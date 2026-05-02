@@ -61,6 +61,45 @@ get to that point. I'd like to push the language further, as well as correct a n
 
 Please reach out to me on X @kolemannix or here if you're interested in the project!
 
+### Installation
+
+To start writing some `k1`, you can either grab pre-built compiler and language server binaries for your platform from the
+[releases](https://github.com/kolemannix/k1/releases) or build the project from source. If you go the pre-built route, be sure to run the `install.sh`
+script included in the archive.
+
+To build from source, you'll want to install Rust, `just`, and LLVM 21. Rust may be installed via [`rustup`](https://rustup.rs). At the time of this
+writing, `rustc` 1.95 is the latest version and works great. You can install [`just`](https://github.com/casey/just#installation) via your package
+manager, pre-built binary, etc. LLVM may also be installed via your package manager. On Mac for example, `brew install llvm@21`. `llvm-sys` won't know
+where the install is at on its own though, so tell it via an environment variable in your shell config. Again on Mac for example:
+
+```bash
+export LLVM_SYS_211_PREFIX="$(brew --prefix llvm@21)"
+```
+
+With the dependencies installed, `k1` and the language server may be built via:
+
+```bash
+just build-k1r
+just lsprelease
+```
+
+The resulting binaries will be available under `./target/release`. You can install the binaries and the dependent `k1lib` to `~/.k1` via:
+
+```bash
+just install-macos-from-macos # Or: just install-linux-from-linux
+```
+
+As the install command suggests, you'll want to add `~/.k1/bin` to your `PATH`.
+
+To smoke test your installation:
+
+```bash
+# Check out the available commands
+k1
+# Run a simple program
+k1 run <(echo 'fn main(): i32 { println("hello k1!"); 0 }')
+```
+
 ## Reflections
 I simply started because I was curious what LLVM was, and had a lot of ideas about how programming could be better (20,000 hours will do that to you), and
 I specifically wanted to understand performance from the inside. Why were my tools and programs so slow?
