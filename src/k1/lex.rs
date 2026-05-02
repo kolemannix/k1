@@ -653,9 +653,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
     pub fn run(&mut self, tokens: &mut Vec<Token>) -> LexResult<()> {
         let mut state =
             LexState { mode_stack: vec![LexMode::Tokens], pending_trivia: Vec::with_capacity(32) };
-        while self.eat_token(tokens, &mut state)?.is_some() {
-            {}
-        }
+        while self.eat_token(tokens, &mut state)?.is_some() {}
         Ok(())
     }
 
@@ -670,7 +668,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         #[inline]
         fn make_token(
             lex: &mut Lexer,
-            pending_trivia: &[TokenTrivia],
+            pending_trivia: &mut Vec<TokenTrivia>,
             kind: TokenKind,
             start: u32,
             len: u32,
@@ -681,13 +679,14 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 .get((start as usize).saturating_sub(1))
                 .is_some_and(|c| (*c as char).is_whitespace());
             let trivia = lex.spans.trivia_pool.add_slice_copy(pending_trivia);
+            pending_trivia.clear();
             Token::new(kind, span, whitespace_preceded, trivia)
         }
 
         #[inline]
         fn make_buffered_token(
             lex: &mut Lexer,
-            pending_trivia: &[TokenTrivia],
+            pending_trivia: &mut Vec<TokenTrivia>,
             kind: TokenKind,
             end: u32,
             tok_len: u32,
@@ -698,7 +697,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         #[inline]
         fn make_keyword_or_ident(
             lex: &mut Lexer,
-            pending_trivia: &[TokenTrivia],
+            pending_trivia: &mut Vec<TokenTrivia>,
             end: u32,
             tok_len: u32,
             is_number: bool,
@@ -716,7 +715,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         }
         macro_rules! make_from_buffer {
             ($end: expr) => {
-                make_keyword_or_ident(self, &state.pending_trivia, $end, tok_len, is_number)
+                make_keyword_or_ident(self, &mut state.pending_trivia, $end, tok_len, is_number)
             };
         }
         loop {
@@ -770,7 +769,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 state.mode_stack.push(LexMode::Interp { brace_depth: 1 });
                                 tokens.push(make_buffered_token(
                                     self,
-                                    &state.pending_trivia,
+                                    &mut state.pending_trivia,
                                     K::StringUnterminated {
                                         delim: string_delim_kind,
                                         interp_exprs,
@@ -778,7 +777,13 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                     n,
                                     tok_len,
                                 ));
-                                tokens.push(make_token(self, &[], K::OpenBrace, n, 1));
+                                tokens.push(make_token(
+                                    self,
+                                    &mut state.pending_trivia,
+                                    K::OpenBrace,
+                                    n,
+                                    1,
+                                ));
                                 return Ok(Some(()));
                             }
                         }
@@ -790,7 +795,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             state.mode_stack.pop();
                             tokens.push(make_buffered_token(
                                 self,
-                                &state.pending_trivia,
+                                &mut state.pending_trivia,
                                 K::String { delim: string_delim_kind, interp_exprs },
                                 n + 1,
                                 tok_len,
@@ -805,7 +810,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             state.mode_stack.pop();
                             tokens.push(make_buffered_token(
                                 self,
-                                &state.pending_trivia,
+                                &mut state.pending_trivia,
                                 K::String { delim: string_delim_kind, interp_exprs },
                                 n + 1,
                                 tok_len,
@@ -833,7 +838,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         macro_rules! return_single {
                             ($kind: expr) => {{
                                 self.advance();
-                                tokens.push(make_token(self, &state.pending_trivia, $kind, n, 1));
+                                tokens.push(make_token(self, &mut state.pending_trivia, $kind, n, 1));
                                 return Ok(Some(()));
                             }};
                         }
@@ -841,7 +846,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             ($kind: expr) => {{
                                 self.advance();
                                 self.advance();
-                                tokens.push(make_token(self, &state.pending_trivia, $kind, n, 2));
+                                tokens.push(make_token(self, &mut state.pending_trivia, $kind, n, 2));
                                 return Ok(Some(()));
                             }};
                         }
@@ -961,7 +966,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                     }
                                     tokens.push(make_token(
                                         self,
-                                        &state.pending_trivia,
+                                        &mut state.pending_trivia,
                                         TokenKind::Char,
                                         n,
                                         4,
@@ -980,7 +985,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                     // `n` is the index of the opening quote
                                     tokens.push(make_token(
                                         self,
-                                        &state.pending_trivia,
+                                        &mut state.pending_trivia,
                                         TokenKind::Char,
                                         n,
                                         3,
@@ -1010,16 +1015,8 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                             || comment_c == EOF_CHAR
                                             || comment_c == '\r' && self.peek() == '\n'
                                         {
-                                            // let comment_tok = make_token(
-                                            //     self,
-                                            //     &state.pending_trivia,
-                                            //     K::LineComment,
-                                            //     n,
-                                            //     self.pos - n,
-                                            // );
-                                            // tokens.push(comment_tok);
                                             let span = self.add_span(n, self.pos - n);
-                                            // TODO: Capture final trailing trivia
+                                            // FIXME: Capture final trailing trivia
                                             state.pending_trivia.push(TokenTrivia {
                                                 span,
                                                 kind: TokenTriviaKind::LineComment,
@@ -1115,7 +1112,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                     // Lex the dot
                                     tokens.push(make_token(
                                         self,
-                                        &state.pending_trivia,
+                                        &mut state.pending_trivia,
                                         K::Dot,
                                         n,
                                         1,

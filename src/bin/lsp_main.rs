@@ -438,7 +438,11 @@ impl LanguageServer for Backend {
         let ast = parse::parse_standalone(file_url.path().to_string(), new_content);
         let new_source = ast.sources.get_main();
         let mut parse_diagnostics = vec![];
-        info!("textDocument/did_change: parsed file {} with {} errors", &file_url, ast.errors.len());
+        info!(
+            "textDocument/did_change: parsed file {} with {} errors",
+            &file_url,
+            ast.errors.len()
+        );
         for error in &ast.errors {
             if let Some(range) = span_to_range(new_source, &ast.spans, error.span()) {
                 let diagnostic = Diagnostic {
@@ -537,31 +541,18 @@ impl LanguageServer for Backend {
             file_url.path(),
             source.tokens.len()
         );
-        self.with_ast(|ast| {
+        self.with_ast(|core_ast| {
             let mut tokens: Vec<SemanticToken> = vec![];
             let mut prev_line = 1;
             let mut prev_start_col = 0;
 
             let edited_sources = self.edited_sources.lock().unwrap();
             let ast_for_file: &ParsedProgram = match is_edited {
-                false => ast,
+                false => core_ast,
                 true => edited_sources.get(&file_url).unwrap(),
             };
             // The goal is to use only 'atoms' to avoid overlaps and backwards movement
             let mut spans_and_kinds = vec![];
-            // for type_expr in ast_for_file.type_exprs.iter() {
-            //     match type_expr {
-            //         k1::parse::ParsedTypeExpr::TypeApplication(ty_app) => {
-            //             let span_id = ty_app.name.span;
-            //             let span = ast_for_file.spans.get(span_id);
-            //             if span.file_id == source.file_id {
-            //                 debug!("type_expr span {} {}", span.start, span.len);
-            //                 spans_and_kinds.push((span, TokenTypes::Type as u32, 0))
-            //             }
-            //         }
-            //         _ => {}
-            //     }
-            // }
             for semantic_token in ast_for_file.semantic_tokens.iter() {
                 if semantic_token.span.file_id == source.file_id {
                     let token_type = match semantic_token.kind {
@@ -570,115 +561,20 @@ impl LanguageServer for Backend {
                         parse::SemanticTokenKind::Keyword => TokenTypes::Keyword,
                         parse::SemanticTokenKind::Function => TokenTypes::Function,
                         parse::SemanticTokenKind::Namespace => TokenTypes::Namespace,
+                        parse::SemanticTokenKind::Operator => TokenTypes::Operator,
                     };
                     spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
                 }
             }
-            // for expr in ast_for_file.exprs.iter_exprs() {
-            //     match expr {
-            //         k1::parse::ParsedExpr::Variable(parsed_var) => {
-            //             let span_id = parsed_var.name.span;
-            //             let span = ast_for_file.spans.get(span_id);
-            //             if span.file_id == source.file_id {
-            //                 debug!("variable name span {} {}", span.start, span.len);
-            //                 spans_and_kinds.push((span, TokenTypes::Variable as u32, 0))
-            //             }
-            //         }
-            //         _ => {}
-            //     }
-            // }
-            // for stmt in ast_for_file.stmts.iter() {
-            //     match stmt {
-            //         k1::parse::ParsedStmt::Let(parsed_let) => {
-            //             let span_id = ty_app.name.span;
-            //             let span = ast_for_file.spans.get(span_id);
-            //             if span.file_id == source.file_id {
-            //                 info!("type_expr span {} {}", span.start, span.len);
-            //                 spans_and_kinds.push((span, TokenTypes::Type as u32))
-            //             }
-            //         }
-            //         _ => {}
-            //     }
-            // }
             for token in &source.tokens {
-                // Hack to retrieve the span from the edited ParsedProgram rather than the primary one
-                let span = ast_for_file.spans.get(token.span);
-                let token_type = match token.kind {
-                    lex::TokenKind::Numeric => Some(TokenTypes::Number as u32),
-                    k1::lex::TokenKind::Ident => Some(TokenTypes::Variable as u32),
-                    k1::lex::TokenKind::String { .. }
-                    | k1::lex::TokenKind::StringUnterminated { .. }
-                    | k1::lex::TokenKind::Char => Some(TokenTypes::String as u32),
-                    k1::lex::TokenKind::KeywordFn
-                    | k1::lex::TokenKind::KeywordLet
-                    | k1::lex::TokenKind::KeywordMut
-                    | k1::lex::TokenKind::KeywordAnd
-                    | k1::lex::TokenKind::KeywordOr
-                    | k1::lex::TokenKind::KeywordIf
-                    | k1::lex::TokenKind::KeywordElse
-                    | k1::lex::TokenKind::KeywordDefType
-                    | k1::lex::TokenKind::KeywordWhile
-                    | k1::lex::TokenKind::KeywordLoop
-                    | k1::lex::TokenKind::KeywordNamespace
-                    | k1::lex::TokenKind::KeywordIntern
-                    | k1::lex::TokenKind::KeywordFor
-                    | k1::lex::TokenKind::KeywordIn
-                    | k1::lex::TokenKind::KeywordAbility
-                    | k1::lex::TokenKind::KeywordImpl
-                    | k1::lex::TokenKind::KeywordIs
-                    | k1::lex::TokenKind::KeywordSwitch
-                    | k1::lex::TokenKind::KeywordNot
-                    | k1::lex::TokenKind::KeywordBuiltin
-                    | k1::lex::TokenKind::KeywordWhere
-                    | k1::lex::TokenKind::KeywordContext
-                    | k1::lex::TokenKind::KeywordUse
-                    | k1::lex::TokenKind::KeywordRequire
-                    | k1::lex::TokenKind::KeywordDefer => Some(TokenTypes::Keyword as u32),
-                    k1::lex::TokenKind::Slash => Some(TokenTypes::Operator as u32),
-                    k1::lex::TokenKind::LineComment => Some(TokenTypes::Comment as u32),
-                    k1::lex::TokenKind::OpenParen
-                    | k1::lex::TokenKind::CloseParen
-                    | k1::lex::TokenKind::OpenBracket
-                    | k1::lex::TokenKind::CloseBracket
-                    | k1::lex::TokenKind::OpenBrace
-                    | k1::lex::TokenKind::CloseBrace
-                    | k1::lex::TokenKind::LAngle
-                    | k1::lex::TokenKind::LAngleLAngle
-                    | k1::lex::TokenKind::RAngle
-                    | k1::lex::TokenKind::RAngleRAngle
-                    | k1::lex::TokenKind::Colon
-                    | k1::lex::TokenKind::ColonEquals
-                    | k1::lex::TokenKind::Semicolon
-                    | k1::lex::TokenKind::Equals
-                    | k1::lex::TokenKind::EqualsEquals
-                    | k1::lex::TokenKind::BangEquals
-                    | k1::lex::TokenKind::Dot
-                    | k1::lex::TokenKind::Comma
-                    | k1::lex::TokenKind::Bang
-                    | k1::lex::TokenKind::QuestionMark
-                    | k1::lex::TokenKind::Pipe
-                    | k1::lex::TokenKind::PipePipe
-                    | k1::lex::TokenKind::Amp
-                    | k1::lex::TokenKind::AmpAmp
-                    | k1::lex::TokenKind::Percent
-                    | k1::lex::TokenKind::BackSlash
-                    | k1::lex::TokenKind::Hash
-                    | k1::lex::TokenKind::At
-                    | k1::lex::TokenKind::Dollar
-                    | k1::lex::TokenKind::Caret
-                    | k1::lex::TokenKind::DoubleQuote
-                    | k1::lex::TokenKind::SingleQuote
-                    | k1::lex::TokenKind::Plus
-                    | k1::lex::TokenKind::Minus
-                    | k1::lex::TokenKind::Asterisk
-                    | k1::lex::TokenKind::LessEqual
-                    | k1::lex::TokenKind::GreaterEqual
-                    | k1::lex::TokenKind::LThinArrow
-                    | k1::lex::TokenKind::RThinArrow => Some(TokenTypes::Operator as u32),
-                    k1::lex::TokenKind::Eof => None,
-                };
-                if let Some(token_type) = token_type {
-                    spans_and_kinds.push((span, token_type, 0))
+                for trivium in ast_for_file.spans.trivia_pool.get_slice(token.trivia) {
+                    match trivium.kind {
+                        lex::TokenTriviaKind::LineComment => {
+                            let span = ast_for_file.spans.get(trivium.span);
+                            spans_and_kinds.push((span, TokenTypes::Comment as u32, 0));
+                        }
+                        _ => {}
+                    }
                 }
             }
             spans_and_kinds.sort_by(|f1, f2| f1.0.start.cmp(&f2.0.start));

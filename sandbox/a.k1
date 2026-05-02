@@ -1,9 +1,3 @@
-fn add[a](x: a, y: a): a { 
-  #meta "x + y"
-}
-
-$p"deftype MyFoo = { foo: int }"
-
 fn repeat(n: int, a: string): string {
   let sb = StringBuilder/new();
   for IntRange/upTo(n) { sb.write-string("{a};") };

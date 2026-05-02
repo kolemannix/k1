@@ -40,6 +40,7 @@ Simple but missing
 - [ ] Bindings generator; `rust-bindgen` equivalent
 - [x] implement iterator for array
 - [ ] Implement at least one format specifier (precision, pretty)
+- [ ] static #switch
 
 # Bugs
 - [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)
@@ -52,12 +53,14 @@ Simple but missing
 
 ## [ ] token stream based macros
 
-## [ ] higher level macros
+## [x] higher level macros
 
 ## [ ] Context ability types
 - [ ] AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem *if it ends up an ability*)
   - let context(impl Alloc) temp = mem/AllocMode.Arena;
   - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
+
+## [ ] Ability objects; dyn[<ability expr>]
 
 ## [x] Distribute builds that work
 - [x] Test on linux
@@ -118,8 +121,6 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] Thread-local globals
 - [x] bitcast function (for struct ABI workarounds right now)
 
-## Project: Ability objects; dyn[<ability expr>]
-
 ## Project: Static Improvements
 - [x] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
 - [x] VM "PermSpace" for caching converted static values in their VM representation
@@ -144,7 +145,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] Hover first pass
 - [x] Hover much better
 - [x] Hover no more markdown
-- [ ] Parse with recovery within same file
+- [x] Parse with recovery within same file
 - [x] In lsp mode, parser should emit actual semantic tokens (currently we just use lexer tokens)
 - [ ] Proper handling of 'trivia' (whitespace and comments)
 - [ ] Go-to

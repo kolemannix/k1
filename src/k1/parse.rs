@@ -1610,6 +1610,7 @@ pub enum SemanticTokenKind {
     Keyword,
     Function,
     Namespace,
+    Operator,
 }
 nz_u32_id!(SemanticTokenId);
 pub struct SemanticToken {
@@ -2281,6 +2282,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             }
         } else if maybe_hash.kind == K::Dollar {
             self.advance();
+            self.add_semantic_token(maybe_hash, SemanticTokenKind::Operator);
             let expr_id = self.consume_static_expr(
                 maybe_hash,
                 condition,
@@ -3234,11 +3236,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let span = self.extend_span(self.get_expression_span(self_arg), args_span);
                     let name = self.intern_ident_token(target);
 
-                    //let args_iter =
-                    //    [ParsedCallArg { name: None, value: self_arg, is_explicit_context: false }]
-                    //        .into_iter()
-                    //        .chain(args);
-
                     let index_of_first_explicit_arg =
                         args.iter().position(|a| !a.is_explicit_context).unwrap_or(args.len());
                     args.insert(
@@ -3247,6 +3244,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     );
                     let args_handle = self.ast.mem.pushn(&args);
 
+                    self.add_semantic_token(target, SemanticTokenKind::Function);
                     Some(self.add_expression(ParsedExpr::Call(ParsedCall {
                         name: QIdent::naked(name, target.span),
                         type_args,
@@ -3676,6 +3674,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     Ok(Some(literal_id))
                 } else if first.kind == K::Ident {
                     let namespaced_ident = self.expect_namespaced_ident()?;
+                    let name_span = self.peek_back().span;
                     let (second, third) = self.tokens.peek_two();
                     if second.kind == K::Colon
                         && !second.is_whitespace_preceded()
@@ -3720,7 +3719,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 let args_handle = self.ast.mem.pushn(&args);
                                 let span = self.extend_span(namespaced_ident.span, args_span);
                                 self.add_semantic_token_span(
-                                    namespaced_ident.span,
+                                    name_span,
                                     SemanticTokenKind::Function,
                                 );
                                 Ok(Some(self.add_expression(ParsedExpr::Call(ParsedCall {
@@ -3830,6 +3829,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         // ^   ^              ^
         // 1   2          ^3  2/4
         let first = self.expect_kind(K::KeywordFor)?;
+        self.add_semantic_token_span(first.span, SemanticTokenKind::Keyword);
         let (second, third) = self.peek_two();
         let binding = if third.kind == K::KeywordIn {
             if second.kind != K::Ident {
@@ -3960,6 +3960,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn parse_let(&mut self) -> ParseResult<Option<ParsedLet>> {
         trace!("parse_let");
         let Some(eaten_keyword) = self.maybe_consume(K::KeywordLet) else { return Ok(None) };
+        self.add_semantic_token(eaten_keyword, SemanticTokenKind::Keyword);
         let is_reference = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
         let mut flags = ParsedLet::FLAG_REFERENCING * is_reference as u8;
         loop {
@@ -3981,7 +3982,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             None => Ok(None),
             Some(_) => self.parse_type_expression(),
         }?;
-        self.expect_kind(K::Equals)?;
+        let equals = self.expect_kind(K::Equals)?;
+        self.add_semantic_token(equals, SemanticTokenKind::Operator);
         let initializer_expression = if self.maybe_consume_ident_chars("uninit").is_some() {
             None
         } else {
@@ -4392,6 +4394,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         };
         let (func_name, func_name_id) = self.expect_ident()?;
+        self.add_semantic_token(fn_keyword, SemanticTokenKind::Keyword);
         self.add_semantic_token(func_name, SemanticTokenKind::Function);
         let mut type_params: SV8<ParsedTypeParam> = smallvec![];
         if self.maybe_consume(K::OpenBracket).is_some() {
