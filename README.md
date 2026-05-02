@@ -64,7 +64,8 @@ Please reach out to me on X @kolemannix or here if you're interested in the proj
 ### Installation
 
 To start writing some `k1`, you can either grab pre-built compiler and language server binaries for your platform from the
-[releases](https://github.com/kolemannix/k1/releases) or build the project from source.
+[releases](https://github.com/kolemannix/k1/releases) or build the project from source. If you go the pre-built route, be sure to run the `install.sh`
+script included in the archive.
 
 To build from source, you'll want to install Rust, `just`, and LLVM 21. Rust may be installed via [`rustup`](https://rustup.rs). At the time of this
 writing, `rustc` 1.95 is the latest version and works great. You can install [`just`](https://github.com/casey/just#installation) via your package
