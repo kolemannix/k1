@@ -202,6 +202,13 @@ impl<T, Tag> Clone for MSlice<T, Tag> {
     }
 }
 
+impl<T, Tag> std::fmt::Debug for MSlice<T, Tag> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ty = std::any::type_name::<T>();
+        write!(f, "MSlice<{ty}>[{}]", self.len())
+    }
+}
+
 impl<T, Tag> MSlice<T, Tag> {
     pub const fn empty() -> Self {
         const BOGUS_OFFSET: NonZeroU32 = NonZeroU32::new(8).unwrap();
@@ -687,6 +694,16 @@ impl<Tag> Mem<Tag> {
             let src: &[T] = slice::from_raw_parts(ptr, count);
             src
         }
+    }
+
+    pub fn getn_zip<T: 'static, U: 'static>(
+        &self,
+        h1: MSlice<T, Tag>,
+        h2: MSlice<U, Tag>,
+    ) -> impl Iterator<Item = (&'static T, &'static U)> + 'static {
+        let slice1 = self.getn(h1);
+        let slice2 = self.getn(h2);
+        slice1.iter().zip(slice2.iter())
     }
 
     pub fn iter<T>(&self, handle: MSlice<T, Tag>) -> slice::Iter<'_, T> {
@@ -1537,6 +1554,7 @@ pub struct MSpillList<T: Copy, const N: usize, Tag> {
     storage: MSpillListStorage<T, Tag, N>,
 }
 pub type MSL2<T, Tag = ()> = MSpillList<T, 2, Tag>;
+#[allow(unused)]
 pub type MSL4<T, Tag = ()> = MSpillList<T, 4, Tag>;
 pub type MSL8<T, Tag = ()> = MSpillList<T, 8, Tag>;
 
@@ -1735,12 +1753,12 @@ pub type MSS8<T, Tag = ()> = MSpillSlice<T, 8, Tag>;
 
 impl<T: Copy, Tag, const N: usize> Default for MSpillSlice<T, N, Tag> {
     fn default() -> Self {
-        Self::new()
+        Self::empty()
     }
 }
 
 impl<T: Copy, Tag, const N: usize> MSpillSlice<T, N, Tag> {
-    pub fn new() -> Self {
+    pub fn empty() -> Self {
         assert!(N > 0);
 
         // SAFETY: MaybeUninit<T> array does not require initialization.

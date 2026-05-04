@@ -579,22 +579,20 @@ impl TypedProgram {
         // lambda obj: some (int -> int) -> dyn[\int -> int] (passing environment AND fn ptr)
         //
         // This method is risk-free in terms of 'leaking' inference types out
-        if original_function_sig.function_type_params.is_empty() {
+        if original_function_sig.fnlike_type_params.is_empty() {
             return Ok((MSlice::empty(), smallvec![]));
         }
 
         let mut fnlike_type_args: List<NameAndType, _> =
-            self.mem.new_list(original_function_sig.function_type_params.len());
+            self.mem.new_list(original_function_sig.fnlike_type_params.len());
         let mut fnlike_type_arg_values: SV8<TypedExprId> = smallvec![];
         let subst_pairs: SV8<_> = self
             .mem
-            .getn(original_function_sig.type_params)
-            .iter()
-            .zip(self.mem.getn(type_args).iter())
+            .getn_zip(original_function_sig.type_params, type_args)
             .map(|(param, arg)| TypeSubstitutionPair { from: param.type_id, to: arg.type_id })
             .collect();
 
-        for function_type_param in self.mem.getn(original_function_sig.function_type_params) {
+        for function_type_param in self.mem.getn(original_function_sig.fnlike_type_params) {
             let (corresponding_arg, corresponding_value_param) =
                 args_and_params.get(function_type_param.value_param_index as usize);
             debug!(
@@ -901,12 +899,8 @@ impl TypedProgram {
                     self.type_id_to_string(arg_info.generic_parent)
                 );
                 // We can directly 'solve' every appearance of a type param here
-                for (passed_type, arg_slot) in self
-                    .types
-                    .mem
-                    .getn_sv4(passed_info.type_args)
-                    .iter()
-                    .zip(self.types.mem.getn_sv4(arg_info.type_args).iter())
+                for (passed_type, arg_slot) in
+                    self.types.mem.getn_zip(passed_info.type_args, arg_info.type_args)
                 {
                     self.unify_and_find_substitutions_rec(*passed_type, *arg_slot);
                 }

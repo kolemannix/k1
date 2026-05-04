@@ -72,7 +72,7 @@ ns list {
   }
 
   fn span[T](self: list[T]): span[T] {
-    span/wrapBuffer(self.asBuffer[T]())
+    span/wrap-buffer(self.asBuffer[T]())
   }
 
   fn copyToBuffer[T](self: list[T]): buffer[T] {

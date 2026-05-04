@@ -1,3 +1,9 @@
+unstable_features = true
 use_small_heuristics = "Max"
 max_width = 100
 tab_spaces = 4
+imports_layout = "Vertical"
+imports_granularity = "Item"
+group_imports = "StdExternalCrate"
+# Nightly
+match_arm_indent = false

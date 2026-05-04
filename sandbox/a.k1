@@ -1,10 +1,20 @@
+ns foo {
+  fn stuff(): int { 33 }
+}
+
 fn repeat(n: int, a: string): string {
   let sb = StringBuilder/new();
   for IntRange/upTo(n) { sb.write-string("{a};") };
   sb.build()
 }
 
+ns foo {
+  fn more-stuff() { {} }
+}
+
 fn main(): i32 {
+  core/println("");
+  list/empty[u64]();
   let x = 21;
   $repeat(5, \println("hello {add(x, x)}"));
   0

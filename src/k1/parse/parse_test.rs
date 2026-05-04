@@ -2,8 +2,8 @@
 // All rights reserved.
 
 use crate::parse::*;
-use std::fs;
 use itertools::Itertools;
+use std::fs;
 
 fn make_test_ast() -> ParsedProgram {
     ParsedProgram::make("unit_test".to_string(), false)
@@ -288,8 +288,16 @@ fn namespaced_fncall() -> ParseResult<()> {
     let input = "foo/bar/baz()";
     let (mut ast, result) = test_single_expr(input)?;
     let ParsedExpr::Call(fn_call) = result else { panic!("not fncall") };
-    assert_eq!(ast.idents.get_name(*ast.idents.slices.get_nth(fn_call.name.path, 0)), "foo");
-    assert_eq!(ast.idents.get_name(*ast.idents.slices.get_nth(fn_call.name.path, 1)), "bar");
+    assert_eq!(ast.idents.get_name(ast.mem.get_nth(fn_call.name.path, 0).name), "foo");
+    assert_eq!(
+        ast.spans.get(ast.mem.get_nth(fn_call.name.path, 0).span),
+        Span { file_id: 0, start: 0, len: 3 }
+    );
+    assert_eq!(ast.idents.get_name(ast.mem.get_nth(fn_call.name.path, 1).name), "bar");
+    assert_eq!(
+        ast.spans.get(ast.mem.get_nth(fn_call.name.path, 1).span),
+        Span { file_id: 0, start: 4, len: 3 }
+    );
     assert_eq!(fn_call.name.name, ast.idents.intern("baz"));
     assert!(fn_call.args.is_empty());
     Ok(())
@@ -299,8 +307,8 @@ fn namespaced_val() -> ParseResult<()> {
     let input = "foo/bar/baz";
     let (mut ast, result) = test_single_expr(input)?;
     let ParsedExpr::Variable(variable) = result else { panic!("not variable") };
-    assert_eq!(ast.idents.get_name(*ast.idents.slices.get_nth(variable.name.path, 0)), "foo");
-    assert_eq!(ast.idents.get_name(*ast.idents.slices.get_nth(variable.name.path, 1)), "bar");
+    assert_eq!(ast.idents.get_name(ast.mem.get_nth(variable.name.path, 0).name), "foo");
+    assert_eq!(ast.idents.get_name(ast.mem.get_nth(variable.name.path, 1).name), "bar");
     assert_eq!(variable.name.name, ast.idents.intern("baz"));
     Ok(())
 }

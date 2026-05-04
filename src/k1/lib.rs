@@ -3,20 +3,20 @@
 
 use smallvec::SmallVec;
 
-mod rawref;
-pub mod ir;
+mod clock;
 pub mod codegen_llvm;
 pub mod compiler;
 mod fixmap;
+pub mod ir;
 mod kmem;
-mod clock;
 pub mod lex;
-pub mod parse;
-mod vecpool;
-mod vpool;
-pub mod typer;
-pub mod vm;
 pub mod lsp_support;
+pub mod parse;
+mod rawref;
+pub mod typer;
+mod vecpool;
+pub mod vm;
+mod vpool;
 //pub mod codegen_llvm_old;
 //pub mod vmtw;
 
@@ -131,7 +131,7 @@ fn nzu32_from_incr(n: u32) -> std::num::NonZeroU32 {
 macro_rules! impl_copy_if_reg {
     ($struct_name:ident) => {
         const _: () = {
-            if std::mem::size_of::<$struct_name>() > (size_of::<usize>() * 2)  {
+            if std::mem::size_of::<$struct_name>() > (size_of::<usize>() * 2) {
                 panic!("impl_copy_if_reg: Larger than 2 words");
             }
         };

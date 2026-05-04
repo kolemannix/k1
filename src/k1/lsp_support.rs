@@ -1,10 +1,60 @@
-use crate::parse::{FileId, ParsedId};
+use crate::lex::Span;
+use crate::parse::{FileId, ParsedId, Sources};
 use crate::{SV8, typer::*};
 use smallvec::smallvec;
 
 pub enum LangItem {
     Expr(TypedExprId),
     Defn(ParsedId),
+}
+
+pub fn is_point_in_span(sources: &Sources, line: u32, col: u32, span: Span) -> bool {
+    if let Some((entity_start_line, _entity_end_line)) = sources.get_lines_for_span(span) {
+        // Only works for single-line spans
+        if entity_start_line.line_index == line {
+            let char_index_abs = entity_start_line.start_char + col;
+            if span.start <= char_index_abs && char_index_abs < span.end() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub fn find_entity_at_point(
+    k1: &TypedProgram,
+    file_id: FileId,
+    // 0-based
+    line: u32,
+    // 0-based
+    col: u32,
+) -> Option<LsEntity> {
+    let ls_entities = k1.ls_entities.borrow();
+    if let Some(entities) = ls_entities.get(&file_id) {
+        for entity in entities {
+            if is_point_in_span(&k1.ast.sources, line, col, entity.span) {
+                return Some(*entity);
+            }
+        }
+    }
+    None
+}
+
+pub fn get_hover_message_for_entity(k1: &TypedProgram, entity: LsEntity) -> String {
+    match entity.kind {
+        LsEntityKind::Namespace(ns_id) => {
+            let ns = k1.namespaces.get(ns_id);
+            let companion_type = match ns.companion_type_id {
+                None => "None".to_string(),
+                Some(type_id) => format!("Companion Type: {}", k1.type_id_to_string(type_id)),
+            };
+            let ns_name_qualified = k1.scope_id_to_string(ns.scope_id);
+            format!("ns {ns_name_qualified}. {companion_type}")
+        }
+        LsEntityKind::FunctionCall { function_id } => {
+            format!("Call\n{}", k1.function_id_to_string(function_id, false))
+        }
+    }
 }
 
 pub fn get_expr_at_point(
@@ -17,13 +67,8 @@ pub fn get_expr_at_point(
     for (expr_id, span_id) in k1.exprs.spans.iter_with_ids() {
         let span = k1.ast.spans.get(*span_id);
         if span.file_id == file {
-            if let Some((start, _end)) = k1.ast.sources.get_lines_for_span(span) {
-                if start.line_index == line_index {
-                    let char_index_abs = start.start_char + char_index;
-                    if span.start <= char_index_abs && char_index_abs < span.end() {
-                        matching_exprs.push((expr_id, span.len));
-                    }
-                }
+            if is_point_in_span(&k1.ast.sources, line_index, char_index, span) {
+                matching_exprs.push((expr_id, span.len));
             }
         }
     }

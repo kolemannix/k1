@@ -51,8 +51,8 @@ use types::*;
 use crate::compiler::CompilerConfig;
 use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, BinaryOpKind, FileId, ForExpr, Ident, IdentSlice, InterpolatedStringPart, NamedTypeArg,
-    NumericWidth, ParseError, ParsedAbilityExpr, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
+    self, BinaryOpKind, FileId, ForExpr, Ident, InterpolatedStringPart, NamedTypeArg, NumericWidth,
+    ParseError, ParsedAbilityExpr, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
     ParsedBlockKind, ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFnParamType,
     ParsedFunctionId, ParsedGlobalId, ParsedHandle, ParsedId, ParsedIfExpr, ParsedList,
     ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId,
@@ -184,6 +184,19 @@ impl InferenceContext {
         self.substitutions_vec.clear();
         self.start_raw = 0;
     }
+}
+
+// For LSP / Tooling
+#[derive(Clone, Copy)]
+pub enum LsEntityKind {
+    Namespace(NamespaceId),
+    FunctionCall { function_id: FunctionId },
+}
+
+#[derive(Clone, Copy)]
+pub struct LsEntity {
+    pub kind: LsEntityKind,
+    pub span: lex::Span,
 }
 
 #[derive(Clone, Copy)]
@@ -833,7 +846,7 @@ pub struct FunctionSignature {
     pub name: Option<Ident>,
     pub function_type: TypeId,
     pub type_params: NamedTypeSlice,
-    pub function_type_params: MSlice<FunctionTypeParam, TypedProgram>,
+    pub fnlike_type_params: MSlice<FnlikeTypeParam, TypedProgram>,
 }
 impl_copy_if_small!(24, FunctionSignature);
 
@@ -843,12 +856,12 @@ impl FunctionSignature {
             name,
             function_type,
             type_params: MSlice::empty(),
-            function_type_params: MSlice::empty(),
+            fnlike_type_params: MSlice::empty(),
         }
     }
 
     pub fn has_type_params(&self) -> bool {
-        !self.type_params.is_empty() || !self.function_type_params.is_empty()
+        !self.type_params.is_empty() || !self.fnlike_type_params.is_empty()
     }
 }
 
@@ -864,11 +877,13 @@ pub struct TypedFunction {
     pub scope: ScopeId,
     pub params: MSlice<TypedFunctionParam, TypedProgram>,
     pub type_params: NamedTypeSlice,
-    pub fnlike_type_params: MSlice<FunctionTypeParam, TypedProgram>,
+    pub fnlike_type_params: MSlice<FnlikeTypeParam, TypedProgram>,
     pub body_block: Option<TypedExprId>,
     pub builtin_type: Option<Builtin>,
     pub linkage: Linkage,
+    /// All specializations of me
     pub child_specializations: Vec<SpecializationInfo>,
+    /// If I am specialization myself
     pub specialization_info: Option<SpecializationInfo>,
     pub parsed_id: ParsedId,
     pub type_id: TypeId,
@@ -889,7 +904,7 @@ impl TypedFunction {
             name: Some(self.name),
             function_type: self.type_id,
             type_params: self.type_params,
-            function_type_params: self.fnlike_type_params,
+            fnlike_type_params: self.fnlike_type_params,
         }
     }
 
@@ -905,32 +920,32 @@ impl TypedFunction {
 /// fn example(knownInt: static int, some thunk: () -> ())
 ///            ^ existential type param 1, a static
 ///                                  ^ existential type param 2, a function type param
-pub struct FunctionTypeParam {
+pub struct FnlikeTypeParam {
     pub name: Ident,
     pub type_id: TypeId,
     pub value_param_index: u32,
     pub span: SpanId,
 }
 
-impl HasName for &FunctionTypeParam {
+impl HasName for &FnlikeTypeParam {
     fn name(&self) -> Ident {
         self.name
     }
 }
 
-impl HasTypeId for &FunctionTypeParam {
+impl HasTypeId for &FnlikeTypeParam {
     fn type_id(&self) -> TypeId {
         self.type_id
     }
 }
 
-impl HasName for FunctionTypeParam {
+impl HasName for FnlikeTypeParam {
     fn name(&self) -> Ident {
         self.name
     }
 }
 
-impl HasTypeId for FunctionTypeParam {
+impl HasTypeId for FnlikeTypeParam {
     fn type_id(&self) -> TypeId {
         self.type_id
     }
@@ -2564,7 +2579,8 @@ pub struct TypedProgram {
 
     // Status and phases
     module_in_progress: Option<ModuleId>,
-    phase: u32,
+
+    pub ls_entities: RefCell<FxHashMap<FileId, Vec<LsEntity>>>,
 
     inference_context_stack: Vec<InferenceContext>,
     inference_context_extras: Vec<InferenceContext>,
@@ -2717,6 +2733,9 @@ impl TypedProgram {
             panic!("Failed to get process dlopen handle");
         }
 
+        let ls_entities =
+            if cfg!(feature = "lsp") { FxHashMap::with_capacity(64) } else { FxHashMap::new() };
+
         TypedProgram {
             modules: VPool::make_with_hint("modules", 32),
             config,
@@ -2748,7 +2767,7 @@ impl TypedProgram {
             functions_pending_body_specialization: vec![],
             ast,
             module_in_progress: None,
-            phase: 0,
+            ls_entities: RefCell::new(ls_entities),
             inference_context_stack: Vec::with_capacity(8),
             inference_context_extras: (0..8).map(|_| InferenceContext::make()).collect(),
             type_defn_stack: Vec::with_capacity(16),
@@ -4028,12 +4047,7 @@ impl TypedProgram {
 
         let ty_app_name = &ty_app.name;
         let ty_app_span = ty_app.span;
-        match self.scopes.find_type_namespaced(
-            scope_id,
-            ty_app_name,
-            &self.namespaces,
-            &self.ast.idents,
-        )? {
+        match self.find_type_namespaced(scope_id, ty_app_name)? {
             Some((type_id, _)) => {
                 match self.types.get(type_id) {
                     Type::Unresolved(parsed_type_defn_id) => {
@@ -4131,23 +4145,12 @@ impl TypedProgram {
                     _other => Ok(self.get_type_id_resolved(type_id, scope_id)),
                 }
             }
-            None => {
-                match self.scopes.find_function_namespaced(
-                    scope_id,
-                    ty_app_name,
-                    &self.namespaces,
-                    &self.ast.idents,
-                )? {
-                    Some(function_id) => Ok(self.get_function(function_id).type_id),
-                    None => {
-                        failf!(
-                            ty_app.span,
-                            "Type '{}' not found",
-                            self.qident_to_string(ty_app_name),
-                        )
-                    }
+            None => match self.find_function_namespaced(scope_id, ty_app_name)? {
+                Some(function_id) => Ok(self.get_function(function_id).type_id),
+                None => {
+                    failf!(ty_app.span, "Type '{}' not found", self.qident_to_string(ty_app_name),)
                 }
-            }
+            },
         }
     }
 
@@ -6815,12 +6818,7 @@ impl TypedProgram {
     ) -> K1Result<(VariableId, TypedExprId)> {
         let ParsedExpr::Variable(variable) = self.ast.exprs.get(variable_expr_id) else { panic!() };
         let variable_name_span = variable.name.span;
-        let variable_id = self.scopes.find_variable_namespaced(
-            scope_id,
-            &variable.name,
-            &self.namespaces,
-            &self.ast.idents,
-        )?;
+        let variable_id = self.find_variable_namespaced(scope_id, &variable.name)?;
         match variable_id {
             None => {
                 failf!(
@@ -7926,9 +7924,9 @@ impl TypedProgram {
         };
         let is_metaprogram = kind.is_metaprogram();
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
-        for param in self.ast.idents.slices.copy_slice_sv4(stat.parameter_names) {
+        for param in self.ast.mem.getn(stat.parameter_names) {
             let variable_expr = self.ast.exprs.add_expression(
-                ParsedExpr::Variable(ParsedVariable { name: QIdent::naked(param, span) }),
+                ParsedExpr::Variable(ParsedVariable { name: QIdent::naked(*param, span) }),
                 false,
                 None,
             );
@@ -7943,7 +7941,7 @@ impl TypedProgram {
                         return failf!(
                             span,
                             "Value type parameter `{}` is unresolved",
-                            self.ident_str(param)
+                            self.ident_str(*param)
                         );
                     }
                 }
@@ -7954,7 +7952,7 @@ impl TypedProgram {
                         return failf!(
                             span,
                             "Expected a value type for argument {}, got a value family",
-                            self.ident_str(param),
+                            self.ident_str(*param),
                         );
                     };
                     static_parameters.push((variable_id, value_id));
@@ -7963,7 +7961,7 @@ impl TypedProgram {
                     return failf!(
                         span,
                         "Non-value parameters aren't supported: {}: {}",
-                        self.ident_str(param),
+                        self.ident_str(*param),
                         self.type_id_to_string(variable_type)
                     );
                 }
@@ -10501,12 +10499,9 @@ impl TypedProgram {
                 ctx,
             ),
             false => {
-                if let Some(function_id) = self.scopes.find_function_namespaced(
-                    ctx.scope_id,
-                    &fn_call.name,
-                    &self.namespaces,
-                    &self.ast.idents,
-                )? {
+                if let Some(function_id) =
+                    self.find_function_namespaced(ctx.scope_id, &fn_call.name)?
+                {
                     if let Some(function_ability_id) =
                         self.get_function(function_id).kind.ability_id()
                     {
@@ -11055,12 +11050,7 @@ impl TypedProgram {
                 //       'function' in a variable abstractly only to toRef() it later
                 if let ParsedExpr::Variable(v) = self.ast.exprs.get(base_arg.value) {
                     let function_name = &v.name;
-                    let function_id = self.scopes.find_function_namespaced(
-                        ctx.scope_id,
-                        function_name,
-                        &self.namespaces,
-                        &self.ast.idents,
-                    )?;
+                    let function_id = self.find_function_namespaced(ctx.scope_id, function_name)?;
                     if let Some(function_id) = function_id {
                         let function = self.get_function(function_id);
                         if function.is_generic() {
@@ -11777,13 +11767,7 @@ impl TypedProgram {
         let span = parsed_variant.span;
         let provided_type = match &parsed_variant.type_name {
             Some(qident) => {
-                let Some((type_id, _)) = self.scopes.find_type_namespaced(
-                    ctx.scope_id,
-                    qident,
-                    &self.namespaces,
-                    &self.ast.idents,
-                )?
-                else {
+                let Some((type_id, _)) = self.find_type_namespaced(ctx.scope_id, qident)? else {
                     return failf!(
                         qident.span,
                         "No type {} is in scope",
@@ -12389,7 +12373,7 @@ impl TypedProgram {
                         // typechecked value expression
                         let matching_ftp_index = self
                             .mem
-                            .getn(signature.function_type_params)
+                            .getn(signature.fnlike_type_params)
                             .iter()
                             .position(|ftp| ftp.value_param_index as usize == param_index);
                         let expr = match matching_ftp_index {
@@ -12458,16 +12442,9 @@ impl TypedProgram {
             span,
         };
 
-        // Builtins that are handled by the typechecking phase are implemented here.
-        if let Some(builtin) = self.get_callee_builtin(&call.callee) {
-            if builtin.is_typer_phase() {
-                return self.handle_builtin(call, builtin, ctx);
-            } else {
-                self.check_builtin(&call, builtin, ctx)?;
-            }
-        }
-
         if let Some(function_id) = callee.maybe_function_id() {
+            self.emit_ls_entity(fn_call.name.span, LsEntityKind::FunctionCall { function_id });
+
             if let Some(enclosing_id) = self.scopes.enclosing_functions.get(ctx.scope_id).function {
                 if enclosing_id == function_id {
                     debug!(
@@ -12476,6 +12453,15 @@ impl TypedProgram {
                     );
                     self.functions.get_mut(function_id).is_recursive = true;
                 }
+            }
+        }
+
+        // Builtins that are handled by the typechecking phase are implemented here.
+        if let Some(builtin) = self.get_callee_builtin(&call.callee) {
+            if builtin.is_typer_phase() {
+                return self.handle_builtin(call, builtin, ctx);
+            } else {
+                self.check_builtin(&call, builtin, ctx)?;
             }
         }
 
@@ -12766,7 +12752,7 @@ impl TypedProgram {
         // have. The pairs look like "some T -> T" -> "(int -> int)*"
         for (function_type_param, function_type_arg) in self
             .mem
-            .getn(generic_function_sig.function_type_params)
+            .getn(generic_function_sig.fnlike_type_params)
             .iter()
             .zip(self.mem.getn(fnlike_type_arguments))
         {
@@ -13983,12 +13969,8 @@ impl TypedProgram {
             }
         }
         for predicate_constraint_fn_qident in self.mem.getn(tp.predicate_functions) {
-            let Some(function_id) = self.scopes.find_function_namespaced(
-                tp.scope_id,
-                predicate_constraint_fn_qident,
-                &self.namespaces,
-                &self.ast.idents,
-            )?
+            let Some(function_id) =
+                self.find_function_namespaced(tp.scope_id, predicate_constraint_fn_qident)?
             else {
                 return failf!(predicate_constraint_fn_qident.span, "Function not found");
             };
@@ -14418,7 +14400,7 @@ impl TypedProgram {
         // Instantiate type arguments.
         let mut type_params: List<NameAndType, _> =
             self_.mem.new_list(ast_fn.type_params.len() + 1);
-        let mut fnlike_type_params: List<FunctionTypeParam, TypedProgram> = self_.mem.new_list(0);
+        let mut fnlike_type_params: List<FnlikeTypeParam, TypedProgram> = self_.mem.new_list(0);
 
         // Inject the 'Self' type parameter
         if is_ability_decl {
@@ -14519,7 +14501,7 @@ impl TypedProgram {
                     let span = ftp.span;
                     fnlike_type_params.push_grow(
                         &mut self_.mem,
-                        FunctionTypeParam { name, type_id, value_param_index: idx as u32, span },
+                        FnlikeTypeParam { name, type_id, value_param_index: idx as u32, span },
                     );
                     // There's actually no way to refer to these types by name,
                     // so we don't need to add a name to the scope
@@ -15055,12 +15037,7 @@ impl TypedProgram {
         ability_name: &QIdent,
         scope_id: ScopeId,
     ) -> K1Result<AbilityId> {
-        let found_ability_id = self.scopes.find_ability_namespaced(
-            scope_id,
-            ability_name,
-            &self.namespaces,
-            &self.ast.idents,
-        )?;
+        let found_ability_id = self.find_ability_namespaced(scope_id, ability_name)?;
         found_ability_id.map(Ok).unwrap_or({
             match self.scopes.find_pending_ability(scope_id, ability_name.name) {
                 None => {
@@ -15550,13 +15527,7 @@ impl TypedProgram {
         name: &QIdent,
         fail_on_traverse_fail: bool,
     ) -> K1Result<SV4<UseableSymbol>> {
-        let scope_id_to_search = match self.scopes.traverse_namespace_chain(
-            scope_id,
-            name.path,
-            &self.namespaces,
-            &self.ast.idents,
-            name.span,
-        ) {
+        let scope_id_to_search = match self.resolve_qident(scope_id, name) {
             Err(e) => {
                 if fail_on_traverse_fail {
                     return Err(e);
@@ -15570,7 +15541,7 @@ impl TypedProgram {
 
         debug!(
             "Searching scope for useable symbol: {}, Functions:\n{:?}",
-            self.scopes.scope_name_to_string(scope_to_search, &self.ast.idents),
+            self.scope_name_to_string(scope_id_to_search),
             scope_to_search.functions.iter().collect::<Vec<_>>()
         );
 
@@ -15928,7 +15899,20 @@ impl TypedProgram {
         } else {
             self.create_namespace(parsed_namespace_id, parent_scope)?
         };
+
         Ok(namespace_id)
+    }
+
+    // nocommit put this in a good spot
+    fn emit_ls_entity(&self, span: SpanId, kind: LsEntityKind) {
+        if cfg!(feature = "lsp") {
+            let span = self.ast.spans.get(span);
+            let mut ls_entities = self.ls_entities.borrow_mut();
+            let file_id = span.file_id;
+            let entities_entry = ls_entities.entry(file_id);
+            let entities = entities_entry.or_insert_with(|| Vec::with_capacity(128));
+            entities.push(LsEntity { kind, span });
+        }
     }
 
     fn declare_namespaces_in_namespace(
@@ -16685,17 +16669,16 @@ impl TypedProgram {
     }
 
     fn add_core_uses_to_scope(&mut self, scope: ScopeId, span: SpanId) -> K1Result<()> {
-        let root_ns: IdentSlice =
-            self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.root_module_name]);
-        let core_ns: IdentSlice = self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.core]);
+        macro_rules! intern_path {
+            ($($name: expr),*) => {
+                self.ast.mem.pushn(&[$(parse::IdentSpanned { name: $name, span }),*])
+            }
+        }
 
-        let core_mem: IdentSlice =
-            self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.core, self.ast.idents.b.mem]);
-        let core_types: IdentSlice = self
-            .ast
-            .idents
-            .slices
-            .add_slice_copy(&[self.ast.idents.b.core, self.ast.idents.b.types]);
+        let root_ns = intern_path!(self.ast.idents.b.root_module_name);
+        let core_ns = intern_path!(self.ast.idents.b.core);
+        let core_mem = intern_path!(self.ast.idents.b.core, self.ast.idents.b.mem);
+        let core_types = intern_path!(self.ast.idents.b.core, self.ast.idents.b.types);
 
         macro_rules! core {
             ($name: expr) => {
@@ -17281,6 +17264,28 @@ impl TypedProgram {
         (source, line)
     }
 
+    pub fn write_scope_path<W: std::fmt::Write + ?Sized>(
+        &self,
+        w: &mut W,
+        scope: ScopeId,
+        delimiter: &str,
+        skip_root: bool,
+    ) {
+        let starting_namespace = self.scopes.nearest_parent_namespace(scope);
+        let namespace_chain = self.namespaces.name_chain(starting_namespace);
+        for (index, identifier) in namespace_chain.iter().enumerate() {
+            let ident_str = self.ident_str(*identifier);
+
+            let is_root = ident_str == "_root";
+            if !(is_root && skip_root) {
+                write!(w, "{ident_str}").unwrap();
+                if index < (namespace_chain.len() - 1) {
+                    write!(w, "{delimiter}").unwrap();
+                }
+            }
+        }
+    }
+
     pub fn write_qualified_name(
         &self,
         w: &mut impl std::fmt::Write,
@@ -17289,17 +17294,8 @@ impl TypedProgram {
         delimiter: &str,
         skip_root: bool,
     ) {
-        let starting_namespace = self.scopes.nearest_parent_namespace(scope);
-        let namespace_chain = self.namespaces.name_chain(starting_namespace);
-        for identifier in namespace_chain.iter() {
-            let ident_str = self.ident_str(*identifier);
-
-            let is_root = ident_str == "_root";
-            if !(skip_root && is_root) {
-                write!(w, "{ident_str}").unwrap();
-                write!(w, "{delimiter}").unwrap();
-            }
-        }
+        self.write_scope_path(w, scope, delimiter, skip_root);
+        write!(w, "{delimiter}").unwrap();
         write!(w, "{}", name).unwrap();
     }
 
@@ -17450,31 +17446,6 @@ impl TypedProgram {
         let use_color = std::io::stderr().is_terminal();
         self.write_location_error(&mut std::io::stderr(), span, use_color);
         panic!("not yet implemented: {}", msg.as_ref())
-    }
-
-    pub fn _sticky_update(&self) {
-        // Sticky line
-        use std::io::Write;
-        write!(std::io::stderr(), "\r>> Phase {}", self.phase).ok();
-    }
-
-    pub fn _info(&self, format_args: std::fmt::Arguments<'_>) {
-        self._sticky_msg(MessageLevel::Info, format_args)
-    }
-
-    // unfinished attempt at a sticky progress bar. We compile too fast for it to matter
-    // but i also wanted to reduce total output lines; might revisit
-    pub fn _sticky_msg(&self, level: MessageLevel, format_args: std::fmt::Arguments<'_>) {
-        use std::io::Write;
-        let mut err = std::io::stderr();
-
-        // Clear line
-        writeln!(err, "\r{}\r", " ".repeat(80)).ok();
-
-        write!(err, "[{}] {}", level, format_args).ok();
-
-        // Sticky line
-        write!(err, "\r>> Phase {}", self.phase).ok();
     }
 
     // Timing

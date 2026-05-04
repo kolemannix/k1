@@ -9,6 +9,7 @@ test:
 
 lsp:
   cargo build --features lsp --bin lsp
+  rm ~/.k1/bin/k1lsp
   cp target/debug/lsp ~/.k1/bin/k1lsp
   cp -r k1lib ~/.k1/k1lib
 

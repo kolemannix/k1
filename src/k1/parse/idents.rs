@@ -2,12 +2,11 @@ use std::fmt::{Display, Formatter};
 
 use string_interner::{Symbol, backend::StringBackend};
 
-use crate::{
-    impl_copy_if_small,
-    lex::SpanId,
-    nz_u32_id,
-    vpool::{SliceHandle, VPool},
-};
+use crate::kmem::MSlice;
+use crate::kmem::Mem;
+use crate::parse::ParsedProgram;
+use crate::parse::ParsedSlice;
+use crate::{impl_copy_if_small, lex::SpanId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct Ident(string_interner::symbol::SymbolU32);
@@ -42,19 +41,38 @@ impl Display for Ident {
     }
 }
 
-nz_u32_id!(IdentSliceId);
-pub type IdentSlice = SliceHandle<IdentSliceId>;
+pub type IdentSlice = ParsedSlice<Ident>;
 
-#[derive(Debug, Clone)]
-pub struct QIdent {
-    pub path: IdentSlice,
+#[derive(Clone, Copy)]
+pub struct IdentSpanned {
     pub name: Ident,
     pub span: SpanId,
+}
+
+impl IdentSpanned {
+    pub fn make(ident: Ident, span: SpanId) -> Self {
+        IdentSpanned { name: ident, span }
+    }
+    pub fn make_anon(ident: Ident) -> Self {
+        IdentSpanned { name: ident, span: SpanId::NONE }
+    }
+}
+
+#[derive(Clone)]
+///```norun
+///A [q]ualified identifier; as in, foo/bar/baz/thing
+///                                 ^^^^^^^^^^^ ^^^^^
+///                                 path[3]     name
+///```
+pub struct QIdent {
+    pub name: Ident,
+    pub span: SpanId,
+    pub path: ParsedSlice<IdentSpanned>,
 }
 impl_copy_if_small!(16, QIdent);
 impl QIdent {
     pub fn naked(name: Ident, span: SpanId) -> QIdent {
-        QIdent { path: IdentSlice::empty(), name, span }
+        QIdent { name, span, path: MSlice::empty() }
     }
     pub fn with_span(&self, span: SpanId) -> QIdent {
         QIdent { span, ..*self }
@@ -123,7 +141,6 @@ pub(crate) struct BuiltinIdents {
     pub sys: Ident,
     pub libc: Ident,
     pub span: Ident,
-    pub Equals: Ident,
     pub add: Ident,
     pub sub: Ident,
     pub mul: Ident,
@@ -203,7 +220,6 @@ pub(crate) struct BuiltinFunctions {
 // and u32 symbols
 pub struct IdentPool {
     intern_pool: string_interner::StringInterner<StringBackend, fxhash::FxBuildHasher>,
-    pub slices: VPool<Ident, IdentSliceId>,
     /// b for builtins
     pub(crate) b: BuiltinIdents,
     /// f for functions
@@ -226,8 +242,7 @@ impl IdentPool {
     }
 
     #[allow(non_snake_case)]
-    pub fn make() -> Self {
-        let mut slices: VPool<Ident, IdentSliceId> = VPool::make_with_hint("ident_slices", 8192);
+    pub fn make(mem: &mut Mem<ParsedProgram>) -> Self {
         let mut pool = string_interner::StringInterner::with_capacity_and_hasher(
             65536,
             fxhash::FxBuildHasher::default(),
@@ -237,6 +252,12 @@ impl IdentPool {
             ($name: expr) => {
                 Ident(pool.get_or_intern_static($name))
             };
+        }
+
+        macro_rules! intern_path {
+            ($($name: expr),*) => {
+                mem.pushn(&[$(IdentSpanned::make_anon($name)),*])
+            }
         }
 
         let b = BuiltinIdents {
@@ -297,7 +318,6 @@ impl IdentPool {
             sys: intern!("sys"),
             libc: intern!("libc"),
             span: intern!("span"),
-            Equals: intern!("equals"),
             add: intern!("add"),
             sub: intern!("sub"),
             mul: intern!("mul"),
@@ -338,60 +358,76 @@ impl IdentPool {
         };
 
         macro_rules! make_fn {
-            ($path: expr, $name: expr) => {
-                QIdent { path: slices.add_slice_copy($path), name: $name, span: SpanId::NONE }
-            };
+            ($path: expr, $name: expr) => {{
+                QIdent { path: $path, name: $name, span: SpanId::NONE }
+            }};
         }
 
-        let List_withCapacity = make_fn!(&[b.core, b.list], b.withCapacity);
-        let List_push = make_fn!(&[b.core, b.list], intern!("push"));
-        let Iterator_next = make_fn!(&[b.iterator], b.next);
+        let path_core_list = intern_path!(b.core, b.list);
+        let List_withCapacity = make_fn!(path_core_list, b.withCapacity);
+        let List_push = make_fn!(path_core_list, intern!("push"));
 
-        let Iterable_iterator = make_fn!(&[b.iterable], intern!("iterator"));
+        let path_core_iterator = intern_path!(b.core, b.iterator);
+        let Iterator_next = make_fn!(path_core_iterator, b.next);
 
-        let bool_negated = make_fn!(&[intern!("bool")], intern!("negated"));
+        let path_core_iterable = intern_path!(b.core, b.iterable);
 
-        let core_crash = make_fn!(&[b.core], intern!("crash"));
-        let core_crashBounds = make_fn!(&[b.core], intern!("crash-bounds"));
-        let core_discard = make_fn!(&[b.core], intern!("discard"));
+        let Iterable_iterator = make_fn!(path_core_iterable, intern!("iterator"));
 
-        let core_Print_printTo = make_fn!(&[b.core, intern!("print")], intern!("printTo"));
+        let path_core_bool = intern_path!(b.core, intern!("bool"));
+        let bool_negated = make_fn!(path_core_bool, intern!("negated"));
 
-        let try__is_ok: QIdent = make_fn!(&[b.try_], intern!("is-ok"));
-        let try__get_value: QIdent = make_fn!(&[b.try_], intern!("get-value"));
-        let try__get_error: QIdent = make_fn!(&[b.try_], intern!("get-error"));
+        let path_core = intern_path!(b.core);
+        let core_crash = make_fn!(path_core, intern!("crash"));
+        let core_crashBounds = make_fn!(path_core, intern!("crash-bounds"));
+        let core_discard = make_fn!(path_core, intern!("discard"));
 
-        let buffer__allocate: QIdent = make_fn!(&[b.core, b.buffer], intern!("_allocate"));
-        let buffer_set: QIdent = make_fn!(&[b.core, b.buffer], intern!("set"));
+        let path_core_print = intern_path!(b.core, intern!("print"));
+        let core_print_printTo = make_fn!(path_core_print, intern!("printTo"));
 
-        let array__set: QIdent = make_fn!(&[b.array], intern!("set"));
+        let path_try = intern_path!(b.try_);
+        let try__is_ok: QIdent = make_fn!(path_try, intern!("is-ok"));
+        let try__get_value: QIdent = make_fn!(path_try, intern!("get-value"));
+        let try__get_error: QIdent = make_fn!(path_try, intern!("get-error"));
 
-        let mem_zeroed: QIdent = make_fn!(&[b.mem], intern!("zeroed"));
+        let path_core_buffer = intern_path!(b.core, b.buffer);
+        let buffer__allocate: QIdent = make_fn!(path_core_buffer, intern!("_allocate"));
+        let buffer_set: QIdent = make_fn!(path_core_buffer, intern!("set"));
 
-        let span_wrapBuffer: QIdent = make_fn!(&[b.core, b.span], intern!("wrapBuffer"));
+        let path_array = intern_path!(b.core, b.array);
+        let array__set: QIdent = make_fn!(path_array, intern!("set"));
 
-        let equals__equals: QIdent = make_fn!(&[b.core, b.Equals], b.equals);
+        let path_mem = intern_path!(b.mem);
+        let mem_zeroed: QIdent = make_fn!(path_mem, intern!("zeroed"));
 
-        let add__add: QIdent = make_fn!(&[b.add], b.add);
-        let sub__sub: QIdent = make_fn!(&[b.sub], b.sub);
-        let mul__mul: QIdent = make_fn!(&[b.mul], b.mul);
-        let div__div: QIdent = make_fn!(&[b.div], b.div);
-        let rem__rem: QIdent = make_fn!(&[b.rem], b.rem);
+        let path_core_span = intern_path!(b.core, b.span);
+        let span_wrapBuffer: QIdent = make_fn!(path_core_span, intern!("wrap-buffer"));
 
-        let ScalarCmp_lt: QIdent = make_fn!(&[b.scalar_cmp], b.lt);
-        let ScalarCmp_le: QIdent = make_fn!(&[b.scalar_cmp], b.le);
-        let ScalarCmp_gt: QIdent = make_fn!(&[b.scalar_cmp], b.gt);
-        let ScalarCmp_ge: QIdent = make_fn!(&[b.scalar_cmp], b.ge);
+        let path_core_equals = intern_path!(b.core, b.equals);
+        let equals__equals: QIdent = make_fn!(path_core_equals, b.equals);
 
-        let StringBuilder_new: QIdent = make_fn!(&[b.core, b.StringBuilder], intern!("new"));
-        let StringBuilder_buildTmp: QIdent =
-            make_fn!(&[b.core, b.StringBuilder], intern!("buildTmp"));
+        let add__add: QIdent = make_fn!(intern_path!(b.add), b.add);
+        let sub__sub: QIdent = make_fn!(intern_path!(b.sub), b.sub);
+        let mul__mul: QIdent = make_fn!(intern_path!(b.mul), b.mul);
+        let div__div: QIdent = make_fn!(intern_path!(b.div), b.div);
+        let rem__rem: QIdent = make_fn!(intern_path!(b.rem), b.rem);
 
-        let bitwise_and = make_fn!(&[b.core, b.bitwise], intern!("bit-and"));
-        let bitwise_or = make_fn!(&[b.core, b.bitwise], intern!("bit-or"));
-        let bitwise_xor = make_fn!(&[b.core, b.bitwise], intern!("xor"));
-        let bitwise_shl = make_fn!(&[b.core, b.bitwise], intern!("shift-left"));
-        let bitwise_shr = make_fn!(&[b.core, b.bitwise], intern!("shift-right"));
+        let path_scalar_cmp = intern_path!(b.scalar_cmp);
+        let ScalarCmp_lt: QIdent = make_fn!(path_scalar_cmp, b.lt);
+        let ScalarCmp_le: QIdent = make_fn!(path_scalar_cmp, b.le);
+        let ScalarCmp_gt: QIdent = make_fn!(path_scalar_cmp, b.gt);
+        let ScalarCmp_ge: QIdent = make_fn!(path_scalar_cmp, b.ge);
+
+        let path_stringbuilder = intern_path!(b.core, b.StringBuilder);
+        let StringBuilder_new: QIdent = make_fn!(path_stringbuilder, intern!("new"));
+        let StringBuilder_buildTmp: QIdent = make_fn!(path_stringbuilder, intern!("buildTmp"));
+
+        let path_core_bitwise = intern_path!(b.core, b.bitwise);
+        let bitwise_and = make_fn!(path_core_bitwise, intern!("bit-and"));
+        let bitwise_or = make_fn!(path_core_bitwise, intern!("bit-or"));
+        let bitwise_xor = make_fn!(path_core_bitwise, intern!("xor"));
+        let bitwise_shl = make_fn!(path_core_bitwise, intern!("shift-left"));
+        let bitwise_shr = make_fn!(path_core_bitwise, intern!("shift-right"));
 
         let f = BuiltinFunctions {
             List_withCapacity,
@@ -405,7 +441,7 @@ impl IdentPool {
             core_crash,
             core_crash_bounds: core_crashBounds,
             core_discard,
-            core_Print_printTo,
+            core_Print_printTo: core_print_printTo,
             buffer__allocate,
             buffer_set,
             Array_set: array__set,
@@ -430,6 +466,6 @@ impl IdentPool {
             bitwise_shr,
         };
 
-        Self { intern_pool: pool, slices, b, f }
+        Self { intern_pool: pool, b, f }
     }
 }

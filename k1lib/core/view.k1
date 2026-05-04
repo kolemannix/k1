@@ -17,7 +17,7 @@ ns span {
   // Constructor functions
 
   // Only safe if you have exclusive access to buffer
-  fn wrapBuffer[T](buffer: buffer[T]): span[T] {
+  fn wrap-buffer[T](buffer: buffer[T]): span[T] {
     { buffer }
   }
 
@@ -113,12 +113,12 @@ ns span {
 
   fn concat[T](self: span[T], other: span[T]): span[T] {
     let concatedBuffer = self.innerBuffer().concat(other.innerBuffer());
-    wrapBuffer(concatedBuffer)
+    wrap-buffer(concatedBuffer)
   }
 
   fn sorted[T](self: span[T]): span[T] where T: comparable {
     let newBuffer = self.buffer.cloned();
-    wrapBuffer(newBuffer.sorted())
+    wrap-buffer(newBuffer.sorted())
   }
 
   fn as-char-span(self: span[byte]): span[char] {

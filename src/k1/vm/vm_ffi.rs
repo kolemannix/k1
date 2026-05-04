@@ -4,11 +4,11 @@ use libffi::raw::ffi_cif;
 use libffi::{low::*, raw};
 use log::debug;
 
-use crate::ir::{self, PhysicalFunctionType, ProgramIr};
 use crate::errf;
+use crate::ir::{self, PhysicalFunctionType, ProgramIr};
 use crate::lex::SpanId;
 use crate::typer::types::{AggType, Layout, PhysicalType, PhysicalTypeEnum, ScalarType};
-use crate::typer::{FunctionId, TypedProgram, K1Result};
+use crate::typer::{FunctionId, K1Result, TypedProgram};
 use crate::vm;
 use crate::vm::{Value, Vm};
 use crate::{failf, kmem::MSlice, parse::Ident};
@@ -30,9 +30,7 @@ pub(super) fn handle_ffi_call(
     let fn_type = k1.ir.functions.get(function_id).unwrap().fn_type;
     let function_params = fn_type.params;
 
-    for (arg_value, param) in
-        k1.ir.mem.getn(args).iter().zip(k1.ir.mem.getn(function_params))
-    {
+    for (arg_value, param) in k1.ir.mem.getn(args).iter().zip(k1.ir.mem.getn(function_params)) {
         let vm_value = vm::resolve_value(k1, vm, frame_index, *arg_value)?;
 
         // If aggregate, you already have the pointer that libffi wants

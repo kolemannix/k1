@@ -123,16 +123,18 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         Err(CompileProgramError::TyperFailure(module)) => {
             let Some(err) = module.messages.iter().find(|e| e.level == MessageLevel::Error) else {
                 if let Some(parse_error) = module.ast.errors.first() {
-                    module.write_error(
-                        &mut std::io::stderr(),
-                        &K1Message {
-                            message: parse_error.message().to_string(),
-                            span: parse_error.span(),
-                            error_kind: ErrorKind::ParseError,
-                            level: MessageLevel::Error,
-                        },
-                        false,
-                    ).unwrap();
+                    module
+                        .write_error(
+                            &mut std::io::stderr(),
+                            &K1Message {
+                                message: parse_error.message().to_string(),
+                                span: parse_error.span(),
+                                error_kind: ErrorKind::ParseError,
+                                level: MessageLevel::Error,
+                            },
+                            false,
+                        )
+                        .unwrap();
                     bail!("{filename}: Failed parsing: {}", parse_error)
                 } else {
                     bail!("{filename}: Failed but had no errors")

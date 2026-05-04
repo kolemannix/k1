@@ -671,7 +671,7 @@ ns array {
 
   fn as-span[t, n](array: *array[t, n]): span[t] where n: static size {
     let temp = array.to-mut.as-buffer();
-    span/wrapBuffer(temp)
+    span/wrap-buffer(temp)
   }
 
 }

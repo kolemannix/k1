@@ -36,9 +36,9 @@ impl Display for TypedProgram {
         f.write_str("--- Ability Impls ---\n")?;
         self.dump_ability_impls(f)?;
         f.write_str("--- Scopes ---\n")?;
-        for (id, scope) in self.scopes.iter() {
+        for (id, _scope) in self.scopes.iter() {
             write!(f, "scope {:02} ", id)?;
-            self.display_scope(scope, f)?;
+            self.display_scope(id, f)?;
             f.write_str("\n")?;
         }
         f.write_str("--- Static Values ---\n")?;
@@ -51,12 +51,13 @@ impl Display for TypedProgram {
 impl TypedProgram {
     pub fn scope_id_to_string(&self, scope_id: ScopeId) -> String {
         let mut s = String::new();
-        self.display_scope(self.scopes.get_scope(scope_id), &mut s).unwrap();
+        self.display_scope(scope_id, &mut s).unwrap();
         s
     }
 
-    pub fn display_scope(&self, scope: &Scope, writ: &mut impl Write) -> std::fmt::Result {
-        self.scopes.display_scope_name(writ, scope, &self.ast.idents)?;
+    pub fn display_scope(&self, scope_id: ScopeId, writ: &mut impl Write) -> std::fmt::Result {
+        let scope = self.scopes.get_scope(scope_id);
+        self.display_scope_name(writ, scope_id)?;
         writeln!(writ, " {}", scope.scope_type.short_name())?;
 
         if !scope.variables.is_empty() {
@@ -76,11 +77,9 @@ impl TypedProgram {
         if !scope.functions.is_empty() {
             writ.write_str("\tFUNCTIONS\n")?;
         }
-        for (name, function_id) in scope.functions.iter() {
+        for (_name, function_id) in scope.functions.iter() {
             let function = self.get_function(*function_id);
             writ.write_str("\t")?;
-            self.write_ident(writ, *name)?;
-            writ.write_str(" -> ")?;
             self.display_function(function, writ, false)?;
             writ.write_str("\n")?;
         }
@@ -98,6 +97,7 @@ impl TypedProgram {
             writ.write_str("\tNAMESPACES\n")?;
         }
         for (_name, namespace_id) in scope.namespaces.iter() {
+            writ.write_str("\t")?;
             write!(writ, "{} -> ", namespace_id)?;
             let namespace = self.namespaces.get(*namespace_id);
             writ.write_str(self.ident_str(namespace.name))?;
@@ -249,11 +249,7 @@ impl TypedProgram {
             }
             Type::TypeParameter(tv) => {
                 if expand {
-                    self.scopes.display_scope_name(
-                        w,
-                        self.scopes.get_scope(tv.scope_id),
-                        &self.ast.idents,
-                    )?;
+                    self.display_scope_name(w, tv.scope_id)?;
                     w.write_str(".")?;
                     w.write_str("'")?;
                     w.write_str(self.ident_str(tv.name))?;
@@ -448,7 +444,14 @@ impl TypedProgram {
         }
 
         w.write_str("fn ")?;
-        self.display_function_signature(w, function.signature())?;
+        let mut sig = function.signature();
+        match function.specialization_info {
+            Some(spec_info) => {
+                sig.name = Some(self.functions.get(spec_info.parent_function).name);
+            }
+            None => {}
+        }
+        self.display_function_signature(w, sig, function.specialization_info)?;
         if display_block {
             w.write_str(" ")?;
             if let Some(block) = &function.body_block {
@@ -619,11 +622,11 @@ impl TypedProgram {
                     }
                     Callee::Abstract { function_sig } => {
                         w.write_str("abstract ")?;
-                        self.display_function_signature(w, *function_sig)?;
+                        self.display_function_signature(w, *function_sig, None)?;
                     }
                     Callee::Builtin { function_sig, builtin } => {
                         w.write_str("builtin ")?;
-                        self.display_function_signature(w, *function_sig)?;
+                        self.display_function_signature(w, *function_sig, None)?;
                         w.write_str(" ")?;
                         w.write_str(builtin.kind_name())?;
                     }
@@ -1049,13 +1052,18 @@ impl TypedProgram {
         }
     }
 
-    pub fn display_named_type(&self, w: &mut impl Write, nt: impl NamedType) -> std::fmt::Result {
-        write!(w, "{} := {}", self.ident_str(nt.name()), self.type_id_to_string(nt.type_id()))
+    pub fn display_named_type(
+        &self,
+        w: &mut impl Write,
+        nt: impl NamedType,
+        sep: &'static str,
+    ) -> std::fmt::Result {
+        write!(w, "{}{} {}", self.ident_str(nt.name()), sep, self.type_id_to_string(nt.type_id()))
     }
 
     pub fn named_type_to_string(&self, nt: impl NamedType) -> String {
         let mut s: String = String::with_capacity(128);
-        self.display_named_type(&mut s, nt).unwrap();
+        self.display_named_type(&mut s, nt, ":=").unwrap();
         s
     }
 
@@ -1072,12 +1080,12 @@ impl TypedProgram {
         }
         write!(w, "[")?;
         for arg in self.mem.getn(ability.kind.arguments()) {
-            self.display_named_type(w, arg)?;
+            self.display_named_type(w, arg, ":=")?;
             w.write_str(", ")?;
         }
         for arg in impl_arguments {
             w.write_str("impl ")?;
-            self.display_named_type(w, arg)?;
+            self.display_named_type(w, arg, ":=")?;
             w.write_str(", ")?;
         }
         write!(w, "]")?;
@@ -1133,13 +1141,13 @@ impl TypedProgram {
                     }
                     AbilityImplFunction::Abstract(sig) => {
                         w.write_str("abstract ")?;
-                        self.display_function_signature(w, sig)?;
+                        self.display_function_signature(w, sig, None)?;
                     }
                     AbilityImplFunction::Builtin(sig, builtin) => {
                         w.write_str("builtin ")?;
                         w.write_str(builtin.kind_name())?;
                         w.write_str(" ")?;
-                        self.display_function_signature(w, sig)?;
+                        self.display_function_signature(w, sig, None)?;
                     }
                 };
                 writeln!(w)?;
@@ -1227,8 +1235,8 @@ impl TypedProgram {
     }
 
     pub fn display_qident<W: Write + ?Sized>(&self, w: &mut W, ident: &QIdent) -> std::fmt::Result {
-        for ns in self.ast.idents.slices.get_slice(ident.path) {
-            self.write_ident(w, *ns)?;
+        for ns in self.ast.mem.getn(ident.path) {
+            self.write_ident(w, ns.name)?;
             write!(w, "/")?;
         }
         self.write_ident(w, ident.name)
@@ -1242,7 +1250,7 @@ impl TypedProgram {
 
     pub fn function_signature_to_string(&self, fn_signature: FunctionSignature) -> String {
         let mut s = String::new();
-        self.display_function_signature(&mut s, fn_signature).unwrap();
+        self.display_function_signature(&mut s, fn_signature, None).unwrap();
         s
     }
 
@@ -1250,6 +1258,7 @@ impl TypedProgram {
         &self,
         w: &mut impl Write,
         signature: FunctionSignature,
+        specialization_info: Option<SpecializationInfo>,
     ) -> std::fmt::Result {
         if let Some(name) = signature.name {
             self.write_ident(w, name)?;
@@ -1261,12 +1270,16 @@ impl TypedProgram {
                     w.write_str(", ")?;
                 }
                 self.write_ident(w, tp.name)?;
+                // FIXME: render the type param constraints, including fnlikes
             }
-            for ftp in self.mem.getn(signature.function_type_params).iter() {
-                self.write_ident(w, ftp.name)?;
-                w.write_str(": ")?;
-                self.display_type_id(w, ftp.type_id, false)?;
-                w.write_str(", ")?;
+            w.write_char(']')?;
+        } else if let Some(spec_info) = specialization_info {
+            w.write_char('[')?;
+            for (index, arg) in self.mem.getn(spec_info.type_arguments).iter().enumerate() {
+                if index > 0 {
+                    w.write_str(", ")?;
+                }
+                self.display_named_type(w, *arg, ":=")?;
             }
             w.write_char(']')?;
         }

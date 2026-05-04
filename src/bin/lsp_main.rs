@@ -8,14 +8,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, RwLock};
 
 use k1::compiler::CompileProgramError;
-use k1::lex::{self, SpanId, Spans};
+use k1::lex::{self, Span, SpanId, Spans};
 use k1::parse;
 use k1::parse::{ParsedProgram, Source};
 use k1::typer::*;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 const TOKEN_TYPES: [SemanticTokenType; 22] = [
     SemanticTokenType::NAMESPACE,
@@ -95,8 +95,7 @@ enum TokenModifiers {
     DefaultLibrary = 1 << 9,
 }
 
-fn span_to_range(source: &Source, spans: &Spans, span_id: SpanId) -> Option<Range> {
-    let span = spans.get(span_id);
+fn span_to_range(source: &Source, span: Span) -> Option<Range> {
     let (start_line, end_line) = source.get_lines_for_span(span)?;
     Some(Range {
         start: Position {
@@ -105,6 +104,10 @@ fn span_to_range(source: &Source, spans: &Spans, span_id: SpanId) -> Option<Rang
         },
         end: Position { line: end_line.line_index, character: span.end() - end_line.start_char },
     })
+}
+fn span_id_to_range(source: &Source, spans: &Spans, span_id: SpanId) -> Option<Range> {
+    let span = spans.get(span_id);
+    span_to_range(source, span)
 }
 
 fn error_to_diagnostic(
@@ -126,7 +129,7 @@ fn error_to_diagnostic(
     // escaped_message.push_str("```txt\n");
     // escaped_message.push_str(&message);
     // escaped_message.push_str("\n```");
-    match span_to_range(source, &ast.spans, span_id) {
+    match span_id_to_range(source, &ast.spans, span_id) {
         None => {
             error!("Failed span lookup for diagnostic: {}", &message);
             None
@@ -369,6 +372,7 @@ impl LanguageServer for Backend {
                     SaveOptions { include_text: None }
                 })),
             }));
+        res.capabilities.definition_provider = Some(OneOf::Left(true));
         res.capabilities.hover_provider = Some(HoverProviderCapability::Simple(true));
         res.capabilities.diagnostic_provider =
             Some(DiagnosticServerCapabilities::Options(DiagnosticOptions {
@@ -444,7 +448,7 @@ impl LanguageServer for Backend {
             ast.errors.len()
         );
         for error in &ast.errors {
-            if let Some(range) = span_to_range(new_source, &ast.spans, error.span()) {
+            if let Some(range) = span_id_to_range(new_source, &ast.spans, error.span()) {
                 let diagnostic = Diagnostic {
                     range,
                     severity: Some(DiagnosticSeverity::ERROR),
@@ -477,26 +481,43 @@ impl LanguageServer for Backend {
         let start = std::time::Instant::now();
         let position = params.text_document_position_params;
         let file_url = position.text_document.uri;
-        let line = position.position.line;
-        let col = position.position.character;
+        let hover_line_index = position.position.line;
+        let hover_col = position.position.character;
         let mut module = self.module.lock().unwrap();
         let CompiledProgram::Typed(k1) = &mut *module else {
-            info!("Parsed but not typed (when does this happen?)");
+            warn!("Parsed but not typed");
             return Ok(None);
         };
-        info!("hover: {}:{}:{}", file_url.path(), line, col);
+
+        info!("hover: {}:{}:{}", file_url.path(), hover_line_index, hover_col);
         let Some(source) = uri_to_source(&k1.ast, &file_url) else {
             info!("Could not get source for {}", file_url.path());
             return Ok(None);
         };
+        let file_id = source.file_id;
+        if let Some(entity) =
+            k1::lsp_support::find_entity_at_point(k1, file_id, hover_line_index, hover_col)
+        {
+            let hover_msg = k1::lsp_support::get_hover_message_for_entity(k1, entity);
+            return Ok(Some(Hover {
+                contents: HoverContents::Scalar(MarkedString::LanguageString(LanguageString {
+                    language: "txt".to_string(),
+                    value: hover_msg,
+                })),
+                range: None,
+            }));
+        }
 
-        let expr = k1::lsp_support::get_expr_at_point(k1, source.file_id, line, col);
+        let expr = k1::lsp_support::get_expr_at_point(k1, file_id, hover_line_index, hover_col);
         let elapsed = start.elapsed();
         info!("hover computed in {:.2?}", elapsed);
         match expr {
             None => Ok(None),
-            Some(expr) => Ok(Some(Hover {
-                contents: HoverContents::Scalar(MarkedString::String(expr)),
+            Some(hover_msg) => Ok(Some(Hover {
+                contents: HoverContents::Scalar(MarkedString::LanguageString(LanguageString {
+                    language: "txt".to_string(),
+                    value: hover_msg,
+                })),
                 range: None,
             })),
         }
@@ -672,6 +693,47 @@ impl LanguageServer for Backend {
                 tags: None,
             }],
         })))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position_params = params.text_document_position_params.position;
+        let line = position_params.line;
+        let char = position_params.character;
+
+        let mut module = self.module.lock().unwrap();
+        let CompiledProgram::Typed(k1) = &mut *module else {
+            error!("Parsed but not typed");
+            return Ok(None);
+        };
+
+        info!("goto_definition: {}:{}:{}", uri.path(), line, char);
+        let Some(requested_source) = uri_to_source(&k1.ast, &uri) else {
+            error!("Could not get source for {}", uri.path());
+            return Ok(None);
+        };
+        let file_id = requested_source.file_id;
+        let Some(entity) = k1::lsp_support::find_entity_at_point(k1, file_id, line, char) else {
+            info!("No entity at point");
+            return Ok(None);
+        };
+
+        let definition = match entity.kind {
+            LsEntityKind::Namespace(namespace_id) => todo!(),
+            LsEntityKind::FunctionCall { function_id } => todo!(),
+        };
+        let Some(range) = span_to_range(requested_source, span) else {
+            error!("Failed to convert span to range for goto_definition");
+            return Ok(None);
+        };
+        let definition_source = k1.ast.sources.get(file_id);
+        let definition_uri =
+            source_to_uri(&definition_source.directory, &definition_source.filename);
+        info!("goto_definition response: {}, {:?}", definition_uri, range);
+        Ok(Some(GotoDefinitionResponse::Scalar(Location { uri: definition_uri, range })))
     }
 }
 

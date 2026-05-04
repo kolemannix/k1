@@ -8,16 +8,14 @@ use smallvec::{SmallVec, smallvec};
 use std::{collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
 use crate::{
-    SV4, errf,
-    lex::SpanId,
-    nz_u32_id,
-    parse::{IdentPool, IdentSlice, ParsedAbilityId, ParsedExprId, QIdent},
-    vpool::VPool,
+    SV4, errf, nz_u32_id,
+    parse::{ParsedAbilityId, ParsedExprId, QIdent},
     static_assert_niched, static_assert_size,
     typer::{
-        AbilityId, FunctionId, Ident, K1Result, LoopType, NamespaceId, Namespaces, TypeId,
-        TypedExprId, VariableId,
+        AbilityId, FunctionId, Ident, K1Result, LoopType, LsEntityKind, NamespaceId, TypeId,
+        TypedExprId, TypedProgram, VariableId,
     },
+    vpool::VPool,
 };
 
 nz_u32_id!(ScopeId);
@@ -253,28 +251,30 @@ impl Scopes {
         }
     }
 
-    pub fn find_variable_namespaced(
-        &self,
-        scope: ScopeId,
-        name: &QIdent,
-        namespaces: &Namespaces,
-        identifiers: &IdentPool,
-    ) -> K1Result<Option<(VariableId, ScopeId)>> {
-        if name.path.is_empty() {
-            Ok(self.find_variable(scope, name.name))
-        } else {
-            let scope_to_search = self.traverse_namespace_chain(
-                scope,
-                name.path,
-                namespaces,
-                identifiers,
-                name.span,
-            )?;
-            match self.get_scope(scope_to_search).find_variable(name.name) {
-                None => Ok(None),
-                Some(VariableInScope::Defined(id)) => Ok(Some((id, scope_to_search))),
-                Some(VariableInScope::Masked) => Ok(None),
+    pub fn find_ability(&self, scope_id: ScopeId, name: Ident) -> Option<AbilityId> {
+        let scope = self.get_scope(scope_id);
+        if let Some(ability_id) = scope.find_ability(name) {
+            return Some(ability_id);
+        }
+        match scope.parent {
+            Some(parent_scope_id) => self.find_ability(parent_scope_id, name),
+            None => None,
+        }
+    }
+
+    pub fn is_ability_id_in_scope(&self, scope_id: ScopeId, target_ability_id: AbilityId) -> bool {
+        let scope = self.get_scope(scope_id);
+        for ability_id in scope.abilities.values() {
+            if *ability_id == target_ability_id {
+                return true;
             }
+        }
+
+        match scope.parent {
+            Some(parent_scope_id) => {
+                self.is_ability_id_in_scope(parent_scope_id, target_ability_id)
+            }
+            None => false,
         }
     }
 
@@ -302,48 +302,6 @@ impl Scopes {
                 Some(parent) => self.find_variable(parent, ident),
                 None => None,
             },
-        }
-    }
-
-    pub fn add_variable(
-        &mut self,
-        scope_id: ScopeId,
-        ident: Ident,
-        variable_id: VariableId,
-    ) -> bool {
-        let scope = self.get_scope_mut(scope_id);
-        scope.add_variable(ident, variable_id)
-    }
-
-    pub fn add_context_variable(
-        &mut self,
-        scope: ScopeId,
-        ident: Ident,
-        variable_id: VariableId,
-        type_id: TypeId,
-    ) -> bool {
-        let scope = self.get_scope_mut(scope);
-        scope.add_context_variable(ident, variable_id, type_id)
-    }
-
-    pub fn find_function_namespaced(
-        &self,
-        scope: ScopeId,
-        name: &QIdent,
-        namespaces: &Namespaces,
-        identifiers: &IdentPool,
-    ) -> K1Result<Option<FunctionId>> {
-        if name.path.is_empty() {
-            Ok(self.find_function(scope, name.name))
-        } else {
-            let scope_to_search = self.traverse_namespace_chain(
-                scope,
-                name.path,
-                namespaces,
-                identifiers,
-                name.span,
-            )?;
-            Ok(self.get_scope(scope_to_search).find_function(name.name))
         }
     }
 
@@ -381,30 +339,6 @@ impl Scopes {
         match scope.parent {
             Some(parent) => self.find_type(parent, ident),
             None => None,
-        }
-    }
-
-    pub fn find_type_namespaced(
-        &self,
-        scope_id: ScopeId,
-        type_name: &QIdent,
-        namespaces: &Namespaces,
-        identifiers: &IdentPool,
-    ) -> K1Result<Option<(TypeId, ScopeId)>> {
-        if type_name.path.is_empty() {
-            Ok(self.find_type(scope_id, type_name.name))
-        } else {
-            let scope_to_search = self.traverse_namespace_chain(
-                scope_id,
-                type_name.path,
-                namespaces,
-                identifiers,
-                type_name.span,
-            )?;
-            Ok(self
-                .get_scope(scope_to_search)
-                .find_type(type_name.name)
-                .map(|t| (t, scope_to_search)))
         }
     }
 
@@ -473,110 +407,25 @@ impl Scopes {
         }
     }
 
-    pub fn nearest_parent_loop(&self, scope_id: ScopeId) -> Option<(ScopeId, LoopType)> {
-        let scope = self.get_scope(scope_id);
-        match scope.scope_type.loop_type() {
-            Some(loop_type) => Some((scope_id, loop_type)),
-            None => match scope.parent {
-                Some(parent) => self.nearest_parent_loop(parent),
-                None => None,
-            },
-        }
-    }
-
-    pub fn scope_name_to_string(&self, scope: &Scope, identifiers: &IdentPool) -> String {
-        let mut name = String::new();
-        self.display_scope_name(&mut name, scope, identifiers).unwrap();
-        name
-    }
-
-    pub fn display_scope_name<W: std::fmt::Write + ?Sized>(
-        &self,
-        name_buf: &mut W,
-        scope: &Scope,
-        identifiers: &IdentPool,
-    ) -> std::fmt::Result {
-        if let Some(p) = scope.parent {
-            let parent_scope = self.get_scope(p);
-            self.display_scope_name(name_buf, parent_scope, identifiers)?;
-            name_buf.write_char('.')?;
-        }
-        match scope.name {
-            Some(_) if scope.parent.is_none() => {}
-            Some(name) => {
-                name_buf.write_str(identifiers.get_name(name))?;
-            }
-            None => name_buf.write_str(scope.scope_type.short_name())?,
-        };
-
-        Ok(())
-    }
-
-    pub fn traverse_namespace_chain(
-        &self,
+    pub fn add_variable(
+        &mut self,
         scope_id: ScopeId,
-        namespace_chain: IdentSlice,
-        namespaces: &Namespaces,
-        idents: &IdentPool,
-        span: SpanId,
-    ) -> K1Result<ScopeId> {
-        let mut ns_iter = idents.slices.get_slice(namespace_chain).iter();
-        let mut cur_scope_id = scope_id;
-        let Some(first) = ns_iter.next() else {
-            return Ok(cur_scope_id);
-        };
-        // First lookup is special and recursive because it's in the current scope
-        let Some(first_ns) = self.find_namespace(cur_scope_id, *first) else {
-            return Err(errf!(
-                span,
-                "Namespace not found: {} from scope: {}",
-                idents.get_name(*first),
-                self.scope_name_to_string(self.get_scope(cur_scope_id), idents)
-            ));
-        };
-        cur_scope_id = namespaces.get(first_ns).scope_id;
-
-        for ns in ns_iter {
-            let cur_scope = self.get_scope(cur_scope_id);
-            let namespace_id = cur_scope.find_namespace(*ns).ok_or_else(|| {
-                errf!(
-                    span,
-                    "Namespace not found: {} in scope: {:?}",
-                    idents.get_name(*ns),
-                    self.get_scope(cur_scope_id).name.map(|n| idents.get_name(n))
-                )
-            })?;
-            let namespace = namespaces.get(namespace_id);
-            cur_scope_id = namespace.scope_id;
-        }
-        Ok(cur_scope_id)
+        ident: Ident,
+        variable_id: VariableId,
+    ) -> bool {
+        let scope = self.get_scope_mut(scope_id);
+        scope.add_variable(ident, variable_id)
     }
 
-    pub fn find_ability(&self, scope_id: ScopeId, name: Ident) -> Option<AbilityId> {
-        let scope = self.get_scope(scope_id);
-        if let Some(ability_id) = scope.find_ability(name) {
-            return Some(ability_id);
-        }
-        match scope.parent {
-            Some(parent_scope_id) => self.find_ability(parent_scope_id, name),
-            None => None,
-        }
-    }
-
-    pub fn is_ability_id_in_scope(&self, scope_id: ScopeId, target_ability_id: AbilityId) -> bool {
-        let scope = self.get_scope(scope_id);
-        for ability_id in scope.abilities.values() {
-            if *ability_id == target_ability_id {
-                return true;
-            }
-        }
-
-        match scope.parent {
-            Some(parent_scope_id) => {
-                self.is_ability_id_in_scope(parent_scope_id, target_ability_id)
-            }
-            None => false,
-        }
+    pub fn add_context_variable(
+        &mut self,
+        scope: ScopeId,
+        ident: Ident,
+        variable_id: VariableId,
+        type_id: TypeId,
+    ) -> bool {
+        let scope = self.get_scope_mut(scope);
+        scope.add_context_variable(ident, variable_id, type_id)
     }
 
     pub fn add_use_binding(
@@ -616,27 +465,6 @@ impl Scopes {
         }
     }
 
-    pub fn find_ability_namespaced(
-        &self,
-        scope_id: ScopeId,
-        ability_name: &QIdent,
-        namespaces: &Namespaces,
-        identifiers: &IdentPool,
-    ) -> K1Result<Option<AbilityId>> {
-        if ability_name.path.is_empty() {
-            Ok(self.find_ability(scope_id, ability_name.name))
-        } else {
-            let scope_to_search = self.traverse_namespace_chain(
-                scope_id,
-                ability_name.path,
-                namespaces,
-                identifiers,
-                ability_name.span,
-            )?;
-            Ok(self.get_scope(scope_to_search).find_ability(ability_name.name))
-        }
-    }
-
     pub fn add_capture(
         &mut self,
         scope_id: ScopeId,
@@ -673,6 +501,130 @@ impl Scopes {
 
     pub fn get_loop_info(&self, loop_scope_id: ScopeId) -> Option<&ScopeLoopInfo> {
         self.loop_info.get(&loop_scope_id)
+    }
+
+    pub fn nearest_parent_loop(&self, scope_id: ScopeId) -> Option<(ScopeId, LoopType)> {
+        let scope = self.get_scope(scope_id);
+        match scope.scope_type.loop_type() {
+            Some(loop_type) => Some((scope_id, loop_type)),
+            None => match scope.parent {
+                Some(parent) => self.nearest_parent_loop(parent),
+                None => None,
+            },
+        }
+    }
+}
+
+impl TypedProgram {
+    pub fn find_variable_namespaced(
+        &self,
+        scope: ScopeId,
+        name: &QIdent,
+    ) -> K1Result<Option<(VariableId, ScopeId)>> {
+        if name.path.is_empty() {
+            Ok(self.scopes.find_variable(scope, name.name))
+        } else {
+            let scope_to_search = self.resolve_qident(scope, name)?;
+            match self.scopes.get_scope(scope_to_search).find_variable(name.name) {
+                None => Ok(None),
+                Some(VariableInScope::Defined(id)) => Ok(Some((id, scope_to_search))),
+                Some(VariableInScope::Masked) => Ok(None),
+            }
+        }
+    }
+
+    pub fn find_function_namespaced(
+        &self,
+        scope: ScopeId,
+        name: &QIdent,
+    ) -> K1Result<Option<FunctionId>> {
+        if name.path.is_empty() {
+            Ok(self.scopes.find_function(scope, name.name))
+        } else {
+            let scope_to_search = self.resolve_qident(scope, name)?;
+            Ok(self.scopes.get_scope(scope_to_search).find_function(name.name))
+        }
+    }
+
+    pub fn find_type_namespaced(
+        &self,
+        scope_id: ScopeId,
+        type_name: &QIdent,
+    ) -> K1Result<Option<(TypeId, ScopeId)>> {
+        if type_name.path.is_empty() {
+            Ok(self.scopes.find_type(scope_id, type_name.name))
+        } else {
+            let scope_to_search = self.resolve_qident(scope_id, type_name)?;
+            Ok(self
+                .scopes
+                .get_scope(scope_to_search)
+                .find_type(type_name.name)
+                .map(|t| (t, scope_to_search)))
+        }
+    }
+
+    pub fn scope_name_to_string(&self, scope_id: ScopeId) -> String {
+        let mut name = String::new();
+        self.display_scope_name(&mut name, scope_id).unwrap();
+        name
+    }
+
+    pub fn display_scope_name<W: std::fmt::Write + ?Sized>(
+        &self,
+        name_buf: &mut W,
+        scope_id: ScopeId,
+    ) -> std::fmt::Result {
+        self.write_scope_path(name_buf, scope_id, "/", true);
+        Ok(())
+    }
+
+    pub fn resolve_qident(&self, scope_id: ScopeId, qident: &QIdent) -> K1Result<ScopeId> {
+        let mut ns_iter = self.ast.mem.getn(qident.path).iter();
+
+        let mut cur_scope_id = scope_id;
+        let Some(first) = ns_iter.next() else {
+            return Ok(cur_scope_id);
+        };
+        // First lookup is special and recursive because it's in the current scope
+        let Some(first_ns) = self.scopes.find_namespace(cur_scope_id, first.name) else {
+            return Err(errf!(
+                first.span,
+                "Namespace not found: {} from scope: {}",
+                self.ident_str(first.name),
+                self.scope_name_to_string(cur_scope_id,)
+            ));
+        };
+        self.emit_ls_entity(first.span, LsEntityKind::Namespace(first_ns));
+        cur_scope_id = self.namespaces.get(first_ns).scope_id;
+
+        for ident in ns_iter {
+            let cur_scope = self.scopes.get_scope(cur_scope_id);
+            let namespace_id = cur_scope.find_namespace(ident.name).ok_or_else(|| {
+                errf!(
+                    ident.span,
+                    "Namespace not found: {} in scope: {:?}",
+                    self.ident_str(ident.name),
+                    self.scopes.get_scope(cur_scope_id).name.map(|n| self.ident_str(n))
+                )
+            })?;
+            let namespace = self.namespaces.get(namespace_id);
+            self.emit_ls_entity(ident.span, LsEntityKind::Namespace(namespace_id));
+            cur_scope_id = namespace.scope_id;
+        }
+        Ok(cur_scope_id)
+    }
+
+    pub fn find_ability_namespaced(
+        &self,
+        scope_id: ScopeId,
+        ability_name: &QIdent,
+    ) -> K1Result<Option<AbilityId>> {
+        if ability_name.path.is_empty() {
+            Ok(self.scopes.find_ability(scope_id, ability_name.name))
+        } else {
+            let scope_to_search = self.resolve_qident(scope_id, ability_name)?;
+            Ok(self.scopes.get_scope(scope_to_search).find_ability(ability_name.name))
+        }
     }
 }
 

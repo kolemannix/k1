@@ -495,11 +495,7 @@ impl TypedProgram {
         )
     }
 
-    pub(super) fn synth_parsed_type_app(
-        &mut self,
-        name: Ident,
-        span: SpanId,
-    ) -> ParsedTypeExprId {
+    pub(super) fn synth_parsed_type_app(&mut self, name: Ident, span: SpanId) -> ParsedTypeExprId {
         self.ast.type_exprs.add(ParsedTypeExpr::TypeApplication(parse::TypeApplication {
             name: QIdent::naked(name, span),
             args: MSlice::empty(),

@@ -838,7 +838,13 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         macro_rules! return_single {
                             ($kind: expr) => {{
                                 self.advance();
-                                tokens.push(make_token(self, &mut state.pending_trivia, $kind, n, 1));
+                                tokens.push(make_token(
+                                    self,
+                                    &mut state.pending_trivia,
+                                    $kind,
+                                    n,
+                                    1,
+                                ));
                                 return Ok(Some(()));
                             }};
                         }
@@ -846,7 +852,13 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             ($kind: expr) => {{
                                 self.advance();
                                 self.advance();
-                                tokens.push(make_token(self, &mut state.pending_trivia, $kind, n, 2));
+                                tokens.push(make_token(
+                                    self,
+                                    &mut state.pending_trivia,
+                                    $kind,
+                                    n,
+                                    2,
+                                ));
                                 return Ok(Some(()));
                             }};
                         }

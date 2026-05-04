@@ -31,5 +31,4 @@ impl Clock {
     pub fn elapsed_ms(&self, since: u64) -> u64 {
         self.elapsed_nanos(since) / 1_000_000
     }
-
 }

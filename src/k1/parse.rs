@@ -6,11 +6,11 @@ use std::io::IsTerminal;
 
 use crate::kmem::{self, Handle, MSL2, MSS2, MSlice, MSpillList};
 use crate::typer::{Linkage, MessageLevel, ModuleId};
-use crate::vpool::{SliceHandle, VPool};
+use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
 use ecow::{EcoVec, eco_vec};
-pub use idents::{Ident, IdentPool, IdentSlice, IdentSliceId, QIdent};
+pub use idents::{Ident, IdentPool, IdentSlice, IdentSpanned, QIdent};
 use itertools::Itertools;
 use log::trace;
 use smallvec::{SmallVec, smallvec};
@@ -87,7 +87,7 @@ pub enum UseKind {
     Ability,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedUse {
     pub target: QIdent,
     pub explicit_kind: Option<UseKind>,
@@ -581,7 +581,7 @@ impl BinaryOpKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ParsedVariable {
     pub name: QIdent,
 }
@@ -718,7 +718,7 @@ pub struct ParsedStaticExpr {
     pub base_expr: ParsedExprId,
     pub kind: ParsedStaticBlockKind,
     pub condition_if_definition: Option<ParsedExprId>,
-    pub parameter_names: SliceHandle<IdentSliceId>,
+    pub parameter_names: IdentSlice,
     pub span: SpanId,
 }
 
@@ -1650,7 +1650,8 @@ unsafe impl Send for ParsedProgram {}
 
 impl ParsedProgram {
     pub fn make(name: String, preallocate_hints: bool) -> ParsedProgram {
-        let mut idents = IdentPool::make();
+        let mut mem = kmem::Mem::make();
+        let mut idents = IdentPool::make(&mut mem);
         let name_id = idents.intern(&name);
 
         macro_rules! if_hint {
@@ -1684,7 +1685,7 @@ impl ParsedProgram {
 
             semantic_tokens,
 
-            mem: kmem::Mem::make(),
+            mem,
         }
     }
 
@@ -2336,7 +2337,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 Parser::expect_ident_ext(p, false, false).map(|(_token, ident)| ident)
             })?;
         }
-        let parameter_names_handle = self.ast.idents.slices.add_slice_copy(&parameter_names);
+        let parameter_names_handle = self.ast.mem.pushn(&parameter_names);
         let base_expr = self.expect_expression()?;
         let expr_span = self.get_expression_span(base_expr);
         let span = self.extend_span(start_token.span, expr_span);
@@ -2408,7 +2409,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             let mut fields = EcoVec::new();
             while self.peek().kind != K::CloseBrace {
                 let ident_token = self.expect_kind(K::Ident)?;
-                let ident = self.intern_ident_token(ident_token);
+                let ident = self.make_ident(ident_token);
                 let maybe_colon = self.peek();
                 let pattern_id = if maybe_colon.kind == K::Colon {
                     self.advance();
@@ -2435,7 +2436,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             let sum_name = if first.kind == K::Ident {
                 // Eats the Colon
                 self.advance();
-                let sum_name = self.intern_ident_token(first);
+                let sum_name = self.make_ident(first);
                 self.expect_kind(K::Colon)?;
                 Some(sum_name)
             } else {
@@ -2444,7 +2445,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 None
             };
             let variant_name_token = self.expect_kind(K::Ident)?;
-            let variant_name_ident = self.intern_ident_token(variant_name_token);
+            let variant_name_ident = self.make_ident(variant_name_token);
             let (payload_pattern, span) = if self.peek().kind == K::OpenParen {
                 self.advance();
                 let payload_pattern_id = self.expect_parse_pattern()?;
@@ -2589,10 +2590,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    fn intern_ident_token(&mut self, token: Token) -> Ident {
+    fn make_ident(&mut self, token: Token) -> Ident {
         let tok_chars =
             Parser::tok_chars(&self.ast.spans, self.ast.sources.get(self.file_id), token);
         self.ast.idents.intern(tok_chars)
+    }
+
+    fn make_ident_spanned(&mut self, token: Token) -> IdentSpanned {
+        let ident = self.make_ident(token);
+        IdentSpanned::make(ident, token.span)
     }
 
     pub fn add_expression(&mut self, expression: ParsedExpr) -> ParsedExprId {
@@ -3092,7 +3098,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if tag.kind != K::Ident {
                 return Err(error_expected("Identifier for sum variant", tag));
             }
-            let tag_name = self.intern_ident_token(tag);
+            let tag_name = self.make_ident(tag);
             self.advance();
             let maybe_payload_paren = self.peek();
             let payload_expression = if maybe_payload_paren.kind == K::OpenParen {
@@ -3133,7 +3139,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             false
         };
         let expr = self.expect_expression()?;
-        let name = if named { Some(self.intern_ident_token(first)) } else { None };
+        let name = if named { Some(self.make_ident(first)) } else { None };
         Ok(ParsedCallArg { name, value: expr, is_explicit_context })
     }
 
@@ -3151,7 +3157,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let span = self.extend_to_here(name.span);
 
-        Ok(StructValueField { name: self.intern_ident_token(name), value, span })
+        Ok(StructValueField { name: self.make_ident(name), value, span })
     }
 
     fn parse_struct_value(&mut self) -> ParseResult<Option<ParsedStruct>> {
@@ -3234,7 +3240,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let (mut args, args_span) = self.expect_fn_call_args()?;
                     let self_arg = result;
                     let span = self.extend_span(self.get_expression_span(self_arg), args_span);
-                    let name = self.intern_ident_token(target);
+                    let name = self.make_ident(target);
 
                     let index_of_first_explicit_arg =
                         args.iter().position(|a| !a.is_explicit_context).unwrap_or(args.len());
@@ -3256,7 +3262,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 } else {
                     // a.b[int] <complete expression>
                     let trailing_asterisk = self.maybe_consume_next_no_whitespace(K::Asterisk);
-                    let target = self.intern_ident_token(target);
+                    let target = self.make_ident(target);
                     let span = self.extend_to_here(self.get_expression_span(result));
                     Some(self.add_expression(ParsedExpr::FieldAccess(FieldAccess {
                         base: result,
@@ -3401,28 +3407,26 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_namespaced_ident(&mut self) -> ParseResult<QIdent> {
         let (first, second) = self.tokens.peek_two();
-        let mut namespaces: SV8<Ident> = smallvec![];
+        let mut namespaces: SV8<IdentSpanned> = smallvec![];
         if second.kind == K::Slash && !second.is_whitespace_preceded() {
             // Namespaced expression; foo/
             // Loop until we don't see a /
-            namespaces.push(self.intern_ident_token(first));
-            self.advance(); // ident
-            self.advance(); // slash
+            namespaces.push(self.make_ident_spanned(first));
+            self.advance_n(2); // ident, slash
             loop {
                 let (a, b) = self.tokens.peek_two();
                 if a.kind == K::Ident && b.kind == K::Slash {
-                    self.advance(); // ident
-                    self.advance(); // slash
-                    namespaces.push(self.intern_ident_token(a));
+                    self.advance_n(2);
+                    namespaces.push(self.make_ident_spanned(a));
                 } else {
                     break;
                 }
             }
         }
         let name = self.expect_kind(K::Ident)?;
-        let name_ident = self.intern_ident_token(name);
+        let name_ident = self.make_ident(name);
         let span = self.extend_span(first.span, name.span);
-        let namespaces_slice = self.ast.idents.slices.add_slice_copy(&namespaces);
+        let namespaces_slice = self.ast.mem.pushn(&namespaces);
         Ok(QIdent { path: namespaces_slice, name: name_ident, span })
     }
 
@@ -3551,7 +3555,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 // :some(42)
                 // :some[int](42)
 
-                let variant_name = self.intern_ident_token(second);
+                let variant_name = self.make_ident(second);
 
                 let type_args = self.parse_bracketed_type_args()?.0;
 
@@ -3835,7 +3839,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if second.kind != K::Ident {
                 return Err(error("Expected identifiers between for and in keywords", second));
             }
-            let binding_ident = self.intern_ident_token(second);
+            let binding_ident = self.make_ident(second);
             self.advance_n(2);
             Some(binding_ident)
         } else {
@@ -3991,7 +3995,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let span = self.extend_to_here(eaten_keyword.span);
         Ok(Some(ParsedLet {
-            name: self.intern_ident_token(name_token),
+            name: self.make_ident(name_token),
             type_expr: typ,
             value: initializer_expression,
             flags,
@@ -4045,7 +4049,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Some(self.expect_expression()?)
         };
         let span = self.extend_to_here(keyword_let_token.span);
-        let name = self.intern_ident_token(name_token);
+        let name = self.make_ident(name_token);
         let global_id = self.ast.add_global(ParsedGlobal {
             name,
             type_expr,
@@ -4334,7 +4338,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         //           ^^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^
         //           constraints
         let name_token = self.expect_kind(K::Ident)?;
-        let name = self.intern_ident_token(name_token);
+        let name = self.make_ident(name_token);
         let constraints = self.parse_type_constraints()?;
         let span = self.extend_to_here(name_token.span);
         Ok(ParsedTypeParam { name, span, constraints })
@@ -4542,7 +4546,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Parser::tok_chars(&self.ast.spans, self.ast.sources.get(self.file_id), next);
             if tok_chars == chars {
                 self.advance();
-                let ident = self.intern_ident_token(next);
+                let ident = self.make_ident(next);
                 Some((next, ident))
             } else {
                 None
@@ -4565,7 +4569,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let start = p.peek().span;
             let is_impl_param = p.maybe_consume(K::KeywordImpl).is_some();
             let name_token = p.expect_kind(K::Ident)?;
-            let name = p.intern_ident_token(name_token);
+            let name = p.make_ident(name_token);
             let constraints = p.parse_type_constraints()?;
             let span = p.extend_span(start, name_token.span);
             Ok(ParsedAbilityParameter { name, is_impl_param, constraints, span })
@@ -4575,7 +4579,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return Ok(None);
         };
         let name_token = self.expect_kind(K::Ident)?;
-        let name_identifier = self.intern_ident_token(name_token);
+        let name_identifier = self.make_ident(name_token);
         let mut ability_params = eco_vec![];
         if let Some(_params_open) = self.maybe_consume(K::OpenBracket) {
             self.eat_delimited_ext(
@@ -4605,7 +4609,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_ability_type_argument(&mut self) -> ParseResult<NamedTypeArg> {
         let name_token = self.expect_kind(K::Ident)?;
-        let name = self.intern_ident_token(name_token);
+        let name = self.make_ident(name_token);
         self.expect_kind(K::Equals)?;
         let peeked = self.peek();
         let type_expr = if peeked.kind == K::Ident && self.get_token_chars(peeked) == "_" {
@@ -4710,7 +4714,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let equals = self.expect_kind(K::Equals)?;
         let type_expr = Parser::expect("Type expression", equals, self.parse_type_expression())?;
         let span = self.extend_span(keyword_type.span, self.ast.get_type_expr_span(type_expr));
-        let name = self.intern_ident_token(name);
+        let name = self.make_ident(name);
         let type_params_handle = self.ast.mem.pushn(&type_params);
         let type_defn_id = self.ast.add_type_defn(ParsedTypeDefn {
             name,
@@ -4739,7 +4743,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let terminator = if is_braced { K::CloseBrace } else { K::Eof };
         let definitions = self.parse_definitions(terminator)?;
 
-        let name = self.intern_ident_token(ident);
+        let name = self.make_ident(ident);
         let span = self.extend_to_here(keyword.span);
         let namespace_id = self.ast.add_namespace(ParsedNamespace {
             name,
@@ -5047,8 +5051,8 @@ impl ParsedProgram {
 
     fn display_qident(&self, w: &mut impl Write, ns_id: &QIdent) -> std::fmt::Result {
         if !ns_id.path.is_empty() {
-            for ns in self.idents.slices.get_slice(ns_id.path).iter() {
-                self.display_ident(w, *ns)?;
+            for ns in self.mem.getn(ns_id.path).iter() {
+                self.display_ident(w, ns.name)?;
                 w.write_str("/")?;
             }
         }
