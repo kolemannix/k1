@@ -161,7 +161,7 @@ fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast Sour
     debug!("uri_to_source: {}", path);
     let source = ast.sources.iter().find(|s| {
         let source_path = format!("{}/{}", s.1.directory, s.1.filename);
-        // info!("    source_path: {}", source_path);
+        info!("    source_path: {}", source_path);
         path == source_path
     });
     source.map(|s| s.1)
@@ -710,7 +710,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        info!("goto_definition: {}:{}:{}", uri.path(), line, char);
+        info!("goto_definition: {}:{}:{}", uri.path(), line + 1, char + 1);
         let Some(requested_source) = uri_to_source(&k1.ast, &uri) else {
             error!("Could not get source for {}", uri.path());
             return Ok(None);
@@ -721,15 +721,16 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let definition = match entity.kind {
-            LsEntityKind::Namespace(namespace_id) => todo!(),
-            LsEntityKind::FunctionCall { function_id } => todo!(),
-        };
-        let Some(range) = span_to_range(requested_source, span) else {
+        let definition_span = k1::lsp_support::get_entity_definition_span(k1, entity.kind);
+        if definition_span == Span::NONE {
+            error!("definition span is nil");
+            return Ok(None);
+        }
+        let definition_source = k1.ast.sources.get(definition_span.file_id);
+        let Some(range) = span_to_range(definition_source, definition_span) else {
             error!("Failed to convert span to range for goto_definition");
             return Ok(None);
         };
-        let definition_source = k1.ast.sources.get(file_id);
         let definition_uri =
             source_to_uri(&definition_source.directory, &definition_source.filename);
         info!("goto_definition response: {}, {:?}", definition_uri, range);

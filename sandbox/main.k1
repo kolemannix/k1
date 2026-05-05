@@ -13,9 +13,10 @@ ns foo {
 }
 
 fn main(): i32 {
+  let f = fn. 10;
+  f();
   core/println("");
+  core/compiler/location();
   list/empty[u64]();
-  let x = 21;
-  $repeat(5, \println("hello {add(x, x)}"));
   0
 }

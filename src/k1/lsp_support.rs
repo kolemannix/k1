@@ -57,6 +57,28 @@ pub fn get_hover_message_for_entity(k1: &TypedProgram, entity: LsEntity) -> Stri
     }
 }
 
+pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) -> Span {
+    match entity_kind {
+        LsEntityKind::Namespace(ns_id) => {
+            let ns = k1.namespaces.get(ns_id);
+            eprintln!("span for ns: {}", k1.ident_str(ns.name));
+            let span_id = k1.ast.get_span_for_id(ns.parsed_id);
+            eprintln!("span id: {}", span_id);
+            k1.ast.spans.get(span_id)
+        }
+        LsEntityKind::FunctionCall { function_id } => {
+            let function = k1.functions.get(function_id);
+            let span_id = match function.parsed_id {
+                ParsedId::Function(parsed_function_id) => {
+                    k1.ast.functions.get(parsed_function_id).name_span
+                }
+                _ => k1.ast.get_span_for_id(function.parsed_id),
+            };
+            k1.ast.spans.get(span_id)
+        }
+    }
+}
+
 pub fn get_expr_at_point(
     k1: &mut TypedProgram,
     file: FileId,
