@@ -12575,7 +12575,7 @@ impl TypedProgram {
                 // This guarantees that we have it available at runtime when typeSchema is
                 // called
                 // Same for typeName
-                self.register_type_metainfo(type_id, span);
+                self.register_type_metainfo(type_id);
 
                 let int_expr = self.synth_int(TypedIntValue::U64(type_id_u64), span);
                 Ok(int_expr)
@@ -15903,18 +15903,6 @@ impl TypedProgram {
         Ok(namespace_id)
     }
 
-    // nocommit put this in a good spot
-    fn emit_ls_entity(&self, span: SpanId, kind: LsEntityKind) {
-        if cfg!(feature = "lsp") {
-            let span = self.ast.spans.get(span);
-            let mut ls_entities = self.ls_entities.borrow_mut();
-            let file_id = span.file_id;
-            let entities_entry = ls_entities.entry(file_id);
-            let entities = entities_entry.or_insert_with(|| Vec::with_capacity(128));
-            entities.push(LsEntity { kind, span });
-        }
-    }
-
     fn declare_namespaces_in_namespace(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
@@ -16765,6 +16753,17 @@ impl TypedProgram {
         Ok(())
     }
 
+    fn emit_ls_entity(&self, span: SpanId, kind: LsEntityKind) {
+        if cfg!(feature = "lsp") {
+            let span = self.ast.spans.get(span);
+            let mut ls_entities = self.ls_entities.borrow_mut();
+            let file_id = span.file_id;
+            let entities_entry = ls_entities.entry(file_id);
+            let entities = entities_entry.or_insert_with(|| Vec::with_capacity(128));
+            entities.push(LsEntity { kind, span });
+        }
+    }
+
     // fn add_std_uses_to_scope(&mut self, scope: ScopeId, span: SpanId) -> TyperResult<()> {
     //     let std_ns: IdentSlice = self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.std]);
     //     let idents_to_use = [QIdent { path: std_ns, name: get_ident!(self, "HashMap"), span }];
@@ -16775,7 +16774,7 @@ impl TypedProgram {
     //     Ok(())
     // }
 
-    fn get_type_schema(&mut self, type_id: TypeId, span: SpanId) -> StaticValueId {
+    fn get_type_schema(&mut self, type_id: TypeId) -> StaticValueId {
         if let Some(static_value_id) = self.type_schemas.get(&type_id) {
             return *static_value_id;
         }
@@ -16888,7 +16887,7 @@ impl TypedProgram {
 
                     // We need to ensure that any and all typeIds that we share with the user
                     // are available at runtime, by calling these functions at least once.
-                    self.register_type_metainfo(f.type_id, span);
+                    self.register_type_metainfo(f.type_id);
 
                     let type_id_value_id = self.static_values.add_type_id_int_value(f.type_id);
                     let offset_u32 = struct_layout[index].offset;
@@ -16926,7 +16925,7 @@ impl TypedProgram {
 
                 // We need to ensure that any and all typeIds that we share with the user
                 // are available at runtime, by calling these functions at least once.
-                self.register_type_metainfo(reference_type.inner_type, span);
+                self.register_type_metainfo(reference_type.inner_type);
 
                 let mutable_value_id =
                     self.static_values.add(StaticValue::Bool(reference_type.is_mutable()));
@@ -16945,7 +16944,7 @@ impl TypedProgram {
                 // { elementTypeId: u64, size: size }
                 let element_type_id_value_id =
                     self.static_values.add_type_id_int_value(array_type.element_type);
-                self.register_type_metainfo(array_type.element_type, span);
+                self.register_type_metainfo(array_type.element_type);
 
                 let maybe_concrete_size_value_id = match concrete_count {
                     None => None,
@@ -17011,7 +17010,7 @@ impl TypedProgram {
                                 self.static_values.add_type_id_int_value(payload_type_id);
                             // We need to ensure that any and all typeIds that we share with the user
                             // are available at runtime, by calling these functions at least once.
-                            self.register_type_metainfo(payload_type_id, span);
+                            self.register_type_metainfo(payload_type_id);
 
                             let offset = maybe_payload_offset.unwrap();
                             let payload_offset_value_id =
@@ -17073,7 +17072,7 @@ impl TypedProgram {
                 // kind the function appears within
 
                 for param in self.types.mem.getn(fn_type.logical_params()) {
-                    self.register_type_metainfo(param.type_id, span);
+                    self.register_type_metainfo(param.type_id);
 
                     let param_name_string_id =
                         self.ast.strings.intern(self.ast.idents.get_name(param.name));
@@ -17099,7 +17098,7 @@ impl TypedProgram {
                     .static_values
                     .add_span(function_params_span_type_id, params_value_ids_slice);
 
-                self.register_type_metainfo(fn_type.return_type, span);
+                self.register_type_metainfo(fn_type.return_type);
                 let return_type_id_value_id =
                     self.static_values.add_type_id_int_value(fn_type.return_type);
 
@@ -17120,7 +17119,7 @@ impl TypedProgram {
 
                 let function_type_id_value_id =
                     self.static_values.add_type_id_int_value(fp.function_type_id);
-                self.register_type_metainfo(fp.function_type_id, span);
+                self.register_type_metainfo(fp.function_type_id);
 
                 let payload = self.static_values.add_struct_from_slice(
                     function_pointer_schema_payload_type_id,
@@ -17128,24 +17127,19 @@ impl TypedProgram {
                 );
                 make_variant(self, get_ident!(self, "function-pointer"), Some(payload))
             }
-            Type::Lambda(_) | Type::LambdaObject(_) | Type::TypeParameter(_) => {
+            Type::Lambda(_)
+            | Type::LambdaObject(_)
+            | Type::TypeParameter(_)
+            | Type::Generic(_)
+            | Type::FunctionTypeParameter(_)
+            | Type::InferenceHole(_)
+            | Type::Unresolved(_)
+            | Type::StaticValue(_) => {
                 let s = self
                     .static_values
                     .add(StaticValue::String(self.ast.strings.intern(typ.kind_name())));
                 make_variant(self, get_ident!(self, "other"), Some(s))
             }
-            Type::Generic(_)
-            | Type::FunctionTypeParameter(_)
-            | Type::InferenceHole(_)
-            | Type::Unresolved(_) => {
-                ice_span!(self, span, "type-schema on {}", typ.kind_name())
-            }
-            Type::StaticValue(_) => ice_span!(
-                self,
-                span,
-                "type-schema on value type should be unreachable {}",
-                typ.kind_name()
-            ),
         };
 
         let static_value_id = self.static_values.add(StaticValue::Sum(schema_static_sum));
@@ -17166,8 +17160,8 @@ impl TypedProgram {
         value_id
     }
 
-    fn register_type_metainfo(&mut self, type_id: TypeId, span: SpanId) {
-        let _ = self.get_type_schema(type_id, span);
+    fn register_type_metainfo(&mut self, type_id: TypeId) {
+        let _ = self.get_type_schema(type_id);
         let _ = self.get_type_name(type_id);
     }
 
