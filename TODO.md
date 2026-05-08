@@ -147,8 +147,13 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] Hover no more markdown
 - [x] Parse with recovery within same file
 - [x] In lsp mode, parser should emit actual semantic tokens (currently we just use lexer tokens)
-- [ ] Proper handling of 'trivia' (whitespace and comments)
-- [ ] Go-to
+- [x] Proper handling of 'trivia' (whitespace and comments)
+- [x] Go-to
+- [x] find references
+- [ ] Rest of the entity kinds
+  - [ ] Types
+  - [ ] Variables (locals, globals, fn params)
+
 - [ ] Completion
 
 ## Project: Actual modules, library vs binary compile, allow linker options
