@@ -65,7 +65,7 @@ Please reach out to me on X @kolemannix or here if you're interested in the proj
 
 To use `k1`, it is recommended to download the release bundle for your platform from [releases](https://github.com/kolemannix/k1/releases) and run `install.sh`
 after unzipping, and after reading it of course! There is a [neovim plugin](https://github.com/kolemannix/k1.nvim) as well as a VSCode extension located here in the repo
-inside [](tools/vscode-k1). The language server support really helps bridge the complete lack of documentation, just let the errors teach you the language!
+inside [tools/vscode-k1](tools/vscode-k1). The language server support really helps bridge the complete lack of documentation, just let the errors teach you the language!
 
 ### Contributing setup
 
@@ -78,7 +78,7 @@ where the install is at on its own though, so tell it via an environment variabl
 export LLVM_SYS_211_PREFIX="$(brew --prefix llvm@21)"
 ```
 
-If you're really serious about building binaries, there is a script located in the repo `llvm/get_llvm.sh` that will help you cut an LLVM 21 build
+If you're really serious about building binaries, there is a script located in the repo [llvm/get_llvm.sh](llvm/get_llvm.sh) that will help you cut an LLVM 21 build
 from source, with the flags k1 needs to enable fully static linking of llvm.
 
 With the dependencies installed, `k1` and the language server may be built via:
