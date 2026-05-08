@@ -17,3 +17,4 @@ llvm/build-llvm
 llvm/install-llvm
 llvm/llvm-project
 
+builds/k1-*/
