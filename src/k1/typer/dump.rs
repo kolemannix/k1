@@ -1063,7 +1063,7 @@ impl TypedProgram {
 
     pub fn named_type_to_string(&self, nt: impl NamedType) -> String {
         let mut s: String = String::with_capacity(128);
-        self.display_named_type(&mut s, nt, ":=").unwrap();
+        self.display_named_type(&mut s, nt, " :=").unwrap();
         s
     }
 
@@ -1080,12 +1080,12 @@ impl TypedProgram {
         }
         write!(w, "[")?;
         for arg in self.mem.getn(ability.kind.arguments()) {
-            self.display_named_type(w, arg, ":=")?;
+            self.display_named_type(w, arg, " :=")?;
             w.write_str(", ")?;
         }
         for arg in impl_arguments {
             w.write_str("impl ")?;
-            self.display_named_type(w, arg, ":=")?;
+            self.display_named_type(w, arg, " :=")?;
             w.write_str(", ")?;
         }
         write!(w, "]")?;
@@ -1279,7 +1279,7 @@ impl TypedProgram {
                 if index > 0 {
                     w.write_str(", ")?;
                 }
-                self.display_named_type(w, *arg, ":=")?;
+                self.display_named_type(w, *arg, " :=")?;
             }
             w.write_char(']')?;
         }

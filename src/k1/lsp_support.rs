@@ -51,8 +51,12 @@ pub fn get_hover_message_for_entity(k1: &TypedProgram, entity: LsEntity) -> Stri
             let ns_name_qualified = k1.scope_id_to_string(ns.scope_id);
             format!("ns {ns_name_qualified}. {companion_type}")
         }
-        LsEntityKind::FunctionCall { function_id } => {
-            format!("Call\n{}", k1.function_id_to_string(function_id, false))
+        LsEntityKind::Function { function_id, is_defn } => {
+            format!(
+                "{}\n{}",
+                if is_defn { "Function" } else { "Call" },
+                k1.function_id_to_string(function_id, false)
+            )
         }
     }
 }
@@ -66,7 +70,7 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
             eprintln!("span id: {}", span_id);
             k1.ast.spans.get(span_id)
         }
-        LsEntityKind::FunctionCall { function_id } => {
+        LsEntityKind::Function { function_id, .. } => {
             let function = k1.functions.get(function_id);
             let span_id = match function.parsed_id {
                 ParsedId::Function(parsed_function_id) => {
@@ -76,6 +80,14 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
             };
             k1.ast.spans.get(span_id)
         }
+    }
+}
+
+pub fn get_function_generic_id(k1: &TypedProgram, function_id: FunctionId) -> FunctionId {
+    let function = k1.functions.get(function_id);
+    match function.specialization_info {
+        Some(info) => info.parent_function,
+        None => function_id,
     }
 }
 

@@ -95,7 +95,7 @@ enum TokenModifiers {
     DefaultLibrary = 1 << 9,
 }
 
-fn span_to_range(source: &Source, span: Span) -> Option<Range> {
+fn span_to_range_with_source(source: &Source, span: Span) -> Option<Range> {
     let (start_line, end_line) = source.get_lines_for_span(span)?;
     Some(Range {
         start: Position {
@@ -105,20 +105,29 @@ fn span_to_range(source: &Source, span: Span) -> Option<Range> {
         end: Position { line: end_line.line_index, character: span.end() - end_line.start_char },
     })
 }
-fn span_id_to_range(source: &Source, spans: &Spans, span_id: SpanId) -> Option<Range> {
+
+fn span_id_to_range(k1: &TypedProgram, span_id: SpanId) -> Option<Range> {
+    let span = k1.ast.spans.get(span_id);
+    span_to_range(k1, span)
+}
+
+fn span_to_range(k1: &TypedProgram, span: Span) -> Option<Range> {
+    let source = k1.ast.sources.get(span.file_id);
+    span_to_range_with_source(source, span)
+}
+
+fn span_id_to_range_with_source(source: &Source, spans: &Spans, span_id: SpanId) -> Option<Range> {
     let span = spans.get(span_id);
-    span_to_range(source, span)
+    span_to_range_with_source(source, span)
 }
 
 fn error_to_diagnostic(
-    ast: &ParsedProgram,
+    k1: &TypedProgram,
     message: String,
     level: MessageLevel,
     span_id: SpanId,
 ) -> Option<(Url, Diagnostic)> {
-    let span = ast.spans.get(span_id);
-    let source = ast.sources.get(span.file_id);
-    let url = source_to_uri(&source.directory, &source.filename);
+    let url = uri_from_span(k1, span_id);
     let severity = match level {
         MessageLevel::Error => DiagnosticSeverity::ERROR,
         MessageLevel::Warn => DiagnosticSeverity::WARNING,
@@ -129,7 +138,7 @@ fn error_to_diagnostic(
     // escaped_message.push_str("```txt\n");
     // escaped_message.push_str(&message);
     // escaped_message.push_str("\n```");
-    match span_id_to_range(source, &ast.spans, span_id) {
+    match span_id_to_range(k1, span_id) {
         None => {
             error!("Failed span lookup for diagnostic: {}", &message);
             None
@@ -156,12 +165,18 @@ fn source_to_uri(directory: impl AsRef<Path>, file: impl AsRef<str>) -> Url {
     Url::from_directory_path(directory.as_ref()).unwrap().join(file.as_ref()).unwrap()
 }
 
+fn uri_from_span(k1: &TypedProgram, span_id: SpanId) -> Url {
+    let span = k1.ast.spans.get(span_id);
+    let source = k1.ast.sources.get(span.file_id);
+    source_to_uri(&source.directory, &source.filename)
+}
+
 fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast Source> {
     let path = url.path();
     debug!("uri_to_source: {}", path);
     let source = ast.sources.iter().find(|s| {
         let source_path = format!("{}/{}", s.1.directory, s.1.filename);
-        info!("    source_path: {}", source_path);
+        debug!("    source_path: {}", source_path);
         path == source_path
     });
     source.map(|s| s.1)
@@ -170,21 +185,15 @@ fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast Sour
 fn uri_to_edited_source(backend: &Backend, url: &Url) -> Option<(Source, bool)> {
     match backend.edited_sources.lock().unwrap().get(url) {
         None => backend
-            .with_ast(|ast| uri_to_source(ast, url).map(|source| (source.clone(), false)))
+            .with_k1(|k1| uri_to_source(&k1.ast, url).map(|source| (source.clone(), false)))
             .unwrap_or(None),
         Some(ast) => Some((ast.sources.get_main().clone(), true)),
     }
 }
 
-enum CompiledProgram {
-    Empty,
-    Parsed(Box<ParsedProgram>),
-    Typed(Box<TypedProgram>),
-}
-
 struct Backend {
     client: Client,
-    module: Mutex<CompiledProgram>,
+    module: Mutex<Option<Box<TypedProgram>>>,
     edited_sources: Mutex<HashMap<Url, ParsedProgram>>,
     workspace_uri: RwLock<Option<Url>>,
     compile_iteration: AtomicU32,
@@ -194,58 +203,49 @@ impl Backend {
     fn new(client: Client) -> Backend {
         Backend {
             client,
-            module: Mutex::new(CompiledProgram::Empty),
+            module: Mutex::new(None),
             edited_sources: Mutex::new(HashMap::new()),
             workspace_uri: RwLock::new(None),
             compile_iteration: AtomicU32::new(0),
         }
     }
 
-    fn with_ast<T>(&self, f: impl Fn(&ParsedProgram) -> T) -> Option<T> {
+    fn with_k1<T>(&self, f: impl Fn(&TypedProgram) -> T) -> Option<T> {
         let m_lock = self.module.lock().unwrap();
         match &*m_lock {
-            CompiledProgram::Empty => None,
-            CompiledProgram::Parsed(pm) => Some(f(pm)),
-            CompiledProgram::Typed(tm) => Some(f(&tm.ast)),
+            None => None,
+            Some(k1) => Some(f(k1)),
         }
     }
 
     fn all_file_urls(&self) -> Vec<Url> {
-        self.with_ast(|ast| {
-            ast.sources.iter().map(|s| source_to_uri(&s.1.directory, &s.1.filename)).collect()
+        self.with_k1(|k1| {
+            k1.ast.sources.iter().map(|s| source_to_uri(&s.1.directory, &s.1.filename)).collect()
         })
         .unwrap_or_default()
     }
 
     fn list_all_errors(&self) -> Vec<(Url, Diagnostic)> {
-        let parse_errors: Vec<(Url, Diagnostic)> = self
-            .with_ast(|parsed_module| {
-                parsed_module
+        let errors: Vec<(Url, Diagnostic)> = self
+            .with_k1(|k1| {
+                k1.ast
                     .errors
                     .iter()
                     .filter_map(|e| {
                         error_to_diagnostic(
-                            parsed_module,
+                            k1,
                             format!("Parse Error: {}", e.message()),
                             MessageLevel::Error,
                             e.span(),
                         )
                     })
+                    .chain(k1.messages.iter().filter_map(|e| {
+                        error_to_diagnostic(k1, e.message.clone(), e.level, e.span)
+                    }))
                     .collect()
             })
             .unwrap_or_default();
-        if !parse_errors.is_empty() {
-            return parse_errors;
-        }
-
-        let mut all_errors = parse_errors;
-
-        if let CompiledProgram::Typed(module) = &*self.module.lock().unwrap() {
-            all_errors.extend(module.messages.iter().filter_map(|e| {
-                error_to_diagnostic(&module.ast, e.message.clone(), e.level, e.span)
-            }));
-        };
-        all_errors
+        errors
     }
 
     fn build_all_files_and_errors_map(&self) -> HashMap<Url, Vec<Diagnostic>> {
@@ -287,15 +287,11 @@ impl Backend {
         let compiled_module = match compile_result {
             Ok(module) => {
                 info!("compile {} succeeded", iteration_number);
-                CompiledProgram::Typed(Box::new(module))
+                Some(Box::new(module))
             }
             Err(CompileProgramError::TyperFailure(module)) => {
                 info!("compile {} typing failed", iteration_number);
-                CompiledProgram::Typed(module)
-            }
-            Err(CompileProgramError::ParseFailure(parsed_module)) => {
-                info!("compile {}, parse failed", iteration_number);
-                CompiledProgram::Parsed(parsed_module)
+                Some(module)
             }
         };
 
@@ -318,7 +314,7 @@ impl Backend {
 
     fn get_typer_errors(&self, file_url: &Url) -> Vec<K1Message> {
         let module_lock = self.module.lock().unwrap();
-        let CompiledProgram::Typed(k1) = &*module_lock else {
+        let Some(k1) = &*module_lock else {
             return vec![];
         };
         let Some(source) = uri_to_source(&k1.ast, file_url) else {
@@ -337,7 +333,7 @@ impl Backend {
     }
 
     fn messages_to_diagnostics(&self, messages: &[K1Message]) -> Vec<Diagnostic> {
-        self.with_ast(|k1| {
+        self.with_k1(|k1| {
             messages
                 .iter()
                 .filter_map(|k1_message| {
@@ -373,6 +369,7 @@ impl LanguageServer for Backend {
                 })),
             }));
         res.capabilities.definition_provider = Some(OneOf::Left(true));
+        res.capabilities.references_provider = Some(OneOf::Left(true));
         res.capabilities.hover_provider = Some(HoverProviderCapability::Simple(true));
         res.capabilities.diagnostic_provider =
             Some(DiagnosticServerCapabilities::Options(DiagnosticOptions {
@@ -448,7 +445,8 @@ impl LanguageServer for Backend {
             ast.errors.len()
         );
         for error in &ast.errors {
-            if let Some(range) = span_id_to_range(new_source, &ast.spans, error.span()) {
+            if let Some(range) = span_id_to_range_with_source(new_source, &ast.spans, error.span())
+            {
                 let diagnostic = Diagnostic {
                     range,
                     severity: Some(DiagnosticSeverity::ERROR),
@@ -484,7 +482,7 @@ impl LanguageServer for Backend {
         let hover_line_index = position.position.line;
         let hover_col = position.position.character;
         let mut module = self.module.lock().unwrap();
-        let CompiledProgram::Typed(k1) = &mut *module else {
+        let Some(k1) = &mut *module else {
             warn!("Parsed but not typed");
             return Ok(None);
         };
@@ -562,14 +560,14 @@ impl LanguageServer for Backend {
             file_url.path(),
             source.tokens.len()
         );
-        self.with_ast(|core_ast| {
+        self.with_k1(|k1| {
             let mut tokens: Vec<SemanticToken> = vec![];
             let mut prev_line = 1;
             let mut prev_start_col = 0;
 
             let edited_sources = self.edited_sources.lock().unwrap();
             let ast_for_file: &ParsedProgram = match is_edited {
-                false => core_ast,
+                false => &k1.ast,
                 true => edited_sources.get(&file_url).unwrap(),
             };
             // The goal is to use only 'atoms' to avoid overlaps and backwards movement
@@ -700,12 +698,12 @@ impl LanguageServer for Backend {
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
-        let position_params = params.text_document_position_params.position;
-        let line = position_params.line;
-        let char = position_params.character;
+        let position = params.text_document_position_params.position;
+        let line = position.line;
+        let char = position.character;
 
         let mut module = self.module.lock().unwrap();
-        let CompiledProgram::Typed(k1) = &mut *module else {
+        let Some(k1) = &mut *module else {
             error!("Parsed but not typed");
             return Ok(None);
         };
@@ -727,7 +725,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let definition_source = k1.ast.sources.get(definition_span.file_id);
-        let Some(range) = span_to_range(definition_source, definition_span) else {
+        let Some(range) = span_to_range(k1, definition_span) else {
             error!("Failed to convert span to range for goto_definition");
             return Ok(None);
         };
@@ -736,6 +734,71 @@ impl LanguageServer for Backend {
         info!("goto_definition response: {}, {:?}", definition_uri, range);
         Ok(Some(GotoDefinitionResponse::Scalar(Location { uri: definition_uri, range })))
     }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let text_document_position = params.text_document_position;
+        let position = text_document_position.position;
+        let uri = text_document_position.text_document.uri;
+        let line = position.line;
+        let char = position.character;
+        let include_declaration = params.context.include_declaration;
+
+        self.with_k1(|k1| find_references(k1, &uri, line, char, include_declaration))
+            .unwrap_or(Ok(None))
+    }
+}
+
+fn find_references(
+    k1: &TypedProgram,
+    request_uri: &Url,
+    line: u32,
+    char: u32,
+    include_declaration: bool,
+) -> Result<Option<Vec<Location>>> {
+    info!("references: {}:{}:{}", request_uri.path(), line + 1, char + 1);
+    let Some((_source, ls_entity)) = find_entity_and_source(k1, request_uri, line, char) else {
+        return Ok(None);
+    };
+
+    match ls_entity.kind {
+        LsEntityKind::Function { function_id, .. } => {
+            let generic_function = k1::lsp_support::get_function_generic_id(k1, function_id);
+            let function = k1.functions.get(generic_function);
+            let defn_span = k1.get_function_span(generic_function);
+            let mut results = Vec::with_capacity(function.usages.len());
+            for span_id in &function.usages {
+                // Skip the usage that is the function's declaration
+                if defn_span == *span_id && !include_declaration {
+                    continue;
+                }
+
+                if let Some(range) = span_id_to_range(k1, *span_id) {
+                    let usage_uri = uri_from_span(k1, *span_id);
+                    results.push(Location { uri: usage_uri, range });
+                }
+            }
+            Ok(Some(results))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn find_entity_and_source<'k1>(
+    k1: &'k1 TypedProgram,
+    uri: &Url,
+    line: u32,
+    char: u32,
+) -> Option<(&'k1 Source, LsEntity)> {
+    let Some(source) = uri_to_source(&k1.ast, uri) else {
+        error!("Could not get source for {}", uri.path());
+        return None;
+    };
+    let file_id = source.file_id;
+    let Some(entity) = k1::lsp_support::find_entity_at_point(k1, file_id, line, char) else {
+        info!("No entity at point");
+        return None;
+    };
+    Some((source, entity))
 }
 
 #[tokio::main]

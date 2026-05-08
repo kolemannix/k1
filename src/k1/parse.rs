@@ -1401,6 +1401,7 @@ pub struct ParsedNamespace {
     pub name: Ident,
     pub definitions: EcoVec<ParsedId>,
     pub id: ParsedNamespaceId,
+    pub name_span: SpanId,
     pub span: SpanId,
 }
 
@@ -1816,7 +1817,7 @@ impl ParsedProgram {
     pub fn get_span_for_id(&self, parsed_id: ParsedId) -> SpanId {
         match parsed_id {
             ParsedId::Use(id) => self.uses.get_use(id).span,
-            ParsedId::Function(id) => self.get_function(id).span,
+            ParsedId::Function(id) => self.get_function(id).name_span,
             ParsedId::Namespace(ns) => self.namespaces.get(ns).span,
             ParsedId::Global(id) => self.get_global(id).span,
             ParsedId::Ability(id) => self.get_ability(id).span,
@@ -2126,6 +2127,7 @@ pub fn init_module(module_name: Ident, ast: &mut ParsedProgram) -> ParsedNamespa
             name,
             definitions: EcoVec::new(),
             id: ParsedNamespaceId::ONE,
+            name_span: SpanId::NONE,
             span: SpanId::NONE,
         })
     } else {
@@ -2136,6 +2138,7 @@ pub fn init_module(module_name: Ident, ast: &mut ParsedProgram) -> ParsedNamespa
         name: module_name,
         definitions: eco_vec![],
         id: root_namespace_id,
+        name_span: SpanId::NONE,
         span: SpanId::NONE,
     });
     ast.namespaces
@@ -2266,30 +2269,11 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         &mut self,
         condition: Option<ParsedExprId>,
     ) -> ParseResult<Option<ParsedExprId>> {
-        let (maybe_hash, maybe_directive) = self.peek_two();
-        // nocommit: remove this syntax before all is done
-        if maybe_hash.kind == K::Hash {
-            // Leave `#debug` entirely alone
-            if self.get_token_chars(maybe_directive) == "debug" {
-                Ok(None)
-            } else {
-                self.advance();
-                match self.parse_static_expr(maybe_hash, maybe_directive, condition)? {
-                    Some(static_expr_id) => Ok(Some(static_expr_id)),
-                    None => Err(error_expected(
-                        "static definition (e.g. #static or #meta)",
-                        maybe_directive,
-                    )),
-                }
-            }
-        } else if maybe_hash.kind == K::Dollar {
+        if let Some(dolla) = self.maybe_consume(K::Dollar) {
             self.advance();
-            self.add_semantic_token(maybe_hash, SemanticTokenKind::Operator);
-            let expr_id = self.consume_static_expr(
-                maybe_hash,
-                condition,
-                ParsedStaticBlockKind::Metaprogram,
-            )?;
+            self.add_semantic_token(dolla, SemanticTokenKind::Operator);
+            let expr_id =
+                self.consume_static_expr(dolla, condition, ParsedStaticBlockKind::Metaprogram)?;
             Ok(Some(expr_id))
         } else {
             Ok(None)
@@ -4736,7 +4720,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         self.add_semantic_token(keyword, SemanticTokenKind::Namespace);
         self.advance();
-        let ident = self.expect_kind(K::Ident)?;
+        let (name_token, name) = self.expect_ident()?;
         let is_braced = match self.tokens.next() {
             t if t.kind == K::OpenBrace => true,  // namespace asdf {
             t if t.kind == K::Semicolon => false, // namespace asdf;
@@ -4745,12 +4729,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let terminator = if is_braced { K::CloseBrace } else { K::Eof };
         let definitions = self.parse_definitions(terminator)?;
 
-        let name = self.make_ident(ident);
         let span = self.extend_to_here(keyword.span);
         let namespace_id = self.ast.add_namespace(ParsedNamespace {
             name,
             definitions,
-            id: ParsedNamespaceId::ONE,
+            id: ParsedNamespaceId::PENDING,
+            name_span: name_token.span,
             span,
         });
         Ok(Some(namespace_id))

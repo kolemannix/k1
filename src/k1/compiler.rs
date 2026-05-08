@@ -8,14 +8,12 @@ use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
 use crate::parse::write_source_location;
-use crate::parse::{self};
 use crate::typer::{LibRefLinkType, MessageLevel, TypedProgram};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
 use log::info;
 
 use crate::codegen_llvm::Cg;
-use parse::ParsedProgram;
 
 use std::path::PathBuf;
 
@@ -255,7 +253,6 @@ macro_rules! static_assert_niched {
 }
 
 pub enum CompileProgramError {
-    ParseFailure(Box<ParsedProgram>),
     TyperFailure(Box<TypedProgram>),
 }
 

@@ -4,6 +4,10 @@ ns foo {
 
 fn repeat(n: int, a: string): string {
   let sb = StringBuilder/new();
+
+  4u8 + 3u8;
+  4 + 3;
+
   for IntRange/upTo(n) { sb.write-string("{a};") };
   sb.build()
 }
@@ -13,7 +17,8 @@ ns foo {
 }
 
 fn main(): i32 {
-  let f = fn. 10;
+  let i = 4;
+  let f = fn. i + 10;
   f();
   core/println("");
   core/compiler/location();

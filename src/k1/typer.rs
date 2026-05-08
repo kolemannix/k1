@@ -190,7 +190,7 @@ impl InferenceContext {
 #[derive(Clone, Copy)]
 pub enum LsEntityKind {
     Namespace(NamespaceId),
-    FunctionCall { function_id: FunctionId },
+    Function { function_id: FunctionId, is_defn: bool },
 }
 
 #[derive(Clone, Copy)]
@@ -896,6 +896,7 @@ pub struct TypedFunction {
     /// 'let returned', RVO
     pub returned_variable: Option<VariableId>,
     pub body_failure: Option<K1Message>,
+    pub usages: Vec<SpanId>,
 }
 
 impl TypedFunction {
@@ -6560,7 +6561,7 @@ impl TypedProgram {
                     let blanket_fn = self.get_function(blanket_impl_function_id);
                     let parsed_fn = blanket_fn.parsed_id.as_function_id().unwrap();
                     let specialized_function_id = self
-                        .compile_function_declaration(
+                        .declare_function(
                             parsed_fn,
                             new_impl_scope,
                             Some(FunctionAbilityContextInfo::ability_impl(
@@ -8612,6 +8613,7 @@ impl TypedProgram {
                 dyn_fn_id: None,
                 returned_variable: None,
                 body_failure: None,
+                usages: vec![],
             });
 
             let function_pointer_type = self.types.add_function_pointer_type(function_type);
@@ -8746,6 +8748,7 @@ impl TypedProgram {
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
+            usages: vec![],
         });
         debug_assert_eq!(actual_body_function_id, body_function_id);
 
@@ -12443,7 +12446,8 @@ impl TypedProgram {
         };
 
         if let Some(function_id) = callee.maybe_function_id() {
-            self.emit_ls_entity(fn_call.name.span, LsEntityKind::FunctionCall { function_id });
+            self.emit_ls_entity(fn_call.name.span, LsEntityKind::Function { function_id, is_defn: false });
+            self.register_function_usage(function_id, fn_call.name.span);
 
             if let Some(enclosing_id) = self.scopes.enclosing_functions.get(ctx.scope_id).function {
                 if enclosing_id == function_id {
@@ -12920,6 +12924,7 @@ impl TypedProgram {
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
+            usages: vec![],
         };
         let actual_specialized_function_id = self.add_function(specialized_function);
         debug_assert_eq!(specialized_function_id, actual_specialized_function_id);
@@ -14243,7 +14248,7 @@ impl TypedProgram {
         let parsed_ability = self.ast.get_ability(ability_ast_id);
         let mut specialized_functions = EcoVec::with_capacity(parsed_ability.functions.len());
         for (index, parsed_fn) in parsed_ability.functions.clone().iter().enumerate() {
-            let result = self.compile_function_declaration(
+            let result = self.declare_function(
                 *parsed_fn,
                 specialized_ability_scope,
                 Some(FunctionAbilityContextInfo::ability_id_only(specialized_ability_id)),
@@ -14329,7 +14334,7 @@ impl TypedProgram {
         Ok(TypedAbilitySignature { specialized_ability_id: new_ability_id, impl_arguments })
     }
 
-    fn compile_function_declaration(
+    fn declare_function(
         &mut self,
         parsed_function_id: ParsedFunctionId,
         parent_scope_id: ScopeId,
@@ -14339,6 +14344,7 @@ impl TypedProgram {
         let namespace = self.namespaces.get(namespace_id);
         let companion_type_id = namespace.companion_type_id;
         let ast_fn = self.ast.get_function(parsed_function_id).clone();
+        let name_span = ast_fn.name_span;
         let is_debug = ast_fn.compiler_debug;
         let should_compile = self.execute_static_condition(ast_fn.condition, parent_scope_id);
         if !should_compile {
@@ -14719,6 +14725,7 @@ impl TypedProgram {
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
+            usages: vec![],
         });
 
         if resolvable_by_name {
@@ -14747,6 +14754,8 @@ impl TypedProgram {
             eprintln!("DEBUG\n{}", self_.function_id_to_string(function_id, false));
             eprintln!("FUNCTION SCOPE\n{}", self_.scope_id_to_string(fn_scope_id));
         }
+
+        self_.emit_ls_entity(name_span, LsEntityKind::Function { function_id, is_defn: true });
 
         Ok(Some(function_id))
     }
@@ -14998,7 +15007,7 @@ impl TypedProgram {
         let mut typed_functions: EcoVec<TypedAbilityFunctionRef> =
             EcoVec::with_capacity(parsed_ability.functions.len());
         for (index, parsed_function_id) in parsed_ability.functions.iter().enumerate() {
-            let Some(function_id) = self.compile_function_declaration(
+            let Some(function_id) = self.declare_function(
                 *parsed_function_id,
                 ability_scope_id,
                 Some(FunctionAbilityContextInfo::ability_id_only(ability_id)),
@@ -15305,7 +15314,7 @@ impl TypedProgram {
             };
 
             let impl_function_id = self
-                .compile_function_declaration(
+                .declare_function(
                     parsed_impl_function_id,
                     impl_scope_id,
                     Some(FunctionAbilityContextInfo::ability_impl(
@@ -15335,10 +15344,10 @@ impl TypedProgram {
                 &[TypeSubstitutionPair { from: ability_self_type, to: impl_self_type }],
             );
 
+            let impl_function_span = self.ast.get_function(parsed_impl_function_id).name_span;
             if let Err(msg) =
                 self.check_types(substituted_root_type, specialized_fn_type, spec_fn_scope)
             {
-                let impl_function_span = self.ast.get_function(parsed_impl_function_id).span;
                 return failf!(
                     impl_function_span,
                     "Invalid implementation of {} in ability {}: {msg}",
@@ -15346,6 +15355,10 @@ impl TypedProgram {
                     self.ast.idents.get_name(ability_name)
                 );
             }
+
+            // Each implementation of an ability function registers as a 'usage' of it
+            self.register_function_usage(ability_function_ref.function_id, impl_function_span);
+
             typed_functions.push(AbilityImplFunction::FunctionId(impl_function_id));
         }
 
@@ -15372,8 +15385,6 @@ impl TypedProgram {
         Ok(typed_impl_id)
     }
 
-    /// All we have to do is fill in the function bodies; the prior phase has already done all
-    /// the work
     fn compile_ability_impl_bodies(
         &mut self,
         parsed_ability_impl_id: ParsedAbilityImplId,
@@ -15744,7 +15755,7 @@ impl TypedProgram {
                     }
                 }
                 ParsedId::Function(parsed_function_id) => {
-                    if let Err(e) = self.compile_function_declaration(
+                    if let Err(e) = self.declare_function(
                         parsed_function_id,
                         namespace_scope_id,
                         None,
@@ -15899,6 +15910,8 @@ impl TypedProgram {
         } else {
             self.create_namespace(parsed_namespace_id, parent_scope)?
         };
+
+        self.emit_ls_entity(ast_namespace.name_span, LsEntityKind::Namespace(namespace_id));
 
         Ok(namespace_id)
     }
@@ -16097,6 +16110,20 @@ impl TypedProgram {
             // module manifests, and 'pre' modules
             self.add_core_uses_to_scope(self.scopes.root_scope_id(), SpanId::NONE)?;
         }
+
+        // let mut unused = vec![];
+        // for function_id in self.functions.iter_ids() {
+        //     let function = self.functions.get(function_id);
+        //     if function.specialization_info.is_none() {
+        //         if function.usages.is_empty() {
+        //             unused.push(function_id);
+        //         }
+        //     }
+        // }
+        // for function_id in unused {
+        //     let span = self.get_function_span(function_id);
+        //     self.report_warning(span, "Unused");
+        // }
 
         Ok(module_id)
     }
@@ -16761,6 +16788,17 @@ impl TypedProgram {
             let entities_entry = ls_entities.entry(file_id);
             let entities = entities_entry.or_insert_with(|| Vec::with_capacity(128));
             entities.push(LsEntity { kind, span });
+        }
+    }
+
+    fn register_function_usage(&mut self, function_id: FunctionId, span: SpanId) {
+        if cfg!(feature = "lsp") {
+            let used_fn = self.functions.get(function_id);
+            let root_fn_id = match used_fn.specialization_info {
+                None => function_id,
+                Some(info) => info.parent_function,
+            };
+            self.functions.get_mut(root_fn_id).usages.push(span);
         }
     }
 
