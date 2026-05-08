@@ -63,9 +63,11 @@ Please reach out to me on X @kolemannix or here if you're interested in the proj
 
 ### Installation
 
-To start writing some `k1`, you can either grab pre-built compiler and language server binaries for your platform from the
-[releases](https://github.com/kolemannix/k1/releases) or build the project from source. If you go the pre-built route, be sure to run the `install.sh`
-script included in the archive.
+To use `k1`, it is recommended to download the release bundle for your platform from [releases](https://github.com/kolemannix/k1/releases) and run `install.sh`
+after unzipping, and after reading it of course! There is a [neovim plugin](https://github.com/kolemannix/k1.nvim) as well as a VSCode extension located here in the repo
+inside [](tools/vscode-k1). The language server support really helps bridge the complete lack of documentation, just let the errors teach you the language!
+
+### Contributing setup
 
 To build from source, you'll want to install Rust, `just`, and LLVM 21. Rust may be installed via [`rustup`](https://rustup.rs). At the time of this
 writing, `rustc` 1.95 is the latest version and works great. You can install [`just`](https://github.com/casey/just#installation) via your package
@@ -75,6 +77,9 @@ where the install is at on its own though, so tell it via an environment variabl
 ```bash
 export LLVM_SYS_211_PREFIX="$(brew --prefix llvm@21)"
 ```
+
+If you're really serious about building binaries, there is a script located in the repo `llvm/get_llvm.sh` that will help you cut an LLVM 21 build
+from source, with the flags k1 needs to enable fully static linking of llvm.
 
 With the dependencies installed, `k1` and the language server may be built via:
 
@@ -100,17 +105,7 @@ k1
 k1 run <(echo 'fn main(): i32 { println("hello k1!"); 0 }')
 ```
 
-## Reflections
-I simply started because I was curious what LLVM was, and had a lot of ideas about how programming could be better (20,000 hours will do that to you), and
-I specifically wanted to understand performance from the inside. Why were my tools and programs so slow?
-Mainly I wanted to see if a compiler could be fast and also do nice things for you. There are some core decisions (functions must declare
-their return types) designed to protect the performance of the compiler. (I think they are good decisions for software engineering anyway)
-I had no expectation that I could do better, having never designed a language or made a compiler, but I just wanted to explore. So I just started studying and
-practicing using this project.
-
-More later I'm sure... everything evolves...
-
-Inspiration
+## Inspiration
 
 > The programmer, like the poet, works only slightly removed from pure thought-stuff. He builds his castles in the air, from air, creating by exertion of the imagination. Few media of creation are so flexible, so easy to polish and rework, so readily capable of realizing grand conceptual structures.... Yet the program construct, unlike the poet's words, is real in the sense that it moves and works, producing visible outputs separate from the construct itself.
 - Brooks
@@ -124,6 +119,16 @@ Inspiration
 https://justforfunnoreally.dev/
 
 Some Heroes: Casey Muratori, Linus Torvalds, Andreas Kling, Jonathan Blow, Ken Thompson, Chris Lattner, Bjarne Stroustrup, [Rob Pike](https://docs.google.com/presentation/d/e/2PACX-1vSmIbSwh1_DXKEMU5YKgYpt5_b4yfOfpfEOKS5_cvtLdiHsX6zt-gNeisamRuCtDtCb2SbTafTI8V47/pub?start=false&loop=false&delayms=3000#slide=id.p)
+
+## Reflections
+I simply started because I was curious what LLVM was, and had a lot of ideas about how programming could be better (20,000 hours will do that to you), and
+I specifically wanted to understand performance from the inside. Why were my tools and programs so slow?
+Mainly I wanted to see if a compiler could be fast and also do nice things for you. There are some core decisions (functions must declare
+their return types) designed to protect the performance of the compiler. (I think they are good decisions for software engineering anyway)
+I had no expectation that I could do better, having never designed a language or made a compiler, but I just wanted to explore. So I just started studying and
+practicing using this project.
+
+More later I'm sure... everything evolves...
 
 ## Case Study: implementing bitfields
 
