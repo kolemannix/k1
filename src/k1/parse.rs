@@ -2269,11 +2269,29 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         &mut self,
         condition: Option<ParsedExprId>,
     ) -> ParseResult<Option<ParsedExprId>> {
-        if let Some(dolla) = self.maybe_consume(K::Dollar) {
+        let (maybe_hash, maybe_directive) = self.peek_two();
+        if maybe_hash.kind == K::Hash {
+            // Leave `#debug` entirely alone
+            if self.get_token_chars(maybe_directive) == "debug" {
+                Ok(None)
+            } else {
+                self.advance();
+                match self.parse_static_expr(maybe_hash, maybe_directive, condition)? {
+                    Some(static_expr_id) => Ok(Some(static_expr_id)),
+                    None => Err(error_expected(
+                        "static definition (e.g. #static or #meta)",
+                        maybe_directive,
+                    )),
+                }
+            }
+        } else if maybe_hash.kind == K::Dollar {
             self.advance();
-            self.add_semantic_token(dolla, SemanticTokenKind::Operator);
-            let expr_id =
-                self.consume_static_expr(dolla, condition, ParsedStaticBlockKind::Metaprogram)?;
+            self.add_semantic_token(maybe_hash, SemanticTokenKind::Operator);
+            let expr_id = self.consume_static_expr(
+                maybe_hash,
+                condition,
+                ParsedStaticBlockKind::Metaprogram,
+            )?;
             Ok(Some(expr_id))
         } else {
             Ok(None)
