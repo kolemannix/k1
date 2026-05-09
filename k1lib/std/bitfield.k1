@@ -24,13 +24,13 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
 
   // This is just a regular StringBuilder that gets some extra methods since we've
   // brought the meta/CodeWriter ability into scope
-  let code = StringBuilder/new(); // The asterisk means we want a reference (a stack address)
+  let code = StringBuilder/new();
 
   // This defines a named struct type with one field, which is a common newtype pattern
-  code.line("deftype {type-name} = {{ bits: {baseName} }");
+  writelnf(code, "deftype {type-name} = {{ bits: {baseName} }");
 
   // We crack open a namespace to put some goodies inside
-  code.line("ns {type-name} {{");
+  writelnf(code, "ns {type-name} {{");
 
   // This actually gets captured by the lambda below
   let bitIndexVal = 0;
@@ -73,10 +73,10 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
   for members {
     let info = memberInfo.get(itIndex);
     // Emit globals, or constants, for each field's mask
-    code.line("  let {it.name}Mask: {baseName} = {info.mask}");
+    writelnf(code, "  let {it.name}Mask: {baseName} = {info.mask}");
   };
 
-  code.line("  let zero: {type-name} = {{ bits: 0 }");
+  writelnf(code, "  let zero: {type-name} = {{ bits: 0 }");
 
   // Now let's do a getter and setter for each bitfield. If the width is 1,
   // we'll use bool since that's what the people likely want. Note that we could configure
@@ -88,34 +88,34 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
     let fieldType = if isBool "bool" else "u{info.typeWidth}";
 
     // Getter
-    code.line("  fn get{nameCap}(self: {type-name}): {fieldType} {{");
+    writelnf(code, "  fn get{nameCap}(self: {type-name}): {fieldType} {{");
 
-    code.line("    let bits: {baseName} = self.bits;");
-    code.line("    let shifted: {baseName} = bits >> {info.offset};");
-    code.line("    let cleared: {baseName} = shifted & {info.rawValue};");
+    writelnf(code, "    let bits: {baseName} = self.bits;");
+    writelnf(code, "    let shifted: {baseName} = bits >> {info.offset};");
+    writelnf(code, "    let cleared: {baseName} = shifted & {info.rawValue};");
     if isBool {
-      code.line("    cleared == 1")
+      writelnf(code, "    cleared == 1");
     } else {
-      code.line("    cleared.as[{fieldType}]");
+      writelnf(code, "    cleared.as[{fieldType}]");
     };
 
-    code.line("  }"); // End Getter
+    writelnf(code, "  }"); // End Getter
 
     // Setter
-    code.line("  fn set{nameCap}(self: {type-name}, value: {fieldType}): {type-name} {{");
+    writelnf(code, "  fn set{nameCap}(self: {type-name}, value: {fieldType}): {type-name} {{");
     if isBool {
-      code.line("    let maskedValue: {baseName} = value.as-u8();")
+      writelnf(code, "    let maskedValue: {baseName} = value.as-u8();")
     } else {
-      code.line("    let maskedValue: {baseName} = value & {info.rawValue};")
+      writelnf(code, "    let maskedValue: {baseName} = value & {info.rawValue};")
     };
     let clearMask = info.invMask;
-    code.line("    let clearedBits: {baseName} = self.bits & {clearMask};");
-    code.line("    let insertedBits: {baseName} = clearedBits | (maskedValue << {info.offset});");
-    code.line("    {{ bits: insertedBits }");
-    code.line("  }"); // End setter
+    writelnf(code, "    let clearedBits: {baseName} = self.bits & {clearMask};");
+    writelnf(code, "    let insertedBits: {baseName} = clearedBits | (maskedValue << {info.offset});");
+    writelnf(code, "    {{ bits: insertedBits }");
+    writelnf(code, "  }"); // End setter
   };
 
-  code.line("}"); // End ns
+  writelnf(code, "}"); // End ns
 
   let printBody = StringBuilder/new();
   for members {
@@ -123,7 +123,7 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
     let getName = "get{info.nameCap}";
     let last = itIndex + 1 == members.len();
     let sep = if last "" else ",";
-    printBody.line(`    w.write-string("{it.name}={{self.{getName}()}{sep}");`);
+    writelnf(printBody, `    w.write-string("{it.name}={{self.{getName}()}{sep}");`);
   };
   code.implPrint(type-name, printBody.build(), indent = 0);
 
