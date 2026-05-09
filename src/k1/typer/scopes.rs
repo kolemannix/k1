@@ -8,12 +8,14 @@ use smallvec::{SmallVec, smallvec};
 use std::{collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
 use crate::{
-    SV4, errf, nz_u32_id,
+    SV4, errf,
+    kmem::Dlist,
+    nz_u32_id,
     parse::{ParsedAbilityId, ParsedExprId, QIdent},
     static_assert_niched, static_assert_size,
     typer::{
-        AbilityId, FunctionId, Ident, K1Result, LoopType, LsEntityKind, NamespaceId, TypeId,
-        TypedExprId, TypedProgram, VariableId,
+        AbilityId, FunctionId, Ident, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId,
+        TypeId, TypedExprId, TypedProgram, VariableId,
     },
     vpool::VPool,
 };
@@ -625,6 +627,21 @@ impl TypedProgram {
             let scope_to_search = self.resolve_qident(scope_id, ability_name)?;
             Ok(self.scopes.get_scope(scope_to_search).find_ability(ability_name.name))
         }
+    }
+
+    pub fn name_chain(&self, id: NamespaceId) -> Dlist<Ident, MemTmp> {
+        let mut chain = Dlist::empty();
+        let mut id = id;
+        loop {
+            let namespace = self.namespaces.get(id);
+            self.get_tmp_unsafe().dlist_push_front(&mut chain, namespace.name);
+            if let Some(parent_id) = namespace.parent_id {
+                id = parent_id;
+            } else {
+                break;
+            }
+        }
+        chain
     }
 }
 

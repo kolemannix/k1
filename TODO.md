@@ -8,7 +8,6 @@
 - [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
 - [x] Destructuring, (in)fallible patterns
 - [x] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
-- [ ] Define order of loaded files in dir; consider abandoning the dir discovery and using `include` model
 - [ ] Finish removing let*
 - [x] Improve named arg passing. Allow mixing named and unnamed as long as the order is correct. Its common to only need to name boolean params, for example
 - [x] Allow name/type elision shorthand in function signatures. Examples: (self: self, size: size, t: t) -> (self, size, t). Enabled by using lowercase for types and values
@@ -21,7 +20,6 @@ More optimal final programs
 
 minor ideas
 - [ ] c"" string literals that are of type ptr (what about interpolation?)
-- [ ] userland: CCompatString which is a valid c string with length in front of the allocation (ill call it antirez strings)
 - [ ] [design/flags_in_tags.k1]
 - [x] Incorporate ffc.h for int and float parsing
 - [ ] Inspired by fast_float, char to digit lookup table
@@ -40,7 +38,7 @@ Simple but missing
 - [ ] Bindings generator; `rust-bindgen` equivalent
 - [x] implement iterator for array
 - [ ] Implement at least one format specifier (precision, pretty)
-- [ ] static #switch
+- [x] static #switch
 
 # Bugs
 - [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)

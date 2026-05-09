@@ -1269,7 +1269,6 @@ pub struct ParsedFunction {
     pub name: Ident,
     pub type_params: ParsedSlice<ParsedTypeParam>,
     pub params: ParsedSlice<ParsedFnParam>,
-    pub context_params: ParsedSlice<ParsedFnParam>,
     pub ret_type: Option<ParsedTypeExprId>,
     pub body: Option<ParsedExprId>,
     pub signature_span: SpanId,
@@ -4448,15 +4447,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let span = self.extend_span(fn_keyword.span, end_span);
         let type_params_handle = self.ast.mem.pushn(&type_params);
         let params_handle =
-            self.ast.mem.pushn_iter(params.iter().filter(|p| !p.modifiers.is_context()).copied());
-        let context_params_handle =
-            self.ast.mem.pushn_iter(params.iter().filter(|p| p.modifiers.is_context()).copied());
+            self.ast.mem.pushn(&params);
         let function_id = self.ast.add_function(ParsedFunction {
             name: func_name_id,
             type_params: type_params_handle,
-            // FIXME(perf, efficient ast): Migrate params and context_params to a single SliceHandle
             params: params_handle,
-            context_params: context_params_handle,
             ret_type,
             body: block,
             signature_span,

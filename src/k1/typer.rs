@@ -24,7 +24,6 @@ pub use static_value::{
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
 use std::error::Error;
 use std::ffi::c_void;
@@ -36,7 +35,7 @@ use std::path::{Path, PathBuf};
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
-use crate::kmem::{Handle, List, MSlice, MSpillSlice, MStr, Mem};
+use crate::kmem::{Dlist, Handle, List, MSlice, MSpillSlice, MStr, Mem};
 use crate::{DepEq, DepHash, SV2, kmem};
 use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
@@ -1775,21 +1774,6 @@ impl Namespaces {
     pub fn find_child_by_name(&self, parent_id: NamespaceId, name: Ident) -> Option<&Namespace> {
         self.iter()
             .find(|ns| ns.parent_id.is_some_and(|parent| parent == parent_id) && ns.name == name)
-    }
-
-    pub fn name_chain(&self, id: NamespaceId) -> VecDeque<Ident> {
-        let mut chain = VecDeque::with_capacity(8);
-        let mut id = id;
-        loop {
-            let namespace = &self.get(id);
-            chain.push_front(namespace.name);
-            if let Some(parent_id) = namespace.parent_id {
-                id = parent_id;
-            } else {
-                break;
-            }
-        }
-        chain
     }
 
     pub fn get_scope(&self, namespace_id: NamespaceId) -> ScopeId {
@@ -13706,11 +13690,12 @@ impl TypedProgram {
     fn resolve_intrinsic_function_type(
         &self,
         fn_name: Ident,
-        namespace_chain: &[Ident],
+        namespace_chain: Dlist<Ident, MemTmp>,
         ability_impl_info: Option<(AbilityId, TypeId)>,
     ) -> Result<Builtin, String> {
         let fn_name_str = self.ast.idents.get_name(fn_name);
-        let second = namespace_chain.get(2).map(|id| self.ident_str(*id));
+        let second =
+            self.tmp.dlist_nth_data_opt(namespace_chain, 2).map(|node| self.ident_str(*node));
         let result = if let Some((ability_id, ability_impl_type_id)) = ability_impl_info {
             let base_ability_id = self.abilities.get(ability_id).base_ability_id;
             use ArithOpClass as Class;
@@ -13893,8 +13878,8 @@ impl TypedProgram {
             Some(result) => Ok(result),
             None => Err(format!(
                 "Could not resolve intrinsic function type for function {}/{}",
-                namespace_chain
-                    .iter()
+                self.tmp
+                    .dlist_iter(namespace_chain)
                     .map(|i| self.ident_str(*i).to_string())
                     .collect::<Vec<_>>()
                     .join("/"),
@@ -14549,17 +14534,10 @@ impl TypedProgram {
         }
 
         // Process parameters
-        let param_count = ast_fn.context_params.len() + ast_fn.params.len();
+        let param_count = ast_fn.params.len();
         let mut param_types: List<FnParamType, _> = self_.types.mem.new_list(param_count);
         let mut params = self_.mem.new_list(param_count);
-        for (idx, fn_param) in self_
-            .ast
-            .mem
-            .getn(ast_fn.context_params)
-            .iter()
-            .chain(self_.ast.mem.getn(ast_fn.params).iter())
-            .enumerate()
-        {
+        for (idx, fn_param) in self_.ast.mem.getn(ast_fn.params).iter().enumerate() {
             let type_expr = match fn_param.type_expr {
                 ParsedFnParamType::Shorthand => {
                     self_.synth_parsed_type_app(fn_param.name, fn_param.span)
@@ -14680,13 +14658,11 @@ impl TypedProgram {
         }
 
         let intrinsic_type = if ast_fn.linkage == Linkage::Intrinsic {
-            // Note(perf): name_chain isn't efficient,
-            // but we don't have a lot of intrinsics
-            let mut namespace_chain = self_.namespaces.name_chain(namespace_id);
+            let namespace_chain = self_.name_chain(namespace_id);
             let resolved = self_
                 .resolve_intrinsic_function_type(
                     ast_fn.name,
-                    namespace_chain.make_contiguous(),
+                    namespace_chain,
                     ability_id.zip(impl_self_type),
                 )
                 .map_err(|msg| errf!(ast_fn.span, "Error typechecking function: {}", msg,))?;
@@ -17377,14 +17353,15 @@ impl TypedProgram {
         skip_root: bool,
     ) {
         let starting_namespace = self.scopes.nearest_parent_namespace(scope);
-        let namespace_chain = self.namespaces.name_chain(starting_namespace);
-        for (index, identifier) in namespace_chain.iter().enumerate() {
-            let ident_str = self.ident_str(*identifier);
+        let namespace_chain = self.name_chain(starting_namespace);
+        for identifier in self.tmp.dlist_iter_nodes(namespace_chain) {
+            let ident_str = self.ident_str(identifier.data);
+            let is_last = identifier.is_last();
 
             let is_root = ident_str == "_root";
             if !(is_root && skip_root) {
                 write!(w, "{ident_str}").unwrap();
-                if index < (namespace_chain.len() - 1) {
+                if !is_last {
                     write!(w, "{delimiter}").unwrap();
                 }
             }
