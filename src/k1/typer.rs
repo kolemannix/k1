@@ -569,7 +569,7 @@ impl TypedAbility {
 #[derive(Clone, Copy)]
 pub struct TypedSumPattern {
     pub sum_type_id: TypeId,
-    pub variant_tag_name: Ident,
+    pub variant_name: Ident,
     pub variant_index: u32,
     pub payload: Option<TypedPatternId>,
     pub span: SpanId,
@@ -578,7 +578,7 @@ pub struct TypedSumPattern {
 #[derive(Clone, Copy)]
 pub struct TypedEnumPattern {
     pub enum_type_id: TypeId,
-    pub tag_name: Ident,
+    pub member_name: Ident,
     pub index: u32,
     pub int_value: TypedIntValue,
     pub span: SpanId,
@@ -4624,7 +4624,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         allow_bindings: bool,
     ) -> K1Result<TypedPatternId> {
-        let parsed_pattern_expr = self.ast.patterns.get_pattern(pat_expr);
+        let parsed_pattern_expr = self.ast.patterns.get(pat_expr);
         match parsed_pattern_expr {
             ParsedPattern::Wildcard(span) => Ok(self.patterns.add(TypedPattern::Wildcard(*span))),
             ParsedPattern::Literal(literal_expr_id) => {
@@ -4744,8 +4744,9 @@ impl TypedProgram {
                         else {
                             return failf!(
                                 sum_pattern.span,
-                                "Impossible pattern: No variant named '{}'",
-                                self.ident_str(sum_pattern.variant_name).blue()
+                                "Impossible pattern: No variant named '{}' in {}",
+                                self.ident_str(sum_pattern.variant_name),
+                                self.type_id_to_string(target_type_id),
                             );
                         };
                         let matching_variant_index = matching_variant.index;
@@ -4775,7 +4776,7 @@ impl TypedProgram {
                         let sum_pattern = TypedSumPattern {
                             sum_type_id: target_type_id,
                             variant_index: matching_variant_index,
-                            variant_tag_name: matching_variant_name,
+                            variant_name: matching_variant_name,
                             payload: payload_pattern,
                             span: sum_pattern_span,
                         };
@@ -4810,15 +4811,16 @@ impl TypedProgram {
                         else {
                             return failf!(
                                 sum_pattern.span,
-                                "Impossible pattern: No value named '{}'",
-                                self.ident_str(sum_pattern.variant_name).blue()
+                                "Impossible pattern: No value named '{}' in {}",
+                                self.ident_str(sum_pattern.variant_name),
+                                self.type_id_to_string(target_type_id)
                             );
                         };
                         let matching_value_name = matching_value.name;
 
                         let enum_pattern = TypedEnumPattern {
                             enum_type_id: target_type_id,
-                            tag_name: matching_value_name,
+                            member_name: matching_value_name,
                             index: matching_value_index as u32,
                             int_value: matching_value.int_value,
                             span: sum_pattern_span,
@@ -7535,27 +7537,16 @@ impl TypedProgram {
                     false,
                     None,
                 );
-                let false_expression = self.ast.exprs.add_expression(
-                    parse::ParsedExpr::Literal(parse::ParsedLiteral::Bool(false, is_expr.span)),
-                    false,
-                    None,
-                );
-                let true_case = parse::ParsedMatchCase {
+                let true_case = parse::ParsedSwitchCase {
                     patterns: MSpillSlice::one(is_expr.pattern),
                     guard_condition_expr: None,
                     expression: true_expression,
                 };
-                let wildcard_pattern =
-                    self.ast.patterns.add_pattern(parse::ParsedPattern::Wildcard(is_expr.span));
-                let false_case = parse::ParsedMatchCase {
-                    patterns: MSpillSlice::one(wildcard_pattern),
-                    guard_condition_expr: None,
-                    expression: false_expression,
-                };
-                let as_match_expr = parse::ParsedMatchExpression {
+                let as_match_expr = parse::ParsedSwitch {
                     match_subject: is_expr.target_expression,
-                    cases: self.ast.mem.pushn(&[true_case, false_case]),
+                    cases: self.ast.mem.pushn(&[true_case]),
                     span: is_expr.span,
+                    is_static: false,
                 };
                 let match_expr_id = self.ast.exprs.add_expression(
                     parse::ParsedExpr::Match(as_match_expr),
@@ -7567,12 +7558,19 @@ impl TypedProgram {
                 let allow_bindings = false;
                 // add_fallback: false since we have an explicit false case.
                 // Alternatively we could accept a fallback _value_ in eval_match_expr
-                self.eval_match_expr(match_expr_id, ctx, check_exhaustive, allow_bindings, false)
+                let false_expr = self.synth_bool(false, is_expr.span);
+                self.eval_match_expr(
+                    match_expr_id,
+                    ctx,
+                    check_exhaustive,
+                    allow_bindings,
+                    Some(false_expr),
+                )
             }
             ParsedExpr::Match(_match_expr) => {
                 let check_exhaustive = true;
                 let allow_bindings = true;
-                self.eval_match_expr(expr_id, ctx, check_exhaustive, allow_bindings, true)
+                self.eval_match_expr(expr_id, ctx, check_exhaustive, allow_bindings, None)
             }
             ParsedExpr::Cast(cast) => {
                 let cast = *cast;
@@ -7626,7 +7624,7 @@ impl TypedProgram {
             }
             ParsedExpr::Static(stat) => {
                 let stat = *stat;
-                match self.eval_static_expr_and_exec(expr_id, stat, false, ctx)? {
+                match self.compile_static_or_meta(expr_id, stat, false, ctx)? {
                     StaticExecutionResult::TypedExpr(typed_expr) => Ok(typed_expr),
                     StaticExecutionResult::Definitions(_) => {
                         self.ice_span(stat.span, "Got static definitions from an expression")
@@ -7887,7 +7885,7 @@ impl TypedProgram {
     }
 
     /// Compiles `#static <expr>` and `#meta <expr>` constructs
-    fn eval_static_expr_and_exec(
+    fn compile_static_or_meta(
         &mut self,
         _expr_id: ParsedExprId,
         stat: ParsedStaticExpr,
@@ -8825,11 +8823,14 @@ impl TypedProgram {
         ctx: EvalExprContext,
         check_exhaustive: bool,
         allow_bindings: bool,
-        add_fallback: bool,
+        fallback_expr: Option<TypedExprId>,
     ) -> K1Result<TypedExprId> {
-        let match_parsed_expr = self.ast.exprs.get(match_expr_id).as_match().unwrap().clone();
-        if match_parsed_expr.cases.is_empty() {
-            return Err(make_error("Match expression with no arms", match_parsed_expr.span));
+        let parsed_match = self.ast.exprs.get(match_expr_id).as_match().unwrap().clone();
+        if parsed_match.is_static {
+            return self.eval_static_match_expr(match_expr_id, ctx);
+        };
+        if parsed_match.cases.is_empty() {
+            return Err(make_error("switch expression with no arms", parsed_match.span));
         }
         let match_scope_id = self.scopes.add_child_scope(
             ctx.scope_id,
@@ -8838,17 +8839,15 @@ impl TypedProgram {
             None,
         );
         let subject_expr =
-            self.eval_expr(match_parsed_expr.match_subject, ctx.with_no_expected_type())?;
+            self.eval_expr(parsed_match.match_subject, ctx.with_no_expected_type())?;
 
-        // Mangled; not a user-facing binding
-        let match_subject_ident = self.ast.idents.intern("match_subject");
         let match_subject_variable =
-            self.synth_variable_defn_simple(match_subject_ident, subject_expr, ctx.scope_id);
+            self.synth_variable_defn_simple(self.ast.idents.b.subject, subject_expr, ctx.scope_id);
 
-        let match_expr_span = match_parsed_expr.span;
+        let match_expr_span = parsed_match.span;
         let arms_ctx = ctx.with_scope(match_scope_id);
 
-        let parsed_cases = match_parsed_expr.cases;
+        let parsed_cases = parsed_match.cases;
         let parsed_pattern_count: u32 = self
             .ast
             .mem
@@ -8991,21 +8990,23 @@ impl TypedProgram {
                 false,
             )?
         }
-        if add_fallback {
-            let fallback_arm = TypedMatchArm {
-                condition: MatchingCondition { instrs: MSlice::empty() },
-                consequent_expr: self.synth_crash_call(
-                    if check_exhaustive {
-                        "Internal Compiler Error: no cases matched but match was meant to be exhaustive"
-                    } else {
-                        "No cases matched"
-                    },
-                    match_expr_span,
-                    arms_ctx.with_no_expected_type(),
-                )?,
-            };
-            typed_arms.push(fallback_arm);
-        }
+        let fallback_value = match fallback_expr {
+            Some(e) => e,
+            None => self.synth_crash_call(
+                if check_exhaustive {
+                    "Internal Compiler Error: no cases matched but match was meant to be exhaustive"
+                } else {
+                    "No cases matched"
+                },
+                match_expr_span,
+                arms_ctx.with_no_expected_type(),
+            )?,
+        };
+        let fallback_arm = TypedMatchArm {
+            condition: MatchingCondition { instrs: MSlice::empty() },
+            consequent_expr: fallback_value,
+        };
+        typed_arms.push(fallback_arm);
 
         // The result type of the match is the type of the first non-never arm, or never
         // They've already been typechecked against each other.
@@ -9024,6 +9025,79 @@ impl TypedProgram {
             match_result_type,
             match_expr_span,
         ))
+    }
+
+    fn eval_static_match_expr(
+        &mut self,
+        match_expr_id: ParsedExprId,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
+        // Our job is to evaluate the conditions statically. That means either compiling the condition
+        // chains into static exprs and running them, or just allowing only trivial patterns
+
+        let ParsedExpr::Match(parsed_match) = self.ast.exprs.get(match_expr_id) else { panic!() };
+        let parsed_match = parsed_match.clone();
+        let match_target =
+            self.execute_static_expr(parsed_match.match_subject, ctx.with_no_expected_type(), &[])?;
+        let subject_span = self.ast.exprs.get_span(parsed_match.match_subject);
+        let StaticValue::Enum(target_type_id, enum_value) = *self.static_values.get(match_target)
+        else {
+            return failf!(subject_span, "Only enums are supported in static match for now");
+        };
+        let enum_members = self.types.get(target_type_id).expect_enum().member_values;
+        let Some(target_member) =
+            self.types.mem.getn(enum_members).iter().find(|m| m.int_value == enum_value)
+        else {
+            self.ice_span(subject_span, "Tag didn't match any variants")
+        };
+        let target_member_name = target_member.name;
+
+        let mut given_cases = self.tmp.new_list(enum_members.len());
+        let mut uncovered_members = self.tmp.new_list(enum_members.len());
+        uncovered_members.extend_iter(self.types.mem.getn(enum_members).iter().map(|m| m.name));
+        for case in self.ast.mem.getn(parsed_match.cases) {
+            if let Some(guard_expr) = case.guard_condition_expr {
+                return failf!(
+                    self.ast.exprs.get_span(guard_expr),
+                    "Guard conditions are not supported in static match for now"
+                );
+            }
+            for pattern_id in case.patterns.as_slice(&self.ast.mem) {
+                let compiled_pattern_id =
+                    self.compile_pattern_to_type(*pattern_id, target_type_id, ctx.scope_id, false)?;
+                let pattern = self.patterns.get(compiled_pattern_id);
+                let TypedPattern::Enum(enum_pattern) = pattern else {
+                    return failf!(
+                        self.ast.get_pattern_span(*pattern_id),
+                        "Only enum patterns are supported in static match for now"
+                    );
+                };
+                uncovered_members.swap_remove_elem(&enum_pattern.member_name);
+                given_cases.push_grow(&mut self.tmp, (*enum_pattern, case.expression));
+            }
+        }
+
+        if !uncovered_members.is_empty() {
+            let uncovered_member_names =
+                uncovered_members.iter().map(|name| self.ident_str(*name)).join(", ");
+            return failf!(
+                parsed_match.span,
+                "Non-exhaustive static match: the following variants were not covered: {}",
+                uncovered_member_names
+            );
+        }
+
+        let mut matched = None;
+        for (pattern, expr) in given_cases.iter() {
+            if pattern.member_name == target_member_name {
+                matched = Some(*expr);
+            }
+        }
+
+        match matched {
+            None => failf!(parsed_match.span, "No cases matched"),
+            Some(expr) => self.eval_expr(expr, ctx),
+        }
     }
 
     fn check_pattern_exhaustiveness(
@@ -12446,7 +12520,10 @@ impl TypedProgram {
         };
 
         if let Some(function_id) = callee.maybe_function_id() {
-            self.emit_ls_entity(fn_call.name.span, LsEntityKind::Function { function_id, is_defn: false });
+            self.emit_ls_entity(
+                fn_call.name.span,
+                LsEntityKind::Function { function_id, is_defn: false },
+            );
             self.register_function_usage(function_id, fn_call.name.span);
 
             if let Some(enclosing_id) = self.scopes.enclosing_functions.get(ctx.scope_id).function {
@@ -15477,7 +15554,7 @@ impl TypedProgram {
                             flags: EvalExprFlags::empty(),
                         };
                         if let Err(e) =
-                            self.eval_static_expr_and_exec(static_expr_id, s, true, eval_expr_ctx)
+                            self.compile_static_or_meta(static_expr_id, s, true, eval_expr_ctx)
                         {
                             self.report(e);
                         };
@@ -15981,19 +16058,15 @@ impl TypedProgram {
                         global_defn_name: None,
                         flags: EvalExprFlags::empty(),
                     };
-                    let newly_parsed_defns = match self.eval_static_expr_and_exec(
-                        static_expr_id,
-                        s,
-                        true,
-                        eval_expr_ctx,
-                    ) {
-                        Err(e) => {
-                            self.report(e);
-                            eco_vec![]
-                        }
-                        Ok(StaticExecutionResult::Definitions(defns)) => defns,
-                        Ok(StaticExecutionResult::TypedExpr(_)) => unreachable!(),
-                    };
+                    let newly_parsed_defns =
+                        match self.compile_static_or_meta(static_expr_id, s, true, eval_expr_ctx) {
+                            Err(e) => {
+                                self.report(e);
+                                eco_vec![]
+                            }
+                            Ok(StaticExecutionResult::Definitions(defns)) => defns,
+                            Ok(StaticExecutionResult::TypedExpr(_)) => unreachable!(),
+                        };
                     // If any of the meta definitions are themselves namespaces,
                     // we need to run them now, in-loop, so that the program behaves
                     // exactly as if they had been literally written in place
@@ -16589,7 +16662,7 @@ impl TypedProgram {
             (TypedPattern::LiteralString(_string_pattern, _), PatternCtor::String) => false,
 
             (TypedPattern::Sum(sum_pat), PatternCtor::Sum { variant_name, inner }) => {
-                if *variant_name == sum_pat.variant_tag_name {
+                if *variant_name == sum_pat.variant_name {
                     match (sum_pat.payload, inner) {
                         (Some(payload), Some(inner)) => {
                             TypedProgram::pattern_eliminates_ctor(ctors, patterns, payload, *inner)
@@ -16633,7 +16706,7 @@ impl TypedProgram {
                 )
             }
             (TypedPattern::Enum(enum_pattern), PatternCtor::Enum { variant_name }) => {
-                enum_pattern.tag_name == *variant_name
+                enum_pattern.member_name == *variant_name
             }
             (TypedPattern::Type(_type_pattern), _ctor) => false,
             (a, b) => {

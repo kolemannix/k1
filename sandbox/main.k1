@@ -17,6 +17,13 @@ ns foo {
 }
 
 fn main(): i32 {
+  #switch k1/os {
+    :macos -> "hooray",
+    :linux -> "boo",
+    :wasm -> asdf
+  };
+
+
   let i = 4;
   let f = fn. i + 10;
   f();

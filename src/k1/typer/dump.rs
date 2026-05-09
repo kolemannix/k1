@@ -1007,7 +1007,7 @@ impl TypedProgram {
             TypedPattern::Variable(var) => w.write_str(self.ident_str(var.name)),
             TypedPattern::Wildcard(_) => w.write_str("_"),
             TypedPattern::Sum(sum_pat) => {
-                w.write_str(self.ident_str(sum_pat.variant_tag_name))?;
+                w.write_str(self.ident_str(sum_pat.variant_name))?;
                 if let Some(payload) = sum_pat.payload {
                     w.write_str("(")?;
                     self.display_pattern(payload, w)?;
@@ -1016,7 +1016,7 @@ impl TypedProgram {
                 Ok(())
             }
             TypedPattern::Enum(e) => {
-                w.write_str(self.ident_str(e.tag_name))?;
+                w.write_str(self.ident_str(e.member_name))?;
                 Ok(())
             }
             TypedPattern::Struct(struct_pat) => {

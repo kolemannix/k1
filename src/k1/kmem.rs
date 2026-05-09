@@ -1487,6 +1487,34 @@ impl<T, Tag> List<T, Tag> {
             self.push_unchecked(value);
         }
     }
+
+    pub fn swap_remove_elem(&mut self, elem: &T) -> Option<T>
+    where
+        T: Copy + PartialEq,
+    {
+        if let Some(index) = self.as_slice().iter().position(|x| x == elem) {
+            Some(self.swap_remove(index))
+        } else {
+            None
+        }
+    }
+
+    pub fn swap_remove(&mut self, index: usize) -> T
+    where
+        T: Copy,
+    {
+        if index >= self.len {
+            panic!("MList swap_remove index out of bounds: {} >= {}", index, self.len);
+        }
+        let last_index = self.len - 1;
+        unsafe {
+            let slice = &mut *self.buf;
+            slice.swap(index, last_index);
+            let val = slice[last_index];
+            self.len -= 1;
+            val
+        }
+    }
 }
 
 impl<T, Tag> std::ops::Index<usize> for List<T, Tag> {

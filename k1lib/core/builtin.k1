@@ -685,7 +685,6 @@ ns array {
   extern("read") fn read(file-no: c-int, buffer: ptr, count: c-sizet): i64
   extern("write") fn write(file-no: c-int, data: ptr, count: c-sizet): i64
 
-  // These may only hold on macos; temporary until we have a bindings generation system
   let MAP_FILE   : c-int = 0x0000
   let MAP_SHARED : c-int = 0x0001
   let MAP_PRIVATE: c-int = 0x0002

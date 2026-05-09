@@ -640,17 +640,18 @@ pub struct ParsedIsExpr {
 }
 
 #[derive(Copy, Clone)]
-pub struct ParsedMatchCase {
+pub struct ParsedSwitchCase {
     pub patterns: MSS2<ParsedPatternId, ParsedProgram>,
     pub guard_condition_expr: Option<ParsedExprId>,
     pub expression: ParsedExprId,
 }
 
 #[derive(Clone)]
-pub struct ParsedMatchExpression {
+pub struct ParsedSwitch {
     pub match_subject: ParsedExprId,
-    pub cases: ParsedSlice<ParsedMatchCase>,
+    pub cases: ParsedSlice<ParsedSwitchCase>,
     pub span: SpanId,
+    pub is_static: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -816,7 +817,7 @@ pub enum ParsedExpr {
     /// <b: pat> -> <expr>
     /// }
     /// ```
-    Match(ParsedMatchExpression),
+    Match(ParsedSwitch),
     /// ```md
     /// x as u64, y as .Color
     /// ```
@@ -867,7 +868,7 @@ impl ParsedExpr {
         }
     }
 
-    pub fn as_match(&self) -> Option<&ParsedMatchExpression> {
+    pub fn as_match(&self) -> Option<&ParsedSwitch> {
         if let Self::Match(v) = self { Some(v) } else { None }
     }
 
@@ -1542,7 +1543,7 @@ impl ParsedPatternPool {
         self.patterns.push(pattern);
         ParsedPatternId(id as u32)
     }
-    pub fn get_pattern(&self, id: ParsedPatternId) -> &ParsedPattern {
+    pub fn get(&self, id: ParsedPatternId) -> &ParsedPattern {
         &self.patterns[id.0 as usize]
     }
 }
@@ -1722,7 +1723,7 @@ impl ParsedProgram {
     }
 
     pub fn get_pattern_span(&self, id: ParsedPatternId) -> SpanId {
-        match self.patterns.get_pattern(id) {
+        match self.patterns.get(id) {
             ParsedPattern::Literal(literal_id) => self.exprs.get(*literal_id).get_span(),
             ParsedPattern::Sum(sum_pattern) => sum_pattern.span,
             ParsedPattern::Variable(_var_pattern, span) => *span,
@@ -3473,59 +3474,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(Some(self.add_expression(ParsedExpr::Loop(ParsedLoopExpr { body, span }))))
             }
             K::KeywordSwitch => {
-                let when_keyword = self.tokens.next();
-                let target_expression = self.expect_expression()?;
-
-                self.expect_kind(K::OpenBrace)?;
-
-                // Allow an opening comma for symmetry
-                if self.peek().kind == K::Comma {
-                    self.advance();
-                }
-                let mut cases = self.ast.mem.new_list(8);
-                while self.peek().kind != K::CloseBrace {
-                    let mut arm_pattern_ids: MSL2<ParsedPatternId, ParsedProgram> =
-                        MSpillList::new();
-                    loop {
-                        let arm_pattern_id = self.expect_parse_pattern()?;
-                        arm_pattern_ids.push(&mut self.ast.mem, arm_pattern_id);
-                        if self.maybe_consume(K::KeywordOr).is_none() {
-                            break;
-                        }
-                    }
-
-                    let guard_condition_expr = if self.maybe_consume(K::KeywordIf).is_some() {
-                        Some(self.expect_expression()?)
-                    } else {
-                        None
-                    };
-
-                    self.expect_kind(K::RThinArrow)?;
-
-                    let arm_expr_id = self.expect_expression()?;
-                    let parsed_case = ParsedMatchCase {
-                        patterns: arm_pattern_ids.into_spill_slice(&mut self.ast.mem),
-                        guard_condition_expr,
-                        expression: arm_expr_id,
-                    };
-                    cases.push_grow(&mut self.ast.mem, parsed_case);
-
-                    let next = self.peek();
-                    if next.kind == K::Comma {
-                        self.advance();
-                    } else if next.kind != K::CloseBrace {
-                        return Err(error_expected("comma or close brace", next));
-                    }
-                }
-                let close = self.expect_kind(K::CloseBrace)?;
-                let span = self.extend_token_span(when_keyword, close);
-                let cases_slice = self.ast.mem.list_to_handle(cases);
-                let match_expr = ParsedMatchExpression {
-                    match_subject: target_expression,
-                    cases: cases_slice,
-                    span,
-                };
-                Ok(Some(self.add_expression(ParsedExpr::Match(match_expr))))
+                let switch = self.expect_switch(false)?;
+                Ok(Some(switch))
             }
             K::KeywordFor => {
                 let for_expr = self.expect_for_expr(false)?;
@@ -3649,10 +3599,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             Ok(Some(for_expr))
                         }
                         K::KeywordIf => {
-                            let mut if_expr =
+                            let if_expr =
                                 Parser::expect("If Expression", first, self.parse_if_expr(true))?;
-                            if_expr.is_static = true;
                             Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
+                        }
+                        K::KeywordSwitch => {
+                            let switch = self.expect_switch(true)?;
+                            Ok(Some(switch))
                         }
                         K::Ident if !maybe_directive.is_whitespace_preceded() => {
                             let chars = self.token_chars(maybe_directive);
@@ -3829,6 +3782,58 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.ast.exprs.get_metadata_mut(expression_id).is_debug = compiler_debug;
         }
         Ok(resulting_expression)
+    }
+
+    fn expect_switch(&mut self, is_static: bool) -> ParseResult<ParsedExprId> {
+        let when_keyword = self.tokens.next();
+        let target_expression = self.expect_expression()?;
+
+        self.expect_kind(K::OpenBrace)?;
+
+        // Allow an opening comma for symmetry
+        if self.peek().kind == K::Comma {
+            self.advance();
+        }
+        let mut cases = self.ast.mem.new_list(8);
+        while self.peek().kind != K::CloseBrace {
+            let mut arm_pattern_ids: MSL2<ParsedPatternId, ParsedProgram> = MSpillList::new();
+            loop {
+                let arm_pattern_id = self.expect_parse_pattern()?;
+                arm_pattern_ids.push(&mut self.ast.mem, arm_pattern_id);
+                if self.maybe_consume(K::KeywordOr).is_none() {
+                    break;
+                }
+            }
+
+            let guard_condition_expr = if self.maybe_consume(K::KeywordIf).is_some() {
+                Some(self.expect_expression()?)
+            } else {
+                None
+            };
+
+            self.expect_kind(K::RThinArrow)?;
+
+            let arm_expr_id = self.expect_expression()?;
+            let parsed_case = ParsedSwitchCase {
+                patterns: arm_pattern_ids.into_spill_slice(&mut self.ast.mem),
+                guard_condition_expr,
+                expression: arm_expr_id,
+            };
+            cases.push_grow(&mut self.ast.mem, parsed_case);
+
+            let next = self.peek();
+            if next.kind == K::Comma {
+                self.advance();
+            } else if next.kind != K::CloseBrace {
+                return Err(error_expected("comma or close brace", next));
+            }
+        }
+        let close = self.expect_kind(K::CloseBrace)?;
+        let span = self.extend_token_span(when_keyword, close);
+        let cases_slice = self.ast.mem.list_to_handle(cases);
+        let match_expr =
+            ParsedSwitch { match_subject: target_expression, cases: cases_slice, span, is_static };
+        Ok(self.add_expression(ParsedExpr::Match(match_expr)))
     }
 
     fn expect_for_expr(&mut self, is_static: bool) -> ParseResult<ParsedExprId> {
@@ -4952,7 +4957,7 @@ impl ParsedProgram {
                 w.write_str("switch ")?;
                 self.display_expr_id(w, match_expr.match_subject)?;
                 w.write_str(" {")?;
-                for ParsedMatchCase { patterns, guard_condition_expr, expression } in
+                for ParsedSwitchCase { patterns, guard_condition_expr, expression } in
                     self.mem.getn(match_expr.cases)
                 {
                     w.write_str("")?;

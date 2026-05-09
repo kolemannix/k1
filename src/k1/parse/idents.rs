@@ -59,7 +59,7 @@ impl IdentSpanned {
 }
 
 #[derive(Clone)]
-///```norun
+///```txt
 ///A [q]ualified identifier; as in, foo/bar/baz/thing
 ///                                 ^^^^^^^^^^^ ^^^^^
 ///                                 path[3]     name
@@ -176,6 +176,7 @@ pub(crate) struct BuiltinIdents {
     pub writef: Ident,
     pub stringf: Ident,
     pub v: Ident,
+    pub subject: Ident,
 }
 
 #[allow(non_snake_case)]
@@ -355,12 +356,11 @@ impl IdentPool {
             writef: intern!("writef"),
             stringf: intern!("stringf"),
             v: intern!("v"),
+            subject: intern!("subject"),
         };
 
         macro_rules! make_fn {
-            ($path: expr, $name: expr) => {{
-                QIdent { path: $path, name: $name, span: SpanId::NONE }
-            }};
+            ($path: expr, $name: expr) => {{ QIdent { path: $path, name: $name, span: SpanId::NONE } }};
         }
 
         let path_core_list = intern_path!(b.core, b.list);
