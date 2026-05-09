@@ -364,7 +364,7 @@ impl TypedProgram {
                 scope_id,
                 span,
             ) {
-                Ok(impl_id) => {
+                Ok((impl_id, _)) => {
                     let the_impl = self.ability_impls.get(impl_id.full_impl_id);
                     let ability_arg_iterator = self
                         .mem

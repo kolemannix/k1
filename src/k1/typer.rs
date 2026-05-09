@@ -6025,14 +6025,14 @@ impl TypedProgram {
 
         scope_id: ScopeId,
         span: SpanId,
-    ) -> Result<AbilityImplHandle, Cow<'static, str>> {
+    ) -> Result<(AbilityImplHandle, bool), Cow<'static, str>> {
         if let Some(impl_handle) = self.find_unique_valid_ability_impl(
             self_type_id,
             target_base_ability_id,
             parameter_constraints,
             scope_id,
         )? {
-            return Ok(impl_handle);
+            return Ok((impl_handle, false));
         }
 
         if allow_ref_self {
@@ -6047,7 +6047,7 @@ impl TypedProgram {
                 //     span,
                 //     format!("I used ref self with {}", self.type_id_to_string(ref_self)),
                 // );
-                return Ok(impl_handle);
+                return Ok((impl_handle, true));
             }
         }
 
@@ -6078,7 +6078,7 @@ impl TypedProgram {
                     span,
                 ) {
                     None => debug!("Blanket impl didn't work"),
-                    Some(impl_handle) => return Ok(impl_handle),
+                    Some(impl_handle) => return Ok((impl_handle, false)),
                 }
             }
         };
@@ -6118,7 +6118,7 @@ impl TypedProgram {
                 };
                 // eprintln!("\n----------------- IMPLEMENTED ENUM\n");
                 // eprintln!("{}", self.ability_impl_to_string(impl_id, true));
-                return Ok(handle);
+                return Ok((handle, false));
             }
         }
 
@@ -6246,7 +6246,7 @@ impl TypedProgram {
         allow_ref_self: bool,
         scope_id: ScopeId,
         span: SpanId,
-    ) -> Result<AbilityImplHandle, Cow<'static, str>> {
+    ) -> Result<(AbilityImplHandle, bool), Cow<'static, str>> {
         let specialized_ability = self.abilities.get(target_specialized_ability_id);
         let base_ability = specialized_ability.base_ability_id;
         let args = specialized_ability.kind.arguments();
@@ -7194,9 +7194,10 @@ impl TypedProgram {
     ) -> K1Result<TypedExprId> {
         let scope_id = ctx.scope_id;
         let block_return_type = self.get_return_type_for_scope(scope_id, span)?;
-        let block_try_impl = self.expect_ability_impl(
+        let (block_try_impl, _) = self.expect_ability_impl(
                     block_return_type,
                     ABILITY_ID_TRY,
+                    true,
                     scope_id,
                     span,
                 ).map_err(|mut e| {
@@ -7205,8 +7206,8 @@ impl TypedProgram {
                     })?;
         let try_value_original_expr = self.eval_expr(operand, ctx.with_no_expected_type())?;
         let try_value_type = self.exprs.get_type(try_value_original_expr);
-        let value_try_impl =
-            self.expect_ability_impl(try_value_type, ABILITY_ID_TRY, scope_id, span)?;
+        let (value_try_impl, _) =
+            self.expect_ability_impl(try_value_type, ABILITY_ID_TRY, true, scope_id, span)?;
         let block_impl_args = self.ability_impls.get(block_try_impl.full_impl_id).impl_arguments;
         let value_impl_args = self.ability_impls.get(value_try_impl.full_impl_id).impl_arguments;
         let block_error_type = self
@@ -7294,9 +7295,6 @@ impl TypedProgram {
         span: SpanId,
     ) -> K1Result<TypedExprId> {
         let operand_expr = self.eval_expr_inner(operand, ctx.with_no_expected_type())?;
-        let operand_type = self.exprs.get_type(operand_expr);
-        let _try_impl =
-            self.expect_ability_impl(operand_type, ABILITY_ID_TRY, ctx.scope_id, span)?;
         self.synth_typed_call_typed_args(
             self.ast.idents.f.try__get_value.with_span(span),
             &[],
@@ -7629,7 +7627,7 @@ impl TypedProgram {
                 let signature = self.eval_ability_expr(qcall.ability_expr, true, ctx.scope_id)?;
                 // Locate the precise impl
                 let self_type_id = self.eval_type_expr(qcall.self_name, ctx.scope_id)?;
-                let impl_handle = self
+                let (impl_handle, _) = self
                     .find_or_generate_specialized_ability_impl_for_type(
                         self_type_id,
                         signature.specialized_ability_id,
@@ -9662,6 +9660,7 @@ impl TypedProgram {
         let (target_is_iterator, _item_type) = match self.expect_ability_impl(
             iterable_type,
             ABILITY_ID_ITERABLE,
+            true,
             ctx.scope_id,
             iterable_span,
         ) {
@@ -9669,6 +9668,7 @@ impl TypedProgram {
                 match self.expect_ability_impl(
                     iterable_type,
                     ABILITY_ID_ITERATOR,
+                    true,
                     ctx.scope_id,
                     iterable_span,
                 ) {
@@ -9679,7 +9679,7 @@ impl TypedProgram {
                             self.type_id_to_string(iterable_type)
                         );
                     }
-                    Ok(iterator_impl) => {
+                    Ok((iterator_impl, _)) => {
                         let impl_args =
                             self.ability_impls.get(iterator_impl.full_impl_id).impl_arguments;
                         let item_type = self.mem.get_nth(impl_args, 0).type_id;
@@ -9687,7 +9687,7 @@ impl TypedProgram {
                     }
                 }
             }
-            Ok(iterable_impl) => {
+            Ok((iterable_impl, _)) => {
                 let impl_args = self.ability_impls.get(iterable_impl.full_impl_id).impl_arguments;
                 let item_type = self.mem.get_nth(impl_args, 0).type_id;
                 (false, item_type)
@@ -9894,14 +9894,15 @@ impl TypedProgram {
         &mut self,
         type_id: TypeId,
         base_ability_id: AbilityId,
+        allow_ref_self: bool,
         scope_id: ScopeId,
         span_for_error: SpanId,
-    ) -> K1Result<AbilityImplHandle> {
+    ) -> K1Result<(AbilityImplHandle, bool)> {
         self.find_or_generate_ability_impl_for_type(
             type_id,
             base_ability_id,
             &[],
-            true,
+            allow_ref_self,
             scope_id,
             span_for_error,
         )
@@ -10402,8 +10403,8 @@ impl TypedProgram {
         // LHS must implement Try and RHS must be its contained type
         let lhs = self.eval_expr(lhs, ctx.with_no_expected_type())?;
         let lhs_type = self.exprs.get_type(lhs);
-        let try_impl = self
-            .expect_ability_impl(lhs_type, ABILITY_ID_TRY, ctx.scope_id, span)
+        let (try_impl, _) = self
+            .expect_ability_impl(lhs_type, ABILITY_ID_TRY, true, ctx.scope_id, span)
             .map_err(|e| {
                 errf!(
                     span,
@@ -10889,25 +10890,34 @@ impl TypedProgram {
                     Ok(_expr) => self.synth_optional_none(STRING_TYPE_ID, call_span),
                 };
                 Ok(Some(expr))
-            } else if n == self.ast.idents.b.writef {
+            } else if n == self.ast.idents.b.writef || n == self.ast.idents.b.writelnf {
+                let newline = n == self.ast.idents.b.writelnf;
                 if fn_call.args.len() < 2 {
                     return failf!(call_span, "write requires 2 arguments");
                 }
                 let writer_arg = self.ast.mem.get_nth(fn_call.args, 0);
-                let writer = self.eval_expr(writer_arg.value, ctx.with_no_expected_type())?;
-                self.expect_ability_impl(
-                    self.exprs.get_type(writer),
+                let writer_expr = self.eval_expr(writer_arg.value, ctx.with_no_expected_type())?;
+                let (_writer_impl, needs_addr_of) = self.expect_ability_impl(
+                    self.exprs.get_type(writer_expr),
                     ABILITY_ID_WRITER,
+                    true,
                     ctx.scope_id,
-                    self.exprs.get_span(writer),
+                    self.exprs.get_span(writer_expr),
                 )?;
+                let writer = if needs_addr_of {
+                    self.synth_address_of(writer_expr, call_span)?
+                } else {
+                    writer_expr
+                };
                 let fmt_string_arg = self.ast.mem.get_nth(fn_call.args, 1);
                 let fmt_string = match self.ast.exprs.get(fmt_string_arg.value) {
-                    ParsedExpr::Literal(ParsedLiteral::String(_, _)) => {
-                        kbail!(self, call_span, "String has no format slots; lets not use write")
+                    ParsedExpr::Literal(ParsedLiteral::String(string_id, _)) => {
+                        let parts =
+                            self.ast.mem.pushn(&[InterpolatedStringPart::String(*string_id)]);
+                        parts
                     }
                     ParsedExpr::InterpolatedString(is) => is.parts,
-                    _ => kbail!(self, call_span, "Expected a format string first"),
+                    _ => kbail!(self, call_span, "Expected a format string"),
                 };
                 let args = match self.ast.mem.get_nth_opt(fn_call.args, 2) {
                     None => self.synth_empty_struct(call_span),
@@ -10917,6 +10927,14 @@ impl TypedProgram {
                 };
                 let format_block =
                     self.synth_format_calls(writer, fmt_string, args, call_span, ctx)?;
+
+                // Write a newline into writer
+                if newline {
+                    let newline_string_id = self.ast.strings.intern("\n");
+                    let newline_string = self.synth_string_literal(newline_string_id, SpanId::NONE);
+                    self.synth_printto_call(newline_string, writer, ctx.with_no_expected_type())?;
+                }
+
                 Ok(Some(format_block))
             } else if n == self.ast.idents.b.stringf {
                 if fn_call.args.is_empty() {
@@ -10930,8 +10948,10 @@ impl TypedProgram {
                 }
                 let fmt_string_arg = *self.ast.mem.get_nth(fn_call.args, 0);
                 match self.ast.exprs.get(fmt_string_arg.value) {
-                    ParsedExpr::Literal(ParsedLiteral::String(_, _)) => {
-                        kbail!(self, call_span, "String has no format slots; lets not use format")
+                    ParsedExpr::Literal(ParsedLiteral::String(string_id, _)) => {
+                        let parts =
+                            self.ast.mem.pushn(&[InterpolatedStringPart::String(*string_id)]);
+                        parts
                     }
                     ParsedExpr::InterpolatedString(is) => is.parts,
                     _ => kbail!(self, call_span, "Expected a format string first"),
@@ -11671,7 +11691,7 @@ impl TypedProgram {
         let solved_self = self.mem.get_nth(self_solution, 0).type_id;
 
         let solved_self = self.types.get_static_family_id_if_static(solved_self);
-        let impl_handle = self
+        let (impl_handle, _) = self
             .find_or_generate_ability_impl_for_type(
                 solved_self,
                 base_ability_id,
@@ -13970,7 +13990,9 @@ impl TypedProgram {
                 signature.impl_arguments
             )
         );
-        if let Ok(impl_handle) = self.find_or_generate_specialized_ability_impl_for_type(
+        // We just can't allow ref self here since we don't have a good way to tell the function
+        // call that it will work only if we coerce this argument, we only have types at this point.
+        if let Ok((impl_handle, _)) = self.find_or_generate_specialized_ability_impl_for_type(
             target_type,
             signature.specialized_ability_id,
             false,

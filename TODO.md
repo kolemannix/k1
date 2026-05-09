@@ -91,7 +91,7 @@ Simple but missing
 ## Vendor'd Libraries
 - [ ] postgres client
 - [x] linker args / "use system lib"
-- [ ] http server
+- [ ] http server: perhaps https://github.com/jeremycw/httpserver.h, or just libmicrohttpd
 - [ ] datastar
 
 ## K1 Profiler
