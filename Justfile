@@ -19,6 +19,9 @@ lsprelease:
 build-k1r:
   cargo build --release --bin k1  --features=llvm-sys/force-static
 
+build-k1-profile:
+  cargo build --profile profiling --bin k1 --features=llvm-sys/force-static
+
 valgrind-linux:
   git pull
   cargo build --profile profiling
