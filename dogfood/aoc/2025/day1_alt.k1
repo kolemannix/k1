@@ -1,0 +1,43 @@
+// An alternate solution to Day 1 to try out a few different features of the language.
+// The original implementation of Day 1 is in ./main.k1.
+
+ns cmath {
+  extern("cos") fn cos(x: f64): f64
+  extern("acos") fn acos(x: f64): f64
+}
+
+let pi: f64 = #static cmath/acos(-1.0)
+let tau: f64 = #static 2.0 * pi
+let num-positions: f64 = 100.0
+let step: f64 = #static tau / num-positions
+let initial-theta: f64 = #static 50.0 * step
+
+deftype part = either part-1, part-2
+
+fn solve(p: part, input: string): int {
+  let acc = 0;
+  let theta = initial-theta;
+  let commands: list[string] = input.splitByChar('\n');
+  for commands {
+    let dir: char = it.get(0);
+    let scale: f64 = if (dir == 'L') { -1.0 } else { 1.0 };
+    let amount: u64 = string/parseBase10(it.drop(1)).!;
+    let n: i64 = if p is :part-1 1 else amount.as[i64];
+    let delta: f64 = if p is :part-1 scale * step * amount.as[f64] else scale * step;
+    for core/IntRange/upTo(n) {
+      theta := theta + delta;
+      if (cmath/cos(theta) == 1.0) {
+        acc := acc + 1;
+      };
+    };
+  };
+  acc
+}
+
+fn main(): i32 {
+  let context alloc: mem/alloc-mode = :arena;
+  let input: string = core/files/readToString("day1_input.txt");
+  println("Day 1 part 1: {solve(:part-1, input)}");
+  println("Day 1 part 2: {solve(:part-2, input)}");
+  0
+}
