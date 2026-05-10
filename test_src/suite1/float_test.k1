@@ -14,7 +14,7 @@ fn test() {
   assert(42.as[f64] == 42.0);
 
 
-  assert(10.0.as[f64] == 10.0);
+  assert(10.0 == 10.0);
   assert((10.0: f64).as[f32] == 10.0);
   assert(11.1.as[u32] == 11);
   assert(10.1.as[i32] == 10);

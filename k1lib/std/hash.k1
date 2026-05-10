@@ -79,15 +79,15 @@ ns HashMap {
     }
   }
 
-  fn fillFactor[V](self: HashMap[V]): f32 {
-    let fillDivisor = if self.entries.len == 0 1.0 else self.entries.len.as[f32];
-    let fillNumerator = if self.size == 0 1.0 else self.size.as[f32];
+  fn fillFactor[V](self: HashMap[V]): f64 {
+    let fillDivisor = if self.entries.len == 0 1.0 else self.entries.len.as[f64];
+    let fillNumerator = if self.size == 0 1.0 else self.size.as[f64];
     let fillFactor = fillNumerator / fillDivisor;
     fillFactor
   }
 
   fn insert[V](self: *mut HashMap[V], key: string, value: V) {
-    if self.*.fillFactor() > 0.7 {
+    if self.fillFactor() > 0.7 {
       self.grow();
     };
     let index = self._computeIndex(key);

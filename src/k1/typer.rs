@@ -6622,12 +6622,12 @@ impl TypedProgram {
     fn eval_float_value(&self, span: SpanId, ctx: EvalExprContext) -> K1Result<TypedFloatValue> {
         let parsed_text = self.ast.get_span_content(span);
         let expected_width = match ctx.expected_type_id {
-            None => NumericWidth::B32,
+            None => NumericWidth::B64,
             Some(F64_TYPE_ID) => NumericWidth::B64,
             Some(F32_TYPE_ID) => NumericWidth::B32,
             Some(_) => {
-                // Parse as f32 and let typechecking fail
-                NumericWidth::B32
+                // Parse as f64 and let typechecking fail
+                NumericWidth::B64
             }
         };
         let value: Result<TypedFloatValue, std::num::ParseFloatError> = match expected_width {

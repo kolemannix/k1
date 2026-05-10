@@ -1217,7 +1217,6 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 ip = inst_node.next
             }
             Inst::Float32ToIntUnsigned { v, to } => {
-                // This changes bits; not a no-op
                 let f = resolve_value!(v).as_f32();
 
                 let result = match to {
@@ -1232,7 +1231,6 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 ip = inst_node.next;
             }
             Inst::Float32ToIntSigned { v, to } => {
-                // This changes bits; not a no-op
                 let f = resolve_value!(v).as_f32();
 
                 let result = match to {
@@ -1247,14 +1245,13 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 ip = inst_node.next;
             }
             Inst::Float64ToIntUnsigned { v, to } => {
-                // This changes bits; not a no-op
                 let f = resolve_value!(v).as_f64();
 
                 let result = match to {
-                    ScalarType::I8 => Value::u8(f as u8),
-                    ScalarType::I16 => Value::u16(f as u16),
-                    ScalarType::I32 => Value::u32(f as u32),
-                    ScalarType::I64 => Value::u64(f as u64),
+                    ScalarType::U8 => Value::u8(f as u8),
+                    ScalarType::U16 => Value::u16(f as u16),
+                    ScalarType::U32 => Value::u32(f as u32),
+                    ScalarType::U64 => Value::u64(f as u64),
                     _ => unreachable!(),
                 };
 
@@ -1262,7 +1259,6 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 ip = inst_node.next;
             }
             Inst::Float64ToIntSigned { v, to } => {
-                // This changes bits; not a no-op
                 let f = resolve_value!(v).as_f64();
 
                 let result = match to {
