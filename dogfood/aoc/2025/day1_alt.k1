@@ -6,15 +6,13 @@ ns cmath {
   extern("acos") fn acos(x: f64): f64
 }
 
-let pi: f64 = #static cmath/acos(-1.0)
-let tau: f64 = #static 2.0 * pi
+let pi: f64 = cmath/acos(-1.0)
+let tau: f64 = 2.0 * pi
 let num-positions: f64 = 100.0
-let step: f64 = #static tau / num-positions
-let initial-theta: f64 = #static 50.0 * step
+let step: f64 = tau / num-positions
+let initial-theta: f64 = 50.0 * step
 
-deftype part = either part-1, part-2
-
-fn solve(p: part, input: string): int {
+fn solve(p: (either part-1, part-2), input: string): int {
   let acc = 0;
   let theta = initial-theta;
   let commands: list[string] = input.splitByChar('\n');
@@ -34,9 +32,9 @@ fn solve(p: part, input: string): int {
   acc
 }
 
+let input: string = core/files/readToString(context :arena)("day1_input.txt")
+
 fn main(): i32 {
-  let context alloc: mem/alloc-mode = :arena;
-  let input: string = core/files/readToString("day1_input.txt");
   println("Day 1 part 1: {solve(:part-1, input)}");
   println("Day 1 part 2: {solve(:part-2, input)}");
   0
