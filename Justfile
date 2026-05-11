@@ -9,8 +9,11 @@ test:
 
 lsp:
   cargo build --features lsp --bin lsp
+
   rm ~/.k1/bin/k1lsp
   cp target/debug/lsp ~/.k1/bin/k1lsp
+
+  rm -r ~/.k1/k1lib
   cp -r k1lib ~/.k1/k1lib
 
 lsprelease:
@@ -47,3 +50,6 @@ install-macos-from-macos: bundle-macos-from-macos
   tar -xzf builds/k1-macos.tar.gz -C builds
   cd builds/k1-macos && ./install.sh
   rm -r builds/k1-macos
+
+install-k1lib:
+  cp -r k1lib ~/.k1/k1lib

@@ -5546,6 +5546,13 @@ impl TypedProgram {
             return Ok(shortcut_value_id);
         }
 
+        if let ParsedExpr::Static(_static) = self.ast.exprs.get(parsed_expr) {
+            self.report_warn(
+                self.ast.exprs.get_span(parsed_expr),
+                "This #static is immediately inside a static",
+            )
+        }
+
         if ctx.is_inference() {
             return failf!(
                 self.ast.get_expr_span(parsed_expr),
@@ -5617,7 +5624,7 @@ impl TypedProgram {
                 let maybe_alt = self.vm_alts.pop();
                 let alt_vm = match maybe_alt {
                     None => {
-                        self.report_warning(span, "Had to make a new alt VM");
+                        self.report_warn(span, "Had to make a new alt VM");
                         let new_vm = vm::Vm::make();
                         new_vm
                     }
@@ -9590,7 +9597,7 @@ impl TypedProgram {
             Type::Reference(_refer) => match self.types.get(target_type) {
                 Type::Pointer => Ok(Outcome::Cast(CastType::ReferenceToPointer)),
                 Type::Reference(_) => {
-                    self.report_warning(span, "Reference to Reference cast");
+                    self.report_warn(span, "Reference to Reference cast");
                     Ok(Outcome::Cast(CastType::ReferenceToReference))
                 }
                 _ => failf!(
@@ -13345,7 +13352,7 @@ impl TypedProgram {
 
                 let match_was_exhaustive = nonexhaustive_msg.is_none();
                 if match_was_exhaustive && has_else {
-                    self.report_warning(
+                    self.report_warn(
                         require.span,
                         "This pattern always matches; remove the 'else' clause",
                     );
@@ -17464,7 +17471,7 @@ impl TypedProgram {
         );
     }
 
-    pub fn report_warning(&mut self, span: SpanId, message: impl AsRef<str>) {
+    pub fn report_warn(&mut self, span: SpanId, message: impl AsRef<str>) {
         self.report(K1Message {
             message: message.as_ref().to_string(),
             span,

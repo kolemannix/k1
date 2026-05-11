@@ -16,6 +16,9 @@ ns foo {
   fn more-stuff() { {} }
 }
 
+#static { let x = 10.0; println("{types/get-type-name[typeOf(x)]}") }
+let x: i32 = #static 42
+
 fn main(): i32 {
   #switch k1/os {
     :macos -> "hooray",
