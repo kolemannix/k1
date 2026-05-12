@@ -13,8 +13,7 @@ lsp:
   rm ~/.k1/bin/k1lsp
   cp target/debug/lsp ~/.k1/bin/k1lsp
 
-  rm -r ~/.k1/k1lib
-  cp -r k1lib ~/.k1/k1lib
+  just install-k1lib
 
 lsprelease:
   cargo build --profile release --features lsp --bin lsp
@@ -52,4 +51,6 @@ install-macos-from-macos: bundle-macos-from-macos
   rm -r builds/k1-macos
 
 install-k1lib:
+  rm -r ~/.k1/k1lib
   cp -r k1lib ~/.k1/k1lib
+
