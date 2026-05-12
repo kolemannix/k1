@@ -1086,6 +1086,7 @@ impl_copy_if_small!(12, ParsedArrayType);
 pub struct ParsedSumTypeVariant {
     pub tag_name: Ident,
     pub payload: Option<ParsedTypeExprId>,
+    pub explicit_value: Option<ParsedNumericLiteral>,
     pub span: SpanId,
 }
 
@@ -1464,7 +1465,7 @@ impl ParsedExpressionPool {
         self.metadata.get_mut(id)
     }
 
-    pub fn add_expression(
+    pub fn add(
         &mut self,
         mut expression: ParsedExpr,
         is_debug: bool,
@@ -2605,7 +2606,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     pub fn add_expression(&mut self, expression: ParsedExpr) -> ParsedExprId {
-        self.ast.exprs.add_expression(expression, false, None)
+        self.ast.exprs.add(expression, false, None)
     }
 
     pub fn add_expression_with_metadata(
@@ -2614,7 +2615,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         is_debug: bool,
         type_hint: Option<ParsedTypeExprId>,
     ) -> ParsedExprId {
-        let id = self.ast.exprs.add_expression(expression, is_debug, type_hint);
+        let id = self.ast.exprs.add(expression, is_debug, type_hint);
         id
     }
 
@@ -2965,7 +2966,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::Sum(sum));
                 self.add_semantic_token(first, SemanticTokenKind::Keyword);
                 Ok(Some(type_expr_id))
-            } else if ident_chars == "typeOf" {
+            } else if ident_chars == "type-of" {
                 self.advance();
                 self.expect_kind(K::OpenParen)?;
                 let target_expr = self.expect_expression()?;
@@ -3076,7 +3077,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_sum_type_expression(&mut self) -> ParseResult<ParsedSumType> {
-        let (keyword, _) = self.expect_ident()?;
+        let (keyword, _) = self.expect_ident_chars("either")?;
         let explicit_tag_type_expr =
             if self.maybe_consume_next_no_whitespace(K::OpenParen).is_some() {
                 let tag_expr = self.expect_type_expression()?;
@@ -3085,51 +3086,40 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             } else {
                 None
             };
-        let mut variants = self.ast.mem.new_list(4);
-        let mut first = true;
-        loop {
-            // Expect comma
-            if !first {
-                if self.peek().kind == K::Comma {
-                    self.advance();
-                } else {
-                    break;
-                }
-            }
-
-            let tag = self.peek();
-            if tag.kind != K::Ident {
-                return Err(error_expected("Identifier for sum variant", tag));
-            }
-            let tag_name = self.make_ident(tag);
-            self.advance();
-            let maybe_payload_paren = self.peek();
-            let payload_expression = if maybe_payload_paren.kind == K::OpenParen {
-                self.advance();
-                let payload_expr = self.expect_type_expression()?;
-                let _close_paren = self.expect_kind(K::CloseParen)?;
-                Some(payload_expr)
-            } else {
-                None
-            };
-            let span = match payload_expression {
-                None => tag.span,
-                Some(expr) => self.ast.type_exprs.get(expr).get_span(),
-            };
-            variants.push_grow(
-                &mut self.ast.mem,
-                ParsedSumTypeVariant { tag_name, payload: payload_expression, span },
-            );
-            first = false;
-        }
-        let last_variant_span =
-            variants.last().ok_or_else(|| error_expected("At least one variant", keyword))?.span;
-        let span = self.extend_span(keyword.span, last_variant_span);
+        self.expect_kind(K::OpenBrace)?;
+        let mut variants: SV8<_> = smallvec![];
+        self.eat_delimited_ext(
+            "either members",
+            &mut variants,
+            K::Comma,
+            K::CloseBrace,
+            Parser::expect_sum_variant,
+        )?;
+        let span = self.extend_to_here(keyword.span);
         Ok(ParsedSumType {
-            variants: self.ast.mem.list_to_handle(variants),
+            variants: self.ast.mem.pushn(&variants),
             tag_type: explicit_tag_type_expr,
             span,
         })
+    }
+
+    fn expect_sum_variant(&mut self) -> ParseResult<ParsedSumTypeVariant> {
+        let (name, tag_name) = self.expect_ident()?;
+        let payload_expression = if self.maybe_consume(K::OpenParen).is_some() {
+            let payload_expr = self.expect_type_expression()?;
+            let _close_paren = self.expect_kind(K::CloseParen)?;
+            Some(payload_expr)
+        } else {
+            None
+        };
+        let explicit_value = if self.maybe_consume(K::Equals).is_some() {
+            let num = self.expect_kind(K::Numeric)?;
+            Some(ParsedNumericLiteral { span: num.span })
+        } else {
+            None
+        };
+        let span = self.extend_to_here(name.span);
+        Ok(ParsedSumTypeVariant { tag_name, payload: payload_expression, explicit_value, span })
     }
 
     fn expect_fn_arg(&mut self, is_explicit_context: bool) -> ParseResult<ParsedCallArg> {
@@ -4446,8 +4436,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let span = self.extend_span(fn_keyword.span, end_span);
         let type_params_handle = self.ast.mem.pushn(&type_params);
-        let params_handle =
-            self.ast.mem.pushn(&params);
+        let params_handle = self.ast.mem.pushn(&params);
         let function_id = self.ast.add_function(ParsedFunction {
             name: func_name_id,
             type_params: type_params_handle,

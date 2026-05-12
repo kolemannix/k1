@@ -85,7 +85,7 @@ ns string {
 
   fn appendCharIn(context alloc: mem/alloc-mode)(self: string, c: char): string {
     let newLength = self.len() + 1;
-    let newBuffer = self.span.innerBuffer()._enlargedCloneIn(newLength);
+    let newBuffer = self.span.inner-buffer()._enlargedCloneIn(newLength);
     newBuffer.set(self.len(), c);
     wrapBuffer(newBuffer)
   }

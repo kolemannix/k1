@@ -2,13 +2,14 @@ ns json;
 
 use core/StringBuilder
 
-deftype json = either
+deftype json = either {
   null,
   str   (string),
   number(f64),
   bool  (bool),
   array (list[json]),
   object(list[{ key: string, value: json }])
+}
 
 deftype parser = {
   input: string,

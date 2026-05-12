@@ -48,9 +48,9 @@ ns type_schema {
       type-id[*bool]
     );
 
-    assert(get-type-schema[either Yes] is :enum(_));
+    assert(get-type-schema[either { Yes }] is :enum(_));
 
-    require get-type-schema[either Yes, No, MaybeSo(string)]
+    require get-type-schema[either { Yes, No, MaybeSo(string) }]
       is :either({ variants })
       and variants.len() == 3
       and variants.get(0).name == "Yes"
@@ -61,7 +61,7 @@ ns type_schema {
       and offset == 8
       else crash("");
 
-    require get-type-schema[(either Yes(int).Yes)]
+    require get-type-schema[either { Yes(int) }.Yes ]
       is :int(:i64)
       else crash("");
 
@@ -75,7 +75,7 @@ ns type_schema {
     assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
 
     let isZeroPtr: *fn(int) -> bool = isZero.toRef();
-    require get-type-schema[typeOf(isZeroPtr)]
+    require get-type-schema[type-of(isZeroPtr)]
       is :function-pointer({ function-type-id }) else crash("");
 
     require type-schema(function-type-id)

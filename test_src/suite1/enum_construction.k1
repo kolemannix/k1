@@ -1,8 +1,8 @@
 ns enum_construction;
 
-deftype state = either on(empty), off(empty), zilch
-deftype state-hard = either on(?int), off(?int)
-deftype contrived[A, B] = either stuff({ a: A, b: B }), empty
+deftype state = either { on(empty), off(empty), zilch }
+deftype state-hard = either { on(?int), off(?int) }
+deftype contrived[A, B] = either { stuff({ a: A, b: B }), empty }
 
 fn test() {
 

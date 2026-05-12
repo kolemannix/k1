@@ -77,7 +77,7 @@ fn testZero() {
   assertEquals(point.y, 0);
   assertEquals(point.z, 0);
 
-  let o: ?typeOf(point) = zeroed();
+  let o: ?type-of(point) = zeroed();
   assertEquals(o.tag, 0);
 
   {}

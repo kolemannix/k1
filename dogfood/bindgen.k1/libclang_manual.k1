@@ -1,0 +1,101 @@
+use core/c-int
+
+ns clang {
+  deftype alias CXIndex = ptr
+
+  extern("clang", "clang_createIndex")
+  fn createIndex(
+    excludeDeclarationsFromPCH: c-int,
+    displayDiagnostics: c-int
+  ): CXIndex
+
+  deftype alias c-unsigned = u32
+
+  deftype CXUnsavedFile = {} // nocommit
+
+  deftype CXTranslationUnit_Flags = either(c-unsigned) None, DetailedPreprocessingRecord
+
+  deftype alias CXCursorKind = c-int // nocommit: real enum
+
+  deftype alias CXClientData = ptr
+
+  deftype CXCursor = {
+    kind: CXCursorKind,
+    xdata: c-int,
+    data: array[ptr, 3]
+  }
+
+  deftype CXString = {
+    data: ptr,
+    private_flags: c-unsigned,
+  }
+   
+  deftype alias CXTranslationUnit = ptr // nocommit
+
+  extern("clang", "clang_parseTranslationUnit2")
+  fn parseTranslationUnit2(
+    index: CXIndex,
+    source_filename: ptr,
+    command_line_args: *ptr,
+    command_line_args_len: c-int,
+    unsaved_files: *CXUnsavedFile,
+    unsaved_files_len: c-unsigned,
+    options: CXTranslationUnit_Flags,
+    out_TU: *CXTranslationUnit
+  ): c-int
+
+  extern("clang", "clang_getTranslationUnitCursor")
+  fn getTranslationUnitCursor(
+    unit: CXTranslationUnit
+  ): CXCursor
+
+// Describes how the traversal of the children of a particular
+// cursor should proceed after visiting a particular child cursor.
+//
+// A value of this enumeration type should be returned by each
+// CXCursorVisitor to indicate how clang_visitChildren() proceed.
+//
+  deftype CXChildVisitResult = either {
+  // Terminates the cursor traversal.
+  Break,
+  // Continues the cursor traversal with the next sibling of
+  // the cursor just visited, without visiting its children.
+  Continue,
+  // Recursively traverse the children of this cursor, using
+  // the same visitor and client data.
+  Recurse
+  }
+
+  deftype alias CXCursorVisitor = *fn(CXCursor, CXCursor, CXClientData) -> CXChildVisitResult
+
+  extern("clang", "clang_visitChildren")
+  fn visitChildren(
+    parent: CXCursor,
+    visitor: CXCursorVisitor,
+    client_data: CXClientData
+  ): c-unsigned
+
+  extern("clang", "clang_getCursorDisplayName")
+  fn getCursorDisplayName(cursor: CXCursor): CXString
+
+  extern("clang", "clang_getCString")
+  fn getCString(cx-string: CXString): ptr
+
+  extern("clang", "clang_disposeString")
+  fn disposeString(cx-string: CXString): ptr
+
+
+  // The type of an element in the abstract syntax tree.
+  deftype CXType = {
+    kind: CXTypeKind,
+    data: array[ptr, 2],
+  }
+  deftype CXCursorKind = either { a }
+
+  extern("clang", "clang_getCursorKind")
+  fn getCursorKind(cursor: CXCursor): CXCursorKind 
+
+  extern("clang", "clang_getCursorType")
+  fn getCursorType(cursor: CXCursor): CXType 
+
+}

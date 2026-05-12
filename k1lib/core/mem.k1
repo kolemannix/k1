@@ -35,13 +35,14 @@ ns mem {
     {}
   }
 
-  deftype alloc-mode = either
+  deftype alloc-mode = either {
     current,
     system-heap,
     custom-heap(*mut Allocator),
     arena,
     custom-arena(*mut arena),
     gc
+  }
 
   impl print for alloc-mode {
     fn printTo[w: writer](self, w) {

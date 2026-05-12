@@ -42,7 +42,7 @@ deftype span[t] = { buffer: buffer[t] }
 deftype list[t] = { len: size, buffer: buffer[t] }
 deftype string = { span: span[char] }
 
-deftype opt[t] = either none, some(t)
+deftype opt[t] = either { none, some(t) }
 
 
 deftype alias c-sizet  = u64
@@ -56,9 +56,9 @@ ns compiler {
   let capture-prints: bool = true
 }
 
-deftype ordering = either less, equal, greater
+deftype ordering = either { less, equal, greater }
 
-deftype result[t, e] = either ok(t), err(e)
+deftype result[t, e] = either { ok(t), err(e) }
 
 deftype alias empty = {}
 
@@ -92,7 +92,8 @@ ns types {
   fn get-type-schema[t](): type-schema { type-schema(type-id[t]) }
 
   // DO NOT REORDER VARIANTS
-  deftype int-kind = either u8, u16, u32, u64, i8, i16, i32, i64
+  // FIXME: We should encode both width and signedness into the bits instead, 'flags in tags' project
+  deftype int-kind = either { u8 = 0, u16 = 1, u32 = 2, u64 = 3, i8 = 4, i16 = 5, i32 = 6, i64 = 7 }
   ns int-kind {
     fn bit-width(self: int-kind): size {
       switch self {
@@ -109,18 +110,21 @@ ns types {
   }
 
   // DO NOT REORDER VARIANTS
-  deftype int-value = either
+  // FIXME: We should encode both width and signedness into the bits instead, 'flags in tags' project
+  // FIXME: Derive an enum from a sum, that is just the tags.
+  deftype int-value = either {
     u8(u8), u16(u16), u32(u32), u64(u64),
     i8(i8), i16(i16), i32(i32), i64(i64)
+  }
 
   deftype layout = { size: u32, align: u32 }
 
-  deftype type-schema = (either
+  deftype type-schema = either {
     char,
     bool,
     ptr,
     int(int-kind),
-    float(either f32, f64),
+    float(either { f32, f64 }),
     enum({
       int-kind: int-kind,
       values: span[{
@@ -160,7 +164,7 @@ ns types {
     // lambda({ type-id: u64, function-type-id: u64 }),
     // lambda-object({ function-type-id: u64 }),
     other(string)
-  )
+  }
 
   deftype any = {
     type-id: u64,
@@ -518,7 +522,7 @@ ns k1 {
   let no-std: bool = builtin
   let debug: bool = builtin
 
-  deftype os = either linux, macos, wasm
+  deftype os = either { linux, macos, wasm }
   let os: os = builtin
   let os-macos: bool = os is :macos
   let os-posix: bool = os is :macos or os is :linux
@@ -527,13 +531,17 @@ ns k1 {
 
   intern fn emit-compiler-message(
     locn: compiler/source-location,
-    level: (either(u8) info, warn, error),
+    // nocommit remove parens and parsing bug
+    level: either(u8) { info, warn, error },
     msg: string
   )
 
-  deftype module-kind = either(u8) library, executable, script
+  deftype module-kind = either(u8) { library, executable, script }
 
-  deftype library-ref = { name: string, link-type: either(u8) default, static, dynamic }
+  deftype library-ref = {
+    name: string,
+    link-type: either(u8) { default, static, dynamic },
+  }
 
   deftype module-manifest = {
     kind: module-kind,

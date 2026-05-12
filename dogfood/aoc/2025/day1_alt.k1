@@ -12,7 +12,7 @@ let num-positions: f64 = 100.0
 let step: f64 = tau / num-positions
 let initial-theta: f64 = 50.0 * step
 
-fn solve(p: (either part-1, part-2), input: string): int {
+fn solve(p: (either { part-1, part-2 }), input: string): int {
   let acc = 0;
   let theta = initial-theta;
   let commands: list[string] = input.splitByChar('\n');

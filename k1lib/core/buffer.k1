@@ -48,7 +48,7 @@ ns buffer {
   }
 
   fn copyFrom-span[T](span: span[T]): buffer[T] {
-    span.innerBuffer().cloned()
+    span.inner-buffer().cloned()
   }
 
   fn cloned[T](self: buffer[T]): buffer[T] {
@@ -399,7 +399,7 @@ impl[T: equals] equals for buffer[T] {
 impl[n: static size, t] iterable[item = t, i = BufferIterator[t]] for *array[t, n] {
   fn iterator(self): i {
     BufferIterator/fromBuffer(
-      self.as-span().innerBuffer()
+      self.as-span().inner-buffer()
     )
   }
 }
@@ -407,7 +407,7 @@ impl[n: static size, t] iterable[item = t, i = BufferIterator[t]] for *array[t, 
 impl[n: static size, t] iterable[item = *mut t, i = BufferRefIterator[t]] for *mut array[t, n] {
   fn iterator(self): i {
     BufferRefIterator/fromBuffer(
-      self.as-span().innerBuffer()
+      self.as-span().inner-buffer()
     )
   }
 }

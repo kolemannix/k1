@@ -7,7 +7,7 @@ fn addStatic[I: static int](x: int): int {
 
 fn test() {
   let THREE: static int = 3;
-  let result = addStatic[typeOf(THREE)](3);
+  let result = addStatic[type-of(THREE)](3);
   let result2 = addStatic[3](3);
   assertEquals(result, 3 + 3);
   assertEquals(result2, 3 + 3);

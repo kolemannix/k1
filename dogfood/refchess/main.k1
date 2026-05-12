@@ -5,7 +5,7 @@ use core/IntRange
 use core/eprintln
 use core/sys
 
-deftype Color = either White, Black
+deftype Color = either { White, Black }
 deftype alias Bitboard = u64
 
 let RANK_1 : Bitboard = 0x00000000000000FF

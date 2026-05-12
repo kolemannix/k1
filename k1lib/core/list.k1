@@ -87,7 +87,7 @@ ns list {
   }
 
   // The possibly-uninitialized backing buffer of this list
-  fn innerBuffer[T](self: list[T]): buffer[T] { self.buffer }
+  fn inner-buffer[T](self: list[T]): buffer[T] { self.buffer }
 
   fn getRef[T](self: *mut list[T], index: size): *mut T {
     if index < 0 or index >= self.len {
@@ -207,13 +207,13 @@ ns list {
 
   fn appendBuffer[T](self: *mut list[T], other: buffer[T]) {
     self.reserve(:current, self.len + other.len);
-    let dst = self.innerBuffer().slice(start = self.len, end = self.len + other.len);
+    let dst = self.inner-buffer().slice(start = self.len, end = self.len + other.len);
     buffer/copyFrom(src = other, dst = dst);
     self.len* <- self.len + other.len;
   }
 
   fn append-span[T](self: *mut list[T], other: span[T]) {
-    self.appendBuffer(other.innerBuffer())
+    self.appendBuffer(other.inner-buffer())
   }
 
   fn swap[T](self: *mut list[T], indexA: size, indexB: size) {

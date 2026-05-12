@@ -28,7 +28,7 @@ ns fixlist {
       self.data*.set(used, value);
       self.used* <- used.as[u32] + 1;
     } else {
-      let typename = types/get-type-name[typeOf(self).value];
+      let typename = types/get-type-name[type-of(self).value];
       crash("{typename} cannot fulfill push. {used + 1} > {self.cap()}")
     }
   }
@@ -48,7 +48,7 @@ ns fixlist {
     let needed = self.len() + values.len();
     if needed <= self.cap() {
       let dstSlice = self.data*.as-buffer().slice(start = self.len(), end = needed);
-      buffer/copyFrom(src = values.innerBuffer(), dst = dstSlice);
+      buffer/copyFrom(src = values.inner-buffer(), dst = dstSlice);
       self.used* <- needed.as[u32];
       :ok({})
     } else {

@@ -3266,7 +3266,17 @@ impl TypedProgram {
             | Type::Never
             | Type::Pointer
             | Type::Integer(_)
-            | Type::Float(_) => {}
+            | Type::Float(_) => {
+                if let ParsedTypeExpr::Builtin(_) = self.ast.type_exprs.get(parsed_type_defn.value_expr) {
+                    // fine
+                } else {
+                    return failf!(
+                        parsed_type_defn.span,
+                        "Non-alias type definition must be a struct or sum; not a '{}'. Perhaps you intended to create an alias `deftype alias <name> = <type>`",
+                        self.type_id_to_string(rhs_type_id)
+                    );
+                }
+            }
             Type::Struct(_s) => {}
             Type::Sum(_s) => {}
             Type::Enum(_e) => {}
@@ -7521,7 +7531,7 @@ impl TypedProgram {
                 // If the 'is' is attached to an if/else, that is handled by if/else
                 // This is just the case of the detached 'is' where we want to return a boolean
                 // indicating whether or not the pattern matched only
-                let true_expression = self.ast.exprs.add_expression(
+                let true_expression = self.ast.exprs.add(
                     parse::ParsedExpr::Literal(parse::ParsedLiteral::Bool(true, is_expr.span)),
                     false,
                     None,
@@ -7537,7 +7547,7 @@ impl TypedProgram {
                     span: is_expr.span,
                     is_static: false,
                 };
-                let match_expr_id = self.ast.exprs.add_expression(
+                let match_expr_id = self.ast.exprs.add(
                     parse::ParsedExpr::Match(as_match_expr),
                     false,
                     None,
@@ -7913,7 +7923,7 @@ impl TypedProgram {
         let is_metaprogram = kind.is_metaprogram();
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
         for param in self.ast.mem.getn(stat.parameter_names) {
-            let variable_expr = self.ast.exprs.add_expression(
+            let variable_expr = self.ast.exprs.add(
                 ParsedExpr::Variable(ParsedVariable { name: QIdent::naked(*param, span) }),
                 false,
                 None,
@@ -10528,7 +10538,7 @@ impl TypedProgram {
             }
         };
         let new_fn_call_id =
-            self.ast.exprs.add_expression(ParsedExpr::Call(new_fn_call), false, None);
+            self.ast.exprs.add(ParsedExpr::Call(new_fn_call), false, None);
         let new_fn_call_clone = self.ast.exprs.get(new_fn_call_id).expect_call().clone();
         self.eval_function_call(&new_fn_call_clone, None, ctx, None)
     }
@@ -15587,7 +15597,6 @@ impl TypedProgram {
         if is_fulfilled {
             return;
         }
-        debug!("Handling unfulfilled use {}", self.qident_to_string(&parsed_use.target));
         let useable_symbols =
             match self.find_useable_symbols(scope_id, &parsed_use.target, fail_on_traverse_fail) {
                 Err(e) => {

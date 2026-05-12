@@ -283,7 +283,7 @@ impl TypedProgram {
             }),
             defn_stmt,
         );
-        let parsed_expr = self.ast.exprs.add_expression(
+        let parsed_expr = self.ast.exprs.add(
             ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span) }),
             false,
             None,
@@ -304,7 +304,7 @@ impl TypedProgram {
         let type_args = self.ast.mem.pushn_iter(type_args_iter);
         let args =
             self.ast.mem.pushn_iter(args.iter().map(|id| parse::ParsedCallArg::unnamed(*id)));
-        self.ast.exprs.add_expression(
+        self.ast.exprs.add(
             ParsedExpr::Call(ParsedCall {
                 name,
                 type_args,
@@ -488,7 +488,7 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_parsed_variable_expr(&mut self, name: Ident, span: SpanId) -> ParsedExprId {
-        self.ast.exprs.add_expression(
+        self.ast.exprs.add(
             ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span) }),
             false,
             None,

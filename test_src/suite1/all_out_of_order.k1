@@ -46,7 +46,7 @@ ns secret {
 
 ns foo {
   ns core {
-    deftype Test = either A, B
+    deftype Test = either { A, B }
     ns Test {
       let default: Test = :A
     }

@@ -1,8 +1,9 @@
 // The intuitive representation, a list[SquareState]
-deftype SquareState = either
+deftype SquareState = either {
   Blank, 
   WPawn, WKnight, WBishop, WRook, WQueen, WKing,
   BPawn, BKnight, BBishop, BRook, BQueen, BKing
+}
 
 ns SquareState {
   fn charSymbol(self: SquareState): char {

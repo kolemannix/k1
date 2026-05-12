@@ -1,13 +1,13 @@
 ns enum_basic;
 
 fn enumNoPayload() {
-  let v: either Yes, No = :No;
-  if v is :No {} else { crash("") };
-  v := :Yes;
-  if v is :Yes {} else { crash("") };
+  let v: either { yes, no } = :no;
+  if v is :no {} else crash("");
+  v := :yes;
+  if v is :yes {} else crash("");
 }
 
-deftype enum-abc = either(u8) a, b, c
+deftype enum-abc = either(u8) { a, b, c }
 impl print for enum-abc {
   fn printTo[w: writer](self, w) { switch self { 
     :a -> w.write-char('a'),

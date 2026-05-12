@@ -1,6 +1,6 @@
 ns enum_method_match_never {
 
-  deftype e = either a(int), b
+  deftype e = either { a(int), b }
   ns e {
     fn valueIfA(self: e): int {
       switch self {
@@ -12,7 +12,7 @@ ns enum_method_match_never {
   
   
   fn isVariant() {
-    let x: either a(int), b(int), c = :a(42);
+    let x: either { a(int), b(int), c } = :a(42);
     assert(x.asB().isNone());
     assert(not x is :c);
     assert(x.asA().isSome());

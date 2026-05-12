@@ -32,9 +32,9 @@ fn complexReferences() {
   structRef.x* <- 42;
   assert(xRef.* == 42);
 
-  let* eitherRef: *mut (either Yes(int), No) = :Yes(3);
+  let* eitherRef: *mut either { Yes(int), No } = :Yes(3);
 
-  let yesRef: *(typeOf(eitherRef).value.Yes) = eitherRef.asYes().!;
+  let yesRef: *(type-of(eitherRef).value.Yes) = eitherRef.asYes().!;
 
   assert(yesRef.* == 3);
   let yesValue: int = eitherRef.asYes().!;

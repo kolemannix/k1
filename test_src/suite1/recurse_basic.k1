@@ -1,6 +1,6 @@
 ns recurse_basic {
   deftype node = { node: *node }
-  deftype tree = either leaf, node(*tree)
+  deftype tree = either { leaf, node(*tree) }
 
   fn make(n: size): *node {
     //println("make {n}");

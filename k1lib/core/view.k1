@@ -25,7 +25,7 @@ ns span {
     { buffer: buffer/fromPtrAndCount(ptr, len) }
   }
 
-  fn innerBuffer[T](self: span[T]): buffer[T] {
+  fn inner-buffer[T](self: span[T]): buffer[T] {
     self.buffer
   }
 
@@ -112,7 +112,7 @@ ns span {
   }
 
   fn concat[T](self: span[T], other: span[T]): span[T] {
-    let concatedBuffer = self.innerBuffer().concat(other.innerBuffer());
+    let concatedBuffer = self.inner-buffer().concat(other.inner-buffer());
     wrap-buffer(concatedBuffer)
   }
 
@@ -133,7 +133,7 @@ ns span {
 
 impl[T] iterable[item = T, i = BufferIterator[T]] for span[T] {
   fn iterator(self): i {
-    BufferIterator/fromBuffer(self.innerBuffer())
+    BufferIterator/fromBuffer(self.inner-buffer())
   }
 }
 
