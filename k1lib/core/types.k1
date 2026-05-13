@@ -1,0 +1,17 @@
+// core types code that does not need to live in builtin.k1
+ns types;
+
+impl print for int-value {
+   fn printTo[w: writer](self, w) {
+     switch self {
+       :u8(v)  -> writef(w, "{v}u8"),
+       :u16(v) -> writef(w, "{v}u16"),
+       :u32(v) -> writef(w, "{v}u32"),
+       :u64(v) -> writef(w, "{v}u64"),
+       :i8(v)  -> writef(w, "{v}i8"),
+       :i16(v) -> writef(w, "{v}i16"),
+       :i32(v) -> writef(w, "{v}i32"),
+       :i64(v) -> writef(w, "{v}i64"),
+     }
+   }
+}

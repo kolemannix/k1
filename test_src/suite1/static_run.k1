@@ -2,14 +2,13 @@ ns static_run;
 let INT_SPAN: span[int] = [1,2,3,4,5]
 
 let i2: 12 = { 3 * 4 }
-let i3: 12 = #static { 3 * 4 }
-let i4: 12 = #static 3 * 4
+let i3: 12 = #static #static 3 * 4
 
-let s1: string = #static {
+let s1: string = {
   let a = "asd";
   a.concat("f")
 }
-let s2: "asdf" = #static {
+let s2: "asdf" = {
   let a = "asd";
   a.concat("f")
 }

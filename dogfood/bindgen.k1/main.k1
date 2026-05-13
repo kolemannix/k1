@@ -7,7 +7,7 @@ let MODULE_INFO: k1/module-manifest = {
     link-args: [
       "-L/Users/knix/dev/k1/llvm/install-llvm/lib",
       "-Wl,-rpath,/Users/knix/dev/k1/llvm/install-llvm/lib"
-      ],
+    ],
   }
 }
 

@@ -3267,7 +3267,9 @@ impl TypedProgram {
             | Type::Pointer
             | Type::Integer(_)
             | Type::Float(_) => {
-                if let ParsedTypeExpr::Builtin(_) = self.ast.type_exprs.get(parsed_type_defn.value_expr) {
+                if let ParsedTypeExpr::Builtin(_) =
+                    self.ast.type_exprs.get(parsed_type_defn.value_expr)
+                {
                     // fine
                 } else {
                     return failf!(
@@ -3504,7 +3506,7 @@ impl TypedProgram {
                             _ => {
                                 return failf!(
                                     self.ast.get_type_expr_span(tag_type_expr),
-                                    "Unsupported tag type"
+                                    "Must be an unsigned int"
                                 );
                             }
                         }
@@ -3514,7 +3516,9 @@ impl TypedProgram {
                 let has_payloads =
                     self.ast.mem.getn(sum.variants).iter().any(|v| v.payload.is_some());
                 if has_payloads {
-                    let mut variants = self.types.mem.new_list(variant_count);
+                    let mut variants: List<TypedSumVariant, _> =
+                        self.types.mem.new_list(variant_count);
+                    let mut next_tag = tag_type.zero();
                     for (index, v) in self.ast.mem.getn(sum.variants).iter().enumerate() {
                         let payload_type_id = match &v.payload {
                             None => None,
@@ -3527,25 +3531,46 @@ impl TypedProgram {
                                 Some(type_id)
                             }
                         };
-                        let tag_value = match tag_type {
-                            IntegerType::U8 => TypedIntValue::U8(index as u8),
-                            IntegerType::U16 => TypedIntValue::U16(index as u16),
-                            IntegerType::U32 => TypedIntValue::U32(index as u32),
-                            IntegerType::U64 => TypedIntValue::U64(index as u64),
-                            _ => unreachable!(),
+                        let tag_int = match v.explicit_value {
+                            None => next_tag,
+                            Some(explicit_value) => {
+                                let parsed = self.eval_integer_value(
+                                    explicit_value.span,
+                                    Some(tag_type.type_id()),
+                                )?;
+                                if parsed.to_u64_bits() < next_tag.to_u64_bits() {
+                                    return failf!(
+                                        explicit_value.span,
+                                        "Tag values must be ascending"
+                                    );
+                                }
+                                parsed
+                            }
                         };
+                        if let Some(existing) = variants.iter().find(|v| v.tag_value == tag_int) {
+                            return failf!(v.span, "Duplicate tag value: {}", existing.tag_value);
+                        }
                         let variant = TypedSumVariant {
                             name: v.tag_name,
                             index: index as u32,
                             payload: payload_type_id,
-                            tag_value,
+                            tag_value: tag_int,
                         };
+
+                        next_tag = tag_int.incr();
                         variants.push(variant);
                     }
                     let defn_info = context
                         .direct_unresolved_target_type
                         .and_then(|t| self.types.get_defn_info(t));
 
+                    debug!(
+                        "variants and tags: {}",
+                        variants
+                            .iter()
+                            .map(|v| format!("  {} {}", self.ident_str(v.name), v.tag_value))
+                            .join("\n")
+                    );
                     let sum_type = Type::Sum(SumType {
                         variants: variants.into_handle(&mut self.types.mem),
                         tag_type,
@@ -3559,21 +3584,39 @@ impl TypedProgram {
                     Ok(sum_type_id)
                 } else {
                     let mut member_values = self.types.mem.new_list(variant_count);
-                    for (index, v) in self.ast.mem.getn(sum.variants).iter().enumerate() {
-                        let tag_value = match tag_type {
-                            IntegerType::U8 => TypedIntValue::U8(index as u8),
-                            IntegerType::U16 => TypedIntValue::U16(index as u16),
-                            IntegerType::U32 => TypedIntValue::U32(index as u32),
-                            IntegerType::U64 => TypedIntValue::U64(index as u64),
-                            _ => unreachable!(),
+                    let mut next_tag = tag_type.zero();
+                    for v in self.ast.mem.getn(sum.variants).iter() {
+                        let tag_value = match v.explicit_value {
+                            None => next_tag,
+                            Some(explicit_value) => {
+                                let parsed = self.eval_integer_value(
+                                    explicit_value.span,
+                                    Some(tag_type.type_id()),
+                                )?;
+                                if parsed.to_u64_bits() < next_tag.to_u64_bits() {
+                                    return failf!(
+                                        explicit_value.span,
+                                        "Tag values must be ascending"
+                                    );
+                                }
+                                parsed
+                            }
                         };
                         let variant = ScalarEnumValue { name: v.tag_name, int_value: tag_value };
+                        next_tag = tag_value.incr();
                         member_values.push(variant);
                     }
                     let defn_info = context
                         .direct_unresolved_target_type
                         .and_then(|t| self.types.get_defn_info(t));
 
+                    debug!(
+                        "members and tags: {}",
+                        member_values
+                            .iter()
+                            .map(|v| format!("  {} {}", self.ident_str(v.name), v.int_value))
+                            .join("\n")
+                    );
                     let enum_type = Type::Enum(ScalarEnumType {
                         member_values: member_values.into_handle(&mut self.types.mem),
                         int_type: tag_type,
@@ -6626,19 +6669,23 @@ impl TypedProgram {
         let parsed_text = self.ast.get_span_content(span);
         let is_float = parsed_text.contains('.');
         if is_float {
-            let float_value = self.eval_float_value(span, ctx)?;
+            let float_value = self.eval_float_value(span, ctx.expected_type_id)?;
             let value_id = self.static_values.add(StaticValue::Float(float_value));
             Ok(value_id)
         } else {
-            let int_value = self.eval_integer_value(span, ctx)?;
+            let int_value = self.eval_integer_value(span, ctx.expected_type_id)?;
             let value_id = self.static_values.add(StaticValue::Int(int_value));
             Ok(value_id)
         }
     }
 
-    fn eval_float_value(&self, span: SpanId, ctx: EvalExprContext) -> K1Result<TypedFloatValue> {
+    fn eval_float_value(
+        &self,
+        span: SpanId,
+        expected_type_id: Option<TypeId>,
+    ) -> K1Result<TypedFloatValue> {
         let parsed_text = self.ast.get_span_content(span);
-        let expected_width = match ctx.expected_type_id {
+        let expected_width = match expected_type_id {
             None => NumericWidth::B64,
             Some(F64_TYPE_ID) => NumericWidth::B64,
             Some(F32_TYPE_ID) => NumericWidth::B32,
@@ -6659,7 +6706,7 @@ impl TypedProgram {
     fn eval_integer_value(
         &mut self,
         span: SpanId,
-        ctx: EvalExprContext,
+        expected_type_id: Option<TypeId>,
     ) -> K1Result<TypedIntValue> {
         let parsed_text = self.ast.get_span_content(span);
 
@@ -6716,7 +6763,7 @@ impl TypedProgram {
 
         let expected_int_type = match suffix_int_type {
             Some(int_type) => int_type,
-            None => match ctx.expected_type_id.map(|t| self.types.get(t)) {
+            None => match expected_type_id.map(|t| self.types.get(t)) {
                 Some(Type::Integer(int_type)) => *int_type,
                 Some(_other) => {
                     // Here we're expecting some non-integer type.
@@ -7547,11 +7594,8 @@ impl TypedProgram {
                     span: is_expr.span,
                     is_static: false,
                 };
-                let match_expr_id = self.ast.exprs.add(
-                    parse::ParsedExpr::Match(as_match_expr),
-                    false,
-                    None,
-                );
+                let match_expr_id =
+                    self.ast.exprs.add(parse::ParsedExpr::Match(as_match_expr), false, None);
                 let check_exhaustive = false;
                 // For standalone 'is', we don't allow binding to patterns since they won't work
                 let allow_bindings = false;
@@ -10537,8 +10581,7 @@ impl TypedProgram {
                 );
             }
         };
-        let new_fn_call_id =
-            self.ast.exprs.add(ParsedExpr::Call(new_fn_call), false, None);
+        let new_fn_call_id = self.ast.exprs.add(ParsedExpr::Call(new_fn_call), false, None);
         let new_fn_call_clone = self.ast.exprs.get(new_fn_call_id).expect_call().clone();
         self.eval_function_call(&new_fn_call_clone, None, ctx, None)
     }

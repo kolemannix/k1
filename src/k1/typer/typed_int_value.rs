@@ -32,6 +32,32 @@ impl TypedIntValue {
         }
     }
 
+    pub fn zero(integer_type: IntegerType) -> Self {
+        match integer_type {
+            IntegerType::U8 => TypedIntValue::U8(0),
+            IntegerType::U16 => TypedIntValue::U16(0),
+            IntegerType::U32 => TypedIntValue::U32(0),
+            IntegerType::U64 => TypedIntValue::U64(0),
+            IntegerType::I8 => TypedIntValue::I8(0),
+            IntegerType::I16 => TypedIntValue::I16(0),
+            IntegerType::I32 => TypedIntValue::I32(0),
+            IntegerType::I64 => TypedIntValue::I64(0),
+        }
+    }
+
+    pub fn incr(&self) -> Self {
+        match *self {
+            TypedIntValue::U8(x) => TypedIntValue::U8(x.saturating_add(1)),
+            TypedIntValue::U16(x) => TypedIntValue::U16(x.saturating_add(1)),
+            TypedIntValue::U32(x) => TypedIntValue::U32(x.saturating_add(1)),
+            TypedIntValue::U64(x) => TypedIntValue::U64(x.saturating_add(1)),
+            TypedIntValue::I8(x) => TypedIntValue::I8(x.saturating_add(1)),
+            TypedIntValue::I16(x) => TypedIntValue::I16(x.saturating_add(1)),
+            TypedIntValue::I32(x) => TypedIntValue::I32(x.saturating_add(1)),
+            TypedIntValue::I64(x) => TypedIntValue::I64(x.saturating_add(1)),
+        }
+    }
+
     pub fn get_type(&self) -> TypeId {
         self.get_integer_type().type_id()
     }

@@ -1,41 +1,33 @@
-ns foo {
-  fn stuff(): int { 33 }
+deftype foo = either(u8) { a = 1, b = 2, c = 4 }
+deftype foo2 = either(u8) { a=0, b, c=255 }
+
+deftype foo3 = either { a, b, c }
+
+deftype bar = either { a(bool) = 0b001, b(int) = 0b010, c(u32) = 0b100 }
+
+fn inspect-enum[t]() {
+  let schema = types/get-type-schema[t];
+  require schema is :enum(e) else crash("");
+  for e.values {
+    println("{it.value} {it.name}")
+  }
 }
-
-// nocommit: bug; should be 'alias'
-deftype alias CXCursorKind = core/c-int 
-
-deftype foo = either(u8) { a(1), b(2), c(4) }
-deftype foo = either(u8) { a(1), b, c(4) }
-deftype foo = either { a, b, c }
-
-fn repeat(n: int, a: string): string {
-  let sb = StringBuilder/new();
-
-  4u8 + 3u8;
-  4 + 3;
-
-  for IntRange/upTo(n) { sb.write-string("{a};") };
-  sb.build()
-}
-
-ns foo {
-  fn more-stuff() { {} }
+fn inspect-sum[t]() {
+  let schema = types/get-type-schema[t];
+  require schema is :either(s) else crash("");
+  for s.variants {
+    println("{it.tag} {it.name}")
+  }
 }
 
 fn main(): i32 {
-  #switch k1/os {
-    :macos -> "hooray",
-    :linux -> "boo",
-    :wasm -> asdf
-  };
-
-
-  let i = 4;
-  let f = fn. i + 10;
-  f();
-  core/println("");
-  core/compiler/location();
-  list/empty[u64]();
   0
+}
+
+#static {
+  //inspect-enum[foo];
+  //inspect-enum[foo2];
+  //inspect-enum[foo3];
+
+  inspect-sum[bar];
 }

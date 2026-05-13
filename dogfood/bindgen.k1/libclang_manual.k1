@@ -13,17 +13,27 @@ ns clang {
 
   deftype CXUnsavedFile = {} // nocommit
 
-  deftype CXTranslationUnit_Flags = either(c-unsigned) None, DetailedPreprocessingRecord
+  deftype CXTranslationUnit_Flags = either(c-unsigned) { None, DetailedPreprocessingRecord }
 
+  deftype alias CXTypeKind = c-int // nocommit: real enum
+  // deftype CXCursorKind = either { a }
   deftype alias CXCursorKind = c-int // nocommit: real enum
 
   deftype alias CXClientData = ptr
+
+  // The type of an element in the abstract syntax tree.
+  deftype CXType = {
+    kind: CXTypeKind,
+    data: array[ptr, 2],
+  }
+  #static assertEquals(types/size-of[CXType], 24)
 
   deftype CXCursor = {
     kind: CXCursorKind,
     xdata: c-int,
     data: array[ptr, 3]
   }
+  #static assertEquals(types/size-of[CXCursor], 32)
 
   deftype CXString = {
     data: ptr,
@@ -56,14 +66,14 @@ ns clang {
 // CXCursorVisitor to indicate how clang_visitChildren() proceed.
 //
   deftype CXChildVisitResult = either {
-  // Terminates the cursor traversal.
-  Break,
-  // Continues the cursor traversal with the next sibling of
-  // the cursor just visited, without visiting its children.
-  Continue,
-  // Recursively traverse the children of this cursor, using
-  // the same visitor and client data.
-  Recurse
+    // Terminates the cursor traversal.
+    Break,
+    // Continues the cursor traversal with the next sibling of
+    // the cursor just visited, without visiting its children.
+    Continue,
+    // Recursively traverse the children of this cursor, using
+    // the same visitor and client data.
+    Recurse
   }
 
   deftype alias CXCursorVisitor = *fn(CXCursor, CXCursor, CXClientData) -> CXChildVisitResult
@@ -83,14 +93,6 @@ ns clang {
 
   extern("clang", "clang_disposeString")
   fn disposeString(cx-string: CXString): ptr
-
-
-  // The type of an element in the abstract syntax tree.
-  deftype CXType = {
-    kind: CXTypeKind,
-    data: array[ptr, 2],
-  }
-  deftype CXCursorKind = either { a }
 
   extern("clang", "clang_getCursorKind")
   fn getCursorKind(cursor: CXCursor): CXCursorKind 
