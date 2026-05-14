@@ -175,7 +175,7 @@ fn b8(name: string): { name: string, bits: size } { bn(name, 8) }
 Here comes a big wall of advanced metaprogramming code; but it may look strikingly like dumb string-building code to you.
 ```rust
 fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): string {
-  use core/StringBuilder; use meta/CodeWriter;
+  use meta/CodeWriter;
 
   let baseTypeId: u64 = types/typeId[Base]();
   let baseSchema = types/typeSchema(baseTypeId);

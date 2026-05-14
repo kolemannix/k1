@@ -743,7 +743,7 @@ pub struct ParsedQAbilityCall {
     pub span: SpanId,
 }
 
-static_assert_size!(ParsedExpr, 48);
+static_assert_size!(ParsedExpr, 56);
 #[derive(Clone)]
 pub enum ParsedExpr {
     /// ```md
@@ -983,6 +983,7 @@ pub struct ParsedLoopExpr {
 pub struct ForExpr {
     pub iterable_expr: ParsedExprId,
     pub binding: Option<Ident>,
+    pub binding_span: SpanId,
     pub body_block: ParsedBlock,
     pub is_static: bool,
     pub span: SpanId,
@@ -3845,9 +3846,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let iterable_expr = self.expect_expression()?;
         let body_expr = self.expect_block(ParsedBlockKind::LoopBody)?;
         let span = self.extend_span(first.span, body_expr.span);
+        let binding_span = match binding {
+            None => first.span,
+            Some(_) => second.span,
+        };
         let expr_id = self.add_expression(ParsedExpr::For(ForExpr {
             iterable_expr,
             binding,
+            binding_span,
             body_block: body_expr,
             is_static,
             span,
@@ -3990,13 +3996,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else {
             Some(self.expect_expression()?)
         };
-        let span = self.extend_to_here(eaten_keyword.span);
         Ok(Some(ParsedLet {
             name: self.make_ident(name_token),
             type_expr: typ,
             value: initializer_expression,
             flags,
-            span,
+            span: name_token.span,
         }))
     }
 

@@ -19,7 +19,6 @@ ns pre {
 
 ns test_meta;
 
-use core/StringBuilder
 use core/meta/CodeWriter
 
 fn simpleIncrement(): i32 {

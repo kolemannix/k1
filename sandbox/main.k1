@@ -6,15 +6,14 @@ deftype foo3 = either { a, b, c }
 deftype bar = either { a(bool) = 0b001, b(int) = 0b010, c(u32) = 0b100 }
 
 fn inspect-enum[t]() {
-  let schema = types/get-type-schema[t];
-  require schema is :enum(e) else crash("");
+  require types/get-type-schema[t] is :enum(e) else crash("");
   for e.values {
+    //nocommit: Do not emit ls entities for calls that are synthesized
     println("{it.value} {it.name}")
   }
 }
 fn inspect-sum[t]() {
-  let schema = types/get-type-schema[t];
-  require schema is :either(s) else crash("");
+  require types/get-type-schema[t] is :either(s) else crash("");
   for s.variants {
     println("{it.tag} {it.name}")
   }

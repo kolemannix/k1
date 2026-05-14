@@ -190,6 +190,7 @@ impl InferenceContext {
 pub enum LsEntityKind {
     Namespace(NamespaceId),
     Function { function_id: FunctionId, is_defn: bool },
+    Variable { variable_id: VariableId },
 }
 
 #[derive(Clone, Copy)]
@@ -1689,7 +1690,10 @@ pub struct Variable {
     pub owner_scope: ScopeId,
     pub flags: VariableFlags,
     pub usage_count: u32,
+    /// Only populated in lsp mode
+    pub usages: Vec<SpanId>,
     pub kind: VariableKind,
+    pub defn_span: SpanId,
 }
 
 impl Variable {
@@ -5759,46 +5763,41 @@ impl TypedProgram {
         parsed_global_id: ParsedGlobalId,
         scope_id: ScopeId,
     ) -> K1Result<VariableId> {
-        let parsed_global = self.ast.get_global(parsed_global_id).clone();
-        let is_exported = parsed_global.is_export;
-        let is_external = parsed_global.is_external;
-        let is_mutable = parsed_global.is_mutable;
-        let global_name = parsed_global.name;
-        let global_span = parsed_global.span;
-        let type_id = self.eval_type_expr(parsed_global.type_expr, scope_id)?;
-
-        let value_expr_id = parsed_global.value_expr;
+        let parsed = self.ast.get_global(parsed_global_id).clone();
+        let type_id = self.eval_type_expr(parsed.type_expr, scope_id)?;
 
         let global_id = self.globals.next_id();
         let variable_id = self.variables.add(Variable {
-            name: global_name,
+            name: parsed.name,
             type_id,
             owner_scope: scope_id,
             kind: VariableKind::Global(global_id),
             flags: VariableFlags::empty(),
             usage_count: 0,
+            usages: vec![],
+            defn_span: parsed.span,
         });
         let actual_global_id = self.globals.add(TypedGlobal {
             variable_id,
             initial_value: None,
-            parsed_expr: value_expr_id,
+            parsed_expr: parsed.value_expr,
             type_id,
-            span: global_span,
-            is_constant: !is_mutable,
-            is_tls: parsed_global.is_thread_local,
-            is_exported,
-            is_external,
+            span: parsed.span,
+            is_constant: !parsed.is_mutable,
+            is_tls: parsed.is_thread_local,
+            is_exported: parsed.is_export,
+            is_external: parsed.is_external,
             ast_id: parsed_global_id,
             parent_scope: scope_id,
         });
 
         debug_assert_eq!(actual_global_id, global_id);
 
-        if scope_id == self.scopes.mem_scope_id && parsed_global.name == self.ast.idents.b.arena {
+        if scope_id == self.scopes.mem_scope_id && parsed.name == self.ast.idents.b.arena {
             self.global_id_k1_arena = Some(global_id)
         };
         self.global_ast_mappings.insert(parsed_global_id, global_id);
-        self.scopes.add_variable(scope_id, global_name, variable_id);
+        self.scopes.add_variable(scope_id, parsed.name, variable_id);
 
         Ok(variable_id)
     }
@@ -6921,7 +6920,7 @@ impl TypedProgram {
                     );
                     self.scopes.add_capture(lambda_scope_id.unwrap(), variable_id, fixup_expr_id);
 
-                    self.variables.get_mut(variable_id).usage_count += 1;
+                    self.register_variable_usage(variable_id, variable.name.span);
                     Ok((variable_id, fixup_expr_id))
                 } else {
                     let expr = self.exprs.add(
@@ -6931,12 +6930,20 @@ impl TypedProgram {
                     );
 
                     if !is_assignment_lhs {
-                        self.variables.get_mut(variable_id).usage_count += 1;
+                        self.register_variable_usage(variable_id, variable.name.span);
                     }
                     Ok((variable_id, expr))
                 }
             }
         }
+    }
+
+    pub fn register_variable_usage(&mut self, variable_id: VariableId, span: SpanId) {
+        if cfg!(feature = "lsp") {
+            self.variables.get_mut(variable_id).usages.push(span);
+            self.emit_ls_entity(span, LsEntityKind::Variable { variable_id });
+        }
+        self.variables.get_mut(variable_id).usage_count += 1;
     }
 
     pub fn get_expr_type(&self, expr_id: TypedExprId) -> &Type {
@@ -7874,6 +7881,7 @@ impl TypedProgram {
             true, // is_mutable
             is_referencing_let,
             list_lit_scope,
+            None,
         );
 
         list_lit_block.statements.push(dest_coll_variable.defn_stmt);
@@ -8568,6 +8576,8 @@ impl TypedProgram {
                 kind: VariableKind::FnParam(FunctionId::PENDING),
                 flags: VariableFlags::empty(),
                 usage_count: 0,
+                usages: vec![],
+                defn_span: parsed_arg.span,
             });
             lambda_scope.add_variable(name, variable_id);
             param_variables.push(TypedFunctionParam { variable_id, span: parsed_arg.span })
@@ -8706,6 +8716,8 @@ impl TypedProgram {
             kind: VariableKind::FnParam(body_function_id),
             flags: VariableFlags::empty(),
             usage_count: 0,
+            usages: vec![],
+            defn_span: span,
         });
         typed_params.insert(0, environment_param);
         param_variables.insert(
@@ -8732,6 +8744,7 @@ impl TypedProgram {
             false,
             false,
             lambda_scope_id,
+            None,
         );
         if let TypedExpr::Block(body) = self.exprs.get_mut(body_expr_id) {
             let mut new_stmts = self.mem.new_list(body.statements.len() + 1);
@@ -8831,7 +8844,7 @@ impl TypedProgram {
                 env_struct_reference_type,
                 span,
             );
-            k1.variables.get_mut(environment_param_variable_id).usage_count += 1;
+            k1.register_variable_usage(environment_param_variable_id, span);
             let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
                 base: env_variable_expr,
                 field_index: field_index as u32,
@@ -9360,8 +9373,12 @@ impl TypedProgram {
             }
             TypedPattern::Variable(variable_pattern) => {
                 let variable_ident = variable_pattern.name;
-                let binding_variable =
-                    self.synth_variable_defn_visible(variable_ident, target_expr, ctx.scope_id);
+                let binding_variable = self.synth_variable_defn_visible(
+                    variable_ident,
+                    target_expr,
+                    ctx.scope_id,
+                    variable_pattern.span,
+                );
                 instrs.push_grow(
                     &mut self.mem,
                     MatchingConditionInstr::Binding { let_stmt: binding_variable.defn_stmt },
@@ -9769,6 +9786,7 @@ impl TypedProgram {
             true, // mutable = true
             false,
             outer_for_expr_scope,
+            Some(iterable_span),
         );
         let iterator_initializer = if target_is_iterator {
             iterable_expr
@@ -9788,6 +9806,7 @@ impl TypedProgram {
             true, //is_mutable
             true, //is_referencing
             outer_for_expr_scope,
+            None,
         );
         let mut loop_block =
             self.synth_block(outer_for_expr_scope, ScopeType::LexicalBlock, body_span, 3);
@@ -9825,6 +9844,7 @@ impl TypedProgram {
             binding_ident,
             next_getValue_call,
             consequent_block.scope_id,
+            for_expr.binding_span,
         );
         let body_block = self.eval_block(
             &for_expr.body_block,
@@ -9941,7 +9961,12 @@ impl TypedProgram {
         let eval_context = ctx.with_scope(block.scope_id).with_no_expected_type();
         for elem in self.static_values.mem.getn(elements) {
             let elem_expr = self.add_static_constant_expr(*elem, iteree_span);
-            let v = self.synth_variable_defn_visible(binding_name, elem_expr, block.scope_id);
+            let v = self.synth_variable_defn_visible(
+                binding_name,
+                elem_expr,
+                block.scope_id,
+                for_expr.binding_span,
+            );
             let user_expr = self.eval_block(&for_expr.body_block, eval_context, false)?;
             self.push_block_stmt_id(&mut block, v.defn_stmt);
             self.push_block_expr_id(&mut block, user_expr);
@@ -10663,7 +10688,7 @@ impl TypedProgram {
                     if let Some((variable_id, _scope_id)) =
                         self.scopes.find_variable(ctx.scope_id, fn_call.name.name)
                     {
-                        self.variables.get_mut(variable_id).usage_count += 1;
+                        self.register_variable_usage(variable_id, fn_call.name.span);
                         let function_variable = self.variables.get(variable_id);
                         debug!(
                             "Variable {} has type {}",
@@ -11402,6 +11427,8 @@ impl TypedProgram {
                 kind: VariableKind::FnParam(new_function_id),
                 flags: VariableFlags::empty(),
                 usage_count: 0,
+                usages: vec![],
+                defn_span: function_defn_span,
             });
             let mut new_variables = self.mem.new_list(new_function.params.len() + 1);
             new_variables.push(TypedFunctionParam {
@@ -12163,7 +12190,7 @@ impl TypedProgram {
                         found.type_id,
                         span,
                     )));
-                    self.variables.get_mut(matching_context_variable).usage_count += 1;
+                    self.register_variable_usage(matching_context_variable, fn_call.name.span);
                     final_params.push(*context_param);
                 } else {
                     let is_source_loc = context_param.type_id == COMPILER_SOURCE_LOC_TYPE_ID;
@@ -13018,6 +13045,8 @@ impl TypedProgram {
                 kind: VariableKind::FnParam(specialized_function_id),
                 flags,
                 usage_count: 0,
+                usages: vec![],
+                defn_span: generic_param.span,
             });
             if specialized_param_type.is_context {
                 self.scopes.add_context_variable(
@@ -13328,6 +13357,8 @@ impl TypedProgram {
                         kind: VariableKind::Stack(stmt_id),
                         flags,
                         usage_count: 0,
+                        usages: vec![],
+                        defn_span: parsed_let.span,
                     });
 
                     if parsed_let.is_returned() {
@@ -13379,6 +13410,7 @@ impl TypedProgram {
                     } else {
                         self.scopes.add_variable(ctx.scope_id, parsed_let.name, variable_id);
                     }
+                    self.emit_ls_entity(parsed_let.span, LsEntityKind::Variable { variable_id });
                     self.stmts.add_expected_id(val_def_stmt, stmt_id);
                     Ok(Some(stmt_id))
                 }
@@ -14703,7 +14735,9 @@ impl TypedProgram {
                 owner_scope: fn_scope_id,
                 flags: if is_context { VariableFlags::Context } else { VariableFlags::empty() },
                 usage_count: 0,
+                usages: vec![],
                 kind: VariableKind::FnParam(FunctionId::PENDING),
+                defn_span: fn_param.span,
             };
 
             let variable_id = self_.variables.add(variable);

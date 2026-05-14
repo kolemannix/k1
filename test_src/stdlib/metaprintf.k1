@@ -1,9 +1,7 @@
-use core/StringBuilder
 use meta/CodeWriter
 
 fn staticAdd[A: static int, B: static int](a: A, b: B): int { a + b }
 
-use core/StringBuilder
 use meta/CodeWriter
 
 // TODO: need to flesh this out more with format specifiers
@@ -52,7 +50,7 @@ fn fmt[Fmt: static string, Args, w: writer](w, fmtString: Fmt, args: Args) {
 }
 
 fn fmtString[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
-  let result = core/StringBuilder/new();
+  let result = StringBuilder/new();
   fmt(&result, fmtString, args);
   result.build()
 }

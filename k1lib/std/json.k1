@@ -1,7 +1,5 @@
 ns json;
 
-use core/StringBuilder
-
 deftype json = either {
   null,
   str   (string),

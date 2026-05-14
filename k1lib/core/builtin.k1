@@ -535,7 +535,6 @@ ns k1 {
 
   intern fn emit-compiler-message(
     locn: compiler/source-location,
-    // nocommit remove parens and parsing bug
     level: either(u8) { info, warn, error },
     msg: string
   )

@@ -26,6 +26,9 @@ pub type LexResult<A> = anyhow::Result<A, LexError>;
 
 nz_u32_id!(SpanId);
 impl SpanId {
+    pub fn is_none(self) -> bool {
+        self == Self::NONE
+    }
     pub const NONE: SpanId = Self::ONE;
 }
 

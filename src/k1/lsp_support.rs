@@ -58,6 +58,18 @@ pub fn get_hover_message_for_entity(k1: &TypedProgram, entity: LsEntity) -> Stri
                 k1.function_id_to_string(function_id, false)
             )
         }
+        LsEntityKind::Variable { variable_id } => {
+            //nocommit valigo font loading
+            let v = k1.variables.get(variable_id);
+            let kind_str = match v.kind {
+                VariableKind::FnParam(_) => "Param",
+                VariableKind::Stack(_) => "Local",
+                VariableKind::StackSynthetic(_) => "Compiler-generated",
+                VariableKind::Global(_) => "Global",
+            };
+            let type_str = k1.type_id_to_string(v.type_id);
+            format!("{}\n{}", type_str, kind_str)
+        }
     }
 }
 
@@ -78,6 +90,10 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
                 }
                 _ => k1.ast.get_span_for_id(function.parsed_id),
             };
+            k1.ast.spans.get(span_id)
+        }
+        LsEntityKind::Variable { variable_id } => {
+            let span_id = k1.variables.get(variable_id).defn_span;
             k1.ast.spans.get(span_id)
         }
     }

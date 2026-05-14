@@ -219,7 +219,7 @@ impl TypedProgram {
         initializer: TypedExprId,
         owner_scope: ScopeId,
     ) -> SynthedVariable {
-        self.synth_variable_defn(name, initializer, false, false, false, owner_scope)
+        self.synth_variable_defn(name, initializer, false, false, false, owner_scope, None)
     }
 
     /// Creates a user-code-visible variable
@@ -228,8 +228,9 @@ impl TypedProgram {
         name: Ident,
         initializer: TypedExprId,
         owner_scope: ScopeId,
+        span: SpanId,
     ) -> SynthedVariable {
-        self.synth_variable_defn(name, initializer, true, false, false, owner_scope)
+        self.synth_variable_defn(name, initializer, true, false, false, owner_scope, Some(span))
     }
 
     /// no_mangle: Skip mangling if we want the variable to be accessible from user code
@@ -241,9 +242,13 @@ impl TypedProgram {
         is_mutable: bool,
         is_referencing: bool,
         owner_scope: ScopeId,
+        span: Option<SpanId>,
     ) -> SynthedVariable {
         let initializer_type = self.exprs.get_type(initializer_id);
-        let span = self.exprs.get_span(initializer_id);
+        let span = match span {
+            None => self.exprs.get_span(initializer_id),
+            Some(span) => span,
+        };
         let type_id = if is_referencing {
             self.types.add_reference_type(initializer_type, is_mutable)
         } else {
@@ -269,8 +274,13 @@ impl TypedProgram {
             kind: VariableKind::StackSynthetic(defn_stmt),
             flags,
             usage_count: 0,
+            usages: vec![],
+            defn_span: span,
         };
         let variable_id = self.variables.add(variable);
+        if !flags.contains(VariableFlags::UserHidden) {
+            self.emit_ls_entity(span, LsEntityKind::Variable { variable_id })
+        }
         let variable_expr =
             self.exprs.add(TypedExpr::Variable(VariableExpr { variable_id }), type_id, span);
         self.stmts.add_expected_id(
@@ -718,6 +728,10 @@ impl TypedProgram {
             return failf!(span, "Interpolated strings are not supported in no_std mode");
         }
         let new_string_builder = self.synth_typed_call_typed_args(
+            // nocommit: We'd like to put SpanId::NONE on this so that we don't emit a bad
+            // language server entity, but llvm complains about a call with no !dbg location.
+            // We could make a bogus span that satisfies llvm somehow, like by being in the same
+            // file?
             self.ast.idents.f.StringBuilder_new.with_span(span),
             &[],
             &[],
@@ -731,6 +745,7 @@ impl TypedProgram {
             true, // is_mutable
             true, // is_referencing
             block.scope_id,
+            None,
         );
         self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
         let args_expr = args_expr.unwrap_or(self.synth_empty_struct(span));

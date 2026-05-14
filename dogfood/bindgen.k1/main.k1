@@ -39,22 +39,43 @@ fn main(): i32 {
   0
 }
 
+deftype BindgenState = {
+  out-buffer: StringBuilder,
+
+}
+
+fn print-dispose-cxstring(cxs: CXString) {
+  // Print the char* value of current_display_name
+  let c-str = clang/getCString(cxs);
+  let name = string/from-c(c-str);
+  print(name);
+  // Since clang_getCursorDisplayName allocates a new CXString, it must be
+  // freed. This applies to all functions returning a CXString
+  clang/disposeString(cxs);
+}
+
 fn visit(
   current: CXCursor,
   _parent: CXCursor,
   _client-data: clang/CXClientData,
 ): clang/CXChildVisitResult {
-  // Allocate a CXString representing the name of the current cursor
-  let current-display-name = clang/getCursorDisplayName(current);
+  print("Name: ");
+  print-dispose-cxstring(clang/getCursorDisplayName(current));
+  println("");
+
+  let cx-kind = clang/getCursorKind(current);
+  println("Kind int is: {cx-kind.value}");
+
+  let cx-type = clang/getCursorType(current);
+  let type_kind_spelling: CXString = clang/getTypeKindSpelling(cx-type.kind);
+  print("Type Kind spelling: ");
+  print-dispose-cxstring(type_kind_spelling);
+  println("");
+
+  println("Type Kind int is: {cx-type.kind}");
+
+  println("\n");
  
-  // Print the char* value of current_display_name
-  let c-str = clang/getCString(current-display-name);
-  let name = string/from-c(c-str);
-  println("Visiting element {name}");
- 
-  // Since clang_getCursorDisplayName allocates a new CXString, it must be
-  // freed. This applies to all functions returning a CXString
-  clang/disposeString(current-display-name);
 
   :Recurse
 }

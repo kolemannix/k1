@@ -56,14 +56,14 @@ fn genericSum() {
     assert(core/types/align-of[MyResult[int, string]]() == 8);
 }
 
-deftype E = either(u8) { A, B, C(int) }
+deftype E = either(u8) { A = 4, B = 8, C(int) = 9 }
 fn tags() {
   let a: E = :A;
   let b: E = :B;
   let c: E = :C(0);
-  assertEquals(a.tag, 0);
-  assertEquals(b.tag, 1);
-  assertEquals(c.tag, 2);
+  assertEquals(a.tag, 4);
+  assertEquals(b.tag, 8);
+  assertEquals(c.tag, 9);
   {}
 }
 

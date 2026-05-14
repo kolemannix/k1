@@ -560,7 +560,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
 
-        // Guarantee code generation of exported globals
+        // Guarantee generation of exported globals
         for global_id in &global_ids {
             let g = self.k1.globals.get(*global_id);
             if g.is_exported {
@@ -568,7 +568,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         }
 
-        // TODO: Codegen the exported functions as well as the called ones
+        // Guarantee generation of exported functions
+        // FIXME: Codegen the exported functions as well as the called ones
         // for (id, function) in self.module.function_iter() {
         //     if function.linkage.is_exported() {
         //         self.codegen_function_signature(id)?;
@@ -682,7 +683,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         locn
     }
     fn set_debug_location_from_span(&self, span: SpanId) {
-        if span != SpanId::NONE {
+        if !span.is_none() {
             let locn = self.get_debug_location_from_span(span);
             self.builder.set_current_debug_location(locn);
         }

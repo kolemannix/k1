@@ -765,21 +765,39 @@ fn find_references(
             let generic_function = k1::lsp_support::get_function_generic_id(k1, function_id);
             let function = k1.functions.get(generic_function);
             let defn_span = k1.get_function_span(generic_function);
-            let mut results = Vec::with_capacity(function.usages.len());
+            let mut locations = Vec::with_capacity(function.usages.len());
             for span_id in &function.usages {
                 // Skip the usage that is the function's declaration
                 if defn_span == *span_id && !include_declaration {
                     continue;
                 }
 
-                if let Some(range) = span_id_to_range(k1, *span_id) {
-                    let usage_uri = uri_from_span(k1, *span_id);
-                    results.push(Location { uri: usage_uri, range });
+                if let Some(location) = location_from_span(k1, *span_id) {
+                    locations.push(location);
                 }
             }
-            Ok(Some(results))
+            Ok(Some(locations))
         }
-        _ => Ok(None),
+        LsEntityKind::Variable { variable_id } => {
+            let v = k1.variables.get(variable_id);
+            let mut locations = Vec::with_capacity(v.usages.len());
+            for span_id in &v.usages {
+                if let Some(location) = location_from_span(k1, *span_id) {
+                    locations.push(location);
+                }
+            }
+            Ok(Some(locations))
+        }
+        LsEntityKind::Namespace(_namespace_id) => Ok(None),
+    }
+}
+
+fn location_from_span(k1: &TypedProgram, span_id: SpanId) -> Option<Location> {
+    if let Some(range) = span_id_to_range(k1, span_id) {
+        let usage_uri = uri_from_span(k1, span_id);
+        Some(Location { uri: usage_uri, range })
+    } else {
+        None
     }
 }
 

@@ -38,7 +38,7 @@ fn day2(part: int, input: string) {
   crash("{invalidSum}");
 }
 
-let* buffer: *mut core/StringBuilder = core/StringBuilder/new();
+let* buffer: *mut StringBuilder = StringBuilder/new();
 fn checkInvalidPart1(value: i64): bool {
   buffer.reset();
   value.printTo(buffer);
