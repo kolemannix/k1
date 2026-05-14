@@ -1151,18 +1151,18 @@ deftype CXCursorKind = either {
 }
 
 deftype CXTypeKind = either {
-  /**
-   * Represents an invalid type (e.g., where no type is available).
-   */
+  //*
+  // Represents an invalid type (e.g., where no type is available).
+  ///
   CXType_Invalid = 0,
 
-  /**
-   * A type whose specific kind is not exposed via this
-   * interface.
-   */
+  //*
+  // A type whose specific kind is not exposed via this
+  // interface.
+  ///
   CXType_Unexposed = 1,
 
-  /* Builtin types */
+  // Builtin types */
   CXType_Void = 2,
   CXType_Bool = 3,
   CXType_Char_U = 4,
@@ -1202,8 +1202,6 @@ deftype CXTypeKind = either {
   CXType_ULongAccum = 38,
   CXType_BFloat16 = 39,
   CXType_Ibm128 = 40,
-  CXType_FirstBuiltin = CXType_Void,
-  CXType_LastBuiltin = CXType_Ibm128,
 
   CXType_Complex = 100,
   CXType_Pointer = 101,
@@ -1225,17 +1223,17 @@ deftype CXTypeKind = either {
   CXType_MemberPointer = 117,
   CXType_Auto = 118,
 
-  /**
-   * Represents a type that was referred to using an elaborated type keyword.
-   *
-   * E.g., struct S, or via a qualified name, e.g., N::M::type, or both.
-   */
+  //*
+  // Represents a type that was referred to using an elaborated type keyword.
+  //
+  // E.g., struct S, or via a qualified name, e.g., N::M::type, or both.
+  ///
   CXType_Elaborated = 119,
 
-  /* OpenCL PipeType. */
+  // OpenCL PipeType. */
   CXType_Pipe = 120,
 
-  /* OpenCL builtin types. */
+  // OpenCL builtin types. */
   CXType_OCLImage1dRO = 121,
   CXType_OCLImage1dArrayRO = 122,
   CXType_OCLImage1dBufferRO = 123,
@@ -1294,7 +1292,7 @@ deftype CXTypeKind = either {
   CXType_OCLIntelSubgroupAVCImeSingleReferenceStreamin = 174,
   CXType_OCLIntelSubgroupAVCImeDualReferenceStreamin = 175,
 
-  /* Old aliases for AVC OpenCL extension types. */
+  // Old aliases for AVC OpenCL extension types. */
   CXType_OCLIntelSubgroupAVCImeResultSingleRefStreamout = 172,
   CXType_OCLIntelSubgroupAVCImeResultDualRefStreamout = 173,
   CXType_OCLIntelSubgroupAVCImeSingleRefStreamin = 174,
@@ -1304,10 +1302,12 @@ deftype CXTypeKind = either {
   CXType_Atomic = 177,
   CXType_BTFTagAttributed = 178,
 
-  /* HLSL Types */
+  // HLSL Types */
   CXType_HLSLResource = 179,
   CXType_HLSLAttributedResource = 180,
   CXType_HLSLInlineSpirv = 181
 }
+let CXType_FirstBuiltin: CXType = CXType_Void
+let CXType_LastBuiltin: CXType = CXType_Ibm128
 
 }

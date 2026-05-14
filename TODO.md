@@ -148,9 +148,10 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] Proper handling of 'trivia' (whitespace and comments)
 - [x] Go-to
 - [x] find references
+- [ ] Workspace symbols
 - [ ] Rest of the entity kinds
   - [ ] Types
-  - [ ] Variables (locals, globals, fn params)
+  - [x] Variables (locals, globals, fn params)
 
 - [ ] Completion
 

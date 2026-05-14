@@ -69,6 +69,7 @@ ns types {
   // Magically implemented for all enums
   ability enum[impl v] {
     fn enum-value(self): v
+    fn from-value(v): ?self
   }
 
   // Implement equals for all enums in userspace B-)

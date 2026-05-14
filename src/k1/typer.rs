@@ -1898,6 +1898,11 @@ pub enum BitCastKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BuiltinAbility {
+    Enum,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Builtin {
     TypeSize,
     TypeStride,
@@ -1906,6 +1911,7 @@ pub enum Builtin {
     TypeId,
     CompilerSourceLocation,
     EnumGetValue,
+    EnumFromValue,
     // Actual function
     TypeSchema,
     TypeName,
@@ -2104,7 +2110,7 @@ pub enum AbilityImplKind {
     Blanket { base_ability: AbilityId, parsed_id: ParsedAbilityImplId },
     DerivedFromBlanket { blanket_impl_id: AbilityImplId },
     TypeParamConstraint,
-    Builtin(Builtin),
+    Builtin(BuiltinAbility),
 }
 
 impl AbilityImplKind {
@@ -5997,7 +6003,14 @@ impl TypedProgram {
                 AbilityImplKind::TypeParamConstraint => {
                     AbilityImplFunction::Abstract(specialized_signature)
                 }
-                AbilityImplKind::Builtin(builtin) => {
+                AbilityImplKind::Builtin(builtin_ability) => {
+                    let builtin = match builtin_ability {
+                        BuiltinAbility::Enum => match self.ident_str(generic_fn.name) {
+                            "enum-value" => Builtin::EnumGetValue,
+                            "from-value" => Builtin::EnumFromValue,
+                            s => ice_span!(self, span, "Unmatched enum function: {s}"),
+                        },
+                    }
                     AbilityImplFunction::Builtin(specialized_signature, builtin)
                 }
                 _ => unreachable!(),
