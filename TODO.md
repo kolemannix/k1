@@ -25,6 +25,7 @@ minor ideas
 - [ ] Inspired by fast_float, char to digit lookup table
 
 On ai confidence, and how the conclusions truly precede the reasoning: https://claude.ai/share/e8f37966-8428-498a-8591-c21e228abc5c
+- https://asciinema.org/
 
 Simple but missing
 - [ ] Exported functions and globals

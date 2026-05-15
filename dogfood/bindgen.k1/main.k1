@@ -14,7 +14,9 @@ let MODULE_INFO: k1/module-manifest = {
 use clang/CXIndex
 use clang/CXTranslationUnit
 use clang/CXCursor
-use clang/CXString
+// use clang/CXString
+// nocommit: if i use clang/CXString, the type is no longer in scope
+//           perhaps because it only uses the namespace?
 
 fn main(): i32 {
 
@@ -34,48 +36,121 @@ fn main(): i32 {
 
   // Obtain a cursor at the root of the translation unit
   let cursor: clang/CXCursor = clang/getTranslationUnitCursor(unit); 
-  clang/visitChildren(parent = cursor, visitor = visit.toRef(), client_data = ptr/null);
+  let state: BindgenState = {
+    out-buffer: StringBuilder/new(),
+    mode: :none,
+  };
+  clang/visitChildren(
+    parent = cursor,
+    visitor = visit.toRef(),
+    client_data = &state.as[ptr]
+  );
 
   0
 }
 
-deftype BindgenState = {
-  out-buffer: StringBuilder,
-
-}
-
-fn print-dispose-cxstring(cxs: CXString) {
+fn print-cxstring(prefix: string, cxs: clang/CXString) {
   // Print the char* value of current_display_name
+  print(prefix);
   let c-str = clang/getCString(cxs);
   let name = string/from-c(c-str);
   print(name);
   // Since clang_getCursorDisplayName allocates a new CXString, it must be
   // freed. This applies to all functions returning a CXString
   clang/disposeString(cxs);
+  println("")
+}
+
+deftype k1-defn = either { 
+  struct({ name: string, fields: list[{ name: string, type: string }] } ),
+  function,
+  typedef
+}
+
+deftype BindgenState = {
+  out-buffer: StringBuilder,
+  definitions: list[k1-defn],
+  current: ?k1-defn,
+}
+impl print for k1-defn {
+  fn printTo[w: writer](self, w) {
+    switch self {
+      // nocommit: write-string is too long
+      :struct(s) -> { w.write-string("struct "); w.write-string(s.name)},
+      :function -> w.write-string("function"),
+      :typedef -> w.write-string("typedef"),
+    }
+  }
 }
 
 fn visit(
   current: CXCursor,
   _parent: CXCursor,
-  _client-data: clang/CXClientData,
+  client-data: clang/CXClientData,
 ): clang/CXChildVisitResult {
-  print("Name: ");
-  print-dispose-cxstring(clang/getCursorDisplayName(current));
-  println("");
 
-  let cx-kind = clang/getCursorKind(current);
-  println("Kind int is: {cx-kind.value}");
+  let cursor-kind = clang/getCursorKind(current);
+  let data = client-data.as[*mut BindgenState];
+  println("Mode: {data.mode}");
+  print-cxstring("Name: ", clang/getCursorDisplayName(current));
+  switch data.mode {
+    :none -> {
+      let is-decl = clang/isDeclaration(cursor-kind) != 0;
+      println("isDeclaration: {is-decl}");
+      switch cursor-kind {
+        :StructDecl -> {
+          println("Handling struct decl");
+          let name = clang/getCursorDisplayName(current).to-k1();
+          data.mode* <- :struct({ name, fields: list/empty() });
+          :Recurse
+        },
+        _ -> {
+          let cursor-kind-name = clang/getCursorKindSpelling(cursor-kind).to-k1();
+          println("Skipping CXCursorKind: {cursor-kind-name}");
+          :Continue
+        }
+      };
+    },
+    :struct(struct) -> {
+      eprintln("struct mode. name: {struct.name}, fields: {struct.fields.map(fn f. f.name)}");
+      crash("todo: struct mode")
+    },
+    :function -> {
+      crash("todo: function mode")
+    },
+    :typedef -> {
+      crash("todo: typedef mode")
+    }
+  }
+}
 
+fn map-type(current: CXCursor): ?string {
   let cx-type = clang/getCursorType(current);
-  let type_kind_spelling: CXString = clang/getTypeKindSpelling(cx-type.kind);
-  print("Type Kind spelling: ");
-  print-dispose-cxstring(type_kind_spelling);
-  println("");
-
-  println("Type Kind int is: {cx-type.kind}");
-
-  println("\n");
- 
-
-  :Recurse
+  let type_kind_spelling: clang/CXString = clang/getTypeKindSpelling(cx-type.kind);
+  print-cxstring("Type Kind spelling: ", type_kind_spelling);
+  println(" -> ({cx-type.kind.value})");
+  let s = switch cx-type.kind {
+    :Void -> p"{}",
+    :Bool -> "bool",
+    :Char_U -> "u8",
+    :UChar -> "u8",
+    :Char16 -> "i16",
+    :Char32 -> "i32",
+    :UShort -> "",
+    :UInt -> "u32",
+    :ULong -> "c-long",
+    :ULongLong -> "c-longlong",
+    :UInt128 -> "u128 unsupported",
+    :Char_S -> "i8",
+    :SChar -> "i8",
+    // In Windows, 2 bytes, otherwise 4, so we'll point to the alias
+    :WChar -> "c-wchar",
+    :Short -> "i16",
+    :Int -> "c-int",
+    _ -> {
+      eprintln("other type: {cx-type.kind.value}");
+      return(:none)
+    }
+  };
+  :some(s)
 }

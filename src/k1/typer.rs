@@ -1911,7 +1911,6 @@ pub enum Builtin {
     TypeId,
     CompilerSourceLocation,
     EnumGetValue,
-    EnumFromValue,
     // Actual function
     TypeSchema,
     TypeName,
@@ -5975,6 +5974,7 @@ impl TypedProgram {
         let mut impl_functions = self.mem.new_list(functions.len() as u32);
         for f in functions.iter() {
             let generic_fn = self.get_function(f.function_id);
+            let fn_name = generic_fn.name;
             let generic_sig = generic_fn.signature();
             let generic_fn_type_id = generic_fn.type_id;
             let specialized_function_type =
@@ -6005,12 +6005,11 @@ impl TypedProgram {
                 }
                 AbilityImplKind::Builtin(builtin_ability) => {
                     let builtin = match builtin_ability {
-                        BuiltinAbility::Enum => match self.ident_str(generic_fn.name) {
+                        BuiltinAbility::Enum => match self.ident_str(fn_name) {
                             "enum-value" => Builtin::EnumGetValue,
-                            "from-value" => Builtin::EnumFromValue,
                             s => ice_span!(self, span, "Unmatched enum function: {s}"),
                         },
-                    }
+                    };
                     AbilityImplFunction::Builtin(specialized_signature, builtin)
                 }
                 _ => unreachable!(),
@@ -6180,7 +6179,7 @@ impl TypedProgram {
                         impl_arguments,
                     },
                     impl_scope_id,
-                    AbilityImplKind::Builtin(Builtin::EnumGetValue),
+                    AbilityImplKind::Builtin(BuiltinAbility::Enum),
                     span,
                 );
                 let handle = AbilityImplHandle {

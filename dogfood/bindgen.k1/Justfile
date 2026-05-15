@@ -1,0 +1,2 @@
+rust-bindgen:
+  bindgen file.cpp --default-enum-style foo --opaque-type opaq -o file.rs

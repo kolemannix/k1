@@ -1,15 +1,15 @@
-nocommit https://asciinema.org/
-For the joy of programming
+A language for the joy of programming
 
-`k1` is like C with 
+`k1` is a next-generation programming language with
 - typeclasses
 - full compile-time execution
-- algebraic data types
-- capturing lambdas
+- programmable, stuctural types and rich type expressions (like Typescript)
+- modern generics, including typeclass bounds
+- advanced sum and enum types
 - pattern matching
 - semi-automatic memory management
+- capturing lambdas
 - next-generation metaprogramming
-- modern generics
 
 ## Tenets
 ### Programming should be joyful
