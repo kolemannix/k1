@@ -67,15 +67,16 @@ deftype alias byte = u8
 ns types {
 
   // Magically implemented for all enums
+  // enum must have ability id 1
   ability enum[impl v] {
     fn enum-value(self): v
   }
 
   // Implement equals for all enums in userspace B-)
+  // nocommit: This will get tried first for every type that wants equals; probably not ideal
   impl[i: equals, e: types/enum[v = i]] equals for e {
     fn equals(self: e, other: e): bool { self.enum-value() == other.enum-value() }
   }
-
 
   // The size, in bytes, of type t. Unlike C's sizeof, does not include end padding
   intern fn size-of[t](): size
@@ -209,7 +210,7 @@ ns meta {
 ////////////////////////////////
 // Built-in Abilities
 
-// equals must have ability id 0
+// equals must have ability id 2
 ability equals {
   fn equals(self, other: self): bool
 }

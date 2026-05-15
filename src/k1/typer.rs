@@ -173,6 +173,16 @@ impl InferenceContext {
         }
     }
 
+    pub fn print_lengths(&self) {
+        eprintln!("s origin_stack {}", self.origin_stack.len());
+        eprintln!("s params {}", self.params.len());
+        eprintln!("s solutions_so_far {}", self.solutions_so_far.len());
+        eprintln!("s inference_vars {}", self.inference_vars.len());
+        eprintln!("s constraints {}", self.constraints.len());
+        eprintln!("s substitutions {}", self.substitutions.len());
+        eprintln!("s substitutions_vec {}", self.substitutions_vec.len());
+    }
+
     pub fn reset(&mut self) {
         self.origin_stack.clear();
         self.params.clear();
@@ -6342,15 +6352,6 @@ impl TypedProgram {
         target_ability_args: &[Option<TypeId>],
         span: SpanId,
     ) -> Option<AbilityImplHandle> {
-        // Push an inference context so our ability inference doesn't clash with any
-        // already ongoing inference. We also can end up applying blanket implementations
-        // recursively, so we need an entire stack not just a double buffer situation
-        // There is no need to pop this on our return because the infer_types machinery
-        // will pop it when it completes. We just have to push one to ensure inference
-        // runs on a clean state, and so that once popped, the old state is restored
-        self.ictx_push();
-        // NOT NEEDED: let mut self_ = scopeguard::guard(self, |s| self_.ictx_pop());
-
         let blanket_impl = self.ability_impls.get(blanket_impl_id);
         let blanket_impl_ability_id = blanket_impl.ability_id;
         let blanket_impl_scope_id = blanket_impl.scope_id;
@@ -6418,6 +6419,16 @@ impl TypedProgram {
             self.ability_impls.get(blanket_impl_id).blanket_type_params;
         let root_scope_id = self.scopes.root_scope_id();
         let blanket_impl_type_params = self.mem.getn(blanket_impl_type_params_handle);
+
+        // Push an inference context so our ability inference doesn't clash with any
+        // already ongoing inference. We also can end up applying blanket implementations
+        // recursively, so we need an entire stack not just a double buffer situation
+        // There is no need to pop this on our return because the infer_types machinery
+        // will pop it when it completes. We just have to push one to ensure inference
+        // runs on a clean state, and so that once popped, the old state is restored
+        self.ictx_push();
+        // NOT NEEDED: let mut self_ = scopeguard::guard(self, |s| self_.ictx_pop());
+
         let solutions_result = self.infer_types(
             blanket_impl_type_params,
             blanket_impl_type_params_handle,
@@ -10977,6 +10988,21 @@ impl TypedProgram {
                     return failf!(call_span, "testCompile takes one argument");
                 }
                 let arg = self.ast.mem.get_nth(fn_call.args, 0);
+                // Because testCompile errors get swallowed, we have to be
+                // more restrictive about what you can do in there
+                if ctx.is_inference() {
+                    return failf!(
+                        call_span,
+                        "Cannot use testCompile when types are being inferred"
+                    );
+                }
+                self.compile_all_pending_ir(call_span).map_err(|mut e| {
+                    e.message = format!(
+                        "Failed to compile pending units before testCompile: {}",
+                        e.message
+                    );
+                    e
+                })?;
                 let result = self.eval_expr(arg.value, ctx.with_no_expected_type());
                 let expr = match result {
                     Err(typer_error) => {
@@ -10990,10 +11016,12 @@ impl TypedProgram {
             } else if n == self.ast.idents.b.writef || n == self.ast.idents.b.writelnf {
                 let newline = n == self.ast.idents.b.writelnf;
                 if fn_call.args.len() < 2 {
-                    return failf!(call_span, "write requires 2 arguments");
+                    return failf!(call_span, "writef requires at least 2 arguments");
                 }
+                let ctx_no_hint = ctx.with_no_expected_type();
+
                 let writer_arg = self.ast.mem.get_nth(fn_call.args, 0);
-                let writer_expr = self.eval_expr(writer_arg.value, ctx.with_no_expected_type())?;
+                let writer_expr = self.eval_expr(writer_arg.value, ctx_no_hint)?;
                 let (_writer_impl, needs_addr_of) = self.expect_ability_impl(
                     self.exprs.get_type(writer_expr),
                     ABILITY_ID_WRITER,
@@ -11009,28 +11037,35 @@ impl TypedProgram {
                 let fmt_string_arg = self.ast.mem.get_nth(fn_call.args, 1);
                 let fmt_string = match self.ast.exprs.get(fmt_string_arg.value) {
                     ParsedExpr::Literal(ParsedLiteral::String(string_id, _)) => {
-                        let parts =
-                            self.ast.mem.pushn(&[InterpolatedStringPart::String(*string_id)]);
+                        let string_part = InterpolatedStringPart::String(*string_id);
+                        let newline_string_id = self.ast.strings.intern("\n");
+                        let parts = if newline {
+                            self.ast.mem.pushn(&[
+                                string_part,
+                                InterpolatedStringPart::String(newline_string_id),
+                            ])
+                        } else {
+                            self.ast.mem.pushn(&[string_part])
+                        };
                         parts
                     }
-                    ParsedExpr::InterpolatedString(is) => is.parts,
+                    ParsedExpr::InterpolatedString(is) => {
+                        let mut parts = self.ast.mem.new_list(is.parts.len() + newline as u32);
+                        parts.extend(self.ast.mem.getn(is.parts));
+                        if newline {
+                            let newline_string_id = self.ast.strings.intern("\n");
+                            parts.push(InterpolatedStringPart::String(newline_string_id))
+                        }
+                        self.ast.mem.list_to_handle(parts)
+                    }
                     _ => kbail!(self, call_span, "Expected a format string"),
                 };
                 let args = match self.ast.mem.get_nth_opt(fn_call.args, 2) {
                     None => self.synth_empty_struct(call_span),
-                    Some(args_arg) => {
-                        self.eval_expr(args_arg.value, ctx.with_no_expected_type())?
-                    }
+                    Some(args_arg) => self.eval_expr(args_arg.value, ctx_no_hint)?,
                 };
                 let format_block =
-                    self.synth_format_calls(writer, fmt_string, args, call_span, ctx)?;
-
-                // Write a newline into writer
-                if newline {
-                    let newline_string_id = self.ast.strings.intern("\n");
-                    let newline_string = self.synth_string_literal(newline_string_id, SpanId::NONE);
-                    self.synth_printto_call(newline_string, writer, ctx.with_no_expected_type())?;
-                }
+                    self.synth_format_calls(writer, fmt_string, args, call_span, ctx_no_hint)?;
 
                 Ok(Some(format_block))
             } else if n == self.ast.idents.b.stringf {
@@ -14980,8 +15015,13 @@ impl TypedProgram {
                     );
                     return Ok(());
                 };
+                let block_ast = *block_ast;
+                if !self.inference_context_stack.is_empty() {
+                    eprintln!("Need clean inference");
+                    self.ictx_push();
+                }
                 let block = self.eval_expr(
-                    *block_ast,
+                    block_ast,
                     EvalExprContext::make(fn_scope_id)
                         .with_expected_type(Some(return_type))
                         // Why do we care to indicate if the function is generic?

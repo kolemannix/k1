@@ -75,7 +75,6 @@ deftype BindgenState = {
 impl print for k1-defn {
   fn printTo[w: writer](self, w) {
     switch self {
-      // nocommit: write-string is too long
       :struct(s) -> { w.string("struct "); w.string(s.name)},
       :function -> w.string("function"),
       :typedef -> w.string("typedef"),

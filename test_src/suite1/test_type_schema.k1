@@ -16,12 +16,7 @@ ns type_schema {
     let name = type-name(id);
     sb.string("Struct {name} {{\n");
     for field in fields {
-      // nocommit writelnf
-      sb.string("  ");
-      sb.string(field.name);
-      sb.string(": ");
-      sb.string(type-name(field.type-id));
-      sb.string("\n");
+      writelnf(sb, "  {field.name}: {type-name(field.type-id)}", );
     };
     sb.string("}");
     sb.build()

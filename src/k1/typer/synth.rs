@@ -693,7 +693,11 @@ impl TypedProgram {
             }
             i += 1
         }
-        Ok(self.exprs.add_block(&mut self.mem, block, EMPTY_TYPE_ID))
+        if block.statements.is_empty() {
+            Ok(self.synth_empty_struct(span))
+        } else {
+            Ok(self.exprs.add_block(&mut self.mem, block, EMPTY_TYPE_ID))
+        }
     }
 
     /// Produces a string, resulting from using a core/string-builder

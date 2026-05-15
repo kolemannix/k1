@@ -32,7 +32,7 @@ fn foo[t: pred no-password](t: t) {
 
 fn test() {
   assert(testCompile(foo({ password: "Passw0rd!" })).isSome());
-  assertEquals(testCompile(foo({ assword: "Passw0rd!" })), :none);
+  assertEquals[?string](testCompile(foo({ assword: "Passw0rd!" })), :none);
 
   let _i: int-wrapper[u64] = { value: 42 };
 

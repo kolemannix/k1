@@ -1,32 +1,31 @@
-deftype foo = either(u8) { a = 1, b = 2, c = 4 }
-deftype foo2 = either(u8) { a=0, b, c=255 }
-
-deftype foo3 = either { a, b, c }
-
-deftype bar = either { a(bool) = 0b001, b(int) = 0b010, c(u32) = 0b100 }
-
-fn inspect-enum[t]() {
-  require types/get-type-schema[t] is :enum(e) else crash("");
-  for e.values {
-    //nocommit: Do not emit ls entities for calls that are synthesized
-    println("{it.value} {it.name}")
-  }
+fn printStructShape[T](): string {
+  let id = types/type-id[T];
+  require types/get-type-schema[T] is :struct({ fields }) else { return("") };
+  let sb = StringBuilder/new();
+  let name = types/type-name(id);
+  sb.string("Struct {name} {{\n");
+  for field in fields {
+    writef(sb, "");
+    // sb.string("  ");
+    sb.string(field.name);
+    sb.string(": ");
+    sb.string(types/type-name(field.type-id));
+    sb.string("\n");
+  };
+  sb.string("}");
+  sb.build()
 }
-fn inspect-sum[t]() {
-  require types/get-type-schema[t] is :either(s) else crash("");
-  for s.variants {
-    println("{it.tag} {it.name}")
-  }
+
+deftype Point3[T] = {
+  x: T, y: T, z: T
 }
 
 fn main(): i32 {
+  assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
+  assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
+  assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
+  assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
   0
 }
 
-#static {
-  //inspect-enum[foo];
-  //inspect-enum[foo2];
-  //inspect-enum[foo3];
-
-  inspect-sum[bar];
-}
+#static main()
