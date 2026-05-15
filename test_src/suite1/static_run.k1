@@ -2,7 +2,8 @@ ns static_run;
 let INT_SPAN: span[int] = [1,2,3,4,5]
 
 let i2: 12 = { 3 * 4 }
-let i3: 12 = #static #static 3 * 4
+// The extra blocks circumvent a warning
+let i3: 12 = { 1; #static { 1; #static 3 * 4 } }
 
 let s1: string = {
   let a = "asd";
