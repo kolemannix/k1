@@ -46,9 +46,9 @@ fn _writeJsonFromSchema(code: *mut StringBuilder, name: string, type-id: u64) {
 
         let fieldLetName = `_{name}{f.name}`;
 
-        code.write-string(
+        code.string(
 `let {fieldLetName} = {name}.{f.name};
-w.write-string("\"{f.name}\":");
+w.string("\"{f.name}\":");
 `
        ); //" fix quote
 

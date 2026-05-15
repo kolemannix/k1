@@ -26,7 +26,7 @@ fn fmt[Fmt: static string, Args, w: writer](w, fmtString: Fmt, args: Args) {
         };
         //meta/emitLine("its a string baby");
         code.line("parts.get(0).printTo(w);");
-        code.line("w.write-string(args);");
+        code.line("w.string(args);");
       },
       :struct({fields}) -> {
         if parts.len != fields.len() {

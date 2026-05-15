@@ -14,15 +14,16 @@ ns type_schema {
     require get-type-schema[T] is :struct({ fields }) else { return("") };
     let* sb = StringBuilder/new();
     let name = type-name(id);
-    sb.write-string("Struct {name} {{\n");
+    sb.string("Struct {name} {{\n");
     for field in fields {
-      sb.write-string("  ");
-      sb.write-string(field.name);
-      sb.write-string(": ");
-      sb.write-string(type-name(field.type-id));
-      sb.write-string("\n");
+      // nocommit writelnf
+      sb.string("  ");
+      sb.string(field.name);
+      sb.string(": ");
+      sb.string(type-name(field.type-id));
+      sb.string("\n");
     };
-    sb.write-string("}");
+    sb.string("}");
     sb.build()
   }
 

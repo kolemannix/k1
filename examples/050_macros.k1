@@ -26,7 +26,7 @@ fn addlazy(x: string, y: string): string {
 // This is a dynamic 'macro' that will repeat the given expression n times
 fn repeat(n: int, expr: string): string {
   let sb = StringBuilder/new();
-  for IntRange/upTo(n) { sb.write-string("{expr};") };
+  for IntRange/upTo(n) { sb.string("{expr};") };
   sb.build()
 }
 

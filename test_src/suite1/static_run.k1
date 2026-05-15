@@ -151,7 +151,7 @@ fn test() {
 
   assertEquals[string](#static {
     let* sb = StringBuilder/new();
-    sb.write-string("Hello");
+    sb.string("Hello");
     sb.build()
   }, "Hello");
 

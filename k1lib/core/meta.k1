@@ -19,7 +19,7 @@ ns meta {
 
       self.indent(indent + 1);
       self.line(p"fn printTo[w: writer](self, w) {");
-      self.write-string(body);
+      self.string(body);
       self.indent(indent + 1);
       self.line("}");
 
@@ -30,13 +30,14 @@ ns meta {
   
   impl[w: writer] CodeWriter for w {
     fn line(self, line: string) {
-      self.write-string(line);
-      self.write-string("\n");
+      self.string(line);
+      // nocommit: line in writer?
+      self.string("\n");
     }
     
     fn var[T](self, name: string, value: T) {
       let bakedVar = meta/bakedVariable[T](name, value);
-      self.write-string(bakedVar)
+      self.string(bakedVar)
     }
   }
 

@@ -275,10 +275,10 @@ ns list {
   fn join[T: show](self: list[T], sep: string): string {
     let b = StringBuilder/new();
     for s in self {
-      &b.write-string(s.show());
+      &b.string(s.show());
       let isLast = itIndex != self.len - 1;
       if not isLast {
-        &b.write-string(sep);
+        &b.string(sep);
       }
     };
     b.build()
@@ -349,7 +349,7 @@ impl[T: print] print for list[T] {
       it.printTo(w);
       let last = itIndex == self.len - 1;
       if not last {
-        w.write-string(",");
+        w.string(",");
       };
     };
     w.write-char(']');

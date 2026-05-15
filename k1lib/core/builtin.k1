@@ -223,10 +223,12 @@ ability writer {
   fn write-char(self, value: char) { self.write-byte(value.as[u8]) }
   fn write-string(self, value: string) { self.write-bytes(value.span-bytes()) }
 
+  fn string(self, string) { self.write-string(string) }
+
   fn repeat(self, value: string, n: size) {
     let i = 0;
     while i < n {
-      self.write-string(value);
+      self.string(value);
       i := i + 1;
     }
   }

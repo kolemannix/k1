@@ -2,8 +2,8 @@ ns string_interp_test;
 
 impl print for { name: string, weight: int } {
   fn printTo[w: writer](self, w) {
-    w.write-string(self.name);
-    w.write-string(": ");
+    w.string(self.name);
+    w.string(": ");
     self.weight.printTo(w);
     {}
   }

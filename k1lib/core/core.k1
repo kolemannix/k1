@@ -67,7 +67,7 @@ fn print(s: string) {
   if k1/is-static and compiler/capture-prints {
     k1/emit-compiler-message(compiler/location(), :info, s)
   } else {
-    io/stdout.write-string(s)
+    io/stdout.string(s)
   };
   {}
 }
@@ -82,7 +82,7 @@ fn eprint(s: string) {
   if k1/is-static and compiler/capture-prints {
     k1/emit-compiler-message(compiler/location(), :warn, s)
   } else {
-    io/stderr.write-string(s)
+    io/stderr.string(s)
   };
   {}
 }
@@ -280,7 +280,7 @@ impl[T: print] show for T {
 impl print for bool {
   fn printTo[w: writer](self: bool, w) { 
     let s = if self "true" else "false";
-    w.write-string(s)
+    w.string(s)
   }
 }
 impl show for bool { fn show(self: bool): string { if self "true" else "false" } }
@@ -581,7 +581,7 @@ impl print for f64 {
 
 impl print for ptr {
   fn printTo[w: writer](self: ptr, w) {
-    w.write-string("0x");
+    w.string("0x");
     formatUInt(context w)(self.as[usize], base = 16);
   }
 }

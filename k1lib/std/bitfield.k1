@@ -123,7 +123,7 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
     let getName = "get{info.nameCap}";
     let last = itIndex + 1 == members.len();
     let sep = if last "" else ",";
-    writelnf(printBody, `    w.write-string("{it.name}={{self.{getName}()}{sep}");`);
+    writelnf(printBody, `    w.string("{it.name}={{self.{getName}()}{sep}");`);
   };
   code.implPrint(type-name, printBody.build(), indent = 0);
 
