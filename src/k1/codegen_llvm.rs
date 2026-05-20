@@ -1487,7 +1487,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Indirect(PointerValue<'ctx>),
         }
         let (llvm_callee, cg_fn_type) = match callee {
-            IrCallee::Builtin(function_id, _)
+            IrCallee::BackendBuiltin(function_id, _)
             | IrCallee::Direct(function_id)
             | IrCallee::Extern { function_id, .. } => {
                 self.declare_llvm_function(function_id)?;

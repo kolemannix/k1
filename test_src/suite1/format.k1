@@ -15,9 +15,9 @@ fn test() {
   assertEquals("-3.140000", stringf("{}", -3.14));
   assertEquals("-3", stringf("{}", -3i8));
   
-  assert(testCompile(stringf("{}", 1, 1)).isSome());
-  assert(testCompile(stringf("{missing}", {x:1})).isSome());
-  assert(testCompile(stringf("{x}", {x: { nested: "asdf" }})).isSome());
+  assert(testCompile(stringf("{}", 1, 1)).is-some());
+  assert(testCompile(stringf("{missing}", {x:1})).is-some());
+  assert(testCompile(stringf("{x}", {x: { nested: "asdf" }})).is-some());
 
   // Or you can just make strings directly, mixing interpolated expressions
   // with struct specifiers

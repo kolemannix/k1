@@ -47,6 +47,9 @@ Simple but missing
 - [ ] Require that a blanket impl's params appear in the Self type
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
+- [ ] Test handling of NaN and Infinity literals, other float edge cases
+
+## [ ] very readable compiler trace, incl specialization args, for debugging
 
 ## [ ] Constant-folding, SCCP
 
@@ -114,6 +117,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: Optimize StaticValue representation for aggregates to be the same as the VM representation
 - [-] Real layouts, in a mem pool, to save roundtripping and increase locality
         -> Kinda done, we now re-use the values in a global 'static stack'
+- [ ] BYTE ARRAYS ARE REPRESENTED BY A SEQ OF IDS
 - [ ] We'll want to skip the id-based repr entirely for heavy heavy static data I think
 
 ## Project: Arena-based core, builtins, stdlib 
@@ -368,11 +372,10 @@ It currently runs directly off the typed tree
 
 ## Ideas
 - [ ] 'join' types to form new enums/structs, statically. `switch {strict|dynamic} ...`? If dynamic, I'll build a sum or product based on the branches' types
+  - [ ] This would be a cool type of branch; 'infer a new sum for me based on all the branches'. `switch(merge) <abc> { ... }`
 - [ ] Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
   - (Monad ability would require closures and generic abilities, which we now have. Just need higher order type params `F[_]`
-- [ ] Require named fncall args by default; and allow anonymous w/ declaration like Jakt?
-- [ ] Test handling of NaN and Infinity, other float edge cases
-- [ ] Try to encode prefix strings, aka German/Umbra strings
+  - This is a good test of a user macro system
 
 ## Compiler
 - [x] LLVM: avoid loading aggregate values directly
@@ -388,7 +391,7 @@ It currently runs directly off the typed tree
 - [x] A '?' operator for early return? We could do an ability for it!
 
 ## Memory Management story
-- [ ] Semi-auto, mostly arenas, perhaps 2 global ones, 'perm' and 'tmp' via thread-locals, standard library built around them
+- [x] Semi-auto, mostly arenas, perhaps 2 global ones, 'perm' and 'tmp' via thread-locals, standard library built around them
 
 # Major fix
 - [x] Unmatched closing delim in namespace causes silent failure to parse rest of sources
@@ -629,9 +632,6 @@ It currently runs directly off the typed tree
 - [x] uint type
 - [x] Generic type inference
 - [x] Type literals would be fun
-- [ ] Syntax Shed
-  - [ ] Function syntax change? (foo = fn (a, b, c): int { }
-  - [ ] from qualifier-focused to name -focused
   - [x] Parse trailing commas
 
 - [-] For iteration (we will just hardcode the iterable types)
@@ -647,7 +647,7 @@ It currently runs directly off the typed tree
   - [x] correct line nums
   - [x] correct spans (depends on multifile)
   - [x] correct file path
-  - [ ] Add lexical scopes for if and while
+  - [x] Add lexical scopes for if and while
 
 # Optionals
 
@@ -676,11 +676,11 @@ It currently runs directly off the typed tree
 
 - [x] I really need a way to write code in Zig or C and use it in my stl to move things along
 - [x] Zig binding of my Array
-- [ ] Early return
+- [x] Early return
 - [x] Implicit return of unit if no return statement
 - [x] string.indexOf
   - charToString implemented in zig and linked
-- [ ] Array.distinct in zig
+- [x] Array.distinct in zig
 - [x] Not equal != operator
 - [x] Unary negation operator
 

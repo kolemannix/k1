@@ -30,7 +30,7 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
   writelnf(code, "deftype {type-name} = {{ bits: {baseName} }");
 
   // We crack open a namespace to put some goodies inside
-  writelnf(code, "ns {type-name} {{");
+  writelnf(code, "ns for {type-name} {{");
 
   // This actually gets captured by the lambda below
   let bitIndexVal = 0;

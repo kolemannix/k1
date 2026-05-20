@@ -9,7 +9,7 @@
 // as your 'slice' type, and we'll rename this, perhaps, to RawBuffer
 // It'll be the same thing except for a 'Promise' from the creator that
 // it's fully populated
-ns buffer {
+ns for buffer {
 
   fn bufferSizeBytes[T](count: size): size {
     count * core/types/size-of-stride[T]()
@@ -308,7 +308,7 @@ deftype BufferIterator[T] = {
   buf: buffer[T],
   pos: size
 }
-ns BufferIterator {
+ns for BufferIterator {
   fn fromBuffer[T](buf: buffer[T]): BufferIterator[T] { 
     { buf, pos: 0 }
   }
@@ -358,7 +358,7 @@ deftype BufferRefIterator[T] = {
   buf: buffer[T],
   pos: size
 }
-ns BufferRefIterator {
+ns for BufferRefIterator {
   fn fromBuffer[T](buf: buffer[T]): BufferRefIterator[T] { 
     { buf, pos: 0 }
   }

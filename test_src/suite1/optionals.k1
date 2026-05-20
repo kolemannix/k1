@@ -12,9 +12,9 @@ fn testBasics(): int {
     assert(x);
   };
 
-  assert(opt/isSome[bool](b));
+  assert(opt/is-some[bool](b));
   let c: ?int = :none;
-  assert(not c.isSome());
+  assert(not c.is-some());
 
   use types/type-id;
   assert(type-id[PointMaybeY.y.some] == type-id[int]);

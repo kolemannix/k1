@@ -11,13 +11,13 @@ fn testBasicIntRangeIteration() {
   assert(iter.next().! == 2);
   assert(iter.next().! == 3);
   assert(iter.next().! == 4);
-  assert(iter.next().isNone());
+  assert(iter.next().is-none());
 }
 
 fn testEmptyIntRange() {
   let* iter = IntRange/make(0, 0).iterator();
   
-  assert(iter.next().isNone());
+  assert(iter.next().is-none());
 }
 
 fn testNegativeIntRange() {
@@ -28,7 +28,7 @@ fn testNegativeIntRange() {
   assert(iter.next().! == -1);
   assert(iter.next().! == 0);
   assert(iter.next().! == 1);
-  assert(iter.next().isNone());
+  assert(iter.next().is-none());
 }
 
 fn testUpTo() {
@@ -37,7 +37,7 @@ fn testUpTo() {
   assert(iter.next().! == 0);
   assert(iter.next().! == 1);
   assert(iter.next().! == 2);
-  assert(iter.next().isNone());
+  assert(iter.next().is-none());
 }
 
 fn testStepBy() {
@@ -76,9 +76,9 @@ fn testNth() {
   assert(iter.next().! == 4);  // Next should be 4
   
   assert(iter.nth(4).! == 9);  // Skip 4 more to get to 8
-  assert(iter.next().isNone());  // Next should be 9
+  assert(iter.next().is-none());  // Next should be 9
   
-  assert(iter.nth(1).isNone());  // Try to skip past end
+  assert(iter.nth(1).is-none());  // Try to skip past end
 }
 
 fn testAdvanceBy() {

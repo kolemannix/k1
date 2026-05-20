@@ -55,13 +55,13 @@ w.string("\"{f.name}\":");
         _writeJsonFromSchema(code, fieldLetName, f.type-id);
         let last = itIndex == s.fields.len() - 1;
         if not last {
-          code.line(`w.write-string(",");`);
+          code.line(`w.string(",");`);
         }
       };
       code.line(`w.write-char('}');`);
     },
     :bool -> {
-      code.line(`w.write-string(if {name} "true": string else "false");`)
+      code.line(`w.string(if {name} "true": string else "false");`)
     },
     :int(_) -> code.line(`{name}.printTo(w);`),
     :either(_) -> {
@@ -69,7 +69,7 @@ w.string("\"{f.name}\":");
       crash("Cannot yet create a JSON writer for either: {tName}")
     },
     _ -> {
-      code.line(`w.write-string(\`"other"\`)`)
+      code.line(`w.string(\`"other"\`)`)
     }
   };
 }

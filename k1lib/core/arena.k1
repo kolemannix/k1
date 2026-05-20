@@ -9,7 +9,7 @@ deftype arena = {
   cur-addr: ptr,
   max-addr: ptr
 }
-ns arena {
+ns for arena {
   let kb: size = 1024
   let mb: size = 1048576
   let gb: size = 1073741824

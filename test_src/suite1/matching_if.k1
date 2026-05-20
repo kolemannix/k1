@@ -107,7 +107,7 @@ fn test() {
   let shadowFailure = testCompile({
     if mixed is :some({ outer: o, inner: :some({ value: o })}) {} else {}
   });
-  assert(shadowFailure.isSome());
+  assert(shadowFailure.is-some());
 
   let myOpt = some(42);
   let yourOpt = some(false);

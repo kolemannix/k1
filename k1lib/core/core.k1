@@ -30,7 +30,7 @@ ns iter {
   }
 
   fn contains[T: equals, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, needle: T): bool {
-    position(iterable, needle).isSome()
+    position(iterable, needle).is-some()
   }
 
   fn forall[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some fn T -> bool): bool {
@@ -138,7 +138,7 @@ ns sys {
   }
 
   fn parseMainArgs(argCount: u32, args: ptr): span[string] {
-    let buf = buffer/fromPtrAndCount[c-string](
+    let buf = buffer/fromPtrAndCount[ptr](
       count = argCount.as[size],
       ptr = args
     );
@@ -194,7 +194,7 @@ fn assertMsg(context locn: compiler/source-location)(msg: string, value: bool) {
   };
 }
 
-ns char {
+ns for char {
   fn toString(self: char): string {
     string/wrapList([self])
   }
@@ -429,7 +429,7 @@ impl comparable for u8 {
   }
 }
 
-ns u8 {
+ns for u8 {
   // TODO: replace with char -> digit lut
   fn toAsciiDigit(v: u8): char {
     if v < 10 {
@@ -444,17 +444,17 @@ ns u8 {
   }
 }
 
-ns u32 {
+ns for u32 {
   let minValue: u32 = 0x00000000
   let maxValue: u32 = 0xFFFFFFFF
 }
 
-ns i32 {
+ns for i32 {
   let maxValue: i32 = 0x7FFFFFFF
   let minValue: i32 = -0x80000000
 }
 
-ns i64 {
+ns for i64 {
   let maxValue: i64 = 0x7FFFFFFFFFFFFFFF
   let minValue: i64 = -0x8000000000000000
   fn nextPow2(self: i64): i64 {
@@ -475,7 +475,7 @@ ns i64 {
   }
 }
 
-ns u64 {
+ns for u64 {
   fn nextPow2(self: u64): u64 {
     let v = self - 1;
     v := v | (v >> 1);
@@ -508,7 +508,7 @@ ns k1rt {
   extern("k1rt", "_k1_parse_f64") fn parse-f64()
 }
 
-ns f64 {
+ns for f64 {
   fn format[w: writer](f: f64, w, places: i32) {
     let* stackBuf = array/zeroed[u8, 32]();
     let writtenLen: i32 = k1rt/snprintf_f64(stackBuf.get-base().as[ptr], 32, f, places);

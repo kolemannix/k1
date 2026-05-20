@@ -212,6 +212,24 @@ pub enum BackendBuiltin {
     CompilerMessage,
 }
 
+impl BackendBuiltin {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            BackendBuiltin::TypeSchema => "type_schema",
+            BackendBuiltin::TypeName => "type_name",
+            BackendBuiltin::Allocate => "allocate",
+            BackendBuiltin::AllocateZeroed => "allocate_zeroed",
+            BackendBuiltin::Reallocate => "reallocate",
+            BackendBuiltin::Free => "free",
+            BackendBuiltin::MemCopy => "mem_copy",
+            BackendBuiltin::MemSet => "mem_set",
+            BackendBuiltin::MemEquals => "mem_equals",
+            BackendBuiltin::Exit => "exit",
+            BackendBuiltin::CompilerMessage => "compiler_message",
+        }
+    }
+}
+
 #[derive(Copy, Clone)]
 pub struct PhysicalFunctionParam {
     pub original_index: Option<u16>,
@@ -239,15 +257,21 @@ impl PhysicalFunctionType {
 
 #[derive(Clone, Copy)]
 pub enum IrCallee {
-    Builtin(FunctionId, BackendBuiltin),
+    /// The backend is responsible for implementing this call
+    BackendBuiltin(FunctionId, BackendBuiltin),
+    /// A normal function call
     Direct(FunctionId),
+    /// Standard 'indirect' call, by function pointer
     Indirect(PhysicalFunctionType, Value),
+    /// Externally linked call. The VM will attempt to dynamically
+    /// invoke this function using libffi, the llvm backend will just
+    /// emit a call and expect linkage
     Extern {
         library_name: Option<parse::Ident>,
         function_name: parse::Ident,
         function_id: FunctionId,
     },
-    // No lambda call; been compiled down to just calls and args by now
+    // (No lambda call; been compiled down to just calls and args by now)
 }
 
 impl IrCallee {
@@ -838,14 +862,12 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
     };
 
     let unit_id = IrUnitId::Function(function_id);
-    let builtin_kind = match intrinsic_type {
+    let maybe_backend_builtin = match intrinsic_type {
+        Some(Builtin::Backend(kind)) => Some(kind),
+        Some(_) => None,
         None => None,
-        Some(i) => match builtin_handler(i) {
-            BuiltinHandler::Backend(backend_builtin) => Some(backend_builtin),
-            _ => None,
-        },
     };
-    finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, builtin_kind)?;
+    finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, maybe_backend_builtin)?;
 
     if is_debug {
         let s = unit_to_string(b.k1, unit_id, true);
@@ -1473,55 +1495,6 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
     }
 }
 
-pub enum BuiltinHandler {
-    IrBakeStaticValue,
-    IrZeroed,
-    IrBoolNegate,
-    IrBitNot,
-    IrBitCast,
-    IrArithBinop(ArithOpKind),
-    IrBitwiseBinop(BitwiseBinopKind),
-    IrPointerIndex,
-    Typer,
-    Backend(BackendBuiltin),
-}
-pub fn builtin_handler(intrinsic_op: Builtin) -> BuiltinHandler {
-    use BuiltinHandler as H;
-    match intrinsic_op {
-        Builtin::TypeSize => H::Typer,
-        Builtin::TypeStride => H::Typer,
-        Builtin::TypeAlign => H::Typer,
-        Builtin::CompilerSourceLocation => H::Typer,
-        Builtin::GetStaticValue => H::Typer,
-        Builtin::StaticTypeToValue => H::Typer,
-        Builtin::TypeId => H::Typer,
-        Builtin::EnumGetValue => H::Typer,
-
-        Builtin::BakeStaticValue => H::IrBakeStaticValue,
-        Builtin::CompilerMessage => H::Backend(BackendBuiltin::CompilerMessage),
-        Builtin::Zeroed => H::IrZeroed,
-
-        Builtin::TypeName => H::Backend(BackendBuiltin::TypeName),
-        Builtin::TypeSchema => H::Backend(BackendBuiltin::TypeSchema),
-
-        Builtin::BoolNegate => H::IrBoolNegate,
-        Builtin::BitNot => H::IrBitNot,
-        Builtin::BitCast => H::IrBitCast,
-        Builtin::ArithBinop(kind) => H::IrArithBinop(kind),
-        Builtin::BitwiseBinop(kind) => H::IrBitwiseBinop(kind),
-        Builtin::PointerIndex => H::IrPointerIndex,
-
-        Builtin::Allocate => H::Backend(BackendBuiltin::Allocate),
-        Builtin::AllocateZeroed => H::Backend(BackendBuiltin::AllocateZeroed),
-        Builtin::Reallocate => H::Backend(BackendBuiltin::Reallocate),
-        Builtin::Free => H::Backend(BackendBuiltin::Free),
-        Builtin::MemCopy => H::Backend(BackendBuiltin::MemCopy),
-        Builtin::MemSet => H::Backend(BackendBuiltin::MemSet),
-        Builtin::MemEquals => H::Backend(BackendBuiltin::MemEquals),
-        Builtin::Exit => H::Backend(BackendBuiltin::Exit),
-    }
-}
-
 fn compile_expr(
     b: &mut Builder,
     // Where to put the result; aka value placement or destination-aware codegen
@@ -1654,248 +1627,42 @@ fn compile_expr(
             let callee_fn_type = b.get_physical_fn_type(function_type_id);
 
             let maybe_function_id = call.callee.maybe_function_id();
-            let (intrinsic_op, linkage) = match maybe_function_id {
+            let (maybe_builtin, linkage) = match maybe_function_id {
                 None => (None, None),
                 Some(f_id) => {
                     let f = b.k1.get_function(f_id);
                     (f.builtin_type, Some(f.linkage))
                 }
             };
-            let (callee, environment_arg) = match (intrinsic_op, linkage) {
-                (Some(intrinsic), _) => {
-                    let backend_builtin = match builtin_handler(intrinsic) {
-                        BuiltinHandler::IrBakeStaticValue => {
-                            return {
-                                // intern fn bakeStaticValue[T](value: T): u64
-                                let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
-                                let _physical_type = b.get_physical_type(type_id);
 
-                                let arg0 = *b.k1.mem.get_nth(call.args, 0);
-                                let value = compile_expr(b, None, arg0)?;
-                                let bake =
-                                    b.push_inst_anon(Inst::BakeStaticValue { type_id, value });
+            let callee: IrCallee;
+            let mut environment_arg: Option<Value> = None;
 
-                                // Produces a type id, which is a scalar
-                                let stored = store_rich_if_dst(
-                                    b,
-                                    dst,
-                                    callee_fn_type.return_type,
-                                    bake.as_value(),
-                                    "",
-                                );
-                                Ok(stored)
-                            };
-                        }
-                        BuiltinHandler::IrZeroed => {
-                            return {
-                                let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
-                                let pt = b.get_physical_type(type_id);
-                                match pt.as_enum() {
-                                    PhysicalTypeEnum::Empty => Ok(Value::Empty),
-                                    PhysicalTypeEnum::Agg(agg_id) => {
-                                        let pt_layout = b.k1.types.agg_types.get(agg_id).layout;
-                                        let dst = match dst {
-                                            None => b.push_alloca(pt, "zeroed no dst").as_value(),
-                                            Some(dst) => dst,
-                                        };
-                                        let zero_u8 = Value::byte(0);
-                                        // intern fn set(dst: ptr, value: u8, count: size): unit
-                                        let count = b.make_int_value(
-                                            &TypedIntValue::I64(pt_layout.size as i64),
-                                            "memset size",
-                                        );
-                                        let memset_args = b.k1.ir.mem.pushn(&[dst, zero_u8, count]);
-                                        let Some(memset_function_id) = b.k1.scopes.find_function(
-                                            b.k1.scopes.mem_scope_id,
-                                            b.k1.ast.idents.b.set,
-                                        ) else {
-                                            b_ice!(b, "Missing memset function");
-                                        };
-                                        let memset_call = IrCall {
-                                            ret_type: PhysicalType::EMPTY,
-                                            callee: IrCallee::Builtin(
-                                                memset_function_id,
-                                                BackendBuiltin::MemSet,
-                                            ),
-                                            args: memset_args,
-                                            dst: None,
-                                        };
-                                        let call_id = b.k1.ir.calls.add(memset_call);
-                                        b.push_inst(Inst::Call { call_id }, "zeroed memset");
-                                        Ok(dst)
-                                    }
-                                    PhysicalTypeEnum::Scalar(st) => {
-                                        let zero_value = zero(st);
-                                        let stored = store_scalar_if_dst(b, dst, zero_value);
-                                        Ok(stored)
-                                    }
-                                }
-                            };
-                        }
-                        BuiltinHandler::IrBoolNegate => {
-                            return {
-                                let arg0 = *b.k1.mem.get_nth(call.args, 0);
-                                let base = compile_expr(b, None, arg0)?;
-                                let neg = b.push_inst_anon(Inst::BoolNegate { v: base });
-                                let stored = store_scalar_if_dst(b, dst, neg.as_value());
-                                Ok(stored)
-                            };
-                        }
-                        BuiltinHandler::IrBitNot => {
-                            return {
-                                let arg0 = *b.k1.mem.get_nth(call.args, 0);
-                                let base = compile_expr(b, None, arg0)?;
-                                let neg = b.push_inst_anon(Inst::BitNot { v: base });
-                                let stored = store_scalar_if_dst(b, dst, neg.as_value());
-                                Ok(stored)
-                            };
-                        }
-                        BuiltinHandler::IrBitCast => {
-                            return {
-                                let from_type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
-                                let to_type_id = b.k1.mem.get_nth(call.type_args, 1).type_id;
-
-                                let from_pt = b.get_physical_type(from_type_id);
-                                let to_pt = b.get_physical_type(to_type_id);
-
-                                let arg0 = *b.k1.mem.get_nth(call.args, 0);
-                                let from_value = compile_expr(b, None, arg0)?;
-                                match (from_pt.as_enum(), to_pt.as_enum()) {
-                                    (PhysicalTypeEnum::Empty, _) | (_, PhysicalTypeEnum::Empty) => {
-                                        return failf!(
-                                            b.cur_span,
-                                            "Cannot bitcast to or from empty type"
-                                        );
-                                    }
-                                    (PhysicalTypeEnum::Scalar(_), PhysicalTypeEnum::Scalar(_)) => {
-                                        // Note that this also covers Pointer to Pointer
-                                        let bitcast = b.push_inst_anon(Inst::BitCast {
-                                            v: from_value,
-                                            to: to_pt,
-                                        });
-                                        let stored = store_rich_if_dst(
-                                            b,
-                                            dst,
-                                            to_pt,
-                                            bitcast.as_value(),
-                                            "fulfill bitcast destination",
-                                        );
-                                        Ok(stored)
-                                    }
-                                    (PhysicalTypeEnum::Scalar(_), PhysicalTypeEnum::Agg(_)) => {
-                                        // We need a place, so its alloca time
-                                        let locn = match dst {
-                                            Some(dst) => dst,
-                                            None => b
-                                                .push_alloca(to_pt, "bitcast scalar to agg place")
-                                                .as_value(),
-                                        };
-
-                                        // We know a scalar store will work
-                                        let _stored = b.push_store(
-                                            locn,
-                                            from_value,
-                                            "bitcast scalar to agg store",
-                                        );
-                                        Ok(locn)
-                                    }
-                                    (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Scalar(_)) => {
-                                        // Perform a 'load' of the scalar type _from_ the
-                                        // aggregate's memory
-                                        let loaded = load_or_copy(
-                                            b,
-                                            to_pt,
-                                            dst,
-                                            from_value,
-                                            false,
-                                            "bitcast agg to scalar",
-                                        );
-                                        Ok(loaded)
-                                    }
-                                    (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Agg(_)) => {
-                                        // Make a copy to a definitely-aligned destination.
-                                        let locn = match dst {
-                                            Some(dst) => dst,
-                                            None => b
-                                                .push_alloca(to_pt, "bitcast agg to agg place")
-                                                .as_value(),
-                                        };
-                                        let _copied = b.push_copy(
-                                            locn,
-                                            from_value,
-                                            from_pt,
-                                            "bitcast agg to agg copy",
-                                        );
-                                        Ok(locn)
-                                    }
-                                }
-                            };
-                        }
-                        BuiltinHandler::IrArithBinop(op) => {
-                            return compile_arith_binop(b, op, &call, dst);
-                        }
-                        BuiltinHandler::IrBitwiseBinop(op) => {
-                            return {
-                                let arg0 = *b.k1.mem.get_nth(call.args, 0);
-                                let lhs = compile_expr(b, None, arg0)?;
-                                let arg1 = *b.k1.mem.get_nth(call.args, 1);
-                                let rhs = compile_expr(b, None, arg1)?;
-                                let lhs_pt = b.get_value_kind(lhs).expect_value().unwrap();
-                                let width = b.k1.types.get_pt_layout(lhs_pt).size_bits() as u8;
-                                let inst = match op {
-                                    BitwiseBinopKind::And => Inst::BitAnd { lhs, rhs, width },
-                                    BitwiseBinopKind::Or => Inst::BitOr { lhs, rhs, width },
-                                    BitwiseBinopKind::Xor => Inst::BitXor { lhs, rhs, width },
-                                    BitwiseBinopKind::ShiftLeft => {
-                                        Inst::BitShiftLeft { lhs, rhs, width }
-                                    }
-                                    BitwiseBinopKind::UnsignedShiftRight => {
-                                        Inst::BitUnsignedShiftRight { lhs, rhs, width }
-                                    }
-                                    BitwiseBinopKind::SignedShiftRight => {
-                                        Inst::BitSignedShiftRight { lhs, rhs, width }
-                                    }
-                                };
-                                let res = b.push_inst_anon(inst);
-                                let stored = store_scalar_if_dst(b, dst, res.as_value());
-                                Ok(stored)
-                            };
-                        }
-                        BuiltinHandler::IrPointerIndex => {
-                            return {
-                                // intern fn refAtIndex[T](self: Pointer, index: uword): T*
-                                let elem_type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
-                                let elem_pt = b.get_physical_type(elem_type_id);
-                                let arg0 = *b.k1.mem.get_nth(call.args, 0);
-                                let base = compile_expr(b, None, arg0)?;
-                                let arg1 = *b.k1.mem.get_nth(call.args, 1);
-                                let element_index = compile_expr(b, None, arg1)?;
-                                let offset = b.push_inst(
-                                    Inst::ArrayOffset { element_t: elem_pt, base, element_index },
-                                    "refAtIndex offest",
-                                );
-                                let stored = store_scalar_if_dst(b, dst, offset.as_value());
-                                Ok(stored)
-                            };
-                        }
-                        BuiltinHandler::Typer => unreachable!(),
-                        BuiltinHandler::Backend(backend_builtin) => backend_builtin,
-                    };
-                    let Some(function_id) = maybe_function_id else {
-                        b_ice!(b, "Missing function id for intrinsic {:?}", intrinsic)
-                    };
-                    (IrCallee::Builtin(function_id, backend_builtin), None)
+            if let Some(Linkage::External { lib_name, fn_name, .. }) = linkage {
+                let function_id = maybe_function_id.unwrap();
+                let function_name = match fn_name {
+                    None => b.k1.get_function(function_id).name,
+                    Some(fn_name) => fn_name,
+                };
+                callee = IrCallee::Extern { library_name: lib_name, function_name, function_id };
+            } else if let Some(builtin) = maybe_builtin {
+                match builtin {
+                    Builtin::Ir(ir_builtin) => {
+                        return compile_ir_builtin(b, call, ir_builtin, callee_fn_type, dst);
+                    }
+                    Builtin::Backend(backend_builtin) => {
+                        let function_id = maybe_function_id.unwrap();
+                        callee = IrCallee::BackendBuiltin(function_id, backend_builtin)
+                    }
+                    Builtin::TyperPhysicalFunction(_) => {
+                        let function_id = maybe_function_id.unwrap();
+                        callee = IrCallee::Direct(function_id)
+                    }
+                    Builtin::TyperInline(_) => unreachable!(),
                 }
-                (_, Some(Linkage::External { lib_name, fn_name, .. })) => {
-                    let function_id = maybe_function_id.unwrap();
-                    let function_name = match fn_name {
-                        None => b.k1.get_function(function_id).name,
-                        Some(fn_name) => fn_name,
-                    };
-                    (IrCallee::Extern { library_name: lib_name, function_name, function_id }, None)
-                }
-                _ => match &call.callee {
-                    Callee::StaticFunction(function_id) => (IrCallee::Direct(*function_id), None),
+            } else {
+                match &call.callee {
+                    Callee::StaticFunction(function_id) => callee = IrCallee::Direct(*function_id),
                     Callee::StaticLambda { function_id, lambda_value_expr, .. } => {
                         let lambda_env = compile_expr(b, None, *lambda_value_expr)?;
                         let lambda_env_type_id = b.k1.exprs.get_type(*lambda_value_expr);
@@ -1906,10 +1673,13 @@ fn compile_expr(
                         // no stack-volatile things!
                         let env_ptr = b.push_alloca(env_pt, "lambda env location").as_value();
                         store_value(b, env_pt, env_ptr, lambda_env, "store lambda env for call");
-                        (IrCallee::Direct(*function_id), Some(env_ptr))
+                        callee = IrCallee::Direct(*function_id);
+                        environment_arg = Some(env_ptr);
                     }
                     Callee::Abstract { .. } => return failf!(b.cur_span, "ir abstract callee"),
-                    Callee::Builtin { .. } => return failf!(b.cur_span, "ir builtin callee"),
+                    Callee::Builtin { builtin, .. } => {
+                        return failf!(b.cur_span, "ir builtin callee: {}", builtin.kind_name());
+                    }
                     Callee::DynamicLambda(dl) => {
                         let lambda_obj = compile_expr(b, None, *dl)?;
                         let lam_obj_type_id = b.k1.types.builtins.dyn_lambda_obj.unwrap();
@@ -1930,19 +1700,20 @@ fn compile_expr(
                         );
                         let env = load_value(b, ptr_pt, env_addr, false, "");
 
-                        (IrCallee::Indirect(callee_fn_type, fn_ptr), Some(env))
+                        callee = IrCallee::Indirect(callee_fn_type, fn_ptr);
+                        environment_arg = Some(env);
                     }
                     Callee::DynamicFunction { function_pointer_expr } => {
                         let callee_inst = compile_expr(b, None, *function_pointer_expr)?;
-                        (IrCallee::Indirect(callee_fn_type, callee_inst), None)
+                        callee = IrCallee::Indirect(callee_fn_type, callee_inst);
                     }
                     Callee::DynamicAbstract { .. } => {
                         return failf!(b.cur_span, "ir abstract call");
                     }
-                },
-            };
+                }
+            }
 
-            // Add function to compile queue, and (maybe) do some inlining one day!
+            // Add function to compile queue
             if let Some(function_id) = callee.known_function_id() {
                 match b.k1.ir.functions.get(function_id) {
                     None => {
@@ -2430,6 +2201,177 @@ fn build_field_access(
         };
         let loaded = load_or_copy(b, result_pt, dst, field_ptr, make_copy, comment);
         loaded
+    }
+}
+
+#[inline]
+fn compile_ir_builtin(
+    b: &mut Builder,
+    call: Call,
+    builtin: BuiltinIr,
+    callee_fn_type: PhysicalFunctionType,
+    dst: Option<Value>,
+) -> K1Result<Value> {
+    match builtin {
+        BuiltinIr::BakeStaticValue => {
+            // intern fn bakeStaticValue[T](value: T): u64
+            let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+            let _physical_type = b.get_physical_type(type_id);
+
+            let arg0 = *b.k1.mem.get_nth(call.args, 0);
+            let value = compile_expr(b, None, arg0)?;
+            let bake = b.push_inst_anon(Inst::BakeStaticValue { type_id, value });
+
+            // Produces a type id, which is a scalar
+            let stored = store_rich_if_dst(b, dst, callee_fn_type.return_type, bake.as_value(), "");
+            Ok(stored)
+        }
+        BuiltinIr::Zeroed => {
+            let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+            let pt = b.get_physical_type(type_id);
+            match pt.as_enum() {
+                PhysicalTypeEnum::Empty => Ok(Value::Empty),
+                PhysicalTypeEnum::Agg(agg_id) => {
+                    let pt_layout = b.k1.types.agg_types.get(agg_id).layout;
+                    let dst = match dst {
+                        None => b.push_alloca(pt, "zeroed no dst").as_value(),
+                        Some(dst) => dst,
+                    };
+                    let zero_u8 = Value::byte(0);
+                    // intern fn set(dst: ptr, value: u8, count: size): unit
+                    let count =
+                        b.make_int_value(&TypedIntValue::I64(pt_layout.size as i64), "memset size");
+                    let memset_args = b.k1.ir.mem.pushn(&[dst, zero_u8, count]);
+                    let Some(memset_function_id) =
+                        b.k1.scopes.find_function(b.k1.scopes.mem_scope_id, b.k1.ast.idents.b.set)
+                    else {
+                        b_ice!(b, "Missing memset function");
+                    };
+                    let memset_call = IrCall {
+                        ret_type: PhysicalType::EMPTY,
+                        callee: IrCallee::BackendBuiltin(
+                            memset_function_id,
+                            BackendBuiltin::MemSet,
+                        ),
+                        args: memset_args,
+                        dst: None,
+                    };
+                    let call_id = b.k1.ir.calls.add(memset_call);
+                    b.push_inst(Inst::Call { call_id }, "zeroed memset");
+                    Ok(dst)
+                }
+                PhysicalTypeEnum::Scalar(st) => {
+                    let zero_value = zero(st);
+                    let stored = store_scalar_if_dst(b, dst, zero_value);
+                    Ok(stored)
+                }
+            }
+        }
+        BuiltinIr::BoolNegate => {
+            let arg0 = *b.k1.mem.get_nth(call.args, 0);
+            let base = compile_expr(b, None, arg0)?;
+            let neg = b.push_inst_anon(Inst::BoolNegate { v: base });
+            let stored = store_scalar_if_dst(b, dst, neg.as_value());
+            Ok(stored)
+        }
+        BuiltinIr::BitNot => {
+            let arg0 = *b.k1.mem.get_nth(call.args, 0);
+            let base = compile_expr(b, None, arg0)?;
+            let neg = b.push_inst_anon(Inst::BitNot { v: base });
+            let stored = store_scalar_if_dst(b, dst, neg.as_value());
+            Ok(stored)
+        }
+        BuiltinIr::Bitcast => {
+            let from_type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+            let to_type_id = b.k1.mem.get_nth(call.type_args, 1).type_id;
+
+            let from_pt = b.get_physical_type(from_type_id);
+            let to_pt = b.get_physical_type(to_type_id);
+
+            let arg0 = *b.k1.mem.get_nth(call.args, 0);
+            let from_value = compile_expr(b, None, arg0)?;
+            match (from_pt.as_enum(), to_pt.as_enum()) {
+                (PhysicalTypeEnum::Empty, _) | (_, PhysicalTypeEnum::Empty) => {
+                    failf!(b.cur_span, "Cannot bitcast to or from empty type")
+                }
+                (PhysicalTypeEnum::Scalar(_), PhysicalTypeEnum::Scalar(_)) => {
+                    // Note that this also covers Pointer to Pointer
+                    let bitcast = b.push_inst_anon(Inst::BitCast { v: from_value, to: to_pt });
+                    let stored = store_rich_if_dst(
+                        b,
+                        dst,
+                        to_pt,
+                        bitcast.as_value(),
+                        "fulfill bitcast destination",
+                    );
+                    Ok(stored)
+                }
+                (PhysicalTypeEnum::Scalar(_), PhysicalTypeEnum::Agg(_)) => {
+                    // We need a place, so its alloca time
+                    let locn = match dst {
+                        Some(dst) => dst,
+                        None => b.push_alloca(to_pt, "bitcast scalar to agg place").as_value(),
+                    };
+
+                    // We know a scalar store will work
+                    let _stored = b.push_store(locn, from_value, "bitcast scalar to agg store");
+                    Ok(locn)
+                }
+                (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Scalar(_)) => {
+                    // Perform a 'load' of the scalar type _from_ the
+                    // aggregate's memory
+                    let loaded =
+                        load_or_copy(b, to_pt, dst, from_value, false, "bitcast agg to scalar");
+                    Ok(loaded)
+                }
+                (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Agg(_)) => {
+                    // Make a copy to a definitely-aligned destination.
+                    let locn = match dst {
+                        Some(dst) => dst,
+                        None => b.push_alloca(to_pt, "bitcast agg to agg place").as_value(),
+                    };
+                    let _copied = b.push_copy(locn, from_value, from_pt, "bitcast agg to agg copy");
+                    Ok(locn)
+                }
+            }
+        }
+        BuiltinIr::ArithBinop(op) => compile_arith_binop(b, op, &call, dst),
+        BuiltinIr::BitwiseBinop(op) => {
+            let arg0 = *b.k1.mem.get_nth(call.args, 0);
+            let lhs = compile_expr(b, None, arg0)?;
+            let arg1 = *b.k1.mem.get_nth(call.args, 1);
+            let rhs = compile_expr(b, None, arg1)?;
+            let lhs_pt = b.get_value_kind(lhs).expect_value().unwrap();
+            let width = b.k1.types.get_pt_layout(lhs_pt).size_bits() as u8;
+            let inst = match op {
+                BitwiseBinopKind::And => Inst::BitAnd { lhs, rhs, width },
+                BitwiseBinopKind::Or => Inst::BitOr { lhs, rhs, width },
+                BitwiseBinopKind::Xor => Inst::BitXor { lhs, rhs, width },
+                BitwiseBinopKind::ShiftLeft => Inst::BitShiftLeft { lhs, rhs, width },
+                BitwiseBinopKind::UnsignedShiftRight => {
+                    Inst::BitUnsignedShiftRight { lhs, rhs, width }
+                }
+                BitwiseBinopKind::SignedShiftRight => Inst::BitSignedShiftRight { lhs, rhs, width },
+            };
+            let res = b.push_inst_anon(inst);
+            let stored = store_scalar_if_dst(b, dst, res.as_value());
+            Ok(stored)
+        }
+        BuiltinIr::PointerIndex => {
+            // intern fn refAtIndex[T](self: Pointer, index: uword): T*
+            let elem_type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+            let elem_pt = b.get_physical_type(elem_type_id);
+            let arg0 = *b.k1.mem.get_nth(call.args, 0);
+            let base = compile_expr(b, None, arg0)?;
+            let arg1 = *b.k1.mem.get_nth(call.args, 1);
+            let element_index = compile_expr(b, None, arg1)?;
+            let offset = b.push_inst(
+                Inst::ArrayOffset { element_t: elem_pt, base, element_index },
+                "refAtIndex offest",
+            );
+            let stored = store_scalar_if_dst(b, dst, offset.as_value());
+            Ok(stored)
+        }
     }
 }
 
@@ -3297,8 +3239,8 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
             }
             k1.types.display_pt(w, call.ret_type)?;
             match &call.callee {
-                IrCallee::Builtin(_, intrinsic_operation) => {
-                    write!(w, " builtin {:?}", intrinsic_operation)?;
+                IrCallee::BackendBuiltin(_, backend_builtin) => {
+                    write!(w, " builtin {}", backend_builtin.kind_name())?;
                 }
                 IrCallee::Direct(function_id) => {
                     write!(w, " ")?;

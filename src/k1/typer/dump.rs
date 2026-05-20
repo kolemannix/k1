@@ -96,12 +96,9 @@ impl TypedProgram {
         if !scope.namespaces.is_empty() {
             writ.write_str("\tNAMESPACES\n")?;
         }
-        for (_name, namespace_id) in scope.namespaces.iter() {
-            writ.write_str("\t")?;
-            write!(writ, "{} -> ", namespace_id)?;
+        for (name, namespace_id) in scope.namespaces.iter() {
             let namespace = self.namespaces.get(*namespace_id);
-            writ.write_str(self.ident_str(namespace.name))?;
-            writ.write_str("\n")?;
+            writeln!(writ, "\tns {} -> {}", self.ident_str(*name), self.ident_str(namespace.name))?;
         }
         Ok(())
     }
@@ -221,7 +218,7 @@ impl TypedProgram {
                         w.write_str(")")?;
                     }
                 } else {
-                    write!(w, "enum {}", se.int_type)?;
+                    write!(w, "anon_enum_{}_{}", se.int_type, type_id.as_u32())?;
                 }
                 Ok(())
             }
@@ -1125,7 +1122,7 @@ impl TypedProgram {
             AbilityImplKind::Blanket { .. } => "blanket",
             AbilityImplKind::DerivedFromBlanket { .. } => "derived",
             AbilityImplKind::TypeParamConstraint => "constraint",
-            AbilityImplKind::Builtin(_) => "builtin",
+            AbilityImplKind::BuiltinDerived => "builtin_derived",
         };
         write!(w, "{kind_str:10} ")?;
         self.display_ability_signature(w, i.ability_id, self.mem.getn(i.impl_arguments))?;
@@ -1141,12 +1138,6 @@ impl TypedProgram {
                     }
                     AbilityImplFunction::Abstract(sig) => {
                         w.write_str("abstract ")?;
-                        self.display_function_signature(w, sig, None)?;
-                    }
-                    AbilityImplFunction::Builtin(sig, builtin) => {
-                        w.write_str("builtin ")?;
-                        w.write_str(builtin.kind_name())?;
-                        w.write_str(" ")?;
                         self.display_function_signature(w, sig, None)?;
                     }
                 };

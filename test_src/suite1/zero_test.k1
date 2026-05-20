@@ -35,7 +35,7 @@ fn testBitcast() {
 
   assert(testCompile(
     mem/bitcast[u8, u16](4)
-  ).isSome());
+  ).is-some());
 }
 
 fn testZero() {

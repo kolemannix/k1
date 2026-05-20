@@ -14,7 +14,7 @@ let MODULE_INFO: k1/module-manifest = {
 use clang/CXIndex
 use clang/CXTranslationUnit
 use clang/CXCursor
-// use clang/CXString
+use clang/CXString
 // nocommit: if i use clang/CXString, the type is no longer in scope
 //           perhaps because it only uses the namespace?
 
@@ -24,65 +24,89 @@ fn main(): i32 {
 
   let index: CXIndex = clang/createIndex(0, 0);
   let unit: CXTranslationUnit = uninit;
+  let file = "file.c\0";
   let err = clang/parseTranslationUnit2(
     index,
-    "file.cpp\0".toCString().ptr, ptr/null, 0,
+    file.toCString().ptr, ptr/null, 0,
     ptr/null, 0,
     :None, &unit
   ); 
   if err != 0 {
-    crash("failed")
+    crash("clang failed on {file}")
   };
 
   // Obtain a cursor at the root of the translation unit
   let cursor: clang/CXCursor = clang/getTranslationUnitCursor(unit); 
   let state: BindgenState = {
-    out-buffer: StringBuilder/new(),
-    mode: :none,
+    definitions: list/empty(),
   };
   clang/visitChildren(
     parent = cursor,
-    visitor = visit.toRef(),
+    visitor = visit-root.toRef(),
     client_data = &state.as[ptr]
   );
+
+  for state.definitions {
+    println("{it}"); 
+  };
 
   0
 }
 
-fn print-cxstring(prefix: string, cxs: clang/CXString) {
-  // Print the char* value of current_display_name
-  print(prefix);
-  let c-str = clang/getCString(cxs);
-  let name = string/from-c(c-str);
-  print(name);
-  // Since clang_getCursorDisplayName allocates a new CXString, it must be
-  // freed. This applies to all functions returning a CXString
-  clang/disposeString(cxs);
-  println("")
-}
-
 deftype k1-defn = either { 
-  struct({ name: string, fields: list[{ name: string, type: string }] } ),
+  struct(k1-struct),
   function,
   typedef
 }
+deftype k1-struct = {
+  name: string,
+  fields: list[{ name: string, type: string }],
+  error: ?string,
+}
 
 deftype BindgenState = {
-  out-buffer: StringBuilder,
   definitions: list[k1-defn],
-  current: ?k1-defn,
 }
 impl print for k1-defn {
   fn printTo[w: writer](self, w) {
     switch self {
-      :struct(s) -> { w.string("struct "); w.string(s.name)},
+      :struct(s) -> {
+        if s.error is :some(e) writelnf(w, "// ERROR: {e}");
+        // nocommit: interpreted as struct fmt arg
+        writelnf(w, "deftype {s.name} = {{");
+        for s.fields { writelnf(w, "  {}: {}", it) };
+        w.string("}")
+      },
       :function -> w.string("function"),
       :typedef -> w.string("typedef"),
     }
   }
 }
 
-fn visit(
+fn visit-struct-member(
+  current: CXCursor,
+  _parent: CXCursor,
+  data: clang/CXClientData,
+): clang/CXChildVisitResult {
+  let struct = data.as[*mut k1-struct];
+  let cursor-kind = clang/getCursorKind(current);
+  let name = clang/getCursorDisplayName(current).to-k1();
+  require cursor-kind is :FieldDecl else {
+    struct.error* <- :some("Encountered non field decl: {cursor-kind.value} {name}");
+    return(:Break)
+  };
+  let type = switch map-type(current) {
+    :err(msg) -> {
+      struct.error* <- :some("Failed to map type: {msg}");
+      return(:Break)
+    },
+    :ok(typ) -> typ
+  };
+  struct.fields*.push({ name, type });
+  :Continue
+}
+
+fn visit-root(
   current: CXCursor,
   _parent: CXCursor,
   client-data: clang/CXClientData,
@@ -90,45 +114,38 @@ fn visit(
 
   let cursor-kind = clang/getCursorKind(current);
   let data = client-data.as[*mut BindgenState];
-  println("Mode: {data.mode}");
   print-cxstring("Name: ", clang/getCursorDisplayName(current));
-  switch data.mode {
-    :none -> {
-      let is-decl = clang/isDeclaration(cursor-kind) != 0;
-      println("isDeclaration: {is-decl}");
-      switch cursor-kind {
-        :StructDecl -> {
-          println("Handling struct decl");
-          let name = clang/getCursorDisplayName(current).to-k1();
-          data.mode* <- :struct({ name, fields: list/empty() });
-          :Recurse
-        },
-        _ -> {
-          let cursor-kind-name = clang/getCursorKindSpelling(cursor-kind).to-k1();
-          println("Skipping CXCursorKind: {cursor-kind-name}");
-          :Continue
-        }
+  let is-decl = clang/isDeclaration(cursor-kind) != 0;
+  println("isDeclaration: {is-decl}");
+  switch cursor-kind {
+    :StructDecl -> {
+      println("Handling struct decl");
+      let name = clang/getCursorDisplayName(current).to-k1();
+      let struct: k1-struct = {
+        name, fields: list/empty(), error: :none
       };
+      clang/visitChildren(
+          parent = current,
+          visitor = visit-struct-member.toRef(),
+          client_data = &struct.as[ptr]
+          );
+
+      data.definitions*.push(:struct(struct));
+
+      :Continue
     },
-    :struct(struct) -> {
-      eprintln("struct mode. name: {struct.name}, fields: {struct.fields.map(fn f. f.name)}");
-      crash("todo: struct mode")
-    },
-    :function -> {
-      crash("todo: function mode")
-    },
-    :typedef -> {
-      crash("todo: typedef mode")
+    _ -> {
+      let cursor-kind-name = clang/getCursorKindSpelling(cursor-kind).to-k1();
+      println("Skipping CXCursorKind: {cursor-kind-name}");
+      :Continue
     }
   }
 }
 
-fn map-type(current: CXCursor): ?string {
+fn map-type(current: CXCursor): result[string, string] {
   let cx-type = clang/getCursorType(current);
-  let type_kind_spelling: clang/CXString = clang/getTypeKindSpelling(cx-type.kind);
-  print-cxstring("Type Kind spelling: ", type_kind_spelling);
   println(" -> ({cx-type.kind.value})");
-  let s = switch cx-type.kind {
+  let s: string = switch cx-type.kind {
     :Void -> p"{}",
     :Bool -> "bool",
     :Char_U -> "u8",
@@ -147,9 +164,21 @@ fn map-type(current: CXCursor): ?string {
     :Short -> "i16",
     :Int -> "c-int",
     _ -> {
-      eprintln("other type: {cx-type.kind.value}");
-      return(:none)
+      let type-kind-spelling = clang/getTypeKindSpelling(cx-type.kind).to-k1();
+      return(:err("other type: {type-kind-spelling} ({cx-type.kind.value})"))
     }
   };
-  :some(s)
+  :ok(s)
+}
+
+fn print-cxstring(prefix: string, cxs: CXString) {
+  // Print the char* value of current_display_name
+  print(prefix);
+  let c-str = clang/getCString(cxs);
+  let name = string/from-c(c-str);
+  print(name);
+  // Since clang_getCursorDisplayName allocates a new CXString, it must be
+  // freed. This applies to all functions returning a CXString
+  clang/disposeString(cxs);
+  println("")
 }

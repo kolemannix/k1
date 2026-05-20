@@ -69,11 +69,21 @@ ns types {
   // Magically implemented for all enums
   // enum must have ability id 1
   ability enum[impl v] {
-    fn enum-value(self): v
+    intern fn enum-value(self): v
+    intern fn tag-name(self): string
   }
 
-  // Implement equals for all enums in userspace B-)
+  // ability sum[impl v] {
+  //   intern fn tag-value(self): v
+  //   intern fn tag-name(self): string)
+  // }
+
+  // This implements equals for all enums, in userspace B-)
   // nocommit: This will get tried first for every type that wants equals; probably not ideal
+  // If I'm going to auto-derive print for all structs and enums on-demand
+  // might as well just autoderive this inside the compiler
+  // its good enough that this is possible, but performance still favors
+  // building it in
   impl[i: equals, e: types/enum[v = i]] equals for e {
     fn equals(self: e, other: e): bool { self.enum-value() == other.enum-value() }
   }
@@ -99,7 +109,7 @@ ns types {
   // DO NOT REORDER VARIANTS
   // FIXME: We should encode both width and signedness into the bits instead, 'flags in tags' project
   deftype int-kind = either(u8) { u8 = 0, u16 = 1, u32 = 2, u64 = 3, i8 = 4, i16 = 5, i32 = 6, i64 = 7 }
-  ns int-kind {
+  ns for int-kind {
     fn bit-width(self: int-kind): size {
       switch self {
         :u8  -> 8,
@@ -399,7 +409,7 @@ ability iterator[impl item] {
   fn advance-by(self: *mut self, n: size)
   fn nth(self: *mut self, n: size): ?item
 
-  fn is-done(self: *self): bool { self.peek().isNone() }
+  fn is-done(self: *self): bool { self.peek().is-none() }
 }
 
 ability iterable[impl item, impl i: iterator[item = item]] {
@@ -411,7 +421,7 @@ ability iterable[impl item, impl i: iterator[item = item]] {
 // to enable basic comptime execution inside of builtin/core
 // For example `if os == "macos"` requires string equality!
 
-ns buffer {
+ns for buffer {
   fn equals-bits[t](self: buffer[t], other: buffer[t]): bool {
     if self.len == 0 and other.len == 0 true
     else if self.len != other.len       false else {
@@ -420,7 +430,7 @@ ns buffer {
   }
 }
 
-ns span {
+ns for span {
   fn equals-bits[t](self: span[t], other: span[t]): bool {
     self.buffer.equals-bits(other.buffer)
   }
@@ -572,7 +582,7 @@ ns sys {
   intern fn exit(code: i32): never
 }
 
-ns ptr {
+ns for ptr {
   let null: ptr = 0.as[ptr]
 
   fn is-null(self: ptr): bool {
@@ -616,7 +626,7 @@ impl equals for ptr {
   }
 }
 
-ns bool {
+ns for bool {
   intern fn negated(self: bool): bool
   fn as-u8(self: bool): u8 { self.as[u8] }
   fn from-u8(value: u8): bool { value != 0u8 }

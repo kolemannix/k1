@@ -11,7 +11,7 @@ pub(crate) mod typed_int_value;
 pub(crate) mod types;
 pub(crate) mod visit;
 
-use crate::ir::{BuiltinHandler, IrUnitId};
+use crate::ir::{BackendBuiltin, IrUnitId};
 use crate::typer::dump::K1DisplayArgs;
 use crate::{clock, compiler, ir, k1_format, k1_format_user, kbail, kerr, vm};
 use bitflags::bitflags;
@@ -1084,9 +1084,6 @@ impl Callee {
         match *ability_impl_fn {
             AbilityImplFunction::FunctionId(function_id) => Callee::StaticFunction(function_id),
             AbilityImplFunction::Abstract(function_sig) => Callee::Abstract { function_sig },
-            AbilityImplFunction::Builtin(function_sig, builtin) => {
-                Callee::Builtin { function_sig, builtin }
-            }
         }
     }
 
@@ -1746,9 +1743,10 @@ pub struct TypedGlobal {
     pub parent_scope: ScopeId,
 }
 
-#[derive(Debug)]
-pub enum NamespaceType {
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum NamespaceKind {
     User,
+    TypeCompanion,
     Ability,
     Root,
 }
@@ -1757,7 +1755,7 @@ pub enum NamespaceType {
 pub struct Namespace {
     pub name: Ident,
     pub scope_id: ScopeId,
-    pub namespace_type: NamespaceType,
+    pub namespace_type: NamespaceKind,
     pub companion_type_id: Option<TypeId>,
     pub parent_id: Option<NamespaceId>,
     pub owner_module: Option<ModuleId>,
@@ -1803,6 +1801,19 @@ pub enum BitwiseBinopKind {
     ShiftLeft,
     SignedShiftRight,
     UnsignedShiftRight,
+}
+
+impl BitwiseBinopKind {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            BitwiseBinopKind::And => "bitwise_and",
+            BitwiseBinopKind::Or => "bitwise_or",
+            BitwiseBinopKind::Xor => "bitwise_xor",
+            BitwiseBinopKind::ShiftLeft => "bitwise_shift_left",
+            BitwiseBinopKind::SignedShiftRight => "bitwise_signed_shr",
+            BitwiseBinopKind::UnsignedShiftRight => "bitwise_unsigned_shl",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1912,85 +1923,103 @@ pub enum BuiltinAbility {
     Enum,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Builtin {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinTyperInline {
     TypeSize,
     TypeStride,
     TypeAlign,
-    Zeroed,
-    TypeId,
     CompilerSourceLocation,
-    EnumGetValue,
-    // Actual function
-    TypeSchema,
-    TypeName,
+    GetStaticValue,
+    StaticTypeToValue,
+    TypeId,
+}
 
+impl BuiltinTyperInline {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            BuiltinTyperInline::TypeSize => "type_size",
+            BuiltinTyperInline::TypeStride => "type_stride",
+            BuiltinTyperInline::TypeAlign => "type_align",
+            BuiltinTyperInline::CompilerSourceLocation => "compiler_source_location",
+            BuiltinTyperInline::GetStaticValue => "get_static_value",
+            BuiltinTyperInline::StaticTypeToValue => "static_type_to_value",
+            BuiltinTyperInline::TypeId => "type_id",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinTyperFunction {
+    EnumAbilityGetValue,
+    EnumAbilityGetTagName,
+    SumAbilityGetTag,
+    SumAbilityGetTagName,
+}
+
+impl BuiltinTyperFunction {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            BuiltinTyperFunction::EnumAbilityGetValue => "enum_ability_get_value",
+            BuiltinTyperFunction::EnumAbilityGetTagName => "enum_ability_get_tag_name",
+            BuiltinTyperFunction::SumAbilityGetTag => "sum_ability_get_tag",
+            BuiltinTyperFunction::SumAbilityGetTagName => "sum_ability_get_tag_name",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinIr {
+    BakeStaticValue,
+    Zeroed,
     BoolNegate,
     BitNot,
-    /// Bit-for-bit no-op reinterpretation from A to B
-    BitCast,
+    Bitcast,
     ArithBinop(ArithOpKind),
     BitwiseBinop(BitwiseBinopKind),
     PointerIndex,
+}
 
-    // Actual functions
-    Allocate,
-    AllocateZeroed,
-    Reallocate,
-    Free,
-    MemCopy,
-    MemSet,
-    MemEquals,
-    Exit,
-    // Static-only
-    CompilerMessage,
-    BakeStaticValue,
-    GetStaticValue,
-    StaticTypeToValue,
+impl BuiltinIr {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            BuiltinIr::BakeStaticValue => "bake_static_value",
+            BuiltinIr::Zeroed => "zeroed",
+            BuiltinIr::BoolNegate => "bool_negate",
+            BuiltinIr::BitNot => "bit_not",
+            BuiltinIr::Bitcast => "bitcast",
+            BuiltinIr::ArithBinop(op_kind) => op_kind.kind_name(),
+            BuiltinIr::BitwiseBinop(op_kind) => op_kind.kind_name(),
+            BuiltinIr::PointerIndex => "pointer_index",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Builtin {
+    Ir(BuiltinIr),
+    /// The typer phase will dissolve this call into some other expression
+    TyperInline(BuiltinTyperInline),
+    /// The typer phase will provide the implementation of the function
+    TyperPhysicalFunction(BuiltinTyperFunction),
+    /// The Backend will do this; current backends include: [llvm, vm]
+    Backend(BackendBuiltin),
 }
 
 impl Builtin {
-    pub fn kind_name(&self) -> &'static str {
+    pub fn as_backend_builtin(&self) -> Option<BackendBuiltin> {
         match self {
-            Builtin::TypeSize => "size_of",
-            Builtin::TypeStride => "size_of_stride",
-            Builtin::TypeAlign => "align_of",
-            Builtin::Zeroed => "zeroed",
-            Builtin::TypeId => "type_id",
-            Builtin::CompilerSourceLocation => "compiler_source_location",
-            Builtin::EnumGetValue => "enum_get_value",
-            Builtin::TypeSchema => "type_schema",
-            Builtin::TypeName => "type_name",
-            Builtin::BoolNegate => "bool_negate",
-            Builtin::BitNot => "bit_not",
-            Builtin::BitCast => "bit_cast",
-            Builtin::ArithBinop(op_kind) => op_kind.kind_name(),
-            Builtin::BitwiseBinop(op_kind) => match op_kind {
-                BitwiseBinopKind::And => "bitwise_and",
-                BitwiseBinopKind::Or => "bitwise_or",
-                BitwiseBinopKind::Xor => "bitwise_xor",
-                BitwiseBinopKind::ShiftLeft => "shift_left",
-                BitwiseBinopKind::SignedShiftRight => "signed_shift_right",
-                BitwiseBinopKind::UnsignedShiftRight => "unsigned_shift_right",
-            },
-            Builtin::PointerIndex => "pointer_index",
-            Builtin::Allocate => "allocate",
-            Builtin::AllocateZeroed => "allocate_zeroed",
-            Builtin::Reallocate => "reallocate",
-            Builtin::Free => "free",
-            Builtin::MemCopy => "mem_copy",
-            Builtin::MemSet => "mem_set",
-            Builtin::MemEquals => "mem_equals",
-            Builtin::Exit => "exit",
-            Builtin::CompilerMessage => "compiler_message",
-            Builtin::BakeStaticValue => "bake_static_value",
-            Builtin::GetStaticValue => "get_static_value",
-            Builtin::StaticTypeToValue => "static_type_to_value",
+            Builtin::Backend(k) => Some(*k),
+            _ => None,
         }
     }
 
-    pub fn is_typer_phase(self) -> bool {
-        matches!(ir::builtin_handler(self), BuiltinHandler::Typer)
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Builtin::TyperInline(k) => k.kind_name(),
+            Builtin::TyperPhysicalFunction(f) => f.kind_name(),
+            Builtin::Backend(backend_builtin) => backend_builtin.kind_name(),
+            Builtin::Ir(kind) => kind.kind_name(),
+        }
     }
 }
 
@@ -2115,11 +2144,23 @@ pub fn write_error(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AbilityImplKind {
+    /// A normal, concrete, typically user-code provided, ability implementation
     Concrete,
-    Blanket { base_ability: AbilityId, parsed_id: ParsedAbilityImplId },
-    DerivedFromBlanket { blanket_impl_id: AbilityImplId },
+    /// A blanket implementation. It's essentially a runnable prototype
+    /// that can generate implementations when conditions are met
+    Blanket {
+        base_ability: AbilityId,
+        parsed_id: ParsedAbilityImplId,
+    },
+    /// An ability impl that was derived from a blanket implementation
+    DerivedFromBlanket {
+        blanket_impl_id: AbilityImplId,
+    },
+    /// A 'fake' implementation kind that is cheap to build;
+    /// since it never needs to be called; we skip generating functions
+    /// for it
     TypeParamConstraint,
-    Builtin(BuiltinAbility),
+    BuiltinDerived,
 }
 
 impl AbilityImplKind {
@@ -2145,24 +2186,29 @@ impl AbilityImplKind {
     pub fn is_derived_from_blanket(&self) -> bool {
         matches!(self, AbilityImplKind::DerivedFromBlanket { .. })
     }
+
+    pub fn is_builtin_derived(&self) -> bool {
+        matches!(self, AbilityImplKind::BuiltinDerived)
+    }
 }
 
 #[derive(Clone, Copy)]
 pub enum AbilityImplFunction {
     FunctionId(FunctionId),
     Abstract(FunctionSignature),
-    Builtin(FunctionSignature, Builtin),
 }
 
 #[derive(Clone)]
 pub struct TypedAbilityImpl {
     pub kind: AbilityImplKind,
+    /// If this is a blanket impl, these are the blanket-level type params
     pub blanket_type_params: NamedTypeSlice,
     pub self_type_id: TypeId,
     pub base_ability_id: AbilityId,
+    /// base ability id _with_ ability parameters applied
     pub ability_id: AbilityId,
     /// The values for the types that the implementation is responsible for providing.
-    /// Yes, they are already baked into the functions but I need them explicitly in order
+    /// Yes, they are already baked into the functions but are needed explicitly in order
     /// to do constraint checking
     pub impl_arguments: NamedTypeSlice,
     /// Invariant: These functions are ordered how they are defined in the ability, NOT how they appear in
@@ -2688,7 +2734,7 @@ impl TypedProgram {
         let root_namespace = Namespace {
             name: root_ident,
             scope_id: Scopes::ROOT_SCOPE_ID,
-            namespace_type: NamespaceType::Root,
+            namespace_type: NamespaceKind::Root,
             companion_type_id: None,
             parent_id: None,
             owner_module: None,
@@ -5555,13 +5601,12 @@ impl TypedProgram {
                 if let Some(value) = global.initial_value { Ok(Some(value)) } else { Ok(None) }
             }
             TypedExpr::Call { call_id, .. } => {
-                // If a call to zeroed(), we can use the StaticValue::Zeroed() shortcut to avoid
+                // If a call to zeroed(), we can use the StaticValue::Zero shortcut to avoid
                 // running silly code
-
                 let call = self.calls.get(*call_id);
                 if let Some(function_id) = call.callee.maybe_function_id() {
                     let function = self.functions.get(function_id);
-                    if let Some(Builtin::Zeroed) = function.builtin_type {
+                    if let Some(Builtin::Ir(BuiltinIr::Zeroed)) = function.builtin_type {
                         let return_type_id = self.exprs.get_type(expr_id);
                         let static_value_id =
                             self.static_values.add(StaticValue::Zero(return_type_id));
@@ -5949,8 +5994,103 @@ impl TypedProgram {
         &mut self,
         implementor_self_type_id: TypeId,
         impl_signature: TypedAbilitySignature,
-        scope_id: ScopeId,
+        impl_scope_id: ScopeId,
         impl_kind: AbilityImplKind,
+        span: SpanId,
+    ) -> AbilityImplId {
+        match impl_kind {
+            AbilityImplKind::TypeParamConstraint => self.implement_ability_for_type_constraint(
+                implementor_self_type_id,
+                impl_signature,
+                impl_scope_id,
+                span,
+            ),
+            AbilityImplKind::BuiltinDerived => {
+                match self.implement_ability_for_type_builtin(
+                    implementor_self_type_id,
+                    impl_signature,
+                    impl_scope_id,
+                    span,
+                ) {
+                    Ok(imp) => imp,
+                    Err(e) => ice_span!(
+                        self,
+                        span,
+                        "Failed while generating builtin ability impl: {}",
+                        e.message
+                    ),
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn implement_ability_for_type_builtin(
+        &mut self,
+        implementor_self_type_id: TypeId,
+        impl_signature: TypedAbilitySignature,
+        scope_id: ScopeId,
+        span: SpanId,
+    ) -> K1Result<AbilityImplId> {
+        let ability = self.abilities.get(impl_signature.specialized_ability_id);
+        let base_ability_id = ability.base_ability_id;
+
+        // Add self
+        let _ = self.scopes.add_type(scope_id, self.ast.idents.b.self_, implementor_self_type_id);
+
+        // Add ability-side params
+        let ability_args = self.mem.getn(ability.kind.arguments());
+        for ability_arg in ability_args.iter() {
+            let _ = self.scopes.add_type(scope_id, ability_arg.name, ability_arg.type_id);
+        }
+        // Add impl params
+        for impl_arg in self.mem.getn(impl_signature.impl_arguments).iter() {
+            let _ = self.scopes.add_type(scope_id, impl_arg.name, impl_arg.type_id);
+        }
+
+        let functions = self.abilities.get(impl_signature.specialized_ability_id).functions.clone();
+        let mut impl_functions = self.mem.new_list(functions.len() as u32);
+        for ability_fn_ref in functions.iter() {
+            let ability_fn = self.functions.get(ability_fn_ref.function_id);
+            let spec_fn_id = self
+                .declare_function(
+                    ability_fn.parsed_id.as_function_id().unwrap(),
+                    scope_id,
+                    Some(FunctionAbilityContextInfo::ability_impl(
+                        base_ability_id,
+                        implementor_self_type_id,
+                        AbilityImplKind::BuiltinDerived,
+                        None,
+                        false,
+                    )),
+                    // Why root namespace?! Answer: the namespace is only used for companion type stuff, so
+                    // this isn't doing any harm
+                    ROOT_NAMESPACE_ID,
+                )?
+                .expect("an ability impl cannot be conditionally compiled");
+            let impl_fn = AbilityImplFunction::FunctionId(spec_fn_id);
+            impl_functions.push(impl_fn)
+        }
+        let impl_id = self.add_ability_impl(TypedAbilityImpl {
+            kind: AbilityImplKind::BuiltinDerived,
+            blanket_type_params: MSlice::empty(),
+            self_type_id: implementor_self_type_id,
+            base_ability_id,
+            ability_id: impl_signature.specialized_ability_id,
+            impl_arguments: impl_signature.impl_arguments,
+            functions: self.mem.list_to_handle(impl_functions),
+            scope_id,
+            span,
+            compile_errors: vec![],
+        });
+        Ok(impl_id)
+    }
+
+    fn implement_ability_for_type_constraint(
+        &mut self,
+        implementor_self_type_id: TypeId,
+        impl_signature: TypedAbilitySignature,
+        scope_id: ScopeId,
         span: SpanId,
     ) -> AbilityImplId {
         let ability = self.abilities.get(impl_signature.specialized_ability_id);
@@ -5962,9 +6102,14 @@ impl TypedProgram {
         // Add self
         subst_pairs.push(spair! {ability.self_type_id => implementor_self_type_id});
         let _ = self.scopes.add_type(scope_id, self.ast.idents.b.self_, implementor_self_type_id);
-        // Add ability params
-        for (parent_ability_param, ability_arg) in
-            self.mem.getn(all_params).iter().filter(|p| !p.is_impl_param).zip(ability_args.iter())
+
+        // Add ability-side params
+        for (parent_ability_param, ability_arg) in self
+            .mem
+            .getn(all_params)
+            .iter()
+            .filter(|p| p.is_ability_side_param())
+            .zip(ability_args.iter())
         {
             subst_pairs.push(spair! {parent_ability_param.type_variable_id => ability_arg.type_id});
             let _ = self.scopes.add_type(scope_id, ability_arg.name, ability_arg.type_id);
@@ -5980,11 +6125,11 @@ impl TypedProgram {
             subst_pairs.push(spair! {parent_impl_param.type_variable_id => impl_arg.type_id});
             let _ = self.scopes.add_type(scope_id, impl_arg.name, impl_arg.type_id);
         }
+
         let functions = self.abilities.get(impl_signature.specialized_ability_id).functions.clone();
         let mut impl_functions = self.mem.new_list(functions.len() as u32);
         for f in functions.iter() {
             let generic_fn = self.get_function(f.function_id);
-            let fn_name = generic_fn.name;
             let generic_sig = generic_fn.signature();
             let generic_fn_type_id = generic_fn.type_id;
             let specialized_function_type =
@@ -6009,25 +6154,11 @@ impl TypedProgram {
                 self.function_signature_to_string(generic_sig),
                 self.function_signature_to_string(specialized_signature),
             );
-            let impl_fn = match impl_kind {
-                AbilityImplKind::TypeParamConstraint => {
-                    AbilityImplFunction::Abstract(specialized_signature)
-                }
-                AbilityImplKind::Builtin(builtin_ability) => {
-                    let builtin = match builtin_ability {
-                        BuiltinAbility::Enum => match self.ident_str(fn_name) {
-                            "enum-value" => Builtin::EnumGetValue,
-                            s => ice_span!(self, span, "Unmatched enum function: {s}"),
-                        },
-                    };
-                    AbilityImplFunction::Builtin(specialized_signature, builtin)
-                }
-                _ => unreachable!(),
-            };
+            let impl_fn = AbilityImplFunction::Abstract(specialized_signature);
             impl_functions.push(impl_fn)
         }
         self.add_ability_impl(TypedAbilityImpl {
-            kind: impl_kind,
+            kind: AbilityImplKind::TypeParamConstraint,
             blanket_type_params: MSlice::empty(),
             self_type_id: implementor_self_type_id,
             base_ability_id,
@@ -6189,7 +6320,7 @@ impl TypedProgram {
                         impl_arguments,
                     },
                     impl_scope_id,
-                    AbilityImplKind::Builtin(BuiltinAbility::Enum),
+                    AbilityImplKind::BuiltinDerived,
                     span,
                 );
                 let handle = AbilityImplHandle {
@@ -6650,13 +6781,6 @@ impl TypedProgram {
                         self,
                         blanket_impl.span,
                         "encountered abstract ability impl function in instantiate blanket impl"
-                    );
-                }
-                AbilityImplFunction::Builtin(_, _) => {
-                    ice_span!(
-                        self,
-                        blanket_impl.span,
-                        "encountered 'builtin' ability impl function in instantiate blanket impl"
                     );
                 }
             };
@@ -7325,7 +7449,7 @@ impl TypedProgram {
             .find(value_impl_args, |nt| nt.name == get_ident!(self, "t"))
             .map(|nt| nt.type_id)
             .unwrap();
-        let mut result_block = self.synth_block(scope_id, ScopeType::LexicalBlock, span, 2);
+        let mut result_block = self.new_block_builder(scope_id, ScopeType::LexicalBlock, span, 2);
         let try_value_var = self.synth_variable_defn_simple(
             self.ast.idents.b.try_value,
             try_value_original_expr,
@@ -7824,8 +7948,12 @@ impl TypedProgram {
         let parsed_elements = &list_expr.elements;
         let element_count = parsed_elements.len();
 
-        let mut list_lit_block =
-            self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 2 + element_count as u32);
+        let mut list_lit_block = self.new_block_builder(
+            ctx.scope_id,
+            ScopeType::LexicalBlock,
+            span,
+            2 + element_count as u32,
+        );
         let list_lit_scope = list_lit_block.scope_id;
         let mut element_type = None;
         let elements: List<TypedExprId, MemTmp> = {
@@ -9832,7 +9960,7 @@ impl TypedProgram {
             None,
         );
         let mut loop_block =
-            self.synth_block(outer_for_expr_scope, ScopeType::LexicalBlock, body_span, 3);
+            self.new_block_builder(outer_for_expr_scope, ScopeType::LexicalBlock, body_span, 3);
         let loop_scope_id = loop_block.scope_id;
         let expected_block_type = ctx
             .expected_type_id
@@ -9840,7 +9968,7 @@ impl TypedProgram {
             .map(|list_type| list_type.element_type);
 
         let mut consequent_block =
-            self.synth_block(loop_scope_id, ScopeType::LexicalBlock, iterable_span, 3);
+            self.new_block_builder(loop_scope_id, ScopeType::LexicalBlock, iterable_span, 3);
 
         let loop_scope_ctx = ctx.with_scope(loop_scope_id).with_no_expected_type();
         let iterator_next_call = self.synth_typed_call_typed_args(
@@ -9971,7 +10099,7 @@ impl TypedProgram {
         };
         let elements = iteration_list.elements;
 
-        let mut block = self.synth_block(
+        let mut block = self.new_block_builder(
             ctx.scope_id,
             ScopeType::LexicalBlock,
             for_expr.span,
@@ -10529,7 +10657,8 @@ impl TypedProgram {
         if let Err(msg) = self.check_types(output_type, rhs_type, ctx.scope_id) {
             return failf!(span, "RHS value incompatible with `Try` output of LHS: {}", msg);
         }
-        let mut coalesce_block = self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 2);
+        let mut coalesce_block =
+            self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 2);
         let lhs_variable = self.synth_variable_defn_simple(
             self.ast.idents.b.optelse_lhs,
             lhs,
@@ -10851,7 +10980,7 @@ impl TypedProgram {
         if gathered_defers.is_empty() {
             Ok(return_expr)
         } else {
-            let mut block = self.synth_block(
+            let mut block = self.new_block_builder(
                 ctx.scope_id,
                 ScopeType::LexicalBlock,
                 span,
@@ -11574,7 +11703,7 @@ impl TypedProgram {
             return failf!(span, "'with' receiver must be a struct");
         };
         let base_struct_fields = base_struct_type.fields;
-        let mut block = self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 2);
+        let mut block = self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 2);
         let base_struct_name = self.ast.idents.intern("base_struct");
         let base_struct_var =
             self.synth_variable_defn_simple(base_struct_name, base_struct_expr, block.scope_id);
@@ -11926,12 +12055,12 @@ impl TypedProgram {
         let mut s = std::mem::take(&mut self.buffers.name_builder);
         let fn_name = self.ident_str(fn_call.name.name);
         let Some(variant) = self.types.mem.getn(variants).iter().find(|v| {
-            s.push_str("as");
+            s.push_str("as-");
             let name = self.ident_str(v.name);
-            let first_letter = name.chars().next().unwrap();
-            let rest = name.chars().skip(1);
-            s.push(first_letter.to_ascii_uppercase());
-            s.extend(rest);
+            // let first_letter = name.chars().next().unwrap();
+            // let rest = name.chars().skip(1);
+            // s.push(first_letter.to_ascii_uppercase());
+            s.push_str(name);
 
             let is_match = fn_name == s;
             s.clear();
@@ -12543,7 +12672,7 @@ impl TypedProgram {
                 } else {
                     match callee {
                         Callee::StaticFunction(function_id) => {
-                            let function_id = self.specialize_function_signature(
+                            let function_id = self.specialize_function_declaration(
                                 type_args,
                                 fnlike_type_args,
                                 function_id,
@@ -12677,10 +12806,12 @@ impl TypedProgram {
 
         // Builtins that are handled by the typechecking phase are implemented here.
         if let Some(builtin) = self.get_callee_builtin(&call.callee) {
-            if builtin.is_typer_phase() {
-                return self.handle_builtin(call, builtin, ctx);
-            } else {
-                self.check_builtin(&call, builtin, ctx)?;
+            match builtin {
+                Builtin::TyperInline(kind) => {
+                    return self.handle_inline_builtin(call, kind, ctx);
+                }
+                // All other builtins can still be checked for correctness here
+                _ => self.check_builtin(&call, builtin, ctx)?,
             }
         }
 
@@ -12726,15 +12857,15 @@ impl TypedProgram {
         result
     }
 
-    fn handle_builtin(
+    fn handle_inline_builtin(
         &mut self,
         call: Call,
-        intrinsic: Builtin,
+        intrinsic: BuiltinTyperInline,
         _ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let span = call.span;
         match intrinsic {
-            Builtin::GetStaticValue => {
+            BuiltinTyperInline::GetStaticValue => {
                 let arg0 = *self.mem.get_nth(call.args, 0);
                 let static_value_id_arg = self.exprs.get(arg0);
                 // For now, require a literal. We could relax this and evaluate it
@@ -12757,7 +12888,7 @@ impl TypedProgram {
                 };
                 Ok(self.exprs.add_static(static_value_id, value.get_type(), false, span))
             }
-            Builtin::StaticTypeToValue => {
+            BuiltinTyperInline::StaticTypeToValue => {
                 // intern fn staticTypeToValue[T, ST: value T](): T
                 // let inner_type_arg = self.named_types.get_nth(call.type_args, 0);
                 let value_type_arg = *self.mem.get_nth(call.type_args, 1);
@@ -12781,11 +12912,11 @@ impl TypedProgram {
                     Ok(filler_expr)
                 }
             }
-            Builtin::CompilerSourceLocation => {
+            BuiltinTyperInline::CompilerSourceLocation => {
                 let source_location = self.synth_source_location(span);
                 Ok(source_location)
             }
-            Builtin::TypeId => {
+            BuiltinTyperInline::TypeId => {
                 let type_arg = self.mem.get_nth(call.type_args, 0);
                 let type_id = type_arg.type_id;
                 let type_id_u64 = type_arg.type_id.as_u32() as u64;
@@ -12799,7 +12930,9 @@ impl TypedProgram {
                 let int_expr = self.synth_int(TypedIntValue::U64(type_id_u64), span);
                 Ok(int_expr)
             }
-            Builtin::TypeSize | Builtin::TypeStride | Builtin::TypeAlign => {
+            BuiltinTyperInline::TypeSize
+            | BuiltinTyperInline::TypeStride
+            | BuiltinTyperInline::TypeAlign => {
                 let type_id = self.mem.get_nth(call.type_args, 0).type_id;
                 match self.get_physical_type(type_id) {
                     PhysicalTypeResult::No => Ok(self.synth_phony(SIZE_TYPE_ID, span)),
@@ -12807,21 +12940,15 @@ impl TypedProgram {
                     PhysicalTypeResult::Yes(_) => {
                         let layout = self.get_layout(type_id).unwrap();
                         let value_bytes = match intrinsic {
-                            Builtin::TypeSize => layout.size as u64,
-                            Builtin::TypeStride => layout.stride() as u64,
-                            Builtin::TypeAlign => layout.align as u64,
+                            BuiltinTyperInline::TypeSize => layout.size as u64,
+                            BuiltinTyperInline::TypeStride => layout.stride() as u64,
+                            BuiltinTyperInline::TypeAlign => layout.align as u64,
                             _ => unreachable!(),
                         };
                         Ok(self.synth_i64(to_k1_size_u64(value_bytes), span))
                     }
                 }
             }
-            Builtin::EnumGetValue => {
-                let enum_arg = *self.mem.get_nth(call.args, 0);
-                let value_expr = self.synth_enum_get_value(enum_arg, span);
-                Ok(value_expr)
-            }
-            _ => self.ice(format!("Unexpected intrinsic in type phase: {:?}", intrinsic), None),
         }
     }
 
@@ -12832,7 +12959,7 @@ impl TypedProgram {
         _ctx: EvalExprContext,
     ) -> K1Result<()> {
         match intrinsic {
-            Builtin::BitCast => {
+            Builtin::Ir(BuiltinIr::Bitcast) => {
                 let type_from = self.mem.get_nth(call.type_args, 0).type_id;
                 let type_to = self.mem.get_nth(call.type_args, 1).type_id;
                 let Some(layout_from) = self.get_layout(type_from) else {
@@ -13002,17 +13129,21 @@ impl TypedProgram {
         specialized_function_type_id
     }
 
-    fn specialize_function_signature(
+    fn specialize_function_declaration(
         &mut self,
-        // Must 'zip' up with each type param
+        // 1 type argument per type parameter
         type_arguments: NamedTypeSlice,
-        // Must 'zip' up with each function type param
+        // 1 type argument per fnlike param
         fnlike_type_arguments: NamedTypeSlice,
         generic_function_id: FunctionId,
     ) -> FunctionId {
         let generic_function = self.get_function(generic_function_id);
         let generic_function_param_variables = generic_function.params;
         let generic_function_scope = generic_function.scope;
+        let is_typer_function_builtin =
+            matches!(generic_function.builtin_type, Some(Builtin::TyperPhysicalFunction(_)));
+
+        debug_assert_eq!(type_arguments.len(), generic_function.type_params.len());
 
         for existing_specialization in &generic_function.child_specializations {
             if self.mem.slices_equal_copy(existing_specialization.type_arguments, type_arguments)
@@ -13155,7 +13286,7 @@ impl TypedProgram {
             self.function_id_to_string(generic_function_id, false)
         );
 
-        if has_body && is_concrete {
+        if (has_body && is_concrete) || is_typer_function_builtin {
             self.functions_pending_body_specialization.push(specialized_function_id);
         }
 
@@ -13850,128 +13981,154 @@ impl TypedProgram {
         &self,
         fn_name: Ident,
         namespace_chain: Dlist<Ident, MemTmp>,
-        ability_impl_info: Option<(AbilityId, TypeId)>,
+        ability_id: Option<AbilityId>,
+        ability_impl_self_type: Option<TypeId>,
     ) -> Result<Builtin, String> {
         let fn_name_str = self.ast.idents.get_name(fn_name);
         let second =
             self.tmp.dlist_nth_data_opt(namespace_chain, 2).map(|node| self.ident_str(*node));
-        let result = if let Some((ability_id, ability_impl_type_id)) = ability_impl_info {
+        let result = if let Some(ability_id) = ability_id {
             let base_ability_id = self.abilities.get(ability_id).base_ability_id;
-            use ArithOpClass as Class;
-            use ArithOpKind as OpKind;
-            use ArithOpOp as Op;
-            macro_rules! mk_arith {
-                ($e: expr) => {
-                    Some(Builtin::ArithBinop($e))
-                };
-            }
-            macro_rules! mk_bitwise {
-                ($e: expr) => {
-                    Some(Builtin::BitwiseBinop($e))
-                };
-            }
-            let t = self.types.get(ability_impl_type_id);
-            let is_integer = t.as_integer().is_some();
-            match (base_ability_id, fn_name_str) {
-                (ABILITY_ID_EQUALS, "equals") => match t {
-                    Type::Char | Type::Bool | Type::Pointer => {
-                        mk_arith!(OpKind::uint(Op::Equals))
-                    }
-                    Type::Integer(i) => {
-                        let o = if i.is_signed() {
-                            OpKind::sint(Op::Equals)
-                        } else {
-                            OpKind::uint(Op::Equals)
-                        };
-                        mk_arith!(o)
-                    }
-                    Type::Float(_) => mk_arith!(OpKind::float(Op::Equals)),
-                    _ => None,
-                },
-                (ABILITY_ID_BITWISE, "bit-not") if is_integer => Some(Builtin::BitNot),
-                (ABILITY_ID_BITWISE, "bit-and") if is_integer => {
-                    mk_bitwise!(BitwiseBinopKind::And)
-                }
-                (ABILITY_ID_BITWISE, "bit-or") if is_integer => {
-                    mk_bitwise!(BitwiseBinopKind::Or)
-                }
-                (ABILITY_ID_BITWISE, "xor") if is_integer => {
-                    mk_bitwise!(BitwiseBinopKind::Xor)
-                }
-                (ABILITY_ID_BITWISE, "shift-left") if is_integer => {
-                    mk_bitwise!(BitwiseBinopKind::ShiftLeft)
-                }
-                (ABILITY_ID_BITWISE, "shift-right") if is_integer => {
-                    let int_type = t.expect_integer();
-                    if int_type.is_signed() {
-                        mk_bitwise!(BitwiseBinopKind::SignedShiftRight)
-                    } else {
-                        mk_bitwise!(BitwiseBinopKind::UnsignedShiftRight)
-                    }
-                }
-                (ABILITY_ID_ADD, "add") => match t {
-                    Type::Integer(i) => {
-                        // Even though signedness is irrelevant here, we still set it properly
-                        // just in case it ever is, (for example if we want to make signed wrap UB
-                        // instead of wrapping)
-                        if i.is_signed() {
-                            mk_arith!(ArithOpKind::sint(Op::Add))
-                        } else {
-                            mk_arith!(ArithOpKind::uint(Op::Add))
-                        }
-                    }
-                    Type::Float(_) => {
-                        mk_arith!(ArithOpKind::float(Op::Add))
-                    }
-                    _ => None,
-                },
-                (ABILITY_ID_SUB, "sub") => {
-                    let class = if let Type::Integer(i) = t {
-                        ArithOpClass::from_int_type(*i)
-                    } else {
-                        ArithOpClass::Float
-                    };
-                    mk_arith!(OpKind { class, op: Op::Sub })
-                }
-                (ABILITY_ID_MUL, "mul") => {
-                    let class = if let Type::Integer(i) = t {
-                        Class::from_int_type(*i)
-                    } else {
-                        Class::Float
-                    };
-                    mk_arith!(OpKind { class, op: Op::Mul })
-                }
-                (ABILITY_ID_DIV, "div") => {
-                    let class = if let Type::Integer(i) = t {
-                        ArithOpClass::from_int_type(*i)
-                    } else {
-                        ArithOpClass::Float
-                    };
-                    mk_arith!(OpKind { class, op: Op::Div })
-                }
-                (ABILITY_ID_REM, "rem") => {
-                    let class = if let Type::Integer(i) = t {
-                        ArithOpClass::from_int_type(*i)
-                    } else {
-                        ArithOpClass::Float
-                    };
-                    mk_arith!(OpKind { class, op: Op::Rem })
-                }
-                (ABILITY_ID_SCALAR_CMP, _) => {
-                    let class = if let Type::Integer(i) = t {
-                        ArithOpClass::from_int_type(*i)
-                    } else {
-                        ArithOpClass::Float
-                    };
-                    match fn_name_str {
-                        "lt" => mk_arith!(OpKind { class, op: Op::Lt }),
-                        "le" => mk_arith!(OpKind { class, op: Op::Le }),
-                        "gt" => mk_arith!(OpKind { class, op: Op::Gt }),
-                        "ge" => mk_arith!(OpKind { class, op: Op::Ge }),
+            match ability_impl_self_type {
+                None => {
+                    match (base_ability_id, fn_name_str) {
+                        // Abilities that are always implemented by the compiler; where the 'intern'
+                        // modifier is on the declaration, not the implementation
+                        (ABILITY_ID_ENUM, "enum-value") => Some(Builtin::TyperPhysicalFunction(
+                            BuiltinTyperFunction::EnumAbilityGetValue,
+                        )),
+                        (ABILITY_ID_ENUM, "tag-name") => Some(Builtin::TyperPhysicalFunction(
+                            BuiltinTyperFunction::EnumAbilityGetTagName,
+                        )),
                         _ => None,
                     }
                 }
-                _ => None,
+                Some(impl_self_type) => {
+                    use ArithOpClass as Class;
+                    use ArithOpKind as OpKind;
+                    use ArithOpOp as Op;
+                    macro_rules! mk_arith {
+                        ($e: expr) => {
+                            Some(Builtin::Ir(BuiltinIr::ArithBinop($e)))
+                        };
+                    }
+                    macro_rules! mk_bitwise {
+                        ($e: expr) => {
+                            Some(Builtin::Ir(BuiltinIr::BitwiseBinop($e)))
+                        };
+                    }
+                    let t = self.types.get(impl_self_type);
+                    let is_integer = t.as_integer().is_some();
+                    match (base_ability_id, fn_name_str) {
+                        (ABILITY_ID_EQUALS, "equals") => match t {
+                            Type::Char | Type::Bool | Type::Pointer => {
+                                mk_arith!(OpKind::uint(Op::Equals))
+                            }
+                            Type::Integer(i) => {
+                                let o = if i.is_signed() {
+                                    OpKind::sint(Op::Equals)
+                                } else {
+                                    OpKind::uint(Op::Equals)
+                                };
+                                mk_arith!(o)
+                            }
+                            Type::Float(_) => mk_arith!(OpKind::float(Op::Equals)),
+                            _ => None,
+                        },
+                        (ABILITY_ID_BITWISE, "bit-not") if is_integer => {
+                            Some(Builtin::Ir(BuiltinIr::BitNot))
+                        }
+                        (ABILITY_ID_BITWISE, "bit-and") if is_integer => {
+                            mk_bitwise!(BitwiseBinopKind::And)
+                        }
+                        (ABILITY_ID_BITWISE, "bit-or") if is_integer => {
+                            mk_bitwise!(BitwiseBinopKind::Or)
+                        }
+                        (ABILITY_ID_BITWISE, "xor") if is_integer => {
+                            mk_bitwise!(BitwiseBinopKind::Xor)
+                        }
+                        (ABILITY_ID_BITWISE, "shift-left") if is_integer => {
+                            mk_bitwise!(BitwiseBinopKind::ShiftLeft)
+                        }
+                        (ABILITY_ID_BITWISE, "shift-right") if is_integer => {
+                            let int_type = t.expect_integer();
+                            if int_type.is_signed() {
+                                mk_bitwise!(BitwiseBinopKind::SignedShiftRight)
+                            } else {
+                                mk_bitwise!(BitwiseBinopKind::UnsignedShiftRight)
+                            }
+                        }
+                        (ABILITY_ID_ADD, "add") => match t {
+                            Type::Integer(i) => {
+                                // Even though signedness is irrelevant here, we still set it properly
+                                // just in case it ever is, (for example if we want to make signed wrap UB
+                                // instead of wrapping)
+                                if i.is_signed() {
+                                    mk_arith!(ArithOpKind::sint(Op::Add))
+                                } else {
+                                    mk_arith!(ArithOpKind::uint(Op::Add))
+                                }
+                            }
+                            Type::Float(_) => {
+                                mk_arith!(ArithOpKind::float(Op::Add))
+                            }
+                            _ => None,
+                        },
+                        (ABILITY_ID_SUB, "sub") => {
+                            let class = if let Type::Integer(i) = t {
+                                ArithOpClass::from_int_type(*i)
+                            } else {
+                                ArithOpClass::Float
+                            };
+                            mk_arith!(OpKind { class, op: Op::Sub })
+                        }
+                        (ABILITY_ID_MUL, "mul") => {
+                            let class = if let Type::Integer(i) = t {
+                                Class::from_int_type(*i)
+                            } else {
+                                Class::Float
+                            };
+                            mk_arith!(OpKind { class, op: Op::Mul })
+                        }
+                        (ABILITY_ID_DIV, "div") => {
+                            let class = if let Type::Integer(i) = t {
+                                ArithOpClass::from_int_type(*i)
+                            } else {
+                                ArithOpClass::Float
+                            };
+                            mk_arith!(OpKind { class, op: Op::Div })
+                        }
+                        (ABILITY_ID_REM, "rem") => {
+                            let class = if let Type::Integer(i) = t {
+                                ArithOpClass::from_int_type(*i)
+                            } else {
+                                ArithOpClass::Float
+                            };
+                            mk_arith!(OpKind { class, op: Op::Rem })
+                        }
+                        (ABILITY_ID_SCALAR_CMP, _) => {
+                            let class = if let Type::Integer(i) = t {
+                                ArithOpClass::from_int_type(*i)
+                            } else {
+                                ArithOpClass::Float
+                            };
+                            match fn_name_str {
+                                "lt" => mk_arith!(OpKind { class, op: Op::Lt }),
+                                "le" => mk_arith!(OpKind { class, op: Op::Le }),
+                                "gt" => mk_arith!(OpKind { class, op: Op::Gt }),
+                                "ge" => mk_arith!(OpKind { class, op: Op::Ge }),
+                                _ => None,
+                            }
+                        }
+                        (ABILITY_ID_ENUM, "enum-value") => Some(Builtin::TyperPhysicalFunction(
+                            BuiltinTyperFunction::EnumAbilityGetValue,
+                        )),
+                        (ABILITY_ID_ENUM, "tag-name") => Some(Builtin::TyperPhysicalFunction(
+                            BuiltinTyperFunction::EnumAbilityGetTagName,
+                        )),
+                        _ => None,
+                    }
+                }
             }
         } else {
             #[allow(clippy::match_single_binding)]
@@ -13981,53 +14138,61 @@ impl TypedProgram {
                     _ => None,
                 },
                 Some("sys") => match fn_name_str {
-                    "exit" => Some(Builtin::Exit),
+                    "exit" => Some(Builtin::Backend(BackendBuiltin::Exit)),
                     _ => None,
                 },
                 Some("mem") => match fn_name_str {
-                    "alloc" => Some(Builtin::Allocate),
-                    "alloc-zeroed" => Some(Builtin::AllocateZeroed),
-                    "realloc" => Some(Builtin::Reallocate),
-                    "free" => Some(Builtin::Free),
-                    "copy" => Some(Builtin::MemCopy),
-                    "set" => Some(Builtin::MemSet),
-                    "equals" => Some(Builtin::MemEquals),
-                    "zeroed" => Some(Builtin::Zeroed),
-                    "bitcast" => Some(Builtin::BitCast),
+                    "alloc" => Some(Builtin::Backend(BackendBuiltin::Allocate)),
+                    "alloc-zeroed" => Some(Builtin::Backend(BackendBuiltin::AllocateZeroed)),
+                    "realloc" => Some(Builtin::Backend(BackendBuiltin::Reallocate)),
+                    "free" => Some(Builtin::Backend(BackendBuiltin::Free)),
+                    "copy" => Some(Builtin::Backend(BackendBuiltin::MemCopy)),
+                    "set" => Some(Builtin::Backend(BackendBuiltin::MemSet)),
+                    "equals" => Some(Builtin::Backend(BackendBuiltin::MemEquals)),
+                    "zeroed" => Some(Builtin::Ir(BuiltinIr::Zeroed)),
+                    "bitcast" => Some(Builtin::Ir(BuiltinIr::Bitcast)),
                     _ => None,
                 },
                 Some("types") => match fn_name_str {
-                    "type-id" => Some(Builtin::TypeId),
-                    "type-name" => Some(Builtin::TypeName),
-                    "type-schema" => Some(Builtin::TypeSchema),
-                    "size-of" => Some(Builtin::TypeSize),
-                    "size-of-stride" => Some(Builtin::TypeStride),
-                    "align-of" => Some(Builtin::TypeAlign),
+                    "type-id" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeId)),
+                    "type-name" => Some(Builtin::Backend(BackendBuiltin::TypeName)),
+                    "type-schema" => Some(Builtin::Backend(BackendBuiltin::TypeSchema)),
+                    "size-of" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeSize)),
+                    "size-of-stride" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeStride)),
+                    "align-of" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeAlign)),
                     _ => None,
                 },
                 Some("compiler") => match fn_name_str {
-                    "location" => Some(Builtin::CompilerSourceLocation),
+                    "location" => {
+                        Some(Builtin::TyperInline(BuiltinTyperInline::CompilerSourceLocation))
+                    }
                     _ => None,
                 },
                 Some("bool") => match fn_name_str {
-                    "negated" => Some(Builtin::BoolNegate),
+                    "negated" => Some(Builtin::Ir(BuiltinIr::BoolNegate)),
                     _ => None,
                 },
                 Some("string") => None,
                 Some("list") => None,
                 Some("char") => None,
                 Some("ptr") => match fn_name_str {
-                    "ref-at-index" => Some(Builtin::PointerIndex),
+                    "ref-at-index" => Some(Builtin::Ir(BuiltinIr::PointerIndex)),
                     _ => None,
                 },
                 Some("meta") => match fn_name_str {
-                    "bake-static-value" => Some(Builtin::BakeStaticValue),
-                    "get-static-value" => Some(Builtin::GetStaticValue),
-                    "static-type-to-value" => Some(Builtin::StaticTypeToValue),
+                    "bake-static-value" => Some(Builtin::Ir(BuiltinIr::BakeStaticValue)),
+                    "get-static-value" => {
+                        Some(Builtin::TyperInline(BuiltinTyperInline::GetStaticValue))
+                    }
+                    "static-type-to-value" => {
+                        Some(Builtin::TyperInline(BuiltinTyperInline::StaticTypeToValue))
+                    }
                     _ => None,
                 },
                 Some("k1") => match fn_name_str {
-                    "emit-compiler-message" => Some(Builtin::CompilerMessage),
+                    "emit-compiler-message" => {
+                        Some(Builtin::Backend(BackendBuiltin::CompilerMessage))
+                    }
                     _ => None,
                 },
                 Some(_) => None,
@@ -14282,7 +14447,7 @@ impl TypedProgram {
 
         let type_arguments = self.mem.pushn(&[NameAndType { name: type_param.name, type_id }]);
         let specialized_function =
-            self.specialize_function_signature(type_arguments, MSlice::empty(), function_id);
+            self.specialize_function_declaration(type_arguments, MSlice::empty(), function_id);
         self.specialize_function_body(specialized_function)?;
         let predicate_result_static_value_id =
             self.execute_static_function(specialized_function, &[], span)?;
@@ -14598,6 +14763,7 @@ impl TypedProgram {
                     impl_info.is_default
                         || impl_info.impl_kind.is_derived_from_blanket()
                         || impl_info.impl_kind.is_type_param_constraint()
+                        || impl_info.impl_kind.is_builtin_derived()
                 })
             });
         let resolvable_by_name = !is_ability_impl && !ability_kind_is_specialized;
@@ -14826,7 +14992,8 @@ impl TypedProgram {
                 .resolve_intrinsic_function_type(
                     ast_fn.name,
                     namespace_chain,
-                    ability_id.zip(impl_self_type),
+                    ability_id,
+                    impl_self_type,
                 )
                 .map_err(|msg| errf!(ast_fn.span, "Error typechecking function: {}", msg,))?;
             Some(resolved)
@@ -14886,7 +15053,7 @@ impl TypedProgram {
                     AbilityImplKind::Concrete
                     | AbilityImplKind::Blanket { .. }
                     | AbilityImplKind::TypeParamConstraint
-                    | AbilityImplKind::Builtin(_) => TypedFunctionKind::AbilityImpl(
+                    | AbilityImplKind::BuiltinDerived => TypedFunctionKind::AbilityImpl(
                         ability_info.ability_id,
                         impl_info.self_type_id,
                     ),
@@ -14991,20 +15158,52 @@ impl TypedProgram {
         let is_extern = matches!(function.linkage, Linkage::External { .. });
         let is_concrete = function.is_concrete;
         let ast_id = function.parsed_id.as_function_id().expect("expected function id");
-        let is_intrinsic = function.builtin_type.is_some();
+        // Here. Which type of builtin is it? Some, we should synthesize here.
+        let (builtin_type_phys_fn, other_intrinsic) = match function.builtin_type {
+            Some(Builtin::TyperPhysicalFunction(f)) => (Some(f), false),
+            Some(_) => (None, true),
+            None => (None, false),
+        };
         let is_ability_defn = matches!(function.kind, TypedFunctionKind::AbilityDefn(_));
 
         let parsed_function = self.ast.get_function(ast_id);
         let parsed_function_ret_type = parsed_function.ret_type;
         let function_signature_span = parsed_function.signature_span;
 
-        let is_abstract = is_intrinsic || is_extern || is_ability_defn;
+        let no_body_expected = other_intrinsic || is_extern || is_ability_defn;
         let is_generic = function.is_generic();
 
         let body_block = match parsed_function.body.as_ref() {
-            None if is_abstract => None,
+            None if builtin_type_phys_fn.is_some() => {
+                let body_expr = self.generate_intrinsic_function_body(
+                    declaration_id,
+                    builtin_type_phys_fn.unwrap(),
+                )?;
+                let body_expr_type = self.exprs.get_type(body_expr);
+                if let Err(msg) = self.check_types(return_type, body_expr_type, fn_scope_id) {
+                    self.ice_span(
+                        function_signature_span,
+                        format!("Builtin wrong return type: {msg}"),
+                    )
+                }
+                let mut block = self.new_block_builder(
+                    fn_scope_id,
+                    ScopeType::FunctionScope,
+                    function_signature_span,
+                    1,
+                );
+                let ret = self.exprs.add(
+                    TypedExpr::Return(TypedReturn { value: body_expr, returned_variable: None }),
+                    NEVER_TYPE_ID,
+                    function_signature_span,
+                );
+                self.push_block_expr_id(&mut block, ret);
+                let block_id = self.exprs.add_block(&mut self.mem, block, NEVER_TYPE_ID);
+                Some(block_id)
+            }
+            None if no_body_expected => None,
             None => return failf!(function_signature_span, "function is missing implementation"),
-            Some(_) if is_abstract => {
+            Some(_) if no_body_expected => {
                 return failf!(function_signature_span, "unexpected function implementation");
             }
             Some(block_ast) => {
@@ -15027,6 +15226,9 @@ impl TypedProgram {
                         // Why do we care to indicate if the function is generic?
                         // Currently, its because we want to avoid running #static and #meta blocks
                         // until the types and static values are provided
+                        // There are now of other implications, like we only want to do
+                        // lsp stuff in the generic pass, and not repeat it in every
+                        // specialization pass
                         .with_is_generic_pass(is_generic),
                 )?;
 
@@ -15057,7 +15259,6 @@ impl TypedProgram {
                 }
             }
 
-            // Set the function's body
             self.get_function_mut(declaration_id).body_block = Some(body_block);
         }
 
@@ -15066,6 +15267,56 @@ impl TypedProgram {
             self.pop_debug_level();
         }
         Ok(())
+    }
+
+    fn generate_intrinsic_function_body(
+        &mut self,
+        function_id: FunctionId,
+        kind: BuiltinTyperFunction,
+    ) -> K1Result<TypedExprId> {
+        let f = self.functions.get(function_id);
+        let fn_span = self.ast.get_span_for_id(f.parsed_id);
+        let params = f.params;
+        match kind {
+            BuiltinTyperFunction::EnumAbilityGetValue => {
+                let enum_param = *self.mem.get_nth(params, 0);
+                let enum_param_expr = self.synth_variable_expr(enum_param.variable_id, fn_span);
+                let value_expr = self.synth_enum_get_value(enum_param_expr, fn_span);
+                Ok(value_expr)
+            }
+            BuiltinTyperFunction::EnumAbilityGetTagName => {
+                // FIXME: a 'switch' would be much better, if we had them
+                // But we'll synthesize a big if/else inline for now.
+                let enum_param = *self.mem.get_nth(params, 0);
+                let enum_param_expr = self.synth_variable_expr(enum_param.variable_id, fn_span);
+                let enum_type_id = self.exprs.get_type(enum_param_expr);
+                let enum_arg_int_expr = self.synth_enum_get_value(enum_param_expr, fn_span);
+                let Type::Enum(enum_type) = self.types.get(enum_type_id) else {
+                    self.ice_span(fn_span, "not an enum");
+                };
+                let mut arms: List<TypedMatchArm, _> =
+                    self.mem.new_list(enum_type.member_values.len());
+                for member in self.types.mem.getn(enum_type.member_values) {
+                    let int_value_expr = self.synth_int(member.int_value, fn_span);
+                    let string_id = self.ast.strings.intern(self.ast.idents.get_name(member.name));
+                    let member_name_expr = self.synth_string_literal(string_id, fn_span);
+                    let cond =
+                        self.synth_simple_equals_call(enum_arg_int_expr, int_value_expr, fn_span);
+                    let instrs = self.mem.pushn(&[MatchingConditionInstr::Cond { value: cond }]);
+                    arms.push(TypedMatchArm {
+                        condition: MatchingCondition { instrs },
+                        consequent_expr: member_name_expr,
+                    });
+                }
+                let match_expr = TypedExpr::Match(TypedMatchExpr {
+                    initial_let_statements: MSlice::empty(),
+                    arms: self.mem.list_to_handle(arms),
+                });
+                Ok(self.exprs.add(match_expr, STRING_TYPE_ID, fn_span))
+            }
+            BuiltinTyperFunction::SumAbilityGetTag => todo!(),
+            BuiltinTyperFunction::SumAbilityGetTagName => todo!(),
+        }
     }
 
     fn warn_variable_usage_counts(
@@ -15183,7 +15434,7 @@ impl TypedProgram {
         let ability_namespace = Namespace {
             name: parsed_ability.name,
             scope_id: ability_scope_id,
-            namespace_type: NamespaceType::Ability,
+            namespace_type: NamespaceKind::Ability,
             companion_type_id: None,
             parent_id: Some(parent_namespace_id),
             owner_module: Some(self.module_in_progress.unwrap()),
@@ -15734,6 +15985,11 @@ impl TypedProgram {
                 }
                 Ok(sym) => sym,
             };
+        debug!(
+            "Usable symbols for {}: {:?}",
+            self.qident_to_string(&parsed_use.target),
+            &useable_symbols
+        );
         let resolution = if useable_symbols.is_empty() {
             debug!("Inserting unresolved use of {}", self.qident_to_string(&parsed_use.target));
             UseStatus::Unresolved(scope_id)
@@ -15813,10 +16069,20 @@ impl TypedProgram {
             })
         }
         if let Some(ns_id) = scope_to_search.find_namespace(name.name) {
-            found_symbols.push(UseableSymbol {
-                source_scope: scope_id_to_search,
-                id: UseableSymbolId::Namespace(ns_id),
-            })
+            let ns = self.namespaces.get(ns_id);
+            let is_companion_ns = ns.namespace_type == NamespaceKind::TypeCompanion;
+            if is_companion_ns {
+                // Skip resolving this use; we know about the namespace
+                // but not about its type yet; if we did, the earlier branch
+                // would have hit
+                // We will resolve this use later
+                debug!("skipping use of unresolved companion ns {}", self.ident_str(ns.name));
+            } else {
+                found_symbols.push(UseableSymbol {
+                    source_scope: scope_id_to_search,
+                    id: UseableSymbolId::Namespace(ns_id),
+                })
+            }
         }
         Ok(found_symbols)
     }
@@ -15839,71 +16105,93 @@ impl TypedProgram {
             if skip_defns.contains(&parsed_definition_id) {
                 continue;
             }
-            if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
-                let parsed_type_defn = self.ast.get_type_defn(type_defn_id);
-                if parsed_type_defn.flags.is_alias() {
-                    // Do nothing for aliases in the decl phase
-                } else {
-                    // Find companion namespace if exists and update type_defn_info
-                    let companion_namespace_id = self
+            match parsed_definition_id {
+                ParsedId::TypeDefn(type_defn_id) => {
+                    let parsed_type_defn = self.ast.get_type_defn(type_defn_id).clone();
+                    if parsed_type_defn.flags.is_alias() {
+                        // Do nothing for aliases in the decl phase
+                    } else {
+                        // Find companion namespace if exists and update type_defn_info
+                        let found_namespace_id = self
+                            .scopes
+                            .get_scope(namespace_scope_id)
+                            .find_namespace(parsed_type_defn.name);
+                        let companion_namespace_id = match found_namespace_id {
+                            None => None,
+                            Some(ns_id) => {
+                                let companion_ns = self.namespaces.get(ns_id);
+                                if companion_ns.namespace_type == NamespaceKind::TypeCompanion {
+                                    Some(ns_id)
+                                } else {
+                                    self.report_hint(parsed_type_defn.span, "matching namespace is not declared as type companion; use an `ns for {}` declaration");
+                                    None
+                                }
+                            }
+                        };
+                        let defn_info = TypeDefnInfo {
+                            name: parsed_type_defn.name,
+                            scope: namespace_scope_id,
+                            companion_namespace: companion_namespace_id,
+                            ast_id: ParsedId::TypeDefn(type_defn_id),
+                            recursive: false,
+                        };
+                        let type_id = self.types.add_unresolved_type_defn(type_defn_id, defn_info);
+
+                        if let Some(companion_namespace_id) = companion_namespace_id {
+                            self.namespaces.get_mut(companion_namespace_id).companion_type_id =
+                                Some(type_id);
+                        }
+                        let name = parsed_type_defn.name;
+                        let added =
+                            self.scopes.get_scope_mut(namespace_scope_id).add_type(name, type_id);
+                        if !added {
+                            let span = parsed_type_defn.span;
+                            self.report(errf!(span, "Type {} exists", self.ident_str(name)));
+                        }
+
+                        // Detect builtin types and store their IDs for fast lookups
+                        if namespace_scope_id == self.scopes.core_scope_id {
+                            if name == self.ast.idents.b.string {
+                                self.types.builtins.string = Some(type_id);
+                            } else if name == self.ast.idents.b.buffer {
+                                self.types.builtins.buffer = Some(type_id);
+                            }
+                        } else if namespace_scope_id == self.scopes.types_scope_id {
+                            if name == self.ast.idents.b.type_schema {
+                                self.types.builtins.types_type_schema = Some(type_id);
+                            } else if name == self.ast.idents.b.int_kind {
+                                self.types.builtins.types_int_kind = Some(type_id);
+                            } else if name == self.ast.idents.b.int_value {
+                                self.types.builtins.types_int_value = Some(type_id)
+                            } else if name == self.ast.idents.b.layout {
+                                self.types.builtins.types_layout = Some(type_id)
+                            }
+                        }
+                    }
+                }
+                ParsedId::Namespace(parsed_namespace_id) => {
+                    self.declare_types_in_parsed_namespace(parsed_namespace_id, skip_defns);
+                }
+                ParsedId::Ability(parsed_ability_id) => {
+                    let parsed_ability_defn = self.ast.get_ability(parsed_ability_id);
+                    let name = parsed_ability_defn.name;
+                    let span = parsed_ability_defn.span;
+                    let added = self
                         .scopes
-                        .get_scope(namespace_scope_id)
-                        .find_namespace(parsed_type_defn.name);
-                    let defn_info = TypeDefnInfo {
-                        name: parsed_type_defn.name,
-                        scope: namespace_scope_id,
-                        companion_namespace: companion_namespace_id,
-                        ast_id: ParsedId::TypeDefn(type_defn_id),
-                        recursive: false,
-                    };
-                    let type_id = self.types.add_unresolved_type_defn(type_defn_id, defn_info);
-
-                    if let Some(companion_namespace_id) = companion_namespace_id {
-                        self.namespaces.get_mut(companion_namespace_id).companion_type_id =
-                            Some(type_id);
-                    }
-                    let name = parsed_type_defn.name;
-                    let added =
-                        self.scopes.get_scope_mut(namespace_scope_id).add_type(name, type_id);
+                        .get_scope_mut(namespace_scope_id)
+                        .add_pending_ability_defn(name, parsed_ability_id);
                     if !added {
-                        let span = parsed_type_defn.span;
-                        self.report(errf!(span, "Type {} exists", self.ident_str(name)));
-                    }
-
-                    // Detect builtin types and store their IDs for fast lookups
-                    if namespace_scope_id == self.scopes.core_scope_id {
-                        if name == self.ast.idents.b.string {
-                            self.types.builtins.string = Some(type_id);
-                        } else if name == self.ast.idents.b.buffer {
-                            self.types.builtins.buffer = Some(type_id);
-                        }
-                    } else if namespace_scope_id == self.scopes.types_scope_id {
-                        if name == self.ast.idents.b.type_schema {
-                            self.types.builtins.types_type_schema = Some(type_id);
-                        } else if name == self.ast.idents.b.int_kind {
-                            self.types.builtins.types_int_kind = Some(type_id);
-                        } else if name == self.ast.idents.b.int_value {
-                            self.types.builtins.types_int_value = Some(type_id)
-                        } else if name == self.ast.idents.b.layout {
-                            self.types.builtins.types_layout = Some(type_id)
-                        }
+                        self.report(errf!(span, "Ability {} exists", self.ident_str(name)));
                     }
                 }
-            }
-            if let ParsedId::Ability(parsed_ability_id) = parsed_definition_id {
-                let parsed_ability_defn = self.ast.get_ability(parsed_ability_id);
-                let name = parsed_ability_defn.name;
-                let span = parsed_ability_defn.span;
-                let added = self
-                    .scopes
-                    .get_scope_mut(namespace_scope_id)
-                    .add_pending_ability_defn(name, parsed_ability_id);
-                if !added {
-                    self.report(errf!(span, "Ability {} exists", self.ident_str(name)));
-                }
-            }
-            if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
-                self.declare_types_in_parsed_namespace(namespace_id, skip_defns);
+                ParsedId::Use(_)
+                | ParsedId::Function(_)
+                | ParsedId::AbilityImpl(_)
+                | ParsedId::Global(_)
+                | ParsedId::Expression(_)
+                | ParsedId::TypeExpression(_)
+                | ParsedId::Pattern(_)
+                | ParsedId::StaticDefn(_) => (),
             }
         }
     }
@@ -16077,10 +16365,15 @@ impl TypedProgram {
             self.scopes.array_scope_id = ns_scope_id;
         }
 
+        let namespace_type = if ast_namespace.is_type_companion {
+            NamespaceKind::TypeCompanion
+        } else {
+            NamespaceKind::User
+        };
         let namespace = Namespace {
             name,
             scope_id: ns_scope_id,
-            namespace_type: NamespaceType::User,
+            namespace_type,
             companion_type_id: None,
             parent_id: Some(parent_ns_id),
             owner_module: Some(self.module_in_progress.unwrap()),
@@ -16338,7 +16631,7 @@ impl TypedProgram {
         // }
         // for function_id in unused {
         //     let span = self.get_function_span(function_id);
-        //     self.report_warning(span, "Unused");
+        //     self.report_warning(span, "Unused function");
         // }
 
         Ok(module_id)
@@ -16402,6 +16695,9 @@ impl TypedProgram {
         debug!(">> Pass 4 declare rest of definitions (functions, globals)");
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
         check_for_errors!("general declaration");
+
+        // nocommit: Change companion ns resolution to only look for namespaces of that type
+        //           Also, check for unresolved ones after resolving types
 
         // Now that functions are declared, another pass for unresolved uses
         let unresolved_uses =

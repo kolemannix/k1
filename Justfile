@@ -1,5 +1,5 @@
 a:
-  ./run.sh sandbox/a.k1
+  ./run.sh sandbox
 
 ts1:
   ./run.sh test_src/suite1
@@ -51,6 +51,6 @@ install-macos-from-macos: bundle-macos-from-macos
   rm -r builds/k1-macos
 
 install-k1lib:
-  rm -r ~/.k1/k1lib
-  cp -r k1lib ~/.k1/k1lib
+  # rm -r ~/.k1/k1lib
+  cp -r k1lib/. ~/.k1/k1lib
 

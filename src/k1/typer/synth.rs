@@ -160,16 +160,16 @@ impl TypedProgram {
         )
     }
 
-    pub(super) fn synth_block(
+    pub(super) fn new_block_builder(
         &mut self,
         parent_scope: ScopeId,
         scope_type: ScopeType,
         span: SpanId,
-        max_len: u32,
+        max_stmt_len: u32,
     ) -> BlockBuilder {
         let block_scope_id =
             self.scopes.add_child_scope(parent_scope, scope_type, ScopeOwnerId::None, None);
-        BlockBuilder { statements: self.mem.new_list(max_len), scope_id: block_scope_id, span }
+        BlockBuilder { statements: self.mem.new_list(max_stmt_len), scope_id: block_scope_id, span }
     }
 
     /// Sometimes a sub-expression of a larger construct has type `never`, for example a function argument
@@ -184,7 +184,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         span: SpanId,
     ) -> TypedExprId {
-        let mut b = self.synth_block(scope_id, ScopeType::LexicalBlock, span, exprs.len() as u32);
+        let mut b = self.new_block_builder(scope_id, ScopeType::LexicalBlock, span, exprs.len() as u32);
         for e in exprs {
             let e_type_id = self.exprs.get_type(*e);
             self.push_block_stmt(&mut b, TypedStmt::Expr(*e, e_type_id));
@@ -456,7 +456,7 @@ impl TypedProgram {
         let phony_fn_id =
             self.scopes.find_function(self.scopes.core_scope_id, self.ast.idents.b.phony).unwrap();
         let specialized_phony_fn_id =
-            self.specialize_function_signature(type_args, MSlice::empty(), phony_fn_id);
+            self.specialize_function_declaration(type_args, MSlice::empty(), phony_fn_id);
         let call = Call {
             callee: Callee::StaticFunction(specialized_phony_fn_id),
             args: MSlice::empty(),
@@ -551,7 +551,7 @@ impl TypedProgram {
         span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        let mut block = self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, parts.len());
+        let mut block = self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, parts.len());
         let block_scope = block.scope_id;
         let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
         if self.config.no_std {
@@ -725,7 +725,7 @@ impl TypedProgram {
             return Ok(e);
         }
 
-        let mut block = self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 3);
+        let mut block = self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 3);
         let block_scope = block.scope_id;
         let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
         if self.config.no_std {
@@ -774,6 +774,14 @@ impl TypedProgram {
         let build_call_type = self.exprs.get_type(build_call);
         Ok(self.exprs.add_block(&mut self.mem, block, build_call_type))
     }
+
+    pub(crate) fn synth_variable_expr(&mut self, variable_id: VariableId, span: SpanId) -> TypedExprId {
+        let type_id = self.variables.get(variable_id).type_id;
+        let expr = self.exprs.add(TypedExpr::Variable(VariableExpr { variable_id }), type_id, span);
+        self.register_variable_usage(variable_id, span);
+        expr
+    }
+
 }
 
 pub(super) fn synth_static_option(

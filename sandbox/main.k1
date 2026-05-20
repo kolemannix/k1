@@ -1,30 +1,6 @@
-fn printStructShape[T](): string {
-  let id = types/type-id[T];
-  require types/get-type-schema[T] is :struct({ fields }) else { return("") };
-  let sb = StringBuilder/new();
-  let name = types/type-name(id);
-  sb.string("Struct {name} {{\n");
-  for field in fields {
-    writef(sb, "");
-    // sb.string("  ");
-    sb.string(field.name);
-    sb.string(": ");
-    sb.string(types/type-name(field.type-id));
-    sb.string("\n");
-  };
-  sb.string("}");
-  sb.build()
-}
-
-deftype Point3[T] = {
-  x: T, y: T, z: T
-}
-
 fn main(): i32 {
-  assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
-  assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
-  assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
-  assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
+  let x: either { a, b, c, d } = :d;
+  println(x.tag-name());
   0
 }
 

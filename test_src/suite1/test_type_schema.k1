@@ -40,7 +40,7 @@ ns type_schema {
       and inner-type-id == type-id[i32] else crash("");
     assert(get-type-schema[*mut i32] is :reference({ mutable: true }));
     assertEquals(
-      get-type-schema[**bool].asReference().!.inner-type-id,
+      get-type-schema[**bool].as-reference().!.inner-type-id,
       type-id[*bool]
     );
 

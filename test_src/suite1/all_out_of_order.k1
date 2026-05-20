@@ -29,11 +29,11 @@ deftype Foo = { name: string }
 
 ns bar {
   // Type with NS used before defined
-  use foo/core/Test
-  fn doIt(_t: Test): Test { 
+  use foo/core/nested
+  fn doIt(_t: nested): nested { 
     // before called
     before();
-    Test/default
+    nested/default
   }
   // before imported (below where called)
   use secret/before
@@ -46,9 +46,9 @@ ns secret {
 
 ns foo {
   ns core {
-    deftype Test = either { A, B }
-    ns Test {
-      let default: Test = :A
+    deftype nested = either { A, B }
+    ns for nested {
+      let default: nested = :A
     }
   }
 }

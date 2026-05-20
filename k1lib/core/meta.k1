@@ -69,7 +69,7 @@ ns meta {
     code.line("}");
 
     // begin ns
-    code.line(`ns {name} {{`);
+    code.line(`ns for {name} {{`);
 
     // begin fn get
     code.line(`  fn get(self: {name}, index: size): {tt} {{`);

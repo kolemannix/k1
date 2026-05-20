@@ -13,18 +13,18 @@ fn sumPayload() {
   } else crash("");
   assert(b is :b(_));
   assert(b is :b('x'));
-  assert(b.asB().! == 'x');
+  assert(b.as-b().! == 'x');
 
   if c is :c("hello, sums") {} else crash("");
   assert(c is :c(_));
-  assert(c.asC().! == "hello, sums");
+  assert(c.as-c().! == "hello, sums");
 
 }
 
 deftype MyResult[T, E] = either { ok(T), err(E) }
-ns MyResult {
+ns for MyResult {
   fn myGet[T, E](self: MyResult[T, E]): T {
-    self.asOk().!
+    self.as-ok().!
   }
   fn show[T: print, E: print](self: MyResult[T, E]): string {
     switch self {
@@ -38,7 +38,7 @@ fn genericSum() {
     let x1: MyResult[int, string] = :ok(-3);
     let x2: MyResult[int, string] = :err("Some error message");
 
-    let x1Ok = x1.asOk();
+    let x1Ok = x1.as-ok();
 
     // This tests type inference for sums
     assert(MyResult/myGet(x1) == -3);

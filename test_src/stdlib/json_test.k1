@@ -14,8 +14,8 @@ fn testBasicEnum() {
   assert(null is :null);
 
   let obj2: json = :array([:str("hello"), :number(123.0)]);
-  assert(obj2.asArray().!.get(0) is :str("hello"));
-  assert(obj2.asArray().!.get(1) is :number(123.0));
+  assert(obj2.as-array().!.get(0) is :str("hello"));
+  assert(obj2.as-array().!.get(1) is :number(123.0));
 }
 
 fn testParsing() {

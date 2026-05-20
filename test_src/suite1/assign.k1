@@ -32,18 +32,18 @@ fn complexReferences() {
   structRef.x* <- 42;
   assert(xRef.* == 42);
 
-  let* eitherRef: *mut either { Yes(int), No } = :Yes(3);
+  let* eitherRef: *mut either { yes(int), no } = :yes(3);
 
-  let yesRef: *(type-of(eitherRef).value.Yes) = eitherRef.asYes().!;
+  let yesRef: *(type-of(eitherRef).value.yes) = eitherRef.as-yes().!;
 
   assert(yesRef.* == 3);
-  let yesValue: int = eitherRef.asYes().!;
+  let yesValue: int = eitherRef.as-yes().!;
   assert(yesValue == 3);
 
-  eitherRef.asYes().! <- -3;
+  eitherRef.as-yes().! <- -3;
 
   assert(yesRef.* == -3);
-  assert(eitherRef.asYes().!.* == -3);
+  assert(eitherRef.as-yes().!.* == -3);
 
   // no restrictions on lhs except that it has to be a pointer,
   // this in conjunction with let* will mean we have pointers for

@@ -3,10 +3,7 @@
 
 // A growable, ordered collection of elements.
 // Backed by an efficient, contiguously allocated buffer
-//
-// list stores a copy of its allocator, because it is intended
-// to be a convenient and easy workhorse for most use cases
-ns list {
+ns for list {
 
   ///////////////////////////
   // Construction functions
@@ -199,6 +196,12 @@ ns list {
     let clone = self.cloned();
     clone.reverse[T]();
     clone
+  }
+
+  fn concat[T](self: list[T], other: list[T]): list[T] {
+    let dst = self.cloned();
+    dst.appendList(other);
+    dst
   }
 
   fn appendList[T](self: *mut list[T], other: list[T]) {

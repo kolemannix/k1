@@ -11,7 +11,7 @@
 // exclusive access to the data (e.g., just created it) 
 // and never break the contract that no observable
 // span contents should ever change
-ns span {
+ns for span {
   
   ////////////////////////
   // Constructor functions

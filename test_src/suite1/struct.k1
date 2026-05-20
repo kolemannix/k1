@@ -13,7 +13,7 @@ fn basicStruct(): int {
 }
 
 deftype Foo = { x: int, y: bool }
-ns Foo {
+ns for Foo {
   fn getValue(self: Foo): int { self.x }
   fn setValue(self: *mut Foo, x: int) { self.x* <- x; }
   fn new(x: int): Foo { { x: x, y: false } }

@@ -4,12 +4,12 @@ ns scopes {
   
   ns Outer {
     deftype Foo = { x: int }
-    ns Foo {
+    ns for Foo {
       fn value(self: Foo): int { self.x + 3 }
     }
   }
   
-  ns Foo {
+  ns for Foo {
     fn value(self: Foo): int { self.x }
   }
   

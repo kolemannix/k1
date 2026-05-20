@@ -1,1 +1,2 @@
 -I/Users/knix/dev/k1/llvm/install-llvm/include
+-xc

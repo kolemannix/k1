@@ -2,7 +2,7 @@ ns generic_struct;
 
 deftype Box[T] = { value: T }
 deftype AuPair[T, U] = { t: ?T, u: ?U }
-ns AuPair {
+ns for AuPair {
   fn t[T, U](self: AuPair[T, U]): ?T {
     self.t
   }

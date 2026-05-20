@@ -34,7 +34,7 @@ fn fnv1a_hash(key: string): u64 {
   hash_value
 }
 
-ns HashMap {
+ns for HashMap {
 
   fn _make[V](cap: size): HashMap[V] {
     { size: 0, entries: list/filled(cap, :none) }

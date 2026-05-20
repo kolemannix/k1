@@ -1,5 +1,7 @@
 // file.cpp
+#include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 typedef struct i2 {
   int x; int y;
@@ -8,7 +10,7 @@ typedef struct i2 {
 struct foo {
   char _char;
   unsigned char _unsigned_char;
-  char16_t _char16_t;
+  // char16_t _char16_t;
   size_t _sizet;
   int _int;
   int* _int_p;

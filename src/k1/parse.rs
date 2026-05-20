@@ -1405,6 +1405,20 @@ pub struct ParsedNamespace {
     pub id: ParsedNamespaceId,
     pub name_span: SpanId,
     pub span: SpanId,
+    pub is_type_companion: bool,
+}
+
+impl ParsedNamespace {
+    pub fn empty(name: Ident) -> Self {
+        ParsedNamespace {
+            name,
+            definitions: EcoVec::new(),
+            id: ParsedNamespaceId::PENDING,
+            name_span: SpanId::NONE,
+            span: SpanId::NONE,
+            is_type_companion: false,
+        }
+    }
 }
 
 // Tiny little expression language that turns out to be necesary
@@ -2125,24 +2139,14 @@ impl Source {
 pub fn init_module(module_name: Ident, ast: &mut ParsedProgram) -> ParsedNamespaceId {
     let root_namespace_id = if ast.namespaces.is_empty() {
         let name = ast.idents.intern("_root");
-        ast.add_namespace(ParsedNamespace {
-            name,
-            definitions: EcoVec::new(),
-            id: ParsedNamespaceId::ONE,
-            name_span: SpanId::NONE,
-            span: SpanId::NONE,
-        })
+        let root_ns = ParsedNamespace::empty(name);
+
+        ast.add_namespace(root_ns)
     } else {
         ast.get_root_namespace().id
     };
 
-    let module_namespace_id = ast.add_namespace(ParsedNamespace {
-        name: module_name,
-        definitions: eco_vec![],
-        id: root_namespace_id,
-        name_span: SpanId::NONE,
-        span: SpanId::NONE,
-    });
+    let module_namespace_id = ast.add_namespace(ParsedNamespace::empty(module_name));
     ast.namespaces
         .get_mut(root_namespace_id)
         .definitions
@@ -4732,6 +4736,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         self.add_semantic_token(keyword, SemanticTokenKind::Namespace);
         self.advance();
+        let mut is_type = false;
+        match self.peek().kind {
+            K::KeywordFor => {
+                self.advance();
+                is_type = true;
+            }
+            _ => {}
+        };
+
         let (name_token, name) = self.expect_ident()?;
         let is_braced = match self.tokens.next() {
             t if t.kind == K::OpenBrace => true,  // namespace asdf {
@@ -4748,6 +4761,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             id: ParsedNamespaceId::PENDING,
             name_span: name_token.span,
             span,
+            is_type_companion: is_type,
         });
         Ok(Some(namespace_id))
     }

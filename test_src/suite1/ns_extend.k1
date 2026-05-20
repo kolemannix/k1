@@ -2,13 +2,13 @@ ns ns_extend;
 
 ns foo {
   deftype Baz = { b: int }
-  ns Baz {
+  ns for Baz {
     fn get(self: Baz): int { self.b }
   }
 }
 
 ns foo {
-  ns Baz {
+  ns for Baz {
     fn get2(self: Baz): int { self.b }
   }
 }

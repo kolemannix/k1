@@ -13,7 +13,7 @@ deftype parser = {
   input: string,
   cursor: size,
 }
-ns parser {
+ns for parser {
   fn peek(self: parser): ?char { self.input.getOpt(self.cursor) }
   fn next(self: *mut parser): ?char {
     switch self.peek() {

@@ -36,14 +36,14 @@ fn k1-string-from-cx-string(cxs: CXString): string {
   let c-str = clang/getCString(cxs);
   let s = string/from-c(c-str);
   clang/disposeString(cxs);
-  s.cloned()
+  s
 }
 
 deftype CXString = {
   data: ptr,
   private_flags: c-unsigned,
 }
-ns CXString {
+ns for CXString {
   fn to-k1(self: CXString): string {
     k1-string-from-cx-string(self)
   }

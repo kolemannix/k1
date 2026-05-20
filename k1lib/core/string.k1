@@ -1,10 +1,7 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-// TODO: CString type
-deftype alias c-string = ptr
-
-ns string {
+ns for string {
   
   fn span(self: string): span[char] { self.span }
 

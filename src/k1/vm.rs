@@ -841,7 +841,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                         let function_id = FunctionId::from_nzu32(function_id_nzu32);
                         function_id
                     }
-                    IrCallee::Builtin(_, backend_builtin) => {
+                    IrCallee::BackendBuiltin(_, backend_builtin) => {
                         match backend_builtin {
                             ir::BackendBuiltin::TypeSchema => {
                                 // intern fn typeSchema(id: u64): TypeSchema
