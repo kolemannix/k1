@@ -15,7 +15,7 @@ if [[ ${#link_flags[@]} -eq 0 ]]; then
 fi
 
 /Users/knix/dev/k1/target/debug/k1 \
-  --write-llvm \
+  --emit-llvm \
   "${link_flags[@]}" \
   -c -lpq \
   run /Users/knix/dev/k1/dogfood/postgres

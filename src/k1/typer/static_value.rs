@@ -60,10 +60,13 @@ pub enum StaticValue {
     Float(TypedFloatValue),
     String(StringId),
     Enum(TypeId, TypedIntValue),
-    Zero(TypeId),
     Struct(StaticStruct),
     Sum(StaticSum),
     LinearContainer(StaticContainer),
+
+    // Special, optimized-ish representation
+    Zero(TypeId),
+    // Raw(TypeId, *mut u8)
 }
 
 impl StaticValue {

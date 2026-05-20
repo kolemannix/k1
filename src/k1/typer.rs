@@ -8252,13 +8252,7 @@ impl TypedProgram {
                     let source_for_emission =
                         self.ast.sources.add_source(crate::parse::Source::make(
                             0,
-                            self.config
-                                .out_dir
-                                .canonicalize()
-                                .unwrap()
-                                .to_str()
-                                .unwrap()
-                                .to_owned(),
+                            self.config.out_dir.to_str().unwrap().to_owned(),
                             generated_filename,
                             content.clone(),
                         ));
@@ -11150,6 +11144,12 @@ impl TypedProgram {
                 let ctx_no_hint = ctx.with_no_expected_type();
 
                 let writer_arg = self.ast.mem.get_nth(fn_call.args, 0);
+                if let ParsedExpr::InterpolatedString(is) = self.ast.exprs.get(writer_arg.value) {
+                    return failf!(
+                        is.span,
+                        "first argument should be the writer, not the format string"
+                    );
+                }
                 let writer_expr = self.eval_expr(writer_arg.value, ctx_no_hint)?;
                 let (_writer_impl, needs_addr_of) = self.expect_ability_impl(
                     self.exprs.get_type(writer_expr),
@@ -16696,8 +16696,7 @@ impl TypedProgram {
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
         check_for_errors!("general declaration");
 
-        // nocommit: Change companion ns resolution to only look for namespaces of that type
-        //           Also, check for unresolved ones after resolving types
+        // nocommit: Also, check for unresolved companion nses after resolving types
 
         // Now that functions are declared, another pass for unresolved uses
         let unresolved_uses =

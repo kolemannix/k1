@@ -1,6 +1,15 @@
-fn main(): i32 {
-  let x: either { a, b, c, d } = :d;
-  println(x.tag-name());
+fn getArgs(): string {
+  println("thunk");
+  "world"
+}
+fn getArgs2(): {a:int, b: int} {
+  println("thunk2");
+  { a: 10, b: 11 }
+}
+#debug fn main(): i32 {
+
+  println(stringf("hello, {b} {a}", getArgs2()));
+
   0
 }
 

@@ -150,6 +150,11 @@ pub enum Command {
         /// File
         file: PathBuf,
     },
+    #[clap()]
+    Repl {
+        /// File
+        file: PathBuf,
+    },
 }
 
 impl Command {
@@ -159,6 +164,7 @@ impl Command {
             Command::Build { file } => file,
             Command::Run { file } => file,
             Command::Test { file } => file,
+            Command::Repl { file } => file,
         }
     }
 
@@ -182,38 +188,31 @@ impl Command {
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
-    /// No core
+    /// core only
     #[arg(short, long, default_value_t = false)]
     pub no_std: bool,
 
-    /// Output an LLVM IR file at out_dir/{module_name}.ll
+    /// Output an LLVM IR file at out_dir/{program_name}.ll
     #[arg(long, default_value_t = false)]
-    pub write_llvm: bool,
+    pub emit_llvm: bool,
 
     /// Optimize
     #[arg(long, default_value_t = false)]
     pub optimize: bool,
 
-    /// Dump Module
+    /// Write out a text represntation of the typed program
     #[arg(long, default_value_t = false)]
     pub dump_module: bool,
 
-    /// Debug Module
+    /// Generate debug info
     #[arg(long)]
     pub debug: bool,
 
     #[arg(long)]
     pub profile: bool,
 
-    /// Log LLVM Instruction Counts
-    #[arg(long, default_value_t = false)]
-    pub llvm_counts: bool,
-
     /// Target platform
     pub target: Option<Target>,
-
-    #[arg(long = "clang-option", short = 'c', allow_hyphen_values = true)]
-    pub clang_options: Vec<String>,
 
     #[command(subcommand)]
     pub command: Command,
@@ -558,7 +557,7 @@ pub fn codegen_module<'ctx, 'module>(
         anyhow::bail!(e)
     };
 
-    if args.write_llvm {
+    if args.emit_llvm {
         let llvm_text = codegen.emit_llvm_ir_text();
         let mut f = File::create(out_dir.join(module_name_path.with_extension("ll")))
             .expect("Failed to create .ll file");
@@ -572,21 +571,7 @@ pub fn codegen_module<'ctx, 'module>(
     }
 
     if do_write_executable {
-        write_executable(codegen.k1, &module_name_path, &args.clang_options)?;
-    }
-
-    if args.llvm_counts {
-        let mut instruction_counts = codegen
-            .llvm_functions
-            .values()
-            .map(|llvm_fn| {
-                (llvm_fn.function_value.get_name().to_string_lossy(), llvm_fn.instruction_count)
-            })
-            .collect::<Vec<_>>();
-        instruction_counts.sort_by_key(|f| f.1);
-        for (name, count) in &instruction_counts {
-            eprintln!("{name}: {count}")
-        }
+        write_executable(codegen.k1, &module_name_path, &[])?;
     }
 
     Ok(codegen)

@@ -243,6 +243,11 @@ ability writer {
       i := i + 1;
     }
   }
+
+  fn line(self, line: string) {
+    self.string(line);
+    self.string("\n");
+  }
 }
 
 ability print {

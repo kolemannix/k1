@@ -15,8 +15,6 @@ use clang/CXIndex
 use clang/CXTranslationUnit
 use clang/CXCursor
 use clang/CXString
-// nocommit: if i use clang/CXString, the type is no longer in scope
-//           perhaps because it only uses the namespace?
 
 fn main(): i32 {
 
@@ -72,7 +70,6 @@ impl print for k1-defn {
     switch self {
       :struct(s) -> {
         if s.error is :some(e) writelnf(w, "// ERROR: {e}");
-        // nocommit: interpreted as struct fmt arg
         writelnf(w, "deftype {s.name} = {{");
         for s.fields { writelnf(w, "  {}: {}", it) };
         w.string("}")

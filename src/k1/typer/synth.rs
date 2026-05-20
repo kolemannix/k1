@@ -184,7 +184,8 @@ impl TypedProgram {
         scope_id: ScopeId,
         span: SpanId,
     ) -> TypedExprId {
-        let mut b = self.new_block_builder(scope_id, ScopeType::LexicalBlock, span, exprs.len() as u32);
+        let mut b =
+            self.new_block_builder(scope_id, ScopeType::LexicalBlock, span, exprs.len() as u32);
         for e in exprs {
             let e_type_id = self.exprs.get_type(*e);
             self.push_block_stmt(&mut b, TypedStmt::Expr(*e, e_type_id));
@@ -551,8 +552,12 @@ impl TypedProgram {
         span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        let mut block = self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, parts.len());
+        let mut block =
+            self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, parts.len() + 1);
         let block_scope = block.scope_id;
+        let args_variable =
+            self.synth_variable_defn_simple(self.ast.idents.b.fmtargs, args_expr, block_scope);
+        self.push_block_stmt_id(&mut block, args_variable.defn_stmt);
         let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
         if self.config.no_std {
             return failf!(span, "Interpolated strings are not supported in no_std mode");
@@ -567,6 +572,10 @@ impl TypedProgram {
             let type_id = k1.exprs.get_type(args);
             match k1.types.get(type_id) {
                 Type::Struct(_) => {
+                    if type_id == STRING_TYPE_ID {
+                        return None;
+                    }
+
                     let (field_index, field) = k1.types.get_struct_field_by_name(type_id, name)?;
                     let field_expr = k1.exprs.add(
                         TypedExpr::StructFieldAccess(FieldAccess {
@@ -600,26 +609,38 @@ impl TypedProgram {
                 | Type::Array(_)
                 | Type::Sum(_) => Ok(args),
                 Type::Struct(s) => {
-                    if n >= s.fields.len() as usize {
-                        return failf!(
+                    if type_id == STRING_TYPE_ID {
+                        if n == 0 {
+                            Ok(args)
+                        } else {
+                            failf!(
+                                span,
+                                "this hole asks for field {} on a string, which provides just 1 value",
+                                n + 1
+                            )
+                        }
+                    } else {
+                        if n >= s.fields.len() as usize {
+                            return failf!(
+                                span,
+                                "Format args struct only has {} fields, but this hole asks for field {}",
+                                s.fields.len(),
+                                n + 1
+                            );
+                        }
+                        let nth_field = k1.types.get_struct_field(type_id, n);
+                        let field_expr = k1.exprs.add(
+                            TypedExpr::StructFieldAccess(FieldAccess {
+                                base: args,
+                                field_index: n as u32,
+                                struct_type: type_id,
+                                access_kind: FieldAccessKind::ValueToValue,
+                            }),
+                            nth_field.type_id,
                             span,
-                            "Format args struct only has {} fields, but this hole asks for field {}",
-                            s.fields.len(),
-                            n + 1
                         );
+                        Ok(field_expr)
                     }
-                    let nth_field = k1.types.get_struct_field(type_id, n);
-                    let field_expr = k1.exprs.add(
-                        TypedExpr::StructFieldAccess(FieldAccess {
-                            base: args,
-                            field_index: n as u32,
-                            struct_type: type_id,
-                            access_kind: FieldAccessKind::ValueToValue,
-                        }),
-                        nth_field.type_id,
-                        span,
-                    );
-                    Ok(field_expr)
                 }
                 _ => {
                     failf!(span, "Not formattable currently: {}", k1.type_id_to_string(type_id))
@@ -667,16 +688,17 @@ impl TypedProgram {
                     };
                     // Must be a naked variable expr, look for it in the struct, then in the scope
                     let typed_expr = match naked_variable_name {
-                        None => {
-                            let typed_expr = self.eval_expr(*expr_id, block_ctx)?;
-                            typed_expr
-                        }
                         Some(name) => {
-                            let struct_arg = get_named_arg(self, args_expr, name, expr_span);
+                            let struct_arg =
+                                get_named_arg(self, args_variable.variable_expr, name, expr_span);
                             match struct_arg {
                                 Some(field_expr) => field_expr,
                                 None => self.eval_expr(*expr_id, block_ctx)?,
                             }
+                        }
+                        None => {
+                            let typed_expr = self.eval_expr(*expr_id, block_ctx)?;
+                            typed_expr
                         }
                     };
 
@@ -684,8 +706,8 @@ impl TypedProgram {
                     self.push_block_expr_id(&mut block, print_expr_call);
                 }
                 parse::InterpolatedStringPart::Hole { fmt_settings: _, span } => {
-                    // Grab the hole_index'th argument from args_expr.
-                    let arg = get_nth_arg(self, args_expr, hole_index, *span)?;
+                    // Grab the hole_index'th argument from args_variable.
+                    let arg = get_nth_arg(self, args_variable.variable_expr, hole_index, *span)?;
                     hole_index += 1;
                     let print_expr_call = self.synth_printto_call(arg, writer_expr, ctx)?;
                     self.push_block_expr_id(&mut block, print_expr_call);
@@ -775,13 +797,16 @@ impl TypedProgram {
         Ok(self.exprs.add_block(&mut self.mem, block, build_call_type))
     }
 
-    pub(crate) fn synth_variable_expr(&mut self, variable_id: VariableId, span: SpanId) -> TypedExprId {
+    pub(crate) fn synth_variable_expr(
+        &mut self,
+        variable_id: VariableId,
+        span: SpanId,
+    ) -> TypedExprId {
         let type_id = self.variables.get(variable_id).type_id;
         let expr = self.exprs.add(TypedExpr::Variable(VariableExpr { variable_id }), type_id, span);
         self.register_variable_usage(variable_id, span);
         expr
     }
-
 }
 
 pub(super) fn synth_static_option(

@@ -54,3 +54,6 @@ install-k1lib:
   # rm -r ~/.k1/k1lib
   cp -r k1lib/. ~/.k1/k1lib
 
+repl +args:
+  RUST_BACKTRACE=1 RUST_LOG=info \
+    cargo run --features=llvm-sys/prefer-dynamic -- repl {{args}}

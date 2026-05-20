@@ -21,7 +21,6 @@ fn main() -> anyhow::Result<ExitCode> {
     ));
     log::set_logger(l).unwrap();
     log::set_max_level(log::LevelFilter::Info);
-    info!("k1 repl v0.1.0");
 
     let cwd = std::env::current_dir().unwrap();
     let name = "repl.k1";

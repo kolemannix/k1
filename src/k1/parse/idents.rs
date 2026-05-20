@@ -178,6 +178,7 @@ pub(crate) struct BuiltinIdents {
     pub stringf: Ident,
     pub v: Ident,
     pub subject: Ident,
+    pub fmtargs: Ident,
 }
 
 #[allow(non_snake_case)]
@@ -359,6 +360,7 @@ impl IdentPool {
             stringf: intern!("stringf"),
             v: intern!("v"),
             subject: intern!("subject"),
+            fmtargs: intern!("fmtargs"),
         };
 
         macro_rules! make_fn {

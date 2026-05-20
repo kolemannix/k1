@@ -46,22 +46,42 @@ fn run() -> anyhow::Result<ExitCode> {
     let Ok(mut program) = compiler::compile_program(&args, &out_dir) else {
         return Ok(ExitCode::FAILURE);
     };
-    if matches!(args.command, Command::Check { .. }) {
+    if args.command.is_check() {
         // Note: I wouldn't mind switching back to exit for the faster
         // exit, but this was hiding a memory bug that causes the lsp
         // and test suite to crash when we try to drop the TypedModule.
-        return Ok(ExitCode::SUCCESS);
+        if cfg!(debug_assertions) {
+            return Ok(ExitCode::SUCCESS);
+        } else {
+            std::process::exit(0)
+        }
     };
     let llvm_ctx = inkwell::context::Context::create();
     return match compiler::codegen_module(&args, &llvm_ctx, &mut program, &out_dir, true) {
-        Ok(cg) => {
-            if matches!(args.command, Command::Build { .. }) {
-                Ok(ExitCode::SUCCESS)
-            } else {
+        Ok(cg) => match args.command {
+            Command::Check { .. } => unreachable!(),
+            Command::Build { .. } => Ok(ExitCode::SUCCESS),
+            Command::Run { .. } => {
                 compiler::run_compiled_program(&out_dir, cg.name());
                 Ok(ExitCode::SUCCESS)
             }
-        }
+            Command::Test { .. } => {
+                eprintln!("k1 test is unimplemented. So you get a free pass.");
+                Ok(ExitCode::SUCCESS)
+            }
+            Command::Repl { .. } => {
+                let mut line = String::new();
+                loop {
+                    let _len = std::io::stdin().read_line(&mut line).unwrap();
+                    if &line == "exit\n" {
+                        return Ok(ExitCode::SUCCESS);
+                    }
+
+                    println!("you said: {}", line);
+                    line.clear();
+                }
+            }
+        },
         Err(err) => {
             eprintln!("Codegen error: {err}");
             Ok(ExitCode::FAILURE)

@@ -125,7 +125,10 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
     let sep = if last "" else ",";
     writelnf(printBody, `    w.string("{it.name}={{self.{getName}()}{sep}");`);
   };
-  code.implPrint(type-name, printBody.build(), indent = 0);
+
+  // Have to use address of so the blanket impl applies
+  // FIXME: Use the address of trick on blanket impl search as well
+  &code.implPrint(type-name, printBody.build(), indent = 0);
 
   code.build()
 }
