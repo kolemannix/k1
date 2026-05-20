@@ -2601,7 +2601,7 @@ pub struct TypedProgram {
     pub type_schemas: FxHashMap<TypeId, StaticValueId>,
     pub type_names: FxHashMap<TypeId, StaticValueId>,
     pub scopes: Scopes,
-    pub messages: Vec<K1Message>,
+    pub messages: RefCell<Vec<K1Message>>,
     pub namespaces: Namespaces,
     pub abilities: VPool<TypedAbility, AbilityId>,
     pub ability_impls: VPool<TypedAbilityImpl, AbilityImplId>,
@@ -2801,7 +2801,7 @@ impl TypedProgram {
             type_schemas: FxHashMap::new(),
             type_names: FxHashMap::new(),
             scopes,
-            messages: vec![],
+            messages: RefCell::new(vec![]),
             namespaces,
             abilities: VPool::make_with_hint("abilities", 2048),
             ability_impls: VPool::make_with_hint("ability_impls", 4096),
@@ -5422,7 +5422,7 @@ impl TypedProgram {
                 //     };
                 // }
                 // Ok(())
-                Err(k1_format_user!(self, "expected struct {} but got struct {}", expected, actual))
+                Err(k1_format_user!(self, "Expected {} but got {}", expected, actual))
             }
             (Type::Reference(exp_ref), Type::Reference(act_ref)) => {
                 match self.check_types(exp_ref.inner_type, act_ref.inner_type, scope_id) {
@@ -16568,7 +16568,7 @@ impl TypedProgram {
             bail!(
                 "{} failed namespace declaration phase with {} errors",
                 self.program_name(),
-                self.messages.len()
+                self.messages.borrow().len()
             )
         }
         let typed_namespace_id = module_root_namespace_declare_result.unwrap();
@@ -16674,10 +16674,17 @@ impl TypedProgram {
 
         debug_assert_eq!(self.types.types.len(), self.types.type_variable_counts.len());
 
-        for type_id in self.types.iter_ids().collect_vec() {
+        for type_id in self.types.iter_ids() {
             if let Type::Unresolved(ast_id) = self.types.get(type_id) {
                 let span = self.ast.get_span_for_id(ParsedId::TypeDefn(*ast_id));
                 self.ice_span(span, "Unresolved type definition")
+            }
+        }
+
+        for ns in self.namespaces.iter() {
+            if ns.namespace_type == NamespaceKind::TypeCompanion && ns.companion_type_id.is_none() {
+                let span = self.ast.get_span_for_id(ns.parsed_id);
+                self.report(errf!(span, "Unresolved companion namespace; we never found type {}", self.ident_str(ns.name)));
             }
         }
 
@@ -16695,8 +16702,6 @@ impl TypedProgram {
         debug!(">> Pass 4 declare rest of definitions (functions, globals)");
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
         check_for_errors!("general declaration");
-
-        // nocommit: Also, check for unresolved companion nses after resolving types
 
         // Now that functions are declared, another pass for unresolved uses
         let unresolved_uses =
@@ -16737,7 +16742,7 @@ impl TypedProgram {
     }
 
     pub fn error_count(&self, kinds: &[MessageLevel]) -> usize {
-        self.messages.iter().filter(|e| kinds.contains(&e.level)).count()
+        self.messages.borrow().iter().filter(|e| kinds.contains(&e.level)).count()
     }
 
     fn assert_builtin_types_correct(&self) {
@@ -17857,12 +17862,12 @@ impl TypedProgram {
 
     // Errors and logging
 
-    pub fn report(&mut self, e: K1Message) {
+    pub fn report(&self, e: K1Message) {
         self.report_ext(e, false)
     }
-    pub fn report_ext(&mut self, e: K1Message, no_print: bool) {
+    pub fn report_ext(&self, e: K1Message, no_print: bool) {
         // Check for exact duplicates; happens a lot with generic code
-        if self.messages.contains(&e) {
+        if self.messages.borrow().contains(&e) {
             return;
         }
 
@@ -17880,7 +17885,7 @@ impl TypedProgram {
             let use_color = std::io::stderr().is_terminal();
             self.write_error(&mut std::io::stderr(), &e, use_color).unwrap();
         }
-        self.messages.push(e);
+        self.messages.borrow_mut().push(e);
     }
 
     pub fn report_hint(&mut self, span: SpanId, message: impl AsRef<str>) {

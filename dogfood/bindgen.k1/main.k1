@@ -44,63 +44,95 @@ fn main(): i32 {
     client_data = &state.as[ptr]
   );
 
+  let out = StringBuilder/new();
+  writelnf(out, "ns file; // file.cpp");
   for state.definitions {
-    println("{it}"); 
+    if it.error is :some(e) writelnf(out, "// ERROR: {e}");
+    writef(out, "deftype {it.name} = {it.type}");
   };
+
+  println(out.build());
 
   0
 }
 
-deftype k1-defn = either { 
-  struct(k1-struct),
-  function,
-  typedef
-}
-deftype k1-struct = {
+deftype k1-defn = { 
   name: string,
-  fields: list[{ name: string, type: string }],
+  type: k1-type,
   error: ?string,
+}
+deftype k1-type = either { simple(string), struct({ fields: list[{ name: string, type: k1-type }] }) }
+
+impl print for k1-type {
+  fn printTo[w: writer](self, w) {
+    switch self {
+      :simple(s) -> w.string(s),
+      :struct(s) -> {
+        w.line(p"{");
+        for s.fields { writelnf(w, "  {}: {},", it) };
+        w.string("}")
+      }
+    }
+  }
 }
 
 deftype BindgenState = {
   definitions: list[k1-defn],
 }
-impl print for k1-defn {
-  fn printTo[w: writer](self, w) {
-    switch self {
-      :struct(s) -> {
-        if s.error is :some(e) writelnf(w, "// ERROR: {e}");
-        writelnf(w, "deftype {s.name} = {{");
-        for s.fields { writelnf(w, "  {}: {}", it) };
-        w.string("}")
-      },
-      :function -> w.string("function"),
-      :typedef -> w.string("typedef"),
-    }
-  }
-}
 
+
+fn visit-struct(struct-root: CXCursor): { struct: k1-type.struct, pending-anon-decl: ?k1-type.struct, error: ?string } {
+  let returned result = zeroed();
+  eprintln("Handling struct decl");
+  clang/visitChildren(
+    parent = struct-root,
+    visitor = visit-struct-member.toRef(),
+    client_data = &result.as[ptr]
+  );
+  result
+}
 fn visit-struct-member(
   current: CXCursor,
   _parent: CXCursor,
   data: clang/CXClientData,
 ): clang/CXChildVisitResult {
-  let struct = data.as[*mut k1-struct];
+  let result = data.as[*mut visit-struct.return];
+  let cursor-name = clang/getCursorDisplayName(current).to-k1();
+  eprintln("visit-struct-member {cursor-name}");
   let cursor-kind = clang/getCursorKind(current);
-  let name = clang/getCursorDisplayName(current).to-k1();
-  require cursor-kind is :FieldDecl else {
-    struct.error* <- :some("Encountered non field decl: {cursor-kind.value} {name}");
-    return(:Break)
-  };
-  let type = switch map-type(current) {
-    :err(msg) -> {
-      struct.error* <- :some("Failed to map type: {msg}");
-      return(:Break)
+  switch cursor-kind {
+    :FieldDecl -> {
+      let field-name = cursor-name;
+      let cx-type = clang/getCursorType(current);
+      switch map-type(cx-type) {
+        :err(msg) -> {
+          result.error* <- :some("Failed to map type of struct field '{field-name}': {msg}");
+          :Break
+        },
+        :ok(typ) -> {
+          result.struct*.fields*.push({ name: field-name, type: typ });
+          :Continue
+        }
+      };
     },
-    :ok(typ) -> typ
-  };
-  struct.fields*.push({ name, type });
-  :Continue
+    :StructDecl -> {
+      // Anonymous member
+      let anon-result = visit-struct(current);
+
+      result.struct*.fields*.push({ name: "TODO", type: :struct(anon-result.struct) });
+
+      if anon-result.error is :some(msg) { 
+        result.error* <- :some(msg);
+        :Break
+      } else {
+        :Continue
+      };
+    },
+    _ -> {
+      result.error* <- :some("Encountered non field decl: {cursor-kind.tag-name()} {cursor-name}");
+      :Break
+    }
+  }
 }
 
 fn visit-root(
@@ -112,57 +144,80 @@ fn visit-root(
   let cursor-kind = clang/getCursorKind(current);
   let data = client-data.as[*mut BindgenState];
   print-cxstring("Name: ", clang/getCursorDisplayName(current));
-  let is-decl = clang/isDeclaration(cursor-kind) != 0;
-  println("isDeclaration: {is-decl}");
+  let is-decl = clang/isDeclaration(cursor-kind).as-bool();
+  eprintln("isDeclaration: {is-decl}");
   switch cursor-kind {
     :StructDecl -> {
-      println("Handling struct decl");
       let name = clang/getCursorDisplayName(current).to-k1();
-      let struct: k1-struct = {
-        name, fields: list/empty(), error: :none
-      };
-      clang/visitChildren(
-          parent = current,
-          visitor = visit-struct-member.toRef(),
-          client_data = &struct.as[ptr]
-          );
+      let struct-decl-result = visit-struct(current);
 
-      data.definitions*.push(:struct(struct));
+      data.definitions*.push({
+        name, type: :struct(struct-decl-result.struct), error: struct-decl-result.error
+      });
 
       :Continue
     },
     _ -> {
       let cursor-kind-name = clang/getCursorKindSpelling(cursor-kind).to-k1();
-      println("Skipping CXCursorKind: {cursor-kind-name}");
+      eprintln("Skipping CXCursorKind: {cursor-kind-name}");
       :Continue
     }
   }
 }
 
-fn map-type(current: CXCursor): result[string, string] {
-  let cx-type = clang/getCursorType(current);
-  println(" -> ({cx-type.kind.value})");
-  let s: string = switch cx-type.kind {
-    :Void -> p"{}",
-    :Bool -> "bool",
-    :Char_U -> "u8",
-    :UChar -> "u8",
-    :Char16 -> "i16",
-    :Char32 -> "i32",
-    :UShort -> "",
-    :UInt -> "u32",
-    :ULong -> "c-long",
-    :ULongLong -> "c-longlong",
-    :UInt128 -> "u128 unsupported",
-    :Char_S -> "i8",
-    :SChar -> "i8",
+fn map-type(cx-type: clang/CXType): result[k1-type, string] {
+  eprintln(" -> ({cx-type.kind.value})");
+  let s: k1-type = switch cx-type.kind {
+    :Void      -> :simple(p"{}"),
+    :Bool      -> :simple("bool"),
+    :Char_U    -> :simple("u8"),
+    :UChar     -> :simple("u8"),
+    :Char16    -> :simple("i16"),
+    :Char32    -> :simple("i32"),
+    :UShort    -> :simple("u16"),
+    :UInt      -> :simple("u32"),
+    :ULong     -> :simple("c-long"),
+    :ULongLong -> :simple("c-longlong"),
+    :UInt128   -> :simple("u128 unsupported"),
+    :Char_S    -> :simple("i8"),
+    :SChar     -> :simple("i8"),
     // In Windows, 2 bytes, otherwise 4, so we'll point to the alias
-    :WChar -> "c-wchar",
-    :Short -> "i16",
-    :Int -> "c-int",
-    _ -> {
+    :WChar     -> :simple("c-wchar"),
+    :Short     -> :simple("i16"),
+    :Int       -> :simple("c-int"),
+    :Pointer   -> {
+      let inner = clang/getPointeeType(cx-type);
+      let inner-mapped = map-type(inner).try;
+      :simple("*mut {inner-mapped}")
+    },
+    :Float     -> :simple("f32"),
+    :Double    -> :simple("f64"),
+    :LongLong  -> :simple("int"),
+    :Long      -> :simple("int"),
+    :Elaborated -> {
+      let named-type = clang/Type_getNamedType(cx-type);
+      map-type(named-type).try
+    },
+    :Typedef -> {
+      let name = clang/getTypedefName(cx-type).to-k1();
+      eprintln("its a typedef with name {name}");
+      :simple(name)
+    },
+    :Record -> {
+      let decl-cursor = clang/getTypeDeclaration(cx-type);
+      let is-anon = clang/Cursor_isAnonymousRecordDecl(decl-cursor).as-bool();
+      if is-anon {
+        eprintln("record, anon");
+        return(:err("anon record (struct/union)"))
+      } else {
+        eprintln("record, named");
+        let name = clang/getCursorSpelling(decl-cursor).to-k1();
+        :simple(name)
+      };
+    },
+    o -> {
       let type-kind-spelling = clang/getTypeKindSpelling(cx-type.kind).to-k1();
-      return(:err("other type: {type-kind-spelling} ({cx-type.kind.value})"))
+      return(:err("other type: {type-kind-spelling} {o.tag-name()} ({cx-type.kind.value})"))
     }
   };
   :ok(s)
@@ -170,12 +225,12 @@ fn map-type(current: CXCursor): result[string, string] {
 
 fn print-cxstring(prefix: string, cxs: CXString) {
   // Print the char* value of current_display_name
-  print(prefix);
+  eprint(prefix);
   let c-str = clang/getCString(cxs);
   let name = string/from-c(c-str);
-  print(name);
+  eprint(name);
   // Since clang_getCursorDisplayName allocates a new CXString, it must be
   // freed. This applies to all functions returning a CXString
   clang/disposeString(cxs);
-  println("")
+  eprintln("")
 }

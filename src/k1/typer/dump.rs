@@ -406,7 +406,7 @@ impl TypedProgram {
         visited: &mut FxHashMap<TypeId, ()>,
     ) -> std::fmt::Result {
         if struc.fields.is_empty() {
-            return writ.write_str("{}");
+            return writ.write_str("empty");
         }
 
         writ.write_str("{ ")?;

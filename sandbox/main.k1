@@ -1,16 +1,10 @@
-fn getArgs(): string {
-  println("thunk");
-  "world"
+ns for baz {
+
 }
-fn getArgs2(): {a:int, b: int} {
-  println("thunk2");
-  { a: 10, b: 11 }
-}
+
 #debug fn main(): i32 {
 
   println(stringf("hello, {b} {a}", getArgs2()));
 
   0
 }
-
-#static main()

@@ -1689,6 +1689,8 @@ impl TypePool {
         visited: &mut FxHashSet<TypeId>,
     ) -> TypeVariableInfo {
         const EMPTY: TypeVariableInfo = TypeVariableInfo::EMPTY;
+        // FIXME: Can just look up the type variables of contained types
+        //        as they are already interned, rather than recurse on them
         debug!("count_type_variables of {} {}", type_id, self.get(type_id).kind_name());
         if visited.contains(&type_id) {
             return TypeVariableInfo::EMPTY;

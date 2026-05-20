@@ -447,6 +447,8 @@ ns for u8 {
 ns for u32 {
   let minValue: u32 = 0x00000000
   let maxValue: u32 = 0xFFFFFFFF
+
+  fn as-bool(self: u32): bool { self != 0 }
 }
 
 ns for i32 {

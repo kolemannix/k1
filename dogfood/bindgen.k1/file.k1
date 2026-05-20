@@ -1,0 +1,18 @@
+ns file; // file.cpp
+deftype i2 = {
+  x: c-int,
+  y: c-int,
+}
+deftype foo = {
+  _char: i8,
+  _unsigned_char: u8,
+  _sizet: c-int,
+  _int: c-int,
+  _int_p: *mut c-int,
+  _bool: c-int,
+  _float: f32,
+  _longlong: int,
+  _long: int,
+  _i2: i2,
+  _struct_i2: i2,
+}

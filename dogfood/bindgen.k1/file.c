@@ -20,6 +20,7 @@ struct foo {
   long _long;
   i2 _i2;
   struct i2 _struct_i2;
+  struct { int x; int y; } _struct_anon;
 };
 
 // 'consts','moduleconsts', 'newtype' and 'newtype_global'.

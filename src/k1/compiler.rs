@@ -384,7 +384,8 @@ pub fn compile_program(
         return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };
     let total_elapsed_ns = start_time.elapsed().as_nanos();
-    let warning_count = k1.messages.iter().filter(|e| e.level == MessageLevel::Warn).count();
+    let warning_count =
+        k1.messages.borrow().iter().filter(|e| e.level == MessageLevel::Warn).count();
     if warning_count > 0 {
         eprintln!("Completed with {} warnings", warning_count);
     }

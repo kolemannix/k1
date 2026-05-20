@@ -239,7 +239,7 @@ impl Backend {
                             e.span(),
                         )
                     })
-                    .chain(k1.messages.iter().filter_map(|e| {
+                    .chain(k1.messages.borrow().iter().filter_map(|e| {
                         error_to_diagnostic(k1, e.message.clone(), e.level, e.span)
                     }))
                     .collect()
@@ -271,17 +271,15 @@ impl Backend {
         let root_uri = self.workspace_uri.read().unwrap();
         let args = k1::compiler::Args {
             no_std: false,
-            write_llvm: false,
+            emit_llvm: false,
             optimize: false,
             dump_module: false,
             debug: true,
             profile: false,
-            llvm_counts: false,
             target: None,
             command: k1::compiler::Command::Check {
                 file: root_uri.as_ref().unwrap().path().into(),
             },
-            clang_options: vec![],
         };
         let compile_result = k1::compiler::compile_program(&args, &out_dir);
         let compiled_module = match compile_result {
@@ -323,6 +321,7 @@ impl Backend {
         };
         let file_id = source.file_id;
         k1.messages
+            .borrow()
             .iter()
             .filter(|m| {
                 let span = k1.ast.spans.get(m.span);

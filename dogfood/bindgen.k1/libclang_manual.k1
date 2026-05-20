@@ -88,6 +88,7 @@ deftype CXChildVisitResult = either {
   Recurse
 }
 
+// nocommit allow names here, throw them away
 deftype alias CXCursorVisitor = *fn(CXCursor, CXCursor, CXClientData) -> CXChildVisitResult
 
 extern("clang", "clang_visitChildren")
@@ -112,6 +113,9 @@ fn getCursorKind(cursor: CXCursor): CXCursorKind
 extern("clang", "clang_getCursorType")
 fn getCursorType(cursor: CXCursor): CXType 
 
+extern("clang", "clang_getCursorSpelling")
+fn getCursorSpelling(CXCursor): CXString  
+
 extern("clang", "clang_getTypeKindSpelling")
 fn getTypeKindSpelling(kind: CXTypeKind): CXString
 
@@ -129,6 +133,24 @@ fn isStatement(cursor-kind: CXCursorKind): u32
 
 extern("clang", "clang_isAttribute")
 fn isAttribute(cursor-kind: CXCursorKind): u32
+
+extern("clang", "clang_Type_getNamedType")
+fn Type_getNamedType(t: CXType): CXType
+
+extern("clang", "clang_getTypedefName")
+fn getTypedefName(t: CXType): CXString 
+
+extern("clang", "clang_getPointeeType")
+fn getPointeeType(t: CXType): CXType 
+
+extern("clang", "clang_getUnqualifiedType")
+fn getUnqualifiedType(t: CXType): CXType 
+
+extern("clang", "clang_getTypeDeclaration")
+fn getTypeDeclaration(t: CXType): CXCursor
+
+extern("clang", "clang_Cursor_isAnonymousRecordDecl")
+fn Cursor_isAnonymousRecordDecl(declCursor: CXCursor): u32
 
 deftype CXCursorKind = either {
   // Declarations
