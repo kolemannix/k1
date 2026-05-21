@@ -5,7 +5,7 @@ deftype SquareState = either {
   BPawn, BKnight, BBishop, BRook, BQueen, BKing
 }
 
-ns SquareState {
+ns for SquareState {
   fn charSymbol(self: SquareState): char {
     switch self {
        :Blank  -> '-',

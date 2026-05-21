@@ -33,7 +33,7 @@ fn testParsing() {
     `{{ "foo": true, "baz": false }`,
     fn j. j is :object(m) and
         m.map(fn f. f.key) == ["foo", "baz"] and
-        m.map(fn f. f.value.asBool().!) == [true, false]
+        m.map(fn f. f.value.as-bool().!) == [true, false]
   );
 
   testParse(" [ ] ", fn j. j is :array(es) and es.isEmpty());

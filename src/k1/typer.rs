@@ -5835,29 +5835,32 @@ impl TypedProgram {
             flags: VariableFlags::empty(),
             usage_count: 0,
             usages: vec![],
-            defn_span: parsed.span,
+            defn_span: parsed.name_span,
         });
-        let actual_global_id = self.globals.add(TypedGlobal {
-            variable_id,
-            initial_value: None,
-            parsed_expr: parsed.value_expr,
-            type_id,
-            span: parsed.span,
-            is_constant: !parsed.is_mutable,
-            is_tls: parsed.is_thread_local,
-            is_exported: parsed.is_export,
-            is_external: parsed.is_external,
-            ast_id: parsed_global_id,
-            parent_scope: scope_id,
-        });
-
-        debug_assert_eq!(actual_global_id, global_id);
+        self.globals.add_expected_id(
+            TypedGlobal {
+                variable_id,
+                initial_value: None,
+                parsed_expr: parsed.value_expr,
+                type_id,
+                span: parsed.span,
+                is_constant: !parsed.is_mutable,
+                is_tls: parsed.is_thread_local,
+                is_exported: parsed.is_export,
+                is_external: parsed.is_external,
+                ast_id: parsed_global_id,
+                parent_scope: scope_id,
+            },
+            global_id,
+        );
 
         if scope_id == self.scopes.mem_scope_id && parsed.name == self.ast.idents.b.arena {
             self.global_id_k1_arena = Some(global_id)
         };
         self.global_ast_mappings.insert(parsed_global_id, global_id);
         self.scopes.add_variable(scope_id, parsed.name, variable_id);
+
+        self.emit_ls_entity(parsed.name_span, LsEntityKind::Variable { variable_id });
 
         Ok(variable_id)
     }
@@ -16684,7 +16687,11 @@ impl TypedProgram {
         for ns in self.namespaces.iter() {
             if ns.namespace_type == NamespaceKind::TypeCompanion && ns.companion_type_id.is_none() {
                 let span = self.ast.get_span_for_id(ns.parsed_id);
-                self.report(errf!(span, "Unresolved companion namespace; we never found type {}", self.ident_str(ns.name)));
+                self.report(errf!(
+                    span,
+                    "Unresolved companion namespace; we never found type {}",
+                    self.ident_str(ns.name)
+                ));
             }
         }
 

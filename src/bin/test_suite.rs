@@ -109,19 +109,18 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         optimize: false,
         debug: false,
         no_std: false,
-        write_llvm: true,
+        emit_llvm: true,
         dump_module: false,
-        llvm_counts: false,
         profile: false,
         target: None,
         command: Command::Build { file: path.as_ref().to_owned() },
-        clang_options: vec![],
     };
     let compile_result = compiler::compile_program(&args, &out_dir);
     let expectation = get_test_expectation(path.as_ref());
     match compile_result {
         Err(CompileProgramError::TyperFailure(module)) => {
-            let Some(err) = module.messages.iter().find(|e| e.level == MessageLevel::Error) else {
+            let messages = module.messages.borrow();
+            let Some(err) = messages.iter().find(|e| e.level == MessageLevel::Error) else {
                 if let Some(parse_error) = module.ast.errors.first() {
                     module
                         .write_error(

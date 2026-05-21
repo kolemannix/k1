@@ -1,10 +1,12 @@
-ns for baz {
+let foo: int = 0
+let export bar: int = 0
 
-}
+#debug fn main(argc: int, argv: ptr): i32 {
+  let xs: list[int] = [1,2,3,4,5];
 
-#debug fn main(): i32 {
 
-  println(stringf("hello, {b} {a}", getArgs2()));
-
+  for xs { println("{itIndex}: {it}") };
   0
 }
+
+#static main(0, ptr/null)

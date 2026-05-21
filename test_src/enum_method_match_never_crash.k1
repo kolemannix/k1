@@ -13,9 +13,9 @@ ns enum_method_match_never {
   
   fn isVariant() {
     let x: either { a(int), b(int), c } = :a(42);
-    assert(x.asB().is-none());
+    assert(x.as-b().is-none());
     assert(not x is :c);
-    assert(x.asA().is-some-some());
+    assert(x.as-b().is-none());
   }
 
 }

@@ -88,7 +88,7 @@ fn writeBitboard[w: writer](writer: w, b: Bitboard) {
   }
 }
 
-ns GameState {
+ns for GameState {
   fn startPos(): GameState {
     let wPawns   = 0b0000000000000000000000000000000000000000000000001111111100000000: Bitboard;
     let wKnights = 0b0000000000000000000000000000000000000000000000000000000001000010: Bitboard;
@@ -236,7 +236,7 @@ fn handleCommand(context eng: Engine)(command: uci/Command): ?string {
 }
 
 deftype Engine = { game: GameState }
-ns Engine {
+ns for Engine {
   fn inDebugMode(_self: Engine): bool { true }
 }
 

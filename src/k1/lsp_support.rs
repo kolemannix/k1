@@ -62,10 +62,13 @@ pub fn get_hover_message_for_entity(k1: &TypedProgram, entity: LsEntity) -> Stri
             //nocommit valigo font loading
             let v = k1.variables.get(variable_id);
             let kind_str = match v.kind {
-                VariableKind::FnParam(_) => "Param",
-                VariableKind::Stack(_) => "Local",
-                VariableKind::StackSynthetic(_) => "Compiler-generated",
-                VariableKind::Global(_) => "Global",
+                VariableKind::FnParam(_) => "Param".to_string(),
+                VariableKind::Stack(_) => "Local".to_string(),
+                VariableKind::StackSynthetic(_) => "Compiler-generated".to_string(),
+                VariableKind::Global(global_id) => {
+                    let global = k1.globals.get(global_id);
+                    format!("Global const={}, export={}", global.is_constant, global.is_exported)
+                },
             };
             let type_str = k1.type_id_to_string(v.type_id);
             format!("{}\n{}", type_str, kind_str)
