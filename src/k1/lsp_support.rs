@@ -40,7 +40,7 @@ pub fn find_entity_at_point(
     None
 }
 
-pub fn get_hover_message_for_entity(k1: &TypedProgram, entity: LsEntity) -> String {
+pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> String {
     match entity.kind {
         LsEntityKind::Namespace(ns_id) => {
             let ns = k1.namespaces.get(ns_id);
@@ -68,10 +68,23 @@ pub fn get_hover_message_for_entity(k1: &TypedProgram, entity: LsEntity) -> Stri
                 VariableKind::Global(global_id) => {
                     let global = k1.globals.get(global_id);
                     format!("Global const={}, export={}", global.is_constant, global.is_exported)
-                },
+                }
             };
             let type_str = k1.type_id_to_string(v.type_id);
             format!("{}\n{}", type_str, kind_str)
+        }
+        LsEntityKind::Type { type_id, applied_type_id } => {
+            // let typ = k1.types.get(type_id);
+            let layout_string = match k1.get_layout(type_id) {
+                None => "No layout".to_string(),
+                Some(layout) => format!("Size: {}, Align: {}", layout.size, layout.align),
+            };
+            let type_string = k1.type_id_to_string(type_id);
+            let applied_type_string = match applied_type_id {
+                None => "".to_string(),
+                Some(type_id) => format!("Applied: {}", k1.type_id_to_string(type_id)),
+            };
+            format!("{type_string}\n{layout_string}\n{applied_type_string}")
         }
     }
 }
@@ -98,6 +111,16 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
         LsEntityKind::Variable { variable_id } => {
             let span_id = k1.variables.get(variable_id).defn_span;
             k1.ast.spans.get(span_id)
+        }
+        LsEntityKind::Type { type_id, .. } => {
+            let defn_info = k1.types.defn_info.get(&type_id);
+            match defn_info {
+                Some(d) => {
+                    let span_id = k1.ast.get_span_for_id(d.ast_id);
+                    k1.ast.spans.get(span_id)
+                }
+                None => Span::NONE,
+            }
         }
     }
 }

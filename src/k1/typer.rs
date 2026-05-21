@@ -201,6 +201,7 @@ pub enum LsEntityKind {
     Namespace(NamespaceId),
     Function { function_id: FunctionId, is_defn: bool },
     Variable { variable_id: VariableId },
+    Type { type_id: TypeId, applied_type_id: Option<TypeId> },
 }
 
 #[derive(Clone, Copy)]
@@ -4150,6 +4151,7 @@ impl TypedProgram {
 
         let ty_app_name = &ty_app.name;
         let ty_app_span = ty_app.span;
+        let name_span = ty_app.name.span;
         match self.find_type_namespaced(scope_id, ty_app_name)? {
             Some((type_id, _)) => {
                 match self.types.get(type_id) {
@@ -4171,6 +4173,10 @@ impl TypedProgram {
                             debug!(
                                 "yielding after detecting recursion: {}",
                                 self.qident_to_string(ty_app_name)
+                            );
+                            self.emit_ls_entity(
+                                ty_app.name.span,
+                                LsEntityKind::Type { type_id, applied_type_id: None },
                             );
                             Ok(type_id)
                         } else {
@@ -4243,9 +4249,25 @@ impl TypedProgram {
                         }
 
                         let type_arguments_slice = self.types.mem.list_to_handle(type_arguments);
-                        Ok(self.instantiate_generic_type(type_id, type_arguments_slice))
+                        let instantiated_type_id =
+                            self.instantiate_generic_type(type_id, type_arguments_slice);
+                        self.emit_ls_entity(
+                            name_span,
+                            LsEntityKind::Type {
+                                type_id,
+                                applied_type_id: Some(instantiated_type_id),
+                            },
+                        );
+                        Ok(instantiated_type_id)
                     }
-                    _other => Ok(self.get_type_id_resolved(type_id, scope_id)),
+                    _other => {
+                        let resolved_type_id = self.get_type_id_resolved(type_id, scope_id);
+                        self.emit_ls_entity(
+                            name_span,
+                            LsEntityKind::Type { type_id, applied_type_id: None },
+                        );
+                        Ok(resolved_type_id)
+                    }
                 }
             }
             None => match self.find_function_namespaced(scope_id, ty_app_name)? {

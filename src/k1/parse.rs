@@ -4683,8 +4683,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_type_defn(&mut self) -> ParseResult<Option<ParsedTypeDefnId>> {
-        let keyword_type = self.maybe_consume(K::KeywordDefType);
-        let Some(keyword_type) = keyword_type else {
+        let Some(_keyword_type) = self.maybe_consume(K::KeywordDefType) else {
             return Ok(None);
         };
 
@@ -4702,7 +4701,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         }
 
-        let name = self.expect_kind(K::Ident)?;
+        let (name_token, name) = self.expect_ident()?;
 
         let mut type_params: SV8<_> = smallvec![];
         if let Some(_type_params_open) = self.maybe_consume(K::OpenBracket) {
@@ -4717,13 +4716,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let equals = self.expect_kind(K::Equals)?;
         let type_expr = Parser::expect("Type expression", equals, self.parse_type_expression())?;
-        let span = self.extend_span(keyword_type.span, self.ast.get_type_expr_span(type_expr));
-        let name = self.make_ident(name);
         let type_params_handle = self.ast.mem.pushn(&type_params);
         let type_defn_id = self.ast.add_type_defn(ParsedTypeDefn {
             name,
             value_expr: type_expr,
-            span,
+            span: name_token.span,
             type_params: type_params_handle,
             id: ParsedTypeDefnId::PENDING, // The id is set by add_typedefn
             flags,

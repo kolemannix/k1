@@ -788,6 +788,7 @@ fn find_references(
             Ok(Some(locations))
         }
         LsEntityKind::Namespace(_namespace_id) => Ok(None),
+        LsEntityKind::Type { type_id, .. } => Ok(None),
     }
 }
 

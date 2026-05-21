@@ -98,6 +98,10 @@ fn visitChildren(
   client_data: CXClientData
 ): c-unsigned
 
+// wait for me, love
+// defrewrite clangdef = (name) => { extern("clang", "clang_{name}") fn {name} }
+// clangdef(getCursorDisplayName)(cursor: CXCursor): CXString
+
 extern("clang", "clang_getCursorDisplayName")
 fn getCursorDisplayName(cursor: CXCursor): CXString
 
