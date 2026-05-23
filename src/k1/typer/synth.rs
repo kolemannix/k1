@@ -651,13 +651,14 @@ impl TypedProgram {
         let mut i = 0usize;
         while i < parts.len() as usize {
             match self.ast.mem.get_nth(parts, i) {
-                parse::InterpolatedStringPart::String(string_id) => {
+                parse::InterpolatedStringPart::String { string_id, .. } => {
                     // Combine consecutive strings into a single constant
                     let mut string_to_print = *string_id;
                     let mut combined: Option<String> = None;
                     while i + 1 < parts.len() as usize {
                         let next = self.ast.mem.get_nth(parts, i + 1);
-                        if let InterpolatedStringPart::String(next_string) = next {
+                        if let InterpolatedStringPart::String { string_id: next_string, .. } = next
+                        {
                             let buf = combined.get_or_insert_with(|| {
                                 String::from(self.ast.strings.get_string(string_to_print))
                             });
@@ -672,8 +673,11 @@ impl TypedProgram {
                     }
                     if !self.ast.strings.get_string(string_to_print).is_empty() {
                         let string_expr = self.synth_string_literal(string_to_print, span);
-                        let print_call =
-                            self.synth_printto_call(string_expr, writer_expr, block_ctx)?;
+                        let print_call = self.synth_printto_call(
+                            string_expr,
+                            writer_expr,
+                            block_ctx.with_hidden(true),
+                        )?;
                         self.push_block_expr_id(&mut block, print_call);
                     }
                 }
@@ -693,16 +697,17 @@ impl TypedProgram {
                                 get_named_arg(self, args_variable.variable_expr, name, expr_span);
                             match struct_arg {
                                 Some(field_expr) => field_expr,
-                                None => self.eval_expr(*expr_id, block_ctx)?,
+                                None => self.eval_expr(*expr_id, block_ctx.with_hidden(false))?,
                             }
                         }
                         None => {
-                            let typed_expr = self.eval_expr(*expr_id, block_ctx)?;
+                            let typed_expr =
+                                self.eval_expr(*expr_id, block_ctx.with_hidden(false))?;
                             typed_expr
                         }
                     };
 
-                    let print_expr_call = self.synth_printto_call(typed_expr, writer_expr, ctx)?;
+                    let print_expr_call = self.synth_printto_call(typed_expr, writer_expr, block_ctx.with_hidden(true))?;
                     self.push_block_expr_id(&mut block, print_expr_call);
                 }
                 parse::InterpolatedStringPart::Hole { fmt_settings: _, span } => {
@@ -738,12 +743,12 @@ impl TypedProgram {
 
         let part_count = interpolated_string.parts.len();
         if part_count == 1 {
-            let parse::InterpolatedStringPart::String(string_id) =
+            let parse::InterpolatedStringPart::String { string_id, span } =
                 self.ast.mem.get_nth(interpolated_string.parts, 0)
             else {
                 panic!()
             };
-            let e = self.synth_string_literal(*string_id, span);
+            let e = self.synth_string_literal(*string_id, *span);
             return Ok(e);
         }
 
@@ -753,6 +758,7 @@ impl TypedProgram {
         if self.config.no_std {
             return failf!(span, "Interpolated strings are not supported in no_std mode");
         }
+        let ctx_for_calls = block_ctx.with_hidden(true);
         let new_string_builder = self.synth_typed_call_typed_args(
             // nocommit: We'd like to put SpanId::NONE on this so that we don't emit a bad
             // language server entity, but llvm complains about a call with no !dbg location.
@@ -761,7 +767,7 @@ impl TypedProgram {
             self.ast.idents.f.StringBuilder_new.with_span(span),
             &[],
             &[],
-            block_ctx,
+            ctx_for_calls,
             false,
         )?;
         let string_builder_var = self.synth_variable_defn(
@@ -787,7 +793,7 @@ impl TypedProgram {
             self.ast.idents.f.StringBuilder_buildTmp.with_span(span),
             &[],
             &[string_builder_var.variable_expr],
-            block_ctx,
+            ctx_for_calls,
             false,
         )?;
         self.push_block_expr_id(&mut block, build_call);

@@ -4,8 +4,11 @@ let export bar: int = 0
 #debug fn main(argc: int, argv: ptr): i32 {
   let xs: list[int] = [1,2,3,4,5];
 
+  let x = 42;
+  x + x;
 
-  for xs { println("{itIndex}: {it}") };
+  println("{x + x}");
+  for i in xs { println("{itIndex}: {i}") };
   0
 }
 

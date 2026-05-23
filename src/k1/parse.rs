@@ -685,7 +685,7 @@ pub struct ParsedFmtSettings {
 #[derive(Clone, Copy)]
 pub enum InterpolatedStringPart {
     // we could put spans on each string part if we need them
-    String(StringId),
+    String { string_id: StringId, span: SpanId },
     Expr(ParsedExprId, ParsedFmtSettings),
     Hole { fmt_settings: ParsedFmtSettings, span: SpanId },
 }
@@ -2827,7 +2827,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     }
                     let string_id = self.ast.strings.intern(&buf);
 
-                    parts.push(InterpolatedStringPart::String(string_id));
+                    parts.push(InterpolatedStringPart::String {
+                        string_id,
+                        span: current_token.span,
+                    });
 
                     if is_terminated {
                         if matches!(
@@ -2847,10 +2850,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         }
         let result = if parts.len() == 1 {
-            let InterpolatedStringPart::String(s) = parts.into_iter().next().unwrap() else {
+            let InterpolatedStringPart::String { string_id, .. } =
+                parts.into_iter().next().unwrap()
+            else {
                 panic!()
             };
-            let literal = ParsedLiteral::String(s, first.span);
+            let literal = ParsedLiteral::String(string_id, first.span);
             Ok(self.add_expression(ParsedExpr::Literal(literal)))
         } else {
             let span = self.extend_to_here(first.span);
@@ -4862,7 +4867,7 @@ impl ParsedProgram {
                 w.write_char('"')?;
                 for part in self.mem.getn(is.parts) {
                     match part {
-                        InterpolatedStringPart::String(s) => w.write_str(self.get_string(*s))?,
+                        InterpolatedStringPart::String{ string_id, .. } => w.write_str(self.get_string(*string_id))?,
                         InterpolatedStringPart::Expr(expr_id, _) => {
                             w.write_char('{')?;
                             self.display_expr_id(w, *expr_id)?;

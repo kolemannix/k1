@@ -432,8 +432,12 @@ fn consecutive_strings() -> ParseResult<()> {
     let ParsedExpr::InterpolatedString(is) = expr else { panic!() };
     let span = ast.spans.get(is.span);
     assert_eq!(is.parts.len(), 2);
-    let InterpolatedStringPart::String(s1) = ast.mem.get_nth(is.parts, 0) else { panic!() };
-    let InterpolatedStringPart::String(s2) = ast.mem.get_nth(is.parts, 1) else { panic!() };
+    let InterpolatedStringPart::String { string_id: s1, .. } = ast.mem.get_nth(is.parts, 0) else {
+        panic!()
+    };
+    let InterpolatedStringPart::String { string_id: s2, .. } = ast.mem.get_nth(is.parts, 1) else {
+        panic!()
+    };
     assert_eq!(ast.get_string(*s1), "Hello, ");
     assert_eq!(ast.get_string(*s2), "World!");
     assert_eq!(span.start, 0);

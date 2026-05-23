@@ -251,6 +251,11 @@ bitflags! {
         /// Most commonly, the body of a generic function
         const GenericPass = 1 << 1;
         const Defer = 1 << 2;
+        /// Indicates that we are generating code
+        /// that the user shouldn't see or care about; should
+        /// pevent emission of language server entities, perhaps
+        /// some warnings, et. al
+        const Hidden = 1 << 3;
     }
 }
 
@@ -316,6 +321,16 @@ impl EvalExprContext {
     pub fn with_is_defer(&self, defer: bool) -> EvalExprContext {
         let mut flags = self.flags;
         flags.set(EvalExprFlags::Defer, defer);
+        EvalExprContext { flags, ..*self }
+    }
+
+    fn is_hidden(&self) -> bool {
+        self.flags.contains(EvalExprFlags::Hidden)
+    }
+
+    fn with_hidden(&self, hidden: bool) -> EvalExprContext {
+        let mut flags = self.flags;
+        flags.set(EvalExprFlags::Hidden, hidden);
         EvalExprContext { flags, ..*self }
     }
 }
@@ -9962,7 +9977,7 @@ impl TypedProgram {
             iterable_expr
         } else {
             self.synth_typed_call_typed_args(
-                self.ast.idents.f.Iterable_iterator.with_span(body_span),
+                self.ast.idents.f.Iterable_iterator.with_span(iterable_span),
                 &[],
                 &[iterable_expr],
                 ctx.with_scope(outer_for_expr_scope).with_no_expected_type(),
@@ -9991,7 +10006,7 @@ impl TypedProgram {
 
         let loop_scope_ctx = ctx.with_scope(loop_scope_id).with_no_expected_type();
         let iterator_next_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Iterator_next.with_span(body_span),
+            self.ast.idents.f.Iterator_next.with_span(iterable_span),
             &[],
             &[iterator_variable.variable_expr],
             loop_scope_ctx,
@@ -10002,8 +10017,7 @@ impl TypedProgram {
             iterator_next_call,
             loop_scope_id,
         );
-        #[allow(non_snake_case)]
-        let next_getValue_call = self.synth_typed_call_typed_args(
+        let next_getvalue_call = self.synth_typed_call_typed_args(
             self.ast.idents.f.try__get_value.with_span(iterable_span),
             &[],
             &[next_variable.variable_expr],
@@ -10012,7 +10026,7 @@ impl TypedProgram {
         )?;
         let binding_variable = self.synth_variable_defn_visible(
             binding_ident,
-            next_getValue_call,
+            next_getvalue_call,
             consequent_block.scope_id,
             for_expr.binding_span,
         );
@@ -11189,14 +11203,21 @@ impl TypedProgram {
                     writer_expr
                 };
                 let fmt_string_arg = self.ast.mem.get_nth(fn_call.args, 1);
+                let fmt_string_arg_span = self.ast.exprs.get_span(fmt_string_arg.value);
                 let fmt_string = match self.ast.exprs.get(fmt_string_arg.value) {
                     ParsedExpr::Literal(ParsedLiteral::String(string_id, _)) => {
-                        let string_part = InterpolatedStringPart::String(*string_id);
+                        let string_part = InterpolatedStringPart::String {
+                            string_id: *string_id,
+                            span: fmt_string_arg_span,
+                        };
                         let newline_string_id = self.ast.strings.intern("\n");
                         let parts = if newline {
                             self.ast.mem.pushn(&[
                                 string_part,
-                                InterpolatedStringPart::String(newline_string_id),
+                                InterpolatedStringPart::String {
+                                    string_id: newline_string_id,
+                                    span: fmt_string_arg_span,
+                                },
                             ])
                         } else {
                             self.ast.mem.pushn(&[string_part])
@@ -11208,7 +11229,10 @@ impl TypedProgram {
                         parts.extend(self.ast.mem.getn(is.parts));
                         if newline {
                             let newline_string_id = self.ast.strings.intern("\n");
-                            parts.push(InterpolatedStringPart::String(newline_string_id))
+                            parts.push(InterpolatedStringPart::String {
+                                string_id: newline_string_id,
+                                span: fmt_string_arg_span,
+                            })
                         }
                         self.ast.mem.list_to_handle(parts)
                     }
@@ -11233,10 +11257,13 @@ impl TypedProgram {
                     );
                 }
                 let fmt_string_arg = *self.ast.mem.get_nth(fn_call.args, 0);
+                let fmt_string_arg_span = self.ast.exprs.get_span(fmt_string_arg.value);
                 match self.ast.exprs.get(fmt_string_arg.value) {
                     ParsedExpr::Literal(ParsedLiteral::String(string_id, _)) => {
-                        let parts =
-                            self.ast.mem.pushn(&[InterpolatedStringPart::String(*string_id)]);
+                        let parts = self.ast.mem.pushn(&[InterpolatedStringPart::String {
+                            string_id: *string_id,
+                            span: fmt_string_arg_span,
+                        }]);
                         parts
                     }
                     ParsedExpr::InterpolatedString(is) => is.parts,
@@ -12812,16 +12839,18 @@ impl TypedProgram {
         };
 
         if let Some(function_id) = callee.maybe_function_id() {
-            self.emit_ls_entity(
-                fn_call.name.span,
-                LsEntityKind::Function { function_id, is_defn: false },
-            );
+            if !ctx.is_hidden() {
+                self.emit_ls_entity(
+                    fn_call.name.span,
+                    LsEntityKind::Function { function_id, is_defn: false },
+                );
+            }
             self.register_function_usage(function_id, fn_call.name.span);
 
             if let Some(enclosing_id) = self.scopes.enclosing_functions.get(ctx.scope_id).function {
                 if enclosing_id == function_id {
                     debug!(
-                        "Marking {} as recursive",
+                        "Marking {} as directly recursive",
                         self.function_id_to_string(enclosing_id, false)
                     );
                     self.functions.get_mut(function_id).is_recursive = true;
