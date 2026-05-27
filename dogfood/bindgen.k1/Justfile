@@ -1,2 +1,26 @@
+default:
+  just --list
+
 rust-bindgen:
-  bindgen file.cpp --default-enum-style foo --opaque-type opaq -o file.rs
+  bindgen -o file.rs http/httpserver.h -- \
+    -Ihttp/ \
+    -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk \
+    -DKQUEUE
+
+build:
+  k1 b .
+
+http: build
+  .k1-out/bindgen.k1 \
+    -n http \
+    -i http/httpserver.h \
+    -clangarg -xc \
+    -clangarg -DKQUEUE \
+    -clangarg -isysroot \
+    -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk \
+    -clangarg -Ihttp/ \
+    > /Users/knix/dev/k1/dogfood/http/http.k1
+
+libclang: build
+  .k1-out/bindgen.k1 -n libclang > libclang_auto.k1.wip
+

@@ -47,14 +47,14 @@ ns type_schema {
     assert(get-type-schema[either { Yes }] is :enum(_));
 
     require get-type-schema[either { Yes, No, MaybeSo(string) }]
-      is :either({ variants })
+      is :either({ variants, payload-offset })
+      and payload-offset == 8
       and variants.len() == 3
       and variants.get(0).name == "Yes"
       and variants.get(1).name == "No"
       and variants.get(2).name == "MaybeSo"
-      and variants.get(2).payload is :some({ type-id, offset })
+      and variants.get(2).payload is :some({ type-id })
       and type-id == type-id[string]
-      and offset == 8
       else crash("");
 
     require get-type-schema[either { Yes(int) }.Yes ]

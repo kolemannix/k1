@@ -107,21 +107,22 @@ pub const GLOBAL_ID_K1_IS_STATIC: TypedGlobalId =
     TypedGlobalId::from_nzu32(NonZeroU32::new(2).unwrap());
 
 pub const ABILITY_ID_ENUM: AbilityId = AbilityId(NonZeroU32::new(1).unwrap());
-pub const ABILITY_ID_EQUALS: AbilityId = AbilityId(NonZeroU32::new(2).unwrap());
-pub const ABILITY_ID_WRITER: AbilityId = AbilityId(NonZeroU32::new(3).unwrap());
-pub const ABILITY_ID_PRINT: AbilityId = AbilityId(NonZeroU32::new(4).unwrap());
-pub const ABILITY_ID_SHOW: AbilityId = AbilityId(NonZeroU32::new(5).unwrap());
-pub const ABILITY_ID_BITWISE: AbilityId = AbilityId(NonZeroU32::new(6).unwrap());
-pub const ABILITY_ID_ADD: AbilityId = AbilityId(NonZeroU32::new(7).unwrap());
-pub const ABILITY_ID_SUB: AbilityId = AbilityId(NonZeroU32::new(8).unwrap());
-pub const ABILITY_ID_MUL: AbilityId = AbilityId(NonZeroU32::new(9).unwrap());
-pub const ABILITY_ID_DIV: AbilityId = AbilityId(NonZeroU32::new(10).unwrap());
-pub const ABILITY_ID_REM: AbilityId = AbilityId(NonZeroU32::new(11).unwrap());
-pub const ABILITY_ID_SCALAR_CMP: AbilityId = AbilityId(NonZeroU32::new(12).unwrap());
-pub const ABILITY_ID_COMPARABLE: AbilityId = AbilityId(NonZeroU32::new(13).unwrap());
-pub const ABILITY_ID_TRY: AbilityId = AbilityId(NonZeroU32::new(14).unwrap());
-pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
-pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
+pub const ABILITY_ID_SUM: AbilityId = AbilityId(NonZeroU32::new(2).unwrap());
+pub const ABILITY_ID_EQUALS: AbilityId = AbilityId(NonZeroU32::new(3).unwrap());
+pub const ABILITY_ID_WRITER: AbilityId = AbilityId(NonZeroU32::new(4).unwrap());
+pub const ABILITY_ID_PRINT: AbilityId = AbilityId(NonZeroU32::new(5).unwrap());
+pub const ABILITY_ID_SHOW: AbilityId = AbilityId(NonZeroU32::new(6).unwrap());
+pub const ABILITY_ID_BITWISE: AbilityId = AbilityId(NonZeroU32::new(7).unwrap());
+pub const ABILITY_ID_ADD: AbilityId = AbilityId(NonZeroU32::new(8).unwrap());
+pub const ABILITY_ID_SUB: AbilityId = AbilityId(NonZeroU32::new(9).unwrap());
+pub const ABILITY_ID_MUL: AbilityId = AbilityId(NonZeroU32::new(10).unwrap());
+pub const ABILITY_ID_DIV: AbilityId = AbilityId(NonZeroU32::new(11).unwrap());
+pub const ABILITY_ID_REM: AbilityId = AbilityId(NonZeroU32::new(12).unwrap());
+pub const ABILITY_ID_SCALAR_CMP: AbilityId = AbilityId(NonZeroU32::new(13).unwrap());
+pub const ABILITY_ID_COMPARABLE: AbilityId = AbilityId(NonZeroU32::new(14).unwrap());
+pub const ABILITY_ID_TRY: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
+pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
+pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(17).unwrap());
 
 pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
 pub const FUNC_TYPE_PARAM_IDEAL_COUNT: usize = 4;
@@ -256,6 +257,10 @@ bitflags! {
         /// pevent emission of language server entities, perhaps
         /// some warnings, et. al
         const Hidden = 1 << 3;
+        /// a.foo()
+        /// ^ We do automatic address-of coercion on
+        /// a.
+        const IsMethodReceiver = 1 << 4;
     }
 }
 
@@ -331,6 +336,16 @@ impl EvalExprContext {
     fn with_hidden(&self, hidden: bool) -> EvalExprContext {
         let mut flags = self.flags;
         flags.set(EvalExprFlags::Hidden, hidden);
+        EvalExprContext { flags, ..*self }
+    }
+
+    fn is_method_receiver(&self) -> bool {
+        self.flags.contains(EvalExprFlags::IsMethodReceiver)
+    }
+
+    fn with_is_method_receiver(&self, is_method_receiver: bool) -> EvalExprContext {
+        let mut flags = self.flags;
+        flags.set(EvalExprFlags::IsMethodReceiver, is_method_receiver);
         EvalExprContext { flags, ..*self }
     }
 }
@@ -1969,7 +1984,7 @@ pub enum BuiltinTyperFunction {
     EnumAbilityGetValue,
     EnumAbilityGetTagName,
     SumAbilityGetTag,
-    SumAbilityGetTagName,
+    SumAbilityGetName,
 }
 
 impl BuiltinTyperFunction {
@@ -1978,7 +1993,7 @@ impl BuiltinTyperFunction {
             BuiltinTyperFunction::EnumAbilityGetValue => "enum_ability_get_value",
             BuiltinTyperFunction::EnumAbilityGetTagName => "enum_ability_get_tag_name",
             BuiltinTyperFunction::SumAbilityGetTag => "sum_ability_get_tag",
-            BuiltinTyperFunction::SumAbilityGetTagName => "sum_ability_get_tag_name",
+            BuiltinTyperFunction::SumAbilityGetName => "sum_ability_get_name",
         }
     }
 }
@@ -2651,13 +2666,15 @@ pub struct TypedProgram {
     inference_context_stack: Vec<InferenceContext>,
     inference_context_extras: Vec<InferenceContext>,
     /// Each entry in this stack contains a set of type ids that are being defined
-    /// at this exact layout level. If we ever find ourselves in the current stack entry,
+    /// and their 'layout depths', where indirection increases depth.
+    /// If we ever find a recursive reference at a matching depth,
     /// that means we have an infinite layout: a mention of a type directly within itself
     /// for example: deftype Foo = { f: Foo }
-    /// If we ever find ourselves at a prior level, that's a valid recursive mention
+    /// If we ever find a recursive reference at a prior level, that's a valid recursive mention
     /// for example: deftype Foo = { f: *Foo }
     ///                                 ^ the * pushes a new entry on the stack
-    /// What about a flat Vec with "layout_depth_level: usize" instead?
+    ///                                 and we'll evaluate the 2nd Foo at d+1, find the first at d,
+    ///                                 and pass the check
     type_defn_stack: Vec<TypeDefnStackEntry>,
 
     // Buffers that we prefer to re-use to avoid thousands of allocations
@@ -4266,6 +4283,13 @@ impl TypedProgram {
                         let type_arguments_slice = self.types.mem.list_to_handle(type_arguments);
                         let instantiated_type_id =
                             self.instantiate_generic_type(type_id, type_arguments_slice);
+
+                        // Here: Check for direct recursion
+                        // if let Some(layout_depth) = context.defn_layout_depth {
+                        //     // Walk the type and look for any of our recursion stack at same level
+                        //     // as usual
+                        // }
+
                         self.emit_ls_entity(
                             name_span,
                             LsEntityKind::Type {
@@ -5097,6 +5121,7 @@ impl TypedProgram {
         expected: TypeId,
         expr: TypedExprId,
         scope_id: ScopeId,
+        allow_addr_of: bool,
     ) -> CheckExprTypeResult<'a> {
         let actual_type_id = self.exprs.get_type(expr);
 
@@ -5206,17 +5231,19 @@ impl TypedProgram {
                     }
                 }
             } else {
-                // A reference is expected, and a reference is not provided
-                // If lhs is just a variable, we can inject an address_of
-                match self.exprs.get(expr) {
-                    TypedExpr::Variable(_) => {
-                        let span = self.exprs.get_span(expr);
-                        if let Ok(expr) = self.synth_address_of(expr, span) {
-                            // self.report_hint(span, "coerce address of");
-                            return CheckExprTypeResult::Coerce(expr, "address_of".into());
+                if allow_addr_of {
+                    // A reference is expected, and a reference is not provided
+                    // If lhs is just a variable, we can inject an address_of
+                    match self.exprs.get(expr) {
+                        TypedExpr::Variable(_) => {
+                            let span = self.exprs.get_span(expr);
+                            if let Ok(expr) = self.synth_address_of(expr, span) {
+                                // self.report_hint(span, "coerce address of");
+                                return CheckExprTypeResult::Coerce(expr, "address_of".into());
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
@@ -5291,7 +5318,7 @@ impl TypedProgram {
                 if let Some(_reference) = self.get_expr_type(expr).as_reference() {
                     // We want this final check to benefit from coercion (which we are currrently implementing)
                     let dereferenced = self.synth_dereference(expr);
-                    match self.check_expr_type(expected, dereferenced, scope_id) {
+                    match self.check_expr_type(expected, dereferenced, scope_id, allow_addr_of) {
                         CheckExprTypeResult::Ok => {
                             return CheckExprTypeResult::Coerce(dereferenced, "deref".into());
                         }
@@ -5315,13 +5342,14 @@ impl TypedProgram {
         expected: TypeId,
         expr: TypedExprId,
         scope_id: ScopeId,
+        allow_addr_of: bool,
     ) -> K1Result<TypedExprId> {
         debug!(
             "check_and_coerce `{}`, expected: {}",
             self.expr_to_string(expr),
             self.type_id_to_string(expected)
         );
-        match self.check_expr_type(expected, expr, scope_id) {
+        match self.check_expr_type(expected, expr, scope_id, allow_addr_of) {
             CheckExprTypeResult::Err(msg) => {
                 let span = self.exprs.get_span(expr);
                 Err(K1Message {
@@ -5430,36 +5458,40 @@ impl TypedProgram {
 
         match (self.types.get(expected), self.types.get(actual)) {
             (Type::InferenceHole(_hole), _any) => Ok(()),
-            (Type::Struct(_), Type::Struct(_)) => {
-                // if s1.fields.len() != s2.fields.len() {
-                //     return Err(k1_format_user!(
-                //         self,
-                //         "expected struct {} but got struct {}",
-                //         expected,
-                //         actual
-                //     ));
-                // }
-                // for (f1, f2) in
-                //     self.types.mem.getn(s1.fields).iter().zip(self.types.mem.getn(s2.fields))
-                // {
-                //     if f1.name != f2.name {
-                //         return Err(k1_format_user!(
-                //             self,
-                //             "struct names differ {}, {}",
-                //             f1.name,
-                //             f2.name
-                //         ));
-                //     }
-                //     if let Err(msg) = self.check_types(f1.type_id, f2.type_id, scope_id) {
-                //         return Err(k1_format_user!(
-                //             self,
-                //             "Struct field {} type mismatch: {msg}",
-                //             f1.name
-                //         ));
-                //     };
-                // }
-                // Ok(())
-                Err(k1_format_user!(self, "Expected {} but got {}", expected, actual))
+            (Type::Struct(s1), Type::Struct(s2)) => {
+                let expected_defn_info = self.types.get_defn_info(expected);
+                if expected_defn_info.is_some() {
+                    Err(k1_format_user!(self, "Expected {} but got {}", expected, actual))
+                } else {
+                    if s1.fields.len() != s2.fields.len() {
+                        return Err(k1_format_user!(
+                            self,
+                            "expected struct {} but got struct {}",
+                            expected,
+                            actual
+                        ));
+                    }
+                    for (f1, f2) in
+                        self.types.mem.getn(s1.fields).iter().zip(self.types.mem.getn(s2.fields))
+                    {
+                        if f1.name != f2.name {
+                            return Err(k1_format_user!(
+                                self,
+                                "field names differ {}, {}",
+                                f1.name,
+                                f2.name
+                            ));
+                        }
+                        if let Err(msg) = self.check_types(f1.type_id, f2.type_id, scope_id) {
+                            return Err(k1_format_user!(
+                                self,
+                                "Struct field {} type mismatch: {msg}",
+                                f1.name
+                            ));
+                        };
+                    }
+                    Ok(())
+                }
             }
             (Type::Reference(exp_ref), Type::Reference(act_ref)) => {
                 match self.check_types(exp_ref.inner_type, act_ref.inner_type, scope_id) {
@@ -6373,6 +6405,43 @@ impl TypedProgram {
                 return Ok((handle, false));
             }
         }
+        if target_base_ability_id == ABILITY_ID_SUM {
+            if let Type::Sum(sum) = self.types.get(self_type_id) {
+                // ability sum[impl v]
+                let base_ability = self.abilities.get(ABILITY_ID_SUM);
+                let base_scope_id = base_ability.scope_id;
+                let impl_scope_id = self.scopes.add_child_scope(
+                    base_scope_id,
+                    ScopeType::AbilityImpl,
+                    ScopeOwnerId::None,
+                    None,
+                );
+
+                // Assign 'v' to the integer type of the sum!
+                let impl_arguments = self.mem.pushn(&[NameAndType {
+                    name: self.ast.idents.b.v,
+                    type_id: sum.tag_type.type_id(),
+                }]);
+                let impl_id = self.implement_ability_for_type(
+                    self_type_id,
+                    TypedAbilitySignature {
+                        specialized_ability_id: target_base_ability_id,
+                        impl_arguments,
+                    },
+                    impl_scope_id,
+                    AbilityImplKind::BuiltinDerived,
+                    span,
+                );
+                let handle = AbilityImplHandle {
+                    base_ability_id: target_base_ability_id,
+                    specialized_ability_id: target_base_ability_id,
+                    full_impl_id: impl_id,
+                };
+                eprintln!("\n----------------- IMPLEMENTED SUM\n");
+                eprintln!("{}", self.ability_impl_to_string(impl_id, true));
+                return Ok((handle, false));
+            }
+        }
 
         Err("No matching implementations found".into())
     }
@@ -7205,7 +7274,7 @@ impl TypedProgram {
             || field_access.field_name == self.ast.idents.b.un_mut
         {
             let to_mut = field_access.field_name == self.ast.idents.b.to_mut;
-            let name = if to_mut { "toMut" } else { "unMut" };
+            let name = if to_mut { "to-mut" } else { "un-mut" };
             let base_expr = self.eval_expr(field_access.base, ctx)?;
             let reference_type = match self.get_expr_type(base_expr) {
                 Type::Reference(reference_type) => *reference_type,
@@ -7357,9 +7426,15 @@ impl TypedProgram {
                     .ok_or_else(|| {
                         errf!(
                             span,
-                            "Field {} not found on struct {}",
+                            "Field {} not found on struct {}\nFields are: {}",
                             self.ast.idents.get_name(field_access.field_name),
-                            self.type_id_to_string(base_type_id)
+                            self.type_id_to_string(base_type_id),
+                            self.types
+                                .mem
+                                .getn(struct_type.fields)
+                                .iter()
+                                .map(|f| self.ast.idents.get_name(f.name))
+                                .join(", ")
                         )
                     })?;
                 let result_type = if field_access.is_referencing {
@@ -7639,8 +7714,9 @@ impl TypedProgram {
         let result_expr = self_.eval_expr_inner(expr_id, ctx)?;
         let result_expr = if explicit_hint {
             let expected_type_id = ctx.expected_type_id.unwrap();
+            let allow_addr_of = ctx.is_method_receiver();
             let coerced_expr = self_
-                .check_and_coerce_expr(expected_type_id, result_expr, ctx.scope_id)
+                .check_and_coerce_expr(expected_type_id, result_expr, ctx.scope_id, allow_addr_of)
                 .map_err(|e| {
                     errf!(
                         self_.ast.exprs.get_span(expr_id),
@@ -7749,12 +7825,13 @@ impl TypedProgram {
             }
             ParsedExpr::Block(block) => {
                 let block = block.clone();
-                let block_scope = self.scopes.add_child_scope(
-                    ctx.scope_id,
-                    ScopeType::LexicalBlock,
-                    ScopeOwnerId::None,
-                    None,
-                );
+                let scope_type = match block.kind {
+                    ParsedBlockKind::FunctionBody => ScopeType::FunctionScope,
+                    ParsedBlockKind::LexicalBlock => ScopeType::LexicalBlock,
+                    ParsedBlockKind::LoopBody => ScopeType::LoopExprBody,
+                };
+                let block_scope =
+                    self.scopes.add_child_scope(ctx.scope_id, scope_type, ScopeOwnerId::None, None);
                 let block_ctx = ctx.with_scope(block_scope);
                 let needs_terminator = match block.kind {
                     ParsedBlockKind::FunctionBody => true,
@@ -7929,7 +8006,8 @@ impl TypedProgram {
         match ctx.expected_type_id {
             None => Ok(expr),
             Some(expected_type) => {
-                match self.check_and_coerce_expr(expected_type, expr, ctx.scope_id) {
+                let allow_addr_of = ctx.is_method_receiver();
+                match self.check_and_coerce_expr(expected_type, expr, ctx.scope_id, allow_addr_of) {
                     Ok(expr) => Ok(expr),
                     error @ Err(_) => {
                         if fail {
@@ -8005,7 +8083,12 @@ impl TypedProgram {
                 let element_expr_checked = match current_expected_type {
                     None => element_expr,
                     Some(current_expected_type) => self
-                        .check_and_coerce_expr(current_expected_type, element_expr, list_lit_scope)
+                        .check_and_coerce_expr(
+                            current_expected_type,
+                            element_expr,
+                            list_lit_scope,
+                            false,
+                        )
                         .map_err(|e| {
                             errf!(e.span, "List element had incorrect type: {}", e.message)
                         })?,
@@ -10302,13 +10385,15 @@ impl TypedProgram {
         };
 
         let alternate = if no_never {
-            self.check_and_coerce_expr(consequent_type, alternate, ctx.scope_id).map_err(|e| {
-                errf!(
-                    alternate_span,
-                    "else branch type did not match then branch type: {}",
-                    e.message,
-                )
-            })?
+            self.check_and_coerce_expr(consequent_type, alternate, ctx.scope_id, false).map_err(
+                |e| {
+                    errf!(
+                        alternate_span,
+                        "else branch type did not match then branch type: {}",
+                        e.message,
+                    )
+                },
+            )?
         } else {
             alternate
         };
@@ -11317,7 +11402,7 @@ impl TypedProgram {
                 let index_expr =
                     self.eval_expr(index_arg.value, ctx.with_expected_type(Some(SIZE_TYPE_ID)))?;
                 let index_expr = self
-                    .check_and_coerce_expr(SIZE_TYPE_ID, index_expr, ctx.scope_id)
+                    .check_and_coerce_expr(SIZE_TYPE_ID, index_expr, ctx.scope_id, false)
                     .map_err(|e| errf!(span, "Array get index type error: {}", e.message))?;
 
                 let is_referencing = n == self.ast.idents.b.get_ref;
@@ -12211,7 +12296,7 @@ impl TypedProgram {
                 else {
                     return failf!(
                         span,
-                        "No member {} on type {}",
+                        "No member {} in enum {}",
                         self.ident_str(variant_name),
                         self.type_id_to_string(provided_type)
                     );
@@ -12609,6 +12694,7 @@ impl TypedProgram {
             CallResolution::Call(callee) => (callee, None),
             CallResolution::MethodCall { callee, receiver } => (callee, Some(receiver)),
         };
+        let is_method = method_receiver.is_some();
 
         // Now that we have resolved to a function id, we need to specialize it if generic
         let callee_function_type_id = self.get_callee_function_type(&callee);
@@ -12630,12 +12716,16 @@ impl TypedProgram {
                     false,
                 )?;
                 let mut typechecked_args = self.mem.new_list(args_and_params.len() as u32);
-                for (maybe_typed_expr, param) in args_and_params.iter() {
+                for (index, (maybe_typed_expr, param)) in args_and_params.iter().enumerate() {
+                    let is_method_receiver = is_method && index == 0;
                     let checked_expr = match *maybe_typed_expr {
                         MaybeTypedExpr::Typed(typed) => {
-                            if let Err(e) =
-                                self.check_and_coerce_expr(param.type_id, typed, ctx.scope_id)
-                            {
+                            if let Err(e) = self.check_and_coerce_expr(
+                                param.type_id,
+                                typed,
+                                ctx.scope_id,
+                                is_method_receiver,
+                            ) {
                                 return failf!(
                                     self.exprs.get_span(typed),
                                     "Invalid type for '{}': {}",
@@ -12648,7 +12738,8 @@ impl TypedProgram {
                         MaybeTypedExpr::Parsed(parsed) => self
                             .eval_expr_with_coercion(
                                 parsed,
-                                ctx.with_expected_type(Some(param.type_id)),
+                                ctx.with_expected_type(Some(param.type_id))
+                                    .with_is_method_receiver(is_method_receiver),
                                 true,
                             )
                             .map_err(|err| {
@@ -12765,6 +12856,8 @@ impl TypedProgram {
                     for (param_index, (maybe_typed_expr, param)) in
                         args_and_params.iter().enumerate()
                     {
+                        let is_method_receiver = param_index == 0 && is_method;
+                        let allow_addr_of = is_method_receiver;
                         // Is this parameter a fnlike type parameter? If so, we already have the
                         // typechecked value expression
                         let matching_ftp_index = self
@@ -12783,13 +12876,15 @@ impl TypedProgram {
                                         param.type_id,
                                         typed,
                                         ctx.scope_id,
+                                        allow_addr_of,
                                     )?;
                                     checked_coerced
                                 }
                                 MaybeTypedExpr::Parsed(parsed) => self
                                     .eval_expr_with_coercion(
                                         parsed,
-                                        ctx.with_expected_type(Some(param.type_id)),
+                                        ctx.with_expected_type(Some(param.type_id))
+                                            .with_is_method_receiver(is_method_receiver),
                                         true,
                                     )
                                     .map_err(|err| {
@@ -13462,6 +13557,7 @@ impl TypedProgram {
         stmt: ParsedStmtId,
         ctx: EvalExprContext,
         coerce_expr: bool,
+        stmt_index: usize,
     ) -> K1Result<Option<TypedStmtId>> {
         match self.ast.stmts.get(stmt) {
             ParsedStmt::Use(use_stmt) => {
@@ -13498,6 +13594,20 @@ impl TypedProgram {
                     )?),
                 };
                 let maybe_return_type_from_function = if parsed_let.is_returned() {
+                    let scope_type = self.scopes.get_scope(ctx.scope_id).scope_type;
+                    if stmt_index != 0
+                        || (scope_type != ScopeType::FunctionScope
+                            && scope_type != ScopeType::LambdaScope)
+                    {
+                        return failf!(
+                            parsed_let.span,
+                            "let returned must be the first statement in a function block; (block type was {})",
+                            scope_type.short_name()
+                        );
+                    }
+                    if let Some(_rv) = self.get_returned_var_for_scope(ctx.scope_id) {
+                        return failf!(parsed_let.span, "There is already a returned let");
+                    }
                     let expected_return =
                         self.get_return_type_for_scope(ctx.scope_id, parsed_let.span)?;
                     Some(expected_return)
@@ -13870,7 +13980,7 @@ impl TypedProgram {
             let coerce = expected_type.is_some();
             debug!("eval_stmt {index} with type {}", self.type_id_to_string_opt(expected_type));
             let Some(stmt_id) =
-                self.eval_stmt(*stmt, ctx.with_expected_type(expected_type), coerce)?
+                self.eval_stmt(*stmt, ctx.with_expected_type(expected_type), coerce, index)?
             else {
                 continue;
             };
@@ -14043,146 +14153,159 @@ impl TypedProgram {
             self.tmp.dlist_nth_data_opt(namespace_chain, 2).map(|node| self.ident_str(*node));
         let result = if let Some(ability_id) = ability_id {
             let base_ability_id = self.abilities.get(ability_id).base_ability_id;
-            match ability_impl_self_type {
-                None => {
-                    match (base_ability_id, fn_name_str) {
-                        // Abilities that are always implemented by the compiler; where the 'intern'
-                        // modifier is on the declaration, not the implementation
-                        (ABILITY_ID_ENUM, "enum-value") => Some(Builtin::TyperPhysicalFunction(
-                            BuiltinTyperFunction::EnumAbilityGetValue,
-                        )),
-                        (ABILITY_ID_ENUM, "tag-name") => Some(Builtin::TyperPhysicalFunction(
-                            BuiltinTyperFunction::EnumAbilityGetTagName,
-                        )),
-                        _ => None,
+            use ArithOpKind as OpKind;
+            use ArithOpOp as Op;
+            macro_rules! mk_arith {
+                ($e: expr) => {
+                    Some(Builtin::Ir(BuiltinIr::ArithBinop($e)))
+                };
+            }
+            macro_rules! mk_bitwise {
+                ($e: expr) => {
+                    Some(Builtin::Ir(BuiltinIr::BitwiseBinop($e)))
+                };
+            }
+            let t = ability_impl_self_type.map(|t| self.types.get(t));
+            let is_integer = t.is_some_and(|t| t.as_integer().is_some());
+            match (base_ability_id, fn_name_str) {
+                (ABILITY_ID_ENUM, "enum-value") => {
+                    Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::EnumAbilityGetValue))
+                }
+                (ABILITY_ID_ENUM, "enum-name") => Some(Builtin::TyperPhysicalFunction(
+                    BuiltinTyperFunction::EnumAbilityGetTagName,
+                )),
+                (ABILITY_ID_SUM, "sum-tag") => {
+                    Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumAbilityGetTag))
+                }
+                (ABILITY_ID_SUM, "sum-name") => {
+                    Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumAbilityGetName))
+                }
+                (ABILITY_ID_EQUALS, "equals") => match t {
+                    Some(Type::Char) | Some(Type::Bool) | Some(Type::Pointer) => {
+                        mk_arith!(OpKind::uint(Op::Equals))
+                    }
+                    Some(Type::Integer(i)) => {
+                        let o = if i.is_signed() {
+                            OpKind::sint(Op::Equals)
+                        } else {
+                            OpKind::uint(Op::Equals)
+                        };
+                        mk_arith!(o)
+                    }
+                    Some(Type::Float(_)) => mk_arith!(OpKind::float(Op::Equals)),
+                    _ => None,
+                },
+                (ABILITY_ID_BITWISE, "bit-not") if is_integer => {
+                    Some(Builtin::Ir(BuiltinIr::BitNot))
+                }
+                (ABILITY_ID_BITWISE, "bit-and") if is_integer => {
+                    mk_bitwise!(BitwiseBinopKind::And)
+                }
+                (ABILITY_ID_BITWISE, "bit-or") if is_integer => {
+                    mk_bitwise!(BitwiseBinopKind::Or)
+                }
+                (ABILITY_ID_BITWISE, "xor") if is_integer => {
+                    mk_bitwise!(BitwiseBinopKind::Xor)
+                }
+                (ABILITY_ID_BITWISE, "shift-left") if is_integer => {
+                    mk_bitwise!(BitwiseBinopKind::ShiftLeft)
+                }
+                (ABILITY_ID_BITWISE, "shift-right") if is_integer => {
+                    let int_type = t.unwrap().expect_integer();
+                    if int_type.is_signed() {
+                        mk_bitwise!(BitwiseBinopKind::SignedShiftRight)
+                    } else {
+                        mk_bitwise!(BitwiseBinopKind::UnsignedShiftRight)
                     }
                 }
-                Some(impl_self_type) => {
-                    use ArithOpClass as Class;
-                    use ArithOpKind as OpKind;
-                    use ArithOpOp as Op;
-                    macro_rules! mk_arith {
-                        ($e: expr) => {
-                            Some(Builtin::Ir(BuiltinIr::ArithBinop($e)))
-                        };
+                (ABILITY_ID_ADD, "add") => match t {
+                    Some(Type::Integer(i)) => {
+                        // Even though signedness is irrelevant here, we still set it properly
+                        // just in case it ever is, (for example if we want to make signed wrap UB
+                        // instead of wrapping)
+                        if i.is_signed() {
+                            mk_arith!(ArithOpKind::sint(Op::Add))
+                        } else {
+                            mk_arith!(ArithOpKind::uint(Op::Add))
+                        }
                     }
-                    macro_rules! mk_bitwise {
-                        ($e: expr) => {
-                            Some(Builtin::Ir(BuiltinIr::BitwiseBinop($e)))
-                        };
+                    Some(Type::Float(_)) => {
+                        mk_arith!(ArithOpKind::float(Op::Add))
                     }
-                    let t = self.types.get(impl_self_type);
-                    let is_integer = t.as_integer().is_some();
-                    match (base_ability_id, fn_name_str) {
-                        (ABILITY_ID_EQUALS, "equals") => match t {
-                            Type::Char | Type::Bool | Type::Pointer => {
-                                mk_arith!(OpKind::uint(Op::Equals))
-                            }
-                            Type::Integer(i) => {
-                                let o = if i.is_signed() {
-                                    OpKind::sint(Op::Equals)
-                                } else {
-                                    OpKind::uint(Op::Equals)
-                                };
-                                mk_arith!(o)
-                            }
-                            Type::Float(_) => mk_arith!(OpKind::float(Op::Equals)),
+                    _ => None,
+                },
+                (ABILITY_ID_SUB, "sub") => match t {
+                    Some(Type::Integer(i)) => {
+                        if i.is_signed() {
+                            mk_arith!(ArithOpKind::sint(Op::Sub))
+                        } else {
+                            mk_arith!(ArithOpKind::uint(Op::Sub))
+                        }
+                    }
+                    Some(Type::Float(_)) => {
+                        mk_arith!(ArithOpKind::float(Op::Sub))
+                    }
+                    _ => None,
+                },
+                (ABILITY_ID_MUL, "mul") => match t {
+                    Some(Type::Integer(i)) => {
+                        if i.is_signed() {
+                            mk_arith!(ArithOpKind::sint(Op::Mul))
+                        } else {
+                            mk_arith!(ArithOpKind::uint(Op::Mul))
+                        }
+                    }
+                    Some(Type::Float(_)) => {
+                        mk_arith!(ArithOpKind::float(Op::Mul))
+                    }
+                    _ => None,
+                },
+                (ABILITY_ID_DIV, "div") => match t {
+                    Some(Type::Integer(i)) => {
+                        if i.is_signed() {
+                            mk_arith!(ArithOpKind::sint(Op::Div))
+                        } else {
+                            mk_arith!(ArithOpKind::uint(Op::Div))
+                        }
+                    }
+                    Some(Type::Float(_)) => {
+                        mk_arith!(ArithOpKind::float(Op::Div))
+                    }
+                    _ => None,
+                },
+                (ABILITY_ID_REM, "rem") => match t {
+                    Some(Type::Integer(i)) => {
+                        if i.is_signed() {
+                            mk_arith!(ArithOpKind::sint(Op::Rem))
+                        } else {
+                            mk_arith!(ArithOpKind::uint(Op::Rem))
+                        }
+                    }
+                    Some(Type::Float(_)) => {
+                        mk_arith!(ArithOpKind::float(Op::Rem))
+                    }
+                    _ => None,
+                },
+                (ABILITY_ID_SCALAR_CMP, _) => {
+                    let class = if let Some(Type::Integer(i)) = t {
+                        Some(ArithOpClass::from_int_type(*i))
+                    } else if let Some(Type::Float(_)) = t {
+                        Some(ArithOpClass::Float)
+                    } else {
+                        None
+                    };
+                    match class {
+                        None => None,
+                        Some(class) => match fn_name_str {
+                            "lt" => mk_arith!(OpKind { class, op: Op::Lt }),
+                            "le" => mk_arith!(OpKind { class, op: Op::Le }),
+                            "gt" => mk_arith!(OpKind { class, op: Op::Gt }),
+                            "ge" => mk_arith!(OpKind { class, op: Op::Ge }),
                             _ => None,
                         },
-                        (ABILITY_ID_BITWISE, "bit-not") if is_integer => {
-                            Some(Builtin::Ir(BuiltinIr::BitNot))
-                        }
-                        (ABILITY_ID_BITWISE, "bit-and") if is_integer => {
-                            mk_bitwise!(BitwiseBinopKind::And)
-                        }
-                        (ABILITY_ID_BITWISE, "bit-or") if is_integer => {
-                            mk_bitwise!(BitwiseBinopKind::Or)
-                        }
-                        (ABILITY_ID_BITWISE, "xor") if is_integer => {
-                            mk_bitwise!(BitwiseBinopKind::Xor)
-                        }
-                        (ABILITY_ID_BITWISE, "shift-left") if is_integer => {
-                            mk_bitwise!(BitwiseBinopKind::ShiftLeft)
-                        }
-                        (ABILITY_ID_BITWISE, "shift-right") if is_integer => {
-                            let int_type = t.expect_integer();
-                            if int_type.is_signed() {
-                                mk_bitwise!(BitwiseBinopKind::SignedShiftRight)
-                            } else {
-                                mk_bitwise!(BitwiseBinopKind::UnsignedShiftRight)
-                            }
-                        }
-                        (ABILITY_ID_ADD, "add") => match t {
-                            Type::Integer(i) => {
-                                // Even though signedness is irrelevant here, we still set it properly
-                                // just in case it ever is, (for example if we want to make signed wrap UB
-                                // instead of wrapping)
-                                if i.is_signed() {
-                                    mk_arith!(ArithOpKind::sint(Op::Add))
-                                } else {
-                                    mk_arith!(ArithOpKind::uint(Op::Add))
-                                }
-                            }
-                            Type::Float(_) => {
-                                mk_arith!(ArithOpKind::float(Op::Add))
-                            }
-                            _ => None,
-                        },
-                        (ABILITY_ID_SUB, "sub") => {
-                            let class = if let Type::Integer(i) = t {
-                                ArithOpClass::from_int_type(*i)
-                            } else {
-                                ArithOpClass::Float
-                            };
-                            mk_arith!(OpKind { class, op: Op::Sub })
-                        }
-                        (ABILITY_ID_MUL, "mul") => {
-                            let class = if let Type::Integer(i) = t {
-                                Class::from_int_type(*i)
-                            } else {
-                                Class::Float
-                            };
-                            mk_arith!(OpKind { class, op: Op::Mul })
-                        }
-                        (ABILITY_ID_DIV, "div") => {
-                            let class = if let Type::Integer(i) = t {
-                                ArithOpClass::from_int_type(*i)
-                            } else {
-                                ArithOpClass::Float
-                            };
-                            mk_arith!(OpKind { class, op: Op::Div })
-                        }
-                        (ABILITY_ID_REM, "rem") => {
-                            let class = if let Type::Integer(i) = t {
-                                ArithOpClass::from_int_type(*i)
-                            } else {
-                                ArithOpClass::Float
-                            };
-                            mk_arith!(OpKind { class, op: Op::Rem })
-                        }
-                        (ABILITY_ID_SCALAR_CMP, _) => {
-                            let class = if let Type::Integer(i) = t {
-                                ArithOpClass::from_int_type(*i)
-                            } else {
-                                ArithOpClass::Float
-                            };
-                            match fn_name_str {
-                                "lt" => mk_arith!(OpKind { class, op: Op::Lt }),
-                                "le" => mk_arith!(OpKind { class, op: Op::Le }),
-                                "gt" => mk_arith!(OpKind { class, op: Op::Gt }),
-                                "ge" => mk_arith!(OpKind { class, op: Op::Ge }),
-                                _ => None,
-                            }
-                        }
-                        (ABILITY_ID_ENUM, "enum-value") => Some(Builtin::TyperPhysicalFunction(
-                            BuiltinTyperFunction::EnumAbilityGetValue,
-                        )),
-                        (ABILITY_ID_ENUM, "tag-name") => Some(Builtin::TyperPhysicalFunction(
-                            BuiltinTyperFunction::EnumAbilityGetTagName,
-                        )),
-                        _ => None,
                     }
                 }
+                _ => None,
             }
         } else {
             #[allow(clippy::match_single_binding)]
@@ -14255,13 +14378,14 @@ impl TypedProgram {
         match result {
             Some(result) => Ok(result),
             None => Err(format!(
-                "Could not resolve intrinsic function type for function {}/{}",
+                "Could not resolve intrinsic function type for function {}/{} (ability: {})",
                 self.tmp
                     .dlist_iter(namespace_chain)
                     .map(|i| self.ident_str(*i).to_string())
                     .collect::<Vec<_>>()
                     .join("/"),
                 fn_name_str,
+                ability_id.is_some()
             )),
         }
     }
@@ -14304,12 +14428,19 @@ impl TypedProgram {
                             ctx.with_expected_type(Some(payload_type)),
                             true,
                         )
-                        .map_err(|e| errf!(span, "Variant payload type mismatch: {}", e.message))?;
+                        .map_err(|e| {
+                            errf!(
+                                self.ast.exprs.get_span(payload_arg),
+                                ":{} payload type mismatch: {}",
+                                self.ident_str(variant_name),
+                                e.message
+                            )
+                        })?;
                     Ok(Some(payload_value))
                 } else {
                     failf!(
                         span,
-                        "Variant '{}' requires data: {}",
+                        ":{} requires data of type {}",
                         self.ident_str(variant_name).blue(),
                         self.type_id_to_string(payload_type)
                     )
@@ -15368,8 +15499,41 @@ impl TypedProgram {
                 });
                 Ok(self.exprs.add(match_expr, STRING_TYPE_ID, fn_span))
             }
-            BuiltinTyperFunction::SumAbilityGetTag => todo!(),
-            BuiltinTyperFunction::SumAbilityGetTagName => todo!(),
+            BuiltinTyperFunction::SumAbilityGetTag => {
+                let sum_param = *self.mem.get_nth(params, 0);
+                let sum_param_expr = self.synth_variable_expr(sum_param.variable_id, fn_span);
+                let value_expr = self.synth_sum_get_tag(sum_param_expr, fn_span);
+                Ok(value_expr)
+            }
+            BuiltinTyperFunction::SumAbilityGetName => {
+                // FIXME: a 'switch' would be much better, if we had them
+                // But we'll synthesize a big if/else inline for now.
+                let sum_param = *self.mem.get_nth(params, 0);
+                let sum_param_expr = self.synth_variable_expr(sum_param.variable_id, fn_span);
+                let sum_type_id = self.exprs.get_type(sum_param_expr);
+                let sum_arg_int_expr = self.synth_sum_get_tag(sum_param_expr, fn_span);
+                let Type::Sum(sum_type) = self.types.get(sum_type_id) else {
+                    self.ice_span(fn_span, "not a sum");
+                };
+                let mut arms: List<TypedMatchArm, _> = self.mem.new_list(sum_type.variants.len());
+                for variant in self.types.mem.getn(sum_type.variants) {
+                    let int_value_expr = self.synth_int(variant.tag_value, fn_span);
+                    let string_id = self.ast.strings.intern(self.ast.idents.get_name(variant.name));
+                    let member_name_expr = self.synth_string_literal(string_id, fn_span);
+                    let cond =
+                        self.synth_simple_equals_call(sum_arg_int_expr, int_value_expr, fn_span);
+                    let instrs = self.mem.pushn(&[MatchingConditionInstr::Cond { value: cond }]);
+                    arms.push(TypedMatchArm {
+                        condition: MatchingCondition { instrs },
+                        consequent_expr: member_name_expr,
+                    });
+                }
+                let match_expr = TypedExpr::Match(TypedMatchExpr {
+                    initial_let_statements: MSlice::empty(),
+                    arms: self.mem.list_to_handle(arms),
+                });
+                Ok(self.exprs.add(match_expr, STRING_TYPE_ID, fn_span))
+            }
         }
     }
 
@@ -17337,10 +17501,13 @@ impl TypedProgram {
             core!("mul"),
             core!("div"),
             core!("rem"),
+            core!("sys"),
             core!("scalar-cmp"),
             core!("StringBuilder"),
             QIdent { path: core_mem, name: get_ident!(self, "zeroed"), span },
+            QIdent { path: core_mem, name: get_ident!(self, "alloc-mode"), span },
             QIdent { path: core_types, name: get_ident!(self, "enum"), span },
+            QIdent { path: core_types, name: get_ident!(self, "sum"), span },
         ];
         for qid in idents_to_use.into_iter() {
             let use_id = self.ast.uses.add_use(parse::ParsedUse {
@@ -17580,7 +17747,7 @@ impl TypedProgram {
                 let either_payload_type_id =
                     get_schema_variant(self, get_ident!(self, "either")).payload.unwrap();
                 let variants_span_type_id =
-                    self.types.get_struct_field(either_payload_type_id, 1).type_id;
+                    self.types.get_struct_field(either_payload_type_id, 2).type_id;
                 let variant_struct_type_id =
                     self.types.get_as_span_instance(variants_span_type_id).unwrap();
                 let tag_type = typed_sum.tag_type;
@@ -17588,7 +17755,9 @@ impl TypedProgram {
                     self.static_values.add(TypedProgram::make_int_kind(int_kind_type_id, tag_type));
                 let sum_agg_id = self.get_physical_type(type_id).unwrap().expect_agg();
                 let sum_pt = self.types.agg_types.get(sum_agg_id).agg_type.expect_sum();
-                let maybe_payload_offset = sum_pt.payload_offset;
+                let payload_offset = sum_pt.payload_offset;
+                let payload_offset_value_id =
+                    self.static_values.add_size(to_k1_size_usize(payload_offset as usize));
                 let mut variant_values = self.static_values.mem.new_list(target_sum_variants.len());
                 for variant in self.types.mem.getn(target_sum_variants) {
                     let name_string_id =
@@ -17624,13 +17793,9 @@ impl TypedProgram {
                             // are available at runtime, by calling these functions at least once.
                             self.register_type_metainfo(payload_type_id);
 
-                            let offset = maybe_payload_offset.unwrap();
-                            let payload_offset_value_id =
-                                self.static_values.add_size(to_k1_size_usize(offset as usize));
-                            let payload_info_struct_id = self.static_values.add_struct_from_slice(
-                                payload_info_struct_id,
-                                &[type_id_value_id, payload_offset_value_id],
-                            );
+                            let payload_info_struct_id = self
+                                .static_values
+                                .add_struct_from_slice(payload_info_struct_id, &[type_id_value_id]);
                             synth_static_option(
                                 &mut self.static_values,
                                 payload_info_opt_type_id,
@@ -17646,7 +17811,7 @@ impl TypedProgram {
                             name_value_id,
                             // tag: IntValue,
                             tag_value_id,
-                            // payload: { typeId: u64, offset: size }?,
+                            // payload: { typeId: u64 },
                             payload_info_value_id,
                         ],
                     ))
@@ -17656,7 +17821,7 @@ impl TypedProgram {
                     self.static_values.add_span(variants_span_type_id, variant_values_slice);
                 let payload_value_id = self.static_values.add_struct_from_slice(
                     either_payload_type_id,
-                    &[tag_type_value_id, variants_span_value_id],
+                    &[tag_type_value_id, payload_offset_value_id, variants_span_value_id],
                 );
                 make_variant(self, get_ident!(self, "either"), Some(payload_value_id))
             }

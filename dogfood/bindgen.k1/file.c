@@ -23,16 +23,21 @@ struct foo {
   struct { int x; int y; } _struct_anon;
 };
 
-// 'consts','moduleconsts', 'newtype' and 'newtype_global'.
 enum Color {
-  Color_Red,
+  Color_Red = 577,
   Color_Green
 };
 
-// typedef struct opaq {
-//   char b[100];
-//   int x;
-// } opaq;
+enum Size { 
+  Size_Small,
+  Size_Medium,
+  Size_Large
+};
+
+typedef struct opaq {
+  char b[100];
+  int x;
+} opaq;
 
 int main(void) {
   return 0;

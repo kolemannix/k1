@@ -26,9 +26,9 @@ fn enumTest() {
   assertEquals(b, enum-abc:b);
   assertEquals(c, enum-abc:c);
 
-  assertEquals[string](a.tag-name(), "a");
-  assertEquals[string](b.tag-name(), "b");
-  assertEquals[string](c.tag-name(), "c");
+  assertEquals[string](a.enum-name(), "a");
+  assertEquals[string](b.enum-name(), "b");
+  assertEquals[string](c.enum-name(), "c");
 
   assertEquals(getEnumValue(c), 2);
   assertEquals(getEnumValue(b), 1);

@@ -3153,7 +3153,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     }
                     Some(payload) => {
                         let tag_end = tag_layout.size;
-                        let payload_offset = payload_offset.unwrap();
                         let payload_padding = payload_offset - tag_end;
                         if payload_padding > 0 {
                             packed_values.push(

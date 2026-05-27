@@ -1,15 +1,10 @@
-let foo: int = 0
-let export bar: int = 0
+fn main(argc: int, argv: ptr): i32 {
+  let clang-args = list/empty[string];
+  // BUG: captured context parameter results in 'Missing variable' in ir
+  //let context alloc: mem/alloc-mode = :arena;
+  //let clang-args-c-strs: list[ptr] = clang-args.map(fn s. s.toCString().ptr);
 
-#debug fn main(argc: int, argv: ptr): i32 {
-  let xs: list[int] = [1,2,3,4,5];
+  let clang-args-c-strs: list[ptr] = clang-args.map(fn s. s.toCString(context :arena)().ptr);
 
-  let x = 42;
-  x + x;
-
-  println("{x + x}");
-  for i in xs { println("{itIndex}: {i}") };
   0
 }
-
-#static main(0, ptr/null)

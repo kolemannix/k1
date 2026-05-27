@@ -194,7 +194,7 @@ fn _parseNextValue(context p: *mut parser)(): result[json, string] {
 
 fn parse-from-string(input: string): result[json, string] {
   let p: parser = { input, cursor: 0 };
-  switch _parseNextValue(context p)() {
+  switch _parseNextValue(context &p)() {
     :err(msg) -> :err("Failed at pos {p.cursor}: {msg}"),
     :ok(json) -> :ok(json)
   }

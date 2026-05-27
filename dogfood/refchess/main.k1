@@ -262,7 +262,7 @@ fn run(_args: span[string]): result[i32, string] {
   };
 }
 
-fn main(argCount: u32, args: ptr): i32 {
+fn main(argCount: i32, args: ptr): i32 {
   let args = sys/parseMainArgs(argCount, args);
   run(args).!
 }

@@ -825,6 +825,13 @@ impl Type {
         }
     }
 
+    pub fn as_float(&self) -> Option<&FloatType> {
+        match self {
+            Type::Float(float) => Some(float),
+            _ => None,
+        }
+    }
+
     #[track_caller]
     pub fn expect_integer(&self) -> IntegerType {
         match self {
@@ -1188,7 +1195,7 @@ pub struct SumPt {
     pub tag_type: ScalarType,
     pub struct_repr: AggregateTypeId,
     pub variants: MSlice<SumVariantPt, TypePool>,
-    pub payload_offset: Option<u32>,
+    pub payload_offset: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -1825,7 +1832,7 @@ impl TypePool {
         }
     }
 
-    pub fn compile_physical_type(
+    pub fn compute_physical_type(
         &mut self,
         static_values: &StaticValuePool,
         type_id: TypeId,
@@ -1945,20 +1952,15 @@ impl TypePool {
                     field_t: PhysicalType::scalar(tag_scalar),
                     name: self.idents.tag,
                 };
-                let (struct_fields, union_offset) = if members_handle.is_empty() {
-                    (self.mem.pushn(&[tag_field]), None)
-                } else {
-                    let union_offset = struct_layout.append_to_aggregate(union_layout);
-                    let payload_field = StructField {
-                        offset: union_offset,
-                        field_t: PhysicalType::agg(union_id),
-                        name: self.idents.payload,
-                    };
-                    let fields = self.mem.pushn(&[tag_field, payload_field]);
-                    (fields, Some(union_offset))
+                let union_offset = struct_layout.append_to_aggregate(union_layout);
+                let payload_field = StructField {
+                    offset: union_offset,
+                    field_t: PhysicalType::agg(union_id),
+                    name: self.idents.payload,
                 };
+                let fields = self.mem.pushn(&[tag_field, payload_field]);
                 let struct_repr = self.agg_types.add(AggregateTypeRecord {
-                    agg_type: AggType::Struct { fields: struct_fields },
+                    agg_type: AggType::Struct { fields },
                     origin_type_id: type_id,
                     layout: struct_layout,
                 });
@@ -2090,7 +2092,7 @@ impl TypePool {
         match self.phys_types.get(&type_id) {
             Some(result) => *result,
             None => {
-                let pt_result = self.compile_physical_type(static_values, type_id);
+                let pt_result = self.compute_physical_type(static_values, type_id);
                 self.phys_types.insert(type_id, pt_result);
                 pt_result
             }

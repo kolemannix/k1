@@ -70,13 +70,13 @@ ns types {
   // enum must have ability id 1
   ability enum[impl v] {
     intern fn enum-value(self): v
-    intern fn tag-name(self): string
+    intern fn enum-name(self): string
   }
 
-  // ability sum[impl v] {
-  //   intern fn tag-value(self): v
-  //   intern fn tag-name(self): string)
-  // }
+  ability sum[impl v] {
+    intern fn sum-tag(self): v
+    intern fn sum-name(self): string
+  }
 
   // This implements equals for all enums, in userspace B-)
   // nocommit: This will get tried first for every type that wants equals; probably not ideal
@@ -161,10 +161,11 @@ ns types {
     }),
     either({
       tag-type: int-kind,
+      payload-offset: size,
       variants: span[{
         name: string,
         tag: int-value,
-        payload: ?{ type-id: u64, offset: size }
+        payload: ?{ type-id: u64 }
       }],
     }),
     string,

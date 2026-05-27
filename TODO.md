@@ -1,47 +1,43 @@
 "C with generics, live interactive programming, typeclasses, next-gen macros, full compile-time execution, and ADTs"
 
+
+Minor and ideas
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [X] Specialization solution (when types are known by the function)
+- [x] Destructuring, (in)fallible patterns
+- [x] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
 -     A kind of *pattern* that checks the type and binds a variable of that type! What other thing for a feature that needs to _check_ and _bind_ than a pattern?!
+- [x] Improve named arg passing. Allow mixing named and unnamed as long as the order is correct. Its common to only need to name boolean params, for example
+- [x] Allow name/type elision shorthand in function signatures. Examples: (self: self, size: size, t: t) -> (self, size, t). Enabled by using lowercase for types and values
+- [x] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
+- [x] Incorporate ffc.h for int and float parsing
 - [ ] Opaque type solution. Try using 1-member structs and make struct's first field special
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
 - [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
-- [x] Destructuring, (in)fallible patterns
-- [x] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
 - [ ] Finish removing let*
-- [x] Improve named arg passing. Allow mixing named and unnamed as long as the order is correct. Its common to only need to name boolean params, for example
-- [x] Allow name/type elision shorthand in function signatures. Examples: (self: self, size: size, t: t) -> (self, size, t). Enabled by using lowercase for types and values
 - [ ] New struct literal syntax : `{ x: 1, y: 2 }` -> `{ .x = 1, .y = 2 }`. Why? clarity of meaning of "=", consistent meaning of '.', and parsing ambiguity resolution
       We still allow `{ .x, .y }` to mean `{ .x = x, .y = y }`
-
-More optimal final programs
-- [x] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
 - [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
-
-minor ideas
 - [ ] c"" string literals that are of type ptr (what about interpolation?)
 - [ ] [design/flags_in_tags.k1]
-- [x] Incorporate ffc.h for int and float parsing
 - [ ] Inspired by fast_float, char to digit lookup table
-
-On ai confidence, and how the conclusions truly precede the reasoning: https://claude.ai/share/e8f37966-8428-498a-8591-c21e228abc5c
-- https://asciinema.org/
-
 Simple but missing
-- [ ] Exported functions and globals
+- [ ] Exported functions
 - [ ] decide if overflow traps or not (in debug and release, if those are even different)
 - [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
-- [x] support ability constraints on generics
-- [x] support explicit type args in AnonEnumConstructor syntax 
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
       currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
-- [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
 - [ ] Bindings generator; `rust-bindgen` equivalent
-- [x] implement iterator for array
 - [ ] Implement at least one format specifier (precision, pretty)
+- [x] exported globals
+- [x] support ability constraints on generics
+- [x] support explicit type args in AnonEnumConstructor syntax 
+- [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
+- [x] implement iterator for array
 - [x] static #switch
 
 # Bugs
+- [ ] same-level recursion is not caught behind option
 - [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)
 - [ ] Defect: Generic (co)recursive types do not work
 - [ ] Require that a blanket impl's params appear in the Self type
@@ -49,7 +45,8 @@ Simple but missing
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 - [ ] Test handling of NaN and Infinity literals, other float edge cases
 
-## [ ] very readable compiler trace, incl specialization args, for debugging
+## [ ] Escape analysis
+- [ ] Use to report escaped stack pointers
 
 ## [ ] Constant-folding, SCCP
 
@@ -57,10 +54,12 @@ Simple but missing
 
 ## [x] higher level macros
 
-## [ ] Context ability types
+## [ ] Context ability types (context system revamp?)
 - [ ] AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem *if it ends up an ability*)
   - let context(impl Alloc) temp = mem/AllocMode.Arena;
   - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
+
+## [ ] very readable compiler trace, incl specialization args, for debugging
 
 ## [ ] Ability objects; dyn[<ability expr>]
 

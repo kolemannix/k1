@@ -61,6 +61,11 @@ ns for span {
     tRef.*
   }
 
+  fn get-opt[t](self: span[t], index: size): ?t {
+    if index >= self.len() :none
+    else :some(self.get(index))
+  }
+
   fn slice[T](self: span[T], start: size, end: size): span[T] {
     { buffer: self.buffer.slice(start, end) }
   }

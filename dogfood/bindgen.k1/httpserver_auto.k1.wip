@@ -1,0 +1,210 @@
+ns file; // k1-bindgen httpserver.h
+deftype http_string_s = {
+}
+deftype http_server_s = {
+}
+deftype http_request_s = {
+}
+deftype http_response_s = {
+}
+extern("httpserver.h", "http_server_loop") fn http_server_loop(): c-int
+extern("httpserver.h", "http_server_init") fn http_server_init(): *mut http_server_s
+extern("httpserver.h", "http_server_listen_addr") fn http_server_listen_addr(): c-int
+extern("httpserver.h", "http_server_listen") fn http_server_listen(): c-int
+extern("httpserver.h", "http_server_listen_addr_poll") fn http_server_listen_addr_poll(): c-int
+extern("httpserver.h", "http_server_listen_poll") fn http_server_listen_poll(): c-int
+extern("httpserver.h", "http_server_poll") fn http_server_poll(): c-int
+extern("httpserver.h", "http_request_has_flag") fn http_request_has_flag(): c-int
+extern("httpserver.h", "http_request_method") fn http_request_method(): http_string_s
+extern("httpserver.h", "http_request_target") fn http_request_target(): http_string_s
+extern("httpserver.h", "http_request_body") fn http_request_body(): http_string_s
+extern("httpserver.h", "http_request_header") fn http_request_header(): http_string_s
+extern("httpserver.h", "http_request_iterate_headers") fn http_request_iterate_headers(): c-int
+extern("httpserver.h", "http_request_set_userdata") fn http_request_set_userdata(): {}
+extern("httpserver.h", "http_request_userdata") fn http_request_userdata(): ptr
+extern("httpserver.h", "http_server_set_userdata") fn http_server_set_userdata(): {}
+extern("httpserver.h", "http_request_server_userdata") fn http_request_server_userdata(): ptr
+extern("httpserver.h", "http_request_connection") fn http_request_connection(): {}
+extern("httpserver.h", "http_request_free_buffer") fn http_request_free_buffer(): {}
+extern("httpserver.h", "http_response_init") fn http_response_init(): *mut http_response_s
+extern("httpserver.h", "http_response_status") fn http_response_status(): {}
+extern("httpserver.h", "http_response_header") fn http_response_header(): {}
+extern("httpserver.h", "http_response_body") fn http_response_body(): {}
+extern("httpserver.h", "http_respond") fn http_respond(): {}
+extern("httpserver.h", "http_respond_chunk") fn http_respond_chunk(): {}
+extern("httpserver.h", "http_respond_chunk_end") fn http_respond_chunk_end(): {}
+extern("httpserver.h", "http_request_read_chunk") fn http_request_read_chunk(): {}
+extern("httpserver.h", "http_request_chunk") fn http_request_chunk(): http_string_s
+deftype http_ev_cb_s = {
+ handler: c-int,
+}
+deftype alias ev_cb_t = http_ev_cb_s
+deftype hsh_buffer_s = {
+ buf: *mut i8,
+ capacity: c-int,
+ length: c-int,
+ index: c-int,
+ after_headers_index: c-int,
+ sequence_id: c-int,
+}
+deftype hsh_token_e = either(u32) {
+  HSH_TOK_METHOD = 0,
+  HSH_TOK_TARGET = 1,
+  HSH_TOK_VERSION = 2,
+  HSH_TOK_HEADER_KEY = 3,
+  HSH_TOK_HEADER_VALUE = 4,
+  HSH_TOK_HEADERS_DONE = 5,
+  HSH_TOK_BODY = 6,
+  HSH_TOK_NONE = 7,
+  HSH_TOK_ERR = 8,
+}
+deftype hsh_token_s = {
+ type: hsh_token_e,
+ flags: c-int,
+ len: c-int,
+ index: c-int,
+}
+deftype hsh_parser_s = {
+ content_length: c-int,
+ content_remaining: c-int,
+ token: hsh_token_s,
+ limit_count: c-int,
+ limit_max: c-int,
+ state: c-int,
+ flags: c-int,
+ sequence_id: c-int,
+}
+deftype hs_token_array_s = {
+ buf: *mut hsh_token_s,
+ capacity: c-int,
+ size: c-int,
+}
+deftype http_request_s = {
+ handler: c-int,
+ timer_handler: c-int,
+ timerfd: c-int,
+ chunk_cb: *mut fn(
+*mut http_request_s,
+ data: ptr,
+ buffer: hsh_buffer_s,
+ parser: hsh_parser_s,
+ tokens: hs_token_array_s,
+ state: c-int,
+ socket: c-int,
+ timeout: c-int,
+ bytes_written: c-int,
+ server: *mut http_server_s,
+ flags: i8,
+}
+deftype alias http_request_t = http_request_s
+deftype http_server_s = {
+ handler: c-int,
+ timer_handler: c-int,
+ memused: c-int,
+ socket: c-int,
+ port: c-int,
+ loop: c-int,
+ timerfd: c-int,
+ len: c-int,
+ request_handler: *mut fn(
+*mut http_request_t,
+ addr: {
+},
+ data: ptr,
+ date: array[i8, 32],
+}
+deftype alias http_server_t = http_server_s
+extern("httpserver.h", "_hs_buffer_free") fn _hs_buffer_free(): {}
+deftype http_string_s = {
+ buf: *mut i8,
+ len: c-int,
+}
+deftype alias http_string_t = http_string_s
+extern("httpserver.h", "hs_get_token_string") fn hs_get_token_string(): http_string_t
+extern("httpserver.h", "hs_request_header") fn hs_request_header(): http_string_t
+extern("httpserver.h", "hs_request_detect_keep_alive_flag") fn hs_request_detect_keep_alive_flag(): {}
+extern("httpserver.h", "hs_request_iterate_headers") fn hs_request_iterate_headers(): c-int
+extern("httpserver.h", "hs_request_set_keep_alive_flag") fn hs_request_set_keep_alive_flag(): {}
+extern("httpserver.h", "hs_request_chunk") fn hs_request_chunk(): http_string_t
+extern("httpserver.h", "hsh_parser_exec") fn hsh_parser_exec(): hsh_token_s
+extern("httpserver.h", "hsh_parser_init") fn hsh_parser_init(): {}
+deftype http_request_s = {
+}
+deftype hs_read_rc_e = either(u32) {
+  HS_READ_RC_SUCCESS = 0,
+  HS_READ_RC_PARSE_ERR = 1,
+  HS_READ_RC_SOCKET_ERR = 2,
+}
+deftype hs_read_opts_s = {
+ max_request_buf_capacity: c-int,
+ eof_rc: c-int,
+ initial_request_buf_capacity: c-int,
+}
+extern("httpserver.h", "hs_read_request_and_exec_user_cb") fn hs_read_request_and_exec_user_cb(): hs_read_rc_e
+deftype http_request_s = {
+}
+deftype alias hs_req_fn_t = *mut fn(
+*mut http_request_s
+deftype http_header_s = {
+ key: *mut i8,
+ value: *mut i8,
+ next: *mut http_header_s,
+}
+deftype alias http_header_t = http_header_s
+deftype http_response_s = {
+ headers: *mut http_header_t,
+ body: *mut i8,
+ content_length: c-int,
+ status: c-int,
+}
+deftype alias http_response_t = http_response_s
+extern("httpserver.h", "hs_response_init") fn hs_response_init(): *mut http_response_t
+extern("httpserver.h", "hs_response_set_header") fn hs_response_set_header(): {}
+extern("httpserver.h", "hs_response_set_status") fn hs_response_set_status(): {}
+extern("httpserver.h", "hs_response_set_body") fn hs_response_set_body(): {}
+extern("httpserver.h", "hs_request_respond") fn hs_request_respond(): {}
+extern("httpserver.h", "hs_request_respond_chunk") fn hs_request_respond_chunk(): {}
+extern("httpserver.h", "hs_request_respond_chunk_end") fn hs_request_respond_chunk_end(): {}
+extern("httpserver.h", "hs_request_respond_error") fn hs_request_respond_error(): {}
+deftype epoll_event = {
+}
+deftype alias hs_evt_cb_t = *mut fn(
+*mut epoll_event
+deftype http_request_s = {
+}
+deftype http_server_s = {
+}
+extern("httpserver.h", "hs_server_listen_on_addr") fn hs_server_listen_on_addr(): {}
+extern("httpserver.h", "hs_server_run_event_loop") fn hs_server_run_event_loop(): c-int
+extern("httpserver.h", "hs_generate_date_time") fn hs_generate_date_time(): {}
+extern("httpserver.h", "hs_server_init") fn hs_server_init(): *mut http_server_s
+extern("httpserver.h", "hs_server_poll_events") fn hs_server_poll_events(): c-int
+deftype http_request_s = {
+}
+deftype hs_write_rc_e = either(u32) {
+  HS_WRITE_RC_SUCCESS = 0,
+  HS_WRITE_RC_SUCCESS_CHUNK = 1,
+  HS_WRITE_RC_SUCCESS_CLOSE = 2,
+  HS_WRITE_RC_CONTINUE = 3,
+  HS_WRITE_RC_SOCKET_ERR = 4,
+}
+extern("httpserver.h", "hs_write_socket") fn hs_write_socket(): hs_write_rc_e
+deftype http_request_s = {
+}
+deftype http_server_s = {
+}
+deftype epoll_event = {
+}
+deftype alias hs_io_cb_t = *mut fn(
+*mut epoll_event
+extern("httpserver.h", "hs_request_terminate_connection") fn hs_request_terminate_connection(): {}
+extern("httpserver.h", "hs_server_accept_connection") fn hs_server_accept_connection(): *mut http_request_s
+deftype http_request_s = {
+}
+extern("httpserver.h", "hs_request_begin_write") fn hs_request_begin_write(): {}
+extern("httpserver.h", "hs_request_begin_read") fn hs_request_begin_read(): {}
+deftype epoll_event = {
+}
+extern("httpserver.h", "hs_on_epoll_server_connection_event") fn hs_on_epoll_server_connection_event(): {}
+extern("httpserver.h", "hs_on_epoll_server_timer_event") fn hs_on_epoll_server_timer_event(): {}
+

@@ -1,4 +1,5 @@
 mkdir -p ~/.k1/bin
+rm ~/.k1/bin/k1lsp
 cp k1lsp ~/.k1/bin/k1lsp
 cp k1 ~/.k1/bin/k1
 rm -r ~/.k1/k1lib

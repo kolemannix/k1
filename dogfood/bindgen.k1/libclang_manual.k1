@@ -1,3 +1,5 @@
+// Manually written bindings for libclang in k1
+// Initial pass for bootstrap, Koleman Nix, May 2026
 use core/c-int
 
 ns clang;
@@ -12,9 +14,13 @@ fn createIndex(
 
 deftype alias c-unsigned = u32
 
-deftype CXUnsavedFile = {} // nocommit
+deftype alias CXUnsavedFile = { filename: *char, contents: *char, length: u64 }
 
-deftype CXTranslationUnit_Flags = either(c-unsigned) { None, DetailedPreprocessingRecord }
+deftype CXTranslationUnit_Flags = either(c-unsigned) {
+  None = 0x0, 
+  DetailedPreprocessingRecord = 0x01,
+  SkipFunctionBodies = 0x40
+}
 
 deftype alias CXClientData = ptr
 
@@ -49,13 +55,13 @@ ns for CXString {
   }
 }
  
-deftype alias CXTranslationUnit = ptr // nocommit
+deftype alias CXTranslationUnit = ptr
 
 extern("clang", "clang_parseTranslationUnit2")
 fn parseTranslationUnit2(
   index: CXIndex,
   source_filename: ptr,
-  command_line_args: *ptr,
+  command_line_args: ptr,
   command_line_args_len: c-int,
   unsaved_files: *CXUnsavedFile,
   unsaved_files_len: c-unsigned,
@@ -155,6 +161,93 @@ fn getTypeDeclaration(t: CXType): CXCursor
 
 extern("clang", "clang_Cursor_isAnonymousRecordDecl")
 fn Cursor_isAnonymousRecordDecl(declCursor: CXCursor): u32
+
+extern("clang", "clang_getEnumDeclIntegerType")
+fn getEnumDeclIntegerType(C: CXCursor): CXType
+
+extern("clang", "clang_getEnumConstantDeclUnsignedValue")
+fn getEnumConstantDeclUnsignedValue(C: CXCursor): u64
+
+extern("clang", "clang_Cursor_isBitField")
+fn Cursor_isBitField(C: CXCursor): u32
+
+extern("clang", "clang_getFieldDeclBitWidth")
+fn getFieldDeclBitWidth(C: CXCursor): int
+
+extern("clang", "clang_getArrayElementType")
+fn getArrayElementType(T: CXType): CXType 
+extern("clang", "clang_getArraySize")
+fn getArraySize(T: CXType): i64
+extern("clang", "clang_getNumElements")
+fn getNumElements(T: CXType): i64
+
+extern("clang", "clang_getResultType")
+fn getResultType(T: CXType): CXType 
+
+extern("clang", "clang_getNumArgTypes")
+fn getNumArgTypes(T: CXType): c-int 
+
+extern("clang", "clang_getArgType")
+fn getArgType(T: CXType, i: u32): CXType 
+
+extern("clang", "clang_Cursor_getArgument")
+fn Cursor_getArgument(C: CXCursor, i: u32): CXCursor 
+
+extern("clang", "clang_getTypedefDeclUnderlyingType")
+fn getTypedefDeclUnderlyingType(C: CXCursor): CXType
+
+extern("clang", "clang_isCursorDefinition")
+fn isCursorDefinition(C: CXCursor): u32
+
+deftype CXSourceLocation = {
+  ptr_data: array[ptr, 2],
+  int_data: u32,
+}
+
+extern("clang", "clang_getCursorLocation")
+fn getCursorLocation(CXCursor): CXSourceLocation 
+
+// Returns non-zero if the given source location is in a system header.
+extern("clang", "clang_Location_isInSystemHeader")
+fn Location_isInSystemHeader(location: CXSourceLocation): c-int
+
+// Returns non-zero if the given source location is in the main file of
+// the corresponding translation unit.
+extern("clang", "clang_Location_isFromMainFile")
+fn Location_isFromMainFile(location: CXSourceLocation): c-int
+
+extern("clang", "clang_getNumDiagnostics")
+fn getNumDiagnostics(Unit: CXTranslationUnit ): u32
+
+deftype alias CXDiagnostic = ptr
+
+extern("clang", "clang_getDiagnostic")
+fn getDiagnostic(Unit: CXTranslationUnit, Index: u32): CXDiagnostic
+
+deftype CXDiagnosticSeverity = either(u32) {
+  CXDiagnostic_Ignored = 0,
+  CXDiagnostic_Note = 1,
+  CXDiagnostic_Warning = 2,
+  CXDiagnostic_Error = 3,
+  CXDiagnostic_Fatal = 4
+}
+ 
+extern("clang", "clang_getDiagnosticSeverity")
+fn getDiagnosticSeverity(CXDiagnostic): CXDiagnosticSeverity
+
+deftype alias CXFile = ptr
+
+extern("clang", "clang_getFileLocation")
+fn getFileLocation(
+  location: CXSourceLocation,
+  file: *mut CXFile,
+  line: *mut u32,
+  column: *mut u32,
+  offset: *mut u32
+)
+
+extern("clang", "clang_getFileName")
+fn getFileName(SFile: CXFile): CXString 
 
 deftype CXCursorKind = either {
   // Declarations

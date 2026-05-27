@@ -64,6 +64,11 @@ fn tags() {
   assertEquals(a.tag, 4);
   assertEquals(b.tag, 8);
   assertEquals(c.tag, 9);
+
+  assertEquals(a.sum-name(), "A");
+  assertEquals(b.sum-name(), "B");
+  assertEquals(c.sum-name(), "C");
+
   {}
 }
 

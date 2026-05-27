@@ -1868,9 +1868,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             store_typed_int(dst, variant_pt.tag);
 
             if let Some(payload_value_id) = payload {
-                let Some(payload_offset) = sum_pt.payload_offset else {
-                    panic!("sum variant has payload but sum has no payload offset")
-                };
+                let payload_offset = sum_pt.payload_offset;
                 let payload_ptr = unsafe { dst.byte_add(payload_offset as usize) };
                 store_static_value(k1, payload_ptr, payload_value_id);
             };
@@ -2474,7 +2472,6 @@ pub fn vm_value_to_static_value(
                 None => None,
                 Some(payload_type_id) => {
                     let payload_pt = k1.get_physical_type(payload_type_id).unwrap();
-                    let payload_offset = payload_offset.unwrap();
                     let payload_ptr = unsafe { sum_ptr.byte_add(payload_offset as usize) };
 
                     let payload_value = load_value(payload_pt, payload_ptr);

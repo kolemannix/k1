@@ -18,7 +18,7 @@ fn test() {
   let h2: handle2 = { index: 10 };
 
   takes-structural(h);
-  assert(testCompile(takes-structural(h2)).is-some());
+  assert(testCompile(takes-structural(h2)).is-none());
 
 
   //:ok; structural type 'promoted' to nominal

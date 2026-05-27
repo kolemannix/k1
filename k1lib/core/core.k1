@@ -137,7 +137,7 @@ ns sys {
     }
   }
 
-  fn parseMainArgs(argCount: u32, args: ptr): span[string] {
+  fn parseMainArgs(argCount: c-int, args: ptr): span[string] {
     let buf = buffer/fromPtrAndCount[ptr](
       count = argCount.as[size],
       ptr = args
@@ -454,6 +454,8 @@ ns for u32 {
 ns for i32 {
   let maxValue: i32 = 0x7FFFFFFF
   let minValue: i32 = -0x80000000
+
+  fn as-bool(self: i32): bool { self != 0 }
 }
 
 ns for i64 {

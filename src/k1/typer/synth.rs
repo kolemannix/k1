@@ -152,9 +152,27 @@ impl TypedProgram {
             self.ice_span(span, "need enum")
         };
         let int_type = e.int_type;
-        debug_assert!(self.types.get(self.exprs.get_type(enum_expr)).as_enum().is_some());
         self.exprs.add(
             TypedExpr::EnumGetValue(EnumGetValue { enum_expr }),
+            int_type.type_id(),
+            span,
+        )
+    }
+
+    pub(super) fn synth_sum_get_tag(
+        &mut self,
+        sum_expr: TypedExprId,
+        span: SpanId,
+    ) -> TypedExprId {
+        let Type::Sum(sum) = self.types.get(self.exprs.get_type(sum_expr)) else {
+            self.ice_span(span, "need sum")
+        };
+        let int_type = sum.tag_type;
+        self.exprs.add(
+            TypedExpr::SumGetTag(GetSumTag {
+                sum_expr_or_reference: sum_expr,
+                is_reference: false,
+            }),
             int_type.type_id(),
             span,
         )
@@ -707,7 +725,11 @@ impl TypedProgram {
                         }
                     };
 
-                    let print_expr_call = self.synth_printto_call(typed_expr, writer_expr, block_ctx.with_hidden(true))?;
+                    let print_expr_call = self.synth_printto_call(
+                        typed_expr,
+                        writer_expr,
+                        block_ctx.with_hidden(true),
+                    )?;
                     self.push_block_expr_id(&mut block, print_expr_call);
                 }
                 parse::InterpolatedStringPart::Hole { fmt_settings: _, span } => {
