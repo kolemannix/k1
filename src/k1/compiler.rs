@@ -479,9 +479,6 @@ pub fn write_executable(
     // Our actual compiled k1 code!
     build_cmd.arg(object_name);
 
-    build_cmd.arg("-o");
-    build_cmd.arg(out_name);
-
     // Linking with libraries.
     // For each module, for each of its libraries, link with it as specified by the link_type
     for module in k1.modules.iter() {
@@ -510,6 +507,10 @@ pub fn write_executable(
     }
 
     build_cmd.args(extra_options);
+
+    build_cmd.arg("-o");
+    build_cmd.arg(out_name);
+
     eprintln!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;
 

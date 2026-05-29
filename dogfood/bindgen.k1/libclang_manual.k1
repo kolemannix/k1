@@ -162,6 +162,9 @@ fn getTypeDeclaration(t: CXType): CXCursor
 extern("clang", "clang_Cursor_isAnonymousRecordDecl")
 fn Cursor_isAnonymousRecordDecl(declCursor: CXCursor): u32
 
+extern("clang", "clang_Cursor_isAnonymous")
+fn Cursor_isAnonymous(C: CXCursor): u32
+
 extern("clang", "clang_getEnumDeclIntegerType")
 fn getEnumDeclIntegerType(C: CXCursor): CXType
 
@@ -245,6 +248,11 @@ fn getFileLocation(
   column: *mut u32,
   offset: *mut u32
 )
+
+extern("clang", "clang_Type_getAlignOf")
+fn Type_getAlignOf(T: CXType): i64
+extern("clang", "clang_Type_getSizeOf")
+fn Type_getSizeOf(T: CXType): i64
 
 extern("clang", "clang_getFileName")
 fn getFileName(SFile: CXFile): CXString 
