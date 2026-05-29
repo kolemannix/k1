@@ -37,6 +37,8 @@ Simple but missing
 - [x] static #switch
 
 # Bugs
+- [ ] captured context parameter results in 'Missing variable' in ir
+- [ ] Out of order type definitions don't work with aliases
 - [ ] same-level recursion is not caught behind option
 - [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)
 - [ ] Defect: Generic (co)recursive types do not work

@@ -24,3 +24,18 @@ http: build
 libclang: build
   .k1-out/bindgen.k1 -n libclang > libclang_auto.k1.wip
 
+kqueue: build
+  .k1-out/bindgen.k1 -system true -n kqueue -i kqueue/kqueue_bindings.c \
+    -clangarg -isysroot \
+    -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk \
+    > kqueue/kqueue.k1
+  cp kqueue/kqueue.k1 /Users/knix/dev/k1/dogfood/http/kqueue.k1
+
+kqueue-lite: build
+  .k1-out/bindgen.k1 -system true -n kqueue -i kqueue/kqueue_bindings.c \
+    -include kevent -include socklen_t -include __darwin_socklen_t \
+    -clangarg -isysroot \
+    -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk \
+    > kqueue/kqueue.k1
+  cp kqueue/kqueue.k1 /Users/knix/dev/k1/dogfood/http/kqueue.k1
+

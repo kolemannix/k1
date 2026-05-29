@@ -8582,7 +8582,7 @@ impl TypedProgram {
                         )
                         .map_err(|e| {
                             errf!(
-                                passed_field.span,
+                                e.span,
                                 "Field '{}' has an issue\n{}",
                                 self.ident_str(passed_field.name),
                                 e.message

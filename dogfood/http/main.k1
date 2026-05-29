@@ -1,3 +1,43 @@
+let MODULE_INFO: k1/module-manifest = {
+  {
+    kind: :executable,
+    deps: [],
+    multithreading: false,
+    libs: [{ link-type: :static, name: "httpserver" }],
+    link-args: [
+      
+    ],
+  }
+}
+
+deftype response = {
+  status: u32,
+  headers: span[{ name: string, value: string }],
+  body: span[u8]
+}
+
+fn response-to-http(context alloc-mode)(response): http/http_response_s {
+  let http-response = http/http_response_init();
+  http/http_response_status(http-response, 200);
+  for response.headers {
+    http/http_response_header(http-response, it.name.toCString().ptr.as(), it.value.toCString().ptr.as());
+  };
+  http/http_response_body(http-response, response.body.buffer.data.as(), response.body.len() as i32);
+  http-response
+}
+
+fn handler(req: *mut http/http_request_s) {
+  let response = http/http_response_init();
+  http/http_response_status(response, 200);
+  // Apparently http_response_header mallocs...
+  http/http_response_header(response, "Content-Type\0".dataPtr().as(), "text/plain\0".dataPtr().as());
+  let s = "Hello, Builder\0";
+  http/http_response_body(response, s.dataPtr().as(), s.len() as i32);
+  http/http_respond(req, response);
+}
+
 fn main(): i32 {
+  let server: http/http_server_s = http/http_server_init(9091, handler.toRef());
+  http/http_server_listen(&server);
   0
 }

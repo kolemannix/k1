@@ -17,14 +17,25 @@ use clang/CXTranslationUnit
 use clang/CXCursor
 use clang/CXString
 
+// TODO:
+// - Embed sizeof / alignof / offsetof assertions
+// - Extract fn param names
+// - Detect varargs and reject, or support
+// - Support Unions
 fn main(argc: c-int, argv: ptr): i32 {
 
   let args = core/sys/parseMainArgs(argc, argv);
   let _out-path: string = "bindings.k1";
   let libname: string = "lib";
   let clang-args = list/empty[string]();
+  let exclude-names = list/empty[string]();
+  let include-names = list/empty[string]();
   let file = "file.c";
+  let skip-system-defns = true;
   for args {
+    if it == "-system" {
+      if args.get-opt(itIndex + 1) is :some(next) { skip-system-defns := next != "true" }
+    };
     if it == "-i" {
       if args.get-opt(itIndex + 1) is :some(next) { file := next }
     };
@@ -36,12 +47,18 @@ fn main(argc: c-int, argv: ptr): i32 {
     };
     if it == "-clangarg" {
       if args.get-opt(itIndex + 1) is :some(next) { clang-args.push(next) }
-    }
-  };
+    };
+    if it == "-exclude" {
+      if args.get-opt(itIndex + 1) is :some(next) { exclude-names.push(next) }
+    };
+    if it == "-include" {
+      if args.get-opt(itIndex + 1) is :some(next) { include-names.push(next) }
+    };
 
+  };
   info("options");
   info("libname: {libname}");
-  info("skip_system_headers: true");
+  info("skip system definitions: {skip-system-defns}");
   info("clang-args: {clang-args}");
 
   let context alloc: mem/alloc-mode = :arena;
@@ -69,10 +86,12 @@ fn main(argc: c-int, argv: ptr): i32 {
     eprintln("diag: {severity.enum-name()}");
   };
 
-  // Obtain a cursor at the root of the translation unit
   let cursor: clang/CXCursor = clang/getTranslationUnitCursor(unit); 
   let state: BindgenState = {
     definitions: list/empty(),
+    skip-system-defns,
+    exclude-names,
+    include-names,
   };
   clang/visitChildren(
     parent = cursor,
@@ -91,41 +110,52 @@ fn main(argc: c-int, argv: ptr): i32 {
     };
     switch it.kind {
       :typedef(typedef) -> {
-        writef(out, "deftype {typedef.name} = ");
-        write-k1-type(&out, typedef.type, indent = 0);
-        out.string("\n");
+        if state.should-include-name(typedef.name) {
+          writef(out, "deftype {typedef.name} = ");
+          write-k1-type(&out, typedef.type, indent = 0);
+          out.string("\n");
+        }
       },
       :global(global) -> {
-        out.string("let ");
-        out.string(global.name);
-        out.string(":  ");
-        write-k1-type(&out, global.type, indent = 0);
-        out.string(" = ");
-        out.string("todo");
-        out.line("");
+        if state.should-include-name(global.name) {
+          out.string("let ");
+          out.string(global.name);
+          out.string(":  ");
+          write-k1-type(&out, global.type, indent = 0);
+          out.string(" = ");
+          out.string("todo");
+          out.line("");
+        }
       },
       :typealias(alias) -> {
-        writef(out, "deftype alias {alias.name} = ");
-        write-k1-type(&out, alias.type, indent = 0);
-        out.string("\n");
+        if state.should-include-name(alias.name) {
+          if alias.type is :simple(name) and name == alias.name {
+
+          } else {
+            writef(out, "deftype alias {alias.name} = ");
+            write-k1-type(&out, alias.type, indent = 0);
+            out.string("\n");
+          }
+        }
       },
       :function(function) -> {
-        writelnf(out, `extern("{}", "{}") fn {}(`, { a: libname, b: function.name, c: function.name });
-        for function.fn-type.params {
-          if itIndex > 0 out.line("");
-          out.string("  ");
-          out.string(it.name ? "p{itIndex}");
-          out.string(": ");
-          write-k1-type(&out, it.type, indent = 1);
-          out.string(",");
-        };
-        out.line("");
-        writef(out, `): `);
-        write-k1-type(&out, function.fn-type.return-type, indent = 0);
-        out.string("\n");
+        if state.should-include-name(function.name) {
+          writelnf(out, `extern("{}", "{}") fn {}(`, { a: libname, b: function.name, c: function.name });
+          for function.fn-type.params {
+            if itIndex > 0 out.line("");
+            out.string("  ");
+            out.string(it.name ? "p{itIndex}");
+            out.string(": ");
+            write-k1-type(&out, it.type, indent = 1);
+            out.string(",");
+          };
+          out.line("");
+          writef(out, `): `);
+          write-k1-type(&out, function.fn-type.return-type, indent = 0);
+          out.string("\n");
+        }
       }
     };
-    out.line("");
   };
 
   println(out.build());
@@ -208,7 +238,8 @@ fn write-k1-type[w: writer](w, k1-type, indent: size) {
       write-k1-type(w, f.fn-type.return-type, indent);
     },
     :ref(ref) -> {
-      w.string("*mut ");
+      if ref.inner is :fn-type(_)* w.string("*")
+      else w.string("*mut ");
       write-k1-type(w, ref.inner, indent)
     },
     :array(a) -> {
@@ -223,6 +254,19 @@ fn write-k1-type[w: writer](w, k1-type, indent: size) {
 
 deftype BindgenState = {
   definitions: list[k1-defn],
+  skip-system-defns: bool,
+  exclude-names: list[string],
+  include-names: list[string],
+}
+
+ns for BindgenState {
+  fn should-include-name(self: BindgenState, name: string): bool {
+    if self.include-names.nonEmpty() {
+      core/iter/contains(self.include-names, name)
+    } else {
+      not core/iter/contains(self.exclude-names, name)
+    }
+  }
 }
 
 fn visit-struct(struct-root: CXCursor): { struct: k1-type.struct, pending-anon-decl: ?k1-type, error: ?string } {
@@ -345,6 +389,15 @@ fn visit-enum(enum-root: CXCursor): { enum: k1-type.enum, error: ?string } {
   result
 }
 
+fn get-location(cursor: CXCursor): { location: clang/CXSourceLocation, filename: string, line: u32 } {
+  let location = clang/getCursorLocation(cursor);
+  let file: clang/CXFile = uninit;
+  let line: u32 = uninit;
+  clang/getFileLocation(location, &file, &line, ptr/null.as(), ptr/null.as());
+  let filename = clang/getFileName(file).to-k1();
+  { location, filename, line }
+}
+
 fn visit-root(
   current: CXCursor,
   _parent: CXCursor,
@@ -353,16 +406,12 @@ fn visit-root(
 
   let cursor-kind = clang/getCursorKind(current);
   let data = client-data.as[*mut BindgenState];
-  let is-decl = clang/isDeclaration(cursor-kind).as-bool();
-  debug("isDeclaration: {is-decl}");
-  let location = clang/getCursorLocation(current);
-  let file: clang/CXFile = uninit;
-  let line: u32 = uninit;
-  clang/getFileLocation(location, &file, &line, ptr/null.as(), ptr/null.as());
-  let filename = clang/getFileName(file).to-k1();
-  info("visit-root {clang/getCursorDisplayName(current).to-k1()} (file = {filename})");
-  let is-system = clang/Location_isInSystemHeader(location) != 0;
-  if is-system {
+
+  info("visit-root {clang/getCursorDisplayName(current).to-k1()}");
+  require get-location(current) is { location, filename, line };
+  let location-info = get-location(current);
+  let is-system = clang/Location_isInSystemHeader(location-info.location) != 0;
+  if is-system and data.skip-system-defns {
     debug("  skipping system defn");
     return(:Continue)
   };
@@ -377,12 +426,12 @@ fn visit-root(
           error: struct-decl-result.error,
           kind: :typedef({ name, type: :struct(struct-decl-result.struct) }), 
         });
-
       };
-
       :Continue
     },
     :EnumDecl -> {
+      let is-anon = clang/Cursor_isAnonymous(current).as-bool();
+      if is-anon { return(:Continue) };
       let name = clang/getCursorSpelling(current).to-k1();
       let enum-decl-result = visit-enum(current);
       data.definitions*.push({
@@ -408,6 +457,29 @@ fn visit-root(
       let type = map-type(cx-type);
       let defn: k1-defn = { kind: :global({ name, type, value: :none }), error: :none };
       data.definitions*.push(defn);
+      :Continue
+    },
+    :UnionDecl -> {
+      let name = clang/getCursorSpelling(current).to-k1();
+      let cx-type = clang/getCursorType(current);
+      let size = clang/Type_getSizeOf(cx-type);
+      let align = clang/Type_getAlignOf(cx-type);
+      // nocommit: parse this construct as a typeexpr: k1-defn.kind:typealias
+      // Temporary hack to support at least some unions 
+      switch { size, align } {
+        { size: 1, align: 1 } -> data.definitions*.push({ kind: :typealias({ name, type: :simple("u8") }), error: :none }),
+        { size: 2, align: 2 } -> data.definitions*.push({ kind: :typealias({ name, type: :simple("u16") }), error: :none }),
+        { size: 4, align: 4 } -> data.definitions*.push({ kind: :typealias({ name, type: :simple("u32") }), error: :none }),
+        { size: 8, align: 8 } -> data.definitions*.push({ kind: :typealias({ name, type: :simple("u64") }), error: :none }),
+        { size: 16, align: 8 } -> {
+          data.definitions*.push({ kind: :typealias({ name, type: :simple(p"{ a: u64, b: u64 }") }), error: :none })
+        },
+        _ -> {
+          let msg = "{name}: unions aren't supported yet (size {size} align {align})";
+          let defn: k1-defn = { kind: :typealias({ name, type: :error-c("\"unsupported union\"") }), error: :some(msg) };
+          data.definitions*.push(defn);
+        }
+      };
       :Continue
     },
     :FunctionDecl -> {
@@ -442,7 +514,8 @@ fn map-fn-type(cx-type: clang/CXType): fn-type {
   for IntRange/upTo(arg-count) {
     let arg-cx-type = clang/getArgType(cx-type, it.as[u32]);
     let arg-type = map-type(arg-cx-type);
-    args.push({ name: :none, type: arg-type })
+    let name: ?string = :none;
+    args.push({ name, type: arg-type })
   };
 
   let ret-type = map-type(ret-type);
@@ -467,8 +540,8 @@ fn map-type(cx-type: clang/CXType): k1-type {
     :Char32    -> :simple("i32"),
     :UShort    -> :simple("u16"),
     :UInt      -> :simple("u32"),
-    :ULong     -> :simple("c-long"),
-    :ULongLong -> :simple("c-longlong"),
+    :ULong     -> :simple("u64"),
+    :ULongLong -> :simple("u64"),
     :UInt128   -> :simple("u128 unsupported"),
     :Char_S    -> :simple("i8"),
     :SChar     -> :simple("i8"),
@@ -496,7 +569,22 @@ fn map-type(cx-type: clang/CXType): k1-type {
     },
     :Typedef -> {
       let name = clang/getTypedefName(cx-type).to-k1();
-      :simple(name)
+      switch name {
+        "uintptr_t" -> :simple("ptr"),
+        "intptr_t"  -> :simple("ptr"),
+        "ptrdiff_t" -> :simple("size"),
+        "int8_t"    -> :simple("i8"),
+        "int16_t"   -> :simple("i16"),
+        "int32_t"   -> :simple("i32"),
+        "__int32_t"   -> :simple("i32"),
+        "int64_t"   -> :simple("i64"),
+        "uint8_t"   -> :simple("u8"),
+        "uint16_t"  -> :simple("u16"),
+        "uint32_t"  -> :simple("u32"),
+        "__uint32_t"  -> :simple("u32"),
+        "uint64_t"  -> :simple("u64"),
+        _ -> :simple(name)
+      }
     },
     :Record -> {
       let decl-cursor = clang/getTypeDeclaration(cx-type);

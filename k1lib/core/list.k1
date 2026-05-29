@@ -179,6 +179,10 @@ ns for list {
     else :none
   }
 
+  fn contains[t: equals](self: list[t], item: t): bool {
+    iter/contains(self, item)
+  }
+
   fn clear[T](self: *mut list[T]) {
     self.len* <- 0
   }

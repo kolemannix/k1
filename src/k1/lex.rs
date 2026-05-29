@@ -1077,13 +1077,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             }
                             _ if is_ident_or_num_start(c) => {
                                 // Enter number submode of ident mode
-                                if c == '_' && next == '_' {
-                                    return Err(errf!(
-                                        self,
-                                        n,
-                                        "the __ prefix is reserved for internals"
-                                    ));
-                                }
                                 if c == '-' || c.is_numeric() {
                                     is_number = true;
                                 }
