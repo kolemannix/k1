@@ -138,7 +138,7 @@ ns mem {
 
 
     fn allocT[T](self: alloc-mode): *mut T {
-      self.alloc(size = types/size-of[T], align = types/align-of[T]).as()
+      self.alloc(size = types/size[T], align = types/align[T]).as()
     }
 
     fn new[T](self: alloc-mode, t: T): *mut T {

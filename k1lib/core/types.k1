@@ -15,3 +15,23 @@ impl print for int-value {
      }
    }
 }
+
+deftype any = {
+  type-id: u64,
+  value: ptr
+}
+
+fn make-any[t](t: *t): any {
+  { type-id: type-id[t], value: t.as[ptr] }
+}
+
+fn assert-wrapper-type[wrapper, inner]() {
+  let schemaA = types/schema[wrapper];
+  let bTypeId = types/type-id[inner];
+  require schemaA is :struct({ fields }) else { crash("is-wrapper-type: Wrapper must be a struct") };
+  require fields.first() is :some(field) and fields.len() == 1 else crash("Wrapper must have one field, got {fields.len()}");
+  let equal = field.type-id == bTypeId;
+  if not equal { crash("Expected {types/name[inner]} but got {types/type-id-name(field.type-id)}") };
+}
+
+fn type-eq[a, b](): bool { types/type-id[a] == types/type-id[b] }

@@ -1,7 +1,5 @@
 ns pointer;
 
-use core/types/size-of
-
 deftype Point3 = { x: int, y: int, z: int }
 
 fn test() {
@@ -13,8 +11,8 @@ fn test() {
   assert(point2.y == 20);
 
   // Move 8 bytes
-  assert(size-of[int]() == 8);
-  let pointShifted = (pointPtr.as[size] + size-of[int]()).as[ptr];
+  assert(types/size[int] == 8);
+  let pointShifted = (pointPtr.as[size] + types/size[int]).as[ptr];
   let point3 = pointShifted.r[Point3];
 
   // x is now y, y is now z, z is now random bits
