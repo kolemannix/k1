@@ -3066,7 +3066,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance();
         } else {
             loop {
-                let expr = self.expect_type_expression()?;
+                let (one, two, three) = self.peek_three();
+                let expr = if one.kind == K::Ident
+                    && two.kind == K::Colon
+                    && !two.is_whitespace_preceded()
+                    && three.is_whitespace_preceded()
+                {
+                    // Parse a name and a type expression
+                    // For now, throw away the name
+                    // It has value just as a label in the source code
+                    self.advance_n(2);
+                    self.expect_type_expression()?
+                } else {
+                    // unnamed; just parse a type expression
+                    self.expect_type_expression()?
+                };
                 params.push(expr);
                 if self.peek().kind == loop_end_kind {
                     self.advance();
@@ -4867,7 +4881,9 @@ impl ParsedProgram {
                 w.write_char('"')?;
                 for part in self.mem.getn(is.parts) {
                     match part {
-                        InterpolatedStringPart::String{ string_id, .. } => w.write_str(self.get_string(*string_id))?,
+                        InterpolatedStringPart::String { string_id, .. } => {
+                            w.write_str(self.get_string(*string_id))?
+                        }
                         InterpolatedStringPart::Expr(expr_id, _) => {
                             w.write_char('{')?;
                             self.display_expr_id(w, *expr_id)?;

@@ -69,14 +69,14 @@ fn thunksTest() {
 
 fn test() {
 
-  let staticAddOneVar = staticAddOne.toRef();
-  let staticResult = someFnParam2(5, staticAddOne.toRef(), staticAddOneVar);
+  let staticAddOneVar = staticAddOne;
+  let staticResult = someFnParam2(5, staticAddOne, staticAddOneVar);
   assertEquals(staticResult, 6 + 6);
 
-  let lam1ResultPtr = someFnParam1(5, staticAddOne.toRef());
+  let lam1ResultPtr = someFnParam1(5, staticAddOne);
   assertEquals(lam1ResultPtr, 6);
 
-  let lam1ResultDyn = someFnParam1(5, staticAddOne.toDyn());
+  let lam1ResultDyn = someFnParam1(5, staticAddOne.to-dyn());
   assertEquals(lam1ResultDyn, 6);
 
   let* c1 = { x: 3 };

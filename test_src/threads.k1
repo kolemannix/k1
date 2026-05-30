@@ -21,7 +21,7 @@ fn main(): i32 {
   let input = arena.push(42);
   let output = arena.push-uninit[*int]();
 
-  let thread = std/thread/start(&arena, run.toRef(), input);
+  let thread = std/thread/start(&arena, run, input);
   std/thread/join(thread.*, output);
 
   // output returned has been incremented 

@@ -6437,8 +6437,8 @@ impl TypedProgram {
                     specialized_ability_id: target_base_ability_id,
                     full_impl_id: impl_id,
                 };
-                eprintln!("\n----------------- IMPLEMENTED SUM\n");
-                eprintln!("{}", self.ability_impl_to_string(impl_id, true));
+                // eprintln!("\n----------------- IMPLEMENTED SUM\n");
+                // eprintln!("{}", self.ability_impl_to_string(impl_id, true));
                 return Ok((handle, false));
             }
         }
@@ -7121,18 +7121,19 @@ impl TypedProgram {
         scope_id: ScopeId,
         // Currently, only used to determine if this counts as a usage
         is_assignment_lhs: bool,
-    ) -> K1Result<(VariableId, TypedExprId)> {
+    ) -> K1Result<(Option<VariableId>, TypedExprId)> {
         let ParsedExpr::Variable(variable) = self.ast.exprs.get(variable_expr_id) else { panic!() };
         let variable_name_span = variable.name.span;
         let variable_id = self.find_variable_namespaced(scope_id, &variable.name)?;
         match variable_id {
-            None => {
-                failf!(
+            None => match self.find_function_namespaced(scope_id, &variable.name)? {
+                None => failf!(
                     variable.name.span,
-                    "Variable '{}' is not defined",
+                    "No value '{}' is in scope",
                     self.ast.idents.get_name(variable.name.name),
-                )
-            }
+                ),
+                Some(fn_id) => Ok((None, self.function_to_reference(fn_id, variable_name_span))),
+            },
             Some((variable_id, variable_scope_id)) => {
                 let parent_lambda = self.scopes.enclosing_functions.get(scope_id).lambda_scope;
                 let (is_capture, lambda_scope_id) = if let Some(lambda_scope_id) = parent_lambda {
@@ -7177,7 +7178,7 @@ impl TypedProgram {
                     self.scopes.add_capture(lambda_scope_id.unwrap(), variable_id, fixup_expr_id);
 
                     self.register_variable_usage(variable_id, variable.name.span);
-                    Ok((variable_id, fixup_expr_id))
+                    Ok((Some(variable_id), fixup_expr_id))
                 } else {
                     let expr = self.exprs.add(
                         TypedExpr::Variable(VariableExpr { variable_id }),
@@ -7188,7 +7189,7 @@ impl TypedProgram {
                     if !is_assignment_lhs {
                         self.register_variable_usage(variable_id, variable.name.span);
                     }
-                    Ok((variable_id, expr))
+                    Ok((Some(variable_id), expr))
                 }
             }
         }
@@ -8256,6 +8257,9 @@ impl TypedProgram {
             );
             let (variable_id, variable_expr) =
                 self.eval_variable(variable_expr, ctx.scope_id, false)?;
+            let Some(variable_id) = variable_id else {
+                return failf!(span, "Must be a regular variable, eg not a function");
+            };
             let variable_type = self.exprs.get_type(variable_expr);
             match self.types.get(variable_type) {
                 Type::StaticValue(svt) => {
@@ -11519,24 +11523,14 @@ impl TypedProgram {
 
         // Special cases of this syntax that aren't really method calls
         if let Some(base_arg) = first_arg {
-            if fn_name == self.ast.idents.b.toRef || fn_name == self.ast.idents.b.toDyn {
-                // TODO: this isn't algebraically sound since you can _only_ use toRef and toDyn
-                //       if you literally name the function on the lhs of the dot; you can't store
-                //       it in a variable, because the function name on its own isn't a valid
-                //       expression. So it's not the most satisfying, but it works for now.
-                //
-                //       I think this is a fair compromise; I don't see the value in putting a
-                //       'function' in a variable abstractly only to toRef() it later
+            if fn_name == self.ast.idents.b.to_dyn {
                 if let ParsedExpr::Variable(v) = self.ast.exprs.get(base_arg.value) {
                     let function_name = &v.name;
                     let function_id = self.find_function_namespaced(ctx.scope_id, function_name)?;
                     if let Some(function_id) = function_id {
                         let function = self.get_function(function_id);
                         if function.is_generic() {
-                            return failf!(
-                                call_span,
-                                "Cannot call toDyn or toRef with a generic function"
-                            );
+                            return failf!(call_span, "Cannot call toDyn with a generic function");
                         }
                         if function.builtin_type.is_some() {
                             return failf!(
@@ -11544,17 +11538,9 @@ impl TypedProgram {
                                 "Cannot get a pointer to an intrinsic operation. (If you need one, make a wrapper function)"
                             );
                         }
-                        return if fn_name == self.ast.idents.b.toDyn {
-                            Ok(CallResolution::Other(
-                                self.function_to_lambda_object(function_id, call_span),
-                            ))
-                        } else if fn_name == self.ast.idents.b.toRef {
-                            Ok(CallResolution::Other(
-                                self.function_to_reference(function_id, call_span),
-                            ))
-                        } else {
-                            unreachable!()
-                        };
+                        return Ok(CallResolution::Other(
+                            self.function_to_lambda_object(function_id, call_span),
+                        ));
                     }
                 }
             } else if fn_name == self.ast.idents.b.as_ {
@@ -13837,27 +13823,31 @@ impl TypedProgram {
             ParsedStmt::Assign(assign) => {
                 static_assert_size!(parse::AssignStmt, 12);
                 let assignment = assign.clone();
+                let lhs_span = self.ast.exprs.get_span(assignment.lhs);
                 let ParsedExpr::Variable(_) = self.ast.exprs.get(assignment.lhs) else {
                     return failf!(
-                        self.ast.exprs.get_span(assignment.lhs),
+                        lhs_span,
                         "Value assignment destination must be a plain variable expression"
                     );
                 };
                 let (typed_variable_id, lhs) =
                     self.eval_variable(assignment.lhs, ctx.scope_id, true)?;
+                let Some(typed_variable_id) = typed_variable_id else {
+                    return failf!(lhs_span, "Must be a regular variable, eg not a function");
+                };
                 match self.variables.get(typed_variable_id).kind {
                     VariableKind::FnParam(_) => {
-                        return failf!(assignment.span, "Cannot re-assign a function parameter");
+                        return failf!(lhs_span, "Cannot re-assign a function parameter");
                     }
                     VariableKind::StackSynthetic(_) => {
                         return failf!(
-                            assignment.span,
+                            lhs_span,
                             "Cannot re-assign a synthetic variable or binding"
                         );
                     }
                     VariableKind::Stack(_) => {}
                     VariableKind::Global(_) => {
-                        return failf!(assignment.span, "Cannot re-assign a global");
+                        return failf!(lhs_span, "Cannot re-assign a global");
                     }
                 };
                 let lhs_type = self.exprs.get_type(lhs);
