@@ -51,9 +51,9 @@ fn genericSum() {
     assertEquals(x1.show(), "Ok: -3\n");
     assertEquals(x2.show(), "Error: Some error message\n");
 
-    assert(core/types/size-of[MyResult[int, string]]() == 24);
-    assert(core/types/size-of-stride[MyResult[int, string]]() == 24);
-    assert(core/types/align-of[MyResult[int, string]]() == 8);
+    assert(types/size[MyResult[int, string]]() == 24);
+    assert(types/stride[MyResult[int, string]]() == 24);
+    assert(types/align[MyResult[int, string]]() == 8);
 }
 
 deftype E = either(u8) { A = 4, B = 8, C(int) = 9 }

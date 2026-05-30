@@ -54,7 +54,7 @@ fn testArray() {
 }
 
 fn test() {
-  assertEquals(types/size-of[Thing](), 9216);
+  assertEquals(types/size[Thing](), 9216);
 
   testArray();
 

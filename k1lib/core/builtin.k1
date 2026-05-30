@@ -89,22 +89,22 @@ ns types {
   }
 
   // The size, in bytes, of type t. Unlike C's sizeof, does not include end padding
-  intern fn size-of[t](): size
+  intern fn size[t](): size
   // The stride, in bytes, of type t. includes end padding
-  intern fn size-of-stride[t](): size
+  intern fn stride[t](): size
 
   // The alignment, in bytes, of type t. Always a power of two
-  intern fn align-of[t](): int
+  intern fn align[t](): int
 
   intern fn type-id[t](): u64
+  intern fn type-id-schema(id: u64): type-schema
+  intern fn type-id-name(id: u64): string
+
   fn type-id-of-val[t](_t: t): u64 { type-id[t] }
+  fn name[t](): string { type-id-name(type-id[t]) }
 
-  intern fn type-schema(id: u64): type-schema
-  intern fn type-name(id: u64): string
-
-  fn get-type-name[t](): string { type-name(type-id[t]) }
-  fn get-type-name-of-val[t](_t: t): string { type-name(type-id[t]) }
-  fn get-type-schema[t](): type-schema { type-schema(type-id[t]) }
+  fn type-name-of-val[t](_t: t): string { name[t] }
+  fn schema[t](): type-schema { type-id-schema(type-id[t]) }
 
   // DO NOT REORDER VARIANTS
   // FIXME: We should encode both width and signedness into the bits instead, 'flags in tags' project
@@ -181,27 +181,6 @@ ns types {
     // lambda-object({ function-type-id: u64 }),
     other(string)
   }
-
-  deftype any = {
-    type-id: u64,
-    value: ptr
-  }
-
-
-  fn make-any[t](t: *t): any {
-    { type-id: type-id[t], value: t.as[ptr] }
-  }
-
-  fn assert-wrapper-type[wrapper, inner]() {
-    let schemaA = types/get-type-schema[wrapper];
-    let bTypeId = types/type-id[inner];
-    require schemaA is :struct({ fields }) else { crash("is-wrapper-type: Wrapper must be a struct") };
-    require fields.first() is :some(field) and fields.len() == 1 else crash("Wrapper must have one field, got {fields.len()}");
-    let equal = field.type-id == bTypeId;
-    if not equal { crash("Expected {types/get-type-name[inner]} but got {types/type-name(field.type-id)}") };
-  }
-
-  fn type-eq[a, b](): bool { types/type-id[a] == types/type-id[b] }
 
 }
 
@@ -666,7 +645,7 @@ ns array {
     array.as[ptr]
   }
   fn size-bytes[t, n](_array: array[t, n]): int where n: static size {
-    types/size-of[array[t, n]]
+    types/size[array[t, n]]
   }
 
   fn zeroed[t, n: static size](): array[t, n] {

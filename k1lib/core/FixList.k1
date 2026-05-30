@@ -28,7 +28,7 @@ ns for fixlist {
       self.data*.set(used, value);
       self.used* <- used.as[u32] + 1;
     } else {
-      let typename = types/get-type-name[type-of(self).value];
+      let typename = types/name[type-of(self).value];
       crash("{typename} cannot fulfill push. {used + 1} > {self.cap()}")
     }
   }

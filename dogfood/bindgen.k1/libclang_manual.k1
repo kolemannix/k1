@@ -29,14 +29,14 @@ deftype CXType = {
   kind: CXTypeKind,
   data: array[ptr, 2],
 }
-#static assertEquals(types/size-of[CXType], 24)
+#static assertEquals(types/size[CXType], 24)
 
 deftype CXCursor = {
   kind: CXCursorKind,
   xdata: c-int,
   data: array[ptr, 3]
 }
-#static assertEquals(types/size-of[CXCursor], 32)
+#static assertEquals(types/size[CXCursor], 32)
 
 fn k1-string-from-cx-string(cxs: CXString): string {
   let c-str = clang/getCString(cxs);

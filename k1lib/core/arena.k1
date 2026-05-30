@@ -1,9 +1,6 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-use core/types/size-of
-use core/types/align-of
-
 deftype arena = {
   base-ptr: ptr,
   cur-addr: ptr,
@@ -37,7 +34,7 @@ ns for arena {
   fn default(): arena {
     _virtual(usageHintMb = 10)
     //let header: *mut arena = base-ptr.as[*mut arena];
-    //header.base-ptr* <- base-ptr.addBytes(types/size-of[arena]());
+    //header.base-ptr* <- base-ptr.addBytes(types/size[arena]);
   }
 
   fn release(self: *mut arena) {
@@ -68,12 +65,12 @@ ns for arena {
   }
 
   fn push-uninit[T](self: *mut arena): *mut T {
-    let dataStart = self.pushLayout(size-of[T](), align-of[T]());
+    let dataStart = self.pushLayout(types/size[T], types/align[T]);
     dataStart.as[*mut T]
   }
 
   fn push[T](self: *mut arena, t: T): *mut T {
-    let dataStart = self.pushLayout(size-of[T](), align-of[T]());
+    let dataStart = self.pushLayout(types/size[T], types/align[T]);
 
     let ref: *mut T = dataStart.rw();
     ref <- t;
@@ -82,7 +79,7 @@ ns for arena {
 
   fn pushN[T](self: *mut arena, ts: span[T]): buffer[T] {
     let size = ts.buffer.sizeBytes();
-    let align = types/align-of[T]();
+    let align = types/align[T]();
     let base = self.pushLayout(size, align);
     let buffer: buffer[T] = buffer/fromPtrAndCount[T](base, ts.len());
     buffer/copyFrom(src = ts.buffer, dst = buffer);

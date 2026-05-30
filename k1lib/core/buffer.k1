@@ -12,7 +12,7 @@
 ns for buffer {
 
   fn bufferSizeBytes[T](count: size): size {
-    count * core/types/size-of-stride[T]()
+    count * core/types/stride[T]
   }
 
   fn sizeBytes[T](self: buffer[T]): size { bufferSizeBytes[T](self.len) }
@@ -87,7 +87,7 @@ ns for buffer {
       ptr/null
     } else {
       let sizeBytes = bufferSizeBytes[T](count);
-      alloc.alloc(sizeBytes, core/types/align-of[T]())
+      alloc.alloc(sizeBytes, core/types/align[T]())
     };
     let data = ptr.rw[T];
     { len: count, data }
@@ -107,7 +107,7 @@ ns for buffer {
       let newPtr = alloc.realloc(
         ptr = self.dataPtr(),
         oldSize = oldSize,
-        align = core/types/align-of[T](),
+        align = core/types/align[T](),
         newSize = newSize,
       );
       self <- { len: newCount, data: newPtr.rw[T] }

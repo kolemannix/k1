@@ -1,77 +1,77 @@
 ns array_type_test;
 
-use core/types/type-name
+use core/types/type-id-name
 use core/types/type-id
 use core/types/type-schema
-use core/types/size-of
-use core/types/size-of-stride
-use core/types/align-of
+use core/types/size
+use core/types/stride
+use core/types/align
 
 deftype Point = { x: i32, y: i32 }
 
 // Generic function to test type substitution with Arrays
 fn getArrayInfo[T](): { elementName: string, fiveSize: size, tenSize: size } {
   {
-    elementName: type-name(type-id[T]),
-    fiveSize: size-of[array[T, 5]],
-    tenSize: size-of[array[T, 10]]
+    elementName: types/name[T],
+    fiveSize: size[array[T, 5]],
+    tenSize: size[array[T, 10]]
   }
 }
 
 // Generic function with Array parameter type to test substitution
 fn describeArray[T](): string {
-  let schema = type-schema(type-id[array[T, 3]]);
+  let schema = types/schema[array[T, 3]];
   require schema is :array({ element-type-id, size }) else {
     return("Failed to get Array schema")
   };
-  let actualElementName = type-name(element-type-id);
+  let actualElementName = type-id-name(element-type-id);
   "array[{actualElementName}, {size.!}]"
 }
 
 fn test() {
 
-  // Test 1: Basic Array type names
-  assertEquals(type-name(type-id[array[i32, 10]]), "array[i32, 10]");
-  assertEquals(type-name(type-id[array[u64, 5]]), "array[u64, 5]");
-  assertEquals(type-name(type-id[array[bool, 3]]), "array[bool, 3]");
+  // Basic Array type names
+  assertEquals(types/name[array[i32, 10]], "array[i32, 10]");
+  assertEquals(types/name[array[u64, 5]], "array[u64, 5]");
+  assertEquals(types/name[array[bool, 3]], "array[bool, 3]");
 
-  // Test 2: Array type schemas
-  let i32ArraySchema = type-schema(type-id[array[i32, 10]]());
+  // Array type schemas
+  let i32ArraySchema = types/schema[array[i32, 10]];
   require i32ArraySchema is :array({ element-type-id, size }) else {
     crash("Expected Array schema for array[i32, 10]")
   };
-  assertEquals(type-name(element-type-id), "i32");
+  assertEquals(type-id-name(element-type-id), "i32");
   assertEquals(size, :some(10));
 
-  let stringArraySchema = type-schema(type-id[array[string, 7]]());
+  let stringArraySchema = types/schema[array[string, 7]];
   require stringArraySchema is :array({ element-type-id, size }) else {
     crash("Expected Array schema for array[string, 7]")
   };
-  assertEquals(type-name(element-type-id), "string");
+  assertEquals(type-id-name(element-type-id), "string");
   assertEquals(size, :some(7));
 
-  // Test 3: Layout and size information
+  // Layout and size information
   // u8 arrays: 1 byte per element, 1-byte aligned
-  assertEquals(size-of[array[u8, 4]](), 4);
-  assertEquals(align-of[array[u8, 4]](), 1);
+  assertEquals(size[array[u8, 4]], 4);
+  assertEquals(align[array[u8, 4]], 1);
 
   // u32 arrays: 4 bytes per element, 4-byte aligned
-  assertEquals(size-of[array[u32, 3]](), 12);
-  assertEquals(align-of[array[u32, 3]](), 4);
+  assertEquals(size[array[u32, 3]], 12);
+  assertEquals(align[array[u32, 3]], 4);
 
   // u64 arrays: 8 bytes per element, 8-byte aligned
-  assertEquals(size-of[array[u64, 2]](), 16);
-  assertEquals(align-of[array[u64, 2]](), 8);
+  assertEquals(size[array[u64, 2]], 16);
+  assertEquals(align[array[u64, 2]], 8);
 
   // Point arrays: Point is 8 bytes (2 * i32), 4-byte aligned
-  assertEquals(align-of[Point](), 4);
-  assertEquals(size-of[Point](), 8);
-  assertEquals(size-of-stride[Point](), 8);
+  assertEquals(align[Point], 4);
+  assertEquals(size[Point], 8);
+  assertEquals(stride[Point], 8);
 
-  assertEquals(size-of[array[Point, 2]](), 16);
-  assertEquals(align-of[array[Point, 2]](), 4);
+  assertEquals(size[array[Point, 2]], 16);
+  assertEquals(align[array[Point, 2]], 4);
 
-  // Test 4: Generic functions with Arrays (tests type substitution)
+  // Generic functions with Arrays (tests type substitution)
   let u8Info = getArrayInfo[u8]();
   assertEquals(u8Info.elementName, "u8");
   assertEquals(u8Info.fiveSize, 5);    // array[u8, 5] = 5 bytes
@@ -91,23 +91,23 @@ fn test() {
   assertEquals(describeArray[string](), "array[string, 3]");
   assertEquals(describeArray[Point](), "array[Point, 3]");
 
-  let array1TypeId = type-id[array[i32, 5]]();
-  let array2TypeId = type-id[array[i32, 5]]();
-  let array3TypeId = type-id[array[i32, 6]]();
-  let array4TypeId = type-id[array[i64, 5]]();
+  let array1TypeId = type-id[array[i32, 5]];
+  let array2TypeId = type-id[array[i32, 5]];
+  let array3TypeId = type-id[array[i32, 6]];
+  let array4TypeId = type-id[array[i64, 5]];
 
   assertEquals(array1TypeId, array2TypeId);  // Same size, same element type
   assert(array1TypeId != array3TypeId);     // Different size - keeping assert for != checks
   assert(array1TypeId != array4TypeId);     // Different element type - keeping assert for != checks
 
-  assertEquals(size-of[array[i32, 0]](), 0);
-  assertEquals(align-of[array[i32, 0]](), 1);  // Zero-length arrays should have alignment 1
+  assertEquals(size[array[i32, 0]], 0);
+  assertEquals(align[array[i32, 0]], 1);  // Zero-length arrays should have alignment 1
 
-  assertEquals(size-of[array[u8, 1]](), 1);
-  assertEquals(align-of[array[u8, 1]](), 1);
+  assertEquals(size[array[u8, 1]], 1);
+  assertEquals(align[array[u8, 1]], 1);
 
-  let t1 = type-id[array[string, 0].element]();
-  let t2 = type-id[string]();
+  let t1 = type-id[array[string, 0].element];
+  let t2 = type-id[string];
   assertEquals(t1, t2);
 
 }

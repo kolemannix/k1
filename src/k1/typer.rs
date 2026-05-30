@@ -14337,11 +14337,11 @@ impl TypedProgram {
                 },
                 Some("types") => match fn_name_str {
                     "type-id" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeId)),
-                    "type-name" => Some(Builtin::Backend(BackendBuiltin::TypeName)),
-                    "type-schema" => Some(Builtin::Backend(BackendBuiltin::TypeSchema)),
-                    "size-of" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeSize)),
-                    "size-of-stride" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeStride)),
-                    "align-of" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeAlign)),
+                    "type-id-name" => Some(Builtin::Backend(BackendBuiltin::TypeName)),
+                    "type-id-schema" => Some(Builtin::Backend(BackendBuiltin::TypeSchema)),
+                    "size" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeSize)),
+                    "stride" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeStride)),
+                    "align" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeAlign)),
                     _ => None,
                 },
                 Some("compiler") => match fn_name_str {

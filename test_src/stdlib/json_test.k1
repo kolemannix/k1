@@ -3,8 +3,8 @@ use std/json/json
 use std/json
 
 fn testBasicEnum() {
-  let size = core/types/size-of[json]();
-  let align = core/types/align-of[json]();
+  let size = core/types/size[json]();
+  let align = core/types/align[json]();
   assertEquals(size, 32);
   assertEquals(align, 8);
 

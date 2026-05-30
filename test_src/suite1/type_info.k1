@@ -1,8 +1,8 @@
 ns type_info;
 
-use core/types/size-of
-use core/types/size-of-stride
-use core/types/align-of
+use core/types/size
+use core/types/stride
+use core/types/align
 use core/types/type-id
 
 fn doIt(_foo: bool, _bar: u32): u32 {
@@ -10,11 +10,11 @@ fn doIt(_foo: bool, _bar: u32): u32 {
 }
 
 fn testSizeOf() {
-  assertEquals(size-of[string](), 16);
-  assertEquals(size-of-stride[string](), 16);
-  assertEquals(align-of[string](), 8);
-  assertEquals(size-of[{ x: u64, c: u8 }](), 9);
-  assertEquals(size-of-stride[{ x: u64, c: u8 }](), 16);
+  assertEquals(size[string], 16);
+  assertEquals(stride[string], 16);
+  assertEquals(align[string], 8);
+  assertEquals(size[{ x: u64, c: u8 }], 9);
+  assertEquals(stride[{ x: u64, c: u8 }], 16);
 }
 
 fn testFnTypeInfo() {

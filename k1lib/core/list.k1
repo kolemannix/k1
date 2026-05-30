@@ -116,7 +116,7 @@ ns for list {
   fn _grow[T](context mode: alloc-mode)(self: *mut list[T]) {
     let newCap: size = if self.buffer.isEmpty() {
       // For large elements, just allocate what's needed - Rust's RawVec does this :)
-      let elemSize = core/types/size-of[T]();
+      let elemSize = types/size[T];
       if elemSize >= 1024 1 else 8
     } else {
       self.cap() * 2

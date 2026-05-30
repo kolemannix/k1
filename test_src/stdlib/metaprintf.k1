@@ -43,7 +43,7 @@ fn fmt[Fmt: static string, Args, w: writer](w, fmtString: Fmt, args: Args) {
         };
 
       },
-      _ -> crash("Unsupported format arguments: {types/get-type-name[Args]}")
+      _ -> crash("Unsupported format arguments: {types/name[Args]}")
     };
     code.build()
   }
