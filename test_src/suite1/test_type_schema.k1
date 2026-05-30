@@ -57,7 +57,7 @@ ns type_schema {
       and type-id == type-id[string]
       else crash("");
 
-    require get-type-schema[either { Yes(int) }.Yes ]
+    require get-type-schema[either { Yes(int) }:Yes ]
       is :int(:i64)
       else crash("");
 

@@ -94,7 +94,7 @@ fn main(argc: c-int, argv: ptr): i32 {
   };
   clang/visitChildren(
     parent = cursor,
-    visitor = visit-root.toRef(),
+    visitor = visit-root,
     client_data = &state.as[ptr]
   );
 
@@ -273,7 +273,7 @@ fn visit-struct(struct-root: CXCursor): { struct: k1-type.struct, pending-anon-d
   debug("Handling struct decl");
   clang/visitChildren(
     parent = struct-root,
-    visitor = visit-struct-member.toRef(), // nocommit: make address of work on functions
+    visitor = visit-struct-member,
     client_data = &result.as[ptr]
   );
   result
@@ -463,8 +463,6 @@ fn visit-root(
       let cx-type = clang/getCursorType(current);
       let size = clang/Type_getSizeOf(cx-type);
       let align = clang/Type_getAlignOf(cx-type);
-      // nocommit: parse this construct as a typeexpr: k1-defn.kind:typealias
-      // Temporary hack to support at least some unions 
       switch { size, align } {
         { size: 1, align: 1 } -> data.definitions*.push({ kind: :typealias({ name, type: :simple("u8") }), error: :none }),
         { size: 2, align: 2 } -> data.definitions*.push({ kind: :typealias({ name, type: :simple("u16") }), error: :none }),
