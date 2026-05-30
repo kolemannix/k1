@@ -3,7 +3,6 @@ let MODULE_INFO: k1/module-manifest = {
     kind: :executable,
     deps: [],
     multithreading: false,
-    // nocommit: we need to achieve libclang statically linked
     libs: [{ name: "clang", link-type: :default }],
     link-args: [
       "-L/Users/knix/dev/k1/llvm/install-llvm/lib",

@@ -1143,6 +1143,7 @@ impl TypedProgram {
                 };
                 writeln!(w)?;
             }
+            w.write_str("}\n")?;
         }
         Ok(())
     }

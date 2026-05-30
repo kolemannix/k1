@@ -4,11 +4,12 @@ fn staticAddOne(x: int): int { x + 1 }
 fn staticAddTwo(x: int): int { x + 2 }
 
 fn test() {
-  assert(staticAddOne.toRef().as[ptr] != staticAddTwo.toRef().as[ptr]);
-  let someAddFn = staticAddOne.toRef();
+  assert(staticAddOne.as[ptr] != staticAddTwo.as[ptr]);
+  let someAddFn: *fn(int) -> int = staticAddOne;
+  let _someAddFn2: *fn(x: int) -> int = staticAddOne;
   let x = someAddFn(10);
   assertEquals(x, 11);
-  someAddFn := staticAddTwo.toRef();
+  someAddFn := staticAddTwo;
   let y = someAddFn(20);
   assertEquals(y, 22);
 

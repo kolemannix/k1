@@ -70,7 +70,7 @@ ns type_schema {
 
     assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
 
-    let isZeroPtr: *fn(int) -> bool = isZero.toRef();
+    let isZeroPtr: *fn(int) -> bool = isZero;
     require get-type-schema[type-of(isZeroPtr)]
       is :function-pointer({ function-type-id }) else crash("");
 

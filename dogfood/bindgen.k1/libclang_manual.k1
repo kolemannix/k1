@@ -94,8 +94,7 @@ deftype CXChildVisitResult = either {
   Recurse
 }
 
-// nocommit allow names here, throw them away
-deftype alias CXCursorVisitor = *fn(CXCursor, CXCursor, CXClientData) -> CXChildVisitResult
+deftype alias CXCursorVisitor = *fn(current: CXCursor, parent: CXCursor, client-data: CXClientData) -> CXChildVisitResult
 
 extern("clang", "clang_visitChildren")
 fn visitChildren(
