@@ -477,12 +477,6 @@ impl TokenKind {
             _ => false,
         }
     }
-    pub fn is_postfix_type_operator(&self) -> bool {
-        match self {
-            K::Dot => true,
-            _ => false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

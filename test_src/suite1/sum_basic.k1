@@ -46,7 +46,7 @@ fn genericSum() {
     assert(x1Ok == :some(-3));
 
     // shows that we can talk about the payload type
-    let _: MyResult[int, string].ok = 42;
+    let _: MyResult[int, string]:ok = 42;
 
     assertEquals(x1.show(), "Ok: -3\n");
     assertEquals(x2.show(), "Error: Some error message\n");

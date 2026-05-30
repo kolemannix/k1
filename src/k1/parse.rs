@@ -1099,8 +1099,15 @@ pub struct ParsedSumType {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedDotMemberAccess {
+pub enum TypeMemberAccessKind {
+    Dot,
+    Colon,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedMemberAccess {
     pub base: ParsedTypeExprId,
+    pub member_kind: TypeMemberAccessKind,
     pub member_name: Ident,
     pub span: SpanId,
 }
@@ -1187,7 +1194,7 @@ pub enum ParsedTypeExpr {
     Reference(ParsedReference),
     Array(ParsedArrayType),
     Sum(ParsedSumType),
-    DotMemberAccess(ParsedDotMemberAccess),
+    MemberAccess(ParsedMemberAccess),
     Function(ParsedFunctionType),
     TypeOf(ParsedTypeOf),
     SomeQuant(SomeQuantifier),
@@ -1208,7 +1215,7 @@ impl ParsedTypeExpr {
             ParsedTypeExpr::Reference(r) => r.span,
             ParsedTypeExpr::Array(arr) => arr.span,
             ParsedTypeExpr::Sum(e) => e.span,
-            ParsedTypeExpr::DotMemberAccess(a) => a.span,
+            ParsedTypeExpr::MemberAccess(a) => a.span,
             ParsedTypeExpr::Function(f) => f.span,
             ParsedTypeExpr::TypeOf(tof) => tof.span,
             ParsedTypeExpr::SomeQuant(q) => q.span,
@@ -2884,23 +2891,25 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         loop {
             let next = self.peek();
-            if next.kind.is_postfix_type_operator() {
-                if next.kind == K::Dot {
-                    self.advance();
-                    let (ident_token, ident) = self.expect_ident()?;
-                    self.add_semantic_token(ident_token, SemanticTokenKind::Type);
-                    let span =
-                        self.extend_span(self.ast.get_type_expr_span(result), ident_token.span);
-                    let new = ParsedTypeExpr::DotMemberAccess(ParsedDotMemberAccess {
-                        base: result,
-                        member_name: ident,
-                        span,
-                    });
-                    let new_id = self.ast.type_exprs.add(new);
-                    result = new_id;
+            if next.kind == K::Dot || (next.kind == K::Colon && !next.is_whitespace_preceded()) {
+                self.advance();
+                let (ident_token, ident) = self.expect_ident()?;
+                self.add_semantic_token(ident_token, SemanticTokenKind::Type);
+                let span = self.extend_span(self.ast.get_type_expr_span(result), ident_token.span);
+                let kind = if next.kind == K::Dot {
+                    TypeMemberAccessKind::Dot
                 } else {
-                    panic!("unhandled postfix type operator {:?}", next.kind);
-                }
+                    TypeMemberAccessKind::Colon
+                };
+                let new = ParsedTypeExpr::MemberAccess(ParsedMemberAccess {
+                    base: result,
+                    member_kind: kind,
+                    member_name: ident,
+                    span,
+                });
+                let new_id = self.ast.type_exprs.add(new);
+                result = new_id;
+            } else if next.kind == K::Colon && !next.is_whitespace_preceded() {
             } else {
                 break;
             }
@@ -3019,8 +3028,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.add_semantic_token_span(base_name.span, SemanticTokenKind::Type);
 
                 // Note: This no longer needs to be special syntax since its not an X anymore.
-                //           I do think we should do a special syntax for slices and arrays and
-                //           lists, just not sure what yet
                 if base_name.path.is_empty() {
                     if self.ast.idents.get_name(base_name.name) == "array" {
                         self.expect_kind(K::OpenBracket)?;
@@ -3042,9 +3049,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
 
                 // parameterized, namespaced type. Examples:
-                // int,
-                // Box[Point],
-                // std::Map[int, int]
+                // core/int,
+                // box[point],
+                // std/map[int, int]
                 let (type_params, type_params_span) = self.parse_bracketed_type_args()?;
                 let span = self.extend_span(first.span, type_params_span);
                 Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::TypeApplication(
@@ -5189,9 +5196,12 @@ impl ParsedProgram {
                 }
                 Ok(())
             }
-            ParsedTypeExpr::DotMemberAccess(acc) => {
+            ParsedTypeExpr::MemberAccess(acc) => {
                 self.display_type_expr_id(acc.base, w)?;
-                w.write_char('.')?;
+                match acc.member_kind {
+                    TypeMemberAccessKind::Dot => w.write_str(".")?,
+                    TypeMemberAccessKind::Colon => w.write_str(":")?,
+                }
                 self.display_ident(w, acc.member_name)
             }
             ParsedTypeExpr::Builtin(_builtin) => w.write_str("builtin"),

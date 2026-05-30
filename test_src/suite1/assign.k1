@@ -34,7 +34,7 @@ fn complexReferences() {
 
   let* eitherRef: *mut either { yes(int), no } = :yes(3);
 
-  let yesRef: *(type-of(eitherRef).value.yes) = eitherRef.as-yes().!;
+  let yesRef: *(type-of(eitherRef).value:yes) = eitherRef.as-yes().!;
 
   assert(yesRef.* == 3);
   let yesValue: int = eitherRef.as-yes().!;

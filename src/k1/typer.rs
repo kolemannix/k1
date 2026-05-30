@@ -3728,10 +3728,11 @@ impl TypedProgram {
                     Ok(sum_type_id)
                 }
             }
-            ParsedTypeExpr::DotMemberAccess(dot_acc) => {
-                let dot_acc = dot_acc.clone();
+            ParsedTypeExpr::MemberAccess(acc) => {
+                let is_dot = matches!(acc.member_kind, parse::TypeMemberAccessKind::Dot);
+                let acc = acc.clone();
                 let base_type = self.eval_type_expr_ext(
-                    dot_acc.base,
+                    acc.base,
                     scope_id,
                     context.descended_layout_unrelated(),
                 )?;
@@ -3741,7 +3742,7 @@ impl TypedProgram {
                         .mem
                         .getn(generic.params)
                         .iter()
-                        .position(|tp| tp.name == dot_acc.member_name)
+                        .position(|tp| tp.name == acc.member_name)
                     {
                         let type_arg_type_id =
                             *self.types.mem.get_nth(spec_info.type_args, matching_type_var_pos);
@@ -3752,39 +3753,51 @@ impl TypedProgram {
                     // You can do dot access on sums to get their variant payloads
                     Type::Sum(sum) => {
                         let Some(matching_variant) =
-                            self.types.sum_variant_by_name(sum.variants, dot_acc.member_name)
+                            self.types.sum_variant_by_name(sum.variants, acc.member_name)
                         else {
                             return failf!(
-                                dot_acc.span,
+                                acc.span,
                                 "Variant '{}' does not exist on either '{}'",
-                                self.ident_str(dot_acc.member_name),
+                                self.ident_str(acc.member_name),
                                 self.type_id_to_string(base_type)
                             );
                         };
                         let Some(payload) = matching_variant.payload else {
                             return failf!(
-                                dot_acc.span,
+                                acc.span,
                                 "Variant '{}' has no payload type",
-                                self.ident_str(dot_acc.member_name)
+                                self.ident_str(acc.member_name)
                             );
                         };
+                        if is_dot {
+                            return failf!(
+                                acc.span,
+                                "Use :, not ., to access this variant's data type"
+                            );
+                        }
                         Ok(payload)
                     }
                     // You can do dot access on structs to get their members!
                     Type::Struct(s) => {
-                        let Some(field) = s.find_field(&self.types.mem, dot_acc.member_name) else {
+                        let Some(field) = s.find_field(&self.types.mem, acc.member_name) else {
                             return failf!(
-                                dot_acc.span,
+                                acc.span,
                                 "Field {} does not exist on struct {}",
-                                self.ident_str(dot_acc.member_name),
+                                self.ident_str(acc.member_name),
                                 self.type_id_to_string(base_type)
                             );
                         };
+                        if !is_dot {
+                            return failf!(
+                                acc.span,
+                                "Use ., not :, to access this struct member's data type"
+                            );
+                        }
                         Ok(field.1.type_id)
                     }
                     // You can do dot access on References to get out their 'value' types
                     Type::Reference(r) => {
-                        if self.ast.idents.get_name(dot_acc.member_name) != "value" {
+                        if self.ast.idents.get_name(acc.member_name) != "value" {
                             return make_fail_ast_id(
                                 &self.ast,
                                 "Invalid member access on Optional type; try '.value'",
@@ -3794,7 +3807,7 @@ impl TypedProgram {
                         Ok(r.inner_type)
                     }
                     Type::Function(fun) => {
-                        let member_name = self.ast.idents.get_name(dot_acc.member_name);
+                        let member_name = self.ast.idents.get_name(acc.member_name);
                         match member_name {
                             "return" => Ok(fun.return_type),
                             _other => {
@@ -3803,7 +3816,7 @@ impl TypedProgram {
                                     .mem
                                     .getn(fun.logical_params())
                                     .iter()
-                                    .find(|p| p.name == dot_acc.member_name)
+                                    .find(|p| p.name == acc.member_name)
                                 {
                                     Ok(param.type_id)
                                 } else {
@@ -3817,12 +3830,12 @@ impl TypedProgram {
                         }
                     }
                     Type::Array(array_type) => {
-                        let member_name = self.ast.idents.get_name(dot_acc.member_name);
+                        let member_name = self.ast.idents.get_name(acc.member_name);
                         match member_name {
                             "element" => Ok(array_type.element_type),
                             _ => {
                                 return failf!(
-                                    dot_acc.span,
+                                    acc.span,
                                     "Array type has no member named {}; try '.element'",
                                     member_name
                                 );
@@ -3831,9 +3844,11 @@ impl TypedProgram {
                     }
                     _ => {
                         return failf!(
-                            dot_acc.span,
-                            "Invalid type for '.' access: {}",
-                            self.type_id_to_string(base_type)
+                            acc.span,
+                            "Type '{}' has no {} member named {}",
+                            self.type_id_to_string(base_type),
+                            if is_dot { "." } else { ":" },
+                            self.ast.idents.get_name(acc.member_name)
                         );
                     }
                 }

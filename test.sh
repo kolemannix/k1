@@ -4,7 +4,7 @@ set -x
 # Exit on errors
 set -e
 export RUST_BACKTRACE=1
-cargo test
+cargo test --lib
 cargo build --features=llvm-sys/prefer-dynamic --bin test_suite --bin k1
 
 
