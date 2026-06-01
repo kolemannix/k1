@@ -127,7 +127,7 @@ ns for span {
   }
 
   fn as-char-span(self: span[byte]): span[char] {
-    { buffer: self.buffer.toCharBuffer() }
+    { buffer: self.buffer.as-char-buffer() }
   }
 
   fn as-byte-span(self: span[char]): span[byte] {

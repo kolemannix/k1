@@ -21,6 +21,8 @@ ns for buffer {
 
   fn len[T](self: buffer[T]): size { self.len }
 
+  fn raw-parts[t](self: buffer[t]): { ptr: ptr, len: size } { { ptr: self.data.as[ptr], len: self.len } }
+
   ////////////////////////
   // Constructor functions
 
@@ -28,7 +30,7 @@ ns for buffer {
     { len: 0, data: ptr/null.as[*mut T] }
   }
 
-  fn fromPtrAndCount[T](ptr: ptr, count: size): buffer[T] {
+  fn fromPtrAndCount[T](ptr, count: size): buffer[T] {
     { len: count, data: ptr.as[*mut T] }
   }
 
@@ -57,7 +59,7 @@ ns for buffer {
   }
 
   fn filledIn[T](context mode: mem/alloc-mode)(size: size, value: T): buffer[T] {
-    let buf: buffer[T] = _allocateIn[T](size);
+    let buf: buffer[T] = allocateIn[T](size);
 
     switch value {
       type[u8](byte) -> {
@@ -82,7 +84,7 @@ ns for buffer {
     buffer/filledIn[T](context :current)(size, value)
   }
 
-  fn _allocateIn[T](context alloc: mem/alloc-mode)(count: size): buffer[T] {
+  fn allocateIn[T](context alloc: mem/alloc-mode)(count: size): buffer[T] {
     let ptr = if count == 0 {
       ptr/null
     } else {
@@ -93,8 +95,8 @@ ns for buffer {
     { len: count, data }
   }
 
-  fn _allocate[T](count: size): buffer[T] {
-    _allocateIn[T](context :current)(count)
+  fn allocate[T](count: size): buffer[T] {
+    allocateIn[T](context :current)(count)
   }
 
   ////////////////////////
@@ -118,7 +120,7 @@ ns for buffer {
   }
 
   fn _enlargedCloneIn[T](context alloc: mem/alloc-mode)(self: buffer[T], newCount: size): buffer[T] {
-    let newBuffer = _allocateIn[T](newCount);
+    let newBuffer = allocateIn[T](newCount);
     copyFrom[T](src = self, dst = newBuffer);
     newBuffer
   }
@@ -284,7 +286,7 @@ ns for buffer {
     }
   }
 
-  fn toCharBuffer(self: buffer[byte]): buffer[char] {
+  fn as-char-buffer(self: buffer[byte]): buffer[char] {
     buffer/fromPtrAndCount[char](
       count = self.len,
       ptr = self.dataPtr()

@@ -163,7 +163,7 @@ pub(crate) struct BuiltinIdents {
     pub StringBuilder: Ident,
     pub builder: Ident,
     pub bitwise: Ident,
-    pub arena: Ident,
+    pub arena_tmp: Ident,
     pub t: Ident,
     pub phony: Ident,
     pub some: Ident,
@@ -194,7 +194,7 @@ pub(crate) struct BuiltinFunctions {
     pub core_crash_bounds: QIdent,
     pub core_discard: QIdent,
     pub core_Print_printTo: QIdent,
-    pub buffer__allocate: QIdent,
+    pub buffer_allocate: QIdent,
     pub buffer_set: QIdent,
     pub Array_set: QIdent,
     pub mem_zeroed: QIdent,
@@ -210,7 +210,7 @@ pub(crate) struct BuiltinFunctions {
     pub ScalarCmp_gt: QIdent,
     pub ScalarCmp_ge: QIdent,
     pub StringBuilder_new: QIdent,
-    pub StringBuilder_buildTmp: QIdent,
+    pub StringBuilder_build_tmp: QIdent,
     pub bitwise_and: QIdent,
     pub bitwise_or: QIdent,
     pub bitwise_xor: QIdent,
@@ -344,7 +344,7 @@ impl IdentPool {
             StringBuilder: intern!("StringBuilder"),
             builder: intern!("builder"),
             bitwise: intern!("bitwise"),
-            arena: intern!("arena"),
+            arena_tmp: intern!("arena-tmp"),
             t: intern!("t"),
             phony: intern!("phony"),
             some: intern!("some"),
@@ -393,7 +393,7 @@ impl IdentPool {
         let try__get_error: QIdent = make_fn!(path_try, intern!("get-error"));
 
         let path_core_buffer = intern_path!(b.core, b.buffer);
-        let buffer__allocate: QIdent = make_fn!(path_core_buffer, intern!("_allocate"));
+        let buffer_allocate: QIdent = make_fn!(path_core_buffer, intern!("allocate"));
         let buffer_set: QIdent = make_fn!(path_core_buffer, intern!("set"));
 
         let path_array = intern_path!(b.core, b.array);
@@ -422,7 +422,7 @@ impl IdentPool {
 
         let path_stringbuilder = intern_path!(b.core, b.StringBuilder);
         let StringBuilder_new: QIdent = make_fn!(path_stringbuilder, intern!("new"));
-        let StringBuilder_buildTmp: QIdent = make_fn!(path_stringbuilder, intern!("buildTmp"));
+        let StringBuilder_build_tmp: QIdent = make_fn!(path_stringbuilder, intern!("build-tmp"));
 
         let path_core_bitwise = intern_path!(b.core, b.bitwise);
         let bitwise_and = make_fn!(path_core_bitwise, intern!("bit-and"));
@@ -444,7 +444,7 @@ impl IdentPool {
             core_crash_bounds: core_crashBounds,
             core_discard,
             core_Print_printTo: core_print_printTo,
-            buffer__allocate,
+            buffer_allocate,
             buffer_set,
             Array_set: array__set,
             mem_zeroed,
@@ -460,7 +460,7 @@ impl IdentPool {
             ScalarCmp_gt,
             ScalarCmp_ge,
             StringBuilder_new,
-            StringBuilder_buildTmp,
+            StringBuilder_build_tmp,
             bitwise_and,
             bitwise_or,
             bitwise_xor,

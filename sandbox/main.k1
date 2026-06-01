@@ -1,10 +1,8 @@
-fn main(argc: int, argv: ptr): i32 {
-  let clang-args = list/empty[string];
-  // BUG: captured context parameter results in 'Missing variable' in ir
-  //let context alloc: mem/alloc-mode = :arena;
-  //let clang-args-c-strs: list[ptr] = clang-args.map(fn s. s.toCString().ptr);
+deftype foo = { x: int }
 
-  let clang-args-c-strs: list[ptr] = clang-args.map(fn s. s.toCString(context :arena)().ptr);
+#debug fn main(argc: int, argv: ptr): i32 {
+  let x: either { xs(int), s(u8), m(ptr), l, xl(string) } = :xs(4);
+  x == x;
 
   0
 }

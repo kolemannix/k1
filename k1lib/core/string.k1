@@ -43,7 +43,7 @@ ns for string {
   }
 
   fn wrapByteBuffer(buffer: buffer[byte]): string {
-    { span: span/wrap-buffer(buffer.toCharBuffer()) }
+    { span: span/wrap-buffer(buffer.as-char-buffer()) }
   }
 
   fn copyFromBytes(buffer: buffer[byte]): string {

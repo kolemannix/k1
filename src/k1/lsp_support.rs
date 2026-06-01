@@ -59,7 +59,6 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
             )
         }
         LsEntityKind::Variable { variable_id } => {
-            //nocommit valigo font loading
             let v = k1.variables.get(variable_id);
             let kind_str = match v.kind {
                 VariableKind::FnParam(_) => "Param".to_string(),

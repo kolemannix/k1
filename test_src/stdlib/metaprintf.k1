@@ -10,7 +10,7 @@ fn fmt[Fmt: static string, Args, w: writer](w, fmtString: Fmt, args: Args) {
   $(fmtString) {
     let code = StringBuilder/new();
     let argsTypeId = types/type-id[Args];
-    let schema = types/type-schema(argsTypeId);
+    let schema = types/type-id-schema(argsTypeId);
     // This naive splitting doesn't work; we need to walk the format string
     // emitting "string parts" or "arg specifiers"
     // Then iterate that structure to produce the runtime

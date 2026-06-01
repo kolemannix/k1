@@ -1431,6 +1431,16 @@ pub enum MatchingConditionInstr {
     Binding { let_stmt: TypedStmtId },
     Cond { value: TypedExprId },
 }
+
+impl MatchingConditionInstr {
+    pub fn cond(value: TypedExprId) -> Self {
+        MatchingConditionInstr::Cond { value }
+    }
+    pub fn binding(let_stmt: TypedStmtId) -> Self {
+        MatchingConditionInstr::Binding { let_stmt }
+    }
+}
+
 impl_copy_if_small!(8, MatchingConditionInstr);
 
 #[derive(Clone)]
@@ -1963,6 +1973,7 @@ pub enum BuiltinTyperInline {
     GetStaticValue,
     StaticTypeToValue,
     TypeId,
+    EnumEquals,
 }
 
 impl BuiltinTyperInline {
@@ -1975,6 +1986,7 @@ impl BuiltinTyperInline {
             BuiltinTyperInline::GetStaticValue => "get_static_value",
             BuiltinTyperInline::StaticTypeToValue => "static_type_to_value",
             BuiltinTyperInline::TypeId => "type_id",
+            BuiltinTyperInline::EnumEquals => "enum_equals",
         }
     }
 }
@@ -1985,6 +1997,7 @@ pub enum BuiltinTyperFunction {
     EnumAbilityGetTagName,
     SumAbilityGetTag,
     SumAbilityGetName,
+    SumEquals,
 }
 
 impl BuiltinTyperFunction {
@@ -1994,6 +2007,7 @@ impl BuiltinTyperFunction {
             BuiltinTyperFunction::EnumAbilityGetTagName => "enum_ability_get_tag_name",
             BuiltinTyperFunction::SumAbilityGetTag => "sum_ability_get_tag",
             BuiltinTyperFunction::SumAbilityGetName => "sum_ability_get_name",
+            BuiltinTyperFunction::SumEquals => "sum_equals",
         }
     }
 }
@@ -5938,7 +5952,7 @@ impl TypedProgram {
             global_id,
         );
 
-        if scope_id == self.scopes.mem_scope_id && parsed.name == self.ast.idents.b.arena {
+        if scope_id == self.scopes.mem_scope_id && parsed.name == self.ast.idents.b.arena_tmp {
             self.global_id_k1_arena = Some(global_id)
         };
         self.global_ast_mappings.insert(parsed_global_id, global_id);
@@ -6325,6 +6339,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         span: SpanId,
     ) -> Result<(AbilityImplHandle, bool), Cow<'static, str>> {
+        // let mut attempts: SV4<String> = smallvec![];
         if let Some(impl_handle) = self.find_unique_valid_ability_impl(
             self_type_id,
             target_base_ability_id,
@@ -6382,83 +6397,95 @@ impl TypedProgram {
             }
         };
 
+        let mut err_msg = None;
         /////////////////// Special type-kind abilities
         if target_base_ability_id == ABILITY_ID_ENUM {
             if let Type::Enum(e) = self.types.get(self_type_id) {
                 // ability enum[impl v]
-                let base_ability = self.abilities.get(ABILITY_ID_ENUM);
-                let base_scope_id = base_ability.scope_id;
-                let impl_scope_id = self.scopes.add_child_scope(
-                    base_scope_id,
-                    ScopeType::AbilityImpl,
-                    ScopeOwnerId::None,
-                    None,
-                );
-
                 // Assign 'v' to the integer type of the enum!
                 let impl_arguments = self.mem.pushn(&[NameAndType {
                     name: self.ast.idents.b.v,
                     type_id: e.int_type.type_id(),
                 }]);
-                let impl_id = self.implement_ability_for_type(
+                let impl_handle = self.generate_builtin_ability_impl(
                     self_type_id,
-                    TypedAbilitySignature {
-                        specialized_ability_id: target_base_ability_id,
-                        impl_arguments,
-                    },
-                    impl_scope_id,
-                    AbilityImplKind::BuiltinDerived,
+                    target_base_ability_id,
+                    impl_arguments,
                     span,
                 );
-                let handle = AbilityImplHandle {
-                    base_ability_id: target_base_ability_id,
-                    specialized_ability_id: target_base_ability_id,
-                    full_impl_id: impl_id,
-                };
-                // eprintln!("\n----------------- IMPLEMENTED ENUM\n");
-                // eprintln!("{}", self.ability_impl_to_string(impl_id, true));
-                return Ok((handle, false));
+                return Ok((impl_handle, false));
             }
         }
         if target_base_ability_id == ABILITY_ID_SUM {
             if let Type::Sum(sum) = self.types.get(self_type_id) {
                 // ability sum[impl v]
-                let base_ability = self.abilities.get(ABILITY_ID_SUM);
-                let base_scope_id = base_ability.scope_id;
-                let impl_scope_id = self.scopes.add_child_scope(
-                    base_scope_id,
-                    ScopeType::AbilityImpl,
-                    ScopeOwnerId::None,
-                    None,
-                );
-
                 // Assign 'v' to the integer type of the sum!
                 let impl_arguments = self.mem.pushn(&[NameAndType {
                     name: self.ast.idents.b.v,
                     type_id: sum.tag_type.type_id(),
                 }]);
-                let impl_id = self.implement_ability_for_type(
+                let impl_handle = self.generate_builtin_ability_impl(
                     self_type_id,
-                    TypedAbilitySignature {
-                        specialized_ability_id: target_base_ability_id,
-                        impl_arguments,
-                    },
-                    impl_scope_id,
-                    AbilityImplKind::BuiltinDerived,
+                    target_base_ability_id,
+                    impl_arguments,
                     span,
                 );
-                let handle = AbilityImplHandle {
-                    base_ability_id: target_base_ability_id,
-                    specialized_ability_id: target_base_ability_id,
-                    full_impl_id: impl_id,
-                };
                 // eprintln!("\n----------------- IMPLEMENTED SUM\n");
                 // eprintln!("{}", self.ability_impl_to_string(impl_id, true));
-                return Ok((handle, false));
+                return Ok((impl_handle, false));
+            }
+        }
+        if target_base_ability_id == ABILITY_ID_EQUALS {
+            match self.types.get(self_type_id) {
+                Type::Enum(_) => {
+                    let impl_handle = self.generate_builtin_ability_impl(
+                        self_type_id,
+                        target_base_ability_id,
+                        MSlice::empty(),
+                        span,
+                    );
+                    return Ok((impl_handle, false));
+                }
+                Type::Sum(sum) => {
+                    // Check if all payloads implement equals
+                    let mut fail = false;
+                    for variant in self.types.mem.getn(sum.variants) {
+                        if let Some(payload) = variant.payload {
+                            if let Err(err) = self.expect_ability_impl(
+                                payload,
+                                ABILITY_ID_EQUALS,
+                                false,
+                                scope_id,
+                                span,
+                            ) {
+                                fail = true;
+                                err_msg = Some(format!(
+                                    "Not all variant data implements equals: :{} {}\n{}",
+                                    self.ident_str(variant.name),
+                                    self.type_id_to_string(payload),
+                                    err.message
+                                ))
+                            };
+                        }
+                    }
+                    if !fail {
+                        let impl_handle = self.generate_builtin_ability_impl(
+                            self_type_id,
+                            target_base_ability_id,
+                            MSlice::empty(),
+                            span,
+                        );
+                        return Ok((impl_handle, false));
+                    }
+                }
+                _ => {}
             }
         }
 
-        Err("No matching implementations found".into())
+        match err_msg {
+            None => Err("No matching implementations found".into()),
+            Some(msg) => Err(msg.into()),
+        }
     }
 
     fn find_unique_valid_ability_impl(
@@ -6542,6 +6569,42 @@ impl TypedProgram {
                 }
             }
         }
+    }
+
+    fn generate_builtin_ability_impl(
+        &mut self,
+        self_type_id: TypeId,
+        base_ability_id: AbilityId,
+        impl_arguments: MSlice<NameAndType, TypedProgram>,
+        span: SpanId,
+    ) -> AbilityImplHandle {
+        let base_ability = self.abilities.get(base_ability_id);
+        let base_scope_id = base_ability.scope_id;
+        let impl_scope_id = self.scopes.add_child_scope(
+            base_scope_id,
+            ScopeType::AbilityImpl,
+            ScopeOwnerId::None,
+            None,
+        );
+
+        let impl_id = self.implement_ability_for_type(
+            self_type_id,
+            TypedAbilitySignature { specialized_ability_id: base_ability_id, impl_arguments },
+            impl_scope_id,
+            AbilityImplKind::BuiltinDerived,
+            span,
+        );
+        let handle = AbilityImplHandle {
+            base_ability_id,
+            specialized_ability_id: base_ability_id,
+            full_impl_id: impl_id,
+        };
+        debug!(
+            "\n----------------- IMPLEMENTED BUILTIN {}\n",
+            self.ident_str(self.abilities.get(base_ability_id).name)
+        );
+        debug!("{}", self.ability_impl_to_string(impl_id, true));
+        handle
     }
 
     fn check_ability_impl(
@@ -8144,7 +8207,7 @@ impl TypedProgram {
                 false,
             )?,
             ContainerKind::Buffer | ContainerKind::Span => self.synth_typed_call_typed_args(
-                self.ast.idents.f.buffer__allocate.with_span(span),
+                self.ast.idents.f.buffer_allocate.with_span(span),
                 &[element_type],
                 &[count_expr],
                 list_lit_ctx,
@@ -9294,7 +9357,7 @@ impl TypedProgram {
                             guard_condition_expr_id,
                             pattern_eval_ctx.with_expected_type(Some(BOOL_TYPE_ID)),
                         )?;
-                        instrs.push(MatchingConditionInstr::Cond { value: guard_condition_expr });
+                        instrs.push(MatchingConditionInstr::cond(guard_condition_expr));
                     };
 
                     // Once we've evaluated the conditions, we can eval the consequent expression inside of it,
@@ -9598,10 +9661,7 @@ impl TypedProgram {
                     is_referencing,
                     Some(sum_pattern.span),
                 )?;
-                instrs.push_grow(
-                    &mut self.mem,
-                    MatchingConditionInstr::Cond { value: is_variant_condition },
-                );
+                instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(is_variant_condition));
 
                 if let Some(payload_pattern) = sum_pattern.payload {
                     let sum_type_id = sum_pattern.sum_type_id;
@@ -9693,7 +9753,7 @@ impl TypedProgram {
                     self.type_id_to_string(pattern.type_id)
                 );
                 let cond = self.synth_bool(pattern_did_match, pattern.span);
-                instrs.push_grow(&mut self.mem, MatchingConditionInstr::Cond { value: cond });
+                instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(cond));
                 let inner_target_expr = if pattern_did_match {
                     // The variable is already of the correct type, so don't do anything at all
                     target_expr
@@ -9739,15 +9799,12 @@ impl TypedProgram {
                         let pattern_int_value_expr =
                             self.add_static_constant_expr(pattern_int_value, span);
                         let target_int_value = self.synth_enum_get_value(target_expr, span);
-                        let equals_call = self.synth_simple_equals_call(
+                        let equals_call = self.synth_equals_call_simple(
                             target_int_value,
                             pattern_int_value_expr,
                             span,
                         );
-                        instrs.push_grow(
-                            &mut self.mem,
-                            MatchingConditionInstr::Cond { value: equals_call },
-                        );
+                        instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(equals_call));
                         Ok(())
                     }
                     TypedPattern::LiteralChar(byte, span) => {
@@ -9755,10 +9812,10 @@ impl TypedProgram {
                         let span = *span;
                         let char_expr = self.add_static_constant_expr(char_value, span);
                         let equals_pattern_char =
-                            self.synth_simple_equals_call(target_expr, char_expr, span);
+                            self.synth_equals_call_simple(target_expr, char_expr, span);
                         instrs.push_grow(
                             &mut self.mem,
-                            MatchingConditionInstr::Cond { value: equals_pattern_char },
+                            MatchingConditionInstr::cond(equals_pattern_char),
                         );
                         Ok(())
                     }
@@ -9766,7 +9823,7 @@ impl TypedProgram {
                         let span = *span;
                         let pattern_integer_literal =
                             self.add_static_constant_expr(*int_value, span);
-                        let equals_pattern_int = self.synth_simple_equals_call(
+                        let equals_pattern_int = self.synth_equals_call_simple(
                             target_expr,
                             pattern_integer_literal,
                             span,
@@ -9782,10 +9839,10 @@ impl TypedProgram {
                         let pattern_float_literal =
                             self.add_static_constant_expr(*float_value, span);
                         let equals_pattern_float =
-                            self.synth_simple_equals_call(target_expr, pattern_float_literal, span);
+                            self.synth_equals_call_simple(target_expr, pattern_float_literal, span);
                         instrs.push_grow(
                             &mut self.mem,
-                            MatchingConditionInstr::Cond { value: equals_pattern_float },
+                            MatchingConditionInstr::cond(equals_pattern_float),
                         );
                         Ok(())
                     }
@@ -9793,10 +9850,10 @@ impl TypedProgram {
                         let span = *span;
                         let bool_expr = self.synth_bool(*bool_value, span);
                         let equals_pattern_bool =
-                            self.synth_simple_equals_call(target_expr, bool_expr, span);
+                            self.synth_equals_call_simple(target_expr, bool_expr, span);
                         instrs.push_grow(
                             &mut self.mem,
-                            MatchingConditionInstr::Cond { value: equals_pattern_bool },
+                            MatchingConditionInstr::cond(equals_pattern_bool),
                         );
                         Ok(())
                     }
@@ -9804,11 +9861,8 @@ impl TypedProgram {
                         let span = *span;
                         let string_expr = self.synth_string_literal(*string_id, span);
                         let condition =
-                            self.synth_simple_equals_call(target_expr, string_expr, span);
-                        instrs.push_grow(
-                            &mut self.mem,
-                            MatchingConditionInstr::Cond { value: condition },
-                        );
+                            self.synth_equals_call_simple(target_expr, string_expr, span);
+                        instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(condition));
                         Ok(())
                     }
                     _ => {
@@ -10632,7 +10686,7 @@ impl TypedProgram {
                 if let Err(msg) = self.check_types(BOOL_TYPE_ID, condition_type, ctx.scope_id) {
                     return failf!(span, "Expected boolean condition: {msg}");
                 };
-                instrs.push_grow(&mut self.mem, MatchingConditionInstr::Cond { value: condition });
+                instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(condition));
                 Ok(())
             }
         }
@@ -12105,7 +12159,7 @@ impl TypedProgram {
                 kerr!(
                     self,
                     call_span,
-                    "Call to {}/{} with self := {} does not work\n{}\nFunction type: {}",
+                    "Call to {}/{} with self := {} does not work\n{}\n[debug function type: {}]",
                     &self.ability_impl_signature_to_string(base_ability_id, MSlice::empty()),
                     fn_call.name.name,
                     solved_self,
@@ -13098,6 +13152,13 @@ impl TypedProgram {
                         Ok(self.synth_i64(to_k1_size_u64(value_bytes), span))
                     }
                 }
+            }
+            BuiltinTyperInline::EnumEquals => {
+                let arg_a = *self.mem.get_nth(call.args, 0);
+                let arg_b = *self.mem.get_nth(call.args, 1);
+                let int_value_a = self.synth_enum_get_value(arg_a, span);
+                let int_value_b = self.synth_enum_get_value(arg_b, span);
+                Ok(self.synth_equals_call_simple(int_value_a, int_value_b, span))
             }
         }
     }
@@ -14198,6 +14259,12 @@ impl TypedProgram {
                         mk_arith!(o)
                     }
                     Some(Type::Float(_)) => mk_arith!(OpKind::float(Op::Equals)),
+                    Some(Type::Enum(_)) => {
+                        Some(Builtin::TyperInline(BuiltinTyperInline::EnumEquals))
+                    }
+                    Some(Type::Sum(_)) => {
+                        Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumEquals))
+                    }
                     _ => None,
                 },
                 (ABILITY_ID_BITWISE, "bit-not") if is_integer => {
@@ -15176,7 +15243,11 @@ impl TypedProgram {
             }
         }
 
-        let intrinsic_type = if ast_fn.linkage == Linkage::Intrinsic {
+        let linkage = match impl_info {
+            Some(info) if info.impl_kind == AbilityImplKind::BuiltinDerived => Linkage::Intrinsic,
+            _ => ast_fn.linkage,
+        };
+        let intrinsic_type = if linkage == Linkage::Intrinsic {
             let namespace_chain = self_.name_chain(namespace_id);
             let resolved = self_
                 .resolve_intrinsic_function_type(
@@ -15259,7 +15330,7 @@ impl TypedProgram {
         };
 
         let param_types_handle = self_.types.mem.list_to_handle(param_types);
-        let call_conv = match ast_fn.linkage {
+        let call_conv = match linkage {
             Linkage::Standard => AbiMode::Internal,
             Linkage::External { .. } => AbiMode::Native,
             Linkage::Intrinsic => AbiMode::Internal,
@@ -15286,7 +15357,7 @@ impl TypedProgram {
             fnlike_type_params: function_type_params_handle,
             body_block: None,
             builtin_type: intrinsic_type,
-            linkage: ast_fn.linkage,
+            linkage,
             child_specializations: vec![],
             specialization_info: None,
             parsed_id: parsed_function_id.into(),
@@ -15491,8 +15562,8 @@ impl TypedProgram {
                     let string_id = self.ast.strings.intern(self.ast.idents.get_name(member.name));
                     let member_name_expr = self.synth_string_literal(string_id, fn_span);
                     let cond =
-                        self.synth_simple_equals_call(enum_arg_int_expr, int_value_expr, fn_span);
-                    let instrs = self.mem.pushn(&[MatchingConditionInstr::Cond { value: cond }]);
+                        self.synth_equals_call_simple(enum_arg_int_expr, int_value_expr, fn_span);
+                    let instrs = self.mem.pushn(&[MatchingConditionInstr::cond(cond)]);
                     arms.push(TypedMatchArm {
                         condition: MatchingCondition { instrs },
                         consequent_expr: member_name_expr,
@@ -15510,9 +15581,74 @@ impl TypedProgram {
                 let value_expr = self.synth_sum_get_tag(sum_param_expr, fn_span);
                 Ok(value_expr)
             }
+            BuiltinTyperFunction::SumEquals => {
+                let sum_param_a = *self.mem.get_nth(params, 0);
+                let sum_param_b = *self.mem.get_nth(params, 1);
+                let arg_a = self.synth_variable_expr(sum_param_a.variable_id, fn_span);
+                let arg_b = self.synth_variable_expr(sum_param_b.variable_id, fn_span);
+                let sum_type_id = self.exprs.get_type(arg_a);
+                let param_a_tag_expr = self.synth_sum_get_tag(arg_a, fn_span);
+                let param_b_tag_expr = self.synth_sum_get_tag(arg_b, fn_span);
+
+                let Type::Sum(sum_type) = self.types.get(sum_type_id) else {
+                    self.ice_span(fn_span, "not a sum");
+                };
+                let mut arms: List<TypedMatchArm, _> =
+                    self.mem.new_list(sum_type.variants.len() + 1);
+                for variant in self.types.mem.getn(sum_type.variants) {
+                    let variant_tag_expr = self.synth_int(variant.tag_value, fn_span);
+                    let a_tag_is_this_variant =
+                        self.synth_equals_call_simple(param_a_tag_expr, variant_tag_expr, fn_span);
+                    let b_tag_is_this_variant =
+                        self.synth_equals_call_simple(param_b_tag_expr, variant_tag_expr, fn_span);
+                    let mut conditions = self.mem.new_list(2 + variant.payload.is_some() as u32);
+                    conditions.push(MatchingConditionInstr::cond(a_tag_is_this_variant));
+                    conditions.push(MatchingConditionInstr::cond(b_tag_is_this_variant));
+                    match variant.payload {
+                        None => {}
+                        Some(payload_type_id) => {
+                            let payload_a = self.exprs.add(
+                                TypedExpr::SumGetPayload(GetSumPayload {
+                                    sum_expr: arg_a,
+                                    variant_index: variant.index,
+                                    access_kind: FieldAccessKind::ValueToValue,
+                                }),
+                                payload_type_id,
+                                fn_span,
+                            );
+                            let payload_b = self.exprs.add(
+                                TypedExpr::SumGetPayload(GetSumPayload {
+                                    sum_expr: arg_b,
+                                    variant_index: variant.index,
+                                    access_kind: FieldAccessKind::ValueToValue,
+                                }),
+                                payload_type_id,
+                                fn_span,
+                            );
+                            let payload_equals =
+                                self.synth_equals_call_simple(payload_a, payload_b, fn_span);
+                            conditions.push(MatchingConditionInstr::cond(payload_equals))
+                        }
+                    }
+                    let conditions = self.mem.list_to_handle(conditions);
+                    arms.push(TypedMatchArm {
+                        condition: MatchingCondition { instrs: conditions },
+                        consequent_expr: self.synth_bool(true, fn_span),
+                    });
+                }
+                arms.push(TypedMatchArm {
+                    condition: MatchingCondition { instrs: MSlice::empty() },
+                    consequent_expr: self.synth_bool(false, fn_span),
+                });
+                let match_expr = TypedExpr::Match(TypedMatchExpr {
+                    initial_let_statements: MSlice::empty(),
+                    arms: self.mem.list_to_handle(arms),
+                });
+                let match_expr_id = self.exprs.add(match_expr, BOOL_TYPE_ID, fn_span);
+                eprintln!("SUM EQUALS MATCH\n{}", self.expr_to_string(match_expr_id));
+                Ok(match_expr_id)
+            }
             BuiltinTyperFunction::SumAbilityGetName => {
-                // FIXME: a 'switch' would be much better, if we had them
-                // But we'll synthesize a big if/else inline for now.
                 let sum_param = *self.mem.get_nth(params, 0);
                 let sum_param_expr = self.synth_variable_expr(sum_param.variable_id, fn_span);
                 let sum_type_id = self.exprs.get_type(sum_param_expr);
@@ -15526,8 +15662,8 @@ impl TypedProgram {
                     let string_id = self.ast.strings.intern(self.ast.idents.get_name(variant.name));
                     let member_name_expr = self.synth_string_literal(string_id, fn_span);
                     let cond =
-                        self.synth_simple_equals_call(sum_arg_int_expr, int_value_expr, fn_span);
-                    let instrs = self.mem.pushn(&[MatchingConditionInstr::Cond { value: cond }]);
+                        self.synth_equals_call_simple(sum_arg_int_expr, int_value_expr, fn_span);
+                    let instrs = self.mem.pushn(&[MatchingConditionInstr::cond(cond)]);
                     arms.push(TypedMatchArm {
                         condition: MatchingCondition { instrs },
                         consequent_expr: member_name_expr,
@@ -16929,6 +17065,9 @@ impl TypedProgram {
         debug!(">> Pass 4 declare rest of definitions (functions, globals)");
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
         check_for_errors!("general declaration");
+        if self.global_id_k1_arena.is_none() {
+            panic!("global_id_k1_arena was not set");
+        }
 
         // Now that functions are declared, another pass for unresolved uses
         let unresolved_uses =
@@ -17490,7 +17629,6 @@ impl TypedProgram {
             core!("print"),
             core!("eprint"),
             core!("eprintln"),
-            core!("printIt"),
             core!("identity"),
             core!("assert"),
             core!("assertEquals"),

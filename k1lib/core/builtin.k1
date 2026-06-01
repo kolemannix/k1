@@ -35,6 +35,7 @@ deftype f32 = builtin
 deftype f64 = builtin
 
 
+// FIXME: Swap len and data in buffer
 deftype buffer[t] = { len: size, data: *mut t }
 
 deftype span[t] = { buffer: buffer[t] }
@@ -79,14 +80,11 @@ ns types {
   }
 
   // This implements equals for all enums, in userspace B-)
-  // nocommit: This will get tried first for every type that wants equals; probably not ideal
-  // If I'm going to auto-derive print for all structs and enums on-demand
-  // might as well just autoderive this inside the compiler
-  // its good enough that this is possible, but performance still favors
-  // building it in
-  impl[i: equals, e: types/enum[v = i]] equals for e {
-    fn equals(self: e, other: e): bool { self.enum-value() == other.enum-value() }
-  }
+  // We do it more efficiently, with a builtin, so as not to pollute the blanket impl search space
+  // but still a good flex
+  // impl[i: equals, e: types/enum[v = i]] equals for e {
+  //   fn equals(self: e, other: e): bool { self.enum-value() == other.enum-value() }
+  // }
 
   // The size, in bytes, of type t. Unlike C's sizeof, does not include end padding
   intern fn size[t](): size
@@ -491,6 +489,7 @@ impl equals for {} {
 ns mem {
 
   // TODO: Possibly reduce to a single alloc with a 'zero' option to reduce the number of builtins
+  // FIXME: Rename these to, like, 'sys-alloc' or something so that we can use these names to mean alloc-mode aware functions
   intern fn alloc(size: size, align: size): ptr
   intern fn alloc-zeroed(size: size, align: size): ptr
   intern fn realloc(ptr: ptr, old-size: size, align: size, new-size: size): ptr

@@ -36,10 +36,13 @@ ns mem {
   }
 
   deftype alloc-mode = either {
+    // Whatever alloc-mode is last on the stack (can never be :current itself)
     current,
+    // The default, thread-local, temporary bump allocator
+    tmp,
+    // The system libc heap (malloc/free and friends)
     system-heap,
     custom-heap(*mut Allocator),
-    arena,
     custom-arena(*mut arena),
     gc
   }
@@ -55,7 +58,7 @@ ns mem {
     fn supportsRealloc(self: alloc-mode): bool { switch self {
       :current -> crash("unreachable"),
       :system-heap or :custom-heap(_) -> true,
-      :arena or :custom-arena(_) -> false,
+      :tmp or :custom-arena(_) -> false,
       :gc -> false
     } }
 
@@ -63,7 +66,7 @@ ns mem {
       :current -> crash("unreachable"),
       :system-heap -> true,
       :custom-heap(_) -> true,
-      :arena -> false,
+      :tmp -> false,
       :custom-arena(_) -> false,
       :gc -> false
     } }
@@ -72,7 +75,7 @@ ns mem {
       :current -> "current",
       :system-heap -> "system",
       :custom-heap(_) -> "custom",
-      :arena -> "arena",
+      :tmp -> "tmp",
       :custom-arena(_) -> "custom_bump",
       :gc -> "gc"
     } }
@@ -99,8 +102,8 @@ ns mem {
         :custom-arena(bump) -> {
           bump.pushLayout(size, align)
         },
-        :arena -> {
-          mem/arena().pushLayout(size, align)
+        :tmp -> {
+          mem/tmp().pushLayout(size, align)
         },
         :gc -> {
           crash("gc is unimplemented; plan to support w/ bdwgc")
@@ -117,7 +120,7 @@ ns mem {
           reallocFn(oldPtr, oldSize, align, newSize)
         },
         :custom-arena(bump) -> crash("UnsupportedOperation: Bump realloc"),
-        :arena -> crash("UnsupportedOperation: arena realloc"),
+        :tmp -> crash("UnsupportedOperation: arena realloc"),
         :gc -> crash("UnsupportedOperation: gc realloc")
       }
     }
@@ -131,7 +134,7 @@ ns mem {
           freeFn(ptr, size, align)
         },
         :custom-arena(bump) -> crash("UnsupportedOperation: free"),
-        :arena -> crash("UnsupportedOperation: free"),
+        :tmp -> crash("UnsupportedOperation: free"),
         :gc -> crash("UnsupportedOperation: free")
       }
     }
@@ -151,12 +154,14 @@ ns mem {
 
   fn new[T](t: T): *mut T { alloc-mode:current.new(t) }
 
-  let mutable tls arena: arena = zeroed()
+  fn allocate(context alloc-mode)(size: size, align: size): ptr { alloc-mode.alloc(size, align) }
 
-  deftype alias ALLOC_STACK_MAX = 128
+  let mutable tls arena-tmp: arena = zeroed()
+
+  deftype alias ALLOC_STACK_MAX = 64
   let mutable tls allocStack: fixlist[alloc-mode, ALLOC_STACK_MAX] = { 
     let s = zeroed[fixlist[alloc-mode, ALLOC_STACK_MAX]];
-    s.push(:arena);
+    s.push(:tmp);
     s
   }
 
@@ -171,14 +176,14 @@ ns mem {
     s
   }
 
-  fn init-temp-arena() {
-    if not arena.base-ptr.is-null() crash("arena already initialized");
-    &arena <- arena/default();
+  fn init-tmp-arena() {
+    if not arena-tmp.base-ptr.is-null() crash("arena-tmp already initialized");
+    &arena-tmp <- arena/default();
   }
 
-  fn arena(): *mut arena {
-    if arena.base-ptr.is-null() { init-temp-arena() };
-    &arena
+  fn tmp(): *mut arena {
+    if arena-tmp.base-ptr.is-null() { init-tmp-arena() };
+    &arena-tmp
   }
 
 }

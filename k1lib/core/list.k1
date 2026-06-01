@@ -35,12 +35,12 @@ ns for list {
   }
 
   fn withCapacity[T](cap: size): list[T] {
-    let buffer = buffer/_allocate[T](cap);
+    let buffer = buffer/allocate[T](cap);
     { len: 0, buffer: buffer }
   }
 
   fn withCapacityIn[T](context mode: alloc-mode)(cap: size): list[T] {
-    let buffer = buffer/_allocateIn[T](cap);
+    let buffer = buffer/allocateIn[T](cap);
     { len: 0, buffer: buffer }
   }
 

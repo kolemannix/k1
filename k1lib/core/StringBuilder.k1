@@ -10,13 +10,6 @@ ns for StringBuilder {
     self.list*.clear()
   }
 
-  fn buildTmp(self: *StringBuilder): string {
-    switch self.list* {
-      :Inline(f)* -> string/fromBytes(f.as-span().clonedIn(context :current)()),
-      :Spilled(l)* -> string/fromBytes(l.as-span())
-    }
-  }
-
   // Careful, if the StringBuilder is stack-allocated, and not 
   // spilled, this points to the stack memory!
   fn raw-span(self: *StringBuilder): span[char] {
@@ -26,6 +19,13 @@ ns for StringBuilder {
   fn build(self: *StringBuilder): string {
     switch self.list* {
       :Inline(f)* -> string/fromBytes(f.as-span().cloned()),
+      :Spilled(l)* -> string/fromBytes(l.as-span())
+    }
+  }
+
+  fn build-tmp(self: *StringBuilder): string {
+    switch self.list* {
+      :Inline(f)* -> string/fromBytes(f.as-span().clonedIn(context :tmp)()),
       :Spilled(l)* -> string/fromBytes(l.as-span())
     }
   }
