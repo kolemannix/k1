@@ -55,7 +55,7 @@ tracing-appender = { version = "0.2", optional = true }
 # raylib = { version = "5.0.1", optional = true}
 
 [[bin]]
-name = "test_suite"
+name = "k1_test"
 path = "src/bin/test_suite.rs"
 
 [[bin]]

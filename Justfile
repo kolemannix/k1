@@ -16,7 +16,7 @@ lsp:
   just install-k1lib
 
 lsprelease:
-  cargo build --profile release --features lsp --bin lsp
+  cargo build --profile release --features lsp --features=llvm-sys/force-static --bin lsp
 
 build-k1r:
   cargo build --release --bin k1  --features=llvm-sys/force-static
@@ -32,7 +32,7 @@ valgrind-linux:
 bundle-linux-from-linux: 
   just lsprelease
   just build-k1r
-  cargo build --release --bin lsp --features=llvm-sys/force-static --features=lsp
+  cargo build --profile release --bin k1_test
   ./builds/bundle.sh target/release builds/k1-linux-x86
 
 install-linux-from-linux: bundle-linux-from-linux
@@ -43,6 +43,7 @@ install-linux-from-linux: bundle-linux-from-linux
 bundle-macos-from-macos:
   just lsprelease
   just build-k1r
+  cargo build --profile release --bin k1_test
   ./builds/bundle.sh target/release builds/k1-macos
 
 install-macos-from-macos: bundle-macos-from-macos

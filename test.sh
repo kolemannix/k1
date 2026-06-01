@@ -5,11 +5,11 @@ set -x
 set -e
 export RUST_BACKTRACE=1
 cargo test --lib
-cargo build --features=llvm-sys/prefer-dynamic --bin test_suite --bin k1
+cargo build --features=llvm-sys/prefer-dynamic --bin k1_test --bin k1
 
 
 export MallocScribble=1
-target/debug/test_suite $1
+target/debug/k1_test $1
 unset MallocScribble
 
 export RUST_LOG=info
