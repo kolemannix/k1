@@ -32,6 +32,10 @@ pub struct TestSuiteClapArgs {
 
     /// Filters test cases by name substring
     pub filter: Option<String>,
+
+    /// The root directory of the test sources to run
+    #[arg(long)]
+    pub tests_dir: Option<String>
 }
 
 #[derive(Debug)]
@@ -269,7 +273,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
 pub fn main() -> Result<()> {
     let test_suite_args = TestSuiteClapArgs::parse();
     eprintln!("{:#?}", test_suite_args);
-    let test_dir = "test_src";
+    let test_dir = test_suite_args.tests_dir.unwrap_or("test_src".to_string());
     let mut all_tests = Vec::new();
     for dir_entry in std::fs::read_dir(test_dir)? {
         let dir_entry = dir_entry?;

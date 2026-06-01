@@ -212,6 +212,7 @@ pub struct Args {
     pub profile: bool,
 
     /// Target platform
+    #[arg(long)]
     pub target: Option<Target>,
 
     #[command(subcommand)]
