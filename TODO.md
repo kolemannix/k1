@@ -22,12 +22,17 @@ Minor and ideas
 - [ ] [design/flags_in_tags.k1]
 - [ ] Inspired by fast_float, char to digit lookup table
 Simple but missing
+- [x] auto-equals implementation on-demand for enums
+- [x] auto-equals implementation on-demand for sums
+- [ ] auto-equals implementation on-demand for structs
+- [ ] auto-print implementation on-demand for sums and structs
 - [ ] Exported functions
 - [ ] decide if overflow traps or not (in debug and release, if those are even different)
 - [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
       currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
-- [ ] Bindings generator; `rust-bindgen` equivalent
+- [x] Bindings generator; `rust-bindgen` equivalent
+  - v0 is done; lots left to do; deep cavern of possible shit, bindgen is. further TODOs tracked in the bindgen project 
 - [ ] Implement at least one format specifier (precision, pretty)
 - [x] exported globals
 - [x] support ability constraints on generics

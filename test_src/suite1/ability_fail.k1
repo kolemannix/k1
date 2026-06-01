@@ -11,6 +11,6 @@ fn test() {
   assertEquals(result, :some(
 `Call to num/num with self := Tool does not work
 No matching implementations found
-Function type: fn('self) -> i32`
+[debug function type: fn('self) -> i32]`
   ))
 }

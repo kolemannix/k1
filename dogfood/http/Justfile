@@ -1,0 +1,2 @@
+tailwind:
+  npx @tailwindcss/cli -i ./web/input.css -o ./web/public/output.css --watch

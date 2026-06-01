@@ -19,6 +19,18 @@ fn sumPayload() {
   assert(c is :c(_));
   assert(c.as-c().! == "hello, sums");
 
+  assert(a == a);
+  assert(a != b);
+  assert(a != c);
+
+  assert(b == b);
+  assert(b != a);
+  assert(b != c);
+
+  assert(c == c);
+  assert(c != a);
+  assert(c != b);
+
 }
 
 deftype MyResult[T, E] = either { ok(T), err(E) }

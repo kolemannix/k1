@@ -19,7 +19,7 @@ impl TypedProgram {
         self.add_static_constant_expr(value_id, span)
     }
 
-    pub(super) fn synth_simple_equals_call(
+    pub(super) fn synth_equals_call_simple(
         &mut self,
         lhs: TypedExprId,
         rhs: TypedExprId,
@@ -77,7 +77,7 @@ impl TypedProgram {
     ) -> TypedExprId {
         let cons_arm = TypedMatchArm {
             condition: MatchingCondition {
-                instrs: self.mem.pushn(&[MatchingConditionInstr::Cond { value: condition }]),
+                instrs: self.mem.pushn(&[MatchingConditionInstr::cond(condition)]),
             },
             consequent_expr: consequent,
         };
@@ -159,11 +159,7 @@ impl TypedProgram {
         )
     }
 
-    pub(super) fn synth_sum_get_tag(
-        &mut self,
-        sum_expr: TypedExprId,
-        span: SpanId,
-    ) -> TypedExprId {
+    pub(super) fn synth_sum_get_tag(&mut self, sum_expr: TypedExprId, span: SpanId) -> TypedExprId {
         let Type::Sum(sum) = self.types.get(self.exprs.get_type(sum_expr)) else {
             self.ice_span(span, "need sum")
         };
@@ -556,7 +552,7 @@ impl TypedProgram {
             span,
         );
         let variant_tag_expr = self.synth_int(variant_tag, span);
-        let tag_equals = self.synth_simple_equals_call(get_tag, variant_tag_expr, span);
+        let tag_equals = self.synth_equals_call_simple(get_tag, variant_tag_expr, span);
         Ok(tag_equals)
     }
 
@@ -782,10 +778,6 @@ impl TypedProgram {
         }
         let ctx_for_calls = block_ctx.with_hidden(true);
         let new_string_builder = self.synth_typed_call_typed_args(
-            // nocommit: We'd like to put SpanId::NONE on this so that we don't emit a bad
-            // language server entity, but llvm complains about a call with no !dbg location.
-            // We could make a bogus span that satisfies llvm somehow, like by being in the same
-            // file?
             self.ast.idents.f.StringBuilder_new.with_span(span),
             &[],
             &[],
@@ -812,7 +804,7 @@ impl TypedProgram {
         )?;
         self.push_block_expr_id(&mut block, format_block);
         let build_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.StringBuilder_buildTmp.with_span(span),
+            self.ast.idents.f.StringBuilder_build_tmp.with_span(span),
             &[],
             &[string_builder_var.variable_expr],
             ctx_for_calls,

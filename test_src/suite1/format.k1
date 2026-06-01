@@ -10,7 +10,7 @@ fn test() {
   // If you have a buffer already, or any writer at all, you can 'write' to it formatted
   writef(w, "hello {world} -- ");
   writef(w, "hello {world} {}", 42);
-  assertEquals(w.buildTmp(), "hello Budapest -- hello Budapest 42");
+  assertEquals(w.build-tmp(), "hello Budapest -- hello Budapest 42");
   assertEquals("true", stringf("{}", true));
   assertEquals("-3.140000", stringf("{}", -3.14));
   assertEquals("-3", stringf("{}", -3i8));

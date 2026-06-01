@@ -53,38 +53,29 @@ fn inc(i: *mut size) { i <- i.* + 1 }
 
 fn identity[T](value: T): T { value }
 
-fn printIt[T: print](value: T) {
-  if k1/is-static and compiler/capture-prints {
-    k1/emit-compiler-message(compiler/location(), :info, value.show())
-  } else {
-    value.printTo(io/stdout);
-    io/stdout.write-char('\n')
-  }
-}
-
-fn print(s: string) {
+fn print[t: print](t) {
   // TODO: Instead of this hack, make write(Sink, span[byte]) the intrinsic.
   if k1/is-static and compiler/capture-prints {
+    let s = t.show();
     k1/emit-compiler-message(compiler/location(), :info, s)
   } else {
-    io/stdout.string(s)
-  };
-  {}
+    t.printTo(io/stdout)
+  }
 }
-fn println(s: string) {
+fn println[t: print](t) {
   // Whatever our implementation of print should be able to buffer
   // such that its better to call twice than allocate a garbage string
-  print(s);
-  print("\n");
+  print[t](t);
+  print[string]("\n");
 }
 
-fn eprint(s: string) {
+fn eprint[t: print](t) {
   if k1/is-static and compiler/capture-prints {
+    let s = t.show();
     k1/emit-compiler-message(compiler/location(), :warn, s)
   } else {
-    io/stderr.string(s)
-  };
-  {}
+    t.printTo(io/stderr)
+  }
 }
 fn eprintln(s: string) {
   // Whatever our implementation of print should be able to buffer
@@ -147,7 +138,7 @@ ns sys {
   }
 
   fn readLine(maxLengthBytes: size): result[string, string] {
-    let buffer = buffer/_allocate[byte](maxLengthBytes);
+    let buffer = buffer/allocate[byte](maxLengthBytes);
     let bytesRead: i64 = posix/read(0, buffer.data.as[ptr], buffer.len.as[c-sizet]);
 
     if bytesRead < 0 {
@@ -165,8 +156,8 @@ ns sys {
 
 ns files {
 
-  fn readToString(context alloc: mem/alloc-mode)(path: string): string {
-    let filenameCString = path.toCString(context :arena)();
+  fn readToString(context alloc-mode: mem/alloc-mode)(path: string): string {
+    let filenameCString = path.toCString(context :tmp)();
 
     let file = libc/files/fopen(filenameCString.ptr, "r\0".toCString().ptr);
     if file.is-null() {
@@ -175,14 +166,12 @@ ns files {
     defer libc/files/fclose(file);
 
     libc/files/fseek(file, 0, libc/files/SEEK_END);
-    let fileSizeBytes = libc/files/ftell(file);
-    let buf = alloc.alloc(size = fileSizeBytes, align = 1);
+    let file-size-bytes = libc/files/ftell(file);
+    let buf = buffer/allocateIn[char](file-size-bytes);
 
     libc/files/fseek(file, 0, libc/files/SEEK_SET);
-    libc/files/fread(buf, fileSizeBytes, 1, file);
-    let string = string/wrapBuffer(
-      buffer/fromPtrAndCount(count = fileSizeBytes, ptr = buf)
-    );
+    libc/files/fread(buf.dataPtr(), buf.len(), 1, file);
+    let string = string/wrapBuffer(buf);
 
     string
   }
