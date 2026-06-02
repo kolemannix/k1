@@ -1,5 +1,6 @@
 #include <stdint.h>
-#include <stdio.h>
+
+extern int printf(const char *, ...);
 
 typedef struct { char x; } VerySmall;
 // define i8 @very_small(i64 %0, i64 %1) #0
@@ -60,6 +61,50 @@ void hfa_big(HFABig hfa1) {
   return;
 }
 
+enum CXCursorKind {
+  UnexposedDecl = 1,
+  StructDecl = 2,
+};
+typedef struct {
+  enum CXCursorKind kind;
+  int xdata;
+  const void *data[3];
+} CXCursor;
+
+CXCursor rtCursor(CXCursor in) {
+  CXCursor out;
+  out.kind = in.kind;
+  out.xdata = in.xdata;
+  out.data[0] = in.data[0];
+  out.data[1] = in.data[1];
+  out.data[2] = in.data[2];
+  printf("rtCursor, kind=%d, xdata=%d, data[0]=%p, data[1]=%p, data[2]=%p\n", in.kind, in.xdata, in.data[0], in.data[1], in.data[2]);
+  return out;
+}
 
 
+typedef struct {
+  const void *data;
+  unsigned private_flags;
+} CXString;
 
+CXString getFileName(void *SFile) {
+  CXString s;
+  s.data = (void*)3;
+  s.private_flags = 21;
+  return s;
+}
+
+
+typedef struct {
+  const void *ptr_data[2];
+  unsigned int_data;
+} CXSourceLocation;
+
+CXSourceLocation getCursorLocation(CXCursor c) {
+  CXSourceLocation locn;
+  locn.ptr_data[0] = (void*)1;
+  locn.ptr_data[1] = (void*)2;
+  locn.int_data = 42;
+  return locn;
+}

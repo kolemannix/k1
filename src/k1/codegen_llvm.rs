@@ -84,7 +84,9 @@ enum AbiParamMapping {
     },
     /// How clang does ARM64 9-16 byte structs
     StructByIntPairArray,
-    BigStructByPtrToCopy,
+    BigStructByPtrToCopy {
+        byval_attr: bool,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1013,7 +1015,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::StructInInteger { .. } => false,
             AbiParamMapping::StructByEightbytePair { .. } => false,
             AbiParamMapping::StructByIntPairArray => false,
-            AbiParamMapping::BigStructByPtrToCopy => true,
+            AbiParamMapping::BigStructByPtrToCopy { .. } => true,
         };
 
         let physical_return_mapped_type = if is_sret {
@@ -1131,7 +1133,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let array_type = self.ctx.i64_type().array_type(2).as_basic_type_enum();
                 array_type
             }
-            AbiParamMapping::BigStructByPtrToCopy => {
+            AbiParamMapping::BigStructByPtrToCopy { .. } => {
                 let ptr_type = self.builtin_types.ptr.as_basic_type_enum();
                 ptr_type
             }
@@ -1181,7 +1183,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_store(dst_ptr, abi_value).unwrap();
                 dst_ptr.as_basic_value_enum()
             }
-            AbiParamMapping::BigStructByPtrToCopy => {
+            AbiParamMapping::BigStructByPtrToCopy { .. } => {
                 // Our canonical representation of all aggregates is an llvm ptr
                 // And this abi route represents them as a ptr, so nothing to do
                 abi_value
@@ -1196,7 +1198,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         k1_value: BasicValueEnum<'ctx>,
     ) -> Option<BasicValueEnum<'ctx>> {
         match mapping {
-            AbiParamMapping::VoidReturnEmpty | AbiParamMapping::BigStructByPtrToCopy => None,
+            AbiParamMapping::VoidReturnEmpty | AbiParamMapping::BigStructByPtrToCopy { .. } => None,
             _ => {
                 let value = self.marshal_abi_param_value(mapping, cg_ty, k1_value, true);
                 Some(value)
@@ -1293,23 +1295,29 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     self.builder.build_load(abi_type, k1_value.into_pointer_value(), "").unwrap();
                 loaded_aggregate
             }
-            AbiParamMapping::BigStructByPtrToCopy => {
+            AbiParamMapping::BigStructByPtrToCopy { byval_attr } => {
                 // Our canonical representation of all aggregates is an llvm ptr
                 // And this abi route represents them as a ptr, already.
                 //
-                // But, this is truly the 'value' getting passed to the C code, then
+                // But, if this is truly the 'value' getting passed to the C code, then
                 // this would allow mutation incorrectly, and we do have to make a copy
                 // So, if this is not a return, but a param marshal, we'd make a copy
                 if is_return {
                     // For returns its moot, the ptr is already a caller-owned slot
                     k1_value
                 } else {
-                    let callers_copy = self.alloca_copy_entire_value(
-                        k1_value.into_pointer_value(),
-                        cg_ty,
-                        "abi_caller_copy",
-                    );
-                    callers_copy.as_basic_value_enum()
+                    if byval_attr {
+                        // We don't need to do an extra copy because byval lowering will do it
+                        k1_value
+                    } else {
+                        // Just a pointer parameter; we take responsibility for making the copy
+                        let callers_copy = self.alloca_copy_entire_value(
+                            k1_value.into_pointer_value(),
+                            cg_ty,
+                            "abi_caller_copy",
+                        );
+                        callers_copy.as_basic_value_enum()
+                    }
                 }
             }
         }
@@ -1524,6 +1532,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             args.push(sret_dst.into())
         }
 
+        let mut byval_args = self.tmp.new_list(0);
         for (index, arg_ir_value) in self.k1.ir.mem.getn(call_args).iter().enumerate() {
             let arg_value = self.resolve_value(inst_mappings, *arg_ir_value)?;
 
@@ -1532,6 +1541,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let value_marshalled =
                 self.marshal_abi_param_value(abi_mapping, &param_k1_ty, arg_value, false);
             trace!("codegen function call arg type: {}", value_marshalled);
+            if let AbiParamMapping::BigStructByPtrToCopy { byval_attr: true } = abi_mapping {
+                byval_args.push_grow(&mut self.tmp, (args.len(), param_k1_ty.rich_type()));
+            };
             args.push(value_marshalled.into())
         }
 
@@ -1540,7 +1552,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let function_value = self.declare_llvm_function(function_id)?;
                 self.set_debug_location_from_span(span);
 
-                self.builder.build_call(function_value, &args, "").unwrap()
+                let call = self.builder.build_call(function_value, &args, "").unwrap();
+                call
             }
             CallKind::Indirect(fn_ptr) => {
                 self.set_debug_location_from_span(span);
@@ -1551,6 +1564,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 call_site_value
             }
         };
+        for (byval_param_index, rich_type) in byval_args.as_slice() {
+            debug!("ADDING BYVAL ATTR TO {} {}", *byval_param_index, rich_type);
+            callsite_value.add_attribute(
+                AttributeLoc::Param(*byval_param_index as u32),
+                self.make_byval_attribute(rich_type.as_any_type_enum()),
+            );
+        }
 
         if cg_fn_type.is_sret {
             let sret_attribute = self.make_sret_attribute(
@@ -2583,20 +2603,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let v = self.k1.variables.get(typed_param.variable_id);
                 param.set_name(self.k1.ident_str(v.name));
 
-                // We don't bother with 'byval' anymore; our calls work on x86 and arm64 by
-                // explicitly managing the local copy ourselves. Clang doesnt both with it either
-                // let abi_mapping =
-                //     self.mem.get_nth_lt(llvm_function_type.param_abi_mappings, i - offset);
-                // if matches!(
-                //     abi_mapping,
-                //     AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }
-                // ) {
-                //     let k1_type =
-                //         self.mem.get_nth_lt(llvm_function_type.param_k1_types, i - offset);
-                //     let byval_attribute =
-                //         self.make_byval_attribute(k1_type.rich_type().as_any_type_enum());
-                //     function_value.add_attribute(AttributeLoc::Param(i as u32), byval_attribute);
-                // }
+                // Without the byval attribute, X86 (System V) big struct calls don't work
+                let abi_mapping =
+                    self.mem.get_nth_lt(llvm_function_type.param_abi_mappings, i - offset);
+                if matches!(abi_mapping, AbiParamMapping::BigStructByPtrToCopy { byval_attr: true })
+                {
+                    let k1_type =
+                        self.mem.get_nth_lt(llvm_function_type.param_k1_types, i - offset);
+                    let byval_attribute =
+                        self.make_byval_attribute(k1_type.rich_type().as_any_type_enum());
+                    function_value.add_attribute(AttributeLoc::Param(i as u32), byval_attribute);
+                }
             }
         }
 
@@ -2638,8 +2655,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             ARM64,
         }
         let callconv = match abi_mode {
-            AbiMode::Internal => CallConv::InternalK1,
-            AbiMode::Native => match self.k1.config.target {
+            AbiMode::Native | AbiMode::Internal => match self.k1.config.target {
                 compiler::Target::LinuxIntel64 => CallConv::AMD64,
                 compiler::Target::MacOsArm64 => CallConv::ARM64,
                 compiler::Target::Wasm64 => CallConv::ARM64,
@@ -2671,7 +2687,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 } else if size_bytes <= 16 {
                                     AbiParamMapping::StructByIntPairArray
                                 } else {
-                                    AbiParamMapping::BigStructByPtrToCopy
+                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: false }
                                 }
                             }
                             CallConv::ARM64 => {
@@ -2685,7 +2701,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                     // [an array of] two integers of 8 bytes each
                                     AbiParamMapping::StructByIntPairArray
                                 } else {
-                                    AbiParamMapping::BigStructByPtrToCopy
+                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: false }
                                 }
                             }
                             CallConv::AMD64 => {
@@ -2704,7 +2720,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                         active_bits2: eb2_bits,
                                     }
                                 } else {
-                                    AbiParamMapping::BigStructByPtrToCopy
+                                    // Without the byval attribute, SYS-V does not work
+                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }
                                 }
                             }
                         }
@@ -3613,7 +3630,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.ctx.create_enum_attribute(Attribute::get_named_enum_kind_id("align"), align)
     }
 
-    #[allow(unused)]
     fn make_byval_attribute(&self, typ: AnyTypeEnum<'ctx>) -> Attribute {
         self.ctx.create_type_attribute(Attribute::get_named_enum_kind_id("byval"), typ)
     }

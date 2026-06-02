@@ -126,7 +126,7 @@ fn prep_ffi_cif(
     let mut ffi_args_types_ptrs = k1.mem.new_list(param_count as u32);
     for fn_param in k1.ir.mem.getn(fn_params) {
         let ffi_type: ffi_type = pt_to_ffi_type(k1, fn_param.pt)
-            .map_err(|msg| errf!(span, "Function type is not FFI compatible: {msg}"))?;
+            .map_err(|msg| errf!(span, "parameter type is not FFI compatible: {msg}"))?;
 
         // We need a stable address to each type here; so we push them to
         // a parallel collection
@@ -137,7 +137,7 @@ fn prep_ffi_cif(
     let atypes: *mut *mut ffi_type = ffi_args_types_ptrs.as_mut_ptr().cast();
 
     let ffi_ret_type: ffi_type = pt_to_ffi_type(k1, return_type)
-        .map_err(|msg| errf!(span, "Function type is not FFI compatible: {msg}"))?;
+        .map_err(|msg| errf!(span, "return type is not FFI compatible: {msg}"))?;
     let ffi_ret_type_alloced: &mut ffi_type = k1.mem.push(ffi_ret_type);
 
     let mut cif: ffi_cif = ffi_cif::default();
@@ -202,12 +202,18 @@ fn pt_to_ffi_type(
                 let t = make_struct_ffi_type(k1, element_storage.as_slice_mut());
                 Ok(t)
             }
-            AggType::Array { .. } => {
-                Err("Arrays can't be passed directly by value in C / via system ffi")
+            AggType::Array { element_pt, len } => {
+                // size and alignment get filled in my ffi_prep_cif
+                // Arrays should just be represented as repeated structs
+                let mut element_storage = k1.mem.new_list(len);
+                let element_ffi_type = pt_to_ffi_type(k1, element_pt)?;
+                for _ in 0..len {
+                    element_storage.push(element_ffi_type);
+                }
+                let t = make_struct_ffi_type(k1, element_storage.as_slice_mut());
+                Ok(t)
             }
-            AggType::Union { .. } => {
-                Err("Opaques can't be passed directly by value in C / via system ffi")
-            }
+            AggType::Union { .. } => Err("TODO: what to do for union in libffi"),
         },
     }
 }
