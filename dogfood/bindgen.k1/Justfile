@@ -48,3 +48,7 @@ basic-linux: build
   .k1-out/bindgen.k1 -system false -n basic -i file.c \
     -clangarg -isystem -clangarg /Users/knix/dev/k1-linux/llvm/install-llvm/lib/clang/21/include \
     > basic.k1
+
+basic-linux-dbg:
+  k1 --debug b .
+  gdb --args .k1-out/bindgen.k1 -system false -n basic -i file.c -clangarg -isystem -clangarg /Users/knix/dev/k1-linux/llvm/install-llvm/lib/clang/21/include

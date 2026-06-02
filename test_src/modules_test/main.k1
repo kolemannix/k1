@@ -47,6 +47,12 @@ ns foo {
   extern("foo", "getCursorLocation")
   fn getCursorLocation(c: CXCursor): CXSourceLocation 
 
+  extern("foo", "takesFn")
+  fn takes-fn(f: *fn(a: u64, b: u64, c: u64, d: u64) -> i32): i32
+
+  extern("foo", "takesFnStruct")
+  fn takes-fn-struct(f: *fn(s: { a: u64, b: u64, c: u64, d: u64 }) -> i32): i32
+
 }
 
 fn testAll() {
@@ -90,8 +96,29 @@ fn testAll() {
 
 }
 
+fn testFnPtr() {
+  // We don't run this one at compile-time because there is no actual function to pass.
+  // FIXME: You can't pass a k1 function to a compiled library at comptime
+  //        since the function pointer doesn't exist; we'd have to JIT the function.
+  //        We should prevent this, somehow
+
+  let sum = foo/takes-fn(sum-fn);
+  assertEquals(sum, 1+2+3+4);
+
+  let sum2 = foo/takes-fn-struct(sum-fn-struct);
+  assertEquals(sum2, 1+2+3+4);
+}
+
+fn sum-fn(a: u64, b: u64, c: u64, d: u64): i32 {
+  (a + b + c + d).as[i32]
+}
+fn sum-fn-struct(s: { a: u64, b: u64, c: u64, d: u64 }): i32 {
+  (s.a + s.b + s.c + s.d).as[i32]
+}
+
 fn main(): i32 {
-  testAll();
   #static testAll();
+  testAll();
+  testFnPtr();
   0
 }
