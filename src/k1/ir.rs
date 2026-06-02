@@ -1217,11 +1217,13 @@ impl<'k1> Builder<'k1> {
             PhysicalTypeResult::Never => {
                 b_ice!(self, "Type is divergent: {}", self.k1.type_id_to_string_ext(type_id, true))
             }
-            PhysicalTypeResult::No => b_ice!(
-                self,
-                "Not a physical type: {}",
-                self.k1.type_id_to_string_ext(type_id, true)
-            ),
+            PhysicalTypeResult::No => {
+                b_ice!(
+                    self,
+                    "Not a physical type: {}",
+                    self.k1.type_id_to_string_ext(type_id, true)
+                )
+            }
             PhysicalTypeResult::Yes(pt) => pt,
         }
     }

@@ -35,7 +35,7 @@ pub struct TestSuiteClapArgs {
 
     /// The root directory of the test sources to run
     #[arg(long)]
-    pub tests_dir: Option<String>
+    pub tests_dir: Option<String>,
 }
 
 #[derive(Debug)]

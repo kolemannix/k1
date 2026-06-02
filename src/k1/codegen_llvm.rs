@@ -82,6 +82,10 @@ enum AbiParamMapping {
         class2: RegisterClass,
         active_bits2: u32,
     },
+    StructByHfa {
+        element: ScalarType,
+        count: u32,
+    },
     /// How clang does ARM64 9-16 byte structs
     StructByIntPairArray,
     BigStructByPtrToCopy {
@@ -1014,6 +1018,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::ScalarInRegister => false,
             AbiParamMapping::StructInInteger { .. } => false,
             AbiParamMapping::StructByEightbytePair { .. } => false,
+            AbiParamMapping::StructByHfa { .. } => false,
             AbiParamMapping::StructByIntPairArray => false,
             AbiParamMapping::BigStructByPtrToCopy { .. } => true,
         };
@@ -1129,6 +1134,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let struct_type = self.ctx.struct_type(&[f1, f2], false).as_basic_type_enum();
                 struct_type
             }
+            AbiParamMapping::StructByHfa { element, count } => {
+                let element_type = match element {
+                    ScalarType::F32 => self.ctx.f32_type().as_basic_type_enum(),
+                    ScalarType::F64 => self.ctx.f64_type().as_basic_type_enum(),
+                    _ => panic!("HFA element must be f32 or f64"),
+                };
+                let fields: Vec<_> = (0..count).map(|_| element_type).collect();
+                self.ctx.struct_type(&fields, false).as_basic_type_enum()
+            }
             AbiParamMapping::StructByIntPairArray => {
                 let array_type = self.ctx.i64_type().array_type(2).as_basic_type_enum();
                 array_type
@@ -1173,6 +1187,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 // Yes its a struct store but its guaranteed to be only 2 members, so lets try it out.
                 // clang for x86 actually has 2 scalar BasicValues at this point (2 params vs 1 struct),
                 // but this should work too
+                self.builder.build_store(dst_ptr, abi_value).unwrap();
+                dst_ptr.as_basic_value_enum()
+            }
+            AbiParamMapping::StructByHfa { .. } => {
+                let dst_ptr = self.build_k1_alloca(cg_ty, "struct_by_hfa_storage");
+                debug_assert!(abi_value.get_type().is_struct_type());
                 self.builder.build_store(dst_ptr, abi_value).unwrap();
                 dst_ptr.as_basic_value_enum()
             }
@@ -1277,6 +1297,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let loaded_aggregate =
                     self.builder.build_load(abi_type, k1_value.into_pointer_value(), "").unwrap();
                 loaded_aggregate
+            }
+            AbiParamMapping::StructByHfa { .. } => {
+                let abi_type = self.mapped_abi_type_param(pt, mapping);
+                self.builder.build_load(abi_type, k1_value.into_pointer_value(), "").unwrap()
             }
             AbiParamMapping::StructByIntPairArray => {
                 // define void @call_eb_pair_mixed() #0 {
@@ -2691,8 +2715,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 }
                             }
                             CallConv::ARM64 => {
-                                // FIXME(abi) Check for HFA on ARM64
-                                if size_bytes <= 8 {
+                                if let Some((element, count)) = self.detect_arm64_hfa(pt) {
+                                    AbiParamMapping::StructByHfa { element, count }
+                                } else if size_bytes <= 8 {
                                     // Returns use the exact width; otherwise just i64
                                     let width_bits = if is_return { size_bytes * 8 } else { 64 };
                                     AbiParamMapping::StructInInteger { width: width_bits }
@@ -2731,6 +2756,59 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
+    fn detect_arm64_hfa(&self, pt: PhysicalType) -> Option<(ScalarType, u32)> {
+        fn add_member(element: &mut Option<ScalarType>, count: &mut u32, st: ScalarType) -> bool {
+            if !matches!(st, ScalarType::F32 | ScalarType::F64) {
+                return false;
+            }
+
+            match element {
+                Some(existing) if *existing != st => false,
+                _ => {
+                    *element = Some(st);
+                    *count += 1;
+                    *count <= 4
+                }
+            }
+        }
+
+        fn visit<'ctx, 'k1>(
+            c: &Cg<'ctx, 'k1>,
+            element: &mut Option<ScalarType>,
+            count: &mut u32,
+            t: PhysicalType,
+        ) -> bool {
+            match t.as_enum() {
+                PhysicalTypeEnum::Empty => true,
+                PhysicalTypeEnum::Scalar(st) => add_member(element, count, st),
+                PhysicalTypeEnum::Agg(agg_id) => {
+                    let agg_record = c.k1.types.agg_types.get(agg_id);
+                    match agg_record.agg_type {
+                        AggType::Struct { fields } => {
+                            c.k1.types
+                                .mem
+                                .getn(fields)
+                                .iter()
+                                .all(|f| visit(c, element, count, f.field_t))
+                        }
+                        AggType::Array { element_pt, len } => {
+                            (0..len).all(|_| visit(c, element, count, element_pt))
+                        }
+                        AggType::Union { .. } | AggType::Sum(_) => false,
+                    }
+                }
+            }
+        }
+
+        let mut element = None;
+        let mut count = 0;
+        if visit(self, &mut element, &mut count, pt) && count > 0 {
+            Some((element.unwrap(), count))
+        } else {
+            None
+        }
+    }
+
     // What a horrible amount of code for such a small transformation!
     fn collect_aggregate_eightbytes(
         &self,
@@ -2738,94 +2816,105 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     ) -> (RegisterClass, RegisterClass, u32) {
         // This whole thing could be generalized to collect N eightbytes, rather than 2, which would let me use it
         // for the HFA detection
-        fn append_type(
-            class1: &mut Option<RegisterClass>,
-            class2: &mut Option<RegisterClass>,
-            cur_bits: &mut u32,
-            class: RegisterClass,
+        fn mark_bits(
+            classes: &mut [RegisterClass; 2],
+            active_bits2: &mut u32,
+            offset_bits: u32,
             size_bits: u32,
+            class: RegisterClass,
         ) {
-            match (class1, class2) {
-                (c1 @ None, None) => *c1 = Some(class),
-                (Some(c1), c2 @ None) => {
-                    let scalar_size_signed: i32 = size_bits as i32;
-                    let cur_bits_signed: i32 = *cur_bits as i32;
+            if size_bits == 0 {
+                return;
+            }
 
-                    let new_bits = scalar_size_signed + cur_bits_signed;
-                    let bleed_bits = new_bits - 8;
+            let end_bits = offset_bits + size_bits;
+            debug_assert!(end_bits <= 128);
 
-                    let new_c1_class = c1.combine(class);
-                    *c1 = new_c1_class;
-                    if bleed_bits > 0 {
-                        // `bleed`: This scalar actually spans the first 8 and last 8 bytes;
-                        // so contributes to the class of both
-                        *c2 = Some(class);
-                        *cur_bits = bleed_bits as u32;
-                    } else if bleed_bits == 0 {
-                        // We completed the first eightbyte exactly; initialize the 2nd and reset
-                        // cur_bits
-                        *c2 = Some(RegisterClass::Initial);
-                        *cur_bits = 0;
-                    } else {
-                        *cur_bits = new_bits as u32;
-                    }
+            for eightbyte in (offset_bits / 64)..=((end_bits - 1) / 64) {
+                let i = eightbyte as usize;
+                classes[i] = classes[i].combine(class);
+                if i == 1 {
+                    *active_bits2 = (*active_bits2).max(end_bits.min(128) - 64);
                 }
-                (Some(_), Some(c2)) => *c2 = c2.combine(class),
-                (None, Some(_)) => unreachable!(),
             }
         }
+
+        fn scalar_register_class(st: ScalarType) -> RegisterClass {
+            match st {
+                ScalarType::U8 => RegisterClass::Int,
+                ScalarType::U16 => RegisterClass::Int,
+                ScalarType::U32 => RegisterClass::Int,
+                ScalarType::U64 => RegisterClass::Int,
+                ScalarType::I8 => RegisterClass::Int,
+                ScalarType::I16 => RegisterClass::Int,
+                ScalarType::I32 => RegisterClass::Int,
+                ScalarType::I64 => RegisterClass::Int,
+                ScalarType::F32 => RegisterClass::Float,
+                ScalarType::F64 => RegisterClass::Float,
+                ScalarType::Pointer => RegisterClass::Int,
+            }
+        }
+
         fn handle_type_rec<'ctx, 'k1>(
             c: &Cg<'ctx, 'k1>,
-            class1: &mut Option<RegisterClass>,
-            class2: &mut Option<RegisterClass>,
-            cur_bits: &mut u32,
+            classes: &mut [RegisterClass; 2],
+            active_bits2: &mut u32,
+            offset_bits: u32,
             t: PhysicalType,
         ) {
             match t.as_enum() {
                 PhysicalTypeEnum::Empty => {}
                 PhysicalTypeEnum::Scalar(st) => {
-                    let class = match st {
-                        ScalarType::U8 => RegisterClass::Int,
-                        ScalarType::U16 => RegisterClass::Int,
-                        ScalarType::U32 => RegisterClass::Int,
-                        ScalarType::U64 => RegisterClass::Int,
-                        ScalarType::I8 => RegisterClass::Int,
-                        ScalarType::I16 => RegisterClass::Int,
-                        ScalarType::I32 => RegisterClass::Int,
-                        ScalarType::I64 => RegisterClass::Int,
-                        ScalarType::F32 => RegisterClass::Float,
-                        ScalarType::F64 => RegisterClass::Float,
-                        ScalarType::Pointer => RegisterClass::Int,
-                    };
-                    append_type(class1, class2, cur_bits, class, st.get_layout().size_bits())
+                    let class = scalar_register_class(st);
+                    mark_bits(
+                        classes,
+                        active_bits2,
+                        offset_bits,
+                        st.get_layout().size_bits(),
+                        class,
+                    )
                 }
                 PhysicalTypeEnum::Agg(agg_id) => {
                     let agg_record = c.k1.types.agg_types.get(agg_id);
                     match agg_record.agg_type {
                         AggType::Struct { fields } => {
                             for f in c.k1.types.mem.getn(fields) {
-                                handle_type_rec(c, class1, class2, cur_bits, f.field_t)
+                                handle_type_rec(
+                                    c,
+                                    classes,
+                                    active_bits2,
+                                    offset_bits + f.offset * 8,
+                                    f.field_t,
+                                )
                             }
                         }
                         AggType::Array { element_pt: element_t, len } => {
-                            for _ in 0..len {
-                                handle_type_rec(c, class1, class2, cur_bits, element_t)
+                            let element_layout = c.k1.types.get_pt_layout(element_t);
+                            for i in 0..len {
+                                let element_offset = element_layout.offset_at_index(i as usize);
+                                handle_type_rec(
+                                    c,
+                                    classes,
+                                    active_bits2,
+                                    offset_bits + element_offset as u32 * 8,
+                                    element_t,
+                                )
                             }
                         }
-                        AggType::Union { .. } => append_type(
-                            class1,
-                            class2,
-                            cur_bits,
-                            RegisterClass::Int,
+                        AggType::Union { .. } => mark_bits(
+                            classes,
+                            active_bits2,
+                            offset_bits,
                             agg_record.layout.size_bits(),
+                            RegisterClass::Int,
                         ),
                         AggType::Sum(e) => {
                             // Just handle the enum's struct
                             handle_type_rec(
                                 c,
-                                class1,
-                                class2,
-                                cur_bits,
+                                classes,
+                                active_bits2,
+                                offset_bits,
                                 PhysicalType::agg(e.struct_repr),
                             )
                         }
@@ -2833,18 +2922,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 }
             }
         }
-        let mut class1 = Some(RegisterClass::Initial);
-        let mut class2 = None;
-        let mut cur_bits = 0;
+        let mut classes = [RegisterClass::Initial, RegisterClass::Initial];
+        let mut active_bits2 = 0;
 
-        handle_type_rec(self, &mut class1, &mut class2, &mut cur_bits, pt);
+        handle_type_rec(self, &mut classes, &mut active_bits2, 0, pt);
 
-        match (class1, class2) {
-            (Some(c1), Some(c2)) => (c1, c2, cur_bits),
-            _ => panic!(
+        match classes {
+            [RegisterClass::Initial, _] | [_, RegisterClass::Initial] => panic!(
                 "Failed to collect 2 eightbytes for 9-16 byte struct {}. Likely a bug.",
                 self.k1.types.pt_to_string(pt)
             ),
+            [class1, class2] => (class1, class2, active_bits2),
         }
     }
 

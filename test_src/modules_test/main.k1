@@ -24,6 +24,15 @@ ns foo {
   deftype Large = { med1: Medium, med2: Medium }
   extern("foo", "large")      fn large(a: Large, b: Large): Large
 
+  deftype HFA2 = { x: f32, y: f32 }
+  extern("foo", "hfa2_add") fn hfa2-add(a: HFA2, b: HFA2): HFA2
+
+  deftype HFA1 = { x: f32 }
+  deftype HFANested3 = { a: HFA1, b: f32, c: f32 }
+  extern("foo", "hfa_nested3_add") fn hfa-nested3-add(a: HFANested3, b: HFANested3): HFANested3
+
+  deftype HFA4 = { a: f64, b: f64, c: f64, d: f64 }
+  extern("foo", "hfa4_add") fn hfa4-add(a: HFA4, b: HFA4): HFA4
 
   deftype CXCursorKind = either(u32) { UnexposedDecl = 1, StructDecl = 2 }
   deftype CXCursor = {
@@ -72,6 +81,27 @@ fn testAll() {
   assertEquals(largeResult.med1.b, 22);
   assertEquals(largeResult.med2.a, 33);
   assertEquals(largeResult.med2.b, 44);
+
+  let hfa2 = foo/hfa2-add({ x: 1.0, y: 2.0 }, { x: 10.0, y: 20.0 });
+  assertEquals(hfa2.x, 11.0);
+  assertEquals(hfa2.y, 22.0);
+
+  let hfaNested3 = foo/hfa-nested3-add(
+    { a: { x: 1.0 }, b: 2.0, c: 3.0 },
+    { a: { x: 10.0 }, b: 20.0, c: 30.0 }
+  );
+  assertEquals(hfaNested3.a.x, 11.0);
+  assertEquals(hfaNested3.b, 22.0);
+  assertEquals(hfaNested3.c, 33.0);
+
+  let hfa4 = foo/hfa4-add(
+    { a: 1.0, b: 2.0, c: 3.0, d: 4.0 },
+    { a: 10.0, b: 20.0, c: 30.0, d: 40.0 }
+  );
+  assertEquals(hfa4.a, 11.0);
+  assertEquals(hfa4.b, 22.0);
+  assertEquals(hfa4.c, 33.0);
+  assertEquals(hfa4.d, 44.0);
 
   let cursor: foo/CXCursor = {
     kind: :UnexposedDecl,
