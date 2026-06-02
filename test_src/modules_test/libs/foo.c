@@ -108,3 +108,18 @@ CXSourceLocation getCursorLocation(CXCursor c) {
   locn.int_data = 42;
   return locn;
 }
+
+int takesFn(int(*fn)(uint64_t, uint64_t, uint64_t, uint64_t)) {
+  int result = fn(1,2,3,4);
+  return result;
+}
+struct takesFnStructArg { uint64_t a; uint64_t b; uint64_t c; uint64_t d; };
+int takesFnStruct(int(*fn)(struct takesFnStructArg)) {
+  struct takesFnStructArg in;
+  in.a = 1;
+  in.b = 2;
+  in.c = 3;
+  in.d = 4;
+  int result = fn(in);
+  return result;
+}
