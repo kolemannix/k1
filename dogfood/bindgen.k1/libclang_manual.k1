@@ -83,7 +83,7 @@ fn getCursorKindSpelling(kind: CXCursorKind): CXString
 // A value of this enumeration type should be returned by each
 // CXCursorVisitor to indicate how clang_visitChildren() proceed.
 //
-deftype CXChildVisitResult = either {
+deftype CXChildVisitResult = either(c-unsigned) {
   // Terminates the cursor traversal.
   Break,
   // Continues the cursor traversal with the next sibling of
@@ -207,7 +207,13 @@ deftype CXSourceLocation = {
 }
 
 extern("clang", "clang_getCursorLocation")
-fn getCursorLocation(CXCursor): CXSourceLocation 
+fn getCursorLocation(C: CXCursor): CXSourceLocation 
+
+extern("clang", "clang_getNullLocation")
+fn getNullLocation(): CXSourceLocation
+
+extern("clang", "clang_equalLocations")
+fn equalLocations(la: CXSourceLocation, CXSourceLocation): c-unsigned
 
 // Returns non-zero if the given source location is in a system header.
 extern("clang", "clang_Location_isInSystemHeader")
@@ -226,7 +232,7 @@ deftype alias CXDiagnostic = ptr
 extern("clang", "clang_getDiagnostic")
 fn getDiagnostic(Unit: CXTranslationUnit, Index: u32): CXDiagnostic
 
-deftype CXDiagnosticSeverity = either(u32) {
+deftype CXDiagnosticSeverity = either(c-unsigned) {
   CXDiagnostic_Ignored = 0,
   CXDiagnostic_Note = 1,
   CXDiagnostic_Warning = 2,
@@ -256,7 +262,7 @@ fn Type_getSizeOf(T: CXType): i64
 extern("clang", "clang_getFileName")
 fn getFileName(SFile: CXFile): CXString 
 
-deftype CXCursorKind = either {
+deftype CXCursorKind = either(c-unsigned) {
   // Declarations
   // A declaration whose specific kind is not exposed via this
   // interface.
@@ -1304,7 +1310,7 @@ deftype CXCursorKind = either {
   OverloadCandidate = 700
 }
 
-deftype CXTypeKind = either {
+deftype CXTypeKind = either(c-unsigned) {
   //*
   // Represents an invalid type (e.g., where no type is available).
   ///

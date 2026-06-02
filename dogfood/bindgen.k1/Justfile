@@ -4,7 +4,7 @@ default:
 rust-bindgen:
   bindgen -o file.rs http/httpserver.h -- \
     -Ihttp/ \
-    -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk \
+    -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk \
     -DKQUEUE
 
 build:
@@ -17,7 +17,7 @@ http: build
     -clangarg -xc \
     -clangarg -DKQUEUE \
     -clangarg -isysroot \
-    -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk \
+    -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk \
     -clangarg -Ihttp/ \
     > /Users/knix/dev/k1/dogfood/http/http.k1
 
@@ -27,7 +27,7 @@ libclang: build
 kqueue: build
   .k1-out/bindgen.k1 -system true -n kqueue -i kqueue/kqueue_bindings.c \
     -clangarg -isysroot \
-    -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk \
+    -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk \
     > kqueue/kqueue.k1
   cp kqueue/kqueue.k1 /Users/knix/dev/k1/dogfood/http/kqueue.k1
 
@@ -35,7 +35,16 @@ kqueue-lite: build
   .k1-out/bindgen.k1 -system true -n kqueue -i kqueue/kqueue_bindings.c \
     -include kevent -include socklen_t -include __darwin_socklen_t \
     -clangarg -isysroot \
-    -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk \
+    -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk \
     > kqueue/kqueue.k1
   cp kqueue/kqueue.k1 /Users/knix/dev/k1/dogfood/http/kqueue.k1
 
+io_uring-linux: build
+  .k1-out/bindgen.k1 -system true -n io_uring -i io_uring/io_uring_bindings.c \
+    -clangarg -isystem -clangarg /Users/knix/dev/k1-linux/llvm/install-llvm/lib/clang/21/include \
+    > io_uring/io_uring.k1
+
+basic-linux: build
+  .k1-out/bindgen.k1 -system false -n basic -i file.c \
+    -clangarg -isystem -clangarg /Users/knix/dev/k1-linux/llvm/install-llvm/lib/clang/21/include \
+    > basic.k1
