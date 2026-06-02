@@ -1015,15 +1015,11 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                                     k1_types::CompilerMessageLevel::Error => MessageLevel::Error,
                                 };
                                 let message = value_to_string_id(k1, message_arg).map_err(|msg| {
-                                    errf!(vm.eval_span, "Bad message string passed to EmitCompilerMessage: {msg}")
-                                })?;
-                                let filename =
-                                unsafe { location.filename.to_str() }.map_err(|msg| {
-                                    errf!(
-                                        vm.eval_span,
-                                        "Bad filename string passed to EmitCompilerMessage: {msg}"
-                                    )
-                                })?;
+                  errf!(vm.eval_span, "Bad message string passed to EmitCompilerMessage: {msg}")
+                })?;
+                                let filename = unsafe { location.filename.to_str() }.map_err(|msg| {
+                  errf!(vm.eval_span, "Bad filename string passed to EmitCompilerMessage: {msg}")
+                })?;
 
                                 eprintln!(
                                     "[{}:{} {}] {}",

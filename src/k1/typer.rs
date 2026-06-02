@@ -5588,7 +5588,10 @@ impl TypedProgram {
                 {
                     Ok(())
                 } else {
-                    Err("Expected a unique lambda, but got a different one. This probably shouldn't happen".into())
+                    Err(
+            "Expected a unique lambda, but got a different one. This probably shouldn't happen"
+              .into(),
+          )
                 }
             }
             (Type::LambdaObject(_lambda_object), Type::Lambda(_lambda_type)) => {
@@ -6114,12 +6117,14 @@ impl TypedProgram {
                     span,
                 ) {
                     Ok(imp) => imp,
-                    Err(e) => ice_span!(
-                        self,
-                        span,
-                        "Failed while generating builtin ability impl: {}",
-                        e.message
-                    ),
+                    Err(e) => {
+                        ice_span!(
+                            self,
+                            span,
+                            "Failed while generating builtin ability impl: {}",
+                            e.message
+                        )
+                    }
                 }
             }
             _ => unreachable!(),
@@ -10012,11 +10017,13 @@ impl TypedProgram {
                     self.report_warn(span, "Reference to Reference cast");
                     Ok(Outcome::Cast(CastType::ReferenceToReference))
                 }
-                _ => failf!(
-                    span,
-                    "Cannot cast reference to '{}'",
-                    self.type_id_to_string(target_type).blue()
-                ),
+                _ => {
+                    failf!(
+                        span,
+                        "Cannot cast reference to '{}'",
+                        self.type_id_to_string(target_type).blue()
+                    )
+                }
             },
             Type::FunctionPointer(_fp) => match self.types.get(target_type) {
                 Type::Pointer => Ok(Outcome::Cast(CastType::ReferenceToPointer)),

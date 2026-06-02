@@ -52,13 +52,32 @@ Large large(Large a, Large b) {
   return r;
 }
 
-typedef struct { float f1; float f2; } HFASmall;
-void hfa_small(HFASmall hfa1) {
-  return;
+typedef struct { float x; float y; } HFA2;
+HFA2 hfa2_add(HFA2 a, HFA2 b) {
+  HFA2 r;
+  r.x = a.x + b.x;
+  r.y = a.y + b.y;
+  return r;
 }
-typedef struct { double f1; double f2; double f3; double f4; } HFABig;
-void hfa_big(HFABig hfa1) {
-  return;
+
+typedef struct { float x; } HFA1;
+typedef struct { HFA1 a; float b; float c; } HFANested3;
+HFANested3 hfa_nested3_add(HFANested3 a, HFANested3 b) {
+  HFANested3 r;
+  r.a.x = a.a.x + b.a.x;
+  r.b = a.b + b.b;
+  r.c = a.c + b.c;
+  return r;
+}
+
+typedef struct { double a; double b; double c; double d; } HFA4;
+HFA4 hfa4_add(HFA4 x, HFA4 y) {
+  HFA4 r;
+  r.a = x.a + y.a;
+  r.b = x.b + y.b;
+  r.c = x.c + y.c;
+  r.d = x.d + y.d;
+  return r;
 }
 
 enum CXCursorKind {
