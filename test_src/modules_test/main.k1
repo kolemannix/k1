@@ -25,6 +25,28 @@ ns foo {
   extern("foo", "large")      fn large(a: Large, b: Large): Large
 
 
+  deftype CXCursorKind = either(u32) { UnexposedDecl = 1, StructDecl = 2 }
+  deftype CXCursor = {
+    kind: CXCursorKind,
+    xdata: i32,
+    data: array[ptr, 3]
+  }
+
+  extern("foo", "rtCursor") fn rtCursor(c: CXCursor): CXCursor
+
+  deftype CXString = {
+    data: ptr,
+    private_flags: u32,
+  }
+  extern("foo", "getFileName") fn getFileName(SFile: ptr): CXString 
+
+  deftype CXSourceLocation = {
+    ptr_data: array[ptr, 2],
+    int_data: u32,
+  }
+  extern("foo", "getCursorLocation")
+  fn getCursorLocation(c: CXCursor): CXSourceLocation 
+
 }
 
 fn testAll() {
@@ -44,6 +66,28 @@ fn testAll() {
   assertEquals(largeResult.med1.b, 22);
   assertEquals(largeResult.med2.a, 33);
   assertEquals(largeResult.med2.b, 44);
+
+  let cursor: foo/CXCursor = {
+    kind: :UnexposedDecl,
+    xdata: -42,
+    data: [1.as[ptr], 2.as[ptr], 3.as[ptr]]
+  };
+  let rt = foo/rtCursor(cursor);
+  assertEquals(cursor.kind.enum-value(), rt.kind.enum-value());
+  assertEquals(cursor.xdata, rt.xdata);
+  assertEquals(cursor.data.get(0), rt.data.get(0));
+  assertEquals(cursor.data.get(1), rt.data.get(1));
+  assertEquals(cursor.data.get(2), rt.data.get(2));
+
+  let n = foo/getFileName(ptr/null);
+  assertEquals(n.data.as[size], 3);
+  assertEquals(n.private_flags, 21);
+
+  let locn = foo/getCursorLocation(rt);
+  assertEquals(locn.ptr_data.get(0), 1.as[ptr]);
+  assertEquals(locn.ptr_data.get(1), 2.as[ptr]);
+  assertEquals(locn.int_data, 42);
+
 }
 
 fn main(): i32 {
