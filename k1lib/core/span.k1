@@ -29,8 +29,8 @@ ns for span {
     self.buffer
   }
 
-  fn dataPtr[T](self: span[T]): ptr {
-    self.buffer.dataPtr()
+  fn data-ptr[T](self: span[T]): ptr {
+    self.buffer.data-ptr()
   }
 
   fn empty[T](): span[T] {

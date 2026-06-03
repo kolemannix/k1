@@ -1,0 +1,19 @@
+fn test(): i32 {
+  let context alloc-mode: alloc-mode = :tmp;
+  let core-args: span[string] = [
+    "-system",  "false",
+    "-n",       "test",
+    "-i",       "test/input.c"
+  ];
+  let args = #if k1/os is :macos {
+    core-args.concat([
+      "clangarg", "-isysroot",
+      "clangarg", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk"
+    ])
+  } else core-args;
+  let output = start(args);
+
+  // TODO: Use 'diff' instead sys/cmd("diff", "input.c", "test/output.k1")
+  assertEquals(output, core/files/readToString("test/output.k1"));
+  0
+}

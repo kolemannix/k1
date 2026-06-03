@@ -178,13 +178,11 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                 TestExpectation::ExitCode { .. } | TestExpectation::AbortErrorMessage { .. }
             );
             if expect_exit {
-                let output_executable = !interpret;
                 let codegen = compiler::codegen_module(
                     &args,
                     ctx,
                     &mut typed_program,
                     &out_dir,
-                    output_executable,
                 )?;
 
                 if interpret {

@@ -1,0 +1,4 @@
+bindgen-llhttp:
+  k1bindgen -i libs/llhttp.h -o llhttp.k1 -n llhttp \
+    -clangarg -I/Library/Developer/CommandLineTools/usr/lib/clang/21/include \
+    -exclude max_align_t

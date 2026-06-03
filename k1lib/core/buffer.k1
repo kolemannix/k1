@@ -17,7 +17,7 @@ ns for buffer {
 
   fn sizeBytes[T](self: buffer[T]): size { bufferSizeBytes[T](self.len) }
 
-  fn dataPtr[T](self: buffer[T]): ptr { self.data.as[ptr] }
+  fn data-ptr[T](self: buffer[T]): ptr { self.data.as[ptr] }
 
   fn len[T](self: buffer[T]): size { self.len }
 
@@ -107,7 +107,7 @@ ns for buffer {
       let newSize = bufferSizeBytes[T](newCount);
       let oldSize = bufferSizeBytes[T](self.len);
       let newPtr = alloc.realloc(
-        ptr = self.dataPtr(),
+        ptr = self.data-ptr(),
         oldSize = oldSize,
         align = core/types/align[T](),
         newSize = newSize,
@@ -134,7 +134,7 @@ ns for buffer {
       crash("Buffer copy dst index out of bounds: {src.len} > {dst.len}")
     };
     let numBytes = bufferSizeBytes[T](src.len);
-    mem/copy(dst = dst.dataPtr(), src = src.dataPtr(), count = numBytes);
+    mem/copy(dst = dst.data-ptr(), src = src.data-ptr(), count = numBytes);
   }
 
   fn clonedIn[T](context mode: mem/alloc-mode)(self: buffer[T]): buffer[T] {
@@ -150,7 +150,7 @@ ns for buffer {
   }
 
   fn getRefUnchecked[T](self: buffer[T], index: size): *mut T {
-    self.dataPtr().ref-at-index[T](index)
+    self.data-ptr().ref-at-index[T](index)
   }
 
   fn getUnchecked[T](self: buffer[T], index: size): T {
@@ -171,7 +171,7 @@ ns for buffer {
 
   fn memset[T](self: buffer[T], value: u8): empty {
     mem/set(
-      dst = self.dataPtr(),
+      dst = self.data-ptr(),
       value = value,
       count = self.len
     );
@@ -289,14 +289,14 @@ ns for buffer {
   fn as-char-buffer(self: buffer[byte]): buffer[char] {
     buffer/fromPtrAndCount[char](
       count = self.len,
-      ptr = self.dataPtr()
+      ptr = self.data-ptr()
     );
   }
 
   fn asByteBuffer(self: buffer[char]): buffer[byte] {
     buffer/fromPtrAndCount[byte](
       count = self.len,
-      ptr = self.dataPtr()
+      ptr = self.data-ptr()
     );
   }
 

@@ -20,7 +20,7 @@ fn response-to-http(context alloc-mode)(response): http/http_response_s {
   let http-response = http/http_response_init();
   http/http_response_status(http-response, 200);
   for response.headers {
-    http/http_response_header(http-response, it.name.toCString().ptr.as(), it.value.toCString().ptr.as());
+    http/http_response_header(http-response, it.name.to-c().ptr.as(), it.value.to-c().ptr.as());
   };
   http/http_response_body(http-response, response.body.buffer.data.as(), response.body.len() as i32);
   http-response
@@ -52,14 +52,14 @@ fn handler(req: *mut http/http_request_s) {
       s.string("\n\n");
       s.string(`<div class="text-red-400">Hello, World!</div>`);
       let s = s.build-tmp();
-      http/http_response_body(response, s.dataPtr().as(), s.len() as i32);
-      http/http_response_header(response, "Content-Type\0".dataPtr().as(), "text/html\0".dataPtr().as());
+      http/http_response_body(response, s.data-ptr().as(), s.len() as i32);
+      http/http_response_header(response, "Content-Type\0".data-ptr().as(), "text/html\0".data-ptr().as());
     },
     // "/output.css" -> {
     //   let context alloc-mode = alloc-mode:tmp;
     //   let css = core/files/readToString("web/public/output.css");
-    //   http/http_response_header(response, "Content-Type\0".dataPtr().as(), "text/css\0".dataPtr().as());
-    //   http/http_response_body(response, css.dataPtr().as(), css.len() as i32);
+    //   http/http_response_header(response, "Content-Type\0".data-ptr().as(), "text/css\0".data-ptr().as());
+    //   http/http_response_body(response, css.data-ptr().as(), css.len() as i32);
     // },
     t -> {
       eprintln("returning 404: {t}");

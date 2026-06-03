@@ -79,7 +79,7 @@ ns for list {
   fn copyToArray[T, N: static size](self: list[T], count: N): *mut array[T, N] {
     let countVal = count.from-static();
     assertEquals(self.len, countVal);
-    let base: ptr = self.asBuffer().cloned().dataPtr();
+    let base: ptr = self.asBuffer().cloned().data-ptr();
     base.as()
   }
 

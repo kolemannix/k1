@@ -1,9 +1,62 @@
 let MODULE_INFO: k1/module-manifest = {
   kind: :executable,
-  libs: [{ link-type: :default, name: "llhttp" }],
+  libs: [{ link-type: :static, name: "llhttp" }],
   deps: [],
   multithreading: false,
   link-args: [],
 }
 
-fn main(): i32 { 0 }
+deftype request-state = {
+  url: list[char],
+}
+
+fn handle_on_message_complete(parser: *mut lib/llhttp_t): i32 {
+  println("Complete!");
+  0
+}
+
+fn on_url_part(parser: *mut lib/llhttp_t, data: *mut i8, count: usize): i32 {
+  let request-state = parser.data.rw[request-state];
+  let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
+  println("on_url_part: appending {bytes}...");
+  request-state.url*.write-bytes(bytes);
+  0
+}
+
+fn on_url_complete(parser: *mut lib/llhttp_t): i32 {
+  let request-state = parser.data.rw[request-state];
+  let url = string/from-span(request-state.url.as-span());
+  println("complete url: {url}");
+  0
+}
+
+fn main(): i32 { 
+  let parser: lib/llhttp_t = uninit;
+  let settings: lib/llhttp_settings_t = uninit;
+
+  lib/llhttp_settings_init(&settings);
+
+  &settings.on_message_complete* <- handle_on_message_complete;
+  &settings.on_url* <- on_url_part;
+  &settings.on_url_complete* <- on_url_complete;
+  lib/llhttp_init(&parser, lib/llhttp_type:HTTP_BOTH, &settings);
+  let parse-state: *mut request-state = mem/new({ url: list/empty() });
+  &parser.data* <- parse-state.as[ptr];
+
+  let request1 = "GET /index.ht";
+  let request2 = "ml HTTP/1.1\r\n\r\n";
+
+  let res1 = lib/llhttp_execute(&parser, request1.data-ptr().as(), request1.len().as[usize]);
+  let res2 = lib/llhttp_execute(&parser, request2.data-ptr().as(), request2.len().as[usize]);
+  switch res1 {
+    :HPE_OK -> println("Success!"),
+    _ -> {
+      let err-name = string/wrap-c(lib/llhttp_errno_name(res1).as[ptr]);
+      let err-reason = string/wrap-c(lib/llhttp_get_error_reason(&parser).as[ptr]);
+      println("ERROR: {err-name} {err-reason}");
+      writelnf(core/io/stdout, "ERROR: {} {}", { err-name, err-reason });
+    }
+  };
+
+  0
+}
