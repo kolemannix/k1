@@ -1079,14 +1079,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn mapped_abi_type_return(
-        &self,
+        &mut self,
         pt: PhysicalType,
         abi_mapping: AbiParamMapping,
     ) -> Option<BasicTypeEnum<'ctx>> {
         if pt.is_empty() { None } else { Some(self.mapped_abi_type_param(pt, abi_mapping)) }
     }
     fn mapped_abi_type_param(
-        &self,
+        &mut self,
         pt: PhysicalType,
         abi_mapping: AbiParamMapping,
     ) -> BasicTypeEnum<'ctx> {
@@ -1140,7 +1140,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     ScalarType::F64 => self.ctx.f64_type().as_basic_type_enum(),
                     _ => panic!("HFA element must be f32 or f64"),
                 };
-                let fields: Vec<_> = (0..count).map(|_| element_type).collect();
+                let mut fields = self.tmp.new_list(count);
+                for _ in 0..count {
+                    fields.push(element_type);
+                }
                 self.ctx.struct_type(&fields, false).as_basic_type_enum()
             }
             AbiParamMapping::StructByIntPairArray => {
@@ -2674,6 +2677,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         is_return: bool,
     ) -> AbiParamMapping {
         enum CallConv {
+            #[allow(unused)]
             InternalK1,
             AMD64,
             ARM64,

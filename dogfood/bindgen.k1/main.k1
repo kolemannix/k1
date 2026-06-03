@@ -1,7 +1,7 @@
 let MODULE_INFO: k1/module-manifest = {
   let llvm-path = if k1/os is :linux "/Users/knix/dev/k1-linux/llvm/install-llvm/lib"
                   else               "/Users/knix/dev/k1/llvm/install-llvm/lib";
-  println("using llvm path {llvm-path}");
+  print("using llvm path {llvm-path}");
   {
     kind: :executable,
     deps: [],
@@ -97,10 +97,6 @@ fn main(argc: c-int, argv: ptr): i32 {
     exclude-names,
     include-names,
   };
-  info("root cursor: {cursor.kind.enum-name()}");
-  info("root cursor: {cursor.xdata}");
-  info("root cursor: {cursor.data.get(0)}");
-  info("root cursor: {cursor.data.get(1)}");
   clang/visitChildren(
     parent = cursor,
     visitor = visit-root,
@@ -219,6 +215,7 @@ fn write-k1-type[w: writer](w, k1-type, indent: size) {
         write-named-type(w, it.name, it.type, indent + 1);
         w.line(",");
       };
+      w.repeat("  ", indent);
       w.string("}")
     },
     :enum(e) -> {
@@ -328,7 +325,7 @@ fn visit-struct-member(
     },
     :StructDecl -> {
       // Anonymous member
-      let is-anon = clang/Cursor_isAnonymousRecordDecl(current).as-bool();
+      let is-anon = clang/Cursor_isAnonymous(current).as-bool();
       if is-anon {
         info("recursing into struct member {cursor-spelling}");
         let anon-result = visit-struct(current);
@@ -344,7 +341,7 @@ fn visit-struct-member(
         let cx-type = clang/getCursorType(current);
         let type = map-type(cx-type);
         
-        info("What to do with non-anon structdecl in struct member: {cursor-display-name}");
+        info("What to do with non-anon structdecl in struct member dn: {cursor-display-name}");
         info("type kind: {cx-type.kind.enum-name()}");
         info("spelling: {cursor-spelling}");
         result.struct*.fields*.push({ name: field-name, type });
@@ -418,17 +415,11 @@ fn visit-root(
   _parent: CXCursor,
   client-data: clang/CXClientData,
 ): clang/CXChildVisitResult {
-  info("VISIT ROOT");
-
   let cursor-kind = clang/getCursorKind(current);
-  info("2 kind {current.kind.enum-value()} kind {cursor-kind.enum-value()}");
-  info("  {current.kind.enum-name()}");
   let data = client-data.as[*mut BindgenState];
-  info("3");
 
   let display-name = clang/getCursorDisplayName(current).to-k1();
   info("visit-root {display-name}");
-  info("4");
   let maybe-locn = get-location(current);
   let is-system = if maybe-locn is :some(locn) clang/Location_isInSystemHeader(locn.location) != 0 else {
     info("ERROR: Got null location for cursor '{display-name}'");
@@ -595,15 +586,16 @@ fn map-type(cx-type: clang/CXType): k1-type {
         "uintptr_t" -> :simple("ptr"),
         "intptr_t"  -> :simple("ptr"),
         "ptrdiff_t" -> :simple("size"),
+        "size_t"    -> :simple("usize"),
         "int8_t"    -> :simple("i8"),
         "int16_t"   -> :simple("i16"),
         "int32_t"   -> :simple("i32"),
-        "__int32_t"   -> :simple("i32"),
+        "__int32_t" -> :simple("i32"),
         "int64_t"   -> :simple("i64"),
         "uint8_t"   -> :simple("u8"),
         "uint16_t"  -> :simple("u16"),
         "uint32_t"  -> :simple("u32"),
-        "__uint32_t"  -> :simple("u32"),
+        "__uint32_t"-> :simple("u32"),
         "uint64_t"  -> :simple("u64"),
         _ -> :simple(name)
       }

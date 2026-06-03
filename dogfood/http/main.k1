@@ -1,79 +1,9 @@
 let MODULE_INFO: k1/module-manifest = {
-  {
-    kind: :executable,
-    deps: [],
-    multithreading: false,
-    libs: [{ link-type: :static, name: "httpserver" }],
-    link-args: [
-      
-    ],
-  }
+  kind: :executable,
+  libs: [{ link-type: :default, name: "llhttp" }],
+  deps: [],
+  multithreading: false,
+  link-args: [],
 }
 
-deftype response = {
-  status: u32,
-  headers: span[{ name: string, value: string }],
-  body: span[u8]
-}
-
-fn response-to-http(context alloc-mode)(response): http/http_response_s {
-  let http-response = http/http_response_init();
-  http/http_response_status(http-response, 200);
-  for response.headers {
-    http/http_response_header(http-response, it.name.toCString().ptr.as(), it.value.toCString().ptr.as());
-  };
-  http/http_response_body(http-response, response.body.buffer.data.as(), response.body.len() as i32);
-  http-response
-}
-
-let output-css: string = core/files/readToString(context :current)("web/public/output.css")
-let head: string =
-`<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    {output-css}
-  </style>
-  <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.1/bundles/datastar.js"></script>
-</head>`
-
-fn str(s: http/http_string_s): string { string/fromRaw(ptr = s.buf.as[ptr], len = s.len.as[size]) }
-
-// Now we just have to put handler in a dylib
-fn handler(req: *mut http/http_request_s) {
-  let response = http/http_response_init();
-  http/http_response_status(response, 200);
-  let target = str(http/http_request_target(req));
-  println("target: `{target}`");
-  switch target {
-    "/" or "/index.html" -> {
-      let s = StringBuilder/new();
-      s.string(head);
-      s.string("\n\n");
-      s.string(`<div class="text-red-400">Hello, World!</div>`);
-      let s = s.build-tmp();
-      http/http_response_body(response, s.dataPtr().as(), s.len() as i32);
-      http/http_response_header(response, "Content-Type\0".dataPtr().as(), "text/html\0".dataPtr().as());
-    },
-    // "/output.css" -> {
-    //   let context alloc-mode = alloc-mode:tmp;
-    //   let css = core/files/readToString("web/public/output.css");
-    //   http/http_response_header(response, "Content-Type\0".dataPtr().as(), "text/css\0".dataPtr().as());
-    //   http/http_response_body(response, css.dataPtr().as(), css.len() as i32);
-    // },
-    t -> {
-      eprintln("returning 404: {t}");
-      http/http_response_status(response, 404);
-
-    }
-  };
-  // Apparently http_response_header mallocs...
-  http/http_respond(req, response);
-  mem/tmp().reset(false);
-}
-
-fn main(): i32 {
-  let server: http/http_server_s = http/http_server_init(9091, handler);
-  http/http_server_listen(&server);
-  0
-}
+fn main(): i32 { 0 }

@@ -29,27 +29,25 @@ valgrind-linux:
   cargo build --profile profiling
   valgrind --tool=callgrind --dump-instr=yes --collect-jumps=yes --callgrind-out-file=cg.out target/profiling/k1 c test_src/suite1
 
-bundle-linux-from-linux: 
+bundle-linux: 
   just lsprelease
   just build-k1r
   cargo build --profile release --bin k1_test
   ./builds/bundle.sh target/release builds/k1-linux-x86
 
-install-linux-from-linux: bundle-linux-from-linux
+install-linux: bundle-linux
   tar -xzf builds/k1-linux-x86.tar.gz -C builds
   cd builds/k1-linux-x86 && ./install.sh
-  rm -r builds/k1-linux-x86
 
-bundle-macos-from-macos:
+bundle-macos:
   just lsprelease
   just build-k1r
   cargo build --profile release --bin k1_test
   ./builds/bundle.sh target/release builds/k1-macos
 
-install-macos-from-macos: bundle-macos-from-macos
+install-macos: bundle-macos
   tar -xzf builds/k1-macos.tar.gz -C builds
   cd builds/k1-macos && ./install.sh
-  rm -r builds/k1-macos
 
 install-k1lib:
   # rm -r ~/.k1/k1lib
