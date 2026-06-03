@@ -2,6 +2,7 @@
 
 
 Minor and ideas
+- [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [X] Specialization solution (when types are known by the function)
 - [x] Destructuring, (in)fallible patterns

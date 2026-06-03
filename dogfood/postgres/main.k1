@@ -37,7 +37,7 @@ fn c-string-or-default(c-str: ptr, fallback: string): string {
 }
 
 fn connect(context alloc: mem/alloc-mode)(conninfo: string): result[Connection, string] {
-  let conninfo-c = conninfo.toCString();
+  let conninfo-c = conninfo.to-c();
   let conn = pg/connectdb(conninfo-c.ptr);
   if conn.is-null() {
     return(:err("PQconnectdb returned null"))
@@ -61,7 +61,7 @@ ns Connection {
   }
 
   fn exec(context alloc: mem/alloc-mode)(self: Connection, query: string): result[QueryResult, string] {
-    let query-c = query.toCString();
+    let query-c = query.to-c();
     let raw-result = pg/exec(self.raw, query-c.ptr);
     if raw-result.is-null() {
       return(:err("PQexec returned null"))

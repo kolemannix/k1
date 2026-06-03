@@ -100,7 +100,7 @@ ns io {
     fn write-bytes(self, bytes: span[byte]) {
       posix/write(
         file-no = self.fileNo,
-        data = bytes.dataPtr(),
+        data = bytes.data-ptr(),
         count = bytes.len().as[c-sizet]
       );
       {}
@@ -157,9 +157,9 @@ ns sys {
 ns files {
 
   fn readToString(context alloc-mode: mem/alloc-mode)(path: string): string {
-    let filenameCString = path.toCString(context :tmp)();
+    let filenameCString = path.to-c(context :tmp)();
 
-    let file = libc/files/fopen(filenameCString.ptr, "r\0".toCString().ptr);
+    let file = libc/files/fopen(filenameCString.ptr, "r\0".data-ptr());
     if file.is-null() {
       crash("fopen failed: `{path}`");
     };
@@ -170,11 +170,23 @@ ns files {
     let buf = buffer/allocateIn[char](file-size-bytes);
 
     libc/files/fseek(file, 0, libc/files/SEEK_SET);
-    libc/files/fread(buf.dataPtr(), buf.len(), 1, file);
+    libc/files/fread(buf.data-ptr(), buf.len(), 1, file);
     let string = string/wrapBuffer(buf);
 
     string
   }
+
+  fn write-entire-file(out-path: string, contents: string) {
+    let out-path-c = out-path.to-c-tmp();
+    let FILE = libc/files/fopen(out-path-c.ptr, $string/c-lit("w"));
+    defer libc/files/fclose(FILE);
+
+    let write-res = libc/files/fwrite(contents.data-ptr(), 1, contents.len(), FILE);
+    if write-res.as[size] != contents.len() {
+      crash("fwrite of {out-path} failed");
+    };
+  }
+
 }
 
 fn assertMsg(context locn: compiler/source-location)(msg: string, value: bool) {
@@ -514,11 +526,11 @@ ns for f64 {
   }
   fn parse-string(s: string, require-total: bool): result[{ value: f64, len: size }, string] {
     let out: f64 = uninit;
-    let result = ffc/parse_double(s.len(), s.dataPtr(), &out);
+    let result = ffc/parse_double(s.len(), s.data-ptr(), &out);
     if not ffc/result_is_ok(result) {
       :err("Could not parse '{s}' as f64")
     } else {
-      let len = result.ptr.diff(s.dataPtr());
+      let len = result.ptr.diff(s.data-ptr());
       if require-total and len != s.len() {
         :err("Parsed an f64 but there was stuff at the end: {len} vs {s.len()}")
       } else {

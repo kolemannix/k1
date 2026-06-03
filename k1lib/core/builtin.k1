@@ -408,7 +408,7 @@ ns for buffer {
   fn equals-bits[t](self: buffer[t], other: buffer[t]): bool {
     if self.len == 0 and other.len == 0 true
     else if self.len != other.len       false else {
-      mem/equals(self.dataPtr(), other.dataPtr(), self.sizeBytes())
+      mem/equals(self.data-ptr(), other.data-ptr(), self.sizeBytes())
     }
   }
 }
@@ -752,9 +752,10 @@ ns libc {
     let SEEK_SET: i32 = 0
     extern("fopen")  fn fopen(path-c-string: ptr, mode-c-string: ptr): ptr
     extern("fseek")  fn fseek(file-desc: ptr, offset: i64, whence: i32): i32
-    extern("fread")  fn fread(buffer: ptr, size: size, num: size, stream: ptr): c-sizet
+    extern("fread")  fn fread(buffer: ptr, size: size, num: size, stream: ptr): usize
     extern("fclose") fn fclose(file-desc: ptr): c-int
     extern("ftell")  fn ftell(file-desc: ptr): c-long
+    extern("fwrite") fn fwrite(data-ptr: ptr, item-size: size, item-count: size, file-desc: ptr): usize
   }
 
   extern("strtod") fn strtod(nptr: ptr, endptr: *mut ptr): f64
@@ -776,8 +777,8 @@ fn crash(context locn: compiler/source-location)(msg: string): never {
     let s = "exiting (nostd)\n\0";
     posix/write(
       file-no = 1,
-      data = s.span().dataPtr(),
-      count = (s.span().len() - 1).as[c-sizet],
+      data = s.data-ptr(),
+      count = (s.len() - 1).as[c-sizet],
     );
     sys/exit(1)
   } else if k1/is-static {

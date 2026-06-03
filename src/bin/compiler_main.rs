@@ -7,6 +7,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use k1::compiler;
 use k1::compiler::{Args, Command};
+use log::info;
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -47,9 +48,7 @@ fn run() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     };
     if args.command.is_check() {
-        // Note: I wouldn't mind switching back to exit for the faster
-        // exit, but this was hiding a memory bug that causes the lsp
-        // and test suite to crash when we try to drop the TypedModule.
+        // In release builds, just exit fast
         if cfg!(debug_assertions) {
             return Ok(ExitCode::SUCCESS);
         } else {
@@ -57,17 +56,22 @@ fn run() -> anyhow::Result<ExitCode> {
         }
     };
     let llvm_ctx = inkwell::context::Context::create();
-    return match compiler::codegen_module(&args, &llvm_ctx, &mut program, &out_dir, true) {
+    return match compiler::codegen_module(&args, &llvm_ctx, &mut program, &out_dir) {
         Ok(cg) => match args.command {
             Command::Check { .. } => unreachable!(),
             Command::Build { .. } => Ok(ExitCode::SUCCESS),
             Command::Run { .. } => {
-                compiler::run_compiled_program(&out_dir, cg.name());
+                info!("run executable: {}", cg.name());
+                let (_, home_dir) = k1::compiler::module_home_from_src_path(&cg.k1.config.src_path);
+                compiler::run_compiled_program(&out_dir, &home_dir, cg.name(), false);
                 Ok(ExitCode::SUCCESS)
             }
             Command::Test { .. } => {
-                eprintln!("k1 test is unimplemented. So you get a free pass.");
-                Ok(ExitCode::SUCCESS)
+                info!("test executable: {}", cg.name());
+                let (_, home_dir) = k1::compiler::module_home_from_src_path(&cg.k1.config.src_path);
+                let exit_code =
+                    compiler::run_compiled_program(&out_dir, &home_dir, cg.name(), true);
+                if exit_code != Some(0) { Ok(ExitCode::FAILURE) } else { Ok(ExitCode::SUCCESS) }
             }
             Command::Repl { .. } => {
                 let mut line = String::new();

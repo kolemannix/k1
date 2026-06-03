@@ -11,7 +11,7 @@ use crate::parse::write_source_location;
 use crate::typer::{LibRefLinkType, MessageLevel, TypedProgram};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
-use log::info;
+use log::{error, info};
 
 use crate::codegen_llvm::Cg;
 
@@ -256,9 +256,7 @@ pub enum CompileProgramError {
     TyperFailure(Box<TypedProgram>),
 }
 
-/// Requires a canonicalized src_path
-/// Returned pair is (parent_dir, source_files)
-pub fn discover_source_files(src_path: &Path) -> (PathBuf, Vec<PathBuf>) {
+pub fn module_home_from_src_path(src_path: &Path) -> (bool, PathBuf) {
     let is_dir = src_path.is_dir();
     let src_dir = if is_dir {
         let src_dir = src_path;
@@ -267,7 +265,13 @@ pub fn discover_source_files(src_path: &Path) -> (PathBuf, Vec<PathBuf>) {
         let src_dir = src_path.parent().unwrap().to_path_buf();
         src_dir
     };
+    (is_dir, src_dir)
+}
 
+/// Requires a canonicalized src_path
+/// Returned pair is (parent_dir, source_files)
+pub fn discover_source_files(src_path: &Path) -> (PathBuf, Vec<PathBuf>) {
+    let (is_dir, src_dir) = module_home_from_src_path(src_path);
     let src_filter: &dyn Fn(&Path) -> bool =
         &|p: &Path| p.extension().is_some_and(|ext| ext == "k1");
     let dir_entries = if is_dir {
@@ -530,11 +534,14 @@ pub fn codegen_module<'ctx, 'module>(
     ctx: &'ctx Context,
     typed_module: &'module mut TypedProgram,
     out_dir: &Path,
-    do_write_executable: bool,
 ) -> Result<Cg<'ctx, 'module>> {
     let mut codegen = Cg::create(ctx, typed_module, args.debug, args.optimize);
-    let module_name = codegen.name().to_string();
+    let mut module_name = codegen.name().to_string();
+    if args.command.is_test() {
+        module_name.push_str("_test");
+    };
     let module_name_path = PathBuf::from(&module_name);
+
     if let Err(e) = codegen.codegen_program() {
         let use_color = std::io::stderr().is_terminal();
         write_source_location(
@@ -566,32 +573,37 @@ pub fn codegen_module<'ctx, 'module>(
             .expect("Failed to create .ll file");
         f.write_all(llvm_text.as_bytes()).unwrap();
     }
-    if do_write_executable {
-        let path = out_dir.join(module_name_path.with_extension("o"));
-        if codegen.emit_object_file(&path).is_err() {
-            bail!("Error writing object file to path: {}", path.display());
-        }
+
+    let path = out_dir.join(module_name_path.with_extension("o"));
+    if codegen.emit_object_file(&path).is_err() {
+        bail!("Error writing object file to path: {}", path.display());
     }
 
-    if do_write_executable {
-        write_executable(codegen.k1, &module_name_path, &[])?;
-    }
+    write_executable(codegen.k1, &module_name_path, &[])?;
 
     Ok(codegen)
 }
 
 // Eventually, we want to return output and exit code to the application
-pub fn run_compiled_program(out_dir: &Path, module_name: &str) {
-    let mut run_cmd = std::process::Command::new(format!("{}/{}", out_dir.display(), module_name));
+pub fn run_compiled_program(out_dir: &Path, program_home_dir: &Path, module_name: &str, is_test: bool) -> Option<i32> {
+    let mut run_cmd = std::process::Command::new(format!(
+        "{}/{}{}",
+        out_dir.display(),
+        module_name,
+        if is_test { "_test" } else { "" }
+    ));
+    run_cmd.current_dir(program_home_dir);
     log::debug!("Run Command: {:?}", run_cmd);
     let run_status = run_cmd.status().unwrap();
 
     match run_status.code() {
         Some(code) => {
-            info!("Program exited with code: {}", code);
+            info!("{} exited with code: {}", module_name, code);
+            Some(code)
         }
         None => {
-            info!("Program was terminated with signal: {:?}", run_status.signal());
+            error!("{} was terminated with signal: {:?}", module_name, run_status.signal());
+            None
         }
     }
 }

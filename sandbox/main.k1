@@ -1,6 +1,6 @@
 deftype foo = { x: int }
 
-#debug fn main(argc: int, argv: ptr): i32 {
+fn main(argc: int, argv: ptr): i32 {
   let x: either { xs(int), s(u8), m(ptr), l, xl(string) } = :xs(4);
   x == x;
 

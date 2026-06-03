@@ -40,7 +40,7 @@ let PURPLE: raylib/Color = { r: 200, g: 122, b: 255, a: 255 }
 
 fn run(title: string): i32 {
   let context alloc-mode: mem/alloc-mode = .arena;
-  let titleC = title.toCString();
+  let titleC = title.to-c();
   raylib/init(800, 450, titleC.ptr);
   raylib/SetTargetFPS(60);
 
@@ -53,7 +53,7 @@ fn run(title: string): i32 {
     let color = if i < 100 PURPLE else PINK;
     ClearBackground(color);
     raylib/BeginDrawing();
-    DrawText("Congrats! (fps: {fps})".toCString().ptr, 200, 200, GRAY);
+    DrawText("Congrats! (fps: {fps})".to-c().ptr, 200, 200, GRAY);
     raylib/EndDrawing();
     i := i + 1;
     if i == 2000 { i := 0 };

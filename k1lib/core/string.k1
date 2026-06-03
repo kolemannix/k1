@@ -2,6 +2,8 @@
 // All rights reserved.
 
 ns for string {
+
+  fn c-lit(s: string): string { `"{s}\\0".data-ptr()` }
   
   fn span(self: string): span[char] { self.span }
 
@@ -146,14 +148,17 @@ ns for string {
     self.substring(0, other.len()) == other
   }
 
-  fn dataPtr(self: string): ptr {
-    self.span.dataPtr()
+  fn data-ptr(self: string): ptr { self.span.data-ptr() }
+
+  // Converts self to a c-style (NUL byte terminated) string
+  fn to-c(context alloc: mem/alloc-mode)(self: string): { ptr: ptr, len: size } {
+    if self.isEmpty()                  { ptr: "\0".data-ptr(), len: 0 }
+    else if self.last() is :some('\0') { ptr: self.data-ptr(), len: self.len() - 1 }
+    else                               { ptr: self.appendCharIn('\0').data-ptr(), len: self.len() }
   }
 
-  fn toCString(context alloc: mem/alloc-mode)(self: string): { ptr: ptr, len: size } {
-    if self.isEmpty()                  { ptr: "\0".dataPtr(), len: 0 }
-    else if self.last() is :some('\0') { ptr: self.dataPtr(), len: self.len() - 1 }
-    else                               { ptr: self.appendCharIn('\0').dataPtr(), len: self.len() }
+  fn to-c-tmp(self: string): { ptr: ptr, len: size } {
+    self.to-c(context :tmp)()
   }
 
   fn wrap-c(cString: ptr): string {
