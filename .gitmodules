@@ -1,3 +1,6 @@
 [submodule "dogfood/http/llhttp"]
 	path = dogfood/http/llhttp
 	url = git@github.com:nodejs/llhttp.git
+[submodule "dogfood/http/libuv"]
+	path = dogfood/http/libuv
+	url = https://github.com/libuv/libuv.git

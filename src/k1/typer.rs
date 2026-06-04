@@ -11216,12 +11216,13 @@ impl TypedProgram {
         let n = fn_call.name.name;
 
         // Method or f(x) syntax
-        if n == self.ast.idents.b.with {
+        if n == self.ast.idents.b.with && fn_call.args.len() == 2 {
             let base = MaybeTypedExpr::Parsed(self.ast.mem.get_nth(fn_call.args, 0).value);
             let res = self.compile_patch_struct(base, fn_call, ctx)?;
             return Ok(Some(res));
         }
 
+        // Method syntax only
         if !fn_call.is_method {
             if n == self.ast.idents.b.return_ {
                 if ctx.flags.contains(EvalExprFlags::Defer) {
