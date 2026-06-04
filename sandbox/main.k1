@@ -1,8 +1,6 @@
 deftype foo = { x: int }
 
 fn main(argc: int, argv: ptr): i32 {
-  let x: either { xs(int), s(u8), m(ptr), l, xl(string) } = :xs(4);
-  x == x;
-
+  eprintln("asdfasdf");
   0
 }

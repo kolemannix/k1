@@ -11,7 +11,7 @@ build:
   k1 b .
 
 install:
-  k1 --optimize b .
+  k1 b .
   rm ~/.k1/bin/k1bindgen
   cp .k1-out/k1bindgen ~/.k1/bin/k1bindgen
 
