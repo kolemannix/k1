@@ -10,8 +10,13 @@ rust-bindgen:
 build:
   k1 b .
 
+install:
+  k1 --optimize b .
+  rm ~/.k1/bin/k1bindgen
+  cp .k1-out/k1bindgen ~/.k1/bin/k1bindgen
+
 http: build
-  .k1-out/bindgen.k1 \
+  .k1-out/k1bindgen \
     -n http \
     -i http/httpserver.h \
     -clangarg -xc \
@@ -22,17 +27,17 @@ http: build
     > /Users/knix/dev/k1/dogfood/http/http.k1
 
 libclang: build
-  .k1-out/bindgen.k1 -n libclang > libclang_auto.k1.wip
+  .k1-out/k1bindgen -n libclang > libclang_auto.k1.wip
 
 kqueue: build
-  .k1-out/bindgen.k1 -system true -n kqueue -i kqueue/kqueue_bindings.c \
+  .k1-out/k1bindgen -system true -n kqueue -i kqueue/kqueue_bindings.c \
     -clangarg -isysroot \
     -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk \
     > kqueue/kqueue.k1
   cp kqueue/kqueue.k1 /Users/knix/dev/k1/dogfood/http/kqueue.k1
 
 kqueue-lite: build
-  .k1-out/bindgen.k1 -system true -n kqueue -i kqueue/kqueue_bindings.c \
+  .k1-out/k1bindgen -system true -n kqueue -i kqueue/kqueue_bindings.c \
     -include kevent -include socklen_t -include __darwin_socklen_t \
     -clangarg -isysroot \
     -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk \
@@ -40,15 +45,15 @@ kqueue-lite: build
   cp kqueue/kqueue.k1 /Users/knix/dev/k1/dogfood/http/kqueue.k1
 
 io_uring-linux: build
-  .k1-out/bindgen.k1 -system true -n io_uring -i io_uring/io_uring_bindings.c \
+  .k1-out/k1bindgen -system true -n io_uring -i io_uring/io_uring_bindings.c \
     -clangarg -isystem -clangarg /Users/knix/dev/k1-linux/llvm/install-llvm/lib/clang/21/include \
     > io_uring/io_uring.k1
 
 basic-linux: build
-  .k1-out/bindgen.k1 -system false -n basic -i file.c \
+  .k1-out/k1bindgen -system false -n basic -i file.c \
     -clangarg -isystem -clangarg /Users/knix/dev/k1-linux/llvm/install-llvm/lib/clang/21/include \
     > basic.k1
 
 basic-linux-dbg:
   k1 --debug b .
-  gdb --args .k1-out/bindgen.k1 -system false -n basic -i file.c -clangarg -isystem -clangarg /Users/knix/dev/k1-linux/llvm/install-llvm/lib/clang/21/include
+  gdb --args .k1-out/k1bindgen -system false -n basic -i file.c -clangarg -isystem -clangarg /Users/knix/dev/k1-linux/llvm/install-llvm/lib/clang/21/include

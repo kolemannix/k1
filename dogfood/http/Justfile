@@ -1,4 +1,25 @@
 bindgen-llhttp:
   k1bindgen -i libs/llhttp.h -o llhttp.k1 -n llhttp \
-    -clangarg -I/Library/Developer/CommandLineTools/usr/lib/clang/21/include \
-    -exclude max_align_t
+    -clangarg -I/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/17/include \
+    -exclude max_align_t \
+    -exclude llhttp__internal_init \
+    -exclude llhttp__internal_execute
+
+bindgen-libuv:
+  k1bindgen -i libs/libuv/include/uv.h -o uv.k1 -n uv \
+    -system false \
+    -clangarg -I/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/17/include \
+    -clangarg -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include \
+    -clangarg -Ilibs/libuv/include \
+    -exclude max_align_t \
+    -exclude llhttp__internal_init \
+    -exclude llhttp__internal_execute
+
+build-llhttp:
+  git submodule update llhttp
+  cd llhttp && \
+    npm ci && \
+    make
+  cp llhttp/build/libllhttp.a libs/
+  cp llhttp/build/libllhttp.so libs/
+  cp llhttp/build/llhttp.h libs/
