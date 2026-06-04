@@ -74,7 +74,8 @@ enum AbiParamMapping {
     ScalarInRegister,
     /// How everyone does 1-8 byte structs
     StructInInteger {
-        width: u32,
+        abi_width: u32,
+        active_width: u32,
     },
     /// How clang does X86 9-16 byte structs
     StructByEightbytePair {
@@ -1095,10 +1096,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 unreachable!("VoidReturn does not map to a BasicType")
             }
             AbiParamMapping::ScalarInRegister => self.pt_canon_type(pt),
-            AbiParamMapping::StructInInteger { width } => {
+            AbiParamMapping::StructInInteger { abi_width, .. } => {
                 let int_type = self
                     .ctx
-                    .custom_width_int_type(NonZeroU32::new(width).unwrap())
+                    .custom_width_int_type(NonZeroU32::new(abi_width).unwrap())
                     .unwrap()
                     .as_basic_type_enum();
                 int_type
@@ -1171,12 +1172,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 unreachable!("we should not have a BasicValue for VoidReturnEmpty")
             }
             AbiParamMapping::ScalarInRegister => abi_value,
-            AbiParamMapping::StructInInteger { width } => {
+            AbiParamMapping::StructInInteger { abi_width: _, active_width } => {
+                // abi_width is the type of the integer value in abi_value
+                // active_width is the size of the struct we are unpacking it into
                 let truncated = self
                     .builder
                     .build_int_truncate(
                         abi_value.into_int_value(),
-                        self.ctx.custom_width_int_type(NonZeroU32::new(width).unwrap()).unwrap(),
+                        self.ctx
+                            .custom_width_int_type(NonZeroU32::new(active_width).unwrap())
+                            .unwrap(),
                         "",
                     )
                     .unwrap();
@@ -1248,9 +1253,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         match mapping {
             AbiParamMapping::VoidReturnEmpty => panic!("VoidReturnEmpty should be handled"),
             AbiParamMapping::ScalarInRegister => k1_value,
-            AbiParamMapping::StructInInteger { .. } => {
+            AbiParamMapping::StructInInteger { active_width, .. } => {
                 let abi_type = self.mapped_abi_type_param(pt, mapping);
-                let integer_ptr = self.build_alloca(abi_type, "abi_struct_int");
+                let dst_int_type = abi_type.into_int_type();
+                let dst_int_align = dst_int_type.get_bit_width() / 8;
+                let integer_ptr = self.build_alloca(dst_int_type, "abi_struct_int");
+                self.builder.build_store(integer_ptr, dst_int_type.const_zero()).unwrap();
 
                 // %1 = alloca %struct.Small2, align 1
                 // %2 = alloca i64, align 8
@@ -1264,10 +1272,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder
                     .build_memcpy(
                         integer_ptr,
-                        src_layout.align,
+                        dst_int_align,
                         k1_value.into_pointer_value(),
                         src_layout.align,
-                        self.builtin_types.ptr_sized_int.const_int(src_layout.size as u64, false),
+                        self.builtin_types.ptr_sized_int.const_int(active_width as u64 / 8, false),
                     )
                     .unwrap();
                 let integer_value = self.builder.build_load(abi_type, integer_ptr, "").unwrap();
@@ -2711,7 +2719,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         match callconv {
                             CallConv::InternalK1 => {
                                 if size_bytes <= 8 {
-                                    AbiParamMapping::StructInInteger { width: size_bytes * 8 }
+                                    AbiParamMapping::StructInInteger {
+                                        abi_width: size_bytes * 8,
+                                        active_width: size_bytes * 8,
+                                    }
                                 } else if size_bytes <= 16 {
                                     AbiParamMapping::StructByIntPairArray
                                 } else {
@@ -2722,9 +2733,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 if let Some((element, count)) = self.detect_arm64_hfa(pt) {
                                     AbiParamMapping::StructByHfa { element, count }
                                 } else if size_bytes <= 8 {
-                                    // Returns use the exact width; otherwise just i64
-                                    let width_bits = if is_return { size_bytes * 8 } else { 64 };
-                                    AbiParamMapping::StructInInteger { width: width_bits }
+                                    // Returns use an ABI type of the exact size of the struct
+                                    // Params use an ABI type of 64, but need to know the 'active' bits
+
+                                    let struct_bits = size_bytes * 8;
+                                    let abi_bits = if is_return { struct_bits } else { 64 };
+                                    let active_bits = struct_bits;
+                                    AbiParamMapping::StructInInteger {
+                                        abi_width: abi_bits,
+                                        active_width: active_bits,
+                                    }
                                 } else if size_bytes <= 16 {
                                     // If the size of the structure is between 9 and 16 bytes, pass the structure as
                                     // [an array of] two integers of 8 bytes each
@@ -2737,7 +2755,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 if size_bytes <= 8 {
                                     // If the size of the structure is less than 8 bytes, pass the structure as an integer of its size in bits
                                     let width_bits = size_bytes * 8;
-                                    AbiParamMapping::StructInInteger { width: width_bits }
+                                    AbiParamMapping::StructInInteger {
+                                        abi_width: width_bits,
+                                        active_width: width_bits,
+                                    }
                                 } else if size_bytes <= 16 {
                                     // "If the size is between 8 and 16 bytes, the logic is a little more difficult."
                                     // Pass by classified eightbytes
@@ -3028,7 +3049,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         function_id: FunctionId,
     ) -> K1Result<()> {
         let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
-        debug!(
+        eprintln!(
             "codegen_unit_body ir\n{}",
             ir::unit_to_string(self.k1, IrUnitId::Function(function_id), true)
         );
