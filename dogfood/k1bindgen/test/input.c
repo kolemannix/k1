@@ -21,6 +21,7 @@ struct foo {
   i2 _i2;
   struct i2 _struct_i2;
   struct { int x; int y; } _struct_anon;
+  float _muh_floats[];
 };
 
 enum Color {

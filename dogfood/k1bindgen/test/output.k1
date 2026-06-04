@@ -13,14 +13,15 @@ deftype foo = {
   _int_p: *mut c-int,
   _bool: c-int,
   _float: f32,
-  _longlong: int,
-  _long: int,
+  _longlong: i64,
+  _long: i64,
   _i2: i2,
   _struct_i2: i2,
   _struct_anon: {
     x: c-int,
     y: c-int,
   },
+  _muh_floats: *mut f32,
 }
 deftype Color = either(u32) {
   Color_Red = 577,

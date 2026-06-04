@@ -424,9 +424,9 @@ fn visit-root(
   let data = client-data.as[*mut BindgenState];
 
   let display-name = clang/getCursorDisplayName(current).to-k1();
-  info("visiting definition: `{display-name}`");
   let locn = get-location(current);
   let is-system = clang/Location_isInSystemHeader(locn.location).as-bool();
+  info("visiting definition: `{display-name}` is-system={is-system}");
   if is-system and data.skip-system-defns {
     debug("  skipping system defn");
     return(:Continue)
@@ -617,6 +617,12 @@ fn map-type(cx-type: clang/CXType): k1-type {
       let elem-type-mapped = mem/new(map-type(elem-type)).un-mut;
       let size = clang/getArraySize(cx-type);
       :array({ elem-type: elem-type-mapped, size })
+    },
+    :IncompleteArray -> {
+      let elem-type = clang/getArrayElementType(cx-type);
+      let elem-mapped = map-type(elem-type);
+      let inner: *k1-type = mem/new(elem-mapped).un-mut;
+      :ref({ inner })
     },
     :Invalid -> {
       return(:error-c("Encountered an Invalid type TODO locn"))

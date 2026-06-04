@@ -15,5 +15,8 @@ fn test(): i32 {
 
   // TODO: Use 'diff' instead sys/cmd("diff", "input.c", "test/output.k1")
   assertEquals(output, core/files/readToString("test/output.k1"));
+
+  core/files/write-entire-file("test/output.k1", output);
+
   0
 }
