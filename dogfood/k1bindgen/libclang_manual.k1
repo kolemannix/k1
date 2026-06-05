@@ -4,7 +4,7 @@ use core/c-int
 
 ns clang;
 
-deftype alias CXIndex = ptr
+type alias CXIndex = ptr
 
 extern("clang", "clang_createIndex")
 fn createIndex(
@@ -12,26 +12,26 @@ fn createIndex(
   displayDiagnostics: c-int
 ): CXIndex
 
-deftype alias c-unsigned = u32
+type alias c-unsigned = u32
 
-deftype alias CXUnsavedFile = { filename: *char, contents: *char, length: u64 }
+type alias CXUnsavedFile = { filename: *char, contents: *char, length: u64 }
 
-deftype CXTranslationUnit_Flags = either(c-unsigned) {
+type CXTranslationUnit_Flags = either(c-unsigned) {
   None = 0x0, 
   DetailedPreprocessingRecord = 0x01,
   SkipFunctionBodies = 0x40
 }
 
-deftype alias CXClientData = ptr
+type alias CXClientData = ptr
 
 // The type of an element in the abstract syntax tree.
-deftype CXType = {
+type CXType = {
   kind: CXTypeKind,
   data: array[ptr, 2],
 }
 #static assertEquals(types/size[CXType], 24)
 
-deftype CXCursor = {
+type CXCursor = {
   kind: CXCursorKind,
   xdata: c-int,
   data: array[ptr, 3]
@@ -45,7 +45,7 @@ fn k1-string-from-cx-string(cxs: CXString): string {
   s
 }
 
-deftype CXString = {
+type CXString = {
   data: ptr,
   private_flags: c-unsigned,
 }
@@ -55,7 +55,7 @@ ns for CXString {
   }
 }
  
-deftype alias CXTranslationUnit = ptr
+type alias CXTranslationUnit = ptr
 
 extern("clang", "clang_parseTranslationUnit2")
 fn parseTranslationUnit2(
@@ -83,7 +83,7 @@ fn getCursorKindSpelling(kind: CXCursorKind): CXString
 // A value of this enumeration type should be returned by each
 // CXCursorVisitor to indicate how clang_visitChildren() proceed.
 //
-deftype CXChildVisitResult = either(c-unsigned) {
+type CXChildVisitResult = either(c-unsigned) {
   // Terminates the cursor traversal.
   Break,
   // Continues the cursor traversal with the next sibling of
@@ -94,7 +94,7 @@ deftype CXChildVisitResult = either(c-unsigned) {
   Recurse
 }
 
-deftype alias CXCursorVisitor = *fn(current: CXCursor, parent: CXCursor, client-data: CXClientData) -> CXChildVisitResult
+type alias CXCursorVisitor = *fn(current: CXCursor, parent: CXCursor, client-data: CXClientData) -> CXChildVisitResult
 
 extern("clang", "clang_visitChildren")
 fn visitChildren(
@@ -201,7 +201,7 @@ fn getTypedefDeclUnderlyingType(C: CXCursor): CXType
 extern("clang", "clang_isCursorDefinition")
 fn isCursorDefinition(C: CXCursor): u32
 
-deftype CXSourceLocation = {
+type CXSourceLocation = {
   ptr_data: array[ptr, 2],
   int_data: u32,
 }
@@ -227,12 +227,12 @@ fn Location_isFromMainFile(location: CXSourceLocation): c-int
 extern("clang", "clang_getNumDiagnostics")
 fn getNumDiagnostics(Unit: CXTranslationUnit ): u32
 
-deftype alias CXDiagnostic = ptr
+type alias CXDiagnostic = ptr
 
 extern("clang", "clang_getDiagnostic")
 fn getDiagnostic(Unit: CXTranslationUnit, Index: u32): CXDiagnostic
 
-deftype CXDiagnosticSeverity = either(c-unsigned) {
+type CXDiagnosticSeverity = either(c-unsigned) {
   CXDiagnostic_Ignored = 0,
   CXDiagnostic_Note = 1,
   CXDiagnostic_Warning = 2,
@@ -243,7 +243,7 @@ deftype CXDiagnosticSeverity = either(c-unsigned) {
 extern("clang", "clang_getDiagnosticSeverity")
 fn getDiagnosticSeverity(CXDiagnostic): CXDiagnosticSeverity
 
-deftype alias CXFile = ptr
+type alias CXFile = ptr
 
 extern("clang", "clang_getFileLocation")
 fn getFileLocation(
@@ -262,7 +262,7 @@ fn Type_getSizeOf(T: CXType): i64
 extern("clang", "clang_getFileName")
 fn getFileName(SFile: CXFile): CXString 
 
-deftype CXCursorKind = either(c-unsigned) {
+type CXCursorKind = either(c-unsigned) {
   // Declarations
   // A declaration whose specific kind is not exposed via this
   // interface.
@@ -1310,7 +1310,7 @@ deftype CXCursorKind = either(c-unsigned) {
   OverloadCandidate = 700
 }
 
-deftype CXTypeKind = either(c-unsigned) {
+type CXTypeKind = either(c-unsigned) {
   //*
   // Represents an invalid type (e.g., where no type is available).
   ///

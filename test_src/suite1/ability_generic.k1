@@ -9,14 +9,14 @@ ns ability_generic {
   }
 
   ns Foob {
-    deftype alias myInt = int
+    type alias myInt = int
 
     impl GAdd[Rhs = myInt, Output = myInt] for myInt {
       fn gadd(self: myInt, rhs: myInt): myInt { self + rhs }
     }
   }
 
-  deftype GenericPoint[T] = { x: T, y: T }
+  type GenericPoint[T] = { x: T, y: T }
   ability GAdd[Rhs, impl Output] {
     fn gadd(self, rhs: Rhs): Output
   }

@@ -5,8 +5,8 @@ use core/IntRange
 use core/eprintln
 use core/sys
 
-deftype Color = either { White, Black }
-deftype alias Bitboard = u64
+type Color = either { White, Black }
+type alias Bitboard = u64
 
 let RANK_1 : Bitboard = 0x00000000000000FF
 let RANK_2 : Bitboard = 0x000000000000FF00
@@ -24,7 +24,7 @@ let H_FILE    : Bitboard = 0x8080808080808080
 let NOT_A_FILE: Bitboard = 0xFEFEFEFEFEFEFEFE
 let NOT_H_FILE: Bitboard = 0x7F7F7F7F7F7F7F7F
 
-deftype GameState = {
+type GameState = {
   wPawns: Bitboard,
   wKnights: Bitboard,
   wBishops: Bitboard,
@@ -184,7 +184,7 @@ ns for GameState {
   }
 }
 
-deftype Move = { from: u8, to: u8 }
+type Move = { from: u8, to: u8 }
 
 fn cmdInfo(): string {
   // Here you would register any options the engine supports
@@ -235,7 +235,7 @@ fn handleCommand(context eng: Engine)(command: uci/Command): ?string {
   }
 }
 
-deftype Engine = { game: GameState }
+type Engine = { game: GameState }
 ns for Engine {
   fn inDebugMode(_self: Engine): bool { true }
 }

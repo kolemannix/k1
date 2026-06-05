@@ -1,6 +1,6 @@
 ns struct_test;
 
-deftype Point = { x: int, y: int, z: int, isGood: bool }
+type Point = { x: int, y: int, z: int, isGood: bool }
 fn basicStruct(): int {
   let zero: Point = {
     x: 0, y: 298, z: 42, isGood: true
@@ -12,7 +12,7 @@ fn basicStruct(): int {
   0
 }
 
-deftype Foo = { x: int, y: bool }
+type Foo = { x: int, y: bool }
 ns for Foo {
   fn getValue(self: Foo): int { self.x }
   fn setValue(self: *mut Foo, x: int) { self.x* <- x; }
@@ -41,7 +41,7 @@ fn eqAnon() {
 }
 
 
-deftype Block = {
+type Block = {
   position: { x: int, y: int, width: int, height: int },
   text: int
 }

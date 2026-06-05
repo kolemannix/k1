@@ -122,7 +122,7 @@ fn start(args: span[string]): string {
     switch it.kind {
       :typedef(typedef) -> {
         if state.should-include-name(typedef.name) {
-          writef(out, "deftype {typedef.name} = ");
+          writef(out, "type {typedef.name} = ");
           write-k1-type(&out, typedef.type, indent = 0);
           out.string("\n");
         }
@@ -143,7 +143,7 @@ fn start(args: span[string]): string {
           if alias.type is :simple(name) and name == alias.name {
 
           } else {
-            writef(out, "deftype alias {alias.name} = ");
+            writef(out, "type alias {alias.name} = ");
             write-k1-type(&out, alias.type, indent = 0);
             out.string("\n");
           }
@@ -176,7 +176,7 @@ fn start(args: span[string]): string {
   }
 }
 
-deftype k1-defn = { 
+type k1-defn = { 
   kind: either { 
     typedef({ name: string, type: k1-type }),
     global({ name: string, type: k1-type, value: ?string }),
@@ -186,10 +186,10 @@ deftype k1-defn = {
   error: ?string,
 }
 
-deftype fn-type = {
+type fn-type = {
   return-type: k1-type, params: list[{ name: ?string, type: k1-type }]
 }
-deftype k1-type = either {
+type k1-type = either {
   error-c(string),
   simple(string),
   struct({ fields: list[{ name: string, type: k1-type }] }),
@@ -266,7 +266,7 @@ fn write-k1-type[w: writer](w, k1-type, indent: size) {
   }
 }
 
-deftype BindgenState = {
+type BindgenState = {
   definitions: list[k1-defn],
   skip-system-defns: bool,
   exclude-names: list[string],

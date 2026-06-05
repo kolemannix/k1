@@ -1,6 +1,6 @@
 ns json;
 
-deftype json = either {
+type json = either {
   null,
   str   (string),
   number(f64),
@@ -9,7 +9,7 @@ deftype json = either {
   object(list[{ key: string, value: json }])
 }
 
-deftype parser = {
+type parser = {
   input: string,
   cursor: size,
 }

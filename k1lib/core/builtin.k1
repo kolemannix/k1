@@ -6,64 +6,64 @@
 
 ///////////
 // Types //
-deftype u8          = builtin
-deftype u16         = builtin
-deftype u32         = builtin
-deftype u64         = builtin
-deftype alias usize = u64
-deftype alias uint  = u64
-deftype i8          = builtin
-deftype i16         = builtin
-deftype i32         = builtin
-deftype i64         = builtin
-deftype alias int   = i64
-deftype alias size  = i64
+type u8          = builtin
+type u16         = builtin
+type u32         = builtin
+type u64         = builtin
+type alias usize = u64
+type alias uint  = u64
+type i8          = builtin
+type i16         = builtin
+type i32         = builtin
+type i64         = builtin
+type alias int   = i64
+type alias size  = i64
 
 // TODO: Incorporate this instead of a 64-bit align type
-deftype alias align = u16
+type alias align = u16
 
-deftype char    = builtin
-deftype bool    = builtin
+type char    = builtin
+type bool    = builtin
 
 /// An uninhabited type representing that code with this type never returns
 /// Used to signal termination and enables basic control flow analysis
-deftype never   = builtin
+type never   = builtin
 
-deftype ptr = builtin
+type ptr = builtin
 
-deftype f32 = builtin
-deftype f64 = builtin
+type f32 = builtin
+type f64 = builtin
 
 
 // FIXME: Swap len and data in buffer
-deftype buffer[t] = { len: size, data: *mut t }
+type buffer[t] = { len: size, data: *mut t }
 
-deftype span[t] = { buffer: buffer[t] }
+type span[t] = { buffer: buffer[t] }
 
-deftype list[t] = { len: size, buffer: buffer[t] }
-deftype string = { span: span[char] }
+type list[t] = { len: size, buffer: buffer[t] }
+type string = { span: span[char] }
 
-deftype opt[t] = either { none, some(t) }
+type opt[t] = either { none, some(t) }
 
 
-deftype alias c-sizet  = u64
-deftype alias c-ssizet = i64
-deftype alias c-int    = i32
-deftype alias c-long   = i64
+type alias c-sizet  = u64
+type alias c-ssizet = i64
+type alias c-int    = i32
+type alias c-long   = i64
 
 ns compiler {
-  deftype source-location = { filename: string, line: u64 }
+  type source-location = { filename: string, line: u64 }
   // Need some way to mark this and is-static as comptime only
   let capture-prints: bool = true
 }
 
-deftype ordering = either { less, equal, greater }
+type ordering = either { less, equal, greater }
 
-deftype result[t, e] = either { ok(t), err(e) }
+type result[t, e] = either { ok(t), err(e) }
 
-deftype alias empty = {}
+type alias empty = {}
 
-deftype alias byte = u8
+type alias byte = u8
 
 ns types {
 
@@ -104,9 +104,8 @@ ns types {
   fn type-name-of-val[t](_t: t): string { name[t] }
   fn schema[t](): type-schema { type-id-schema(type-id[t]) }
 
-  // DO NOT REORDER VARIANTS
   // FIXME: We should encode both width and signedness into the bits instead, 'flags in tags' project
-  deftype int-kind = either(u8) { u8 = 0, u16 = 1, u32 = 2, u64 = 3, i8 = 4, i16 = 5, i32 = 6, i64 = 7 }
+  type int-kind = either(u8) { u8 = 0, u16 = 1, u32 = 2, u64 = 3, i8 = 4, i16 = 5, i32 = 6, i64 = 7 }
   ns for int-kind {
     fn bit-width(self: int-kind): size {
       switch self {
@@ -122,22 +121,24 @@ ns types {
     }
   }
 
-  // DO NOT REORDER VARIANTS
   // FIXME: We should encode both width and signedness into the bits instead, 'flags in tags' project
-  // FIXME: Derive an enum from a sum, that is just its tags.
-  deftype int-value = either {
-    u8(u8), u16(u16), u32(u32), u64(u64),
-    i8(i8), i16(i16), i32(i32), i64(i64)
+  // FIXME: Derive an enum from a sum, that is just its tags!!
+  type int-value = either {
+    u8(u8) = 0, u16(u16) = 1, u32(u32) = 2, u64(u64) = 3,
+    i8(i8) = 4, i16(i16) = 5, i32(i32) = 6, i64(i64) = 7
   }
 
-  deftype layout = { size: u32, align: u32 }
+  type float-kind = either { f32 = 0, f64 = 1 }
+  type float-value = either { f32(f32) = 0, f64(f64) = 1 }
 
-  deftype type-schema = either {
+  type layout = { size: u32, align: u32 }
+
+  type type-schema = either {
     char,
     bool,
     ptr,
     int(int-kind),
-    float(either { f32, f64 }),
+    float(float-kind),
     enum({
       int-kind: int-kind,
       values: span[{
@@ -523,7 +524,7 @@ ns k1 {
   let no-std: bool = builtin
   let debug: bool = builtin
 
-  deftype os = either { linux, macos, wasm }
+  type os = either { linux, macos, wasm }
   let os: os = builtin
   let os-macos: bool = os is :macos
   let os-posix: bool = os is :macos or os is :linux
@@ -536,14 +537,14 @@ ns k1 {
     msg: string
   )
 
-  deftype module-kind = either(u8) { library, executable, script }
+  type module-kind = either(u8) { library, executable, script }
 
-  deftype library-ref = {
+  type library-ref = {
     name: string,
     link-type: either(u8) { default, static, dynamic },
   }
 
-  deftype module-manifest = {
+  type module-manifest = {
     kind: module-kind,
     deps: span[string],
 
@@ -718,8 +719,8 @@ ns array {
 
   extern("backtrace") fn backtrace(buffer: ptr, size: c-int)
 
-  deftype timespec = { tv_sec: u64, tv_nsec: u64 }
-  deftype alias clockid_t = c-int
+  type timespec = { tv_sec: u64, tv_nsec: u64 }
+  type alias clockid_t = c-int
   let CLOCK_MONOTONIC: clockid_t = 1
   extern("clock_gettime") fn clock_gettime(clockid: clockid_t, tp: *mut timespec): c-int
 

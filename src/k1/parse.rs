@@ -1,4 +1,4 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2026 knix
 // All rights reserved.
 
 use std::fmt::{Display, Formatter, Write};
@@ -4709,7 +4709,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_type_defn(&mut self) -> ParseResult<Option<ParsedTypeDefnId>> {
-        let Some(_keyword_type) = self.maybe_consume(K::KeywordDefType) else {
+        let Some(_keyword_type) = self.maybe_consume_ident_chars("type") else {
             return Ok(None);
         };
 

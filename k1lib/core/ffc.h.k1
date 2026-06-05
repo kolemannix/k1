@@ -1,10 +1,10 @@
 ns ffc;
 
-deftype alias ffc_outcome = u32
+type alias ffc_outcome = u32
 let FFC_OUTCOME_OK           : ffc_outcome = 0
 let FFC_OUTCOME_INVALID_INPUT: ffc_outcome = 1
 let FFC_OUTCOME_OUT_OF_RANGE : ffc_outcome = 2
-deftype ffc_result = {
+type ffc_result = {
   // Where parsing stopped
   ptr: ptr,
   // The outcome of the call

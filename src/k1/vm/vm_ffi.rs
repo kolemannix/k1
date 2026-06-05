@@ -190,7 +190,7 @@ fn pt_to_ffi_type(
                     let payload_ffi_type = pt_to_ffi_type(k1, payload.field_t)?;
                     element_storage.push(payload_ffi_type);
                 }
-                let t = make_struct_ffi_type(k1, element_storage.as_slice_mut());
+                let t = make_struct_ffi_type(k1, element_storage.as_slice_mut(), 0, 0);
                 Ok(t)
             }
             AggType::Struct { fields } => {
@@ -199,7 +199,7 @@ fn pt_to_ffi_type(
                     let field_ffi_type = pt_to_ffi_type(k1, field.field_t)?;
                     element_storage.push(field_ffi_type);
                 }
-                let t = make_struct_ffi_type(k1, element_storage.as_slice_mut());
+                let t = make_struct_ffi_type(k1, element_storage.as_slice_mut(), 0, 0);
                 Ok(t)
             }
             AggType::Array { element_pt, len } => {
@@ -210,10 +210,40 @@ fn pt_to_ffi_type(
                 for _ in 0..len {
                     element_storage.push(element_ffi_type);
                 }
-                let t = make_struct_ffi_type(k1, element_storage.as_slice_mut());
+                let t = make_struct_ffi_type(k1, element_storage.as_slice_mut(), 0, 0);
                 Ok(t)
             }
-            AggType::Union { .. } => Err("TODO: what to do for union in libffi"),
+            AggType::Union { members } => {
+                // Default is zeroed()
+                let mut max_size_member: ffi_type = ffi_type::default();
+                let mut max_align_member: ffi_type = ffi_type::default();
+
+                for member in k1.types.mem.getn(members) {
+                    let member_ffi_type = pt_to_ffi_type(k1, member.ty)?;
+                    if member_ffi_type.size > max_size_member.size {
+                        max_size_member = member_ffi_type;
+                    }
+                    if member_ffi_type.alignment > max_align_member.alignment {
+                        max_align_member = member_ffi_type;
+                    }
+                }
+
+                // Put our ffi_types in the heap
+                let mut element_storage = k1.mem.new_list(2);
+                element_storage.push(max_size_member);
+                element_storage.push(max_align_member);
+
+                let t = make_struct_ffi_type(
+                    k1,
+                    element_storage.as_slice_mut(),
+                    max_size_member.size,
+                    max_align_member.alignment,
+                );
+                Ok(t)
+            }
+            AggType::Opaque { .. } => Err(
+                "opaque types are only FFI-compatible by pointer; by-value opaque ABI is not representable safely",
+            ),
         },
     }
 }
@@ -222,6 +252,10 @@ fn pt_to_ffi_type(
 fn make_struct_ffi_type(
     k1: &mut TypedProgram,
     ffi_type_storage: &mut [ffi_type],
+    // Leave 0 for actual Structs; but set for Union emulation
+    size: usize,
+    // Leave 0 for actual Structs; but set for Union emulation
+    alignment: u16,
 ) -> libffi::low::ffi_type {
     let mut element_ptrs = k1.mem.new_list::<*mut ffi_type>(ffi_type_storage.len() as u32 + 1);
 
@@ -243,8 +277,8 @@ fn make_struct_ffi_type(
 
     // size and alignment get filled in my ffi_prep_cif
     let my_struct: ffi_type = ffi_type {
-        size: 0,
-        alignment: 0,
+        size,
+        alignment,
         type_: type_tag::STRUCT,
         elements: element_ptrs.as_mut_ptr(),
     };

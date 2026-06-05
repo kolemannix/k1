@@ -306,7 +306,7 @@ ns for buffer {
 
 }
 
-deftype BufferIterator[T] = {
+type BufferIterator[T] = {
   buf: buffer[T],
   pos: size
 }
@@ -356,7 +356,7 @@ impl[T: print] print for buffer[T] {
   }
 }
 
-deftype BufferRefIterator[T] = {
+type BufferRefIterator[T] = {
   buf: buffer[T],
   pos: size
 }

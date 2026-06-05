@@ -8,34 +8,37 @@ let MODULE_INFO: k1/module-manifest = {
 
 ns foo {
 
-  deftype VerySmall = { x: u8 }
+  type VerySmall = { x: u8 }
   impl print for VerySmall { fn printTo[w: writer](self: VerySmall, w) { w.string("{ {self.x} }") } }
   impl equals for VerySmall { fn equals(self: VerySmall, other: VerySmall): bool { self.x == other.x } }
   extern("foo", "very_small") fn very_small(x: VerySmall, y: VerySmall): VerySmall
 
-  deftype Small = { r: u8, g: u8, b: u8, a: u8 }
+  type IntWrap = { inner: i32 }
+  extern("foo", "intWrap") fn intWrap(a: IntWrap, b: IntWrap): IntWrap
+
+  type Small = { r: u8, g: u8, b: u8, a: u8 }
   extern("foo", "small")      fn small(x: Small, y: Small): Small
 
-  deftype Medium = { a: u64, b: u64 }
+  type Medium = { a: u64, b: u64 }
   extern("foo", "medium")     fn medium(a: Medium, b: Medium): Medium
 
-  deftype MixedClassMedium = { f1: f32, f2: f32, i3: array[i16, 4] }
+  type MixedClassMedium = { f1: f32, f2: f32, i3: array[i16, 4] }
 
-  deftype Large = { med1: Medium, med2: Medium }
+  type Large = { med1: Medium, med2: Medium }
   extern("foo", "large")      fn large(a: Large, b: Large): Large
 
-  deftype HFA2 = { x: f32, y: f32 }
+  type HFA2 = { x: f32, y: f32 }
   extern("foo", "hfa2_add") fn hfa2-add(a: HFA2, b: HFA2): HFA2
 
-  deftype HFA1 = { x: f32 }
-  deftype HFANested3 = { a: HFA1, b: f32, c: f32 }
+  type HFA1 = { x: f32 }
+  type HFANested3 = { a: HFA1, b: f32, c: f32 }
   extern("foo", "hfa_nested3_add") fn hfa-nested3-add(a: HFANested3, b: HFANested3): HFANested3
 
-  deftype HFA4 = { a: f64, b: f64, c: f64, d: f64 }
+  type HFA4 = { a: f64, b: f64, c: f64, d: f64 }
   extern("foo", "hfa4_add") fn hfa4-add(a: HFA4, b: HFA4): HFA4
 
-  deftype CXCursorKind = either(u32) { UnexposedDecl = 1, StructDecl = 2 }
-  deftype CXCursor = {
+  type CXCursorKind = either(u32) { UnexposedDecl = 1, StructDecl = 2 }
+  type CXCursor = {
     kind: CXCursorKind,
     xdata: i32,
     data: array[ptr, 3]
@@ -43,13 +46,13 @@ ns foo {
 
   extern("foo", "rtCursor") fn rtCursor(c: CXCursor): CXCursor
 
-  deftype CXString = {
+  type CXString = {
     data: ptr,
     private_flags: u32,
   }
   extern("foo", "getFileName") fn getFileName(SFile: ptr): CXString 
 
-  deftype CXSourceLocation = {
+  type CXSourceLocation = {
     ptr_data: array[ptr, 2],
     int_data: u32,
   }
@@ -62,6 +65,9 @@ ns foo {
   extern("foo", "takesFnStruct")
   fn takes-fn-struct(f: *fn(s: { a: u64, b: u64, c: u64, d: u64 }) -> i32): i32
 
+  type TagUnion = either(u32) { a(i32) = 0, b(i64) = 1, c(ptr) = 2 }
+  extern("foo", "TagUnion_iszero") fn TagUnion_iszero(x: TagUnion): i32
+
 }
 
 fn testAll() {
@@ -69,6 +75,16 @@ fn testAll() {
     foo/very_small({ x: 10 }, { x: 20 }),
     { x: 30 }
   );
+
+  let smallResult = foo/small({r: 1, g: 10, b: 20, a: 30 }, { r: 1, g: 1, b: 1, a: 1 });
+  assertEquals(smallResult.r, 2);
+  assertEquals(smallResult.g, 11);
+  assertEquals(smallResult.b, 21);
+  assertEquals(smallResult.a, 31);
+
+  let intWrapResult = foo/intWrap({ inner: -5 }, { inner: 10 });
+  assertEquals(intWrapResult.inner, 5);
+
   let mediumResult = foo/medium({ a: 10, b: 100 }, { a: 1, b: 20 });
   assertEquals(mediumResult.a, 11);
   assertEquals(mediumResult.b, 120);
@@ -124,6 +140,16 @@ fn testAll() {
   assertEquals(locn.ptr_data.get(1), 2.as[ptr]);
   assertEquals(locn.int_data, 42);
 
+  assert(not foo/TagUnion_iszero(:a(10)).as-bool());
+  assert(    foo/TagUnion_iszero(:a(0)).as-bool());
+
+  assert(not foo/TagUnion_iszero(:b(10)).as-bool());
+  assert(    foo/TagUnion_iszero(:b(0)).as-bool());
+
+  assert(foo/TagUnion_iszero(:c(ptr/null)).as-bool());
+  let x = 10;
+  assert(not foo/TagUnion_iszero(:c(&x.as())).as-bool());
+
 }
 
 fn testFnPtr() {
@@ -145,6 +171,9 @@ fn sum-fn(a: u64, b: u64, c: u64, d: u64): i32 {
 fn sum-fn-struct(s: { a: u64, b: u64, c: u64, d: u64 }): i32 {
   (s.a + s.b + s.c + s.d).as[i32]
 }
+
+// nocommit: abi/ffi test some 'sum' types
+
 
 fn main(): i32 {
   #static testAll();

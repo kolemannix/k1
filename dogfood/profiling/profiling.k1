@@ -1,14 +1,14 @@
 // Port of basic block profiler from Casey Muratori's Computer Enhance
 
 // Core profiling data structures
-deftype ProfileAnchor = {
+type ProfileAnchor = {
     tsc_elapsed_exclusive: u64,   // Does NOT include children
     tsc_elapsed_inclusive: u64,  // DOES include children  
     hit_count: u64,
     label: string,
 }
 
-deftype ProfileBlock = {
+type ProfileBlock = {
     label: string,
     old_tsc_elapsed_inclusive: u64,
     start_tsc: u64,

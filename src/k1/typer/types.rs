@@ -1,4 +1,4 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2026 knix
 // All rights reserved.
 
 use std::collections::hash_map::Entry;
@@ -266,14 +266,14 @@ impl GenericType {}
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum IntegerType {
-    U8,
-    U16,
-    U32,
-    U64,
-    I8,
-    I16,
-    I32,
-    I64,
+    U8 = 0,
+    U16 = 1,
+    U32 = 2,
+    U64 = 3,
+    I8 = 4,
+    I16 = 5,
+    I32 = 6,
+    I64 = 7,
 }
 
 impl Display for IntegerType {
@@ -354,8 +354,8 @@ impl IntegerType {
 
 #[derive(Clone, Copy)]
 pub enum FloatType {
-    F32,
-    F64,
+    F32 = 0,
+    F64 = 1,
 }
 impl FloatType {
     pub fn zero(&self) -> TypedFloatValue {
@@ -444,6 +444,18 @@ pub struct FunctionPointerType {
     pub function_type_id: TypeId,
 }
 
+#[derive(Clone, Copy)]
+pub struct OpaqueType {
+    pub size: u32,
+    pub align: u32,
+}
+
+impl OpaqueType {
+    pub fn layout(&self) -> Layout {
+        Layout { size: self.size, align: self.align }
+    }
+}
+
 static_assert_size!(Type, 28);
 #[derive(Clone)]
 pub enum Type {
@@ -460,6 +472,7 @@ pub enum Type {
     Array(ArrayType),
     Struct(StructType),
     Sum(SumType),
+    Opaque(OpaqueType),
 
     /// An uninhabited type; used to indicate divergent control flow
     Never,
@@ -653,6 +666,10 @@ impl TypePool {
                     v.payload.hash(state);
                 }
             }
+            Type::Opaque(opaque) => {
+                opaque.size.hash(state);
+                opaque.align.hash(state);
+            }
             // Inherently unique as well
             Type::Generic(generic) => {
                 generic.inner.hash(state);
@@ -714,6 +731,7 @@ impl Type {
             Type::FunctionTypeParameter(_) => "ftp",
             Type::InferenceHole(_) => "hole",
             Type::Sum(_) => "sum",
+            Type::Opaque(_) => "opaque",
             Type::Enum(_) => "enum",
             Type::Never => "never",
             Type::Generic(_) => "generic",
@@ -944,6 +962,8 @@ pub struct BuiltinTypes {
     pub types_type_schema: Option<TypeId>,
     pub types_int_kind: Option<TypeId>,
     pub types_int_value: Option<TypeId>,
+    pub types_float_kind: Option<TypeId>,
+    pub types_float_value: Option<TypeId>,
 }
 
 #[repr(u8)]
@@ -1216,6 +1236,7 @@ pub enum AggType {
     Array { element_pt: PhysicalType, len: u32 },
     Union { members: MSlice<UnionMember, TypePool> },
     Sum(SumPt),
+    Opaque { size: u32, align: u32 },
 }
 
 impl AggType {
@@ -1752,6 +1773,7 @@ impl TypePool {
                 }
                 result
             }
+            Type::Opaque(_) => EMPTY,
             Type::Enum(_) => EMPTY,
             Type::Never => EMPTY,
             // The real answer here would be, all the type variables on the RHS that aren't one of
@@ -1977,6 +1999,14 @@ impl TypePool {
                 });
                 PhysicalTypeResult::Yes(PhysicalType::agg(sum_agg_id))
             }
+            Type::Opaque(opaque) => {
+                let opaque_agg_id = self.agg_types.add(AggregateTypeRecord {
+                    agg_type: AggType::Opaque { size: opaque.size, align: opaque.align },
+                    origin_type_id: type_id,
+                    layout: opaque.layout(),
+                });
+                PhysicalTypeResult::Yes(PhysicalType::agg(opaque_agg_id))
+            }
             Type::Lambda(lam_id) => {
                 let lam = self.lambda_types.get(*lam_id);
                 self.add_physical_duplicate(static_values, type_id, lam.env_type)
@@ -2039,6 +2069,7 @@ impl TypePool {
             }
             AggType::Array { .. } => None,
             AggType::Union { .. } => None,
+            AggType::Opaque { .. } => None,
         }
     }
 
@@ -2047,7 +2078,8 @@ impl TypePool {
             AggType::Sum(e) => self.get_agg_struct_layout(e.struct_repr),
             AggType::Struct { fields } => self.mem.getn_sv4(fields),
             AggType::Array { .. } => panic!("Array is not a struct"),
-            AggType::Union { .. } => panic!("not a struct"),
+            AggType::Union { .. } => panic!("union has no struct-like layout"),
+            AggType::Opaque { .. } => panic!("opaque has no struct-like layout"),
         }
     }
 
@@ -2249,6 +2281,9 @@ impl TypePool {
                     }
                     write!(w, " }}")?;
                     Ok(())
+                }
+                AggType::Opaque { size, align } => {
+                    write!(w, "opaque[{}, {}]", size, align)
                 }
             },
         }

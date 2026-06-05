@@ -57,7 +57,7 @@ ns meta {
     if fields.isEmpty() { crash("Input struct must have at least one field") };
 
     let* code = StringBuilder/new();
-    code.line("deftype {name} = {{");
+    code.line("type {name} = {{");
     for f in fields {
       code.line("  ARR_{f.name}: list[typeFromId({f.type-id})],");
     };

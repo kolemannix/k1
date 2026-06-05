@@ -4,7 +4,7 @@
 ns mem {
 
   // For now here's all I can do until I have dyn traits
-  deftype Allocator = {
+  type Allocator = {
     malloc:  *(fn(size, size) -> ptr),
     zalloc:  *(fn(size, size) -> ptr),
     realloc: *(fn(ptr, size, size, size) -> ptr),
@@ -35,7 +35,7 @@ ns mem {
     {}
   }
 
-  deftype alloc-mode = either {
+  type alloc-mode = either {
     // Whatever alloc-mode is last on the stack (can never be :current itself)
     current,
     // The default, thread-local, temporary bump allocator
@@ -158,7 +158,7 @@ ns mem {
 
   let mutable tls arena-tmp: arena = zeroed()
 
-  deftype alias ALLOC_STACK_MAX = 64
+  type alias ALLOC_STACK_MAX = 64
   let mutable tls allocStack: fixlist[alloc-mode, ALLOC_STACK_MAX] = { 
     let s = zeroed[fixlist[alloc-mode, ALLOC_STACK_MAX]];
     s.push(:tmp);

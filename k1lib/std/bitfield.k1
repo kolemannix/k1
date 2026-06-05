@@ -27,7 +27,7 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
   let code = StringBuilder/new();
 
   // This defines a named struct type with one field, which is a common newtype pattern
-  writelnf(code, "deftype {type-name} = {{ bits: {baseName} }");
+  writelnf(code, "type {type-name} = {{ bits: {baseName} }");
 
   // We crack open a namespace to put some goodies inside
   writelnf(code, "ns for {type-name} {{");

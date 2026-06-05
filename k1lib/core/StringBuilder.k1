@@ -1,6 +1,6 @@
 use core/spill-list
 
-deftype StringBuilder = { list: spill-list[u8, 96] }
+type StringBuilder = { list: spill-list[u8, 96] }
 ns for StringBuilder {
   fn new(): StringBuilder {
     { list: spill-list/new() }

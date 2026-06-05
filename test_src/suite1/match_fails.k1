@@ -1,6 +1,6 @@
 ns match_fails;
 
-deftype Foo = { x: int, y: ?bool }
+type Foo = { x: int, y: ?bool }
 fn useless() {
   let foo: Foo = { x: 1, y: :none };
   let result = testCompile(switch foo {
@@ -12,7 +12,7 @@ fn useless() {
   assert(result is :some(_));
 }
 
-deftype Blub = { x: int, y: ?bool }
+type Blub = { x: int, y: ?bool }
 fn unhandled() {
   let blub: Blub = { x: 1, y: :none };
   let result = testCompile(switch blub {

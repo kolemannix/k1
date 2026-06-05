@@ -1,6 +1,6 @@
 ns array_test;
 
-deftype Thing = {
+type Thing = {
   data: array[u8, 1024],
   data2: array[u64, 1024],
 }

@@ -1,7 +1,5 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2026 knix
 // All rights reserved.
-
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -41,10 +39,7 @@ fn run() -> anyhow::Result<ExitCode> {
     let args = Args::parse();
     log::debug!("{:#?}", args);
 
-    let out_dir: PathBuf = ".k1-out".into();
-    std::fs::create_dir_all(&out_dir)?;
-
-    let Ok(mut program) = compiler::compile_program(&args, &out_dir) else {
+    let Ok(mut program) = compiler::compile_program(&args) else {
         return Ok(ExitCode::FAILURE);
     };
     if args.command.is_check() {
@@ -56,21 +51,22 @@ fn run() -> anyhow::Result<ExitCode> {
         }
     };
     let llvm_ctx = inkwell::context::Context::create();
-    return match compiler::codegen_module(&args, &llvm_ctx, &mut program, &out_dir) {
+    return match compiler::codegen_module(&args, &llvm_ctx, &mut program) {
         Ok(cg) => match args.command {
             Command::Check { .. } => unreachable!(),
             Command::Build { .. } => Ok(ExitCode::SUCCESS),
             Command::Run { .. } => {
                 info!("run executable: {}", cg.name());
-                let (_, home_dir) = k1::compiler::module_home_from_src_path(&cg.k1.config.src_path);
-                compiler::run_compiled_program(&out_dir, &home_dir, cg.name(), false);
+                let home_dir = &cg.k1.config.home_dir;
+                let out_dir = &cg.k1.config.out_dir;
+                compiler::run_compiled_program(out_dir, home_dir, cg.name(), false);
                 Ok(ExitCode::SUCCESS)
             }
             Command::Test { .. } => {
                 info!("test executable: {}", cg.name());
-                let (_, home_dir) = k1::compiler::module_home_from_src_path(&cg.k1.config.src_path);
-                let exit_code =
-                    compiler::run_compiled_program(&out_dir, &home_dir, cg.name(), true);
+                let home_dir = &cg.k1.config.home_dir;
+                let out_dir = &cg.k1.config.out_dir;
+                let exit_code = compiler::run_compiled_program(out_dir, home_dir, cg.name(), true);
                 if exit_code != Some(0) { Ok(ExitCode::FAILURE) } else { Ok(ExitCode::SUCCESS) }
             }
             Command::Repl { .. } => {

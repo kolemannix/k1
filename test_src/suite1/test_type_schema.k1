@@ -1,5 +1,5 @@
 ns type_schema {
-  deftype Point3[t] = {
+  type Point3[t] = {
     x: t, y: t, z: t
   }
 
@@ -30,6 +30,10 @@ ns type_schema {
     assert(schema[i16]  is :int(:i16));
     assert(schema[i32]  is :int(:i32));
     assert(schema[i64]  is :int(:i64));
+
+    assert(schema[f32]  is :float(:f32));
+    assert(schema[f64]  is :float(:f64));
+
     let pointByteSchema = schema[Point3[u8]];
     require pointByteSchema is :struct({ fields }) else crash("");
     assertEquals(fields.len(), 3);

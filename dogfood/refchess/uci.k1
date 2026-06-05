@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Koleman Nix 
 ns uci;
 
-deftype Command = either {
+type Command = either {
   Uci,
   IsReady,
   NewGame,

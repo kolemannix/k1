@@ -1,6 +1,6 @@
 ns optionals;
 
-deftype PointMaybeY = { x: int, y: ?int }
+type PointMaybeY = { x: int, y: ?int }
 
 fn testBasics(): int {
   let p: ?PointMaybeY = :some({ x: 1, y: :some(2) });
@@ -22,7 +22,7 @@ fn testBasics(): int {
   0
 }
 
-deftype WeirdPoint = { x: ?int, y: int }
+type WeirdPoint = { x: ?int, y: int }
 
 fn testComplex(): int {
   let my_point: WeirdPoint = { x: :some(42), y: 0 };

@@ -1,7 +1,7 @@
 ns generic_struct;
 
-deftype Box[T] = { value: T }
-deftype AuPair[T, U] = { t: ?T, u: ?U }
+type Box[T] = { value: T }
+type AuPair[T, U] = { t: ?T, u: ?U }
 ns for AuPair {
   fn t[T, U](self: AuPair[T, U]): ?T {
     self.t
@@ -15,7 +15,7 @@ fn unboxIt[T](b: Box[Box[Box[T]]]): T {
 
 fn takesPolyAuPair[C, D](_x: AuPair[C, D]) { {} }
 
-deftype ConstrainedBox[A, B: try[t = A, e = empty]] = { inner: B }
+type ConstrainedBox[A, B: try[t = A, e = empty]] = { inner: B }
 fn testConstraints() {
   // Should typecheck just fine since the constraint is satisfied
   let x: ConstrainedBox[int, ?int] = { inner: some(4) };

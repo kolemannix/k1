@@ -1,4 +1,4 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2026 knix
 // All rights reserved.
 /// A wildly unsafe memory Arena because I never
 /// intend to free any of this except when throwing

@@ -7,7 +7,7 @@ fn matchBool(b: bool): string {
   }
 }
 
-deftype TriState = either { Yes, No, Failure({ reason: string }) }
+type TriState = either { Yes, No, Failure({ reason: string }) }
 fn matchTristateOpt(t: ?TriState): string {
   switch t {
     :some(:Yes) -> "yes",

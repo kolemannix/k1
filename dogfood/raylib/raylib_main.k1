@@ -11,9 +11,9 @@ let MODULE_INFO: k1/module-manifest = {
   }
 }
 ns raylib {
-  deftype Color = { r: u8, g: u8, b: u8, a: u8 }
+  type Color = { r: u8, g: u8, b: u8, a: u8 }
 
-  deftype Rectangle = {
+  type Rectangle = {
     x: f32, y: f32, width: f32, height: f32
   }
 

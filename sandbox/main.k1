@@ -1,6 +1,11 @@
-deftype foo = { x: int }
+type foo = { x: int }
+
+// type distincttest = distinct[int]
+
+type alias abc = opaque[8, 4]
 
 fn main(argc: int, argv: ptr): i32 {
+  let x: abc = uninit;
   eprintln("asdfasdf");
   0
 }

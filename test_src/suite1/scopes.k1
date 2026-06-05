@@ -1,9 +1,9 @@
 ns scopes {
-  deftype Foo = { x: int }
-  deftype alias Alias = Foo
+  type Foo = { x: int }
+  type alias Alias = Foo
   
   ns Outer {
-    deftype Foo = { x: int }
+    type Foo = { x: int }
     ns for Foo {
       fn value(self: Foo): int { self.x + 3 }
     }

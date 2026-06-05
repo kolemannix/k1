@@ -1,18 +1,18 @@
-deftype ObjCommon = { rc: u32, line: u32 }
+type ObjCommon = { rc: u32, line: u32 }
 ns ObjCommon {
   let empty: ObjCommon = { rc: 0, line: 0 }
 }
 
-deftype TfObj = either(u32)
+type TfObj = either(u32)
   Int   ({ common: ObjCommon, i: i64 }),
   Str   ({ common: ObjCommon, value: string }),
   Bool  ({ common: ObjCommon, b: bool }),
   List  ({ common: ObjCommon, elems: list[*mut TfObj], len: size }),
   Symbol({ common: ObjCommon, name: string })
 
-deftype Parser = { input: string, cursor: size }
+type Parser = { input: string, cursor: size }
 
-deftype Ctx = { stack: list[TfObj] }
+type Ctx = { stack: list[TfObj] }
 
 use mem/new
 fn mkStr(value: string): *TfObj { new(:Str({ common: ObjCommon/empty, value })) }

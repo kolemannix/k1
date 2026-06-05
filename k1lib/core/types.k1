@@ -16,7 +16,7 @@ impl print for int-value {
    }
 }
 
-deftype any = {
+type any = {
   type-id: u64,
   value: ptr
 }

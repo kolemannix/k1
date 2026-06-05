@@ -27,7 +27,7 @@ let inputFile: string = core/files/readToString(context .arena)("day5_input.txt"
 // So, in this example, 3 of the available ingredient IDs are fresh.
 
 use core/assertdbg
-deftype Range = { start: uint, end: uint }
+type Range = { start: uint, end: uint }
 ns Range {
   fn parse(s: string): Result[Range, string] {
      let r = s.splitByChar('-');

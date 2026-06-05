@@ -1,7 +1,7 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-deftype arena = {
+type arena = {
   base-ptr: ptr,
   cur-addr: ptr,
   max-addr: ptr

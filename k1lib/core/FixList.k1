@@ -6,7 +6,7 @@
 // |used|10 items  |
 // +----+----------+
 // 0    4
-deftype fixlist[T, N: static size] = { data: array[T, N], used: u32 }
+type fixlist[T, N: static size] = { data: array[T, N], used: u32 }
 ns for fixlist {
   fn cap[T, N: static size](self: fixlist[T, N]): size { self.data.len() }
   fn len[T, N: static size](self: fixlist[T, N]): size { self.used.as[size] }

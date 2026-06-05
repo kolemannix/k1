@@ -1,16 +1,16 @@
 ns struct_composition;
 
-deftype Positioned = {
+type Positioned = {
   x: int, y: int, width: int, height: int
 }
-deftype Text = _struct_combine[{ text: string }, Positioned]
+type Text = _struct_combine[{ text: string }, Positioned]
 
-deftype User = {
+type User = {
   name: string,
   password: string,
 }
 
-deftype UserView = _struct_remove[User, { password: string }]
+type UserView = _struct_remove[User, { password: string }]
 
 fn test() {
   let t: Text = { text: "Hello, Builder!", x: 0, y: 0, width: 0, height: 0 };

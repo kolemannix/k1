@@ -16,7 +16,7 @@ fn is-int[t](): bool {
   types/schema[t] is :int(_)
 }
 
-deftype int-wrapper[T: pred is-int] = { value: T }
+type int-wrapper[T: pred is-int] = { value: T }
 
 ability to-scalar[out: pred is-scalar] {
   fn to-scalar(self): out
