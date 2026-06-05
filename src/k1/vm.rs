@@ -1,4 +1,4 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2026 knix
 // All rights reserved.
 
 use std::ffi::c_void;
@@ -2485,11 +2485,11 @@ pub fn vm_value_to_static_value(
         Type::FunctionPointer(_) => {
             return failf!(span, "Cannot bake function pointers");
         }
-        Type::Reference(_) => return failf!(span, "Cannot yet bake pointers"),
-        Type::Lambda(_) | Type::LambdaObject(_) => {
+        Type::Reference(_) => return failf!(span, "Cannot yet bake references"),
+        Type::Lambda(_) | Type::LambdaObject(_) | Type::Opaque(_) => {
             return failf!(
                 span,
-                "Only scalars, structs, and eithers can be statically baked. Got: {}",
+                "Only plain old data (scalars, structs, arrays, eithers, etc) can be statically baked. Got: {}",
                 k1.type_id_to_string(type_id)
             );
         }

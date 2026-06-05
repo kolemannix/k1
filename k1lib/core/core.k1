@@ -87,7 +87,7 @@ fn eprintln(s: string) {
 #if k1/OS_POSIX
 ns io {
   // TODO: Add buffering to stdout and stderr!
-  deftype OutStream = { fileNo: i32 }
+  type OutStream = { fileNo: i32 }
   let stdout: OutStream = { fileNo: posix/stdout }
   let stderr: OutStream = { fileNo: posix/stderr }
 

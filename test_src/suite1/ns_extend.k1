@@ -1,7 +1,7 @@
 ns ns_extend;
 
 ns foo {
-  deftype Baz = { b: int }
+  type Baz = { b: int }
   ns for Baz {
     fn get(self: Baz): int { self.b }
   }

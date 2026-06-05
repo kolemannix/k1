@@ -1,4 +1,4 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2026 knix
 // All rights reserved.
 
 use std::fmt;
@@ -187,7 +187,6 @@ pub enum TokenKind {
     KeywordOr,
     KeywordIf,
     KeywordElse,
-    KeywordDefType,
     KeywordWhile,
     KeywordLoop,
     KeywordNamespace,
@@ -296,7 +295,6 @@ impl TokenKind {
             K::KeywordOr => "or",
             K::KeywordIf => "if",
             K::KeywordElse => "else",
-            K::KeywordDefType => "deftype",
             K::KeywordWhile => "while",
             K::KeywordLoop => "loop",
             K::KeywordNamespace => "ns",
@@ -397,6 +395,8 @@ impl TokenKind {
     }
 
     pub fn token_from_bytes(bytes: &[u8]) -> Option<TokenKind> {
+        // TODO: Fewer lexed keywords; more context-aware idents-as-keywords
+        // This prevents 'name-squatting' on things like 'type', 'in', 'for'
         match bytes {
             b"fn" => Some(K::KeywordFn),
             b"let" => Some(K::KeywordLet),
@@ -405,7 +405,6 @@ impl TokenKind {
             b"or" => Some(K::KeywordOr),
             b"if" => Some(K::KeywordIf),
             b"else" => Some(K::KeywordElse),
-            b"deftype" => Some(K::KeywordDefType),
             b"while" => Some(K::KeywordWhile),
             b"loop" => Some(K::KeywordLoop),
             b"ns" => Some(K::KeywordNamespace),

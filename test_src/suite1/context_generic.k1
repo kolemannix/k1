@@ -1,6 +1,6 @@
 ns context_generic;
 
-deftype MyBox[T] = { value: T }
+type MyBox[T] = { value: T }
 
 fn box[T](context _foo: T)(value: T): MyBox[T] {
   { value: value }

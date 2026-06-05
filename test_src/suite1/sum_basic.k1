@@ -1,6 +1,6 @@
 ns sum_basic;
 
-deftype Maybe = either { a, b(char), c(string) }
+type Maybe = either { a, b(char), c(string) }
 fn sumPayload() {
   let a: Maybe = :a;
   let b: Maybe = :b('x');
@@ -33,7 +33,7 @@ fn sumPayload() {
 
 }
 
-deftype MyResult[T, E] = either { ok(T), err(E) }
+type MyResult[T, E] = either { ok(T), err(E) }
 ns for MyResult {
   fn myGet[T, E](self: MyResult[T, E]): T {
     self.as-ok().!
@@ -68,7 +68,7 @@ fn genericSum() {
     assert(types/align[MyResult[int, string]]() == 8);
 }
 
-deftype E = either(u8) { A = 4, B = 8, C(int) = 9 }
+type E = either(u8) { A = 4, B = 8, C(int) = 9 }
 fn tags() {
   let a: E = :A;
   let b: E = :B;

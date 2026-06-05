@@ -7,7 +7,7 @@ use core/types/size
 use core/types/stride
 use core/types/align
 
-deftype Point = { x: i32, y: i32 }
+type Point = { x: i32, y: i32 }
 
 // Generic function to test type substitution with Arrays
 fn getArrayInfo[T](): { elementName: string, fiveSize: size, tenSize: size } {

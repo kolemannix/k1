@@ -10,7 +10,7 @@ let MODULE_INFO: k1/module-manifest = {
   }
 }
 
-deftype response = {
+type response = {
   status: u32,
   headers: span[{ name: string, value: string }],
   body: span[u8]

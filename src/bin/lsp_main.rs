@@ -1,9 +1,9 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2026 knix
 // All rights reserved.
 
 use log::debug;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, RwLock};
 
@@ -264,8 +264,6 @@ impl Backend {
     }
 
     fn compile(&self) -> u32 {
-        let out_dir: PathBuf = ".k1-out/lsp".into();
-        std::fs::create_dir_all(&out_dir).unwrap();
         let iteration_number = self.compile_iteration.load(Ordering::Relaxed);
         info!("compiling version {}", iteration_number);
         let root_uri = self.workspace_uri.read().unwrap();
@@ -281,7 +279,7 @@ impl Backend {
                 file: root_uri.as_ref().unwrap().path().into(),
             },
         };
-        let compile_result = k1::compiler::compile_program(&args, &out_dir);
+        let compile_result = k1::compiler::compile_program(&args);
         let compiled_module = match compile_result {
             Ok(module) => {
                 info!("compile {} succeeded", iteration_number);

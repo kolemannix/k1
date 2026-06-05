@@ -1,4 +1,4 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2026 knix
 // All rights reserved.
 
 use std::fmt::{Display, Formatter, Write};
@@ -312,6 +312,9 @@ impl TypedProgram {
                     }
                 }
                 Ok(())
+            }
+            Type::Opaque(opaque) => {
+                write!(w, "opaque[{}, {}]", opaque.size, opaque.align)
             }
             Type::Never => w.write_str("never"),
             Type::Generic(generic) => {

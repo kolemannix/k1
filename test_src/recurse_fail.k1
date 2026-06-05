@@ -1,5 +1,5 @@
-deftype Red = { r: *Red, b: Black } 
-deftype Black = { g: Green, b: bool } 
-deftype Green = { i: int, r: Red }
+type Red = { r: *Red, b: Black } 
+type Black = { g: Green, b: bool } 
+type Green = { i: int, r: Red }
 
 //errmsg: Same-level recursion: type Red directly contains itself

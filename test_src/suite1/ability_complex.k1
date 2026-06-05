@@ -1,6 +1,6 @@
 ns ability_complex;
 
-deftype Pair[PA, PB] = { a: *PA, b: ?PB }
+type Pair[PA, PB] = { a: *PA, b: ?PB }
 ability AsPair[AA, BB] {
   fn getA(self): *AA
   fn getB(self): ?BB

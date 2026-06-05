@@ -1,6 +1,6 @@
 ns enum_fail;
 ns inner;
-deftype E = either { A(int) , B , C }
+type E = either { A(int) , B , C }
 
 fn test() {
   let result = testCompile(:A(true): E);

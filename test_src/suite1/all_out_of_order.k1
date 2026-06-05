@@ -23,9 +23,9 @@ fn test() {
   assert(takesHelloer(foo).s == "Joe");
 }
 
-deftype MyString = { s: string }
+type MyString = { s: string }
 
-deftype Foo = { name: string }
+type Foo = { name: string }
 
 ns bar {
   // Type with NS used before defined
@@ -46,7 +46,7 @@ ns secret {
 
 ns foo {
   ns core {
-    deftype nested = either { A, B }
+    type nested = either { A, B }
     ns for nested {
       let default: nested = :A
     }

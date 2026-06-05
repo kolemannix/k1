@@ -16,8 +16,8 @@
 // Library, no dependencies, not multithreaded work
 let MODULE_INFO: k1/module-manifest = zeroed()
 
-deftype Entry[V] = ?{ key: string, value: V, deleted: bool }
-deftype HashMap[V] = {
+type Entry[V] = ?{ key: string, value: V, deleted: bool }
+type HashMap[V] = {
   size: size,
   // TODO: Switch to a 3-state enum for the deleted variant for a more efficient layout
   entries: list[Entry[V]],

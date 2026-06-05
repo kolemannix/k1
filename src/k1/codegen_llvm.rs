@@ -1,4 +1,4 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2026 knix
 // All rights reserved.
 
 use std::num::NonZeroU32;
@@ -894,7 +894,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 &type_name,
                             )
                             .as_type();
-                        let aligned_opaque_repr = self.codegen_union_repr(agg_layout);
+                        let aligned_opaque_repr = self.codegen_opaque_repr(agg_layout);
                         CgType::Union(CgUnionType {
                             pt,
                             aligned_opaque_repr,
@@ -908,6 +908,39 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             self.codegen_type(PhysicalType::agg(e.struct_repr));
 
                         struct_repr_cg_type
+                    }
+                    AggType::Opaque { size, align } => {
+                        let layout = Layout { size, align }; 
+                        let aligned_opaque_repr = self.codegen_opaque_repr(layout);
+
+                        let span = self.debug.current_span();
+                        let line_number = self.get_line_number(span);
+                        let di_type = self
+                            .debug
+                            .debug_builder
+                            .create_union_type(
+                                self.debug.current_scope(),
+                                &type_name,
+                                self.debug.current_file(),
+                                line_number,
+                                agg_layout.size_bits() as u64,
+                                agg_layout.align_bits(),
+                                0,
+                                &[],
+                                0,
+                                &type_name,
+                            )
+                            .as_type();
+
+                        // For now, we'll call this a 'Union', its just our own type anyway,
+                        // arguably it shouldn't even be a Sum since they share so much
+                        CgType::Union(CgUnionType {
+                            pt,
+                            aligned_opaque_repr,
+                            members: MSlice::empty(),
+                            layout,
+                            di_type,
+                        })
                     }
                 };
                 self.llvm_types.insert(agg_id, cg_type);
@@ -944,7 +977,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    fn codegen_union_repr(&self, expected_layout: Layout) -> StructType<'ctx> {
+    fn codegen_opaque_repr(&self, expected_layout: Layout) -> StructType<'ctx> {
         // For union types, we generate a 2-field struct to trick LLVM.
 
         // Field 1 is a synthetic integer wide enough to force the alignment of the
@@ -2714,7 +2747,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     AggType::Sum(_)
                     | AggType::Union { .. }
                     | AggType::Struct { .. }
-                    | AggType::Array { .. } => {
+                    | AggType::Array { .. }
+                    | AggType::Opaque { .. } => {
                         let size_bytes = agg_record.layout.size;
                         match callconv {
                             CallConv::InternalK1 => {
@@ -2819,7 +2853,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         AggType::Array { element_pt, len } => {
                             (0..len).all(|_| visit(c, element, count, element_pt))
                         }
-                        AggType::Union { .. } | AggType::Sum(_) => false,
+                        AggType::Union { .. } | AggType::Sum(_) | AggType::Opaque { .. } => false,
                     }
                 }
             }
@@ -2934,13 +2968,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             RegisterClass::Int,
                         ),
                         AggType::Sum(e) => {
-                            // Just handle the enum's struct
+                            // Just handle the sum's struct representation
                             handle_type_rec(
                                 c,
                                 classes,
                                 active_bits2,
                                 offset_bits,
                                 PhysicalType::agg(e.struct_repr),
+                            )
+                        }
+                        AggType::Opaque { size, .. } => {
+                            mark_bits(
+                                classes,
+                                active_bits2,
+                                offset_bits,
+                                size * 8,
+                                RegisterClass::Int,
                             )
                         }
                     }
@@ -3049,7 +3092,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         function_id: FunctionId,
     ) -> K1Result<()> {
         let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
-        eprintln!(
+        debug!(
             "codegen_unit_body ir\n{}",
             ir::unit_to_string(self.k1, IrUnitId::Function(function_id), true)
         );

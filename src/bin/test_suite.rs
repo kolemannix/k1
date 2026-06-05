@@ -1,8 +1,8 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2026 knix
 // All rights reserved.
 
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -106,8 +106,6 @@ fn get_test_expectation(test_file: &Path) -> TestExpectation {
 }
 
 fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<()> {
-    let out_dir: PathBuf = ".k1-out/test_suite".into();
-    std::fs::create_dir_all(&out_dir)?;
     let filename = path.as_ref().file_name().unwrap().to_str().unwrap();
     let args = k1::compiler::Args {
         optimize: false,
@@ -119,7 +117,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         target: None,
         command: Command::Build { file: path.as_ref().to_owned() },
     };
-    let compile_result = compiler::compile_program(&args, &out_dir);
+    let compile_result = compiler::compile_program(&args);
     let expectation = get_test_expectation(path.as_ref());
     match compile_result {
         Err(CompileProgramError::TyperFailure(module)) => {
@@ -178,12 +176,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                 TestExpectation::ExitCode { .. } | TestExpectation::AbortErrorMessage { .. }
             );
             if expect_exit {
-                let codegen = compiler::codegen_module(
-                    &args,
-                    ctx,
-                    &mut typed_program,
-                    &out_dir,
-                )?;
+                let codegen = compiler::codegen_module(&args, ctx, &mut typed_program)?;
 
                 if interpret {
                     match codegen.interpret_module() {
@@ -199,8 +192,11 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                         }
                     }
                 } else {
-                    let mut run_cmd =
-                        std::process::Command::new(format!("{}/{}", out_dir.display(), name));
+                    let mut run_cmd = std::process::Command::new(format!(
+                        "{}/{}",
+                        codegen.k1.config.out_dir.display(),
+                        name
+                    ));
                     let run_result = run_cmd.output();
                     match run_result {
                         Err(e) => {
@@ -278,6 +274,11 @@ pub fn main() -> Result<()> {
         let metadata = dir_entry.metadata()?;
         let path = dir_entry.path();
         eprintln!("{path:?}");
+
+        if path.file_name().unwrap().to_str().unwrap().starts_with(".") {
+            continue;
+        }
+
         if metadata.is_file() {
             let extension = path.extension().unwrap();
             if extension == "k1" {

@@ -4,7 +4,7 @@ ability Num {
   fn num(self): i32
 }
 
-deftype Point = { x: i32, y: i32 }
+type Point = { x: i32, y: i32 }
 
 impl Num for Point {
   fn num(self): i32 {
@@ -37,8 +37,8 @@ ns qualified_syntax {
     fn secret(): A
   }
 
-  deftype Foo = {}
-  deftype Bar = {}
+  type Foo = {}
+  type Bar = {}
 
   impl HasSecretGen[A = int] for Foo {
     fn secret(): int { 10 }

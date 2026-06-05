@@ -1,8 +1,8 @@
 ns try_test;
 
-deftype alias Error = string
+type alias Error = string
 
-deftype Foo = {
+type Foo = {
   a: bool
 }
 

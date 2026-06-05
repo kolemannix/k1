@@ -1,13 +1,13 @@
 ns struct_anon_nomethod;
 
-deftype PointNamed = { x: int, y: int }
+type PointNamed = { x: int, y: int }
 ns for PointNamed {
   fn sum(self: PointNamed): int {
     self.x + self.y
   }
 }
 
-deftype alias PointAlias = { x: int, y: int }
+type alias PointAlias = { x: int, y: int }
 ns PointAlias {
   fn sum(me: PointAlias): int {
     me.x + me.y

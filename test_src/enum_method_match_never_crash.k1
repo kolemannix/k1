@@ -1,6 +1,6 @@
 ns enum_method_match_never {
 
-  deftype e = either { a(int), b }
+  type e = either { a(int), b }
   ns for e {
     fn valueIfA(self: e): int {
       switch self {

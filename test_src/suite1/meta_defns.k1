@@ -14,7 +14,7 @@ $ {
 }
 
 $ {
-  p"deftype Frob = { b: bool }"
+  p"type Frob = { b: bool }"
 }
 
 $ {

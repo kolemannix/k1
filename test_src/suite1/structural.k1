@@ -1,11 +1,11 @@
 ns structural;
 
 // Nominal
-deftype handle = { index: size }
-deftype handle2 = { index: size }
+type handle = { index: size }
+type handle2 = { index: size }
 
 // Structural, just an alias
-deftype alias handle3 = { index: size }
+type alias handle3 = { index: size }
 
 fn takes-structural(_s: { index: size}) { {} }
 

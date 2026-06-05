@@ -7,7 +7,7 @@ fn enumNoPayload() {
   if v is :yes {} else crash("");
 }
 
-deftype enum-abc = either(u8) { a, b, c }
+type enum-abc = either(u8) { a, b, c }
 impl print for enum-abc {
   fn printTo[w: writer](self, w) { switch self { 
     :a -> w.write-char('a'),
@@ -41,7 +41,7 @@ fn getEnumValue[i, e: types/enum[v = i]](e: e): i {
   e.enum-value()
 }
 
-deftype custom-enum-tags = either { a = 10, b = 11, c = 12 }
+type custom-enum-tags = either { a = 10, b = 11, c = 12 }
 fn custom-tags-test() {
   assertEquals(custom-enum-tags:a.value, 10);
   assertEquals(custom-enum-tags:b.value, 11);

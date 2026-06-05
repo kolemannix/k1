@@ -52,7 +52,7 @@ fn listSlice() {
   assert(fullSlice.get(2) == 3);
 }
 
-deftype Point = {
+type Point = {
   x: int,
   y: int,
   z: int,

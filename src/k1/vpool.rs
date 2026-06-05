@@ -1,4 +1,4 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2026 knix
 // All rights reserved.
 
 use std::hash::{Hash, Hasher};

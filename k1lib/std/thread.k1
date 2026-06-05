@@ -2,7 +2,7 @@ ns thread;
 
 use core/arena
 
-deftype alias Thread = *empty
+type alias Thread = *empty
 
 ns pthread {
   extern("pthread_create") fn pthread_create(thread: *Thread, attrs: ptr, start_routine: ptr, input: ptr): i32

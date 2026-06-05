@@ -1,4 +1,4 @@
-deftype Color = either { Red, Green, Blue }
+type Color = either { Red, Green, Blue }
 
 impl show for Color {
   fn show(self: Color): string {

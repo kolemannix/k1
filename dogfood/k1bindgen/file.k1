@@ -1,9 +1,9 @@
 ns file; // file.cpp
-deftype i2 = {
+type i2 = {
   x: c-int,
   y: c-int,
 }
-deftype foo = {
+type foo = {
   _char: i8,
   _unsigned_char: u8,
   _sizet: c-int,

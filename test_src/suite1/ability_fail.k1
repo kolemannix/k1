@@ -3,7 +3,7 @@ ability num {
   fn num(self): i32
 }
 
-deftype Tool = either { True, False, Iono }
+type Tool = either { True, False, Iono }
 
 fn test() {
   let p: Tool = :True;

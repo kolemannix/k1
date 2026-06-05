@@ -9,7 +9,7 @@ let MODULE_INFO: k1/module-manifest = {
   link-args: [],
 }
 
-deftype request-state = {
+type request-state = {
   url: list[char],
 }
 

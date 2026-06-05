@@ -28,8 +28,8 @@ ns pg {
   extern("pq", "PQgetvalue") fn get-value(result: ptr, row: core/c-int, column: core/c-int): ptr
 }
 
-deftype Connection = { raw: ptr }
-deftype QueryResult = { raw: ptr }
+type Connection = { raw: ptr }
+type QueryResult = { raw: ptr }
 
 fn c-string-or-default(c-str: ptr, fallback: string): string {
   if c-str.is-null() fallback

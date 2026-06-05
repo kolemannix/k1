@@ -1,4 +1,4 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2026 knix
 // All rights reserved.
 
 use std::fs;
@@ -228,6 +228,7 @@ impl Args {
 #[derive(Debug, Clone)]
 pub struct CompilerConfig {
     pub src_path: PathBuf,
+    pub home_dir: PathBuf,
     pub is_test_build: bool,
     pub no_std: bool,
     pub target: Target,
@@ -301,10 +302,7 @@ fn write_program_dump(p: &TypedProgram) {
 /// If `args.file` points to a file,
 /// - compile that file only.
 /// - program name is the name of the file.
-pub fn compile_program(
-    args: &Args,
-    out_dir: &Path,
-) -> std::result::Result<TypedProgram, CompileProgramError> {
+pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, CompileProgramError> {
     #[cfg(feature = "profile")]
     let profiler_guard = if args.profile {
         Some(
@@ -319,12 +317,14 @@ pub fn compile_program(
     };
     let start_time = std::time::Instant::now();
 
-    let out_dir = out_dir.canonicalize().unwrap();
-
     let src_path = args
         .file()
         .canonicalize()
         .unwrap_or_else(|_| panic!("Failed to load source path: {:?}", args.file()));
+
+    let (_is_dir, home_dir) = module_home_from_src_path(&src_path);
+    let out_dir: PathBuf = home_dir.join(".k1-out");
+    std::fs::create_dir_all(&out_dir).unwrap();
 
     let use_std = !args.no_std;
 
@@ -359,6 +359,7 @@ pub fn compile_program(
 
     let config = CompilerConfig {
         src_path: src_path.clone(),
+        home_dir,
         is_test_build: args.command.is_test(),
         no_std: args.no_std,
         target,
@@ -533,7 +534,6 @@ pub fn codegen_module<'ctx, 'module>(
     args: &Args,
     ctx: &'ctx Context,
     typed_module: &'module mut TypedProgram,
-    out_dir: &Path,
 ) -> Result<Cg<'ctx, 'module>> {
     let mut codegen = Cg::create(ctx, typed_module, args.debug, args.optimize);
     let mut module_name = codegen.name().to_string();
@@ -541,6 +541,7 @@ pub fn codegen_module<'ctx, 'module>(
         module_name.push_str("_test");
     };
     let module_name_path = PathBuf::from(&module_name);
+    let out_dir = codegen.k1.config.out_dir.clone();
 
     if let Err(e) = codegen.codegen_program() {
         let use_color = std::io::stderr().is_terminal();
@@ -585,7 +586,12 @@ pub fn codegen_module<'ctx, 'module>(
 }
 
 // Eventually, we want to return output and exit code to the application
-pub fn run_compiled_program(out_dir: &Path, program_home_dir: &Path, module_name: &str, is_test: bool) -> Option<i32> {
+pub fn run_compiled_program(
+    out_dir: &Path,
+    program_home_dir: &Path,
+    module_name: &str,
+    is_test: bool,
+) -> Option<i32> {
     let mut run_cmd = std::process::Command::new(format!(
         "{}/{}{}",
         out_dir.display(),

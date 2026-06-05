@@ -1,6 +1,6 @@
 ns opaque_type_01;
 
-deftype UserId = { inner: int }
+type UserId = { inner: int }
 ns for UserId {
   fn make(value: int): UserId {
     { inner: value }

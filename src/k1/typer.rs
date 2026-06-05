@@ -1,4 +1,4 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2026 knix
 // All rights reserved.
 
 pub(crate) mod derive;
@@ -4206,14 +4206,12 @@ impl TypedProgram {
         scope_id: ScopeId,
         context: EvalTypeExprContext,
     ) -> K1Result<TypeId> {
-        let ParsedTypeExpr::TypeApplication(ty_app) = self.ast.type_exprs.get(ty_app_id) else {
+        let ParsedTypeExpr::TypeApplication(ty_app) = self.ast.type_exprs.get(ty_app_id).clone()
+        else {
             panic_at_disco!("Expected TypeApplication")
         };
 
-        let ty_app_name = &ty_app.name;
-        let ty_app_span = ty_app.span;
-        let name_span = ty_app.name.span;
-        match self.find_type_namespaced(scope_id, ty_app_name)? {
+        match self.find_type_namespaced(scope_id, &ty_app.name)? {
             Some((type_id, _)) => {
                 match self.types.get(type_id) {
                     Type::Unresolved(parsed_type_defn_id) => {
@@ -4223,17 +4221,17 @@ impl TypedProgram {
                             if Some(entry.layout_depth) == context.defn_layout_depth {
                                 kbail!(
                                     self,
-                                    ty_app_span,
+                                    ty_app.span,
                                     "Same-level recursion: type {} directly contains itself",
-                                    ty_app_name.name
+                                    ty_app.name.name
                                 )
                             }
                             if !ty_app.args.is_empty() {
-                                return failf!(ty_app_span, "cant do recursive generics yet");
+                                return failf!(ty_app.span, "cant do recursive generics yet");
                             }
                             debug!(
                                 "yielding after detecting recursion: {}",
-                                self.qident_to_string(ty_app_name)
+                                self.qident_to_string(&ty_app.name)
                             );
                             self.emit_ls_entity(
                                 ty_app.name.span,
@@ -4267,7 +4265,7 @@ impl TypedProgram {
                     Type::Generic(g) => {
                         if ty_app.args.len() != g.params.len() {
                             return failf!(
-                                ty_app_span,
+                                ty_app.span,
                                 "Type {} expects {} type arguments, got {}",
                                 self.qident_to_string(&ty_app.name),
                                 g.params.len(),
@@ -4305,7 +4303,7 @@ impl TypedProgram {
                                 *arg_type,
                                 subst_pairs.as_slice(),
                                 scope_id,
-                                ty_app_span,
+                                ty_app.span,
                             )?;
                         }
 
@@ -4313,14 +4311,15 @@ impl TypedProgram {
                         let instantiated_type_id =
                             self.instantiate_generic_type(type_id, type_arguments_slice);
 
-                        // Here: Check for direct recursion
+                        // Here: Check for direct recursion after instantiation to fix bug with
+                        // generics
                         // if let Some(layout_depth) = context.defn_layout_depth {
                         //     // Walk the type and look for any of our recursion stack at same level
                         //     // as usual
                         // }
 
                         self.emit_ls_entity(
-                            name_span,
+                            ty_app.name.span,
                             LsEntityKind::Type {
                                 type_id,
                                 applied_type_id: Some(instantiated_type_id),
@@ -4331,19 +4330,37 @@ impl TypedProgram {
                     _other => {
                         let resolved_type_id = self.get_type_id_resolved(type_id, scope_id);
                         self.emit_ls_entity(
-                            name_span,
+                            ty_app.name.span,
                             LsEntityKind::Type { type_id, applied_type_id: None },
                         );
                         Ok(resolved_type_id)
                     }
                 }
             }
-            None => match self.find_function_namespaced(scope_id, ty_app_name)? {
-                Some(function_id) => Ok(self.get_function(function_id).type_id),
-                None => {
-                    failf!(ty_app.span, "Type '{}' not found", self.qident_to_string(ty_app_name),)
+            None => {
+                if ty_app.args.is_empty() {
+                    match self.find_function_namespaced(scope_id, &ty_app.name)? {
+                        Some(function_id) => Ok(self.get_function(function_id).type_id),
+                        None => {
+                            failf!(
+                                ty_app.span,
+                                "Type '{}' not found",
+                                self.qident_to_string(&ty_app.name),
+                            )
+                        }
+                    }
+                } else {
+                    if let Some(opaque_type_id) = self.handle_opaque_tyapp(&ty_app)? {
+                        Ok(opaque_type_id)
+                    } else {
+                        failf!(
+                            ty_app.span,
+                            "Type '{}' not found",
+                            self.qident_to_string(&ty_app.name)
+                        )
+                    }
                 }
-            },
+            }
         }
     }
 
@@ -4405,6 +4422,63 @@ impl TypedProgram {
                 specialized_type
             }
         }
+    }
+
+    fn handle_opaque_tyapp(&mut self, ty_app: &parse::TypeApplication) -> K1Result<Option<TypeId>> {
+        if self.ident_str(ty_app.name.name) != "opaque" {
+            return Ok(None);
+        }
+        if !ty_app.name.path.is_empty() {
+            return failf!(
+                ty_app.span,
+                "Expected 'opaque' with no namespace, got '{}'",
+                self.qident_to_string(&ty_app.name)
+            );
+        }
+        if ty_app.args.len() != 2 {
+            return failf!(
+                ty_app.span,
+                "Expected 2 type parameters for opaque, got {}",
+                ty_app.args.len()
+            );
+        }
+        let Some(size_expr) = self.ast.mem.get_nth(ty_app.args, 0).type_expr else {
+            return failf!(ty_app.span, "Wildcard _ type not accepted here");
+        };
+        let Some(align_expr) = self.ast.mem.get_nth(ty_app.args, 1).type_expr else {
+            return failf!(ty_app.span, "Wildcard _ type not accepted here");
+        };
+        let ParsedTypeExpr::StaticLiteral(ParsedLiteral::Numeric(size_lit)) =
+            *self.ast.type_exprs.get(size_expr)
+        else {
+            return failf!(ty_app.span, "Expected a static literal for opaque size");
+        };
+        let ParsedTypeExpr::StaticLiteral(ParsedLiteral::Numeric(align_lit)) =
+            *self.ast.type_exprs.get(align_expr)
+        else {
+            return failf!(ty_app.span, "Expected a static literal for opaque alignment");
+        };
+        let TypedIntValue::U32(size) =
+            self.eval_integer_value(size_lit.span, Some(IntegerType::U32.type_id()))?
+        else {
+            return failf!(size_lit.span, "Expected a u32 value for opaque size");
+        };
+        let TypedIntValue::U32(align) =
+            self.eval_integer_value(align_lit.span, Some(IntegerType::U32.type_id()))?
+        else {
+            return failf!(align_lit.span, "Expected a u32 value for opaque alignment");
+        };
+
+        if align == 0 || !align.is_power_of_two() || align > 128 {
+            return failf!(
+                align_lit.span,
+                "Alignment must be a non-zero power of two, not exceeding 128, got {}",
+                align
+            );
+        }
+
+        let opaque_type = self.types.add_anon(Type::Opaque(OpaqueType { size, align }));
+        Ok(Some(opaque_type))
     }
 
     fn substitute_in_type(
@@ -4565,6 +4639,7 @@ impl TypedProgram {
                     type_id
                 }
             }
+            Type::Opaque(_) => type_id,
             Type::Reference(reference) => {
                 let reference = *reference;
                 let new_inner = self.substitute_in_type(reference.inner_type, substitution_pairs);
@@ -16530,6 +16605,10 @@ impl TypedProgram {
                                 self.types.builtins.types_int_kind = Some(type_id);
                             } else if name == self.ast.idents.b.int_value {
                                 self.types.builtins.types_int_value = Some(type_id)
+                            } else if name == self.ast.idents.b.float_kind {
+                                self.types.builtins.types_float_kind = Some(type_id)
+                            } else if name == self.ast.idents.b.float_value {
+                                self.types.builtins.types_float_value = Some(type_id)
                             } else if name == self.ast.idents.b.layout {
                                 self.types.builtins.types_layout = Some(type_id)
                             }
@@ -17712,6 +17791,7 @@ impl TypedProgram {
         let type_schema_type_id = self.types.builtins.types_type_schema.unwrap();
         let type_schema = *self.types.get(type_schema_type_id).expect_sum();
         let int_kind_type_id = self.types.builtins.types_int_kind.unwrap();
+        let float_kind_type_id = self.types.builtins.types_float_kind.unwrap();
         let get_schema_variant = |self_: &TypedProgram, ident| {
             self_.types.sum_variant_by_name(type_schema.variants, ident).unwrap()
         };
@@ -17739,6 +17819,12 @@ impl TypedProgram {
                 let enum_value =
                     make_variant(self, get_ident!(self, "int"), Some(payload_value_id));
                 enum_value
+            }
+            Type::Float(float_type) => {
+                let float_kind_enum_value =
+                    TypedProgram::make_float_kind(float_kind_type_id, *float_type);
+                let payload_value_id = self.static_values.add(float_kind_enum_value);
+                make_variant(self, get_ident!(self, "float"), Some(payload_value_id))
             }
             Type::Enum(enum_type) => {
                 let target_enum_members = enum_type.member_values;
@@ -17791,7 +17877,6 @@ impl TypedProgram {
                 );
                 make_variant(self, get_ident!(self, "enum"), Some(payload_value_id))
             }
-            Type::Float(_float_type) => todo!("float schema"),
             Type::Struct(_struct_type) if chased_type_id == STRING_TYPE_ID => {
                 make_variant(self, get_ident!(self, "string"), None)
             }
@@ -17976,6 +18061,15 @@ impl TypedProgram {
                 );
                 make_variant(self, get_ident!(self, "either"), Some(payload_value_id))
             }
+            Type::Opaque(opaque) => {
+                // FIXME: Proper opaque type schema
+                let s = self.static_values.add(StaticValue::String(
+                    self.ast
+                        .strings
+                        .intern(format!("opaque[size={}, align={}]", opaque.size, opaque.align)),
+                ));
+                make_variant(self, get_ident!(self, "other"), Some(s))
+            }
             Type::Never => make_variant(self, get_ident!(self, "never"), None),
             Type::Function(fn_type) => {
                 let fn_type = *fn_type;
@@ -18095,6 +18189,10 @@ impl TypedProgram {
 
     fn make_int_kind(int_kind_type_id: TypeId, integer_type: IntegerType) -> StaticValue {
         StaticValue::Enum(int_kind_type_id, TypedIntValue::U8(integer_type as u8))
+    }
+
+    fn make_float_kind(float_kind_type_id: TypeId, float_type: FloatType) -> StaticValue {
+        StaticValue::Enum(float_kind_type_id, TypedIntValue::U8(float_type as u8))
     }
 
     fn make_int_value(

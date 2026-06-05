@@ -1,6 +1,6 @@
 ns matching_if;
 
-deftype alias ABC = either { A, B, C }
+type alias ABC = either { A, B, C }
 
 impl print for ABC {
   fn printTo[w: writer](self: ABC, w) {

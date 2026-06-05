@@ -8,7 +8,7 @@ VerySmall very_small(VerySmall a, VerySmall b) {
   VerySmall r = {0};
   r.x += a.x;
   r.x += b.x;
-  printf("very small, a.x=%d, b.x=%d, r.x=%d\n", a.x, b.x, r.x);
+  // printf("very small, a.x=%d, b.x=%d, r.x=%d\n", a.x, b.x, r.x);
   return r;
 }
 
@@ -24,6 +24,13 @@ Small small(Small a, Small b) {
   r.b += b.b;
   r.a += b.a;
   return r;
+}
+
+typedef struct { int inner; } IntWrap;
+IntWrap intWrap(IntWrap a, IntWrap b) {
+  IntWrap result;
+  result.inner = a.inner + b.inner;
+  return result;
 }
 
 typedef struct { uint64_t a; uint64_t b; } Medium;
@@ -97,7 +104,7 @@ CXCursor rtCursor(CXCursor in) {
   out.data[0] = in.data[0];
   out.data[1] = in.data[1];
   out.data[2] = in.data[2];
-  printf("rtCursor, kind=%d, xdata=%d, data[0]=%p, data[1]=%p, data[2]=%p\n", in.kind, in.xdata, in.data[0], in.data[1], in.data[2]);
+  // printf("rtCursor, kind=%d, xdata=%d, data[0]=%p, data[1]=%p, data[2]=%p\n", in.kind, in.xdata, in.data[0], in.data[1], in.data[2]);
   return out;
 }
 
@@ -141,4 +148,27 @@ int takesFnStruct(int(*fn)(struct takesFnStructArg)) {
   in.d = 4;
   int result = fn(in);
   return result;
+}
+
+enum Tag {
+  TA,
+  TB,
+  TC
+};
+
+typedef struct {
+  enum Tag tag;
+  union {
+    int a;
+    long b;
+    void *c;
+  } data;
+} TagUnion;
+
+int TagUnion_iszero(TagUnion x) {
+  switch (x.tag) {
+    case TA: return x.data.a == 0;
+    case TB: return x.data.b == 0;
+    case TC: return x.data.c == (void*)0;
+  }
 }
