@@ -910,7 +910,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         struct_repr_cg_type
                     }
                     AggType::Opaque { size, align } => {
-                        let layout = Layout { size, align }; 
+                        let layout = Layout { size, align };
                         let aligned_opaque_repr = self.codegen_opaque_repr(layout);
 
                         let span = self.debug.current_span();
@@ -999,9 +999,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let padding_bytes = expected_layout.size.saturating_sub(aligner_type.get_bit_width() / 8);
 
         let padding = self.padding_type(padding_bytes);
-        let aligned_struct_repr = self
-            .ctx
-            .struct_type(&[aligner_type.as_basic_type_enum(), padding.as_basic_type_enum()], false);
+        let aligned_struct_repr = if padding_bytes == 0 {
+            self.ctx.struct_type(&[aligner_type.as_basic_type_enum()], false)
+        } else {
+            self.ctx.struct_type(
+                &[aligner_type.as_basic_type_enum(), padding.as_basic_type_enum()],
+                false,
+            )
+        };
 
         let llvm_layout = self.layout_per_llvm(&aligned_struct_repr);
         if expected_layout.strided() != llvm_layout {
@@ -2977,15 +2982,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 PhysicalType::agg(e.struct_repr),
                             )
                         }
-                        AggType::Opaque { size, .. } => {
-                            mark_bits(
-                                classes,
-                                active_bits2,
-                                offset_bits,
-                                size * 8,
-                                RegisterClass::Int,
-                            )
-                        }
+                        AggType::Opaque { size, .. } => mark_bits(
+                            classes,
+                            active_bits2,
+                            offset_bits,
+                            size * 8,
+                            RegisterClass::Int,
+                        ),
                     }
                 }
             }
@@ -3009,9 +3012,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         function_id: FunctionId,
     ) -> K1Result<()> {
-        debug!("codegen_function_body {}", self.k1.function_id_to_string(function_id, false));
         self.current_insert_function = function_id;
         let typed_function = self.k1.get_function(function_id);
+        let is_debug = typed_function.compiler_debug;
+        if is_debug {
+            self.k1.push_debug_level();
+        }
+        debug!("codegen_function_body {}", self.k1.function_id_to_string(function_id, false));
 
         let function_span = self.k1.ast.get_span_for_id(typed_function.parsed_id);
         let function_line_number = self
@@ -3081,7 +3088,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         self.set_debug_location_from_span(function_span);
         self.codegen_unit_body(inst_mappings, function_id)?;
+        if is_debug {
+            // function_value.view_function_cfg_only();
+            debug!("LLVM final function");
+            function_value.print_to_stderr();
+        }
         self.debug.pop_scope();
+
+        if is_debug {
+            self.k1.pop_debug_level();
+        }
 
         Ok(())
     }
@@ -3094,7 +3110,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
         debug!(
             "codegen_unit_body ir\n{}",
-            ir::unit_to_string(self.k1, IrUnitId::Function(function_id), true)
+            ir::unit_to_string(self.k1, IrUnitId::Function(function_id), false)
         );
         match ir_unit.function_builtin_kind {
             Some(builtin_kind) => {
@@ -3108,7 +3124,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         ir::cfg_simplify(self.k1, IrUnitId::Function(function_id));
         debug!(
             "codegen_unit_body ir simplified\n{}",
-            ir::unit_to_string(self.k1, IrUnitId::Function(function_id), true)
+            ir::unit_to_string(self.k1, IrUnitId::Function(function_id), false)
         );
 
         let ir_unit = self.k1.ir.functions.get(function_id).unwrap();

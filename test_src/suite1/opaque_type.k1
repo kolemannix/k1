@@ -1,0 +1,15 @@
+ns opaque_test;
+fn test() {
+  let x: opaque[8, 4] = uninit;
+  let x2: opaque[8, 4] = zeroed();
+
+  assertEquals(types/size[opaque[10, 1]], 10);
+  assertEquals(types/size[opaque[128, 8]], 128);
+
+  assertEquals(types/size[{
+    x: i32, y: i32, z: opaque[128, 8]
+  }], 136);
+
+  assertEquals(types/align[opaque[10, 1]], 1);
+  assertEquals(types/align[opaque[10, 16]], 16);
+}

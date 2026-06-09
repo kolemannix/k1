@@ -1,0 +1,10 @@
+ns pthread;
+
+// deftype alias pid_t = 
+// deftype alias pthread_once_t = 
+// deftype alias pthread_t = 
+// deftype alias pthread_mutex_t = 
+// deftype alias pthread_rwlock_t = 
+// deftype alias semaphore_t = 
+// deftype alias pthread_cond_t = 
+// deftype alias pthread_key_t = 

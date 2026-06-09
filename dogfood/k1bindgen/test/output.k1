@@ -5,6 +5,16 @@ type i2 = {
   x: c-int,
   y: c-int,
 }
+
+
+type Union1_u = union {
+  x: c-int,
+  f: f32,
+  l: i64,
+}
+
+type alias Union1_t = Union1_u
+
 type foo = {
   _char: i8,
   _unsigned_char: u8,
@@ -21,21 +31,30 @@ type foo = {
     x: c-int,
     y: c-int,
   },
-  _muh_floats: *mut f32,
+  _union_1: Union1_t,
+  _union_union1: Union1_u,
+  _union_anon: union {
+    x: c-int,
+    y: f32,
+    c: array[i8, 4],
+  },
+  _muh_floats: array[f32, 0],
 }
+
 type Color = either(u32) {
   Color_Red = 577,
   Color_Green = 578,
 }
+
 type Size = either(u32) {
   Size_Small = 0,
   Size_Medium = 1,
   Size_Large = 2,
 }
-type opaq = {
-  b: array[i8, 100],
-  x: c-int,
-}
-extern("test", "main") fn main(
 
-): c-int
+type opaq = opaque[104, 4]
+
+
+extern("test", "main")
+fn main(): c-int
+

@@ -7,6 +7,13 @@ typedef struct i2 {
   int x; int y;
 } i2;
 
+union Union1_u {
+  int x;
+  float f;
+  long l;
+};
+typedef union Union1_u Union1_t;
+
 struct foo {
   char _char;
   unsigned char _unsigned_char;
@@ -21,6 +28,11 @@ struct foo {
   i2 _i2;
   struct i2 _struct_i2;
   struct { int x; int y; } _struct_anon;
+  Union1_t _union_1;
+  union Union1_u _union_union1;
+  union {
+    int x; float y; char c[4];
+  } _union_anon;
   float _muh_floats[];
 };
 

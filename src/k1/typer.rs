@@ -2669,7 +2669,7 @@ pub struct TypedProgram {
     /// an error after the last phase where handle them, which should be
     /// function declarations
     pub use_statuses: FxHashMap<ParsedUseId, UseStatus>,
-    pub debug_level_stack: Vec<log::LevelFilter>,
+    pub debug_level_stack: RefCell<Vec<log::LevelFilter>>,
     pub functions_pending_body_specialization: Vec<FunctionId>,
 
     // Status and phases
@@ -2772,7 +2772,8 @@ impl TypedProgram {
         let ast = ParsedProgram::make(program_name, true);
 
         let mut types = TypePool::empty(ast.idents.b.tag, ast.idents.b.payload);
-        let empty_struct_id = types.add_empty_struct();
+        let empty_struct_id = types.add_anon(Type::Struct(StructType::struc(MSlice::empty())));
+
         assert_eq!(empty_struct_id, EMPTY_TYPE_ID);
 
         let root_ident = ast.idents.b.root_module_name;
@@ -2860,7 +2861,7 @@ impl TypedProgram {
             global_ast_mappings: FxHashMap::new(),
             ability_impl_ast_mappings: FxHashMap::new(),
             use_statuses: FxHashMap::new(),
-            debug_level_stack: vec![log::max_level()],
+            debug_level_stack: RefCell::new(vec![log::max_level()]),
             functions_pending_body_specialization: vec![],
             ast,
             module_in_progress: None,
@@ -3138,16 +3139,17 @@ impl TypedProgram {
         self.inference_context_stack.pop().unwrap()
     }
 
-    pub fn push_debug_level(&mut self) {
+    pub fn push_debug_level(&self) {
         let level = log::LevelFilter::Debug;
-        self.debug_level_stack.push(level);
+        self.debug_level_stack.borrow_mut().push(level);
         log::set_max_level(level);
         debug!("push max_level is now {}", log::max_level())
     }
 
-    pub fn pop_debug_level(&mut self) {
-        self.debug_level_stack.pop();
-        log::set_max_level(*self.debug_level_stack.last().unwrap());
+    pub fn pop_debug_level(&self) {
+        let mut stack = self.debug_level_stack.borrow_mut();
+        stack.pop();
+        log::set_max_level(*stack.last().unwrap());
         debug!("pop max_level is now {}", log::max_level())
     }
 
@@ -3462,14 +3464,20 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Struct(struct_defn) => {
                 let struct_defn = struct_defn.clone();
+                let is_union = struct_defn.record_kind.is_union();
+                let kind = match struct_defn.record_kind {
+                    parse::ParsedRecordKind::Struct => RecordKind::Struct,
+                    parse::ParsedRecordKind::Union => RecordKind::Union,
+                };
                 let mut fields: List<StructTypeField, TypePool> =
                     self.types.mem.new_list(struct_defn.fields.len() as u32);
                 for ast_field in struct_defn.fields.iter() {
                     if let Some(existing_field) = fields.iter().find(|f| f.name == ast_field.name) {
                         return failf!(
                             struct_defn.span,
-                            "Duplicate field name '{}' in struct definition",
-                            self.ident_str(existing_field.name)
+                            "Duplicate field name '{}' in {}",
+                            self.ident_str(existing_field.name),
+                            if is_union { "union" } else { "struct" },
                         );
                     }
                     let ty = self.eval_type_expr_ext(
@@ -3483,8 +3491,10 @@ impl TypedProgram {
                 let defn_info =
                     context.direct_unresolved_target_type.and_then(|t| self.types.get_defn_info(t));
                 let no_fields = fields.is_empty();
-                let struct_defn =
-                    Type::Struct(StructType { fields: self.types.mem.list_to_handle(fields) });
+                let struct_defn = Type::Struct(StructType {
+                    fields: self.types.mem.list_to_handle(fields),
+                    record_kind: kind,
+                });
                 let type_id = self.add_or_resolve_type(
                     context.direct_unresolved_target_type,
                     struct_defn,
@@ -4111,6 +4121,15 @@ impl TypedProgram {
                     .get(arg2)
                     .as_struct()
                     .ok_or_else(|| errf!(ty_app.span, "Expected struct"))?;
+                let record_kind = struct1.record_kind;
+                if struct2.record_kind != record_kind {
+                    return failf!(
+                        ty_app.span,
+                        "Cannot combine a {} and a {}",
+                        struct1.record_kind.kind_name(),
+                        struct2.record_kind.kind_name(),
+                    );
+                }
 
                 let mut combined_fields =
                     self.types.mem.new_list(struct1.fields.len() + struct2.fields.len());
@@ -4133,6 +4152,7 @@ impl TypedProgram {
                     context.direct_unresolved_target_type.and_then(|t| self.types.get_defn_info(t));
                 let new_struct = Type::Struct(StructType {
                     fields: self.types.mem.list_to_handle(combined_fields),
+                    record_kind,
                 });
                 let type_id = self.add_or_resolve_type(
                     context.direct_unresolved_target_type,
@@ -4175,6 +4195,15 @@ impl TypedProgram {
                     .get(arg2)
                     .as_struct()
                     .ok_or_else(|| errf!(ty_app.span, "Expected struct"))?;
+                let record_kind = struct1.record_kind;
+                if struct2.record_kind != record_kind {
+                    return failf!(
+                        ty_app.span,
+                        "Cannot combine a {} and a {}",
+                        struct1.record_kind.kind_name(),
+                        struct2.record_kind.kind_name(),
+                    );
+                }
                 let struct2_fields = self.types.mem.getn(struct2.fields);
                 let new_fields = self
                     .types
@@ -4187,7 +4216,7 @@ impl TypedProgram {
 
                 let defn_info =
                     context.direct_unresolved_target_type.and_then(|t| self.types.get_defn_info(t));
-                let new_struct = Type::Struct(StructType { fields: new_fields });
+                let new_struct = Type::Struct(StructType { fields: new_fields, record_kind });
                 let type_id = self.add_or_resolve_type(
                     context.direct_unresolved_target_type,
                     new_struct,
@@ -4569,6 +4598,7 @@ impl TypedProgram {
             | Type::Pointer
             | Type::Never => type_id,
             Type::Struct(struc) => {
+                let record_kind = struc.record_kind;
                 let new_fields_handle = self.types.mem.dupn(struc.fields);
                 let new_fields = self.types.mem.getn_mut(new_fields_handle);
                 let mut any_change = false;
@@ -4593,7 +4623,7 @@ impl TypedProgram {
                         })
                         .or_else(|| self.types.get_instance_info(type_id).cloned());
 
-                    let specialized_struct = StructType { fields: new_fields_handle };
+                    let specialized_struct = StructType { fields: new_fields_handle, record_kind };
                     self.types.add(
                         Type::Struct(specialized_struct),
                         defn_info_to_use,
@@ -8653,7 +8683,7 @@ impl TypedProgram {
             field_values.push(StructLiteralField { name: ast_field.name, expr: Some(expr) });
         }
 
-        let struct_type = StructType { fields: self.types.mem.list_to_handle(field_defns) };
+        let struct_type = StructType::struc(self.types.mem.list_to_handle(field_defns));
         let struct_type_id = self.types.add_anon(Type::Struct(struct_type));
         let typed_struct = StructLiteral { fields: self.mem.list_to_handle(field_values) };
         Ok(self.exprs.add(TypedExpr::Struct(typed_struct), struct_type_id, parsed_struct.span))
@@ -8673,6 +8703,13 @@ impl TypedProgram {
             self.ice_span(self.ast.get_expr_span(expr_id), "expected an expected struct type")
         };
         let original_expected_struct = *original_expected_struct;
+        if original_expected_struct.record_kind == RecordKind::Union {
+            return failf!(
+                self.ast.get_expr_span(expr_id),
+                "Cannot use struct literal syntax to construct a union. Expected type {} is a union.",
+                self.type_id_to_string(original_expected_struct_id)
+            );
+        }
         let expected_struct_id = original_expected_struct_id;
         let expected_struct = *self.types.get(expected_struct_id).expect_struct();
         let expected_struct_defn_info = self.types.get_defn_info(expected_struct_id);
@@ -8820,7 +8857,10 @@ impl TypedProgram {
                 }
             }
         };
-        let output_struct = StructType { fields: self.types.mem.list_to_handle(field_types) };
+        let output_struct = StructType {
+            fields: self.types.mem.list_to_handle(field_types),
+            record_kind: RecordKind::Struct,
+        };
         let output_struct_type_id = self.types.add(
             Type::Struct(output_struct),
             expected_struct_defn_info,
@@ -9121,7 +9161,7 @@ impl TypedProgram {
         }
         let env_fields_handle = self.types.mem.list_to_handle(env_field_types);
         let environment_struct_type =
-            self.types.add_anon(Type::Struct(StructType { fields: env_fields_handle }));
+            self.types.add_anon(Type::Struct(StructType::struc(env_fields_handle)));
 
         let environment_struct = self.exprs.add(
             TypedExpr::Struct(StructLiteral { fields: self.mem.list_to_handle(env_exprs) }),
@@ -11934,7 +11974,7 @@ impl TypedProgram {
         let call_conv = function_type.abi_mode;
         let return_type = function_type.return_type;
         let physical_params = function_type.physical_params;
-        let empty_env_struct_type = self.types.add_empty_struct();
+        let empty_env_struct_type = EMPTY_TYPE_ID;
         let empty_env_struct_ref = self.types.add_reference_type(empty_env_struct_type, false);
         let mut new_params = self.types.mem.new_list(physical_params.len() + 1);
 
@@ -17143,7 +17183,7 @@ impl TypedProgram {
                 StructTypeField { name: self.ast.idents.b.env, type_id: POINTER_TYPE_ID },
                 StructTypeField { name: self.ast.idents.b.fn_ptr, type_id: POINTER_TYPE_ID },
             ]);
-            let t = self.types.add_anon(Type::Struct(StructType { fields }));
+            let t = self.types.add_anon(Type::Struct(StructType::struc(fields)));
             self.types.builtins.dyn_lambda_obj = Some(t);
             self.assert_builtin_types_correct();
         }

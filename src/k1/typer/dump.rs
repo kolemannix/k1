@@ -403,25 +403,29 @@ impl TypedProgram {
 
     fn display_struct_fields<W: fmt::Write + ?Sized>(
         &self,
-        writ: &mut W,
+        w: &mut W,
         struc: &StructType,
         expand: bool,
         visited: &mut FxHashMap<TypeId, ()>,
     ) -> std::fmt::Result {
         if struc.fields.is_empty() {
-            return writ.write_str("empty");
+            return w.write_str("empty");
         }
 
-        writ.write_str("{ ")?;
+        if struc.record_kind == RecordKind::Union {
+            w.write_str("union ")?;
+        }
+
+        w.write_str("{ ")?;
         for (index, field) in self.types.mem.getn(struc.fields).iter().enumerate() {
             if index > 0 {
-                writ.write_str(", ")?;
+                w.write_str(", ")?;
             }
-            writ.write_str(self.ast.idents.get_name(field.name))?;
-            writ.write_str(": ")?;
-            self.display_type_id_ext(writ, field.type_id, expand, visited)?;
+            w.write_str(self.ast.idents.get_name(field.name))?;
+            w.write_str(": ")?;
+            self.display_type_id_ext(w, field.type_id, expand, visited)?;
         }
-        writ.write_str(" }")
+        w.write_str(" }")
     }
 
     pub fn function_to_string(&self, function: &TypedFunction, display_block: bool) -> String {

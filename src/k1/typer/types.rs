@@ -129,12 +129,32 @@ impl std::hash::Hash for TypeDefnInfo {
     }
 }
 
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+pub enum RecordKind {
+    Struct,
+    Union,
+}
+
+impl RecordKind {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            RecordKind::Struct => "struct",
+            RecordKind::Union => "union",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct StructType {
     pub fields: MSlice<StructTypeField, TypePool>,
+    pub record_kind: RecordKind,
 }
 
 impl StructType {
+    pub fn struc(fields: MSlice<StructTypeField, TypePool>) -> StructType {
+        StructType { fields, record_kind: RecordKind::Struct }
+    }
+
     pub fn find_field(
         &self,
         m: &kmem::Mem<TypePool>,
@@ -573,6 +593,7 @@ impl TypePool {
                 }
                 true
             }
+            (Type::Opaque(o1), Type::Opaque(o2)) => o1.size == o2.size && o1.align == o2.align,
             (Type::Never, Type::Never) => true,
             // We never really want to de-dupe this type as its inherently unique
             (Type::Generic(_g1), Type::Generic(_g2)) => false,
@@ -635,6 +656,7 @@ impl TypePool {
             Type::Bool => {}
             Type::Struct(s) => {
                 defn.hash(state);
+                s.record_kind.hash(state);
                 s.fields.len().hash(state);
                 for f in self.mem.getn(s.fields) {
                     f.name.hash(state);
@@ -1359,7 +1381,10 @@ impl TypePool {
         this.add_anon(Type::Integer(IntegerType::I32));
         this.add_anon(Type::Integer(IntegerType::I64));
 
-        this.add_anon(Type::Struct(StructType { fields: MSlice::empty() }));
+        this.add_anon(Type::Struct(StructType {
+            fields: MSlice::empty(),
+            record_kind: RecordKind::Struct,
+        }));
         this.add_anon(Type::Char);
         this.add_anon(Type::Bool);
         this.add_anon(Type::Never);
@@ -1467,7 +1492,7 @@ impl TypePool {
         &mut self,
         origin_type_id: TypeId,
         members: MSlice<UnionMember, TypePool>,
-    ) -> AggregateTypeId {
+    ) -> PhysicalType {
         let mut size = 0;
         let mut align = 1;
         for m in self.mem.getn(members) {
@@ -1480,11 +1505,16 @@ impl TypePool {
             }
         }
         let union_layout = Layout { size, align };
-        self.agg_types.add(AggregateTypeRecord {
-            agg_type: AggType::Union { members },
-            origin_type_id,
-            layout: union_layout,
-        })
+        if size == 0 {
+            PhysicalType::EMPTY
+        } else {
+            let agg_id = self.agg_types.add(AggregateTypeRecord {
+                agg_type: AggType::Union { members },
+                origin_type_id,
+                layout: union_layout,
+            });
+            PhysicalType::agg(agg_id)
+        }
     }
 
     pub fn add_value_type(
@@ -1617,10 +1647,6 @@ impl TypePool {
         lambda_type_id
     }
 
-    pub fn add_empty_struct(&mut self) -> TypeId {
-        self.add_anon(Type::Struct(StructType { fields: MSlice::empty() }))
-    }
-
     pub const LAMBDA_OBJECT_FN_PTR_INDEX: usize = 0;
     pub const LAMBDA_OBJECT_ENV_PTR_INDEX: usize = 1;
 
@@ -1635,7 +1661,7 @@ impl TypePool {
             StructTypeField { name: identifiers.b.fn_ptr, type_id: fn_ptr_type },
             StructTypeField { name: identifiers.b.env_ptr, type_id: POINTER_TYPE_ID },
         ]);
-        let struct_representation = self.add_anon(Type::Struct(StructType { fields }));
+        let struct_representation = self.add_anon(Type::Struct(StructType::struc(fields)));
         self.add_anon(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
             parsed_id,
@@ -1900,37 +1926,56 @@ impl TypePool {
                     },
                 }
             }
-            Type::Struct(s) => {
-                let s_fields = s.fields;
-                let mut fields = self.mem.new_list(s.fields.len());
-                let mut layout = Layout::ZERO_SIZED;
-                for field in self.mem.getn(s_fields) {
-                    match self.get_physical_type(static_values, field.type_id) {
-                        PhysicalTypeResult::No => return PhysicalTypeResult::No,
-                        PhysicalTypeResult::Never => return PhysicalTypeResult::Never,
-                        PhysicalTypeResult::Yes(field_pt) => {
-                            let field_layout = self.get_pt_layout(field_pt);
-                            let offset = layout.append_to_aggregate(field_layout);
-                            fields.push(StructField {
-                                field_t: field_pt,
-                                offset,
-                                name: field.name,
-                            });
+            Type::Struct(s) => match s.record_kind {
+                RecordKind::Struct => {
+                    let s_fields = s.fields;
+                    let mut fields = self.mem.new_list(s.fields.len());
+                    let mut layout = Layout::ZERO_SIZED;
+                    for field in self.mem.getn(s_fields) {
+                        match self.get_physical_type(static_values, field.type_id) {
+                            PhysicalTypeResult::No => return PhysicalTypeResult::No,
+                            PhysicalTypeResult::Never => return PhysicalTypeResult::Never,
+                            PhysicalTypeResult::Yes(field_pt) => {
+                                let field_layout = self.get_pt_layout(field_pt);
+                                let offset = layout.append_to_aggregate(field_layout);
+                                fields.push(StructField {
+                                    field_t: field_pt,
+                                    offset,
+                                    name: field.name,
+                                });
+                            }
                         }
                     }
+                    if layout.size == 0 {
+                        PhysicalTypeResult::Yes(PhysicalType::EMPTY)
+                    } else {
+                        let fields_handle = self.mem.list_to_handle(fields);
+                        let agg_id = self.agg_types.add(AggregateTypeRecord {
+                            agg_type: AggType::Struct { fields: fields_handle },
+                            origin_type_id: type_id,
+                            layout,
+                        });
+                        PhysicalTypeResult::Yes(PhysicalType::agg(agg_id))
+                    }
                 }
-                if layout.size == 0 {
-                    PhysicalTypeResult::Yes(PhysicalType::EMPTY)
-                } else {
-                    let fields_handle = self.mem.list_to_handle(fields);
-                    let agg_id = self.agg_types.add(AggregateTypeRecord {
-                        agg_type: AggType::Struct { fields: fields_handle },
-                        origin_type_id: type_id,
-                        layout,
-                    });
-                    PhysicalTypeResult::Yes(PhysicalType::agg(agg_id))
+                RecordKind::Union => {
+                    let u_fields = s.fields;
+                    let mut members = self.mem.new_list(u_fields.len());
+                    for field in self.mem.getn(u_fields) {
+                        match self.get_physical_type(static_values, field.type_id) {
+                            PhysicalTypeResult::No => return PhysicalTypeResult::No,
+                            PhysicalTypeResult::Never => return PhysicalTypeResult::Never,
+                            PhysicalTypeResult::Yes(field_pt) => {
+                                members.push(UnionMember { name: field.name, ty: field_pt });
+                            }
+                        }
+                    }
+
+                    let members_handle = self.mem.list_to_handle(members);
+                    let union = self.make_union_type(type_id, members_handle);
+                    PhysicalTypeResult::Yes(union)
                 }
-            }
+            },
             Type::Sum(e) => {
                 let variant_count = e.variants.len();
 
@@ -1966,7 +2011,7 @@ impl TypePool {
 
                 let members_handle = self.mem.list_to_handle(union_members);
                 let union_id = self.make_union_type(type_id, members_handle);
-                let union_layout = self.get_pt_layout(PhysicalType::agg(union_id));
+                let union_layout = self.get_pt_layout(union_id);
 
                 let mut struct_layout = tag_layout;
                 let tag_field = StructField {
@@ -1977,7 +2022,7 @@ impl TypePool {
                 let union_offset = struct_layout.append_to_aggregate(union_layout);
                 let payload_field = StructField {
                     offset: union_offset,
-                    field_t: PhysicalType::agg(union_id),
+                    field_t: union_id,
                     name: self.idents.payload,
                 };
                 let fields = self.mem.pushn(&[tag_field, payload_field]);

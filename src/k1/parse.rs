@@ -1034,10 +1034,23 @@ pub struct StructTypeField {
     pub type_expr: ParsedTypeExprId,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedRecordKind {
+    Struct,
+    Union,
+}
+
+impl ParsedRecordKind {
+    pub fn is_union(&self) -> bool {
+        matches!(self, ParsedRecordKind::Union)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StructType {
     pub fields: EcoVec<StructTypeField>,
     pub span: SpanId,
+    pub record_kind: ParsedRecordKind,
 }
 
 #[derive(Clone)]
@@ -2944,8 +2957,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 span,
                 kind: reference_kind,
             }))))
-        } else if first.kind == K::OpenBrace {
-            self.advance();
+        } else if first.kind == K::OpenBrace || self.get_token_chars(first) == "union" {
+            let is_union = first.kind != K::OpenBrace;
+            if is_union {
+                self.advance();
+                self.expect_kind(K::OpenBrace)?;
+            } else {
+                self.advance();
+            }
             let mut fields = eco_vec![];
             self.eat_delimited_ext(
                 "Struct fields",
@@ -2955,7 +2974,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Parser::expect_struct_type_field,
             )?;
             let span = self.extend_to_here(first.span);
-            let struc = StructType { fields, span };
+            let kind = if is_union { ParsedRecordKind::Union } else { ParsedRecordKind::Struct };
+            let struc = StructType { fields, span, record_kind: kind };
             Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::Struct(struc))))
         } else if first.kind == K::QuestionMark {
             self.advance();
@@ -2980,13 +3000,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 unreachable!("parse_literal returned non-literal")
             }
         } else if first.kind == K::Ident {
-            let ident_chars = self.get_token_chars(first);
-            if ident_chars == "either" {
+            let first_chars = self.get_token_chars(first);
+            if first_chars == "either" {
                 let sum = self.expect_sum_type_expression()?;
                 let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::Sum(sum));
                 self.add_semantic_token(first, SemanticTokenKind::Keyword);
                 Ok(Some(type_expr_id))
-            } else if ident_chars == "type-of" {
+            } else if first_chars == "type-of" {
                 self.advance();
                 self.expect_kind(K::OpenParen)?;
                 let target_expr = self.expect_expression()?;
@@ -2995,7 +3015,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let type_of = ParsedTypeExpr::TypeOf(ParsedTypeOf { target_expr, span });
                 self.add_semantic_token(first, SemanticTokenKind::Function);
                 Ok(Some(self.ast.type_exprs.add(type_of)))
-            } else if ident_chars == "typeFromId" {
+            } else if first_chars == "typeFromId" {
                 self.advance();
                 self.expect_kind(K::OpenParen)?;
                 let target_expr = self.expect_expression()?;
@@ -3005,7 +3025,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     ParsedTypeExpr::TypeFromId(ParsedTypeFromId { id_expr: target_expr, span });
                 self.add_semantic_token(first, SemanticTokenKind::Function);
                 Ok(Some(self.ast.type_exprs.add(type_from_id)))
-            } else if ident_chars == "static" {
+            } else if first_chars == "static" {
                 self.advance();
                 let inner_type_expr = self.expect_type_expression()?;
                 let span = self.extend_to_here(first.span);
@@ -3015,7 +3035,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 });
                 self.add_semantic_token(first, SemanticTokenKind::Keyword);
                 Ok(Some(self.ast.type_exprs.add(static_expr)))
-            } else if ident_chars == "some" {
+            } else if first_chars == "some" {
                 self.advance();
                 let inner_expr = self.expect_type_expression()?;
                 let span = self.extend_to_here(first.span);
@@ -5150,6 +5170,9 @@ impl ParsedProgram {
     ) -> std::fmt::Result {
         match self.type_exprs.get(ty_expr_id) {
             ParsedTypeExpr::Struct(struct_type) => {
+                if struct_type.record_kind.is_union() {
+                    w.write_str("union ")?;
+                }
                 w.write_str("{ ")?;
                 for field in struct_type.fields.iter() {
                     self.display_ident(w, field.name)?;

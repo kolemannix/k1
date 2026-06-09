@@ -1,6 +1,9 @@
 default:
   just --list
 
+test:
+  k1 test .
+
 rust-bindgen:
   bindgen -o file.rs http/httpserver.h -- \
     -Ihttp/ \
@@ -22,7 +25,7 @@ http: build
     -clangarg -xc \
     -clangarg -DKQUEUE \
     -clangarg -isysroot \
-    -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk \
+    -clangarg  $(xcrun --sdk macosx --show-sdk-path) \
     -clangarg -Ihttp/ \
     > /Users/knix/dev/k1/dogfood/http/http.k1
 
@@ -32,7 +35,7 @@ libclang: build
 kqueue: build
   .k1-out/k1bindgen -system true -n kqueue -i kqueue/kqueue_bindings.c \
     -clangarg -isysroot \
-    -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk \
+    -clangarg $(xcrun --sdk macosx --show-sdk-path) \
     > kqueue/kqueue.k1
   cp kqueue/kqueue.k1 /Users/knix/dev/k1/dogfood/http/kqueue.k1
 
@@ -40,7 +43,7 @@ kqueue-lite: build
   .k1-out/k1bindgen -system true -n kqueue -i kqueue/kqueue_bindings.c \
     -include kevent -include socklen_t -include __darwin_socklen_t \
     -clangarg -isysroot \
-    -clangarg /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk \
+    -clangarg $(xcrun --sdk macosx --show-sdk-path) \
     > kqueue/kqueue.k1
   cp kqueue/kqueue.k1 /Users/knix/dev/k1/dogfood/http/kqueue.k1
 

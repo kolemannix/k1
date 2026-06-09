@@ -28,7 +28,7 @@ fn low() {
   while_test/test();
   use_test/test();
   type_order/test();
-  opaque_type_01/test();
+  opaque_test/test();
   test_comptime/test();
   test_globals/test();
 }

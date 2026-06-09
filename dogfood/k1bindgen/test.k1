@@ -3,7 +3,8 @@ fn test(): i32 {
   let core-args: span[string] = [
     "-system",  "false",
     "-n",       "test",
-    "-i",       "test/input.c"
+    "-i",       "test/input.c",
+    "-opaque",  "opaq",
   ];
   let args = #if k1/os is :macos {
     core-args.concat([
@@ -14,9 +15,9 @@ fn test(): i32 {
   let output = start(args);
 
   // TODO: Use 'diff' instead sys/cmd("diff", "input.c", "test/output.k1")
-  assertEquals(output, core/files/readToString("test/output.k1"));
-
+  let expected = core/files/readToString("test/output.k1");
   core/files/write-entire-file("test/output.k1", output);
+  assertEquals(output, expected);
 
   0
 }
