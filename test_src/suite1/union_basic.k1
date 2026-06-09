@@ -1,0 +1,20 @@
+ns union_basic;
+
+type U = union { a: u32, b: f32, c: i32 }
+
+fn identityU(u: U): U {
+  u
+}
+
+fn test() {
+  assertEquals(types/size[U], 4);
+  assertEquals(types/align[U], 4);
+  let u: U = uninit;
+
+  // TODO: type-schema for unions
+
+  identityU(u);
+
+  {}
+}
+
