@@ -5,6 +5,19 @@ bindgen-llhttp:
     -exclude llhttp__internal_init \
     -exclude llhttp__internal_execute
 
+bindgen-net:
+  k1bindgen -i net.c -o net.k1 -n net \
+    -clangarg -isysroot \
+    -clangarg "$(xcrun --sdk macosx --show-sdk-path)" \
+    -system true \
+    -include sockaddr_in \
+    -include sa_family_t \
+    -include sockaddr \
+    -include addrinfo \
+    -include in_port_t \
+    -include in_addr \
+    -include in_addr_t
+
 bindgen-libuv:
   k1bindgen -i libs/libuv/include/uv.h -o uv.k1 -n uv \
     -clangarg -Ilibs/libuv/include \

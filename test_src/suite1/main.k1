@@ -19,6 +19,7 @@ fn low() {
   bits_test/test();
   test_uninit/test();
   control_flow/test();
+  union_basic/test();
   enum_basic/test();
   sum_basic/test();
   function_pointer/test();
