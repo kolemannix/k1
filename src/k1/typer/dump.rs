@@ -58,7 +58,7 @@ impl TypedProgram {
     pub fn display_scope(&self, scope_id: ScopeId, writ: &mut impl Write) -> std::fmt::Result {
         let scope = self.scopes.get_scope(scope_id);
         self.display_scope_name(writ, scope_id)?;
-        writeln!(writ, " {}", scope.scope_type.short_name())?;
+        writeln!(writ, "kind: {}", scope.scope_type.short_name())?;
 
         if !scope.variables.is_empty() {
             writ.write_str("\tVARS\n")?;
@@ -377,13 +377,6 @@ impl TypedProgram {
                     self.display_static_value(w, value_id)?;
                 }
                 w.write_str("]")?;
-                Ok(())
-            }
-            Type::Unresolved(u) => {
-                let defn = self.ast.type_defns.get(*u);
-                w.write_str("<unresolved definition '")?;
-                self.write_ident(w, defn.name)?;
-                w.write_str("'>")?;
                 Ok(())
             }
             Type::Array(array_type) => {
@@ -1306,10 +1299,13 @@ impl TypedProgram {
 
     pub fn dump_type(&self, w: &mut impl Write, id: TypeId) -> std::fmt::Result {
         write!(w, "type #{:02} {:10} ", id, self.types.get(id).kind_name())?;
-        let tvar_info = self.types.get_contained_type_variable_counts(id);
-        let l = self.types.get_layout_nonmut(id).unwrap_or(Layout::ZERO_SIZED);
+        let tvar_info = self.types.get_type_variable_counts(id);
+        let l = match self.types.get_layout_nonmut(id) {
+            Some(layout) => format!("layout: size={},align={}", layout.size, layout.align),
+            None => "layout: none".to_string(),
+        };
         let defn_name = self.types.get_defn_info(id).map(|i| self.ident_str(i.name));
-        write!(w, "defn_name={} size={} align={} ", defn_name.unwrap_or("-"), l.size, l.align)?;
+        write!(w, "defn_name={} {}", defn_name.unwrap_or("-"), l)?;
         write!(
             w,
             "tparams={} holes={}",

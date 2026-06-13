@@ -6,7 +6,7 @@ ns for opt {
   fn is-some[T](self: ?T): bool { self is :some(_) }
   fn is-none[T](self: ?T): bool { self is :none }
 
-  fn get[T](context locn: compiler/source-location)(self: ?T): T {
+  fn get[T](context locn: k1/source-location)(self: ?T): T {
     if self is :some(t) t else {
       crash("opt.get on None")
     }

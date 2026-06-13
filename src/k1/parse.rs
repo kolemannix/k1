@@ -1044,6 +1044,13 @@ impl ParsedRecordKind {
     pub fn is_union(&self) -> bool {
         matches!(self, ParsedRecordKind::Union)
     }
+
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            ParsedRecordKind::Struct => "struct",
+            ParsedRecordKind::Union => "union",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

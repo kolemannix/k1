@@ -203,6 +203,12 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
         id
     }
 
+    pub fn reserve_id(&mut self) -> Index {
+        let id = self.next_id();
+        self.set_len_checked(self.len + 1);
+        id
+    }
+
     pub fn add_expected_id(&mut self, t: T, expected_id: Index) -> Index {
         let id = self.next_id();
 

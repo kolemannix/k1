@@ -1215,12 +1215,19 @@ impl<'k1> Builder<'k1> {
     fn get_physical_type(&mut self, type_id: TypeId) -> PhysicalType {
         match self.get_physical_type_result(type_id) {
             PhysicalTypeResult::Never => {
-                b_ice!(self, "Type is divergent: {}", self.k1.type_id_to_string_ext(type_id, true))
+                b_ice!(self, "codegen never type: {}", self.k1.type_id_to_string_ext(type_id, true))
             }
             PhysicalTypeResult::No => {
                 b_ice!(
                     self,
-                    "Not a physical type: {}",
+                    "codegen non-physical type: {}",
+                    self.k1.type_id_to_string_ext(type_id, true)
+                )
+            }
+            PhysicalTypeResult::Infinite => {
+                b_ice!(
+                    self,
+                    "codegen infinite type: {}",
                     self.k1.type_id_to_string_ext(type_id, true)
                 )
             }

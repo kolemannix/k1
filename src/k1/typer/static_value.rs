@@ -89,22 +89,6 @@ impl StaticValue {
         }
     }
 
-    pub fn get_type(&self) -> TypeId {
-        match self {
-            StaticValue::Empty => EMPTY_TYPE_ID,
-            StaticValue::Bool(_) => BOOL_TYPE_ID,
-            StaticValue::Char(_) => CHAR_TYPE_ID,
-            StaticValue::Int(typed_integer_value) => typed_integer_value.get_type(),
-            StaticValue::Enum(type_id, _) => *type_id,
-            StaticValue::Float(typed_float_value) => typed_float_value.get_type(),
-            StaticValue::String(_) => STRING_TYPE_ID,
-            StaticValue::Zero(type_id) => *type_id,
-            StaticValue::Struct(s) => s.type_id,
-            StaticValue::Sum(e) => e.sum_type_id,
-            StaticValue::LinearContainer(v) => v.type_id,
-        }
-    }
-
     pub fn as_boolean(&self) -> Option<bool> {
         match self {
             StaticValue::Bool(b) => Some(*b),

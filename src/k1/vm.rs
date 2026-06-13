@@ -20,7 +20,7 @@ use crate::kmem::{DlNode, Handle};
 use crate::parse::NumericWidth;
 use crate::typer::types::{
     ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, PhysicalTypeEnum,
-    PhysicalTypeResult, STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
+    PhysicalTypeResult, ScalarType, Type, TypeId, TypePool,
 };
 use crate::typer::{
     ErrorKind, FunctionId, K1Message, K1Result, MessageLevel, StaticContainer, StaticContainerKind,
@@ -1836,7 +1836,8 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
         StaticValue::Float(fv) => store_scalar(fv.get_scalar_type(), dst, Value::float_value(*fv)),
         StaticValue::String(string_id) => {
             let value = string_id_to_value(k1, *string_id);
-            let string_pt = k1.get_physical_type(STRING_TYPE_ID).unwrap();
+            let string_type_id = k1.string_type_id();
+            let string_pt = k1.get_physical_type(string_type_id).unwrap();
             store_value(&k1.types, string_pt, dst, value);
         }
         StaticValue::Zero(type_id) => {
@@ -1928,8 +1929,9 @@ pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
     // I need to guarantee it can't re-allocate because that's still sadly using the string interner library
     let k1_string = k1_types::K1BufferLike { len: s.len(), data: s.as_ptr().cast_mut() };
     if cfg!(debug_assertions) {
-        let char_span_type_id = k1.types.get_struct_field(STRING_TYPE_ID, 0).type_id;
-        let string_layout = k1.get_layout(STRING_TYPE_ID).unwrap();
+        let string_type_id = k1.string_type_id();
+        let char_span_type_id = k1.types.get_struct_field(string_type_id, 0).type_id;
+        let string_layout = k1.get_layout(string_type_id).unwrap();
         debug_assert_eq!(string_layout, k1.get_layout(char_span_type_id).unwrap());
         debug_assert_eq!(size_of_val(&k1_string), string_layout.size as usize);
     }
@@ -2392,7 +2394,7 @@ pub fn vm_value_to_static_value(
             }))
         }
         Type::Struct(struct_type) => {
-            if type_id == STRING_TYPE_ID {
+            if type_id == k1.string_type_id() {
                 let string_id = value_to_string_id(k1, vm_value).map_err(|msg| {
                     errf!(span, "Could not convert string to static value: {msg}")
                 })?;
@@ -2499,8 +2501,7 @@ pub fn vm_value_to_static_value(
         | Type::Generic(_)
         | Type::TypeParameter(_)
         | Type::FunctionTypeParameter(_)
-        | Type::InferenceHole(_)
-        | Type::Unresolved(_) => unreachable!(),
+        | Type::InferenceHole(_) => unreachable!(),
     };
     Ok(static_value_id)
 }
@@ -2585,12 +2586,14 @@ fn render_debug_address(w: &mut impl std::fmt::Write, vm: &Vm, value: Value) -> 
 
 fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Value {
     match k1.get_physical_type(type_id) {
-        PhysicalTypeResult::No | PhysicalTypeResult::Never => ice_span!(
-            k1,
-            span,
-            "not a value type; zeroed() for type {} is undefined",
-            k1.types.get(type_id).kind_name()
-        ),
+        PhysicalTypeResult::No | PhysicalTypeResult::Never | PhysicalTypeResult::Infinite => {
+            ice_span!(
+                k1,
+                span,
+                "not a value type; zeroed() for type {} is undefined",
+                k1.types.get(type_id).kind_name()
+            )
+        }
         PhysicalTypeResult::Yes(pt) => match pt.as_enum() {
             PhysicalTypeEnum::Scalar(_) => Value(0),
             PhysicalTypeEnum::Agg(agg_id) => {
