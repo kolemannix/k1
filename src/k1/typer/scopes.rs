@@ -5,7 +5,11 @@ use ahash::HashMapExt;
 use fxhash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 
-use std::{collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
+use std::{
+    collections::hash_map::{self, Entry},
+    fmt::Display,
+    num::NonZeroU32,
+};
 
 use crate::{
     SV4, errf,
@@ -15,7 +19,7 @@ use crate::{
     static_assert_niched, static_assert_size,
     typer::{
         AbilityId, FunctionId, Ident, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId,
-        TypeId, TypedExprId, TypedProgram, VariableId,
+        TypeId, TypePendingDefinition, TypedExprId, TypedProgram, VariableId,
     },
     vpool::VPool,
 };
@@ -359,6 +363,21 @@ impl Scopes {
         }
     }
 
+    pub fn find_pending_type(
+        &self,
+        scope_id: ScopeId,
+        name: Ident,
+    ) -> Option<(TypePendingDefinition, ScopeId)> {
+        let scope = self.get_scope(scope_id);
+        if let Some(defn) = scope.find_pending_type(name) {
+            return Some((defn, scope_id));
+        }
+        match scope.parent {
+            Some(parent) => self.find_pending_type(parent, name),
+            None => None,
+        }
+    }
+
     pub fn scope_has_ancestor(&self, scope_id: ScopeId, ancestor: ScopeId) -> bool {
         let scope = self.get_scope(scope_id);
         match scope.parent {
@@ -523,6 +542,8 @@ impl TypedProgram {
         scope: ScopeId,
         name: &QIdent,
     ) -> K1Result<Option<(VariableId, ScopeId)>> {
+        // Unqualified mentions are implicitly recursive searches
+        // But qualified mentions imply that the targeted symbol lives directly at the given path!
         if name.path.is_empty() {
             Ok(self.scopes.find_variable(scope, name.name))
         } else {
@@ -540,6 +561,8 @@ impl TypedProgram {
         scope: ScopeId,
         name: &QIdent,
     ) -> K1Result<Option<FunctionId>> {
+        // Unqualified mentions are implicitly recursive searches
+        // But qualified mentions imply that the targeted symbol lives directly at the given path!
         if name.path.is_empty() {
             Ok(self.scopes.find_function(scope, name.name))
         } else {
@@ -553,6 +576,8 @@ impl TypedProgram {
         scope_id: ScopeId,
         type_name: &QIdent,
     ) -> K1Result<Option<(TypeId, ScopeId)>> {
+        // Unqualified mentions are implicitly recursive searches
+        // But qualified mentions imply that the targeted symbol lives directly at the given path!
         if type_name.path.is_empty() {
             Ok(self.scopes.find_type(scope_id, type_name.name))
         } else {
@@ -621,11 +646,32 @@ impl TypedProgram {
         scope_id: ScopeId,
         ability_name: &QIdent,
     ) -> K1Result<Option<AbilityId>> {
+        // Unqualified mentions are implicitly recursive searches
+        // But qualified mentions imply that the targeted symbol lives directly at the given path!
         if ability_name.path.is_empty() {
             Ok(self.scopes.find_ability(scope_id, ability_name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope_id, ability_name)?;
             Ok(self.scopes.get_scope(scope_to_search).find_ability(ability_name.name))
+        }
+    }
+
+    pub fn find_pending_type_namespaced(
+        &self,
+        scope_id: ScopeId,
+        type_name: &QIdent,
+    ) -> K1Result<Option<(TypePendingDefinition, ScopeId)>> {
+        // Unqualified mentions are implicitly recursive searches
+        // But qualified mentions imply that the targeted symbol lives directly at the given path!
+        if type_name.path.is_empty() {
+            Ok(self.scopes.find_pending_type(scope_id, type_name.name))
+        } else {
+            let scope_to_search = self.resolve_qident(scope_id, type_name)?;
+            Ok(self
+                .scopes
+                .get_scope(scope_to_search)
+                .find_pending_type(type_name.name)
+                .map(|defn| (defn, scope_to_search)))
         }
     }
 
@@ -712,9 +758,9 @@ impl VariableInScope {
     }
 }
 
-// Every scope is 248 bytes!!
+// FIXME: Every scope is 248 bytes!!
 // Time for a less naive more computer-friendly representation
-#[repr(C)]
+// We could use global hash maps that include scope_id in the key instead
 pub struct Scope {
     pub parent: Option<ScopeId>,
     pub scope_type: ScopeType,
@@ -723,6 +769,7 @@ pub struct Scope {
     pub context_variables_by_type: FxHashMap<TypeId, VariableId>,
     pub functions: FxHashMap<Ident, FunctionId>,
     pub namespaces: FxHashMap<Ident, NamespaceId>,
+    pub pending_type_defns: FxHashMap<Ident, TypePendingDefinition>,
     pub types: FxHashMap<Ident, TypeId>,
     pub abilities: FxHashMap<Ident, AbilityId>,
     pub pending_ability_defns: FxHashMap<Ident, ParsedAbilityId>,
@@ -740,6 +787,7 @@ impl Scope {
             types: FxHashMap::new(),
             abilities: FxHashMap::new(),
             pending_ability_defns: FxHashMap::new(),
+            pending_type_defns: FxHashMap::new(),
             parent: None,
             scope_type,
             owner_id,
@@ -838,7 +886,7 @@ impl Scope {
 
     #[must_use]
     pub fn add_ability(&mut self, ident: Ident, ability_id: AbilityId) -> bool {
-        if let std::collections::hash_map::Entry::Vacant(e) = self.abilities.entry(ident) {
+        if let hash_map::Entry::Vacant(e) = self.abilities.entry(ident) {
             e.insert(ability_id);
             true
         } else {
@@ -856,9 +904,7 @@ impl Scope {
         ident: Ident,
         parsed_defn_id: ParsedAbilityId,
     ) -> bool {
-        if let std::collections::hash_map::Entry::Vacant(e) =
-            self.pending_ability_defns.entry(ident)
-        {
+        if let hash_map::Entry::Vacant(e) = self.pending_ability_defns.entry(ident) {
             e.insert(parsed_defn_id);
             true
         } else {
@@ -872,5 +918,19 @@ impl Scope {
 
     pub fn remove_pending_ability_defn(&mut self, ident: Ident) -> bool {
         self.pending_ability_defns.remove(&ident).is_some()
+    }
+
+    #[must_use]
+    pub fn add_pending_type(&mut self, name: Ident, pending_type: TypePendingDefinition) -> bool {
+        if let hash_map::Entry::Vacant(e) = self.pending_type_defns.entry(name) {
+            e.insert(pending_type);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn find_pending_type(&self, ident: Ident) -> Option<TypePendingDefinition> {
+        self.pending_type_defns.get(&ident).copied()
     }
 }

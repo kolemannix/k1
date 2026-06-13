@@ -42,7 +42,7 @@ use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::types::{
     AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, PhysicalTypeEnum, PhysicalTypeResult,
-    STRING_TYPE_ID, ScalarType, Type, TypeDefnInfo, TypeId,
+    ScalarType, Type, TypeDefnInfo, TypeId,
 };
 use crate::typer::{
     FunctionId, K1Result, Linkage as TyperLinkage, StaticContainerKind, StaticValue, StaticValueId,
@@ -1855,7 +1855,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .map(|(x, y)| (*x, *y))
                     .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
                 {
-                    if self.k1.types.get_contained_type_variable_counts(type_id).is_abstract() {
+                    if self.k1.types.get_type_variable_counts(type_id).is_abstract() {
                         // No point re-ifying types that don't exist at runtime
                         // like type parameters
                         continue;
@@ -1926,7 +1926,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .map(|(x, y)| (*x, *y))
                     .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
                 {
-                    if self.k1.types.get_contained_type_variable_counts(type_id).is_abstract() {
+                    if self.k1.types.get_type_variable_counts(type_id).is_abstract() {
                         // No point re-ifying types that don't exist at runtime
                         // like type parameters
                         continue;
@@ -3451,7 +3451,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             return Ok(*global);
         };
         let direct_value = self.codegen_static_value_as_const(static_value_id, 0)?;
-        let type_id = self.k1.static_values.get(static_value_id).get_type();
+        let type_id = self.k1.get_static_value_type(static_value_id);
         let layout = self.k1.get_layout(type_id).unwrap();
         let global = self.make_global_from_value(
             direct_value,
@@ -3587,7 +3587,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         // Ensure the string layout is what we expect
         // deftype string = { private span: span[char] }
-        let string_pt = self.k1.get_physical_type(STRING_TYPE_ID).unwrap();
+        let string_type_id = self.k1.string_type_id();
+        let string_pt = self.k1.get_physical_type(string_type_id).unwrap();
         let string_type = self.codegen_type(string_pt).expect_struct();
         let string_wrapper_struct_type = string_type.struct_type;
 

@@ -1,13 +1,13 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-fn assertEquals[T: print and equals](context locn: compiler/source-location)(a: T, b: T) {
+fn assertEquals[T: print and equals](context locn: k1/source-location)(a: T, b: T) {
   if a != b {
     crash("ASSERT FAILED: {a} != {b}")
   }
 }
 
-fn assertNotEquals[T: print and equals](context locn: compiler/source-location)(a: T, b: T) {
+fn assertNotEquals[T: print and equals](context locn: k1/source-location)(a: T, b: T) {
   if a == b {
     crash("ASSERT FAILED: {a} == {b}")
   }
@@ -55,9 +55,9 @@ fn identity[T](value: T): T { value }
 
 fn print[t: print](t) {
   // TODO: Instead of this hack, make write(Sink, span[byte]) the intrinsic.
-  if k1/is-static and compiler/capture-prints {
+  if k1/is-static and k1/capture-prints {
     let s = t.show();
-    k1/emit-compiler-message(compiler/location(), :info, s)
+    k1/emit-compiler-message(k1/location(), :info, s)
   } else {
     t.printTo(io/stdout)
   }
@@ -70,9 +70,9 @@ fn println[t: print](t) {
 }
 
 fn eprint[t: print](t) {
-  if k1/is-static and compiler/capture-prints {
+  if k1/is-static and k1/capture-prints {
     let s = t.show();
-    k1/emit-compiler-message(compiler/location(), :warn, s)
+    k1/emit-compiler-message(k1/location(), :warn, s)
   } else {
     t.printTo(io/stderr)
   }
@@ -189,7 +189,7 @@ ns files {
 
 }
 
-fn assertMsg(context locn: compiler/source-location)(msg: string, value: bool) {
+fn assertMsg(context locn: k1/source-location)(msg: string, value: bool) {
   if not value {
     crash("ASSERT FAILED: {msg}")
   };

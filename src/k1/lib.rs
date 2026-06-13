@@ -123,8 +123,8 @@ macro_rules! nz_u32_id {
 }
 
 fn nzu32_from_incr(n: u32) -> std::num::NonZeroU32 {
-    // Safety: If you add one to a u32 it'll never be zero
-    unsafe { std::num::NonZeroU32::new_unchecked(n + 1) }
+    // SAFETY: Saturating add won't wrap and 0 + 1 is > 0
+    unsafe { std::num::NonZeroU32::new_unchecked(n.saturating_add(1)) }
 }
 
 #[macro_export]

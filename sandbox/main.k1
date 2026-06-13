@@ -1,16 +1,9 @@
-// type distincttest = distinct[int]
-type U = union { a: u32, b: f32, c: i32 }
+type Bar = { foo: Foo, bar: Bar }
+type Foo = { x: t }
 
-#debug fn tu(u: U): U {
-  u
-}
+type alias t = opaque[4, 4]
 
 fn main(argc: int, argv: ptr): i32 {
-  // let u: U = U:a(0);
-  // let f: f32 = u.b;
-  // assertEquals(u.a, 0);
-  // assertEquals(f, 0.0);
-  let u: U = uninit;
-  tu(u);
+
   0
 }

@@ -9,7 +9,7 @@ use fxhash::FxHashMap;
 
 use crate::typer::scopes::*;
 
-use crate::parse::{Ident, IdentPool, ParsedId, ParsedTypeDefnId};
+use crate::parse::{Ident, IdentPool, ParsedId};
 
 use crate::{SV4, impl_copy_if_small, nz_u32_id, typer::*};
 
@@ -181,20 +181,6 @@ pub const NEVER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(12).unwrap());
 pub const POINTER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(13).unwrap());
 pub const F32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(14).unwrap());
 pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(15).unwrap());
-
-pub const BUFFER_DATA_FIELD_NAME: &str = "data";
-pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(16).unwrap());
-
-pub const SPAN_TYPE_ID: TypeId = TypeId(NonZeroU32::new(17).unwrap());
-
-pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(18).unwrap());
-pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(19).unwrap());
-pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(20).unwrap());
-pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(21).unwrap());
-pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(22).unwrap());
-
-pub const _RESULT_TYPE_ID: TypeId = TypeId(NonZeroU32::new(23).unwrap());
-//pub const TYPE_SCHEMA_TYPE_ID: TypeId = TypeId(NonZeroU32::new(39).unwrap());
 
 #[derive(Clone)]
 pub struct ListType {
@@ -512,7 +498,6 @@ pub enum Type {
     TypeParameter(TypeParameter),
     FunctionTypeParameter(FunctionTypeParameter),
     InferenceHole(InferenceHoleType),
-    Unresolved(ParsedTypeDefnId),
 }
 
 impl TypePool {
@@ -628,7 +613,6 @@ impl TypePool {
             }
             (Type::LambdaObject(_co1), Type::LambdaObject(_co2)) => false,
             (Type::StaticValue(vt1), Type::StaticValue(vt2)) => vt1.value_id == vt2.value_id,
-            (Type::Unresolved(ur1), Type::Unresolved(ur2)) => ur1 == ur2,
             (t1, t2) => {
                 if t1.kind_name() == t2.kind_name() {
                     panic!("Missing handling for kind in type_eq: {}", t1.kind_name())
@@ -727,9 +711,6 @@ impl TypePool {
                 svt.family_type_id.hash(state);
                 svt.value_id.hash(state)
             }
-            Type::Unresolved(id) => {
-                id.hash(state);
-            }
             Type::Array(arr) => {
                 arr.element_type.hash(state);
                 arr.size_type.hash(state);
@@ -762,7 +743,6 @@ impl Type {
             Type::Lambda(_) => "lambda",
             Type::LambdaObject(_) => "lambdaobj",
             Type::StaticValue(_) => "value",
-            Type::Unresolved(_) => "unresolved",
             Type::Array(_) => "array",
         }
     }
@@ -929,13 +909,6 @@ impl Type {
         }
     }
 
-    pub fn as_unresolved(&self) -> Option<ParsedTypeDefnId> {
-        match self {
-            Type::Unresolved(id) => Some(*id),
-            _ => None,
-        }
-    }
-
     pub(crate) fn as_array(&self) -> Option<ArrayType> {
         match self {
             Type::Array(arr) => Some(*arr),
@@ -964,7 +937,7 @@ impl TypeVariableInfo {
             || self.unresolved_static_count > 0
     }
 
-    fn add(self, other: Self) -> Self {
+    fn add(self, other: &Self) -> Self {
         Self {
             inference_variable_count: self.inference_variable_count
                 + other.inference_variable_count,
@@ -977,15 +950,53 @@ impl TypeVariableInfo {
 #[derive(Default)]
 pub struct BuiltinTypes {
     pub empty: TypeId,
-    pub string: Option<TypeId>,
     pub buffer: Option<TypeId>,
+    pub span: Option<TypeId>,
+    pub list: Option<TypeId>,
+    pub string: Option<TypeId>,
+    pub opt: Option<TypeId>,
     pub dyn_lambda_obj: Option<TypeId>,
+    pub source_location: Option<TypeId>,
+    pub ordering: Option<TypeId>,
     pub types_layout: Option<TypeId>,
     pub types_type_schema: Option<TypeId>,
     pub types_int_kind: Option<TypeId>,
     pub types_int_value: Option<TypeId>,
     pub types_float_kind: Option<TypeId>,
     pub types_float_value: Option<TypeId>,
+}
+
+impl BuiltinTypes {
+    pub fn assert_complete(&self) {
+        assert!(self.empty != TypeId::PENDING);
+        debug_assert!(self.buffer.is_some());
+        debug_assert!(self.span.is_some());
+        debug_assert!(self.list.is_some());
+        debug_assert!(self.string.is_some());
+        debug_assert!(self.opt.is_some());
+        debug_assert!(self.dyn_lambda_obj.is_some());
+        debug_assert!(self.types_layout.is_some());
+        debug_assert!(self.types_type_schema.is_some());
+        debug_assert!(self.types_int_kind.is_some());
+        debug_assert!(self.types_int_value.is_some());
+        debug_assert!(self.types_float_kind.is_some());
+        debug_assert!(self.types_float_value.is_some());
+    }
+    pub fn string(&self) -> TypeId {
+        self.string.expect("string builtin missing")
+    }
+    pub fn buffer(&self) -> TypeId {
+        self.buffer.expect("buffer builtin missing")
+    }
+    pub fn list(&self) -> TypeId {
+        self.list.expect("list builtin missing")
+    }
+    pub fn span(&self) -> TypeId {
+        self.span.expect("span builtin missing")
+    }
+    pub fn opt(&self) -> TypeId {
+        self.opt.expect("opt builtin missing")
+    }
 }
 
 #[repr(u8)]
@@ -1069,15 +1080,17 @@ impl ScalarType {
 pub enum PhysicalTypeResult {
     No,
     Never,
+    Infinite,
     Yes(PhysicalType),
 }
 
 impl PhysicalTypeResult {
     pub fn unwrap(self) -> PhysicalType {
         match self {
-            PhysicalTypeResult::Yes(pt) => pt,
             PhysicalTypeResult::No => panic!("Called unwrap on PhysicalTypeResult::No"),
             PhysicalTypeResult::Never => panic!("Called unwrap on PhysicalTypeResult::Never"),
+            PhysicalTypeResult::Infinite => panic!("Called unwrap on PhysicalTypeResult::Infinite"),
+            PhysicalTypeResult::Yes(pt) => pt,
         }
     }
 }
@@ -1314,7 +1327,6 @@ pub struct TypePool {
     pub phys_types: FxHashMap<TypeId, PhysicalTypeResult>,
 
     /// Lookup mappings for parsed -> typed ids
-    pub ast_type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
     pub ast_ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
 
     pub builtins: BuiltinTypes,
@@ -1327,12 +1339,11 @@ pub struct TypePool {
     pub lambda_types: VPool<LambdaType, LambdaTypeId>,
 
     pub idents: TypePoolIdents,
-
-    buf_visited_types: FxHashSet<TypeId>,
 }
 
 impl TypePool {
     pub fn empty(tag_ident: Ident, payload_ident: Ident) -> TypePool {
+        // nocommit: Profile with no madvise/hinting
         const EXPECTED_TYPE_COUNT: usize = 65536;
         let mut agg_types = VPool::make_with_hint("phys_types", EXPECTED_TYPE_COUNT / 2);
         // Reserve the lower values so they dont conflict with scalars once packed
@@ -1352,7 +1363,6 @@ impl TypePool {
             specializations: FxHashMap::with_capacity(EXPECTED_TYPE_COUNT / 2),
             phys_types: FxHashMap::with_capacity(EXPECTED_TYPE_COUNT / 2),
 
-            ast_type_defn_mapping: FxHashMap::default(),
             ast_ability_mapping: FxHashMap::default(),
 
             builtins: BuiltinTypes::default(),
@@ -1364,8 +1374,6 @@ impl TypePool {
             lambda_types: VPool::make_with_hint("lambdas", EXPECTED_TYPE_COUNT / 128),
 
             idents: TypePoolIdents { tag: tag_ident, payload: payload_ident },
-
-            buf_visited_types: FxHashSet::with_capacity(64),
         }
     }
 
@@ -1433,51 +1441,37 @@ impl TypePool {
         type_id
     }
 
-    pub fn add_unresolved_type_defn(
+    pub fn set_type(
         &mut self,
-        parsed_id: ParsedTypeDefnId,
-        info: TypeDefnInfo,
-    ) -> TypeId {
-        let type_id = self.add(Type::Unresolved(parsed_id), Some(info), None);
-        self.ast_type_defn_mapping.insert(parsed_id, type_id);
-        type_id
-    }
-
-    pub fn resolve_unresolved(
-        &mut self,
-        unresolved_type_id: TypeId,
+        id: TypeId,
         type_value: Type,
         instance_info: Option<GenericInstanceInfo>,
+        defn_info: Option<TypeDefnInfo>,
     ) {
-        let defn_info = self.defn_info.get(&unresolved_type_id).copied();
         let hash = self.hash_type(&type_value, defn_info);
-        let typ = self.get_mut(unresolved_type_id);
-        if typ.as_unresolved().is_none() {
-            panic!("Tried to resolve a type that was not unresolved: {}", typ.kind_name());
-        }
-        *typ = type_value;
-        self.hashes.insert(hash, unresolved_type_id);
-        // Adding a type is a mess, since we have all these places to update
-        // and we have to do it differently if we're resolving vs adding new.
-        // ...
-        // Update: HARD AGREE 4 months later!
-        // Checklist is:
-        // - manage the hash
-        // - Update the 3 SoA fields: variable counts, phys_type_mapping, and instance_info
-        // - Manage both the resolve vs insert paths
-        // - Handle sums since they are self-referential
-        //
-        // Update: Mostly fixed this by making sum variants not their own types
+        *self.get_mut(id) = type_value;
+        self.hashes.insert(hash, id);
 
-        let variable_counts = self.count_type_variables(unresolved_type_id);
-        *self.type_variable_counts.get_mut(unresolved_type_id) = variable_counts;
-        *self.instance_info.get_mut(unresolved_type_id) = instance_info;
+        let variable_counts = self.count_type_variables(id);
+        *self.type_variable_counts.get_mut(id) = variable_counts;
+
+        if let Some(defn_info) = defn_info {
+            self.defn_info.insert(id, defn_info);
+        }
+        *self.instance_info.get_mut(id) = instance_info;
     }
 
     pub fn next_type_id(&self) -> TypeId {
-        // Safety: If you add one to a u32 it'll never be zero.
-        // Community Notes: Not true, it can wrap!
-        unsafe { TypeId(NonZeroU32::new_unchecked(self.types.len() as u32 + 1)) }
+        self.types.next_id()
+    }
+
+    pub fn reserve_id(&mut self) -> TypeId {
+        let id = self.types.reserve_id();
+        let id2 = self.instance_info.reserve_id();
+        let id3 = self.type_variable_counts.reserve_id();
+        debug_assert_eq!(id, id2);
+        debug_assert_eq!(id, id3);
+        id
     }
 
     pub fn add_reference_type(&mut self, inner_type: TypeId, mutable: bool) -> TypeId {
@@ -1702,10 +1696,6 @@ impl TypePool {
         self.types.len()
     }
 
-    pub fn find_type_defn_mapping(&mut self, type_defn_id: ParsedTypeDefnId) -> Option<TypeId> {
-        self.ast_type_defn_mapping.get(&type_defn_id).copied()
-    }
-
     pub fn add_ability_mapping(
         &mut self,
         parsed_ability_id: ParsedAbilityId,
@@ -1721,41 +1711,13 @@ impl TypePool {
         self.ast_ability_mapping.get(&parsed_ability_id).copied()
     }
 
-    pub fn get_contained_type_variable_counts(&self, type_id: TypeId) -> TypeVariableInfo {
+    pub fn get_type_variable_counts(&self, type_id: TypeId) -> TypeVariableInfo {
         *self.type_variable_counts.get(type_id)
     }
 
-    /// Recursively checks if given type contains any type variables
-    pub fn count_type_variables(&mut self, type_id: TypeId) -> TypeVariableInfo {
-        let mut visited = std::mem::take(&mut self.buf_visited_types);
-
-        let result = self.count_type_variables_rec(type_id, &mut visited);
-
-        visited.clear();
-        self.buf_visited_types = visited;
-
-        result
-    }
-
-    pub fn count_type_variables_rec(
-        &self,
-        type_id: TypeId,
-        visited: &mut FxHashSet<TypeId>,
-    ) -> TypeVariableInfo {
+    pub fn count_type_variables(&self, type_id: TypeId) -> TypeVariableInfo {
         const EMPTY: TypeVariableInfo = TypeVariableInfo::EMPTY;
-        // FIXME: Can just look up the type variables of contained types
-        //        as they are already interned, rather than recurse on them
         debug!("count_type_variables of {} {}", type_id, self.get(type_id).kind_name());
-        if visited.contains(&type_id) {
-            return TypeVariableInfo::EMPTY;
-        }
-
-        visited.insert(type_id);
-
-        // if visited.len() > unsafe { MAX_VISITED } {
-        //     eprintln!("MAX VISITED: {}", unsafe { MAX_VISITED });
-        //     unsafe { MAX_VISITED = visited.len() }
-        // }
 
         match self.get(type_id) {
             Type::TypeParameter(_tp) => TypeVariableInfo {
@@ -1769,7 +1731,7 @@ impl TypePool {
                     inference_variable_count: 0,
                     unresolved_static_count: 0,
                 };
-                let fn_info = self.count_type_variables_rec(ftp.function_type, visited);
+                let fn_info = self.type_variable_counts.get(ftp.function_type);
                 base_info.add(fn_info)
             }
             Type::InferenceHole(_hole) => TypeVariableInfo {
@@ -1785,16 +1747,16 @@ impl TypePool {
             Type::Struct(struc) => {
                 let mut result = EMPTY;
                 for field in self.mem.getn(struc.fields).iter() {
-                    result = result.add(self.count_type_variables_rec(field.type_id, visited))
+                    result = result.add(self.type_variable_counts.get(field.type_id))
                 }
                 result
             }
-            Type::Reference(refer) => self.count_type_variables_rec(refer.inner_type, visited),
+            Type::Reference(refer) => *self.type_variable_counts.get(refer.inner_type),
             Type::Sum(e) => {
                 let mut result = EMPTY;
                 for v in self.mem.getn(e.variants) {
                     if let Some(payload) = v.payload {
-                        result = result.add(self.count_type_variables_rec(payload, visited));
+                        result = result.add(self.type_variable_counts.get(payload));
                     }
                 }
                 result
@@ -1808,21 +1770,20 @@ impl TypePool {
             Type::Function(fun) => {
                 let mut result = EMPTY;
                 for param in self.mem.getn(fun.physical_params).iter() {
-                    result = result.add(self.count_type_variables_rec(param.type_id, visited))
+                    result = result.add(self.type_variable_counts.get(param.type_id))
                 }
-                result = result.add(self.count_type_variables_rec(fun.return_type, visited));
+                result = result.add(self.type_variable_counts.get(fun.return_type));
                 result
             }
-            Type::FunctionPointer(fp) => {
-                self.count_type_variables_rec(fp.function_type_id, visited)
-            }
+            Type::FunctionPointer(fp) => *self.type_variable_counts.get(fp.function_type_id),
             Type::Lambda(lambda_id) => {
                 let lambda = self.lambda_types.get(*lambda_id);
-                self.count_type_variables_rec(lambda.function_type, visited)
-                    .add(self.count_type_variables_rec(lambda.env_type, visited))
+                self.type_variable_counts
+                    .get(lambda.function_type)
+                    .add(self.type_variable_counts.get(lambda.env_type))
             }
             // But a lambda object is generic if its function is generic
-            Type::LambdaObject(co) => self.count_type_variables_rec(co.function_type, visited),
+            Type::LambdaObject(co) => *self.type_variable_counts.get(co.function_type),
             Type::StaticValue(svt) => {
                 let this = if svt.value_id.is_none() {
                     TypeVariableInfo {
@@ -1833,15 +1794,15 @@ impl TypePool {
                 } else {
                     EMPTY
                 };
-                let inner = self.count_type_variables_rec(svt.family_type_id, visited);
+                let inner = self.type_variable_counts.get(svt.family_type_id);
                 this.add(inner)
             }
-            Type::Unresolved(_) => EMPTY,
             Type::Array(arr) => {
                 // Arrays contain 2 types, the element type and the size type,
                 // which is usually a `static uword`, but can be a type parameter
-                self.count_type_variables_rec(arr.element_type, visited)
-                    .add(self.count_type_variables_rec(arr.size_type, visited))
+                self.type_variable_counts
+                    .get(arr.element_type)
+                    .add(self.type_variable_counts.get(arr.size_type))
             }
         }
     }
@@ -1913,6 +1874,7 @@ impl TypePool {
                     Some(len) => match self.get_physical_type(static_values, array.element_type) {
                         PhysicalTypeResult::No => PhysicalTypeResult::No,
                         PhysicalTypeResult::Never => PhysicalTypeResult::Never,
+                        PhysicalTypeResult::Infinite => PhysicalTypeResult::No,
                         PhysicalTypeResult::Yes(element_pt) => {
                             let elem_layout = self.get_pt_layout(element_pt);
                             let record = AggregateTypeRecord {
@@ -1935,6 +1897,7 @@ impl TypePool {
                         match self.get_physical_type(static_values, field.type_id) {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
                             PhysicalTypeResult::Never => return PhysicalTypeResult::Never,
+                            PhysicalTypeResult::Infinite => return PhysicalTypeResult::Infinite,
                             PhysicalTypeResult::Yes(field_pt) => {
                                 let field_layout = self.get_pt_layout(field_pt);
                                 let offset = layout.append_to_aggregate(field_layout);
@@ -1965,6 +1928,7 @@ impl TypePool {
                         match self.get_physical_type(static_values, field.type_id) {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
                             PhysicalTypeResult::Never => return PhysicalTypeResult::Never,
+                            PhysicalTypeResult::Infinite => return PhysicalTypeResult::Infinite,
                             PhysicalTypeResult::Yes(field_pt) => {
                                 members.push(UnionMember { name: field.name, ty: field_pt });
                             }
@@ -1994,6 +1958,11 @@ impl TypePool {
                             PhysicalTypeResult::Never => {
                                 // We simply skip this variant!
                                 debug!("I am skipping this sum variant")
+                            }
+                            PhysicalTypeResult::Infinite => {
+                                // We can never figure out a size large enough to hold all variants,
+                                // since one variant is infinitely sized
+                                return PhysicalTypeResult::No;
                             }
                             PhysicalTypeResult::Yes(payload_pt) => {
                                 union_members.push(UnionMember { name: v.name, ty: payload_pt });
@@ -2065,8 +2034,7 @@ impl TypePool {
             | Type::Generic(_)
             | Type::TypeParameter(_)
             | Type::FunctionTypeParameter(_)
-            | Type::InferenceHole(_)
-            | Type::Unresolved(_) => PhysicalTypeResult::No,
+            | Type::InferenceHole(_) => PhysicalTypeResult::No,
         }
     }
 
@@ -2079,6 +2047,7 @@ impl TypePool {
         match self.get_physical_type(static_values, other) {
             PhysicalTypeResult::No => PhysicalTypeResult::No,
             PhysicalTypeResult::Never => PhysicalTypeResult::Never,
+            PhysicalTypeResult::Infinite => PhysicalTypeResult::Infinite,
             orig @ PhysicalTypeResult::Yes(other_pt) => match other_pt.as_enum() {
                 PhysicalTypeEnum::Empty => orig,
                 PhysicalTypeEnum::Scalar(_) => orig,
@@ -2181,6 +2150,7 @@ impl TypePool {
             Some(maybe_pt) => match maybe_pt {
                 PhysicalTypeResult::No => None,
                 PhysicalTypeResult::Never => None,
+                PhysicalTypeResult::Infinite => None,
                 PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(*pt)),
             },
             None => None,
@@ -2195,13 +2165,14 @@ impl TypePool {
         match self.get_physical_type(static_values, type_id) {
             PhysicalTypeResult::No => None,
             PhysicalTypeResult::Never => None,
+            PhysicalTypeResult::Infinite => None,
             PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(pt)),
         }
     }
 
     pub fn get_as_list_instance(&self, type_id: TypeId) -> Option<ListType> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
-            if spec_info.generic_parent == LIST_TYPE_ID {
+            if spec_info.generic_parent == self.builtins.list() {
                 Some(ListType { element_type: *self.mem.get_nth(spec_info.type_args, 0) })
             } else {
                 None
@@ -2211,7 +2182,7 @@ impl TypePool {
 
     pub fn get_as_buffer_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
-            if spec_info.generic_parent == BUFFER_TYPE_ID {
+            if spec_info.generic_parent == self.builtins.buffer() {
                 Some(*self.mem.get_nth(spec_info.type_args, 0))
             } else {
                 None
@@ -2221,7 +2192,7 @@ impl TypePool {
 
     pub fn get_as_span_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
-            if spec_info.generic_parent == SPAN_TYPE_ID {
+            if spec_info.generic_parent == self.builtins.span() {
                 Some(*self.mem.get_nth(spec_info.type_args, 0))
             } else {
                 None
@@ -2231,11 +2202,11 @@ impl TypePool {
 
     pub fn get_as_container_instance(&self, type_id: TypeId) -> Option<(TypeId, ContainerKind)> {
         if let Some(info) = self.get_instance_info(type_id) {
-            if info.generic_parent == LIST_TYPE_ID {
+            if info.generic_parent == self.builtins.list() {
                 Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::List))
-            } else if info.generic_parent == BUFFER_TYPE_ID {
+            } else if info.generic_parent == self.builtins.buffer() {
                 Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::Buffer))
-            } else if info.generic_parent == SPAN_TYPE_ID {
+            } else if info.generic_parent == self.builtins.span() {
                 Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::Span))
             } else {
                 None
@@ -2249,7 +2220,7 @@ impl TypePool {
 
     pub fn get_as_opt_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
-            if spec_info.generic_parent == OPTIONAL_TYPE_ID {
+            if spec_info.generic_parent == self.builtins.opt() {
                 Some(*self.mem.get_nth(spec_info.type_args, 0))
             } else {
                 None

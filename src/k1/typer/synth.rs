@@ -108,7 +108,7 @@ impl TypedProgram {
 
     pub(super) fn synth_optional_type(&mut self, inner_type: TypeId) -> TypeId {
         let args = self.types.mem.pushn(&[inner_type]);
-        self.instantiate_generic_type(OPTIONAL_TYPE_ID, args)
+        self.instantiate_generic_type(self.types.builtins.opt(), args)
     }
 
     pub(super) fn synth_optional_some(&mut self, expr_id: TypedExprId) -> (TypedExprId, TypeId) {
@@ -428,7 +428,8 @@ impl TypedProgram {
                 StructLiteralField { name: self.ast.idents.b.line, expr: Some(line_number_expr) },
             ]),
         });
-        self.exprs.add(struct_expr, COMPILER_SOURCE_LOC_TYPE_ID, span)
+        let source_location_type_id = self.types.builtins.source_location.unwrap();
+        self.exprs.add(struct_expr, source_location_type_id, span)
     }
 
     pub(super) fn synth_crash_call(
@@ -586,7 +587,7 @@ impl TypedProgram {
             let type_id = k1.exprs.get_type(args);
             match k1.types.get(type_id) {
                 Type::Struct(_) => {
-                    if type_id == STRING_TYPE_ID {
+                    if type_id == k1.types.builtins.string() {
                         return None;
                     }
 
@@ -623,7 +624,7 @@ impl TypedProgram {
                 | Type::Array(_)
                 | Type::Sum(_) => Ok(args),
                 Type::Struct(s) => {
-                    if type_id == STRING_TYPE_ID {
+                    if type_id == k1.types.builtins.string() {
                         if n == 0 {
                             Ok(args)
                         } else {

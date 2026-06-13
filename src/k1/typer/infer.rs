@@ -789,7 +789,7 @@ impl TypedProgram {
         let mut newly_solved_params: SV4<TypeSubstitutionPair> = smallvec![];
         for (solved_from, solved_to) in final_pairs.iter() {
             let is_fully_solved =
-                self.types.get_contained_type_variable_counts(*solved_to).inference_variable_count
+                self.types.get_type_variable_counts(*solved_to).inference_variable_count
                     == 0;
             if !is_fully_solved {
                 continue;
