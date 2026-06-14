@@ -51,13 +51,6 @@ type alias c-ssizet = i64
 type alias c-int    = i32
 type alias c-long   = i64
 
-// nocommit can I combine the 3 ns k1s
-ns k1 {
-  type source-location = { filename: string, line: u64 }
-  // Need some way to mark this and is-static as comptime only
-  let capture-prints: bool = true
-}
-
 type ordering = either { less, equal, greater }
 
 type result[t, e] = either { ok(t), err(e) }
@@ -518,6 +511,12 @@ ns mem {
 /////////////////////////////////
 // Compiler builtins
 ns k1 {
+
+  type source-location = { filename: string, line: u64 }
+
+  // Need some way to mark this and is-static as comptime only
+  let capture-prints: bool = true
+
   // is-static is set to 'true' when executing K1 code statically, at compile-time
   let is-static: bool = builtin
 
@@ -531,6 +530,8 @@ ns k1 {
   let os-posix: bool = os is :macos or os is :linux
 
   let multithreading: bool = builtin
+
+  intern fn location(): source-location
 
   intern fn emit-compiler-message(
     locn: k1/source-location,
@@ -559,10 +560,6 @@ ns k1 {
 
 /////////////////////////////////
 // Core sizing intrinsics
-
-ns k1 {
-  intern fn location(): source-location
-}
 
 ns sys {
   intern fn exit(code: i32): never

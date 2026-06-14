@@ -12,6 +12,7 @@ Minor and ideas
 - [x] Allow name/type elision shorthand in function signatures. Examples: (self: self, size: size, t: t) -> (self, size, t). Enabled by using lowercase for types and values
 - [x] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
 - [x] Incorporate ffc.h for int and float parsing
+- [ ] `#[must_use]` equivalent
 - [ ] Opaque type solution. Try using 1-member structs and make struct's first field special
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
 - [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library

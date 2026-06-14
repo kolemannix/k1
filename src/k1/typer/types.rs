@@ -1427,9 +1427,9 @@ impl TypePool {
         // pub instance_info
 
         let variable_counts = self.count_type_variables(type_id);
-        self.type_variable_counts.add(variable_counts);
+        self.type_variable_counts.add_expected_id(variable_counts, type_id);
 
-        self.instance_info.add(instance_info);
+        self.instance_info.add_expected_id(instance_info, type_id);
 
         if let Some(defn_info) = defn_info {
             self.defn_info.insert(type_id, defn_info);

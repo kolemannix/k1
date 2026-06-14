@@ -1,4 +1,10 @@
-type Bar = { foo: Foo, bar: Bar }
+ns stuff {
+  type alias intalias = int
+}
+
+use stuff/intalias
+
+type Bar = { foo: Foo, bar: *Bar, i: intalias }
 type Foo = { x: t }
 
 type alias t = opaque[4, 4]

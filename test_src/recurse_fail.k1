@@ -2,4 +2,4 @@ type Red = { r: *Red, b: Black }
 type Black = { g: Green, b: bool } 
 type Green = { i: int, r: Red }
 
-//errmsg: Same-level recursion: type Red directly contains itself
+//errmsg: This type has an infinite size due to a cycle; Red was mentioned inside Red with no indirection

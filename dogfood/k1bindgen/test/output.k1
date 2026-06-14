@@ -52,8 +52,9 @@ type Size = either(u32) {
   Size_Large = 2,
 }
 
-type opaq = opaque[104, 4]
+type alias opaq = opaque[104, 4]
 
+type alias opaq = opaque[104, 4]
 
 extern("test", "main")
 fn main(): c-int

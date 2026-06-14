@@ -1515,6 +1515,19 @@ impl<T, Tag> List<T, Tag> {
             val
         }
     }
+
+    pub fn pop(&mut self) -> Option<T>
+    where
+        T: Copy,
+    {
+        if self.len == 0 {
+            None
+        } else {
+            let t = self.last().copied();
+            self.len -= 1;
+            t
+        }
+    }
 }
 
 impl<T, Tag> std::ops::Index<usize> for List<T, Tag> {
