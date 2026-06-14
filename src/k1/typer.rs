@@ -212,12 +212,10 @@ pub struct LsEntity {
     pub span: lex::Span,
 }
 
-// nocommit dead
 #[derive(Clone, Copy)]
 pub struct TypeDefnStackEntry {
     pub parsed_id: ParsedTypeDefnId,
     pub reserved_type_id: TypeId,
-    pub layout_depth: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -2598,6 +2596,31 @@ pub struct TypePendingDefinition {
     pub parsed_id: ParsedTypeDefnId,
 }
 
+#[derive(Clone, Copy)]
+pub struct UsePendingResolution {
+    pub namespace_id: NamespaceId,
+    pub scope_id: ScopeId,
+    pub use_id: ParsedUseId,
+}
+
+#[derive(Clone, Default)]
+pub struct TypeDefnContext {
+    /// Each entry in this stack contains a set of type ids that are being defined
+    /// This is used not only to detect and generate recursive types, but also to
+    /// track when recursion has occurred so that we can check for proper layout indirection,
+    /// avoiding infinite types
+    pub stack: Vec<TypeDefnStackEntry>,
+
+    /// Includes co-recursive mentions, like Foo -> Bar -> Foo
+    pub recursive_mentions: Vec<TypeId>,
+}
+impl TypeDefnContext {
+    fn reset(&mut self) {
+        self.stack.clear();
+        self.recursive_mentions.clear();
+    }
+}
+
 pub struct TypedProgram {
     pub modules: VPool<Module, ModuleId>,
     pub config: CompilerConfig,
@@ -2641,6 +2664,7 @@ pub struct TypedProgram {
     pub use_statuses: FxHashMap<ParsedUseId, UseStatus>,
     pub debug_level_stack: RefCell<Vec<log::LevelFilter>>,
     pub functions_pending_body_specialization: Vec<FunctionId>,
+    pub uses_pending_resolution: VecDeque<UsePendingResolution>,
     pub types_pending_definition: VecDeque<TypePendingDefinition>,
 
     // Status and phases
@@ -2650,17 +2674,8 @@ pub struct TypedProgram {
 
     inference_context_stack: Vec<InferenceContext>,
     inference_context_extras: Vec<InferenceContext>,
-    /// Each entry in this stack contains a set of type ids that are being defined
-    /// and their 'layout depths', where indirection increases depth.
-    /// If we ever find a recursive reference at a matching depth,
-    /// that means we have an infinite layout: a mention of a type directly within itself
-    /// for example: deftype Foo = { f: Foo }
-    /// If we ever find a recursive reference at a prior level, that's a valid recursive mention
-    /// for example: deftype Foo = { f: *Foo }
-    ///                                 ^ the * pushes a new entry on the stack
-    ///                                 and we'll evaluate the 2nd Foo at d+1, find the first at d,
-    ///                                 and pass the check
-    type_defn_stack: Vec<TypeDefnStackEntry>,
+
+    type_defn_context: TypeDefnContext,
 
     // Buffers that we prefer to re-use to avoid thousands of allocations
     // Clear them after you use them, but leave the memory allocated
@@ -2835,13 +2850,14 @@ impl TypedProgram {
             use_statuses: FxHashMap::new(),
             debug_level_stack: RefCell::new(vec![log::max_level()]),
             functions_pending_body_specialization: vec![],
+            uses_pending_resolution: VecDeque::new(),
             types_pending_definition: VecDeque::new(),
             ast,
             module_in_progress: None,
             ls_entities: RefCell::new(ls_entities),
             inference_context_stack: Vec::with_capacity(8),
             inference_context_extras: (0..8).map(|_| InferenceContext::make()).collect(),
-            type_defn_stack: Vec::with_capacity(16),
+            type_defn_context: TypeDefnContext::default(),
             buffers: TypedModuleBuffers {
                 name_builder: String::with_capacity(4096),
                 emitted_code: String::with_capacity(8192),
@@ -3225,7 +3241,7 @@ impl TypedProgram {
         self.stmts.add(TypedStmt::Expr(expr, type_id))
     }
 
-    fn eval_type_defn_new(
+    fn eval_type_defn(
         &mut self,
         parsed_type_defn_id: ParsedTypeDefnId,
         namespace_scope_id: ScopeId,
@@ -3233,7 +3249,7 @@ impl TypedProgram {
         let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
         let is_generic_defn = !parsed_type_defn.type_params.is_empty();
         let is_alias = parsed_type_defn.flags.is_alias();
-        eprintln!("eval_type_defn_new {}", self.ident_str(parsed_type_defn.name));
+        debug!("eval_type_defn {}", self.ident_str(parsed_type_defn.name));
 
         if parsed_type_defn.name == self.ast.idents.b.some {
             return failf!(parsed_type_defn.span, "'some' is not a valid type name");
@@ -3241,11 +3257,9 @@ impl TypedProgram {
 
         let reserved_type_id = if !is_alias {
             let reserved_type_id = self.types.reserve_id();
-            self.type_defn_stack.push(TypeDefnStackEntry {
-                parsed_id: parsed_type_defn_id,
-                reserved_type_id,
-                layout_depth: 0,
-            });
+            self.type_defn_context
+                .stack
+                .push(TypeDefnStackEntry { parsed_id: parsed_type_defn_id, reserved_type_id });
             Some(reserved_type_id)
         } else {
             None
@@ -3384,9 +3398,11 @@ impl TypedProgram {
                         );
                     }
                 }
+                // Allowed nominal types
                 Type::Struct(_s) => {}
                 Type::Sum(_s) => {}
                 Type::Enum(_e) => {}
+
                 _other => {
                     return failf!(
                         parsed_type_defn.span,
@@ -3429,7 +3445,6 @@ impl TypedProgram {
         // if its recursive, we just point at the generic, which is very wrong
         let type_id = if is_generic_defn {
             let gen_type = GenericType { params: type_params_handle, inner: rhs_type_id };
-            // self.types.add(Type::Generic(gen_type), defn_info, None)
             self.types.set_type(
                 reserved_type_id.unwrap(),
                 Type::Generic(gen_type),
@@ -3458,7 +3473,7 @@ impl TypedProgram {
             self.report(errf!(span, "Type {} exists", self.ident_str(name)));
         }
 
-        // Detect builtin types and store their IDs for fast lookups
+        // Capture type_ids of compiler-known types
         if namespace_scope_id == self.scopes.core_scope_id {
             if name == self.ast.idents.b.string {
                 self.types.builtins.string = Some(type_id);
@@ -3494,10 +3509,33 @@ impl TypedProgram {
         }
 
         if !is_alias {
-            let Some(defn_stack_entry) = self.type_defn_stack.pop() else {
+            let Some(defn_stack_entry) = self.type_defn_context.stack.pop() else {
                 self.ice_span(parsed_type_defn.span, "No defn stack entry");
             };
             debug_assert_eq!(defn_stack_entry.reserved_type_id, type_id);
+
+            if !self.type_defn_context.recursive_mentions.is_empty() {
+                let mut seen =
+                    self.tmp.new_list(self.type_defn_context.recursive_mentions.len() as u32);
+                if let Some(cycled_type_id) = self.check_type_finite_rec(
+                    &self.type_defn_context.recursive_mentions,
+                    type_id,
+                    false,
+                    &mut seen,
+                ) {
+                    self.report(errf!(
+                        parsed_type_defn.span,
+                        "This type has an infinite size due to a cycle; {} was mentioned inside {} with no indirection",
+                        self.type_id_to_string(cycled_type_id),
+                        self.type_id_to_string(type_id),
+                    ));
+                }
+            }
+
+            // After popping the last definition, clear the recursive mentions too
+            if self.type_defn_context.stack.is_empty() {
+                self.type_defn_context.reset()
+            }
         }
         if let Some(idx) = self
             .types_pending_definition
@@ -3511,177 +3549,6 @@ impl TypedProgram {
         }
         Ok(type_id)
     }
-
-    // fn eval_type_defn(
-    //     &mut self,
-    //     parsed_type_defn_id: ParsedTypeDefnId,
-    //     scope_id: ScopeId,
-    //     defn_layout_depth: u32,
-    // ) -> K1Result<TypeId> {
-    //     let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id);
-    //     let is_generic_defn = !parsed_type_defn.type_params.is_empty();
-
-    //     if parsed_type_defn.flags.is_alias() {
-    //         if is_generic_defn {
-    //             return failf!(
-    //                 parsed_type_defn.span,
-    //                 "Type alias cannot be generic: {}",
-    //                 self.ident_str(parsed_type_defn.name)
-    //             );
-    //         }
-    //         let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
-    //         let rhs = self.eval_type_expr(parsed_type_defn.value_expr, scope_id)?;
-    //         if !self.scopes.add_type(scope_id, parsed_type_defn.name, rhs) {
-    //             return failf!(
-    //                 parsed_type_defn.span,
-    //                 "Type name '{}' is taken",
-    //                 self.ident_str(parsed_type_defn.name).blue()
-    //             );
-    //         };
-    //         return Ok(rhs);
-    //     }
-
-    //     let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
-    //     debug_assert!(!parsed_type_defn.flags.is_alias());
-
-    //     if parsed_type_defn.name == self.ast.idents.b.some {
-    //         return failf!(parsed_type_defn.span, "'some' is not a valid type name");
-    //     }
-    //     let my_type_id = self.types.find_type_defn_mapping(parsed_type_defn_id).unwrap();
-    //     self.type_defn_stack.push(TypeDefnStackEntry {
-    //         reserved_type_id: my_type_id,
-    //         layout_depth: defn_layout_depth,
-    //     });
-
-    //     if self.types.get(my_type_id).as_unresolved().is_none() {
-    //         return Ok(my_type_id);
-    //     }
-
-    //     let is_generic_defn = !parsed_type_defn.type_params.is_empty();
-
-    //     let defn_scope_id = self.scopes.add_child_scope(
-    //         scope_id,
-    //         ScopeType::TypeDefn,
-    //         ScopeOwnerId::None,
-    //         Some(parsed_type_defn.name),
-    //     );
-    //     let mut type_params: List<NameAndType, _> =
-    //         self.mem.new_list(parsed_type_defn.type_params.len());
-    //     for type_param in self.ast.mem.getn(parsed_type_defn.type_params).iter() {
-    //         let maybe_static_constraint =
-    //             match ParsedTypeConstraintExpr::single_static_constraint_or_fail(
-    //                 &self.ast.mem,
-    //                 type_param.constraints,
-    //             ) {
-    //                 Ok(Some(parsed_static_constraint)) => {
-    //                     Some(self.eval_type_expr(parsed_static_constraint, defn_scope_id)?)
-    //                 }
-    //                 Ok(None) => None,
-    //                 Err(msg) => return failf!(type_param.span, "{}", msg),
-    //             };
-    //         let mut ability_constraint_signatures: SV4<TypedAbilitySignature> = smallvec![];
-    //         let mut predicate_functions = self.mem.new_list(0);
-    //         for parsed_constraint in self.ast.mem.getn(type_param.constraints) {
-    //             match parsed_constraint {
-    //                 ParsedTypeConstraintExpr::Ability(ability_expr) => {
-    //                     let ability_sig =
-    //                         self.eval_ability_expr(*ability_expr, false, defn_scope_id)?;
-    //                     ability_constraint_signatures.push(ability_sig);
-    //                 }
-    //                 ParsedTypeConstraintExpr::Predicate(qident) => {
-    //                     predicate_functions.push_grow(&mut self.mem, *qident);
-    //                 }
-    //                 ParsedTypeConstraintExpr::Static(_) => {}
-    //             };
-    //         }
-    //         let predicate_functions_handle = self.mem.list_to_handle(predicate_functions);
-    //         let type_variable_id = self.add_type_parameter(
-    //             TypeParameter {
-    //                 name: type_param.name,
-    //                 static_constraint: maybe_static_constraint,
-    //                 predicate_functions: predicate_functions_handle,
-    //                 scope_id: defn_scope_id,
-    //                 span: type_param.span,
-    //             },
-    //             ability_constraint_signatures,
-    //         );
-    //         type_params.push(NameAndType { name: type_param.name, type_id: type_variable_id });
-    //         let added = self
-    //             .scopes
-    //             .get_scope_mut(defn_scope_id)
-    //             .add_type(type_param.name, type_variable_id);
-    //         if !added {
-    //             return failf!(
-    //                 type_param.span,
-    //                 "Type variable name '{}' is taken",
-    //                 self.ident_str(type_param.name).blue()
-    //             );
-    //         }
-    //     }
-    //     let type_params_handle = self.mem.list_to_handle(type_params);
-
-    //     let type_eval_context = EvalTypeExprContext {
-    //         // For generics, we want the RHS to be its own type, then we make a Generic wrapper
-    //         // that points to it, so we pass None for `direct_unresolved_target_type`
-    //         direct_unresolved_target_type: if is_generic_defn { None } else { Some(my_type_id) },
-    //         is_inside_type_definition_rhs: true,
-    //         is_direct_function_parameter: false,
-    //         is_inside_static_type: false,
-    //         defn_layout_depth: Some(defn_layout_depth),
-    //     };
-
-    //     // Actually compile the RHS
-    //     let rhs_type_id =
-    //         self.eval_type_expr_ext(parsed_type_defn.value_expr, defn_scope_id, type_eval_context)?;
-
-    //     // Not a generic and not an alias, so its a "New Type"
-    //     // A named struct or sum or a builtin
-    //     match self.types.get(rhs_type_id) {
-    //         Type::Char
-    //         | Type::Bool
-    //         | Type::Never
-    //         | Type::Pointer
-    //         | Type::Integer(_)
-    //         | Type::Float(_) => {
-    //             if let ParsedTypeExpr::Builtin(_) =
-    //                 self.ast.type_exprs.get(parsed_type_defn.value_expr)
-    //             {
-    //                 // fine
-    //             } else {
-    //                 return failf!(
-    //                     parsed_type_defn.span,
-    //                     "Non-alias type definition must be a struct or sum; not a '{}'. Perhaps you intended to create an alias `deftype alias <name> = <type>`",
-    //                     self.type_id_to_string(rhs_type_id)
-    //                 );
-    //             }
-    //         }
-    //         Type::Struct(_s) => {}
-    //         Type::Sum(_s) => {}
-    //         Type::Enum(_e) => {}
-    //         _other => {
-    //             return failf!(
-    //                 parsed_type_defn.span,
-    //                 "Non-alias type definition must be a struct or sum or builtin; not a '{}'. Perhaps you meant to create an alias `deftype alias <name> = <type>`",
-    //                 self.type_id_to_string(rhs_type_id)
-    //             );
-    //         }
-    //     };
-
-    //     // Recursive generic types do not work.
-    //     //
-    //     // We aren't properly running the TypeApplication expr
-    //     // if its recursive, we just point at the generic, which is very wrong
-    //     if is_generic_defn {
-    //         let gen_type = GenericType { params: type_params_handle, inner: rhs_type_id };
-    //         self.types.resolve_unresolved(my_type_id, Type::Generic(gen_type), None);
-    //     }
-
-    //     let Some(defn_stack_entry) = self.type_defn_stack.pop() else {
-    //         self.ice_span(parsed_type_defn.span, "No defn stack entry");
-    //     };
-    //     debug_assert_eq!(defn_stack_entry.reserved_type_id, my_type_id);
-    //     Ok(my_type_id)
-    // }
 
     fn eval_type_expr(
         &mut self,
@@ -4487,16 +4354,21 @@ impl TypedProgram {
                     }
                 }
                 Some((pending_defn, _scope_id)) => {
-                    if let Some(entry) =
-                        self.type_defn_stack.iter().find(|e| e.parsed_id == pending_defn.parsed_id)
+                    if let Some(entry) = self
+                        .type_defn_context
+                        .stack
+                        .iter()
+                        .find(|e| e.parsed_id == pending_defn.parsed_id)
                     {
                         if !ty_app.args.is_empty() {
+                            // nocommit let's do recursive generics now
+                            // What do I even store in here? A "ToApply[reserved_type_id, param a, param b]?
+                            // Yes, exactly that. The RHS of a generic isn't a fully baked type
+                            // anyway, because its got type variables in it anyway!
                             return failf!(ty_app.span, "cant do recursive generics yet");
                         }
-                        eprintln!(
-                            "yielding after detecting recursion: {}",
-                            self.qident_to_string(&ty_app.name)
-                        );
+
+                        self.type_defn_context.recursive_mentions.push(entry.reserved_type_id);
                         self.emit_ls_entity(
                             ty_app.name.span,
                             LsEntityKind::Type {
@@ -4506,15 +4378,14 @@ impl TypedProgram {
                         );
                         Ok(entry.reserved_type_id)
                     } else {
-                        // Not recursion, just encountering an out-of-order type
                         debug!(
-                            "Evaluating {} inside {} because I haven't seen it",
+                            "Evaluating {} inside {} on demand",
                             self.ident_str(self.ast.get_type_defn(pending_defn.parsed_id).name),
                             self.scope_id_to_string(scope_id)
                         );
 
                         let _result =
-                            self.eval_type_defn_new(pending_defn.parsed_id, pending_defn.scope_id)?;
+                            self.eval_type_defn(pending_defn.parsed_id, pending_defn.scope_id)?;
 
                         // Just re-call this function from the top now that the type exists. (hack? idk)
                         self.eval_type_application(ty_app_id, scope_id, context)
@@ -13881,7 +13752,7 @@ impl TypedProgram {
     ) -> K1Result<Option<TypedStmtId>> {
         match self.ast.stmts.get(stmt) {
             ParsedStmt::Use(use_stmt) => {
-                let parsed_use = self.ast.uses.get_use(use_stmt.use_id);
+                let parsed_use = *self.ast.uses.get_use(use_stmt.use_id);
                 // These uses should always hit since we only do 1 pass inside function bodies, and
                 // at that point all symbols are resolvable
                 let useable_symbols =
@@ -15900,7 +15771,7 @@ impl TypedProgram {
                     arms: self.mem.list_to_handle(arms),
                 });
                 let match_expr_id = self.exprs.add(match_expr, BOOL_TYPE_ID, fn_span);
-                eprintln!("SUM EQUALS MATCH\n{}", self.expr_to_string(match_expr_id));
+                // eprintln!("SUM EQUALS MATCH\n{}", self.expr_to_string(match_expr_id));
                 Ok(match_expr_id)
             }
             BuiltinTyperFunction::SumAbilityGetName => {
@@ -16576,12 +16447,13 @@ impl TypedProgram {
         }
     }
 
+    #[must_use]
     fn eval_use_definition(
         &mut self,
         scope_id: ScopeId,
         parsed_use_id: ParsedUseId,
         fail_on_traverse_fail: bool,
-    ) {
+    ) -> bool {
         let parsed_use = *self.ast.uses.get_use(parsed_use_id);
         let status_entry = self.use_statuses.get(&parsed_use_id);
         let is_fulfilled = match status_entry {
@@ -16589,13 +16461,13 @@ impl TypedProgram {
             _ => false,
         };
         if is_fulfilled {
-            return;
+            return true;
         }
         let useable_symbols =
             match self.find_useable_symbols(scope_id, &parsed_use.target, fail_on_traverse_fail) {
                 Err(e) => {
                     self.report(e);
-                    return;
+                    return false;
                 }
                 Ok(sym) => sym,
             };
@@ -16616,14 +16488,17 @@ impl TypedProgram {
                 );
                 debug!("Inserting resolved use of {:?}", symbol);
             }
+            // nocommit: UseStatus can likely go away
             UseStatus::Resolved(useable_symbols)
         };
 
+        let ret = resolution.is_resolved();
         self.use_statuses.insert(parsed_use_id, resolution);
+        ret
     }
 
     fn find_useable_symbols(
-        &self,
+        &mut self,
         scope_id: ScopeId,
         name: &QIdent,
         fail_on_traverse_fail: bool,
@@ -16666,7 +16541,18 @@ impl TypedProgram {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Type { type_id, companion_namespace },
             })
+        } else
+        // This 'else' is load-bearing since we don't actually remove the pending definitions
+        // from the scopes
+        if let Some(pending_type) = scope_to_search.find_pending_type(name.name) {
+            let type_id = self.eval_type_defn(pending_type.parsed_id, pending_type.scope_id)?;
+            let companion_namespace = self.types.get_companion_namespace(type_id);
+            found_symbols.push(UseableSymbol {
+                source_scope: scope_id_to_search,
+                id: UseableSymbolId::Type { type_id, companion_namespace },
+            })
         }
+        let scope_to_search = self.scopes.get_scope(scope_id_to_search);
         if let Some(variable_id) =
             scope_to_search.find_variable(name.name).and_then(|vis| vis.variable_id())
         {
@@ -16683,6 +16569,7 @@ impl TypedProgram {
             })
         }
         if let Some(ns_id) = scope_to_search.find_namespace(name.name) {
+            // nocommit: this workaround can be likely removed since we now resolve pending types
             let ns = self.namespaces.get(ns_id);
             let is_companion_ns = ns.namespace_type == NamespaceKind::TypeCompanion;
             if is_companion_ns {
@@ -16763,188 +16650,20 @@ impl TypedProgram {
         }
     }
 
-    // Evaluate a namespace during the Type Declaration phase:
-    // This means finding all the type declarations in the namespace and registering their names,
-    // as well as ability defns, which are like types, and registering their names
-    // then recursing down into child namespaces and doing the same
-    // fn declare_types_in_parsed_namespace(
-    //     &mut self,
-    //     parsed_namespace_id: ParsedNamespaceId,
-    //     skip_defns: &[ParsedId],
-    // ) {
+    // nocommit
+    // fn resolve_uses_in_namespace_recursively(&mut self, parsed_namespace_id: ParsedNamespaceId) {
     //     let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
     //     let ns = self.namespaces.get(namespace_id);
-    //     debug!("declare_types_in_namespace {}", self.ident_str(ns.name));
+    //     debug!("resolve_uses_in_namespace {}", self.ident_str(ns.name));
     //     let namespace_scope_id = ns.scope_id;
     //     let parsed_definitions = self.ast.namespaces.get(parsed_namespace_id).definitions.clone();
+    //
     //     for &parsed_definition_id in parsed_definitions.iter() {
-    //         if skip_defns.contains(&parsed_definition_id) {
-    //             continue;
-    //         }
-    //         match parsed_definition_id {
-    //             ParsedId::TypeDefn(type_defn_id) => {
-    //                 let parsed_type_defn = self.ast.get_type_defn(type_defn_id).clone();
-    //                 if parsed_type_defn.flags.is_alias() {
-    //                     // Do nothing for aliases in the decl phase
-    //                 } else {
-    //                     // Find companion namespace if exists and update type_defn_info
-    //
-    //                     // nocommit move this registration work to eval_type_defn
-    //                     let found_namespace_id = self
-    //                         .scopes
-    //                         .get_scope(namespace_scope_id)
-    //                         .find_namespace(parsed_type_defn.name);
-    //                     let companion_namespace_id = match found_namespace_id {
-    //                         None => None,
-    //                         Some(ns_id) => {
-    //                             let companion_ns = self.namespaces.get(ns_id);
-    //                             if companion_ns.namespace_type == NamespaceKind::TypeCompanion {
-    //                                 Some(ns_id)
-    //                             } else {
-    //                                 self.report_hint(parsed_type_defn.span, "matching namespace is not declared as type companion; use an `ns for {}` declaration");
-    //                                 None
-    //                             }
-    //                         }
-    //                     };
-    //                     let defn_info = TypeDefnInfo {
-    //                         name: parsed_type_defn.name,
-    //                         scope: namespace_scope_id,
-    //                         companion_namespace: companion_namespace_id,
-    //                         ast_id: ParsedId::TypeDefn(type_defn_id),
-    //                         recursive: false,
-    //                     };
-    //                     let type_id = self.types.add_unresolved_type_defn(type_defn_id, defn_info);
-    //
-    //                     if let Some(companion_namespace_id) = companion_namespace_id {
-    //                         self.namespaces.get_mut(companion_namespace_id).companion_type_id =
-    //                             Some(type_id);
-    //                     }
-    //                     let name = parsed_type_defn.name;
-    //                     let added =
-    //                         self.scopes.get_scope_mut(namespace_scope_id).add_type(name, type_id);
-    //                     if !added {
-    //                         let span = parsed_type_defn.span;
-    //                         self.report(errf!(span, "Type {} exists", self.ident_str(name)));
-    //                     }
-    //
-    //                     // Detect builtin types and store their IDs for fast lookups
-    //                     if namespace_scope_id == self.scopes.core_scope_id {
-    //                         if name == self.ast.idents.b.string {
-    //                             self.types.builtins.string = Some(type_id);
-    //                         } else if name == self.ast.idents.b.buffer {
-    //                             self.types.builtins.buffer = Some(type_id);
-    //                         } else if name == self.ast.idents.b.span {
-    //                             self.types.builtins.span = Some(type_id);
-    //                         }
-    //                     } else if namespace_scope_id == self.scopes.types_scope_id {
-    //                         if name == self.ast.idents.b.type_schema {
-    //                             self.types.builtins.types_type_schema = Some(type_id);
-    //                         } else if name == self.ast.idents.b.int_kind {
-    //                             self.types.builtins.types_int_kind = Some(type_id);
-    //                         } else if name == self.ast.idents.b.int_value {
-    //                             self.types.builtins.types_int_value = Some(type_id)
-    //                         } else if name == self.ast.idents.b.float_kind {
-    //                             self.types.builtins.types_float_kind = Some(type_id)
-    //                         } else if name == self.ast.idents.b.float_value {
-    //                             self.types.builtins.types_float_value = Some(type_id)
-    //                         } else if name == self.ast.idents.b.layout {
-    //                             self.types.builtins.types_layout = Some(type_id)
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //             ParsedId::Namespace(parsed_namespace_id) => {
-    //                 self.declare_types_in_parsed_namespace(parsed_namespace_id, skip_defns);
-    //             }
-    //             ParsedId::Ability(parsed_ability_id) => {
-    //                 let parsed_ability_defn = self.ast.get_ability(parsed_ability_id);
-    //                 let name = parsed_ability_defn.name;
-    //                 let span = parsed_ability_defn.span;
-    //                 let added = self
-    //                     .scopes
-    //                     .get_scope_mut(namespace_scope_id)
-    //                     .add_pending_ability_defn(name, parsed_ability_id);
-    //                 if !added {
-    //                     self.report(errf!(span, "Ability {} exists", self.ident_str(name)));
-    //                 }
-    //             }
-    //             ParsedId::Use(_)
-    //             | ParsedId::Function(_)
-    //             | ParsedId::AbilityImpl(_)
-    //             | ParsedId::Global(_)
-    //             | ParsedId::Expression(_)
-    //             | ParsedId::TypeExpression(_)
-    //             | ParsedId::Pattern(_)
-    //             | ParsedId::StaticDefn(_) => (),
-    //         }
-    //     }
-    // }
-
-    fn resolve_uses_in_namespace_recursively(&mut self, parsed_namespace_id: ParsedNamespaceId) {
-        let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
-        let ns = self.namespaces.get(namespace_id);
-        debug!("resolve_uses_in_namespace {}", self.ident_str(ns.name));
-        let namespace_scope_id = ns.scope_id;
-        let parsed_definitions = self.ast.namespaces.get(parsed_namespace_id).definitions.clone();
-
-        for &parsed_definition_id in parsed_definitions.iter() {
-            if let ParsedId::Use(parsed_use_id) = parsed_definition_id {
-                self.eval_use_definition(namespace_scope_id, parsed_use_id, true);
-            }
-            if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
-                self.resolve_uses_in_namespace_recursively(namespace_id);
-            }
-        }
-    }
-
-    // fn toposort_types_in_parsed_namespace(
-    //     &mut self,
-    //     parsed_namespace_id: ParsedNamespaceId,
-    //     skip_defns: &[ParsedId],
-    // ) {
-    //     let namespace_id = self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
-    //     let namespace = self.namespaces.get(*namespace_id);
-    //     let namespace_scope_id = namespace.scope_id;
-    //     let parsed_namespace = self.ast.namespaces.get(parsed_namespace_id);
-    //
-    //     for parsed_definition_id in parsed_namespace.definitions.clone().iter() {
-    //         if skip_defns.contains(parsed_definition_id) {
-    //             continue;
-    //         }
-    //         if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
-    //             if let Err(e) = self.toposort(*type_defn_id, namespace_scope_id, 0) {
-    //                 self.type_defn_stack.clear();
-    //                 self.report(e);
-    //             };
+    //         if let ParsedId::Use(parsed_use_id) = parsed_definition_id {
+    //             self.eval_use_definition(namespace_scope_id, parsed_use_id, true);
     //         }
     //         if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
-    //             self.eval_types_in_parsed_namespace(*namespace_id, skip_defns)
-    //         }
-    //     }
-    // }
-
-    // fn eval_types_in_parsed_namespace(
-    //     &mut self,
-    //     parsed_namespace_id: ParsedNamespaceId,
-    //     skip_defns: &[ParsedId],
-    // ) {
-    //     let namespace_id = self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
-    //     let namespace = self.namespaces.get(*namespace_id);
-    //     let namespace_scope_id = namespace.scope_id;
-    //     let parsed_namespace = self.ast.namespaces.get(parsed_namespace_id);
-
-    //     for parsed_definition_id in parsed_namespace.definitions.clone().iter() {
-    //         if skip_defns.contains(parsed_definition_id) {
-    //             continue;
-    //         }
-    //         if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
-    //             if let Err(e) = self.eval_type_defn_new(*type_defn_id, namespace_scope_id) {
-    //                 self.type_defn_stack.clear();
-    //                 self.report(e);
-    //             };
-    //         }
-    //         if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
-    //             self.eval_types_in_parsed_namespace(*namespace_id, skip_defns)
+    //             self.resolve_uses_in_namespace_recursively(namespace_id);
     //         }
     //     }
     // }
@@ -17139,6 +16858,49 @@ impl TypedProgram {
         Ok(namespace_id)
     }
 
+    fn discover_uses_in_namespace(
+        &mut self,
+        parsed_namespace_id: ParsedNamespaceId,
+        skip_defns: &[ParsedId],
+        recurse: bool,
+        skip_self: bool,
+    ) {
+        let Some(namespace_id) = self.namespace_ast_mappings.get(&parsed_namespace_id).copied()
+        else {
+            // If we haven't even declared namespaces yet
+            return;
+        };
+        let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
+        let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
+        let ast_namespace_defns = ast_namespace.definitions.clone();
+        for defn in ast_namespace_defns.iter() {
+            if skip_defns.contains(defn) {
+                continue;
+            }
+            match *defn {
+                ParsedId::Use(parsed_use_id) => {
+                    if !skip_self {
+                        debug!(
+                            "discovering use {}",
+                            self.qident_to_string(&self.ast.uses.get_use(parsed_use_id).target)
+                        );
+                        self.uses_pending_resolution.push_back(UsePendingResolution {
+                            namespace_id,
+                            scope_id: namespace_scope_id,
+                            use_id: parsed_use_id,
+                        })
+                    }
+                }
+                ParsedId::Namespace(ns) => {
+                    if recurse {
+                        self.discover_uses_in_namespace(ns, skip_defns, true, false);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn declare_namespaces_in_namespace(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
@@ -17155,12 +16917,7 @@ impl TypedProgram {
                 continue;
             }
             match *defn {
-                ParsedId::Use(parsed_use_id) => {
-                    // Attempting uses here will really only resolve things from pre/
-                    // or from other modules; stuff from this module will need to be
-                    // resolved by later passes
-                    self.eval_use_definition(namespace_scope_id, parsed_use_id, false);
-                }
+                ParsedId::Use(_) => {}
                 ParsedId::Namespace(namespace_id) => {
                     if let Err(e) = self.declare_namespace_recursive(
                         namespace_id,
@@ -17347,12 +17104,32 @@ impl TypedProgram {
         Ok(module_id)
     }
 
+    fn resolve_pending_uses(&mut self) {
+        let mut i = 0;
+        // eprintln!("resolve_pending_uses called with {}", self.uses_pending_resolution.len());
+        while let Some(use_pending) = self.uses_pending_resolution.get(i) {
+            // Attempting uses here will really only resolve things from pre/
+            // or from other modules; stuff from this module will need to be
+            // resolved by later passes
+            //
+            // But this lets us use things like std/meta for metaprograms, which is
+            // important
+            if self.eval_use_definition(use_pending.scope_id, use_pending.use_id, false) {
+                self.uses_pending_resolution.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+        // eprintln!("resolve_pending_uses finished with {}", self.uses_pending_resolution.len());
+    }
+
     fn run_all_phases_on_ns(
         &mut self,
         module_root_parsed_namespace: ParsedNamespaceId,
         module_id: ModuleId,
         skip_defns: &[ParsedId],
     ) -> anyhow::Result<()> {
+        let is_core = module_id == MODULE_ID_CORE;
         macro_rules! check_for_errors {
             ($msg:expr) => {
                 match self.error_count(&[MessageLevel::Error]) {
@@ -17364,23 +17141,27 @@ impl TypedProgram {
             };
         }
 
+        debug!(">> Pass 0 discover and resolve uses");
+        self.discover_uses_in_namespace(module_root_parsed_namespace, skip_defns, false, false);
+        self.resolve_pending_uses();
+
         debug!(">> Pass 1 declare namespaces and run global #meta programs");
         self.declare_namespaces_in_namespace(module_root_parsed_namespace, skip_defns);
         check_for_errors!("namespace declaration");
 
         // Pending Type declaration phase
         debug!(">> Pass 2 declare types");
+        self.discover_uses_in_namespace(module_root_parsed_namespace, skip_defns, true, true);
+
         self.discover_types_in_parsed_namespace(module_root_parsed_namespace, skip_defns);
 
-        // self.resolve_uses_in_namespace_recursively(module_root_parsed_namespace);
-
-        check_for_errors!("resolve initial uses");
-        // self.declare_types_in_parsed_namespace(module_root_parsed_namespace, skip_defns);
-        check_for_errors!("type declaration");
+        // If we resolve uses this early in core, we evaluate the builtin types out of the expected order
+        if !is_core {
+            self.resolve_pending_uses();
+        }
+        // check_for_errors!("type declaration");
         while let Some(tpd) = self.types_pending_definition.front() {
-            // nocommit: defn_layout_depth needs to become something we run on completed types
-            // Because it doesn't work for generics yet anyway
-            eprintln!(
+            debug!(
                 "types_pending_definition {}\n{}",
                 self.types_pending_definition.len(),
                 self.types_pending_definition
@@ -17388,8 +17169,8 @@ impl TypedProgram {
                     .map(|tpd| self.ident_str(self.ast.type_defns.get(tpd.parsed_id).name))
                     .join(", ")
             );
-            if let Err(err) = self.eval_type_defn_new(tpd.parsed_id, tpd.scope_id) {
-                self.type_defn_stack.clear();
+            if let Err(err) = self.eval_type_defn(tpd.parsed_id, tpd.scope_id) {
+                self.type_defn_context.reset();
                 self.types_pending_definition.pop_front();
                 self.report(err);
             }
@@ -17410,7 +17191,7 @@ impl TypedProgram {
             }
         }
 
-        if module_id == MODULE_ID_CORE {
+        if is_core {
             let fields = self.types.mem.pushn(&[
                 StructTypeField { name: self.ast.idents.b.env, type_id: POINTER_TYPE_ID },
                 StructTypeField { name: self.ast.idents.b.fn_ptr, type_id: POINTER_TYPE_ID },
@@ -17419,13 +17200,8 @@ impl TypedProgram {
             self.types.builtins.dyn_lambda_obj = Some(t);
             self.assert_builtin_types_correct();
         }
-        if module_id == MODULE_ID_CORE {
-            eprintln!("{}", self.dump_types_to_string());
-        }
 
-        // nocommit: We could just discover all these once then put them in a work queue
-        // might be easier to reason about
-        self.resolve_uses_in_namespace_recursively(module_root_parsed_namespace);
+        self.resolve_pending_uses();
 
         // Everything else declaration phase
         debug!(">> Pass 4 declare rest of definitions (functions, globals)");
@@ -17436,24 +17212,35 @@ impl TypedProgram {
         }
 
         // Now that functions are declared, another pass for unresolved uses
-        let unresolved_uses =
-            self.tmp.pushn_iter(self.use_statuses.iter().filter_map(|(id, status)| match status {
-                UseStatus::Unresolved(scope_id) => Some((*id, *scope_id)),
-                UseStatus::Resolved(_) => None,
-            }));
-        for (unresolved_use, scope_id) in self.tmp.getn(unresolved_uses) {
-            self.eval_use_definition(*scope_id, *unresolved_use, true);
-            let resolved = self.use_statuses.get(unresolved_use).unwrap().is_resolved();
-            if !resolved {
-                let parsed_use = self.ast.uses.get_use(*unresolved_use);
-                let error = errf!(
-                    parsed_use.span,
-                    "Unresolved use of {}",
-                    self.ident_str(parsed_use.target.name)
-                );
-                self.report(error)
-            }
+        // let unresolved_uses =
+        //     self.tmp.pushn_iter(self.use_statuses.iter().filter_map(|(id, status)| match status {
+        //         UseStatus::Unresolved(scope_id) => Some((*id, *scope_id)),
+        //         UseStatus::Resolved(_) => None,
+        //     }));
+        self.resolve_pending_uses();
+        for pending_use in &self.uses_pending_resolution {
+            let parsed_use = self.ast.uses.get_use(pending_use.use_id);
+            let error = errf!(
+                parsed_use.span,
+                "Unresolved use of {}",
+                self.ident_str(parsed_use.target.name)
+            );
+            self.report(error)
         }
+        // nocommit
+        // for (unresolved_use, scope_id) in self.tmp.getn(unresolved_uses) {
+        //     self.eval_use_definition(*scope_id, *unresolved_use, true);
+        //     let resolved = self.use_statuses.get(unresolved_use).unwrap().is_resolved();
+        //     if !resolved {
+        //         let parsed_use = self.ast.uses.get_use(*unresolved_use);
+        //         let error = errf!(
+        //             parsed_use.span,
+        //             "Unresolved use of {}",
+        //             self.ident_str(parsed_use.target.name)
+        //         );
+        //         self.report(error)
+        //     }
+        // }
 
         debug_assert!(self.abilities.get(ABILITY_ID_EQUALS).name == get_ident!(self, "equals"));
         debug_assert!(self.abilities.get(ABILITY_ID_BITWISE).name == get_ident!(self, "bitwise"));
@@ -17552,6 +17339,84 @@ impl TypedProgram {
             function_ids.clear()
         }
         Ok(())
+    }
+
+    fn check_type_finite_rec(
+        &self,
+        targets: &[TypeId],
+        type_id: TypeId,
+        behind_indirection: bool,
+        stack: &mut List<TypeId, MemTmp>,
+    ) -> Option<TypeId> {
+        let pushed = if targets.contains(&type_id) {
+            if stack.contains(&type_id) {
+                return if behind_indirection { None } else { Some(type_id) };
+            }
+
+            stack.push(type_id);
+            true
+        } else {
+            false
+        };
+
+        let result = match self.types.get(type_id) {
+            Type::Struct(struct_type) => {
+                for f in self.types.mem.getn(struct_type.fields) {
+                    if let Some(t) =
+                        self.check_type_finite_rec(targets, f.type_id, behind_indirection, stack)
+                    {
+                        if pushed {
+                            stack.pop();
+                        }
+                        return Some(t);
+                    }
+                }
+
+                None
+            }
+
+            Type::Sum(sum_type) => {
+                for v in self.types.mem.getn(sum_type.variants) {
+                    if let Some(payload) = v.payload {
+                        if let Some(t) =
+                            self.check_type_finite_rec(targets, payload, behind_indirection, stack)
+                        {
+                            if pushed {
+                                stack.pop();
+                            }
+                            return Some(t);
+                        }
+                    }
+                }
+
+                None
+            }
+
+            Type::Reference(reference_type) => {
+                self.check_type_finite_rec(targets, reference_type.inner_type, true, stack)
+            }
+
+            Type::Array(array_type) => {
+                if self.get_concrete_count_of_array(array_type.size_type) != Some(0) {
+                    self.check_type_finite_rec(
+                        targets,
+                        array_type.element_type,
+                        behind_indirection,
+                        stack,
+                    )
+                } else {
+                    None
+                }
+            }
+
+            _ => None,
+        };
+
+        if pushed {
+            stack.pop();
+        }
+
+        result
     }
 
     fn generate_constructors_for_type(
@@ -18023,7 +17888,15 @@ impl TypedProgram {
                 span,
                 explicit_kind: None,
             });
-            self.eval_use_definition(scope, use_id, true);
+            if !self.eval_use_definition(scope, use_id, true) {
+                //FIXME: We can't quite fail here since we use 'std' from 'core', and it gets
+                //resolved later
+                //return failf!(
+                //    qid.span,
+                //    "Failed to resolve a core use: {}",
+                //    self.qident_to_string(&qid)
+                //);
+            }
         }
         Ok(())
     }

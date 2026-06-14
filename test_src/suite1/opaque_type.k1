@@ -1,7 +1,7 @@
 ns opaque_test;
 fn test() {
-  let x: opaque[8, 4] = uninit;
-  let x2: opaque[8, 4] = zeroed();
+  let _x: opaque[8, 4] = uninit;
+  let _x2: opaque[8, 4] = zeroed();
 
   assertEquals(types/size[opaque[10, 1]], 10);
   assertEquals(types/size[opaque[128, 8]], 128);
