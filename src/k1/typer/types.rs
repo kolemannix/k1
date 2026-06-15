@@ -1343,25 +1343,22 @@ pub struct TypePool {
 
 impl TypePool {
     pub fn empty(tag_ident: Ident, payload_ident: Ident) -> TypePool {
-        // nocommit: Profile with no madvise/hinting
-        const EXPECTED_TYPE_COUNT: usize = 65536;
-        let mut agg_types = VPool::make_with_hint("phys_types", EXPECTED_TYPE_COUNT / 2);
+        let mut agg_types = VPool::make("phys_types");
         // Reserve the lower values so they dont conflict with scalars once packed
         agg_types.skip_next_n_slots(PhysicalType::MIN_AGG_ID as usize);
 
         TypePool {
-            types: VPool::make_with_hint("types", EXPECTED_TYPE_COUNT),
-            hashes: FxHashMap::with_capacity(EXPECTED_TYPE_COUNT),
+            types: VPool::make("types"),
+            hashes: FxHashMap::new(),
 
-            type_variable_counts: VPool::make_with_hint(
+            type_variable_counts: VPool::make(
                 "type_variable_counts",
-                EXPECTED_TYPE_COUNT,
             ),
-            instance_info: VPool::make_with_hint("instance_info", EXPECTED_TYPE_COUNT),
+            instance_info: VPool::make("instance_info"),
 
-            defn_info: FxHashMap::with_capacity(EXPECTED_TYPE_COUNT / 2),
-            specializations: FxHashMap::with_capacity(EXPECTED_TYPE_COUNT / 2),
-            phys_types: FxHashMap::with_capacity(EXPECTED_TYPE_COUNT / 2),
+            defn_info: FxHashMap::new(),
+            specializations: FxHashMap::new(),
+            phys_types: FxHashMap::new(),
 
             ast_ability_mapping: FxHashMap::default(),
 
@@ -1371,7 +1368,7 @@ impl TypePool {
 
             mem: kmem::Mem::make(),
 
-            lambda_types: VPool::make_with_hint("lambdas", EXPECTED_TYPE_COUNT / 128),
+            lambda_types: VPool::make("lambdas"),
 
             idents: TypePoolIdents { tag: tag_ident, payload: payload_ident },
         }

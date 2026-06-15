@@ -90,16 +90,15 @@ pub enum IrUnitId {
 pub struct IrModuleConfig {}
 
 impl ProgramIr {
-    pub fn make(instr_count_hint: usize) -> Self {
-        let function_count_hint = instr_count_hint / 16;
+    pub fn make() -> Self {
         ProgramIr {
             mem: kmem::Mem::make(),
-            instrs: VPool::make_with_hint("ir_soa_instrs", instr_count_hint),
-            sources: VPool::make_with_hint("ir_soa_sources", instr_count_hint),
-            comments: VPool::make_with_hint("ir_soa_comments", instr_count_hint),
-            debug_info: VPool::make_with_hint("ir_soa_debug_info", instr_count_hint),
-            functions: VPool::make_with_hint("ir_functions", function_count_hint),
-            calls: VPool::make_with_hint("ir_calls", instr_count_hint / 2),
+            instrs: VPool::make("ir_soa_instrs"),
+            sources: VPool::make("ir_soa_sources"),
+            comments: VPool::make("ir_soa_comments"),
+            debug_info: VPool::make("ir_soa_debug_info"),
+            functions: VPool::make("ir_functions"),
+            calls: VPool::make("ir_calls"),
             phys_fn_type_cache: FxHashMap::new(),
             exprs: FxHashMap::new(),
             module_config: IrModuleConfig {},

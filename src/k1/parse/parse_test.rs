@@ -6,7 +6,7 @@ use itertools::Itertools;
 use std::fs;
 
 fn make_test_ast() -> ParsedProgram {
-    ParsedProgram::make("unit_test".to_string(), false)
+    ParsedProgram::make("unit_test".to_string())
 }
 
 fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'ast> {

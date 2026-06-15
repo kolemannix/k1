@@ -39,13 +39,9 @@ pub struct Spans {
 
 impl Spans {
     pub fn new() -> Spans {
-        Self::new_with_hint(131072)
-    }
-
-    pub fn new_with_hint(expected_spans: usize) -> Spans {
-        let mut span_pool = VPool::make_with_hint("spans", expected_spans);
+        let mut span_pool = VPool::make("spans");
         span_pool.add(Span::NONE);
-        let trivia_pool = VPool::make_with_hint("trivia", expected_spans / 8);
+        let trivia_pool = VPool::make("trivia");
         Spans { span_pool, trivia_pool }
     }
 
@@ -1186,7 +1182,7 @@ fn is_ident_or_num_start(c: char) -> bool {
 }
 
 pub fn lex_standalone(content: &str) -> (Spans, Vec<Token>, Option<LexError>) {
-    let mut spans = Spans::new_with_hint(1024);
+    let mut spans = Spans::new();
     let mut token_vec = vec![];
     match Lexer::make(content, &mut spans, 1).run(&mut token_vec) {
         Err(e) => (spans, token_vec, Some(e)),
