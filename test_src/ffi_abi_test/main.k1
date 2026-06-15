@@ -172,8 +172,7 @@ fn sum-fn-struct(s: { a: u64, b: u64, c: u64, d: u64 }): i32 {
   (s.a + s.b + s.c + s.d).as[i32]
 }
 
-// nocommit: abi/ffi test some 'sum' types
-
+// TODO: abi/ffi test some 'sum' types
 
 fn main(): i32 {
   #static testAll();

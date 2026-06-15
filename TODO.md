@@ -4,15 +4,8 @@
 Minor and ideas
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
-- [X] Specialization solution (when types are known by the function)
-- [x] Destructuring, (in)fallible patterns
-- [x] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
--     A kind of *pattern* that checks the type and binds a variable of that type! What other thing for a feature that needs to _check_ and _bind_ than a pattern?!
-- [x] Improve named arg passing. Allow mixing named and unnamed as long as the order is correct. Its common to only need to name boolean params, for example
-- [x] Allow name/type elision shorthand in function signatures. Examples: (self: self, size: size, t: t) -> (self, size, t). Enabled by using lowercase for types and values
-- [x] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
-- [x] Incorporate ffc.h for int and float parsing
 - [ ] `#[must_use]` equivalent
+- [ ] enum-from-sum type operator
 - [ ] Opaque type solution. Try using 1-member structs and make struct's first field special
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
 - [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
@@ -24,18 +17,26 @@ Minor and ideas
 - [ ] [design/flags_in_tags.k1]
 - [ ] Inspired by fast_float, char to digit lookup table
 Simple but missing
-- [x] auto-equals implementation on-demand for enums
-- [x] auto-equals implementation on-demand for sums
 - [ ] auto-equals implementation on-demand for structs
 - [ ] auto-print implementation on-demand for sums and structs
 - [ ] Exported functions
-- [ ] decide if overflow traps or not (in debug and release, if those are even different)
-- [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
       currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
+- [ ] Implement at least one format specifier (precision, pretty)
+- [ ] decide if overflow traps or not (in debug and release, if those are even different)
+- [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
+- [X] Specialization solution (when types are known by the function)
+- [x] Destructuring, (in)fallible patterns
+- [x] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
+-     A kind of *pattern* that checks the type and binds a variable of that type! What other thing for a feature that needs to _check_ and _bind_ than a pattern?!
+- [x] Improve named arg passing. Allow mixing named and unnamed as long as the order is correct. Its common to only need to name boolean params, for example
+- [x] Allow name/type elision shorthand in function signatures. Examples: (self: self, size: size, t: t) -> (self, size, t). Enabled by using lowercase for types and values
+- [x] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
+- [x] Incorporate ffc.h for int and float parsing
+- [x] auto-equals implementation on-demand for enums
+- [x] auto-equals implementation on-demand for sums
 - [x] Bindings generator; `rust-bindgen` equivalent
   - v0 is done; lots left to do; deep cavern of possible shit, bindgen is. further TODOs tracked in the bindgen project 
-- [ ] Implement at least one format specifier (precision, pretty)
 - [x] exported globals
 - [x] support ability constraints on generics
 - [x] support explicit type args in AnonEnumConstructor syntax 
@@ -48,14 +49,17 @@ Simple but missing
 - [ ] Out of order type definitions don't work with aliases
 - [ ] same-level recursion is not caught behind option
 - [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)
-- [ ] Defect: Generic (co)recursive types do not work
 - [ ] Require that a blanket impl's params appear in the Self type
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 - [ ] Test handling of NaN and Infinity literals, other float edge cases
 
-## [ ] Escape analysis
-- [ ] Use to report escaped stack pointers
+
+## [ ] Support (co)recursive Generics
+
+## [ ] vector types
+
+## [ ] inline asm
 
 ## [ ] Constant-folding, SCCP
 
@@ -71,6 +75,9 @@ Simple but missing
 ## [ ] very readable compiler trace, incl specialization args, for debugging
 
 ## [ ] Ability objects; dyn[<ability expr>]
+
+## [ ] Escape analysis
+- [ ] Use to report escaped stack pointers
 
 ## [x] Distribute builds that work
 - [x] Test on linux
