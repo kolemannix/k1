@@ -2493,11 +2493,11 @@ pub struct TypedExprPool {
 }
 
 impl TypedExprPool {
-    pub fn make_with_hint(hint: usize) -> Self {
+    pub fn make() -> Self {
         TypedExprPool {
-            exprs: VPool::make_with_hint("typed_exprs", hint),
-            type_ids: VPool::make_with_hint("typed_expr_type_ids", hint),
-            spans: VPool::make_with_hint("typed_expr_spans", hint),
+            exprs: VPool::make("typed_exprs"),
+            type_ids: VPool::make("typed_expr_type_ids"),
+            spans: VPool::make("typed_expr_spans"),
         }
     }
 
@@ -2655,13 +2655,7 @@ pub struct TypedProgram {
     pub function_ast_mappings: FxHashMap<ParsedFunctionId, FunctionId>,
     pub global_ast_mappings: FxHashMap<ParsedGlobalId, TypedGlobalId>,
     pub ability_impl_ast_mappings: FxHashMap<ParsedAbilityImplId, AbilityImplId>,
-    /// We don't know about functions during the type discovery phase, so a 'use'
-    /// that targets a function could miss. Rather than make the user
-    /// specify 'use type' vs 'use fn', etc, we just keep track of
-    /// whether a 'use' ever hits. If a use never hits, we'll report
-    /// an error after the last phase where handle them, which should be
-    /// function declarations
-    pub use_statuses: FxHashMap<ParsedUseId, UseStatus>,
+
     pub debug_level_stack: RefCell<Vec<log::LevelFilter>>,
     pub functions_pending_body_specialization: Vec<FunctionId>,
     pub uses_pending_resolution: VecDeque<UsePendingResolution>,
@@ -2755,7 +2749,7 @@ impl Timing {
 
 impl TypedProgram {
     pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
-        let ast = ParsedProgram::make(program_name, true);
+        let ast = ParsedProgram::make(program_name);
 
         let mut types = TypePool::empty(ast.idents.b.tag, ast.idents.b.payload);
         let empty_struct_id = types.add_anon(Type::Struct(StructType::struc(MSlice::empty())));
@@ -2822,24 +2816,24 @@ impl TypedProgram {
             if cfg!(feature = "lsp") { FxHashMap::with_capacity(64) } else { FxHashMap::new() };
 
         TypedProgram {
-            modules: VPool::make_with_hint("modules", 32),
+            modules: VPool::make("modules"),
             config,
             program_settings: ProgramSettings { multithreaded: false, executable: false },
-            functions: VPool::make_with_hint("typed_functions", 8192),
-            variables: VPool::make_with_hint("typed_variables", 8192),
+            functions: VPool::make("typed_functions"),
+            variables: VPool::make("typed_variables"),
             types,
-            globals: VPool::make_with_hint("typed_globals", 4096),
-            exprs: TypedExprPool::make_with_hint(65536),
-            calls: VPool::make_with_hint("typed_calls", 32768),
-            stmts: VPool::make_with_hint("typed_stmts", 8192 << 1),
-            static_values: StaticValuePool::make_with_hint(8192),
+            globals: VPool::make("typed_globals"),
+            exprs: TypedExprPool::make(),
+            calls: VPool::make("typed_calls"),
+            stmts: VPool::make("typed_stmts"),
+            static_values: StaticValuePool::make_with_hint(0),
             type_schemas: FxHashMap::new(),
             type_names: FxHashMap::new(),
             scopes,
             messages: RefCell::new(vec![]),
             namespaces,
-            abilities: VPool::make_with_hint("abilities", 2048),
-            ability_impls: VPool::make_with_hint("ability_impls", 4096),
+            abilities: VPool::make("abilities"),
+            ability_impls: VPool::make("ability_impls"),
             ability_impl_table: FxHashMap::new(),
             blanket_impls: FxHashMap::new(),
             function_name_to_ability: FxHashMap::with_capacity(1024),
@@ -2847,7 +2841,6 @@ impl TypedProgram {
             function_ast_mappings: FxHashMap::with_capacity(512),
             global_ast_mappings: FxHashMap::new(),
             ability_impl_ast_mappings: FxHashMap::new(),
-            use_statuses: FxHashMap::new(),
             debug_level_stack: RefCell::new(vec![log::max_level()]),
             functions_pending_body_specialization: vec![],
             uses_pending_resolution: VecDeque::new(),
@@ -2888,7 +2881,7 @@ impl TypedProgram {
             mem: kmem::Mem::make(),
             tmp: kmem::Mem::make(),
 
-            ir: ir::ProgramIr::make(32768),
+            ir: ir::ProgramIr::make(),
 
             timing: Timing {
                 clock,
@@ -4361,10 +4354,13 @@ impl TypedProgram {
                         .find(|e| e.parsed_id == pending_defn.parsed_id)
                     {
                         if !ty_app.args.is_empty() {
-                            // nocommit let's do recursive generics now
+                            // FIXME let's do recursive generics now
                             // What do I even store in here? A "ToApply[reserved_type_id, param a, param b]?
                             // Yes, exactly that. The RHS of a generic isn't a fully baked type
-                            // anyway, because its got type variables in it anyway!
+                            // anyway, because its got type variables in it!
+                            // In instantiate_generic_type, we keep track of the exact types we are
+                            // instantiating (e.g., node[t]) and if we see a node[t], just use
+                            // the reserved type id instead
                             return failf!(ty_app.span, "cant do recursive generics yet");
                         }
 
@@ -16455,14 +16451,14 @@ impl TypedProgram {
         fail_on_traverse_fail: bool,
     ) -> bool {
         let parsed_use = *self.ast.uses.get_use(parsed_use_id);
-        let status_entry = self.use_statuses.get(&parsed_use_id);
-        let is_fulfilled = match status_entry {
-            Some(use_status) if use_status.is_resolved() => true,
-            _ => false,
-        };
-        if is_fulfilled {
-            return true;
-        }
+        // let status_entry = self.use_statuses.get(&parsed_use_id);
+        // let is_fulfilled = match status_entry {
+        //     Some(use_status) if use_status.is_resolved() => true,
+        //     _ => false,
+        // };
+        // if is_fulfilled {
+        //     return true;
+        // }
         let useable_symbols =
             match self.find_useable_symbols(scope_id, &parsed_use.target, fail_on_traverse_fail) {
                 Err(e) => {
@@ -16478,7 +16474,7 @@ impl TypedProgram {
         );
         let resolution = if useable_symbols.is_empty() {
             debug!("Inserting unresolved use of {}", self.qident_to_string(&parsed_use.target));
-            UseStatus::Unresolved(scope_id)
+            false
         } else {
             for symbol in &useable_symbols {
                 self.scopes.add_use_binding(
@@ -16488,13 +16484,10 @@ impl TypedProgram {
                 );
                 debug!("Inserting resolved use of {:?}", symbol);
             }
-            // nocommit: UseStatus can likely go away
-            UseStatus::Resolved(useable_symbols)
+            true
         };
-
-        let ret = resolution.is_resolved();
-        self.use_statuses.insert(parsed_use_id, resolution);
-        ret
+        // self.use_statuses.insert(parsed_use_id, resolution);
+        resolution
     }
 
     fn find_useable_symbols(
@@ -16569,21 +16562,10 @@ impl TypedProgram {
             })
         }
         if let Some(ns_id) = scope_to_search.find_namespace(name.name) {
-            // nocommit: this workaround can be likely removed since we now resolve pending types
-            let ns = self.namespaces.get(ns_id);
-            let is_companion_ns = ns.namespace_type == NamespaceKind::TypeCompanion;
-            if is_companion_ns {
-                // Skip resolving this use; we know about the namespace
-                // but not about its type yet; if we did, the earlier branch
-                // would have hit
-                // We will resolve this use later
-                debug!("skipping use of unresolved companion ns {}", self.ident_str(ns.name));
-            } else {
-                found_symbols.push(UseableSymbol {
-                    source_scope: scope_id_to_search,
-                    id: UseableSymbolId::Namespace(ns_id),
-                })
-            }
+            found_symbols.push(UseableSymbol {
+                source_scope: scope_id_to_search,
+                id: UseableSymbolId::Namespace(ns_id),
+            })
         }
         Ok(found_symbols)
     }
@@ -16649,24 +16631,6 @@ impl TypedProgram {
             }
         }
     }
-
-    // nocommit
-    // fn resolve_uses_in_namespace_recursively(&mut self, parsed_namespace_id: ParsedNamespaceId) {
-    //     let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
-    //     let ns = self.namespaces.get(namespace_id);
-    //     debug!("resolve_uses_in_namespace {}", self.ident_str(ns.name));
-    //     let namespace_scope_id = ns.scope_id;
-    //     let parsed_definitions = self.ast.namespaces.get(parsed_namespace_id).definitions.clone();
-    //
-    //     for &parsed_definition_id in parsed_definitions.iter() {
-    //         if let ParsedId::Use(parsed_use_id) = parsed_definition_id {
-    //             self.eval_use_definition(namespace_scope_id, parsed_use_id, true);
-    //         }
-    //         if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
-    //             self.resolve_uses_in_namespace_recursively(namespace_id);
-    //         }
-    //     }
-    // }
 
     fn declare_namespace_definitions(
         &mut self,
@@ -17211,12 +17175,6 @@ impl TypedProgram {
             panic!("global_id_k1_arena was not set");
         }
 
-        // Now that functions are declared, another pass for unresolved uses
-        // let unresolved_uses =
-        //     self.tmp.pushn_iter(self.use_statuses.iter().filter_map(|(id, status)| match status {
-        //         UseStatus::Unresolved(scope_id) => Some((*id, *scope_id)),
-        //         UseStatus::Resolved(_) => None,
-        //     }));
         self.resolve_pending_uses();
         for pending_use in &self.uses_pending_resolution {
             let parsed_use = self.ast.uses.get_use(pending_use.use_id);
@@ -17227,20 +17185,6 @@ impl TypedProgram {
             );
             self.report(error)
         }
-        // nocommit
-        // for (unresolved_use, scope_id) in self.tmp.getn(unresolved_uses) {
-        //     self.eval_use_definition(*scope_id, *unresolved_use, true);
-        //     let resolved = self.use_statuses.get(unresolved_use).unwrap().is_resolved();
-        //     if !resolved {
-        //         let parsed_use = self.ast.uses.get_use(*unresolved_use);
-        //         let error = errf!(
-        //             parsed_use.span,
-        //             "Unresolved use of {}",
-        //             self.ident_str(parsed_use.target.name)
-        //         );
-        //         self.report(error)
-        //     }
-        // }
 
         debug_assert!(self.abilities.get(ABILITY_ID_EQUALS).name == get_ident!(self, "equals"));
         debug_assert!(self.abilities.get(ABILITY_ID_BITWISE).name == get_ident!(self, "bitwise"));

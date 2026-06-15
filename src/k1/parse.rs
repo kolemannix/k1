@@ -1485,10 +1485,10 @@ pub struct ParsedExpressionPool {
     metadata: VPool<ParsedExprMetadata, ParsedExprId>,
 }
 impl ParsedExpressionPool {
-    pub fn make_with_hint(expected_elements: usize) -> Self {
+    pub fn make() -> Self {
         ParsedExpressionPool {
-            expressions: VPool::make_with_hint("parsed_expr", expected_elements),
-            metadata: VPool::make_with_hint("parsed_expr_metadata", expected_elements),
+            expressions: VPool::make("parsed_expr"),
+            metadata: VPool::make("parsed_expr_metadata"),
         }
     }
 
@@ -1545,9 +1545,7 @@ pub struct ParsedTypeExpressionPool {
 }
 impl ParsedTypeExpressionPool {
     fn new() -> Self {
-        ParsedTypeExpressionPool {
-            type_expressions: VPool::make_with_hint("parsed_type_expr", 65536),
-        }
+        ParsedTypeExpressionPool { type_expressions: VPool::make("parsed_type_expr") }
     }
 
     pub fn add(&mut self, expression: ParsedTypeExpr) -> ParsedTypeExprId {
@@ -1695,37 +1693,30 @@ unsafe impl Sync for ParsedProgram {}
 unsafe impl Send for ParsedProgram {}
 
 impl ParsedProgram {
-    pub fn make(name: String, preallocate_hints: bool) -> ParsedProgram {
+    pub fn make(name: String) -> ParsedProgram {
         let mut mem = kmem::Mem::make();
         let mut idents = IdentPool::make(&mut mem);
         let name_id = idents.intern(&name);
 
-        macro_rules! if_hint {
-            ($value: expr) => {
-                if preallocate_hints { $value } else { 0 }
-            };
-        }
-
-        let semantic_tokens =
-            VPool::make_with_hint("semantic_tokens", if cfg!(feature = "lsp") { 65536 } else { 0 });
+        let semantic_tokens = VPool::make("semantic_tokens");
 
         ParsedProgram {
             name,
             name_id,
-            spans: Spans::new_with_hint(if_hint!(131072)),
-            functions: VPool::make_with_hint("functions", if_hint!(16384)),
-            globals: VPool::make_with_hint("parsed_globals", if_hint!(8192)),
-            type_defns: VPool::make_with_hint("parsed_type_defn", if_hint!(2048)),
-            namespaces: VPool::make_with_hint("parsed_namespaces", if_hint!(8192)),
-            abilities: VPool::make_with_hint("parsed_abilities", if_hint!(2048)),
+            spans: Spans::new(),
+            functions: VPool::make("functions"),
+            globals: VPool::make("parsed_globals"),
+            type_defns: VPool::make("parsed_type_defn"),
+            namespaces: VPool::make("parsed_namespaces"),
+            abilities: VPool::make("parsed_abilities"),
             ability_impls: Vec::new(),
             sources: Sources::default(),
             idents,
             strings: StringPool::make(),
-            exprs: ParsedExpressionPool::make_with_hint(if_hint!(131072)),
+            exprs: ParsedExpressionPool::make(),
             type_exprs: ParsedTypeExpressionPool::new(),
             patterns: ParsedPatternPool::default(),
-            stmts: VPool::make_with_hint("parsed_stmts", if_hint!(65536)),
+            stmts: VPool::make("parsed_stmts"),
             uses: ParsedUsePool::make(),
             errors: Vec::new(),
 
@@ -5361,7 +5352,7 @@ pub fn lex_file_into_program(
 /// To be used by the lsp or other tools that are
 /// only interested in parsing a single file independently
 pub fn parse_standalone(program_name: String, content: String) -> ParsedProgram {
-    let mut ast = ParsedProgram::make(program_name.clone(), false);
+    let mut ast = ParsedProgram::make(program_name.clone());
 
     let source = Source::make(0, ".".to_string(), program_name.clone(), content);
     let mut token_vec = vec![];
