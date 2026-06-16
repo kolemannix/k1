@@ -38,7 +38,8 @@ struct foo {
 
 enum Color {
   Color_Red = 577,
-  Color_Green
+  Color_Green = -10,
+  Color_Blue = 42
 };
 
 enum Size { 
@@ -47,10 +48,10 @@ enum Size {
   Size_Large
 };
 
-typedef struct opaq {
+struct opaq {
   char b[100];
   int x;
-} opaq;
+};
 
 int main(void) {
   return 0;

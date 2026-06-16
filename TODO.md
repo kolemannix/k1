@@ -44,6 +44,12 @@ Simple but missing
 - [x] implement iterator for array
 - [x] static #switch
 
+bindgen dogfood list
+- dogfood(k1): implement 'continue'
+- dogfood(lsp): failed call still ls entity
+- dogfood(lsp): failed match arm still check others
+- dogfood(lsp): sum patterns ls entities
+
 # Bugs
 - [ ] captured context parameter results in 'Missing variable' in ir
 - [ ] Out of order type definitions don't work with aliases

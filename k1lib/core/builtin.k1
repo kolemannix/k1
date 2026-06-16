@@ -490,7 +490,14 @@ ns mem {
   intern fn realloc(ptr: ptr, old-size: size, align: size, new-size: size): ptr
   intern fn free(ptr: ptr, size: size, align: size)
 
+  // Does not handle overlaps; memcpy
   intern fn copy(
+    dst: ptr,
+    src: ptr,
+    count: size
+  )
+  // Handles overlaps; memmove
+  intern fn move(
     dst: ptr,
     src: ptr,
     count: size

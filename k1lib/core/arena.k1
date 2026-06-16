@@ -82,7 +82,7 @@ ns for arena {
     let align = types/align[T]();
     let base = self.pushLayout(size, align);
     let buffer: buffer[T] = buffer/fromPtrAndCount[T](base, ts.len());
-    buffer/copyFrom(src = ts.buffer, dst = buffer);
+    buffer/copy(src = ts.buffer, dst = buffer);
     buffer
   }
 

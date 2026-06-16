@@ -1760,7 +1760,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let result = call.try_as_basic_value().expect_basic("free return");
                 self.builder.build_return(Some(&result)).unwrap()
             }
-            BackendBuiltin::MemCopy => {
+            BackendBuiltin::MemCopy | BackendBuiltin::MemMove => {
                 // intern fn copy(
                 //   dst: Pointer,
                 //   src: Pointer,
@@ -1771,16 +1771,28 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let size_arg = self.load_function_argument(function_id, 2).into_int_value();
                 let dst_align_bytes = 1;
                 let src_align_bytes = 1;
-                let _not_actually_a_ret_ptr = self
-                    .builder
-                    .build_memcpy(
-                        dst_ptr_arg,
-                        dst_align_bytes,
-                        src_ptr_arg,
-                        src_align_bytes,
-                        size_arg,
-                    )
-                    .unwrap();
+                if builtin_type == BackendBuiltin::MemMove {
+                    self.builder
+                        .build_memmove(
+                            dst_ptr_arg,
+                            dst_align_bytes,
+                            src_ptr_arg,
+                            src_align_bytes,
+                            size_arg,
+                        )
+                        .unwrap();
+                } else {
+                    let _not_actually_a_ret_ptr = self
+                        .builder
+                        .build_memcpy(
+                            dst_ptr_arg,
+                            dst_align_bytes,
+                            src_ptr_arg,
+                            src_align_bytes,
+                            size_arg,
+                        )
+                        .unwrap();
+                }
                 self.builder.build_return(None).unwrap()
             }
             BackendBuiltin::MemSet => {

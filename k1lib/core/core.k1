@@ -156,7 +156,7 @@ ns sys {
 
 ns files {
 
-  fn readToString(context alloc-mode: mem/alloc-mode)(path: string): string {
+  fn read-to-string(context alloc-mode: mem/alloc-mode)(path: string): string {
     let filenameCString = path.to-c(context :tmp)();
 
     let file = libc/files/fopen(filenameCString.ptr, "r\0".data-ptr());

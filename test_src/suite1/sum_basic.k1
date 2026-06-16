@@ -1,6 +1,6 @@
 ns sum_basic;
 
-type Maybe = either { a, b(char), c(string) }
+type Maybe = either(i8) { a = -1, b(char) = 0, c(string) = 100 }
 fn sumPayload() {
   let a: Maybe = :a;
   let b: Maybe = :b('x');

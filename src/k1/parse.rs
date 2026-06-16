@@ -3163,7 +3163,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             None
         };
         let explicit_value = if self.maybe_consume(K::Equals).is_some() {
-            let num = self.expect_kind(K::Numeric)?;
+            let Some(num_result) = self.parse_literal_atom()? else {
+                return Err(error("Expected number after equals for member value", self.peek()));
+            };
+            let ParsedExpr::Literal(ParsedLiteral::Numeric(num)) = self.ast.exprs.get(num_result)
+            else {
+                return Err(error(
+                    "Expected numeric literal after equals for member value",
+                    self.peek(),
+                ));
+            };
             Some(ParsedNumericLiteral { span: num.span })
         } else {
             None

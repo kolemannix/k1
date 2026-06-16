@@ -3699,15 +3699,12 @@ impl TypedProgram {
                     }
                     Some(tag_type_expr) => {
                         let tag_type = self.eval_type_expr(tag_type_expr, scope_id)?;
-                        match tag_type {
-                            U8_TYPE_ID => IntegerType::U8,
-                            U16_TYPE_ID => IntegerType::U16,
-                            U32_TYPE_ID => IntegerType::U32,
-                            U64_TYPE_ID => IntegerType::U64,
+                        match self.types.get(tag_type) {
+                            Type::Integer(int_type) => *int_type,
                             _ => {
                                 return failf!(
                                     self.ast.get_type_expr_span(tag_type_expr),
-                                    "Must be an unsigned int"
+                                    "Must be an integer type"
                                 );
                             }
                         }
@@ -3739,12 +3736,6 @@ impl TypedProgram {
                                     explicit_value.span,
                                     Some(tag_type.type_id()),
                                 )?;
-                                if parsed.to_u64_bits() < next_tag.to_u64_bits() {
-                                    return failf!(
-                                        explicit_value.span,
-                                        "Tag values must be ascending"
-                                    );
-                                }
                                 parsed
                             }
                         };
@@ -3776,7 +3767,7 @@ impl TypedProgram {
                     let sum_type_id = self.types.add_anon(sum_type);
                     Ok(sum_type_id)
                 } else {
-                    let mut member_values = self.types.mem.new_list(variant_count);
+                    let mut member_values: List<ScalarEnumValue, _> = self.types.mem.new_list(variant_count);
                     let mut next_tag = tag_type.zero();
                     for v in self.ast.mem.getn(sum.variants).iter() {
                         let tag_value = match v.explicit_value {
@@ -3786,15 +3777,14 @@ impl TypedProgram {
                                     explicit_value.span,
                                     Some(tag_type.type_id()),
                                 )?;
-                                if parsed.to_u64_bits() < next_tag.to_u64_bits() {
-                                    return failf!(
-                                        explicit_value.span,
-                                        "Tag values must be ascending"
-                                    );
-                                }
                                 parsed
                             }
                         };
+                        if let Some(existing) =
+                            member_values.iter().find(|v| v.int_value == tag_value)
+                        {
+                            return failf!(v.span, "Duplicate enum value: {}", existing.int_value);
+                        }
                         let variant = ScalarEnumValue { name: v.tag_name, int_value: tag_value };
                         next_tag = tag_value.incr();
                         member_values.push(variant);
@@ -14521,6 +14511,7 @@ impl TypedProgram {
                     "realloc" => Some(Builtin::Backend(BackendBuiltin::Reallocate)),
                     "free" => Some(Builtin::Backend(BackendBuiltin::Free)),
                     "copy" => Some(Builtin::Backend(BackendBuiltin::MemCopy)),
+                    "move" => Some(Builtin::Backend(BackendBuiltin::MemMove)),
                     "set" => Some(Builtin::Backend(BackendBuiltin::MemSet)),
                     "equals" => Some(Builtin::Backend(BackendBuiltin::MemEquals)),
                     "zeroed" => Some(Builtin::Ir(BuiltinIr::Zeroed)),

@@ -215,7 +215,7 @@ ns for list {
   fn appendBuffer[T](self: *mut list[T], other: buffer[T]) {
     self.reserve(:current, self.len + other.len);
     let dst = self.inner-buffer().slice(start = self.len, end = self.len + other.len);
-    buffer/copyFrom(src = other, dst = dst);
+    buffer/copy(src = other, dst = dst);
     self.len* <- self.len + other.len;
   }
 
@@ -319,6 +319,18 @@ ns for list {
     let keep = list/empty[T]();
     for i in self { if f(i) keep.push(i) };
     keep
+  }
+
+  fn remove[T](self: *mut list[T], index: size) {
+    if index.as[u64] >= self.len.as[u64] {
+      crash("list index out of bounds. index {index}, len {self.len}")
+    };
+    self.buffer.remove(index);
+    self.len* <- self.len - 1;
+  }
+
+  fn filter-in-place[T](self: *mut list[T], f: some fn T -> bool) {
+    crash("filter-in-place todo") 
   }
 
 }

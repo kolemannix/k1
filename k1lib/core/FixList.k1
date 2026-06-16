@@ -48,7 +48,7 @@ ns for fixlist {
     let needed = self.len() + values.len();
     if needed <= self.cap() {
       let dstSlice = self.data*.as-buffer().slice(start = self.len(), end = needed);
-      buffer/copyFrom(src = values.inner-buffer(), dst = dstSlice);
+      buffer/copy(src = values.inner-buffer(), dst = dstSlice);
       self.used* <- needed.as[u32];
       :ok({})
     } else {

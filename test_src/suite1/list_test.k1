@@ -31,11 +31,15 @@ fn listFill(): int {
   assert(empty.len == emptyCloned.len);
   assert(empty.cloned() == empty);
 
+  xs.remove(0);
+  xs.remove(3);
+  assert(xs.* == [1,2,3]);
+
   0
 }
 
 fn listSlice() {
-  let* a =  [1,2,3];
+  let a =  [1,2,3];
   let slice = a.slice(0,2);
   assert(slice.len == 2);
   assert(slice.get(0) == 1);
@@ -59,7 +63,7 @@ type Point = {
 }
 
 fn listOfStructs(): int {
-  let* xs = [{ x: 1, y: 2, z: 3}: Point];
+  let xs = [{ x: 1, y: 2, z: 3}: Point];
   let i = 0;
   while i < 100 {
     xs.push({ x: 1, y: 2, z: 3});
@@ -68,6 +72,7 @@ fn listOfStructs(): int {
 
   assert(xs.len == 101);
   assert(xs.cap() == 128);
+
   0
 }
 

@@ -942,14 +942,17 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
 
                                 builtin_return!(Value::ptr(ptr))
                             }
-                            ir::BackendBuiltin::MemCopy => {
+                            ir::BackendBuiltin::MemCopy | ir::BackendBuiltin::MemMove => {
                                 // intern fn copy( dst: Pointer, src: Pointer, count: uword): empty
                                 let dst: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
                                 let src: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
                                 let count: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
 
-                                memcopy(src.as_ptr(), dst.as_ptr(), count.as_usize());
-
+                                if backend_builtin == ir::BackendBuiltin::MemCopy {
+                                    memcopy(src.as_ptr(), dst.as_ptr(), count.as_usize());
+                                } else {
+                                    memmove(src.as_ptr(), dst.as_ptr(), count.as_usize());
+                                }
                                 builtin_return!()
                             }
                             ir::BackendBuiltin::MemSet => {

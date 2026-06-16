@@ -37,7 +37,7 @@ fn main(argc: u32, argv: ptr): i32 {
     return(1);
   };
   let programTextPath = args.get(1);
-  let programText = core/files/readToString(programTextPath);
+  let programText = core/files/read-to-string(programTextPath);
 
   let program = compile(programTextPath);
 
