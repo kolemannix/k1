@@ -1,0 +1,6 @@
+use net/addrinfo
+use net/sockaddr
+use net/sockaddr_in
+use net/sockaddr_in6
+// not really net but we'll get there later
+use net/FILE

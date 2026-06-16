@@ -71,7 +71,7 @@ fn brute(input: string) {
   println("Zeroes: {zeroes}");
 }
 
-let input: string = core/files/readToString(context .Arena)("day1_input.txt");
+let input: string = core/files/read-to-string(context .Arena)("day1_input.txt");
 
 fn main(): i32 {
   println("Hello, AoC 2025!");

@@ -1,3 +1,5 @@
+bindgen: bindgen-llhttp bindgen-net bindgen-libuv
+
 bindgen-llhttp:
   k1bindgen -i libs/llhttp.h -o llhttp.k1 -n llhttp \
     -clangarg -isysroot \
@@ -11,12 +13,18 @@ bindgen-net:
     -clangarg "$(xcrun --sdk macosx --show-sdk-path)" \
     -system true \
     -include sockaddr_in \
+    -include sockaddr_in6 \
     -include sa_family_t \
     -include sockaddr \
+    -include socklen_t \
+    -opaque socklen_t \
     -include addrinfo \
     -include in_port_t \
     -include in_addr \
-    -include in_addr_t
+    -include in6_addr \
+    -include in_addr_t \
+    -include FILE \
+    -opaque FILE
 
 bindgen-libuv:
   k1bindgen -i libs/libuv/include/uv.h -o uv.k1 -n uv \
@@ -24,6 +32,7 @@ bindgen-libuv:
     -system false \
     -clangarg -isysroot \
     -clangarg "$(xcrun --sdk macosx --show-sdk-path)" \
+    -prelude-file uv_bindgen_prelude.k1.txt \
     -opaque uv__dirent_t \
     -opaque uv_uid_t \
     -opaque uv_gid_t \
@@ -100,7 +109,7 @@ bindgen-libuv:
     -exclude uv__io_s \
     -opaque uv_write_s \
     -opaque uv_write_t \
-    -exclude uv_metrics_s
+    -exclude UV_OVERLAPPED_PIPE
 
 build-llhttp:
   git submodule update llhttp

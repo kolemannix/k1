@@ -23,7 +23,7 @@ fn main() -> anyhow::Result<ExitCode> {
 
     let cwd = std::env::current_dir().unwrap();
     let name = "repl.k1";
-    let mut ast = ParsedProgram::make("repl".to_string(), true);
+    let mut ast = ParsedProgram::make("repl".to_string());
     let file_id = 0;
 
     let mut line = String::with_capacity(1024);

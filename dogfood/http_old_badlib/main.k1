@@ -26,7 +26,7 @@ fn response-to-http(context alloc-mode)(response): http/http_response_s {
   http-response
 }
 
-let output-css: string = core/files/readToString(context :current)("web/public/output.css")
+let output-css: string = core/files/read-to-string(context :current)("web/public/output.css")
 let head: string =
 `<head>
   <meta charset="UTF-8">
@@ -57,7 +57,7 @@ fn handler(req: *mut http/http_request_s) {
     },
     // "/output.css" -> {
     //   let context alloc-mode = alloc-mode:tmp;
-    //   let css = core/files/readToString("web/public/output.css");
+    //   let css = core/files/read-to-string("web/public/output.css");
     //   http/http_response_header(response, "Content-Type\0".data-ptr().as(), "text/css\0".data-ptr().as());
     //   http/http_response_body(response, css.data-ptr().as(), css.len() as i32);
     // },

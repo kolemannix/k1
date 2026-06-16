@@ -123,7 +123,8 @@ ns for span {
 
   fn sorted[T](self: span[T]): span[T] where T: comparable {
     let newBuffer = self.buffer.cloned();
-    wrap-buffer(newBuffer.sorted())
+    newBuffer.sort();
+    wrap-buffer(newBuffer)
   }
 
   fn as-char-span(self: span[byte]): span[char] {

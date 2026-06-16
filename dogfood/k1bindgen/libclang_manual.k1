@@ -167,6 +167,8 @@ fn Cursor_isAnonymous(C: CXCursor): u32
 extern("clang", "clang_getEnumDeclIntegerType")
 fn getEnumDeclIntegerType(C: CXCursor): CXType
 
+extern("clang", "clang_getEnumConstantDeclValue")
+fn getEnumConstantDeclValue(C: CXCursor): i64
 extern("clang", "clang_getEnumConstantDeclUnsignedValue")
 fn getEnumConstantDeclUnsignedValue(C: CXCursor): u64
 

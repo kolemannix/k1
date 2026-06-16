@@ -1,2 +1,2 @@
-type custom-sum-tags = either { a = 10, b = 9, c = 12 }
-//errmsg: Tag values must be ascending
+type custom-sum-tags = either { a = 10, b = 9, c = 10 }
+//errmsg: Duplicate enum value: 10u8
