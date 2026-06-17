@@ -45,10 +45,11 @@ Simple but missing
 - [x] static #switch
 
 bindgen dogfood list
-- dogfood(k1): implement 'continue'
-- dogfood(lsp): failed call still ls entity
-- dogfood(lsp): failed match arm still check others
-- dogfood(lsp): sum patterns ls entities
+- [ ] dogfood(k1): implement 'continue'
+- [x] dogfood(lsp): failed call still ls entity
+- [x] dogfood(lsp): sum/enum ctors ls entities
+- [x] dogfood(lsp): failed match arm still check others
+- [x] dogfood(lsp): sum patterns ls entities
 
 # Bugs
 - [ ] captured context parameter results in 'Missing variable' in ir

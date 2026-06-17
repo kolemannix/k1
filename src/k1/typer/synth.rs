@@ -324,7 +324,7 @@ impl TypedProgram {
         args: &[ParsedExprId],
         is_method: bool,
     ) -> ParsedExprId {
-        let span = name.span;
+        let span = name.name_span;
         let type_args_iter = type_args.iter().map(|id| NamedTypeArg::unnamed(*id, span));
         let type_args = self.ast.mem.pushn_iter(type_args_iter);
         let args =

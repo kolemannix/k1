@@ -204,6 +204,7 @@ pub enum LsEntityKind {
     Function { function_id: FunctionId, is_defn: bool },
     Variable { variable_id: VariableId },
     Type { type_id: TypeId, applied_type_id: Option<TypeId> },
+    Variant { type_id: TypeId, variant_index: u32 },
 }
 
 #[derive(Clone, Copy)]
@@ -1352,6 +1353,7 @@ pub enum CastType {
     ReferenceToPointer,
     /// Destination type can only be u64 and i64
     PointerToWord,
+    PointerToFunctionPointer,
     WordToPointer,
     FloatExtend,
     FloatTruncate,
@@ -1376,6 +1378,7 @@ impl Display for CastType {
             CastType::ReferenceToPointer => write!(f, "reftoptr"),
             CastType::PointerToWord => write!(f, "ptrtoword"),
             CastType::WordToPointer => write!(f, "wordtoptr"),
+            CastType::PointerToFunctionPointer => write!(f, "ptr-to-fnptr"),
             CastType::FloatExtend => write!(f, "fext"),
             CastType::FloatTruncate => write!(f, "ftrunc"),
             CastType::FloatToUnsignedInteger => write!(f, "ftouint"),
@@ -3740,13 +3743,18 @@ impl TypedProgram {
                             }
                         };
                         if let Some(existing) = variants.iter().find(|v| v.tag_value == tag_int) {
-                            return failf!(v.span, "Duplicate tag value: {}", existing.tag_value);
+                            return failf!(
+                                v.name_span,
+                                "Duplicate tag value: {}",
+                                existing.tag_value
+                            );
                         }
                         let variant = TypedSumVariant {
                             name: v.tag_name,
                             index: index as u32,
                             payload: payload_type_id,
                             tag_value: tag_int,
+                            name_span: v.name_span,
                         };
 
                         next_tag = tag_int.incr();
@@ -3767,7 +3775,8 @@ impl TypedProgram {
                     let sum_type_id = self.types.add_anon(sum_type);
                     Ok(sum_type_id)
                 } else {
-                    let mut member_values: List<ScalarEnumValue, _> = self.types.mem.new_list(variant_count);
+                    let mut member_values: List<ScalarEnumValue, _> =
+                        self.types.mem.new_list(variant_count);
                     let mut next_tag = tag_type.zero();
                     for v in self.ast.mem.getn(sum.variants).iter() {
                         let tag_value = match v.explicit_value {
@@ -3783,9 +3792,17 @@ impl TypedProgram {
                         if let Some(existing) =
                             member_values.iter().find(|v| v.int_value == tag_value)
                         {
-                            return failf!(v.span, "Duplicate enum value: {}", existing.int_value);
+                            return failf!(
+                                v.name_span,
+                                "Duplicate enum value: {}",
+                                existing.int_value
+                            );
                         }
-                        let variant = ScalarEnumValue { name: v.tag_name, int_value: tag_value };
+                        let variant = ScalarEnumValue {
+                            name: v.tag_name,
+                            int_value: tag_value,
+                            name_span: v.name_span,
+                        };
                         next_tag = tag_value.incr();
                         member_values.push(variant);
                     }
@@ -4293,7 +4310,7 @@ impl TypedProgram {
                             self.instantiate_generic_type(type_id, type_arguments_slice);
 
                         self.emit_ls_entity(
-                            ty_app.name.span,
+                            ty_app.name.name_span,
                             LsEntityKind::Type {
                                 type_id,
                                 applied_type_id: Some(instantiated_type_id),
@@ -4304,7 +4321,7 @@ impl TypedProgram {
                     _other => {
                         let resolved_type_id = self.get_type_id_resolved(type_id, scope_id);
                         self.emit_ls_entity(
-                            ty_app.name.span,
+                            ty_app.name.name_span,
                             LsEntityKind::Type { type_id, applied_type_id: None },
                         );
                         Ok(resolved_type_id)
@@ -4318,7 +4335,7 @@ impl TypedProgram {
                             Some(function_id) => Ok(self.get_function(function_id).type_id),
                             None => {
                                 failf!(
-                                    ty_app.name.span,
+                                    ty_app.name.name_span,
                                     "Type '{}' not found",
                                     self.qident_to_string(&ty_app.name),
                                 )
@@ -4329,7 +4346,7 @@ impl TypedProgram {
                             Ok(opaque_type_id)
                         } else {
                             failf!(
-                                ty_app.name.span,
+                                ty_app.name.name_span,
                                 "Type '{}' not found",
                                 self.qident_to_string(&ty_app.name)
                             )
@@ -4356,7 +4373,7 @@ impl TypedProgram {
 
                         self.type_defn_context.recursive_mentions.push(entry.reserved_type_id);
                         self.emit_ls_entity(
-                            ty_app.name.span,
+                            ty_app.name.name_span,
                             LsEntityKind::Type {
                                 type_id: entry.reserved_type_id,
                                 applied_type_id: None,
@@ -5032,8 +5049,16 @@ impl TypedProgram {
                                 self.type_id_to_string(target_type_id),
                             );
                         };
+
                         let matching_variant_index = matching_variant.index;
                         let matching_variant_name = matching_variant.name;
+                        self.emit_ls_entity(
+                            sum_pattern.span,
+                            LsEntityKind::Variant {
+                                type_id: target_type_id,
+                                variant_index: matching_variant_index,
+                            },
+                        );
 
                         let payload_pattern = match &sum_pattern.payload_pattern {
                             None => None,
@@ -5100,6 +5125,13 @@ impl TypedProgram {
                             );
                         };
                         let matching_value_name = matching_value.name;
+                        self.emit_ls_entity(
+                            sum_pattern.span,
+                            LsEntityKind::Variant {
+                                type_id: target_type_id,
+                                variant_index: matching_value_index as u32,
+                            },
+                        );
 
                         let enum_pattern = TypedEnumPattern {
                             enum_type_id: target_type_id,
@@ -7297,12 +7329,12 @@ impl TypedProgram {
         is_assignment_lhs: bool,
     ) -> K1Result<(Option<VariableId>, TypedExprId)> {
         let ParsedExpr::Variable(variable) = self.ast.exprs.get(variable_expr_id) else { panic!() };
-        let variable_name_span = variable.name.span;
+        let variable_name_span = variable.name.name_span;
         let variable_id = self.find_variable_namespaced(scope_id, &variable.name)?;
         match variable_id {
             None => match self.find_function_namespaced(scope_id, &variable.name)? {
                 None => failf!(
-                    variable.name.span,
+                    variable.name.name_span,
                     "No value '{}' is in scope",
                     self.ast.idents.get_name(variable.name.name),
                 ),
@@ -7351,7 +7383,7 @@ impl TypedProgram {
                     );
                     self.scopes.add_capture(lambda_scope_id.unwrap(), variable_id, fixup_expr_id);
 
-                    self.register_variable_usage(variable_id, variable.name.span);
+                    self.register_variable_usage(variable_id, variable.name.name_span);
                     Ok((Some(variable_id), fixup_expr_id))
                 } else {
                     let expr = self.exprs.add(
@@ -7361,7 +7393,7 @@ impl TypedProgram {
                     );
 
                     if !is_assignment_lhs {
-                        self.register_variable_usage(variable_id, variable.name.span);
+                        self.register_variable_usage(variable_id, variable.name.name_span);
                     }
                     Ok((Some(variable_id), expr))
                 }
@@ -8154,7 +8186,7 @@ impl TypedProgram {
                     .find_function_by_name(call_name)
                 else {
                     return failf!(
-                        call_ast_expr.name.span,
+                        call_ast_expr.name.name_span,
                         "No such function `{}` in ability `{}`",
                         self.ident_str(call_name),
                         self.ability_signature_to_string(signature)
@@ -9379,6 +9411,7 @@ impl TypedProgram {
         let subject_expr_span = self.exprs.get_span(match_subject_variable.variable_expr);
 
         // Core loop to build up the typed, compiled match arms
+        let mut first_error = None;
         for parsed_case in self.ast.mem.getn(parsed_cases) {
             let multi_pattern = parsed_case.patterns.len() > 1;
             let mut expected_bindings: Option<SmallVec<[VariablePattern; 8]>> = None;
@@ -9469,11 +9502,19 @@ impl TypedProgram {
 
                     // Once we've evaluated the conditions, we can eval the consequent expression inside of it,
                     // since the bindings are now available
-                    let consequent_expr = self.eval_expr_with_coercion(
+                    let consequent_result = self.eval_expr_with_coercion(
                         parsed_case.expression,
                         pattern_eval_ctx.with_expected_type(expected_arm_type_id),
                         true,
-                    )?;
+                    );
+                    let consequent_expr = match consequent_result {
+                        Err(err) => {
+                            self.report(err.clone());
+                            first_error = Some(err);
+                            continue;
+                        }
+                        Ok(expr) => expr,
+                    };
                     let consequent_expr_type = self.exprs.get_type(consequent_expr);
 
                     if expected_arm_type_id.is_none() && consequent_expr_type != NEVER_TYPE_ID {
@@ -9492,6 +9533,10 @@ impl TypedProgram {
                     typed_arms.push(match_arm);
                 }
             }
+        }
+
+        if let Some(err) = first_error {
+            return Err(err);
         }
 
         // Exhaustiveness Checking
@@ -10139,6 +10184,7 @@ impl TypedProgram {
                 Type::Reference(_refer) => Ok(Outcome::Cast(CastType::PointerToReference)),
                 Type::Integer(IntegerType::U64) => Ok(Outcome::Cast(CastType::PointerToWord)),
                 Type::Integer(IntegerType::I64) => Ok(Outcome::Cast(CastType::PointerToWord)),
+                Type::FunctionPointer(_) => Ok(Outcome::Cast(CastType::PointerToFunctionPointer)),
                 _ => failf!(
                     span,
                     "Cannot cast ptr to '{}'",
@@ -11140,7 +11186,7 @@ impl TypedProgram {
                     if let Some((variable_id, _scope_id)) =
                         self.scopes.find_variable(ctx.scope_id, fn_call.name.name)
                     {
-                        self.register_variable_usage(variable_id, fn_call.name.span);
+                        self.register_variable_usage(variable_id, fn_call.name.name_span);
                         let function_variable = self.variables.get(variable_id);
                         debug!(
                             "Variable {} has type {}",
@@ -11165,7 +11211,7 @@ impl TypedProgram {
                                 Ok(CallResolution::Call(Callee::DynamicLambda(self.exprs.add(
                                     TypedExpr::Variable(VariableExpr { variable_id }),
                                     function_variable.type_id,
-                                    fn_call.name.span,
+                                    fn_call.name.name_span,
                                 ))))
                             }
                             Type::FunctionTypeParameter(ftp) => {
@@ -11182,7 +11228,7 @@ impl TypedProgram {
                                 let function_pointer_expr = self.exprs.add(
                                     TypedExpr::Variable(VariableExpr { variable_id }),
                                     function_variable.type_id,
-                                    fn_call.name.span,
+                                    fn_call.name.name_span,
                                 );
                                 Ok(CallResolution::Call(Callee::DynamicFunction {
                                     function_pointer_expr,
@@ -12415,11 +12461,15 @@ impl TypedProgram {
             Some(qident) => {
                 let Some((type_id, _)) = self.find_type_namespaced(ctx.scope_id, qident)? else {
                     return failf!(
-                        qident.span,
+                        qident.name_span,
                         "No type {} is in scope",
                         self.qident_to_string(qident)
                     );
                 };
+                self.emit_ls_entity(
+                    qident.name_span,
+                    LsEntityKind::Type { type_id, applied_type_id: None },
+                );
                 type_id
             }
             None => match ctx.expected_type_id {
@@ -12470,6 +12520,13 @@ impl TypedProgram {
                     TypedExpr::Enum(EnumConstructor { value_index: matching_value_index as u32 }),
                     provided_type,
                     span,
+                );
+                self.emit_ls_entity(
+                    parsed_variant.span,
+                    LsEntityKind::Variant {
+                        type_id: provided_type,
+                        variant_index: matching_value_index as u32,
+                    },
                 );
                 Ok(enum_expr)
             }
@@ -12668,7 +12725,7 @@ impl TypedProgram {
                         found.type_id,
                         span,
                     )));
-                    self.register_variable_usage(matching_context_variable, fn_call.name.span);
+                    self.register_variable_usage(matching_context_variable, fn_call.name.name_span);
                     final_params.push(*context_param);
                 } else {
                     let is_source_loc =
@@ -12861,6 +12918,26 @@ impl TypedProgram {
             CallResolution::MethodCall { callee, receiver } => (callee, Some(receiver)),
         };
         let is_method = method_receiver.is_some();
+
+        if let Some(function_id) = callee.maybe_function_id() {
+            if !ctx.is_hidden() {
+                self.emit_ls_entity(
+                    fn_call.name.name_span,
+                    LsEntityKind::Function { function_id, is_defn: false },
+                );
+            }
+            self.register_function_usage(function_id, fn_call.name.name_span);
+
+            if let Some(enclosing_id) = self.scopes.enclosing_functions.get(ctx.scope_id).function {
+                if enclosing_id == function_id {
+                    debug!(
+                        "Marking {} as directly recursive (stopgap that does not properly detect cycles but helps for now)",
+                        self.function_id_to_string(enclosing_id, false)
+                    );
+                    self.functions.get_mut(function_id).is_recursive = true;
+                }
+            }
+        }
 
         // Now that we have resolved to a function id, we need to specialize it if generic
         let callee_function_type_id = self.get_callee_function_type(&callee);
@@ -13096,26 +13173,6 @@ impl TypedProgram {
             return_type: call_return_type,
             span,
         };
-
-        if let Some(function_id) = callee.maybe_function_id() {
-            if !ctx.is_hidden() {
-                self.emit_ls_entity(
-                    fn_call.name.span,
-                    LsEntityKind::Function { function_id, is_defn: false },
-                );
-            }
-            self.register_function_usage(function_id, fn_call.name.span);
-
-            if let Some(enclosing_id) = self.scopes.enclosing_functions.get(ctx.scope_id).function {
-                if enclosing_id == function_id {
-                    debug!(
-                        "Marking {} as directly recursive",
-                        self.function_id_to_string(enclosing_id, false)
-                    );
-                    self.functions.get_mut(function_id).is_recursive = true;
-                }
-            }
-        }
 
         // Builtins that are handled by the typechecking phase are implemented here.
         if let Some(builtin) = self.get_callee_builtin(&call.callee) {
@@ -13745,7 +13802,7 @@ impl TypedProgram {
                     self.find_useable_symbols(ctx.scope_id, &parsed_use.target, true)?;
                 if useable_symbols.is_empty() {
                     return failf!(
-                        parsed_use.target.span,
+                        parsed_use.target.name_span,
                         "Could not find {}",
                         self.ident_str(parsed_use.target.name)
                     );
@@ -14581,12 +14638,12 @@ impl TypedProgram {
         variant_name: Ident,
         payload: Option<ParsedExprId>,
         ctx: EvalExprContext,
-        span: SpanId,
+        variant_span: SpanId,
     ) -> K1Result<TypedExprId> {
         let sum = self.types.get(concrete_sum_type).expect_sum();
         let Some(variant) = self.types.sum_variant_by_name(sum.variants, variant_name) else {
             return failf!(
-                span,
+                variant_span,
                 "No variant '{}' exists in sum '{}'",
                 self.ident_str(variant_name).blue(),
                 self.type_id_to_string(concrete_sum_type)
@@ -14597,7 +14654,7 @@ impl TypedProgram {
             None => {
                 if let Some(_payload_arg) = payload {
                     failf!(
-                        span,
+                        variant_span,
                         "Variant '{}' does not have data",
                         self.ident_str(variant_name).blue()
                     )
@@ -14624,7 +14681,7 @@ impl TypedProgram {
                     Ok(Some(payload_value))
                 } else {
                     failf!(
-                        span,
+                        variant_span,
                         ":{} requires data of type {}",
                         self.ident_str(variant_name).blue(),
                         self.type_id_to_string(payload_type)
@@ -14643,7 +14700,11 @@ impl TypedProgram {
         let sum_constructor = self.exprs.add(
             TypedExpr::SumConstructor(TypedSumConstructor { variant_index, payload }),
             concrete_sum_type,
-            span,
+            variant_span,
+        );
+        self.emit_ls_entity(
+            variant_span,
+            LsEntityKind::Variant { type_id: concrete_sum_type, variant_index },
         );
         Ok(sum_constructor)
     }
@@ -14735,7 +14796,7 @@ impl TypedProgram {
             let Some(function_id) =
                 self.find_function_namespaced(tp.scope_id, predicate_constraint_fn_qident)?
             else {
-                return failf!(predicate_constraint_fn_qident.span, "Function not found");
+                return failf!(predicate_constraint_fn_qident.name_span, "Function not found");
             };
             let predicate_result: bool =
                 self.execute_type_predicate_function(function_id, passed_type, span)?;
@@ -15995,7 +16056,7 @@ impl TypedProgram {
             match self.scopes.find_pending_ability(scope_id, ability_name.name) {
                 None => {
                     failf!(
-                        ability_name.span,
+                        ability_name.name_span,
                         "No ability '{}' is in scope",
                         self.ident_str(ability_name.name)
                     )
@@ -16004,7 +16065,7 @@ impl TypedProgram {
                     debug!(
                         "Recursing into pending ability {} from {}",
                         self.ident_str(ability_name.name),
-                        self.ast.get_span_content(ability_name.span)
+                        self.ast.get_span_content(ability_name.name_span)
                     );
                     let ability_id =
                         self.compile_ability_definition(pending_ability, ability_scope)?;
@@ -16093,7 +16154,7 @@ impl TypedProgram {
                         }
                         ParsedTypeConstraintExpr::Predicate(qident) => {
                             return failf!(
-                                qident.span,
+                                qident.name_span,
                                 "Blanket implementation parameters cannot have type predicate functions yet"
                             );
                         }
@@ -17743,13 +17804,13 @@ impl TypedProgram {
 
         macro_rules! core {
             ($name: expr) => {
-                QIdent { path: core_ns, name: get_ident!(self, $name), span }
+                QIdent { path: core_ns, name: get_ident!(self, $name), name_span: span }
             };
         }
 
         let idents_to_use = [
-            QIdent { path: root_ns, name: self.ast.idents.b.core, span }, // use _root/core;
-            QIdent { path: root_ns, name: self.ast.idents.b.std, span },  // use _root/std;
+            QIdent { path: root_ns, name: self.ast.idents.b.core, name_span: span }, // use _root/core;
+            QIdent { path: root_ns, name: self.ast.idents.b.std, name_span: span }, // use _root/std;
             core!("u8"),
             core!("u16"),
             core!("u32"),
@@ -17811,10 +17872,10 @@ impl TypedProgram {
             core!("sys"),
             core!("scalar-cmp"),
             core!("StringBuilder"),
-            QIdent { path: core_mem, name: get_ident!(self, "zeroed"), span },
-            QIdent { path: core_mem, name: get_ident!(self, "alloc-mode"), span },
-            QIdent { path: core_types, name: get_ident!(self, "enum"), span },
-            QIdent { path: core_types, name: get_ident!(self, "sum"), span },
+            QIdent { path: core_mem, name: get_ident!(self, "zeroed"), name_span: span },
+            QIdent { path: core_mem, name: get_ident!(self, "alloc-mode"), name_span: span },
+            QIdent { path: core_types, name: get_ident!(self, "enum"), name_span: span },
+            QIdent { path: core_types, name: get_ident!(self, "sum"), name_span: span },
         ];
         for qid in idents_to_use.into_iter() {
             let use_id = self.ast.uses.add_use(parse::ParsedUse {

@@ -13,5 +13,9 @@ fn test() {
   let y = someAddFn(20);
   assertEquals(y, 22);
 
+  let null-callback: *fn(int) -> int = ptr/null.as();
+  let null-callback-ptr: ptr = null-callback.as[ptr];
+  assertEquals(null-callback-ptr, ptr/null);
+
   {}
 }

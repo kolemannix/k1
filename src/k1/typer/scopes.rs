@@ -582,11 +582,11 @@ impl TypedProgram {
             Ok(self.scopes.find_type(scope_id, type_name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope_id, type_name)?;
-            Ok(self
-                .scopes
-                .get_scope(scope_to_search)
-                .find_type(type_name.name)
-                .map(|t| (t, scope_to_search)))
+            let found_type = self.scopes.get_scope(scope_to_search).find_type(type_name.name);
+            match found_type {
+                None => Ok(None),
+                Some(type_id) => Ok(Some((type_id, scope_to_search))),
+            }
         }
     }
 

@@ -574,6 +574,7 @@ impl LanguageServer for Backend {
                     let token_type = match semantic_token.kind {
                         parse::SemanticTokenKind::Type => TokenTypes::Type,
                         parse::SemanticTokenKind::Variable => TokenTypes::Variable,
+                        parse::SemanticTokenKind::String => TokenTypes::String,
                         parse::SemanticTokenKind::Keyword => TokenTypes::Keyword,
                         parse::SemanticTokenKind::Function => TokenTypes::Function,
                         parse::SemanticTokenKind::Namespace => TokenTypes::Namespace,
@@ -716,7 +717,8 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let definition_span = k1::lsp_support::get_entity_definition_span(k1, entity.kind);
+        let definition_span_id = k1::lsp_support::get_entity_definition_span(k1, entity.kind);
+        let definition_span = k1.ast.spans.get(definition_span_id);
         if definition_span == Span::NONE {
             error!("definition span is nil");
             return Ok(None);
@@ -787,6 +789,10 @@ fn find_references(
         }
         LsEntityKind::Namespace(_namespace_id) => Ok(None),
         LsEntityKind::Type { .. } => Ok(None),
+        LsEntityKind::Variant { .. } => {
+            // This will be really useful; a variant that is never constructed...
+            Ok(None)
+        }
     }
 }
 
