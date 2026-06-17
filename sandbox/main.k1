@@ -11,5 +11,12 @@ type alias t = opaque[4, 4]
 
 fn main(argc: int, argv: ptr): i32 {
 
+  println(asdfasdf);
+
+  switch opt:some("asdf") {
+    :some("")  -> { xxx },
+    :none      -> { xxx },
+  };
+
   0
 }

@@ -1,5 +1,6 @@
-use crate::lex::Span;
+use crate::lex::{Span, SpanId};
 use crate::parse::{FileId, ParsedId, Sources};
+use crate::typer::types::Type;
 use crate::{SV8, typer::*};
 use smallvec::smallvec;
 
@@ -73,7 +74,6 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
             format!("{}\n{}", type_str, kind_str)
         }
         LsEntityKind::Type { type_id, applied_type_id } => {
-            // let typ = k1.types.get(type_id);
             let layout_string = match k1.get_layout(type_id) {
                 None => "No layout".to_string(),
                 Some(layout) => format!("Size: {}, Align: {}", layout.size, layout.align),
@@ -85,17 +85,25 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
             };
             format!("{type_string}\n{layout_string}\n{applied_type_string}")
         }
+        LsEntityKind::Variant { type_id, .. } => {
+            let layout_string = match k1.get_layout(type_id) {
+                None => "No layout".to_string(),
+                Some(layout) => format!("Size: {}, Align: {}", layout.size, layout.align),
+            };
+            let type_string = k1.type_id_to_string(type_id);
+            format!("{type_string}\n{layout_string}")
+        }
     }
 }
 
-pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) -> Span {
-    match entity_kind {
+pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) -> SpanId {
+    let span_id = match entity_kind {
         LsEntityKind::Namespace(ns_id) => {
             let ns = k1.namespaces.get(ns_id);
             eprintln!("span for ns: {}", k1.ident_str(ns.name));
             let span_id = k1.ast.get_span_for_id(ns.parsed_id);
             eprintln!("span id: {}", span_id);
-            k1.ast.spans.get(span_id)
+            span_id
         }
         LsEntityKind::Function { function_id, .. } => {
             let function = k1.functions.get(function_id);
@@ -105,23 +113,38 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
                 }
                 _ => k1.ast.get_span_for_id(function.parsed_id),
             };
-            k1.ast.spans.get(span_id)
+            span_id
         }
         LsEntityKind::Variable { variable_id } => {
             let span_id = k1.variables.get(variable_id).defn_span;
-            k1.ast.spans.get(span_id)
+            span_id
         }
         LsEntityKind::Type { type_id, .. } => {
             let defn_info = k1.types.defn_info.get(&type_id);
             match defn_info {
                 Some(d) => {
                     let span_id = k1.ast.get_span_for_id(d.ast_id);
-                    k1.ast.spans.get(span_id)
+                    span_id
                 }
-                None => Span::NONE,
+                None => SpanId::NONE,
             }
         }
-    }
+        LsEntityKind::Variant { type_id, variant_index } => match k1.types.get(type_id) {
+            Type::Sum(sum) => {
+                let variant = k1.types.sum_variant_by_index(sum.variants, variant_index);
+                variant.name_span
+            }
+            Type::Enum(enum_type) => {
+                let member = k1.types.mem.get_nth(enum_type.member_values, variant_index as usize);
+                member.name_span
+            }
+            _ => {
+                eprintln!("Invalid Variant entity; type is not a sum or enum!");
+                SpanId::NONE
+            }
+        },
+    };
+    span_id
 }
 
 pub fn get_function_generic_id(k1: &TypedProgram, function_id: FunctionId) -> FunctionId {

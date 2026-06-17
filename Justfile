@@ -1,3 +1,12 @@
+os := os()
+bundle-name := if os == "linux" {
+  "k1-linux-x86"
+} else if os == "macos" {
+  "k1-macos"
+} else {
+  error("Unsupported OS: " + os)
+}
+
 a:
   ./run.sh sandbox
 
@@ -29,25 +38,15 @@ valgrind-linux:
   cargo build --profile profiling
   valgrind --tool=callgrind --dump-instr=yes --collect-jumps=yes --callgrind-out-file=cg.out target/profiling/k1 c test_src/suite1
 
-bundle-linux: 
+bundle:
   just lsprelease
   just build-k1r
   cargo build --profile release --bin k1_test
-  ./builds/bundle.sh target/release builds/k1-linux-x86
+  ./builds/bundle.sh target/release builds/{{bundle-name}}
 
-install-linux: bundle-linux
-  tar -xzf builds/k1-linux-x86.tar.gz -C builds
-  cd builds/k1-linux-x86 && ./install.sh
-
-bundle-macos:
-  just lsprelease
-  just build-k1r
-  cargo build --profile release --bin k1_test
-  ./builds/bundle.sh target/release builds/k1-macos
-
-install-macos: bundle-macos
-  tar -xzf builds/k1-macos.tar.gz -C builds
-  cd builds/k1-macos && ./install.sh
+install: bundle
+  tar -xzf builds/{{bundle-name}}.tar.gz -C builds
+  cd builds/{{bundle-name}} && ./install.sh
 
 install-k1lib:
   # rm -r ~/.k1/k1lib

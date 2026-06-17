@@ -847,7 +847,7 @@ impl ParsedExpr {
             Self::Literal(lit) => lit.get_span(),
             Self::InterpolatedString(is) => is.span,
             Self::Call(call) => call.span,
-            Self::Variable(var) => var.name.span,
+            Self::Variable(var) => var.name.name_span,
             Self::FieldAccess(acc) => acc.span,
             Self::Block(block) => block.span,
             Self::If(if_expr) => if_expr.span,
@@ -1108,7 +1108,7 @@ pub struct ParsedSumTypeVariant {
     pub tag_name: Ident,
     pub payload: Option<ParsedTypeExprId>,
     pub explicit_value: Option<ParsedNumericLiteral>,
-    pub span: SpanId,
+    pub name_span: SpanId,
 }
 
 #[derive(Clone)]
@@ -1651,6 +1651,7 @@ pub(crate) type ParsedHandle<T> = Handle<T, ParsedProgram>;
 pub enum SemanticTokenKind {
     Type,
     Variable,
+    String,
     Keyword,
     Function,
     Namespace,
@@ -2311,7 +2312,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             }
         } else if maybe_hash.kind == K::Dollar {
             self.advance();
-            self.add_semantic_token(maybe_hash, SemanticTokenKind::Operator);
+            self.emit_semantic_token(maybe_hash, SemanticTokenKind::Operator);
             let expr_id = self.consume_static_expr(
                 maybe_hash,
                 condition,
@@ -2342,7 +2343,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                             _ => unreachable!(),
                         };
                         self.advance();
-                        self.add_semantic_token(maybe_directive, SemanticTokenKind::Keyword);
+                        self.emit_semantic_token(maybe_directive, SemanticTokenKind::Keyword);
                         let e = self.consume_static_expr(hash_token, condition, kind)?;
                         Ok(Some(e))
                     }
@@ -2656,11 +2657,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     #[inline]
-    fn add_semantic_token(&mut self, token: Token, kind: SemanticTokenKind) -> SemanticTokenId {
-        self.add_semantic_token_span(token.span, kind)
+    fn emit_semantic_token(&mut self, token: Token, kind: SemanticTokenKind) -> SemanticTokenId {
+        self.emit_semantic_token_span(token.span, kind)
     }
 
-    fn add_semantic_token_span(
+    fn emit_semantic_token_span(
         &mut self,
         span_id: SpanId,
         kind: SemanticTokenKind,
@@ -2849,6 +2850,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         string_id,
                         span: current_token.span,
                     });
+                    self.emit_semantic_token(current_token, SemanticTokenKind::String);
 
                     if is_terminated {
                         if matches!(
@@ -2905,7 +2907,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if next.kind == K::Dot || (next.kind == K::Colon && !next.is_whitespace_preceded()) {
                 self.advance();
                 let (ident_token, ident) = self.expect_ident()?;
-                self.add_semantic_token(ident_token, SemanticTokenKind::Type);
+                self.emit_semantic_token(ident_token, SemanticTokenKind::Type);
                 let span = self.extend_span(self.ast.get_type_expr_span(result), ident_token.span);
                 let kind = if next.kind == K::Dot {
                     TypeMemberAccessKind::Dot
@@ -2988,7 +2990,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if first.kind == K::KeywordBuiltin {
             self.advance();
             let builtin_id = self.ast.type_exprs.add(ParsedTypeExpr::Builtin(first.span));
-            self.add_semantic_token(first, SemanticTokenKind::Keyword);
+            self.emit_semantic_token(first, SemanticTokenKind::Keyword);
             Ok(Some(builtin_id))
         } else if let Some(literal_expr_id) = self.parse_literal_atom()? {
             if let ParsedExpr::Literal(l) = self.ast.exprs.get(literal_expr_id) {
@@ -3002,7 +3004,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if first_chars == "either" {
                 let sum = self.expect_sum_type_expression()?;
                 let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::Sum(sum));
-                self.add_semantic_token(first, SemanticTokenKind::Keyword);
+                self.emit_semantic_token(first, SemanticTokenKind::Keyword);
                 Ok(Some(type_expr_id))
             } else if first_chars == "type-of" {
                 self.advance();
@@ -3011,7 +3013,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let end = self.expect_kind(K::CloseParen)?;
                 let span = self.extend_token_span(first, end);
                 let type_of = ParsedTypeExpr::TypeOf(ParsedTypeOf { target_expr, span });
-                self.add_semantic_token(first, SemanticTokenKind::Function);
+                self.emit_semantic_token(first, SemanticTokenKind::Function);
                 Ok(Some(self.ast.type_exprs.add(type_of)))
             } else if first_chars == "typeFromId" {
                 self.advance();
@@ -3021,7 +3023,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let span = self.extend_token_span(first, end);
                 let type_from_id =
                     ParsedTypeExpr::TypeFromId(ParsedTypeFromId { id_expr: target_expr, span });
-                self.add_semantic_token(first, SemanticTokenKind::Function);
+                self.emit_semantic_token(first, SemanticTokenKind::Function);
                 Ok(Some(self.ast.type_exprs.add(type_from_id)))
             } else if first_chars == "static" {
                 self.advance();
@@ -3031,7 +3033,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     family_type_expr: inner_type_expr,
                     span,
                 });
-                self.add_semantic_token(first, SemanticTokenKind::Keyword);
+                self.emit_semantic_token(first, SemanticTokenKind::Keyword);
                 Ok(Some(self.ast.type_exprs.add(static_expr)))
             } else if first_chars == "some" {
                 self.advance();
@@ -3039,11 +3041,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let span = self.extend_to_here(first.span);
                 let quantifier =
                     ParsedTypeExpr::SomeQuant(SomeQuantifier { inner_type_expr: inner_expr, span });
-                self.add_semantic_token(first, SemanticTokenKind::Keyword);
+                self.emit_semantic_token(first, SemanticTokenKind::Keyword);
                 Ok(Some(self.ast.type_exprs.add(quantifier)))
             } else {
                 let base_name = self.expect_namespaced_ident()?;
-                self.add_semantic_token_span(base_name.span, SemanticTokenKind::Type);
+                self.emit_semantic_token_span(base_name.name_span, SemanticTokenKind::Type);
 
                 // Note: This no longer needs to be special syntax since its not an X anymore.
                 if base_name.path.is_empty() {
@@ -3177,8 +3179,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else {
             None
         };
-        let span = self.extend_to_here(name.span);
-        Ok(ParsedSumTypeVariant { tag_name, payload: payload_expression, explicit_value, span })
+        Ok(ParsedSumTypeVariant {
+            tag_name,
+            payload: payload_expression,
+            explicit_value,
+            name_span: name.span,
+        })
     }
 
     fn expect_fn_arg(&mut self, is_explicit_context: bool) -> ParseResult<ParsedCallArg> {
@@ -3302,7 +3308,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     );
                     let args_handle = self.ast.mem.pushn(&args);
 
-                    self.add_semantic_token(target, SemanticTokenKind::Function);
+                    self.emit_semantic_token(target, SemanticTokenKind::Function);
                     Some(self.add_expression(ParsedExpr::Call(ParsedCall {
                         name: QIdent::naked(name, target.span),
                         type_args,
@@ -3477,9 +3483,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
         let name = self.expect_kind(K::Ident)?;
         let name_ident = self.make_ident(name);
-        let span = self.extend_span(first.span, name.span);
+        let span = name.span;
         let namespaces_slice = self.ast.mem.pushn(&namespaces);
-        Ok(QIdent { path: namespaces_slice, name: name_ident, span })
+        Ok(QIdent { path: namespaces_slice, name: name_ident, name_span: span })
     }
 
     pub fn parse_compiler_debug(&mut self) -> bool {
@@ -3551,20 +3557,22 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             K::Colon => {
                 self.advance();
-                self.expect_kind(K::Ident)?;
+                let (name_token, variant_name) = self.expect_ident()?;
                 // :none
+                // ^^^^^
                 // :some(42)
+                // ^^^^^
                 // :some[int](42)
-
-                let variant_name = self.make_ident(second);
+                // ^^^^^
+                // We set the span to just the name component
+                let span = self.extend_token_span(first, name_token);
 
                 let type_args = self.parse_bracketed_type_args()?.0;
 
                 if third.kind == K::OpenParen {
                     self.advance();
                     let payload = self.expect_expression()?;
-                    let close_paren = self.expect_kind(K::CloseParen)?;
-                    let span = self.extend_token_span(first, close_paren);
+                    self.expect_kind(K::CloseParen)?;
                     Ok(Some(self.add_expression(ParsedExpr::Variant(ParsedVariant {
                         type_name: None,
                         variant_name,
@@ -3573,7 +3581,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         span,
                     }))))
                 } else {
-                    let span = self.extend_token_span(first, second);
                     Ok(Some(self.add_expression(ParsedExpr::Variant(ParsedVariant {
                         type_name: None,
                         variant_name,
@@ -3689,7 +3696,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         && !third.is_whitespace_preceded()
                     {
                         self.advance();
-                        let (_, variant_name) = self.expect_ident()?;
+                        let (variant_name_token, variant_name) = self.expect_ident()?;
+                        let span = self.extend_token_span(second, variant_name_token);
                         let type_args = self.parse_bracketed_type_args()?.0;
                         let payload = if self.maybe_consume(K::OpenParen).is_some() {
                             let p = self.expect_expression()?;
@@ -3699,7 +3707,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             None
                         };
 
-                        let span = self.extend_to_here(first.span);
                         let variant_expr =
                             self.add_expression(ParsedExpr::Variant(ParsedVariant {
                                 type_name: Some(namespaced_ident),
@@ -3725,8 +3732,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 // Call with type params above
                                 let (args, args_span) = self.expect_fn_call_args()?;
                                 let args_handle = self.ast.mem.pushn(&args);
-                                let span = self.extend_span(namespaced_ident.span, args_span);
-                                self.add_semantic_token_span(
+                                let span = self.extend_span(namespaced_ident.name_span, args_span);
+                                self.emit_semantic_token_span(
                                     name_span,
                                     SemanticTokenKind::Function,
                                 );
@@ -3764,7 +3771,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                     }));
 
                                 let ability_type_arguments = first_type_args;
-                                let ab_expr_span = self.extend_to_here(namespaced_ident.span);
+                                let ab_expr_span = self.extend_to_here(namespaced_ident.name_span);
                                 let ability_expr_id = self.ast.mem.push_h(ParsedAbilityExpr {
                                     name: namespaced_ident,
                                     arguments: ability_type_arguments,
@@ -3801,8 +3808,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         }
                     } else {
                         // The last thing it can be is a simple variable reference expression
-                        self.add_semantic_token_span(
-                            namespaced_ident.span,
+                        self.emit_semantic_token_span(
+                            namespaced_ident.name_span,
                             SemanticTokenKind::Variable,
                         );
                         Ok(Some(self.add_expression(ParsedExpr::Variable(ParsedVariable {
@@ -3889,7 +3896,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         // ^   ^              ^
         // 1   2          ^3  2/4
         let first = self.expect_kind(K::KeywordFor)?;
-        self.add_semantic_token_span(first.span, SemanticTokenKind::Keyword);
+        self.emit_semantic_token_span(first.span, SemanticTokenKind::Keyword);
         let (second, third) = self.peek_two();
         let binding = if third.kind == K::KeywordIn {
             if second.kind != K::Ident {
@@ -4025,7 +4032,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn parse_let(&mut self) -> ParseResult<Option<ParsedLet>> {
         trace!("parse_let");
         let Some(eaten_keyword) = self.maybe_consume(K::KeywordLet) else { return Ok(None) };
-        self.add_semantic_token(eaten_keyword, SemanticTokenKind::Keyword);
+        self.emit_semantic_token(eaten_keyword, SemanticTokenKind::Keyword);
         let is_reference = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
         let mut flags = ParsedLet::FLAG_REFERENCING * is_reference as u8;
         loop {
@@ -4048,7 +4055,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Some(_) => self.parse_type_expression(),
         }?;
         let equals = self.expect_kind(K::Equals)?;
-        self.add_semantic_token(equals, SemanticTokenKind::Operator);
+        self.emit_semantic_token(equals, SemanticTokenKind::Operator);
         let initializer_expression = if self.maybe_consume_ident_chars("uninit").is_some() {
             None
         } else {
@@ -4459,8 +4466,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         };
         let (func_name, func_name_id) = self.expect_ident()?;
-        self.add_semantic_token(fn_keyword, SemanticTokenKind::Keyword);
-        self.add_semantic_token(func_name, SemanticTokenKind::Function);
+        self.emit_semantic_token(fn_keyword, SemanticTokenKind::Keyword);
+        self.emit_semantic_token(func_name, SemanticTokenKind::Function);
         let mut type_params: SV8<ParsedTypeParam> = smallvec![];
         if self.maybe_consume(K::OpenBracket).is_some() {
             self.eat_delimited_ext(
@@ -4690,8 +4697,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             K::CloseBracket,
             Parser::expect_ability_type_argument,
         )? {
-            None => name.span,
-            Some(args_span) => self.extend_span(name.span, args_span),
+            None => name.name_span,
+            Some(args_span) => self.extend_span(name.name_span, args_span),
         };
         let arguments_handle = self.ast.mem.pushn(&arguments);
         Ok(ParsedAbilityExpr { name, arguments: arguments_handle, span })
@@ -4786,7 +4793,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         if keyword.kind != K::KeywordNamespace {
             return Ok(None);
         };
-        self.add_semantic_token(keyword, SemanticTokenKind::Namespace);
+        self.emit_semantic_token(keyword, SemanticTokenKind::Namespace);
         self.advance();
         let mut is_type = false;
         match self.peek().kind {

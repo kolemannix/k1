@@ -66,16 +66,16 @@ impl IdentSpanned {
 ///```
 pub struct QIdent {
     pub name: Ident,
-    pub span: SpanId,
+    pub name_span: SpanId,
     pub path: ParsedSlice<IdentSpanned>,
 }
 impl_copy_if_small!(16, QIdent);
 impl QIdent {
     pub fn naked(name: Ident, span: SpanId) -> QIdent {
-        QIdent { name, span, path: MSlice::empty() }
+        QIdent { name, name_span: span, path: MSlice::empty() }
     }
     pub fn with_span(&self, span: SpanId) -> QIdent {
-        QIdent { span, ..*self }
+        QIdent { name_span: span, ..*self }
     }
 }
 
@@ -370,7 +370,7 @@ impl IdentPool {
         };
 
         macro_rules! make_fn {
-            ($path: expr, $name: expr) => {{ QIdent { path: $path, name: $name, span: SpanId::NONE } }};
+            ($path: expr, $name: expr) => {{ QIdent { path: $path, name: $name, name_span: SpanId::NONE } }};
         }
 
         let path_core_list = intern_path!(b.core, b.list);

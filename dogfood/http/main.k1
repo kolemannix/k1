@@ -71,7 +71,7 @@ fn wait_for_a_while(handle: *mut uv/uv_idle_t) {
     &counter <- counter + 1;
     println(counter);
 
-    if (counter >= 100_000) uv/uv_idle_stop(handle)
+    if (counter >= 1000) uv/uv_idle_stop(handle)
 }
 
 fn main(): i32 { 
@@ -82,11 +82,17 @@ fn main(): i32 {
     let l = uv/uv_default_loop();
 
     let idler: uv/uv_idle_t = uninit;
+
     uv/uv_idle_init(l, &idler);
+    let fs-t: uv/uv_fs_t = uninit;
+    let flags =  core/posix/O_RDWR;
+    let uv-file = uv/uv_fs_open(l, &fs-t, ($string/c-lit("uv.k1")).rw[i8], flags, 0, ptr/null.as());
+    uv/uv_fs_read(l, &fs-t, uv-file, 1, -1, fn _req. println("opened"));
     uv/uv_idle_start(&idler, wait_for_a_while);
 
     println("idling");
     uv/uv_run(l, :UV_RUN_DEFAULT);
+
 
     println("Now quitting.");
     uv/uv_loop_close(l);

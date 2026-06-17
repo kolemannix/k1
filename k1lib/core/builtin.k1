@@ -692,10 +692,16 @@ ns array {
 
 #if k1/os-posix ns posix {
 
-  let stdin: i32 = 0
+  let stdin: i32  = 0
   let stdout: i32 = 1
   let stderr: i32 = 2
 
+  let O_RDONLY: c-int = 0x0000
+  let O_WRONLY: c-int = 0x0001
+  let O_RDWR  : c-int = 0x0002
+  let O_SEARCH: c-int = (if k1/os-macos 0x40100000 else 0x200000)
+  let O_EXEC  : c-int = (if k1/os-macos 0x40000000 else 0x200000)
+  extern("open") fn open(path: ptr, oflag: c-int): c-int
   extern("read") fn read(file-no: c-int, buffer: ptr, count: c-sizet): i64
   extern("write") fn write(file-no: c-int, data: ptr, count: c-sizet): i64
 
@@ -731,13 +737,13 @@ ns array {
 
 }
 
-// Eventually: #if k1/c-runtime
+// Could if ifdef'd behind a 'crt' flag if we wanted one #if k1/c-runtime
 ns libc {
 
   extern("exit") fn exit(code: i32): never
 
+  // Used by the llvm backend, currently
   extern("memcmp") fn memcmp(s1: ptr, s2: ptr, size: size): i32
-
   extern("malloc") fn malloc(size: size): ptr
   extern("calloc") fn calloc(count: int, size: size): ptr
   extern("free") fn free(ptr: ptr)

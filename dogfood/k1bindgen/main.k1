@@ -671,6 +671,7 @@ fn map-type(cx-type: clang/CXType): k1-type {
       :array({ elem-type: elem-type-mapped, size })
     },
     :IncompleteArray -> {
+      // nocommit bindgen Incomplete Array in function just means ptr
       let elem-type = clang/getArrayElementType(cx-type);
       let elem-mapped = mem/new(map-type(elem-type));
       :array({ elem-type: elem-mapped, size: 0 })

@@ -239,6 +239,7 @@ pub struct TypedSumVariant {
     pub index: u32,
     pub payload: Option<TypeId>,
     pub tag_value: TypedIntValue,
+    pub name_span: SpanId,
 }
 
 #[derive(Clone, Copy)]
@@ -251,6 +252,7 @@ pub struct SumType {
 pub struct ScalarEnumValue {
     pub name: Ident,
     pub int_value: TypedIntValue,
+    pub name_span: SpanId,
 }
 
 #[derive(Copy, Clone)]
@@ -1351,9 +1353,7 @@ impl TypePool {
             types: VPool::make("types"),
             hashes: FxHashMap::new(),
 
-            type_variable_counts: VPool::make(
-                "type_variable_counts",
-            ),
+            type_variable_counts: VPool::make("type_variable_counts"),
             instance_info: VPool::make("instance_info"),
 
             defn_info: FxHashMap::new(),
@@ -2124,7 +2124,7 @@ impl TypePool {
         variants: MSlice<TypedSumVariant, TypePool>,
         index: u32,
     ) -> &TypedSumVariant {
-        self.mem.getn(variants).iter().find(|v| v.index == index).unwrap()
+        self.mem.get_nth(variants, index as usize)
     }
 
     pub fn get_physical_type(
