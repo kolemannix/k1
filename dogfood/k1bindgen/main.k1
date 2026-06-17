@@ -1,7 +1,7 @@
 let MODULE_INFO: k1/module-manifest = {
   let llvm-path = if k1/os is :linux "/Users/knix/dev/k1-linux/llvm/install-llvm/lib"
                   else               "/Users/knix/dev/k1/llvm/install-llvm/lib";
-  print("using llvm path {llvm-path}");
+  // print("using llvm path {llvm-path}");
   {
     kind: :executable,
     deps: [],
@@ -572,7 +572,7 @@ fn map-fn-type(cx-type: clang/CXType): fn-type {
   let args = list/empty[fn-type.params.t]();
   for IntRange/upTo(arg-count) {
     let arg-cx-type = clang/getArgType(cx-type, it.as[u32]);
-    let arg-type = map-type(arg-cx-type);
+    let arg-type = map-type-ext(arg-cx-type, :fn-param);
     let name: ?string = :none;
     args.push({ name, type: arg-type })
   };
@@ -589,6 +589,9 @@ fn map-fn-type(cx-type: clang/CXType): fn-type {
 // fn map-type(cx-type: clang/CXType): k1-type
 
 fn map-type(cx-type: clang/CXType): k1-type {
+  map-type-ext(cx-type, :default)
+}
+fn map-type-ext(cx-type: clang/CXType, c-context: either { default, fn-param }): k1-type {
   // debug("  map-type {cx-type.kind.enum-name()}");
   let s: k1-type = switch cx-type.kind {
     :Void      -> :simple(p"{}"),
@@ -671,10 +674,19 @@ fn map-type(cx-type: clang/CXType): k1-type {
       :array({ elem-type: elem-type-mapped, size })
     },
     :IncompleteArray -> {
-      // nocommit bindgen Incomplete Array in function just means ptr
       let elem-type = clang/getArrayElementType(cx-type);
       let elem-mapped = mem/new(map-type(elem-type));
-      :array({ elem-type: elem-mapped, size: 0 })
+      switch c-context {
+        :default -> {
+          // Typically, an IncompleteArray means a Flexible Array member
+          // Which we can model very nicely as 0-sized array
+          :array({ elem-type: elem-mapped, size: 0 })
+        },
+        :fn-param -> {
+          // If it occurs in a function param, it just decays to a pointer
+          :ref({ inner: elem-mapped })
+        }
+      }
     },
     :Invalid -> {
       return(:error-c("Encountered an Invalid type TODO locn"))
