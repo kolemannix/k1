@@ -36,6 +36,10 @@ struct foo {
   float _muh_floats[];
 };
 
+void myFunction(char incompleteArray[]) {
+  return;
+}
+
 enum Color {
   Color_Red = 577,
   Color_Green = -10,

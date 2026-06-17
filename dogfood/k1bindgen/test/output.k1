@@ -40,6 +40,11 @@ type foo = {
   _muh_floats: array[f32, 0],
 }
 
+extern("test", "myFunction")
+fn myFunction(
+  p0: *mut i8,
+): {}
+
 type Color = either(i32) {
   Color_Red = 577,
   Color_Green = -10,
