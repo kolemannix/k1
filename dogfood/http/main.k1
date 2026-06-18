@@ -18,7 +18,7 @@ fn handle_on_message_complete(_parser: *mut llhttp/llhttp_t): i32 {
   0
 }
 
-fn on_url_part(parser: *mut llhttp/llhttp_t, data: *mut i8, count: usize): i32 {
+fn on_url_part(parser: *mut llhttp/llhttp_t, data: *mut u8, count: usize): i32 {
   let request-state = parser.data.rw[request-state];
   let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
   println("on_url_part: appending {bytes}...");
@@ -74,28 +74,96 @@ fn wait_for_a_while(handle: *mut uv/uv_idle_t) {
     if (counter >= 1000) uv/uv_idle_stop(handle)
 }
 
+ns uv {
+  ns for uv_buf_t {
+    fn to-buffer(self: uv_buf_t): buffer[u8] {
+      buffer/fromRefAndCount(self.base, self.len.as())
+    }
+
+    fn from-buffer(buffer: buffer[u8]): uv_buf_t {
+      uv/uv_buf_init(buffer.data, buffer.len.as[u32])
+    }
+  }
+}
+
+ability uv-request {
+  fn as-request(self: *mut self): *mut uv/uv_req_t
+}
+
+impl uv-request for uv/uv_fs_t {
+  fn as-request(self: *mut self): *mut uv/uv_req_t {
+    self.as()
+  }
+}
+
+fn set-data[r: uv-request, t](
+  req: *mut r,
+  data: *t,
+) {
+  uv/uv_req_set_data(req.as-request(), data.as[ptr]);
+}
+fn get-data[r: uv-request, t](
+  req: *mut r,
+): *mut t {
+  uv/uv_req_get_data(req.as-request()).as[*mut t]
+}
+
+fn example-fs() {
+  // let l = alloc-mode:current.allocT[uv/uv_loop_t];
+  // uv/uv_loop_init(l);
+  let l = uv/uv_default_loop();
+
+  // let idler: uv/uv_idle_t = uninit;
+  // uv/uv_idle_init(l, &idler);
+  // uv/uv_idle_start(&idler, wait_for_a_while);
+
+  let open-req: uv/uv_fs_t = uninit;
+  let flags =  core/posix/O_RDWR;
+  let uv-file = uv/uv_fs_open(l, &open-req, ($string/c-lit("uv.k1")).rw[u8], flags, 0, ptr/null.as());
+  if uv-file < 0 {
+    println("open error: {uv-file}");
+    crash("");
+  };
+  let data-buffer = buffer/allocate[u8](1024);
+  let uvbuf = uv/uv_buf_t/from-buffer(data-buffer);
+  let read-req: uv/uv_fs_t = uninit;
+  set-data(&read-req, &data-buffer);
+
+  uv/uv_fs_read(l, &read-req, uv-file, &uvbuf, 1, offset = 0, fn uv-fs. {
+    let data: *mut buffer[u8] = get-data(uv-fs);
+    let result: size = uv/uv_fs_get_result(uv-fs);
+    let s = string/wrapByteBuffer(data);
+    println("done read: {result}. data={data.len}\n{s}");
+  });
+
+  println("idling");
+  uv/uv_run(l, :UV_RUN_DEFAULT);
+
+  println("Now quitting.");
+  uv/uv_loop_close(l);
+
+  {}
+}
+
 fn main(): i32 { 
   example-http();
+  example-fs();
 
-    // let l = alloc-mode:current.allocT[uv/uv_loop_t];
-    // uv/uv_loop_init(l);
-    let l = uv/uv_default_loop();
+  let l = uv/uv_default_loop();
 
-    let idler: uv/uv_idle_t = uninit;
+  let server: uv/uv_tcp_t = uninit;
+  uv/uv_tcp_init(l, &server);
 
-    uv/uv_idle_init(l, &idler);
-    let fs-t: uv/uv_fs_t = uninit;
-    let flags =  core/posix/O_RDWR;
-    let uv-file = uv/uv_fs_open(l, &fs-t, ($string/c-lit("uv.k1")).rw[i8], flags, 0, ptr/null.as());
-    uv/uv_fs_read(l, &fs-t, uv-file, 1, -1, fn _req. println("opened"));
-    uv/uv_idle_start(&idler, wait_for_a_while);
+  let addr: uv/sockaddr_in = uninit;
+  let a = ($string/c-lit("0.0.0.0")).rw[u8];
+  uv/uv_ip4_addr(a, 3000, &addr);
 
-    println("idling");
-    uv/uv_run(l, :UV_RUN_DEFAULT);
+  uv/uv_tcp_bind(&server, &addr.as(), 0);
+  let r: i32 = uv/uv_listen(&server.as[*mut uv/uv_stream_t], backlog = 128, on_new_connection);
+  if (r != 0) {
+      eprintln("Listen error {uv/uv_strerror(r)}");
+      return(1);
+  };
 
-
-    println("Now quitting.");
-    uv/uv_loop_close(l);
-
-  0
+  return(uv_run(l, UV_RUN_DEFAULT))
 }

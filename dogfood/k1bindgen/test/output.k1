@@ -15,7 +15,7 @@ type Union1_u = union {
 type alias Union1_t = Union1_u
 
 type foo = {
-  _char: i8,
+  _char: u8,
   _unsigned_char: u8,
   _sizet: i32,
   _int: i32,
@@ -35,14 +35,14 @@ type foo = {
   _union_anon: union {
     x: i32,
     y: f32,
-    c: array[i8, 4],
+    c: array[u8, 4],
   },
   _muh_floats: array[f32, 0],
 }
 
 extern("test", "myFunction")
 fn myFunction(
-  p0: *mut i8,
+  p0: *mut u8,
 ): {}
 
 type Color = either(i32) {

@@ -7,8 +7,8 @@ type llhttp__internal_s = {
   _span_pos0: ptr,
   _span_cb0: ptr,
   error: i32,
-  reason: *mut i8,
-  error_pos: *mut i8,
+  reason: *mut u8,
+  error_pos: *mut u8,
   data: ptr,
   _current: ptr,
   content_length: u64,
@@ -276,7 +276,7 @@ type alias llhttp_settings_t = llhttp_settings_s
 
 type alias llhttp_data_cb = *fn(
   *mut llhttp_t,
-  *mut i8,
+  *mut u8,
   usize
 ) -> i32
 
@@ -372,7 +372,7 @@ fn llhttp_settings_init(
 extern("llhttp", "llhttp_execute")
 fn llhttp_execute(
   p0: *mut llhttp_t,
-  p1: *mut i8,
+  p1: *mut u8,
   p2: usize,
 ): llhttp_errno_t
 
@@ -414,33 +414,33 @@ fn llhttp_get_errno(
 extern("llhttp", "llhttp_get_error_reason")
 fn llhttp_get_error_reason(
   p0: *mut llhttp_t,
-): *mut i8
+): *mut u8
 
 extern("llhttp", "llhttp_set_error_reason")
 fn llhttp_set_error_reason(
   p0: *mut llhttp_t,
-  p1: *mut i8,
+  p1: *mut u8,
 ): {}
 
 extern("llhttp", "llhttp_get_error_pos")
 fn llhttp_get_error_pos(
   p0: *mut llhttp_t,
-): *mut i8
+): *mut u8
 
 extern("llhttp", "llhttp_errno_name")
 fn llhttp_errno_name(
   p0: llhttp_errno_t,
-): *mut i8
+): *mut u8
 
 extern("llhttp", "llhttp_method_name")
 fn llhttp_method_name(
   p0: llhttp_method_t,
-): *mut i8
+): *mut u8
 
 extern("llhttp", "llhttp_status_name")
 fn llhttp_status_name(
   p0: llhttp_status_t,
-): *mut i8
+): *mut u8
 
 extern("llhttp", "llhttp_set_lenient_headers")
 fn llhttp_set_lenient_headers(
