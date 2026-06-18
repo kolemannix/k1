@@ -10161,7 +10161,14 @@ impl TypedProgram {
             Type::Reference(_refer) => match self.types.get(target_type) {
                 Type::Pointer => Ok(Outcome::Cast(CastType::ReferenceToPointer)),
                 Type::Reference(_) => {
-                    self.report_warn(span, "Reference to Reference cast");
+                    self.report_warn(
+                        span,
+                        format!(
+                            "{} to {} (todo: detect safer vs less safe reference casts)",
+                            self.type_id_to_string(base_expr_type),
+                            self.type_id_to_string(target_type)
+                        ),
+                    );
                     Ok(Outcome::Cast(CastType::ReferenceToReference))
                 }
                 _ => {

@@ -605,7 +605,7 @@ fn map-type-ext(cx-type: clang/CXType, c-context: either { default, fn-param }):
     :ULong     -> :simple("u64"),
     :ULongLong -> :simple("u64"),
     :UInt128   -> :simple("u128 unsupported"),
-    :Char_S    -> :simple("i8"),
+    :Char_S    -> :simple("u8"),
     :SChar     -> :simple("i8"),
     // In Windows, 2 bytes, otherwise 4, so we'll point to the alias
     :WChar     -> :simple("c-wchar"),

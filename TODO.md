@@ -2,6 +2,7 @@
 
 
 Minor and ideas
+- [ ] allow opaques to be named / nominal; bindgen them that way. The name is really more useful than the size/align
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [ ] `#[must_use]` equivalent
