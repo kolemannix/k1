@@ -143,6 +143,9 @@ ns mem {
     fn allocT[T](self: alloc-mode): *mut T {
       self.alloc(size = types/size[T], align = types/align[T]).as()
     }
+    fn freeT[T](self: alloc-mode, t: *mut T) {
+      self.free(ptr = t.as(), size = types/size[T], align = types/align[T])
+    }
 
     fn new[T](self: alloc-mode, t: T): *mut T {
       let ref = self.allocT[T];

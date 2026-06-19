@@ -86,6 +86,10 @@ ns for arena {
     buffer
   }
 
+  fn push-buffer[t](self: *mut arena, size): buffer[t] {
+    buffer/allocateIn[t](context :custom-arena(self))(size)
+  }
+
   fn pushString(self: *mut arena, s: string): string {
     let data: buffer[char] = self.pushN(s.span());
     string/wrapBuffer(data)
