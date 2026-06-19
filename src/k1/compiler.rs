@@ -208,6 +208,10 @@ pub struct Args {
     #[arg(long)]
     pub debug: bool,
 
+    /// Link AddressSanitizer and UndefinedBehaviorSanitizer
+    #[arg(long)]
+    pub sanitize: bool,
+
     #[arg(long)]
     pub profile: bool,
 
@@ -233,6 +237,7 @@ pub struct CompilerConfig {
     pub no_std: bool,
     pub target: Target,
     pub debug: bool,
+    pub sanitize: bool,
     pub out_dir: PathBuf,
     pub optimize: bool,
 }
@@ -364,6 +369,7 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
         no_std: args.no_std,
         target,
         debug: args.debug,
+        sanitize: args.sanitize,
         out_dir,
         optimize: args.optimize,
     };
@@ -443,6 +449,7 @@ pub fn write_executable(
     let debug = k1.config.debug;
     let out_dir = &k1.config.out_dir;
     let optimize = k1.config.optimize;
+    let sanitize = k1.config.sanitize;
     let clang_time = std::time::Instant::now();
 
     let mut build_cmd = std::process::Command::new("cc");
@@ -457,7 +464,6 @@ pub fn write_executable(
 
     if debug {
         build_cmd.arg("-g");
-        build_cmd.arg("-fsanitize=address,undefined");
         build_cmd.arg("-O0");
     } else {
         if optimize {
@@ -471,6 +477,9 @@ pub fn write_executable(
             build_cmd.arg("-fno-omit-frame-pointer");
         }
     };
+    if sanitize {
+        build_cmd.arg("-fsanitize=address,undefined");
+    }
 
     match target.target_os() {
         TargetOs::MacOs => {

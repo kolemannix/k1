@@ -273,6 +273,7 @@ impl Backend {
             optimize: false,
             dump_module: false,
             debug: true,
+            sanitize: false,
             profile: false,
             target: None,
             command: k1::compiler::Command::Check {
