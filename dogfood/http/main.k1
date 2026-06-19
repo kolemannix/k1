@@ -5,7 +5,7 @@ let MODULE_INFO: k1/module-manifest = {
     { link-type: :static, name: "uv" },
   ],
   deps: [],
-  multithreading: false,
+  multithreading: true,
   link-args: [],
 }
 
@@ -96,6 +96,18 @@ impl uv-request for uv/uv_fs_t {
   }
 }
 
+impl uv-request for uv/uv_work_t {
+  fn as-request(self: *mut self): *mut uv/uv_req_t {
+    self.as()
+  }
+}
+
+impl uv-request for uv/uv_write_t {
+  fn as-request(self: *mut self): *mut uv/uv_req_t {
+    self.as()
+  }
+}
+
 fn set-data[r: uv-request, t](
   req: *mut r,
   data: *t,
@@ -145,9 +157,304 @@ fn example-fs() {
   {}
 }
 
+type task[t, e] = {
+  state: *mut task-state[t, e],
+}
+
+type task-state[t, e] = {
+  req: *mut uv/uv_work_t,
+  mutex: *mut uv/uv_mutex_t,
+  cond: *mut uv/uv_cond_t,
+  ready: bool,
+  output: result[t, e],
+}
+
+type task-work[t, e, params] = {
+  state: *mut task-state[t, e],
+  params: params,
+}
+
+ns for task {
+  fn new[t, e, params](
+    l: *mut uv/uv_loop_t,
+    params: params,
+    work-cb: uv/uv_work_cb,
+    after-work-cb: uv/uv_after_work_cb,
+    initial-output: result[t, e],
+  ): task[t, e] {
+    let mode = mem/alloc-mode:system-heap;
+    // nocommit: Better in-place construction story
+    let state: *mut task-state[t, e] = mode.new({
+      req     : mode.allocT[uv/uv_work_t],
+      mutex   : mode.allocT[uv/uv_mutex_t],
+      cond    : mode.allocT[uv/uv_cond_t],
+      ready: false,
+      output: initial-output,
+    });
+    let work: *mut task-work[t, e, params] = mode.new({
+      state,
+      params,
+    });
+
+    let mutex-rc = uv/uv_mutex_init(state.mutex);
+    if mutex-rc != 0 {
+      crash("uv_mutex_init failed: {mutex-rc}");
+    };
+
+    let cond-rc = uv/uv_cond_init(state.cond);
+    if cond-rc != 0 {
+      uv/uv_mutex_destroy(state.mutex);
+      crash("uv_cond_init failed: {cond-rc}");
+    };
+
+    set-data(state.req, work);
+
+    let queue-rc = uv/uv_queue_work(l, state.req, work-cb, after-work-cb);
+    if queue-rc != 0 {
+      uv/uv_cond_destroy(state.cond);
+      uv/uv_mutex_destroy(state.mutex);
+      crash("uv_queue_work failed: {queue-rc}");
+    };
+
+    { state }
+  }
+
+
+  fn await[t, e](self: task[t, e]): result[t, e] {
+    let state = self.state;
+    uv/uv_mutex_lock(state.mutex);
+    while state.ready == false {
+      uv/uv_cond_wait(state.cond, state.mutex);
+    };
+    uv/uv_mutex_unlock(state.mutex);
+    state.output
+  }
+}
+
+type db-query-params = {
+  query: string,
+}
+
+fn run-blocking-database-query(req: *mut uv/uv_work_t) {
+  let work: *mut task-work[int, string, db-query-params] = get-data(req);
+  let state = work.state;
+  let params = work.params;
+
+  tprintln("fake DB query started: {params.query}");
+
+  state.ready* <- false;
+
+  // uv/uv_sleep(250);
+
+  uv/uv_mutex_lock(state.mutex);
+  state.output* <- :ok(3);
+  state.ready* <- true;
+  uv/uv_cond_broadcast(state.cond);
+  uv/uv_mutex_unlock(state.mutex);
+  {}
+}
+
+fn after-blocking-database-query(req: *mut uv/uv_work_t, status: i32) {
+  let work: *mut task-work[int, string, db-query-params] = get-data(req);
+  let state = work.state;
+  let params = work.params;
+
+  if status == 0 {
+    switch state.output {
+      :ok(row-count) -> tprintln("after-work: fake DB query returned {row-count} rows for {params.query}"),
+      :err(msg) -> tprintln("after-work: fake DB query failed: {msg}"),
+    };
+  } else {
+    tprintln("after-work: fake DB query failed with status {status}");
+  };
+}
+
+type db-conn = {
+  uv-loop: *mut uv/uv_loop_t,
+}
+
+ns for db-conn {
+  fn run-query(self: db-conn, query: string): task[int, string] {
+    task/new(
+      self.uv-loop,
+      { query },
+      run-blocking-database-query,
+      after-blocking-database-query,
+      :err("not started"),
+    )
+  }
+}
+
+fn handle-fake-get-count-request(l: *mut uv/uv_loop_t, _request: string): result[int, string] {
+  println("handling fake getCount request");
+  let db-conn: db-conn = { uv-loop: l };
+  let query-task: task[int, string] = db-conn.run-query("select count(*) from fake_users where active = true");
+  println("before");
+  let result: result[int, string] = query-task.await();
+  println("after");
+  result
+}
+
+fn example-worker-task() {
+  let l = uv/uv_default_loop();
+  let result = handle-fake-get-count-request(l, "GET /count HTTP/1.1\r\n\r\n");
+  switch result {
+    :ok(count) -> println("example request count: {count}"),
+    :err(msg) -> println("example request failed: {msg}"),
+  };
+  {}
+}
+
+fn close-client(_handle: *mut uv/uv_handle_t) { {} }
+
+type http-handler-params = {
+  uv-loop: *mut uv/uv_loop_t,
+  client: *mut uv/uv_stream_t,
+  request: string,
+}
+
+type http-handler-work = {
+  req: *mut uv/uv_work_t,
+  params: http-handler-params,
+  output: result[string, string],
+}
+
+type http-write-state = {
+  client: *mut uv/uv_stream_t,
+}
+
+fn handle-request(req: *mut uv/uv_work_t) {
+  let work: *mut http-handler-work = get-data(req);
+  let params = work.params;
+
+  tprintln("handler: fake parsing request bytes: {params.request.len()}");
+
+  let db-conn: db-conn = { uv-loop: params.uv-loop };
+  let query-task: task[int, string] = db-conn.run-query("select count(*) from fake_users where active = true");
+  let query-result: result[int, string] = query-task.await();
+
+  tprintln("handler: fake processing and serializing");
+  let response = switch query-result {
+    :ok(_count) -> "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n3",
+    :err(_msg) -> "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror",
+  };
+
+  work.output* <- :ok(response);
+  {}
+}
+
+fn after-response-write(req: *mut uv/uv_write_t, status: i32) {
+  let write-state: *mut http-write-state = get-data(req);
+  if status != 0 {
+    tprintln("write failed: {status}");
+  } else {
+    tprintln("wrote fake response");
+  };
+  uv/uv_close(write-state.client.as(), close-client);
+}
+
+fn tprintln[t: print](t) {
+  // get thread name
+  let thread-self = uv/uv_thread_self();
+  let thread-name-buf = array/zeroed[u8, 256]();
+  let _rc = uv/uv_thread_getname(&thread-self, &thread-name-buf.get-base(), thread-name-buf.len().as());
+  let thread-name = string/from-c(thread-name-buf.base-ptr());
+
+  println("[{thread-name}] {t}")
+}
+
+fn write-fake-response(client: *mut uv/uv_stream_t, response: string) {
+  let write-req = mem/alloc-mode:system-heap.allocT[uv/uv_write_t]();
+  let write-state: *mut http-write-state = mem/alloc-mode:system-heap.new({ client });
+  set-data(write-req, write-state);
+
+  let buf = uv/uv_buf_init(response.data-ptr().as[*mut u8], response.len().as[u32]);
+  let write-rc = uv/uv_write(write-req, client, &buf, 1, after-response-write);
+  if write-rc != 0 {
+    tprintln("uv_write failed: {write-rc}");
+    uv/uv_close(client.as(), close-client);
+  };
+}
+
+
+fn after-fake-http-handler(req: *mut uv/uv_work_t, status: i32) {
+  tprintln("after-fake-http-handler");
+  let work: *mut http-handler-work = get-data(req);
+
+  if status != 0 {
+    tprintln("handler failed with status {status}");
+    uv/uv_close(work.params.client.as(), close-client);
+    return();
+  };
+
+  switch work.output {
+    :ok(response) -> write-fake-response(work.params.client, response),
+    :err(msg) -> {
+      tprintln("handler failed: {msg}");
+      uv/uv_close(work.params.client.as(), close-client);
+    },
+  };
+}
+
+fn alloc-read-buffer(_handle: *mut uv/uv_handle_t, suggested-size: usize, buf: *mut uv/uv_buf_t) {
+  let data = buffer/allocateIn[u8](context mem/alloc-mode:system-heap)(suggested-size.as[size]);
+  buf <- uv/uv_buf_t/from-buffer(data);
+}
+
+fn on_client_read(stream: *mut uv/uv_stream_t, nread: size, buf: *mut uv/uv_buf_t) {
+  if nread <= 0 {
+    let _stop-rc = uv/uv_read_stop(stream);
+    uv/uv_close(stream.as(), close-client);
+    return();
+  };
+
+  let request-bytes = span/from-raw[byte](buf.base.as[ptr], nread);
+  let request = string/fromBytes(request-bytes);
+  tprintln("read request bytes {nread}\n{request}\n-----------");
+
+  let l = uv/uv_handle_get_loop(stream.as());
+  let _stop-rc = uv/uv_read_stop(stream);
+  let work: *mut http-handler-work = mem/alloc-mode:system-heap.new({
+    req: mem/alloc-mode:system-heap.allocT[uv/uv_work_t](),
+    params: { uv-loop: l, client: stream, request },
+    output: :err("handler not started"),
+  });
+  set-data(work.req, work);
+  let queue-rc = uv/uv_queue_work(l, work.req, handle-request, after-fake-http-handler);
+  if queue-rc != 0 {
+    tprintln("uv_queue_work for request handler failed: {queue-rc}");
+    uv/uv_close(stream.as(), close-client);
+  };
+  {}
+}
+
+fn on_new_connection(server: *mut uv/uv_stream_t, status: i32) {
+  if status < 0 {
+    println("new connection error: {status}");
+    return();
+  };
+
+  let client: *mut uv/uv_tcp_t = mem/current().allocT[uv/uv_tcp_t]();
+  let l = uv/uv_default_loop();
+  uv/uv_tcp_init(l, client);
+
+  let accept-rc = uv/uv_accept(server, client.as[*mut uv/uv_stream_t]);
+  if accept-rc == 0 {
+    tprintln("accepted connection; scheduling read");
+    let read-rc = uv/uv_read_start(client.as[*mut uv/uv_stream_t], alloc-read-buffer, on_client_read);
+    if read-rc != 0 {
+      tprintln("read start error: {read-rc}");
+      uv/uv_close(client.as[*mut uv/uv_handle_t], close-client);
+    };
+  } else {
+    tprintln("accept error: {accept-rc}");
+    uv/uv_close(client.as[*mut uv/uv_handle_t], close-client);
+  };
+}
+
 fn main(): i32 { 
-  example-http();
-  example-fs();
+  // example-http();
+  // example-fs();
 
   let l = uv/uv_default_loop();
 
@@ -161,9 +468,10 @@ fn main(): i32 {
   uv/uv_tcp_bind(&server, &addr.as(), 0);
   let r: i32 = uv/uv_listen(&server.as[*mut uv/uv_stream_t], backlog = 128, on_new_connection);
   if (r != 0) {
-      eprintln("Listen error {uv/uv_strerror(r)}");
+      let listen-error = string/wrap-c(uv/uv_strerror(r).as[ptr]);
+      eprintln("Listen error {listen-error}");
       return(1);
   };
 
-  return(uv_run(l, UV_RUN_DEFAULT))
+  return(uv/uv_run(l, :UV_RUN_DEFAULT))
 }
