@@ -185,6 +185,17 @@ type task-state[t] = {
   output: ?t,
 }
 
+ns for task-state {
+  fn release[t](self: task-state[t]) {
+    uv/uv_cond_destroy(self.cond);
+    uv/uv_mutex_destroy(self.mutex);
+    let heap = mem/alloc-mode:system-heap;
+    heap.freeT(self.req);
+    heap.freeT(self.mutex);
+    heap.freeT(self.cond);
+  }
+}
+
 type task-work[t, params] = {
   state: *mut task-state[t],
   params: params,
@@ -197,16 +208,16 @@ ns for task {
     handler: *fn(params) -> t,
     params: params,
   ): task[t] {
-    let mode = mem/alloc-mode:system-heap;
+    let heap = mem/alloc-mode:system-heap;
     // nocommit: Better in-place construction story
-    let state: *mut task-state[t] = mode.new({
-      req     : mode.allocT[uv/uv_work_t],
-      mutex   : mode.allocT[uv/uv_mutex_t],
-      cond    : mode.allocT[uv/uv_cond_t],
+    let state: *mut task-state[t] = heap.new({
+      req     : heap.allocT[uv/uv_work_t],
+      mutex   : heap.allocT[uv/uv_mutex_t],
+      cond    : heap.allocT[uv/uv_cond_t],
       ready: false,
       output: :none,
     });
-    let work: *mut task-work[t, params] = mode.new({
+    let work: *mut task-work[t, params] = heap.new({
       state,
       params,
       handler,
@@ -225,15 +236,25 @@ ns for task {
 
     state.req.set-data(work);
 
-    let queue-rc = uv/uv_queue_work(l, state.req, fn req. {
-      let work: *mut task-work[t, params] = req.get-data();
-      let handler = work.handler;
-      task/complete(work.state, handler(work.params));
-      {}
-    }, after-task-work);
+    let queue-rc = uv/uv_queue_work(
+      l, state.req,
+      fn req. {
+        let task-work = req.get-data[task-work[t, params]];
+        let handler = task-work.handler;
+        task/complete(task-work.state, handler(task-work.params));
+        {}
+      },
+      fn (req, status) {
+        let task-work = req.get-data[task-work[t, params]];
+        task-work.state.release();
+        if status != 0 {
+          tprintln("task work failed with status {status}");
+        };
+      }
+    );
+
     if queue-rc != 0 {
-      uv/uv_cond_destroy(state.cond);
-      uv/uv_mutex_destroy(state.mutex);
+      state.release();
       crash("uv_queue_work failed: {queue-rc}");
     };
 
@@ -252,11 +273,6 @@ ns for task {
       uv/uv_cond_wait(state.cond, state.mutex);
     };
     uv/uv_mutex_unlock(state.mutex);
-
-    // Free and close everything
-    uv/uv_cond_destroy(state.cond);
-    uv/uv_mutex_destroy(state.mutex);
-    self.release();
     
     state.output.!
   }
@@ -268,10 +284,7 @@ ns for task {
     //       So probably it gets given an arena, owned by the caller.
     //       So we pay for 1 mmap per spawn, kinda nice. And can put these
     //       libuv handles in there too
-    let mode = mem/alloc-mode:system-heap;
-    mode.freeT(self.state.req);
-    mode.freeT(self.state.mutex);
-    mode.freeT(self.state.cond);
+    self.state.release();
   }
 
   fn complete[t](state: *mut task-state[t], output: t) {
@@ -295,12 +308,6 @@ fn fake-database-query(params: db-query-params): result[int, string] {
   :ok(3)
 }
 
-fn after-task-work(_req: *mut uv/uv_work_t, status: i32) {
-  if status != 0 {
-    tprintln("task work failed with status {status}");
-  };
-}
-
 type db-conn = {
   uv-loop: *mut uv/uv_loop_t,
 }
@@ -315,26 +322,6 @@ ns for db-conn {
   }
 }
 
-fn handle-fake-get-count-request(l: *mut uv/uv_loop_t, _request: string): result[int, string] {
-  println("handling fake getCount request");
-  let db-conn: db-conn = { uv-loop: l };
-  let query-task: task[result[int, string]] = db-conn.run-query("select count(*) from fake_users where active = true");
-  println("before");
-  let result: result[int, string] = query-task.await();
-  println("after");
-  result
-}
-
-fn example-worker-task() {
-  let l = uv/uv_default_loop();
-  let result = handle-fake-get-count-request(l, "GET /count HTTP/1.1\r\n\r\n");
-  switch result {
-    :ok(count) -> println("example request count: {count}"),
-    :err(msg) -> println("example request failed: {msg}"),
-  };
-  {}
-}
-
 fn close-client(handle: *mut uv/uv_handle_t) { 
   let connection = handle.get-data[connection]();
   connection.release();
@@ -347,9 +334,15 @@ type http-handler-params = {
   request: string,
 }
 
+type response-stream = {}
+type http-response = either {
+  complete(string),
+  stream(response-stream),
+  err(string)
+}
 type http-handler-work = {
   params: http-handler-params,
-  output: result[string, string],
+  http-response: http-response,
 }
 
 type http-write-state = {
@@ -359,16 +352,15 @@ type http-write-state = {
 type http-request = { }
 
 ns user-code {
-  fn handle(_req: http-request, db-conn): string {
+  fn handle(_req: http-request, db-conn): http-response {
     let query-task: task[result[int, string]] = db-conn.run-query("select count(*) from fake_users where active = true");
     let query-result: result[int, string] = query-task.await();
 
     tprintln("handler: fake processing and serializing");
-    let response = switch query-result {
-      :ok(_count) -> "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nHello",
-      :err(_msg) -> "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror",
-    };
-    response
+    switch query-result {
+      :ok(_count) -> :complete("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nHello"),
+      :err(_msg) -> :complete("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror"),
+    }
   }
 }
 
@@ -381,23 +373,14 @@ fn handle-request(req: *mut uv/uv_work_t) {
   // TODO: get conn from a thread-local
   let db-conn: db-conn = { uv-loop: params.uv-loop };
 
-  let response = user-code/handle({}: http-request, db-conn);
-
-  work.output* <- :ok(response);
+  work.http-response* <- user-code/handle({}: http-request, db-conn);
   {}
 }
 
-fn after-response-write(req: *mut uv/uv_write_t, status: i32) {
-  let write-state: *mut http-write-state = req.get-data();
-  if status != 0 {
-    tprintln("write failed: {status}");
-  } else {
-    tprintln("wrote fake response");
-  };
-  uv/uv_close(write-state.client.as(), close-client);
-}
-
+let tlog: bool = false
 fn tprintln[t: print](t) {
+  if not tlog return();
+
   // get thread name
   let thread-self = uv/uv_thread_self();
   let thread-name-buf = array/zeroed[u8, 256]();
@@ -407,34 +390,57 @@ fn tprintln[t: print](t) {
   println("[{thread-name}] {t}")
 }
 
+// Called on the main event loop after the http handler is done
+// Because he's on the main thread, the after handler is the only one who is allowed to write to the stream
+// So he should expect to find 'marching orders' from the logic worker handler in the work's data
+// Usually, write a response to the tcp stream. But maybe something else, like keep streaming the response or something, idk
 fn after-fake-http-handler(req: *mut uv/uv_work_t, status: i32) {
   tprintln("after-fake-http-handler");
   let work: *mut http-handler-work = req.get-data();
 
+  // If the work was cancelled using uv_cancel() status will be UV_ECANCELED.
   if status != 0 {
-    tprintln("handler failed with status {status}");
+    tprintln("handler was cancelled");
     uv/uv_close(work.params.client.as(), close-client);
     return();
   };
 
   let client = work.params.client;
 
+// [ ] dogfood bindgen strip prefix
+// [ ] dogfood bindgen strip suffix
 // [ ] dogfood struct access lsp entity
 // [ ] dogfood match fallback arm hidden
 // [ ] dogfood remove *mut distinction
+// [ ] dogfood swap data and len in k1 buffer struct
 // [ ] take specialized generic function pointers
-  switch work.output {
-    :ok(response) -> {
+  switch work.http-response {
+    :complete(body) -> {
       let write-req = mem/alloc-mode:system-heap.allocT[uv/uv_write_t]();
       let write-state: *mut http-write-state = mem/alloc-mode:system-heap.new({ client });
       write-req.set-data(write-state);
 
-      let buf = uv/uv_buf_init(response.data-ptr().as[*mut u8], response.len().as[u32]);
-      let write-rc = uv/uv_write(write-req, client, &buf, 1, after-response-write);
+      let buf: uv/uv_buf_t = uv/uv_buf_init(body.data-ptr().as[*mut u8], body.len().as[u32]);
+      // the uv_buf_t array itself only needs to outlive the call, so the stack pointer is fine
+      let write-rc = uv/uv_write(write-req, client, &buf, 1, fn (req, status) {
+        let write-state: *mut http-write-state = req.get-data();
+        let client = write-state.client;
+        if status != 0 {
+          tprintln("write failed: {status}");
+        } else {
+          tprintln("wrote fake response");
+        };
+        alloc-mode:system-heap.freeT(req);
+        uv/uv_close(client.as(), close-client);
+      });
+
       if write-rc != 0 {
         tprintln("uv_write failed: {write-rc}");
         uv/uv_close(client.as(), close-client);
       };
+    },
+    :stream(stream) -> {
+      tprintln("streaming unimplemented");
     },
     :err(msg) -> {
       tprintln("handler failed: {msg}");
@@ -456,7 +462,7 @@ fn queue-fake-http-handler(stream: *mut uv/uv_stream_t, request: string) {
 
   let work: *mut http-handler-work = mem/alloc-mode:system-heap.new({
     params: { uv-loop: l, client: stream, request },
-    output: :err("handler not started"),
+    http-response: :err("handler not started"),
   });
   let work-req = mem/alloc-mode:system-heap.allocT[uv/uv_work_t]();
   work-req.set-data(work);
@@ -519,13 +525,17 @@ fn on_new_connection(server: *mut uv/uv_stream_t, status: i32) {
     return();
   };
 
+  let l = uv/uv_handle_get_loop(server.as());
+
   let connection: *mut connection = connection/make();
 
   let client: *mut uv/uv_tcp_t = connection.arena*.push-uninit[uv/uv_tcp_t]();
+  // uv/uv_tcp_nodelay(client, 1);
+  let tcp-init-rc = uv/uv_tcp_init(l, client);
   client.set-data(connection);
-
-  let l = uv/uv_handle_get_loop(server.as());
-  uv/uv_tcp_init(l, client);
+  if tcp-init-rc != 0 {
+    eprintln("tcp init failed: {string/wrap-c(uv/uv_strerror(tcp-init-rc).as[ptr])}");
+  };
 
   let accept-rc = uv/uv_accept(server, client.as[*mut uv/uv_stream_t]);
   tprintln("conn arena new usedBytes: {connection.arena.usedBytes()}");
@@ -546,22 +556,34 @@ fn main(): i32 {
   // example-http();
   // example-fs();
 
+  println("hello");
   let l = uv/uv_default_loop();
 
   let server: uv/uv_tcp_t = uninit;
-  uv/uv_tcp_init(l, &server);
+  let tcp-init-rc = uv/uv_tcp_init(l, &server);
+  if tcp-init-rc != 0 {
+    eprintln("tcp init failed: {string/wrap-c(uv/uv_strerror(tcp-init-rc).as[ptr])}");
+    return(1);
+  };
 
   let addr: uv/sockaddr_in = uninit;
   let a = ($string/c-lit("0.0.0.0")).rw[u8];
-  uv/uv_ip4_addr(a, 3000, &addr);
+  if uv/uv_ip4_addr(a, 3000, &addr) != 0 {
+    eprintln("uv_ip4_addr failed");
+    return(1);
+  };
 
-  uv/uv_tcp_bind(&server, &addr.as(), 0);
+  let bind-rc = uv/uv_tcp_bind(&server, &addr.as(), 0);
+  if bind-rc != 0 {
+    eprintln("bind failed: {string/wrap-c(uv/uv_strerror(bind-rc).as[ptr])}");
+  };
   let r: i32 = uv/uv_listen(&server.as[*mut uv/uv_stream_t], backlog = 128, on_new_connection);
   if (r != 0) {
       let listen-error = string/wrap-c(uv/uv_strerror(r).as[ptr]);
       eprintln("Listen error {listen-error}");
       return(1);
   };
+  eprintln("listening on 3000...");
 
   return(uv/uv_run(l, :UV_RUN_DEFAULT))
 }
