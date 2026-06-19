@@ -110,6 +110,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
     let args = k1::compiler::Args {
         optimize: false,
         debug: false,
+        sanitize: false,
         no_std: false,
         emit_llvm: true,
         dump_module: false,
