@@ -1756,9 +1756,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let free_ident = self.k1.ast.idents.intern("free");
                 let free_fn_id = self.find_libc_function_id(free_ident).unwrap();
                 let free_fv = self.declare_llvm_function(free_fn_id)?;
-                let call = self.builder.build_call(free_fv, &[old_ptr_arg], "").unwrap();
-                let result = call.try_as_basic_value().expect_basic("free return");
-                self.builder.build_return(Some(&result)).unwrap()
+                let _call = self.builder.build_call(free_fv, &[old_ptr_arg], "").unwrap();
+                self.builder.build_return(None).unwrap()
             }
             BackendBuiltin::MemCopy | BackendBuiltin::MemMove => {
                 // intern fn copy(
