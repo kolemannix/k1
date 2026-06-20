@@ -65,15 +65,6 @@ fn example-http() {
   };
 }
 
-let mutable counter: i64 = 0
-
-fn wait_for_a_while(handle: *mut uv/uv_idle_t) {
-    &counter <- counter + 1;
-    println(counter);
-
-    if (counter >= 1000) uv/uv_idle_stop(handle)
-}
-
 ns uv {
   ns for uv_buf_t {
     fn to-buffer(self: uv_buf_t): buffer[u8] {
@@ -219,43 +210,6 @@ impl uv-handle for uv/uv_async_t {
 
 impl uv-handle for uv/uv_handle_t {
   fn as-handle(self: *mut self): *mut uv/uv_handle_t { self }
-}
-
-fn example-fs() {
-  // let l = alloc-mode:current.allocT[uv/uv_loop_t];
-  // uv/uv_loop_init(l);
-  let l = uv/uv_default_loop();
-
-  // let idler: uv/uv_idle_t = uninit;
-  // uv/uv_idle_init(l, &idler);
-  // uv/uv_idle_start(&idler, wait_for_a_while);
-
-  let open-req: uv/uv_fs_t = uninit;
-  let flags =  core/posix/O_RDWR;
-  let uv-file = uv/uv_fs_open(l, &open-req, ($string/c-lit("uv.k1")).rw[u8], flags, 0, ptr/null.as());
-  if uv-file < 0 {
-    println("open error: {uv-file}");
-    crash("");
-  };
-  let data-buffer = buffer/allocate[u8](1024);
-  let uvbuf = uv/uv_buf_t/from-buffer(data-buffer);
-  let read-req: uv/uv_fs_t = uninit;
-  read-req.set-data(&data-buffer);
-
-  uv/uv_fs_read(l, &read-req, uv-file, &uvbuf, 1, offset = 0, fn uv-fs. {
-    let data: *mut buffer[u8] = uv-fs.get-data();
-    let result: size = uv/uv_fs_get_result(uv-fs);
-    let s = string/wrapByteBuffer(data);
-    tprintln("done read: {result}. data={data.len}\n{s}");
-  });
-
-  println("idling");
-  uv/uv_run(l, :UV_RUN_DEFAULT);
-
-  println("Now quitting.");
-  uv/uv_loop_close(l);
-
-  {}
 }
 
 type task[t] = {
@@ -431,7 +385,7 @@ ns user-code {
 
     tprintln("handler: fake processing and serializing {req.raw.len()} request bytes");
     switch query-result {
-      :ok(_count) -> :complete("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nHello"),
+      :ok(_count) -> :complete("HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello from k1"),
       :err(_msg) -> :complete("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror"),
     }
   }
@@ -496,10 +450,10 @@ fn after-handle-request(req: *mut uv/uv_work_t, status: i32) {
 
 // [ ] dogfood bindgen strip prefix
 // [ ] dogfood bindgen strip suffix
-// [ ] dogfood struct access lsp entity
-// [ ] dogfood match fallback arm hidden
-// [ ] dogfood remove *mut distinction
-// [ ] dogfood swap data and len in k1 buffer struct
+// [ ] dogfood language struct access lsp entity
+// [ ] dogfood language match fallback arm hidden
+// [ ] dogfood language remove *mut distinction
+// [ ] dogfood language swap data and len in k1 buffer struct
 // [ ] take specialized generic function pointers
   require work.http-response is :some(response) else {
     // This is a bug; it shouldn't be possible to have not set this to some
@@ -667,8 +621,6 @@ fn on_new_connection(server: *mut uv/uv_stream_t, status: i32) {
 }
 
 fn main(): i32 { 
-  // example-http();
-  // example-fs();
 
   let l = uv/uv_default_loop();
   uv/init-work-queue(l);
@@ -700,9 +652,7 @@ fn main(): i32 {
   };
   eprintln("listening on {port}...");
 
-  return(uv/uv_run(l, :UV_RUN_DEFAULT))
-}
+  uv/uv_run(l, :UV_RUN_DEFAULT);
 
-// Assertion failed: (uv__has_active_reqs(req->loop)), function uv__queue_done, file threadpool.
-// c, line 370.
-// [1]    93720 abort      UV_THREADPOOL_SIZE=32 .k1-out/http
+  0
+}

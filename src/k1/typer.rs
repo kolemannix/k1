@@ -380,6 +380,7 @@ impl PatternCtorId {
     pub const LAMBDA_OBJECT: PatternCtorId = PatternCtorId::from_u32(10).unwrap();
     pub const BUFFER: PatternCtorId = PatternCtorId::from_u32(11).unwrap();
     pub const SPAN: PatternCtorId = PatternCtorId::from_u32(12).unwrap();
+    pub const OPAQUE: PatternCtorId = PatternCtorId::from_u32(13).unwrap();
 }
 
 /// Used for analyzing pattern matching
@@ -405,6 +406,7 @@ pub enum PatternCtor {
     ValueType,
     Buffer,
     Span,
+    Opaque,
     /// In the future, we should do real array patterns since length is statically known
     Array,
     Reference(PatternCtorId),
@@ -436,6 +438,7 @@ impl PatternCtor {
             PatternCtor::ValueType => "value type",
             PatternCtor::Buffer => "buffer",
             PatternCtor::Span => "span",
+            PatternCtor::Opaque => "opaque",
             PatternCtor::Array => "array",
             PatternCtor::Reference(_) => "reference",
             PatternCtor::Struct { .. } => "struct",
@@ -2782,18 +2785,19 @@ impl TypedProgram {
             panic!("Root namespace was taken, hmmmm");
         }
         let mut pattern_ctors = VPool::make_with_hint("pattern_ctors", 8192);
-        pattern_ctors.add(PatternCtor::BoolFalse);
-        pattern_ctors.add(PatternCtor::BoolTrue);
-        pattern_ctors.add(PatternCtor::Char);
-        pattern_ctors.add(PatternCtor::String);
-        pattern_ctors.add(PatternCtor::Int);
-        pattern_ctors.add(PatternCtor::Float);
-        pattern_ctors.add(PatternCtor::Pointer);
-        pattern_ctors.add(PatternCtor::TypeVariable);
-        pattern_ctors.add(PatternCtor::FunctionPointer);
-        pattern_ctors.add(PatternCtor::LambdaObject);
-        pattern_ctors.add(PatternCtor::Buffer);
-        pattern_ctors.add(PatternCtor::Span);
+        pattern_ctors.add_expected_id(PatternCtor::BoolFalse, PatternCtorId::B_FALSE);
+        pattern_ctors.add_expected_id(PatternCtor::BoolTrue, PatternCtorId::B_TRUE);
+        pattern_ctors.add_expected_id(PatternCtor::Char, PatternCtorId::CHAR);
+        pattern_ctors.add_expected_id(PatternCtor::String, PatternCtorId::STRING);
+        pattern_ctors.add_expected_id(PatternCtor::Int, PatternCtorId::INT);
+        pattern_ctors.add_expected_id(PatternCtor::Float, PatternCtorId::FLOAT);
+        pattern_ctors.add_expected_id(PatternCtor::Pointer, PatternCtorId::POINTER);
+        pattern_ctors.add_expected_id(PatternCtor::TypeVariable, PatternCtorId::TYPE_VARIABLE);
+        pattern_ctors.add_expected_id(PatternCtor::FunctionPointer, PatternCtorId::FUNCTION_POINTER);
+        pattern_ctors.add_expected_id(PatternCtor::LambdaObject, PatternCtorId::LAMBDA_OBJECT);
+        pattern_ctors.add_expected_id(PatternCtor::Buffer, PatternCtorId::BUFFER);
+        pattern_ctors.add_expected_id(PatternCtor::Span, PatternCtorId::SPAN);
+        pattern_ctors.add_expected_id(PatternCtor::Opaque, PatternCtorId::OPAQUE);
 
         let init_start = std::time::Instant::now();
         let clock = if cfg!(feature = "profile") {
@@ -17492,6 +17496,9 @@ impl TypedProgram {
             Type::Pointer => dst.push(alive(PatternCtorId::POINTER)), // Just an opaque atom
             Type::FunctionPointer(_) => {
                 dst.push(alive(PatternCtorId::FUNCTION_POINTER)) // FunctionPointer is an opaque atom pattern
+            }
+            Type::Opaque(_) => {
+                dst.push(alive(PatternCtorId::OPAQUE)) // Opaque is an opaque atom pattern
             }
             Type::Reference(refer) => {
                 // Follow the pointer
