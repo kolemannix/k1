@@ -1,3 +1,9 @@
+build:
+  k1 b .
+
+run:
+  k1 r .
+
 bindgen: bindgen-llhttp bindgen-net bindgen-libuv
 
 bindgen-llhttp:

@@ -462,20 +462,21 @@ pub fn write_executable(
         None
     };
 
+    if optimize {
+        build_cmd.arg("-O3");
+    } else if debug {
+        build_cmd.arg("-O0");
+    }
     if debug {
         build_cmd.arg("-g");
-        build_cmd.arg("-O0");
     } else {
-        if optimize {
-            build_cmd.arg("-O3");
+        // For stack traces
+        if target.target_os() == TargetOs::Linux {
+            build_cmd.arg("-g");
         } else {
-            if target.target_os() == TargetOs::Linux {
-                build_cmd.arg("-g");
-            } else {
-                build_cmd.arg("-gline-tables-only");
-            }
-            build_cmd.arg("-fno-omit-frame-pointer");
+            build_cmd.arg("-gline-tables-only");
         }
+        build_cmd.arg("-fno-omit-frame-pointer");
     };
     if sanitize {
         build_cmd.arg("-fsanitize=address,undefined");
