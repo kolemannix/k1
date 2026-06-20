@@ -1,0 +1,36 @@
+fn example-fs() {
+  // let l = alloc-mode:current.allocT[uv/uv_loop_t];
+  // uv/uv_loop_init(l);
+  let l = uv/uv_default_loop();
+
+  // let idler: uv/uv_idle_t = uninit;
+  // uv/uv_idle_init(l, &idler);
+  // uv/uv_idle_start(&idler, wait_for_a_while);
+
+  let open-req: uv/uv_fs_t = uninit;
+  let flags =  core/posix/O_RDWR;
+  let uv-file = uv/uv_fs_open(l, &open-req, ($string/c-lit("uv.k1")).rw[u8], flags, 0, ptr/null.as());
+  if uv-file < 0 {
+    println("open error: {uv-file}");
+    crash("");
+  };
+  let data-buffer = buffer/allocate[u8](1024);
+  let uvbuf = uv/uv_buf_t/from-buffer(data-buffer);
+  let read-req: uv/uv_fs_t = uninit;
+  read-req.set-data(&data-buffer);
+
+  uv/uv_fs_read(l, &read-req, uv-file, &uvbuf, 1, offset = 0, fn uv-fs. {
+    let data: *mut buffer[u8] = uv-fs.get-data();
+    let result: size = uv/uv_fs_get_result(uv-fs);
+    let s = string/wrapByteBuffer(data);
+    tprintln("done read: {result}. data={data.len}\n{s}");
+  });
+
+  println("idling");
+  uv/uv_run(l, :UV_RUN_DEFAULT);
+
+  println("Now quitting.");
+  uv/uv_loop_close(l);
+
+  {}
+}

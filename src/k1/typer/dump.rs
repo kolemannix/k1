@@ -949,6 +949,7 @@ impl TypedProgram {
             PatternCtor::ValueType => writ.write_str("static[...]"),
             PatternCtor::Buffer => writ.write_str("buffer"),
             PatternCtor::Span => writ.write_str("span"),
+            PatternCtor::Opaque => writ.write_str("opaque"),
             PatternCtor::Array => writ.write_str("<array>"),
             PatternCtor::Reference(inner) => {
                 writ.write_str("*")?;
