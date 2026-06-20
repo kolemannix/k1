@@ -84,6 +84,87 @@ ns uv {
       uv/uv_buf_init(buffer.data, buffer.len.as[u32])
     }
   }
+
+  fn init-work-queue(uv-loop: *mut uv/uv_loop_t) {
+    let heap = mem/alloc-mode:system-heap;
+    let queue: *mut uv-work-queue = heap.new({
+      uv-loop,
+      async-handle: heap.allocT[uv/uv_async_t],
+      mutex: heap.allocT[uv/uv_mutex_t],
+      submissions: list/empty[uv-work-submission](),
+    });
+
+    let mutex-rc = uv/uv_mutex_init(queue.mutex);
+    if mutex-rc != 0 {
+      crash("uv_mutex_init for work queue failed: {mutex-rc}");
+    };
+
+    let async-rc = uv/uv_async_init(uv-loop, queue.async-handle, drain-work-queue);
+    if async-rc != 0 {
+      uv/uv_mutex_destroy(queue.mutex);
+      heap.freeT(queue.async-handle);
+      heap.freeT(queue.mutex);
+      heap.freeT(queue);
+      crash("uv_async_init for work queue failed: {async-rc}");
+    };
+
+    queue.async-handle.set-data(queue);
+    &work-queue <- queue.as[ptr];
+  }
+
+  fn submit-work(req: *mut uv/uv_work_t, work-cb: uv/uv_work_cb, after-cb: uv/uv_after_work_cb) {
+    if work-queue.is-null() {
+      crash("uv work queue not initialized");
+    };
+    let queue = work-queue.as[*mut uv-work-queue];
+
+    uv/uv_mutex_lock(queue.mutex);
+    queue.submissions*.pushIn(context :system-heap)({ req, work-cb, after-cb });
+    uv/uv_mutex_unlock(queue.mutex);
+
+    let send-rc = uv/uv_async_send(queue.async-handle);
+    if send-rc < 0 crash("uv_async_send for work queue failed: {send-rc}");
+  }
+}
+
+type uv-work-submission = {
+  req: *mut uv/uv_work_t,
+  work-cb: uv/uv_work_cb,
+  after-cb: uv/uv_after_work_cb,
+}
+
+type uv-work-queue = {
+  uv-loop: *mut uv/uv_loop_t,
+  async-handle: *mut uv/uv_async_t,
+  mutex: *mut uv/uv_mutex_t,
+  submissions: list[uv-work-submission],
+}
+
+let mutable work-queue: ptr = ptr/null
+
+fn drain-work-queue(handle: *mut uv/uv_async_t) {
+  let queue = handle.get-data[uv-work-queue]();
+  loop {
+    uv/uv_mutex_lock(queue.mutex);
+    if queue.submissions.isEmpty() {
+      uv/uv_mutex_unlock(queue.mutex);
+      break();
+    };
+
+    for submission in queue.submissions {
+      let queue-rc = uv/uv_queue_work(
+        queue.uv-loop,
+        submission.req,
+        submission.work-cb,
+        submission.after-cb,
+      );
+      if queue-rc != 0 {
+        crash("uv_queue_work failed: {queue-rc}");
+      };
+    };
+    queue.submissions*.clear();
+    uv/uv_mutex_unlock(queue.mutex);
+  }
 }
 
 ability uv-request {
@@ -129,6 +210,10 @@ ability uv-handle {
 }
 
 impl uv-handle for uv/uv_tcp_t {
+  fn as-handle(self: *mut self): *mut uv/uv_handle_t { self.as() }
+}
+
+impl uv-handle for uv/uv_async_t {
   fn as-handle(self: *mut self): *mut uv/uv_handle_t { self.as() }
 }
 
@@ -181,18 +266,20 @@ type task-state[t] = {
   req: *mut uv/uv_work_t,
   mutex: *mut uv/uv_mutex_t,
   cond: *mut uv/uv_cond_t,
-  ready: bool,
+  handler-done: bool,
+  libuv-done: bool,
   output: ?t,
 }
 
 ns for task-state {
-  fn release[t](self: task-state[t]) {
+  fn release[t](self: *mut task-state[t]) {
     uv/uv_cond_destroy(self.cond);
     uv/uv_mutex_destroy(self.mutex);
     let heap = mem/alloc-mode:system-heap;
     heap.freeT(self.req);
     heap.freeT(self.mutex);
     heap.freeT(self.cond);
+    heap.freeT(self);
   }
 }
 
@@ -214,7 +301,8 @@ ns for task {
       req     : heap.allocT[uv/uv_work_t],
       mutex   : heap.allocT[uv/uv_mutex_t],
       cond    : heap.allocT[uv/uv_cond_t],
-      ready: false,
+      handler-done: false,
+      libuv-done: false,
       output: :none,
     });
     let work: *mut task-work[t, params] = heap.new({
@@ -236,8 +324,8 @@ ns for task {
 
     state.req.set-data(work);
 
-    let queue-rc = uv/uv_queue_work(
-      l, state.req,
+    uv/submit-work(
+      state.req,
       fn req. {
         let task-work = req.get-data[task-work[t, params]];
         let handler = task-work.handler;
@@ -246,17 +334,16 @@ ns for task {
       },
       fn (req, status) {
         let task-work = req.get-data[task-work[t, params]];
-        task-work.state.release();
         if status != 0 {
           tprintln("task work failed with status {status}");
         };
+        uv/uv_mutex_lock(task-work.state.mutex);
+        task-work.state.libuv-done* <- true;
+        uv/uv_cond_signal(task-work.state.cond);
+        uv/uv_mutex_unlock(task-work.state.mutex);
+        mem/alloc-mode:system-heap.freeT(task-work);
       }
     );
-
-    if queue-rc != 0 {
-      state.release();
-      crash("uv_queue_work failed: {queue-rc}");
-    };
 
     { state }
   }
@@ -264,33 +351,22 @@ ns for task {
 
   fn await[t](self: task[t]): t {
     let state = self.state;
-    if state.output is :some(t) {
-      return(t)
-    };
 
     uv/uv_mutex_lock(state.mutex);
-    while state.ready == false {
+    while state.handler-done == false or state.libuv-done == false {
       uv/uv_cond_wait(state.cond, state.mutex);
     };
     uv/uv_mutex_unlock(state.mutex);
     
-    state.output.!
-  }
-
-  fn release[t](self: task[t]) {
-    // TODO: Would we ever give each task its own arena?
-    //       If its a db query, it needs a place to put the results...
-    //       That place should live on after await() is called, obviously.
-    //       So probably it gets given an arena, owned by the caller.
-    //       So we pay for 1 mmap per spawn, kinda nice. And can put these
-    //       libuv handles in there too
-    self.state.release();
+    let output = state.output.!;
+    state.release();
+    output
   }
 
   fn complete[t](state: *mut task-state[t], output: t) {
     uv/uv_mutex_lock(state.mutex);
     state.output* <- :some(output);
-    state.ready* <- true;
+    state.handler-done* <- true;
     uv/uv_cond_signal(state.cond);
     uv/uv_mutex_unlock(state.mutex);
   }
@@ -322,41 +398,38 @@ ns for db-conn {
   }
 }
 
-fn close-client(handle: *mut uv/uv_handle_t) { 
-  let connection = handle.get-data[connection]();
-  connection.release();
-  tprintln("closing client")
-}
+use core/arena
 
-type http-handler-params = {
-  uv-loop: *mut uv/uv_loop_t,
-  client: *mut uv/uv_stream_t,
-  request: string,
-}
+type http-handler-deps = { }
 
 type response-stream = {}
 type http-response = either {
   complete(string),
   stream(response-stream),
-  err(string)
 }
 type http-handler-work = {
-  params: http-handler-params,
-  http-response: http-response,
+  uv-loop: *mut uv/uv_loop_t,
+  client: *mut uv/uv_stream_t,
+  request-arena: *mut arena,
+  request: string,
+
+  http-response: ?http-response,
 }
 
 type http-write-state = {
   client: *mut uv/uv_stream_t,
+  connection: *mut connection,
 }
 
-type http-request = { }
+type http-request = {
+  raw: string,
+}
 
 ns user-code {
-  fn handle(_req: http-request, db-conn): http-response {
-    let query-task: task[result[int, string]] = db-conn.run-query("select count(*) from fake_users where active = true");
-    let query-result: result[int, string] = query-task.await();
+  fn handle(req: http-request, db-conn): http-response {
+    let query-result: result[int, string] = db-conn.run-query("select count(*) from fake_users where active = true").await();
 
-    tprintln("handler: fake processing and serializing");
+    tprintln("handler: fake processing and serializing {req.raw.len()} request bytes");
     switch query-result {
       :ok(_count) -> :complete("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nHello"),
       :err(_msg) -> :complete("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror"),
@@ -366,14 +439,19 @@ ns user-code {
 
 fn handle-request(req: *mut uv/uv_work_t) {
   let work: *mut http-handler-work = req.get-data();
-  let params = work.params;
 
-  tprintln("handler: fake parsing request bytes: {params.request.len()}");
+  tprintln("handler: fake parsing request bytes: {work.request.len()}");
 
   // TODO: get conn from a thread-local
-  let db-conn: db-conn = { uv-loop: params.uv-loop };
+  let db-conn: db-conn = { uv-loop: work.uv-loop };
 
-  work.http-response* <- user-code/handle({}: http-request, db-conn);
+  mem/pushMode(:custom-arena(work.request-arena));
+  work.http-response* <- :some(
+    // nocommit: make this error use the smaller span
+    // user-code/handle({ raw: params.request }: http-request, db-conn)
+    user-code/handle({ raw: work.request }: http-request, db-conn)
+  );
+  let _mode = mem/popMode();
   {}
 }
 
@@ -390,22 +468,31 @@ fn tprintln[t: print](t) {
   println("[{thread-name}] {t}")
 }
 
+fn close-connection[h: uv-handle](h: *mut h) {
+  uv/uv_close(h.as-handle(), fn h. {
+    let connection = h.get-data[connection]();
+    tprintln("closing connection{connection.serial-no}");
+    connection.release();
+  })
+}
+
 // Called on the main event loop after the http handler is done
 // Because he's on the main thread, the after handler is the only one who is allowed to write to the stream
 // So he should expect to find 'marching orders' from the logic worker handler in the work's data
 // Usually, write a response to the tcp stream. But maybe something else, like keep streaming the response or something, idk
-fn after-fake-http-handler(req: *mut uv/uv_work_t, status: i32) {
-  tprintln("after-fake-http-handler");
+fn after-handle-request(req: *mut uv/uv_work_t, status: i32) {
+  tprintln("after-handle-request");
   let work: *mut http-handler-work = req.get-data();
 
   // If the work was cancelled using uv_cancel() status will be UV_ECANCELED.
   if status != 0 {
     tprintln("handler was cancelled");
-    uv/uv_close(work.params.client.as(), close-client);
+    close-connection(work.client);
     return();
   };
 
-  let client = work.params.client;
+  let client = work.client;
+  let connection = client.get-data[connection]();
 
 // [ ] dogfood bindgen strip prefix
 // [ ] dogfood bindgen strip suffix
@@ -414,10 +501,16 @@ fn after-fake-http-handler(req: *mut uv/uv_work_t, status: i32) {
 // [ ] dogfood remove *mut distinction
 // [ ] dogfood swap data and len in k1 buffer struct
 // [ ] take specialized generic function pointers
-  switch work.http-response {
+  require work.http-response is :some(response) else {
+    // This is a bug; it shouldn't be possible to have not set this to some
+    // since the harness is in control of this opt, so we close
+    close-connection(client);
+    return();
+  };
+  switch response {
     :complete(body) -> {
-      let write-req = mem/alloc-mode:system-heap.allocT[uv/uv_write_t]();
-      let write-state: *mut http-write-state = mem/alloc-mode:system-heap.new({ client });
+      let write-req = connection.request-arena*.push-uninit[uv/uv_write_t]();
+      let write-state: *mut http-write-state = connection.request-arena*.push({ client, connection });
       write-req.set-data(write-state);
 
       let buf: uv/uv_buf_t = uv/uv_buf_init(body.data-ptr().as[*mut u8], body.len().as[u32]);
@@ -425,26 +518,24 @@ fn after-fake-http-handler(req: *mut uv/uv_work_t, status: i32) {
       let write-rc = uv/uv_write(write-req, client, &buf, 1, fn (req, status) {
         let write-state: *mut http-write-state = req.get-data();
         let client = write-state.client;
+        let connection = write-state.connection;
         if status != 0 {
           tprintln("write failed: {status}");
+          close-connection(client);
+          return();
         } else {
           tprintln("wrote fake response");
         };
-        alloc-mode:system-heap.freeT(req);
-        uv/uv_close(client.as(), close-client);
+        connection.finish-request(client);
       });
 
       if write-rc != 0 {
         tprintln("uv_write failed: {write-rc}");
-        uv/uv_close(client.as(), close-client);
+        close-connection(client);
       };
     },
     :stream(stream) -> {
       tprintln("streaming unimplemented");
-    },
-    :err(msg) -> {
-      tprintln("handler failed: {msg}");
-      uv/uv_close(client.as(), close-client);
     },
   };
 }
@@ -452,37 +543,41 @@ fn after-fake-http-handler(req: *mut uv/uv_work_t, status: i32) {
 fn alloc-read-buffer(handle: *mut uv/uv_handle_t, suggested-size: usize, buf: *mut uv/uv_buf_t) {
   let connection = handle.get-data[connection]();
   tprintln("[c{connection.serial-no}] alloc-read-buffer, size {suggested-size}");
-  let byte-buffer = connection.arena*.push-buffer[u8](suggested-size.as[size]);
+  let byte-buffer = connection.request-arena*.push-buffer[u8](suggested-size.as[size]);
   buf <- uv/uv_buf_t/from-buffer(byte-buffer);
 }
 
-fn queue-fake-http-handler(stream: *mut uv/uv_stream_t, request: string) {
-  let l = uv/uv_handle_get_loop(stream.as());
+fn queue-fake-http-handler(client: *mut uv/uv_stream_t, request: string) {
+  let uv-loop = uv/uv_handle_get_loop(client.as-handle());
+  let connection = client.get-data[connection]();
   tprintln("read complete: {request.len()} bytes\n{request}\n-----------");
 
-  let work: *mut http-handler-work = mem/alloc-mode:system-heap.new({
-    params: { uv-loop: l, client: stream, request },
-    http-response: :err("handler not started"),
+  let work: *mut http-handler-work = connection.request-arena*.push({
+    uv-loop, 
+    client, 
+    request-arena: connection.request-arena*, 
+    request,
+    http-response: :none,
   });
-  let work-req = mem/alloc-mode:system-heap.allocT[uv/uv_work_t]();
+  let work-req = connection.request-arena*.push-uninit[uv/uv_work_t]();
   work-req.set-data(work);
-  let queue-rc = uv/uv_queue_work(l, work-req, handle-request, after-fake-http-handler);
+  let queue-rc = uv/uv_queue_work(uv-loop, work-req, handle-request, after-handle-request);
   if queue-rc != 0 {
     tprintln("uv_queue_work for request handler failed: {queue-rc}");
-    uv/uv_close(stream.as(), close-client);
+    close-connection(client);
   };
   {}
 }
 
-fn on_client_read(stream: *mut uv/uv_stream_t, nread: size, buf: *mut uv/uv_buf_t) {
+fn on_client_read(client: *mut uv/uv_stream_t, nread: size, buf: *mut uv/uv_buf_t) {
   tprintln("on_client_read {nread}");
   if nread > 0 {
     let request-bytes = span/from-raw[byte](buf.base.as[ptr], nread);
     let request = string/fromBytes(request-bytes);
     tprintln("read request bytes {nread}\n{request}\n-----------");
 
-    let _stop-rc = uv/uv_read_stop(stream);
-    queue-fake-http-handler(stream, request);
+    let _stop-rc = uv/uv_read_stop(client);
+    queue-fake-http-handler(client, request);
     return();
   };
 
@@ -493,28 +588,46 @@ fn on_client_read(stream: *mut uv/uv_stream_t, nread: size, buf: *mut uv/uv_buf_
     } else {
       tprintln("read error: {nread}");
     };
-    let _stop-rc = uv/uv_read_stop(stream);
-    uv/uv_close(stream.as(), close-client);
+    let _stop-rc = uv/uv_read_stop(client);
+    close-connection(client);
   };
   {}
 }
 
-use core/arena
-
-type connection = { arena: arena, serial-no: u64 }
+type connection = {
+  connection-arena: arena,
+  request-arena: arena,
+  client: *mut uv/uv_tcp_t,
+  serial-no: u64
+}
 let mutable tls conn-serial: u64 = 0
 
 ns for connection {
   fn make(): *mut connection {
-    alloc-mode:system-heap.new({
-      arena: core/arena/_virtual(usageHintMb = 1),
+    let connection: *mut connection = alloc-mode:system-heap.new({
+      connection-arena: core/arena/_virtual(usageHintMb = 1),
+      request-arena: core/arena/_virtual(usageHintMb = 1),
+      client: ptr/null.as[*mut uv/uv_tcp_t],
       serial-no: { &conn-serial <- conn-serial + 1; conn-serial }
-    })
+    });
+    connection.client* <- connection.connection-arena*.push-uninit[uv/uv_tcp_t]();
+    connection
   }
   fn release(self: *mut connection) {
-    self.arena*.release();
-    tprintln("conn{self.serial-no} arena close usedBytes: {self.arena.usedBytes()}");
+    tprintln("conn{self.serial-no} request arena close usedBytes: {self.request-arena.usedBytes()}");
+    self.request-arena*.release();
+    tprintln("conn{self.serial-no} connection arena close usedBytes: {self.connection-arena.usedBytes()}");
+    self.connection-arena*.release();
     alloc-mode:system-heap.freeT(self);
+  }
+  fn finish-request(self: *mut connection, client: *mut uv/uv_stream_t) {
+    tprintln("conn{self.serial-no} request arena reset usedBytes: {self.request-arena.usedBytes()}");
+    self.request-arena*.reset(false);
+    let read-rc = uv/uv_read_start(self.client, alloc-read-buffer, on_client_read);
+    if read-rc != 0 {
+      tprintln("read restart error: {read-rc}");
+      close-connection(client);
+    };
   }
 }
 
@@ -525,30 +638,31 @@ fn on_new_connection(server: *mut uv/uv_stream_t, status: i32) {
     return();
   };
 
-  let l = uv/uv_handle_get_loop(server.as());
+  let l = uv/uv_handle_get_loop(server.as-handle());
 
   let connection: *mut connection = connection/make();
 
-  let client: *mut uv/uv_tcp_t = connection.arena*.push-uninit[uv/uv_tcp_t]();
-  // uv/uv_tcp_nodelay(client, 1);
+  let client: *mut uv/uv_tcp_t = connection.client;
   let tcp-init-rc = uv/uv_tcp_init(l, client);
   client.set-data(connection);
   if tcp-init-rc != 0 {
     eprintln("tcp init failed: {string/wrap-c(uv/uv_strerror(tcp-init-rc).as[ptr])}");
   };
+  uv/uv_tcp_nodelay(client, 1);
 
-  let accept-rc = uv/uv_accept(server, client.as[*mut uv/uv_stream_t]);
-  tprintln("conn arena new usedBytes: {connection.arena.usedBytes()}");
+  let accept-rc = uv/uv_accept(server, client);
+  tprintln("connection arena new usedBytes: {connection.connection-arena.usedBytes()}");
   if accept-rc == 0 {
+    uv/uv_tcp_keepalive_ex(client, 1, idle = 60, intvl = 10, cnt = 3);
     tprintln("accepted connection; scheduling read");
-    let read-rc = uv/uv_read_start(client.as[*mut uv/uv_stream_t], alloc-read-buffer, on_client_read);
+    let read-rc = uv/uv_read_start(client, alloc-read-buffer, on_client_read);
     if read-rc != 0 {
       tprintln("read start error: {read-rc}");
-      uv/uv_close(client.as[*mut uv/uv_handle_t], close-client);
+      close-connection(client);
     };
   } else {
     tprintln("accept error: {accept-rc}");
-    uv/uv_close(client.as[*mut uv/uv_handle_t], close-client);
+    close-connection(client);
   };
 }
 
@@ -556,8 +670,8 @@ fn main(): i32 {
   // example-http();
   // example-fs();
 
-  println("hello");
   let l = uv/uv_default_loop();
+  uv/init-work-queue(l);
 
   let server: uv/uv_tcp_t = uninit;
   let tcp-init-rc = uv/uv_tcp_init(l, &server);
@@ -568,7 +682,8 @@ fn main(): i32 {
 
   let addr: uv/sockaddr_in = uninit;
   let a = ($string/c-lit("0.0.0.0")).rw[u8];
-  if uv/uv_ip4_addr(a, 3000, &addr) != 0 {
+  let port: i32 = 3000;
+  if uv/uv_ip4_addr(a, port, &addr) != 0 {
     eprintln("uv_ip4_addr failed");
     return(1);
   };
@@ -577,13 +692,17 @@ fn main(): i32 {
   if bind-rc != 0 {
     eprintln("bind failed: {string/wrap-c(uv/uv_strerror(bind-rc).as[ptr])}");
   };
-  let r: i32 = uv/uv_listen(&server.as[*mut uv/uv_stream_t], backlog = 128, on_new_connection);
+  let r: i32 = uv/uv_listen(&server, backlog = 128, on_new_connection);
   if (r != 0) {
       let listen-error = string/wrap-c(uv/uv_strerror(r).as[ptr]);
       eprintln("Listen error {listen-error}");
       return(1);
   };
-  eprintln("listening on 3000...");
+  eprintln("listening on {port}...");
 
   return(uv/uv_run(l, :UV_RUN_DEFAULT))
 }
+
+// Assertion failed: (uv__has_active_reqs(req->loop)), function uv__queue_done, file threadpool.
+// c, line 370.
+// [1]    93720 abort      UV_THREADPOOL_SIZE=32 .k1-out/http

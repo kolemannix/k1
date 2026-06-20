@@ -517,7 +517,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let debug_context = Cg::init_debug(ctx, &llvm_module, module, optimize, debug);
 
-        let machine = Cg::set_up_machine(&mut llvm_module, debug);
+        let machine = Cg::set_up_machine(&mut llvm_module, optimize);
         let target_data = machine.get_target_data();
 
         let ptr = ctx.ptr_type(AddressSpace::default());
@@ -3687,7 +3687,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.k1.program_name()
     }
 
-    fn set_up_machine(module: &mut LlvmModule, debug: bool) -> TargetMachine {
+    fn set_up_machine(module: &mut LlvmModule, optimize: bool) -> TargetMachine {
         // Target::initialize_aarch64(&InitializationConfig::default());
         Target::initialize_native(&InitializationConfig::default()).unwrap();
         // let triple_str = &format!("arm64-apple-macosx{}", MAC_SDK_VERSION);
@@ -3697,7 +3697,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let target = Target::from_triple(&triple).unwrap();
         let cpu = TargetMachine::get_host_cpu_name().to_string();
         let features = TargetMachine::get_host_cpu_features().to_string();
-        let opt_level = if debug { OptimizationLevel::None } else { OptimizationLevel::Aggressive };
+        let opt_level = if !optimize { OptimizationLevel::None } else { OptimizationLevel::Aggressive };
         let machine = target
             .create_target_machine(
                 &triple,

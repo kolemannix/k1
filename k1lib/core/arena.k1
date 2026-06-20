@@ -32,7 +32,7 @@ ns for arena {
   }
 
   fn default(): arena {
-    _virtual(usageHintMb = 10)
+    _virtual(usageHintMb = 1)
     //let header: *mut arena = base-ptr.as[*mut arena];
     //header.base-ptr* <- base-ptr.addBytes(types/size[arena]);
   }
