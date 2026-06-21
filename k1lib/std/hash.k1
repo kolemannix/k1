@@ -47,7 +47,7 @@ ns for HashMap {
   fn grow[V](self: *mut HashMap[V]) {
     let origSize = self.size;
     let oldEntries = self.entries;
-    let newCap = if oldEntries.cap() == 0 1 else oldEntries.cap() * 2;
+    let newCap = if oldEntries.cap() == 0 4 else oldEntries.cap() * 2;
 
     let newMap = _make[V](newCap);
     self <- newMap;
@@ -60,7 +60,7 @@ ns for HashMap {
     assertEquals(origSize, self.size)
   }
 
-  fn _computeIndex[V](self: *HashMap[V], key: string): size {
+  fn _computeIndex[V](self: HashMap[V], key: string): size {
     let hash = fnv1a_hash(key);
     let index = hash % self.entries.len.as[u64];
     index.as[size]
@@ -110,7 +110,7 @@ ns for HashMap {
     };
   }
 
-  fn get[V](self: *HashMap[V], key: string): ?V {
+  fn get[V](self: HashMap[V], key: string): ?V {
     let index = self._computeIndex(key);
     let slot = self.entries.get(index);
     require slot is :some({ key: existingKey, value: v, deleted }) else {

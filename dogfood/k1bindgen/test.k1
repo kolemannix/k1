@@ -1,15 +1,16 @@
 fn test(): i32 {
   let context alloc-mode: alloc-mode = :tmp;
   let core-args: span[string] = [
-    "-system",  "false",
-    "-n",       "test",
-    "-i",       "test/input.c",
-    "-opaque",  "opaq",
-    "-exclude",  "Color_Blue",
-    "-exclude",  "__",
-    "-strip-suffix", "_t", 
-    "-strip-suffix", "_u", 
+    "-system",       "false",
+    "-n",            "test",
+    "-i",            "test/input.c",
+    "-opaque",       "opaq",
+    "-exclude",      "Color_Blue",
+    "-exclude",      "__",
+    "-strip-suffix", "_t",      
+    "-strip-suffix", "_u",      
     "-strip-prefix", "cinput_", 
+    "-rename"      , "cinput_custom_name", "my-custom-name"
   ];
   let args = #if k1/os is :macos {
     core-args.concat([

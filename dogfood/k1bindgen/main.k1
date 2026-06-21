@@ -20,10 +20,10 @@ use clang/CXCursor
 use clang/CXString
 
 // TODO:
-// - Embed sizeof / alignof / offsetof assertions
-// - Extract fn param names by traversing the children, not just cheating by only looing at its 'cx-type' like we are now
-// - Detect varargs and reject, or support
-// - Support Unions
+// - [ ] Embed sizeof / alignof / offsetof assertions
+// - [ ] Extract fn param names by traversing the children, not just cheating by only looing at its 'cx-type' like we are now
+// - [ ] Detect varargs and emit error
+// - [x] Support Unions
 fn main(argc: c-int, argv: ptr): i32 { 
   #if k1/test
     test()
@@ -41,6 +41,7 @@ fn start(args: span[string]): string {
   let suffix-strips = list/empty[string];
   let prefix-strips = list/empty[string];
   let opaque-names = list/empty[string];
+  let renames = list/empty[{ from: string, to: string }];
   let file = "file.c";
   let skip-system-defns = true;
   let prelude-file: ?string = :none;
@@ -78,6 +79,13 @@ fn start(args: span[string]): string {
     };
     if it == "-prelude-file" {
       if args.get-opt(itIndex + 1) is :some(next) { prelude-file := :some(next) }
+    };
+    if it == "-rename" {
+      if args.get-opt(itIndex + 1) is :some(from) { 
+        if args.get-opt(itIndex + 2) is :some(to) {
+          renames.push({ from, to })
+        }
+      }
     }
 
   };
@@ -121,7 +129,7 @@ fn start(args: span[string]): string {
     exclude-substrings,
     include-names,
     opaque-names,
-    name-config: { suffix-strips, prefix-strips },
+    name-config: { suffix-strips, prefix-strips, renames },
   };
   clang/visitChildren(
     parent = cursor,
@@ -313,6 +321,7 @@ fn write-k1-type(context w: *mut StringBuilder, name-config)(k1-type, indent: si
 type name-config = {
   suffix-strips: list[string],
   prefix-strips: list[string],
+  renames: list[{ from: string, to: string }],
 }
 ns for name-config {
   fn strip-prefix(self: name-config, name: string): string {
@@ -334,6 +343,8 @@ ns for name-config {
     name
   }
   fn transformed-name(self: name-config, name: string): string {
+    if core/iter/find(self.renames, fn r. r.from == name) is :some({ to }) return(to);
+
     let name = self.strip-prefix(name);
     let name = self.strip-suffix(name);
     let name = mangle-name(name);
@@ -341,11 +352,15 @@ ns for name-config {
   }
 }
 type BindgenState = {
+  // state / output
   defns: list[k1-defn],
+
+  // Inclusion config
   skip-system-defns: bool,
   exclude-substrings: list[string],
   include-names: list[string],
   opaque-names: list[string],
+
   name-config: name-config
 }
 
