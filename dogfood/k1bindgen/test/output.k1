@@ -59,6 +59,8 @@ type Size = either(u32) {
 
 type loop_c = {}
 
+type my-custom-name = {}
+
 type alias opaq = opaque[104, 4]
 
 extern("test", "cinput_main")

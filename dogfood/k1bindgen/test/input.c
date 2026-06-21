@@ -59,6 +59,8 @@ struct my__internal {};
 // should get mangled; loop_c
 struct cinput_loop {};
 
+struct cinput_custom_name {};
+
 struct opaq {
   char b[100];
   int x;

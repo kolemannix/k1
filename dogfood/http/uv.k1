@@ -178,7 +178,7 @@ type req_type = either(u32) {
 }
 
 
-type alias loop = opaque[1072, 8]
+type alias loop_c = opaque[1072, 8]
 
 type alias handle = opaque[96, 8]
 
@@ -286,45 +286,45 @@ fn replace_allocator(
 ): i32
 
 extern("uv", "uv_default_loop")
-fn default_loop(): *mut loop
+fn default_loop(): *mut loop_c
 
 extern("uv", "uv_loop_init")
 fn loop_init(
-  p0: *mut loop,
+  p0: *mut loop_c,
 ): i32
 
 extern("uv", "uv_loop_close")
 fn loop_close(
-  p0: *mut loop,
+  p0: *mut loop_c,
 ): i32
 
 extern("uv", "uv_loop_new")
-fn loop_new(): *mut loop
+fn loop_new(): *mut loop_c
 
 extern("uv", "uv_loop_delete")
 fn loop_delete(
-  p0: *mut loop,
+  p0: *mut loop_c,
 ): {}
 
 extern("uv", "uv_loop_alive")
 fn loop_alive(
-  p0: *mut loop,
+  p0: *mut loop_c,
 ): i32
 
 extern("uv", "uv_loop_configure")
 fn loop_configure(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: loop_option,
 ): i32
 
 extern("uv", "uv_loop_fork")
 fn loop_fork(
-  p0: *mut loop,
+  p0: *mut loop_c,
 ): i32
 
 extern("uv", "uv_run")
 fn run(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: run_mode,
 ): i32
 
@@ -345,22 +345,22 @@ fn has_ref(
 
 extern("uv", "uv_update_time")
 fn update_time(
-  p0: *mut loop,
+  p0: *mut loop_c,
 ): {}
 
 extern("uv", "uv_now")
 fn now(
-  p0: *mut loop,
+  p0: *mut loop_c,
 ): u64
 
 extern("uv", "uv_backend_fd")
 fn backend_fd(
-  p0: *mut loop,
+  p0: *mut loop_c,
 ): i32
 
 extern("uv", "uv_backend_timeout")
 fn backend_timeout(
-  p0: *mut loop,
+  p0: *mut loop_c,
 ): i32
 
 type alias alloc_cb = *fn(
@@ -544,7 +544,7 @@ fn handle_get_data(
 extern("uv", "uv_handle_get_loop")
 fn handle_get_loop(
   p0: *mut handle,
-): *mut loop
+): *mut loop_c
 
 extern("uv", "uv_req_get_data")
 fn req_get_data(
@@ -568,20 +568,20 @@ fn is_active(
 
 extern("uv", "uv_walk")
 fn walk(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: walk_cb,
   p2: ptr,
 ): {}
 
 extern("uv", "uv_print_all_handles")
 fn print_all_handles(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut FILE,
 ): {}
 
 extern("uv", "uv_print_active_handles")
 fn print_active_handles(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut FILE,
 ): {}
 
@@ -674,13 +674,13 @@ fn is_closing(
 
 extern("uv", "uv_tcp_init")
 fn tcp_init(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut tcp,
 ): i32
 
 extern("uv", "uv_tcp_init_ex")
 fn tcp_init_ex(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut tcp,
   p2: u32,
 ): i32
@@ -774,13 +774,13 @@ type alias udp_recv_cb = *fn(
 
 extern("uv", "uv_udp_init")
 fn udp_init(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut udp,
 ): i32
 
 extern("uv", "uv_udp_init_ex")
 fn udp_init_ex(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut udp,
   p2: u32,
 ): i32
@@ -846,7 +846,7 @@ type tty_vtermstate = either(u32) {
 
 extern("uv", "uv_tty_init")
 fn tty_init(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut tty,
   p2: file,
   p3: i32,
@@ -869,7 +869,7 @@ fn guess_handle(
 
 extern("uv", "uv_pipe_init")
 fn pipe_init(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut pipe,
   p2: i32,
 ): i32
@@ -957,39 +957,39 @@ type poll_event = either(u32) {
 
 extern("uv", "uv_poll_init")
 fn poll_init(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut poll,
   p2: i32,
 ): i32
 
 extern("uv", "uv_prepare_init")
 fn prepare_init(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut prepare,
 ): i32
 
 extern("uv", "uv_check_init")
 fn check_init(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut check,
 ): i32
 
 extern("uv", "uv_idle_init")
 fn idle_init(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut idle,
 ): i32
 
 extern("uv", "uv_async_init")
 fn async_init(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut async,
   p2: async_cb,
 ): i32
 
 extern("uv", "uv_timer_init")
 fn timer_init(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut timer,
 ): i32
 
@@ -1010,7 +1010,7 @@ fn timer_get_due_in(
 
 extern("uv", "uv_getaddrinfo")
 fn getaddrinfo(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut getaddrinfo,
   p2: getaddrinfo_cb,
   p3: *mut u8,
@@ -1025,7 +1025,7 @@ fn freeaddrinfo(
 
 extern("uv", "uv_getnameinfo")
 fn getnameinfo(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut getnameinfo,
   p2: getnameinfo_cb,
   p3: *mut sockaddr,
@@ -1064,7 +1064,7 @@ fn process_get_pid(
 
 extern("uv", "uv_queue_work")
 fn queue_work(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut work,
   p2: work_cb,
   p3: after_work_cb,
@@ -1259,13 +1259,13 @@ fn os_uname(
 
 extern("uv", "uv_metrics_info")
 fn metrics_info(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut metrics,
 ): i32
 
 extern("uv", "uv_metrics_idle_time")
 fn metrics_idle_time(
-  p0: *mut loop,
+  p0: *mut loop_c,
 ): u64
 
 type fs_type = either(i32) {
@@ -1337,7 +1337,7 @@ fn fs_req_cleanup(
 
 extern("uv", "uv_fs_close")
 fn fs_close(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: file,
   p3: fs_cb,
@@ -1345,7 +1345,7 @@ fn fs_close(
 
 extern("uv", "uv_fs_open")
 fn fs_open(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: i32,
@@ -1355,7 +1355,7 @@ fn fs_open(
 
 extern("uv", "uv_fs_read")
 fn fs_read(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: file,
   p3: *mut buf,
@@ -1366,7 +1366,7 @@ fn fs_read(
 
 extern("uv", "uv_fs_unlink")
 fn fs_unlink(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: fs_cb,
@@ -1374,7 +1374,7 @@ fn fs_unlink(
 
 extern("uv", "uv_fs_write")
 fn fs_write(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: file,
   p3: *mut buf,
@@ -1385,7 +1385,7 @@ fn fs_write(
 
 extern("uv", "uv_fs_copyfile")
 fn fs_copyfile(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: *mut u8,
@@ -1395,7 +1395,7 @@ fn fs_copyfile(
 
 extern("uv", "uv_fs_mkdir")
 fn fs_mkdir(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: i32,
@@ -1404,7 +1404,7 @@ fn fs_mkdir(
 
 extern("uv", "uv_fs_mkdtemp")
 fn fs_mkdtemp(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: fs_cb,
@@ -1412,7 +1412,7 @@ fn fs_mkdtemp(
 
 extern("uv", "uv_fs_mkstemp")
 fn fs_mkstemp(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: fs_cb,
@@ -1420,7 +1420,7 @@ fn fs_mkstemp(
 
 extern("uv", "uv_fs_rmdir")
 fn fs_rmdir(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: fs_cb,
@@ -1428,7 +1428,7 @@ fn fs_rmdir(
 
 extern("uv", "uv_fs_opendir")
 fn fs_opendir(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: fs_cb,
@@ -1436,7 +1436,7 @@ fn fs_opendir(
 
 extern("uv", "uv_fs_readdir")
 fn fs_readdir(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut dir,
   p3: fs_cb,
@@ -1444,7 +1444,7 @@ fn fs_readdir(
 
 extern("uv", "uv_fs_closedir")
 fn fs_closedir(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut dir,
   p3: fs_cb,
@@ -1452,7 +1452,7 @@ fn fs_closedir(
 
 extern("uv", "uv_fs_fstat")
 fn fs_fstat(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: file,
   p3: fs_cb,
@@ -1460,7 +1460,7 @@ fn fs_fstat(
 
 extern("uv", "uv_fs_rename")
 fn fs_rename(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: *mut u8,
@@ -1469,7 +1469,7 @@ fn fs_rename(
 
 extern("uv", "uv_fs_fsync")
 fn fs_fsync(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: file,
   p3: fs_cb,
@@ -1477,7 +1477,7 @@ fn fs_fsync(
 
 extern("uv", "uv_fs_fdatasync")
 fn fs_fdatasync(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: file,
   p3: fs_cb,
@@ -1485,7 +1485,7 @@ fn fs_fdatasync(
 
 extern("uv", "uv_fs_ftruncate")
 fn fs_ftruncate(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: file,
   p3: i64,
@@ -1494,7 +1494,7 @@ fn fs_ftruncate(
 
 extern("uv", "uv_fs_access")
 fn fs_access(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: i32,
@@ -1503,7 +1503,7 @@ fn fs_access(
 
 extern("uv", "uv_fs_chmod")
 fn fs_chmod(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: i32,
@@ -1512,7 +1512,7 @@ fn fs_chmod(
 
 extern("uv", "uv_fs_utime")
 fn fs_utime(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: f64,
@@ -1522,7 +1522,7 @@ fn fs_utime(
 
 extern("uv", "uv_fs_futime")
 fn fs_futime(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: file,
   p3: f64,
@@ -1532,7 +1532,7 @@ fn fs_futime(
 
 extern("uv", "uv_fs_lutime")
 fn fs_lutime(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: f64,
@@ -1542,7 +1542,7 @@ fn fs_lutime(
 
 extern("uv", "uv_fs_lstat")
 fn fs_lstat(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: fs_cb,
@@ -1550,7 +1550,7 @@ fn fs_lstat(
 
 extern("uv", "uv_fs_link")
 fn fs_link(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: *mut u8,
@@ -1559,7 +1559,7 @@ fn fs_link(
 
 extern("uv", "uv_fs_readlink")
 fn fs_readlink(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: fs_cb,
@@ -1567,7 +1567,7 @@ fn fs_readlink(
 
 extern("uv", "uv_fs_realpath")
 fn fs_realpath(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: fs_cb,
@@ -1575,7 +1575,7 @@ fn fs_realpath(
 
 extern("uv", "uv_fs_fchmod")
 fn fs_fchmod(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: file,
   p3: i32,
@@ -1584,7 +1584,7 @@ fn fs_fchmod(
 
 extern("uv", "uv_fs_chown")
 fn fs_chown(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: uid,
@@ -1594,7 +1594,7 @@ fn fs_chown(
 
 extern("uv", "uv_fs_fchown")
 fn fs_fchown(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: file,
   p3: uid,
@@ -1604,7 +1604,7 @@ fn fs_fchown(
 
 extern("uv", "uv_fs_lchown")
 fn fs_lchown(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs,
   p2: *mut u8,
   p3: uid,
@@ -1619,7 +1619,7 @@ type fs_event = either(u32) {
 
 extern("uv", "uv_fs_poll_init")
 fn fs_poll_init(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs_poll,
 ): i32
 
@@ -1643,7 +1643,7 @@ type fs_event_flags = either(u32) {
 
 extern("uv", "uv_fs_event_init")
 fn fs_event_init(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut fs_event,
 ): i32
 
@@ -1706,7 +1706,7 @@ fn inet_pton(
 
 extern("uv", "uv_random")
 fn random(
-  p0: *mut loop,
+  p0: *mut loop_c,
   p1: *mut random,
   p2: ptr,
   p3: usize,
@@ -1997,7 +1997,7 @@ type alias any_req = opaque[1320, 8]
 
 extern("uv", "uv_loop_get_data")
 fn loop_get_data(
-  p0: *mut loop,
+  p0: *mut loop_c,
 ): ptr
 
 extern("uv", "uv_utf16_length_as_wtf8")

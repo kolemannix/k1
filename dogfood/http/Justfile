@@ -39,10 +39,10 @@ bindgen-libuv:
     -clangarg -isysroot \
     -clangarg "$(xcrun --sdk macosx --show-sdk-path)" \
     -prelude-file uv_bindgen_prelude.k1.txt \
+    -rename uv_loop_t uv-loop \
     -exclude _s \
     -strip-prefix uv_ \
     -strip-suffix _t \
-    -opaque uv__dirent_t \
     -opaque uv_uid_t \
     -opaque uv_gid_t \
     -opaque uv_pid_t \
