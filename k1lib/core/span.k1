@@ -72,6 +72,20 @@ ns for span {
 
   fn take[T](self: span[T], count: size): span[T] { self.slice(0,     count) }
   fn drop[T](self: span[T], count: size): span[T] { self.slice(count, self.len()) }
+  fn take-right[t](self: span[t], count: size): span[t] {
+    self.slice(self.len() - count, self.len())
+  }
+  fn drop-right[t](self: span[t], count: size): span[t] {
+    self.slice(0, self.len() - count)
+  }
+
+  fn starts-with[t: equals](self: span[t], other: span[t]): bool {
+    self.buffer.starts-with(other.buffer)
+  }
+  
+  fn ends-with[t: equals](self: span[t], other: span[t]): bool {
+    self.buffer.ends-with(other.buffer)
+  }
 
   fn chunks[T](self: span[T], size: size): span[span[T]] {
     let bufferChunks = self.buffer.chunks(size);

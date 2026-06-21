@@ -5,14 +5,15 @@ type i2 = {
   y: i32,
 }
 
+type alias i2 = i2
 
-type Union1_u = union {
+type Union1 = union {
   x: i32,
   f: f32,
   l: i64,
 }
 
-type alias Union1_t = Union1_u
+type alias Union1 = Union1
 
 type foo = {
   _char: u8,
@@ -30,8 +31,8 @@ type foo = {
     x: i32,
     y: i32,
   },
-  _union_1: Union1_t,
-  _union_union1: Union1_u,
+  _union_1: Union1,
+  _union_union1: Union1,
   _union_anon: union {
     x: i32,
     y: f32,
@@ -56,8 +57,10 @@ type Size = either(u32) {
   Size_Large = 2,
 }
 
+type loop_c = {}
+
 type alias opaq = opaque[104, 4]
 
-extern("test", "main")
+extern("test", "cinput_main")
 fn main(): i32
 

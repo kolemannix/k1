@@ -3,16 +3,16 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-typedef struct i2 {
+typedef struct cinput_i2 {
   int x; int y;
 } i2;
 
-union Union1_u {
+union cinput_Union1_u {
   int x;
   float f;
   long l;
 };
-typedef union Union1_u Union1_t;
+typedef union cinput_Union1_u cinput_Union1_t;
 
 struct foo {
   char _char;
@@ -26,10 +26,10 @@ struct foo {
   long long _longlong;
   long _long;
   i2 _i2;
-  struct i2 _struct_i2;
+  struct cinput_i2 _struct_i2;
   struct { int x; int y; } _struct_anon;
-  Union1_t _union_1;
-  union Union1_u _union_union1;
+  cinput_Union1_t _union_1;
+  union cinput_Union1_u _union_union1;
   union {
     int x; float y; char c[4];
   } _union_anon;
@@ -43,6 +43,7 @@ void myFunction(char incompleteArray[]) {
 enum Color {
   Color_Red = 577,
   Color_Green = -10,
+  // Color_Blue should get excluded due to explicit exclusion
   Color_Blue = 42
 };
 
@@ -52,11 +53,18 @@ enum Size {
   Size_Large
 };
 
+// should get excluded due to dunder
+struct my__internal {};
+
+// should get mangled; loop_c
+struct cinput_loop {};
+
 struct opaq {
   char b[100];
   int x;
 };
 
-int main(void) {
+// should have correct link name
+int cinput_main(void) {
   return 0;
 }

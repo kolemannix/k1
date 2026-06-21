@@ -6,6 +6,10 @@ fn test(): i32 {
     "-i",       "test/input.c",
     "-opaque",  "opaq",
     "-exclude",  "Color_Blue",
+    "-exclude",  "__",
+    "-strip-suffix", "_t", 
+    "-strip-suffix", "_u", 
+    "-strip-prefix", "cinput_", 
   ];
   let args = #if k1/os is :macos {
     core-args.concat([
