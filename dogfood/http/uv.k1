@@ -8,54 +8,48 @@ use net/sockaddr_in6
 // not really net but we'll get there later
 use net/FILE
 // end contents of uv_bindgen_prelude.k1.txt
-type uv_buf_t = {
+type buf = {
   base: *mut u8,
   len: usize,
 }
 
 
-type alias uv_file = i32
+type alias file = i32
 
-type alias uv_os_sock_t = i32
+type alias os_fd = i32
 
-type alias uv_os_fd_t = i32
+type alias pid = opaque[4, 4]
 
-type alias uv_pid_t = opaque[4, 4]
+type alias once = opaque[16, 8]
 
-type alias uv_once_t = opaque[16, 8]
+type alias thread = opaque[8, 8]
 
-type alias uv_thread_t = opaque[8, 8]
+type alias mutex = opaque[64, 8]
 
-type alias uv_mutex_t = opaque[64, 8]
+type alias rwlock = opaque[200, 8]
 
-type alias uv_rwlock_t = opaque[200, 8]
+type alias cond = opaque[48, 8]
 
-type alias uv_sem_t = opaque[4, 4]
-
-type alias uv_cond_t = opaque[48, 8]
-
-type alias uv_key_t = opaque[8, 8]
+type alias key = opaque[8, 8]
 
 type alias _uv_barrier = opaque[128, 8]
 
-type uv_barrier_t = {
+type barrier = {
   b: *mut _uv_barrier,
 }
 
 
-type alias uv_gid_t = opaque[4, 4]
+type alias gid = opaque[4, 4]
 
-type alias uv_uid_t = opaque[4, 4]
+type alias uid = opaque[4, 4]
 
-type alias uv__dirent_t = opaque[1048, 8]
-
-type uv_lib_t = {
+type lib = {
   handle: ptr,
   errmsg: *mut u8,
 }
 
 
-type uv_errno_t = either(i32) {
+type errno = either(i32) {
   UV_E2BIG = -7,
   UV_EACCES = -13,
   UV_EADDRINUSE = -48,
@@ -145,7 +139,7 @@ type uv_errno_t = either(i32) {
 }
 
 
-type uv_handle_type = either(u32) {
+type handle_type = either(u32) {
   UV_UNKNOWN_HANDLE = 0,
   UV_ASYNC = 1,
   UV_CHECK = 2,
@@ -168,7 +162,7 @@ type uv_handle_type = either(u32) {
 }
 
 
-type uv_req_type = either(u32) {
+type req_type = either(u32) {
   UV_UNKNOWN_REQ = 0,
   UV_REQ = 1,
   UV_CONNECT = 2,
@@ -184,88 +178,78 @@ type uv_req_type = either(u32) {
 }
 
 
-type alias uv_loop_t = opaque[1072, 8]
+type alias loop = opaque[1072, 8]
 
-type alias uv_handle_t = opaque[96, 8]
+type alias handle = opaque[96, 8]
 
-type alias uv_dir_t = opaque[56, 8]
+type alias dir = opaque[56, 8]
 
-type alias uv_stream_t = opaque[264, 8]
+type alias tcp = opaque[264, 8]
 
-type alias uv_tcp_t = opaque[264, 8]
+type alias udp = opaque[224, 8]
 
-type alias uv_udp_t = opaque[224, 8]
+type alias pipe = opaque[280, 8]
 
-type alias uv_pipe_t = opaque[280, 8]
+type alias tty = opaque[344, 8]
 
-type alias uv_tty_t = opaque[344, 8]
+type alias poll = opaque[168, 8]
 
-type alias uv_poll_t = opaque[168, 8]
+type alias timer = opaque[152, 8]
 
-type alias uv_timer_t = opaque[152, 8]
+type alias prepare = opaque[120, 8]
 
-type alias uv_prepare_t = opaque[120, 8]
+type alias check = opaque[120, 8]
 
-type alias uv_check_t = opaque[120, 8]
+type alias idle = opaque[120, 8]
 
-type alias uv_idle_t = opaque[120, 8]
+type alias async = opaque[128, 8]
 
-type alias uv_async_t = opaque[128, 8]
+type alias process = opaque[136, 8]
 
-type alias uv_process_t = opaque[136, 8]
+type alias fs_event = opaque[304, 8]
 
-type alias uv_fs_event_t = opaque[304, 8]
+type alias fs_poll = opaque[104, 8]
 
-type alias uv_fs_poll_t = opaque[104, 8]
+type alias req = opaque[64, 8]
 
-type alias uv_signal_t = opaque[152, 8]
+type alias getaddrinfo = opaque[160, 8]
 
-type alias uv_req_t = opaque[64, 8]
+type alias getnameinfo = opaque[1320, 8]
 
-type alias uv_getaddrinfo_t = opaque[160, 8]
+type alias write = opaque[192, 8]
 
-type alias uv_getnameinfo_t = opaque[1320, 8]
+type alias connect = opaque[96, 8]
 
-type alias uv_shutdown_t = opaque[80, 8]
+type alias fs = opaque[440, 8]
 
-type alias uv_write_t = opaque[192, 8]
+type alias work = opaque[128, 8]
 
-type alias uv_connect_t = opaque[96, 8]
+type alias random = opaque[144, 8]
 
-type alias uv_udp_send_t = opaque[320, 8]
+type alias env_item = env_item_s
 
-type alias uv_fs_t = opaque[440, 8]
+type alias cpu_info = cpu_info_s
 
-type alias uv_work_t = opaque[128, 8]
+type alias interface_address = interface_address_s
 
-type alias uv_random_t = opaque[144, 8]
+type alias dirent = dirent_s
 
-type alias uv_env_item_t = uv_env_item_s
+type alias passwd = passwd_s
 
-type alias uv_cpu_info_t = uv_cpu_info_s
+type alias group = group_s
 
-type alias uv_interface_address_t = uv_interface_address_s
+type alias utsname = utsname_s
 
-type alias uv_dirent_t = uv_dirent_s
+type alias metrics = metrics_s
 
-type alias uv_passwd_t = uv_passwd_s
-
-type alias uv_group_t = uv_group_s
-
-type alias uv_utsname_t = uv_utsname_s
-
-type alias uv_statfs_t = uv_statfs_s
-
-type alias uv_metrics_t = uv_metrics_s
-
-type uv_loop_option = either(u32) {
+type loop_option = either(u32) {
   UV_LOOP_BLOCK_SIGNAL = 0,
   UV_METRICS_IDLE_TIME = 1,
   UV_LOOP_USE_IO_URING_SQPOLL = 2,
 }
 
 
-type uv_run_mode = either(u32) {
+type run_mode = either(u32) {
   UV_RUN_DEFAULT = 0,
   UV_RUN_ONCE = 1,
   UV_RUN_NOWAIT = 2,
@@ -273,657 +257,503 @@ type uv_run_mode = either(u32) {
 
 
 extern("uv", "uv_version")
-fn uv_version(): u32
+fn version(): u32
 
-extern("uv", "uv_version_string")
-fn uv_version_string(): *mut u8
-
-type alias uv_malloc_func = *fn(
+type alias malloc_func = *fn(
   usize
 ) -> ptr
 
-type alias uv_realloc_func = *fn(
+type alias realloc_func = *fn(
   ptr,
   usize
 ) -> ptr
 
-type alias uv_calloc_func = *fn(
+type alias calloc_func = *fn(
   usize,
   usize
 ) -> ptr
 
-type alias uv_free_func = *fn(
+type alias free_func = *fn(
   ptr
 ) -> {}
 
-extern("uv", "uv_library_shutdown")
-fn uv_library_shutdown(): {}
-
 extern("uv", "uv_replace_allocator")
-fn uv_replace_allocator(
-  p0: uv_malloc_func,
-  p1: uv_realloc_func,
-  p2: uv_calloc_func,
-  p3: uv_free_func,
+fn replace_allocator(
+  p0: malloc_func,
+  p1: realloc_func,
+  p2: calloc_func,
+  p3: free_func,
 ): i32
 
 extern("uv", "uv_default_loop")
-fn uv_default_loop(): *mut uv_loop_t
+fn default_loop(): *mut loop
 
 extern("uv", "uv_loop_init")
-fn uv_loop_init(
-  p0: *mut uv_loop_t,
+fn loop_init(
+  p0: *mut loop,
 ): i32
 
 extern("uv", "uv_loop_close")
-fn uv_loop_close(
-  p0: *mut uv_loop_t,
+fn loop_close(
+  p0: *mut loop,
 ): i32
 
 extern("uv", "uv_loop_new")
-fn uv_loop_new(): *mut uv_loop_t
+fn loop_new(): *mut loop
 
 extern("uv", "uv_loop_delete")
-fn uv_loop_delete(
-  p0: *mut uv_loop_t,
+fn loop_delete(
+  p0: *mut loop,
 ): {}
 
-extern("uv", "uv_loop_size")
-fn uv_loop_size(): usize
-
 extern("uv", "uv_loop_alive")
-fn uv_loop_alive(
-  p0: *mut uv_loop_t,
+fn loop_alive(
+  p0: *mut loop,
 ): i32
 
 extern("uv", "uv_loop_configure")
-fn uv_loop_configure(
-  p0: *mut uv_loop_t,
-  p1: uv_loop_option,
+fn loop_configure(
+  p0: *mut loop,
+  p1: loop_option,
 ): i32
 
 extern("uv", "uv_loop_fork")
-fn uv_loop_fork(
-  p0: *mut uv_loop_t,
+fn loop_fork(
+  p0: *mut loop,
 ): i32
 
 extern("uv", "uv_run")
-fn uv_run(
-  p0: *mut uv_loop_t,
-  p1: uv_run_mode,
+fn run(
+  p0: *mut loop,
+  p1: run_mode,
 ): i32
 
-extern("uv", "uv_stop")
-fn uv_stop(
-  p0: *mut uv_loop_t,
-): {}
-
 extern("uv", "uv_ref")
-fn uv_ref(
-  p0: *mut uv_handle_t,
+fn ref(
+  p0: *mut handle,
 ): {}
 
 extern("uv", "uv_unref")
-fn uv_unref(
-  p0: *mut uv_handle_t,
+fn unref(
+  p0: *mut handle,
 ): {}
 
 extern("uv", "uv_has_ref")
-fn uv_has_ref(
-  p0: *mut uv_handle_t,
+fn has_ref(
+  p0: *mut handle,
 ): i32
 
 extern("uv", "uv_update_time")
-fn uv_update_time(
-  p0: *mut uv_loop_t,
+fn update_time(
+  p0: *mut loop,
 ): {}
 
 extern("uv", "uv_now")
-fn uv_now(
-  p0: *mut uv_loop_t,
+fn now(
+  p0: *mut loop,
 ): u64
 
 extern("uv", "uv_backend_fd")
-fn uv_backend_fd(
-  p0: *mut uv_loop_t,
+fn backend_fd(
+  p0: *mut loop,
 ): i32
 
 extern("uv", "uv_backend_timeout")
-fn uv_backend_timeout(
-  p0: *mut uv_loop_t,
+fn backend_timeout(
+  p0: *mut loop,
 ): i32
 
-type alias uv_alloc_cb = *fn(
-  *mut uv_handle_t,
+type alias alloc_cb = *fn(
+  *mut handle,
   usize,
-  *mut uv_buf_t
+  *mut buf
 ) -> {}
 
-type alias uv_read_cb = *fn(
-  *mut uv_stream_t,
+type alias read_cb = *fn(
+  *mut stream,
   size,
-  *mut uv_buf_t
+  *mut buf
 ) -> {}
 
-type alias uv_write_cb = *fn(
-  *mut uv_write_t,
+type alias write_cb = *fn(
+  *mut write,
   i32
 ) -> {}
 
-type alias uv_connect_cb = *fn(
-  *mut uv_connect_t,
+type alias connect_cb = *fn(
+  *mut connect,
   i32
 ) -> {}
 
-type alias uv_shutdown_cb = *fn(
-  *mut uv_shutdown_t,
+type alias connection_cb = *fn(
+  *mut stream,
   i32
 ) -> {}
 
-type alias uv_connection_cb = *fn(
-  *mut uv_stream_t,
-  i32
+type alias close_cb = *fn(
+  *mut handle
 ) -> {}
 
-type alias uv_close_cb = *fn(
-  *mut uv_handle_t
-) -> {}
-
-type alias uv_poll_cb = *fn(
-  *mut uv_poll_t,
+type alias poll_cb = *fn(
+  *mut poll,
   i32,
   i32
 ) -> {}
 
-type alias uv_timer_cb = *fn(
-  *mut uv_timer_t
+type alias timer_cb = *fn(
+  *mut timer
 ) -> {}
 
-type alias uv_async_cb = *fn(
-  *mut uv_async_t
+type alias async_cb = *fn(
+  *mut async
 ) -> {}
 
-type alias uv_prepare_cb = *fn(
-  *mut uv_prepare_t
+type alias prepare_cb = *fn(
+  *mut prepare
 ) -> {}
 
-type alias uv_check_cb = *fn(
-  *mut uv_check_t
+type alias check_cb = *fn(
+  *mut check
 ) -> {}
 
-type alias uv_idle_cb = *fn(
-  *mut uv_idle_t
+type alias idle_cb = *fn(
+  *mut idle
 ) -> {}
 
-type alias uv_exit_cb = *fn(
-  *mut uv_process_t,
+type alias exit_cb = *fn(
+  *mut process,
   i64,
   i32
 ) -> {}
 
-type alias uv_walk_cb = *fn(
-  *mut uv_handle_t,
+type alias walk_cb = *fn(
+  *mut handle,
   ptr
 ) -> {}
 
-type alias uv_fs_cb = *fn(
-  *mut uv_fs_t
+type alias fs_cb = *fn(
+  *mut fs
 ) -> {}
 
-type alias uv_work_cb = *fn(
-  *mut uv_work_t
+type alias work_cb = *fn(
+  *mut work
 ) -> {}
 
-type alias uv_after_work_cb = *fn(
-  *mut uv_work_t,
+type alias after_work_cb = *fn(
+  *mut work,
   i32
 ) -> {}
 
-type alias uv_getaddrinfo_cb = *fn(
-  *mut uv_getaddrinfo_t,
+type alias getaddrinfo_cb = *fn(
+  *mut getaddrinfo,
   i32,
   *mut addrinfo
 ) -> {}
 
-type alias uv_getnameinfo_cb = *fn(
-  *mut uv_getnameinfo_t,
+type alias getnameinfo_cb = *fn(
+  *mut getnameinfo,
   i32,
   *mut u8,
   *mut u8
 ) -> {}
 
-type alias uv_random_cb = *fn(
-  *mut uv_random_t,
+type alias random_cb = *fn(
+  *mut random,
   i32,
   ptr,
   usize
 ) -> {}
 
-type uv_clock_id = either(u32) {
+type clock_id = either(u32) {
   UV_CLOCK_MONOTONIC = 0,
   UV_CLOCK_REALTIME = 1,
 }
 
 
-type uv_timespec_t = {
+type timespec = {
   tv_sec: i64,
   tv_nsec: i64,
 }
 
 
-type uv_timespec64_t = {
+type timespec64 = {
   tv_sec: i64,
   tv_nsec: i32,
 }
 
 
-type uv_timeval_t = {
+type timeval = {
   tv_sec: i64,
   tv_usec: i64,
 }
 
 
-type uv_timeval64_t = {
+type timeval64 = {
   tv_sec: i64,
   tv_usec: i32,
 }
 
 
-type uv_stat_t = {
-  st_dev: u64,
-  st_mode: u64,
-  st_nlink: u64,
-  st_uid: u64,
-  st_gid: u64,
-  st_rdev: u64,
-  st_ino: u64,
-  st_size: u64,
-  st_blksize: u64,
-  st_blocks: u64,
-  st_flags: u64,
-  st_gen: u64,
-  st_atim: uv_timespec_t,
-  st_mtim: uv_timespec_t,
-  st_ctim: uv_timespec_t,
-  st_birthtim: uv_timespec_t,
-}
-
-
-type alias uv_fs_event_cb = *fn(
-  *mut uv_fs_event_t,
+type alias fs_event_cb = *fn(
+  *mut fs_event,
   *mut u8,
   i32,
   i32
 ) -> {}
 
-type alias uv_fs_poll_cb = *fn(
-  *mut uv_fs_poll_t,
+type alias fs_poll_cb = *fn(
+  *mut fs_poll,
   i32,
-  *mut uv_stat_t,
-  *mut uv_stat_t
+  *mut stat,
+  *mut stat
 ) -> {}
 
-type alias uv_signal_cb = *fn(
-  *mut uv_signal_t,
-  i32
-) -> {}
-
-type uv_membership = either(u32) {
+type membership = either(u32) {
   UV_LEAVE_GROUP = 0,
   UV_JOIN_GROUP = 1,
 }
 
 
-extern("uv", "uv_translate_sys_error")
-fn uv_translate_sys_error(
-  p0: i32,
-): i32
-
-extern("uv", "uv_strerror")
-fn uv_strerror(
-  p0: i32,
-): *mut u8
-
-extern("uv", "uv_strerror_r")
-fn uv_strerror_r(
-  p0: i32,
-  p1: *mut u8,
-  p2: usize,
-): *mut u8
-
 extern("uv", "uv_err_name")
-fn uv_err_name(
+fn err_name(
   p0: i32,
 ): *mut u8
 
 extern("uv", "uv_err_name_r")
-fn uv_err_name_r(
+fn err_name_r(
   p0: i32,
   p1: *mut u8,
   p2: usize,
 ): *mut u8
 
-type alias uv_req_s = opaque[64, 8]
-
-extern("uv", "uv_shutdown")
-fn uv_shutdown(
-  p0: *mut uv_shutdown_t,
-  p1: *mut uv_stream_t,
-  p2: uv_shutdown_cb,
-): i32
-
-type alias uv_shutdown_s = opaque[80, 8]
-
-type alias uv_handle_s = opaque[96, 8]
-
-extern("uv", "uv_handle_size")
-fn uv_handle_size(
-  p0: uv_handle_type,
-): usize
-
 extern("uv", "uv_handle_get_type")
-fn uv_handle_get_type(
-  p0: *mut uv_handle_t,
-): uv_handle_type
+fn handle_get_type(
+  p0: *mut handle,
+): handle_type
 
 extern("uv", "uv_handle_type_name")
-fn uv_handle_type_name(
-  p0: uv_handle_type,
+fn handle_type_name(
+  p0: handle_type,
 ): *mut u8
 
 extern("uv", "uv_handle_get_data")
-fn uv_handle_get_data(
-  p0: *mut uv_handle_t,
+fn handle_get_data(
+  p0: *mut handle,
 ): ptr
 
 extern("uv", "uv_handle_get_loop")
-fn uv_handle_get_loop(
-  p0: *mut uv_handle_t,
-): *mut uv_loop_t
-
-extern("uv", "uv_handle_set_data")
-fn uv_handle_set_data(
-  p0: *mut uv_handle_t,
-  p1: ptr,
-): {}
-
-extern("uv", "uv_req_size")
-fn uv_req_size(
-  p0: uv_req_type,
-): usize
+fn handle_get_loop(
+  p0: *mut handle,
+): *mut loop
 
 extern("uv", "uv_req_get_data")
-fn uv_req_get_data(
-  p0: *mut uv_req_t,
+fn req_get_data(
+  p0: *mut req,
 ): ptr
 
-extern("uv", "uv_req_set_data")
-fn uv_req_set_data(
-  p0: *mut uv_req_t,
-  p1: ptr,
-): {}
-
 extern("uv", "uv_req_get_type")
-fn uv_req_get_type(
-  p0: *mut uv_req_t,
-): uv_req_type
+fn req_get_type(
+  p0: *mut req,
+): req_type
 
 extern("uv", "uv_req_type_name")
-fn uv_req_type_name(
-  p0: uv_req_type,
+fn req_type_name(
+  p0: req_type,
 ): *mut u8
 
 extern("uv", "uv_is_active")
-fn uv_is_active(
-  p0: *mut uv_handle_t,
+fn is_active(
+  p0: *mut handle,
 ): i32
 
 extern("uv", "uv_walk")
-fn uv_walk(
-  p0: *mut uv_loop_t,
-  p1: uv_walk_cb,
+fn walk(
+  p0: *mut loop,
+  p1: walk_cb,
   p2: ptr,
 ): {}
 
 extern("uv", "uv_print_all_handles")
-fn uv_print_all_handles(
-  p0: *mut uv_loop_t,
+fn print_all_handles(
+  p0: *mut loop,
   p1: *mut FILE,
 ): {}
 
 extern("uv", "uv_print_active_handles")
-fn uv_print_active_handles(
-  p0: *mut uv_loop_t,
+fn print_active_handles(
+  p0: *mut loop,
   p1: *mut FILE,
 ): {}
 
 extern("uv", "uv_close")
-fn uv_close(
-  p0: *mut uv_handle_t,
-  p1: uv_close_cb,
+fn close(
+  p0: *mut handle,
+  p1: close_cb,
 ): {}
 
-extern("uv", "uv_send_buffer_size")
-fn uv_send_buffer_size(
-  p0: *mut uv_handle_t,
-  p1: *mut i32,
-): i32
-
-extern("uv", "uv_recv_buffer_size")
-fn uv_recv_buffer_size(
-  p0: *mut uv_handle_t,
-  p1: *mut i32,
-): i32
-
 extern("uv", "uv_fileno")
-fn uv_fileno(
-  p0: *mut uv_handle_t,
-  p1: *mut uv_os_fd_t,
+fn fileno(
+  p0: *mut handle,
+  p1: *mut os_fd,
 ): i32
 
 extern("uv", "uv_buf_init")
-fn uv_buf_init(
+fn buf_init(
   p0: *mut u8,
   p1: u32,
-): uv_buf_t
+): buf
 
 extern("uv", "uv_pipe")
-fn uv_pipe(
-  p0: array[uv_file, 2],
+fn pipe(
+  p0: array[file, 2],
   p1: i32,
   p2: i32,
 ): i32
 
-extern("uv", "uv_socketpair")
-fn uv_socketpair(
-  p0: i32,
-  p1: i32,
-  p2: array[uv_os_sock_t, 2],
-  p3: i32,
-  p4: i32,
-): i32
-
-type alias uv_stream_s = opaque[264, 8]
-
-extern("uv", "uv_stream_get_write_queue_size")
-fn uv_stream_get_write_queue_size(
-  p0: *mut uv_stream_t,
-): usize
-
 extern("uv", "uv_listen")
-fn uv_listen(
-  p0: *mut uv_stream_t,
+fn listen(
+  p0: *mut stream,
   p1: i32,
-  p2: uv_connection_cb,
+  p2: connection_cb,
 ): i32
 
 extern("uv", "uv_accept")
-fn uv_accept(
-  p0: *mut uv_stream_t,
-  p1: *mut uv_stream_t,
-): i32
-
-extern("uv", "uv_read_start")
-fn uv_read_start(
-  p0: *mut uv_stream_t,
-  p1: uv_alloc_cb,
-  p2: uv_read_cb,
-): i32
-
-extern("uv", "uv_read_stop")
-fn uv_read_stop(
-  p0: *mut uv_stream_t,
+fn accept(
+  p0: *mut stream,
+  p1: *mut stream,
 ): i32
 
 extern("uv", "uv_write")
-fn uv_write(
-  p0: *mut uv_write_t,
-  p1: *mut uv_stream_t,
-  p2: *mut uv_buf_t,
+fn write(
+  p0: *mut write,
+  p1: *mut stream,
+  p2: *mut buf,
   p3: u32,
-  p4: uv_write_cb,
+  p4: write_cb,
 ): i32
 
 extern("uv", "uv_write2")
-fn uv_write2(
-  p0: *mut uv_write_t,
-  p1: *mut uv_stream_t,
-  p2: *mut uv_buf_t,
+fn write2(
+  p0: *mut write,
+  p1: *mut stream,
+  p2: *mut buf,
   p3: u32,
-  p4: *mut uv_stream_t,
-  p5: uv_write_cb,
+  p4: *mut stream,
+  p5: write_cb,
 ): i32
 
 extern("uv", "uv_try_write")
-fn uv_try_write(
-  p0: *mut uv_stream_t,
-  p1: *mut uv_buf_t,
+fn try_write(
+  p0: *mut stream,
+  p1: *mut buf,
   p2: u32,
 ): i32
 
 extern("uv", "uv_try_write2")
-fn uv_try_write2(
-  p0: *mut uv_stream_t,
-  p1: *mut uv_buf_t,
+fn try_write2(
+  p0: *mut stream,
+  p1: *mut buf,
   p2: u32,
-  p3: *mut uv_stream_t,
+  p3: *mut stream,
 ): i32
 
-type alias uv_write_s = opaque[192, 8]
-
 extern("uv", "uv_is_readable")
-fn uv_is_readable(
-  p0: *mut uv_stream_t,
+fn is_readable(
+  p0: *mut stream,
 ): i32
 
 extern("uv", "uv_is_writable")
-fn uv_is_writable(
-  p0: *mut uv_stream_t,
-): i32
-
-extern("uv", "uv_stream_set_blocking")
-fn uv_stream_set_blocking(
-  p0: *mut uv_stream_t,
-  p1: i32,
+fn is_writable(
+  p0: *mut stream,
 ): i32
 
 extern("uv", "uv_is_closing")
-fn uv_is_closing(
-  p0: *mut uv_handle_t,
+fn is_closing(
+  p0: *mut handle,
 ): i32
 
-type alias uv_tcp_s = opaque[264, 8]
-
 extern("uv", "uv_tcp_init")
-fn uv_tcp_init(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_tcp_t,
+fn tcp_init(
+  p0: *mut loop,
+  p1: *mut tcp,
 ): i32
 
 extern("uv", "uv_tcp_init_ex")
-fn uv_tcp_init_ex(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_tcp_t,
+fn tcp_init_ex(
+  p0: *mut loop,
+  p1: *mut tcp,
   p2: u32,
 ): i32
 
 extern("uv", "uv_tcp_open")
-fn uv_tcp_open(
-  p0: *mut uv_tcp_t,
-  p1: uv_os_sock_t,
+fn tcp_open(
+  p0: *mut tcp,
+  p1: os_sock,
 ): i32
 
 extern("uv", "uv_tcp_nodelay")
-fn uv_tcp_nodelay(
-  p0: *mut uv_tcp_t,
+fn tcp_nodelay(
+  p0: *mut tcp,
   p1: i32,
 ): i32
 
 extern("uv", "uv_tcp_keepalive")
-fn uv_tcp_keepalive(
-  p0: *mut uv_tcp_t,
+fn tcp_keepalive(
+  p0: *mut tcp,
   p1: i32,
   p2: u32,
 ): i32
 
 extern("uv", "uv_tcp_keepalive_ex")
-fn uv_tcp_keepalive_ex(
-  p0: *mut uv_tcp_t,
+fn tcp_keepalive_ex(
+  p0: *mut tcp,
   p1: i32,
   p2: u32,
   p3: u32,
   p4: u32,
 ): i32
 
-extern("uv", "uv_tcp_simultaneous_accepts")
-fn uv_tcp_simultaneous_accepts(
-  p0: *mut uv_tcp_t,
-  p1: i32,
-): i32
-
-type uv_tcp_flags = either(u32) {
+type tcp_flags = either(u32) {
   UV_TCP_IPV6ONLY = 1,
   UV_TCP_REUSEPORT = 2,
 }
 
 extern("uv", "uv_tcp_bind")
-fn uv_tcp_bind(
-  p0: *mut uv_tcp_t,
+fn tcp_bind(
+  p0: *mut tcp,
   p1: *mut sockaddr,
   p2: u32,
 ): i32
 
 extern("uv", "uv_tcp_getsockname")
-fn uv_tcp_getsockname(
-  p0: *mut uv_tcp_t,
+fn tcp_getsockname(
+  p0: *mut tcp,
   p1: *mut sockaddr,
   p2: *mut i32,
 ): i32
 
 extern("uv", "uv_tcp_getpeername")
-fn uv_tcp_getpeername(
-  p0: *mut uv_tcp_t,
+fn tcp_getpeername(
+  p0: *mut tcp,
   p1: *mut sockaddr,
   p2: *mut i32,
 ): i32
 
 extern("uv", "uv_tcp_close_reset")
-fn uv_tcp_close_reset(
-  p0: *mut uv_tcp_t,
-  p1: uv_close_cb,
+fn tcp_close_reset(
+  p0: *mut tcp,
+  p1: close_cb,
 ): i32
 
 extern("uv", "uv_tcp_connect")
-fn uv_tcp_connect(
-  p0: *mut uv_connect_t,
-  p1: *mut uv_tcp_t,
+fn tcp_connect(
+  p0: *mut connect,
+  p1: *mut tcp,
   p2: *mut sockaddr,
-  p3: uv_connect_cb,
+  p3: connect_cb,
 ): i32
 
-type alias uv_connect_s = opaque[96, 8]
-
-type uv_udp_flags = either(u32) {
+type udp_flags = either(u32) {
   UV_UDP_IPV6ONLY = 1,
   UV_UDP_PARTIAL = 2,
   UV_UDP_REUSEADDR = 4,
@@ -934,181 +764,73 @@ type uv_udp_flags = either(u32) {
   UV_UDP_RECVMMSG = 256,
 }
 
-type alias uv_udp_send_cb = *fn(
-  *mut uv_udp_send_t,
-  i32
-) -> {}
-
-type alias uv_udp_recv_cb = *fn(
-  *mut uv_udp_t,
+type alias udp_recv_cb = *fn(
+  *mut udp,
   size,
-  *mut uv_buf_t,
+  *mut buf,
   *mut sockaddr,
   u32
 ) -> {}
 
-type alias uv_udp_s = opaque[224, 8]
-
-type alias uv_udp_send_s = opaque[320, 8]
-
 extern("uv", "uv_udp_init")
-fn uv_udp_init(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_udp_t,
+fn udp_init(
+  p0: *mut loop,
+  p1: *mut udp,
 ): i32
 
 extern("uv", "uv_udp_init_ex")
-fn uv_udp_init_ex(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_udp_t,
+fn udp_init_ex(
+  p0: *mut loop,
+  p1: *mut udp,
   p2: u32,
 ): i32
 
 extern("uv", "uv_udp_open")
-fn uv_udp_open(
-  p0: *mut uv_udp_t,
-  p1: uv_os_sock_t,
+fn udp_open(
+  p0: *mut udp,
+  p1: os_sock,
 ): i32
 
 extern("uv", "uv_udp_open_ex")
-fn uv_udp_open_ex(
-  p0: *mut uv_udp_t,
-  p1: uv_os_sock_t,
+fn udp_open_ex(
+  p0: *mut udp,
+  p1: os_sock,
   p2: u32,
 ): i32
 
 extern("uv", "uv_udp_bind")
-fn uv_udp_bind(
-  p0: *mut uv_udp_t,
+fn udp_bind(
+  p0: *mut udp,
   p1: *mut sockaddr,
   p2: u32,
 ): i32
 
 extern("uv", "uv_udp_connect")
-fn uv_udp_connect(
-  p0: *mut uv_udp_t,
+fn udp_connect(
+  p0: *mut udp,
   p1: *mut sockaddr,
 ): i32
 
 extern("uv", "uv_udp_getpeername")
-fn uv_udp_getpeername(
-  p0: *mut uv_udp_t,
+fn udp_getpeername(
+  p0: *mut udp,
   p1: *mut sockaddr,
   p2: *mut i32,
 ): i32
 
 extern("uv", "uv_udp_getsockname")
-fn uv_udp_getsockname(
-  p0: *mut uv_udp_t,
+fn udp_getsockname(
+  p0: *mut udp,
   p1: *mut sockaddr,
   p2: *mut i32,
 ): i32
 
-extern("uv", "uv_udp_set_membership")
-fn uv_udp_set_membership(
-  p0: *mut uv_udp_t,
-  p1: *mut u8,
-  p2: *mut u8,
-  p3: uv_membership,
-): i32
-
-extern("uv", "uv_udp_set_source_membership")
-fn uv_udp_set_source_membership(
-  p0: *mut uv_udp_t,
-  p1: *mut u8,
-  p2: *mut u8,
-  p3: *mut u8,
-  p4: uv_membership,
-): i32
-
-extern("uv", "uv_udp_set_multicast_loop")
-fn uv_udp_set_multicast_loop(
-  p0: *mut uv_udp_t,
-  p1: i32,
-): i32
-
-extern("uv", "uv_udp_set_multicast_ttl")
-fn uv_udp_set_multicast_ttl(
-  p0: *mut uv_udp_t,
-  p1: i32,
-): i32
-
-extern("uv", "uv_udp_set_multicast_interface")
-fn uv_udp_set_multicast_interface(
-  p0: *mut uv_udp_t,
-  p1: *mut u8,
-): i32
-
-extern("uv", "uv_udp_set_broadcast")
-fn uv_udp_set_broadcast(
-  p0: *mut uv_udp_t,
-  p1: i32,
-): i32
-
-extern("uv", "uv_udp_set_ttl")
-fn uv_udp_set_ttl(
-  p0: *mut uv_udp_t,
-  p1: i32,
-): i32
-
-extern("uv", "uv_udp_send")
-fn uv_udp_send(
-  p0: *mut uv_udp_send_t,
-  p1: *mut uv_udp_t,
-  p2: *mut uv_buf_t,
-  p3: u32,
-  p4: *mut sockaddr,
-  p5: uv_udp_send_cb,
-): i32
-
-extern("uv", "uv_udp_try_send")
-fn uv_udp_try_send(
-  p0: *mut uv_udp_t,
-  p1: *mut uv_buf_t,
-  p2: u32,
-  p3: *mut sockaddr,
-): i32
-
-extern("uv", "uv_udp_try_send2")
-fn uv_udp_try_send2(
-  p0: *mut uv_udp_t,
-  p1: u32,
-  p2: *mut *mut uv_buf_t,
-  p3: *mut u32,
-  p4: *mut *mut sockaddr,
-  p5: u32,
-): i32
-
-extern("uv", "uv_udp_recv_start")
-fn uv_udp_recv_start(
-  p0: *mut uv_udp_t,
-  p1: uv_alloc_cb,
-  p2: uv_udp_recv_cb,
-): i32
-
 extern("uv", "uv_udp_using_recvmmsg")
-fn uv_udp_using_recvmmsg(
-  p0: *mut uv_udp_t,
+fn udp_using_recvmmsg(
+  p0: *mut udp,
 ): i32
 
-extern("uv", "uv_udp_recv_stop")
-fn uv_udp_recv_stop(
-  p0: *mut uv_udp_t,
-): i32
-
-extern("uv", "uv_udp_get_send_queue_size")
-fn uv_udp_get_send_queue_size(
-  p0: *mut uv_udp_t,
-): usize
-
-extern("uv", "uv_udp_get_send_queue_count")
-fn uv_udp_get_send_queue_count(
-  p0: *mut uv_udp_t,
-): usize
-
-type alias uv_tty_s = opaque[344, 8]
-
-type uv_tty_mode_t = either(u32) {
+type tty_mode = either(u32) {
   UV_TTY_MODE_NORMAL = 0,
   UV_TTY_MODE_RAW = 1,
   UV_TTY_MODE_IO = 2,
@@ -1116,137 +838,117 @@ type uv_tty_mode_t = either(u32) {
 }
 
 
-type uv_tty_vtermstate_t = either(u32) {
+type tty_vtermstate = either(u32) {
   UV_TTY_SUPPORTED = 0,
   UV_TTY_UNSUPPORTED = 1,
 }
 
 
 extern("uv", "uv_tty_init")
-fn uv_tty_init(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_tty_t,
-  p2: uv_file,
+fn tty_init(
+  p0: *mut loop,
+  p1: *mut tty,
+  p2: file,
   p3: i32,
 ): i32
 
-extern("uv", "uv_tty_set_mode")
-fn uv_tty_set_mode(
-  p0: *mut uv_tty_t,
-  p1: uv_tty_mode_t,
-): i32
-
 extern("uv", "uv_tty_reset_mode")
-fn uv_tty_reset_mode(): i32
+fn tty_reset_mode(): i32
 
 extern("uv", "uv_tty_get_winsize")
-fn uv_tty_get_winsize(
-  p0: *mut uv_tty_t,
+fn tty_get_winsize(
+  p0: *mut tty,
   p1: *mut i32,
   p2: *mut i32,
 ): i32
 
-extern("uv", "uv_tty_set_vterm_state")
-fn uv_tty_set_vterm_state(
-  p0: uv_tty_vtermstate_t,
-): {}
-
-extern("uv", "uv_tty_get_vterm_state")
-fn uv_tty_get_vterm_state(
-  p0: *mut uv_tty_vtermstate_t,
-): i32
-
 extern("uv", "uv_guess_handle")
-fn uv_guess_handle(
-  p0: uv_file,
-): uv_handle_type
-
-type alias uv_pipe_s = opaque[280, 8]
+fn guess_handle(
+  p0: file,
+): handle_type
 
 extern("uv", "uv_pipe_init")
-fn uv_pipe_init(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_pipe_t,
+fn pipe_init(
+  p0: *mut loop,
+  p1: *mut pipe,
   p2: i32,
 ): i32
 
 extern("uv", "uv_pipe_open")
-fn uv_pipe_open(
-  p0: *mut uv_pipe_t,
-  p1: uv_file,
+fn pipe_open(
+  p0: *mut pipe,
+  p1: file,
 ): i32
 
 extern("uv", "uv_pipe_bind")
-fn uv_pipe_bind(
-  p0: *mut uv_pipe_t,
+fn pipe_bind(
+  p0: *mut pipe,
   p1: *mut u8,
 ): i32
 
 extern("uv", "uv_pipe_bind2")
-fn uv_pipe_bind2(
-  p0: *mut uv_pipe_t,
+fn pipe_bind2(
+  p0: *mut pipe,
   p1: *mut u8,
   p2: usize,
   p3: u32,
 ): i32
 
 extern("uv", "uv_pipe_connect")
-fn uv_pipe_connect(
-  p0: *mut uv_connect_t,
-  p1: *mut uv_pipe_t,
+fn pipe_connect(
+  p0: *mut connect,
+  p1: *mut pipe,
   p2: *mut u8,
-  p3: uv_connect_cb,
+  p3: connect_cb,
 ): {}
 
 extern("uv", "uv_pipe_connect2")
-fn uv_pipe_connect2(
-  p0: *mut uv_connect_t,
-  p1: *mut uv_pipe_t,
+fn pipe_connect2(
+  p0: *mut connect,
+  p1: *mut pipe,
   p2: *mut u8,
   p3: usize,
   p4: u32,
-  p5: uv_connect_cb,
+  p5: connect_cb,
 ): i32
 
 extern("uv", "uv_pipe_getsockname")
-fn uv_pipe_getsockname(
-  p0: *mut uv_pipe_t,
+fn pipe_getsockname(
+  p0: *mut pipe,
   p1: *mut u8,
   p2: *mut usize,
 ): i32
 
 extern("uv", "uv_pipe_getpeername")
-fn uv_pipe_getpeername(
-  p0: *mut uv_pipe_t,
+fn pipe_getpeername(
+  p0: *mut pipe,
   p1: *mut u8,
   p2: *mut usize,
 ): i32
 
 extern("uv", "uv_pipe_pending_instances")
-fn uv_pipe_pending_instances(
-  p0: *mut uv_pipe_t,
+fn pipe_pending_instances(
+  p0: *mut pipe,
   p1: i32,
 ): {}
 
 extern("uv", "uv_pipe_pending_count")
-fn uv_pipe_pending_count(
-  p0: *mut uv_pipe_t,
+fn pipe_pending_count(
+  p0: *mut pipe,
 ): i32
 
 extern("uv", "uv_pipe_pending_type")
-fn uv_pipe_pending_type(
-  p0: *mut uv_pipe_t,
-): uv_handle_type
+fn pipe_pending_type(
+  p0: *mut pipe,
+): handle_type
 
 extern("uv", "uv_pipe_chmod")
-fn uv_pipe_chmod(
-  p0: *mut uv_pipe_t,
+fn pipe_chmod(
+  p0: *mut pipe,
   p1: i32,
 ): i32
 
-type alias uv_poll_s = opaque[168, 8]
-
-type uv_poll_event = either(u32) {
+type poll_event = either(u32) {
   UV_READABLE = 1,
   UV_WRITABLE = 2,
   UV_DISCONNECT = 4,
@@ -1254,209 +956,85 @@ type uv_poll_event = either(u32) {
 }
 
 extern("uv", "uv_poll_init")
-fn uv_poll_init(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_poll_t,
+fn poll_init(
+  p0: *mut loop,
+  p1: *mut poll,
   p2: i32,
 ): i32
 
-extern("uv", "uv_poll_init_socket")
-fn uv_poll_init_socket(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_poll_t,
-  p2: uv_os_sock_t,
-): i32
-
-extern("uv", "uv_poll_start")
-fn uv_poll_start(
-  p0: *mut uv_poll_t,
-  p1: i32,
-  p2: uv_poll_cb,
-): i32
-
-extern("uv", "uv_poll_stop")
-fn uv_poll_stop(
-  p0: *mut uv_poll_t,
-): i32
-
-type alias uv_prepare_s = opaque[120, 8]
-
 extern("uv", "uv_prepare_init")
-fn uv_prepare_init(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_prepare_t,
+fn prepare_init(
+  p0: *mut loop,
+  p1: *mut prepare,
 ): i32
-
-extern("uv", "uv_prepare_start")
-fn uv_prepare_start(
-  p0: *mut uv_prepare_t,
-  p1: uv_prepare_cb,
-): i32
-
-extern("uv", "uv_prepare_stop")
-fn uv_prepare_stop(
-  p0: *mut uv_prepare_t,
-): i32
-
-type alias uv_check_s = opaque[120, 8]
 
 extern("uv", "uv_check_init")
-fn uv_check_init(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_check_t,
+fn check_init(
+  p0: *mut loop,
+  p1: *mut check,
 ): i32
-
-extern("uv", "uv_check_start")
-fn uv_check_start(
-  p0: *mut uv_check_t,
-  p1: uv_check_cb,
-): i32
-
-extern("uv", "uv_check_stop")
-fn uv_check_stop(
-  p0: *mut uv_check_t,
-): i32
-
-type alias uv_idle_s = opaque[120, 8]
 
 extern("uv", "uv_idle_init")
-fn uv_idle_init(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_idle_t,
+fn idle_init(
+  p0: *mut loop,
+  p1: *mut idle,
 ): i32
-
-extern("uv", "uv_idle_start")
-fn uv_idle_start(
-  p0: *mut uv_idle_t,
-  p1: uv_idle_cb,
-): i32
-
-extern("uv", "uv_idle_stop")
-fn uv_idle_stop(
-  p0: *mut uv_idle_t,
-): i32
-
-type alias uv_async_s = opaque[128, 8]
 
 extern("uv", "uv_async_init")
-fn uv_async_init(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_async_t,
-  p2: uv_async_cb,
+fn async_init(
+  p0: *mut loop,
+  p1: *mut async,
+  p2: async_cb,
 ): i32
-
-extern("uv", "uv_async_send")
-fn uv_async_send(
-  p0: *mut uv_async_t,
-): i32
-
-type alias uv_timer_s = opaque[152, 8]
 
 extern("uv", "uv_timer_init")
-fn uv_timer_init(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_timer_t,
-): i32
-
-extern("uv", "uv_timer_start")
-fn uv_timer_start(
-  p0: *mut uv_timer_t,
-  p1: uv_timer_cb,
-  p2: u64,
-  p3: u64,
-): i32
-
-extern("uv", "uv_timer_stop")
-fn uv_timer_stop(
-  p0: *mut uv_timer_t,
+fn timer_init(
+  p0: *mut loop,
+  p1: *mut timer,
 ): i32
 
 extern("uv", "uv_timer_again")
-fn uv_timer_again(
-  p0: *mut uv_timer_t,
+fn timer_again(
+  p0: *mut timer,
 ): i32
 
-extern("uv", "uv_timer_set_repeat")
-fn uv_timer_set_repeat(
-  p0: *mut uv_timer_t,
-  p1: u64,
-): {}
-
 extern("uv", "uv_timer_get_repeat")
-fn uv_timer_get_repeat(
-  p0: *mut uv_timer_t,
+fn timer_get_repeat(
+  p0: *mut timer,
 ): u64
 
 extern("uv", "uv_timer_get_due_in")
-fn uv_timer_get_due_in(
-  p0: *mut uv_timer_t,
+fn timer_get_due_in(
+  p0: *mut timer,
 ): u64
 
-type alias uv_getaddrinfo_s = opaque[160, 8]
-
 extern("uv", "uv_getaddrinfo")
-fn uv_getaddrinfo(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_getaddrinfo_t,
-  p2: uv_getaddrinfo_cb,
+fn getaddrinfo(
+  p0: *mut loop,
+  p1: *mut getaddrinfo,
+  p2: getaddrinfo_cb,
   p3: *mut u8,
   p4: *mut u8,
   p5: *mut addrinfo,
 ): i32
 
 extern("uv", "uv_freeaddrinfo")
-fn uv_freeaddrinfo(
+fn freeaddrinfo(
   p0: *mut addrinfo,
 ): {}
 
-type alias uv_getnameinfo_s = opaque[1320, 8]
-
 extern("uv", "uv_getnameinfo")
-fn uv_getnameinfo(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_getnameinfo_t,
-  p2: uv_getnameinfo_cb,
+fn getnameinfo(
+  p0: *mut loop,
+  p1: *mut getnameinfo,
+  p2: getnameinfo_cb,
   p3: *mut sockaddr,
   p4: i32,
 ): i32
 
-type uv_stdio_flags = either(u32) {
-  UV_IGNORE = 0,
-  UV_CREATE_PIPE = 1,
-  UV_INHERIT_FD = 2,
-  UV_INHERIT_STREAM = 4,
-  UV_READABLE_PIPE = 16,
-  UV_WRITABLE_PIPE = 32,
-  UV_NONBLOCK_PIPE = 64,
-}
+type alias process_options = process_options_s
 
-
-type uv_stdio_container_s = {
-  flags: uv_stdio_flags,
-  data: union {
-    stream: *mut uv_stream_t,
-    fd: i32,
-  },
-}
-
-type alias uv_stdio_container_t = uv_stdio_container_s
-
-type uv_process_options_s = {
-  exit_cb: uv_exit_cb,
-  file: *mut u8,
-  args: *mut *mut u8,
-  env: *mut *mut u8,
-  cwd: *mut u8,
-  flags: u32,
-  stdio_count: i32,
-  stdio: *mut uv_stdio_container_t,
-  uid: uv_uid_t,
-  gid: uv_gid_t,
-}
-
-type alias uv_process_options_t = uv_process_options_s
-
-type uv_process_flags = either(u32) {
+type process_flags = either(u32) {
   UV_PROCESS_SETUID = 1,
   UV_PROCESS_SETGID = 2,
   UV_PROCESS_WINDOWS_VERBATIM_ARGUMENTS = 4,
@@ -1467,109 +1045,37 @@ type uv_process_flags = either(u32) {
   UV_PROCESS_WINDOWS_FILE_PATH_EXACT_NAME = 128,
 }
 
-type alias uv_process_s = opaque[136, 8]
-
-extern("uv", "uv_spawn")
-fn uv_spawn(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_process_t,
-  p2: *mut uv_process_options_t,
-): i32
-
 extern("uv", "uv_process_kill")
-fn uv_process_kill(
-  p0: *mut uv_process_t,
+fn process_kill(
+  p0: *mut process,
   p1: i32,
 ): i32
 
 extern("uv", "uv_kill")
-fn uv_kill(
+fn kill(
   p0: i32,
   p1: i32,
 ): i32
 
 extern("uv", "uv_process_get_pid")
-fn uv_process_get_pid(
-  p0: *mut uv_process_t,
-): uv_pid_t
-
-type alias uv_work_s = opaque[128, 8]
+fn process_get_pid(
+  p0: *mut process,
+): pid
 
 extern("uv", "uv_queue_work")
-fn uv_queue_work(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_work_t,
-  p2: uv_work_cb,
-  p3: uv_after_work_cb,
+fn queue_work(
+  p0: *mut loop,
+  p1: *mut work,
+  p2: work_cb,
+  p3: after_work_cb,
 ): i32
 
 extern("uv", "uv_cancel")
-fn uv_cancel(
-  p0: *mut uv_req_t,
+fn cancel(
+  p0: *mut req,
 ): i32
 
-type uv_cpu_times_s = {
-  user: u64,
-  nice: u64,
-  sys: u64,
-  idle: u64,
-  irq: u64,
-}
-
-type uv_cpu_info_s = {
-  model: *mut u8,
-  speed: i32,
-  cpu_times: uv_cpu_times_s,
-}
-
-type uv_interface_address_s = {
-  name: *mut u8,
-  phys_addr: array[u8, 6],
-  is_internal: i32,
-  address: union {
-    address4: sockaddr_in,
-    address6: sockaddr_in6,
-  },
-  netmask: union {
-    netmask4: sockaddr_in,
-    netmask6: sockaddr_in6,
-  },
-}
-
-type uv_passwd_s = {
-  username: *mut u8,
-  uid: u64,
-  gid: u64,
-  shell: *mut u8,
-  homedir: *mut u8,
-}
-
-type uv_group_s = {
-  groupname: *mut u8,
-  gid: u64,
-  members: *mut *mut u8,
-}
-
-type uv_utsname_s = {
-  sysname: array[u8, 256],
-  release: array[u8, 256],
-  version: array[u8, 256],
-  machine: array[u8, 256],
-}
-
-type uv_statfs_s = {
-  f_type: u64,
-  f_bsize: u64,
-  f_blocks: u64,
-  f_bfree: u64,
-  f_bavail: u64,
-  f_files: u64,
-  f_ffree: u64,
-  f_frsize: u64,
-  f_spare: array[u64, 3],
-}
-
-type uv_dirent_type_t = either(u32) {
+type dirent_type = either(u32) {
   UV_DIRENT_UNKNOWN = 0,
   UV_DIRENT_FILE = 1,
   UV_DIRENT_DIR = 2,
@@ -1581,51 +1087,30 @@ type uv_dirent_type_t = either(u32) {
 }
 
 
-type uv_dirent_s = {
-  name: *mut u8,
-  type: uv_dirent_type_t,
-}
-
-extern("uv", "uv_setup_args")
-fn uv_setup_args(
-  p0: i32,
-  p1: *mut *mut u8,
-): *mut *mut u8
-
 extern("uv", "uv_get_process_title")
-fn uv_get_process_title(
+fn get_process_title(
   p0: *mut u8,
   p1: usize,
 ): i32
 
-extern("uv", "uv_set_process_title")
-fn uv_set_process_title(
-  p0: *mut u8,
-): i32
-
-extern("uv", "uv_resident_set_memory")
-fn uv_resident_set_memory(
-  p0: *mut usize,
-): i32
-
 extern("uv", "uv_uptime")
-fn uv_uptime(
+fn uptime(
   p0: *mut f64,
 ): i32
 
 extern("uv", "uv_get_osfhandle")
-fn uv_get_osfhandle(
+fn get_osfhandle(
   p0: i32,
-): uv_os_fd_t
+): os_fd
 
 extern("uv", "uv_open_osfhandle")
-fn uv_open_osfhandle(
-  p0: uv_os_fd_t,
+fn open_osfhandle(
+  p0: os_fd,
 ): i32
 
-type uv_rusage_t = {
-  ru_utime: uv_timeval_t,
-  ru_stime: uv_timeval_t,
+type rusage = {
+  ru_utime: timeval,
+  ru_stime: timeval,
   ru_maxrss: u64,
   ru_ixrss: u64,
   ru_idrss: u64,
@@ -1644,179 +1129,146 @@ type uv_rusage_t = {
 
 
 extern("uv", "uv_getrusage")
-fn uv_getrusage(
-  p0: *mut uv_rusage_t,
+fn getrusage(
+  p0: *mut rusage,
 ): i32
 
 extern("uv", "uv_getrusage_thread")
-fn uv_getrusage_thread(
-  p0: *mut uv_rusage_t,
+fn getrusage_thread(
+  p0: *mut rusage,
 ): i32
 
 extern("uv", "uv_os_homedir")
-fn uv_os_homedir(
+fn os_homedir(
   p0: *mut u8,
   p1: *mut usize,
 ): i32
 
 extern("uv", "uv_os_tmpdir")
-fn uv_os_tmpdir(
+fn os_tmpdir(
   p0: *mut u8,
   p1: *mut usize,
 ): i32
 
 extern("uv", "uv_os_get_passwd")
-fn uv_os_get_passwd(
-  p0: *mut uv_passwd_t,
+fn os_get_passwd(
+  p0: *mut passwd,
 ): i32
 
 extern("uv", "uv_os_free_passwd")
-fn uv_os_free_passwd(
-  p0: *mut uv_passwd_t,
+fn os_free_passwd(
+  p0: *mut passwd,
 ): {}
 
 extern("uv", "uv_os_get_passwd2")
-fn uv_os_get_passwd2(
-  p0: *mut uv_passwd_t,
-  p1: uv_uid_t,
+fn os_get_passwd2(
+  p0: *mut passwd,
+  p1: uid,
 ): i32
 
 extern("uv", "uv_os_get_group")
-fn uv_os_get_group(
-  p0: *mut uv_group_t,
-  p1: uv_uid_t,
+fn os_get_group(
+  p0: *mut group,
+  p1: uid,
 ): i32
 
 extern("uv", "uv_os_free_group")
-fn uv_os_free_group(
-  p0: *mut uv_group_t,
+fn os_free_group(
+  p0: *mut group,
 ): {}
 
 extern("uv", "uv_os_getpid")
-fn uv_os_getpid(): uv_pid_t
+fn os_getpid(): pid
 
 extern("uv", "uv_os_getppid")
-fn uv_os_getppid(): uv_pid_t
+fn os_getppid(): pid
 
 extern("uv", "uv_os_getpriority")
-fn uv_os_getpriority(
-  p0: uv_pid_t,
+fn os_getpriority(
+  p0: pid,
   p1: *mut i32,
-): i32
-
-extern("uv", "uv_os_setpriority")
-fn uv_os_setpriority(
-  p0: uv_pid_t,
-  p1: i32,
 ): i32
 
 extern("uv", "uv_thread_getpriority")
-fn uv_thread_getpriority(
-  p0: uv_thread_t,
+fn thread_getpriority(
+  p0: thread,
   p1: *mut i32,
 ): i32
 
-extern("uv", "uv_thread_setpriority")
-fn uv_thread_setpriority(
-  p0: uv_thread_t,
-  p1: i32,
-): i32
-
 extern("uv", "uv_available_parallelism")
-fn uv_available_parallelism(): u32
+fn available_parallelism(): u32
 
 extern("uv", "uv_cpu_info")
-fn uv_cpu_info(
-  p0: *mut *mut uv_cpu_info_t,
+fn cpu_info(
+  p0: *mut *mut cpu_info,
   p1: *mut i32,
 ): i32
 
 extern("uv", "uv_free_cpu_info")
-fn uv_free_cpu_info(
-  p0: *mut uv_cpu_info_t,
+fn free_cpu_info(
+  p0: *mut cpu_info,
   p1: i32,
 ): {}
 
-extern("uv", "uv_cpumask_size")
-fn uv_cpumask_size(): i32
-
 extern("uv", "uv_interface_addresses")
-fn uv_interface_addresses(
-  p0: *mut *mut uv_interface_address_t,
+fn interface_addresses(
+  p0: *mut *mut interface_address,
   p1: *mut i32,
 ): i32
 
 extern("uv", "uv_free_interface_addresses")
-fn uv_free_interface_addresses(
-  p0: *mut uv_interface_address_t,
+fn free_interface_addresses(
+  p0: *mut interface_address,
   p1: i32,
 ): {}
 
-type uv_env_item_s = {
-  name: *mut u8,
-  value: *mut u8,
-}
-
 extern("uv", "uv_os_environ")
-fn uv_os_environ(
-  p0: *mut *mut uv_env_item_t,
+fn os_environ(
+  p0: *mut *mut env_item,
   p1: *mut i32,
 ): i32
 
 extern("uv", "uv_os_free_environ")
-fn uv_os_free_environ(
-  p0: *mut uv_env_item_t,
+fn os_free_environ(
+  p0: *mut env_item,
   p1: i32,
 ): {}
 
 extern("uv", "uv_os_getenv")
-fn uv_os_getenv(
+fn os_getenv(
   p0: *mut u8,
   p1: *mut u8,
   p2: *mut usize,
 ): i32
 
-extern("uv", "uv_os_setenv")
-fn uv_os_setenv(
-  p0: *mut u8,
-  p1: *mut u8,
-): i32
-
 extern("uv", "uv_os_unsetenv")
-fn uv_os_unsetenv(
+fn os_unsetenv(
   p0: *mut u8,
 ): i32
 
 extern("uv", "uv_os_gethostname")
-fn uv_os_gethostname(
+fn os_gethostname(
   p0: *mut u8,
   p1: *mut usize,
 ): i32
 
 extern("uv", "uv_os_uname")
-fn uv_os_uname(
-  p0: *mut uv_utsname_t,
+fn os_uname(
+  p0: *mut utsname,
 ): i32
 
-type uv_metrics_s = {
-  loop_count: u64,
-  events: u64,
-  events_waiting: u64,
-  reserved: array[*mut u64, 13],
-}
-
 extern("uv", "uv_metrics_info")
-fn uv_metrics_info(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_metrics_t,
+fn metrics_info(
+  p0: *mut loop,
+  p1: *mut metrics,
 ): i32
 
 extern("uv", "uv_metrics_idle_time")
-fn uv_metrics_idle_time(
-  p0: *mut uv_loop_t,
+fn metrics_idle_time(
+  p0: *mut loop,
 ): u64
 
-type uv_fs_type = either(i32) {
+type fs_type = either(i32) {
   UV_FS_UNKNOWN = -1,
   UV_FS_CUSTOM = 0,
   UV_FS_OPEN = 1,
@@ -1858,510 +1310,387 @@ type uv_fs_type = either(i32) {
 }
 
 
-type alias uv_dir_s = opaque[56, 8]
-
-type alias uv_fs_s = opaque[440, 8]
-
 extern("uv", "uv_fs_get_type")
-fn uv_fs_get_type(
-  p0: *mut uv_fs_t,
-): uv_fs_type
+fn fs_get_type(
+  p0: *mut fs,
+): fs_type
 
 extern("uv", "uv_fs_get_result")
-fn uv_fs_get_result(
-  p0: *mut uv_fs_t,
+fn fs_get_result(
+  p0: *mut fs,
 ): size
 
-extern("uv", "uv_fs_get_system_error")
-fn uv_fs_get_system_error(
-  p0: *mut uv_fs_t,
-): i32
-
 extern("uv", "uv_fs_get_ptr")
-fn uv_fs_get_ptr(
-  p0: *mut uv_fs_t,
+fn fs_get_ptr(
+  p0: *mut fs,
 ): ptr
 
 extern("uv", "uv_fs_get_path")
-fn uv_fs_get_path(
-  p0: *mut uv_fs_t,
+fn fs_get_path(
+  p0: *mut fs,
 ): *mut u8
 
-extern("uv", "uv_fs_get_statbuf")
-fn uv_fs_get_statbuf(
-  p0: *mut uv_fs_t,
-): *mut uv_stat_t
-
 extern("uv", "uv_fs_req_cleanup")
-fn uv_fs_req_cleanup(
-  p0: *mut uv_fs_t,
+fn fs_req_cleanup(
+  p0: *mut fs,
 ): {}
 
 extern("uv", "uv_fs_close")
-fn uv_fs_close(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: uv_file,
-  p3: uv_fs_cb,
+fn fs_close(
+  p0: *mut loop,
+  p1: *mut fs,
+  p2: file,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_open")
-fn uv_fs_open(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_open(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
   p3: i32,
   p4: i32,
-  p5: uv_fs_cb,
+  p5: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_read")
-fn uv_fs_read(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: uv_file,
-  p3: *mut uv_buf_t,
+fn fs_read(
+  p0: *mut loop,
+  p1: *mut fs,
+  p2: file,
+  p3: *mut buf,
   p4: u32,
   p5: i64,
-  p6: uv_fs_cb,
+  p6: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_unlink")
-fn uv_fs_unlink(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_unlink(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
-  p3: uv_fs_cb,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_write")
-fn uv_fs_write(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: uv_file,
-  p3: *mut uv_buf_t,
+fn fs_write(
+  p0: *mut loop,
+  p1: *mut fs,
+  p2: file,
+  p3: *mut buf,
   p4: u32,
   p5: i64,
-  p6: uv_fs_cb,
+  p6: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_copyfile")
-fn uv_fs_copyfile(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_copyfile(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
   p3: *mut u8,
   p4: i32,
-  p5: uv_fs_cb,
+  p5: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_mkdir")
-fn uv_fs_mkdir(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_mkdir(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
   p3: i32,
-  p4: uv_fs_cb,
+  p4: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_mkdtemp")
-fn uv_fs_mkdtemp(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_mkdtemp(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
-  p3: uv_fs_cb,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_mkstemp")
-fn uv_fs_mkstemp(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_mkstemp(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
-  p3: uv_fs_cb,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_rmdir")
-fn uv_fs_rmdir(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_rmdir(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
-  p3: uv_fs_cb,
-): i32
-
-extern("uv", "uv_fs_scandir")
-fn uv_fs_scandir(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: *mut u8,
-  p3: i32,
-  p4: uv_fs_cb,
-): i32
-
-extern("uv", "uv_fs_scandir_next")
-fn uv_fs_scandir_next(
-  p0: *mut uv_fs_t,
-  p1: *mut uv_dirent_t,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_opendir")
-fn uv_fs_opendir(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_opendir(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
-  p3: uv_fs_cb,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_readdir")
-fn uv_fs_readdir(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: *mut uv_dir_t,
-  p3: uv_fs_cb,
+fn fs_readdir(
+  p0: *mut loop,
+  p1: *mut fs,
+  p2: *mut dir,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_closedir")
-fn uv_fs_closedir(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: *mut uv_dir_t,
-  p3: uv_fs_cb,
-): i32
-
-extern("uv", "uv_fs_stat")
-fn uv_fs_stat(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: *mut u8,
-  p3: uv_fs_cb,
+fn fs_closedir(
+  p0: *mut loop,
+  p1: *mut fs,
+  p2: *mut dir,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_fstat")
-fn uv_fs_fstat(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: uv_file,
-  p3: uv_fs_cb,
+fn fs_fstat(
+  p0: *mut loop,
+  p1: *mut fs,
+  p2: file,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_rename")
-fn uv_fs_rename(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_rename(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
   p3: *mut u8,
-  p4: uv_fs_cb,
+  p4: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_fsync")
-fn uv_fs_fsync(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: uv_file,
-  p3: uv_fs_cb,
+fn fs_fsync(
+  p0: *mut loop,
+  p1: *mut fs,
+  p2: file,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_fdatasync")
-fn uv_fs_fdatasync(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: uv_file,
-  p3: uv_fs_cb,
+fn fs_fdatasync(
+  p0: *mut loop,
+  p1: *mut fs,
+  p2: file,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_ftruncate")
-fn uv_fs_ftruncate(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: uv_file,
+fn fs_ftruncate(
+  p0: *mut loop,
+  p1: *mut fs,
+  p2: file,
   p3: i64,
-  p4: uv_fs_cb,
-): i32
-
-extern("uv", "uv_fs_sendfile")
-fn uv_fs_sendfile(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: uv_file,
-  p3: uv_file,
-  p4: i64,
-  p5: usize,
-  p6: uv_fs_cb,
+  p4: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_access")
-fn uv_fs_access(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_access(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
   p3: i32,
-  p4: uv_fs_cb,
+  p4: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_chmod")
-fn uv_fs_chmod(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_chmod(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
   p3: i32,
-  p4: uv_fs_cb,
+  p4: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_utime")
-fn uv_fs_utime(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_utime(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
   p3: f64,
   p4: f64,
-  p5: uv_fs_cb,
+  p5: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_futime")
-fn uv_fs_futime(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: uv_file,
+fn fs_futime(
+  p0: *mut loop,
+  p1: *mut fs,
+  p2: file,
   p3: f64,
   p4: f64,
-  p5: uv_fs_cb,
+  p5: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_lutime")
-fn uv_fs_lutime(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_lutime(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
   p3: f64,
   p4: f64,
-  p5: uv_fs_cb,
+  p5: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_lstat")
-fn uv_fs_lstat(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_lstat(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
-  p3: uv_fs_cb,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_link")
-fn uv_fs_link(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_link(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
   p3: *mut u8,
-  p4: uv_fs_cb,
-): i32
-
-extern("uv", "uv_fs_symlink")
-fn uv_fs_symlink(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: *mut u8,
-  p3: *mut u8,
-  p4: i32,
-  p5: uv_fs_cb,
+  p4: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_readlink")
-fn uv_fs_readlink(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_readlink(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
-  p3: uv_fs_cb,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_realpath")
-fn uv_fs_realpath(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_realpath(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
-  p3: uv_fs_cb,
+  p3: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_fchmod")
-fn uv_fs_fchmod(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: uv_file,
+fn fs_fchmod(
+  p0: *mut loop,
+  p1: *mut fs,
+  p2: file,
   p3: i32,
-  p4: uv_fs_cb,
+  p4: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_chown")
-fn uv_fs_chown(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_chown(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
-  p3: uv_uid_t,
-  p4: uv_gid_t,
-  p5: uv_fs_cb,
+  p3: uid,
+  p4: gid,
+  p5: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_fchown")
-fn uv_fs_fchown(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: uv_file,
-  p3: uv_uid_t,
-  p4: uv_gid_t,
-  p5: uv_fs_cb,
+fn fs_fchown(
+  p0: *mut loop,
+  p1: *mut fs,
+  p2: file,
+  p3: uid,
+  p4: gid,
+  p5: fs_cb,
 ): i32
 
 extern("uv", "uv_fs_lchown")
-fn uv_fs_lchown(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
+fn fs_lchown(
+  p0: *mut loop,
+  p1: *mut fs,
   p2: *mut u8,
-  p3: uv_uid_t,
-  p4: uv_gid_t,
-  p5: uv_fs_cb,
+  p3: uid,
+  p4: gid,
+  p5: fs_cb,
 ): i32
 
-extern("uv", "uv_fs_statfs")
-fn uv_fs_statfs(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_t,
-  p2: *mut u8,
-  p3: uv_fs_cb,
-): i32
-
-type uv_fs_event = either(u32) {
+type fs_event = either(u32) {
   UV_RENAME = 1,
   UV_CHANGE = 2,
 }
 
-type alias uv_fs_event_s = opaque[304, 8]
-
-type alias uv_fs_poll_s = opaque[104, 8]
-
 extern("uv", "uv_fs_poll_init")
-fn uv_fs_poll_init(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_poll_t,
-): i32
-
-extern("uv", "uv_fs_poll_start")
-fn uv_fs_poll_start(
-  p0: *mut uv_fs_poll_t,
-  p1: uv_fs_poll_cb,
-  p2: *mut u8,
-  p3: u32,
-): i32
-
-extern("uv", "uv_fs_poll_stop")
-fn uv_fs_poll_stop(
-  p0: *mut uv_fs_poll_t,
+fn fs_poll_init(
+  p0: *mut loop,
+  p1: *mut fs_poll,
 ): i32
 
 extern("uv", "uv_fs_poll_getpath")
-fn uv_fs_poll_getpath(
-  p0: *mut uv_fs_poll_t,
+fn fs_poll_getpath(
+  p0: *mut fs_poll,
   p1: *mut u8,
   p2: *mut usize,
 ): i32
 
-type alias uv_signal_s = opaque[152, 8]
-
-extern("uv", "uv_signal_init")
-fn uv_signal_init(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_signal_t,
-): i32
-
-extern("uv", "uv_signal_start")
-fn uv_signal_start(
-  p0: *mut uv_signal_t,
-  p1: uv_signal_cb,
-  p2: i32,
-): i32
-
-extern("uv", "uv_signal_start_oneshot")
-fn uv_signal_start_oneshot(
-  p0: *mut uv_signal_t,
-  p1: uv_signal_cb,
-  p2: i32,
-): i32
-
-extern("uv", "uv_signal_stop")
-fn uv_signal_stop(
-  p0: *mut uv_signal_t,
-): i32
-
 extern("uv", "uv_loadavg")
-fn uv_loadavg(
+fn loadavg(
   p0: array[f64, 3],
 ): {}
 
-type uv_fs_event_flags = either(u32) {
+type fs_event_flags = either(u32) {
   UV_FS_EVENT_WATCH_ENTRY = 1,
   UV_FS_EVENT_STAT = 2,
   UV_FS_EVENT_RECURSIVE = 4,
 }
 
 extern("uv", "uv_fs_event_init")
-fn uv_fs_event_init(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_fs_event_t,
-): i32
-
-extern("uv", "uv_fs_event_start")
-fn uv_fs_event_start(
-  p0: *mut uv_fs_event_t,
-  p1: uv_fs_event_cb,
-  p2: *mut u8,
-  p3: u32,
-): i32
-
-extern("uv", "uv_fs_event_stop")
-fn uv_fs_event_stop(
-  p0: *mut uv_fs_event_t,
+fn fs_event_init(
+  p0: *mut loop,
+  p1: *mut fs_event,
 ): i32
 
 extern("uv", "uv_fs_event_getpath")
-fn uv_fs_event_getpath(
-  p0: *mut uv_fs_event_t,
+fn fs_event_getpath(
+  p0: *mut fs_event,
   p1: *mut u8,
   p2: *mut usize,
 ): i32
 
 extern("uv", "uv_ip4_addr")
-fn uv_ip4_addr(
+fn ip4_addr(
   p0: *mut u8,
   p1: i32,
   p2: *mut sockaddr_in,
 ): i32
 
 extern("uv", "uv_ip6_addr")
-fn uv_ip6_addr(
+fn ip6_addr(
   p0: *mut u8,
   p1: i32,
   p2: *mut sockaddr_in6,
 ): i32
 
 extern("uv", "uv_ip4_name")
-fn uv_ip4_name(
+fn ip4_name(
   p0: *mut sockaddr_in,
   p1: *mut u8,
   p2: usize,
 ): i32
 
 extern("uv", "uv_ip6_name")
-fn uv_ip6_name(
+fn ip6_name(
   p0: *mut sockaddr_in6,
   p1: *mut u8,
   p2: usize,
 ): i32
 
 extern("uv", "uv_ip_name")
-fn uv_ip_name(
+fn ip_name(
   p0: *mut sockaddr,
   p1: *mut u8,
   p2: usize,
 ): i32
 
 extern("uv", "uv_inet_ntop")
-fn uv_inet_ntop(
+fn inet_ntop(
   p0: i32,
   p1: ptr,
   p2: *mut u8,
@@ -2369,392 +1698,316 @@ fn uv_inet_ntop(
 ): i32
 
 extern("uv", "uv_inet_pton")
-fn uv_inet_pton(
+fn inet_pton(
   p0: i32,
   p1: *mut u8,
   p2: ptr,
 ): i32
 
-type alias uv_random_s = opaque[144, 8]
-
 extern("uv", "uv_random")
-fn uv_random(
-  p0: *mut uv_loop_t,
-  p1: *mut uv_random_t,
+fn random(
+  p0: *mut loop,
+  p1: *mut random,
   p2: ptr,
   p3: usize,
   p4: u32,
-  p5: uv_random_cb,
+  p5: random_cb,
 ): i32
 
 extern("uv", "uv_if_indextoname")
-fn uv_if_indextoname(
+fn if_indextoname(
   p0: u32,
   p1: *mut u8,
   p2: *mut usize,
 ): i32
 
 extern("uv", "uv_if_indextoiid")
-fn uv_if_indextoiid(
+fn if_indextoiid(
   p0: u32,
   p1: *mut u8,
   p2: *mut usize,
 ): i32
 
 extern("uv", "uv_exepath")
-fn uv_exepath(
+fn exepath(
   p0: *mut u8,
   p1: *mut usize,
 ): i32
 
 extern("uv", "uv_cwd")
-fn uv_cwd(
+fn cwd(
   p0: *mut u8,
   p1: *mut usize,
 ): i32
 
 extern("uv", "uv_chdir")
-fn uv_chdir(
+fn chdir(
   p0: *mut u8,
 ): i32
 
 extern("uv", "uv_get_free_memory")
-fn uv_get_free_memory(): u64
+fn get_free_memory(): u64
 
 extern("uv", "uv_get_total_memory")
-fn uv_get_total_memory(): u64
+fn get_total_memory(): u64
 
 extern("uv", "uv_get_constrained_memory")
-fn uv_get_constrained_memory(): u64
+fn get_constrained_memory(): u64
 
 extern("uv", "uv_get_available_memory")
-fn uv_get_available_memory(): u64
+fn get_available_memory(): u64
 
 extern("uv", "uv_clock_gettime")
-fn uv_clock_gettime(
-  p0: uv_clock_id,
-  p1: *mut uv_timespec64_t,
+fn clock_gettime(
+  p0: clock_id,
+  p1: *mut timespec64,
 ): i32
 
 extern("uv", "uv_hrtime")
-fn uv_hrtime(): u64
-
-extern("uv", "uv_sleep")
-fn uv_sleep(
-  p0: u32,
-): {}
-
-extern("uv", "uv_disable_stdio_inheritance")
-fn uv_disable_stdio_inheritance(): {}
+fn hrtime(): u64
 
 extern("uv", "uv_dlopen")
-fn uv_dlopen(
+fn dlopen(
   p0: *mut u8,
-  p1: *mut uv_lib_t,
+  p1: *mut lib,
 ): i32
 
 extern("uv", "uv_dlclose")
-fn uv_dlclose(
-  p0: *mut uv_lib_t,
+fn dlclose(
+  p0: *mut lib,
 ): {}
 
 extern("uv", "uv_dlsym")
-fn uv_dlsym(
-  p0: *mut uv_lib_t,
+fn dlsym(
+  p0: *mut lib,
   p1: *mut u8,
   p2: *mut ptr,
 ): i32
 
 extern("uv", "uv_dlerror")
-fn uv_dlerror(
-  p0: *mut uv_lib_t,
+fn dlerror(
+  p0: *mut lib,
 ): *mut u8
 
 extern("uv", "uv_mutex_init")
-fn uv_mutex_init(
-  p0: *mut uv_mutex_t,
+fn mutex_init(
+  p0: *mut mutex,
 ): i32
 
 extern("uv", "uv_mutex_init_recursive")
-fn uv_mutex_init_recursive(
-  p0: *mut uv_mutex_t,
+fn mutex_init_recursive(
+  p0: *mut mutex,
 ): i32
 
 extern("uv", "uv_mutex_destroy")
-fn uv_mutex_destroy(
-  p0: *mut uv_mutex_t,
+fn mutex_destroy(
+  p0: *mut mutex,
 ): {}
 
 extern("uv", "uv_mutex_lock")
-fn uv_mutex_lock(
-  p0: *mut uv_mutex_t,
+fn mutex_lock(
+  p0: *mut mutex,
 ): {}
 
 extern("uv", "uv_mutex_trylock")
-fn uv_mutex_trylock(
-  p0: *mut uv_mutex_t,
+fn mutex_trylock(
+  p0: *mut mutex,
 ): i32
 
 extern("uv", "uv_mutex_unlock")
-fn uv_mutex_unlock(
-  p0: *mut uv_mutex_t,
+fn mutex_unlock(
+  p0: *mut mutex,
 ): {}
 
 extern("uv", "uv_rwlock_init")
-fn uv_rwlock_init(
-  p0: *mut uv_rwlock_t,
+fn rwlock_init(
+  p0: *mut rwlock,
 ): i32
 
 extern("uv", "uv_rwlock_destroy")
-fn uv_rwlock_destroy(
-  p0: *mut uv_rwlock_t,
+fn rwlock_destroy(
+  p0: *mut rwlock,
 ): {}
 
 extern("uv", "uv_rwlock_rdlock")
-fn uv_rwlock_rdlock(
-  p0: *mut uv_rwlock_t,
+fn rwlock_rdlock(
+  p0: *mut rwlock,
 ): {}
 
 extern("uv", "uv_rwlock_tryrdlock")
-fn uv_rwlock_tryrdlock(
-  p0: *mut uv_rwlock_t,
+fn rwlock_tryrdlock(
+  p0: *mut rwlock,
 ): i32
 
 extern("uv", "uv_rwlock_rdunlock")
-fn uv_rwlock_rdunlock(
-  p0: *mut uv_rwlock_t,
+fn rwlock_rdunlock(
+  p0: *mut rwlock,
 ): {}
 
 extern("uv", "uv_rwlock_wrlock")
-fn uv_rwlock_wrlock(
-  p0: *mut uv_rwlock_t,
+fn rwlock_wrlock(
+  p0: *mut rwlock,
 ): {}
 
 extern("uv", "uv_rwlock_trywrlock")
-fn uv_rwlock_trywrlock(
-  p0: *mut uv_rwlock_t,
+fn rwlock_trywrlock(
+  p0: *mut rwlock,
 ): i32
 
 extern("uv", "uv_rwlock_wrunlock")
-fn uv_rwlock_wrunlock(
-  p0: *mut uv_rwlock_t,
+fn rwlock_wrunlock(
+  p0: *mut rwlock,
 ): {}
-
-extern("uv", "uv_sem_init")
-fn uv_sem_init(
-  p0: *mut uv_sem_t,
-  p1: u32,
-): i32
-
-extern("uv", "uv_sem_destroy")
-fn uv_sem_destroy(
-  p0: *mut uv_sem_t,
-): {}
-
-extern("uv", "uv_sem_post")
-fn uv_sem_post(
-  p0: *mut uv_sem_t,
-): {}
-
-extern("uv", "uv_sem_wait")
-fn uv_sem_wait(
-  p0: *mut uv_sem_t,
-): {}
-
-extern("uv", "uv_sem_trywait")
-fn uv_sem_trywait(
-  p0: *mut uv_sem_t,
-): i32
 
 extern("uv", "uv_cond_init")
-fn uv_cond_init(
-  p0: *mut uv_cond_t,
+fn cond_init(
+  p0: *mut cond,
 ): i32
 
 extern("uv", "uv_cond_destroy")
-fn uv_cond_destroy(
-  p0: *mut uv_cond_t,
-): {}
-
-extern("uv", "uv_cond_signal")
-fn uv_cond_signal(
-  p0: *mut uv_cond_t,
+fn cond_destroy(
+  p0: *mut cond,
 ): {}
 
 extern("uv", "uv_cond_broadcast")
-fn uv_cond_broadcast(
-  p0: *mut uv_cond_t,
+fn cond_broadcast(
+  p0: *mut cond,
 ): {}
 
 extern("uv", "uv_barrier_init")
-fn uv_barrier_init(
-  p0: *mut uv_barrier_t,
+fn barrier_init(
+  p0: *mut barrier,
   p1: u32,
 ): i32
 
 extern("uv", "uv_barrier_destroy")
-fn uv_barrier_destroy(
-  p0: *mut uv_barrier_t,
+fn barrier_destroy(
+  p0: *mut barrier,
 ): {}
 
 extern("uv", "uv_barrier_wait")
-fn uv_barrier_wait(
-  p0: *mut uv_barrier_t,
+fn barrier_wait(
+  p0: *mut barrier,
 ): i32
 
 extern("uv", "uv_cond_wait")
-fn uv_cond_wait(
-  p0: *mut uv_cond_t,
-  p1: *mut uv_mutex_t,
+fn cond_wait(
+  p0: *mut cond,
+  p1: *mut mutex,
 ): {}
 
 extern("uv", "uv_cond_timedwait")
-fn uv_cond_timedwait(
-  p0: *mut uv_cond_t,
-  p1: *mut uv_mutex_t,
+fn cond_timedwait(
+  p0: *mut cond,
+  p1: *mut mutex,
   p2: u64,
 ): i32
 
 extern("uv", "uv_once")
-fn uv_once(
-  p0: *mut uv_once_t,
+fn once(
+  p0: *mut once,
   p1: *fn(
 
   ) -> {},
 ): {}
 
 extern("uv", "uv_key_create")
-fn uv_key_create(
-  p0: *mut uv_key_t,
+fn key_create(
+  p0: *mut key,
 ): i32
 
 extern("uv", "uv_key_delete")
-fn uv_key_delete(
-  p0: *mut uv_key_t,
+fn key_delete(
+  p0: *mut key,
 ): {}
 
 extern("uv", "uv_key_get")
-fn uv_key_get(
-  p0: *mut uv_key_t,
+fn key_get(
+  p0: *mut key,
 ): ptr
 
-extern("uv", "uv_key_set")
-fn uv_key_set(
-  p0: *mut uv_key_t,
-  p1: ptr,
-): {}
-
 extern("uv", "uv_gettimeofday")
-fn uv_gettimeofday(
-  p0: *mut uv_timeval64_t,
+fn gettimeofday(
+  p0: *mut timeval64,
 ): i32
 
-type alias uv_thread_cb = *fn(
+type alias thread_cb = *fn(
   ptr
 ) -> {}
 
 extern("uv", "uv_thread_create")
-fn uv_thread_create(
-  p0: *mut uv_thread_t,
-  p1: uv_thread_cb,
+fn thread_create(
+  p0: *mut thread,
+  p1: thread_cb,
   p2: ptr,
 ): i32
 
 extern("uv", "uv_thread_detach")
-fn uv_thread_detach(
-  p0: *mut uv_thread_t,
+fn thread_detach(
+  p0: *mut thread,
 ): i32
 
-type uv_thread_create_flags = either(u32) {
+type thread_create_flags = either(u32) {
   UV_THREAD_NO_FLAGS = 0,
   UV_THREAD_HAS_STACK_SIZE = 1,
 }
 
 
-type uv_thread_options_s = {
-  flags: u32,
-  stack_size: usize,
-}
-
-type alias uv_thread_options_t = uv_thread_options_s
+type alias thread_options = thread_options_s
 
 extern("uv", "uv_thread_create_ex")
-fn uv_thread_create_ex(
-  p0: *mut uv_thread_t,
-  p1: *mut uv_thread_options_t,
-  p2: uv_thread_cb,
+fn thread_create_ex(
+  p0: *mut thread,
+  p1: *mut thread_options,
+  p2: thread_cb,
   p3: ptr,
 ): i32
 
-extern("uv", "uv_thread_setaffinity")
-fn uv_thread_setaffinity(
-  p0: *mut uv_thread_t,
-  p1: *mut u8,
-  p2: *mut u8,
-  p3: usize,
-): i32
-
 extern("uv", "uv_thread_getaffinity")
-fn uv_thread_getaffinity(
-  p0: *mut uv_thread_t,
+fn thread_getaffinity(
+  p0: *mut thread,
   p1: *mut u8,
   p2: usize,
 ): i32
 
 extern("uv", "uv_thread_getcpu")
-fn uv_thread_getcpu(): i32
-
-extern("uv", "uv_thread_self")
-fn uv_thread_self(): uv_thread_t
+fn thread_getcpu(): i32
 
 extern("uv", "uv_thread_join")
-fn uv_thread_join(
-  p0: *mut uv_thread_t,
+fn thread_join(
+  p0: *mut thread,
 ): i32
 
 extern("uv", "uv_thread_equal")
-fn uv_thread_equal(
-  p0: *mut uv_thread_t,
-  p1: *mut uv_thread_t,
-): i32
-
-extern("uv", "uv_thread_setname")
-fn uv_thread_setname(
-  p0: *mut u8,
+fn thread_equal(
+  p0: *mut thread,
+  p1: *mut thread,
 ): i32
 
 extern("uv", "uv_thread_getname")
-fn uv_thread_getname(
-  p0: *mut uv_thread_t,
+fn thread_getname(
+  p0: *mut thread,
   p1: *mut u8,
   p2: usize,
 ): i32
 
-type alias uv_any_handle = opaque[344, 8]
+type alias any_handle = opaque[344, 8]
 
-type alias uv_any_req = opaque[1320, 8]
-
-type alias uv_loop_s = opaque[1072, 8]
+type alias any_req = opaque[1320, 8]
 
 extern("uv", "uv_loop_get_data")
-fn uv_loop_get_data(
-  p0: *mut uv_loop_t,
+fn loop_get_data(
+  p0: *mut loop,
 ): ptr
 
-extern("uv", "uv_loop_set_data")
-fn uv_loop_set_data(
-  p0: *mut uv_loop_t,
-  p1: ptr,
-): {}
-
 extern("uv", "uv_utf16_length_as_wtf8")
-fn uv_utf16_length_as_wtf8(
+fn utf16_length_as_wtf8(
   p0: *mut u16,
   p1: size,
 ): usize
 
 extern("uv", "uv_utf16_to_wtf8")
-fn uv_utf16_to_wtf8(
+fn utf16_to_wtf8(
   p0: *mut u16,
   p1: size,
   p2: *mut *mut u8,
@@ -2762,12 +2015,12 @@ fn uv_utf16_to_wtf8(
 ): i32
 
 extern("uv", "uv_wtf8_length_as_utf16")
-fn uv_wtf8_length_as_utf16(
+fn wtf8_length_as_utf16(
   p0: *mut u8,
 ): size
 
 extern("uv", "uv_wtf8_to_utf16")
-fn uv_wtf8_to_utf16(
+fn wtf8_to_utf16(
   p0: *mut u8,
   p1: *mut u16,
   p2: usize,

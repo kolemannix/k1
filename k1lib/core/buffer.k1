@@ -225,6 +225,22 @@ ns for buffer {
 
   fn take[t](self: buffer[t], count: size): buffer[t] { self.slice(0,     count) }
   fn drop[t](self: buffer[t], count: size): buffer[t] { self.slice(count, self.len) }
+  fn take-right[t](self: buffer[t], count: size): buffer[t] {
+    self.slice(self.len() - count, self.len())
+  }
+  fn drop-right[t](self: buffer[t], count: size): buffer[t] {
+    self.slice(0, self.len() - count)
+  }
+
+  fn starts-with[t: equals](self: buffer[t], other: buffer[t]): bool {
+    other.len() <= self.len() and
+    self.take(other.len()) == other
+  }
+  
+  fn ends-with[t: equals](self: buffer[t], other: buffer[t]): bool {
+    other.len() <= self.len() and
+    self.take-right(other.len()) == other
+  }
 
   fn chunks[t](self: buffer[t], size: size): span[buffer[t]] {
     if size == 0 return(span/empty());

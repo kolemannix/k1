@@ -29,11 +29,11 @@ fn parseCommand(cmd: string): result[Command, string] {
     
     // Commands that require more complex parsing
     _ -> {
-      if cmd.startsWith("perft ") {
+      if cmd.starts-with("perft ") {
          let parsedDepth = cmd.drop(6).toInt();
          if parsedDepth is :some(depth) { :ok(:Perft({ depth: depth.as[u32] })) }
          else :err("Invalid perft command: {cmd}")
-      } else if cmd.startsWith("position ") {
+      } else if cmd.starts-with("position ") {
         // "position" command sets up a position to analyze:
         //   "position startpos" - start from initial position
         //   "position startpos moves e2e4 e7e5" - start pos then apply moves
@@ -42,22 +42,22 @@ fn parseCommand(cmd: string): result[Command, string] {
 
         
         // Example minimal parsing:
-        // if cmd.startsWith("position startpos") {
+        // if cmd.starts-with("position startpos") {
         //   println("[debug] setting up start position");
         //   
         //   // Check if there are moves to apply
-        //   if cmd.startsWith("position startpos moves ") {
+        //   if cmd.starts-with("position startpos moves ") {
         //     let movesStr = cmd.substring(24, cmd.len());
         //     println("[debug] applying moves: \{movesStr}");
         //   }
         //   
-        // } else if cmd.startsWith("position fen ") {
+        // } else if cmd.starts-with("position fen ") {
         //   println("[debug] setting up FEN position");
         //   // Would parse FEN and any moves here
         // }
 
         :ok(:Position(cmd.substring(8, cmd.len())))
-      } else if cmd.startsWith("go ") {
+      } else if cmd.starts-with("go ") {
         // "go" command tells engine to start calculating. Examples:
         //   "go infinite" - search until "stop" command
         //   "go wtime 300000 btime 300000" - search with time controls

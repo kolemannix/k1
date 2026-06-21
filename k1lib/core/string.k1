@@ -117,10 +117,10 @@ ns for string {
     })
   }
 
-  fn indexOfString(self: string, target: string): ?size {
+  fn index-of-string(self: string, target: string): ?size {
     for self.span {
       let i = itIndex;
-      if i + target.len() >= self.len() {
+      if i + target.len() > self.len() {
         return(:none)
       };
       let sub = self.substring(i, i + target.len());
@@ -129,23 +129,31 @@ ns for string {
     :none
   }
 
+  fn contains-string(self: string, target: string): bool { self.index-of-string(target) is :some(_) }
+
   fn substring(self: string, start: size, end: size): string {
-    { span: self.span.slice(start, end) }
+    self.slice(start, end)
   }
   fn slice(self: string, start: size, end: size): string {
     { span: self.span.slice(start, end) }
   }
 
-  fn take(self: string, count: size): string { self.substring(0,     count) }
-  fn drop(self: string, count: size): string { self.substring(count, self.len()) }
+  fn take(self: string, count: size): string { { span: self.span.take(count) } }
+  fn drop(self: string, count: size): string { { span: self.span.drop(count) } }
+  fn take-right(self: string, count: size): string { { span: self.span.take-right(count) } }
+  fn drop-right(self: string, count: size): string { { span: self.span.drop-right(count) } }
+  
+  fn starts-with(self: string, other: string): bool {
+    self.span.starts-with(other.span)
+  }
+  
+  fn ends-with(self: string, other: string): bool {
+    self.span.ends-with(other.span)
+  }
 
   fn chunks(self: string, size: size): span[string] {
     let char-spans: span[span[char]] = self.span.chunks(size);
     mem/bitcast[span[span[char]], span[string]](char-spans)
-  }
-
-  fn startsWith(self: string, other: string): bool {
-    self.substring(0, other.len()) == other
   }
 
   fn data-ptr(self: string): ptr { self.span.data-ptr() }

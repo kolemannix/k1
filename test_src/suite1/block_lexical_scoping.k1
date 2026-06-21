@@ -7,6 +7,6 @@ fn test() {
   });
   assert(
     result is :some(msg) 
-    and msg.startsWith("Error in parameter 'value' in call to 'assert'\nNo value '_foo' is in scope")
+    and msg.starts-with("Error in parameter 'value' in call to 'assert'\nNo value '_foo' is in scope")
   )
 }

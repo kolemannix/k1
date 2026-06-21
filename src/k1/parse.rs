@@ -2997,7 +2997,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::StaticLiteral(*l));
                 Ok(Some(type_expr_id))
             } else {
-                unreachable!("parse_literal returned non-literal")
+                Err(error("This literal can't be used as a type", first))
             }
         } else if first.kind == K::Ident {
             let first_chars = self.get_token_chars(first);
