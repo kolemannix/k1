@@ -32,18 +32,18 @@ $ core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List")
 fn test() {
   let frob: Frob = { b: false };
 
-  assertEquals(frob.getName(), "Joe");
-  assertEquals(isPow2(n), false);
-  assertEquals(isPow2(x), true);
-  assertEquals(Secret/secret1(), 42);
-  assertEquals(Secret/secret2(), 43);
+  assert-equals(frob.getName(), "Joe");
+  assert-equals(isPow2(n), false);
+  assert-equals(isPow2(x), true);
+  assert-equals(Secret/secret1(), 42);
+  assert-equals(Secret/secret2(), 43);
 
   let* ps = Point3List/empty();
   ps.push({ x: 5, y: 10, z: 15 });
   let p = ps.get(0);
-  assertEquals(p.x, 5);
-  assertEquals(p.y, 10);
-  assertEquals(p.z, 15);
+  assert-equals(p.x, 5);
+  assert-equals(p.y, 10);
+  assert-equals(p.z, 15);
 
 }
 

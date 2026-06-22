@@ -5,7 +5,7 @@
 
 typedef struct cinput_i2 {
   int x; int y;
-} i2;
+} cinput_i2;
 
 union cinput_Union1_u {
   int x;
@@ -25,7 +25,7 @@ struct foo {
   float _float;
   long long _longlong;
   long _long;
-  i2 _i2;
+  cinput_i2 _i2;
   struct cinput_i2 _struct_i2;
   struct { int x; int y; } _struct_anon;
   cinput_Union1_t _union_1;

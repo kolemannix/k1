@@ -2793,7 +2793,8 @@ impl TypedProgram {
         pattern_ctors.add_expected_id(PatternCtor::Float, PatternCtorId::FLOAT);
         pattern_ctors.add_expected_id(PatternCtor::Pointer, PatternCtorId::POINTER);
         pattern_ctors.add_expected_id(PatternCtor::TypeVariable, PatternCtorId::TYPE_VARIABLE);
-        pattern_ctors.add_expected_id(PatternCtor::FunctionPointer, PatternCtorId::FUNCTION_POINTER);
+        pattern_ctors
+            .add_expected_id(PatternCtor::FunctionPointer, PatternCtorId::FUNCTION_POINTER);
         pattern_ctors.add_expected_id(PatternCtor::LambdaObject, PatternCtorId::LAMBDA_OBJECT);
         pattern_ctors.add_expected_id(PatternCtor::Buffer, PatternCtorId::BUFFER);
         pattern_ctors.add_expected_id(PatternCtor::Span, PatternCtorId::SPAN);
@@ -8796,20 +8797,11 @@ impl TypedProgram {
                     });
                 }
                 Some(passed_expr) => {
-                    let expr = self
-                        .eval_expr_with_coercion(
-                            *passed_expr,
-                            ctx.with_expected_type(Some(expected_field.type_id)),
-                            true,
-                        )
-                        .map_err(|e| {
-                            errf!(
-                                e.span,
-                                "Field '{}' has an issue\n{}",
-                                self.ident_str(passed_field.name),
-                                e.message
-                            )
-                        })?;
+                    let expr = self.eval_expr_with_coercion(
+                        *passed_expr,
+                        ctx.with_expected_type(Some(expected_field.type_id)),
+                        true,
+                    )?;
                     let expr_type = self.exprs.get_type(expr);
                     if expr_type == NEVER_TYPE_ID {
                         return failf!(
@@ -12999,10 +12991,10 @@ impl TypedProgram {
                             .map_err(|err| {
                                 errf!(
                                     err.span,
-                                    "Error in parameter '{}' in call to '{}'\n{}",
-                                    self.ident_str(param.name),
+                                    "{}\nOccurred in call parameter '{}.{}'",
+                                    err.message,
                                     self.qident_to_string(&fn_call.name),
-                                    err.message
+                                    self.ident_str(param.name),
                                 )
                             })?,
                     };
@@ -14158,16 +14150,11 @@ impl TypedProgram {
                     );
                 }
                 let expected_rhs = lhs_type.inner_type;
-                let rhs = self
-                    .eval_expr_with_coercion(
-                        set_stmt.rhs,
-                        ctx.with_expected_type(Some(expected_rhs)),
-                        true,
-                    )
-                    .map_err(|mut e| {
-                        e.message = format!("Invalid type for storage: {}", e.message);
-                        e
-                    })?;
+                let rhs = self.eval_expr_with_coercion(
+                    set_stmt.rhs,
+                    ctx.with_expected_type(Some(expected_rhs)),
+                    true,
+                )?;
                 let stmt_id = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
                     destination: lhs,
                     value: rhs,
@@ -14675,20 +14662,11 @@ impl TypedProgram {
             }
             Some(payload_type) => {
                 if let Some(payload_arg) = payload {
-                    let payload_value = self
-                        .eval_expr_with_coercion(
-                            payload_arg,
-                            ctx.with_expected_type(Some(payload_type)),
-                            true,
-                        )
-                        .map_err(|e| {
-                            errf!(
-                                self.ast.exprs.get_span(payload_arg),
-                                ":{} payload type mismatch: {}",
-                                self.ident_str(variant_name),
-                                e.message
-                            )
-                        })?;
+                    let payload_value = self.eval_expr_with_coercion(
+                        payload_arg,
+                        ctx.with_expected_type(Some(payload_type)),
+                        true,
+                    )?;
                     Ok(Some(payload_value))
                 } else {
                     failf!(
@@ -17870,8 +17848,8 @@ impl TypedProgram {
             core!("eprintln"),
             core!("identity"),
             core!("assert"),
-            core!("assertEquals"),
-            core!("assertMsg"),
+            core!("assert-equals"),
+            core!("assert-msg"),
             core!("crash"),
             core!("meta"),
             core!("mem"),
@@ -17933,20 +17911,14 @@ impl TypedProgram {
         }
     }
 
-    // fn add_std_uses_to_scope(&mut self, scope: ScopeId, span: SpanId) -> TyperResult<()> {
-    //     let std_ns: IdentSlice = self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.std]);
-    //     let idents_to_use = [QIdent { path: std_ns, name: get_ident!(self, "HashMap"), span }];
-    //     for qid in idents_to_use.into_iter() {
-    //         let use_id = self.ast.uses.add_use(parse::ParsedUse { target: qid, alias: None, span });
-    //         self.eval_use_definition(scope, use_id)?;
-    //     }
-    //     Ok(())
-    // }
-
     fn get_type_schema(&mut self, type_id: TypeId) -> StaticValueId {
-        if let Some(static_value_id) = self.type_schemas.get(&type_id) {
+        let reserved_id = if let Some(static_value_id) = self.type_schemas.get(&type_id) {
             return *static_value_id;
-        }
+        } else {
+            let reserved_value_id = self.static_values.pool.reserve_id();
+            self.type_schemas.insert(type_id, reserved_value_id);
+            reserved_value_id
+        };
 
         let type_schema_type_id = self.types.builtins.types_type_schema.unwrap();
         let type_schema = *self.types.get(type_schema_type_id).expect_sum();
@@ -18041,6 +18013,7 @@ impl TypedProgram {
                 make_variant(self, get_ident!(self, "string"), None)
             }
             Type::Struct(struct_type) => {
+                let record_kind = struct_type.record_kind;
                 let struct_schema_payload_type_id =
                     get_schema_variant(self, get_ident!(self, "struct")).payload.unwrap();
                 // { fields: span[{}] }
@@ -18052,8 +18025,13 @@ impl TypedProgram {
                     self.types.mem.get_nth(struct_schema_payload_struct.fields, 0).type_id;
                 let struct_schema_field_item_struct_type_id =
                     self.types.get_as_span_instance(struct_schema_fields_span_type_id).unwrap();
+
+                // for offsets
+                let struct_layout = match record_kind {
+                    RecordKind::Struct => Some(self.get_struct_layout(type_id)),
+                    RecordKind::Union => None,
+                };
                 // { name: string), typeId: u64, offset: size }
-                let struct_layout = self.get_struct_layout(type_id);
                 let mut field_values: List<StaticValueId, StaticValuePool> =
                     self.static_values.mem.new_list(struct_type_fields.len());
                 for (index, f) in self.types.mem.getn(struct_type_fields).iter().enumerate() {
@@ -18065,7 +18043,10 @@ impl TypedProgram {
                     self.register_type_metainfo(f.type_id);
 
                     let type_id_value_id = self.static_values.add_type_id_int_value(f.type_id);
-                    let offset_u32 = struct_layout[index].offset;
+                    let offset_u32 = match &struct_layout {
+                        None => 0,
+                        Some(struct_layout) => struct_layout[index].offset,
+                    };
                     let offset_value_id = self.static_values.add_size(offset_u32 as i64);
                     let field_struct_fields = self.static_values.mem.pushn(&[
                         // name: string
@@ -18088,7 +18069,11 @@ impl TypedProgram {
                 let payload = self
                     .static_values
                     .add_struct_from_slice(struct_schema_payload_type_id, &[span_value_id]);
-                make_variant(self, get_ident!(self, "struct"), Some(payload))
+                let variant_name = match record_kind {
+                    RecordKind::Struct => "struct",
+                    RecordKind::Union => "union",
+                };
+                make_variant(self, get_ident!(self, variant_name), Some(payload))
             }
             Type::Reference(reference_type) => {
                 let reference_type = *reference_type;
@@ -18323,9 +18308,8 @@ impl TypedProgram {
             }
         };
 
-        let static_value_id = self.static_values.add(StaticValue::Sum(schema_static_sum));
-        self.type_schemas.insert(type_id, static_value_id);
-        static_value_id
+        self.static_values.set(reserved_id, StaticValue::Sum(schema_static_sum));
+        reserved_id
     }
 
     fn get_type_name(&mut self, type_id: TypeId) -> StaticValueId {

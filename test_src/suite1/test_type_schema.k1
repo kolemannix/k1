@@ -3,6 +3,8 @@ ns type_schema {
     x: t, y: t, z: t
   }
 
+  type recursive-type = { node: *recursive-type }
+
   use types/schema
   use types/type-id
   use types/type-id-schema
@@ -36,12 +38,12 @@ ns type_schema {
 
     let pointByteSchema = schema[Point3[u8]];
     require pointByteSchema is :struct({ fields }) else crash("");
-    assertEquals(fields.len(), 3);
+    assert-equals(fields.len(), 3);
     require schema[*i32]
       is :reference({ mutable: false, inner-type-id })
       and inner-type-id == type-id[i32] else crash("");
     assert(schema[*mut i32] is :reference({ mutable: true }));
-    assertEquals(
+    assert-equals(
       schema[**bool].as-reference().!.inner-type-id,
       type-id[*bool]
     );
@@ -70,7 +72,7 @@ ns type_schema {
       and size == :some(5)
       else crash("");
 
-    assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
+    assert-equals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
 
     let isZeroPtr: *fn(int) -> bool = isZero;
     require schema[type-of(isZeroPtr)]
@@ -80,8 +82,21 @@ ns type_schema {
       is :function({ params, return-type-id }) else crash("");
 
     assert(type-id-schema(return-type-id) is :bool);
-    assertEquals(params.get(0).name, "x");
+    assert-equals(params.get(0).name, "x");
     assert(type-id-schema(params.get(0).type-id) is :int(_));
+
+    require schema[union { a: int, b: f64, c: f32 }]
+      is :union({ fields })
+      and fields.len()         == 3
+      and fields.get(0).name   == "a"
+      and fields.get(0).offset == 0
+      and fields.get(1).name   == "b"
+      and fields.get(1).offset == 0
+      and fields.get(2).name   == "c"
+      and fields.get(2).offset == 0
+      else crash("");
+
+    require schema[recursive-type] is :struct(_) else crash("");
 
     {}
   }

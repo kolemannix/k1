@@ -71,53 +71,53 @@ ns foo {
 }
 
 fn testAll() {
-  assertEquals(
+  assert-equals(
     foo/very_small({ x: 10 }, { x: 20 }),
     { x: 30 }
   );
 
   let smallResult = foo/small({r: 1, g: 10, b: 20, a: 30 }, { r: 1, g: 1, b: 1, a: 1 });
-  assertEquals(smallResult.r, 2);
-  assertEquals(smallResult.g, 11);
-  assertEquals(smallResult.b, 21);
-  assertEquals(smallResult.a, 31);
+  assert-equals(smallResult.r, 2);
+  assert-equals(smallResult.g, 11);
+  assert-equals(smallResult.b, 21);
+  assert-equals(smallResult.a, 31);
 
   let intWrapResult = foo/intWrap({ inner: -5 }, { inner: 10 });
-  assertEquals(intWrapResult.inner, 5);
+  assert-equals(intWrapResult.inner, 5);
 
   let mediumResult = foo/medium({ a: 10, b: 100 }, { a: 1, b: 20 });
-  assertEquals(mediumResult.a, 11);
-  assertEquals(mediumResult.b, 120);
+  assert-equals(mediumResult.a, 11);
+  assert-equals(mediumResult.b, 120);
 
   let largeResult = foo/large(
     { med1: { a: 1, b: 2 }, med2: { a: 3, b: 4 } },
     { med1: { a: 10, b: 20 }, med2: { a: 30, b: 40 } }
   );
-  assertEquals(largeResult.med1.a, 11);
-  assertEquals(largeResult.med1.b, 22);
-  assertEquals(largeResult.med2.a, 33);
-  assertEquals(largeResult.med2.b, 44);
+  assert-equals(largeResult.med1.a, 11);
+  assert-equals(largeResult.med1.b, 22);
+  assert-equals(largeResult.med2.a, 33);
+  assert-equals(largeResult.med2.b, 44);
 
   let hfa2 = foo/hfa2-add({ x: 1.0, y: 2.0 }, { x: 10.0, y: 20.0 });
-  assertEquals(hfa2.x, 11.0);
-  assertEquals(hfa2.y, 22.0);
+  assert-equals(hfa2.x, 11.0);
+  assert-equals(hfa2.y, 22.0);
 
   let hfaNested3 = foo/hfa-nested3-add(
     { a: { x: 1.0 }, b: 2.0, c: 3.0 },
     { a: { x: 10.0 }, b: 20.0, c: 30.0 }
   );
-  assertEquals(hfaNested3.a.x, 11.0);
-  assertEquals(hfaNested3.b, 22.0);
-  assertEquals(hfaNested3.c, 33.0);
+  assert-equals(hfaNested3.a.x, 11.0);
+  assert-equals(hfaNested3.b, 22.0);
+  assert-equals(hfaNested3.c, 33.0);
 
   let hfa4 = foo/hfa4-add(
     { a: 1.0, b: 2.0, c: 3.0, d: 4.0 },
     { a: 10.0, b: 20.0, c: 30.0, d: 40.0 }
   );
-  assertEquals(hfa4.a, 11.0);
-  assertEquals(hfa4.b, 22.0);
-  assertEquals(hfa4.c, 33.0);
-  assertEquals(hfa4.d, 44.0);
+  assert-equals(hfa4.a, 11.0);
+  assert-equals(hfa4.b, 22.0);
+  assert-equals(hfa4.c, 33.0);
+  assert-equals(hfa4.d, 44.0);
 
   let cursor: foo/CXCursor = {
     kind: :UnexposedDecl,
@@ -125,20 +125,20 @@ fn testAll() {
     data: [1.as[ptr], 2.as[ptr], 3.as[ptr]]
   };
   let rt = foo/rtCursor(cursor);
-  assertEquals(cursor.kind.enum-value(), rt.kind.enum-value());
-  assertEquals(cursor.xdata, rt.xdata);
-  assertEquals(cursor.data.get(0), rt.data.get(0));
-  assertEquals(cursor.data.get(1), rt.data.get(1));
-  assertEquals(cursor.data.get(2), rt.data.get(2));
+  assert-equals(cursor.kind.enum-value(), rt.kind.enum-value());
+  assert-equals(cursor.xdata, rt.xdata);
+  assert-equals(cursor.data.get(0), rt.data.get(0));
+  assert-equals(cursor.data.get(1), rt.data.get(1));
+  assert-equals(cursor.data.get(2), rt.data.get(2));
 
   let n = foo/getFileName(ptr/null);
-  assertEquals(n.data.as[size], 3);
-  assertEquals(n.private_flags, 21);
+  assert-equals(n.data.as[size], 3);
+  assert-equals(n.private_flags, 21);
 
   let locn = foo/getCursorLocation(rt);
-  assertEquals(locn.ptr_data.get(0), 1.as[ptr]);
-  assertEquals(locn.ptr_data.get(1), 2.as[ptr]);
-  assertEquals(locn.int_data, 42);
+  assert-equals(locn.ptr_data.get(0), 1.as[ptr]);
+  assert-equals(locn.ptr_data.get(1), 2.as[ptr]);
+  assert-equals(locn.int_data, 42);
 
   assert(not foo/TagUnion_iszero(:a(10)).as-bool());
   assert(    foo/TagUnion_iszero(:a(0)).as-bool());
@@ -159,10 +159,10 @@ fn testFnPtr() {
   //        We should prevent this, somehow
 
   let sum = foo/takes-fn(sum-fn);
-  assertEquals(sum, 1+2+3+4);
+  assert-equals(sum, 1+2+3+4);
 
   let sum2 = foo/takes-fn-struct(sum-fn-struct);
-  assertEquals(sum2, 1+2+3+4);
+  assert-equals(sum2, 1+2+3+4);
 }
 
 fn sum-fn(a: u64, b: u64, c: u64, d: u64): i32 {

@@ -9,8 +9,8 @@ fn testLiterals() {
   let array: array[bool, 3] = [false, true, true];
   let buffer: buffer[bool] = [false, true, true];
   let list: list[bool] = [false, true, true];
-  assertEquals(&array.as-buffer(), buffer);
-  assertEquals(list.asBuffer(), buffer);
+  assert-equals(&array.as-buffer(), buffer);
+  assert-equals(list.asBuffer(), buffer);
 }
 
 fn testFilled() {
@@ -18,13 +18,13 @@ fn testFilled() {
   let buffer: buffer[u8] = buffer/filledIn(size = 64, value = 3);
   let array: *array[u8, 64] = array/filled-in(3, 64);
   let list: list[u8] = list/filledIn(size = 64, value = 3);
-  assertEquals(buffer.len, 64);
-  assertEquals(array.len(), 64);
-  assertEquals(list.len, 64);
+  assert-equals(buffer.len, 64);
+  assert-equals(array.len(), 64);
+  assert-equals(list.len, 64);
   for buffer {
-    assertEquals(buffer.get(itIndex), 3);
-    assertEquals(list.get(itIndex), 3);
-    assertEquals(array.get(itIndex), 3);
+    assert-equals(buffer.get(itIndex), 3);
+    assert-equals(list.get(itIndex), 3);
+    assert-equals(array.get(itIndex), 3);
   }
 }
 
@@ -38,23 +38,23 @@ fn testArray() {
   };
   for core/IntRange/upTo(a.len()) {
     if it % 2 == 0 {
-      assertEquals(a.get(it), 1);
+      assert-equals(a.get(it), 1);
     } else {
-      assertEquals(a.get(it), 3);
+      assert-equals(a.get(it), 3);
     }
   };
   for a {
     if itIndex % 2 == 0 {
-      assertEquals(it, 1);
+      assert-equals(it, 1);
     } else {
-      assertEquals(it, 3);
+      assert-equals(it, 3);
     }
   }
 
 }
 
 fn test() {
-  assertEquals(types/size[Thing](), 9216);
+  assert-equals(types/size[Thing](), 9216);
 
   testArray();
 
@@ -66,7 +66,7 @@ fn test() {
   array.set(0, 3.14);
   let buf = buffer/wrapArray(&array);
   assert(buf.get(0) == array.get(0));
-  assertEquals(buf.get(0), array.get(0));
+  assert-equals(buf.get(0), array.get(0));
 
   {}
 }

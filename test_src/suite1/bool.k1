@@ -21,10 +21,10 @@ fn test() {
   let r2 = if false and crashBool() false else true;
   assert(r2);
 
-  assertEquals(t.as[u8], 1);
-  assertEquals(f.as[u8], 0);
-  assertEquals(t.as[i32], 1);
-  assertEquals(f.as[i32], 0);
+  assert-equals(t.as[u8], 1);
+  assert-equals(f.as[u8], 0);
+  assert-equals(t.as[i32], 1);
+  assert-equals(f.as[i32], 0);
 
   {}
 }

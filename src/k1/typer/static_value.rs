@@ -342,6 +342,12 @@ impl StaticValuePool {
         new_id
     }
 
+    pub fn set(&mut self, reserved_id: StaticValueId, value: StaticValue) {
+        let hash = self.hash(&value);
+        *self.pool.get_mut(reserved_id) = value;
+        self.hashes.insert(hash, reserved_id);
+    }
+
     pub fn get(&self, id: StaticValueId) -> &StaticValue {
         self.pool.get(id)
     }

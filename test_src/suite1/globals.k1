@@ -13,11 +13,11 @@ let globalString: string = "imglobal"
 
 fn test() {
 
-   assertEquals(foo, 42);
-   assertEquals(bar, 31);
+   assert-equals(foo, 42);
+   assert-equals(bar, 31);
 
-   assertEquals(globalInt, 0);
-   assertEquals(staticInt, 2);
+   assert-equals(globalInt, 0);
+   assert-equals(staticInt, 2);
 
    while globalIntMut > staticInt {
      &globalIntMut <- globalIntMut - 1;
@@ -25,11 +25,11 @@ fn test() {
    assert(globalIntMut == 2);
 
    &globalMutPtr <- &globalIntMut.as[ptr];
-   assertEquals(globalMutPtr.as[*int].*, 2);
+   assert-equals(globalMutPtr.as[*int].*, 2);
    assert(&globalIntMut.as[ptr] == globalMutPtr);
 
-   assertEquals(globalString.len(), 8);
-   assertEquals(globalString, "imglobal");
+   assert-equals(globalString.len(), 8);
+   assert-equals(globalString, "imglobal");
 
   {}
 }

@@ -8,11 +8,11 @@ fn test() {
 
   { // Infallible
     require foo is { x, y };
-    assertEquals(x, 1);
-    assertEquals(y, :some(2));
+    assert-equals(x, 1);
+    assert-equals(y, :some(2));
 
     require foo is { y };
-    assertEquals(y, :some(2));
+    assert-equals(y, :some(2));
   };
 
   require not false else {

@@ -57,7 +57,7 @@ ns for HashMap {
         if not v.deleted self.insert(v.key, v.value)
       }
     };
-    assertEquals(origSize, self.size)
+    assert-equals(origSize, self.size)
   }
 
   fn _computeIndex[V](self: HashMap[V], key: string): size {

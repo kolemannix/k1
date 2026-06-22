@@ -10,17 +10,17 @@ fn doIt(_foo: bool, _bar: u32): u32 {
 }
 
 fn testSizeOf() {
-  assertEquals(size[string], 16);
-  assertEquals(stride[string], 16);
-  assertEquals(align[string], 8);
-  assertEquals(size[{ x: u64, c: u8 }], 9);
-  assertEquals(stride[{ x: u64, c: u8 }], 16);
+  assert-equals(size[string], 16);
+  assert-equals(stride[string], 16);
+  assert-equals(align[string], 8);
+  assert-equals(size[{ x: u64, c: u8 }], 9);
+  assert-equals(stride[{ x: u64, c: u8 }], 16);
 }
 
 fn testFnTypeInfo() {
-  assertEquals(type-id[doIt.return](), type-id[u32]());
-  assertEquals(type-id[doIt._foo](), type-id[bool]());
-  assertEquals(type-id[doIt._bar](), type-id[doIt.return]());
+  assert-equals(type-id[doIt.return](), type-id[u32]());
+  assert-equals(type-id[doIt._foo](), type-id[bool]());
+  assert-equals(type-id[doIt._bar](), type-id[doIt.return]());
 }
 
 fn test() {

@@ -48,14 +48,14 @@ fn main(): i32 {
     a -> {}
   };
 
-  assertEquals(matchBool(false), "false");
-  assertEquals(matchOptBool(:some(false)), "false");
-  assertEquals(matchOptBool(:none), "None");
+  assert-equals(matchBool(false), "false");
+  assert-equals(matchOptBool(:some(false)), "false");
+  assert-equals(matchOptBool(:none), "None");
 
   let yes: TriState = :Yes;
-  assertEquals(matchTristateOpt(:some(yes)), "yes");
-  assertEquals(matchTristateOpt(:some(:Yes)), "yes");
-  assertEquals(matchTristateOpt(:some(:Failure({ reason: "because" }))), "failure: because");
+  assert-equals(matchTristateOpt(:some(yes)), "yes");
+  assert-equals(matchTristateOpt(:some(:Yes)), "yes");
+  assert-equals(matchTristateOpt(:some(:Failure({ reason: "because" }))), "failure: because");
 
   assert(not bothTrue({ a: true, b: false }));
   assert(bothTrue({ a: true, b: true }));
@@ -73,9 +73,9 @@ fn main(): i32 {
 
   require foo is :ok(i);
 
-  assertEquals(i, 42);
+  assert-equals(i, 42);
   switch foo {
-    :ok(i) -> assertEquals(i, 42),
+    :ok(i) -> assert-equals(i, 42),
   };
 
   0

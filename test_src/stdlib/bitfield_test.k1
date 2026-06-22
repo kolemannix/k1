@@ -5,8 +5,8 @@ $std/bitfield/define[u16]("FlagsAuto", [b1("shielded"), b1("cloaked"), b1("damag
 fn testBitfield() {
   let y: FlagsAuto = { bits: 0b1111_0000_1000_1101 };
   let x: FlagsAuto = FlagsAuto/zero.setShielded(true).setDamaged(true).setSectorId(17).setFoo(0b1111_0000);
-  assertEquals(y.getShielded(), x.getShielded());
-  assertEquals(y.getCloaked(), x.getCloaked());
-  assertEquals(y.getDamaged(), x.getDamaged());
-  assertEquals(y.getSectorId(), x.getSectorId());
+  assert-equals(y.getShielded(), x.getShielded());
+  assert-equals(y.getCloaked(), x.getCloaked());
+  assert-equals(y.getDamaged(), x.getDamaged());
+  assert-equals(y.getSectorId(), x.getSectorId());
 }

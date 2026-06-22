@@ -13,7 +13,7 @@ fn add[T](a: T, b: T): i32 where T: Num, T: show {
 
 fn test() {
   let result = testCompile(add("asdf": string, "asdf": string));
-  assertEquals(
+  assert-equals(
     result,
     :some("Invalid call to add\n    Could not satisfy ability constraint Num for given type 'T := string due to: No matching implementations found")
   )

@@ -3,14 +3,14 @@ ns zst_test;
 let globalZst: {} = {}
 
 fn testGlobal(): empty {
-  assertEquals(0, types/size[type-of(globalZst)]);
+  assert-equals(0, types/size[type-of(globalZst)]);
   globalZst;
-  assertEquals(globalZst, &globalZst.*);
+  assert-equals(globalZst, &globalZst.*);
 }
 
 fn testLocal(_a: empty, _b: empty, _c: empty, _d: empty): empty {
   let l = {};
-  assertEquals(types/size[type-of(l)], 0);
+  assert-equals(types/size[type-of(l)], 0);
   l
 }
 
@@ -25,7 +25,7 @@ fn test() {
 
 fn staticZst() {
   let point = #static { x: 1, y: (#static 2): int };
-  assertEquals(point.x.from-static(), 1);
+  assert-equals(point.x.from-static(), 1);
 }
 
 //fn staticGetX[P: static { x: int, y: int }](p: P): int {

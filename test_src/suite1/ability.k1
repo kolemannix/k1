@@ -55,14 +55,14 @@ ns qualified_syntax {
 
   fn test() {
     let sFoo: int = HasSecretGen[A = int]@(Foo)/secret();
-    assertEquals(sFoo, 10);
+    assert-equals(sFoo, 10);
     let sBar: int = HasSecretGen[A = int]@(Bar)/secret();
-    assertEquals(sBar, 20);
+    assert-equals(sBar, 20);
 
     let sFooInt: int = HasSecretInt@(Foo)/secret();
-    assertEquals(sFooInt, 10);
+    assert-equals(sFooInt, 10);
     let sBarInt: int = HasSecretInt@(Bar)/secret();
-    assertEquals(sBarInt, 20);
+    assert-equals(sBarInt, 20);
   }
 }
 
@@ -82,8 +82,8 @@ fn test() {
 
   let buf: span[u8] = [104: u8, 101, 108, 108, 111].as-span();
   let x: string = Codec/read(buf);
-  assertEquals(x, "hello");
-  assertEquals[string]("asdf", Codec/read("asdf".write()));
+  assert-equals(x, "hello");
+  assert-equals[string]("asdf", Codec/read("asdf".write()));
 
   qualified_syntax/test();
 }

@@ -37,8 +37,8 @@ fn test() {
   (point.x: 1);
   (point.y: 2);
   // Value assertions
-  assertEquals(point.x.from-static(), 1);
-  assertEquals(point.y.from-static(), 2);
+  assert-equals(point.x.from-static(), 1);
+  assert-equals(point.y.from-static(), 2);
 
   // Scalars
   assert(#static true);
@@ -51,9 +51,9 @@ fn test() {
   assert(not #static 123.0 == 3.14);
 
   // Return struct
-  assertEquals[u8](#static getPoint().x, 1);
-  assertEquals[u32](#static getPoint().y, 300);
-  assertEquals[i64](#static getPoint().z, -222);
+  assert-equals[u8](#static getPoint().x, 1);
+  assert-equals[u32](#static getPoint().y, 300);
+  assert-equals[i64](#static getPoint().z, -222);
 
   // Variable assign
   let goodbye: "Goodbye, World!" = #static {
@@ -61,14 +61,14 @@ fn test() {
     msg := "Goodbye, World!";
     msg
   };
-  assertEquals[string](goodbye, "Goodbye, World!");
+  assert-equals[string](goodbye, "Goodbye, World!");
 
   let letAssign = #static {
     let i = 22;
     i := 10;
     i
   };
-  assertEquals[int](letAssign, 10);
+  assert-equals[int](letAssign, 10);
 
   let padded = #static {
     let padded = { a: 1: u8, b: 2: u8, c: 3: u8, d: 4: u64, e: 5 };
@@ -87,9 +87,9 @@ fn test() {
     i <- core/identity(i.*);
     i.*
   };
-  assertEquals[int](letRef, 10);
+  assert-equals[int](letRef, 10);
 
-  assertEquals(core/k1/is-static, false);
+  assert-equals(core/k1/is-static, false);
   #static assert(core/k1/is-static);
 
   let enum1 = #static {
@@ -97,14 +97,14 @@ fn test() {
     let y = if x is :some(x) x else crash("");
     y
   };
-  assertEquals[int](enum1, 42);
+  assert-equals[int](enum1, 42);
 
   let fieldPtrTest: int = #static {
     let* x = 21;
     let s = { ptr: x };
     s.ptr.*
   };
-  assertEquals(fieldPtrTest, 21);
+  assert-equals(fieldPtrTest, 21);
 
 
   let ptrInStructs = #static {
@@ -112,10 +112,10 @@ fn test() {
     let* f = { asdf: b };
     f.asdf.*
   };
-  assertEquals[u8](ptrInStructs, 10);
+  assert-equals[u8](ptrInStructs, 10);
 
   //// Loops
-  #if false assertEquals(#static {
+  #if false assert-equals(#static {
     let i = 0;
     loop {
       if i >= 5 { break() };
@@ -124,7 +124,7 @@ fn test() {
     i
   }, 5);
 
-  #if false assertEquals(#static {
+  #if false assert-equals(#static {
     let i = 0;
     while i < 5 { i := i + 1 };
     i
@@ -140,9 +140,9 @@ fn test() {
     let inced = [1,2,3,4,5].map(fn it. it+1);
     inced.last()
   };
-  assertEquals[?int](listLast, some(6));
+  assert-equals[?int](listLast, some(6));
 
-  assertEquals[int](#static loop {
+  assert-equals[int](#static loop {
     switch 42 {
       _ -> break(100)
     }
@@ -150,13 +150,13 @@ fn test() {
 
   // StringBuilder
 
-  assertEquals[string](#static {
+  assert-equals[string](#static {
     let* sb = StringBuilder/new();
     sb.string("Hello");
     sb.build()
   }, "Hello");
 
-  assertEquals[?string](
+  assert-equals[?string](
     testCompile( #static assert(false) ).map(fn(s) s.take(38)),
     some("Static execution exited with code: 111")
   );
@@ -169,34 +169,34 @@ fn test() {
     let xs = [1,2,3,4,5];
     xs.as-span()
   };
-  assertEquals(span, [1,2,3,4,5]);
+  assert-equals(span, [1,2,3,4,5]);
   #static {
     let* l = list/wrapBuffer(buffer/copyFrom-span(INT_SPAN));
     l.push(9);
-    assertEquals(l.len, 6);
-    assertEquals(l.last(), some(9));
+    assert-equals(l.len, 6);
+    assert-equals(l.last(), some(9));
   };
 
 
   // Simple lambda
-  assertEquals[int](#static {
+  assert-equals[int](#static {
     let lam = fn(x: int) x * 2;
     lam(1)
   }, 2);
 
   // span of spans!
   let vov: span[span[int]] = #static [[1,2,3], [4,5,6]];
-  assertEquals(vov.len(), 2);
-  assertEquals(vov.get(0).get(0), 1);
-  assertEquals(vov.get(0).get(1), 2);
-  assertEquals(vov.get(0).get(2), 3);
-  assertEquals(vov.get(1).get(0), 4);
-  assertEquals(vov.get(1).get(1), 5);
-  assertEquals(vov.get(1).get(2), 6);
+  assert-equals(vov.len(), 2);
+  assert-equals(vov.get(0).get(0), 1);
+  assert-equals(vov.get(0).get(1), 2);
+  assert-equals(vov.get(0).get(2), 3);
+  assert-equals(vov.get(1).get(0), 4);
+  assert-equals(vov.get(1).get(1), 5);
+  assert-equals(vov.get(1).get(2), 6);
 
 
   let point = #static { x: 1, y: (#static 2): int };
-  assertEquals(point.from-static().x, 1);
+  assert-equals(point.from-static().x, 1);
 
   {}
 }

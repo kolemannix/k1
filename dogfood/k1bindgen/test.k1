@@ -12,10 +12,12 @@ fn test(): i32 {
     "-strip-prefix", "cinput_", 
     "-rename"      , "cinput_custom_name", "my-custom-name"
   ];
-  let args = #if k1/os is :macos {
+  let args = #if k1/os-macos {
     core-args.concat([
-      "clangarg", "-isysroot",
-      "clangarg", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk"
+      "-clangarg", "-isystem",
+      "-clangarg", "/Users/knix/dev/k1/llvm/install-llvm/lib/clang/21/include",
+      "-clangarg", "-isysroot",
+      "-clangarg", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk"
     ])
   } else core-args;
   let output = start(args);
@@ -23,7 +25,7 @@ fn test(): i32 {
   // TODO: Use 'diff' instead sys/cmd("diff", "input.c", "test/output.k1")
   let expected = core/files/read-to-string("test/output.k1");
   core/files/write-entire-file("test/output.k1", output);
-  assertEquals(output, expected);
+  assert-equals(output, expected);
 
   0
 }

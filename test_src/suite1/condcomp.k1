@@ -6,7 +6,7 @@ let MY_VALUE_NEG: bool = not MY_VALUE
 
 fn test() {
   use core/k1;
-  assertEquals(k1/test, false);
+  assert-equals(k1/test, false);
 
   let trip = false;
   #if MY_VALUE_NEG {

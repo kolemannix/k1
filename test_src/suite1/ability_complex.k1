@@ -38,7 +38,7 @@ fn test() {
   let b = unwrapB[int, bool, Pair[int, bool]](myPair);
   assert(b);
   let i = unwrapB[bool, int, Pair[int, bool]](myPair);
-  assertEquals(i, 10);
+  assert-equals(i, 10);
 
   {}
 }

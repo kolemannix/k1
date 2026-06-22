@@ -172,7 +172,7 @@ impl TypedProgram {
                             } else {
                                 return failf!(
                                     e.span,
-                                    "{}\n  Occurred while trying to determine type of argument for inference using expected type: {}",
+                                    "{}\nOccurred while trying to determine type of argument for inference using expected type: {}",
                                     e.message,
                                     self_.type_id_to_string(expected_type_so_far)
                                 );
@@ -789,8 +789,7 @@ impl TypedProgram {
         let mut newly_solved_params: SV4<TypeSubstitutionPair> = smallvec![];
         for (solved_from, solved_to) in final_pairs.iter() {
             let is_fully_solved =
-                self.types.get_type_variable_counts(*solved_to).inference_variable_count
-                    == 0;
+                self.types.get_type_variable_counts(*solved_to).inference_variable_count == 0;
             if !is_fully_solved {
                 continue;
             }

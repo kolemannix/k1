@@ -19,8 +19,8 @@ type ConstrainedBox[A, B: try[t = A, e = empty]] = { inner: B }
 fn testConstraints() {
   // Should typecheck just fine since the constraint is satisfied
   let x: ConstrainedBox[int, ?int] = { inner: some(4) };
-  assertEquals(types/type-id[type-of(x).A], types/type-id[int]);
-  assertEquals[?string](
+  assert-equals(types/type-id[type-of(x).A], types/type-id[int]);
+  assert-equals[?string](
     testCompile({ inner: some(4) }: ConstrainedBox[int, ?bool]),
     :some("Provided type B := opt[bool] does implement required ability try, but the implementation parameter t is wrong: Expected type was i64 but the actual implementation uses bool")
   );
@@ -34,11 +34,11 @@ fn test() {
   let c2: Box[bool] = { value: false };
   let c3: Box[?bool] = { value: :some(false) };
   let c4: Box[*bool] = { value: core/mem/new(false) };
-  assertEquals(b.value, 0);
-  assertEquals(c.value, true);
-  assertEquals(c2.value, false);
-  assertEquals(c3.value.!, false);
-  assertEquals(c4.value.*, false);
+  assert-equals(b.value, 0);
+  assert-equals(c.value, true);
+  assert-equals(c2.value, false);
+  assert-equals(c3.value.!, false);
+  assert-equals(c4.value.*, false);
 
   let p: AuPair[int, bool] = { t: some(0), u: some(true) };
   assert(p.t.! == 0);

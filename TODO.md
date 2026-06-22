@@ -5,6 +5,9 @@ Minor and ideas
 - nocommit pattern match on opaque
 - nocommit pattern match on union
 - [ ] allow opaques to be named / nominal; bindgen them that way. The name is really more useful than the size/align
+- [ ] Better in-place construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
+      way to get the heap address
+
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [ ] `#[must_use]` equivalent

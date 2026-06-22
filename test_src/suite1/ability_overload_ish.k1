@@ -21,8 +21,8 @@ impl Frob for i32 {
 
 fn test() {
   let x: i32 = 10;
-  assertEquals(x.foo(), 10);
-  assertEquals(x.foo(10), 20);
+  assert-equals(x.foo(), 10);
+  assert-equals(x.foo(10), 20);
 
   {}
 }

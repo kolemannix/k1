@@ -6,17 +6,17 @@ fn test() {
   // pointer is initialized, but value is not
   let* x: *mut int = uninit;
   x <- 42;
-  assertEquals(x.*, 42);
+  assert-equals(x.*, 42);
 
   let y: int = uninit;
   y := 10;
-  assertEquals(y, 10);
+  assert-equals(y, 10);
 
   // pointer itself is uninitialized
   let p: *int = uninit;
   p := &GLOB;
-  assertEquals(p.as[ptr], &GLOB.as[ptr]);
-  assertEquals(p.*, 50);
+  assert-equals(p.as[ptr], &GLOB.as[ptr]);
+  assert-equals(p.*, 50);
 
   {}
 }

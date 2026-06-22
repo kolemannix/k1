@@ -35,3 +35,17 @@ fn assert-wrapper-type[wrapper, inner]() {
 }
 
 fn type-eq[a, b](): bool { types/type-id[a] == types/type-id[b] }
+
+fn assert-layout[t](size: size, align: size, struct-fields: span[size]) {
+  let actual-size = types/stride[t];
+  let actual-align = types/align[t];
+  assert-equals(size, actual-size);
+  assert-equals(align, actual-align);
+  if struct-fields.nonEmpty() {
+    let schema-fields = types/schema[t].as-struct().!.fields;
+    for offset in struct-fields {
+      let actual-field = schema-fields.get(itIndex);
+      assert-msg("offset of {actual-field.name} {actual-field.offset} != {offset}", actual-field.offset == offset);
+    }
+  }
+}

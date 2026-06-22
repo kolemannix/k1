@@ -19,21 +19,21 @@ fn enumTest() {
   let a: enum-abc = :a;
   let b: enum-abc = :b;
   let c: enum-abc = :c;
-  assertEquals(a.value, 0);
-  assertEquals(b.value, 1);
-  assertEquals(c.value, 2);
-  assertEquals(a, enum-abc:a);
-  assertEquals(b, enum-abc:b);
-  assertEquals(c, enum-abc:c);
+  assert-equals(a.value, 0);
+  assert-equals(b.value, 1);
+  assert-equals(c.value, 2);
+  assert-equals(a, enum-abc:a);
+  assert-equals(b, enum-abc:b);
+  assert-equals(c, enum-abc:c);
 
-  assertEquals[string](a.enum-name(), "a");
-  assertEquals[string](b.enum-name(), "b");
-  assertEquals[string](c.enum-name(), "c");
+  assert-equals[string](a.enum-name(), "a");
+  assert-equals[string](b.enum-name(), "b");
+  assert-equals[string](c.enum-name(), "c");
 
-  assertEquals(getEnumValue(c), 2);
-  assertEquals(getEnumValue(b), 1);
-  assertEquals(c, c);
-  assertEquals(b, b);
+  assert-equals(getEnumValue(c), 2);
+  assert-equals(getEnumValue(b), 1);
+  assert-equals(c, c);
+  assert-equals(b, b);
   core/assertNotEquals(c, b);
 }
 
@@ -43,9 +43,9 @@ fn getEnumValue[i, e: types/enum[v = i]](e: e): i {
 
 type custom-enum-tags = either { a = 10, b = 11, c = 12 }
 fn custom-tags-test() {
-  assertEquals(custom-enum-tags:a.value, 10);
-  assertEquals(custom-enum-tags:b.value, 11);
-  assertEquals(custom-enum-tags:c.value, 12);
+  assert-equals(custom-enum-tags:a.value, 10);
+  assert-equals(custom-enum-tags:b.value, 11);
+  assert-equals(custom-enum-tags:c.value, 12);
 }
 
 fn test() {
