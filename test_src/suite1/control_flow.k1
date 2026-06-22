@@ -44,20 +44,20 @@ fn loopBreak() {
     } else 4
     
   };
-  assertEquals(x, 3);
+  assert-equals(x, 3);
 
   // Break with aggregate
   let y: string = loop {
     break("asdf")
   };
-  assertEquals(y, "asdf")
+  assert-equals(y, "asdf")
 }
 
 fn loopNested() {
   let result = loop {
     break(loop { break(10) })
   };
-  assertEquals(result, 10)
+  assert-equals(result, 10)
 }
 
 fn loopFalse() {

@@ -29,14 +29,14 @@ type CXType = {
   kind: CXTypeKind,
   data: array[ptr, 2],
 }
-#static assertEquals(types/size[CXType], 24)
+#static assert-equals(types/size[CXType], 24)
 
 type CXCursor = {
   kind: CXCursorKind,
   xdata: c-int,
   data: array[ptr, 3]
 }
-#static assertEquals(types/size[CXCursor], 32)
+#static assert-equals(types/size[CXCursor], 32)
 
 fn k1-string-from-cx-string(cxs: CXString): string {
   let c-str = clang/getCString(cxs);
@@ -260,6 +260,8 @@ extern("clang", "clang_Type_getAlignOf")
 fn Type_getAlignOf(T: CXType): i64
 extern("clang", "clang_Type_getSizeOf")
 fn Type_getSizeOf(T: CXType): i64
+extern("clang", "clang_Cursor_getOffsetOfField")
+fn Cursor_getOffsetOfField(C: CXCursor): i64
 
 extern("clang", "clang_getFileName")
 fn getFileName(SFile: CXFile): CXString 

@@ -11,7 +11,7 @@ fn test() {
 
   let* point = { x: 5, y: 2 };
   if point is { x, y: 2 }* {
-    assertEquals(x.*, 5);
+    assert-equals(x.*, 5);
   };
 
   x <- some(5);
@@ -21,7 +21,7 @@ fn test() {
       xx <- xx.* - 1;
     }
   };
-  assertEquals(x.*, :some(0));
+  assert-equals(x.*, :some(0));
 
   use core/mem/new;
   let b: *mut *mut *mut bool = new[*mut *mut bool](new[*mut bool](new[bool](true)));

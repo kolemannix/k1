@@ -113,12 +113,12 @@ fn test() {
   let yourOpt = some(false);
   if myOpt is :some(x) and x == 42 {} else assert(false);
 
-  assertEquals(bindingIfStruct({ x: 1, y: 2 }), :A);
-  assertEquals(bindingIfStruct({ x: 2, y: 2 }), :B);
+  assert-equals(bindingIfStruct({ x: 1, y: 2 }), :A);
+  assert-equals(bindingIfStruct({ x: 2, y: 2 }), :B);
 
-  assertEquals(switchStruct({ x: 11, y: 0 }), :A);
-  assertEquals(switchStruct({ x: 1, y: 3 }), :B);
-  assertEquals(switchStruct({ x: 0, y: 2 }), :B);
+  assert-equals(switchStruct({ x: 11, y: 0 }), :A);
+  assert-equals(switchStruct({ x: 1, y: 3 }), :B);
+  assert-equals(switchStruct({ x: 0, y: 2 }), :B);
 
   if myOpt is :some(42) and yourOpt is :some(f) and 3 == 3 and not false {
     assert(f == false)

@@ -7,7 +7,7 @@ fn loopTest(sensor: *mut int) {
   // Every iteration, we increment i, then check that the sensor is right behind it,
   // then increment the sensor
   while i < 10 {
-    defer { assertEquals(i - 1, sensor.*); inc(sensor) };
+    defer { assert-equals(i - 1, sensor.*); inc(sensor) };
     i := i + 1;
   };
   {}
@@ -17,11 +17,11 @@ fn loopTest(sensor: *mut int) {
 // and if it appears at the end of a block, does NOT cause
 // duplicate insertion of that block's defers
 fn returnTest(sensor: *mut int) {
-  defer { assertEquals(sensor.*, 2); inc(sensor) };
+  defer { assert-equals(sensor.*, 2); inc(sensor) };
   if true {
-    defer { assertEquals(sensor.*, 1); inc(sensor) };
+    defer { assert-equals(sensor.*, 1); inc(sensor) };
     if false {} else {
-      defer { assertEquals(sensor.*, 0); inc(sensor) };
+      defer { assert-equals(sensor.*, 0); inc(sensor) };
       return()
     }
   } else {
@@ -35,11 +35,11 @@ fn test() {
   // runs too few or too many times!
   let* sensor = 0;
   loopTest(sensor);
-  assertEquals(sensor.*, 10);
+  assert-equals(sensor.*, 10);
 
   sensor <- 0;
   returnTest(sensor);
-  assertEquals(sensor.*, 3);
+  assert-equals(sensor.*, 3);
   
   {}
 }

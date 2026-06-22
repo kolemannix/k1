@@ -27,9 +27,9 @@ fn test() {
 
   assert("".splitByChar('.') == []);
 
-  assertEquals("a.".splitByChar('.'), ["a"]);
+  assert-equals("a.".splitByChar('.'), ["a"]);
   assert("bbb.".splitByChar('.') == ["bbb"]);
-  assertEquals("a.b.cc.d".splitByChar('.'), ["a", "b", "cc", "d"]);
+  assert-equals("a.b.cc.d".splitByChar('.'), ["a", "b", "cc", "d"]);
   assert("a...".splitByChar('.') == ["a", "", ""]);
   assert("..".splitByChar('.') == ["", ""]);
 

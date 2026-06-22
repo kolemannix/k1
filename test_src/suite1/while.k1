@@ -7,7 +7,7 @@ fn whileSimple() {
     i := i - 1;
     iters := iters + 1;
   };
-  assertEquals(iters, 20);
+  assert-equals(iters, 20);
 }
 
 fn whileReturn(): int {

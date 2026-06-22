@@ -8,7 +8,7 @@ type Tool = either { True, False, Iono }
 fn test() {
   let p: Tool = :True;
   let result = testCompile(p.num());
-  assertEquals(result, :some(
+  assert-equals(result, :some(
 `Call to num/num with self := Tool does not work
 No matching implementations found
 [debug function type: fn('self) -> i32]`

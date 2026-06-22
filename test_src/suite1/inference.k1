@@ -42,7 +42,7 @@ fn test() {
   combine(identity(4000), get(some(5000))): u32;
   combine(identity(8000), identity(get(some(9000)))): u32;
 
-  assertEquals(getOrElse(some(1000), -1), 1000);
+  assert-equals(getOrElse(some(1000), -1), 1000);
 
   occursCheckTest(42);
 
@@ -54,7 +54,7 @@ fn test() {
   let withNever = testCompile(
     combine3(x.*, core/sys/exit(1), { one: some(-1), two: some(3), })
   );
-  assertEquals(withNever, :none);
+  assert-equals(withNever, :none);
 
   {}
 }

@@ -5,33 +5,33 @@ use core/mem/zeroed
 fn testBitcast() {
   let x: i32 = -1;
   let y: u32 = mem/bitcast(x);
-  assertEquals(y, 0xffff_ffff);
+  assert-equals(y, 0xffff_ffff);
 
   // From agg to agg
   let s: string = "foo";
   let sWrap = { inner: s };
   let sAgain: string = mem/bitcast(sWrap);
-  assertEquals(s, sAgain);
+  assert-equals(s, sAgain);
 
   // From agg to scalar
   let p2: { x: f32, y: f32 } = { x: 1.0, y: -1.0 };
   let scalar = mem/bitcast[_, i64](p2);
   let p3: { x: f32, y: f32 } = mem/bitcast(scalar);
-  assertEquals(p2.x, p3.x);
-  assertEquals(p2.y, p3.y);
+  assert-equals(p2.x, p3.x);
+  assert-equals(p2.y, p3.y);
 
   // From scalar to scalar
   let f: f32 = -3.14159;
   let i: i32 = mem/bitcast(f);
   let f2: f32 = mem/bitcast(i);
-  assertEquals(f, f2);
+  assert-equals(f, f2);
 
   // From scalar to agg
   let ipoint: u32 = 0b0000_0000_0000_0001_0000_0000_0000_0010;
   let p: { x: i16, y: u16 } = mem/bitcast(ipoint);
   // Note: endianness-dependent result
-  assertEquals(p.y, 1);
-  assertEquals(p.x, 2);
+  assert-equals(p.y, 1);
+  assert-equals(p.x, 2);
 
   assert(testCompile(
     mem/bitcast[u8, u16](4)
@@ -43,24 +43,24 @@ fn testZero() {
   let v16: u16 = zeroed();
   let v32: u32 = zeroed();
   let v64: u64 = zeroed();
-  assertEquals(v8, 0);
-  assertEquals(v16, 0);
-  assertEquals(v32, 0);
-  assertEquals(v64, 0);
+  assert-equals(v8, 0);
+  assert-equals(v16, 0);
+  assert-equals(v32, 0);
+  assert-equals(v64, 0);
 
   let vi8: i8 = zeroed();
   let vi16: i16 = zeroed();
   let vi32: i32 = zeroed();
   let vi64: i64 = zeroed();
-  assertEquals(vi8, 0);
-  assertEquals(vi16, 0);
-  assertEquals(vi32, 0);
-  assertEquals(vi64, 0);
+  assert-equals(vi8, 0);
+  assert-equals(vi16, 0);
+  assert-equals(vi32, 0);
+  assert-equals(vi64, 0);
 
   let vword: i64 = zeroed();
   let vuword: u64 = zeroed();
-  assertEquals(vword, 0);
-  assertEquals(vuword, 0);
+  assert-equals(vword, 0);
+  assert-equals(vuword, 0);
 
   let vf32: f32 = zeroed();
   assert(vf32 == 0.0);
@@ -68,17 +68,17 @@ fn testZero() {
   assert(vf64 == 0.0);
 
   let* i32Ptr: *i32 = zeroed();
-  assertEquals(i32Ptr.*, 0);
+  assert-equals(i32Ptr.*, 0);
   let i32Null: *i32 = zeroed();
   assert(i32Null.as[ptr] == ptr/null);
 
   let point: { x: u8, y: u8, z: i32 } = zeroed();
-  assertEquals(point.x, 0);
-  assertEquals(point.y, 0);
-  assertEquals(point.z, 0);
+  assert-equals(point.x, 0);
+  assert-equals(point.y, 0);
+  assert-equals(point.z, 0);
 
   let o: ?type-of(point) = zeroed();
-  assertEquals(o.tag, 0);
+  assert-equals(o.tag, 0);
 
   {}
 }

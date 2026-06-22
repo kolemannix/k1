@@ -41,17 +41,17 @@ impl[T: Increment] IncrFour for T {
 
 fn test() {
   let i: i32 = 554;
-  assertEquals(i.inc(), 555);
-  assertEquals(i.incTwice(), 556);
-  assertEquals(i.incTwice().incTwice(), 558);
-  assertEquals(i.incFour(), 558);
-  assertEquals(i.incEight(), 562);
+  assert-equals(i.inc(), 555);
+  assert-equals(i.incTwice(), 556);
+  assert-equals(i.incTwice().incTwice(), 558);
+  assert-equals(i.incFour(), 558);
+  assert-equals(i.incEight(), 562);
 
   let u: u32 = 0;
-  assertEquals(u.incTwice(), 2);
+  assert-equals(u.incTwice(), 2);
 
   // Ensures that our specialized implementation is used over the default
-  assertEquals(I32_SPEC_COUNTER, 6);
+  assert-equals(I32_SPEC_COUNTER, 6);
   
   {}
 }

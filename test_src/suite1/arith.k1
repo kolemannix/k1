@@ -28,10 +28,10 @@ fn test() {
   assert(y > 51);
   assert(y < 53);
 
-  assertEquals(2 % 2, 0);
-  assertEquals(2 % 3, 2);
-  assertEquals(-1 % 2, -1);
-  assertEquals(-10 % 2, 0);
+  assert-equals(2 % 2, 0);
+  assert-equals(2 % 3, 2);
+  assert-equals(-1 % 2, -1);
+  assert-equals(-10 % 2, 0);
 
   assert(add_stuff(y = 2, x = 1) == 1341);
 
@@ -45,19 +45,19 @@ fn test() {
   assert(2 == 2);
 
   let z = 0.show();
-  assertEquals(z, "0");
-  assertEquals(1.show(), "1");
-  assertEquals(2.show(), "2");
-  assertEquals(3.show(), "3");
-  assertEquals(4.show(), "4");
-  assertEquals(5.show(), "5");
-  assertEquals(15.show(), "15");
-  assertEquals(16.show(), "16");
-  assertEquals(99.show(), "99");
-  assertEquals(101.show(), "101");
-  assertEquals(-101.show(), "-101");
-  assertEquals(-99.show(), "-99");
-  assertEquals(-11.show(), "-11");
+  assert-equals(z, "0");
+  assert-equals(1.show(), "1");
+  assert-equals(2.show(), "2");
+  assert-equals(3.show(), "3");
+  assert-equals(4.show(), "4");
+  assert-equals(5.show(), "5");
+  assert-equals(15.show(), "15");
+  assert-equals(16.show(), "16");
+  assert-equals(99.show(), "99");
+  assert-equals(101.show(), "101");
+  assert-equals(-101.show(), "-101");
+  assert-equals(-99.show(), "-99");
+  assert-equals(-11.show(), "-11");
 
   // Integer suffixes
   let _a: u8 = 255u8;
@@ -71,23 +71,23 @@ fn test() {
 
   // Coercions
   // Unsigned widen
-  assertEquals(3u8.as[u16], 3);
-  assertEquals(3u8.as[u32], 3);
-  assertEquals(3u8.as[u64], 3);
+  assert-equals(3u8.as[u16], 3);
+  assert-equals(3u8.as[u32], 3);
+  assert-equals(3u8.as[u64], 3);
 
   // Signed widen
-  assertEquals(3i8.as[i16], 3);
-  assertEquals(3i8.as[i32], 3);
-  assertEquals(3i8.as[i64], 3);
-  assertEquals(-3i8.as[i16], -3);
-  assertEquals(-3i8.as[i32], -3);
-  assertEquals(-3i8.as[i64], -3);
+  assert-equals(3i8.as[i16], 3);
+  assert-equals(3i8.as[i32], 3);
+  assert-equals(3i8.as[i64], 3);
+  assert-equals(-3i8.as[i16], -3);
+  assert-equals(-3i8.as[i32], -3);
+  assert-equals(-3i8.as[i64], -3);
 
   // Unsigned widen to signed
-  assertEquals(3u32.as[u64], 3u64);
+  assert-equals(3u32.as[u64], 3u64);
 
   // Signed widen to unsigned
-  assertEquals(-1i16.as[i32].as[u32], 0xFFFF_FFFF); 
+  assert-equals(-1i16.as[i32].as[u32], 0xFFFF_FFFF); 
   // Not directly allowed
   assert(testCompile(-1i16.as[u32]).is-some());
 

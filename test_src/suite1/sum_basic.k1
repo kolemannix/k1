@@ -60,8 +60,8 @@ fn genericSum() {
     // shows that we can talk about the payload type
     let _: MyResult[int, string]:ok = 42;
 
-    assertEquals(x1.show(), "Ok: -3\n");
-    assertEquals(x2.show(), "Error: Some error message\n");
+    assert-equals(x1.show(), "Ok: -3\n");
+    assert-equals(x2.show(), "Error: Some error message\n");
 
     assert(types/size[MyResult[int, string]]() == 24);
     assert(types/stride[MyResult[int, string]]() == 24);
@@ -73,13 +73,13 @@ fn tags() {
   let a: E = :A;
   let b: E = :B;
   let c: E = :C(0);
-  assertEquals(a.tag, 4);
-  assertEquals(b.tag, 8);
-  assertEquals(c.tag, 9);
+  assert-equals(a.tag, 4);
+  assert-equals(b.tag, 8);
+  assert-equals(c.tag, 9);
 
-  assertEquals(a.sum-name(), "A");
-  assertEquals(b.sum-name(), "B");
-  assertEquals(c.sum-name(), "C");
+  assert-equals(a.sum-name(), "A");
+  assert-equals(b.sum-name(), "B");
+  assert-equals(c.sum-name(), "C");
 
   {}
 }

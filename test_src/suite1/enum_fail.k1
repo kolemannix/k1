@@ -4,8 +4,8 @@ type E = either { A(int) , B , C }
 
 fn test() {
   let result = testCompile(:A(true): E);
-  assertEquals(
+  assert-equals(
     result,
-    :some(":A payload type mismatch: Expected i64 but got bool")
+    :some("Expected i64 but got bool")
   );
 }

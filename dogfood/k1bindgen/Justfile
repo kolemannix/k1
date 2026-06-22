@@ -3,6 +3,7 @@ default:
 
 test:
   k1 test .
+  k1 c test/output.k1
 
 rust-bindgen:
   bindgen -o file.rs http/httpserver.h -- \

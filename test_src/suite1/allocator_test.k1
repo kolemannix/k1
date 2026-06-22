@@ -7,7 +7,7 @@ fn test() {
   a.push({ x: 10, y: 10 });
   let s = a.push("Hello, memory");
   assert(s.len() == 13);
-  assertEquals(s.*, "Hello, memory");
+  assert-equals(s.*, "Hello, memory");
 
   a.release();
 

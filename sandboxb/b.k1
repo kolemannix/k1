@@ -25,7 +25,7 @@ fn typeVariantName(type-id: u64): ?string {
 fn main(): i32 {
   let i: int = 10;
   let intPtr = make-any(&i);
-  assertEquals(typeVariantName(intPtr.type-id), :some("int"));
-  assertEquals(kindOfAny(intPtr), "int");
+  assert-equals(typeVariantName(intPtr.type-id), :some("int"));
+  assert-equals(kindOfAny(intPtr), "int");
   0
 }

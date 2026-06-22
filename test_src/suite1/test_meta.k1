@@ -30,7 +30,7 @@ fn simpleIncrement(): i32 {
     };
     code.build()
   };
-  assertEquals(x, 15);
+  assert-equals(x, 15);
 
   0
 }
@@ -91,9 +91,9 @@ fn toJson[T](t: T): string {
 }
 
 fn testToJson() {
-  assertEquals(toJson(true), "true");
+  assert-equals(toJson(true), "true");
   let json1 = toJson({ x: 1, y: 2, z: {}, d: false });
-  assertEquals(json1, p`{"x":1,"y":2,"z":{},"d":false}`);
+  assert-equals(json1, p`{"x":1,"y":2,"z":{},"d":false}`);
 
   {}
 }

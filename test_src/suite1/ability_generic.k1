@@ -71,11 +71,11 @@ ns ability_generic {
     let p: GenericPoint[i32] = { x: 1, y: 2 };
 
     let added: GenericPoint[i32] = p.gadd(p);
-    assertEquals(added.x, 1i32 + 1);
-    assertEquals(added.y, 2i32 + 2);
+    assert-equals(added.x, 1i32 + 1);
+    assert-equals(added.y, 2i32 + 2);
 
-    assertEquals((3: i32).to(): string, "3");
-    assertEquals(From/from(3: i32): string, "3");
+    assert-equals((3: i32).to(): string, "3");
+    assert-equals(From/from(3: i32): string, "3");
   }
 
 }

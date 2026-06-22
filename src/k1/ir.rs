@@ -2406,12 +2406,7 @@ fn compile_cast(
         | CastType::ReferenceToPointer => {
             let base_noop = compile_expr(b, None, c.base_expr)?;
             let to_pt = b.get_physical_type(target_type_id);
-            // nocommit: Test if this bitcast is needed on these true noops; maybe only sign change
-            // is needed by the VM? But subsequent ops should carry enough info; we should be using
-            // the types from the typed tree, not from the previous instructions
-            let casted = b.push_inst(Inst::BitCast { v: base_noop, to: to_pt }, "cast noop");
-            let stored =
-                store_rich_if_dst(b, dst, to_pt, casted.as_value(), "fulfill cast destination");
+            let stored = store_rich_if_dst(b, dst, to_pt, base_noop, "fulfill cast destination");
             Ok(stored)
         }
         CastType::IntegerCast(IntegerCastDirection::Extend)

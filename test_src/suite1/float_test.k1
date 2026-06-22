@@ -2,7 +2,7 @@ ns float_test;
 
 fn test() {
   let pi: f64 = 3.14159;
-  assertEquals(pi, 3.14159);
+  assert-equals(pi, 3.14159);
   assert(3.0 > 2.0);
   assert(3.0 >= 3.0);
   assert(not 3.0 > 3.0);
@@ -18,7 +18,7 @@ fn test() {
   assert((10.0: f64).as[f32] == 10.0);
   assert(11.1.as[u32] == 11);
   assert(10.1.as[i32] == 10);
-  assertEquals(-10.1.as[i32], -10);
+  assert-equals(-10.1.as[i32], -10);
   assert((58686845.22: f64).as[i64] == 58686845);
   assert(447.as[f32] == 447.0);
   assert(-447.as[f32] == -447.0);

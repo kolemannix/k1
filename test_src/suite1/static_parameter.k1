@@ -9,11 +9,11 @@ fn test() {
   let THREE: static int = 3;
   let result = addStatic[type-of(THREE)](3);
   let result2 = addStatic[3](3);
-  assertEquals(result, 3 + 3);
-  assertEquals(result2, 3 + 3);
+  assert-equals(result, 3 + 3);
+  assert-equals(result2, 3 + 3);
 
   let result3 = addStatic[5](3);
-  assertEquals(result3, 8);
+  assert-equals(result3, 8);
 
   {}
 }

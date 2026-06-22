@@ -5,8 +5,8 @@ use std/json
 fn testBasicEnum() {
   let size = core/types/size[json]();
   let align = core/types/align[json]();
-  assertEquals(size, 32);
-  assertEquals(align, 8);
+  assert-equals(size, 32);
+  assert-equals(align, 8);
 
   let obj: json = :str("hello");
   let null: json = :null;

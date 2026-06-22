@@ -152,6 +152,13 @@ ns types {
         offset: size
       }],
     }),
+    union({
+      fields: span[{
+        name: string,
+        type-id: u64,
+        offset: size
+      }],
+    }),
     either({
       tag-type: int-kind,
       payload-offset: size,

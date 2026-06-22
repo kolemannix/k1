@@ -11,7 +11,7 @@ fn captures() {
     addOne(x) + closedOver + addOne(closedOver) + (if closedOver == 3 1 else 0);
   };
 
-  assertEquals(add(3), 12);
+  assert-equals(add(3), 12);
 }
 
 fn captureMut() {
@@ -64,26 +64,26 @@ fn thunksTest() {
   ];
 
   runThings(thunks);
-  assertEquals(counter.*, 3);
+  assert-equals(counter.*, 3);
 }
 
 fn test() {
 
   let staticAddOneVar = staticAddOne;
   let staticResult = someFnParam2(5, staticAddOne, staticAddOneVar);
-  assertEquals(staticResult, 6 + 6);
+  assert-equals(staticResult, 6 + 6);
 
   let lam1ResultPtr = someFnParam1(5, staticAddOne);
-  assertEquals(lam1ResultPtr, 6);
+  assert-equals(lam1ResultPtr, 6);
 
   let lam1ResultDyn = someFnParam1(5, staticAddOne.to-dyn());
-  assertEquals(lam1ResultDyn, 6);
+  assert-equals(lam1ResultDyn, 6);
 
   let* c1 = { x: 3 };
   let c2 = 2;
 
   let withClosures = someFnParam2(5, fn x. x + 1 + c1.x, fn x. x + 2 + c2);
-  assertEquals(withClosures, (5 + 1 + 3) + (5 + 2 + 2));
+  assert-equals(withClosures, (5 + 1 + 3) + (5 + 2 + 2));
 
   let withGenerics = someFnParamGen(true, fn b. not b, fn b. some(b));
   assert(withGenerics == some(false));
@@ -97,10 +97,10 @@ fn test() {
   let* x = 10;
   // Coerce lambdas to lambda objects
   simpleDyn(fn. {"Thunk! {x.*}"; x <- 11 });
-  assertEquals(x.*, 11);
+  assert-equals(x.*, 11);
   // Coerce function refs to lambda objects
   simpleDyn(fn. {"Thunk!"; x <- 12 });
-  assertEquals(x.*, 12);
+  assert-equals(x.*, 12);
 
   thunksTest();
 

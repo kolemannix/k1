@@ -24,6 +24,6 @@ fn test() {
   let intPtr = make-any(i);
   let* s = { x: 1, y: 100 };
   let structPtr = make-any(s);
-  assertEquals(kindOfAny(intPtr), "int");
-  assertEquals(kindOfAny(structPtr), "struct");
+  assert-equals(kindOfAny(intPtr), "int");
+  assert-equals(kindOfAny(structPtr), "struct");
 }

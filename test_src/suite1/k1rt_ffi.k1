@@ -8,5 +8,5 @@ fn test-ffi() {
     let chars = stack-buf.as-span().slice(0, len.as[size]);
     string/from-span(chars)
   };
-  assertEquals(s, "3.140")
+  assert-equals(s, "3.140")
 }

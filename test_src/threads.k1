@@ -8,10 +8,10 @@ let MODULE_INFO: k1/module-manifest = zeroed().with({
 let mutable tls myvar: i32 = 0
 
 fn run(input: *mut int): ptr {
-  assertEquals(input.*, 42);
+  assert-equals(input.*, 42);
   &myvar <- myvar + 1;
   input <- input.* + 1;
-  assertEquals(myvar, 1);
+  assert-equals(myvar, 1);
   input.as()
 }
 
@@ -25,10 +25,10 @@ fn main(): i32 {
   std/thread/join(thread.*, output);
 
   // output returned has been incremented 
-  assertEquals(input.as[ptr], output.*.as[ptr]);
-  assertEquals(output.*.*, 43);
+  assert-equals(input.as[ptr], output.*.as[ptr]);
+  assert-equals(output.*.*, 43);
 
   // myvar is unchanged by the thread since its threadlocal
-  assertEquals(myvar, 1000);
+  assert-equals(myvar, 1000);
   0
 }

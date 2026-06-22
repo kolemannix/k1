@@ -1,7 +1,7 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-fn assertEquals[T: print and equals](context locn: k1/source-location)(a: T, b: T) {
+fn assert-equals[T: print and equals](context locn: k1/source-location)(a: T, b: T) {
   if a != b {
     crash("ASSERT FAILED: {a} != {b}")
   }
@@ -189,7 +189,7 @@ ns files {
 
 }
 
-fn assertMsg(context locn: k1/source-location)(msg: string, value: bool) {
+fn assert-msg(context locn: k1/source-location)(msg: string, value: bool) {
   if not value {
     crash("ASSERT FAILED: {msg}")
   };
