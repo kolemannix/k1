@@ -447,8 +447,8 @@ fn after-handle-request(req: *mut uv/work, status: i32) {
   let client = work.client;
   let connection = client.get-data[connection]();
 
-// [ ] dogfood bindgen strip prefix
-// [ ] dogfood bindgen strip suffix
+// [x] dogfood bindgen strip prefix
+// [x] dogfood bindgen strip suffix
 // [ ] dogfood language struct access lsp entity
 // [ ] dogfood language match fallback arm hidden
 // [ ] dogfood language remove *mut distinction

@@ -17266,7 +17266,7 @@ impl TypedProgram {
                     .iter()
                     .map(|f| self.ident_str(f.name))
                     .collect::<SV2<_>>()[..]
-                    == ["len", "data"]
+                    == ["data", "len"]
             );
         }
 
@@ -17282,7 +17282,7 @@ impl TypedProgram {
                     .iter()
                     .map(|f| self.ident_str(f.name))
                     .collect::<SV2<_>>()[..]
-                    == ["len", "buffer"]
+                    == ["buffer", "len"]
             );
         }
 

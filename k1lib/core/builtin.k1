@@ -35,12 +35,11 @@ type f32 = builtin
 type f64 = builtin
 
 
-// FIXME: Swap len and data in buffer
-type buffer[t] = { len: size, data: *mut t }
+type buffer[t] = { data: *mut t, len: size }
 
 type span[t] = { buffer: buffer[t] }
 
-type list[t] = { len: size, buffer: buffer[t] }
+type list[t] = { buffer: buffer[t], len: size }
 type string = { span: span[char] }
 
 type opt[t] = either { none, some(t) }

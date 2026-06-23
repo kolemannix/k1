@@ -3606,16 +3606,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let char_span_struct = self.mem.get_nth_lt(string_type.fields, 0).expect_struct();
         let char_buffer_cg_type = self.mem.get_nth_lt(char_span_struct.fields, 0).expect_struct();
         debug_assert!(
+            char_buffer_cg_type.struct_type.get_field_type_at_index(0).unwrap().is_pointer_type()
+        );
+        debug_assert!(
             char_buffer_cg_type
                 .struct_type
-                .get_field_type_at_index(0)
+                .get_field_type_at_index(1)
                 .unwrap()
                 .into_int_type()
                 .get_bit_width()
                 == 64
-        );
-        debug_assert!(
-            char_buffer_cg_type.struct_type.get_field_type_at_index(1).unwrap().is_pointer_type()
         );
         debug_assert!(char_buffer_cg_type.struct_type.count_fields() == 2);
 
@@ -3660,8 +3660,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         data: PointerValue<'ctx>,
     ) -> K1Result<StructValue<'ctx>> {
         let buffer_struct_value = struct_type.const_named_struct(&[
-            self.builtin_types.ptr_sized_int.const_int(len, false).as_basic_value_enum(),
             data.as_basic_value_enum(),
+            self.builtin_types.ptr_sized_int.const_int(len, false).as_basic_value_enum(),
         ]);
         Ok(buffer_struct_value)
     }
@@ -3697,7 +3697,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let target = Target::from_triple(&triple).unwrap();
         let cpu = TargetMachine::get_host_cpu_name().to_string();
         let features = TargetMachine::get_host_cpu_features().to_string();
-        let opt_level = if !optimize { OptimizationLevel::None } else { OptimizationLevel::Aggressive };
+        let opt_level =
+            if !optimize { OptimizationLevel::None } else { OptimizationLevel::Aggressive };
         let machine = target
             .create_target_machine(
                 &triple,
