@@ -130,9 +130,10 @@ pub mod k1_types {
     #[derive(Clone, Copy)]
     /// Encompasses all 3 'core' contiguous buffer types in k1:
     /// - buffer, span, and string, same layout
+    /// - It's even 'list-compatible' since list starts with a buffer.
     pub struct K1BufferLike {
-        pub len: usize,
         pub data: *mut u8,
+        pub len: usize,
     }
 
     #[derive(Clone, Copy)]

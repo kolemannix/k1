@@ -10,6 +10,9 @@ pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     let Some(_unit) = get_compiled_unit(&k1.ir, unit_id) else {
         return;
     };
+    if _unit.is_debug {
+        eprintln!("optimizing {}", unit_to_string(k1, unit_id, true));
+    }
 
     let mut visit_stack = std::mem::take(&mut k1.ir.opt_buf_stack);
     visit_stack.push(OptVisit::Enter(unit_id));
@@ -145,11 +148,13 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     ) {
         let call_inst = *k1.ir.mem.get(call_inst_node);
         let call_inst_id = call_inst.data;
-        // eprintln!("Inlining call i{}", call_inst_id.as_u32());
+        debug!("Inlining call i{} {}", call_inst_id, inst_to_string(k1, call_inst_id));
         let self_unit = get_compiled_unit(&k1.ir, self_unit_id).unwrap();
         let IrCallee::Direct(callee_fn_id) = call.callee else { panic!() };
         let call_span = *k1.ir.sources.get(call_inst_id);
         let callee_unit = k1.ir.functions.get(callee_fn_id).unwrap();
+        debug!("callee\n{}", unit_to_string(k1, IrUnitId::Function(callee_fn_id), false));
+        debug!("self\n{}", unit_to_string(k1, self_unit_id, false));
 
         let entry_span = match self_unit_id {
             IrUnitId::Expr(e) => k1.exprs.get_span(e),
@@ -187,7 +192,6 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         } else {
             call_next
         };
-        debug!("removed call: {}", inst_to_string(b.k1, call_inst_id));
 
         // None when the call is the last instruction in the block
         let call_post_block: Option<BlockId> = match call_next.is_nil() {
@@ -208,7 +212,6 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                         // There's always a post block that contains at least a ret if the return
                         // type is not 'void' or 'never' (its a scalar here)
                         b.goto_block(call_post_block.unwrap());
-                        // phi instead
                         let phi = b.push_inst_front(
                             Inst::Phi { t: call.ret_type, incomings: MSlice::empty() },
                             "inlined scalar return",
@@ -243,7 +246,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
             self_rewrites.block_exits.insert(call_block_handle, call_post_block);
         }
         for (self_block, _) in b.k1.ir.mem.dlist_iter_handles(b.blocks) {
-            rewrite_in_block(&mut b.k1.ir, self_block, &mut self_rewrites);
+            rewrite_in_block(&mut b.k1.ir, self_block, &mut self_rewrites, &[]);
         }
 
         b.cur_block = call_block_handle;
@@ -251,6 +254,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
 
         let mut inlined_first: BlockId = Handle::nil();
         let mut inlined_last: BlockId = Handle::nil();
+        let mut rewritten_returns = b.k1.tmp.new_list(0);
         for (index, (callee_block_id, callee_block)) in
             b.k1.ir.mem.dlist_iter_handles(callee_unit.blocks).enumerate()
         {
@@ -290,13 +294,16 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                         match &mut return_info {
                             InlinedReturnInfo::Empty => {}
                             InlinedReturnInfo::AggInStorage(dst_storage) => {
-                                store_value(
+                                rewrite_value(&mut inlined_rewrites, v);
+                                let store_id = store_value(
                                     &mut b,
                                     call.ret_type,
                                     *dst_storage,
                                     *v,
                                     "inlined agg ret",
-                                );
+                                )
+                                .expect("call.ret_type is not Empty");
+                                rewritten_returns.push_grow(&mut b.k1.tmp, store_id);
                             }
                             InlinedReturnInfo::ScalarInPhi(_, cases) => cases.push_grow(
                                 &mut b.k1.ir.mem,
@@ -328,13 +335,13 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
             rewrite_instr(&mut b.k1.ir, &mut inlined_rewrites, &mut inst);
         }
 
-        // eprintln!("pre rewrite\n{}", blocks_to_string(b.k1, b.blocks, false));
         for (self_block, _) in b.k1.ir.mem.dlist_iter_handles_from(b.blocks, inlined_first) {
-            rewrite_in_block(&mut b.k1.ir, self_block, &mut inlined_rewrites);
+            rewrite_in_block(&mut b.k1.ir, self_block, &mut inlined_rewrites, &rewritten_returns);
             if self_block == inlined_last {
                 break;
             }
         }
+        // debug!("post rewrite\n{}", blocks_to_string(b.k1, b.blocks, false, false));
 
         let unit = get_compiled_unit_mut(&mut b.k1.ir, self_unit_id).unwrap();
         unit.blocks = b.blocks;
@@ -345,16 +352,24 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         b.k1.ir.opt_buf_inline_self_rewrites = self_rewrites;
         b.k1.ir.opt_buf_inline_inlined_rewrites = inlined_rewrites;
 
-        debug!("post inline\n{}", unit_to_string(b.k1, self_unit_id, false));
+        // debug!("post inline\n{}", unit_to_string(b.k1, self_unit_id, false));
         // if let Err(e) = validate_unit(b.k1, self_unit_id) {
         //     k1.report(e)
         // };
     }
 }
 
-fn rewrite_in_block(ir: &mut ProgramIr, block: BlockId, mappings: &mut RewriteMappings) {
+fn rewrite_in_block(
+    ir: &mut ProgramIr,
+    block: BlockId,
+    mappings: &mut RewriteMappings,
+    skip_instrs: &[InstId],
+) {
     let block = ir.mem.get_raw_ref(block);
     for callee_inst_id in ir.mem.dlist_iter(block.data.instrs) {
+        if skip_instrs.contains(&*callee_inst_id) {
+            continue;
+        }
         let mut inst = ir.instrs.get_raw(*callee_inst_id);
         rewrite_instr(ir, mappings, &mut inst)
     }
@@ -384,6 +399,12 @@ impl RewriteMappings {
             "inst map: {}",
             self.values.iter().map(|(old, new)| format!("{} -> {}", old, new)).join(", ")
         );
+        if let Some(fn_params) = self.fn_params {
+            eprintln!(
+                "fn params: {}",
+                fn_params.iter().enumerate().map(|(i, v)| format!("p{} -> {}", i, v)).join(", ")
+            );
+        }
         eprintln!(
             "block enter: {}",
             self.block_enters
@@ -842,7 +863,7 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
                             }
                         }
 
-                        // Let's just clean up now
+                        // clean up
                         // Remove succ
                         // Rewrite succs succ's phis
                         for (_, succ_cfg_node) in ir.mem.dlist_iter_handles(succ_node.data.succs) {
@@ -852,7 +873,7 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
 
                         if !rewrites.values.is_empty() {
                             for (block_id, _) in ir.mem.dlist_iter_handles(*blocks) {
-                                rewrite_in_block(ir, block_id, &mut rewrites)
+                                rewrite_in_block(ir, block_id, &mut rewrites, &[])
                             }
                         }
 
