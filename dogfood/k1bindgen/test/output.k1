@@ -40,8 +40,18 @@ type foo = {
 #static assert-layout[foo](104, 8, [0, 1, 8, 16, 24, 32, 36, 40, 48, 56, 64, 72, 80, 88, 96, 100, ])
 extern("test", "myFunction")
 fn myFunction(
-  p0: *mut u8,
+  incompleteArray: *mut u8,
 ): {}
+extern("test", "cinput_sum")
+fn sum(
+  lhs: i32,
+  rhs: u32,
+): i32
+extern("test", "cinput_unnamed_param")
+fn unnamed_param(
+  p0: i32,
+  named: u32,
+): i32
 type Color = either(i32) {
   Color_Red = 577,
   Color_Green = -10,

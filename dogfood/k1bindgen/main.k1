@@ -20,9 +20,10 @@ use clang/CXCursor
 use clang/CXString
 
 // TODO:
-// - [x] Embed sizeof / alignof / offsetof assertions
-// - [ ] Extract fn param names by traversing the children, not just cheating by only looing at its 'cx-type' like we are now
+// - [ ] implement value of globals (woops)
+// - [x] Extract fn param names by traversing the children, not just cheating by only looking at its 'cx-type' like we are now
 // - [ ] Detect varargs and emit error
+// - [x] Embed sizeof / alignof / offsetof assertions
 // - [x] Support Unions
 fn main(argc: c-int, argv: ptr): i32 { 
   #if k1/test
@@ -636,12 +637,12 @@ fn visit-root(
       let name = clang/getCursorSpelling(current).to-k1();
       let cx-type = clang/getCursorType(current);
       debug("FunctionDecl {name} {cx-type.kind.enum-name()}");
-      let fn-type = map-fn-type(cx-type);
+      let fn-decl = map-fn-decl(current);
 
       bg.defns*.push({
         name,
-        error: :none,
-        kind: :function({ fn-type }),
+        error: fn-decl.error,
+        kind: :function({ fn-type: fn-decl.fn-type }),
         layout: :none,
       });
 
@@ -667,6 +668,47 @@ fn visit-opaque(_bg: *mut BindgenState, cursor: CXCursor): k1-type {
   let size = clang/Type_getSizeOf(clang/getCursorType(cursor));
   let align = clang/Type_getAlignOf(clang/getCursorType(cursor));
   :opaque({ size, align })
+}
+
+// nocommit deslopify
+fn map-fn-decl(cursor: CXCursor): { fn-type: fn-type, error: ?string } {
+  let returned result = zeroed();
+  let cx-type = clang/getCursorType(cursor);
+  let fallback = map-fn-type(cx-type);
+  &result.fn-type*.return-type* <- fallback.return-type;
+  &result.fn-type*.params* <- list/empty[fn-type.params.t]();
+
+  clang/visitChildren(
+    parent = cursor,
+    visitor = visit-fn-param,
+    client_data = &result.as[ptr]
+  );
+
+  if result.fn-type.params.len() != fallback.params.len() {
+    &result.error* <- :some("Function parameter cursor count ({result.fn-type.params.len()}) does not match function type argument count ({fallback.params.len()})")
+  };
+
+  result
+}
+
+fn visit-fn-param(
+  current: CXCursor,
+  _parent: CXCursor,
+  data: clang/CXClientData,
+): clang/CXChildVisitResult {
+  let result = data.as[*mut map-fn-decl.return];
+  let cursor-kind = clang/getCursorKind(current);
+  switch cursor-kind {
+    :ParmDecl -> {
+      let name-spelling = clang/getCursorSpelling(current).to-k1();
+      let name: ?string = if name-spelling.isEmpty() :none else :some(name-spelling);
+      let cx-type = clang/getCursorType(current);
+      let arg-type = map-type-ext(cx-type, :fn-param);
+      result.fn-type*.params*.push({ name, type: arg-type });
+      :Continue
+    },
+    _ -> :Continue
+  }
 }
 
 fn map-fn-type(cx-type: clang/CXType): fn-type {
