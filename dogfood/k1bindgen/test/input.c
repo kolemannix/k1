@@ -40,6 +40,12 @@ void myFunction(char incompleteArray[]) {
   return;
 }
 
+int cinput_sum(int lhs, unsigned int rhs) {
+  return lhs + rhs;
+}
+
+int cinput_unnamed_param(int, unsigned int named);
+
 enum Color {
   Color_Red = 577,
   Color_Green = -10,
