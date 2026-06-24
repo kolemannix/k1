@@ -3400,14 +3400,11 @@ impl TypedProgram {
                     }
                 }
                 // Allowed nominal types
-                Type::Struct(_s) => {}
-                Type::Sum(_s) => {}
-                Type::Enum(_e) => {}
-
+                Type::Struct(_) | Type::Sum(_) | Type::Enum(_) | Type::Opaque(_) => {}
                 _other => {
                     return failf!(
                         parsed_type_defn.span,
-                        "Non-alias type definition must be a struct or sum or builtin; not a '{}'. Perhaps you meant to create an alias `deftype alias <name> = <type>`",
+                        "Non-alias type definition must be a struct or either or opaque or builtin; not a '{}'. Perhaps you meant to create an alias `deftype alias <name> = <type>`",
                         self.type_id_to_string(rhs_type_id)
                     );
                 }
@@ -4516,7 +4513,7 @@ impl TypedProgram {
             );
         }
 
-        let opaque_type = self.types.add_anon(Type::Opaque(OpaqueType { size, align }));
+        let opaque_type = self.types.add(Type::Opaque(OpaqueType { size, align }), None, None);
         Ok(Some(opaque_type))
     }
 

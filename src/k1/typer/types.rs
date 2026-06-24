@@ -580,7 +580,13 @@ impl TypePool {
                 }
                 true
             }
-            (Type::Opaque(o1), Type::Opaque(o2)) => o1.size == o2.size && o1.align == o2.align,
+            (Type::Opaque(o1), Type::Opaque(o2)) => {
+                if defn1 != defn2 {
+                    return false;
+                }
+
+                o1.size == o2.size && o1.align == o2.align
+            }
             (Type::Never, Type::Never) => true,
             // We never really want to de-dupe this type as its inherently unique
             (Type::Generic(_g1), Type::Generic(_g2)) => false,
@@ -675,11 +681,13 @@ impl TypePool {
                 }
             }
             Type::Opaque(opaque) => {
+                defn.hash(state);
                 opaque.size.hash(state);
                 opaque.align.hash(state);
             }
             // Inherently unique as well
             Type::Generic(generic) => {
+                defn.hash(state);
                 generic.inner.hash(state);
                 generic.params.raw_offset().hash(state);
                 generic.params.len().hash(state);
