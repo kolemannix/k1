@@ -1,0 +1,127 @@
+// An experimental libuv work based async 'task'
+// Spawns the given callback on a libuv worker thread
+// And awaits the result via a condition variable
+
+// Using this from libuv worker threads themselves
+// can result in deadlocks, so don't do that.
+
+// I think ideally we probably re-purpose this to run
+// on a newly spawned thread, for work that is expensive enough
+// that we don't care about thread overhead.
+
+// That or we re-purpose this to enqueue the work onto a dedicated work thread
+// that perhaps we have a handle to; db-writer.spawn(task)
+// This will be the shape of our solution for ensuring our sqlite writes
+// never deadlock; they must be serialized to something like this
+type task[t] = {
+  state: *mut task-state[t],
+}
+
+type task-state[t] = {
+  req: *mut uv/work,
+  mutex: *mut uv/mutex,
+  cond: *mut uv/cond,
+  handler-done: bool,
+  libuv-done: bool,
+  output: ?t,
+}
+
+ns for task-state {
+  fn release[t](self: *mut task-state[t]) {
+    uv/cond_destroy(self.cond);
+    uv/mutex_destroy(self.mutex);
+    let heap = mem/alloc-mode:system-heap;
+    heap.freeT(self.req);
+    heap.freeT(self.mutex);
+    heap.freeT(self.cond);
+    heap.freeT(self);
+  }
+}
+
+type task-work[t, params] = {
+  state: *mut task-state[t],
+  params: params,
+  handler: *fn(params) -> t,
+}
+
+ns for task {
+  fn spawn[t, params](
+    l: *mut uv-loop,
+    handler: *fn(params) -> t,
+    params: params,
+  ): task[t] {
+    let heap = mem/alloc-mode:system-heap;
+    let state: *mut task-state[t] = heap.new({
+      req     : heap.allocT[uv/work],
+      mutex   : heap.allocT[uv/mutex],
+      cond    : heap.allocT[uv/cond],
+      handler-done: false,
+      libuv-done: false,
+      output: :none,
+    });
+    let work: *mut task-work[t, params] = heap.new({
+      state,
+      params,
+      handler,
+    });
+
+    let mutex-rc = uv/mutex_init(state.mutex);
+    if mutex-rc != 0 {
+      crash("uv_mutex_init failed: {mutex-rc}");
+    };
+
+    let cond-rc = uv/cond_init(state.cond);
+    if cond-rc != 0 {
+      uv/mutex_destroy(state.mutex);
+      crash("uv_cond_init failed: {cond-rc}");
+    };
+
+    state.req.set-data(work);
+
+    uv/submit-work(
+      state.req,
+      fn req. {
+        let task-work = req.get-data[task-work[t, params]];
+        let handler = task-work.handler;
+        task/complete(task-work.state, handler(task-work.params));
+        {}
+      },
+      fn (req, status) {
+        let task-work = req.get-data[task-work[t, params]];
+        if status != 0 {
+          tprintln("task work failed with status {status}");
+        };
+        uv/mutex_lock(task-work.state.mutex);
+        task-work.state.libuv-done* <- true;
+        uv/cond_signal(task-work.state.cond);
+        uv/mutex_unlock(task-work.state.mutex);
+        mem/alloc-mode:system-heap.freeT(task-work);
+      }
+    );
+
+    { state }
+  }
+
+
+  fn await[t](self: task[t]): t {
+    let state = self.state;
+
+    uv/mutex_lock(state.mutex);
+    while state.handler-done == false or state.libuv-done == false {
+      uv/cond_wait(state.cond, state.mutex);
+    };
+    uv/mutex_unlock(state.mutex);
+    
+    let output = state.output.!;
+    state.release();
+    output
+  }
+
+  fn complete[t](state: *mut task-state[t], output: t) {
+    uv/mutex_lock(state.mutex);
+    state.output* <- :some(output);
+    state.handler-done* <- true;
+    uv/cond_signal(state.cond);
+    uv/mutex_unlock(state.mutex);
+  }
+}

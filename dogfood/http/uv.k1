@@ -289,20 +289,20 @@ extern("uv", "uv_library_shutdown")
 fn library_shutdown(): {}
 extern("uv", "uv_replace_allocator")
 fn replace_allocator(
-  p0: malloc_func,
-  p1: realloc_func,
-  p2: calloc_func,
-  p3: free_func,
+  malloc_func: malloc_func,
+  realloc_func: realloc_func,
+  calloc_func: calloc_func,
+  free_func: free_func,
 ): i32
 extern("uv", "uv_default_loop")
 fn default_loop(): *mut uv-loop
 extern("uv", "uv_loop_init")
 fn loop_init(
-  p0: *mut uv-loop,
+  loop_c: *mut uv-loop,
 ): i32
 extern("uv", "uv_loop_close")
 fn loop_close(
-  p0: *mut uv-loop,
+  loop_c: *mut uv-loop,
 ): i32
 extern("uv", "uv_loop_new")
 fn loop_new(): *mut uv-loop
@@ -314,21 +314,21 @@ extern("uv", "uv_loop_size")
 fn loop_size(): usize
 extern("uv", "uv_loop_alive")
 fn loop_alive(
-  p0: *mut uv-loop,
+  loop_c: *mut uv-loop,
 ): i32
 extern("uv", "uv_loop_configure")
 fn loop_configure(
-  p0: *mut uv-loop,
-  p1: loop_option,
+  loop_c: *mut uv-loop,
+  option: loop_option,
 ): i32
 extern("uv", "uv_loop_fork")
 fn loop_fork(
-  p0: *mut uv-loop,
+  loop_c: *mut uv-loop,
 ): i32
 extern("uv", "uv_run")
 fn run(
   p0: *mut uv-loop,
-  p1: run_mode,
+  mode: run_mode,
 ): i32
 extern("uv", "uv_stop")
 fn stop(
@@ -538,159 +538,159 @@ type membership = either(u32) {
 #static assert-layout[membership](4, 4, [])
 extern("uv", "uv_translate_sys_error")
 fn translate_sys_error(
-  p0: i32,
+  sys_errno: i32,
 ): i32
 extern("uv", "uv_strerror")
 fn strerror(
-  p0: i32,
+  err: i32,
 ): *mut u8
 extern("uv", "uv_strerror_r")
 fn strerror_r(
-  p0: i32,
-  p1: *mut u8,
-  p2: usize,
+  err: i32,
+  buf: *mut u8,
+  buflen: usize,
 ): *mut u8
 extern("uv", "uv_err_name")
 fn err_name(
-  p0: i32,
+  err: i32,
 ): *mut u8
 extern("uv", "uv_err_name_r")
 fn err_name_r(
-  p0: i32,
-  p1: *mut u8,
-  p2: usize,
+  err: i32,
+  buf: *mut u8,
+  buflen: usize,
 ): *mut u8
 extern("uv", "uv_shutdown")
 fn shutdown(
-  p0: *mut shutdown,
-  p1: *mut stream,
-  p2: shutdown_cb,
+  req: *mut shutdown,
+  handle: *mut stream,
+  cb: shutdown_cb,
 ): i32
 extern("uv", "uv_handle_size")
 fn handle_size(
-  p0: handle_type,
+  type: handle_type,
 ): usize
 extern("uv", "uv_handle_get_type")
 fn handle_get_type(
-  p0: *mut handle,
+  handle: *mut handle,
 ): handle_type
 extern("uv", "uv_handle_type_name")
 fn handle_type_name(
-  p0: handle_type,
+  type: handle_type,
 ): *mut u8
 extern("uv", "uv_handle_get_data")
 fn handle_get_data(
-  p0: *mut handle,
+  handle: *mut handle,
 ): ptr
 extern("uv", "uv_handle_get_loop")
 fn handle_get_loop(
-  p0: *mut handle,
+  handle: *mut handle,
 ): *mut uv-loop
 extern("uv", "uv_handle_set_data")
 fn handle_set_data(
-  p0: *mut handle,
-  p1: ptr,
+  handle: *mut handle,
+  data: ptr,
 ): {}
 extern("uv", "uv_req_size")
 fn req_size(
-  p0: req_type,
+  type: req_type,
 ): usize
 extern("uv", "uv_req_get_data")
 fn req_get_data(
-  p0: *mut req,
+  req: *mut req,
 ): ptr
 extern("uv", "uv_req_set_data")
 fn req_set_data(
-  p0: *mut req,
-  p1: ptr,
+  req: *mut req,
+  data: ptr,
 ): {}
 extern("uv", "uv_req_get_type")
 fn req_get_type(
-  p0: *mut req,
+  req: *mut req,
 ): req_type
 extern("uv", "uv_req_type_name")
 fn req_type_name(
-  p0: req_type,
+  type: req_type,
 ): *mut u8
 extern("uv", "uv_is_active")
 fn is_active(
-  p0: *mut handle,
+  handle: *mut handle,
 ): i32
 extern("uv", "uv_walk")
 fn walk(
-  p0: *mut uv-loop,
-  p1: walk_cb,
-  p2: ptr,
+  loop_c: *mut uv-loop,
+  walk_cb: walk_cb,
+  arg: ptr,
 ): {}
 extern("uv", "uv_print_all_handles")
 fn print_all_handles(
-  p0: *mut uv-loop,
-  p1: *mut FILE,
+  loop_c: *mut uv-loop,
+  stream: *mut FILE,
 ): {}
 extern("uv", "uv_print_active_handles")
 fn print_active_handles(
-  p0: *mut uv-loop,
-  p1: *mut FILE,
+  loop_c: *mut uv-loop,
+  stream: *mut FILE,
 ): {}
 extern("uv", "uv_close")
 fn close(
-  p0: *mut handle,
-  p1: close_cb,
+  handle: *mut handle,
+  close_cb: close_cb,
 ): {}
 extern("uv", "uv_send_buffer_size")
 fn send_buffer_size(
-  p0: *mut handle,
-  p1: *mut i32,
+  handle: *mut handle,
+  value: *mut i32,
 ): i32
 extern("uv", "uv_recv_buffer_size")
 fn recv_buffer_size(
-  p0: *mut handle,
-  p1: *mut i32,
+  handle: *mut handle,
+  value: *mut i32,
 ): i32
 extern("uv", "uv_fileno")
 fn fileno(
-  p0: *mut handle,
-  p1: *mut os_fd,
+  handle: *mut handle,
+  fd: *mut os_fd,
 ): i32
 extern("uv", "uv_buf_init")
 fn buf_init(
-  p0: *mut u8,
-  p1: u32,
+  base: *mut u8,
+  len: u32,
 ): buf
 extern("uv", "uv_pipe")
 fn pipe(
-  p0: array[file, 2],
-  p1: i32,
-  p2: i32,
+  fds: array[file, 2],
+  read_flags: i32,
+  write_flags: i32,
 ): i32
 extern("uv", "uv_socketpair")
 fn socketpair(
-  p0: i32,
-  p1: i32,
-  p2: array[os_sock, 2],
-  p3: i32,
-  p4: i32,
+  type: i32,
+  protocol: i32,
+  socket_vector: array[os_sock, 2],
+  flags0: i32,
+  flags1: i32,
 ): i32
 extern("uv", "uv_stream_get_write_queue_size")
 fn stream_get_write_queue_size(
-  p0: *mut stream,
+  stream: *mut stream,
 ): usize
 extern("uv", "uv_listen")
 fn listen(
-  p0: *mut stream,
-  p1: i32,
-  p2: connection_cb,
+  stream: *mut stream,
+  backlog: i32,
+  cb: connection_cb,
 ): i32
 extern("uv", "uv_accept")
 fn accept(
-  p0: *mut stream,
-  p1: *mut stream,
+  server: *mut stream,
+  client: *mut stream,
 ): i32
 extern("uv", "uv_read_start")
 fn read_start(
   p0: *mut stream,
-  p1: alloc_cb,
-  p2: read_cb,
+  alloc_cb: alloc_cb,
+  read_cb: read_cb,
 ): i32
 extern("uv", "uv_read_stop")
 fn read_stop(
@@ -698,90 +698,90 @@ fn read_stop(
 ): i32
 extern("uv", "uv_write")
 fn write(
-  p0: *mut write,
-  p1: *mut stream,
-  p2: *mut buf,
-  p3: u32,
-  p4: write_cb,
+  req: *mut write,
+  handle: *mut stream,
+  bufs: *mut buf,
+  nbufs: u32,
+  cb: write_cb,
 ): i32
 extern("uv", "uv_write2")
 fn write2(
-  p0: *mut write,
-  p1: *mut stream,
-  p2: *mut buf,
-  p3: u32,
-  p4: *mut stream,
-  p5: write_cb,
+  req: *mut write,
+  handle: *mut stream,
+  bufs: *mut buf,
+  nbufs: u32,
+  send_handle: *mut stream,
+  cb: write_cb,
 ): i32
 extern("uv", "uv_try_write")
 fn try_write(
-  p0: *mut stream,
-  p1: *mut buf,
-  p2: u32,
+  handle: *mut stream,
+  bufs: *mut buf,
+  nbufs: u32,
 ): i32
 extern("uv", "uv_try_write2")
 fn try_write2(
-  p0: *mut stream,
-  p1: *mut buf,
-  p2: u32,
-  p3: *mut stream,
+  handle: *mut stream,
+  bufs: *mut buf,
+  nbufs: u32,
+  send_handle: *mut stream,
 ): i32
 extern("uv", "uv_is_readable")
 fn is_readable(
-  p0: *mut stream,
+  handle: *mut stream,
 ): i32
 extern("uv", "uv_is_writable")
 fn is_writable(
-  p0: *mut stream,
+  handle: *mut stream,
 ): i32
 extern("uv", "uv_stream_set_blocking")
 fn stream_set_blocking(
-  p0: *mut stream,
-  p1: i32,
+  handle: *mut stream,
+  blocking: i32,
 ): i32
 extern("uv", "uv_is_closing")
 fn is_closing(
-  p0: *mut handle,
+  handle: *mut handle,
 ): i32
 extern("uv", "uv_tcp_init")
 fn tcp_init(
   p0: *mut uv-loop,
-  p1: *mut tcp,
+  handle: *mut tcp,
 ): i32
 extern("uv", "uv_tcp_init_ex")
 fn tcp_init_ex(
   p0: *mut uv-loop,
-  p1: *mut tcp,
-  p2: u32,
+  handle: *mut tcp,
+  flags: u32,
 ): i32
 extern("uv", "uv_tcp_open")
 fn tcp_open(
-  p0: *mut tcp,
-  p1: os_sock,
+  handle: *mut tcp,
+  sock: os_sock,
 ): i32
 extern("uv", "uv_tcp_nodelay")
 fn tcp_nodelay(
-  p0: *mut tcp,
-  p1: i32,
+  handle: *mut tcp,
+  enable: i32,
 ): i32
 extern("uv", "uv_tcp_keepalive")
 fn tcp_keepalive(
-  p0: *mut tcp,
-  p1: i32,
-  p2: u32,
+  handle: *mut tcp,
+  enable: i32,
+  delay: u32,
 ): i32
 extern("uv", "uv_tcp_keepalive_ex")
 fn tcp_keepalive_ex(
-  p0: *mut tcp,
-  p1: i32,
-  p2: u32,
-  p3: u32,
-  p4: u32,
+  handle: *mut tcp,
+  on: i32,
+  idle: u32,
+  intvl: u32,
+  cnt: u32,
 ): i32
 extern("uv", "uv_tcp_simultaneous_accepts")
 fn tcp_simultaneous_accepts(
-  p0: *mut tcp,
-  p1: i32,
+  handle: *mut tcp,
+  enable: i32,
 ): i32
 type tcp_flags = either(u32) {
   UV_TCP_IPV6ONLY = 1,
@@ -790,33 +790,33 @@ type tcp_flags = either(u32) {
 #static assert-layout[tcp_flags](4, 4, [])
 extern("uv", "uv_tcp_bind")
 fn tcp_bind(
-  p0: *mut tcp,
-  p1: *mut sockaddr,
-  p2: u32,
+  handle: *mut tcp,
+  addr: *mut sockaddr,
+  flags: u32,
 ): i32
 extern("uv", "uv_tcp_getsockname")
 fn tcp_getsockname(
-  p0: *mut tcp,
-  p1: *mut sockaddr,
-  p2: *mut i32,
+  handle: *mut tcp,
+  name: *mut sockaddr,
+  namelen: *mut i32,
 ): i32
 extern("uv", "uv_tcp_getpeername")
 fn tcp_getpeername(
-  p0: *mut tcp,
-  p1: *mut sockaddr,
-  p2: *mut i32,
+  handle: *mut tcp,
+  name: *mut sockaddr,
+  namelen: *mut i32,
 ): i32
 extern("uv", "uv_tcp_close_reset")
 fn tcp_close_reset(
-  p0: *mut tcp,
-  p1: close_cb,
+  handle: *mut tcp,
+  close_cb: close_cb,
 ): i32
 extern("uv", "uv_tcp_connect")
 fn tcp_connect(
-  p0: *mut connect,
-  p1: *mut tcp,
-  p2: *mut sockaddr,
-  p3: connect_cb,
+  req: *mut connect,
+  handle: *mut tcp,
+  addr: *mut sockaddr,
+  cb: connect_cb,
 ): i32
 type udp_flags = either(u32) {
   UV_UDP_IPV6ONLY = 1,
@@ -845,134 +845,134 @@ type alias udp_recv_cb = *fn(
 extern("uv", "uv_udp_init")
 fn udp_init(
   p0: *mut uv-loop,
-  p1: *mut udp,
+  handle: *mut udp,
 ): i32
 extern("uv", "uv_udp_init_ex")
 fn udp_init_ex(
   p0: *mut uv-loop,
-  p1: *mut udp,
-  p2: u32,
+  handle: *mut udp,
+  flags: u32,
 ): i32
 extern("uv", "uv_udp_open")
 fn udp_open(
-  p0: *mut udp,
-  p1: os_sock,
+  handle: *mut udp,
+  sock: os_sock,
 ): i32
 extern("uv", "uv_udp_open_ex")
 fn udp_open_ex(
-  p0: *mut udp,
-  p1: os_sock,
-  p2: u32,
+  handle: *mut udp,
+  sock: os_sock,
+  flags: u32,
 ): i32
 extern("uv", "uv_udp_bind")
 fn udp_bind(
-  p0: *mut udp,
-  p1: *mut sockaddr,
-  p2: u32,
+  handle: *mut udp,
+  addr: *mut sockaddr,
+  flags: u32,
 ): i32
 extern("uv", "uv_udp_connect")
 fn udp_connect(
-  p0: *mut udp,
-  p1: *mut sockaddr,
+  handle: *mut udp,
+  addr: *mut sockaddr,
 ): i32
 extern("uv", "uv_udp_getpeername")
 fn udp_getpeername(
-  p0: *mut udp,
-  p1: *mut sockaddr,
-  p2: *mut i32,
+  handle: *mut udp,
+  name: *mut sockaddr,
+  namelen: *mut i32,
 ): i32
 extern("uv", "uv_udp_getsockname")
 fn udp_getsockname(
-  p0: *mut udp,
-  p1: *mut sockaddr,
-  p2: *mut i32,
+  handle: *mut udp,
+  name: *mut sockaddr,
+  namelen: *mut i32,
 ): i32
 extern("uv", "uv_udp_set_membership")
 fn udp_set_membership(
-  p0: *mut udp,
-  p1: *mut u8,
-  p2: *mut u8,
-  p3: membership,
+  handle: *mut udp,
+  multicast_addr: *mut u8,
+  interface_addr: *mut u8,
+  membership: membership,
 ): i32
 extern("uv", "uv_udp_set_source_membership")
 fn udp_set_source_membership(
-  p0: *mut udp,
-  p1: *mut u8,
-  p2: *mut u8,
-  p3: *mut u8,
-  p4: membership,
+  handle: *mut udp,
+  multicast_addr: *mut u8,
+  interface_addr: *mut u8,
+  source_addr: *mut u8,
+  membership: membership,
 ): i32
 extern("uv", "uv_udp_set_multicast_loop")
 fn udp_set_multicast_loop(
-  p0: *mut udp,
-  p1: i32,
+  handle: *mut udp,
+  on: i32,
 ): i32
 extern("uv", "uv_udp_set_multicast_ttl")
 fn udp_set_multicast_ttl(
-  p0: *mut udp,
-  p1: i32,
+  handle: *mut udp,
+  ttl: i32,
 ): i32
 extern("uv", "uv_udp_set_multicast_interface")
 fn udp_set_multicast_interface(
-  p0: *mut udp,
-  p1: *mut u8,
+  handle: *mut udp,
+  interface_addr: *mut u8,
 ): i32
 extern("uv", "uv_udp_set_broadcast")
 fn udp_set_broadcast(
-  p0: *mut udp,
-  p1: i32,
+  handle: *mut udp,
+  on: i32,
 ): i32
 extern("uv", "uv_udp_set_ttl")
 fn udp_set_ttl(
-  p0: *mut udp,
-  p1: i32,
+  handle: *mut udp,
+  ttl: i32,
 ): i32
 extern("uv", "uv_udp_send")
 fn udp_send(
-  p0: *mut udp_send,
-  p1: *mut udp,
-  p2: *mut buf,
-  p3: u32,
-  p4: *mut sockaddr,
-  p5: udp_send_cb,
+  req: *mut udp_send,
+  handle: *mut udp,
+  bufs: *mut buf,
+  nbufs: u32,
+  addr: *mut sockaddr,
+  send_cb: udp_send_cb,
 ): i32
 extern("uv", "uv_udp_try_send")
 fn udp_try_send(
-  p0: *mut udp,
-  p1: *mut buf,
-  p2: u32,
-  p3: *mut sockaddr,
+  handle: *mut udp,
+  bufs: *mut buf,
+  nbufs: u32,
+  addr: *mut sockaddr,
 ): i32
 extern("uv", "uv_udp_try_send2")
 fn udp_try_send2(
-  p0: *mut udp,
-  p1: u32,
-  p2: *mut *mut buf,
-  p3: *mut u32,
-  p4: *mut *mut sockaddr,
-  p5: u32,
+  handle: *mut udp,
+  count: u32,
+  bufs: *mut *mut buf,
+  nbufs: *mut u32,
+  addrs: *mut *mut sockaddr,
+  flags: u32,
 ): i32
 extern("uv", "uv_udp_recv_start")
 fn udp_recv_start(
-  p0: *mut udp,
-  p1: alloc_cb,
-  p2: udp_recv_cb,
+  handle: *mut udp,
+  alloc_cb: alloc_cb,
+  recv_cb: udp_recv_cb,
 ): i32
 extern("uv", "uv_udp_using_recvmmsg")
 fn udp_using_recvmmsg(
-  p0: *mut udp,
+  handle: *mut udp,
 ): i32
 extern("uv", "uv_udp_recv_stop")
 fn udp_recv_stop(
-  p0: *mut udp,
+  handle: *mut udp,
 ): i32
 extern("uv", "uv_udp_get_send_queue_size")
 fn udp_get_send_queue_size(
-  p0: *mut udp,
+  handle: *mut udp,
 ): usize
 extern("uv", "uv_udp_get_send_queue_count")
 fn udp_get_send_queue_count(
-  p0: *mut udp,
+  handle: *mut udp,
 ): usize
 type tty_mode = either(u32) {
   UV_TTY_MODE_NORMAL = 0,
@@ -990,102 +990,102 @@ extern("uv", "uv_tty_init")
 fn tty_init(
   p0: *mut uv-loop,
   p1: *mut tty,
-  p2: file,
-  p3: i32,
+  fd: file,
+  readable: i32,
 ): i32
 extern("uv", "uv_tty_set_mode")
 fn tty_set_mode(
   p0: *mut tty,
-  p1: tty_mode,
+  mode: tty_mode,
 ): i32
 extern("uv", "uv_tty_reset_mode")
 fn tty_reset_mode(): i32
 extern("uv", "uv_tty_get_winsize")
 fn tty_get_winsize(
   p0: *mut tty,
-  p1: *mut i32,
-  p2: *mut i32,
+  width: *mut i32,
+  height: *mut i32,
 ): i32
 extern("uv", "uv_tty_set_vterm_state")
 fn tty_set_vterm_state(
-  p0: tty_vtermstate,
+  state: tty_vtermstate,
 ): {}
 extern("uv", "uv_tty_get_vterm_state")
 fn tty_get_vterm_state(
-  p0: *mut tty_vtermstate,
+  state: *mut tty_vtermstate,
 ): i32
 extern("uv", "uv_guess_handle")
 fn guess_handle(
-  p0: file,
+  file: file,
 ): handle_type
 extern("uv", "uv_pipe_init")
 fn pipe_init(
   p0: *mut uv-loop,
-  p1: *mut pipe,
-  p2: i32,
+  handle: *mut pipe,
+  ipc: i32,
 ): i32
 extern("uv", "uv_pipe_open")
 fn pipe_open(
   p0: *mut pipe,
-  p1: file,
+  file: file,
 ): i32
 extern("uv", "uv_pipe_bind")
 fn pipe_bind(
-  p0: *mut pipe,
-  p1: *mut u8,
+  handle: *mut pipe,
+  name: *mut u8,
 ): i32
 extern("uv", "uv_pipe_bind2")
 fn pipe_bind2(
-  p0: *mut pipe,
-  p1: *mut u8,
-  p2: usize,
-  p3: u32,
+  handle: *mut pipe,
+  name: *mut u8,
+  namelen: usize,
+  flags: u32,
 ): i32
 extern("uv", "uv_pipe_connect")
 fn pipe_connect(
-  p0: *mut connect,
-  p1: *mut pipe,
-  p2: *mut u8,
-  p3: connect_cb,
+  req: *mut connect,
+  handle: *mut pipe,
+  name: *mut u8,
+  cb: connect_cb,
 ): {}
 extern("uv", "uv_pipe_connect2")
 fn pipe_connect2(
-  p0: *mut connect,
-  p1: *mut pipe,
-  p2: *mut u8,
-  p3: usize,
-  p4: u32,
-  p5: connect_cb,
+  req: *mut connect,
+  handle: *mut pipe,
+  name: *mut u8,
+  namelen: usize,
+  flags: u32,
+  cb: connect_cb,
 ): i32
 extern("uv", "uv_pipe_getsockname")
 fn pipe_getsockname(
-  p0: *mut pipe,
-  p1: *mut u8,
-  p2: *mut usize,
+  handle: *mut pipe,
+  buffer: *mut u8,
+  size: *mut usize,
 ): i32
 extern("uv", "uv_pipe_getpeername")
 fn pipe_getpeername(
-  p0: *mut pipe,
-  p1: *mut u8,
-  p2: *mut usize,
+  handle: *mut pipe,
+  buffer: *mut u8,
+  size: *mut usize,
 ): i32
 extern("uv", "uv_pipe_pending_instances")
 fn pipe_pending_instances(
-  p0: *mut pipe,
-  p1: i32,
+  handle: *mut pipe,
+  count: i32,
 ): {}
 extern("uv", "uv_pipe_pending_count")
 fn pipe_pending_count(
-  p0: *mut pipe,
+  handle: *mut pipe,
 ): i32
 extern("uv", "uv_pipe_pending_type")
 fn pipe_pending_type(
-  p0: *mut pipe,
+  handle: *mut pipe,
 ): handle_type
 extern("uv", "uv_pipe_chmod")
 fn pipe_chmod(
-  p0: *mut pipe,
-  p1: i32,
+  handle: *mut pipe,
+  flags: i32,
 ): i32
 type poll_event = either(u32) {
   UV_READABLE = 1,
@@ -1096,131 +1096,131 @@ type poll_event = either(u32) {
 #static assert-layout[poll_event](4, 4, [])
 extern("uv", "uv_poll_init")
 fn poll_init(
-  p0: *mut uv-loop,
-  p1: *mut poll,
-  p2: i32,
+  loop_c: *mut uv-loop,
+  handle: *mut poll,
+  fd: i32,
 ): i32
 extern("uv", "uv_poll_init_socket")
 fn poll_init_socket(
-  p0: *mut uv-loop,
-  p1: *mut poll,
-  p2: os_sock,
+  loop_c: *mut uv-loop,
+  handle: *mut poll,
+  socket: os_sock,
 ): i32
 extern("uv", "uv_poll_start")
 fn poll_start(
-  p0: *mut poll,
-  p1: i32,
-  p2: poll_cb,
+  handle: *mut poll,
+  events: i32,
+  cb: poll_cb,
 ): i32
 extern("uv", "uv_poll_stop")
 fn poll_stop(
-  p0: *mut poll,
+  handle: *mut poll,
 ): i32
 extern("uv", "uv_prepare_init")
 fn prepare_init(
   p0: *mut uv-loop,
-  p1: *mut prepare,
+  prepare: *mut prepare,
 ): i32
 extern("uv", "uv_prepare_start")
 fn prepare_start(
-  p0: *mut prepare,
-  p1: prepare_cb,
+  prepare: *mut prepare,
+  cb: prepare_cb,
 ): i32
 extern("uv", "uv_prepare_stop")
 fn prepare_stop(
-  p0: *mut prepare,
+  prepare: *mut prepare,
 ): i32
 extern("uv", "uv_check_init")
 fn check_init(
   p0: *mut uv-loop,
-  p1: *mut check,
+  check: *mut check,
 ): i32
 extern("uv", "uv_check_start")
 fn check_start(
-  p0: *mut check,
-  p1: check_cb,
+  check: *mut check,
+  cb: check_cb,
 ): i32
 extern("uv", "uv_check_stop")
 fn check_stop(
-  p0: *mut check,
+  check: *mut check,
 ): i32
 extern("uv", "uv_idle_init")
 fn idle_init(
   p0: *mut uv-loop,
-  p1: *mut idle,
+  idle: *mut idle,
 ): i32
 extern("uv", "uv_idle_start")
 fn idle_start(
-  p0: *mut idle,
-  p1: idle_cb,
+  idle: *mut idle,
+  cb: idle_cb,
 ): i32
 extern("uv", "uv_idle_stop")
 fn idle_stop(
-  p0: *mut idle,
+  idle: *mut idle,
 ): i32
 extern("uv", "uv_async_init")
 fn async_init(
   p0: *mut uv-loop,
-  p1: *mut async,
-  p2: async_cb,
+  async: *mut async,
+  async_cb: async_cb,
 ): i32
 extern("uv", "uv_async_send")
 fn async_send(
-  p0: *mut async,
+  async: *mut async,
 ): i32
 extern("uv", "uv_timer_init")
 fn timer_init(
   p0: *mut uv-loop,
-  p1: *mut timer,
+  handle: *mut timer,
 ): i32
 extern("uv", "uv_timer_start")
 fn timer_start(
-  p0: *mut timer,
-  p1: timer_cb,
-  p2: u64,
-  p3: u64,
+  handle: *mut timer,
+  cb: timer_cb,
+  timeout: u64,
+  repeat: u64,
 ): i32
 extern("uv", "uv_timer_stop")
 fn timer_stop(
-  p0: *mut timer,
+  handle: *mut timer,
 ): i32
 extern("uv", "uv_timer_again")
 fn timer_again(
-  p0: *mut timer,
+  handle: *mut timer,
 ): i32
 extern("uv", "uv_timer_set_repeat")
 fn timer_set_repeat(
-  p0: *mut timer,
-  p1: u64,
+  handle: *mut timer,
+  repeat: u64,
 ): {}
 extern("uv", "uv_timer_get_repeat")
 fn timer_get_repeat(
-  p0: *mut timer,
+  handle: *mut timer,
 ): u64
 extern("uv", "uv_timer_get_due_in")
 fn timer_get_due_in(
-  p0: *mut timer,
+  handle: *mut timer,
 ): u64
 extern("uv", "uv_getaddrinfo")
 fn getaddrinfo(
-  p0: *mut uv-loop,
-  p1: *mut getaddrinfo,
-  p2: getaddrinfo_cb,
-  p3: *mut u8,
-  p4: *mut u8,
-  p5: *mut addrinfo,
+  loop_c: *mut uv-loop,
+  req: *mut getaddrinfo,
+  getaddrinfo_cb: getaddrinfo_cb,
+  node: *mut u8,
+  service: *mut u8,
+  hints: *mut addrinfo,
 ): i32
 extern("uv", "uv_freeaddrinfo")
 fn freeaddrinfo(
-  p0: *mut addrinfo,
+  ai: *mut addrinfo,
 ): {}
 extern("uv", "uv_getnameinfo")
 fn getnameinfo(
-  p0: *mut uv-loop,
-  p1: *mut getnameinfo,
-  p2: getnameinfo_cb,
-  p3: *mut sockaddr,
-  p4: i32,
+  loop_c: *mut uv-loop,
+  req: *mut getnameinfo,
+  getnameinfo_cb: getnameinfo_cb,
+  addr: *mut sockaddr,
+  flags: i32,
 ): i32
 type stdio_flags = either(u32) {
   UV_IGNORE = 0,
@@ -1270,19 +1270,19 @@ type process_flags = either(u32) {
 #static assert-layout[process_flags](4, 4, [])
 extern("uv", "uv_spawn")
 fn spawn(
-  p0: *mut uv-loop,
-  p1: *mut process,
-  p2: *mut process_options,
+  loop_c: *mut uv-loop,
+  handle: *mut process,
+  options: *mut process_options,
 ): i32
 extern("uv", "uv_process_kill")
 fn process_kill(
   p0: *mut process,
-  p1: i32,
+  signum: i32,
 ): i32
 extern("uv", "uv_kill")
 fn kill(
-  p0: i32,
-  p1: i32,
+  pid: i32,
+  signum: i32,
 ): i32
 extern("uv", "uv_process_get_pid")
 fn process_get_pid(
@@ -1290,14 +1290,14 @@ fn process_get_pid(
 ): pid
 extern("uv", "uv_queue_work")
 fn queue_work(
-  p0: *mut uv-loop,
-  p1: *mut work,
-  p2: work_cb,
-  p3: after_work_cb,
+  loop_c: *mut uv-loop,
+  req: *mut work,
+  work_cb: work_cb,
+  after_work_cb: after_work_cb,
 ): i32
 extern("uv", "uv_cancel")
 fn cancel(
-  p0: *mut req,
+  req: *mut req,
 ): i32
 type cpu_times_s = {
   user: u64,
@@ -1378,33 +1378,33 @@ type dirent_s = {
 #static assert-layout[dirent_s](16, 8, [0, 8, ])
 extern("uv", "uv_setup_args")
 fn setup_args(
-  p0: i32,
-  p1: *mut *mut u8,
+  argc: i32,
+  argv: *mut *mut u8,
 ): *mut *mut u8
 extern("uv", "uv_get_process_title")
 fn get_process_title(
-  p0: *mut u8,
-  p1: usize,
+  buffer: *mut u8,
+  size: usize,
 ): i32
 extern("uv", "uv_set_process_title")
 fn set_process_title(
-  p0: *mut u8,
+  title: *mut u8,
 ): i32
 extern("uv", "uv_resident_set_memory")
 fn resident_set_memory(
-  p0: *mut usize,
+  rss: *mut usize,
 ): i32
 extern("uv", "uv_uptime")
 fn uptime(
-  p0: *mut f64,
+  uptime: *mut f64,
 ): i32
 extern("uv", "uv_get_osfhandle")
 fn get_osfhandle(
-  p0: i32,
+  fd: i32,
 ): os_fd
 extern("uv", "uv_open_osfhandle")
 fn open_osfhandle(
-  p0: os_fd,
+  os_fd: os_fd,
 ): i32
 type rusage = {
   ru_utime: timeval,
@@ -1427,43 +1427,43 @@ type rusage = {
 #static assert-layout[rusage](144, 8, [0, 16, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, ])
 extern("uv", "uv_getrusage")
 fn getrusage(
-  p0: *mut rusage,
+  rusage: *mut rusage,
 ): i32
 extern("uv", "uv_getrusage_thread")
 fn getrusage_thread(
-  p0: *mut rusage,
+  rusage: *mut rusage,
 ): i32
 extern("uv", "uv_os_homedir")
 fn os_homedir(
-  p0: *mut u8,
-  p1: *mut usize,
+  buffer: *mut u8,
+  size: *mut usize,
 ): i32
 extern("uv", "uv_os_tmpdir")
 fn os_tmpdir(
-  p0: *mut u8,
-  p1: *mut usize,
+  buffer: *mut u8,
+  size: *mut usize,
 ): i32
 extern("uv", "uv_os_get_passwd")
 fn os_get_passwd(
-  p0: *mut passwd,
+  pwd: *mut passwd,
 ): i32
 extern("uv", "uv_os_free_passwd")
 fn os_free_passwd(
-  p0: *mut passwd,
+  pwd: *mut passwd,
 ): {}
 extern("uv", "uv_os_get_passwd2")
 fn os_get_passwd2(
-  p0: *mut passwd,
-  p1: uid,
+  pwd: *mut passwd,
+  uid: uid,
 ): i32
 extern("uv", "uv_os_get_group")
 fn os_get_group(
-  p0: *mut group,
-  p1: uid,
+  grp: *mut group,
+  gid: uid,
 ): i32
 extern("uv", "uv_os_free_group")
 fn os_free_group(
-  p0: *mut group,
+  grp: *mut group,
 ): {}
 extern("uv", "uv_os_getpid")
 fn os_getpid(): pid
@@ -1471,47 +1471,47 @@ extern("uv", "uv_os_getppid")
 fn os_getppid(): pid
 extern("uv", "uv_os_getpriority")
 fn os_getpriority(
-  p0: pid,
-  p1: *mut i32,
+  pid: pid,
+  priority: *mut i32,
 ): i32
 extern("uv", "uv_os_setpriority")
 fn os_setpriority(
-  p0: pid,
-  p1: i32,
+  pid: pid,
+  priority: i32,
 ): i32
 extern("uv", "uv_thread_getpriority")
 fn thread_getpriority(
-  p0: thread,
-  p1: *mut i32,
+  tid: thread,
+  priority: *mut i32,
 ): i32
 extern("uv", "uv_thread_setpriority")
 fn thread_setpriority(
-  p0: thread,
-  p1: i32,
+  tid: thread,
+  priority: i32,
 ): i32
 extern("uv", "uv_available_parallelism")
 fn available_parallelism(): u32
 extern("uv", "uv_cpu_info")
 fn cpu_info(
-  p0: *mut *mut cpu_info,
-  p1: *mut i32,
+  cpu_infos: *mut *mut cpu_info,
+  count: *mut i32,
 ): i32
 extern("uv", "uv_free_cpu_info")
 fn free_cpu_info(
-  p0: *mut cpu_info,
-  p1: i32,
+  cpu_infos: *mut cpu_info,
+  count: i32,
 ): {}
 extern("uv", "uv_cpumask_size")
 fn cpumask_size(): i32
 extern("uv", "uv_interface_addresses")
 fn interface_addresses(
-  p0: *mut *mut interface_address,
-  p1: *mut i32,
+  addresses: *mut *mut interface_address,
+  count: *mut i32,
 ): i32
 extern("uv", "uv_free_interface_addresses")
 fn free_interface_addresses(
-  p0: *mut interface_address,
-  p1: i32,
+  addresses: *mut interface_address,
+  count: i32,
 ): {}
 type env_item_s = {
   name: *mut u8,
@@ -1520,37 +1520,37 @@ type env_item_s = {
 #static assert-layout[env_item_s](16, 8, [0, 8, ])
 extern("uv", "uv_os_environ")
 fn os_environ(
-  p0: *mut *mut env_item,
-  p1: *mut i32,
+  envitems: *mut *mut env_item,
+  count: *mut i32,
 ): i32
 extern("uv", "uv_os_free_environ")
 fn os_free_environ(
-  p0: *mut env_item,
-  p1: i32,
+  envitems: *mut env_item,
+  count: i32,
 ): {}
 extern("uv", "uv_os_getenv")
 fn os_getenv(
-  p0: *mut u8,
-  p1: *mut u8,
-  p2: *mut usize,
+  name: *mut u8,
+  buffer: *mut u8,
+  size: *mut usize,
 ): i32
 extern("uv", "uv_os_setenv")
 fn os_setenv(
-  p0: *mut u8,
-  p1: *mut u8,
+  name: *mut u8,
+  value: *mut u8,
 ): i32
 extern("uv", "uv_os_unsetenv")
 fn os_unsetenv(
-  p0: *mut u8,
+  name: *mut u8,
 ): i32
 extern("uv", "uv_os_gethostname")
 fn os_gethostname(
-  p0: *mut u8,
-  p1: *mut usize,
+  buffer: *mut u8,
+  size: *mut usize,
 ): i32
 extern("uv", "uv_os_uname")
 fn os_uname(
-  p0: *mut utsname,
+  buffer: *mut utsname,
 ): i32
 type metrics_s = {
   loop_count: u64,
@@ -1561,12 +1561,12 @@ type metrics_s = {
 #static assert-layout[metrics_s](128, 8, [0, 8, 16, 24, ])
 extern("uv", "uv_metrics_info")
 fn metrics_info(
-  p0: *mut uv-loop,
-  p1: *mut metrics,
+  loop_c: *mut uv-loop,
+  metrics: *mut metrics,
 ): i32
 extern("uv", "uv_metrics_idle_time")
 fn metrics_idle_time(
-  p0: *mut uv-loop,
+  loop_c: *mut uv-loop,
 ): u64
 type fs_type = either(i32) {
   UV_FS_UNKNOWN = -1,
@@ -1635,299 +1635,299 @@ fn fs_get_statbuf(
 ): *mut stat
 extern("uv", "uv_fs_req_cleanup")
 fn fs_req_cleanup(
-  p0: *mut fs,
+  req: *mut fs,
 ): {}
 extern("uv", "uv_fs_close")
 fn fs_close(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: file,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  file: file,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_open")
 fn fs_open(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: i32,
-  p4: i32,
-  p5: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  flags: i32,
+  mode: i32,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_read")
 fn fs_read(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: file,
-  p3: *mut buf,
-  p4: u32,
-  p5: i64,
-  p6: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  file: file,
+  bufs: *mut buf,
+  nbufs: u32,
+  offset: i64,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_unlink")
 fn fs_unlink(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_write")
 fn fs_write(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: file,
-  p3: *mut buf,
-  p4: u32,
-  p5: i64,
-  p6: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  file: file,
+  bufs: *mut buf,
+  nbufs: u32,
+  offset: i64,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_copyfile")
 fn fs_copyfile(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: *mut u8,
-  p4: i32,
-  p5: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  new_path: *mut u8,
+  flags: i32,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_mkdir")
 fn fs_mkdir(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: i32,
-  p4: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  mode: i32,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_mkdtemp")
 fn fs_mkdtemp(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  tpl: *mut u8,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_mkstemp")
 fn fs_mkstemp(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  tpl: *mut u8,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_rmdir")
 fn fs_rmdir(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_scandir")
 fn fs_scandir(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: i32,
-  p4: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  flags: i32,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_scandir_next")
 fn fs_scandir_next(
-  p0: *mut fs,
-  p1: *mut dirent,
+  req: *mut fs,
+  ent: *mut dirent,
 ): i32
 extern("uv", "uv_fs_opendir")
 fn fs_opendir(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_readdir")
 fn fs_readdir(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut dir,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  dir: *mut dir,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_closedir")
 fn fs_closedir(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut dir,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  dir: *mut dir,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_stat")
 fn fs_stat(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_fstat")
 fn fs_fstat(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: file,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  file: file,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_rename")
 fn fs_rename(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: *mut u8,
-  p4: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  new_path: *mut u8,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_fsync")
 fn fs_fsync(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: file,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  file: file,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_fdatasync")
 fn fs_fdatasync(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: file,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  file: file,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_ftruncate")
 fn fs_ftruncate(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: file,
-  p3: i64,
-  p4: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  file: file,
+  offset: i64,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_sendfile")
 fn fs_sendfile(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: file,
-  p3: file,
-  p4: i64,
-  p5: usize,
-  p6: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  out_fd: file,
+  in_fd: file,
+  in_offset: i64,
+  length: usize,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_access")
 fn fs_access(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: i32,
-  p4: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  mode: i32,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_chmod")
 fn fs_chmod(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: i32,
-  p4: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  mode: i32,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_utime")
 fn fs_utime(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: f64,
-  p4: f64,
-  p5: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  atime: f64,
+  mtime: f64,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_futime")
 fn fs_futime(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: file,
-  p3: f64,
-  p4: f64,
-  p5: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  file: file,
+  atime: f64,
+  mtime: f64,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_lutime")
 fn fs_lutime(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: f64,
-  p4: f64,
-  p5: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  atime: f64,
+  mtime: f64,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_lstat")
 fn fs_lstat(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_link")
 fn fs_link(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: *mut u8,
-  p4: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  new_path: *mut u8,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_symlink")
 fn fs_symlink(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: *mut u8,
-  p4: i32,
-  p5: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  new_path: *mut u8,
+  flags: i32,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_readlink")
 fn fs_readlink(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_realpath")
 fn fs_realpath(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_fchmod")
 fn fs_fchmod(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: file,
-  p3: i32,
-  p4: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  file: file,
+  mode: i32,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_chown")
 fn fs_chown(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: uid,
-  p4: gid,
-  p5: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  uid: uid,
+  gid: gid,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_fchown")
 fn fs_fchown(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: file,
-  p3: uid,
-  p4: gid,
-  p5: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  file: file,
+  uid: uid,
+  gid: gid,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_lchown")
 fn fs_lchown(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: uid,
-  p4: gid,
-  p5: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  uid: uid,
+  gid: gid,
+  cb: fs_cb,
 ): i32
 extern("uv", "uv_fs_statfs")
 fn fs_statfs(
-  p0: *mut uv-loop,
-  p1: *mut fs,
-  p2: *mut u8,
-  p3: fs_cb,
+  loop_c: *mut uv-loop,
+  req: *mut fs,
+  path: *mut u8,
+  cb: fs_cb,
 ): i32
 type fs_event_kind = either(u32) {
   UV_RENAME = 1,
@@ -1936,50 +1936,50 @@ type fs_event_kind = either(u32) {
 #static assert-layout[fs_event_kind](4, 4, [])
 extern("uv", "uv_fs_poll_init")
 fn fs_poll_init(
-  p0: *mut uv-loop,
-  p1: *mut fs_poll,
+  loop_c: *mut uv-loop,
+  handle: *mut fs_poll,
 ): i32
 extern("uv", "uv_fs_poll_start")
 fn fs_poll_start(
-  p0: *mut fs_poll,
-  p1: fs_poll_cb,
-  p2: *mut u8,
-  p3: u32,
+  handle: *mut fs_poll,
+  poll_cb: fs_poll_cb,
+  path: *mut u8,
+  interval: u32,
 ): i32
 extern("uv", "uv_fs_poll_stop")
 fn fs_poll_stop(
-  p0: *mut fs_poll,
+  handle: *mut fs_poll,
 ): i32
 extern("uv", "uv_fs_poll_getpath")
 fn fs_poll_getpath(
-  p0: *mut fs_poll,
-  p1: *mut u8,
-  p2: *mut usize,
+  handle: *mut fs_poll,
+  buffer: *mut u8,
+  size: *mut usize,
 ): i32
 extern("uv", "uv_signal_init")
 fn signal_init(
-  p0: *mut uv-loop,
-  p1: *mut signal,
+  loop_c: *mut uv-loop,
+  handle: *mut signal,
 ): i32
 extern("uv", "uv_signal_start")
 fn signal_start(
-  p0: *mut signal,
-  p1: signal_cb,
-  p2: i32,
+  handle: *mut signal,
+  signal_cb: signal_cb,
+  signum: i32,
 ): i32
 extern("uv", "uv_signal_start_oneshot")
 fn signal_start_oneshot(
-  p0: *mut signal,
-  p1: signal_cb,
-  p2: i32,
+  handle: *mut signal,
+  signal_cb: signal_cb,
+  signum: i32,
 ): i32
 extern("uv", "uv_signal_stop")
 fn signal_stop(
-  p0: *mut signal,
+  handle: *mut signal,
 ): i32
 extern("uv", "uv_loadavg")
 fn loadavg(
-  p0: array[f64, 3],
+  avg: array[f64, 3],
 ): {}
 type fs_event_flags = either(u32) {
   UV_FS_EVENT_WATCH_ENTRY = 1,
@@ -1989,103 +1989,103 @@ type fs_event_flags = either(u32) {
 #static assert-layout[fs_event_flags](4, 4, [])
 extern("uv", "uv_fs_event_init")
 fn fs_event_init(
-  p0: *mut uv-loop,
-  p1: *mut fs_event,
+  loop_c: *mut uv-loop,
+  handle: *mut fs_event,
 ): i32
 extern("uv", "uv_fs_event_start")
 fn fs_event_start(
-  p0: *mut fs_event,
-  p1: fs_event_cb,
-  p2: *mut u8,
-  p3: u32,
+  handle: *mut fs_event,
+  cb: fs_event_cb,
+  path: *mut u8,
+  flags: u32,
 ): i32
 extern("uv", "uv_fs_event_stop")
 fn fs_event_stop(
-  p0: *mut fs_event,
+  handle: *mut fs_event,
 ): i32
 extern("uv", "uv_fs_event_getpath")
 fn fs_event_getpath(
-  p0: *mut fs_event,
-  p1: *mut u8,
-  p2: *mut usize,
+  handle: *mut fs_event,
+  buffer: *mut u8,
+  size: *mut usize,
 ): i32
 extern("uv", "uv_ip4_addr")
 fn ip4_addr(
-  p0: *mut u8,
-  p1: i32,
-  p2: *mut sockaddr_in,
+  ip: *mut u8,
+  port: i32,
+  addr: *mut sockaddr_in,
 ): i32
 extern("uv", "uv_ip6_addr")
 fn ip6_addr(
-  p0: *mut u8,
-  p1: i32,
-  p2: *mut sockaddr_in6,
+  ip: *mut u8,
+  port: i32,
+  addr: *mut sockaddr_in6,
 ): i32
 extern("uv", "uv_ip4_name")
 fn ip4_name(
-  p0: *mut sockaddr_in,
-  p1: *mut u8,
-  p2: usize,
+  src: *mut sockaddr_in,
+  dst: *mut u8,
+  size: usize,
 ): i32
 extern("uv", "uv_ip6_name")
 fn ip6_name(
-  p0: *mut sockaddr_in6,
-  p1: *mut u8,
-  p2: usize,
+  src: *mut sockaddr_in6,
+  dst: *mut u8,
+  size: usize,
 ): i32
 extern("uv", "uv_ip_name")
 fn ip_name(
-  p0: *mut sockaddr,
-  p1: *mut u8,
-  p2: usize,
+  src: *mut sockaddr,
+  dst: *mut u8,
+  size: usize,
 ): i32
 extern("uv", "uv_inet_ntop")
 fn inet_ntop(
-  p0: i32,
-  p1: ptr,
-  p2: *mut u8,
-  p3: usize,
+  af: i32,
+  src: ptr,
+  dst: *mut u8,
+  size: usize,
 ): i32
 extern("uv", "uv_inet_pton")
 fn inet_pton(
-  p0: i32,
-  p1: *mut u8,
-  p2: ptr,
+  af: i32,
+  src: *mut u8,
+  dst: ptr,
 ): i32
 extern("uv", "uv_random")
 fn random(
-  p0: *mut uv-loop,
-  p1: *mut random,
-  p2: ptr,
-  p3: usize,
-  p4: u32,
-  p5: random_cb,
+  loop_c: *mut uv-loop,
+  req: *mut random,
+  buf: ptr,
+  buflen: usize,
+  flags: u32,
+  cb: random_cb,
 ): i32
 extern("uv", "uv_if_indextoname")
 fn if_indextoname(
-  p0: u32,
-  p1: *mut u8,
-  p2: *mut usize,
+  ifindex: u32,
+  buffer: *mut u8,
+  size: *mut usize,
 ): i32
 extern("uv", "uv_if_indextoiid")
 fn if_indextoiid(
-  p0: u32,
-  p1: *mut u8,
-  p2: *mut usize,
+  ifindex: u32,
+  buffer: *mut u8,
+  size: *mut usize,
 ): i32
 extern("uv", "uv_exepath")
 fn exepath(
-  p0: *mut u8,
-  p1: *mut usize,
+  buffer: *mut u8,
+  size: *mut usize,
 ): i32
 extern("uv", "uv_cwd")
 fn cwd(
-  p0: *mut u8,
-  p1: *mut usize,
+  buffer: *mut u8,
+  size: *mut usize,
 ): i32
 extern("uv", "uv_chdir")
 fn chdir(
-  p0: *mut u8,
+  dir: *mut u8,
 ): i32
 extern("uv", "uv_get_free_memory")
 fn get_free_memory(): u64
@@ -2097,180 +2097,180 @@ extern("uv", "uv_get_available_memory")
 fn get_available_memory(): u64
 extern("uv", "uv_clock_gettime")
 fn clock_gettime(
-  p0: clock_id,
-  p1: *mut timespec64,
+  clock_id: clock_id,
+  ts: *mut timespec64,
 ): i32
 extern("uv", "uv_hrtime")
 fn hrtime(): u64
 extern("uv", "uv_sleep")
 fn sleep(
-  p0: u32,
+  msec: u32,
 ): {}
 extern("uv", "uv_disable_stdio_inheritance")
 fn disable_stdio_inheritance(): {}
 extern("uv", "uv_dlopen")
 fn dlopen(
-  p0: *mut u8,
-  p1: *mut lib,
+  filename: *mut u8,
+  lib: *mut lib,
 ): i32
 extern("uv", "uv_dlclose")
 fn dlclose(
-  p0: *mut lib,
+  lib: *mut lib,
 ): {}
 extern("uv", "uv_dlsym")
 fn dlsym(
-  p0: *mut lib,
-  p1: *mut u8,
-  p2: *mut ptr,
+  lib: *mut lib,
+  name: *mut u8,
+  ptr: *mut ptr,
 ): i32
 extern("uv", "uv_dlerror")
 fn dlerror(
-  p0: *mut lib,
+  lib: *mut lib,
 ): *mut u8
 extern("uv", "uv_mutex_init")
 fn mutex_init(
-  p0: *mut mutex,
+  handle: *mut mutex,
 ): i32
 extern("uv", "uv_mutex_init_recursive")
 fn mutex_init_recursive(
-  p0: *mut mutex,
+  handle: *mut mutex,
 ): i32
 extern("uv", "uv_mutex_destroy")
 fn mutex_destroy(
-  p0: *mut mutex,
+  handle: *mut mutex,
 ): {}
 extern("uv", "uv_mutex_lock")
 fn mutex_lock(
-  p0: *mut mutex,
+  handle: *mut mutex,
 ): {}
 extern("uv", "uv_mutex_trylock")
 fn mutex_trylock(
-  p0: *mut mutex,
+  handle: *mut mutex,
 ): i32
 extern("uv", "uv_mutex_unlock")
 fn mutex_unlock(
-  p0: *mut mutex,
+  handle: *mut mutex,
 ): {}
 extern("uv", "uv_rwlock_init")
 fn rwlock_init(
-  p0: *mut rwlock,
+  rwlock: *mut rwlock,
 ): i32
 extern("uv", "uv_rwlock_destroy")
 fn rwlock_destroy(
-  p0: *mut rwlock,
+  rwlock: *mut rwlock,
 ): {}
 extern("uv", "uv_rwlock_rdlock")
 fn rwlock_rdlock(
-  p0: *mut rwlock,
+  rwlock: *mut rwlock,
 ): {}
 extern("uv", "uv_rwlock_tryrdlock")
 fn rwlock_tryrdlock(
-  p0: *mut rwlock,
+  rwlock: *mut rwlock,
 ): i32
 extern("uv", "uv_rwlock_rdunlock")
 fn rwlock_rdunlock(
-  p0: *mut rwlock,
+  rwlock: *mut rwlock,
 ): {}
 extern("uv", "uv_rwlock_wrlock")
 fn rwlock_wrlock(
-  p0: *mut rwlock,
+  rwlock: *mut rwlock,
 ): {}
 extern("uv", "uv_rwlock_trywrlock")
 fn rwlock_trywrlock(
-  p0: *mut rwlock,
+  rwlock: *mut rwlock,
 ): i32
 extern("uv", "uv_rwlock_wrunlock")
 fn rwlock_wrunlock(
-  p0: *mut rwlock,
+  rwlock: *mut rwlock,
 ): {}
 extern("uv", "uv_sem_init")
 fn sem_init(
-  p0: *mut sem,
-  p1: u32,
+  sem: *mut sem,
+  value: u32,
 ): i32
 extern("uv", "uv_sem_destroy")
 fn sem_destroy(
-  p0: *mut sem,
+  sem: *mut sem,
 ): {}
 extern("uv", "uv_sem_post")
 fn sem_post(
-  p0: *mut sem,
+  sem: *mut sem,
 ): {}
 extern("uv", "uv_sem_wait")
 fn sem_wait(
-  p0: *mut sem,
+  sem: *mut sem,
 ): {}
 extern("uv", "uv_sem_trywait")
 fn sem_trywait(
-  p0: *mut sem,
+  sem: *mut sem,
 ): i32
 extern("uv", "uv_cond_init")
 fn cond_init(
-  p0: *mut cond,
+  cond: *mut cond,
 ): i32
 extern("uv", "uv_cond_destroy")
 fn cond_destroy(
-  p0: *mut cond,
+  cond: *mut cond,
 ): {}
 extern("uv", "uv_cond_signal")
 fn cond_signal(
-  p0: *mut cond,
+  cond: *mut cond,
 ): {}
 extern("uv", "uv_cond_broadcast")
 fn cond_broadcast(
-  p0: *mut cond,
+  cond: *mut cond,
 ): {}
 extern("uv", "uv_barrier_init")
 fn barrier_init(
-  p0: *mut barrier,
-  p1: u32,
+  barrier: *mut barrier,
+  count: u32,
 ): i32
 extern("uv", "uv_barrier_destroy")
 fn barrier_destroy(
-  p0: *mut barrier,
+  barrier: *mut barrier,
 ): {}
 extern("uv", "uv_barrier_wait")
 fn barrier_wait(
-  p0: *mut barrier,
+  barrier: *mut barrier,
 ): i32
 extern("uv", "uv_cond_wait")
 fn cond_wait(
-  p0: *mut cond,
-  p1: *mut mutex,
+  cond: *mut cond,
+  mutex: *mut mutex,
 ): {}
 extern("uv", "uv_cond_timedwait")
 fn cond_timedwait(
-  p0: *mut cond,
-  p1: *mut mutex,
-  p2: u64,
+  cond: *mut cond,
+  mutex: *mut mutex,
+  timeout: u64,
 ): i32
 extern("uv", "uv_once")
 fn once(
-  p0: *mut once,
-  p1: *fn(
+  guard: *mut once,
+  callback: *fn(
 
   ) -> {},
 ): {}
 extern("uv", "uv_key_create")
 fn key_create(
-  p0: *mut key,
+  key: *mut key,
 ): i32
 extern("uv", "uv_key_delete")
 fn key_delete(
-  p0: *mut key,
+  key: *mut key,
 ): {}
 extern("uv", "uv_key_get")
 fn key_get(
-  p0: *mut key,
+  key: *mut key,
 ): ptr
 extern("uv", "uv_key_set")
 fn key_set(
-  p0: *mut key,
-  p1: ptr,
+  key: *mut key,
+  value: ptr,
 ): {}
 extern("uv", "uv_gettimeofday")
 fn gettimeofday(
-  p0: *mut timeval64,
+  tv: *mut timeval64,
 ): i32
 type alias thread_cb = *fn(
   ptr
@@ -2278,13 +2278,13 @@ type alias thread_cb = *fn(
 #static assert-layout[thread_cb](8, 8, [])
 extern("uv", "uv_thread_create")
 fn thread_create(
-  p0: *mut thread,
-  p1: thread_cb,
-  p2: ptr,
+  tid: *mut thread,
+  entry: thread_cb,
+  arg: ptr,
 ): i32
 extern("uv", "uv_thread_detach")
 fn thread_detach(
-  p0: *mut thread,
+  tid: *mut thread,
 ): i32
 type thread_create_flags = either(u32) {
   UV_THREAD_NO_FLAGS = 0,
@@ -2300,23 +2300,23 @@ type alias thread_options = thread_options_s
 #static assert-layout[thread_options](16, 8, [])
 extern("uv", "uv_thread_create_ex")
 fn thread_create_ex(
-  p0: *mut thread,
-  p1: *mut thread_options,
-  p2: thread_cb,
-  p3: ptr,
+  tid: *mut thread,
+  params: *mut thread_options,
+  entry: thread_cb,
+  arg: ptr,
 ): i32
 extern("uv", "uv_thread_setaffinity")
 fn thread_setaffinity(
-  p0: *mut thread,
-  p1: *mut u8,
-  p2: *mut u8,
-  p3: usize,
+  tid: *mut thread,
+  cpumask: *mut u8,
+  oldmask: *mut u8,
+  mask_size: usize,
 ): i32
 extern("uv", "uv_thread_getaffinity")
 fn thread_getaffinity(
-  p0: *mut thread,
-  p1: *mut u8,
-  p2: usize,
+  tid: *mut thread,
+  cpumask: *mut u8,
+  mask_size: usize,
 ): i32
 extern("uv", "uv_thread_getcpu")
 fn thread_getcpu(): i32
@@ -2324,22 +2324,22 @@ extern("uv", "uv_thread_self")
 fn thread_self(): thread
 extern("uv", "uv_thread_join")
 fn thread_join(
-  p0: *mut thread,
+  tid: *mut thread,
 ): i32
 extern("uv", "uv_thread_equal")
 fn thread_equal(
-  p0: *mut thread,
-  p1: *mut thread,
+  t1: *mut thread,
+  t2: *mut thread,
 ): i32
 extern("uv", "uv_thread_setname")
 fn thread_setname(
-  p0: *mut u8,
+  name: *mut u8,
 ): i32
 extern("uv", "uv_thread_getname")
 fn thread_getname(
-  p0: *mut thread,
-  p1: *mut u8,
-  p2: usize,
+  tid: *mut thread,
+  name: *mut u8,
+  size: usize,
 ): i32
 type alias any_handle = opaque[344, 8]
 #static assert-layout[any_handle](344, 8, [])
@@ -2352,27 +2352,27 @@ fn loop_get_data(
 extern("uv", "uv_loop_set_data")
 fn loop_set_data(
   p0: *mut uv-loop,
-  p1: ptr,
+  data: ptr,
 ): {}
 extern("uv", "uv_utf16_length_as_wtf8")
 fn utf16_length_as_wtf8(
-  p0: *mut u16,
-  p1: size,
+  utf16: *mut u16,
+  utf16_len: size,
 ): usize
 extern("uv", "uv_utf16_to_wtf8")
 fn utf16_to_wtf8(
-  p0: *mut u16,
-  p1: size,
-  p2: *mut *mut u8,
-  p3: *mut usize,
+  utf16: *mut u16,
+  utf16_len: size,
+  wtf8_ptr: *mut *mut u8,
+  wtf8_len_ptr: *mut usize,
 ): i32
 extern("uv", "uv_wtf8_length_as_utf16")
 fn wtf8_length_as_utf16(
-  p0: *mut u8,
+  wtf8: *mut u8,
 ): size
 extern("uv", "uv_wtf8_to_utf16")
 fn wtf8_to_utf16(
-  p0: *mut u8,
-  p1: *mut u16,
-  p2: usize,
+  wtf8: *mut u8,
+  utf16: *mut u16,
+  utf16_len: usize,
 ): {}

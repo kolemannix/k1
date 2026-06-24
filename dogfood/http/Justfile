@@ -10,8 +10,8 @@ bindgen-llhttp:
   k1bindgen -i libs/llhttp.h -o llhttp.k1 -n llhttp \
     -clangarg -isysroot \
     -clangarg "$(xcrun --sdk macosx --show-sdk-path)" \
-    -exclude llhttp__internal_init \
-    -exclude llhttp__internal_execute
+    -strip-prefix llhttp_ \
+    -strip-suffix _t
 
 bindgen-net:
   k1bindgen -i net.c -o net.k1 -n net \
@@ -125,3 +125,11 @@ build-llhttp:
   cp llhttp/build/libllhttp.a libs/
   cp llhttp/build/libllhttp.so libs/
   cp llhttp/build/llhttp.h libs/
+
+build-libuv:
+  git submodule update libuv
+  cd libuv && cmake -B build -DBUILD_TESTING=ON && cmake --build build && ./build/uv_run_tests
+  cp libuv/build/libuv.a libs/
+  cp libuv/build/libuv.dylib libs/
+  cp libuv/include/uv.h libs/uv.h
+

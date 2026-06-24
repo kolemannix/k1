@@ -11,62 +11,6 @@ let MODULE_INFO: k1/module-manifest = {
 
 use uv/uv-loop
 
-type request-state = {
-  url: list[char],
-}
-
-fn handle_on_message_complete(_parser: *mut llhttp/llhttp_t): i32 {
-  println("Complete!");
-  0
-}
-
-fn on_url_part(parser: *mut llhttp/llhttp_t, data: *mut u8, count: usize): i32 {
-  let request-state = parser.data.rw[request-state];
-  let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
-  println("on_url_part: appending {bytes}...");
-  request-state.url*.write-bytes(bytes);
-  0
-}
-
-fn on_url_complete(parser: *mut llhttp/llhttp_t): i32 {
-  let request-state = parser.data.rw[request-state];
-  let url = string/from-span(request-state.url.as-span());
-  println("complete url: {url}");
-  0
-}
-
-fn example-http() {
-  let parser: llhttp/llhttp_t = uninit;
-
-  let settings: llhttp/llhttp_settings_t = zeroed();
-  llhttp/llhttp_settings_init(&settings);
-  let settings = settings.with({
-    on_message_complete: handle_on_message_complete,
-    on_url: on_url_part,
-    on_url_complete: on_url_complete,
-  });
-
-  llhttp/llhttp_init(&parser, :HTTP_BOTH, &settings);
-  let parse-state: *mut request-state = mem/new({ url: list/empty() });
-  &parser.data* <- parse-state.as[ptr];
-
-  // Shouldn't strings be green in catppuccin? Something wrong with the semantic tokens?
-  let request1 = "GET /index.ht";
-  let request2 = "ml HTTP/1.1\r\n\r\n";
-
-  let res1 = llhttp/llhttp_execute(&parser, request1.data-ptr().as(), request1.len().as[usize]);
-  let _res2 = llhttp/llhttp_execute(&parser, request2.data-ptr().as(), request2.len().as[usize]);
-  switch res1 {
-    :HPE_OK -> println("Success!"),
-    _ -> {
-      let err-name = string/wrap-c(llhttp/llhttp_errno_name(res1).as[ptr]);
-      let err-reason = string/wrap-c(llhttp/llhttp_get_error_reason(&parser).as[ptr]);
-      println("ERROR: {err-name} {err-reason}");
-      writelnf(core/io/stdout, "ERROR: {} {}", { err-name, err-reason });
-    }
-  };
-}
-
 ns uv {
   ns for buf {
     fn to-buffer(self: buf): buffer[u8] {
@@ -214,119 +158,6 @@ impl uv-handle for uv/handle {
   fn as-handle(self: *mut self): *mut uv/handle { self }
 }
 
-type task[t] = {
-  state: *mut task-state[t],
-}
-
-type task-state[t] = {
-  req: *mut uv/work,
-  mutex: *mut uv/mutex,
-  cond: *mut uv/cond,
-  handler-done: bool,
-  libuv-done: bool,
-  output: ?t,
-}
-
-ns for task-state {
-  fn release[t](self: *mut task-state[t]) {
-    uv/cond_destroy(self.cond);
-    uv/mutex_destroy(self.mutex);
-    let heap = mem/alloc-mode:system-heap;
-    heap.freeT(self.req);
-    heap.freeT(self.mutex);
-    heap.freeT(self.cond);
-    heap.freeT(self);
-  }
-}
-
-type task-work[t, params] = {
-  state: *mut task-state[t],
-  params: params,
-  handler: *fn(params) -> t,
-}
-
-ns for task {
-  fn spawn[t, params](
-    l: *mut uv-loop,
-    handler: *fn(params) -> t,
-    params: params,
-  ): task[t] {
-    let heap = mem/alloc-mode:system-heap;
-    let state: *mut task-state[t] = heap.new({
-      req     : heap.allocT[uv/work],
-      mutex   : heap.allocT[uv/mutex],
-      cond    : heap.allocT[uv/cond],
-      handler-done: false,
-      libuv-done: false,
-      output: :none,
-    });
-    let work: *mut task-work[t, params] = heap.new({
-      state,
-      params,
-      handler,
-    });
-
-    let mutex-rc = uv/mutex_init(state.mutex);
-    if mutex-rc != 0 {
-      crash("uv_mutex_init failed: {mutex-rc}");
-    };
-
-    let cond-rc = uv/cond_init(state.cond);
-    if cond-rc != 0 {
-      uv/mutex_destroy(state.mutex);
-      crash("uv_cond_init failed: {cond-rc}");
-    };
-
-    state.req.set-data(work);
-
-    uv/submit-work(
-      state.req,
-      fn req. {
-        let task-work = req.get-data[task-work[t, params]];
-        let handler = task-work.handler;
-        task/complete(task-work.state, handler(task-work.params));
-        {}
-      },
-      fn (req, status) {
-        let task-work = req.get-data[task-work[t, params]];
-        if status != 0 {
-          tprintln("task work failed with status {status}");
-        };
-        uv/mutex_lock(task-work.state.mutex);
-        task-work.state.libuv-done* <- true;
-        uv/cond_signal(task-work.state.cond);
-        uv/mutex_unlock(task-work.state.mutex);
-        mem/alloc-mode:system-heap.freeT(task-work);
-      }
-    );
-
-    { state }
-  }
-
-
-  fn await[t](self: task[t]): t {
-    let state = self.state;
-
-    uv/mutex_lock(state.mutex);
-    while state.handler-done == false or state.libuv-done == false {
-      uv/cond_wait(state.cond, state.mutex);
-    };
-    uv/mutex_unlock(state.mutex);
-    
-    let output = state.output.!;
-    state.release();
-    output
-  }
-
-  fn complete[t](state: *mut task-state[t], output: t) {
-    uv/mutex_lock(state.mutex);
-    state.output* <- :some(output);
-    state.handler-done* <- true;
-    uv/cond_signal(state.cond);
-    uv/mutex_unlock(state.mutex);
-  }
-}
-
 type db-query-params = {
   query: string,
 }
@@ -344,12 +175,15 @@ type db-conn = {
 }
 
 ns for db-conn {
-  fn run-query(self: db-conn, query: string): task[result[int, string]] {
+  fn run-query-task(self: db-conn, query: string): task[result[int, string]] {
     task/spawn(
       self.uv-loop,
       fake-database-query,
       { query },
     )
+  }
+  fn run-query(self: db-conn, query: string): result[int, string] {
+    fake-database-query({ query })
   }
 }
 
@@ -382,7 +216,8 @@ type http-request = {
 
 ns user-code {
   fn handle(req: http-request, db-conn): http-response {
-    let query-result: result[int, string] = db-conn.run-query("select count(*) from fake_users where active = true").await();
+    // let query-result: task[result[int, string]] = db-conn.run-query("select count(*) from fake_users where active = true");
+    let query-result: result[int, string] = db-conn.run-query("select count(*) from fake_users where active = true");
 
     tprintln("handler: fake processing and serializing {req.raw.len()} request bytes");
     switch query-result {
@@ -452,7 +287,7 @@ fn after-handle-request(req: *mut uv/work, status: i32) {
 // [ ] dogfood language struct access lsp entity
 // [ ] dogfood language match fallback arm hidden
 // [ ] dogfood language remove *mut distinction
-// [ ] dogfood language swap data and len in k1 buffer struct
+// [x] dogfood language swap data and len in k1 buffer struct
 // [ ] take specialized generic function pointers
   require work.http-response is :some(response) else {
     // This is a bug; it shouldn't be possible to have not set this to some
@@ -500,7 +335,7 @@ fn alloc-read-buffer(handle: *mut uv/handle, suggested-size: usize, buf: *mut uv
   buf <- uv/buf/from-buffer(byte-buffer);
 }
 
-fn queue-fake-http-handler(client: *mut uv/stream, request: string) {
+fn queue-http-handler(client: *mut uv/stream, request: string) {
   let uv-loop = uv/handle_get_loop(client.as-handle());
   let connection = client.get-data[connection]();
   tprintln("read complete: {request.len()} bytes\n{request}\n-----------");
@@ -519,7 +354,6 @@ fn queue-fake-http-handler(client: *mut uv/stream, request: string) {
     tprintln("uv_queue_work for request handler failed: {queue-rc}");
     close-connection(client);
   };
-  {}
 }
 
 fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
@@ -530,7 +364,7 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
     tprintln("read request bytes {nread}\n{request}\n-----------");
 
     let _stop-rc = uv/read_stop(client);
-    queue-fake-http-handler(client, request);
+    queue-http-handler(client, request);
     return();
   };
 
