@@ -44,7 +44,7 @@ int cinput_sum(int lhs, unsigned int rhs) {
   return lhs + rhs;
 }
 
-int cinput_unnamed_param(int, unsigned int named);
+int cinput_unnamed_param(int, unsigned int named, float loop);
 
 enum Color {
   Color_Red = 577,

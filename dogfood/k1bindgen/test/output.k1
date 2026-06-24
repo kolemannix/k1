@@ -51,6 +51,7 @@ extern("test", "cinput_unnamed_param")
 fn unnamed_param(
   p0: i32,
   named: u32,
+  loop_c: f32,
 ): i32
 type Color = either(i32) {
   Color_Red = 577,

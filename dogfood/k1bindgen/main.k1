@@ -197,7 +197,7 @@ fn start(args: span[string]): string {
             for function.fn-type.params {
               if itIndex > 0 out.line("");
               out.string("  ");
-              out.string(it.name ? "p{itIndex}");
+              out.string(if it.name is :some(name) mangle-name(name) else "p{itIndex}");
               out.string(": ");
               write-k1-type(it.type, indent = 1);
               out.string(",");
