@@ -7,8 +7,7 @@ type alias in_port_t = u16
 #static assert-layout[in_port_t](2, 2, [])
 type alias sa_family_t = u8
 #static assert-layout[sa_family_t](1, 1, [])
-type alias socklen_t = opaque[4, 4]
-#static assert-layout[socklen_t](4, 4, [])
+type socklen_t = opaque[4, 4]
 type sockaddr = {
   sa_len: u8,
   sa_family: sa_family_t,
@@ -55,5 +54,4 @@ type addrinfo = {
   ai_next: *mut addrinfo,
 }
 #static assert-layout[addrinfo](48, 8, [0, 4, 8, 12, 16, 24, 32, 40, ])
-type alias FILE = opaque[152, 8]
-#static assert-layout[FILE](152, 8, [])
+type FILE = opaque[152, 8]

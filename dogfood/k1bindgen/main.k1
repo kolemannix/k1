@@ -163,10 +163,19 @@ fn start(args: span[string]): string {
       if name != it.name debug("mapped {it.name} to {name}");
       switch it.kind {
         :typedef(typedef) -> {
-          writef(out, "type {name} = ");
-          write-k1-type(typedef.type, indent = 0);
-          out.string("\n");
-          if it.error is :none write-layout-assertions(name, typedef.type, it.layout);
+          let skip = false;
+          if typedef.alias {
+            if typedef.type is :name(target-name) and state.name-config.transformed-name(target-name) == name {
+              skip := true
+            }
+          };
+          if not skip {
+            writef(out, "type{if typedef.alias " alias " else " "}{name} = ");
+            write-k1-type(typedef.type, indent = 0);
+            out.string("\n");
+            let is-opaque = typedef.type is :opaque(_);
+            if not is-opaque and it.error is :none write-layout-assertions(name, typedef.type, it.layout);
+          }
         },
         :global(global) -> {
           out.string("let ");
@@ -176,16 +185,6 @@ fn start(args: span[string]): string {
           out.string(" = ");
           out.string("todo");
           out.line("");
-        },
-        :typealias(alias) -> {
-          if alias.type is :name(target-name) and state.name-config.transformed-name(target-name) == name {
-
-          } else {
-            writef(out, "type alias {name} = ");
-            write-k1-type(alias.type, indent = 0);
-            out.string("\n");
-            if it.error is :none write-layout-assertions(name, alias.type, it.layout);
-          }
         },
         :function(function) -> {
           writelnf(out, `extern("{libname}", "{raw-name}")`);
@@ -239,9 +238,8 @@ type layout = {
 type k1-defn = { 
   name: string,
   kind: either { 
-    typedef({ type: k1-type }),
+    typedef({ type: k1-type, alias: bool }),
     global({ type: k1-type, value: ?string }),
-    typealias({ type: k1-type }),
     function({ fn-type: fn-type })
   },
   error: ?string,
@@ -424,8 +422,8 @@ fn visit-struct-member(
   data: clang/CXClientData,
 ): clang/CXChildVisitResult {
   let result = data.as[*mut visit-struct.return];
-  let cursor-display-name = clang/getCursorDisplayName(current).to-k1();
-  let cursor-spelling = clang/getCursorSpelling(current).to-k1();
+  let cursor-display-name = clang/getCursorDisplayName(current).to-string();
+  let cursor-spelling = clang/getCursorSpelling(current).to-string();
   debug("visit-struct-member {cursor-display-name}");
   let cursor-kind = clang/getCursorKind(current);
   switch cursor-kind {
@@ -500,8 +498,8 @@ fn visit-enum(enum-root: CXCursor): { enum: k1-type:enum, error: ?string } {
     data: clang/CXClientData -> clang/CXChildVisitResult
   ) {
     let result = data.as[*mut visit-enum.return];
-    let cursor-display-name = clang/getCursorDisplayName(current).to-k1();
-    let cursor-spelling = clang/getCursorSpelling(current).to-k1();
+    let cursor-display-name = clang/getCursorDisplayName(current).to-string();
+    let cursor-spelling = clang/getCursorSpelling(current).to-string();
     let cursor-kind = clang/getCursorKind(current);
     //log("visit-enum-member {cursor-name} {cursor-kind.enum-name()}");
     switch cursor-kind {
@@ -535,7 +533,7 @@ fn get-location(cursor: CXCursor): { location: clang/CXSourceLocation, filename:
   let file: clang/CXFile = uninit;
   let line: u32 = uninit;
   clang/getFileLocation(location, &file, &line, ptr/null.as(), ptr/null.as());
-  let filename = clang/getFileName(file).to-k1();
+  let filename = clang/getFileName(file).to-string();
   { location, filename, line }
 }
 
@@ -547,7 +545,7 @@ fn visit-root(
   let bg = client-data.as[*mut BindgenState];
   let cursor-kind = clang/getCursorKind(current);
 
-  let display-name = clang/getCursorDisplayName(current).to-k1();
+  let display-name = clang/getCursorDisplayName(current).to-string();
   let locn = get-location(current);
   let is-system = clang/Location_isInSystemHeader(locn.location).as-bool();
   info("visiting definition: `{display-name}` is-system={is-system}");
@@ -558,7 +556,7 @@ fn visit-root(
 
   switch cursor-kind {
     :StructDecl or :UnionDecl -> {
-      let name = clang/getCursorSpelling(current).to-k1();
+      let name = clang/getCursorSpelling(current).to-string();
       let kind = if cursor-kind is :StructDecl :struct: k1-type:struct.kind else :union;
       if clang/isCursorDefinition(current).as-bool() {
 
@@ -567,7 +565,7 @@ fn visit-root(
           bg.defns*.push({
             name,
             error: :none,
-            kind: :typealias({ type: opaque}),
+            kind: :typedef({ type: opaque, alias: false }),
             layout: layout-for-cursor(current)
           });
           return(:Continue)
@@ -578,7 +576,7 @@ fn visit-root(
         bg.defns*.push({
           name,
           error: struct-decl-result.error,
-          kind: :typedef({ type: :struct({ fields: struct-decl-result.fields, kind }) }), 
+          kind: :typedef({ type: :struct({ fields: struct-decl-result.fields, kind }), alias: false }), 
           layout: layout-for-cursor(current),
         });
       };
@@ -587,7 +585,7 @@ fn visit-root(
     :EnumDecl -> {
       let is-anon = clang/Cursor_isAnonymous(current).as-bool();
       if is-anon { return(:Continue) };
-      let name = clang/getCursorSpelling(current).to-k1();
+      let name = clang/getCursorSpelling(current).to-string();
       let enum-decl-result = visit-enum(current);
       // FIXME: Use in-place filter
       &enum-decl-result.enum*.members* <- enum-decl-result.enum.members.filter(fn m. bg.should-include-name(m.name));
@@ -595,20 +593,20 @@ fn visit-root(
       bg.defns*.push({
         name,
         error: enum-decl-result.error,
-        kind: :typedef({ type: :enum(enum-decl-result.enum) }),
+        kind: :typedef({ type: :enum(enum-decl-result.enum), alias: false }),
         layout: layout-for-cursor(current)
       });
       :Continue
     },
     :TypedefDecl -> {
-      let name = clang/getCursorSpelling(current).to-k1();
+      let name = clang/getCursorSpelling(current).to-string();
 
       if bg.is-opaque-name(name) {
         let opaque = visit-opaque(bg, current);
         bg.defns*.push({
           name,
           error: :none,
-          kind: :typealias({ type: opaque}),
+          kind: :typedef({ type: opaque, alias: false }),
           layout: layout-for-cursor(current)
         });
         return(:Continue)
@@ -619,13 +617,13 @@ fn visit-root(
       bg.defns*.push({
         name,
         error: :none,
-        kind: :typealias({ type }),
+        kind: :typedef({ type, alias: true }),
         layout: layout-for-cursor(current)
       });
       :Continue
     },
     :VarDecl -> {
-      let name = clang/getCursorSpelling(current).to-k1();
+      let name = clang/getCursorSpelling(current).to-string();
       debug("Name of VarDecl: {name}");
       let cx-type = clang/getCursorType(current);
       let type = map-type(cx-type);
@@ -634,7 +632,7 @@ fn visit-root(
       :Continue
     },
     :FunctionDecl -> {
-      let name = clang/getCursorSpelling(current).to-k1();
+      let name = clang/getCursorSpelling(current).to-string();
       let cx-type = clang/getCursorType(current);
       debug("FunctionDecl {name} {cx-type.kind.enum-name()}");
       let fn-decl = map-fn-decl(current);
@@ -649,7 +647,7 @@ fn visit-root(
       :Continue
     },
     _ -> {
-      let cursor-kind-name = clang/getCursorKindSpelling(cursor-kind).to-k1();
+      let cursor-kind-name = clang/getCursorKindSpelling(cursor-kind).to-string();
       debug("Skipping CXCursorKind: {cursor-kind-name}");
       :Continue
     }
@@ -700,7 +698,7 @@ fn visit-fn-param(
   let cursor-kind = clang/getCursorKind(current);
   switch cursor-kind {
     :ParmDecl -> {
-      let name-spelling = clang/getCursorSpelling(current).to-k1();
+      let name-spelling = clang/getCursorSpelling(current).to-string();
       let name: ?string = if name-spelling.isEmpty() :none else :some(name-spelling);
       let cx-type = clang/getCursorType(current);
       let arg-type = map-type-ext(cx-type, :fn-param);
@@ -780,7 +778,7 @@ fn map-type-ext(cx-type: clang/CXType, c-context: either { default, fn-param }):
       map-type(named-type)
     },
     :Typedef -> {
-      let name = clang/getTypedefName(cx-type).to-k1();
+      let name = clang/getTypedefName(cx-type).to-string();
       switch name {
         "uintptr_t" -> :k1("ptr"),
         "intptr_t"  -> :k1("ptr"),
@@ -812,7 +810,7 @@ fn map-type-ext(cx-type: clang/CXType, c-context: either { default, fn-param }):
       if is-anon {
         return(:error-c("anon record (struct/union)"))
       } else {
-        let name = clang/getCursorSpelling(decl-cursor).to-k1();
+        let name = clang/getCursorSpelling(decl-cursor).to-string();
         :name(name)
       };
     },
@@ -843,7 +841,7 @@ fn map-type-ext(cx-type: clang/CXType, c-context: either { default, fn-param }):
     :Enum -> {
       // enum CXCursorKind kind;
       let decl-cursor = clang/getTypeDeclaration(cx-type);
-      let name = clang/getCursorSpelling(decl-cursor).to-k1();
+      let name = clang/getCursorSpelling(decl-cursor).to-string();
       :name(name);
     },
     :FunctionProto -> {

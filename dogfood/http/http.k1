@@ -3,41 +3,147 @@ ns http;
 // A fake silly 'stream' for now
 type stream[t] = { source: list[t], cursor: size }
 
+type header = {
+  url: string,
+  headers: list[{ field: string, value: string }],
+  method: llhttp/method,
+  // version: string,
+
+  // cache of important, known, parsed headers
+  content-length: ?size
+}
+
 type parse-state = {
+  on-header-complete: *fn(header) -> {},
   url: list[char],
   current-header-field: list[char],
   current-header-value: list[char],
   headers: list[{ field: string, value: string }],
+  content-length: ?size,
   body: either { buffered(list[byte]), streamed(stream[byte]) },
 }
-
-type request = {
-  url: string,
-  headers: list[{ field: string, value: string }],
-  body: either { buffered(list[byte]), streamed(stream[byte]) },
+ns for parse-state {
+  fn reset(self: *mut parse-state) {
+    self.url*.clear();
+    self.current-header-field*.clear();
+    self.current-header-value*.clear();
+    self.headers*.clear();
+    self.content-length* <- :none;
+    switch self.body* {
+      :buffered(buf)* -> buf.clear(),
+      :streamed(stream)* -> stream.source*.clear(),
+    };
+  }
 }
 
 // Wraps a pointer to an llhttp_t with some stronger-ish typing
 // over the user data
-type llhttp-t[user-data] = { parser: *mut llhttp/t, phantom: array[user-data, 0] }
+type llhttp-t[user-data] = { parser: llhttp/t, phantom: array[user-data, 0] }
+type alias parser = llhttp-t[parse-state]
+#static { assert-equals(types/size[parser], types/size[llhttp/t]); assert-equals(types/align[parser], types/align[llhttp/t]) }
+
 ns for llhttp-t {
-  fn data[user-data](self: llhttp-t[user-data]): *mut user-data { self.parser.data.rw[user-data] }
-  fn set-data[user-data](self: llhttp-t[user-data], data: *mut user-data) { self.parser.data* <- data.as[ptr] }
+  fn data[user-data](self: *mut llhttp-t[user-data]): *mut user-data { self.parser.data.rw[user-data] }
+  fn set-data[user-data](self: *mut llhttp-t[user-data], data: *mut user-data) { self.parser*.data* <- data.as[ptr] }
 }
 
-fn on-url-part(parser: *mut llhttp-t[parse-state], data: *mut u8, count: usize): i32 {
+// A fully parsed request
+type request = {
+  header: header,
+  body: either { buffered(list[byte]), streamed(stream[byte]) },
+}
+
+fn on-url-part(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let request-state = parser.data();
   let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
   println("on_url_part: appending {bytes}...");
   request-state.url*.write-bytes(bytes);
   0
 }
-
-fn on_url_complete(parser: *mut llhttp/t): i32 {
-  let request-state = parser.data.rw[parse-state];
+fn on-url-complete(parser: *mut parser): i32 {
+  let request-state = parser.data();
   let url = string/from-span(request-state.url.as-span());
   println("complete url: {url}");
   0
+}
+
+fn on-header-field(parser: *mut parser, data: *mut u8, count: usize): i32 {
+  let request-state = parser.data();
+  request-state.current-header-field;
+  let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
+  println("on_header_field: appending {bytes}...");
+  0
+}
+fn on-header-field-complete(_parser: *mut parser): i32 {
+  println("on-header-field-complete...");
+  0
+}
+fn on-header-value(parser: *mut parser, data: *mut u8, count: usize): i32 {
+  let request-state = parser.data();
+  let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
+  request-state.current-header-value*.write-bytes(bytes);
+  println("on-header-value: appending {bytes}...");
+  0
+}
+fn on-header-value-complete(parser: *mut parser): i32 {
+  println("on-header-value-complete...");
+  let request-state = parser.data();
+  request-state.headers*.push({ 
+    field: string/from-span(request-state.current-header-field.as-span()),
+    value: string/from-span(request-state.current-header-value.as-span())
+  });
+  request-state.current-header-field*.clear();
+  request-state.current-header-value*.clear();
+
+  0
+}
+
+fn on-headers-complete(parser: *mut llhttp-t[parse-state]): i32 {
+  println("on-headers-complete...");
+  let state = parser.data();
+  let url = string/from-span(state.url.as-span());
+  let headers = state.headers*;
+  println("url: {url}");
+  for header in headers {
+    println("header: {header.field}: {header.value}");
+  };
+
+  let header: header = {
+    url: string/from-span(state.url.as-span()),
+    headers: state.headers,
+    method: mem/bitcast(llhttp/get_method(parser.as()).as[u32]),
+
+    content-length: state.content-length,
+  };
+
+  // nocommit can't make indirect call on struct member directly
+  (state.on-header-complete)(header)(header);
+
+  0
+}
+
+fn on-body(parser: *mut llhttp-t[parse-state], data: *mut u8, count: usize): i32 {
+  let request-state = parser.data();
+  let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
+  println("on_body: appending {bytes}...");
+  switch request-state.body* {
+    :buffered(buf)* -> buf.write-bytes(bytes),
+    :streamed(stream)* -> stream.source*.append-span(bytes),
+  };
+  0
+}
+
+fn parse-init(on-header-complete: *fn(header) -> {}): parse-state {
+  {
+    on-header-complete,
+    url: list/empty(),
+    current-header-field: list/empty(),
+    current-header-value: list/empty(),
+    headers: list/empty(),
+    body: :buffered(list/empty()),
+
+    content-length: :none,
+  }
 }
 
 fn example-http() {
@@ -46,29 +152,42 @@ fn example-http() {
   llhttp/settings_init(&settings);
   let settings = settings.with({
     // on_message_begin    : on_message_begin,    
-    on_url              : on_url,              // collect path/URL fragments
-    on_header_field     : on_header_field,     // collect header-name fragments
-    on_header_value     : on_header_value,     // collect header-value fragments
-    on_headers_complete : on_headers_complete, // finalize method/version/headers
-    on_body             : on_body,             // stream or collect body fragments
-    on_message_complete : on_message_complete, // emit completed request
+    on_url              : on-url-part.as(),              // collect path/URL fragments
+    on_url_complete     : on-url-complete.as(),              // collect path/URL fragments
+    on_header_field     : on-header-field.as(),     // collect header-name fragments
+    on_header_field_complete: on-header-field-complete.as(),
+    on_header_value     : on-header-value.as(),     // collect header-value fragments
+    on_header_value_complete: on-header-value-complete.as(),
+    on_headers_complete : on-headers-complete.as(), // finalize method/version/headers
+    on_body             : on-body.as(),             // stream or collect body fragments
+    on_message_complete : fn _parser. { println("complete"); 0 }, // emit completed request
   });
 
-  let parser: llhttp/t = uninit;
-  llhttp/init(&parser, :HTTP_BOTH, &settings);
-  let parse-state: *mut request-state = mem/new({ url: list/empty() });
-  &parser.data* <- parse-state.as[ptr];
+  let parser: parser = uninit;
+  llhttp/init(&parser.as(), :HTTP_BOTH, &settings);
+  let f: *fn(header) -> {} = fn(h: header) {
+    for h.headers.as-span() { println("{it.field}: {it.value}") };
+    {}
+  };
+  let parse-state: *mut parse-state = mem/new(parse-init(
+    on-header-complete = f
+  ));
+  parser.set-data(parse-state);
 
-  let request1 = "GET /index.ht";
-  let request2 = "ml HTTP/1.1\r\n\r\n";
+  let chunks = ["GET /index.ht",
+                "ml HTTP/1.1\r\n",
+                "Accept: text/html\r\n",
+                "\r\n"];
 
-  let res1 = llhttp/execute(&parser, request1.data-ptr().as(), request1.len().as[usize]);
-  let _res2 = llhttp/execute(&parser, request2.data-ptr().as(), request2.len().as[usize]);
-  switch res1 {
+  let last-res: llhttp/errno = :HPE_OK;
+  for chunks {
+    last-res := llhttp/execute(&parser.as(), it.data-ptr().as(), it.len().as[usize])
+  };
+  switch last-res {
     :HPE_OK -> println("Success!"),
     _ -> {
-      let err-name = string/wrap-c(llhttp/errno_name(res1).as[ptr]);
-      let err-reason = string/wrap-c(llhttp/get_error_reason(&parser).as[ptr]);
+      let err-name = string/wrap-c(llhttp/errno_name(last-res).as[ptr]);
+      let err-reason = string/wrap-c(llhttp/get_error_reason(&parser.as()).as[ptr]);
       println("ERROR: {err-name} {err-reason}");
       writelnf(core/io/stdout, "ERROR: {} {}", { err-name, err-reason });
     }

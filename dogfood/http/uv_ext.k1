@@ -1,0 +1,75 @@
+ability uv-request {
+  fn as-request(self: *mut self): *mut uv/req
+  fn set-data[t](self: *mut self, data: *mut t) { uv/req_set_data(self.as-request(), data.as[ptr]) }
+  fn get-data[t](self: *mut self): *mut t { uv/req_get_data(self.as-request()).as[*mut t] }
+}
+
+impl uv-request for uv/fs {
+  fn as-request(self: *mut self): *mut uv/req { self.as() }
+}
+
+impl uv-request for uv/work {
+  fn as-request(self: *mut self): *mut uv/req { self.as() }
+}
+
+impl uv-request for uv/write {
+  fn as-request(self: *mut self): *mut uv/req { self.as() }
+}
+
+fn set-request-data[r: uv-request, t](
+  req: *mut r,
+  data: *t,
+) {
+  uv/req_set_data(req.as-request(), data.as[ptr]);
+}
+fn get-request-data[r: uv-request, t](
+  req: *mut r,
+): *mut t {
+  uv/req_get_data(req.as-request()).as[*mut t]
+}
+
+ability uv-handle {
+  fn as-handle(self: *mut self): *mut uv/handle
+  fn set-data[t](self: *mut self, data: *mut t) { uv/handle_set_data(self.as-handle(), data.as[ptr]) }
+  fn get-data[t](self: *mut self): *mut t { uv/handle_get_data(self.as-handle()).as[*mut t] }
+}
+
+impl uv-handle for uv/tcp {
+  fn as-handle(self: *mut self): *mut uv/handle { self.as() }
+}
+
+impl uv-handle for uv/async {
+  fn as-handle(self: *mut self): *mut uv/handle { self.as() }
+}
+
+impl uv-handle for uv/stream {
+  fn as-handle(self: *mut self): *mut uv/handle { self.as() }
+}
+
+impl uv-handle for uv/handle {
+  fn as-handle(self: *mut self): *mut uv/handle { self }
+}
+
+ns uv {
+  ns for buf {
+    fn to-buffer(self: buf): buffer[u8] {
+      buffer/fromRefAndCount(self.base, self.len.as())
+    }
+
+    fn from-buffer(buffer: buffer[u8]): buf {
+      uv/buf_init(buffer.data, buffer.len.as[u32])
+    }
+  }
+}
+
+ability uv-stream {
+  fn as-stream(self: *mut self): *mut uv/stream
+}
+
+impl uv-stream for uv/tcp {
+  fn as-stream(self: *mut self): *mut uv/stream { self.as() }
+}
+
+impl uv-stream for uv/stream {
+  fn as-stream(self: *mut self): *mut uv/stream { self }
+}

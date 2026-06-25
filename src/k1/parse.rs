@@ -310,6 +310,8 @@ impl NamedTypeArg {
 
 static_assert_size!(ParsedCall, 44);
 #[derive(Clone)]
+/// Calling a named function
+/// Supports type parameters and method syntax
 pub struct ParsedCall {
     pub name: QIdent,
     pub type_args: ParsedSlice<NamedTypeArg>,
@@ -317,6 +319,14 @@ pub struct ParsedCall {
     pub span: SpanId,
     pub is_method: bool,
     pub id: ParsedExprId,
+}
+
+/// 'Calling' an expression. Used for indirect calls or calls by pointer
+#[derive(Clone, Copy)]
+pub struct ParsedExprCall {
+    pub called_expr: ParsedExprId,
+    pub args: ParsedSlice<ParsedCallArg>,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -591,7 +601,6 @@ pub struct FieldAccess {
     pub base: ParsedExprId,
     pub field_name: Ident,
     pub type_args: ParsedSlice<NamedTypeArg>,
-    pub is_coalescing: bool,  // ?.
     pub is_referencing: bool, // *.
     pub span: SpanId,
 }
@@ -767,6 +776,10 @@ pub enum ParsedExpr {
     /// ```
     Call(ParsedCall),
     /// ```md
+    /// (getFunction())(1, 2)
+    /// ```
+    CallOnExpr(ParsedExprCall),
+    /// ```md
     /// x
     /// ```
     Variable(ParsedVariable),
@@ -847,6 +860,7 @@ impl ParsedExpr {
             Self::Literal(lit) => lit.get_span(),
             Self::InterpolatedString(is) => is.span,
             Self::Call(call) => call.span,
+            Self::CallOnExpr(call) => call.span,
             Self::Variable(var) => var.name.name_span,
             Self::FieldAccess(acc) => acc.span,
             Self::Block(block) => block.span,
@@ -2361,7 +2375,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         kind: ParsedStaticBlockKind,
     ) -> ParseResult<ParsedExprId> {
         let mut parameter_names: SV4<Ident> = smallvec![];
-        if let Some(_open_token) = self.maybe_consume_next_no_whitespace(K::OpenParen) {
+        if let Some(_open_token) = self.maybe_consume_no_whitespace(K::OpenParen) {
             self.eat_delimited_ext("params", &mut parameter_names, K::Comma, K::CloseParen, |p| {
                 Parser::expect_ident_ext(p, false, false).map(|(_token, ident)| ident)
             })?;
@@ -2585,26 +2599,26 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Parser::tok_chars(&self.ast.spans, self.source(), tok)
     }
 
-    fn maybe_consume(&mut self, target_token: TokenKind) -> Option<Token> {
+    fn maybe_consume(&mut self, target_kind: TokenKind) -> Option<Token> {
         let tok = self.peek();
-        if tok.kind == target_token {
+        if tok.kind == target_kind {
             self.advance();
-            trace!("eat_token SUCCESS '{}'", target_token);
+            trace!("eat_token SUCCESS '{}'", target_kind);
             Some(tok)
         } else {
-            trace!("eat_token MISS '{}'", target_token);
+            trace!("eat_token MISS '{}'", target_kind);
             None
         }
     }
 
-    fn maybe_consume_next_no_whitespace(&mut self, target_token: TokenKind) -> Option<Token> {
+    fn maybe_consume_no_whitespace(&mut self, target_kind: TokenKind) -> Option<Token> {
         let tok = self.peek();
-        if tok.kind == target_token && !tok.is_whitespace_preceded() {
+        if tok.is_kind_nonspaced(target_kind) {
             self.advance();
-            trace!("eat_token SUCCESS '{}'", target_token);
+            trace!("eat_token SUCCESS '{}'", target_kind);
             Some(tok)
         } else {
-            trace!("eat_token MISS '{}'", target_token);
+            trace!("eat_token MISS '{}'", target_kind);
             None
         }
     }
@@ -2904,7 +2918,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         loop {
             let next = self.peek();
-            if next.kind == K::Dot || (next.kind == K::Colon && !next.is_whitespace_preceded()) {
+            if next.is_kind_nonspaced(K::Dot) || next.is_kind_nonspaced(K::Colon) {
                 self.advance();
                 let (ident_token, ident) = self.expect_ident()?;
                 self.emit_semantic_token(ident_token, SemanticTokenKind::Type);
@@ -2922,7 +2936,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 });
                 let new_id = self.ast.type_exprs.add(new);
                 result = new_id;
-            } else if next.kind == K::Colon && !next.is_whitespace_preceded() {
             } else {
                 break;
             }
@@ -3095,8 +3108,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             loop {
                 let (one, two, three) = self.peek_three();
                 let expr = if one.kind == K::Ident
-                    && two.kind == K::Colon
-                    && !two.is_whitespace_preceded()
+                    && two.is_kind_nonspaced(K::Colon)
                     && three.is_whitespace_preceded()
                 {
                     // Parse a name and a type expression
@@ -3130,14 +3142,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_sum_type_expression(&mut self) -> ParseResult<ParsedSumType> {
         let (keyword, _) = self.expect_ident_chars("either")?;
-        let explicit_tag_type_expr =
-            if self.maybe_consume_next_no_whitespace(K::OpenParen).is_some() {
-                let tag_expr = self.expect_type_expression()?;
-                self.expect_kind(K::CloseParen)?;
-                Some(tag_expr)
-            } else {
-                None
-            };
+        let explicit_tag_type_expr = if self.maybe_consume_no_whitespace(K::OpenParen).is_some() {
+            let tag_expr = self.expect_type_expression()?;
+            self.expect_kind(K::CloseParen)?;
+            Some(tag_expr)
+        } else {
+            None
+        };
         self.expect_kind(K::OpenBrace)?;
         let mut variants: SV8<_> = smallvec![];
         self.eat_delimited_ext(
@@ -3248,7 +3259,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let Some(mut result) = self.parse_base_expression()? else { return Ok(None) };
         // Looping for postfix ops inspired by Jakt's parser
         let with_postfix: ParsedExprId = loop {
-            let (next, second) = self.peek_two();
+            let next = self.peek();
+            // FIXME: Remove old cast syntax
             let new_result = if next.kind == K::Ident && self.token_chars(next) == "as" {
                 self.advance();
                 let type_expr_id = self.expect_type_expression()?;
@@ -3273,16 +3285,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     span,
                 }));
                 Some(is_expression_id)
-            } else if (next.kind == K::Dot && !next.is_whitespace_preceded())
-                || (next.kind == K::QuestionMark
-                    && (second.kind == K::Dot && !second.is_whitespace_preceded()))
-            {
-                let is_coalescing = next.kind == K::QuestionMark;
+            } else if next.is_kind_nonspaced(K::OpenParen) {
+                // An expression call: <expr>(param1, param2)
+                let (call_args, _span) = self.expect_fn_call_args()?;
+                let self_arg = result;
+                let args_handle = self.ast.mem.pushn(&call_args);
+                let span = self.extend_to_here(self.get_expression_span(self_arg));
+                let call = ParsedExprCall { called_expr: result, args: args_handle, span };
+                let call_expr_id = self.add_expression(ParsedExpr::CallOnExpr(call));
+                Some(call_expr_id)
+            } else if next.is_kind_nonspaced(K::Dot) {
                 // Field access syntax; a.b with optional bracketed type args []
                 self.advance();
-                if is_coalescing {
-                    self.advance();
-                }
                 let target = match self.peek().kind {
                     K::Ident => self.tokens.next(),
                     K::Asterisk => self.tokens.next(),
@@ -3319,14 +3333,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     })))
                 } else {
                     // a.b[int] <complete expression>
-                    let trailing_asterisk = self.maybe_consume_next_no_whitespace(K::Asterisk);
+                    let trailing_asterisk = self.maybe_consume_no_whitespace(K::Asterisk);
                     let target = self.make_ident(target);
                     let span = self.extend_to_here(self.get_expression_span(result));
                     Some(self.add_expression(ParsedExpr::FieldAccess(FieldAccess {
                         base: result,
                         field_name: target,
                         type_args,
-                        is_coalescing,
                         is_referencing: trailing_asterisk.is_some(),
                         span,
                     })))
@@ -3466,7 +3479,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn expect_namespaced_ident(&mut self) -> ParseResult<QIdent> {
         let (first, second) = self.tokens.peek_two();
         let mut namespaces: SV8<IdentSpanned> = smallvec![];
-        if second.kind == K::Slash && !second.is_whitespace_preceded() {
+        if second.is_kind_nonspaced(K::Slash) {
             // Namespaced expression; foo/
             // Loop until we don't see a /
             namespaces.push(self.make_ident_spanned(first));
@@ -3491,8 +3504,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     pub fn parse_compiler_debug(&mut self) -> bool {
         let (first, second) = self.peek_two();
         let is_debug = first.kind == K::Hash
-            && second.kind == K::Ident
-            && !second.is_whitespace_preceded()
+            && second.is_kind_nonspaced(K::Ident)
             && self.get_token_chars(second) == "debug";
         if is_debug {
             self.advance_n(2);
@@ -3691,10 +3703,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let namespaced_ident = self.expect_namespaced_ident()?;
                     let name_span = self.peek_back().span;
                     let (second, third) = self.tokens.peek_two();
-                    if second.kind == K::Colon
-                        && !second.is_whitespace_preceded()
-                        && !third.is_whitespace_preceded()
-                    {
+                    if second.is_kind_nonspaced(K::Colon) && !third.is_whitespace_preceded() {
                         self.advance();
                         let (variant_name_token, variant_name) = self.expect_ident()?;
                         let span = self.extend_token_span(second, variant_name_token);
@@ -4033,7 +4042,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         trace!("parse_let");
         let Some(eaten_keyword) = self.maybe_consume(K::KeywordLet) else { return Ok(None) };
         self.emit_semantic_token(eaten_keyword, SemanticTokenKind::Keyword);
-        let is_reference = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
+        let is_reference = self.maybe_consume_no_whitespace(K::Asterisk).is_some();
         let mut flags = ParsedLet::FLAG_REFERENCING * is_reference as u8;
         loop {
             let p = self.peek();
@@ -4939,8 +4948,43 @@ impl ParsedProgram {
                 Ok(())
             }
             ParsedExpr::Call(call) => {
-                self.display_ident(w, call.name.name)?;
-                w.write_str("(...)")?;
+                self.display_qident(w, &call.name)?;
+                if !call.type_args.is_empty() {
+                    w.write_str("[")?;
+                    for (index, ta) in self.mem.getn(call.type_args).iter().enumerate() {
+                        if index > 0 {
+                            w.write_str(", ")?;
+                        }
+                        self.display_type_arg(w, *ta)?;
+                    }
+                    w.write_str("]")?;
+                }
+                w.write_str("(")?;
+                for (index, arg) in self.mem.getn(call.args).iter().enumerate() {
+                    if arg.is_explicit_context {
+                        w.write_str("context ")?;
+                    }
+                    self.display_expr_id(w, arg.value)?;
+                    let last = index == call.args.len() as usize - 1;
+                    if !last {
+                        w.write_str(", ")?;
+                    }
+                }
+                w.write_str(")")?;
+                Ok(())
+            }
+            ParsedExpr::CallOnExpr(call) => {
+                w.write_str("(")?;
+                self.display_expr_id(w, call.called_expr)?;
+                w.write_str(")(")?;
+                for (index, arg) in self.mem.getn(call.args).iter().enumerate() {
+                    self.display_expr_id(w, arg.value)?;
+                    let last = index == call.args.len() as usize - 1;
+                    if !last {
+                        w.write_str(", ")?;
+                    }
+                }
+                w.write_str(")")?;
                 Ok(())
             }
             ParsedExpr::Variable(var) => {

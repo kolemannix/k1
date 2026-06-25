@@ -1,7 +1,12 @@
 ns opaque_test;
+
+type named-opaque = opaque[16, 4]
+
 fn test() {
   let _x: opaque[8, 4] = uninit;
   let x2: opaque[8, 4] = zeroed();
+
+  assert(types/type-id[named-opaque] != types/type-id[opaque[16, 4]]);
 
   assert-equals(types/size[opaque[10, 1]], 10);
   assert-equals(types/size[opaque[128, 8]], 128);

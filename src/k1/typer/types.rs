@@ -126,6 +126,7 @@ impl std::hash::Hash for TypeDefnInfo {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
         self.scope.hash(state);
+        self.ast_id.hash(state);
     }
 }
 
@@ -388,11 +389,6 @@ impl FloatType {
 
 #[derive(Clone, Copy)]
 pub struct FnParamType {
-    // FIXME: Determine if param names are truly 'part' of the function type.
-    // For now, keeping them to fix some bugs. When we excluded them, we had
-    // different functions appearing identical and downstream 'name' lookups failed.
-    // The solution is to move the name entirely out of the type
-    pub name: Ident,
     pub type_id: TypeId,
     pub is_context: bool,
     pub is_lambda_env: bool,
@@ -688,14 +684,14 @@ impl TypePool {
             // Inherently unique as well
             Type::Generic(generic) => {
                 defn.hash(state);
-                generic.inner.hash(state);
-                generic.params.raw_offset().hash(state);
-                generic.params.len().hash(state);
+                // nocommit try just using the defn
+                // generic.inner.hash(state);
+                // generic.params.raw_offset().hash(state);
+                // generic.params.len().hash(state);
             }
             Type::Function(fun) => {
                 fun.return_type.hash(state);
                 for param in self.mem.getn(fun.physical_params) {
-                    param.name.hash(state);
                     param.is_context.hash(state);
                     param.is_lambda_env.hash(state);
                     param.type_id.hash(state);
