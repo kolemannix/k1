@@ -275,6 +275,7 @@ impl Backend {
             debug: true,
             sanitize: false,
             profile: false,
+            quiet: true,
             target: None,
             command: k1::compiler::Command::Check {
                 file: root_uri.as_ref().unwrap().path().into(),

@@ -116,6 +116,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         dump_module: false,
         profile: false,
         target: None,
+        quiet: true,
         command: Command::Build { file: path.as_ref().to_owned() },
     };
     let compile_result = compiler::compile_program(&args);
