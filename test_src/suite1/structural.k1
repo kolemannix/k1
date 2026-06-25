@@ -9,26 +9,26 @@ type alias handle3 = { index: size }
 
 fn takes-structural(_s: { index: size}) { {} }
 
-fn get(_h: handle): string { "mock" }
+fn get-nominal(_h: handle): string { "mock" }
 
 fn test() {
-  let h = { index: 10 };
+  let handle-anon = { index: 10 };
 
   let h1 = { index: 10 }: handle;
   let h2: handle2 = { index: 10 };
 
-  takes-structural(h);
+  takes-structural(handle-anon);
   assert(testCompile(takes-structural(h2)).is-none());
 
 
-  //:ok; structural type 'promoted' to nominal
-  get({ index: 10 });
+  //:ok; structural type 'promoted' to nominal at creation time
+  get-nominal({ index: 10 });
 
-  // error, h is declared as structural
-  assert(testCompile(get(h)).is-some());
+  // not ok; get takes `handle` nominally; h is anonymous.
+  assert(testCompile(get-nominal(handle-anon)).is-some());
 
   //:ok; correct nominal type
-  get(h1);
+  get-nominal(h1);
 
   // Not ok; different nominal types!
   assert(testCompile(get(h2)).is-some());

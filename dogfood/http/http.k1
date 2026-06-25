@@ -116,8 +116,7 @@ fn on-headers-complete(parser: *mut llhttp-t[parse-state]): i32 {
     content-length: state.content-length,
   };
 
-  // nocommit can't make indirect call on struct member directly
-  (state.on-header-complete)(header)(header);
+  (state.on-header-complete)(header);
 
   0
 }
