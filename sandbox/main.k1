@@ -1,22 +1,43 @@
-ns stuff {
-  type alias intalias = int
+type header = {
+  url: string,
+  headers: list[{ field: string, value: string }],
+  method: u32,
+  // version: string,
+
+  // cache of important, known, parsed headers
+  content-length: ?size
 }
 
-use stuff/intalias
+type parse-state = {
+  on-header-complete: *fn(header) -> {},
+  url: list[char],
+  current-header-field: list[char],
+  current-header-value: list[char],
+  headers: list[{ field: string, value: string }],
+  content-length: ?size,
+  body: either { buffered(list[byte]) },
+}
 
-type Bar = { foo: Foo, bar: *Bar, i: intalias }
-type Foo = { x: t }
+fn parse-init(on-header-complete: *fn(header) -> {}): parse-state {
+  {
+    on-header-complete,
+    url: list/empty(),
+    current-header-field: list/empty(),
+    current-header-value: list/empty(),
+    headers: list/empty(),
+    body: :buffered(list/empty()),
 
-type alias t = opaque[4, 4]
+    content-length: :none,
+  }
+}
 
-fn main(argc: int, argv: ptr): i32 {
+#debug fn main(argc: int, argv: ptr): i32 {
 
-  println(asdfasdf);
+  let x: parse-state = uninit;
 
-  switch opt:some("asdf") {
-    :some("")  -> { xxx },
-    :none      -> { xxx },
-  };
+  let h: header = uninit;
+
+  (x.on-header-complete)(h);
 
   0
 }

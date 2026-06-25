@@ -68,7 +68,6 @@ type loop_c = {}
 #static assert-layout[loop_c](0, 1, [])
 type my-custom-name = {}
 #static assert-layout[my-custom-name](0, 1, [])
-type alias opaq = opaque[104, 4]
-#static assert-layout[opaq](104, 4, [])
+type opaq = opaque[104, 4]
 extern("test", "cinput_main")
 fn main(): i32

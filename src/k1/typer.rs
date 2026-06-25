@@ -164,13 +164,13 @@ pub struct InferenceContext {
 impl InferenceContext {
     pub fn make() -> Self {
         InferenceContext {
-            origin_stack: Vec::with_capacity(64),
-            params: Vec::with_capacity(128),
-            solutions_so_far: Vec::with_capacity(64),
-            inference_vars: Vec::with_capacity(32),
-            constraints: Vec::with_capacity(256),
-            substitutions: FxHashMap::with_capacity(256),
-            substitutions_vec: Vec::with_capacity(256),
+            origin_stack: Vec::new(),
+            params: Vec::new(),
+            solutions_so_far: Vec::new(),
+            inference_vars: Vec::new(),
+            constraints: Vec::new(),
+            substitutions: FxHashMap::new(),
+            substitutions_vec: Vec::new(),
             start_raw: 0,
         }
     }
@@ -1074,7 +1074,7 @@ pub struct AddressOfExpr {
 
 #[derive(Clone)]
 pub enum CallResolution {
-    Other(TypedExprId),
+    OtherExpr(TypedExprId),
     Call(Callee),
     MethodCall { callee: Callee, receiver: TypedExprId },
 }
@@ -2398,7 +2398,7 @@ pub struct TypedModuleBuffers {
     field_ctors: Vec<Vec<(Ident, PatternCtorId)>>,
     pattern_ctor_ancestor_stack: Vec<TypeId>,
     int_parse: String,
-    visited_types: RefCell<FxHashMap<TypeId, ()>>,
+    visited_types: RefCell<Vec<TypeId>>,
 }
 
 nz_u32_id!(ModuleId);
@@ -2820,8 +2820,7 @@ impl TypedProgram {
             panic!("Failed to get process dlopen handle");
         }
 
-        let ls_entities =
-            if cfg!(feature = "lsp") { FxHashMap::with_capacity(64) } else { FxHashMap::new() };
+        let ls_entities = FxHashMap::new();
 
         TypedProgram {
             modules: VPool::make("modules"),
@@ -2856,18 +2855,18 @@ impl TypedProgram {
             ast,
             module_in_progress: None,
             ls_entities: RefCell::new(ls_entities),
-            inference_context_stack: Vec::with_capacity(8),
-            inference_context_extras: (0..8).map(|_| InferenceContext::make()).collect(),
+            inference_context_stack: Vec::new(),
+            inference_context_extras: (0..4).map(|_| InferenceContext::make()).collect(),
             type_defn_context: TypeDefnContext::default(),
             buffers: TypedModuleBuffers {
-                name_builder: String::with_capacity(4096),
-                emitted_code: String::with_capacity(8192),
-                lexer_tokens: Vec::with_capacity(16384),
-                trial_ctors: Vec::with_capacity(1024),
-                field_ctors: (0..128).map(|_| Vec::with_capacity(128)).collect::<Vec<_>>(),
+                name_builder: String::new(),
+                emitted_code: String::new(),
+                lexer_tokens: Vec::new(),
+                trial_ctors: Vec::new(),
+                field_ctors: (0..128).map(|_| Vec::new()).collect::<Vec<_>>(),
                 pattern_ctor_ancestor_stack: Vec::with_capacity(64),
                 int_parse: String::with_capacity(128),
-                visited_types: RefCell::new(FxHashMap::with_capacity(128)),
+                visited_types: RefCell::new(Vec::new()),
             },
             patterns: TypedPatternPool::make(),
             pattern_ctors,
@@ -5615,7 +5614,12 @@ impl TypedProgram {
             (Type::Struct(s1), Type::Struct(s2)) => {
                 let expected_defn_info = self.types.get_defn_info(expected);
                 if expected_defn_info.is_some() {
-                    Err(k1_format_user!(self, "Expected {} but got {}", expected, actual))
+                    Err(k1_format_user!(
+                        self,
+                        "Expected {} but got {}",
+                        self.type_id_to_string_ext(expected, true),
+                        self.type_id_to_string_ext(actual, true)
+                    ))
                 } else {
                     if s1.fields.len() != s2.fields.len() {
                         return Err(k1_format_user!(
@@ -6479,22 +6483,6 @@ impl TypedProgram {
             return Ok((impl_handle, false));
         }
 
-        if allow_ref_self {
-            let ref_self = self.types.add_reference_type(self_type_id, true);
-            if let Some(impl_handle) = self.find_unique_valid_ability_impl(
-                ref_self,
-                target_base_ability_id,
-                parameter_constraints,
-                scope_id,
-            )? {
-                // self.report_hint(
-                //     span,
-                //     format!("I used ref self with {}", self.type_id_to_string(ref_self)),
-                // );
-                return Ok((impl_handle, true));
-            }
-        }
-
         // Blanket
         debug!(
             "Blanket search for impl {} for {} with constraints {}",
@@ -6609,6 +6597,22 @@ impl TypedProgram {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        if allow_ref_self {
+            let ref_self = self.types.add_reference_type(self_type_id, true);
+            if let Some(impl_handle) = self.find_unique_valid_ability_impl(
+                ref_self,
+                target_base_ability_id,
+                parameter_constraints,
+                scope_id,
+            )? {
+                // self.report_hint(
+                //     span,
+                //     format!("I used ref self with {}", self.type_id_to_string(ref_self)),
+                // );
+                return Ok((impl_handle, true));
             }
         }
 
@@ -7458,9 +7462,6 @@ impl TypedProgram {
 
         // Special case: .! unwrap operation
         if field_access.field_name == self.ast.idents.b.bang {
-            if field_access.is_coalescing {
-                return failf!(field_access.span, "Cannot use ?. with unwrap operator");
-            }
             if field_access.is_referencing {
                 return failf!(field_access.span, "Cannot use * with unwrap operator");
             }
@@ -7469,9 +7470,6 @@ impl TypedProgram {
 
         // Special case: .try unwrap operation
         if field_access.field_name == self.ast.idents.b.try_ {
-            if field_access.is_coalescing {
-                return failf!(field_access.span, "Cannot use ?. with try operator");
-            }
             if field_access.is_referencing {
                 return failf!(field_access.span, "Cannot use * with try operator");
             }
@@ -7534,9 +7532,6 @@ impl TypedProgram {
 
         // Optional fork case: sum.tag
         if field_access.field_name == self.ast.idents.b.tag {
-            if field_access.is_coalescing {
-                return failf!(field_access.span, "TODO: support coalesce for .tag");
-            }
             if let Some(get_tag) = self.handle_sum_get_tag(base_expr, field_access.span)? {
                 return Ok(get_tag);
             }
@@ -7544,18 +7539,12 @@ impl TypedProgram {
 
         // Optional fork case: enum.value
         if field_access.field_name == self.ast.idents.b.value {
-            if field_access.is_coalescing {
-                return failf!(field_access.span, "TODO: support coalesce for .value");
-            }
             if let Some(get_value) = self.handle_enum_get_value(base_expr, field_access.span)? {
                 return Ok(get_value);
             }
         }
 
         if field_access.field_name == self.ast.idents.b.variantName {
-            if field_access.is_coalescing {
-                return failf!(field_access.span, "TODO: support coalesce for .variantName");
-            }
             return failf!(
                 field_access.span,
                 "TODO: Generate variantName() code (for only sums that it is called on!)"
@@ -7568,7 +7557,7 @@ impl TypedProgram {
                 (inner_type, Some(*reference_type))
             }
             _other => {
-                if field_access.is_referencing && !field_access.is_coalescing {
+                if field_access.is_referencing {
                     return failf!(
                         base_span,
                         "Field access target is not a pointer, so referencing access with * cannot be used"
@@ -7587,9 +7576,6 @@ impl TypedProgram {
         } else {
             FieldAccessKind::ValueToValue
         };
-        if field_access.is_coalescing {
-            return failf!(span, "?. not implemented currently");
-        }
         //eprintln!("base_type_id is {}", self.type_id_to_string(base_type_id));
         match self.types.get(base_type_id) {
             Type::StaticValue(svt) => {
@@ -8051,7 +8037,31 @@ impl TypedProgram {
                 let block = self.eval_block(&block, block_ctx, needs_terminator)?;
                 Ok(block)
             }
-            ParsedExpr::Call(fn_call) => self.eval_function_call(&fn_call.clone(), None, ctx, None),
+            ParsedExpr::Call(call) => self.eval_function_call(&call.clone(), None, ctx, None),
+            ParsedExpr::CallOnExpr(call) => {
+                let call = *call;
+                let called_expr_span = self.ast.get_expr_span(call.called_expr);
+                let called_expr = self.eval_expr(call.called_expr, ctx.with_no_expected_type())?;
+                let called_expr_type = self.exprs.get_type(called_expr);
+                let Type::FunctionPointer(_) = self.types.get(called_expr_type) else {
+                    return Err(kerr!(
+                        self,
+                        called_expr_span,
+                        "Not a callable expression; type is '{}' rather than a function pointer",
+                        called_expr_type
+                    ));
+                };
+                let callee = Callee::DynamicFunction { function_pointer_expr: called_expr };
+                let call = ParsedCall {
+                    name: QIdent::naked(self.ast.idents.b.invoke, called_expr_span),
+                    type_args: MSlice::empty(),
+                    args: call.args,
+                    span: call.span,
+                    is_method: false,
+                    id: expr_id,
+                };
+                self.eval_function_call(&call, None, ctx, Some(callee))
+            }
             ParsedExpr::For(for_expr) => self.eval_for_expr(&for_expr.clone(), ctx),
             ParsedExpr::Variant(parsed_variant) => self.eval_variant(parsed_variant.clone(), ctx),
             ParsedExpr::Is(is_expr) => {
@@ -10172,7 +10182,47 @@ impl TypedProgram {
                     )
                 }
             },
-            Type::FunctionPointer(_fp) => match self.types.get(target_type) {
+            Type::FunctionPointer(from_fp) => match self.types.get(target_type) {
+                Type::FunctionPointer(to_fp) => {
+                    // For good c interop, its really nice to be able to cast function pointers to
+                    // slightly different types, for example if we have a typesafe version of a type
+                    // with a raw void* baton, our type has a *mut t and the baton has ptr. We want
+                    // to allow this
+                    let from_type =
+                        *self.types.get(from_fp.function_type_id).as_function().unwrap();
+                    let to_type = *self.types.get(to_fp.function_type_id).as_function().unwrap();
+                    if from_type.physical_params.len() != to_type.physical_params.len() {
+                        return failf!(
+                            span,
+                            "Cannot cast between function types: parameter count mismatch: {} vs {}",
+                            from_type.physical_params.len(),
+                            to_type.physical_params.len()
+                        );
+                    }
+                    if let Err(msg) =
+                        self.check_types(from_type.return_type, to_type.return_type, ctx.scope_id)
+                    {
+                        self.report_warn(
+                            span,
+                            format!("Cannot guarantee the return types are compatible; {}", msg),
+                        )
+                    }
+                    for (from_param, to_param) in
+                        self.types.mem.getn_zip(from_type.physical_params, to_type.physical_params)
+                    {
+                        // We can't allow any ABI-affecting casts, so have to be careful. Basically,
+                        // nothing that changes the physical type.
+                        if let Err(msg) =
+                            self.check_types(from_param.type_id, to_param.type_id, ctx.scope_id)
+                        {
+                            self.report_warn(
+                                span,
+                                format!("Cannot guarantee these params are compatible; {}", msg),
+                            )
+                        }
+                    }
+                    Ok(Outcome::Cast(CastType::ReferenceToPointer))
+                }
                 Type::Pointer => Ok(Outcome::Cast(CastType::ReferenceToPointer)),
                 _ => failf!(
                     span,
@@ -10231,7 +10281,7 @@ impl TypedProgram {
         let body_span = for_expr.body_block.span;
 
         // Project: Kill all this with the macro system
-        let (target_is_iterator, _item_type) = match self.expect_ability_impl(
+        let (target_is_iterator, needs_addr_of) = match self.expect_ability_impl(
             iterable_type,
             ABILITY_ID_ITERABLE,
             true,
@@ -10253,19 +10303,10 @@ impl TypedProgram {
                             self.type_id_to_string(iterable_type)
                         );
                     }
-                    Ok((iterator_impl, _)) => {
-                        let impl_args =
-                            self.ability_impls.get(iterator_impl.full_impl_id).impl_arguments;
-                        let item_type = self.mem.get_nth(impl_args, 0).type_id;
-                        (true, item_type)
-                    }
+                    Ok((_iterator_impl, used_refself)) => (true, used_refself),
                 }
             }
-            Ok((iterable_impl, _)) => {
-                let impl_args = self.ability_impls.get(iterable_impl.full_impl_id).impl_arguments;
-                let item_type = self.mem.get_nth(impl_args, 0).type_id;
-                (false, item_type)
-            }
+            Ok((_iterable_impl, used_refself)) => (false, used_refself),
         };
 
         // We de-sugar the 'for ... do' expr into a typed while loop, synthesizing
@@ -10284,13 +10325,18 @@ impl TypedProgram {
             outer_for_expr_scope,
             Some(iterable_span),
         );
-        let iterator_initializer = if target_is_iterator {
+        let coerced_iterable_expr = if needs_addr_of {
+            self.synth_address_of(iterable_expr, SpanId::NONE)?
+        } else {
             iterable_expr
+        };
+        let iterator_initializer = if target_is_iterator {
+            coerced_iterable_expr
         } else {
             self.synth_typed_call_typed_args(
                 self.ast.idents.f.Iterable_iterator.with_span(iterable_span),
                 &[],
-                &[iterable_expr],
+                &[coerced_iterable_expr],
                 ctx.with_scope(outer_for_expr_scope).with_no_expected_type(),
                 false,
             )?
@@ -11119,7 +11165,7 @@ impl TypedProgram {
     ) -> K1Result<CallResolution> {
         let call_span = fn_call.span;
         if let Some(builtin_result) = self.handle_builtin_function_call_lookalikes(fn_call, ctx)? {
-            return Ok(CallResolution::Other(builtin_result));
+            return Ok(CallResolution::OtherExpr(builtin_result));
         }
 
         let self_arg_expr: Option<MaybeTypedExpr> = match known_args.as_ref() {
@@ -11621,7 +11667,7 @@ impl TypedProgram {
                     }
                     Some(size) => self.synth_i64(size, span),
                 };
-                Ok(CallResolution::Other(array_length))
+                Ok(CallResolution::OtherExpr(array_length))
             }
             n if n == self.ast.idents.b.get || n == self.ast.idents.b.get_ref => {
                 if call.args.len() != 2 {
@@ -11716,7 +11762,7 @@ impl TypedProgram {
                     crash_oob,
                     span,
                 );
-                Ok(CallResolution::Other(if_else_expr))
+                Ok(CallResolution::OtherExpr(if_else_expr))
             }
             _ => {
                 let array_scope = self.scopes.get_scope(self.scopes.array_scope_id);
@@ -11763,7 +11809,7 @@ impl TypedProgram {
                                 "Cannot get a pointer to an intrinsic operation. (If you need one, make a wrapper function)"
                             );
                         }
-                        return Ok(CallResolution::Other(
+                        return Ok(CallResolution::OtherExpr(
                             self.function_to_lambda_object(function_id, call_span),
                         ));
                     }
@@ -11780,7 +11826,7 @@ impl TypedProgram {
                     },
                 };
                 let result = self.eval_cast(base_arg.value, dest_type, call_span, ctx)?;
-                return Ok(CallResolution::Other(result));
+                return Ok(CallResolution::OtherExpr(result));
             } else if fn_name == self.ast.idents.b.to_static {
                 if call.args.len() != 1 {
                     return failf!(call_span, ".toStatic() takes no additional arguments");
@@ -11790,7 +11836,7 @@ impl TypedProgram {
                     Err(msg) => {
                         return failf!(call_span, "Failed to lift value to static: {}", msg);
                     }
-                    Ok(static_expr_id) => Ok(CallResolution::Other(static_expr_id)),
+                    Ok(static_expr_id) => Ok(CallResolution::OtherExpr(static_expr_id)),
                 };
             } else if fn_name == self.ast.idents.b.from_static {
                 let base_value = self.eval_expr(base_arg.value, ctx.with_no_expected_type())?;
@@ -11807,7 +11853,7 @@ impl TypedProgram {
                     static_type.value_id,
                     call_span,
                 );
-                return Ok(CallResolution::Other(materialized));
+                return Ok(CallResolution::OtherExpr(materialized));
             }
         }
 
@@ -11823,7 +11869,7 @@ impl TypedProgram {
 
         // Handle the special case of the synthesized sum 'as{Variant}' methods
         if let Some(sum_as_result) = self.handle_sum_as_variant_call(base_expr, call)? {
-            return Ok(CallResolution::Other(sum_as_result));
+            return Ok(CallResolution::OtherExpr(sum_as_result));
         }
 
         let base_expr_type = self.exprs.get_type(base_expr);
@@ -11832,6 +11878,30 @@ impl TypedProgram {
         if let Type::Array(_array_type) = self.types.get(base_for_method) {
             return self.handle_array_method_call(base_expr, base_for_method, call, ctx);
         }
+
+        // nocommit don't want to part with it yet
+        // if let Type::Struct(struct_type) = self.types.get(base_for_method) {
+        //     if let Some((field_index, field)) = struct_type.find_field(&self.types.mem, fn_name) {
+        //         if let Type::FunctionPointer(_fp) = self.types.get(field.type_id) {
+        //             let base_is_a_reference =
+        //                 self.types.get(base_expr_type).as_reference().is_some();
+        //             let access_kind = if base_is_a_reference {
+        //                 FieldAccessKind::Dereference
+        //             } else {
+        //                 FieldAccessKind::ValueToValue
+        //             };
+        //             let field_access_expr = self.synth_struct_field_access(
+        //                 base_expr,
+        //                 field_index,
+        //                 access_kind,
+        //                 call_span,
+        //             )?;
+        //             return Ok(CallResolution::Call(Callee::DynamicFunction {
+        //                 function_pointer_expr: field_access_expr,
+        //             }));
+        //         }
+        //     }
+        // }
 
         if let Some(companion_ns) =
             self.types.get_defn_info(base_for_method).and_then(|d| d.companion_namespace)
@@ -11863,7 +11933,7 @@ impl TypedProgram {
         let Some(abilities_with_function_name) = self.function_name_to_ability.get(&fn_name) else {
             return failf!(
                 call_span,
-                "Method '{}' does not exist on type: '{}'",
+                "Method '{}' does not exist on type '{}'",
                 self.ident_str(call.name.name),
                 self.type_id_to_string(base_expr_type),
             );
@@ -12105,20 +12175,11 @@ impl TypedProgram {
                                 }
                             };
 
-                            let typed_expr = self
-                                .eval_expr_with_coercion(
-                                    parsed_expr,
-                                    ctx.with_expected_type(Some(base_field.type_id)),
-                                    true,
-                                )
-                                .map_err(|mut e| {
-                                    e.message = format!(
-                                        "Field {} has incorrect type: {}",
-                                        self.ident_str(name),
-                                        e.message
-                                    );
-                                    e
-                                })?;
+                            let typed_expr = self.eval_expr_with_coercion(
+                                parsed_expr,
+                                ctx.with_expected_type(Some(base_field.type_id)),
+                                true,
+                            )?;
                             patch_hits += 1;
                             typed_expr
                         }
@@ -12752,7 +12813,6 @@ impl TypedProgram {
             }
         }
 
-        let args_slice = self.ast.mem.getn(fn_call.args);
         let is_lambda = self.types.mem.get_nth_opt(params, 0).is_some_and(|p| p.is_lambda_env);
         let params = if is_lambda { params.skip(1) } else { params };
         let explicit_param_count =
@@ -12913,7 +12973,7 @@ impl TypedProgram {
             Some(callee) => CallResolution::Call(callee),
         };
         let (callee, method_receiver) = match call_resolution {
-            CallResolution::Other(typed_expr_id) => return Ok(typed_expr_id),
+            CallResolution::OtherExpr(typed_expr_id) => return Ok(typed_expr_id),
             CallResolution::Call(callee) => (callee, None),
             CallResolution::MethodCall { callee, receiver } => (callee, Some(receiver)),
         };
@@ -12971,9 +13031,10 @@ impl TypedProgram {
                             ) {
                                 return failf!(
                                     self.exprs.get_span(typed),
-                                    "Invalid type for '{}': {}",
+                                    "{}\nOccurred in pre-typed call parameter '{}.{}'",
+                                    e.message,
+                                    self.qident_to_string(&fn_call.name),
                                     self.ident_str(param.name),
-                                    e.message
                                 );
                             };
                             typed
@@ -17534,7 +17595,7 @@ impl TypedProgram {
                                     span_id,
                                 );
                                 match field_ctors_buf.get_mut(index) {
-                                    None => field_ctors_buf.push(Vec::with_capacity(128)),
+                                    None => field_ctors_buf.push(Vec::new()),
                                     Some(buf) => buf.clear(),
                                 };
                                 if dst.len() == prev_len {

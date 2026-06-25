@@ -78,7 +78,7 @@ ns for task {
 
     state.req.set-data(work);
 
-    uv/submit-work(
+    work/submit-work(
       state.req,
       fn req. {
         let task-work = req.get-data[task-work[t, params]];

@@ -50,7 +50,7 @@ type CXString = {
   private_flags: c-unsigned,
 }
 ns for CXString {
-  fn to-k1(self: CXString): string {
+  fn to-string(self: CXString): string {
     k1-string-from-cx-string(self)
   }
 }

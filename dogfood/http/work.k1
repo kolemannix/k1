@@ -1,0 +1,82 @@
+ns work {
+  fn init-work-queue(uv-loop: *mut uv-loop) {
+    let heap = mem/alloc-mode:system-heap;
+    let queue: *mut uv-work-queue = heap.new({
+      uv-loop,
+      async-handle: heap.allocT[uv/async],
+      mutex: heap.allocT[uv/mutex],
+      submissions: list/empty[uv-work-submission](),
+    });
+  
+    let mutex-rc = uv/mutex_init(queue.mutex);
+    if mutex-rc != 0 {
+      crash("uv_mutex_init for work queue failed: {mutex-rc}");
+    };
+  
+    let async-rc = uv/async_init(uv-loop, queue.async-handle, drain-work-queue);
+    if async-rc != 0 {
+      uv/mutex_destroy(queue.mutex);
+      heap.freeT(queue.async-handle);
+      heap.freeT(queue.mutex);
+      heap.freeT(queue);
+      crash("uv_async_init for work queue failed: {async-rc}");
+    };
+  
+    queue.async-handle.set-data(queue);
+    &work-queue <- queue.as[ptr];
+  }
+  
+  fn submit-work(req: *mut uv/work, work-cb: uv/work_cb, after-cb: uv/after_work_cb) {
+    if work-queue.is-null() {
+      crash("uv work queue not initialized");
+    };
+    let queue = work-queue.as[*mut uv-work-queue];
+  
+    uv/mutex_lock(queue.mutex);
+    queue.submissions*.pushIn(context :system-heap)({ req, work-cb, after-cb });
+    uv/mutex_unlock(queue.mutex);
+  
+    let send-rc = uv/async_send(queue.async-handle);
+    if send-rc < 0 crash("uv_async_send for work queue failed: {send-rc}");
+  }
+  
+  type uv-work-submission = {
+    req: *mut uv/work,
+    work-cb: uv/work_cb,
+    after-cb: uv/after_work_cb,
+  }
+  
+  type uv-work-queue = {
+    uv-loop: *mut uv-loop,
+    async-handle: *mut uv/async,
+    mutex: *mut uv/mutex,
+    submissions: list[uv-work-submission],
+  }
+  
+  let mutable work-queue: ptr = ptr/null
+  
+  fn drain-work-queue(handle: *mut uv/async) {
+    let queue = handle.get-data[uv-work-queue]();
+    loop {
+      uv/mutex_lock(queue.mutex);
+      if queue.submissions.isEmpty() {
+        uv/mutex_unlock(queue.mutex);
+        break();
+      };
+  
+      for submission in queue.submissions {
+        let queue-rc = uv/queue_work(
+          queue.uv-loop,
+          submission.req,
+          submission.work-cb,
+          submission.after-cb,
+        );
+        if queue-rc != 0 {
+          crash("uv_queue_work failed: {queue-rc}");
+        };
+      };
+      queue.submissions*.clear();
+      uv/mutex_unlock(queue.mutex);
+    }
+  }
+}

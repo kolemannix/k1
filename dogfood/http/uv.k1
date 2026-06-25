@@ -20,32 +20,21 @@ type alias os_sock = i32
 #static assert-layout[os_sock](4, 4, [])
 type alias os_fd = i32
 #static assert-layout[os_fd](4, 4, [])
-type alias pid = opaque[4, 4]
-#static assert-layout[pid](4, 4, [])
-type alias once = opaque[16, 8]
-#static assert-layout[once](16, 8, [])
-type alias thread = opaque[8, 8]
-#static assert-layout[thread](8, 8, [])
-type alias mutex = opaque[64, 8]
-#static assert-layout[mutex](64, 8, [])
-type alias rwlock = opaque[200, 8]
-#static assert-layout[rwlock](200, 8, [])
-type alias sem = opaque[4, 4]
-#static assert-layout[sem](4, 4, [])
-type alias cond = opaque[48, 8]
-#static assert-layout[cond](48, 8, [])
-type alias key = opaque[8, 8]
-#static assert-layout[key](8, 8, [])
-type alias _uv_barrier = opaque[128, 8]
-#static assert-layout[_uv_barrier](128, 8, [])
+type pid = opaque[4, 4]
+type once = opaque[16, 8]
+type thread = opaque[8, 8]
+type mutex = opaque[64, 8]
+type rwlock = opaque[200, 8]
+type sem = opaque[4, 4]
+type cond = opaque[48, 8]
+type key = opaque[8, 8]
+type _uv_barrier = opaque[128, 8]
 type barrier = {
   b: *mut _uv_barrier,
 }
 #static assert-layout[barrier](8, 8, [0, ])
-type alias gid = opaque[4, 4]
-#static assert-layout[gid](4, 4, [])
-type alias uid = opaque[4, 4]
-#static assert-layout[uid](4, 4, [])
+type gid = opaque[4, 4]
+type uid = opaque[4, 4]
 type lib = {
   handle: ptr,
   errmsg: *mut u8,
@@ -177,62 +166,34 @@ type req_type = either(u32) {
   UV_REQ_TYPE_MAX = 11,
 }
 #static assert-layout[req_type](4, 4, [])
-type alias uv-loop = opaque[1072, 8]
-#static assert-layout[uv-loop](1072, 8, [])
-type alias handle = opaque[96, 8]
-#static assert-layout[handle](96, 8, [])
-type alias dir = opaque[56, 8]
-#static assert-layout[dir](56, 8, [])
-type alias stream = opaque[264, 8]
-#static assert-layout[stream](264, 8, [])
-type alias tcp = opaque[264, 8]
-#static assert-layout[tcp](264, 8, [])
-type alias udp = opaque[224, 8]
-#static assert-layout[udp](224, 8, [])
-type alias pipe = opaque[280, 8]
-#static assert-layout[pipe](280, 8, [])
-type alias tty = opaque[344, 8]
-#static assert-layout[tty](344, 8, [])
-type alias poll = opaque[168, 8]
-#static assert-layout[poll](168, 8, [])
-type alias timer = opaque[152, 8]
-#static assert-layout[timer](152, 8, [])
-type alias prepare = opaque[120, 8]
-#static assert-layout[prepare](120, 8, [])
-type alias check = opaque[120, 8]
-#static assert-layout[check](120, 8, [])
-type alias idle = opaque[120, 8]
-#static assert-layout[idle](120, 8, [])
-type alias async = opaque[128, 8]
-#static assert-layout[async](128, 8, [])
-type alias process = opaque[136, 8]
-#static assert-layout[process](136, 8, [])
-type alias fs_event = opaque[304, 8]
-#static assert-layout[fs_event](304, 8, [])
-type alias fs_poll = opaque[104, 8]
-#static assert-layout[fs_poll](104, 8, [])
-type alias signal = opaque[152, 8]
-#static assert-layout[signal](152, 8, [])
-type alias req = opaque[64, 8]
-#static assert-layout[req](64, 8, [])
-type alias getaddrinfo = opaque[160, 8]
-#static assert-layout[getaddrinfo](160, 8, [])
-type alias getnameinfo = opaque[1320, 8]
-#static assert-layout[getnameinfo](1320, 8, [])
-type alias shutdown = opaque[80, 8]
-#static assert-layout[shutdown](80, 8, [])
-type alias write = opaque[192, 8]
-#static assert-layout[write](192, 8, [])
-type alias connect = opaque[96, 8]
-#static assert-layout[connect](96, 8, [])
-type alias udp_send = opaque[320, 8]
-#static assert-layout[udp_send](320, 8, [])
-type alias fs = opaque[440, 8]
-#static assert-layout[fs](440, 8, [])
-type alias work = opaque[128, 8]
-#static assert-layout[work](128, 8, [])
-type alias random = opaque[144, 8]
-#static assert-layout[random](144, 8, [])
+type uv-loop = opaque[1072, 8]
+type handle = opaque[96, 8]
+type dir = opaque[56, 8]
+type stream = opaque[264, 8]
+type tcp = opaque[264, 8]
+type udp = opaque[224, 8]
+type pipe = opaque[280, 8]
+type tty = opaque[344, 8]
+type poll = opaque[168, 8]
+type timer = opaque[152, 8]
+type prepare = opaque[120, 8]
+type check = opaque[120, 8]
+type idle = opaque[120, 8]
+type async = opaque[128, 8]
+type process = opaque[136, 8]
+type fs_event = opaque[304, 8]
+type fs_poll = opaque[104, 8]
+type signal = opaque[152, 8]
+type req = opaque[64, 8]
+type getaddrinfo = opaque[160, 8]
+type getnameinfo = opaque[1320, 8]
+type shutdown = opaque[80, 8]
+type write = opaque[192, 8]
+type connect = opaque[96, 8]
+type udp_send = opaque[320, 8]
+type fs = opaque[440, 8]
+type work = opaque[128, 8]
+type random = opaque[144, 8]
 type alias env_item = env_item_s
 #static assert-layout[env_item](16, 8, [])
 type alias cpu_info = cpu_info_s
@@ -2341,10 +2302,8 @@ fn thread_getname(
   name: *mut u8,
   size: usize,
 ): i32
-type alias any_handle = opaque[344, 8]
-#static assert-layout[any_handle](344, 8, [])
-type alias any_req = opaque[1320, 8]
-#static assert-layout[any_req](1320, 8, [])
+type any_handle = opaque[344, 8]
+type any_req = opaque[1320, 8]
 extern("uv", "uv_loop_get_data")
 fn loop_get_data(
   p0: *mut uv-loop,

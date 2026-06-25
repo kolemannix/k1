@@ -557,6 +557,14 @@ impl Token {
     pub fn is_whitespace_preceded(&self) -> bool {
         self.flags & TOKEN_FLAG_IS_WHITESPACE_PRECEDED == TOKEN_FLAG_IS_WHITESPACE_PRECEDED
     }
+
+    pub fn is_kind_nonspaced(&self, kind: TokenKind) -> bool {
+        self.kind == kind && !self.is_whitespace_preceded()
+    }
+
+    pub fn is_kind_spaced(&self, kind: TokenKind) -> bool {
+        self.kind == kind && self.is_whitespace_preceded()
+    }
 }
 
 macro_rules! errf {
