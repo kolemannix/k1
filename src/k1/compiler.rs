@@ -200,7 +200,7 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub optimize: bool,
 
-    /// Write out a text represntation of the typed program
+    /// Write out a text representation of the typed program
     #[arg(long, default_value_t = false)]
     pub dump_module: bool,
 
@@ -214,6 +214,10 @@ pub struct Args {
 
     #[arg(long)]
     pub profile: bool,
+
+    /// quiet mode, no timing summary
+    #[arg(short, long, default_value_t = false)]
+    pub quiet: bool,
 
     /// Target platform
     #[arg(long)]
@@ -377,21 +381,27 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
     let mut k1 = TypedProgram::new(module_name.clone(), config);
 
     if let Err(e) = k1.add_module(&corelib_dir, false) {
-        write_program_dump(&k1);
+        if args.dump_module {
+            write_program_dump(&k1);
+        }
         eprintln!("{}", e);
         return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };
 
     if use_std {
         if let Err(e) = k1.add_module(&stdlib_dir, false) {
-            write_program_dump(&k1);
+            if args.dump_module {
+                write_program_dump(&k1);
+            }
             eprintln!("{}", e);
             return Err(CompileProgramError::TyperFailure(Box::new(k1)));
         }
     }
 
     if let Err(e) = k1.add_module(&src_path, true) {
-        write_program_dump(&k1);
+        if args.dump_module {
+            write_program_dump(&k1);
+        }
         eprintln!("{}", e);
         return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };
@@ -401,12 +411,14 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
     if warning_count > 0 {
         eprintln!("Completed with {} warnings", warning_count);
     }
-    k1.print_timing_info(
-        &src_path.to_string_lossy(),
-        total_elapsed_ns as u64,
-        &mut std::io::stderr(),
-    )
-    .unwrap();
+    if !args.quiet {
+        k1.print_timing_info(
+            &src_path.to_string_lossy(),
+            total_elapsed_ns as u64,
+            &mut std::io::stderr(),
+        )
+        .unwrap();
+    }
 
     #[cfg(feature = "profile")]
     if let Some(profiler_guard) = profiler_guard {
