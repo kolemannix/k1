@@ -8,11 +8,11 @@ cargo test --lib
 cargo build --features=llvm-sys/prefer-dynamic --bin k1_test --bin k1
 
 
-export MallocScribble=1
+# export MallocScribble=1
 make -C k1lib/core/libs clean build
 make -C test_src/ffi_abi_test/libs clean build
 target/debug/k1_test $1
-unset MallocScribble
+# unset MallocScribble
 
 export RUST_LOG=info
 target/debug/k1 --emit-llvm build dogfood/refchess
