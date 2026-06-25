@@ -5613,43 +5613,73 @@ impl TypedProgram {
             (Type::InferenceHole(_hole), _any) => Ok(()),
             (Type::Struct(s1), Type::Struct(s2)) => {
                 let expected_defn_info = self.types.get_defn_info(expected);
-                if expected_defn_info.is_some() {
-                    Err(k1_format_user!(
-                        self,
-                        "Expected {} but got {}",
-                        self.type_id_to_string_ext(expected, true),
-                        self.type_id_to_string_ext(actual, true)
-                    ))
-                } else {
-                    if s1.fields.len() != s2.fields.len() {
-                        return Err(k1_format_user!(
-                            self,
-                            "expected struct {} but got struct {}",
-                            expected,
-                            actual
-                        ));
-                    }
-                    for (f1, f2) in
-                        self.types.mem.getn(s1.fields).iter().zip(self.types.mem.getn(s2.fields))
-                    {
-                        if f1.name != f2.name {
+                let actual_defn_info = self.types.get_defn_info(actual);
+
+                // If I expected certain nominal struct
+                // I won't accept an anonymous struct
+                // Nor a nominal struct of a different kind
+                // But I will accept
+                // But if I expect an anonymous struct, the a named or anonymous one will do
+                // if it matches structurally
+                // nocommit: Same treatment for sums, I suspect
+                if let Some(expected_defn_info) = expected_defn_info {
+                    match actual_defn_info {
+                        None => {
+                            debug!("expected_defn_info some actual none");
                             return Err(k1_format_user!(
                                 self,
-                                "field names differ {}, {}",
-                                f1.name,
-                                f2.name
+                                "Expected named struct {} but got anonymous struct {}",
+                                expected,
+                                actual
                             ));
                         }
-                        if let Err(msg) = self.check_types(f1.type_id, f2.type_id, scope_id) {
-                            return Err(k1_format_user!(
-                                self,
-                                "Struct field {} type mismatch: {msg}",
-                                f1.name
-                            ));
-                        };
+                        Some(actual_defn_info) => {
+                            debug!("expected_defn_info some actual some");
+                            if expected_defn_info.name == actual_defn_info.name
+                                && expected_defn_info.scope == actual_defn_info.scope
+                            {
+                                // Same nominal struct, we're good
+                            } else {
+                                return Err(k1_format_user!(
+                                    self,
+                                    "Expected named struct {} but got named struct {}",
+                                    expected,
+                                    actual
+                                ));
+                            }
+                        }
                     }
-                    Ok(())
                 }
+
+                // Proceed to structural typecheck
+                if s1.fields.len() != s2.fields.len() {
+                    return Err(k1_format_user!(
+                        self,
+                        "expected struct {} but got struct {}",
+                        expected,
+                        actual
+                    ));
+                }
+                for (f1, f2) in
+                    self.types.mem.getn(s1.fields).iter().zip(self.types.mem.getn(s2.fields))
+                {
+                    if f1.name != f2.name {
+                        return Err(k1_format_user!(
+                            self,
+                            "field names differ {}, {}",
+                            f1.name,
+                            f2.name
+                        ));
+                    }
+                    if let Err(msg) = self.check_types(f1.type_id, f2.type_id, scope_id) {
+                        return Err(k1_format_user!(
+                            self,
+                            "Struct field {} type mismatch: {msg}",
+                            f1.name
+                        ));
+                    };
+                }
+                Ok(())
             }
             (Type::Reference(exp_ref), Type::Reference(act_ref)) => {
                 match self.check_types(exp_ref.inner_type, act_ref.inner_type, scope_id) {
@@ -11879,30 +11909,6 @@ impl TypedProgram {
             return self.handle_array_method_call(base_expr, base_for_method, call, ctx);
         }
 
-        // nocommit don't want to part with it yet
-        // if let Type::Struct(struct_type) = self.types.get(base_for_method) {
-        //     if let Some((field_index, field)) = struct_type.find_field(&self.types.mem, fn_name) {
-        //         if let Type::FunctionPointer(_fp) = self.types.get(field.type_id) {
-        //             let base_is_a_reference =
-        //                 self.types.get(base_expr_type).as_reference().is_some();
-        //             let access_kind = if base_is_a_reference {
-        //                 FieldAccessKind::Dereference
-        //             } else {
-        //                 FieldAccessKind::ValueToValue
-        //             };
-        //             let field_access_expr = self.synth_struct_field_access(
-        //                 base_expr,
-        //                 field_index,
-        //                 access_kind,
-        //                 call_span,
-        //             )?;
-        //             return Ok(CallResolution::Call(Callee::DynamicFunction {
-        //                 function_pointer_expr: field_access_expr,
-        //             }));
-        //         }
-        //     }
-        // }
-
         if let Some(companion_ns) =
             self.types.get_defn_info(base_for_method).and_then(|d| d.companion_namespace)
         {
@@ -12376,12 +12382,11 @@ impl TypedProgram {
                 kerr!(
                     self,
                     call_span,
-                    "Call to {}/{} with self := {} does not work\n{}\n[debug function type: {}]",
+                    "Call to {}/{} with self := {} does not work\n{}",
                     &self.ability_impl_signature_to_string(base_ability_id, MSlice::empty()),
                     fn_call.name.name,
                     solved_self,
                     msg,
-                    function_type_id,
                 )
             })?;
 

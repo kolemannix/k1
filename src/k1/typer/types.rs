@@ -126,7 +126,6 @@ impl std::hash::Hash for TypeDefnInfo {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
         self.scope.hash(state);
-        self.ast_id.hash(state);
     }
 }
 
@@ -390,6 +389,7 @@ impl FloatType {
 #[derive(Clone, Copy)]
 pub struct FnParamType {
     pub type_id: TypeId,
+    pub name: Ident,
     pub is_context: bool,
     pub is_lambda_env: bool,
 }
@@ -682,19 +682,16 @@ impl TypePool {
                 opaque.align.hash(state);
             }
             // Inherently unique as well
-            Type::Generic(generic) => {
+            Type::Generic(_generic) => {
                 defn.hash(state);
-                // nocommit try just using the defn
-                // generic.inner.hash(state);
-                // generic.params.raw_offset().hash(state);
-                // generic.params.len().hash(state);
             }
             Type::Function(fun) => {
                 fun.return_type.hash(state);
                 for param in self.mem.getn(fun.physical_params) {
+                    param.type_id.hash(state);
+                    param.name.hash(state);
                     param.is_context.hash(state);
                     param.is_lambda_env.hash(state);
-                    param.type_id.hash(state);
                 }
             }
             Type::FunctionPointer(fp) => fp.function_type_id.hash(state),
