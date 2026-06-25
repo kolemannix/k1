@@ -1,0 +1,773 @@
+# K1 Syntax And Basics
+
+This guide is a practical map for reading and writing K1 in this repo. It is
+based on examples from `test_src`, which is currently the best executable
+language reference.
+
+K1 is still moving. Prefer the patterns in newer tests when examples conflict.
+Use kebab-case for new K1 names: namespaces, functions, types, fields,
+variables, abilities, and methods.
+
+## File Shape
+
+A typical test file starts with a namespace, then declarations, then a `test`
+function:
+
+```rust
+ns example-test;
+
+type point = { x: int, y: int }
+
+fn origin(): point {
+  { x: 0, y: 0 }
+}
+
+fn test() {
+  let p = origin();
+  assert-equals(p.x, 0);
+}
+```
+
+Namespaces may use semicolon form:
+
+```rust
+ns format-test;
+```
+
+or block form:
+
+```rust
+ns lambdas {
+  fn test() {}
+}
+```
+
+Call across namespaces with `/`:
+
+```rust
+format-test/test();
+core/types/type-id[int]
+```
+
+See `test_src/suite1/main.k1`, `test_src/suite1/format.k1`, and
+`test_src/suite1/lambdas.k1`.
+
+## Naming
+
+For new K1 code, use kebab-case for everything:
+
+```rust
+ns allocator-test;
+
+type http-request = { status-code: int }
+
+fn parse-request(): http-request {
+  { status-code: 200 }
+}
+```
+
+Older tests still contain camelCase names such as `testBasics` and `PointMaybeY`.
+Treat those as legacy during the transition. New names should be kebab-case even
+for fields and type names.
+
+Prefer short, concrete names in tests. A file named `range_test.k1` may still use
+`ns range-test;` in new code.
+
+## Functions
+
+Functions use `fn`, typed parameters, and an optional return type after `:`.
+The final expression is the return value when there is no explicit `return`.
+
+```rust
+fn add-one(x: int): int {
+  x + 1
+}
+
+fn log-message(message: string) {
+  println(message);
+}
+```
+
+Use `return(value)` for early returns:
+
+```rust
+fn choose(flag: bool): int {
+  if flag {
+    return(1)
+  };
+  0
+}
+```
+
+Generic parameters go in square brackets:
+
+```rust
+fn unwrap-box[T](b: box[box[T]]): T {
+  b.value.value
+}
+```
+
+Use `_` at call sites when a type argument should be inferred:
+
+```rust
+takes-poly-au-pair[int, _](value);
+```
+
+See `test_src/suite1/control_flow.k1` and
+`test_src/suite1/generic_struct.k1`.
+
+## Blocks, Statements, And Values
+
+Blocks are expressions. The last expression is the block value:
+
+```rust
+let answer = {
+  let base = 40;
+  base + 2
+};
+```
+
+Semicolons separate statements and are required; the parser does not use
+newlines to separate expressions. A block with no meaningful value yields `{}`,
+the empty/unit value:
+
+```rust
+let result: {} = if true {
+  println("done");
+};
+assert(result == {});
+```
+
+K1 code commonly ends test helpers with `{}` when the intent is "return unit".
+
+## Variables And Mutation
+
+Use `let` for local bindings:
+
+```rust
+let count = 0;
+count := count + 1;
+```
+
+Use `:=` to reassign a local variable.
+
+Use `let*` when you need a stack reference:
+
+```rust
+let* counter = 0;
+counter <- counter.* + 1;
+assert-equals(counter.*, 1);
+```
+
+`let*` is deprecated, but it still appears in tests and existing code. Use `.*`
+to read through a reference, and `<-` to write through it. Field access often
+auto-dereferences when the target type makes that clear:
+
+```rust
+let* item = { value: 41 };
+item.value <- 42;
+assert-equals(item.value, 42);
+```
+
+See `test_src/suite1/assign.k1`, `test_src/suite1/pointer.k1`,
+`test_src/suite1/lambdas.k1`, and `test_src/suite1/struct.k1`.
+
+## Core Types
+
+Common scalar types include:
+
+```rust
+bool
+char
+string
+int
+i8
+i32
+i64
+u8
+u32
+u64
+size
+f32
+f64
+```
+
+Integer literals can be annotated inline:
+
+```rust
+let byte = 10: u8;
+let signed = -3i8;
+```
+
+Type assertions and casts use `:` and `.as[...]`:
+
+```rust
+let three = 3: i32;
+let raw = ptr-value.as[size];
+```
+
+## Structs
+
+`type name = ...` creates a nominal type with a unique identity. Currently,
+nominal types can be created for structs, enums, and opaque types:
+
+```rust
+type point = { x: int, y: int }
+
+let p: point = { x: 1, y: 2 };
+assert-equals(p.x, 1);
+```
+
+`type alias name = ...` creates a plain alias for the type on the right-hand
+side. This is how to name an existing scalar or structural type without creating
+a new nominal identity:
+
+```rust
+type alias byte-count = u32
+type alias point-like = { x: int, y: int }
+```
+
+Anonymous struct types are common:
+
+```rust
+fn area(rect: { width: int, height: int }): int {
+  rect.width * rect.height
+}
+```
+
+Field shorthand is supported when a local has the same name:
+
+```rust
+let width = 50;
+let rect = { width, height: 20 };
+```
+
+Use `.with(...)` to copy a struct with selected fields changed:
+
+```rust
+let next = current.with({ count: current.count + 1 });
+```
+
+Attach methods to a type with `ns for`:
+
+```rust
+type counter = { value: int }
+
+ns for counter {
+  fn inc(self: *mut counter) {
+    self.value <- self.value + 1;
+  }
+}
+```
+
+See `test_src/suite1/struct.k1` and
+`test_src/suite1/struct_composition.k1`.
+
+## Field Access
+
+Struct field access has three typed forms in the compiler. The Rust enum is
+`FieldAccessKind` in `src/k1/typer.rs`:
+
+```rust
+ValueToValue
+Dereference
+ReferenceThrough
+```
+
+The source syntax is intentionally small:
+
+```rust
+let p = { x: 1, y: 2 };
+let x: int = p.x;
+
+let* p-ref = { x: 1, y: 2 };
+let x-value: int = p-ref.x;
+let x-ref: *mut int = p-ref.x*;
+```
+
+The three cases are:
+
+- `ValueToValue`: `a.foo` when `a` is a struct value. The result is the value of
+  `foo`.
+- `Dereference`: `a.foo` when `a` is a reference to a struct. The result is
+  still the value of `foo`; K1 dereferences the base and loads/copies the field
+  value.
+- `ReferenceThrough`: `a.foo*` when `a` is a reference to a struct. The result is
+  a reference to the `foo` field itself.
+
+In short, `a.foo` means "give me the field value whether `a` is a value or a
+reference." `a.foo*` means "`a` is a reference, and I want a reference through it
+to the field."
+
+Use reference-through access when mutating a field through a struct reference:
+
+```rust
+let* p = { x: 1 };
+p.x* <- 2;
+assert-equals(p.x, 2);
+```
+
+The same trailing `*` idea applies to aggregate-like access elsewhere. Arrays
+have analogous value/reference element access through methods such as `.get(...)`
+and `.get-ref(...)`. Sum patterns also use trailing `*` to bind references to
+payload data; see the next section.
+
+See `test_src/suite1/assign.k1`, `test_src/suite1/struct.k1`, and
+`src/k1/typer.rs`.
+
+## Enums And Sums
+
+K1 uses `either` for payload-less enum-like types and payload-carrying sum
+types.
+
+Payload-less enums expose their scalar value through `.value` and through the
+`enum-value` ability method:
+
+```rust
+type color = either(u8) { red, green, blue }
+
+let c: color = :red;
+assert(c is :red);
+assert-equals(color:green.value, 1);
+assert-equals(c.enum-value(), 0);
+```
+
+Enum tags may be explicit:
+
+```rust
+type status = either { ok = 10, missing = 20 }
+assert-equals(status:missing.value, 20);
+```
+
+Payload-carrying sums expose their active tag through `.tag`, and generated
+variant helpers such as `.as-ok()` return an optional payload:
+
+```rust
+type parse-result[T] = either { ok(T), err(string) }
+
+let result: parse-result[int] = :ok(42);
+assert-equals(result.tag, 0);
+
+if result is :ok(value) {
+  assert-equals(value, 42);
+} else {
+  crash("expected ok");
+}
+
+assert-equals(result.as-ok().!, 42);
+```
+
+When the sum itself is a reference, payload access follows the same value versus
+reference-through rule as struct fields. Ask for the value when you want the
+payload value; use trailing `*` when you want a reference to the variant's data:
+
+```rust
+let* result-ref: *mut parse-result[int] = :ok(42);
+
+if result-ref is :ok(ok-ref)* {
+  ok-ref <- 100;
+} else {
+  crash("expected ok");
+}
+
+assert-equals(result-ref.as-ok().!, 100);
+```
+
+The compiler represents sum payload access with the same `FieldAccessKind` enum
+used for struct fields. Internally this is "get the sum data"; with
+reference-through access, the result is a reference to that data.
+
+This works in `if`, `while`, `require`, and `switch` patterns:
+
+```rust
+switch result-ref {
+  :ok(value-ref)* -> { value-ref <- value-ref.* + 1 },
+  :err(message-ref)* -> { crash(message-ref.*) }
+}
+```
+
+Use `switch` for exhaustive branching:
+
+```rust
+fn show-result(result: parse-result[int]): string {
+  switch result {
+    :ok(value) -> { "ok {value}" },
+    :err(message) -> { "err {message}" }
+  }
+}
+```
+
+Generated helpers such as `.as-ok()`, `.is-some()`, `.enum-name()`,
+`.sum-name()`, `.enum-value()`, and `.tag` show up throughout the tests.
+
+See `test_src/suite1/enum_basic.k1`, `test_src/suite1/sum_basic.k1`,
+`test_src/suite1/match_references.k1`, and `test_src/suite1/matching_if.k1`.
+
+## Option And Result
+
+Optional values use `?T`, with `:some(value)` and `:none`:
+
+```rust
+let maybe-name: ?string = :some("k1");
+
+if maybe-name is :some(name) {
+  assert-equals(name, "k1");
+}
+```
+
+Examples may use either direct variants such as `:some(value)` or helper
+constructors such as `some(value)`. Use whichever is clearer in the surrounding
+code.
+
+The postfix `.!` unwraps an optional-like value when the code expects it to be
+present. It is good style when the invariant is clear:
+
+```rust
+assert-equals(maybe-name.!, "k1");
+```
+
+This syntax is user-accessible through abilities rather than hardcoded as a
+one-off builtin. That is true of most special-looking K1 syntax: prefer looking
+for the relevant ability before assuming a parser or compiler intrinsic.
+
+The `?` operator provides a fallback for optionals:
+
+```rust
+let value = maybe-int ? 42;
+```
+
+Results are sums with `:ok` and `:err`. The `.try` form propagates errors
+through the active `try` ability:
+
+```rust
+fn run(): result[int, string] {
+  let value = can-fail().try;
+  :ok(value + 1)
+}
+```
+
+See `test_src/suite1/optionals.k1` and `test_src/suite1/try_test.k1`.
+
+## Conditionals And Pattern Matching
+
+`if` is an expression:
+
+```rust
+let n = if flag 1 else 2;
+```
+
+Use `is` for pattern checks and bindings:
+
+```rust
+if value is :some(x) and x > 0 {
+  assert(x > 0);
+} else {
+  assert(false);
+}
+```
+
+Struct patterns work in `if`, `require`, and `switch`:
+
+```rust
+switch point {
+  { x: 0, y } -> y,
+  { x, y } if x == y -> x,
+  _ -> 0
+}
+```
+
+Matching `if` chains bind names only when `is` expressions live at the top level
+of an `and` chain. An `or` breaks that property.
+
+`require` checks a condition and runs an error block otherwise:
+
+```rust
+require value is :some(x) else {
+  crash("missing value")
+};
+assert(x > 0);
+```
+
+See `test_src/suite1/matching_if.k1`, `test_src/suite1/match_fails.k1`,
+`test_src/suite1/match_references.k1`, and
+`test_src/suite1/require_test.k1`.
+
+## Loops
+
+`while` loops are statement-like and usually yield `{}`:
+
+```rust
+while i < 10 {
+  i := i + 1;
+};
+```
+
+`loop` can yield a value through `break(value)`:
+
+```rust
+let found: int = loop {
+  break(42)
+};
+```
+
+`for` loops iterate over iterable values. The loop body can use `it` and
+`itIndex`:
+
+```rust
+for values {
+  println("{itIndex}: {it}");
+}
+```
+
+`defer` runs when leaving the current scope, including early returns:
+
+```rust
+defer cleanup();
+```
+
+See `test_src/suite1/while.k1`, `test_src/suite1/control_flow.k1`,
+`test_src/suite1/for_yield.k1`, and `test_src/suite1/defer_test.k1`.
+
+## Arrays, Buffers, Lists, And Spans
+
+Array, buffer, list, and span types are written with square brackets:
+
+```rust
+let fixed: array[bool, 3] = [false, true, true];
+let dynamic: list[bool] = [false, true, true];
+let view: span[bool] = dynamic.as-span();
+```
+
+Arrays have a compile-time length in their type. Buffers, lists, and spans are
+used heavily in the core library and dogfood programs.
+
+Common helpers include `.len()`, `.get(index)`, `.set(index, value)`,
+`.as-span()`, `buffer/wrapArray(...)`, and `list/filledIn(...)`. Some of these
+names are still legacy camelCase and will be renamed eventually; prefer
+kebab-case for new APIs.
+
+See `test_src/suite1/array_test.k1`, `test_src/suite1/list_test.k1`,
+`test_src/suite1/range_test.k1`, and `test_src/suite1/buffer_test.k1`.
+
+## Lambdas And Function Values
+
+Lambda forms include typed parameters:
+
+```rust
+let add-one = fn(x: int) x + 1;
+```
+
+inferred parameters:
+
+```rust
+let add-one = fn x. x + 1;
+```
+
+and nullary thunks:
+
+```rust
+let thunk = fn. { println("later") };
+```
+
+Function parameters can accept static function values, closure-like values, or
+dynamic function objects depending on the type. Prefer `some fn ...` for
+beginner-facing examples and ordinary function parameters; reach for
+`dyn[fn ...]` when you specifically need a dynamic function object:
+
+```rust
+fn apply(i: int, f: some fn int -> int): int {
+  f(i)
+}
+
+fn run-later(thunk: dyn[fn() -> {}]) {
+  thunk()
+}
+```
+
+The pipe operator `||` passes a value through functions:
+
+```rust
+let result = [1,2,3]
+  || map(fn x. x + 1)
+  || filter(fn x. x % 2 == 0);
+```
+
+See `test_src/suite1/lambdas.k1` and `test_src/suite1/pipe.k1`.
+
+## Abilities And Impls
+
+Abilities define behavior that types can implement:
+
+```rust
+ability printable-id {
+  fn printable-id(self): string
+}
+
+type user = { id: int }
+
+impl printable-id for user {
+  fn printable-id(self): string {
+    stringf("user-{id}", self)
+  }
+}
+```
+
+Ability bounds go on type parameters:
+
+```rust
+fn show[T: print](value: T): string {
+  stringf("{}", value)
+}
+```
+
+Qualified ability calls use `/`:
+
+```rust
+print/print-to(value, writer);
+```
+
+When multiple impls could apply, tests also use explicit ability/type selection:
+
+```rust
+some-ability@(some-type)/function-name();
+```
+
+See `test_src/suite1/ability.k1`,
+`test_src/suite1/ability_constraint.k1`,
+`test_src/suite1/ability_generic.k1`, and
+`test_src/suite1/ability_complex.k1`.
+
+## Imports
+
+Use `use` to bring functions, constants, types, or namespaces into scope:
+
+```rust
+use core/types/type-id
+use core/libc/files/SEEK_END as seek-end
+
+fn test() {
+  use core/string as str;
+  let hello: str = "hello";
+}
+```
+
+Prefer local `use` statements when the alias is only needed in one function.
+
+See `test_src/suite1/use_test.k1`.
+
+## Compile-Time Execution
+
+`#static` evaluates an expression at compile time:
+
+```rust
+let answer: 42 = #static {
+  40 + 2
+};
+```
+
+Static values can carry literal types:
+
+```rust
+let greeting: "hello" = #static "hello";
+```
+
+`#if` conditionally includes code at compile time:
+
+```rust
+#if false {
+  crash("not compiled")
+}
+```
+
+See `test_src/suite1/static_run.k1`,
+`test_src/suite1/static_parameter.k1`, and
+`test_src/suite1/test_comptime.k1`.
+
+## Formatting And Strings
+
+String interpolation is supported inside string literals and formatting helpers:
+
+```rust
+let name = "k1";
+assert-equals("hello {name}", "hello k1");
+```
+
+Use `writef` to write formatted text to any value that implements the `writer`
+ability. The first argument is the writer, the second is the format string, and
+the optional third argument supplies format values:
+
+```rust
+let* w = StringBuilder/new();
+writef(w, "hello {}", 42);
+writef(w, " {name}", { name: "k1" });
+```
+
+Use `writelnf` the same way when you want a trailing newline:
+
+```rust
+writelnf(w, "status: {}", 200);
+```
+
+Use `stringf` to build and return a formatted string. It takes the format string
+first and an optional values argument second:
+
+```rust
+let s = stringf("hello {name}");
+let dated = stringf("{yyyy}-{mm}-{dd}", { yyyy: 2026, mm: 6, dd: 25 });
+```
+
+Bare `{}` placeholders consume the value argument directly. Named placeholders
+such as `{name}` read fields from the values struct. Interpolated expressions can
+also refer to locals in scope:
+
+```rust
+let place = "Budapest";
+assert-equals(stringf("hello {place}"), "hello Budapest");
+```
+
+`writef`, `writelnf`, and `stringf` are special syntax hooks checked by the
+typer, but they still rely on normal K1 abilities for the actual output. In
+particular, `writef` and `writelnf` require a `writer`.
+
+Raw strings use backticks:
+
+```rust
+let raw = `Hello,
+
+  "world"`;
+```
+
+See `test_src/suite1/format.k1` and
+`test_src/suite1/string_interp.k1`.
+
+## Tests
+
+Language regression tests live under `test_src`.
+
+Use this shape for a new positive test:
+
+```rust
+ns feature-test;
+
+fn test() {
+  assert-equals(1 + 1, 2);
+}
+```
+
+Then add it to `test_src/suite1/main.k1` if it belongs in suite1.
+
+Use `testCompile(...)` when a snippet should fail to compile:
+
+```rust
+assert(testCompile(bad-expression()).is-some());
+```
+
+Use `assert`, `assert-equals`, and `core/assertNotEquals` for expectations.
+
+## Open Questions For Idiom
+
+These are places where tests show behavior, but the preferred style or long-term
+design should be confirmed:
+
+- Should `#static` be introduced early as a core language feature, or kept in an
+  advanced guide?

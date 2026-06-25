@@ -7,12 +7,15 @@ bundle-name := if os == "linux" {
   error("Unsupported OS: " + os)
 }
 
+# Run the current scratch file; use for writing reproducers or not-yet-working code, then move it to test_src/ when done or fixed
 a:
   ./run.sh sandbox
 
+# fastest path to checking compiler correctness; suite1 covers most features
 ts1:
   ./run.sh test_src/suite1
 
+# exhaustive path; notably runs larger projects in dogfood
 test:
   ./test.sh
 

@@ -53,6 +53,7 @@ you" vibe that Rust gives off, and it is offputting in a way that standard typec
 ## Status
 Long todo list still!
 [Check it out](TODO.md) for a glimpse into the development flow, or the [test_src/](test_src/) dir to see what the language can currently do!
+For a compact language reference based on the executable tests, see [K1 Syntax And Basics](docs/k1-syntax-basics.md).
 
 Still exploring and heavily experimenting, but I really like using this language these days. 
 
