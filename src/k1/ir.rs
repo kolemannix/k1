@@ -8,7 +8,7 @@
 /// in having our own. It'll be easier to write an interpreter for
 /// and will help make adding other backends far, far easier
 use crate::kmem::{DlNode, Dlist, Handle, List, NodeHandle};
-use crate::parse::{self, StringId, NumericWidth};
+use crate::parse::{self, NumericWidth, StringId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
 use crate::{failf, static_assert_size};
@@ -192,7 +192,7 @@ impl InstId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackendBuiltin {
-    // In LLVM backend, this is becomes a runtime switch
+    // In LLVM backend, this becomes a runtime switch
     // In the VM, just a lookup. So we leave it as a builtin
     // rather than generate ir for it due to that difference
     TypeSchema,
