@@ -7,10 +7,14 @@ use fxhash::FxHashMap;
 use libffi::{low::CodePtr, raw};
 use log::debug;
 
-use crate::bc::{self, BcCallee, BcInstKind, BcUnit, BcValue};
-use crate::ir::{self, IrUnitId};
+use crate::bc::{
+    self, BcFunction, BcFunctionId, BcInstKind, BcReturn, BcReturnMode, BcValue, FrameOffset,
+    ProgramBc,
+};
+use crate::ir::{self, IrUnitId, PhysicalFunctionType};
 use crate::kmem;
 use crate::lex::SpanId;
+use crate::parse::StringId;
 use crate::typer::types::{Layout, PhysicalType, ScalarType, TypeId};
 use crate::typer::{
     ErrorKind, FunctionId, K1Message, K1Result, MessageLevel, StaticValueId, TypedExprId,
@@ -60,45 +64,18 @@ macro_rules! casted_float_op {
     };
 }
 
-macro_rules! bin_int {
-    ($k1:expr, $vm:expr, $frame_index:expr, $dst:expr, $lhs:expr, $rhs:expr, $width:expr, $op:ident) => {{
-        let lhs = resolve_value($k1, $vm, $frame_index, $lhs)?.bits();
-        let rhs = resolve_value($k1, $vm, $frame_index, $rhs)?.bits();
-        $vm.stack.set_local_value($frame_index, $dst, Value(casted_uop!($width, $op, lhs, rhs)));
-        $vm.stack.frames[$frame_index as usize].pc += 1;
-    }};
-}
-
-macro_rules! bin_int_op {
-    ($k1:expr, $vm:expr, $frame_index:expr, $dst:expr, $lhs:expr, $rhs:expr, $width:expr, $trait:ident, $op:ident) => {{
-        let lhs = resolve_value($k1, $vm, $frame_index, $lhs)?.bits();
-        let rhs = resolve_value($k1, $vm, $frame_index, $rhs)?.bits();
-        use std::ops::$trait;
-        $vm.stack.set_local_value($frame_index, $dst, Value(casted_uop!($width, $op, lhs, rhs)));
-        $vm.stack.frames[$frame_index as usize].pc += 1;
-    }};
-}
-
-macro_rules! bin_float {
-    ($k1:expr, $vm:expr, $frame_index:expr, $dst:expr, $lhs:expr, $rhs:expr, $width:expr, $trait:ident, $op:ident) => {{
-        let lhs = resolve_value($k1, $vm, $frame_index, $lhs)?.bits();
-        let rhs = resolve_value($k1, $vm, $frame_index, $rhs)?.bits();
-        use std::ops::$trait;
-        $vm.stack.set_local_value(
-            $frame_index,
-            $dst,
-            Value(casted_float_op!($width, $op, lhs, rhs)),
-        );
-        $vm.stack.frames[$frame_index as usize].pc += 1;
-    }};
-}
-
 #[derive(Clone)]
 struct CompilerMessage {
     level: MessageLevel,
-    message: crate::parse::StringId,
+    message: StringId,
     filename: String,
     line: u32,
+}
+
+#[derive(Clone, Copy)]
+struct DebugFrame {
+    unit_id: IrUnitId,
+    call_span: Option<SpanId>,
 }
 
 pub struct Vm2 {
@@ -107,7 +84,7 @@ pub struct Vm2 {
     pub static_stack: vm::Stack,
     eval_span: SpanId,
     compiler_messages: Vec<CompilerMessage>,
-    overall_return_addr: *mut u8,
+    current_frame: *mut FrameHeader,
 }
 
 impl Vm2 {
@@ -118,7 +95,7 @@ impl Vm2 {
             static_stack: vm::Stack::make(),
             eval_span: SpanId::NONE,
             compiler_messages: Vec::with_capacity(16),
-            overall_return_addr: core::ptr::null_mut(),
+            current_frame: core::ptr::null_mut(),
         }
     }
 
@@ -139,7 +116,7 @@ impl Vm2 {
         self.static_stack.reset();
         self.globals.clear();
         self.compiler_messages.clear();
-        self.overall_return_addr = core::ptr::null_mut();
+        self.current_frame = core::ptr::null_mut();
         self.eval_span = SpanId::NONE;
 
         if let Some(mut arena) = arena_to_preserve {
@@ -157,8 +134,11 @@ pub fn execute_compiled_function(
     arguments: &[StaticValueId],
 ) -> K1Result<StaticValueId> {
     let span = k1.get_function_span(function_id);
-    let unit = bc::get_or_compile_function(k1, function_id)?;
-    execute_compiled_unit(k1, vm, unit, arguments, span)
+    k1.compile_all_pending_ir(span)?;
+    let reachable_functions = bc::close_ir_for_function_execution(k1, function_id)?;
+    let program = bc::compile_function_program(k1, function_id, &reachable_functions)?;
+    let entry = program.function_indexes[&function_id];
+    execute_program(k1, vm, program, entry, arguments, span)
 }
 
 pub fn execute_compiled_expr(
@@ -167,78 +147,106 @@ pub fn execute_compiled_expr(
     expr_id: TypedExprId,
 ) -> K1Result<StaticValueId> {
     let span = k1.exprs.get_span(expr_id);
-    let unit = bc::get_or_compile_expr(k1, expr_id)?;
-    execute_compiled_unit(k1, vm, unit, &[], span)
+    k1.compile_all_pending_ir(span)?;
+    let reachable_functions = bc::close_ir_for_expr_execution(k1, expr_id)?;
+    let program = bc::compile_expr_program(k1, expr_id, &reachable_functions)?;
+    let entry = program.expr_indexes[&expr_id];
+    execute_program(k1, vm, program, entry, &[], span)
 }
 
-fn execute_compiled_unit(
+fn execute_program(
     k1: &mut TypedProgram,
     vm: &mut Vm2,
-    unit: BcUnit,
+    mut program: ProgramBc,
+    entry: BcFunctionId,
     arguments: &[StaticValueId],
     span: SpanId,
 ) -> K1Result<StaticValueId> {
     let start = k1.timing.clock.raw();
     vm.eval_span = span;
+    debug_assert!(vm.current_frame.is_null());
 
-    debug_assert!(vm.stack.frames.is_empty());
-    let ret_layout = k1.types.get_pt_layout(unit.return_pt);
-    let ret_addr = vm.stack.push_layout_uninit(ret_layout);
-    vm.overall_return_addr = ret_addr;
-    vm.stack.push_frame(Some(span), unit.clone(), RetInfo2::top(unit.return_pt));
+    let entry_function = program.get_function(entry).clone();
+    let ret_addr = if entry_function.return_layout.size == 0 {
+        core::ptr::null_mut()
+    } else {
+        vm.stack.push_layout_uninit(entry_function.return_layout)
+    };
+    let top_return = BcReturn {
+        pt: entry_function.return_pt,
+        layout: entry_function.return_layout,
+        dst: None,
+        mode: return_mode(entry_function.return_pt),
+    };
+    let header = vm.stack.push_frame(
+        core::ptr::null_mut(),
+        entry,
+        0,
+        entry,
+        usize::MAX,
+        ret_addr,
+        top_return,
+        &entry_function,
+    );
+    vm.current_frame = header;
+    vm.stack.debug_frames.push(DebugFrame { unit_id: entry_function.unit_id, call_span: Some(span) });
 
     for (index, arg) in arguments.iter().enumerate() {
         let vm_value = vm::static_value_to_vm_value(k1, *arg, span);
-        vm.stack.set_param_value(0, index as u32, vm_value);
+        let param_offset = entry_function.param_offsets[index];
+        store_slot(header, param_offset, vm_value);
     }
 
-    let exit_code = exec_loop(k1, vm)?;
+    let exit_code = exec_loop(k1, vm, &mut program, entry, 0)?;
     let elapsed_nanos = k1.timing.elapsed_nanos(start);
     k1.timing.total_vm_nanos += elapsed_nanos as i64;
     report_execution_messages(k1, vm, span);
 
     if exit_code != 0 {
         failf!(span, "Static execution exited with code: {}", exit_code)
-    } else if unit.diverges || unit.return_pt.is_empty() {
-        vm.overall_return_addr = core::ptr::null_mut();
+    } else if entry_function.diverges || entry_function.return_pt.is_empty() {
         Ok(k1.static_values.empty_id())
     } else {
-        let loaded = vm::load_value(unit.return_pt, ret_addr);
-        let returned_value = vm::vm_value_to_static_value(k1, unit.result_type_id, loaded, span)?;
-        vm.overall_return_addr = core::ptr::null_mut();
-        Ok(returned_value)
+        let loaded = vm::load_value(entry_function.return_pt, ret_addr);
+        vm::vm_value_to_static_value(k1, entry_function.result_type_id, loaded, span)
     }
 }
 
-fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm2) -> K1Result<i32> {
+fn exec_loop(
+    k1: &mut TypedProgram,
+    vm: &mut Vm2,
+    program: &mut ProgramBc,
+    mut function_id: BcFunctionId,
+    mut pc: usize,
+) -> K1Result<i32> {
     let exit_code = 'exec: loop {
-        let frame_index = vm.stack.current_frame_index();
-        let pc = vm.stack.frames[frame_index as usize].pc;
-        let inst = vm.stack.frames[frame_index as usize].unit.instrs[pc].clone();
-        vm.eval_span = vm.stack.frames[frame_index as usize].unit.spans[pc];
+        let function = program.get_function(function_id);
+        let inst = function.instrs[pc].clone();
+        vm.eval_span = function.spans[pc];
         k1.timing.total_vm_instrs += 1;
 
         macro_rules! resolve {
             ($v:expr) => {
-                resolve_value(k1, vm, frame_index, $v)?
+                resolve_value(k1, vm, program, vm.current_frame, $v)?
             };
         }
         macro_rules! set {
-            ($slot:expr, $value:expr) => {
-                vm.stack.set_local_value(frame_index, $slot, $value)
+            ($offset:expr, $value:expr) => {
+                store_slot(vm.current_frame, $offset, $value)
             };
         }
         macro_rules! next {
             () => {{
-                vm.stack.frames[frame_index as usize].pc += 1;
+                pc += 1;
                 continue 'exec;
             }};
         }
         macro_rules! jump {
             ($offset:expr) => {{
-                let frame = &mut vm.stack.frames[frame_index as usize];
-                frame.prev_block = inst.block;
-                frame.pc = ((pc as isize) + ($offset as isize)) as usize;
+                unsafe {
+                    (*vm.current_frame).prev_block = inst.block;
+                }
+                pc = ((pc as isize) + ($offset as isize)) as usize;
                 continue 'exec;
             }};
         }
@@ -253,11 +261,6 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm2) -> K1Result<i32> {
                 set!(dst, value);
                 next!();
             }
-            BcInstKind::Alloca { dst, vm_layout } => {
-                let ptr = vm.stack.push_layout_uninit(vm_layout);
-                set!(dst, Value::ptr(ptr));
-                next!();
-            }
             BcInstKind::Store { dst, value, t } => {
                 let dst = resolve!(dst);
                 let value = resolve!(value);
@@ -266,239 +269,190 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm2) -> K1Result<i32> {
             }
             BcInstKind::Load { dst, t, src } => {
                 let src = resolve!(src);
-                let loaded = vm::load_scalar(t, src.as_ptr());
-                set!(dst, loaded);
+                set!(dst, vm::load_scalar(t, src.as_ptr()));
                 next!();
             }
-            BcInstKind::Copy { dst, src, vm_size } => {
+            BcInstKind::Copy { dst, src, size } => {
                 let dst = resolve!(dst).as_ptr();
                 let src = resolve!(src).as_ptr();
-                vm::memmove(src, dst, vm_size as usize);
+                vm::memmove(src, dst, size as usize);
                 next!();
             }
-            BcInstKind::StructOffset { dst, base, vm_offset } => {
+            BcInstKind::StructOffset { dst, base, offset } => {
                 let base = resolve!(base).as_ptr();
-                let field_ptr = unsafe { base.byte_add(vm_offset as usize) };
+                let field_ptr = unsafe { base.byte_add(offset as usize) };
                 set!(dst, Value::ptr(field_ptr));
                 next!();
             }
-            BcInstKind::ArrayOffset { dst, element_t, base, element_index } => {
+            BcInstKind::ArrayOffset { dst, element_stride, base, element_index } => {
                 let base = resolve!(base).as_ptr();
                 let index = resolve!(element_index).bits();
-                let elem_layout = k1.types.get_pt_layout(element_t);
-                let ptr = unsafe { base.byte_add(elem_layout.offset_at_index(index as usize)) };
+                let ptr = unsafe { base.byte_add(element_stride as usize * index as usize) };
                 set!(dst, Value::ptr(ptr));
                 next!();
             }
-            BcInstKind::Call { dst, ret_type, callee, args, ret_dst } => {
-                let ret_layout = k1.types.get_pt_layout(ret_type);
-                let has_dst = match (dst, ret_dst) {
-                    (Some(slot), Some(ret_dst)) => {
-                        let dst_addr = resolve!(ret_dst);
-                        set!(slot, dst_addr);
-                        true
-                    }
-                    (Some(slot), None) if ret_type.is_agg() => {
-                        let storage = Value::ptr(vm.stack.push_layout_uninit(ret_layout));
-                        set!(slot, storage);
-                        true
-                    }
-                    _ => false,
-                };
-
-                macro_rules! builtin_return {
-                    ($value:expr) => {{
-                        if let Some(slot) = dst {
-                            fulfill_return(k1, vm, frame_index, slot, has_dst, ret_type, $value);
-                        }
-                        next!();
-                    }};
-                    () => {{
-                        next!();
-                    }};
-                }
-
-                let dispatch_function_id = match callee {
-                    BcCallee::Extern { library_name, function_name, function_id } => {
-                        let result = handle_ffi_call(
-                            k1,
-                            vm,
-                            frame_index,
-                            ret_type,
-                            &args,
-                            library_name,
-                            function_name,
-                            function_id,
-                        )?;
-                        builtin_return!(result);
-                    }
-                    BcCallee::Direct(function_id) => function_id,
-                    BcCallee::Indirect(value) => {
-                        let callee_value = resolve!(value);
-                        let function_id_u64 = callee_value.bits();
-                        let nzu32 = NonZeroU32::new(function_id_u64 as u32).unwrap();
-                        FunctionId::from_nzu32(nzu32)
-                    }
-                    BcCallee::BackendBuiltin(backend_builtin) => match backend_builtin {
-                        ir::BackendBuiltin::TypeSchema => {
-                            let type_id_arg = resolve!(args[0]).bits();
-                            let type_id =
-                                TypeId::from_nzu32(NonZeroU32::new(type_id_arg as u32).unwrap());
-                            let Some(schema_static_value_id) = k1.type_schemas.get(&type_id) else {
-                                vm2_ice!(
-                                    k1,
-                                    vm,
-                                    "Missing type schema: {}",
-                                    k1.type_id_to_string(type_id)
-                                )
-                            };
-                            let value = vm::static_value_to_vm_value(
-                                k1,
-                                *schema_static_value_id,
-                                vm.eval_span,
-                            );
-                            builtin_return!(value);
-                        }
-                        ir::BackendBuiltin::TypeName => {
-                            let type_id_arg = resolve!(args[0]).bits();
-                            let type_id =
-                                TypeId::from_nzu32(NonZeroU32::new(type_id_arg as u32).unwrap());
-                            let name_value_id = *k1.type_names.get(&type_id).unwrap();
-                            let value =
-                                vm::static_value_to_vm_value(k1, name_value_id, vm.eval_span);
-                            builtin_return!(value);
-                        }
-                        ir::BackendBuiltin::Allocate | ir::BackendBuiltin::AllocateZeroed => {
-                            let zero = backend_builtin == ir::BackendBuiltin::AllocateZeroed;
-                            let size = resolve!(args[0]).as_usize();
-                            let align = resolve!(args[1]).as_usize();
-                            let Ok(layout) = std::alloc::Layout::from_size_align(size, align)
-                            else {
-                                vm2_crash(
-                                    k1,
-                                    vm,
-                                    format!("Bad allocation layout: size={size}, align={align}"),
-                                )
-                            };
-                            let ptr = if zero {
-                                unsafe { std::alloc::alloc_zeroed(layout) }
-                            } else {
-                                unsafe { std::alloc::alloc(layout) }
-                            };
-                            builtin_return!(Value::ptr(ptr));
-                        }
-                        ir::BackendBuiltin::Reallocate => {
-                            let old_ptr = resolve!(args[0]).as_ptr();
-                            let old_size = resolve!(args[1]).as_usize();
-                            let align = resolve!(args[2]).as_usize();
-                            let new_size = resolve!(args[3]).as_usize();
-                            let layout =
-                                std::alloc::Layout::from_size_align(old_size, align).unwrap();
-                            let ptr = unsafe { std::alloc::realloc(old_ptr, layout, new_size) };
-                            builtin_return!(Value::ptr(ptr));
-                        }
-                        ir::BackendBuiltin::Free => {
-                            let ptr = resolve!(args[0]).as_ptr();
-                            let size = resolve!(args[1]).as_usize();
-                            let align = resolve!(args[2]).as_usize();
-                            let layout = std::alloc::Layout::from_size_align(size, align).unwrap();
-                            unsafe { std::alloc::dealloc(ptr, layout) };
-                            builtin_return!();
-                        }
-                        ir::BackendBuiltin::MemCopy | ir::BackendBuiltin::MemMove => {
-                            let dst = resolve!(args[0]).as_ptr();
-                            let src = resolve!(args[1]).as_ptr();
-                            let count = resolve!(args[2]).as_usize();
-                            if backend_builtin == ir::BackendBuiltin::MemCopy {
-                                vm::memcopy(src, dst, count);
-                            } else {
-                                vm::memmove(src, dst, count);
-                            }
-                            builtin_return!();
-                        }
-                        ir::BackendBuiltin::MemSet => {
-                            let dst = resolve!(args[0]).as_ptr();
-                            let value = resolve!(args[1]).bits() as u8;
-                            let count = resolve!(args[2]).as_usize();
-                            unsafe { std::ptr::write_bytes(dst, value, count) };
-                            builtin_return!();
-                        }
-                        ir::BackendBuiltin::MemEquals => {
-                            let p1 = resolve!(args[0]).as_ptr();
-                            let p2 = resolve!(args[1]).as_ptr();
-                            let size = resolve!(args[2]).as_usize();
-                            let p1_slice = unsafe { std::slice::from_raw_parts(p1, size) };
-                            let p2_slice = unsafe { std::slice::from_raw_parts(p2, size) };
-                            builtin_return!(Value::bool(p1_slice == p2_slice));
-                        }
-                        ir::BackendBuiltin::Exit => {
-                            let exit_code = resolve!(args[0]).bits();
-                            break 'exec exit_code as i32;
-                        }
-                        ir::BackendBuiltin::CompilerMessage => {
-                            let location_arg = resolve!(args[0]);
-                            let level_arg = resolve!(args[1]);
-                            let message_arg = resolve!(args[2]);
-                            let location = unsafe {
-                                (location_arg.as_ptr() as *const k1_types::K1SourceLocation).read()
-                            };
-                            let level =
-                                match k1_types::CompilerMessageLevel::from_u8(level_arg.as_u8())
-                                    .unwrap_or(k1_types::CompilerMessageLevel::Info)
-                                {
-                                    k1_types::CompilerMessageLevel::Info => MessageLevel::Info,
-                                    k1_types::CompilerMessageLevel::Warn => MessageLevel::Warn,
-                                    k1_types::CompilerMessageLevel::Error => MessageLevel::Error,
-                                };
-                            let message =
-                                vm::value_to_string_id(k1, message_arg).map_err(|msg| {
-                                    errf!(
-                                        vm.eval_span,
-                                        "Bad message string passed to EmitCompilerMessage: {msg}"
-                                    )
-                                })?;
-                            let filename =
-                                unsafe { location.filename.to_str() }.map_err(|msg| {
-                                    errf!(
-                                        vm.eval_span,
-                                        "Bad filename string passed to EmitCompilerMessage: {msg}"
-                                    )
-                                })?;
-                            eprintln!(
-                                "[{}:{} {}] {}",
-                                filename,
-                                location.line,
-                                level.name_str().color(level.color()),
-                                k1.get_string(message)
-                            );
-                            vm.compiler_messages.push(CompilerMessage {
-                                level,
-                                message,
-                                filename: filename.to_string(),
-                                line: location.line as u32,
-                            });
-                            builtin_return!();
-                        }
-                    },
-                };
-
-                let callee_unit = bc::get_or_compile_function(k1, dispatch_function_id)?;
-                let caller_frame_index = vm.stack.current_frame_index();
-                vm.stack.frames[caller_frame_index as usize].pc = pc + 1;
-                let ret_info = RetInfo2 {
-                    pt: ret_type,
-                    frame_index: caller_frame_index,
-                    result_slot: dst,
-                    has_dst,
-                    top: false,
-                };
-                vm.stack.push_frame(Some(vm.eval_span), callee_unit, ret_info);
-                let new_frame_index = vm.stack.current_frame_index();
-                for (index, arg) in args.iter().enumerate() {
-                    let value = resolve_value(k1, vm, caller_frame_index, *arg)?;
-                    vm.stack.set_param_value(new_frame_index, index as u32, value);
-                }
+            BcInstKind::CallDirect { result, callee, args, ret, next_pc } => {
+                let return_dst = prepare_call_return(k1, vm, program, result, ret)?;
+                push_call_frame(k1, vm, program, function_id, next_pc, callee, return_dst, ret, args, vm.eval_span)?;
+                function_id = callee;
+                pc = 0;
                 continue 'exec;
+            }
+            BcInstKind::CallIndirect { result, callee, args, ret, next_pc } => {
+                let function_ref = resolve!(callee).bits();
+                let Some(callee) = program.function_for_ref_bits(function_ref) else {
+                    return failf!(vm.eval_span, "Indirect call to function not present in bytecode program");
+                };
+                let return_dst = prepare_call_return(k1, vm, program, result, ret)?;
+                push_call_frame(k1, vm, program, function_id, next_pc, callee, return_dst, ret, args, vm.eval_span)?;
+                function_id = callee;
+                pc = 0;
+                continue 'exec;
+            }
+            BcInstKind::CallExtern {
+                result,
+                function_id: extern_function_id,
+                library_name,
+                function_name,
+                fn_type,
+                param_pts,
+                args,
+                ret,
+                ..
+            } => {
+                let value = handle_ffi_call(
+                    k1,
+                    vm,
+                    program,
+                    ret.pt,
+                    &param_pts,
+                    &args,
+                    library_name,
+                    function_name,
+                    extern_function_id,
+                    fn_type,
+                )?;
+                finish_inline_return(k1, vm, program, result, ret, value)?;
+                next!();
+            }
+            BcInstKind::CallBuiltin { result, builtin, args, ret, .. } => {
+                match builtin {
+                    ir::BackendBuiltin::TypeSchema => {
+                        let type_id_arg = resolve!(args[0]).bits();
+                        let type_id =
+                            TypeId::from_nzu32(NonZeroU32::new(type_id_arg as u32).unwrap());
+                        let Some(schema_static_value_id) = k1.type_schemas.get(&type_id) else {
+                            vm2_ice!(k1, vm, "Missing type schema: {}", k1.type_id_to_string(type_id))
+                        };
+                        let value =
+                            vm::static_value_to_vm_value(k1, *schema_static_value_id, vm.eval_span);
+                        finish_inline_return(k1, vm, program, result, ret, value)?;
+                    }
+                    ir::BackendBuiltin::TypeName => {
+                        let type_id_arg = resolve!(args[0]).bits();
+                        let type_id =
+                            TypeId::from_nzu32(NonZeroU32::new(type_id_arg as u32).unwrap());
+                        let name_value_id = *k1.type_names.get(&type_id).unwrap();
+                        let value = vm::static_value_to_vm_value(k1, name_value_id, vm.eval_span);
+                        finish_inline_return(k1, vm, program, result, ret, value)?;
+                    }
+                    ir::BackendBuiltin::Allocate | ir::BackendBuiltin::AllocateZeroed => {
+                        let zero = builtin == ir::BackendBuiltin::AllocateZeroed;
+                        let size = resolve!(args[0]).as_usize();
+                        let align = resolve!(args[1]).as_usize();
+                        let Ok(layout) = std::alloc::Layout::from_size_align(size, align) else {
+                            vm2_crash(k1, vm, format!("Bad allocation layout: size={size}, align={align}"))
+                        };
+                        let ptr = if zero {
+                            unsafe { std::alloc::alloc_zeroed(layout) }
+                        } else {
+                            unsafe { std::alloc::alloc(layout) }
+                        };
+                        finish_inline_return(k1, vm, program, result, ret, Value::ptr(ptr))?;
+                    }
+                    ir::BackendBuiltin::Reallocate => {
+                        let old_ptr = resolve!(args[0]).as_ptr();
+                        let old_size = resolve!(args[1]).as_usize();
+                        let align = resolve!(args[2]).as_usize();
+                        let new_size = resolve!(args[3]).as_usize();
+                        let layout = std::alloc::Layout::from_size_align(old_size, align).unwrap();
+                        let ptr = unsafe { std::alloc::realloc(old_ptr, layout, new_size) };
+                        finish_inline_return(k1, vm, program, result, ret, Value::ptr(ptr))?;
+                    }
+                    ir::BackendBuiltin::Free => {
+                        let ptr = resolve!(args[0]).as_ptr();
+                        let size = resolve!(args[1]).as_usize();
+                        let align = resolve!(args[2]).as_usize();
+                        let layout = std::alloc::Layout::from_size_align(size, align).unwrap();
+                        unsafe { std::alloc::dealloc(ptr, layout) };
+                        finish_inline_return(k1, vm, program, result, ret, Value(0))?;
+                    }
+                    ir::BackendBuiltin::MemCopy | ir::BackendBuiltin::MemMove => {
+                        let dst = resolve!(args[0]).as_ptr();
+                        let src = resolve!(args[1]).as_ptr();
+                        let count = resolve!(args[2]).as_usize();
+                        if builtin == ir::BackendBuiltin::MemCopy {
+                            vm::memcopy(src, dst, count);
+                        } else {
+                            vm::memmove(src, dst, count);
+                        }
+                        finish_inline_return(k1, vm, program, result, ret, Value(0))?;
+                    }
+                    ir::BackendBuiltin::MemSet => {
+                        let dst = resolve!(args[0]).as_ptr();
+                        let value = resolve!(args[1]).bits() as u8;
+                        let count = resolve!(args[2]).as_usize();
+                        unsafe { std::ptr::write_bytes(dst, value, count) };
+                        finish_inline_return(k1, vm, program, result, ret, Value(0))?;
+                    }
+                    ir::BackendBuiltin::MemEquals => {
+                        let p1 = resolve!(args[0]).as_ptr();
+                        let p2 = resolve!(args[1]).as_ptr();
+                        let size = resolve!(args[2]).as_usize();
+                        let p1_slice = unsafe { std::slice::from_raw_parts(p1, size) };
+                        let p2_slice = unsafe { std::slice::from_raw_parts(p2, size) };
+                        finish_inline_return(k1, vm, program, result, ret, Value::bool(p1_slice == p2_slice))?;
+                    }
+                    ir::BackendBuiltin::Exit => {
+                        break 'exec resolve!(args[0]).bits() as i32;
+                    }
+                    ir::BackendBuiltin::CompilerMessage => {
+                        let location_arg = resolve!(args[0]);
+                        let level_arg = resolve!(args[1]);
+                        let message_arg = resolve!(args[2]);
+                        let location = unsafe {
+                            (location_arg.as_ptr() as *const k1_types::K1SourceLocation).read()
+                        };
+                        let level = match k1_types::CompilerMessageLevel::from_u8(level_arg.as_u8())
+                            .unwrap_or(k1_types::CompilerMessageLevel::Info)
+                        {
+                            k1_types::CompilerMessageLevel::Info => MessageLevel::Info,
+                            k1_types::CompilerMessageLevel::Warn => MessageLevel::Warn,
+                            k1_types::CompilerMessageLevel::Error => MessageLevel::Error,
+                        };
+                        let message = vm::value_to_string_id(k1, message_arg).map_err(|msg| {
+                            errf!(vm.eval_span, "Bad message string passed to EmitCompilerMessage: {msg}")
+                        })?;
+                        let filename = unsafe { location.filename.to_str() }.map_err(|msg| {
+                            errf!(vm.eval_span, "Bad filename string passed to EmitCompilerMessage: {msg}")
+                        })?;
+                        eprintln!(
+                            "[{}:{} {}] {}",
+                            filename,
+                            location.line,
+                            level.name_str().color(level.color()),
+                            k1.get_string(message)
+                        );
+                        vm.compiler_messages.push(CompilerMessage {
+                            level,
+                            message,
+                            filename: filename.to_string(),
+                            line: location.line as u32,
+                        });
+                        finish_inline_return(k1, vm, program, result, ret, Value(0))?;
+                    }
+                }
+                next!();
             }
             BcInstKind::Jump { offset } => jump!(offset),
             BcInstKind::JumpIf { cond, cons_offset, alt_offset } => {
@@ -508,144 +462,119 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm2) -> K1Result<i32> {
                     jump!(alt_offset)
                 }
             }
-            BcInstKind::Unreachable => {
-                return failf!(vm.eval_span, "Reached unreachable instruction");
-            }
-            BcInstKind::Phi { dst, incomings } => {
-                let prev_block = vm.stack.frames[frame_index as usize].prev_block;
+            BcInstKind::Unreachable => return failf!(vm.eval_span, "Reached unreachable instruction"),
+            BcInstKind::Phi { dst, size, incomings } => {
+                let prev_block = unsafe { (*vm.current_frame).prev_block };
                 let Some((_, value)) = incomings.iter().find(|(from, _)| *from == prev_block)
                 else {
-                    return failf!(
-                        vm.eval_span,
-                        "No phi incoming for predecessor block {}",
-                        prev_block
-                    );
+                    return failf!(vm.eval_span, "No phi incoming for predecessor block {}", prev_block);
                 };
                 let value = resolve!(*value);
-                set!(dst, value);
+                match dst {
+                    BcValue::Slot(offset) => set!(offset, value),
+                    BcValue::Address(offset) => {
+                        vm::memmove(value.as_ptr(), frame_ptr(vm.current_frame, offset), size as usize);
+                    }
+                    BcValue::Empty => {}
+                    _ => return failf!(vm.eval_span, "Unsupported phi destination"),
+                }
                 next!();
             }
             BcInstKind::Ret { v } => {
                 let returned_value = resolve!(v);
-                let cur_frame_index = vm.stack.current_frame_index();
-                let ret_info = vm.stack.frames[cur_frame_index as usize].ret_info;
-                if ret_info.top {
-                    if !ret_info.pt.is_empty() {
-                        if vm.overall_return_addr.is_null() {
-                            vm2_ice!(k1, vm, "Top-level return address not initialized");
-                        }
-                        vm::store_value(
-                            &k1.types,
-                            ret_info.pt,
-                            vm.overall_return_addr,
-                            returned_value,
-                        );
-                    }
-                    vm.stack.pop_frame();
+                let header = unsafe { &*vm.current_frame };
+                if header.prev.is_null() {
+                    write_return_value(header.return_dst, header.return_mode, header.return_size, returned_value);
+                    let old = vm.current_frame;
+                    vm.current_frame = core::ptr::null_mut();
+                    vm.stack.pop_frame(old);
                     break 'exec 0;
                 } else {
-                    let slot = ret_info.result_slot.unwrap();
-                    fulfill_return(
-                        k1,
-                        vm,
-                        ret_info.frame_index,
-                        slot,
-                        ret_info.has_dst,
-                        ret_info.pt,
-                        returned_value,
-                    );
-                    vm.stack.pop_frame();
+                    write_return_value(header.return_dst, header.return_mode, header.return_size, returned_value);
+                    let old = vm.current_frame;
+                    function_id = BcFunctionId::from_u32(header.caller_function).unwrap();
+                    pc = header.return_pc;
+                    vm.current_frame = header.prev;
+                    vm.stack.pop_frame(old);
                     continue 'exec;
                 }
             }
             BcInstKind::BoolNegate { dst, v } => {
-                let b = resolve!(v).as_bool();
-                set!(dst, Value::bool(!b));
+                set!(dst, Value::bool(!resolve!(v).as_bool()));
                 next!();
             }
             BcInstKind::BitNot { dst, v } => {
-                let input = resolve!(v);
-                set!(dst, Value(!input.bits()));
+                set!(dst, Value(!resolve!(v).bits()));
                 next!();
             }
             BcInstKind::BitCast { dst, v }
             | BcInstKind::PtrToWord { dst, v }
             | BcInstKind::WordToPtr { dst, v } => {
-                let input = resolve!(v);
-                set!(dst, input);
+                set!(dst, resolve!(v));
                 next!();
             }
             BcInstKind::IntTrunc { dst, v, to } => {
-                let input = resolve!(v);
-                set!(dst, input.truncated(to.width()));
+                set!(dst, resolve!(v).truncated(to.width()));
                 next!();
             }
             BcInstKind::IntExtU { dst, v } => {
-                let input = resolve!(v);
-                set!(dst, input);
+                set!(dst, resolve!(v));
                 next!();
             }
             BcInstKind::IntExtS { dst, v, from, to } => {
-                let input = resolve!(v);
-                set!(dst, input.sign_extended(from.width(), to.width()));
+                set!(dst, resolve!(v).sign_extended(from.width(), to.width()));
                 next!();
             }
             BcInstKind::FloatTrunc { dst, v } => {
-                let input = resolve!(v);
-                set!(dst, Value::f32(input.as_f64() as f32));
+                set!(dst, Value::f32(resolve!(v).as_f64() as f32));
                 next!();
             }
             BcInstKind::FloatExt { dst, v } => {
-                let input = resolve!(v);
-                set!(dst, Value::f64(input.as_f32() as f64));
+                set!(dst, Value::f64(resolve!(v).as_f32() as f64));
                 next!();
             }
             BcInstKind::Float32ToIntUnsigned { dst, v, to } => {
                 let f = resolve!(v).as_f32();
-                let result = match to {
+                set!(dst, match to {
                     ScalarType::U8 => Value::u8(f as u8),
                     ScalarType::U16 => Value::u16(f as u16),
                     ScalarType::U32 => Value::u32(f as u32),
                     ScalarType::U64 => Value::u64(f as u64),
                     _ => unreachable!(),
-                };
-                set!(dst, result);
+                });
                 next!();
             }
             BcInstKind::Float32ToIntSigned { dst, v, to } => {
                 let f = resolve!(v).as_f32();
-                let result = match to {
+                set!(dst, match to {
                     ScalarType::I8 => Value::i8(f as i8),
                     ScalarType::I16 => Value::i16(f as i16),
                     ScalarType::I32 => Value::i32(f as i32),
                     ScalarType::I64 => Value::i64(f as i64),
                     _ => unreachable!(),
-                };
-                set!(dst, result);
+                });
                 next!();
             }
             BcInstKind::Float64ToIntUnsigned { dst, v, to } => {
                 let f = resolve!(v).as_f64();
-                let result = match to {
+                set!(dst, match to {
                     ScalarType::U8 => Value::u8(f as u8),
                     ScalarType::U16 => Value::u16(f as u16),
                     ScalarType::U32 => Value::u32(f as u32),
                     ScalarType::U64 => Value::u64(f as u64),
                     _ => unreachable!(),
-                };
-                set!(dst, result);
+                });
                 next!();
             }
             BcInstKind::Float64ToIntSigned { dst, v, to } => {
                 let f = resolve!(v).as_f64();
-                let result = match to {
+                set!(dst, match to {
                     ScalarType::I8 => Value::i8(f as i8),
                     ScalarType::I16 => Value::i16(f as i16),
                     ScalarType::I32 => Value::i32(f as i32),
                     ScalarType::I64 => Value::i64(f as i64),
                     _ => unreachable!(),
-                };
-                set!(dst, result);
+                });
                 next!();
             }
             BcInstKind::IntToFloatUnsigned { dst, v, from, to } => {
@@ -681,13 +610,22 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm2) -> K1Result<i32> {
                 next!();
             }
             BcInstKind::IntAdd { dst, lhs, rhs, width } => {
-                bin_int!(k1, vm, frame_index, dst, lhs, rhs, width, wrapping_add)
+                let lhs = resolve!(lhs).bits();
+                let rhs = resolve!(rhs).bits();
+                set!(dst, Value(casted_uop!(width, wrapping_add, lhs, rhs)));
+                next!();
             }
             BcInstKind::IntSub { dst, lhs, rhs, width } => {
-                bin_int!(k1, vm, frame_index, dst, lhs, rhs, width, wrapping_sub)
+                let lhs = resolve!(lhs).bits();
+                let rhs = resolve!(rhs).bits();
+                set!(dst, Value(casted_uop!(width, wrapping_sub, lhs, rhs)));
+                next!();
             }
             BcInstKind::IntMul { dst, lhs, rhs, width } => {
-                bin_int!(k1, vm, frame_index, dst, lhs, rhs, width, wrapping_mul)
+                let lhs = resolve!(lhs).bits();
+                let rhs = resolve!(rhs).bits();
+                set!(dst, Value(casted_uop!(width, wrapping_mul, lhs, rhs)));
+                next!();
             }
             BcInstKind::IntDivUnsigned { dst, lhs, rhs, width } => {
                 let lhs = resolve!(lhs).bits();
@@ -732,24 +670,43 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm2) -> K1Result<i32> {
             BcInstKind::IntCmp { dst, lhs, rhs, pred, width } => {
                 let lhs = resolve!(lhs).bits();
                 let rhs = resolve!(rhs).bits();
-                let b = int_cmp(lhs, rhs, pred, width);
-                set!(dst, Value::bool(b));
+                set!(dst, Value::bool(int_cmp(lhs, rhs, pred, width)));
                 next!();
             }
             BcInstKind::FloatAdd { dst, lhs, rhs, width } => {
-                bin_float!(k1, vm, frame_index, dst, lhs, rhs, width, Add, add)
+                use std::ops::Add;
+                let lhs = resolve!(lhs).bits();
+                let rhs = resolve!(rhs).bits();
+                set!(dst, Value(casted_float_op!(width, add, lhs, rhs)));
+                next!();
             }
             BcInstKind::FloatSub { dst, lhs, rhs, width } => {
-                bin_float!(k1, vm, frame_index, dst, lhs, rhs, width, Sub, sub)
+                use std::ops::Sub;
+                let lhs = resolve!(lhs).bits();
+                let rhs = resolve!(rhs).bits();
+                set!(dst, Value(casted_float_op!(width, sub, lhs, rhs)));
+                next!();
             }
             BcInstKind::FloatMul { dst, lhs, rhs, width } => {
-                bin_float!(k1, vm, frame_index, dst, lhs, rhs, width, Mul, mul)
+                use std::ops::Mul;
+                let lhs = resolve!(lhs).bits();
+                let rhs = resolve!(rhs).bits();
+                set!(dst, Value(casted_float_op!(width, mul, lhs, rhs)));
+                next!();
             }
             BcInstKind::FloatDiv { dst, lhs, rhs, width } => {
-                bin_float!(k1, vm, frame_index, dst, lhs, rhs, width, Div, div)
+                use std::ops::Div;
+                let lhs = resolve!(lhs).bits();
+                let rhs = resolve!(rhs).bits();
+                set!(dst, Value(casted_float_op!(width, div, lhs, rhs)));
+                next!();
             }
             BcInstKind::FloatRem { dst, lhs, rhs, width } => {
-                bin_float!(k1, vm, frame_index, dst, lhs, rhs, width, Rem, rem)
+                use std::ops::Rem;
+                let lhs = resolve!(lhs).bits();
+                let rhs = resolve!(rhs).bits();
+                set!(dst, Value(casted_float_op!(width, rem, lhs, rhs)));
+                next!();
             }
             BcInstKind::FloatCmp { dst, lhs, rhs, pred, width } => {
                 let lhs = resolve!(lhs);
@@ -770,32 +727,44 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm2) -> K1Result<i32> {
                 next!();
             }
             BcInstKind::BitAnd { dst, lhs, rhs, width } => {
-                bin_int_op!(k1, vm, frame_index, dst, lhs, rhs, width, BitAnd, bitand)
+                use std::ops::BitAnd;
+                let lhs = resolve!(lhs).bits();
+                let rhs = resolve!(rhs).bits();
+                set!(dst, Value(casted_uop!(width, bitand, lhs, rhs)));
+                next!();
             }
             BcInstKind::BitOr { dst, lhs, rhs, width } => {
-                bin_int_op!(k1, vm, frame_index, dst, lhs, rhs, width, BitOr, bitor)
+                use std::ops::BitOr;
+                let lhs = resolve!(lhs).bits();
+                let rhs = resolve!(rhs).bits();
+                set!(dst, Value(casted_uop!(width, bitor, lhs, rhs)));
+                next!();
             }
             BcInstKind::BitXor { dst, lhs, rhs, width } => {
-                bin_int_op!(k1, vm, frame_index, dst, lhs, rhs, width, BitXor, bitxor)
+                use std::ops::BitXor;
+                let lhs = resolve!(lhs).bits();
+                let rhs = resolve!(rhs).bits();
+                set!(dst, Value(casted_uop!(width, bitxor, lhs, rhs)));
+                next!();
             }
             BcInstKind::BitShiftLeft { dst, lhs, rhs, width } => {
+                use std::ops::Shl;
                 let lhs = resolve!(lhs).bits();
                 let rhs = resolve!(rhs).as_u32();
-                use std::ops::Shl;
                 set!(dst, Value(casted_uop!(width, shl, lhs, rhs)));
                 next!();
             }
             BcInstKind::BitUnsignedShiftRight { dst, lhs, rhs, width } => {
+                use std::ops::Shr;
                 let lhs = resolve!(lhs).bits();
                 let rhs = resolve!(rhs).as_u32();
-                use std::ops::Shr;
                 set!(dst, Value(casted_uop!(width, shr, lhs, rhs)));
                 next!();
             }
             BcInstKind::BitSignedShiftRight { dst, lhs, rhs, width } => {
+                use std::ops::Shr;
                 let lhs = resolve!(lhs).bits();
                 let rhs = resolve!(rhs).as_u32();
-                use std::ops::Shr;
                 set!(dst, Value(casted_iop!(width, shr, lhs, rhs) as u64));
                 next!();
             }
@@ -811,18 +780,117 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm2) -> K1Result<i32> {
     Ok(exit_code)
 }
 
+fn push_call_frame(
+    k1: &mut TypedProgram,
+    vm: &mut Vm2,
+    program: &mut ProgramBc,
+    caller_function: BcFunctionId,
+    return_pc: usize,
+    callee: BcFunctionId,
+    return_dst: *mut u8,
+    ret: BcReturn,
+    args: Vec<BcValue>,
+    span: SpanId,
+) -> K1Result<()> {
+    let old_frame = vm.current_frame;
+    let mut arg_values = Vec::with_capacity(args.len());
+    for arg in args {
+        arg_values.push(resolve_value(k1, vm, program, old_frame, arg)?);
+    }
+    let callee_fn = program.get_function(callee);
+    let header = vm.stack.push_frame(
+        old_frame,
+        callee,
+        caller_function.as_u32(),
+        callee,
+        return_pc,
+        return_dst,
+        ret,
+        callee_fn,
+    );
+    for (index, value) in arg_values.into_iter().enumerate() {
+        store_slot(header, callee_fn.param_offsets[index], value);
+    }
+    vm.current_frame = header;
+    vm.stack.debug_frames.push(DebugFrame { unit_id: callee_fn.unit_id, call_span: Some(span) });
+    Ok(())
+}
+
+fn prepare_call_return(
+    k1: &mut TypedProgram,
+    vm: &mut Vm2,
+    program: &mut ProgramBc,
+    result: Option<FrameOffset>,
+    ret: BcReturn,
+) -> K1Result<*mut u8> {
+    let explicit_dst = |k1: &mut TypedProgram, vm: &mut Vm2, program: &mut ProgramBc, dst: BcValue| {
+        if let (Some(result), Some(dst_slot)) = (result, dst.as_slot()) {
+            if result == dst_slot {
+                return Ok(frame_ptr(vm.current_frame, result));
+            }
+        }
+        value_to_ptr(k1, vm, program, vm.current_frame, dst)
+    };
+    let dst = match ret.mode {
+        BcReturnMode::None => core::ptr::null_mut(),
+        BcReturnMode::Scalar => match ret.dst {
+            Some(dst) => explicit_dst(k1, vm, program, dst)?,
+            None => frame_ptr(vm.current_frame, result.unwrap()),
+        },
+        BcReturnMode::InMemory => match ret.dst {
+            Some(dst) => explicit_dst(k1, vm, program, dst)?,
+            None => frame_ptr(vm.current_frame, result.unwrap()),
+        },
+    };
+    if let (Some(result), Some(dst_value)) = (result, ret.dst) {
+        if dst_value.as_slot() != Some(result) {
+            store_slot(vm.current_frame, result, Value::ptr(dst));
+        }
+    }
+    Ok(dst)
+}
+
+fn finish_inline_return(
+    k1: &mut TypedProgram,
+    vm: &mut Vm2,
+    program: &mut ProgramBc,
+    result: Option<FrameOffset>,
+    ret: BcReturn,
+    returned_value: Value,
+) -> K1Result<()> {
+    let dst = prepare_call_return(k1, vm, program, result, ret)?;
+    write_return_value(dst, ret.mode, ret.layout.size, returned_value);
+    Ok(())
+}
+
+fn write_return_value(
+    dst: *mut u8,
+    mode: BcReturnMode,
+    size: u32,
+    returned_value: Value,
+) {
+    match mode {
+        BcReturnMode::None => {}
+        BcReturnMode::Scalar => store_slot_ptr(dst, returned_value),
+        BcReturnMode::InMemory => {
+            vm::memmove(returned_value.as_ptr(), dst, size as usize);
+        }
+    }
+}
+
 #[inline(always)]
 fn resolve_value(
     k1: &mut TypedProgram,
     vm: &mut Vm2,
-    frame_index: u32,
+    _program: &mut ProgramBc,
+    frame: *mut FrameHeader,
     value: BcValue,
 ) -> K1Result<Value> {
     match value {
-        BcValue::Local(slot) => Ok(vm.stack.get_local_value(frame_index, slot)),
+        BcValue::Slot(offset) => Ok(load_slot(frame, offset)),
+        BcValue::Address(offset) => Ok(Value::ptr(frame_ptr(frame, offset))),
         BcValue::StaticValue { id, .. } => Ok(vm::static_value_to_vm_value(k1, id, vm.eval_span)),
         BcValue::FunctionAddr(function_id) => Ok(vm::function_id_to_ref_value(function_id)),
-        BcValue::FnParam { index, .. } => Ok(vm.stack.get_param_value(frame_index, index)),
         BcValue::Data32 { t, data } => {
             let value = match t {
                 ScalarType::F32 => Value(data as u64),
@@ -836,9 +904,19 @@ fn resolve_value(
             };
             Ok(value)
         }
-        BcValue::GlobalAddr { storage_pt, id } => resolve_global(k1, vm, id, storage_pt),
+        BcValue::GlobalAddr { storage_pt, layout, id } => resolve_global(k1, vm, id, storage_pt, layout),
         BcValue::Empty => Ok(Value(0)),
     }
+}
+
+fn value_to_ptr(
+    k1: &mut TypedProgram,
+    vm: &mut Vm2,
+    program: &mut ProgramBc,
+    frame: *mut FrameHeader,
+    value: BcValue,
+) -> K1Result<*mut u8> {
+    Ok(resolve_value(k1, vm, program, frame, value)?.as_ptr())
 }
 
 fn resolve_global(
@@ -846,6 +924,7 @@ fn resolve_global(
     vm: &mut Vm2,
     global_id: TypedGlobalId,
     t: PhysicalType,
+    layout: Layout,
 ) -> K1Result<Value> {
     if let Some(v) = k1.vm_global_constant_lookups.get(&global_id) {
         return Ok(*v);
@@ -860,6 +939,7 @@ fn resolve_global(
         None => {
             let eval_start = k1.timing.raw();
             k1.eval_global_body(global.ast_id)?;
+            k1.compile_all_pending_ir(vm.eval_span)?;
             let eval_time = k1.timing.elapsed_nanos(eval_start);
             k1.timing.total_vm_nanos -= eval_time as i64;
             k1.globals.get(global_id).initial_value.unwrap()
@@ -867,7 +947,6 @@ fn resolve_global(
         Some(value_id) => value_id,
     };
     let shared_vm_value = vm::static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
-    let layout = k1.types.get_pt_layout(t);
     if is_constant {
         let dst = k1.vm_static_stack.push_layout_uninit(layout);
         vm::store_value(&k1.types, t, dst, shared_vm_value);
@@ -883,150 +962,25 @@ fn resolve_global(
     }
 }
 
-fn fulfill_return(
-    k1: &TypedProgram,
-    vm: &mut Vm2,
-    frame_index: u32,
-    result_slot: u32,
-    has_dst: bool,
-    ret_type: PhysicalType,
-    returned_value: Value,
-) {
-    if has_dst {
-        let addr = vm.stack.get_local_value(frame_index, result_slot).as_ptr();
-        vm::store_value(&k1.types, ret_type, addr, returned_value);
-    } else {
-        vm.stack.set_local_value(frame_index, result_slot, returned_value);
-    }
-}
-
-#[derive(Clone, Copy)]
-struct RetInfo2 {
-    pt: PhysicalType,
-    frame_index: u32,
-    result_slot: Option<u32>,
-    has_dst: bool,
-    top: bool,
-}
-
-impl RetInfo2 {
-    fn top(pt: PhysicalType) -> Self {
-        Self { pt, frame_index: 0, result_slot: None, has_dst: false, top: true }
-    }
-}
-
-pub struct Stack2 {
-    mem: kmem::Mem<()>,
-    frames: Vec<StackFrame2>,
-}
-
-#[derive(Clone)]
-struct StackFrame2 {
-    index: u32,
-    base_ptr: *mut u8,
-    call_span: Option<SpanId>,
-    unit: BcUnit,
-    param_count: u32,
-    local_count: u32,
-    pc: usize,
-    prev_block: u32,
-    ret_info: RetInfo2,
-}
-
-impl Stack2 {
-    fn make() -> Self {
-        let mut mem = kmem::Mem::make();
-        mem.will_need(STACK_SIZE);
-        Self { mem, frames: Vec::with_capacity(512) }
-    }
-
-    fn reset(&mut self) {
-        self.mem.reset(cfg!(debug_assertions));
-        self.frames.clear();
-    }
-
-    fn push_frame(&mut self, call_span: Option<SpanId>, unit: BcUnit, ret_info: RetInfo2) {
-        let index = self.frames.len() as u32;
-        self.mem.align_to_bytes(8);
-        let base_ptr = self.mem.cursor();
-        let param_count = unit.param_count;
-        let local_count = unit.local_count;
-        self.mem.push_slice_uninit::<Value>((param_count + local_count) as usize);
-        self.frames.push(StackFrame2 {
-            index,
-            base_ptr,
-            call_span,
-            unit,
-            param_count,
-            local_count,
-            pc: 0,
-            prev_block: u32::MAX,
-            ret_info,
-        });
-    }
-
-    fn pop_frame(&mut self) -> StackFrame2 {
-        let frame = self.frames.pop().unwrap();
-        self.mem.set_cursor(frame.base_ptr);
-        frame
-    }
-
-    fn current_frame_index(&self) -> u32 {
-        self.frames.len() as u32 - 1
-    }
-
-    fn values_for_frame(&self, frame_index: u32) -> &mut [Value] {
-        let frame = &self.frames[frame_index as usize];
-        unsafe {
-            core::slice::from_raw_parts_mut(
-                frame.base_ptr as *mut Value,
-                (frame.param_count + frame.local_count) as usize,
-            )
-        }
-    }
-
-    fn get_param_value(&self, frame_index: u32, param_index: u32) -> Value {
-        self.values_for_frame(frame_index)[param_index as usize]
-    }
-
-    fn set_param_value(&mut self, frame_index: u32, param_index: u32, value: Value) {
-        self.values_for_frame(frame_index)[param_index as usize] = value;
-    }
-
-    fn get_local_value(&self, frame_index: u32, slot: u32) -> Value {
-        let frame = &self.frames[frame_index as usize];
-        self.values_for_frame(frame_index)[(frame.param_count + slot) as usize]
-    }
-
-    fn set_local_value(&mut self, frame_index: u32, slot: u32, value: Value) {
-        let frame = &self.frames[frame_index as usize];
-        self.values_for_frame(frame_index)[(frame.param_count + slot) as usize] = value;
-    }
-
-    fn push_layout_uninit(&mut self, layout: Layout) -> *mut u8 {
-        self.mem.push_layout_uninit(layout.size, layout.align)
-    }
-}
-
 fn handle_ffi_call(
     k1: &mut TypedProgram,
     vm: &mut Vm2,
-    frame_index: u32,
+    program: &mut ProgramBc,
     return_pt: PhysicalType,
+    param_pts: &[PhysicalType],
     args: &[BcValue],
-    lib_name: Option<crate::parse::StringId>,
-    fn_name: crate::parse::StringId,
+    lib_name: Option<StringId>,
+    fn_name: StringId,
     function_id: FunctionId,
+    fn_type: PhysicalFunctionType,
 ) -> K1Result<Value> {
     let nargs = args.len();
     let mut ffi_args_value_storage: Vec<u64> = Vec::with_capacity(nargs);
     let mut ffi_args_value_ptrs: Vec<*mut c_void> = Vec::with_capacity(nargs);
 
-    let fn_type = k1.ir.functions.get(function_id).unwrap().fn_type;
-    let function_params = fn_type.params;
-    for (arg_value, param) in args.iter().zip(k1.ir.mem.getn(function_params)) {
-        let vm_value = resolve_value(k1, vm, frame_index, *arg_value)?;
-        if param.pt.is_agg() {
+    for (arg_value, param_pt) in args.iter().zip(param_pts.iter()) {
+        let vm_value = resolve_value(k1, vm, program, vm.current_frame, *arg_value)?;
+        if param_pt.is_agg() {
             ffi_args_value_ptrs.push(vm_value.as_ptr() as *mut c_void);
         } else {
             ffi_args_value_storage.push(vm_value.bits());
@@ -1086,6 +1040,102 @@ fn handle_ffi_call(
     }
 }
 
+#[repr(C)]
+struct FrameHeader {
+    prev: *mut FrameHeader,
+    payload_base: *mut u8,
+    caller_function: u32,
+    current_function: u32,
+    return_pc: usize,
+    return_dst: *mut u8,
+    return_mode: BcReturnMode,
+    return_size: u32,
+    prev_block: u32,
+}
+
+pub struct Stack2 {
+    mem: kmem::Mem<()>,
+    debug_frames: Vec<DebugFrame>,
+}
+
+impl Stack2 {
+    fn make() -> Self {
+        let mut mem = kmem::Mem::make();
+        mem.will_need(STACK_SIZE);
+        Self { mem, debug_frames: Vec::with_capacity(512) }
+    }
+
+    fn reset(&mut self) {
+        self.mem.reset(cfg!(debug_assertions));
+        self.debug_frames.clear();
+    }
+
+    fn push_frame(
+        &mut self,
+        prev: *mut FrameHeader,
+        current: BcFunctionId,
+        caller_function: u32,
+        current_function: BcFunctionId,
+        return_pc: usize,
+        return_dst: *mut u8,
+        ret: BcReturn,
+        function: &BcFunction,
+    ) -> *mut FrameHeader {
+        self.mem.align_to_bytes(std::mem::align_of::<FrameHeader>());
+        let header = self.mem.push(FrameHeader {
+            prev,
+            payload_base: core::ptr::null_mut(),
+            caller_function,
+            current_function: current_function.as_u32(),
+            return_pc,
+            return_dst,
+            return_mode: ret.mode,
+            return_size: ret.layout.size,
+            prev_block: u32::MAX,
+        }) as *mut FrameHeader;
+        debug_assert_eq!(current.as_u32(), current_function.as_u32());
+        self.mem.align_to_bytes(function.frame_align as usize);
+        let payload_base = self.mem.push_layout_uninit(function.frame_size, 1);
+        unsafe { (*header).payload_base = payload_base };
+        header
+    }
+
+    fn pop_frame(&mut self, header: *mut FrameHeader) {
+        self.debug_frames.pop();
+        self.mem.set_cursor(header.cast());
+    }
+
+    fn push_layout_uninit(&mut self, layout: Layout) -> *mut u8 {
+        self.mem.push_layout_uninit(layout.size, layout.align)
+    }
+}
+
+fn return_mode(pt: PhysicalType) -> BcReturnMode {
+    if pt.is_empty() {
+        BcReturnMode::None
+    } else if pt.is_agg() {
+        BcReturnMode::InMemory
+    } else {
+        BcReturnMode::Scalar
+    }
+}
+
+fn frame_ptr(frame: *mut FrameHeader, offset: FrameOffset) -> *mut u8 {
+    unsafe { (*frame).payload_base.byte_add(offset.0 as usize) }
+}
+
+fn load_slot(frame: *mut FrameHeader, offset: FrameOffset) -> Value {
+    unsafe { (frame_ptr(frame, offset) as *const Value).read() }
+}
+
+fn store_slot(frame: *mut FrameHeader, offset: FrameOffset, value: Value) {
+    store_slot_ptr(frame_ptr(frame, offset), value)
+}
+
+fn store_slot_ptr(dst: *mut u8, value: Value) {
+    unsafe { (dst as *mut Value).write(value) };
+}
+
 fn int_cmp(lhs: u64, rhs: u64, pred: ir::IntCmpPred, width: u8) -> bool {
     match (width, pred) {
         (8, ir::IntCmpPred::Eq) => (lhs as u8) == (rhs as u8),
@@ -1131,9 +1181,24 @@ fn int_cmp(lhs: u64, rhs: u64, pred: ir::IntCmpPred, width: u8) -> bool {
 pub fn make_stack_trace(k1: &TypedProgram, stack: &Stack2) -> String {
     use std::fmt::Write;
     let mut s = String::new();
-    for f in stack.frames.iter() {
-        write!(&mut s, "[{:02}] ", f.index).unwrap();
-        display_unit_name(&mut s, k1, f.unit.unit_id).unwrap();
+    for (index, f) in stack.debug_frames.iter().enumerate() {
+        write!(&mut s, "[{:02}] ", index).unwrap();
+        display_unit_name(&mut s, k1, f.unit_id).unwrap();
+        if let Some(span) = f.call_span {
+            let (source, line) = k1.get_span_location(span);
+            write!(&mut s, " {}:{}", source.filename, line.line_number()).unwrap()
+        }
+        writeln!(&mut s).unwrap();
+    }
+    s
+}
+
+fn make_active_stack_trace(k1: &TypedProgram, vm: &Vm2) -> String {
+    use std::fmt::Write;
+    let mut s = String::new();
+    for (index, f) in vm.stack.debug_frames.iter().enumerate() {
+        write!(&mut s, "[{:02}] ", index).unwrap();
+        display_unit_name(&mut s, k1, f.unit_id).unwrap();
         if let Some(span) = f.call_span {
             let (source, line) = k1.get_span_location(span);
             write!(&mut s, " {}:{}", source.filename, line.line_number()).unwrap()
@@ -1197,6 +1262,6 @@ fn report_execution_messages(k1: &mut TypedProgram, vm: &Vm2, span: SpanId) {
 
 #[track_caller]
 fn vm2_crash(k1: &TypedProgram, vm: &Vm2, msg: impl AsRef<str>) -> ! {
-    eprintln!("VM2 STACK TRACE\n{}", make_stack_trace(k1, &vm.stack));
+    eprintln!("VM2 STACK TRACE\n{}", make_active_stack_trace(k1, vm));
     panic!("{}", msg.as_ref())
 }
