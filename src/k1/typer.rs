@@ -51,7 +51,7 @@ use types::*;
 use crate::compiler::CompilerConfig;
 use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, BinaryOpKind, FileId, ForExpr, Ident, InterpolatedStringPart, NamedTypeArg, NumericWidth,
+    self, BinaryOpKind, FileId, ForExpr, StringId, InterpolatedStringPart, NamedTypeArg, NumericWidth,
     ParseError, ParsedAbilityExpr, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
     ParsedBlockKind, ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFnParamType,
     ParsedFunctionId, ParsedGlobalId, ParsedHandle, ParsedId, ParsedIfExpr, ParsedList,
@@ -59,7 +59,7 @@ use crate::parse::{
     ParsedProgram, ParsedSlice, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt, ParsedStmtId,
     ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
     ParsedUnaryOpKind, ParsedUseId, ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent,
-    Sources, StringId, StructValueField, StructValueFieldKind,
+    Sources, StructValueField, StructValueFieldKind,
 };
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -83,7 +83,7 @@ nz_u32_id!(TypedExprId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Linkage {
     Standard,
-    External { module_id: ModuleId, lib_name: Option<Ident>, fn_name: Option<Ident> },
+    External { module_id: ModuleId, lib_name: Option<StringId>, fn_name: Option<StringId> },
     Intrinsic,
 }
 
@@ -95,7 +95,7 @@ impl Linkage {
 
 #[derive(Debug, Clone)]
 pub struct TypedAbilityFunctionRef {
-    pub function_name: Ident,
+    pub function_name: StringId,
     pub index: u32,
     pub ability_id: AbilityId,
     pub function_id: FunctionId,
@@ -273,7 +273,7 @@ pub struct EvalExprContext {
     scope_id: ScopeId,
     expected_type_id: Option<TypeId>,
     static_ctx: Option<StaticExecContext>,
-    global_defn_name: Option<Ident>,
+    global_defn_name: Option<StringId>,
     flags: EvalExprFlags,
 }
 impl EvalExprContext {
@@ -413,13 +413,13 @@ pub enum PatternCtor {
     Array,
     Reference(PatternCtorId),
     Struct {
-        fields: SV4<(Ident, PatternCtorId)>,
+        fields: SV4<(StringId, PatternCtorId)>,
     },
     Enum {
-        variant_name: Ident,
+        variant_name: StringId,
     },
     Sum {
-        variant_name: Ident,
+        variant_name: StringId,
         inner: Option<PatternCtorId>,
     },
 }
@@ -449,7 +449,7 @@ impl PatternCtor {
         }
     }
 
-    pub fn push_field(&mut self, field: (Ident, PatternCtorId)) {
+    pub fn push_field(&mut self, field: (StringId, PatternCtorId)) {
         match self {
             PatternCtor::Struct { fields } => fields.push(field),
             _ => {}
@@ -510,7 +510,7 @@ impl TypedAbilityKind {
 
 #[derive(Debug, Clone)]
 pub struct TypedAbilityParam {
-    name: Ident,
+    name: StringId,
     type_variable_id: TypeId,
     is_impl_param: bool,
     #[allow(unused)]
@@ -519,7 +519,7 @@ pub struct TypedAbilityParam {
 impl_copy_if_small!(16, TypedAbilityParam);
 
 impl HasName for &TypedAbilityParam {
-    fn name(&self) -> Ident {
+    fn name(&self) -> StringId {
         self.name
     }
 }
@@ -530,7 +530,7 @@ impl HasTypeId for &TypedAbilityParam {
 }
 
 impl HasName for TypedAbilityParam {
-    fn name(&self) -> Ident {
+    fn name(&self) -> StringId {
         self.name
     }
 }
@@ -589,7 +589,7 @@ impl ArgsAndParams {
 
 #[derive(Clone)]
 pub struct TypedAbility {
-    pub name: Ident,
+    pub name: StringId,
     pub base_ability_id: AbilityId,
     pub self_type_id: TypeId,
     pub parameters: MSlice<TypedAbilityParam, TypedProgram>,
@@ -601,7 +601,7 @@ pub struct TypedAbility {
 }
 
 impl TypedAbility {
-    pub fn find_function_by_name(&self, name: Ident) -> Option<TypedAbilityFunctionRef> {
+    pub fn find_function_by_name(&self, name: StringId) -> Option<TypedAbilityFunctionRef> {
         self.functions.iter().find(|f| f.function_name == name).copied()
     }
 
@@ -617,7 +617,7 @@ impl TypedAbility {
 #[derive(Clone, Copy)]
 pub struct TypedSumPattern {
     pub sum_type_id: TypeId,
-    pub variant_name: Ident,
+    pub variant_name: StringId,
     pub variant_index: u32,
     pub payload: Option<TypedPatternId>,
     pub span: SpanId,
@@ -626,7 +626,7 @@ pub struct TypedSumPattern {
 #[derive(Clone, Copy)]
 pub struct TypedEnumPattern {
     pub enum_type_id: TypeId,
-    pub member_name: Ident,
+    pub member_name: StringId,
     pub index: u32,
     pub int_value: TypedIntValue,
     pub span: SpanId,
@@ -634,7 +634,7 @@ pub struct TypedEnumPattern {
 
 #[derive(Clone, Copy)]
 pub struct TypedStructPatternField {
-    pub name: Ident,
+    pub name: StringId,
     pub pattern: TypedPatternId,
     pub field_index: u32,
     pub field_type_id: TypeId,
@@ -649,7 +649,7 @@ pub struct TypedStructPattern {
 
 #[derive(Clone, Copy)]
 pub struct VariablePattern {
-    pub name: Ident,
+    pub name: StringId,
     pub type_id: TypeId,
     pub span: SpanId,
 }
@@ -891,7 +891,7 @@ impl TypedFunctionKind {
 
 #[derive(Clone)]
 pub struct FunctionSignature {
-    pub name: Option<Ident>,
+    pub name: Option<StringId>,
     pub function_type: TypeId,
     pub type_params: NamedTypeSlice,
     pub fnlike_type_params: MSlice<FnlikeTypeParam, TypedProgram>,
@@ -899,7 +899,7 @@ pub struct FunctionSignature {
 impl_copy_if_small!(24, FunctionSignature);
 
 impl FunctionSignature {
-    pub fn make_no_generics(name: Option<Ident>, function_type: TypeId) -> FunctionSignature {
+    pub fn make_no_generics(name: Option<StringId>, function_type: TypeId) -> FunctionSignature {
         FunctionSignature {
             name,
             function_type,
@@ -921,7 +921,7 @@ pub struct TypedFunctionParam {
 
 #[derive(Clone)]
 pub struct TypedFunction {
-    pub name: Ident,
+    pub name: StringId,
     pub scope: ScopeId,
     pub params: MSlice<TypedFunctionParam, TypedProgram>,
     pub type_params: NamedTypeSlice,
@@ -970,14 +970,14 @@ impl TypedFunction {
 ///            ^ existential type param 1, a static
 ///                                  ^ existential type param 2, a function type param
 pub struct FnlikeTypeParam {
-    pub name: Ident,
+    pub name: StringId,
     pub type_id: TypeId,
     pub value_param_index: u32,
     pub span: SpanId,
 }
 
 impl HasName for &FnlikeTypeParam {
-    fn name(&self) -> Ident {
+    fn name(&self) -> StringId {
         self.name
     }
 }
@@ -989,7 +989,7 @@ impl HasTypeId for &FnlikeTypeParam {
 }
 
 impl HasName for FnlikeTypeParam {
-    fn name(&self) -> Ident {
+    fn name(&self) -> StringId {
         self.name
     }
 }
@@ -1001,7 +1001,7 @@ impl HasTypeId for FnlikeTypeParam {
 }
 
 pub trait HasName {
-    fn name(&self) -> Ident;
+    fn name(&self) -> StringId;
 }
 
 pub trait HasTypeId {
@@ -1015,7 +1015,7 @@ impl<T> NamedType for T where T: HasTypeId + HasName {}
 // TODO(perf): We could certainly do a pass where we remove the name from tons and tons of places;
 // this would cut size in half which is meaningful considering how many of these we have
 pub struct NameAndType {
-    pub name: Ident,
+    pub name: StringId,
     pub type_id: TypeId,
 }
 
@@ -1024,7 +1024,7 @@ pub type NamedTypeSlice = MSlice<NameAndType, TypedProgram>;
 pub type TypeIdSlice = MSlice<TypeId, TypePool>;
 
 impl HasName for &NameAndType {
-    fn name(&self) -> Ident {
+    fn name(&self) -> StringId {
         self.name
     }
 }
@@ -1035,7 +1035,7 @@ impl HasTypeId for &NameAndType {
 }
 
 impl HasName for NameAndType {
-    fn name(&self) -> Ident {
+    fn name(&self) -> StringId {
         self.name
     }
 }
@@ -1152,7 +1152,7 @@ pub struct Call {
 
 #[derive(Clone, Copy)]
 pub struct StructLiteralField {
-    pub name: Ident,
+    pub name: StringId,
     // None means uninitialized
     pub expr: Option<TypedExprId>,
 }
@@ -1742,7 +1742,7 @@ pub enum VariableKind {
 
 #[derive(Clone)]
 pub struct Variable {
-    pub name: Ident,
+    pub name: StringId,
     pub type_id: TypeId,
     pub owner_scope: ScopeId,
     pub flags: VariableFlags,
@@ -1803,7 +1803,7 @@ pub enum NamespaceKind {
 
 #[derive(Debug)]
 pub struct Namespace {
-    pub name: Ident,
+    pub name: StringId,
     pub scope_id: ScopeId,
     pub namespace_type: NamespaceKind,
     pub companion_type_id: Option<TypeId>,
@@ -1833,7 +1833,7 @@ impl Namespaces {
         self.namespaces.iter()
     }
 
-    pub fn find_child_by_name(&self, parent_id: NamespaceId, name: Ident) -> Option<&Namespace> {
+    pub fn find_child_by_name(&self, parent_id: NamespaceId, name: StringId) -> Option<&Namespace> {
         self.iter()
             .find(|ns| ns.parent_id.is_some_and(|parent| parent == parent_id) && ns.name == name)
     }
@@ -2164,7 +2164,7 @@ macro_rules! get_ident {
         $self
             .ast
             .idents
-            .get($name)
+            .lookup($name)
             .unwrap_or_else(|| panic!("Missing identifier '{}' in pool", $name))
     };
 }
@@ -2369,7 +2369,7 @@ impl EvalTypeExprContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Symbol {
     pub namespace: NamespaceId,
-    pub identifier: Ident,
+    pub identifier: StringId,
 }
 
 #[derive(Debug, Clone)]
@@ -2401,7 +2401,7 @@ pub struct TypedModuleBuffers {
     lexer_tokens: Vec<lex::Token>,
     /// For Pattern matching trials
     trial_ctors: Vec<PatternCtorTrialEntry>,
-    field_ctors: Vec<Vec<(Ident, PatternCtorId)>>,
+    field_ctors: Vec<Vec<(StringId, PatternCtorId)>>,
     pattern_ctor_ancestor_stack: Vec<TypeId>,
     int_parse: String,
     visited_types: RefCell<Vec<TypeId>>,
@@ -2462,7 +2462,7 @@ impl Default for ModuleManifest {
 
 pub struct Module {
     pub id: ModuleId,
-    pub name: Ident,
+    pub name: StringId,
     pub home_dir: PathBuf,
     pub manifest: ModuleManifest,
     pub namespace_id: NamespaceId,
@@ -2474,7 +2474,7 @@ pub struct Module {
 
 impl Module {
     // Used to 'reserve' a spot for module so that parser can know its module id
-    pub fn pending(id: ModuleId, name: Ident) -> Self {
+    pub fn pending(id: ModuleId, name: StringId) -> Self {
         Module {
             id,
             name,
@@ -2662,7 +2662,7 @@ pub struct TypedProgram {
     /// Once a blanket impl succeeds, its added to ability_impl_table
     /// for that type
     pub blanket_impls: FxHashMap<AbilityId, EcoVec<AbilityImplId>>,
-    pub function_name_to_ability: FxHashMap<Ident, EcoVec<AbilityId>>,
+    pub function_name_to_ability: FxHashMap<StringId, EcoVec<AbilityId>>,
     pub namespace_ast_mappings: FxHashMap<ParsedNamespaceId, NamespaceId>,
     pub function_ast_mappings: FxHashMap<ParsedFunctionId, FunctionId>,
     pub global_ast_mappings: FxHashMap<ParsedGlobalId, TypedGlobalId>,
@@ -2709,7 +2709,7 @@ pub struct TypedProgram {
     pub vm_static_value_lookups: FxHashMap<StaticValueId, vm::Value>,
     pub vm_process_dlopen_handle: *mut std::ffi::c_void,
 
-    pub vm_dylib_handles: FxHashMap<(ModuleId, Ident), *mut std::ffi::c_void>,
+    pub vm_dylib_handles: FxHashMap<(ModuleId, StringId), *mut std::ffi::c_void>,
     pub vm_ffi_functions: FxHashMap<FunctionId, vm::VmFfiHandle>,
 
     /// Perm arena space
@@ -2998,7 +2998,7 @@ impl TypedProgram {
                 deps: vec![],
                 multithreading: false,
                 libs: vec![LibRef {
-                    name: self.ast.strings.intern("k1rt"),
+                    name: self.ast.idents.intern("k1rt"),
                     link_type: LibRefLinkType::Static,
                 }],
                 link_args: vec![],
@@ -3161,7 +3161,7 @@ impl TypedProgram {
     }
 
     pub fn get_string(&self, string_id: StringId) -> &str {
-        self.ast.strings.get_string(string_id)
+        self.ast.idents.get_string(string_id)
     }
 
     pub fn name_of_type(&self, type_id: TypeId) -> &str {
@@ -3171,18 +3171,18 @@ impl TypedProgram {
         }
     }
 
-    pub fn ident_str(&self, id: Ident) -> &str {
-        self.ast.idents.get_name(id)
+    pub fn ident_str(&self, id: StringId) -> &str {
+        self.ast.idents.get_string(id)
     }
 
-    pub fn ident_str_opt(&self, id: Option<Ident>) -> &str {
+    pub fn ident_str_opt(&self, id: Option<StringId>) -> &str {
         match id {
-            Some(id) => self.ast.idents.get_name(id),
+            Some(id) => self.ast.idents.get_string(id),
             None => "<no name>",
         }
     }
 
-    pub fn build_ident_with(&mut self, mut f: impl FnMut(&mut TypedProgram, &mut String)) -> Ident {
+    pub fn build_ident_with(&mut self, mut f: impl FnMut(&mut TypedProgram, &mut String)) -> StringId {
         let mut name_buffer = std::mem::take(&mut self.buffers.name_builder);
         f(self, &mut name_buffer);
         let new_name_ident = self.ast.idents.intern(&name_buffer);
@@ -3894,7 +3894,7 @@ impl TypedProgram {
                     }
                     // You can do dot access on References to get out their 'value' types
                     Type::Reference(r) => {
-                        if self.ast.idents.get_name(acc.member_name) != "value" {
+                        if self.ast.idents.get_string(acc.member_name) != "value" {
                             return make_fail_ast_id(
                                 &self.ast,
                                 "Invalid member access on Optional type; try '.value'",
@@ -3904,7 +3904,7 @@ impl TypedProgram {
                         Ok(r.inner_type)
                     }
                     Type::Function(fun) => {
-                        let member_name = self.ast.idents.get_name(acc.member_name);
+                        let member_name = self.ast.idents.get_string(acc.member_name);
                         match member_name {
                             "return" => Ok(fun.return_type),
                             _other => {
@@ -3927,7 +3927,7 @@ impl TypedProgram {
                         }
                     }
                     Type::Array(array_type) => {
-                        let member_name = self.ast.idents.get_name(acc.member_name);
+                        let member_name = self.ast.idents.get_string(acc.member_name);
                         match member_name {
                             "element" => Ok(array_type.element_type),
                             _ => {
@@ -3945,7 +3945,7 @@ impl TypedProgram {
                             "Type '{}' has no {} member named {}",
                             self.type_id_to_string(base_type),
                             if is_dot { "." } else { ":" },
-                            self.ast.idents.get_name(acc.member_name)
+                            self.ast.idents.get_string(acc.member_name)
                         );
                     }
                 }
@@ -7446,7 +7446,7 @@ impl TypedProgram {
                 None => failf!(
                     variable.name.name_span,
                     "No value '{}' is in scope",
-                    self.ast.idents.get_name(variable.name.name),
+                    self.ast.idents.get_string(variable.name.name),
                 ),
                 Some(fn_id) => Ok((None, self.function_to_reference(fn_id, variable_name_span))),
             },
@@ -7473,7 +7473,7 @@ impl TypedProgram {
                         return failf!(
                             variable_name_span,
                             "Cannot assign to captured variable '{}'. Declare it as a reference and use `<-` instead",
-                            self.ast.idents.get_name(variable.name.name)
+                            self.ast.idents.get_string(variable.name.name)
                         );
                     }
                     if !variable.name.path.is_empty() {
@@ -7698,7 +7698,7 @@ impl TypedProgram {
                         errf!(
                             span,
                             "Field {} not found on struct {}",
-                            self.ast.idents.get_name(field_access.field_name),
+                            self.ast.idents.get_string(field_access.field_name),
                             self.type_id_to_string(base_type_id)
                         )
                     })?;
@@ -7726,13 +7726,13 @@ impl TypedProgram {
                         errf!(
                             span,
                             "Field {} not found on struct {}\nFields are: {}",
-                            self.ast.idents.get_name(field_access.field_name),
+                            self.ast.idents.get_string(field_access.field_name),
                             self.type_id_to_string(base_type_id),
                             self.types
                                 .mem
                                 .getn(struct_type.fields)
                                 .iter()
-                                .map(|f| self.ast.idents.get_name(f.name))
+                                .map(|f| self.ast.idents.get_string(f.name))
                                 .join(", ")
                         )
                     })?;
@@ -7756,7 +7756,7 @@ impl TypedProgram {
             _ => failf!(
                 span,
                 "Field {} does not exist on type {}",
-                self.ast.idents.get_name(field_access.field_name),
+                self.ast.idents.get_string(field_access.field_name),
                 self.type_id_to_string(base_expr_type)
             ),
         }
@@ -8273,7 +8273,7 @@ impl TypedProgram {
                 let parsed_stmt_span = self.ast.get_stmt_span(code.parsed_stmt);
                 let span_content =
                     self.ast.sources.get_span_content(self.ast.spans.get(parsed_stmt_span));
-                let string_id = self.ast.strings.intern(span_content);
+                let string_id = self.ast.idents.intern(span_content);
                 let id = self.synth_string_literal(string_id, code.span);
                 // debug!("content for #code is exactly: `{span_content}`");
                 Ok(id)
@@ -8574,25 +8574,33 @@ impl TypedProgram {
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
         for param in self.ast.mem.getn(stat.parameter_names) {
             let variable_expr = self.ast.exprs.add(
-                ParsedExpr::Variable(ParsedVariable { name: QIdent::naked(*param, span) }),
+                ParsedExpr::Variable(ParsedVariable {
+                    name: QIdent::naked(param.name, param.span),
+                }),
                 false,
                 None,
             );
             let (variable_id, variable_expr) =
                 self.eval_variable(variable_expr, ctx.scope_id, false)?;
             let Some(variable_id) = variable_id else {
-                return failf!(span, "Must be a regular variable, eg not a function");
+                return failf!(param.span, "Must be a plain variable");
             };
             let variable_type = self.exprs.get_type(variable_expr);
+
+            self.register_variable_usage(variable_id, param.span);
+            debug!(
+                "Variable {} will be passed in to static execution",
+                self.ident_str(self.variables.get(variable_id).name),
+            );
             match self.types.get(variable_type) {
                 Type::StaticValue(svt) => {
                     if let Some(value_id) = svt.value_id {
                         static_parameters.push((variable_id, value_id));
                     } else {
                         return failf!(
-                            span,
+                            param.span,
                             "Value type parameter `{}` is unresolved",
-                            self.ident_str(*param)
+                            self.ident_str(param.name)
                         );
                     }
                 }
@@ -8601,29 +8609,22 @@ impl TypedProgram {
                         self.types.get(tp.static_constraint.unwrap()).as_value_type().unwrap();
                     let Some(value_id) = static_type.value_id else {
                         return failf!(
-                            span,
-                            "Expected a value type for argument {}, got a value family",
-                            self.ident_str(*param),
+                            param.span,
+                            "Expected a statically-known, 'value' type for argument {}, got a value family",
+                            self.ident_str(param.name),
                         );
                     };
                     static_parameters.push((variable_id, value_id));
                 }
                 _ => {
                     return failf!(
-                        span,
-                        "Non-value parameters aren't supported: {}: {}",
-                        self.ident_str(*param),
+                        param.span,
+                        "Expected a statically-known, 'value' type for argument {}, but got a {}",
+                        self.ident_str(param.name),
                         self.type_id_to_string(variable_type)
                     );
                 }
             }
-        }
-        for s in &static_parameters {
-            debug!(
-                "Variable {} := `{}` will be passed in to static execution",
-                self.ident_str(self.variables.get(s.0).name),
-                self.static_value_to_string(s.1)
-            );
         }
         let vm_result = self.execute_static_expr(
             base_expr,
@@ -8638,12 +8639,6 @@ impl TypedProgram {
 
         match kind {
             ParsedStaticBlockKind::Value => {
-                //eprintln!("expected_exists_non_static={expected_exists_non_static}");
-                //let expr = if expected_exists_non_static {
-                //    self.add_static_constant_expr(vm_result, span)
-                //} else {
-                //    self.add_static_value_expr(vm_result, span)
-                //};
                 let expr = self.add_static_value_expr(vm_result, span);
                 Ok(StaticExecutionResult::TypedExpr(expr))
             }
@@ -8651,7 +8646,7 @@ impl TypedProgram {
                 let StaticValue::String(string_id) = self.static_values.get(vm_result) else {
                     return failf!(span, "#meta block did not evaluate to a string");
                 };
-                let emitted_string = self.ast.strings.get_string(*string_id);
+                let emitted_string = self.ast.idents.get_string(*string_id);
 
                 if emitted_string.is_empty() {
                     if is_definition {
@@ -11648,7 +11643,7 @@ impl TypedProgram {
                 let result = self.eval_expr(arg.value, ctx.with_no_expected_type());
                 let expr = match result {
                     Err(typer_error) => {
-                        let string_id = self.ast.strings.intern(typer_error.message);
+                        let string_id = self.ast.idents.intern(typer_error.message);
                         let string_expr = self.synth_string_literal(string_id, call_span);
                         self.synth_optional_some(string_expr).0
                     }
@@ -11690,7 +11685,7 @@ impl TypedProgram {
                             string_id: *string_id,
                             span: fmt_string_arg_span,
                         };
-                        let newline_string_id = self.ast.strings.intern("\n");
+                        let newline_string_id = self.ast.idents.intern("\n");
                         let parts = if newline {
                             self.ast.mem.pushn(&[
                                 string_part,
@@ -11708,7 +11703,7 @@ impl TypedProgram {
                         let mut parts = self.ast.mem.new_list(is.parts.len() + newline as u32);
                         parts.extend(self.ast.mem.getn(is.parts));
                         if newline {
-                            let newline_string_id = self.ast.strings.intern("\n");
+                            let newline_string_id = self.ast.idents.intern("\n");
                             parts.push(InterpolatedStringPart::String {
                                 string_id: newline_string_id,
                                 span: fmt_string_arg_span,
@@ -11866,7 +11861,7 @@ impl TypedProgram {
                     ctx,
                     false,
                 )?;
-                let string_id = self.ast.strings.intern("Array index out of bounds");
+                let string_id = self.ast.idents.intern("Array index out of bounds");
                 let crash_message = self.synth_string_literal(string_id, span);
                 let crash_oob = self.synth_typed_call_typed_args(
                     self.ast.idents.f.core_crash_bounds.with_span(span),
@@ -11920,8 +11915,11 @@ impl TypedProgram {
                     let function_id = self.find_function_namespaced(ctx.scope_id, function_name)?;
                     if let Some(function_id) = function_id {
                         let function = self.get_function(function_id);
-                        if function.is_generic() {
-                            return failf!(call_span, "Cannot call toDyn with a generic function");
+                        if !function.is_concrete {
+                            return failf!(
+                                call_span,
+                                "Cannot call toDyn with a generic function (compiler todo: accept the type args and specialize it)"
+                            );
                         }
                         if function.builtin_type.is_some() {
                             return failf!(
@@ -13834,16 +13832,6 @@ impl TypedProgram {
 
     fn specialize_function_body(&mut self, function_id: FunctionId) -> K1Result<()> {
         let specialized_function = self.get_function(function_id);
-        // eprintln!("specialize_function_body\n  {}", self.function_id_to_string(function_id, false));
-        // nocommit: this crashes on default ability impl fns
-        //           probably because they are missing specialization info
-        // eprintln!(
-        //     "specialize_function_body with: {}",
-        //     self.pretty_print_named_type_slice(
-        //         specialized_function.specialization_info.unwrap().type_arguments,
-        //         ", "
-        //     )
-        // );
         if specialized_function.body_block.is_some() {
             return Ok(());
         }
@@ -14546,12 +14534,12 @@ impl TypedProgram {
 
     fn resolve_intrinsic_function_type(
         &self,
-        fn_name: Ident,
-        namespace_chain: Dlist<Ident, MemTmp>,
+        fn_name: StringId,
+        namespace_chain: Dlist<StringId, MemTmp>,
         ability_id: Option<AbilityId>,
         ability_impl_self_type: Option<TypeId>,
     ) -> Result<Builtin, String> {
-        let fn_name_str = self.ast.idents.get_name(fn_name);
+        let fn_name_str = self.ast.idents.get_string(fn_name);
         let second =
             self.tmp.dlist_nth_data_opt(namespace_chain, 2).map(|node| self.ident_str(*node));
         let result = if let Some(ability_id) = ability_id {
@@ -14809,7 +14797,7 @@ impl TypedProgram {
     fn eval_sum_constructor(
         &mut self,
         concrete_sum_type: TypeId,
-        variant_name: Ident,
+        variant_name: StringId,
         payload: Option<ParsedExprId>,
         ctx: EvalExprContext,
         variant_span: SpanId,
@@ -14878,7 +14866,7 @@ impl TypedProgram {
         &mut self,
         target_type: TypeId,
         signature: TypedAbilitySignature,
-        name: Ident,
+        name: StringId,
         scope_id: ScopeId,
         span: SpanId,
     ) -> K1Result<()> {
@@ -14938,7 +14926,7 @@ impl TypedProgram {
 
     fn check_type_constraints(
         &mut self,
-        param_name: Ident,
+        param_name: StringId,
         param_type: TypeId,
         passed_type: TypeId,
         substitution_pairs: &[TypeSubstitutionPair],
@@ -15771,8 +15759,7 @@ impl TypedProgram {
         let function_signature_span = parsed_function.signature_span;
 
         let no_body_expected = other_intrinsic || is_extern || is_ability_defn;
-        // nocommit DRY up is_generic and is_concrete
-        let is_generic = function.is_generic();
+        let is_generic = !is_concrete;
 
         let body_block = match parsed_function.body.as_ref() {
             None if builtin_type_phys_fn.is_some() => {
@@ -15882,8 +15869,7 @@ impl TypedProgram {
                     self.mem.new_list(enum_type.member_values.len());
                 for member in self.types.mem.getn(enum_type.member_values) {
                     let int_value_expr = self.synth_int(member.int_value, fn_span);
-                    let string_id = self.ast.strings.intern(self.ast.idents.get_name(member.name));
-                    let member_name_expr = self.synth_string_literal(string_id, fn_span);
+                    let member_name_expr = self.synth_string_literal(member.name, fn_span);
                     let cond =
                         self.synth_equals_call_simple(enum_arg_int_expr, int_value_expr, fn_span);
                     let instrs = self.mem.pushn(&[MatchingConditionInstr::cond(cond)]);
@@ -15982,8 +15968,7 @@ impl TypedProgram {
                 let mut arms: List<TypedMatchArm, _> = self.mem.new_list(sum_type.variants.len());
                 for variant in self.types.mem.getn(sum_type.variants) {
                     let int_value_expr = self.synth_int(variant.tag_value, fn_span);
-                    let string_id = self.ast.strings.intern(self.ast.idents.get_name(variant.name));
-                    let member_name_expr = self.synth_string_literal(string_id, fn_span);
+                    let member_name_expr = self.synth_string_literal(variant.name, fn_span);
                     let cond =
                         self.synth_equals_call_simple(sum_arg_int_expr, int_value_expr, fn_span);
                     let instrs = self.mem.pushn(&[MatchingConditionInstr::cond(cond)]);
@@ -16073,11 +16058,7 @@ impl TypedProgram {
                         FieldAccessKind::ValueToValue,
                         fn_span,
                     )?;
-                    // nocommit: Probably best to just have one pool for strings and idents, with
-                    // how often idents become strings
-                    let name_string_id =
-                        self.ast.strings.intern(self.ast.idents.get_name(field.name));
-                    let name_expr = self.synth_string_literal(name_string_id, fn_span);
+                    let name_expr = self.synth_string_literal(field.name, fn_span);
                     let print_name_expr = self.synth_printto_call(name_expr, writer_expr, ctx)?;
                     let print_colon_expr = self.synth_printto_call(colon_expr, writer_expr, ctx)?;
 
@@ -16623,8 +16604,8 @@ impl TypedProgram {
                 return failf!(
                     impl_function_span,
                     "Invalid implementation of {} in ability {}: {msg}",
-                    self.ast.idents.get_name(ability_function_ref.function_name),
-                    self.ast.idents.get_name(ability_name)
+                    self.ast.idents.get_string(ability_function_ref.function_name),
+                    self.ast.idents.get_string(ability_name)
                 );
             }
 
@@ -17300,7 +17281,7 @@ impl TypedProgram {
     pub fn run_on_module(
         &mut self,
         module_id: ModuleId,
-        module_name: Ident,
+        module_name: StringId,
         module_root_parsed_namespace: ParsedNamespaceId,
         manifest: ModuleManifest,
         home_dir: PathBuf,
@@ -17686,7 +17667,7 @@ impl TypedProgram {
         &mut self,
         type_id: TypeId,
         dst: &mut Vec<PatternCtorTrialEntry>,
-        field_ctors_buf: &mut Vec<Vec<(Ident, PatternCtorId)>>,
+        field_ctors_buf: &mut Vec<Vec<(StringId, PatternCtorId)>>,
         ancestors: &mut Vec<TypeId>,
         span_id: SpanId,
     ) {
@@ -17697,7 +17678,7 @@ impl TypedProgram {
         fn handle_sum_variant(
             k1: &mut TypedProgram,
             dst: &mut Vec<PatternCtorTrialEntry>,
-            field_ctors_buf: &mut Vec<Vec<(Ident, PatternCtorId)>>,
+            field_ctors_buf: &mut Vec<Vec<(StringId, PatternCtorId)>>,
             span_id: SpanId,
             ancestors: &mut Vec<TypeId>,
             v: &TypedSumVariant,
@@ -18205,7 +18186,7 @@ impl TypedProgram {
         let get_schema_variant = |self_: &TypedProgram, ident| {
             self_.types.sum_variant_by_name(type_schema.variants, ident).unwrap()
         };
-        let make_variant = |self_: &TypedProgram, name: Ident, payload: Option<StaticValueId>| {
+        let make_variant = |self_: &TypedProgram, name: StringId, payload: Option<StaticValueId>| {
             let v = get_schema_variant(self_, name);
             StaticSum { sum_type_id: type_schema_type_id, variant_index: v.index, payload }
         };
@@ -18253,9 +18234,7 @@ impl TypedProgram {
                 //   value: int-value,
                 // }]
                 for member_value in self.types.mem.getn(target_enum_members) {
-                    let name_string_id =
-                        self.ast.strings.intern(self.ast.idents.get_name(member_value.name));
-                    let name_value_id = self.static_values.add_string(name_string_id);
+                    let name_value_id = self.static_values.add_string(member_value.name);
 
                     let int_value_type_id = self.types.builtins.types_int_value.unwrap();
                     let int_value_sum = self.types.get(int_value_type_id).expect_sum();
@@ -18313,8 +18292,7 @@ impl TypedProgram {
                 let mut field_values: List<StaticValueId, StaticValuePool> =
                     self.static_values.mem.new_list(struct_type_fields.len());
                 for (index, f) in self.types.mem.getn(struct_type_fields).iter().enumerate() {
-                    let name_string_id = self.ast.strings.intern(self.ast.idents.get_name(f.name));
-                    let name_string_value_id = self.static_values.add_string(name_string_id);
+                    let name_string_value_id = self.static_values.add_string(f.name);
 
                     // We need to ensure that any and all typeIds that we share with the user
                     // are available at runtime, by calling these functions at least once.
@@ -18419,9 +18397,7 @@ impl TypedProgram {
                     self.static_values.add_size(to_k1_size_usize(payload_offset as usize));
                 let mut variant_values = self.static_values.mem.new_list(target_sum_variants.len());
                 for variant in self.types.mem.getn(target_sum_variants) {
-                    let name_string_id =
-                        self.ast.strings.intern(self.ast.idents.get_name(variant.name));
-                    let name_value_id = self.static_values.add_string(name_string_id);
+                    let name_value_id = self.static_values.add_string(variant.name);
 
                     let int_value_type_id = self.types.builtins.types_int_value.unwrap();
                     let int_value_enum = self.types.get(int_value_type_id).expect_sum();
@@ -18488,7 +18464,7 @@ impl TypedProgram {
                 // FIXME: Proper opaque type schema
                 let s = self.static_values.add(StaticValue::String(
                     self.ast
-                        .strings
+                        .idents
                         .intern(format!("opaque[size={}, align={}]", opaque.size, opaque.align)),
                 ));
                 make_variant(self, get_ident!(self, "other"), Some(s))
@@ -18519,10 +18495,7 @@ impl TypedProgram {
                 for param in self.types.mem.getn(fn_type.logical_params()) {
                     self.register_type_metainfo(param.type_id);
 
-                    let param_name_string_id =
-                        self.ast.strings.intern(self.ast.idents.get_name(param.name));
-                    let param_name_value_id =
-                        self.static_values.add(StaticValue::String(param_name_string_id));
+                    let param_name_value_id = self.static_values.add_string(param.name);
                     let param_type_id_value_id =
                         self.static_values.add_type_id_int_value(param.type_id);
                     let param_struct_value_id = self.static_values.add_struct_from_slice(
@@ -18581,7 +18554,7 @@ impl TypedProgram {
             | Type::StaticValue(_) => {
                 let s = self
                     .static_values
-                    .add(StaticValue::String(self.ast.strings.intern(typ.kind_name())));
+                    .add(StaticValue::String(self.ast.idents.intern(typ.kind_name())));
                 make_variant(self, get_ident!(self, "other"), Some(s))
             }
         };
@@ -18595,8 +18568,9 @@ impl TypedProgram {
             return *existing;
         }
 
+        // FIXME: get_type_name should re-use a buffer, really.
         let type_string = self.type_id_to_string(type_id);
-        let string_id = self.ast.strings.intern(type_string);
+        let string_id = self.ast.idents.intern(type_string);
         let value_id = self.static_values.add_string(string_id);
 
         self.type_names.insert(type_id, value_id);
@@ -18642,7 +18616,7 @@ impl TypedProgram {
     pub fn get_dylib_handle(
         &mut self,
         function_id: FunctionId,
-        lib_name_ident: Ident,
+        lib_name_ident: StringId,
         span: SpanId,
     ) -> K1Result<*mut std::ffi::c_void> {
         let Linkage::External { module_id, .. } = self.functions.get(function_id).linkage else {
@@ -18652,7 +18626,7 @@ impl TypedProgram {
             return Ok(*handle);
         }
 
-        let lib_name_str = self.ast.idents.get_name(lib_name_ident);
+        let lib_name_str = self.ast.idents.get_string(lib_name_ident);
         let lib_filename: PathBuf = match self.config.target.target_os() {
             crate::compiler::TargetOs::Linux => {
                 Path::new(&format!("lib{}", lib_name_str)).with_extension("so")
@@ -18744,7 +18718,7 @@ impl TypedProgram {
     pub fn make_qualified_name(
         &self,
         scope: ScopeId,
-        name: Ident,
+        name: StringId,
         delimiter: &str,
         skip_root: bool,
     ) -> String {

@@ -8,7 +8,7 @@
 /// in having our own. It'll be easier to write an interpreter for
 /// and will help make adding other backends far, far easier
 use crate::kmem::{DlNode, Dlist, Handle, List, NodeHandle};
-use crate::parse::{self, Ident, NumericWidth};
+use crate::parse::{self, StringId, NumericWidth};
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
 use crate::{failf, static_assert_size};
@@ -37,7 +37,7 @@ macro_rules! b_ice {
 
 #[derive(Clone, Copy)]
 pub struct IrDebugVariableInfo {
-    pub name: Ident,
+    pub name: StringId,
     pub original_type_id: TypeId,
     pub user_hidden: bool,
     pub source_span: SpanId,
@@ -268,8 +268,8 @@ pub enum IrCallee {
     /// invoke this function using libffi, the llvm backend will just
     /// emit a call and expect linkage
     Extern {
-        library_name: Option<parse::Ident>,
-        function_name: parse::Ident,
+        library_name: Option<parse::StringId>,
+        function_name: parse::StringId,
         function_id: FunctionId,
     },
     // (No lambda call; been compiled down to just calls and args by now)

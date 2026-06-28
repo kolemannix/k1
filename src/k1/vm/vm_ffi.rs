@@ -11,7 +11,7 @@ use crate::typer::types::{AggType, Layout, PhysicalType, PhysicalTypeEnum, Scala
 use crate::typer::{FunctionId, K1Result, TypedProgram};
 use crate::vm;
 use crate::vm::{Value, Vm};
-use crate::{failf, kmem::MSlice, parse::Ident};
+use crate::{failf, kmem::MSlice, parse::StringId};
 
 pub(super) fn handle_ffi_call(
     k1: &mut TypedProgram,
@@ -19,8 +19,8 @@ pub(super) fn handle_ffi_call(
     frame_index: u32,
     return_pt: PhysicalType,
     args: MSlice<ir::Value, ProgramIr>,
-    lib_name: Option<Ident>,
-    fn_name: Ident,
+    lib_name: Option<StringId>,
+    fn_name: StringId,
     function_id: FunctionId,
 ) -> K1Result<Value> {
     let nargs = args.len() as usize;

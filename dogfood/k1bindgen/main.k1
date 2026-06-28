@@ -668,23 +668,25 @@ fn visit-opaque(_bg: *mut BindgenState, cursor: CXCursor): k1-type {
   :opaque({ size, align })
 }
 
-// nocommit deslopify
 fn map-fn-decl(cursor: CXCursor): { fn-type: fn-type, error: ?string } {
-  let returned result = zeroed();
-  let cx-type = clang/getCursorType(cursor);
-  let fallback = map-fn-type(cx-type);
-  &result.fn-type*.return-type* <- fallback.return-type;
-  &result.fn-type*.params* <- list/empty[fn-type.params.t]();
+  let returned result = {
+    let cx-type = clang/getCursorType(cursor);
+    let ret-cx-type = clang/getResultType(cx-type);
+    let return-type = map-type(ret-cx-type);
+    {
+      fn-type: {
+        params: list/empty(),
+        return-type,
+      },
+      error: :none
+    }
+  };
 
   clang/visitChildren(
     parent = cursor,
     visitor = visit-fn-param,
     client_data = &result.as[ptr]
   );
-
-  if result.fn-type.params.len() != fallback.params.len() {
-    &result.error* <- :some("Function parameter cursor count ({result.fn-type.params.len()}) does not match function type argument count ({fallback.params.len()})")
-  };
 
   result
 }
@@ -715,7 +717,6 @@ fn map-fn-type(cx-type: clang/CXType): fn-type {
   };
   let ret-type = clang/getResultType(cx-type);
   let arg-count = clang/getNumArgTypes(cx-type);
-  // debug("  map-fn-type {arg-count} arg types");
   let args = list/empty[fn-type.params.t]();
   for IntRange/upTo(arg-count) {
     let arg-cx-type = clang/getArgType(cx-type, it.as[u32]);

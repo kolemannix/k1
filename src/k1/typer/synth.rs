@@ -230,7 +230,7 @@ impl TypedProgram {
     /// This is the vastly most common case
     pub(super) fn synth_variable_defn_simple(
         &mut self,
-        name: Ident,
+        name: StringId,
         initializer: TypedExprId,
         owner_scope: ScopeId,
     ) -> SynthedVariable {
@@ -240,7 +240,7 @@ impl TypedProgram {
     /// Creates a user-code-visible variable
     pub(super) fn synth_variable_defn_visible(
         &mut self,
-        name: Ident,
+        name: StringId,
         initializer: TypedExprId,
         owner_scope: ScopeId,
         span: SpanId,
@@ -251,7 +251,7 @@ impl TypedProgram {
     /// no_mangle: Skip mangling if we want the variable to be accessible from user code
     pub(super) fn synth_variable_defn(
         &mut self,
-        name: Ident,
+        name: StringId,
         initializer_id: TypedExprId,
         no_mangle: bool,
         is_mutable: bool,
@@ -273,7 +273,7 @@ impl TypedProgram {
             name
         } else {
             self.build_ident_with(|k1, s| {
-                write!(s, "__{}_{}", k1.ast.idents.get_name(name), k1.variables.len()).unwrap();
+                write!(s, "__{}_{}", k1.ast.idents.get_string(name), k1.variables.len()).unwrap();
             })
         };
         let mut flags = VariableFlags::empty();
@@ -409,7 +409,7 @@ impl TypedProgram {
         s: impl AsRef<str>,
         span: SpanId,
     ) -> TypedExprId {
-        let string_id = self.ast.strings.intern(s);
+        let string_id = self.ast.idents.intern(s);
         self.synth_string_literal(string_id, span)
     }
 
@@ -427,7 +427,7 @@ impl TypedProgram {
         let line_number = line.line_number();
 
         let source = self.ast.sources.source_by_span(self.ast.spans.get(span));
-        let filename_string_id = self.ast.strings.intern(&source.filename);
+        let filename_string_id = self.ast.idents.intern(&source.filename);
         let filename_expr = self.synth_string_literal(filename_string_id, span);
 
         let line_number_expr = self.synth_int(TypedIntValue::U64(line_number as u64), span);
@@ -447,7 +447,7 @@ impl TypedProgram {
         span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        let message_string_id = self.ast.strings.intern(message);
+        let message_string_id = self.ast.idents.intern(message);
         let message_expr = self.synth_string_literal(message_string_id, span);
         self.synth_typed_call_typed_args(
             self.ast.idents.f.core_crash.with_span(span),
@@ -522,7 +522,7 @@ impl TypedProgram {
         }
     }
 
-    pub(super) fn synth_parsed_variable_expr(&mut self, name: Ident, span: SpanId) -> ParsedExprId {
+    pub(super) fn synth_parsed_variable_expr(&mut self, name: StringId, span: SpanId) -> ParsedExprId {
         self.ast.exprs.add(
             ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span) }),
             false,
@@ -530,7 +530,7 @@ impl TypedProgram {
         )
     }
 
-    pub(super) fn synth_parsed_type_app(&mut self, name: Ident, span: SpanId) -> ParsedTypeExprId {
+    pub(super) fn synth_parsed_type_app(&mut self, name: StringId, span: SpanId) -> ParsedTypeExprId {
         self.ast.type_exprs.add(ParsedTypeExpr::TypeApplication(parse::TypeApplication {
             name: QIdent::naked(name, span),
             args: MSlice::empty(),
@@ -590,7 +590,7 @@ impl TypedProgram {
         fn get_named_arg(
             k1: &mut TypedProgram,
             args: TypedExprId,
-            name: Ident,
+            name: StringId,
             span: SpanId,
         ) -> Option<TypedExprId> {
             let type_id = k1.exprs.get_type(args);
@@ -684,18 +684,18 @@ impl TypedProgram {
                         if let InterpolatedStringPart::String { string_id: next_string, .. } = next
                         {
                             let buf = combined.get_or_insert_with(|| {
-                                String::from(self.ast.strings.get_string(string_to_print))
+                                String::from(self.ast.idents.get_string(string_to_print))
                             });
-                            buf.push_str(self.ast.strings.get_string(*next_string));
+                            buf.push_str(self.ast.idents.get_string(*next_string));
                             i += 1;
                         } else {
                             break;
                         }
                     }
                     if let Some(combined) = combined {
-                        string_to_print = self.ast.strings.intern(combined);
+                        string_to_print = self.ast.idents.intern(combined);
                     }
-                    if !self.ast.strings.get_string(string_to_print).is_empty() {
+                    if !self.ast.idents.get_string(string_to_print).is_empty() {
                         let string_expr = self.synth_string_literal(string_to_print, span);
                         let print_call = self.synth_printto_call(
                             string_expr,

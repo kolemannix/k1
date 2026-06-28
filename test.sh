@@ -21,6 +21,6 @@ target/debug/k1             test  dogfood/k1bindgen
 
 if rg --type-add 'k1:*.k1' -c 'nocommit' -t rust -t c -t k1 .
 then
-    echo "Found nocommit messages"
+    echo "Everything passed! But we're failing since there are nocommit messages"
     exit 1
 fi
