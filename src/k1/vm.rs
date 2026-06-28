@@ -9,7 +9,7 @@ use colored::Colorize;
 use fxhash::FxHashMap;
 use log::debug;
 
-mod vm_ffi;
+pub(crate) mod vm_ffi;
 #[cfg(test)]
 mod vm_test;
 
@@ -184,9 +184,9 @@ pub mod k1_types {
 #[derive(Debug, Clone, Copy)]
 pub struct VmFfiHandle {
     #[allow(unused)]
-    library_handle: *mut c_void,
-    function_pointer: *mut c_void,
-    cif: libffi::raw::ffi_cif,
+    pub(crate) library_handle: *mut c_void,
+    pub(crate) function_pointer: *mut c_void,
+    pub(crate) cif: libffi::raw::ffi_cif,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,7 +346,7 @@ fn write_bytes(w: &mut impl std::fmt::Write, bytes: &[u8]) -> std::fmt::Result {
 #[derive(Debug, Clone, Copy)]
 // Pure storage to be interpreted
 #[repr(transparent)]
-pub struct Value(u64);
+pub struct Value(pub(crate) u64);
 
 impl Value {
     pub const TRUE: Value = Self::bool(true);
@@ -356,7 +356,7 @@ impl Value {
         if b { Value(1) } else { Value(0) }
     }
 
-    fn as_bool(&self) -> bool {
+    pub(crate) fn as_bool(&self) -> bool {
         #[cfg(debug_assertions)]
         {
             let v = self.bits();
@@ -373,15 +373,15 @@ impl Value {
         Value(ptr.addr() as u64)
     }
 
-    const fn bits(&self) -> u64 {
+    pub(crate) const fn bits(&self) -> u64 {
         self.0
     }
 
-    const fn as_usize(&self) -> usize {
+    pub(crate) const fn as_usize(&self) -> usize {
         self.0 as usize
     }
 
-    const fn truncated(&self, to: NumericWidth) -> Self {
+    pub(crate) const fn truncated(&self, to: NumericWidth) -> Self {
         match to {
             NumericWidth::B8 => Value(self.0 as u8 as u64),
             NumericWidth::B16 => Value(self.0 as u16 as u64),
@@ -390,7 +390,7 @@ impl Value {
         }
     }
 
-    const fn sign_extended(&self, from: NumericWidth, to: NumericWidth) -> Self {
+    pub(crate) const fn sign_extended(&self, from: NumericWidth, to: NumericWidth) -> Self {
         match (from, to) {
             (NumericWidth::B8, NumericWidth::B16) => {
                 let v = self.0 as i8 as i16 as u16 as u64;
@@ -420,35 +420,35 @@ impl Value {
         }
     }
 
-    const fn u8(u8: u8) -> Value {
+    pub(crate) const fn u8(u8: u8) -> Value {
         Value(u8 as u64)
     }
 
-    const fn u16(u16: u16) -> Value {
+    pub(crate) const fn u16(u16: u16) -> Value {
         Value(u16 as u64)
     }
 
-    const fn u32(u32: u32) -> Value {
+    pub(crate) const fn u32(u32: u32) -> Value {
         Value(u32 as u64)
     }
 
-    const fn u64(u64: u64) -> Value {
+    pub(crate) const fn u64(u64: u64) -> Value {
         Value(u64)
     }
 
-    const fn i8(i8: i8) -> Value {
+    pub(crate) const fn i8(i8: i8) -> Value {
         Value(i8 as u8 as u64)
     }
 
-    const fn i16(i16: i16) -> Value {
+    pub(crate) const fn i16(i16: i16) -> Value {
         Value(i16 as u16 as u64)
     }
 
-    const fn i32(i32: i32) -> Value {
+    pub(crate) const fn i32(i32: i32) -> Value {
         Value(i32 as u32 as u64)
     }
 
-    const fn i64(i64: i64) -> Value {
+    pub(crate) const fn i64(i64: i64) -> Value {
         Value(i64 as u64)
     }
 
@@ -480,13 +480,13 @@ impl Value {
     }
 
     #[track_caller]
-    fn as_ptr(&self) -> *mut u8 {
+    pub(crate) fn as_ptr(&self) -> *mut u8 {
         let p = self.0 as *mut u8;
         sanity_check_ptr(p);
         p
     }
 
-    fn as_ptr_unchecked(&self) -> *const u8 {
+    pub(crate) fn as_ptr_unchecked(&self) -> *const u8 {
         let p = self.0 as *const u8;
         p
     }
@@ -1753,7 +1753,7 @@ fn fulfill_return(
     }
 }
 
-fn function_id_to_ref_value(function_id: FunctionId) -> Value {
+pub(crate) fn function_id_to_ref_value(function_id: FunctionId) -> Value {
     let function_id_u32 = function_id.as_u32();
     let function_id_as_ptr = function_id_u32 as usize as *const u8;
     debug!(
@@ -2000,14 +2000,14 @@ pub fn store_value(types: &TypePool, t: PhysicalType, dst: *mut u8, value: Value
     }
 }
 
-fn memmove(src: *const u8, dst: *mut u8, size_bytes: usize) {
+pub(crate) fn memmove(src: *const u8, dst: *mut u8, size_bytes: usize) {
     //debug!("memmove src {:?} dst {:?} size {}", src, dst, size_bytes);
     unsafe {
         core::ptr::copy(src, dst, size_bytes);
     }
 }
 
-fn memcopy(src: *const u8, dst: *mut u8, size_bytes: usize) {
+pub(crate) fn memcopy(src: *const u8, dst: *mut u8, size_bytes: usize) {
     //debug!("memcopy src {:?} dst {:?} size {}", src, dst, size_bytes);
     unsafe {
         core::ptr::copy_nonoverlapping(src, dst, size_bytes);

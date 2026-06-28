@@ -3,6 +3,7 @@
 
 use smallvec::SmallVec;
 
+pub mod bc;
 mod clock;
 pub mod codegen_llvm;
 pub mod compiler;
@@ -16,6 +17,7 @@ mod rawref;
 pub mod typer;
 mod vecpool;
 pub mod vm;
+pub mod vm2;
 mod vpool;
 //pub mod codegen_llvm_old;
 //pub mod vmtw;

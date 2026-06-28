@@ -11,9 +11,10 @@ pub(crate) mod typed_int_value;
 pub(crate) mod types;
 pub(crate) mod visit;
 
+use crate::bc;
 use crate::ir::{BackendBuiltin, IrUnitId};
 use crate::typer::dump::K1DisplayArgs;
-use crate::{clock, compiler, ir, k1_format, k1_format_user, kbail, kerr, vm};
+use crate::{clock, compiler, ir, k1_format, k1_format_user, kbail, kerr, vm, vm2};
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
@@ -2692,7 +2693,7 @@ pub struct TypedProgram {
 
     // `vm`: Can execute code statically; primary VM; gets 'rented out'
     // from the TypedProgram to avoid borrow bullshit
-    pub vm: Box<Option<vm::Vm>>,
+    pub vm: Box<Option<vm2::Vm2>>,
 
     // Used to execute static code if it is first encountered
     // while executing the surrounding code statically
@@ -2700,7 +2701,7 @@ pub struct TypedProgram {
     // not see any of the values from its calling environment, just
     // like how comptime code can't see runtime values. Each level
     // of static execution has the same relationship with its outer caller
-    pub vm_alts: Vec<vm::Vm>,
+    pub vm_alts: Vec<vm2::Vm2>,
 
     // For every static value, once evaluated, we store its runtime representation
     // here; the data lives in vm_static_stack
@@ -2718,6 +2719,7 @@ pub struct TypedProgram {
     pub tmp: kmem::Mem<MemTmp>,
 
     pub ir: ir::ProgramIr,
+    pub bc: bc::ProgramBc,
 
     pub timing: Timing,
 
@@ -2876,13 +2878,13 @@ impl TypedProgram {
             },
             patterns: TypedPatternPool::make(),
             pattern_ctors,
-            vm: Box::new(Some(vm::Vm::make())),
+            vm: Box::new(Some(vm2::Vm2::make())),
             vm_alts: vec![
-                vm::Vm::make(),
-                vm::Vm::make(),
-                vm::Vm::make(),
-                vm::Vm::make(),
-                vm::Vm::make(),
+                vm2::Vm2::make(),
+                vm2::Vm2::make(),
+                vm2::Vm2::make(),
+                vm2::Vm2::make(),
+                vm2::Vm2::make(),
             ],
             vm_static_stack,
             vm_global_constant_lookups,
@@ -2895,6 +2897,7 @@ impl TypedProgram {
             tmp: kmem::Mem::make(),
 
             ir: ir::ProgramIr::make(),
+            bc: bc::ProgramBc::make(),
 
             timing: Timing {
                 clock,
@@ -5914,7 +5917,7 @@ impl TypedProgram {
 
     fn execute_static_expr_with_vm(
         &mut self,
-        vm: &mut vm::Vm,
+        vm: &mut vm2::Vm2,
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
         input_parameters: &[(VariableId, StaticValueId)],
@@ -5971,8 +5974,8 @@ impl TypedProgram {
             );
         }
 
-        let execution_result = vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
-            let stack_trace = vm::make_stack_trace(self, &vm.stack);
+        let execution_result = vm2::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
+            let stack_trace = vm2::make_stack_trace(self, &vm.stack);
             e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
             e
         });
@@ -5999,7 +6002,7 @@ impl TypedProgram {
     fn do_with_vm<T>(
         &mut self,
         span: SpanId,
-        mut f: impl FnMut(&mut TypedProgram, &mut vm::Vm) -> T,
+        mut f: impl FnMut(&mut TypedProgram, &mut vm2::Vm2) -> T,
     ) -> T {
         let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
             None => {
@@ -6007,7 +6010,7 @@ impl TypedProgram {
                 let alt_vm = match maybe_alt {
                     None => {
                         self.report_warn(span, "Had to make a new alt VM");
-                        let new_vm = vm::Vm::make();
+                        let new_vm = vm2::Vm2::make();
                         new_vm
                     }
                     Some(alt_vm) => alt_vm,
@@ -6038,9 +6041,9 @@ impl TypedProgram {
             k1.compile_all_pending_ir(span)?;
 
             let execution_result =
-                vm::execute_compiled_function(k1, vm, function_id, function_parameters).map_err(
+                vm2::execute_compiled_function(k1, vm, function_id, function_parameters).map_err(
                     |mut e| {
-                        let stack_trace = vm::make_stack_trace(k1, &vm.stack);
+                        let stack_trace = vm2::make_stack_trace(k1, &vm.stack);
                         e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
                         e
                     },

@@ -114,7 +114,7 @@ pub(super) fn handle_ffi_call(
     }
 }
 
-fn prep_ffi_cif(
+pub(crate) fn prep_ffi_cif(
     k1: &mut TypedProgram,
     physical_function_type: PhysicalFunctionType,
     span: SpanId,
