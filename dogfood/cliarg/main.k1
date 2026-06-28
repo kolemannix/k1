@@ -59,7 +59,8 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
     // For each field in the target type, create a local variable to house our parsed data
     for s.fields {
       switch get-arg-kind(it.type-id) {
-        :string or :opt-string -> writelnf(code, "let {it.name}-val: ?typeFromId({args-type-id}).{it.name} = :none;"),
+        :string      -> writelnf(code, "let {it.name}-val: ?typeFromId({args-type-id}).{it.name} = :none;"),
+        :opt-string  -> writelnf(code, "let {it.name}-val: typeFromId({args-type-id}).{it.name} = :none;"),
         :list-string -> writelnf(code, "let {it.name}-val: typeFromId({args-type-id}).{it.name} = list/empty();"),
       };
     };

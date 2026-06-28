@@ -2,20 +2,22 @@
 
 
 Minor and ideas
-- nocommit pattern match on opaque
-- nocommit pattern match on union
-- [ ] allow opaques to be named / nominal; bindgen them that way. The name is really more useful than the size/align
+- [x] allow opaques to be named / nominal; bindgen them that way. The name is really more useful than the size/align
 - [ ] Better in-place construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
-      way to get the heap address
+      way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
 
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [ ] `#[must_use]` equivalent
 - [ ] enum-from-sum type operator
-- [ ] Opaque type solution. Try using 1-member structs and make struct's first field special
+- [ ] 'newtype' solution; 'distinct' types? `type handle = distinct[size]`
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
 - [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
 - [ ] Finish removing let*
+- [ ] remove 'swtich' keyword, unify everything under 'if':
+      `if x           then <a> else <b>`
+      `if x is <pat>` then <a> else <b>
+      `if x           { <pat>, <pat>, <pat> }
 - [ ] New struct literal syntax : `{ x: 1, y: 2 }` -> `{ .x = 1, .y = 2 }`. Why? clarity of meaning of "=", consistent meaning of '.', and parsing ambiguity resolution
       We still allow `{ .x, .y }` to mean `{ .x = x, .y = y }`
 - [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
@@ -23,8 +25,9 @@ Minor and ideas
 - [ ] [design/flags_in_tags.k1]
 - [ ] Inspired by fast_float, char to digit lookup table
 Simple but missing
-- [ ] auto-equals implementation on-demand for structs
-- [ ] auto-print implementation on-demand for sums and structs
+- [x] auto-equals implementation on-demand for structs
+- [x] auto-print implementation on-demand for structs
+- [ ] auto-print implementation on-demand for sums
 - [ ] Exported functions
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
       currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
@@ -59,12 +62,10 @@ bindgen dogfood list
 
 # Bugs
 - [ ] captured context parameter results in 'Missing variable' in ir
-- [ ] Out of order type definitions don't work with aliases
-- [ ] same-level recursion is not caught behind option
+- [x] Out of order type definitions don't work with aliases
+- [x] same-level recursion is not caught behind option
 - [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)
 - [ ] Require that a blanket impl's params appear in the Self type
-- [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
-                             'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 - [ ] Test handling of NaN and Infinity literals, other float edge cases
 
 
