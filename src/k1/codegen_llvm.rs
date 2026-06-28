@@ -39,7 +39,7 @@ use crate::ir::{
 };
 use crate::kmem::{Handle, List, MSlice};
 use crate::lex::SpanId;
-use crate::parse::{FileId, Ident, StringId};
+use crate::parse::{FileId, StringId};
 use crate::typer::types::{
     AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, PhysicalTypeEnum, PhysicalTypeResult,
     ScalarType, Type, TypeDefnInfo, TypeId,
@@ -1691,7 +1691,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         basic_value.into()
     }
 
-    fn find_libc_function_id(&self, ident: Ident) -> Option<FunctionId> {
+    fn find_libc_function_id(&self, ident: StringId) -> Option<FunctionId> {
         self.k1.scopes.find_function(self.k1.scopes.libc_scope_id, ident)
     }
 

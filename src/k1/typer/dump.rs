@@ -55,83 +55,83 @@ impl TypedProgram {
         s
     }
 
-    pub fn display_scope(&self, scope_id: ScopeId, writ: &mut impl Write) -> std::fmt::Result {
+    pub fn display_scope(&self, scope_id: ScopeId, w: &mut impl Write) -> std::fmt::Result {
         let scope = self.scopes.get_scope(scope_id);
-        self.display_scope_name(writ, scope_id)?;
-        writeln!(writ, "kind: {}", scope.scope_type.short_name())?;
+        self.display_scope_name(w, scope_id)?;
+        writeln!(w, "kind: {}", scope.scope_type.short_name())?;
 
         if !scope.variables.is_empty() {
-            writ.write_str("\tVARS\n")?;
+            w.write_str("\tVARS\n")?;
         }
         for (id, variable_in_scope) in scope.variables.iter() {
-            write!(writ, "\t{} -> ", self.ident_str(*id))?;
+            write!(w, "\t{} -> ", self.ident_str(*id))?;
             match variable_in_scope {
-                VariableInScope::Masked => writ.write_str("masked")?,
+                VariableInScope::Masked => w.write_str("masked")?,
                 VariableInScope::Defined(variable_id) => {
                     let variable = self.variables.get(*variable_id);
-                    self.display_variable(variable, writ)?;
+                    self.display_variable(variable, w)?;
                 }
             }
-            writ.write_str("\n")?;
+            w.write_str("\n")?;
         }
         if !scope.functions.is_empty() {
-            writ.write_str("\tFUNCTIONS\n")?;
+            w.write_str("\tFUNCTIONS\n")?;
         }
         for (_name, function_id) in scope.functions.iter() {
             let function = self.get_function(*function_id);
-            writ.write_str("\t")?;
-            self.display_function(function, writ, false)?;
-            writ.write_str("\n")?;
+            w.write_str("\t")?;
+            self.display_function(function, w, false)?;
+            w.write_str("\n")?;
         }
         if !scope.types.is_empty() {
-            writ.write_str("\tTYPES\n")?;
+            w.write_str("\tTYPES\n")?;
         }
         for (ident, type_id) in scope.types.iter() {
-            writ.write_str("\t")?;
-            self.write_ident(writ, *ident)?;
-            writ.write_str(" -> ")?;
-            self.display_type_id(writ, *type_id, true)?;
-            writ.write_str("\n")?;
+            w.write_str("\t")?;
+            self.write_ident(w, *ident)?;
+            w.write_str(" -> ")?;
+            self.display_type_id(w, *type_id, true)?;
+            w.write_str("\n")?;
         }
         if !scope.namespaces.is_empty() {
-            writ.write_str("\tNAMESPACES\n")?;
+            w.write_str("\tNAMESPACES\n")?;
         }
         for (name, namespace_id) in scope.namespaces.iter() {
             let namespace = self.namespaces.get(*namespace_id);
-            writeln!(writ, "\tns {} -> {}", self.ident_str(*name), self.ident_str(namespace.name))?;
+            writeln!(w, "\tns {} -> {}", self.ident_str(*name), self.ident_str(namespace.name))?;
         }
         Ok(())
     }
 
-    fn display_variable(&self, var: &Variable, writ: &mut impl Write) -> std::fmt::Result {
-        writ.write_str("(")?;
-        writ.write_str(self.ident_str(var.name))?;
-        writ.write_str(": ")?;
-        self.display_type_id(writ, var.type_id, false)?;
-        writ.write_str(")")?;
+    fn display_variable(&self, var: &Variable, w: &mut impl Write) -> std::fmt::Result {
+        w.write_str("(")?;
+        self.write_ident(w, var.name)?;
+        w.write_str(": ")?;
+        self.display_type_id(w, var.type_id, false)?;
+        w.write_str(")")?;
         Ok(())
     }
 
     pub fn display_type_id<W: fmt::Write + ?Sized>(
         &self,
-        writ: &mut W,
+        w: &mut W,
         ty: TypeId,
         expand: bool,
     ) -> std::fmt::Result {
         let mut visited = self.buffers.visited_types.borrow_mut();
-        let res = self.display_type_id_ext(writ, ty, expand, &mut visited);
+        let res = self.display_type_id_ext(w, ty, expand, &mut visited);
         visited.clear();
         res
     }
 
     pub fn display_type_id_rec<W: fmt::Write + ?Sized>(
         &self,
-        writ: &mut W,
+        w: &mut W,
         ty: TypeId,
         expand: bool,
         visiting: &mut Vec<TypeId>,
     ) -> std::fmt::Result {
-        self.display_type_id_ext(writ, ty, expand, visiting)
+        self.display_type_id_ext(w, ty, expand, visiting)
     }
 
     // Silly function but so commonly needed its worth the call-site ergonomics
@@ -208,7 +208,7 @@ impl TypedProgram {
             }
             Type::Enum(se) => {
                 if let Some(defn_info) = defn_info {
-                    w.write_str(self.ident_str(defn_info.name))?;
+                    self.write_ident(w, defn_info.name)?;
                     if let Some(spec_info) = self.types.get_instance_info(type_id) {
                         self.display_instance_info(w, spec_info, expand, visiting)?;
                     }
@@ -230,7 +230,7 @@ impl TypedProgram {
             Type::Pointer => w.write_str("ptr"),
             Type::Struct(struc) => {
                 if let Some(defn_info) = defn_info {
-                    w.write_str(self.ident_str(defn_info.name))?;
+                    self.write_ident(w, defn_info.name)?;
                     if let Some(spec_info) = self.types.get_instance_info(type_id) {
                         self.display_instance_info(w, spec_info, expand, visiting)?;
                     }
@@ -249,10 +249,10 @@ impl TypedProgram {
                     self.display_scope_name(w, tv.scope_id)?;
                     w.write_str(".")?;
                     w.write_str("'")?;
-                    w.write_str(self.ident_str(tv.name))?;
+                    self.write_ident(w, tv.name)?;
                 } else {
                     w.write_str("'")?;
-                    w.write_str(self.ident_str(tv.name))?;
+                    self.write_ident(w, tv.name)?;
                 }
                 if let Some(static_constraint) = tv.static_constraint {
                     w.write_str(": ")?;
@@ -284,7 +284,7 @@ impl TypedProgram {
             }
             Type::Sum(e) => {
                 if let Some(defn_info) = defn_info {
-                    w.write_str(self.ident_str(defn_info.name))?;
+                    self.write_ident(w, defn_info.name)?;
                     if let Some(spec_info) = self.types.get_instance_info(type_id) {
                         self.display_instance_info(w, spec_info, expand, visiting)?;
                     }
@@ -296,7 +296,7 @@ impl TypedProgram {
                 if !is_named || expand {
                     w.write_str("either ")?;
                     for (idx, v) in self.types.mem.getn(e.variants).iter().enumerate() {
-                        w.write_str(self.ast.idents.get_name(v.name))?;
+                        self.write_ident(w, v.name)?;
                         if let Some(payload) = &v.payload {
                             w.write_str("(")?;
                             self.display_type_id_rec(w, *payload, expand, visiting)?;
@@ -331,7 +331,7 @@ impl TypedProgram {
                 self.write_ident(w, defn_info.name)?;
                 w.write_str("[")?;
                 for (idx, param) in self.mem.getn(generic.params).iter().enumerate() {
-                    w.write_str(self.ident_str(param.name))?;
+                    self.write_ident(w, param.name)?;
                     let last = idx == generic.params.len() as usize - 1;
                     if !last {
                         w.write_str(", ")?;
@@ -431,7 +431,7 @@ impl TypedProgram {
             if index > 0 {
                 w.write_str(", ")?;
             }
-            w.write_str(self.ast.idents.get_name(field.name))?;
+            self.write_ident(w, field.name)?;
             w.write_str(": ")?;
             self.display_type_id_ext(w, field.type_id, expand, visited)?;
         }
@@ -486,18 +486,18 @@ impl TypedProgram {
     fn display_block(
         &self,
         block: &TypedBlock,
-        writ: &mut impl Write,
+        w: &mut impl Write,
         indentation: usize,
     ) -> std::fmt::Result {
         for (idx, stmt) in self.mem.getn(block.statements).iter().enumerate() {
-            self.display_stmt(*stmt, writ, indentation + 1)?;
+            self.display_stmt(*stmt, w, indentation + 1)?;
             if idx < block.statements.len() as usize - 1 {
-                writ.write_str(";")?;
+                w.write_str(";")?;
             }
-            writ.write_str("\n")?;
+            w.write_str("\n")?;
         }
-        writ.write_str(&"  ".repeat(indentation))?;
-        writ.write_str("}")?;
+        w.write_str(&"  ".repeat(indentation))?;
+        w.write_str("}")?;
         Ok(())
     }
 
@@ -510,47 +510,47 @@ impl TypedProgram {
     fn display_stmt(
         &self,
         stmt: TypedStmtId,
-        writ: &mut impl Write,
+        w: &mut impl Write,
         indentation: usize,
     ) -> std::fmt::Result {
-        writ.write_str(&"  ".repeat(indentation))?;
+        w.write_str(&"  ".repeat(indentation))?;
         match self.stmts.get(stmt) {
-            TypedStmt::Expr(expr, _) => self.display_expr_id(*expr, writ, indentation),
+            TypedStmt::Expr(expr, _) => self.display_expr_id(*expr, w, indentation),
             TypedStmt::Let(let_stmt) => {
                 if let_stmt.is_referencing {
-                    writ.write_str("let* ")?;
+                    w.write_str("let* ")?;
                 } else {
-                    writ.write_str("let ")?;
+                    w.write_str("let ")?;
                 }
-                self.display_variable(self.variables.get(let_stmt.variable_id), writ)?;
-                writ.write_str(" = ")?;
+                self.display_variable(self.variables.get(let_stmt.variable_id), w)?;
+                w.write_str(" = ")?;
                 match let_stmt.initializer {
-                    None => writ.write_str("uninit")?,
-                    Some(initializer) => self.display_expr_id(initializer, writ, indentation)?,
+                    None => w.write_str("uninit")?,
+                    Some(initializer) => self.display_expr_id(initializer, w, indentation)?,
                 };
                 Ok(())
             }
             TypedStmt::Assignment(assignment) => {
-                self.display_expr_id(assignment.destination, writ, indentation)?;
+                self.display_expr_id(assignment.destination, w, indentation)?;
                 match assignment.kind {
-                    AssignmentKind::Store => writ.write_str(" <- ")?,
-                    AssignmentKind::Set => writ.write_str(" := ")?,
+                    AssignmentKind::Store => w.write_str(" <- ")?,
+                    AssignmentKind::Set => w.write_str(" := ")?,
                 }
-                self.display_expr_id(assignment.value, writ, indentation)
+                self.display_expr_id(assignment.value, w, indentation)
             }
             TypedStmt::Require(require_stmt) => {
-                writ.write_str("require ")?;
-                self.display_matching_condition(writ, &require_stmt.condition, indentation)?;
+                w.write_str("require ")?;
+                self.display_matching_condition(w, &require_stmt.condition, indentation)?;
                 if let Some(else_body) = require_stmt.else_body {
-                    writ.write_str(" else ")?;
-                    self.display_expr_id(else_body, writ, indentation)?;
+                    w.write_str(" else ")?;
+                    self.display_expr_id(else_body, w, indentation)?;
                 }
                 Ok(())
             }
             TypedStmt::Defer(defer) => {
-                writ.write_str("defer parsed<<")?;
-                self.ast.display_expr_id(writ, defer.parsed_expr)?;
-                writ.write_str(">>")?;
+                w.write_str("defer parsed<<")?;
+                self.ast.display_expr_id(w, defer.parsed_expr)?;
+                w.write_str(">>")?;
                 Ok(())
             }
         }
@@ -585,7 +585,7 @@ impl TypedProgram {
                         w.write_str(",\n")?;
                     }
                     w.write_str(&"  ".repeat(indentation + 1))?;
-                    w.write_str(self.ident_str(field.name))?;
+                    self.write_ident(w, field.name)?;
                     w.write_str(": ")?;
                     match field.expr {
                         None => w.write_str("uninit")?,
@@ -621,7 +621,7 @@ impl TypedProgram {
             }
             TypedExpr::Variable(v) => {
                 let variable = self.variables.get(v.variable_id);
-                w.write_str(self.ident_str(variable.name))
+                self.write_ident(w, variable.name)
             }
             TypedExpr::Call { call_id, .. } => {
                 let call = self.calls.get(*call_id);
@@ -712,7 +712,7 @@ impl TypedProgram {
                 let enum_type = self.types.get(expr_type).expect_sum();
                 let variant =
                     self.types.sum_variant_by_index(enum_type.variants, enum_constr.variant_index);
-                w.write_str(self.ident_str(variant.name))?;
+                self.write_ident(w, variant.name)?;
                 if let Some(payload) = &enum_constr.payload {
                     w.write_str("(")?;
                     self.display_expr_id(*payload, w, indentation)?;
@@ -779,7 +779,7 @@ impl TypedProgram {
                 self.display_type_id(w, lambda_type.env_type, false).unwrap();
                 w.write_str("]")?;
                 for arg in self.types.mem.getn(fn_type.logical_params()) {
-                    w.write_str(self.ident_str(arg.name))?;
+                    self.write_ident(w, arg.name)?;
                     w.write_str(": ")?;
                     self.display_type_id(w, arg.type_id, false)?;
                 }
@@ -791,13 +791,13 @@ impl TypedProgram {
             }
             TypedExpr::FunctionPointer(fr) => {
                 let fun = self.get_function(fr.function_id);
-                w.write_str(self.ident_str(fun.name))?;
+                self.write_ident(w, fun.name)?;
                 w.write_str(".toRef()")
             }
             TypedExpr::PendingCapture(pending_capture) => {
                 w.write_str("capture(")?;
                 let variable = self.variables.get(pending_capture.captured_variable_id);
-                w.write_str(self.ident_str(variable.name))?;
+                self.write_ident(w, variable.name)?;
                 w.write_str(")")?;
                 Ok(())
             }
@@ -950,54 +950,54 @@ impl TypedProgram {
     pub fn display_pattern_ctor(
         &self,
         pattern_ctor_id: PatternCtorId,
-        writ: &mut impl Write,
+        w: &mut impl Write,
     ) -> std::fmt::Result {
         match self.pattern_ctors.get(pattern_ctor_id) {
-            PatternCtor::BoolTrue => writ.write_str("true"),
-            PatternCtor::BoolFalse => writ.write_str("false"),
-            PatternCtor::Char => writ.write_str("'<char>'"),
-            PatternCtor::String => writ.write_str("<string>"),
-            PatternCtor::Int => writ.write_str("<int>"),
-            PatternCtor::Float => writ.write_str("<float>"),
-            PatternCtor::Pointer => writ.write_str("<ptr>"),
-            PatternCtor::TypeVariable => writ.write_str("<tvar>"),
-            PatternCtor::FunctionPointer => writ.write_str("fn*"),
-            PatternCtor::LambdaObject => writ.write_str("dyn[fn ...]"),
-            PatternCtor::ValueType => writ.write_str("static[...]"),
-            PatternCtor::Buffer => writ.write_str("buffer"),
-            PatternCtor::Span => writ.write_str("span"),
-            PatternCtor::Opaque => writ.write_str("opaque"),
-            PatternCtor::Array => writ.write_str("<array>"),
+            PatternCtor::BoolTrue => w.write_str("true"),
+            PatternCtor::BoolFalse => w.write_str("false"),
+            PatternCtor::Char => w.write_str("'<char>'"),
+            PatternCtor::String => w.write_str("<string>"),
+            PatternCtor::Int => w.write_str("<int>"),
+            PatternCtor::Float => w.write_str("<float>"),
+            PatternCtor::Pointer => w.write_str("<ptr>"),
+            PatternCtor::TypeVariable => w.write_str("<tvar>"),
+            PatternCtor::FunctionPointer => w.write_str("fn*"),
+            PatternCtor::LambdaObject => w.write_str("dyn[fn ...]"),
+            PatternCtor::ValueType => w.write_str("static[...]"),
+            PatternCtor::Buffer => w.write_str("buffer"),
+            PatternCtor::Span => w.write_str("span"),
+            PatternCtor::Opaque => w.write_str("opaque"),
+            PatternCtor::Array => w.write_str("<array>"),
             PatternCtor::Reference(inner) => {
-                writ.write_str("*")?;
-                self.display_pattern_ctor(*inner, writ)
+                w.write_str("*")?;
+                self.display_pattern_ctor(*inner, w)
             }
             PatternCtor::Struct { fields } => {
-                writ.write_str("{ ")?;
+                w.write_str("{ ")?;
                 for (index, (field_name, field_pattern)) in fields.iter().enumerate() {
-                    writ.write_str(self.ident_str(*field_name))?;
-                    writ.write_str(": ")?;
-                    self.display_pattern_ctor(*field_pattern, writ)?;
+                    w.write_str(self.ident_str(*field_name))?;
+                    w.write_str(": ")?;
+                    self.display_pattern_ctor(*field_pattern, w)?;
                     let last = index == fields.len() - 1;
                     if !last {
-                        writ.write_str(", ")?;
+                        w.write_str(", ")?;
                     } else {
-                        writ.write_str(" ")?;
+                        w.write_str(" ")?;
                     }
                 }
-                writ.write_str("}")?;
+                w.write_str("}")?;
                 Ok(())
             }
             PatternCtor::Enum { variant_name } => {
-                writ.write_str(self.ident_str(*variant_name))?;
+                w.write_str(self.ident_str(*variant_name))?;
                 Ok(())
             }
             PatternCtor::Sum { variant_name, inner } => {
-                writ.write_str(self.ident_str(*variant_name))?;
+                w.write_str(self.ident_str(*variant_name))?;
                 if let Some(payload) = inner.as_ref() {
-                    writ.write_str("(")?;
-                    self.display_pattern_ctor(*payload, writ)?;
-                    writ.write_str(")")?;
+                    w.write_str("(")?;
+                    self.display_pattern_ctor(*payload, w)?;
+                    w.write_str(")")?;
                 };
                 Ok(())
             }
@@ -1019,10 +1019,10 @@ impl TypedProgram {
             TypedPattern::LiteralString(string_id, _) => {
                 write!(w, "\"{}\"", self.get_string(*string_id))
             }
-            TypedPattern::Variable(var) => w.write_str(self.ident_str(var.name)),
+            TypedPattern::Variable(var) => self.write_ident(w, var.name),
             TypedPattern::Wildcard(_) => w.write_str("_"),
             TypedPattern::Sum(sum_pat) => {
-                w.write_str(self.ident_str(sum_pat.variant_name))?;
+                self.write_ident(w, sum_pat.variant_name)?;
                 if let Some(payload) = sum_pat.payload {
                     w.write_str("(")?;
                     self.display_pattern(payload, w)?;
@@ -1031,7 +1031,7 @@ impl TypedProgram {
                 Ok(())
             }
             TypedPattern::Enum(e) => {
-                w.write_str(self.ident_str(e.member_name))?;
+                self.write_ident(w, e.member_name)?;
                 Ok(())
             }
             TypedPattern::Struct(struct_pat) => {
@@ -1039,7 +1039,7 @@ impl TypedProgram {
                 for (index, field_pat) in
                     self.patterns.get_slice(struct_pat.fields).iter().enumerate()
                 {
-                    w.write_str(self.ident_str(field_pat.name))?;
+                    self.write_ident(w, field_pat.name)?;
                     w.write_str(": ")?;
                     self.display_pattern(field_pat.pattern, w)?;
                     let last = index == struct_pat.fields.len() as usize - 1;
@@ -1240,7 +1240,7 @@ impl TypedProgram {
         s
     }
 
-    pub fn write_ident<W: Write + ?Sized>(&self, w: &mut W, ident: Ident) -> std::fmt::Result {
+    pub fn write_ident<W: Write + ?Sized>(&self, w: &mut W, ident: StringId) -> std::fmt::Result {
         w.write_str(self.ident_str(ident))
     }
 
@@ -1299,7 +1299,7 @@ impl TypedProgram {
             if idx > 0 {
                 w.write_str(", ")?;
             }
-            w.write_str(self.ident_str(param.name))?;
+            self.write_ident(w, param.name)?;
             w.write_str(": ")?;
             self.display_type_id(w, param.type_id, false)?;
         }
@@ -1464,7 +1464,7 @@ impl DepDisplay<TypedProgram, K1DisplayArgs> for MStr<MemTmp> {
     }
 }
 
-impl DepDisplay<TypedProgram, K1DisplayArgs> for Ident {
+impl DepDisplay<TypedProgram, K1DisplayArgs> for StringId {
     fn fmt(&self, w: &mut dyn Write, k1: &TypedProgram, _args: &K1DisplayArgs) -> std::fmt::Result {
         w.write_str(k1.ident_str(*self))
     }

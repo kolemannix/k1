@@ -10,12 +10,10 @@ use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
 use ecow::{EcoVec, eco_vec};
-pub use idents::{Ident, IdentPool, IdentSlice, IdentSpanned, QIdent};
+pub use idents::{StringId, IdentPool, IdentSlice, IdentSpanned, QIdent};
 use itertools::Itertools;
 use log::trace;
 use smallvec::{SmallVec, smallvec};
-use string_interner::Symbol;
-use string_interner::backend::StringBackend;
 
 /// Make a qualified, `NamespacedIdentifier` from components
 #[macro_export]
@@ -91,7 +89,7 @@ pub enum UseKind {
 pub struct ParsedUse {
     pub target: QIdent,
     pub explicit_kind: Option<UseKind>,
-    pub alias: Option<Ident>,
+    pub alias: Option<StringId>,
     pub span: SpanId,
 }
 
@@ -244,45 +242,9 @@ impl ParsedLiteral {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct StringId(string_interner::symbol::SymbolU32);
-
-impl StringId {
-    pub fn as_usize(&self) -> usize {
-        self.0.to_usize()
-    }
-}
-
-impl Display for StringId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.to_usize())
-    }
-}
-
-pub struct StringPool {
-    intern_pool: string_interner::StringInterner<StringBackend>,
-}
-impl StringPool {
-    pub fn make() -> StringPool {
-        let pool = string_interner::StringInterner::with_capacity(65536);
-        StringPool { intern_pool: pool }
-    }
-
-    pub fn intern(&mut self, s: impl AsRef<str>) -> StringId {
-        let s = self.intern_pool.get_or_intern(&s);
-        StringId(s)
-    }
-    pub fn lookup(&self, s: impl AsRef<str>) -> Option<StringId> {
-        self.intern_pool.get(&s).map(StringId)
-    }
-    pub fn get_string(&self, id: StringId) -> &str {
-        self.intern_pool.resolve(id.0).expect("failed to resolve string id")
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ParsedCallArg {
-    pub name: Option<Ident>,
+    pub name: Option<StringId>,
     pub value: ParsedExprId,
     pub is_explicit_context: bool,
 }
@@ -296,7 +258,7 @@ impl ParsedCallArg {
 
 #[derive(Debug, Clone)]
 pub struct NamedTypeArg {
-    pub name: Option<Ident>,
+    pub name: Option<StringId>,
     pub type_expr: Option<ParsedTypeExprId>,
     pub span: SpanId,
 }
@@ -331,7 +293,7 @@ pub struct ParsedExprCall {
 
 #[derive(Debug, Clone)]
 pub struct ParsedLet {
-    pub name: Ident,
+    pub name: StringId,
     pub type_expr: Option<ParsedTypeExprId>,
     pub value: Option<ParsedExprId>,
     pub span: SpanId,
@@ -599,7 +561,7 @@ pub struct ParsedVariable {
 #[derive(Clone)]
 pub struct FieldAccess {
     pub base: ParsedExprId,
-    pub field_name: Ident,
+    pub field_name: StringId,
     pub type_args: ParsedSlice<NamedTypeArg>,
     pub is_referencing: bool, // *.
     pub span: SpanId,
@@ -617,7 +579,7 @@ pub enum StructValueFieldKind {
 
 #[derive(Clone, Copy)]
 pub struct StructValueField {
-    pub name: Ident,
+    pub name: StringId,
     pub span: SpanId,
     pub value: StructValueFieldKind,
 }
@@ -635,7 +597,7 @@ impl_copy_if_small!(16, ParsedStruct);
 #[derive(Clone)]
 pub struct ParsedVariant {
     pub type_name: Option<QIdent>,
-    pub variant_name: Ident,
+    pub variant_name: StringId,
     pub type_args: ParsedSlice<NamedTypeArg>,
     pub payload: Option<ParsedExprId>,
     pub span: SpanId,
@@ -672,7 +634,7 @@ pub struct ParsedCast {
 
 #[derive(Clone, Copy)]
 pub struct LambdaArgDefn {
-    pub binding: Ident,
+    pub binding: StringId,
     pub ty: Option<ParsedTypeExprId>,
     pub span: SpanId,
 }
@@ -728,7 +690,7 @@ pub struct ParsedStaticExpr {
     pub base_expr: ParsedExprId,
     pub kind: ParsedStaticBlockKind,
     pub condition_if_definition: Option<ParsedExprId>,
-    pub parameter_names: IdentSlice,
+    pub parameter_names: ParsedSlice<IdentSpanned>,
     pub span: SpanId,
 }
 
@@ -913,14 +875,14 @@ impl ParsedExpr {
 
 #[derive(Debug, Clone)]
 pub struct ParsedStructPattern {
-    pub fields: EcoVec<(Ident, ParsedPatternId)>,
+    pub fields: EcoVec<(StringId, ParsedPatternId)>,
     pub span: SpanId,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedSumPattern {
-    pub sum_name: Option<Ident>,
-    pub variant_name: Ident,
+    pub sum_name: Option<StringId>,
+    pub variant_name: StringId,
     pub payload_pattern: Option<ParsedPatternId>,
     pub span: SpanId,
 }
@@ -949,7 +911,7 @@ pub struct ParsedTypePattern {
 #[derive(Debug, Clone)]
 pub enum ParsedPattern {
     Literal(ParsedExprId),
-    Variable(Ident, SpanId),
+    Variable(StringId, SpanId),
     Struct(ParsedStructPattern),
     Sum(ParsedSumPattern),
     Wildcard(SpanId),
@@ -996,7 +958,7 @@ pub struct ParsedLoopExpr {
 #[derive(Debug, Clone)]
 pub struct ForExpr {
     pub iterable_expr: ParsedExprId,
-    pub binding: Option<Ident>,
+    pub binding: Option<StringId>,
     pub binding_span: SpanId,
     pub body_block: ParsedBlock,
     pub is_static: bool,
@@ -1044,7 +1006,7 @@ pub struct ParsedBlock {
 
 #[derive(Debug, Clone)]
 pub struct StructTypeField {
-    pub name: Ident,
+    pub name: StringId,
     pub type_expr: ParsedTypeExprId,
 }
 
@@ -1119,7 +1081,7 @@ impl_copy_if_small!(12, ParsedArrayType);
 
 #[derive(Clone, Copy)]
 pub struct ParsedSumTypeVariant {
-    pub tag_name: Ident,
+    pub tag_name: StringId,
     pub payload: Option<ParsedTypeExprId>,
     pub explicit_value: Option<ParsedNumericLiteral>,
     pub name_span: SpanId,
@@ -1142,7 +1104,7 @@ pub enum TypeMemberAccessKind {
 pub struct ParsedMemberAccess {
     pub base: ParsedTypeExprId,
     pub member_kind: TypeMemberAccessKind,
-    pub member_name: Ident,
+    pub member_name: StringId,
     pub span: SpanId,
 }
 
@@ -1262,7 +1224,7 @@ impl ParsedTypeExpr {
 
 #[derive(Clone, Copy)]
 pub struct ParsedTypeParam {
-    pub name: Ident,
+    pub name: StringId,
     pub constraints: MSlice<ParsedTypeConstraintExpr, ParsedProgram>,
     pub span: SpanId,
 }
@@ -1302,14 +1264,14 @@ impl ParsedTypeConstraintExpr {
 
 #[derive(Clone)]
 pub struct ParsedTypeConstraint {
-    pub name: Ident,
+    pub name: StringId,
     pub constraint_expr: ParsedTypeConstraintExpr,
     pub span: SpanId,
 }
 
 #[derive(Clone)]
 pub struct ParsedFunction {
-    pub name: Ident,
+    pub name: StringId,
     pub type_params: ParsedSlice<ParsedTypeParam>,
     pub params: ParsedSlice<ParsedFnParam>,
     pub ret_type: Option<ParsedTypeExprId>,
@@ -1334,7 +1296,7 @@ pub enum ParsedFnParamType {
 
 #[derive(Clone, Copy)]
 pub struct ParsedFnParam {
-    pub name: Ident,
+    pub name: StringId,
     pub type_expr: ParsedFnParamType,
     pub span: SpanId,
     pub modifiers: FnArgDefModifiers,
@@ -1364,7 +1326,7 @@ impl FnArgDefModifiers {
 
 #[derive(Debug, Clone)]
 pub struct ParsedGlobal {
-    pub name: Ident,
+    pub name: StringId,
     pub type_expr: ParsedTypeExprId,
     pub value_expr: Option<ParsedExprId>,
     pub name_span: SpanId,
@@ -1398,7 +1360,7 @@ impl ParsedTypeDefnFlags {
 
 #[derive(Clone)]
 pub struct ParsedTypeDefn {
-    pub name: Ident,
+    pub name: StringId,
     pub value_expr: ParsedTypeExprId,
     pub type_params: MSlice<ParsedTypeParam, ParsedProgram>,
     pub span: SpanId,
@@ -1408,7 +1370,7 @@ pub struct ParsedTypeDefn {
 
 #[derive(Clone)]
 pub struct ParsedAbilityParameter {
-    pub name: Ident,
+    pub name: StringId,
     pub is_impl_param: bool,
     pub constraints: MSlice<ParsedTypeConstraintExpr, ParsedProgram>,
     pub span: SpanId,
@@ -1416,7 +1378,7 @@ pub struct ParsedAbilityParameter {
 
 #[derive(Clone)]
 pub struct ParsedAbility {
-    pub name: Ident,
+    pub name: StringId,
     pub functions: EcoVec<ParsedFunctionId>,
     pub span: SpanId,
     pub params: EcoVec<ParsedAbilityParameter>,
@@ -1442,7 +1404,7 @@ pub struct ParsedAbilityImplementation {
 
 #[derive(Debug, Clone)]
 pub struct ParsedNamespace {
-    pub name: Ident,
+    pub name: StringId,
     pub definitions: EcoVec<ParsedId>,
     pub id: ParsedNamespaceId,
     pub name_span: SpanId,
@@ -1451,7 +1413,7 @@ pub struct ParsedNamespace {
 }
 
 impl ParsedNamespace {
-    pub fn empty(name: Ident) -> Self {
+    pub fn empty(name: StringId) -> Self {
         ParsedNamespace {
             name,
             definitions: EcoVec::new(),
@@ -1679,7 +1641,7 @@ pub struct SemanticToken {
 
 pub struct ParsedProgram {
     pub name: String,
-    pub name_id: Ident,
+    pub name_id: StringId,
     pub spans: Spans,
     pub functions: VPool<ParsedFunction, ParsedFunctionId>,
     pub globals: VPool<ParsedGlobal, ParsedGlobalId>,
@@ -1689,7 +1651,6 @@ pub struct ParsedProgram {
     pub ability_impls: Vec<ParsedAbilityImplementation>,
     pub sources: Sources,
     pub idents: IdentPool,
-    pub strings: StringPool,
     pub exprs: ParsedExpressionPool,
     pub type_exprs: ParsedTypeExpressionPool,
     pub patterns: ParsedPatternPool,
@@ -1727,7 +1688,6 @@ impl ParsedProgram {
             ability_impls: Vec::new(),
             sources: Sources::default(),
             idents,
-            strings: StringPool::make(),
             exprs: ParsedExpressionPool::make(),
             type_exprs: ParsedTypeExpressionPool::new(),
             patterns: ParsedPatternPool::default(),
@@ -2170,7 +2130,7 @@ impl Source {
     }
 }
 
-pub fn init_module(module_name: Ident, ast: &mut ParsedProgram) -> ParsedNamespaceId {
+pub fn init_module(module_name: StringId, ast: &mut ParsedProgram) -> ParsedNamespaceId {
     let root_namespace_id = if ast.namespaces.is_empty() {
         let name = ast.idents.intern("_root");
         let root_ns = ParsedNamespace::empty(name);
@@ -2191,7 +2151,7 @@ pub fn init_module(module_name: Ident, ast: &mut ParsedProgram) -> ParsedNamespa
 pub fn parse_file(
     ast: &mut ParsedProgram,
     module_id: ModuleId,
-    module_name: Ident,
+    module_name: StringId,
     module_namespace_id: ParsedNamespaceId,
     file_id: FileId,
     tokens: &[Token],
@@ -2204,7 +2164,7 @@ pub fn parse_file(
 
 pub struct Parser<'toks, 'module> {
     pub module_id: ModuleId,
-    pub module_name: Ident,
+    pub module_name: StringId,
     pub module_namespace_id: ParsedNamespaceId,
     pub ast: &'module mut ParsedProgram,
     tokens: TokenIter<'toks>,
@@ -2215,7 +2175,7 @@ pub struct Parser<'toks, 'module> {
 impl<'toks, 'ast> Parser<'toks, 'ast> {
     pub fn make_for_file(
         module_id: ModuleId,
-        module_name: Ident,
+        module_name: StringId,
         module_namespace_id: ParsedNamespaceId,
         ast: &'ast mut ParsedProgram,
         tokens: &'toks [Token],
@@ -2374,22 +2334,21 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         condition_if_definition: Option<ParsedExprId>,
         kind: ParsedStaticBlockKind,
     ) -> ParseResult<ParsedExprId> {
-        let mut parameter_names: SV4<Ident> = smallvec![];
+        let mut parameter_names: SV4<IdentSpanned> = smallvec![];
         if let Some(_open_token) = self.maybe_consume_no_whitespace(K::OpenParen) {
             self.eat_delimited_ext("params", &mut parameter_names, K::Comma, K::CloseParen, |p| {
-                Parser::expect_ident_ext(p, false, false).map(|(_token, ident)| ident)
+                Parser::expect_ident_ext(p, false, false)
+                    .map(|(token, ident)| IdentSpanned { name: ident, span: token.span })
             })?;
         }
         let parameter_names_handle = self.ast.mem.pushn(&parameter_names);
         let base_expr = self.expect_expression()?;
-        let expr_span = self.get_expression_span(base_expr);
-        let span = self.extend_span(start_token.span, expr_span);
         Ok(self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
             base_expr,
             kind,
             condition_if_definition,
             parameter_names: parameter_names_handle,
-            span,
+            span: start_token.span,
         })))
     }
 
@@ -2507,7 +2466,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         } else if first.kind == K::Ident {
             // Variable
             let (ident_token, ident) = self.expect_ident_lower()?;
-            let ident_str = self.ast.idents.get_name(ident);
+            let ident_str = self.ast.idents.get_string(ident);
             match ident_str {
                 "_" => {
                     let pattern_id =
@@ -2633,7 +2592,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    fn make_ident(&mut self, token: Token) -> Ident {
+    fn make_ident(&mut self, token: Token) -> StringId {
         let tok_chars =
             Parser::tok_chars(&self.ast.spans, self.ast.sources.get(self.file_id), token);
         self.ast.idents.intern(tok_chars)
@@ -2858,7 +2817,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             buf.push(c)
                         }
                     }
-                    let string_id = self.ast.strings.intern(&buf);
+                    let string_id = self.ast.idents.intern(&buf);
 
                     parts.push(InterpolatedStringPart::String {
                         string_id,
@@ -3062,7 +3021,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
                 // Note: This no longer needs to be special syntax since its not an X anymore.
                 if base_name.path.is_empty() {
-                    if self.ast.idents.get_name(base_name.name) == "array" {
+                    if self.ast.idents.get_string(base_name.name) == "array" {
                         self.expect_kind(K::OpenBracket)?;
 
                         let element_type = self.expect_type_expression()?;
@@ -4535,7 +4494,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(function_id))
     }
 
-    fn expect_dq_ident(&mut self) -> ParseResult<Ident> {
+    fn expect_dq_ident(&mut self) -> ParseResult<StringId> {
         let external_name_token = self.expect_kind(K::STRING_DQ_INTERP)?;
         // Accessing the token chars this way achieves a partial borrow of self
         // allowing us to intern the identifier
@@ -4580,7 +4539,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(ParsedTypeConstraint { name, constraint_expr, span })
     }
 
-    fn expect_ident_ext(&mut self, upper: bool, lower: bool) -> ParseResult<(Token, Ident)> {
+    fn expect_ident_ext(&mut self, upper: bool, lower: bool) -> ParseResult<(Token, StringId)> {
         let token = self.expect_kind(K::Ident)?;
         let tok_chars =
             Parser::tok_chars(&self.ast.spans, self.ast.sources.get(self.file_id), token);
@@ -4600,19 +4559,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     #[allow(unused)]
-    fn expect_ident_upper(&mut self) -> ParseResult<(Token, Ident)> {
+    fn expect_ident_upper(&mut self) -> ParseResult<(Token, StringId)> {
         self.expect_ident_ext(true, false)
     }
 
-    fn expect_ident_lower(&mut self) -> ParseResult<(Token, Ident)> {
+    fn expect_ident_lower(&mut self) -> ParseResult<(Token, StringId)> {
         self.expect_ident_ext(false, true)
     }
 
-    fn expect_ident(&mut self) -> ParseResult<(Token, Ident)> {
+    fn expect_ident(&mut self) -> ParseResult<(Token, StringId)> {
         self.expect_ident_ext(false, false)
     }
 
-    fn maybe_consume_ident_chars(&mut self, chars: &str) -> Option<(Token, Ident)> {
+    fn maybe_consume_ident_chars(&mut self, chars: &str) -> Option<(Token, StringId)> {
         let next = self.peek();
         if next.kind == K::Ident {
             let tok_chars =
@@ -4630,7 +4589,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     #[allow(unused)]
-    fn expect_ident_chars(&mut self, chars: &str) -> ParseResult<(Token, Ident)> {
+    fn expect_ident_chars(&mut self, chars: &str) -> ParseResult<(Token, StringId)> {
         match self.maybe_consume_ident_chars(chars) {
             None => Err(error(format!("Expected '{chars}'"), self.peek())),
             Some(p) => Ok(p),
@@ -4899,7 +4858,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 // Display
 impl ParsedProgram {
     fn get_string(&self, id: StringId) -> &str {
-        self.strings.get_string(id)
+        self.idents.get_string(id)
     }
 
     pub fn expr_id_to_string(&self, expr: ParsedExprId) -> String {
@@ -4908,8 +4867,8 @@ impl ParsedProgram {
         buffer
     }
 
-    pub fn display_ident(&self, w: &mut impl Write, ident: Ident) -> std::fmt::Result {
-        w.write_str(self.idents.get_name(ident))
+    pub fn display_ident(&self, w: &mut impl Write, ident: StringId) -> std::fmt::Result {
+        w.write_str(self.idents.get_string(ident))
     }
 
     pub fn display_expr_id(&self, w: &mut impl Write, expr: ParsedExprId) -> std::fmt::Result {
@@ -5347,7 +5306,7 @@ impl ParsedProgram {
                     "let{}{} {} = ",
                     if let_stmt.is_referencing() { "* " } else { " " },
                     if let_stmt.is_context() { "context " } else { " " },
-                    self.idents.get_name(let_stmt.name)
+                    self.idents.get_string(let_stmt.name)
                 )?;
                 match let_stmt.value {
                     None => w.write_str("uninit")?,

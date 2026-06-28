@@ -9,7 +9,7 @@ use fxhash::FxHashMap;
 
 use crate::typer::scopes::*;
 
-use crate::parse::{Ident, IdentPool, ParsedId};
+use crate::parse::{StringId, IdentPool, ParsedId};
 
 use crate::{SV4, impl_copy_if_small, nz_u32_id, typer::*};
 
@@ -90,7 +90,7 @@ impl Display for Layout {
 
 #[derive(Clone)]
 pub struct StructTypeField {
-    pub name: Ident,
+    pub name: StringId,
     pub type_id: TypeId,
 }
 impl_copy_if_small!(8, StructTypeField);
@@ -114,7 +114,7 @@ nz_u32_id!(TypeDefnId);
 // then look it up
 // they're not small
 pub struct TypeDefnInfo {
-    pub name: Ident,
+    pub name: StringId,
     pub scope: ScopeId,
     pub companion_namespace: Option<NamespaceId>,
     pub ast_id: ParsedId,
@@ -158,7 +158,7 @@ impl StructType {
     pub fn find_field(
         &self,
         m: &kmem::Mem<TypePool>,
-        field_name: Ident,
+        field_name: StringId,
     ) -> Option<(usize, &StructTypeField)> {
         m.getn(self.fields).iter().enumerate().find(|(_, field)| field.name == field_name)
     }
@@ -189,7 +189,7 @@ pub struct ListType {
 
 #[derive(Clone)]
 pub struct TypeParameter {
-    pub name: Ident,
+    pub name: StringId,
     pub static_constraint: Option<TypeId>,
     pub predicate_functions: MSlice<QIdent, TypedProgram>,
     pub scope_id: ScopeId,
@@ -199,7 +199,7 @@ impl_copy_if_small!(24, TypeParameter);
 
 #[derive(Clone)]
 pub struct FunctionTypeParameter {
-    pub name: Ident,
+    pub name: StringId,
     pub scope_id: ScopeId,
     pub span: SpanId,
     pub function_type: TypeId,
@@ -235,7 +235,7 @@ impl_copy_if_small!(8, ArrayType);
 
 #[derive(Clone, Copy)]
 pub struct TypedSumVariant {
-    pub name: Ident,
+    pub name: StringId,
     pub index: u32,
     pub payload: Option<TypeId>,
     pub tag_value: TypedIntValue,
@@ -250,7 +250,7 @@ pub struct SumType {
 
 #[derive(Copy, Clone)]
 pub struct ScalarEnumValue {
-    pub name: Ident,
+    pub name: StringId,
     pub int_value: TypedIntValue,
     pub name_span: SpanId,
 }
@@ -389,7 +389,7 @@ impl FloatType {
 #[derive(Clone, Copy)]
 pub struct FnParamType {
     pub type_id: TypeId,
-    pub name: Ident,
+    pub name: StringId,
     pub is_context: bool,
     pub is_lambda_env: bool,
 }
@@ -1245,7 +1245,7 @@ impl PhysicalTypeEnum {
 pub struct StructField {
     pub offset: u32,
     pub field_t: PhysicalType,
-    pub name: Ident,
+    pub name: StringId,
 }
 
 #[derive(Clone, Copy)]
@@ -1264,7 +1264,7 @@ pub struct SumVariantPt {
 
 #[derive(Clone, Copy)]
 pub struct UnionMember {
-    pub name: Ident,
+    pub name: StringId,
     pub ty: PhysicalType,
 }
 
@@ -1311,8 +1311,8 @@ pub struct AggregateTypeRecord {
 }
 
 pub struct TypePoolIdents {
-    tag: Ident,
-    payload: Ident,
+    tag: StringId,
+    payload: StringId,
 }
 
 pub struct TypePool {
@@ -1345,7 +1345,7 @@ pub struct TypePool {
 }
 
 impl TypePool {
-    pub fn empty(tag_ident: Ident, payload_ident: Ident) -> TypePool {
+    pub fn empty(tag_ident: StringId, payload_ident: StringId) -> TypePool {
         let mut agg_types = VPool::make("phys_types");
         // Reserve the lower values so they dont conflict with scalars once packed
         agg_types.skip_next_n_slots(PhysicalType::MIN_AGG_ID as usize);
@@ -1377,7 +1377,7 @@ impl TypePool {
 
     #[cfg(test)]
     pub fn with_builtin_types() -> TypePool {
-        let mut this = TypePool::empty(Ident::forged(), Ident::forged());
+        let mut this = TypePool::empty(StringId::forged(), StringId::forged());
         this.add_anon(Type::Integer(IntegerType::U8));
         this.add_anon(Type::Integer(IntegerType::U16));
         this.add_anon(Type::Integer(IntegerType::U32));
@@ -1564,7 +1564,7 @@ impl TypePool {
     pub fn get_struct_field_by_name(
         &self,
         type_id: TypeId,
-        name: Ident,
+        name: StringId,
     ) -> Option<(usize, &StructTypeField)> {
         self.get(type_id).expect_struct().find_field(&self.mem, name)
     }
@@ -2109,14 +2109,14 @@ impl TypePool {
     pub fn enum_value_by_name(
         &self,
         values: MSlice<ScalarEnumValue, TypePool>,
-        name: Ident,
+        name: StringId,
     ) -> Option<(usize, &'static ScalarEnumValue)> {
         self.mem.getn(values).iter().find_position(|v| v.name == name)
     }
     pub fn sum_variant_by_name(
         &self,
         variants: MSlice<TypedSumVariant, TypePool>,
-        name: Ident,
+        name: StringId,
     ) -> Option<&'static TypedSumVariant> {
         self.mem.getn(variants).iter().find(|v| v.name == name)
     }

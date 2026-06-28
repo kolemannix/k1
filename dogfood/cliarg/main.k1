@@ -41,22 +41,26 @@ fn gen-help-text[t](summary: string): string {
   sb.build-tmp();
 }
 
+// fn make-parse-args-fn(args-type-id: u64, customizations: span[{ name: string, settings: {} }]): string {
+//   
+// }
+
 fn parse-args[t](args: span[string], customizations: span[{ name: string, settings: {} }]): result[t, string] {
   // Note: it would be better to move these two lines inside the meta call
   // But this exercises the compiler better
-  // nocommit: a comptime capture should count as a usage
-  let t-id = #static types/type-id[t];
-  let s = #static switch types/schema[t] { :struct(s) -> s, _ -> crash("need a struct") };
+  let _t-id = #static types/type-id[t];
+  let _s = #static switch types/schema[t] { :struct(s) -> s, _ -> crash("need a struct") };
 
-  let result: result[t, string] = $(s, t-id) {
-    let s: types/type-schema:struct = s.from-static();
+  let result: result[t, string] = $(_s, _t-id) {
+    let args-type-id = _t-id;
+    let s: types/type-schema:struct = _s.from-static();
     let code = StringBuilder/new();
 
     // For each field in the target type, create a local variable to house our parsed data
     for s.fields {
       switch get-arg-kind(it.type-id) {
-        :string or :opt-string -> writelnf(code, "let {it.name}-val: ?typeFromId({t-id}).{it.name} = :none;"),
-        :list-string -> writelnf(code, "let {it.name}-val: typeFromId({t-id}).{it.name} = list/empty();"),
+        :string or :opt-string -> writelnf(code, "let {it.name}-val: ?typeFromId({args-type-id}).{it.name} = :none;"),
+        :list-string -> writelnf(code, "let {it.name}-val: typeFromId({args-type-id}).{it.name} = list/empty();"),
       };
     };
 

@@ -126,8 +126,8 @@ fn fn_args_literal() -> Result<(), ParseError> {
     if let ParsedExpr::Call(fn_call) = result {
         let args = ast.mem.getn(fn_call.args);
         let idents = &ast.idents;
-        assert_eq!(idents.get_name(fn_call.name.name), "f");
-        assert_eq!(idents.get_name(args[0].name.unwrap()), "myarg");
+        assert_eq!(idents.get_string(fn_call.name.name), "f");
+        assert_eq!(idents.get_string(args[0].name.unwrap()), "myarg");
         assert!(ParsedExpr::is_literal(ast.exprs.get(args[0].value)));
         assert!(ParsedExpr::is_literal(ast.exprs.get(args[1].value)));
         assert!(ParsedExpr::is_literal(ast.exprs.get(args[1].value)));
@@ -153,11 +153,11 @@ fn dot_accessor() -> ParseResult<()> {
     let input = "a.b.c";
     let (ast, result) = test_single_expr(input)?;
     let ParsedExpr::FieldAccess(access_op) = result else { panic!() };
-    assert_eq!(ast.idents.get_name(access_op.field_name), "c");
+    assert_eq!(ast.idents.get_string(access_op.field_name), "c");
     let ParsedExpr::FieldAccess(acc2) = ast.exprs.get(access_op.base) else { panic!() };
-    assert_eq!(ast.idents.get_name(acc2.field_name), "b");
+    assert_eq!(ast.idents.get_string(acc2.field_name), "b");
     let ParsedExpr::Variable(v) = ast.exprs.get(acc2.base) else { panic!() };
-    assert_eq!(ast.idents.get_name(v.name.name), "a");
+    assert_eq!(ast.idents.get_string(v.name.name), "a");
     Ok(())
 }
 
@@ -288,12 +288,12 @@ fn namespaced_fncall() -> ParseResult<()> {
     let input = "foo/bar/baz()";
     let (mut ast, result) = test_single_expr(input)?;
     let ParsedExpr::Call(fn_call) = result else { panic!("not fncall") };
-    assert_eq!(ast.idents.get_name(ast.mem.get_nth(fn_call.name.path, 0).name), "foo");
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path, 0).name), "foo");
     assert_eq!(
         ast.spans.get(ast.mem.get_nth(fn_call.name.path, 0).span),
         Span { file_id: 0, start: 0, len: 3 }
     );
-    assert_eq!(ast.idents.get_name(ast.mem.get_nth(fn_call.name.path, 1).name), "bar");
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path, 1).name), "bar");
     assert_eq!(
         ast.spans.get(ast.mem.get_nth(fn_call.name.path, 1).span),
         Span { file_id: 0, start: 4, len: 3 }
@@ -307,8 +307,8 @@ fn namespaced_val() -> ParseResult<()> {
     let input = "foo/bar/baz";
     let (mut ast, result) = test_single_expr(input)?;
     let ParsedExpr::Variable(variable) = result else { panic!("not variable") };
-    assert_eq!(ast.idents.get_name(ast.mem.get_nth(variable.name.path, 0).name), "foo");
-    assert_eq!(ast.idents.get_name(ast.mem.get_nth(variable.name.path, 1).name), "bar");
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(variable.name.path, 0).name), "foo");
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(variable.name.path, 1).name), "bar");
     assert_eq!(variable.name.name, ast.idents.intern("baz"));
     Ok(())
 }
@@ -348,7 +348,7 @@ fn variants_payload() -> ParseResult<()> {
     let ParsedExpr::Variant(v) = expr else { panic!() };
     assert!(v.payload.is_some());
     assert!(v.type_name.is_some());
-    assert_eq!(ast.idents.get_name(v.variant_name), "foo");
+    assert_eq!(ast.idents.get_string(v.variant_name), "foo");
     assert_eq!(v.type_args.len(), 2);
     assert_eq!(&ast.expr_id_to_string(expr_id), "veni/vidi/vici:foo[t, u](bar.bar)");
     Ok(())

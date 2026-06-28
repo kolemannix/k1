@@ -31,7 +31,7 @@ use crate::{
     errf, failf, ice_span,
     kmem::{self, MSlice},
     lex::SpanId,
-    parse::{Ident, StringId},
+    parse::StringId,
 };
 
 macro_rules! vm_ice {
@@ -2310,10 +2310,10 @@ pub fn value_to_rust_str<'a>(value: Value) -> Result<&'a str, &'static str> {
 
 pub fn value_to_string_id(m: &mut TypedProgram, value: Value) -> Result<StringId, &'static str> {
     let rust_str = value_to_rust_str(value)?;
-    Ok(m.ast.strings.intern(rust_str))
+    Ok(m.ast.idents.intern(rust_str))
 }
 
-pub fn value_to_ident(m: &mut TypedProgram, value: Value) -> Result<Ident, &'static str> {
+pub fn value_to_ident(m: &mut TypedProgram, value: Value) -> Result<StringId, &'static str> {
     let rust_str = value_to_rust_str(value)?;
     Ok(m.ast.idents.intern(rust_str))
 }

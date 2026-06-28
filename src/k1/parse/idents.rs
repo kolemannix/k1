@@ -9,51 +9,54 @@ use crate::parse::ParsedSlice;
 use crate::{impl_copy_if_small, lex::SpanId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct Ident(string_interner::symbol::SymbolU32);
+pub struct StringId(string_interner::symbol::SymbolU32);
 
-impl Ident {
-    pub fn forged() -> Ident {
-        Ident(string_interner::symbol::SymbolU32::try_from_usize(1).unwrap())
+impl StringId {
+    pub fn forged() -> StringId {
+        StringId(string_interner::symbol::SymbolU32::try_from_usize(1).unwrap())
+    }
+    pub fn as_usize(&self) -> usize {
+        self.0.to_usize()
     }
 }
 
-impl Ord for Ident {
+impl Ord for StringId {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.0.cmp(&other.0)
     }
 }
 
-impl PartialOrd for Ident {
+impl PartialOrd for StringId {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl From<Ident> for usize {
-    fn from(value: Ident) -> Self {
+impl From<StringId> for usize {
+    fn from(value: StringId) -> Self {
         value.0.to_usize()
     }
 }
 
-impl Display for Ident {
+impl Display for StringId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0.to_usize())
     }
 }
 
-pub type IdentSlice = ParsedSlice<Ident>;
+pub type IdentSlice = ParsedSlice<StringId>;
 
 #[derive(Clone, Copy)]
 pub struct IdentSpanned {
-    pub name: Ident,
+    pub name: StringId,
     pub span: SpanId,
 }
 
 impl IdentSpanned {
-    pub fn make(ident: Ident, span: SpanId) -> Self {
+    pub fn make(ident: StringId, span: SpanId) -> Self {
         IdentSpanned { name: ident, span }
     }
-    pub fn make_anon(ident: Ident) -> Self {
+    pub fn make_anon(ident: StringId) -> Self {
         IdentSpanned { name: ident, span: SpanId::NONE }
     }
 }
@@ -65,13 +68,13 @@ impl IdentSpanned {
 ///                                 path[3]     name
 ///```
 pub struct QIdent {
-    pub name: Ident,
+    pub name: StringId,
     pub name_span: SpanId,
     pub path: ParsedSlice<IdentSpanned>,
 }
 impl_copy_if_small!(16, QIdent);
 impl QIdent {
-    pub fn naked(name: Ident, span: SpanId) -> QIdent {
+    pub fn naked(name: StringId, span: SpanId) -> QIdent {
         QIdent { name, name_span: span, path: MSlice::empty() }
     }
     pub fn with_span(&self, span: SpanId) -> QIdent {
@@ -81,108 +84,108 @@ impl QIdent {
 
 #[allow(non_snake_case)]
 pub(crate) struct BuiltinIdents {
-    pub main: Ident,
-    pub next: Ident,
-    pub _self: Ident,
-    pub self_: Ident,
-    pub it: Ident,
-    pub string: Ident,
-    pub len: Ident,
-    pub get: Ident,
-    pub get_ref: Ident,
-    pub iter: Ident,
-    pub itIndex: Ident,
-    pub as_: Ident,
-    pub list: Ident,
-    pub withCapacity: Ident,
-    pub dest: Ident,
-    pub block_expr_val: Ident,
-    pub optelse_lhs: Ident,
-    pub lambda_env_var_name: Ident,
-    pub env: Ident,
-    pub fn_ptr: Ident,
-    pub env_ptr: Ident,
-    pub asterisk: Ident,
-    pub bang: Ident,
-    pub payload: Ident,
-    pub try_: Ident,
-    pub try_value: Ident,
-    pub if_target: Ident,
-    pub to_dyn: Ident,
-    pub to_static: Ident,
-    pub from_static: Ident,
-    pub filename: Ident,
-    pub line: Ident,
-    pub equals: Ident,
-    pub tag: Ident,
-    pub value: Ident,
-    pub variantName: Ident,
-    pub MODULE_INFO: Ident,
-    pub root_module_name: Ident,
-    pub core: Ident,
-    pub std: Ident,
-    pub k1: Ident,
-    pub types: Ident,
-    pub type_schema: Ident,
-    pub int_kind: Ident,
-    pub int_value: Ident,
-    pub float_kind: Ident,
-    pub float_value: Ident,
-    pub layout: Ident,
-    pub source_location: Ident,
-    pub array: Ident,
-    pub to_mut: Ident,
-    pub un_mut: Ident,
-    pub pre: Ident,
-    pub iterator: Ident,
-    pub iterable: Ident,
-    pub opt: Ident,
-    pub ordering: Ident,
-    pub buffer: Ident,
-    pub set: Ident,
-    pub mem: Ident,
-    pub sys: Ident,
-    pub libc: Ident,
-    pub span: Ident,
-    pub add: Ident,
-    pub sub: Ident,
-    pub mul: Ident,
-    pub div: Ident,
-    pub rem: Ident,
-    pub scalar_cmp: Ident,
-    pub invoke: Ident,
-    pub lt: Ident,
-    pub le: Ident,
-    pub gt: Ident,
-    pub ge: Ident,
+    pub main: StringId,
+    pub next: StringId,
+    pub _self: StringId,
+    pub self_: StringId,
+    pub it: StringId,
+    pub string: StringId,
+    pub len: StringId,
+    pub get: StringId,
+    pub get_ref: StringId,
+    pub iter: StringId,
+    pub itIndex: StringId,
+    pub as_: StringId,
+    pub list: StringId,
+    pub withCapacity: StringId,
+    pub dest: StringId,
+    pub block_expr_val: StringId,
+    pub optelse_lhs: StringId,
+    pub lambda_env_var_name: StringId,
+    pub env: StringId,
+    pub fn_ptr: StringId,
+    pub env_ptr: StringId,
+    pub asterisk: StringId,
+    pub bang: StringId,
+    pub payload: StringId,
+    pub try_: StringId,
+    pub try_value: StringId,
+    pub if_target: StringId,
+    pub to_dyn: StringId,
+    pub to_static: StringId,
+    pub from_static: StringId,
+    pub filename: StringId,
+    pub line: StringId,
+    pub equals: StringId,
+    pub tag: StringId,
+    pub value: StringId,
+    pub variantName: StringId,
+    pub MODULE_INFO: StringId,
+    pub root_module_name: StringId,
+    pub core: StringId,
+    pub std: StringId,
+    pub k1: StringId,
+    pub types: StringId,
+    pub type_schema: StringId,
+    pub int_kind: StringId,
+    pub int_value: StringId,
+    pub float_kind: StringId,
+    pub float_value: StringId,
+    pub layout: StringId,
+    pub source_location: StringId,
+    pub array: StringId,
+    pub to_mut: StringId,
+    pub un_mut: StringId,
+    pub pre: StringId,
+    pub iterator: StringId,
+    pub iterable: StringId,
+    pub opt: StringId,
+    pub ordering: StringId,
+    pub buffer: StringId,
+    pub set: StringId,
+    pub mem: StringId,
+    pub sys: StringId,
+    pub libc: StringId,
+    pub span: StringId,
+    pub add: StringId,
+    pub sub: StringId,
+    pub mul: StringId,
+    pub div: StringId,
+    pub rem: StringId,
+    pub scalar_cmp: StringId,
+    pub invoke: StringId,
+    pub lt: StringId,
+    pub le: StringId,
+    pub gt: StringId,
+    pub ge: StringId,
 
-    pub param_0: Ident,
-    pub param_1: Ident,
-    pub param_2: Ident,
-    pub param_3: Ident,
-    pub param_4: Ident,
-    pub param_5: Ident,
-    pub param_6: Ident,
-    pub param_7: Ident,
-    pub param_8: Ident,
-    pub StringBuilder: Ident,
-    pub builder: Ident,
-    pub bitwise: Ident,
-    pub arena_tmp: Ident,
-    pub t: Ident,
-    pub phony: Ident,
-    pub some: Ident,
-    pub with: Ident,
-    pub return_: Ident,
-    pub break_: Ident,
-    pub continue_: Ident,
-    pub testCompile: Ident,
-    pub writef: Ident,
-    pub writelnf: Ident,
-    pub stringf: Ident,
-    pub v: Ident,
-    pub subject: Ident,
-    pub fmtargs: Ident,
+    pub param_0: StringId,
+    pub param_1: StringId,
+    pub param_2: StringId,
+    pub param_3: StringId,
+    pub param_4: StringId,
+    pub param_5: StringId,
+    pub param_6: StringId,
+    pub param_7: StringId,
+    pub param_8: StringId,
+    pub StringBuilder: StringId,
+    pub builder: StringId,
+    pub bitwise: StringId,
+    pub arena_tmp: StringId,
+    pub t: StringId,
+    pub phony: StringId,
+    pub some: StringId,
+    pub with: StringId,
+    pub return_: StringId,
+    pub break_: StringId,
+    pub continue_: StringId,
+    pub testCompile: StringId,
+    pub writef: StringId,
+    pub writelnf: StringId,
+    pub stringf: StringId,
+    pub v: StringId,
+    pub subject: StringId,
+    pub fmtargs: StringId,
 }
 
 #[allow(non_snake_case)]
@@ -233,14 +236,14 @@ pub struct IdentPool {
     pub(crate) f: BuiltinFunctions,
 }
 impl IdentPool {
-    pub fn intern(&mut self, s: impl AsRef<str>) -> Ident {
+    pub fn intern(&mut self, s: impl AsRef<str>) -> StringId {
         let s = self.intern_pool.get_or_intern(&s);
-        Ident(s)
+        StringId(s)
     }
-    pub fn get(&self, s: impl AsRef<str>) -> Option<Ident> {
-        self.intern_pool.get(&s).map(Ident)
+    pub fn lookup(&self, s: impl AsRef<str>) -> Option<StringId> {
+        self.intern_pool.get(&s).map(StringId)
     }
-    pub fn get_name(&self, id: Ident) -> &str {
+    pub fn get_string(&self, id: StringId) -> &str {
         self.intern_pool.resolve(id.0).expect("failed to resolve identifier")
     }
 
@@ -257,7 +260,7 @@ impl IdentPool {
 
         macro_rules! intern {
             ($name: expr) => {
-                Ident(pool.get_or_intern_static($name))
+                StringId(pool.get_or_intern_static($name))
             };
         }
 
