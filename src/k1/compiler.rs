@@ -216,7 +216,7 @@ pub struct Args {
     pub profile: bool,
 
     /// quiet mode, no timing summary
-    #[arg(short, long, default_value_t = false)]
+    #[arg(short, long, default_value_t = true)]
     pub quiet: bool,
 
     /// Target platform

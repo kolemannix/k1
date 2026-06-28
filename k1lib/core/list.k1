@@ -114,7 +114,7 @@ ns for list {
   }
 
   fn _grow[T](context mode: alloc-mode)(self: *mut list[T]) {
-    let newCap: size = if self.buffer.isEmpty() {
+    let newCap: size = if self.buffer.is-empty() {
       // For large elements, just allocate what's needed - Rust's RawVec does this :)
       let elemSize = types/size[T];
       if elemSize >= 1024 1 else 8
@@ -148,16 +148,16 @@ ns for list {
     self.buffer.slice(start, end)
   }
 
-  fn isEmpty[T](self: list[T]): bool {
+  fn is-empty[T](self: list[T]): bool {
     self.len == 0
   }
 
-  fn nonEmpty[T](self: list[T]): bool {
+  fn non-empty[T](self: list[T]): bool {
     self.len > 0
   }
 
   fn firstRef[T](self: *mut list[T]): ?(*mut T) {
-    if self.nonEmpty() {
+    if self.non-empty() {
       :some(self.getRef(0))
     } else {
       :none
@@ -165,17 +165,17 @@ ns for list {
   }
 
   fn first[T](self: list[T]): ?T {
-    if self.nonEmpty() :some(self.get(0)) 
+    if self.non-empty() :some(self.get(0)) 
     else :none
   }
 
   fn lastRef[T](self: *mut list[T]): ?(*mut T) {
-    if self.nonEmpty() :some(self.getRef(self.len - 1))
+    if self.non-empty() :some(self.getRef(self.len - 1))
     else :none
   }
 
   fn last[T](self: list[T]): ?T {
-    if self.nonEmpty() :some(self.get(self.len - 1))
+    if self.non-empty() :some(self.get(self.len - 1))
     else :none
   }
 
@@ -279,14 +279,12 @@ ns for list {
     copy
   }
 
-  fn join[T: show](self: list[T], sep: string): string {
+  fn join[T: print](self: list[T], sep: string): string {
     let b = StringBuilder/new();
     for s in self {
-      &b.string(s.show());
-      let isLast = itIndex != self.len - 1;
-      if not isLast {
-        &b.string(sep);
-      }
+      s.print-to(&b);
+      let isLast = itIndex == self.len - 1;
+      if not isLast { b.string(sep) }
     };
     b.build()
   }
@@ -362,10 +360,10 @@ impl[T: equals] equals for list[T] {
 }
 
 impl[T: print] print for list[T] {
-  fn printTo[w: writer](self: list[T], w) {
+  fn print-to[w: writer](self: list[T], w) {
     w.write-char('[');
     for self {
-      it.printTo(w);
+      it.print-to(w);
       let last = itIndex == self.len - 1;
       if not last {
         w.string(",");

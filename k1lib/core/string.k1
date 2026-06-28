@@ -60,15 +60,15 @@ ns for string {
 
   fn len(self: string): size { self.span.len() }
 
-  fn isEmpty(self: string): bool { self.len() == 0 }
-  fn nonEmpty(self: string): bool { self.len() != 0 }
+  fn is-empty(self: string): bool { self.len() == 0 }
+  fn non-empty(self: string): bool { self.len() != 0 }
 
   fn first(self: string): ?char {
-    if self.nonEmpty() :some(self.get(0)) else :none
+    if self.non-empty() :some(self.get(0)) else :none
   }
 
   fn last(self: string): ?char {
-    if self.nonEmpty() :some(self.get(self.len() - 1)) else :none
+    if self.is-empty() :some(self.get(self.len() - 1)) else :none
   }
 
   fn indexOf(self: string, c: char): i64 {
@@ -160,7 +160,7 @@ ns for string {
 
   // Converts self to a c-style (NUL byte terminated) string
   fn to-c(context alloc: mem/alloc-mode)(self: string): { ptr: ptr, len: size } {
-    if self.isEmpty()                  { ptr: "\0".data-ptr(), len: 0 }
+    if self.is-empty()                  { ptr: "\0".data-ptr(), len: 0 }
     else if self.last() is :some('\0') { ptr: self.data-ptr(), len: self.len() - 1 }
     else                               { ptr: self.appendCharIn('\0').data-ptr(), len: self.len() }
   }
@@ -182,7 +182,7 @@ ns for string {
 
   // TODO(stdlib perf): use snprintf for string to int
   fn toInt(self: string): ?int {
-    if self.isEmpty() { return(:none) };
+    if self.is-empty() { return(:none) };
 
     let neg = self.get(0) == '-';
     let i = if neg 1 else 0;
@@ -209,15 +209,12 @@ ns for string {
     } else self
   }
  
-  fn parseBase10(s: string): ?uint {
+  fn parseBase10(self: string): ?uint {
     let o: uint = 0;
-    for c in s {
-      if c.toAsciiDigit() is :some(digitValue) {
-
-      } else { return (:none) };
-      if not c.isAsciiDigit() { return(:none) };
-      // no
-      let digitValue: uint = (c.as_u8() - 48).as[uint];
+    for c in self {
+      require c.toAsciiDigit() is :some(digitValue) else { return(:none) };
+      // FIXME char to digit LUT
+      let digitValue: uint = (c.as[u8] - 48).as[uint];
       o := o * 10;
       o := o + digitValue;
     };

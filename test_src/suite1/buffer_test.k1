@@ -3,8 +3,8 @@ ns buffer_test;
 fn bufferEmpty() {
   let empty = buffer/empty[int]();
   assert(empty.len == 0);
-  assert(empty.isEmpty());
-  assert(not empty.nonEmpty());
+  assert(empty.is-empty());
+  assert(not empty.non-empty());
   assert(empty.first() == :none);
   assert(empty.last() == :none);
 }
@@ -12,8 +12,8 @@ fn bufferEmpty() {
 fn bufferFilled() {
   let buf = buffer/filled[i8](5, 42);
   assert(buf.len == 5);
-  assert(not buf.isEmpty());
-  assert(buf.nonEmpty());
+  assert(not buf.is-empty());
+  assert(buf.non-empty());
 
   let i = 0;
   while i < 5 {

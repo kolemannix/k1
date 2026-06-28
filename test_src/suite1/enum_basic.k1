@@ -9,7 +9,7 @@ fn enumNoPayload() {
 
 type enum-abc = either(u8) { a, b, c }
 impl print for enum-abc {
-  fn printTo[w: writer](self, w) { switch self { 
+  fn print-to[w: writer](self, w) { switch self { 
     :a -> w.write-char('a'),
     :b -> w.write-char('b'),
     :c -> w.write-char('c'),
@@ -34,7 +34,7 @@ fn enumTest() {
   assert-equals(getEnumValue(b), 1);
   assert-equals(c, c);
   assert-equals(b, b);
-  core/assertNotEquals(c, b);
+  core/assert-not-equals(c, b);
 }
 
 fn getEnumValue[i, e: types/enum[v = i]](e: e): i {

@@ -72,10 +72,23 @@ fn withFields() {
   assert-equals(s.d.inside, 1);
 }
 
+fn auto-equals() {
+  let a: { x: int, y: f32 } = { x: 10, y: 10.0 };
+  let b: { x: int, y: f32 } = { x: 20, y: 20.0 };
+  let c: { x: int, y: f32 } = { x: 10, y: 10.0 };
+  assert(a != b);
+  assert(a == c);
+  core/assert-not-equals(a, b);
+  assert-equals(a, c);
+
+  assert-equals(a.show(), p"{ x: 10, y: 10.000000 }");
+}
+
 fn test() {
   basicStruct();
   structArgMut();
   eqAnon();
   structNested();
   withFields();
+  auto-equals();
 }

@@ -259,16 +259,16 @@ ns for buffer {
     results.as-span()
   }
 
-  fn isEmpty[t](self: buffer[t]): bool {
+  fn is-empty[t](self: buffer[t]): bool {
     self.len == 0
   }
 
-  fn nonEmpty[t](self: buffer[t]): bool {
+  fn non-empty[t](self: buffer[t]): bool {
     self.len > 0
   }
 
   fn firstRef[t](self: buffer[t]): ?(*mut t) {
-    if not self.isEmpty() {
+    if not self.is-empty() {
       :some(self.getRef(0))
     } else {
       :none
@@ -283,7 +283,7 @@ ns for buffer {
   }
 
   fn lastRef[t](self: buffer[t]): ?(*mut t) {
-    if not self.isEmpty() {
+    if not self.is-empty() {
       :some(self.getRef(self.len - 1))
     } else {
       :none
@@ -386,10 +386,10 @@ impl[t] iterable[item = t, i = BufferIterator[t]] for buffer[t] {
 }
 
 impl[t: print] print for buffer[t] {
-  fn printTo[w: writer](self, w): empty {
+  fn print-to[w: writer](self, w): empty {
     w.write-char('[');
     for self {
-      it.printTo(w);
+      it.print-to(w);
       let last = itIndex == self.len - 1;
       if not last {
         w.write-char(',');

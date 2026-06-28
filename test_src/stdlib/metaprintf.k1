@@ -25,7 +25,7 @@ fn fmt[Fmt: static string, Args, w: writer](w, fmtString: Fmt, args: Args) {
           crash("Got 1 format argument (a string) but format string has {parts.len}")
         };
         //meta/emitLine("its a string baby");
-        code.line("parts.get(0).printTo(w);");
+        code.line("parts.get(0).print-to(w);");
         code.line("w.string(args);");
       },
       :struct({fields}) -> {
@@ -38,8 +38,8 @@ fn fmt[Fmt: static string, Args, w: writer](w, fmtString: Fmt, args: Args) {
         };
 
         for part in parts {
-          code.line("parts.get({itIndex}).printTo(w);");
-          code.line("f{itIndex}.printTo(w);");
+          code.line("parts.get({itIndex}).print-to(w);");
+          code.line("f{itIndex}.print-to(w);");
         };
 
       },

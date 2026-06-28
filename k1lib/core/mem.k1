@@ -48,7 +48,7 @@ ns mem {
   }
 
   impl print for alloc-mode {
-    fn printTo[w: writer](self, w) {
+    fn print-to[w: writer](self, w) {
       w.string(self.kindName())
     }
   }
