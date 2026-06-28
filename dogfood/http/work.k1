@@ -59,7 +59,7 @@ ns work {
     let queue = handle.get-data[uv-work-queue]();
     loop {
       uv/mutex_lock(queue.mutex);
-      if queue.submissions.isEmpty() {
+      if queue.submissions.is-empty() {
         uv/mutex_unlock(queue.mutex);
         break();
       };

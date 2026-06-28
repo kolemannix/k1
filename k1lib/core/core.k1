@@ -7,7 +7,7 @@ fn assert-equals[T: print and equals](context locn: k1/source-location)(a: T, b:
   }
 }
 
-fn assertNotEquals[T: print and equals](context locn: k1/source-location)(a: T, b: T) {
+fn assert-not-equals[T: print and equals](context locn: k1/source-location)(a: T, b: T) {
   if a == b {
     crash("ASSERT FAILED: {a} == {b}")
   }
@@ -59,7 +59,7 @@ fn print[t: print](t) {
     let s = t.show();
     k1/emit-compiler-message(k1/location(), :info, s)
   } else {
-    t.printTo(io/stdout)
+    t.print-to(io/stdout)
   }
 }
 fn println[t: print](t) {
@@ -74,7 +74,7 @@ fn eprint[t: print](t) {
     let s = t.show();
     k1/emit-compiler-message(k1/location(), :warn, s)
   } else {
-    t.printTo(io/stderr)
+    t.print-to(io/stderr)
   }
 }
 fn eprintln(s: string) {
@@ -272,21 +272,21 @@ impl scalar-cmp for char {
 impl[T: print] show for T {
   fn show(self): string { 
     let sb = StringBuilder/new();
-    self.printTo(&sb);
+    self.print-to(&sb);
     sb.build()
   }
 }
 
 
 impl print for bool {
-  fn printTo[w: writer](self: bool, w) { 
+  fn print-to[w: writer](self: bool, w) { 
     let s = if self "true" else "false";
     w.string(s)
   }
 }
 impl show for bool { fn show(self: bool): string { if self "true" else "false" } }
 
-impl print for char { fn printTo[w: writer](self: char, w) { w.write-char(self) } }
+impl print for char { fn print-to[w: writer](self: char, w) { w.write-char(self) } }
 // Direct specialized 'show' impl to avoid going through a buffer
 impl show for char { fn show(self: char): string { self.toString() } }
 
@@ -321,49 +321,49 @@ fn formatUInt[w: writer](context w)(value: u64, base: u64) {
 }
 
 impl print for u8 {
-  fn printTo[w: writer](self: u8, w) {
-    (self.as[u64]).printTo(w)
+  fn print-to[w: writer](self: u8, w) {
+    (self.as[u64]).print-to(w)
   }
 }
 
 impl print for u16 {
-  fn printTo[w: writer](self: u16, w) {
-    (self.as[u64]).printTo(w)
+  fn print-to[w: writer](self: u16, w) {
+    (self.as[u64]).print-to(w)
   }
 }
 
 impl print for u32 {
-  fn printTo[w: writer](self: u32, w) {
-    (self.as[u64]).printTo(w)
+  fn print-to[w: writer](self: u32, w) {
+    (self.as[u64]).print-to(w)
   }
 }
 
 impl print for u64 {
-  fn printTo[w: writer](self: u64, w) {
+  fn print-to[w: writer](self: u64, w) {
     formatUInt(context w)(self, base = 10);
   }
 }
 
 impl print for i8 {
-  fn printTo[w: writer](self: i8, w) {
-    (self.as[int]).printTo(w)
+  fn print-to[w: writer](self: i8, w) {
+    (self.as[int]).print-to(w)
   }
 }
 
 impl print for i16 {
-  fn printTo[w: writer](self: i16, w) {
-    (self.as[int]).printTo(w)
+  fn print-to[w: writer](self: i16, w) {
+    (self.as[int]).print-to(w)
   }
 }
 
 impl print for i32 {
-  fn printTo[w: writer](self: i32, w) {
-    (self.as[int]).printTo(w)
+  fn print-to[w: writer](self: i32, w) {
+    (self.as[int]).print-to(w)
   }
 }
 
 impl print for int {
-  fn printTo[w: writer](self: int, w) {
+  fn print-to[w: writer](self: int, w) {
     let neg = self < 0;
     if neg {
       w.write-char('-');
@@ -573,19 +573,19 @@ impl scalar-cmp for f64 {
 }
 
 impl print for f32 {
-  fn printTo[w: writer](self: f32, w) {
+  fn print-to[w: writer](self: f32, w) {
     f64/format(self.as[f64], w, places = -1);
   }
 }
 
 impl print for f64 {
-  fn printTo[w: writer](self: f64, w) {
+  fn print-to[w: writer](self: f64, w) {
     f64/format(self, w, places = -1);
   }
 }
 
 impl print for ptr {
-  fn printTo[w: writer](self: ptr, w) {
+  fn print-to[w: writer](self: ptr, w) {
     w.string("0x");
     formatUInt(context w)(self.as[usize], base = 16);
   }

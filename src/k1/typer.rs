@@ -107,6 +107,7 @@ pub const GLOBAL_ID_COMPILER_CAPTURE_PRINTS: TypedGlobalId =
 pub const GLOBAL_ID_K1_IS_STATIC: TypedGlobalId =
     TypedGlobalId::from_nzu32(NonZeroU32::new(2).unwrap());
 
+//rustfmt: off
 pub const ABILITY_ID_ENUM: AbilityId = AbilityId(NonZeroU32::new(1).unwrap());
 pub const ABILITY_ID_SUM: AbilityId = AbilityId(NonZeroU32::new(2).unwrap());
 pub const ABILITY_ID_EQUALS: AbilityId = AbilityId(NonZeroU32::new(3).unwrap());
@@ -124,6 +125,7 @@ pub const ABILITY_ID_COMPARABLE: AbilityId = AbilityId(NonZeroU32::new(14).unwra
 pub const ABILITY_ID_TRY: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
 pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
 pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(17).unwrap());
+//rustfmt: on
 
 pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
 pub const FUNC_TYPE_PARAM_IDEAL_COUNT: usize = 4;
@@ -2005,6 +2007,8 @@ pub enum BuiltinTyperFunction {
     SumAbilityGetTag,
     SumAbilityGetName,
     SumEquals,
+    StructEquals,
+    StructPrintTo,
 }
 
 impl BuiltinTyperFunction {
@@ -2015,6 +2019,8 @@ impl BuiltinTyperFunction {
             BuiltinTyperFunction::SumAbilityGetTag => "sum_ability_get_tag",
             BuiltinTyperFunction::SumAbilityGetName => "sum_ability_get_name",
             BuiltinTyperFunction::SumEquals => "sum_equals",
+            BuiltinTyperFunction::StructEquals => "struct_equals",
+            BuiltinTyperFunction::StructPrintTo => "struct_print_to",
         }
     }
 }
@@ -5612,16 +5618,14 @@ impl TypedProgram {
         match (self.types.get(expected), self.types.get(actual)) {
             (Type::InferenceHole(_hole), _any) => Ok(()),
             (Type::Struct(s1), Type::Struct(s2)) => {
-                let expected_defn_info = self.types.get_defn_info(expected);
-                let actual_defn_info = self.types.get_defn_info(actual);
-
-                // If I expected certain nominal struct
-                // I won't accept an anonymous struct
-                // Nor a nominal struct of a different kind
-                // But I will accept
+                // If I expect a certain nominal type
+                // I won't accept an anonymous type
+                // Nor a nominal type of a different kind
+                // But I will accept the same nominal type,
                 // But if I expect an anonymous struct, the a named or anonymous one will do
                 // if it matches structurally
-                // nocommit: Same treatment for sums, I suspect
+                let expected_defn_info = self.types.get_defn_info(expected);
+                let actual_defn_info = self.types.get_defn_info(actual);
                 if let Some(expected_defn_info) = expected_defn_info {
                     match actual_defn_info {
                         None => {
@@ -5638,7 +5642,7 @@ impl TypedProgram {
                             if expected_defn_info.name == actual_defn_info.name
                                 && expected_defn_info.scope == actual_defn_info.scope
                             {
-                                // Same nominal struct, we're good
+                                // Same nominal type, we're good
                             } else {
                                 return Err(k1_format_user!(
                                     self,
@@ -5697,6 +5701,7 @@ impl TypedProgram {
                 }
             }
             (Type::Sum(_exp_sum), Type::Sum(_act_sum)) => {
+                // FIXME: We'll probably need a structural treatment for sums eventually
                 Err(k1_format_user!(self, "expected sum {} but got sum {}", expected, actual))
             }
             (Type::Function(f1), Type::Function(f2)) => {
@@ -6502,7 +6507,7 @@ impl TypedProgram {
 
         scope_id: ScopeId,
         span: SpanId,
-    ) -> Result<(AbilityImplHandle, bool), Cow<'static, str>> {
+    ) -> Result<(AbilityImplHandle, bool), MStr<MemTmp>> {
         // let mut attempts: SV4<String> = smallvec![];
         if let Some(impl_handle) = self.find_unique_valid_ability_impl(
             self_type_id,
@@ -6545,7 +6550,7 @@ impl TypedProgram {
             }
         };
 
-        let mut err_msg = None;
+        let mut err_msg: Option<MStr<MemTmp>> = None;
         /////////////////// Special type-kind abilities
         if target_base_ability_id == ABILITY_ID_ENUM {
             if let Type::Enum(e) = self.types.get(self_type_id) {
@@ -6599,7 +6604,7 @@ impl TypedProgram {
                     let mut fail = false;
                     for variant in self.types.mem.getn(sum.variants) {
                         if let Some(payload) = variant.payload {
-                            if let Err(err) = self.expect_ability_impl(
+                            if let Err(_err) = self.expect_ability_impl(
                                 payload,
                                 ABILITY_ID_EQUALS,
                                 false,
@@ -6607,14 +6612,80 @@ impl TypedProgram {
                                 span,
                             ) {
                                 fail = true;
-                                err_msg = Some(format!(
-                                    "Not all variant data implements equals: :{} {}\n{}",
-                                    self.ident_str(variant.name),
-                                    self.type_id_to_string(payload),
-                                    err.message
+                                err_msg = Some(k1_format_user!(
+                                    self,
+                                    ":{} variant's data {} does not implement equals",
+                                    variant.name,
+                                    payload,
                                 ))
                             };
                         }
+                    }
+                    if !fail {
+                        let impl_handle = self.generate_builtin_ability_impl(
+                            self_type_id,
+                            target_base_ability_id,
+                            MSlice::empty(),
+                            span,
+                        );
+                        return Ok((impl_handle, false));
+                    }
+                }
+                Type::Struct(struct_type) => {
+                    // Check if all fields implement equals
+                    let mut fail = false;
+                    for field in self.types.mem.getn(struct_type.fields) {
+                        if let Err(_err) = self.expect_ability_impl(
+                            field.type_id,
+                            ABILITY_ID_EQUALS,
+                            false,
+                            scope_id,
+                            span,
+                        ) {
+                            fail = true;
+                            err_msg = Some(k1_format_user!(
+                                self,
+                                "field {} type {} does not implement equals",
+                                field.name,
+                                field.type_id,
+                            ))
+                        };
+                    }
+                    if !fail {
+                        let impl_handle = self.generate_builtin_ability_impl(
+                            self_type_id,
+                            target_base_ability_id,
+                            MSlice::empty(),
+                            span,
+                        );
+                        return Ok((impl_handle, false));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if target_base_ability_id == ABILITY_ID_PRINT {
+            match self.types.get(self_type_id) {
+                Type::Struct(struct_type) => {
+                    // Check if all fields implement print
+                    let mut fail = false;
+                    for field in self.types.mem.getn(struct_type.fields) {
+                        if let Err(_err) = self.expect_ability_impl(
+                            field.type_id,
+                            ABILITY_ID_PRINT,
+                            false,
+                            scope_id,
+                            span,
+                        ) {
+                            fail = true;
+                            err_msg = Some(k1_format_user!(
+                                self,
+                                "field {} type {} does not implement print",
+                                field.name,
+                                field.type_id,
+                            ))
+                        };
                     }
                     if !fail {
                         let impl_handle = self.generate_builtin_ability_impl(
@@ -6648,7 +6719,7 @@ impl TypedProgram {
 
         match err_msg {
             None => Err("No matching implementations found".into()),
-            Some(msg) => Err(msg.into()),
+            Some(msg) => Err(msg),
         }
     }
 
@@ -6658,7 +6729,7 @@ impl TypedProgram {
         target_base_ability_id: AbilityId,
         parameter_constraints: &[Option<TypeId>],
         scope_id: ScopeId,
-    ) -> Result<Option<AbilityImplHandle>, Cow<'static, str>> {
+    ) -> Result<Option<AbilityImplHandle>, MStr<MemTmp>> {
         let Some(impl_handles) = self.ability_impl_table.get(&self_type_id) else {
             return Ok(None);
         };
@@ -6728,8 +6799,11 @@ impl TypedProgram {
                             .join(", "),
                         impls_formatted
                     );
-                    Err(format!("Multiple matching implementations found:\n{}", impls_formatted)
-                        .into())
+                    Err(k1_format_user!(
+                        self,
+                        "Multiple matching implementations found:\n{}",
+                        impls_formatted
+                    ))
                 }
             }
         }
@@ -6809,7 +6883,7 @@ impl TypedProgram {
         allow_ref_self: bool,
         scope_id: ScopeId,
         span: SpanId,
-    ) -> Result<(AbilityImplHandle, bool), Cow<'static, str>> {
+    ) -> Result<(AbilityImplHandle, bool), MStr<MemTmp>> {
         let specialized_ability = self.abilities.get(target_specialized_ability_id);
         let base_ability = specialized_ability.base_ability_id;
         let args = specialized_ability.kind.arguments();
@@ -8687,6 +8761,7 @@ impl TypedProgram {
             return failf!(e.span(), "Failed to lex code emitted from here");
         };
 
+        let error_count_start = self.ast.errors.len();
         let mut p = crate::parse::Parser::make_for_file(
             module.id,
             module.name,
@@ -8696,16 +8771,31 @@ impl TypedProgram {
             file_id,
         );
 
+        let msg_base = "Failed to parse the code you returned: ";
         let result = match kind {
             ParseAdHocKind::Expr => match p.expect_expression() {
                 Err(e) => {
-                    failf!(e.span(), "Failed to parse your emitted code: {}", e)
+                    failf!(e.span(), "{msg_base}{}", e)
                 }
-                Ok(parsed_expr) => Ok(ParseAdHocResult::Expr(parsed_expr)),
+                Ok(parsed_expr) => {
+                    if p.ast.errors.len() > error_count_start {
+                        let e = p.ast.errors.last().unwrap();
+                        failf!(e.span(), "{msg_base}{}", e.clone())
+                    } else {
+                        Ok(ParseAdHocResult::Expr(parsed_expr))
+                    }
+                }
             },
             ParseAdHocKind::Definitions => match p.parse_definitions(TokenKind::Eof) {
-                Err(e) => failf!(e.span(), "Failed to parse your emitted code: {}", e),
-                Ok(defns) => Ok(ParseAdHocResult::Definitions(defns)),
+                Err(e) => failf!(e.span(), "{msg_base}{}", e),
+                Ok(defns) => {
+                    if p.ast.errors.len() > error_count_start {
+                        let e = p.ast.errors.last().unwrap();
+                        failf!(e.span(), "{msg_base}{}", e.clone())
+                    } else {
+                        Ok(ParseAdHocResult::Definitions(defns))
+                    }
+                }
             },
         };
 
@@ -11874,7 +11964,7 @@ impl TypedProgram {
                 let Some(static_type) = self.types.get_static_type_of_type(base_type_id) else {
                     return failf!(
                         call_span,
-                        "Cannot use .fromStatic() on non-static type: {}",
+                        "Cannot use .from-static() on non-static type: {}",
                         self.type_id_to_string(base_type_id)
                     );
                 };
@@ -13745,6 +13835,8 @@ impl TypedProgram {
     fn specialize_function_body(&mut self, function_id: FunctionId) -> K1Result<()> {
         let specialized_function = self.get_function(function_id);
         // eprintln!("specialize_function_body\n  {}", self.function_id_to_string(function_id, false));
+        // nocommit: this crashes on default ability impl fns
+        //           probably because they are missing specialization info
         // eprintln!(
         //     "specialize_function_body with: {}",
         //     self.pretty_print_named_type_slice(
@@ -13767,13 +13859,25 @@ impl TypedProgram {
                 "specialize_function_body wants a normal specialization or a blanket impl defn",
             );
         let parent_function = self.get_function(parent_function);
+
+        // Approach: Synthesize the implementation for this builtin
+        if let Some(Builtin::TyperPhysicalFunction(kind @ BuiltinTyperFunction::StructPrintTo)) =
+            parent_function.builtin_type
+        {
+            let body_expr_id = self.generate_intrinsic_function_body(
+                function_id,
+                specialized_function_scope_id,
+                kind,
+            )?;
+            self.get_function_mut(function_id).body_block = Some(body_expr_id);
+
+            return Ok(());
+        };
+
+        // Approach: Just compile the AST again, with bound types
         debug_assert!(parent_function.body_block.is_some());
         debug_assert!(specialized_function.body_block.is_none());
 
-        // Approach 1: Re-run whole body w/ bound types
-        // Downside: cloning, extra work, etc
-        // Upside: way way less code.
-        // Have to bind type names that shouldn't exist, kinda
         let parsed_body = *self
             .ast
             .get_function(parent_function.parsed_id.as_function_id().unwrap())
@@ -13792,7 +13896,7 @@ impl TypedProgram {
         {
             return failf!(
                 self.get_span_responsible_for_expr_type(typed_body),
-                "Function body type mismatch: {}\n specialized signature is: {}",
+                "[bug] Function body type mismatch: {}\n specialized signature is: {}",
                 msg,
                 self.type_id_to_string(specialized_function_type)
             );
@@ -14497,6 +14601,15 @@ impl TypedProgram {
                     }
                     Some(Type::Sum(_)) => {
                         Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumEquals))
+                    }
+                    Some(Type::Struct(_)) => {
+                        Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::StructEquals))
+                    }
+                    _ => None,
+                },
+                (ABILITY_ID_PRINT, "print-to") => match t {
+                    Some(Type::Struct(_)) => {
+                        Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::StructPrintTo))
                     }
                     _ => None,
                 },
@@ -15658,34 +15771,16 @@ impl TypedProgram {
         let function_signature_span = parsed_function.signature_span;
 
         let no_body_expected = other_intrinsic || is_extern || is_ability_defn;
+        // nocommit DRY up is_generic and is_concrete
         let is_generic = function.is_generic();
 
         let body_block = match parsed_function.body.as_ref() {
             None if builtin_type_phys_fn.is_some() => {
-                let body_expr = self.generate_intrinsic_function_body(
+                let block_id = self.generate_intrinsic_function_body(
                     declaration_id,
+                    fn_scope_id,
                     builtin_type_phys_fn.unwrap(),
                 )?;
-                let body_expr_type = self.exprs.get_type(body_expr);
-                if let Err(msg) = self.check_types(return_type, body_expr_type, fn_scope_id) {
-                    self.ice_span(
-                        function_signature_span,
-                        format!("Builtin wrong return type: {msg}"),
-                    )
-                }
-                let mut block = self.new_block_builder(
-                    fn_scope_id,
-                    ScopeType::FunctionScope,
-                    function_signature_span,
-                    1,
-                );
-                let ret = self.exprs.add(
-                    TypedExpr::Return(TypedReturn { value: body_expr, returned_variable: None }),
-                    NEVER_TYPE_ID,
-                    function_signature_span,
-                );
-                self.push_block_expr_id(&mut block, ret);
-                let block_id = self.exprs.add_block(&mut self.mem, block, NEVER_TYPE_ID);
                 Some(block_id)
             }
             None if no_body_expected => None,
@@ -15759,12 +15854,14 @@ impl TypedProgram {
     fn generate_intrinsic_function_body(
         &mut self,
         function_id: FunctionId,
+        fn_scope_id: ScopeId,
         kind: BuiltinTyperFunction,
     ) -> K1Result<TypedExprId> {
         let f = self.functions.get(function_id);
+        let return_type = self.get_function_type(function_id).return_type;
         let fn_span = self.ast.get_span_for_id(f.parsed_id);
         let params = f.params;
-        match kind {
+        let body_expr = match kind {
             BuiltinTyperFunction::EnumAbilityGetValue => {
                 let enum_param = *self.mem.get_nth(params, 0);
                 let enum_param_expr = self.synth_variable_expr(enum_param.variable_id, fn_span);
@@ -15901,7 +15998,125 @@ impl TypedProgram {
                 });
                 Ok(self.exprs.add(match_expr, self.types.builtins.string(), fn_span))
             }
+            BuiltinTyperFunction::StructEquals => {
+                let struct_param_a = *self.mem.get_nth(params, 0);
+                let struct_param_b = *self.mem.get_nth(params, 1);
+                let arg_a = self.synth_variable_expr(struct_param_a.variable_id, fn_span);
+                let arg_b = self.synth_variable_expr(struct_param_b.variable_id, fn_span);
+                let struct_type_id = self.exprs.get_type(arg_a);
+                let struct_type = self.types.get(struct_type_id).as_struct().unwrap();
+                let mut conditions = self.mem.new_list(struct_type.fields.len());
+                for (index, _field) in self.types.mem.getn(struct_type.fields).iter().enumerate() {
+                    let field_of_a = self.synth_struct_field_access(
+                        arg_a,
+                        index,
+                        FieldAccessKind::ValueToValue,
+                        fn_span,
+                    )?;
+                    let field_of_b = self.synth_struct_field_access(
+                        arg_b,
+                        index,
+                        FieldAccessKind::ValueToValue,
+                        fn_span,
+                    )?;
+                    let equals_expr =
+                        self.synth_equals_call_simple(field_of_a, field_of_b, fn_span);
+                    conditions.push(MatchingConditionInstr::cond(equals_expr))
+                }
+                let equals_arm = TypedMatchArm {
+                    condition: MatchingCondition { instrs: self.mem.list_to_handle(conditions) },
+                    consequent_expr: self.synth_bool(true, fn_span),
+                };
+                let false_arm = TypedMatchArm {
+                    condition: MatchingCondition { instrs: MSlice::empty() },
+                    consequent_expr: self.synth_bool(false, fn_span),
+                };
+                let arms = self.mem.pushn(&[equals_arm, false_arm]);
+                let match_expr = TypedExpr::Match(TypedMatchExpr {
+                    initial_let_statements: MSlice::empty(),
+                    arms,
+                });
+                let match_expr_id = self.exprs.add(match_expr, BOOL_TYPE_ID, fn_span);
+                // eprintln!("STRUCT EQUALS\n{}", self.expr_to_string(match_expr_id));
+                Ok(match_expr_id)
+            }
+            BuiltinTyperFunction::StructPrintTo => {
+                let struct_param = *self.mem.get_nth(params, 0);
+                let writer_param = *self.mem.get_nth(params, 1);
+
+                let struct_expr = self.synth_variable_expr(struct_param.variable_id, fn_span);
+                let struct_type_id = self.exprs.get_type(struct_expr);
+                let struct_type = *self.types.get(struct_type_id).as_struct().unwrap();
+                let writer_expr = self.synth_variable_expr(writer_param.variable_id, fn_span);
+
+                let mut block = self.new_block_builder(
+                    fn_scope_id,
+                    ScopeType::LexicalBlock,
+                    fn_span,
+                    (struct_type.fields.len() * 4) // 4 per field
+                    - 1  // minus last delimiter
+                    + 2, // open/close brace
+                );
+                let ctx = EvalExprContext::make(block.scope_id);
+
+                let obrace_expr = self.synth_string_literal_from_str("{ ", fn_span);
+                let write_obrace = self.synth_printto_call(obrace_expr, writer_expr, ctx)?;
+                self.push_block_expr_id(&mut block, write_obrace);
+
+                let comma_expr = self.synth_string_literal_from_str(", ", fn_span);
+                let colon_expr = self.synth_string_literal_from_str(": ", fn_span);
+                // FIXME: This won't support indentation until we pluck 'print' out into 'Display' and 'Inspect'
+                for (index, field) in self.types.mem.getn(struct_type.fields).iter().enumerate() {
+                    let field_expr = self.synth_struct_field_access(
+                        struct_expr,
+                        index,
+                        FieldAccessKind::ValueToValue,
+                        fn_span,
+                    )?;
+                    // nocommit: Probably best to just have one pool for strings and idents, with
+                    // how often idents become strings
+                    let name_string_id =
+                        self.ast.strings.intern(self.ast.idents.get_name(field.name));
+                    let name_expr = self.synth_string_literal(name_string_id, fn_span);
+                    let print_name_expr = self.synth_printto_call(name_expr, writer_expr, ctx)?;
+                    let print_colon_expr = self.synth_printto_call(colon_expr, writer_expr, ctx)?;
+
+                    let print_value_expr = self.synth_printto_call(field_expr, writer_expr, ctx)?;
+
+                    self.push_block_expr_id(&mut block, print_name_expr);
+                    self.push_block_expr_id(&mut block, print_colon_expr);
+                    self.push_block_expr_id(&mut block, print_value_expr);
+
+                    if index as u32 != struct_type.fields.len() - 1 {
+                        let print_comma_expr =
+                            self.synth_printto_call(comma_expr, writer_expr, ctx)?;
+                        self.push_block_expr_id(&mut block, print_comma_expr);
+                    }
+                }
+
+                let cbrace_expr = self.synth_string_literal_from_str(" }", fn_span);
+                let write_cbrace = self.synth_printto_call(cbrace_expr, writer_expr, ctx)?;
+                self.push_block_expr_id(&mut block, write_cbrace);
+
+                let block_expr_id = self.exprs.add_block(&mut self.mem, block, EMPTY_TYPE_ID);
+                // eprintln!("STRUCT PRINT TO\n{}", self.expr_to_string(block_expr_id));
+                Ok(block_expr_id)
+            }
+        }?;
+
+        let body_expr_type = self.exprs.get_type(body_expr);
+        if let Err(msg) = self.check_types(return_type, body_expr_type, fn_scope_id) {
+            self.ice_span(fn_span, format!("Builtin wrong return type: {msg}"))
         }
+        let mut block = self.new_block_builder(fn_scope_id, ScopeType::FunctionScope, fn_span, 1);
+        let ret = self.exprs.add(
+            TypedExpr::Return(TypedReturn { value: body_expr, returned_variable: None }),
+            NEVER_TYPE_ID,
+            fn_span,
+        );
+        self.push_block_expr_id(&mut block, ret);
+        let block_id = self.exprs.add_block(&mut self.mem, block, NEVER_TYPE_ID);
+        Ok(block_id)
     }
 
     fn warn_variable_usage_counts(

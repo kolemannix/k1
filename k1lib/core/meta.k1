@@ -19,7 +19,7 @@ ns meta {
       self.line("impl print for {type-name} {{");
 
       self.indent(indent + 1);
-      self.line(p"fn printTo[w: writer](self, w) {");
+      self.line(p"fn print-to[w: writer](self, w) {");
       self.string(body);
       self.indent(indent + 1);
       self.line("}");
@@ -54,7 +54,7 @@ ns meta {
     let tt = "typeFromId({structTypeId})";
     require types/type-id-schema(structTypeId) is :struct({ fields }) else
       crash("Its called a STRUCT of arrays for a reason");
-    if fields.isEmpty() { crash("Input struct must have at least one field") };
+    if fields.is-empty() { crash("Input struct must have at least one field") };
 
     let* code = StringBuilder/new();
     code.line("type {name} = {{");

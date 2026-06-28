@@ -80,7 +80,7 @@ ns for spill-list {
 }
 
 impl[T, N: static size] print for spill-list[T, N] {
-  fn printTo[w: writer](self, w) {
+  fn print-to[w: writer](self, w) {
      switch self {
        :Inline(fix) -> {
          w.string("inline ");
@@ -89,7 +89,7 @@ impl[T, N: static size] print for spill-list[T, N] {
          w.string("spilled ");
        }
      };
-     self.len().printTo(w);
+     self.len().print-to(w);
   }
 }
 

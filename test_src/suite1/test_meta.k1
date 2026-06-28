@@ -63,7 +63,7 @@ w.string("\"{f.name}\":");
     :bool -> {
       code.line(`w.string(if {name} "true": string else "false");`)
     },
-    :int(_) -> code.line(`{name}.printTo(w);`),
+    :int(_) -> code.line(`{name}.print-to(w);`),
     :either(_) -> {
       let tName = types/type-id-name(type-id);
       crash("Cannot yet create a JSON writer for either: {tName}")

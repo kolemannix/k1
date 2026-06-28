@@ -44,7 +44,7 @@ fn partOne(input: string) {
   let* ranges = list/empty[Range]();
   let* ing = list/empty[uint]();
   for lines {
-    if it.isEmpty() { parseMode := .Ingredients; } else {
+    if it.is-empty() { parseMode := .Ingredients; } else {
       switch parseMode {
         .Ranges -> { ranges.push(Range/parse(it).!) },
         .Ingredients -> { ing.push(it.parseBase10().!) }

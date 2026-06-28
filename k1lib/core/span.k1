@@ -92,16 +92,16 @@ ns for span {
     mem/bitcast(bufferChunks)
   }
 
-  fn isEmpty[T](self: span[T]): bool {
+  fn is-empty[T](self: span[T]): bool {
     self.len() == 0
   }
 
-  fn nonEmpty[T](self: span[T]): bool {
+  fn non-empty[T](self: span[T]): bool {
     self.len() > 0
   }
 
   fn firstRef[T](self: span[T]): ?*T {
-    if not self.isEmpty() {
+    if not self.is-empty() {
       :some(self.getRef(0))
     } else {
       :none
@@ -116,7 +116,7 @@ ns for span {
   }
 
   fn lastRef[T](self: span[T]): ?*T {
-    if not self.isEmpty() {
+    if not self.is-empty() {
       :some(self.getRef(self.len() - 1))
     } else {
       :none
@@ -158,10 +158,10 @@ impl[T] iterable[item = T, i = BufferIterator[T]] for span[T] {
 }
 
 impl[T: print] print for span[T] {
-  fn printTo[w: writer](self, w): empty {
+  fn print-to[w: writer](self, w): empty {
     w.write-char('[');
     for self {
-      it.printTo(w);
+      it.print-to(w);
       let last = itIndex == self.len() - 1;
       if not last {
         w.write-char(',');
@@ -191,12 +191,12 @@ impl[T: equals] equals for span[T] {
 //  fn take[T](self: view[T], count: size): view[T] { self.slice(0,     count) }
 //  fn drop[T](self: view[T], count: size): view[T] { self.slice(count, self.len()) }
 //
-//  fn isEmpty[T](self: view[T]): bool { self.len() == 0 }
+//  fn is-empty[T](self: view[T]): bool { self.len() == 0 }
 //
-//  fn nonEmpty[T](self: view[T]): bool { self.len() > 0 }
+//  fn non-empty[T](self: view[T]): bool { self.len() > 0 }
 //
 //  fn firstRef[T](self: view[T]): ?*T {
-//    if not self.isEmpty() {
+//    if not self.is-empty() {
 //      :some(self.getRef(0))
 //    } else {
 //      :none
@@ -211,7 +211,7 @@ impl[T: equals] equals for span[T] {
 //  }
 //
 //  fn lastRef[T](self: view[T]): ?*T {
-//    if not self.isEmpty() {
+//    if not self.is-empty() {
 //      :some(self.getRef(self.len() - 1))
 //    } else {
 //      :none

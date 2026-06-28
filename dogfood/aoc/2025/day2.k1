@@ -41,7 +41,7 @@ fn day2(part: int, input: string) {
 let* buffer: *mut StringBuilder = StringBuilder/new();
 fn checkInvalidPart1(value: i64): bool {
   buffer.reset();
-  value.printTo(buffer);
+  value.print-to(buffer);
   let valueStr = string/from-span(buffer.raw-span());
   if valueStr.len() & 1 == 1 {
     //println("skipping odd len {valueStr}");
@@ -57,7 +57,7 @@ fn checkInvalidPart1(value: i64): bool {
 }
 fn checkInvalidPart2(value: i64): bool {
   buffer.reset();
-  value.printTo(buffer);
+  value.print-to(buffer);
   let valueStr = string/from-span(buffer.raw-span());
   //println("checkInvalidPart2 {valueStr}");
   for IntRange/make(1, (valueStr.len() / 2) + 1) {

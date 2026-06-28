@@ -17,7 +17,8 @@ fn test() {
   
   assert(testCompile(stringf("{}", 1, 1)).is-some());
   assert(testCompile(stringf("{missing}", {x:1})).is-some());
-  assert(testCompile(stringf("{x}", {x: { nested: "asdf" }})).is-some());
+  // this works now because { nested: "asdf" } implements print. hah!
+  assert(testCompile(stringf("{x}", {x: { nested: "asdf" }})).is-none());
 
   // Or you can just make strings directly, mixing interpolated expressions
   // with struct specifiers

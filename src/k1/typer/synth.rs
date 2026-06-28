@@ -387,7 +387,7 @@ impl TypedProgram {
         let span = self.exprs.get_span(to_print);
         let writer_type_id = self.exprs.get_type(writer);
         self.synth_typed_call_typed_args(
-            self.ast.idents.f.core_Print_printTo.with_span(span),
+            self.ast.idents.f.core_print_print_to.with_span(span),
             &[writer_type_id],
             &[to_print, writer],
             ctx.with_no_expected_type(),
@@ -402,6 +402,15 @@ impl TypedProgram {
     ) -> TypedExprId {
         let string_value = self.static_values.add_string(string_id);
         self.add_static_constant_expr(string_value, span)
+    }
+
+    pub(super) fn synth_string_literal_from_str(
+        &mut self,
+        s: impl AsRef<str>,
+        span: SpanId,
+    ) -> TypedExprId {
+        let string_id = self.ast.strings.intern(s);
+        self.synth_string_literal(string_id, span)
     }
 
     pub(super) fn synth_int(&mut self, int_value: TypedIntValue, span: SpanId) -> TypedExprId {

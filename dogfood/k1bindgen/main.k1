@@ -189,7 +189,7 @@ fn start(args: span[string]): string {
         :function(function) -> {
           writelnf(out, `extern("{libname}", "{raw-name}")`);
           writef(out, `fn {name}(`);
-          if function.fn-type.params.isEmpty() {
+          if function.fn-type.params.is-empty() {
             writef(out, `): `);
           } else {
             out.line("");
@@ -285,7 +285,7 @@ fn write-k1-type(context w: *mut StringBuilder, name-config)(k1-type, indent: si
     :struct(s) -> {
       if s.kind is :union w.string("union ");
       w.string(p"{");
-      if s.fields.nonEmpty() w.line("");
+      if s.fields.non-empty() w.line("");
       for s.fields {
         w.repeat("  ", indent + 1);
         write-named-type(it.name, it.type, indent + 1);
@@ -328,7 +328,7 @@ fn write-k1-type(context w: *mut StringBuilder, name-config)(k1-type, indent: si
       w.string("array[");
       write-k1-type(a.elem-type, indent);
       w.string(", ");
-      a.size.printTo(w);
+      a.size.print-to(w);
       w.string("]");
     },
     :opaque(opaque) -> {
@@ -390,7 +390,7 @@ ns for BindgenState {
     result
   }
   fn should-include-name(self: BindgenState, name: string): bool {
-    if self.include-names.nonEmpty() {
+    if self.include-names.non-empty() {
       core/iter/contains(self.include-names, name)
     } else {
       for exclude in self.exclude-substrings {
@@ -699,7 +699,7 @@ fn visit-fn-param(
   switch cursor-kind {
     :ParmDecl -> {
       let name-spelling = clang/getCursorSpelling(current).to-string();
-      let name: ?string = if name-spelling.isEmpty() :none else :some(name-spelling);
+      let name: ?string = if name-spelling.is-empty() :none else :some(name-spelling);
       let cx-type = clang/getCursorType(current);
       let arg-type = map-type-ext(cx-type, :fn-param);
       result.fn-type*.params*.push({ name, type: arg-type });

@@ -2,7 +2,7 @@
 ns types;
 
 impl print for int-value {
-   fn printTo[w: writer](self, w) {
+   fn print-to[w: writer](self, w) {
      switch self {
        :u8(v)  -> writef(w, "{v}u8"),
        :u16(v) -> writef(w, "{v}u16"),
@@ -41,7 +41,7 @@ fn assert-layout[t](size: size, align: size, struct-fields: span[size]) {
   let actual-align = types/align[t];
   assert-equals(size, actual-size);
   assert-equals(align, actual-align);
-  if struct-fields.nonEmpty() {
+  if struct-fields.non-empty() {
     let schema-fields = types/schema[t].as-struct().!.fields;
     for offset in struct-fields {
       let actual-field = schema-fields.get(itIndex);

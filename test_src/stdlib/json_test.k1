@@ -28,7 +28,7 @@ fn testParsing() {
 
   testParse(`false`, fn j. j is :bool(false));
   testParse(`true`,  fn j. j is :bool(true));
-  testParse(`{{}`,   fn j. j is :object(m) and m.isEmpty());
+  testParse(`{{}`,   fn j. j is :object(m) and m.is-empty());
   testParse(
     `{{ "foo": true, "baz": false }`,
     fn j. j is :object(m) and
@@ -36,7 +36,7 @@ fn testParsing() {
         m.map(fn f. f.value.as-bool().!) == [true, false]
   );
 
-  testParse(" [ ] ", fn j. j is :array(es) and es.isEmpty());
+  testParse(" [ ] ", fn j. j is :array(es) and es.is-empty());
   //testParse(`[]`, fn j. j is :array(_));
 }
 

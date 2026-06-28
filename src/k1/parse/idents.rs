@@ -198,7 +198,7 @@ pub(crate) struct BuiltinFunctions {
     pub core_crash: QIdent,
     pub core_crash_bounds: QIdent,
     pub core_discard: QIdent,
-    pub core_Print_printTo: QIdent,
+    pub core_print_print_to: QIdent,
     pub buffer_allocate: QIdent,
     pub buffer_set: QIdent,
     pub Array_set: QIdent,
@@ -395,7 +395,7 @@ impl IdentPool {
         let core_discard = make_fn!(path_core, intern!("discard"));
 
         let path_core_print = intern_path!(b.core, intern!("print"));
-        let core_print_printTo = make_fn!(path_core_print, intern!("printTo"));
+        let core_print_print_to = make_fn!(path_core_print, intern!("print-to"));
 
         let path_try = intern_path!(b.try_);
         let try__is_ok: QIdent = make_fn!(path_try, intern!("is-ok"));
@@ -453,7 +453,7 @@ impl IdentPool {
             core_crash,
             core_crash_bounds: core_crashBounds,
             core_discard,
-            core_Print_printTo: core_print_printTo,
+            core_print_print_to,
             buffer_allocate,
             buffer_set,
             Array_set: array__set,

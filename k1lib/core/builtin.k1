@@ -229,17 +229,19 @@ ability writer {
   }
 }
 
+// rename print to ability display
 ability print {
-  fn printTo[w: writer](self, w)
+  fn print-to[w: writer](self, w)
 }
+// where formatter is a concrete type that always writes into a StringBuilder?
+// or generic over w
+// ability inspect { fn inspect-to[w: writer](f: formatter[w], self) }
+
+// TODO: show does not belong in k1 long term because the name is too Haskelly, which is to say
+//       both erudite and pedestrian at the same time? Looking at you, 'Just'
 
 // show must have ability id 4
-// TODO: show does not belong in k1 long term because it says nothing about where the data
-//       is allocated, and the name is too Haskelly, which is to say
-//       both erudite and pedestrian at the same time? Looking at you,
-//       'Just'
-//       I think it might be fine actually, the assumption is that it goes into the current
-//       default allocator
+// prints self into the current default allocator
 ability show {
   fn show(self): string
 }
@@ -475,11 +477,11 @@ impl equals for string {
 }
 
 impl print for string {
-  fn printTo[w: writer](self: string, w) { w.write-string(self) }
+  fn print-to[w: writer](self: string, w) { w.write-string(self) }
 }
 
 impl print for {} {
-  fn printTo[w: writer](self: {}, w) { w.write-string("{{}") }
+  fn print-to[w: writer](self: {}, w) { w.write-string("{{}") }
 }
 
 
