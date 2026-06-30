@@ -51,7 +51,7 @@ use types::*;
 use crate::compiler::CompilerConfig;
 use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, BinaryOpKind, FileId, ForExpr, StringId, InterpolatedStringPart, NamedTypeArg, NumericWidth,
+    self, BinaryOpKind, FileId, ForExpr, InterpolatedStringPart, NamedTypeArg, NumericWidth,
     ParseError, ParsedAbilityExpr, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
     ParsedBlockKind, ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFnParamType,
     ParsedFunctionId, ParsedGlobalId, ParsedHandle, ParsedId, ParsedIfExpr, ParsedList,
@@ -59,7 +59,7 @@ use crate::parse::{
     ParsedProgram, ParsedSlice, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt, ParsedStmtId,
     ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
     ParsedUnaryOpKind, ParsedUseId, ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent,
-    Sources, StructValueField, StructValueFieldKind,
+    Sources, StringId, StructValueField, StructValueFieldKind,
 };
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -3182,7 +3182,10 @@ impl TypedProgram {
         }
     }
 
-    pub fn build_ident_with(&mut self, mut f: impl FnMut(&mut TypedProgram, &mut String)) -> StringId {
+    pub fn build_ident_with(
+        &mut self,
+        mut f: impl FnMut(&mut TypedProgram, &mut String),
+    ) -> StringId {
         let mut name_buffer = std::mem::take(&mut self.buffers.name_builder);
         f(self, &mut name_buffer);
         let new_name_ident = self.ast.idents.intern(&name_buffer);
@@ -6421,8 +6424,8 @@ impl TypedProgram {
             };
             debug!(
                 "specialized constraint ability function signature {}: {}",
-                self.function_signature_to_string(generic_sig),
-                self.function_signature_to_string(specialized_signature),
+                self.function_signature_to_string(&generic_sig),
+                self.function_signature_to_string(&specialized_signature),
             );
             let impl_fn = AbilityImplFunction::Abstract(specialized_signature);
             impl_functions.push(impl_fn)
@@ -10330,10 +10333,22 @@ impl TypedProgram {
                         if let Err(msg) =
                             self.check_types(from_param.type_id, to_param.type_id, ctx.scope_id)
                         {
-                            self.report_warn(
-                                span,
-                                format!("Cannot guarantee these params are compatible; {}", msg),
-                            )
+                            // Pointers and references are abi-identical. It'd be nice to also do
+                            // structs with 1 pointer member
+                            match (
+                                self.types.get(from_param.type_id),
+                                self.types.get(to_param.type_id),
+                            ) {
+                                (Type::Pointer, Type::Reference(_)) => {}
+                                (Type::Reference(_), Type::Pointer) => {}
+                                _ => self.report_warn(
+                                    span,
+                                    format!(
+                                        "Cannot guarantee these params are compatible; {}",
+                                        msg
+                                    ),
+                                ),
+                            }
                         }
                     }
                     Ok(Outcome::Cast(CastType::ReferenceToPointer))
@@ -12360,8 +12375,10 @@ impl TypedProgram {
         if passed_len != ability_fn_type.logical_params().len() as usize {
             return failf!(
                 call_span,
-                "Mismatching arg count when trying to resolve ability call to {} (this probably doesn't handle context params properly)",
-                self.ident_str(fn_call.name.name)
+                "Mismatching arg count when trying to resolve ability call to {}. expected {}, got {} [[this probably doesn't handle context params properly]]",
+                self.ident_str(fn_call.name.name),
+                ability_fn_type.logical_params().len(),
+                passed_len,
             );
         }
 
@@ -12851,6 +12868,7 @@ impl TypedProgram {
     fn align_call_arguments_with_parameters(
         &mut self,
         fn_call: &ParsedCall,
+        signature: &FunctionSignature,
         // If a method call and we've already compiled the first argument
         // this is it, we should use it instead of the fn_call's first arg
         method_receiver: Option<TypedExprId>,
@@ -12918,15 +12936,6 @@ impl TypedProgram {
             None => actual_passed_args.len(),
             Some(pre_evaled_params) => pre_evaled_params.len(),
         };
-        if total_passed != total_expected {
-            return failf!(
-                span,
-                "Incorrect number of arguments to {}: expected {}, got {}",
-                self.ident_str(fn_call.name.name),
-                total_expected,
-                total_passed
-            );
-        }
 
         let expected_literal_params = self
             .types
@@ -12988,6 +12997,18 @@ impl TypedProgram {
                 final_params.push(*fn_param);
             }
         }
+
+        // We accounted for every parameter; now we just need to ensure no extras were passed
+        if total_passed > total_expected {
+            return failf!(
+                span,
+                "Too many arguments to {}: expected {}, got {}",
+                self.function_signature_to_string(signature),
+                total_expected,
+                total_passed
+            );
+        }
+
         Ok(ArgsAndParams { args: final_args, params: final_params })
     }
 
@@ -13095,7 +13116,7 @@ impl TypedProgram {
         // Now that we have resolved to a function id, we need to specialize it if generic
         let callee_function_type_id = self.get_callee_function_type(&callee);
         let signature = self.get_callee_function_signature(&callee);
-        debug!("Callee is: {}", self.function_signature_to_string(signature));
+        debug!("Callee is: {}", self.function_signature_to_string(&signature));
         let is_generic = signature.has_type_params();
 
         let original_function_type = self.types.get(callee_function_type_id).as_function().unwrap();
@@ -13105,6 +13126,7 @@ impl TypedProgram {
             false => {
                 let args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
+                    &signature,
                     method_receiver,
                     params,
                     known_args.map(|(_known_types, known_args)| known_args),
@@ -13156,6 +13178,7 @@ impl TypedProgram {
             true => {
                 let original_args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
+                    &signature,
                     method_receiver,
                     params,
                     known_args.map(|(_known_types, known_args)| known_args),
@@ -13233,8 +13256,10 @@ impl TypedProgram {
                 let specialized_fn_type =
                     self.types.get(specialized_function_type).as_function().unwrap();
                 let specialized_params = specialized_fn_type.physical_params;
+                let specialized_signature = self.get_callee_function_signature(&callee);
                 let args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
+                    &specialized_signature,
                     method_receiver,
                     specialized_params,
                     known_args.map(|(_known_types, known_args)| known_args),
@@ -14812,6 +14837,10 @@ impl TypedProgram {
             );
         };
         let variant_index = variant.index;
+        self.emit_ls_entity(
+            variant_span,
+            LsEntityKind::Variant { type_id: concrete_sum_type, variant_index },
+        );
         let payload = match variant.payload {
             None => {
                 if let Some(_payload_arg) = payload {
@@ -14854,10 +14883,6 @@ impl TypedProgram {
             TypedExpr::SumConstructor(TypedSumConstructor { variant_index, payload }),
             concrete_sum_type,
             variant_span,
-        );
-        self.emit_ls_entity(
-            variant_span,
-            LsEntityKind::Variant { type_id: concrete_sum_type, variant_index },
         );
         Ok(sum_constructor)
     }
@@ -15353,19 +15378,18 @@ impl TypedProgram {
         let resolvable_by_name = !is_ability_impl && !ability_kind_is_specialized;
 
         let name = match impl_info.as_ref() {
-            Some(impl_info) => {
-                let mut s = String::with_capacity(256);
+            Some(impl_info) => self_.build_ident_with(|k1, s| {
                 write!(
-                    &mut s,
-                    "impl_{}{}.{}_for_{}",
-                    self_.ident_str(self_.abilities.get(ability_id.unwrap()).name),
+                    s,
+                    "impl_{}{}.{}_for_{}{}",
                     ability_id.unwrap().as_u32(),
-                    self_.ident_str(ast_fn.name),
-                    self_.type_id_to_string(impl_info.self_type_id),
+                    k1.ident_str(k1.abilities.get(ability_id.unwrap()).name),
+                    k1.ident_str(ast_fn.name),
+                    k1.type_id_to_string(impl_info.self_type_id),
+                    impl_info.self_type_id,
                 )
                 .unwrap();
-                self_.ast.idents.intern(s)
-            }
+            }),
             None => ast_fn.name,
         };
 
@@ -18186,10 +18210,11 @@ impl TypedProgram {
         let get_schema_variant = |self_: &TypedProgram, ident| {
             self_.types.sum_variant_by_name(type_schema.variants, ident).unwrap()
         };
-        let make_variant = |self_: &TypedProgram, name: StringId, payload: Option<StaticValueId>| {
-            let v = get_schema_variant(self_, name);
-            StaticSum { sum_type_id: type_schema_type_id, variant_index: v.index, payload }
-        };
+        let make_variant =
+            |self_: &TypedProgram, name: StringId, payload: Option<StaticValueId>| {
+                let v = get_schema_variant(self_, name);
+                StaticSum { sum_type_id: type_schema_type_id, variant_index: v.index, payload }
+            };
 
         // For now, introspection does not support 'static' types, it just sees through them
 

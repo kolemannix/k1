@@ -23,6 +23,7 @@ use clang/CXString
 // - [ ] implement value of globals (woops)
 // - [x] Extract fn param names by traversing the children, not just cheating by only looking at its 'cx-type' like we are now
 // - [ ] Detect varargs and emit error
+// - [ ] Use derived cli arg parser
 // - [x] Embed sizeof / alignof / offsetof assertions
 // - [x] Support Unions
 fn main(argc: c-int, argv: ptr): i32 { 
@@ -32,6 +33,18 @@ fn main(argc: c-int, argv: ptr): i32 {
     let _output = start(core/sys/parseMainArgs(argc, argv));
     0
   }
+}
+type bindgen-args = {
+  lib-name: string,
+  in-path: string,
+  out-path: string,
+  skip-system-defns: bool,
+  exclude: list[string],
+  include: list[string],
+  opaque: list[string],
+  strip-suffix: list[string],
+  strip-prefix: list[string],
+  rename: list[string],
 }
 fn start(args: span[string]): string {
   let out-path: ?string = :none;

@@ -31,7 +31,7 @@ use itertools::Itertools;
 use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueRecordAtEnd;
 use llvm_sys::debuginfo::LLVMDIBuilderInsertDeclareRecordAtEnd;
 
-use log::{debug, info, trace};
+use log::{debug, trace};
 
 use crate::compiler::{self};
 use crate::ir::{
@@ -617,7 +617,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Some(v) => self.builder.build_return(Some(&v)).unwrap(),
         };
 
-        info!("codegen phase 'llvm' took {}ms", start.elapsed().as_millis());
+        debug!("codegen phase 'llvm' took {}ms", start.elapsed().as_millis());
         Ok(())
     }
 
@@ -3711,7 +3711,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .unwrap();
 
         let data_layout = &machine.get_target_data().get_data_layout();
-        info!(
+        debug!(
             "Initializing to target: {} using cpu: {} triple: {}, features: {}, layout: {}",
             target.get_name().to_string_lossy(),
             cpu,
@@ -3766,7 +3766,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         // self.llvm_machine.add_analysis_passes(&module_pass_manager);
         // module_pass_manager.run_on(&self.llvm_module);
 
-        info!("codegen phase 'optimize' took {}ms", start.elapsed().as_millis());
+        debug!("codegen phase 'optimize' took {}ms", start.elapsed().as_millis());
         //for (_, function) in self.llvm_functions.iter_mut() {
         //    let new_count = Codegen::count_function_instructions(function.function_value);
         //    function.instruction_count = new_count;
@@ -3778,7 +3778,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     pub fn emit_object_file(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
         let machine = &self.llvm_machine;
         let path = path.as_ref();
-        log::info!("Outputting object file to {}", path.display());
+        log::debug!("Outputting object file to {}", path.display());
         machine.write_to_file(&self.llvm_module, inkwell::targets::FileType::Object, path).unwrap();
         Ok(())
     }

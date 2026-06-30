@@ -11,7 +11,7 @@ use crate::parse::write_source_location;
 use crate::typer::{LibRefLinkType, MessageLevel, TypedProgram};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
-use log::{error, info};
+use log::error;
 
 use crate::codegen_llvm::Cg;
 
@@ -244,6 +244,7 @@ pub struct CompilerConfig {
     pub sanitize: bool,
     pub out_dir: PathBuf,
     pub optimize: bool,
+    pub quiet: bool,
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -376,6 +377,7 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
         sanitize: args.sanitize,
         out_dir,
         optimize: args.optimize,
+        quiet: args.quiet,
     };
 
     let mut k1 = TypedProgram::new(module_name.clone(), config);
@@ -539,7 +541,7 @@ pub fn write_executable(
     build_cmd.arg("-o");
     build_cmd.arg(out_name);
 
-    eprintln!("Build Command: {:?}", build_cmd);
+    log::debug!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;
 
     if !build_status.success() {
@@ -548,7 +550,9 @@ pub fn write_executable(
     }
 
     let elapsed = clang_time.elapsed();
-    info!("link executable took {}ms", elapsed.as_millis());
+    if !k1.config.quiet {
+        eprintln!("link executable took {}ms", elapsed.as_millis());
+    }
     Ok(())
 }
 
@@ -582,7 +586,9 @@ pub fn codegen_module<'ctx, 'module>(
         anyhow::bail!(e)
     }
 
-    eprintln!("iropt: {}ms", codegen.k1.timing.total_iropt_nanos / 1_000_000);
+    if !args.quiet {
+        eprintln!("iropt: {}ms", codegen.k1.timing.total_iropt_nanos / 1_000_000);
+    }
 
     let optimize_ir = args.optimize;
     if let Err(e) = codegen.optimize_verify(optimize_ir) {
@@ -626,7 +632,9 @@ pub fn run_compiled_program(
 
     match run_status.code() {
         Some(code) => {
-            info!("{} exited with code: {}", module_name, code);
+            if code != 0 {
+                error!("{} exited with code: {}", module_name, code);
+            }
             Some(code)
         }
         None => {

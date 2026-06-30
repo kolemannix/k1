@@ -2,6 +2,7 @@ fn test(): i32 {
   let context alloc-mode: alloc-mode = :tmp;
   let core-args: span[string] = [
     "-system",       "false",
+    "-o",            "test/output.k1",
     "-n",            "test",
     "-i",            "test/input.c",
     "-opaque",       "opaq",
@@ -23,8 +24,7 @@ fn test(): i32 {
   let output = start(args);
 
   // TODO: Use 'diff' instead sys/cmd("diff", "input.c", "test/output.k1")
-  let expected = core/files/read-to-string("test/output.k1");
-  core/files/write-entire-file("test/output.k1", output);
+  let expected = core/files/read-to-string("test/expected.k1");
   assert-equals(output, expected);
 
   0

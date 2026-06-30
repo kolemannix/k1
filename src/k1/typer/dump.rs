@@ -465,7 +465,7 @@ impl TypedProgram {
             }
             None => {}
         }
-        self.display_function_signature(w, sig, function.specialization_info)?;
+        self.display_function_signature(w, &sig, function.specialization_info)?;
         if display_block {
             w.write_str(" ")?;
             if let Some(block) = &function.body_block {
@@ -636,11 +636,11 @@ impl TypedProgram {
                     }
                     Callee::Abstract { function_sig } => {
                         w.write_str("abstract ")?;
-                        self.display_function_signature(w, *function_sig, None)?;
+                        self.display_function_signature(w, function_sig, None)?;
                     }
                     Callee::Builtin { function_sig, builtin } => {
                         w.write_str("builtin ")?;
-                        self.display_function_signature(w, *function_sig, None)?;
+                        self.display_function_signature(w, function_sig, None)?;
                         w.write_str(" ")?;
                         w.write_str(builtin.kind_name())?;
                     }
@@ -1150,9 +1150,9 @@ impl TypedProgram {
             w.write_str(" {\n")?;
             for ability_impl_fn in self.mem.getn(i.functions) {
                 w.write_str("\t\t")?;
-                match *ability_impl_fn {
+                match ability_impl_fn {
                     AbilityImplFunction::FunctionId(ability_impl_fn) => {
-                        self.display_function(self.get_function(ability_impl_fn), w, false)?
+                        self.display_function(self.get_function(*ability_impl_fn), w, false)?
                     }
                     AbilityImplFunction::Abstract(sig) => {
                         w.write_str("abstract ")?;
@@ -1258,7 +1258,7 @@ impl TypedProgram {
         s
     }
 
-    pub fn function_signature_to_string(&self, fn_signature: FunctionSignature) -> String {
+    pub fn function_signature_to_string(&self, fn_signature: &FunctionSignature) -> String {
         let mut s = String::new();
         self.display_function_signature(&mut s, fn_signature, None).unwrap();
         s
@@ -1267,7 +1267,7 @@ impl TypedProgram {
     pub fn display_function_signature(
         &self,
         w: &mut impl Write,
-        signature: FunctionSignature,
+        signature: &FunctionSignature,
         specialization_info: Option<SpecializationInfo>,
     ) -> std::fmt::Result {
         if let Some(name) = signature.name {

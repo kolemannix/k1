@@ -1,7 +1,16 @@
 ns http;
 
 // A fake silly 'stream' for now
-type stream[t] = { source: list[t], cursor: size }
+type stream = { source: list[span[u8]], read-cursor: size }
+ns for stream {
+  // nocommit: does not complain about the extra [t]
+  // fn empty(): stream[t] { { source: list/empty(), read-cursor: 0 } }
+  fn empty(): stream { { source: list/empty(), read-cursor: 0 } }
+  fn clear(self: *mut stream) { 
+    self.source*.clear();
+    self.read-cursor* <- 0;
+  }
+}
 
 type header = {
   url: string,
@@ -13,65 +22,96 @@ type header = {
   content-length: ?size
 }
 
+type body-mode = either { strict, stream }
 type parse-state = {
-  on-header-complete: *fn(header) -> {},
+  user-data: ptr,
+  arena: *mut arena,
+  on-header-complete: *fn(ptr, header) -> {},
+  on-body-complete: *fn(ptr, span[span[byte]]) -> {},
   url: list[char],
   current-header-field: list[char],
   current-header-value: list[char],
   headers: list[{ field: string, value: string }],
   content-length: ?size,
-  body: either { buffered(list[byte]), streamed(stream[byte]) },
+
+  body-mode: body-mode,
+  body-chunks: list[span[u8]],
+  body-stream: stream[byte],
 }
 ns for parse-state {
+  fn empty[t](arena: *mut arena, user-data: *mut t, on-header-complete: *fn(ptr, header) -> {}, on-body-complete: *fn(ptr, span[span[byte]]) -> {}): parse-state {
+    // nocommit consider zeroed() once working
+    {
+      user-data: user-data.as[ptr],
+      arena,
+
+      on-header-complete,
+      on-body-complete,
+      url: list/empty(),
+      current-header-field: list/empty(),
+      current-header-value: list/empty(),
+      headers: list/empty(),
+
+      body-mode: :strict,
+      body-chunks: list/empty(),
+      body-stream: stream/empty(),
+  
+      content-length: :none,
+    }
+  }
+
   fn reset(self: *mut parse-state) {
-    self.url*.clear();
-    self.current-header-field*.clear();
-    self.current-header-value*.clear();
-    self.headers*.clear();
-    self.content-length* <- :none;
-    switch self.body* {
-      :buffered(buf)* -> buf.clear(),
-      :streamed(stream)* -> stream.source*.clear(),
-    };
+    let user-data = self.user-data;
+    let arena = self.arena;
+    let on-header-complete = self.on-header-complete;
+    let on-body-complete = self.on-body-complete;
+    self <- zeroed().with({ user-data, arena, on-header-complete, on-body-complete })
   }
 }
 
 // Wraps a pointer to an llhttp_t with some stronger-ish typing
-// over the user data
-type llhttp-t[user-data] = { parser: llhttp/t, phantom: array[user-data, 0] }
-type alias parser = llhttp-t[parse-state]
+// over our particular user-data, 'parse-state'
+type parser = { parser: llhttp/t, phantom: array[parse-state, 0] }
 #static { assert-equals(types/size[parser], types/size[llhttp/t]); assert-equals(types/align[parser], types/align[llhttp/t]) }
 
-ns for llhttp-t {
-  fn data[user-data](self: *mut llhttp-t[user-data]): *mut user-data { self.parser.data.rw[user-data] }
-  fn set-data[user-data](self: *mut llhttp-t[user-data], data: *mut user-data) { self.parser*.data* <- data.as[ptr] }
+ns for parser {
+  fn data(self: *mut parser): *mut parse-state { self.parser.data.rw[parse-state] }
+  fn set-data(self: *mut parser, data: *mut parse-state) { self.parser*.data* <- data.as[ptr] }
+
+  fn reset(self: *mut parser) {
+    // We want to re-use all of the buffers in parse-state, just clear them
+    self.data().reset();
+
+    // Reset an already initialized parser back to the start state, preserving the existing parser type, callback settings, user data, and lenient flags.
+    llhttp/reset(self.parser*);
+  }
 }
 
 // A fully parsed request
 type request = {
   header: header,
-  body: either { buffered(list[byte]), streamed(stream[byte]) },
+  body: either { none, buffered(span[span[u8]]), streamed(stream) },
 }
 
 fn on-url-part(parser: *mut parser, data: *mut u8, count: usize): i32 {
-  let request-state = parser.data();
+  let state = parser.data();
   let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
   println("on_url_part: appending {bytes}...");
-  request-state.url*.write-bytes(bytes);
+  state.url*.write-bytes(bytes);
   0
 }
 fn on-url-complete(parser: *mut parser): i32 {
-  let request-state = parser.data();
-  let url = string/from-span(request-state.url.as-span());
+  let state = parser.data();
+  let url = string/from-span(state.url.as-span());
   println("complete url: {url}");
   0
 }
 
 fn on-header-field(parser: *mut parser, data: *mut u8, count: usize): i32 {
-  let request-state = parser.data();
-  request-state.current-header-field;
+  let state = parser.data();
   let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
   println("on_header_field: appending {bytes}...");
+  state.current-header-field*.write-bytes(bytes);
   0
 }
 fn on-header-field-complete(_parser: *mut parser): i32 {
@@ -79,26 +119,26 @@ fn on-header-field-complete(_parser: *mut parser): i32 {
   0
 }
 fn on-header-value(parser: *mut parser, data: *mut u8, count: usize): i32 {
-  let request-state = parser.data();
+  let state = parser.data();
   let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
-  request-state.current-header-value*.write-bytes(bytes);
   println("on-header-value: appending {bytes}...");
+  state.current-header-value*.write-bytes(bytes);
   0
 }
 fn on-header-value-complete(parser: *mut parser): i32 {
   println("on-header-value-complete...");
-  let request-state = parser.data();
-  request-state.headers*.push({ 
-    field: string/from-span(request-state.current-header-field.as-span()),
-    value: string/from-span(request-state.current-header-value.as-span())
+  let state = parser.data();
+  state.headers*.push({ 
+    field: string/from-span(state.current-header-field.as-span()).cloned(),
+    value: string/from-span(state.current-header-value.as-span()).cloned(),
   });
-  request-state.current-header-field*.clear();
-  request-state.current-header-value*.clear();
+  state.current-header-field*.clear();
+  state.current-header-value*.clear();
 
   0
 }
 
-fn on-headers-complete(parser: *mut llhttp-t[parse-state]): i32 {
+fn on-headers-complete(parser: *mut parser): i32 {
   println("on-headers-complete...");
   let state = parser.data();
   let url = string/from-span(state.url.as-span());
@@ -116,62 +156,96 @@ fn on-headers-complete(parser: *mut llhttp-t[parse-state]): i32 {
     content-length: state.content-length,
   };
 
-  (state.on-header-complete)(header);
+  (state.on-header-complete)(state.user-data, header);
 
   0
 }
 
-fn on-body(parser: *mut llhttp-t[parse-state], data: *mut u8, count: usize): i32 {
-  let request-state = parser.data();
+fn impl-on-body(parser: *mut parser, data: *mut u8, count: usize): i32 {
+  let state = parser.data();
   let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
   println("on_body: appending {bytes}...");
-  switch request-state.body* {
-    :buffered(buf)* -> buf.write-bytes(bytes),
-    :streamed(stream)* -> stream.source*.append-span(bytes),
+  switch state.body-mode {
+    :strict -> {
+      println("on_body: appending chunk of {bytes.len()}...");
+      state.body-chunks*.push(bytes)
+    },
+    :stream -> {
+      println("on_body streamed: TODO");
+      state.body-stream*.source*.push(bytes)
+    },
   };
   0
 }
+fn impl-on-body-complete(parser: *mut parser) {
+  let state = parser.data();
+  switch state.body-mode {
+    :strict -> {
+      (state.on-body-complete)(state.user-data, state.body-chunks.as-span());
+    },
+    :stream -> {
+      // We've already sent everything; just signal that its done
+      // Or maybe do nothing; everything should be 'stored' in the stream
+      // object by now
+      eprintln("todo on-body-complete for body-mode:stream");
+    }
+  };
+}
 
-fn parse-init(on-header-complete: *fn(header) -> {}): parse-state {
-  {
-    on-header-complete,
-    url: list/empty(),
-    current-header-field: list/empty(),
-    current-header-value: list/empty(),
-    headers: list/empty(),
-    body: :buffered(list/empty()),
+fn parser-init[user-data](
+  connection-arena: *mut arena,
+  request-arena: *mut arena,
+  user-data: *mut user-data,
+  on-header-complete: *fn(*mut user-data, header) -> http/body-mode,
+  on-body-complete: *fn(*mut user-data, span[span[u8]]) -> {}
+): parser {
+  let settings: llhttp/settings = zeroed();
+  llhttp/settings_init(&settings);
+  let settings = connection-arena.push(settings.with({
+    // on_message_begin    : on_message_begin,    
+    on_method           : fn(_p, _, _) 0,
+    on_url              : on-url-part.as(),
+    on_url_complete     : on-url-complete.as(),
+    on_header_field     : on-header-field.as(),
+    on_header_field_complete: on-header-field-complete.as(),
+    on_header_value     : on-header-value.as(),
+    on_header_value_complete: on-header-value-complete.as(),
+    on_headers_complete : on-headers-complete.as(),
+    on_body             : impl-on-body.as(),
+    on_message_complete : impl-on-body-complete.as(),
+  }));
 
-    content-length: :none,
-  }
+  let parser: parser = uninit;
+  llhttp/init(&parser.as(), :HTTP_BOTH, settings);
+  let parse-state: *mut parse-state = connection-arena.push(
+    parse-state/empty(request-arena, user-data, on-header-complete.as(), on-body-complete.as())
+  );
+  parser.set-data(parse-state);
+  parser
+}
+
+fn tick(
+  parser: *mut parser,
+  bytes: span[u8],
+): llhttp/errno {
+  llhttp/execute(
+    parser = parser.parser*,
+    data   = bytes.buffer.data,
+    len    = bytes.len().as[usize]
+  )
 }
 
 fn example-http() {
 
-  let settings: llhttp/settings = zeroed();
-  llhttp/settings_init(&settings);
-  let settings = settings.with({
-    // on_message_begin    : on_message_begin,    
-    on_url              : on-url-part.as(),              // collect path/URL fragments
-    on_url_complete     : on-url-complete.as(),              // collect path/URL fragments
-    on_header_field     : on-header-field.as(),     // collect header-name fragments
-    on_header_field_complete: on-header-field-complete.as(),
-    on_header_value     : on-header-value.as(),     // collect header-value fragments
-    on_header_value_complete: on-header-value-complete.as(),
-    on_headers_complete : on-headers-complete.as(), // finalize method/version/headers
-    on_body             : on-body.as(),             // stream or collect body fragments
-    on_message_complete : fn _parser. { println("complete"); 0 }, // emit completed request
-  });
-
-  let parser: parser = uninit;
-  llhttp/init(&parser.as(), :HTTP_BOTH, &settings);
-  let f: *fn(header) -> {} = fn(h: header) {
-    for h.headers.as-span() { println("{it.field}: {it.value}") };
-    {}
-  };
-  let parse-state: *mut parse-state = mem/new(parse-init(
-    on-header-complete = f
-  ));
-  parser.set-data(parse-state);
+  let user-data: empty = {};
+  let arena = arena/default();
+  let parser = parser-init[empty](
+    &arena,
+    &arena,
+    &user-data,
+    on-header-complete = fn(_d, _h) :strict,
+    on-body-complete = fn(_d, _h) {}
+  );
 
   let chunks = ["GET /index.ht",
                 "ml HTTP/1.1\r\n",
