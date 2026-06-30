@@ -29,11 +29,12 @@ Simple but missing
 - [x] auto-print implementation on-demand for structs
 - [ ] auto-print implementation on-demand for sums
 - [ ] Exported functions
-- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
-      currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
+- [ ] Tail calls
 - [ ] Implement at least one format specifier (precision, pretty)
 - [ ] decide if overflow traps or not (in debug and release, if those are even different)
 - [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
+- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
+      currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
 - [X] Specialization solution (when types are known by the function)
 - [x] Destructuring, (in)fallible patterns
 - [x] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
@@ -61,15 +62,13 @@ bindgen dogfood list
 - [x] dogfood(lsp): sum patterns ls entities
 
 # Bugs
+- [ ] [major] Support (co)recursive Generics
+- [ ] [major] Allow pattern matching *into* recursive types (currently we just terminate)
 - [ ] captured context parameter results in 'Missing variable' in ir
 - [x] Out of order type definitions don't work with aliases
 - [x] same-level recursion is not caught behind option
-- [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)
 - [ ] Require that a blanket impl's params appear in the Self type
 - [ ] Test handling of NaN and Infinity literals, other float edge cases
-
-
-## [ ] Support (co)recursive Generics
 
 ## [ ] vector types
 

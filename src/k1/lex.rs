@@ -11,7 +11,8 @@ use crate::vpool::{SliceHandle, VPool};
 use TokenKind as K;
 use log::debug;
 
-pub const EOF_CHAR: char = '\0';
+pub const EOF_CHAR: char = 27 as char; // esc
+// pub const EOF_CHAR: char = '\0' as char;
 pub const EOF_TOKEN: Token =
     Token { kind: TokenKind::Eof, span: SpanId::NONE, trivia: SliceHandle::empty(), flags: 0 };
 
@@ -1163,7 +1164,10 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
 
     #[inline]
     fn peek_n(&self, n: usize) -> char {
-        self.content.get(self.pos as usize + n).copied().unwrap_or(0) as char
+        match self.content.get(self.pos as usize + n) {
+            None => EOF_CHAR,
+            Some(c) => *c as char,
+        }
     }
 
     fn peek_with_pos(&self) -> (char, u32) {

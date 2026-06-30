@@ -35,7 +35,7 @@ fn gen-help-text[t](summary: string): string {
     switch get-arg-kind(it.type-id) {
       :string -> writelnf(sb, `  +{it.name} - required.`),
       :opt-string -> writelnf(sb, `  +{it.name} - optional. (-{it.name} to unset)`),
-      :list-string -> writelnf(sb, `  +{it.name} - list. (-{it.name} to unset)`),
+      :list-string -> writelnf(sb, `  +{it.name} - list.`),
     };
   };
   sb.build-tmp();
