@@ -25,6 +25,8 @@ ns for StringBuilder {
 
   fn build-tmp(self: *StringBuilder): string {
     switch self.list* {
+      // nocommit: make this not allocate in the inline case; it causes a crash
+      // :Inline(f)* -> string/fromBytes(f.as-span()),
       :Inline(f)* -> string/fromBytes(f.as-span().cloned-in(context :tmp)()),
       :Spilled(l)* -> string/fromBytes(l.as-span())
     }

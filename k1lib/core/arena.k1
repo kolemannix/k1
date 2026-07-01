@@ -43,7 +43,7 @@ ns for arena {
 
   fn reset(self: *mut arena, clear: bool) {
     let usedBytes = self.usedBytes();
-    println("[arena] Resetting {usedBytes / kb}KiB");
+    // println("[arena] Resetting {usedBytes / kb}KiB");
     self.cur-addr* <- self.base-ptr;
 
     if clear {
