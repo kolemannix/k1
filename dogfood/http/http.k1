@@ -153,13 +153,8 @@ fn on-header-value-complete(parser: *mut parser): i32 {
 
 fn on-headers-complete(parser: *mut parser): i32 {
   let state = parser.data();
-  println("on-headers-complete...");
   let url = string/from-span(state.url.as-span());
   let headers = state.headers*;
-  println("url: {url}");
-  for header in headers {
-    println("header: {header.field}: {header.value}");
-  };
 
   let header: header = {
     url,

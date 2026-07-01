@@ -110,9 +110,7 @@ fn tprintln[t: print](t) {
 fn close-connection[h: uv-handle](h: *mut h) {
   uv/close(h.as-handle(), fn h. {
     let connection = h.get-data[connection]();
-    mem/pushMode(:custom-arena(connection.request-arena*));
     tprintln("closing connection{connection.serial-no}");
-    mem/popMode();
     connection.release();
   })
 }
@@ -123,13 +121,11 @@ fn close-connection[h: uv-handle](h: *mut h) {
 // Usually, write a response to the tcp stream. But maybe something else, like keep streaming the response or something, idk
 fn after-handle-request(req: *mut uv/work, status: i32) {
   let work: *mut http-handler-work = req.get-data();
-  mem/pushMode(:custom-arena(work.request-arena));
   tprintln("after-handle-request");
 
   // If the work was cancelled using uv_cancel() status will be UV_ECANCELED.
   if status != 0 {
     tprintln("handler was cancelled");
-    mem/popMode();
     close-connection(work.client);
     return();
   };
@@ -148,7 +144,6 @@ fn after-handle-request(req: *mut uv/work, status: i32) {
   require work.http-response is :some(response) else {
     // This is a bug; it shouldn't be possible to have not set this to some
     // since the harness is in control of this opt, so we close
-    mem/popMode();
     close-connection(client);
     return();
   };
@@ -164,22 +159,18 @@ fn after-handle-request(req: *mut uv/work, status: i32) {
         let write-state: *mut http-write-state = req.get-data();
         let client = write-state.client;
         let connection = write-state.connection;
-        mem/pushMode(:custom-arena(connection.request-arena*));
         if status != 0 {
           tprintln("write failed: {status}");
-          mem/popMode();
           close-connection(client);
           return();
         } else {
           tprintln("wrote fake response");
         };
-        mem/popMode();
         connection.finish-request(client);
       });
 
       if write-rc != 0 {
         tprintln("uv_write failed: {write-rc}");
-        mem/popMode();
         close-connection(client);
         return();
       };
@@ -188,15 +179,12 @@ fn after-handle-request(req: *mut uv/work, status: i32) {
       tprintln("streaming unimplemented");
     },
   };
-  mem/popMode();
   {}
 }
 
 fn alloc-read-buffer(handle: *mut uv/handle, suggested-size: usize, buf: *mut uv/buf) {
   let connection = handle.get-data[connection]();
-  mem/pushMode(:custom-arena(connection.request-arena*));
   tprintln("[c{connection.serial-no}] alloc-read-buffer, size {suggested-size}");
-  mem/popMode();
   let byte-buffer = connection.request-arena*.push-buffer[u8](suggested-size.as[size]);
   buf <- uv/buf/from-buffer(byte-buffer);
 }
@@ -278,7 +266,7 @@ type connection = {
 let mutable tls conn-serial: u64 = 0
 
 fn on-complete-http-header(connection: *mut connection, header: http/header): http/body-mode {
-  eprintln("matching handler");
+  // eprintln("matching handler");
   connection.parsed-header* <- :some(header);
   switch match-route(header, connection.route-handlers) {
     :none -> { 
@@ -332,9 +320,7 @@ ns for connection {
       addr.request-arena* <- core/arena/_virtual(usageHintMb = 1);
       let connection-arena: *mut arena = addr.connection-arena*;
       let request-arena: *mut arena = addr.request-arena*;
-      mem/pushMode(:custom-arena(connection-arena));
       tprintln("making connection with deps: {make-user-deps.as[ptr]}");
-      mem/popMode();
       let client = connection-arena.push-uninit[uv/tcp]();
       addr <- {
         connection-arena: uninit, // already stored
@@ -362,22 +348,16 @@ ns for connection {
     connection
   }
   fn release(self: *mut connection) {
-    mem/pushMode(:custom-arena(self.request-arena*));
     tprintln("conn{self.serial-no} request arena close usedBytes: {self.request-arena.usedBytes()}");
-    mem/popMode();
     self.request-arena*.release();
-    mem/pushMode(:custom-arena(self.connection-arena*));
     tprintln("conn{self.serial-no} connection arena close usedBytes: {self.connection-arena.usedBytes()}");
-    mem/popMode();
     self.connection-arena*.release();
     alloc-mode:system-heap.freeT(self);
   }
   fn finish-request(self: *mut connection, client: *mut uv/stream) {
-    mem/pushMode(:custom-arena(self.request-arena*));
     tprintln("finish-request");
     tprintln("todo: check for Connection: close");
     tprintln("conn{self.serial-no} request arena reset usedBytes: {self.request-arena.usedBytes()}");
-    mem/popMode();
     self.request-arena*.reset(false);
     self.request-parser*.reset();
 
@@ -392,7 +372,8 @@ ns for connection {
 }
 
 fn on-new-connection(server: *mut uv/stream, status: i32) {
-  println("------------ on_new_connection -------------");
+  mem/tmp().reset(false);
+  tprintln("------------ on_new_connection -------------");
   if status < 0 {
     println("new connection error: {status}");
     return();
@@ -412,7 +393,6 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
   uv/tcp_nodelay(client, 1);
 
   let accept-rc = uv/accept(server, client.as-stream());
-  mem/pushMode(:custom-arena(connection.connection-arena*));
   tprintln("connection arena new usedBytes: {connection.connection-arena.usedBytes()}");
   if accept-rc == 0 {
     uv/tcp_keepalive_ex(client, 1, idle = 60, intvl = 10, cnt = 3);
@@ -420,17 +400,14 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
     let read-rc = uv/read_start(client.as-stream(), alloc-read-buffer, on_client_read);
     if read-rc != 0 {
       tprintln("read start error: {read-rc}");
-      mem/popMode();
       close-connection(client);
       return();
     };
   } else {
     tprintln("accept error: {accept-rc}");
-    mem/popMode();
     close-connection(client);
     return();
   };
-  mem/popMode();
   {}
 }
 
@@ -519,22 +496,28 @@ fn main(): i32 {
   let arena: arena = arena/default();
   let context arena: *mut arena = &arena;
 
+  // only once per thread
   let make-deps = fn. {
-    mem/current().new(
+    (alloc-mode:system-heap).new(
       { 
         config: { jwt-secret: "asdf" },
         db-conn: {}
       }: user-code/deps
     )
   };
-  println("make deps addr: {make-deps.as[ptr]}");
-  start-app[user-code/deps](make-deps, [
+
+  mem/pushMode(:custom-arena(arena));
+  let route-handlers: span[user-route-handler[user-code/deps]] = [
     { 
       body-mode: :strict,
       path-pattern: "*",
       logic-fn: user-code/handle
     }
-  ]);
+  ];
+  mem/popMode();
+
+  println("make deps addr: {make-deps.as[ptr]}");
+  start-app[user-code/deps](make-deps, route-handlers);
 
   // http/example-http();
 
