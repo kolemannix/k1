@@ -26,7 +26,7 @@ type body-mode = either { strict, stream }
 type parse-state = {
   user-data: ptr,
   arena: *mut arena,
-  on-header-complete: *fn(ptr, header) -> {},
+  on-header-complete: *fn(ptr, header) -> body-mode,
   on-body-complete: *fn(ptr, span[span[byte]]) -> {},
   url: list[char],
   current-header-field: list[char],
@@ -39,7 +39,7 @@ type parse-state = {
   body-stream: stream[byte],
 }
 ns for parse-state {
-  fn empty[t](arena: *mut arena, user-data: *mut t, on-header-complete: *fn(ptr, header) -> {}, on-body-complete: *fn(ptr, span[span[byte]]) -> {}): parse-state {
+  fn empty[t](arena: *mut arena, user-data: *mut t, on-header-complete: *fn(ptr, header) -> body-mode, on-body-complete: *fn(ptr, span[span[byte]]) -> {}): parse-state {
     // nocommit consider zeroed() once working
     {
       user-data: user-data.as[ptr],
@@ -67,6 +67,10 @@ ns for parse-state {
     let on-body-complete = self.on-body-complete;
     self <- zeroed().with({ user-data, arena, on-header-complete, on-body-complete })
   }
+
+  fn alloc-mode(self: *mut parse-state): alloc-mode {
+    :custom-arena(self.arena)
+  }
 }
 
 // Wraps a pointer to an llhttp_t with some stronger-ish typing
@@ -79,10 +83,10 @@ ns for parser {
   fn set-data(self: *mut parser, data: *mut parse-state) { self.parser*.data* <- data.as[ptr] }
 
   fn reset(self: *mut parser) {
-    // We want to re-use all of the buffers in parse-state, just clear them
     self.data().reset();
 
     // Reset an already initialized parser back to the start state, preserving the existing parser type, callback settings, user data, and lenient flags.
+    // FIXME in the success case we're supposed to just call llhttp_finish on the parser rather than resetting it
     llhttp/reset(self.parser*);
   }
 }
@@ -95,42 +99,51 @@ type request = {
 
 fn on-url-part(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let state = parser.data();
-  let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
-  println("on_url_part: appending {bytes}...");
-  state.url*.write-bytes(bytes);
+  let bytes: span[char] = span/from-raw(data.as[ptr], count.as());
+  let context a = state.alloc-mode();
+  if state.url.is-empty() { state.url*.reserve(a, 1024) };
+  state.url*.append-span-in(bytes);
+  if state.url.len() > 16384 {
+    return(llhttp/errno:HPE_USER.enum-value().as[i32])
+  };
   0
 }
-fn on-url-complete(parser: *mut parser): i32 {
-  let state = parser.data();
-  let url = string/from-span(state.url.as-span());
-  println("complete url: {url}");
+fn on-url-complete(_parser: *mut parser): i32 {
   0
 }
 
 fn on-header-field(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let state = parser.data();
-  let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
-  println("on_header_field: appending {bytes}...");
-  state.current-header-field*.write-bytes(bytes);
+  let context a = state.alloc-mode();
+  let bytes: span[char] = span/from-raw(data.as[ptr], count.as());
+
+  if state.current-header-field.is-empty() { state.current-header-field*.reserve(a, 256) };
+  state.current-header-field*.append-span-in(bytes);
   0
 }
-fn on-header-field-complete(_parser: *mut parser): i32 {
-  println("on-header-field-complete...");
+fn on-header-field-complete(parser: *mut parser): i32 {
+  let _state = parser.data();
   0
 }
 fn on-header-value(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let state = parser.data();
-  let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
-  println("on-header-value: appending {bytes}...");
-  state.current-header-value*.write-bytes(bytes);
+  let context a = state.alloc-mode();
+  let bytes: span[char] = span/from-raw(data.as[ptr], count.as());
+
+  if state.current-header-value.is-empty() { state.current-header-value*.reserve(a, 256) };
+  state.current-header-value*.append-span-in(bytes);
   0
 }
 fn on-header-value-complete(parser: *mut parser): i32 {
-  println("on-header-value-complete...");
   let state = parser.data();
-  state.headers*.push({ 
-    field: string/from-span(state.current-header-field.as-span()).cloned(),
-    value: string/from-span(state.current-header-value.as-span()).cloned(),
+  let context a = state.alloc-mode();
+  let field-string = string/from-span(state.current-header-field.as-span().cloned-in());
+  let value-string = string/from-span(state.current-header-value.as-span().cloned-in());
+
+  state.headers*.reserve(a, 64);
+  state.headers*.pushIn({ 
+    field: field-string,
+    value: value-string,
   });
   state.current-header-field*.clear();
   state.current-header-value*.clear();
@@ -139,8 +152,8 @@ fn on-header-value-complete(parser: *mut parser): i32 {
 }
 
 fn on-headers-complete(parser: *mut parser): i32 {
-  println("on-headers-complete...");
   let state = parser.data();
+  println("on-headers-complete...");
   let url = string/from-span(state.url.as-span());
   let headers = state.headers*;
   println("url: {url}");
@@ -149,35 +162,35 @@ fn on-headers-complete(parser: *mut parser): i32 {
   };
 
   let header: header = {
-    url: string/from-span(state.url.as-span()),
+    url,
     headers: state.headers,
     method: mem/bitcast(llhttp/get_method(parser.as()).as[u32]),
 
     content-length: state.content-length,
   };
 
-  (state.on-header-complete)(state.user-data, header);
-
+  state.body-mode* <- (state.on-header-complete)(state.user-data, header);
   0
 }
 
 fn impl-on-body(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let state = parser.data();
+  let context a = state.alloc-mode();
   let bytes: span[byte] = span/from-raw(data.as[ptr], count.as());
-  println("on_body: appending {bytes}...");
+  // println("on_body: appending {bytes}...");
   switch state.body-mode {
     :strict -> {
-      println("on_body: appending chunk of {bytes.len()}...");
-      state.body-chunks*.push(bytes)
+      // println("on_body: appending chunk of {bytes.len()}...");
+      state.body-chunks*.pushIn(bytes)
     },
     :stream -> {
-      println("on_body streamed: TODO");
-      state.body-stream*.source*.push(bytes)
+      // println("on_body streamed: TODO");
+      state.body-stream*.source*.pushIn(bytes)
     },
   };
   0
 }
-fn impl-on-body-complete(parser: *mut parser) {
+fn impl-on-body-complete(parser: *mut parser): i32 {
   let state = parser.data();
   switch state.body-mode {
     :strict -> {
@@ -190,6 +203,7 @@ fn impl-on-body-complete(parser: *mut parser) {
       eprintln("todo on-body-complete for body-mode:stream");
     }
   };
+  0
 }
 
 fn parser-init[user-data](
@@ -266,4 +280,3 @@ fn example-http() {
     }
   };
 }
-

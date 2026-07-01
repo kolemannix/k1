@@ -203,6 +203,7 @@ ns for list {
   }
 
   fn concat[T](self: list[T], other: list[T]): list[T] {
+    // FIXME: 2 copies, possibly
     let dst = self.cloned();
     dst.appendList(other);
     dst
@@ -213,7 +214,10 @@ ns for list {
   }
 
   fn appendBuffer[T](self: *mut list[T], other: buffer[T]) {
-    self.reserve(:current, self.len + other.len);
+    self.appendBufferIn[T](context :current)(other)
+  }
+  fn appendBufferIn[T](context alloc-mode)(self: *mut list[T], other: buffer[T]) {
+    self.reserve(alloc-mode, self.len + other.len);
     let dst = self.inner-buffer().slice(start = self.len, end = self.len + other.len);
     buffer/copy(src = other, dst = dst);
     self.len* <- self.len + other.len;
@@ -221,6 +225,9 @@ ns for list {
 
   fn append-span[T](self: *mut list[T], other: span[T]) {
     self.appendBuffer(other.inner-buffer())
+  }
+  fn append-span-in[T](context alloc-mode)(self: *mut list[T], other: span[T]) {
+    self.appendBufferIn(other.inner-buffer())
   }
 
   fn swap[T](self: *mut list[T], indexA: size, indexB: size) {

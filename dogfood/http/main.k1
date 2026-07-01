@@ -69,6 +69,7 @@ type http-request = {
 }
 
 fn handle-request(req: *mut uv/work) {
+  tprintln("handle-request");
   let work: *mut http-handler-work = req.get-data();
 
   // We're now on the uv worker thread. We need to get our thread-local deps, or initialize them
@@ -82,17 +83,18 @@ fn handle-request(req: *mut uv/work) {
 
   // get-or-create-threadlocal-deps(work-make-user-deps);
 
-  tprintln("handle-request");
-
   mem/pushMode(:custom-arena(work.request-arena));
   let response = (work.handler.logic-fn)(work.request, user-deps-baton);
   work.http-response* <- :some(response);
   mem/popMode();
 
+  mem/tmp().reset(clear = false);
+
   {}
 }
 
-let tlog: bool = true
+// nocommit: design module 'params' / 'args' so we can toggle things like tlog
+let tlog: bool = false
 fn tprintln[t: print](t) {
   if not tlog return();
 
@@ -100,7 +102,7 @@ fn tprintln[t: print](t) {
   let thread-self = uv/thread_self();
   let thread-name-buf = array/zeroed[u8, 256]();
   let _rc = uv/thread_getname(&thread-self, &thread-name-buf.get-base(), thread-name-buf.len().as());
-  let thread-name = string/from-c(thread-name-buf.base-ptr());
+  let thread-name = string/wrap-c(thread-name-buf.base-ptr());
 
   println("[{thread-name}] {t}")
 }
@@ -108,7 +110,9 @@ fn tprintln[t: print](t) {
 fn close-connection[h: uv-handle](h: *mut h) {
   uv/close(h.as-handle(), fn h. {
     let connection = h.get-data[connection]();
+    mem/pushMode(:custom-arena(connection.request-arena*));
     tprintln("closing connection{connection.serial-no}");
+    mem/popMode();
     connection.release();
   })
 }
@@ -118,12 +122,14 @@ fn close-connection[h: uv-handle](h: *mut h) {
 // So he should expect to find 'marching orders' from the logic worker handler in the work's data
 // Usually, write a response to the tcp stream. But maybe something else, like keep streaming the response or something, idk
 fn after-handle-request(req: *mut uv/work, status: i32) {
-  tprintln("after-handle-request");
   let work: *mut http-handler-work = req.get-data();
+  mem/pushMode(:custom-arena(work.request-arena));
+  tprintln("after-handle-request");
 
   // If the work was cancelled using uv_cancel() status will be UV_ECANCELED.
   if status != 0 {
     tprintln("handler was cancelled");
+    mem/popMode();
     close-connection(work.client);
     return();
   };
@@ -142,6 +148,7 @@ fn after-handle-request(req: *mut uv/work, status: i32) {
   require work.http-response is :some(response) else {
     // This is a bug; it shouldn't be possible to have not set this to some
     // since the harness is in control of this opt, so we close
+    mem/popMode();
     close-connection(client);
     return();
   };
@@ -157,30 +164,39 @@ fn after-handle-request(req: *mut uv/work, status: i32) {
         let write-state: *mut http-write-state = req.get-data();
         let client = write-state.client;
         let connection = write-state.connection;
+        mem/pushMode(:custom-arena(connection.request-arena*));
         if status != 0 {
           tprintln("write failed: {status}");
+          mem/popMode();
           close-connection(client);
           return();
         } else {
           tprintln("wrote fake response");
         };
+        mem/popMode();
         connection.finish-request(client);
       });
 
       if write-rc != 0 {
         tprintln("uv_write failed: {write-rc}");
+        mem/popMode();
         close-connection(client);
+        return();
       };
     },
     :stream -> {
       tprintln("streaming unimplemented");
     },
   };
+  mem/popMode();
+  {}
 }
 
 fn alloc-read-buffer(handle: *mut uv/handle, suggested-size: usize, buf: *mut uv/buf) {
   let connection = handle.get-data[connection]();
+  mem/pushMode(:custom-arena(connection.request-arena*));
   tprintln("[c{connection.serial-no}] alloc-read-buffer, size {suggested-size}");
+  mem/popMode();
   let byte-buffer = connection.request-arena*.push-buffer[u8](suggested-size.as[size]);
   buf <- uv/buf/from-buffer(byte-buffer);
 }
@@ -239,6 +255,7 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
     } else {
       tprintln("http parse error {parse-result.enum-name()}; closing connection");
       close-connection(client);
+      return();
     }
   };
   {}
@@ -288,13 +305,13 @@ fn on-complete-http-header(connection: *mut connection, header: http/header): ht
 
 fn on-complete-http-body(connection: *mut connection, chunks: span[span[u8]]) {
   let request: http/request = {
-    header: connection.parsed-header.!,
+    header: connection.parsed-header.get(),
     body: :buffered(chunks)
   };
   let total-size = 0;
   for chunks { total-size := total-size + it.len() };
   tprintln("got the whole body! {chunks.len()} chunks; {total-size} total");
-  queue-http-handler(connection, request, connection.matched-handler.!)
+  queue-http-handler(connection, request, connection.matched-handler.get())
 }
 
 
@@ -315,7 +332,9 @@ ns for connection {
       addr.request-arena* <- core/arena/_virtual(usageHintMb = 1);
       let connection-arena: *mut arena = addr.connection-arena*;
       let request-arena: *mut arena = addr.request-arena*;
+      mem/pushMode(:custom-arena(connection-arena));
       tprintln("making connection with deps: {make-user-deps.as[ptr]}");
+      mem/popMode();
       let client = connection-arena.push-uninit[uv/tcp]();
       addr <- {
         connection-arena: uninit, // already stored
@@ -343,16 +362,22 @@ ns for connection {
     connection
   }
   fn release(self: *mut connection) {
+    mem/pushMode(:custom-arena(self.request-arena*));
     tprintln("conn{self.serial-no} request arena close usedBytes: {self.request-arena.usedBytes()}");
+    mem/popMode();
     self.request-arena*.release();
+    mem/pushMode(:custom-arena(self.connection-arena*));
     tprintln("conn{self.serial-no} connection arena close usedBytes: {self.connection-arena.usedBytes()}");
+    mem/popMode();
     self.connection-arena*.release();
     alloc-mode:system-heap.freeT(self);
   }
   fn finish-request(self: *mut connection, client: *mut uv/stream) {
+    mem/pushMode(:custom-arena(self.request-arena*));
     tprintln("finish-request");
     tprintln("todo: check for Connection: close");
     tprintln("conn{self.serial-no} request arena reset usedBytes: {self.request-arena.usedBytes()}");
+    mem/popMode();
     self.request-arena*.reset(false);
     self.request-parser*.reset();
 
@@ -367,7 +392,7 @@ ns for connection {
 }
 
 fn on-new-connection(server: *mut uv/stream, status: i32) {
-  tprintln("------------ on_new_connection -------------");
+  println("------------ on_new_connection -------------");
   if status < 0 {
     println("new connection error: {status}");
     return();
@@ -387,6 +412,7 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
   uv/tcp_nodelay(client, 1);
 
   let accept-rc = uv/accept(server, client.as-stream());
+  mem/pushMode(:custom-arena(connection.connection-arena*));
   tprintln("connection arena new usedBytes: {connection.connection-arena.usedBytes()}");
   if accept-rc == 0 {
     uv/tcp_keepalive_ex(client, 1, idle = 60, intvl = 10, cnt = 3);
@@ -394,12 +420,18 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
     let read-rc = uv/read_start(client.as-stream(), alloc-read-buffer, on_client_read);
     if read-rc != 0 {
       tprintln("read start error: {read-rc}");
+      mem/popMode();
       close-connection(client);
+      return();
     };
   } else {
     tprintln("accept error: {accept-rc}");
+    mem/popMode();
     close-connection(client);
+    return();
   };
+  mem/popMode();
+  {}
 }
 
 ${

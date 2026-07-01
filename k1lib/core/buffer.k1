@@ -145,7 +145,7 @@ ns for buffer {
     mem/move(dst = dst.data-ptr(), src = src.data-ptr(), count = numBytes);
   }
 
-  fn clonedIn[t](context mode: mem/alloc-mode)(self: buffer[t]): buffer[t] {
+  fn cloned-in[t](context mode: mem/alloc-mode)(self: buffer[t]): buffer[t] {
     let clone = self._enlargedCloneIn(newCount = self.len);
     clone
   }
