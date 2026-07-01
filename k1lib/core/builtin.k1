@@ -816,6 +816,10 @@ fn crash(context locn: k1/source-location)(msg: string): never {
     eprint("\n");
     //let s = "{msg} at {filename}:{line}\n";
     //eprint(s);
+
+    // use this to make crash trap!
+    // let x = ptr/null.as[*mut i32].*;
+    // sys/exit(x)
     sys/exit(1)
   }
 }
