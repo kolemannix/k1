@@ -45,7 +45,7 @@ ns for buffer {
   }
 
   fn copy-from-array[t, N: static size](array: *array[t, N]): buffer[t] {
-    let wrapped = wrapArray[t, N](array.to-mut);
+    let wrapped = wrapArray[t, N](array);
     wrapped.cloned();
   }
 

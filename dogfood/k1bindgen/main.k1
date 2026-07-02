@@ -37,8 +37,10 @@ fn main(argc: c-int, argv: ptr): i32 {
 type bindgen-args = {
   lib-name: string,
   in-path: string,
-  out-path: string,
-  skip-system-defns: bool,
+  out-path: ?string,
+  clangarg: list[string],
+  system: string,
+  prelude-file: ?string,
   exclude: list[string],
   include: list[string],
   opaque: list[string],
@@ -47,87 +49,76 @@ type bindgen-args = {
   rename: list[string],
 }
 fn start(args: span[string]): string {
-  let out-path: ?string = :none;
-  let libname: string = "lib";
-  let clang-args = list/empty[string];
-  let exclude-substrings = list/empty[string];
-  let include-names = list/empty[string];
-  let suffix-strips = list/empty[string];
-  let prefix-strips = list/empty[string];
-  let opaque-names = list/empty[string];
-  let renames = list/empty[{ from: string, to: string }];
-  let args = std/sys/parse-args[bindgen-args]();
-  let file = "file.c";
-  let skip-system-defns = true;
-  let prelude-file: ?string = :none;
-  // TODO: Pull this out into an immediate-mode flags module
-  for args {
-    if it == "-system" {
-      if args.get-opt(itIndex + 1) is :some(next) { skip-system-defns := next != "true" }
-    };
-    if it == "-i" {
-      if args.get-opt(itIndex + 1) is :some(next) { file := next }
-    };
-    if it == "-o" {
-      if args.get-opt(itIndex + 1) is :some(next) { out-path := :some(next) }
-    };
-    if it == "-n" {
-      if args.get-opt(itIndex + 1) is :some(next) { libname := next }
-    };
-    if it == "-clangarg" {
-      if args.get-opt(itIndex + 1) is :some(next) { clang-args.push(next) }
-    };
-    if it == "-exclude" {
-      if args.get-opt(itIndex + 1) is :some(next) { exclude-substrings.push(next) }
-    };
-    if it == "-include" {
-      if args.get-opt(itIndex + 1) is :some(next) { include-names.push(next) }
-    };
-    if it == "-opaque" {
-      if args.get-opt(itIndex + 1) is :some(next) { opaque-names.push(next) }
-    };
-    if it == "-strip-suffix" {
-      if args.get-opt(itIndex + 1) is :some(next) { suffix-strips.push(next) }
-    };
-    if it == "-strip-prefix" {
-      if args.get-opt(itIndex + 1) is :some(next) { prefix-strips.push(next) }
-    };
-    if it == "-prelude-file" {
-      if args.get-opt(itIndex + 1) is :some(next) { prelude-file := :some(next) }
-    };
-    if it == "-rename" {
-      if args.get-opt(itIndex + 1) is :some(from) { 
-        if args.get-opt(itIndex + 2) is :some(to) {
-          renames.push({ from, to })
-        }
-      }
-    }
+  let args = switch std/sys/parse-args[bindgen-args](args, []) { :ok(args) -> args, :err(msg) -> return("Failed to parse arguments: {msg}") };
 
-  };
-  info("options");
-  info("  libname: {libname}");
-  info("  skip system definitions: {skip-system-defns}");
-  info("  input file: {file}");
-  info("  clang-args: {clang-args}");
-  info("  strip-prefix: {prefix-strips}");
-  info("  strip-suffix: {suffix-strips}");
+  // TODO: Pull this out into an immediate-mode flags module
+  // for args {
+  //   if it == "-system" {
+  //     if args.get-opt(itIndex + 1) is :some(next) { skip-system-defns := next != "true" }
+  //   };
+  //   if it == "-i" {
+  //     if args.get-opt(itIndex + 1) is :some(next) { file := next }
+  //   };
+  //   if it == "-o" {
+  //     if args.get-opt(itIndex + 1) is :some(next) { out-path := :some(next) }
+  //   };
+  //   if it == "-n" {
+  //     if args.get-opt(itIndex + 1) is :some(next) { libname := next }
+  //   };
+  //   if it == "-clangarg" {
+  //     if args.get-opt(itIndex + 1) is :some(next) { clang-args.push(next) }
+  //   };
+  //   if it == "-exclude" {
+  //     if args.get-opt(itIndex + 1) is :some(next) { exclude-substrings.push(next) }
+  //   };
+  //   if it == "-include" {
+  //     if args.get-opt(itIndex + 1) is :some(next) { include-names.push(next) }
+  //   };
+  //   if it == "-opaque" {
+  //     if args.get-opt(itIndex + 1) is :some(next) { opaque-names.push(next) }
+  //   };
+  //   if it == "-strip-suffix" {
+  //     if args.get-opt(itIndex + 1) is :some(next) { suffix-strips.push(next) }
+  //   };
+  //   if it == "-strip-prefix" {
+  //     if args.get-opt(itIndex + 1) is :some(next) { prefix-strips.push(next) }
+  //   };
+  //   if it == "-prelude-file" {
+  //     if args.get-opt(itIndex + 1) is :some(next) { prelude-file := :some(next) }
+  //   };
+  //   if it == "-rename" {
+  //     if args.get-opt(itIndex + 1) is :some(from) { 
+  //       if args.get-opt(itIndex + 2) is :some(to) {
+  //         renames.push({ from, to })
+  //       }
+  //     }
+  //   }
+
+  // };
+  // info("options");
+  // info("  libname: {libname}");
+  // info("  skip system definitions: {skip-system-defns}");
+  // info("  input file: {file}");
+  // info("  clang-args: {clang-args}");
+  // info("  strip-prefix: {prefix-strips}");
+  // info("  strip-suffix: {suffix-strips}");
 
   let context alloc: mem/alloc-mode = :tmp;
 
   let index: CXIndex = clang/createIndex(1, 1);
   let unit: CXTranslationUnit = uninit;
-  let clang-args-c-strs: list[ptr] = clang-args.map(fn s. s.to-c(context :tmp)().ptr);
+  let clang-args-c-strs: list[ptr] = args.clangarg.map(fn s. s.to-c(context :tmp)().ptr);
 
   let err = clang/parseTranslationUnit2(
     index,
-    source_filename = file.to-c().ptr,
+    source_filename = args.in-path.to-c().ptr,
     command_line_args = clang-args-c-strs.base-ptr(),
     command_line_args_len = clang-args-c-strs.len().as[i32],
     ptr/null.as(), 0,
     :SkipFunctionBodies, &unit
   ); 
   if err != 0 {
-    crash("clang failed on {libname}")
+    crash("clang failed on {args.lib-name}")
   };
 
   let num-diagnostics = clang/getNumDiagnostics(unit);
@@ -138,13 +129,20 @@ fn start(args: span[string]): string {
   };
 
   let cursor: clang/CXCursor = clang/getTranslationUnitCursor(unit); 
+  let parsed-renames = args.rename.map(fn s. { 
+    let parts = s.splitByChar(':');
+    if parts.len() != 2 eprintln("Bad rename: {s}");
+    { from: parts.get(0), to: parts.get(1) }
+  });
   let state: BindgenState = {
+    lib-name: args.lib-name,
+    out-path: args.out-path,
     defns: list/empty(),
-    skip-system-defns,
-    exclude-substrings,
-    include-names,
-    opaque-names,
-    name-config: { suffix-strips, prefix-strips, renames },
+    skip-system-defns: args.system != "true",
+    exclude-substrings: args.exclude,
+    include-names: args.include,
+    opaque-names: args.opaque,
+    name-config: { suffix-strips: args.strip-suffix, prefix-strips: args.strip-prefix, renames: parsed-renames },
   };
   clang/visitChildren(
     parent = cursor,
@@ -152,15 +150,15 @@ fn start(args: span[string]): string {
     client_data = &state.as[ptr]
   );
 
-  info("Found {state.defns.len()} definitions in {file}. Emitting to {out-path ? "stdout"}");
+  info("Found {state.defns.len()} definitions in {args.in-path}. Emitting to {args.out-path ? "stdout"}");
 
   let out = StringBuilder/new();
   let context out-writer = &out;
   let context name-config = state.name-config;
-  writelnf(out, "ns {libname}; // generated by k1-bindgen");
+  writelnf(out, "ns {args.lib-name}; // generated by k1-bindgen");
   out.line("");
   out.line("use types/assert-layout");
-  if prelude-file is :some(prelude-file) {
+  if args.prelude-file is :some(prelude-file) {
     let prelude-string = core/files/read-to-string(prelude-file);
     out.line("// contents of {prelude-file}");
     out.string(prelude-string);
@@ -201,7 +199,7 @@ fn start(args: span[string]): string {
           out.line("");
         },
         :function(function) -> {
-          writelnf(out, `extern("{libname}", "{raw-name}")`);
+          writelnf(out, `extern("{state.lib-name}", "{raw-name}")`);
           writef(out, `fn {name}(`);
           if function.fn-type.params.is-empty() {
             writef(out, `): `);
@@ -226,7 +224,7 @@ fn start(args: span[string]): string {
   };
 
   let s = out.build();
-  switch out-path {
+  switch state.out-path {
     :none -> { print(s); s },
     :some(path) -> { core/files/write-entire-file(out-path = path, contents = s); s }
   }
@@ -385,6 +383,8 @@ ns for name-config {
   }
 }
 type BindgenState = {
+  lib-name: string,
+  out-path: ?string,
   // state / output
   defns: list[k1-defn],
 
@@ -779,7 +779,7 @@ fn map-type-ext(cx-type: clang/CXType, c-context: either { default, fn-param }):
       if inner-mapped is :k1(p"{}") {
         :k1("ptr")
       } else {
-        let inner: *k1-type = mem/new(inner-mapped).un-mut;
+        let inner: *k1-type = mem/new(inner-mapped);
         :ref({ inner })
       }
     },
@@ -831,7 +831,7 @@ fn map-type-ext(cx-type: clang/CXType, c-context: either { default, fn-param }):
     },
     :ConstantArray -> {
       let elem-type = clang/getArrayElementType(cx-type);
-      let elem-type-mapped = mem/new(map-type(elem-type)).un-mut;
+      let elem-type-mapped = mem/new(map-type(elem-type));
       let size = clang/getArraySize(cx-type);
       :array({ elem-type: elem-type-mapped, size })
     },

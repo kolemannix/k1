@@ -52,16 +52,28 @@ ns for arena {
     }
   }
 
+  let MIN_ALIGN: size = types/size[ptr]
   fn alloc-layout(self: *mut arena, size: size, align: size): ptr {
-    let dataStart = self.cur-addr.aligned(align);
-    let newEnd = dataStart.add-bytes(size);
-    if newEnd.as[usize] > self.max-addr.as[usize] {
-      mem/pushMode(:system-heap);
-      crash("arena is out of space to allocate {size} bytes. newEnd: {newEnd} > {self.max-addr}")
-    };
+    let cursor = self.cur-addr.as[size];
 
-    self.cur-addr* <- newEnd;
-    dataStart
+    // cursor is already MIN_ALIGN-aligned, so only stricter
+    // alignments need extra padding before the returned allocation.
+    let prefix-padding = if align > MIN_ALIGN ptr/get-align-offset(cursor, align) else 0;
+
+    let raw-bump = size + prefix-padding;
+
+    let available = self.max-addr.as[size] - cursor;
+    if available >= raw-bump {
+      // Keep the arena cursor MIN_ALIGN-aligned for the next allocation.
+      let offset-to-min-align = ptr/get-align-offset(raw-bump, MIN_ALIGN);
+      let total-bump = raw-bump + offset-to-min-align;
+      let alloc-ptr = cursor + prefix-padding;
+      self.cur-addr* <- (cursor + total-bump).as[ptr];
+      alloc-ptr.as[ptr]
+    } else {
+       mem/pushMode(:system-heap);
+       crash("arena is out of space to allocate {size} bytes. available: {available}")
+    }
   }
 
   fn alloc[T](self: *mut arena): *mut T {

@@ -40,9 +40,8 @@ ns type_schema {
     require pointByteSchema is :struct({ fields }) else crash("");
     assert-equals(fields.len(), 3);
     require schema[*i32]
-      is :reference({ mutable: false, inner-type-id })
+      is :reference({ inner-type-id })
       and inner-type-id == type-id[i32] else crash("");
-    assert(schema[*mut i32] is :reference({ mutable: true }));
     assert-equals(
       schema[**bool].as-reference().!.inner-type-id,
       type-id[*bool]

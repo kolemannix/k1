@@ -1,24 +1,25 @@
 fn test(): i32 {
   let context alloc-mode: alloc-mode = :tmp;
   let core-args: span[string] = [
+    "k1bindgen",
+    "-lib-name",     "testlib",
     "-system",       "false",
-    "-o",            "test/output.k1",
-    "-n",            "test",
-    "-i",            "test/input.c",
-    "-opaque",       "opaq",
-    "-exclude",      "Color_Blue",
-    "-exclude",      "__",
-    "-strip-suffix", "_t",      
-    "-strip-suffix", "_u",      
-    "-strip-prefix", "cinput_", 
-    "-rename"      , "cinput_custom_name", "my-custom-name"
+    "-out-path",     "test/output.k1",
+    "-in-path",      "test/input.c",
+    "+opaque",       "opaq",
+    "+exclude",      "Color_Blue",
+    "+exclude",      "__",
+    "+strip-suffix", "_t",      
+    "+strip-suffix", "_u",      
+    "+strip-prefix", "cinput_", 
+    "+rename"      , "cinput_custom_name:my-custom-name"
   ];
   let args = #if k1/os-macos {
     core-args.concat([
-      "-clangarg", "-isystem",
-      "-clangarg", "/Users/knix/dev/k1/llvm/install-llvm/lib/clang/21/include",
-      "-clangarg", "-isysroot",
-      "-clangarg", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk"
+      "+clangarg", "-isystem",
+      "+clangarg", "/Users/knix/dev/k1/llvm/install-llvm/lib/clang/21/include",
+      "+clangarg", "-isysroot",
+      "+clangarg", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk"
     ])
   } else core-args;
   let output = start(args);

@@ -71,7 +71,7 @@ ns for fixlist {
   }
 
   fn get[T, N: static size](self: *fixlist[T, N], index: size): T {
-    self.to-mut.getRef(index).*
+    self.getRef(index).*
   }
 
   fn getRef[T, N: static size](self: *mut fixlist[T, N], index: size): *mut T {

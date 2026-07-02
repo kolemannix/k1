@@ -139,7 +139,7 @@ ns types {
         value: int-value,
       }]
     }),
-    reference({ inner-type-id: u64, mutable: bool }),
+    reference({ inner-type-id: u64 }),
     array({
       element-type-id: u64,
       size: ?int
@@ -593,34 +593,38 @@ ns for ptr {
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
   // But we _could_ do it in userland using size-of and arithmetic which is neat!
-  intern fn ref-at-index[t](self: ptr, index: int): *mut t
+  intern fn ref-at-index[t](self: ptr, index: size): *mut t
 
-  fn add-bytes(self: ptr, offset: int): ptr {
-    (self.as[int] + offset).as[ptr]
+  fn add-bytes(self: ptr, offset: size): ptr {
+    (self.as[size] + offset).as[ptr]
   }
 
-  fn sub-bytes(self: ptr, offset: int): ptr {
-    (self.as[int] - offset).as[ptr]
+  fn sub-bytes(self: ptr, offset: size): ptr {
+    (self.as[size] - offset).as[ptr]
   }
 
-  fn diff(self: ptr, other: ptr): int {
-    self.as[int] - other.as[int]
+  fn diff(self: ptr, other: ptr): size {
+    self.as[size] - other.as[size]
   }
 
-  fn align-addr(base-address: size, align-bytes: size): int {
-    let mask = align-bytes - 1;
+  fn align-addr(base-address: size, alignment: size): size {
+    let mask = alignment - 1;
     (base-address + mask) & mask.bit-not()
   }
 
-  fn aligned(self: ptr, align-bytes: int): ptr {
-    align-addr(self.as[size], align-bytes).as()
+  fn get-align-offset(size: size, alignment: size): size {
+    (alignment - size) & (alignment - 1)
+  }
+
+  fn aligned(self: ptr, alignment: size): ptr {
+    align-addr(self.as[size], alignment).as()
   }
 
 }
 
 impl equals for ptr {
   fn equals(self: ptr, other: ptr): bool {
-    self.as[int] == other.as[int]
+    self.as[size] == other.as[size]
   }
 }
 
@@ -692,7 +696,7 @@ ns array {
   }
 
   fn as-span[t, n](array: *array[t, n]): span[t] where n: static size {
-    let temp = array.to-mut.as-buffer();
+    let temp = array.as-buffer();
     span/wrap-buffer(temp)
   }
 
