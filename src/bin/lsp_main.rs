@@ -795,6 +795,10 @@ fn find_references(
             // This will be really useful; a variant that is never constructed...
             Ok(None)
         }
+        LsEntityKind::StructField { .. } => {
+            // This will be really useful; a field that is never accessed...
+            Ok(None)
+        }
     }
 }
 

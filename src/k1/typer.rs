@@ -207,6 +207,7 @@ pub enum LsEntityKind {
     Variable { variable_id: VariableId },
     Type { type_id: TypeId, applied_type_id: Option<TypeId> },
     Variant { type_id: TypeId, variant_index: u32 },
+    StructField { type_id: TypeId, field_index: u32, access_kind: Option<FieldAccessKind> },
 }
 
 #[derive(Clone, Copy)]
@@ -333,11 +334,11 @@ impl EvalExprContext {
         EvalExprContext { flags, ..*self }
     }
 
-    fn is_hidden(&self) -> bool {
+    fn is_hidden_calls(&self) -> bool {
         self.flags.contains(EvalExprFlags::Hidden)
     }
 
-    fn with_hidden(&self, hidden: bool) -> EvalExprContext {
+    fn with_hidden_calls(&self, hidden: bool) -> EvalExprContext {
         let mut flags = self.flags;
         flags.set(EvalExprFlags::Hidden, hidden);
         EvalExprContext { flags, ..*self }
@@ -3597,7 +3598,11 @@ impl TypedProgram {
                         scope_id,
                         context.descended(),
                     )?;
-                    fields.push(StructTypeField { name: ast_field.name, type_id: ty })
+                    fields.push(StructTypeField {
+                        name: ast_field.name,
+                        type_id: ty,
+                        span: ast_field.name_span,
+                    })
                 }
 
                 let struct_defn = Type::Struct(StructType {
@@ -4329,6 +4334,14 @@ impl TypedProgram {
                         Ok(instantiated_type_id)
                     }
                     _other => {
+                        if !ty_app.args.is_empty() {
+                            return failf!(
+                                ty_app.span,
+                                "Type {} is not generic, but got {} type arguments",
+                                self.qident_to_string(&ty_app.name),
+                                ty_app.args.len()
+                            );
+                        }
                         let resolved_type_id = self.get_type_id_resolved(type_id, scope_id);
                         self.emit_ls_entity(
                             ty_app.name.name_span,
@@ -7651,13 +7664,6 @@ impl TypedProgram {
             }
         }
 
-        if field_access.field_name == self.ast.idents.b.variantName {
-            return failf!(
-                field_access.span,
-                "TODO: Generate variantName() code (for only sums that it is called on!)"
-            );
-        }
-
         let (base_type_id, base_reference_type) = match self.get_expr_type(base_expr) {
             Type::Reference(reference_type) => {
                 let inner_type = reference_type.inner_type;
@@ -7705,6 +7711,14 @@ impl TypedProgram {
                             self.type_id_to_string(base_type_id)
                         )
                     })?;
+                self.emit_ls_entity(
+                    field_access.span,
+                    LsEntityKind::StructField {
+                        type_id: svt.family_type_id,
+                        field_index: field_index as u32,
+                        access_kind: Some(FieldAccessKind::ValueToValue),
+                    },
+                );
                 match svt.value_id {
                     None => {
                         // Abstract case
@@ -7739,6 +7753,14 @@ impl TypedProgram {
                                 .join(", ")
                         )
                     })?;
+                self.emit_ls_entity(
+                    field_access.span,
+                    LsEntityKind::StructField {
+                        type_id: base_type_id,
+                        field_index: field_index as u32,
+                        access_kind: Some(access_kind),
+                    },
+                );
                 let result_type = if field_access.is_referencing {
                     let reference_type = base_reference_type.unwrap();
                     self.types.add_reference_type(target_field.type_id, reference_type.mutable)
@@ -8062,12 +8084,12 @@ impl TypedProgram {
             ParsedExpr::Struct(_ast_struct) => {
                 if let Some(expected_type) = ctx.expected_type_id {
                     if let Type::Struct(_s) = self.types.get(expected_type) {
-                        self.eval_expected_struct(expr_id, ctx)
+                        self.eval_struct_expected(expr_id, ctx)
                     } else {
-                        self.eval_anonymous_struct(expr_id, ctx)
+                        self.eval_struct_anonymous(expr_id, ctx)
                     }
                 } else {
-                    self.eval_anonymous_struct(expr_id, ctx)
+                    self.eval_struct_anonymous(expr_id, ctx)
                 }
             }
             ParsedExpr::If(if_expr) => self.eval_if_expr(&if_expr.clone(), ctx),
@@ -8078,7 +8100,7 @@ impl TypedProgram {
                 let op = op.clone();
                 match op.op_kind {
                     ParsedUnaryOpKind::BooleanNegation => {
-                        let negated_expr = self.synth_parsed_bool_not(op.expr);
+                        let negated_expr = self.synth_parsed_bool_not(op.expr, op.span);
                         self.eval_expr(negated_expr, ctx)
                     }
                     ParsedUnaryOpKind::AddressOf => self.compile_address_of(op.expr, ctx, op.span),
@@ -8803,7 +8825,7 @@ impl TypedProgram {
         result
     }
 
-    fn eval_anonymous_struct(
+    fn eval_struct_anonymous(
         &mut self,
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
@@ -8828,7 +8850,11 @@ impl TypedProgram {
             if expr_type == NEVER_TYPE_ID {
                 return failf!(ast_field.span, "never is not allowed in struct literals");
             }
-            field_defns.push(StructTypeField { name: ast_field.name, type_id: expr_type });
+            field_defns.push(StructTypeField {
+                name: ast_field.name,
+                type_id: expr_type,
+                span: ast_field.span,
+            });
             field_values.push(StructLiteralField { name: ast_field.name, expr: Some(expr) });
         }
 
@@ -8838,7 +8864,7 @@ impl TypedProgram {
         Ok(self.exprs.add(TypedExpr::Struct(typed_struct), struct_type_id, parsed_struct.span))
     }
 
-    fn eval_expected_struct(
+    fn eval_struct_expected(
         &mut self,
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
@@ -8871,7 +8897,9 @@ impl TypedProgram {
         )> = smallvec![];
 
         let struct_span = parsed_struct.span;
-        for expected_field in self.types.mem.getn(expected_struct.fields).iter() {
+        for (index, expected_field) in
+            self.types.mem.getn(expected_struct.fields).iter().enumerate()
+        {
             let Some(passed_field) = self
                 .ast
                 .mem
@@ -8892,6 +8920,14 @@ impl TypedProgram {
                 StructValueFieldKind::Expr(parsed_expr) => Some(parsed_expr),
                 StructValueFieldKind::Uninit => None,
             };
+            self.emit_ls_entity(
+                passed_field.span,
+                LsEntityKind::StructField {
+                    type_id: expected_struct_id,
+                    field_index: index as u32,
+                    access_kind: None,
+                },
+            );
             passed_fields_aligned.push((parsed_expr, passed_field, expected_field))
         }
 
@@ -8919,6 +8955,7 @@ impl TypedProgram {
                     field_types.push(StructTypeField {
                         name: expected_field.name,
                         type_id: expected_field.type_id,
+                        span: expected_field.span,
                     });
                 }
                 Some(passed_expr) => {
@@ -8934,8 +8971,11 @@ impl TypedProgram {
                             "never is not allowed in struct literals"
                         );
                     }
-                    field_types
-                        .push(StructTypeField { name: expected_field.name, type_id: expr_type });
+                    field_types.push(StructTypeField {
+                        name: expected_field.name,
+                        type_id: expr_type,
+                        span: expected_field.span,
+                    });
                     field_values
                         .push(StructLiteralField { name: expected_field.name, expr: Some(expr) });
                 }
@@ -9291,7 +9331,7 @@ impl TypedProgram {
         let mut env_exprs = self.mem.new_list(lambda_info.captured_variables.len() as u32);
         for captured_variable_id in lambda_info.captured_variables.iter() {
             let v = self.variables.get(*captured_variable_id);
-            env_field_types.push(StructTypeField { type_id: v.type_id, name: v.name });
+            env_field_types.push(StructTypeField { type_id: v.type_id, name: v.name, span });
             let var_expr = self.exprs.add(
                 TypedExpr::Variable(VariableExpr { variable_id: *captured_variable_id }),
                 v.type_id,
@@ -13094,7 +13134,7 @@ impl TypedProgram {
         let is_method = method_receiver.is_some();
 
         if let Some(function_id) = callee.maybe_function_id() {
-            if !ctx.is_hidden() {
+            if !ctx.is_hidden_calls() {
                 self.emit_ls_entity(
                     fn_call.name.name_span,
                     LsEntityKind::Function { function_id, is_defn: false },
@@ -17122,16 +17162,6 @@ impl TypedProgram {
         let direct_parent = self.scopes.get_scope(parent_scope);
         let namespace_id = if let Some(existing) = direct_parent.find_namespace(ast_namespace.name)
         {
-            if self.module_in_progress.unwrap()
-                != self.namespaces.get(existing).owner_module.unwrap()
-            {
-                return failf!(
-                    ast_namespace.span,
-                    "Cannot extend definition of namespace {} from another module {}",
-                    self.ident_str(ast_namespace.name),
-                    self.ident_str(self.modules.get(self.module_in_progress.unwrap()).name)
-                );
-            }
             // Namespace extension
             // Map this separate namespace AST node to the same semantic namespace
             self.namespace_ast_mappings.insert(parsed_namespace_id, existing);
@@ -17481,8 +17511,16 @@ impl TypedProgram {
 
         if is_core {
             let fields = self.types.mem.pushn(&[
-                StructTypeField { name: self.ast.idents.b.env, type_id: POINTER_TYPE_ID },
-                StructTypeField { name: self.ast.idents.b.fn_ptr, type_id: POINTER_TYPE_ID },
+                StructTypeField {
+                    name: self.ast.idents.b.fn_ptr,
+                    type_id: POINTER_TYPE_ID,
+                    span: SpanId::NONE,
+                },
+                StructTypeField {
+                    name: self.ast.idents.b.env_ptr,
+                    type_id: POINTER_TYPE_ID,
+                    span: SpanId::NONE,
+                },
             ]);
             let t = self.types.add_anon(Type::Struct(StructType::struc(fields)));
             self.types.builtins.dyn_lambda_obj = Some(t);

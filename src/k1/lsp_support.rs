@@ -93,6 +93,20 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
             let type_string = k1.type_id_to_string(type_id);
             format!("{type_string}\n{layout_string}")
         }
+        LsEntityKind::StructField { type_id, field_index, access_kind } => {
+            let struct_type = k1.types.get(type_id).as_struct().unwrap();
+            let field = k1.types.mem.get_nth(struct_type.fields, field_index as usize);
+            let field_type_string = k1.type_id_to_string(field.type_id);
+            let access_kind_string = match access_kind {
+                None => "",
+                Some(ak) => match ak {
+                    FieldAccessKind::ValueToValue => "Value Access",
+                    FieldAccessKind::Dereference => "Dereferencing Access",
+                    FieldAccessKind::ReferenceThrough => "Referencing Access (pointer to member)",
+                },
+            };
+            format!("{}: {}\n{}", k1.ident_str(field.name), field_type_string, access_kind_string)
+        }
     }
 }
 
@@ -143,6 +157,16 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
                 SpanId::NONE
             }
         },
+        LsEntityKind::StructField { type_id, field_index, .. } => match k1.types.get(type_id) {
+            Type::Struct(struct_type) => {
+                let field = k1.types.mem.get_nth(struct_type.fields, field_index as usize);
+                field.span
+            }
+            _ => {
+                eprintln!("Invalid StructField entity; type is not a struct!");
+                SpanId::NONE
+            }
+        }
     };
     span_id
 }

@@ -9,7 +9,7 @@ use fxhash::FxHashMap;
 
 use crate::typer::scopes::*;
 
-use crate::parse::{StringId, IdentPool, ParsedId};
+use crate::parse::{IdentPool, ParsedId, StringId};
 
 use crate::{SV4, impl_copy_if_small, nz_u32_id, typer::*};
 
@@ -92,8 +92,9 @@ impl Display for Layout {
 pub struct StructTypeField {
     pub name: StringId,
     pub type_id: TypeId,
+    pub span: SpanId,
 }
-impl_copy_if_small!(8, StructTypeField);
+impl_copy_if_small!(12, StructTypeField);
 
 #[derive(Clone)]
 pub struct GenericInstanceInfo {
@@ -1648,10 +1649,22 @@ impl TypePool {
         function_type_id: TypeId,
         parsed_id: ParsedId,
     ) -> TypeId {
+        // Unlike types.builtins.dyn_lam_obj, this contains the actual function type
+        // for typechecking calls
+        // The other one is just concerned with mapping to the right physical type.
+        // Which is just { ptr, ptr }
         let fn_ptr_type = self.add_function_pointer_type(function_type_id);
         let fields = self.mem.pushn(&[
-            StructTypeField { name: identifiers.b.fn_ptr, type_id: fn_ptr_type },
-            StructTypeField { name: identifiers.b.env_ptr, type_id: POINTER_TYPE_ID },
+            StructTypeField {
+                name: identifiers.b.fn_ptr,
+                type_id: fn_ptr_type,
+                span: SpanId::NONE,
+            },
+            StructTypeField {
+                name: identifiers.b.env_ptr,
+                type_id: POINTER_TYPE_ID,
+                span: SpanId::NONE,
+            },
         ]);
         let struct_representation = self.add_anon(Type::Struct(StructType::struc(fields)));
         self.add_anon(Type::LambdaObject(LambdaObjectType {

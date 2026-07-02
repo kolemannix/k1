@@ -368,8 +368,7 @@ impl TypedProgram {
         self.eval_function_call(&call, None, ctx, None)
     }
 
-    pub(super) fn synth_parsed_bool_not(&mut self, base: ParsedExprId) -> ParsedExprId {
-        let span = self.ast.exprs.get_span(base);
+    pub(super) fn synth_parsed_bool_not(&mut self, base: ParsedExprId, span: SpanId) -> ParsedExprId {
         self.synth_parsed_function_call(
             self.ast.idents.f.bool__negated.with_span(span),
             &[],
@@ -700,7 +699,7 @@ impl TypedProgram {
                         let print_call = self.synth_printto_call(
                             string_expr,
                             writer_expr,
-                            block_ctx.with_hidden(true),
+                            block_ctx.with_hidden_calls(true),
                         )?;
                         self.push_block_expr_id(&mut block, print_call);
                     }
@@ -721,12 +720,12 @@ impl TypedProgram {
                                 get_named_arg(self, args_variable.variable_expr, name, expr_span);
                             match struct_arg {
                                 Some(field_expr) => field_expr,
-                                None => self.eval_expr(*expr_id, block_ctx.with_hidden(false))?,
+                                None => self.eval_expr(*expr_id, block_ctx.with_hidden_calls(false))?,
                             }
                         }
                         None => {
                             let typed_expr =
-                                self.eval_expr(*expr_id, block_ctx.with_hidden(false))?;
+                                self.eval_expr(*expr_id, block_ctx.with_hidden_calls(false))?;
                             typed_expr
                         }
                     };
@@ -734,7 +733,7 @@ impl TypedProgram {
                     let print_expr_call = self.synth_printto_call(
                         typed_expr,
                         writer_expr,
-                        block_ctx.with_hidden(true),
+                        block_ctx.with_hidden_calls(true),
                     )?;
                     self.push_block_expr_id(&mut block, print_expr_call);
                 }
@@ -786,7 +785,7 @@ impl TypedProgram {
         if self.config.no_std {
             return failf!(span, "Interpolated strings are not supported in no_std mode");
         }
-        let ctx_for_calls = block_ctx.with_hidden(true);
+        let ctx_for_calls = block_ctx.with_hidden_calls(true);
         let new_string_builder = self.synth_typed_call_typed_args(
             self.ast.idents.f.StringBuilder_new.with_span(span),
             &[],

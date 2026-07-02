@@ -1,43 +1,33 @@
 use core/spill-list
 
-type StringBuilder = { list: spill-list[u8, 96] }
+type StringBuilder = { list: list[u8] }
 ns for StringBuilder {
   fn new(): StringBuilder {
-    { list: spill-list/new() }
+    { list: list/empty() }
   }
 
   fn reset(self: *mut StringBuilder) {
     self.list*.clear()
   }
 
-  // Careful, if the StringBuilder is stack-allocated, and not 
-  // spilled, this points to the stack memory!
-  fn raw-span(self: *StringBuilder): span[char] {
-    self.list*.as-span().as-char-span()
+  fn peek(self: *StringBuilder): span[char] {
+    self.list.as-span().as-char-span()
   }
 
   fn build(self: *StringBuilder): string {
-    switch self.list* {
-      :Inline(f)* -> string/fromBytes(f.as-span().cloned()),
-      :Spilled(l)* -> string/fromBytes(l.as-span())
-    }
+    string/fromBytes(self.list.as-span()).cloned()
   }
 
   fn build-tmp(self: *StringBuilder): string {
-    switch self.list* {
-      // nocommit: make this not allocate in the inline case; it causes a crash
-      // :Inline(f)* -> string/fromBytes(f.as-span()),
-      :Inline(f)* -> string/fromBytes(f.as-span().cloned-in(context :tmp)()),
-      :Spilled(l)* -> string/fromBytes(l.as-span())
-    }
+    string/fromBytes(self.list.as-span()).cloned-in(context :tmp)()
   }
 }
 
 impl writer for *mut StringBuilder {
   fn write-byte(self, b: u8): empty {
-    self.list*.push(b)
+    self.list*.push-in(context :tmp)(b)
   }
   fn write-bytes(self, b: span[u8]): empty {
-    self.list*.pushN(b)
+    self.list*.append-span(b)
   }
 }

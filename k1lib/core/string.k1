@@ -24,6 +24,10 @@ ns for string {
     from-span(self.span.cloned())
   }
 
+  fn cloned-in(context alloc-mode: mem/alloc-mode)(self: string): string {
+    from-span(self.span.cloned-in())
+  }
+
   fn from-span(span: span[char]): string {
     { span }
   }

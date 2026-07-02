@@ -19,7 +19,7 @@ fn main(): i32 {
   &myvar <- 1000;
   let arena = arena/default();
   let input = arena.push(42);
-  let output = arena.push-uninit[*int]();
+  let output = arena.alloc[*int]();
 
   let thread = std/thread/start(&arena, run, input);
   std/thread/join(thread.*, output);

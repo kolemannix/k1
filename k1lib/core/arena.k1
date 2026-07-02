@@ -52,7 +52,7 @@ ns for arena {
     }
   }
 
-  fn pushLayout(self: *mut arena, size: size, align: size): ptr {
+  fn alloc-layout(self: *mut arena, size: size, align: size): ptr {
     let dataStart = self.cur-addr.aligned(align);
     let newEnd = dataStart.add-bytes(size);
     if newEnd.as[usize] > self.max-addr.as[usize] {
@@ -64,38 +64,38 @@ ns for arena {
     dataStart
   }
 
-  fn push-uninit[T](self: *mut arena): *mut T {
-    let dataStart = self.pushLayout(types/size[T], types/align[T]);
+  fn alloc[T](self: *mut arena): *mut T {
+    let dataStart = self.alloc-layout(types/size[T], types/align[T]);
     dataStart.as[*mut T]
   }
 
   fn push[T](self: *mut arena, t: T): *mut T {
-    let dataStart = self.pushLayout(types/size[T], types/align[T]);
+    let dataStart = self.alloc-layout(types/size[T], types/align[T]);
 
     let ref: *mut T = dataStart.rw();
     ref <- t;
     ref
   }
 
-  fn pushN[T](self: *mut arena, ts: span[T]): buffer[T] {
+  fn push-span[T](self: *mut arena, ts: span[T]): buffer[T] {
     let size = ts.buffer.sizeBytes();
     let align = types/align[T]();
-    let base = self.pushLayout(size, align);
+    let base = self.alloc-layout(size, align);
     let buffer: buffer[T] = buffer/fromPtrAndCount[T](base, ts.len());
     buffer/copy(src = ts.buffer, dst = buffer);
     buffer
   }
 
-  fn push-buffer[t](self: *mut arena, size): buffer[t] {
+  fn alloc-buffer[t](self: *mut arena, size): buffer[t] {
     buffer/allocateIn[t](context :custom-arena(self))(size)
   }
 
-  fn pushString(self: *mut arena, s: string): string {
-    let data: buffer[char] = self.pushN(s.span());
+  fn push-string(self: *mut arena, s: string): string {
+    let data: buffer[char] = self.push-span(s.span());
     string/wrapBuffer(data)
   }
 
-  fn pushList[T](self: *mut arena, cap: size): list[T] {
+  fn alloc-list[T](self: *mut arena, cap: size): list[T] {
     list/withCapacityIn(context :custom-arena(self))(cap)
   }
 

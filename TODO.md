@@ -3,6 +3,7 @@
 
 Minor and ideas
 - [x] allow opaques to be named / nominal; bindgen them that way. The name is really more useful than the size/align
+- [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
 - [ ] Better in-place construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
       way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
 
@@ -60,6 +61,10 @@ bindgen dogfood list
 - [x] dogfood(lsp): sum/enum ctors ls entities
 - [x] dogfood(lsp): failed match arm still check others
 - [x] dogfood(lsp): sum patterns ls entities
+
+http dogfood list
+- [ ] design module 'params' / 'args' so we can toggle things like tlog
+- [ ] solution for lazily evaluated log arguments
 
 # Bugs
 - [ ] [major] Support (co)recursive Generics
