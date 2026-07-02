@@ -100,10 +100,10 @@ ns mem {
           zalloc(size, align)
         },
         :custom-arena(bump) -> {
-          bump.pushLayout(size, align)
+          bump.alloc-layout(size, align)
         },
         :tmp -> {
-          mem/tmp().pushLayout(size, align)
+          mem/tmp().alloc-layout(size, align)
         },
         :gc -> {
           crash("gc is unimplemented; plan to support w/ bdwgc")
@@ -157,7 +157,8 @@ ns mem {
 
   fn new[T](t: T): *mut T { alloc-mode:current.new(t) }
 
-  fn allocate(context alloc-mode)(size: size, align: size): ptr { alloc-mode.alloc(size, align) }
+  fn alloc-layout(size: size, align: size): ptr { alloc-mode:current.alloc(size, align) }
+  fn alloc-t[t](): ptr { alloc-mode:current.allocT() }
 
   let mutable tls arena-tmp: arena = zeroed()
 

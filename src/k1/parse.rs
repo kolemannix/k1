@@ -10,7 +10,7 @@ use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
 use ecow::{EcoVec, eco_vec};
-pub use idents::{StringId, IdentPool, IdentSlice, IdentSpanned, QIdent};
+pub use idents::{IdentPool, IdentSlice, IdentSpanned, QIdent, StringId};
 use itertools::Itertools;
 use log::trace;
 use smallvec::{SmallVec, smallvec};
@@ -1007,6 +1007,7 @@ pub struct ParsedBlock {
 #[derive(Debug, Clone)]
 pub struct StructTypeField {
     pub name: StringId,
+    pub name_span: SpanId,
     pub type_expr: ParsedTypeExprId,
 }
 
@@ -2861,10 +2862,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_struct_type_field(&mut self) -> ParseResult<StructTypeField> {
-        let (_name_token, name) = self.expect_ident()?;
+        let (name_token, name) = self.expect_ident()?;
         self.expect_kind(K::Colon)?;
         let type_expr = self.expect_type_expression()?;
-        Ok(StructTypeField { name, type_expr })
+        Ok(StructTypeField { name, name_span: name_token.span, type_expr })
     }
 
     fn expect_type_expression(&mut self) -> ParseResult<ParsedTypeExprId> {
@@ -3183,9 +3184,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else {
             StructValueFieldKind::VarShorthand
         };
-        let span = self.extend_to_here(name.span);
 
-        Ok(StructValueField { name: self.make_ident(name), value, span })
+        Ok(StructValueField { name: self.make_ident(name), value, span: name.span })
     }
 
     fn parse_struct_value(&mut self) -> ParseResult<Option<ParsedStruct>> {
@@ -3510,11 +3510,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.advance();
                 let name = self.expect_namespaced_ident()?;
                 let var_expr = self.add_expression(ParsedExpr::Variable(ParsedVariable { name }));
-                let span = self.extend_span(first.span, self.get_expression_span(var_expr));
                 Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp {
                     expr: var_expr,
                     op_kind: ParsedUnaryOpKind::AddressOf,
-                    span,
+                    span: first.span,
                 }))))
             }
             K::KeywordNot => {
@@ -3523,8 +3522,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 };
                 self.advance();
                 let expr = self.expect_expression()?;
-                let span = self.extend_span(first.span, self.get_expression_span(expr));
-                Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp { expr, op_kind, span }))))
+                Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp {
+                    expr,
+                    op_kind,
+                    span: first.span,
+                }))))
             }
             K::Colon => {
                 self.advance();

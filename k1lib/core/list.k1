@@ -129,7 +129,7 @@ ns for list {
     { len: self.len, buffer: newBuffer }
   }
 
-  fn pushIn[T](context mode: alloc-mode)(self: *mut list[T], elem: T) {
+  fn push-in[T](context mode: alloc-mode)(self: *mut list[T], elem: T) {
     let startLength = self.len;
     if startLength == self.*.cap() {
       self._grow();
@@ -139,7 +139,7 @@ ns for list {
   }
 
   fn push[T](self: *mut list[T], elem: T) {
-    self.pushIn[T](context :current)(elem)
+    self.push-in[T](context :current)(elem)
   }
 
   fn slice[T](self: list[T], start: size, end: size): buffer[T] {

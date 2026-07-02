@@ -792,6 +792,14 @@ fn assertdbg(context locn: k1/source-location)(value: bool) {
   else         { locn; value; {} }
 }
 
+fn printBacktrace() {
+  #if k1/os-posix {
+    k1rt/_k1_print_backtrace(frame_count = 128);
+  } else {
+    println("non-posix backtrace TODO")
+  }
+}
+
 fn crash(context locn: k1/source-location)(msg: string): never {
   if k1/no-std {
     let s = "exiting (nostd)\n\0";
@@ -805,7 +813,7 @@ fn crash(context locn: k1/source-location)(msg: string): never {
     k1/emit-compiler-message(locn, :error, msg);
     sys/exit(111)
   } else {
-    sys/printBacktrace();
+    printBacktrace();
 
     // We print this way to avoid calling our format code
     eprint(msg);
