@@ -3636,18 +3636,12 @@ impl TypedProgram {
                 self.eval_type_expr(parsed_ty_app_id, scope_id)
             }
             ParsedTypeExpr::Reference(r) => {
-                let mutable = match r.kind {
-                    parse::ReferenceKind::Read => false,
-                    parse::ReferenceKind::Mut => true,
-                };
                 let inner_ty = self.eval_type_expr_ext(r.base, scope_id, context.descended())?;
                 if let Type::Function(_) = self.types.get(inner_ty) {
                     let function_pointer_type = self.types.add_function_pointer_type(inner_ty);
                     Ok(function_pointer_type)
                 } else {
-                    let reference_type =
-                        Type::Reference(ReferenceType { inner_type: inner_ty, mutable });
-                    let type_id = self.types.add_anon(reference_type);
+                    let type_id = self.types.add_reference_type(inner_ty);
                     Ok(type_id)
                 }
             }
@@ -4702,9 +4696,7 @@ impl TypedProgram {
                 let reference = *reference;
                 let new_inner = self.substitute_in_type(reference.inner_type, substitution_pairs);
                 if new_inner != reference.inner_type {
-                    let specialized_reference =
-                        ReferenceType { inner_type: new_inner, mutable: reference.mutable };
-                    self.types.add_anon(Type::Reference(specialized_reference))
+                    self.types.add_reference_type(new_inner)
                 } else {
                     type_id
                 }
@@ -5383,28 +5375,8 @@ impl TypedProgram {
             }
         }
 
-        if let Type::Reference(exp_ref) = self.types.get(expected) {
-            if let Type::Reference(actual_ref) = self.types.get(actual_type_id) {
-                // If we expect a readonly reference but have a mutable one
-                if !exp_ref.mutable && actual_ref.mutable {
-                    match self.check_types(exp_ref.inner_type, actual_ref.inner_type, scope_id) {
-                        Ok(_) => {
-                            let readonly_reference =
-                                self.types.add_reference_type(actual_ref.inner_type, false);
-                            let casted_reference = self.synth_cast(
-                                expr,
-                                readonly_reference,
-                                CastType::ReferenceToReference,
-                                None,
-                            );
-                            return CheckExprTypeResult::Coerce(
-                                casted_reference,
-                                "write->read".into(),
-                            );
-                        }
-                        Err(_) => {}
-                    }
-                }
+        if let Type::Reference(_exp_ref) = self.types.get(expected) {
+            if let Type::Reference(_actual_ref) = self.types.get(actual_type_id) {
             } else {
                 if allow_addr_of {
                     // A reference is expected, and a reference is not provided
@@ -5702,19 +5674,7 @@ impl TypedProgram {
                 Ok(())
             }
             (Type::Reference(exp_ref), Type::Reference(act_ref)) => {
-                match self.check_types(exp_ref.inner_type, act_ref.inner_type, scope_id) {
-                    e @ Err(_) => e,
-                    Ok(()) => {
-                        if exp_ref.mutable && !act_ref.mutable {
-                            Err(k1_format_user!(
-                                self,
-                                "Required a mutable reference; got an immutable one",
-                            ))
-                        } else {
-                            Ok(())
-                        }
-                    }
-                }
+                self.check_types(exp_ref.inner_type, act_ref.inner_type, scope_id)
             }
             (Type::Sum(_exp_sum), Type::Sum(_act_sum)) => {
                 // FIXME: We'll probably need a structural treatment for sums eventually
@@ -6718,7 +6678,7 @@ impl TypedProgram {
         }
 
         if allow_ref_self {
-            let ref_self = self.types.add_reference_type(self_type_id, true);
+            let ref_self = self.types.add_reference_type(self_type_id);
             if let Some(impl_handle) = self.find_unique_valid_ability_impl(
                 ref_self,
                 target_base_ability_id,
@@ -7596,57 +7556,6 @@ impl TypedProgram {
             return self.eval_try_operator(field_access.base, ctx, field_access.span);
         }
 
-        // Special case: .toMut / .unMut reference unwrap operations
-        if field_access.field_name == self.ast.idents.b.to_mut
-            || field_access.field_name == self.ast.idents.b.un_mut
-        {
-            let to_mut = field_access.field_name == self.ast.idents.b.to_mut;
-            let name = if to_mut { "to-mut" } else { "un-mut" };
-            let base_expr = self.eval_expr(field_access.base, ctx)?;
-            let reference_type = match self.get_expr_type(base_expr) {
-                Type::Reference(reference_type) => *reference_type,
-                _ => {
-                    return failf!(
-                        field_access.span,
-                        "{name} must be used on a reference; this is a {}",
-                        self.type_id_to_string(self.exprs.get_type(base_expr))
-                    );
-                }
-            };
-            if to_mut {
-                if reference_type.mutable {
-                    return failf!(
-                        field_access.span,
-                        "{name} must be used on a non-mutable reference"
-                    );
-                }
-                let mut_reference_type = self.types.add_anon(Type::Reference(ReferenceType {
-                    inner_type: reference_type.inner_type,
-                    mutable: true,
-                }));
-                return Ok(self.synth_cast(
-                    base_expr,
-                    mut_reference_type,
-                    CastType::ReferenceToMut,
-                    Some(field_access.span),
-                ));
-            } else {
-                if reference_type.is_read_only() {
-                    return failf!(field_access.span, "{name} must be used on a mutable reference");
-                }
-                let nonmut_reference_type = self.types.add_anon(Type::Reference(ReferenceType {
-                    inner_type: reference_type.inner_type,
-                    mutable: false,
-                }));
-                return Ok(self.synth_cast(
-                    base_expr,
-                    nonmut_reference_type,
-                    CastType::ReferenceUnMut,
-                    Some(field_access.span),
-                ));
-            }
-        }
-
         let base_expr = self.eval_expr(field_access.base, ctx.with_no_expected_type())?;
         let base_expr_type = self.exprs.get_type(base_expr);
 
@@ -7762,8 +7671,7 @@ impl TypedProgram {
                     },
                 );
                 let result_type = if field_access.is_referencing {
-                    let reference_type = base_reference_type.unwrap();
-                    self.types.add_reference_type(target_field.type_id, reference_type.mutable)
+                    self.types.add_reference_type(target_field.type_id)
                 } else {
                     target_field.type_id
                 };
@@ -7834,7 +7742,7 @@ impl TypedProgram {
             _ => return failf!(span, "This only works on local and global variables"),
         };
         let input_type = self.exprs.get_type(input);
-        let reference_type = self.types.add_reference_type(input_type, true);
+        let reference_type = self.types.add_reference_type(input_type);
         let addr_of_expr = self.exprs.add(
             TypedExpr::AddressOf(AddressOfExpr { target_variable: variable_id, kind }),
             reference_type,
@@ -7972,7 +7880,7 @@ impl TypedProgram {
         // The expected_type when we get `intptr.*` is int, so
         // the expected_type when we get `intptr` should be *int
         let inner_expected_type = match ctx.expected_type_id {
-            Some(expected) => Some(self.types.add_reference_type(expected, false)),
+            Some(expected) => Some(self.types.add_reference_type(expected)),
             None => None,
         };
         let base_expr = self.eval_expr(operand, ctx.with_expected_type(inner_expected_type))?;
@@ -8501,7 +8409,6 @@ impl TypedProgram {
             self.ast.idents.b.dest,
             make_dest_coll,
             false,
-            true, // is_mutable
             is_referencing_let,
             list_lit_scope,
             None,
@@ -9350,7 +9257,7 @@ impl TypedProgram {
         );
 
         let environment_struct_reference_type =
-            self.types.add_reference_type(environment_struct_type, false);
+            self.types.add_reference_type(environment_struct_type);
         // We decay down to POINTER so that the function calls typecheck
         let environment_param = FnParamType {
             name: self.ast.idents.b.lambda_env_var_name,
@@ -9390,7 +9297,6 @@ impl TypedProgram {
         let environment_casted_variable = self.synth_variable_defn(
             self.ast.idents.b.env,
             cast_env_param,
-            false,
             false,
             false,
             lambda_scope_id,
@@ -9484,7 +9390,7 @@ impl TypedProgram {
         ) -> (TypedExpr, TypeId, SpanId) {
             let v = k1.variables.get(captured_variable_id);
             let variable_type = v.type_id;
-            let env_struct_reference_type = k1.types.add_reference_type(env_struct_type, false);
+            let env_struct_reference_type = k1.types.add_reference_type(env_struct_type);
             // Note: Can't capture 2 variables of the same name in a lambda. Might not
             //       actually be a problem
             let (field_index, _env_struct_field) =
@@ -9917,16 +9823,8 @@ impl TypedProgram {
                 let struct_type = struct_pattern.struct_type_id;
                 let struct_pattern_span = struct_pattern.span;
                 for pattern_field in self.patterns.get_slice(struct_pattern.fields).iter() {
-                    let struct_reference_type = if is_referencing {
-                        Some(self.types.get(target_expr_type).expect_reference())
-                    } else {
-                        None
-                    };
                     let result_type = if is_referencing {
-                        self.types.add_reference_type(
-                            pattern_field.field_type_id,
-                            struct_reference_type.unwrap().mutable,
-                        )
+                        self.types.add_reference_type(pattern_field.field_type_id)
                     } else {
                         pattern_field.field_type_id
                     };
@@ -9992,9 +9890,7 @@ impl TypedProgram {
                         );
                     };
                     let result_type_id = if is_referencing {
-                        let mutable = self.types.get(target_expr_type).expect_reference().mutable;
-                        let r = self.types.add_reference_type(payload_type_id, mutable);
-                        r
+                        self.types.add_reference_type(payload_type_id)
                     } else {
                         payload_type_id
                     };
@@ -10490,7 +10386,6 @@ impl TypedProgram {
             self.ast.idents.b.itIndex,
             zero_expr,
             true,
-            true, // mutable = true
             false,
             outer_for_expr_scope,
             Some(iterable_span),
@@ -10515,7 +10410,6 @@ impl TypedProgram {
             self.ast.idents.b.iter,
             iterator_initializer,
             false,
-            true, //is_mutable
             true, //is_referencing
             outer_for_expr_scope,
             None,
@@ -11869,8 +11763,7 @@ impl TypedProgram {
                     FieldAccessKind::ValueToValue
                 };
                 let result_type = if is_referencing {
-                    let mutable = array_reference_type.unwrap().mutable;
-                    self.types.add_reference_type(array_type.element_type, mutable)
+                    self.types.add_reference_type(array_type.element_type)
                 } else {
                     array_type.element_type
                 };
@@ -12227,7 +12120,7 @@ impl TypedProgram {
         let return_type = function_type.return_type;
         let physical_params = function_type.physical_params;
         let empty_env_struct_type = EMPTY_TYPE_ID;
-        let empty_env_struct_ref = self.types.add_reference_type(empty_env_struct_type, false);
+        let empty_env_struct_ref = self.types.add_reference_type(empty_env_struct_type);
         let mut new_params = self.types.mem.new_list(physical_params.len() + 1);
 
         new_params.push(FnParamType {
@@ -12608,7 +12501,6 @@ impl TypedProgram {
             Type::Sum(e) => (e, false),
             _ => return Ok(None),
         };
-        let base_expr_type = self.exprs.get_type(base_expr);
         let span = fn_call.span;
         let variants = e.variants;
         let mut s = std::mem::take(&mut self.buffers.name_builder);
@@ -12635,8 +12527,7 @@ impl TypedProgram {
         };
         let variant_index = variant.index;
         let resulting_type_id = if is_reference {
-            let ref_type = self.types.get(base_expr_type).expect_reference();
-            self.types.add_reference_type(payload_type_id, ref_type.mutable)
+            self.types.add_reference_type(payload_type_id)
         } else {
             payload_type_id
         };
@@ -14085,7 +13976,7 @@ impl TypedProgram {
                 };
                 let provided_type = maybe_return_type_from_function.or(annotated_type);
 
-                let (expected_rhs_type, provided_reference_mutability) = match provided_type {
+                let expected_rhs_type = match provided_type {
                     Some(provided_type) => {
                         if parsed_let.is_referencing() {
                             let Type::Reference(expected_reference_type) =
@@ -14098,15 +13989,12 @@ impl TypedProgram {
                                     "Expected type must be a reference type when using let*"
                                 );
                             };
-                            (
-                                Some(expected_reference_type.inner_type),
-                                Some(expected_reference_type.mutable),
-                            )
+                            Some(expected_reference_type.inner_type)
                         } else {
-                            (Some(provided_type), None)
+                            Some(provided_type)
                         }
                     }
-                    None => (None, None),
+                    None => None,
                 };
 
                 let value_expr = match parsed_let.value {
@@ -14135,8 +14023,7 @@ impl TypedProgram {
                         },
                         Some(actual_type) => {
                             if parsed_let.is_referencing() {
-                                let mutable = provided_reference_mutability.unwrap_or(true);
-                                self.types.add_reference_type(actual_type, mutable)
+                                self.types.add_reference_type(actual_type)
                             } else {
                                 actual_type
                             }
@@ -14363,12 +14250,6 @@ impl TypedProgram {
                         self.type_id_to_string(lhs_type)
                     );
                 };
-                if lhs_type.is_read_only() {
-                    return failf!(
-                        self.ast.exprs.get_span(set_stmt.lhs),
-                        "Cannot write to a read-only reference"
-                    );
-                }
                 let expected_rhs = lhs_type.inner_type;
                 let rhs = self.eval_expr_with_coercion(
                     set_stmt.rhs,
@@ -18406,12 +18287,9 @@ impl TypedProgram {
                 // are available at runtime, by calling these functions at least once.
                 self.register_type_metainfo(reference_type.inner_type);
 
-                let mutable_value_id =
-                    self.static_values.add(StaticValue::Bool(reference_type.is_mutable()));
-
                 let payload_struct_id = self.static_values.add_struct_from_slice(
                     reference_schema_payload_type_id,
-                    &[inner_type_id_value_id, mutable_value_id],
+                    &[inner_type_id_value_id],
                 );
                 make_variant(self, get_ident!(self, "reference"), Some(payload_struct_id))
             }

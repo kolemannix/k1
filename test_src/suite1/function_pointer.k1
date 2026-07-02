@@ -20,7 +20,7 @@ fn test() {
   assert-equals(null-callback-ptr, ptr/null);
 
   let x = staticAddOne;
-  let has-fn: has-fn = { myfn: x };
+  let _has-fn: has-fn = { myfn: x };
   let has-fn: has-fn = { myfn: staticAddOne };
 
   assert-equals((has-fn.myfn)(4), 5);

@@ -215,16 +215,6 @@ pub struct InferenceHoleType {
 #[derive(Clone, Copy)]
 pub struct ReferenceType {
     pub inner_type: TypeId,
-    pub mutable: bool,
-}
-impl ReferenceType {
-    pub fn is_read_only(&self) -> bool {
-        !self.mutable
-    }
-
-    pub fn is_mutable(&self) -> bool {
-        self.mutable
-    }
 }
 
 #[derive(Clone)]
@@ -546,7 +536,7 @@ impl TypePool {
                 true
             }
             (Type::Reference(r1), Type::Reference(r2)) => {
-                r1.inner_type == r2.inner_type && r1.mutable == r2.mutable
+                r1.inner_type == r2.inner_type
             }
             (Type::Array(a1), Type::Array(a2)) => {
                 a1.element_type == a2.element_type && a1.size_type == a2.size_type
@@ -654,7 +644,6 @@ impl TypePool {
             }
             Type::Reference(r) => {
                 r.inner_type.hash(state);
-                r.mutable.hash(state);
             }
             Type::TypeParameter(t_param) => {
                 t_param.name.hash(state);
@@ -1473,8 +1462,8 @@ impl TypePool {
         id
     }
 
-    pub fn add_reference_type(&mut self, inner_type: TypeId, mutable: bool) -> TypeId {
-        self.add_anon(Type::Reference(ReferenceType { inner_type, mutable }))
+    pub fn add_reference_type(&mut self, inner_type: TypeId) -> TypeId {
+        self.add_anon(Type::Reference(ReferenceType { inner_type }))
     }
 
     pub fn add_function_pointer_type(&mut self, function_type_id: TypeId) -> TypeId {

@@ -234,7 +234,7 @@ impl TypedProgram {
         initializer: TypedExprId,
         owner_scope: ScopeId,
     ) -> SynthedVariable {
-        self.synth_variable_defn(name, initializer, false, false, false, owner_scope, None)
+        self.synth_variable_defn(name, initializer, false, false, owner_scope, None)
     }
 
     /// Creates a user-code-visible variable
@@ -245,7 +245,7 @@ impl TypedProgram {
         owner_scope: ScopeId,
         span: SpanId,
     ) -> SynthedVariable {
-        self.synth_variable_defn(name, initializer, true, false, false, owner_scope, Some(span))
+        self.synth_variable_defn(name, initializer, true, false, owner_scope, Some(span))
     }
 
     /// no_mangle: Skip mangling if we want the variable to be accessible from user code
@@ -254,7 +254,6 @@ impl TypedProgram {
         name: StringId,
         initializer_id: TypedExprId,
         no_mangle: bool,
-        is_mutable: bool,
         is_referencing: bool,
         owner_scope: ScopeId,
         span: Option<SpanId>,
@@ -265,7 +264,7 @@ impl TypedProgram {
             Some(span) => span,
         };
         let type_id = if is_referencing {
-            self.types.add_reference_type(initializer_type, is_mutable)
+            self.types.add_reference_type(initializer_type)
         } else {
             initializer_type
         };
@@ -279,7 +278,7 @@ impl TypedProgram {
         let mut flags = VariableFlags::empty();
         flags.set(VariableFlags::Referencing, is_referencing);
         flags.set(VariableFlags::UserHidden, !no_mangle);
-        let reassignable = !is_referencing && is_mutable;
+        let reassignable = !is_referencing;
         flags.set(VariableFlags::Reassigned, reassignable);
         let defn_stmt = self.stmts.next_id();
         let variable = Variable {
@@ -368,7 +367,11 @@ impl TypedProgram {
         self.eval_function_call(&call, None, ctx, None)
     }
 
-    pub(super) fn synth_parsed_bool_not(&mut self, base: ParsedExprId, span: SpanId) -> ParsedExprId {
+    pub(super) fn synth_parsed_bool_not(
+        &mut self,
+        base: ParsedExprId,
+        span: SpanId,
+    ) -> ParsedExprId {
         self.synth_parsed_function_call(
             self.ast.idents.f.bool__negated.with_span(span),
             &[],
@@ -521,7 +524,11 @@ impl TypedProgram {
         }
     }
 
-    pub(super) fn synth_parsed_variable_expr(&mut self, name: StringId, span: SpanId) -> ParsedExprId {
+    pub(super) fn synth_parsed_variable_expr(
+        &mut self,
+        name: StringId,
+        span: SpanId,
+    ) -> ParsedExprId {
         self.ast.exprs.add(
             ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span) }),
             false,
@@ -529,7 +536,11 @@ impl TypedProgram {
         )
     }
 
-    pub(super) fn synth_parsed_type_app(&mut self, name: StringId, span: SpanId) -> ParsedTypeExprId {
+    pub(super) fn synth_parsed_type_app(
+        &mut self,
+        name: StringId,
+        span: SpanId,
+    ) -> ParsedTypeExprId {
         self.ast.type_exprs.add(ParsedTypeExpr::TypeApplication(parse::TypeApplication {
             name: QIdent::naked(name, span),
             args: MSlice::empty(),
@@ -720,7 +731,9 @@ impl TypedProgram {
                                 get_named_arg(self, args_variable.variable_expr, name, expr_span);
                             match struct_arg {
                                 Some(field_expr) => field_expr,
-                                None => self.eval_expr(*expr_id, block_ctx.with_hidden_calls(false))?,
+                                None => {
+                                    self.eval_expr(*expr_id, block_ctx.with_hidden_calls(false))?
+                                }
                             }
                         }
                         None => {
@@ -797,7 +810,6 @@ impl TypedProgram {
             self.ast.idents.b.builder,
             new_string_builder,
             false,
-            true, // is_mutable
             true, // is_referencing
             block.scope_id,
             None,

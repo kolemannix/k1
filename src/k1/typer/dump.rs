@@ -276,9 +276,6 @@ impl TypedProgram {
             }
             Type::Reference(r) => {
                 w.write_char('*')?;
-                if r.mutable {
-                    w.write_str("mut ")?;
-                }
                 self.display_type_id_rec(w, r.inner_type, expand, visiting)?;
                 Ok(())
             }
