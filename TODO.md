@@ -22,12 +22,13 @@ Minor and ideas
 - [ ] New struct literal syntax : `{ x: 1, y: 2 }` -> `{ .x = 1, .y = 2 }`. Why? clarity of meaning of "=", consistent meaning of '.', and parsing ambiguity resolution
       We still allow `{ .x, .y }` to mean `{ .x = x, .y = y }`
 - [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
-- [ ] c"" string literals that are of type ptr (what about interpolation?)
+- [ ] c"" string literals that are of type ptr (no interpolation)
 - [ ] [design/flags_in_tags.k1]
 - [ ] Inspired by fast_float, char to digit lookup table
 Simple but missing
 - [x] auto-equals implementation on-demand for structs
 - [x] auto-print implementation on-demand for structs
+- [ ] atomics
 - [ ] auto-print implementation on-demand for sums
 - [ ] Exported functions
 - [ ] Tail calls

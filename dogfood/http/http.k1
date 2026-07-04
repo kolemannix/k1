@@ -134,7 +134,7 @@ fn on-header-value-complete(parser: *mut parser): i32 {
     field: field-string,
     value: value-string,
   };
-  state.headers*.pushIn(header);
+  state.headers*.push-in(header);
   state.current-header-field*.clear();
   state.current-header-value*.clear();
 
@@ -167,11 +167,11 @@ fn impl-on-body(parser: *mut parser, data: *mut u8, count: usize): i32 {
   switch state.body-mode {
     :strict -> {
       // println("on_body: appending chunk of {bytes.len()}...");
-      state.body-chunks*.pushIn(bytes)
+      state.body-chunks*.push-in(bytes)
     },
     :stream -> {
       // println("on_body streamed: TODO");
-      state.body-stream*.source*.pushIn(bytes)
+      state.body-stream*.source*.push-in(bytes)
     },
   };
   0

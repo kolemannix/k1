@@ -182,7 +182,7 @@ ns mem {
 
   fn init-tmp-arena() {
     if not arena-tmp.base-ptr.is-null() crash("arena-tmp already initialized");
-    &arena-tmp <- arena/default();
+    &arena-tmp <- arena/init-default();
   }
 
   fn tmp(): *mut arena {

@@ -1,3 +1,4 @@
+
 ability uv-request {
   fn as-request(self: *mut self): *mut uv/req
   fn set-data[t](self: *mut self, data: *mut t) { uv/req_set_data(self.as-request(), data.as[ptr]) }
@@ -58,6 +59,13 @@ ns uv {
 
     fn from-buffer(buffer: buffer[u8]): buf {
       uv/buf_init(buffer.data, buffer.len.as[u32])
+    }
+  }
+
+  ns for errno {
+    fn from-i32(i: i32): errno {
+      if i >= 0 crash("not an errno: {i}");
+      mem/bitcast[i32, uv/errno](i)
     }
   }
 }

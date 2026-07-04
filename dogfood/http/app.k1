@@ -1,0 +1,45 @@
+ns app;
+
+
+type deps = { config: { jwt-secret: string }, db-conn: db-conn }
+
+// TODO load header.html globally
+// Template together index.html
+
+// let template: string = core/files/read-to-string(context :tmp)("web/header.html")
+fn handle(req: http/request, deps: *mut deps): http-response {
+  // let query-result: task[result[int, string]] = db-conn.run-query("select count(*) from fake_users where active = true");
+  let context alloc = alloc-mode:current;
+
+
+  tprintln("user-code/handle: request {req.header.method.enum-name()} `{req.header.url}`");
+
+  let respond = fn text: string . {
+    // tprintln("responding with string {text}");
+    let response = StringBuilder/new();
+    writef(
+      response,
+      "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: "
+      "{text.len()}\r\n\r\n{text}"
+    );
+    response.build()
+  };
+
+  if req.header.url.starts-with("/app/endpoint") {
+    :complete(respond(`<div id="hal">I cannae doe it</div>`));
+  } else {
+    let template: string = core/files/read-to-string("web/header.html");
+    :complete(respond(template));
+  }
+  // :complete("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror")
+}
+// fn handle-sse(req: http/request, deps: *mut deps): http-response {
+//   // let query-result: task[result[int, string]] = db-conn.run-query("select count(*) from fake_users where active = true");
+//   let query-result: result[int, string] = deps.db-conn.run-query("select count(*) from fake_users where active = true");
+// 
+//   tprintln("handler: fake processing and serializing request {req.header.method.enum-name()} `{req.header.url}`");
+//   switch query-result {
+//     :ok(_count) -> :complete("HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello from k1"),
+//     :err(_msg) -> :complete("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror"),
+//   }
+// }
