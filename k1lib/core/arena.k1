@@ -4,7 +4,11 @@
 type arena = {
   base-ptr: ptr,
   cur-addr: ptr,
-  max-addr: ptr
+  max-addr: ptr,
+  mark: ptr,
+  alloc-kind: either(u64) { virtual, malloc },
+  name: string,
+  // eventually we'll support chaining here
 }
 ns for arena {
   let kb: size = 1024
@@ -19,35 +23,49 @@ ns for arena {
     self.cur-addr.diff(self.base-ptr)
   }
 
-  fn _virtual(usageHintMb: size): arena {
+  fn set-name(self: *arena, name: string) { self.name* <- name }
+
+  fn _make(base-ptr: ptr, size, alloc-kind: arena.alloc-kind): arena {
+    {
+      base-ptr: base-ptr,
+      cur-addr: base-ptr,
+      max-addr: base-ptr.add-bytes(size),
+      mark: ptr/null,
+      alloc-kind,
+      name: "",
+    }
+  }
+
+  fn init-virtual(usageHintMb: size): arena {
     let sizeBytes = 1 * gb;
     let base-ptr: ptr = mem/virtualAlloc(sizeBytes);
     #if k1/debug mem/set(dst = base-ptr, value = 0xCD, count = usageHintMb * mb);
     posix/madvise(base-ptr, (usageHintMb * mb).as[c-sizet], advice = posix/MADV_SEQUENTIAL);
-    {
-      base-ptr: base-ptr,
-      cur-addr: base-ptr,
-      max-addr: base-ptr.add-bytes(sizeBytes)
-    }
+    _make(base-ptr, sizeBytes, :virtual)
   }
 
-  fn default(): arena {
-    _virtual(usageHintMb = 1)
-    //let header: *mut arena = base-ptr.as[*mut arena];
-    //header.base-ptr* <- base-ptr.addBytes(types/size[arena]);
+  fn init-physical(self: *mut arena): arena {
+    let size-bytes = 8 * kb;
+    let base-ptr = mem/alloc(size = size-bytes, align = MIN_ALIGN);
+    _make(base-ptr, size-bytes, :malloc)
+  }
+
+  fn init-default(): arena {
+    init-virtual(usageHintMb = 1)
   }
 
   fn release(self: *mut arena) {
-    mem/virtualRelease(self.base-ptr, self.regionSizeBytes())
+    switch self.alloc-kind {
+      :virtual -> mem/virtualRelease(self.base-ptr, self.regionSizeBytes()),
+      :malloc -> mem/free(self.base-ptr, self.regionSizeBytes(), MIN_ALIGN)
+    };
   }
 
   fn reset(self: *mut arena, clear: bool) {
     let usedBytes = self.usedBytes();
-    // println("[arena] Resetting {usedBytes / kb}KiB");
     self.cur-addr* <- self.base-ptr;
 
     if clear {
-      println("mem/set clear {self.base-ptr} 0 {usedBytes}");
       mem/set(dst = self.base-ptr, value = 0, count = usedBytes);
     }
   }
@@ -72,7 +90,7 @@ ns for arena {
       alloc-ptr.as[ptr]
     } else {
        mem/pushMode(:system-heap);
-       crash("arena is out of space to allocate {size} bytes. available: {available}")
+       crash("arena {self.name} is out of space to allocate {size} bytes. available: {available}")
     }
   }
 
@@ -109,6 +127,16 @@ ns for arena {
 
   fn alloc-list[T](self: *mut arena, cap: size): list[T] {
     list/withCapacityIn(context :custom-arena(self))(cap)
+  }
+
+  fn mark(self: *mut arena) {
+    self.mark* <- self.cur-addr;
+  }
+
+  fn reset-to-mark(self: *mut arena) {
+    assert(self.mark != ptr/null);
+    self.cur-addr* <- self.mark;
+    self.mark* <- ptr/null;
   }
 
 }

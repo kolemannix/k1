@@ -4,6 +4,9 @@ build:
 run:
   k1 r .
 
+serve:
+  cd web && ./caddy run --config Caddyfile --watch
+
 bindgen: bindgen-llhttp bindgen-net bindgen-libuv
 
 bindgen-llhttp:

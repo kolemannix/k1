@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <script type="module" src="../datastar.js"></script>
+    <title>My First Webpage</title>
+</head>
+<body>
+    <h1>Hello, World!</h1>
+    <p>{{xxx}}</p>
+    <button data-on:click="@get('/app/endpoint')">
+        Open the pod bay doors, HAL.
+    </button>
+    <div id="hal"></div>
+
+    <input data-bind="foo" />
+    <div data-on-interval__duration.16.667ms="@get('/app/endpoint')"></div>
+
+</body>
+</html>

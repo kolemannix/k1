@@ -61,9 +61,21 @@ type http-request = {
   raw: string,
 }
 
-fn handle-request(req: *mut uv/work) {
+fn do-work(req: *mut uv/work) {
+  // this is a good time to clear our thread-local temporary allocator
+  mem/tmp().reset(clear = true);
+
   tprintln("handle-request");
   let work: *mut http-handler-work = req.get-data();
+  if work.connection.is-closing {
+    tprintln("detected closed connection in do-work; skipping");
+    return();
+  };
+
+  if work.connection.should-close {
+    tprintln("detected should-close connection in do-work; skipping");
+    return();
+  };
 
   // We're now on the uv worker thread. We need to get our thread-local deps, or initialize them
   if worker-user-data.is-null() {
@@ -79,85 +91,70 @@ fn handle-request(req: *mut uv/work) {
   };
   let user-deps-baton: ptr = worker-user-data;
 
-  // get-or-create-threadlocal-deps(work-make-user-deps);
-
   mem/pushMode(:custom-arena(work.connection.request-arena*));
   let response = (work.handler.logic-fn)(work.request, user-deps-baton);
   work.http-response* <- :some(response);
   mem/popMode();
 
-  mem/tmp().reset(clear = false);
-
   {}
-}
-
-let tlog: bool = true
-fn mprintln(code: string): string {
-  #if tlog "tprintln({code})"
-  else ""
-}
-fn tprintln[t: print](t) {
-  if not tlog return();
-
-  // get thread name
-  let thread-self = uv/thread_self();
-  let thread-name-buf = array/zeroed[u8, 256]();
-  let _rc = uv/thread_getname(&thread-self, &thread-name-buf.get-base(), thread-name-buf.len().as());
-  let thread-name = string/wrap-c(thread-name-buf.base-ptr());
-
-  println("[{thread-name}] {t}")
-}
-
-fn close-connection(conn: *mut connection) {
-  uv/close(conn.client.as-handle(), fn h. {
-    let connection = h.get-data[connection]();
-    tprintln("closing connection{connection.serial-no}");
-    &conn-count <- conn-count - 1;
-    tprintln("active connections: {conn-count}");
-    connection.release();
-  })
 }
 
 // Called on the main event loop after the http handler is done
 // Because he's on the main thread, the after handler is the only one who is allowed to write to the stream
 // So he should expect to find 'marching orders' from the logic worker handler in the work's data
 // Usually, write a response to the tcp stream. But maybe something else, like keep streaming the response or something, idk
-fn after-handle-request(req: *mut uv/work, status: i32) {
+fn after-do-work(req: *mut uv/work, status: i32) {
   let work: *mut http-handler-work = req.get-data();
-  tprintln("after-handle-request");
+  tprintln("after-do-work");
+  defer {
+    tprintln("freeing work");
+    alloc-mode:system-heap.freeT(req)
+  };
 
   // If the work was cancelled using uv_cancel() status will be UV_ECANCELED.
   if status != 0 {
+    // If the work was cancelled, the connection not safe for us to use
+    // and we're not in charge of cleaning it up; just the work handle
     tprintln("handler was cancelled");
-    close-connection(work.connection);
     return();
   };
 
+  // Now we can safely access connection
   let connection = work.connection;
-
-// [x] dogfood bindgen strip prefix
-// [x] dogfood bindgen strip suffix
-// [ ] enum from int (using bitcast currently)
-// [x] dogfood language struct access lsp entity
-// [ ] dogfood language match fallback arm hidden
-// [ ] dogfood language remove *mut distinction
-// [x] dogfood language swap data and len in k1 buffer struct
-// [ ] take specialized generic function pointers
-  require work.http-response is :some(response) else {
-    // This is a bug; it shouldn't be possible to have not set this to some
-    // since the harness is in control of this opt, so we close
+  if connection.is-closing {
+    return()
+  };
+  if connection.should-close {
     close-connection(connection);
     return();
   };
+
+// [ ] enum from int (using bitcast currently)
+// [ ] dogfood language match fallback arm hidden
+// [ ] atomics
+// [ ] take specialized generic function pointers
+// [x] dogfood bindgen strip prefix
+// [x] dogfood bindgen strip suffix
+// [x] dogfood language struct access lsp entity
+// [x] dogfood language remove *mut distinction
+// [x] dogfood language swap data and len in k1 buffer struct
+  require work.http-response is :some(response) else {
+    // This is a bug; it shouldn't be possible to have not set this to some
+    // since the harness is in control of this opt, so we close
+    crash("[bug] handler did not set work.http-response");
+  };
   switch response {
     :complete(body) -> {
-      let write-req = connection.request-arena*.push-uninit[uv/write]();
+      let write-req = connection.request-arena*.alloc[uv/write]();
       write-req.set-data(connection);
 
       let buf: uv/buf = uv/buf_init(body.data-ptr().as[*mut u8], body.len().as[u32]);
       // the uv_buf array itself only needs to outlive the call, so the stack pointer is fine
       let write-rc = uv/write(write-req, connection.client.as-stream(), &buf, 1, fn (req, status) {
         let connection: *mut connection = req.get-data();
+        if connection.should-close {
+          close-connection(connection);
+        };
         if status != 0 {
           tprintln("write failed: {status}");
           close-connection(connection);
@@ -181,10 +178,52 @@ fn after-handle-request(req: *mut uv/work, status: i32) {
   {}
 }
 
+let tlog: bool = true
+fn mprintln(code: string): string {
+  #if tlog "tprintln({code})"
+  else ""
+}
+fn tprintln[t: print](t) {
+  if not tlog return();
+
+  // get thread name
+  let thread-self = uv/thread_self();
+  let thread-name-buf = array/zeroed[u8, 256]();
+  let _rc = uv/thread_getname(&thread-self, &thread-name-buf.get-base(), thread-name-buf.len().as());
+  let thread-name = string/wrap-c(thread-name-buf.base-ptr());
+
+  println("[{thread-name}] {t}")
+}
+
+fn close-connection(conn: *mut connection) {
+  conn.is-closing* <- true;
+  if uv/is_closing(conn.client.as-handle()).as-bool() {
+    tprintln("not closing connection{conn.serial-no}");
+    return();
+  } else {
+    tprintln("close-connection {conn.serial-no}");
+  };
+  if conn.current-work is :some(work) {
+    tprintln("cancelling work");
+    let cancel-rc = uv/cancel(work.as-request());
+    if cancel-rc != 0 {
+      let errno = uv/errno/from-i32(cancel-rc);
+      tprintln("failed cancel work {errno.enum-name()}");
+    }
+  };
+  uv/close(conn.client.as-handle(), fn h. {
+    let connection = h.get-data[connection]();
+    tprintln("closed connection{connection.serial-no}; releasing");
+    connection.release();
+    &conn-count <- conn-count - 1;
+    tprintln("active connections: {conn-count}");
+  })
+}
+
 fn alloc-read-buffer(handle: *mut uv/handle, suggested-size: usize, buf: *mut uv/buf) {
   let connection = handle.get-data[connection]();
   tprintln("[c{connection.serial-no}] alloc-read-buffer, size {suggested-size}");
-  let byte-buffer = connection.request-arena*.push-buffer[u8](suggested-size.as[size]);
+  let byte-buffer = connection.request-arena*.alloc-buffer[u8](suggested-size.as[size]);
   buf <- uv/buf/from-buffer(byte-buffer);
 }
 
@@ -202,32 +241,46 @@ fn queue-http-handler(connection: *mut connection, request: http/request, handle
 
     http-response: :none,
   });
-  let work-req = connection.request-arena*.push-uninit[uv/work]();
+  // let work-req = connection.request-arena*.alloc[uv/work];
+  let work-req = alloc-mode:system-heap.allocT[uv/work];
   work-req.set-data(work);
-  let queue-rc = uv/queue_work(uv-loop, work-req, handle-request, after-handle-request);
+  // nocommit: ls-entity do-work here should register as a usage of the function
+  let queue-rc = uv/queue_work(uv-loop, work-req, do-work, after-do-work);
   if queue-rc != 0 {
     tprintln("uv_queue_work for request handler failed: {queue-rc}");
     close-connection(connection);
-  };
+  } else {
+    core/assert(connection.current-work is :none);
+    connection.current-work* <- :some(work-req);
+  }
 }
 
 fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
   let connection = client.get-data[connection]();
   tprintln("on_client_read {nread} conn {connection.serial-no}");
   if nread < 0 {
-    let uv-errno = mem/bitcast[i32, uv/errno](nread.as[i32]);
-    if uv-errno is :UV_EOF {
-      tprintln("client reached EOF");
-      close-connection(connection);
-      return();
-    } else {
-      tprintln("read error: {nread}");
-      // FIXME: Are we sure we can do this, in the streaming case the worker could be on the other side and will try
-      //        to access the 'connection', for example to use the request arena
-      //        can we call uv_work cancel maybe? That won't do anything about that os thread though once its 'live'
-      close-connection(connection);
-      return();
-    };
+    let raw-errno = nread.as[i32];
+    let uv-errno = uv/errno/from-i32(raw-errno);
+    switch uv-errno {
+      :UV_EOF or :UV_ECONNRESET -> {
+        tprintln("client reached EOF");
+        if connection.current-work is :none {
+          close-connection(connection);
+        } else {
+           // nocommit: synchronize access to should-close and is-closing
+           connection.should-close* <- true;
+        };
+        return();
+      },
+      _ -> {
+        tprintln("uncategorized read error: {uv-errno.enum-name()}");
+        // FIXME: Are we sure we can do this, in the streaming case the worker could be on the other side and will try
+        //        to access the 'connection', for example to use the request arena
+        //        can we call uv_work cancel maybe? That won't do anything about that os thread though once its 'live'
+        close-connection(connection);
+        return();
+      }
+    }
   };
 
   if nread > 0 {
@@ -248,6 +301,15 @@ type connection = {
   connection-arena: arena,
   client: *mut uv/tcp,
   serial-no: u64,
+  close-state: {
+    lock: uv/mutex,
+    // Someone has called close-connection() and uv/close()
+    is-closing: bool,
+    // The worker thread should do no work
+    // And call close-connection in the after work cb
+    should-close: bool,
+  },
+  current-work: ?*uv/work,
 
   route-handlers: span[route-handler],
 
@@ -316,12 +378,18 @@ ns for connection {
       let request-arena: *mut arena = addr.request-arena*;
 
       addr.connection-arena* <- core/arena/_virtual(usageHintMb = 1);
+      connection-arena.set-name("connection");
       addr.request-arena* <- core/arena/_virtual(usageHintMb = 1);
-      let client = connection-arena.push-uninit[uv/tcp]();
+      request-arena.set-name("request");
+      let client = connection-arena.alloc[uv/tcp];
       addr <- {
         connection-arena: uninit, // already stored
         client,
         serial-no: { &conn-serial <- conn-serial + 1; conn-serial },
+        is-closing: false,
+        should-close: false,
+        // for calling cancel
+        current-work: :none,
 
         route-handlers,
 
@@ -355,15 +423,16 @@ ns for connection {
     if not self.parsed-header.!.keep-alive {
       close-connection(self);
     } else {
-      tprintln("conn{self.serial-no} request arena reset usedBytes: {self.request-arena.usedBytes()}");
-      self.request-arena*.reset(false);
+      tprintln("keepalive! conn{self.serial-no} request arena reset usedBytes: {self.request-arena.usedBytes()}");
+      self.current-work* <- :none;
+      self.request-arena*.reset(true);
       self.request-parser*.reset();
     }
   }
 }
 
 fn on-new-connection(server: *mut uv/stream, status: i32) {
-  mem/tmp().reset(false);
+  mem/tmp().reset(true);
   tprintln("------------ on_new_connection -------------");
   if status < 0 {
     println("new connection error: {status}");
@@ -430,7 +499,7 @@ fn start-app[deps](context arena: *mut arena)(make-deps: *fn() -> *mut deps, rou
   let l = uv/default_loop();
   work/init-work-queue(l);
 
-  let server: *mut uv/tcp = arena.push-uninit[uv/tcp];
+  let server: *mut uv/tcp = arena.alloc[uv/tcp];
   let tcp-init-rc = uv/tcp_init(l, server);
 
   let erased-handlers = mem/bitcast[span[user-route-handler[deps]], span[route-handler]](route-handlers);
@@ -467,30 +536,6 @@ fn start-app[deps](context arena: *mut arena)(make-deps: *fn() -> *mut deps, rou
   :ok({})
 }
 
-ns user-code {
-  type deps = { config: { jwt-secret: string }, db-conn: db-conn }
-  fn handle(req: http/request, deps: *mut deps): http-response {
-    // let query-result: task[result[int, string]] = db-conn.run-query("select count(*) from fake_users where active = true");
-    let query-result: result[int, string] = deps.db-conn.run-query("select count(*) from fake_users where active = true");
-
-    tprintln("user-code/handle: request {req.header.method.enum-name()} `{req.header.url}`");
-    switch query-result {
-      :ok(_count) -> :complete("HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello from k1"),
-      :err(_msg) -> :complete("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror"),
-    }
-  }
-  fn handle-sse(req: http/request, deps: *mut deps): http-response {
-    // let query-result: task[result[int, string]] = db-conn.run-query("select count(*) from fake_users where active = true");
-    let query-result: result[int, string] = deps.db-conn.run-query("select count(*) from fake_users where active = true");
-
-    tprintln("handler: fake processing and serializing request {req.header.method.enum-name()} `{req.header.url}`");
-    switch query-result {
-      :ok(_count) -> :complete("HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello from k1"),
-      :err(_msg) -> :complete("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror"),
-    }
-  }
-}
-
 let mutable tls worker-user-data: ptr = ptr/null
 
 
@@ -498,6 +543,7 @@ fn main(): i32 {
 
   let arena: arena = arena/default();
   let context arena: *mut arena = &arena;
+  arena.set-name("mainthread");
 
   // only once per thread
   let make-deps = fn. {
@@ -505,22 +551,21 @@ fn main(): i32 {
       { 
         config: { jwt-secret: "asdf" },
         db-conn: {}
-      }: user-code/deps
+      }: app/deps
     )
   };
 
   mem/pushMode(:custom-arena(arena));
-  let route-handlers: span[user-route-handler[user-code/deps]] = [
+  let route-handlers: span[user-route-handler[app/deps]] = [
     { 
       body-mode: :strict,
       path-pattern: "*",
-      logic-fn: user-code/handle
+      logic-fn: app/handle
     }
   ];
   mem/popMode();
 
-  println("make deps addr: {make-deps.as[ptr]}");
-  start-app[user-code/deps](make-deps, route-handlers);
+  start-app[app/deps](make-deps, route-handlers);
 
   // http/example-http();
 

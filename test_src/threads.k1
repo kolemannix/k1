@@ -17,7 +17,7 @@ fn run(input: *mut int): ptr {
 
 fn main(): i32 {
   &myvar <- 1000;
-  let arena = arena/default();
+  let arena = arena/init-default();
   let input = arena.push(42);
   let output = arena.alloc[*int]();
 

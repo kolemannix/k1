@@ -117,6 +117,9 @@ pub mod k1_types {
         pub basePtr: *const u8,
         pub curAddr: u64,
         pub maxAddr: u64,
+        pub mark: usize,
+        pub allocKind: u64,
+        pub name: K1BufferLike,
     }
 
     #[repr(C)]
