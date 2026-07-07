@@ -3,7 +3,7 @@
 
 use crate::typer::*;
 
-const BUILTIN_VALUE_COUNT: usize = 3;
+const BUILTIN_VALUE_COUNT: usize = 4;
 
 #[test]
 fn test_basic() {
