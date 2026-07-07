@@ -138,24 +138,15 @@ ns for arena {
     list/withCapacityIn(context :custom-arena(self))(cap)
   }
 
-
-  // if self.end_ptr() == mem.cursor() {
-  //     // Fast path for growth when this list is the last thing in the arena; just move the cursor forward
-  //     let additional_ts = new_cap as usize - self.cap();
-  //     mem.push_slice_uninit_prealigned::<T>(additional_ts);
-  //     let new_buf = core::ptr::slice_from_raw_parts_mut(self.buf as *mut T, new_cap as usize);
-  //     let new_me = List { buf: new_buf, len: self.len, _tag: PhantomData };
-  //     debug_assert_eq!(new_me.end_ptr().addr(), mem.cursor().addr());
-  //     new_me
   fn try-realloc(self: *arena, old-ptr: ptr, old-size: size, new-size: size, align: size): ptr {
-    let old-end = old-ptr.add-bytes(old-size);
-    if old-end == self.cur-addr {
-      println("yes");
-      let bump-amount = new-size - old-size;
-      self.cur-addr* <- self.cur-addr.add-bytes(bump-amount);
+    assert(new-size >= old-size);
+    let old-end-aligned = old-ptr.add-bytes(old-size).aligned(MIN_ALIGN);
+    let new-end-aligned = old-ptr.add-bytes(new-size).aligned(MIN_ALIGN);
+    if old-end-aligned == self.cur-addr and new-end-aligned <= self.end-addr {
+      // Grow in place
+      self.cur-addr* <- new-end-aligned;
       old-ptr
     } else {
-      println("no");
       let new-allocation = self.alloc-layout(new-size, align);
       mem/copy(dst = new-allocation, src = old-ptr, count = old-size);
       new-allocation
