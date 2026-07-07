@@ -2757,6 +2757,19 @@ pub struct Timing {
     pub total_ir_nanos: i64,
     pub total_iropt_nanos: i64,
     pub total_bcgen_nanos: i64,
+
+    // iropt phase breakdown. inline/simplify bracket their phases in
+    // optimize_unit; cfg is self-timed inside cfg_compute, so it is *nested
+    // within* (not additional to) the other two.
+    pub iropt_inline_nanos: i64,
+    pub iropt_simplify_nanos: i64,
+    pub iropt_cfg_nanos: i64,
+    pub iropt_inline_count: i64,
+    pub iropt_simplify_passes: i64,
+    pub iropt_cfg_computes: i64,
+    /// Instructions added to the instrs pool during optimize_unit (inlining
+    /// copies + the phis/stores/allocas it synthesizes)
+    pub iropt_insts_created: i64,
 }
 
 impl Timing {
@@ -2920,6 +2933,13 @@ impl TypedProgram {
                 total_ir_nanos: 0,
                 total_iropt_nanos: 0,
                 total_bcgen_nanos: 0,
+                iropt_inline_nanos: 0,
+                iropt_simplify_nanos: 0,
+                iropt_cfg_nanos: 0,
+                iropt_inline_count: 0,
+                iropt_simplify_passes: 0,
+                iropt_cfg_computes: 0,
+                iropt_insts_created: 0,
             },
             global_id_k1_arena: None,
         }
@@ -18985,13 +19005,27 @@ impl TypedProgram {
         eprintln!("\t{} functions", self.functions.len());
         eprintln!("\t{} types", self.types.type_count());
         eprintln!("\t{} idents", self.ast.idents.len());
+        let iropt_created = self.timing.iropt_insts_created;
+        let irgen_created = self.ir.instrs.len() as i64 - iropt_created;
         eprintln!(
-            "\t{} instructions, {}ms ir, {}ms iropt, {:.2}ms bcgen ({} code words)",
+            "\t{} instructions ({} irgen + {} iropt, {:.2}x), {}ms ir, {}ms iropt, {:.2}ms bcgen ({} code words)",
             self.ir.instrs.len(),
+            irgen_created,
+            iropt_created,
+            self.ir.instrs.len() as f64 / irgen_created.max(1) as f64,
             self.timing.total_ir_nanos / 1_000_000,
             self.timing.total_iropt_nanos / 1_000_000,
             self.timing.total_bcgen_nanos as f64 / 1_000_000.0,
             self.bc.code.len(),
+        );
+        eprintln!(
+            "\t  iropt: {:.2}ms inline ({} inlines), {:.2}ms simplify ({} passes), {:.2}ms cfg ({} computes; nested in the others)",
+            self.timing.iropt_inline_nanos as f64 / 1_000_000.0,
+            self.timing.iropt_inline_count,
+            self.timing.iropt_simplify_nanos as f64 / 1_000_000.0,
+            self.timing.iropt_simplify_passes,
+            self.timing.iropt_cfg_nanos as f64 / 1_000_000.0,
+            self.timing.iropt_cfg_computes,
         );
         self.tmp.print_usage("\ttmp");
         self.mem.print_usage("\tperm");

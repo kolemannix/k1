@@ -7,6 +7,7 @@ pub enum OptVisit {
 
 pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     let start = k1.timing.raw();
+    let insts_before = k1.ir.instrs.len();
     let Some(_unit) = get_compiled_unit(&k1.ir, unit_id) else {
         return;
     };
@@ -40,9 +41,20 @@ pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         }
     }
 
+    // Analysis escape hatch: measure what inlining actually buys the VM
+    // (with the bc engine, calls are cheap; the answer may have changed)
+    let skip_inline = std::env::var("K1_IROPT_NO_INLINE").is_ok();
+
+    let inline_start = k1.timing.raw();
     for unit_id in order.iter() {
-        inline_calls_in_unit(k1, *unit_id)
+        if skip_inline {
+            // Still mark done + fix counts/cfg so downstream invariants hold
+            finish_unit_no_inline(k1, *unit_id);
+        } else {
+            inline_calls_in_unit(k1, *unit_id)
+        }
     }
+    k1.timing.iropt_inline_nanos += k1.timing.elapsed_nanos(inline_start) as i64;
 
     {
         visit_stack.clear();
@@ -55,9 +67,15 @@ pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         k1.ir.opt_buf_callees = callees;
     }
 
+    let cfg_start = k1.timing.raw();
     cfg_compute_unit(&mut k1.ir, unit_id);
+    k1.timing.iropt_cfg_nanos += k1.timing.elapsed_nanos(cfg_start) as i64;
+    k1.timing.iropt_cfg_computes += 1;
+    let simplify_start = k1.timing.raw();
     cfg_simplify(k1, unit_id);
+    k1.timing.iropt_simplify_nanos += k1.timing.elapsed_nanos(simplify_start) as i64;
 
+    k1.timing.iropt_insts_created += (k1.ir.instrs.len() - insts_before) as i64;
     let elapsed = k1.timing.elapsed_nanos(start);
     k1.timing.total_iropt_nanos += elapsed as i64;
 }
@@ -90,6 +108,22 @@ fn collect_direct_unoptimized_callees(
     }
 }
 
+/// K1_IROPT_NO_INLINE: the bookkeeping of `inline_calls_in_unit` without any
+/// inlining, so units are still marked done with valid counts and cfg.
+fn finish_unit_no_inline(k1: &mut TypedProgram, unit_id: IrUnitId) {
+    let blocks = get_compiled_unit(&k1.ir, unit_id).unwrap().blocks;
+    let inst_count = k1
+        .ir
+        .mem
+        .dlist_iter(blocks)
+        .map(|block| k1.ir.mem.dlist_compute_len(block.instrs) as u32)
+        .sum();
+    cfg_compute_unit(&mut k1.ir, unit_id);
+    let unit = get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap();
+    unit.inline_done = true;
+    unit.inst_count = inst_count;
+}
+
 fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     debug!("Inlining calls in {}", unit_name_to_string(k1, unit_id));
     while do_pass(k1, unit_id) {}
@@ -100,7 +134,10 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         .dlist_iter(blocks)
         .map(|block| k1.ir.mem.dlist_compute_len(block.instrs) as u32)
         .sum();
+    let cfg_start = k1.timing.raw();
     cfg_compute_unit(&mut k1.ir, unit_id);
+    k1.timing.iropt_cfg_nanos += k1.timing.elapsed_nanos(cfg_start) as i64;
+    k1.timing.iropt_cfg_computes += 1;
     let unit = get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap();
     unit.inline_done = true;
     unit.inst_count = inst_count;
@@ -147,6 +184,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         call_inst_node: IrHandle<InstNode>,
         call: IrCall,
     ) {
+        k1.timing.iropt_inline_count += 1;
         let call_inst = *k1.ir.mem.get(call_inst_node);
         let call_inst_id = call_inst.data;
         debug!("Inlining call i{} {}", call_inst_id, inst_to_string(k1, call_inst_id));
@@ -773,7 +811,10 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
     // - Merge successor into self
     // - Trampoline removal
 
-    while do_pass(k1, blocks) {}
+    while do_pass(k1, blocks) {
+        k1.timing.iropt_simplify_passes += 1;
+    }
+    k1.timing.iropt_simplify_passes += 1; // the final no-op pass
 
     fn do_pass(k1: &mut TypedProgram, blocks: &mut IrList<Block>) -> bool {
         let ir = &mut k1.ir;
@@ -886,7 +927,10 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
         }
 
         if !noop {
-            cfg_compute(ir, *blocks);
+            let cfg_start = k1.timing.raw();
+            cfg_compute(&mut k1.ir, *blocks);
+            k1.timing.iropt_cfg_nanos += k1.timing.elapsed_nanos(cfg_start) as i64;
+            k1.timing.iropt_cfg_computes += 1;
         }
         rewrites.clear();
         k1.ir.opt_buf_cfg_simpl_rewrites = rewrites;
