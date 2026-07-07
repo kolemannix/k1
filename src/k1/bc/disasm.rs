@@ -57,7 +57,7 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
 
     write!(w, "{:6} ", pc).unwrap();
     match op {
-        Opcode::Halt | Opcode::Unreachable | Opcode::RetVoid => {
+        Opcode::Halt | Opcode::Unreachable => {
             write!(w, "{}", op.name()).unwrap();
         }
         Opcode::Enter => {

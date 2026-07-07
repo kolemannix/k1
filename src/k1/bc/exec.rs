@@ -21,18 +21,16 @@ use crate::failf;
 use crate::ir::{self, BackendBuiltin, IrUnitId};
 use crate::lex::SpanId;
 use crate::typer::types::{PhysicalType, ScalarType, TypeId};
-use crate::typer::{
-    FunctionId, K1Result, StaticValueId, TypedExprId, TypedGlobalId, TypedProgram,
-};
+use crate::typer::{FunctionId, K1Result, StaticValueId, TypedExprId, TypedGlobalId, TypedProgram};
 use crate::vm::{
-    self, casted_float_op, casted_iop, casted_uop, load_scalar, load_value, store_scalar,
-    store_value, Value, Vm,
+    self, Value, Vm, casted_float_op, casted_iop, casted_uop, load_scalar, load_value,
+    store_scalar, store_value,
 };
 
 use super::lower;
 use super::{
-    builtin_from_tag, float_pred_from_tag, header_a, header_b, header_op, int_pred_from_tag,
-    CastKind, Opcode, UnitKind, SRC_CONST_BIT,
+    CastKind, Opcode, SRC_CONST_BIT, UnitKind, builtin_from_tag, float_pred_from_tag, header_a,
+    header_b, header_op, int_pred_from_tag,
 };
 
 pub fn execute_compiled_expr(
@@ -153,9 +151,8 @@ pub fn make_stack_trace(k1: &TypedProgram, fault_fp: *const u8, fault_pc: u32) -
             write!(&mut s, " {}:{}", source.filename, line.line_number()).unwrap();
         }
         writeln!(&mut s).unwrap();
-        let (caller_fp, ret_pc) = unsafe {
-            ((*(fp as *const u64)) as *const u8, (*(fp as *const u64).add(1)) as u32)
-        };
+        let (caller_fp, ret_pc) =
+            unsafe { ((*(fp as *const u64)) as *const u8, (*(fp as *const u64).add(1)) as u32) };
         if ret_pc == 0 {
             break;
         }
@@ -231,6 +228,11 @@ fn exec_loop(
             code_at!(pc + 1 + $i)
         };
     }
+    macro_rules! advance {
+        ($op:path) => {
+            pc += const { 1 + $op.operand_count() }
+        };
+    }
     // Error return, recording the fault location for stack traces
     macro_rules! vmerr {
         ($($args:expr),*) => {{
@@ -280,7 +282,7 @@ fn exec_loop(
                 if fp.addr() + frame_bytes + 4096 > end {
                     vmerr!("Comptime stack overflow (frame of {} bytes)", frame_bytes);
                 }
-                pc += 2;
+                advance!(Opcode::Enter);
             }
             Opcode::Jump => {
                 pc = operand!(0) as usize;
@@ -294,10 +296,9 @@ fn exec_loop(
                 vmerr!("Reached unreachable instruction");
             }
             Opcode::Ret => {
+                // Covers void returns too: their src is const 0 and no one
+                // reads ret_reg for them.
                 ret_reg = read_src!(operand!(0));
-                pop_frame!();
-            }
-            Opcode::RetVoid => {
                 pop_frame!();
             }
             Opcode::RetAgg => {
@@ -330,10 +331,10 @@ fn exec_loop(
                 let info = match k1.bc.functions.get(&function_id) {
                     Some(info) => *info,
                     None => {
-                        // Cold path: lower on demand; may grow code/consts.
-                        // Attribute the time to bcgen, not vm execution.
-                        // TODO: Panic on this or log it; determine if we ever encounter
-                        // Shouldn't be possible with how we lower now; goal is to remove it.
+                        eprintln!(
+                            "[bc] UNEXPECTED: lazily lowering indirect-call target at runtime: {}",
+                            k1.function_id_to_string(function_id, false)
+                        );
                         vm.eval_span = k1.bc.span_for_pc(pc as u32);
                         let bcgen_start = k1.timing.clock.raw();
                         let info =
@@ -386,7 +387,7 @@ fn exec_loop(
                         new_fp.add(super::FRAME_HEADER_WORDS as usize * 8 + nargs * 8);
                     vm.stack.mem.set_cursor(scratch_start);
                 }
-                // Aggregate returns: libffi writes straight into our sret 
+                // Aggregate returns: libffi writes straight into our sret
                 // Scalars come back in the value.
                 let ret_dst: Option<*mut u8> = if ret_pt.is_agg() {
                     Some(unsafe { *(new_fp as *const u64).add(2) } as *mut u8)
@@ -394,13 +395,19 @@ fn exec_loop(
                     None
                 };
                 let result = vmtry!(vm::vm_ffi::handle_ffi_call_resolved(
-                    k1, vm, ret_pt, args, lib_name, fn_name, function_id, ret_dst
+                    k1,
+                    vm,
+                    ret_pt,
+                    args,
+                    lib_name,
+                    fn_name,
+                    function_id,
+                    ret_dst
                 ));
                 if !ret_pt.is_agg() {
                     ret_reg = result;
                 }
-                // TODO: Document why this is 7
-                pc += 7;
+                advance!(Opcode::CallExtern);
             }
             Opcode::CallBuiltin => {
                 let builtin = builtin_from_tag(header_a(h));
@@ -429,28 +436,28 @@ fn exec_loop(
                     }
                     BuiltinOutcome::Empty => {}
                 }
-                pc += 4;
+                advance!(Opcode::CallBuiltin);
             }
             Opcode::RetGet => {
                 write_slot!(operand!(0), ret_reg);
-                pc += 2;
+                advance!(Opcode::RetGet);
             }
             Opcode::RetStore => {
                 let t = ScalarType::from_tag(header_a(h) as u32);
                 let addr = read_src!(operand!(0));
                 store_scalar(t, addr.as_ptr(), ret_reg);
-                pc += 2;
+                advance!(Opcode::RetStore);
             }
             Opcode::Mov => {
                 let v = read_src!(operand!(1));
                 write_slot!(operand!(0), v);
-                pc += 3;
+                advance!(Opcode::Mov);
             }
             Opcode::Lea => {
                 let offset = operand!(1) as usize;
                 let addr = unsafe { fp.add(offset) };
                 write_slot!(operand!(0), Value::ptr(addr));
-                pc += 3;
+                advance!(Opcode::Lea);
             }
             Opcode::LoadGlobal => {
                 let dst = operand!(0);
@@ -461,20 +468,20 @@ fn exec_loop(
                 // nested static execution (on alt VMs), possibly more lowering.
                 let v = vmtry!(vm::resolve_global(k1, vm, global_id, storage_pt));
                 write_slot!(dst, v);
-                pc += 4;
+                advance!(Opcode::LoadGlobal);
             }
             Opcode::Load => {
                 let t = ScalarType::from_tag(header_a(h) as u32);
                 let addr = read_src!(operand!(1));
                 write_slot!(operand!(0), load_scalar(t, addr.as_ptr()));
-                pc += 3;
+                advance!(Opcode::Load);
             }
             Opcode::Store => {
                 let t = ScalarType::from_tag(header_a(h) as u32);
                 let addr = read_src!(operand!(0));
                 let v = read_src!(operand!(1));
                 store_scalar(t, addr.as_ptr(), v);
-                pc += 3;
+                advance!(Opcode::Store);
             }
             Opcode::Copy => {
                 let size = operand!(2) as usize;
@@ -488,14 +495,14 @@ fn exec_loop(
                     }
                     vm::memmove(src_ptr, dst_ptr, size);
                 }
-                pc += 4;
+                advance!(Opcode::Copy);
             }
             Opcode::PtrAddImm => {
                 let base = read_src!(operand!(1));
                 let offset = operand!(2) as usize;
                 let result = unsafe { base.as_ptr().byte_add(offset) };
                 write_slot!(operand!(0), Value::ptr(result));
-                pc += 4;
+                advance!(Opcode::PtrAddImm);
             }
             Opcode::PtrIndex => {
                 let base = read_src!(operand!(1));
@@ -503,7 +510,7 @@ fn exec_loop(
                 let stride = operand!(3) as usize;
                 let result = unsafe { base.as_ptr().byte_add(stride * index) };
                 write_slot!(operand!(0), Value::ptr(result));
-                pc += 5;
+                advance!(Opcode::PtrIndex);
             }
             Opcode::IntAdd => {
                 let width = header_a(h);
@@ -511,7 +518,7 @@ fn exec_loop(
                 let rhs = read_src!(operand!(2)).bits();
                 let r = casted_uop!(width, wrapping_add, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::IntAdd);
             }
             Opcode::IntSub => {
                 let width = header_a(h);
@@ -519,7 +526,7 @@ fn exec_loop(
                 let rhs = read_src!(operand!(2)).bits();
                 let r = casted_uop!(width, wrapping_sub, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::IntSub);
             }
             Opcode::IntMul => {
                 let width = header_a(h);
@@ -527,7 +534,7 @@ fn exec_loop(
                 let rhs = read_src!(operand!(2)).bits();
                 let r = casted_uop!(width, wrapping_mul, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::IntMul);
             }
             Opcode::IntDivU => {
                 let width = header_a(h);
@@ -539,7 +546,7 @@ fn exec_loop(
                 use std::ops::Div;
                 let r = casted_uop!(width, div, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::IntDivU);
             }
             Opcode::IntDivS => {
                 let width = header_a(h);
@@ -551,7 +558,7 @@ fn exec_loop(
                 use std::ops::Div;
                 let r = casted_iop!(width, div, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r as u64));
-                pc += 4;
+                advance!(Opcode::IntDivS);
             }
             Opcode::IntRemU => {
                 let width = header_a(h);
@@ -563,7 +570,7 @@ fn exec_loop(
                 use std::ops::Rem;
                 let r = casted_uop!(width, rem, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::IntRemU);
             }
             Opcode::IntRemS => {
                 let width = header_a(h);
@@ -575,7 +582,7 @@ fn exec_loop(
                 use std::ops::Rem;
                 let r = casted_iop!(width, rem, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r as u64));
-                pc += 4;
+                advance!(Opcode::IntRemS);
             }
             Opcode::IntCmp => {
                 let width = header_a(h);
@@ -584,7 +591,7 @@ fn exec_loop(
                 let rhs = read_src!(operand!(2)).bits();
                 let b = int_cmp(width, pred, lhs, rhs);
                 write_slot!(operand!(0), Value::bool(b));
-                pc += 4;
+                advance!(Opcode::IntCmp);
             }
             Opcode::FloatAdd => {
                 let width = header_a(h);
@@ -593,7 +600,7 @@ fn exec_loop(
                 use std::ops::Add;
                 let r = casted_float_op!(width, add, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::FloatAdd);
             }
             Opcode::FloatSub => {
                 let width = header_a(h);
@@ -602,7 +609,7 @@ fn exec_loop(
                 use std::ops::Sub;
                 let r = casted_float_op!(width, sub, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::FloatSub);
             }
             Opcode::FloatMul => {
                 let width = header_a(h);
@@ -611,7 +618,7 @@ fn exec_loop(
                 use std::ops::Mul;
                 let r = casted_float_op!(width, mul, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::FloatMul);
             }
             Opcode::FloatDiv => {
                 let width = header_a(h);
@@ -620,7 +627,7 @@ fn exec_loop(
                 use std::ops::Div;
                 let r = casted_float_op!(width, div, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::FloatDiv);
             }
             Opcode::FloatRem => {
                 let width = header_a(h);
@@ -629,7 +636,7 @@ fn exec_loop(
                 use std::ops::Rem;
                 let r = casted_float_op!(width, rem, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::FloatRem);
             }
             Opcode::FloatCmp => {
                 let width = header_a(h);
@@ -651,7 +658,7 @@ fn exec_loop(
                     _ => unreachable!(),
                 };
                 write_slot!(operand!(0), Value::bool(b));
-                pc += 4;
+                advance!(Opcode::FloatCmp);
             }
             Opcode::BitAnd => {
                 let width = header_a(h);
@@ -660,7 +667,7 @@ fn exec_loop(
                 use std::ops::BitAnd;
                 let r = casted_uop!(width, bitand, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::BitAnd);
             }
             Opcode::BitOr => {
                 let width = header_a(h);
@@ -669,7 +676,7 @@ fn exec_loop(
                 use std::ops::BitOr;
                 let r = casted_uop!(width, bitor, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::BitOr);
             }
             Opcode::BitXor => {
                 let width = header_a(h);
@@ -678,7 +685,7 @@ fn exec_loop(
                 use std::ops::BitXor;
                 let r = casted_uop!(width, bitxor, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::BitXor);
             }
             Opcode::Shl => {
                 let width = header_a(h);
@@ -687,7 +694,7 @@ fn exec_loop(
                 use std::ops::Shl;
                 let r = casted_uop!(width, shl, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::Shl);
             }
             Opcode::ShrU => {
                 let width = header_a(h);
@@ -696,7 +703,7 @@ fn exec_loop(
                 use std::ops::Shr;
                 let r = casted_uop!(width, shr, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
-                pc += 4;
+                advance!(Opcode::ShrU);
             }
             Opcode::ShrS => {
                 let width = header_a(h);
@@ -705,18 +712,18 @@ fn exec_loop(
                 use std::ops::Shr;
                 let r = casted_iop!(width, shr, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r as u64));
-                pc += 4;
+                advance!(Opcode::ShrS);
             }
             Opcode::BoolNegate => {
                 let b = read_src!(operand!(1)).as_bool();
                 write_slot!(operand!(0), Value::bool(!b));
-                pc += 3;
+                advance!(Opcode::BoolNegate);
             }
             Opcode::BitNot => {
                 // Inverts all 64 bits regardless of width; matches the old VM
                 let v = read_src!(operand!(1));
                 write_slot!(operand!(0), Value::u64(!v.bits()));
-                pc += 3;
+                advance!(Opcode::BitNot);
             }
             Opcode::Cast => {
                 let kind = CastKind::from_u8(header_a(h));
@@ -726,16 +733,17 @@ fn exec_loop(
                 let input = read_src!(operand!(1));
                 let result = exec_cast(kind, from, to, input);
                 write_slot!(operand!(0), result);
-                pc += 3;
+                advance!(Opcode::Cast);
             }
             Opcode::BakeStaticValue => {
                 let dst = operand!(0);
                 let type_id = TypeId::from_nzu32(NonZeroU32::new(operand!(1)).unwrap());
                 let input = read_src!(operand!(2));
                 vm.eval_span = k1.bc.span_for_pc(pc as u32);
-                let value_id = vmtry!(vm::vm_value_to_static_value(k1, type_id, input, vm.eval_span));
+                let value_id =
+                    vmtry!(vm::vm_value_to_static_value(k1, type_id, input, vm.eval_span));
                 write_slot!(dst, Value::u64(value_id.as_u32() as u64));
-                pc += 4;
+                advance!(Opcode::BakeStaticValue);
             }
         }
     }
@@ -744,9 +752,8 @@ fn exec_loop(
 fn exec_cast(kind: CastKind, from: u32, to: u32, input: Value) -> Value {
     match kind {
         CastKind::IntTrunc => input.truncated(ScalarType::from_tag(to).width()),
-        CastKind::IntExtS => {
-            input.sign_extended(ScalarType::from_tag(from).width(), ScalarType::from_tag(to).width())
-        }
+        CastKind::IntExtS => input
+            .sign_extended(ScalarType::from_tag(from).width(), ScalarType::from_tag(to).width()),
         CastKind::FloatTrunc => Value::f32(input.as_f64() as f32),
         CastKind::FloatExt => Value::f64(input.as_f32() as f64),
         CastKind::F32ToUInt => {
@@ -900,7 +907,8 @@ fn exec_builtin(
                     k1.type_id_to_string(type_id)
                 );
             };
-            let schema_vm_value = vm::static_value_to_vm_value(k1, *schema_static_value_id, vm.eval_span);
+            let schema_vm_value =
+                vm::static_value_to_vm_value(k1, *schema_static_value_id, vm.eval_span);
             Ok(BuiltinOutcome::Value(schema_vm_value))
         }
         BackendBuiltin::TypeName => {
@@ -932,8 +940,7 @@ fn exec_builtin(
             let new_size = args[3];
             let layout =
                 std::alloc::Layout::from_size_align(old_size.as_usize(), align.as_usize()).unwrap();
-            let ptr =
-                unsafe { std::alloc::realloc(old_ptr.as_ptr(), layout, new_size.as_usize()) };
+            let ptr = unsafe { std::alloc::realloc(old_ptr.as_ptr(), layout, new_size.as_usize()) };
             Ok(BuiltinOutcome::Value(Value::ptr(ptr)))
         }
         BackendBuiltin::Free => {
