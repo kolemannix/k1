@@ -1294,7 +1294,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::StructInInteger { active_width, .. } => {
                 let abi_type = self.mapped_abi_type_param(pt, mapping);
                 let dst_int_type = abi_type.into_int_type();
-                let dst_int_align = dst_int_type.get_bit_width() / 8;
+                // The ABI int can be a non-power-of-two width (i24 for a
+                // 3-byte struct, i40/i48/i56 for 5-7); bit_width/8 is then
+                // not a legal alignment. Use the type's ABI alignment, which
+                // is also exactly what the alloca below gets.
+                let dst_int_align =
+                    self.llvm_machine.get_target_data().get_abi_alignment(&dst_int_type);
                 let integer_ptr = self.build_alloca(dst_int_type, "abi_struct_int");
                 self.builder.build_store(integer_ptr, dst_int_type.const_zero()).unwrap();
 
