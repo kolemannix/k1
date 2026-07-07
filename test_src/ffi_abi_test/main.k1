@@ -16,6 +16,15 @@ ns foo {
   type IntWrap = { inner: i32 }
   extern("foo", "intWrap") fn intWrap(a: IntWrap, b: IntWrap): IntWrap
 
+  // Odd-sized structs: 3 bytes (i24) and 6 bytes (i48) coercions
+  type Rgb3 = { r: u8, g: u8, b: u8 }
+  extern("foo", "rgb3") fn rgb3(a: Rgb3, b: Rgb3): Rgb3
+
+  type ThreeShorts = { a: i16, b: i16, c: i16 }
+  extern("foo", "three_shorts") fn three-shorts(a: ThreeShorts, b: ThreeShorts): ThreeShorts
+
+  extern("foo", "takesRgb3Fn") fn takes-rgb3-fn(f: *fn(x: Rgb3) -> Rgb3): Rgb3
+
   type Small = { r: u8, g: u8, b: u8, a: u8 }
   extern("foo", "small")      fn small(x: Small, y: Small): Small
 
@@ -84,6 +93,16 @@ fn testAll() {
 
   let intWrapResult = foo/intWrap({ inner: -5 }, { inner: 10 });
   assert-equals(intWrapResult.inner, 5);
+
+  let rgb3 = foo/rgb3({ r: 1, g: 2, b: 3 }, { r: 10, g: 20, b: 30 });
+  assert-equals(rgb3.r, 11);
+  assert-equals(rgb3.g, 22);
+  assert-equals(rgb3.b, 33);
+
+  let ts = foo/three-shorts({ a: 1, b: 2, c: 3 }, { a: -10, b: 20, c: -30 });
+  assert-equals(ts.a, -9);
+  assert-equals(ts.b, 22);
+  assert-equals(ts.c, -27);
 
   let mediumResult = foo/medium({ a: 10, b: 100 }, { a: 1, b: 20 });
   assert-equals(mediumResult.a, 11);
@@ -163,6 +182,17 @@ fn testFnPtr() {
 
   let sum2 = foo/takes-fn-struct(sum-fn-struct);
   assert-equals(sum2, 1+2+3+4);
+
+  // C passes a by-value 3-byte struct to k1 and gets one back: the k1 side
+  // must marshal its param and return through the i24 coercion correctly
+  let rt3 = foo/takes-rgb3-fn(bump-rgb3);
+  assert-equals(rt3.r, 2);
+  assert-equals(rt3.g, 3);
+  assert-equals(rt3.b, 4);
+}
+
+fn bump-rgb3(x: foo/Rgb3): foo/Rgb3 {
+  { r: x.r + 1, g: x.g + 1, b: x.b + 1 }
 }
 
 fn sum-fn(a: u64, b: u64, c: u64, d: u64): i32 {

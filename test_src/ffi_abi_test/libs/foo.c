@@ -26,6 +26,34 @@ Small small(Small a, Small b) {
   return r;
 }
 
+// 3 bytes: coerced to a non-power-of-two integer (i24) on arm64 returns and
+// amd64 params/returns. Regression coverage for alignment handling there.
+typedef struct { char r; char g; char b; } Rgb3;
+Rgb3 rgb3(Rgb3 a, Rgb3 b) {
+  Rgb3 r = {0};
+  r.r = a.r + b.r;
+  r.g = a.g + b.g;
+  r.b = a.b + b.b;
+  return r;
+}
+
+// 6 bytes: same story with i48
+typedef struct { short a; short b; short c; } ThreeShorts;
+ThreeShorts three_shorts(ThreeShorts a, ThreeShorts b) {
+  ThreeShorts r = {0};
+  r.a = a.a + b.a;
+  r.b = a.b + b.b;
+  r.c = a.c + b.c;
+  return r;
+}
+
+// C calls back into k1 with a by-value 3-byte struct in and out; exercises
+// the k1-side param/return marshalling (i24) against the real ABI
+Rgb3 takesRgb3Fn(Rgb3(*fn)(Rgb3)) {
+  Rgb3 in = { 1, 2, 3 };
+  return fn(in);
+}
+
 typedef struct { int inner; } IntWrap;
 IntWrap intWrap(IntWrap a, IntWrap b) {
   IntWrap result;
