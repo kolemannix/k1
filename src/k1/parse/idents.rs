@@ -18,6 +18,10 @@ impl StringId {
     pub fn as_usize(&self) -> usize {
         self.0.to_usize()
     }
+    /// Inverse of `as_usize`
+    pub fn from_usize(v: usize) -> StringId {
+        StringId(string_interner::symbol::SymbolU32::try_from_usize(v).unwrap())
+    }
 }
 
 impl Ord for StringId {

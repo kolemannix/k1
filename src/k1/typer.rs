@@ -2729,6 +2729,7 @@ pub struct TypedProgram {
     pub tmp: kmem::Mem<MemTmp>,
 
     pub ir: ir::ProgramIr,
+    pub bc: crate::bc::BcProgram,
 
     pub timing: Timing,
 
@@ -2755,6 +2756,7 @@ pub struct Timing {
     pub total_vm_instrs: i64,
     pub total_ir_nanos: i64,
     pub total_iropt_nanos: i64,
+    pub total_bcgen_nanos: i64,
 }
 
 impl Timing {
@@ -2907,6 +2909,7 @@ impl TypedProgram {
             tmp: kmem::Mem::make(),
 
             ir: ir::ProgramIr::make(),
+            bc: crate::bc::BcProgram::make(),
 
             timing: Timing {
                 clock,
@@ -2916,6 +2919,7 @@ impl TypedProgram {
                 total_vm_instrs: 0,
                 total_ir_nanos: 0,
                 total_iropt_nanos: 0,
+                total_bcgen_nanos: 0,
             },
             global_id_k1_arena: None,
         }
@@ -5971,17 +5975,88 @@ impl TypedProgram {
             );
         }
 
-        let execution_result = vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
-            let stack_trace = vm::make_stack_trace(self, &vm.stack);
-            e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
-            e
-        });
+        let execution_result = match self.config.static_exec {
+            crate::compiler::StaticExecMode::Ir => {
+                vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
+                    let stack_trace = vm::make_stack_trace(self, &vm.stack);
+                    e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
+                    e
+                })
+            }
+            crate::compiler::StaticExecMode::Bc => {
+                crate::bc::exec::execute_compiled_expr(self, vm, expr, true)
+            }
+            crate::compiler::StaticExecMode::Both => {
+                let ir_result = vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
+                    let stack_trace = vm::make_stack_trace(self, &vm.stack);
+                    e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
+                    e
+                });
+                vm.reset(self.global_id_k1_arena);
+                // Messages are reported by the primary (ir) run; suppress dupes
+                let bc_result = crate::bc::exec::execute_compiled_expr(self, vm, expr, false);
+                self.compare_static_exec_results("expr", &ir_result, &bc_result, expr_span);
+                ir_result
+            }
+        };
 
         vm.reset(self.global_id_k1_arena);
 
         let static_value_id = execution_result?;
 
         Ok(static_value_id)
+    }
+
+    /// Parity check for StaticExecMode::Both: both engines ran, compare what
+    /// they produced and log any divergence. The ir engine's result is the
+    /// one we actually use during bring-up.
+    fn compare_static_exec_results(
+        &self,
+        what: &str,
+        ir_result: &K1Result<StaticValueId>,
+        bc_result: &K1Result<StaticValueId>,
+        span: SpanId,
+    ) {
+        let location = {
+            let (source, line) = self.get_span_location(span);
+            format!("{}:{}", source.filename, line.line_number())
+        };
+        match (ir_result, bc_result) {
+            (Ok(ir_id), Ok(bc_id)) => {
+                if ir_id != bc_id {
+                    // Interning may or may not dedupe; compare rendered forms
+                    let ir_str = self.static_value_to_string(*ir_id);
+                    let bc_str = self.static_value_to_string(*bc_id);
+                    if ir_str != bc_str {
+                        eprintln!(
+                            "[bc] DIVERGENCE in static {} at {}:\n  ir: {}\n  bc: {}",
+                            what, location, ir_str, bc_str
+                        );
+                    }
+                }
+            }
+            (Ok(ir_id), Err(bc_err)) => {
+                eprintln!(
+                    "[bc] DIVERGENCE in static {} at {}: ir ok ({}), bc failed: {}",
+                    what,
+                    location,
+                    self.static_value_to_string(*ir_id),
+                    bc_err.message
+                );
+            }
+            (Err(ir_err), Ok(bc_id)) => {
+                eprintln!(
+                    "[bc] DIVERGENCE in static {} at {}: ir failed ({}), bc ok ({})",
+                    what,
+                    location,
+                    ir_err.message,
+                    self.static_value_to_string(*bc_id)
+                );
+            }
+            (Err(_), Err(_)) => {
+                // Both failed; close enough for parity purposes
+            }
+        }
     }
 
     fn execute_static_expr(
@@ -6037,14 +6112,44 @@ impl TypedProgram {
             ir::compile_function(k1, function_id)?;
             k1.compile_all_pending_ir(span)?;
 
-            let execution_result =
-                vm::execute_compiled_function(k1, vm, function_id, function_parameters).map_err(
-                    |mut e| {
-                        let stack_trace = vm::make_stack_trace(k1, &vm.stack);
-                        e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
-                        e
-                    },
-                );
+            let execution_result = match k1.config.static_exec {
+                crate::compiler::StaticExecMode::Ir => {
+                    vm::execute_compiled_function(k1, vm, function_id, function_parameters)
+                        .map_err(|mut e| {
+                            let stack_trace = vm::make_stack_trace(k1, &vm.stack);
+                            e.message =
+                                format!("{}\nExecution Trace\n{}", e.message, stack_trace);
+                            e
+                        })
+                }
+                crate::compiler::StaticExecMode::Bc => crate::bc::exec::execute_compiled_function(
+                    k1,
+                    vm,
+                    function_id,
+                    function_parameters,
+                    true,
+                ),
+                crate::compiler::StaticExecMode::Both => {
+                    let ir_result =
+                        vm::execute_compiled_function(k1, vm, function_id, function_parameters)
+                            .map_err(|mut e| {
+                                let stack_trace = vm::make_stack_trace(k1, &vm.stack);
+                                e.message =
+                                    format!("{}\nExecution Trace\n{}", e.message, stack_trace);
+                                e
+                            });
+                    vm.reset(k1.global_id_k1_arena);
+                    let bc_result = crate::bc::exec::execute_compiled_function(
+                        k1,
+                        vm,
+                        function_id,
+                        function_parameters,
+                        false,
+                    );
+                    k1.compare_static_exec_results("function", &ir_result, &bc_result, span);
+                    ir_result
+                }
+            };
 
             vm.reset(k1.global_id_k1_arena);
 
@@ -18881,10 +18986,12 @@ impl TypedProgram {
         eprintln!("\t{} types", self.types.type_count());
         eprintln!("\t{} idents", self.ast.idents.len());
         eprintln!(
-            "\t{} instructions, {}ms ir, {}ms iropt",
+            "\t{} instructions, {}ms ir, {}ms iropt, {:.2}ms bcgen ({} code words)",
             self.ir.instrs.len(),
             self.timing.total_ir_nanos / 1_000_000,
             self.timing.total_iropt_nanos / 1_000_000,
+            self.timing.total_bcgen_nanos as f64 / 1_000_000.0,
+            self.bc.code.len(),
         );
         self.tmp.print_usage("\ttmp");
         self.mem.print_usage("\tperm");

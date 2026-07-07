@@ -63,6 +63,27 @@ pub enum Arch {
     Wasm,
 }
 
+/// Which engine executes comptime (static) code.
+/// `Both` runs both the IR interpreter and the bc VM on every static execution and
+/// logs divergences
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum StaticExecMode {
+    Ir,
+    Bc,
+    Both,
+}
+
+impl std::fmt::Display for StaticExecMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            StaticExecMode::Ir => "ir",
+            StaticExecMode::Bc => "bc",
+            StaticExecMode::Both => "both",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 /// For now, I just do a simple exhaustive enum of the triples I actually support
 /// rather than a 'target triple' type of struct where very few values of that type
@@ -215,13 +236,17 @@ pub struct Args {
     #[arg(long)]
     pub profile: bool,
 
-    /// quiet mode, no timing summary
-    #[arg(short, long, default_value_t = true)]
-    pub quiet: bool,
+    /// Chatty mode, timing summaries, other development info
+    #[arg(short, long, default_value_t = false, action = clap::ArgAction::Set)]
+    pub chatty: bool,
 
     /// Target platform
     #[arg(long)]
     pub target: Option<Target>,
+
+    /// Engine for comptime execution: the ir interpreter, the bc VM, or both
+    #[arg(long, value_enum, default_value_t = StaticExecMode::Both)]
+    pub static_exec: StaticExecMode,
 
     #[command(subcommand)]
     pub command: Command,
@@ -244,7 +269,8 @@ pub struct CompilerConfig {
     pub sanitize: bool,
     pub out_dir: PathBuf,
     pub optimize: bool,
-    pub quiet: bool,
+    pub chatty: bool,
+    pub static_exec: StaticExecMode,
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -377,7 +403,8 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
         sanitize: args.sanitize,
         out_dir,
         optimize: args.optimize,
-        quiet: args.quiet,
+        chatty: args.chatty,
+        static_exec: args.static_exec,
     };
 
     let mut k1 = TypedProgram::new(module_name.clone(), config);
@@ -413,7 +440,7 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
     if warning_count > 0 {
         eprintln!("Completed with {} warnings", warning_count);
     }
-    if !args.quiet {
+    if args.chatty {
         k1.print_timing_info(
             &src_path.to_string_lossy(),
             total_elapsed_ns as u64,
@@ -550,7 +577,7 @@ pub fn write_executable(
     }
 
     let elapsed = clang_time.elapsed();
-    if !k1.config.quiet {
+    if k1.config.chatty {
         eprintln!("link executable took {}ms", elapsed.as_millis());
     }
     Ok(())
@@ -586,7 +613,7 @@ pub fn codegen_module<'ctx, 'module>(
         anyhow::bail!(e)
     }
 
-    if !args.quiet {
+    if args.chatty {
         eprintln!("iropt: {}ms", codegen.k1.timing.total_iropt_nanos / 1_000_000);
     }
 

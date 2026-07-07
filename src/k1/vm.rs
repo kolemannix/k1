@@ -9,7 +9,7 @@ use colored::Colorize;
 use fxhash::FxHashMap;
 use log::debug;
 
-mod vm_ffi;
+pub(crate) mod vm_ffi;
 #[cfg(test)]
 mod vm_test;
 
@@ -106,6 +106,9 @@ macro_rules! casted_float_op {
         }
     };
 }
+
+// Shared with the bc VM (bc/exec.rs) so arithmetic semantics cannot drift
+pub(crate) use {casted_float_op, casted_iop, casted_uop};
 
 /// Bit-for-bit mappings of K1 types
 #[allow(non_snake_case)]
@@ -209,10 +212,12 @@ pub struct Vm {
     globals: FxHashMap<TypedGlobalId, Value>,
     pub static_stack: Stack,
     pub stack: Stack,
-    eval_span: SpanId,
-    compiler_messages: Vec<CompilerMessage>,
+    pub(crate) eval_span: SpanId,
+    pub(crate) compiler_messages: Vec<CompilerMessage>,
     // This is just the first valid address in `stack`, before the first frame
-    overall_return_addr: *mut u8,
+    pub(crate) overall_return_addr: *mut u8,
+    /// (fp, pc) at the point of a bc execution error, for bc stack traces
+    pub(crate) bc_fault: Option<(u64, u32)>,
 }
 
 impl Vm {
@@ -223,7 +228,7 @@ impl Vm {
         let arena_to_preserve = if let Some(arena_global_id) = arena_global_id {
             if let Some(arena_value) = self.globals.get(&arena_global_id) {
                 let arena_ptr: *mut k1_types::Arena = arena_value.as_ptr().cast();
-                eprintln!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
+                debug!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
                 let arena: k1_types::Arena = unsafe { arena_ptr.read() };
                 Some(arena)
             } else {
@@ -238,6 +243,7 @@ impl Vm {
         self.globals.clear();
         self.compiler_messages.clear();
         self.overall_return_addr = core::ptr::null_mut();
+        self.bc_fault = None;
 
         if let Some(mut arena) = arena_to_preserve {
             // Voila!
@@ -260,6 +266,7 @@ impl Vm {
             stack,
             eval_span: SpanId::NONE,
             compiler_messages: Vec::with_capacity(16),
+            bc_fault: None,
         }
     }
 
@@ -358,7 +365,7 @@ impl Value {
         if b { Value(1) } else { Value(0) }
     }
 
-    fn as_bool(&self) -> bool {
+    pub(crate) fn as_bool(&self) -> bool {
         #[cfg(debug_assertions)]
         {
             let v = self.bits();
@@ -375,15 +382,15 @@ impl Value {
         Value(ptr.addr() as u64)
     }
 
-    const fn bits(&self) -> u64 {
+    pub(crate) const fn bits(&self) -> u64 {
         self.0
     }
 
-    const fn as_usize(&self) -> usize {
+    pub(crate) const fn as_usize(&self) -> usize {
         self.0 as usize
     }
 
-    const fn truncated(&self, to: NumericWidth) -> Self {
+    pub(crate) const fn truncated(&self, to: NumericWidth) -> Self {
         match to {
             NumericWidth::B8 => Value(self.0 as u8 as u64),
             NumericWidth::B16 => Value(self.0 as u16 as u64),
@@ -392,7 +399,7 @@ impl Value {
         }
     }
 
-    const fn sign_extended(&self, from: NumericWidth, to: NumericWidth) -> Self {
+    pub(crate) const fn sign_extended(&self, from: NumericWidth, to: NumericWidth) -> Self {
         match (from, to) {
             (NumericWidth::B8, NumericWidth::B16) => {
                 let v = self.0 as i8 as i16 as u16 as u64;
@@ -422,35 +429,35 @@ impl Value {
         }
     }
 
-    const fn u8(u8: u8) -> Value {
+    pub(crate) const fn u8(u8: u8) -> Value {
         Value(u8 as u64)
     }
 
-    const fn u16(u16: u16) -> Value {
+    pub(crate) const fn u16(u16: u16) -> Value {
         Value(u16 as u64)
     }
 
-    const fn u32(u32: u32) -> Value {
+    pub(crate) const fn u32(u32: u32) -> Value {
         Value(u32 as u64)
     }
 
-    const fn u64(u64: u64) -> Value {
+    pub(crate) const fn u64(u64: u64) -> Value {
         Value(u64)
     }
 
-    const fn i8(i8: i8) -> Value {
+    pub(crate) const fn i8(i8: i8) -> Value {
         Value(i8 as u8 as u64)
     }
 
-    const fn i16(i16: i16) -> Value {
+    pub(crate) const fn i16(i16: i16) -> Value {
         Value(i16 as u16 as u64)
     }
 
-    const fn i32(i32: i32) -> Value {
+    pub(crate) const fn i32(i32: i32) -> Value {
         Value(i32 as u32 as u64)
     }
 
-    const fn i64(i64: i64) -> Value {
+    pub(crate) const fn i64(i64: i64) -> Value {
         Value(i64 as u64)
     }
 
@@ -482,7 +489,7 @@ impl Value {
     }
 
     #[track_caller]
-    fn as_ptr(&self) -> *mut u8 {
+    pub(crate) fn as_ptr(&self) -> *mut u8 {
         let p = self.0 as *mut u8;
         sanity_check_ptr(p);
         p
@@ -1669,7 +1676,7 @@ fn resolve_value(
 }
 
 #[inline(always)]
-fn resolve_global(
+pub(crate) fn resolve_global(
     k1: &mut TypedProgram,
     vm: &mut Vm,
     global_id: TypedGlobalId,
@@ -1946,7 +1953,7 @@ pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
     Value::ptr(string_stack_addr.cast())
 }
 
-fn allocate(layout: std::alloc::Layout, zero: bool) -> *mut u8 {
+pub(crate) fn allocate(layout: std::alloc::Layout, zero: bool) -> *mut u8 {
     let ptr = if zero {
         unsafe { std::alloc::alloc_zeroed(layout) }
     } else {
@@ -2002,14 +2009,14 @@ pub fn store_value(types: &TypePool, t: PhysicalType, dst: *mut u8, value: Value
     }
 }
 
-fn memmove(src: *const u8, dst: *mut u8, size_bytes: usize) {
+pub(crate) fn memmove(src: *const u8, dst: *mut u8, size_bytes: usize) {
     //debug!("memmove src {:?} dst {:?} size {}", src, dst, size_bytes);
     unsafe {
         core::ptr::copy(src, dst, size_bytes);
     }
 }
 
-fn memcopy(src: *const u8, dst: *mut u8, size_bytes: usize) {
+pub(crate) fn memcopy(src: *const u8, dst: *mut u8, size_bytes: usize) {
     //debug!("memcopy src {:?} dst {:?} size {}", src, dst, size_bytes);
     unsafe {
         core::ptr::copy_nonoverlapping(src, dst, size_bytes);
@@ -2621,7 +2628,7 @@ fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Va
     }
 }
 
-unsafe fn slice_from_raw_parts_checked<'a, T>(
+pub(crate) unsafe fn slice_from_raw_parts_checked<'a, T>(
     vm: &Vm,
     k1: &TypedProgram,
     data: *const T,
@@ -2669,7 +2676,48 @@ pub fn make_stack_trace(k1: &TypedProgram, stack: &Stack) -> String {
     }
     s
 }
-fn report_execution_messages(k1: &mut TypedProgram, vm: &Vm, span: SpanId, _exit_code: i32) {
+/// The CompilerMessage builtin body, shared with the bc VM. Mirrors the
+/// inline arm in `exec_loop` (Inst::Call -> BackendBuiltin::CompilerMessage).
+pub(crate) fn builtin_compiler_message(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    location_arg: Value,
+    level_arg: Value,
+    message_arg: Value,
+) -> K1Result<()> {
+    let location = unsafe { (location_arg.as_ptr() as *const k1_types::K1SourceLocation).read() };
+    let level = match k1_types::CompilerMessageLevel::from_u8(level_arg.as_u8())
+        .unwrap_or(k1_types::CompilerMessageLevel::Info)
+    {
+        k1_types::CompilerMessageLevel::Info => MessageLevel::Info,
+        k1_types::CompilerMessageLevel::Warn => MessageLevel::Warn,
+        k1_types::CompilerMessageLevel::Error => MessageLevel::Error,
+    };
+    let message = value_to_string_id(k1, message_arg).map_err(|msg| {
+        errf!(vm.eval_span, "Bad message string passed to EmitCompilerMessage: {msg}")
+    })?;
+    let filename = unsafe { location.filename.to_str() }.map_err(|msg| {
+        errf!(vm.eval_span, "Bad filename string passed to EmitCompilerMessage: {msg}")
+    })?;
+
+    eprintln!(
+        "[{}:{} {}] {}",
+        filename,
+        location.line,
+        level.name_str().color(level.color()),
+        k1.get_string(message)
+    );
+
+    vm.compiler_messages.push(CompilerMessage {
+        level,
+        message,
+        filename: filename.to_string(),
+        line: location.line as u32,
+    });
+    Ok(())
+}
+
+pub(crate) fn report_execution_messages(k1: &mut TypedProgram, vm: &Vm, span: SpanId, _exit_code: i32) {
     if vm.compiler_messages.is_empty() {
         return;
     }

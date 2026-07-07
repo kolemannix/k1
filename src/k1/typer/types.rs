@@ -1109,6 +1109,16 @@ impl PhysicalType {
 
     const MIN_AGG_ID: u32 = 16;
 
+    /// Raw representation, for encoding into bytecode operands
+    pub const fn to_u32(self) -> u32 {
+        self.0
+    }
+
+    /// Inverse of `to_u32`
+    pub const fn from_u32(v: u32) -> PhysicalType {
+        PhysicalType(v)
+    }
+
     pub const fn as_scalar(self) -> Option<ScalarType> {
         match self.0 {
             1..=11 => Some(ScalarType::from_tag(self.0)),

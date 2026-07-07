@@ -3,6 +3,7 @@
 
 use smallvec::SmallVec;
 
+pub mod bc;
 mod clock;
 pub mod codegen_llvm;
 pub mod compiler;

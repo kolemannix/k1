@@ -275,8 +275,9 @@ impl Backend {
             debug: true,
             sanitize: false,
             profile: false,
-            quiet: true,
+            chatty: false,
             target: None,
+            static_exec: k1::compiler::StaticExecMode::Bc,
             command: k1::compiler::Command::Check {
                 file: root_uri.as_ref().unwrap().path().into(),
             },
