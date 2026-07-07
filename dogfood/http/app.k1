@@ -2,10 +2,23 @@ ns app;
 
 
 let gridsize: u32 = 256
-type deps = { config: { jwt-secret: string }, db-conn: db-conn, pixels: array[u8, 65536] }
+type deps = { config: { jwt-secret: string }, db-conn: db-conn, pixels: *array[u8, 65536] }
 
 // TODO load header.html globally
 // Template together index.html
+
+let mutable pixels: array[u8, 65536] = zeroed()
+
+// only once per thread
+fn make-deps(): *deps {
+  (alloc-mode:system-heap).new(
+    { 
+      config: { jwt-secret: "asdf" },
+      db-conn: {},
+      pixels: &pixels,
+    }: app/deps
+  )
+}
 
 // let template: string = core/files/read-to-string(context :tmp)("web/header.html")
 fn handle(req: http/request, deps: *mut deps): http-response {
@@ -25,10 +38,10 @@ fn handle(req: http/request, deps: *mut deps): http-response {
   };
 
   if req.header.url.starts-with("/app/endpoint") {
-    update(deps.pixels*);
+    update(deps.pixels);
     let out = StringBuilder/new();
     let body-out = StringBuilder/new();
-    render(&body-out, deps.pixels*);
+    render(&body-out, deps.pixels);
     write-response(&out, body-out.build());
     // To avoid the double-buffer situation, we could support 'chunks' instead of
     // just 'complete'; libuv supports this vectored write
@@ -57,6 +70,7 @@ fn update(pixels: *array[u8, 65536]): { x: u32, y: u32 } {
   let x = sys/random(gridsize);
   let y = sys/random(gridsize);
   let pix = pixels.get-ref(y*gridsize + x);
-  pix <- pix ^ 1;
+  // pix <- pix ^ 1;
+  pix <- 1;
   { x, y }
 }

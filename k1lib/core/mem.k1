@@ -170,7 +170,6 @@ ns mem {
   }
 
   fn init-tmp-arena() {
-    // nocommit: better ways of working with ptr/*t. matching is one, 'is-null' magic method on *t also perhaps
     if not arena-tmp.as[ptr].is-null() crash("arena-tmp already initialized");
     &arena-tmp <- arena/init-default();
   }

@@ -161,9 +161,6 @@ fn after-do-work(req: *mut uv/work, status: i32) {
           return();
         };
         if connection.close-state.should-close {
-          // nocommit These calls to close-connection shouldnt try to cancel work
-          // work could be freed already. But we aren't clearing current-work
-          // where we should.
           close-connection(connection);
           return();
         };
@@ -565,17 +562,6 @@ fn main(): i32 {
   let context arena = arena/init-default();
   arena.set-name("mainthread");
 
-  // only once per thread
-  let make-deps = fn. {
-    (alloc-mode:system-heap).new(
-      { 
-        config: { jwt-secret: "asdf" },
-        db-conn: {},
-        pixels: zeroed(),
-      }: app/deps
-    )
-  };
-
   mem/pushMode(:custom-arena(arena));
   let route-handlers: span[user-route-handler[app/deps]] = [
     { 
@@ -586,7 +572,7 @@ fn main(): i32 {
   ];
   mem/popMode();
 
-  start-app[app/deps](make-deps, route-handlers);
+  start-app[app/deps](app/make-deps, route-handlers);
 
   // http/example-http();
 

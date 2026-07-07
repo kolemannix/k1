@@ -85,7 +85,9 @@ http dogfood list
 
 ## [ ] token stream based macros
 
-## [x] higher level macros
+## [ ] expr-level macros
+
+## [x] meta-based macros
 
 ## [ ] Context ability types (context system revamp?)
 - [ ] AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem *if it ends up an ability*)
