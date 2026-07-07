@@ -69,7 +69,6 @@ pub enum Opcode {
     JumpIf,
     Unreachable,
     Ret,
-    RetVoid,
     RetAgg,
     Call,
     CallIndirect,
@@ -125,32 +124,30 @@ impl Opcode {
         unsafe { core::mem::transmute::<u8, Opcode>(v) }
     }
 
-    /// Number of u32 operand words following the header word.
-    pub fn operand_count(self) -> usize {
+    pub const fn operand_count(self) -> usize {
         // TODO(perf): I think we could bake the operand count into the opcode bits.
         match self {
             Opcode::Halt => 0,
-            Opcode::Enter => 1,        // [frame_bytes]
-            Opcode::Jump => 1,         // [pc]
-            Opcode::JumpIf => 3,       // [cond src][cons pc][alt pc]
+            Opcode::Enter => 1,  // [frame_bytes]
+            Opcode::Jump => 1,   // [pc]
+            Opcode::JumpIf => 3, // [cond src][cons pc][alt pc]
             Opcode::Unreachable => 0,
             Opcode::Ret => 1,          // [src]
-            Opcode::RetVoid => 0,
             Opcode::RetAgg => 2,       // [src][size]
             Opcode::Call => 2,         // [target pc][fp_delta bytes]
             Opcode::CallIndirect => 2, // [fn src][fp_delta]
-            Opcode::CallExtern => 6,   // [function_id][lib_name(0=none)][fn_name][ret_pt][fp_delta][nargs]
-            Opcode::CallBuiltin => 3,  // A = builtin tag; [ret_pt][fp_delta][nargs]
-            Opcode::RetGet => 1,       // [dst]
-            Opcode::RetStore => 1,     // A = scalar tag; [addr src]
-            Opcode::Mov => 2,          // [dst][src]
-            Opcode::Lea => 2,          // [dst][frame byte offset]
-            Opcode::LoadGlobal => 3,   // [dst][global_id][storage_pt]
-            Opcode::Load => 2,         // A = scalar tag; [dst][addr src]
-            Opcode::Store => 2,        // A = scalar tag; [addr src][val src]
-            Opcode::Copy => 3,         // [dst src][src src][size]
-            Opcode::PtrAddImm => 3,    // [dst][base src][byte offset]
-            Opcode::PtrIndex => 4,     // [dst][base src][index src][stride]
+            Opcode::CallExtern => 6, // [function_id][lib_name(0=none)][fn_name][ret_pt][fp_delta][nargs]
+            Opcode::CallBuiltin => 3, // A = builtin tag; [ret_pt][fp_delta][nargs]
+            Opcode::RetGet => 1,     // [dst]
+            Opcode::RetStore => 1,   // A = scalar tag; [addr src]
+            Opcode::Mov => 2,        // [dst][src]
+            Opcode::Lea => 2,        // [dst][frame byte offset]
+            Opcode::LoadGlobal => 3, // [dst][global_id][storage_pt]
+            Opcode::Load => 2,       // A = scalar tag; [dst][addr src]
+            Opcode::Store => 2,      // A = scalar tag; [addr src][val src]
+            Opcode::Copy => 3,       // [dst src][src src][size]
+            Opcode::PtrAddImm => 3,  // [dst][base src][byte offset]
+            Opcode::PtrIndex => 4,   // [dst][base src][index src][stride]
             Opcode::IntAdd
             | Opcode::IntSub
             | Opcode::IntMul
@@ -172,7 +169,7 @@ impl Opcode {
             | Opcode::ShrU
             | Opcode::ShrS => 3, // [dst][lhs][rhs]
             Opcode::BoolNegate | Opcode::BitNot => 2, // [dst][src]
-            Opcode::Cast => 2,           // [dst][src]
+            Opcode::Cast => 2,       // [dst][src]
             Opcode::BakeStaticValue => 3, // [dst][type_id][src]
         }
     }
@@ -185,7 +182,6 @@ impl Opcode {
             Opcode::JumpIf => "jump_if",
             Opcode::Unreachable => "unreachable",
             Opcode::Ret => "ret",
-            Opcode::RetVoid => "ret_void",
             Opcode::RetAgg => "ret_agg",
             Opcode::Call => "call",
             Opcode::CallIndirect => "call_indirect",
@@ -498,9 +494,13 @@ mod bc_test {
         ] {
             assert!(int_pred_from_tag(int_pred_tag(p)) == p);
         }
-        for p in
-            [FloatCmpPred::Eq, FloatCmpPred::Lt, FloatCmpPred::Le, FloatCmpPred::Gt, FloatCmpPred::Ge]
-        {
+        for p in [
+            FloatCmpPred::Eq,
+            FloatCmpPred::Lt,
+            FloatCmpPred::Le,
+            FloatCmpPred::Gt,
+            FloatCmpPred::Ge,
+        ] {
             assert!(float_pred_from_tag(float_pred_tag(p)) as u8 == p as u8);
         }
     }

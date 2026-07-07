@@ -28,8 +28,8 @@ use crate::typer::{FunctionId, K1Result, TypedExprId, TypedFloatValue, TypedProg
 use crate::vm;
 
 use super::{
-    builtin_tag, float_pred_tag, header, int_pred_tag, CastKind, Opcode, UnitInfo, UnitKind,
-    FRAME_HEADER_WORDS, PENDING_PC,
+    CastKind, FRAME_HEADER_WORDS, Opcode, PENDING_PC, UnitInfo, UnitKind, builtin_tag,
+    float_pred_tag, header, int_pred_tag,
 };
 
 pub fn get_or_lower_unit(
@@ -307,7 +307,17 @@ fn resolve_src(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::Value) -> u
             let v = vm::static_value_to_vm_value(k1, id, ctx.cur_span);
             k1.bc.intern_const(v.bits())
         }
-        ir::Value::FunctionAddr(function_id) => k1.bc.intern_const(function_id.as_u32() as u64),
+        ir::Value::FunctionAddr(function_id) => {
+            // Be sure to lower functions whose addresses have been taken
+            if !k1.bc.functions.contains_key(&function_id)
+                && !k1.bc.in_progress.contains(&function_id)
+            {
+                if let Err(e) = get_or_lower_function(k1, function_id, ctx.cur_span) {
+                    debug!("[bc] deferred: address-taken function failed to lower: {}", e.message);
+                }
+            }
+            k1.bc.intern_const(function_id.as_u32() as u64)
+        }
         ir::Value::Empty => k1.bc.intern_const(0),
         ir::Value::GlobalAddr { storage_pt, id } => {
             let scratch = ctx.next_scratch();
@@ -659,18 +669,16 @@ fn emit_inst(
             ctx.emit(Opcode::Unreachable, 0, 0);
         }
         Inst::Ret { v, agg: _ } => {
-            // Key off the unit's physical return type, like the old VM does
-            // off ret_info.pt.
             let ret_pt = ctx.ret_pt;
-            if ret_pt.is_empty() {
-                ctx.emit(Opcode::RetVoid, 0, 0);
-            } else if ret_pt.is_agg() {
+            if ret_pt.is_agg() {
                 let size = k1.types.get_pt_layout(ret_pt).size;
                 let src = resolve_src(k1, ctx, v);
                 ctx.emit(Opcode::RetAgg, 0, 0);
                 ctx.push(src);
                 ctx.push(size);
             } else {
+                // Empty returns arrive as `Ret { v: Empty }` and resolve to
+                // const 0; nobody reads ret_reg for them
                 let src = resolve_src(k1, ctx, v);
                 ctx.emit(Opcode::Ret, 0, 0);
                 ctx.push(src);
