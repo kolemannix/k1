@@ -47,7 +47,6 @@ ns for list {
   fn reserve[T](self: *mut list[T], alloc: alloc-mode, count: size) {
     if self.cap() >= count { return() };
     self.buffer*._growTo[T](context alloc)(count);
-    assertdbg(self.buffer.len == count);
   }
 
   fn single[T](value: T): list[T] {

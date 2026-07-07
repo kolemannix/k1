@@ -84,6 +84,7 @@ impl QIdent {
 
 #[allow(non_snake_case)]
 pub(crate) struct BuiltinIdents {
+    pub null: StringId,
     pub main: StringId,
     pub next: StringId,
     pub _self: StringId,
@@ -268,6 +269,7 @@ impl IdentPool {
         }
 
         let b = BuiltinIdents {
+            null: intern!("null"),
             main: intern!("main"),
             _self: intern!("_self"),
             self_: intern!("self"),

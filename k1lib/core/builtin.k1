@@ -370,6 +370,13 @@ impl scalar-cmp for i64 {
   intern fn ge(self, other: self): bool
 }
 
+impl scalar-cmp for ptr {
+  fn lt(self, other: self): bool { self.as[usize].lt(other.as[usize]) }
+  fn le(self, other: self): bool { self.as[usize].le(other.as[usize]) }
+  fn gt(self, other: self): bool { self.as[usize].gt(other.as[usize]) }
+  fn ge(self, other: self): bool { self.as[usize].ge(other.as[usize]) }
+}
+
 ability comparable {
   fn compare(self, other: self): ordering
 }

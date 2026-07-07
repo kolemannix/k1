@@ -103,20 +103,15 @@ ns for buffer {
   // Modification
 
   fn _growTo[t](context alloc: mem/alloc-mode)(self: *mut buffer[t], newCount: size): empty {
-    if alloc.resolve().supportsRealloc() {
-      let newSize = bufferSizeBytes[t](newCount);
-      let oldSize = bufferSizeBytes[t](self.len);
-      let newPtr = alloc.realloc(
-        ptr = self.data-ptr(),
-        oldSize = oldSize,
-        align = core/types/align[t](),
-        newSize = newSize,
-      );
-      self <- { len: newCount, data: newPtr.rw[t] }
-    } else {
-      let newBuffer = self._enlargedCloneIn(newCount);
-      self <- newBuffer
-    }
+    let newSize = bufferSizeBytes[t](newCount);
+    let oldSize = bufferSizeBytes[t](self.len);
+    let newPtr = alloc.realloc(
+      ptr = self.data-ptr(),
+      oldSize = oldSize,
+      align = core/types/align[t](),
+      newSize = newSize,
+    );
+    self <- { len: newCount, data: newPtr.rw[t] }
   }
 
   fn _enlargedCloneIn[t](context alloc: mem/alloc-mode)(self: buffer[t], newCount: size): buffer[t] {

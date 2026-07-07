@@ -33,8 +33,18 @@ fn test() {
   assert(b.*.*.* == false);
 
   switch b {
-     true*** -> crash("b  was true!"),
+     true*** -> crash("b was true!"),
      false*** -> {}
+  };
+
+  switch b {
+    null -> crash("b was null"),
+    _ -> {}
+  };
+
+  switch b.as[ptr] {
+    null -> crash("b was null as ptr"),
+    _ -> {},
   };
 
   {}

@@ -67,12 +67,13 @@ fn do-work(req: *mut uv/work) {
 
   tprintln("handle-request");
   let work: *mut http-handler-work = req.get-data();
-  if work.connection.is-closing {
+  let close-state = work.connection.get-close-state-sync();
+  if close-state.is-closing {
     tprintln("detected closed connection in do-work; skipping");
     return();
   };
 
-  if work.connection.should-close {
+  if close-state.should-close {
     tprintln("detected should-close connection in do-work; skipping");
     return();
   };
@@ -91,7 +92,7 @@ fn do-work(req: *mut uv/work) {
   };
   let user-deps-baton: ptr = worker-user-data;
 
-  mem/pushMode(:custom-arena(work.connection.request-arena*));
+  mem/pushMode(:custom-arena(work.connection.request-arena));
   let response = (work.handler.logic-fn)(work.request, user-deps-baton);
   work.http-response* <- :some(response);
   mem/popMode();
@@ -106,6 +107,8 @@ fn do-work(req: *mut uv/work) {
 fn after-do-work(req: *mut uv/work, status: i32) {
   let work: *mut http-handler-work = req.get-data();
   tprintln("after-do-work");
+  tprintln("clearing current-work");
+  work.connection.current-work* <- :none;
   defer {
     tprintln("freeing work");
     alloc-mode:system-heap.freeT(req)
@@ -121,10 +124,11 @@ fn after-do-work(req: *mut uv/work, status: i32) {
 
   // Now we can safely access connection
   let connection = work.connection;
-  if connection.is-closing {
+  let close-state = connection.get-close-state-sync();
+  if close-state.is-closing {
     return()
   };
-  if connection.should-close {
+  if close-state.should-close {
     close-connection(connection);
     return();
   };
@@ -145,24 +149,32 @@ fn after-do-work(req: *mut uv/work, status: i32) {
   };
   switch response {
     :complete(body) -> {
-      let write-req = connection.request-arena*.alloc[uv/write]();
+      let write-req = connection.request-arena.alloc[uv/write]();
       write-req.set-data(connection);
 
       let buf: uv/buf = uv/buf_init(body.data-ptr().as[*mut u8], body.len().as[u32]);
       // the uv_buf array itself only needs to outlive the call, so the stack pointer is fine
-      let write-rc = uv/write(write-req, connection.client.as-stream(), &buf, 1, fn (req, status) {
+      let write-rc = uv/write(write-req, connection.client*.as-stream(), &buf, 1, fn (req, status) {
         let connection: *mut connection = req.get-data();
-        if connection.should-close {
+        // Direct access is fine as we are on the main thread
+        if connection.close-state.is-closing {
+          return();
+        };
+        if connection.close-state.should-close {
+          // nocommit These calls to close-connection shouldnt try to cancel work
+          // work could be freed already. But we aren't clearing current-work
+          // where we should.
           close-connection(connection);
+          return();
         };
         if status != 0 {
-          tprintln("write failed: {status}");
+          let errno = uv/errno/from-i32(status);
+          tprintln("write failed: {errno.enum-name()}");
           close-connection(connection);
           return();
         } else {
-          tprintln("wrote fake response");
-        };
-        connection.finish-request();
+          connection.finish-request();
+        }
       });
 
       if write-rc != 0 {
@@ -196,8 +208,8 @@ fn tprintln[t: print](t) {
 }
 
 fn close-connection(conn: *mut connection) {
-  conn.is-closing* <- true;
-  if uv/is_closing(conn.client.as-handle()).as-bool() {
+  conn.set-is-closing-sync(true);
+  if uv/is_closing(conn.client-handle()).as-bool() {
     tprintln("not closing connection{conn.serial-no}");
     return();
   } else {
@@ -211,7 +223,7 @@ fn close-connection(conn: *mut connection) {
       tprintln("failed cancel work {errno.enum-name()}");
     }
   };
-  uv/close(conn.client.as-handle(), fn h. {
+  uv/close(conn.client-handle(), fn h. {
     let connection = h.get-data[connection]();
     tprintln("closed connection{connection.serial-no}; releasing");
     connection.release();
@@ -223,7 +235,7 @@ fn close-connection(conn: *mut connection) {
 fn alloc-read-buffer(handle: *mut uv/handle, suggested-size: usize, buf: *mut uv/buf) {
   let connection = handle.get-data[connection]();
   tprintln("[c{connection.serial-no}] alloc-read-buffer, size {suggested-size}");
-  let byte-buffer = connection.request-arena*.alloc-buffer[u8](suggested-size.as[size]);
+  let byte-buffer = connection.request-arena.alloc-buffer[u8](suggested-size.as[size]);
   buf <- uv/buf/from-buffer(byte-buffer);
 }
 
@@ -233,7 +245,7 @@ fn queue-http-handler(connection: *mut connection, request: http/request, handle
   let connection = client.get-data[connection]();
   tprintln("read complete: {request.header.url}\n-----------");
 
-  let work: *mut http-handler-work = connection.request-arena*.push({
+  let work: *mut http-handler-work = connection.request-arena.push({
     connection,
     request,
 
@@ -244,7 +256,6 @@ fn queue-http-handler(connection: *mut connection, request: http/request, handle
   // let work-req = connection.request-arena*.alloc[uv/work];
   let work-req = alloc-mode:system-heap.allocT[uv/work];
   work-req.set-data(work);
-  // nocommit: ls-entity do-work here should register as a usage of the function
   let queue-rc = uv/queue_work(uv-loop, work-req, do-work, after-do-work);
   if queue-rc != 0 {
     tprintln("uv_queue_work for request handler failed: {queue-rc}");
@@ -267,8 +278,7 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
         if connection.current-work is :none {
           close-connection(connection);
         } else {
-           // nocommit: synchronize access to should-close and is-closing
-           connection.should-close* <- true;
+           connection.set-should-close-sync(true);
         };
         return();
       },
@@ -298,8 +308,8 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
 }
 
 type connection = {
-  connection-arena: arena,
-  client: *mut uv/tcp,
+  connection-arena: *arena,
+  client: uv/tcp,
   serial-no: u64,
   close-state: {
     lock: uv/mutex,
@@ -313,13 +323,102 @@ type connection = {
 
   route-handlers: span[route-handler],
 
-  request-arena: arena,
+  request-arena: *arena,
   request-parser: http/parser,
 
   make-user-deps: *fn() -> ptr,
   matched-handler: ?route-handler,
   parsed-header: ?http/header,
 }
+
+ns for connection {
+  fn make(uv-loop: *uv-loop, make-user-deps: *fn() -> ptr, route-handlers: span[route-handler]): *mut connection {
+    let connection = {
+      // We need a stable pointer to connection-arena
+      let connection-arena = core/arena/init-virtual(usageHintMb = 1);
+      connection-arena.set-name("connection");
+      let request-arena: *mut arena = core/arena/init-virtual(usageHintMb = 1);
+      request-arena.set-name("request");
+      let conn: *mut connection = alloc-mode:system-heap.allocT();
+
+      conn <- {
+        connection-arena,
+        client: uninit,
+        serial-no: { &conn-serial <- conn-serial + 1; conn-serial },
+        close-state: {
+          lock: uninit,
+          is-closing: false,
+          should-close: false,
+        },
+        // for calling cancel
+        current-work: :none,
+
+        route-handlers,
+
+        request-arena, 
+        request-parser: http/parser-init[connection](
+          connection-arena = connection-arena,
+          request-arena = request-arena,
+          user-data = conn,
+          on-header-complete = on-complete-http-header,
+          on-body-complete = on-complete-http-body,
+        ),
+
+        make-user-deps,
+        matched-handler: :none,
+        parsed-header: :none,
+      };
+      assert(not conn.connection-arena.base-ptr.is-null());
+
+      let mutex-rc = uv/mutex_init(conn.close-state*.lock*);
+      if mutex-rc != 0 crash("uv_mutex_init failed");
+
+      let tcp-init-rc = uv/tcp_init(uv-loop, conn.client*);
+      if tcp-init-rc != 0 {
+        eprintln("tcp init failed: {string/wrap-c(uv/strerror(tcp-init-rc).as[ptr])}");
+      };
+      conn.client*.set-data(conn);
+      uv/tcp_nodelay(conn.client*, 1);
+
+      conn
+    };
+    connection
+  }
+  fn release(self: *mut connection) {
+    tprintln("conn{self.serial-no} request arena close usedBytes: {self.request-arena.usedBytes()}");
+    self.request-arena.release();
+    tprintln("conn{self.serial-no} connection arena close usedBytes: {self.connection-arena.usedBytes()}");
+    self.connection-arena.release();
+    alloc-mode:system-heap.freeT(self);
+  }
+  fn finish-request(self: *mut connection) {
+    tprintln("finish-request");
+    if not self.parsed-header.!.keep-alive {
+      close-connection(self);
+    } else {
+      tprintln("keepalive! conn{self.serial-no} request arena reset usedBytes: {self.request-arena.usedBytes()}");
+      self.current-work* <- :none;
+      self.request-arena.reset(true);
+      self.request-parser*.reset();
+    }
+  }
+
+  fn get-close-state-sync(self: *mut connection): { is-closing: bool, should-close: bool } {
+    uv/mutex_lock(self.close-state*.lock*);
+    let state = { is-closing: self.close-state.is-closing, should-close: self.close-state.should-close };
+    uv/mutex_unlock(self.close-state*.lock*);
+    state
+  }
+  fn set-is-closing-sync(self: *connection, is-closing: bool) {
+    self.close-state*.is-closing* <- is-closing;
+  }
+  fn set-should-close-sync(self: *connection, should-close: bool) {
+    self.close-state*.should-close* <- should-close;
+  }
+
+  fn client-handle(self: *connection): *uv/handle { self.client*.as-handle() }
+}
+
 let mutable conn-serial: u64 = 0
 let mutable conn-count: u64 = 0
 
@@ -360,77 +459,6 @@ fn on-complete-http-body(connection: *mut connection, chunks: span[span[u8]]) {
   queue-http-handler(connection, request, connection.matched-handler.get())
 }
 
-
-//      let request = {
-//        header,
-//        body: switch handler.body-mode {
-//          :none -> :buffered(list/empty()),
-//          :strict -> :buffered(list/empty()),
-//          :stream -> :streamed({ source: list/empty(), cursor: 0 })
-//        }
-//      }: http/request;
-ns for connection {
-  fn make(make-user-deps: *fn() -> ptr, route-handlers: span[route-handler]): *mut connection {
-    let connection = {
-      // We need a stable pointer to connection-arena
-      let addr: *mut connection = alloc-mode:system-heap.allocT();
-      let connection-arena: *mut arena = addr.connection-arena*;
-      let request-arena: *mut arena = addr.request-arena*;
-
-      addr.connection-arena* <- core/arena/_virtual(usageHintMb = 1);
-      connection-arena.set-name("connection");
-      addr.request-arena* <- core/arena/_virtual(usageHintMb = 1);
-      request-arena.set-name("request");
-      let client = connection-arena.alloc[uv/tcp];
-      addr <- {
-        connection-arena: uninit, // already stored
-        client,
-        serial-no: { &conn-serial <- conn-serial + 1; conn-serial },
-        is-closing: false,
-        should-close: false,
-        // for calling cancel
-        current-work: :none,
-
-        route-handlers,
-
-        request-arena: uninit, // already stored
-        request-parser: http/parser-init[connection](
-          connection-arena = connection-arena,
-          request-arena = request-arena,
-          user-data = addr,
-          on-header-complete = on-complete-http-header,
-          on-body-complete = on-complete-http-body,
-        ),
-
-        make-user-deps,
-        matched-handler: :none,
-        parsed-header: :none,
-      };
-      assert(not addr.connection-arena.base-ptr.is-null());
-      addr
-    };
-    connection
-  }
-  fn release(self: *mut connection) {
-    tprintln("conn{self.serial-no} request arena close usedBytes: {self.request-arena.usedBytes()}");
-    self.request-arena*.release();
-    tprintln("conn{self.serial-no} connection arena close usedBytes: {self.connection-arena.usedBytes()}");
-    self.connection-arena*.release();
-    alloc-mode:system-heap.freeT(self);
-  }
-  fn finish-request(self: *mut connection) {
-    tprintln("finish-request");
-    if not self.parsed-header.!.keep-alive {
-      close-connection(self);
-    } else {
-      tprintln("keepalive! conn{self.serial-no} request arena reset usedBytes: {self.request-arena.usedBytes()}");
-      self.current-work* <- :none;
-      self.request-arena*.reset(true);
-      self.request-parser*.reset();
-    }
-  }
-}
-
 fn on-new-connection(server: *mut uv/stream, status: i32) {
   mem/tmp().reset(true);
   tprintln("------------ on_new_connection -------------");
@@ -442,17 +470,10 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
   let l = uv/handle_get_loop(server.as-handle());
 
   let server-data = server.as-handle().get-data[server-data];
-  let connection: *mut connection = connection/make(server-data.make-deps, server-data.route-handlers);
+  let connection: *connection = connection/make(l, server-data.make-deps, server-data.route-handlers);
+  let client: *uv/tcp = connection.client*;
+
   &conn-count <- conn-count + 1;
-
-  let client: *mut uv/tcp = connection.client;
-  let tcp-init-rc = uv/tcp_init(l, client);
-  client.set-data(connection);
-  if tcp-init-rc != 0 {
-    eprintln("tcp init failed: {string/wrap-c(uv/strerror(tcp-init-rc).as[ptr])}");
-  };
-  uv/tcp_nodelay(client, 1);
-
   let accept-rc = uv/accept(server, client.as-stream());
   tprintln("connection arena new usedBytes: {connection.connection-arena.usedBytes()}");
   if accept-rc == 0 {
@@ -484,7 +505,7 @@ type {name} = {{
 #static types/assert-layout[route-handler](32, 8, [0, 8, 24])
 #static types/assert-layout[user-route-handler[empty]](32, 8, [0, 8, 24])
 
-fn match-route(request-header: http/header, all-routes: span[route-handler]): ?route-handler {
+fn match-route(_request-header: http/header, all-routes: span[route-handler]): ?route-handler {
   all-routes.first()
 }
 
@@ -541,8 +562,7 @@ let mutable tls worker-user-data: ptr = ptr/null
 
 fn main(): i32 { 
 
-  let arena: arena = arena/default();
-  let context arena: *mut arena = &arena;
+  let context arena = arena/init-default();
   arena.set-name("mainthread");
 
   // only once per thread
@@ -550,7 +570,8 @@ fn main(): i32 {
     (alloc-mode:system-heap).new(
       { 
         config: { jwt-secret: "asdf" },
-        db-conn: {}
+        db-conn: {},
+        pixels: zeroed(),
       }: app/deps
     )
   };

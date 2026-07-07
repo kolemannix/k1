@@ -1,11 +1,10 @@
-// Copyright (c) 2025 knix
+// Copyright (c) 2025 kni
 // All rights reserved.
 
 type arena = {
   base-ptr: ptr,
   cur-addr: ptr,
-  max-addr: ptr,
-  mark: ptr,
+  end-addr: ptr,
   alloc-kind: either(u64) { virtual, malloc },
   name: string,
   // eventually we'll support chaining here
@@ -15,53 +14,63 @@ ns for arena {
   let mb: size = 1048576
   let gb: size = 1073741824
 
-  fn regionSizeBytes(self: arena): size {
-    self.max-addr.diff(self.base-ptr)
+  fn regionSizeBytes(self: *arena): size {
+    self.end-addr.diff(self.base-ptr)
+  }
+  fn allocationSizeBytes(self: *arena): size {
+    self.end-addr.diff(self.get-alloc-base())
   }
 
-  fn usedBytes(self: arena): size {
+  fn usedBytes(self: *arena): size {
     self.cur-addr.diff(self.base-ptr)
   }
 
+
   fn set-name(self: *arena, name: string) { self.name* <- name }
 
-  fn _make(base-ptr: ptr, size, alloc-kind: arena.alloc-kind): arena {
-    {
-      base-ptr: base-ptr,
-      cur-addr: base-ptr,
-      max-addr: base-ptr.add-bytes(size),
-      mark: ptr/null,
+  fn get-alloc-base(self: *arena): ptr { self.base-ptr.sub-bytes(types/stride[arena]) }
+  fn store-header(base-ptr: ptr, size, alloc-kind: arena.alloc-kind): *arena {
+    assert(size >= types/stride[arena]);
+    let memory-start = base-ptr.add-bytes(types/stride[arena]);
+    let memory-size = size - types/stride[arena];
+    let arena: *arena = base-ptr.rw[arena];
+    // #static assert(types/align[arena] <= MIN_ALIGN);
+    arena <- {
+      base-ptr: memory-start,
+      cur-addr: memory-start,
+      end-addr: memory-start.add-bytes(memory-size),
       alloc-kind,
       name: "",
-    }
+    };
+    arena
   }
 
-  fn init-virtual(usageHintMb: size): arena {
+  fn init-virtual(usageHintMb: size): *arena {
     let sizeBytes = 1 * gb;
     let base-ptr: ptr = mem/virtualAlloc(sizeBytes);
     #if k1/debug mem/set(dst = base-ptr, value = 0xCD, count = usageHintMb * mb);
     posix/madvise(base-ptr, (usageHintMb * mb).as[c-sizet], advice = posix/MADV_SEQUENTIAL);
-    _make(base-ptr, sizeBytes, :virtual)
+    store-header(base-ptr, sizeBytes, :virtual)
   }
 
-  fn init-physical(self: *mut arena): arena {
-    let size-bytes = 8 * kb;
+  fn init-physical(size-bytes: size): *arena {
+    // simple single allocation for now, will do chunk chaining once I need it
     let base-ptr = mem/alloc(size = size-bytes, align = MIN_ALIGN);
-    _make(base-ptr, size-bytes, :malloc)
+    store-header(base-ptr, size-bytes, :malloc)
   }
 
-  fn init-default(): arena {
+  fn init-default(): *arena {
     init-virtual(usageHintMb = 1)
   }
 
-  fn release(self: *mut arena) {
+  fn release(self: *arena) {
     switch self.alloc-kind {
-      :virtual -> mem/virtualRelease(self.base-ptr, self.regionSizeBytes()),
-      :malloc -> mem/free(self.base-ptr, self.regionSizeBytes(), MIN_ALIGN)
+      :virtual -> mem/virtualRelease(self.get-alloc-base(), self.allocationSizeBytes()),
+      :malloc -> mem/free(self.get-alloc-base(), self.allocationSizeBytes(), MIN_ALIGN)
     };
   }
 
-  fn reset(self: *mut arena, clear: bool) {
+  fn reset(self: *arena, clear: bool) {
     let usedBytes = self.usedBytes();
     self.cur-addr* <- self.base-ptr;
 
@@ -71,7 +80,7 @@ ns for arena {
   }
 
   let MIN_ALIGN: size = types/size[ptr]
-  fn alloc-layout(self: *mut arena, size: size, align: size): ptr {
+  fn alloc-layout(self: *arena, size: size, align: size): ptr {
     let cursor = self.cur-addr.as[size];
 
     // cursor is already MIN_ALIGN-aligned, so only stricter
@@ -80,7 +89,7 @@ ns for arena {
 
     let raw-bump = size + prefix-padding;
 
-    let available = self.max-addr.as[size] - cursor;
+    let available = self.end-addr.as[size] - cursor;
     if available >= raw-bump {
       // Keep the arena cursor MIN_ALIGN-aligned for the next allocation.
       let offset-to-min-align = ptr/get-align-offset(raw-bump, MIN_ALIGN);
@@ -94,20 +103,20 @@ ns for arena {
     }
   }
 
-  fn alloc[T](self: *mut arena): *mut T {
+  fn alloc[T](self: *arena): *T {
     let dataStart = self.alloc-layout(types/size[T], types/align[T]);
-    dataStart.as[*mut T]
+    dataStart.as[*T]
   }
 
-  fn push[T](self: *mut arena, t: T): *mut T {
+  fn push[T](self: *arena, t: T): *T {
     let dataStart = self.alloc-layout(types/size[T], types/align[T]);
 
-    let ref: *mut T = dataStart.rw();
+    let ref: *T = dataStart.rw();
     ref <- t;
     ref
   }
 
-  fn push-span[T](self: *mut arena, ts: span[T]): buffer[T] {
+  fn push-span[T](self: *arena, ts: span[T]): buffer[T] {
     let size = ts.buffer.sizeBytes();
     let align = types/align[T]();
     let base = self.alloc-layout(size, align);
@@ -116,27 +125,53 @@ ns for arena {
     buffer
   }
 
-  fn alloc-buffer[t](self: *mut arena, size): buffer[t] {
+  fn alloc-buffer[t](self: *arena, size): buffer[t] {
     buffer/allocateIn[t](context :custom-arena(self))(size)
   }
 
-  fn push-string(self: *mut arena, s: string): string {
+  fn push-string(self: *arena, s: string): string {
     let data: buffer[char] = self.push-span(s.span());
     string/wrapBuffer(data)
   }
 
-  fn alloc-list[T](self: *mut arena, cap: size): list[T] {
+  fn alloc-list[T](self: *arena, cap: size): list[T] {
     list/withCapacityIn(context :custom-arena(self))(cap)
   }
 
-  fn mark(self: *mut arena) {
-    self.mark* <- self.cur-addr;
+
+  // if self.end_ptr() == mem.cursor() {
+  //     // Fast path for growth when this list is the last thing in the arena; just move the cursor forward
+  //     let additional_ts = new_cap as usize - self.cap();
+  //     mem.push_slice_uninit_prealigned::<T>(additional_ts);
+  //     let new_buf = core::ptr::slice_from_raw_parts_mut(self.buf as *mut T, new_cap as usize);
+  //     let new_me = List { buf: new_buf, len: self.len, _tag: PhantomData };
+  //     debug_assert_eq!(new_me.end_ptr().addr(), mem.cursor().addr());
+  //     new_me
+  fn try-realloc(self: *arena, old-ptr: ptr, old-size: size, new-size: size, align: size): ptr {
+    let old-end = old-ptr.add-bytes(old-size);
+    if old-end == self.cur-addr {
+      println("yes");
+      let bump-amount = new-size - old-size;
+      self.cur-addr* <- self.cur-addr.add-bytes(bump-amount);
+      old-ptr
+    } else {
+      println("no");
+      let new-allocation = self.alloc-layout(new-size, align);
+      mem/copy(dst = new-allocation, src = old-ptr, count = old-size);
+      new-allocation
+    }
   }
 
-  fn reset-to-mark(self: *mut arena) {
-    assert(self.mark != ptr/null);
-    self.cur-addr* <- self.mark;
-    self.mark* <- ptr/null;
+  fn mark(self: *arena): arena-mark {
+    { start: self.cur-addr }
+  }
+
+  fn pop-to-mark(self: *arena, arena-mark) {
+    assert(arena-mark.start >= self.base-ptr);
+    assert(arena-mark.start < self.end-addr);
+    assert(arena-mark.start >= self.cur-addr);
+    self.cur-addr* <- arena-mark.start;
   }
 
 }
+type arena-mark = { start: ptr }
