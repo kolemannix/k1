@@ -81,7 +81,7 @@ pub struct ProgramIr {
 }
 type IrStr = MStr<ProgramIr>;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IrUnitId {
     Function(FunctionId),
     Expr(TypedExprId),

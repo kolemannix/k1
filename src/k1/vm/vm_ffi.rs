@@ -23,16 +23,41 @@ pub(super) fn handle_ffi_call(
     fn_name: StringId,
     function_id: FunctionId,
 ) -> K1Result<Value> {
-    let nargs = args.len() as usize;
+    let mut resolved: smallvec::SmallVec<[Value; 8]> =
+        smallvec::SmallVec::with_capacity(args.len() as usize);
+    for arg_value in k1.ir.mem.getn(args).iter() {
+        resolved.push(vm::resolve_value(k1, vm, frame_index, *arg_value)?);
+    }
+    handle_ffi_call_resolved(k1, vm, return_pt, &resolved, lib_name, fn_name, function_id, None)
+}
+
+/// Core FFI dispatch on already-resolved argument values. Used directly by
+/// the bc VM (which has the args contiguous in its out-arg region) and via
+/// the resolving wrapper above by the old IR interpreter.
+///
+/// `ret_dst`: caller-provided storage for an aggregate return. When given,
+/// libffi writes the struct directly into it (the bc VM passes its sret
+/// pointer, so no temp buffer and no copy afterwards). Ignored for scalar
+/// returns, which land in a local word and go back by value.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn handle_ffi_call_resolved(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    return_pt: PhysicalType,
+    args: &[Value],
+    lib_name: Option<StringId>,
+    fn_name: StringId,
+    function_id: FunctionId,
+    ret_dst: Option<*mut u8>,
+) -> K1Result<Value> {
+    let nargs = args.len();
     let mut ffi_args_value_storage = vm.stack.mem.new_list(nargs as u32);
     let mut ffi_args_value_ptrs = vm.stack.mem.new_list(nargs as u32);
 
     let fn_type = k1.ir.functions.get(function_id).unwrap().fn_type;
     let function_params = fn_type.params;
 
-    for (arg_value, param) in k1.ir.mem.getn(args).iter().zip(k1.ir.mem.getn(function_params)) {
-        let vm_value = vm::resolve_value(k1, vm, frame_index, *arg_value)?;
-
+    for (vm_value, param) in args.iter().zip(k1.ir.mem.getn(function_params)) {
         // If aggregate, you already have the pointer that libffi wants
         if param.pt.is_agg() {
             ffi_args_value_ptrs.push(vm_value.as_ptr() as *mut c_void);
@@ -82,15 +107,31 @@ pub(super) fn handle_ffi_call(
         core::slice::from_raw_parts(ffi_handle.cif.arg_types, nargs)
     });
 
-    let result_storage = unsafe {
-        // TODO(ffi): We've already allocated space for non-scalar returns; use it
-        // TODO(ffi): If the result fits in 1 word, we should just use the instruction slot instead
-        let ret_size = (*(ffi_handle.cif.rtype)).size;
-        let ret_align = (*(ffi_handle.cif.rtype)).alignment;
-        let result_space: *mut u8 =
-            vm.stack.push_layout_uninit(Layout { size: ret_size as u32, align: ret_align as u32 });
-        debug!("result space is {} {}", ret_size, ret_align);
-        result_space
+    // Return storage:
+    // - Scalar (and void): a local word. libffi widens sub-word integral
+    //   returns to a full ffi_arg, so this must be >= 8 bytes; a u64 is both
+    //   big enough and aligned enough. The value goes back by-value (the bc
+    //   VM's ret_reg / the old VM's instruction slot)
+    // - Aggregate: the caller's destination when provided (bc sret; libffi
+    //   writes exactly rtype->size bytes, and k1 layouts match the C ABI),
+    //   otherwise a stack temp sized from the cif (old engine path; its
+    //   fulfill_return copies out of it).
+    let mut scalar_ret_word: u64 = 0;
+    let result_storage: *mut u8 = if return_pt.is_agg() {
+        match ret_dst {
+            Some(dst) => dst,
+            None => unsafe {
+                let ret_size = (*(ffi_handle.cif.rtype)).size;
+                let ret_align = (*(ffi_handle.cif.rtype)).alignment;
+                debug!("result space is {} {}", ret_size, ret_align);
+                vm.stack.push_layout_uninit(Layout {
+                    size: ret_size as u32,
+                    align: ret_align as u32,
+                })
+            },
+        }
+    } else {
+        &mut scalar_ret_word as *mut u64 as *mut u8
     };
 
     unsafe {

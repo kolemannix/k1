@@ -116,7 +116,12 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         dump_module: false,
         profile: false,
         target: None,
-        quiet: true,
+        chatty: false,
+        static_exec: match std::env::var("K1_TEST_SUITE_STATIC_EXEC").as_deref() {
+            Ok("ir") => k1::compiler::StaticExecMode::Ir,
+            Ok("bc") => k1::compiler::StaticExecMode::Bc,
+            _ => k1::compiler::StaticExecMode::Both,
+        },
         command: Command::Build { file: path.as_ref().to_owned() },
     };
     let compile_result = compiler::compile_program(&args);
