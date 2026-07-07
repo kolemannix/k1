@@ -14,10 +14,10 @@
         height: 3px;
       }
       .off-pixel {
-        background-color: "black";
+        background-color: black;
       }
       .on-pixel {
-        background-color: "yellow";
+        background-color: yellow;
       }
     </style>
 </head>
@@ -26,7 +26,7 @@
     <h1>Hello, World!</h1>
     <input data-bind="foo" />
     <input type="checkbox" name="sync" data-bind="sync">Sync</checkbox>
-    <div data-on-interval__duration.100ms="if ($sync) @get('/app/endpoint')"></div>
+    <div data-on-interval__duration.500ms="if ($sync) @get('/app/endpoint')"></div>
     <div id="grid"></div>
 
 

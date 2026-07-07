@@ -118,7 +118,7 @@ ns for arena {
 
   fn push-span[T](self: *arena, ts: span[T]): buffer[T] {
     let size = ts.buffer.sizeBytes();
-    let align = types/align[T]();
+    let align = types/align[T];
     let base = self.alloc-layout(size, align);
     let buffer: buffer[T] = buffer/fromPtrAndCount[T](base, ts.len());
     buffer/copy(src = ts.buffer, dst = buffer);
@@ -151,6 +151,34 @@ ns for arena {
       mem/copy(dst = new-allocation, src = old-ptr, count = old-size);
       new-allocation
     }
+  }
+
+  // Return physical pages beyond `retain-bytes` to the OS, keeping the
+  // virtual reservation (and every pointer below the cursor) intact.
+  // Reclaimed pages read back as zero the next time they are touched.
+  // Live data is never reclaimed: the watermark is clamped to cur-addr,
+  // so this is safe to call at any time, not just after reset().
+  // No-op for :malloc arenas.
+  fn shrink-to-fit(self: *arena, retain-bytes: size) {
+    if self.alloc-kind is :virtual {
+      let keep-end = if self.usedBytes() > retain-bytes {
+        self.cur-addr
+      } else {
+        self.base-ptr.add-bytes(retain-bytes)
+      };
+      // Round up to a page boundary; a partially-retained page (including
+      // the one holding this arena's header) must survive.
+      let page-size = posix/getpagesize().as[size];
+      let reclaim-start = keep-end.aligned(page-size);
+      if reclaim-start < self.end-addr {
+        let reclaim-len = self.end-addr.diff(reclaim-start);
+        let advice = if k1/os-macos posix/MADV_FREE_REUSABLE else posix/MADV_DONTNEED;
+        let result = posix/madvise-raw(reclaim-start, reclaim-len.as[c-sizet], advice);
+        if result != 0 {
+          crash("madvise({reclaim-start} x {reclaim-len}) failed for arena {self.name}")
+        };
+      };
+    };
   }
 
   fn mark(self: *arena): arena-mark {
