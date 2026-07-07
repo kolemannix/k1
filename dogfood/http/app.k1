@@ -1,7 +1,8 @@
 ns app;
 
 
-type deps = { config: { jwt-secret: string }, db-conn: db-conn }
+let gridsize: u32 = 256
+type deps = { config: { jwt-secret: string }, db-conn: db-conn, pixels: array[u8, 65536] }
 
 // TODO load header.html globally
 // Template together index.html
@@ -14,32 +15,48 @@ fn handle(req: http/request, deps: *mut deps): http-response {
 
   tprintln("user-code/handle: request {req.header.method.enum-name()} `{req.header.url}`");
 
-  let respond = fn text: string . {
+  let write-response = fn(out: *StringBuilder, text: string) {
     // tprintln("responding with string {text}");
-    let response = StringBuilder/new();
     writef(
-      response,
+      out,
       "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: "
       "{text.len()}\r\n\r\n{text}"
-    );
-    response.build()
+    )
   };
 
   if req.header.url.starts-with("/app/endpoint") {
-    :complete(respond(`<div id="hal">I cannae doe it</div>`));
+    update(deps.pixels*);
+    let out = StringBuilder/new();
+    let body-out = StringBuilder/new();
+    render(&body-out, deps.pixels*);
+    write-response(&out, body-out.build());
+    // To avoid the double-buffer situation, we could support 'chunks' instead of
+    // just 'complete'; libuv supports this vectored write
+    :complete(out.build());
   } else {
     let template: string = core/files/read-to-string("web/header.html");
-    :complete(respond(template));
+    let out = StringBuilder/new();
+    write-response(&out, template);
+    :complete(out.build());
   }
   // :complete("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror")
 }
-// fn handle-sse(req: http/request, deps: *mut deps): http-response {
-//   // let query-result: task[result[int, string]] = db-conn.run-query("select count(*) from fake_users where active = true");
-//   let query-result: result[int, string] = deps.db-conn.run-query("select count(*) from fake_users where active = true");
-// 
-//   tprintln("handler: fake processing and serializing request {req.header.method.enum-name()} `{req.header.url}`");
-//   switch query-result {
-//     :ok(_count) -> :complete("HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello from k1"),
-//     :err(_msg) -> :complete("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror"),
-//   }
-// }
+
+fn render(out: *StringBuilder, pixels: *array[u8, 65536]) {
+  out.string(`<div id="grid" style="position: relative">`);
+  let size = 3;
+  for pixels {
+    let y = itIndex / gridsize;
+    let x = itIndex % gridsize;
+    writelnf(out, `<div class="{if it == 0 "off-pixel" else "on-pixel"}" style="top: {y * size}px; left: {x * size}px id="pixel-{x},{y}"></div>`);
+  };
+  out.string(`</div">`);
+}
+
+fn update(pixels: *array[u8, 65536]): { x: u32, y: u32 } {
+  let x = sys/random(gridsize);
+  let y = sys/random(gridsize);
+  let pix = pixels.get-ref(y*gridsize + x);
+  pix <- pix ^ 1;
+  { x, y }
+}

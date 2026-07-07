@@ -746,6 +746,8 @@ impl TypedPatternPool {
             TypedPattern::Reference(refer) => {
                 self.get_pattern_bindings_rec(refer.inner_pattern, bindings)
             }
+            TypedPattern::RefNull(_, _) => (),
+            TypedPattern::PointerNull(_) => (),
             TypedPattern::Type(t) => self.get_pattern_bindings_rec(t.inner_pattern, bindings),
         }
     }
@@ -768,6 +770,8 @@ impl TypedPatternPool {
                 .any(|field_pattern| self.pattern_never_useless(field_pattern.pattern)),
             TypedPattern::Wildcard(_span_id) => false,
             TypedPattern::Reference(refer) => self.pattern_never_useless(refer.inner_pattern),
+            TypedPattern::RefNull(_, _) => true,
+            TypedPattern::PointerNull(_) => true,
             TypedPattern::Type(_) => true,
         }
     }
@@ -787,6 +791,8 @@ pub enum TypedPattern {
     Struct(TypedStructPattern),
     Wildcard(SpanId),
     Reference(TypedReferencePattern),
+    RefNull(TypeId, SpanId),
+    PointerNull(SpanId),
     Type(TypePattern),
 }
 
@@ -798,12 +804,14 @@ impl TypedPattern {
             TypedPattern::LiteralFloat(_, _) => "float",
             TypedPattern::LiteralBool(_, _) => "bool",
             TypedPattern::LiteralString(_, _) => "string",
-            TypedPattern::Enum(_) => "enum variant",
+            TypedPattern::Enum(_) => "enum",
             TypedPattern::Variable(_) => "variable",
-            TypedPattern::Sum(_) => "sum variant",
-            TypedPattern::Struct(_) => "struct pattern",
+            TypedPattern::Sum(_) => "variant",
+            TypedPattern::Struct(_) => "struct",
             TypedPattern::Wildcard(_) => "_",
-            TypedPattern::Reference(_) => "reference pattern",
+            TypedPattern::Reference(_) => "reference",
+            TypedPattern::RefNull(_, _) => "null reference",
+            TypedPattern::PointerNull(_) => "null ptr",
             TypedPattern::Type(_) => "type pattern",
         }
     }
@@ -820,6 +828,8 @@ impl TypedPattern {
             TypedPattern::Struct(struct_pattern) => struct_pattern.span,
             TypedPattern::Wildcard(span) => *span,
             TypedPattern::Reference(refer) => refer.span,
+            TypedPattern::RefNull(_, span) => *span,
+            TypedPattern::PointerNull(span) => *span,
             TypedPattern::Type(t) => t.span,
         }
     }
@@ -2727,6 +2737,7 @@ pub struct TypedProgram {
 
 impl Drop for TypedProgram {
     fn drop(&mut self) {
+        unsafe { libc::dlclose(self.vm_process_dlopen_handle) };
         for (id, vm_dylib_handle) in self.vm_dylib_handles.iter() {
             unsafe {
                 libc::dlclose(*vm_dylib_handle);
@@ -5012,14 +5023,27 @@ impl TypedProgram {
                 }
             }
             ParsedPattern::Variable(ident_id, span) => {
-                if !allow_bindings {
-                    return failf!(*span, "Bindings are not allowed here");
+                if *ident_id == self.ast.idents.b.null {
+                    match self.types.get(target_type_id) {
+                        Type::Reference(reference_type) => Ok(self
+                            .patterns
+                            .add(TypedPattern::RefNull(reference_type.inner_type, *span))),
+                        Type::Pointer => Ok(self.patterns.add(TypedPattern::PointerNull(*span))),
+                        _ => failf!(
+                            self.ast.get_pattern_span(pat_expr),
+                            "'null' is a pattern that applies to reference (*t) types and ptr"
+                        ),
+                    }
+                } else {
+                    if !allow_bindings {
+                        return failf!(*span, "Bindings are not allowed here");
+                    }
+                    Ok(self.patterns.add(TypedPattern::Variable(VariablePattern {
+                        name: *ident_id,
+                        type_id: target_type_id,
+                        span: *span,
+                    })))
                 }
-                Ok(self.patterns.add(TypedPattern::Variable(VariablePattern {
-                    name: *ident_id,
-                    type_id: target_type_id,
-                    span: *span,
-                })))
             }
             ParsedPattern::Sum(sum_pattern) => {
                 let sum_pattern_span = sum_pattern.span;
@@ -9952,6 +9976,29 @@ impl TypedProgram {
                 self.compile_pattern_into_values(inner_pattern, target_expr, instrs, true, ctx)?;
                 Ok(())
             }
+            TypedPattern::RefNull(_inner_type, span) => {
+                let span = *span;
+                let target_expr_as_ptr = self.synth_cast(
+                    target_expr,
+                    POINTER_TYPE_ID,
+                    CastType::ReferenceToPointer,
+                    Some(span),
+                );
+                let ptr_null_expr =
+                    self.add_static_constant_expr(self.static_values.nullptr_id(), span);
+                let is_null_expr =
+                    self.synth_equals_call_simple(target_expr_as_ptr, ptr_null_expr, span);
+                instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(is_null_expr));
+                Ok(())
+            }
+            TypedPattern::PointerNull(span) => {
+                let span = *span;
+                let ptr_null_expr =
+                    self.add_static_constant_expr(self.static_values.nullptr_id(), span);
+                let is_null_expr = self.synth_equals_call_simple(target_expr, ptr_null_expr, span);
+                instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(is_null_expr));
+                Ok(())
+            }
             TypedPattern::Type(pattern) => {
                 // We want to push a cond to instrs representing whether the type matches
                 let pattern = *pattern;
@@ -12035,6 +12082,7 @@ impl TypedProgram {
     ) -> TypedExprId {
         let function = self.get_function(function_id);
         let function_pointer_type = self.types.add_function_pointer_type(function.type_id);
+        self.emit_ls_entity(call_span, LsEntityKind::Function { function_id, is_defn: false });
         self.exprs.add(
             TypedExpr::FunctionPointer(FunctionPointerExpr { function_id }),
             function_pointer_type,
@@ -17872,6 +17920,8 @@ impl TypedProgram {
             (TypedPattern::LiteralInteger(_int_pattern, _), PatternCtor::Int) => false,
             (TypedPattern::LiteralFloat(_float_pattern, _), PatternCtor::Float) => false,
             (TypedPattern::LiteralString(_string_pattern, _), PatternCtor::String) => false,
+            (TypedPattern::RefNull(_type_id, _), PatternCtor::Reference(_)) => false,
+            (TypedPattern::PointerNull(_), PatternCtor::Pointer) => false,
 
             (TypedPattern::Sum(sum_pat), PatternCtor::Sum { variant_name, inner }) => {
                 if *variant_name == sum_pat.variant_name {

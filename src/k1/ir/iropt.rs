@@ -76,6 +76,7 @@ fn collect_direct_unoptimized_callees(
                 let call = k1.ir.calls.get(*call_id);
                 match call.callee {
                     IrCallee::Direct(function_id) => {
+                        debug!("getting callee {}", k1.function_id_to_string(function_id, true));
                         let callee_unit =
                             get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
                         if !callee_unit.inline_done {

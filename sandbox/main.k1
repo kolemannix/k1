@@ -1,11 +1,11 @@
 fn main(): i32 {
-  let a = core/arena/init-virtual(0);
-  a.mark();
-  for IntRange/upTo(100) { a.alloc[u64](); };
-
-  println("a is at {a.usedBytes()}");
-  a.reset(false);
-  println("a is at {a.usedBytes()}");
+  let arena = mem/tmp();
+  
+  let xs = list/withCapacity[int](8);
+  for IntRange/upTo(100) {
+    xs.push(it);
+  };
+  println("base: {xs.base-ptr()} cap {xs.cap()}");
 
   0
 }

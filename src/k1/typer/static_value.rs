@@ -64,7 +64,7 @@ pub enum StaticValue {
     Sum(StaticSum),
     LinearContainer(StaticContainer),
 
-    // Special, optimized-ish representation
+    // Special, optimized-ish representations
     Zero(TypeId),
     // Raw(TypeId, *mut u8)
 }
@@ -230,6 +230,7 @@ pub struct StaticValuePool {
     empty_id: StaticValueId,
     false_id: StaticValueId,
     true_id: StaticValueId,
+    nullptr_id: StaticValueId,
 }
 
 impl StaticValuePool {
@@ -238,6 +239,7 @@ impl StaticValuePool {
         let false_id = pool.add(StaticValue::Bool(false));
         let true_id = pool.add(StaticValue::Bool(true));
         let empty_id = pool.add(StaticValue::Empty);
+        let nullptr_id = pool.add(StaticValue::Zero(POINTER_TYPE_ID));
         StaticValuePool {
             mem: kmem::Mem::make(),
             pool,
@@ -245,6 +247,7 @@ impl StaticValuePool {
             empty_id,
             false_id,
             true_id,
+            nullptr_id,
         }
     }
 
@@ -258,6 +261,10 @@ impl StaticValuePool {
 
     pub fn true_id(&self) -> StaticValueId {
         self.true_id
+    }
+
+    pub fn nullptr_id(&self) -> StaticValueId {
+        self.nullptr_id
     }
 
     pub fn next_id(&self) -> StaticValueId {

@@ -49,35 +49,20 @@ ns mem {
 
   impl print for alloc-mode {
     fn print-to[w: writer](self, w) {
-      w.string(self.kindName())
+      use types/sum;
+      w.string(self.sum-name())
     }
   }
 
   ns for alloc-mode {
 
-    fn supportsRealloc(self: alloc-mode): bool { switch self {
-      :current -> crash("unreachable"),
-      :system-heap or :custom-heap(_) -> true,
-      :tmp or :custom-arena(_) -> false,
-      :gc -> false
-    } }
-
     fn requiresFree(self: alloc-mode): bool { switch self {
-      :current -> crash("unreachable"),
-      :system-heap -> true,
-      :custom-heap(_) -> true,
-      :tmp -> false,
+      :current         -> crash("unreachable"),
+      :system-heap     -> true,
+      :custom-heap(_)  -> true,
+      :tmp             -> false,
       :custom-arena(_) -> false,
-      :gc -> false
-    } }
-
-    fn kindName(self: alloc-mode): string { switch self {
-      :current -> "current",
-      :system-heap -> "system",
-      :custom-heap(_) -> "custom",
-      :tmp -> "tmp",
-      :custom-arena(_) -> "custom_bump",
-      :gc -> "gc"
+      :gc              -> false
     } }
 
     fn resolve(self: alloc-mode): alloc-mode {
@@ -119,9 +104,13 @@ ns mem {
           let reallocFn = alloc.*.realloc;
           reallocFn(oldPtr, oldSize, align, newSize)
         },
-        :custom-arena(bump) -> crash("UnsupportedOperation: Bump realloc"),
-        :tmp -> crash("UnsupportedOperation: arena realloc"),
-        :gc -> crash("UnsupportedOperation: gc realloc")
+        :custom-arena(arena) -> {
+          arena.try-realloc(oldPtr, oldSize, newSize, align)
+        },
+        :tmp -> {
+          tmp().try-realloc(oldPtr, oldSize, newSize, align)
+        },
+        :gc -> oldPtr
       }
     }
 
@@ -158,9 +147,9 @@ ns mem {
   fn new[T](t: T): *mut T { alloc-mode:current.new(t) }
 
   fn alloc-layout(size: size, align: size): ptr { alloc-mode:current.alloc(size, align) }
-  fn alloc-t[t](): ptr { alloc-mode:current.allocT() }
+  fn alloc-t[t](): *t { alloc-mode:current.allocT() }
 
-  let mutable tls arena-tmp: arena = zeroed()
+  let mutable tls arena-tmp: *arena = ptr/null.rw[arena]
 
   type alias ALLOC_STACK_MAX = 64
   let mutable tls allocStack: fixlist[alloc-mode, ALLOC_STACK_MAX] = { 
@@ -181,13 +170,14 @@ ns mem {
   }
 
   fn init-tmp-arena() {
-    if not arena-tmp.base-ptr.is-null() crash("arena-tmp already initialized");
+    // nocommit: better ways of working with ptr/*t. matching is one, 'is-null' magic method on *t also perhaps
+    if not arena-tmp.as[ptr].is-null() crash("arena-tmp already initialized");
     &arena-tmp <- arena/init-default();
   }
 
-  fn tmp(): *mut arena {
-    if arena-tmp.base-ptr.is-null() { init-tmp-arena() };
-    &arena-tmp
+  fn tmp(): *arena {
+    if arena-tmp.as[ptr].is-null() { init-tmp-arena() };
+    arena-tmp
   }
 
 }

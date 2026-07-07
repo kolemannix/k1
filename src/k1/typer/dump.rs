@@ -1014,53 +1014,55 @@ impl TypedProgram {
             TypedPattern::LiteralFloat(value_id, _) => self.display_static_value(w, *value_id),
             TypedPattern::LiteralBool(bool, _) => write!(w, "{bool}"),
             TypedPattern::LiteralString(string_id, _) => {
-                write!(w, "\"{}\"", self.get_string(*string_id))
-            }
+                        write!(w, "\"{}\"", self.get_string(*string_id))
+                    }
             TypedPattern::Variable(var) => self.write_ident(w, var.name),
             TypedPattern::Wildcard(_) => w.write_str("_"),
             TypedPattern::Sum(sum_pat) => {
-                self.write_ident(w, sum_pat.variant_name)?;
-                if let Some(payload) = sum_pat.payload {
-                    w.write_str("(")?;
-                    self.display_pattern(payload, w)?;
-                    w.write_str(")")?;
-                };
-                Ok(())
-            }
-            TypedPattern::Enum(e) => {
-                self.write_ident(w, e.member_name)?;
-                Ok(())
-            }
-            TypedPattern::Struct(struct_pat) => {
-                w.write_str("{ ")?;
-                for (index, field_pat) in
-                    self.patterns.get_slice(struct_pat.fields).iter().enumerate()
-                {
-                    self.write_ident(w, field_pat.name)?;
-                    w.write_str(": ")?;
-                    self.display_pattern(field_pat.pattern, w)?;
-                    let last = index == struct_pat.fields.len() as usize - 1;
-                    if !last {
-                        w.write_str(", ")?;
-                    } else {
-                        w.write_str(" ")?;
+                        self.write_ident(w, sum_pat.variant_name)?;
+                        if let Some(payload) = sum_pat.payload {
+                            w.write_str("(")?;
+                            self.display_pattern(payload, w)?;
+                            w.write_str(")")?;
+                        };
+                        Ok(())
                     }
-                }
-                w.write_str("}")?;
-                Ok(())
-            }
+            TypedPattern::Enum(e) => {
+                        self.write_ident(w, e.member_name)?;
+                        Ok(())
+                    }
+            TypedPattern::Struct(struct_pat) => {
+                        w.write_str("{ ")?;
+                        for (index, field_pat) in
+                            self.patterns.get_slice(struct_pat.fields).iter().enumerate()
+                        {
+                            self.write_ident(w, field_pat.name)?;
+                            w.write_str(": ")?;
+                            self.display_pattern(field_pat.pattern, w)?;
+                            let last = index == struct_pat.fields.len() as usize - 1;
+                            if !last {
+                                w.write_str(", ")?;
+                            } else {
+                                w.write_str(" ")?;
+                            }
+                        }
+                        w.write_str("}")?;
+                        Ok(())
+                    }
             TypedPattern::Reference(reference_pattern) => {
-                self.display_pattern(reference_pattern.inner_pattern, w)?;
-                w.write_str("*")?;
-                Ok(())
-            }
+                        self.display_pattern(reference_pattern.inner_pattern, w)?;
+                        w.write_str("*")?;
+                        Ok(())
+                    }
             TypedPattern::Type(type_pattern) => {
-                w.write_str("type[")?;
-                self.display_type_id(w, type_pattern.type_id, false)?;
-                w.write_str("](")?;
-                self.display_pattern(type_pattern.inner_pattern, w)?;
-                Ok(())
-            }
+                        w.write_str("type[")?;
+                        self.display_type_id(w, type_pattern.type_id, false)?;
+                        w.write_str("](")?;
+                        self.display_pattern(type_pattern.inner_pattern, w)?;
+                        Ok(())
+                    }
+            TypedPattern::RefNull(_, _) => w.write_str("null"),
+            TypedPattern::PointerNull(_) => w.write_str("null"),
         }
     }
 

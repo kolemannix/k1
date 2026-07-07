@@ -116,8 +116,7 @@ pub mod k1_types {
     pub struct Arena {
         pub basePtr: *const u8,
         pub curAddr: u64,
-        pub maxAddr: u64,
-        pub mark: usize,
+        pub endAddr: u64,
         pub allocKind: u64,
         pub name: K1BufferLike,
     }
@@ -223,8 +222,8 @@ impl Vm {
 
         let arena_to_preserve = if let Some(arena_global_id) = arena_global_id {
             if let Some(arena_value) = self.globals.get(&arena_global_id) {
-                let arena_ptr: *const k1_types::Arena = arena_value.as_ptr().cast();
-                debug!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
+                let arena_ptr: *mut k1_types::Arena = arena_value.as_ptr().cast();
+                eprintln!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
                 let arena: k1_types::Arena = unsafe { arena_ptr.read() };
                 Some(arena)
             } else {
@@ -2494,7 +2493,14 @@ pub fn vm_value_to_static_value(
         Type::FunctionPointer(_) => {
             return failf!(span, "Cannot bake function pointers");
         }
-        Type::Reference(_) => return failf!(span, "Cannot yet bake references"),
+        Type::Reference(_) => {
+            let addr = vm_value.as_ptr();
+            if addr.is_null() || addr.addr() == 0 {
+                k1.static_values.add(StaticValue::Zero(type_id))
+            } else {
+                return failf!(span, "Cannot yet bake non-null references");
+            }
+        }
         Type::Lambda(_) | Type::LambdaObject(_) | Type::Opaque(_) => {
             return failf!(
                 span,

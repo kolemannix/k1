@@ -6,18 +6,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
     <script type="module" src="../datastar.js"></script>
-    <title>My First Webpage</title>
+    <title>k1/d* stress test</title>
+    <style>
+      .off-pixel, .on-pixel {
+        position: absolute;
+        width: 3px;
+        height: 3px;
+      }
+      .off-pixel {
+        background-color: "black";
+      }
+      .on-pixel {
+        background-color: "yellow";
+      }
+    </style>
 </head>
 <body>
+    <div data-json-signals></div>
     <h1>Hello, World!</h1>
-    <p>{{xxx}}</p>
-    <button data-on:click="@get('/app/endpoint')">
-        Open the pod bay doors, HAL.
-    </button>
-    <div id="hal"></div>
-
     <input data-bind="foo" />
-    <div data-on-interval__duration.16.667ms="@get('/app/endpoint')"></div>
+    <input type="checkbox" name="sync" data-bind="sync">Sync</checkbox>
+    <div data-on-interval__duration.100ms="if ($sync) @get('/app/endpoint')"></div>
+    <div id="grid"></div>
+
 
 </body>
 </html>

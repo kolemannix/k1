@@ -238,10 +238,10 @@ fn tick(
 fn example-http() {
 
   let user-data: empty = {};
-  let arena = arena/default();
+  let arena = arena/init-default();
   let parser = parser-init[empty](
-    &arena,
-    &arena,
+    arena,
+    arena,
     &user-data,
     on-header-complete = fn(_d, _h) :strict,
     on-body-complete = fn(_d, _h) {}
