@@ -1,11 +1,13 @@
-fn main(): i32 {
-  let arena = mem/tmp();
-  
-  let xs = list/withCapacity[int](8);
-  for IntRange/upTo(100) {
-    xs.push(it);
-  };
-  println("base: {xs.base-ptr()} cap {xs.cap()}");
+fn print-if-10(x: int) {
+  if x == 10 println("work");
+}
+
+let global-x: int = 5;
+ 
+#debug fn main(): i32 {
+
+  print-if-gt-10(global-x);
+  print-if-gt-10(12);
 
   0
 }
