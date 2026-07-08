@@ -826,6 +826,7 @@ dependencies = [
  "libffi",
  "llvm-sys",
  "log",
+ "memchr",
  "memmap2",
  "mimalloc",
  "pprof",

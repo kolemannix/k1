@@ -18,6 +18,7 @@ dbg = []
 [dependencies]
 # Core dependencies
 anyhow = "1.0.69"
+memchr = "2"
 clap = { version = "4.4.7", features = ["derive"] }
 colored = "2"
 env_logger = "0.10.0"

@@ -1591,11 +1591,11 @@ impl Sources {
         &mut self.sources[file_id as usize]
     }
 
-    pub fn get_line_for_span_start(&self, span: Span) -> Option<&Line> {
+    pub fn get_line_for_span_start(&self, span: Span) -> Option<Line> {
         self.sources[span.file_id as usize].get_line_for_span_start(span)
     }
 
-    pub fn get_lines_for_span(&self, span: Span) -> Option<(&Line, &Line)> {
+    pub fn get_lines_for_span(&self, span: Span) -> Option<(Line, Line)> {
         let (start, end) = self.sources[span.file_id as usize].get_lines_for_span(span)?;
         Some((start, end))
     }
@@ -1821,7 +1821,7 @@ impl ParsedProgram {
         }
     }
 
-    pub fn get_lines_for_span_id(&self, span_id: SpanId) -> Option<(&Line, &Line)> {
+    pub fn get_lines_for_span_id(&self, span_id: SpanId) -> Option<(Line, Line)> {
         self.sources.get_lines_for_span(self.spans.get(span_id))
     }
 
@@ -1896,11 +1896,7 @@ fn error_expected(expected: impl AsRef<str>, token: Token) -> ParseError {
     ParseError::Parse { message: format!("Expected {}", expected.as_ref()), token, cause: None }
 }
 
-pub fn get_span_source_line<'sources>(
-    spans: &Spans,
-    sources: &'sources Sources,
-    span_id: SpanId,
-) -> &'sources Line {
+pub fn get_span_source_line(spans: &Spans, sources: &Sources, span_id: SpanId) -> Line {
     let span = spans.get(span_id);
     let source = sources.source_by_span(span);
     let Some(line) = source.get_line_for_span_start(span) else {
@@ -2034,7 +2030,8 @@ pub fn write_source_location(
     Ok(())
 }
 
-#[derive(Debug, Clone)]
+/// `len` excludes the line terminator (`\n` or `\r\n`).
+#[derive(Debug, Clone, Copy)]
 pub struct Line {
     pub start_char: u32,
     pub len: u32,
@@ -2056,45 +2053,15 @@ pub struct Source {
     pub directory: String,
     pub filename: String,
     pub content: String,
-    pub lines: Vec<Line>,
+    newline_positions: Vec<u32>,
     pub tokens: Vec<Token>,
 }
 
 impl Source {
     pub fn make(file_id: FileId, directory: String, filename: String, content: String) -> Source {
-        let mut lines = Vec::with_capacity(128);
-        let mut iter = content.chars().enumerate().peekable();
-        let mut line_len: usize = 0;
-        // We compute lines ourselves because we need to know the start offset of each line
-        // in chars
-        while let Some((c_index, c)) = iter.next() {
-            let mut push_line = || {
-                let start: u32 = (c_index - line_len) as u32;
-                let len = c_index as u32 - start;
-                debug_assert_eq!(len, line_len as u32);
-                lines.push(Line { start_char: start, len, line_index: lines.len() as u32 });
-                line_len = 0;
-            };
-            if c == '\n' {
-                push_line();
-            } else if c == '\r' && iter.peek().is_some_and(|(_, c)| *c == '\n') {
-                // Skip over the \n
-                iter.next();
-                push_line();
-            } else {
-                line_len += 1;
-            }
-        }
-        if line_len != 0 {
-            // Push the last line
-            let start: u32 = (content.len() - line_len) as u32;
-            lines.push(Line {
-                start_char: start,
-                len: content.len() as u32 - start,
-                line_index: lines.len() as u32,
-            });
-        }
-        Source { file_id, directory, filename, content, lines, tokens: vec![] }
+        let newline_positions =
+            memchr::memchr_iter(b'\n', content.as_bytes()).map(|pos| pos as u32).collect();
+        Source { file_id, directory, filename, content, newline_positions, tokens: vec![] }
     }
 
     pub fn get_content(&self, start: u32, len: u32) -> &str {
@@ -2105,29 +2072,55 @@ impl Source {
         self.get_content(span.start, span.len)
     }
 
-    pub fn get_line(&self, line_index: usize) -> Option<&Line> {
-        self.lines.get(line_index)
+    pub fn line_count(&self) -> usize {
+        let nl_count = self.newline_positions.len();
+        match self.newline_positions.last() {
+            // Content ends with a newline: no line follows it
+            Some(&last) if last as usize == self.content.len() - 1 => nl_count,
+            Some(_) => nl_count + 1,
+            None if self.content.is_empty() => 0,
+            None => 1,
+        }
     }
 
-    pub fn get_line_content(&self, line: &Line) -> &str {
+    pub fn get_line(&self, line_index: usize) -> Option<Line> {
+        if line_index >= self.line_count() {
+            return None;
+        }
+        let start = match line_index {
+            0 => 0,
+            i => self.newline_positions[i - 1] + 1,
+        };
+        let end = match self.newline_positions.get(line_index) {
+            Some(&nl) if nl > start && self.content.as_bytes()[nl as usize - 1] == b'\r' => nl - 1,
+            Some(&nl) => nl,
+            None => self.content.len() as u32,
+        };
+        Some(Line { start_char: start, len: end - start, line_index: line_index as u32 })
+    }
+
+    pub fn get_line_content(&self, line: Line) -> &str {
         self.get_content(line.start_char, line.len)
     }
 
-    pub fn get_lines_for_span(&self, span: Span) -> Option<(&Line, &Line)> {
+    pub fn get_lines_for_span(&self, span: Span) -> Option<(Line, Line)> {
         let start = self.get_line_for_offset(span.start)?;
         let end = self.get_line_for_offset(span.end())?;
         Some((start, end))
     }
 
-    pub fn get_line_for_offset(&self, offset: u32) -> Option<&Line> {
-        self.lines.iter().find(|line| (line.start_char..=line.end_char()).contains(&offset))
+    pub fn get_line_for_offset(&self, offset: u32) -> Option<Line> {
+        if offset as usize > self.content.len() {
+            return None;
+        }
+        // A newline belongs to the line it terminates, so the containing line
+        // is the first one whose '\n' is at or after `offset`
+        let line_index = self.newline_positions.partition_point(|&nl| nl < offset);
+        self.get_line(line_index)
     }
 
-    pub fn get_line_for_span_start(&self, span: Span) -> Option<&Line> {
-        self.lines.iter().find(|line| {
-            let line_end = line.end_char();
-            line.start_char <= span.start && line_end >= span.start
-        })
+    pub fn get_line_for_span_start(&self, span: Span) -> Option<Line> {
+        self.get_line_for_offset(span.start)
     }
 }
 

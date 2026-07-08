@@ -18788,7 +18788,7 @@ impl TypedProgram {
         if handle.is_null() { None } else { Some(handle) }
     }
 
-    pub fn get_span_location(&self, span: SpanId) -> (&parse::Source, &parse::Line) {
+    pub fn get_span_location(&self, span: SpanId) -> (&parse::Source, parse::Line) {
         let the_span = self.ast.spans.get(span);
         let source = self.ast.sources.get(the_span.file_id);
         let line = source.get_line_for_span_start(the_span).unwrap();
@@ -18990,7 +18990,7 @@ impl TypedProgram {
     ) -> std::io::Result<()> {
         let infer_ms = self.timing.total_infer_nanos as f64 / 1_000_000.0;
         let vm_ms = self.timing.total_vm_nanos as f64 / 1_000_000.0;
-        let lines: usize = self.ast.sources.iter().map(|s| s.1.lines.len()).sum();
+        let lines: usize = self.ast.sources.iter().map(|s| s.1.line_count()).sum();
         // mm lines per ns, aka lines per second
         let lines_per_s = if lines > 0 { lines as f64 * 1e9 / full_elapsed_ns as f64 } else { 0.0 };
         eprintln!(
