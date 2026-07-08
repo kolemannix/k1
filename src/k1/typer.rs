@@ -2837,15 +2837,7 @@ impl TypedProgram {
         pattern_ctors.add_expected_id(PatternCtor::Span, PatternCtorId::SPAN);
         pattern_ctors.add_expected_id(PatternCtor::Opaque, PatternCtorId::OPAQUE);
 
-        let init_start = std::time::Instant::now();
-        let clock = if cfg!(feature = "profile") {
-            debug!("clock init");
-            let c = clock::Clock::new_counter();
-            debug!("clock calibration done in {}ms", init_start.elapsed().as_millis());
-            c
-        } else {
-            clock::Clock::new_system()
-        };
+        let clock = clock::Clock::new();
 
         let mut vm_static_stack = vm::Stack::make();
         let addr = vm_static_stack.push_t(true as u8);
