@@ -104,7 +104,7 @@ ns for string {
     for c in self {
       if c == delim {
         ranges.push(r);
-        r <- { start: itIndex + 1, len: 0 };
+        r <- { start: it-index + 1, len: 0 };
       } else {
         r.len* <- r.len + 1
       };

@@ -5,7 +5,7 @@ use string_interner::{Symbol, backend::StringBackend};
 use crate::kmem::MSlice;
 use crate::kmem::Mem;
 use crate::parse::ParsedProgram;
-use crate::parse::ParsedSlice;
+use crate::parse::AstSlice;
 use crate::{impl_copy_if_small, lex::SpanId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -48,7 +48,7 @@ impl Display for StringId {
     }
 }
 
-pub type IdentSlice = ParsedSlice<StringId>;
+pub type IdentSlice = AstSlice<StringId>;
 
 #[derive(Clone, Copy)]
 pub struct IdentSpanned {
@@ -74,7 +74,7 @@ impl IdentSpanned {
 pub struct QIdent {
     pub name: StringId,
     pub name_span: SpanId,
-    pub path: ParsedSlice<IdentSpanned>,
+    pub path: AstSlice<IdentSpanned>,
 }
 impl_copy_if_small!(16, QIdent);
 impl QIdent {
@@ -99,7 +99,7 @@ pub(crate) struct BuiltinIdents {
     pub get: StringId,
     pub get_ref: StringId,
     pub iter: StringId,
-    pub itIndex: StringId,
+    pub it_index: StringId,
     pub as_: StringId,
     pub list: StringId,
     pub withCapacity: StringId,
@@ -283,7 +283,7 @@ impl IdentPool {
             get: intern!("get"),
             get_ref: intern!("get-ref"),
             iter: intern!("iter"),
-            itIndex: intern!("itIndex"),
+            it_index: intern!("it-index"),
             as_: intern!("as"),
             list: intern!("list"),
             withCapacity: intern!("withCapacity"),
