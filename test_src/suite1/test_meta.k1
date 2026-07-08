@@ -53,7 +53,7 @@ w.string("\"{f.name}\":");
        ); //" fix quote
 
         _writeJsonFromSchema(code, fieldLetName, f.type-id);
-        let last = itIndex == s.fields.len() - 1;
+        let last = it-index == s.fields.len() - 1;
         if not last {
           code.line(`w.string(",");`);
         }

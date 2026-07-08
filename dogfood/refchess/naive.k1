@@ -70,7 +70,7 @@ impl show for Square {
 fn dump(board: list[SquareState]) {
   for square in board {
     let symbol = square.charSymbol();
-    if itIndex % 8 == 7 {
+    if it-index % 8 == 7 {
       println("{symbol}");
     } else {
       print("{symbol}")

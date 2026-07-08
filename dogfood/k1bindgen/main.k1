@@ -54,41 +54,41 @@ fn start(args: span[string]): string {
   // TODO: Pull this out into an immediate-mode flags module
   // for args {
   //   if it == "-system" {
-  //     if args.get-opt(itIndex + 1) is :some(next) { skip-system-defns := next != "true" }
+  //     if args.get-opt(it-index + 1) is :some(next) { skip-system-defns := next != "true" }
   //   };
   //   if it == "-i" {
-  //     if args.get-opt(itIndex + 1) is :some(next) { file := next }
+  //     if args.get-opt(it-index + 1) is :some(next) { file := next }
   //   };
   //   if it == "-o" {
-  //     if args.get-opt(itIndex + 1) is :some(next) { out-path := :some(next) }
+  //     if args.get-opt(it-index + 1) is :some(next) { out-path := :some(next) }
   //   };
   //   if it == "-n" {
-  //     if args.get-opt(itIndex + 1) is :some(next) { libname := next }
+  //     if args.get-opt(it-index + 1) is :some(next) { libname := next }
   //   };
   //   if it == "-clangarg" {
-  //     if args.get-opt(itIndex + 1) is :some(next) { clang-args.push(next) }
+  //     if args.get-opt(it-index + 1) is :some(next) { clang-args.push(next) }
   //   };
   //   if it == "-exclude" {
-  //     if args.get-opt(itIndex + 1) is :some(next) { exclude-substrings.push(next) }
+  //     if args.get-opt(it-index + 1) is :some(next) { exclude-substrings.push(next) }
   //   };
   //   if it == "-include" {
-  //     if args.get-opt(itIndex + 1) is :some(next) { include-names.push(next) }
+  //     if args.get-opt(it-index + 1) is :some(next) { include-names.push(next) }
   //   };
   //   if it == "-opaque" {
-  //     if args.get-opt(itIndex + 1) is :some(next) { opaque-names.push(next) }
+  //     if args.get-opt(it-index + 1) is :some(next) { opaque-names.push(next) }
   //   };
   //   if it == "-strip-suffix" {
-  //     if args.get-opt(itIndex + 1) is :some(next) { suffix-strips.push(next) }
+  //     if args.get-opt(it-index + 1) is :some(next) { suffix-strips.push(next) }
   //   };
   //   if it == "-strip-prefix" {
-  //     if args.get-opt(itIndex + 1) is :some(next) { prefix-strips.push(next) }
+  //     if args.get-opt(it-index + 1) is :some(next) { prefix-strips.push(next) }
   //   };
   //   if it == "-prelude-file" {
-  //     if args.get-opt(itIndex + 1) is :some(next) { prelude-file := :some(next) }
+  //     if args.get-opt(it-index + 1) is :some(next) { prelude-file := :some(next) }
   //   };
   //   if it == "-rename" {
-  //     if args.get-opt(itIndex + 1) is :some(from) { 
-  //       if args.get-opt(itIndex + 2) is :some(to) {
+  //     if args.get-opt(it-index + 1) is :some(from) { 
+  //       if args.get-opt(it-index + 2) is :some(to) {
   //         renames.push({ from, to })
   //       }
   //     }
@@ -206,9 +206,9 @@ fn start(args: span[string]): string {
           } else {
             out.line("");
             for function.fn-type.params {
-              if itIndex > 0 out.line("");
+              if it-index > 0 out.line("");
               out.string("  ");
-              out.string(if it.name is :some(name) mangle-name(name) else "p{itIndex}");
+              out.string(if it.name is :some(name) mangle-name(name) else "p{it-index}");
               out.string(": ");
               write-k1-type(it.type, indent = 1);
               out.string(",");
@@ -317,13 +317,13 @@ fn write-k1-type(context w: *mut StringBuilder, name-config)(k1-type, indent: si
     :fn-type(f) -> {
       w.line(p"fn(");
       for f.fn-type.params {
-        if itIndex > 0 w.line("");
+        if it-index > 0 w.line("");
         w.repeat("  ", indent + 1);
         switch it.name {
           :none -> write-k1-type(it.type, indent + 1),
           :some(name) -> write-named-type(name, it.type, indent + 1),
         };
-        if itIndex != f.fn-type.params.len() - 1 { w.string(",") }
+        if it-index != f.fn-type.params.len() - 1 { w.string(",") }
       };
 
       w.line("");

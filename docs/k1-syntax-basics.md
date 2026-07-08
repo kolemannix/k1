@@ -511,11 +511,11 @@ let found: int = loop {
 ```
 
 `for` loops iterate over iterable values. The loop body can use `it` and
-`itIndex`:
+`it-index`:
 
 ```rust
 for values {
-  println("{itIndex}: {it}");
+  println("{it-index}: {it}");
 }
 ```
 

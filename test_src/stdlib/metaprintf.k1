@@ -34,12 +34,12 @@ fn fmt[Fmt: static string, Args, w: writer](w, fmtString: Fmt, args: Args) {
         };
 
         for field in fields {
-          code.line("let f{itIndex} = args.{field.name};")
+          code.line("let f{it-index} = args.{field.name};")
         };
 
         for part in parts {
-          code.line("parts.get({itIndex}).print-to(w);");
-          code.line("f{itIndex}.print-to(w);");
+          code.line("parts.get({it-index}).print-to(w);");
+          code.line("f{it-index}.print-to(w);");
         };
 
       },

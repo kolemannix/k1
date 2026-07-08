@@ -59,8 +59,8 @@ fn render(out: *StringBuilder, pixels: *array[u8, 65536]) {
   out.string(`<div id="grid" style="position: relative">`);
   let size = 3;
   for pixels {
-    let y = itIndex / gridsize;
-    let x = itIndex % gridsize;
+    let y = it-index / gridsize;
+    let x = it-index % gridsize;
     writelnf(out, `<div class="{if it == 0 "off-pixel" else "on-pixel"}" style="top: {y * size}px; left: {x * size}px" id="pixel-{x},{y}"></div>`);
   };
   out.string(`</div">`);

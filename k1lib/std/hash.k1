@@ -182,7 +182,7 @@ ns for HashMap {
     let size = self.size;
     println("Size: {size}, Capacity: {capacity}");
     for self.entries {
-      print("  SLOT {itIndex}: ");
+      print("  SLOT {it-index}: ");
       switch it {
         :none -> println("empty"),
         :some({ key, value, deleted }) -> {

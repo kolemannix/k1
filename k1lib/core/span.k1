@@ -162,7 +162,7 @@ impl[T: print] print for span[T] {
     w.write-char('[');
     for self {
       it.print-to(w);
-      let last = itIndex == self.len() - 1;
+      let last = it-index == self.len() - 1;
       if not last {
         w.write-char(',');
       };

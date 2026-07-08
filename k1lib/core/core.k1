@@ -24,7 +24,7 @@ ns iter {
 
   fn position[T: equals, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, needle: T): ?size {
     for iterable {
-      if it == needle return(:some(itIndex))
+      if it == needle return(:some(it-index))
     };
     :none
   }
