@@ -34,7 +34,6 @@ mimalloc = "0.1.43"
 pprof = { version = "0.15.0", features = ["flamegraph"], optional = true }
 ecow = "0.2.3"
 memmap2 = "0.9.7"
-quanta = "0.12.6"
 libc = "0.2.177"
 
 # LLVM / compiler toolchain stuff
