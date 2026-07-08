@@ -45,6 +45,15 @@ macro_rules! writestr {
 }
 
 #[macro_export]
+macro_rules! debug {
+    ($($arg:tt)+) => {
+        if cfg!(debug_assertions) {
+            log::debug!($($arg)+)
+        }
+    }
+}
+
+#[macro_export]
 macro_rules! nz_u32_id {
     ($name: ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

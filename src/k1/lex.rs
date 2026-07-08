@@ -9,7 +9,7 @@ use crate::parse::BinaryOpKind;
 use crate::parse::FileId;
 use crate::vpool::{SliceHandle, VPool};
 use TokenKind as K;
-use log::debug;
+use crate::debug;
 
 pub const EOF_CHAR: char = 27 as char; // esc
 // pub const EOF_CHAR: char = '\0' as char;

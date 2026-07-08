@@ -1368,7 +1368,7 @@ impl<T, Tag> List<T, Tag> {
                 if self.len != 0 {
                     // eprintln!("{}", std::backtrace::Backtrace::capture());
                     eprintln!(
-                        "{}:{} mlist realloc from {} -> {}",
+                        "{}:{} mlist true realloc from {} -> {}",
                         loc.file(),
                         loc.line(),
                         self.cap(),

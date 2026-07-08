@@ -7,7 +7,7 @@ use std::num::NonZeroU32;
 use ahash::HashMapExt;
 use colored::Colorize;
 use fxhash::FxHashMap;
-use log::debug;
+use crate::debug;
 
 pub(crate) mod vm_ffi;
 #[cfg(test)]

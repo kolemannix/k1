@@ -13,7 +13,7 @@ pub(crate) mod visit;
 
 use crate::ir::{BackendBuiltin, IrUnitId};
 use crate::typer::dump::K1DisplayArgs;
-use crate::{clock, compiler, ir, k1_format, k1_format_user, kbail, kerr, vm};
+use crate::{clock, compiler, debug, ir, k1_format, k1_format_user, kbail, kerr, vm};
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
@@ -42,7 +42,7 @@ use ahash::HashMapExt;
 use anyhow::bail;
 use colored::Colorize;
 use fxhash::FxHashMap;
-use log::{debug, error};
+use log::{error};
 use smallvec::{SmallVec, smallvec};
 
 use scopes::*;
@@ -54,7 +54,7 @@ use crate::parse::{
     self, BinaryOpKind, FileId, ForExpr, InterpolatedStringPart, NamedTypeArg, NumericWidth,
     ParseError, ParsedAbilityExpr, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
     ParsedBlockKind, ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFnParamType,
-    ParsedFunctionId, ParsedGlobalId, ParsedHandle, ParsedId, ParsedIfExpr, ParsedList,
+    ParsedFunctionId, ParsedGlobalId, ParsedHandle, ParsedId, ParsedIfExpr, ParsedListLiteral,
     ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId,
     ParsedProgram, ParsedSlice, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt, ParsedStmtId,
     ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
@@ -594,7 +594,7 @@ pub struct TypedAbility {
     pub base_ability_id: AbilityId,
     pub self_type_id: TypeId,
     pub parameters: MSlice<TypedAbilityParam, TypedProgram>,
-    pub functions: EcoVec<TypedAbilityFunctionRef>,
+    pub functions: MSlice<TypedAbilityFunctionRef, TypedProgram>,
     pub scope_id: ScopeId,
     pub ast_id: ParsedAbilityId,
     pub namespace_id: NamespaceId,
@@ -602,8 +602,12 @@ pub struct TypedAbility {
 }
 
 impl TypedAbility {
-    pub fn find_function_by_name(&self, name: StringId) -> Option<TypedAbilityFunctionRef> {
-        self.functions.iter().find(|f| f.function_name == name).copied()
+    pub fn find_function_by_name(
+        &self,
+        mem: &Mem<TypedProgram>,
+        name: StringId,
+    ) -> Option<TypedAbilityFunctionRef> {
+        mem.getn(self.functions).iter().find(|f| f.function_name == name).copied()
     }
 
     pub fn parent_ability_id(&self) -> Option<AbilityId> {
@@ -5224,8 +5228,10 @@ impl TypedProgram {
                         self.type_id_to_string(target_type_id)
                     )
                 })?;
-                let mut fields = self.patterns.mem.new_list(struct_pattern.fields.len() as u32);
-                for (field_name, field_parsed_pattern_id) in &struct_pattern.fields {
+                let mut fields = self.patterns.mem.new_list(struct_pattern.fields.len());
+                for (field_name, field_parsed_pattern_id) in
+                    self.ast.mem.getn(struct_pattern.fields)
+                {
                     let (expected_field_index, expected_field) = expected_struct
                         .find_field(&self.types.mem, *field_name)
                         .ok_or_else(|| {
@@ -6428,6 +6434,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> K1Result<AbilityImplId> {
         let ability = self.abilities.get(impl_signature.specialized_ability_id);
+        let functions = ability.functions;
         let base_ability_id = ability.base_ability_id;
 
         // Add self
@@ -6443,9 +6450,8 @@ impl TypedProgram {
             let _ = self.scopes.add_type(scope_id, impl_arg.name, impl_arg.type_id);
         }
 
-        let functions = self.abilities.get(impl_signature.specialized_ability_id).functions.clone();
-        let mut impl_functions = self.mem.new_list(functions.len() as u32);
-        for ability_fn_ref in functions.iter() {
+        let mut impl_functions = self.mem.new_list(functions.len());
+        for ability_fn_ref in self.mem.getn(functions) {
             let ability_fn = self.functions.get(ability_fn_ref.function_id);
             let spec_fn_id = self
                 .declare_function(
@@ -6489,6 +6495,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> AbilityImplId {
         let ability = self.abilities.get(impl_signature.specialized_ability_id);
+        let ability_functions = ability.functions;
         let base_ability_id = ability.base_ability_id;
         let ability_self_type = ability.self_type_id;
         let all_params = self.abilities.get(base_ability_id).parameters;
@@ -6521,9 +6528,9 @@ impl TypedProgram {
             let _ = self.scopes.add_type(scope_id, impl_arg.name, impl_arg.type_id);
         }
 
-        let functions = self.abilities.get(impl_signature.specialized_ability_id).functions.clone();
-        let mut impl_functions = self.mem.new_list(functions.len() as u32);
-        for f in functions.iter() {
+        let functions = self.abilities.get(impl_signature.specialized_ability_id).functions;
+        let mut impl_functions = self.mem.new_list(functions.len());
+        for f in self.mem.getn(ability_functions) {
             let generic_fn = self.get_function(f.function_id);
             let generic_sig = generic_fn.signature();
             let generic_fn_type_id = generic_fn.type_id;
@@ -8206,7 +8213,7 @@ impl TypedProgram {
                 self.eval_field_access(expr_id, &field_access, ctx)
             }
             ParsedExpr::Block(block) => {
-                let block = block.clone();
+                let block = *block;
                 let scope_type = match block.kind {
                     ParsedBlockKind::FunctionBody => ScopeType::FunctionScope,
                     ParsedBlockKind::LexicalBlock => ScopeType::LexicalBlock,
@@ -8381,7 +8388,7 @@ impl TypedProgram {
                 let Some(tafr) = self
                     .abilities
                     .get(signature.specialized_ability_id)
-                    .find_function_by_name(call_name)
+                    .find_function_by_name(&self.mem, call_name)
                 else {
                     return failf!(
                         call_ast_expr.name.name_span,
@@ -8453,7 +8460,7 @@ impl TypedProgram {
     fn eval_list_literal(
         &mut self,
         _expr_id: ParsedExprId,
-        list_expr: &ParsedList,
+        list_expr: &ParsedListLiteral,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let (expected_element_type, list_kind) = match ctx.expected_type_id.as_ref() {
@@ -8469,20 +8476,15 @@ impl TypedProgram {
             None => (None, ContainerKind::List),
         };
         let span = list_expr.span;
-        let parsed_elements = &list_expr.elements;
-        let element_count = parsed_elements.len();
+        let element_count = list_expr.elements.len();
 
-        let mut list_lit_block = self.new_block_builder(
-            ctx.scope_id,
-            ScopeType::LexicalBlock,
-            span,
-            2 + element_count as u32,
-        );
+        let mut list_lit_block =
+            self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 2 + element_count);
         let list_lit_scope = list_lit_block.scope_id;
         let mut element_type = None;
         let elements: List<TypedExprId, MemTmp> = {
-            let mut elements = self.tmp.new_list(element_count as u32);
-            for elem in parsed_elements.iter() {
+            let mut elements = self.tmp.new_list(element_count);
+            for elem in self.ast.mem.getn(list_expr.elements) {
                 let current_expected_type = element_type.or(expected_element_type);
                 let element_expr =
                     self.eval_expr(*elem, ctx.with_expected_type(current_expected_type))?;
@@ -9566,12 +9568,15 @@ impl TypedProgram {
         kind: ParsedBlockKind,
     ) -> ParsedBlock {
         match self.ast.exprs.get(body) {
-            ParsedExpr::Block(b) => b.clone(),
+            ParsedExpr::Block(b) => *b,
             other_expr => {
                 let block = parse::ParsedBlock {
                     span: other_expr.get_span(),
                     kind,
-                    stmts: eco_vec![self.ast.stmts.add(parse::ParsedStmt::LoneExpression(body))],
+                    stmts: self
+                        .ast
+                        .mem
+                        .pushn(&[self.ast.stmts.add(parse::ParsedStmt::LoneExpression(body))]),
                 };
                 block
             }
@@ -11435,7 +11440,7 @@ impl TypedProgram {
                         let function_ability_index = self
                             .abilities
                             .get(function_ability_id)
-                            .find_function_by_name(fn_call.name.name)
+                            .find_function_by_name(&self.mem, fn_call.name.name)
                             .unwrap();
                         let ability_impl_function = self.solve_ability_call(
                             function_ability_index,
@@ -12164,8 +12169,11 @@ impl TypedProgram {
         for ability_id in abilities_with_function_name.clone().iter() {
             let in_scope = self.scopes.is_ability_id_in_scope(ctx.scope_id, *ability_id);
             if in_scope {
-                let ability_function_ref =
-                    self.abilities.get(*ability_id).find_function_by_name(fn_name).unwrap();
+                let ability_function_ref = self
+                    .abilities
+                    .get(*ability_id)
+                    .find_function_by_name(&self.mem, fn_name)
+                    .unwrap();
                 match self.solve_ability_call(
                     ability_function_ref,
                     call,
@@ -14462,11 +14470,11 @@ impl TypedProgram {
         }
     }
 
-    /// This block's scope is ALREADY PROVIDED AND SET IN CTX
+    /// HEY KOLEMAN This block's scope is ALREADY PROVIDED AND SET IN CTX
     fn eval_block(
         &mut self,
         block: &ParsedBlock,
-        // This block's scope is ALREADY PROVIDED AND SET IN CTX
+        // HEY KOLEMAN This block's scope is ALREADY PROVIDED AND SET IN CTX
         ctx: EvalExprContext,
         needs_terminator: bool,
     ) -> K1Result<TypedExprId> {
@@ -14474,17 +14482,17 @@ impl TypedProgram {
         if block.stmts.is_empty() {
             return failf!(block.span, "Blocks must contain at least one statement or expression");
         }
-        let mut stmts = self.mem.new_list(block.stmts.len() as u32 + 1);
+        let mut stmts = self.mem.new_list(block.stmts.len() + 1);
         let mut last_expr_type: TypeId = self.types.builtins.empty;
         let mut last_stmt_is_divergent = false;
-        for (index, stmt) in block.stmts.iter().enumerate() {
+        for (index, stmt) in self.ast.mem.getn(block.stmts).iter().enumerate() {
             if last_stmt_is_divergent {
                 return failf!(
                     self.ast.get_stmt_span(*stmt),
                     "Dead code following divergent statement",
                 );
             }
-            let is_last = index == block.stmts.len() - 1;
+            let is_last = index + 1 == block.stmts.len() as usize;
             let expected_type = if is_last { ctx.expected_type_id } else { None };
 
             let coerce = expected_type.is_some();
@@ -15329,7 +15337,7 @@ impl TypedProgram {
             base_ability_id: generic_ability_id,
             self_type_id: new_self_type_id,
             parameters: impl_params_handle,
-            functions: eco_vec![],
+            functions: MSlice::empty(),
             scope_id: specialized_ability_scope,
             ast_id: ability_ast_id,
             namespace_id: ability_namespace_id,
@@ -15337,8 +15345,8 @@ impl TypedProgram {
         });
 
         let parsed_ability = self.ast.get_ability(ability_ast_id);
-        let mut specialized_functions = EcoVec::with_capacity(parsed_ability.functions.len());
-        for (index, parsed_fn) in parsed_ability.functions.clone().iter().enumerate() {
+        let mut specialized_functions = self.mem.new_list(parsed_ability.functions.len());
+        for (index, parsed_fn) in self.ast.mem.getn(parsed_ability.functions).iter().enumerate() {
             let result = self.declare_function(
                 *parsed_fn,
                 specialized_ability_scope,
@@ -15360,7 +15368,8 @@ impl TypedProgram {
             });
         }
 
-        self.abilities.get_mut(specialized_ability_id).functions = specialized_functions;
+        self.abilities.get_mut(specialized_ability_id).functions =
+            self.mem.list_to_handle(specialized_functions);
         {
             let parent_ability = self.abilities.get_mut(generic_ability_id);
             let TypedAbilityKind::Generic { specializations } = &mut parent_ability.kind else {
@@ -16252,7 +16261,7 @@ impl TypedProgram {
 
         let self_ident_id = self.ast.idents.b.self_;
         let mut ability_params: List<TypedAbilityParam, _> =
-            self.mem.new_list(parsed_ability.params.len() as u32 + 1);
+            self.mem.new_list(parsed_ability.params.len() + 1);
         let self_type_id = self.add_type_parameter(
             TypeParameter {
                 name: self_ident_id,
@@ -16264,7 +16273,7 @@ impl TypedProgram {
             smallvec![],
         );
         let _ = self.scopes.get_scope_mut(ability_scope_id).add_type(self_ident_id, self_type_id);
-        for ability_param in parsed_ability.params.clone().iter() {
+        for ability_param in self.ast.mem.getn(parsed_ability.params) {
             let mut ability_constraint_signatures: SV4<TypedAbilitySignature> = smallvec![];
             let mut predicate_functions = self.mem.new_list(0);
             for constraint in self.ast.mem.getn(ability_param.constraints) {
@@ -16356,7 +16365,7 @@ impl TypedProgram {
             base_ability_id: ability_id,
             self_type_id,
             parameters: self.mem.list_to_handle(ability_params),
-            functions: eco_vec![],
+            functions: MSlice::empty(),
             scope_id: ability_scope_id,
             ast_id: parsed_ability.id,
             namespace_id,
@@ -16375,9 +16384,11 @@ impl TypedProgram {
         self.types.add_ability_mapping(parsed_ability_id, ability_id);
         self.scopes.set_scope_owner_id(ability_scope_id, ScopeOwnerId::Ability(ability_id));
 
-        let mut typed_functions: EcoVec<TypedAbilityFunctionRef> =
-            EcoVec::with_capacity(parsed_ability.functions.len());
-        for (index, parsed_function_id) in parsed_ability.functions.iter().enumerate() {
+        let mut typed_functions: List<TypedAbilityFunctionRef, _> =
+            self.mem.new_list(parsed_ability.functions.len());
+        for (index, parsed_function_id) in
+            self.ast.mem.getn(parsed_ability.functions).iter().enumerate()
+        {
             let Some(function_id) = self.declare_function(
                 *parsed_function_id,
                 ability_scope_id,
@@ -16408,7 +16419,7 @@ impl TypedProgram {
                 function_id,
             });
         }
-        self.abilities.get_mut(ability_id).functions = typed_functions;
+        self.abilities.get_mut(ability_id).functions = self.mem.list_to_handle(typed_functions);
         Ok(ability_id)
     }
 
@@ -16641,7 +16652,7 @@ impl TypedProgram {
         for &parsed_fn in parsed_impl_functions {
             let parsed_fn_name = self.ast.get_function(parsed_fn).name;
             let Some(_ability_function_ref) =
-                ability.functions.iter().find(|f| f.function_name == parsed_fn_name)
+                self.mem.getn(ability.functions).iter().find(|f| f.function_name == parsed_fn_name)
             else {
                 return failf!(
                     span,
@@ -16651,8 +16662,8 @@ impl TypedProgram {
             };
         }
 
-        let mut typed_functions = self.mem.new_list(ability.functions.len() as u32);
-        for ability_function_ref in &ability.functions {
+        let mut typed_functions = self.mem.new_list(ability.functions.len());
+        for ability_function_ref in self.mem.getn(ability.functions) {
             let matching_impl_function = parsed_impl_functions.iter().find_map(|&fn_id| {
                 let the_fn = self.ast.get_function(fn_id);
                 if the_fn.name == ability_function_ref.function_name {

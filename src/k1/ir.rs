@@ -22,7 +22,7 @@ use crate::{
 use ahash::{HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
 use itertools::Itertools;
-use log::debug;
+use crate::debug;
 use std::fmt::Write;
 
 macro_rules! b_ice {
