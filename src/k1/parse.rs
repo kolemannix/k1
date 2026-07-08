@@ -4,7 +4,7 @@
 use std::fmt::{Display, Formatter, Write};
 use std::io::IsTerminal;
 
-use crate::kmem::{self, Handle, MSL2, MSS2, MSlice, MSpillList};
+use crate::kmem::{self, Handle, List, MSL2, MSS2, MSlice, MSpillList};
 use crate::typer::{Linkage, MessageLevel, ModuleId};
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
@@ -213,8 +213,8 @@ impl ParsedId {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedList {
-    pub elements: EcoVec<ParsedExprId>,
+pub struct ParsedListLiteral {
+    pub elements: ParsedSlice<ParsedExprId>,
     pub span: SpanId,
 }
 
@@ -714,7 +714,7 @@ pub struct ParsedQAbilityCall {
     pub span: SpanId,
 }
 
-static_assert_size!(ParsedExpr, 56);
+static_assert_size!(ParsedExpr, 44);
 #[derive(Clone)]
 pub enum ParsedExpr {
     /// ```md
@@ -772,7 +772,7 @@ pub enum ParsedExpr {
     /// ```md
     /// [<expr>, <expr>, <expr>]
     /// ```
-    ListLiteral(ParsedList),
+    ListLiteral(ParsedListLiteral),
     /// ```md
     /// for <ident> in <coll: expr> do <body: expr>
     /// ```
@@ -875,7 +875,7 @@ impl ParsedExpr {
 
 #[derive(Debug, Clone)]
 pub struct ParsedStructPattern {
-    pub fields: EcoVec<(StringId, ParsedPatternId)>,
+    pub fields: ParsedSlice<(StringId, ParsedPatternId)>,
     pub span: SpanId,
 }
 
@@ -999,10 +999,11 @@ pub enum ParsedBlockKind {
 
 #[derive(Debug, Clone)]
 pub struct ParsedBlock {
-    pub stmts: EcoVec<ParsedStmtId>,
+    pub stmts: ParsedSlice<ParsedStmtId>,
     pub kind: ParsedBlockKind,
     pub span: SpanId,
 }
+impl_copy_if_small!(16, ParsedBlock);
 
 #[derive(Debug, Clone)]
 pub struct StructTypeField {
@@ -1369,7 +1370,7 @@ pub struct ParsedTypeDefn {
     pub flags: ParsedTypeDefnFlags,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct ParsedAbilityParameter {
     pub name: StringId,
     pub is_impl_param: bool,
@@ -1380,9 +1381,9 @@ pub struct ParsedAbilityParameter {
 #[derive(Clone)]
 pub struct ParsedAbility {
     pub name: StringId,
-    pub functions: EcoVec<ParsedFunctionId>,
+    pub functions: ParsedSlice<ParsedFunctionId>,
     pub span: SpanId,
-    pub params: EcoVec<ParsedAbilityParameter>,
+    pub params: ParsedSlice<ParsedAbilityParameter>,
     pub id: ParsedAbilityId,
 }
 
@@ -1424,30 +1425,6 @@ impl ParsedNamespace {
             is_type_companion: false,
         }
     }
-}
-
-// Tiny little expression language that turns out to be necesary
-// if you want nice rich logical
-// recursive conditional compilation; i.e.,
-// #if <cond> {
-//   fn xyz();
-//   ns Foo {} }
-// else #if <cond2> {
-//   #if <cond3> { fn abc() } else { fn def() }
-// } else ns Bar {}
-pub enum ParsedDefinitionItem {
-    // Full solution is to build out this enum, then in typer, in the very first phase
-    // Evaluate all the conditions and form a new array of actual definitions for every
-    // namespace and all subsequent phases just look at that list
-    Conditional {
-        condition: ParsedExprId,
-        cons_item: Box<ParsedDefinitionItem>,
-        else_item: Box<ParsedDefinitionItem>,
-    },
-    Block {
-        items: EcoVec<ParsedDefinitionItem>,
-    },
-    Definition(ParsedId),
 }
 
 #[derive(Clone, Copy)]
@@ -2210,6 +2187,10 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         }
     }
 
+    fn list_to_handle<T>(&mut self, list: List<T, ParsedProgram>) -> ParsedSlice<T> {
+        self.ast.mem.list_to_handle(list)
+    }
+
     pub fn parse_definition(&mut self, terminator: TokenKind) -> ParseResult<Option<ParsedId>> {
         let (first, second) = self.peek_two();
         let condition = if first.kind == K::Hash && second.kind == K::KeywordIf {
@@ -2402,7 +2383,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         } else if first.kind == K::OpenBrace {
             // Struct
             let open_brace = self.tokens.next();
-            let mut fields = EcoVec::new();
+            let mut fields = self.ast.mem.new_list(0);
             while self.peek().kind != K::CloseBrace {
                 let ident_token = self.expect_kind(K::Ident)?;
                 let ident = self.make_ident(ident_token);
@@ -2415,7 +2396,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                     let pattern = ParsedPattern::Variable(ident, ident_token.span);
                     self.ast.patterns.add_pattern(pattern)
                 };
-                fields.push((ident, pattern_id));
+                fields.push_grow(&mut self.ast.mem, (ident, pattern_id));
                 let next = self.peek();
                 if next.kind == K::Comma {
                     self.advance();
@@ -2425,7 +2406,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             }
             let end = self.expect_kind(K::CloseBrace)?;
             let span = self.extend_token_span(open_brace, end);
-            let pattern = ParsedStructPattern { fields, span };
+            let pattern = ParsedStructPattern { fields: self.list_to_handle(fields), span };
             let pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Struct(pattern));
             Ok(pattern_id)
         } else if first.kind == K::Colon || (first.kind == K::Ident && second.kind == K::Colon) {
@@ -2544,7 +2525,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn tok_chars<'source>(spans: &Spans, source: &'source Source, tok: Token) -> &'source str {
         let s = Parser::chars_at_span(spans, source, tok.span);
-        trace!("{}.chars='{}'", tok.kind, s);
         s
     }
 
@@ -2556,10 +2536,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let tok = self.peek();
         if tok.kind == target_kind {
             self.advance();
-            trace!("eat_token SUCCESS '{}'", target_kind);
             Some(tok)
         } else {
-            trace!("eat_token MISS '{}'", target_kind);
             None
         }
     }
@@ -2568,10 +2546,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let tok = self.peek();
         if tok.is_kind_nonspaced(target_kind) {
             self.advance();
-            trace!("eat_token SUCCESS '{}'", target_kind);
             Some(tok)
         } else {
-            trace!("eat_token MISS '{}'", target_kind);
             None
         }
     }
@@ -3581,8 +3557,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 // [a,b,c]
                 // [a x 10]
                 self.advance();
-                let mut elements = eco_vec![];
-                self.eat_delimited_ext(
+                let mut elements = self.ast.mem.new_list(0);
+                self.eat_delimited_arena(
                     "list elements",
                     &mut elements,
                     TokenKind::Comma,
@@ -3590,9 +3566,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     Parser::expect_expression,
                 )?;
                 let span = self.extend_to_here(first.span);
-                Ok(Some(
-                    self.add_expression(ParsedExpr::ListLiteral(ParsedList { elements, span })),
-                ))
+                Ok(Some(self.add_expression(ParsedExpr::ListLiteral(ParsedListLiteral {
+                    elements: self.ast.mem.list_to_handle(elements),
+                    span,
+                }))))
             }
             K::Dollar => {
                 self.advance();
@@ -3848,7 +3825,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
         let close = self.expect_kind(K::CloseBrace)?;
         let span = self.extend_token_span(when_keyword, close);
-        let cases_slice = self.ast.mem.list_to_handle(cases);
+        let cases_slice = self.list_to_handle(cases);
         let match_expr =
             ParsedSwitch { match_subject: target_expression, cases: cases_slice, span, is_static };
         Ok(self.add_expression(ParsedExpr::Match(match_expr)))
@@ -4191,6 +4168,63 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
+    fn eat_delimited_arena<T: Copy, F>(
+        &mut self,
+        name: &str,
+        destination: &mut List<T, ParsedProgram>,
+        delim: TokenKind,
+        terminator: TokenKind,
+        parse: F,
+    ) -> ParseResult<()>
+    where
+        F: Fn(&mut Parser<'toks, 'module>) -> ParseResult<T>,
+    {
+        loop {
+            if terminator == self.peek().kind {
+                self.advance();
+                return Ok(());
+            }
+
+            match parse(self) {
+                Err(e) => {
+                    self.ast.report_error(e);
+                    match self.scan_to_kind(&[delim, terminator])? {
+                        t if t.kind == delim => continue,
+                        t if t.kind == terminator => break Ok(()),
+                        _ => {
+                            break Err(
+                                self.error_here(format!("Missing terminator {}", terminator))
+                            );
+                        }
+                    }
+                }
+                Ok(elem) => {
+                    destination.push_grow(&mut self.ast.mem, elem);
+                }
+            }
+
+            if terminator == self.peek().kind {
+                self.advance();
+                return Ok(());
+            }
+            let found_delim = self.maybe_consume(delim);
+            if found_delim.is_none() {
+                self.ast.report_error(
+                    self.error_here(format!("Expected '{delim}' in between each {name}")),
+                );
+                match self.scan_to_kind(&[delim, terminator])? {
+                    t if t.kind == delim => continue,
+                    t if t.kind == terminator => break Ok(()),
+                    _ => {
+                        break Err(
+                            self.error_here(format!("Expected {} after all {name}", terminator))
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn eat_delimited_ext<T, F>(
         &mut self,
         name: &str,
@@ -4331,8 +4365,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let Some(block_start) = self.maybe_consume(K::OpenBrace) else {
             return Ok(None);
         };
-        let mut stmts = eco_vec![];
-        self.eat_delimited_ext(
+
+        // we'd rather burn some memory than spend time re-allocating block statements
+        let mut stmts = self.ast.mem.new_list(32);
+        self.eat_delimited_arena(
             "Block statements",
             &mut stmts,
             K::Semicolon,
@@ -4340,7 +4376,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Parser::expect_statement,
         )?;
         let span = self.extend_to_here(block_start.span);
-        Ok(Some(ParsedBlock { stmts, kind, span }))
+        Ok(Some(ParsedBlock { stmts: self.list_to_handle(stmts), kind, span }))
     }
 
     fn parse_type_constraints(
@@ -4357,7 +4393,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.advance()
                 }
             }
-            Ok(self.ast.mem.list_to_handle(constraints))
+            Ok(self.list_to_handle(constraints))
         } else {
             Ok(MSlice::empty())
         }
@@ -4607,9 +4643,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let name_token = self.expect_kind(K::Ident)?;
         let name_identifier = self.make_ident(name_token);
-        let mut ability_params = eco_vec![];
+        let mut ability_params = self.ast.mem.new_list(0);
         if let Some(_params_open) = self.maybe_consume(K::OpenBracket) {
-            self.eat_delimited_ext(
+            self.eat_delimited_arena(
                 "Ability Parameter",
                 &mut ability_params,
                 K::Comma,
@@ -4618,18 +4654,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             )?;
         };
         self.expect_kind(K::OpenBrace)?;
-        let mut functions = EcoVec::new();
+        let mut functions = self.ast.mem.new_list(4);
         while let Some(parsed_function) = self.parse_function(None)? {
-            functions.push(parsed_function);
+            functions.push_grow(&mut self.ast.mem, parsed_function);
         }
         let close_token = self.expect_kind(K::CloseBrace)?;
         let span = self.extend_token_span(keyword_ability, close_token);
         let ability_id = self.ast.add_ability(ParsedAbility {
             name: name_identifier,
-            functions,
-            params: ability_params,
+            functions: self.ast.mem.list_to_handle(functions),
+            params: self.ast.mem.list_to_handle(ability_params),
             span,
-            id: ParsedAbilityId::ONE,
+            id: ParsedAbilityId::PENDING,
         });
         Ok(Some(ability_id))
     }

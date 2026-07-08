@@ -2,7 +2,7 @@ use std::ffi::c_void;
 
 use libffi::raw::ffi_cif;
 use libffi::{low::*, raw};
-use log::debug;
+use crate::debug;
 
 use crate::errf;
 use crate::ir::{self, PhysicalFunctionType, ProgramIr};

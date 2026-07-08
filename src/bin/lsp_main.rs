@@ -1,7 +1,7 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
-use log::debug;
+use k1::debug;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};

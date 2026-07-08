@@ -18,7 +18,7 @@
 //!   that were waiting on this unit's `code_start`.
 
 use fxhash::FxHashMap;
-use log::debug;
+use crate::debug;
 
 use crate::failf;
 use crate::ir::{self, BlockId, DataInst, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId};
