@@ -679,8 +679,13 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 .content
                 .get((start as usize).saturating_sub(1))
                 .is_some_and(|c| (*c as char).is_whitespace());
-            let trivia = lex.spans.trivia_pool.add_slice_copy(pending_trivia);
-            pending_trivia.clear();
+            let trivia = if pending_trivia.is_empty() {
+                SliceHandle::empty()
+            } else {
+                let trivia = lex.spans.trivia_pool.add_slice_copy(pending_trivia);
+                pending_trivia.clear();
+                trivia
+            };
             Token::new(kind, span, whitespace_preceded, trivia)
         }
 
@@ -721,7 +726,9 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         }
         loop {
             let (c, n) = self.peek_with_pos();
-            debug!("LEX char='{}' n={} tok_len={} state={:?}", c, n, tok_len, state);
+            if cfg!(feature = "dbg") {
+                debug!("LEX char='{}' n={} tok_len={} state={:?}", c, n, tok_len, state);
+            }
             let lex_mode = state.mode_stack.last_mut().unwrap();
             match lex_mode {
                 LexMode::DoubleQuoteString { exprs: interp_exprs }
@@ -1022,22 +1029,23 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                     // so that the main loop doesn't have to check for this state
                                     self.advance();
                                     self.advance();
-                                    let mut comment_c;
-                                    loop {
-                                        comment_c = self.next();
-                                        if comment_c == '\n'
-                                            || comment_c == EOF_CHAR
-                                            || comment_c == '\r' && self.peek() == '\n'
-                                        {
-                                            let span = self.add_span(n, self.pos - n);
-                                            // FIXME: Capture final trailing trivia
-                                            state.pending_trivia.push(TokenTrivia {
-                                                span,
-                                                kind: TokenTriviaKind::LineComment,
-                                            });
-                                            return Ok(Some(()));
+                                    let rest = &self.content[self.pos as usize..];
+                                    self.pos = match memchr::memchr(b'\n', rest) {
+                                        // Stop on the '\r' of a "\r\n", otherwise consume the '\n'
+                                        Some(i) if i > 0 && rest[i - 1] == b'\r' => {
+                                            self.pos + i as u32
                                         }
-                                    }
+                                        Some(i) => self.pos + i as u32 + 1,
+                                        // Matches the old char loop, which consumed one EOF too
+                                        None => self.content.len() as u32 + 1,
+                                    };
+                                    let span = self.add_span(n, self.pos - n);
+                                    // FIXME: Capture final trailing trivia
+                                    state.pending_trivia.push(TokenTrivia {
+                                        span,
+                                        kind: TokenTriviaKind::LineComment,
+                                    });
+                                    return Ok(Some(()));
                                 } else {
                                     return_single!(K::Slash)
                                 }
@@ -1071,12 +1079,16 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             '$' => return_single!(K::Dollar),
                             '^' => return_single!(K::Caret),
                             ' ' | '\x09'..='\x0d' => {
-                                // simply eat whitespace
+                                // simply eat whitespace; consume the whole run
+                                // here rather than re-dispatching per char
                                 self.advance();
+                                while matches!(self.peek(), ' ' | '\x09'..='\x0d') {
+                                    self.advance();
+                                }
                             }
                             _ if is_ident_or_num_start(c) => {
                                 // Enter number submode of ident mode
-                                if c == '-' || c.is_numeric() {
+                                if c == '-' || is_numeric_char(c) {
                                     is_number = true;
                                 }
                                 tok_len += 1;
@@ -1105,7 +1117,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 // 100.42 -> Ident(100.42)
                                 // 100.toInt() -> Ident(100), Dot, Ident(toInt)
                                 if is_number {
-                                    if next.is_numeric() {
+                                    if is_numeric_char(next) {
                                         tok_len += 1;
                                         self.advance();
                                     } else {
@@ -1139,6 +1151,12 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 if is_ident_char(c) {
                                     tok_len += 1;
                                     self.advance();
+                                    // Consume the rest of the ident run here
+                                    // rather than re-dispatching per char
+                                    while is_ident_char(self.peek()) {
+                                        tok_len += 1;
+                                        self.advance();
+                                    }
                                 } else {
                                     tokens.push(make_from_buffer!(n));
                                     return Ok(Some(()));
@@ -1185,12 +1203,50 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
     }
 }
 
+const CLASS_IDENT: u8 = 1;
+const CLASS_NUMERIC: u8 = 2;
+/// Byte-indexed classification for the chars the lexer actually sees
+/// Notably marks hyphen - as an ident char
+#[rustfmt::skip]
+static BYTE_CLASS: [u8; 256] = [
+//  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x00 control
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x10 control
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, // 0x20 sp ! " # $ % & ' ( ) * + , - . /
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, // 0x30 0 1 2 3 4 5 6 7 8 9 : ; < = > ?
+    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x40 @ A B C D E F G H I J K L M N O
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, // 0x50 P Q R S T U V W X Y Z [ \ ] ^ _
+    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x60 ` a b c d e f g h i j k l m n o
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, // 0x70 p q r s t u v w x y z { | } ~ del
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x80 Latin-1 control
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x90 Latin-1 control
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, // 0xa0 punctuation, except ª (0xaa) is alphabetic
+    0, 0, 3, 3, 0, 1, 0, 0, 0, 3, 1, 0, 3, 3, 3, 0, // 0xb0 punctuation, except ² ³ µ ¹ º ¼ ½ ¾
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0xc0 À Á Â Ã Ä Å Æ Ç È É Ê Ë Ì Í Î Ï
+    1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, // 0xd0 Ð Ñ Ò Ó Ô Õ Ö × Ø Ù Ú Û Ü Ý Þ ß (× is not)
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0xe0 à á â ã ä å æ ç è é ê ë ì í î ï
+    1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, // 0xf0 ð ñ ò ó ô õ ö ÷ ø ù ú û ü ý þ ÿ (÷ is not)
+];
+
+#[inline]
 pub fn is_ident_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_' || c == '-'
+    match BYTE_CLASS.get(c as usize) {
+        Some(class) => class & CLASS_IDENT != 0,
+        None => c.is_alphanumeric(),
+    }
 }
 
+#[inline]
 fn is_ident_or_num_start(c: char) -> bool {
-    c.is_alphanumeric() || c == '_' || c == '-'
+    is_ident_char(c)
+}
+
+#[inline]
+fn is_numeric_char(c: char) -> bool {
+    match BYTE_CLASS.get(c as usize) {
+        Some(class) => class & CLASS_NUMERIC != 0,
+        None => c.is_numeric(),
+    }
 }
 
 pub fn lex_standalone(content: &str) -> (Spans, Vec<Token>, Option<LexError>) {
@@ -1205,6 +1261,18 @@ pub fn lex_standalone(content: &str) -> (Spans, Vec<Token>, Option<LexError>) {
 #[cfg(test)]
 mod test {
     use crate::lex::{Lexer, Span, SpanId, Spans, Token, TokenKind as K, TokenTriviaKind};
+
+    #[test]
+    fn byte_class_matches_char_methods() {
+        for b in 0..=255u8 {
+            let c = b as char;
+            let class = super::BYTE_CLASS[b as usize];
+            let ident = c.is_alphanumeric() || c == '_' || c == '-';
+            let numeric = c.is_numeric();
+            assert_eq!(class & super::CLASS_IDENT != 0, ident, "ident class for byte {b:#x}");
+            assert_eq!(class & super::CLASS_NUMERIC != 0, numeric, "numeric class for byte {b:#x}");
+        }
+    }
 
     fn set_up(input: &str) -> anyhow::Result<(Spans, Vec<Token>)> {
         let mut spans = Spans::new();
