@@ -6,6 +6,7 @@ bundle-name := if os == "linux" {
 } else {
   error("Unsupported OS: " + os)
 }
+export LLVM_SYS_211_PREFIX := env_var_or_default("LLVM_SYS_211_PREFIX", "./llvm/install-llvm")
 
 # Run the current scratch file; use for writing reproducers or not-yet-working code, then move it to test_src/ when done or fixed
 a:
@@ -30,10 +31,10 @@ lsp:
 lsprelease:
   cargo build --profile release --features lsp --features=llvm-sys/force-static --bin lsp
 
-build-k1r:
+build-r:
   cargo build --release --bin k1  --features=llvm-sys/force-static
 
-build-k1-profile:
+build-profile:
   cargo build --profile profiling --bin k1 --features=llvm-sys/force-static
 
 valgrind-linux:
@@ -43,7 +44,7 @@ valgrind-linux:
 
 bundle:
   just lsprelease
-  just build-k1r
+  just build-r
   cargo build --profile release --bin k1_test
   ./builds/bundle.sh target/release builds/{{bundle-name}}
 

@@ -5920,7 +5920,8 @@ impl TypedProgram {
             // for p in &self.ir.b_units_pending_compile {
             //     eprintln!("PENDING: {} {}", p.as_u32(), self.function_id_to_string(*p, false));
             // }
-            if let Some(function_id) = self.ir.units_pending_compile.pop() {
+            if let Some(function_id) = self.ir.units_pending_compile.keys().next().copied() {
+                self.ir.units_pending_compile.remove(&function_id);
                 self.eval_function_body(function_id)?;
                 if let Err(e) = ir::compile_function(self, function_id) {
                     return failf!(
@@ -5996,13 +5997,12 @@ impl TypedProgram {
         }
 
         let execution_result = match self.config.static_exec {
-            crate::compiler::StaticExecMode::Ir => {
-                vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
+            crate::compiler::StaticExecMode::Ir => vm::execute_compiled_expr(self, vm, expr)
+                .map_err(|mut e| {
                     let stack_trace = vm::make_stack_trace(self, &vm.stack);
                     e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
                     e
-                })
-            }
+                }),
             crate::compiler::StaticExecMode::Bc => {
                 crate::bc::exec::execute_compiled_expr(self, vm, expr, true)
             }
@@ -6134,13 +6134,13 @@ impl TypedProgram {
 
             let execution_result = match k1.config.static_exec {
                 crate::compiler::StaticExecMode::Ir => {
-                    vm::execute_compiled_function(k1, vm, function_id, function_parameters)
-                        .map_err(|mut e| {
+                    vm::execute_compiled_function(k1, vm, function_id, function_parameters).map_err(
+                        |mut e| {
                             let stack_trace = vm::make_stack_trace(k1, &vm.stack);
-                            e.message =
-                                format!("{}\nExecution Trace\n{}", e.message, stack_trace);
+                            e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
                             e
-                        })
+                        },
+                    )
                 }
                 crate::compiler::StaticExecMode::Bc => crate::bc::exec::execute_compiled_function(
                     k1,

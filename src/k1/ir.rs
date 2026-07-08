@@ -65,9 +65,9 @@ pub struct ProgramIr {
     pub phys_fn_type_cache: FxHashMap<TypeId, PhysicalFunctionType>,
 
     // Builder data
-    b_variables: Vec<BuilderVariable>,
+    b_variables: FxHashMap<VariableId, BuilderVariable>,
     b_loops: FxHashMap<ScopeId, LoopInfo>,
-    pub units_pending_compile: Vec<FunctionId>,
+    pub units_pending_compile: FxHashMap<FunctionId, ()>,
 
     opt_buf_stack: Vec<iropt::OptVisit>,
     opt_buf_order: Vec<IrUnitId>,
@@ -102,9 +102,9 @@ impl ProgramIr {
             phys_fn_type_cache: FxHashMap::new(),
             exprs: FxHashMap::new(),
             module_config: IrModuleConfig {},
-            b_variables: Vec::with_capacity(256),
+            b_variables: FxHashMap::new(),
             b_loops: FxHashMap::default(),
-            units_pending_compile: vec![],
+            units_pending_compile: FxHashMap::new(),
 
             opt_buf_stack: vec![],
             opt_buf_order: vec![],
@@ -846,7 +846,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
         };
         let builder_variable =
             BuilderVariable { id: param.variable_id, value, storage_pt: t, indirect: false };
-        b.k1.ir.b_variables.push(builder_variable);
+        b.k1.ir.b_variables.insert(builder_variable.id, builder_variable);
     }
 
     let f = b.k1.get_function(function_id);
@@ -893,12 +893,15 @@ pub fn compile_top_level_expr(
     for (variable_id, static_value_id) in input_parameters {
         let variable = b.k1.variables.get(*variable_id);
         let pt = b.get_physical_type(variable.type_id);
-        b.k1.ir.b_variables.push(BuilderVariable {
-            id: *variable_id,
-            value: Value::StaticValue { t: pt, id: *static_value_id },
-            storage_pt: pt,
-            indirect: !pt.is_agg(),
-        })
+        b.k1.ir.b_variables.insert(
+            *variable_id,
+            BuilderVariable {
+                id: *variable_id,
+                value: Value::StaticValue { t: pt, id: *static_value_id },
+                storage_pt: pt,
+                indirect: !pt.is_agg(),
+            },
+        );
     }
 
     let return_type_id = b.k1.exprs.get_type(expr);
@@ -1206,7 +1209,7 @@ impl<'k1> Builder<'k1> {
     }
 
     fn get_variable(&self, variable_id: VariableId) -> Option<&BuilderVariable> {
-        self.k1.ir.b_variables.iter().find(|bv| bv.id == variable_id)
+        self.k1.ir.b_variables.get(&variable_id)
     }
 
     fn get_physical_type_result(&mut self, type_id: TypeId) -> PhysicalTypeResult {
@@ -1286,7 +1289,7 @@ impl<'k1> Builder<'k1> {
         }
     }
 
-    fn get_instr_block(&self, inst_id: InstId) -> IrHandle<BlockNode> {
+    fn _get_instr_block(&self, inst_id: InstId) -> IrHandle<BlockNode> {
         self.k1
             .ir
             .mem
@@ -1419,12 +1422,15 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
                 if let Some(init) = let_stmt.initializer {
                     compile_expr(b, None, init)?;
                 }
-                b.k1.ir.b_variables.push(BuilderVariable {
-                    id: let_stmt.variable_id,
-                    value: Value::Empty,
-                    storage_pt: rich_pt,
-                    indirect: false,
-                });
+                b.k1.ir.b_variables.insert(
+                    let_stmt.variable_id,
+                    BuilderVariable {
+                        id: let_stmt.variable_id,
+                        value: Value::Empty,
+                        storage_pt: rich_pt,
+                        indirect: false,
+                    },
+                );
                 Ok(Value::Empty)
             } else {
                 let variable_alloca =
@@ -1440,12 +1446,15 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
                 // non-referencing int -> indirect
                 // non-referencing agg -> direct
                 let is_direct = if rich_pt.is_agg() { true } else { let_stmt.is_referencing };
-                b.k1.ir.b_variables.push(BuilderVariable {
-                    id: let_stmt.variable_id,
-                    value: variable_alloca.as_value(),
-                    storage_pt: var_pt,
-                    indirect: !is_direct,
-                });
+                b.k1.ir.b_variables.insert(
+                    let_stmt.variable_id,
+                    BuilderVariable {
+                        id: let_stmt.variable_id,
+                        value: variable_alloca.as_value(),
+                        storage_pt: var_pt,
+                        indirect: !is_direct,
+                    },
+                );
                 Ok(Value::Empty)
             }
         }
@@ -1727,9 +1736,7 @@ fn compile_expr(
             if let Some(function_id) = callee.known_function_id() {
                 match b.k1.ir.functions.get(function_id) {
                     None => {
-                        if !b.k1.ir.units_pending_compile.contains(&function_id) {
-                            b.k1.ir.units_pending_compile.push(function_id);
-                        }
+                        b.k1.ir.units_pending_compile.entry(function_id).or_insert(());
                     }
                     Some(_unit) => {}
                 }
@@ -2087,14 +2094,14 @@ fn compile_expr(
             let l = b.k1.types.lambda_types.get(lambda_type_id);
             let function_id = l.function_id;
             let env_struct = l.environment_struct;
-            b.k1.ir.units_pending_compile.push(function_id);
+            b.k1.ir.units_pending_compile.insert(function_id, ());
             compile_expr(b, dst, env_struct)
         }
         TypedExpr::FunctionPointer(fpe) => {
             let fp = Value::FunctionAddr(fpe.function_id);
             let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
             let stored = store_rich_if_dst(b, dst, ptr_pt, fp, "deliver fn pointer");
-            b.k1.ir.units_pending_compile.push(fpe.function_id);
+            b.k1.ir.units_pending_compile.insert(fpe.function_id, ());
             Ok(stored)
         }
         TypedExpr::PendingCapture(_) => b_ice!(b, "ir on PendingCapture"),
@@ -2172,7 +2179,7 @@ fn compile_variable_to_address(
                     "Variables are: {}",
                     b.k1.ir
                         .b_variables
-                        .iter()
+                        .values()
                         .map(|bv| format!("{} {}", bv.id, bv.value))
                         .join("\n")
                 );
@@ -3187,7 +3194,7 @@ pub fn display_block(
             let (_, line) = k1.get_span_location(span_id);
             let first_line = lines.lines().next().unwrap_or("");
             let column = the_span.start + 1 - line.start_char;
-            write!(w, "| {first_line:60}|{:3}:{}|", line.line_number(), column)?;
+            write!(w, "| {first_line:30}|{:3}:{}|", line.line_number(), column)?;
         }
         writeln!(w)?;
     }

@@ -67,10 +67,12 @@ pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         k1.ir.opt_buf_callees = callees;
     }
 
-    let cfg_start = k1.timing.raw();
-    cfg_compute_unit(&mut k1.ir, unit_id);
-    k1.timing.iropt_cfg_nanos += k1.timing.elapsed_nanos(cfg_start) as i64;
-    k1.timing.iropt_cfg_computes += 1;
+    if !get_compiled_unit(&k1.ir, unit_id).unwrap().cfg_valid {
+        let cfg_start = k1.timing.raw();
+        cfg_compute_unit(&mut k1.ir, unit_id);
+        k1.timing.iropt_cfg_nanos += k1.timing.elapsed_nanos(cfg_start) as i64;
+        k1.timing.iropt_cfg_computes += 1;
+    }
     let simplify_start = k1.timing.raw();
     cfg_simplify(k1, unit_id);
     k1.timing.iropt_simplify_nanos += k1.timing.elapsed_nanos(simplify_start) as i64;
@@ -126,8 +128,66 @@ fn finish_unit_no_inline(k1: &mut TypedProgram, unit_id: IrUnitId) {
 
 fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     debug!("Inlining calls in {}", unit_name_to_string(k1, unit_id));
-    while do_pass(k1, unit_id) {}
+    // Uses of each inlined call's result are not patched per-inline:
+    // mappings (removed call inst -> its phi/alloca replacement) accumulate in
+    // result_rewrites and are applied in one unit-wide pass after the scan.
+    // Entries can't chain (replacements are never call insts), so a single
+    // application converges, even when a later inline copies a still-stale
+    // operand into its inlined body.
+    let mut result_rewrites = std::mem::take(&mut k1.ir.opt_buf_inline_self_rewrites);
+    let mut did_inline = false;
+    let mut cur_block = get_compiled_unit(&k1.ir, unit_id).unwrap().blocks.first;
+    'scan: while !cur_block.is_nil() {
+        let mut cur_inst = k1.ir.mem.get(cur_block).data.instrs.first;
+        while !cur_inst.is_nil() {
+            let inst_node = *k1.ir.mem.get(cur_inst);
+            if let Inst::Call { call_id } = k1.ir.instrs.get(inst_node.data) {
+                let call = *k1.ir.calls.get(*call_id);
+                if let IrCallee::Direct(function_id) = call.callee {
+                    // FIXME: inlining This only prevents direct recursion, corecursive
+                    // units still cause us to fail. We need to detect these cycles and
+                    // avoid inlining them
+                    if unit_id != IrUnitId::Function(function_id)
+                        && !k1.functions.get(function_id).is_recursive
+                    {
+                        let callee_unit =
+                            get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
+                        if callee_unit.inst_count < 20 {
+                            cur_block = inline_call(
+                                k1,
+                                unit_id,
+                                cur_block,
+                                cur_inst,
+                                call,
+                                &mut result_rewrites,
+                            );
+                            did_inline = true;
+                            continue 'scan;
+                        }
+                    }
+                }
+            }
+            cur_inst = inst_node.next;
+        }
+        cur_block = k1.ir.mem.get(cur_block).next;
+    }
+
     let blocks = get_compiled_unit(&k1.ir, unit_id).unwrap().blocks;
+    if !result_rewrites.values.is_empty() {
+        for (block, _) in k1.ir.mem.dlist_iter_handles(blocks) {
+            rewrite_in_block(&mut k1.ir, block, &mut result_rewrites, &[]);
+        }
+    }
+    result_rewrites.clear();
+    k1.ir.opt_buf_inline_self_rewrites = result_rewrites;
+
+    if !did_inline {
+        let unit = get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap();
+        debug_assert!(unit.cfg_valid);
+        unit.inline_done = true;
+        return;
+    }
+
     let inst_count = k1
         .ir
         .mem
@@ -142,48 +202,14 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     unit.inline_done = true;
     unit.inst_count = inst_count;
 
-    fn do_pass(k1: &mut TypedProgram, unit_id: IrUnitId) -> bool {
-        let self_unit = get_compiled_unit(&k1.ir, unit_id).unwrap();
-        for block in k1.ir.mem.dlist_iter(self_unit.blocks) {
-            for (inst_node_handle, inst_node) in k1.ir.mem.dlist_iter_handles(block.instrs) {
-                let inst_id = inst_node.data;
-                let inst = k1.ir.instrs.get(inst_id);
-                if let Inst::Call { call_id } = inst {
-                    // Inline calls
-                    let call = *k1.ir.calls.get(*call_id);
-                    match call.callee {
-                        IrCallee::Direct(function_id) => {
-                            // FIXME: inlining This only prevents direct recursion, corecursive
-                            // units still cause us to fail. We need to detect these cycles and
-                            // avoid inlining them
-                            if unit_id == IrUnitId::Function(function_id) {
-                                continue;
-                            }
-                            if k1.functions.get(function_id).is_recursive {
-                                continue;
-                            }
-                            let callee_unit =
-                                get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
-
-                            if callee_unit.inst_count < 20 {
-                                inline_call(k1, unit_id, inst_node_handle, call);
-                                return true;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        false
-    }
-
     fn inline_call(
         k1: &mut TypedProgram,
         self_unit_id: IrUnitId,
+        call_block_handle: BlockId,
         call_inst_node: IrHandle<InstNode>,
         call: IrCall,
-    ) {
+        result_rewrites: &mut RewriteMappings,
+    ) -> BlockId {
         k1.timing.iropt_inline_count += 1;
         let call_inst = *k1.ir.mem.get(call_inst_node);
         let call_inst_id = call_inst.data;
@@ -210,11 +236,8 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
             entry_span,
         };
 
-        let call_block_handle = b.get_instr_block(call_inst_id);
         let mut call_block_node_ref = b.k1.ir.mem.get_raw_ref(call_block_handle);
         let self_entry_block = b.blocks.first;
-
-        let mut self_rewrites = std::mem::take(&mut b.k1.ir.opt_buf_inline_self_rewrites);
 
         let call_args = b.k1.ir.mem.getn(call.args);
         let mut inlined_rewrites = std::mem::take(&mut b.k1.ir.opt_buf_inline_inlined_rewrites);
@@ -255,7 +278,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                             Inst::Phi { t: call.ret_type, incomings: MSlice::empty() },
                             "inlined scalar return",
                         );
-                        self_rewrites.values.insert(call_inst_id, Value::Inst(phi));
+                        result_rewrites.values.insert(call_inst_id, Value::Inst(phi));
                         InlinedReturnInfo::ScalarInPhi(phi, incomings)
                     }
                     PhysicalTypeEnum::Agg(_) => {
@@ -272,7 +295,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                         let self_entry_instrs =
                             &mut b.k1.ir.mem.get_raw_ref(self_entry_block).as_mut().data.instrs;
                         b.k1.ir.mem.dlist_insert(self_entry_instrs, 0, dst_alloca);
-                        self_rewrites.values.insert(call_inst_id, Value::Inst(dst_alloca));
+                        result_rewrites.values.insert(call_inst_id, Value::Inst(dst_alloca));
                         InlinedReturnInfo::AggInStorage(dst_alloca.as_value())
                     }
                     PhysicalTypeEnum::Empty => InlinedReturnInfo::Empty,
@@ -281,11 +304,23 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
             Some(dst) => InlinedReturnInfo::AggInStorage(dst),
         };
 
+        // The split moved call_block's terminator into call_post_block; any
+        // phi naming call_block as its predecessor lives in that terminator's
+        // targets and must now name call_post_block instead. (No post block
+        // means the call diverged, so call_block had no successors.)
         if let Some(call_post_block) = call_post_block {
-            self_rewrites.block_exits.insert(call_block_handle, call_post_block);
-        }
-        for (self_block, _) in b.k1.ir.mem.dlist_iter_handles(b.blocks) {
-            rewrite_in_block(&mut b.k1.ir, self_block, &mut self_rewrites, &[]);
+            let post_instrs = b.k1.ir.mem.get(call_post_block).data.instrs;
+            let terminator_id = b.k1.ir.mem.get(post_instrs.last).data;
+            match *b.k1.ir.instrs.get(terminator_id) {
+                Inst::Jump(target) => {
+                    rewrite_phi_incoming(&mut b.k1.ir, target, call_block_handle, call_post_block)
+                }
+                Inst::JumpIf { cons, alt, .. } => {
+                    rewrite_phi_incoming(&mut b.k1.ir, cons, call_block_handle, call_post_block);
+                    rewrite_phi_incoming(&mut b.k1.ir, alt, call_block_handle, call_post_block);
+                }
+                _ => {}
+            }
         }
 
         b.cur_block = call_block_handle;
@@ -386,15 +421,23 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         unit.blocks = b.blocks;
         unit.cfg_valid = false;
 
-        self_rewrites.clear();
         inlined_rewrites.clear();
-        b.k1.ir.opt_buf_inline_self_rewrites = self_rewrites;
         b.k1.ir.opt_buf_inline_inlined_rewrites = inlined_rewrites;
 
         // debug!("post inline\n{}", unit_to_string(b.k1, self_unit_id, false));
         // if let Err(e) = validate_unit(b.k1, self_unit_id) {
         //     k1.report(e)
         // };
+
+        if inlined_first.is_nil() {
+            // Callee had no blocks; nothing new to scan
+            match call_post_block {
+                Some(post) => post,
+                None => b.k1.ir.mem.get(call_block_handle).next,
+            }
+        } else {
+            inlined_first
+        }
     }
 }
 
@@ -810,18 +853,47 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
     // Now, more interesting simplifications
     // - Merge successor into self
     // - Trampoline removal
+    //
+    // Both edits are cfg-local, so preds/succs are patched in place instead
+    // of recomputing the whole cfg per change, and a pass applies every edit
+    // it finds instead of one. An edit can re-enable a block behind the
+    // cursor (a trampoline's pred can become mergeable), so we loop passes to
+    // a fixpoint; that converges in a couple of passes.
+    //
+    // Killed single-incoming phis accumulate in `rewrites` and are applied in
+    // one unit-wide pass at the end. Insert-time resolution keeps the map's
+    // values fully resolved (never another killed phi), so application stays
+    // a single lookup. Until that pass runs, operands may still name killed
+    // phis; the logic here reads only terminators, phi `from` fields (patched
+    // eagerly), and instruction counts, never operands.
+    let mut rewrites = std::mem::take(&mut k1.ir.opt_buf_cfg_simpl_rewrites);
 
-    while do_pass(k1, blocks) {
+    while do_pass(k1, blocks, &mut rewrites) {
         k1.timing.iropt_simplify_passes += 1;
     }
     k1.timing.iropt_simplify_passes += 1; // the final no-op pass
 
-    fn do_pass(k1: &mut TypedProgram, blocks: &mut IrList<Block>) -> bool {
+    if !rewrites.values.is_empty() {
+        for (block_id, _) in k1.ir.mem.dlist_iter_handles(*blocks) {
+            rewrite_in_block(&mut k1.ir, block_id, &mut rewrites, &[])
+        }
+    }
+    rewrites.clear();
+    k1.ir.opt_buf_cfg_simpl_rewrites = rewrites;
+
+    fn do_pass(
+        k1: &mut TypedProgram,
+        blocks: &mut IrList<Block>,
+        rewrites: &mut RewriteMappings,
+    ) -> bool {
         let ir = &mut k1.ir;
         let mut noop = true;
-        let mut rewrites = std::mem::take(&mut ir.opt_buf_cfg_simpl_rewrites);
 
-        for (block_id, node) in ir.mem.dlist_iter_handles(*blocks) {
+        let mut cur = blocks.first;
+        while !cur.is_nil() {
+            let block_id = cur;
+            let node = *ir.mem.get(cur);
+
             // Trampoline case
             if let Some(pred) = ir.mem.dlist_get_singleton(node.data.preds) {
                 if let Some(succ) = ir.mem.dlist_get_singleton(node.data.succs) {
@@ -854,9 +926,13 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
                                 }
 
                                 rewrite_phi_incoming(ir, succ, block_id, pred);
+                                // Patch the cfg: pred -> block_id -> succ becomes pred -> succ
+                                cfg_replace_edge(ir, ir.mem.get(pred).data.succs, block_id, succ);
+                                cfg_replace_edge(ir, ir.mem.get(succ).data.preds, block_id, pred);
                                 ir.mem.dlist_remove(blocks, block_id);
                                 noop = false;
-                                break;
+                                cur = node.next; // saved before the removal
+                                continue;
                             };
                         }
                     }
@@ -892,7 +968,25 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
                                 if incomings.len() == 1 {
                                     let only_case = ir.mem.get_nth(*incomings, 0);
                                     debug_assert_eq!(only_case.from, block_id);
-                                    rewrites.values.insert(inst_node.data, only_case.value);
+                                    let killed = inst_node.data;
+                                    // Keep the deferred map fully resolved:
+                                    // resolve the value through the map, then
+                                    // re-point existing entries at this phi
+                                    let mut resolved = only_case.value;
+                                    if let Value::Inst(id) = resolved {
+                                        if let Some(v) = rewrites.values.get(&id) {
+                                            resolved = *v;
+                                        }
+                                    }
+                                    debug_assert!(
+                                        !matches!(resolved, Value::Inst(id) if id == killed)
+                                    );
+                                    for v in rewrites.values.values_mut() {
+                                        if matches!(*v, Value::Inst(id) if id == killed) {
+                                            *v = resolved;
+                                        }
+                                    }
+                                    rewrites.values.insert(killed, resolved);
                                     debug!("block_merge: skipping single phi i{}", inst_node.data);
                                     skip = true;
                                 } else {
@@ -906,37 +1000,44 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
                         }
 
                         // clean up
-                        // Remove succ
-                        // Rewrite succs succ's phis
+                        // Remove succ; take over its successors, patching
+                        // their phis and pred edges to point here
                         for (_, succ_cfg_node) in ir.mem.dlist_iter_handles(succ_node.data.succs) {
-                            rewrite_phi_incoming(ir, succ_cfg_node.data, succ_block_id, block_id)
+                            rewrite_phi_incoming(ir, succ_cfg_node.data, succ_block_id, block_id);
+                            cfg_replace_edge(
+                                ir,
+                                ir.mem.get(succ_cfg_node.data).data.preds,
+                                succ_block_id,
+                                block_id,
+                            );
                         }
+                        block_node.data.succs = succ_node.data.succs;
                         ir.mem.dlist_remove(blocks, succ_block_id);
 
-                        if !rewrites.values.is_empty() {
-                            for (block_id, _) in ir.mem.dlist_iter_handles(*blocks) {
-                                rewrite_in_block(ir, block_id, &mut rewrites, &[])
-                            }
-                        }
-
                         noop = false;
-                        break;
+                        // Re-examine this block: it may chain into another
+                        // merge, or have become a trampoline
+                        continue;
                     }
                 }
             }
-        }
 
-        if !noop {
-            let cfg_start = k1.timing.raw();
-            cfg_compute(&mut k1.ir, *blocks);
-            k1.timing.iropt_cfg_nanos += k1.timing.elapsed_nanos(cfg_start) as i64;
-            k1.timing.iropt_cfg_computes += 1;
+            cur = node.next;
         }
-        rewrites.clear();
-        k1.ir.opt_buf_cfg_simpl_rewrites = rewrites;
         !noop
     }
     debug!("cfg_simplify end\n{}", blocks_to_string(k1, *blocks, true, false));
+}
+
+/// Replace every occurrence of `old` with `new` in a cfg edge list (preds or
+/// succs). Duplicate entries (a JumpIf with both arms on one target) are the
+/// canonical representation cfg_compute produces, so all occurrences map over.
+fn cfg_replace_edge(ir: &mut ProgramIr, edges: IrList<BlockId>, old: BlockId, new: BlockId) {
+    for (_, mut node) in ir.mem.dlist_iter_handles(edges) {
+        if node.data == old {
+            node.data = new;
+        }
+    }
 }
 
 fn rewrite_phi_incoming(ir: &mut ProgramIr, phi_block_id: BlockId, from: BlockId, to: BlockId) {

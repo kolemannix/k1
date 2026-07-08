@@ -245,7 +245,7 @@ pub struct Args {
     pub target: Option<Target>,
 
     /// Engine for comptime execution: the ir interpreter, the bc VM, or both
-    #[arg(long, value_enum, default_value_t = StaticExecMode::Both)]
+    #[arg(long, value_enum, default_value_t = StaticExecMode::Bc)]
     pub static_exec: StaticExecMode,
 
     #[command(subcommand)]
