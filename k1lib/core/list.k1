@@ -289,7 +289,7 @@ ns for list {
     let b = StringBuilder/new();
     for s in self {
       s.print-to(&b);
-      let isLast = itIndex == self.len - 1;
+      let isLast = it-index + 1 == self.len;
       if not isLast { b.string(sep) }
     };
     b.build()
@@ -370,7 +370,7 @@ impl[T: print] print for list[T] {
     w.write-char('[');
     for self {
       it.print-to(w);
-      let last = itIndex == self.len - 1;
+      let last = it-index + 1 == self.len;
       if not last {
         w.string(",");
       };

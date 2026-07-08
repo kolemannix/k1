@@ -16,7 +16,7 @@ fn main(): i32 {
 
   let sumDiffs = 0;
   for l in left.* {
-    let r = right.*.get(itIndex);
+    let r = right.*.get(it-index);
     let diff = if l > r l - r else r - l;
     sumDiffs := sumDiffs + diff;
   };

@@ -385,7 +385,7 @@ impl[t: print] print for buffer[t] {
     w.write-char('[');
     for self {
       it.print-to(w);
-      let last = itIndex == self.len - 1;
+      let last = it-index == self.len - 1;
       if not last {
         w.write-char(',');
       };
@@ -428,7 +428,7 @@ impl[t: equals] equals for buffer[t] {
   fn equals(self: buffer[t], other: buffer[t]): bool {
     if self.len != other.len false else {
       for a in self {
-        let b = other.get(itIndex);
+        let b = other.get(it-index);
         if a != b return(false);
       };
       true

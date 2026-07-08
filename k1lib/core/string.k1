@@ -77,7 +77,7 @@ ns for string {
 
   fn indexOf(self: string, c: char): i64 {
     for self.span {
-      if it == c return(itIndex)
+      if it == c return(it-index)
     };
     -1
   }
@@ -102,7 +102,6 @@ ns for string {
     let* r = { start: 0: size, len: 0: size };
 
     for c in self {
-      //println("{itIndex} {c} ({r.start},{r.len})");
       if c == delim {
         ranges.push(r);
         r <- { start: itIndex + 1, len: 0 };
@@ -123,7 +122,7 @@ ns for string {
 
   fn index-of-string(self: string, target: string): ?size {
     for self.span {
-      let i = itIndex;
+      let i = it-index;
       if i + target.len() > self.len() {
         return(:none)
       };

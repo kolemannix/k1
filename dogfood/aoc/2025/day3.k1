@@ -30,7 +30,7 @@ fn part1(input: string) {
     };
     let joltage = (hi.AsciiDigit().! * 10 + lo.AsciiDigit().!);
     sum := sum + joltage;
-    println("Result {itIndex} for bank `{bank}`: {joltage} {sum}")
+    println("Result {it-index} for bank `{bank}`: {joltage} {sum}")
   };
   println("Sum: {sum}")
 }
@@ -48,7 +48,7 @@ fn part2(input: string) {
       println("picking ({start},{end}) {rangeSize} from {candidateRange}");
       let best = { index: start, value: bank.get(start) };
       for cand in candidateRange {
-        if cand > best.value { best := { index: itIndex + start, value: cand } }
+        if cand > best.value { best := { index: it-index + start, value: cand } }
       };
       sels.push(best.value);
       start := best.index + 1;
@@ -57,7 +57,7 @@ fn part2(input: string) {
 
     let joltage = string/from-span(sels.as-span()).parseBase10();
     sum := sum + joltage.!;
-    println("Result {itIndex} for bank `{bank}`: {sels.*} {sum}")
+    println("Result {it-index} for bank `{bank}`: {sels.*} {sum}")
   };
   println("Sum: {sum}")
 }

@@ -15,7 +15,7 @@ fn unique(arr: buffer[char]): bool {
 fn solve(): int {
   let input = "bvwbjplbgvbhsrlpgdmjqwftvncz";
   for input {
-    let i = itIndex;
+    let i = it-index;
     let sub = input.substring(i, i + 4);
     if unique(sub.innerbuffer()) {
       return(i + 4);

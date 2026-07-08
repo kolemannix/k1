@@ -232,7 +232,7 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
   // The item being iterated over is named `it` if no binding is supplied
   // `itIndex` is also given to us
   for members {
-    let info = memberInfo.get(itIndex);
+    let info = memberInfo.get(it-index);
     // Emit globals, or constants, for each field's mask
     code.line("  let {it.name}Mask: {baseName} = {info.mask};");
   };
@@ -243,7 +243,7 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
   // we'll use bool since that's what the people likely want. Note that we could configure
   // any of this behavior because this is just a regular function
   for members {
-    let info = memberInfo.get(itIndex);
+    let info = memberInfo.get(it-index);
     let nameCap = info.nameCap;
     let isBool = it.bits == 1;
     let fieldType = if isBool "bool" else "u{info.typeWidth}";
@@ -280,9 +280,9 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
 
   let* printBody = StringBuilder/new();
   for members {
-    let info = memberInfo.get(itIndex);
+    let info = memberInfo.get(it-index);
     let getName = "get{info.nameCap}";
-    let last = itIndex + 1 == members.len();
+    let last = it-index + 1 == members.len();
     let sep = if last "" else ",";
     printBody.line(`    w.writeString("{it.name}={{self.{getName}()}{sep}");`);
   };

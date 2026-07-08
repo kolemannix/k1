@@ -119,7 +119,7 @@ fn cheap_computation(n: int): int {
     
   let result = 0;
   for IntRange/upTo(n) {
-    if itIndex % 2 == 0 { result := result + 3 }
+    if it-index % 2 == 0 { result := result + 3 }
     else { result := result - 2 }
   };
 
@@ -132,7 +132,7 @@ fn expensive_computation(n: int): int {
     
   let result = 0;
   for IntRange/upTo(n) {
-    if itIndex % 2 == 0 { result := result + 3 }
+    if it-index % 2 == 0 { result := result + 3 }
     else { result := result - 2 }
   };
 

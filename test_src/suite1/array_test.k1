@@ -22,9 +22,9 @@ fn testFilled() {
   assert-equals(array.len(), 64);
   assert-equals(list.len, 64);
   for buffer {
-    assert-equals(buffer.get(itIndex), 3);
-    assert-equals(list.get(itIndex), 3);
-    assert-equals(array.get(itIndex), 3);
+    assert-equals(buffer.get(it-index), 3);
+    assert-equals(list.get(it-index), 3);
+    assert-equals(array.get(it-index), 3);
   }
 }
 
@@ -44,7 +44,7 @@ fn testArray() {
     }
   };
   for a {
-    if itIndex % 2 == 0 {
+    if it-index % 2 == 0 {
       assert-equals(it, 1);
     } else {
       assert-equals(it, 3);
