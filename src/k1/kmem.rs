@@ -423,7 +423,7 @@ impl<Tag> Mem<Tag> {
         self.offset_to_ptr::<T>(handle.0.unwrap())
     }
 
-    pub fn list_to_handle<T>(&self, list: List<T, Tag>) -> MSlice<T, Tag> {
+    pub fn list_to_handle<T: Copy>(&self, list: List<T, Tag>) -> MSlice<T, Tag> {
         let offset = self.ptr_to_offset(list.buf.cast_const());
         MSlice::make(offset, list.len() as u32)
     }
@@ -579,12 +579,37 @@ impl<Tag> Mem<Tag> {
         self.pushn(slice)
     }
 
-    /// We know we can't address more than 4GB (to keep handles small), so we accept a u32 len, not a usize
-    pub fn new_list<T>(&mut self, len: u32) -> List<T, Tag> {
-        let dst = self.push_slice_uninit(len as usize);
+    pub fn slice_extend<T: Copy + 'static>(
+        &mut self,
+        s: MSlice<T, Tag>,
+        other: &[T],
+    ) -> MSlice<T, Tag> {
+        if other.is_empty() {
+            return s;
+        }
+        let mut l = self.new_list_from_slice(s, s.len() + other.len() as u32);
+        l.extend(other);
+        self.list_to_handle(l)
+    }
 
-        let raw_slice: *mut [T] = core::ptr::slice_from_raw_parts_mut(dst, len as usize);
+    /// We know we can't address more than 4GB (to keep handles small), so we accept a u32 len, not a usize
+    pub fn new_list<T>(&mut self, cap: u32) -> List<T, Tag> {
+        let dst = self.push_slice_uninit(cap as usize);
+
+        let raw_slice: *mut [T] = core::ptr::slice_from_raw_parts_mut(dst, cap as usize);
         List { buf: raw_slice, len: 0, _tag: PhantomData }
+    }
+
+    /// We know we can't address more than 4GB (to keep handles small), so we accept a u32 len, not a usize
+    pub fn new_list_from_slice<T: Copy + 'static>(
+        &mut self,
+        slice: MSlice<T, Tag>,
+        cap: u32,
+    ) -> List<T, Tag> {
+        assert!(cap >= slice.len());
+        let mut list = self.new_list(cap);
+        list.extend(self.getn_lt(slice));
+        list
     }
 
     pub fn push_str(&mut self, s: impl AsRef<str>) -> MStr<Tag> {
@@ -1299,6 +1324,14 @@ impl<T, Tag> List<T, Tag> {
         self.buf.len()
     }
 
+    pub fn empty() -> Self {
+        List {
+            buf: core::ptr::slice_from_raw_parts_mut(core::ptr::null_mut(), 0),
+            len: 0,
+            _tag: PhantomData,
+        }
+    }
+
     pub fn base_ptr(&self) -> *mut T {
         unsafe { (*self.buf).as_mut_ptr() }
     }
@@ -1450,6 +1483,16 @@ impl<T, Tag> List<T, Tag> {
         self.len += vals.len();
     }
 
+    pub fn extend_grow(&mut self, mem: &mut Mem<Tag>, vals: &[T])
+    where
+        T: Copy,
+    {
+        if self.len + vals.len() > self.buf.len() {
+            *self = self.grow(mem);
+        }
+        self.extend(vals)
+    }
+
     pub fn extend_iter<I>(&mut self, vals: I)
     where
         T: Copy,
@@ -1459,7 +1502,10 @@ impl<T, Tag> List<T, Tag> {
             self.push(item);
         }
     }
-    pub fn as_slice(&self) -> &[T] {
+    pub fn as_slice_lt<'a>(&self) -> &'a [T] {
+        unsafe { &(&(*self.buf))[..self.len] }
+    }
+    pub fn as_slice<'a>(&self) -> &'a [T] {
         unsafe { &(&(*self.buf))[..self.len] }
     }
 
@@ -1475,7 +1521,10 @@ impl<T, Tag> List<T, Tag> {
         self.as_slice_mut().iter_mut()
     }
 
-    pub fn into_handle(self, mem: &mut Mem<Tag>) -> MSlice<T, Tag> {
+    pub fn into_handle(self, mem: &mut Mem<Tag>) -> MSlice<T, Tag>
+    where
+        T: Copy,
+    {
         mem.list_to_handle(self)
     }
 
@@ -1606,7 +1655,7 @@ union MSpillListStorage<T: Copy, Tag, const N: usize> {
     spill: ManuallyDrop<List<T, Tag>>,
 }
 
-impl<T: Copy, Tag, const N: usize> MSpillList<T, N, Tag> {
+impl<T: Copy + 'static, Tag, const N: usize> MSpillList<T, N, Tag> {
     #[inline]
     pub fn new() -> Self {
         assert!(N > 0);
@@ -1757,7 +1806,7 @@ impl<T: Copy, Tag, const N: usize> MSpillList<T, N, Tag> {
     }
 }
 
-impl<T: Copy, Tag, const N: usize> Default for MSpillList<T, N, Tag> {
+impl<T: Copy + 'static, Tag, const N: usize> Default for MSpillList<T, N, Tag> {
     fn default() -> Self {
         Self::new()
     }

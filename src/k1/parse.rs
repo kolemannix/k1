@@ -5,11 +5,11 @@ use std::fmt::{Display, Formatter, Write};
 use std::io::IsTerminal;
 
 use crate::kmem::{self, Handle, List, MSL2, MSS2, MSlice, MSpillList};
+use crate::rawref::RawRef;
 use crate::typer::{Linkage, MessageLevel, ModuleId};
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
-use ecow::{EcoVec, eco_vec};
 pub use idents::{IdentPool, IdentSlice, IdentSpanned, QIdent, StringId};
 use itertools::Itertools;
 use log::trace;
@@ -48,12 +48,6 @@ impl<T, const N: usize> CanPush<T> for SmallVec<[T; N]>
 where
     [T; N]: smallvec::Array<Item = T>,
 {
-    fn push_it(&mut self, value: T) {
-        self.push(value)
-    }
-}
-
-impl<T: Clone> CanPush<T> for EcoVec<T> {
     fn push_it(&mut self, value: T) {
         self.push(value)
     }
@@ -214,7 +208,7 @@ impl ParsedId {
 
 #[derive(Debug, Clone)]
 pub struct ParsedListLiteral {
-    pub elements: ParsedSlice<ParsedExprId>,
+    pub elements: AstSlice<ParsedExprId>,
     pub span: SpanId,
 }
 
@@ -276,8 +270,8 @@ static_assert_size!(ParsedCall, 44);
 /// Supports type parameters and method syntax
 pub struct ParsedCall {
     pub name: QIdent,
-    pub type_args: ParsedSlice<NamedTypeArg>,
-    pub args: ParsedSlice<ParsedCallArg>,
+    pub type_args: AstSlice<NamedTypeArg>,
+    pub args: AstSlice<ParsedCallArg>,
     pub span: SpanId,
     pub is_method: bool,
     pub id: ParsedExprId,
@@ -287,7 +281,7 @@ pub struct ParsedCall {
 #[derive(Clone, Copy)]
 pub struct ParsedExprCall {
     pub called_expr: ParsedExprId,
-    pub args: ParsedSlice<ParsedCallArg>,
+    pub args: AstSlice<ParsedCallArg>,
     pub span: SpanId,
 }
 
@@ -562,7 +556,7 @@ pub struct ParsedVariable {
 pub struct FieldAccess {
     pub base: ParsedExprId,
     pub field_name: StringId,
-    pub type_args: ParsedSlice<NamedTypeArg>,
+    pub type_args: AstSlice<NamedTypeArg>,
     pub is_referencing: bool, // *.
     pub span: SpanId,
 }
@@ -589,7 +583,7 @@ pub struct StructValueField {
 /// { foo: 1, bar: false }
 /// ^....................^ fields
 pub struct ParsedStruct {
-    pub fields: ParsedSlice<StructValueField>,
+    pub fields: AstSlice<StructValueField>,
     pub span: SpanId,
 }
 impl_copy_if_small!(16, ParsedStruct);
@@ -598,7 +592,7 @@ impl_copy_if_small!(16, ParsedStruct);
 pub struct ParsedVariant {
     pub type_name: Option<QIdent>,
     pub variant_name: StringId,
-    pub type_args: ParsedSlice<NamedTypeArg>,
+    pub type_args: AstSlice<NamedTypeArg>,
     pub payload: Option<ParsedExprId>,
     pub span: SpanId,
 }
@@ -620,7 +614,7 @@ pub struct ParsedSwitchCase {
 #[derive(Clone)]
 pub struct ParsedSwitch {
     pub match_subject: ParsedExprId,
-    pub cases: ParsedSlice<ParsedSwitchCase>,
+    pub cases: AstSlice<ParsedSwitchCase>,
     pub span: SpanId,
     pub is_static: bool,
 }
@@ -641,7 +635,7 @@ pub struct LambdaArgDefn {
 
 #[derive(Clone)]
 pub struct ParsedLambda {
-    pub arguments: ParsedSlice<LambdaArgDefn>,
+    pub arguments: AstSlice<LambdaArgDefn>,
     pub return_type: Option<ParsedTypeExprId>,
     pub body: ParsedExprId,
     pub span: SpanId,
@@ -663,7 +657,7 @@ pub enum InterpolatedStringPart {
 
 #[derive(Clone, Copy)]
 pub struct ParsedInterpolatedString {
-    pub parts: ParsedSlice<InterpolatedStringPart>,
+    pub parts: AstSlice<InterpolatedStringPart>,
     pub span: SpanId,
 }
 
@@ -690,7 +684,7 @@ pub struct ParsedStaticExpr {
     pub base_expr: ParsedExprId,
     pub kind: ParsedStaticBlockKind,
     pub condition_if_definition: Option<ParsedExprId>,
-    pub parameter_names: ParsedSlice<IdentSpanned>,
+    pub parameter_names: AstSlice<IdentSpanned>,
     pub span: SpanId,
 }
 
@@ -708,7 +702,7 @@ pub struct ParsedCode {
 /// `(Show @ int)/show()`
 #[derive(Clone, Copy)]
 pub struct ParsedQAbilityCall {
-    pub ability_expr: ParsedHandle<ParsedAbilityExpr>,
+    pub ability_expr: AstHandle<ParsedAbilityExpr>,
     pub self_name: ParsedTypeExprId,
     pub call_expr: ParsedExprId,
     pub span: SpanId,
@@ -875,7 +869,7 @@ impl ParsedExpr {
 
 #[derive(Debug, Clone)]
 pub struct ParsedStructPattern {
-    pub fields: ParsedSlice<(StringId, ParsedPatternId)>,
+    pub fields: AstSlice<(StringId, ParsedPatternId)>,
     pub span: SpanId,
 }
 
@@ -999,13 +993,13 @@ pub enum ParsedBlockKind {
 
 #[derive(Debug, Clone)]
 pub struct ParsedBlock {
-    pub stmts: ParsedSlice<ParsedStmtId>,
+    pub stmts: AstSlice<ParsedStmtId>,
     pub kind: ParsedBlockKind,
     pub span: SpanId,
 }
 impl_copy_if_small!(16, ParsedBlock);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StructTypeField {
     pub name: StringId,
     pub name_span: SpanId,
@@ -1033,7 +1027,7 @@ impl ParsedRecordKind {
 
 #[derive(Debug, Clone)]
 pub struct StructType {
-    pub fields: EcoVec<StructTypeField>,
+    pub fields: AstSlice<StructTypeField>,
     pub span: SpanId,
     pub record_kind: ParsedRecordKind,
 }
@@ -1041,7 +1035,7 @@ pub struct StructType {
 #[derive(Clone)]
 pub struct TypeApplication {
     pub name: QIdent,
-    pub args: ParsedSlice<NamedTypeArg>,
+    pub args: AstSlice<NamedTypeArg>,
     pub span: SpanId,
 }
 
@@ -1091,7 +1085,7 @@ pub struct ParsedSumTypeVariant {
 
 #[derive(Clone)]
 pub struct ParsedSumType {
-    pub variants: ParsedSlice<ParsedSumTypeVariant>,
+    pub variants: AstSlice<ParsedSumTypeVariant>,
     pub tag_type: Option<ParsedTypeExprId>,
     pub span: SpanId,
 }
@@ -1235,13 +1229,13 @@ impl ParsedTypeParam {}
 
 #[derive(Clone, Copy)]
 pub enum ParsedTypeConstraintExpr {
-    Ability(ParsedHandle<ParsedAbilityExpr>),
+    Ability(AstHandle<ParsedAbilityExpr>),
     Static(ParsedTypeExprId),
     Predicate(QIdent),
 }
 
 impl ParsedTypeConstraintExpr {
-    pub fn as_ability(&self) -> Option<ParsedHandle<ParsedAbilityExpr>> {
+    pub fn as_ability(&self) -> Option<AstHandle<ParsedAbilityExpr>> {
         if let ParsedTypeConstraintExpr::Ability(ability) = self { Some(*ability) } else { None }
     }
 
@@ -1264,7 +1258,7 @@ impl ParsedTypeConstraintExpr {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct ParsedTypeConstraint {
     pub name: StringId,
     pub constraint_expr: ParsedTypeConstraintExpr,
@@ -1274,8 +1268,8 @@ pub struct ParsedTypeConstraint {
 #[derive(Clone)]
 pub struct ParsedFunction {
     pub name: StringId,
-    pub type_params: ParsedSlice<ParsedTypeParam>,
-    pub params: ParsedSlice<ParsedFnParam>,
+    pub type_params: AstSlice<ParsedTypeParam>,
+    pub params: AstSlice<ParsedFnParam>,
     pub ret_type: Option<ParsedTypeExprId>,
     pub body: Option<ParsedExprId>,
     pub signature_span: SpanId,
@@ -1283,7 +1277,7 @@ pub struct ParsedFunction {
     pub name_span: SpanId,
     pub linkage: Linkage,
     pub compiler_debug: bool,
-    pub additional_where_constraints: EcoVec<ParsedTypeConstraint>,
+    pub additional_where_constraints: AstSlice<ParsedTypeConstraint>,
     pub condition: Option<ParsedExprId>,
     pub id: ParsedFunctionId,
 }
@@ -1381,33 +1375,33 @@ pub struct ParsedAbilityParameter {
 #[derive(Clone)]
 pub struct ParsedAbility {
     pub name: StringId,
-    pub functions: ParsedSlice<ParsedFunctionId>,
+    pub functions: AstSlice<ParsedFunctionId>,
     pub span: SpanId,
-    pub params: ParsedSlice<ParsedAbilityParameter>,
+    pub params: AstSlice<ParsedAbilityParameter>,
     pub id: ParsedAbilityId,
 }
 
 #[derive(Clone)]
 pub struct ParsedAbilityExpr {
     pub name: QIdent,
-    pub arguments: ParsedSlice<NamedTypeArg>,
+    pub arguments: AstSlice<NamedTypeArg>,
     pub span: SpanId,
 }
 
 #[derive(Clone)]
 pub struct ParsedAbilityImplementation {
-    pub ability_expr: ParsedHandle<ParsedAbilityExpr>,
-    pub generic_impl_params: EcoVec<ParsedTypeParam>,
+    pub ability_expr: AstHandle<ParsedAbilityExpr>,
+    pub generic_impl_params: AstSlice<ParsedTypeParam>,
     pub self_type: ParsedTypeExprId,
-    pub functions: EcoVec<ParsedFunctionId>,
+    pub functions: AstSlice<ParsedFunctionId>,
     pub id: ParsedAbilityImplId,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+// Not clone due to contained kmem::List which needs to grow
 pub struct ParsedNamespace {
     pub name: StringId,
-    pub definitions: EcoVec<ParsedId>,
+    pub definitions: List<ParsedId, ParsedProgram>,
     pub id: ParsedNamespaceId,
     pub name_span: SpanId,
     pub span: SpanId,
@@ -1418,7 +1412,7 @@ impl ParsedNamespace {
     pub fn empty(name: StringId) -> Self {
         ParsedNamespace {
             name,
-            definitions: EcoVec::new(),
+            definitions: List::empty(),
             id: ParsedNamespaceId::PENDING,
             name_span: SpanId::NONE,
             span: SpanId::NONE,
@@ -1598,8 +1592,8 @@ impl Sources {
     }
 }
 
-pub(crate) type ParsedSlice<T> = MSlice<T, ParsedProgram>;
-pub(crate) type ParsedHandle<T> = Handle<T, ParsedProgram>;
+pub(crate) type AstSlice<T> = MSlice<T, ParsedProgram>;
+pub(crate) type AstHandle<T> = Handle<T, ParsedProgram>;
 
 #[derive(Clone, Copy)]
 pub enum SemanticTokenKind {
@@ -2115,7 +2109,7 @@ pub fn init_module(module_name: StringId, ast: &mut ParsedProgram) -> ParsedName
     ast.namespaces
         .get_mut(root_namespace_id)
         .definitions
-        .push(ParsedId::Namespace(module_namespace_id));
+        .push_grow(&mut ast.mem, ParsedId::Namespace(module_namespace_id));
     module_namespace_id
 }
 
@@ -2129,7 +2123,7 @@ pub fn parse_file(
 ) -> ParseResult<()> {
     let mut parser =
         Parser::make_for_file(module_id, module_name, module_namespace_id, ast, tokens, file_id);
-    parser.parse_file();
+    parser.parse_file_into_module();
     Ok(())
 }
 
@@ -2162,11 +2156,14 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             string_buffer: String::with_capacity(1024),
         }
     }
-    pub fn parse_file(&mut self) {
+    pub fn parse_file_into_module(&mut self) {
+        let mut definitions = RawRef::from_mut(
+            &mut self.ast.namespaces.get_mut(self.module_namespace_id).definitions,
+        );
         loop {
             match self.parse_definition(K::Eof) {
                 Ok(Some(def)) => {
-                    self.ast.namespaces.get_mut(self.module_namespace_id).definitions.push(def)
+                    definitions.push_grow(&mut self.ast.mem, def);
                 }
                 Err(err) => {
                     self.ast.report_error(err);
@@ -2187,7 +2184,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         }
     }
 
-    fn list_to_handle<T>(&mut self, list: List<T, ParsedProgram>) -> ParsedSlice<T> {
+    fn list_to_handle<T: Copy + 'static>(&mut self, list: List<T, ParsedProgram>) -> AstSlice<T> {
         self.ast.mem.list_to_handle(list)
     }
 
@@ -2907,8 +2904,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             } else {
                 self.advance();
             }
-            let mut fields = eco_vec![];
-            self.eat_delimited_ext(
+            let mut fields = self.ast.mem.new_list(0);
+            self.eat_delimited_arena(
                 "Struct fields",
                 &mut fields,
                 K::Comma,
@@ -2917,7 +2914,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             )?;
             let span = self.extend_to_here(first.span);
             let kind = if is_union { ParsedRecordKind::Union } else { ParsedRecordKind::Struct };
-            let struc = StructType { fields, span, record_kind: kind };
+            let struc = StructType { fields: self.list_to_handle(fields), span, record_kind: kind };
             Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::Struct(struc))))
         } else if first.kind == K::QuestionMark {
             self.advance();
@@ -3374,7 +3371,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.extend_span(self.get_expression_span(expr1), self.get_expression_span(expr2))
     }
 
-    fn parse_bracketed_type_args(&mut self) -> ParseResult<(ParsedSlice<NamedTypeArg>, SpanId)> {
+    fn parse_bracketed_type_args(&mut self) -> ParseResult<(AstSlice<NamedTypeArg>, SpanId)> {
         let Some(open_bracket) = self.maybe_consume(K::OpenBracket) else {
             return Ok((MSlice::empty(), self.peek_back().span));
         };
@@ -4168,7 +4165,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    fn eat_delimited_arena<T: Copy, F>(
+    fn eat_delimited_arena<T: Copy + 'static, F>(
         &mut self,
         name: &str,
         destination: &mut List<T, ParsedProgram>,
@@ -4483,9 +4480,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else {
             None
         };
-        let additional_type_constraints = if self.maybe_consume(K::KeywordWhere).is_some() {
-            let mut additional_type_constraints = eco_vec![];
-            self.eat_delimited_ext(
+        let mut additional_type_constraints = self.ast.mem.new_list(0);
+        if self.maybe_consume(K::KeywordWhere).is_some() {
+            self.eat_delimited_arena(
                 "Type variable constraints",
                 &mut additional_type_constraints,
                 K::Comma,
@@ -4493,10 +4490,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Parser::expect_named_type_constraint,
             )?;
             self.tokens.retreat(); // Un-eat the close sentinel
-            additional_type_constraints
-        } else {
-            eco_vec![]
         };
+
         let signature_span = self.extend_to_here(func_name.span);
         let block = self.parse_block(ParsedBlockKind::FunctionBody)?;
         let end_span = block.as_ref().map(|b| b.span).unwrap_or(params_span);
@@ -4518,7 +4513,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name_span: func_name.span,
             linkage,
             compiler_debug: is_debug,
-            additional_where_constraints: additional_type_constraints,
+            additional_where_constraints: self.ast.mem.list_to_handle(additional_type_constraints),
             condition,
             id: ParsedFunctionId::PENDING,
         });
@@ -4705,26 +4700,28 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_ability_impl(&mut self) -> ParseResult<Option<ParsedAbilityImplId>> {
         let Some(keyword_impl) = self.maybe_consume(K::KeywordImpl) else { return Ok(None) };
-        let mut generic_impl_params = eco_vec![];
-        self.eat_delimited_if_opener(
-            "Generic implementation parameters",
-            &mut generic_impl_params,
-            K::OpenBracket,
-            K::Comma,
-            K::CloseBracket,
-            |p| p.expect_type_param(),
-        )?;
+        let mut generic_impl_params = self.ast.mem.new_list(0);
+        if let Some(_open_bracket) = self.maybe_consume(K::OpenBracket) {
+            self.eat_delimited_arena(
+                "Generic implementation parameters",
+                &mut generic_impl_params,
+                K::Comma,
+                K::CloseBracket,
+                |p| p.expect_type_param(),
+            )?;
+        }
+
         let ability = self.expect_ability_expr()?;
         let ability_expr_id = self.ast.mem.push_h(ability);
         self.expect_kind(K::KeywordFor)?;
         let target_type = self.expect_type_expression()?;
 
         // Read the functions inside block; one day also associated constants
-        let mut functions = eco_vec![];
+        let mut functions = self.ast.mem.new_list(0);
         self.expect_kind(K::OpenBrace)?;
 
         while let Some(parsed_function) = self.parse_function(None)? {
-            functions.push(parsed_function);
+            functions.push_grow(&mut self.ast.mem, parsed_function);
         }
 
         let close_brace = self.expect_kind(K::CloseBrace)?;
@@ -4732,9 +4729,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let ability_impl_id = self.ast.add_ability_impl(ParsedAbilityImplementation {
             ability_expr: ability_expr_id,
-            generic_impl_params,
+            generic_impl_params: self.ast.mem.list_to_handle(generic_impl_params),
             self_type: target_type,
-            functions,
+            functions: self.ast.mem.list_to_handle(functions),
             id: ParsedAbilityImplId(u32::MAX),
             span,
         });
@@ -4824,10 +4821,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(namespace_id))
     }
 
-    pub fn parse_definitions(&mut self, terminator: TokenKind) -> ParseResult<EcoVec<ParsedId>> {
-        let mut definitions = EcoVec::new();
+    pub fn parse_definitions(
+        &mut self,
+        terminator: TokenKind,
+    ) -> ParseResult<List<ParsedId, ParsedProgram>> {
+        let mut definitions = self.ast.mem.new_list(0);
         while let Some(def) = self.parse_definition(terminator)? {
-            definitions.push(def);
+            definitions.push_grow(&mut self.ast.mem, def);
         }
         Ok(definitions)
     }
@@ -5169,7 +5169,7 @@ impl ParsedProgram {
     fn display_ability_expr(
         &self,
         w: &mut impl Write,
-        ability_expr_id: ParsedHandle<ParsedAbilityExpr>,
+        ability_expr_id: AstHandle<ParsedAbilityExpr>,
     ) -> std::fmt::Result {
         let e = self.mem.get(ability_expr_id);
         self.display_qident(w, &e.name)?;
@@ -5222,7 +5222,7 @@ impl ParsedProgram {
                     w.write_str("union ")?;
                 }
                 w.write_str("{ ")?;
-                for field in struct_type.fields.iter() {
+                for field in self.mem.getn(struct_type.fields).iter() {
                     self.display_ident(w, field.name)?;
                     w.write_str(": ")?;
                     self.display_type_expr_id(ty_expr_id, w)?;
@@ -5420,7 +5420,7 @@ pub fn parse_standalone(program_name: String, content: String) -> ParsedProgram 
 
     let mut parser =
         Parser::make_for_file(module_id, module_name, module_ns_id, &mut ast, &token_vec, file_id);
-    parser.parse_file();
+    parser.parse_file_into_module();
 
     // Store tokens for the lsp
     #[cfg(feature = "lsp")]

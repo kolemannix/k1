@@ -42,7 +42,7 @@ use ahash::HashMapExt;
 use anyhow::bail;
 use colored::Colorize;
 use fxhash::FxHashMap;
-use log::{error};
+use log::error;
 use smallvec::{SmallVec, smallvec};
 
 use scopes::*;
@@ -51,15 +51,15 @@ use types::*;
 use crate::compiler::CompilerConfig;
 use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, BinaryOpKind, FileId, ForExpr, InterpolatedStringPart, NamedTypeArg, NumericWidth,
-    ParseError, ParsedAbilityExpr, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
+    self, AstHandle, AstSlice, BinaryOpKind, FileId, ForExpr, InterpolatedStringPart, NamedTypeArg,
+    NumericWidth, ParseError, ParsedAbilityExpr, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
     ParsedBlockKind, ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFnParamType,
-    ParsedFunctionId, ParsedGlobalId, ParsedHandle, ParsedId, ParsedIfExpr, ParsedListLiteral,
-    ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId,
-    ParsedProgram, ParsedSlice, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt, ParsedStmtId,
-    ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
-    ParsedUnaryOpKind, ParsedUseId, ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent,
-    Sources, StringId, StructValueField, StructValueFieldKind,
+    ParsedFunctionId, ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedListLiteral, ParsedLiteral,
+    ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram,
+    ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr,
+    ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId,
+    ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
+    StructValueFieldKind,
 };
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -235,7 +235,7 @@ pub struct StaticExecContext {
 
 pub enum StaticExecutionResult {
     TypedExpr(TypedExprId),
-    Definitions(EcoVec<ParsedId>),
+    Definitions(AstSlice<ParsedId>),
 }
 
 pub enum ParseAdHocKind {
@@ -245,7 +245,7 @@ pub enum ParseAdHocKind {
 
 pub enum ParseAdHocResult {
     Expr(ParsedExprId),
-    Definitions(EcoVec<ParsedId>),
+    Definitions(AstSlice<ParsedId>),
 }
 
 bitflags! {
@@ -3018,7 +3018,7 @@ impl TypedProgram {
                 &token_buffer,
                 file_id,
             );
-            parser.parse_file();
+            parser.parse_file_into_module();
             token_buffer.clear();
         }
 
@@ -3622,8 +3622,8 @@ impl TypedProgram {
                     parse::ParsedRecordKind::Union => RecordKind::Union,
                 };
                 let mut fields: List<StructTypeField, TypePool> =
-                    self.types.mem.new_list(struct_defn.fields.len() as u32);
-                for ast_field in struct_defn.fields.iter() {
+                    self.types.mem.new_list(struct_defn.fields.len());
+                for ast_field in self.ast.mem.getn(struct_defn.fields) {
                     if let Some(existing_field) = fields.iter().find(|f| f.name == ast_field.name) {
                         return failf!(
                             struct_defn.span,
@@ -4870,6 +4870,7 @@ impl TypedProgram {
         let namespace = self.ast.namespaces.get(parsed_namespace_id);
         let Some(manifest_function) = namespace
             .definitions
+            .as_slice()
             .iter()
             .filter_map(|defn| defn.as_global_id())
             .find(|id| self.ast.get_global(*id).name == self.ast.idents.b.MODULE_INFO)
@@ -7173,7 +7174,7 @@ impl TypedProgram {
             .mem
             .getn(blanket_impl_type_params_handle)
             .iter()
-            .zip(parsed_blanket_impl.generic_impl_params.clone().iter())
+            .zip(self.ast.mem.getn(parsed_blanket_impl.generic_impl_params))
             .zip(self.mem.getn(solutions).iter())
         {
             let _ = self.scopes.add_type(
@@ -8733,7 +8734,7 @@ impl TypedProgram {
 
                 if emitted_string.is_empty() {
                     if is_definition {
-                        Ok(StaticExecutionResult::Definitions(eco_vec![]))
+                        Ok(StaticExecutionResult::Definitions(MSlice::empty()))
                     } else {
                         Ok(StaticExecutionResult::TypedExpr(self.synth_empty_struct(span)))
                     }
@@ -8871,7 +8872,7 @@ impl TypedProgram {
                         let e = p.ast.errors.last().unwrap();
                         failf!(e.span(), "{msg_base}{}", e.clone())
                     } else {
-                        Ok(ParseAdHocResult::Definitions(defns))
+                        Ok(ParseAdHocResult::Definitions(self.ast.mem.list_to_handle(defns)))
                     }
                 }
             },
@@ -10560,7 +10561,7 @@ impl TypedProgram {
 
         let zero_expr = self.synth_i64(0, for_expr.body_block.span);
         let index_variable = self.synth_variable_defn(
-            self.ast.idents.b.itIndex,
+            self.ast.idents.b.it_index,
             zero_expr,
             true,
             false,
@@ -11826,8 +11827,10 @@ impl TypedProgram {
                         parts
                     }
                     ParsedExpr::InterpolatedString(is) => {
-                        let mut parts = self.ast.mem.new_list(is.parts.len() + newline as u32);
-                        parts.extend(self.ast.mem.getn(is.parts));
+                        let mut parts = self
+                            .ast
+                            .mem
+                            .new_list_from_slice(is.parts, is.parts.len() + newline as u32);
                         if newline {
                             let newline_string_id = self.ast.idents.intern("\n");
                             parts.push(InterpolatedStringPart::String {
@@ -12351,7 +12354,7 @@ impl TypedProgram {
         self.push_block_stmt_id(&mut block, base_struct_var.defn_stmt);
         let patch_arg = *self.ast.mem.get_nth(call.args, 1);
         enum ProvidedPatchStruct {
-            ParsedFields(ParsedSlice<StructValueField>),
+            ParsedFields(AstSlice<StructValueField>),
             TypedExpr(TypedExprId),
         }
         let mut patch_hits = 0;
@@ -15388,7 +15391,7 @@ impl TypedProgram {
 
     fn check_ability_expr(
         &mut self,
-        ability_expr_id: ParsedHandle<ParsedAbilityExpr>,
+        ability_expr_id: AstHandle<ParsedAbilityExpr>,
         scope_id: ScopeId,
         skip_impl_check: bool,
     ) -> K1Result<(AbilityId, NamedTypeSlice, NamedTypeSlice)> {
@@ -15422,7 +15425,7 @@ impl TypedProgram {
 
     fn eval_ability_expr(
         &mut self,
-        ability_expr_id: ParsedHandle<ParsedAbilityExpr>,
+        ability_expr_id: AstHandle<ParsedAbilityExpr>,
         skip_impl_check: bool,
         scope_id: ScopeId,
     ) -> K1Result<TypedAbilitySignature> {
@@ -15519,8 +15522,10 @@ impl TypedProgram {
             let mut static_constraint: Option<TypeId> = None;
 
             for parsed_constraint in self_.ast.mem.getn(type_parameter.constraints).iter().chain(
-                ast_fn
-                    .additional_where_constraints
+                self_
+                    .ast
+                    .mem
+                    .getn(ast_fn.additional_where_constraints)
                     .iter()
                     .filter(|c| c.name == type_parameter.name)
                     .map(|c| &c.constraint_expr),
@@ -16460,14 +16465,14 @@ impl TypedProgram {
         let parsed_ability_impl = self.ast.get_ability_impl(parsed_id).clone();
         let span = parsed_ability_impl.span;
         let ability_expr = self.ast.mem.get(parsed_ability_impl.ability_expr).clone();
-        let parsed_impl_functions = &parsed_ability_impl.functions;
+        let parsed_impl_functions = parsed_ability_impl.functions;
 
         let impl_scope_id =
             self.scopes.add_child_scope(scope_id, ScopeType::AbilityImpl, ScopeOwnerId::None, None);
 
         let mut blanket_type_params: List<NameAndType, _> =
-            self.mem.new_list(parsed_ability_impl.generic_impl_params.len() as u32);
-        for blanket_impl_param in &parsed_ability_impl.generic_impl_params {
+            self.mem.new_list(parsed_ability_impl.generic_impl_params.len());
+        for blanket_impl_param in self.ast.mem.getn(parsed_ability_impl.generic_impl_params) {
             let maybe_static_constraint =
                 match ParsedTypeConstraintExpr::single_static_constraint_or_fail(
                     &self.ast.mem,
@@ -16649,7 +16654,7 @@ impl TypedProgram {
         };
 
         // Report extra functions first
-        for &parsed_fn in parsed_impl_functions {
+        for &parsed_fn in self.ast.mem.getn(parsed_impl_functions) {
             let parsed_fn_name = self.ast.get_function(parsed_fn).name;
             let Some(_ability_function_ref) =
                 self.mem.getn(ability.functions).iter().find(|f| f.function_name == parsed_fn_name)
@@ -16664,14 +16669,15 @@ impl TypedProgram {
 
         let mut typed_functions = self.mem.new_list(ability.functions.len());
         for ability_function_ref in self.mem.getn(ability.functions) {
-            let matching_impl_function = parsed_impl_functions.iter().find_map(|&fn_id| {
-                let the_fn = self.ast.get_function(fn_id);
-                if the_fn.name == ability_function_ref.function_name {
-                    Some((fn_id, false))
-                } else {
-                    None
-                }
-            });
+            let matching_impl_function =
+                self.ast.mem.getn(parsed_impl_functions).iter().find_map(|&fn_id| {
+                    let the_fn = self.ast.get_function(fn_id);
+                    if the_fn.name == ability_function_ref.function_name {
+                        Some((fn_id, false))
+                    } else {
+                        None
+                    }
+                });
             let (parsed_impl_function_id, is_default) = match matching_impl_function {
                 Some(id) => id,
                 None => {
@@ -17006,10 +17012,11 @@ impl TypedProgram {
     ) {
         let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
         let ns = self.namespaces.get(namespace_id);
+        let parsed_definitions =
+            self.ast.namespaces.get(parsed_namespace_id).definitions.as_slice();
         debug!("discover_types_in_namespace {}", self.ident_str(ns.name));
         let namespace_scope_id = ns.scope_id;
-        let parsed_definitions = self.ast.namespaces.get(parsed_namespace_id).definitions.clone();
-        for &parsed_definition_id in parsed_definitions.iter() {
+        for &parsed_definition_id in parsed_definitions {
             if skip_defns.contains(&parsed_definition_id) {
                 continue;
             }
@@ -17070,7 +17077,7 @@ impl TypedProgram {
         let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
         let namespace = self.namespaces.get(namespace_id);
         let namespace_scope_id = namespace.scope_id;
-        for defn in &parsed_namespace.definitions.clone() {
+        for defn in parsed_namespace.definitions.as_slice() {
             if skip_defns.contains(defn) {
                 continue;
             }
@@ -17124,10 +17131,11 @@ impl TypedProgram {
     }
 
     fn compile_ns_body(&mut self, ast_namespace_id: ParsedNamespaceId, skip_defns: &[ParsedId]) {
-        let ast_namespace = self.ast.namespaces.get(ast_namespace_id).clone();
+        let ast_namespace = self.ast.namespaces.get(ast_namespace_id);
+        let ast_definitions = &ast_namespace.definitions;
         let namespace_id = *self.namespace_ast_mappings.get(&ast_namespace.id).unwrap();
         let ns_scope_id = self.namespaces.get(namespace_id).scope_id;
-        for defn in &ast_namespace.definitions {
+        for defn in ast_definitions.as_slice() {
             if skip_defns.contains(defn) {
                 continue;
             }
@@ -17222,7 +17230,8 @@ impl TypedProgram {
         parsed_namespace_id: ParsedNamespaceId,
         parent_scope: ScopeId,
     ) -> K1Result<NamespaceId> {
-        let ast_namespace = self.ast.namespaces.get(parsed_namespace_id).clone();
+        let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
+        let name_span = ast_namespace.name_span;
 
         let direct_parent = self.scopes.get_scope(parent_scope);
         let namespace_id = if let Some(existing) = direct_parent.find_namespace(ast_namespace.name)
@@ -17236,7 +17245,7 @@ impl TypedProgram {
             self.create_namespace(parsed_namespace_id, parent_scope)?
         };
 
-        self.emit_ls_entity(ast_namespace.name_span, LsEntityKind::Namespace(namespace_id));
+        self.emit_ls_entity(name_span, LsEntityKind::Namespace(namespace_id));
 
         Ok(namespace_id)
     }
@@ -17255,8 +17264,8 @@ impl TypedProgram {
         };
         let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
         let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
-        let ast_namespace_defns = ast_namespace.definitions.clone();
-        for defn in ast_namespace_defns.iter() {
+        let ast_definitions = ast_namespace.definitions.as_slice();
+        for defn in ast_definitions {
             if skip_defns.contains(defn) {
                 continue;
             }
@@ -17289,13 +17298,18 @@ impl TypedProgram {
         parsed_namespace_id: ParsedNamespaceId,
         skip_defns: &[ParsedId],
     ) {
-        let ast_namespace = self.ast.namespaces.get(parsed_namespace_id).clone();
+        let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
+        let ast_definitions = ast_namespace.definitions.as_slice();
 
         let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
         let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
 
-        let mut defns_to_add: SV4<(usize, EcoVec<ParsedId>)> = smallvec![];
-        for (index, defn) in ast_namespace.definitions.iter().enumerate() {
+        // new_defns will contain all of the namespace's original parsed definitions
+        // as well as any new ones generated via metaprogramming
+        let mut new_defns = self.ast.mem.new_list(ast_definitions.len() as u32);
+
+        for defn in ast_definitions.iter() {
+            new_defns.push_grow(&mut self.ast.mem, *defn);
             if skip_defns.contains(defn) {
                 continue;
             }
@@ -17348,7 +17362,7 @@ impl TypedProgram {
                         match self.compile_static_or_meta(static_expr_id, s, true, eval_expr_ctx) {
                             Err(e) => {
                                 self.report(e);
-                                eco_vec![]
+                                MSlice::empty()
                             }
                             Ok(StaticExecutionResult::Definitions(defns)) => defns,
                             Ok(StaticExecutionResult::TypedExpr(_)) => unreachable!(),
@@ -17359,7 +17373,7 @@ impl TypedProgram {
                     //
                     // We'll add them to the AST definitions later so that further
                     // passes can find them
-                    for &d in newly_parsed_defns.iter() {
+                    for &d in self.ast.mem.getn(newly_parsed_defns) {
                         if let ParsedId::Namespace(ns) = d {
                             if let Err(e) =
                                 self.declare_namespace_recursive(ns, namespace_scope_id, skip_defns)
@@ -17368,22 +17382,16 @@ impl TypedProgram {
                             };
                         }
                     }
-                    // We want to insert a given #meta's definitions right
-                    // after that meta, hence the +1
-                    defns_to_add.push((index + 1, newly_parsed_defns));
+                    // We want to insert a given #meta's definitions right after that meta
+                    let new_defns_slice = self.ast.mem.getn(newly_parsed_defns);
+                    new_defns.extend_grow(&mut self.ast.mem, new_defns_slice);
                 }
                 _ => {}
             }
         }
-        // Reduce EcoVec refcount explicitly before we mutate
-        drop(ast_namespace);
 
         let ast_namespace = self.ast.namespaces.get_mut(parsed_namespace_id);
-        for (insertion_index, defns) in defns_to_add.iter() {
-            for (i, defn) in defns.iter().enumerate() {
-                ast_namespace.definitions.insert(*insertion_index + i, *defn);
-            }
-        }
+        ast_namespace.definitions = new_defns;
     }
 
     fn declare_namespace_recursive(
@@ -17446,6 +17454,7 @@ impl TypedProgram {
         if !is_core {
             if let Some(pre_ns_parsed_id) = parsed_ns
                 .definitions
+                .as_slice()
                 .iter()
                 .filter_map(|d| d.as_namespace_id())
                 .find(|id| self.ast.namespaces.get(*id).name == self.ast.idents.b.pre)
