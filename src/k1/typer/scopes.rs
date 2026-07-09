@@ -3,7 +3,7 @@
 
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
-use smallvec::{SmallVec, smallvec};
+use smallvec::SmallVec;
 
 use std::{
     collections::hash_map::{self, Entry},
@@ -18,7 +18,7 @@ use crate::{
     parse::{ParsedAbilityId, ParsedExprId, QIdent},
     static_assert_niched, static_assert_size,
     typer::{
-        AbilityId, FunctionId, StringId, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId,
+        AbilityId, FunctionId, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId, StringId,
         TypeId, TypePendingDefinition, TypedExprId, TypedProgram, VariableId,
     },
     vpool::VPool,
@@ -124,7 +124,6 @@ pub struct ScopeDefers {
 pub struct Scopes {
     /// SCOPES SoA POOLS BEGIN
     pub scopes: VPool<Scope, ScopeId>,
-    pub children: VPool<SV4<ScopeId>, ScopeId>,
     /// The actual function that a scope appears within is a very important thing to know
     pub enclosing_functions: VPool<ScopeEnclosingFunctions, ScopeId>,
     /// SCOPES SoA POOLS END
@@ -146,7 +145,6 @@ impl Scopes {
         let root_scope = Scope::make(ScopeType::Namespace, ScopeOwnerId::None, Some(root_ident));
         let mut scopes = Scopes {
             scopes: VPool::make_with_hint("scopes", count_hint),
-            children: VPool::make_with_hint("scope_children", count_hint),
             enclosing_functions: VPool::make_with_hint("scope_enclosing_functions", count_hint),
             lambda_info: FxHashMap::new(),
             loop_info: FxHashMap::new(),
@@ -159,26 +157,16 @@ impl Scopes {
             types_scope_id: ScopeId::PENDING,
             array_scope_id: ScopeId::PENDING,
         };
-        let id = scopes.add(
-            root_scope,
-            smallvec![],
-            ScopeEnclosingFunctions { lambda_scope: None, function: None },
-        );
+        let id =
+            scopes.add(root_scope, ScopeEnclosingFunctions { lambda_scope: None, function: None });
         debug_assert_eq!(id, Self::ROOT_SCOPE_ID);
         scopes
     }
 
-    fn add(
-        &mut self,
-        scope: Scope,
-        children: SV4<ScopeId>,
-        enclosing: ScopeEnclosingFunctions,
-    ) -> ScopeId {
+    fn add(&mut self, scope: Scope, enclosing: ScopeEnclosingFunctions) -> ScopeId {
         let id = self.scopes.add(scope);
-        let id2 = self.children.add(children);
-        let id3 = self.enclosing_functions.add(enclosing);
+        let id2 = self.enclosing_functions.add(enclosing);
         debug_assert_eq!(id, id2);
-        debug_assert_eq!(id2, id3);
         id
     }
 
@@ -209,12 +197,10 @@ impl Scopes {
         scope_owner_id: ScopeOwnerId,
         name: Option<StringId>,
     ) -> ScopeId {
-        let id = self.scopes.next_id();
-        self.children.get_mut(parent_scope_id).push(id);
         let mut scope = Scope::make(scope_type, scope_owner_id, name);
         scope.parent = Some(parent_scope_id);
 
-        let id = self.add(scope, smallvec![], ScopeEnclosingFunctions::empty());
+        let id = self.add(scope, ScopeEnclosingFunctions::empty());
 
         let enclosing_lambda_scope = self.nearest_parent_lambda(id);
         let enclosing_function = self.nearest_parent_function(id);
@@ -289,17 +275,24 @@ impl Scopes {
         scope: ScopeId,
         type_id: TypeId,
     ) -> Option<VariableId> {
-        let scope = self.get_scope(scope);
-        if let Some(v) = scope.find_context_variable_by_type(type_id) {
-            return Some(v);
-        }
-        match scope.parent {
-            Some(parent) => self.find_context_variable_by_type(parent, type_id),
-            None => None,
+        let mut scope_id = scope;
+        loop {
+            let scope = self.get_scope(scope_id);
+            if let Some(v) = scope.find_context_variable_by_type(type_id) {
+                return Some(v);
+            }
+            match scope.parent {
+                Some(parent) => scope_id = parent,
+                None => return None,
+            }
         }
     }
 
-    pub fn find_variable(&self, scope_id: ScopeId, ident: StringId) -> Option<(VariableId, ScopeId)> {
+    pub fn find_variable(
+        &self,
+        scope_id: ScopeId,
+        ident: StringId,
+    ) -> Option<(VariableId, ScopeId)> {
         let scope = self.get_scope(scope_id);
         match scope.find_variable(ident) {
             Some(VariableInScope::Defined(id)) => Some((id, scope_id)),
@@ -758,7 +751,7 @@ impl VariableInScope {
     }
 }
 
-// FIXME: Every scope is 248 bytes!!
+// FIXME: Every scope is 288 bytes!!
 // Time for a less naive more computer-friendly representation
 // We could use global hash maps that include scope_id in the key instead
 pub struct Scope {
@@ -835,6 +828,10 @@ impl Scope {
     }
 
     pub fn find_context_variable_by_type(&self, type_id: TypeId) -> Option<VariableId> {
+        // Most scopes have no context variables; skip hashing entirely
+        if self.context_variables_by_type.is_empty() {
+            return None;
+        }
         self.context_variables_by_type.get(&type_id).copied()
     }
 
@@ -921,7 +918,11 @@ impl Scope {
     }
 
     #[must_use]
-    pub fn add_pending_type(&mut self, name: StringId, pending_type: TypePendingDefinition) -> bool {
+    pub fn add_pending_type(
+        &mut self,
+        name: StringId,
+        pending_type: TypePendingDefinition,
+    ) -> bool {
         if let hash_map::Entry::Vacant(e) = self.pending_type_defns.entry(name) {
             e.insert(pending_type);
             true

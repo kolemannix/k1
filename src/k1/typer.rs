@@ -2693,6 +2693,10 @@ pub struct TypedProgram {
 
     pub ls_entities: RefCell<FxHashMap<FileId, Vec<LsEntity>>>,
 
+    /// Interned filename per file, so synthesizing source locations (e.g. for
+    /// every assert call) doesn't re-hash the filename string each time
+    filename_string_ids: FxHashMap<FileId, StringId>,
+
     inference_context_stack: Vec<InferenceContext>,
     inference_context_extras: Vec<InferenceContext>,
 
@@ -2884,6 +2888,7 @@ impl TypedProgram {
             ast,
             module_in_progress: None,
             ls_entities: RefCell::new(ls_entities),
+            filename_string_ids: FxHashMap::default(),
             inference_context_stack: Vec::new(),
             inference_context_extras: (0..4).map(|_| InferenceContext::make()).collect(),
             type_defn_context: TypeDefnContext::default(),
@@ -12993,8 +12998,9 @@ impl TypedProgram {
         let named = args_slice.first().is_some_and(|arg| arg.name.is_some());
         let mut final_args: SV8<MaybeTypedExpr> = SmallVec::new();
         let mut final_params: SV8<FnParamType> = SmallVec::new();
+        let all_params = self.types.mem.getn(params);
         if !explicit_context_args {
-            for context_param in self.types.mem.getn(params).iter().filter(|p| p.is_context) {
+            for context_param in all_params.iter().filter(|p| p.is_context) {
                 let matching_context_variable =
                     self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id);
                 if let Some(matching_context_variable) = matching_context_variable {
@@ -13033,23 +13039,19 @@ impl TypedProgram {
             }
         }
 
-        let is_lambda = self.types.mem.get_nth_opt(params, 0).is_some_and(|p| p.is_lambda_env);
-        let params = if is_lambda { params.skip(1) } else { params };
-        let explicit_param_count =
-            self.types.mem.getn(params).iter().filter(|p| !p.is_context).count();
-        let context_param_count = params.len() as usize - explicit_param_count;
+        let is_lambda = all_params.first().is_some_and(|p| p.is_lambda_env);
+        let params_slice = if is_lambda { &all_params[1..] } else { all_params };
+        let explicit_param_count = params_slice.iter().filter(|p| !p.is_context).count();
+        let context_param_count = params_slice.len() - explicit_param_count;
         let total_expected =
-            if explicit_context_args { params.len() as usize } else { explicit_param_count };
+            if explicit_context_args { params_slice.len() } else { explicit_param_count };
         let actual_passed_args = args_slice;
         let total_passed = match known_typed_args {
             None => actual_passed_args.len(),
             Some(pre_evaled_params) => pre_evaled_params.len(),
         };
 
-        let expected_literal_params = self
-            .types
-            .mem
-            .getn(params)
+        let expected_literal_params = params_slice
             .iter()
             // If the user opted to pass context params explicitly, then check all params
             // If the user did not, then just check the non-context params, since the compiler is responsible
