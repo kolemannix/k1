@@ -9,6 +9,7 @@ use crate::nz_u32_id;
 use crate::parse::BinaryOpKind;
 use crate::parse::FileId;
 use crate::vpool::{SliceHandle, VPool};
+use crate::{static_assert_niched, static_assert_size};
 use TokenKind as K;
 
 pub const EOF_CHAR: char = 27 as char; // esc
@@ -163,17 +164,18 @@ impl StringDelimKind {
 pub enum TokenKind {
     Ident,
     Numeric,
+    // The 8 string variants must stay contiguous so is_string() lowers to a range check.
     /// A completed string
-    String {
-        delim: StringDelimKind,
-        interp_exprs: bool,
-    },
-    /// Used in string interpolation; any not-fully-completed string, for example:
-    /// Could be the initial segment, a connecting segment between 2 interpolations,
-    StringUnterminated {
-        delim: StringDelimKind,
-        interp_exprs: bool,
-    },
+    StringDoneDqInterp,
+    StringDoneDqNoInterp,
+    StringDoneBtInterp,
+    StringDoneBtNoInterp,
+    /// Used in string interpolation; any not-fully-completed string:
+    /// the initial segment, or a connecting segment between 2 interpolations
+    StringOpenDqInterp,
+    StringOpenDqNoInterp,
+    StringOpenBtInterp,
+    StringOpenBtNoInterp,
 
     Char,
 
@@ -252,6 +254,17 @@ pub enum TokenKind {
     Eof,
 }
 
+static_assert_size!(TokenKind, 1);
+static_assert_niched!(TokenKind);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StringTokenInfo {
+    pub delim: StringDelimKind,
+    pub interp_exprs: bool,
+    /// false = unterminated segment (ends at a `{` interpolation hole)
+    pub done: bool,
+}
+
 impl fmt::Display for TokenKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_ref())
@@ -265,23 +278,49 @@ impl AsRef<str> for TokenKind {
 }
 
 impl TokenKind {
-    pub const STRING_DQ_INTERP: TokenKind =
-        TokenKind::String { delim: StringDelimKind::DoubleQuote, interp_exprs: true };
-    pub const STRING_DQ_PLAIN: TokenKind =
-        TokenKind::String { delim: StringDelimKind::DoubleQuote, interp_exprs: false };
+    pub const fn string(delim: StringDelimKind, interp_exprs: bool, done: bool) -> TokenKind {
+        use StringDelimKind as D;
+        match (done, delim, interp_exprs) {
+            (true, D::DoubleQuote, true) => K::StringDoneDqInterp,
+            (true, D::DoubleQuote, false) => K::StringDoneDqNoInterp,
+            (true, D::Backtick, true) => K::StringDoneBtInterp,
+            (true, D::Backtick, false) => K::StringDoneBtNoInterp,
+            (false, D::DoubleQuote, true) => K::StringOpenDqInterp,
+            (false, D::DoubleQuote, false) => K::StringOpenDqNoInterp,
+            (false, D::Backtick, true) => K::StringOpenBtInterp,
+            (false, D::Backtick, false) => K::StringOpenBtNoInterp,
+        }
+    }
 
-    pub const STRING_BT_INTERP: TokenKind =
-        TokenKind::String { delim: StringDelimKind::Backtick, interp_exprs: true };
-    pub const STRING_BT_PLAIN: TokenKind =
-        TokenKind::String { delim: StringDelimKind::Backtick, interp_exprs: false };
+    pub const fn as_string(self) -> Option<StringTokenInfo> {
+        use StringDelimKind as D;
+        let (done, delim, interp_exprs) = match self {
+            K::StringDoneDqInterp => (true, D::DoubleQuote, true),
+            K::StringDoneDqNoInterp => (true, D::DoubleQuote, false),
+            K::StringDoneBtInterp => (true, D::Backtick, true),
+            K::StringDoneBtNoInterp => (true, D::Backtick, false),
+            K::StringOpenDqInterp => (false, D::DoubleQuote, true),
+            K::StringOpenDqNoInterp => (false, D::DoubleQuote, false),
+            K::StringOpenBtInterp => (false, D::Backtick, true),
+            K::StringOpenBtNoInterp => (false, D::Backtick, false),
+            _ => return None,
+        };
+        Some(StringTokenInfo { delim, interp_exprs, done })
+    }
 
-    pub const STRING_UNTERM_DQ_INTERP: TokenKind =
-        TokenKind::StringUnterminated { delim: StringDelimKind::DoubleQuote, interp_exprs: true };
-
-    pub const STRING_UNTERM_BT_INTERP: TokenKind =
-        TokenKind::StringUnterminated { delim: StringDelimKind::Backtick, interp_exprs: true };
-    pub const STRING_UNTERM_BT_PLAIN: TokenKind =
-        TokenKind::StringUnterminated { delim: StringDelimKind::Backtick, interp_exprs: false };
+    pub const fn is_string(self) -> bool {
+        matches!(
+            self,
+            K::StringDoneDqInterp
+                | K::StringDoneDqNoInterp
+                | K::StringDoneBtInterp
+                | K::StringDoneBtNoInterp
+                | K::StringOpenDqInterp
+                | K::StringOpenDqNoInterp
+                | K::StringOpenBtInterp
+                | K::StringOpenBtNoInterp
+        )
+    }
 
     pub fn get_repr(&self) -> &'static str {
         match self {
@@ -357,34 +396,14 @@ impl TokenKind {
 
             K::Ident => "<ident>",
             K::Numeric => "<numeric>",
-            K::String { delim: StringDelimKind::Backtick, interp_exprs } => {
-                if *interp_exprs {
-                    "<f`string`>"
-                } else {
-                    "<`string`>"
-                }
-            }
-            K::String { delim: StringDelimKind::DoubleQuote, interp_exprs } => {
-                if *interp_exprs {
-                    "<f\"string\">"
-                } else {
-                    "<\"string\">"
-                }
-            }
-            K::StringUnterminated { delim: StringDelimKind::Backtick, interp_exprs } => {
-                if *interp_exprs {
-                    "<f`string...>"
-                } else {
-                    "<`string...>"
-                }
-            }
-            K::StringUnterminated { delim: StringDelimKind::DoubleQuote, interp_exprs } => {
-                if *interp_exprs {
-                    "<f\"string...>"
-                } else {
-                    "<\"string...>"
-                }
-            }
+            K::StringDoneBtInterp => "<f`string`>",
+            K::StringDoneBtNoInterp => "<`string`>",
+            K::StringDoneDqInterp => "<f\"string\">",
+            K::StringDoneDqNoInterp => "<\"string\">",
+            K::StringOpenBtInterp => "<f`string...>",
+            K::StringOpenBtNoInterp => "<`string...>",
+            K::StringOpenDqInterp => "<f\"string...>",
+            K::StringOpenDqNoInterp => "<\"string...>",
             K::Char => "<char>",
 
             K::Eof => "<EOF>",
@@ -543,6 +562,7 @@ pub struct Token {
     pub trivia: SliceHandle<TokenTriviaId>,
     pub flags: u8,
 }
+static_assert_size!(Token, 16);
 
 impl Token {
     pub fn new(
@@ -710,10 +730,9 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         ) -> Token {
             let start = end - tok_len;
             let len = tok_len;
-            let tok_bytes: &[u8] = &lex.content[start as usize..(start + len) as usize];
             if is_number {
                 make_token(lex, pending_trivia, K::Numeric, start, len)
-            } else if let Some(kind) = TokenKind::token_from_bytes(tok_bytes) {
+            } else if let Some(kind) = TokenKind::token_from_bytes(&lex.content[start as usize..(start + len) as usize]) {
                 make_token(lex, pending_trivia, kind, start, len)
             } else {
                 make_token(lex, pending_trivia, K::Ident, start, len)
@@ -779,10 +798,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 tokens.push(make_buffered_token(
                                     self,
                                     &mut state.pending_trivia,
-                                    K::StringUnterminated {
-                                        delim: string_delim_kind,
-                                        interp_exprs,
-                                    },
+                                    K::string(string_delim_kind, interp_exprs, false),
                                     n,
                                     tok_len,
                                 ));
@@ -805,7 +821,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             tokens.push(make_buffered_token(
                                 self,
                                 &mut state.pending_trivia,
-                                K::String { delim: string_delim_kind, interp_exprs },
+                                K::string(string_delim_kind, interp_exprs, true),
                                 n + 1,
                                 tok_len,
                             ));
@@ -820,7 +836,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             tokens.push(make_buffered_token(
                                 self,
                                 &mut state.pending_trivia,
-                                K::String { delim: string_delim_kind, interp_exprs },
+                                K::string(string_delim_kind, interp_exprs, true),
                                 n + 1,
                                 tok_len,
                             ));
@@ -1424,7 +1440,7 @@ mod test {
     #[test]
     fn literal_string_simple() -> anyhow::Result<()> {
         let (spans, tokens) = set_up("\"foobear\"")?;
-        assert_token(&spans, &tokens, 0, K::STRING_DQ_INTERP, 0, 9, false);
+        assert_token(&spans, &tokens, 0, K::StringDoneDqInterp, 0, 9, false);
         Ok(())
     }
 
@@ -1436,7 +1452,7 @@ mod test {
         assert_token(&spans, &tokens, 2, K::Equals, 6, 1, true);
         assert_token(&spans, &tokens, 3, K::Ident, 8, 7, true);
         assert_token(&spans, &tokens, 4, K::OpenParen, 15, 1, false);
-        assert_token(&spans, &tokens, 5, K::STRING_DQ_PLAIN, 16, 10, false);
+        assert_token(&spans, &tokens, 5, K::StringDoneDqNoInterp, 16, 10, false);
         assert_token(&spans, &tokens, 6, K::CloseParen, 26, 1, false);
         Ok(())
     }
@@ -1447,11 +1463,11 @@ mod test {
         expect_token_kinds(
             input,
             vec![
-                K::STRING_UNTERM_DQ_INTERP,
+                K::StringOpenDqInterp,
                 K::OpenBrace,
                 K::Ident,
                 K::CloseBrace,
-                K::STRING_DQ_INTERP,
+                K::StringDoneDqInterp,
             ],
         )
     }
@@ -1462,17 +1478,17 @@ mod test {
         expect_token_kinds(
             input,
             vec![
-                K::STRING_UNTERM_DQ_INTERP,
+                K::StringOpenDqInterp,
                 K::OpenBrace,
                 K::Ident,
                 K::OpenParen,
                 K::CloseParen,
                 K::CloseBrace,
-                K::STRING_UNTERM_DQ_INTERP,
+                K::StringOpenDqInterp,
                 K::OpenBrace,
                 K::Ident,
                 K::CloseBrace,
-                K::STRING_DQ_INTERP,
+                K::StringDoneDqInterp,
             ],
         )
     }
@@ -1483,11 +1499,11 @@ mod test {
         expect_token_kinds(
             input,
             vec![
-                K::STRING_UNTERM_DQ_INTERP,
+                K::StringOpenDqInterp,
                 K::OpenBrace,
-                K::STRING_DQ_PLAIN,
+                K::StringDoneDqNoInterp,
                 K::CloseBrace,
-                K::STRING_DQ_INTERP,
+                K::StringDoneDqInterp,
             ],
         )
     }
@@ -1498,15 +1514,15 @@ mod test {
         expect_token_kinds(
             input,
             vec![
-                K::STRING_UNTERM_DQ_INTERP,
+                K::StringOpenDqInterp,
                 K::OpenBrace,
-                K::STRING_UNTERM_DQ_INTERP,
+                K::StringOpenDqInterp,
                 K::OpenBrace,
                 K::Ident,
                 K::CloseBrace,
-                K::STRING_DQ_INTERP,
+                K::StringDoneDqInterp,
                 K::CloseBrace,
-                K::STRING_DQ_INTERP,
+                K::StringDoneDqInterp,
             ],
         )
     }
@@ -1514,7 +1530,7 @@ mod test {
     #[test]
     fn interpolation_escape_doublebrace() -> anyhow::Result<()> {
         let input = "\"Method 'sum' does not exist on type: '{{ x: iword, y: iword }'\"";
-        expect_token_kinds(input, vec![K::STRING_DQ_INTERP])
+        expect_token_kinds(input, vec![K::StringDoneDqInterp])
     }
 
     #[test]
@@ -1523,9 +1539,9 @@ mod test {
         expect_token_kinds(
             input,
             vec![
-                K::STRING_UNTERM_DQ_INTERP,
+                K::StringOpenDqInterp,
                 K::OpenBrace,
-                K::STRING_UNTERM_DQ_INTERP,
+                K::StringOpenDqInterp,
                 K::OpenBrace,
                 K::OpenParen,
                 K::OpenBrace,
@@ -1537,9 +1553,9 @@ mod test {
                 K::Dot,
                 K::Ident, // .x
                 K::CloseBrace,
-                K::STRING_DQ_INTERP,
+                K::StringDoneDqInterp,
                 K::CloseBrace,
-                K::STRING_DQ_INTERP,
+                K::StringDoneDqInterp,
             ],
         )
     }
@@ -1547,7 +1563,7 @@ mod test {
     #[test]
     fn backtick_string_1() -> anyhow::Result<()> {
         let input = "`Method 'sum' does not exist on type: '{{ x: iword, y: iword }'`";
-        expect_token_kinds(input, vec![K::STRING_BT_INTERP])
+        expect_token_kinds(input, vec![K::StringDoneBtInterp])
     }
 
     #[test]
@@ -1568,15 +1584,15 @@ mod test {
         expect_token_kinds(
             input,
             vec![
-                K::STRING_UNTERM_BT_INTERP,
+                K::StringOpenBtInterp,
                 K::OpenBrace,
-                K::STRING_UNTERM_DQ_INTERP,
+                K::StringOpenDqInterp,
                 K::OpenBrace,
                 K::Ident,
                 K::CloseBrace,
-                K::STRING_DQ_INTERP,
+                K::StringDoneDqInterp,
                 K::CloseBrace,
-                K::STRING_BT_INTERP,
+                K::StringDoneBtInterp,
             ],
         )
     }

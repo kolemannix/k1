@@ -2646,7 +2646,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     )))))
                 }
             }
-            (K::String { .. } | K::StringUnterminated { .. }, _) => Ok(Some(self.expect_string()?)),
+            (k, _) if k.is_string() => Ok(Some(self.expect_string()?)),
             (K::Minus, K::Numeric) if !second.is_whitespace_preceded() => {
                 self.advance_n(2);
                 let span = self.extend_token_span(first, second);
@@ -2709,8 +2709,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         self.expect_kind(K::CloseBrace)?;
                     }
                 }
-                K::StringUnterminated { delim, interp_exprs }
-                | K::String { delim, interp_exprs } => {
+                k if k.is_string() => {
+                    let StringTokenInfo { delim, interp_exprs, done } = k.as_string().unwrap();
                     // Accessing the tok_chars this way achieves a partial borrow of self
                     let text = Parser::tok_chars(
                         &self.ast.spans,
@@ -2737,7 +2737,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         }
                         first_segment = false;
                     }
-                    let is_terminated = matches!(current_token.kind, K::String { .. });
+                    let is_terminated = done;
                     while let Some(c) = chars.next() {
                         if c == '{' && interp_exprs {
                             let Some(next) = chars.next() else {
@@ -2790,10 +2790,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.emit_semantic_token(current_token, SemanticTokenKind::String);
 
                     if is_terminated {
-                        if matches!(
-                            self.peek().kind,
-                            K::String { .. } | K::StringUnterminated { .. }
-                        ) {
+                        if self.peek().kind.is_string() {
                             first_segment = true;
                             continue;
                         } else {
@@ -4514,7 +4511,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_dq_ident(&mut self) -> ParseResult<StringId> {
-        let external_name_token = self.expect_kind(K::STRING_DQ_INTERP)?;
+        let external_name_token = self.expect_kind(K::StringDoneDqInterp)?;
         // Accessing the token chars this way achieves a partial borrow of self
         // allowing us to intern the identifier
         let string_text = Parser::tok_chars(
