@@ -47,7 +47,21 @@ use std::{
 pub struct Mem<Tag = ()> {
     mmap: memmap2::MmapMut,
     cursor: *mut u8,
+    /// See `high_water_mark`; only updated on `reset`/`reset_to`
+    hwm: usize,
     _marker: PhantomData<Tag>,
+}
+
+/// A saved arena position; see `Mem::mark` and `Mem::reset_to`.
+pub struct MemMark<Tag> {
+    cursor: *mut u8,
+    _marker: PhantomData<Tag>,
+}
+impl<Tag> Copy for MemMark<Tag> {}
+impl<Tag> Clone for MemMark<Tag> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 pub struct DlNode<T, Tag> {
@@ -358,10 +372,11 @@ impl<Tag> Mem<Tag> {
         // arena than convert on every single access
         let cursor = unsafe { mmap.as_mut_ptr().byte_add(8) };
 
-        Self { cursor, mmap, _marker: PhantomData }
+        Self { cursor, mmap, hwm: 0, _marker: PhantomData }
     }
 
     pub fn reset(&mut self, zero: bool) {
+        self.hwm = self.hwm.max(self.bytes_used());
         if zero {
             let used = self.bytes_used();
             unsafe {
@@ -369,6 +384,11 @@ impl<Tag> Mem<Tag> {
             }
         }
         self.cursor = unsafe { self.mmap.as_mut_ptr().byte_add(8) };
+    }
+
+    /// The most bytes ever live at once in this arena.
+    pub fn high_water_mark(&self) -> usize {
+        self.hwm.max(self.bytes_used())
     }
 
     /// Sends an advise_range call, effectively faulting in
@@ -383,6 +403,16 @@ impl<Tag> Mem<Tag> {
 
     pub fn set_cursor(&mut self, new_cursor: *mut u8) {
         self.set_cursor_checked(new_cursor);
+    }
+
+    pub fn mark(&self) -> MemMark<Tag> {
+        MemMark { cursor: self.cursor, _marker: PhantomData }
+    }
+
+    pub fn reset_to(&mut self, mark: MemMark<Tag>) {
+        debug_assert!(mark.cursor.addr() <= self.cursor.addr());
+        self.hwm = self.hwm.max(self.bytes_used());
+        self.set_cursor_checked(mark.cursor);
     }
 
     pub fn base_ptr(&self) -> *const u8 {
@@ -1301,9 +1331,10 @@ macro_rules! k1_format {
 impl<Tag> Mem<Tag> {
     pub fn print_usage(&self, name: &str) {
         let used_kb = self.bytes_used() / crate::KILOBYTE;
+        let hwm_kb = self.high_water_mark() / crate::KILOBYTE;
         let total = self.mmap.len() / crate::KILOBYTE;
         let percent = (used_kb as f64) / (total as f64) * 100.0;
-        eprintln!("{name} usage: {used_kb}/{total}kb ({percent:.2}%)");
+        eprintln!("{name} usage: {used_kb}/{total}kb ({percent:.2}%), hwm: {hwm_kb}kb");
     }
 }
 

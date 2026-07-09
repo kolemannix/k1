@@ -596,20 +596,23 @@ pub struct TypedAbilitySignature {
 }
 
 pub(crate) struct ArgsAndParams {
-    args: SV8<MaybeTypedExpr>,
-    params: SV8<FnParamType>,
+    args: MSlice<MaybeTypedExpr, MemTmp>,
+    params: MSlice<FnParamType, MemTmp>,
 }
 
 impl ArgsAndParams {
-    fn iter(&self) -> impl Iterator<Item = (&MaybeTypedExpr, &FnParamType)> {
-        self.args.iter().zip(self.params.iter())
+    fn get(&self, index: usize, mem: &Mem<MemTmp>) -> (MaybeTypedExpr, FnParamType) {
+        (*mem.get_nth(self.args, index), *mem.get_nth(self.params, index))
     }
 
-    fn get(&self, index: usize) -> (MaybeTypedExpr, FnParamType) {
-        (self.args[index], self.params[index])
+    fn iter(
+        &self,
+        mem: &Mem<MemTmp>,
+    ) -> impl Iterator<Item = (&'static MaybeTypedExpr, &'static FnParamType)> + 'static {
+        mem.getn_zip(self.args, self.params)
     }
 
-    fn len(&self) -> usize {
+    fn len(&self) -> u32 {
         debug_assert!(self.args.len() == self.params.len());
         self.args.len()
     }
@@ -2538,6 +2541,8 @@ pub struct ProgramSettings {
 }
 
 pub struct MemTmp;
+type TmpList<T> = List<T, MemTmp>;
+type TmpSlice<T> = MSlice<T, MemTmp>;
 
 pub struct TypedExprPool {
     // SoA pools
@@ -12952,8 +12957,8 @@ impl TypedProgram {
         let args_slice = self.ast.mem.getn(fn_call.args);
         let explicit_context_args = args_slice.iter().any(|a| a.is_explicit_context);
         let named = args_slice.first().is_some_and(|arg| arg.name.is_some());
-        let mut final_args: SV8<MaybeTypedExpr> = SmallVec::new();
-        let mut final_params: SV8<FnParamType> = SmallVec::new();
+        let mut final_args: TmpList<MaybeTypedExpr> = self.tmp.new_list(params.len());
+        let mut final_params: TmpList<FnParamType> = self.tmp.new_list(params.len());
         let all_params = self.types.mem.getn(params);
         if !explicit_context_args {
             for context_param in all_params.iter().filter(|p| p.is_context) {
@@ -13076,7 +13081,10 @@ impl TypedProgram {
             );
         }
 
-        Ok(ArgsAndParams { args: final_args, params: final_params })
+        Ok(ArgsAndParams {
+            args: self.tmp.list_to_handle(final_args),
+            params: self.tmp.list_to_handle(final_params),
+        })
     }
 
     pub fn get_callee_function_signature(&self, callee: &Callee) -> FunctionSignature {
@@ -13143,6 +13151,19 @@ impl TypedProgram {
         ctx: EvalExprContext,
         known_callee: Option<Callee>,
     ) -> K1Result<TypedExprId> {
+        let tmp_mark = self.tmp.mark();
+        let result = self.eval_function_call_inner(fn_call, known_args, ctx, known_callee);
+        self.tmp.reset_to(tmp_mark);
+        result
+    }
+
+    fn eval_function_call_inner(
+        &mut self,
+        fn_call: &ParsedCall,
+        known_args: Option<(&[TypeId], &[TypedExprId])>,
+        ctx: EvalExprContext,
+        known_callee: Option<Callee>,
+    ) -> K1Result<TypedExprId> {
         let span = fn_call.span;
         debug!("eval_function_call {}", self.qident_to_string(&fn_call.name));
         assert!(
@@ -13201,7 +13222,9 @@ impl TypedProgram {
                     false,
                 )?;
                 let mut typechecked_args = self.mem.new_list(args_and_params.len() as u32);
-                for (index, (maybe_typed_expr, param)) in args_and_params.iter().enumerate() {
+                for (index, (maybe_typed_expr, param)) in
+                    self.tmp.getn_zip(args_and_params.args, args_and_params.params).enumerate()
+                {
                     let is_method_receiver = is_method && index == 0;
                     let checked_expr = match *maybe_typed_expr {
                         MaybeTypedExpr::Typed(typed) => {
@@ -13341,7 +13364,7 @@ impl TypedProgram {
                 // We can skip re-evaluating everything if we're just here to learn the return types
                 if !ctx.is_inference() {
                     for (param_index, (maybe_typed_expr, param)) in
-                        args_and_params.iter().enumerate()
+                        self.tmp.getn_zip(args_and_params.args, args_and_params.params).enumerate()
                     {
                         let is_method_receiver = param_index == 0 && is_method;
                         let allow_addr_of = is_method_receiver;
@@ -14192,8 +14215,7 @@ impl TypedProgram {
                     });
 
                     if parsed_let.is_returned() {
-                        if let Some(lambda_scope) =
-                            self.scopes.nearest_parent_lambda(ctx.scope_id)
+                        if let Some(lambda_scope) = self.scopes.nearest_parent_lambda(ctx.scope_id)
                         {
                             let returned_var_ref = &mut self
                                 .scopes
@@ -17268,10 +17290,9 @@ impl TypedProgram {
                     // If it is a namespace, we ensure we handle it right now, as this is the phase that
                     // namespaces should be declared. Everything else will get handled naturally
                     // as we iterate over the namespace's definitions in the future phases
-                    let static_ctx =
-                        StaticExecContext { expected_return_type: Some(I32_TYPE_ID) };
-                    let eval_expr_ctx = EvalExprContext::make(namespace_scope_id)
-                        .with_static_ctx(Some(static_ctx));
+                    let static_ctx = StaticExecContext { expected_return_type: Some(I32_TYPE_ID) };
+                    let eval_expr_ctx =
+                        EvalExprContext::make(namespace_scope_id).with_static_ctx(Some(static_ctx));
                     let newly_parsed_defns =
                         match self.compile_static_or_meta(static_expr_id, s, true, eval_expr_ctx) {
                             Err(e) => {
