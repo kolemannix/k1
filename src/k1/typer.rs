@@ -9314,6 +9314,8 @@ impl TypedProgram {
             .get(ctx.scope_id)
             .function
             .map(|id| self.get_function(id).name);
+
+        // nocommit: kill this name-building too. Just worry about unique names in codegen
         let name = self.build_ident_with(|k1, s| {
             if let Some(fn_name) = enclosing_fn_name {
                 s.push_str(k1.ident_str(fn_name));
@@ -9321,7 +9323,7 @@ impl TypedProgram {
             s.push_str("_lam_");
             write!(s, "{}", lambda_scope_id.as_u32()).unwrap();
         });
-        let name_string = self.make_qualified_name(ctx.scope_id, name, "__", true);
+        let name_string = self.make_qualified_name(ctx.scope_id, name, None, "__", true);
         let name = self.ast.idents.intern(name_string);
 
         let lambda_info = self.scopes.get_lambda_info(lambda_scope_id);
@@ -13809,6 +13811,7 @@ impl TypedProgram {
         let generic_function = self.get_function(generic_function_id);
         let generic_function_param_variables = generic_function.params;
         let generic_function_scope = generic_function.scope;
+        let generic_signature = generic_function.signature();
         let is_typer_function_builtin =
             matches!(generic_function.builtin_type, Some(Builtin::TyperPhysicalFunction(_)));
 
@@ -13839,25 +13842,26 @@ impl TypedProgram {
         let specialized_function_type_id = self.substitute_in_function_signature(
             type_arguments,
             fnlike_type_arguments,
-            generic_function.signature(),
+            generic_signature,
         );
         let specialized_function_id = self.functions.next_id();
-        debug!(
-            "specialized function type: {}",
-            self.type_id_to_string(specialized_function_type_id)
-        );
-        let specialized_name_ident = self.build_ident_with(|m, s| {
-            let generic_function = m.get_function(generic_function_id);
-            let spec_num = generic_function.child_specializations.len() + 1;
-            write!(s, "{}__", m.ident_str(generic_function.name)).unwrap();
-            for (index, nt) in m.mem.getn(type_arguments).iter().enumerate() {
-                m.display_type_id(s, nt.type_id, false).unwrap();
-                if index < type_arguments.len() as usize - 1 {
-                    write!(s, "_").unwrap();
-                }
-            }
-            write!(s, "_{spec_num}").unwrap();
-        });
+        // debug!(
+        //     "specialized function type: {}",
+        //     self.type_id_to_string(specialized_function_type_id)
+        // );
+        // let specialized_name_ident = self.build_ident_with(|m, s| {
+        //     let generic_function = m.get_function(generic_function_id);
+        //     let spec_num = generic_function.child_specializations.len() + 1;
+        //     write!(s, "{}__", m.ident_str(generic_function.name)).unwrap();
+        //     for (index, nt) in m.mem.getn(type_arguments).iter().enumerate() {
+        //         m.display_type_id(s, nt.type_id, false).unwrap();
+        //         if index < type_arguments.len() as usize - 1 {
+        //             write!(s, "_").unwrap();
+        //         }
+        //     }
+        //     write!(s, "_{spec_num}").unwrap();
+        // });
+        // eprintln!("built name: {}", self.ident_str(specialized_name_ident));
 
         let specialized_function_type =
             self.types.get(specialized_function_type_id).as_function().unwrap();
@@ -13866,7 +13870,7 @@ impl TypedProgram {
             generic_function_scope,
             ScopeType::FunctionScope,
             ScopeOwnerId::None,
-            Some(specialized_name_ident),
+            None,
         );
 
         for nt in self.mem.getn(type_arguments) {
@@ -13920,7 +13924,7 @@ impl TypedProgram {
             .body
             .is_some();
         let specialized_function = TypedFunction {
-            name: specialized_name_ident,
+            name: generic_function.name,
             scope: spec_fn_scope,
             params: self.mem.list_to_handle(param_variables),
             // Must be empty for correctness; a specialized function has no type parameters!
@@ -18835,23 +18839,35 @@ impl TypedProgram {
         w: &mut impl std::fmt::Write,
         scope: ScopeId,
         name: &str,
+        suffix_id: Option<usize>,
         delimiter: &str,
         skip_root: bool,
     ) {
         self.write_scope_path(w, scope, delimiter, skip_root);
         write!(w, "{delimiter}").unwrap();
         write!(w, "{}", name).unwrap();
+        if let Some(suffix_id) = suffix_id {
+            write!(w, "_{suffix_id}").unwrap()
+        }
     }
 
     pub fn make_qualified_name(
         &self,
         scope: ScopeId,
         name: StringId,
+        suffix_id: Option<usize>,
         delimiter: &str,
         skip_root: bool,
     ) -> String {
         let mut buf = String::with_capacity(64);
-        self.write_qualified_name(&mut buf, scope, self.ident_str(name), delimiter, skip_root);
+        self.write_qualified_name(
+            &mut buf,
+            scope,
+            self.ident_str(name),
+            suffix_id,
+            delimiter,
+            skip_root,
+        );
         buf
     }
 

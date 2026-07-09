@@ -1219,19 +1219,19 @@ impl<'k1> Builder<'k1> {
     fn get_physical_type(&mut self, type_id: TypeId) -> PhysicalType {
         match self.get_physical_type_result(type_id) {
             PhysicalTypeResult::Never => {
-                b_ice!(self, "codegen never type: {}", self.k1.type_id_to_string_ext(type_id, true))
+                b_ice!(self, "ir never type: {}", self.k1.type_id_to_string_ext(type_id, true))
             }
             PhysicalTypeResult::No => {
                 b_ice!(
                     self,
-                    "codegen non-physical type: {}",
+                    "ir non-physical type: {}",
                     self.k1.type_id_to_string_ext(type_id, true)
                 )
             }
             PhysicalTypeResult::Infinite => {
                 b_ice!(
                     self,
-                    "codegen infinite type: {}",
+                    "ir infinite type: {}",
                     self.k1.type_id_to_string_ext(type_id, true)
                 )
             }
@@ -3049,7 +3049,7 @@ pub fn display_unit_name(
     match unit {
         IrUnitId::Function(function_id) => {
             let function = k1.functions.get(function_id);
-            k1.write_qualified_name(w, function.scope, k1.ident_str(function.name), "/", true);
+            k1.write_qualified_name(w, function.scope, k1.ident_str(function.name), None, "/", true);
         }
         IrUnitId::Expr(typed_expr_id) => {
             let expr_span = k1.exprs.get_span(typed_expr_id);

@@ -2616,10 +2616,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_literal_atom(&mut self) -> ParseResult<Option<ParsedExprId>> {
         let (first, second) = self.tokens.peek_two();
-        trace!("parse_literal {} {}", first.kind, second.kind);
         match (first.kind, second.kind) {
             (K::Char, _) => {
-                trace!("parse_literal char");
                 self.advance();
                 let text = self.token_chars(first);
                 assert!(text.starts_with('\''));
@@ -2683,7 +2681,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_string(&mut self) -> ParseResult<ParsedExprId> {
         let first = self.tokens.peek();
-        trace!("expect_string");
 
         let mut buf = std::mem::take(&mut self.string_buffer);
 
@@ -3443,7 +3440,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn parse_base_expression(&mut self) -> ParseResult<Option<ParsedExprId>> {
         let compiler_debug = self.parse_compiler_debug();
         let (first, second, third) = self.tokens.peek_three();
-        trace!("parse_base_expression {} {} {}", first.kind, second.kind, third.kind);
+        // trace!("parse_base_expression {} {} {}", first.kind, second.kind, third.kind);
         let resulting_expression = match first.kind {
             K::OpenParen => {
                 self.advance();
@@ -3536,7 +3533,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             K::OpenBrace => {
                 // The syntax {} means empty struct, not empty block
                 // If you want an block, use a unit block { () }
-                trace!("parse_expr {:?} {:?} {:?}", first, second, third);
+                // trace!("parse_expr {:?} {:?} {:?}", first, second, third);
                 if let Some(struct_value) = self.parse_struct_value()? {
                     Ok(Some(self.add_expression(ParsedExpr::Struct(struct_value))))
                 } else {
@@ -3967,7 +3964,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_let(&mut self) -> ParseResult<Option<ParsedLet>> {
-        trace!("parse_let");
         let Some(eaten_keyword) = self.maybe_consume(K::KeywordLet) else { return Ok(None) };
         self.emit_semantic_token(eaten_keyword, SemanticTokenKind::Keyword);
         let is_reference = self.maybe_consume_no_whitespace(K::Asterisk).is_some();
@@ -4025,7 +4021,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_global(&mut self) -> ParseResult<Option<ParsedGlobalId>> {
-        trace!("parse_global");
         let Some(keyword_let_token) = self.maybe_consume(K::KeywordLet) else {
             return Ok(None);
         };
@@ -4329,7 +4324,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     pub fn parse_statement(&mut self) -> ParseResult<Option<ParsedStmtId>> {
-        trace!("parse_statement {:?}", self.peek());
         if let Some(use_id) = self.parse_use()? {
             let span = self.ast.uses.get_use(use_id).span;
             Ok(Some(self.ast.stmts.add(ParsedStmt::Use(UseStmt { span, use_id }))))
@@ -4412,7 +4406,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         &mut self,
         preexisting_condition: Option<ParsedExprId>,
     ) -> ParseResult<Option<ParsedFunctionId>> {
-        trace!("parse_function");
         let is_debug = self.parse_compiler_debug();
         let condition = match preexisting_condition {
             None => {
