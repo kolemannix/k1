@@ -8,14 +8,13 @@ use crate::debug;
 use crate::nz_u32_id;
 use crate::parse::BinaryOpKind;
 use crate::parse::FileId;
-use crate::vpool::{SliceHandle, VPool};
+use crate::vpool::VPool;
 use crate::{static_assert_niched, static_assert_size};
 use TokenKind as K;
 
 pub const EOF_CHAR: char = 27 as char; // esc
 // pub const EOF_CHAR: char = '\0' as char;
-pub const EOF_TOKEN: Token =
-    Token { kind: TokenKind::Eof, span: SpanId::NONE, trivia: SliceHandle::empty(), flags: 0 };
+pub const EOF_TOKEN: Token = Token { kind: TokenKind::Eof, span: SpanId::NONE, flags: 0 };
 
 #[derive(Debug, Clone)]
 pub struct LexError {
@@ -36,15 +35,13 @@ impl SpanId {
 
 pub struct Spans {
     pub span_pool: VPool<Span, SpanId>,
-    pub trivia_pool: VPool<TokenTrivia, TokenTriviaId>,
 }
 
 impl Spans {
     pub fn new() -> Spans {
         let mut span_pool = VPool::make("spans");
         span_pool.add(Span::NONE);
-        let trivia_pool = VPool::make("trivia");
-        Spans { span_pool, trivia_pool }
+        Spans { span_pool }
     }
 
     pub fn add(&mut self, span: Span) -> SpanId {
@@ -88,6 +85,13 @@ pub struct TokenIter<'toks> {
 
 impl<'toks> TokenIter<'toks> {
     pub fn make(data: &'toks [Token]) -> TokenIter<'toks> {
+        // peek_n clamps every index onto the final token instead of
+        // bounds-checking, so the stream must end with an EOF sentinel
+        // (Lexer::run guarantees this).
+        assert!(
+            data.last().is_some_and(|t| t.kind == TokenKind::Eof),
+            "TokenIter requires an EOF-terminated token stream"
+        );
         TokenIter { cursor: 0, tokens: data }
     }
 
@@ -120,8 +124,14 @@ impl<'toks> TokenIter<'toks> {
 
     #[inline]
     pub fn peek_n(&self, n: i64) -> Token {
-        let pos = self.cursor as i64 + n;
-        self.tokens.get(pos as usize).copied().unwrap_or(EOF_TOKEN)
+        // Branchless: any out-of-range index, including a negative `pos`,
+        // which wraps to a huge usize, clamps onto the trailing EOF
+        // sentinel. Compiles to cmp/cmov/load with no EOF fallback branch.
+        let pos = self.cursor.wrapping_add(n as usize);
+        let idx = pos.min(self.tokens.len() - 1);
+        // SAFETY: `make` asserts `tokens` is non-empty, so `len - 1` cannot
+        // wrap and `idx` is always in bounds.
+        unsafe { *self.tokens.get_unchecked(idx) }
     }
 
     #[inline]
@@ -553,27 +563,19 @@ const TOKEN_FLAG_IS_WHITESPACE_PRECEDED: u8 = 0x01;
 #[allow(unused)]
 const TOKEN_FLAG_IS_WHITESPACE_FOLLOWED: u8 = 0x02;
 
-nz_u32_id!(TokenTriviaId);
-
 #[derive(Debug, Clone, Copy)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: SpanId,
-    pub trivia: SliceHandle<TokenTriviaId>,
     pub flags: u8,
 }
-static_assert_size!(Token, 16);
+static_assert_size!(Token, 8);
 
 impl Token {
-    pub fn new(
-        kind: TokenKind,
-        span_id: SpanId,
-        whitespace_preceeded: bool,
-        trivia: SliceHandle<TokenTriviaId>,
-    ) -> Token {
+    pub fn new(kind: TokenKind, span_id: SpanId, whitespace_preceeded: bool) -> Token {
         let flags = if whitespace_preceeded { TOKEN_FLAG_IS_WHITESPACE_PRECEDED } else { 0 };
 
-        Token { kind, span: span_id, trivia, flags }
+        Token { kind, span: span_id, flags }
     }
     pub fn is_whitespace_preceded(&self) -> bool {
         self.flags & TOKEN_FLAG_IS_WHITESPACE_PRECEDED == TOKEN_FLAG_IS_WHITESPACE_PRECEDED
@@ -607,6 +609,44 @@ pub enum TokenTriviaKind {
 pub struct TokenTrivia {
     pub span: SpanId,
     pub kind: TokenTriviaKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TriviaEntry {
+    /// Index into the file's tokens vec of the token this trivia precedes;
+    /// trailing trivia attaches to the final EOF sentinel token
+    /// (index tokens.len() - 1)
+    pub token_idx: u32,
+    pub trivia: TokenTrivia,
+}
+
+/// Sparse token -> trivia attachment; entries are sorted by token_idx
+/// by construction since the lexer emits them in source order
+#[derive(Debug, Default, Clone)]
+pub struct TokenTriviaTable {
+    entries: Vec<TriviaEntry>,
+}
+
+impl TokenTriviaTable {
+    pub fn push(&mut self, entry: TriviaEntry) {
+        debug_assert!(self.entries.last().is_none_or(|last| last.token_idx <= entry.token_idx));
+        self.entries.push(entry)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &TriviaEntry> {
+        self.entries.iter()
+    }
+
+    /// All trivia attached to (immediately preceding) the token at `token_idx`
+    pub fn for_token(&self, token_idx: u32) -> &[TriviaEntry] {
+        let start = self.entries.partition_point(|e| e.token_idx < token_idx);
+        let end = self.entries.partition_point(|e| e.token_idx <= token_idx);
+        &self.entries[start..end]
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -643,7 +683,6 @@ impl LexMode {
 #[derive(Debug)]
 struct LexState {
     mode_stack: Vec<LexMode>,
-    pending_trivia: Vec<TokenTrivia>,
 }
 pub struct Lexer<'a, 'spans> {
     pub file_id: FileId,
@@ -651,6 +690,7 @@ pub struct Lexer<'a, 'spans> {
     content: &'a [u8],
     pub spans: &'spans mut Spans,
     pub pos: u32,
+    pub trivia: TokenTriviaTable,
 }
 
 impl<'content, 'spans> Lexer<'content, 'spans> {
@@ -659,7 +699,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         spans: &'spans mut Spans,
         file_id: FileId,
     ) -> Lexer<'content, 'spans> {
-        Lexer { file_id, content: input.as_bytes(), spans, pos: 0 }
+        Lexer { file_id, content: input.as_bytes(), spans, pos: 0, trivia: TokenTriviaTable::default() }
     }
 
     fn make_error(&mut self, message: String, start: u32, len: u32) -> LexError {
@@ -672,10 +712,18 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
     }
 
     pub fn run(&mut self, tokens: &mut Vec<Token>) -> LexResult<()> {
-        let mut state =
-            LexState { mode_stack: vec![LexMode::Tokens], pending_trivia: Vec::with_capacity(32) };
-        while self.eat_token(tokens, &mut state)?.is_some() {}
-        Ok(())
+        let mut state = LexState { mode_stack: vec![LexMode::Tokens] };
+        let result = loop {
+            match self.eat_token(tokens, &mut state) {
+                Ok(Some(())) => {}
+                Ok(None) => break Ok(()),
+                Err(e) => break Err(e),
+            }
+        };
+        // Terminate with an EOF sentinel even on error; TokenIter's branchless
+        // peeks clamp onto it instead of bounds-checking every access.
+        tokens.push(EOF_TOKEN);
+        result
     }
 
     fn eat_token(
@@ -687,43 +735,23 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         let mut is_number = false;
 
         #[inline]
-        fn make_token(
-            lex: &mut Lexer,
-            pending_trivia: &mut Vec<TokenTrivia>,
-            kind: TokenKind,
-            start: u32,
-            len: u32,
-        ) -> Token {
+        fn make_token(lex: &mut Lexer, kind: TokenKind, start: u32, len: u32) -> Token {
             let span = lex.add_span(start, len);
             let whitespace_preceded = lex
                 .content
                 .get((start as usize).saturating_sub(1))
                 .is_some_and(|c| (*c as char).is_whitespace());
-            let trivia = if pending_trivia.is_empty() {
-                SliceHandle::empty()
-            } else {
-                let trivia = lex.spans.trivia_pool.add_slice_copy(pending_trivia);
-                pending_trivia.clear();
-                trivia
-            };
-            Token::new(kind, span, whitespace_preceded, trivia)
+            Token::new(kind, span, whitespace_preceded)
         }
 
         #[inline]
-        fn make_buffered_token(
-            lex: &mut Lexer,
-            pending_trivia: &mut Vec<TokenTrivia>,
-            kind: TokenKind,
-            end: u32,
-            tok_len: u32,
-        ) -> Token {
-            make_token(lex, pending_trivia, kind, end - tok_len, tok_len)
+        fn make_buffered_token(lex: &mut Lexer, kind: TokenKind, end: u32, tok_len: u32) -> Token {
+            make_token(lex, kind, end - tok_len, tok_len)
         }
 
         #[inline]
         fn make_keyword_or_ident(
             lex: &mut Lexer,
-            pending_trivia: &mut Vec<TokenTrivia>,
             end: u32,
             tok_len: u32,
             is_number: bool,
@@ -731,16 +759,16 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             let start = end - tok_len;
             let len = tok_len;
             if is_number {
-                make_token(lex, pending_trivia, K::Numeric, start, len)
+                make_token(lex, K::Numeric, start, len)
             } else if let Some(kind) = TokenKind::token_from_bytes(&lex.content[start as usize..(start + len) as usize]) {
-                make_token(lex, pending_trivia, kind, start, len)
+                make_token(lex, kind, start, len)
             } else {
-                make_token(lex, pending_trivia, K::Ident, start, len)
+                make_token(lex, K::Ident, start, len)
             }
         }
         macro_rules! make_from_buffer {
             ($end: expr) => {
-                make_keyword_or_ident(self, &mut state.pending_trivia, $end, tok_len, is_number)
+                make_keyword_or_ident(self, $end, tok_len, is_number)
             };
         }
         loop {
@@ -797,14 +825,12 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 state.mode_stack.push(LexMode::Interp { brace_depth: 1 });
                                 tokens.push(make_buffered_token(
                                     self,
-                                    &mut state.pending_trivia,
                                     K::string(string_delim_kind, interp_exprs, false),
                                     n,
                                     tok_len,
                                 ));
                                 tokens.push(make_token(
                                     self,
-                                    &mut state.pending_trivia,
                                     K::OpenBrace,
                                     n,
                                     1,
@@ -820,7 +846,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             state.mode_stack.pop();
                             tokens.push(make_buffered_token(
                                 self,
-                                &mut state.pending_trivia,
                                 K::string(string_delim_kind, interp_exprs, true),
                                 n + 1,
                                 tok_len,
@@ -835,7 +860,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             state.mode_stack.pop();
                             tokens.push(make_buffered_token(
                                 self,
-                                &mut state.pending_trivia,
                                 K::string(string_delim_kind, interp_exprs, true),
                                 n + 1,
                                 tok_len,
@@ -865,7 +889,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 self.advance();
                                 tokens.push(make_token(
                                     self,
-                                    &mut state.pending_trivia,
                                     $kind,
                                     n,
                                     1,
@@ -879,7 +902,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 self.advance();
                                 tokens.push(make_token(
                                     self,
-                                    &mut state.pending_trivia,
                                     $kind,
                                     n,
                                     2,
@@ -1003,7 +1025,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                     }
                                     tokens.push(make_token(
                                         self,
-                                        &mut state.pending_trivia,
                                         TokenKind::Char,
                                         n,
                                         4,
@@ -1022,7 +1043,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                     // `n` is the index of the opening quote
                                     tokens.push(make_token(
                                         self,
-                                        &mut state.pending_trivia,
                                         TokenKind::Char,
                                         n,
                                         3,
@@ -1056,10 +1076,12 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                         None => self.content.len() as u32 + 1,
                                     };
                                     let span = self.add_span(n, self.pos - n);
-                                    // FIXME: Capture final trailing trivia
-                                    state.pending_trivia.push(TokenTrivia {
-                                        span,
-                                        kind: TokenTriviaKind::LineComment,
+                                    self.trivia.push(TriviaEntry {
+                                        token_idx: tokens.len() as u32,
+                                        trivia: TokenTrivia {
+                                            span,
+                                            kind: TokenTriviaKind::LineComment,
+                                        },
                                     });
                                     return Ok(Some(()));
                                 } else {
@@ -1147,7 +1169,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                     // Lex the dot
                                     tokens.push(make_token(
                                         self,
-                                        &mut state.pending_trivia,
                                         K::Dot,
                                         n,
                                         1,
@@ -1301,7 +1322,8 @@ mod test {
         let mut spans = Spans::new();
         let mut token_vec = vec![];
         Lexer::make(input, &mut spans, 0).run(&mut token_vec)?;
-        let kinds: Vec<K> = token_vec.iter().map(|t| t.kind).collect();
+        let mut kinds: Vec<K> = token_vec.iter().map(|t| t.kind).collect();
+        assert_eq!(kinds.pop(), Some(K::Eof));
         assert_eq!(kinds, expected);
         Ok(())
     }
@@ -1344,7 +1366,7 @@ mod test {
         let input = "-43";
         let (spans, tokens) = set_up(input)?;
         let kinds: Vec<K> = tokens.iter().map(|t| t.kind).collect();
-        assert_eq!(kinds, vec![K::Minus, K::Numeric]);
+        assert_eq!(kinds, vec![K::Minus, K::Numeric, K::Eof]);
         let span0 = spans.get(tokens[0].span);
         assert_eq!(span0.start, 0);
         assert_eq!(span0.len, 1);
@@ -1362,7 +1384,7 @@ mod test {
         let input = "- 43";
         let (spans, tokens) = set_up(input)?;
         let kinds: Vec<K> = tokens.iter().map(|t| t.kind).collect();
-        assert_eq!(kinds, vec![K::Minus, K::Numeric]);
+        assert_eq!(kinds, vec![K::Minus, K::Numeric, K::Eof]);
         let span0 = spans.get(tokens[0].span);
         assert_eq!(span0.start, 0);
         assert_eq!(span0.len, 1);
@@ -1399,21 +1421,42 @@ mod test {
         // <test harness> expected output
         //
         "#;
-        let (spans, tokens) = set_up(input)?;
+        let mut spans = Spans::new();
+        let mut tokens = vec![];
+        let mut lexer = Lexer::make(input, &mut spans, 0);
+        lexer.run(&mut tokens)?;
+        let trivia = lexer.trivia;
+
         let kinds: Vec<K> = tokens.iter().map(|t| t.kind).collect();
-        let let_trivia = spans.trivia_pool.get_slice(tokens[0].trivia);
-        assert_eq!(let_trivia.len(), 2);
-        assert_eq!(let_trivia[0].kind, TokenTriviaKind::LineComment);
-        assert_eq!(spans.get(let_trivia[0].span), Span { start: 0, len: 16, file_id: 0 });
-
-        assert_eq!(let_trivia[1].kind, TokenTriviaKind::LineComment);
-        assert_eq!(spans.get(let_trivia[1].span), Span { start: 24, len: 13, file_id: 0 });
-
-        assert_eq!(spans.get(tokens[0].span), Span { start: 45, len: 3, file_id: 0 });
         assert_eq!(
-            vec![K::KeywordLet, K::Ident, K::Colon, K::Ident, K::Equals, K::Numeric, K::Semicolon,],
+            vec![
+                K::KeywordLet,
+                K::Ident,
+                K::Colon,
+                K::Ident,
+                K::Equals,
+                K::Numeric,
+                K::Semicolon,
+                K::Eof,
+            ],
             kinds
         );
+        assert_eq!(spans.get(tokens[0].span), Span { start: 45, len: 3, file_id: 0 });
+
+        let let_trivia = trivia.for_token(0);
+        assert_eq!(let_trivia.len(), 2);
+        assert_eq!(let_trivia[0].trivia.kind, TokenTriviaKind::LineComment);
+        assert_eq!(spans.get(let_trivia[0].trivia.span), Span { start: 0, len: 16, file_id: 0 });
+        assert_eq!(let_trivia[1].trivia.kind, TokenTriviaKind::LineComment);
+        assert_eq!(spans.get(let_trivia[1].trivia.span), Span { start: 24, len: 13, file_id: 0 });
+
+        assert!(trivia.for_token(3).is_empty());
+
+        // Trailing comments attach to the EOF sentinel, the last token
+        let trailing = trivia.for_token(tokens.len() as u32 - 1);
+        assert_eq!(trailing.len(), 2);
+        assert_eq!(spans.get(trailing[0].trivia.span), Span { start: 72, len: 34, file_id: 0 });
+        assert_eq!(spans.get(trailing[1].trivia.span), Span { start: 114, len: 3, file_id: 0 });
         Ok(())
     }
 
