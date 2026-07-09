@@ -111,7 +111,7 @@ pub enum Opcode {
     // Unary
     BoolNegate,
     BitNot,
-    Cast, // A = CastKind, B = (from_scalar_tag << 8) | to_scalar_tag
+    Cast, // A = CastKind, B = (from_bits << 8) | to_bits
     // Metaprogramming
     BakeStaticValue,
 }
@@ -139,12 +139,12 @@ impl Opcode {
             Opcode::CallExtern => 6, // [function_id][lib_name(0=none)][fn_name][ret_pt][fp_delta][nargs]
             Opcode::CallBuiltin => 3, // A = builtin tag; [ret_pt][fp_delta][nargs]
             Opcode::RetGet => 1,     // [dst]
-            Opcode::RetStore => 1,   // A = scalar tag; [addr src]
+            Opcode::RetStore => 1,   // A = width in bits; [addr src]
             Opcode::Mov => 2,        // [dst][src]
             Opcode::Lea => 2,        // [dst][frame byte offset]
             Opcode::LoadGlobal => 3, // [dst][global_id][storage_pt]
-            Opcode::Load => 2,       // A = scalar tag; [dst][addr src]
-            Opcode::Store => 2,      // A = scalar tag; [addr src][val src]
+            Opcode::Load => 2,       // A = width in bits; [dst][addr src]
+            Opcode::Store => 2,      // A = width in bits; [addr src][val src]
             Opcode::Copy => 3,       // [dst src][src src][size]
             Opcode::PtrAddImm => 3,  // [dst][base src][byte offset]
             Opcode::PtrIndex => 4,   // [dst][base src][index src][stride]
@@ -169,7 +169,7 @@ impl Opcode {
             | Opcode::ShrU
             | Opcode::ShrS => 3, // [dst][lhs][rhs]
             Opcode::BoolNegate | Opcode::BitNot => 2, // [dst][src]
-            Opcode::Cast => 2,       // [dst][src]
+            Opcode::Cast => 2,       // A = CastKind, B = from_bits << 8 | to_bits; [dst][src]
             Opcode::BakeStaticValue => 3, // [dst][type_id][src]
         }
     }
@@ -328,22 +328,22 @@ pub fn builtin_from_tag(t: u8) -> crate::ir::BackendBuiltin {
     }
 }
 
-#[inline]
+#[inline(always)]
 pub const fn header(op: Opcode, a: u8, b: u16) -> u32 {
     op as u32 | ((a as u32) << 8) | ((b as u32) << 16)
 }
 
-#[inline]
+#[inline(always)]
 pub const fn header_op(h: u32) -> u8 {
     h as u8
 }
 
-#[inline]
+#[inline(always)]
 pub const fn header_a(h: u32) -> u8 {
     (h >> 8) as u8
 }
 
-#[inline]
+#[inline(always)]
 pub const fn header_b(h: u32) -> u16 {
     (h >> 16) as u16
 }

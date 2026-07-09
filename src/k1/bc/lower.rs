@@ -253,8 +253,10 @@ const fn align_up(v: u32, align: u32) -> u32 {
     v.next_multiple_of(align)
 }
 
-/// Data32 semantics copied verbatim from vm.rs `resolve_value` — including
-/// the F64 numeric u32->f32->f64 conversion and I64 sign extension.
+fn wbits(t: ScalarType) -> u8 {
+    t.width().bits() as u8
+}
+
 fn const_of_data32(t: ScalarType, data: u32) -> u64 {
     match t {
         ScalarType::F32 => data as u64,
@@ -604,14 +606,14 @@ fn emit_inst(
         Inst::Store { dst, value, t } => {
             let addr = resolve_src(k1, ctx, dst);
             let val = resolve_src(k1, ctx, value);
-            ctx.emit(Opcode::Store, t.to_tag(), 0);
+            ctx.emit(Opcode::Store, wbits(t), 0);
             ctx.push(addr);
             ctx.push(val);
         }
         Inst::Load { t, src } => {
             let addr = resolve_src(k1, ctx, src);
             let dst = ctx.slot_of(inst_id);
-            ctx.emit(Opcode::Load, t.to_tag(), 0);
+            ctx.emit(Opcode::Load, wbits(t), 0);
             ctx.push(dst);
             ctx.push(addr);
         }
@@ -688,23 +690,23 @@ fn emit_inst(
         Inst::BoolNegate { v } => unop!(Opcode::BoolNegate, 0, 0, v),
         Inst::BitNot { v } => unop!(Opcode::BitNot, 0, 0, v),
 
-        Inst::IntTrunc { v, to } => cast!(CastKind::IntTrunc, 0, to.to_tag(), v),
-        Inst::IntExtS { v, from, to } => cast!(CastKind::IntExtS, from.to_tag(), to.to_tag(), v),
+        Inst::IntTrunc { v, to } => cast!(CastKind::IntTrunc, 0, wbits(to), v),
+        Inst::IntExtS { v, from, to } => cast!(CastKind::IntExtS, wbits(from), wbits(to), v),
         Inst::FloatTrunc { v, .. } => cast!(CastKind::FloatTrunc, 0, 0, v),
         Inst::FloatExt { v, .. } => cast!(CastKind::FloatExt, 0, 0, v),
-        Inst::Float32ToIntUnsigned { v, to } => cast!(CastKind::F32ToUInt, 0, to.to_tag(), v),
-        Inst::Float32ToIntSigned { v, to } => cast!(CastKind::F32ToSInt, 0, to.to_tag(), v),
-        Inst::Float64ToIntUnsigned { v, to } => cast!(CastKind::F64ToUInt, 0, to.to_tag(), v),
-        Inst::Float64ToIntSigned { v, to } => cast!(CastKind::F64ToSInt, 0, to.to_tag(), v),
+        Inst::Float32ToIntUnsigned { v, to } => cast!(CastKind::F32ToUInt, 0, wbits(to), v),
+        Inst::Float32ToIntSigned { v, to } => cast!(CastKind::F32ToSInt, 0, wbits(to), v),
+        Inst::Float64ToIntUnsigned { v, to } => cast!(CastKind::F64ToUInt, 0, wbits(to), v),
+        Inst::Float64ToIntSigned { v, to } => cast!(CastKind::F64ToSInt, 0, wbits(to), v),
         Inst::IntToFloatUnsigned { v, from, to } => {
             let kind =
                 if to == ScalarType::F32 { CastKind::UIntToF32 } else { CastKind::UIntToF64 };
-            cast!(kind, from.to_tag(), to.to_tag(), v)
+            cast!(kind, wbits(from), wbits(to), v)
         }
         Inst::IntToFloatSigned { v, from, to } => {
             let kind =
                 if to == ScalarType::F32 { CastKind::SIntToF32 } else { CastKind::SIntToF64 };
-            cast!(kind, from.to_tag(), to.to_tag(), v)
+            cast!(kind, wbits(from), wbits(to), v)
         }
 
         Inst::IntAdd { lhs, rhs, width } => binop!(Opcode::IntAdd, width, 0, lhs, rhs),
@@ -860,7 +862,7 @@ fn emit_call(
             Some(_) => {
                 // The call slot holds the destination address; store through it
                 let t = ret_pt.expect_scalar();
-                ctx.emit(Opcode::RetStore, t.to_tag(), 0);
+                ctx.emit(Opcode::RetStore, wbits(t), 0);
                 ctx.push(call_slot);
             }
             None => {
