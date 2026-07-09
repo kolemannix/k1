@@ -166,7 +166,7 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
                 eprintln!("Invalid StructField entity; type is not a struct!");
                 SpanId::NONE
             }
-        }
+        },
     };
     span_id
 }

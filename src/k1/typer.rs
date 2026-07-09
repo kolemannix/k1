@@ -271,10 +271,15 @@ bitflags! {
 
 #[derive(Clone, Copy)]
 pub struct EvalExprContext {
+    // Always required
     scope_id: ScopeId,
+    // Always required
     expected_type_id: Option<TypeId>,
+    // Almost always None
     static_ctx: Option<StaticExecContext>,
+    // Almost always None
     global_defn_name: Option<StringId>,
+    // Each flag is almost always none, but that's good
     flags: EvalExprFlags,
 }
 impl EvalExprContext {
@@ -2805,7 +2810,7 @@ impl TypedProgram {
         assert_eq!(empty_struct_id, EMPTY_TYPE_ID);
 
         let root_ident = ast.idents.b.root_module_name;
-        let mut scopes = Scopes::make(root_ident, 8192);
+        let mut scopes = Scopes::make();
         let mut namespaces = Namespaces { namespaces: VPool::make_with_hint("namespaces", 1024) };
         let root_namespace = Namespace {
             name: root_ident,
@@ -2821,8 +2826,7 @@ impl TypedProgram {
             .set_scope_owner_id(Scopes::ROOT_SCOPE_ID, ScopeOwnerId::Namespace(root_namespace_id));
 
         // Add _root ns to the root scope as well so users can use it
-        if !scopes.get_scope_mut(Scopes::ROOT_SCOPE_ID).add_namespace(root_ident, root_namespace_id)
-        {
+        if !scopes.add_namespace(Scopes::ROOT_SCOPE_ID, root_ident, root_namespace_id) {
             panic!("Root namespace was taken, hmmmm");
         }
         let mut pattern_ctors = VPool::make_with_hint("pattern_ctors", 8192);
@@ -3240,9 +3244,7 @@ impl TypedProgram {
         if let Some(exec_module) =
             self.modules.iter().find(|m| m.manifest.kind == ModuleKind::Executable)
         {
-            self.scopes
-                .get_scope(exec_module.namespace_scope_id)
-                .find_function(self.ast.idents.b.main)
+            self.scopes.find_function_local(exec_module.namespace_scope_id, self.ast.idents.b.main)
         } else {
             None
         }
@@ -3323,7 +3325,6 @@ impl TypedProgram {
                 namespace_scope_id,
                 ScopeType::TypeDefn,
                 ScopeOwnerId::None,
-                Some(parsed_type_defn.name),
             );
             defn_scope_id
         } else {
@@ -3371,10 +3372,7 @@ impl TypedProgram {
                 ability_constraint_signatures,
             );
             type_params.push(NameAndType { name: type_param.name, type_id: type_variable_id });
-            let added = self
-                .scopes
-                .get_scope_mut(defn_scope_id)
-                .add_type(type_param.name, type_variable_id);
+            let added = self.scopes.add_type(defn_scope_id, type_param.name, type_variable_id);
             if !added {
                 return failf!(
                     type_param.span,
@@ -3457,7 +3455,7 @@ impl TypedProgram {
         }
 
         let found_namespace_id =
-            self.scopes.get_scope(namespace_scope_id).find_namespace(parsed_type_defn.name);
+            self.scopes.find_namespace_local(namespace_scope_id, parsed_type_defn.name);
         let companion_namespace_id = match found_namespace_id {
             None => None,
             Some(ns_id) => {
@@ -3510,7 +3508,7 @@ impl TypedProgram {
             self.namespaces.get_mut(companion_namespace_id).companion_type_id = Some(type_id);
         }
         let name = parsed_type_defn.name;
-        let added = self.scopes.get_scope_mut(namespace_scope_id).add_type(name, type_id);
+        let added = self.scopes.add_type(namespace_scope_id, name, type_id);
         if !added {
             let span = parsed_type_defn.span;
             self.report(errf!(span, "Type {} exists", self.ident_str(name)));
@@ -5976,12 +5974,8 @@ impl TypedProgram {
         let parsed_expr_as_block =
             self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
         let expr_span = parsed_expr_as_block.span;
-        let static_block_scope = self.scopes.add_child_scope(
-            ctx.scope_id,
-            ScopeType::LexicalBlock,
-            ScopeOwnerId::None,
-            None,
-        );
+        let static_block_scope =
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
         let static_eval_ctx = ctx.with_scope(static_block_scope);
         let expr = self.eval_block(&parsed_expr_as_block, static_eval_ctx, true)?;
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
@@ -6582,12 +6576,8 @@ impl TypedProgram {
                 type_parameter.scope_id,
                 ScopeType::AbilityImpl,
                 ScopeOwnerId::None,
-                None,
             );
-            let _ = self
-                .scopes
-                .get_scope_mut(constrained_impl_scope)
-                .add_type(type_parameter.name, type_id);
+            let _ = self.scopes.add_type(constrained_impl_scope, type_parameter.name, type_id);
             self.implement_ability_for_type(
                 type_id,
                 ability_sig,
@@ -6948,12 +6938,8 @@ impl TypedProgram {
     ) -> AbilityImplHandle {
         let base_ability = self.abilities.get(base_ability_id);
         let base_scope_id = base_ability.scope_id;
-        let impl_scope_id = self.scopes.add_child_scope(
-            base_scope_id,
-            ScopeType::AbilityImpl,
-            ScopeOwnerId::None,
-            None,
-        );
+        let impl_scope_id =
+            self.scopes.add_child_scope(base_scope_id, ScopeType::AbilityImpl, ScopeOwnerId::None);
 
         let impl_id = self.implement_ability_for_type(
             self_type_id,
@@ -7163,7 +7149,6 @@ impl TypedProgram {
             blanket_impl_scope_id,
             ScopeType::AbilityImpl,
             ScopeOwnerId::None,
-            None,
         );
         let parsed_blanket_impl = self.ast.get_ability_impl(parsed_id);
 
@@ -7250,7 +7235,6 @@ impl TypedProgram {
             blanket_impl.scope_id,
             ScopeType::AbilityImpl,
             ScopeOwnerId::None,
-            None,
         );
 
         let pairs: SV4<TypeSubstitutionPair> = self
@@ -8218,7 +8202,7 @@ impl TypedProgram {
                     ParsedBlockKind::LoopBody => ScopeType::LoopExprBody,
                 };
                 let block_scope =
-                    self.scopes.add_child_scope(ctx.scope_id, scope_type, ScopeOwnerId::None, None);
+                    self.scopes.add_child_scope(ctx.scope_id, scope_type, ScopeOwnerId::None);
                 let block_ctx = ctx.with_scope(block_scope);
                 let needs_terminator = match block.kind {
                     ParsedBlockKind::FunctionBody => true,
@@ -9120,12 +9104,8 @@ impl TypedProgram {
             return failf!(while_expr.span, "'while' body must be a block");
         };
 
-        let condition_block_scope_id = self.scopes.add_child_scope(
-            ctx.scope_id,
-            ScopeType::LexicalBlock,
-            ScopeOwnerId::None,
-            None,
-        );
+        let condition_block_scope_id =
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
 
         let condition_or_block = self.eval_matching_condition(
             while_expr.cond,
@@ -9141,7 +9121,6 @@ impl TypedProgram {
             condition_block_scope_id,
             ScopeType::WhileLoopBody,
             ScopeOwnerId::None,
-            None,
         );
         self.scopes.add_loop_info(
             body_block_scope_id,
@@ -9169,12 +9148,8 @@ impl TypedProgram {
         loop_expr: &ParsedLoopExpr,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        let body_scope = self.scopes.add_child_scope(
-            ctx.scope_id,
-            ScopeType::LoopExprBody,
-            ScopeOwnerId::None,
-            None,
-        );
+        let body_scope =
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LoopExprBody, ScopeOwnerId::None);
         self.scopes.add_loop_info(body_scope, ScopeLoopInfo { break_type: ctx.expected_type_id });
 
         // Expected type is handled by loop info above, its needed by 'break's but notably we do not
@@ -9198,12 +9173,8 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let lambda = self.ast.exprs.get(expr_id).expect_lambda();
-        let lambda_scope_id = self.scopes.add_child_scope(
-            ctx.scope_id,
-            ScopeType::LambdaScope,
-            ScopeOwnerId::None, // To be set later!
-            None,
-        );
+        let lambda_scope_id =
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LambdaScope, ScopeOwnerId::None);
         let lambda_arguments = lambda.arguments;
         let lambda_body = lambda.body;
         let span = lambda.span;
@@ -9271,7 +9242,6 @@ impl TypedProgram {
 
         let mut param_variables = self.mem.new_list(lambda_arguments.len() + 1);
 
-        let lambda_scope = self.scopes.get_scope_mut(lambda_scope_id);
         for (typed_arg, parsed_arg) in typed_params.iter().zip(self.ast.mem.getn(lambda_arguments))
         {
             let name = typed_arg.name;
@@ -9285,7 +9255,7 @@ impl TypedProgram {
                 usages: vec![],
                 defn_span: parsed_arg.span,
             });
-            lambda_scope.add_variable(name, variable_id);
+            self.scopes.add_variable(lambda_scope_id, name, variable_id);
             param_variables.push(TypedFunctionParam { variable_id, span: parsed_arg.span })
         }
 
@@ -9344,9 +9314,9 @@ impl TypedProgram {
 
             let body_function_id = self.functions.next_id();
             {
-                let scope_mut = self.scopes.get_scope_mut(lambda_scope_id);
-                scope_mut.scope_type = ScopeType::FunctionScope;
-                scope_mut.owner_id = ScopeOwnerId::Function(body_function_id);
+                self.scopes.get_scope_mut(lambda_scope_id).scope_type = ScopeType::FunctionScope;
+                self.scopes
+                    .set_scope_owner_id(lambda_scope_id, ScopeOwnerId::Function(body_function_id));
             }
 
             for v in param_variables.iter() {
@@ -9598,12 +9568,8 @@ impl TypedProgram {
         if parsed_match.cases.is_empty() {
             return Err(make_error("switch expression with no arms", parsed_match.span));
         }
-        let match_scope_id = self.scopes.add_child_scope(
-            ctx.scope_id,
-            ScopeType::LexicalBlock,
-            ScopeOwnerId::None,
-            None,
-        );
+        let match_scope_id =
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
         let subject_expr =
             self.eval_expr(parsed_match.match_subject, ctx.with_no_expected_type())?;
 
@@ -9700,7 +9666,6 @@ impl TypedProgram {
                         match_scope_id,
                         ScopeType::MatchArm,
                         ScopeOwnerId::None,
-                        None,
                     );
                     let pattern_eval_ctx =
                         arms_ctx.with_scope(arm_scope_id).with_no_expected_type();
@@ -10556,7 +10521,7 @@ impl TypedProgram {
         // a few local variables in order to achieve this.
 
         let outer_for_expr_scope =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::ForExpr, ScopeOwnerId::None, None);
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::ForExpr, ScopeOwnerId::None);
 
         let zero_expr = self.synth_i64(0, for_expr.body_block.span);
         let index_variable = self.synth_variable_defn(
@@ -10833,12 +10798,8 @@ impl TypedProgram {
         if if_expr.is_static {
             return self.eval_static_if_expr(if_expr, ctx);
         }
-        let match_scope_id = self.scopes.add_child_scope(
-            ctx.scope_id,
-            ScopeType::LexicalBlock,
-            ScopeOwnerId::None,
-            None,
-        );
+        let match_scope_id =
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
 
         let condition_or_block = self.eval_matching_condition(
             if_expr.cond,
@@ -11139,12 +11100,8 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        let condition_scope = self.scopes.add_child_scope(
-            ctx.scope_id,
-            ScopeType::LexicalBlock,
-            ScopeOwnerId::None,
-            None,
-        );
+        let condition_scope =
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
         let condition_ctx = ctx.with_scope(condition_scope).with_no_expected_type();
         let matching_condition = match self.eval_matching_condition(expr_id, None, condition_ctx)? {
             MatchingConditionResult::MatchingCondition(mc) => mc,
@@ -12007,8 +11964,9 @@ impl TypedProgram {
                 Ok(CallResolution::OtherExpr(if_else_expr))
             }
             _ => {
-                let array_scope = self.scopes.get_scope(self.scopes.array_scope_id);
-                if let Some(method_id) = array_scope.find_function(call.name.name) {
+                if let Some(method_id) =
+                    self.scopes.find_function_local(self.scopes.array_scope_id, call.name.name)
+                {
                     Ok(CallResolution::MethodCall {
                         callee: Callee::make_static(method_id),
                         receiver,
@@ -12127,21 +12085,17 @@ impl TypedProgram {
         if let Some(companion_ns) =
             self.types.get_defn_info(base_for_method).and_then(|d| d.companion_namespace)
         {
-            let companion_scope = self.get_namespace_scope(companion_ns);
-            debug!(
-                "companion scope {}",
-                self.scope_id_to_string(self.namespaces.get_scope(companion_ns))
-            );
+            let companion_scope_id = self.namespaces.get_scope(companion_ns);
+            debug!("companion scope {}", self.scope_id_to_string(companion_scope_id));
             debug!(
                 "functions in companion scope for type {}: {:?}",
                 self.type_id_to_string(base_for_method),
-                companion_scope
-                    .functions
-                    .values()
-                    .map(|f| self.ident_str(self.functions.get(*f).name).to_string())
+                self.scopes
+                    .iter_scope_functions(companion_scope_id)
+                    .map(|(_, f)| self.ident_str(self.functions.get(f).name).to_string())
                     .join(", ")
             );
-            if let Some(method_id) = companion_scope.find_function(fn_name) {
+            if let Some(method_id) = self.scopes.find_function_local(companion_scope_id, fn_name) {
                 return Ok(CallResolution::MethodCall {
                     callee: Callee::make_static(method_id),
                     receiver: base_expr,
@@ -12169,7 +12123,9 @@ impl TypedProgram {
                 .join(", ")
         );
         for ability_id in abilities_with_function_name.clone().iter() {
-            let in_scope = self.scopes.is_ability_id_in_scope(ctx.scope_id, *ability_id);
+            let ability_name = self.abilities.get(*ability_id).name;
+            let in_scope =
+                self.scopes.is_ability_id_in_scope(ctx.scope_id, ability_name, *ability_id);
             if in_scope {
                 let ability_function_ref = self
                     .abilities
@@ -13872,7 +13828,6 @@ impl TypedProgram {
             generic_function_scope,
             ScopeType::FunctionScope,
             ScopeOwnerId::None,
-            None,
         );
 
         for nt in self.mem.getn(type_arguments) {
@@ -14010,10 +13965,17 @@ impl TypedProgram {
             .body
             .as_ref()
             .unwrap();
-        let typed_body = self.eval_expr(
-            parsed_body,
+        let ParsedExpr::Block(parsed_body_block) = *self.ast.exprs.get(parsed_body) else {
+            return failf!(
+                self.ast.exprs.get_span(parsed_body),
+                "[bug] went to specialized function but body expr is not a block"
+            );
+        };
+        let typed_body = self.eval_block(
+            &parsed_body_block,
             EvalExprContext::make(specialized_function_scope_id)
                 .with_expected_type(Some(specialized_return_type)),
+            true,
         )?;
 
         let body_type = self.exprs.get_type(typed_body);
@@ -14022,7 +13984,7 @@ impl TypedProgram {
         {
             return failf!(
                 self.get_span_responsible_for_expr_type(typed_body),
-                "[bug] Function body type mismatch: {}\n specialized signature is: {}",
+                "[bug] Function body type mismatch: {}\n [occurred in specialization; should not be possible]. signature is: {}",
                 msg,
                 self.type_id_to_string(specialized_function_type)
             );
@@ -14322,7 +14284,6 @@ impl TypedProgram {
                     ctx.scope_id,
                     ScopeType::LexicalBlock,
                     ScopeOwnerId::None,
-                    None,
                 );
 
                 // Make the binding variables unavailable in the else scope
@@ -14332,8 +14293,7 @@ impl TypedProgram {
                         let variable = self.variables.get(stmt.variable_id);
 
                         if !variable.is_user_hidden() {
-                            let else_scope = self.scopes.get_scope_mut(else_scope);
-                            else_scope.mask_variable(variable.name);
+                            self.scopes.mask_variable(else_scope, variable.name);
                         }
                     }
                 }
@@ -15288,7 +15248,6 @@ impl TypedProgram {
             parent_scope_id,
             ScopeType::AbilityDefn,
             ScopeOwnerId::None,
-            Some(ability_name),
         );
 
         for (arg_type, param) in
@@ -15327,10 +15286,7 @@ impl TypedProgram {
             },
             smallvec![],
         );
-        let _ = self
-            .scopes
-            .get_scope_mut(specialized_ability_scope)
-            .add_type(self_ident, new_self_type_id);
+        let _ = self.scopes.add_type(specialized_ability_scope, self_ident, new_self_type_id);
 
         let impl_params_handle = self.mem.pushn(&impl_params);
         let specialized_ability_id = self.abilities.add(TypedAbility {
@@ -15501,7 +15457,6 @@ impl TypedProgram {
             parent_scope_id,
             ScopeType::FunctionScope,
             ScopeOwnerId::None,
-            Some(name),
         );
 
         // Instantiate type arguments.
@@ -15562,10 +15517,9 @@ impl TypedProgram {
                 },
                 ability_constraint_signatures,
             );
-            let fn_scope = self_.scopes.get_scope_mut(fn_scope_id);
             let type_param = NameAndType { name: type_parameter.name, type_id: type_variable_id };
             type_params.push(type_param);
-            if !fn_scope.add_type(type_parameter.name, type_variable_id) {
+            if !self_.scopes.add_type(fn_scope_id, type_parameter.name, type_variable_id) {
                 return failf!(
                     type_parameter.span,
                     "Duplicate type variable name: {}",
@@ -15806,7 +15760,7 @@ impl TypedProgram {
             self_.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(function_id);
         }
         let param_variables_handle = self_.mem.list_to_handle(params);
-        let function_id = self_.add_function(TypedFunction {
+        let actual_function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
             params: param_variables_handle,
@@ -15828,6 +15782,7 @@ impl TypedProgram {
             body_failure: None,
             usages: vec![],
         });
+        debug_assert_eq!(actual_function_id, function_id);
 
         if resolvable_by_name {
             if !self_.scopes.add_function(parent_scope_id, ast_fn.name, function_id) {
@@ -15918,19 +15873,21 @@ impl TypedProgram {
                     eprintln!("Need clean inference");
                     self.ictx_push();
                 }
-                let block = self.eval_expr(
-                    block_ast,
-                    EvalExprContext::make(fn_scope_id)
-                        .with_expected_type(Some(return_type))
-                        // Why do we care to indicate if the function is generic?
-                        // Currently, its because we want to avoid running #static and #meta blocks
-                        // until the types and static values are provided
-                        // There are now of other implications, like we only want to do
-                        // lsp stuff in the generic pass, and not repeat it in every
-                        // specialization pass
-                        .with_is_generic_pass(is_generic),
-                )?;
+                let ParsedExpr::Block(block_itself) = self.ast.exprs.get(block_ast) else {
+                    return failf!(function_signature_span, "[bug] function bodies must be blocks");
+                };
+                let block_itself = *block_itself;
+                let eval_ctx = EvalExprContext::make(fn_scope_id)
+                    .with_expected_type(Some(return_type))
+                    // Why do we care to indicate if the function is generic?
+                    // Currently, its because we want to avoid running #static and #meta blocks
+                    // until the types and static values are provided
+                    // There are now of other implications, like we only want to do
+                    // lsp stuff in the generic pass, and not repeat it in every
+                    // specialization pass
+                    .with_is_generic_pass(is_generic);
 
+                let block = self.eval_block(&block_itself, eval_ctx, true)?;
                 if let Err(msg) =
                     self.check_types(return_type, self.exprs.get_type(block), fn_scope_id)
                 {
@@ -16255,12 +16212,8 @@ impl TypedProgram {
         }
         let parsed_ability = self.ast.get_ability(parsed_ability_id).clone();
         let parent_namespace_id = self.scopes.get_scope_owner(scope_id).as_namespace().unwrap();
-        let ability_scope_id = self.scopes.add_child_scope(
-            scope_id,
-            ScopeType::AbilityDefn,
-            ScopeOwnerId::None,
-            Some(parsed_ability.name),
-        );
+        let ability_scope_id =
+            self.scopes.add_child_scope(scope_id, ScopeType::AbilityDefn, ScopeOwnerId::None);
 
         let self_ident_id = self.ast.idents.b.self_;
         let mut ability_params: List<TypedAbilityParam, _> =
@@ -16275,7 +16228,7 @@ impl TypedProgram {
             },
             smallvec![],
         );
-        let _ = self.scopes.get_scope_mut(ability_scope_id).add_type(self_ident_id, self_type_id);
+        let _ = self.scopes.add_type(ability_scope_id, self_ident_id, self_type_id);
         for ability_param in self.ast.mem.getn(parsed_ability.params) {
             let mut ability_constraint_signatures: SV4<TypedAbilitySignature> = smallvec![];
             let mut predicate_functions = self.mem.new_list(0);
@@ -16316,11 +16269,7 @@ impl TypedProgram {
                 ability_constraint_signatures,
             );
 
-            if !self
-                .scopes
-                .get_scope_mut(ability_scope_id)
-                .add_type(ability_param.name, param_type_id)
-            {
+            if !self.scopes.add_type(ability_scope_id, ability_param.name, param_type_id) {
                 return failf!(
                     ability_param.span,
                     "Duplicate type variable: {}",
@@ -16352,8 +16301,7 @@ impl TypedProgram {
             parsed_id: ParsedId::Ability(parsed_ability_id),
         };
         let namespace_id = self.namespaces.add(ability_namespace);
-        let ns_added =
-            self.scopes.get_scope_mut(scope_id).add_namespace(parsed_ability.name, namespace_id);
+        let ns_added = self.scopes.add_namespace(scope_id, parsed_ability.name, namespace_id);
         if !ns_added {
             return failf!(
                 parsed_ability.span,
@@ -16375,8 +16323,7 @@ impl TypedProgram {
             kind,
         };
         let ability_id = self.abilities.add(typed_ability);
-        let added =
-            self.scopes.get_scope_mut(scope_id).add_ability(parsed_ability.name, ability_id);
+        let added = self.scopes.add_ability(scope_id, parsed_ability.name, ability_id);
         if !added {
             return failf!(
                 parsed_ability.span,
@@ -16466,7 +16413,7 @@ impl TypedProgram {
         let parsed_impl_functions = parsed_ability_impl.functions;
 
         let impl_scope_id =
-            self.scopes.add_child_scope(scope_id, ScopeType::AbilityImpl, ScopeOwnerId::None, None);
+            self.scopes.add_child_scope(scope_id, ScopeType::AbilityImpl, ScopeOwnerId::None);
 
         let mut blanket_type_params: List<NameAndType, _> =
             self.mem.new_list(parsed_ability_impl.generic_impl_params.len());
@@ -16499,11 +16446,7 @@ impl TypedProgram {
                 // The constraints need T to exist
                 smallvec![],
             );
-            if !self
-                .scopes
-                .get_scope_mut(impl_scope_id)
-                .add_type(blanket_impl_param.name, type_variable_id)
-            {
+            if !self.scopes.add_type(impl_scope_id, blanket_impl_param.name, type_variable_id) {
                 return failf!(
                     blanket_impl_param.span,
                     "Duplicate blanket impl parameter name: {}",
@@ -16516,7 +16459,6 @@ impl TypedProgram {
                     impl_scope_id,
                     ScopeType::AbilityImpl,
                     ScopeOwnerId::None,
-                    None,
                 );
                 for constraint in self.ast.mem.getn(blanket_impl_param.constraints) {
                     match constraint {
@@ -16570,24 +16512,14 @@ impl TypedProgram {
         let ability = self.abilities.get(ability_id).clone();
         let ability_name = ability.name;
         let ability_self_type = ability.self_type_id;
-        let impl_scope_name = format_ident!(
-            self,
-            "{}_impl_{}",
-            self.ident_str(ability_name),
-            self.type_id_to_string(impl_self_type)
-        );
-        self.scopes.get_scope_mut(impl_scope_id).name = Some(impl_scope_name);
         // Bind 'Self' = target_type
         // Discarded because we just made this scope
-        let _ = self
-            .scopes
-            .get_scope_mut(impl_scope_id)
-            .add_type(self.ast.idents.b.self_, impl_self_type);
+        let _ = self.scopes.add_type(impl_scope_id, self.ast.idents.b.self_, impl_self_type);
 
         // We also need to bind any ability parameters that this
         // ability is already specialized on; they aren't in our fresh scope
         for argument in self.mem.getn(ability.kind.arguments()) {
-            if !self.scopes.get_scope_mut(impl_scope_id).add_type(argument.name, argument.type_id) {
+            if !self.scopes.add_type(impl_scope_id, argument.name, argument.type_id) {
                 return failf!(
                     span,
                     "Type parameter name {} is already used by an ability parameter",
@@ -16632,8 +16564,7 @@ impl TypedProgram {
                 self.ident_str(impl_param.name),
                 self.type_id_to_string(arg_type)
             );
-            let added =
-                self.scopes.get_scope_mut(impl_scope_id).add_type(impl_param.name, arg_type);
+            let added = self.scopes.add_type(impl_scope_id, impl_param.name, arg_type);
             if !added {
                 return failf!(
                     matching_arg.span,
@@ -16939,12 +16870,10 @@ impl TypedProgram {
             }
             Ok(s) => s,
         };
-        let scope_to_search = self.scopes.get_scope(scope_id_to_search);
-
         debug!(
             "Searching scope for useable symbol: {}, Functions:\n{:?}",
             self.scope_name_to_string(scope_id_to_search),
-            scope_to_search.functions.iter().collect::<Vec<_>>()
+            self.scopes.iter_scope_functions(scope_id_to_search).collect::<Vec<_>>()
         );
 
         // TODO(MODULES): Validate modules cannot use something from a module they don't depend on
@@ -16955,13 +16884,13 @@ impl TypedProgram {
         // we resolve namespaced identifiers :O
 
         let mut found_symbols: SV4<_> = smallvec![];
-        if let Some(function_id) = scope_to_search.find_function(name.name) {
+        if let Some(function_id) = self.scopes.find_function_local(scope_id_to_search, name.name) {
             found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Function(function_id),
             });
         }
-        if let Some(type_id) = scope_to_search.find_type(name.name) {
+        if let Some(type_id) = self.scopes.find_type_local(scope_id_to_search, name.name) {
             let companion_namespace = self.types.get_companion_namespace(type_id);
             found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
@@ -16970,7 +16899,9 @@ impl TypedProgram {
         } else
         // This 'else' is load-bearing since we don't actually remove the pending definitions
         // from the scopes
-        if let Some(pending_type) = scope_to_search.find_pending_type(name.name) {
+        if let Some(pending_type) =
+            self.scopes.find_pending_type_local(scope_id_to_search, name.name)
+        {
             let type_id = self.eval_type_defn(pending_type.parsed_id, pending_type.scope_id)?;
             let companion_namespace = self.types.get_companion_namespace(type_id);
             found_symbols.push(UseableSymbol {
@@ -16978,23 +16909,24 @@ impl TypedProgram {
                 id: UseableSymbolId::Type { type_id, companion_namespace },
             })
         }
-        let scope_to_search = self.scopes.get_scope(scope_id_to_search);
-        if let Some(variable_id) =
-            scope_to_search.find_variable(name.name).and_then(|vis| vis.variable_id())
+        if let Some(variable_id) = self
+            .scopes
+            .find_variable_local(scope_id_to_search, name.name)
+            .and_then(|vis| vis.variable_id())
         {
             found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Global(variable_id),
             })
         }
-        if let Some(ability_id) = scope_to_search.find_ability(name.name) {
+        if let Some(ability_id) = self.scopes.find_ability_local(scope_id_to_search, name.name) {
             let namespace_id = self.abilities.get(ability_id).namespace_id;
             found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Ability(ability_id, namespace_id),
             })
         }
-        if let Some(ns_id) = scope_to_search.find_namespace(name.name) {
+        if let Some(ns_id) = self.scopes.find_namespace_local(scope_id_to_search, name.name) {
             found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Namespace(ns_id),
@@ -17026,10 +16958,11 @@ impl TypedProgram {
                         scope_id: namespace_scope_id,
                         parsed_id: type_defn_id,
                     };
-                    let added = self
-                        .scopes
-                        .get_scope_mut(namespace_scope_id)
-                        .add_pending_type(parsed_type_defn.name, pending_defn);
+                    let added = self.scopes.add_pending_type(
+                        namespace_scope_id,
+                        parsed_type_defn.name,
+                        pending_defn,
+                    );
                     if !added {
                         self.report(errf!(
                             parsed_type_defn.span,
@@ -17046,10 +16979,11 @@ impl TypedProgram {
                     let parsed_ability_defn = self.ast.get_ability(parsed_ability_id);
                     let name = parsed_ability_defn.name;
                     let span = parsed_ability_defn.span;
-                    let added = self
-                        .scopes
-                        .get_scope_mut(namespace_scope_id)
-                        .add_pending_ability_defn(name, parsed_ability_id);
+                    let added = self.scopes.add_pending_ability_defn(
+                        namespace_scope_id,
+                        name,
+                        parsed_ability_id,
+                    );
                     if !added {
                         self.report(errf!(span, "Ability {} exists", self.ident_str(name)));
                     }
@@ -17149,12 +17083,8 @@ impl TypedProgram {
         let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
         let name = ast_namespace.name;
 
-        let ns_scope_id = self.scopes.add_child_scope(
-            parent_scope_id,
-            ScopeType::Namespace,
-            ScopeOwnerId::None,
-            Some(name),
-        );
+        let ns_scope_id =
+            self.scopes.add_child_scope(parent_scope_id, ScopeType::Namespace, ScopeOwnerId::None);
         let parent_ns_id = self
             .scopes
             .get_scope_owner(parent_scope_id)
@@ -17210,8 +17140,7 @@ impl TypedProgram {
         let namespace_id = self.namespaces.add(namespace);
         self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
 
-        let parent_scope = self.scopes.get_scope_mut(parent_scope_id);
-        if !parent_scope.add_namespace(name, namespace_id) {
+        if !self.scopes.add_namespace(parent_scope_id, name, namespace_id) {
             return failf!(
                 ast_namespace.span,
                 "Namespace name {} is taken",
@@ -17231,8 +17160,8 @@ impl TypedProgram {
         let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
         let name_span = ast_namespace.name_span;
 
-        let direct_parent = self.scopes.get_scope(parent_scope);
-        let namespace_id = if let Some(existing) = direct_parent.find_namespace(ast_namespace.name)
+        let namespace_id = if let Some(existing) =
+            self.scopes.find_namespace_local(parent_scope, ast_namespace.name)
         {
             // Namespace extension
             // Map this separate namespace AST node to the same semantic namespace

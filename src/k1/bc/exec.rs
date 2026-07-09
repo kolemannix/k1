@@ -443,6 +443,8 @@ fn exec_loop(
                 advance!(Opcode::RetGet);
             }
             Opcode::RetStore => {
+                // nocommit this is far too slow for the bc layer; we should just know the size by
+                // now
                 let t = ScalarType::from_tag(header_a(h) as u32);
                 let addr = read_src!(operand!(0));
                 store_scalar(t, addr.as_ptr(), ret_reg);

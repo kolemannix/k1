@@ -17,8 +17,8 @@
 //!   append base, splice into `k1.bc.code`, and patch any recursion fixups
 //!   that were waiting on this unit's `code_start`.
 
-use fxhash::FxHashMap;
 use crate::debug;
+use fxhash::FxHashMap;
 
 use crate::failf;
 use crate::ir::{self, BlockId, DataInst, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId};

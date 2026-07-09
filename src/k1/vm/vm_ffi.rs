@@ -1,8 +1,8 @@
 use std::ffi::c_void;
 
+use crate::debug;
 use libffi::raw::ffi_cif;
 use libffi::{low::*, raw};
-use crate::debug;
 
 use crate::errf;
 use crate::ir::{self, PhysicalFunctionType, ProgramIr};
@@ -124,10 +124,8 @@ pub(crate) fn handle_ffi_call_resolved(
                 let ret_size = (*(ffi_handle.cif.rtype)).size;
                 let ret_align = (*(ffi_handle.cif.rtype)).alignment;
                 debug!("result space is {} {}", ret_size, ret_align);
-                vm.stack.push_layout_uninit(Layout {
-                    size: ret_size as u32,
-                    align: ret_align as u32,
-                })
+                vm.stack
+                    .push_layout_uninit(Layout { size: ret_size as u32, align: ret_align as u32 })
             },
         }
     } else {
@@ -317,11 +315,7 @@ fn make_struct_ffi_type(
     element_ptrs.push(core::ptr::null_mut());
 
     // size and alignment get filled in my ffi_prep_cif
-    let my_struct: ffi_type = ffi_type {
-        size,
-        alignment,
-        type_: type_tag::STRUCT,
-        elements: element_ptrs.as_mut_ptr(),
-    };
+    let my_struct: ffi_type =
+        ffi_type { size, alignment, type_: type_tag::STRUCT, elements: element_ptrs.as_mut_ptr() };
     my_struct
 }

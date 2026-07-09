@@ -4,10 +4,10 @@
 use std::ffi::c_void;
 use std::num::NonZeroU32;
 
+use crate::debug;
 use ahash::HashMapExt;
 use colored::Colorize;
 use fxhash::FxHashMap;
-use crate::debug;
 
 pub(crate) mod vm_ffi;
 #[cfg(test)]
@@ -2717,7 +2717,12 @@ pub(crate) fn builtin_compiler_message(
     Ok(())
 }
 
-pub(crate) fn report_execution_messages(k1: &mut TypedProgram, vm: &Vm, span: SpanId, _exit_code: i32) {
+pub(crate) fn report_execution_messages(
+    k1: &mut TypedProgram,
+    vm: &Vm,
+    span: SpanId,
+    _exit_code: i32,
+) {
     if vm.compiler_messages.is_empty() {
         return;
     }

@@ -5,11 +5,7 @@ use ahash::HashMapExt;
 use fxhash::FxHashMap;
 use smallvec::SmallVec;
 
-use std::{
-    collections::hash_map::{self, Entry},
-    fmt::Display,
-    num::NonZeroU32,
-};
+use std::{collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
 use crate::{
     SV4, errf,
@@ -121,12 +117,60 @@ pub struct ScopeDefers {
     pub deferred_exprs: SV4<ParsedExprId>,
 }
 
+/// A packed (scope, symbol) key for the global per-kind symbol maps
+type ScopeKey = u64;
+
+#[inline]
+fn skey(scope: ScopeId, sym: u32) -> ScopeKey {
+    ((scope.as_u32() as u64) << 32) | sym as u64
+}
+
+#[inline]
+fn skey_name(scope: ScopeId, name: StringId) -> ScopeKey {
+    skey(scope, name.as_usize() as u32)
+}
+
+#[inline]
+fn skey_scope_part(key: ScopeKey) -> u32 {
+    (key >> 32) as u32
+}
+
+#[inline]
+fn skey_name_part(key: ScopeKey) -> StringId {
+    StringId::from_usize((key & 0xFFFF_FFFF) as usize)
+}
+
+/// Bits for `Scope::kinds`: which symbol kinds a scope has at least one entry
+/// of. Chain walks test the bit before probing the global maps, so scopes that
+/// contain nothing of a kind (most of them) cost no hashing at all.
+pub mod kinds {
+    pub const CONTEXT_VARIABLES: u8 = 1 << 0;
+    pub const FUNCTIONS: u8 = 1 << 1;
+    pub const NAMESPACES: u8 = 1 << 2;
+    pub const TYPES: u8 = 1 << 3;
+    pub const ABILITIES: u8 = 1 << 4;
+    pub const PENDING_TYPES: u8 = 1 << 5;
+    pub const PENDING_ABILITIES: u8 = 1 << 6;
+}
+
 pub struct Scopes {
     /// SCOPES SoA POOLS BEGIN
     pub scopes: VPool<Scope, ScopeId>,
     /// The actual function that a scope appears within is a very important thing to know
     pub enclosing_functions: VPool<ScopeEnclosingFunctions, ScopeId>,
     /// SCOPES SoA POOLS END
+    // Scope contents (except variables, which are hot enough that per-scope
+    // locality wins) live here, keyed by (scope, symbol), so that its cheap
+    // to create a scope; most scopes don't contain most kinds; they are sparse.
+    // `Scope::kinds` records which maps can hit for a given scope, saving
+    // hashmap lookups; since the maps are now bigger
+    context_variables_by_type: FxHashMap<ScopeKey, VariableId>,
+    functions: FxHashMap<ScopeKey, FunctionId>,
+    namespaces: FxHashMap<ScopeKey, NamespaceId>,
+    types: FxHashMap<ScopeKey, TypeId>,
+    abilities: FxHashMap<ScopeKey, AbilityId>,
+    pending_type_defns: FxHashMap<ScopeKey, TypePendingDefinition>,
+    pending_ability_defns: FxHashMap<ScopeKey, ParsedAbilityId>,
     pub lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
     pub loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
     pub block_defers: FxHashMap<ScopeId, ScopeDefers>,
@@ -141,11 +185,18 @@ pub struct Scopes {
 
 impl Scopes {
     pub const ROOT_SCOPE_ID: ScopeId = ScopeId(NonZeroU32::new(1).unwrap());
-    pub fn make(root_ident: StringId, count_hint: usize) -> Self {
-        let root_scope = Scope::make(ScopeType::Namespace, ScopeOwnerId::None, Some(root_ident));
+    pub fn make() -> Self {
+        let root_scope = Scope::make(ScopeType::Namespace, ScopeOwnerId::None);
         let mut scopes = Scopes {
-            scopes: VPool::make_with_hint("scopes", count_hint),
-            enclosing_functions: VPool::make_with_hint("scope_enclosing_functions", count_hint),
+            scopes: VPool::make("scopes"),
+            enclosing_functions: VPool::make("scope_enclosing_functions"),
+            context_variables_by_type: FxHashMap::new(),
+            functions: FxHashMap::new(),
+            namespaces: FxHashMap::new(),
+            types: FxHashMap::new(),
+            abilities: FxHashMap::new(),
+            pending_type_defns: FxHashMap::new(),
+            pending_ability_defns: FxHashMap::new(),
             lambda_info: FxHashMap::new(),
             loop_info: FxHashMap::new(),
             block_defers: FxHashMap::new(),
@@ -184,10 +235,9 @@ impl Scopes {
         sibling_scope_id: ScopeId,
         scope_type: ScopeType,
         scope_owner_id: ScopeOwnerId,
-        name: Option<StringId>,
     ) -> ScopeId {
         let parent = self.get_scope(sibling_scope_id).parent.unwrap();
-        self.add_child_scope(parent, scope_type, scope_owner_id, name)
+        self.add_child_scope(parent, scope_type, scope_owner_id)
     }
 
     pub fn add_child_scope(
@@ -195,15 +245,18 @@ impl Scopes {
         parent_scope_id: ScopeId,
         scope_type: ScopeType,
         scope_owner_id: ScopeOwnerId,
-        name: Option<StringId>,
     ) -> ScopeId {
-        let mut scope = Scope::make(scope_type, scope_owner_id, name);
+        let mut scope = Scope::make(scope_type, scope_owner_id);
         scope.parent = Some(parent_scope_id);
 
         let id = self.add(scope, ScopeEnclosingFunctions::empty());
 
+        // nocommit: I wonder if this is wasted work; we do it for _every single scope_.
+        // Yes we want it cached, but this is probably bad, and its extra bookkeeping = bug surface
+        // area
         let enclosing_lambda_scope = self.nearest_parent_lambda(id);
         let enclosing_function = self.nearest_parent_function(id);
+
         *self.enclosing_functions.get_mut(id) = ScopeEnclosingFunctions {
             lambda_scope: enclosing_lambda_scope,
             function: enclosing_function,
@@ -226,6 +279,14 @@ impl Scopes {
 
     pub fn set_scope_owner_id(&mut self, id: ScopeId, owner_id: ScopeOwnerId) {
         self.get_scope_mut(id).owner_id = owner_id;
+        // The enclosing-function info is derived from owners at scope
+        // creation, but function scopes get their owner assigned only after
+        // creation, so refresh it. This matters since function bodies are
+        // evaluated directly in the function's scope (no separate body scope).
+        *self.enclosing_functions.get_mut(id) = ScopeEnclosingFunctions {
+            lambda_scope: self.nearest_parent_lambda(id),
+            function: self.nearest_parent_function(id),
+        };
     }
 
     pub fn get_scope_owner(&self, scope_id: ScopeId) -> ScopeOwnerId {
@@ -233,41 +294,42 @@ impl Scopes {
     }
 
     pub fn find_namespace(&self, scope: ScopeId, ident: StringId) -> Option<NamespaceId> {
-        let scope = self.get_scope(scope);
-        if let ns @ Some(_r) = scope.find_namespace(ident) {
-            return ns;
-        }
-        match scope.parent {
-            Some(parent) => self.find_namespace(parent, ident),
-            None => None,
-        }
+        self.walk_chain(scope, kinds::NAMESPACES, |sid| {
+            self.namespaces.get(&skey_name(sid, ident)).copied()
+        })
+        .map(|(v, _)| v)
+    }
+
+    pub fn find_namespace_local(&self, scope: ScopeId, ident: StringId) -> Option<NamespaceId> {
+        self.namespaces.get(&skey_name(scope, ident)).copied()
     }
 
     pub fn find_ability(&self, scope_id: ScopeId, name: StringId) -> Option<AbilityId> {
-        let scope = self.get_scope(scope_id);
-        if let Some(ability_id) = scope.find_ability(name) {
-            return Some(ability_id);
-        }
-        match scope.parent {
-            Some(parent_scope_id) => self.find_ability(parent_scope_id, name),
-            None => None,
-        }
+        self.walk_chain(scope_id, kinds::ABILITIES, |sid| {
+            self.abilities.get(&skey_name(sid, name)).copied()
+        })
+        .map(|(v, _)| v)
     }
 
-    pub fn is_ability_id_in_scope(&self, scope_id: ScopeId, target_ability_id: AbilityId) -> bool {
-        let scope = self.get_scope(scope_id);
-        for ability_id in scope.abilities.values() {
-            if *ability_id == target_ability_id {
-                return true;
-            }
-        }
+    pub fn find_ability_local(&self, scope_id: ScopeId, name: StringId) -> Option<AbilityId> {
+        self.abilities.get(&skey_name(scope_id, name)).copied()
+    }
 
-        match scope.parent {
-            Some(parent_scope_id) => {
-                self.is_ability_id_in_scope(parent_scope_id, target_ability_id)
+    /// Note: name-based, so an ability brought into scope only under a `use`
+    /// alias won't be found by its canonical name
+    pub fn is_ability_id_in_scope(
+        &self,
+        scope_id: ScopeId,
+        name: StringId,
+        target_ability_id: AbilityId,
+    ) -> bool {
+        self.walk_chain(scope_id, kinds::ABILITIES, |sid| {
+            match self.abilities.get(&skey_name(sid, name)) {
+                Some(found) if *found == target_ability_id => Some(()),
+                _ => None,
             }
-            None => false,
-        }
+        })
+        .is_some()
     }
 
     pub fn find_context_variable_by_type(
@@ -278,13 +340,23 @@ impl Scopes {
         let mut scope_id = scope;
         loop {
             let scope = self.get_scope(scope_id);
-            if let Some(v) = scope.find_context_variable_by_type(type_id) {
-                return Some(v);
+            if scope.kinds & kinds::CONTEXT_VARIABLES != 0
+                && let Some(v) =
+                    self.context_variables_by_type.get(&skey(scope_id, type_id.as_u32()))
+            {
+                return Some(*v);
             }
-            match scope.parent {
-                Some(parent) => scope_id = parent,
-                None => return None,
+            // Context variables are only ever function params or `let context`s
+            // in function bodies -- never globals -- so once the walk climbs
+            // out of function-land into a namespace, there's nothing left to
+            // find. (Note some paths still evaluate a function body in its own
+            // FunctionScope *below* the declaration scope holding the params,
+            // so we cannot stop at the first FunctionScope yet; tighten this
+            // to `== FunctionScope` once every body is one scope.)
+            if scope.scope_type == ScopeType::Namespace {
+                return None;
             }
+            scope_id = scope.parent?;
         }
     }
 
@@ -293,25 +365,55 @@ impl Scopes {
         scope_id: ScopeId,
         ident: StringId,
     ) -> Option<(VariableId, ScopeId)> {
-        let scope = self.get_scope(scope_id);
-        match scope.find_variable(ident) {
-            Some(VariableInScope::Defined(id)) => Some((id, scope_id)),
-            Some(VariableInScope::Masked) => None,
-            None => match scope.parent {
-                Some(parent) => self.find_variable(parent, ident),
-                None => None,
-            },
+        let mut scope_id = scope_id;
+        loop {
+            let scope = self.get_scope(scope_id);
+            match scope.variables.get(&ident) {
+                Some(VariableInScope::Defined(id)) => return Some((*id, scope_id)),
+                Some(VariableInScope::Masked) => return None,
+                None => {}
+            }
+            scope_id = scope.parent?;
         }
     }
 
+    pub fn find_variable_local(
+        &self,
+        scope_id: ScopeId,
+        ident: StringId,
+    ) -> Option<VariableInScope> {
+        self.get_scope(scope_id).variables.get(&ident).copied()
+    }
+
     pub fn find_function(&self, scope: ScopeId, ident: StringId) -> Option<FunctionId> {
-        let scope = self.get_scope(scope);
-        if let Some(function_id) = scope.find_function(ident) {
-            return Some(function_id);
-        }
-        match scope.parent {
-            Some(parent) => self.find_function(parent, ident),
-            None => None,
+        self.walk_chain(scope, kinds::FUNCTIONS, |sid| {
+            self.functions.get(&skey_name(sid, ident)).copied()
+        })
+        .map(|(v, _)| v)
+    }
+
+    pub fn find_function_local(&self, scope: ScopeId, ident: StringId) -> Option<FunctionId> {
+        self.functions.get(&skey_name(scope, ident)).copied()
+    }
+
+    /// Walk the scope chain from `scope_id` to the root, probing scopes whose
+    /// `kinds` contains `kind` with `f`. Returns the first hit and its scope.
+    #[inline]
+    fn walk_chain<V>(
+        &self,
+        scope_id: ScopeId,
+        kind: u8,
+        f: impl Fn(ScopeId) -> Option<V>,
+    ) -> Option<(V, ScopeId)> {
+        let mut scope_id = scope_id;
+        loop {
+            let scope = self.get_scope(scope_id);
+            if scope.kinds & kind != 0
+                && let Some(v) = f(scope_id)
+            {
+                return Some((v, scope_id));
+            }
+            scope_id = scope.parent?;
         }
     }
 
@@ -322,38 +424,107 @@ impl Scopes {
         identifier: StringId,
         function_id: FunctionId,
     ) -> bool {
-        self.get_scope_mut(scope_id).add_function(identifier, function_id)
+        let added = match self.functions.entry(skey_name(scope_id, identifier)) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(e) => {
+                e.insert(function_id);
+                true
+            }
+        };
+        if added {
+            self.get_scope_mut(scope_id).kinds |= kinds::FUNCTIONS;
+        }
+        added
     }
 
     #[must_use]
     pub fn add_type(&mut self, scope_id: ScopeId, ident: StringId, ty: TypeId) -> bool {
-        self.get_scope_mut(scope_id).add_type(ident, ty)
+        let added = match self.types.entry(skey_name(scope_id, ident)) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(e) => {
+                e.insert(ty);
+                true
+            }
+        };
+        if added {
+            self.get_scope_mut(scope_id).kinds |= kinds::TYPES;
+        }
+        added
+    }
+
+    pub fn overwrite_type(&mut self, scope_id: ScopeId, ident: StringId, ty: TypeId) -> bool {
+        self.get_scope_mut(scope_id).kinds |= kinds::TYPES;
+        self.types.insert(skey_name(scope_id, ident), ty).is_some()
     }
 
     pub fn find_type(&self, scope_id: ScopeId, ident: StringId) -> Option<(TypeId, ScopeId)> {
-        let scope = self.get_scope(scope_id);
-        if let v @ Some(_r) = scope.find_type(ident) {
-            return v.map(|v| (v, scope_id));
-        }
-        match scope.parent {
-            Some(parent) => self.find_type(parent, ident),
-            None => None,
-        }
+        self.walk_chain(scope_id, kinds::TYPES, |sid| {
+            self.types.get(&skey_name(sid, ident)).copied()
+        })
     }
 
-    pub fn find_pending_ability(
-        &self,
+    pub fn find_type_local(&self, scope_id: ScopeId, ident: StringId) -> Option<TypeId> {
+        self.types.get(&skey_name(scope_id, ident)).copied()
+    }
+
+    #[must_use]
+    pub fn add_namespace(
+        &mut self,
         scope_id: ScopeId,
         ident: StringId,
-    ) -> Option<(ParsedAbilityId, ScopeId)> {
-        let scope = self.get_scope(scope_id);
-        if let Some(defn) = scope.find_pending_ability(ident) {
-            return Some((defn, scope_id));
+        namespace_id: NamespaceId,
+    ) -> bool {
+        let added = match self.namespaces.entry(skey_name(scope_id, ident)) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(e) => {
+                e.insert(namespace_id);
+                true
+            }
+        };
+        if added {
+            self.get_scope_mut(scope_id).kinds |= kinds::NAMESPACES;
         }
-        match scope.parent {
-            Some(parent) => self.find_pending_ability(parent, ident),
-            None => None,
+        added
+    }
+
+    #[must_use]
+    pub fn add_ability(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        ability_id: AbilityId,
+    ) -> bool {
+        let added = match self.abilities.entry(skey_name(scope_id, ident)) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(e) => {
+                e.insert(ability_id);
+                true
+            }
+        };
+        if added {
+            self.get_scope_mut(scope_id).kinds |= kinds::ABILITIES;
         }
+        added
+    }
+
+    #[must_use]
+    pub fn add_pending_type(
+        &mut self,
+        scope_id: ScopeId,
+        name: StringId,
+        pending_type: TypePendingDefinition,
+    ) -> bool {
+        let added = match self.pending_type_defns.entry(skey_name(scope_id, name)) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(e) => {
+                e.insert(pending_type);
+                true
+            }
+        };
+        if added {
+            self.get_scope_mut(scope_id).kinds |= kinds::PENDING_TYPES;
+        }
+        added
     }
 
     pub fn find_pending_type(
@@ -361,14 +532,96 @@ impl Scopes {
         scope_id: ScopeId,
         name: StringId,
     ) -> Option<(TypePendingDefinition, ScopeId)> {
-        let scope = self.get_scope(scope_id);
-        if let Some(defn) = scope.find_pending_type(name) {
-            return Some((defn, scope_id));
+        self.walk_chain(scope_id, kinds::PENDING_TYPES, |sid| {
+            self.pending_type_defns.get(&skey_name(sid, name)).copied()
+        })
+    }
+
+    pub fn find_pending_type_local(
+        &self,
+        scope_id: ScopeId,
+        name: StringId,
+    ) -> Option<TypePendingDefinition> {
+        self.pending_type_defns.get(&skey_name(scope_id, name)).copied()
+    }
+
+    #[must_use]
+    pub fn add_pending_ability_defn(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        parsed_defn_id: ParsedAbilityId,
+    ) -> bool {
+        let added = match self.pending_ability_defns.entry(skey_name(scope_id, ident)) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(e) => {
+                e.insert(parsed_defn_id);
+                true
+            }
+        };
+        if added {
+            self.get_scope_mut(scope_id).kinds |= kinds::PENDING_ABILITIES;
         }
-        match scope.parent {
-            Some(parent) => self.find_pending_type(parent, name),
-            None => None,
-        }
+        added
+    }
+
+    pub fn remove_pending_ability_defn(&mut self, scope_id: ScopeId, ident: StringId) -> bool {
+        // Note: we leave the PENDING_ABILITIES kind bit set; it's a hint that
+        // the map *may* hit, not a guarantee
+        self.pending_ability_defns.remove(&skey_name(scope_id, ident)).is_some()
+    }
+
+    pub fn find_pending_ability(
+        &self,
+        scope_id: ScopeId,
+        ident: StringId,
+    ) -> Option<(ParsedAbilityId, ScopeId)> {
+        self.walk_chain(scope_id, kinds::PENDING_ABILITIES, |sid| {
+            self.pending_ability_defns.get(&skey_name(sid, ident)).copied()
+        })
+    }
+
+    /// Iterate the symbols of one kind defined directly in `scope_id`.
+    /// A filtered scan of the whole map: for debugging/dumps and cold paths only.
+    fn iter_scope_map<V: Copy>(
+        map: &FxHashMap<ScopeKey, V>,
+        scope_id: ScopeId,
+    ) -> impl Iterator<Item = (StringId, V)> + '_ {
+        map.iter().filter_map(move |(k, v)| {
+            if skey_scope_part(*k) == scope_id.as_u32() {
+                Some((skey_name_part(*k), *v))
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn iter_scope_variables(
+        &self,
+        scope_id: ScopeId,
+    ) -> impl Iterator<Item = (StringId, VariableInScope)> + '_ {
+        self.get_scope(scope_id).variables.iter().map(|(k, v)| (*k, *v))
+    }
+
+    pub fn iter_scope_functions(
+        &self,
+        scope_id: ScopeId,
+    ) -> impl Iterator<Item = (StringId, FunctionId)> + '_ {
+        Self::iter_scope_map(&self.functions, scope_id)
+    }
+
+    pub fn iter_scope_types(
+        &self,
+        scope_id: ScopeId,
+    ) -> impl Iterator<Item = (StringId, TypeId)> + '_ {
+        Self::iter_scope_map(&self.types, scope_id)
+    }
+
+    pub fn iter_scope_namespaces(
+        &self,
+        scope_id: ScopeId,
+    ) -> impl Iterator<Item = (StringId, NamespaceId)> + '_ {
+        Self::iter_scope_map(&self.namespaces, scope_id)
     }
 
     pub fn scope_has_ancestor(&self, scope_id: ScopeId, ancestor: ScopeId) -> bool {
@@ -399,6 +652,8 @@ impl Scopes {
     pub fn nearest_parent_function(&self, calling_scope: ScopeId) -> Option<FunctionId> {
         let scope = self.get_scope(calling_scope);
         match scope.owner_id {
+            // We can stop searching once we find an ability or namespace scope; a function won't ever appear above them
+            ScopeOwnerId::Ability(_) | ScopeOwnerId::Namespace(_) => None,
             ScopeOwnerId::Function(fn_id) => Some(fn_id),
             _ => match scope.parent {
                 Some(parent) => self.nearest_parent_function(parent),
@@ -410,9 +665,14 @@ impl Scopes {
     fn nearest_parent_lambda(&self, scope_id: ScopeId) -> Option<ScopeId> {
         let scope = self.get_scope(scope_id);
         match scope.scope_type {
+            // We can stop searching once we find an ability or namespace scope; a lambda won't ever appear above them
+            ScopeType::AbilityDefn
+            | ScopeType::AbilityImpl
+            | ScopeType::TypeDefn
+            | ScopeType::Namespace => None,
             ScopeType::LambdaScope => Some(scope_id),
             // We can stop searching once we find a function scope; a lambda won't ever appear
-            // outside of a function! (And we don't do locally defined named functions
+            // outside of a function! (And we don't do locally defined named functions)
             ScopeType::FunctionScope => None,
             _ => match scope.parent {
                 Some(parent) => self.nearest_parent_lambda(parent),
@@ -427,19 +687,34 @@ impl Scopes {
         ident: StringId,
         variable_id: VariableId,
     ) -> bool {
-        let scope = self.get_scope_mut(scope_id);
-        scope.add_variable(ident, variable_id)
+        // This accomplishes shadowing by overwriting the name in the scope.
+        // I think this is ok because the variable itself (by variable id)
+        // is not lost, in case we wanted to do some analysis.
+        // Still, might need to mark it shadowed explicitly?
+        self.get_scope_mut(scope_id)
+            .variables
+            .insert(ident, VariableInScope::Defined(variable_id))
+            .is_none()
+    }
+
+    pub fn mask_variable(&mut self, scope_id: ScopeId, ident: StringId) {
+        self.get_scope_mut(scope_id).variables.insert(ident, VariableInScope::Masked);
     }
 
     pub fn add_context_variable(
         &mut self,
-        scope: ScopeId,
+        scope_id: ScopeId,
         ident: StringId,
         variable_id: VariableId,
         type_id: TypeId,
     ) -> bool {
-        let scope = self.get_scope_mut(scope);
-        scope.add_context_variable(ident, variable_id, type_id)
+        match self.context_variables_by_type.entry(skey(scope_id, type_id.as_u32())) {
+            Entry::Occupied(_) => return false,
+            Entry::Vacant(e) => e.insert(variable_id),
+        };
+        self.get_scope_mut(scope_id).kinds |= kinds::CONTEXT_VARIABLES;
+        self.add_variable(scope_id, ident, variable_id);
+        true
     }
 
     pub fn add_use_binding(
@@ -460,21 +735,17 @@ impl Scopes {
                 // Discard because 'use's should shadow
                 let _ = self.add_type(scope_id, name_to_use, type_id);
                 if let Some(companion_namespace) = companion_namespace {
-                    let _ = self
-                        .get_scope_mut(scope_id)
-                        .add_namespace(name_to_use, companion_namespace);
+                    let _ = self.add_namespace(scope_id, name_to_use, companion_namespace);
                 }
             }
             UseableSymbolId::Namespace(ns_id) => {
-                let s = self.get_scope_mut(scope_id);
                 // Discard because 'use's should shadow
-                let _ = s.add_namespace(name_to_use, ns_id);
+                let _ = self.add_namespace(scope_id, name_to_use, ns_id);
             }
             UseableSymbolId::Ability(ability_id, namespace_id) => {
-                let s = self.get_scope_mut(scope_id);
                 // Discard because 'use's should shadow
-                let _ = s.add_ability(name_to_use, ability_id);
-                let _ = s.add_namespace(name_to_use, namespace_id);
+                let _ = self.add_ability(scope_id, name_to_use, ability_id);
+                let _ = self.add_namespace(scope_id, name_to_use, namespace_id);
             }
         }
     }
@@ -541,7 +812,7 @@ impl TypedProgram {
             Ok(self.scopes.find_variable(scope, name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope, name)?;
-            match self.scopes.get_scope(scope_to_search).find_variable(name.name) {
+            match self.scopes.find_variable_local(scope_to_search, name.name) {
                 None => Ok(None),
                 Some(VariableInScope::Defined(id)) => Ok(Some((id, scope_to_search))),
                 Some(VariableInScope::Masked) => Ok(None),
@@ -560,7 +831,7 @@ impl TypedProgram {
             Ok(self.scopes.find_function(scope, name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope, name)?;
-            Ok(self.scopes.get_scope(scope_to_search).find_function(name.name))
+            Ok(self.scopes.find_function_local(scope_to_search, name.name))
         }
     }
 
@@ -575,10 +846,25 @@ impl TypedProgram {
             Ok(self.scopes.find_type(scope_id, type_name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope_id, type_name)?;
-            let found_type = self.scopes.get_scope(scope_to_search).find_type(type_name.name);
+            let found_type = self.scopes.find_type_local(scope_to_search, type_name.name);
             match found_type {
                 None => Ok(None),
                 Some(type_id) => Ok(Some((type_id, scope_to_search))),
+            }
+        }
+    }
+
+    /// Scopes don't store names; derive one from the owner, if any.
+    /// For pretty-printing and debugging only.
+    pub fn scope_owner_name(&self, scope_id: ScopeId) -> Option<StringId> {
+        match self.scopes.get_scope_owner(scope_id) {
+            ScopeOwnerId::None => None,
+            ScopeOwnerId::Namespace(ns_id) => Some(self.namespaces.get(ns_id).name),
+            ScopeOwnerId::Ability(ability_id) => self.abilities.get_opt(ability_id).map(|a| a.name),
+            // get_opt because owners can be assigned ids before the function
+            // itself is added to the pool
+            ScopeOwnerId::Function(function_id) | ScopeOwnerId::Lambda(_, function_id, _) => {
+                self.functions.get_opt(function_id).map(|f| f.name)
             }
         }
     }
@@ -618,15 +904,15 @@ impl TypedProgram {
         cur_scope_id = self.namespaces.get(first_ns).scope_id;
 
         for ident in ns_iter {
-            let cur_scope = self.scopes.get_scope(cur_scope_id);
-            let namespace_id = cur_scope.find_namespace(ident.name).ok_or_else(|| {
-                errf!(
-                    ident.span,
-                    "Namespace not found: {} in scope: {:?}",
-                    self.ident_str(ident.name),
-                    self.scopes.get_scope(cur_scope_id).name.map(|n| self.ident_str(n))
-                )
-            })?;
+            let namespace_id =
+                self.scopes.find_namespace_local(cur_scope_id, ident.name).ok_or_else(|| {
+                    errf!(
+                        ident.span,
+                        "Namespace not found: {} in scope: {:?}",
+                        self.ident_str(ident.name),
+                        self.scope_owner_name(cur_scope_id).map(|n| self.ident_str(n))
+                    )
+                })?;
             let namespace = self.namespaces.get(namespace_id);
             self.emit_ls_entity(ident.span, LsEntityKind::Namespace(namespace_id));
             cur_scope_id = namespace.scope_id;
@@ -645,7 +931,7 @@ impl TypedProgram {
             Ok(self.scopes.find_ability(scope_id, ability_name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope_id, ability_name)?;
-            Ok(self.scopes.get_scope(scope_to_search).find_ability(ability_name.name))
+            Ok(self.scopes.find_ability_local(scope_to_search, ability_name.name))
         }
     }
 
@@ -662,8 +948,7 @@ impl TypedProgram {
             let scope_to_search = self.resolve_qident(scope_id, type_name)?;
             Ok(self
                 .scopes
-                .get_scope(scope_to_search)
-                .find_pending_type(type_name.name)
+                .find_pending_type_local(scope_to_search, type_name.name)
                 .map(|defn| (defn, scope_to_search)))
         }
     }
@@ -751,187 +1036,25 @@ impl VariableInScope {
     }
 }
 
-// FIXME: Every scope is 288 bytes!!
-// Time for a less naive more computer-friendly representation
-// We could use global hash maps that include scope_id in the key instead
+/// Except for variables, a scope's symbols live in `Scopes`' global maps,
+/// keyed by (scope, name); `kinds` records which of those maps can hit for
+/// this scope. Variables stay inline because identifier resolution probes
+/// them constantly and the freshly-written per-scope maps stay cache-hot.
+///
+/// Scopes don't have names; for pretty-printing, derive one from `owner_id`
+/// via `TypedProgram::scope_owner_name`.
 pub struct Scope {
     pub parent: Option<ScopeId>,
     pub scope_type: ScopeType,
+    /// Bitset of `kinds::*`
+    kinds: u8,
     pub owner_id: ScopeOwnerId,
     pub variables: FxHashMap<StringId, VariableInScope>,
-    pub context_variables_by_type: FxHashMap<TypeId, VariableId>,
-    pub functions: FxHashMap<StringId, FunctionId>,
-    pub namespaces: FxHashMap<StringId, NamespaceId>,
-    pub pending_type_defns: FxHashMap<StringId, TypePendingDefinition>,
-    pub types: FxHashMap<StringId, TypeId>,
-    pub abilities: FxHashMap<StringId, AbilityId>,
-    pub pending_ability_defns: FxHashMap<StringId, ParsedAbilityId>,
-    /// Name is just used for pretty-printing and debugging; scopes don't really have names
-    pub name: Option<StringId>,
 }
+static_assert_size!(Scope, 56);
 
 impl Scope {
-    pub fn make(scope_type: ScopeType, owner_id: ScopeOwnerId, name: Option<StringId>) -> Scope {
-        Scope {
-            variables: FxHashMap::new(),
-            context_variables_by_type: FxHashMap::new(),
-            functions: FxHashMap::new(),
-            namespaces: FxHashMap::new(),
-            types: FxHashMap::new(),
-            abilities: FxHashMap::new(),
-            pending_ability_defns: FxHashMap::new(),
-            pending_type_defns: FxHashMap::new(),
-            parent: None,
-            scope_type,
-            owner_id,
-            name,
-        }
-    }
-
-    pub fn add_variable(&mut self, ident: StringId, value: VariableId) -> bool {
-        // This accomplishes shadowing by overwriting the name in the scope.
-        // I think this is ok because the variable itself (by variable id)
-        // is not lost, in case we wanted to do some analysis.
-        // Still, might need to mark it shadowed explicitly?
-        self.variables.insert(ident, VariableInScope::Defined(value)).is_none()
-    }
-
-    pub fn mask_variable(&mut self, ident: StringId) {
-        self.variables.insert(ident, VariableInScope::Masked);
-    }
-
-    #[must_use]
-    pub fn add_context_variable(
-        &mut self,
-        ident: StringId,
-        value: VariableId,
-        type_id: TypeId,
-    ) -> bool {
-        if let Entry::Vacant(e) = self.context_variables_by_type.entry(type_id) {
-            e.insert(value);
-            // This accomplishes shadowing by overwriting the name in the scope.
-            // I think this is ok because the variable itself (by variable id)
-            // is not lost, in case we wanted to do some analysis.
-            // Still, might need to mark it shadowed explicitly?
-            self.variables.insert(ident, VariableInScope::Defined(value));
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn find_variable(&self, ident: StringId) -> Option<VariableInScope> {
-        match self.variables.get(&ident) {
-            Some(vis) => Some(*vis),
-            None => None,
-        }
-    }
-
-    pub fn find_context_variable_by_type(&self, type_id: TypeId) -> Option<VariableId> {
-        // Most scopes have no context variables; skip hashing entirely
-        if self.context_variables_by_type.is_empty() {
-            return None;
-        }
-        self.context_variables_by_type.get(&type_id).copied()
-    }
-
-    pub fn overwrite_type(&mut self, ident: StringId, ty: TypeId) -> bool {
-        self.types.insert(ident, ty).is_some()
-    }
-
-    #[must_use]
-    pub fn add_type(&mut self, ident: StringId, ty: TypeId) -> bool {
-        if let Entry::Vacant(e) = self.types.entry(ident) {
-            e.insert(ty);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn find_type(&self, ident: StringId) -> Option<TypeId> {
-        self.types.get(&ident).copied()
-    }
-
-    #[must_use]
-    pub fn add_function(&mut self, ident: StringId, function_id: FunctionId) -> bool {
-        if let Entry::Vacant(e) = self.functions.entry(ident) {
-            e.insert(function_id);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn find_function(&self, ident: StringId) -> Option<FunctionId> {
-        self.functions.get(&ident).copied()
-    }
-
-    #[must_use]
-    pub fn add_namespace(&mut self, ident: StringId, namespace_id: NamespaceId) -> bool {
-        if let std::collections::hash_map::Entry::Vacant(e) = self.namespaces.entry(ident) {
-            e.insert(namespace_id);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn find_namespace(&self, ident: StringId) -> Option<NamespaceId> {
-        self.namespaces.get(&ident).copied()
-    }
-
-    #[must_use]
-    pub fn add_ability(&mut self, ident: StringId, ability_id: AbilityId) -> bool {
-        if let hash_map::Entry::Vacant(e) = self.abilities.entry(ident) {
-            e.insert(ability_id);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn find_ability(&self, ident: StringId) -> Option<AbilityId> {
-        self.abilities.get(&ident).copied()
-    }
-
-    #[must_use]
-    pub fn add_pending_ability_defn(
-        &mut self,
-        ident: StringId,
-        parsed_defn_id: ParsedAbilityId,
-    ) -> bool {
-        if let hash_map::Entry::Vacant(e) = self.pending_ability_defns.entry(ident) {
-            e.insert(parsed_defn_id);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn find_pending_ability(&self, ident: StringId) -> Option<ParsedAbilityId> {
-        self.pending_ability_defns.get(&ident).copied()
-    }
-
-    pub fn remove_pending_ability_defn(&mut self, ident: StringId) -> bool {
-        self.pending_ability_defns.remove(&ident).is_some()
-    }
-
-    #[must_use]
-    pub fn add_pending_type(
-        &mut self,
-        name: StringId,
-        pending_type: TypePendingDefinition,
-    ) -> bool {
-        if let hash_map::Entry::Vacant(e) = self.pending_type_defns.entry(name) {
-            e.insert(pending_type);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn find_pending_type(&self, ident: StringId) -> Option<TypePendingDefinition> {
-        self.pending_type_defns.get(&ident).copied()
+    pub fn make(scope_type: ScopeType, owner_id: ScopeOwnerId) -> Scope {
+        Scope { parent: None, scope_type, kinds: 0, owner_id, variables: FxHashMap::new() }
     }
 }
