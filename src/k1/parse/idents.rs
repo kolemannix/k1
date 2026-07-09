@@ -4,8 +4,8 @@ use string_interner::{Symbol, backend::StringBackend};
 
 use crate::kmem::MSlice;
 use crate::kmem::Mem;
-use crate::parse::ParsedProgram;
 use crate::parse::AstSlice;
+use crate::parse::ParsedProgram;
 use crate::{impl_copy_if_small, lex::SpanId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

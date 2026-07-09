@@ -535,9 +535,7 @@ impl TypePool {
                 }
                 true
             }
-            (Type::Reference(r1), Type::Reference(r2)) => {
-                r1.inner_type == r2.inner_type
-            }
+            (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
             (Type::Array(a1), Type::Array(a2)) => {
                 a1.element_type == a2.element_type && a1.size_type == a2.size_type
             }

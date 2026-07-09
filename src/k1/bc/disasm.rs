@@ -6,12 +6,12 @@
 
 use std::fmt::Write;
 
-use crate::typer::types::ScalarType;
 use crate::typer::TypedProgram;
+use crate::typer::types::ScalarType;
 
 use super::{
-    builtin_from_tag, float_pred_from_tag, header_a, header_b, header_op, int_pred_from_tag,
-    CastKind, Opcode, SRC_CONST_BIT,
+    CastKind, Opcode, SRC_CONST_BIT, builtin_from_tag, float_pred_from_tag, header_a, header_b,
+    header_op, int_pred_from_tag,
 };
 
 fn write_src(w: &mut String, k1: &TypedProgram, src: u32) {
@@ -89,8 +89,12 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write!(w, " fp+={}", ops[1]).unwrap();
         }
         Opcode::CallExtern => {
-            write!(w, "call_extern fn#{} ret_pt={} fp+={} nargs={}", ops[0], ops[3], ops[4], ops[5])
-                .unwrap();
+            write!(
+                w,
+                "call_extern fn#{} ret_pt={} fp+={} nargs={}",
+                ops[0], ops[3], ops[4], ops[5]
+            )
+            .unwrap();
         }
         Opcode::CallBuiltin => {
             write!(

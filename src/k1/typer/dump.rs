@@ -60,45 +60,53 @@ impl TypedProgram {
         self.display_scope_name(w, scope_id)?;
         writeln!(w, "kind: {}", scope.scope_type.short_name())?;
 
-        if !scope.variables.is_empty() {
-            w.write_str("\tVARS\n")?;
-        }
-        for (id, variable_in_scope) in scope.variables.iter() {
-            write!(w, "\t{} -> ", self.ident_str(*id))?;
+        let mut first = true;
+        for (id, variable_in_scope) in self.scopes.iter_scope_variables(scope_id) {
+            if first {
+                w.write_str("\tVARS\n")?;
+                first = false;
+            }
+            write!(w, "\t{} -> ", self.ident_str(id))?;
             match variable_in_scope {
                 VariableInScope::Masked => w.write_str("masked")?,
                 VariableInScope::Defined(variable_id) => {
-                    let variable = self.variables.get(*variable_id);
+                    let variable = self.variables.get(variable_id);
                     self.display_variable(variable, w)?;
                 }
             }
             w.write_str("\n")?;
         }
-        if !scope.functions.is_empty() {
-            w.write_str("\tFUNCTIONS\n")?;
-        }
-        for (_name, function_id) in scope.functions.iter() {
-            let function = self.get_function(*function_id);
+        let mut first = true;
+        for (_name, function_id) in self.scopes.iter_scope_functions(scope_id) {
+            if first {
+                w.write_str("\tFUNCTIONS\n")?;
+                first = false;
+            }
+            let function = self.get_function(function_id);
             w.write_str("\t")?;
             self.display_function(function, w, false)?;
             w.write_str("\n")?;
         }
-        if !scope.types.is_empty() {
-            w.write_str("\tTYPES\n")?;
-        }
-        for (ident, type_id) in scope.types.iter() {
+        let mut first = true;
+        for (ident, type_id) in self.scopes.iter_scope_types(scope_id) {
+            if first {
+                w.write_str("\tTYPES\n")?;
+                first = false;
+            }
             w.write_str("\t")?;
-            self.write_ident(w, *ident)?;
+            self.write_ident(w, ident)?;
             w.write_str(" -> ")?;
-            self.display_type_id(w, *type_id, true)?;
+            self.display_type_id(w, type_id, true)?;
             w.write_str("\n")?;
         }
-        if !scope.namespaces.is_empty() {
-            w.write_str("\tNAMESPACES\n")?;
-        }
-        for (name, namespace_id) in scope.namespaces.iter() {
-            let namespace = self.namespaces.get(*namespace_id);
-            writeln!(w, "\tns {} -> {}", self.ident_str(*name), self.ident_str(namespace.name))?;
+        let mut first = true;
+        for (name, namespace_id) in self.scopes.iter_scope_namespaces(scope_id) {
+            if first {
+                w.write_str("\tNAMESPACES\n")?;
+                first = false;
+            }
+            let namespace = self.namespaces.get(namespace_id);
+            writeln!(w, "\tns {} -> {}", self.ident_str(name), self.ident_str(namespace.name))?;
         }
         Ok(())
     }
@@ -1014,53 +1022,53 @@ impl TypedProgram {
             TypedPattern::LiteralFloat(value_id, _) => self.display_static_value(w, *value_id),
             TypedPattern::LiteralBool(bool, _) => write!(w, "{bool}"),
             TypedPattern::LiteralString(string_id, _) => {
-                        write!(w, "\"{}\"", self.get_string(*string_id))
-                    }
+                write!(w, "\"{}\"", self.get_string(*string_id))
+            }
             TypedPattern::Variable(var) => self.write_ident(w, var.name),
             TypedPattern::Wildcard(_) => w.write_str("_"),
             TypedPattern::Sum(sum_pat) => {
-                        self.write_ident(w, sum_pat.variant_name)?;
-                        if let Some(payload) = sum_pat.payload {
-                            w.write_str("(")?;
-                            self.display_pattern(payload, w)?;
-                            w.write_str(")")?;
-                        };
-                        Ok(())
-                    }
+                self.write_ident(w, sum_pat.variant_name)?;
+                if let Some(payload) = sum_pat.payload {
+                    w.write_str("(")?;
+                    self.display_pattern(payload, w)?;
+                    w.write_str(")")?;
+                };
+                Ok(())
+            }
             TypedPattern::Enum(e) => {
-                        self.write_ident(w, e.member_name)?;
-                        Ok(())
-                    }
+                self.write_ident(w, e.member_name)?;
+                Ok(())
+            }
             TypedPattern::Struct(struct_pat) => {
-                        w.write_str("{ ")?;
-                        for (index, field_pat) in
-                            self.patterns.get_slice(struct_pat.fields).iter().enumerate()
-                        {
-                            self.write_ident(w, field_pat.name)?;
-                            w.write_str(": ")?;
-                            self.display_pattern(field_pat.pattern, w)?;
-                            let last = index == struct_pat.fields.len() as usize - 1;
-                            if !last {
-                                w.write_str(", ")?;
-                            } else {
-                                w.write_str(" ")?;
-                            }
-                        }
-                        w.write_str("}")?;
-                        Ok(())
+                w.write_str("{ ")?;
+                for (index, field_pat) in
+                    self.patterns.get_slice(struct_pat.fields).iter().enumerate()
+                {
+                    self.write_ident(w, field_pat.name)?;
+                    w.write_str(": ")?;
+                    self.display_pattern(field_pat.pattern, w)?;
+                    let last = index == struct_pat.fields.len() as usize - 1;
+                    if !last {
+                        w.write_str(", ")?;
+                    } else {
+                        w.write_str(" ")?;
                     }
+                }
+                w.write_str("}")?;
+                Ok(())
+            }
             TypedPattern::Reference(reference_pattern) => {
-                        self.display_pattern(reference_pattern.inner_pattern, w)?;
-                        w.write_str("*")?;
-                        Ok(())
-                    }
+                self.display_pattern(reference_pattern.inner_pattern, w)?;
+                w.write_str("*")?;
+                Ok(())
+            }
             TypedPattern::Type(type_pattern) => {
-                        w.write_str("type[")?;
-                        self.display_type_id(w, type_pattern.type_id, false)?;
-                        w.write_str("](")?;
-                        self.display_pattern(type_pattern.inner_pattern, w)?;
-                        Ok(())
-                    }
+                w.write_str("type[")?;
+                self.display_type_id(w, type_pattern.type_id, false)?;
+                w.write_str("](")?;
+                self.display_pattern(type_pattern.inner_pattern, w)?;
+                Ok(())
+            }
             TypedPattern::RefNull(_, _) => w.write_str("null"),
             TypedPattern::PointerNull(_) => w.write_str("null"),
         }

@@ -1,3 +1,4 @@
+use crate::debug;
 /// Copyright (c) 2026 knix
 /// All rights reserved.
 ///
@@ -22,7 +23,6 @@ use crate::{
 use ahash::{HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
 use itertools::Itertools;
-use crate::debug;
 use std::fmt::Write;
 
 macro_rules! b_ice {
@@ -965,7 +965,9 @@ fn finalize_unit(
     }
 
     iropt::cfg_compute_unit(&mut b.k1.ir, unit_id);
-    validate_unit(b.k1, unit_id)?;
+    if cfg!(debug_assertions) {
+        validate_unit(b.k1, unit_id)?;
+    }
 
     b.k1.ir.b_variables.clear();
     b.k1.ir.b_loops.clear();
@@ -1229,11 +1231,7 @@ impl<'k1> Builder<'k1> {
                 )
             }
             PhysicalTypeResult::Infinite => {
-                b_ice!(
-                    self,
-                    "ir infinite type: {}",
-                    self.k1.type_id_to_string_ext(type_id, true)
-                )
+                b_ice!(self, "ir infinite type: {}", self.k1.type_id_to_string_ext(type_id, true))
             }
             PhysicalTypeResult::Yes(pt) => pt,
         }
@@ -3049,7 +3047,14 @@ pub fn display_unit_name(
     match unit {
         IrUnitId::Function(function_id) => {
             let function = k1.functions.get(function_id);
-            k1.write_qualified_name(w, function.scope, k1.ident_str(function.name), None, "/", true);
+            k1.write_qualified_name(
+                w,
+                function.scope,
+                k1.ident_str(function.name),
+                None,
+                "/",
+                true,
+            );
         }
         IrUnitId::Expr(typed_expr_id) => {
             let expr_span = k1.exprs.get_span(typed_expr_id);

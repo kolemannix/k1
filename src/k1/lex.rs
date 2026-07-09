@@ -4,12 +4,12 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
+use crate::debug;
 use crate::nz_u32_id;
 use crate::parse::BinaryOpKind;
 use crate::parse::FileId;
 use crate::vpool::{SliceHandle, VPool};
 use TokenKind as K;
-use crate::debug;
 
 pub const EOF_CHAR: char = 27 as char; // esc
 // pub const EOF_CHAR: char = '\0' as char;
@@ -530,9 +530,9 @@ pub const CHAR_ESCAPED_CHARS: [EscapedChar; 6] = [
     EscapedChar { sentinel: '\\', output: b'\\' },
 ];
 
-const TOKEN_FLAG_IS_WHITESPACE_PRECEDED: u64 = 0x01;
+const TOKEN_FLAG_IS_WHITESPACE_PRECEDED: u8 = 0x01;
 #[allow(unused)]
-const TOKEN_FLAG_IS_WHITESPACE_FOLLOWED: u64 = 0x02;
+const TOKEN_FLAG_IS_WHITESPACE_FOLLOWED: u8 = 0x02;
 
 nz_u32_id!(TokenTriviaId);
 
@@ -541,7 +541,7 @@ pub struct Token {
     pub kind: TokenKind,
     pub span: SpanId,
     pub trivia: SliceHandle<TokenTriviaId>,
-    pub flags: u64,
+    pub flags: u8,
 }
 
 impl Token {

@@ -182,7 +182,7 @@ impl TypedProgram {
         max_stmt_len: u32,
     ) -> BlockBuilder {
         let block_scope_id =
-            self.scopes.add_child_scope(parent_scope, scope_type, ScopeOwnerId::None, None);
+            self.scopes.add_child_scope(parent_scope, scope_type, ScopeOwnerId::None);
         BlockBuilder { statements: self.mem.new_list(max_stmt_len), scope_id: block_scope_id, span }
     }
 
