@@ -2026,13 +2026,22 @@ pub struct Source {
     pub content: String,
     newline_positions: Vec<u32>,
     pub tokens: Vec<Token>,
+    pub trivia: TokenTriviaTable,
 }
 
 impl Source {
     pub fn make(file_id: FileId, directory: String, filename: String, content: String) -> Source {
         let newline_positions =
             memchr::memchr_iter(b'\n', content.as_bytes()).map(|pos| pos as u32).collect();
-        Source { file_id, directory, filename, content, newline_positions, tokens: vec![] }
+        Source {
+            file_id,
+            directory,
+            filename,
+            content,
+            newline_positions,
+            tokens: vec![],
+            trivia: TokenTriviaTable::default(),
+        }
     }
 
     pub fn get_content(&self, start: u32, len: u32) -> &str {
@@ -5385,6 +5394,8 @@ pub fn lex_file_into_program(
     let text = &module.sources.get(file_id).content;
     let mut lexer = Lexer::make(text, &mut module.spans, file_id);
     lexer.run(tokens).map_err(ParseError::Lex)?;
+    let trivia = std::mem::take(&mut lexer.trivia);
+    module.sources.get_mut(file_id).trivia = trivia;
 
     Ok(file_id)
 }

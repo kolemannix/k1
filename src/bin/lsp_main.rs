@@ -586,15 +586,13 @@ impl LanguageServer for Backend {
                     spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
                 }
             }
-            for token in &source.tokens {
-                for trivium in ast_for_file.spans.trivia_pool.get_slice(token.trivia) {
-                    match trivium.kind {
-                        lex::TokenTriviaKind::LineComment => {
-                            let span = ast_for_file.spans.get(trivium.span);
-                            spans_and_kinds.push((span, TokenTypes::Comment as u32, 0));
-                        }
-                        _ => {}
+            for entry in source.trivia.iter() {
+                match entry.trivia.kind {
+                    lex::TokenTriviaKind::LineComment => {
+                        let span = ast_for_file.spans.get(entry.trivia.span);
+                        spans_and_kinds.push((span, TokenTypes::Comment as u32, 0));
                     }
+                    _ => {}
                 }
             }
             spans_and_kinds.sort_by(|f1, f2| f1.0.start.cmp(&f2.0.start));

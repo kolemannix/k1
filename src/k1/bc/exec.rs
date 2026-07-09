@@ -205,6 +205,7 @@ fn exec_loop(
     let mut pc: usize = start_pc as usize;
     let mut fp: *mut u8 = top_fp;
     let mut ret_reg: Value = Value::u64(0);
+    let mut instrs_run = 0;
 
     // Callers wrap uses in `unsafe`; pointer arithmetic + deref together
     macro_rules! word_ptr {
@@ -290,7 +291,7 @@ fn exec_loop(
     loop {
         debug_assert!(pc < k1.bc.code.len(), "bc pc out of bounds");
         let h = code_at!(pc);
-        k1.timing.total_vm_instrs += 1;
+        instrs_run += 1;
         let op = Opcode::from_u8(header_op(h));
 
         match op {
@@ -300,6 +301,7 @@ fn exec_loop(
                 if !top_ret_pt.is_empty() && !top_ret_pt.is_agg() {
                     store_value(&k1.types, top_ret_pt, vm.overall_return_addr, ret_reg);
                 }
+                k1.timing.total_vm_instrs += instrs_run;
                 return Ok(0);
             }
             Opcode::Enter => {
