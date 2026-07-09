@@ -503,7 +503,7 @@ impl TypedProgram {
             }
 
             // An Inference Pair for each parameter/argument pair
-            inference_pairs.extend(args_and_params.iter().map(|(expr, param)| {
+            inference_pairs.extend(args_and_params.iter(&self.tmp).map(|(expr, param)| {
                 let passed_type = match expr {
                     MaybeTypedExpr::Parsed(expr_id) => TypeOrParsedExpr::Parsed(*expr_id),
                     MaybeTypedExpr::Typed(expr) => {
@@ -594,7 +594,7 @@ impl TypedProgram {
 
         for function_type_param in self.mem.getn(original_function_sig.fnlike_type_params) {
             let (corresponding_arg, corresponding_value_param) =
-                args_and_params.get(function_type_param.value_param_index as usize);
+                args_and_params.get(function_type_param.value_param_index as usize, &self.tmp);
             debug!(
                 "The param for function_type_param {} {} is {} and passed: {:?}",
                 function_type_param.type_id,
