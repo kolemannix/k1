@@ -5,7 +5,7 @@ use ahash::HashMapExt;
 use fxhash::FxHashMap;
 use smallvec::SmallVec;
 
-use std::{collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
+use std::{cell::RefCell, collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
 use crate::{
     SV4, errf,
@@ -94,12 +94,6 @@ pub struct ScopeEnclosingFunctions {
     pub function: Option<FunctionId>,
 }
 
-impl ScopeEnclosingFunctions {
-    pub fn empty() -> Self {
-        ScopeEnclosingFunctions { lambda_scope: None, function: None }
-    }
-}
-
 pub struct ScopeLambdaInfo {
     pub expected_return_type: Option<TypeId>,
     pub capture_exprs_for_fixup: SmallVec<[TypedExprId; 8]>,
@@ -154,16 +148,9 @@ pub mod kinds {
 }
 
 pub struct Scopes {
-    /// SCOPES SoA POOLS BEGIN
     pub scopes: VPool<Scope, ScopeId>,
-    /// The actual function that a scope appears within is a very important thing to know
-    pub enclosing_functions: VPool<ScopeEnclosingFunctions, ScopeId>,
-    /// SCOPES SoA POOLS END
-    // Scope contents (except variables, which are hot enough that per-scope
-    // locality wins) live here, keyed by (scope, symbol), so that its cheap
-    // to create a scope; most scopes don't contain most kinds; they are sparse.
-    // `Scope::kinds` records which maps can hit for a given scope, saving
-    // hashmap lookups; since the maps are now bigger
+    /// maps scopes to their parent lambda scope, if any. used for capture detection. 
+    lambda_cache: RefCell<FxHashMap<ScopeId, Option<ScopeId>>>,
     context_variables_by_type: FxHashMap<ScopeKey, VariableId>,
     functions: FxHashMap<ScopeKey, FunctionId>,
     namespaces: FxHashMap<ScopeKey, NamespaceId>,
@@ -189,7 +176,7 @@ impl Scopes {
         let root_scope = Scope::make(ScopeType::Namespace, ScopeOwnerId::None);
         let mut scopes = Scopes {
             scopes: VPool::make("scopes"),
-            enclosing_functions: VPool::make("scope_enclosing_functions"),
+            lambda_cache: RefCell::new(FxHashMap::new()),
             context_variables_by_type: FxHashMap::new(),
             functions: FxHashMap::new(),
             namespaces: FxHashMap::new(),
@@ -208,17 +195,9 @@ impl Scopes {
             types_scope_id: ScopeId::PENDING,
             array_scope_id: ScopeId::PENDING,
         };
-        let id =
-            scopes.add(root_scope, ScopeEnclosingFunctions { lambda_scope: None, function: None });
+        let id = scopes.scopes.add(root_scope);
         debug_assert_eq!(id, Self::ROOT_SCOPE_ID);
         scopes
-    }
-
-    fn add(&mut self, scope: Scope, enclosing: ScopeEnclosingFunctions) -> ScopeId {
-        let id = self.scopes.add(scope);
-        let id2 = self.enclosing_functions.add(enclosing);
-        debug_assert_eq!(id, id2);
-        id
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (ScopeId, &Scope)> {
@@ -248,21 +227,7 @@ impl Scopes {
     ) -> ScopeId {
         let mut scope = Scope::make(scope_type, scope_owner_id);
         scope.parent = Some(parent_scope_id);
-
-        let id = self.add(scope, ScopeEnclosingFunctions::empty());
-
-        // nocommit: I wonder if this is wasted work; we do it for _every single scope_.
-        // Yes we want it cached, but this is probably bad, and its extra bookkeeping = bug surface
-        // area
-        let enclosing_lambda_scope = self.nearest_parent_lambda(id);
-        let enclosing_function = self.nearest_parent_function(id);
-
-        *self.enclosing_functions.get_mut(id) = ScopeEnclosingFunctions {
-            lambda_scope: enclosing_lambda_scope,
-            function: enclosing_function,
-        };
-
-        id
+        self.scopes.add(scope)
     }
 
     pub fn get_scope(&self, id: ScopeId) -> &Scope {
@@ -279,14 +244,6 @@ impl Scopes {
 
     pub fn set_scope_owner_id(&mut self, id: ScopeId, owner_id: ScopeOwnerId) {
         self.get_scope_mut(id).owner_id = owner_id;
-        // The enclosing-function info is derived from owners at scope
-        // creation, but function scopes get their owner assigned only after
-        // creation, so refresh it. This matters since function bodies are
-        // evaluated directly in the function's scope (no separate body scope).
-        *self.enclosing_functions.get_mut(id) = ScopeEnclosingFunctions {
-            lambda_scope: self.nearest_parent_lambda(id),
-            function: self.nearest_parent_function(id),
-        };
     }
 
     pub fn get_scope_owner(&self, scope_id: ScopeId) -> ScopeOwnerId {
@@ -650,34 +607,60 @@ impl Scopes {
     }
 
     pub fn nearest_parent_function(&self, calling_scope: ScopeId) -> Option<FunctionId> {
-        let scope = self.get_scope(calling_scope);
-        match scope.owner_id {
-            // We can stop searching once we find an ability or namespace scope; a function won't ever appear above them
-            ScopeOwnerId::Ability(_) | ScopeOwnerId::Namespace(_) => None,
-            ScopeOwnerId::Function(fn_id) => Some(fn_id),
-            _ => match scope.parent {
-                Some(parent) => self.nearest_parent_function(parent),
-                None => None,
-            },
+        let mut scope_id = calling_scope;
+        loop {
+            let scope = self.get_scope(scope_id);
+            match scope.owner_id {
+                // We can stop searching once we find an ability or namespace scope; a function won't ever appear above them
+                ScopeOwnerId::Ability(_) | ScopeOwnerId::Namespace(_) => return None,
+                ScopeOwnerId::Function(fn_id) => return Some(fn_id),
+                _ => match scope.parent {
+                    Some(parent) => scope_id = parent,
+                    None => return None,
+                },
+            }
         }
     }
 
-    fn nearest_parent_lambda(&self, scope_id: ScopeId) -> Option<ScopeId> {
-        let scope = self.get_scope(scope_id);
-        match scope.scope_type {
-            // We can stop searching once we find an ability or namespace scope; a lambda won't ever appear above them
-            ScopeType::AbilityDefn
-            | ScopeType::AbilityImpl
-            | ScopeType::TypeDefn
-            | ScopeType::Namespace => None,
-            ScopeType::LambdaScope => Some(scope_id),
-            // We can stop searching once we find a function scope; a lambda won't ever appear
-            // outside of a function! (And we don't do locally defined named functions)
-            ScopeType::FunctionScope => None,
-            _ => match scope.parent {
-                Some(parent) => self.nearest_parent_lambda(parent),
-                None => None,
-            },
+    /// Queried for every variable mention (capture detection), so results are
+    /// memoized. The memo is safe because a scope's position relative to its
+    /// enclosing lambda never changes while that lambda's body is being
+    /// evaluated; the only scope_type mutation (no-capture lambda ->
+    /// function conversion) happens after its body is fully evaluated, and
+    /// re-evaluations build fresh scopes.
+    pub fn nearest_parent_lambda(&self, scope_id: ScopeId) -> Option<ScopeId> {
+        if let Some(cached) = self.lambda_cache.borrow().get(&scope_id) {
+            return *cached;
+        }
+        let mut sid = scope_id;
+        let result = loop {
+            let scope = self.get_scope(sid);
+            match scope.scope_type {
+                // We can stop searching once we find an ability or namespace scope; a lambda won't ever appear above them
+                ScopeType::AbilityDefn
+                | ScopeType::AbilityImpl
+                | ScopeType::TypeDefn
+                | ScopeType::Namespace => break None,
+                ScopeType::LambdaScope => break Some(sid),
+                // We can stop searching once we find a function scope; a lambda won't ever appear
+                // outside of a function! (And we don't do locally defined named functions)
+                ScopeType::FunctionScope => break None,
+                _ => match scope.parent {
+                    Some(parent) => sid = parent,
+                    None => break None,
+                },
+            }
+        };
+        self.lambda_cache.borrow_mut().insert(scope_id, result);
+        result
+    }
+
+    /// Both enclosing-function facts at once, for consumers that give lambdas
+    /// priority over the containing function (e.g. `return` handling)
+    pub fn enclosing_function_info(&self, scope_id: ScopeId) -> ScopeEnclosingFunctions {
+        ScopeEnclosingFunctions {
+            lambda_scope: self.nearest_parent_lambda(scope_id),
+            function: self.nearest_parent_function(scope_id),
         }
     }
 

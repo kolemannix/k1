@@ -7565,7 +7565,7 @@ impl TypedProgram {
                 Some(fn_id) => Ok((None, self.function_to_reference(fn_id, variable_name_span))),
             },
             Some((variable_id, variable_scope_id)) => {
-                let parent_lambda = self.scopes.enclosing_functions.get(scope_id).lambda_scope;
+                let parent_lambda = self.scopes.nearest_parent_lambda(scope_id);
                 let (is_capture, lambda_scope_id) = if let Some(lambda_scope_id) = parent_lambda {
                     let variable_is_above_lambda =
                         self.scopes.scope_has_ancestor(lambda_scope_id, variable_scope_id);
@@ -9283,12 +9283,8 @@ impl TypedProgram {
             _ => body_type,
         };
 
-        let enclosing_fn_name = self
-            .scopes
-            .enclosing_functions
-            .get(ctx.scope_id)
-            .function
-            .map(|id| self.get_function(id).name);
+        let enclosing_fn_name =
+            self.scopes.nearest_parent_function(ctx.scope_id).map(|id| self.get_function(id).name);
 
         // nocommit: kill this name-building too. Just worry about unique names in codegen
         let name = self.build_ident_with(|k1, s| {
@@ -11489,17 +11485,17 @@ impl TypedProgram {
     }
 
     fn get_return_type_for_scope(&self, scope_id: ScopeId, span: SpanId) -> K1Result<TypeId> {
-        match self.scopes.enclosing_functions.get(scope_id) {
+        match self.scopes.enclosing_function_info(scope_id) {
             ScopeEnclosingFunctions { lambda_scope: Some(lambda_scope), .. } => {
                 let Some(expected_return_type) =
-                    self.scopes.get_lambda_info(*lambda_scope).expected_return_type
+                    self.scopes.get_lambda_info(lambda_scope).expected_return_type
                 else {
                     return failf!(span, "We don't know the return type of this lambda");
                 };
                 Ok(expected_return_type)
             }
             ScopeEnclosingFunctions { function: Some(function_id), .. } => {
-                let expected_return_type = self.get_function_type(*function_id).return_type;
+                let expected_return_type = self.get_function_type(function_id).return_type;
                 Ok(expected_return_type)
             }
             _ => failf!(span, "No parent function"),
@@ -11507,12 +11503,12 @@ impl TypedProgram {
     }
 
     fn get_returned_var_for_scope(&self, scope_id: ScopeId) -> Option<VariableId> {
-        match self.scopes.enclosing_functions.get(scope_id) {
+        match self.scopes.enclosing_function_info(scope_id) {
             ScopeEnclosingFunctions { lambda_scope: Some(lambda_scope), .. } => {
-                self.scopes.get_lambda_info(*lambda_scope).returned_variable
+                self.scopes.get_lambda_info(lambda_scope).returned_variable
             }
             ScopeEnclosingFunctions { function: Some(function_id), .. } => {
-                let maybe_returned_var = self.functions.get(*function_id).returned_variable;
+                let maybe_returned_var = self.functions.get(function_id).returned_variable;
                 maybe_returned_var
             }
             _ => None,
@@ -13169,7 +13165,7 @@ impl TypedProgram {
             }
             self.register_function_usage(function_id, fn_call.name.name_span);
 
-            if let Some(enclosing_id) = self.scopes.enclosing_functions.get(ctx.scope_id).function {
+            if let Some(enclosing_id) = self.scopes.nearest_parent_function(ctx.scope_id) {
                 if enclosing_id == function_id {
                     debug!(
                         "Marking {} as directly recursive (stopgap that does not properly detect cycles but helps for now)",
@@ -14193,7 +14189,7 @@ impl TypedProgram {
 
                     if parsed_let.is_returned() {
                         if let Some(lambda_scope) =
-                            self.scopes.enclosing_functions.get(ctx.scope_id).lambda_scope
+                            self.scopes.nearest_parent_lambda(ctx.scope_id)
                         {
                             let returned_var_ref = &mut self
                                 .scopes
@@ -14209,7 +14205,7 @@ impl TypedProgram {
                             }
                             *returned_var_ref = Some(variable_id)
                         } else if let Some(function_id) =
-                            self.scopes.enclosing_functions.get(ctx.scope_id).function
+                            self.scopes.nearest_parent_function(ctx.scope_id)
                         {
                             let returned_var_ref =
                                 &mut self.functions.get_mut(function_id).returned_variable;
