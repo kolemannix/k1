@@ -224,8 +224,6 @@ pub struct TypeDefnStackEntry {
 
 #[derive(Clone, Copy)]
 pub struct StaticExecContext {
-    #[allow(unused)]
-    is_metaprogram: bool,
     /// If a `return` is used, what type is expected
     /// This is needed because `return` usually looks at the
     /// enclosing function, but for #static blocks it shouldn't
@@ -266,6 +264,8 @@ bitflags! {
         /// ^ We do automatic address-of coercion on
         /// a.
         const IsMethodReceiver = 1 << 4;
+        /// We are compiling code for compile-time (static) execution
+        const Static = 1 << 5;
     }
 }
 
@@ -275,84 +275,106 @@ pub struct EvalExprContext {
     scope_id: ScopeId,
     // Always required
     expected_type_id: Option<TypeId>,
-    // Almost always None
-    static_ctx: Option<StaticExecContext>,
-    // Almost always None
-    global_defn_name: Option<StringId>,
+    /// Meaningful only when flags contains Static: the `return` type
+    /// expectation inside #static blocks
+    static_expected_return_type: Option<TypeId>,
     // Each flag is almost always none, but that's good
     flags: EvalExprFlags,
 }
+
+// small enough for reg passing
+static_assert_size!(EvalExprContext, 16);
 impl EvalExprContext {
+    #[inline(always)]
     fn make(scope_id: ScopeId) -> EvalExprContext {
         EvalExprContext {
             scope_id,
             expected_type_id: None,
-            static_ctx: None,
-            global_defn_name: None,
+            static_expected_return_type: None,
             flags: EvalExprFlags::empty(),
         }
     }
 
+    #[inline(always)]
     pub fn is_static(&self) -> bool {
-        self.static_ctx.is_some()
+        self.flags.contains(EvalExprFlags::Static)
     }
 
+    #[inline(always)]
     pub fn with_expected_type(&self, expected_type_id: Option<TypeId>) -> EvalExprContext {
         EvalExprContext { expected_type_id, ..*self }
     }
 
+    #[inline(always)]
     pub fn with_no_expected_type(&self) -> EvalExprContext {
         EvalExprContext { expected_type_id: None, ..*self }
     }
 
+    #[inline(always)]
     pub fn with_static_ctx(&self, static_ctx: Option<StaticExecContext>) -> EvalExprContext {
-        EvalExprContext { static_ctx, ..*self }
+        let mut flags = self.flags;
+        flags.set(EvalExprFlags::Static, static_ctx.is_some());
+        EvalExprContext {
+            static_expected_return_type: static_ctx.and_then(|s| s.expected_return_type),
+            flags,
+            ..*self
+        }
     }
 
+    #[inline(always)]
     fn with_inference(&self, is_inference: bool) -> EvalExprContext {
         let mut flags = self.flags;
         flags.set(EvalExprFlags::Inference, is_inference);
         EvalExprContext { flags, ..*self }
     }
 
+    #[inline(always)]
     fn is_inference(&self) -> bool {
         self.flags.contains(EvalExprFlags::Inference)
     }
 
+    #[inline(always)]
     fn with_scope(&self, scope_id: ScopeId) -> EvalExprContext {
         EvalExprContext { scope_id, ..*self }
     }
 
+    #[inline(always)]
     pub fn with_is_generic_pass(&self, is_generic_pass: bool) -> EvalExprContext {
         let mut flags = self.flags;
         flags.set(EvalExprFlags::GenericPass, is_generic_pass);
         EvalExprContext { flags, ..*self }
     }
 
+    #[inline(always)]
     fn is_generic_pass(&self) -> bool {
         self.flags.contains(EvalExprFlags::GenericPass)
     }
 
+    #[inline(always)]
     pub fn with_is_defer(&self, defer: bool) -> EvalExprContext {
         let mut flags = self.flags;
         flags.set(EvalExprFlags::Defer, defer);
         EvalExprContext { flags, ..*self }
     }
 
+    #[inline(always)]
     fn is_hidden_calls(&self) -> bool {
         self.flags.contains(EvalExprFlags::Hidden)
     }
 
+    #[inline(always)]
     fn with_hidden_calls(&self, hidden: bool) -> EvalExprContext {
         let mut flags = self.flags;
         flags.set(EvalExprFlags::Hidden, hidden);
         EvalExprContext { flags, ..*self }
     }
 
+    #[inline(always)]
     fn is_method_receiver(&self) -> bool {
         self.flags.contains(EvalExprFlags::IsMethodReceiver)
     }
 
+    #[inline(always)]
     fn with_is_method_receiver(&self, is_method_receiver: bool) -> EvalExprContext {
         let mut flags = self.flags;
         flags.set(EvalExprFlags::IsMethodReceiver, is_method_receiver);
@@ -4879,16 +4901,9 @@ impl TypedProgram {
         };
         let manifest_result = self.execute_static_expr(
             value_expr,
-            EvalExprContext {
-                scope_id: Scopes::ROOT_SCOPE_ID,
-                expected_type_id: Some(type_id),
-                static_ctx: Some(StaticExecContext {
-                    is_metaprogram: false,
-                    expected_return_type: Some(type_id),
-                }),
-                global_defn_name: None,
-                flags: EvalExprFlags::empty(),
-            },
+            EvalExprContext::make(Scopes::ROOT_SCOPE_ID)
+                .with_expected_type(Some(type_id))
+                .with_static_ctx(Some(StaticExecContext { expected_return_type: Some(type_id) })),
             &[],
         )?;
 
@@ -6194,7 +6209,6 @@ impl TypedProgram {
         let vm_cond_result = self.execute_static_expr(
             cond,
             ctx.with_expected_type(Some(BOOL_TYPE_ID)).with_static_ctx(Some(StaticExecContext {
-                is_metaprogram: false,
                 expected_return_type: Some(BOOL_TYPE_ID),
             })),
             &[],
@@ -6287,17 +6301,17 @@ impl TypedProgram {
             None => declared_type,
         };
 
-        let ctx = EvalExprContext {
-            scope_id,
-            expected_type_id: Some(expected_type_for_execution),
-            static_ctx: Some(StaticExecContext {
-                is_metaprogram: false,
-                expected_return_type: Some(expected_type_for_execution),
-            }),
-            global_defn_name: Some(global_name),
-            flags: EvalExprFlags::empty(),
+        let static_value_id = if let ParsedExpr::Builtin(span) = self.ast.exprs.get(value_expr_id) {
+            let span = *span;
+            self.eval_builtin_global(global_name, scope_id, expected_type_for_execution, span)?
+        } else {
+            let ctx = EvalExprContext::make(scope_id)
+                .with_expected_type(Some(expected_type_for_execution))
+                .with_static_ctx(Some(StaticExecContext {
+                    expected_return_type: Some(expected_type_for_execution),
+                }));
+            self.execute_static_expr(value_expr_id, ctx, &[])?
         };
-        let static_value_id = self.execute_static_expr(value_expr_id, ctx, &[])?;
         let static_value_type_id = self.get_static_value_type(static_value_id);
 
         match self.types.get_static_type_of_type(declared_type) {
@@ -6333,6 +6347,36 @@ impl TypedProgram {
         self.globals.get_mut(global_id).initial_value = Some(static_value_id);
 
         Ok(())
+    }
+
+    /// Produces the value of a global whose initializer is the `builtin` keyword,
+    /// e.g. `let test: bool = builtin`. These are all compiler-known constants
+    fn eval_builtin_global(
+        &mut self,
+        defn_name: StringId,
+        scope_id: ScopeId,
+        expected_type_id: TypeId,
+        span: SpanId,
+    ) -> K1Result<StaticValueId> {
+        if scope_id != self.get_k1_scope_id() {
+            return failf!(span, "All the known builtins constants live in the k1 scope");
+        }
+        let bool_value = match self.ident_str(defn_name) {
+            "test" => self.config.is_test_build,
+            "no-std" => self.config.no_std,
+            "debug" => self.config.debug,
+            // The VM overrides this global's value during static execution
+            "is-static" => false,
+            "multithreading" => self.program_settings.multithreaded,
+            "os" => {
+                let os_tag_value = self.config.target.target_os() as u8;
+                let static_enum =
+                    StaticValue::Enum(expected_type_id, TypedIntValue::U8(os_tag_value));
+                return Ok(self.static_values.add(static_enum));
+            }
+            s => return failf!(span, "Unknown builtin name: {s}"),
+        };
+        Ok(self.static_values.add(StaticValue::Bool(bool_value)))
     }
 
     fn add_function(&mut self, mut function: TypedFunction) -> FunctionId {
@@ -8292,44 +8336,8 @@ impl TypedProgram {
                 Ok(res)
             }
             ParsedExpr::Builtin(span) => {
-                let Some(defn_name) = ctx.global_defn_name else {
-                    return failf!(*span, "builtin can only be used as a top-level expression");
-                };
-                let parent_scope_id = self.scopes.get_scope(ctx.scope_id).parent.unwrap();
-                if parent_scope_id != self.get_k1_scope_id() {
-                    return failf!(*span, "All the known builtins constants live in the k1 scope");
-                }
-                match self.ident_str(defn_name) {
-                    "test" => {
-                        let is_test_build = self.config.is_test_build;
-                        Ok(self.synth_bool(is_test_build, *span))
-                    }
-                    "os" => {
-                        let os_tag_value = self.config.target.target_os() as u8;
-                        let k1_os_global_type_id = ctx.expected_type_id.unwrap();
-                        let static_enum = StaticValue::Enum(
-                            k1_os_global_type_id,
-                            TypedIntValue::U8(os_tag_value),
-                        );
-                        let os_id = self.static_values.add(static_enum);
-                        let expr_id = self.add_static_constant_expr(os_id, *span);
-                        Ok(expr_id)
-                    }
-                    "no-std" => {
-                        let no_std = self.config.no_std;
-                        Ok(self.synth_bool(no_std, *span))
-                    }
-                    "debug" => {
-                        let debug = self.config.debug;
-                        Ok(self.synth_bool(debug, *span))
-                    }
-                    "is-static" => Ok(self.synth_bool(false, *span)),
-                    "multithreading" => {
-                        let bool_value = self.program_settings.multithreaded;
-                        Ok(self.synth_bool(bool_value, *span))
-                    }
-                    s => failf!(*span, "Unknown builtin name: {s}"),
-                }
+                // Handled in eval_global_body before dispatching here
+                failf!(*span, "builtin can currently only be used as the initializer of a global")
             }
             ParsedExpr::Static(stat) => {
                 let stat = *stat;
@@ -8635,7 +8643,6 @@ impl TypedProgram {
             },
             ParsedStaticBlockKind::Metaprogram => Some(self.types.builtins.string()),
         };
-        let is_metaprogram = kind.is_metaprogram();
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
         for param in self.ast.mem.getn(stat.parameter_names) {
             let variable_expr = self.ast.exprs.add(
@@ -8694,10 +8701,7 @@ impl TypedProgram {
         let vm_result = self.execute_static_expr(
             base_expr,
             ctx.with_expected_type(expected_type_for_execution).with_static_ctx(Some(
-                StaticExecContext {
-                    is_metaprogram,
-                    expected_return_type: expected_type_for_execution,
-                },
+                StaticExecContext { expected_return_type: expected_type_for_execution },
             )),
             &static_parameters,
         )?;
@@ -11524,7 +11528,7 @@ impl TypedProgram {
         let expected_return_type = if ctx.is_static() {
             // When _typechecking_, not executing, inside #static blocks
             // The expected return type should just be the expected type of the static block
-            ctx.static_ctx.unwrap().expected_return_type
+            ctx.static_expected_return_type
         } else {
             Some(self.get_return_type_for_scope(ctx.scope_id, span)?)
         };
@@ -16780,15 +16784,9 @@ impl TypedProgram {
                         self.execute_static_condition(s.condition_if_definition, scope_id);
 
                     if should_compile {
-                        let static_ctx =
-                            StaticExecContext { is_metaprogram, expected_return_type: None };
-                        let eval_expr_ctx = EvalExprContext {
-                            scope_id,
-                            expected_type_id: None,
-                            static_ctx: Some(static_ctx),
-                            global_defn_name: None,
-                            flags: EvalExprFlags::empty(),
-                        };
+                        let static_ctx = StaticExecContext { expected_return_type: None };
+                        let eval_expr_ctx =
+                            EvalExprContext::make(scope_id).with_static_ctx(Some(static_ctx));
                         if let Err(e) =
                             self.compile_static_or_meta(static_expr_id, s, true, eval_expr_ctx)
                         {
@@ -17270,17 +17268,10 @@ impl TypedProgram {
                     // If it is a namespace, we ensure we handle it right now, as this is the phase that
                     // namespaces should be declared. Everything else will get handled naturally
                     // as we iterate over the namespace's definitions in the future phases
-                    let static_ctx = StaticExecContext {
-                        is_metaprogram,
-                        expected_return_type: Some(I32_TYPE_ID),
-                    };
-                    let eval_expr_ctx = EvalExprContext {
-                        scope_id: namespace_scope_id,
-                        expected_type_id: None,
-                        static_ctx: Some(static_ctx),
-                        global_defn_name: None,
-                        flags: EvalExprFlags::empty(),
-                    };
+                    let static_ctx =
+                        StaticExecContext { expected_return_type: Some(I32_TYPE_ID) };
+                    let eval_expr_ctx = EvalExprContext::make(namespace_scope_id)
+                        .with_static_ctx(Some(static_ctx));
                     let newly_parsed_defns =
                         match self.compile_static_or_meta(static_expr_id, s, true, eval_expr_ctx) {
                             Err(e) => {
