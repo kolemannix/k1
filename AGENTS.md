@@ -46,6 +46,19 @@ Before nontrivial work, read:
 - `src/bin/test_suite.rs`: K1 regression test runner.
 - `src/bin/lsp_main.rs` and `src/k1/lsp_support.rs`: language server.
 
+## Build Environment
+
+- All cargo invocations need `LLVM_SYS_211_PREFIX=<repo root>/llvm/install-llvm`
+  exported (set in ~/.zshrc, but not inherited by non-login shells) and
+  `--features=llvm-sys/prefer-dynamic`. Without the prefix, `llvm-sys` fails to
+  compile; export it before running the `just` recipes too.
+- Binaries outside `target/debug` (e.g. `target/profiling/k1`) resolve k1lib
+  from the exe path and fail in worktrees; set `K1_HOME=<repo root>`.
+- The full test suite needs native libs built first:
+  `make -C k1lib/core/libs clean build` and
+  `make -C test_src/ffi_abi_test/libs clean build` (`just test` handles this).
+- `--chatty true` prints the compiler timing summary.
+
 ## Commands
 
 - `just ts1`: fast suite1 language/compiler check.

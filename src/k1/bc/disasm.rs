@@ -7,7 +7,6 @@
 use std::fmt::Write;
 
 use crate::typer::TypedProgram;
-use crate::typer::types::ScalarType;
 
 use super::{
     CastKind, Opcode, SRC_CONST_BIT, builtin_from_tag, float_pred_from_tag, header_a, header_b,
@@ -112,7 +111,7 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write_dst(w, ops[0]);
         }
         Opcode::RetStore => {
-            write!(w, "ret_store.{} ", ScalarType::from_tag(a as u32)).unwrap();
+            write!(w, "ret_store.{} ", a).unwrap();
             write_src(w, k1, ops[0]);
         }
         Opcode::Mov => {
@@ -132,14 +131,14 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write!(w, " <- global#{}", ops[1]).unwrap();
         }
         Opcode::Load => {
-            write!(w, "load.{} ", ScalarType::from_tag(a as u32)).unwrap();
+            write!(w, "load.{} ", a).unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- [").unwrap();
             write_src(w, k1, ops[1]);
             write!(w, "]").unwrap();
         }
         Opcode::Store => {
-            write!(w, "store.{} [", ScalarType::from_tag(a as u32)).unwrap();
+            write!(w, "store.{} [", a).unwrap();
             write_src(w, k1, ops[0]);
             write!(w, "] <- ").unwrap();
             write_src(w, k1, ops[1]);

@@ -361,10 +361,12 @@ impl Value {
     pub const TRUE: Value = Self::bool(true);
     pub const NULLPTR: Value = Self(0);
 
+    #[inline(always)]
     pub const fn bool(b: bool) -> Value {
         if b { Value(1) } else { Value(0) }
     }
 
+    #[inline(always)]
     pub(crate) fn as_bool(&self) -> bool {
         #[cfg(debug_assertions)]
         {
@@ -378,50 +380,61 @@ impl Value {
         self.0 != 0
     }
 
+    #[inline(always)]
     pub fn ptr(ptr: *const u8) -> Value {
         Value(ptr.addr() as u64)
     }
 
+    #[inline(always)]
     pub(crate) const fn bits(&self) -> u64 {
         self.0
     }
 
+    #[inline(always)]
     pub(crate) const fn as_usize(&self) -> usize {
         self.0 as usize
     }
 
     pub(crate) const fn truncated(&self, to: NumericWidth) -> Self {
-        match to {
-            NumericWidth::B8 => Value(self.0 as u8 as u64),
-            NumericWidth::B16 => Value(self.0 as u16 as u64),
-            NumericWidth::B32 => Value(self.0 as u32 as u64),
-            NumericWidth::B64 => *self,
+        self.truncated_raw(to.bits())
+    }
+
+    pub(crate) const fn truncated_raw(&self, to_bits: u32) -> Self {
+        match to_bits {
+            8 => Value(self.0 as u8 as u64),
+            16 => Value(self.0 as u16 as u64),
+            32 => Value(self.0 as u32 as u64),
+            _ => *self,
         }
     }
 
     pub(crate) const fn sign_extended(&self, from: NumericWidth, to: NumericWidth) -> Self {
-        match (from, to) {
-            (NumericWidth::B8, NumericWidth::B16) => {
+        self.sign_extended_raw(from.bits(), to.bits())
+    }
+
+    pub(crate) const fn sign_extended_raw(&self, from_bits: u32, to_bits: u32) -> Self {
+        match (from_bits, to_bits) {
+            (8, 16) => {
                 let v = self.0 as i8 as i16 as u16 as u64;
                 Value(v)
             }
-            (NumericWidth::B8, NumericWidth::B32) => {
+            (8, 32) => {
                 let v = self.0 as i8 as i32 as u32 as u64;
                 Value(v)
             }
-            (NumericWidth::B8, NumericWidth::B64) => {
+            (8, 64) => {
                 let v = self.0 as i8 as i64 as u64;
                 Value(v)
             }
-            (NumericWidth::B16, NumericWidth::B32) => {
+            (16, 32) => {
                 let v = self.0 as i16 as i32 as u32 as u64;
                 Value(v)
             }
-            (NumericWidth::B16, NumericWidth::B64) => {
+            (16, 64) => {
                 let v = self.0 as i16 as i64 as u64;
                 Value(v)
             }
-            (NumericWidth::B32, NumericWidth::B64) => {
+            (32, 64) => {
                 let v = self.0 as i32 as i64 as u64;
                 Value(v)
             }
@@ -429,34 +442,42 @@ impl Value {
         }
     }
 
+    #[inline(always)]
     pub(crate) const fn u8(u8: u8) -> Value {
         Value(u8 as u64)
     }
 
+    #[inline(always)]
     pub(crate) const fn u16(u16: u16) -> Value {
         Value(u16 as u64)
     }
 
+    #[inline(always)]
     pub(crate) const fn u32(u32: u32) -> Value {
         Value(u32 as u64)
     }
 
+    #[inline(always)]
     pub(crate) const fn u64(u64: u64) -> Value {
         Value(u64)
     }
 
+    #[inline(always)]
     pub(crate) const fn i8(i8: i8) -> Value {
         Value(i8 as u8 as u64)
     }
 
+    #[inline(always)]
     pub(crate) const fn i16(i16: i16) -> Value {
         Value(i16 as u16 as u64)
     }
 
+    #[inline(always)]
     pub(crate) const fn i32(i32: i32) -> Value {
         Value(i32 as u32 as u64)
     }
 
+    #[inline(always)]
     pub(crate) const fn i64(i64: i64) -> Value {
         Value(i64 as u64)
     }

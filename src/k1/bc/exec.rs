@@ -20,11 +20,10 @@ use std::num::NonZeroU32;
 use crate::failf;
 use crate::ir::{self, BackendBuiltin, IrUnitId};
 use crate::lex::SpanId;
-use crate::typer::types::{PhysicalType, ScalarType, TypeId};
+use crate::typer::types::{PhysicalType, TypeId};
 use crate::typer::{FunctionId, K1Result, StaticValueId, TypedExprId, TypedGlobalId, TypedProgram};
 use crate::vm::{
-    self, Value, Vm, casted_float_op, casted_iop, casted_uop, load_scalar, load_value,
-    store_scalar, store_value,
+    self, Value, Vm, casted_float_op, casted_iop, casted_uop, load_value, store_value,
 };
 
 use super::lower;
@@ -167,6 +166,33 @@ enum BuiltinOutcome {
     Value(Value),
     Empty,
     Exit(i32),
+}
+
+// Scalar memory ops carry their width in bits (8/16/32/64) in `header_a`
+#[inline]
+fn store_bits(width_bits: u8, dst: *mut u8, v: Value) {
+    debug_assert!(!dst.is_null(), "store_bits to null (width {})", width_bits);
+    unsafe {
+        match width_bits {
+            8 => dst.write(v.bits() as u8),
+            16 => (dst as *mut u16).write(v.bits() as u16),
+            32 => (dst as *mut u32).write(v.bits() as u32),
+            _ => (dst as *mut u64).write(v.bits()),
+        }
+    }
+}
+
+#[inline]
+fn load_bits(width_bits: u8, src: *const u8) -> Value {
+    debug_assert!(!src.is_null(), "load_bits from null (width {})", width_bits);
+    unsafe {
+        match width_bits {
+            8 => Value::u8(src.read()),
+            16 => Value::u16((src as *const u16).read()),
+            32 => Value::u32((src as *const u32).read()),
+            _ => Value::u64((src as *const u64).read()),
+        }
+    }
 }
 
 fn exec_loop(
@@ -443,11 +469,8 @@ fn exec_loop(
                 advance!(Opcode::RetGet);
             }
             Opcode::RetStore => {
-                // nocommit this is far too slow for the bc layer; we should just know the size by
-                // now
-                let t = ScalarType::from_tag(header_a(h) as u32);
                 let addr = read_src!(operand!(0));
-                store_scalar(t, addr.as_ptr(), ret_reg);
+                store_bits(header_a(h), addr.as_ptr(), ret_reg);
                 advance!(Opcode::RetStore);
             }
             Opcode::Mov => {
@@ -473,16 +496,14 @@ fn exec_loop(
                 advance!(Opcode::LoadGlobal);
             }
             Opcode::Load => {
-                let t = ScalarType::from_tag(header_a(h) as u32);
                 let addr = read_src!(operand!(1));
-                write_slot!(operand!(0), load_scalar(t, addr.as_ptr()));
+                write_slot!(operand!(0), load_bits(header_a(h), addr.as_ptr()));
                 advance!(Opcode::Load);
             }
             Opcode::Store => {
-                let t = ScalarType::from_tag(header_a(h) as u32);
                 let addr = read_src!(operand!(0));
                 let v = read_src!(operand!(1));
-                store_scalar(t, addr.as_ptr(), v);
+                store_bits(header_a(h), addr.as_ptr(), v);
                 advance!(Opcode::Store);
             }
             Opcode::Copy => {
@@ -751,94 +772,86 @@ fn exec_loop(
     }
 }
 
+/// `from`/`to` are widths in bits; signedness is carried by the CastKind.
 fn exec_cast(kind: CastKind, from: u32, to: u32, input: Value) -> Value {
     match kind {
-        CastKind::IntTrunc => input.truncated(ScalarType::from_tag(to).width()),
-        CastKind::IntExtS => input
-            .sign_extended(ScalarType::from_tag(from).width(), ScalarType::from_tag(to).width()),
+        CastKind::IntTrunc => input.truncated_raw(to),
+        CastKind::IntExtS => input.sign_extended_raw(from, to),
         CastKind::FloatTrunc => Value::f32(input.as_f64() as f32),
         CastKind::FloatExt => Value::f64(input.as_f32() as f64),
         CastKind::F32ToUInt => {
             let f = input.as_f32();
-            match ScalarType::from_tag(to) {
-                ScalarType::U8 => Value::u8(f as u8),
-                ScalarType::U16 => Value::u16(f as u16),
-                ScalarType::U32 => Value::u32(f as u32),
-                ScalarType::U64 => Value::u64(f as u64),
-                _ => unreachable!(),
+            match to {
+                8 => Value::u8(f as u8),
+                16 => Value::u16(f as u16),
+                32 => Value::u32(f as u32),
+                _ => Value::u64(f as u64),
             }
         }
         CastKind::F32ToSInt => {
             let f = input.as_f32();
-            match ScalarType::from_tag(to) {
-                ScalarType::I8 => Value::i8(f as i8),
-                ScalarType::I16 => Value::i16(f as i16),
-                ScalarType::I32 => Value::i32(f as i32),
-                ScalarType::I64 => Value::i64(f as i64),
-                _ => unreachable!(),
+            match to {
+                8 => Value::i8(f as i8),
+                16 => Value::i16(f as i16),
+                32 => Value::i32(f as i32),
+                _ => Value::i64(f as i64),
             }
         }
         CastKind::F64ToUInt => {
             let f = input.as_f64();
-            match ScalarType::from_tag(to) {
-                ScalarType::U8 => Value::u8(f as u8),
-                ScalarType::U16 => Value::u16(f as u16),
-                ScalarType::U32 => Value::u32(f as u32),
-                ScalarType::U64 => Value::u64(f as u64),
-                _ => unreachable!(),
+            match to {
+                8 => Value::u8(f as u8),
+                16 => Value::u16(f as u16),
+                32 => Value::u32(f as u32),
+                _ => Value::u64(f as u64),
             }
         }
         CastKind::F64ToSInt => {
             let f = input.as_f64();
-            match ScalarType::from_tag(to) {
-                ScalarType::I8 => Value::i8(f as i8),
-                ScalarType::I16 => Value::i16(f as i16),
-                ScalarType::I32 => Value::i32(f as i32),
-                ScalarType::I64 => Value::i64(f as i64),
-                _ => unreachable!(),
+            match to {
+                8 => Value::i8(f as i8),
+                16 => Value::i16(f as i16),
+                32 => Value::i32(f as i32),
+                _ => Value::i64(f as i64),
             }
         }
         CastKind::UIntToF32 => {
             let bits = input.bits();
-            let f = match ScalarType::from_tag(from) {
-                ScalarType::U8 => bits as u8 as f32,
-                ScalarType::U16 => bits as u16 as f32,
-                ScalarType::U32 => bits as u32 as f32,
-                ScalarType::U64 => bits as f32,
-                _ => unreachable!(),
+            let f = match from {
+                8 => bits as u8 as f32,
+                16 => bits as u16 as f32,
+                32 => bits as u32 as f32,
+                _ => bits as f32,
             };
             Value::f32(f)
         }
         CastKind::UIntToF64 => {
             let bits = input.bits();
-            let f = match ScalarType::from_tag(from) {
-                ScalarType::U8 => bits as u8 as f64,
-                ScalarType::U16 => bits as u16 as f64,
-                ScalarType::U32 => bits as u32 as f64,
-                ScalarType::U64 => bits as f64,
-                _ => unreachable!(),
+            let f = match from {
+                8 => bits as u8 as f64,
+                16 => bits as u16 as f64,
+                32 => bits as u32 as f64,
+                _ => bits as f64,
             };
             Value::f64(f)
         }
         CastKind::SIntToF32 => {
             let bits = input.bits();
-            let f = match ScalarType::from_tag(from) {
-                ScalarType::I8 => bits as i8 as f32,
-                ScalarType::I16 => bits as i16 as f32,
-                ScalarType::I32 => bits as i32 as f32,
-                ScalarType::I64 => bits as i64 as f32,
-                _ => unreachable!(),
+            let f = match from {
+                8 => bits as i8 as f32,
+                16 => bits as i16 as f32,
+                32 => bits as i32 as f32,
+                _ => bits as i64 as f32,
             };
             Value::f32(f)
         }
         CastKind::SIntToF64 => {
             let bits = input.bits();
-            let f = match ScalarType::from_tag(from) {
-                ScalarType::I8 => bits as i8 as f64,
-                ScalarType::I16 => bits as i16 as f64,
-                ScalarType::I32 => bits as i32 as f64,
-                ScalarType::I64 => bits as i64 as f64,
-                _ => unreachable!(),
+            let f = match from {
+                8 => bits as i8 as f64,
+                16 => bits as i16 as f64,
+                32 => bits as i32 as f64,
+                _ => bits as i64 as f64,
             };
             Value::f64(f)
         }
