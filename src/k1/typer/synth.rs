@@ -425,11 +425,18 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {
-        let (_, line) = self.get_span_location(span);
-        let line_number = line.line_number();
+        let the_span = self.ast.spans.get(span);
+        let source = self.ast.sources.get(the_span.file_id);
+        let line_number = source.get_line_for_span_start(the_span).unwrap().line_number();
 
-        let source = self.ast.sources.source_by_span(self.ast.spans.get(span));
-        let filename_string_id = self.ast.idents.intern(&source.filename);
+        let filename_string_id = match self.filename_string_ids.get(&the_span.file_id) {
+            Some(id) => *id,
+            None => {
+                let id = self.ast.idents.intern(&source.filename);
+                self.filename_string_ids.insert(the_span.file_id, id);
+                id
+            }
+        };
         let filename_expr = self.synth_string_literal(filename_string_id, span);
 
         let line_number_expr = self.synth_int(TypedIntValue::U64(line_number as u64), span);

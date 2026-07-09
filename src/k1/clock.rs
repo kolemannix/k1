@@ -56,13 +56,17 @@ impl Clock {
     }
 
     #[inline]
-    pub fn elapsed_nanos(&self, since: u64) -> u64 {
-        let ticks = self.raw().saturating_sub(since);
+    pub fn ticks_to_nanos(&self, ticks: u64) -> u64 {
         if self.numer == self.denom {
             ticks
         } else {
             (ticks as u128 * self.numer as u128 / self.denom as u128) as u64
         }
+    }
+
+    #[inline]
+    pub fn elapsed_nanos(&self, since: u64) -> u64 {
+        self.ticks_to_nanos(self.raw().saturating_sub(since))
     }
 
     pub fn elapsed_ms(&self, since: u64) -> u64 {
