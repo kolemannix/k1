@@ -12,6 +12,7 @@ pub struct Clock {
 
 impl Clock {
     #[cfg(target_vendor = "apple")]
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let mut info = MachTimebaseInfo { numer: 0, denom: 0 };
         unsafe { mach_timebase_info(&mut info) };

@@ -633,7 +633,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             // Eventually we'll need to ask the user for a link name
             self.k1.ident_str(variable.name).to_string()
         } else {
-            self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false)
+            self.k1.make_qualified_name(variable.owner_scope, variable.name, None, "__", false)
         };
 
         let llvm_global = if global.is_external {
@@ -732,7 +732,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         match defn_info {
             None => write!(w, "{}", name).unwrap(),
-            Some(info) => self.k1.write_qualified_name(w, info.scope, &name, ".", true),
+            Some(info) => self.k1.write_qualified_name(w, info.scope, &name, None, ".", true),
         };
     }
 
@@ -2612,6 +2612,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             _ => Cg::mangle(self.k1.make_qualified_name(
                 typed_function.scope,
                 typed_function.name,
+                Some(function_id.as_u32() as usize),
                 ".",
                 true,
             )),
