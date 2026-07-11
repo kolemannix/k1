@@ -41,8 +41,8 @@ ns Range {
 fn partOne(input: string) {
   let lines = input.splitByChar('\n');
   let parseMode: either { Ranges, Ingredients } = .Ranges;
-  let* ranges = list/empty[Range]();
-  let* ing = list/empty[uint]();
+  let ranges = list/empty[Range]();
+  let ing = list/empty[uint]();
   for lines {
     if it.is-empty() { parseMode := .Ingredients; } else {
       switch parseMode {

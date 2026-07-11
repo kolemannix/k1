@@ -12,7 +12,6 @@ use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size}
 use TokenKind as K;
 pub use idents::{IdentPool, IdentSlice, IdentSpanned, QIdent, StringId};
 use itertools::Itertools;
-use log::trace;
 use smallvec::{SmallVec, smallvec};
 
 /// Make a qualified, `NamespacedIdentifier` from components
@@ -296,16 +295,12 @@ pub struct ParsedLet {
 
 impl ParsedLet {
     pub const FLAG_CONTEXT: u8 = 1 << 0;
-    pub const FLAG_REFERENCING: u8 = 1 << 1;
     pub const FLAG_RETURNED: u8 = 1 << 2;
 
-    pub fn make_flags(context: bool, referencing: bool, returned: bool) -> u8 {
+    pub fn make_flags(context: bool, returned: bool) -> u8 {
         let mut flags = 0;
         if context {
             flags |= Self::FLAG_CONTEXT;
-        }
-        if referencing {
-            flags |= Self::FLAG_REFERENCING;
         }
         if returned {
             flags |= Self::FLAG_RETURNED;
@@ -318,13 +313,6 @@ impl ParsedLet {
     }
     pub fn is_context(&self) -> bool {
         self.flags & Self::FLAG_CONTEXT != 0
-    }
-
-    pub fn set_referencing(&mut self) {
-        self.flags |= Self::FLAG_REFERENCING;
-    }
-    pub fn is_referencing(&self) -> bool {
-        self.flags & Self::FLAG_REFERENCING != 0
     }
 
     pub fn set_returned(&mut self) {
@@ -3972,8 +3960,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn parse_let(&mut self) -> ParseResult<Option<ParsedLet>> {
         let Some(eaten_keyword) = self.maybe_consume(K::KeywordLet) else { return Ok(None) };
         self.emit_semantic_token(eaten_keyword, SemanticTokenKind::Keyword);
-        let is_reference = self.maybe_consume_no_whitespace(K::Asterisk).is_some();
-        let mut flags = ParsedLet::FLAG_REFERENCING * is_reference as u8;
+        let mut flags = 0u8;
         loop {
             let p = self.peek();
             match p.kind {
@@ -5333,8 +5320,7 @@ impl ParsedProgram {
             ParsedStmt::Let(let_stmt) => {
                 write!(
                     w,
-                    "let{}{} {} = ",
-                    if let_stmt.is_referencing() { "* " } else { " " },
+                    "let{} {} = ",
                     if let_stmt.is_context() { "context " } else { " " },
                     self.idents.get_string(let_stmt.name)
                 )?;

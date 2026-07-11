@@ -2,12 +2,21 @@ fn print-if-10(x: int) {
   if x == 10 println("work");
 }
 
-let global-x: int = 5;
+let global-x: int = 5
  
 #debug fn main(): i32 {
 
-  print-if-gt-10(global-x);
-  print-if-gt-10(12);
+  print-if-10(global-x);
+  print-if-10(12);
 
   0
 }
+
+// main fn(): i32 (inst count=4, cfg_valid=true)
+// b260352 entry  preds: [], succs: []
+//  i5622 = load i64 from g54                                           ; fulfill variable usage| global-x                      |  9:15|
+//  i5623 = call {} print-if-10(i5622)                                  | print-if-10(global-x)         |  9:3|
+//  i5624 = call {} print-if-10(data32(i64, 12))                        | print-if-10(12)               | 10:3|
+//  i5625 = ret i32 data32(i32, 0)                                      | 0                             | 12:3|
+// END
+

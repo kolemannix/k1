@@ -9,17 +9,18 @@ fn assignVar() {
 }
 
 fn assignVarRef() {
-  let* count = 0;
-  count <- 1;
-  assert(count.* == 1);
-  count <- 2;
-  assert(count.* == 2);
+  let count = 0;
+  &count <- 1;
+  assert(count == 1);
+  &count <- 2;
+  assert(count == 2);
 }
 
 fn complexReferences() {
-  let* structRef = { x: 42 };
+  let structRef = { x: 42 };
+  let structRef = &structRef;
 
-  let xValue: int = structRef.x*;
+  let xValue: int = structRef.x;
   let xRef: *mut int = structRef.x*;
 
   assert(xRef.* == xValue);
@@ -32,7 +33,8 @@ fn complexReferences() {
   structRef.x* <- 42;
   assert(xRef.* == 42);
 
-  let* eitherRef: *mut either { yes(int), no } = :yes(3);
+  let eitherRef: either { yes(int), no } = :yes(3);
+  let eitherRef = &eitherRef;
 
   let yesRef: *(type-of(eitherRef).value:yes) = eitherRef.as-yes().!;
 
@@ -45,14 +47,9 @@ fn complexReferences() {
   assert(yesRef.* == -3);
   assert(eitherRef.as-yes().!.* == -3);
 
-  // no restrictions on lhs except that it has to be a pointer,
-  // this in conjunction with let* will mean we have pointers for
-  // simple mutable ints, and should mean we can evaluate the lhs
-  // of assignments as a normal expression
-  // <any ptr> <- <expr>
-
-  let* innerStructRef = { x: 42 };
-  let structOptRef: ?*mut { x: int } = :some(innerStructRef);
+  let innerStructRef = { x: 42 };
+  let innerStructRef = &innerStructRef;
+  let structOptRef: ?*{ x: int } = :some(innerStructRef);
 
   if structOptRef is :some(x) {
     assert(x.x == 42);

@@ -6,7 +6,7 @@ fn test() {
   let _hello: "hello" = "hello";
 
   let _hello2: "hello!" = #static {
-    let* bytes = [104u8];
+    let bytes = [104u8];
     bytes.push(101);
     bytes.push(108);
     bytes.push(108);

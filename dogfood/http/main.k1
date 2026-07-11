@@ -88,7 +88,7 @@ fn do-work(req: *mut uv/work) {
     mem/popMode();
 
     tprintln("made deps: {deps-baton}");
-    &worker-user-data <- deps-baton;
+    worker-user-data <- deps-baton;
   };
   let user-deps-baton: ptr = worker-user-data;
 
@@ -224,7 +224,7 @@ fn close-connection(conn: *mut connection) {
     let connection = h.get-data[connection]();
     tprintln("closed connection{connection.serial-no}; releasing");
     connection.release();
-    &conn-count <- conn-count - 1;
+    conn-count <- conn-count - 1;
     tprintln("active connections: {conn-count}");
   })
 }
@@ -341,7 +341,7 @@ ns for connection {
       conn <- {
         connection-arena,
         client: uninit,
-        serial-no: { &conn-serial <- conn-serial + 1; conn-serial },
+        serial-no: { conn-serial <- conn-serial + 1; conn-serial },
         close-state: {
           lock: uninit,
           is-closing: false,
@@ -470,7 +470,7 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
   let connection: *connection = connection/make(l, server-data.make-deps, server-data.route-handlers);
   let client: *uv/tcp = connection.client*;
 
-  &conn-count <- conn-count + 1;
+  conn-count <- conn-count + 1;
   let accept-rc = uv/accept(server, client.as-stream());
   tprintln("connection arena new usedBytes: {connection.connection-arena.usedBytes()}");
   if accept-rc == 0 {

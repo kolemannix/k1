@@ -3,14 +3,9 @@ ns test_uninit;
 let GLOB: int = 50
 
 fn test() {
-  // pointer is initialized, but value is not
-  let* x: *mut int = uninit;
+  let x: int = uninit;
   x <- 42;
-  assert-equals(x.*, 42);
-
-  let y: int = uninit;
-  y := 10;
-  assert-equals(y, 10);
+  assert-equals(x, 42);
 
   // pointer itself is uninitialized
   let p: *int = uninit;

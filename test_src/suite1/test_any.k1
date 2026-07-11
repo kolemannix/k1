@@ -20,10 +20,10 @@ fn typeVariantName(type-id: u64): string {
 }
 
 fn test() {
-  let* i: *int = 10;
-  let intPtr = make-any(i);
-  let* s = { x: 1, y: 100 };
-  let structPtr = make-any(s);
+  let i: int = 10;
+  let intPtr = make-any(&i);
+  let s = { x: 1, y: 100 };
+  let structPtr = make-any(&s);
   assert-equals(kindOfAny(intPtr), "int");
   assert-equals(kindOfAny(structPtr), "struct");
 }

@@ -234,7 +234,7 @@ impl TypedProgram {
         initializer: TypedExprId,
         owner_scope: ScopeId,
     ) -> SynthedVariable {
-        self.synth_variable_defn(name, initializer, false, false, owner_scope, None)
+        self.synth_variable_defn(name, initializer, false, owner_scope, None)
     }
 
     /// Creates a user-code-visible variable
@@ -245,7 +245,7 @@ impl TypedProgram {
         owner_scope: ScopeId,
         span: SpanId,
     ) -> SynthedVariable {
-        self.synth_variable_defn(name, initializer, true, false, owner_scope, Some(span))
+        self.synth_variable_defn(name, initializer, true, owner_scope, Some(span))
     }
 
     /// no_mangle: Skip mangling if we want the variable to be accessible from user code
@@ -254,7 +254,6 @@ impl TypedProgram {
         name: StringId,
         initializer_id: TypedExprId,
         no_mangle: bool,
-        is_referencing: bool,
         owner_scope: ScopeId,
         span: Option<SpanId>,
     ) -> SynthedVariable {
@@ -263,11 +262,7 @@ impl TypedProgram {
             None => self.exprs.get_span(initializer_id),
             Some(span) => span,
         };
-        let type_id = if is_referencing {
-            self.types.add_reference_type(initializer_type)
-        } else {
-            initializer_type
-        };
+        let type_id = initializer_type;
         let new_ident = if no_mangle {
             name
         } else {
@@ -276,10 +271,9 @@ impl TypedProgram {
             })
         };
         let mut flags = VariableFlags::empty();
-        flags.set(VariableFlags::Referencing, is_referencing);
         flags.set(VariableFlags::UserHidden, !no_mangle);
-        let reassignable = !is_referencing;
-        flags.set(VariableFlags::Reassigned, reassignable);
+        // let reassignable = true;
+        // flags.set(VariableFlags::Reassigned, reassignable);
         let defn_stmt = self.stmts.next_id();
         let variable = Variable {
             name: new_ident,
@@ -302,7 +296,6 @@ impl TypedProgram {
                 variable_id,
                 variable_type: type_id,
                 initializer: Some(initializer_id),
-                is_referencing,
                 span,
             }),
             defn_stmt,
@@ -817,14 +810,14 @@ impl TypedProgram {
             self.ast.idents.b.builder,
             new_string_builder,
             false,
-            true, // is_referencing
             block.scope_id,
             None,
         );
+        let string_builder_expr = self.synth_address_of(string_builder_var.variable_expr, SpanId::NONE, true).unwrap();
         self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
         let args_expr = args_expr.unwrap_or(self.synth_empty_struct(span));
         let format_block = self.synth_format_calls(
-            string_builder_var.variable_expr,
+            string_builder_expr,
             interpolated_string.parts,
             args_expr,
             span,
@@ -834,7 +827,7 @@ impl TypedProgram {
         let build_call = self.synth_typed_call_typed_args(
             self.ast.idents.f.StringBuilder_build_tmp.with_span(span),
             &[],
-            &[string_builder_var.variable_expr],
+            &[string_builder_expr],
             ctx_for_calls,
             false,
         )?;

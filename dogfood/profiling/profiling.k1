@@ -42,7 +42,7 @@ fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
     
     let old_tsc_elapsed_inclusive = anchor.tsc_elapsed_inclusive;
     
-    &global_profiler_parent <- anchor_index;
+    global_profiler_parent <- anchor_index;
     let start_tsc = read-cpu-counter();
     
     {
@@ -56,7 +56,7 @@ fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
 
 fn end_profile_block(block: ProfileBlock) {
     let elapsed = read-cpu-counter() - block.start_tsc;
-    &global_profiler_parent <- block.parent_index;
+    global_profiler_parent <- block.parent_index;
     
     let parent = &global_profiler_anchors.get-ref(block.parent_index.as[size]);
     let anchor = &global_profiler_anchors.get-ref(block.anchor_index.as[size]);
@@ -93,12 +93,12 @@ fn print_anchor_data(total_cpu_elapsed: u64) {
 
 // Begin overall profiling session
 fn begin_profile() {
-    &global_profile_start_tsc <- read-cpu-counter()
+    global_profile_start_tsc <- read-cpu-counter()
 }
 
 // End profiling session and print results
 fn end_and_print_profile() {
-    &global_profile_end_tsc <- read-cpu-counter();
+    global_profile_end_tsc <- read-cpu-counter();
     let total_tsc_elapsed = global_profile_end_tsc - global_profile_start_tsc;
     
     let nanos_elapsed = std/time/counter-to-nanos(total_tsc_elapsed);
