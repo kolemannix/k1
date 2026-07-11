@@ -93,19 +93,11 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
             let type_string = k1.type_id_to_string(type_id);
             format!("{type_string}\n{layout_string}")
         }
-        LsEntityKind::StructField { type_id, field_index, access_kind } => {
+        LsEntityKind::StructField { type_id, field_index } => {
             let struct_type = k1.types.get(type_id).as_struct().unwrap();
             let field = k1.types.mem.get_nth(struct_type.fields, field_index as usize);
             let field_type_string = k1.type_id_to_string(field.type_id);
-            let access_kind_string = match access_kind {
-                None => "",
-                Some(ak) => match ak {
-                    FieldAccessKind::ValueToValue => "Value Access",
-                    FieldAccessKind::Dereference => "Dereferencing Access",
-                    FieldAccessKind::ReferenceThrough => "Referencing Access (pointer to member)",
-                },
-            };
-            format!("{}: {}\n{}", k1.ident_str(field.name), field_type_string, access_kind_string)
+            format!("{}: {}", k1.ident_str(field.name), field_type_string)
         }
     }
 }

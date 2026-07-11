@@ -760,6 +760,9 @@ impl InstKind {
     fn is_value(&self) -> bool {
         matches!(self, InstKind::Value(_))
     }
+    const fn is_empty(&self) -> bool {
+        matches!(self, InstKind::Value(pt) if pt.is_empty())
+    }
     #[track_caller]
     pub fn expect_value(&self) -> Result<PhysicalType, String> {
         match self {
@@ -795,7 +798,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
         return Ok(());
     }
 
-    let mut b = Builder::new(k1);
+    let mut b = Builder::new(k1, true);
 
     //eprintln!("ir::compile_function {}", b.k1.function_id_to_string(function_id, false));
     let f = b.k1.get_function(function_id);
@@ -888,7 +891,7 @@ pub fn compile_top_level_expr(
 ) -> K1Result<()> {
     let start = k1.timing.clock.raw();
 
-    let mut b = Builder::new(k1);
+    let mut b = Builder::new(k1, true);
 
     for (variable_id, static_value_id) in input_parameters {
         let variable = b.k1.variables.get(*variable_id);
@@ -1005,10 +1008,12 @@ pub struct Builder<'k1> {
     cur_span: SpanId,
     // entry_span is the span assigned to the hoisted allocas
     entry_span: SpanId,
+
+    emission_time_optimizations: bool,
 }
 
 impl<'k1> Builder<'k1> {
-    fn new(k1: &'k1 mut TypedProgram) -> Self {
+    fn new(k1: &'k1 mut TypedProgram, emission_time_optimizations: bool) -> Self {
         Self {
             k1,
 
@@ -1020,6 +1025,8 @@ impl<'k1> Builder<'k1> {
             cur_block: Handle::nil(),
             cur_span: SpanId::NONE,
             entry_span: SpanId::NONE,
+
+            emission_time_optimizations,
         }
     }
 
@@ -1128,7 +1135,9 @@ impl<'k1> Builder<'k1> {
         alt: BlockId,
         comment: impl Into<IrStr>,
     ) -> InstId {
-        if let Value::Data32 { t: ScalarType::U8, data: b32 } = cond {
+        if let Value::Data32 { t: ScalarType::U8, data: b32 } = cond
+            && self.emission_time_optimizations
+        {
             if b32 == 1 {
                 // JMPIF true ...
                 self.push_jump(cons, comment)
@@ -1235,6 +1244,11 @@ impl<'k1> Builder<'k1> {
             }
             PhysicalTypeResult::Yes(pt) => pt,
         }
+    }
+
+    fn get_expr_physical_type(&mut self, expr_id: TypedExprId) -> PhysicalType {
+        let type_id = self.k1.exprs.get_type(expr_id);
+        self.get_physical_type(type_id)
     }
 
     fn type_to_inst_kind(&mut self, type_id: TypeId) -> InstKind {
@@ -1396,13 +1410,10 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
         TypedStmt::Let(let_stmt) => {
             let let_stmt = *let_stmt;
 
-            let rich_type_id = if let_stmt.is_referencing {
-                b.k1.types.get(let_stmt.variable_type).as_reference().unwrap().inner_type
-            } else {
-                let_stmt.variable_type
-            };
+            let rich_type_id = let_stmt.variable_type;
             let var_pt = b.get_physical_type(let_stmt.variable_type);
             let rich_pt = b.get_physical_type(rich_type_id);
+            debug_assert_eq!(var_pt, rich_pt); // nocommit
 
             let typed_var = b.k1.variables.get(let_stmt.variable_id);
             let returned = typed_var.is_returned();
@@ -1437,13 +1448,14 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
                 if let Some(init) = let_stmt.initializer {
                     compile_expr(b, Some(variable_alloca.as_value()), init)?;
                 }
-                // Referencing lets bind to a pointer value, which is exactly what the
-                // alloca slot is, so they are 'direct'.
-                // Non-referencing lets bind to the dereferenced value, but are backed by an alloca
-                // slot, so they are 'indirect' (need loading on rvalue access)
-                // non-referencing int -> indirect
-                // non-referencing agg -> direct
-                let is_direct = if rich_pt.is_agg() { true } else { let_stmt.is_referencing };
+                // Since aggregate values are represented by their address in our IR
+                // they are considered 'direct' variables, meaning we don't have to
+                // generate a load when they are used.
+                //
+                // Scalars however are represented as values; and the variable is a place,
+                // an address, so we consider it an 'indirect' representation of that scalar value,
+                // for example an i32.
+                let is_direct = rich_pt.is_agg();
                 b.k1.ir.b_variables.insert(
                     let_stmt.variable_id,
                     BuilderVariable {
@@ -1555,78 +1567,63 @@ fn compile_expr(
             }
             Ok(struct_base)
         }
-        TypedExpr::StructFieldAccess(field_access) => {
-            let struct_base = compile_expr(b, None, field_access.base)?;
-            let struct_pt_id = b.get_physical_type(field_access.struct_type).expect_agg();
-            let field_ptr = b.push_struct_offset(
-                struct_pt_id,
-                struct_base,
-                field_access.field_index,
-                "struct field access",
-            );
+        TypedExpr::StructFieldAccess(_) => {
+            let (field_ptr, frozen) = compile_expr_place(b, expr)?;
             let result_type = b.get_physical_type(expr_type);
-            let result =
-                build_field_access(b, field_access.access_kind, dst, field_ptr, result_type);
+            let needs_copy = !frozen;
+            let result = build_field_access(b, dst, field_ptr, result_type, needs_copy);
             Ok(result)
         }
-        TypedExpr::ArrayGetElement(array_get) => {
-            let array_base = compile_expr(b, None, array_get.base)?;
-            let array_agg_id = b.get_physical_type(array_get.array_type).expect_agg();
-            let (element_pt, _len) = b.k1.types.agg_types.get(array_agg_id).agg_type.expect_array();
-            let index = compile_expr(b, None, array_get.index)?;
-
-            let element_ptr = b.push_inst(
-                Inst::ArrayOffset { element_t: element_pt, base: array_base, element_index: index },
-                "array get offset",
-            );
+        TypedExpr::ArrayGetElement(_) => {
+            let (element_ptr, frozen) = compile_expr_place(b, expr)?;
             let result_type = b.get_physical_type(expr_type);
-            let result = build_field_access(
-                b,
-                array_get.access_kind,
-                dst,
-                element_ptr.as_value(),
-                result_type,
-            );
+            let needs_copy = !frozen;
+            let result = build_field_access(b, dst, element_ptr, result_type, needs_copy);
             Ok(result)
         }
         TypedExpr::Variable(variable_expr) => {
-            let (var_value, var_pt, is_indirect) =
-                compile_variable_to_address(b, variable_expr.variable_id);
+            let (var_value, var_pt, is_indirect, is_constant) =
+                compile_variable_to_address(b, variable_expr.variable_id, false);
             if is_indirect {
                 // indirect; var_value is storage that holds the variable's type
-                let loaded_or_copied =
-                    load_or_copy(b, var_pt, dst, var_value, false, "fulfill variable usage");
+                // copy_aggregates: false is correct because we know this is not an aggregate;
+                // aggregates are always 'direct'
+                debug_assert!(!var_pt.is_agg());
+                let copy_aggregates = !is_constant;
+                let loaded_or_copied = load_or_copy(
+                    b,
+                    var_pt,
+                    dst,
+                    var_value,
+                    copy_aggregates,
+                    "fulfill variable usage",
+                );
                 Ok(loaded_or_copied)
             } else {
                 // direct; var_value is already a canonical representation of the value; just have to
                 // fulfill dst
+                // nocommit: we can reproduce a bug here; when dst = None, if the variable is
+                // mutable, we should be making a copy.
                 let stored = store_rich_if_dst(b, dst, var_pt, var_value, "direct variable");
                 Ok(stored)
             }
         }
         TypedExpr::AddressOf(address_of) => {
-            let variable_id = address_of.target_variable;
-            let (var_addr_value, _is_indirect, _var_storage_pt) =
-                compile_variable_to_address(b, variable_id);
+            let (place, _frozen) = compile_expr_place(b, address_of.target_expr)?;
 
-            #[cfg(debug_assertions)]
-            if !b.get_value_kind(var_addr_value).is_ptr() {
-                b.k1.ice_span(b.cur_span, "Address-of yielded non-ptr")
-            }
-
-            let stored =
-                store_rich_if_dst(b, dst, PhysicalType::PTR, var_addr_value, "fulfill address of");
+            let stored = store_scalar_if_dst(b, dst, place);
             Ok(stored)
         }
-        TypedExpr::Deref(deref) => {
-            let src = compile_expr(b, None, deref.target)?;
+        TypedExpr::Deref(_) => {
+            let (src, frozen) = compile_expr_place(b, expr)?;
             let target_pt = b.get_physical_type(expr_type);
+            let copy_aggregates = !frozen;
             let loaded = load_or_copy(
                 b,
                 target_pt,
                 dst,
                 src,
-                true,
+                copy_aggregates,
                 if dst.is_some() { "lang deref fulfill to dst" } else { "lang deref no dst" },
             );
             Ok(loaded)
@@ -1809,6 +1806,7 @@ fn compile_expr(
 
             let match_end_block = b.push_block("match_end");
 
+            // nocommit: Eliminate the phi if we have a 'dst' - just do stores
             let mut incomings: List<PhiCase, _> = b.k1.ir.mem.new_list(match_expr.arms.len());
             for ((index, arm), (arm_block, arm_cons_block)) in
                 b.k1.mem.getn(match_expr.arms).iter().enumerate().zip(arm_blocks.iter())
@@ -1852,7 +1850,7 @@ fn compile_expr(
                     if pt.is_empty() {
                         Ok(Value::Empty)
                     } else {
-                        let value = if incomings.len() == 1 {
+                        let value = if incomings.len() == 1 && b.emission_time_optimizations {
                             let phi_case = incomings[0];
                             phi_case.value
                         } else {
@@ -1981,11 +1979,8 @@ fn compile_expr(
             Ok(sum_base)
         }
         TypedExpr::SumGetTag(sum_get_tag) => {
-            let sum_base = compile_expr(b, None, sum_get_tag.sum_expr_or_reference)?;
-            let sum_type =
-                b.k1.types
-                    .get_type_dereferenced(b.k1.exprs.get_type(sum_get_tag.sum_expr_or_reference))
-                    .expect_sum();
+            let (sum_base, _frozen) = compile_expr_place(b, sum_get_tag.sum_expr)?;
+            let sum_type = b.k1.get_expr_type(sum_get_tag.sum_expr).expect_sum();
             let tag_scalar = PhysicalType::scalar(sum_type.tag_type.get_scalar_type());
 
             // Load straight from the sum base, dont bother with a struct gep
@@ -1998,51 +1993,14 @@ fn compile_expr(
                 "get sum tag, load or copy to dst",
             ))
         }
-        TypedExpr::SumGetPayload(sum_get_payload) => {
-            let variant_index = sum_get_payload.variant_index;
-            let sum_base_value = compile_expr(b, None, sum_get_payload.sum_expr)?;
-
-            let base_expr_type_id = b.k1.exprs.get_type(sum_get_payload.sum_expr);
-            let base_t = b.k1.types.get(base_expr_type_id);
-            let sum_type_id = match sum_get_payload.access_kind {
-                FieldAccessKind::ValueToValue => base_expr_type_id,
-                FieldAccessKind::Dereference | FieldAccessKind::ReferenceThrough => {
-                    base_t.expect_reference().inner_type
-                }
-            };
-            let sum_agg_id = b.k1.get_physical_type(sum_type_id).unwrap().expect_agg();
-            let sum_pt = b.k1.types.agg_types.get(sum_agg_id).agg_type.expect_sum();
-            let variants = sum_pt.variants;
-            let sum_struct_repr = sum_pt.struct_repr;
-            let payload_offset =
-                b.push_struct_offset(sum_struct_repr, sum_base_value, 1, "sum payload offset");
-            if sum_get_payload.access_kind == FieldAccessKind::ReferenceThrough {
-                // We're generating a pointer to the payload. The variant itself is a reference
-                // and the value we produce here is just a pointer to the payload
-                let stored = store_scalar_if_dst(b, dst, payload_offset);
-                Ok(stored)
-            } else {
-                // We're loading the payload. The variant itself may or may not be a reference.
-                // If it's a reference, we need to do a copying load to avoid incorrect aliasing
-                // If it's not, we don't need to make a copy since the source is just a value
-                // (albeit represented as an address)
-                let make_copy = match sum_get_payload.access_kind {
-                    FieldAccessKind::ValueToValue => false,
-                    FieldAccessKind::Dereference => true,
-                    FieldAccessKind::ReferenceThrough => unreachable!(),
-                };
-                let sum_variant = b.k1.types.mem.get_nth(variants, variant_index as usize);
-                let payload_pt = sum_variant.payload.unwrap();
-                let copied = load_or_copy(
-                    b,
-                    payload_pt,
-                    dst,
-                    payload_offset,
-                    make_copy,
-                    "deliver sum payload",
-                );
-                Ok(copied)
-            }
+        TypedExpr::SumGetPayload(_sum_get_payload) => {
+            // nocommit: move to place; compile payload to place; simplify this one
+            let (payload_place, frozen) = compile_expr_place(b, expr)?;
+            let result_type = b.get_physical_type(expr_type);
+            let make_copy = !frozen;
+            let copied =
+                load_or_copy(b, result_type, dst, payload_place, make_copy, "deliver sum payload");
+            Ok(copied)
         }
         TypedExpr::Enum(e) => {
             // Just compile to the integer
@@ -2152,24 +2110,94 @@ fn compile_expr(
     }
 }
 
+fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bool)> {
+    match b.k1.exprs.get(expr).clone() {
+        TypedExpr::StructFieldAccess(field_access) => {
+            let struct_pt_id = b.get_physical_type(field_access.struct_type).expect_agg();
+            let (base_ptr, frozen) = compile_expr_place(b, field_access.base)?;
+            let field_ptr = b.push_struct_offset(
+                struct_pt_id,
+                base_ptr,
+                field_access.field_index,
+                "struct access place",
+            );
+            Ok((field_ptr, frozen))
+        }
+        TypedExpr::ArrayGetElement(array_get) => {
+            let (array_base, frozen) = compile_expr_place(b, array_get.base)?;
+            let array_agg_id = b.get_physical_type(array_get.array_type).expect_agg();
+            let (element_pt, _len) = b.k1.types.agg_types.get(array_agg_id).agg_type.expect_array();
+            let index = compile_expr(b, None, array_get.index)?;
+            let element_ptr = b.push_inst(
+                Inst::ArrayOffset { element_t: element_pt, base: array_base, element_index: index },
+                "array get offset place",
+            );
+            Ok((element_ptr.as_value(), frozen))
+        }
+        TypedExpr::Variable(variable_expr) => {
+            let (addr_value, _pt, _is_indirect, is_constant) =
+                compile_variable_to_address(b, variable_expr.variable_id, true);
+            let frozen = is_constant;
+            Ok((addr_value, frozen))
+        }
+        TypedExpr::Deref(deref_expr) => {
+            let value_of_p = compile_expr(b, None, deref_expr.target)?;
+            Ok((value_of_p, false))
+        }
+        TypedExpr::SumGetPayload(sum_get_payload) => {
+            let (sum_base, frozen) = compile_expr_place(b, sum_get_payload.sum_expr)?;
+            let sum_type_id = b.k1.exprs.get_type(sum_get_payload.sum_expr);
+            let sum_agg_id = b.k1.get_physical_type(sum_type_id).unwrap().expect_agg();
+            let sum_pt = b.k1.types.agg_types.get(sum_agg_id).agg_type.expect_sum();
+            let sum_struct_repr = sum_pt.struct_repr;
+            let payload_offset =
+                b.push_struct_offset(sum_struct_repr, sum_base, 1, "sum payload offset");
+            Ok((payload_offset, frozen))
+        }
+        TypedExpr::AddressOf(_address_of_expr) => {
+            b_ice!(b, "AddressOf is not a place expression; it produces an address, not a place");
+        }
+        _ => {
+            let e = compile_expr(b, None, expr)?;
+            debug_assert!(b.get_value_kind(e).is_aggregate() || b.get_value_kind(e).is_empty());
+            Ok((e, true))
+        }
+    }
+}
+
 fn compile_variable_to_address(
     b: &mut Builder,
     variable_id: VariableId,
-) -> (Value, PhysicalType, bool) {
+    // Don't fold to the value; the caller wants the address explicitly
+    require_address: bool,
+) -> (Value, PhysicalType, bool, bool) {
     let variable = b.k1.variables.get(variable_id);
     match variable.global_id() {
         Some(global_id) => {
+            let global = b.k1.globals.get(global_id);
             // Globals are pretty complex. We always generate an instruction
             // representing the **address** of the global, because they are always
             // addresses to static memory. For aggregate types, that address _is_
             // the value of the expression referring to the global, but for
             // non-reference types, we must 'load' the value from the address, since
             // the address is just an implementation detail
+            //
+            // Caveat: For immutable globals, we optimize to the value. This is to propagate constants
             let value_type = variable.type_id;
+            let is_constant = global.is_constant;
             let value_pt = b.get_physical_type(value_type);
+            // TODO: global folding
+            // if global.is_constant
+            //     && value_pt.is_scalar()
+            //     && !require_address
+            //     && b.emission_time_optimizations
+            // {
+            //     let static_value = b.k1.static_values.get(global.initial_value);
+            // } else {
             let address = Value::GlobalAddr { storage_pt: value_pt, id: global_id };
             let is_direct = value_pt.is_agg();
-            (address, value_pt, !is_direct)
+            (address, value_pt, !is_direct, is_constant)
+            // }
         }
         None => {
             let Some(var) = b.get_variable(variable_id) else {
@@ -2185,38 +2213,26 @@ fn compile_variable_to_address(
             };
             let var_value = var.value;
             let var_indirect = var.indirect;
-            (var_value, var.storage_pt, var_indirect)
+            let is_constant = false;
+            (var_value, var.storage_pt, var_indirect, is_constant)
         }
     }
 }
 
 fn build_field_access(
     b: &mut Builder,
-    access_kind: FieldAccessKind,
     dst: Option<Value>,
     field_ptr: Value,
     result_pt: PhysicalType,
+    needs_copy: bool,
 ) -> Value {
-    if access_kind == FieldAccessKind::ReferenceThrough {
-        let stored = store_scalar_if_dst(b, dst, field_ptr);
-        stored
-    } else {
-        // We're loading a field. The variant itself may or may not be a reference.
-        // If it's a reference, we need to do a copying load to avoid incorrect aliasing
-        // If it's not, we don't need to make a copy since the source is just a value
-        // (albeit represented as an address)
-        let make_copy = match access_kind {
-            FieldAccessKind::ValueToValue => false,
-            FieldAccessKind::Dereference => true,
-            FieldAccessKind::ReferenceThrough => unreachable!(),
-        };
-        let comment = match make_copy {
-            false => "field access no copy",
-            true => "field access w copy",
-        };
-        let loaded = load_or_copy(b, result_pt, dst, field_ptr, make_copy, comment);
-        loaded
-    }
+    let make_copy = needs_copy;
+    let comment = match make_copy {
+        false => "field access no copy",
+        true => "field access w copy",
+    };
+    let loaded = load_or_copy(b, result_pt, dst, field_ptr, make_copy, comment);
+    loaded
 }
 
 #[inline]
