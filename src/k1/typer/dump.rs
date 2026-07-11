@@ -600,7 +600,8 @@ impl TypedProgram {
             TypedExpr::StructFieldAccess(field_access) => {
                 self.display_expr_id(field_access.base, w, indentation)?;
                 w.write_str(".")?;
-                let fields = self.types.get(field_access.struct_type).expect_struct().fields;
+                let struct_type = self.exprs.get_type(field_access.base);
+                let fields = self.types.get(struct_type).expect_struct().fields;
                 let name = self.types.mem.get_nth(fields, field_access.field_index as usize).name;
                 self.write_ident(w, name)?;
                 Ok(())

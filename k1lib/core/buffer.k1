@@ -366,7 +366,7 @@ impl[t] iterator[item = t] for BufferIterator[t] {
     { at-least: rem, at-most: :some(rem) }
   }
   fn advance-by(self: *mut self, n: size): empty {
-    self.pos* <- self.pos + n
+    self.pos <- self.pos + n
   }
   fn nth(self: *mut self, n: size): ?item {
     self.advance-by(n);
@@ -416,7 +416,7 @@ impl[t] iterator[item = *mut t] for BufferRefIterator[t] {
     { at-least: rem, at-most: some(rem) }
   }
   fn advance-by(self: *mut self, n: size): empty {
-    self.pos* <- self.pos + n
+    self.pos <- self.pos + n
   }
   fn nth(self: *mut self, n: size): ?item {
     self.advance-by(n);

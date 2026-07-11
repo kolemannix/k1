@@ -5,7 +5,7 @@ let globalZst: {} = {}
 fn testGlobal(): empty {
   assert-equals(0, types/size[type-of(globalZst)]);
   globalZst;
-  assert-equals(globalZst, &globalZst.*);
+  assert-equals(globalZst, (&globalZst).*);
 }
 
 fn testLocal(_a: empty, _b: empty, _c: empty, _d: empty): empty {
@@ -17,7 +17,7 @@ fn testLocal(_a: empty, _b: empty, _c: empty, _d: empty): empty {
 fn test() {
   globalZst; // empty
   &globalZst;
-  &globalZst.*; // no-op yielding Value::Empty
+  (&globalZst).*; // no-op yielding Value::Empty
 
   testLocal({}, {}, {}, {});
   staticZst();

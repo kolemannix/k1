@@ -497,7 +497,6 @@ impl TypedProgram {
         self.exprs.add(TypedExpr::Call { call_id }, type_id, span)
     }
 
-    // nocommit can I use synth_struct_field_access in more places now that its always the same
     pub(super) fn synth_field_access(
         &mut self,
         struct_expr: TypedExprId,
@@ -513,7 +512,6 @@ impl TypedProgram {
             TypedExpr::StructFieldAccess(FieldAccess {
                 base: struct_expr,
                 field_index: field_index as u32,
-                struct_type: struct_type_id,
             }),
             field.type_id,
             span,

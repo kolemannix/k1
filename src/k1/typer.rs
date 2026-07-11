@@ -266,11 +266,6 @@ bitflags! {
         const IsMethodReceiver = 1 << 4;
         /// We are compiling code for compile-time (static) execution
         const Static = 1 << 5;
-        /// We are compiling a place (or lvalue in the canon)
-        /// Fail if you see a non-place.
-        /// Valid: struct chain &a.b.c.d.y
-        /// Invalid: &a.foo().y
-        const IsPlace = 1 << 6;
     }
 }
 
@@ -1114,8 +1109,12 @@ pub struct DerefExpr {
 
 #[derive(Clone, Copy)]
 pub enum AddressOfKind {
-    StackVariable,
-    GlobalVariable,
+    /// Covers both Stack and StackSynthetic roots
+    StackVariable(VariableId),
+    GlobalVariable(VariableId),
+    /// The chain roots at a Deref (a derived place: the address already exists as a
+    /// reference value), or — synthetic sites only — at an rvalue that ir materializes
+    /// as a frozen temporary.
     OtherExpr,
 }
 
@@ -1243,19 +1242,15 @@ impl ArrayLiteral {
 pub struct ArrayGetElement {
     pub base: TypedExprId,
     pub index: TypedExprId,
-    // nocommit: don't need array_type anymore
-    pub array_type: TypeId,
 }
-impl_copy_if_small!(16, ArrayGetElement);
+impl_copy_if_small!(8, ArrayGetElement);
 
-/// `base` can be a reference to a struct, or a struct.
-/// `FieldAccessKind` talks about the _result_ type.
+/// `base` is always a struct value; auto-deref inserts a Deref node when the
+/// source base is a reference
 #[derive(Clone)]
 pub struct FieldAccess {
     pub base: TypedExprId,
     pub field_index: u32,
-    // nocommit: struct type not really needed because its now always the type of `base`
-    pub struct_type: TypeId,
 }
 
 #[derive(Clone)]
@@ -1753,6 +1748,9 @@ bitflags! {
         const Context = 1 << 1;
         const UserHidden = 1 << 2;
         const Returned = 1 << 3;
+        /// This variable's address was taken via an AddressOf rooted at it. IR must give
+        /// it real storage; non-addressed, non-reassigned scalars can stay SSA values.
+        const AddressTaken = 1 << 4;
     }
 }
 
@@ -1796,6 +1794,9 @@ impl Variable {
     }
     pub fn is_returned(&self) -> bool {
         self.flags.contains(VariableFlags::Returned)
+    }
+    pub fn is_address_taken(&self) -> bool {
+        self.flags.contains(VariableFlags::AddressTaken)
     }
 }
 
@@ -5426,16 +5427,12 @@ impl TypedProgram {
             } else {
                 if allow_addr_of {
                     // A reference is expected, and a reference is not provided
-                    // If lhs is just a variable, we can inject an address_of
-                    match self.exprs.get(expr) {
-                        TypedExpr::Variable(_) => {
-                            let span = self.exprs.get_span(expr);
-                            if let Ok(expr) = self.synth_address_of(expr, span, false) {
-                                // self.report_hint(span, "coerce address of");
-                                return CheckExprTypeResult::Coerce(expr, "address_of".into());
-                            }
-                        }
-                        _ => {}
+                    // If the expr is a place, we can inject an address_of; the place
+                    // walk in synth_address_of decides
+                    let span = self.exprs.get_span(expr);
+                    if let Ok(expr) = self.synth_address_of(expr, span, false) {
+                        // self.report_hint(span, "coerce address of");
+                        return CheckExprTypeResult::Coerce(expr, "address_of".into());
                     }
                 }
             }
@@ -7698,6 +7695,11 @@ impl TypedProgram {
             return self.eval_dereference(field_access.base, ctx, span);
         }
 
+        // Special case: .& address-of operation
+        if field_access.field_name == self.ast.idents.b.amp {
+            return self.compile_address_of(field_access.base, ctx, span);
+        }
+
         // Special case: .! unwrap operation
         if field_access.field_name == self.ast.idents.b.bang {
             return self.eval_unwrap_operator(field_access.base, ctx, field_access.span);
@@ -7807,7 +7809,6 @@ impl TypedProgram {
                     TypedExpr::StructFieldAccess(FieldAccess {
                         base: base_agg_expr,
                         field_index: field_index as u32,
-                        struct_type: base_type_id,
                     }),
                     result_type,
                     span,
@@ -7842,7 +7843,10 @@ impl TypedProgram {
         span: SpanId,
         allow_synthetic: bool,
     ) -> K1Result<TypedExprId> {
-        let kind = self.get_place_chain_or_something(input);
+        let kind = self.check_place_for_address_of(input, allow_synthetic, span)?;
+        if let AddressOfKind::StackVariable(variable_id) = kind {
+            self.variables.get_mut(variable_id).flags.insert(VariableFlags::AddressTaken);
+        }
         let input_type = self.exprs.get_type(input);
         let reference_type = self.types.add_reference_type(input_type);
         let addr_of_expr = self.exprs.add(
@@ -7853,41 +7857,69 @@ impl TypedProgram {
         Ok(addr_of_expr)
     }
 
-    fn get_place_chain_or_something(&mut self, input: TypedExprId) {
-        match self.exprs.get(input) {
+    /// Walks a place (lvalue) chain root-to-leaf, verifying `expr` denotes a place whose
+    /// address may be taken, and classifying the root.
+    /// Valid: &a.b.c.y   Invalid: &a.foo().y
+    /// `allow_synthetic` permits StackSynthetic variable roots, which user code
+    /// cannot name.
+    fn check_place_for_address_of(
+        &self,
+        expr: TypedExprId,
+        allow_synthetic: bool,
+        span: SpanId,
+    ) -> K1Result<AddressOfKind> {
+        match self.exprs.get(expr) {
             TypedExpr::Variable(v) => {
                 let var = self.variables.get(v.variable_id);
                 match var.kind {
-                    VariableKind::FnParam(_) => {
-                        return failf!(
-                            span,
-                            "Cannot take address of a function parameter; re-declare it or use a & type"
-                        );
-                    }
+                    // Params have no storage in ir (they are SSA values), so no address
+                    // exists to take, even through a chain like &param.field
+                    VariableKind::FnParam(_) => failf!(
+                        span,
+                        "Cannot take address of a function parameter; re-declare it or use a & type"
+                    ),
                     VariableKind::StackSynthetic(_) => {
                         if allow_synthetic {
-                            (v.variable_id, AddressOfKind::StackVariable)
+                            Ok(AddressOfKind::StackVariable(v.variable_id))
                         } else {
-                            return failf!(
-                                span,
-                                "Cannot take address of a compiler-generated variable"
-                            );
+                            failf!(span, "Cannot take address of a compiler-generated variable")
                         }
                     }
-                    VariableKind::Stack(_) => (v.variable_id, AddressOfKind::StackVariable),
-                    VariableKind::Global(_) => (v.variable_id, AddressOfKind::GlobalVariable),
+                    VariableKind::Stack(_) => Ok(AddressOfKind::StackVariable(v.variable_id)),
+                    VariableKind::Global(_) => Ok(AddressOfKind::GlobalVariable(v.variable_id)),
                 }
             }
             TypedExpr::StructFieldAccess(field_access) => {
-                check_is_place(field_access.base);
-                Ok(())
+                self.check_place_for_address_of(field_access.base, allow_synthetic, span)
+            }
+            TypedExpr::ArrayGetElement(array_get) => {
+                // The index is evaluated as a value; only the base affects placeness
+                self.check_place_for_address_of(array_get.base, allow_synthetic, span)
+            }
+            TypedExpr::SumGetPayload(get_payload) => {
+                self.check_place_for_address_of(get_payload.sum_expr, allow_synthetic, span)
+            }
+            // A derived place: the address is the target reference's value, so no new
+            // address is taken and there is nothing to register
+            TypedExpr::Deref(_) => Ok(AddressOfKind::OtherExpr),
+            // Blocks are place-transparent in their trailing expression; array `get`
+            // relies on this: it synthesizes `{ <bounds check>; array[index] }`
+            TypedExpr::Block(block) => {
+                let last_stmt = self.mem.getn(block.statements).last().copied();
+                if let Some(TypedStmt::Expr(trailing_expr, _)) =
+                    last_stmt.map(|s| self.stmts.get(s))
+                {
+                    self.check_place_for_address_of(*trailing_expr, allow_synthetic, span)
+                } else {
+                    failf!(span, "Cannot take the address of a block with no trailing expression")
+                }
             }
             other => {
-                return failf!(
+                failf!(
                     span,
-                    "Currently Unsupported AddressOf expr: {}",
-                    self.expr_to_string(input)
-                );
+                    "Cannot take the address of a {}; only places (variables, struct fields, array elements, sum payloads, and dereferences) have addresses",
+                    other.kind_name()
+                )
             }
         }
     }
@@ -9486,7 +9518,6 @@ impl TypedProgram {
             let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
                 base: k1.synth_dereference(env_variable_expr),
                 field_index: field_index as u32,
-                struct_type: env_struct_type,
             });
             (env_field_access, variable_type, span)
         }
@@ -9908,6 +9939,7 @@ impl TypedProgram {
                         SpanId::NONE,
                     );
                     let final_field = if is_referencing {
+                        // Infallible: when referencing, struct_base is a Deref, a valid place root
                         self.synth_address_of(get_struct_field, SpanId::NONE, false).unwrap()
                     } else {
                         get_struct_field
@@ -9968,6 +10000,7 @@ impl TypedProgram {
                         sum_pattern.span,
                     );
                     let final_payload_expr = if is_referencing {
+                        // Infallible: when referencing, sum_base is a Deref, a valid place root
                         self.synth_address_of(get_payload_expr, SpanId::NONE, false).unwrap()
                     } else {
                         get_payload_expr
@@ -10476,8 +10509,25 @@ impl TypedProgram {
             outer_for_expr_scope,
             Some(iterable_span),
         );
+        let mut iterable_defn_stmt: Option<TypedStmtId> = None;
         let coerced_iterable_expr = if needs_addr_of {
-            self.synth_address_of(iterable_expr, SpanId::NONE, true)?
+            match self.synth_address_of(iterable_expr, SpanId::NONE, true) {
+                Ok(addr) => addr,
+                Err(_) => {
+                    // The iterable is an rvalue (e.g. a call result); bind it to a
+                    // synthetic variable so we have a place to point at
+                    let iterable_name = self.ast.idents.intern("iterable");
+                    let iterable_variable = self.synth_variable_defn(
+                        iterable_name,
+                        iterable_expr,
+                        false,
+                        outer_for_expr_scope,
+                        Some(iterable_span),
+                    );
+                    iterable_defn_stmt = Some(iterable_variable.defn_stmt);
+                    self.synth_address_of(iterable_variable.variable_expr, SpanId::NONE, true)?
+                }
+            }
         } else {
             iterable_expr
         };
@@ -10602,6 +10652,9 @@ impl TypedProgram {
         );
 
         let mut for_expr_initial_statements = self.mem.new_list(5);
+        if let Some(iterable_defn_stmt) = iterable_defn_stmt {
+            for_expr_initial_statements.push(iterable_defn_stmt);
+        }
         for_expr_initial_statements.push(index_variable.defn_stmt);
         for_expr_initial_statements.push(iterator_variable.defn_stmt);
         let loop_stmt_id = self.add_expr_stmt(loop_expr);
@@ -11700,7 +11753,11 @@ impl TypedProgram {
                     self.exprs.get_span(writer_expr),
                 )?;
                 let writer = if needs_addr_of {
-                    self.synth_address_of(writer_expr, call_span, true)?
+                    // The Writer impl is on the reference type, so the writer must be
+                    // an lvalue; bind rvalues to a variable at the call site
+                    self.synth_address_of(writer_expr, call_span, true).map_err(|e| {
+                        errf!(call_span, "The writer must be an lvalue: {}", e.message)
+                    })?
                 } else {
                     writer_expr
                 };
@@ -11827,7 +11884,6 @@ impl TypedProgram {
                 let array_reference_type = self.get_expr_type(receiver).as_reference();
                 let array_expr =
                     self.synth_dereference_when(receiver, array_reference_type.is_some());
-                let result_type = array_type.element_type;
 
                 if let Ok(static_index_expr) = self.attempt_static_lift(index_expr) {
                     let static_index_type = self.exprs.get_type(static_index_expr);
@@ -11851,9 +11907,8 @@ impl TypedProgram {
                     TypedExpr::ArrayGetElement(ArrayGetElement {
                         base: array_expr,
                         index: index_expr,
-                        array_type: array_type_id,
                     }),
-                    result_type,
+                    array_type.element_type,
                     span,
                 );
                 let array_length_expr = self.synth_typed_call_typed_args(
@@ -11879,14 +11934,27 @@ impl TypedProgram {
                     ctx.with_no_expected_type(),
                     false,
                 )?;
-                let if_else_expr = self.synth_if_else(
-                    result_type,
+                // We emit `{ if !in_bounds crash; array[index] }` rather than an if/else
+                // over the element so that the element access is the block's trailing
+                // expr: blocks are place-transparent, which is what makes
+                // `arr.get(i).&` and `arr.get(i) <- v` work
+                let unit_expr = self.synth_empty_struct(span);
+                let bounds_check_expr = self.synth_if_else(
+                    self.types.builtins.empty,
                     is_in_bounds,
-                    get_element_expr,
+                    unit_expr,
                     crash_oob,
                     span,
                 );
-                Ok(CallResolution::OtherExpr(if_else_expr))
+                let mut statements = self.mem.new_list(2);
+                statements.push(self.add_expr_stmt(bounds_check_expr));
+                statements.push(self.add_expr_stmt(get_element_expr));
+                let block_expr = self.exprs.add_block(
+                    &mut self.mem,
+                    BlockBuilder { scope_id: ctx.scope_id, statements, span },
+                    array_type.element_type,
+                );
+                Ok(CallResolution::OtherExpr(block_expr))
             }
             _ => {
                 if let Some(method_id) =
@@ -12582,6 +12650,7 @@ impl TypedProgram {
             span,
         );
         let payload_referenced = if is_reference {
+            // Infallible: when is_reference, sum_base_expr is a Deref, a valid place root
             self.synth_address_of(payload_expr, SpanId::NONE, false).unwrap()
         } else {
             payload_expr
@@ -13119,10 +13188,17 @@ impl TypedProgram {
                     false,
                 )?;
                 let mut typechecked_args = self.mem.new_list(args_and_params.len());
+                // The receiver is the first non-context param; context params come first
+                // in the aligned args
+                let receiver_index = if is_method {
+                    self.tmp.getn(args_and_params.params).iter().position(|p| !p.is_context)
+                } else {
+                    None
+                };
                 for (index, (maybe_typed_expr, param)) in
                     self.tmp.getn_zip(args_and_params.args, args_and_params.params).enumerate()
                 {
-                    let is_method_receiver = is_method && index == 0;
+                    let is_method_receiver = receiver_index == Some(index);
                     let checked_expr = match *maybe_typed_expr {
                         MaybeTypedExpr::Typed(typed) => {
                             if let Err(e) = self.check_and_coerce_expr(
@@ -13260,10 +13336,17 @@ impl TypedProgram {
 
                 // We can skip re-evaluating everything if we're just here to learn the return types
                 if !ctx.is_inference() {
+                    // The receiver is the first non-context param; context params come
+                    // first in the aligned args
+                    let receiver_index = if is_method {
+                        self.tmp.getn(args_and_params.params).iter().position(|p| !p.is_context)
+                    } else {
+                        None
+                    };
                     for (param_index, (maybe_typed_expr, param)) in
                         self.tmp.getn_zip(args_and_params.args, args_and_params.params).enumerate()
                     {
-                        let is_method_receiver = param_index == 0 && is_method;
+                        let is_method_receiver = receiver_index == Some(param_index);
                         let allow_addr_of = is_method_receiver;
                         // Is this parameter a fnlike type parameter? If so, we already have the
                         // typechecked value expression

@@ -3216,8 +3216,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     K::Ident => self.tokens.next(),
                     K::Asterisk => self.tokens.next(),
                     K::Bang => self.tokens.next(),
+                    K::Amp => self.tokens.next(),
                     _k => {
-                        return Err(error_expected("Field name, or postfix *, or !", self.peek()));
+                        return Err(error_expected(
+                            "Field name, or postfix *, !, or &",
+                            self.peek(),
+                        ));
                     }
                 };
                 let (type_args, _) = self.parse_bracketed_type_args()?;
@@ -3248,8 +3252,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     })))
                 } else {
                     // a.b[int] <complete expression>
-                    // discarded for now: nocommit
-                    let _trailing_asterisk = self.maybe_consume_no_whitespace(K::Asterisk);
                     let target = self.make_ident(target);
                     let span = self.extend_to_here(self.get_expression_span(result));
                     Some(self.add_expression(ParsedExpr::FieldAccess(FieldAccess {
@@ -3477,7 +3479,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     return Err(error("unexpected prefix operator", first));
                 };
                 self.advance();
-                // nocommit: should not also parse with postfix precedence?
                 let expr = self.expect_expression()?;
                 Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp {
                     expr,

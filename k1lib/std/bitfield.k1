@@ -128,7 +128,7 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
 
   // Have to use address of so the blanket impl applies
   // FIXME: Use the address of trick on blanket impl search as well
-  &code.implPrint(type-name, printBody.build(), indent = 0);
+  (&code).implPrint(type-name, printBody.build(), indent = 0);
 
   code.build()
 }

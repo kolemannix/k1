@@ -24,9 +24,9 @@ fn test() {
    };
    assert(globalIntMut == 2);
 
-   globalMutPtr <- &globalIntMut.as[ptr];
+   globalMutPtr <- (&globalIntMut).as[ptr];
    assert-equals(globalMutPtr.as[*int].*, 2);
-   assert(&globalIntMut.as[ptr] == globalMutPtr);
+   assert((&globalIntMut).as[ptr] == globalMutPtr);
 
    assert-equals(globalString.len(), 8);
    assert-equals(globalString, "imglobal");

@@ -28,7 +28,7 @@ fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
     let parent_index = global_profiler_parent;
     //eprintln("begin {label} with index {anchor_index}");
     //eprintln("  parent: {parent_index}");
-    let anchor = &global_profiler_anchors.get-ref(anchor_index.as[size]);
+    let anchor = global_profiler_anchors.get(anchor_index.as[size]).&;
     
     // Initialize anchor on first use
     if anchor.label == "" {
@@ -58,10 +58,10 @@ fn end_profile_block(block: ProfileBlock) {
     let elapsed = read-cpu-counter() - block.start_tsc;
     global_profiler_parent <- block.parent_index;
     
-    let parent = &global_profiler_anchors.get-ref(block.parent_index.as[size]);
-    let anchor = &global_profiler_anchors.get-ref(block.anchor_index.as[size]);
+    let parent = global_profiler_anchors.get(block.parent_index.as[size]).&;
+    let anchor = global_profiler_anchors.get(block.anchor_index.as[size]).&;
     
-    parent.tsc_elapsed_exclusive* <- parent.tsc_elapsed_exclusive - elapsed;
+    parent.tsc_elapsed_exclusive <- parent.tsc_elapsed_exclusive - elapsed;
     anchor <- {
       tsc_elapsed_exclusive: anchor.tsc_elapsed_exclusive + elapsed,
       tsc_elapsed_inclusive: block.old_tsc_elapsed_inclusive + elapsed,
@@ -84,7 +84,7 @@ fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *ProfileAnchor) {
 
 // Print all anchor profiling data
 fn print_anchor_data(total_cpu_elapsed: u64) {
-    for anchor in &global_profiler_anchors.as-buffer().refIter() {
+    for anchor in (&global_profiler_anchors).as-buffer().refIter() {
         if anchor.hit_count != 0 {
             print_time_elapsed(total_cpu_elapsed, anchor)
         }

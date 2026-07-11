@@ -72,7 +72,7 @@ ns for HashMap {
       probeIndex := probeIndex + 1;
       if probeIndex == self.entries.len { probeIndex := 0 };
 
-      let entryRef = self.entries*.getRef(probeIndex);
+      let entryRef = self.entries.getRef(probeIndex);
       if entryRef is :none* {
         return(entryRef)
       }
@@ -91,12 +91,12 @@ ns for HashMap {
       self.grow();
     };
     let index = self._computeIndex(key);
-    let entryRef = self.entries*.getRef(index);
+    let entryRef = self.entries.getRef(index);
     let entry = { key: key, value: value, deleted: false };
     switch entryRef.* {
       :none -> {
         entryRef <- :some(entry);
-        self.size* <- self.size + 1;
+        self.size <- self.size + 1;
       },
       :some({ key: existingKey, value: _ }) -> {
         if existingKey == key {
@@ -104,7 +104,7 @@ ns for HashMap {
         } else {
           let nextAvailableEntry = self._probe(index);
           nextAvailableEntry <- :some(entry);
-          self.size* <- self.size + 1;
+          self.size <- self.size + 1;
         }
       }
     };
@@ -139,7 +139,7 @@ ns for HashMap {
 
   fn remove[V](self: *mut HashMap[V], key: string): bool {
     let index = self._computeIndex(key);
-    let entryRef = self.entries*.getRef(index);
+    let entryRef = self.entries.getRef(index);
     require entryRef is :some({ key: existingKey, value: value, deleted })* else {
       return(false)
     };
@@ -148,7 +148,7 @@ ns for HashMap {
         (false)
       } else {
         deleted <- true;
-        self.size* <- self.size - 1;
+        self.size <- self.size - 1;
         true
       }
     } else {
@@ -157,13 +157,13 @@ ns for HashMap {
         probeIndex := probeIndex + 1;
         if probeIndex == self.entries.len { probeIndex := 0; };
 
-        let probedEntryRef = self.entries*.getRef(probeIndex);
+        let probedEntryRef = self.entries.getRef(probeIndex);
         switch probedEntryRef {
           :some({ key: existingKey, value, deleted })* -> {
             if key == existingKey.* {
               let wasDeleted = deleted.*;
               if not wasDeleted {
-                self.size* <- self.size - 1;
+                self.size <- self.size - 1;
                 deleted <- true;
                 break(true)
               } else {

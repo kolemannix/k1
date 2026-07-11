@@ -21,7 +21,7 @@ fn complexReferences() {
   let structRef = &structRef;
 
   let xValue: int = structRef.x;
-  let xRef: *mut int = structRef.x*;
+  let xRef: *mut int = &structRef.x;
 
   assert(xRef.* == xValue);
   assert(structRef.*.x == structRef.x);
@@ -30,7 +30,7 @@ fn complexReferences() {
 
   assert(xRef.* == -10);
 
-  structRef.x* <- 42;
+  structRef.x <- 42;
   assert(xRef.* == 42);
 
   let eitherRef: either { yes(int), no } = :yes(3);
@@ -53,7 +53,7 @@ fn complexReferences() {
 
   if structOptRef is :some(x) {
     assert(x.x == 42);
-    x.x* <- 43;
+    x.x <- 43;
     assert(x.x == 43);
   } else {
     crash("None")

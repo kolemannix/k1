@@ -69,7 +69,7 @@ fn render(out: *StringBuilder, pixels: *array[u8, 65536]) {
 fn update(pixels: *array[u8, 65536]): { x: u32, y: u32 } {
   let x = sys/random(gridsize);
   let y = sys/random(gridsize);
-  let pix = pixels.get-ref(y*gridsize + x);
+  let pix = pixels.get(y*gridsize + x).&;
   // pix <- pix ^ 1;
   pix <- 1;
   { x, y }

@@ -20,12 +20,12 @@ fn test() {
   };
 
   let myInt = 4;
-  require &myInt is 4* else {
+  require (&myInt) is 4* else {
     crash("")
   };
 
   let myEntity = { id: "abc123", health: 99, opacity: 0.5, alive: true };
-  require &myEntity is { health, opacity, alive: true }* and health.* > 50 and opacity.* > 0.0 else {
+  require (&myEntity) is { health, opacity, alive: true }* and health.* > 50 and opacity.* > 0.0 else {
     crash("")
   };
 

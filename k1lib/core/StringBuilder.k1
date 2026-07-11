@@ -7,7 +7,7 @@ ns for StringBuilder {
   }
 
   fn reset(self: *mut StringBuilder) {
-    self.list*.clear()
+    self.list.clear()
   }
 
   fn peek(self: *StringBuilder): span[char] {
@@ -25,9 +25,9 @@ ns for StringBuilder {
 
 impl writer for *mut StringBuilder {
   fn write-byte(self, b: u8): empty {
-    self.list*.push-in(context :tmp)(b)
+    self.list.push-in(context :tmp)(b)
   }
   fn write-bytes(self, b: span[u8]): empty {
-    self.list*.append-span(b)
+    self.list.append-span(b)
   }
 }

@@ -8,7 +8,7 @@ fn test() {
   // By taking the address of point, we generate an LLVM ptrtoint
   // this makes points address 'exposed' and thus immune to SROA
   // So we can talk about the stack memory in k1 as long as we stay within the allocation
-  let pointPtr = &point.as[ptr];
+  let pointPtr = (&point).as[ptr];
 
   let point2 = pointPtr.r[Point3];
   assert(point2.x == 10);
