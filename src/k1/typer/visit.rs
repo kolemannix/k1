@@ -105,10 +105,10 @@ impl TypedProgram {
                 }
             }
             TypedExpr::StructFieldAccess(field_access) => {
-                recurse!(field_access.base);
+                recurse!(field_access.base_struct);
             }
             TypedExpr::ArrayGetElement(array_get) => {
-                recurse!(array_get.base);
+                recurse!(array_get.base_array);
                 recurse!(array_get.index);
             }
             TypedExpr::Variable(_) => (),

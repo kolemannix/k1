@@ -1246,11 +1246,6 @@ impl<'k1> Builder<'k1> {
         }
     }
 
-    fn get_expr_physical_type(&mut self, expr_id: TypedExprId) -> PhysicalType {
-        let type_id = self.k1.exprs.get_type(expr_id);
-        self.get_physical_type(type_id)
-    }
-
     fn type_to_inst_kind(&mut self, type_id: TypeId) -> InstKind {
         if type_id == NEVER_TYPE_ID {
             InstKind::Terminator
@@ -2109,9 +2104,9 @@ fn compile_expr(
 fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bool)> {
     match b.k1.exprs.get(expr).clone() {
         TypedExpr::StructFieldAccess(field_access) => {
-            let struct_type = b.k1.exprs.get_type(field_access.base);
+            let struct_type = b.k1.exprs.get_type(field_access.base_struct);
             let struct_pt_id = b.get_physical_type(struct_type).expect_agg();
-            let (base_ptr, frozen) = compile_expr_place(b, field_access.base)?;
+            let (base_ptr, frozen) = compile_expr_place(b, field_access.base_struct)?;
             let field_ptr = b.push_struct_offset(
                 struct_pt_id,
                 base_ptr,
@@ -2121,8 +2116,8 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
             Ok((field_ptr, frozen))
         }
         TypedExpr::ArrayGetElement(array_get) => {
-            let (array_base, frozen) = compile_expr_place(b, array_get.base)?;
-            let array_type = b.k1.exprs.get_type(array_get.base);
+            let (array_base, frozen) = compile_expr_place(b, array_get.base_array)?;
+            let array_type = b.k1.exprs.get_type(array_get.base_array);
             let array_agg_id = b.get_physical_type(array_type).expect_agg();
             let (element_pt, _len) = b.k1.types.agg_types.get(array_agg_id).agg_type.expect_array();
             let index = compile_expr(b, None, array_get.index)?;

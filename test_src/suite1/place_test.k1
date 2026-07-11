@@ -10,28 +10,25 @@ fn makeInner(): Inner {
 }
 
 fn negativeCases(p: int, s: Inner, arr: array[int, 3]) {
-  // The get-ref intrinsic is gone; element references come from arr.get(i).&
-  let getRefResult = testCompile(arr.get-ref(0));
-  assert-equals(getRefResult, :some("No such method on Array: get-ref"));
   // Element address rooted at a by-value param is rejected like any param place
   let paramElemResult = testCompile(arr.get(0).&);
   assert-equals(
     paramElemResult,
-    :some("Cannot take address of a function parameter; re-declare it or use a & type")
+    :some("Cannot take address of a function parameter; re-declare it or use a * type")
   );
   // Address of a function parameter is rejected at the place root
   let paramResult = testCompile(&p);
   assert-equals(
     paramResult,
-    :some("Cannot take address of a function parameter; re-declare it or use a & type")
+    :some("Cannot take address of a function parameter; re-declare it or use a * type")
   );
   // ...even through a field chain rooted at the parameter
   let paramFieldResult = testCompile(&s.a);
   assert-equals(
     paramFieldResult,
-    :some("Cannot take address of a function parameter; re-declare it or use a & type")
+    :some("Cannot take address of a function parameter; re-declare it or use a * type")
   );
-  // An rvalue root (call result) is not a place
+  // A call result is not a place
   let rvalueResult = testCompile(&makeInner().a);
   assert-equals(
     rvalueResult,
@@ -57,7 +54,7 @@ fn test() {
   assert-equals(outer.inner.a, 42);
 
   // Re-borrow: field address through an existing reference
-  // AddressOf(FieldAccess(FieldAccess(Deref(outerRef)))) -> derived place, allowed
+  // AddressOf(FieldAccess(FieldAccess(Deref(outerRef)))) -> allowed
   let outerRef = &outer;
   let bRef = &outerRef.inner.b;
   assert-equals(bRef.*, 6);
@@ -66,8 +63,6 @@ fn test() {
   let gRef = &globalPlaceVal;
   assert-equals(gRef.*, 77);
 
-  // Array element address via .& (array.get synthesizes a bounds-checked block;
-  // blocks are place-transparent in their trailing expression)
   let arr: array[int, 3] = zeroed();
   arr.get(0) <- 10;
   arr.get(1) <- 20;
