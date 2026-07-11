@@ -14,7 +14,7 @@ ability Increment {
 impl Increment for i32 {
   fn inc(self): self { self + 1 }
   fn incTwice(self): i32 {
-    &I32_SPEC_COUNTER <- I32_SPEC_COUNTER + 1;
+    I32_SPEC_COUNTER <- I32_SPEC_COUNTER + 1;
     // Testing scope bindings
     let me: self = self;
     let again: i32 = me;

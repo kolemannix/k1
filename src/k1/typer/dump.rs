@@ -522,11 +522,7 @@ impl TypedProgram {
         match self.stmts.get(stmt) {
             TypedStmt::Expr(expr, _) => self.display_expr_id(*expr, w, indentation),
             TypedStmt::Let(let_stmt) => {
-                if let_stmt.is_referencing {
-                    w.write_str("let* ")?;
-                } else {
-                    w.write_str("let ")?;
-                }
+                w.write_str("let ")?;
                 self.display_variable(self.variables.get(let_stmt.variable_id), w)?;
                 w.write_str(" = ")?;
                 match let_stmt.initializer {

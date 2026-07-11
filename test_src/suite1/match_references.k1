@@ -1,7 +1,8 @@
 ns match_references;
 
 fn test() {
-  let* x = some(42);
+  let x = some(42);
+  let x = &x;
   while x.* is :some(xx) {
     if xx == 0 break()
     else { 
@@ -9,7 +10,8 @@ fn test() {
     }
   };
 
-  let* point = { x: 5, y: 2 };
+  let point = { x: 5, y: 2 };
+  let point = &point;
   if point is { x, y: 2 }* {
     assert-equals(x.*, 5);
   };
@@ -24,7 +26,7 @@ fn test() {
   assert-equals(x.*, :some(0));
 
   use core/mem/new;
-  let b: *mut *mut *mut bool = new[*mut *mut bool](new[*mut bool](new[bool](true)));
+  let b: ***bool = new[**bool](new[*bool](new[bool](true)));
   if not b is true*** { crash("b was false!") };
   assert(b.*.*.* == true);
 

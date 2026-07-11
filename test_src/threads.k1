@@ -9,14 +9,14 @@ let mutable tls myvar: i32 = 0
 
 fn run(input: *mut int): ptr {
   assert-equals(input.*, 42);
-  &myvar <- myvar + 1;
+  myvar <- myvar + 1;
   input <- input.* + 1;
   assert-equals(myvar, 1);
   input.as()
 }
 
 fn main(): i32 {
-  &myvar <- 1000;
+  myvar <- 1000;
   // TODO: We could hugely improve this api now
   //       using current idioms and features; provide
   //       a highly ergonomic shim that lets us just have a fn that

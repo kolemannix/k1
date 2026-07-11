@@ -1514,6 +1514,7 @@ impl<T, Tag> List<T, Tag> {
         self.len += vals.len();
     }
 
+    #[track_caller]
     pub fn extend_grow(&mut self, mem: &mut Mem<Tag>, vals: &[T])
     where
         T: Copy,

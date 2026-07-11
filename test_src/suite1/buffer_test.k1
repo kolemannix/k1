@@ -108,7 +108,7 @@ fn bufferChunks() {
 }
 
 fn bufferSwap() {
-  let* buf = buffer/filled(3, 0);
+  let buf = buffer/filled(3, 0);
   buf.set(0, 10);
   buf.set(1, 20);
   buf.set(2, 30);

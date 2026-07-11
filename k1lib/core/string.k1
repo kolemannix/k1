@@ -98,8 +98,8 @@ ns for string {
   }
 
   fn splitByChar(self: string, delim: char): list[string] {
-    let* ranges = list/empty[{ start: size, len: size }]();
-    let* r = { start: 0: size, len: 0: size };
+    let ranges = list/empty[{ start: size, len: size }]();
+    let r = { start: 0: size, len: 0: size };
 
     for c in self {
       if c == delim {

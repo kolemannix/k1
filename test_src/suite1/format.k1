@@ -5,7 +5,7 @@ fn test() {
   let getWorld = fn. world;
 
   // StringBuilder implements `writer`
-  let* w = StringBuilder/new();
+  let w = StringBuilder/new();
 
   // If you have a buffer already, or any writer at all, you can 'write' to it formatted
   writef(w, "hello {world} -- ");

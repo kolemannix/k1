@@ -31,13 +31,12 @@ ns for spill-list {
   }
 
   fn _spill[T, N: static size](fixlist: *mut fixlist[T, N]): list[T] {
-    let* list = list/withCapacityIn[T](context :current)(fixlist.cap() * 2);
+    let list = list/withCapacityIn[T](context :current)(fixlist.cap() * 2);
 
     let srcbuffer = fixlist.asBuffer();
     list.appendBuffer(srcbuffer);
-    // eprintln("Spilled to a list of cap {list.cap()}");
 
-    list.*
+    list
   }
 
   fn push[T, N: static size](self: *mut spill-list[T, N], t: T) {
@@ -46,11 +45,11 @@ ns for spill-list {
       :Inline(fixlist)* -> {
         if fixlist.tryPush(t) is :ok(_) {}
         else {
-          let* list = _spill(fixlist);
+          let list = _spill(fixlist);
   
           list.push(t);
   
-          self <- :Spilled(list.*)
+          self <- :Spilled(list)
         }
       }
     }
@@ -63,11 +62,11 @@ ns for spill-list {
         if fixlist.tryPushN(ts) is :ok(_) {}
         else {
           // Correctness: The only error case is the out of capacity one
-          let* list = _spill(fixlist);
+          let list = _spill(fixlist);
   
           list.append-span(ts);
   
-          self <- :Spilled(list.*)
+          self <- :Spilled(list)
         }
       }
     }

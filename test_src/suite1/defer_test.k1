@@ -33,13 +33,13 @@ fn returnTest(sensor: *mut int) {
 fn test() {
   // We use an integer so that we can detect if a defer
   // runs too few or too many times!
-  let* sensor = 0;
-  loopTest(sensor);
-  assert-equals(sensor.*, 10);
+  let sensor = 0;
+  loopTest(&sensor);
+  assert-equals(sensor, 10);
 
-  sensor <- 0;
-  returnTest(sensor);
-  assert-equals(sensor.*, 3);
+  &sensor <- 0;
+  returnTest(&sensor);
+  assert-equals(sensor, 3);
   
   {}
 }

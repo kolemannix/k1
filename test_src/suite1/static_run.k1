@@ -81,11 +81,12 @@ fn test() {
   (padded.e: 5i64);
 
   let letRef = #static {
-    let* i = 10;
+    let i = 10;
 
     //assert(i.* == 10);
-    i <- core/identity(i.*);
-    i.*
+    &i <- core/identity(i);
+    i := core/identity(i);
+    i
   };
   assert-equals[int](letRef, 10);
 
@@ -100,16 +101,16 @@ fn test() {
   assert-equals[int](enum1, 42);
 
   let fieldPtrTest: int = #static {
-    let* x = 21;
-    let s = { ptr: x };
+    let x = 21;
+    let s = { ptr: &x };
     s.ptr.*
   };
   assert-equals(fieldPtrTest, 21);
 
 
   let ptrInStructs = #static {
-    let* b: *u8 = 10;
-    let* f = { asdf: b };
+    let b: u8 = 10;
+    let f = { asdf: &b };
     f.asdf.*
   };
   assert-equals[u8](ptrInStructs, 10);
@@ -131,7 +132,7 @@ fn test() {
   }, 5);
 
   #static {
-    let* l = list/withCapacity[empty](0);
+    let l = list/withCapacity[empty](0);
     l.len
   };
 
@@ -151,7 +152,7 @@ fn test() {
   // StringBuilder
 
   assert-equals[string](#static {
-    let* sb = StringBuilder/new();
+    let sb = StringBuilder/new();
     sb.string("Hello");
     sb.build()
   }, "Hello");
@@ -171,7 +172,8 @@ fn test() {
   };
   assert-equals(span, [1,2,3,4,5]);
   #static {
-    let* l = list/wrapBuffer(buffer/copyFrom-span(INT_SPAN));
+    // uses a global
+    let l = list/wrapBuffer(buffer/copyFrom-span(INT_SPAN));
     l.push(9);
     assert-equals(l.len, 6);
     assert-equals(l.last(), some(9));

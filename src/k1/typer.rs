@@ -1252,15 +1252,7 @@ pub enum FieldAccessKind {
 }
 
 /// `base` can be a reference to a struct, or a struct.
-/// `is_referencing` talks about the _result_ type. If the base
-/// is a reference, you can take the field either as a value or a reference itself
-/// is_referencing = true means you're getting a pointer to the field
-/// is_referencing = false means you're getting a loaded value.
-///
-/// If the base is a reference, but is-referencing is false, then that's a
-/// "dereferencing" field access, which requires a copy of the value.
-/// So maybe is_referencing should be instead some flags or style that also
-/// encode whether the base is a reference
+/// `FieldAccessKind` talks about the _result_ type.
 #[derive(Clone)]
 pub struct FieldAccess {
     pub base: TypedExprId,
@@ -1632,7 +1624,6 @@ pub struct LetStmt {
     pub variable_id: VariableId,
     pub variable_type: TypeId,
     pub initializer: Option<TypedExprId>,
-    pub is_referencing: bool,
     pub span: SpanId,
 }
 impl_copy_if_small!(20, LetStmt);
@@ -1773,7 +1764,6 @@ bitflags! {
         const Context = 1 << 1;
         const UserHidden = 1 << 2;
         const Returned = 1 << 3;
-        const Referencing = 1 << 4;
     }
 }
 
@@ -1817,9 +1807,6 @@ impl Variable {
     }
     pub fn is_returned(&self) -> bool {
         self.flags.contains(VariableFlags::Returned)
-    }
-    pub fn is_referencing(&self) -> bool {
-        self.flags.contains(VariableFlags::Referencing)
     }
 }
 
@@ -5454,7 +5441,7 @@ impl TypedProgram {
                     match self.exprs.get(expr) {
                         TypedExpr::Variable(_) => {
                             let span = self.exprs.get_span(expr);
-                            if let Ok(expr) = self.synth_address_of(expr, span) {
+                            if let Ok(expr) = self.synth_address_of(expr, span, false) {
                                 // self.report_hint(span, "coerce address of");
                                 return CheckExprTypeResult::Coerce(expr, "address_of".into());
                             }
@@ -7628,9 +7615,6 @@ impl TypedProgram {
                 };
 
                 let v = self.variables.get(variable_id);
-                if is_assignment_lhs && v.is_referencing() {
-                    return failf!(variable_name_span, "Cannot reassign a referencing variable");
-                }
                 if is_capture {
                     if is_assignment_lhs {
                         return failf!(
@@ -7760,22 +7744,28 @@ impl TypedProgram {
             }
         }
 
-        let (base_type_id, base_reference_type) = match self.get_expr_type(base_expr) {
+        let (base_expr, base_type_id, base_is_reference) = match self.get_expr_type(base_expr) {
             Type::Reference(reference_type) => {
                 let inner_type = reference_type.inner_type;
-                (inner_type, Some(*reference_type))
+                (base_expr, inner_type, true)
             }
             _other => {
                 if field_access.is_referencing {
-                    return failf!(
-                        base_span,
-                        "Field access target is not a pointer, so referencing access with * cannot be used"
-                    );
+                    let address_of_base_result = self.synth_address_of(base_expr, SpanId::NONE, false);
+                    match address_of_base_result {
+                        Ok(address_of_base) => (address_of_base, base_expr_type, true),
+                        Err(_) => {
+                            return failf!(
+                                base_span,
+                                "Field access target is not a pointer, so referencing access with * cannot be used"
+                            );
+                        }
+                    }
+                } else {
+                    (base_expr, base_expr_type, false)
                 }
-                (base_expr_type, None)
             }
         };
-        let base_is_reference = base_reference_type.is_some();
         let access_kind = if base_is_reference {
             if field_access.is_referencing {
                 FieldAccessKind::ReferenceThrough
@@ -7893,19 +7883,18 @@ impl TypedProgram {
             Some(t) => Some(self.types.get_type_id_dereferenced(t)),
         };
         let input = self.eval_expr(base_expr, ctx.with_expected_type(expected_type))?;
-        self.synth_address_of(input, span)
+        self.synth_address_of(input, span, false)
     }
 
-    fn synth_address_of(&mut self, input: TypedExprId, span: SpanId) -> K1Result<TypedExprId> {
+    fn synth_address_of(
+        &mut self,
+        input: TypedExprId,
+        span: SpanId,
+        allow_synthetic: bool,
+    ) -> K1Result<TypedExprId> {
         let (variable_id, kind) = match self.exprs.get(input) {
             TypedExpr::Variable(v) => {
                 let var = self.variables.get(v.variable_id);
-                if var.is_referencing() {
-                    return failf!(
-                        span,
-                        "Cannot take address of a referencing variable; you already have it!"
-                    );
-                }
                 match var.kind {
                     VariableKind::FnParam(_) => {
                         return failf!(
@@ -7914,10 +7903,14 @@ impl TypedProgram {
                         );
                     }
                     VariableKind::StackSynthetic(_) => {
-                        return failf!(
-                            span,
-                            "Cannot take address of a binding or synthetic variable"
-                        );
+                        if allow_synthetic {
+                            (v.variable_id, AddressOfKind::StackVariable)
+                        } else {
+                            return failf!(
+                                span,
+                                "Cannot take address of a compiler-generated variable"
+                            );
+                        }
                     }
                     VariableKind::Stack(_) => (v.variable_id, AddressOfKind::StackVariable),
                     VariableKind::Global(_) => (v.variable_id, AddressOfKind::GlobalVariable),
@@ -8546,7 +8539,7 @@ impl TypedProgram {
                 false,
             )?,
         };
-        let is_referencing_let = match list_kind {
+        let needs_address_of = match list_kind {
             ContainerKind::Array(_) => true,
             ContainerKind::Buffer | ContainerKind::Span => false,
             ContainerKind::List => true,
@@ -8555,10 +8548,14 @@ impl TypedProgram {
             self.ast.idents.b.dest,
             make_dest_coll,
             false,
-            is_referencing_let,
             list_lit_scope,
             None,
         );
+        let dest_coll_expr = if needs_address_of {
+            self.synth_address_of(dest_coll_variable.variable_expr, SpanId::NONE, true).unwrap()
+        } else {
+            dest_coll_variable.variable_expr
+        };
 
         list_lit_block.statements.push(dest_coll_variable.defn_stmt);
         for (index, element_value_expr) in elements.iter().enumerate() {
@@ -8567,14 +8564,14 @@ impl TypedProgram {
                 ContainerKind::List => self.synth_typed_call_typed_args(
                     self.ast.idents.f.List_push.with_span(span),
                     &[element_type],
-                    &[dest_coll_variable.variable_expr, *element_value_expr],
+                    &[dest_coll_expr, *element_value_expr],
                     list_lit_ctx,
                     false,
                 )?,
                 ContainerKind::Buffer | ContainerKind::Span => self.synth_typed_call_typed_args(
                     self.ast.idents.f.buffer_set.with_span(span),
                     &[element_type],
-                    &[dest_coll_variable.variable_expr, index_expr, *element_value_expr],
+                    &[dest_coll_expr, index_expr, *element_value_expr],
                     list_lit_ctx,
                     false,
                 )?,
@@ -8584,7 +8581,7 @@ impl TypedProgram {
                     self.synth_typed_call_typed_args(
                         self.ast.idents.f.Array_set.with_span(span),
                         &[element_type, size_type],
-                        &[dest_coll_variable.variable_expr, index_expr, *element_value_expr],
+                        &[dest_coll_expr, index_expr, *element_value_expr],
                         list_lit_ctx,
                         false,
                     )?
@@ -8595,7 +8592,7 @@ impl TypedProgram {
             self.push_block_stmt_id(&mut list_lit_block, push_stmt);
         }
         let final_expr = match list_kind {
-            ContainerKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
+            ContainerKind::List => dest_coll_variable.variable_expr,
             ContainerKind::Buffer => dest_coll_variable.variable_expr,
             ContainerKind::Span => self.synth_typed_call_typed_args(
                 self.ast.idents.f.span_wrapBuffer.with_span(span),
@@ -9423,7 +9420,6 @@ impl TypedProgram {
         let environment_casted_variable = self.synth_variable_defn(
             self.ast.idents.b.env,
             cast_env_param,
-            false,
             false,
             lambda_scope_id,
             None,
@@ -10533,12 +10529,11 @@ impl TypedProgram {
             self.ast.idents.b.it_index,
             zero_expr,
             true,
-            false,
             outer_for_expr_scope,
             Some(iterable_span),
         );
         let coerced_iterable_expr = if needs_addr_of {
-            self.synth_address_of(iterable_expr, SpanId::NONE)?
+            self.synth_address_of(iterable_expr, SpanId::NONE, true)?
         } else {
             iterable_expr
         };
@@ -10557,10 +10552,10 @@ impl TypedProgram {
             self.ast.idents.b.iter,
             iterator_initializer,
             false,
-            true, //is_referencing
             outer_for_expr_scope,
             None,
         );
+        let iterator_expr = self.synth_address_of(iterator_variable.variable_expr, SpanId::NONE, true)?;
         let mut loop_block =
             self.new_block_builder(outer_for_expr_scope, ScopeType::LexicalBlock, body_span, 3);
         let loop_scope_id = loop_block.scope_id;
@@ -10576,7 +10571,7 @@ impl TypedProgram {
         let iterator_next_call = self.synth_typed_call_typed_args(
             self.ast.idents.f.Iterator_next.with_span(iterable_span),
             &[],
-            &[iterator_variable.variable_expr],
+            &[iterator_expr],
             loop_scope_ctx,
             false,
         )?;
@@ -11761,7 +11756,7 @@ impl TypedProgram {
                     self.exprs.get_span(writer_expr),
                 )?;
                 let writer = if needs_addr_of {
-                    self.synth_address_of(writer_expr, call_span)?
+                    self.synth_address_of(writer_expr, call_span, true)?
                 } else {
                     writer_expr
                 };
@@ -13221,7 +13216,7 @@ impl TypedProgram {
                     ctx.scope_id,
                     false,
                 )?;
-                let mut typechecked_args = self.mem.new_list(args_and_params.len() as u32);
+                let mut typechecked_args = self.mem.new_list(args_and_params.len());
                 for (index, (maybe_typed_expr, param)) in
                     self.tmp.getn_zip(args_and_params.args, args_and_params.params).enumerate()
                 {
@@ -13359,7 +13354,7 @@ impl TypedProgram {
 
                 // We've finished inference and all types are known; we now compile all the expressions
                 // again to generate code with no holes and fully concrete types.
-                let mut typechecked_args = self.mem.new_list(args_and_params.len() as u32);
+                let mut typechecked_args = self.mem.new_list(args_and_params.len());
 
                 // We can skip re-evaluating everything if we're just here to learn the return types
                 if !ctx.is_inference() {
@@ -14143,26 +14138,7 @@ impl TypedProgram {
                 };
                 let provided_type = maybe_return_type_from_function.or(annotated_type);
 
-                let expected_rhs_type = match provided_type {
-                    Some(provided_type) => {
-                        if parsed_let.is_referencing() {
-                            let Type::Reference(expected_reference_type) =
-                                self.types.get(provided_type)
-                            else {
-                                let expected_type_span =
-                                    self.ast.get_type_expr_span(parsed_let.type_expr.unwrap());
-                                return failf!(
-                                    expected_type_span,
-                                    "Expected type must be a reference type when using let*"
-                                );
-                            };
-                            Some(expected_reference_type.inner_type)
-                        } else {
-                            Some(provided_type)
-                        }
-                    }
-                    None => None,
-                };
+                let expected_rhs_type = provided_type;
 
                 let value_expr = match parsed_let.value {
                     None => None,
@@ -14188,20 +14164,13 @@ impl TypedProgram {
                             None => return failf!(parsed_let.span, "Uninit let requires a type"),
                             Some(t) => t,
                         },
-                        Some(actual_type) => {
-                            if parsed_let.is_referencing() {
-                                self.types.add_reference_type(actual_type)
-                            } else {
-                                actual_type
-                            }
-                        }
+                        Some(actual_type) => actual_type,
                     };
 
                     let mut flags = VariableFlags::empty();
 
                     flags.set(VariableFlags::Context, parsed_let.is_context());
                     flags.set(VariableFlags::Returned, parsed_let.is_returned());
-                    flags.set(VariableFlags::Referencing, parsed_let.is_referencing());
                     let stmt_id = self.stmts.next_id();
                     let variable_id = self.variables.add(Variable {
                         name: parsed_let.name,
@@ -14249,7 +14218,6 @@ impl TypedProgram {
                         variable_type,
                         variable_id,
                         initializer: value_expr,
-                        is_referencing: parsed_let.is_referencing(),
                         span: parsed_let.span,
                     });
                     if parsed_let.is_context() {
@@ -14406,6 +14374,14 @@ impl TypedProgram {
                 static_assert_size!(parse::StoreStmt, 12);
                 let set_stmt = set_stmt.clone();
                 let lhs = self.eval_expr(set_stmt.lhs, ctx.with_no_expected_type())?;
+                // Coerce the lhs to an address, if possible
+                let lhs = match self.get_expr_type(lhs) {
+                    Type::Reference(_r) => lhs,
+                    _other => match self.synth_address_of(lhs, SpanId::NONE, false) {
+                        Ok(new_lhs) => new_lhs,
+                        Err(_) => lhs,
+                    },
+                };
                 let lhs_type = self.exprs.get_type(lhs);
                 let Some(lhs_type) = self.types.get(lhs_type).as_reference() else {
                     return failf!(

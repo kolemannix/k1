@@ -241,7 +241,7 @@ ns for buffer {
     if size == 0 return(span/empty());
     let rem = self.len() % size != 0;
     let div = self.len() / size;
-    let* results = list/withCapacity[buffer[t]](div + (rem.as[size]));
+    let results = list/withCapacity[buffer[t]](div + (rem.as[size]));
 
     let i = 0;
     let j = 0;
@@ -311,7 +311,7 @@ ns for buffer {
   }
 
   fn sort[t](self: buffer[t]) where t: comparable {
-    let* list = list/wrapBuffer(self);
+    let list = list/wrapBuffer(self);
     list.sort();
   }
 

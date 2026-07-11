@@ -15,8 +15,11 @@ fn captures() {
 }
 
 fn captureMut() {
-  let* counter = 3;
+  let counter = 3;
+  let counter = &counter;
 
+  // We have to capture the variable pointed at the address of counter
+  // TODO: rework captures
   let myInc = fn() {
     counter <- counter.* + 1;
   };
@@ -56,7 +59,7 @@ fn runThings(thunks: list[dyn[fn() -> empty]]) {
 }
 
 fn thunksTest() {
-  let* counter = 0;
+  let counter = { let x = 0; &x };
   let thunks: list[dyn[fn() -> empty]] = [
     fn. { counter <- counter.* + 1 },
     fn. { counter <- counter.* + 1 },
@@ -79,7 +82,7 @@ fn test() {
   let lam1ResultDyn = someFnParam1(5, staticAddOne.to-dyn());
   assert-equals(lam1ResultDyn, 6);
 
-  let* c1 = { x: 3 };
+  let c1 = { x: 3 };
   let c2 = 2;
 
   let withClosures = someFnParam2(5, fn x. x + 1 + c1.x, fn x. x + 2 + c2);
@@ -94,7 +97,7 @@ fn test() {
     || filter(fn x. x % 2 == 0);
   assert(result == [2, 4, 6, 8]);
 
-  let* x = 10;
+  let x = { let tmp = 10; &tmp };
   // Coerce lambdas to lambda objects
   simpleDyn(fn. {"Thunk! {x.*}"; x <- 11 });
   assert-equals(x.*, 11);

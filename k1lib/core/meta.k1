@@ -56,7 +56,7 @@ ns meta {
       crash("Its called a STRUCT of arrays for a reason");
     if fields.is-empty() { crash("Input struct must have at least one field") };
 
-    let* code = StringBuilder/new();
+    let code = StringBuilder/new();
     code.line("type {name} = {{");
     for f in fields {
       code.line("  ARR_{f.name}: list[typeFromId({f.type-id})],");
@@ -68,11 +68,11 @@ ns meta {
 
     // begin fn get
     code.line(`  fn get(self: {name}, index: size): {tt} {{`);
-    code.line(`    let* ret: *mut {tt} = mem/zeroed();`);
+    code.line(`    let returned ret: {tt} = mem/zeroed();`);
     for f in fields {
       code.line(`    ret.{f.name}* <- self.ARR_{f.name}.get(index);`)
     };
-    code.line(`    ret.*`);
+    code.line(`    ret`);
     code.line(`  }`); // end fn get
 
     // begin fn empty

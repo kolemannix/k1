@@ -1,7 +1,7 @@
 ns list_test;
 
 fn listFill(): int {
-  let* xs = list/empty[int]();
+  let xs = list/empty[int]();
   assert(xs.cap() == 0);
   assert(xs.len == 0);
 
@@ -21,10 +21,10 @@ fn listFill(): int {
   assert(xs.last().! == 4);
 
   let exp = [0,1,2,3,4];
-  assert(xs.* == exp);
+  assert(xs == exp);
 
   let xs2 = xs.cloned();
-  assert(xs2 == xs.*);
+  assert(xs2 == xs);
 
   let empty = []: list[byte];
   let emptyCloned = empty.cloned();
@@ -33,7 +33,7 @@ fn listFill(): int {
 
   xs.remove(0);
   xs.remove(3);
-  assert(xs.* == [1,2,3]);
+  assert(xs == [1,2,3]);
 
   0
 }
@@ -134,26 +134,26 @@ fn testSort() {
 }
 
 fn testSwap() {
-  let* a = [1,2];
+  let a = [1,2];
   a.swap(0,1);
-  assert(a.* == [2,1]);
+  assert(a == [2,1]);
   a.swap(1,0);
-  assert(a.* == [1,2]);
+  assert(a == [1,2]);
   a.swap(1,1);
-  assert(a.* == [1,2]);
+  assert(a == [1,2]);
 }
 
 fn iterator(): int {
   let l = [1,2,3];
-  let* i = l.iterator();
+  let i = l.iterator();
   assert(i.size-hint().at-least == 3);
   assert(i.next().! == 1);
   assert(i.next().! == 2);
   assert(i.next().! == 3);
   assert(i.next().is-none());
-  let* i2 = l.iterator();
+  let i2 = l.iterator();
   assert(i2.nth(2) == :some(3));
-  let* i3 = l.iterator();
+  let i3 = l.iterator();
   assert(i3.nth(10) == :none);
   0
 }

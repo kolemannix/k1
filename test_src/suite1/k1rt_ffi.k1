@@ -1,6 +1,6 @@
 fn test-ffi() {
   let s: string = #static {
-    let* stack-buf = array/zeroed[char, 1024]();
+    let stack-buf = array/zeroed[char, 1024]();
     let len: core/c-int = core/k1rt/snprintf_f64(
       stack-buf.base-ptr(), 1024, 3.14, places = 3
     );

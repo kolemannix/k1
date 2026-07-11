@@ -20,11 +20,11 @@ fn test() {
    assert-equals(staticInt, 2);
 
    while globalIntMut > staticInt {
-     &globalIntMut <- globalIntMut - 1;
+     globalIntMut <- globalIntMut - 1;
    };
    assert(globalIntMut == 2);
 
-   &globalMutPtr <- &globalIntMut.as[ptr];
+   globalMutPtr <- &globalIntMut.as[ptr];
    assert-equals(globalMutPtr.as[*int].*, 2);
    assert(&globalIntMut.as[ptr] == globalMutPtr);
 

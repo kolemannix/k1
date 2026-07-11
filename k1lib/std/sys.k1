@@ -28,7 +28,7 @@ fn readLine(maxLengthBytes: size): result[string, string] {
   };
 
   let length: size = bytesRead - 1;
-  &buffer.len* <- length;
+  buffer.len* <- length;
 
   let result = string/wrapByteBuffer(buffer);
   :ok(result)

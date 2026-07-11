@@ -38,7 +38,7 @@ fn test() {
   assert-equals(Secret/secret1(), 42);
   assert-equals(Secret/secret2(), 43);
 
-  let* ps = Point3List/empty();
+  let ps = Point3List/empty();
   ps.push({ x: 5, y: 10, z: 15 });
   let p = ps.get(0);
   assert-equals(p.x, 5);
