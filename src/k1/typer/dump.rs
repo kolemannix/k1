@@ -598,9 +598,9 @@ impl TypedProgram {
                 w.write_str("}")
             }
             TypedExpr::StructFieldAccess(field_access) => {
-                self.display_expr_id(field_access.base, w, indentation)?;
+                self.display_expr_id(field_access.base_struct, w, indentation)?;
                 w.write_str(".")?;
-                let struct_type = self.exprs.get_type(field_access.base);
+                let struct_type = self.exprs.get_type(field_access.base_struct);
                 let fields = self.types.get(struct_type).expect_struct().fields;
                 let name = self.types.mem.get_nth(fields, field_access.field_index as usize).name;
                 self.write_ident(w, name)?;
@@ -608,7 +608,7 @@ impl TypedProgram {
             }
             TypedExpr::ArrayGetElement(array_get) => {
                 // array.get(index) / array.getRef(index)
-                self.display_expr_id(array_get.base, w, indentation)?;
+                self.display_expr_id(array_get.base_array, w, indentation)?;
                 w.write_str(".get(")?;
                 self.display_expr_id(array_get.index, w, indentation)?;
                 w.write_str(")")?;

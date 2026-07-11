@@ -510,7 +510,7 @@ impl TypedProgram {
         let field = self.types.get_struct_field(struct_type_id, field_index);
         let expr_id = self.exprs.add(
             TypedExpr::StructFieldAccess(FieldAccess {
-                base: struct_expr,
+                base_struct: struct_expr,
                 field_index: field_index as u32,
             }),
             field.type_id,
