@@ -10,7 +10,7 @@ fn test() {
   // pointer itself is uninitialized
   let p: *int = uninit;
   p := &GLOB;
-  assert-equals(p.as[ptr], &GLOB.as[ptr]);
+  assert-equals(p.as[ptr], (&GLOB).as[ptr]);
   assert-equals(p.*, 50);
 
   {}

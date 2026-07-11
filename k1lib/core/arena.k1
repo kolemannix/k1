@@ -26,7 +26,7 @@ ns for arena {
   }
 
 
-  fn set-name(self: *arena, name: string) { self.name* <- name }
+  fn set-name(self: *arena, name: string) { self.name <- name }
 
   fn get-alloc-base(self: *arena): ptr { self.base-ptr.sub-bytes(types/stride[arena]) }
   fn store-header(base-ptr: ptr, size, alloc-kind: arena.alloc-kind): *arena {
@@ -72,7 +72,7 @@ ns for arena {
 
   fn reset(self: *arena, clear: bool) {
     let usedBytes = self.usedBytes();
-    self.cur-addr* <- self.base-ptr;
+    self.cur-addr <- self.base-ptr;
 
     if clear {
       mem/set(dst = self.base-ptr, value = 0, count = usedBytes);
@@ -95,7 +95,7 @@ ns for arena {
       let offset-to-min-align = ptr/get-align-offset(raw-bump, MIN_ALIGN);
       let total-bump = raw-bump + offset-to-min-align;
       let alloc-ptr = cursor + prefix-padding;
-      self.cur-addr* <- (cursor + total-bump).as[ptr];
+      self.cur-addr <- (cursor + total-bump).as[ptr];
       alloc-ptr.as[ptr]
     } else {
        mem/pushMode(:system-heap);
@@ -144,7 +144,7 @@ ns for arena {
     let new-end-aligned = old-ptr.add-bytes(new-size).aligned(MIN_ALIGN);
     if old-end-aligned == self.cur-addr and new-end-aligned <= self.end-addr {
       // Grow in place
-      self.cur-addr* <- new-end-aligned;
+      self.cur-addr <- new-end-aligned;
       old-ptr
     } else {
       let new-allocation = self.alloc-layout(new-size, align);
@@ -161,7 +161,7 @@ ns for arena {
     assert(arena-mark.start >= self.base-ptr);
     assert(arena-mark.start < self.end-addr);
     assert(arena-mark.start >= self.cur-addr);
-    self.cur-addr* <- arena-mark.start;
+    self.cur-addr <- arena-mark.start;
   }
 
 }

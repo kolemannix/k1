@@ -52,7 +52,7 @@ fn test() {
   let x = opt:some(42);
 
   let withNever = testCompile(
-    combine3(&x.*, core/sys/exit(1), { one: some(-1), two: some(3), })
+    combine3((&x).*, core/sys/exit(1), { one: some(-1), two: some(3), })
   );
   assert-equals(withNever, :none);
 

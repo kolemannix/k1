@@ -167,7 +167,7 @@ fn testAll() {
 
   assert(foo/TagUnion_iszero(:c(ptr/null)).as-bool());
   let x = 10;
-  assert(not foo/TagUnion_iszero(:c(&x.as())).as-bool());
+  assert(not foo/TagUnion_iszero(:c((&x).as())).as-bool());
 
 }
 

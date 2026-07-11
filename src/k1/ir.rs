@@ -760,7 +760,7 @@ impl InstKind {
     fn is_value(&self) -> bool {
         matches!(self, InstKind::Value(_))
     }
-    const fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         matches!(self, InstKind::Value(pt) if pt.is_empty())
     }
     #[track_caller]
@@ -1413,7 +1413,6 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
             let rich_type_id = let_stmt.variable_type;
             let var_pt = b.get_physical_type(let_stmt.variable_type);
             let rich_pt = b.get_physical_type(rich_type_id);
-            debug_assert_eq!(var_pt, rich_pt); // nocommit
 
             let typed_var = b.k1.variables.get(let_stmt.variable_id);
             let returned = typed_var.is_returned();
@@ -1602,8 +1601,6 @@ fn compile_expr(
             } else {
                 // direct; var_value is already a canonical representation of the value; just have to
                 // fulfill dst
-                // nocommit: we can reproduce a bug here; when dst = None, if the variable is
-                // mutable, we should be making a copy.
                 let stored = store_rich_if_dst(b, dst, var_pt, var_value, "direct variable");
                 Ok(stored)
             }
@@ -1994,7 +1991,6 @@ fn compile_expr(
             ))
         }
         TypedExpr::SumGetPayload(_sum_get_payload) => {
-            // nocommit: move to place; compile payload to place; simplify this one
             let (payload_place, frozen) = compile_expr_place(b, expr)?;
             let result_type = b.get_physical_type(expr_type);
             let make_copy = !frozen;
@@ -2113,7 +2109,8 @@ fn compile_expr(
 fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bool)> {
     match b.k1.exprs.get(expr).clone() {
         TypedExpr::StructFieldAccess(field_access) => {
-            let struct_pt_id = b.get_physical_type(field_access.struct_type).expect_agg();
+            let struct_type = b.k1.exprs.get_type(field_access.base);
+            let struct_pt_id = b.get_physical_type(struct_type).expect_agg();
             let (base_ptr, frozen) = compile_expr_place(b, field_access.base)?;
             let field_ptr = b.push_struct_offset(
                 struct_pt_id,
@@ -2125,7 +2122,8 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
         }
         TypedExpr::ArrayGetElement(array_get) => {
             let (array_base, frozen) = compile_expr_place(b, array_get.base)?;
-            let array_agg_id = b.get_physical_type(array_get.array_type).expect_agg();
+            let array_type = b.k1.exprs.get_type(array_get.base);
+            let array_agg_id = b.get_physical_type(array_type).expect_agg();
             let (element_pt, _len) = b.k1.types.agg_types.get(array_agg_id).agg_type.expect_array();
             let index = compile_expr(b, None, array_get.index)?;
             let element_ptr = b.push_inst(
@@ -2144,6 +2142,21 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
             let value_of_p = compile_expr(b, None, deref_expr.target)?;
             Ok((value_of_p, false))
         }
+        TypedExpr::Block(block) => {
+            // Blocks are place-transparent in their trailing expression: compile the
+            // leading statements for effect, then the trailing expr as a place
+            let statements = block.statements;
+            let Some((&last, leading)) = b.k1.mem.getn(statements).split_last() else {
+                b_ice!(b, "Empty block is not a place");
+            };
+            for &stmt in leading {
+                compile_stmt(b, None, stmt)?;
+            }
+            let TypedStmt::Expr(trailing_expr, _) = *b.k1.stmts.get(last) else {
+                b_ice!(b, "Block whose last statement is not an expression is not a place");
+            };
+            compile_expr_place(b, trailing_expr)
+        }
         TypedExpr::SumGetPayload(sum_get_payload) => {
             let (sum_base, frozen) = compile_expr_place(b, sum_get_payload.sum_expr)?;
             let sum_type_id = b.k1.exprs.get_type(sum_get_payload.sum_expr);
@@ -2159,7 +2172,10 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
         }
         _ => {
             let e = compile_expr(b, None, expr)?;
-            debug_assert!(b.get_value_kind(e).is_aggregate() || b.get_value_kind(e).is_empty());
+            // Aggregates are represented by-address, and a struct/array literal
+            // materialized without a dst yields its alloca (a ptr); both are addresses
+            // usable as a (frozen) place
+            debug_assert!(b.get_value_kind(e).is_storage() || b.get_value_kind(e).is_empty());
             Ok((e, true))
         }
     }

@@ -308,9 +308,10 @@ assert-equals(p.x, 2);
 ```
 
 The same trailing `*` idea applies to aggregate-like access elsewhere. Arrays
-have analogous value/reference element access through methods such as `.get(...)`
-and `.get-ref(...)`. Sum patterns also use trailing `*` to bind references to
-payload data; see the next section.
+have value element access through `.get(...)`; to get a reference to an element,
+take its address with the postfix `.&` operator: `arr.get(i).&`. Element stores
+also work directly: `arr.get(i) <- value`. Sum patterns also use trailing `*` to
+bind references to payload data; see the next section.
 
 See `test_src/suite1/assign.k1`, `test_src/suite1/struct.k1`, and
 `src/k1/typer.rs`.

@@ -46,7 +46,7 @@ ns for list {
 
   fn reserve[T](self: *mut list[T], alloc: alloc-mode, count: size) {
     if self.cap() >= count { return() };
-    self.buffer*._growTo[T](context alloc)(count);
+    self.buffer._growTo[T](context alloc)(count);
   }
 
   fn single[T](value: T): list[T] {
@@ -133,7 +133,7 @@ ns for list {
     if startLength == self.*.cap() {
       self._grow();
     };
-    self.len* <- startLength + 1;
+    self.len <- startLength + 1;
     self.set(startLength, elem);
   }
 
@@ -183,7 +183,7 @@ ns for list {
   }
 
   fn clear[T](self: *mut list[T]) {
-    self.len* <- 0
+    self.len <- 0
   }
 
   fn reverse[T](self: *mut list[T]) {
@@ -219,7 +219,7 @@ ns for list {
     self.reserve(alloc-mode, self.len + other.len);
     let dst = self.inner-buffer().slice(start = self.len, end = self.len + other.len);
     buffer/copy(src = other, dst = dst);
-    self.len* <- self.len + other.len;
+    self.len <- self.len + other.len;
   }
 
   fn append-span[T](self: *mut list[T], other: span[T]) {
@@ -330,7 +330,7 @@ ns for list {
       crash("list index out of bounds. index {index}, len {self.len}")
     };
     self.buffer.remove(index);
-    self.len* <- self.len - 1;
+    self.len <- self.len - 1;
   }
 
   fn filter-in-place[T](self: *mut list[T], f: some fn T -> bool) {

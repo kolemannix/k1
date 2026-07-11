@@ -94,7 +94,7 @@ ns io {
   impl writer for OutStream {
     fn write-byte(self, value: u8) {
       let value_spot = value;
-      posix/write(file-no = self.fileNo, data = &value_spot.as[ptr], count = 1);
+      posix/write(file-no = self.fileNo, data = (&value_spot).as[ptr], count = 1);
       {}
     }
     fn write-bytes(self, bytes: span[byte]) {
@@ -262,13 +262,13 @@ fn formatUInt[w: writer](context w)(value: u64, base: u64) {
     while remaining > 0 {
       let d = remaining % base;
       let c = u8/toAsciiDigit(d.as[u8]);
-      &digits.push(c);
+      digits.push(c);
       remaining := remaining / base;
     };
 
-    &digits.reverse();
+    digits.reverse();
 
-    w.write-bytes(&digits.as-span().as-byte-span());
+    w.write-bytes(digits.as-span().as-byte-span());
 
     {}
   }

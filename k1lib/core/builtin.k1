@@ -660,10 +660,10 @@ fn phony[t](): t { crash("phony") }
 
 ns array {
   fn get-base-read[t, n](array: *array[t, n]): *t where n: static size {
-    array.get-ref(0)
+    array.get(0).&
   }
   fn get-base[t, n](array: *mut array[t, n]): *mut t where n: static size {
-    array.get-ref(0)
+    array.get(0).&
   }
   fn base-ptr[t, n](array: *mut array[t, n]): ptr where n: static size {
     array.as[ptr]
@@ -685,14 +685,14 @@ ns array {
   }
 
   fn set[t, n](array: *mut array[t, n], index: int, value: t) where n: static size {
-    array.get-ref(index) <- value
+    array.get(index) <- value
   }
 
   fn filled-in[t, n: static size](context alloc: mem/alloc-mode)(t: t, n: n): *mut array[t, n] {
     let array-uninit = allocate[t, n]();
     let i = 0;
     while i < n.from-static() {
-      array-uninit.get-ref(i) <- t;
+      array-uninit.get(i) <- t;
       i := i + 1;
     };
     array-uninit

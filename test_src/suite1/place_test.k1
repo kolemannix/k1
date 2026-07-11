@@ -1,0 +1,86 @@
+ns place_test;
+
+type Inner = { a: int, b: int }
+type Outer = { name: string, inner: Inner }
+
+let globalPlaceVal: int = 77
+
+fn makeInner(): Inner {
+  { a: 1, b: 2 }
+}
+
+fn negativeCases(p: int, s: Inner, arr: array[int, 3]) {
+  // The get-ref intrinsic is gone; element references come from arr.get(i).&
+  let getRefResult = testCompile(arr.get-ref(0));
+  assert-equals(getRefResult, :some("No such method on Array: get-ref"));
+  // Element address rooted at a by-value param is rejected like any param place
+  let paramElemResult = testCompile(arr.get(0).&);
+  assert-equals(
+    paramElemResult,
+    :some("Cannot take address of a function parameter; re-declare it or use a & type")
+  );
+  // Address of a function parameter is rejected at the place root
+  let paramResult = testCompile(&p);
+  assert-equals(
+    paramResult,
+    :some("Cannot take address of a function parameter; re-declare it or use a & type")
+  );
+  // ...even through a field chain rooted at the parameter
+  let paramFieldResult = testCompile(&s.a);
+  assert-equals(
+    paramFieldResult,
+    :some("Cannot take address of a function parameter; re-declare it or use a & type")
+  );
+  // An rvalue root (call result) is not a place
+  let rvalueResult = testCompile(&makeInner().a);
+  assert-equals(
+    rvalueResult,
+    :some("Cannot take the address of a call; only places (variables, struct fields, array elements, sum payloads, and dereferences) have addresses")
+  );
+}
+
+fn test() {
+  // Address of a local
+  let x = 10;
+  let xRef = &x;
+  assert-equals(xRef.*, 10);
+
+  // Postfix .& is the same operation
+  let xRef2 = x.&;
+  assert-equals(xRef2.*, 10);
+
+  // Address of a nested struct field, and writing through it
+  let outer: Outer = { name: "hi", inner: { a: 5, b: 6 } };
+  let aRef = &outer.inner.a;
+  assert-equals(aRef.*, 5);
+  aRef <- 42;
+  assert-equals(outer.inner.a, 42);
+
+  // Re-borrow: field address through an existing reference
+  // AddressOf(FieldAccess(FieldAccess(Deref(outerRef)))) -> derived place, allowed
+  let outerRef = &outer;
+  let bRef = &outerRef.inner.b;
+  assert-equals(bRef.*, 6);
+
+  // Address of a global
+  let gRef = &globalPlaceVal;
+  assert-equals(gRef.*, 77);
+
+  // Array element address via .& (array.get synthesizes a bounds-checked block;
+  // blocks are place-transparent in their trailing expression)
+  let arr: array[int, 3] = zeroed();
+  arr.get(0) <- 10;
+  arr.get(1) <- 20;
+  let elemRef = arr.get(1).&;
+  assert-equals(elemRef.*, 20);
+  elemRef <- 21;
+  assert-equals(arr.get(1), 21);
+
+  // ...and through an array reference
+  let arrRef = &arr;
+  let elemRef2 = arrRef.get(2).&;
+  elemRef2 <- 30;
+  assert-equals(arr.get(2), 30);
+
+  negativeCases(3, { a: 1, b: 2 }, arr);
+}
