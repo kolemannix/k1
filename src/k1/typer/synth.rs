@@ -138,9 +138,18 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_dereference(&mut self, base: TypedExprId) -> TypedExprId {
+        // nocommit: Try no span
         let span = self.exprs.get_span(base);
         let type_id = self.get_expr_type(base).expect_reference().inner_type;
         self.exprs.add(TypedExpr::Deref(DerefExpr { target: base }), type_id, span)
+    }
+
+    pub(super) fn synth_dereference_when(
+        &mut self,
+        base: TypedExprId,
+        is_reference: bool,
+    ) -> TypedExprId {
+        if is_reference { self.synth_dereference(base) } else { base }
     }
 
     pub(super) fn synth_enum_get_value(
@@ -164,14 +173,7 @@ impl TypedProgram {
             self.ice_span(span, "need sum")
         };
         let int_type = sum.tag_type;
-        self.exprs.add(
-            TypedExpr::SumGetTag(GetSumTag {
-                sum_expr_or_reference: sum_expr,
-                is_reference: false,
-            }),
-            int_type.type_id(),
-            span,
-        )
+        self.exprs.add(TypedExpr::SumGetTag(GetSumTag { sum_expr }), int_type.type_id(), span)
     }
 
     pub(super) fn new_block_builder(
@@ -495,33 +497,28 @@ impl TypedProgram {
         self.exprs.add(TypedExpr::Call { call_id }, type_id, span)
     }
 
-    pub(super) fn synth_struct_field_access(
+    // nocommit can I use synth_struct_field_access in more places now that its always the same
+    pub(super) fn synth_field_access(
         &mut self,
         struct_expr: TypedExprId,
         field_index: usize,
-        access_kind: FieldAccessKind,
         span: SpanId,
-    ) -> K1Result<TypedExprId> {
-        if access_kind == FieldAccessKind::ValueToValue {
-            let struct_type_id = self.exprs.get_type(struct_expr);
-            let Type::Struct(_s) = self.types.get(struct_type_id) else {
-                self.ice_span(span, "bad struct field access: base is not a struct");
-            };
-            let field = self.types.get_struct_field(struct_type_id, field_index);
-            let expr_id = self.exprs.add(
-                TypedExpr::StructFieldAccess(FieldAccess {
-                    base: struct_expr,
-                    field_index: field_index as u32,
-                    struct_type: struct_type_id,
-                    access_kind,
-                }),
-                field.type_id,
-                span,
-            );
-            Ok(expr_id)
-        } else {
-            self.ice_span(span, "unsupported access kind for synth");
-        }
+    ) -> TypedExprId {
+        let struct_type_id = self.exprs.get_type(struct_expr);
+        let Type::Struct(_s) = self.types.get(struct_type_id) else {
+            self.ice_span(span, "bad struct field access: base is not a struct");
+        };
+        let field = self.types.get_struct_field(struct_type_id, field_index);
+        let expr_id = self.exprs.add(
+            TypedExpr::StructFieldAccess(FieldAccess {
+                base: struct_expr,
+                field_index: field_index as u32,
+                struct_type: struct_type_id,
+            }),
+            field.type_id,
+            span,
+        );
+        expr_id
     }
 
     pub(super) fn synth_parsed_variable_expr(
@@ -550,27 +547,17 @@ impl TypedProgram {
 
     pub(super) fn synth_sum_is_variant(
         &mut self,
-        enum_expr_or_reference: TypedExprId,
+        sum_expr: TypedExprId,
         variant_index: u32,
-        is_reference: bool,
         span: Option<SpanId>,
     ) -> K1Result<TypedExprId> {
-        let enum_type = self
-            .types
-            .get_type_dereferenced(self.exprs.get_type(enum_expr_or_reference))
-            .expect_sum();
-        let tag_type = enum_type.tag_type;
+        let sum_type = self.types.get(self.exprs.get_type(sum_expr)).expect_sum();
+        let tag_type = sum_type.tag_type;
         let variant_tag =
-            self.types.sum_variant_by_index(enum_type.variants, variant_index).tag_value;
-        let span = span.unwrap_or(self.exprs.get_span(enum_expr_or_reference));
-        let get_tag = self.exprs.add(
-            TypedExpr::SumGetTag(GetSumTag {
-                sum_expr_or_reference: enum_expr_or_reference,
-                is_reference,
-            }),
-            tag_type.type_id(),
-            span,
-        );
+            self.types.sum_variant_by_index(sum_type.variants, variant_index).tag_value;
+        let span = span.unwrap_or(self.exprs.get_span(sum_expr));
+        let get_tag =
+            self.exprs.add(TypedExpr::SumGetTag(GetSumTag { sum_expr }), tag_type.type_id(), span);
         let variant_tag_expr = self.synth_int(variant_tag, span);
         let tag_equals = self.synth_equals_call_simple(get_tag, variant_tag_expr, span);
         Ok(tag_equals)
@@ -610,17 +597,8 @@ impl TypedProgram {
                         return None;
                     }
 
-                    let (field_index, field) = k1.types.get_struct_field_by_name(type_id, name)?;
-                    let field_expr = k1.exprs.add(
-                        TypedExpr::StructFieldAccess(FieldAccess {
-                            base: args,
-                            field_index: field_index as u32,
-                            struct_type: type_id,
-                            access_kind: FieldAccessKind::ValueToValue,
-                        }),
-                        field.type_id,
-                        span,
-                    );
+                    let (field_index, _field) = k1.types.get_struct_field_by_name(type_id, name)?;
+                    let field_expr = k1.synth_field_access(args, field_index, span);
                     Some(field_expr)
                 }
                 _ => None,
@@ -662,17 +640,7 @@ impl TypedProgram {
                                 n + 1
                             );
                         }
-                        let nth_field = k1.types.get_struct_field(type_id, n);
-                        let field_expr = k1.exprs.add(
-                            TypedExpr::StructFieldAccess(FieldAccess {
-                                base: args,
-                                field_index: n as u32,
-                                struct_type: type_id,
-                                access_kind: FieldAccessKind::ValueToValue,
-                            }),
-                            nth_field.type_id,
-                            span,
-                        );
+                        let field_expr = k1.synth_field_access(args, n, span);
                         Ok(field_expr)
                     }
                 }
@@ -813,7 +781,8 @@ impl TypedProgram {
             block.scope_id,
             None,
         );
-        let string_builder_expr = self.synth_address_of(string_builder_var.variable_expr, SpanId::NONE, true).unwrap();
+        let string_builder_expr =
+            self.synth_address_of(string_builder_var.variable_expr, SpanId::NONE, true).unwrap();
         self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
         let args_expr = args_expr.unwrap_or(self.synth_empty_struct(span));
         let format_block = self.synth_format_calls(

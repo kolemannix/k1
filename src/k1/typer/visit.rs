@@ -161,7 +161,7 @@ impl TypedProgram {
                 }
             }
             TypedExpr::SumGetTag(get_enum_tag) => {
-                recurse!(get_enum_tag.sum_expr_or_reference);
+                recurse!(get_enum_tag.sum_expr);
             }
             TypedExpr::SumGetPayload(enum_get_payload) => {
                 recurse!(enum_get_payload.sum_expr);

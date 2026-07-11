@@ -207,7 +207,7 @@ pub enum LsEntityKind {
     Variable { variable_id: VariableId },
     Type { type_id: TypeId, applied_type_id: Option<TypeId> },
     Variant { type_id: TypeId, variant_index: u32 },
-    StructField { type_id: TypeId, field_index: u32, access_kind: Option<FieldAccessKind> },
+    StructField { type_id: TypeId, field_index: u32 },
 }
 
 #[derive(Clone, Copy)]
@@ -266,6 +266,11 @@ bitflags! {
         const IsMethodReceiver = 1 << 4;
         /// We are compiling code for compile-time (static) execution
         const Static = 1 << 5;
+        /// We are compiling a place (or lvalue in the canon)
+        /// Fail if you see a non-place.
+        /// Valid: struct chain &a.b.c.d.y
+        /// Invalid: &a.foo().y
+        const IsPlace = 1 << 6;
     }
 }
 
@@ -1111,11 +1116,12 @@ pub struct DerefExpr {
 pub enum AddressOfKind {
     StackVariable,
     GlobalVariable,
+    OtherExpr,
 }
 
 #[derive(Clone, Copy)]
 pub struct AddressOfExpr {
-    pub target_variable: VariableId,
+    pub target_expr: TypedExprId,
     pub kind: AddressOfKind,
 }
 
@@ -1237,19 +1243,10 @@ impl ArrayLiteral {
 pub struct ArrayGetElement {
     pub base: TypedExprId,
     pub index: TypedExprId,
+    // nocommit: don't need array_type anymore
     pub array_type: TypeId,
-    // This is really just a field access by number instead of name
-    pub access_kind: FieldAccessKind,
 }
 impl_copy_if_small!(16, ArrayGetElement);
-
-/// Also used for SumGetPayload.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum FieldAccessKind {
-    ValueToValue,
-    Dereference,
-    ReferenceThrough,
-}
 
 /// `base` can be a reference to a struct, or a struct.
 /// `FieldAccessKind` talks about the _result_ type.
@@ -1257,14 +1254,8 @@ pub enum FieldAccessKind {
 pub struct FieldAccess {
     pub base: TypedExprId,
     pub field_index: u32,
+    // nocommit: struct type not really needed because its now always the type of `base`
     pub struct_type: TypeId,
-    pub access_kind: FieldAccessKind,
-}
-
-impl FieldAccess {
-    pub fn is_reference_through(&self) -> bool {
-        matches!(self.access_kind, FieldAccessKind::ReferenceThrough)
-    }
 }
 
 #[derive(Clone)]
@@ -1278,16 +1269,14 @@ impl_copy_if_small!(16, TypedSumConstructor);
 pub struct GetSumPayload {
     pub sum_expr: TypedExprId,
     pub variant_index: u32,
-    pub access_kind: FieldAccessKind,
 }
 impl_copy_if_small!(12, GetSumPayload);
 
 #[derive(Clone)]
 pub struct GetSumTag {
-    pub sum_expr_or_reference: TypedExprId,
-    pub is_reference: bool,
+    pub sum_expr: TypedExprId,
 }
-impl_copy_if_small!(8, GetSumTag);
+impl_copy_if_small!(4, GetSumTag);
 
 #[derive(Clone, Copy)]
 pub struct EnumConstructor {
@@ -7680,9 +7669,7 @@ impl TypedProgram {
         field_access: &parse::FieldAccess,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        // Special case: Sum Constructor
         let span = field_access.span;
-        let base_span = self.ast.exprs.get_span(field_access.base);
 
         if !field_access.type_args.is_empty() {
             // Treat it like a call; foo.<field_name>[u32]
@@ -7713,68 +7700,38 @@ impl TypedProgram {
 
         // Special case: .! unwrap operation
         if field_access.field_name == self.ast.idents.b.bang {
-            if field_access.is_referencing {
-                return failf!(field_access.span, "Cannot use * with unwrap operator");
-            }
             return self.eval_unwrap_operator(field_access.base, ctx, field_access.span);
         }
 
         // Special case: .try unwrap operation
         if field_access.field_name == self.ast.idents.b.try_ {
-            if field_access.is_referencing {
-                return failf!(field_access.span, "Cannot use * with try operator");
-            }
             return self.eval_try_operator(field_access.base, ctx, field_access.span);
         }
 
-        let base_expr = self.eval_expr(field_access.base, ctx.with_no_expected_type())?;
-        let base_expr_type = self.exprs.get_type(base_expr);
+        let raw_base_expr = self.eval_expr(field_access.base, ctx.with_no_expected_type())?;
+        let raw_base_expr_type = self.exprs.get_type(raw_base_expr);
+        let (base_agg_expr, base_type_id) = match self.types.get(raw_base_expr_type) {
+            Type::Reference(r) => {
+                let inner = r.inner_type;
+                (self.synth_dereference(raw_base_expr), inner)
+            }
+            _other => (raw_base_expr, raw_base_expr_type),
+        };
 
         // Optional fork case: sum.tag
         if field_access.field_name == self.ast.idents.b.tag {
-            if let Some(get_tag) = self.handle_sum_get_tag(base_expr, field_access.span)? {
+            if let Some(get_tag) = self.handle_sum_get_tag(base_agg_expr, field_access.span)? {
                 return Ok(get_tag);
             }
         }
 
         // Optional fork case: enum.value
         if field_access.field_name == self.ast.idents.b.value {
-            if let Some(get_value) = self.handle_enum_get_value(base_expr, field_access.span)? {
+            if let Some(get_value) = self.handle_enum_get_value(base_agg_expr, field_access.span)? {
                 return Ok(get_value);
             }
         }
 
-        let (base_expr, base_type_id, base_is_reference) = match self.get_expr_type(base_expr) {
-            Type::Reference(reference_type) => {
-                let inner_type = reference_type.inner_type;
-                (base_expr, inner_type, true)
-            }
-            _other => {
-                if field_access.is_referencing {
-                    let address_of_base_result = self.synth_address_of(base_expr, SpanId::NONE, false);
-                    match address_of_base_result {
-                        Ok(address_of_base) => (address_of_base, base_expr_type, true),
-                        Err(_) => {
-                            return failf!(
-                                base_span,
-                                "Field access target is not a pointer, so referencing access with * cannot be used"
-                            );
-                        }
-                    }
-                } else {
-                    (base_expr, base_expr_type, false)
-                }
-            }
-        };
-        let access_kind = if base_is_reference {
-            if field_access.is_referencing {
-                FieldAccessKind::ReferenceThrough
-            } else {
-                FieldAccessKind::Dereference
-            }
-        } else {
-            FieldAccessKind::ValueToValue
-        };
         //eprintln!("base_type_id is {}", self.type_id_to_string(base_type_id));
         match self.types.get(base_type_id) {
             Type::StaticValue(svt) => {
@@ -7802,7 +7759,6 @@ impl TypedProgram {
                     LsEntityKind::StructField {
                         type_id: svt.family_type_id,
                         field_index: field_index as u32,
-                        access_kind: Some(FieldAccessKind::ValueToValue),
                     },
                 );
                 match svt.value_id {
@@ -7844,19 +7800,13 @@ impl TypedProgram {
                     LsEntityKind::StructField {
                         type_id: base_type_id,
                         field_index: field_index as u32,
-                        access_kind: Some(access_kind),
                     },
                 );
-                let result_type = if field_access.is_referencing {
-                    self.types.add_reference_type(target_field.type_id)
-                } else {
-                    target_field.type_id
-                };
+                let result_type = target_field.type_id;
                 Ok(self.exprs.add(
                     TypedExpr::StructFieldAccess(FieldAccess {
-                        base: base_expr,
+                        base: base_agg_expr,
                         field_index: field_index as u32,
-                        access_kind,
                         struct_type: base_type_id,
                     }),
                     result_type,
@@ -7867,7 +7817,7 @@ impl TypedProgram {
                 span,
                 "Field {} does not exist on type {}",
                 self.ast.idents.get_string(field_access.field_name),
-                self.type_id_to_string(base_expr_type)
+                self.type_id_to_string(base_type_id)
             ),
         }
     }
@@ -7892,7 +7842,19 @@ impl TypedProgram {
         span: SpanId,
         allow_synthetic: bool,
     ) -> K1Result<TypedExprId> {
-        let (variable_id, kind) = match self.exprs.get(input) {
+        let kind = self.get_place_chain_or_something(input);
+        let input_type = self.exprs.get_type(input);
+        let reference_type = self.types.add_reference_type(input_type);
+        let addr_of_expr = self.exprs.add(
+            TypedExpr::AddressOf(AddressOfExpr { target_expr: input, kind }),
+            reference_type,
+            span,
+        );
+        Ok(addr_of_expr)
+    }
+
+    fn get_place_chain_or_something(&mut self, input: TypedExprId) {
+        match self.exprs.get(input) {
             TypedExpr::Variable(v) => {
                 let var = self.variables.get(v.variable_id);
                 match var.kind {
@@ -7916,19 +7878,18 @@ impl TypedProgram {
                     VariableKind::Global(_) => (v.variable_id, AddressOfKind::GlobalVariable),
                 }
             }
-            TypedExpr::StructFieldAccess(_) => {
-                return failf!(span, "Unsupported address_of on struct field");
+            TypedExpr::StructFieldAccess(field_access) => {
+                check_is_place(field_access.base);
+                Ok(())
             }
-            _ => return failf!(span, "This only works on local and global variables"),
-        };
-        let input_type = self.exprs.get_type(input);
-        let reference_type = self.types.add_reference_type(input_type);
-        let addr_of_expr = self.exprs.add(
-            TypedExpr::AddressOf(AddressOfExpr { target_variable: variable_id, kind }),
-            reference_type,
-            span,
-        );
-        Ok(addr_of_expr)
+            other => {
+                return failf!(
+                    span,
+                    "Currently Unsupported AddressOf expr: {}",
+                    self.expr_to_string(input)
+                );
+            }
+        }
     }
 
     fn eval_try_operator(
@@ -8971,7 +8932,6 @@ impl TypedProgram {
                 LsEntityKind::StructField {
                     type_id: expected_struct_id,
                     field_index: index as u32,
-                    access_kind: None,
                 },
             );
             passed_fields_aligned.push((parsed_expr, passed_field, expected_field))
@@ -9524,10 +9484,9 @@ impl TypedProgram {
             );
             k1.register_variable_usage(environment_param_variable_id, span);
             let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
-                base: env_variable_expr,
+                base: k1.synth_dereference(env_variable_expr),
                 field_index: field_index as u32,
                 struct_type: env_struct_type,
-                access_kind: FieldAccessKind::ValueToValue,
             });
             (env_field_access, variable_type, span)
         }
@@ -9939,34 +9898,25 @@ impl TypedProgram {
         let pat = self.patterns.get(pattern_id);
         match pat {
             TypedPattern::Struct(struct_pattern) => {
+                let pattern_fields = struct_pattern.fields;
                 let is_referencing = is_immediately_inside_reference_pattern;
-                let struct_type = struct_pattern.struct_type_id;
-                let struct_pattern_span = struct_pattern.span;
-                for pattern_field in self.patterns.get_slice(struct_pattern.fields).iter() {
-                    let result_type = if is_referencing {
-                        self.types.add_reference_type(pattern_field.field_type_id)
-                    } else {
-                        pattern_field.field_type_id
-                    };
-                    let get_struct_field = self.exprs.add(
-                        TypedExpr::StructFieldAccess(FieldAccess {
-                            base: target_expr,
-                            field_index: pattern_field.field_index,
-                            struct_type,
-                            access_kind: if is_referencing {
-                                FieldAccessKind::ReferenceThrough
-                            } else {
-                                FieldAccessKind::ValueToValue
-                            },
-                        }),
-                        result_type,
-                        struct_pattern_span,
+                let struct_base = self.synth_dereference_when(target_expr, is_referencing);
+                for pattern_field in self.patterns.get_slice(pattern_fields).iter() {
+                    let get_struct_field = self.synth_field_access(
+                        struct_base,
+                        pattern_field.field_index as usize,
+                        SpanId::NONE,
                     );
+                    let final_field = if is_referencing {
+                        self.synth_address_of(get_struct_field, SpanId::NONE, false).unwrap()
+                    } else {
+                        get_struct_field
+                    };
                     let var_name = self.build_ident_with(|k1, s| {
                         write!(s, "field_{}", k1.ident_str(pattern_field.name)).unwrap();
                     });
                     let struct_field_variable =
-                        self.synth_variable_defn_simple(var_name, get_struct_field, ctx.scope_id);
+                        self.synth_variable_defn_simple(var_name, final_field, ctx.scope_id);
                     instrs.push_grow(
                         &mut self.mem,
                         MatchingConditionInstr::Binding {
@@ -9986,10 +9936,10 @@ impl TypedProgram {
             TypedPattern::Sum(sum_pattern) => {
                 let sum_pattern = *sum_pattern;
                 let is_referencing = is_immediately_inside_reference_pattern;
+                let sum_base = self.synth_dereference_when(target_expr, is_referencing);
                 let is_variant_condition = self.synth_sum_is_variant(
-                    target_expr,
+                    sum_base,
                     sum_pattern.variant_index,
-                    is_referencing,
                     Some(sum_pattern.span),
                 )?;
                 instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(is_variant_condition));
@@ -10009,28 +9959,22 @@ impl TypedProgram {
                             self.ident_str(variant_name)
                         );
                     };
-                    let result_type_id = if is_referencing {
-                        self.types.add_reference_type(payload_type_id)
-                    } else {
-                        payload_type_id
-                    };
-                    let access_kind = if is_referencing {
-                        FieldAccessKind::ReferenceThrough
-                    } else {
-                        FieldAccessKind::ValueToValue
-                    };
                     let get_payload_expr = self.exprs.add(
                         TypedExpr::SumGetPayload(GetSumPayload {
-                            sum_expr: target_expr,
+                            sum_expr: sum_base,
                             variant_index,
-                            access_kind,
                         }),
-                        result_type_id,
+                        payload_type_id,
                         sum_pattern.span,
                     );
+                    let final_payload_expr = if is_referencing {
+                        self.synth_address_of(get_payload_expr, SpanId::NONE, false).unwrap()
+                    } else {
+                        get_payload_expr
+                    };
                     let payload_variable = self.synth_variable_defn_simple(
                         variant_name,
-                        get_payload_expr,
+                        final_payload_expr,
                         ctx.scope_id,
                     );
                     instrs.push_grow(
@@ -10555,7 +10499,8 @@ impl TypedProgram {
             outer_for_expr_scope,
             None,
         );
-        let iterator_expr = self.synth_address_of(iterator_variable.variable_expr, SpanId::NONE, true)?;
+        let iterator_expr =
+            self.synth_address_of(iterator_variable.variable_expr, SpanId::NONE, true)?;
         let mut loop_block =
             self.new_block_builder(outer_for_expr_scope, ScopeType::LexicalBlock, body_span, 3);
         let loop_scope_id = loop_block.scope_id;
@@ -10611,8 +10556,7 @@ impl TypedProgram {
         consequent_block.statements.push(binding_variable.defn_stmt);
         consequent_block.statements.push(user_block_variable.defn_stmt);
 
-        let next_is_some_call =
-            self.synth_sum_is_variant(next_variable.variable_expr, 1, false, None)?;
+        let next_is_some_call = self.synth_sum_is_variant(next_variable.variable_expr, 1, None)?;
         let empty_break = self.synth_empty_struct(body_span);
         let break_expr = self.exprs.add(
             TypedExpr::Break(TypedBreak {
@@ -11869,7 +11813,7 @@ impl TypedProgram {
                 };
                 Ok(CallResolution::OtherExpr(array_length))
             }
-            n if n == self.ast.idents.b.get || n == self.ast.idents.b.get_ref => {
+            n if n == self.ast.idents.b.get => {
                 if call.args.len() != 2 {
                     return failf!(span, "Array get takes 1 argument, the index");
                 }
@@ -11880,29 +11824,11 @@ impl TypedProgram {
                     .check_and_coerce_expr(SIZE_TYPE_ID, index_expr, ctx.scope_id, false)
                     .map_err(|e| errf!(span, "Array get index type error: {}", e.message))?;
 
-                let is_referencing = n == self.ast.idents.b.get_ref;
                 let array_reference_type = self.get_expr_type(receiver).as_reference();
-                if is_referencing && array_reference_type.is_none() {
-                    return failf!(
-                        span,
-                        "Cannot use .getRef() on this Array since it is not a reference: {}",
-                        self.type_id_to_string(self.exprs.get_type(receiver))
-                    );
-                }
-                let access_kind = if array_reference_type.is_some() {
-                    if is_referencing {
-                        FieldAccessKind::ReferenceThrough
-                    } else {
-                        FieldAccessKind::Dereference
-                    }
-                } else {
-                    FieldAccessKind::ValueToValue
-                };
-                let result_type = if is_referencing {
-                    self.types.add_reference_type(array_type.element_type)
-                } else {
-                    array_type.element_type
-                };
+                let array_expr =
+                    self.synth_dereference_when(receiver, array_reference_type.is_some());
+                let result_type = array_type.element_type;
+
                 if let Ok(static_index_expr) = self.attempt_static_lift(index_expr) {
                     let static_index_type = self.exprs.get_type(static_index_expr);
                     if let Some(index_size) = self
@@ -11923,10 +11849,9 @@ impl TypedProgram {
                 }
                 let get_element_expr = self.exprs.add(
                     TypedExpr::ArrayGetElement(ArrayGetElement {
-                        base: receiver,
+                        base: array_expr,
                         index: index_expr,
                         array_type: array_type_id,
-                        access_kind,
                     }),
                     result_type,
                     span,
@@ -12070,7 +11995,7 @@ impl TypedProgram {
             }
         };
 
-        // Handle the special case of the synthesized sum 'as{Variant}' methods
+        // Handle the special case of the synthesized sum 'as-variant' methods
         if let Some(sum_as_result) = self.handle_sum_as_variant_call(base_expr, call)? {
             return Ok(CallResolution::OtherExpr(sum_as_result));
         }
@@ -12334,12 +12259,11 @@ impl TypedProgram {
                     let patch_parsed_field =
                         self.ast.mem.getn(parsed).iter().find(|f| f.name == name);
                     match patch_parsed_field {
-                        None => self.synth_struct_field_access(
+                        None => self.synth_field_access(
                             base_struct_var.variable_expr,
                             base_field_index,
-                            FieldAccessKind::ValueToValue,
                             span,
-                        )?,
+                        ),
                         Some(parsed_field) => {
                             let parsed_expr = match parsed_field.value {
                                 StructValueFieldKind::VarShorthand => self
@@ -12382,21 +12306,19 @@ impl TypedProgram {
                                 self.ident_str(base_field.name)
                             );
                         }
-                        let patch_field_access_expr_id = self.synth_struct_field_access(
+                        let patch_field_access_expr_id = self.synth_field_access(
                             patch_struct_expr,
                             matching_patch_field_index,
-                            FieldAccessKind::ValueToValue,
                             span,
-                        )?;
+                        );
                         patch_hits += 1;
                         patch_field_access_expr_id
                     } else {
-                        let base_field_access_expr_id = self.synth_struct_field_access(
+                        let base_field_access_expr_id = self.synth_field_access(
                             base_struct_var.variable_expr,
                             base_field_index,
-                            FieldAccessKind::ValueToValue,
                             span,
-                        )?;
+                        );
                         base_field_access_expr_id
                     }
                 }
@@ -12579,19 +12501,10 @@ impl TypedProgram {
         base_expr_id: TypedExprId,
         span: SpanId,
     ) -> K1Result<Option<TypedExprId>> {
-        let original_type = self.exprs.get_type(base_expr_id);
-        let base_dereferenced = match self.types.get(original_type) {
-            Type::Enum(_) => base_expr_id,
-            Type::Reference(refer) => match self.types.get(refer.inner_type) {
-                Type::Enum(_) => {
-                    let expr = self.synth_dereference(base_expr_id);
-                    expr
-                }
-                _ => return Ok(None),
-            },
-            _ => return Ok(None),
-        };
-        Ok(Some(self.synth_enum_get_value(base_dereferenced, span)))
+        match self.get_expr_type(base_expr_id) {
+            Type::Enum(_) => Ok(Some(self.synth_enum_get_value(base_expr_id, span))),
+            _ => Ok(None),
+        }
     }
 
     fn handle_sum_get_tag(
@@ -12599,20 +12512,15 @@ impl TypedProgram {
         base_expr_id: TypedExprId,
         span: SpanId,
     ) -> K1Result<Option<TypedExprId>> {
-        let original_type = self.exprs.get_type(base_expr_id);
-        let (sum_type, is_reference) = match self.types.get(original_type) {
-            Type::Sum(e) => (e, false),
-            Type::Reference(refer) => match self.types.get(refer.inner_type) {
-                Type::Sum(e) => (e, true),
-                _ => return Ok(None),
-            },
+        let sum_type = match self.get_expr_type(base_expr_id) {
+            Type::Sum(s) => s,
             _ => return Ok(None),
         };
 
         let tag_type = sum_type.tag_type;
 
         Ok(Some(self.exprs.add(
-            TypedExpr::SumGetTag(GetSumTag { sum_expr_or_reference: base_expr_id, is_reference }),
+            TypedExpr::SumGetTag(GetSumTag { sum_expr: base_expr_id }),
             tag_type.type_id(),
             span,
         )))
@@ -12665,29 +12573,23 @@ impl TypedProgram {
             return failf!(span, "Variant '{}' has no data", self.ident_str(variant.name));
         };
         let variant_index = variant.index;
-        let resulting_type_id = if is_reference {
-            self.types.add_reference_type(payload_type_id)
-        } else {
-            payload_type_id
-        };
-        let condition =
-            self.synth_sum_is_variant(base_expr, variant_index, is_reference, Some(span))?;
-        let access_kind = if is_reference {
-            FieldAccessKind::ReferenceThrough
-        } else {
-            FieldAccessKind::ValueToValue
-        };
+        let sum_base_expr =
+            if is_reference { self.synth_dereference(base_expr) } else { base_expr };
+        let condition = self.synth_sum_is_variant(sum_base_expr, variant_index, Some(span))?;
         let payload_expr = self.exprs.add(
-            TypedExpr::SumGetPayload(GetSumPayload {
-                sum_expr: base_expr,
-                variant_index,
-                access_kind,
-            }),
-            resulting_type_id,
+            TypedExpr::SumGetPayload(GetSumPayload { sum_expr: sum_base_expr, variant_index }),
+            payload_type_id,
             span,
         );
-        let (consequent, consequent_type_id) = self.synth_optional_some(payload_expr);
-        let alternate = self.synth_optional_none(resulting_type_id, span);
+        let payload_referenced = if is_reference {
+            self.synth_address_of(payload_expr, SpanId::NONE, false).unwrap()
+        } else {
+            payload_expr
+        };
+        let (consequent, consequent_type_id) = self.synth_optional_some(payload_referenced);
+
+        let out_value_type = self.exprs.get_type(payload_referenced);
+        let alternate = self.synth_optional_none(out_value_type, span);
         debug_assert_eq!(consequent_type_id, self.exprs.get_type(alternate));
         Ok(Some(self.synth_if_else(consequent_type_id, condition, consequent, alternate, span)))
     }
@@ -16005,7 +15907,6 @@ impl TypedProgram {
                                 TypedExpr::SumGetPayload(GetSumPayload {
                                     sum_expr: arg_a,
                                     variant_index: variant.index,
-                                    access_kind: FieldAccessKind::ValueToValue,
                                 }),
                                 payload_type_id,
                                 fn_span,
@@ -16014,7 +15915,6 @@ impl TypedProgram {
                                 TypedExpr::SumGetPayload(GetSumPayload {
                                     sum_expr: arg_b,
                                     variant_index: variant.index,
-                                    access_kind: FieldAccessKind::ValueToValue,
                                 }),
                                 payload_type_id,
                                 fn_span,
@@ -16077,18 +15977,8 @@ impl TypedProgram {
                 let struct_type = self.types.get(struct_type_id).as_struct().unwrap();
                 let mut conditions = self.mem.new_list(struct_type.fields.len());
                 for (index, _field) in self.types.mem.getn(struct_type.fields).iter().enumerate() {
-                    let field_of_a = self.synth_struct_field_access(
-                        arg_a,
-                        index,
-                        FieldAccessKind::ValueToValue,
-                        fn_span,
-                    )?;
-                    let field_of_b = self.synth_struct_field_access(
-                        arg_b,
-                        index,
-                        FieldAccessKind::ValueToValue,
-                        fn_span,
-                    )?;
+                    let field_of_a = self.synth_field_access(arg_a, index, fn_span);
+                    let field_of_b = self.synth_field_access(arg_b, index, fn_span);
                     let equals_expr =
                         self.synth_equals_call_simple(field_of_a, field_of_b, fn_span);
                     conditions.push(MatchingConditionInstr::cond(equals_expr))
@@ -16137,12 +16027,7 @@ impl TypedProgram {
                 let colon_expr = self.synth_string_literal_from_str(": ", fn_span);
                 // FIXME: This won't support indentation until we pluck 'print' out into 'Display' and 'Inspect'
                 for (index, field) in self.types.mem.getn(struct_type.fields).iter().enumerate() {
-                    let field_expr = self.synth_struct_field_access(
-                        struct_expr,
-                        index,
-                        FieldAccessKind::ValueToValue,
-                        fn_span,
-                    )?;
+                    let field_expr = self.synth_field_access(struct_expr, index, fn_span);
                     let name_expr = self.synth_string_literal(field.name, fn_span);
                     let print_name_expr = self.synth_printto_call(name_expr, writer_expr, ctx)?;
                     let print_colon_expr = self.synth_printto_call(colon_expr, writer_expr, ctx)?;

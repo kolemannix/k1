@@ -603,19 +603,12 @@ impl TypedProgram {
                 let fields = self.types.get(field_access.struct_type).expect_struct().fields;
                 let name = self.types.mem.get_nth(fields, field_access.field_index as usize).name;
                 self.write_ident(w, name)?;
-                if field_access.is_reference_through() {
-                    w.write_char('*')?;
-                }
                 Ok(())
             }
             TypedExpr::ArrayGetElement(array_get) => {
                 // array.get(index) / array.getRef(index)
                 self.display_expr_id(array_get.base, w, indentation)?;
-                if array_get.access_kind == FieldAccessKind::ReferenceThrough {
-                    w.write_str(".getRef(")?;
-                } else {
-                    w.write_str(".get(")?;
-                }
+                w.write_str(".get(")?;
                 self.display_expr_id(array_get.index, w, indentation)?;
                 w.write_str(")")?;
                 Ok(())
@@ -705,8 +698,10 @@ impl TypedProgram {
                 w.write_str(".*")
             }
             TypedExpr::AddressOf(addr_of) => {
-                self.write_ident(w, self.variables.get(addr_of.target_variable).name)?;
-                w.write_str(".&")
+                w.write_str("&(")?;
+                self.display_expr_id(addr_of.target_expr, w, indentation)?;
+                w.write_str(")")?;
+                Ok(())
             }
             TypedExpr::SumConstructor(enum_constr) => {
                 w.write_str(".")?;
@@ -727,26 +722,18 @@ impl TypedProgram {
                 self.display_type_id(w, expr_type, false)
             }
             TypedExpr::SumGetTag(get_tag) => {
-                self.display_expr_id(get_tag.sum_expr_or_reference, w, indentation)?;
+                self.display_expr_id(get_tag.sum_expr, w, indentation)?;
                 w.write_str(".tag")?;
                 Ok(())
             }
             TypedExpr::SumGetPayload(get_payload_expr) => {
                 self.display_expr_id(get_payload_expr.sum_expr, w, indentation)?;
-                w.write_str(".payload")?;
-                if get_payload_expr.access_kind == FieldAccessKind::ReferenceThrough {
-                    w.write_char('*')?;
-                }
-                w.write_char('[')?;
-                let enum_type = self
-                    .types
-                    .get_type_dereferenced(self.exprs.get_type(get_payload_expr.sum_expr))
-                    .expect_sum();
+                w.write_str(".")?;
+                let enum_type = self.get_expr_type(get_payload_expr.sum_expr).expect_sum();
                 let variant = self
                     .types
                     .sum_variant_by_index(enum_type.variants, get_payload_expr.variant_index);
                 self.write_ident(w, variant.name)?;
-                w.write_char(']')?;
                 Ok(())
             }
             TypedExpr::Enum(e) => {

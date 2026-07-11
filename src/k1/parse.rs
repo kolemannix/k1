@@ -545,7 +545,6 @@ pub struct FieldAccess {
     pub base: ParsedExprId,
     pub field_name: StringId,
     pub type_args: AstSlice<NamedTypeArg>,
-    pub is_referencing: bool, // *.
     pub span: SpanId,
 }
 
@@ -3249,14 +3248,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     })))
                 } else {
                     // a.b[int] <complete expression>
-                    let trailing_asterisk = self.maybe_consume_no_whitespace(K::Asterisk);
+                    // discarded for now: nocommit
+                    let _trailing_asterisk = self.maybe_consume_no_whitespace(K::Asterisk);
                     let target = self.make_ident(target);
                     let span = self.extend_to_here(self.get_expression_span(result));
                     Some(self.add_expression(ParsedExpr::FieldAccess(FieldAccess {
                         base: result,
                         field_name: target,
                         type_args,
-                        is_referencing: trailing_asterisk.is_some(),
                         span,
                     })))
                 }
@@ -3433,7 +3432,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     /// or a 'base case'; it doesn't have any real meaning at the language level
     fn parse_base_expression(&mut self) -> ParseResult<Option<ParsedExprId>> {
         let compiler_debug = self.parse_compiler_debug();
-        let (first, second, third) = self.tokens.peek_three();
+        let first = self.tokens.peek();
+        let third = self.tokens.peek_n(2);
         // trace!("parse_base_expression {} {} {}", first.kind, second.kind, third.kind);
         let resulting_expression = match first.kind {
             K::OpenParen => {
@@ -3465,10 +3465,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             K::Amp => {
                 self.advance();
-                let name = self.expect_namespaced_ident()?;
-                let var_expr = self.add_expression(ParsedExpr::Variable(ParsedVariable { name }));
+                let expr = self.expect_expression_with_postfix_ops()?;
                 Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp {
-                    expr: var_expr,
+                    expr,
                     op_kind: ParsedUnaryOpKind::AddressOf,
                     span: first.span,
                 }))))
@@ -3478,6 +3477,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     return Err(error("unexpected prefix operator", first));
                 };
                 self.advance();
+                // nocommit: should not also parse with postfix precedence?
                 let expr = self.expect_expression()?;
                 Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp {
                     expr,
@@ -3765,6 +3765,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.ast.exprs.get_metadata_mut(expression_id).is_debug = compiler_debug;
         }
         Ok(resulting_expression)
+    }
+
+    fn expect_expression_with_postfix_ops(&mut self) -> ParseResult<ParsedExprId> {
+        Parser::expect("expression", self.peek(), self.parse_expression_with_postfix_ops())
     }
 
     fn expect_switch(&mut self, is_static: bool) -> ParseResult<ParsedExprId> {
