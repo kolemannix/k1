@@ -7,7 +7,7 @@ use std::io::{IsTerminal, Write};
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
-use crate::parse::write_source_location;
+use crate::parse::{StringId, write_source_location};
 use crate::typer::{LibRefLinkType, MessageLevel, TypedProgram};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
@@ -225,6 +225,10 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub dump_module: bool,
 
+    /// Write out every string in the identifier intern pool, with stats
+    #[arg(long, default_value_t = false)]
+    pub dump_idents: bool,
+
     /// Generate debug info
     #[arg(long)]
     pub debug: bool,
@@ -334,6 +338,34 @@ pub fn discover_source_files(src_path: &Path) -> (PathBuf, Vec<PathBuf>) {
 
 fn write_program_dump(p: &TypedProgram) {
     let _ = std::fs::write(format!("{}_module_dump.txt", p.program_name()), format!("{}", p));
+}
+
+fn write_idents_dump(p: &TypedProgram) {
+    use std::fmt::Write;
+    let idents = &p.ast.idents;
+    let count = idents.len();
+    let content_bytes = idents.content_bytes();
+    let mut out = String::with_capacity(content_bytes + count * 16);
+    let avg = if count == 0 { 0.0 } else { content_bytes as f64 / count as f64 };
+    writeln!(out, "; ident pool: {} strings, {} content bytes, avg len {:.1}", count, content_bytes, avg).unwrap();
+
+    let mut by_len: Vec<(StringId, &str)> = idents.iter().collect();
+    by_len.sort_by_key(|(_, s)| std::cmp::Reverse(s.len()));
+    writeln!(out, "; 20 longest:").unwrap();
+    for (id, s) in by_len.iter().take(20) {
+        let mut end = s.len().min(120);
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        writeln!(out, ";   [{}] len={} {:?}", id, s.len(), &s[..end]).unwrap();
+    }
+
+    for (id, s) in idents.iter() {
+        writeln!(out, "[{}] {:?}", id, s).unwrap();
+    }
+    let path = format!("{}_idents_dump.txt", p.program_name());
+    eprintln!("Wrote ident pool dump to {path}");
+    let _ = std::fs::write(path, out);
 }
 
 /// If `args.file` points to a directory,
@@ -482,6 +514,9 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
 
     if args.dump_module {
         write_program_dump(&k1);
+    }
+    if args.dump_idents {
+        write_idents_dump(&k1);
     }
 
     Ok(k1)

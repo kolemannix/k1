@@ -188,6 +188,29 @@ pub(crate) struct BuiltinIdents {
     pub v: StringId,
     pub subject: StringId,
     pub fmtargs: StringId,
+    pub e: StringId,
+    pub comparable: StringId,
+    // type-schema variant names; must match types/type-schema in types.k1
+    pub char: StringId,
+    pub bool: StringId,
+    pub ptr: StringId,
+    pub int: StringId,
+    pub float: StringId,
+    pub enum_: StringId,
+    pub struct_: StringId,
+    pub union: StringId,
+    pub reference: StringId,
+    pub either: StringId,
+    pub other: StringId,
+    pub never: StringId,
+    pub function: StringId,
+    pub function_pointer: StringId,
+    pub base_struct: StringId,
+    pub newline: StringId,
+    // messages for synthesized crash calls
+    pub crash_msg_no_cases: StringId,
+    pub crash_msg_no_cases_exhaustive: StringId,
+    pub crash_msg_array_oob: StringId,
 }
 
 #[allow(non_snake_case)]
@@ -251,6 +274,16 @@ impl IdentPool {
 
     pub fn len(&self) -> usize {
         self.intern_pool.len()
+    }
+
+    /// All interned strings in insertion order.
+    pub fn iter(&self) -> impl Iterator<Item = (StringId, &str)> {
+        self.intern_pool.iter().map(|(sym, s)| (StringId(sym), s))
+    }
+
+    /// Total bytes of string content in the pool.
+    pub fn content_bytes(&self) -> usize {
+        self.intern_pool.iter().map(|(_, s)| s.len()).sum()
     }
 
     #[allow(non_snake_case)]
@@ -372,6 +405,30 @@ impl IdentPool {
             v: intern!("v"),
             subject: intern!("subject"),
             fmtargs: intern!("fmtargs"),
+            e: intern!("e"),
+            comparable: intern!("comparable"),
+            char: intern!("char"),
+            bool: intern!("bool"),
+            ptr: intern!("ptr"),
+            int: intern!("int"),
+            float: intern!("float"),
+            enum_: intern!("enum"),
+            struct_: intern!("struct"),
+            union: intern!("union"),
+            reference: intern!("reference"),
+            either: intern!("either"),
+            other: intern!("other"),
+            never: intern!("never"),
+            function: intern!("function"),
+            function_pointer: intern!("function-pointer"),
+            base_struct: intern!("base_struct"),
+            newline: intern!("\n"),
+            crash_msg_no_cases: intern!("No cases matched"),
+            crash_msg_no_cases_exhaustive: intern!(
+                "No cases matched but match was meant to be exhaustive. \
+                Either the match subject is corrupt, or there is a compiler bug."
+            ),
+            crash_msg_array_oob: intern!("Array index out of bounds"),
         };
 
         macro_rules! make_fn {

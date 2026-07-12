@@ -2093,7 +2093,7 @@ impl Source {
 
 pub fn init_module(module_name: StringId, ast: &mut ParsedProgram) -> ParsedNamespaceId {
     let root_namespace_id = if ast.namespaces.is_empty() {
-        let name = ast.idents.intern("_root");
+        let name = ast.idents.b.root_module_name;
         let root_ns = ParsedNamespace::empty(name);
 
         ast.add_namespace(root_ns)
@@ -2978,7 +2978,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
                 // Note: This no longer needs to be special syntax since its not an X anymore.
                 if base_name.path.is_empty() {
-                    if self.ast.idents.get_string(base_name.name) == "array" {
+                    if base_name.name == self.ast.idents.b.array {
                         self.expect_kind(K::OpenBracket)?;
 
                         let element_type = self.expect_type_expression()?;

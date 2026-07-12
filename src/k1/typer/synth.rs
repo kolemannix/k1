@@ -445,12 +445,11 @@ impl TypedProgram {
 
     pub(super) fn synth_crash_call(
         &mut self,
-        message: &str,
+        message: StringId,
         span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        let message_string_id = self.ast.idents.intern(message);
-        let message_expr = self.synth_string_literal(message_string_id, span);
+        let message_expr = self.synth_string_literal(message, span);
         self.synth_typed_call_typed_args(
             self.ast.idents.f.core_crash.with_span(span),
             &[],
