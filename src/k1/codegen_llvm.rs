@@ -641,7 +641,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let basic_type = self.codegen_type(global_pt);
             self.make_external_global(basic_type.rich_type(), &name, global.is_constant)
         } else {
-            let initial_static_value_id = global.initial_value.unwrap();
+            let initial_static_value_id = global.initial_value.as_value().unwrap();
             let initializer_basic_value =
                 self.codegen_static_value_as_const(initial_static_value_id, 0)?;
             let llvm_linkage = match global.is_exported {

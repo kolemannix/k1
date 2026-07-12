@@ -52,6 +52,11 @@ pub struct Mem<Tag = ()> {
     _marker: PhantomData<Tag>,
 }
 
+fn poison_arena_resets() -> bool {
+    static POISON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *POISON.get_or_init(|| std::env::var_os("K1_POISON_ARENA_RESETS").is_some())
+}
+
 /// A saved arena position; see `Mem::mark` and `Mem::reset_to`.
 pub struct MemMark<Tag> {
     cursor: *mut u8,
@@ -412,6 +417,12 @@ impl<Tag> Mem<Tag> {
     pub fn reset_to(&mut self, mark: MemMark<Tag>) {
         debug_assert!(mark.cursor.addr() <= self.cursor.addr());
         self.hwm = self.hwm.max(self.bytes_used());
+        if poison_arena_resets() {
+            let freed = self.cursor.addr() - mark.cursor.addr();
+            unsafe {
+                core::ptr::write_bytes(mark.cursor, 0xCD, freed);
+            }
+        }
         self.set_cursor_checked(mark.cursor);
     }
 

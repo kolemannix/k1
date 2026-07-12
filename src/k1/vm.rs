@@ -23,9 +23,9 @@ use crate::typer::types::{
     PhysicalTypeResult, ScalarType, Type, TypeId, TypePool,
 };
 use crate::typer::{
-    ErrorKind, FunctionId, K1Message, K1Result, MessageLevel, StaticContainer, StaticContainerKind,
-    StaticStruct, StaticSum, StaticValue, StaticValueId, StaticValuePool, TypedExprId,
-    TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
+    ErrorKind, FunctionId, GlobalInitialValue, K1Message, K1Result, MessageLevel, StaticContainer,
+    StaticContainerKind, StaticStruct, StaticSum, StaticValue, StaticValueId, StaticValuePool,
+    TypedExprId, TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
 };
 use crate::{
     errf, failf, ice_span,
@@ -1718,22 +1718,29 @@ pub(crate) fn resolve_global(
         return Ok(*v);
     }
 
-    // Case 3: First evaluation. If not mutable, put in share global constants. If mutable,
+    // Case 3: First use in this VM. If not mutable, put in share global constants. If mutable,
     // generate and store the shared original, but store a copy in our local vm to allow mutation
     let global = k1.globals.get(global_id);
     let is_constant = global.is_constant;
     let initial_value_id = match global.initial_value {
-        None => {
-            // Run this global's body, subtracting the time from our vm exec time
-            let eval_start = k1.timing.raw();
-            k1.eval_global_body(global.ast_id)?;
-            let eval_time = k1.timing.elapsed_nanos(eval_start);
-            k1.timing.total_vm_nanos -= eval_time as i64;
-
-            let value_id = k1.globals.get(global_id).initial_value.unwrap();
-            value_id
+        GlobalInitialValue::Pending => {
+            // Globals referenced by compiled code are evaluated by the pre-execution
+            // drain (compile_all_pending_ir); re-entering the compiler mid-run to
+            // evaluate one is no longer allowed
+            return failf!(
+                vm.eval_span,
+                "VM encountered un-evaluated global '{}'; all globals referenced by compiled code should have been evaluated before execution. This is a compiler bug",
+                k1.ident_str(k1.variables.get(global.variable_id).name)
+            );
         }
-        Some(value_id) => value_id,
+        GlobalInitialValue::Uninit => {
+            return failf!(
+                vm.eval_span,
+                "Cannot read external global '{}' at compile time; its storage only exists at link time",
+                k1.ident_str(k1.variables.get(global.variable_id).name)
+            );
+        }
+        GlobalInitialValue::Value(value_id) => value_id,
     };
     debug!(
         "shared global is: {}. the `t` of the instr is: {}",

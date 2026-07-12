@@ -68,6 +68,7 @@ pub struct ProgramIr {
     b_variables: FxHashMap<VariableId, BuilderVariable>,
     b_loops: FxHashMap<ScopeId, LoopInfo>,
     pub units_pending_compile: FxHashMap<FunctionId, ()>,
+    pub globals_pending_eval: FxHashMap<TypedGlobalId, ()>,
 
     opt_buf_stack: Vec<iropt::OptVisit>,
     opt_buf_order: Vec<IrUnitId>,
@@ -105,6 +106,7 @@ impl ProgramIr {
             b_variables: FxHashMap::new(),
             b_loops: FxHashMap::default(),
             units_pending_compile: FxHashMap::new(),
+            globals_pending_eval: FxHashMap::new(),
 
             opt_buf_stack: vec![],
             opt_buf_order: vec![],
@@ -2213,6 +2215,10 @@ fn compile_variable_to_address(
     match variable.global_id() {
         Some(global_id) => {
             let global = b.k1.globals.get(global_id).clone();
+            if global.initial_value.is_pending() {
+                // We'll need to compile this global's body before we can execute this ir unit
+                b.k1.ir.globals_pending_eval.entry(global_id).or_insert(());
+            }
             // We typically generate an instruction
             // representing the **address** of the global, because they are always
             // addresses to static memory. For aggregate types, that address _is_
@@ -2227,7 +2233,7 @@ fn compile_variable_to_address(
             let is_constant = global.is_constant;
             let value_pt = b.get_physical_type(value_type);
 
-            if let Some(initial_value) = global.initial_value
+            if let Some(initial_value) = global.initial_value.as_value()
                 && global.is_constant
                 && value_pt.is_scalar()
                 && !require_address
