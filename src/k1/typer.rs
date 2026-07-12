@@ -13188,13 +13188,14 @@ impl TypedProgram {
                 {
                     let is_method_receiver = receiver_index == Some(index);
                     let checked_expr = match *maybe_typed_expr {
-                        MaybeTypedExpr::Typed(typed) => {
-                            if let Err(e) = self.check_and_coerce_expr(
-                                param.type_id,
-                                typed,
-                                ctx.scope_id,
-                                is_method_receiver,
-                            ) {
+                        MaybeTypedExpr::Typed(typed) => match self.check_and_coerce_expr(
+                            param.type_id,
+                            typed,
+                            ctx.scope_id,
+                            is_method_receiver,
+                        ) {
+                            Ok(checked_coerced) => checked_coerced,
+                            Err(e) => {
                                 return failf!(
                                     self.exprs.get_span(typed),
                                     "{}\nOccurred in pre-typed call parameter '{}.{}'",
@@ -13202,9 +13203,8 @@ impl TypedProgram {
                                     self.qident_to_string(&fn_call.name),
                                     self.ident_str(param.name),
                                 );
-                            };
-                            typed
-                        }
+                            }
+                        },
                         MaybeTypedExpr::Parsed(parsed) => self
                             .eval_expr_with_coercion(
                                 parsed,

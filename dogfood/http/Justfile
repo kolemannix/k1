@@ -1,8 +1,8 @@
 build:
-  k1 b .
+  k1 --optimize b .
 
 run:
-  k1 r .
+  k1 --optimize r .
 
 serve:
   cd web && ./caddy run --config Caddyfile --watch

@@ -276,6 +276,7 @@ impl Backend {
             sanitize: false,
             profile: false,
             chatty: false,
+            optimize_ir: true,
             target: None,
             static_exec: k1::compiler::StaticExecMode::Bc,
             command: k1::compiler::Command::Check {

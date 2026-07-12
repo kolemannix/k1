@@ -117,6 +117,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         profile: false,
         target: None,
         chatty: false,
+        optimize_ir: true,
         static_exec: match std::env::var("K1_TEST_SUITE_STATIC_EXEC").as_deref() {
             Ok("ir") => k1::compiler::StaticExecMode::Ir,
             Ok("bc") => k1::compiler::StaticExecMode::Bc,
