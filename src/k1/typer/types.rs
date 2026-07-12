@@ -1327,6 +1327,11 @@ pub struct TypePool {
     pub specializations: FxHashMap<TypeId, Vec<(TypeIdSlice, TypeId)>>,
     pub phys_types: FxHashMap<TypeId, PhysicalTypeResult>,
 
+    /// InferenceHole type ids by hole index, for holes with no static constraint.
+    /// `add` hash-conses holes to one id per (index, static_type) anyway; this skips
+    /// the hash+probe on the common path. PENDING marks not-yet-created indices.
+    hole_type_cache: Vec<TypeId>,
+
     /// Lookup mappings for parsed -> typed ids
     pub ast_ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
 
@@ -1358,6 +1363,8 @@ impl TypePool {
             defn_info: FxHashMap::new(),
             specializations: FxHashMap::new(),
             phys_types: FxHashMap::new(),
+
+            hole_type_cache: Vec::new(),
 
             ast_ability_mapping: FxHashMap::default(),
 
@@ -1517,6 +1524,25 @@ impl TypePool {
 
     pub fn add_anon(&mut self, typ: Type) -> TypeId {
         self.add(typ, None, None)
+    }
+
+    pub fn get_inference_hole(&mut self, index: u32, static_type: Option<TypeId>) -> TypeId {
+        if static_type.is_none() {
+            if let Some(&cached) = self.hole_type_cache.get(index as usize) {
+                if cached != TypeId::PENDING {
+                    return cached;
+                }
+            }
+        }
+        let type_id = self.add_anon(Type::InferenceHole(InferenceHoleType { index, static_type }));
+        if static_type.is_none() {
+            let index = index as usize;
+            if self.hole_type_cache.len() <= index {
+                self.hole_type_cache.resize(index + 1, TypeId::PENDING);
+            }
+            self.hole_type_cache[index] = type_id;
+        }
+        type_id
     }
 
     /// The two types of types that we need to treat as 'static' types are Static types themselves
@@ -2240,6 +2266,19 @@ impl TypePool {
         if let Some(specializations) = self.specializations.get(&base) {
             for candidate in specializations {
                 if self.mem.slices_equal_copy(candidate.0, args) {
+                    return Some(candidate.1);
+                }
+            }
+        }
+        None
+    }
+
+    /// Cache lookup against args that don't (yet) live in `self.mem`; lets callers
+    /// avoid committing an args slice to the permanent arena until a cache miss
+    pub fn get_specialization_slice(&self, base: TypeId, args: &[TypeId]) -> Option<TypeId> {
+        if let Some(specializations) = self.specializations.get(&base) {
+            for candidate in specializations {
+                if self.mem.getn(candidate.0) == args {
                     return Some(candidate.1);
                 }
             }

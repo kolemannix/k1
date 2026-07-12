@@ -114,6 +114,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         no_std: false,
         emit_llvm: true,
         dump_module: false,
+        dump_idents: false,
         profile: false,
         target: None,
         chatty: false,

@@ -41,59 +41,65 @@ impl TypedProgram {
             self.ictx_push();
         }
 
-        let ictx = self.ictx_mut();
-        ictx.origin_stack.push(span);
-        let infer_depth = ictx.origin_stack.len();
-        if infer_depth == 1 {
+        self.ictx_mut().origin_stack.push(span);
+        if self.ictx().origin_stack.len() == 1 {
             let raw = self.timing.clock.raw();
             self.ictx_mut().start_raw = raw;
         }
 
-        let mut self_ = scopeguard::guard(self, |self_| {
-            let clock = &self_.timing.clock;
-            let start = self_.ictx().start_raw;
-            let elapsed = clock.elapsed_nanos(start);
+        let result = self.infer_types_inner(
+            all_type_params,
+            must_solve_params,
+            inference_pairs,
+            span,
+            scope_id,
+        );
 
-            let ictx = self_.ictx_mut();
-            let id = ictx.origin_stack.pop().unwrap();
-            debug_assert_eq!(id, span);
-            if ictx.origin_stack.is_empty() {
-                self_.timing.total_infers += 1;
-                self_.timing.total_infer_nanos += elapsed as i64;
+        let popped = self.ictx_mut().origin_stack.pop().unwrap();
+        debug_assert_eq!(popped, span);
+        if self.ictx().origin_stack.is_empty() {
+            let elapsed = self.timing.clock.elapsed_nanos(self.ictx().start_raw);
+            self.timing.total_infers += 1;
+            self.timing.total_infer_nanos += elapsed as i64;
+            debug!("Resetting inference context");
+            self.ictx_pop();
+        }
+        result
+    }
 
-                debug!("Resetting inference context");
-                self_.ictx_pop();
-            } else {
-                debug!(
-                    "Not resetting inference buffers: inference depth is nonzero: {}",
-                    ictx.origin_stack.len()
-                );
-            }
-        });
-
+    fn infer_types_inner(
+        &mut self,
+        all_type_params: &[NameAndType],
+        must_solve_params: NamedTypeSlice,
+        inference_pairs: &[InferenceInputPair],
+        span: SpanId,
+        scope_id: ScopeId,
+    ) -> K1Result<(NamedTypeSlice, NamedTypeSlice)> {
+        let infer_depth = self.ictx().origin_stack.len();
         // Stores the mapping from the function (or type's) type parameters to their
         // corresponding instantiated type holes for this inference context
         let mut params_to_holes: SV8<TypeSubstitutionPair> =
             SmallVec::with_capacity(all_type_params.len());
 
-        let inference_var_count = self_.ictx().inference_vars.len() as u32;
-        self_.ictx_mut().params.extend(all_type_params.iter().map(|nt| nt.type_id));
+        let frame_start = self.ictx().slots.len() as u32;
         for (idx, param) in all_type_params.iter().enumerate() {
-            let hole_index = idx as u32 + inference_var_count;
+            let hole_index = idx as u32 + frame_start;
 
-            let static_type = self_.types.get(param.type_id).as_tvar().unwrap().static_constraint;
+            let static_type = self.types.get(param.type_id).as_tvar().unwrap().static_constraint;
 
-            let type_hole = self_.types.add_anon(Type::InferenceHole(InferenceHoleType {
-                index: hole_index as u32,
-                static_type,
-            }));
+            let type_hole = self.types.get_inference_hole(hole_index, static_type);
 
-            self_.ictx_mut().inference_vars.push(type_hole);
+            self.ictx_mut().slots.push(InferenceSlot {
+                param_type: param.type_id(),
+                hole_type: type_hole,
+                solution: None,
+                fully_solved: false,
+            });
             params_to_holes.push(spair! { param.type_id() => type_hole });
         }
         debug!(
             "[infer {infer_depth}] Instantiation set is:\n{}",
-            self_.pretty_print_type_substitutions(&params_to_holes, "\n")
+            self.pretty_print_type_substitutions(&params_to_holes, "\n")
         );
 
         // Used for the error message, mainly
@@ -106,11 +112,11 @@ impl TypedProgram {
         for (index, InferenceInputPair { arg: expr, param_type: gen_param, allow_mismatch }) in
             inference_pairs.iter().enumerate()
         {
-            let instantiated_param_type = self_.substitute_in_type(*gen_param, &params_to_holes);
+            let instantiated_param_type = self.substitute_in_type(*gen_param, &params_to_holes);
             debug!(
                 "[infer {infer_depth}] Instantiated parameter type for inference. Was: {}, is: {}",
-                self_.type_id_to_string(*gen_param),
-                self_.type_id_to_string(instantiated_param_type)
+                self.type_id_to_string(*gen_param),
+                self.type_id_to_string(instantiated_param_type)
             );
 
             debug!(
@@ -119,20 +125,20 @@ impl TypedProgram {
                 inference_pairs.len()
             );
 
-            let s = std::mem::take(&mut self_.ictx_mut().substitutions_vec);
+            let s = std::mem::take(&mut self.ictx_mut().substitutions_vec);
             // Calculating the 'expected_type_so_far' is an extra step that gives us better
             // results; we're able to get 'better' types from later arguments if we've already
             // learned some things from prior ones.
-            let expected_type_so_far = self_.substitute_in_type(instantiated_param_type, &s);
+            let expected_type_so_far = self.substitute_in_type(instantiated_param_type, &s);
             debug!(
                 "[infer {infer_depth}] Set is \n{}",
-                self_.pretty_print_type_substitutions(&s, "\n"),
+                self.pretty_print_type_substitutions(&s, "\n"),
             );
             debug!(
                 "[infer {infer_depth}] Expected type is: {}",
-                self_.type_id_to_string(expected_type_so_far)
+                self.type_id_to_string(expected_type_so_far)
             );
-            self_.ictx_mut().substitutions_vec = s;
+            self.ictx_mut().substitutions_vec = s;
 
             let (argument_type, argument_span) = match expr {
                 TypeOrParsedExpr::Type(type_id) => (*type_id, span),
@@ -141,15 +147,28 @@ impl TypedProgram {
                         .with_inference(true)
                         .with_expected_type(Some(expected_type_so_far));
 
+                    // TEMP instrumentation (see Timing)
+                    let expected_counts =
+                        self.types.get_type_variable_counts(expected_type_so_far);
+                    self.timing.pass1_arg_evals += 1;
+                    if expected_counts.inference_variable_count == 0
+                        && expected_counts.unresolved_static_count == 0
+                    {
+                        self.timing.pass1_arg_evals_hole_free += 1;
+                    }
+                    let pass1_start = self.timing.clock.raw();
+
                     let evaluation_result =
-                        self_.eval_expr_with_coercion(*parsed_expr, inference_context, false);
+                        self.eval_expr_with_coercion(*parsed_expr, inference_context, false);
+                    self.timing.pass1_arg_eval_nanos +=
+                        self.timing.clock.elapsed_nanos(pass1_start) as i64;
                     match evaluation_result {
                         Ok(expr_id) => {
-                            let expr_type = self_.exprs.get_type(expr_id);
-                            let expr_span = self_.exprs.get_span(expr_id);
+                            let expr_type = self.exprs.get_type(expr_id);
+                            let expr_span = self.exprs.get_span(expr_id);
                             debug!(
                                 "[infer {infer_depth}] Actual type is: {}",
-                                self_.type_id_to_string(expr_type)
+                                self.type_id_to_string(expr_type)
                             );
                             (expr_type, expr_span)
                         }
@@ -163,7 +182,7 @@ impl TypedProgram {
                             // mis-written, so need to rethink this, toggling to false for now
                             // Eventually I think we need a signal score heuristic on errors to
                             // determine whether the lambda failure would stop inference here or not
-                            let should_skip = match self_.ast.exprs.get(*parsed_expr) {
+                            let should_skip = match self.ast.exprs.get(*parsed_expr) {
                                 ParsedExpr::Lambda(_) => false,
                                 _ => false,
                             };
@@ -174,7 +193,7 @@ impl TypedProgram {
                                     e.span,
                                     "{}\nOccurred while trying to determine type of argument for inference using expected type: {}",
                                     e.message,
-                                    self_.type_id_to_string(expected_type_so_far)
+                                    self.type_id_to_string(expected_type_so_far)
                                 );
                             }
                         }
@@ -184,12 +203,12 @@ impl TypedProgram {
             argument_types.push(argument_type);
             debug!(
                 "[infer {infer_depth}] unify {} =:= {}",
-                self_.type_id_to_string(argument_type),
-                self_.type_id_to_string(expected_type_so_far),
+                self.type_id_to_string(argument_type),
+                self.type_id_to_string(expected_type_so_far),
             );
             // unify_and_find_substitutions populates self.inferences_context.constraints
             if let TypeUnificationResult::NonMatching(msg) =
-                self_.unify_and_find_substitutions(argument_type, expected_type_so_far)
+                self.unify_and_find_substitutions(argument_type, expected_type_so_far)
             {
                 // allow_mismatch is used to avoid reporting a mismatch on the return type,
                 // before we're able to learn more about the rest of the inference. We get a better
@@ -198,21 +217,21 @@ impl TypedProgram {
                     return failf!(
                         argument_span,
                         "(unify fail) Passed value does not match expected type: expected {} but got {}\nReason: {msg}",
-                        self_.type_id_to_string(expected_type_so_far),
-                        self_.type_id_to_string(argument_type)
+                        self.type_id_to_string(expected_type_so_far),
+                        self.type_id_to_string(argument_type)
                     );
                 }
             };
 
             // After each pair is 'walked', we 'apply' what we learned by calling calculate_inference_substitutions
-            let newly_solved_params = self_.calculate_inference_substitutions(span)?;
+            let newly_solved_params = self.calculate_inference_substitutions(span)?;
             for newly_solved_param in &newly_solved_params {
                 debug!(
                     "[infer {infer_depth}] ****** GOT NEWLY SOLVED PARAM {} -> {}",
-                    self_.type_id_to_string(newly_solved_param.from),
-                    self_.type_id_to_string(newly_solved_param.to)
+                    self.type_id_to_string(newly_solved_param.from),
+                    self.type_id_to_string(newly_solved_param.to)
                 );
-                self_.apply_constraints_to_inferred_type(
+                self.apply_constraints_to_inferred_type(
                     newly_solved_param.from,
                     newly_solved_param.to,
                     scope_id,
@@ -222,22 +241,22 @@ impl TypedProgram {
 
             debug!(
                 "[infer {infer_depth}] all constraints\n\t{}",
-                self_.pretty_print_type_substitutions(&self_.ictx().constraints, "\n\t"),
+                self.pretty_print_type_substitutions(&self.ictx().constraints, "\n\t"),
             );
         }
 
-        let mut solutions: List<NameAndType, _> = self_.mem.new_list(must_solve_params.len());
+        let mut solutions: List<NameAndType, _> = self.mem.new_list(must_solve_params.len());
         let mut unsolved_params: SV8<NameAndType> = smallvec![];
         let mut all_solutions: List<NameAndType, _> =
-            self_.mem.new_list(all_type_params.len() as u32);
+            self.mem.new_list(all_type_params.len() as u32);
 
         // TODO: enrich this error, probably do the same thing we're doing below for unsolved
-        let final_substitutions = &self_.ictx().substitutions;
+        let final_substitutions = &self.ictx().substitutions;
 
         for param in all_type_params.iter() {
             let param_to_hole = params_to_holes.iter().find(|p| p.from == param.type_id()).unwrap();
             let corresponding_hole = param_to_hole.to;
-            let is_must_solve = self_.mem.slice_contains(must_solve_params, param);
+            let is_must_solve = self.mem.slice_contains(must_solve_params, param);
             if let Some(solution) = final_substitutions.get(&corresponding_hole) {
                 all_solutions.push(NameAndType { name: param.name(), type_id: *solution });
                 if is_must_solve {
@@ -255,7 +274,7 @@ impl TypedProgram {
                 "Could not solve for {} given arguments:\n{}\nSolutions:{}",
                 unsolved_params
                     .iter()
-                    .map(|p| self_.ident_str(p.name()))
+                    .map(|p| self.ident_str(p.name()))
                     .collect::<Vec<_>>()
                     .join(", "),
                 argument_types
@@ -264,18 +283,18 @@ impl TypedProgram {
                     .map(|(passed_type, pair)| {
                         format!(
                             "{}: {}",
-                            self_.type_id_to_string_ext(*passed_type, false),
-                            self_.type_id_to_string_ext(pair.param_type, false),
+                            self.type_id_to_string_ext(*passed_type, false),
+                            self.type_id_to_string_ext(pair.param_type, false),
                         )
                     })
                     .collect::<Vec<_>>()
                     .join("\n"),
-                self_.pretty_print_type_substitutions(&self_.ictx().solutions_so_far, ", ")
+                self.pretty_print_type_substitutions(&self.ictx().solutions_so_far, ", ")
             );
         }
-        debug!("INFER DONE {}", self_.pretty_print_named_types(&solutions, ", "));
-        let solutions_handle = self_.mem.list_to_handle(solutions);
-        let all_solutions_handle = self_.mem.list_to_handle(all_solutions);
+        debug!("INFER DONE {}", self.pretty_print_named_types(&solutions, ", "));
+        let solutions_handle = self.mem.list_to_handle(solutions);
+        let all_solutions_handle = self.mem.list_to_handle(all_solutions);
         Ok((solutions_handle, all_solutions_handle))
     }
 
@@ -797,11 +816,11 @@ impl TypedProgram {
             // If the thing we've solved is one of the param holes themselves
             // e.g., '0
             let Some(inference_var_index) =
-                ctx.inference_vars.iter().position(|t| *t == *solved_from)
+                ctx.slots.iter().position(|s| s.hole_type == *solved_from)
             else {
                 continue;
             };
-            let original_param = ctx.params[inference_var_index];
+            let original_param = ctx.slots[inference_var_index].param_type;
 
             debug!(
                 "final_pair {} -> {}",
@@ -838,11 +857,13 @@ impl TypedProgram {
     fn make_inference_substitution_set(&self) -> SV8<TypeSubstitutionPair> {
         let mut subst_set: SV8<TypeSubstitutionPair> = smallvec![];
         let ictx = self.ictx();
-        for (param, inference_hole) in ictx.params.iter().zip(ictx.inference_vars.iter()) {
-            if let Some(solution) = ictx.solutions_so_far.iter().find(|p| p.from == *param) {
+        for slot in ictx.slots.iter() {
+            if let Some(solution) =
+                ictx.solutions_so_far.iter().find(|p| p.from == slot.param_type)
+            {
                 subst_set.push(*solution)
             } else {
-                subst_set.push(spair! { *param => *inference_hole })
+                subst_set.push(spair! { slot.param_type => slot.hole_type })
             }
         }
         subst_set

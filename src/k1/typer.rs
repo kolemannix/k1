@@ -151,12 +151,30 @@ pub struct InferenceInputPair {
     allow_mismatch: bool,
 }
 
+/// One entry per instantiated type parameter of an inference context,
+/// indexed by its inference hole's index
+#[derive(Debug, Clone, Copy)]
+pub struct InferenceSlot {
+    /// The type parameter being solved, e.g. 'T'
+    pub param_type: TypeId,
+    /// The instantiated inference hole standing in for it, e.g. ''0'
+    pub hole_type: TypeId,
+    /// Current best solution; may still mention other holes while partial
+    pub solution: Option<TypeId>,
+    /// True once solution is Some and hole-free; set exactly once
+    pub fully_solved: bool,
+}
+
 #[derive(Default)]
 pub struct InferenceContext {
     pub origin_stack: Vec<SpanId>,
-    pub params: Vec<TypeId>,
+    /// Append-only across nested inferences within one context;
+    /// slot index == hole index
+    pub slots: Vec<InferenceSlot>,
+    /// Slot indices whose solution just became hole-free; drained by infer_types,
+    /// which applies the param's constraints for each
+    pub newly_solved: Vec<u32>,
     pub solutions_so_far: Vec<TypeSubstitutionPair>,
-    pub inference_vars: Vec<TypeId>,
     pub constraints: Vec<TypeSubstitutionPair>,
     pub substitutions: FxHashMap<TypeId, TypeId>,
     pub substitutions_vec: Vec<TypeSubstitutionPair>,
@@ -167,9 +185,9 @@ impl InferenceContext {
     pub fn make() -> Self {
         InferenceContext {
             origin_stack: Vec::new(),
-            params: Vec::new(),
+            slots: Vec::new(),
+            newly_solved: Vec::new(),
             solutions_so_far: Vec::new(),
-            inference_vars: Vec::new(),
             constraints: Vec::new(),
             substitutions: FxHashMap::new(),
             substitutions_vec: Vec::new(),
@@ -179,9 +197,9 @@ impl InferenceContext {
 
     pub fn print_lengths(&self) {
         eprintln!("s origin_stack {}", self.origin_stack.len());
-        eprintln!("s params {}", self.params.len());
+        eprintln!("s slots {}", self.slots.len());
+        eprintln!("s newly_solved {}", self.newly_solved.len());
         eprintln!("s solutions_so_far {}", self.solutions_so_far.len());
-        eprintln!("s inference_vars {}", self.inference_vars.len());
         eprintln!("s constraints {}", self.constraints.len());
         eprintln!("s substitutions {}", self.substitutions.len());
         eprintln!("s substitutions_vec {}", self.substitutions_vec.len());
@@ -189,9 +207,9 @@ impl InferenceContext {
 
     pub fn reset(&mut self) {
         self.origin_stack.clear();
-        self.params.clear();
+        self.slots.clear();
+        self.newly_solved.clear();
         self.solutions_so_far.clear();
-        self.inference_vars.clear();
         self.constraints.clear();
         self.substitutions.clear();
         self.substitutions_vec.clear();
@@ -2761,6 +2779,12 @@ pub struct Timing {
     pub clock: clock::Clock,
     pub total_infers: usize,
     pub total_infer_nanos: i64,
+    // TEMP: inference double-eval instrumentation; delete when the infer perf work lands
+    pub pass1_arg_evals: usize,
+    pub pass1_arg_evals_hole_free: usize,
+    pub pass1_arg_eval_nanos: i64,
+    pub pass2_arg_reevals: usize,
+    pub pass2_arg_reeval_nanos: i64,
     pub total_vm_nanos: i64,
     pub total_vm_instrs: i64,
     pub total_ir_nanos: i64,
@@ -2929,6 +2953,11 @@ impl TypedProgram {
                 clock,
                 total_infers: 0,
                 total_infer_nanos: 0,
+                pass1_arg_evals: 0,
+                pass1_arg_evals_hole_free: 0,
+                pass1_arg_eval_nanos: 0,
+                pass2_arg_reevals: 0,
+                pass2_arg_reeval_nanos: 0,
                 total_vm_nanos: 0,
                 total_vm_instrs: 0,
                 total_ir_nanos: 0,
@@ -3926,7 +3955,7 @@ impl TypedProgram {
                     }
                     // You can do dot access on References to get out their 'value' types
                     Type::Reference(r) => {
-                        if self.ast.idents.get_string(acc.member_name) != "value" {
+                        if acc.member_name != self.ast.idents.b.value {
                             return make_fail_ast_id(
                                 &self.ast,
                                 "Invalid member access on Optional type; try '.value'",
@@ -4450,7 +4479,6 @@ impl TypedProgram {
         generic_type: TypeId,
         type_arguments: TypeIdSlice,
     ) -> TypeId {
-        let gen_type = self.types.get(generic_type).expect_generic();
         match self.types.get_specialization(generic_type, type_arguments) {
             Some(existing) => {
                 debug!(
@@ -4466,43 +4494,61 @@ impl TypedProgram {
                 );
                 existing
             }
-            None => {
-                debug_assert!(gen_type.params.len() == type_arguments.len());
-                let defn_info = self.types.get_defn_info(generic_type).unwrap();
-                // Note: This is where we'd check constraints on the pairs:
-                // that each passed params meets the constraints of the generic param
-                let substitution_pairs: SV8<TypeSubstitutionPair> = self
-                    .mem
-                    .getn(gen_type.params)
-                    .iter()
-                    .zip(self.types.mem.getn(type_arguments))
-                    .map(|(type_param, passed_type_arg)| TypeSubstitutionPair {
-                        from: type_param.type_id,
-                        to: *passed_type_arg,
-                    })
-                    .collect();
-                let inner = gen_type.inner;
+            None => self.instantiate_generic_type_miss(generic_type, type_arguments),
+        }
+    }
 
-                let specialized_type = self.substitute_in_type_ext(
-                    inner,
-                    &substitution_pairs,
-                    Some(generic_type),
-                    Some(defn_info),
-                );
-                if log::log_enabled!(log::Level::Debug) {
-                    let inst_info =
-                        self.types.get_instance_info(specialized_type).unwrap().type_args;
-                    eprintln!(
-                        "instantiated\n{} with params\n{} got expanded type:\n{}\n\n",
-                        self.type_id_to_string_ext(inner, true),
-                        self.pretty_print_type_slice(inst_info, ", "),
-                        self.type_id_to_string_ext(specialized_type, true)
-                    );
-                }
-                self.types.insert_specialization(generic_type, type_arguments, specialized_type);
-                specialized_type
+    /// Like [Self::instantiate_generic_type], but for args not committed to `types.mem`;
+    /// only copies them into the permanent arena on a specialization-cache miss
+    fn instantiate_generic_type_from_slice(
+        &mut self,
+        generic_type: TypeId,
+        type_arguments: &[TypeId],
+    ) -> TypeId {
+        match self.types.get_specialization_slice(generic_type, type_arguments) {
+            Some(existing) => existing,
+            None => {
+                let args_handle = self.types.mem.pushn(type_arguments);
+                self.instantiate_generic_type_miss(generic_type, args_handle)
             }
         }
+    }
+
+    fn instantiate_generic_type_miss(
+        &mut self,
+        generic_type: TypeId,
+        type_arguments: TypeIdSlice,
+    ) -> TypeId {
+        let gen_type = self.types.get(generic_type).expect_generic();
+        debug_assert!(gen_type.params.len() == type_arguments.len());
+        let defn_info = self.types.get_defn_info(generic_type).unwrap();
+        // Note: This is where we'd check constraints on the pairs:
+        // that each passed params meets the constraints of the generic param
+        let substitution_pairs: SV8<TypeSubstitutionPair> = self
+            .mem
+            .getn(gen_type.params)
+            .iter()
+            .zip(self.types.mem.getn(type_arguments))
+            .map(|(type_param, passed_type_arg)| TypeSubstitutionPair {
+                from: type_param.type_id,
+                to: *passed_type_arg,
+            })
+            .collect();
+        let inner = gen_type.inner;
+
+        let specialized_type =
+            self.substitute_in_type_ext(inner, &substitution_pairs, Some(generic_type), Some(defn_info));
+        if log::log_enabled!(log::Level::Debug) {
+            let inst_info = self.types.get_instance_info(specialized_type).unwrap().type_args;
+            eprintln!(
+                "instantiated\n{} with params\n{} got expanded type:\n{}\n\n",
+                self.type_id_to_string_ext(inner, true),
+                self.pretty_print_type_slice(inst_info, ", "),
+                self.type_id_to_string_ext(specialized_type, true)
+            );
+        }
+        self.types.insert_specialization(generic_type, type_arguments, specialized_type);
+        specialized_type
     }
 
     fn handle_opaque_tyapp(&mut self, ty_app: &parse::TypeApplication) -> K1Result<Option<TypeId>> {
@@ -4579,6 +4625,14 @@ impl TypedProgram {
         // TODO: for full recursive types support, we need breadcrumbs
         // breadcrumbs: &mut Vec<TypeId>,
     ) -> TypeId {
+        // The empty substitution is the identity; without this check the guards below
+        // pass vacuously and we do a full (allocating) traversal for nothing
+        if substitution_pairs.is_empty()
+            && generic_parent_to_attach.is_none()
+            && defn_info_to_attach.is_none()
+        {
+            return type_id;
+        }
         let is_all_holes = substitution_pairs
             .iter()
             .all(|p| self.types.type_variable_counts.get(p.from).inference_variable_count > 0);
@@ -4626,13 +4680,22 @@ impl TypedProgram {
             // int, bool, char
             // Opt[T] -> Opt[char]
             let generic_parent = spec_info.generic_parent;
-            let mut new_type_args = self.tmp.new_list(spec_info.type_args.len());
-            for prev_arg in self.types.mem.getn_sv4(spec_info.type_args) {
+            let original_args = spec_info.type_args;
+            let mut new_type_args = self.tmp.new_list(original_args.len());
+            let mut any_change = false;
+            for prev_arg in self.types.mem.getn_sv4(original_args) {
                 let new_type = self.substitute_in_type(prev_arg, substitution_pairs);
+                if new_type != prev_arg {
+                    any_change = true;
+                }
                 new_type_args.push(new_type);
             }
-            let new_type_args_slice = self.types.mem.pushn(&new_type_args);
-            return self.instantiate_generic_type(generic_parent, new_type_args_slice);
+            // On no change, or a cache hit, we avoid committing the args to types.mem
+            return if any_change {
+                self.instantiate_generic_type_from_slice(generic_parent, new_type_args.as_slice())
+            } else {
+                self.instantiate_generic_type(generic_parent, original_args)
+            };
         };
 
         let matching_subst_pair = substitution_pairs.iter().find(|pair| pair.from == type_id);
@@ -4651,18 +4714,21 @@ impl TypedProgram {
             | Type::Never => type_id,
             Type::Struct(struc) => {
                 let record_kind = struc.record_kind;
-                let new_fields_handle = self.types.mem.dupn(struc.fields);
-                let new_fields = self.types.mem.getn_mut(new_fields_handle);
+                let old_fields = struc.fields;
                 let mut any_change = false;
                 let original_defn_info = self.types.get_defn_info(type_id);
                 let defn_info_to_use = defn_info_to_attach.or(original_defn_info);
-                for field in new_fields.iter_mut() {
+                // Build the candidate in tmp; only commit to types.mem if something changed
+                let mut new_fields = self.tmp.new_list(old_fields.len());
+                for field in self.types.mem.getn(old_fields) {
                     let new_field_type_id =
                         self.substitute_in_type(field.type_id, substitution_pairs);
                     if new_field_type_id != field.type_id {
                         any_change = true;
                     }
-                    field.type_id = new_field_type_id;
+                    let mut new_field = *field;
+                    new_field.type_id = new_field_type_id;
+                    new_fields.push(new_field);
                 }
                 if any_change {
                     let generic_instance_info = generic_parent_to_attach
@@ -4675,6 +4741,7 @@ impl TypedProgram {
                         })
                         .or_else(|| self.types.get_instance_info(type_id).cloned());
 
+                    let new_fields_handle = self.types.mem.pushn(new_fields.as_slice());
                     let specialized_struct = StructType { fields: new_fields_handle, record_kind };
                     self.types.add(
                         Type::Struct(specialized_struct),
@@ -4687,21 +4754,22 @@ impl TypedProgram {
             }
             Type::Sum(e) => {
                 let original_tag_type = e.tag_type;
-                let new_variants = self.types.mem.dupn(e.variants);
+                let old_variants = e.variants;
                 let mut any_changed = false;
                 let original_defn_info = self.types.get_defn_info(type_id);
                 let defn_info_to_use = defn_info_to_attach.or(original_defn_info);
-                for variant in self.types.mem.getn_mut(new_variants) {
-                    match variant.payload {
-                        None => {}
-                        Some(p) => {
-                            let new_payload_id = self.substitute_in_type(p, substitution_pairs);
-                            if new_payload_id != p {
-                                any_changed = true;
-                                variant.payload = Some(new_payload_id)
-                            };
-                        }
-                    };
+                // Build the candidate in tmp; only commit to types.mem if something changed
+                let mut new_variants = self.tmp.new_list(old_variants.len());
+                for variant in self.types.mem.getn(old_variants) {
+                    let mut new_variant = *variant;
+                    if let Some(p) = variant.payload {
+                        let new_payload_id = self.substitute_in_type(p, substitution_pairs);
+                        if new_payload_id != p {
+                            any_changed = true;
+                            new_variant.payload = Some(new_payload_id)
+                        };
+                    }
+                    new_variants.push(new_variant);
                 }
                 if any_changed {
                     let generic_instance_info = generic_parent_to_attach
@@ -4713,7 +4781,9 @@ impl TypedProgram {
                                 .pushn_iter(substitution_pairs.iter().map(|p| p.to)),
                         })
                         .or_else(|| self.types.get_instance_info(type_id).cloned());
-                    let new_sum = SumType { variants: new_variants, tag_type: original_tag_type };
+                    let new_variants_handle = self.types.mem.pushn(new_variants.as_slice());
+                    let new_sum =
+                        SumType { variants: new_variants_handle, tag_type: original_tag_type };
                     let new_sum_id =
                         self.types.add(Type::Sum(new_sum), defn_info_to_use, generic_instance_info);
                     new_sum_id
@@ -7941,12 +8011,12 @@ impl TypedProgram {
         let value_impl_args = self.ability_impls.get(value_try_impl.full_impl_id).impl_arguments;
         let block_error_type = self
             .mem
-            .find(block_impl_args, |nt| nt.name == get_ident!(self, "e"))
+            .find(block_impl_args, |nt| nt.name == self.ast.idents.b.e)
             .map(|nt| nt.type_id)
             .unwrap();
         let error_type = self
             .mem
-            .find(value_impl_args, |nt| nt.name == get_ident!(self, "e"))
+            .find(value_impl_args, |nt| nt.name == self.ast.idents.b.e)
             .map(|nt| nt.type_id)
             .unwrap();
         if let Err(msg) = self.check_types(block_error_type, error_type, scope_id) {
@@ -7957,7 +8027,7 @@ impl TypedProgram {
         };
         let value_success_type = self
             .mem
-            .find(value_impl_args, |nt| nt.name == get_ident!(self, "t"))
+            .find(value_impl_args, |nt| nt.name == self.ast.idents.b.t)
             .map(|nt| nt.type_id)
             .unwrap();
         let mut result_block = self.new_block_builder(scope_id, ScopeType::LexicalBlock, span, 2);
@@ -9719,9 +9789,9 @@ impl TypedProgram {
             Some(e) => e,
             None => self.synth_crash_call(
                 if check_exhaustive {
-                    "Internal Compiler Error: no cases matched but match was meant to be exhaustive"
+                    self.ast.idents.b.crash_msg_no_cases_exhaustive
                 } else {
-                    "No cases matched"
+                    self.ast.idents.b.crash_msg_no_cases
                 },
                 match_expr_span,
                 arms_ctx.with_no_expected_type(),
@@ -10506,7 +10576,7 @@ impl TypedProgram {
                 Err(_) => {
                     // The iterable is an rvalue (e.g. a call result); bind it to a
                     // synthetic variable so we have a place to point at
-                    let iterable_name = self.ast.idents.intern("iterable");
+                    let iterable_name = self.ast.idents.b.iterable;
                     let iterable_variable = self.synth_variable_defn(
                         iterable_name,
                         iterable_expr,
@@ -10561,7 +10631,7 @@ impl TypedProgram {
             false,
         )?;
         let next_variable = self.synth_variable_defn_simple(
-            get_ident!(self, "next"),
+            self.ast.idents.b.next,
             iterator_next_call,
             loop_scope_id,
         );
@@ -11757,7 +11827,7 @@ impl TypedProgram {
                             string_id: *string_id,
                             span: fmt_string_arg_span,
                         };
-                        let newline_string_id = self.ast.idents.intern("\n");
+                        let newline_string_id = self.ast.idents.b.newline;
                         let parts = if newline {
                             self.ast.mem.pushn(&[
                                 string_part,
@@ -11777,7 +11847,7 @@ impl TypedProgram {
                             .mem
                             .new_list_from_slice(is.parts, is.parts.len() + newline as u32);
                         if newline {
-                            let newline_string_id = self.ast.idents.intern("\n");
+                            let newline_string_id = self.ast.idents.b.newline;
                             parts.push(InterpolatedStringPart::String {
                                 string_id: newline_string_id,
                                 span: fmt_string_arg_span,
@@ -11913,8 +11983,8 @@ impl TypedProgram {
                     ctx,
                     false,
                 )?;
-                let string_id = self.ast.idents.intern("Array index out of bounds");
-                let crash_message = self.synth_string_literal(string_id, span);
+                let crash_message =
+                    self.synth_string_literal(self.ast.idents.b.crash_msg_array_oob, span);
                 let crash_oob = self.synth_typed_call_typed_args(
                     self.ast.idents.f.core_crash_bounds.with_span(span),
                     &[],
@@ -12284,7 +12354,7 @@ impl TypedProgram {
         };
         let base_struct_fields = base_struct_type.fields;
         let mut block = self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 2);
-        let base_struct_name = self.ast.idents.intern("base_struct");
+        let base_struct_name = self.ast.idents.b.base_struct;
         let base_struct_var =
             self.synth_variable_defn_simple(base_struct_name, base_struct_expr, block.scope_id);
         self.push_block_stmt_id(&mut block, base_struct_var.defn_stmt);
@@ -13358,22 +13428,30 @@ impl TypedProgram {
                                     )?;
                                     checked_coerced
                                 }
-                                MaybeTypedExpr::Parsed(parsed) => self
-                                    .eval_expr_with_coercion(
-                                        parsed,
-                                        ctx.with_expected_type(Some(param.type_id))
-                                            .with_is_method_receiver(is_method_receiver),
-                                        true,
-                                    )
-                                    .map_err(|err| {
-                                        errf!(
-                                            err.span,
-                                            "Error in parameter '{}' in call to '{}''\n{}",
-                                            self.ident_str(param.name),
-                                            self.qident_to_string(&fn_call.name),
-                                            err.message
+                                MaybeTypedExpr::Parsed(parsed) => {
+                                    // TEMP instrumentation (see Timing)
+                                    self.timing.pass2_arg_reevals += 1;
+                                    let pass2_start = self.timing.clock.raw();
+                                    let result = self
+                                        .eval_expr_with_coercion(
+                                            parsed,
+                                            ctx.with_expected_type(Some(param.type_id))
+                                                .with_is_method_receiver(is_method_receiver),
+                                            true,
                                         )
-                                    })?,
+                                        .map_err(|err| {
+                                            errf!(
+                                                err.span,
+                                                "Error in parameter '{}' in call to '{}''\n{}",
+                                                self.ident_str(param.name),
+                                                self.qident_to_string(&fn_call.name),
+                                                err.message
+                                            )
+                                        });
+                                    self.timing.pass2_arg_reeval_nanos +=
+                                        self.timing.clock.elapsed_nanos(pass2_start) as i64;
+                                    result?
+                                }
                             },
                         };
                         typechecked_args.push(expr);
@@ -15412,12 +15490,11 @@ impl TypedProgram {
             Some(impl_info) => self_.build_ident_with(|k1, s| {
                 write!(
                     s,
-                    "impl_{}{}.{}_for_{}{}",
+                    "impl_{}{}.{}_for_t{}",
                     ability_id.unwrap().as_u32(),
                     k1.ident_str(k1.abilities.get(ability_id.unwrap()).name),
                     k1.ident_str(ast_fn.name),
-                    k1.type_id_to_string(impl_info.self_type_id),
-                    impl_info.self_type_id,
+                    impl_info.self_type_id.as_u32(),
                 )
                 .unwrap();
             }),
@@ -17489,10 +17566,10 @@ impl TypedProgram {
             self.report(error)
         }
 
-        debug_assert!(self.abilities.get(ABILITY_ID_EQUALS).name == get_ident!(self, "equals"));
-        debug_assert!(self.abilities.get(ABILITY_ID_BITWISE).name == get_ident!(self, "bitwise"));
+        debug_assert!(self.abilities.get(ABILITY_ID_EQUALS).name == self.ast.idents.b.equals);
+        debug_assert!(self.abilities.get(ABILITY_ID_BITWISE).name == self.ast.idents.b.bitwise);
         debug_assert!(
-            self.abilities.get(ABILITY_ID_COMPARABLE).name == get_ident!(self, "comparable")
+            self.abilities.get(ABILITY_ID_COMPARABLE).name == self.ast.idents.b.comparable
         );
 
         debug!(">> Pass 5 bodies (functions, globals, abilities)");
@@ -17536,7 +17613,7 @@ impl TypedProgram {
             let list_generic = self.types.get(self.types.builtins.list()).expect_generic();
             let info = self.types.get_defn_info(self.types.builtins.list()).unwrap();
             let list_struct = self.types.get(list_generic.inner).expect_struct();
-            debug_assert!(info.name == get_ident!(self, "list"));
+            debug_assert!(info.name == self.ast.idents.b.list);
             debug_assert!(
                 self.types
                     .mem
@@ -17551,7 +17628,7 @@ impl TypedProgram {
         {
             let string_struct = self.types.get(self.types.builtins.string()).expect_struct();
             let info = self.types.get_defn_info(self.types.builtins.string()).unwrap();
-            debug_assert!(info.name == get_ident!(self, "string"));
+            debug_assert!(info.name == self.ast.idents.b.string);
             debug_assert!(string_struct.fields.len() == 1);
         }
 
@@ -17559,14 +17636,14 @@ impl TypedProgram {
             let optional_generic = self.types.get(self.types.builtins.opt()).expect_generic();
             let info = self.types.get_defn_info(self.types.builtins.opt()).unwrap();
             let inner = self.types.get(optional_generic.inner);
-            debug_assert!(info.name == get_ident!(self, "opt"));
+            debug_assert!(info.name == self.ast.idents.b.opt);
             debug_assert!(inner.as_sum().unwrap().variants.len() == 2);
         }
         {
             let ordering_enum = self.types.get(self.types.builtins.ordering.unwrap()).expect_enum();
             let info = self.types.get_defn_info(self.types.builtins.ordering.unwrap()).unwrap();
             debug_assert!(ordering_enum.member_values.len() == 3);
-            debug_assert!(info.name == get_ident!(self, "ordering"));
+            debug_assert!(info.name == self.ast.idents.b.ordering);
         }
     }
 
@@ -18130,7 +18207,7 @@ impl TypedProgram {
             core!("StringBuilder"),
             QIdent { path: core_mem, name: get_ident!(self, "zeroed"), name_span: span },
             QIdent { path: core_mem, name: get_ident!(self, "alloc-mode"), name_span: span },
-            QIdent { path: core_types, name: get_ident!(self, "enum"), name_span: span },
+            QIdent { path: core_types, name: self.ast.idents.b.enum_, name_span: span },
             QIdent { path: core_types, name: get_ident!(self, "sum"), name_span: span },
         ];
         for qid in idents_to_use.into_iter() {
@@ -18205,28 +18282,28 @@ impl TypedProgram {
 
         let typ = self.types.get(chased_type_id);
         let schema_static_sum = match typ {
-            Type::Char => make_variant(self, get_ident!(self, "char"), None),
-            Type::Bool => make_variant(self, get_ident!(self, "bool"), None),
-            Type::Pointer => make_variant(self, get_ident!(self, "ptr"), None),
+            Type::Char => make_variant(self, self.ast.idents.b.char, None),
+            Type::Bool => make_variant(self, self.ast.idents.b.bool, None),
+            Type::Pointer => make_variant(self, self.ast.idents.b.ptr, None),
             Type::Integer(integer_type) => {
                 let int_kind_enum_value =
                     TypedProgram::make_int_kind(int_kind_type_id, *integer_type);
 
                 let payload_value_id = self.static_values.add(int_kind_enum_value);
                 let enum_value =
-                    make_variant(self, get_ident!(self, "int"), Some(payload_value_id));
+                    make_variant(self, self.ast.idents.b.int, Some(payload_value_id));
                 enum_value
             }
             Type::Float(float_type) => {
                 let float_kind_enum_value =
                     TypedProgram::make_float_kind(float_kind_type_id, *float_type);
                 let payload_value_id = self.static_values.add(float_kind_enum_value);
-                make_variant(self, get_ident!(self, "float"), Some(payload_value_id))
+                make_variant(self, self.ast.idents.b.float, Some(payload_value_id))
             }
             Type::Enum(enum_type) => {
                 let target_enum_members = enum_type.member_values;
                 let enum_schema_payload_type_id =
-                    get_schema_variant(self, get_ident!(self, "enum")).payload.unwrap();
+                    get_schema_variant(self, self.ast.idents.b.enum_).payload.unwrap();
                 let values_span_type_id =
                     self.types.get_struct_field(enum_schema_payload_type_id, 1).type_id;
                 let value_struct_type_id =
@@ -18270,15 +18347,15 @@ impl TypedProgram {
                     enum_schema_payload_type_id,
                     &[int_type_value_id, variants_span_value_id],
                 );
-                make_variant(self, get_ident!(self, "enum"), Some(payload_value_id))
+                make_variant(self, self.ast.idents.b.enum_, Some(payload_value_id))
             }
             Type::Struct(_struct_type) if chased_type_id == self.types.builtins.string() => {
-                make_variant(self, get_ident!(self, "string"), None)
+                make_variant(self, self.ast.idents.b.string, None)
             }
             Type::Struct(struct_type) => {
                 let record_kind = struct_type.record_kind;
                 let struct_schema_payload_type_id =
-                    get_schema_variant(self, get_ident!(self, "struct")).payload.unwrap();
+                    get_schema_variant(self, self.ast.idents.b.struct_).payload.unwrap();
                 // { fields: span[{}] }
                 let struct_schema_payload_struct =
                     self.types.get(struct_schema_payload_type_id).expect_struct();
@@ -18332,15 +18409,15 @@ impl TypedProgram {
                     .static_values
                     .add_struct_from_slice(struct_schema_payload_type_id, &[span_value_id]);
                 let variant_name = match record_kind {
-                    RecordKind::Struct => "struct",
-                    RecordKind::Union => "union",
+                    RecordKind::Struct => self.ast.idents.b.struct_,
+                    RecordKind::Union => self.ast.idents.b.union,
                 };
-                make_variant(self, get_ident!(self, variant_name), Some(payload))
+                make_variant(self, variant_name, Some(payload))
             }
             Type::Reference(reference_type) => {
                 let reference_type = *reference_type;
                 let reference_schema_payload_type_id =
-                    get_schema_variant(self, get_ident!(self, "reference")).payload.unwrap();
+                    get_schema_variant(self, self.ast.idents.b.reference).payload.unwrap();
                 // { innerTypeId: u64, mutable: bool }
                 let inner_type_id_value_id =
                     self.static_values.add_type_id_int_value(reference_type.inner_type);
@@ -18353,13 +18430,13 @@ impl TypedProgram {
                     reference_schema_payload_type_id,
                     &[inner_type_id_value_id],
                 );
-                make_variant(self, get_ident!(self, "reference"), Some(payload_struct_id))
+                make_variant(self, self.ast.idents.b.reference, Some(payload_struct_id))
             }
             Type::Array(array_type) => {
                 let array_type = *array_type;
                 let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
                 let array_schema_payload_type_id =
-                    get_schema_variant(self, get_ident!(self, "array")).payload.unwrap();
+                    get_schema_variant(self, self.ast.idents.b.array).payload.unwrap();
                 // { elementTypeId: u64, size: size }
                 let element_type_id_value_id =
                     self.static_values.add_type_id_int_value(array_type.element_type);
@@ -18380,12 +18457,12 @@ impl TypedProgram {
                     array_schema_payload_type_id,
                     &[element_type_id_value_id, size_value_id],
                 );
-                make_variant(self, get_ident!(self, "array"), Some(payload_struct_id))
+                make_variant(self, self.ast.idents.b.array, Some(payload_struct_id))
             }
             Type::Sum(typed_sum) => {
                 let target_sum_variants = typed_sum.variants;
                 let either_payload_type_id =
-                    get_schema_variant(self, get_ident!(self, "either")).payload.unwrap();
+                    get_schema_variant(self, self.ast.idents.b.either).payload.unwrap();
                 let variants_span_type_id =
                     self.types.get_struct_field(either_payload_type_id, 2).type_id;
                 let variant_struct_type_id =
@@ -18461,7 +18538,7 @@ impl TypedProgram {
                     either_payload_type_id,
                     &[tag_type_value_id, payload_offset_value_id, variants_span_value_id],
                 );
-                make_variant(self, get_ident!(self, "either"), Some(payload_value_id))
+                make_variant(self, self.ast.idents.b.either, Some(payload_value_id))
             }
             Type::Opaque(opaque) => {
                 // FIXME: Proper opaque type schema
@@ -18470,13 +18547,13 @@ impl TypedProgram {
                         .idents
                         .intern(format!("opaque[size={}, align={}]", opaque.size, opaque.align)),
                 ));
-                make_variant(self, get_ident!(self, "other"), Some(s))
+                make_variant(self, self.ast.idents.b.other, Some(s))
             }
-            Type::Never => make_variant(self, get_ident!(self, "never"), None),
+            Type::Never => make_variant(self, self.ast.idents.b.never, None),
             Type::Function(fn_type) => {
                 let fn_type = *fn_type;
                 let function_schema_payload_type_id =
-                    get_schema_variant(self, get_ident!(self, "function")).payload.unwrap();
+                    get_schema_variant(self, self.ast.idents.b.function).payload.unwrap();
                 //Function({
                 //  params: span[{ name: string, typeId: u64 }],
                 //  returnTypeId: u64,
@@ -18532,11 +18609,11 @@ impl TypedProgram {
                         return_type_id_value_id,
                     ],
                 );
-                make_variant(self, get_ident!(self, "function"), Some(payload))
+                make_variant(self, self.ast.idents.b.function, Some(payload))
             }
             Type::FunctionPointer(fp) => {
                 let function_pointer_schema_payload_type_id =
-                    get_schema_variant(self, get_ident!(self, "function-pointer")).payload.unwrap();
+                    get_schema_variant(self, self.ast.idents.b.function_pointer).payload.unwrap();
 
                 let function_type_id_value_id =
                     self.static_values.add_type_id_int_value(fp.function_type_id);
@@ -18546,7 +18623,7 @@ impl TypedProgram {
                     function_pointer_schema_payload_type_id,
                     &[function_type_id_value_id],
                 );
-                make_variant(self, get_ident!(self, "function-pointer"), Some(payload))
+                make_variant(self, self.ast.idents.b.function_pointer, Some(payload))
             }
             Type::Lambda(_)
             | Type::LambdaObject(_)
@@ -18558,7 +18635,7 @@ impl TypedProgram {
                 let s = self
                     .static_values
                     .add(StaticValue::String(self.ast.idents.intern(typ.kind_name())));
-                make_variant(self, get_ident!(self, "other"), Some(s))
+                make_variant(self, self.ast.idents.b.other, Some(s))
             }
         };
 
@@ -18940,6 +19017,15 @@ impl TypedProgram {
             } else {
                 0.0
             }
+        )?;
+        writeln!(
+            out,
+            "\t  TEMP p1 arg evals: {} ({} hole-free), {:.2}ms; p2 re-evals: {}, {:.2}ms",
+            self.timing.pass1_arg_evals,
+            self.timing.pass1_arg_evals_hole_free,
+            self.timing.pass1_arg_eval_nanos as f64 / 1_000_000.0,
+            self.timing.pass2_arg_reevals,
+            self.timing.pass2_arg_reeval_nanos as f64 / 1_000_000.0,
         )?;
         let vm_us = self.timing.total_vm_nanos as f64 / 1_000.0;
         let vm_us_per_instr = vm_us / self.timing.total_vm_instrs as f64;
