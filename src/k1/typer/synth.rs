@@ -138,10 +138,8 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_dereference(&mut self, base: TypedExprId) -> TypedExprId {
-        // nocommit: Try no span
-        let span = self.exprs.get_span(base);
         let type_id = self.get_expr_type(base).expect_reference().inner_type;
-        self.exprs.add(TypedExpr::Deref(DerefExpr { target: base }), type_id, span)
+        self.exprs.add(TypedExpr::Deref(DerefExpr { target: base }), type_id, SpanId::NONE)
     }
 
     pub(super) fn synth_dereference_when(

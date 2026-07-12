@@ -2,6 +2,7 @@ ns place_test;
 
 type Inner = { a: int, b: int }
 type Outer = { name: string, inner: Inner }
+type Shape = either { circle({ radius: int, filled: bool }), point }
 
 let globalPlaceVal: int = 77
 
@@ -76,6 +77,35 @@ fn test() {
   let elemRef2 = arrRef.get(2).&;
   elemRef2 <- 30;
   assert-equals(arr.get(2), 30);
+
+  // Mixed aggregates: store to a struct member inside an array element
+  // (place chain: field -> block -> array element -> variable)
+  let points: array[Inner, 2] = zeroed();
+  points.get(0).a <- 100;
+  points.get(1).b <- 200;
+  assert-equals(points.get(0).a, 100);
+  assert-equals(points.get(0).b, 0);
+  let pointBRef = points.get(1).b.&;
+  pointBRef <- 201;
+  assert-equals(points.get(1).b, 201);
+
+  // Mixed aggregates: store to struct members inside a sum payload, through a
+  // reference binding from a switch on the variant
+  let shape: Shape = :circle({ radius: 5, filled: false });
+  switch &shape {
+    :circle(c)* -> {
+      c.radius <- 10;
+      c.filled <- true;
+    },
+    _ -> crash("expected a circle")
+  };
+  switch shape {
+    :circle(c) -> {
+      assert-equals(c.radius, 10);
+      assert(c.filled);
+    },
+    _ -> crash("expected a circle")
+  };
 
   negativeCases(3, { a: 1, b: 2 }, arr);
 }

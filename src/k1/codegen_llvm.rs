@@ -563,8 +563,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     /// `codegen_program` is the module Entrypoint
     pub fn codegen_program(&mut self) -> K1Result<()> {
-        let start = std::time::Instant::now();
-
         let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
 
         // Guarantee generation of exported globals
@@ -617,7 +615,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Some(v) => self.builder.build_return(Some(&v)).unwrap(),
         };
 
-        debug!("codegen phase 'llvm' took {}ms", start.elapsed().as_millis());
         Ok(())
     }
 
@@ -3772,7 +3769,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         // self.llvm_machine.add_analysis_passes(&module_pass_manager);
         // module_pass_manager.run_on(&self.llvm_module);
 
-        debug!("codegen phase 'optimize' took {}ms", start.elapsed().as_millis());
+        if self.k1.config.chatty {
+            eprintln!("codegen 'optimize' took {}ms", start.elapsed().as_millis());
+        }
         //for (_, function) in self.llvm_functions.iter_mut() {
         //    let new_count = Codegen::count_function_instructions(function.function_value);
         //    function.instruction_count = new_count;
