@@ -10,6 +10,23 @@ fn makeInner(): Inner {
   { a: 1, b: 2 }
 }
 
+ns for Inner {
+  fn me(self: *mut Inner): *mut Inner { self }
+}
+
+// Receiver auto-address-of must resolve to the real field place, not a copy.
+// Regression: the non-generic call path discarded the coerced receiver, so
+// outerRef.inner.me() got the address of a stack temp (dogfood/http hit this
+// as a corrupted libuv handle).
+fn receiverCoercion() {
+  let outer: Outer = { name: "hi", inner: { a: 11, b: 22 } };
+  let outerRef = &outer;
+  let innerRef = outerRef.inner.&;
+  assert(outerRef.inner.me().as[ptr] == innerRef.as[ptr]);
+  outerRef.inner.me().a <- 99;
+  assert-equals(outer.inner.a, 99);
+}
+
 fn negativeCases(p: int, s: Inner, arr: array[int, 3]) {
   // Element address rooted at a by-value param is rejected like any param place
   let paramElemResult = testCompile(arr.get(0).&);
@@ -106,6 +123,8 @@ fn test() {
     },
     _ -> crash("expected a circle")
   };
+
+  receiverCoercion();
 
   negativeCases(3, { a: 1, b: 2 }, arr);
 }
