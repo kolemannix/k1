@@ -159,25 +159,20 @@ pub struct InferenceSlot {
     pub param_type: TypeId,
     /// The instantiated inference hole standing in for it, e.g. ''0'
     pub hole_type: TypeId,
-    /// Current best solution; may still mention other holes while partial
+    /// Current best solution; may still mention other holes while partial,
+    /// and may be overwritten by a later better binding
     pub solution: Option<TypeId>,
-    /// True once solution is Some and hole-free; set exactly once
+    /// True once solution first becomes hole-free; never unset
     pub fully_solved: bool,
 }
 
 #[derive(Default)]
 pub struct InferenceContext {
     pub origin_stack: Vec<SpanId>,
-    /// Append-only across nested inferences within one context;
     /// slot index == hole index
     pub slots: Vec<InferenceSlot>,
-    /// Slot indices whose solution just became hole-free; drained by infer_types,
-    /// which applies the param's constraints for each
+    /// Slot indices whose solution just became hole-free
     pub newly_solved: Vec<u32>,
-    pub solutions_so_far: Vec<TypeSubstitutionPair>,
-    pub constraints: Vec<TypeSubstitutionPair>,
-    pub substitutions: FxHashMap<TypeId, TypeId>,
-    pub substitutions_vec: Vec<TypeSubstitutionPair>,
     pub start_raw: u64,
 }
 
@@ -187,10 +182,6 @@ impl InferenceContext {
             origin_stack: Vec::new(),
             slots: Vec::new(),
             newly_solved: Vec::new(),
-            solutions_so_far: Vec::new(),
-            constraints: Vec::new(),
-            substitutions: FxHashMap::new(),
-            substitutions_vec: Vec::new(),
             start_raw: 0,
         }
     }
@@ -199,20 +190,12 @@ impl InferenceContext {
         eprintln!("s origin_stack {}", self.origin_stack.len());
         eprintln!("s slots {}", self.slots.len());
         eprintln!("s newly_solved {}", self.newly_solved.len());
-        eprintln!("s solutions_so_far {}", self.solutions_so_far.len());
-        eprintln!("s constraints {}", self.constraints.len());
-        eprintln!("s substitutions {}", self.substitutions.len());
-        eprintln!("s substitutions_vec {}", self.substitutions_vec.len());
     }
 
     pub fn reset(&mut self) {
         self.origin_stack.clear();
         self.slots.clear();
         self.newly_solved.clear();
-        self.solutions_so_far.clear();
-        self.constraints.clear();
-        self.substitutions.clear();
-        self.substitutions_vec.clear();
         self.start_raw = 0;
     }
 }
@@ -1810,11 +1793,35 @@ impl Variable {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlobalInitialValue {
+    /// The initializer has not been evaluated yet
+    Pending,
+    /// Evaluated: this global has no compile-time value. Currently this means an
+    /// external global, whose storage arrives at link time
+    Uninit,
+    /// Evaluated to a value
+    Value(StaticValueId),
+}
+
+impl GlobalInitialValue {
+    pub fn as_value(&self) -> Option<StaticValueId> {
+        match self {
+            GlobalInitialValue::Value(v) => Some(*v),
+            GlobalInitialValue::Pending | GlobalInitialValue::Uninit => None,
+        }
+    }
+
+    pub fn is_pending(&self) -> bool {
+        matches!(self, GlobalInitialValue::Pending)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TypedGlobal {
     pub variable_id: VariableId,
     pub parsed_expr: Option<ParsedExprId>,
-    pub initial_value: Option<StaticValueId>,
+    pub initial_value: GlobalInitialValue,
     pub type_id: TypeId,
     pub span: SpanId,
     pub is_constant: bool,
@@ -2700,6 +2707,7 @@ pub struct TypedProgram {
     pub namespace_ast_mappings: FxHashMap<ParsedNamespaceId, NamespaceId>,
     pub function_ast_mappings: FxHashMap<ParsedFunctionId, FunctionId>,
     pub global_ast_mappings: FxHashMap<ParsedGlobalId, TypedGlobalId>,
+    pub globals_in_progress: Vec<TypedGlobalId>,
     pub ability_impl_ast_mappings: FxHashMap<ParsedAbilityImplId, AbilityImplId>,
 
     pub debug_level_stack: RefCell<Vec<log::LevelFilter>>,
@@ -2779,12 +2787,6 @@ pub struct Timing {
     pub clock: clock::Clock,
     pub total_infers: usize,
     pub total_infer_nanos: i64,
-    // TEMP: inference double-eval instrumentation; delete when the infer perf work lands
-    pub pass1_arg_evals: usize,
-    pub pass1_arg_evals_hole_free: usize,
-    pub pass1_arg_eval_nanos: i64,
-    pub pass2_arg_reevals: usize,
-    pub pass2_arg_reeval_nanos: i64,
     pub total_vm_nanos: i64,
     pub total_vm_instrs: i64,
     pub total_ir_nanos: i64,
@@ -2904,6 +2906,7 @@ impl TypedProgram {
             namespace_ast_mappings: FxHashMap::with_capacity(512),
             function_ast_mappings: FxHashMap::with_capacity(512),
             global_ast_mappings: FxHashMap::new(),
+            globals_in_progress: vec![],
             ability_impl_ast_mappings: FxHashMap::new(),
             debug_level_stack: RefCell::new(vec![log::max_level()]),
             functions_pending_body_specialization: vec![],
@@ -2953,11 +2956,6 @@ impl TypedProgram {
                 clock,
                 total_infers: 0,
                 total_infer_nanos: 0,
-                pass1_arg_evals: 0,
-                pass1_arg_evals_hole_free: 0,
-                pass1_arg_eval_nanos: 0,
-                pass2_arg_reevals: 0,
-                pass2_arg_reeval_nanos: 0,
                 total_vm_nanos: 0,
                 total_vm_instrs: 0,
                 total_ir_nanos: 0,
@@ -3193,11 +3191,6 @@ impl TypedProgram {
         let mut c = self.inference_context_stack.pop().unwrap();
         c.reset();
         self.inference_context_extras.push(c);
-    }
-
-    /// Used to temporarily take and avoid a long mut self borrow
-    fn ictx_take(&mut self) -> InferenceContext {
-        self.inference_context_stack.pop().unwrap()
     }
 
     pub fn push_debug_level(&self) {
@@ -4622,6 +4615,24 @@ impl TypedProgram {
         substitution_pairs: &[TypeSubstitutionPair],
         generic_parent_to_attach: Option<TypeId>,
         defn_info_to_attach: Option<TypeDefnInfo>,
+    ) -> TypeId {
+        let tmp_mark = self.tmp.mark();
+        let res = self.substitute_in_type_ext_inner(
+            type_id,
+            substitution_pairs,
+            generic_parent_to_attach,
+            defn_info_to_attach,
+        );
+        self.tmp.reset_to(tmp_mark);
+        res
+    }
+
+    fn substitute_in_type_ext_inner(
+        &mut self,
+        type_id: TypeId,
+        substitution_pairs: &[TypeSubstitutionPair],
+        generic_parent_to_attach: Option<TypeId>,
+        defn_info_to_attach: Option<TypeDefnInfo>,
         // TODO: for full recursive types support, we need breadcrumbs
         // breadcrumbs: &mut Vec<TypeId>,
     ) -> TypeId {
@@ -5944,7 +5955,7 @@ impl TypedProgram {
                     );
                 };
                 let global = self.globals.get(global_id);
-                if let Some(value) = global.initial_value { Ok(Some(value)) } else { Ok(None) }
+                Ok(global.initial_value.as_value())
             }
             TypedExpr::Call { call_id, .. } => {
                 // If a call to zeroed(), we can use the StaticValue::Zero shortcut to avoid
@@ -5987,6 +5998,12 @@ impl TypedProgram {
                         e.message
                     );
                 };
+            } else if let Some(global_id) =
+                self.ir.globals_pending_eval.keys().next().copied()
+            {
+                self.ir.globals_pending_eval.remove(&global_id);
+                let ast_id = self.globals.get(global_id).ast_id;
+                self.eval_global_body(ast_id)?;
             } else {
                 break;
             }
@@ -6282,7 +6299,7 @@ impl TypedProgram {
         self.globals.add_expected_id(
             TypedGlobal {
                 variable_id,
-                initial_value: None,
+                initial_value: GlobalInitialValue::Pending,
                 parsed_expr: parsed.value_expr,
                 type_id,
                 span: parsed.span,
@@ -6308,30 +6325,63 @@ impl TypedProgram {
     }
 
     pub fn eval_global_body(&mut self, parsed_global_id: ParsedGlobalId) -> K1Result<()> {
-        let parsed_global = self.ast.get_global(parsed_global_id).clone();
         let Some(global_id) = self.global_ast_mappings.get(&parsed_global_id).copied() else {
             // This means we failed to compile the definition; or we have a bug!
             // TODO: Store failures so we can be certain which is true!
             debug!("skipping rest of global body");
             return Ok(());
         };
+        // Evaluation is one-shot; the pre-execution drain may get here before the body phase
+        if !self.globals.get(global_id).initial_value.is_pending() {
+            return Ok(());
+        }
+        if self.globals_in_progress.contains(&global_id) {
+            let global_name = |id: &TypedGlobalId| {
+                self.ident_str(self.variables.get(self.globals.get(*id).variable_id).name)
+            };
+            return failf!(
+                self.ast.get_global(parsed_global_id).span,
+                "Global initializer cycle: {} -> {}",
+                self.globals_in_progress.iter().map(global_name).collect::<Vec<_>>().join(" -> "),
+                global_name(&global_id),
+            );
+        }
+        self.globals_in_progress.push(global_id);
+        let result = self.eval_global_body_inner(parsed_global_id, global_id);
+        let popped = self.globals_in_progress.pop();
+        debug_assert_eq!(popped, Some(global_id));
+        result
+    }
+
+    fn eval_global_body_inner(
+        &mut self,
+        parsed_global_id: ParsedGlobalId,
+        global_id: TypedGlobalId,
+    ) -> K1Result<()> {
+        let parsed_global = self.ast.get_global(parsed_global_id).clone();
         let typed_global = self.globals.get(global_id);
         let is_external = typed_global.is_external;
+        let parsed_expr = typed_global.parsed_expr;
+        let scope_id = typed_global.parent_scope;
+        let declared_type = typed_global.type_id;
         let value_expr_id = if is_external {
-            match typed_global.parsed_expr {
-                None => return Ok(()),
+            match parsed_expr {
+                None => {
+                    // Evaluated, but there is no compile-time value: storage arrives at
+                    // link time. Recording this keeps evaluation one-shot
+                    self.globals.get_mut(global_id).initial_value = GlobalInitialValue::Uninit;
+                    return Ok(());
+                }
                 Some(_id) => {
                     return failf!(parsed_global.span, "External globals cannot have initializers");
                 }
             }
         } else {
-            match typed_global.parsed_expr {
+            match parsed_expr {
                 None => return failf!(parsed_global.span, "Global has no initializer"),
                 Some(id) => id,
             }
         };
-        let scope_id = typed_global.parent_scope;
-        let declared_type = typed_global.type_id;
 
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
@@ -6384,7 +6434,7 @@ impl TypedProgram {
             }
         }
 
-        self.globals.get_mut(global_id).initial_value = Some(static_value_id);
+        self.globals.get_mut(global_id).initial_value = GlobalInitialValue::Value(static_value_id);
 
         Ok(())
     }
@@ -7191,6 +7241,7 @@ impl TypedProgram {
             &args_and_params,
             span,
             root_scope_id,
+            None,
         );
         let (solutions, _all_solutions) = match solutions_result {
             Err(e) => {
@@ -9121,6 +9172,7 @@ impl TypedProgram {
                         &subst_pairs,
                         struct_span,
                         ctx.scope_id,
+                        None,
                     )?;
                     debug!(
                         "I reverse-engineered these: {}",
@@ -12577,6 +12629,7 @@ impl TypedProgram {
             &args_and_params,
             fn_call.span,
             ctx.scope_id,
+            None,
         )?;
 
         let mut parameter_constraints: List<Option<TypeId>, MemTmp> =
@@ -12923,6 +12976,7 @@ impl TypedProgram {
                                 &args_and_params,
                                 span,
                                 ctx.scope_id,
+                                None,
                             )?;
                             solutions
                         }
@@ -13308,7 +13362,7 @@ impl TypedProgram {
                 )?;
 
                 // We infer the type arguments, or just use them if the user has supplied them
-                let type_args = match &known_args {
+                let (type_args, stashed_args) = match &known_args {
                     Some((type_args, _va)) if !type_args.is_empty() => {
                         // Need the name
                         if type_args.len() != signature.type_params.len() as usize {
@@ -13321,7 +13375,7 @@ impl TypedProgram {
                                 name: type_param.name,
                                 type_id: *type_arg,
                             });
-                        self.mem.pushn_iter(args_with_names)
+                        (self.mem.pushn_iter(args_with_names), smallvec![])
                     }
                     _ => self.infer_and_constrain_call_type_args(
                         fn_call,
@@ -13388,6 +13442,15 @@ impl TypedProgram {
                     false,
                 )?;
 
+                // Splice in arguments that inference already evaluated for real: their
+                // expected types were fully concrete, so the results are exactly what the
+                // loop below would produce by re-evaluating
+                for (arg_index, stashed_expr) in &stashed_args {
+                    let arg = &mut self.tmp.getn_mut(args_and_params.args)[*arg_index as usize];
+                    debug_assert!(matches!(arg, MaybeTypedExpr::Parsed(_)));
+                    *arg = MaybeTypedExpr::Typed(*stashed_expr);
+                }
+
                 // We've finished inference and all types are known; we now compile all the expressions
                 // again to generate code with no holes and fully concrete types.
                 let mut typechecked_args = self.mem.new_list(args_and_params.len());
@@ -13428,30 +13491,22 @@ impl TypedProgram {
                                     )?;
                                     checked_coerced
                                 }
-                                MaybeTypedExpr::Parsed(parsed) => {
-                                    // TEMP instrumentation (see Timing)
-                                    self.timing.pass2_arg_reevals += 1;
-                                    let pass2_start = self.timing.clock.raw();
-                                    let result = self
-                                        .eval_expr_with_coercion(
-                                            parsed,
-                                            ctx.with_expected_type(Some(param.type_id))
-                                                .with_is_method_receiver(is_method_receiver),
-                                            true,
+                                MaybeTypedExpr::Parsed(parsed) => self
+                                    .eval_expr_with_coercion(
+                                        parsed,
+                                        ctx.with_expected_type(Some(param.type_id))
+                                            .with_is_method_receiver(is_method_receiver),
+                                        true,
+                                    )
+                                    .map_err(|err| {
+                                        errf!(
+                                            err.span,
+                                            "Error in parameter '{}' in call to '{}''\n{}",
+                                            self.ident_str(param.name),
+                                            self.qident_to_string(&fn_call.name),
+                                            err.message
                                         )
-                                        .map_err(|err| {
-                                            errf!(
-                                                err.span,
-                                                "Error in parameter '{}' in call to '{}''\n{}",
-                                                self.ident_str(param.name),
-                                                self.qident_to_string(&fn_call.name),
-                                                err.message
-                                            )
-                                        });
-                                    self.timing.pass2_arg_reeval_nanos +=
-                                        self.timing.clock.elapsed_nanos(pass2_start) as i64;
-                                    result?
-                                }
+                                    })?,
                             },
                         };
                         typechecked_args.push(expr);
@@ -14507,9 +14562,11 @@ impl TypedProgram {
 
             let coerce = expected_type.is_some();
             debug!("eval_stmt {index} with type {}", self.type_id_to_string_opt(expected_type));
-            let Some(stmt_id) =
-                self.eval_stmt(*stmt, ctx.with_expected_type(expected_type), coerce, index)?
-            else {
+            let tmp_mark = self.tmp.mark();
+            let stmt_result =
+                self.eval_stmt(*stmt, ctx.with_expected_type(expected_type), coerce, index);
+            self.tmp.reset_to(tmp_mark);
+            let Some(stmt_id) = stmt_result? else {
                 continue;
             };
 
@@ -17038,6 +17095,8 @@ impl TypedProgram {
             if skip_defns.contains(defn) {
                 continue;
             }
+            // Declarations write into permanent pools/mem; tmp is per-declaration scratch
+            let tmp_mark = self.tmp.mark();
             match *defn {
                 ParsedId::Use(_use_id) => {}
                 ParsedId::Namespace(namespace_id) => {
@@ -17084,6 +17143,7 @@ impl TypedProgram {
                     )
                 }
             }
+            self.tmp.reset_to(tmp_mark);
         }
     }
 
@@ -17505,7 +17565,10 @@ impl TypedProgram {
                     .map(|tpd| self.ident_str(self.ast.type_defns.get(tpd.parsed_id).name))
                     .join(", ")
             );
-            if let Err(err) = self.eval_type_defn(tpd.parsed_id, tpd.scope_id) {
+            let tmp_mark = self.tmp.mark();
+            let result = self.eval_type_defn(tpd.parsed_id, tpd.scope_id);
+            self.tmp.reset_to(tmp_mark);
+            if let Err(err) = result {
                 self.type_defn_context.reset();
                 self.types_pending_definition.pop_front();
                 self.report(err);
@@ -19017,15 +19080,6 @@ impl TypedProgram {
             } else {
                 0.0
             }
-        )?;
-        writeln!(
-            out,
-            "\t  TEMP p1 arg evals: {} ({} hole-free), {:.2}ms; p2 re-evals: {}, {:.2}ms",
-            self.timing.pass1_arg_evals,
-            self.timing.pass1_arg_evals_hole_free,
-            self.timing.pass1_arg_eval_nanos as f64 / 1_000_000.0,
-            self.timing.pass2_arg_reevals,
-            self.timing.pass2_arg_reeval_nanos as f64 / 1_000_000.0,
         )?;
         let vm_us = self.timing.total_vm_nanos as f64 / 1_000.0;
         let vm_us_per_instr = vm_us / self.timing.total_vm_instrs as f64;
