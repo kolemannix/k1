@@ -798,7 +798,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
         return Ok(());
     }
 
-    let mut b = Builder::new(k1, true);
+    let mut b = Builder::new(k1);
 
     //eprintln!("ir::compile_function {}", b.k1.function_id_to_string(function_id, false));
     let f = b.k1.get_function(function_id);
@@ -848,7 +848,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
             value
         };
         let builder_variable =
-            BuilderVariable { id: param.variable_id, value, storage_pt: t, indirect: false };
+            BuilderVariable { id: param.variable_id, value, pt: t, indirect: false };
         b.k1.ir.b_variables.insert(builder_variable.id, builder_variable);
     }
 
@@ -891,7 +891,7 @@ pub fn compile_top_level_expr(
 ) -> K1Result<()> {
     let start = k1.timing.clock.raw();
 
-    let mut b = Builder::new(k1, true);
+    let mut b = Builder::new(k1);
 
     for (variable_id, static_value_id) in input_parameters {
         let variable = b.k1.variables.get(*variable_id);
@@ -901,7 +901,7 @@ pub fn compile_top_level_expr(
             BuilderVariable {
                 id: *variable_id,
                 value: Value::StaticValue { t: pt, id: *static_value_id },
-                storage_pt: pt,
+                pt,
                 indirect: !pt.is_agg(),
             },
         );
@@ -980,7 +980,7 @@ fn finalize_unit(
 struct BuilderVariable {
     id: VariableId,
     value: Value,
-    storage_pt: PhysicalType,
+    pt: PhysicalType,
     indirect: bool,
 }
 
@@ -1008,12 +1008,10 @@ pub struct Builder<'k1> {
     cur_span: SpanId,
     // entry_span is the span assigned to the hoisted allocas
     entry_span: SpanId,
-
-    emission_time_optimizations: bool,
 }
 
 impl<'k1> Builder<'k1> {
-    fn new(k1: &'k1 mut TypedProgram, emission_time_optimizations: bool) -> Self {
+    fn new(k1: &'k1 mut TypedProgram) -> Self {
         Self {
             k1,
 
@@ -1025,9 +1023,11 @@ impl<'k1> Builder<'k1> {
             cur_block: Handle::nil(),
             cur_span: SpanId::NONE,
             entry_span: SpanId::NONE,
-
-            emission_time_optimizations,
         }
+    }
+
+    pub fn optimize_enabled(&self) -> bool {
+        self.k1.config.optimize_ir
     }
 
     fn make_inst(&mut self, inst: Inst, comment: IrStr, debug_info: IrDebugInfo) -> InstId {
@@ -1136,7 +1136,7 @@ impl<'k1> Builder<'k1> {
         comment: impl Into<IrStr>,
     ) -> InstId {
         if let Value::Data32 { t: ScalarType::U8, data: b32 } = cond
-            && self.emission_time_optimizations
+            && self.optimize_enabled()
         {
             if b32 == 1 {
                 // JMPIF true ...
@@ -1430,7 +1430,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
                     BuilderVariable {
                         id: let_stmt.variable_id,
                         value: Value::Empty,
-                        storage_pt: rich_pt,
+                        pt: rich_pt,
                         indirect: false,
                     },
                 );
@@ -1455,7 +1455,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
                     BuilderVariable {
                         id: let_stmt.variable_id,
                         value: variable_alloca.as_value(),
-                        storage_pt: var_pt,
+                        pt: var_pt,
                         indirect: !is_direct,
                     },
                 );
@@ -1576,28 +1576,32 @@ fn compile_expr(
             Ok(result)
         }
         TypedExpr::Variable(variable_expr) => {
-            let (var_value, var_pt, is_indirect, is_constant) =
-                compile_variable_to_address(b, variable_expr.variable_id, false);
-            if is_indirect {
-                // indirect; var_value is storage that holds the variable's type
-                // copy_aggregates: false is correct because we know this is not an aggregate;
-                // aggregates are always 'direct'
-                debug_assert!(!var_pt.is_agg());
-                let copy_aggregates = !is_constant;
-                let loaded_or_copied = load_or_copy(
-                    b,
-                    var_pt,
-                    dst,
-                    var_value,
-                    copy_aggregates,
-                    "fulfill variable usage",
-                );
-                Ok(loaded_or_copied)
-            } else {
-                // direct; var_value is already a canonical representation of the value; just have to
-                // fulfill dst
-                let stored = store_rich_if_dst(b, dst, var_pt, var_value, "direct variable");
-                Ok(stored)
+            let var_result = compile_variable_to_address(b, variable_expr.variable_id, false);
+            match var_result {
+                CompileVariableResult::FoldedValue { value, pt } => {
+                    let stored = store_rich_if_dst(b, dst, pt, value, "folded variable");
+                    Ok(stored)
+                }
+                CompileVariableResult::Address { addr, pt, indirect, constant } => {
+                    if indirect {
+                        debug_assert!(!pt.is_agg());
+                        let copy_aggregates = !constant;
+                        let loaded_or_copied = load_or_copy(
+                            b,
+                            pt,
+                            dst,
+                            addr,
+                            copy_aggregates,
+                            "fulfill variable usage",
+                        );
+                        Ok(loaded_or_copied)
+                    } else {
+                        // direct; var_value is already a canonical representation of the value; just have to
+                        // fulfill dst
+                        let stored = store_rich_if_dst(b, dst, pt, addr, "direct variable");
+                        Ok(stored)
+                    }
+                }
             }
         }
         TypedExpr::AddressOf(address_of) => {
@@ -1778,6 +1782,7 @@ fn compile_expr(
         }
         TypedExpr::Match(match_expr) => {
             let match_result_type = expr_type;
+            let result_inst_kind = b.type_to_inst_kind(match_result_type);
             for stmt in b.k1.mem.getn(match_expr.initial_let_statements) {
                 compile_stmt(b, None, *stmt)?;
             }
@@ -1798,8 +1803,14 @@ fn compile_expr(
 
             let match_end_block = b.push_block("match_end");
 
-            // nocommit: Eliminate the phi if we have a 'dst' - just do stores
-            let mut incomings: List<PhiCase, _> = b.k1.ir.mem.new_list(match_expr.arms.len());
+            enum MatchDst {
+                Phi(List<PhiCase, ProgramIr>),
+                CallerDst(Value),
+            }
+            let mut result_value: MatchDst = match dst {
+                None => MatchDst::Phi(b.k1.ir.mem.new_list(match_expr.arms.len())),
+                Some(dst) => MatchDst::CallerDst(dst),
+            };
             for ((index, arm), (arm_block, arm_cons_block)) in
                 b.k1.mem.getn(match_expr.arms).iter().enumerate().zip(arm_blocks.iter())
             {
@@ -1821,8 +1832,8 @@ fn compile_expr(
                 )?;
 
                 b.goto_block(*arm_cons_block);
-                let result = compile_expr(b, None, arm.consequent_expr)?;
-                let cons_diverges = b.get_value_kind(result).is_terminator();
+                let arm_result = compile_expr(b, None, arm.consequent_expr)?;
+                let cons_diverges = b.get_value_kind(arm_result).is_terminator();
                 debug_assert_eq!(
                     b.k1.exprs.get_type(arm.consequent_expr) == NEVER_TYPE_ID,
                     cons_diverges
@@ -1830,32 +1841,44 @@ fn compile_expr(
 
                 if !cons_diverges {
                     let current_block = b.cur_block;
-                    incomings.push(PhiCase { from: current_block, value: result });
+                    match &mut result_value {
+                        MatchDst::Phi(incomings) => {
+                            incomings.push(PhiCase { from: current_block, value: arm_result })
+                        }
+                        MatchDst::CallerDst(dst) => {
+                            let pt = result_inst_kind.expect_value().unwrap();
+                            store_value(b, pt, *dst, arm_result, "match arm result store");
+                        }
+                    };
                     b.push_jump(match_end_block, "");
                 }
             }
 
             b.goto_block(match_end_block);
-            let result_inst_kind = b.type_to_inst_kind(match_result_type);
             match result_inst_kind {
                 InstKind::Value(pt) => {
                     if pt.is_empty() {
                         Ok(Value::Empty)
                     } else {
-                        let value = if incomings.len() == 1 && b.emission_time_optimizations {
-                            let phi_case = incomings[0];
-                            phi_case.value
-                        } else {
-                            let incomings_handle = b.k1.ir.mem.list_to_handle(incomings);
-                            let phi_inst = b.push_inst(
-                                Inst::Phi { t: pt, incomings: incomings_handle },
-                                "match phi",
-                            );
-                            phi_inst.as_value()
-                        };
-                        // Interesting thought: If dst is Some, we could just do stores to it instead of phi.
-                        let fulfilled = store_rich_if_dst(b, dst, pt, value, "fulfill match dst");
-                        Ok(fulfilled)
+                        match result_value {
+                            MatchDst::Phi(incomings) => {
+                                let value = if incomings.len() == 1 && b.optimize_enabled() {
+                                    incomings[0].value
+                                } else {
+                                    let incomings_handle = b.k1.ir.mem.list_to_handle(incomings);
+                                    let phi_inst = b.push_inst(
+                                        Inst::Phi { t: pt, incomings: incomings_handle },
+                                        "match phi",
+                                    );
+                                    phi_inst.as_value()
+                                };
+                                debug_assert!(dst.is_none());
+                                let fulfilled =
+                                    store_rich_if_dst(b, dst, pt, value, "fulfill match dst");
+                                Ok(fulfilled)
+                            }
+                            MatchDst::CallerDst(dst) => Ok(dst),
+                        }
                     }
                 }
                 InstKind::Void => {
@@ -2054,49 +2077,9 @@ fn compile_expr(
         TypedExpr::PendingCapture(_) => b_ice!(b, "ir on PendingCapture"),
         TypedExpr::StaticValue(stat) => {
             let t = b.get_physical_type(expr_type);
-            // We lower the simple scalar static values
-            // but leave the aggregates as globals
-            match b.k1.static_values.get(stat.value_id) {
-                StaticValue::Empty => Ok(Value::Empty),
-                StaticValue::Bool(bv) => {
-                    let imm = Value::byte(*bv as u8);
-                    let store = store_scalar_if_dst(b, dst, imm);
-                    Ok(store)
-                }
-                StaticValue::Char(byte) => {
-                    let imm = Value::byte(*byte);
-                    let store = store_scalar_if_dst(b, dst, imm);
-                    Ok(store)
-                }
-                StaticValue::Int(int) => {
-                    let int = *int;
-                    let imm = b.make_int_value(&int, "static int");
-                    let store = store_scalar_if_dst(b, dst, imm);
-                    Ok(store)
-                }
-                StaticValue::Enum(_, int) => {
-                    let int = *int;
-                    let imm = b.make_int_value(&int, "static enum");
-                    let store = store_scalar_if_dst(b, dst, imm);
-                    Ok(store)
-                }
-                StaticValue::Float(float) => {
-                    let float = *float;
-                    //task(ir): Pack small floats
-                    let imm = b.push_inst(Inst::Data(DataInst::Float(float)), "static float");
-                    let store = store_scalar_if_dst(b, dst, imm.as_value());
-                    Ok(store)
-                }
-                StaticValue::String(_)
-                | StaticValue::Zero(_)
-                | StaticValue::Struct(_)
-                | StaticValue::Sum(_)
-                | StaticValue::LinearContainer(_) => {
-                    let value = Value::StaticValue { t, id: stat.value_id };
-                    let stored = store_rich_if_dst(b, dst, t, value, "store static value to dst");
-                    Ok(stored)
-                }
-            }
+            let value = compile_static_value(b, stat.value_id, t);
+            let stored = store_rich_if_dst(b, dst, t, value, "store static value to dst");
+            Ok(stored)
         }
     }
 }
@@ -2128,10 +2111,13 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
             Ok((element_ptr.as_value(), frozen))
         }
         TypedExpr::Variable(variable_expr) => {
-            let (addr_value, _pt, _is_indirect, is_constant) =
-                compile_variable_to_address(b, variable_expr.variable_id, true);
-            let frozen = is_constant;
-            Ok((addr_value, frozen))
+            let CompileVariableResult::Address { addr, constant, .. } =
+                compile_variable_to_address(b, variable_expr.variable_id, true)
+            else {
+                panic!("require_address not honored")
+            };
+            let frozen = constant;
+            Ok((addr, frozen))
         }
         TypedExpr::Deref(deref_expr) => {
             let value_of_p = compile_expr(b, None, deref_expr.target)?;
@@ -2167,48 +2153,120 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
         }
         _ => {
             let e = compile_expr(b, None, expr)?;
-            // Aggregates are represented by-address, and a struct/array literal
-            // materialized without a dst yields its alloca (a ptr); both are addresses
-            // usable as a (frozen) place
             debug_assert!(b.get_value_kind(e).is_storage() || b.get_value_kind(e).is_empty());
             Ok((e, true))
         }
     }
 }
 
+fn compile_static_value(b: &mut Builder, value_id: StaticValueId, pt: PhysicalType) -> Value {
+    // We lower the simple static values
+    // but leave the aggregates as globals
+    match b.k1.static_values.get(value_id) {
+        StaticValue::Empty => Value::Empty,
+        StaticValue::Bool(bv) => {
+            let imm = Value::byte(*bv as u8);
+            imm
+        }
+        StaticValue::Char(byte) => {
+            let imm = Value::byte(*byte);
+            imm
+        }
+        StaticValue::Int(int) => {
+            let int = *int;
+            let int_value = b.make_int_value(&int, "static int");
+            int_value
+        }
+        StaticValue::Enum(_, int) => {
+            let int = *int;
+            let int_value = b.make_int_value(&int, "static enum");
+            int_value
+        }
+        StaticValue::Float(float) => {
+            let float = *float;
+            //task(ir): Pack small floats
+            let imm = b.push_inst(Inst::Data(DataInst::Float(float)), "static float");
+            imm.as_value()
+        }
+        StaticValue::String(_)
+        | StaticValue::Zero(_)
+        | StaticValue::Struct(_)
+        | StaticValue::Sum(_)
+        | StaticValue::LinearContainer(_) => {
+            let value = Value::StaticValue { t: pt, id: value_id };
+            value
+        }
+    }
+}
+
+enum CompileVariableResult {
+    Address { addr: Value, pt: PhysicalType, indirect: bool, constant: bool },
+    FoldedValue { value: Value, pt: PhysicalType },
+}
 fn compile_variable_to_address(
     b: &mut Builder,
     variable_id: VariableId,
     // Don't fold to the value; the caller wants the address explicitly
     require_address: bool,
-) -> (Value, PhysicalType, bool, bool) {
+) -> CompileVariableResult {
     let variable = b.k1.variables.get(variable_id);
     match variable.global_id() {
         Some(global_id) => {
-            let global = b.k1.globals.get(global_id);
-            // Globals are pretty complex. We always generate an instruction
+            let global = b.k1.globals.get(global_id).clone();
+            // We typically generate an instruction
             // representing the **address** of the global, because they are always
             // addresses to static memory. For aggregate types, that address _is_
-            // the value of the expression referring to the global, but for
-            // non-reference types, we must 'load' the value from the address, since
-            // the address is just an implementation detail
+            // the value of the expression referring to the global: we call this 'direct'.
+            // But for non-reference types, we must 'load' the value from the address, since
+            // the address is just an implementation detail, we call this 'indirect'.
             //
-            // Caveat: For immutable globals, we optimize to the value. This is to propagate constants
+            // That's the unoptimized picture. When optimizations are enabled,
+            // we'll try to fold straight to a value.
+
             let value_type = variable.type_id;
             let is_constant = global.is_constant;
             let value_pt = b.get_physical_type(value_type);
-            // TODO: global folding
-            // if global.is_constant
-            //     && value_pt.is_scalar()
-            //     && !require_address
-            //     && b.emission_time_optimizations
-            // {
-            //     let static_value = b.k1.static_values.get(global.initial_value);
-            // } else {
-            let address = Value::GlobalAddr { storage_pt: value_pt, id: global_id };
-            let is_direct = value_pt.is_agg();
-            (address, value_pt, !is_direct, is_constant)
-            // }
+
+            if let Some(initial_value) = global.initial_value
+                && global.is_constant
+                && value_pt.is_scalar()
+                && !require_address
+                && b.optimize_enabled()
+                && global_id != GLOBAL_ID_K1_IS_STATIC
+            {
+                let value = compile_static_value(b, initial_value, value_pt);
+                let folded_value = match value {
+                    Value::Inst(_) => {
+                        // A Data inst... that's fine as a value
+                        Some(value)
+                    }
+                    Value::GlobalAddr { .. } => unreachable!(),
+                    Value::StaticValue { .. } =>
+                    // probably unreachable; since we check for scalar above, and currently
+                    // only aggragates compile to Value::StaticValue, but too brittle to assert
+                    {
+                        None
+                    }
+                    Value::FunctionAddr(_) => unreachable!(),
+                    Value::FnParam { .. } => unreachable!(),
+                    Value::Data32 { .. } => Some(value),
+                    Value::Empty => Some(value),
+                };
+                if let Some(value) = folded_value {
+                    return CompileVariableResult::FoldedValue { value, pt: value_pt };
+                }
+            }
+
+            {
+                let addr = Value::GlobalAddr { storage_pt: value_pt, id: global_id };
+                let is_direct = value_pt.is_agg();
+                CompileVariableResult::Address {
+                    addr,
+                    pt: value_pt,
+                    indirect: !is_direct,
+                    constant: is_constant,
+                }
+            }
         }
         None => {
             let Some(var) = b.get_variable(variable_id) else {
@@ -2225,7 +2283,12 @@ fn compile_variable_to_address(
             let var_value = var.value;
             let var_indirect = var.indirect;
             let is_constant = false;
-            (var_value, var.storage_pt, var_indirect, is_constant)
+            CompileVariableResult::Address {
+                addr: var_value,
+                pt: var.pt,
+                indirect: var_indirect,
+                constant: is_constant,
+            }
         }
     }
 }

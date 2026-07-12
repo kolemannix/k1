@@ -234,8 +234,6 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
             cur_block: Handle::nil(),
             cur_span: call_span,
             entry_span,
-            // Not going to be used by this builder, probably?
-            emission_time_optimizations: true,
         };
 
         let mut call_block_node_ref = b.k1.ir.mem.get_raw_ref(call_block_handle);

@@ -236,9 +236,13 @@ pub struct Args {
     #[arg(long)]
     pub profile: bool,
 
-    /// Chatty mode, timing summaries, other development info
+    /// Chatty mode, timing summaries, other info; for compiler developers
     #[arg(short, long, default_value_t = false, action = clap::ArgAction::Set)]
     pub chatty: bool,
+
+    /// Toggles whether k1 optimizes its own ir during emission; for compiler developers
+    #[arg(short, long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub optimize_ir: bool,
 
     /// Target platform
     #[arg(long)]
@@ -271,6 +275,7 @@ pub struct CompilerConfig {
     pub optimize: bool,
     pub chatty: bool,
     pub static_exec: StaticExecMode,
+    pub optimize_ir: bool,
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -405,6 +410,7 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
         optimize: args.optimize,
         chatty: args.chatty,
         static_exec: args.static_exec,
+        optimize_ir: args.optimize_ir,
     };
 
     let mut k1 = TypedProgram::new(module_name.clone(), config);
@@ -586,9 +592,10 @@ pub fn write_executable(
 pub fn codegen_module<'ctx, 'module>(
     args: &Args,
     ctx: &'ctx Context,
-    typed_module: &'module mut TypedProgram,
+    k1: &'module mut TypedProgram,
 ) -> Result<Cg<'ctx, 'module>> {
-    let mut codegen = Cg::create(ctx, typed_module, args.debug, args.optimize);
+    let codegen_start = std::time::Instant::now();
+    let mut codegen = Cg::create(ctx, k1, args.debug, args.optimize);
     let mut module_name = codegen.name().to_string();
     if args.command.is_test() {
         module_name.push_str("_test");
@@ -614,6 +621,7 @@ pub fn codegen_module<'ctx, 'module>(
     }
 
     if args.chatty {
+        eprintln!("codegen took {}ms", codegen_start.elapsed().as_millis());
         eprintln!("iropt: {}ms", codegen.k1.timing.total_iropt_nanos / 1_000_000);
     }
 

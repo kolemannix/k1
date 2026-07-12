@@ -9275,16 +9275,15 @@ impl TypedProgram {
         let enclosing_fn_name =
             self.scopes.nearest_parent_function(ctx.scope_id).map(|id| self.get_function(id).name);
 
-        // nocommit: kill this name-building too. Just worry about unique names in codegen
         let name = self.build_ident_with(|k1, s| {
+            k1.write_scope_path(s, ctx.scope_id, ".", true);
+            s.push('.');
             if let Some(fn_name) = enclosing_fn_name {
                 s.push_str(k1.ident_str(fn_name));
             };
             s.push_str("_lam_");
             write!(s, "{}", lambda_scope_id.as_u32()).unwrap();
         });
-        let name_string = self.make_qualified_name(ctx.scope_id, name, None, "__", true);
-        let name = self.ast.idents.intern(name_string);
 
         let lambda_info = self.scopes.get_lambda_info(lambda_scope_id);
 
