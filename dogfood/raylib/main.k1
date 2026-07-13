@@ -3,10 +3,10 @@ let MODULE_INFO: k1/module-manifest = {
   let link-args = list/empty[string]();
   for frameworks { link-args.push("-framework"); link-args.push(it) };
   {
-    kind: .executable,
+    kind: :executable,
     deps: [],
     multithreading: false,
-    libs: [{ name: "raylib", link-type: .static }],
+    libs: [{ name: "raylib", link-type: :static }],
     link-args: link-args.span(),
   }
 }
@@ -39,7 +39,7 @@ let PINK: raylib/Color = { r: 255, g: 109, b: 194, a: 255 }
 let PURPLE: raylib/Color = { r: 200, g: 122, b: 255, a: 255 }
 
 fn run(title: string): i32 {
-  let context alloc-mode: mem/alloc-mode = .arena;
+  let context alloc-mode: mem/alloc-mode = :tmp;
   let titleC = title.to-c();
   raylib/init(800, 450, titleC.ptr);
   raylib/SetTargetFPS(60);

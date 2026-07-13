@@ -282,6 +282,7 @@ impl Backend {
             command: k1::compiler::Command::Check {
                 file: root_uri.as_ref().unwrap().path().into(),
             },
+            dump_idents: false,
         };
         let compile_result = k1::compiler::compile_program(&args);
         let compiled_module = match compile_result {
