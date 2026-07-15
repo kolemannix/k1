@@ -602,8 +602,8 @@ pub struct TypedAbilitySignature {
 }
 
 pub(crate) struct ArgsAndParams {
-    args: MSlice<MaybeTypedExpr, MemTmp>,
-    params: MSlice<FnParamType, MemTmp>,
+    args: TmpSlice<MaybeTypedExpr>,
+    params: TmpSlice<FnParamType>,
 }
 
 impl ArgsAndParams {
@@ -629,8 +629,8 @@ pub struct TypedAbility {
     pub name: StringId,
     pub base_ability_id: AbilityId,
     pub self_type_id: TypeId,
-    pub parameters: MSlice<TypedAbilityParam, TypedProgram>,
-    pub functions: MSlice<TypedAbilityFunctionRef, TypedProgram>,
+    pub parameters: PermSlice<TypedAbilityParam>,
+    pub functions: PermSlice<TypedAbilityFunctionRef>,
     pub scope_id: ScopeId,
     pub ast_id: ParsedAbilityId,
     pub namespace_id: NamespaceId,
@@ -898,7 +898,7 @@ pub struct BlockBuilder {
 #[derive(Clone)]
 pub struct TypedBlock {
     pub scope_id: ScopeId,
-    pub statements: MSlice<TypedStmtId, TypedProgram>,
+    pub statements: PermSlice<TypedStmtId>,
 }
 
 #[derive(Clone)]
@@ -945,7 +945,7 @@ pub struct FunctionSignature {
     pub name: Option<StringId>,
     pub function_type: TypeId,
     pub type_params: NamedTypeSlice,
-    pub fnlike_type_params: MSlice<FnlikeTypeParam, TypedProgram>,
+    pub fnlike_type_params: PermSlice<FnlikeTypeParam>,
 }
 impl_copy_if_small!(24, FunctionSignature);
 
@@ -974,9 +974,9 @@ pub struct TypedFunctionParam {
 pub struct TypedFunction {
     pub name: StringId,
     pub scope: ScopeId,
-    pub params: MSlice<TypedFunctionParam, TypedProgram>,
+    pub params: PermSlice<TypedFunctionParam>,
     pub type_params: NamedTypeSlice,
-    pub fnlike_type_params: MSlice<FnlikeTypeParam, TypedProgram>,
+    pub fnlike_type_params: PermSlice<FnlikeTypeParam>,
     pub body_block: Option<TypedExprId>,
     pub builtin_type: Option<Builtin>,
     pub linkage: Linkage,
@@ -1070,7 +1070,7 @@ pub struct NameAndType {
     pub type_id: TypeId,
 }
 
-pub type NamedTypeSlice = MSlice<NameAndType, TypedProgram>;
+pub type NamedTypeSlice = PermSlice<NameAndType>;
 
 pub type TypeIdSlice = MSlice<TypeId, TypePool>;
 
@@ -1193,7 +1193,7 @@ impl Callee {
 #[derive(Clone)]
 pub struct Call {
     pub callee: Callee,
-    pub args: MSlice<TypedExprId, TypedProgram>,
+    pub args: PermSlice<TypedExprId>,
     /// type_args remain unerased for some intrinsics where we want codegen to see the types.
     /// Specifically sizeOf[T], since there's no actual value to specialize on. kinda a hack would be
     /// better to specialize anyway and inline? idk
@@ -1211,7 +1211,7 @@ pub struct StructLiteralField {
 
 #[derive(Clone)]
 pub struct StructLiteral {
-    pub fields: MSlice<StructLiteralField, TypedProgram>,
+    pub fields: PermSlice<StructLiteralField>,
 }
 
 #[derive(Debug, Clone)]
@@ -1453,7 +1453,7 @@ pub struct PendingCaptureExpr {
 
 #[derive(Clone, Copy)]
 pub struct MatchingCondition {
-    pub instrs: MSlice<MatchingConditionInstr, TypedProgram>,
+    pub instrs: PermSlice<MatchingConditionInstr>,
 }
 
 #[derive(Debug, Clone)]
@@ -1488,8 +1488,8 @@ impl_copy_if_small!(4, LoopExpr);
 #[derive(Clone)]
 /// Invariant: The last arm's condition must always evaluate to 'true'
 pub struct TypedMatchExpr {
-    pub initial_let_statements: MSlice<TypedStmtId, TypedProgram>,
-    pub arms: MSlice<TypedMatchArm, TypedProgram>,
+    pub initial_let_statements: PermSlice<TypedStmtId>,
+    pub arms: PermSlice<TypedMatchArm>,
 }
 
 #[derive(Clone, Copy)]
@@ -2315,7 +2315,7 @@ pub struct TypedAbilityImpl {
     pub impl_arguments: NamedTypeSlice,
     /// Invariant: These functions are ordered how they are defined in the ability, NOT how they appear in
     /// the impl code
-    pub functions: MSlice<AbilityImplFunction, TypedProgram>,
+    pub functions: PermSlice<AbilityImplFunction>,
     pub scope_id: ScopeId,
     pub span: SpanId,
     /// I need this so that I don't try to instantiate blanket implementations that fail
@@ -2542,6 +2542,7 @@ pub struct ProgramSettings {
 pub struct MemTmp;
 type TmpList<T> = List<T, MemTmp>;
 type TmpSlice<T> = MSlice<T, MemTmp>;
+type PermSlice<T> = MSlice<T, TypedProgram>;
 
 pub struct TypedExprPool {
     // SoA pools
@@ -6076,15 +6077,14 @@ impl TypedProgram {
         }
 
         let execution_result = match self.config.static_exec {
-            compiler::StaticExecMode::Ir => vm::execute_compiled_expr(self, vm, expr)
-                .map_err(|mut e| {
+            compiler::StaticExecMode::Ir => {
+                vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
                     let stack_trace = vm::make_stack_trace(self, &vm.stack);
                     e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
                     e
-                }),
-            compiler::StaticExecMode::Bc => {
-                bc::exec::execute_compiled_expr(self, vm, expr, true)
+                })
             }
+            compiler::StaticExecMode::Bc => bc::exec::execute_compiled_expr(self, vm, expr, true),
             compiler::StaticExecMode::Both => {
                 let ir_result = vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
                     let stack_trace = vm::make_stack_trace(self, &vm.stack);
@@ -7076,7 +7076,7 @@ impl TypedProgram {
         &mut self,
         self_type_id: TypeId,
         base_ability_id: AbilityId,
-        impl_arguments: MSlice<NameAndType, TypedProgram>,
+        impl_arguments: PermSlice<NameAndType>,
         span: SpanId,
     ) -> AbilityImplHandle {
         let base_ability = self.abilities.get(base_ability_id);
@@ -9034,7 +9034,7 @@ impl TypedProgram {
                     repl_ns_scope,
                     ScopeType::LexicalBlock,
                     SpanId::NONE,
-                    stmts.len() as u32,
+                    stmts.len() as u32 + 1,
                 );
                 let ctx = EvalExprContext::make(cell_block.scope_id);
                 let mut last_expr_type = self.types.builtins.empty;
@@ -9053,17 +9053,18 @@ impl TypedProgram {
                             let type_id = typed_let.variable_type;
                             let global_id = self.globals.next_id();
                             let name = parsed_let.name;
+                            let flags = VariableFlags::Reassigned;
                             let variable_id = self.variables.add(Variable {
                                 name,
                                 type_id,
                                 owner_scope: repl_ns_scope,
-                                flags: VariableFlags::empty(),
+                                flags,
                                 usage_count: 0,
                                 usages: vec![],
                                 kind: VariableKind::Global(global_id),
                                 defn_span: parsed_let.span,
                             });
-                            let global_id = self.globals.add_expected_id(
+                            let _global_id = self.globals.add_expected_id(
                                 TypedGlobal {
                                     variable_id,
                                     // We're relocating the initializer to the block; so this
@@ -9142,9 +9143,8 @@ impl TypedProgram {
                     ir::unit_to_string(self, IrUnitId::Expr(cell_expr), true)
                 );
                 let exec_result = self.do_with_vm(span, |k1, vm| {
-                    let r = vm::execute_compiled_expr(k1, vm, cell_expr);
+                    let r = bc::exec::execute_compiled_expr(k1, vm, cell_expr, true);
                     vm.reset(k1.global_id_k1_arena);
-                    bc::exec::execute_compiled_expr(k1, vm, cell_expr, true);
                     r
                 })?;
                 Ok(Some(exec_result))
