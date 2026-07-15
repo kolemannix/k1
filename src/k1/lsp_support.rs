@@ -1,5 +1,5 @@
 use crate::lex::{Span, SpanId};
-use crate::parse::{FileId, ParsedId, Sources};
+use crate::parse::{FileId, ParsedId, SourceFiles};
 use crate::typer::types::Type;
 use crate::{SV8, typer::*};
 use smallvec::smallvec;
@@ -9,7 +9,7 @@ pub enum LangItem {
     Defn(ParsedId),
 }
 
-pub fn is_point_in_span(sources: &Sources, line: u32, col: u32, span: Span) -> bool {
+pub fn is_point_in_span(sources: &SourceFiles, line: u32, col: u32, span: Span) -> bool {
     if let Some((entity_start_line, _entity_end_line)) = sources.get_lines_for_span(span) {
         // Only works for single-line spans
         if entity_start_line.line_index == line {

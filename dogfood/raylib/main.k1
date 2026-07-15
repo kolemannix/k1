@@ -26,37 +26,60 @@ ns raylib {
   extern("raylib","ClearBackground") fn ClearBackground(color: Color)
 
   // define void @DrawText(ptr noundef %0, i32 noundef %1, i32 noundef %2, i64 %3) #0 {
-  extern("raylib","DrawText") fn DrawText(text: ptr, posX: i32, posY: i32, color: Color)
+  extern("raylib","DrawText") fn DrawText(text: ptr, posX: i32, posY: i32, fontSize: i32, color: Color)
 
   extern("raylib","SetTargetFPS") fn SetTargetFPS(fps: i32)
   extern("raylib","GetFPS") fn GetFPS(): i32
 
 }
 
-let RED: raylib/Color = { r: 255, g: 0, b: 0, a: 255 }
-let GRAY: raylib/Color = { r: 200, g: 200, b: 200, a: 255 }
-let PINK: raylib/Color = { r: 255, g: 109, b: 194, a: 255 }
+let RED: raylib/Color    = { r: 255, g: 0, b: 0, a: 255 }
+let GRAY: raylib/Color   = { r: 200, g: 200, b: 200, a: 255 }
+let PINK: raylib/Color   = { r: 255, g: 109, b: 194, a: 255 }
 let PURPLE: raylib/Color = { r: 200, g: 122, b: 255, a: 255 }
 
+type thing-kind = either {
+  bits64(u64),
+  text(string)
+}
+type vec2 = { x: i32, y: i32 }
+type thing = {
+  pos: vec2,
+  kind: thing-kind
+}
+
+use raylib/DrawText
+use raylib/ClearBackground
+
+fn render(context frame-arena: alloc-mode)(things: *list[thing]) {
+  for things {
+    DrawText("thing {it-index}".to-c().ptr, it.pos.x, it.pos.y, 32, PINK);
+  };
+}
+
 fn run(title: string): i32 {
-  let context alloc-mode: mem/alloc-mode = :tmp;
-  let titleC = title.to-c();
+  let titleC = title.to-c(context :tmp)();
+
+  let perm = alloc-mode:custom-arena(core/arena/init-virtual(1));
+  let things: list[thing] = list/withCapacityIn(context perm)(1024);
+  things.push-in(context perm)({
+    pos: { x: 200, y: 300 },
+    kind: :bits64(10)
+  });
   raylib/init(800, 450, titleC.ptr);
   raylib/SetTargetFPS(60);
 
-  use raylib/ClearBackground;
-  use raylib/DrawText;
 
-  let i = 0;
+  let context frame = alloc-mode:custom-arena(core/arena/init-virtual(1));
+  mem/pushMode(frame);
   while not raylib/WindowShouldClose() {
     let fps = raylib/GetFPS();
-    let color = if i < 100 PURPLE else PINK;
-    ClearBackground(color);
     raylib/BeginDrawing();
-    DrawText("Congrats! (fps: {fps})".to-c().ptr, 200, 200, GRAY);
+    ClearBackground(GRAY);
+    DrawText("Congrats! (fps: {fps})".to-c().ptr, 200, 200, 32, PINK);
+    render(things.&);
     raylib/EndDrawing();
-    i := i + 1;
-    if i == 2000 { i := 0 };
+    frame.as-custom-arena().!.reset(false);
   };
 
   raylib/CloseWindow();

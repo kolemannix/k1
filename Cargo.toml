@@ -50,6 +50,9 @@ tokio-util = { version = "0.7", features = ["codec"], optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", optional = true }
 tracing-appender = { version = "0.2", optional = true }
+httparse = "1.10.1"
+maud = "0.27.0"
+serde_json = "1.0.150"
 
 # raylib gui only deps
 # raylib = { version = "5.0.1", optional = true}

@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 
 use k1::lex::TokenKind;
-use k1::parse::{ParsedProgram, Source};
+use k1::parse::{ParsedProgram, SourceFile};
 use k1::typer::ModuleId;
 use mimalloc::MiMalloc;
 
@@ -32,7 +32,7 @@ fn main() -> anyhow::Result<ExitCode> {
         let mut tokens = vec![];
         let lex_result = k1::parse::lex_file_into_program(
             &mut ast,
-            Source::make(
+            SourceFile::make(
                 file_id,
                 cwd.to_str().unwrap().to_string(),
                 name.to_string(),

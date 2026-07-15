@@ -176,6 +176,11 @@ pub enum Command {
         /// File
         file: PathBuf,
     },
+    #[clap()]
+    Server {
+        /// File
+        file: PathBuf,
+    },
 }
 
 impl Command {
@@ -186,6 +191,7 @@ impl Command {
             Command::Run { file } => file,
             Command::Test { file } => file,
             Command::Repl { file } => file,
+            Command::Server { file } => file,
         }
     }
 
