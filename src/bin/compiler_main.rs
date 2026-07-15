@@ -1,6 +1,8 @@
+use std::net::TcpListener;
 // Copyright (c) 2026 knix
 // All rights reserved.
 use std::process::ExitCode;
+use std::thread;
 
 use clap::Parser;
 use k1::compiler;
@@ -52,7 +54,7 @@ fn run() -> anyhow::Result<ExitCode> {
     };
     let llvm_ctx = inkwell::context::Context::create();
     return match compiler::codegen_module(&args, &llvm_ctx, &mut program) {
-        Ok(cg) => match args.command {
+        Ok(mut cg) => match args.command {
             Command::Check { .. } => unreachable!(),
             Command::Build { .. } => Ok(ExitCode::SUCCESS),
             Command::Run { .. } => {
@@ -80,6 +82,20 @@ fn run() -> anyhow::Result<ExitCode> {
                     println!("you said: {}", line);
                     line.clear();
                 }
+            }
+            Command::Server { .. } => {
+                let listener = TcpListener::bind("127.0.0.1:8080").expect("Could not bind to port");
+                println!("k1 server running on http://127.0.0.1:8080");
+
+                for stream in listener.incoming() {
+                    match stream {
+                        Ok(stream) => {
+                            k1::server::handle_client(&mut cg, stream);
+                        }
+                        Err(e) => eprintln!("Connection failed: {}", e),
+                    }
+                }
+                Ok(ExitCode::SUCCESS)
             }
         },
         Err(err) => {

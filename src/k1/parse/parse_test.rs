@@ -11,7 +11,7 @@ fn make_test_ast() -> ParsedProgram {
 
 fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'ast> {
     let source =
-        Source::make(0, "unit_test".to_string(), "unit_test.k1".to_string(), input.to_string());
+        SourceFile::make(0, "unit_test".to_string(), "unit_test.k1".to_string(), input.to_string());
     let file_id = source.file_id;
     let module_id = ModuleId::from_u32(1).unwrap();
     let module_name = ast.idents.intern("unit_test");

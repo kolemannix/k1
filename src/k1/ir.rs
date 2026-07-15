@@ -1471,15 +1471,14 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
                     let TypedExpr::Variable(v) = b.k1.exprs.get(ass.destination) else {
                         b.k1.ice_span(ass.span, "Invalid value assignment lhs")
                     };
-                    let builder_variable = b.get_variable(v.variable_id).expect("Missing variable");
-                    //if !builder_variable.indirect {
-                    //    b.k1.ice_with_span(
-                    //        "Expect an indirect variable for value assignment",
-                    //        b.k1.exprs.get_span(ass.destination),
-                    //    )
-                    //};
-                    let variable_value = builder_variable.value;
-                    let _rhs_stored = compile_expr(b, Some(variable_value), ass.value)?;
+                    let variable_id = v.variable_id;
+                    let CompileVariableResult::Address { addr, constant, .. } =
+                        compile_variable_to_address(b, variable_id, true)
+                    else {
+                        unreachable!()
+                    };
+                    debug_assert!(!constant);
+                    let _rhs_stored = compile_expr(b, Some(addr), ass.value)?;
                     Ok(Value::Empty)
                 }
                 AssignmentKind::Store => {

@@ -10,7 +10,7 @@ use std::sync::{Mutex, RwLock};
 use k1::compiler::CompileProgramError;
 use k1::lex::{self, Span, SpanId, Spans};
 use k1::parse;
-use k1::parse::{ParsedProgram, Source};
+use k1::parse::{ParsedProgram, SourceFile};
 use k1::typer::*;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
@@ -95,7 +95,7 @@ enum TokenModifiers {
     DefaultLibrary = 1 << 9,
 }
 
-fn span_to_range_with_source(source: &Source, span: Span) -> Option<Range> {
+fn span_to_range_with_source(source: &SourceFile, span: Span) -> Option<Range> {
     let (start_line, end_line) = source.get_lines_for_span(span)?;
     Some(Range {
         start: Position {
@@ -116,7 +116,7 @@ fn span_to_range(k1: &TypedProgram, span: Span) -> Option<Range> {
     span_to_range_with_source(source, span)
 }
 
-fn span_id_to_range_with_source(source: &Source, spans: &Spans, span_id: SpanId) -> Option<Range> {
+fn span_id_to_range_with_source(source: &SourceFile, spans: &Spans, span_id: SpanId) -> Option<Range> {
     let span = spans.get(span_id);
     span_to_range_with_source(source, span)
 }
@@ -171,7 +171,7 @@ fn uri_from_span(k1: &TypedProgram, span_id: SpanId) -> Url {
     source_to_uri(&source.directory, &source.filename)
 }
 
-fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast Source> {
+fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast SourceFile> {
     let path = url.path();
     debug!("uri_to_source: {}", path);
     let source = ast.sources.iter().find(|s| {
@@ -182,7 +182,7 @@ fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast Sour
     source.map(|s| s.1)
 }
 
-fn uri_to_edited_source(backend: &Backend, url: &Url) -> Option<(Source, bool)> {
+fn uri_to_edited_source(backend: &Backend, url: &Url) -> Option<(SourceFile, bool)> {
     match backend.edited_sources.lock().unwrap().get(url) {
         None => backend
             .with_k1(|k1| uri_to_source(&k1.ast, url).map(|source| (source.clone(), false)))
@@ -817,7 +817,7 @@ fn find_entity_and_source<'k1>(
     uri: &Url,
     line: u32,
     char: u32,
-) -> Option<(&'k1 Source, LsEntity)> {
+) -> Option<(&'k1 SourceFile, LsEntity)> {
     let Some(source) = uri_to_source(&k1.ast, uri) else {
         error!("Could not get source for {}", uri.path());
         return None;

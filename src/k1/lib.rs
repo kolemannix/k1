@@ -18,6 +18,7 @@ pub mod typer;
 mod vecpool;
 pub mod vm;
 mod vpool;
+pub mod server;
 //pub mod codegen_llvm_old;
 //pub mod vmtw;
 

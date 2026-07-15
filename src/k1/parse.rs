@@ -1525,27 +1525,27 @@ impl ParsedPatternPool {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct Sources {
-    sources: Vec<Source>,
+pub struct SourceFiles {
+    sources: Vec<SourceFile>,
 }
 
-impl Sources {
-    pub fn add_source(&mut self, mut source: Source) -> FileId {
+impl SourceFiles {
+    pub fn add_file(&mut self, mut source: SourceFile) -> FileId {
         let id = self.next_file_id();
         source.file_id = id;
         self.sources.push(source);
         id
     }
 
-    pub fn get_main(&self) -> &Source {
+    pub fn get_main(&self) -> &SourceFile {
         &self.sources[0]
     }
 
-    pub fn get(&self, file_id: FileId) -> &Source {
+    pub fn get(&self, file_id: FileId) -> &SourceFile {
         &self.sources[file_id as usize]
     }
 
-    pub fn get_mut(&mut self, file_id: FileId) -> &mut Source {
+    pub fn get_mut(&mut self, file_id: FileId) -> &mut SourceFile {
         &mut self.sources[file_id as usize]
     }
 
@@ -1562,11 +1562,11 @@ impl Sources {
         self.sources[span.file_id as usize].get_span_content(span)
     }
 
-    pub fn source_by_span(&self, span: Span) -> &Source {
+    pub fn source_by_span(&self, span: Span) -> &SourceFile {
         self.get(span.file_id)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (FileId, &Source)> {
+    pub fn iter(&self) -> impl Iterator<Item = (FileId, &SourceFile)> {
         self.sources.iter().map(|source| (source.file_id, source))
     }
 
@@ -1608,7 +1608,7 @@ pub struct ParsedProgram {
     pub namespaces: VPool<ParsedNamespace, ParsedNamespaceId>,
     pub abilities: VPool<ParsedAbility, ParsedAbilityId>,
     pub ability_impls: Vec<ParsedAbilityImplementation>,
-    pub sources: Sources,
+    pub sources: SourceFiles,
     pub idents: IdentPool,
     pub exprs: ParsedExpressionPool,
     pub type_exprs: ParsedTypeExpressionPool,
@@ -1645,7 +1645,7 @@ impl ParsedProgram {
             namespaces: VPool::make("parsed_namespaces"),
             abilities: VPool::make("parsed_abilities"),
             ability_impls: Vec::new(),
-            sources: Sources::default(),
+            sources: SourceFiles::default(),
             idents,
             exprs: ParsedExpressionPool::make(),
             type_exprs: ParsedTypeExpressionPool::new(),
@@ -1854,7 +1854,7 @@ fn error_expected(expected: impl AsRef<str>, token: Token) -> ParseError {
     ParseError::Parse { message: format!("Expected {}", expected.as_ref()), token, cause: None }
 }
 
-pub fn get_span_source_line(spans: &Spans, sources: &Sources, span_id: SpanId) -> Line {
+pub fn get_span_source_line(spans: &Spans, sources: &SourceFiles, span_id: SpanId) -> Line {
     let span = spans.get(span_id);
     let source = sources.source_by_span(span);
     let Some(line) = source.get_line_for_span_start(span) else {
@@ -1914,7 +1914,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
 pub fn write_source_location(
     w: &mut impl std::io::Write,
     spans: &Spans,
-    sources: &Sources,
+    sources: &SourceFiles,
     span_id: SpanId,
     level: MessageLevel,
     context_lines: usize,
@@ -2006,7 +2006,7 @@ impl Line {
 }
 
 #[derive(Debug, Clone)]
-pub struct Source {
+pub struct SourceFile {
     pub file_id: FileId,
     pub directory: String,
     pub filename: String,
@@ -2016,11 +2016,16 @@ pub struct Source {
     pub trivia: TokenTriviaTable,
 }
 
-impl Source {
-    pub fn make(file_id: FileId, directory: String, filename: String, content: String) -> Source {
+impl SourceFile {
+    pub fn make(
+        file_id: FileId,
+        directory: String,
+        filename: String,
+        content: String,
+    ) -> SourceFile {
         let newline_positions =
             memchr::memchr_iter(b'\n', content.as_bytes()).map(|pos| pos as u32).collect();
-        Source {
+        SourceFile {
             file_id,
             directory,
             filename,
@@ -2320,7 +2325,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         })))
     }
 
-    fn source(&self) -> &Source {
+    fn source(&self) -> &SourceFile {
         self.ast.sources.get(self.file_id)
     }
 
@@ -2509,14 +2514,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn chars_at_span<'source>(
         spans: &Spans,
-        source: &'source Source,
+        source: &'source SourceFile,
         span_id: SpanId,
     ) -> &'source str {
         let span = spans.get(span_id);
         source.get_span_content(span)
     }
 
-    fn tok_chars<'source>(spans: &Spans, source: &'source Source, tok: Token) -> &'source str {
+    fn tok_chars<'source>(spans: &Spans, source: &'source SourceFile, tok: Token) -> &'source str {
         let s = Parser::chars_at_span(spans, source, tok.span);
         s
     }
@@ -4355,17 +4360,26 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return Ok(None);
         };
 
+        let stmts = self.parse_block_statements(K::CloseBrace)?;
+
+        let span = self.extend_to_here(block_start.span);
+        Ok(Some(ParsedBlock { stmts: self.list_to_handle(stmts), kind, span }))
+    }
+
+    pub fn parse_block_statements(
+        &mut self,
+        terminator: TokenKind,
+    ) -> ParseResult<List<ParsedStmtId, ParsedProgram>> {
         // we'd rather burn some memory than spend time re-allocating block statements
         let mut stmts = self.ast.mem.new_list(32);
         self.eat_delimited_arena(
             "Block statements",
             &mut stmts,
             K::Semicolon,
-            K::CloseBrace,
+            terminator,
             Parser::expect_statement,
         )?;
-        let span = self.extend_to_here(block_start.span);
-        Ok(Some(ParsedBlock { stmts: self.list_to_handle(stmts), kind, span }))
+        Ok(stmts)
     }
 
     fn parse_type_constraints(
@@ -4400,7 +4414,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(ParsedTypeParam { name, span, constraints })
     }
 
-    fn parse_function(
+    pub fn parse_function(
         &mut self,
         preexisting_condition: Option<ParsedExprId>,
     ) -> ParseResult<Option<ParsedFunctionId>> {
@@ -5378,10 +5392,10 @@ impl ParsedProgram {
 
 pub fn lex_file_into_program(
     module: &mut ParsedProgram,
-    source: Source,
+    source: SourceFile,
     tokens: &mut Vec<Token>,
 ) -> ParseResult<FileId> {
-    let file_id = module.sources.add_source(source);
+    let file_id = module.sources.add_file(source);
     let text = &module.sources.get(file_id).content;
     let mut lexer = Lexer::make(text, &mut module.spans, file_id);
     lexer.run(tokens).map_err(ParseError::Lex)?;
@@ -5396,7 +5410,7 @@ pub fn lex_file_into_program(
 pub fn parse_standalone(program_name: String, content: String) -> ParsedProgram {
     let mut ast = ParsedProgram::make(program_name.clone());
 
-    let source = Source::make(0, ".".to_string(), program_name.clone(), content);
+    let source = SourceFile::make(0, ".".to_string(), program_name.clone(), content);
     let mut token_vec = vec![];
     let file_id = match lex_file_into_program(&mut ast, source, &mut token_vec) {
         Err(e) => {

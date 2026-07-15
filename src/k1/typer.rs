@@ -13,7 +13,7 @@ pub(crate) mod visit;
 
 use crate::ir::{BackendBuiltin, IrUnitId};
 use crate::typer::dump::K1DisplayArgs;
-use crate::{clock, compiler, debug, ir, k1_format, k1_format_user, kbail, kerr, vm};
+use crate::{bc, clock, compiler, debug, ir, k1_format, k1_format_user, kbail, kerr, vm};
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
@@ -58,8 +58,8 @@ use crate::parse::{
     ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram,
     ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr,
     ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId,
-    ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
-    StructValueFieldKind,
+    ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, SourceFiles, StringId,
+    StructValueField, StructValueFieldKind,
 };
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -242,9 +242,14 @@ pub enum ParseAdHocKind {
     Definitions,
 }
 
-pub enum ParseAdHocResult {
+pub enum ParseMetaprogramResult {
     Expr(ParsedExprId),
     Definitions(AstSlice<ParsedId>),
+}
+
+pub enum ParseReplSourceResult {
+    Stmts(List<ParsedStmtId, ParsedProgram>),
+    Defn(ParsedId),
 }
 
 bitflags! {
@@ -994,7 +999,7 @@ pub struct TypedFunction {
 }
 
 impl TypedFunction {
-    fn signature(&self) -> FunctionSignature {
+    pub fn signature(&self) -> FunctionSignature {
         FunctionSignature {
             name: Some(self.name),
             function_type: self.type_id,
@@ -1003,7 +1008,7 @@ impl TypedFunction {
         }
     }
 
-    fn is_generic(&self) -> bool {
+    pub fn is_generic(&self) -> bool {
         matches!(self.kind, TypedFunctionKind::AbilityDefn(_)) || self.signature().has_type_params()
     }
 }
@@ -2220,7 +2225,7 @@ fn make_fail_ast_id<A, T: Into<String>>(
 pub fn write_error(
     w: &mut impl std::io::Write,
     spans: &Spans,
-    sources: &Sources,
+    sources: &SourceFiles,
     message: impl AsRef<str>,
     level: MessageLevel,
     span: SpanId,
@@ -2769,6 +2774,7 @@ pub struct TypedProgram {
     pub timing: Timing,
 
     pub global_id_k1_arena: Option<TypedGlobalId>,
+    pub megarepl: Option<MegareplState>,
 }
 
 impl Drop for TypedProgram {
@@ -2970,6 +2976,7 @@ impl TypedProgram {
                 iropt_insts_created: 0,
             },
             global_id_k1_arena: None,
+            megarepl: None,
         }
     }
 
@@ -3015,7 +3022,7 @@ impl TypedProgram {
                 .unwrap_or_else(|_| panic!("Failed to open file to parse: {:?}", path));
             let name = path.file_name().unwrap();
             let file_id = self.ast.sources.next_file_id();
-            let source = parse::Source::make(
+            let source = parse::SourceFile::make(
                 file_id,
                 directory_string.clone(),
                 name.to_str().unwrap().to_string(),
@@ -4529,8 +4536,12 @@ impl TypedProgram {
             .collect();
         let inner = gen_type.inner;
 
-        let specialized_type =
-            self.substitute_in_type_ext(inner, &substitution_pairs, Some(generic_type), Some(defn_info));
+        let specialized_type = self.substitute_in_type_ext(
+            inner,
+            &substitution_pairs,
+            Some(generic_type),
+            Some(defn_info),
+        );
         if log::log_enabled!(log::Level::Debug) {
             let inst_info = self.types.get_instance_info(specialized_type).unwrap().type_args;
             eprintln!(
@@ -5998,9 +6009,7 @@ impl TypedProgram {
                         e.message
                     );
                 };
-            } else if let Some(global_id) =
-                self.ir.globals_pending_eval.keys().next().copied()
-            {
+            } else if let Some(global_id) = self.ir.globals_pending_eval.keys().next().copied() {
                 self.ir.globals_pending_eval.remove(&global_id);
                 let ast_id = self.globals.get(global_id).ast_id;
                 self.eval_global_body(ast_id)?;
@@ -6011,7 +6020,7 @@ impl TypedProgram {
         Ok(())
     }
 
-    fn execute_static_expr_with_vm(
+    fn execute_parsed_expr_with_vm(
         &mut self,
         vm: &mut vm::Vm,
         parsed_expr: ParsedExprId,
@@ -6067,16 +6076,16 @@ impl TypedProgram {
         }
 
         let execution_result = match self.config.static_exec {
-            crate::compiler::StaticExecMode::Ir => vm::execute_compiled_expr(self, vm, expr)
+            compiler::StaticExecMode::Ir => vm::execute_compiled_expr(self, vm, expr)
                 .map_err(|mut e| {
                     let stack_trace = vm::make_stack_trace(self, &vm.stack);
                     e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
                     e
                 }),
-            crate::compiler::StaticExecMode::Bc => {
-                crate::bc::exec::execute_compiled_expr(self, vm, expr, true)
+            compiler::StaticExecMode::Bc => {
+                bc::exec::execute_compiled_expr(self, vm, expr, true)
             }
-            crate::compiler::StaticExecMode::Both => {
+            compiler::StaticExecMode::Both => {
                 let ir_result = vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
                     let stack_trace = vm::make_stack_trace(self, &vm.stack);
                     e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
@@ -6157,7 +6166,7 @@ impl TypedProgram {
     ) -> K1Result<StaticValueId> {
         let span = self.ast.exprs.get(parsed_expr).get_span();
         self.do_with_vm(span, |k1, vm| {
-            k1.execute_static_expr_with_vm(vm, parsed_expr, ctx, input_parameters)
+            k1.execute_parsed_expr_with_vm(vm, parsed_expr, ctx, input_parameters)
         })
     }
 
@@ -8868,16 +8877,17 @@ impl TypedProgram {
                     if !is_definition {
                         content.push_str("\n}");
                     }
-                    debug!("Emitted raw content:\n---\n{content}\n---");
+                    eprintln!("Emitted raw content:\n---\n{content}\n---");
                     let generated_path = self.config.out_dir.join(&generated_filename);
                     let source_for_emission =
-                        self.ast.sources.add_source(crate::parse::Source::make(
+                        self.ast.sources.add_file(crate::parse::SourceFile::make(
                             0,
                             self.config.out_dir.to_str().unwrap().to_owned(),
                             generated_filename,
                             content.clone(),
                         ));
                     // TODO: Write #meta source files asynchronously
+                    // FIXME: General metaprogramming emission overhead
                     self.report_hint_silent(span, &content);
                     if let Err(e) = std::fs::write(&generated_path, &content) {
                         eprintln!(
@@ -8892,12 +8902,12 @@ impl TypedProgram {
                         ParseAdHocKind::Expr
                     };
                     let parsed_metaprogram_result =
-                        self.parse_ad_hoc(source_for_emission, &content, parse_kind);
+                        self.parse_metaprogram_source(source_for_emission, parse_kind);
                     content.clear();
                     self.buffers.emitted_code = content;
                     let parsed_metaprogram = parsed_metaprogram_result?;
                     match parsed_metaprogram {
-                        ParseAdHocResult::Expr(parsed_expr_id) => {
+                        ParseMetaprogramResult::Expr(parsed_expr_id) => {
                             let typed_metaprogram = self.eval_expr(parsed_expr_id, ctx)?;
                             debug!(
                                 "Emitted compiled expr:\n{}",
@@ -8905,7 +8915,7 @@ impl TypedProgram {
                             );
                             Ok(StaticExecutionResult::TypedExpr(typed_metaprogram))
                         }
-                        ParseAdHocResult::Definitions(defns_slice) => {
+                        ParseMetaprogramResult::Definitions(defns_slice) => {
                             Ok(StaticExecutionResult::Definitions(defns_slice))
                         }
                     }
@@ -8914,25 +8924,27 @@ impl TypedProgram {
         }
     }
 
-    fn parse_ad_hoc(
+    fn with_parser<R>(
         &mut self,
         file_id: FileId,
-        code_str: &str,
-        kind: ParseAdHocKind,
-    ) -> K1Result<ParseAdHocResult> {
+        f: impl FnOnce(&mut parse::Parser) -> K1Result<R>,
+    ) -> K1Result<R> {
+        let mut tokens = std::mem::take(&mut self.buffers.lexer_tokens);
+        tokens.clear();
+
         let module = self.modules.get(self.module_in_progress.unwrap());
         let parsed_namespace_id =
             self.namespaces.get(module.namespace_id).parsed_id.as_namespace_id().unwrap();
+        let code_str = &self.ast.sources.get(file_id).content;
         let mut lexer = crate::lex::Lexer::make(code_str, &mut self.ast.spans, file_id);
-        let mut tokens = std::mem::take(&mut self.buffers.lexer_tokens);
         if let Err(e) = lexer.run(&mut tokens) {
             let e = ParseError::Lex(e);
             parse::print_error(&self.ast, &e);
             tokens.clear();
+            self.buffers.lexer_tokens = tokens;
             return failf!(e.span(), "Failed to lex code emitted from here");
         };
 
-        let error_count_start = self.ast.errors.len();
         let mut p = crate::parse::Parser::make_for_file(
             module.id,
             module.name,
@@ -8942,38 +8954,206 @@ impl TypedProgram {
             file_id,
         );
 
-        let msg_base = "Failed to parse the code you returned: ";
-        let result = match kind {
-            ParseAdHocKind::Expr => match p.expect_expression() {
+        let r = f(&mut p);
+        tokens.clear();
+        self.buffers.lexer_tokens = tokens;
+        r
+    }
+
+    fn parse_metaprogram_source(
+        &mut self,
+        file_id: FileId,
+        kind: ParseAdHocKind,
+    ) -> K1Result<ParseMetaprogramResult> {
+        self.with_parser(file_id, move |p| {
+            eprintln!("parse_metaprogram_source...");
+            let msg_base = "Failed to parse the code you returned: ";
+            let error_count_start = p.ast.errors.len();
+            match kind {
+                ParseAdHocKind::Expr => match p.expect_expression() {
+                    Err(e) => {
+                        failf!(e.span(), "{msg_base}{}", e)
+                    }
+                    Ok(parsed_expr) => {
+                        eprintln!("ok");
+                        if p.ast.errors.len() > error_count_start {
+                            let e = p.ast.errors.last().unwrap();
+                            failf!(e.span(), "{msg_base}{}", e.clone())
+                        } else {
+                            Ok(ParseMetaprogramResult::Expr(parsed_expr))
+                        }
+                    }
+                },
+                ParseAdHocKind::Definitions => match p.parse_definitions(TokenKind::Eof) {
+                    Err(e) => failf!(e.span(), "{msg_base}{}", e),
+                    Ok(defns) => {
+                        if p.ast.errors.len() > error_count_start {
+                            let e = p.ast.errors.last().unwrap();
+                            failf!(e.span(), "{msg_base}{}", e.clone())
+                        } else {
+                            Ok(ParseMetaprogramResult::Definitions(p.ast.mem.list_to_handle(defns)))
+                        }
+                    }
+                },
+            }
+        })
+    }
+
+    fn parse_repl_source(&mut self, file_id: FileId) -> K1Result<Option<StaticValueId>> {
+        let repl_source_result = self.with_parser(file_id, move |p| {
+            let msg_base = "Failed to parse the code you returned: ";
+            let error_count_start = p.ast.errors.len();
+            let p_result = p.parse_function(None);
+            let new_errors = p.ast.errors.len() - error_count_start;
+            match p_result {
                 Err(e) => {
                     failf!(e.span(), "{msg_base}{}", e)
                 }
-                Ok(parsed_expr) => {
-                    if p.ast.errors.len() > error_count_start {
-                        let e = p.ast.errors.last().unwrap();
-                        failf!(e.span(), "{msg_base}{}", e.clone())
-                    } else {
-                        Ok(ParseAdHocResult::Expr(parsed_expr))
+                Ok(_) if new_errors > 0 => {
+                    let e = p.ast.errors.last().unwrap();
+                    failf!(e.span(), "{msg_base}{}", e)
+                }
+                Ok(Some(defn)) => Ok(ParseReplSourceResult::Defn(ParsedId::Function(defn))),
+                Ok(None) => match p.parse_block_statements(TokenKind::Eof) {
+                    Err(e) => failf!(e.span(), "{msg_base}{}", e),
+                    Ok(stmts) => Ok(ParseReplSourceResult::Stmts(stmts)),
+                },
+            }
+        })?;
+
+        match repl_source_result {
+            ParseReplSourceResult::Stmts(stmts) => {
+                if stmts.is_empty() {
+                    return Ok(None);
+                }
+                let span = self.ast.get_stmt_span(stmts[0]);
+                let repl_ns_scope = self.megarepl.as_ref().unwrap().ns_scope;
+                // We're putting a Lexical Block in a Namespace directly.
+                // This is impossible in K1, but the compiler should not care.
+                let mut cell_block = self.new_block_builder(
+                    repl_ns_scope,
+                    ScopeType::LexicalBlock,
+                    SpanId::NONE,
+                    stmts.len() as u32,
+                );
+                let ctx = EvalExprContext::make(cell_block.scope_id);
+                let mut last_expr_type = self.types.builtins.empty;
+                for (index, stmt) in stmts.as_slice().iter().enumerate() {
+                    let is_last = index + 1 == stmts.len();
+                    match self.ast.stmts.get(*stmt).clone() {
+                        ParsedStmt::Let(parsed_let) => {
+                            // Intercept and create a global for repl lets
+                            let Some(typed_stmt_id) = self.eval_stmt(*stmt, ctx, false, index)?
+                            else {
+                                unreachable!()
+                            };
+                            let TypedStmt::Let(typed_let) = self.stmts.get(typed_stmt_id) else {
+                                unreachable!()
+                            };
+                            let type_id = typed_let.variable_type;
+                            let global_id = self.globals.next_id();
+                            let name = parsed_let.name;
+                            let variable_id = self.variables.add(Variable {
+                                name,
+                                type_id,
+                                owner_scope: repl_ns_scope,
+                                flags: VariableFlags::empty(),
+                                usage_count: 0,
+                                usages: vec![],
+                                kind: VariableKind::Global(global_id),
+                                defn_span: parsed_let.span,
+                            });
+                            let global_id = self.globals.add_expected_id(
+                                TypedGlobal {
+                                    variable_id,
+                                    // We're relocating the initializer to the block; so this
+                                    // should appear as an uninitialized global.
+                                    // The whole situation feels like a hack.
+                                    // But if I can build this without touching any other code
+                                    // maybe that's worth celebrating as the opposite of a hack;
+                                    // the compiler is supporting higher-level systems like a platform
+                                    parsed_expr: None,
+                                    initial_value: GlobalInitialValue::Uninit,
+                                    type_id,
+                                    span: parsed_let.span,
+                                    is_constant: false,
+                                    is_tls: false,
+                                    is_exported: false,
+                                    is_external: false,
+                                    ast_id: ParsedGlobalId::PENDING,
+                                    parent_scope: repl_ns_scope,
+                                },
+                                global_id,
+                            );
+                            self.scopes.add_variable(repl_ns_scope, name, variable_id);
+
+                            // Global is created. Now at this position in the block, we do
+                            // a set
+                            if let Some(initializer) = typed_let.initializer {
+                                let variable_expr =
+                                    self.synth_variable_expr(variable_id, SpanId::NONE);
+                                let assign_stmt =
+                                    self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
+                                        destination: variable_expr,
+                                        value: initializer,
+                                        span: self.exprs.get_span(initializer),
+                                        kind: AssignmentKind::Set,
+                                    }));
+                                self.push_block_stmt_id(&mut cell_block, assign_stmt);
+                            }
+
+                            if is_last {
+                                let empty = self.synth_empty_struct(span);
+                                let return_expr = self.exprs.add_return(empty, None, span);
+                                self.push_block_expr_id(&mut cell_block, return_expr);
+                            }
+                        }
+                        ParsedStmt::Use(_)
+                        | ParsedStmt::Require(_)
+                        | ParsedStmt::Assign(_)
+                        | ParsedStmt::Store(_)
+                        | ParsedStmt::Defer(_)
+                        | ParsedStmt::LoneExpression(_) => {
+                            if let Some(stmt_id) = self.eval_stmt(*stmt, ctx, false, index)? {
+                                last_expr_type = self.get_stmt_type(stmt_id);
+                                if let TypedStmt::Expr(e, _) = self.stmts.get(stmt_id)
+                                    && is_last
+                                {
+                                    let return_expr = self.exprs.add_return(*e, None, span);
+                                    self.push_block_expr_id(&mut cell_block, return_expr);
+                                } else {
+                                    self.push_block_stmt_id(&mut cell_block, stmt_id);
+
+                                    let empty = self.synth_empty_struct(span);
+                                    let return_expr = self.exprs.add_return(empty, None, span);
+                                    self.push_block_expr_id(&mut cell_block, return_expr);
+                                }
+                            }
+                        }
                     }
                 }
-            },
-            ParseAdHocKind::Definitions => match p.parse_definitions(TokenKind::Eof) {
-                Err(e) => failf!(e.span(), "{msg_base}{}", e),
-                Ok(defns) => {
-                    if p.ast.errors.len() > error_count_start {
-                        let e = p.ast.errors.last().unwrap();
-                        failf!(e.span(), "{msg_base}{}", e.clone())
-                    } else {
-                        Ok(ParseAdHocResult::Definitions(self.ast.mem.list_to_handle(defns)))
-                    }
-                }
-            },
-        };
+                let cell_expr = self.exprs.add_block(&mut self.mem, cell_block, last_expr_type);
 
-        tokens.clear();
-        self.buffers.lexer_tokens = tokens;
-
-        result
+                ir::compile_top_level_expr(self, cell_expr, &[], false)?;
+                self.compile_all_pending_ir(span)?;
+                ir::optimize_unit(self, IrUnitId::Expr(cell_expr));
+                eprintln!(
+                    "executing repl unit.\n{}",
+                    ir::unit_to_string(self, IrUnitId::Expr(cell_expr), true)
+                );
+                let exec_result = self.do_with_vm(span, |k1, vm| {
+                    let r = vm::execute_compiled_expr(k1, vm, cell_expr);
+                    vm.reset(k1.global_id_k1_arena);
+                    bc::exec::execute_compiled_expr(k1, vm, cell_expr, true);
+                    r
+                })?;
+                Ok(Some(exec_result))
+            }
+            ParseReplSourceResult::Defn(parsed_id) => {
+                eprintln!("skipping compile of definitions");
+                Ok(None)
+            }
+        }
     }
 
     fn eval_struct_anonymous(
@@ -14678,9 +14858,7 @@ impl TypedProgram {
         Ok(id)
     }
 
-    // Handle 'returned variable' case, which lets you return
-    // a pointer to the return type, designed to empower RVO
-    // The bool means the return is indirected from its actual type
+    // Handle 'returned variable' case
     fn check_returned_value_expr(
         &mut self,
         expr: TypedExprId,
@@ -18353,8 +18531,7 @@ impl TypedProgram {
                     TypedProgram::make_int_kind(int_kind_type_id, *integer_type);
 
                 let payload_value_id = self.static_values.add(int_kind_enum_value);
-                let enum_value =
-                    make_variant(self, self.ast.idents.b.int, Some(payload_value_id));
+                let enum_value = make_variant(self, self.ast.idents.b.int, Some(payload_value_id));
                 enum_value
             }
             Type::Float(float_type) => {
@@ -18815,7 +18992,7 @@ impl TypedProgram {
         if handle.is_null() { None } else { Some(handle) }
     }
 
-    pub fn get_span_location(&self, span: SpanId) -> (&parse::Source, parse::Line) {
+    pub fn get_span_location(&self, span: SpanId) -> (&parse::SourceFile, parse::Line) {
         let the_span = self.ast.spans.get(span);
         let source = self.ast.sources.get(the_span.file_id);
         let line = source.get_line_for_span_start(the_span).unwrap();
@@ -19087,6 +19264,69 @@ impl TypedProgram {
         writeln!(out, "\t{:.2}ms vm, avg {:.2}us/instr", vm_ms, vm_us_per_instr)?;
         Ok(())
     }
+
+    /////////// MEGAREPL
+
+    pub fn megarepl_submit(&mut self, code: String) -> String {
+        self.ensure_megarepl_session();
+        let megarepl = self.megarepl.as_ref().unwrap();
+        let cell_number = megarepl.cell_count;
+        let filename = format!("{}_repl_cell_{}.k1", self.program_name(), cell_number);
+        let source_id = self.ast.sources.add_file(crate::parse::SourceFile::make(
+            0,
+            self.config.out_dir.to_str().unwrap().to_owned(),
+            filename,
+            code,
+        ));
+        match self.parse_repl_source(source_id) {
+            Ok(Some(v)) => self.static_value_to_string(v),
+            Ok(None) => "Ok, nothing".to_string(),
+            Err(e) => e.message.clone(),
+        }
+    }
+
+    fn ensure_megarepl_session(&mut self) {
+        match self.megarepl {
+            Some(_) => {}
+            None => {
+                let name = self.ast.idents.intern("megarepl");
+                let parsed_namespace_id =
+                    self.ast.namespaces.add(parse::ParsedNamespace::empty(name));
+
+                let module_id = self.module_in_progress.unwrap();
+                let module = self.modules.get(module_id);
+                let ns_scope_id = self.scopes.add_child_scope(
+                    module.namespace_scope_id,
+                    ScopeType::Namespace,
+                    ScopeOwnerId::None,
+                );
+                let ns_id = self.namespaces.add(Namespace {
+                    name,
+                    scope_id: ns_scope_id,
+                    namespace_type: NamespaceKind::User,
+                    companion_type_id: None,
+                    parent_id: Some(module.namespace_id),
+                    owner_module: Some(module_id),
+                    parsed_id: ParsedId::Namespace(parsed_namespace_id),
+                });
+                self.megarepl = Some(MegareplState {
+                    vm: vm::Vm::make(),
+                    parsed_ns: parsed_namespace_id,
+                    ns: ns_id,
+                    ns_scope: ns_scope_id,
+                    cell_count: 0,
+                });
+            }
+        }
+    }
+}
+
+pub struct MegareplState {
+    pub vm: vm::Vm,
+    pub parsed_ns: ParsedNamespaceId,
+    pub ns: NamespaceId,
+    pub ns_scope: ScopeId,
+    pub cell_count: u32,
 }
 
 fn to_k1_size_u64(value: u64) -> i64 {
