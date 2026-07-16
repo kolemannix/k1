@@ -781,6 +781,9 @@ pub fn cfg_compute(ir: &mut ProgramIr, blocks: IrList<Block>) {
         }
         let mut block_node = ir.mem.get_raw_ref(block_id);
         let instrs = block_node.data.instrs;
+        if instrs.is_empty() {
+            continue;
+        }
         let succs = &mut block_node.data.succs;
         let terminator_inst_id = ir.mem.get(instrs.last).data;
         match ir.instrs.get(terminator_inst_id) {

@@ -1,0 +1,163 @@
+:root {
+  color-scheme: light dark;
+
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas,
+    monospace;
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --bg:          light-dark(#f7f7f5, #14161a);
+  --surface:     light-dark(#ffffff, #1c1f26);
+  --surface-2:   light-dark(#f0f0ee, #232730);
+  --border:      light-dark(#d9d9d4, #2e3340);
+  --text:        light-dark(#1d2024, #d7dae0);
+  --text-muted:  light-dark(#6b7076, #8a90a0);
+  --accent:      light-dark(#0d66d0, #6cb2ff);
+  --accent-soft: light-dark(#e3efff, #1a2c44);
+  --danger:      light-dark(#c22f2f, #ff7b72);
+
+  --radius: 8px;
+  --space: 1rem;
+  --shadow: 0 1px 3px rgb(0 0 0 / 0.2);
+}
+
+/* 2. Reset ---------------------------------------------------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+input,
+button,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+/* 3. Base ------------------------------------------------------ */
+body {
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+pre,
+code {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+}
+
+h1 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* 4. Components ------------------------------------------------ */
+.site-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space);
+  padding: 0.75rem calc(var(--space) * 1.25);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+/* live dump of datastar signals; useful while developing */
+.signals-debug {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repl {
+  max-width: 72rem;
+  margin-inline: auto;
+  padding: calc(var(--space) * 1.5) var(--space);
+  display: grid;
+  gap: var(--space);
+}
+
+.code-input {
+  width: 100%;
+  field-sizing: content;
+  min-height: 80px;
+  resize: vertical;
+  padding: 0.65rem 0.9rem;
+  font-size: 1rem;
+  font-family: var(--font-mono);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+
+  &::placeholder {
+    color: var(--text-muted);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+  }
+}
+
+.results {
+  display: grid;
+  gap: var(--space);
+}
+
+.result-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+
+  /* hide the whole card until it has something to show */
+  &:has(.result-output:empty) {
+    display: none;
+  }
+}
+
+.result-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  padding: 0.4rem 0.9rem;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.result-output {
+  padding: 0.75rem 0.9rem;
+  overflow-x: auto;
+  line-height: 1.45;
+  tab-size: 4;
+}
+
+/* 5. Utilities -------------------------------------------------- */
+.muted {
+  color: var(--text-muted);
+}
+
+.error {
+  color: var(--danger);
+}

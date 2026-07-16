@@ -326,7 +326,7 @@ impl<Tag> AsRef<str> for MStr<Tag> {
 impl<Tag> std::fmt::Display for MStr<Tag> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = self.as_str();
-        write!(f, "{}", s)
+        f.pad(s)
     }
 }
 

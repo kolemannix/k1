@@ -2,7 +2,6 @@ use std::net::TcpListener;
 // Copyright (c) 2026 knix
 // All rights reserved.
 use std::process::ExitCode;
-use std::thread;
 
 use clap::Parser;
 use k1::compiler;
