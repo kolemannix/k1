@@ -225,18 +225,12 @@ impl Vm {
         // Note that we don't de-allocate any resources
         // we just zero the memory and reset the stack pointer
 
-        let arena_to_preserve = if let Some(arena_global_id) = arena_global_id {
-            if let Some(arena_value) = self.globals.get(&arena_global_id) {
-                let arena_ptr: *mut k1_types::Arena = arena_value.as_ptr().cast();
-                debug!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
-                let arena: k1_types::Arena = unsafe { arena_ptr.read() };
-                Some(arena)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        // The arena-tmp global is an 8-byte cell holding a *arena; read the
+        // pointer out before we wipe the static stack the cell lives in
+        let arena_ptr_to_preserve: Option<*mut k1_types::Arena> = arena_global_id
+            .and_then(|gid| self.globals.get(&gid))
+            .map(|cell| unsafe { cell.as_ptr().cast::<*mut k1_types::Arena>().read() })
+            .filter(|p| !p.is_null());
 
         self.stack.reset();
         self.static_stack.reset();
@@ -245,11 +239,13 @@ impl Vm {
         self.overall_return_addr = core::ptr::null_mut();
         self.bc_fault = None;
 
-        if let Some(mut arena) = arena_to_preserve {
-            // Voila!
-            arena.curAddr = arena.basePtr.addr() as u64;
-            let arena_ptr = self.static_stack.push_t(arena);
-            self.globals.insert(arena_global_id.unwrap(), Value::ptr(arena_ptr));
+        if let Some(arena_ptr) = arena_ptr_to_preserve {
+            debug!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
+            // Empty the live arena (same as k1 arena/reset(clear=false)) and
+            // re-create the pointer cell so init-tmp-arena doesn't re-mmap
+            unsafe { (*arena_ptr).curAddr = (*arena_ptr).basePtr.addr() as u64 };
+            let cell = self.static_stack.push_t(arena_ptr);
+            self.globals.insert(arena_global_id.unwrap(), Value::ptr(cell));
         }
 
         self.eval_span = SpanId::NONE;
@@ -1734,35 +1730,39 @@ pub(crate) fn resolve_global(
             );
         }
         GlobalInitialValue::Uninit => {
-            return failf!(
-                vm.eval_span,
-                "Cannot read external global '{}' at compile time; its storage only exists at link time",
-                k1.ident_str(k1.variables.get(global.variable_id).name)
-            );
+            if global.is_external {
+                return failf!(
+                    vm.eval_span,
+                    "Cannot read external global '{}' at compile time; its storage only exists at link time",
+                    k1.ident_str(k1.variables.get(global.variable_id).name)
+                );
+            } else {
+                None
+            }
         }
-        GlobalInitialValue::Value(value_id) => value_id,
+        GlobalInitialValue::Value(value_id) => Some(value_id),
     };
-    debug!(
-        "shared global is: {}. the `t` of the instr is: {}",
-        k1.static_value_to_string(initial_value_id),
-        k1.types.pt_to_string(t)
-    );
-    let shared_vm_value = static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
+
     let layout = k1.types.get_pt_layout(t);
+    let dst = if is_constant { k1.vm_shared_static_stack.push_layout_uninit(layout) } else { vm.static_stack.push_layout_uninit(layout) };
+    let addr = Value::ptr(dst);
+
     if is_constant {
-        let dst = k1.vm_static_stack.push_layout_uninit(layout);
-        store_value(&k1.types, t, dst, shared_vm_value);
-        let addr = Value::ptr(dst);
         k1.vm_global_constant_lookups.insert(global_id, addr);
-        Ok(addr)
     } else {
-        // We need a local copy of this
-        let dst = vm.static_stack.push_layout_uninit(layout);
-        store_value(&k1.types, t, dst, shared_vm_value);
-        let addr = Value::ptr(dst);
         vm.globals.insert(global_id, addr);
-        Ok(addr)
     }
+
+    if let Some(initial_value_id) = initial_value_id {
+        debug!(
+            "shared global is: {}. the `t` of the instr is: {}",
+            k1.static_value_to_string(initial_value_id),
+            k1.types.pt_to_string(t)
+        );
+        let shared_vm_value = static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
+        store_value(&k1.types, t, dst, shared_vm_value);
+    }
+    Ok(addr)
 }
 
 #[inline(always)]
@@ -1824,7 +1824,7 @@ pub fn static_value_to_vm_value(
         StaticValue::Zero(type_id) => static_zero_value(k1, *type_id, span),
         StaticValue::Struct(static_struct) => {
             let layout = k1.get_layout(static_struct.type_id).unwrap();
-            let struct_base = k1.vm_static_stack.push_layout_uninit(layout);
+            let struct_base = k1.vm_shared_static_stack.push_layout_uninit(layout);
 
             store_static_value(k1, struct_base, static_value_id);
 
@@ -1832,7 +1832,7 @@ pub fn static_value_to_vm_value(
         }
         StaticValue::Sum(sum) => {
             let layout = k1.get_layout(sum.sum_type_id).unwrap();
-            let sum_base = k1.vm_static_stack.push_layout_uninit(layout);
+            let sum_base = k1.vm_shared_static_stack.push_layout_uninit(layout);
 
             store_static_value(k1, sum_base, static_value_id);
 
@@ -1847,14 +1847,14 @@ pub fn static_value_to_vm_value(
             let layout = k1.get_layout(element_type).unwrap();
             let array_allocation_layout = layout.array_me(len);
 
-            let array_base_ptr = k1.vm_static_stack.push_layout_uninit(array_allocation_layout);
+            let array_base_ptr = k1.vm_shared_static_stack.push_layout_uninit(array_allocation_layout);
 
             store_static_array_elements(k1, array_base_ptr, element_type, container_elements);
 
             match kind {
                 StaticContainerKind::Span => {
                     let rust_span = k1_types::K1BufferLike { len, data: array_base_ptr };
-                    let span_struct_ptr = k1.vm_static_stack.push_t(rust_span);
+                    let span_struct_ptr = k1.vm_shared_static_stack.push_t(rust_span);
 
                     Value::ptr(span_struct_ptr)
                 }
@@ -1922,7 +1922,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
 
             let array_base_ptr = match kind {
                 StaticContainerKind::Span => {
-                    k1.vm_static_stack.push_layout_uninit(array_allocation_layout)
+                    k1.vm_shared_static_stack.push_layout_uninit(array_allocation_layout)
                 }
                 StaticContainerKind::Array => dst,
             };
@@ -1977,7 +1977,7 @@ pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
         debug_assert_eq!(size_of_val(&k1_string), string_layout.size as usize);
     }
 
-    let string_stack_addr = k1.vm_static_stack.mem.push(k1_string) as *mut k1_types::K1BufferLike;
+    let string_stack_addr = k1.vm_shared_static_stack.mem.push(k1_string) as *mut k1_types::K1BufferLike;
     Value::ptr(string_stack_addr.cast())
 }
 
@@ -2646,7 +2646,7 @@ fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Va
             PhysicalTypeEnum::Scalar(_) => Value(0),
             PhysicalTypeEnum::Agg(agg_id) => {
                 let layout = k1.types.agg_types.get(agg_id).layout;
-                let data: *mut u8 = k1.vm_static_stack.push_layout_uninit(layout);
+                let data: *mut u8 = k1.vm_shared_static_stack.push_layout_uninit(layout);
                 unsafe { std::ptr::write_bytes(data, 0, layout.size as usize) };
 
                 Value::ptr(data.cast_const())

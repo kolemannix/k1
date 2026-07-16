@@ -62,3 +62,6 @@ install-k1lib:
 repl +args:
   RUST_BACKTRACE=1 RUST_LOG=info \
     cargo run --features=llvm-sys/prefer-dynamic -- repl {{args}}
+
+server +args:
+  RUST_BACKTRACE=1 cargo run --bin k1 -- server {{args}}

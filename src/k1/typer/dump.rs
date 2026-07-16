@@ -494,6 +494,11 @@ impl TypedProgram {
         w: &mut impl Write,
         indentation: usize,
     ) -> std::fmt::Result {
+        if block.statements.is_empty() {
+            w.write_str("{}")?;
+            return Ok(());
+        }
+        w.write_str("{")?;
         for (idx, stmt) in self.mem.getn(block.statements).iter().enumerate() {
             self.display_stmt(*stmt, w, indentation + 1)?;
             if idx < block.statements.len() as usize - 1 {

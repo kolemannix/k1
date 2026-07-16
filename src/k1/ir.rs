@@ -1626,10 +1626,12 @@ fn compile_expr(
             Ok(loaded)
         }
         TypedExpr::Block(_) => {
-            let Some(last) = compile_block_stmts(b, dst, expr)? else {
-                return failf!(b.cur_span, "Block has no value");
+            let last = compile_block_stmts(b, dst, expr)?;
+            let block_value = match last {
+                None => Value::Empty,
+                Some(last) => last,
             };
-            Ok(last)
+            Ok(block_value)
         }
         TypedExpr::Call { call_id } => {
             let call = b.k1.calls.get(call_id).clone();
@@ -2477,7 +2479,7 @@ fn compile_ir_builtin(
             let element_index = compile_expr(b, None, arg1)?;
             let offset = b.push_inst(
                 Inst::ArrayOffset { element_t: elem_pt, base, element_index },
-                "refAtIndex offest",
+                "refAtIndex offset",
             );
             let stored = store_scalar_if_dst(b, dst, offset.as_value());
             Ok(stored)
@@ -3283,9 +3285,7 @@ pub fn display_block(
         let inst_str = inst_to_string(k1, *inst_id);
         write!(w, "{:60}", inst_str)?;
         let comment = ir.comments.get(*inst_id);
-        if !comment.is_empty() {
-            write!(w, "; {}", comment)?;
-        }
+        write!(w, "; {:30}", comment)?;
 
         if show_source {
             let span_id = *ir.sources.get(*inst_id);

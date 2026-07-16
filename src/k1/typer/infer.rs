@@ -591,7 +591,7 @@ impl TypedProgram {
                     .mem
                     .getn(generic_function_sig.fnlike_type_params)
                     .iter()
-                    .map(|ftp| ftp.value_param_index as u32)
+                    .map(|ftp| ftp.value_param_index)
                     .collect();
                 Some(InferArgStash {
                     ctx,
