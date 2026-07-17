@@ -1,13 +1,13 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-fn assert-equals[T: print and equals](context locn: k1/source-location)(a: T, b: T) {
+fn assert-equals[t: print and equals](context locn: k1/source-location)(a: t, b: t) {
   if a != b {
     crash("ASSERT FAILED: {a} != {b}")
   }
 }
 
-fn assert-not-equals[T: print and equals](context locn: k1/source-location)(a: T, b: T) {
+fn assert-not-equals[t: print and equals](context locn: k1/source-location)(a: t, b: t) {
   if a == b {
     crash("ASSERT FAILED: {a} == {b}")
   }
@@ -15,43 +15,51 @@ fn assert-not-equals[T: print and equals](context locn: k1/source-location)(a: T
 
 ns iter {
 
-  fn find[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some fn T -> bool): ?T {
+  fn find[t, Iter: iterator[item = t], I: iterable[item = t, i = Iter]](iterable: I, pred: some fn t -> bool): ?t {
     for iterable {
       if pred(it) return(:some(it))
     };
     :none
   }
 
-  fn position[T: equals, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, needle: T): ?size {
+  fn position[t: equals, Iter: iterator[item = t], I: iterable[item = t, i = Iter]](iterable: I, needle: t): ?size {
     for iterable {
       if it == needle return(:some(it-index))
     };
     :none
   }
 
-  fn contains[T: equals, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, needle: T): bool {
+  fn contains[t: equals, Iter: iterator[item = t], I: iterable[item = t, i = Iter]](iterable: I, needle: t): bool {
     position(iterable, needle).is-some()
   }
 
-  fn forall[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some fn T -> bool): bool {
+  fn forall[t, Iter: iterator[item = t], I: iterable[item = t, i = Iter]](iterable: I, pred: some fn t -> bool): bool {
     for iterable { if not pred(it) return(false) };
     true
   }
 
-  fn exists[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some fn T -> bool): bool {
+  fn exists[t, Iter: iterator[item = t], I: iterable[item = t, i = Iter]](iterable: I, pred: some fn t -> bool): bool {
     for iterable {
       if pred(it) return(true)
     };
     false
   }
 
+  fn sum[t: add and zero, Iter: iterator[item = t], I: iterable[item = t, i = Iter]](iterable: I): t {
+    let t = zero@(t)/zero();
+    for iterable {
+      t := t + it
+    };
+    t
+  }
+
 }
 
 fn inc(i: *mut size) { i <- i.* + 1 }
 // TODO: Would be cool to have this
-// fn incNew[T: Add and KnowledgeOfOne](i: *mut T): T { i <- i.* + KnowledgeOfOne@(T)/one() }
+// fn incNew[t: Add and KnowledgeOfOne](i: *mut t): t { i <- i.* + KnowledgeOfOne@(t)/one() }
 
-fn identity[T](value: T): T { value }
+fn identity[t](value: t): t { value }
 
 fn print[t: print](t) {
   // TODO: Instead of this hack, make write(Sink, span[byte]) the intrinsic.
@@ -223,7 +231,7 @@ impl scalar-cmp for char {
   fn ge(self, other: self): bool { (self.as[u8]).ge(other.as[u8]) }
 }
 
-impl[T: print] show for T {
+impl[t: print] show for t {
   fn show(self): string { 
     let sb = StringBuilder/new();
     self.print-to(&sb);
@@ -366,22 +374,24 @@ impl[S, F] try[t = S, e = F] for result[S, F] {
   }
 }
 
+// Branchless three-way compare: (a > b) - (a < b) is exactly ordering's -1/0/1 tag.
+// LLVM recognizes this shape and lowers it to its scmp/ucmp intrinsics.
+fn compare-scalars[t: scalar-cmp](a: t, b: t): ordering {
+  let gt = a.gt(b).as-u8().as[i8];
+  let lt = a.lt(b).as-u8().as[i8];
+  mem/bitcast[i8, ordering](gt - lt)
+}
+
 impl comparable for i64 {
-  fn compare(self: i64, other: i64): ordering {
-    if self == other :equal else if self > other :greater else :less
-  }
+  fn compare(self: i64, other: i64): ordering { compare-scalars(self, other) }
 }
 
 impl comparable for u64 {
-  fn compare(self: u64, other: u64): ordering {
-    if self == other :equal else if self > other :greater else :less
-  }
+  fn compare(self: u64, other: u64): ordering { compare-scalars(self, other) }
 }
 
 impl comparable for u8 {
-  fn compare(self: u8, other: u8): ordering {
-    if self == other :equal else if self > other :greater else :less
-  }
+  fn compare(self: u8, other: u8): ordering { compare-scalars(self, other) }
 }
 
 ns for u8 {
@@ -493,6 +503,20 @@ ns for f64 {
     }
   }
 
+  // Maps to an i64 key whose integer order is IEEE-754 totalOrder:
+  // -NaN < -inf < ... < -0.0 < +0.0 < ... < +inf < +NaN
+  fn total-order-key(self: f64): i64 {
+    let bits = mem/bitcast[f64, i64](self);
+    bits.xor(((bits >> 63).as[u64] >> 1).as[i64])
+  }
+}
+
+ns for f32 {
+  // See f64/total-order-key
+  fn total-order-key(self: f32): i32 {
+    let bits = mem/bitcast[f32, i32](self);
+    bits.xor(((bits >> 31).as[u32] >> 1).as[i32])
+  }
 }
 
 impl equals for f32 { intern fn equals(self: f32, other: f32): bool }
@@ -525,6 +549,32 @@ impl scalar-cmp for f64 {
   intern fn gt(self, other: self): bool
   intern fn ge(self, other: self): bool
 }
+
+// Float compare is IEEE-754 totalOrder, so it stays a consistent total order
+// even for NaN. Note two divergences from the `==`/`<` operators: -0.0 compares
+// :less than +0.0, and NaN compares :greater than +inf (-NaN :less than -inf).
+impl comparable for f32 {
+  fn compare(self: f32, other: f32): ordering {
+    compare-scalars(self.total-order-key(), other.total-order-key())
+  }
+}
+impl comparable for f64 {
+  fn compare(self: f64, other: f64): ordering {
+    compare-scalars(self.total-order-key(), other.total-order-key())
+  }
+}
+
+impl zero for char { fn zero(): char { 0u8.as[char] } }
+impl zero for f32 { fn zero(): f32 { 0.0 } }
+impl zero for f64 { fn zero(): f64 { 0.0 } }
+impl zero for u8  { fn zero(): u8  { 0   } }
+impl zero for u16 { fn zero(): u16 { 0   } }
+impl zero for u32 { fn zero(): u32 { 0   } }
+impl zero for u64 { fn zero(): u64 { 0   } }
+impl zero for i8  { fn zero(): i8  { 0   } }
+impl zero for i16 { fn zero(): i16 { 0   } }
+impl zero for i32 { fn zero(): i32 { 0   } }
+impl zero for i64 { fn zero(): i64 { 0   } }
 
 impl print for f32 {
   fn print-to[w: writer](self: f32, w) {

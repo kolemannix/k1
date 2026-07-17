@@ -1,0 +1,71 @@
+ns ordering_test;
+
+fn tags-test() {
+  // The tags are load-bearing: compare-scalars computes (a > b) - (a < b)
+  // and bitcasts the result straight to ordering
+  assert-equals(ordering:less.value, -1);
+  assert-equals(ordering:equal.value, 0);
+  assert-equals(ordering:greater.value, 1);
+
+  let l: ordering = mem/bitcast(-1: i8);
+  let e: ordering = mem/bitcast(0: i8);
+  let g: ordering = mem/bitcast(1: i8);
+  assert(l is :less);
+  assert(e is :equal);
+  assert(g is :greater);
+}
+
+fn int-compare-test() {
+  assert((1: i64).compare(2) is :less);
+  assert((2: i64).compare(2) is :equal);
+  assert((2: i64).compare(1) is :greater);
+  assert((-1: i64).compare(1) is :less);
+  assert(i64/minValue.compare(i64/maxValue) is :less);
+  assert(i64/maxValue.compare(i64/minValue) is :greater);
+
+  assert((0: u8).compare(255) is :less);
+  assert((255: u8).compare(0) is :greater);
+  assert((7: u64).compare(7) is :equal);
+  assert((0xFFFFFFFFFFFFFFFF: u64).compare(0) is :greater);
+
+  assert('a'.compare('z') is :less);
+  assert('m'.compare('m') is :equal);
+  assert('z'.compare('a') is :greater);
+}
+
+fn float-compare-test() {
+  assert((1.5: f64).compare(2.5) is :less);
+  assert((2.5: f64).compare(2.5) is :equal);
+  assert((2.5: f64).compare(1.5) is :greater);
+  assert((-1.0: f64).compare(1.0) is :less);
+
+  let pos-nan:  f64 = mem/bitcast(0x7FF8000000000000: u64);
+  let neg-nan:  f64 = mem/bitcast(0xFFF8000000000000: u64);
+  let pos-inf:  f64 = mem/bitcast(0x7FF0000000000000: u64);
+  let neg-inf:  f64 = mem/bitcast(0xFFF0000000000000: u64);
+  let neg-zero: f64 = mem/bitcast(0x8000000000000000: u64);
+
+  // totalOrder: -NaN < -inf < -0.0 < +0.0 < +inf < +NaN
+  assert(neg-nan.compare(neg-inf) is :less);
+  assert(neg-inf.compare(neg-zero) is :less);
+  assert(neg-zero.compare(0.0) is :less);
+  assert((0.0: f64).compare(pos-inf) is :less);
+  assert(pos-inf.compare(pos-nan) is :less);
+  assert(pos-nan.compare(pos-nan) is :equal);
+
+  // Unlike the < operator, compare is consistent for NaN in both directions
+  assert(pos-nan.compare(1.0) is :greater);
+  assert((1.0: f64).compare(pos-nan) is :less);
+
+  assert((1.5: f32).compare(2.5) is :less);
+  assert((2.5: f32).compare(2.5) is :equal);
+  assert((2.5: f32).compare(1.5) is :greater);
+  let f32-neg-nan: f32 = mem/bitcast(0xFFC00000: u32);
+  assert(f32-neg-nan.compare(-1.0) is :less);
+}
+
+fn test() {
+  tags-test();
+  int-compare-test();
+  float-compare-test();
+}

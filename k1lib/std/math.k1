@@ -1,0 +1,15 @@
+ns math;
+
+ability exp {
+  fn exp(self): self
+}
+impl exp for f64 {
+  fn exp(self: f64): f64 {
+    core/libc/math/exp_f64(self)
+  }
+}
+impl exp for f32 {
+  fn exp(self: f32): f32 {
+    core/libc/math/exp_f32(self)
+  }
+}

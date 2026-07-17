@@ -1,4 +1,3 @@
-use std::net::TcpListener;
 // Copyright (c) 2026 knix
 // All rights reserved.
 use std::process::ExitCode;
@@ -51,9 +50,13 @@ fn run() -> anyhow::Result<ExitCode> {
             std::process::exit(0)
         }
     };
+    if matches!(args.command, Command::Server { .. }) {
+        k1::server::serve(program);
+        return Ok(ExitCode::SUCCESS);
+    }
     let llvm_ctx = inkwell::context::Context::create();
     return match compiler::codegen_module(&args, &llvm_ctx, &mut program) {
-        Ok(mut cg) => match args.command {
+        Ok(cg) => match args.command {
             Command::Check { .. } => unreachable!(),
             Command::Build { .. } => Ok(ExitCode::SUCCESS),
             Command::Run { .. } => {
@@ -82,20 +85,7 @@ fn run() -> anyhow::Result<ExitCode> {
                     line.clear();
                 }
             }
-            Command::Server { .. } => {
-                let listener = TcpListener::bind("127.0.0.1:8080").expect("Could not bind to port");
-                println!("k1 server running on http://127.0.0.1:8080");
-
-                for stream in listener.incoming() {
-                    match stream {
-                        Ok(stream) => {
-                            k1::server::handle_client(&mut cg, stream);
-                        }
-                        Err(e) => eprintln!("Connection failed: {}", e),
-                    }
-                }
-                Ok(ExitCode::SUCCESS)
-            }
+            Command::Server { .. } => unreachable!("server runs before codegen"),
         },
         Err(err) => {
             eprintln!("Codegen error: {err}");
