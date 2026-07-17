@@ -353,8 +353,6 @@ impl Backend {
     }
 }
 
-unsafe impl Sync for Backend {}
-unsafe impl Send for Backend {}
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {

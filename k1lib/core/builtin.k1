@@ -50,7 +50,7 @@ type alias c-ssizet = i64
 type alias c-int    = i32
 type alias c-long   = i64
 
-type ordering = either { less, equal, greater }
+type ordering = either(i8) { less = -1, equal = 0, greater = 1 }
 
 type result[t, e] = either { ok(t), err(e) }
 
@@ -408,6 +408,12 @@ ability iterator[impl item] {
 ability iterable[impl item, impl i: iterator[item = item]] {
   fn iterator(self): i
 }
+
+ability zero { fn zero(): self }
+
+// ability as-span[impl t] {
+//   fn as-span(self): span[t]
+// }
 
 /////////////////////////////////
 // Code that we want to have available very early
@@ -791,6 +797,11 @@ ns libc {
 
   extern("strtod") fn strtod(nptr: ptr, endptr: *mut ptr): f64
   extern("strtof") fn strtof(nptr: ptr, endptr: *mut ptr): f32
+
+  ns math {
+    extern("expf") fn exp_f32(f32): f32
+    extern("exp")  fn exp_f64(f64): f64
+  }
 
 }
 

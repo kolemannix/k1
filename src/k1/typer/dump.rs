@@ -393,7 +393,7 @@ impl TypedProgram {
                 self.display_type_id_rec(w, svt.family_type_id, expand, visiting)?;
                 if let Some(value_id) = svt.value_id {
                     w.write_str(", ")?;
-                    self.display_static_value(w, value_id)?;
+                    self.display_static_value(w, value_id, !expand)?;
                 }
                 w.write_str("]")?;
                 Ok(())
@@ -798,10 +798,10 @@ impl TypedProgram {
             TypedExpr::StaticValue(s) => {
                 if s.is_typed_as_static {
                     w.write_str("#static ")?;
-                    self.display_static_value(w, s.value_id)?;
+                    self.display_static_value(w, s.value_id, false)?;
                     Ok(())
                 } else {
-                    self.display_static_value(w, s.value_id)?;
+                    self.display_static_value(w, s.value_id, false)?;
                     Ok(())
                 }
             }
@@ -809,8 +809,12 @@ impl TypedProgram {
     }
 
     pub fn static_value_to_string(&self, id: StaticValueId) -> String {
+        self.static_value_to_string_ext(id, false)
+    }
+
+    pub fn static_value_to_string_ext(&self, id: StaticValueId, pretty: bool) -> String {
         let mut s = String::with_capacity(256);
-        self.display_static_value(&mut s, id).unwrap();
+        self.display_static_value(&mut s, id, pretty).unwrap();
         s
     }
 
@@ -818,29 +822,47 @@ impl TypedProgram {
         &self,
         w: &mut W,
         id: StaticValueId,
+        pretty: bool,
     ) -> std::fmt::Result {
         match self.static_values.get(id) {
             StaticValue::Empty => w.write_str("{}"),
             StaticValue::Bool(b) => write!(w, "{}", *b),
             StaticValue::Char(c) => write!(w, "{}", *c as char),
-            StaticValue::Int(typed_integer_value) => {
-                write!(w, "{}", typed_integer_value)
+            StaticValue::Int(i) => {
+                if pretty {
+                    if i.is_signed() {
+                        write!(w, "{}", i.to_i64())?;
+                    } else {
+                        write!(w, "{}", i.to_u64_bits())?;
+                    };
+                    Ok(())
+                } else {
+                    write!(w, "{}", i)
+                }
             }
-            StaticValue::Enum(type_id, typed_integer_value) => {
+            StaticValue::Enum(type_id, i) => {
                 self.display_type_id(w, *type_id, false)?;
-                write!(w, "({})", typed_integer_value)
+                write!(w, "({})", i)
             }
-            StaticValue::Float(typed_float_value) => {
-                write!(w, "{}", typed_float_value)
+            StaticValue::Float(f) => {
+                if pretty {
+                    write!(w, "{}", f.as_f64())
+                } else {
+                    write!(w, "{}", f)
+                }
             }
             StaticValue::String(s) => {
                 write!(w, "\"{}\"", self.get_string(*s))
             }
             StaticValue::Zero(type_id) => {
-                write!(w, "zeroed[")?;
-                self.display_type_id(w, *type_id, false)?;
-                write!(w, "]()")?;
-                Ok(())
+                if pretty {
+                    w.write_str("zeroed")
+                } else {
+                    write!(w, "zeroed[")?;
+                    self.display_type_id(w, *type_id, false)?;
+                    write!(w, "]")?;
+                    Ok(())
+                }
             }
             StaticValue::Struct(static_struct) => {
                 w.write_str("{ ")?;
@@ -857,7 +879,7 @@ impl TypedProgram {
                     }
                     self.write_ident(w, field_type.name)?;
                     w.write_str(": ")?;
-                    self.display_static_value(w, *field_value_id)?;
+                    self.display_static_value(w, *field_value_id, pretty)?;
                 }
                 w.write_str(" }")
             }
@@ -878,18 +900,20 @@ impl TypedProgram {
                     None => {}
                     Some(payload_id) => {
                         write!(w, "(")?;
-                        self.display_static_value(w, payload_id)?;
+                        self.display_static_value(w, payload_id, pretty)?;
                         write!(w, ")")?;
                     }
                 };
                 Ok(())
             }
             StaticValue::LinearContainer(cont) => {
-                match cont.kind {
-                    StaticContainerKind::Span => write!(w, "span")?,
-                    StaticContainerKind::Array => write!(w, "array")?,
+                if !pretty {
+                    match cont.kind {
+                        StaticContainerKind::Span => write!(w, "span")?,
+                        StaticContainerKind::Array => write!(w, "array")?,
+                    }
                 }
-                self.display_static_items(w, self.static_values.get_slice(cont.elements))?;
+                self.display_static_items(w, self.static_values.get_slice(cont.elements), pretty)?;
                 Ok(())
             }
         }
@@ -899,10 +923,11 @@ impl TypedProgram {
         &self,
         w: &mut W,
         elements: &[StaticValueId],
+        pretty: bool,
     ) -> std::fmt::Result {
         write!(w, "[")?;
         for (index, elem) in elements.iter().enumerate() {
-            self.display_static_value(w, *elem)?;
+            self.display_static_value(w, *elem, pretty)?;
             let last = index == elements.len() - 1;
             if !last {
                 write!(w, ", ")?;
@@ -1007,8 +1032,12 @@ impl TypedProgram {
     pub fn display_pattern(&self, pattern: TypedPatternId, w: &mut impl Write) -> std::fmt::Result {
         match self.patterns.get(pattern) {
             TypedPattern::LiteralChar(value, _) => write!(w, "{value}"),
-            TypedPattern::LiteralInteger(value_id, _) => self.display_static_value(w, *value_id),
-            TypedPattern::LiteralFloat(value_id, _) => self.display_static_value(w, *value_id),
+            TypedPattern::LiteralInteger(value_id, _) => {
+                self.display_static_value(w, *value_id, true)
+            }
+            TypedPattern::LiteralFloat(value_id, _) => {
+                self.display_static_value(w, *value_id, true)
+            }
             TypedPattern::LiteralBool(bool, _) => write!(w, "{bool}"),
             TypedPattern::LiteralString(string_id, _) => {
                 write!(w, "\"{}\"", self.get_string(*string_id))
@@ -1371,7 +1400,7 @@ impl TypedProgram {
     pub fn dump_static_values(&self, w: &mut impl Write) -> std::fmt::Result {
         for (id, _value) in self.static_values.iter_with_ids() {
             write!(w, "{:04} ", id.as_u32())?;
-            self.display_static_value(w, id)?;
+            self.display_static_value(w, id, false)?;
             writeln!(w)?;
         }
         Ok(())
@@ -1482,8 +1511,9 @@ impl DepDisplay<TypedProgram, K1DisplayArgs> for TypeId {
 }
 
 impl DepDisplay<TypedProgram, K1DisplayArgs> for StaticValueId {
-    fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, _args: &K1DisplayArgs) -> std::fmt::Result {
-        k1.display_static_value(f, *self)
+    fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, args: &K1DisplayArgs) -> std::fmt::Result {
+        let pretty = args.user_facing;
+        k1.display_static_value(f, *self, pretty)
     }
 }
 

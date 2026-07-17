@@ -17,6 +17,7 @@ fn low() {
   ability_overload_ish/test();
   ability_default_fns/test();
   bits_test/test();
+  ordering_test/test();
   test_uninit/test();
   control_flow/test();
   union_basic/test();

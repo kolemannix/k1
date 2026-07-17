@@ -246,15 +246,20 @@ impl From<i8> for TypedIntValue {
 
 impl Display for TypedIntValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TypedIntValue::U8(v) => write!(f, "{}u8", v),
-            TypedIntValue::U16(v) => write!(f, "{}u16", v),
-            TypedIntValue::U32(v) => write!(f, "{}u32", v),
-            TypedIntValue::U64(v) => write!(f, "{}u64", v),
-            TypedIntValue::I8(v) => write!(f, "{}i8", v),
-            TypedIntValue::I16(v) => write!(f, "{}i16", v),
-            TypedIntValue::I32(v) => write!(f, "{}i32", v),
-            TypedIntValue::I64(v) => write!(f, "{}i64", v),
+        let (val, suffix): (i128, &str) = match *self {
+            TypedIntValue::U8(v) => (v as i128, "u8"),
+            TypedIntValue::U16(v) => (v as i128, "u16"),
+            TypedIntValue::U32(v) => (v as i128, "u32"),
+            TypedIntValue::U64(v) => (v as i128, "u64"),
+            TypedIntValue::I8(v) => (v as i128, "i8"),
+            TypedIntValue::I16(v) => (v as i128, "i16"),
+            TypedIntValue::I32(v) => (v as i128, "i32"),
+            TypedIntValue::I64(v) => (v as i128, "i64"),
+        };
+        if f.width().is_none() && f.precision().is_none() {
+            write!(f, "{val}{suffix}")
+        } else {
+            f.pad(&format!("{val}{suffix}"))
         }
     }
 }

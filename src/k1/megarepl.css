@@ -42,6 +42,8 @@ select {
 /* 3. Base ------------------------------------------------------ */
 body {
   min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
@@ -52,7 +54,7 @@ body {
 pre,
 code {
   font-family: var(--font-mono);
-  font-size: 0.875rem;
+  font-size: 0.7rem;
 }
 
 h1 {
@@ -68,30 +70,256 @@ h1 {
 /* 4. Components ------------------------------------------------ */
 .site-header {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   gap: var(--space);
-  padding: 0.75rem calc(var(--space) * 1.25);
+  padding: 0.5rem calc(var(--space) * 1.25);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
 
+.rail-toggle {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0 0.55rem;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+}
+
 /* live dump of datastar signals; useful while developing */
+.debug-footer {
+  max-width: 72rem;
+  margin-inline: auto;
+  padding: var(--space);
+  border-top: 1px solid var(--border);
+}
+
 .signals-debug {
   color: var(--text-muted);
   font-size: 0.75rem;
-  max-width: 50%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
-.repl {
-  max-width: 72rem;
-  margin-inline: auto;
-  padding: calc(var(--space) * 1.5) var(--space);
+/* workspace: collapsible cell rail on the left, canvas on the right */
+.workspace {
+  flex: 1;
+  min-height: 0;
   display: grid;
+  grid-template-columns: 380px 1fr;
+  transition: grid-template-columns 0.25s ease;
+
+  &.collapsed {
+    grid-template-columns: 44px 1fr;
+  }
+}
+
+.cell-rail {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-2);
+  border-right: 1px solid var(--border);
+}
+
+.rail-cells {
+  position: absolute;
+  inset: 0;
+  /* fixed width so cards keep their shape mid-collapse */
+  width: 380px;
+  padding: var(--space);
+  display: flex;
+  flex-direction: column;
   gap: var(--space);
+  overflow-y: auto;
+  transition: opacity 0.2s ease;
+}
+
+.rail-chips {
+  position: absolute;
+  inset: 0;
+  padding: 0.6rem 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.workspace.collapsed .rail-cells {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.workspace.collapsed .rail-chips {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.rail-new {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  background: none;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+}
+
+.chip {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--accent);
+  }
+}
+
+.chip-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+
+  &.ok { background: var(--text-muted); }
+  &.pinned { background: var(--accent); }
+  &.err { background: var(--danger); }
+}
+
+.canvas {
+  overflow: auto;
+  padding: calc(var(--space) * 1.5);
+  background-image: radial-gradient(
+    light-dark(#d3d3cd, #2a2f3a) 1px,
+    transparent 1px
+  );
+  background-size: 18px 18px;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(450px, 1fr));
+  gap: var(--space);
+  align-content: start;
+}
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.tile-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  padding: 0.35rem 0.9rem;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.tile-value {
+  font-size: .7rem;
+}
+
+.canvas-hint {
+  margin: calc(var(--space) * 2) auto;
+  max-width: 24rem;
+  padding: var(--space);
+  text-align: center;
+  color: var(--text-muted);
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace,
+  .rail-cells,
+  .rail-chips {
+    transition: none;
+  }
+}
+
+.cell-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+
+  & p {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.85rem;
+  }
+}
+
+.exec-time {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.pin-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  cursor: pointer;
+
+  &:has(:checked) {
+    color: var(--accent);
+  }
+}
+
+.run-button {
+  margin-bottom: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.15rem 0.9rem;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--accent);
+  }
 }
 
 .code-input {
@@ -100,7 +328,7 @@ h1 {
   min-height: 80px;
   resize: vertical;
   padding: 0.65rem 0.9rem;
-  font-size: 1rem;
+  font-size: .7rem;
   font-family: var(--font-mono);
   background: var(--surface);
   border: 1px solid var(--border);
@@ -127,23 +355,38 @@ h1 {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
-
-  /* hide the whole card until it has something to show */
-  &:has(.result-output:empty) {
-    display: none;
-  }
 }
 
-.result-label {
+.result-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.3rem 0.5rem;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.result-tab {
   font-family: var(--font-mono);
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-muted);
-  padding: 0.4rem 0.9rem;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
+  padding: 0.2rem 0.65rem;
+  background: none;
+  border: none;
+  border-radius: calc(var(--radius) - 4px);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--text);
+  }
+
+  &.active {
+    color: var(--accent);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
 }
 
 .result-output {

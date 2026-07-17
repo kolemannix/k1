@@ -14,6 +14,7 @@ pub(crate) mod megarepl;
 
 use crate::ir::{BackendBuiltin, IrUnitId};
 use crate::typer::dump::K1DisplayArgs;
+use crate::typer::megarepl::MegareplState;
 use crate::{bc, clock, compiler, debug, ir, k1_format, k1_format_user, kbail, kerr, vm};
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
@@ -2778,6 +2779,13 @@ pub struct TypedProgram {
     pub global_id_k1_arena: Option<TypedGlobalId>,
     pub megarepl: Option<MegareplState>,
 }
+
+// SAFETY: TypedProgram's raw pointers point into its own heap allocations
+// (kmem arenas, pools) or are process-wide dlopen handles; none of them are
+// tied to the thread that created them, so the value may move between
+// threads. Sync is deliberately not asserted: concurrent access still needs
+// external synchronization (e.g. the server's Mutex).
+unsafe impl Send for TypedProgram {}
 
 impl Drop for TypedProgram {
     fn drop(&mut self) {
@@ -8967,7 +8975,6 @@ impl TypedProgram {
         kind: ParseAdHocKind,
     ) -> K1Result<ParseMetaprogramResult> {
         self.with_parser(file_id, move |p| {
-            eprintln!("parse_metaprogram_source...");
             let msg_base = "Failed to parse the code you returned: ";
             let error_count_start = p.ast.errors.len();
             match kind {
@@ -8976,7 +8983,6 @@ impl TypedProgram {
                         failf!(e.span(), "{msg_base}{}", e)
                     }
                     Ok(parsed_expr) => {
-                        eprintln!("ok");
                         if p.ast.errors.len() > error_count_start {
                             let e = p.ast.errors.last().unwrap();
                             failf!(e.span(), "{msg_base}{}", e.clone())
@@ -18268,6 +18274,7 @@ impl TypedProgram {
             core!("try"),
             core!("iterator"),
             core!("iterable"),
+            core!("iter"),
             core!("println"),
             core!("print"),
             core!("eprint"),
@@ -18289,6 +18296,7 @@ impl TypedProgram {
             core!("rem"),
             core!("sys"),
             core!("scalar-cmp"),
+            core!("StringBuilder"),
             core!("StringBuilder"),
             QIdent { path: core_mem, name: get_ident!(self, "zeroed"), name_span: span },
             QIdent { path: core_mem, name: get_ident!(self, "alloc-mode"), name_span: span },
@@ -19109,36 +19117,6 @@ impl TypedProgram {
         Ok(())
     }
 
-}
-
-#[derive(Clone)]
-pub struct MegareplCell {
-    pub id: u32,
-    pub expr_id: Option<TypedExprId>,
-    pub iteration: u32,
-    pub source_id: FileId,
-    /// An explanatory message for display
-    pub message: String,
-    pub last_result: CellResult,
-}
-
-#[derive(Clone)]
-pub enum CellResult {
-    Expr { value: StaticValueId },
-    // Defn {  },
-    Error { k1_message: K1Message },
-}
-impl CellResult {
-    pub fn error(k1_message: K1Message) -> Self {
-        CellResult::Error { k1_message }
-    }
-}
-pub struct MegareplState {
-    pub vm: vm::Vm,
-    pub parsed_ns: ParsedNamespaceId,
-    pub ns: NamespaceId,
-    pub ns_scope: ScopeId,
-    pub cells: Vec<MegareplCell>,
 }
 
 fn to_k1_size_u64(value: u64) -> i64 {

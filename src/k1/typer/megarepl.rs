@@ -1,6 +1,41 @@
 use super::*;
 use crate::failf;
 
+#[derive(Clone)]
+pub struct MegareplCell {
+    pub id: u32,
+    /// Run after every execution of other cells
+    pub is_watcher: bool,
+    /// Show this cell's output as a tile on the canvas
+    pub is_pinned: bool,
+    pub expr_id: Option<TypedExprId>,
+    pub iteration: u32,
+    pub source_id: FileId,
+    /// An explanatory message for display
+    pub message: String,
+    pub last_result: CellResult,
+    pub last_exec_time: Option<std::time::Duration>,
+}
+
+#[derive(Clone)]
+pub enum CellResult {
+    Expr { value: StaticValueId },
+    // Defn {  },
+    Error { k1_message: K1Message },
+}
+impl CellResult {
+    pub fn error(k1_message: K1Message) -> Self {
+        CellResult::Error { k1_message }
+    }
+}
+pub struct MegareplState {
+    pub vm: vm::Vm,
+    pub parsed_ns: ParsedNamespaceId,
+    pub ns: NamespaceId,
+    pub ns_scope: ScopeId,
+    pub cells: Vec<MegareplCell>,
+}
+
 impl TypedProgram {
     fn parse_repl_source(&mut self, file_id: FileId) -> K1Result<ParseReplSourceResult> {
         self.with_parser(file_id, move |p| {
@@ -30,27 +65,27 @@ impl TypedProgram {
         if let Some(cell_id) = cell_id {
             let existing = self.megarepl_get_cell(cell_id);
             let existing_code = &self.ast.sources.get(existing.source_id).content;
-            if existing_code == &code {
-                //
-            } else {
+            if existing_code != &code {
                 let iteration = existing.iteration + 1;
                 let new_source = self.megarepl_create_source(cell_id, iteration, code);
-                self.megarepl_get_cell_mut(cell_id).source_id = new_source;
+                let cell = self.megarepl_get_cell_mut(cell_id);
+                cell.source_id = new_source;
+                cell.iteration = iteration;
                 if let Err(e) = self.megarepl_compile_source(cell_id) {
                     self.megarepl_set_cell_compile_error(cell_id, e);
                 }
             };
             self.megarepl_execute_cell(cell_id);
             self.megarepl_set_cell_message(cell_id, "Re-ran".to_string());
-            return cell_id;
+            cell_id
+        } else {
+            let cell_id = self.megarepl_new(code);
+            if let Err(e) = self.megarepl_compile_source(cell_id) {
+                self.megarepl_set_cell_compile_error(cell_id, e);
+            }
+            self.megarepl_execute_cell(cell_id);
+            cell_id
         }
-
-        let cell_id = self.megarepl_new(code);
-        if let Err(e) = self.megarepl_compile_source(cell_id) {
-            self.megarepl_set_cell_compile_error(cell_id, e);
-        }
-        self.megarepl_execute_cell(cell_id);
-        cell_id
     }
 
     fn megarepl_set_cell_compile_error(&mut self, cell_id: u32, error: K1Message) {
@@ -89,11 +124,14 @@ impl TypedProgram {
         let mr = self.megarepl.as_mut().unwrap();
         mr.cells.push(MegareplCell {
             id: cell_id,
+            is_watcher: false,
+            is_pinned: false,
             expr_id: None,
             iteration: 0,
             source_id,
             last_result: CellResult::error(make_warning("uninit", SpanId::NONE)),
             message: String::new(),
+            last_exec_time: None,
         });
         cell_id
     }
@@ -114,7 +152,9 @@ impl TypedProgram {
                 Err(k1_message) => Err(k1_message),
                 Ok(expr_id) => {
                     self.megarepl_get_cell_mut(cell_id).expr_id = Some(expr_id);
-                    self.megarepl_execute_cell(cell_id);
+                    // Solo: megarepl_submit executes again after compiling, and
+                    // that run does the watcher fan-out
+                    self.megarepl_execute_cell_solo(cell_id);
                     Ok(())
                 }
             },
@@ -126,6 +166,20 @@ impl TypedProgram {
     }
 
     fn megarepl_execute_cell(&mut self, cell_id: u32) {
+        self.megarepl_execute_cell_solo(cell_id);
+
+        // Watchers re-run after any other cell runs. Fanning out only from
+        // here (not from megarepl_execute_cell_solo) keeps a watcher's own
+        // execution from re-triggering the watchers forever.
+        let cells = self.megarepl.as_ref().unwrap().cells.iter().map(|c| c.id).collect_vec();
+        for watcher_id in cells {
+            if watcher_id != cell_id && self.megarepl_get_cell(watcher_id).is_watcher {
+                self.megarepl_execute_cell_solo(watcher_id);
+            }
+        }
+    }
+
+    fn megarepl_execute_cell_solo(&mut self, cell_id: u32) {
         let cell = self.megarepl_get_cell(cell_id);
         let Some(cell_expr) = cell.expr_id else {
             eprintln!("nothing to execute");
@@ -136,8 +190,10 @@ impl TypedProgram {
             "executing repl unit.\n{}",
             ir::unit_to_string(self, IrUnitId::Expr(cell_expr), true)
         );
+        let exec_start = std::time::Instant::now();
         let exec_result = self
             .do_with_vm(span, |k1, vm| bc::exec::execute_compiled_expr(k1, vm, cell_expr, true));
+        self.megarepl_get_cell_mut(cell_id).last_exec_time = Some(exec_start.elapsed());
         match exec_result {
             Err(k1_message) => {
                 self.megarepl_get_cell_mut(cell_id).last_result = CellResult::Error { k1_message };
@@ -145,7 +201,21 @@ impl TypedProgram {
             Ok(value) => {
                 self.megarepl_get_cell_mut(cell_id).last_result = CellResult::Expr { value };
             }
-        };
+        }
+    }
+
+    pub fn megarepl_toggle_watcher(&mut self, cell_id: u32) -> bool {
+        let cell = self.megarepl_get_cell_mut(cell_id);
+        cell.is_watcher = !cell.is_watcher;
+        cell.is_watcher
+    }
+
+    pub fn megarepl_toggle_pin(&mut self, cell_id: u32) -> bool {
+        let cell = self.megarepl_get_cell_mut(cell_id);
+        cell.is_pinned = !cell.is_pinned;
+        // For now pinned implies watched: a displayed tile is a live one
+        cell.is_watcher = cell.is_pinned;
+        cell.is_pinned
     }
 
     fn megarepl_compile_statements(
@@ -173,7 +243,7 @@ impl TypedProgram {
                         Some(type_expr) => Some(self.eval_type_expr(type_expr, block_scope)?),
                     };
                     let rhs = match parsed_let.value {
-                        Some(expr) => Some(self.eval_expr(expr, ctx)?),
+                        Some(expr) => Some(self.eval_expr(expr, ctx.with_expected_type(expected_type))?),
                         None => None,
                     };
                     if rhs.is_none() && expected_type.is_none() {
