@@ -33,8 +33,7 @@
 
 input,
 button,
-textarea,
-select {
+textarea {
   font: inherit;
   color: inherit;
 }
@@ -136,8 +135,18 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: var(--space);
-  overflow-y: auto;
+  min-height: 0;
   transition: opacity 0.2s ease;
+}
+
+/* cells scroll on their own so the Data panel above them stays visible */
+.cell-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
 }
 
 .rail-chips {
@@ -205,13 +214,13 @@ h1 {
   border-radius: 50%;
 
   &.ok { background: var(--text-muted); }
-  &.pinned { background: var(--accent); }
+  &.watch { background: var(--accent); }
   &.err { background: var(--danger); }
 }
 
-.canvas {
-  overflow: auto;
-  padding: calc(var(--space) * 1.5);
+/* the dotted work surface behind tiles and browse listings */
+.canvas,
+.ns-main {
   background-image: radial-gradient(
     light-dark(#d3d3cd, #2a2f3a) 1px,
     transparent 1px
@@ -219,14 +228,20 @@ h1 {
   background-size: 18px 18px;
 }
 
+.canvas {
+  overflow: auto;
+  padding: calc(var(--space) * 1.5);
+}
+
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(450px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: var(--space);
   align-content: start;
 }
 
-.tile {
+/* card: bordered surface panel (canvas tiles, cell results, browse listings) */
+.card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -234,12 +249,14 @@ h1 {
   overflow: hidden;
 }
 
-.tile-label {
+.card-label {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
   gap: 0.5rem;
   font-family: var(--font-mono);
   font-size: 0.65rem;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-muted);
@@ -259,10 +276,6 @@ h1 {
 
 .output-stderr {
   color: var(--danger);
-}
-
-.tile .output-values {
-  font-size: .7rem;
 }
 
 .canvas-hint {
@@ -286,17 +299,97 @@ h1 {
 
 .cell-header {
   display: flex;
-  align-items: baseline;
-  gap: 0.75rem;
+  align-items: center;
+  gap: 0.6rem;
+}
 
-  & p {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.85rem;
+.cell-toggle {
+  padding: 0;
+  background: none;
+  border: none;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--accent);
   }
+}
+
+.cell-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+/* first line of the cell's code, shown only while collapsed */
+.cell-summary {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cell-header .exec-time {
+  margin-left: auto;
+}
+
+.cell-body {
+  margin-top: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.cell.closed {
+  & .cell-summary {
+    display: block;
+  }
+
+  & .cell-body {
+    display: none;
+  }
+}
+
+.cell-disclosures {
+  display: flex;
+  gap: 0.9rem;
+  padding-left: 0.15rem;
+}
+
+.disclosure {
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--text);
+  }
+
+  &.on {
+    color: var(--accent);
+  }
+}
+
+/* rail output stays quiet: no card, just a rule down the left edge */
+.cell .result-output {
+  padding: 0.3rem 0.75rem;
+  border-left: 2px solid var(--border);
 }
 
 .exec-time {
@@ -305,7 +398,7 @@ h1 {
   color: var(--text-muted);
 }
 
-.pin-toggle {
+.watch-toggle {
   display: flex;
   align-items: center;
   gap: 0.3rem;
@@ -320,18 +413,26 @@ h1 {
 }
 
 .run-button {
-  margin-bottom: 0.4rem;
-  font-size: 0.8rem;
-  font-weight: 600;
-  padding: 0.15rem 0.9rem;
+  width: 26px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-size: 0.6rem;
   color: var(--accent);
-  background: var(--accent-soft);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
   cursor: pointer;
 
   &:hover {
     border-color: var(--accent);
+  }
+
+  &:active {
+    box-shadow: none;
+    transform: translateY(1px);
   }
 }
 
@@ -358,50 +459,6 @@ h1 {
   }
 }
 
-.results {
-  display: grid;
-  gap: var(--space);
-}
-
-.result-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-
-.result-tabs {
-  display: flex;
-  gap: 0.25rem;
-  padding: 0.3rem 0.5rem;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
-}
-
-.result-tab {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-  padding: 0.2rem 0.65rem;
-  background: none;
-  border: none;
-  border-radius: calc(var(--radius) - 4px);
-  cursor: pointer;
-
-  &:hover {
-    color: var(--text);
-  }
-
-  &.active {
-    color: var(--accent);
-    background: var(--surface);
-    box-shadow: var(--shadow);
-  }
-}
-
 .result-output {
   padding: 0.75rem 0.9rem;
   overflow-x: auto;
@@ -409,11 +466,278 @@ h1 {
   tab-size: 4;
 }
 
-/* 5. Utilities -------------------------------------------------- */
-.muted {
+/* browse: namespace tree rail + per-namespace member listings */
+.site-nav {
+  display: flex;
+  gap: 0.25rem;
+
+  & a {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    text-decoration: none;
+    padding: 0.2rem 0.65rem;
+    border-radius: calc(var(--radius) - 3px);
+
+    &:hover {
+      color: var(--text);
+    }
+
+    &.active {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+  }
+}
+
+.browse-workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+}
+
+.ns-rail {
+  overflow-y: auto;
+  background: var(--surface-2);
+  border-right: 1px solid var(--border);
+  padding: 0.6rem 0;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
+
+.ns-tree,
+.tree-kids {
+  list-style: none;
+  padding: 0;
+}
+
+.tree-kids {
+  padding-left: 0.9rem;
+}
+
+.tree-node {
+  display: block;
+  padding: 0.14rem 0.9rem;
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  &:hover {
+    color: var(--accent);
+  }
+
+  &.selected {
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+}
+
+.ns-main {
+  overflow-y: auto;
+  padding: calc(var(--space) * 1.25);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space);
+}
+
+.ns-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+
+  & a {
+    color: var(--text-muted);
+    text-decoration: none;
+
+    &:hover {
+      color: var(--accent);
+    }
+  }
+}
+
+.crumb-sep {
   color: var(--text-muted);
 }
 
+.crumb-here {
+  font-weight: 650;
+}
+
+.ns-kind-chip {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.05rem 0.4rem;
+  background: var(--surface);
+}
+
+.member-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.28rem 0.9rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+
+  & + .member-row {
+    border-top: 1px dashed var(--border);
+  }
+}
+
+a.member-row:hover {
+  background: var(--accent-soft);
+}
+
+.member-kw {
+  color: var(--text-muted);
+}
+
+.member-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.member-sig {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.member-meta {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+}
+
+/* the rail's Data panel: live repl globals as name / type / value rows */
+.data-section {
+  flex-shrink: 0;
+  max-height: 40%;
+  overflow-y: auto;
+
+  & .card-label {
+    position: sticky;
+    top: 0;
+  }
+}
+
+.data-hint {
+  padding: 0.5rem 0.9rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+
+  & td {
+    padding: 0.28rem 0.6rem;
+    vertical-align: baseline;
+
+    &:first-child {
+      padding-left: 0.9rem;
+    }
+
+    &:last-child {
+      padding-right: 0.9rem;
+    }
+  }
+
+  & tr + tr td {
+    border-top: 1px dashed var(--border);
+  }
+}
+
+.data-name {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* watcher rows: identified by number, not name */
+.data-watch {
+  color: var(--text-muted);
+}
+
+/* per-row "show on canvas": quiet until hovered */
+.data-plus {
+  padding: 0 0.3rem;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+
+  tr:hover & {
+    opacity: 1;
+  }
+
+  &:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+}
+
+.widget-close {
+  padding: 0;
+  background: none;
+  border: none;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--danger);
+  }
+}
+
+.widget-hint {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.data-type {
+  color: var(--text-muted);
+  white-space: nowrap;
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.data-value {
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* long values scroll in place instead of growing the row */
+.data-clamp {
+  max-height: 7.5rem;
+  overflow-y: auto;
+}
+
+/* 5. Utilities -------------------------------------------------- */
 .error {
   color: var(--danger);
 }

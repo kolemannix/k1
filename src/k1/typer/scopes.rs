@@ -134,6 +134,16 @@ fn skey_name_part(key: ScopeKey) -> StringId {
     StringId::from_usize((key & 0xFFFF_FFFF) as usize)
 }
 
+/// One scope's entries in a per-kind symbol map
+fn entries_in_scope<T: Copy>(
+    map: &FxHashMap<ScopeKey, T>,
+    scope_id: ScopeId,
+) -> impl Iterator<Item = (StringId, T)> + '_ {
+    map.iter().filter_map(move |(key, v)| {
+        (skey_scope_part(*key) == scope_id.as_u32()).then(|| (skey_name_part(*key), *v))
+    })
+}
+
 /// Bits for `Scope::kinds`: which symbol kinds a scope has at least one entry
 /// of. Chain walks test the bit before probing the global maps, so scopes that
 /// contain nothing of a kind (most of them) cost no hashing at all.
@@ -259,6 +269,27 @@ impl Scopes {
 
     pub fn find_namespace_local(&self, scope: ScopeId, ident: StringId) -> Option<NamespaceId> {
         self.namespaces.get(&skey_name(scope, ident)).copied()
+    }
+
+    pub fn functions_in_scope(
+        &self,
+        scope_id: ScopeId,
+    ) -> impl Iterator<Item = (StringId, FunctionId)> + '_ {
+        entries_in_scope(&self.functions, scope_id)
+    }
+
+    pub fn types_in_scope(
+        &self,
+        scope_id: ScopeId,
+    ) -> impl Iterator<Item = (StringId, TypeId)> + '_ {
+        entries_in_scope(&self.types, scope_id)
+    }
+
+    pub fn abilities_in_scope(
+        &self,
+        scope_id: ScopeId,
+    ) -> impl Iterator<Item = (StringId, AbilityId)> + '_ {
+        entries_in_scope(&self.abilities, scope_id)
     }
 
     pub fn find_ability(&self, scope_id: ScopeId, name: StringId) -> Option<AbilityId> {

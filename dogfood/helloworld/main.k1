@@ -11,4 +11,57 @@ fn render(data: *interesting-data): megarepl/render-output {
   :scene([:rect({ color: 0, x: 10, y: 10, w: 10, h: 10 })])
 }
 
+ns orders {
+  type status = either { pending, shipped, delivered, cancelled }
+
+  type order = {
+    id: uint,
+    customer: string,
+    item: string,
+    quantity: uint,
+    unit-cents: uint,
+    status: status,
+    country: string,
+  }
+
+  fn parse-status(s: string): status {
+    if s == "pending" :pending
+    else if s == "shipped" :shipped
+    else if s == "delivered" :delivered
+    else if s == "cancelled" :cancelled
+    else crash("unknown order status: {s}")
+  }
+
+  fn parse-line(line: string): order {
+    let fields = line.splitByChar(',');
+    require fields.len() == 7 else { crash("bad csv row: {line}") };
+    {
+      id: fields.get(0).parseBase10().!,
+      customer: fields.get(1),
+      item: fields.get(2),
+      quantity: fields.get(3).parseBase10().!,
+      unit-cents: fields.get(4).parseBase10().!,
+      status: parse-status(fields.get(5)),
+      country: fields.get(6),
+    }
+  }
+
+  fn load(path: string): list[order] {
+    let lines = core/files/read-to-string(context :current)(path).splitByChar('\n');
+    let orders = list/empty[order]();
+    for line in lines {
+      // Skip the header; splitByChar already drops the trailing empty line
+      if it-index > 0 and line.len() > 0 {
+        orders.push(parse-line(line));
+      };
+    };
+    orders
+  }
+
+  // Path is relative to the k1 invocation, normally the repo root
+  fn sample(): list[order] {
+    load("dogfood/helloworld/orders.csv")
+  }
+}
+
 fn main(): i32 { 0 }

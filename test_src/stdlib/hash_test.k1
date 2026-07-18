@@ -3,34 +3,148 @@ ns hash_test;
 use std/HashMap
 
 fn testBasic() {
-  let myMap = HashMap/new[int]();
+  let myMap = HashMap/new[string, int]();
+  assert(myMap.is-empty());
   myMap.insert("a", 10);
   myMap.insert("b", 11);
   myMap.insert("c", 12);
+  assert-equals(myMap.len(), 3);
   assert-equals(myMap.get("a"), :some(10));
   assert-equals(myMap.get("b"), :some(11));
   assert-equals(myMap.get("c"), :some(12));
-  myMap.remove("a");
+  assert-equals(myMap.get("d"), :none);
+  assert(myMap.contains("a"));
+  assert(not myMap.contains("d"));
+  assert-equals(myMap.remove("a"), :some(10));
+  assert-equals(myMap.remove("a"), :none);
   assert-equals(myMap.get("a"), :none);
   assert-equals(myMap.get("b"), :some(11));
+  assert-equals(myMap.len(), 2);
   myMap.insert("a", 20);
   assert-equals(myMap.get("a"), :some(20));
   myMap.insert("b", 21);
   assert-equals(myMap.get("b"), :some(21));
+  assert-equals(myMap.len(), 3);
+}
+
+fn testIntKeys() {
+  let m = HashMap/new[int, string]();
+  let i = 0;
+  while i < 50 {
+    m.insert(i, "v{i}");
+    i := i + 1
+  };
+  assert-equals(m.len(), 50);
+  assert-equals(m.get(17), :some("v17"));
+  assert-equals(m.get(50), :none);
+  assert-equals(m.remove(17), :some("v17"));
+  assert-equals(m.get(17), :none);
+  assert-equals(m.get(18), :some("v18"));
+}
+
+fn testGetRef() {
+  let m = HashMap/new[string, int]();
+  m.insert("a", 1);
+  let vref = m.get-ref("a").!;
+  vref <- 100;
+  assert-equals(m.get("a"), :some(100));
+  assert(m.get-ref("missing") is :none);
+}
+
+fn testIterate() {
+  let m = HashMap/new[string, int]();
+  m.insert("a", 1);
+  m.insert("b", 2);
+  m.insert("c", 3);
+  m.remove("b");
+  let total = 0;
+  let seen = 0;
+  for kv in m {
+    total := total + kv.value;
+    seen := seen + 1
+  };
+  assert-equals(seen, 2);
+  assert-equals(total, 4);
+}
+
+fn testEmpty() {
+  let e = HashMap/new[string, int]();
+  assert(e.get("x") is :none);
+  assert(not e.contains("x"));
+  assert(e.remove("x") is :none);
+  e.clear();
+  assert(e.is-empty());
+  let iterated = 0;
+  for kv in e {
+    iterated := iterated + 1
+  };
+  assert-equals(iterated, 0);
+  assert-equals("{e}", "{{}");
+}
+
+fn testClear() {
+  let m = HashMap/new[string, int]();
+  m.insert("a", 1);
+  m.insert("b", 2);
+  m.clear();
+  assert(m.is-empty());
+  assert-equals(m.get("a"), :none);
+  m.insert("a", 3);
+  assert-equals(m.get("a"), :some(3));
+  assert-equals(m.len(), 1);
+}
+
+fn testWithCapacity() {
+  let m = HashMap/with-capacity[string, int](100);
+  let capacityBefore = m.capacity();
+  let i = 0;
+  while i < 100 {
+    m.insert("key{i}", i);
+    i := i + 1
+  };
+  assert-equals(m.capacity(), capacityBefore);
+  assert-equals(m.len(), 100);
+}
+
+fn testGetOrInsert() {
+  let m = HashMap/new[string, int]();
+  let a = m.get-or-insert("a", fn. 10);
+  assert-equals(a.*, 10);
+  a <- 11;
+  let a2 = m.get-or-insert("a", fn. 99);
+  assert-equals(a2.*, 11);
+  assert-equals(m.len(), 1);
+  assert-equals(m.get("a"), :some(11));
+
+  let words: list[string] = ["x", "y", "x", "x"];
+  let counts = HashMap/new[string, int]();
+  for w in words {
+    let c = counts.get-or-insert(w, fn. 0);
+    c <- c.* + 1;
+  };
+  assert-equals(counts.get("x"), :some(3));
+  assert-equals(counts.get("y"), :some(1));
+  assert-equals(counts.get("z"), :none);
+}
+
+fn testPrint() {
+  let m = HashMap/new[string, int]();
+  m.insert("a", 1);
+  assert-equals("{m}", "{{a: 1}");
+  if false { m.dump() };
 }
 
 fn testResize(size: int) {
-  let myMap = HashMap/new[int]();
+  let myMap = HashMap/new[string, int]();
   let i = 0;
   while i < size {
     myMap.insert(i.show(), i);
     if i % 5 == 0 {
-      myMap.remove(i.show())
+      myMap.remove(i.show());
     };
     i := i + 1
   };
   i := 0;
-  // myMap.dump();
   while i < size {
     let result = myMap.get(i.show());
     if i % 5 == 0 {
@@ -40,10 +154,32 @@ fn testResize(size: int) {
     };
     i := i + 1
   };
-  // myMap.dump();
+}
+
+// removing and re-inserting in place must reuse tombstones
+// rather than accumulate load
+fn testChurn() {
+  let m = HashMap/new[int, int]();
+  let round = 0;
+  while round < 1000 {
+    m.insert(round % 4, round);
+    m.remove(round % 4);
+    round := round + 1
+  };
+  assert-equals(m.len(), 0);
+  assert(m.capacity() <= 16);
 }
 
 fn test() {
   testBasic();
+  testIntKeys();
+  testGetRef();
+  testIterate();
+  testEmpty();
+  testClear();
+  testWithCapacity();
+  testGetOrInsert();
+  testPrint();
   testResize(100);
+  testChurn();
 }

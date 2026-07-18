@@ -584,6 +584,27 @@ ns k1 {
     link-args: span[string],
   }
 
+  ns repl {
+    // we can't quite do this yet
+    // fn watch(value: $expr, );
+
+    // we could just explicitly handle valid vs invalid pairs of (type, widget-kind)
+    // Or we could do add-integer-widget() with an integer-widget-kind. 
+    // type widget-kind = either { int-slider({ min: size, max: size }),  }
+    // fn add-widget[t](value: t, kind: widget-kind)
+
+    // Or we could use typeclasses (abilities).
+    // fn add-widget-slider[t: numeric](value: t, min: size, max: size)
+
+    // OR what about this? Am I a genius or losing it
+    // fn add-slider[t](name: string, get: fn() -> u32, set: fn(u32) -> {})
+
+    // lets name it 'checkbox' not 'add-checkbox', immediate-mode style, since
+    // the user's code is totally immediate mode style
+    intern fn checkbox[t](name: string, get: fn() -> bool, set: fn(u32) -> bool)
+
+  }
+
 }
 
 /////////////////////////////////
