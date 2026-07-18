@@ -212,6 +212,9 @@ pub enum BackendBuiltin {
     Exit,
 
     CompilerMessage,
+    /// k1/repl/checkbox: a repl cell registering a checkbox widget; the VM
+    /// accumulates it as a ReplCommand for the megarepl engine to drain
+    ReplCheckbox,
 }
 
 impl BackendBuiltin {
@@ -229,6 +232,7 @@ impl BackendBuiltin {
             BackendBuiltin::MemEquals => "mem_equals",
             BackendBuiltin::Exit => "exit",
             BackendBuiltin::CompilerMessage => "compiler_message",
+            BackendBuiltin::ReplCheckbox => "repl_checkbox",
         }
     }
 }

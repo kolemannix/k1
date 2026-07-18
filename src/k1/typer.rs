@@ -14992,6 +14992,8 @@ impl TypedProgram {
                     "location" => {
                         Some(Builtin::TyperInline(BuiltinTyperInline::CompilerSourceLocation))
                     }
+                    // k1/repl
+                    "checkbox" => Some(Builtin::Backend(BackendBuiltin::ReplCheckbox)),
                     _ => None,
                 },
                 Some(_) => None,
