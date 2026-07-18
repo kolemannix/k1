@@ -24,7 +24,9 @@ pub struct StaticSum {
 #[derive(Clone, Copy)]
 pub enum StaticContainerKind {
     Span,
+    Buffer,
     Array,
+    List,
 }
 
 #[derive(Clone, Copy)]
@@ -85,6 +87,8 @@ impl StaticValue {
             StaticValue::LinearContainer(c) => match c.kind {
                 StaticContainerKind::Span => "span",
                 StaticContainerKind::Array => "array",
+                StaticContainerKind::Buffer => "buffer",
+                StaticContainerKind::List => "list",
             },
         }
     }

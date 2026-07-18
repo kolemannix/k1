@@ -1,5 +1,7 @@
 http://localhost:8080 {
+  log
   root assets
+  reverse_proxy /app 127.0.0.1:3000
   reverse_proxy /app/* 127.0.0.1:3000
   file_server browse
 }

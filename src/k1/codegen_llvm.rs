@@ -3397,7 +3397,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     self.codegen_static_elements_array(element_type, span_elements, depth)?;
 
                 match cont.kind {
-                    StaticContainerKind::Span => {
+                    StaticContainerKind::Span
+                    | StaticContainerKind::Buffer
+                    | StaticContainerKind::List => {
                         let element_type_layout = self.k1.get_layout(element_type).unwrap();
                         let data_global = self.make_global_from_value(
                             array_value.as_basic_value_enum(),
@@ -3410,14 +3412,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         data_global.set_constant(true);
                         data_global.set_unnamed_addr(true);
                         data_global.set_initializer(&array_value);
-                        let span_struct = self
-                            .make_span_struct(
-                                cont.type_id,
-                                cont.len() as u64,
-                                data_global.as_pointer_value(),
-                            )
-                            .unwrap();
-                        span_struct.as_basic_value_enum()
+                        let span_struct = self.make_span_struct(
+                            cont.type_id,
+                            cont.len() as u64,
+                            data_global.as_pointer_value(),
+                        );
+                        let final_struct = match cont.kind {
+                            StaticContainerKind::Array => unreachable!(),
+                            StaticContainerKind::Span | StaticContainerKind::Buffer => span_struct,
+                            StaticContainerKind::List => {
+                                self.make_list_struct(cont.type_id, span_struct, cont.len() as u64)
+                            }
+                        };
+                        final_struct.as_basic_value_enum()
                     }
                     StaticContainerKind::Array => array_value.as_basic_value_enum(),
                 }
@@ -3626,7 +3633,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             char_buffer_cg_type.struct_type,
             str_len as u64,
             global_str_data.as_pointer_value(),
-        )?;
+        );
         let char_span_struct_value = char_span_struct
             .struct_type
             .const_named_struct(&[char_buffer_struct_value.as_basic_value_enum()]);
@@ -3661,12 +3668,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         struct_type: StructType<'ctx>,
         len: u64,
         data: PointerValue<'ctx>,
-    ) -> K1Result<StructValue<'ctx>> {
+    ) -> StructValue<'ctx> {
         let buffer_struct_value = struct_type.const_named_struct(&[
             data.as_basic_value_enum(),
-            self.builtin_types.ptr_sized_int.const_int(len, false).as_basic_value_enum(),
+            self.ctx.i64_type().const_int(len, false).as_basic_value_enum(),
         ]);
-        Ok(buffer_struct_value)
+        buffer_struct_value
     }
 
     fn make_span_struct(
@@ -3674,7 +3681,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         span_type_id: TypeId,
         len: u64,
         data: PointerValue<'ctx>,
-    ) -> K1Result<StructValue<'ctx>> {
+    ) -> StructValue<'ctx> {
         let buffer_type_id = self
             .k1
             .types
@@ -3684,6 +3691,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let buffer_pt = self.k1.get_physical_type(buffer_type_id).unwrap();
         let buffer_cg_type = self.codegen_type(buffer_pt).expect_struct();
         self.make_buffer_struct(buffer_cg_type.struct_type, len, data)
+    }
+
+    fn make_list_struct(
+        &mut self,
+        list_type_id: TypeId,
+        buffer_struct: StructValue<'ctx>,
+        len: u64,
+    ) -> StructValue<'ctx> {
+        let list_pt = self.k1.get_physical_type(list_type_id).unwrap();
+        let list_cg_type = self.codegen_type(list_pt).expect_struct();
+        list_cg_type.struct_type.const_named_struct(&[
+            // data
+            buffer_struct.as_basic_value_enum(),
+            // capacity
+            self.ctx.i64_type().const_int(len, false).as_basic_value_enum(),
+        ])
     }
 
     pub fn name(&self) -> &str {

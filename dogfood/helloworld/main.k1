@@ -1,1 +1,14 @@
+
+type interesting-data = { value: bool }
+
+ns megarepl {
+  type draw-command = either { text({ s: string, x: size, y: size }), rect({ color: u32, x: size, y: size, w: size, h: size}), line({}) }
+  type render-output = either {
+    text(string), scene(span[draw-command]), table, // others?
+  }
+}
+fn render(data: *interesting-data): megarepl/render-output {
+  :scene([:rect({ color: 0, x: 10, y: 10, w: 10, h: 10 })])
+}
+
 fn main(): i32 { 0 }

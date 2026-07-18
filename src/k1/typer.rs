@@ -4,13 +4,13 @@
 pub(crate) mod derive;
 pub(crate) mod dump;
 pub(crate) mod infer;
+pub(crate) mod megarepl;
 pub(crate) mod scopes;
 pub(crate) mod static_value;
 pub(crate) mod synth;
 pub(crate) mod typed_int_value;
 pub(crate) mod types;
 pub(crate) mod visit;
-pub(crate) mod megarepl;
 
 use crate::ir::{BackendBuiltin, IrUnitId};
 use crate::typer::dump::K1DisplayArgs;
@@ -5969,11 +5969,7 @@ impl TypedProgram {
             TypedExpr::Variable(v) => {
                 let typed_variable = self.variables.get(v.variable_id);
                 let Some(global_id) = typed_variable.global_id() else {
-                    return failf!(
-                        self.exprs.get_span(expr_id),
-                        "Variable cannot be evaluated at compile time: {}",
-                        self.ident_str(typed_variable.name)
-                    );
+                    return Ok(None);
                 };
                 let global = self.globals.get(global_id);
                 Ok(global.initial_value.as_value())
@@ -19116,7 +19112,6 @@ impl TypedProgram {
         writeln!(out, "\t{:.2}ms vm, avg {:.2}us/instr", vm_ms, vm_us_per_instr)?;
         Ok(())
     }
-
 }
 
 fn to_k1_size_u64(value: u64) -> i64 {

@@ -5,7 +5,7 @@ use k1::debug;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use k1::compiler::CompileProgramError;
 use k1::lex::{self, Span, SpanId, Spans};
@@ -193,7 +193,7 @@ fn uri_to_edited_source(backend: &Backend, url: &Url) -> Option<(SourceFile, boo
 
 struct Backend {
     client: Client,
-    module: Mutex<Option<Box<TypedProgram>>>,
+    module: k1::server::SharedProgram,
     edited_sources: Mutex<HashMap<Url, ParsedProgram>>,
     workspace_uri: RwLock<Option<Url>>,
     compile_iteration: AtomicU32,
@@ -201,9 +201,12 @@ struct Backend {
 
 impl Backend {
     fn new(client: Client) -> Backend {
+        let module: k1::server::SharedProgram = Arc::new(Mutex::new(None));
+        let server_module = module.clone();
+        std::thread::spawn(move || k1::server::serve(server_module));
         Backend {
             client,
-            module: Mutex::new(None),
+            module,
             edited_sources: Mutex::new(HashMap::new()),
             workspace_uri: RwLock::new(None),
             compile_iteration: AtomicU32::new(0),

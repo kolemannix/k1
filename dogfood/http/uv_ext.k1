@@ -60,6 +60,10 @@ ns uv {
     fn from-buffer(buffer: buffer[u8]): buf {
       uv/buf_init(buffer.data, buffer.len.as[u32])
     }
+
+    fn from-span(span: span[u8]): buf {
+      uv/buf_init(span.buffer.data, span.len().as[u32])
+    }
   }
 
   ns for errno {

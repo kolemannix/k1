@@ -1,13 +1,9 @@
 ns app;
 
-
-let gridsize: u32 = 256
-type deps = { config: { jwt-secret: string }, db-conn: db-conn, pixels: *array[u8, 65536] }
+type deps = { config: { jwt-secret: string }, db-conn: db-conn }
 
 // TODO load header.html globally
 // Template together index.html
-
-let mutable pixels: array[u8, 65536] = zeroed()
 
 // only once per thread
 fn make-deps(): *deps {
@@ -15,7 +11,6 @@ fn make-deps(): *deps {
     { 
       config: { jwt-secret: "asdf" },
       db-conn: {},
-      pixels: &pixels,
     }: app/deps
   )
 }
@@ -25,36 +20,73 @@ fn handle(req: http/request, deps: *mut deps): http-response {
   // let query-result: task[result[int, string]] = db-conn.run-query("select count(*) from fake_users where active = true");
   let context alloc = alloc-mode:current;
 
+  let styles = core/files/read-to-string("web/styles.css");
+
 
   tprintln("user-code/handle: request {req.header.method.enum-name()} `{req.header.url}`");
 
-  let write-response = fn(out: *StringBuilder, text: string) {
+  let make-header = fn(len: size) {
     // tprintln("responding with string {text}");
-    writef(
-      out,
-      "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: "
-      "{text.len()}\r\n\r\n{text}"
-    )
+    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: "
+    "{len}\r\n\r\n"
   };
 
-  if req.header.url.starts-with("/app/endpoint") {
-    update(deps.pixels);
-    let out = StringBuilder/new();
-    let body-out = StringBuilder/new();
-    render(&body-out, deps.pixels);
-    write-response(&out, body-out.build());
+  if req.header.url.starts-with("/app/starry-night") {
+    // let out = StringBuilder/new();
+    // let body-out = StringBuilder/new();
+    // render(&body-out, deps.pixels);
+    // write-response(&out, body-out.build());
     // To avoid the double-buffer situation, we could support 'chunks' instead of
     // just 'complete'; libuv supports this vectored write
-    :complete(out.build());
+    // :complete(out.build());
+    :complete([make-header(4), "todo"])
+  } else if req.header.url.starts-with("/app/sync") {
+    // TODO: push styles as script maybe + new body
+    let template: string = core/files/read-to-string("web/header.html");
+    let output = template(template, [{ key: "styles.css", value: styles }]).!;
+    let header = make-header(output.len());
+    :complete([header, output]);
   } else {
     let template: string = core/files/read-to-string("web/header.html");
-    let out = StringBuilder/new();
-    write-response(&out, template);
-    :complete(out.build());
+    let output = template(template, [{ key: "styles.css", value: styles }]).!;
+    let header = make-header(output.len());
+    :complete([header, output]);
   }
   // :complete("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror")
 }
 
+fn template(template: string, values: span[{ key: string, value: string }]): ?string {
+  let out = StringBuilder/new();
+  let i = 0;
+  while i < template.len() {
+    let c = template.get(i);
+    // TODO: simd scan
+    if c == '{' and template.get(i + 1) == '{' {
+      let rest = template.drop(i + 2);
+      let close = rest.indexOf('}');
+      if close == -1 return(:none);
+      let key = rest.take(close);
+      switch core/iter/find(values, fn p. p.key == key) {
+        :none -> return(:none),
+        :some(pair) -> out.write-string(pair.value)
+      };
+      i := i + 2 + close + 2;
+    } else {
+      out.write-char(c);
+      i := i + 1;
+    }
+  };
+  :some(out.build())
+}
+
+#static {
+  let result = template(p"my favorite food is {{x}}{{punct}}", [{ key: "x", value: "Ice Cream" }, { key: "punct", value: "!"}]);
+  println(result.!)
+}
+
+#if false ns wip-pixel-grid {
+
+let gridsize: u32 = 256
 fn render(out: *StringBuilder, pixels: *array[u8, 65536]) {
   out.string(`<div id="grid" style="position: relative">`);
   let size = 3;
@@ -73,4 +105,5 @@ fn update(pixels: *array[u8, 65536]): { x: u32, y: u32 } {
   // pix <- pix ^ 1;
   pix <- 1;
   { x, y }
+}
 }

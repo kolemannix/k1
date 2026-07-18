@@ -13,8 +13,6 @@ pub struct Tabs {
 struct TabDef {
     key: &'static str,
     label: &'static str,
-    /// Extra datastar expression run when the tab is selected, e.g. a lazy @get
-    on_select: Option<String>,
 }
 
 impl Tabs {
@@ -22,16 +20,8 @@ impl Tabs {
         Tabs { signal, tabs: vec![] }
     }
 
-    pub fn tab(self, key: &'static str, label: &'static str) -> Tabs {
-        self.add(TabDef { key, label, on_select: None })
-    }
-
-    pub fn tab_with_action(self, key: &'static str, label: &'static str, action: String) -> Tabs {
-        self.add(TabDef { key, label, on_select: Some(action) })
-    }
-
-    fn add(mut self, tab: TabDef) -> Tabs {
-        self.tabs.push(tab);
+    pub fn tab(mut self, key: &'static str, label: &'static str) -> Tabs {
+        self.tabs.push(TabDef { key, label });
         self
     }
 
@@ -47,14 +37,9 @@ impl Tabs {
             nav .result-tabs
                 data-signals__ifmissing=(format!("{{{}: '{}'}}", self.signal, default)) {
                 @for tab in &self.tabs {
-                    @let select = format!("${} = '{}'", self.signal, tab.key);
-                    @let on_click = match &tab.on_select {
-                        None => select,
-                        Some(action) => format!("{select}; {action}"),
-                    };
                     button .result-tab
                         data-class:active=(self.selected(tab.key))
-                        data-on:click=(on_click)
+                        data-on:click=(format!("${} = '{}'", self.signal, tab.key))
                         { (tab.label) }
                 }
             }
