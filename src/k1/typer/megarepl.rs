@@ -1,24 +1,21 @@
 use super::*;
 use crate::failf;
 
+pub type CellId = u32;
+pub type WidgetId = u32;
+
 #[derive(Clone)]
 pub struct MegareplCell {
-    pub id: u32,
-    /// Run after every execution of other cells
+    pub id: CellId,
     pub is_watcher: bool,
-    /// Show this cell's output as a tile on the canvas
-    pub is_pinned: bool,
     pub expr_id: Option<TypedExprId>,
     pub iteration: u32,
     pub source_id: FileId,
-    /// An explanatory message for display
-    pub message: String,
     pub last_result: CellResult,
     pub last_exec_time: Option<std::time::Duration>,
-    /// IR dump of the most recent execution, kept for display
     pub last_ir: String,
     /// Hidden globals capturing the values of the cell's non-unit toplevel
-    /// expressions, in source order; read back after each execution
+    /// expressions, in source order
     pub output_globals: Vec<(TypedGlobalId, TypeId)>,
 }
 
@@ -44,12 +41,51 @@ impl CellResult {
         CellResult::Error { k1_message, stdout: String::new(), stderr: String::new() }
     }
 }
+
+impl MegareplCell {
+    pub fn is_error(&self) -> bool {
+        matches!(self.last_result, CellResult::Error { .. })
+    }
+}
+
+pub struct MegareplGlobal {
+    pub global_id: TypedGlobalId,
+    /// Value after the most recent run, refreshed once per submit; None until
+    /// the global is first assigned
+    pub last_value: Option<StaticValueId>,
+}
+
+#[derive(Clone, Copy)]
+pub enum WidgetDataSource {
+    /// A let-bound name in the repl scope
+    Binding(StringId),
+    /// A watcher cell's latest result
+    Watcher(CellId),
+}
+
+#[derive(Clone, Copy)]
+pub enum WidgetKind {
+    /// Read-only text dump of the value (static-value printing)
+    Plain,
+}
+
+/// A view of some Data placed on the canvas. Many-to-many with Data: a value
+/// can appear in any number of widgets.
+pub struct MegareplWidget {
+    pub id: WidgetId,
+    pub data: WidgetDataSource,
+    pub kind: WidgetKind,
+}
+
 pub struct MegareplState {
-    pub vm: vm::Vm,
     pub parsed_ns: ParsedNamespaceId,
     pub ns: NamespaceId,
     pub ns_scope: ScopeId,
     pub cells: Vec<MegareplCell>,
+    pub globals: Vec<MegareplGlobal>,
+    pub widgets: Vec<MegareplWidget>,
+    /// Monotonic so deleting a widget never re-labels the others
+    pub next_widget_id: CellId,
 }
 
 impl TypedProgram {
@@ -76,35 +112,75 @@ impl TypedProgram {
         })
     }
 
-    pub fn megarepl_submit(&mut self, cell_id: Option<u32>, code: String) -> u32 /* cell id */ {
+    pub fn megarepl_submit(&mut self, cell_id: Option<CellId>, code: String) {
         self.ensure_megarepl_session();
-        if let Some(cell_id) = cell_id {
-            let existing = self.megarepl_get_cell(cell_id);
-            let existing_code = &self.ast.sources.get(existing.source_id).content;
-            if existing_code != &code {
-                let iteration = existing.iteration + 1;
-                let new_source = self.megarepl_create_source(cell_id, iteration, code);
-                let cell = self.megarepl_get_cell_mut(cell_id);
-                cell.source_id = new_source;
-                cell.iteration = iteration;
+        let cell_id = match cell_id {
+            Some(cell_id) => {
+                let existing = self.megarepl_get_cell(cell_id);
+                let existing_code = &self.ast.sources.get(existing.source_id).content;
+                if existing_code != &code {
+                    let iteration = existing.iteration + 1;
+                    let new_source = self.megarepl_create_source(cell_id, iteration, code);
+                    let cell = self.megarepl_get_cell_mut(cell_id);
+                    cell.source_id = new_source;
+                    cell.iteration = iteration;
+                    if let Err(e) = self.megarepl_compile_source(cell_id) {
+                        self.megarepl_set_cell_compile_error(cell_id, e);
+                    }
+                };
+                cell_id
+            }
+            None => {
+                let cell_id = self.megarepl_new(code);
                 if let Err(e) = self.megarepl_compile_source(cell_id) {
                     self.megarepl_set_cell_compile_error(cell_id, e);
                 }
-            };
-            self.megarepl_execute_cell(cell_id);
-            self.megarepl_set_cell_message(cell_id, "Re-ran".to_string());
-            cell_id
-        } else {
-            let cell_id = self.megarepl_new(code);
-            if let Err(e) = self.megarepl_compile_source(cell_id) {
-                self.megarepl_set_cell_compile_error(cell_id, e);
+                cell_id
             }
-            self.megarepl_execute_cell(cell_id);
-            cell_id
+        };
+        self.megarepl_execute_cell(cell_id);
+        self.megarepl_refresh_globals();
+    }
+
+    /// A repl global is user data if its variable still resolves in the
+    /// session scope: output-capture globals are never added there, and
+    /// shadowed `let` bindings get overwritten
+    pub fn megarepl_global_is_live(&self, mr_global: &MegareplGlobal) -> bool {
+        let ns_scope = self.megarepl.as_ref().unwrap().ns_scope;
+        let variable_id = self.globals.get(mr_global.global_id).variable_id;
+        let name = self.variables.get(variable_id).name;
+        matches!(
+            self.scopes.find_variable_local(ns_scope, name),
+            Some(VariableInScope::Defined(found)) if found == variable_id
+        )
+    }
+
+    /// Re-reads every live global's current value out of the VM for display
+    fn megarepl_refresh_globals(&mut self) {
+        let mr = self.megarepl.as_ref().unwrap();
+        let live: Vec<(usize, TypedGlobalId, TypeId)> = mr
+            .globals
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| self.megarepl_global_is_live(g))
+            .map(|(index, g)| (index, g.global_id, self.globals.get(g.global_id).type_id))
+            .collect();
+        let values: Vec<Option<StaticValueId>> = self.do_with_vm(SpanId::NONE, |k1, vm| {
+            live.iter()
+                .map(|(_, global_id, type_id)| {
+                    vm::peek_global_as_static(k1, vm, *global_id, *type_id)
+                })
+                .collect()
+        });
+        let mr = self.megarepl.as_mut().unwrap();
+        for ((index, _, _), value) in live.iter().zip(values) {
+            if value.is_some() {
+                mr.globals[*index].last_value = value;
+            }
         }
     }
 
-    fn megarepl_set_cell_compile_error(&mut self, cell_id: u32, error: K1Message) {
+    fn megarepl_set_cell_compile_error(&mut self, cell_id: CellId, error: K1Message) {
         let cell = self.megarepl_get_cell_mut(cell_id);
         cell.last_result = CellResult::error(error);
         cell.expr_id = None;
@@ -112,23 +188,19 @@ impl TypedProgram {
         cell.last_ir.clear();
     }
 
-    fn megarepl_set_cell_message(&mut self, cell_id: u32, message: String) {
-        self.megarepl_get_cell_mut(cell_id).message = message;
-    }
-
-    pub fn megarepl_get_cell(&self, cell_id: u32) -> &MegareplCell {
+    pub fn megarepl_get_cell(&self, cell_id: CellId) -> &MegareplCell {
         &self.megarepl.as_ref().unwrap().cells[cell_id as usize]
     }
 
-    pub fn megarepl_get_cell_opt(&self, cell_id: u32) -> Option<&MegareplCell> {
+    pub fn megarepl_get_cell_opt(&self, cell_id: CellId) -> Option<&MegareplCell> {
         self.megarepl.as_ref().unwrap().cells.get(cell_id as usize)
     }
 
-    fn megarepl_get_cell_mut(&mut self, cell_id: u32) -> &mut MegareplCell {
+    fn megarepl_get_cell_mut(&mut self, cell_id: CellId) -> &mut MegareplCell {
         &mut self.megarepl.as_mut().unwrap().cells[cell_id as usize]
     }
 
-    fn megarepl_create_source(&mut self, cell_id: u32, iteration: u32, code: String) -> FileId {
+    fn megarepl_create_source(&mut self, cell_id: CellId, iteration: u32, code: String) -> FileId {
         let filename = format!("{}_repl_cell_{}.{}.k1", self.program_name(), cell_id, iteration);
         let source_id = self.ast.sources.add_file(crate::parse::SourceFile::make(
             0,
@@ -141,18 +213,16 @@ impl TypedProgram {
 
     fn megarepl_new(&mut self, code: String) -> u32 {
         let mr = self.megarepl.as_mut().unwrap();
-        let cell_id = mr.cells.len() as u32;
+        let cell_id = mr.cells.len() as CellId;
         let source_id = self.megarepl_create_source(cell_id, 0, code);
         let mr = self.megarepl.as_mut().unwrap();
         mr.cells.push(MegareplCell {
             id: cell_id,
             is_watcher: false,
-            is_pinned: false,
             expr_id: None,
             iteration: 0,
             source_id,
             last_result: CellResult::error(make_warning("uninit", SpanId::NONE)),
-            message: String::new(),
             last_exec_time: None,
             output_globals: vec![],
             last_ir: String::new(),
@@ -162,7 +232,7 @@ impl TypedProgram {
 
     // Have to compile, which sets expr
     // Then execute, which sets result
-    fn megarepl_compile_source(&mut self, cell_id: u32) -> K1Result<()> {
+    fn megarepl_compile_source(&mut self, cell_id: CellId) -> K1Result<()> {
         let source = self.megarepl_get_cell(cell_id).source_id;
         let repl_source_result = match self.parse_repl_source(source) {
             Err(e) => {
@@ -194,7 +264,7 @@ impl TypedProgram {
         }
     }
 
-    fn megarepl_execute_cell(&mut self, cell_id: u32) {
+    fn megarepl_execute_cell(&mut self, cell_id: CellId) {
         self.megarepl_execute_cell_solo(cell_id);
 
         // Watchers re-run after any other cell runs. Fanning out only from
@@ -208,7 +278,7 @@ impl TypedProgram {
         }
     }
 
-    fn megarepl_execute_cell_solo(&mut self, cell_id: u32) {
+    fn megarepl_execute_cell_solo(&mut self, cell_id: CellId) {
         let cell = self.megarepl_get_cell(cell_id);
         let Some(cell_expr) = cell.expr_id else {
             eprintln!("nothing to execute");
@@ -245,18 +315,36 @@ impl TypedProgram {
         };
     }
 
-    pub fn megarepl_toggle_watcher(&mut self, cell_id: u32) -> bool {
+    pub fn megarepl_toggle_watcher(&mut self, cell_id: CellId) -> bool {
         let cell = self.megarepl_get_cell_mut(cell_id);
         cell.is_watcher = !cell.is_watcher;
         cell.is_watcher
     }
 
-    pub fn megarepl_toggle_pin(&mut self, cell_id: u32) -> bool {
-        let cell = self.megarepl_get_cell_mut(cell_id);
-        cell.is_pinned = !cell.is_pinned;
-        // For now pinned implies watched: a displayed tile is a live one
-        cell.is_watcher = cell.is_pinned;
-        cell.is_pinned
+    pub fn megarepl_add_widget(&mut self, data: WidgetDataSource, kind: WidgetKind) -> WidgetId {
+        let mr = self.megarepl.as_mut().unwrap();
+        let id = mr.next_widget_id;
+        mr.next_widget_id += 1;
+        mr.widgets.push(MegareplWidget { id, data, kind });
+        id
+    }
+
+    pub fn megarepl_remove_widget(&mut self, widget_id: WidgetId) {
+        self.megarepl.as_mut().unwrap().widgets.retain(|w| w.id != widget_id);
+    }
+
+    /// The Data entry `name` currently resolves to, if any
+    pub fn megarepl_resolve_binding(&self, name: StringId) -> Option<&MegareplGlobal> {
+        let mr = self.megarepl.as_ref().unwrap();
+        let Some(VariableInScope::Defined(variable_id)) =
+            self.scopes.find_variable_local(mr.ns_scope, name)
+        else {
+            return None;
+        };
+        let VariableKind::Global(global_id) = self.variables.get(variable_id).kind else {
+            return None;
+        };
+        mr.globals.iter().find(|g| g.global_id == global_id)
     }
 
     /// Creates an uninitialized, non-constant global in the repl namespace.
@@ -287,7 +375,7 @@ impl TypedProgram {
             kind: VariableKind::Global(global_id),
             defn_span: span,
         });
-        let _global_id = self.globals.add_expected_id(
+        let global_id = self.globals.add_expected_id(
             TypedGlobal {
                 variable_id,
                 parsed_expr: None,
@@ -303,13 +391,18 @@ impl TypedProgram {
             },
             global_id,
         );
+        self.megarepl
+            .as_mut()
+            .unwrap()
+            .globals
+            .push(MegareplGlobal { global_id, last_value: None });
         (global_id, variable_id)
     }
 
     fn megarepl_compile_statements(
         &mut self,
         stmts: List<ParsedStmtId, ParsedProgram>,
-        cell_id: u32,
+        cell_id: CellId,
         iteration: u32,
     ) -> K1Result<(TypedExprId, Vec<(TypedGlobalId, TypeId)>)> {
         let span = stmts.first().map(|s| self.ast.get_stmt_span(*s)).unwrap_or(SpanId::NONE);
@@ -481,38 +574,55 @@ impl TypedProgram {
     }
 
     pub fn ensure_megarepl_session(&mut self) {
-        match self.megarepl {
-            Some(_) => {}
-            None => {
-                let name = self.ast.idents.intern("megarepl");
-                let parsed_namespace_id =
-                    self.ast.namespaces.add(parse::ParsedNamespace::empty(name));
-
-                let module_id = self.module_in_progress.unwrap();
-                let module = self.modules.get(module_id);
-                let ns_scope_id = self.scopes.add_child_scope(
-                    module.namespace_scope_id,
-                    ScopeType::Namespace,
-                    ScopeOwnerId::None,
-                );
-                let ns_id = self.namespaces.add(Namespace {
-                    name,
-                    scope_id: ns_scope_id,
-                    namespace_type: NamespaceKind::User,
-                    companion_type_id: None,
-                    parent_id: Some(module.namespace_id),
-                    owner_module: Some(module_id),
-                    parsed_id: ParsedId::Namespace(parsed_namespace_id),
-                });
-                self.megarepl = Some(MegareplState {
-                    vm: vm::Vm::make(),
-                    parsed_ns: parsed_namespace_id,
-                    ns: ns_id,
-                    ns_scope: ns_scope_id,
-                    cells: vec![],
-                });
-            }
+        if self.megarepl.is_some() {
+            return;
         }
+        // Obscure name so we stay clear of the program's own namespaces
+        // (`megarepl` itself is fair game for user code); if it somehow
+        // exists anyway, extend it
+        let name = self.ast.idents.intern("_repl_session");
+        let module_id = self.module_in_progress.unwrap();
+        let module = self.modules.get(module_id);
+        let module_ns_scope = module.namespace_scope_id;
+        let (ns_id, ns_scope_id, parsed_ns) =
+            match self.scopes.find_namespace_local(module_ns_scope, name) {
+                Some(ns_id) => {
+                    let ns = self.namespaces.get(ns_id);
+                    (ns_id, ns.scope_id, ns.parsed_id.as_namespace_id().unwrap())
+                }
+                None => {
+                    let parsed_namespace_id =
+                        self.ast.namespaces.add(parse::ParsedNamespace::empty(name));
+                    let module_ns_id = module.namespace_id;
+                    let ns_scope_id = self.scopes.add_child_scope(
+                        module_ns_scope,
+                        ScopeType::Namespace,
+                        ScopeOwnerId::None,
+                    );
+                    let ns_id = self.namespaces.add(Namespace {
+                        name,
+                        scope_id: ns_scope_id,
+                        namespace_type: NamespaceKind::User,
+                        companion_type_id: None,
+                        parent_id: Some(module_ns_id),
+                        owner_module: Some(module_id),
+                        parsed_id: ParsedId::Namespace(parsed_namespace_id),
+                    });
+                    self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(ns_id));
+                    let added = self.scopes.add_namespace(module_ns_scope, name, ns_id);
+                    debug_assert!(added, "megarepl ns name was free; we just checked");
+                    (ns_id, ns_scope_id, parsed_namespace_id)
+                }
+            };
+        self.megarepl = Some(MegareplState {
+            parsed_ns,
+            ns: ns_id,
+            ns_scope: ns_scope_id,
+            cells: vec![],
+            globals: vec![],
+            widgets: vec![],
+            next_widget_id: 0,
+        });
     }
 
     pub fn megarepl_static_value_to_string(&self, value_id: StaticValueId) -> String {

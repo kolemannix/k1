@@ -840,9 +840,23 @@ impl TypedProgram {
                     write!(w, "{}", i)
                 }
             }
-            StaticValue::Enum(type_id, i) => {
-                self.display_type_id(w, *type_id, false)?;
-                write!(w, "({})", i)
+            StaticValue::Enum(enum_type_id, int_value) => {
+                if pretty {
+                    let enum_type = self.types.get(*enum_type_id).expect_enum();
+                    let value_name = self
+                        .types
+                        .mem
+                        .getn(enum_type.member_values)
+                        .iter()
+                        .find(|m| m.int_value == *int_value)
+                        .unwrap();
+                    w.write_char(':')?;
+                    self.write_ident(w, value_name.name)?;
+                    Ok(())
+                } else {
+                    self.display_type_id(w, *enum_type_id, false)?;
+                    write!(w, "({})", int_value)
+                }
             }
             StaticValue::Float(f) => {
                 if pretty {
@@ -852,7 +866,11 @@ impl TypedProgram {
                 }
             }
             StaticValue::String(s) => {
-                write!(w, "\"{}\"", self.get_string(*s))
+                if pretty {
+                    write!(w, "{}", self.get_string(*s))
+                } else {
+                    write!(w, "\"{}\"", self.get_string(*s))
+                }
             }
             StaticValue::Zero(type_id) => {
                 if pretty {

@@ -251,9 +251,16 @@ impl Vm {
 
         if let Some(arena_ptr) = arena_ptr_to_preserve {
             debug!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
-            // Empty the live arena (same as k1 arena/reset(clear=false)) and
-            // re-create the pointer cell so init-tmp-arena doesn't re-mmap
-            unsafe { (*arena_ptr).curAddr = (*arena_ptr).basePtr.addr() as u64 };
+            // Empty and zero the live arena (same as k1 arena/reset(clear=true)) and
+            // re-create the pointer cell so init-tmp-arena doesn't re-mmap.
+            // Zeroing upholds alloc-mode.alloc's zeroed-memory contract, which fresh
+            // mmap pages provide and reuse across static executions would break.
+            unsafe {
+                let base = (*arena_ptr).basePtr;
+                let used = (*arena_ptr).curAddr - base.addr() as u64;
+                core::ptr::write_bytes(base.cast_mut(), 0, used as usize);
+                (*arena_ptr).curAddr = base.addr() as u64;
+            };
             let cell = self.static_stack.push_t(arena_ptr);
             self.globals.insert(arena_global_id.unwrap(), Value::ptr(cell));
         }
@@ -2830,6 +2837,24 @@ pub fn read_global_as_static(
     let addr = resolve_global(k1, vm, global_id, pt)?;
     let loaded = load_value(pt, addr.as_ptr());
     vm_value_to_static_value(k1, type_id, loaded, span)
+}
+
+/// A global's current value, if this VM (or the shared constant space)
+/// already holds storage for it; unlike `read_global_as_static` this never
+/// materializes an untouched global, whose contents would be uninitialized
+/// garbage
+pub fn peek_global_as_static(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    global_id: TypedGlobalId,
+    type_id: TypeId,
+) -> Option<StaticValueId> {
+    let materialized = vm.globals.contains_key(&global_id)
+        || k1.vm_global_constant_lookups.contains_key(&global_id);
+    if !materialized {
+        return None;
+    }
+    read_global_as_static(k1, vm, global_id, type_id).ok()
 }
 
 pub(crate) fn report_execution_messages(

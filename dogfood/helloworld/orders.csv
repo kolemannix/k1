@@ -1,0 +1,31 @@
+id,customer,item,quantity,unit-cents,status,country
+1001,Ada Lovelace,Mechanical Keyboard,1,12999,delivered,UK
+1002,Grace Hopper,USB-C Dock,2,8450,shipped,USA
+1003,Alan Turing,Ergonomic Mouse,1,4599,pending,UK
+1004,Edsger Dijkstra,Monitor Arm,3,6799,delivered,Netherlands
+1005,Barbara Liskov,Laptop Stand,1,3899,cancelled,USA
+1006,Donald Knuth,Fountain Pen,5,2250,delivered,USA
+1007,John McCarthy,Whiteboard Markers,12,899,shipped,USA
+1008,Niklaus Wirth,Desk Lamp,1,5450,pending,Switzerland
+1009,Tony Hoare,Noise Cancelling Headphones,1,27999,delivered,UK
+1010,Frances Allen,Webcam,2,7999,shipped,USA
+1011,Ken Thompson,Split Keyboard,1,19500,pending,USA
+1012,Dennis Ritchie,Trackball,1,9950,delivered,USA
+1013,Bjarne Stroustrup,Standing Desk,1,44900,shipped,Denmark
+1014,Anders Hejlsberg,Cable Organizer,4,1250,delivered,Denmark
+1015,Yukihiro Matsumoto,Tea Kettle,1,6200,delivered,Japan
+1016,Guido van Rossum,Espresso Grinder,1,32900,pending,Netherlands
+1017,Brendan Eich,Monitor 27in,2,31999,shipped,USA
+1018,Rich Hickey,Vinyl Record,7,2999,delivered,USA
+1019,Simon Peyton Jones,Bookshelf,2,15900,cancelled,UK
+1020,Leslie Lamport,Document Camera,1,11450,shipped,USA
+1021,Margaret Hamilton,Flight Sim Yoke,1,24999,delivered,USA
+1022,Radia Perlman,Network Switch,3,10500,pending,USA
+1023,Vint Cerf,Router,2,13999,shipped,USA
+1024,Tim Berners-Lee,Server Rack,1,89900,pending,UK
+1025,Linus Torvalds,Scuba Mask,1,7850,delivered,Finland
+1026,Graydon Hoare,Crab Plush,10,1999,shipped,Canada
+1027,Chris Lattner,Model Rocket,2,5600,delivered,USA
+1028,Katherine Johnson,Telescope,1,52500,shipped,USA
+1029,Claude Shannon,Juggling Balls,9,1150,delivered,USA
+1030,John Backus,Record Player,1,21900,cancelled,USA
