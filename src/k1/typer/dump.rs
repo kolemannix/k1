@@ -911,6 +911,8 @@ impl TypedProgram {
                     match cont.kind {
                         StaticContainerKind::Span => write!(w, "span")?,
                         StaticContainerKind::Array => write!(w, "array")?,
+                        StaticContainerKind::Buffer => write!(w, "buffer")?,
+                        StaticContainerKind::List => write!(w, "list")?,
                     }
                 }
                 self.display_static_items(w, self.static_values.get_slice(cont.elements), pretty)?;

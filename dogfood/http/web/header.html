@@ -7,18 +7,9 @@
 
     <script type="module" src="../datastar.js"></script>
     <title>k1/d* stress test</title>
+    <link id="live-css" rel="stylesheet"/>
     <style>
-      .off-pixel, .on-pixel {
-        position: absolute;
-        width: 3px;
-        height: 3px;
-      }
-      .off-pixel {
-        background-color: black;
-      }
-      .on-pixel {
-        background-color: yellow;
-      }
+      {{styles.css}}
     </style>
 </head>
 <body>
@@ -26,9 +17,8 @@
     <h1>Hello, World!</h1>
     <input data-bind="foo" />
     <input type="checkbox" name="sync" data-bind="sync">Sync</checkbox>
-    <div data-on-interval__duration.500ms="if ($sync) @get('/app/endpoint')"></div>
+    <div data-on-interval__duration.1000ms="if ($sync) @get('/app/sync')"></div>
     <div id="grid"></div>
-
 
 </body>
 </html>

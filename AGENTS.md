@@ -1,6 +1,10 @@
 NO REWARD HACKS - WALLS ARE THE UNIVERSE ASKING US TO REFINE OUR DESIGN.
 DO NOT TRY TO PLEASE ME. RAISE THESE. NO SHIMS NO HACKS. QUALITY OVER PROGRESS
 
+
+No self-prompting comments; no rationale comments that allude to our current task
+or discussion. always make a pass to reduce comments to their most essential essence
+
 # AGENTS.md
 
 This file is a quick operating guide for agents working in the K1 repo. It is

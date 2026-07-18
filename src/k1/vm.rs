@@ -138,7 +138,14 @@ pub mod k1_types {
     /// - It's even 'list-compatible' since list starts with a buffer.
     pub struct K1BufferLike {
         pub data: *mut u8,
-        pub len: usize,
+        pub len: i64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct K1List {
+        pub k1_buffer: K1BufferLike,
+        pub capacity: i64,
     }
 
     #[derive(Clone, Copy)]
@@ -164,7 +171,7 @@ pub mod k1_types {
         ///# Safety
         /// None of this is safe
         pub unsafe fn to_slice<'a, T>(self) -> &'a [T] {
-            unsafe { std::slice::from_raw_parts(self.data as *const T, self.len) }
+            unsafe { std::slice::from_raw_parts(self.data as *const T, self.len as usize) }
         }
 
         ///# Safety
@@ -214,6 +221,9 @@ pub struct Vm {
     pub stack: Stack,
     pub(crate) eval_span: SpanId,
     pub(crate) compiler_messages: Vec<CompilerMessage>,
+    /// When set, emitted messages are only recorded, not printed to the
+    /// console; the megarepl harvests them as the cell's stdout/stderr
+    pub quiet_messages: bool,
     // This is just the first valid address in `stack`, before the first frame
     pub(crate) overall_return_addr: *mut u8,
     /// (fp, pc) at the point of a bc execution error, for bc stack traces
@@ -262,6 +272,7 @@ impl Vm {
             stack,
             eval_span: SpanId::NONE,
             compiler_messages: Vec::with_capacity(16),
+            quiet_messages: false,
             bc_fault: None,
         }
     }
@@ -1744,7 +1755,11 @@ pub(crate) fn resolve_global(
     };
 
     let layout = k1.types.get_pt_layout(t);
-    let dst = if is_constant { k1.vm_shared_static_stack.push_layout_uninit(layout) } else { vm.static_stack.push_layout_uninit(layout) };
+    let dst = if is_constant {
+        k1.vm_shared_static_stack.push_layout_uninit(layout)
+    } else {
+        vm.static_stack.push_layout_uninit(layout)
+    };
     let addr = Value::ptr(dst);
 
     if is_constant {
@@ -1847,17 +1862,30 @@ pub fn static_value_to_vm_value(
             let layout = k1.get_layout(element_type).unwrap();
             let array_allocation_layout = layout.array_me(len);
 
-            let array_base_ptr = k1.vm_shared_static_stack.push_layout_uninit(array_allocation_layout);
+            let array_base_ptr =
+                k1.vm_shared_static_stack.push_layout_uninit(array_allocation_layout);
 
             store_static_array_elements(k1, array_base_ptr, element_type, container_elements);
 
             match kind {
-                StaticContainerKind::Span => {
-                    let rust_span = k1_types::K1BufferLike { len, data: array_base_ptr };
+                // k1 span and buffer have identical layouts; differ only in mutability
+                StaticContainerKind::Span | StaticContainerKind::Buffer => {
+                    let rust_span =
+                        k1_types::K1BufferLike { len: len as i64, data: array_base_ptr };
                     let span_struct_ptr = k1.vm_shared_static_stack.push_t(rust_span);
 
                     Value::ptr(span_struct_ptr)
                 }
+                StaticContainerKind::List => {
+                    // k1 list is a growable buffer; { buffer, capacity }.
+                    let rust_list = k1_types::K1List {
+                        k1_buffer: k1_types::K1BufferLike { data: array_base_ptr, len: len as i64 },
+                        capacity: len as i64,
+                    };
+                    let rust_struct_ptr = k1.vm_shared_static_stack.push_t(rust_list);
+                    Value::ptr(rust_struct_ptr)
+                }
+                // k1 array is an aggregate value, so we represent it by its base address
                 StaticContainerKind::Array => Value::ptr(array_base_ptr),
             }
         }
@@ -1921,7 +1949,9 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             let array_allocation_layout = layout.array_me(len);
 
             let array_base_ptr = match kind {
-                StaticContainerKind::Span => {
+                StaticContainerKind::Span
+                | StaticContainerKind::Buffer
+                | StaticContainerKind::List => {
                     k1.vm_shared_static_stack.push_layout_uninit(array_allocation_layout)
                 }
                 StaticContainerKind::Array => dst,
@@ -1930,11 +1960,21 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             store_static_array_elements(k1, array_base_ptr, element_type, container_elements);
 
             match kind {
-                StaticContainerKind::Span => {
+                StaticContainerKind::Span | StaticContainerKind::Buffer => {
                     // Store the struct to dst
-                    let rust_span = k1_types::K1BufferLike { len, data: array_base_ptr };
+                    let rust_span =
+                        k1_types::K1BufferLike { len: len as i64, data: array_base_ptr };
 
                     unsafe { *(dst as *mut k1_types::K1BufferLike) = rust_span };
+                }
+                StaticContainerKind::List => {
+                    // Store the struct to dst
+                    let rust_list = k1_types::K1List {
+                        k1_buffer: k1_types::K1BufferLike { data: array_base_ptr, len: len as i64 },
+                        capacity: len as i64,
+                    };
+
+                    unsafe { *(dst as *mut k1_types::K1List) = rust_list };
                 }
                 StaticContainerKind::Array => {}
             }
@@ -1967,8 +2007,8 @@ fn store_static_array_elements(
 pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
     let s = k1.get_string(string_id);
     // This just points into the Rust memory for the string's data. Teehee uwuu
-    // I need to guarantee it can't re-allocate because that's still sadly using the string interner library
-    let k1_string = k1_types::K1BufferLike { len: s.len(), data: s.as_ptr().cast_mut() };
+    // I need to guarantee it can't re-allocate because that's still using the string interner library
+    let k1_string = k1_types::K1BufferLike { len: s.len() as i64, data: s.as_ptr().cast_mut() };
     if cfg!(debug_assertions) {
         let string_type_id = k1.string_type_id();
         let char_span_type_id = k1.types.get_struct_field(string_type_id, 0).type_id;
@@ -1977,7 +2017,8 @@ pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
         debug_assert_eq!(size_of_val(&k1_string), string_layout.size as usize);
     }
 
-    let string_stack_addr = k1.vm_shared_static_stack.mem.push(k1_string) as *mut k1_types::K1BufferLike;
+    let string_stack_addr =
+        k1.vm_shared_static_stack.mem.push(k1_string) as *mut k1_types::K1BufferLike;
     Value::ptr(string_stack_addr.cast())
 }
 
@@ -2445,27 +2486,31 @@ pub fn vm_value_to_static_value(
             {
                 match container_kind {
                     ContainerKind::Array(_) => unreachable!(),
-                    ContainerKind::List | ContainerKind::Buffer => {
-                        return failf!(
-                            span,
-                            "{} cannot be converted to static value; convert to a span first",
-                            k1.type_id_to_string(type_id)
-                        );
-                    }
-                    ContainerKind::Span => {
-                        let k1_span: k1_types::K1BufferLike = value_as_span(vm_value);
+                    ContainerKind::Span | ContainerKind::List | ContainerKind::Buffer => {
+                        let k1_span: k1_types::K1BufferLike = match container_kind {
+                            ContainerKind::List => value_as_list(vm_value).k1_buffer,
+                            ContainerKind::Span => value_as_span(vm_value),
+                            ContainerKind::Buffer => value_as_span(vm_value),
+                            _ => unreachable!(),
+                        };
                         let element_pt = k1.get_physical_type(element_type).unwrap();
                         let mut elements = k1.static_values.mem.new_list(k1_span.len as u32);
-                        for index in 0..k1_span.len {
+                        for index in 0..(k1_span.len as usize) {
                             let elem_vm = get_span_element(k1, k1_span.data, element_pt, index);
                             let elem_static =
                                 vm_value_to_static_value(k1, element_type, elem_vm, span)?;
                             elements.push(elem_static);
                         }
                         let elements_slice = elements.into_handle(&mut k1.static_values.mem);
+                        let static_kind = match container_kind {
+                            ContainerKind::Array(_) => unreachable!(),
+                            ContainerKind::Buffer => StaticContainerKind::Buffer,
+                            ContainerKind::Span => StaticContainerKind::Span,
+                            ContainerKind::List => StaticContainerKind::List,
+                        };
                         k1.static_values.add(StaticValue::LinearContainer(StaticContainer {
                             elements: elements_slice,
-                            kind: StaticContainerKind::Span,
+                            kind: static_kind,
                             type_id,
                         }))
                     }
@@ -2552,6 +2597,13 @@ pub fn vm_value_to_static_value(
         | Type::InferenceHole(_) => unreachable!(),
     };
     Ok(static_value_id)
+}
+
+pub fn value_as_list(list_value: Value) -> k1_types::K1List {
+    let ptr = list_value.as_ptr();
+    let list_ptr = ptr as *const k1_types::K1List;
+    let k1_list = unsafe { list_ptr.read() };
+    k1_list
 }
 
 pub fn value_as_span(span_value: Value) -> k1_types::K1BufferLike {
@@ -2728,13 +2780,15 @@ pub(crate) fn builtin_compiler_message(
         errf!(vm.eval_span, "Bad filename string passed to EmitCompilerMessage: {msg}")
     })?;
 
-    eprintln!(
-        "[{}:{} {}] {}",
-        filename,
-        location.line,
-        level.name_str().color(level.color()),
-        k1.get_string(message)
-    );
+    if !vm.quiet_messages {
+        eprintln!(
+            "[{}:{} {}] {}",
+            filename,
+            location.line,
+            level.name_str().color(level.color()),
+            k1.get_string(message)
+        );
+    }
 
     vm.compiler_messages.push(CompilerMessage {
         level,
@@ -2743,6 +2797,39 @@ pub(crate) fn builtin_compiler_message(
         line: location.line as u32,
     });
     Ok(())
+}
+
+/// Removes captured print messages from `from` onward and splits them into
+/// (stdout, stderr) text: core's print/eprint emit Info/Warn compiler messages
+/// when running on the VM (k1/is-static and k1/capture-prints)
+pub fn drain_captured_prints(k1: &TypedProgram, vm: &mut Vm, from: usize) -> (String, String) {
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    for message in vm.compiler_messages.drain(from..) {
+        let s = k1.get_string(message.message);
+        match message.level {
+            MessageLevel::Info | MessageLevel::Hint => stdout.push_str(s),
+            MessageLevel::Warn | MessageLevel::Error => stderr.push_str(s),
+        }
+    }
+    (stdout, stderr)
+}
+
+/// Reads a global's current value out of VM memory as a static value
+pub fn read_global_as_static(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    global_id: TypedGlobalId,
+    type_id: TypeId,
+) -> K1Result<StaticValueId> {
+    let span = vm.eval_span;
+    let pt = match k1.types.get_physical_type(&k1.static_values, type_id) {
+        PhysicalTypeResult::Yes(pt) => pt,
+        _ => return Ok(k1.static_values.empty_id()),
+    };
+    let addr = resolve_global(k1, vm, global_id, pt)?;
+    let loaded = load_value(pt, addr.as_ptr());
+    vm_value_to_static_value(k1, type_id, loaded, span)
 }
 
 pub(crate) fn report_execution_messages(

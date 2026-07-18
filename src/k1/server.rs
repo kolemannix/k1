@@ -1,24 +1,33 @@
+mod bus;
+pub mod sse;
 mod tabs;
 
 use itertools::Itertools;
 use maud::html;
 use tabs::Tabs;
 
-use crate::ir;
 use crate::typer::megarepl::{CellResult, MegareplCell};
 use crate::typer::TypedProgram;
-use std::borrow::Cow;
 use std::fmt;
 use std::io::Read;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
+
+/// The program the server serves, shared with whoever compiles it: the CLI
+/// hands over sole ownership, while the LSP keeps a handle and swaps in a
+/// whole new program on every recompile.
+pub type SharedProgram = Arc<Mutex<Option<Box<TypedProgram>>>>;
 
 enum Response {
     Ok(String),
+    /// The request was a command; its effects were published on the event bus
+    NoContent,
     BadRequest,
     NotFound,
+    /// No compiled program behind the server (yet)
+    Unavailable,
 }
 
 /// Wraps a closure as `Display` so render helpers can return cheap values that
@@ -50,15 +59,13 @@ impl<R: fmt::Display> fmt::Display for SignalFilter<R> {
     }
 }
 
-/// Submits the cell's code for recompilation/re-execution. Sends the cell's
-/// own signals plus every cell's tab signal, since watchers re-render in the
-/// response and their IR panes need to be kept fresh too.
+/// Submits the cell's code for recompilation/re-execution
 fn cell_post_action(cell_id: u32) -> impl fmt::Display {
     DisplayFn(move |f| {
         write!(
             f,
             "@post('/cell/{cell_id}', {})",
-            SignalFilter(format_args!("^cells_{cell_id}_|_tab$"))
+            SignalFilter(format_args!("^cells_{cell_id}_code$"))
         )
     })
 }
@@ -67,19 +74,12 @@ fn cell_post_action(cell_id: u32) -> impl fmt::Display {
 /// makes it a watcher: a displayed tile is a live one)
 fn pin_toggle_action(cell_id: u32) -> impl fmt::Display {
     DisplayFn(move |f| {
-        write!(
-            f,
-            "@post('/cell-pin/{cell_id}', {})",
-            SignalFilter(format_args!("^cells_{cell_id}_tab$"))
-        )
+        write!(f, "@post('/cell-pin/{cell_id}', {})", SignalFilter("^$"))
     })
 }
 
 fn cell_dom_id(cell_id: u32) -> impl fmt::Display {
     DisplayFn(move |f| write!(f, "cell-{cell_id}"))
-}
-fn ir_output_id(cell_id: u32) -> impl fmt::Display {
-    DisplayFn(move |f| write!(f, "cell-ir-{cell_id}"))
 }
 fn chip_dom_id(cell_id: u32) -> impl fmt::Display {
     DisplayFn(move |f| write!(f, "chip-{cell_id}"))
@@ -100,10 +100,7 @@ fn exec_time_display(exec_time: std::time::Duration) -> impl fmt::Display {
 }
 
 fn cell_tabs(cell_id: u32) -> Tabs {
-    let ir_get = format!("@get('/cell-ir/{cell_id}', {})", SignalFilter("^$"));
-    Tabs::new(cell_signal(cell_id, "tab").to_string())
-        .tab(TAB_OUTPUT, "Output")
-        .tab_with_action(TAB_IR, "IR", ir_get)
+    Tabs::new(cell_signal(cell_id, "tab").to_string()).tab(TAB_OUTPUT, "Output").tab(TAB_IR, "IR")
 }
 
 //nocommit TODO at least one render function
@@ -116,25 +113,31 @@ fn megarepl_cells(k1: &TypedProgram) -> &[MegareplCell] {
     &k1.megarepl.as_ref().unwrap().cells
 }
 
-fn render_ir_output(cell_id: u32, ir: &str) -> maud::Markup {
-    html! {
-        pre #(ir_output_id(cell_id))
-            .result-output
-            data-show=(cell_tabs(cell_id).selected(TAB_IR))
-            { (ir) }
-    }
-}
-fn cell_ir_string(k1: &TypedProgram, cell_id: u32) -> String {
-    match k1.megarepl_get_cell(cell_id).expr_id {
-        None => String::new(),
-        Some(expr_id) => ir::unit_to_string(k1, ir::IrUnitId::Expr(expr_id), true),
-    }
-}
 
-fn cell_output<'k>(k1: &TypedProgram, cell: &'k MegareplCell) -> (Cow<'k, str>, bool) {
-    match &cell.last_result {
-        CellResult::Expr { value } => (Cow::Owned(k1.static_value_to_string(*value)), false),
-        CellResult::Error { k1_message } => (Cow::Borrowed(k1_message.message.as_str()), true),
+fn render_output_panes(k1: &TypedProgram, cell: &MegareplCell) -> maud::Markup {
+    let (values, is_error, stdout, stderr) = match &cell.last_result {
+        CellResult::Expr { outputs, value, stdout, stderr } => {
+            let mut values: Vec<String> =
+                outputs.iter().map(|v| k1.megarepl_static_value_to_string(*v)).collect();
+            if *value != k1.static_values.empty_id() {
+                values.push(k1.megarepl_static_value_to_string(*value));
+            }
+            (values, false, stdout.as_str(), stderr.as_str())
+        }
+        CellResult::Error { k1_message, stdout, stderr } => {
+            (vec![k1_message.message.clone()], true, stdout.as_str(), stderr.as_str())
+        }
+    };
+    html! {
+        @if !values.is_empty() {
+            pre .result-output .output-values .error[is_error] { (values.join("\n")) }
+        }
+        @if !stdout.is_empty() {
+            pre .result-output .output-stdout { (stdout) }
+        }
+        @if !stderr.is_empty() {
+            pre .result-output .output-stderr { (stderr) }
+        }
     }
 }
 
@@ -162,7 +165,7 @@ fn render_chip(cell: &MegareplCell) -> maud::Markup {
 /// A pinned cell's output, placed on the canvas
 fn render_tile(k1: &TypedProgram, cell_id: u32) -> maud::Markup {
     let cell = k1.megarepl_get_cell(cell_id);
-    let (output, is_error) = cell_output(k1, cell);
+    let is_error = matches!(cell.last_result, CellResult::Error { .. });
     html! {
         article #(tile_dom_id(cell_id)) .tile {
             div .tile-label .error[is_error] {
@@ -171,20 +174,15 @@ fn render_tile(k1: &TypedProgram, cell_id: u32) -> maud::Markup {
                     span { (exec_time_display(exec_time)) }
                 }
             }
-            pre .result-output .tile-value { (output) }
+            (render_output_panes(k1, cell))
         }
     }
 }
-/// `include_ir`: the IR pane is lazy, so it renders empty unless the client is
-/// currently viewing it (its tab signal says so) and needs it kept fresh.
-fn render_cell(k1: &TypedProgram, cell_id: u32, include_ir: bool) -> maud::Markup {
+fn render_cell(k1: &TypedProgram, cell_id: u32) -> maud::Markup {
     let cell = k1.megarepl_get_cell(cell_id);
     let source = k1.ast.sources.get(cell.source_id);
     let post = cell_post_action(cell_id);
     let tabs = cell_tabs(cell_id);
-    let is_error = matches!(cell.last_result, CellResult::Error { .. });
-    let (output, _) = cell_output(k1, cell);
-    let ir = if include_ir { cell_ir_string(k1, cell_id) } else { String::new() };
     html! {
         div #(cell_dom_id(cell_id)) {
         header .cell-header {
@@ -209,27 +207,24 @@ fn render_cell(k1: &TypedProgram, cell_id: u32, include_ir: bool) -> maud::Marku
         section .results {
             article .result-card {
                 (tabs.nav())
-                pre .result-output .error[is_error]
-                    data-show=(tabs.selected(TAB_OUTPUT))
-                    { (output) }
-                (render_ir_output(cell_id, &ir))
+                div .output-panes data-show=(tabs.selected(TAB_OUTPUT)) {
+                    (render_output_panes(k1, cell))
+                }
+                pre .result-output data-show=(tabs.selected(TAB_IR)) { (cell.last_ir) }
             }
         }
         }
     }
 }
-/// Cells live in the rail: full cards when expanded, status chips at 44px when
-/// collapsed. Collapse is client state ($_rail_collapsed; the underscore keeps
-/// it out of every request).
-fn render_rail(k1: &TypedProgram, signals: &Signals) -> maud::Markup {
+
+fn render_rail(k1: &TypedProgram) -> maud::Markup {
     html! {
         aside #rail .cell-rail {
             div .rail-cells {
                 @for cell in megarepl_cells(k1) {
-                    (render_cell(k1, cell.id, CellSignals::extract(signals, cell.id).viewing_ir))
+                    (render_cell(k1, cell.id))
                 }
-                // Sends every cell's tab signal so re-rendering keeps viewed IR fresh
-                button .rail-new data-on:click=(format!("@post('/new-cell', {})", SignalFilter("_tab$")))
+                button .rail-new data-on:click=(format!("@post('/new-cell', {})", SignalFilter("^$")))
                     { "+ new cell" }
             }
             div .rail-chips {
@@ -258,16 +253,16 @@ fn render_canvas(k1: &TypedProgram) -> maud::Markup {
     }
 }
 
-fn render_workspace(k1: &TypedProgram, signals: &Signals) -> maud::Markup {
+fn render_workspace(k1: &TypedProgram) -> maud::Markup {
     html! {
         main #workspace .workspace data-class:collapsed="$_rail_collapsed" {
-            (render_rail(k1, signals))
+            (render_rail(k1))
             (render_canvas(k1))
         }
     }
 }
-/// Styles are read from the source tree at runtime so /css-watch can
-/// live-reload edits; the compiled-in copy is the fallback.
+/// Styles are read from the source tree at runtime so edits can be
+/// live-reloaded; the compiled-in copy is the fallback.
 const CSS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/k1/megarepl.css");
 
 fn read_styles() -> String {
@@ -290,7 +285,7 @@ fn render_full_page(k1: &TypedProgram) -> maud::Markup {
                 title { "k1 megarepl" }
                 style #page-styles { (PreEscaped(read_styles())) }
             }
-            body data-init=(format!("@get('/css-watch', {})", SignalFilter("^$"))) {
+            body data-init=(format!("@get('/events', {})", SignalFilter("^$"))) {
                 header .site-header {
                     button .rail-toggle
                         title="Collapse or expand the cell rail"
@@ -299,7 +294,7 @@ fn render_full_page(k1: &TypedProgram) -> maud::Markup {
                         { "«" }
                     h1 { "k1 megarepl" }
                 }
-                (render_workspace(k1, &Signals::new()))
+                (render_workspace(k1))
                 footer .debug-footer {
                     code .signals-debug data-json-signals {}
                 }
@@ -321,8 +316,18 @@ fn write_response(stream: &mut TcpStream, response: &Response) {
             body.len(),
             body
         ),
+        Response::NoContent => stream.write_all(b"HTTP/1.1 204 NO CONTENT\r\n\r\n"),
         Response::BadRequest => stream.write_all(BAD_REQUEST.as_bytes()),
         Response::NotFound => stream.write_all(NOT_FOUND.as_bytes()),
+        Response::Unavailable => {
+            let body = "no compiled program yet; reload after the next successful compile";
+            write!(
+                stream,
+                "HTTP/1.1 503 SERVICE UNAVAILABLE\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            )
+        }
     };
     if let Err(e) = result {
         eprintln!("tcp write error: {e}")
@@ -341,7 +346,6 @@ fn parse_signals(body: &[u8]) -> Option<Signals> {
 /// One cell's signals, plucked out of the dynamically-named signals object
 struct CellSignals<'a> {
     code: Option<&'a str>,
-    viewing_ir: bool,
 }
 
 impl<'a> CellSignals<'a> {
@@ -349,17 +353,15 @@ impl<'a> CellSignals<'a> {
         let get = |field: &'static str| {
             signals.get(&cell_signal(cell_id, field).to_string()).and_then(|v| v.as_str())
         };
-        CellSignals { code: get("code"), viewing_ir: get("tab") == Some(TAB_IR) }
+        CellSignals { code: get("code") }
     }
 }
 
 /// Everything in the page that changes when a cell's result changes: its rail
-/// card, its status chip, and (when pinned) its canvas tile. Plain HTML
-/// responses patch each top-level element by id.
-fn render_cell_patch(k1: &TypedProgram, cell_id: u32, signals: &Signals) -> String {
-    let viewing_ir = CellSignals::extract(signals, cell_id).viewing_ir;
+/// card, its status chip, and (when pinned) its canvas tile
+fn render_cell_patch(k1: &TypedProgram, cell_id: u32) -> String {
     let cell = k1.megarepl_get_cell(cell_id);
-    let mut html = render_cell(k1, cell_id, viewing_ir).0;
+    let mut html = render_cell(k1, cell_id).0;
     html.push_str(&render_chip(cell).0);
     if cell.is_pinned {
         html.push_str(&render_tile(k1, cell_id).0);
@@ -368,13 +370,19 @@ fn render_cell_patch(k1: &TypedProgram, cell_id: u32, signals: &Signals) -> Stri
 }
 
 /// Parses the `/<route>/{cell_id}` path segment and validates the cell exists.
-fn parse_cell_id(k1: &TypedProgram, segments: &[&str]) -> Option<u32> {
-    let cell_id: u32 = segments.get(1)?.parse().ok()?;
-    let cell_count = k1.megarepl.as_ref()?.cells.len();
-    if (cell_id as usize) < cell_count { Some(cell_id) } else { None }
+fn parse_cell_id(k1: &TypedProgram, segment: Option<&str>) -> Option<u32> {
+    let cell_id: u32 = segment?.parse().ok()?;
+    let exists = k1.megarepl_get_cell_opt(cell_id).is_some();
+    if exists { Some(cell_id) } else { None }
 }
 
-fn handle_request(k1: &mut TypedProgram, method: &str, path: &str, body: &[u8]) -> Response {
+fn handle_request(
+    k1: &mut TypedProgram,
+    bus: &bus::EventBus,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> Response {
     let path = path.split('?').next().unwrap();
     let segments: Vec<&str> = path[1..].split('/').collect();
     eprintln!("handling {} {:?}", method, segments);
@@ -386,12 +394,16 @@ fn handle_request(k1: &mut TypedProgram, method: &str, path: &str, body: &[u8]) 
             Response::Ok(render_full_page(k1).0)
         }
         "new-cell" => {
-            let signals = parse_signals(body).unwrap_or_default();
             k1.megarepl_submit(None, String::new());
-            Response::Ok(render_workspace(k1, &signals).0)
+            let mut event = String::new();
+            sse::patch_elements(&mut event, render_workspace(k1).0);
+            bus.publish(event);
+            Response::NoContent
         }
         "cell" => {
-            let Some(cell_id) = parse_cell_id(k1, &segments) else {
+            // /cell/{cell_id}
+            let cell_id_segment = segments.get(1).copied();
+            let Some(cell_id) = parse_cell_id(k1, cell_id_segment) else {
                 return Response::BadRequest;
             };
             let Some(signals) = parse_signals(body) else {
@@ -402,35 +414,34 @@ fn handle_request(k1: &mut TypedProgram, method: &str, path: &str, body: &[u8]) 
             };
             let cell_id = k1.megarepl_submit(Some(cell_id), code.to_string());
             // Watchers re-ran too; patch them along with the submitted cell
-            let mut html = render_cell_patch(k1, cell_id, &signals);
+            let mut html = render_cell_patch(k1, cell_id);
             let watcher_ids: Vec<u32> = megarepl_cells(k1)
                 .iter()
                 .filter(|c| c.is_watcher && c.id != cell_id)
                 .map(|c| c.id)
                 .collect();
             for watcher_id in watcher_ids {
-                html.push_str(&render_cell_patch(k1, watcher_id, &signals));
+                html.push_str(&render_cell_patch(k1, watcher_id));
             }
-            Response::Ok(html)
+            let mut event = String::new();
+            sse::patch_elements(&mut event, html);
+            bus.publish(event);
+            Response::NoContent
         }
         "cell-pin" => {
-            let Some(cell_id) = parse_cell_id(k1, &segments) else {
+            // /cell-pin/{cell_id}
+            let cell_id_segment = segments.get(1).copied();
+            let Some(cell_id) = parse_cell_id(k1, cell_id_segment) else {
                 return Response::BadRequest;
             };
-            let signals = parse_signals(body).unwrap_or_default();
             k1.megarepl_toggle_pin(cell_id);
             // The tile count changed, so replace the whole canvas
-            let viewing_ir = CellSignals::extract(&signals, cell_id).viewing_ir;
-            let mut html = render_cell(k1, cell_id, viewing_ir).0;
+            let mut html = render_cell(k1, cell_id).0;
             html.push_str(&render_canvas(k1).0);
-            Response::Ok(html)
-        }
-        "cell-ir" => {
-            let Some(cell_id) = parse_cell_id(k1, &segments) else {
-                return Response::BadRequest;
-            };
-            let ir_string = cell_ir_string(k1, cell_id);
-            Response::Ok(render_ir_output(cell_id, &ir_string).0)
+            let mut event = String::new();
+            sse::patch_elements(&mut event, html);
+            bus.publish(event);
+            Response::NoContent
         }
         "functions" => {
             let f = k1
@@ -444,28 +455,37 @@ fn handle_request(k1: &mut TypedProgram, method: &str, path: &str, body: &[u8]) 
 }
 
 /// One thread per connection; the compiler is locked per request, so routes
-/// that never touch it (the SSE ones) can hold their connection open forever.
-pub fn serve(k1: TypedProgram) {
-    let listener = TcpListener::bind("127.0.0.1:8080").expect("Could not bind to port");
-    println!("k1 server running on http://127.0.0.1:8080");
-    let k1 = Mutex::new(k1);
-    std::thread::scope(|scope| {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    // Compiling cells recurses; give connections compiler-sized stacks
-                    std::thread::Builder::new()
-                        .stack_size(crate::STACK_SIZE)
-                        .spawn_scoped(scope, || handle_client(&k1, stream))
-                        .expect("failed to spawn connection thread");
-                }
-                Err(e) => eprintln!("Connection failed: {}", e),
-            }
+/// that never touch it (css reload) can hold their connection open forever.
+pub fn serve(k1: SharedProgram) {
+    let listener = match TcpListener::bind("127.0.0.1:8080") {
+        Ok(listener) => listener,
+        Err(e) => {
+            eprintln!("megarepl server could not bind 127.0.0.1:8080: {e}");
+            return;
         }
-    });
+    };
+    eprintln!("k1 server running on http://127.0.0.1:8080");
+    let bus = Arc::new(bus::EventBus::new());
+    {
+        let bus = bus.clone();
+        std::thread::spawn(move || css_watch_publisher(&bus));
+    }
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                let k1 = k1.clone();
+                let bus = bus.clone();
+                std::thread::Builder::new()
+                    .stack_size(crate::STACK_SIZE)
+                    .spawn(move || handle_client(&k1, &bus, stream))
+                    .expect("failed to spawn connection thread");
+            }
+            Err(e) => eprintln!("Connection failed: {}", e),
+        }
+    }
 }
 
-fn handle_client(k1: &Mutex<TypedProgram>, mut stream: TcpStream) {
+fn handle_client(k1: &SharedProgram, bus: &bus::EventBus, mut stream: TcpStream) {
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 4096];
 
@@ -518,13 +538,18 @@ fn handle_client(k1: &Mutex<TypedProgram>, mut stream: TcpStream) {
         let body = &buffer[header_len..header_len + content_length];
 
         // SSE routes take over the connection and never take the compiler lock
-        if path.split('?').next().unwrap() == "/css-watch" {
-            return css_watch(stream);
+        if path.split('?').next().unwrap() == "/events" {
+            return events_stream(bus.subscribe(), stream);
         }
 
         let response = {
-            let mut k1 = k1.lock().unwrap();
-            handle_request(&mut k1, &method, &path, body)
+            // A panicked request poisons the lock; keep serving anyway — losing
+            // the repl session to one bad cell is worse than any inconsistency
+            let mut guard = k1.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            match guard.as_deref_mut() {
+                Some(k1) => handle_request(k1, bus, &method, &path, body),
+                None => Response::Unavailable,
+            }
         };
         write_response(&mut stream, &response);
 
@@ -535,44 +560,54 @@ fn handle_client(k1: &Mutex<TypedProgram>, mut stream: TcpStream) {
 
 /// Holds the connection open and pushes a patched `<style>` element whenever
 /// megarepl.css changes on disk.
-fn css_watch(mut stream: TcpStream) {
-    const SSE_HEADERS: &str =
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\n";
-    if stream.write_all(SSE_HEADERS.as_bytes()).is_err() {
+/// The per-tab event stream: everything published on the bus goes down this
+/// connection until the client hangs up.
+fn events_stream(events: std::sync::mpsc::Receiver<Arc<String>>, mut stream: TcpStream) {
+    if stream.write_all(sse::SSE_HEADERS.as_bytes()).is_err() {
         return;
     }
-    // The blocking read doubles as the poll interval and disconnect detection:
-    // SSE clients send nothing, so reads only ever time out or return 0 on close
-    stream.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+    // SSE clients send nothing, so a read only ever times out (still alive)
+    // or returns 0 (hung up); probe when idle to reap dead connections
+    stream.set_read_timeout(Some(Duration::from_millis(1))).unwrap();
     let mut probe = [0u8; 64];
+    loop {
+        match events.recv_timeout(Duration::from_millis(300)) {
+            Ok(event) => {
+                if stream.write_all(event.as_bytes()).is_err() {
+                    return;
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => match stream.read(&mut probe) {
+                Ok(0) => return, // client closed the connection
+                Ok(_) => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(_) => return,
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
+/// Polls the stylesheet's mtime and publishes the patched `<style>` element
+fn css_watch_publisher(bus: &bus::EventBus) {
     let mut last_seen = css_mtime();
     loop {
-        match stream.read(&mut probe) {
-            Ok(0) => return, // client closed the connection
-            Ok(_) => {}
-            Err(e) if matches!(
-                e.kind(),
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-            ) => {}
-            Err(_) => return,
-        }
+        std::thread::sleep(Duration::from_millis(300));
         let mtime = css_mtime();
         if mtime == last_seen {
             continue;
         }
         last_seen = mtime;
         eprintln!("css changed; patching");
-        let mut event = String::from(
-            "event: datastar-patch-elements\ndata: elements <style id=\"page-styles\">\n",
+        let mut event = String::new();
+        sse::patch_elements(
+            &mut event,
+            format_args!("<style id=\"page-styles\">\n{}\n</style>", read_styles()),
         );
-        for line in read_styles().lines() {
-            event.push_str("data: elements ");
-            event.push_str(line);
-            event.push('\n');
-        }
-        event.push_str("data: elements </style>\n\n");
-        if stream.write_all(event.as_bytes()).is_err() {
-            return;
-        }
+        bus.publish(event);
     }
 }

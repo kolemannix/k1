@@ -1,0 +1,11 @@
+.off-pixel, .on-pixel {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+}
+.off-pixel {
+  background-color: black;
+}
+.on-pixel {
+  background-color: yellow;
+}

@@ -45,7 +45,7 @@ use core/arena
 type http-handler-deps = { }
 
 type http-response = either {
-  complete(string),
+  complete(span[string]),
   stream,
 }
 type http-handler-work = {
@@ -148,13 +148,15 @@ fn after-do-work(req: *mut uv/work, status: i32) {
     crash("[bug] handler did not set work.http-response");
   };
   switch response {
-    :complete(body) -> {
+    :complete(chunks) -> {
       let write-req = connection.request-arena.alloc[uv/write]();
       write-req.set-data(connection);
 
-      let buf: uv/buf = uv/buf_init(body.data-ptr().as[*mut u8], body.len().as[u32]);
-      // the uv_buf array itself only needs to outlive the call, so the stack pointer is fine
-      let write-rc = uv/write(write-req, connection.client.as-stream(), &buf, 1, fn (req, status) {
+      let bufs = connection.request-arena.alloc-list[uv/buf](chunks.len());
+      for chunks {
+        bufs.push(uv/buf/from-span(it.span-bytes()));
+      };
+      let write-rc = uv/write(write-req, connection.client.as-stream(), bufs.asBuffer().data-ptr().as(), bufs.len().as[u32], fn (req, status) {
         let connection: *mut connection = req.get-data();
         // Direct access is fine as we are on the main thread
         if connection.close-state.is-closing {

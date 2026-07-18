@@ -51,7 +51,8 @@ fn run() -> anyhow::Result<ExitCode> {
         }
     };
     if matches!(args.command, Command::Server { .. }) {
-        k1::server::serve(program);
+        use std::sync::{Arc, Mutex};
+        k1::server::serve(Arc::new(Mutex::new(Some(Box::new(program)))));
         return Ok(ExitCode::SUCCESS);
     }
     let llvm_ctx = inkwell::context::Context::create();
