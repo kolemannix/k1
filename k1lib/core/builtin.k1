@@ -601,7 +601,7 @@ ns k1 {
 
     // lets name it 'checkbox' not 'add-checkbox', immediate-mode style, since
     // the user's code is totally immediate mode style
-    intern fn checkbox[t](name: string, get: fn() -> bool, set: fn(u32) -> bool)
+    intern fn checkbox(name: string, get: *fn() -> bool, set: *fn(bool) -> {})
 
   }
 

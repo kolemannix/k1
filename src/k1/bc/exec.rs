@@ -1002,5 +1002,9 @@ fn exec_builtin(
             vm::builtin_compiler_message(k1, vm, args[0], args[1], args[2])?;
             Ok(BuiltinOutcome::Empty)
         }
+        BackendBuiltin::ReplCheckbox => {
+            vm::builtin_repl_checkbox(k1, vm, args[0], args[1], args[2])?;
+            Ok(BuiltinOutcome::Empty)
+        }
     }
 }

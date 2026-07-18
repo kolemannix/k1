@@ -1963,6 +1963,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(None).unwrap()
             }
             BackendBuiltin::CompilerMessage => self.builder.build_return(None).unwrap(),
+            // Repl commands only mean something to a live megarepl session;
+            // in a compiled binary the call is a no-op
+            BackendBuiltin::ReplCheckbox => self.builder.build_return(None).unwrap(),
         };
         Ok(instr)
     }

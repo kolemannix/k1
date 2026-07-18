@@ -290,7 +290,7 @@ impl TypedProgram {
         self.megarepl_get_cell_mut(cell_id).last_ir = ir_string;
         let output_globals = self.megarepl_get_cell(cell_id).output_globals.clone();
         let exec_start = std::time::Instant::now();
-        let (exec_result, stdout, stderr) = self.do_with_vm(span, |k1, vm| {
+        let (exec_result, stdout, stderr, repl_commands) = self.do_with_vm(span, |k1, vm| {
             let messages_start = vm.compiler_messages.len();
             vm.quiet_messages = true;
             let result = bc::exec::execute_compiled_expr(k1, vm, cell_expr, false);
@@ -298,6 +298,7 @@ impl TypedProgram {
             // Prints during VM execution land in compiler_messages; harvest
             // this run's slice of them instead of reporting to the console
             let (stdout, stderr) = vm::drain_captured_prints(k1, vm, messages_start);
+            let repl_commands = std::mem::take(&mut vm.repl_commands);
             let result = result.and_then(|value| {
                 let mut outputs = Vec::with_capacity(output_globals.len());
                 for (global_id, type_id) in &output_globals {
@@ -305,8 +306,19 @@ impl TypedProgram {
                 }
                 Ok((outputs, value))
             });
-            (result, stdout, stderr)
+            (result, stdout, stderr, repl_commands)
         });
+        // TODO(repl-commands): THE handoff point — cell code has spoken and
+        // this is where its commands become engine state. For
+        // ReplCommand::Checkbox { name, get, set }: upsert-by-name into
+        // MegareplState.widgets as a new read/write WidgetKind holding the
+        // two FunctionIds; render calls `get` in the VM to draw the checked
+        // state, and the browser's toggle POSTs call `set(new_value)` then
+        // re-run watchers and publish. Upsert, not push: watchers re-run
+        // cells, so the same call re-fires every run and must converge.
+        if !repl_commands.is_empty() {
+            eprintln!("dropping {} unhandled repl command(s)", repl_commands.len());
+        }
         let cell = self.megarepl_get_cell_mut(cell_id);
         cell.last_exec_time = Some(exec_start.elapsed());
         cell.last_result = match exec_result {

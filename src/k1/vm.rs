@@ -215,12 +215,20 @@ pub struct CompilerMessage {
     line: u32,
 }
 
+/// A repl command issued by cell code during execution (`k1/repl/*`
+/// builtins); the megarepl engine drains these after each run
+#[derive(Clone, Copy)]
+pub enum ReplCommand {
+    Checkbox { name: StringId, get: FunctionId, set: FunctionId },
+}
+
 pub struct Vm {
     globals: FxHashMap<TypedGlobalId, Value>,
     pub static_stack: Stack,
     pub stack: Stack,
     pub(crate) eval_span: SpanId,
     pub(crate) compiler_messages: Vec<CompilerMessage>,
+    pub(crate) repl_commands: Vec<ReplCommand>,
     /// When set, emitted messages are only recorded, not printed to the
     /// console; the megarepl harvests them as the cell's stdout/stderr
     pub quiet_messages: bool,
@@ -246,6 +254,7 @@ impl Vm {
         self.static_stack.reset();
         self.globals.clear();
         self.compiler_messages.clear();
+        self.repl_commands.clear();
         self.overall_return_addr = core::ptr::null_mut();
         self.bc_fault = None;
 
@@ -279,6 +288,7 @@ impl Vm {
             stack,
             eval_span: SpanId::NONE,
             compiler_messages: Vec::with_capacity(16),
+            repl_commands: vec![],
             quiet_messages: false,
             bc_fault: None,
         }
@@ -1084,6 +1094,13 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                                     line: location.line as u32,
                                 });
 
+                                builtin_return!()
+                            }
+                            ir::BackendBuiltin::ReplCheckbox => {
+                                let name_arg = resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
+                                let get_arg = resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
+                                let set_arg = resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
+                                builtin_repl_checkbox(k1, vm, name_arg, get_arg, set_arg)?;
                                 builtin_return!()
                             }
                         }
@@ -2803,6 +2820,28 @@ pub(crate) fn builtin_compiler_message(
         filename: filename.to_string(),
         line: location.line as u32,
     });
+    Ok(())
+}
+
+/// The ReplCheckbox builtin body, shared with the bc VM:
+/// `k1/repl/checkbox(name, get, set)`. Function-pointer args carry the
+/// FunctionId in their bits (same encoding CallIndirect uses).
+pub(crate) fn builtin_repl_checkbox(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    name_arg: Value,
+    get_arg: Value,
+    set_arg: Value,
+) -> K1Result<()> {
+    let name = value_to_string_id(k1, name_arg)
+        .map_err(|msg| errf!(vm.eval_span, "Bad name string passed to repl/checkbox: {msg}"))?;
+    let Some(get) = FunctionId::from_u32(get_arg.bits() as u32) else {
+        return failf!(vm.eval_span, "repl/checkbox: `get` is a null function pointer");
+    };
+    let Some(set) = FunctionId::from_u32(set_arg.bits() as u32) else {
+        return failf!(vm.eval_span, "repl/checkbox: `set` is a null function pointer");
+    };
+    vm.repl_commands.push(ReplCommand::Checkbox { name, get, set });
     Ok(())
 }
 

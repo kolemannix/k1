@@ -324,6 +324,7 @@ pub fn builtin_from_tag(t: u8) -> crate::ir::BackendBuiltin {
         x if x == B::MemEquals as u8 => B::MemEquals,
         x if x == B::Exit as u8 => B::Exit,
         x if x == B::CompilerMessage as u8 => B::CompilerMessage,
+        x if x == B::ReplCheckbox as u8 => B::ReplCheckbox,
         _ => unreachable!("bad builtin tag"),
     }
 }
