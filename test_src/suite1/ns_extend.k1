@@ -1,21 +1,21 @@
 ns ns_extend;
 
 ns foo {
-  type Baz = { b: int }
-  ns for Baz {
-    fn get(self: Baz): int { self.b }
+  type baz = { b: int }
+  ns for baz {
+    fn get(self: baz): int { self.b }
   }
 }
 
 ns foo {
-  ns for Baz {
-    fn get2(self: Baz): int { self.b }
+  ns for baz {
+    fn get2(self: baz): int { self.b }
   }
 }
 
 
 fn test() {
-  let baz = { b: 32 }: foo/Baz;
-  assert(foo/Baz/get(baz) + foo/Baz/get2(baz) == 64);
+  let baz = { b: 32 }: foo/baz;
+  assert(foo/baz/get(baz) + foo/baz/get2(baz) == 64);
   assert(baz.get() + baz.get2() == 64);
 }

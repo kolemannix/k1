@@ -1,5 +1,5 @@
 fn example-fs() {
-  // let l = alloc-mode:current.allocT[uv/uv_loop_t];
+  // let l = alloc-mode:current.alloc-t[uv/uv_loop_t];
   // uv/uv_loop_init(l);
   let l = uv/default_loop();
 
@@ -22,7 +22,7 @@ fn example-fs() {
   uv/fs_read(l, &read-req, uv-file, &uvbuf, 1, offset = 0, fn uv-fs. {
     let data: *mut buffer[u8] = uv-fs.get-data();
     let result: size = uv/fs_get_result(uv-fs);
-    let s = string/wrapByteBuffer(data);
+    let s = string/wrap-byte-buffer(data);
     tprintln("done read: {result}. data={data.len}\n{s}");
   });
 

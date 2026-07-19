@@ -1,11 +1,11 @@
 ns ability_self_call;
 
-ability Foo {
+ability foo {
   fn a(self)
   fn b(self)
 }
 
-impl Foo for string {
+impl foo for string {
   fn a(self) {
     self.b()
   }

@@ -1,37 +1,37 @@
-// The intuitive representation, a list[SquareState]
-type SquareState = either {
-  Blank, 
-  WPawn, WKnight, WBishop, WRook, WQueen, WKing,
-  BPawn, BKnight, BBishop, BRook, BQueen, BKing
+// The intuitive representation, a list[square-state]
+type square-state = either {
+  blank, 
+  w-pawn, w-knight, w-bishop, w-rook, w-queen, w-king,
+  b-pawn, b-knight, b-bishop, b-rook, b-queen, b-king
 }
 
-ns for SquareState {
-  fn charSymbol(self: SquareState): char {
+ns for square-state {
+  fn char-symbol(self: square-state): char {
     switch self {
-       :Blank  -> '-',
-       :WPawn   -> 'P',
-       :WKnight -> 'N',
-       :WBishop -> 'B',
-       :WRook   -> 'R',
-       :WQueen  -> 'Q',
-       :WKing   -> 'K',
-       :BPawn   -> 'p',
-       :BKnight -> 'n',
-       :BBishop -> 'b',
-       :BRook   -> 'r',
-       :BQueen  -> 'q',
-       :BKing   -> 'k',
+       :blank  -> '-',
+       :w-pawn   -> 'P',
+       :w-knight -> 'N',
+       :w-bishop -> 'B',
+       :w-rook   -> 'R',
+       :w-queen  -> 'Q',
+       :w-king   -> 'K',
+       :b-pawn   -> 'p',
+       :b-knight -> 'n',
+       :b-bishop -> 'b',
+       :b-rook   -> 'r',
+       :b-queen  -> 'q',
+       :b-king   -> 'k',
     };
   }
 }
 
-type Square = { rank: u8, file: u8 }
+type square = { rank: u8, file: u8 }
 
-ns Square {
-  fn fromRankFile(x: u8, y: u8): Square {
+ns square {
+  fn from-rank-file(x: u8, y: u8): square {
     { rank: y, file: x }
   }
-  fn fromName(s: string): Square {
+  fn from-name(s: string): square {
     let file: u8 = switch s.first().! {
        'a' or 'A' -> 0,
        'b' or 'B' -> 1,
@@ -43,13 +43,13 @@ ns Square {
        'h' or 'H' -> 7,
        _ -> crash("bad tile name: {s}")
     };
-    let rank = (s.get(1).toAsciiDigit().! - 1);
-    fromRankFile(file, rank)
+    let rank = (s.get(1).to-ascii-digit().! - 1);
+    from-rank-file(file, rank)
   }
 }
 
-impl show for Square {
-  fn show(self: Square): string {
+impl show for square {
+  fn show(self: square): string {
     let file = switch self.file {
       0 -> 'a',
       1 -> 'b',
@@ -67,9 +67,9 @@ impl show for Square {
 }
 
 
-fn dump(board: list[SquareState]) {
+fn dump(board: list[square-state]) {
   for square in board {
-    let symbol = square.charSymbol();
+    let symbol = square.char-symbol();
     if it-index % 8 == 7 {
       println("{symbol}");
     } else {
@@ -78,26 +78,26 @@ fn dump(board: list[SquareState]) {
   }
 }
 
-fn startPos(): list[SquareState] {
-  let board = list/filled[SquareState](64, :Blank);
-  board.set(0, :WRook);
-  board.set(1, :WKnight);
-  board.set(2, :WBishop);
-  board.set(3, :WQueen);
-  board.set(4, :WKing);
-  board.set(5, :WBishop);
-  board.set(6, :WKnight);
-  board.set(7, :WRook);
-  { let i = 0; while i < 8 { board.set(i + 8, :WPawn); i := i + 1 } };
+fn start-pos(): list[square-state] {
+  let board = list/filled[square-state](64, :blank);
+  board.set(0, :w-rook);
+  board.set(1, :w-knight);
+  board.set(2, :w-bishop);
+  board.set(3, :w-queen);
+  board.set(4, :w-king);
+  board.set(5, :w-bishop);
+  board.set(6, :w-knight);
+  board.set(7, :w-rook);
+  { let i = 0; while i < 8 { board.set(i + 8, :w-pawn); i := i + 1 } };
 
-  { let i = 0; while i < 8 { board.set(i + 48, :BPawn); i := i + 1 } };
-  board.set(56, :BRook);
-  board.set(57, :BKnight);
-  board.set(58, :BBishop);
-  board.set(59, :BQueen);
-  board.set(60, :BKing);
-  board.set(61, :BBishop);
-  board.set(62, :BKnight);
-  board.set(63, :BRook);
+  { let i = 0; while i < 8 { board.set(i + 48, :b-pawn); i := i + 1 } };
+  board.set(56, :b-rook);
+  board.set(57, :b-knight);
+  board.set(58, :b-bishop);
+  board.set(59, :b-queen);
+  board.set(60, :b-king);
+  board.set(61, :b-bishop);
+  board.set(62, :b-knight);
+  board.set(63, :b-rook);
   board
 }

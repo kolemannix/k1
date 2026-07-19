@@ -140,7 +140,7 @@ ns pre {
 ```
 
 `p"..."` and ``p`...` `` strings are used heavily for generated code where
-literal braces are common. `CodeWriter` helpers also appear in metaprograms.
+literal braces are common. `code-writer` helpers also appear in metaprograms.
 
 See `test_src/suite1/test_meta.k1`, `test_src/suite1/meta_defns.k1`, and
 `test_src/stdlib/metaprintf.k1`.

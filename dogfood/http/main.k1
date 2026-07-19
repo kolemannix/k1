@@ -83,19 +83,19 @@ fn do-work(req: *mut uv/work) {
     tprintln("i have to make deps");
 
     // These are create once and never-free
-    mem/pushMode(:system-heap);
+    mem/push-mode(:system-heap);
     let deps-baton = (work.connection.make-user-deps)();
-    mem/popMode();
+    mem/pop-mode();
 
     tprintln("made deps: {deps-baton}");
     worker-user-data <- deps-baton;
   };
   let user-deps-baton: ptr = worker-user-data;
 
-  mem/pushMode(:custom-arena(work.connection.request-arena));
+  mem/push-mode(:custom-arena(work.connection.request-arena));
   let response = (work.handler.logic-fn)(work.request, user-deps-baton);
   work.http-response <- :some(response);
-  mem/popMode();
+  mem/pop-mode();
 
   {}
 }
@@ -111,7 +111,7 @@ fn after-do-work(req: *mut uv/work, status: i32) {
   work.connection.current-work <- :none;
   defer {
     tprintln("freeing work");
-    alloc-mode:system-heap.freeT(req)
+    alloc-mode:system-heap.free-t(req)
   };
 
   // If the work was cancelled using uv_cancel() status will be UV_ECANCELED.
@@ -156,7 +156,7 @@ fn after-do-work(req: *mut uv/work, status: i32) {
       for chunks {
         bufs.push(uv/buf/from-span(it.span-bytes()));
       };
-      let write-rc = uv/write(write-req, connection.client.as-stream(), bufs.asBuffer().data-ptr().as(), bufs.len().as[u32], fn (req, status) {
+      let write-rc = uv/write(write-req, connection.client.as-stream(), bufs.as-buffer().data-ptr().as(), bufs.len().as[u32], fn (req, status) {
         let connection: *mut connection = req.get-data();
         // Direct access is fine as we are on the main thread
         if connection.close-state.is-closing {
@@ -253,7 +253,7 @@ fn queue-http-handler(connection: *mut connection, request: http/request, handle
     http-response: :none,
   });
   // let work-req = connection.request-arena.alloc[uv/work];
-  let work-req = alloc-mode:system-heap.allocT[uv/work];
+  let work-req = alloc-mode:system-heap.alloc-t[uv/work];
   work-req.set-data(work);
   let queue-rc = uv/queue_work(uv-loop, work-req, do-work, after-do-work);
   if queue-rc != 0 {
@@ -334,11 +334,11 @@ ns for connection {
   fn make(uv-loop: *uv-loop, make-user-deps: *fn() -> ptr, route-handlers: span[route-handler]): *mut connection {
     let connection = {
       // We need a stable pointer to connection-arena
-      let connection-arena = core/arena/init-virtual(usageHintMb = 1);
+      let connection-arena = core/arena/init-virtual(usage-hint-mb = 1);
       connection-arena.set-name("connection");
-      let request-arena: *mut arena = core/arena/init-virtual(usageHintMb = 1);
+      let request-arena: *mut arena = core/arena/init-virtual(usage-hint-mb = 1);
       request-arena.set-name("request");
-      let conn: *mut connection = alloc-mode:system-heap.allocT();
+      let conn: *mut connection = alloc-mode:system-heap.alloc-t();
 
       conn <- {
         connection-arena,
@@ -384,18 +384,18 @@ ns for connection {
     connection
   }
   fn release(self: *mut connection) {
-    tprintln("conn{self.serial-no} request arena close usedBytes: {self.request-arena.usedBytes()}");
+    tprintln("conn{self.serial-no} request arena close used-bytes: {self.request-arena.used-bytes()}");
     self.request-arena.release();
-    tprintln("conn{self.serial-no} connection arena close usedBytes: {self.connection-arena.usedBytes()}");
+    tprintln("conn{self.serial-no} connection arena close used-bytes: {self.connection-arena.used-bytes()}");
     self.connection-arena.release();
-    alloc-mode:system-heap.freeT(self);
+    alloc-mode:system-heap.free-t(self);
   }
   fn finish-request(self: *mut connection) {
     tprintln("finish-request");
     if not self.parsed-header.!.keep-alive {
       close-connection(self);
     } else {
-      tprintln("keepalive! conn{self.serial-no} request arena reset usedBytes: {self.request-arena.usedBytes()}");
+      tprintln("keepalive! conn{self.serial-no} request arena reset used-bytes: {self.request-arena.used-bytes()}");
       self.current-work <- :none;
       self.request-arena.reset(true);
       self.request-parser.reset();
@@ -436,7 +436,7 @@ fn on-complete-http-header(connection: *mut connection, header: http/header): ht
       connection.matched-handler <- :some(handler);
       switch handler.body-mode {
           :strict -> {
-            // Continue reading; do not enqueue handler yet
+            // continue reading; do not enqueue handler yet
             :strict
           },
           :stream -> {
@@ -474,7 +474,7 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
 
   conn-count <- conn-count + 1;
   let accept-rc = uv/accept(server, client.as-stream());
-  tprintln("connection arena new usedBytes: {connection.connection-arena.usedBytes()}");
+  tprintln("connection arena new used-bytes: {connection.connection-arena.used-bytes()}");
   if accept-rc == 0 {
     uv/tcp_keepalive_ex(client, 1, idle = 60, intvl = 10, cnt = 3);
     tprintln("accepted connection; scheduling read");
@@ -564,7 +564,7 @@ fn main(): i32 {
   let context arena = arena/init-default();
   arena.set-name("mainthread");
 
-  mem/pushMode(:custom-arena(arena));
+  mem/push-mode(:custom-arena(arena));
   let route-handlers: span[user-route-handler[app/deps]] = [
     { 
       body-mode: :strict,
@@ -572,7 +572,7 @@ fn main(): i32 {
       logic-fn: app/handle
     }
   ];
-  mem/popMode();
+  mem/pop-mode();
 
   start-app[app/deps](app/make-deps, route-handlers);
 

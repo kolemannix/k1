@@ -1,5 +1,5 @@
 ns type_schema {
-  type Point3[t] = {
+  type point3[t] = {
     x: t, y: t, z: t
   }
 
@@ -9,10 +9,10 @@ ns type_schema {
   use types/type-id
   use types/type-id-schema
 
-  fn printStructShape[T](): string {
-    let id = type-id[T];
-    require schema[T] is :struct({ fields }) else { return("") };
-    let sb = StringBuilder/new();
+  fn print-struct-shape[t](): string {
+    let id = type-id[t];
+    require schema[t] is :struct({ fields }) else { return("") };
+    let sb = string-builder/new();
     let name = types/type-id-name(id);
     sb.string("Struct {name} {{\n");
     for field in fields {
@@ -36,8 +36,8 @@ ns type_schema {
     assert(schema[f32]  is :float(:f32));
     assert(schema[f64]  is :float(:f64));
 
-    let pointByteSchema = schema[Point3[u8]];
-    require pointByteSchema is :struct({ fields }) else crash("");
+    let point-byte-schema = schema[point3[u8]];
+    require point-byte-schema is :struct({ fields }) else crash("");
     assert-equals(fields.len(), 3);
     require schema[*i32]
       is :reference({ inner-type-id })
@@ -47,20 +47,20 @@ ns type_schema {
       type-id[*bool]
     );
 
-    assert(schema[either { Yes }] is :enum(_));
+    assert(schema[either { yes }] is :enum(_));
 
-    require schema[either { Yes, No, MaybeSo(string) }]
+    require schema[either { yes, no, maybe-so(string) }]
       is :either({ variants, payload-offset })
       and payload-offset == 8
       and variants.len() == 3
-      and variants.get(0).name == "Yes"
-      and variants.get(1).name == "No"
-      and variants.get(2).name == "MaybeSo"
+      and variants.get(0).name == "yes"
+      and variants.get(1).name == "no"
+      and variants.get(2).name == "maybe-so"
       and variants.get(2).payload is :some({ type-id })
       and type-id == type-id[string]
       else crash("");
 
-    require schema[either { Yes(int) }:Yes ]
+    require schema[either { yes(int) }:yes ]
       is :int(:i64)
       else crash("");
 
@@ -71,10 +71,10 @@ ns type_schema {
       and size == :some(5)
       else crash("");
 
-    assert-equals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
+    assert-equals(print-struct-shape[point3[u8]], p"Struct point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
 
-    let isZeroPtr: *fn(int) -> bool = isZero;
-    require schema[type-of(isZeroPtr)]
+    let is-zero-ptr: *fn(int) -> bool = is-zero;
+    require schema[type-of(is-zero-ptr)]
       is :function-pointer({ function-type-id }) else crash("");
 
     require type-id-schema(function-type-id)
@@ -100,6 +100,6 @@ ns type_schema {
     {}
   }
 
-  fn isZero(x: int): bool { x == 0 }
+  fn is-zero(x: int): bool { x == 0 }
 }
 

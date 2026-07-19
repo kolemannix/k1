@@ -1,6 +1,6 @@
 ns enum_basic;
 
-fn enumNoPayload() {
+fn enum-no-payload() {
   let v: either { yes, no } = :no;
   if v is :no {} else crash("");
   v := :yes;
@@ -15,7 +15,7 @@ impl print for enum-abc {
     :c -> w.write-char('c'),
   } }
 }
-fn enumTest() {
+fn enum-test() {
   let a: enum-abc = :a;
   let b: enum-abc = :b;
   let c: enum-abc = :c;
@@ -30,14 +30,14 @@ fn enumTest() {
   assert-equals[string](b.enum-name(), "b");
   assert-equals[string](c.enum-name(), "c");
 
-  assert-equals(getEnumValue(c), 2);
-  assert-equals(getEnumValue(b), 1);
+  assert-equals(get-enum-value(c), 2);
+  assert-equals(get-enum-value(b), 1);
   assert-equals(c, c);
   assert-equals(b, b);
   core/assert-not-equals(c, b);
 }
 
-fn getEnumValue[i, e: types/enum[v = i]](e: e): i {
+fn get-enum-value[i, e: types/enum[v = i]](e: e): i {
   e.enum-value()
 }
 
@@ -50,7 +50,7 @@ fn custom-tags-test() {
 
 fn test() {
   custom-tags-test();
-  enumNoPayload();
-  enumTest();
+  enum-no-payload();
+  enum-test();
 }
 

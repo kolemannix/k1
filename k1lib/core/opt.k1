@@ -3,25 +3,25 @@
 
 ns for opt {
 
-  fn is-some[T](self: ?T): bool { self is :some(_) }
-  fn is-none[T](self: ?T): bool { self is :none }
+  fn is-some[t](self: ?t): bool { self is :some(_) }
+  fn is-none[t](self: ?t): bool { self is :none }
 
-  fn get[T](context locn: k1/source-location)(self: ?T): T {
+  fn get[t](context locn: k1/source-location)(self: ?t): t {
     if self is :some(t) t else {
       crash("opt.get on None")
     }
   }
 
-  fn contains[T: equals](self: ?T, t: T): bool {
+  fn contains[t: equals](self: ?t, t: t): bool {
     switch self {
       :none -> false,
       :some(v) -> v == t
     }
   }
 
-  // I'm leaving this separate function here 
+  // i'm leaving this separate function here 
   // because at one point it exercised a really weird compiler bug
-  fn equals[T](a: opt[T], b: opt[T]): bool where T: equals {
+  fn equals[t](a: opt[t], b: opt[t]): bool where t: equals {
     if a is :some(at) {
       if b is :some(bt) at == bt else false
     } else {
@@ -29,7 +29,7 @@ ns for opt {
     }
   }
 
-  fn map[T, U](self: opt[T], f: some fn T -> U): opt[U] {
+  fn map[t, u](self: opt[t], f: some fn t -> u): opt[u] {
     switch self {
       :none -> :none,
       :some(t) -> :some(f(t))
@@ -39,19 +39,19 @@ ns for opt {
 }
 
 // Convenience constructors in the global scope for opt instances
-fn none[T](): opt[T] { opt:none[T] }
-fn some[T](value: T): opt[T] { opt:some[T](value) }
+fn none[t](): opt[t] { opt:none[t] }
+fn some[t](value: t): opt[t] { opt:some[t](value) }
 
 
-impl[T: equals] equals for opt[T] {
-  fn equals(self: opt[T], other: opt[T]): bool {
-    // I'm leaving this separate function call here 
+impl[t: equals] equals for opt[t] {
+  fn equals(self: opt[t], other: opt[t]): bool {
+    // i'm leaving this separate function call here 
     // because at one point it exercised a really weird compiler bug
     opt/equals(self, other)
   }
 }
 
-impl[A] try[t = A, e = empty] for opt[A] {
+impl[a] try[t = a, e = empty] for opt[a] {
   fn error(_e: empty): opt[t] { :none }
   fn value(t: t): opt[t] { opt:some(t) }
 

@@ -15,37 +15,37 @@ fn assert-not-equals[t: print and equals](context locn: k1/source-location)(a: t
 
 ns iter {
 
-  fn find[t, Iter: iterator[item = t], I: iterable[item = t, i = Iter]](iterable: I, pred: some fn t -> bool): ?t {
+  fn find[t, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i, pred: some fn t -> bool): ?t {
     for iterable {
       if pred(it) return(:some(it))
     };
     :none
   }
 
-  fn position[t: equals, Iter: iterator[item = t], I: iterable[item = t, i = Iter]](iterable: I, needle: t): ?size {
+  fn position[t: equals, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i, needle: t): ?size {
     for iterable {
       if it == needle return(:some(it-index))
     };
     :none
   }
 
-  fn contains[t: equals, Iter: iterator[item = t], I: iterable[item = t, i = Iter]](iterable: I, needle: t): bool {
+  fn contains[t: equals, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i, needle: t): bool {
     position(iterable, needle).is-some()
   }
 
-  fn forall[t, Iter: iterator[item = t], I: iterable[item = t, i = Iter]](iterable: I, pred: some fn t -> bool): bool {
+  fn forall[t, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i, pred: some fn t -> bool): bool {
     for iterable { if not pred(it) return(false) };
     true
   }
 
-  fn exists[t, Iter: iterator[item = t], I: iterable[item = t, i = Iter]](iterable: I, pred: some fn t -> bool): bool {
+  fn exists[t, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i, pred: some fn t -> bool): bool {
     for iterable {
       if pred(it) return(true)
     };
     false
   }
 
-  fn sum[t: add and zero, Iter: iterator[item = t], I: iterable[item = t, i = Iter]](iterable: I): t {
+  fn sum[t: add and zero, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i): t {
     let t = zero@(t)/zero();
     for iterable {
       t := t + it
@@ -95,19 +95,19 @@ fn eprintln(s: string) {
 #if k1/OS_POSIX
 ns io {
   // TODO: Add buffering to stdout and stderr!
-  type OutStream = { fileNo: i32 }
-  let stdout: OutStream = { fileNo: posix/stdout }
-  let stderr: OutStream = { fileNo: posix/stderr }
+  type out-stream = { file-no: i32 }
+  let stdout: out-stream = { file-no: posix/stdout }
+  let stderr: out-stream = { file-no: posix/stderr }
 
-  impl writer for OutStream {
+  impl writer for out-stream {
     fn write-byte(self, value: u8) {
       let value_spot = value;
-      posix/write(file-no = self.fileNo, data = (&value_spot).as[ptr], count = 1);
+      posix/write(file-no = self.file-no, data = (&value_spot).as[ptr], count = 1);
       {}
     }
     fn write-bytes(self, bytes: span[byte]) {
       posix/write(
-        file-no = self.fileNo,
+        file-no = self.file-no,
         data = bytes.data-ptr(),
         count = bytes.len().as[c-sizet]
       );
@@ -119,9 +119,9 @@ ns io {
 ns files {
 
   fn read-to-string(context alloc-mode: mem/alloc-mode)(path: string): string {
-    let filenameCString = path.to-c(context :tmp)();
+    let filename-c-string = path.to-c(context :tmp)();
 
-    let file = libc/files/fopen(filenameCString.ptr, "r\0".data-ptr());
+    let file = libc/files/fopen(filename-c-string.ptr, "r\0".data-ptr());
     if file.is-null() {
       crash("fopen failed: `{path}`");
     };
@@ -129,11 +129,11 @@ ns files {
 
     libc/files/fseek(file, 0, libc/files/SEEK_END);
     let file-size-bytes = libc/files/ftell(file);
-    let buf = buffer/allocateIn[char](file-size-bytes);
+    let buf = buffer/allocate-in[char](file-size-bytes);
 
     libc/files/fseek(file, 0, libc/files/SEEK_SET);
     libc/files/fread(buf.data-ptr(), buf.len(), 1, file);
-    let string = string/wrapBuffer(buf);
+    let string = string/wrap-buffer(buf);
 
     string
   }
@@ -158,8 +158,8 @@ fn assert-msg(context locn: k1/source-location)(msg: string, value: bool) {
 }
 
 ns for char {
-  fn toString(self: char): string {
-    string/wrapList([self])
+  fn to-string(self: char): string {
+    string/wrap-list([self])
   }
 
   fn as_u8(self: char): u8 { self.as[u8] }
@@ -175,44 +175,44 @@ ns for char {
 
   //}
 
-  fn isAscii(self: char): bool {
+  fn is-ascii(self: char): bool {
     self.as[u8] <= 0x7F
   }
 
-  fn isAsciiLetter(self: char): bool {
+  fn is-ascii-letter(self: char): bool {
     let s = self.as[u8];
     (s >= 'a'.as[u8] and s <= 'z'.as[u8]) or (s >= 'A'.as[u8] and s <= 'Z'.as[u8])
   }
 
-  fn isAsciiDigit(self: char): bool {
+  fn is-ascii-digit(self: char): bool {
     let s = self.as[u8];
     s >= '0'.as[u8] and s <= '9'.as[u8]
   }
 
-  fn toAsciiDigit(self: char): ?u8 {
-    if self.isAsciiDigit() { :some(self.as[u8] - '0'.as[u8]) } 
+  fn to-ascii-digit(self: char): ?u8 {
+    if self.is-ascii-digit() { :some(self.as[u8] - '0'.as[u8]) } 
     else :none
   }
 
-  fn isAsciiLower(self: char): bool {
+  fn is-ascii-lower(self: char): bool {
     let s = self.as[u8];
     s >= 'a'.as[u8] and s <= 'z'.as[u8]
   }
 
-  fn isAsciiUpper(self: char): bool {
+  fn is-ascii-upper(self: char): bool {
     let s = self.as[u8];
     s >= 'A'.as[u8] and s <= 'Z'.as[u8]
   }
 
-  fn toAsciiUpper(self: char): char {
+  fn to-ascii-upper(self: char): char {
     // Toggle (clear) the 6th bit if we are ascii lower
-    let u8 = (self.as[u8]).xor(ASCII_CASE_MASK * self.isAsciiLower().as-u8());
+    let u8 = (self.as[u8]).xor(ASCII_CASE_MASK * self.is-ascii-lower().as-u8());
     u8.as[char]
   }
 
-  fn toAsciiLower(self: char): char {
+  fn to-ascii-lower(self: char): char {
     // Set the 6th bit if we are ascii upper
-    let u8 = (self.as[u8]) | (ASCII_CASE_MASK * self.isAsciiUpper().as-u8());
+    let u8 = (self.as[u8]) | (ASCII_CASE_MASK * self.is-ascii-upper().as-u8());
     u8.as[char]
   }
 
@@ -233,7 +233,7 @@ impl scalar-cmp for char {
 
 impl[t: print] show for t {
   fn show(self): string { 
-    let sb = StringBuilder/new();
+    let sb = string-builder/new();
     self.print-to(&sb);
     sb.build()
   }
@@ -250,26 +250,26 @@ impl show for bool { fn show(self: bool): string { if self "true" else "false" }
 
 impl print for char { fn print-to[w: writer](self: char, w) { w.write-char(self) } }
 // Direct specialized 'show' impl to avoid going through a buffer
-impl show for char { fn show(self: char): string { self.toString() } }
+impl show for char { fn show(self: char): string { self.to-string() } }
 
-fn formatUInt[w: writer](context w)(value: u64, base: u64) {
+fn format-uint[w: writer](context w)(value: u64, base: u64) {
   if value == 0 { w.write-char('0'); return() }
   else if value < base {
-    let digit = u8/toAsciiDigit(value.as[u8]);
+    let digit = u8/to-ascii-digit(value.as[u8]);
     w.write-char(digit);
   } else if value < (base * 2) {
     let first = (value / base);
-    let firstDigit = u8/toAsciiDigit(first.as[u8]);
+    let first-digit = u8/to-ascii-digit(first.as[u8]);
     let second = value % base;
-    let secondDigit = u8/toAsciiDigit(second.as[u8]);
-    w.write-char(firstDigit);
-    w.write-char(secondDigit);
+    let second-digit = u8/to-ascii-digit(second.as[u8]);
+    w.write-char(first-digit);
+    w.write-char(second-digit);
   } else {
     let remaining = value;
     let digits = fixlist/uninit[char, 20];
     while remaining > 0 {
       let d = remaining % base;
-      let c = u8/toAsciiDigit(d.as[u8]);
+      let c = u8/to-ascii-digit(d.as[u8]);
       digits.push(c);
       remaining := remaining / base;
     };
@@ -302,7 +302,7 @@ impl print for u32 {
 
 impl print for u64 {
   fn print-to[w: writer](self: u64, w) {
-    formatUInt(context w)(self, base = 10);
+    format-uint(context w)(self, base = 10);
   }
 }
 
@@ -332,11 +332,11 @@ impl print for int {
     };
 
     let pos = if neg { (self * -1) } else self;
-    formatUInt(context w)(pos.as[uint], 10);
+    format-uint(context w)(pos.as[uint], 10);
   }
 }
 
-impl[S, F: print] try[t = S, e = F] for result[S, F] {
+impl[s, f: print] try[t = s, e = f] for result[s, f] {
   fn error(e: e): self { :err(e) }
   fn value(t: t): self    { :ok(t) }
 
@@ -355,7 +355,7 @@ impl[S, F: print] try[t = S, e = F] for result[S, F] {
   }
 }
 
-impl[S, F] try[t = S, e = F] for result[S, F] {
+impl[s, f] try[t = s, e = f] for result[s, f] {
   fn error(e: e): self { :err(e) }
   fn value(t: t): self    { :ok(t) }
 
@@ -396,44 +396,44 @@ impl comparable for u8 {
 
 ns for u8 {
   // TODO: replace with char -> digit lut
-  fn toAsciiDigit(v: u8): char {
+  fn to-ascii-digit(v: u8): char {
     if v < 10 {
       (v + 48).as[char] // '0' + v
     } else if v < 36 {
       (v + 87).as[char] // 'a' + (v - 10)
     } else if v < 62 {
-      (v + 29).as[char] // 'A' + (v - 36)
+      (v + 29).as[char] // 'a' + (v - 36)
     } else {
-      crash("u8/toAsciiDigit: value {v} is out of range (max 61)")
+      crash("u8/to-ascii-digit: value {v} is out of range (max 61)")
     }
   }
 }
 
 ns for u32 {
-  let minValue: u32 = 0x00000000
-  let maxValue: u32 = 0xFFFFFFFF
+  let min-value: u32 = 0x00000000
+  let max-value: u32 = 0xFFFFFFFF
 
   fn as-bool(self: u32): bool { self != 0 }
 }
 
 ns for i32 {
-  let maxValue: i32 = 0x7FFFFFFF
-  let minValue: i32 = -0x80000000
+  let max-value: i32 = 0x7FFFFFFF
+  let min-value: i32 = -0x80000000
 
   fn as-bool(self: i32): bool { self != 0 }
 }
 
 ns for i64 {
-  let maxValue: i64 = 0x7FFFFFFFFFFFFFFF
-  let minValue: i64 = -0x8000000000000000
-  fn nextPow2(self: i64): i64 {
+  let max-value: i64 = 0x7FFFFFFFFFFFFFFF
+  let min-value: i64 = -0x8000000000000000
+  fn next-pow2(self: i64): i64 {
     // TODO: We could call ctlz instead when available
-    if self < 0 crash("i64/nextPow2: value must be positive") else
+    if self < 0 crash("i64/next-pow2: value must be positive") else
     if self == 0 return(1);
 
-    let next = (self.as[u64]).nextPow2();
-    if next > i64/maxValue.as[u64] {
-      crash("i64/nextPow2: value too large to fit in i64")
+    let next = (self.as[u64]).next-pow2();
+    if next > i64/max-value.as[u64] {
+      crash("i64/next-pow2: value too large to fit in i64")
     };
     next.as[i64]
   }
@@ -445,7 +445,7 @@ ns for i64 {
 }
 
 ns for u64 {
-  fn nextPow2(self: u64): u64 {
+  fn next-pow2(self: u64): u64 {
     let v = self - 1;
     v := v | (v >> 1);
     v := v | (v >> 2);
@@ -456,7 +456,7 @@ ns for u64 {
     v + 1
   }
 
-  fn bitmaskLow(n: size): u64 {
+  fn bitmask-low(n: size): u64 {
     assert(n <= 64);
     (1usize << n.as[u32]) - 1
   }
@@ -468,7 +468,7 @@ ns k1rt {
   // extern("k1rt.c", "_k1_show_backtrace") fn _k1_show_backtrace()
   // Allowing you to mix and match .c and .k1 files
 
-  // TODO: Doesn't even need to be written in C
+  // TODO: Doesn't even need to be written in c
   extern("k1rt", "_k1_print_backtrace") fn _k1_print_backtrace(frame_count: c-int)
 
   extern("k1rt", "_k1_snprintf_f32") fn snprintf_f32(buf: ptr, size: c-sizet, float: f32, places: i32): i32
@@ -480,9 +480,9 @@ ns k1rt {
 ns for f64 {
   fn format[w: writer](f: f64, w, places: i32) {
     let stack-buf = array/zeroed[u8, 32]();
-    let writtenLen: i32 = k1rt/snprintf_f64(stack-buf.get-base().as[ptr], 32, f, places);
-    if writtenLen <= 0 crash("snprintf_f32 returned {writtenLen}");
-    w.write-bytes(stack-buf.as-span().slice(0, writtenLen.as[size]))
+    let written-len: i32 = k1rt/snprintf_f64(stack-buf.get-base().as[ptr], 32, f, places);
+    if written-len <= 0 crash("snprintf_f32 returned {written-len}");
+    w.write-bytes(stack-buf.as-span().slice(0, written-len.as[size]))
   }
 
   fn from-string(s: string): result[{ value: f64, len: size }, string] {
@@ -550,7 +550,7 @@ impl scalar-cmp for f64 {
   intern fn ge(self, other: self): bool
 }
 
-// Float compare is IEEE-754 totalOrder, so it stays a consistent total order
+// float compare is IEEE-754 totalOrder, so it stays a consistent total order
 // even for NaN. Note two divergences from the `==`/`<` operators: -0.0 compares
 // :less than +0.0, and NaN compares :greater than +inf (-NaN :less than -inf).
 impl comparable for f32 {
@@ -591,6 +591,6 @@ impl print for f64 {
 impl print for ptr {
   fn print-to[w: writer](self: ptr, w) {
     w.string("0x");
-    formatUInt(context w)(self.as[usize], base = 16);
+    format-uint(context w)(self.as[usize], base = 16);
   }
 }

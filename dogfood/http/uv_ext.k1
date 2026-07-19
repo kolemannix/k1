@@ -54,7 +54,7 @@ impl uv-handle for uv/handle {
 ns uv {
   ns for buf {
     fn to-buffer(self: buf): buffer[u8] {
-      buffer/fromRefAndCount(self.base, self.len.as())
+      buffer/from-ref-and-count(self.base, self.len.as())
     }
 
     fn from-buffer(buffer: buffer[u8]): buf {

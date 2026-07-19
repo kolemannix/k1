@@ -14,14 +14,14 @@ let s2: "asdf" = {
   a.concat("f")
 }
 
-fn staticsAndCoercion(): i32 {
+fn statics-and-coercion(): i32 {
    let _i: "a" = #static "a";
    let _i2: string = #static "a";
    let _i3: "a" = "a";
    0
 }
 
-fn getPoint(): { x: u8, y: u32, z: i64 } {
+fn get-point(): { x: u8, y: u32, z: i64 } {
   { x: 1, y: 300, z: -222 }
 }
 fn test() {
@@ -51,9 +51,9 @@ fn test() {
   assert(not #static 123.0 == 3.14);
 
   // Return struct
-  assert-equals[u8](#static getPoint().x, 1);
-  assert-equals[u32](#static getPoint().y, 300);
-  assert-equals[i64](#static getPoint().z, -222);
+  assert-equals[u8](#static get-point().x, 1);
+  assert-equals[u32](#static get-point().y, 300);
+  assert-equals[i64](#static get-point().z, -222);
 
   // Variable assign
   let goodbye: "Goodbye, World!" = #static {
@@ -63,12 +63,12 @@ fn test() {
   };
   assert-equals[string](goodbye, "Goodbye, World!");
 
-  let letAssign = #static {
+  let let-assign = #static {
     let i = 22;
     i := 10;
     i
   };
-  assert-equals[int](letAssign, 10);
+  assert-equals[int](let-assign, 10);
 
   let padded = #static {
     let padded = { a: 1: u8, b: 2: u8, c: 3: u8, d: 4: u64, e: 5 };
@@ -80,7 +80,7 @@ fn test() {
   (padded.d: 4u64);
   (padded.e: 5i64);
 
-  let letRef = #static {
+  let let-ref = #static {
     let i = 10;
 
     //assert(i.* == 10);
@@ -88,7 +88,7 @@ fn test() {
     i := core/identity(i);
     i
   };
-  assert-equals[int](letRef, 10);
+  assert-equals[int](let-ref, 10);
 
   assert-equals(core/k1/is-static, false);
   #static assert(core/k1/is-static);
@@ -100,20 +100,20 @@ fn test() {
   };
   assert-equals[int](enum1, 42);
 
-  let fieldPtrTest: int = #static {
+  let field-ptr-test: int = #static {
     let x = 21;
     let s = { ptr: &x };
     s.ptr.*
   };
-  assert-equals(fieldPtrTest, 21);
+  assert-equals(field-ptr-test, 21);
 
 
-  let ptrInStructs = #static {
+  let ptr-in-structs = #static {
     let b: u8 = 10;
     let f = { asdf: &b };
     f.asdf.*
   };
-  assert-equals[u8](ptrInStructs, 10);
+  assert-equals[u8](ptr-in-structs, 10);
 
   //// Loops
   #if false assert-equals(#static {
@@ -132,16 +132,16 @@ fn test() {
   }, 5);
 
   #static {
-    let l = list/withCapacity[empty](0);
+    let l = list/with-capacity[empty](0);
     l.len
   };
 
   // lists
-  let listLast = #static {
+  let list-last = #static {
     let inced = [1,2,3,4,5].map(fn it. it+1);
     inced.last()
   };
-  assert-equals[?int](listLast, some(6));
+  assert-equals[?int](list-last, some(6));
 
   assert-equals[int](#static loop {
     switch 42 {
@@ -149,16 +149,16 @@ fn test() {
     }
   }, 100);
 
-  // StringBuilder
+  // string-builder
 
   assert-equals[string](#static {
-    let sb = StringBuilder/new();
+    let sb = string-builder/new();
     sb.string("Hello");
     sb.build()
   }, "Hello");
 
   assert-equals[?string](
-    testCompile( #static assert(false) ).map(fn(s) s.take(38)),
+    test-compile( #static assert(false) ).map(fn(s) s.take(38)),
     some("Static execution exited with code: 111")
   );
 
@@ -173,7 +173,7 @@ fn test() {
   assert-equals(span, [1,2,3,4,5]);
   #static {
     // uses a global
-    let l = list/wrapBuffer(buffer/copyFrom-span(INT_SPAN));
+    let l = list/wrap-buffer(buffer/copy-from-span(INT_SPAN));
     l.push(9);
     assert-equals(l.len, 6);
     assert-equals(l.last(), some(9));
@@ -203,8 +203,8 @@ fn test() {
   {}
 }
 
-fn getOne(): int { 1 }
-fn getThree(): int { getOne() + 2 }
+fn get-one(): int { 1 }
+fn get-three(): int { get-one() + 2 }
 
 fn foo(n: int) {
   if n == 0 return()

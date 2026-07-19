@@ -1,9 +1,9 @@
 ns range_test;
 
-use core/IntRange
+use core/int-range
 
-fn testBasicIntRangeIteration() {
-  let iter = IntRange/make(0, 5).iterator();
+fn test-basic-int-range-iteration() {
+  let iter = int-range/make(0, 5).iterator();
   
   // Test stepping through range one by one
   assert(iter.next().! == 0);
@@ -14,14 +14,14 @@ fn testBasicIntRangeIteration() {
   assert(iter.next().is-none());
 }
 
-fn testEmptyIntRange() {
-  let iter = IntRange/make(0, 0).iterator();
+fn test-empty-int-range() {
+  let iter = int-range/make(0, 0).iterator();
   
   assert(iter.next().is-none());
 }
 
-fn testNegativeIntRange() {
-  let iter = IntRange/make(-3, 2).iterator();
+fn test-negative-int-range() {
+  let iter = int-range/make(-3, 2).iterator();
   
   assert(iter.next().! == -3);
   assert(iter.next().! == -2);
@@ -31,8 +31,8 @@ fn testNegativeIntRange() {
   assert(iter.next().is-none());
 }
 
-fn testUpTo() {
-  let iter = IntRange/upTo(3).iterator();
+fn test-up-to() {
+  let iter = int-range/up-to(3).iterator();
   
   assert(iter.next().! == 0);
   assert(iter.next().! == 1);
@@ -40,23 +40,23 @@ fn testUpTo() {
   assert(iter.next().is-none());
 }
 
-fn testStepBy() {
-  let iter = IntRange/upTo(10).iterator();
+fn test-step-by() {
+  let iter = int-range/up-to(10).iterator();
   
-  assert(iter.stepBy(2));  // Move by 2 to position 2
+  assert(iter.step-by(2));  // move by 2 to position 2
   assert(iter.current() == 2);
   
-  assert(iter.stepBy(3));  // Move by 3 to position 5
+  assert(iter.step-by(3));  // move by 3 to position 5
   assert(iter.current() == 5);
   
-  assert(iter.stepBy(4));  // Move by 4 to position 9
+  assert(iter.step-by(4));  // move by 4 to position 9
   assert(iter.current() == 9);
   
-  assert(not iter.stepBy(2));  // Try to move past end
+  assert(not iter.step-by(2));  // Try to move past end
 }
 
-fn testSizeHint() {
-  let iter = IntRange/make(0, 5).iterator();
+fn test-size-hint() {
+  let iter = int-range/make(0, 5).iterator();
   
   let hint = iter.size-hint();
   assert(hint.at-least == 5);
@@ -69,8 +69,8 @@ fn testSizeHint() {
   assert(hint2.at-least == 3);
 }
 
-fn testNth() {
-  let iter = IntRange/upTo(10).iterator();
+fn test-nth() {
+  let iter = int-range/up-to(10).iterator();
   
   assert(iter.nth(3).! == 3);  // Skip to 4th element
   assert(iter.next().! == 4);  // Next should be 4
@@ -81,8 +81,8 @@ fn testNth() {
   assert(iter.nth(1).is-none());  // Try to skip past end
 }
 
-fn testAdvanceBy() {
-  let iter = IntRange/upTo(5).iterator();
+fn test-advance-by() {
+  let iter = int-range/up-to(5).iterator();
   
   iter.advance-by(2);
   assert(iter.next().! == 2);
@@ -92,12 +92,12 @@ fn testAdvanceBy() {
 }
 
 fn test() {
-  testBasicIntRangeIteration();
-  testEmptyIntRange();
-  testNegativeIntRange();
-  testUpTo();
-  testStepBy();
-  testSizeHint();
-  testNth();
-  testAdvanceBy();
+  test-basic-int-range-iteration();
+  test-empty-int-range();
+  test-negative-int-range();
+  test-up-to();
+  test-step-by();
+  test-size-hint();
+  test-nth();
+  test-advance-by();
 }

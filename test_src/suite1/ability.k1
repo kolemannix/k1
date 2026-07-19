@@ -1,68 +1,68 @@
 ns ability_01;
 
-ability Num {
+ability num {
   fn num(self): i32
 }
 
-type Point = { x: i32, y: i32 }
+type point = { x: i32, y: i32 }
 
-impl Num for Point {
+impl num for point {
   fn num(self): i32 {
     self.x + self.y
   }
 }
 
-ability Codec {
-  fn aConst(): u8
+ability codec {
+  fn a-const(): u8
   fn write(self): span[u8]
   fn read(buffer: span[u8]): self
 }
 
-impl Codec for string {
-  fn aConst(): u8 { 10 }
+impl codec for string {
+  fn a-const(): u8 { 10 }
   fn write(self: string): span[u8] {
     self.span().as-byte-span()
   }
   fn read(buffer: span[u8]): string {
-    string/fromBytes(buffer)
+    string/from-bytes(buffer)
   }
 }
 
 ns qualified_syntax {
 
-  ability HasSecretInt {
+  ability has-secret-int {
     fn secret(): int
   }
-  ability HasSecretGen[A] {
-    fn secret(): A
+  ability has-secret-gen[a] {
+    fn secret(): a
   }
 
-  type Foo = {}
-  type Bar = {}
+  type foo = {}
+  type bar = {}
 
-  impl HasSecretGen[A = int] for Foo {
+  impl has-secret-gen[a = int] for foo {
     fn secret(): int { 10 }
   }
-  impl HasSecretGen[A = int] for Bar {
+  impl has-secret-gen[a = int] for bar {
     fn secret(): int { 20 }
   }
-  impl HasSecretInt for Foo {
+  impl has-secret-int for foo {
     fn secret(): int { 10 }
   }
-  impl HasSecretInt for Bar {
+  impl has-secret-int for bar {
     fn secret(): int { 20 }
   }
 
   fn test() {
-    let sFoo: int = HasSecretGen[A = int]@(Foo)/secret();
-    assert-equals(sFoo, 10);
-    let sBar: int = HasSecretGen[A = int]@(Bar)/secret();
-    assert-equals(sBar, 20);
+    let s-foo: int = has-secret-gen[a = int]@(foo)/secret();
+    assert-equals(s-foo, 10);
+    let s-bar: int = has-secret-gen[a = int]@(bar)/secret();
+    assert-equals(s-bar, 20);
 
-    let sFooInt: int = HasSecretInt@(Foo)/secret();
-    assert-equals(sFooInt, 10);
-    let sBarInt: int = HasSecretInt@(Bar)/secret();
-    assert-equals(sBarInt, 20);
+    let s-foo-int: int = has-secret-int@(foo)/secret();
+    assert-equals(s-foo-int, 10);
+    let s-bar-int: int = has-secret-int@(bar)/secret();
+    assert-equals(s-bar-int, 20);
   }
 }
 
@@ -74,23 +74,23 @@ fn test() {
   assert(three.num() == 3);
 
   // Qualified call
-  assert(Num/num(3: i32) == 3);
+  assert(num/num(3: i32) == 3);
 
   // Method-style call on user-defined type
-  let p = { x: 1, y: 2 }: Point;
+  let p = { x: 1, y: 2 }: point;
   assert(p.num() == 3);
 
   let buf: span[u8] = [104: u8, 101, 108, 108, 111].as-span();
-  let x: string = Codec/read(buf);
+  let x: string = codec/read(buf);
   assert-equals(x, "hello");
-  assert-equals[string]("asdf", Codec/read("asdf".write()));
+  assert-equals[string]("asdf", codec/read("asdf".write()));
 
   qualified_syntax/test();
 }
 
 // This is below 'main' so that
 // it tests for order-independence of the impls
-impl Num for i32 {
+impl num for i32 {
   fn num(self): i32 {
     self
   }

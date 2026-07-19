@@ -8,65 +8,65 @@ let MODULE_INFO: k1/module-manifest = {
 
 ns foo {
 
-  type VerySmall = { x: u8 }
-  impl print for VerySmall { fn print-to[w: writer](self: VerySmall, w) { w.string("{ {self.x} }") } }
-  impl equals for VerySmall { fn equals(self: VerySmall, other: VerySmall): bool { self.x == other.x } }
-  extern("foo", "very_small") fn very_small(x: VerySmall, y: VerySmall): VerySmall
+  type very-small = { x: u8 }
+  impl print for very-small { fn print-to[w: writer](self: very-small, w) { w.string("{ {self.x} }") } }
+  impl equals for very-small { fn equals(self: very-small, other: very-small): bool { self.x == other.x } }
+  extern("foo", "very_small") fn very_small(x: very-small, y: very-small): very-small
 
-  type IntWrap = { inner: i32 }
-  extern("foo", "intWrap") fn intWrap(a: IntWrap, b: IntWrap): IntWrap
+  type int-wrap = { inner: i32 }
+  extern("foo", "intWrap") fn int-wrap(a: int-wrap, b: int-wrap): int-wrap
 
   // Odd-sized structs: 3 bytes (i24) and 6 bytes (i48) coercions
-  type Rgb3 = { r: u8, g: u8, b: u8 }
-  extern("foo", "rgb3") fn rgb3(a: Rgb3, b: Rgb3): Rgb3
+  type rgb3 = { r: u8, g: u8, b: u8 }
+  extern("foo", "rgb3") fn rgb3(a: rgb3, b: rgb3): rgb3
 
-  type ThreeShorts = { a: i16, b: i16, c: i16 }
-  extern("foo", "three_shorts") fn three-shorts(a: ThreeShorts, b: ThreeShorts): ThreeShorts
+  type three-shorts = { a: i16, b: i16, c: i16 }
+  extern("foo", "three_shorts") fn three-shorts(a: three-shorts, b: three-shorts): three-shorts
 
-  extern("foo", "takesRgb3Fn") fn takes-rgb3-fn(f: *fn(x: Rgb3) -> Rgb3): Rgb3
+  extern("foo", "takesRgb3Fn") fn takes-rgb3-fn(f: *fn(x: rgb3) -> rgb3): rgb3
 
-  type Small = { r: u8, g: u8, b: u8, a: u8 }
-  extern("foo", "small")      fn small(x: Small, y: Small): Small
+  type small = { r: u8, g: u8, b: u8, a: u8 }
+  extern("foo", "small")      fn small(x: small, y: small): small
 
-  type Medium = { a: u64, b: u64 }
-  extern("foo", "medium")     fn medium(a: Medium, b: Medium): Medium
+  type medium = { a: u64, b: u64 }
+  extern("foo", "medium")     fn medium(a: medium, b: medium): medium
 
-  type MixedClassMedium = { f1: f32, f2: f32, i3: array[i16, 4] }
+  type mixed-class-medium = { f1: f32, f2: f32, i3: array[i16, 4] }
 
-  type Large = { med1: Medium, med2: Medium }
-  extern("foo", "large")      fn large(a: Large, b: Large): Large
+  type large = { med1: medium, med2: medium }
+  extern("foo", "large")      fn large(a: large, b: large): large
 
   type HFA2 = { x: f32, y: f32 }
   extern("foo", "hfa2_add") fn hfa2-add(a: HFA2, b: HFA2): HFA2
 
   type HFA1 = { x: f32 }
-  type HFANested3 = { a: HFA1, b: f32, c: f32 }
-  extern("foo", "hfa_nested3_add") fn hfa-nested3-add(a: HFANested3, b: HFANested3): HFANested3
+  type hfa-nested3 = { a: HFA1, b: f32, c: f32 }
+  extern("foo", "hfa_nested3_add") fn hfa-nested3-add(a: hfa-nested3, b: hfa-nested3): hfa-nested3
 
   type HFA4 = { a: f64, b: f64, c: f64, d: f64 }
   extern("foo", "hfa4_add") fn hfa4-add(a: HFA4, b: HFA4): HFA4
 
-  type CXCursorKind = either(u32) { UnexposedDecl = 1, StructDecl = 2 }
-  type CXCursor = {
-    kind: CXCursorKind,
+  type cx-cursor-kind = either(u32) { unexposed-decl = 1, struct-decl = 2 }
+  type cx-cursor = {
+    kind: cx-cursor-kind,
     xdata: i32,
     data: array[ptr, 3]
   }
 
-  extern("foo", "rtCursor") fn rtCursor(c: CXCursor): CXCursor
+  extern("foo", "rtCursor") fn rt-cursor(c: cx-cursor): cx-cursor
 
-  type CXString = {
+  type cx-string = {
     data: ptr,
     private_flags: u32,
   }
-  extern("foo", "getFileName") fn getFileName(SFile: ptr): CXString 
+  extern("foo", "getFileName") fn get-file-name(s-file: ptr): cx-string 
 
-  type CXSourceLocation = {
+  type cx-source-location = {
     ptr_data: array[ptr, 2],
     int_data: u32,
   }
   extern("foo", "getCursorLocation")
-  fn getCursorLocation(c: CXCursor): CXSourceLocation 
+  fn get-cursor-location(c: cx-cursor): cx-source-location 
 
   extern("foo", "takesFn")
   fn takes-fn(f: *fn(a: u64, b: u64, c: u64, d: u64) -> i32): i32
@@ -74,25 +74,25 @@ ns foo {
   extern("foo", "takesFnStruct")
   fn takes-fn-struct(f: *fn(s: { a: u64, b: u64, c: u64, d: u64 }) -> i32): i32
 
-  type TagUnion = either(u32) { a(i32) = 0, b(i64) = 1, c(ptr) = 2 }
-  extern("foo", "TagUnion_iszero") fn TagUnion_iszero(x: TagUnion): i32
+  type tag-union = either(u32) { a(i32) = 0, b(i64) = 1, c(ptr) = 2 }
+  extern("foo", "TagUnion_iszero") fn tag-union-iszero(x: tag-union): i32
 
 }
 
-fn testAll() {
+fn test-all() {
   assert-equals(
     foo/very_small({ x: 10 }, { x: 20 }),
     { x: 30 }
   );
 
-  let smallResult = foo/small({r: 1, g: 10, b: 20, a: 30 }, { r: 1, g: 1, b: 1, a: 1 });
-  assert-equals(smallResult.r, 2);
-  assert-equals(smallResult.g, 11);
-  assert-equals(smallResult.b, 21);
-  assert-equals(smallResult.a, 31);
+  let small-result = foo/small({r: 1, g: 10, b: 20, a: 30 }, { r: 1, g: 1, b: 1, a: 1 });
+  assert-equals(small-result.r, 2);
+  assert-equals(small-result.g, 11);
+  assert-equals(small-result.b, 21);
+  assert-equals(small-result.a, 31);
 
-  let intWrapResult = foo/intWrap({ inner: -5 }, { inner: 10 });
-  assert-equals(intWrapResult.inner, 5);
+  let int-wrap-result = foo/int-wrap({ inner: -5 }, { inner: 10 });
+  assert-equals(int-wrap-result.inner, 5);
 
   let rgb3 = foo/rgb3({ r: 1, g: 2, b: 3 }, { r: 10, g: 20, b: 30 });
   assert-equals(rgb3.r, 11);
@@ -104,30 +104,30 @@ fn testAll() {
   assert-equals(ts.b, 22);
   assert-equals(ts.c, -27);
 
-  let mediumResult = foo/medium({ a: 10, b: 100 }, { a: 1, b: 20 });
-  assert-equals(mediumResult.a, 11);
-  assert-equals(mediumResult.b, 120);
+  let medium-result = foo/medium({ a: 10, b: 100 }, { a: 1, b: 20 });
+  assert-equals(medium-result.a, 11);
+  assert-equals(medium-result.b, 120);
 
-  let largeResult = foo/large(
+  let large-result = foo/large(
     { med1: { a: 1, b: 2 }, med2: { a: 3, b: 4 } },
     { med1: { a: 10, b: 20 }, med2: { a: 30, b: 40 } }
   );
-  assert-equals(largeResult.med1.a, 11);
-  assert-equals(largeResult.med1.b, 22);
-  assert-equals(largeResult.med2.a, 33);
-  assert-equals(largeResult.med2.b, 44);
+  assert-equals(large-result.med1.a, 11);
+  assert-equals(large-result.med1.b, 22);
+  assert-equals(large-result.med2.a, 33);
+  assert-equals(large-result.med2.b, 44);
 
   let hfa2 = foo/hfa2-add({ x: 1.0, y: 2.0 }, { x: 10.0, y: 20.0 });
   assert-equals(hfa2.x, 11.0);
   assert-equals(hfa2.y, 22.0);
 
-  let hfaNested3 = foo/hfa-nested3-add(
+  let hfa-nested3 = foo/hfa-nested3-add(
     { a: { x: 1.0 }, b: 2.0, c: 3.0 },
     { a: { x: 10.0 }, b: 20.0, c: 30.0 }
   );
-  assert-equals(hfaNested3.a.x, 11.0);
-  assert-equals(hfaNested3.b, 22.0);
-  assert-equals(hfaNested3.c, 33.0);
+  assert-equals(hfa-nested3.a.x, 11.0);
+  assert-equals(hfa-nested3.b, 22.0);
+  assert-equals(hfa-nested3.c, 33.0);
 
   let hfa4 = foo/hfa4-add(
     { a: 1.0, b: 2.0, c: 3.0, d: 4.0 },
@@ -138,40 +138,40 @@ fn testAll() {
   assert-equals(hfa4.c, 33.0);
   assert-equals(hfa4.d, 44.0);
 
-  let cursor: foo/CXCursor = {
-    kind: :UnexposedDecl,
+  let cursor: foo/cx-cursor = {
+    kind: :unexposed-decl,
     xdata: -42,
     data: [1.as[ptr], 2.as[ptr], 3.as[ptr]]
   };
-  let rt = foo/rtCursor(cursor);
+  let rt = foo/rt-cursor(cursor);
   assert-equals(cursor.kind.enum-value(), rt.kind.enum-value());
   assert-equals(cursor.xdata, rt.xdata);
   assert-equals(cursor.data.get(0), rt.data.get(0));
   assert-equals(cursor.data.get(1), rt.data.get(1));
   assert-equals(cursor.data.get(2), rt.data.get(2));
 
-  let n = foo/getFileName(ptr/null);
+  let n = foo/get-file-name(ptr/null);
   assert-equals(n.data.as[size], 3);
   assert-equals(n.private_flags, 21);
 
-  let locn = foo/getCursorLocation(rt);
+  let locn = foo/get-cursor-location(rt);
   assert-equals(locn.ptr_data.get(0), 1.as[ptr]);
   assert-equals(locn.ptr_data.get(1), 2.as[ptr]);
   assert-equals(locn.int_data, 42);
 
-  assert(not foo/TagUnion_iszero(:a(10)).as-bool());
-  assert(    foo/TagUnion_iszero(:a(0)).as-bool());
+  assert(not foo/tag-union-iszero(:a(10)).as-bool());
+  assert(    foo/tag-union-iszero(:a(0)).as-bool());
 
-  assert(not foo/TagUnion_iszero(:b(10)).as-bool());
-  assert(    foo/TagUnion_iszero(:b(0)).as-bool());
+  assert(not foo/tag-union-iszero(:b(10)).as-bool());
+  assert(    foo/tag-union-iszero(:b(0)).as-bool());
 
-  assert(foo/TagUnion_iszero(:c(ptr/null)).as-bool());
+  assert(foo/tag-union-iszero(:c(ptr/null)).as-bool());
   let x = 10;
-  assert(not foo/TagUnion_iszero(:c((&x).as())).as-bool());
+  assert(not foo/tag-union-iszero(:c((&x).as())).as-bool());
 
 }
 
-fn testFnPtr() {
+fn test-fn-ptr() {
   // We don't run this one at compile-time because there is no actual function to pass.
   // FIXME: You can't pass a k1 function to a compiled library at comptime
   //        since the function pointer doesn't exist; we'd have to JIT the function.
@@ -183,7 +183,7 @@ fn testFnPtr() {
   let sum2 = foo/takes-fn-struct(sum-fn-struct);
   assert-equals(sum2, 1+2+3+4);
 
-  // C passes a by-value 3-byte struct to k1 and gets one back: the k1 side
+  // c passes a by-value 3-byte struct to k1 and gets one back: the k1 side
   // must marshal its param and return through the i24 coercion correctly
   let rt3 = foo/takes-rgb3-fn(bump-rgb3);
   assert-equals(rt3.r, 2);
@@ -191,7 +191,7 @@ fn testFnPtr() {
   assert-equals(rt3.b, 4);
 }
 
-fn bump-rgb3(x: foo/Rgb3): foo/Rgb3 {
+fn bump-rgb3(x: foo/rgb3): foo/rgb3 {
   { r: x.r + 1, g: x.g + 1, b: x.b + 1 }
 }
 
@@ -205,8 +205,8 @@ fn sum-fn-struct(s: { a: u64, b: u64, c: u64, d: u64 }): i32 {
 // TODO: abi/ffi test some 'sum' types
 
 fn main(): i32 {
-  #static testAll();
-  testAll();
-  testFnPtr();
+  #static test-all();
+  test-all();
+  test-fn-ptr();
   0
 }

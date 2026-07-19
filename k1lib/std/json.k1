@@ -14,7 +14,7 @@ type parser = {
   cursor: size,
 }
 ns for parser {
-  fn peek(self: parser): ?char { self.input.getOpt(self.cursor) }
+  fn peek(self: parser): ?char { self.input.get-opt(self.cursor) }
   fn next(self: *mut parser): ?char {
     switch self.peek() {
       :none -> :none,
@@ -36,7 +36,7 @@ ns for parser {
       :none -> false
     }
   }
-  fn eatWhitespace(self: *mut parser) {
+  fn eat-whitespace(self: *mut parser) {
     loop {
       switch self.peek() {
         :none -> break(),
@@ -69,9 +69,9 @@ fn next-or(context p: *mut parser)(msg: string): result[char, string] {
   }
 }
 
-fn _parseString(context p: *mut parser)(): result[json, string] {
+fn _parse-string(context p: *mut parser)(): result[json, string] {
   if not p.expect('"') { return(:err("expected string")) };
-  let sb = StringBuilder/new();
+  let sb = string-builder/new();
   loop {
     let c1 = next-or("Unterminated string").try;
     if c1 == '\\' {
@@ -95,7 +95,7 @@ fn _parseString(context p: *mut parser)(): result[json, string] {
 fn _expect-array(context p: *mut parser)(): result[json, string] {
   // eprintln("_expect-array {p.remaining-input().take(10)}");
   if not p.expect('[') { return(:err("internal error at _expect-array")) };
-  p.eatWhitespace();
+  p.eat-whitespace();
   if p.peek() == :some(']') { 
     p.advance();
     return(:ok(:array([])))
@@ -105,11 +105,11 @@ fn _expect-array(context p: *mut parser)(): result[json, string] {
 
   loop {
     // eprintln("parseArray len={elements.len()} {p.peek()}");
-    p.eatWhitespace();
-    let value = _parseNextValue().try;
+    p.eat-whitespace();
+    let value = _parse-next-value().try;
     elements.push(value);
 
-    p.eatWhitespace();
+    p.eat-whitespace();
     switch p.peek() {
       :none -> break(:err("Unexpected end of input in array")),
       :some(']') -> {
@@ -127,7 +127,7 @@ fn _expect-array(context p: *mut parser)(): result[json, string] {
 fn _expect-object(context p: *mut parser)(): result[json, string] {
   // eprintln("_expect-object {p.remaining-input().take(10)}");
   if not p.expect('{') { return(:err("internal error at _expect-object")) };
-  p.eatWhitespace();
+  p.eat-whitespace();
   if p.peek() == :some('}') { 
     p.advance();
     return(:ok(:object([])))
@@ -137,18 +137,18 @@ fn _expect-object(context p: *mut parser)(): result[json, string] {
 
   loop {
     // eprintln("parseObject len={members.len()} {p.remaining-input().take(10)}");
-    p.eatWhitespace();
-    require _parseString().try is :str(keyName) else {
+    p.eat-whitespace();
+    require _parse-string().try is :str(key-name) else {
       return(:err("expected string key in object"))
     };
 
-    p.eatWhitespace();
+    p.eat-whitespace();
     if not p.expect(':') { return(:err("expected colon")) };
-    p.eatWhitespace();
-    let value = _parseNextValue().try;
-    members.push({ key: keyName, value });
+    p.eat-whitespace();
+    let value = _parse-next-value().try;
+    members.push({ key: key-name, value });
 
-    p.eatWhitespace();
+    p.eat-whitespace();
     switch p.peek() {
       :none -> break(:err("Unexpected end of input in object")),
       :some('}') -> {
@@ -163,15 +163,15 @@ fn _expect-object(context p: *mut parser)(): result[json, string] {
   }
 }
 
-fn _parseNumber(context p: *mut parser)(): result[json, string] {
+fn _parse-number(context p: *mut parser)(): result[json, string] {
   let result = f64/parse-string(s = p.remaining-input(), require-total = false).try;
   p.advance-n(result.len);
   :ok(:number(result.value))
 }
 
-fn _parseNextValue(context p: *mut parser)(): result[json, string] {
+fn _parse-next-value(context p: *mut parser)(): result[json, string] {
   // eprintln("pnv {p.remaining-input().take(10)}");
-  p.eatWhitespace();
+  p.eat-whitespace();
   if p.peek() is :some(c) {
     switch c {
       'n' -> {
@@ -180,11 +180,11 @@ fn _parseNextValue(context p: *mut parser)(): result[json, string] {
       },
       'f' -> { p.advance-n(5); :ok(:bool(false)) },
       't' -> { p.advance-n(4); :ok(:bool(true)) },
-      '"' -> _parseString(),
+      '"' -> _parse-string(),
       '{' -> _expect-object(),
       '[' -> _expect-array(),
-      _ if c.isAsciiDigit() or c == '-' -> 
-        _parseNumber(),
+      _ if c.is-ascii-digit() or c == '-' -> 
+        _parse-number(),
       _ -> return(:err("Not valid json"))
     }
   } else {
@@ -194,7 +194,7 @@ fn _parseNextValue(context p: *mut parser)(): result[json, string] {
 
 fn parse-from-string(input: string): result[json, string] {
   let p: parser = { input, cursor: 0 };
-  switch _parseNextValue(context &p)() {
+  switch _parse-next-value(context &p)() {
     :err(msg) -> :err("Failed at pos {p.cursor}: {msg}"),
     :ok(json) -> :ok(json)
   }

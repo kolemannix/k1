@@ -1,28 +1,28 @@
 ns struct_anon_nomethod;
 
-type PointNamed = { x: int, y: int }
-ns for PointNamed {
-  fn sum(self: PointNamed): int {
+type point-named = { x: int, y: int }
+ns for point-named {
+  fn sum(self: point-named): int {
     self.x + self.y
   }
 }
 
-type alias PointAlias = { x: int, y: int }
-ns PointAlias {
-  fn sum(me: PointAlias): int {
+type alias point-alias = { x: int, y: int }
+ns point-alias {
+  fn sum(me: point-alias): int {
     me.x + me.y
   }
 }
 
 fn test() {
-  // Should work because PointNamed is a proper type
-  let p: PointNamed = { x: 0, y: 0 };
+  // Should work because point-named is a proper type
+  let p: point-named = { x: 0, y: 0 };
   p.sum();
 
-  // Should not work because PointAlias is a type alias
-  let p2: PointAlias = { x: 0, y: 0 };
+  // Should not work because point-alias is a type alias
+  let p2: point-alias = { x: 0, y: 0 };
   assert-equals[?string](
-    testCompile(p2.sum()),
+    test-compile(p2.sum()),
     opt:some(p"Method 'sum' does not exist on type '{ x: i64, y: i64 }'")
   );
 

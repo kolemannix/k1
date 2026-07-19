@@ -1,29 +1,29 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-type IntRange = { start: int, end: int }
-ns for IntRange {
-  fn make(start: int, end: int): IntRange { { start, end } }
-  fn upTo(end: int): IntRange { { start: 0, end } }
+type int-range = { start: int, end: int }
+ns for int-range {
+  fn make(start: int, end: int): int-range { { start, end } }
+  fn up-to(end: int): int-range { { start: 0, end } }
 }
-type IntRangeIterator = { range: IntRange, offset: int }
+type int-range-iterator = { range: int-range, offset: int }
 
-ns for IntRangeIterator {
-  fn make(range: IntRange): IntRangeIterator { { range, offset: 0 } }
+ns for int-range-iterator {
+  fn make(range: int-range): int-range-iterator { { range, offset: 0 } }
 
-  fn position(self: IntRangeIterator): int { self.range.start + self.offset }
-  fn size(self: IntRangeIterator): int { self.range.end - self.range.start }
-  fn stepBy(self: *mut IntRangeIterator, n: size): bool { 
+  fn position(self: int-range-iterator): int { self.range.start + self.offset }
+  fn size(self: int-range-iterator): int { self.range.end - self.range.start }
+  fn step-by(self: *mut int-range-iterator, n: size): bool { 
     self.offset <- self.offset + n;
-    let isInBounds = self.position() < self.range.end;
-    isInBounds
+    let is-in-bounds = self.position() < self.range.end;
+    is-in-bounds
   }
-  fn current(self: IntRangeIterator): int {
+  fn current(self: int-range-iterator): int {
     self.range.start + self.offset
   }
 }
 
-impl iterator[item = int] for IntRangeIterator {
+impl iterator[item = int] for int-range-iterator {
   fn peek(self: *self): ?int {
      if self.position() >= self.range.end {
        :none
@@ -37,15 +37,15 @@ impl iterator[item = int] for IntRangeIterator {
     { at-least: remaining, at-most: :some(remaining) }
   }
   fn advance-by(self: *mut self, n: size) {
-    self.stepBy(n);
+    self.step-by(n);
     {}
   }
   fn nth(self: *mut self, n: size): ?size {
-    self.stepBy(n); 
+    self.step-by(n); 
     self.next()
   }
 }
 
-impl iterable[item = int, i = IntRangeIterator] for IntRange {
-  fn iterator(self: IntRange): IntRangeIterator { IntRangeIterator/make(self) }
+impl iterable[item = int, i = int-range-iterator] for int-range {
+  fn iterator(self: int-range): int-range-iterator { int-range-iterator/make(self) }
 }

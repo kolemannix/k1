@@ -35,11 +35,11 @@ fn test() {
 
   assert(add_stuff(y = 2, x = 1) == 1341);
 
-  let multResult: int = mult(
+  let mult-result: int = mult(
     55,
     2 + 3 + 3,
   );
-  assert(multResult == 440);
+  assert(mult-result == 440);
 
   assert(1 != 2);
   assert(2 == 2);
@@ -89,7 +89,7 @@ fn test() {
   // Signed widen to unsigned
   assert-equals(-1i16.as[i32].as[u32], 0xFFFF_FFFF); 
   // Not directly allowed
-  assert(testCompile(-1i16.as[u32]).is-some());
+  assert(test-compile(-1i16.as[u32]).is-some());
 
   {}
 

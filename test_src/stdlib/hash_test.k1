@@ -3,32 +3,32 @@ ns hash_test;
 use std/map
 use std/set
 
-fn testBasic() {
-  let myMap = map/new[string, int]();
-  assert(myMap.is-empty());
-  myMap.insert("a", 10);
-  myMap.insert("b", 11);
-  myMap.insert("c", 12);
-  assert-equals(myMap.len(), 3);
-  assert-equals(myMap.get("a"), :some(10));
-  assert-equals(myMap.get("b"), :some(11));
-  assert-equals(myMap.get("c"), :some(12));
-  assert-equals(myMap.get("d"), :none);
-  assert(myMap.contains("a"));
-  assert(not myMap.contains("d"));
-  assert-equals(myMap.remove("a"), :some(10));
-  assert-equals(myMap.remove("a"), :none);
-  assert-equals(myMap.get("a"), :none);
-  assert-equals(myMap.get("b"), :some(11));
-  assert-equals(myMap.len(), 2);
-  myMap.insert("a", 20);
-  assert-equals(myMap.get("a"), :some(20));
-  myMap.insert("b", 21);
-  assert-equals(myMap.get("b"), :some(21));
-  assert-equals(myMap.len(), 3);
+fn test-basic() {
+  let my-map = map/new[string, int]();
+  assert(my-map.is-empty());
+  my-map.insert("a", 10);
+  my-map.insert("b", 11);
+  my-map.insert("c", 12);
+  assert-equals(my-map.len(), 3);
+  assert-equals(my-map.get("a"), :some(10));
+  assert-equals(my-map.get("b"), :some(11));
+  assert-equals(my-map.get("c"), :some(12));
+  assert-equals(my-map.get("d"), :none);
+  assert(my-map.contains("a"));
+  assert(not my-map.contains("d"));
+  assert-equals(my-map.remove("a"), :some(10));
+  assert-equals(my-map.remove("a"), :none);
+  assert-equals(my-map.get("a"), :none);
+  assert-equals(my-map.get("b"), :some(11));
+  assert-equals(my-map.len(), 2);
+  my-map.insert("a", 20);
+  assert-equals(my-map.get("a"), :some(20));
+  my-map.insert("b", 21);
+  assert-equals(my-map.get("b"), :some(21));
+  assert-equals(my-map.len(), 3);
 }
 
-fn testIntKeys() {
+fn test-int-keys() {
   let m = map/new[int, string]();
   let i = 0;
   while i < 50 {
@@ -43,7 +43,7 @@ fn testIntKeys() {
   assert-equals(m.get(18), :some("v18"));
 }
 
-fn testGetRef() {
+fn test-get-ref() {
   let m = map/new[string, int]();
   m.insert("a", 1);
   let vref = m.get-ref("a").!;
@@ -52,7 +52,7 @@ fn testGetRef() {
   assert(m.get-ref("missing") is :none);
 }
 
-fn testIterate() {
+fn test-iterate() {
   let m = map/new[string, int]();
   m.insert("a", 1);
   m.insert("b", 2);
@@ -68,7 +68,7 @@ fn testIterate() {
   assert-equals(total, 4);
 }
 
-fn testEmpty() {
+fn test-empty() {
   let e = map/new[string, int]();
   assert(e.get("x") is :none);
   assert(not e.contains("x"));
@@ -83,7 +83,7 @@ fn testEmpty() {
   assert-equals("{e}", "{{}");
 }
 
-fn testClear() {
+fn test-clear() {
   let m = map/new[string, int]();
   m.insert("a", 1);
   m.insert("b", 2);
@@ -95,19 +95,19 @@ fn testClear() {
   assert-equals(m.len(), 1);
 }
 
-fn testWithCapacity() {
+fn test-with-capacity() {
   let m = map/with-capacity[string, int](100);
-  let capacityBefore = m.capacity();
+  let capacity-before = m.capacity();
   let i = 0;
   while i < 100 {
     m.insert("key{i}", i);
     i := i + 1
   };
-  assert-equals(m.capacity(), capacityBefore);
+  assert-equals(m.capacity(), capacity-before);
   assert-equals(m.len(), 100);
 }
 
-fn testGetOrInsert() {
+fn test-get-or-insert() {
   let m = map/new[string, int]();
   let a = m.get-or-insert("a", fn. 10);
   assert-equals(a.*, 10);
@@ -128,14 +128,14 @@ fn testGetOrInsert() {
   assert-equals(counts.get("z"), :none);
 }
 
-fn testPrint() {
+fn test-print() {
   let m = map/new[string, int]();
   m.insert("a", 1);
   assert-equals("{m}", "{{a: 1}");
   if false { m.dump() };
 }
 
-fn testSet() {
+fn test-set() {
   let s = set/new[string]();
   assert(s.is-empty());
   assert(s.add("a"));
@@ -163,19 +163,19 @@ fn testSet() {
   assert-equals(total, 6);
 }
 
-fn testResize(size: int) {
-  let myMap = map/new[string, int]();
+fn test-resize(size: int) {
+  let my-map = map/new[string, int]();
   let i = 0;
   while i < size {
-    myMap.insert(i.show(), i);
+    my-map.insert(i.show(), i);
     if i % 5 == 0 {
-      myMap.remove(i.show());
+      my-map.remove(i.show());
     };
     i := i + 1
   };
   i := 0;
   while i < size {
-    let result = myMap.get(i.show());
+    let result = my-map.get(i.show());
     if i % 5 == 0 {
       assert-msg("{i} should be empty", result is :none);
     } else {
@@ -187,7 +187,7 @@ fn testResize(size: int) {
 
 // removing and re-inserting in place must reuse tombstones
 // rather than accumulate load
-fn testChurn() {
+fn test-churn() {
   let m = map/new[int, int]();
   let round = 0;
   while round < 1000 {
@@ -200,16 +200,16 @@ fn testChurn() {
 }
 
 fn test() {
-  testBasic();
-  testIntKeys();
-  testGetRef();
-  testIterate();
-  testEmpty();
-  testClear();
-  testWithCapacity();
-  testGetOrInsert();
-  testPrint();
-  testSet();
-  testResize(100);
-  testChurn();
+  test-basic();
+  test-int-keys();
+  test-get-ref();
+  test-iterate();
+  test-empty();
+  test-clear();
+  test-with-capacity();
+  test-get-or-insert();
+  test-print();
+  test-set();
+  test-resize(100);
+  test-churn();
 }

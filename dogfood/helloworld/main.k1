@@ -33,24 +33,24 @@ ns orders {
   }
 
   fn parse-line(line: string): order {
-    let fields = line.splitByChar(',');
+    let fields = line.split-by-char(',');
     require fields.len() == 7 else { crash("bad csv row: {line}") };
     {
-      id: fields.get(0).parseBase10().!,
+      id: fields.get(0).parse-base10().!,
       customer: fields.get(1),
       item: fields.get(2),
-      quantity: fields.get(3).parseBase10().!,
-      unit-cents: fields.get(4).parseBase10().!,
+      quantity: fields.get(3).parse-base10().!,
+      unit-cents: fields.get(4).parse-base10().!,
       status: parse-status(fields.get(5)),
       country: fields.get(6),
     }
   }
 
   fn load(path: string): list[order] {
-    let lines = core/files/read-to-string(context :current)(path).splitByChar('\n');
+    let lines = core/files/read-to-string(context :current)(path).split-by-char('\n');
     let orders = list/empty[order]();
     for line in lines {
-      // Skip the header; splitByChar already drops the trailing empty line
+      // Skip the header; split-by-char already drops the trailing empty line
       if it-index > 0 and line.len() > 0 {
         orders.push(parse-line(line));
       };

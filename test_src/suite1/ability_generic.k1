@@ -1,57 +1,57 @@
 ns ability_generic {
 
-  impl GAdd[Rhs = i32, Output = i32] for i32 {
-    fn gadd(self: i32, rhs: Rhs): i32 { self + rhs }
+  impl g-add[rhs = i32, output = i32] for i32 {
+    fn gadd(self: i32, rhs: rhs): i32 { self + rhs }
   }
 
-  impl GAdd[Rhs = i64, Output = i64] for i32 {
+  impl g-add[rhs = i64, output = i64] for i32 {
    fn gadd(self: i32, rhs: i64): i64 { self.as[i64] + rhs }
   }
 
-  ns Foob {
-    type alias myInt = int
+  ns foob {
+    type alias my-int = int
 
-    impl GAdd[Rhs = myInt, Output = myInt] for myInt {
-      fn gadd(self: myInt, rhs: myInt): myInt { self + rhs }
+    impl g-add[rhs = my-int, output = my-int] for my-int {
+      fn gadd(self: my-int, rhs: my-int): my-int { self + rhs }
     }
   }
 
-  type GenericPoint[T] = { x: T, y: T }
-  ability GAdd[Rhs, impl Output] {
-    fn gadd(self, rhs: Rhs): Output
+  type generic-point[t] = { x: t, y: t }
+  ability g-add[rhs, impl output] {
+    fn gadd(self, rhs: rhs): output
   }
-  impl[T: GAdd[Rhs = T, Output = T] and show]
-    GAdd[Rhs = GenericPoint[T], Output = GenericPoint[T]]
-    for GenericPoint[T] {
-      fn gadd(self: GenericPoint[T], other: GenericPoint[T]): GenericPoint[T] {
-        let newX: T = self.x.gadd(other.x);
+  impl[t: g-add[rhs = t, output = t] and show]
+    g-add[rhs = generic-point[t], output = generic-point[t]]
+    for generic-point[t] {
+      fn gadd(self: generic-point[t], other: generic-point[t]): generic-point[t] {
+        let new-x: t = self.x.gadd(other.x);
         //let a = self.x; let b = other.x;
-        //println("GenericPoint.add X {a} + {b} = {newX}");
-        let newY: T = self.y.gadd(other.y);
+        //println("generic-point.add x {a} + {b} = {new-x}");
+        let new-y: t = self.y.gadd(other.y);
         //let a = self.y; let b = other.y;
-        //println("GenericPoint.add Y {a} + {b} = {newY}");
-        { x: newX, y: newY }
+        //println("generic-point.add y {a} + {b} = {new-y}");
+        { x: new-x, y: new-y }
       }
   }
 
-  ability From[F] { fn from(t: F): self }
-  ability To[To] { fn to(self): To }
+  ability from[f] { fn from(t: f): self }
+  ability to[to] { fn to(self): to }
 
-  impl[T: show] To[To = string] for T {
-    fn to(self: T): string { self.show() }
+  impl[t: show] to[to = string] for t {
+    fn to(self: t): string { self.show() }
   }
 
-  impl[U, T: To[To = U]] From[F = T] for U {
-    fn from(t: T): U { t.to() }
+  impl[u, t: to[to = u]] from[f = t] for u {
+    fn from(t: t): u { t.to() }
   }
 
-  impl To[To = string] for i32 {
+  impl to[to = string] for i32 {
     fn to(self): string { show/show[i32](self) }
   }
-  impl To[To = string] for i64 {
+  impl to[to = string] for i64 {
     fn to(self): string { show/show[i64](self) }
   }
-  impl To[To = char] for byte {
+  impl to[to = char] for byte {
     fn to(self: byte): char { self.as() }
   }
 
@@ -68,14 +68,14 @@ ns ability_generic {
     assert(add64 == 16: i64);
 
     // Blanket Impls
-    let p: GenericPoint[i32] = { x: 1, y: 2 };
+    let p: generic-point[i32] = { x: 1, y: 2 };
 
-    let added: GenericPoint[i32] = p.gadd(p);
+    let added: generic-point[i32] = p.gadd(p);
     assert-equals(added.x, 1i32 + 1);
     assert-equals(added.y, 2i32 + 2);
 
     assert-equals((3: i32).to(): string, "3");
-    assert-equals(From/from(3: i32): string, "3");
+    assert-equals(from/from(3: i32): string, "3");
   }
 
 }

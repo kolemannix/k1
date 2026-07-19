@@ -9,7 +9,7 @@ impl print for { name: string, weight: int } {
   }
 }
 
-fn testRawStrings() {
+fn test-raw-strings() {
   let s1 = `Hello,
 
   "world"`;
@@ -23,11 +23,11 @@ fn test() {
   let p = { outer: { inner: true } };
   assert-equals("{not p.outer.inner}", "false");
 
-  let withBraces = "{42.show()} + {20} = {({ value: 62}.value)}";
-  assert-equals(withBraces, "42 + 20 = 62");
+  let with-braces = "{42.show()} + {20} = {({ value: 62}.value)}";
+  assert-equals(with-braces, "42 + 20 = 62");
 
   let nested = "{"String has {10 + 10} in"} it";
   assert-equals(nested, "String has 20 in it");
 
-  testRawStrings();
+  test-raw-strings();
 }

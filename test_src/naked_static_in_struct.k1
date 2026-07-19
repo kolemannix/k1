@@ -1,4 +1,4 @@
-type Foo = { y: either { Bar(opt[static string]) } }
+type foo = { y: either { bar(opt[static string]) } }
 
 fn main(): i32 {
   0

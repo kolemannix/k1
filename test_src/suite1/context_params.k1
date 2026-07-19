@@ -1,24 +1,24 @@
 ns context_params;
 
-fn addTracked(context hist: *mut list[string])(x: int, y: int): int {
+fn add-tracked(context hist: *mut list[string])(x: int, y: int): int {
   hist.push(x.show().concat(" + ").concat(y.show()));
   x + y
 }
 
-fn addAll(context _a: u8, _b: u16)(x: int, y: int): int {
+fn add-all(context _a: u8, _b: u16)(x: int, y: int): int {
   x + y
 }
 
 fn test() {
   let context history: *mut list[string] = core/mem/new([]);
 
-  assert(addTracked(context history)(1,2) == 3);
+  assert(add-tracked(context history)(1,2) == 3);
 
-  assert(addTracked(3,4) == 7);
+  assert(add-tracked(3,4) == 7);
 
   let context u: u8 = 1;
   let context v: u16 = 1;
-  addAll(4, 5);
+  add-all(4, 5);
 
   assert(history.* == ["1 + 2","3 + 4"]);
 }

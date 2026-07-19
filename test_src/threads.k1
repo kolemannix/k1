@@ -20,7 +20,7 @@ fn main(): i32 {
   // TODO: We could hugely improve this api now
   //       using current idioms and features; provide
   //       a highly ergonomic shim that lets us just have a fn that
-  //       takes a T and returns a U, and handle all the allocations
+  //       takes a t and returns a u, and handle all the allocations
   //       and ptr-munging internally
   let arena = arena/init-default();
   let input = arena.push(42);

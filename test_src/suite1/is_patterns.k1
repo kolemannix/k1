@@ -21,7 +21,7 @@ fn test() {
   assert(not (b is false));
   assert(b is true);
 
-  // Float pattern
+  // float pattern
   let f = 3.14;
   assert(f is 3.14);
   assert(not (f is 2.71));
@@ -49,13 +49,13 @@ fn test() {
   };
   assert(else_ran);
 
-  // Record pattern, with integer pattern
+  // record pattern, with integer pattern
   // and nested variable pattern
   if foo is { x: 1, y } {
     assert(y == "asdf");
   };
 
-  // Record pattern where inner has condition statements
+  // record pattern where inner has condition statements
   let bar = { x: :some(1): ?int };
   if bar is { x: :some(x) } {
     assert(x == 1);

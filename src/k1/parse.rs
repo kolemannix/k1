@@ -2949,7 +2949,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let type_of = ParsedTypeExpr::TypeOf(ParsedTypeOf { target_expr, span });
                 self.emit_semantic_token(first, SemanticTokenKind::Function);
                 Ok(Some(self.ast.type_exprs.add(type_of)))
-            } else if first_chars == "typeFromId" {
+            } else if first_chars == "type-from-id" {
                 self.advance();
                 self.expect_kind(K::OpenParen)?;
                 let target_expr = self.expect_expression()?;
@@ -5311,7 +5311,7 @@ impl ParsedProgram {
                 Ok(())
             }
             ParsedTypeExpr::TypeFromId(tfi) => {
-                w.write_str("typeFromId(")?;
+                w.write_str("type-from-id(")?;
                 self.display_expr_id(w, tfi.id_expr)?;
                 w.write_str(")")?;
                 Ok(())

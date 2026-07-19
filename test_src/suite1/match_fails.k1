@@ -1,9 +1,9 @@
 ns match_fails;
 
-type Foo = { x: int, y: ?bool }
+type foo = { x: int, y: ?bool }
 fn useless() {
-  let foo: Foo = { x: 1, y: :none };
-  let result = testCompile(switch foo {
+  let foo: foo = { x: 1, y: :none };
+  let result = test-compile(switch foo {
     { x, y: :some(true) } -> x,
     { x, y: :some(false) } -> x,
     { x, y: :some(false) } -> x,
@@ -12,10 +12,10 @@ fn useless() {
   assert(result is :some(_));
 }
 
-type Blub = { x: int, y: ?bool }
+type blub = { x: int, y: ?bool }
 fn unhandled() {
-  let blub: Blub = { x: 1, y: :none };
-  let result = testCompile(switch blub {
+  let blub: blub = { x: 1, y: :none };
+  let result = test-compile(switch blub {
     { x, y: :some(true) } -> x,
     { x, y: :none } -> x + 2
   });

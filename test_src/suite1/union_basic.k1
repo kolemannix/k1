@@ -1,17 +1,17 @@
 ns union_basic;
 
-type U = union { a: u32, b: f32, c: i32 }
+type u = union { a: u32, b: f32, c: i32 }
 
-fn identityU(u: U): U {
+fn identity-u(u: u): u {
   u
 }
 
 fn test() {
-  assert-equals(types/size[U], 4);
-  assert-equals(types/align[U], 4);
-  let u: U = uninit;
+  assert-equals(types/size[u], 4);
+  assert-equals(types/align[u], 4);
+  let u: u = uninit;
 
-  require types/schema[U] is :union({ fields })
+  require types/schema[u] is :union({ fields })
     and fields.len() == 3
     and fields.get(0).name == "a"
     and fields.get(0).offset == 0
@@ -21,7 +21,7 @@ fn test() {
     and fields.get(2).offset == 0
     else crash("");
 
-  identityU(u);
+  identity-u(u);
 
   {}
 }

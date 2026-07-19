@@ -20,8 +20,8 @@ fn int-compare-test() {
   assert((2: i64).compare(2) is :equal);
   assert((2: i64).compare(1) is :greater);
   assert((-1: i64).compare(1) is :less);
-  assert(i64/minValue.compare(i64/maxValue) is :less);
-  assert(i64/maxValue.compare(i64/minValue) is :greater);
+  assert(i64/min-value.compare(i64/max-value) is :less);
+  assert(i64/max-value.compare(i64/min-value) is :greater);
 
   assert((0: u8).compare(255) is :less);
   assert((255: u8).compare(0) is :greater);

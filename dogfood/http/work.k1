@@ -3,8 +3,8 @@ ns work {
     let heap = mem/alloc-mode:system-heap;
     let queue: *mut uv-work-queue = heap.new({
       uv-loop,
-      async-handle: heap.allocT[uv/async],
-      mutex: heap.allocT[uv/mutex],
+      async-handle: heap.alloc-t[uv/async],
+      mutex: heap.alloc-t[uv/mutex],
       submissions: list/empty[uv-work-submission](),
     });
   
@@ -16,9 +16,9 @@ ns work {
     let async-rc = uv/async_init(uv-loop, queue.async-handle, drain-work-queue);
     if async-rc != 0 {
       uv/mutex_destroy(queue.mutex);
-      heap.freeT(queue.async-handle);
-      heap.freeT(queue.mutex);
-      heap.freeT(queue);
+      heap.free-t(queue.async-handle);
+      heap.free-t(queue.mutex);
+      heap.free-t(queue);
       crash("uv_async_init for work queue failed: {async-rc}");
     };
   
