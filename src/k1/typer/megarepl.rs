@@ -8,6 +8,9 @@ pub type WidgetId = u32;
 pub struct MegareplCell {
     pub id: CellId,
     pub is_watcher: bool,
+    /// When set (and watching), the page re-runs this cell every N ms via
+    /// datastar's data-on-interval
+    pub watch_interval_ms: Option<u32>,
     pub expr_id: Option<TypedExprId>,
     pub iteration: u32,
     pub source_id: FileId,
@@ -61,20 +64,19 @@ pub enum WidgetDataSource {
     Binding(StringId),
     /// A watcher cell's latest result
     Watcher(CellId),
+    Checkbox {
+        name: StringId,
+        get_fn: FunctionId,
+        set_fn: FunctionId,
+        current_value: bool,
+    },
 }
 
+/// A view of some Data placed on the canvas
 #[derive(Clone, Copy)]
-pub enum WidgetKind {
-    /// Read-only text dump of the value (static-value printing)
-    Plain,
-}
-
-/// A view of some Data placed on the canvas. Many-to-many with Data: a value
-/// can appear in any number of widgets.
 pub struct MegareplWidget {
     pub id: WidgetId,
     pub data: WidgetDataSource,
-    pub kind: WidgetKind,
 }
 
 pub struct MegareplState {
@@ -86,6 +88,10 @@ pub struct MegareplState {
     pub widgets: Vec<MegareplWidget>,
     /// Monotonic so deleting a widget never re-labels the others
     pub next_widget_id: CellId,
+    /// The session's dedicated execution VM: repl globals live in its memory
+    /// for the whole session, so it is never reset. Option only so
+    /// `megarepl_with_vm` can lend it out while `self` stays borrowable.
+    pub vm: Option<vm::Vm>,
 }
 
 impl TypedProgram {
@@ -116,35 +122,37 @@ impl TypedProgram {
         self.ensure_megarepl_session();
         let cell_id = match cell_id {
             Some(cell_id) => {
-                let existing = self.megarepl_get_cell(cell_id);
-                let existing_code = &self.ast.sources.get(existing.source_id).content;
-                if existing_code != &code {
-                    let iteration = existing.iteration + 1;
-                    let new_source = self.megarepl_create_source(cell_id, iteration, code);
-                    let cell = self.megarepl_get_cell_mut(cell_id);
-                    cell.source_id = new_source;
-                    cell.iteration = iteration;
-                    if let Err(e) = self.megarepl_compile_source(cell_id) {
-                        self.megarepl_set_cell_compile_error(cell_id, e);
-                    }
-                };
+                self.megarepl_update_code(cell_id, code);
                 cell_id
             }
-            None => {
-                let cell_id = self.megarepl_new(code);
-                if let Err(e) = self.megarepl_compile_source(cell_id) {
-                    self.megarepl_set_cell_compile_error(cell_id, e);
-                }
-                cell_id
-            }
+            None => self.megarepl_new(code),
         };
+        self.megarepl_run(cell_id);
+    }
+
+    /// Swaps in new source and recompiles, iff the code actually changed
+    fn megarepl_update_code(&mut self, cell_id: CellId, code: String) {
+        let existing = self.megarepl_get_cell(cell_id);
+        if self.ast.sources.get(existing.source_id).content == code {
+            return;
+        }
+        let iteration = existing.iteration + 1;
+        let new_source = self.megarepl_create_source(cell_id, iteration, code);
+        let cell = self.megarepl_get_cell_mut(cell_id);
+        cell.source_id = new_source;
+        cell.iteration = iteration;
+        if let Err(e) = self.megarepl_compile_source(cell_id) {
+            self.megarepl_set_cell_compile_error(cell_id, e);
+        }
+    }
+
+    /// The one meaning of "run": execute the cell as compiled (observers fan
+    /// out from there), then re-read Data
+    pub fn megarepl_run(&mut self, cell_id: CellId) {
         self.megarepl_execute_cell(cell_id);
         self.megarepl_refresh_globals();
     }
 
-    /// A repl global is user data if its variable still resolves in the
-    /// session scope: output-capture globals are never added there, and
-    /// shadowed `let` bindings get overwritten
     pub fn megarepl_global_is_live(&self, mr_global: &MegareplGlobal) -> bool {
         let ns_scope = self.megarepl.as_ref().unwrap().ns_scope;
         let variable_id = self.globals.get(mr_global.global_id).variable_id;
@@ -165,7 +173,8 @@ impl TypedProgram {
             .filter(|(_, g)| self.megarepl_global_is_live(g))
             .map(|(index, g)| (index, g.global_id, self.globals.get(g.global_id).type_id))
             .collect();
-        let values: Vec<Option<StaticValueId>> = self.do_with_vm(SpanId::NONE, |k1, vm| {
+
+        let values: Vec<Option<StaticValueId>> = self.megarepl_with_vm(|k1, vm| {
             live.iter()
                 .map(|(_, global_id, type_id)| {
                     vm::peek_global_as_static(k1, vm, *global_id, *type_id)
@@ -211,7 +220,7 @@ impl TypedProgram {
         source_id
     }
 
-    fn megarepl_new(&mut self, code: String) -> u32 {
+    fn megarepl_new(&mut self, code: String) -> CellId {
         let mr = self.megarepl.as_mut().unwrap();
         let cell_id = mr.cells.len() as CellId;
         let source_id = self.megarepl_create_source(cell_id, 0, code);
@@ -219,6 +228,7 @@ impl TypedProgram {
         mr.cells.push(MegareplCell {
             id: cell_id,
             is_watcher: false,
+            watch_interval_ms: None,
             expr_id: None,
             iteration: 0,
             source_id,
@@ -227,6 +237,9 @@ impl TypedProgram {
             output_globals: vec![],
             last_ir: String::new(),
         });
+        if let Err(e) = self.megarepl_compile_source(cell_id) {
+            self.megarepl_set_cell_compile_error(cell_id, e);
+        }
         cell_id
     }
 
@@ -250,9 +263,6 @@ impl TypedProgram {
                         let cell = self.megarepl_get_cell_mut(cell_id);
                         cell.expr_id = Some(expr_id);
                         cell.output_globals = output_globals;
-                        // Solo: megarepl_submit executes again after compiling, and
-                        // that run does the watcher fan-out
-                        self.megarepl_execute_cell_solo(cell_id);
                         Ok(())
                     }
                 }
@@ -264,16 +274,64 @@ impl TypedProgram {
         }
     }
 
+    pub fn megarepl(&self) -> &MegareplState {
+        self.megarepl.as_ref().unwrap()
+    }
+
+    /// Runs `f` with the session's dedicated VM (not the typer's pooled VMs,
+    /// which get reset between static evals and would lose the repl globals)
+    fn megarepl_with_vm<T>(&mut self, f: impl FnOnce(&mut TypedProgram, &mut vm::Vm) -> T) -> T {
+        let mut vm = self.megarepl_mut().vm.take().expect("megarepl vm already lent out");
+        let result = f(self, &mut vm);
+        self.megarepl_mut().vm = Some(vm);
+        result
+    }
+
+    pub fn megarepl_mut(&mut self) -> &mut MegareplState {
+        self.megarepl.as_mut().unwrap()
+    }
+
     fn megarepl_execute_cell(&mut self, cell_id: CellId) {
         self.megarepl_execute_cell_solo(cell_id);
 
-        // Watchers re-run after any other cell runs. Fanning out only from
-        // here (not from megarepl_execute_cell_solo) keeps a watcher's own
-        // execution from re-triggering the watchers forever.
+        // Take care not to re-run ourselves
+        self.megarepl_run_observers(&[cell_id]);
+    }
+
+    // Watchers and widgets
+    fn megarepl_run_observers(&mut self, skip_cells: &[CellId]) {
         let cells = self.megarepl.as_ref().unwrap().cells.iter().map(|c| c.id).collect_vec();
         for watcher_id in cells {
-            if watcher_id != cell_id && self.megarepl_get_cell(watcher_id).is_watcher {
+            if !skip_cells.contains(&watcher_id) && self.megarepl_get_cell(watcher_id).is_watcher {
                 self.megarepl_execute_cell_solo(watcher_id);
+            }
+        }
+
+        // Checkbox widgets are like watchers. Soon this will generalize... 'Control' widgets?
+        // Vs Binding and Watcher which are display widgets
+        let widgets = self.megarepl().widgets.clone();
+        for (index, widget) in widgets.iter().enumerate() {
+            match widget.data {
+                WidgetDataSource::Checkbox { get_fn, .. } => {
+                    let Ok(is_checked_value) = self.megarepl_with_vm(|k1, vm| {
+                        bc::exec::execute_compiled_function(k1, vm, get_fn, &[], false)
+                    }) else {
+                        eprintln!("megarepl checkbox widget function exec failed");
+                        continue;
+                    };
+                    let StaticValue::Bool(is_checked) = *self.static_values.get(is_checked_value)
+                    else {
+                        eprintln!("megarepl checkbox widget function returned non-boolean");
+                        continue;
+                    };
+                    let WidgetDataSource::Checkbox { current_value, .. } =
+                        &mut self.megarepl_mut().widgets[index].data
+                    else {
+                        panic!()
+                    };
+                    *current_value = is_checked;
+                }
+                _ => {}
             }
         }
     }
@@ -284,19 +342,17 @@ impl TypedProgram {
             eprintln!("nothing to execute");
             return;
         };
-        let span = self.exprs.get_span(cell_expr);
         let ir_string = ir::unit_to_string(self, IrUnitId::Expr(cell_expr), true);
-        eprintln!("executing repl unit.\n{ir_string}");
+        debug!("executing repl unit.\n{ir_string}");
         self.megarepl_get_cell_mut(cell_id).last_ir = ir_string;
         let output_globals = self.megarepl_get_cell(cell_id).output_globals.clone();
         let exec_start = std::time::Instant::now();
-        let (exec_result, stdout, stderr, repl_commands) = self.do_with_vm(span, |k1, vm| {
+
+        let (exec_result, stdout, stderr, repl_commands) = self.megarepl_with_vm(|k1, vm| {
             let messages_start = vm.compiler_messages.len();
             vm.quiet_messages = true;
             let result = bc::exec::execute_compiled_expr(k1, vm, cell_expr, false);
             vm.quiet_messages = false;
-            // Prints during VM execution land in compiler_messages; harvest
-            // this run's slice of them instead of reporting to the console
             let (stdout, stderr) = vm::drain_captured_prints(k1, vm, messages_start);
             let repl_commands = std::mem::take(&mut vm.repl_commands);
             let result = result.and_then(|value| {
@@ -308,16 +364,38 @@ impl TypedProgram {
             });
             (result, stdout, stderr, repl_commands)
         });
-        // TODO(repl-commands): THE handoff point — cell code has spoken and
-        // this is where its commands become engine state. For
-        // ReplCommand::Checkbox { name, get, set }: upsert-by-name into
-        // MegareplState.widgets as a new read/write WidgetKind holding the
-        // two FunctionIds; render calls `get` in the VM to draw the checked
-        // state, and the browser's toggle POSTs call `set(new_value)` then
-        // re-run watchers and publish. Upsert, not push: watchers re-run
-        // cells, so the same call re-fires every run and must converge.
-        if !repl_commands.is_empty() {
-            eprintln!("dropping {} unhandled repl command(s)", repl_commands.len());
+        for command in repl_commands {
+            match command {
+                vm::ReplCommand::Checkbox { name, get, set } => {
+                    // Upsert by name: cells re-run (watchers, re-submits), so
+                    // registration must converge, not accumulate
+                    let existing = self.megarepl_mut().widgets.iter_mut().find(|w| {
+                        matches!(w.data, WidgetDataSource::Checkbox { name: n, .. } if n == name)
+                    });
+                    match existing {
+                        Some(widget) => {
+                            let WidgetDataSource::Checkbox { current_value, .. } = widget.data
+                            else {
+                                unreachable!("matched checkbox above");
+                            };
+                            widget.data = WidgetDataSource::Checkbox {
+                                name,
+                                get_fn: get,
+                                set_fn: set,
+                                current_value,
+                            };
+                        }
+                        None => {
+                            self.megarepl_add_widget(WidgetDataSource::Checkbox {
+                                name,
+                                get_fn: get,
+                                set_fn: set,
+                                current_value: false,
+                            });
+                        }
+                    }
+                }
+            }
         }
         let cell = self.megarepl_get_cell_mut(cell_id);
         cell.last_exec_time = Some(exec_start.elapsed());
@@ -333,11 +411,15 @@ impl TypedProgram {
         cell.is_watcher
     }
 
-    pub fn megarepl_add_widget(&mut self, data: WidgetDataSource, kind: WidgetKind) -> WidgetId {
+    pub fn megarepl_set_watch_interval(&mut self, cell_id: CellId, ms: Option<u32>) {
+        self.megarepl_get_cell_mut(cell_id).watch_interval_ms = ms;
+    }
+
+    pub fn megarepl_add_widget(&mut self, data: WidgetDataSource) -> WidgetId {
         let mr = self.megarepl.as_mut().unwrap();
         let id = mr.next_widget_id;
         mr.next_widget_id += 1;
-        mr.widgets.push(MegareplWidget { id, data, kind });
+        mr.widgets.push(MegareplWidget { id, data });
         id
     }
 
@@ -345,7 +427,32 @@ impl TypedProgram {
         self.megarepl.as_mut().unwrap().widgets.retain(|w| w.id != widget_id);
     }
 
-    /// The Data entry `name` currently resolves to, if any
+    /// Widget ids are monotonic, not indices; deletion leaves holes
+    pub fn megarepl_widget_opt(&self, widget_id: WidgetId) -> Option<&MegareplWidget> {
+        self.megarepl().widgets.iter().find(|w| w.id == widget_id)
+    }
+
+    // Only checkbox control for now
+    pub fn megarepl_send_control(&mut self, widget_id: WidgetId, value: bool) {
+        let Some(widget) = self.megarepl_widget_opt(widget_id) else {
+            return;
+        };
+        let WidgetDataSource::Checkbox { set_fn, .. } = widget.data else {
+            return;
+        };
+        let static_bool =
+            if value { self.static_values.true_id() } else { self.static_values.false_id() };
+        let result = self.megarepl_with_vm(|k1, vm| {
+            bc::exec::execute_compiled_function(k1, vm, set_fn, &[static_bool], false)
+        });
+        if let Err(e) = result {
+            eprintln!("megarepl checkbox set failed: {}", e.message);
+        }
+
+        self.megarepl_run_observers(&[]);
+        self.megarepl_refresh_globals();
+    }
+
     pub fn megarepl_resolve_binding(&self, name: StringId) -> Option<&MegareplGlobal> {
         let mr = self.megarepl.as_ref().unwrap();
         let Some(VariableInScope::Defined(variable_id)) =
@@ -359,16 +466,6 @@ impl TypedProgram {
         mr.globals.iter().find(|g| g.global_id == global_id)
     }
 
-    /// Creates an uninitialized, non-constant global in the repl namespace.
-    /// Cell code Set-assigns into these at runtime: `let`s relocate their
-    /// initializers this way, and non-unit toplevel expression values are
-    /// captured into hidden ones.
-    ///
-    /// The global appears uninitialized because its "initializer" runs inside
-    /// the cell block. The whole situation feels like a hack. But if I can
-    /// build this without touching any other code maybe that's worth
-    /// celebrating as the opposite of a hack; the compiler is supporting
-    /// higher-level systems like a platform.
     fn megarepl_make_global(
         &mut self,
         name: StringId,
@@ -527,8 +624,7 @@ impl TypedProgram {
                             ));
                             let (global_id, variable_id) =
                                 self.megarepl_make_global(name, expr_type, expr_span);
-                            let variable_expr =
-                                self.synth_variable_expr(variable_id, SpanId::NONE);
+                            let variable_expr = self.synth_variable_expr(variable_id, SpanId::NONE);
                             let assign_stmt =
                                 self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
                                     destination: variable_expr,
@@ -634,6 +730,7 @@ impl TypedProgram {
             globals: vec![],
             widgets: vec![],
             next_widget_id: 0,
+            vm: Some(vm::Vm::make()),
         });
     }
 
