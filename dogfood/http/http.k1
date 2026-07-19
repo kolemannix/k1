@@ -1,6 +1,6 @@
 ns http;
 
-// A fake silly 'stream' for now
+// a fake silly 'stream' for now
 type stream = { source: list[span[u8]], read-cursor: size }
 ns for stream {
   fn empty(): stream { { source: list/empty(), read-cursor: 0 } }
@@ -80,7 +80,7 @@ ns for parser {
   }
 }
 
-// A fully parsed request
+// a fully parsed request
 type request = {
   header: header,
   body: either { none, buffered(span[span[u8]]), streamed(stream) },

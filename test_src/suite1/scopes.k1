@@ -1,36 +1,36 @@
 ns scopes {
-  type Foo = { x: int }
-  type alias Alias = Foo
+  type foo = { x: int }
+  type alias foo-alias = foo
   
-  ns Outer {
-    type Foo = { x: int }
-    ns for Foo {
-      fn value(self: Foo): int { self.x + 3 }
+  ns outer {
+    type foo = { x: int }
+    ns for foo {
+      fn value(self: foo): int { self.x + 3 }
     }
   }
   
-  ns for Foo {
-    fn value(self: Foo): int { self.x }
+  ns for foo {
+    fn value(self: foo): int { self.x }
   }
   
   
   let x: int = 3
-  fn scopeCollision(x: int): int {
+  fn scope-collision(x: int): int {
     x;
     let x: int = 42;
     assert(x == 42);
     0
   }
   
-  // Tests that the method gets assigned to the right Foo/value()
-  fn namespaceAlias() {
-    let x: Alias = {x:1};
+  // Tests that the method gets assigned to the right foo/value()
+  fn namespace-alias() {
+    let x: foo-alias = {x:1};
     assert(x.value() == 1);
   }
 
   fn test() {
-    scopes/scopeCollision(12);
-    scopes/namespaceAlias();
+    scopes/scope-collision(12);
+    scopes/namespace-alias();
   }
 
 }

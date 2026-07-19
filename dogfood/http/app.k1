@@ -32,11 +32,11 @@ fn handle(req: http/request, deps: *mut deps): http-response {
   };
 
   if req.header.url.starts-with("/app/starry-night") {
-    // let out = StringBuilder/new();
-    // let body-out = StringBuilder/new();
+    // let out = string-builder/new();
+    // let body-out = string-builder/new();
     // render(&body-out, deps.pixels);
     // write-response(&out, body-out.build());
-    // To avoid the double-buffer situation, we could support 'chunks' instead of
+    // to avoid the double-buffer situation, we could support 'chunks' instead of
     // just 'complete'; libuv supports this vectored write
     // :complete(out.build());
     :complete([make-header(4), "todo"])
@@ -52,18 +52,18 @@ fn handle(req: http/request, deps: *mut deps): http-response {
     let header = make-header(output.len());
     :complete([header, output]);
   }
-  // :complete("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror")
+  // :complete("HTTP/1.1 500 Internal Server error\r\nContent-Length: 5\r\n\r\nerror")
 }
 
 fn template(template: string, values: span[{ key: string, value: string }]): ?string {
-  let out = StringBuilder/new();
+  let out = string-builder/new();
   let i = 0;
   while i < template.len() {
     let c = template.get(i);
     // TODO: simd scan
     if c == '{' and template.get(i + 1) == '{' {
       let rest = template.drop(i + 2);
-      let close = rest.indexOf('}');
+      let close = rest.index-of('}');
       if close == -1 return(:none);
       let key = rest.take(close);
       switch core/iter/find(values, fn p. p.key == key) {
@@ -87,7 +87,7 @@ fn template(template: string, values: span[{ key: string, value: string }]): ?st
 #if false ns wip-pixel-grid {
 
 let gridsize: u32 = 256
-fn render(out: *StringBuilder, pixels: *array[u8, 65536]) {
+fn render(out: *string-builder, pixels: *array[u8, 65536]) {
   out.string(`<div id="grid" style="position: relative">`);
   let size = 3;
   for pixels {

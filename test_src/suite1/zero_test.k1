@@ -2,43 +2,43 @@ ns zero_test;
 
 use core/mem/zeroed
 
-fn testBitcast() {
+fn test-bitcast() {
   let x: i32 = -1;
   let y: u32 = mem/bitcast(x);
   assert-equals(y, 0xffff_ffff);
 
-  // From agg to agg
+  // from agg to agg
   let s: string = "foo";
-  let sWrap = { inner: s };
-  let sAgain: string = mem/bitcast(sWrap);
-  assert-equals(s, sAgain);
+  let s-wrap = { inner: s };
+  let s-again: string = mem/bitcast(s-wrap);
+  assert-equals(s, s-again);
 
-  // From agg to scalar
+  // from agg to scalar
   let p2: { x: f32, y: f32 } = { x: 1.0, y: -1.0 };
   let scalar = mem/bitcast[_, i64](p2);
   let p3: { x: f32, y: f32 } = mem/bitcast(scalar);
   assert-equals(p2.x, p3.x);
   assert-equals(p2.y, p3.y);
 
-  // From scalar to scalar
+  // from scalar to scalar
   let f: f32 = -3.14159;
   let i: i32 = mem/bitcast(f);
   let f2: f32 = mem/bitcast(i);
   assert-equals(f, f2);
 
-  // From scalar to agg
+  // from scalar to agg
   let ipoint: u32 = 0b0000_0000_0000_0001_0000_0000_0000_0010;
   let p: { x: i16, y: u16 } = mem/bitcast(ipoint);
   // Note: endianness-dependent result
   assert-equals(p.y, 1);
   assert-equals(p.x, 2);
 
-  assert(testCompile(
+  assert(test-compile(
     mem/bitcast[u8, u16](4)
   ).is-some());
 }
 
-fn testZero() {
+fn test-zero() {
   let v8: u8 = zeroed();
   let v16: u16 = zeroed();
   let v32: u32 = zeroed();
@@ -67,8 +67,8 @@ fn testZero() {
   let vf64: f64 = zeroed();
   assert(vf64 == 0.0);
 
-  let i32Null: *i32 = zeroed();
-  assert(i32Null.as[ptr] == ptr/null);
+  let i32-null: *i32 = zeroed();
+  assert(i32-null.as[ptr] == ptr/null);
 
   let point: { x: u8, y: u8, z: i32 } = zeroed();
   assert-equals(point.x, 0);

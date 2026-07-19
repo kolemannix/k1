@@ -1,12 +1,12 @@
-fn testAll() {
+fn test-all() {
   hash_test/test();
   test-fixlist();
-  testBitfield();
-  testFormat();
+  test-bitfield();
+  test-format();
   json_test/test();
 }
 fn main(): i32 {
-  #static testAll();
-  testAll();
+  #static test-all();
+  test-all();
   0
 }

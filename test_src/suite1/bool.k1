@@ -1,6 +1,6 @@
 ns bool_test;
 
-fn crashBool(): bool {
+fn crash-bool(): bool {
   crash("secret crash")
 }
 
@@ -13,12 +13,12 @@ fn test() {
   assert(not (f and f));
   assert(not (f or f));
 
-  // The point is that crashBool never runs
-  let r1 = if true or crashBool() true else false;
+  // The point is that crash-bool never runs
+  let r1 = if true or crash-bool() true else false;
   assert(r1);
 
-  // The point is that crashBool never runs
-  let r2 = if false and crashBool() false else true;
+  // The point is that crash-bool never runs
+  let r2 = if false and crash-bool() false else true;
   assert(r2);
 
   assert-equals(t.as[u8], 1);

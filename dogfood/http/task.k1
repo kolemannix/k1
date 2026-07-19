@@ -5,7 +5,7 @@
 // Using this from libuv worker threads themselves
 // can result in deadlocks, so don't do that.
 
-// I think ideally we probably re-purpose this to run
+// i think ideally we probably re-purpose this to run
 // on a newly spawned thread, for work that is expensive enough
 // that we don't care about thread overhead.
 
@@ -31,10 +31,10 @@ ns for task-state {
     uv/cond_destroy(self.cond);
     uv/mutex_destroy(self.mutex);
     let heap = mem/alloc-mode:system-heap;
-    heap.freeT(self.req);
-    heap.freeT(self.mutex);
-    heap.freeT(self.cond);
-    heap.freeT(self);
+    heap.free-t(self.req);
+    heap.free-t(self.mutex);
+    heap.free-t(self.cond);
+    heap.free-t(self);
   }
 }
 
@@ -52,9 +52,9 @@ ns for task {
   ): task[t] {
     let heap = mem/alloc-mode:system-heap;
     let state: *mut task-state[t] = heap.new({
-      req     : heap.allocT[uv/work],
-      mutex   : heap.allocT[uv/mutex],
-      cond    : heap.allocT[uv/cond],
+      req     : heap.alloc-t[uv/work],
+      mutex   : heap.alloc-t[uv/mutex],
+      cond    : heap.alloc-t[uv/cond],
       handler-done: false,
       libuv-done: false,
       output: :none,
@@ -95,7 +95,7 @@ ns for task {
         task-work.state.libuv-done <- true;
         uv/cond_signal(task-work.state.cond);
         uv/mutex_unlock(task-work.state.mutex);
-        mem/alloc-mode:system-heap.freeT(task-work);
+        mem/alloc-mode:system-heap.free-t(task-work);
       }
     );
 

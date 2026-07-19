@@ -11,7 +11,7 @@ L82`;
 
 fn day1(input: string) {
 
-  let commands = input.splitByChar('\n');
+  let commands = input.split-by-char('\n');
 
   //println(input);
 
@@ -22,16 +22,16 @@ fn day1(input: string) {
   let szs = 0;
   for commands {
     let negative = it.get(0) == 'L';
-    let magnitudeStr = it.drop(1);
-    let isZero = pos == 0;
-    let _lastPos = pos;
-    require string/parseBase10(magnitudeStr) is :some(magnitude) else { return() };
+    let magnitude-str = it.drop(1);
+    let is-zero = pos == 0;
+    let _last-pos = pos;
+    require string/parse-base10(magnitude-str) is :some(magnitude) else { return() };
 
     let change = if negative { magnitude.as[int] * -1 } else magnitude.as[int];
 
     pos := pos + change;
     
-    if (pos < 0 and not isZero) { mzs := mzs + 1 };
+    if (pos < 0 and not is-zero) { mzs := mzs + 1 };
     mzs := mzs + (pos.abs() / 100);
     if (pos == 0) { mzs := mzs + 1 };
 
@@ -46,14 +46,14 @@ fn day1(input: string) {
 }
 
 fn brute(input: string) {
-  let commands = input.splitByChar('\n');
+  let commands = input.split-by-char('\n');
 
   let pos = 50;
   let zeroes = 0;
   for commands {
     let negative = it.get(0) == 'L';
-    let magnitudeStr = it.drop(1);
-    require string/parseBase10(magnitudeStr) is :some(magnitude) else { return() };
+    let magnitude-str = it.drop(1);
+    require string/parse-base10(magnitude-str) is :some(magnitude) else { return() };
     let m = magnitude.as[int];
     while m > 0 {
       if negative { pos := pos - 1 } else { pos := pos + 1 };
@@ -71,7 +71,7 @@ fn brute(input: string) {
   println("Zeroes: {zeroes}");
 }
 
-let input: string = core/files/read-to-string(context .Arena)("day1_input.txt");
+let input: string = core/files/read-to-string(context .arena)("day1_input.txt");
 
 fn main(): i32 {
   println("Hello, AoC 2025!");

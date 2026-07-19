@@ -1,6 +1,6 @@
 ns assign;
 
-fn assignVar() {
+fn assign-var() {
   let count = 0;
   count := 1;
   assert(count == 1);
@@ -8,7 +8,7 @@ fn assignVar() {
   assert(count == 2);
 }
 
-fn assignVarRef() {
+fn assign-var-ref() {
   let count = 0;
   &count <- 1;
   assert(count == 1);
@@ -16,42 +16,42 @@ fn assignVarRef() {
   assert(count == 2);
 }
 
-fn complexReferences() {
-  let structRef = { x: 42 };
-  let structRef = &structRef;
+fn complex-references() {
+  let struct-ref = { x: 42 };
+  let struct-ref = &struct-ref;
 
-  let xValue: int = structRef.x;
-  let xRef: *mut int = &structRef.x;
+  let x-value: int = struct-ref.x;
+  let x-ref: *mut int = &struct-ref.x;
 
-  assert(xRef.* == xValue);
-  assert(structRef.*.x == structRef.x);
+  assert(x-ref.* == x-value);
+  assert(struct-ref.*.x == struct-ref.x);
 
-  xRef <- -10;
+  x-ref <- -10;
 
-  assert(xRef.* == -10);
+  assert(x-ref.* == -10);
 
-  structRef.x <- 42;
-  assert(xRef.* == 42);
+  struct-ref.x <- 42;
+  assert(x-ref.* == 42);
 
-  let eitherRef: either { yes(int), no } = :yes(3);
-  let eitherRef = &eitherRef;
+  let either-ref: either { yes(int), no } = :yes(3);
+  let either-ref = &either-ref;
 
-  let yesRef: *(type-of(eitherRef).value:yes) = eitherRef.as-yes().!;
+  let yes-ref: *(type-of(either-ref).value:yes) = either-ref.as-yes().!;
 
-  assert(yesRef.* == 3);
-  let yesValue: int = eitherRef.as-yes().!;
-  assert(yesValue == 3);
+  assert(yes-ref.* == 3);
+  let yes-value: int = either-ref.as-yes().!;
+  assert(yes-value == 3);
 
-  eitherRef.as-yes().! <- -3;
+  either-ref.as-yes().! <- -3;
 
-  assert(yesRef.* == -3);
-  assert(eitherRef.as-yes().!.* == -3);
+  assert(yes-ref.* == -3);
+  assert(either-ref.as-yes().!.* == -3);
 
-  let innerStructRef = { x: 42 };
-  let innerStructRef = &innerStructRef;
-  let structOptRef: ?*{ x: int } = :some(innerStructRef);
+  let inner-struct-ref = { x: 42 };
+  let inner-struct-ref = &inner-struct-ref;
+  let struct-opt-ref: ?*{ x: int } = :some(inner-struct-ref);
 
-  if structOptRef is :some(x) {
+  if struct-opt-ref is :some(x) {
     assert(x.x == 42);
     x.x <- 43;
     assert(x.x == 43);
@@ -63,7 +63,7 @@ fn complexReferences() {
 }
 
 fn test() {
-  assignVar();
-  assignVarRef();
-  complexReferences();
+  assign-var();
+  assign-var-ref();
+  complex-references();
 }

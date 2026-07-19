@@ -1,37 +1,37 @@
 ns never_everywhere;
 
-fn takesFour(_a: empty, _b: empty, _c: empty, _d: empty) {{}}
-fn callArguments(): never { 
+fn takes-four(_a: empty, _b: empty, _c: empty, _d: empty) {{}}
+fn call-arguments(): never { 
   // We're going to do stuff in call arguments that ultimately crash, and ensure that
   // they do run in order up to the 'never' typed one
   let counter = { let tmp = 0; &tmp };
   let incr = fn() { counter <- counter.* + 1 };
   // This should get compiled to:
   // { incr(); incr(), incr(), { if i.* == 3 core/sys/exit(0) else crash("i wasnt incremented") } }
-  // No 'call' is even emitted
-  takesFour(
+  // no 'call' is even emitted
+  takes-four(
     _a = incr(),
     _b = incr(),
     _c = incr(),
     _d = { if counter.* == 3 core/sys/exit(0) else crash("counter wasnt incremented") }
   )
 }
-fn letRhs(): empty { let _x = crash("letRhs") }
-fn assgnRhs(): never { let _x = 123; _x := crash("assgn rhs") }
+fn let-rhs(): empty { let _x = crash("let-rhs") }
+fn assgn-rhs(): never { let _x = 123; _x := crash("assgn rhs") }
 // should fail to compile anyway
 // fn binopLhs(): never { crash("") + 4 }
-fn binopRhs(): int { 4 + crash("") }
+fn binop-rhs(): int { 4 + crash("") }
 fn unop(): never { not crash("") }
-fn whileCond(): never { while crash("asdf") { {} } }
-fn enumConstrPayload(): never { opt:some(crash("asdf")) }
-fn getEnumPayload(): i64 { 
+fn while-cond(): never { while crash("asdf") { {} } }
+fn enum-constr-payload(): never { opt:some(crash("asdf")) }
+fn get-enum-payload(): i64 { 
   let x: ?int = opt:some(crash(""));
 }
-fn castTarget(): i64 { crash(""): i64 }
-fn inReturn(): never { 
+fn cast-target(): i64 { crash(""): i64 }
+fn in-return(): never { 
   // This just yields the 'crash' expression, as if it were not inside a return
   #static assert-equals[?string](
-    testCompile(
+    test-compile(
       return(crash("what"))
     ),
     :none
@@ -39,10 +39,10 @@ fn inReturn(): never {
 
   core/sys/exit(0)
 }
-fn inBreak(): never { 
+fn in-break(): never { 
   #static assert-equals[?string](
-    testCompile(
-      loop { break(crash("inBreak")) }
+    test-compile(
+      loop { break(crash("in-break")) }
     ),
     :some("break is dead since returned expression is divergent; consider removing the 'break'")
   );
@@ -50,6 +50,6 @@ fn inBreak(): never {
 }
 
 fn test() {
-  let crashyArgsError = testCompile(#static callArguments());
-  assert(crashyArgsError is :none);
+  let crashy-args-error = test-compile(#static call-arguments());
+  assert(crashy-args-error is :none);
 }

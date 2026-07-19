@@ -16,8 +16,8 @@ fn test() {
   };
   assert(trip);
 
-  let comptimeCheck = #if false "foo" else "bar";
-  assert(comptimeCheck == "bar");
+  let comptime-check = #if false "foo" else "bar";
+  assert(comptime-check == "bar");
 
   {}
 }

@@ -2,7 +2,7 @@ ns enum_method_match_never {
 
   type e = either { a(int), b }
   ns for e {
-    fn valueIfA(self: e): int {
+    fn value-if-a(self: e): int {
       switch self {
         :a(i) -> i,
         :b -> crash("This is a B!"),
@@ -11,7 +11,7 @@ ns enum_method_match_never {
   }
   
   
-  fn isVariant() {
+  fn is-variant() {
     let x: either { a(int), b(int), c } = :a(42);
     assert(x.as-b().is-none());
     assert(not x is :c);
@@ -21,13 +21,13 @@ ns enum_method_match_never {
 }
 
 fn main(): i32 {
-    enum_method_match_never/isVariant();
+    enum_method_match_never/is-variant();
 
     use enum_method_match_never/e;
     let x = e:a(42);
     let y = e:a(42);
-    assert(x.valueIfA() == y.valueIfA());
-    assert((:b: e).valueIfA() == 0);
+    assert(x.value-if-a() == y.value-if-a());
+    assert((:b: e).value-if-a() == 0);
     1
   }
 //exitcode: 1 This is a B!

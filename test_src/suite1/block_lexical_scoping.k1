@@ -1,7 +1,7 @@
 ns lexical_scope;
 
 fn test() {
-  let result = testCompile({
+  let result = test-compile({
     { let _foo = 100 };
     assert(_foo == 100);
   });

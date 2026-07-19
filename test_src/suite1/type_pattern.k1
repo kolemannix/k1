@@ -1,6 +1,6 @@
 ns type_pattern;
 
-fn inspect[T](v: T): int {
+fn inspect[t](v: t): int {
   switch v {
     type[{ x: int, y: int }]({ x, y }) -> x + y,
     type["hello"](vv) -> 2,

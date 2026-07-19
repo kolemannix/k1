@@ -1,1 +1,1 @@
-type Pool[T] = { arena: *mut core/arena, free: list[u32], len: u32 }
+type pool[t] = { arena: *mut core/arena, free: list[u32], len: u32 }

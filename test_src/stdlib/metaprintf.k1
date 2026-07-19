@@ -1,22 +1,22 @@
-use meta/CodeWriter
+use meta/code-writer
 
-fn staticAdd[A: static int, B: static int](a: A, b: B): int { a + b }
+fn static-add[a: static int, b: static int](a: a, b: b): int { a + b }
 
-use meta/CodeWriter
+use meta/code-writer
 
 // TODO: need to flesh this out more with format specifiers
 //           and other things
-fn fmt[Fmt: static string, Args, w: writer](w, fmtString: Fmt, args: Args) {
-  $(fmtString) {
-    let code = StringBuilder/new();
-    let argsTypeId = types/type-id[Args];
-    let schema = types/type-id-schema(argsTypeId);
+fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
+  $(fmt-string) {
+    let code = string-builder/new();
+    let args-type-id = types/type-id[args];
+    let schema = types/type-id-schema(args-type-id);
     // This naive splitting doesn't work; we need to walk the format string
     // emitting "string parts" or "arg specifiers"
     // Then iterate that structure to produce the runtime
     // code, which will need the baked string parts
-    let fmtString: string = fmtString.from-static();
-    let parts = fmtString.splitByChar('?');
+    let fmt-string: string = fmt-string.from-static();
+    let parts = fmt-string.split-by-char('?');
 
     code.var("parts", parts.as-span());
     switch schema {
@@ -43,29 +43,29 @@ fn fmt[Fmt: static string, Args, w: writer](w, fmtString: Fmt, args: Args) {
         };
 
       },
-      _ -> crash("Unsupported format arguments: {types/name[Args]}")
+      _ -> crash("Unsupported format arguments: {types/name[args]}")
     };
     code.build()
   }
 }
 
-fn fmtString[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
-  let result = StringBuilder/new();
-  fmt(&result, fmtString, args);
+fn fmt-string[fmt: static string, args](fmt-string: fmt, args: args): string {
+  let result = string-builder/new();
+  fmt(&result, fmt-string, args);
   result.build()
 }
 
-fn testFormat() {
-  let s1 = fmtString("My value is: ? ?", {a: 42, b: true});
+fn test-format() {
+  let s1 = fmt-string("My value is: ? ?", {a: 42, b: true});
   //let s1 = sprintf(args.get(1), {a: 42, b: true});
   assert-equals(s1, "My value is: 42 true");
-  let s3 = fmtString("My values are: ? and ?", {a: "asdf", b: true});
+  let s3 = fmt-string("My values are: ? and ?", {a: "asdf", b: true});
   assert-equals(s3, "My values are: asdf and true");
 
-  let s4 = fmtString("My string is ?", "Hello, World!");
+  let s4 = fmt-string("My string is ?", "Hello, World!");
   assert-equals(s4, "My string is Hello, World!");
 
-  let res: int = staticAdd(#static 3, #static 2);
+  let res: int = static-add(#static 3, #static 2);
   assert-equals(res, 5);
 
   {}

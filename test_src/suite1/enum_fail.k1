@@ -1,9 +1,9 @@
 ns enum_fail;
 ns inner;
-type E = either { A(int) , B , C }
+type e = either { a(int) , b , c }
 
 fn test() {
-  let result = testCompile(:A(true): E);
+  let result = test-compile(:a(true): e);
   assert-equals(
     result,
     :some("Expected i64 but got bool")

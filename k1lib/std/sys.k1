@@ -1,35 +1,35 @@
 ns sys;
 
-#if k1/os-macos extern("arc4random_uniform") fn arc4random_uniform(upperBound: u32): u32
+#if k1/os-macos extern("arc4random_uniform") fn arc4random_uniform(upper-bound: u32): u32
 
-fn random(upperBound: u32): u32 {
+fn random(upper-bound: u32): u32 {
   #switch k1/os {
-    :macos -> arc4random_uniform(upperBound),
+    :macos -> arc4random_uniform(upper-bound),
     :linux -> crash("linux 'random' unimpl"),
     :wasm -> #static crash("wasm 'random' unimpl")
   }
 }
 
-fn parseMainArgs(argCount: c-int, args: ptr): span[string] {
-  let buf = buffer/fromPtrAndCount[ptr](
-    count = argCount.as[size],
+fn parse-main-args(arg-count: c-int, args: ptr): span[string] {
+  let buf = buffer/from-ptr-and-count[ptr](
+    count = arg-count.as[size],
     ptr = args
   );
-  let strings = list/fromMapping(buf, fn cstr. string/wrap-c(cstr));
+  let strings = list/from-mapping(buf, fn cstr. string/wrap-c(cstr));
   strings.as-span()
 }
 
-fn readLine(maxLengthBytes: size): result[string, string] {
-  let buffer = buffer/allocate[byte](maxLengthBytes);
-  let bytesRead: i64 = posix/read(0, buffer.data.as[ptr], buffer.len.as[c-sizet]);
+fn read-line(max-length-bytes: size): result[string, string] {
+  let buffer = buffer/allocate[byte](max-length-bytes);
+  let bytes-read: i64 = posix/read(0, buffer.data.as[ptr], buffer.len.as[c-sizet]);
 
-  if bytesRead < 0 {
+  if bytes-read < 0 {
     return(:err("Failed to read line"));
   };
 
-  let length: size = bytesRead - 1;
+  let length: size = bytes-read - 1;
   buffer.len <- length;
 
-  let result = string/wrapByteBuffer(buffer);
+  let result = string/wrap-byte-buffer(buffer);
   :ok(result)
 }

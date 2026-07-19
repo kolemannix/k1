@@ -8,11 +8,11 @@ use core/libc/files/SEEK_END as SEEKEND
 
 ns foo {
   type alias intalias = int
-  fn getOne(): int { 1 }
+  fn get-one(): int { 1 }
 }
 // Use a type alias, then reference it in a type definition
 use foo/intalias
-type UseTest = { i: intalias, v: foo/intalias }
+type use-test = { i: intalias, v: foo/intalias }
 
 fn test() {
   // Use a function from stmt w/ alias
@@ -20,8 +20,8 @@ fn test() {
   assert(type-id-alias[never] == type-id[never]);
 
   // Use a constant from stmt w/ alias
-  use core/libc/files/SEEK_END as S;
-  assert(S == core/libc/files/SEEK_END);
+  use core/libc/files/SEEK_END as s;
+  assert(s == core/libc/files/SEEK_END);
   assert(SEEKEND == core/libc/files/SEEK_END);
 
   // Use a basic type
@@ -30,12 +30,12 @@ fn test() {
 
   // Use a generic type
   use core/opt as optional;
-  let helloOpt: optional[str] = some("Hello");
-  assert(hello == helloOpt.!);
+  let hello-opt: optional[str] = some("Hello");
+  assert(hello == hello-opt.!);
 
   // Use a namespace
-  use use_test/foo as fooAlias;
-  assert(fooAlias/getOne() == 1);
+  use use_test/foo as foo-alias;
+  assert(foo-alias/get-one() == 1);
 
   {}
 }

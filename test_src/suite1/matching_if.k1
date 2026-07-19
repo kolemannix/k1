@@ -1,13 +1,13 @@
 ns matching_if;
 
-type alias ABC = either { A, B, C }
+type alias ABC = either { a, b, c }
 
 impl print for ABC {
   fn print-to[w: writer](self: ABC, w) {
     switch self {
-      :A -> w.write-char('A'),
-      :B -> w.write-char('B'),
-      :C -> w.write-char('C')
+      :a -> w.write-char('A'),
+      :b -> w.write-char('B'),
+      :c -> w.write-char('C')
     }
   }
 }
@@ -15,27 +15,27 @@ impl print for ABC {
 impl equals for ABC {
   fn equals(self: ABC, other: ABC): bool {
     switch { fst: self, snd: other } {
-      { fst: :A, snd: :A } -> true,
-      { fst: :B, snd: :B } -> true,
-      { fst: :C, snd: :C } -> true,
+      { fst: :a, snd: :a } -> true,
+      { fst: :b, snd: :b } -> true,
+      { fst: :c, snd: :c } -> true,
       _ -> false
     }
   }
 }
 
-fn bindingIfStruct(v: { x: int, y: int }): ABC {
+fn binding-if-struct(v: { x: int, y: int }): ABC {
   if v is { x: xx, y: yy } and xx == 1 {
-    :A
+    :a
   } else {
-    :B
+    :b
   }
 }
 
-fn switchStruct(v: { x: int, y: int }): ABC {
+fn switch-struct(v: { x: int, y: int }): ABC {
   switch v {
-    { x: 11 } -> :A,
-    { x: xx, y: yy } if xx == 1 or yy == 2 -> :B,
-    _ -> :C
+    { x: 11 } -> :a,
+    { x: xx, y: yy } if xx == 1 or yy == 2 -> :b,
+    _ -> :c
   }
 }
 
@@ -55,72 +55,72 @@ fn test() {
   assert(result);
 
   // Illegal due to the 'or' breaking the 'matching condition' property
-  let failure1 = testCompile(
+  let failure1 = test-compile(
     if x is :some(illegal_binding) or true {
       illegal_binding
     }
   );
   assert(failure1 is :some(_));
 
-  let myPoint = { x: 1, y: 2 };
-  let structResult = if myPoint is { x: 1, y: yy } and myPoint is { x: xx, y: 2 } {
+  let my-point = { x: 1, y: 2 };
+  let struct-result = if my-point is { x: 1, y: yy } and my-point is { x: xx, y: 2 } {
     yy == 2 and xx == 1
   } else (false);
-  assert(structResult);
+  assert(struct-result);
 
   // Test nested pattern matching with Options containing structs
   let nested = some({ x: some(42), y: some(24) });
-  let nestedResult = if nested is :some({ x: :some(xVal), y: :some(yVal) }) {
-    xVal == 42 and yVal == 24
+  let nested-result = if nested is :some({ x: :some(x-val), y: :some(y-val) }) {
+    x-val == 42 and y-val == 24
   } else (false);
-  assert(nestedResult);
+  assert(nested-result);
 
   // Test that partial nested matches fail appropriately
   let partial = some({ x: some(42), y: none[int]() });
-  let partialResult = if partial is :some({ x: :some(xVal), y: :some(yVal) }) {
+  let partial-result = if partial is :some({ x: :some(x-val), y: :some(y-val) }) {
     (false)  // Should never reach here
   } else (true);
-  assert(partialResult);
+  assert(partial-result);
 
   // Test deeply nested patterns with mixed struct/enum matching
   let complex = some({ 
     point: { x: 1, y: 2 },
     value: some("test")
   });
-  let complexResult = if complex is :some({ point: { x: 1, y: yy }, value: :some(v) }) {
+  let complex-result = if complex is :some({ point: { x: 1, y: yy }, value: :some(v) }) {
     yy == 2 and v == "test"
   } else (false);
-  assert(complexResult);
+  assert(complex-result);
 
   // Test mixing bound variables from different levels
   let mixed = some({ 
     outer: 1,
     inner: some({ value: 1 })
   });
-  let mixedResult = if mixed is :some({ outer: o, inner: :some({ value: v })}) {
+  let mixed-result = if mixed is :some({ outer: o, inner: :some({ value: v })}) {
     o == v  // Both should be 1
   } else (false);
-  assert(mixedResult);
+  assert(mixed-result);
 
   // Test that we can't use bound variables in the pattern itself
   // We should prevent shadowing within the same match, seems like always a bad idea
-  let shadowFailure = testCompile({
+  let shadow-failure = test-compile({
     if mixed is :some({ outer: o, inner: :some({ value: o })}) {} else {}
   });
-  assert(shadowFailure.is-some());
+  assert(shadow-failure.is-some());
 
-  let myOpt = some(42);
-  let yourOpt = some(false);
-  if myOpt is :some(x) and x == 42 {} else assert(false);
+  let my-opt = some(42);
+  let your-opt = some(false);
+  if my-opt is :some(x) and x == 42 {} else assert(false);
 
-  assert-equals(bindingIfStruct({ x: 1, y: 2 }), :A);
-  assert-equals(bindingIfStruct({ x: 2, y: 2 }), :B);
+  assert-equals(binding-if-struct({ x: 1, y: 2 }), :a);
+  assert-equals(binding-if-struct({ x: 2, y: 2 }), :b);
 
-  assert-equals(switchStruct({ x: 11, y: 0 }), :A);
-  assert-equals(switchStruct({ x: 1, y: 3 }), :B);
-  assert-equals(switchStruct({ x: 0, y: 2 }), :B);
+  assert-equals(switch-struct({ x: 11, y: 0 }), :a);
+  assert-equals(switch-struct({ x: 1, y: 3 }), :b);
+  assert-equals(switch-struct({ x: 0, y: 2 }), :b);
 
-  if myOpt is :some(42) and yourOpt is :some(f) and 3 == 3 and not false {
+  if my-opt is :some(42) and your-opt is :some(f) and 3 == 3 and not false {
     assert(f == false)
   } else assert(false);
 

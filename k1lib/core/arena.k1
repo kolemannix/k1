@@ -14,14 +14,14 @@ ns for arena {
   let mb: size = 1048576
   let gb: size = 1073741824
 
-  fn regionSizeBytes(self: *arena): size {
+  fn region-size-bytes(self: *arena): size {
     self.end-addr.diff(self.base-ptr)
   }
-  fn allocationSizeBytes(self: *arena): size {
+  fn allocation-size-bytes(self: *arena): size {
     self.end-addr.diff(self.get-alloc-base())
   }
 
-  fn usedBytes(self: *arena): size {
+  fn used-bytes(self: *arena): size {
     self.cur-addr.diff(self.base-ptr)
   }
 
@@ -45,37 +45,37 @@ ns for arena {
     arena
   }
 
-  fn init-virtual(usageHintMb: size): *arena {
-    let sizeBytes = 1 * gb;
-    let base-ptr: ptr = mem/virtualAlloc(sizeBytes);
-    #if k1/debug mem/set(dst = base-ptr, value = 0xCD, count = usageHintMb * mb);
-    posix/madvise(base-ptr, (usageHintMb * mb).as[c-sizet], advice = posix/MADV_SEQUENTIAL);
-    store-header(base-ptr, sizeBytes, :virtual)
+  fn init-virtual(usage-hint-mb: size): *arena {
+    let size-bytes = 1 * gb;
+    let base-ptr: ptr = mem/virtual-alloc(size-bytes);
+    #if k1/debug mem/set(dst = base-ptr, value = 0xCD, count = usage-hint-mb * mb);
+    posix/madvise(base-ptr, (usage-hint-mb * mb).as[c-sizet], advice = posix/MADV_SEQUENTIAL);
+    store-header(base-ptr, size-bytes, :virtual)
   }
 
   fn init-physical(size-bytes: size): *arena {
-    // simple single allocation for now, will do chunk chaining once I need it
+    // simple single allocation for now, will do chunk chaining once i need it
     let base-ptr = mem/alloc(size = size-bytes, align = MIN_ALIGN);
     store-header(base-ptr, size-bytes, :malloc)
   }
 
   fn init-default(): *arena {
-    init-virtual(usageHintMb = 1)
+    init-virtual(usage-hint-mb = 1)
   }
 
   fn release(self: *arena) {
     switch self.alloc-kind {
-      :virtual -> mem/virtualRelease(self.get-alloc-base(), self.allocationSizeBytes()),
-      :malloc -> mem/free(self.get-alloc-base(), self.allocationSizeBytes(), MIN_ALIGN)
+      :virtual -> mem/virtual-release(self.get-alloc-base(), self.allocation-size-bytes()),
+      :malloc -> mem/free(self.get-alloc-base(), self.allocation-size-bytes(), MIN_ALIGN)
     };
   }
 
   fn reset(self: *arena, clear: bool) {
-    let usedBytes = self.usedBytes();
+    let used-bytes = self.used-bytes();
     self.cur-addr <- self.base-ptr;
 
     if clear {
-      mem/set(dst = self.base-ptr, value = 0, count = usedBytes);
+      mem/set(dst = self.base-ptr, value = 0, count = used-bytes);
     }
   }
 
@@ -98,44 +98,44 @@ ns for arena {
       self.cur-addr <- (cursor + total-bump).as[ptr];
       alloc-ptr.as[ptr]
     } else {
-       mem/pushMode(:system-heap);
+       mem/push-mode(:system-heap);
        crash("arena {self.name} is out of space to allocate {size} bytes. available: {available}")
     }
   }
 
-  fn alloc[T](self: *arena): *T {
-    let dataStart = self.alloc-layout(types/size[T], types/align[T]);
-    dataStart.as[*T]
+  fn alloc[t](self: *arena): *t {
+    let data-start = self.alloc-layout(types/size[t], types/align[t]);
+    data-start.as[*t]
   }
 
-  fn push[T](self: *arena, t: T): *T {
-    let dataStart = self.alloc-layout(types/size[T], types/align[T]);
+  fn push[t](self: *arena, t: t): *t {
+    let data-start = self.alloc-layout(types/size[t], types/align[t]);
 
-    let ref: *T = dataStart.rw();
+    let ref: *t = data-start.rw();
     ref <- t;
     ref
   }
 
-  fn push-span[T](self: *arena, ts: span[T]): buffer[T] {
-    let size = ts.buffer.sizeBytes();
-    let align = types/align[T];
+  fn push-span[t](self: *arena, ts: span[t]): buffer[t] {
+    let size = ts.buffer.size-bytes();
+    let align = types/align[t];
     let base = self.alloc-layout(size, align);
-    let buffer: buffer[T] = buffer/fromPtrAndCount[T](base, ts.len());
+    let buffer: buffer[t] = buffer/from-ptr-and-count[t](base, ts.len());
     buffer/copy(src = ts.buffer, dst = buffer);
     buffer
   }
 
   fn alloc-buffer[t](self: *arena, size): buffer[t] {
-    buffer/allocateIn[t](context :custom-arena(self))(size)
+    buffer/allocate-in[t](context :custom-arena(self))(size)
   }
 
   fn push-string(self: *arena, s: string): string {
     let data: buffer[char] = self.push-span(s.span());
-    string/wrapBuffer(data)
+    string/wrap-buffer(data)
   }
 
-  fn alloc-list[T](self: *arena, cap: size): list[T] {
-    list/withCapacityIn(context :custom-arena(self))(cap)
+  fn alloc-list[t](self: *arena, cap: size): list[t] {
+    list/with-capacity-in(context :custom-arena(self))(cap)
   }
 
   fn try-realloc(self: *arena, old-ptr: ptr, old-size: size, new-size: size, align: size): ptr {

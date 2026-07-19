@@ -1,23 +1,23 @@
 ns pointer;
 
-type Point3 = { x: int, y: int, z: int }
-type Point2 = _struct_remove[Point3, { z: int }]
+type point3 = { x: int, y: int, z: int }
+type point2 = _struct_remove[point3, { z: int }]
 
 fn test() {
-  let point: Point3 = { x: 10, y: 20, z: 30 };
+  let point: point3 = { x: 10, y: 20, z: 30 };
   // By taking the address of point, we generate an LLVM ptrtoint
   // this makes points address 'exposed' and thus immune to SROA
   // So we can talk about the stack memory in k1 as long as we stay within the allocation
-  let pointPtr = (&point).as[ptr];
+  let point-ptr = (&point).as[ptr];
 
-  let point2 = pointPtr.r[Point3];
+  let point2 = point-ptr.r[point3];
   assert(point2.x == 10);
   assert(point2.y == 20);
 
-  assert(types/size[Point3] == 24);
-  assert(types/size[Point2] == 16);
-  let pointShifted = (pointPtr.as[size] + types/size[int]).as[ptr];
-  let point3: *Point2 = pointShifted.r[Point2];
+  assert(types/size[point3] == 24);
+  assert(types/size[point2] == 16);
+  let point-shifted = (point-ptr.as[size] + types/size[int]).as[ptr];
+  let point3: *point2 = point-shifted.r[point2];
 
   // x is now y, y is now z, z is now random bits
   assert(point3.x == 20);

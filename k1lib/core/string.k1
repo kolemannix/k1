@@ -11,7 +11,7 @@ ns for string {
     self.span.get(index)
   }
 
-  fn getOpt(self: string, index: size): ?char {
+  fn get-opt(self: string, index: size): ?char {
     if index >= self.len() :none
     else :some(self.get(index))
   }
@@ -32,34 +32,34 @@ ns for string {
     { span }
   }
 
-  fn fromRaw(ptr: ptr, len: size): string {
+  fn from-raw(ptr: ptr, len: size): string {
     from-span(span/from-raw(ptr, len))
   }
 
-  fn fromBytes(span: span[byte]): string {
+  fn from-bytes(span: span[byte]): string {
     { span: span.as-char-span() }
   }
 
-  fn wrapList(list: list[char]): string {
+  fn wrap-list(list: list[char]): string {
     { span: list.as-span() }
   }
 
-  fn wrapBuffer(buffer: buffer[char]): string {
+  fn wrap-buffer(buffer: buffer[char]): string {
     { span: span/wrap-buffer(buffer) }
   }
 
-  fn wrapByteBuffer(buffer: buffer[byte]): string {
+  fn wrap-byte-buffer(buffer: buffer[byte]): string {
     { span: span/wrap-buffer(buffer.as-char-buffer()) }
   }
 
-  fn copyFromBytes(buffer: buffer[byte]): string {
+  fn copy-from-bytes(buffer: buffer[byte]): string {
     let copied: buffer[byte] = buffer.cloned();
-    wrapByteBuffer(copied)
+    wrap-byte-buffer(copied)
   }
 
-  fn copyFrombuffer(buffer: buffer[char]): string {
+  fn copy-from-buffer(buffer: buffer[char]): string {
     let copied = buffer.cloned();
-    wrapBuffer(copied)
+    wrap-buffer(copied)
   }
 
   fn len(self: string): size { self.span.len() }
@@ -75,7 +75,7 @@ ns for string {
     if self.is-empty() :some(self.get(self.len() - 1)) else :none
   }
 
-  fn indexOf(self: string, c: char): i64 {
+  fn index-of(self: string, c: char): i64 {
     for self.span {
       if it == c return(it-index)
     };
@@ -86,18 +86,18 @@ ns for string {
     from-span(self.span.concat(other.span))
   }
 
-  fn appendCharIn(context alloc: mem/alloc-mode)(self: string, c: char): string {
-    let newLength = self.len() + 1;
-    let newBuffer = self.span.inner-buffer()._enlargedCloneIn(newLength);
-    newBuffer.set(self.len(), c);
-    wrapBuffer(newBuffer)
+  fn append-char-in(context alloc: mem/alloc-mode)(self: string, c: char): string {
+    let new-length = self.len() + 1;
+    let new-buffer = self.span.inner-buffer()._enlarged-clone-in(new-length);
+    new-buffer.set(self.len(), c);
+    wrap-buffer(new-buffer)
   }
 
-  fn appendChar(self: string, c: char): string {
-    appendCharIn(context :current)(self, c)
+  fn append-char(self: string, c: char): string {
+    append-char-in(context :current)(self, c)
   }
 
-  fn splitByChar(self: string, delim: char): list[string] {
+  fn split-by-char(self: string, delim: char): list[string] {
     let ranges = list/empty[{ start: size, len: size }]();
     let r = { start: 0: size, len: 0: size };
 
@@ -165,33 +165,33 @@ ns for string {
   fn to-c(context alloc: mem/alloc-mode)(self: string): { ptr: ptr, len: size } {
     if self.is-empty()                  { ptr: "\0".data-ptr(), len: 0 }
     else if self.last() is :some('\0') { ptr: self.data-ptr(), len: self.len() - 1 }
-    else                               { ptr: self.appendCharIn('\0').data-ptr(), len: self.len() }
+    else                               { ptr: self.append-char-in('\0').data-ptr(), len: self.len() }
   }
 
   fn to-c-tmp(self: string): { ptr: ptr, len: size } {
     self.to-c(context :tmp)()
   }
 
-  fn wrap-c(cString: ptr): string {
-    let len = libc/strlen(cString);
-    fromRaw(ptr = cString, len = len)
+  fn wrap-c(c-string: ptr): string {
+    let len = libc/strlen(c-string);
+    from-raw(ptr = c-string, len = len)
   }
 
-  fn from-c(cString: ptr): string {
-    let wrapped = wrap-c(cString);
+  fn from-c(c-string: ptr): string {
+    let wrapped = wrap-c(c-string);
     let copy = wrapped.cloned();
     copy
   }
 
   // TODO(stdlib perf): use snprintf for string to int
-  fn toInt(self: string): ?int {
+  fn to-int(self: string): ?int {
     if self.is-empty() { return(:none) };
 
     let neg = self.get(0) == '-';
     let i = if neg 1 else 0;
     let total = 0;
     while i < self.len() {
-      if self.get(i).toAsciiDigit() is :some(digit) {
+      if self.get(i).to-ascii-digit() is :some(digit) {
         total := (total * 10) + digit.as[int];
       } else {
         return(:none);
@@ -204,22 +204,22 @@ ns for string {
     )
   }
 
-  fn capitalizeAscii(self: string): string {
-    if self.first() is :some(c) and c.isAsciiLower() {
-      let cloneChars: buffer[char] = self.span.buffer.cloned();
-      cloneChars.set(0, c.toAsciiUpper());
-      wrapBuffer(cloneChars)
+  fn capitalize-ascii(self: string): string {
+    if self.first() is :some(c) and c.is-ascii-lower() {
+      let clone-chars: buffer[char] = self.span.buffer.cloned();
+      clone-chars.set(0, c.to-ascii-upper());
+      wrap-buffer(clone-chars)
     } else self
   }
  
-  fn parseBase10(self: string): ?uint {
+  fn parse-base10(self: string): ?uint {
     let o: uint = 0;
     for c in self {
-      require c.toAsciiDigit() is :some(digitValue) else { return(:none) };
+      require c.to-ascii-digit() is :some(digit-value) else { return(:none) };
       // FIXME char to digit LUT
-      let digitValue: uint = (c.as[u8] - 48).as[uint];
+      let digit-value: uint = (c.as[u8] - 48).as[uint];
       o := o * 10;
-      o := o + digitValue;
+      o := o + digit-value;
     };
     :some(o)
   }
@@ -230,10 +230,10 @@ impl show for string {
   fn show(self: string): string { self }
 }
 
-impl iterable[item = char, i = BufferIterator[char]] for string {
+impl iterable[item = char, i = buffer-iterator[char]] for string {
   fn iterator(self: string): i { self.span().iterator() }
 }
 
-impl iterable[item = char, i = BufferIterator[char]] for *string {
+impl iterable[item = char, i = buffer-iterator[char]] for *string {
   fn iterator(self: *string): i { self.*.iterator() }
 }

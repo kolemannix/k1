@@ -1,23 +1,23 @@
 ns array_test;
 
-type Thing = {
+type thing = {
   data: array[u8, 1024],
   data2: array[u64, 1024],
 }
 
-fn testLiterals() {
+fn test-literals() {
   let array: array[bool, 3] = [false, true, true];
   let buffer: buffer[bool] = [false, true, true];
   let list: list[bool] = [false, true, true];
   assert-equals((&array).as-buffer(), buffer);
-  assert-equals(list.asBuffer(), buffer);
+  assert-equals(list.as-buffer(), buffer);
 }
 
-fn testFilled() {
+fn test-filled() {
   let context alloc: mem/alloc-mode = :tmp;
-  let buffer: buffer[u8] = buffer/filledIn(size = 64, value = 3);
+  let buffer: buffer[u8] = buffer/filled-in(size = 64, value = 3);
   let array: *array[u8, 64] = array/filled-in(3, 64);
-  let list: list[u8] = list/filledIn(size = 64, value = 3);
+  let list: list[u8] = list/filled-in(size = 64, value = 3);
   assert-equals(buffer.len, 64);
   assert-equals(array.len(), 64);
   assert-equals(list.len, 64);
@@ -28,15 +28,15 @@ fn testFilled() {
   }
 }
 
-fn testArray() {
+fn test-array() {
   let context alloc: mem/alloc-mode = :tmp;
-  let ls: list[u8] = list/filledIn(size = 10, value = 3);
+  let ls: list[u8] = list/filled-in(size = 10, value = 3);
 
-  let a: *mut array[u8, 10] = list/copyToArray(ls, 10);
-  for core/IntRange/upTo(a.len()) {
+  let a: *mut array[u8, 10] = list/copy-to-array(ls, 10);
+  for core/int-range/up-to(a.len()) {
     if it % 2 == 0 { a.get(it) <- 1 };
   };
-  for core/IntRange/upTo(a.len()) {
+  for core/int-range/up-to(a.len()) {
     if it % 2 == 0 {
       assert-equals(a.get(it), 1);
     } else {
@@ -54,17 +54,17 @@ fn testArray() {
 }
 
 fn test() {
-  assert-equals(types/size[Thing](), 9216);
+  assert-equals(types/size[thing](), 9216);
 
-  testArray();
+  test-array();
 
-  testLiterals();
-  testFilled();
+  test-literals();
+  test-filled();
 
   let array: array[f32, 10] = mem/zeroed();
-  assert(testCompile(array.get(11)) is :some(_));
+  assert(test-compile(array.get(11)) is :some(_));
   array.set(0, 3.14);
-  let buf = buffer/wrapArray(&array);
+  let buf = buffer/wrap-array(&array);
   assert(buf.get(0) == array.get(0));
   assert-equals(buf.get(0), array.get(0));
 

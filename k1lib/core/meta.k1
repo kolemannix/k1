@@ -3,8 +3,8 @@
 
 ns meta {
 
-  ability CodeWriter {
-    fn lines[Iter: iterator[item = string]](self, lines: Iter) {
+  ability code-writer {
+    fn lines[iter: iterator[item = string]](self, lines: iter) {
       for l in lines { self.line(l) }
     }
 
@@ -14,7 +14,7 @@ ns meta {
       self.repeat("  ", n);
     }
      
-    fn implPrint(self, type-name: string, body: string, indent: size) {
+    fn impl-print(self, type-name: string, body: string, indent: size) {
       self.indent(indent);
       self.line("impl print for {type-name} {{");
 
@@ -29,37 +29,37 @@ ns meta {
     }
   }
   
-  impl[w: writer] CodeWriter for w {
+  impl[w: writer] code-writer for w {
     fn var[t](self, name: string, value: t) {
-      let bakedVar = meta/bakedVariable[t](name, value);
-      self.string(bakedVar)
+      let baked-var = meta/baked-variable[t](name, value);
+      self.string(baked-var)
     }
   }
 
-  fn bakedValueExpr[T](value: T): string {
-    let valueId = bake-static-value[T](value);
-    `core/meta/get-static-value({valueId})`
+  fn baked-value-expr[t](value: t): string {
+    let value-id = bake-static-value[t](value);
+    `core/meta/get-static-value({value-id})`
   }
 
-  fn bakedVariable[T](name: string, value: T): string {
-    let bakedValueExpr: string = bakedValueExpr[T](value);
-    let type-id = types/type-id[T]();
-    `let {name}: typeFromId({type-id}) = {bakedValueExpr};\n`
+  fn baked-variable[t](name: string, value: t): string {
+    let baked-value-expr: string = baked-value-expr[t](value);
+    let type-id = types/type-id[t]();
+    `let {name}: type-from-id({type-id}) = {baked-value-expr};\n`
   }
 
   // Note: If we had an ability for "growable collection", we could implement it.
   //       len, get, empty, (push)
-  fn defineSoA[T](name: string): string {
-    let structTypeId = types/type-id[T];
-    let tt = "typeFromId({structTypeId})";
-    require types/type-id-schema(structTypeId) is :struct({ fields }) else
+  fn define-soa[t](name: string): string {
+    let struct-type-id = types/type-id[t];
+    let tt = "type-from-id({struct-type-id})";
+    require types/type-id-schema(struct-type-id) is :struct({ fields }) else
       crash("Its called a STRUCT of arrays for a reason");
     if fields.is-empty() { crash("Input struct must have at least one field") };
 
-    let code = StringBuilder/new();
+    let code = string-builder/new();
     code.line("type {name} = {{");
     for f in fields {
-      code.line("  ARR_{f.name}: list[typeFromId({f.type-id})],");
+      code.line("  ARR_{f.name}: list[type-from-id({f.type-id})],");
     };
     code.line("}");
 

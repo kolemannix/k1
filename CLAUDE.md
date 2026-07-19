@@ -95,12 +95,12 @@ Before nontrivial work, read:
 - `k1lib/core/mem.k1`: allocation, zeroing, bitcast, and raw memory helpers.
 - `k1lib/core/list.k1`, `buffer.k1`, `span.k1`, `string.k1`: primary
   collection/string APIs.
-- `k1lib/core/range.k1`: `IntRange`, iterators, and iterable impls.
+- `k1lib/core/range.k1`: `int-range`, iterators, and iterable impls.
 - `k1lib/core/opt.k1`: option helpers like `some`, `none`, and unwrap-related
   behavior.
 - `k1lib/core/types.k1`: type reflection helpers, `any`, and layout assertions.
 - `k1lib/core/meta.k1`: metaprogramming helpers.
-- `k1lib/core/FixList.k1`, `SpillList.k1`, `StringBuilder.k1`, `arena.k1`,
+- `k1lib/core/fix-list.k1`, `spill-list.k1`, `string-builder.k1`, `arena.k1`,
   `bitwise.k1`: core utility types/abilities.
 - `k1lib/core/ffc.h.k1` and `k1lib/core/libs/`: C runtime support, fast-float
   bridge, `k1rt.c`, and static/shared runtime libraries.

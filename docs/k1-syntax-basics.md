@@ -54,7 +54,8 @@ See `test_src/suite1/main.k1`, `test_src/suite1/format.k1`, and
 
 ## Naming
 
-For new K1 code, use kebab-case for everything:
+K1 code uses kebab-case for everything: namespaces, functions, types, fields,
+and enum variants. Constants are SCREAMING_SNAKE.
 
 ```rust
 ns allocator-test;
@@ -65,10 +66,6 @@ fn parse-request(): http-request {
   { status-code: 200 }
 }
 ```
-
-Older tests still contain camelCase names such as `testBasics` and `PointMaybeY`.
-Treat those as legacy during the transition. New names should be kebab-case even
-for fields and type names.
 
 Prefer short, concrete names in tests. A file named `range_test.k1` may still use
 `ns range-test;` in new code.
@@ -543,9 +540,7 @@ Arrays have a compile-time length in their type. Buffers, lists, and spans are
 used heavily in the core library and dogfood programs.
 
 Common helpers include `.len()`, `.get(index)`, `.set(index, value)`,
-`.as-span()`, `buffer/wrapArray(...)`, and `list/filledIn(...)`. Some of these
-names are still legacy camelCase and will be renamed eventually; prefer
-kebab-case for new APIs.
+`.as-span()`, `buffer/wrap-array(...)`, and `list/filled-in(...)`.
 
 See `test_src/suite1/array_test.k1`, `test_src/suite1/list_test.k1`,
 `test_src/suite1/range_test.k1`, and `test_src/suite1/buffer_test.k1`.
@@ -698,7 +693,7 @@ ability. The first argument is the writer, the second is the format string, and
 the optional third argument supplies format values:
 
 ```rust
-let* w = StringBuilder/new();
+let* w = string-builder/new();
 writef(w, "hello {}", 42);
 writef(w, " {name}", { name: "k1" });
 ```
@@ -757,13 +752,13 @@ fn test() {
 
 Then add it to `test_src/suite1/main.k1` if it belongs in suite1.
 
-Use `testCompile(...)` when a snippet should fail to compile:
+Use `test-compile(...)` when a snippet should fail to compile:
 
 ```rust
-assert(testCompile(bad-expression()).is-some());
+assert(test-compile(bad-expression()).is-some());
 ```
 
-Use `assert`, `assert-equals`, and `core/assertNotEquals` for expectations.
+Use `assert`, `assert-equals`, and `core/assert-not-equals` for expectations.
 
 ## Open Questions For Idiom
 

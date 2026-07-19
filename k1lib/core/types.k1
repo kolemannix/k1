@@ -26,11 +26,11 @@ fn make-any[t](t: *t): any {
 }
 
 fn assert-wrapper-type[wrapper, inner]() {
-  let schemaA = types/schema[wrapper];
-  let bTypeId = types/type-id[inner];
-  require schemaA is :struct({ fields }) else { crash("is-wrapper-type: Wrapper must be a struct") };
+  let schema-a = types/schema[wrapper];
+  let b-type-id = types/type-id[inner];
+  require schema-a is :struct({ fields }) else { crash("is-wrapper-type: Wrapper must be a struct") };
   require fields.first() is :some(field) and fields.len() == 1 else crash("Wrapper must have one field, got {fields.len()}");
-  let equal = field.type-id == bTypeId;
+  let equal = field.type-id == b-type-id;
   if not equal { crash("Expected {types/name[inner]} but got {types/type-id-name(field.type-id)}") };
 }
 

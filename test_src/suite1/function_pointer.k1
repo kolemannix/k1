@@ -1,31 +1,31 @@
 ns function_pointer;
 
-fn staticAddOne(x: int): int { x + 1 }
-fn staticAddTwo(x: int): int { x + 2 }
+fn static-add-one(x: int): int { x + 1 }
+fn static-add-two(x: int): int { x + 2 }
 
 type has-fn = { myfn: *fn(not-x: int) -> int }
 
 fn test() {
-  assert(staticAddOne.as[ptr] != staticAddTwo.as[ptr]);
-  let someAddFn: *fn(int) -> int = staticAddOne;
-  let _someAddFn2: *fn(x: int) -> int = staticAddOne;
-  let x = someAddFn(10);
+  assert(static-add-one.as[ptr] != static-add-two.as[ptr]);
+  let some-add-fn: *fn(int) -> int = static-add-one;
+  let _some-add-fn2: *fn(x: int) -> int = static-add-one;
+  let x = some-add-fn(10);
   assert-equals(x, 11);
-  someAddFn := staticAddTwo;
-  let y = someAddFn(20);
+  some-add-fn := static-add-two;
+  let y = some-add-fn(20);
   assert-equals(y, 22);
 
   let null-callback: *fn(int) -> int = ptr/null.as();
   let null-callback-ptr: ptr = null-callback.as[ptr];
   assert-equals(null-callback-ptr, ptr/null);
 
-  let x = staticAddOne;
+  let x = static-add-one;
   let _has-fn: has-fn = { myfn: x };
-  let has-fn: has-fn = { myfn: staticAddOne };
+  let has-fn: has-fn = { myfn: static-add-one };
 
   assert-equals((has-fn.myfn)(4), 5);
-  assert(testCompile( (has-fn.myfn)() ) is :some(_));
-  assert(testCompile( (has-fn.myfn)(4)() ) is :some(_));
+  assert(test-compile( (has-fn.myfn)() ) is :some(_));
+  assert(test-compile( (has-fn.myfn)(4)() ) is :some(_));
 
   {}
 }

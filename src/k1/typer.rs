@@ -1400,7 +1400,7 @@ impl Display for CastType {
             CastType::IntegerExtendFromChar => write!(f, "iextfromchar"),
             CastType::BoolToInt => write!(f, "bool2int"),
             CastType::ReferenceToMut => write!(f, "reference2mut"),
-            CastType::ReferenceUnMut => write!(f, "referenceUnmut"),
+            CastType::ReferenceUnMut => write!(f, "reference-unmut"),
             CastType::ReferenceToReference => write!(f, "reftoref"),
             CastType::PointerToReference => write!(f, "ptrtoref"),
             CastType::ReferenceToPointer => write!(f, "reftoptr"),
@@ -8636,7 +8636,7 @@ impl TypedProgram {
         let count_expr = self.synth_i64(element_count as i64, span);
         let make_dest_coll = match list_kind {
             ContainerKind::List => self.synth_typed_call_typed_args(
-                self.ast.idents.f.List_withCapacity.with_span(span),
+                self.ast.idents.f.List_with_capacity.with_span(span),
                 &[element_type],
                 &[count_expr],
                 list_lit_ctx,
@@ -11838,22 +11838,22 @@ impl TypedProgram {
                     return failf!(fn_call.span, "continue cannot be used inside `defer` blocks");
                 }
                 todo!("implement continue")
-            } else if n == self.ast.idents.b.testCompile {
+            } else if n == self.ast.idents.b.test_compile {
                 if fn_call.args.len() != 1 {
-                    return failf!(call_span, "testCompile takes one argument");
+                    return failf!(call_span, "test-compile takes one argument");
                 }
                 let arg = self.ast.mem.get_nth(fn_call.args, 0);
-                // Because testCompile errors get swallowed, we have to be
+                // Because test-compile errors get swallowed, we have to be
                 // more restrictive about what you can do in there
                 if ctx.is_inference() {
                     return failf!(
                         call_span,
-                        "Cannot use testCompile when types are being inferred"
+                        "Cannot use test-compile when types are being inferred"
                     );
                 }
                 self.compile_all_pending_ir(call_span).map_err(|mut e| {
                     e.message = format!(
-                        "Failed to compile pending units before testCompile: {}",
+                        "Failed to compile pending units before test-compile: {}",
                         e.message
                     );
                     e
@@ -18286,7 +18286,7 @@ impl TypedProgram {
             core!("mem"),
             core!("types"),
             core!("k1"),
-            core!("IntRange"),
+            core!("int-range"),
             core!("add"),
             core!("sub"),
             core!("mul"),
@@ -18294,8 +18294,8 @@ impl TypedProgram {
             core!("rem"),
             core!("sys"),
             core!("scalar-cmp"),
-            core!("StringBuilder"),
-            core!("StringBuilder"),
+            core!("string-builder"),
+            core!("string-builder"),
             QIdent { path: core_mem, name: get_ident!(self, "zeroed"), name_span: span },
             QIdent { path: core_mem, name: get_ident!(self, "alloc-mode"), name_span: span },
             QIdent { path: core_types, name: self.ast.idents.b.enum_, name_span: span },

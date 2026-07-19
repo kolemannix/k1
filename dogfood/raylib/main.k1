@@ -11,32 +11,32 @@ let MODULE_INFO: k1/module-manifest = {
   }
 }
 ns raylib {
-  type Color = { r: u8, g: u8, b: u8, a: u8 }
+  type color = { r: u8, g: u8, b: u8, a: u8 }
 
-  type Rectangle = {
+  type rectangle = {
     x: f32, y: f32, width: f32, height: f32
   }
 
   extern("raylib","InitWindow") fn init(width: i32, height: i32, name: ptr)
-  extern("raylib","CloseWindow") fn CloseWindow()
-  extern("raylib","WindowShouldClose") fn WindowShouldClose(): bool
+  extern("raylib","CloseWindow") fn close-window()
+  extern("raylib","WindowShouldClose") fn window-should-close(): bool
 
-  extern("raylib","BeginDrawing") fn BeginDrawing()
-  extern("raylib","EndDrawing") fn EndDrawing()
-  extern("raylib","ClearBackground") fn ClearBackground(color: Color)
+  extern("raylib","BeginDrawing") fn begin-drawing()
+  extern("raylib","EndDrawing") fn end-drawing()
+  extern("raylib","ClearBackground") fn clear-background(color: color)
 
-  // define void @DrawText(ptr noundef %0, i32 noundef %1, i32 noundef %2, i64 %3) #0 {
-  extern("raylib","DrawText") fn DrawText(text: ptr, posX: i32, posY: i32, fontSize: i32, color: Color)
+  // define void @draw-text(ptr noundef %0, i32 noundef %1, i32 noundef %2, i64 %3) #0 {
+  extern("raylib","DrawText") fn draw-text(text: ptr, pos-x: i32, pos-y: i32, font-size: i32, color: color)
 
-  extern("raylib","SetTargetFPS") fn SetTargetFPS(fps: i32)
-  extern("raylib","GetFPS") fn GetFPS(): i32
+  extern("raylib","SetTargetFPS") fn set-target-fps(fps: i32)
+  extern("raylib","GetFPS") fn get-fps(): i32
 
 }
 
-let RED: raylib/Color    = { r: 255, g: 0, b: 0, a: 255 }
-let GRAY: raylib/Color   = { r: 200, g: 200, b: 200, a: 255 }
-let PINK: raylib/Color   = { r: 255, g: 109, b: 194, a: 255 }
-let PURPLE: raylib/Color = { r: 200, g: 122, b: 255, a: 255 }
+let RED: raylib/color    = { r: 255, g: 0, b: 0, a: 255 }
+let GRAY: raylib/color   = { r: 200, g: 200, b: 200, a: 255 }
+let PINK: raylib/color   = { r: 255, g: 109, b: 194, a: 255 }
+let PURPLE: raylib/color = { r: 200, g: 122, b: 255, a: 255 }
 
 type thing-kind = either {
   bits64(u64),
@@ -48,41 +48,41 @@ type thing = {
   kind: thing-kind
 }
 
-use raylib/DrawText
-use raylib/ClearBackground
+use raylib/draw-text
+use raylib/clear-background
 
 fn render(context frame-arena: alloc-mode)(things: *list[thing]) {
   for things {
-    DrawText("thing {it-index}".to-c().ptr, it.pos.x, it.pos.y, 32, PINK);
+    draw-text("thing {it-index}".to-c().ptr, it.pos.x, it.pos.y, 32, PINK);
   };
 }
 
 fn run(title: string): i32 {
-  let titleC = title.to-c(context :tmp)();
+  let title-c = title.to-c(context :tmp)();
 
   let perm = alloc-mode:custom-arena(core/arena/init-virtual(1));
-  let things: list[thing] = list/withCapacityIn(context perm)(1024);
+  let things: list[thing] = list/with-capacity-in(context perm)(1024);
   things.push-in(context perm)({
     pos: { x: 200, y: 300 },
     kind: :bits64(10)
   });
-  raylib/init(800, 450, titleC.ptr);
-  raylib/SetTargetFPS(60);
+  raylib/init(800, 450, title-c.ptr);
+  raylib/set-target-fps(60);
 
 
   let context frame = alloc-mode:custom-arena(core/arena/init-virtual(1));
-  mem/pushMode(frame);
-  while not raylib/WindowShouldClose() {
-    let fps = raylib/GetFPS();
-    raylib/BeginDrawing();
-    ClearBackground(GRAY);
-    DrawText("Congrats! (fps: {fps})".to-c().ptr, 200, 200, 32, PINK);
+  mem/push-mode(frame);
+  while not raylib/window-should-close() {
+    let fps = raylib/get-fps();
+    raylib/begin-drawing();
+    clear-background(GRAY);
+    draw-text("Congrats! (fps: {fps})".to-c().ptr, 200, 200, 32, PINK);
     render(things.&);
-    raylib/EndDrawing();
+    raylib/end-drawing();
     frame.as-custom-arena().!.reset(false);
   };
 
-  raylib/CloseWindow();
+  raylib/close-window();
   if k1/is-static 11 else 1
 }
 
@@ -93,8 +93,8 @@ fn main(): i32 {
   //  ctResult
   //};
 
-  let rtResult = run("runtime!");
-  println("Hey, the runtime result was {rtResult}");
+  let rt-result = run("runtime!");
+  println("Hey, the runtime result was {rt-result}");
   0
 }
 

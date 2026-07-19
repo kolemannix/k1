@@ -15,14 +15,14 @@ let initial-theta: f64 = 50.0 * step
 fn solve(p: (either { part-1, part-2 }), input: string): int {
   let acc = 0;
   let theta = initial-theta;
-  let commands: list[string] = input.splitByChar('\n');
+  let commands: list[string] = input.split-by-char('\n');
   for commands {
     let dir: char = it.get(0);
     let scale: f64 = if (dir == 'L') { -1.0 } else { 1.0 };
-    let amount: u64 = string/parseBase10(it.drop(1)).!;
+    let amount: u64 = string/parse-base10(it.drop(1)).!;
     let n: i64 = if p is :part-1 1 else amount.as[i64];
     let delta: f64 = if p is :part-1 scale * step * amount.as[f64] else scale * step;
-    for core/IntRange/upTo(n) {
+    for core/int-range/up-to(n) {
       theta := theta + delta;
       if (cmath/cos(theta) == 1.0) {
         acc := acc + 1;

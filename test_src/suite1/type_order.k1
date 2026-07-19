@@ -1,15 +1,15 @@
 ns type_order;
 
 // Concession: for now, aliases depend on declaration order again
-type alias Point = { x: int, y: int }
-type alias PointList = list[Point]
+type alias point = { x: int, y: int }
+type alias point-list = list[point]
 
-ability ToPoint {
-  fn toPoint(self): Point
+ability to-point {
+  fn to-point(self): point
 }
 
 fn test() {
-  let _x: type_order/Point = { x: 1, y: 2 };
+  let _x: type_order/point = { x: 1, y: 2 };
 }
 
 

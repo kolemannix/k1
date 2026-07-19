@@ -1,6 +1,6 @@
 ns while_test;
 
-fn whileSimple() {
+fn while-simple() {
   let i: int = 10;
   let iters = 0;
   while i > -10 {
@@ -10,14 +10,14 @@ fn whileSimple() {
   assert-equals(iters, 20);
 }
 
-fn whileReturn(): int {
+fn while-return(): int {
   while true {
     return(1)
   };
   0
 }
 
-fn whileNested(): int {
+fn while-nested(): int {
   while true {
     while true {
       return(10)
@@ -26,7 +26,7 @@ fn whileNested(): int {
   4
 }
 
-fn whileReturnClosure(): int {
+fn while-return-closure(): int {
   while true {
     let s = fn(-> int) { return(5) };
     return(s())
@@ -34,7 +34,7 @@ fn whileReturnClosure(): int {
   4
 }
 
-fn whileBreak(): int {
+fn while-break(): int {
   while true {
     break();
   };
@@ -42,9 +42,9 @@ fn whileBreak(): int {
 }
 
 fn test() {
-  whileSimple();
-  assert(whileReturn() == 1);
-  assert(whileNested() == 10);
-  assert(whileReturnClosure() == 5);
-  assert(whileBreak() == 4);
+  while-simple();
+  assert(while-return() == 1);
+  assert(while-nested() == 10);
+  assert(while-return-closure() == 5);
+  assert(while-break() == 4);
 }

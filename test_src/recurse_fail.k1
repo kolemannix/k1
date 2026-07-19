@@ -1,5 +1,5 @@
-type Red = { r: *Red, b: Black } 
-type Black = { g: Green, b: bool } 
-type Green = { i: int, r: Red }
+type red = { r: *red, b: black } 
+type black = { g: green, b: bool } 
+type green = { i: int, r: red }
 
-//errmsg: This type has an infinite size due to a cycle; Red was mentioned inside Red with no indirection
+//errmsg: This type has an infinite size due to a cycle; red was mentioned inside red with no indirection
