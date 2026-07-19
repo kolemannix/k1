@@ -18,12 +18,14 @@ use clang/CXIndex
 use clang/CXTranslationUnit
 use clang/CXCursor
 use clang/CXString
+use std/map
+use std/set
 
 // TODO:
 // - [ ] implement value of globals (woops)
 // - [x] Extract fn param names by traversing the children, not just cheating by only looking at its 'cx-type' like we are now
 // - [ ] Detect varargs and emit error
-// - [ ] Use derived cli arg parser
+// - [x] Use derived cli arg parser
 // - [x] Embed sizeof / alignof / offsetof assertions
 // - [x] Support Unions
 fn main(argc: c-int, argv: ptr): i32 { 
@@ -51,58 +53,6 @@ type bindgen-args = {
 fn start(args: span[string]): string {
   let args = switch std/sys/parse-args[bindgen-args](args, []) { :ok(args) -> args, :err(msg) -> return("Failed to parse arguments: {msg}") };
 
-  // TODO: Pull this out into an immediate-mode flags module
-  // for args {
-  //   if it == "-system" {
-  //     if args.get-opt(it-index + 1) is :some(next) { skip-system-defns := next != "true" }
-  //   };
-  //   if it == "-i" {
-  //     if args.get-opt(it-index + 1) is :some(next) { file := next }
-  //   };
-  //   if it == "-o" {
-  //     if args.get-opt(it-index + 1) is :some(next) { out-path := :some(next) }
-  //   };
-  //   if it == "-n" {
-  //     if args.get-opt(it-index + 1) is :some(next) { libname := next }
-  //   };
-  //   if it == "-clangarg" {
-  //     if args.get-opt(it-index + 1) is :some(next) { clang-args.push(next) }
-  //   };
-  //   if it == "-exclude" {
-  //     if args.get-opt(it-index + 1) is :some(next) { exclude-substrings.push(next) }
-  //   };
-  //   if it == "-include" {
-  //     if args.get-opt(it-index + 1) is :some(next) { include-names.push(next) }
-  //   };
-  //   if it == "-opaque" {
-  //     if args.get-opt(it-index + 1) is :some(next) { opaque-names.push(next) }
-  //   };
-  //   if it == "-strip-suffix" {
-  //     if args.get-opt(it-index + 1) is :some(next) { suffix-strips.push(next) }
-  //   };
-  //   if it == "-strip-prefix" {
-  //     if args.get-opt(it-index + 1) is :some(next) { prefix-strips.push(next) }
-  //   };
-  //   if it == "-prelude-file" {
-  //     if args.get-opt(it-index + 1) is :some(next) { prelude-file := :some(next) }
-  //   };
-  //   if it == "-rename" {
-  //     if args.get-opt(it-index + 1) is :some(from) { 
-  //       if args.get-opt(it-index + 2) is :some(to) {
-  //         renames.push({ from, to })
-  //       }
-  //     }
-  //   }
-
-  // };
-  // info("options");
-  // info("  libname: {libname}");
-  // info("  skip system definitions: {skip-system-defns}");
-  // info("  input file: {file}");
-  // info("  clang-args: {clang-args}");
-  // info("  strip-prefix: {prefix-strips}");
-  // info("  strip-suffix: {suffix-strips}");
-
   let context alloc: mem/alloc-mode = :tmp;
 
   let index: CXIndex = clang/createIndex(1, 1);
@@ -129,19 +79,20 @@ fn start(args: span[string]): string {
   };
 
   let cursor: clang/CXCursor = clang/getTranslationUnitCursor(unit); 
-  let parsed-renames = args.rename.map(fn s. { 
+  let parsed-renames = map/with-capacity-in[string, string](args.rename.len());
+  for s in args.rename {
     let parts = s.splitByChar(':');
     if parts.len() != 2 eprintln("Bad rename: {s}");
-    { from: parts.get(0), to: parts.get(1) }
-  });
+    parsed-renames.insert-in(parts.get(0), parts.get(1));
+  };
   let state: BindgenState = {
     lib-name: args.lib-name,
     out-path: args.out-path,
     defns: list/empty(),
     skip-system-defns: args.system != "true",
     exclude-substrings: args.exclude,
-    include-names: args.include,
-    opaque-names: args.opaque,
+    include-names: set/from-span-in(args.include.as-span()),
+    opaque-names: set/from-span-in(args.opaque.as-span()),
     name-config: { suffix-strips: args.strip-suffix, prefix-strips: args.strip-prefix, renames: parsed-renames },
   };
   clang/visitChildren(
@@ -352,7 +303,7 @@ fn write-k1-type(context w: *mut StringBuilder, name-config)(k1-type, indent: si
 type name-config = {
   suffix-strips: list[string],
   prefix-strips: list[string],
-  renames: list[{ from: string, to: string }],
+  renames: map[string, string],
 }
 ns for name-config {
   fn strip-prefix(self: name-config, name: string): string {
@@ -374,7 +325,7 @@ ns for name-config {
     name
   }
   fn transformed-name(self: name-config, name: string): string {
-    if core/iter/find(self.renames, fn r. r.from == name) is :some({ to }) return(to);
+    if self.renames.get(name) is :some(to) return(to);
 
     let name = self.strip-prefix(name);
     let name = self.strip-suffix(name);
@@ -391,21 +342,21 @@ type BindgenState = {
   // Inclusion config
   skip-system-defns: bool,
   exclude-substrings: list[string],
-  include-names: list[string],
-  opaque-names: list[string],
+  include-names: set[string],
+  opaque-names: set[string],
 
   name-config: name-config
 }
 
 ns for BindgenState {
   fn is-opaque-name(self: BindgenState, name: string): bool {
-    let result = core/iter/contains(self.opaque-names, name);
+    let result = self.opaque-names.contains(name);
     debug("is-opaque-name {name}? {result}");
     result
   }
   fn should-include-name(self: BindgenState, name: string): bool {
     if self.include-names.non-empty() {
-      core/iter/contains(self.include-names, name)
+      self.include-names.contains(name)
     } else {
       for exclude in self.exclude-substrings {
         if exclude.ends-with("$") {

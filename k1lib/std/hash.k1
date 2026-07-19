@@ -54,15 +54,15 @@ impl hash for bool {
   }
 }
 
-type hash-slot[k, v] = { hash: u64, key: k, value: v }
+type map-slot[k, v] = { hash: u64, key: k, value: v }
 
-type HashMap[k, v] = {
+type map[k, v] = {
   count: size,
   tombstones: size,
-  slots: buffer[hash-slot[k, v]],
+  slots: buffer[map-slot[k, v]],
 }
 
-ns for HashMap {
+ns for map {
 
   use mem/alloc-mode
 
@@ -74,7 +74,7 @@ ns for HashMap {
     if h < 2 h + 2 else h
   }
 
-  fn new[k, v](): HashMap[k, v] {
+  fn new[k, v](): map[k, v] {
     { count: 0, tombstones: 0, slots: buffer/empty() }
   }
 
@@ -88,27 +88,27 @@ ns for HashMap {
     cap
   }
 
-  fn with-capacity-in[k, v](context mode: alloc-mode)(min-capacity: size): HashMap[k, v] {
+  fn with-capacity-in[k, v](context mode: alloc-mode)(min-capacity: size): map[k, v] {
     { count: 0, tombstones: 0, slots: _allocate-slots[k, v](_capacity-for(min-capacity)) }
   }
 
-  fn with-capacity[k, v](min-capacity: size): HashMap[k, v] {
+  fn with-capacity[k, v](min-capacity: size): map[k, v] {
     with-capacity-in[k, v](context :current)(min-capacity)
   }
 
-  fn _allocate-slots[k, v](context mode: alloc-mode)(cap: size): buffer[hash-slot[k, v]] {
+  fn _allocate-slots[k, v](context mode: alloc-mode)(cap: size): buffer[map-slot[k, v]] {
     // alloc-mode.alloc returns zeroed memory, and zero hash means empty,
     // so a fresh buffer is a valid all-empty table
-    buffer/allocateIn[hash-slot[k, v]](cap)
+    buffer/allocateIn[map-slot[k, v]](cap)
   }
 
-  fn len[k, v](self: HashMap[k, v]): size { self.count }
+  fn len[k, v](self: map[k, v]): size { self.count }
 
-  fn is-empty[k, v](self: HashMap[k, v]): bool { self.count == 0 }
+  fn is-empty[k, v](self: map[k, v]): bool { self.count == 0 }
 
-  fn capacity[k, v](self: HashMap[k, v]): size { self.slots.len }
+  fn capacity[k, v](self: map[k, v]): size { self.slots.len }
 
-  fn _rehash[k, v](context mode: alloc-mode)(self: *mut HashMap[k, v], new-cap: size) {
+  fn _rehash[k, v](context mode: alloc-mode)(self: *mut map[k, v], new-cap: size) {
     let old = self.slots;
     let new-slots = _allocate-slots[k, v](new-cap);
     let mask = new-cap - 1;
@@ -125,7 +125,7 @@ ns for HashMap {
     if old.non-empty() {
       let resolved = mode.resolve();
       if resolved.requiresFree() {
-        resolved.free(old.data-ptr(), old.sizeBytes(), core/types/align[hash-slot[k, v]]());
+        resolved.free(old.data-ptr(), old.sizeBytes(), core/types/align[map-slot[k, v]]());
       }
     };
   }
@@ -133,7 +133,7 @@ ns for HashMap {
   // Keeps at least a quarter of the table empty so probe sequences
   // always terminate. Doubles only when live entries justify it;
   // otherwise rehashes at the same size to purge tombstones.
-  fn _ensure-room[k, v](context mode: alloc-mode)(self: *mut HashMap[k, v]) {
+  fn _ensure-room[k, v](context mode: alloc-mode)(self: *mut map[k, v]) {
     let cap = self.slots.len;
     if cap == 0 {
       self._rehash(8);
@@ -145,7 +145,7 @@ ns for HashMap {
     };
   }
 
-  fn _find-index[k, v](self: HashMap[k, v], key: k, h: u64): ?size where k: equals {
+  fn _find-index[k, v](self: map[k, v], key: k, h: u64): ?size where k: equals {
     if self.count == 0 { return(:none) };
     let mask = self.slots.len - 1;
     let idx = h.as[size] & mask;
@@ -159,7 +159,7 @@ ns for HashMap {
 
   // Where an insert of key should land: the slot already holding it, or
   // the best open slot on its probe path (first tombstone, else first empty)
-  fn _probe-insert[k, v](self: HashMap[k, v], key: k, h: u64): { idx: size, found: bool, from-tombstone: bool }
+  fn _probe-insert[k, v](self: map[k, v], key: k, h: u64): { idx: size, found: bool, from-tombstone: bool }
     where k: equals {
     let mask = self.slots.len - 1;
     let idx = h.as[size] & mask;
@@ -180,13 +180,13 @@ ns for HashMap {
     }
   }
 
-  fn _place[k, v](self: *mut HashMap[k, v], probe: { idx: size, found: bool, from-tombstone: bool }, slot: hash-slot[k, v]) {
+  fn _place[k, v](self: *mut map[k, v], probe: { idx: size, found: bool, from-tombstone: bool }, slot: map-slot[k, v]) {
     if probe.from-tombstone { self.tombstones <- self.tombstones - 1 };
     self.slots.getRefUnchecked(probe.idx) <- slot;
     self.count <- self.count + 1;
   }
 
-  fn insert-in[k, v](context mode: alloc-mode)(self: *mut HashMap[k, v], key: k, value: v)
+  fn insert-in[k, v](context mode: alloc-mode)(self: *mut map[k, v], key: k, value: v)
     where k: hash, k: equals {
     self._ensure-room();
     let h = _slot-hash(key);
@@ -198,12 +198,12 @@ ns for HashMap {
     };
   }
 
-  fn insert[k, v](self: *mut HashMap[k, v], key: k, value: v) where k: hash, k: equals {
+  fn insert[k, v](self: *mut map[k, v], key: k, value: v) where k: hash, k: equals {
     self.insert-in(context :current)(key, value)
   }
 
   // The reference is valid until the next insert or rehash
-  fn get-or-insert-in[k, v](context mode: alloc-mode)(self: *mut HashMap[k, v], key: k, make: some fn() -> v): *mut v
+  fn get-or-insert-in[k, v](context mode: alloc-mode)(self: *mut map[k, v], key: k, make: some fn() -> v): *mut v
     where k: hash, k: equals {
     self._ensure-room();
     let h = _slot-hash(key);
@@ -216,7 +216,7 @@ ns for HashMap {
 
   // Body duplicated from get-or-insert-in: a some-fn param can neither be
   // passed to another some-fn param nor captured by a wrapping lambda today
-  fn get-or-insert[k, v](self: *mut HashMap[k, v], key: k, make: some fn() -> v): *mut v
+  fn get-or-insert[k, v](self: *mut map[k, v], key: k, make: some fn() -> v): *mut v
     where k: hash, k: equals {
     self._ensure-room(context :current)();
     let h = _slot-hash(key);
@@ -227,25 +227,25 @@ ns for HashMap {
     self.slots.getRefUnchecked(probe.idx).value.&
   }
 
-  fn get[k, v](self: HashMap[k, v], key: k): ?v where k: hash, k: equals {
+  fn get[k, v](self: map[k, v], key: k): ?v where k: hash, k: equals {
     switch self._find-index(key, _slot-hash(key)) {
       :some(idx) -> :some(self.slots.getRefUnchecked(idx).value),
       :none -> :none
     }
   }
 
-  fn get-ref[k, v](self: *mut HashMap[k, v], key: k): ?(*mut v) where k: hash, k: equals {
+  fn get-ref[k, v](self: *mut map[k, v], key: k): ?(*mut v) where k: hash, k: equals {
     switch self._find-index(key, _slot-hash(key)) {
       :some(idx) -> :some(self.slots.getRefUnchecked(idx).value.&),
       :none -> :none
     }
   }
 
-  fn contains[k, v](self: HashMap[k, v], key: k): bool where k: hash, k: equals {
+  fn contains[k, v](self: map[k, v], key: k): bool where k: hash, k: equals {
     self._find-index(key, _slot-hash(key)).is-some()
   }
 
-  fn remove[k, v](self: *mut HashMap[k, v], key: k): ?v where k: hash, k: equals {
+  fn remove[k, v](self: *mut map[k, v], key: k): ?v where k: hash, k: equals {
     switch self._find-index(key, _slot-hash(key)) {
       :none -> :none,
       :some(idx) -> {
@@ -259,13 +259,13 @@ ns for HashMap {
     }
   }
 
-  fn clear[k, v](self: *mut HashMap[k, v]) {
+  fn clear[k, v](self: *mut map[k, v]) {
     self.slots.memset(0);
     self.count <- 0;
     self.tombstones <- 0;
   }
 
-  fn dump[k, v](self: HashMap[k, v]) where k: print, v: print {
+  fn dump[k, v](self: map[k, v]) where k: print, v: print {
     let count = self.count;
     let tombstones = self.tombstones;
     let capacity = self.slots.len;
@@ -284,14 +284,14 @@ ns for HashMap {
 
 }
 
-type HashMapIterator[k, v] = {
-  slots: buffer[hash-slot[k, v]],
+type map-iterator[k, v] = {
+  slots: buffer[map-slot[k, v]],
   pos: size,
   remaining: size,
 }
 
-ns for HashMapIterator {
-  fn _next-live[k, v](self: *HashMapIterator[k, v], from: size): size {
+ns for map-iterator {
+  fn _next-live[k, v](self: *map-iterator[k, v], from: size): size {
     let i = from;
     while i < self.slots.len and self.slots.getRefUnchecked(i).hash < 2 {
       i := i + 1;
@@ -300,8 +300,8 @@ ns for HashMapIterator {
   }
 }
 
-impl[k, v] iterator[item = { key: k, value: v }] for HashMapIterator[k, v] {
-  fn peek(self: *HashMapIterator[k, v]): ?item {
+impl[k, v] iterator[item = { key: k, value: v }] for map-iterator[k, v] {
+  fn peek(self: *map-iterator[k, v]): ?item {
     let i = self._next-live(self.pos);
     if i < self.slots.len {
       let s = self.slots.getRefUnchecked(i);
@@ -331,13 +331,13 @@ impl[k, v] iterator[item = { key: k, value: v }] for HashMapIterator[k, v] {
   }
 }
 
-impl[k, v] iterable[item = { key: k, value: v }, i = HashMapIterator[k, v]] for HashMap[k, v] {
+impl[k, v] iterable[item = { key: k, value: v }, i = map-iterator[k, v]] for map[k, v] {
   fn iterator(self): i {
     { slots: self.slots, pos: 0, remaining: self.count }
   }
 }
 
-impl[k: print, v: print] print for HashMap[k, v] {
+impl[k: print, v: print] print for map[k, v] {
   fn print-to[w: writer](self, w): empty {
     w.write-char('{');
     let first = true;
@@ -347,6 +347,107 @@ impl[k: print, v: print] print for HashMap[k, v] {
       kv.key.print-to(w);
       w.write-string(": ");
       kv.value.print-to(w);
+    };
+    w.write-char('}');
+  }
+}
+
+type set[t] = { inner: map[t, empty] }
+
+ns for set {
+
+  use mem/alloc-mode
+
+  fn new[t](): set[t] {
+    { inner: map/new() }
+  }
+
+  fn with-capacity-in[t](context mode: alloc-mode)(min-capacity: size): set[t] {
+    { inner: map/with-capacity-in[t, empty](min-capacity) }
+  }
+
+  fn with-capacity[t](min-capacity: size): set[t] {
+    with-capacity-in[t](context :current)(min-capacity)
+  }
+
+  fn from-span-in[t](context mode: alloc-mode)(values: span[t]): set[t] where t: hash, t: equals {
+    let s = with-capacity-in[t](values.len());
+    for v in values {
+      s.add-in(v);
+    };
+    s
+  }
+
+  fn from-span[t](values: span[t]): set[t] where t: hash, t: equals {
+    from-span-in[t](context :current)(values)
+  }
+
+  fn len[t](self: set[t]): size { self.inner.len() }
+
+  fn is-empty[t](self: set[t]): bool { self.inner.is-empty() }
+
+  fn non-empty[t](self: set[t]): bool { not self.inner.is-empty() }
+
+  // true if the value was newly added
+  fn add-in[t](context mode: alloc-mode)(self: *mut set[t], value: t): bool where t: hash, t: equals {
+    let before = self.inner.len();
+    self.inner.insert-in(value, {});
+    self.inner.len() != before
+  }
+
+  fn add[t](self: *mut set[t], value: t): bool where t: hash, t: equals {
+    self.add-in(context :current)(value)
+  }
+
+  fn contains[t](self: set[t], value: t): bool where t: hash, t: equals {
+    self.inner.contains(value)
+  }
+
+  fn remove[t](self: *mut set[t], value: t): bool where t: hash, t: equals {
+    self.inner.remove(value).is-some()
+  }
+
+  fn clear[t](self: *mut set[t]) {
+    self.inner.clear();
+  }
+
+}
+
+type set-iterator[t] = { inner: map-iterator[t, empty] }
+
+impl[t] iterator[item = t] for set-iterator[t] {
+  fn peek(self: *set-iterator[t]): ?item {
+    switch self.inner.peek() {
+      :some(kv) -> :some(kv.key),
+      :none -> :none
+    }
+  }
+  fn size-hint(self: *self): { at-least: size, at-most: ?size } {
+    self.inner.size-hint()
+  }
+  fn advance-by(self: *mut self, n: size): empty {
+    self.inner.advance-by(n)
+  }
+  fn nth(self: *mut self, n: size): ?item {
+    self.advance-by(n);
+    self.next()
+  }
+}
+
+impl[t] iterable[item = t, i = set-iterator[t]] for set[t] {
+  fn iterator(self): i {
+    { inner: self.inner.iterator() }
+  }
+}
+
+impl[t: print] print for set[t] {
+  fn print-to[w: writer](self, w): empty {
+    w.write-char('{');
+    let first = true;
+    for v in self {
+      if not first { w.write-string(", ") };
+      first := false;
+      v.print-to(w);
     };
     w.write-char('}');
   }

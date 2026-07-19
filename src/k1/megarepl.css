@@ -398,6 +398,26 @@ h1 {
   color: var(--text-muted);
 }
 
+.interval-input {
+  width: 4.2rem;
+  padding: 0 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+
+  &::placeholder {
+    color: var(--text-muted);
+  }
+
+  &:focus-visible {
+    outline: 1.5px solid var(--accent);
+    outline-offset: -1px;
+  }
+}
+
 .watch-toggle {
   display: flex;
   align-items: center;
@@ -716,6 +736,48 @@ a.member-row:hover {
   padding: 0.4rem 0.9rem;
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+/* checkbox control: a big satisfying power orb */
+.power-orb {
+  width: 96px;
+  height: 96px;
+  margin: 1.2rem auto;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 50%;
+  font-size: 2rem;
+  color: rgb(255 255 255 / 0.8);
+  cursor: pointer;
+  background: radial-gradient(
+    circle at 32% 28%,
+    light-dark(#b9bdb6, #4a5160),
+    light-dark(#8f948c, #2a303c) 72%
+  );
+  box-shadow:
+    inset 0 6px 10px rgb(255 255 255 / 0.25),
+    inset 0 -8px 14px rgb(0 0 0 / 0.28),
+    0 8px 18px rgb(0 0 0 / 0.3);
+  transition: transform 0.12s ease, background 0.3s ease, box-shadow 0.3s ease;
+
+  &:hover {
+    transform: scale(1.05);
+  }
+
+  &:active {
+    transform: scale(0.92);
+  }
+
+  &.on {
+    background: radial-gradient(circle at 32% 28%, #86efac, #16a34a 72%);
+    box-shadow:
+      inset 0 6px 10px rgb(255 255 255 / 0.35),
+      inset 0 -8px 14px rgb(0 0 0 / 0.25),
+      0 0 16px rgb(34 197 94 / 0.65),
+      0 0 42px rgb(34 197 94 / 0.35),
+      0 8px 18px rgb(0 0 0 / 0.25);
+  }
 }
 
 .data-type {

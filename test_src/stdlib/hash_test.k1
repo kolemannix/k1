@@ -1,9 +1,10 @@
 ns hash_test;
 
-use std/HashMap
+use std/map
+use std/set
 
 fn testBasic() {
-  let myMap = HashMap/new[string, int]();
+  let myMap = map/new[string, int]();
   assert(myMap.is-empty());
   myMap.insert("a", 10);
   myMap.insert("b", 11);
@@ -28,7 +29,7 @@ fn testBasic() {
 }
 
 fn testIntKeys() {
-  let m = HashMap/new[int, string]();
+  let m = map/new[int, string]();
   let i = 0;
   while i < 50 {
     m.insert(i, "v{i}");
@@ -43,7 +44,7 @@ fn testIntKeys() {
 }
 
 fn testGetRef() {
-  let m = HashMap/new[string, int]();
+  let m = map/new[string, int]();
   m.insert("a", 1);
   let vref = m.get-ref("a").!;
   vref <- 100;
@@ -52,7 +53,7 @@ fn testGetRef() {
 }
 
 fn testIterate() {
-  let m = HashMap/new[string, int]();
+  let m = map/new[string, int]();
   m.insert("a", 1);
   m.insert("b", 2);
   m.insert("c", 3);
@@ -68,7 +69,7 @@ fn testIterate() {
 }
 
 fn testEmpty() {
-  let e = HashMap/new[string, int]();
+  let e = map/new[string, int]();
   assert(e.get("x") is :none);
   assert(not e.contains("x"));
   assert(e.remove("x") is :none);
@@ -83,7 +84,7 @@ fn testEmpty() {
 }
 
 fn testClear() {
-  let m = HashMap/new[string, int]();
+  let m = map/new[string, int]();
   m.insert("a", 1);
   m.insert("b", 2);
   m.clear();
@@ -95,7 +96,7 @@ fn testClear() {
 }
 
 fn testWithCapacity() {
-  let m = HashMap/with-capacity[string, int](100);
+  let m = map/with-capacity[string, int](100);
   let capacityBefore = m.capacity();
   let i = 0;
   while i < 100 {
@@ -107,7 +108,7 @@ fn testWithCapacity() {
 }
 
 fn testGetOrInsert() {
-  let m = HashMap/new[string, int]();
+  let m = map/new[string, int]();
   let a = m.get-or-insert("a", fn. 10);
   assert-equals(a.*, 10);
   a <- 11;
@@ -117,7 +118,7 @@ fn testGetOrInsert() {
   assert-equals(m.get("a"), :some(11));
 
   let words: list[string] = ["x", "y", "x", "x"];
-  let counts = HashMap/new[string, int]();
+  let counts = map/new[string, int]();
   for w in words {
     let c = counts.get-or-insert(w, fn. 0);
     c <- c.* + 1;
@@ -128,14 +129,42 @@ fn testGetOrInsert() {
 }
 
 fn testPrint() {
-  let m = HashMap/new[string, int]();
+  let m = map/new[string, int]();
   m.insert("a", 1);
   assert-equals("{m}", "{{a: 1}");
   if false { m.dump() };
 }
 
+fn testSet() {
+  let s = set/new[string]();
+  assert(s.is-empty());
+  assert(s.add("a"));
+  assert(s.add("b"));
+  assert(not s.add("a"));
+  assert-equals(s.len(), 2);
+  assert(s.contains("a"));
+  assert(not s.contains("c"));
+  assert(s.remove("a"));
+  assert(not s.remove("a"));
+  assert(not s.contains("a"));
+  assert-equals(s.len(), 1);
+  assert-equals("{s}", "{{b}");
+  s.clear();
+  assert(s.is-empty());
+
+  let vals: list[int] = [1, 2, 3, 2, 1];
+  let nums = set/from-span(vals.as-span());
+  assert-equals(nums.len(), 3);
+  assert(nums.non-empty());
+  let total = 0;
+  for n in nums {
+    total := total + n
+  };
+  assert-equals(total, 6);
+}
+
 fn testResize(size: int) {
-  let myMap = HashMap/new[string, int]();
+  let myMap = map/new[string, int]();
   let i = 0;
   while i < size {
     myMap.insert(i.show(), i);
@@ -159,7 +188,7 @@ fn testResize(size: int) {
 // removing and re-inserting in place must reuse tombstones
 // rather than accumulate load
 fn testChurn() {
-  let m = HashMap/new[int, int]();
+  let m = map/new[int, int]();
   let round = 0;
   while round < 1000 {
     m.insert(round % 4, round);
@@ -180,6 +209,7 @@ fn test() {
   testWithCapacity();
   testGetOrInsert();
   testPrint();
+  testSet();
   testResize(100);
   testChurn();
 }

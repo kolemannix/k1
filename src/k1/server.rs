@@ -9,7 +9,7 @@ use maud::html;
 
 use crate::typer::TypedProgram;
 use crate::typer::megarepl::{
-    CellId, CellResult, MegareplCell, MegareplGlobal, MegareplWidget, WidgetDataSource, WidgetKind,
+    CellId, CellResult, MegareplCell, MegareplGlobal, MegareplWidget, WidgetDataSource,
 };
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -36,6 +36,10 @@ fn cell_signal(cell_id: CellId, field: &'static str) -> impl fmt::Display {
     DisplayFn(move |f| write!(f, "cells_{cell_id}_{field}"))
 }
 
+fn widget_signal(widget_id: u32, field: &'static str) -> impl fmt::Display {
+    DisplayFn(move |f| write!(f, "widgets_{widget_id}_{field}"))
+}
+
 /// Client-only UI state for a cell (collapse/disclosure toggles); the leading
 /// underscore keeps these signals out of request payloads
 fn cell_ui_signal(cell_id: CellId, field: &'static str) -> impl fmt::Display {
@@ -57,7 +61,7 @@ fn cell_post_action(cell_id: CellId) -> impl fmt::Display {
     DisplayFn(move |f| {
         write!(
             f,
-            "@post('/cell/{cell_id}', {})",
+            "@post('/cell-submit/{cell_id}', {})",
             SignalFilter(format_args!("^cells_{cell_id}_code$"))
         )
     })
@@ -103,13 +107,6 @@ fn exec_time_display(exec_time: std::time::Duration) -> impl fmt::Display {
 //              x Render UI for exploring your program: namespaces, types, abilities (their impls), functions
 //nocommit TODO stop going through static value and instead work with the raw memory layout more and
 //              more (StaticValue::Raw(...)) is an option
-//
-fn megarepl_cells(k1: &TypedProgram) -> &[MegareplCell] {
-    &k1.megarepl.as_ref().unwrap().cells
-}
-fn megarepl_globals(k1: &TypedProgram) -> &[MegareplGlobal] {
-    &k1.megarepl.as_ref().unwrap().globals
-}
 
 fn render_output_panes(k1: &TypedProgram, cell: &MegareplCell) -> maud::Markup {
     let (values, is_error, stdout, stderr) = match &cell.last_result {
@@ -163,6 +160,7 @@ fn render_widget(k1: &TypedProgram, widget: &MegareplWidget) -> maud::Markup {
         Value(String),
         Error,
         Unbound,
+        Checkbox(bool),
     }
     let (label, body) = match widget.data {
         WidgetDataSource::Binding(name) => {
@@ -182,22 +180,52 @@ fn render_widget(k1: &TypedProgram, widget: &MegareplWidget) -> maud::Markup {
             };
             (format!("⟳ {}", cell_id + 1), body)
         }
+        WidgetDataSource::Checkbox { name, current_value, .. } => {
+            (k1.ident_str(name).to_string(), Body::Checkbox(current_value))
+        }
     };
-    let delete = format!("@post('/widget/delete/{}', {})", widget.id, SignalFilter("^$"));
+    let delete_action = format!("@post('/widget-delete/{}', {})", widget.id, SignalFilter("^$"));
     html! {
         article #(widget_dom_id(widget.id)) .card .widget {
             div .card-label .error[matches!(body, Body::Error)] {
                 span { (label) }
-                button .widget-close title="Remove" data-on:click=(delete) { "×" }
+                button .widget-close title="Remove" data-on:click=(delete_action) { "×" }
             }
             @match &body {
-                // WidgetKind::Plain is the only kind so far
                 Body::Value(text) => { pre .result-output { (text) } }
+                Body::Checkbox(checked) => {
+                    // The click bakes in the target value; the morphed
+                    // re-render flips it for the next click
+                    @let toggle = format!(
+                        "${} = {}; @post('/widget-set/{}', {})",
+                        widget_signal(widget.id, "value"),
+                        !*checked,
+                        widget.id,
+                        SignalFilter(format_args!("^widgets_{}_value$", widget.id))
+                    );
+                    button .power-orb .on[*checked]
+                        title={ "click to turn " (if *checked { "off" } else { "on" }) }
+                        data-on:click=(toggle)
+                        { "⏻" }
+                }
                 Body::Error => { p .widget-hint .error { "error" } }
                 Body::Unbound => { p .widget-hint { "unbound" } }
             }
         }
     }
+}
+
+/// An invisible element whose datastar interval re-runs the watcher; the
+/// duration lives in the attribute name, which maud can't build dynamically
+fn render_cell_ticker(cell: &MegareplCell) -> maud::Markup {
+    let Some(ms) = cell.watch_interval_ms.filter(|_| cell.is_watcher) else {
+        return html! {};
+    };
+    maud::PreEscaped(format!(
+        "<div class=\"cell-ticker\" data-on-interval__duration.{ms}ms=\"@post('/cell-run/{}', {})\"></div>",
+        cell.id,
+        SignalFilter("^$")
+    ))
 }
 
 fn render_cell(k1: &TypedProgram, cell: &MegareplCell) -> maud::Markup {
@@ -209,8 +237,9 @@ fn render_cell(k1: &TypedProgram, cell: &MegareplCell) -> maud::Markup {
     let summary = source.content.lines().next().unwrap_or("");
     html! {
         div #(cell_dom_id(cell.id)) .cell data-class:closed={ "$" (closed) } {
+        (render_cell_ticker(cell))
         header .cell-header {
-            button .run-button title="Run" data-on:click=(post) { "▶" }
+            button .run-button title="Run (cmd+enter)" data-on:click=(post) { "▶" }
             span .cell-label { (cell.id + 1) }
             span .cell-summary .error[cell.is_error()] { (summary) }
             @if let Some(exec_time) = cell.last_exec_time {
@@ -222,6 +251,18 @@ fn render_cell(k1: &TypedProgram, cell: &MegareplCell) -> maud::Markup {
                     data-on:change=(watch_toggle_action(cell.id));
                 "watch"
             }
+            @if cell.is_watcher {
+                input .interval-input type="number" min="0" step="250"
+                    placeholder="ms"
+                    title="Also re-run every N milliseconds"
+                    value=[cell.watch_interval_ms]
+                    data-bind=(cell_signal(cell.id, "interval"))
+                    data-on:change=(format_args!(
+                        "@post('/cell-interval/{}', {})",
+                        cell.id,
+                        SignalFilter(format_args!("^cells_{}_interval$", cell.id))
+                    ));
+            }
             button .cell-toggle
                 title="Collapse or expand"
                 data-on:click={ "$" (closed) " = !$" (closed) }
@@ -232,9 +273,12 @@ fn render_cell(k1: &TypedProgram, cell: &MegareplCell) -> maud::Markup {
             textarea
                 .code-input type="text"
                 autofocus
+                spellcheck="false"
                 placeholder="k1 code, then we go"
                 data-bind=(cell_signal(cell.id, "code"))
-                data-on:change=(post)
+                data-on:keydown={
+                    "evt.key === 'Enter' && (evt.metaKey || evt.ctrlKey) && " (post)
+                }
                 { (source.content) }
             div .cell-disclosures {
                 button .disclosure data-class:on={ "$" (show_out) }
@@ -259,10 +303,10 @@ fn render_cell(k1: &TypedProgram, cell: &MegareplCell) -> maud::Markup {
 }
 
 /// Places a Plain widget for the Data row on the canvas
-fn widget_plus_button(data_path: fmt::Arguments) -> maud::Markup {
+fn widget_plus_button(new_path: fmt::Arguments) -> maud::Markup {
     html! {
         button .data-plus title="Show on the canvas"
-            data-on:click=(format_args!("@post('/widget/new/{data_path}', {})", SignalFilter("^$")))
+            data-on:click=(format_args!("@post('/{new_path}', {})", SignalFilter("^$")))
             { "+" }
     }
 }
@@ -272,8 +316,9 @@ fn widget_plus_button(data_path: fmt::Arguments) -> maud::Markup {
 /// a value that re-computes on every run is data too
 fn render_data_section(k1: &TypedProgram) -> maud::Markup {
     let live: Vec<&MegareplGlobal> =
-        megarepl_globals(k1).iter().filter(|g| k1.megarepl_global_is_live(g)).collect();
-    let watchers: Vec<&MegareplCell> = megarepl_cells(k1).iter().filter(|c| c.is_watcher).collect();
+        k1.megarepl().globals.iter().filter(|g| k1.megarepl_global_is_live(g)).collect();
+    let watchers: Vec<&MegareplCell> =
+        k1.megarepl().cells.iter().filter(|c| c.is_watcher).collect();
     html! {
         section #data .card .data-section {
             div .card-label { span { "Data" } }
@@ -298,7 +343,7 @@ fn render_data_section(k1: &TypedProgram) -> maud::Markup {
                                     None => { "—" }
                                 }
                             }
-                            td { (widget_plus_button(format_args!("let/{name}"))) }
+                            td { (widget_plus_button(format_args!("widget-new-let/{name}"))) }
                         }
                     }
                     @for cell in &watchers {
@@ -323,7 +368,7 @@ fn render_data_section(k1: &TypedProgram) -> maud::Markup {
                                     td .data-value .error { "error" }
                                 }
                             }
-                            td { (widget_plus_button(format_args!("watcher/{}", cell.id))) }
+                            td { (widget_plus_button(format_args!("widget-new-watcher/{}", cell.id))) }
                         }
                     }
                 }
@@ -339,15 +384,15 @@ fn render_rail(k1: &TypedProgram) -> maud::Markup {
                 // Data leads and stays visible; cells scroll beneath it
                 (render_data_section(k1))
                 div .cell-list {
-                    @for cell in megarepl_cells(k1) {
+                    @for cell in &k1.megarepl().cells {
                         (render_cell(k1, cell))
                     }
-                    button .rail-new data-on:click=(format!("@post('/new-cell', {})", SignalFilter("^$")))
+                    button .rail-new data-on:click=(format!("@post('/cell-new', {})", SignalFilter("^$")))
                         { "+ new code" }
                 }
             }
             div .rail-chips {
-                @for cell in megarepl_cells(k1) {
+                @for cell in &k1.megarepl().cells {
                     (render_chip(cell))
                 }
             }
@@ -471,9 +516,28 @@ fn render_full_page(k1: &TypedProgram) -> maud::Markup {
 
 /// The submitted code for the cell, from the request's signals payload
 fn submitted_code(body: &[u8], cell_id: CellId) -> Option<String> {
-    let signals: serde_json::Value = serde_json::from_slice(body).ok()?;
-    let code = signals.get(cell_signal(cell_id, "code").to_string())?.as_str()?;
+    let mut signals: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let code = signals.get_mut(cell_signal(cell_id, "code").to_string())?.as_str()?;
     Some(code.to_string())
+}
+
+/// The submitted code for the cell, from the request's signals payload
+/// The submitted watch interval: positive ms, where 0/empty/malformed all
+/// mean "stop ticking"
+fn submitted_interval(body: &[u8], cell_id: CellId) -> Option<u32> {
+    let signals: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let ms = match signals.get(cell_signal(cell_id, "interval").to_string())? {
+        serde_json::Value::Number(n) => n.as_u64()? as u32,
+        serde_json::Value::String(s) => s.parse().ok()?,
+        _ => return None,
+    };
+    if ms == 0 { None } else { Some(ms) }
+}
+
+fn submitted_widget_control(body: &[u8], widget_id: u32) -> Option<serde_json::Value> {
+    let mut signals: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let value = signals.get_mut(widget_signal(widget_id, "value").to_string())?;
+    Some(value.take())
 }
 
 /// Commands respond with no content; their effects go out on the event bus
@@ -502,9 +566,23 @@ fn handle_request(
     let segments: Vec<&str> = path[1..].split('/').collect();
     eprintln!("handling {} {:?}", method, segments);
     let route = *segments.first().unwrap();
-    if matches!(route, "cell" | "cell-watch" | "new-cell" | "widget") && method != "POST" {
+    // Commands are one flat path segment plus at most one argument segment
+    let is_command = matches!(
+        route,
+        "cell-submit"
+            | "cell-new"
+            | "cell-watch"
+            | "cell-interval"
+            | "cell-run"
+            | "widget-new-let"
+            | "widget-new-watcher"
+            | "widget-set"
+            | "widget-delete"
+    );
+    if is_command && method != "POST" {
         return Response::BadRequest;
     }
+    let arg = segments.get(1).copied();
     match route {
         "" => {
             if k1.megarepl.is_none() {
@@ -512,13 +590,12 @@ fn handle_request(
             }
             Response::Html(render_full_page(k1).0)
         }
-        "new-cell" => {
+        "cell-new" => {
             k1.megarepl_submit(None, String::new());
             publish_elements(bus, render_workspace(k1).0)
         }
-        "cell" => {
-            // /cell/{cell_id}
-            let Some(cell_id) = parse_cell_id(k1, segments.get(1).copied()) else {
+        "cell-submit" => {
+            let Some(cell_id) = parse_cell_id(k1, arg) else {
                 return Response::BadRequest;
             };
             let Some(code) = submitted_code(body, cell_id) else {
@@ -528,40 +605,69 @@ fn handle_request(
             publish_elements(bus, render_workspace(k1).0)
         }
         "cell-watch" => {
-            // /cell-watch/{cell_id}
-            let Some(cell_id) = parse_cell_id(k1, segments.get(1).copied()) else {
+            let Some(cell_id) = parse_cell_id(k1, arg) else {
                 return Response::BadRequest;
             };
             k1.megarepl_toggle_watcher(cell_id);
             publish_elements(bus, render_workspace(k1).0)
         }
-        "widget" => match segments.get(1).copied() {
-            // /widget/new/let/{name} | /widget/new/watcher/{cell_id}
-            Some("new") => {
-                let data = match (segments.get(2).copied(), segments.get(3).copied()) {
-                    (Some("let"), Some(name)) => match k1.ast.idents.lookup(name) {
-                        Some(name_id) => WidgetDataSource::Binding(name_id),
-                        None => return Response::BadRequest,
-                    },
-                    (Some("watcher"), Some(id)) => match parse_cell_id(k1, Some(id)) {
-                        Some(cell_id) => WidgetDataSource::Watcher(cell_id),
-                        None => return Response::BadRequest,
-                    },
-                    _ => return Response::BadRequest,
-                };
-                k1.megarepl_add_widget(data, WidgetKind::Plain);
-                publish_elements(bus, render_workspace(k1).0)
+        "cell-interval" => {
+            let Some(cell_id) = parse_cell_id(k1, arg) else {
+                return Response::BadRequest;
+            };
+            k1.megarepl_set_watch_interval(cell_id, submitted_interval(body, cell_id));
+            publish_elements(bus, render_workspace(k1).0)
+        }
+        "cell-run" => {
+            let Some(cell_id) = parse_cell_id(k1, arg) else {
+                return Response::BadRequest;
+            };
+            k1.megarepl_run(cell_id);
+            publish_elements(bus, render_workspace(k1).0)
+        }
+        "widget-new-let" => {
+            let Some(name_id) = arg.and_then(|name| k1.ast.idents.lookup(name)) else {
+                return Response::BadRequest;
+            };
+            k1.megarepl_add_widget(WidgetDataSource::Binding(name_id));
+            publish_elements(bus, render_workspace(k1).0)
+        }
+        "widget-new-watcher" => {
+            let Some(cell_id) = parse_cell_id(k1, arg) else {
+                return Response::BadRequest;
+            };
+            k1.megarepl_add_widget(WidgetDataSource::Watcher(cell_id));
+            publish_elements(bus, render_workspace(k1).0)
+        }
+        "widget-set" => {
+            let Some(widget_id) = arg.and_then(|s| s.parse().ok()) else {
+                return Response::BadRequest;
+            };
+            let Some(widget) = k1.megarepl_widget_opt(widget_id) else {
+                return Response::BadRequest;
+            };
+            match widget.data {
+                WidgetDataSource::Binding(_) | WidgetDataSource::Watcher(_) => {
+                    Response::BadRequest
+                }
+                WidgetDataSource::Checkbox { .. } => {
+                    let submitted = submitted_widget_control(body, widget_id);
+                    if let Some(serde_json::Value::Bool(value)) = submitted {
+                        k1.megarepl_send_control(widget_id, value);
+                        publish_elements(bus, render_workspace(k1).0)
+                    } else {
+                        Response::BadRequest
+                    }
+                }
             }
-            // /widget/delete/{widget_id}
-            Some("delete") => {
-                let Some(widget_id) = segments.get(2).and_then(|s| s.parse().ok()) else {
-                    return Response::BadRequest;
-                };
-                k1.megarepl_remove_widget(widget_id);
-                publish_elements(bus, render_workspace(k1).0)
-            }
-            _ => Response::BadRequest,
-        },
+        }
+        "widget-delete" => {
+            let Some(widget_id) = arg.and_then(|s| s.parse().ok()) else {
+                return Response::BadRequest;
+            };
+            k1.megarepl_remove_widget(widget_id);
+            publish_elements(bus, render_workspace(k1).0)
+        }
         "ns" => {
             let ns_path: Vec<&str> =
                 segments[1..].iter().copied().filter(|s| !s.is_empty()).collect();

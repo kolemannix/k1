@@ -105,7 +105,7 @@ Before nontrivial work, read:
 - `k1lib/core/ffc.h.k1` and `k1lib/core/libs/`: C runtime support, fast-float
   bridge, `k1rt.c`, and static/shared runtime libraries.
 - `k1lib/std/bitfield.k1`: metaprogrammed bitfield generation.
-- `k1lib/std/hash.k1`: `HashMap`.
+- `k1lib/std/hash.k1`: the `hash` ability, `map`, and `set`.
 - `k1lib/std/json.k1`: JSON parser/model.
 - `k1lib/std/thread.k1`: pthread-backed threading helpers.
 - `k1lib/std/time.k1`: time helpers.

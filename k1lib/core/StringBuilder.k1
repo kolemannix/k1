@@ -23,9 +23,9 @@ ns for StringBuilder {
   }
 }
 
-impl writer for *mut StringBuilder {
+impl writer for *StringBuilder {
   fn write-byte(self, b: u8): empty {
-    self.list.push-in(context :tmp)(b)
+    self.list.push(b)
   }
   fn write-bytes(self, b: span[u8]): empty {
     self.list.append-span(b)
