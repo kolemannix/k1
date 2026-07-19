@@ -41,16 +41,16 @@ fn list-fill(): int {
 fn list-slice() {
   let a =  [1,2,3];
   let slice = a.slice(0,2);
-  assert(slice.len == 2);
+  assert(slice.len() == 2);
   assert(slice.get(0) == 1);
   assert(slice.get(1) == 2);
 
   let empty-list = []: list[int];
   let empty-slice = empty-list.slice(0,0);
-  assert(empty-slice.len == 0);
+  assert(empty-slice.len() == 0);
 
   let full-slice = a.slice(0,3);
-  assert(full-slice.len == 3);
+  assert(full-slice.len() == 3);
   assert(full-slice.get(0) == 1);
   assert(full-slice.get(1) == 2);
   assert(full-slice.get(2) == 3);

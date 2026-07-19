@@ -120,7 +120,7 @@ ns for arena {
     let size = ts.buffer.size-bytes();
     let align = types/align[t];
     let base = self.alloc-layout(size, align);
-    let buffer: buffer[t] = buffer/from-ptr-and-count[t](base, ts.len());
+    let buffer: buffer[t] = buffer/wrap-raw[t](base, ts.len());
     buffer/copy(src = ts.buffer, dst = buffer);
     buffer
   }

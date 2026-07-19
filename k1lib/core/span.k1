@@ -21,8 +21,8 @@ ns for span {
     { buffer }
   }
 
-  fn from-raw[t](ptr: ptr, len: size): span[t] {
-    { buffer: buffer/from-ptr-and-count(ptr, len) }
+  fn wrap-raw[t](ptr: ptr, len: size): span[t] {
+    { buffer: buffer/wrap-raw(ptr, len) }
   }
 
   fn inner-buffer[t](self: span[t]): buffer[t] {
@@ -37,8 +37,8 @@ ns for span {
     { buffer: buffer/empty[t]() }
   }
 
-  fn copy-from-array[t, n: static size](array: *array[t, n]): span[t] {
-    let buffer = buffer/copy-from-array[t, n](array);
+  fn from-array[t, n: static size](array: *array[t, n]): span[t] {
+    let buffer = buffer/from-array[t, n](array);
     { buffer }
   }
 
@@ -53,7 +53,7 @@ ns for span {
   fn len[t](self: span[t]): size { self.buffer.len }
 
   fn get-ref[t](self: span[t], index: size): *t {
-    self.buffer.get-ref-read[t](index)
+    self.buffer.get-ref[t](index)
   }
 
   fn get[t](self: span[t], index: size): t {

@@ -8,7 +8,7 @@ fn basic() {
   assert(s.len() == 1);
   assert(s.get(0) == '!');
 
-  assert(s.append-char('!') == "!!");
+  assert(s.concat-char('!') == "!!");
 }
 
 fn escape() {

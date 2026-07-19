@@ -23,7 +23,7 @@ fn test() {
   assert("abc" != "abcc");
   assert("abc" == "abc");
 
-  assert("abc".append-char('x') == "abcx");
+  assert("abc".concat-char('x') == "abcx");
 
   assert("".split-by-char('.') == []);
 

@@ -6977,11 +6977,20 @@ impl TypedProgram {
                 parameter_constraints,
                 scope_id,
             )? {
-                // self.report_hint(
-                //     span,
-                //     format!("I used ref self with {}", self.type_id_to_string(ref_self)),
-                // );
                 return Ok((impl_handle, true));
+            }
+            if let Some(blanket_impls_for_base) = self.blanket_impls.get(&target_base_ability_id) {
+                for blanket_impl_id in blanket_impls_for_base.clone() {
+                    if let Some(impl_handle) = self.try_apply_blanket_implementation(
+                        blanket_impl_id,
+                        ref_self,
+                        target_base_ability_id,
+                        parameter_constraints,
+                        span,
+                    ) {
+                        return Ok((impl_handle, true));
+                    }
+                }
             }
         }
 

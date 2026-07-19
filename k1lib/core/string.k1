@@ -21,22 +21,22 @@ ns for string {
   }
 
   fn cloned(self: string): string {
-    from-span(self.span.cloned())
+    wrap-span(self.span.cloned())
   }
 
   fn cloned-in(context alloc-mode: mem/alloc-mode)(self: string): string {
-    from-span(self.span.cloned-in())
+    wrap-span(self.span.cloned-in())
   }
 
-  fn from-span(span: span[char]): string {
+  fn wrap-span(span: span[char]): string {
     { span }
   }
 
-  fn from-raw(ptr: ptr, len: size): string {
-    from-span(span/from-raw(ptr, len))
+  fn wrap-raw(ptr: ptr, len: size): string {
+    wrap-span(span/wrap-raw(ptr, len))
   }
 
-  fn from-bytes(span: span[byte]): string {
+  fn wrap-bytes(span: span[byte]): string {
     { span: span.as-char-span() }
   }
 
@@ -52,12 +52,12 @@ ns for string {
     { span: span/wrap-buffer(buffer.as-char-buffer()) }
   }
 
-  fn copy-from-bytes(buffer: buffer[byte]): string {
+  fn from-bytes(buffer: buffer[byte]): string {
     let copied: buffer[byte] = buffer.cloned();
     wrap-byte-buffer(copied)
   }
 
-  fn copy-from-buffer(buffer: buffer[char]): string {
+  fn from-buffer(buffer: buffer[char]): string {
     let copied = buffer.cloned();
     wrap-buffer(copied)
   }
@@ -83,18 +83,18 @@ ns for string {
   }
 
   fn concat(self: string, other: string): string {
-    from-span(self.span.concat(other.span))
+    wrap-span(self.span.concat(other.span))
   }
 
-  fn append-char-in(context alloc: mem/alloc-mode)(self: string, c: char): string {
+  fn concat-char-in(context alloc: mem/alloc-mode)(self: string, c: char): string {
     let new-length = self.len() + 1;
     let new-buffer = self.span.inner-buffer()._enlarged-clone-in(new-length);
     new-buffer.set(self.len(), c);
     wrap-buffer(new-buffer)
   }
 
-  fn append-char(self: string, c: char): string {
-    append-char-in(context :current)(self, c)
+  fn concat-char(self: string, c: char): string {
+    concat-char-in(context :current)(self, c)
   }
 
   fn split-by-char(self: string, delim: char): list[string] {
@@ -116,7 +116,7 @@ ns for string {
 
     ranges.map(fn range. {
       let end = range.start + range.len;
-      self.substring(range.start, end)
+      self.slice(range.start, end)
     })
   }
 
@@ -126,7 +126,7 @@ ns for string {
       if i + target.len() > self.len() {
         return(:none)
       };
-      let sub = self.substring(i, i + target.len());
+      let sub = self.slice(i, i + target.len());
       if sub == target { return(:some(i)) };
     };
     :none
@@ -134,9 +134,6 @@ ns for string {
 
   fn contains-string(self: string, target: string): bool { self.index-of-string(target) is :some(_) }
 
-  fn substring(self: string, start: size, end: size): string {
-    self.slice(start, end)
-  }
   fn slice(self: string, start: size, end: size): string {
     { span: self.span.slice(start, end) }
   }
@@ -165,7 +162,7 @@ ns for string {
   fn to-c(context alloc: mem/alloc-mode)(self: string): { ptr: ptr, len: size } {
     if self.is-empty()                  { ptr: "\0".data-ptr(), len: 0 }
     else if self.last() is :some('\0') { ptr: self.data-ptr(), len: self.len() - 1 }
-    else                               { ptr: self.append-char-in('\0').data-ptr(), len: self.len() }
+    else                               { ptr: self.concat-char-in('\0').data-ptr(), len: self.len() }
   }
 
   fn to-c-tmp(self: string): { ptr: ptr, len: size } {
@@ -174,7 +171,7 @@ ns for string {
 
   fn wrap-c(c-string: ptr): string {
     let len = libc/strlen(c-string);
-    from-raw(ptr = c-string, len = len)
+    wrap-raw(ptr = c-string, len = len)
   }
 
   fn from-c(c-string: ptr): string {

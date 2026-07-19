@@ -542,6 +542,17 @@ used heavily in the core library and dogfood programs.
 Common helpers include `.len()`, `.get(index)`, `.set(index, value)`,
 `.as-span()`, `buffer/wrap-array(...)`, and `list/filled-in(...)`.
 
+Collection API naming follows a doctrine:
+
+- `wrap-*` constructors are zero-copy views over existing memory (the dangerous
+  ones, so they are explicitly named). `from-*` constructors make an owned copy.
+- `as-*` accessors return views; `to-*` methods return owned copies.
+- A bare operation allocates in the ambient `:current` alloc-mode; the `-in`
+  variant takes an explicit `context alloc-mode` (e.g. `cloned`/`cloned-in`,
+  `push`/`push-in`, `reserve`/`reserve-in`).
+- Mutators take `*mut self` and reuse the verb (`sort`, `reverse`); functional
+  variants get `-ed` (`sorted`, `reversed`).
+
 See `test_src/suite1/array_test.k1`, `test_src/suite1/list_test.k1`,
 `test_src/suite1/range_test.k1`, and `test_src/suite1/buffer_test.k1`.
 

@@ -44,9 +44,13 @@ ns for list {
     { len: 0, buffer: buffer }
   }
 
-  fn reserve[t](self: *mut list[t], alloc: alloc-mode, count: size) {
+  fn reserve-in[t](context alloc: alloc-mode)(self: *mut list[t], count: size) {
     if self.cap() >= count { return() };
-    self.buffer._grow-to[t](context alloc)(count);
+    self.buffer._grow-to[t](count);
+  }
+
+  fn reserve[t](self: *mut list[t], count: size) {
+    self.reserve-in[t](context :current)(count)
   }
 
   fn single[t](value: t): list[t] {
@@ -64,18 +68,14 @@ ns for list {
   }
 
   fn as-span[t](self: list[t]): span[t] {
-    list/span[t](self)
-  }
-
-  fn span[t](self: list[t]): span[t] {
     span/wrap-buffer(self.as-buffer[t]())
   }
 
-  fn copy-to-buffer[t](self: list[t]): buffer[t] {
+  fn to-buffer[t](self: list[t]): buffer[t] {
     self.as-buffer().cloned()
   }
 
-  fn copy-to-array[t, n: static size](self: list[t], count: n): *mut array[t, n] {
+  fn to-array[t, n: static size](self: list[t], count: n): *mut array[t, n] {
     let count-val = count.from-static();
     assert-equals(self.len, count-val);
     let base: ptr = self.as-buffer().cloned().data-ptr();
@@ -120,12 +120,15 @@ ns for list {
     } else {
       self.cap() * 2
     };
-    self.reserve(mode, new-cap);
+    self.reserve-in(new-cap);
+  }
+
+  fn cloned-in[t](context mode: alloc-mode)(self: list[t]): list[t] {
+    { len: self.len, buffer: self.buffer.cloned-in() }
   }
 
   fn cloned[t](self: list[t]): list[t] {
-    let new-buffer = self.buffer.cloned();
-    { len: self.len, buffer: new-buffer }
+    self.cloned-in[t](context :current)()
   }
 
   fn push-in[t](context mode: alloc-mode)(self: *mut list[t], elem: t) {
@@ -141,10 +144,10 @@ ns for list {
     self.push-in[t](context :current)(elem)
   }
 
-  fn slice[t](self: list[t], start: size, end: size): buffer[t] {
-    if self.len == 0 return(buffer/empty[t]());
+  fn slice[t](self: list[t], start: size, end: size): span[t] {
+    if self.len == 0 return(span/empty[t]());
     if end > self.len { crash("list slice end out of bounds: {end}") };
-    self.buffer.slice(start, end)
+    span/wrap-buffer(self.buffer.slice(start, end))
   }
 
   fn is-empty[t](self: list[t]): bool {
@@ -216,7 +219,7 @@ ns for list {
     self.append-buffer-in[t](context :current)(other)
   }
   fn append-buffer-in[t](context alloc-mode)(self: *mut list[t], other: buffer[t]) {
-    self.reserve(alloc-mode, self.len + other.len);
+    self.reserve-in(self.len + other.len);
     let dst = self.inner-buffer().slice(start = self.len, end = self.len + other.len);
     buffer/copy(src = other, dst = dst);
     self.len <- self.len + other.len;
