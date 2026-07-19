@@ -30,11 +30,10 @@ ns for task-state {
   fn release[t](self: *mut task-state[t]) {
     uv/cond_destroy(self.cond);
     uv/mutex_destroy(self.mutex);
-    let heap = mem/alloc-mode:system-heap;
-    heap.freeT(self.req);
-    heap.freeT(self.mutex);
-    heap.freeT(self.cond);
-    heap.freeT(self);
+    system-heap.freeT(self.req);
+    system-heap.freeT(self.mutex);
+    system-heap.freeT(self.cond);
+    system-heap.freeT(self);
   }
 }
 
@@ -50,16 +49,15 @@ ns for task {
     handler: *fn(params) -> t,
     params: params,
   ): task[t] {
-    let heap = mem/alloc-mode:system-heap;
-    let state: *mut task-state[t] = heap.new({
-      req     : heap.allocT[uv/work],
-      mutex   : heap.allocT[uv/mutex],
-      cond    : heap.allocT[uv/cond],
+    let state: *mut task-state[t] = system-heap.new({
+      req     : system-heap.allocT[uv/work],
+      mutex   : system-heap.allocT[uv/mutex],
+      cond    : system-heap.allocT[uv/cond],
       handler-done: false,
       libuv-done: false,
       output: :none,
     });
-    let work: *mut task-work[t, params] = heap.new({
+    let work: *mut task-work[t, params] = system-heap.new({
       state,
       params,
       handler,
@@ -95,7 +93,7 @@ ns for task {
         task-work.state.libuv-done <- true;
         uv/cond_signal(task-work.state.cond);
         uv/mutex_unlock(task-work.state.mutex);
-        mem/alloc-mode:system-heap.freeT(task-work);
+        system-heap.freeT(task-work);
       }
     );
 

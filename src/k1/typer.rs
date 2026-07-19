@@ -18298,6 +18298,7 @@ impl TypedProgram {
             core!("StringBuilder"),
             QIdent { path: core_mem, name: get_ident!(self, "zeroed"), name_span: span },
             QIdent { path: core_mem, name: get_ident!(self, "alloc-mode"), name_span: span },
+            QIdent { path: core_mem, name: get_ident!(self, "system-heap"), name_span: span },
             QIdent { path: core_types, name: self.ast.idents.b.enum_, name_span: span },
             QIdent { path: core_types, name: get_ident!(self, "sum"), name_span: span },
         ];

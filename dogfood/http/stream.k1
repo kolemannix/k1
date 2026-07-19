@@ -1,0 +1,122 @@
+// Pull-based response streaming.
+//
+// A handler returns :stream({ content-type, stream }) and the harness drains
+// the response-stream on the main thread: next(state) is called after each
+// write completes, until :done. Chunks must stay valid until the following
+// next() call (or connection end).
+
+type stream-pull = either { chunk(span[u8]), done }
+type response-stream = {
+  state: ptr,
+  next: *fn(ptr) -> stream-pull,
+}
+type stream-response = { content-type: string, stream: response-stream }
+
+// A response-stream over an in-memory buffer, yielding fixed-size chunks.
+// Allocates its cursor state in the ambient mode; callers inside a request
+// handler get the request arena, which is exactly the lifetime we need.
+fn stream-of-buffer(bytes: span[u8], chunk-size: size): response-stream {
+  let state: *mut buffer-stream = mem/new({ bytes, cursor: 0, chunk-size });
+  { state: state.as[ptr], next: buffer-stream-next }
+}
+
+type buffer-stream = {
+  bytes: span[u8],
+  cursor: size,
+  chunk-size: size,
+}
+
+fn buffer-stream-next(state: ptr): stream-pull {
+  let bs: *mut buffer-stream = state.rw[buffer-stream]();
+  let remaining = bs.bytes.len() - bs.cursor;
+  if remaining == 0 { return(:done) };
+  let n = if remaining < bs.chunk-size remaining else bs.chunk-size;
+  let chunk = bs.bytes.slice(bs.cursor, bs.cursor + n);
+  bs.cursor <- bs.cursor + n;
+  :chunk(chunk)
+}
+
+// HTTP/1.1 chunked transfer encoding of a response-stream: headers first,
+// then one encoded chunk per stream-pull, driven from each write's
+// completion callback. All allocations come from the request arena, which
+// stays live until finish-request runs after the terminal chunk.
+ns chunked {
+
+  type encoder = {
+    connection: *mut connection,
+    stream: response-stream,
+    finishing: bool,
+  }
+
+  fn begin(connection: *mut connection, streaming: stream-response) {
+    let encoder: *mut encoder = connection.request-arena.push({
+      connection,
+      stream: streaming.stream,
+      finishing: false,
+    });
+    mem/pushMode(:custom-arena(connection.request-arena));
+    let headers = stringf(
+      "HTTP/1.1 200 OK\r\nContent-Type: {streaming.content-type}\r\nTransfer-Encoding: chunked\r\n\r\n");
+    mem/popMode();
+    write-frame(encoder, headers.span-bytes());
+  }
+
+  fn write-frame(encoder: *mut encoder, bytes: span[u8]) {
+    let connection = encoder.connection;
+    let req = connection.request-arena.alloc[uv/write]();
+    req.set-data(encoder);
+    let buf: uv/buf = uv/buf/from-span(bytes);
+    let rc = uv/write(req, connection.client.as-stream(), &buf, 1, on-write-complete);
+    if rc != 0 {
+      tprintln("chunked encoder uv_write failed: {rc}");
+      close-connection(connection);
+    }
+  }
+
+  fn on-write-complete(req: *mut uv/write, status: i32) {
+    let encoder: *mut encoder = req.get-data();
+    let connection = encoder.connection;
+    // Main thread; direct close-state access is fine
+    if connection.close-state.is-closing { return() };
+    if connection.close-state.should-close { close-connection(connection); return() };
+    if status != 0 {
+      let errno = uv/errno/from-i32(status);
+      tprintln("chunked write failed: {errno.enum-name()}");
+      close-connection(connection);
+      return();
+    };
+    if encoder.finishing {
+      connection.finish-request();
+    } else {
+      encode-next-chunk(encoder);
+    }
+  }
+
+  // chunk frame: hex size, CRLF, data, CRLF; terminal frame: "0\r\n\r\n"
+  fn encode-next-chunk(encoder: *mut encoder) {
+    let connection = encoder.connection;
+    switch (encoder.stream.next)(encoder.stream.state) {
+      :chunk(bytes) -> {
+        mem/pushMode(:custom-arena(connection.request-arena));
+        let out = StringBuilder/new();
+        append-hex(&out, bytes.len());
+        out.string("\r\n");
+        out.write-bytes(bytes);
+        out.string("\r\n");
+        let frame = out.build();
+        mem/popMode();
+        write-frame(encoder, frame.span-bytes());
+      },
+      :done -> {
+        encoder.finishing <- true;
+        write-frame(encoder, "0\r\n\r\n".span-bytes());
+      },
+    }
+  }
+
+  let hex-digits: string = "0123456789abcdef"
+  fn append-hex(out: *mut StringBuilder, value: size) {
+    if value >= 16 { append-hex(out, value / 16) };
+    out.string(string/fromRaw(hex-digits.data-ptr().add-bytes(value % 16), 1));
+  }
+}
