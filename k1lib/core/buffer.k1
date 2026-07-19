@@ -30,26 +30,26 @@ ns for buffer {
     { len: 0, data: ptr/null.as[*mut t] }
   }
 
-  fn from-ptr-and-count[t](ptr, count: size): buffer[t] {
+  fn wrap-raw[t](ptr, count: size): buffer[t] {
     { len: count, data: ptr.as[*mut t] }
   }
 
-  fn from-ref-and-count[t](data: *mut t, len: size): buffer[t] {
+  fn wrap-ref[t](data: *mut t, len: size): buffer[t] {
     { len, data }
   }
 
   fn wrap-array[t, n: static size](array: *mut array[t, n]): buffer[t] {
     let l = array.len();
-    let wrapped = from-ref-and-count(array.get-base(), l);
+    let wrapped = wrap-ref(array.get-base(), l);
     wrapped
   }
 
-  fn copy-from-array[t, n: static size](array: *array[t, n]): buffer[t] {
+  fn from-array[t, n: static size](array: *array[t, n]): buffer[t] {
     let wrapped = wrap-array[t, n](array);
     wrapped.cloned();
   }
 
-  fn copy-from-span[t](span: span[t]): buffer[t] {
+  fn from-span[t](span: span[t]): buffer[t] {
     span.inner-buffer().cloned()
   }
 
@@ -160,10 +160,6 @@ ns for buffer {
 
   ///////////////////////////
   // Accessor functions
-
-  fn get-ref-read[t](self: buffer[t], index: size): *t {
-    self.get-ref[t](index)
-  }
 
   fn get-ref-unchecked[t](self: buffer[t], index: size): *mut t {
     self.data-ptr().ref-at-index[t](index)
@@ -325,14 +321,14 @@ ns for buffer {
   }
 
   fn as-char-buffer(self: buffer[byte]): buffer[char] {
-    buffer/from-ptr-and-count[char](
+    buffer/wrap-raw[char](
       count = self.len,
       ptr = self.data-ptr()
     );
   }
 
   fn as-byte-buffer(self: buffer[char]): buffer[byte] {
-    buffer/from-ptr-and-count[byte](
+    buffer/wrap-raw[byte](
       count = self.len,
       ptr = self.data-ptr()
     );

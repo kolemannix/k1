@@ -42,7 +42,7 @@ let mutable buffer: string-builder = string-builder/new();
 fn check-invalid-part1(value: i64): bool {
   buffer.reset();
   value.print-to(buffer);
-  let value-str = string/from-span(buffer.raw-span());
+  let value-str = string/wrap-span(buffer.raw-span());
   if value-str.len() & 1 == 1 {
     //println("skipping odd len {value-str}");
     return(false)
@@ -58,7 +58,7 @@ fn check-invalid-part1(value: i64): bool {
 fn check-invalid-part2(value: i64): bool {
   buffer.reset();
   value.print-to(buffer);
-  let value-str = string/from-span(buffer.raw-span());
+  let value-str = string/wrap-span(buffer.raw-span());
   //println("check-invalid-part2 {value-str}");
   for int-range/make(1, (value-str.len() / 2) + 1) {
     //println("Testing {value} for {it}");

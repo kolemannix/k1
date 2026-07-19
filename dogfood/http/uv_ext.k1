@@ -53,15 +53,15 @@ impl uv-handle for uv/handle {
 
 ns uv {
   ns for buf {
-    fn to-buffer(self: buf): buffer[u8] {
-      buffer/from-ref-and-count(self.base, self.len.as())
+    fn as-buffer(self: buf): buffer[u8] {
+      buffer/wrap-ref(self.base, self.len.as())
     }
 
-    fn from-buffer(buffer: buffer[u8]): buf {
+    fn wrap-buffer(buffer: buffer[u8]): buf {
       uv/buf_init(buffer.data, buffer.len.as[u32])
     }
 
-    fn from-span(span: span[u8]): buf {
+    fn wrap-span(span: span[u8]): buf {
       uv/buf_init(span.buffer.data, span.len().as[u32])
     }
   }

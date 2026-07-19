@@ -7,7 +7,7 @@ let MODULE_INFO: k1/module-manifest = {
     deps: [],
     multithreading: false,
     libs: [{ name: "raylib", link-type: :static }],
-    link-args: link-args.span(),
+    link-args: link-args.as-span(),
   }
 }
 ns raylib {

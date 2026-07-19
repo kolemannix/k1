@@ -55,7 +55,7 @@ fn part2(input: string) {
       range-size := range-size - 1;
     };
 
-    let joltage = string/from-span(sels.as-span()).parse-base10();
+    let joltage = string/wrap-span(sels.as-span()).parse-base10();
     sum := sum + joltage.!;
     println("Result {it-index} for bank `{bank}`: {sels.*} {sum}")
   };

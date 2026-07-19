@@ -154,7 +154,7 @@ fn after-do-work(req: *mut uv/work, status: i32) {
 
       let bufs = connection.request-arena.alloc-list[uv/buf](chunks.len());
       for chunks {
-        bufs.push(uv/buf/from-span(it.span-bytes()));
+        bufs.push(uv/buf/wrap-span(it.span-bytes()));
       };
       let write-rc = uv/write(write-req, connection.client.as-stream(), bufs.as-buffer().data-ptr().as(), bufs.len().as[u32], fn (req, status) {
         let connection: *mut connection = req.get-data();
@@ -235,7 +235,7 @@ fn alloc-read-buffer(handle: *mut uv/handle, suggested-size: usize, buf: *mut uv
   let connection = handle.get-data[connection]();
   tprintln("[c{connection.serial-no}] alloc-read-buffer, size {suggested-size}");
   let byte-buffer = connection.request-arena.alloc-buffer[u8](suggested-size.as[size]);
-  buf <- uv/buf/from-buffer(byte-buffer);
+  buf <- uv/buf/wrap-buffer(byte-buffer);
 }
 
 fn queue-http-handler(connection: *mut connection, request: http/request, handler: route-handler) {
@@ -293,7 +293,7 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
   };
 
   if nread > 0 {
-    let chunk-bytes = span/from-raw[byte](buf.base.as[ptr], nread);
+    let chunk-bytes = span/wrap-raw[byte](buf.base.as[ptr], nread);
     let parse-result = http/tick(connection.request-parser.&, chunk-bytes);
     use llhttp/errno;
     if parse-result is errno:HPE_OK {

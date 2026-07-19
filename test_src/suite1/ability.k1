@@ -24,7 +24,7 @@ impl codec for string {
     self.span().as-byte-span()
   }
   fn read(buffer: span[u8]): string {
-    string/from-bytes(buffer)
+    string/wrap-bytes(buffer)
   }
 }
 

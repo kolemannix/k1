@@ -134,7 +134,9 @@ More later I'm sure... everything evolves...
 ## Case Study: implementing bitfields
 
 Let's add a feature to `k1` using metaprogramming to support bitfields.
-[Video Version](https://youtu.be/bSxzW6lGWlc)
+[Video Version](https://youtu.be/bSxzW6lGWlc) (the video predates some syntax
+changes; the code below is the current implementation, live at
+`k1lib/std/bitfield.k1`)
 
 I'd like to be able to define a bitfield by providing a name, a 'base' integer type
 big enough to house all the fields I provide, and a series of fields as a collection of (name, bit width) pairs.
@@ -142,15 +144,15 @@ big enough to house all the fields I provide, and a series of fields as a collec
 We can encode this in K1 easily enough as a function:
 
 ```rust
-fn bitfield[Base](typeName: string, members: View[{ name: string, bits: size}]): ???
+fn define[base](type-name: string, members: span[{ name: string, bits: size }]): ???
 ```
-We use a type parameter, `Base`, denoted in square brackets, to track our 'base type', which
+We use a type parameter, `base`, denoted in square brackets, to track our 'base type', which
 should be an unsigned integer type, which we can enforce later. `k1` provides the usual friends: u8, u16, u32, and u64.
 
 We also accept a name to attach to whatever constructs we end up generating for our flags.
 Perhaps functions to encode and decode each bit-field, and maybe some constants? Not sure yet.
 
-Most importantly we accept a View of structs, with `name` and `bits`, telling us which 'bit' 'fields' we'd
+Most importantly we accept a span of structs, with `name` and `bits`, telling us which 'bit' 'fields' we'd
 like to encode or pack into the value.
 
 That leaves the return type, which we've left as `???`. Ultimately we'd like to produce
@@ -158,135 +160,133 @@ some code; most text-based programming languages are very well-represented and m
 a particularly powerful format: source code text. So we'll return a `string`,
 (not a `org.sys.meta.macros.whitebox.TTreeSyn.Quoted`) containing the K1 code we'd otherwise have hand-written for our bitfield.
 
+We'll want a few helpers. `int-width-for-bits` just crashes on bad input rather
+than returning a `result[t, e]`, since we intend to run this code at compile-time:
+
 ```rust
-fn intWidthForBits(bits: size): size {
+fn int-width-for-bits(bits: size): size {
   if bits <= 8 8
   else if bits <= 16 16
   else if bits <= 32 32
   else if bits <= 64 64
-  // We'll just exit on an error here rather than returning a `Result[T, E]`, since we intend to run this code at compile-time.
   else crash("Too many bits: {bits}")
 }
 // Some simple constructors to make our metaprogram nice to invoke later
 fn bn(name: string, bits: size): { name: string, bits: size } { { name, bits } }
-fn b1(name: string): { name: string, bits: size } { bn(name, 1) }
-fn b8(name: string): { name: string, bits: size } { bn(name, 8) }
+fn b1(name: string): { name: string, bits: size } { bn(name = name, bits = 1) }
+fn b8(name: string): { name: string, bits: size } { bn(name = name, bits = 8) }
 ```
 
 Here comes a big wall of advanced metaprogramming code; but it may look strikingly like dumb string-building code to you.
 ```rust
-fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): string {
-  use meta/CodeWriter;
+fn define[base](type-name: string, members: span[{ name: string, bits: size }]): string {
+  use meta/code-writer;
 
-  let baseTypeId: u64 = types/typeId[Base]();
-  let baseSchema = types/typeSchema(baseTypeId);
-  let baseName = types/typeName(baseTypeId);
-  require baseSchema is .Int(intKind) else { crash("Base should be an int; got {baseName}") };
-  let totalBits = intKind.bitWidth();
+  let base-type-id: u64 = types/type-id[base]();
+  let base-schema = types/type-id-schema(base-type-id);
+  let base-name = types/type-id-name(base-type-id);
+  require base-schema is :int(int-kind) else { crash("Base should be an int; got {base-name}") };
+  let total-bits = int-kind.bit-width();
 
-  // This is just a regular StringBuilder that gets some extra methods since we've
-  // brought the meta/CodeWriter ability into scope
-  let* code = StringBuilder/new(); // The asterisk means we want a reference (a stack address)
+  // This is just a regular string-builder that gets some extra methods since we've
+  // brought the meta/code-writer ability into scope
+  let code = string-builder/new();
 
   // This defines a named struct type with one field, which is a common newtype pattern
-  code.line("deftype {typeName} = {{ bits: {baseName} }");
+  writelnf(code, "type {type-name} = {{ bits: {base-name} }");
 
   // We crack open a namespace to put some goodies inside
-  code.line("ns {typeName} {{");
+  writelnf(code, "ns for {type-name} {{");
 
   // This actually gets captured by the lambda below
-  let* bitIndex = 0;
+  let bit-index-val = 0;
+  let bit-index: *mut size = &bit-index-val;
 
   // Let's analyze each member we were passed, and perform the actual bitfield layouting work once.
   // We'll make a list of an unnamed (anonymous) little struct type for our info we'll need later
-  let memberInfo: List[{ 
+  let member-info: list[{ 
     // mask: the positioned mask
     mask: usize,
-    // typeWidth: the smallest type that can hold these bits; see `intWidthForBits`
-    typeWidth: size,
-    // invMask: the negation of the mask, but also masked down to typeWidth size (to generate constants that fit)
-    invMask: usize,
-    // rawValue: the mask shifted to the start, the 'magnitude' of the used bits
-    rawValue: usize,
+    // type-width: the smallest type that can hold these bits; see `int-width-for-bits`
+    type-width: size,
+    // inv-mask: the negation of the mask, but also masked down to type-width size (to generate constants that fit)
+    inv-mask: usize,
+    // raw-value: the mask shifted to the start, the 'magnitude' of the used bits
+    raw-value: usize,
     // offset: the bit pos that the mask starts at; where the value lives; how much to shift
-    offset: size,
-    // nameCap: the name of the field, capitalized
-    nameCap: string
-  }] = List/fromMap(members, \member. {
+    offset: size
+  }] = list/from-mapping(members, fn member. {
     let bits = member.bits;
-    if bitIndex.* + bits > totalBits crash("Too big: {bitIndex.* + bits}");
-    let rawValue = u64/bitmaskLow(bits);
-    let typeWidth = intWidthForBits(bits);
-    let nameCap = member.name.capitalizeAscii();
-    let mask = rawValue.shiftLeft(bitIndex.* as u32);
-    let offset = bitIndex.*;
-    let sizeMask = u64/bitmaskLow(typeWidth);
-    let invMask = mask.bitNot().bitAnd(sizeMask);
+    if bit-index.* + bits > total-bits crash("Too big: {bit-index.* + bits}");
+    let raw-value = u64/bitmask-low(bits);
+    let type-width = int-width-for-bits(bits);
+    let mask = raw-value << bit-index.*.as();
+    let offset = bit-index.*;
+    let size-mask = u64/bitmask-low(type-width);
+    let inv-mask = mask.bit-not() & size-mask;
 
-    bitIndex <- bitIndex.* + bits;
+    bit-index <- bit-index.* + bits;
 
-    { mask, typeWidth, invMask, rawValue, offset, nameCap }
+    { mask, type-width, inv-mask, raw-value, offset }
   });
 
-  // The for loop works on any type that implements Iterable or Iterator
+  // The for loop works on any type that implements iterable or iterator
   // The item being iterated over is named `it` if no binding is supplied
-  // `itIndex` is also given to us
+  // `it-index` is also given to us
   for members {
-    let info = memberInfo.get(it-index);
+    let info = member-info.get(it-index);
     // Emit globals, or constants, for each field's mask
-    code.line("  let {it.name}Mask: {baseName} = {info.mask};");
+    writelnf(code, "  let {it.name}-mask: {base-name} = {info.mask}");
   };
 
-  code.line("  let zero: {typeName} = {{ bits: 0 };");
+  writelnf(code, "  let zero: {type-name} = {{ bits: 0 }");
 
   // Now let's do a getter and setter for each bitfield. If the width is 1,
   // we'll use bool since that's what the people likely want. Note that we could configure
   // any of this behavior because this is just a regular function
   for members {
-    let info = memberInfo.get(it-index);
-    let nameCap = info.nameCap;
-    let isBool = it.bits == 1;
-    let fieldType = if isBool "bool" else "u{info.typeWidth}";
+    let info = member-info.get(it-index);
+    let is-bool = it.bits == 1;
+    let field-type = if is-bool "bool" else "u{info.type-width}";
 
     // Getter
-    code.line("  fn get{nameCap}(self: {typeName}): {fieldType} {{");
+    writelnf(code, "  fn get-{it.name}(self: {type-name}): {field-type} {{");
 
-    code.line("    let bits: {baseName} = self.bits;");
-    code.line("    let shifted: {baseName} = bits.shiftRight({info.offset});");
-    code.line("    let cleared: {baseName} = shifted.bitAnd({info.rawValue});");
-    if isBool {
-      code.line("    cleared == 1")
+    writelnf(code, "    let bits: {base-name} = self.bits;");
+    writelnf(code, "    let shifted: {base-name} = bits >> {info.offset};");
+    writelnf(code, "    let cleared: {base-name} = shifted & {info.raw-value};");
+    if is-bool {
+      writelnf(code, "    cleared == 1");
     } else {
-      code.line("    cleared as {fieldType}");
+      writelnf(code, "    cleared.as[{field-type}]");
     };
 
-    code.line("  }"); // End Getter
+    writelnf(code, "  }"); // End Getter
 
     // Setter
-    code.line("  fn set{nameCap}(self: {typeName}, value: {fieldType}): {typeName} {{");
-    if isBool {
-      code.line("    let maskedValue = (value.as_u8());")
+    writelnf(code, "  fn set-{it.name}(self: {type-name}, value: {field-type}): {type-name} {{");
+    if is-bool {
+      writelnf(code, "    let masked-value: {base-name} = value.as-u8();")
     } else {
-      code.line("    let maskedValue: {baseName} = value.bitAnd({info.rawValue});")
+      writelnf(code, "    let masked-value: {base-name} = value & {info.raw-value};")
     };
-    let clearMask = info.invMask;
-    code.line("    let clearedBits: {baseName} = self.bits.bitAnd({clearMask});");
-    code.line("    let insertedBits: {baseName} = clearedBits.bitOr(maskedValue.shiftLeft({info.offset}));");
-    code.line("    {{ bits: insertedBits }");
-    code.line("  }"); // End setter
+    let clear-mask = info.inv-mask;
+    writelnf(code, "    let cleared-bits: {base-name} = self.bits & {clear-mask};");
+    writelnf(code, "    let inserted-bits: {base-name} = cleared-bits | (masked-value << {info.offset});");
+    writelnf(code, "    {{ bits: inserted-bits }");
+    writelnf(code, "  }"); // End setter
   };
 
-  code.line("}"); // End ns
+  writelnf(code, "}"); // End ns
 
-  let* printBody = StringBuilder/new();
+  let print-body = string-builder/new();
   for members {
-    let info = memberInfo.get(it-index);
-    let getName = "get{info.nameCap}";
+    let get-name = "get-{it.name}";
     let last = it-index + 1 == members.len();
     let sep = if last "" else ",";
-    printBody.line(`    w.writeString("{it.name}={{self.{getName}()}{sep}");`);
+    writelnf(print-body, `    w.string("{it.name}={{self.{get-name}()}{sep}");`);
   };
-  code.implPrint(typeName, printBody.build(), indent = 0);
+  (&code).impl-print(type-name, print-body.build(), indent = 0);
 
   code.build()
 }
@@ -299,25 +299,26 @@ For an example input, let's encode some data about a starship into 16 bits.
 - bits 9-16: a byte named `foo` because what example is complete without a `foo`
 
 We could test this function by just running it and inspecting the string, since
-it is a normal function, or we could ask `k1` to run it for us and insert the result into our program:
+it is a normal function, or we could ask `k1` to run it for us and insert the result into our program
+using the `$` metaprogramming operator:
 ```rust
-#meta std/bitfield/define[u16]("StarshipFlags",
-  [b1("shielded"), b1("cloaked"), b1("damaged"), { name: "sectorId", bits: 5 }, bn("foo", 8)]
+$std/bitfield/define[u16]("starship-flags",
+  [b1("shielded"), b1("cloaked"), b1("damaged"), { name: "sector-id", bits: 5 }, bn("foo", 8)]
 )
 ```
 
-And now we can use the type and namespace `StarshipFlags` to pack some bits!
+And now we can use the type and namespace `starship-flags` to pack some bits!
 ```rust
-fn testBitfield(): unit {
-  let y: StarshipFlags = { bits: 0b1111_0000_1000_1101 };
-  //                           foo......|secto||||
-  //                                           |||- shielded
-  //                                           ||- cloaked
-  //                                           |- damaged
-  let x: StarshipFlags = StarshipFlags/zero.setShielded(true).setDamaged(true).setSectorId(17).setFoo(0b1111_0000);
-  assertEquals(y.getShielded(), x.getShielded());
-  assertEquals(y.getCloaked(), x.getCloaked());
-  assertEquals(y.getDamaged(), x.getDamaged());
-  assertEquals(y.getSectorId(), x.getSectorId());
+fn test-bitfield() {
+  let y: starship-flags = { bits: 0b1111_0000_1000_1101 };
+  //                                foo......|secto||||
+  //                                                |||- shielded
+  //                                                ||- cloaked
+  //                                                |- damaged
+  let x: starship-flags = starship-flags/zero.set-shielded(true).set-damaged(true).set-sector-id(17).set-foo(0b1111_0000);
+  assert-equals(y.get-shielded(), x.get-shielded());
+  assert-equals(y.get-cloaked(), x.get-cloaked());
+  assert-equals(y.get-damaged(), x.get-damaged());
+  assert-equals(y.get-sector-id(), x.get-sector-id());
 }
 ```

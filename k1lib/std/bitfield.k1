@@ -115,16 +115,13 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
 
   let print-body = string-builder/new();
   for members {
-    let info = member-info.get(it-index);
     let get-name = "get-{it.name}";
     let last = it-index + 1 == members.len();
     let sep = if last "" else ",";
     writelnf(print-body, `    w.string("{it.name}={{self.{get-name}()}{sep}");`);
   };
 
-  // Have to use address of so the blanket impl applies
-  // FIXME: Use the address of trick on blanket impl search as well
-  (&code).impl-print(type-name, print-body.build(), indent = 0);
+  code.impl-print(type-name, print-body.build(), indent = 0);
 
   code.build()
 }

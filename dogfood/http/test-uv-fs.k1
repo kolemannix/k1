@@ -15,7 +15,7 @@ fn example-fs() {
     crash("");
   };
   let data-buffer = buffer/allocate[u8](1024);
-  let uvbuf = uv/buf/from-buffer(data-buffer);
+  let uvbuf = uv/buf/wrap-buffer(data-buffer);
   let read-req: uv/fs = uninit;
   read-req.set-data(&data-buffer);
 

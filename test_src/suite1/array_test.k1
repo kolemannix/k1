@@ -32,7 +32,7 @@ fn test-array() {
   let context alloc: mem/alloc-mode = :tmp;
   let ls: list[u8] = list/filled-in(size = 10, value = 3);
 
-  let a: *mut array[u8, 10] = list/copy-to-array(ls, 10);
+  let a: *mut array[u8, 10] = list/to-array(ls, 10);
   for core/int-range/up-to(a.len()) {
     if it % 2 == 0 { a.get(it) <- 1 };
   };

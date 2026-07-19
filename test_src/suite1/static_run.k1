@@ -173,7 +173,7 @@ fn test() {
   assert-equals(span, [1,2,3,4,5]);
   #static {
     // uses a global
-    let l = list/wrap-buffer(buffer/copy-from-span(INT_SPAN));
+    let l = list/wrap-buffer(buffer/from-span(INT_SPAN));
     l.push(9);
     assert-equals(l.len, 6);
     assert-equals(l.last(), some(9));

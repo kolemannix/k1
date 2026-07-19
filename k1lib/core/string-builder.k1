@@ -15,11 +15,11 @@ ns for string-builder {
   }
 
   fn build(self: *string-builder): string {
-    string/from-bytes(self.list.as-span()).cloned()
+    string/wrap-bytes(self.list.as-span()).cloned()
   }
 
   fn build-tmp(self: *string-builder): string {
-    string/from-bytes(self.list.as-span()).cloned-in(context :tmp)()
+    string/wrap-bytes(self.list.as-span()).cloned-in(context :tmp)()
   }
 }
 
