@@ -1,0 +1,106 @@
+// Represents an inline, 'pushable' contiguous collection of Ts, with a fixed capacity.
+// Storage is inline!
+//  
+// For example, a fixlist[byte, 10] is 14 bytes long, and looks like:
+// +----+----------+
+// |used|10 items  |
+// +----+----------+
+// 0    4
+type fixlist[t, n: static size] = { data: array[t, n], used: u32 }
+ns for fixlist {
+  fn cap[t, n: static size](self: fixlist[t, n]): size { self.data.len() }
+  fn len[t, n: static size](self: fixlist[t, n]): size { self.used.as[size] }
+
+  fn zeroed[t, n: static size](): fixlist[t, n] { mem/zeroed() }
+
+  fn uninit[t, n: static size](): core/fixlist[t, n] {
+    { used: 0, data: uninit }
+  }
+
+  fn clear[t, n: static size](self: *mut fixlist[t, n]): empty {
+    self.used <- 0
+  }
+
+  fn push[t, n: static size](self: *mut fixlist[t, n], value: t): empty {
+    let used: size = self.len();
+    if used < self.cap() {
+      self.data.set(used, value);
+      self.used <- used.as[u32] + 1;
+    } else {
+      let typename = types/name[type-of(self).value];
+      crash("{typename} cannot fulfill push. {used + 1} > {self.cap()}")
+    }
+  }
+
+  fn try-push[t, n: static size](self: *mut fixlist[t, n], value: t): result[empty, empty] {
+    let used: size = self.len();
+    if used < self.cap() {
+      self.data.set(used, value);
+      self.used <- used.as[u32] + 1;
+      :ok({})
+    } else {
+      :err({})
+    }
+  }
+
+  fn try-push-n[t, n: static size](self: *mut fixlist[t, n], values: span[t]): result[empty, empty] {
+    let needed = self.len() + values.len();
+    if needed <= self.cap() {
+      let dst-slice = self.data.as-buffer().slice(start = self.len(), end = needed);
+      buffer/copy(src = values.inner-buffer(), dst = dst-slice);
+      self.used <- needed.as[u32];
+      :ok({})
+    } else {
+      :err({})
+      //:err("{typename} cannot fulfill push-n. {needed} (needed) > {self.capacity()}")
+    }
+  }
+
+  fn push-n[t, n: static size](self: *mut fixlist[t, n], values: span[t]): empty {
+    let result = self.try-push-n[t, n](values);
+    if result is :err(_) crash("fixlist out of space")
+  }
+
+  fn as-buffer[t, n: static size](self: *mut fixlist[t, n]): buffer[t] {
+    self.data.as-buffer().slice(0, self.len())
+  }
+
+  fn as-span[t, n: static size](self: *fixlist[t, n]): span[t] {
+    self.data.as-span().slice(0, self.len())
+  }
+
+  fn get[t, n: static size](self: *fixlist[t, n], index: size): t {
+    self.get-ref(index).*
+  }
+
+  fn get-ref[t, n: static size](self: *mut fixlist[t, n], index: size): *mut t {
+    if index < self.len() {
+      self.data.get(index).&
+    } else {
+      crash("fixlist index out of bounds: {index} > {self.len()}")
+    }
+  }
+
+  fn set[t, n: static size](self: *mut fixlist[t, n], index: size, value: t): empty {
+    self.get-ref(index) <- value
+  }
+
+  fn last[t, n: static size](self: *fixlist[t, n]): ?t {
+    self.as-span().last()
+  }
+
+  fn pop[t, n: static size](self: *mut fixlist[t, n]): ?t {
+    switch self.last() {
+       :some(t) -> {
+         self.used <- self.used - 1;
+         :some(t)
+       },
+       :none -> :none
+    }
+  }
+
+  fn reverse[t, n: static size](self: *mut fixlist[t, n]) {
+    self.as-buffer().reverse()
+  }
+
+}

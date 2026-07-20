@@ -135,6 +135,7 @@ fn skey_name_part(key: ScopeKey) -> StringId {
 }
 
 /// One scope's entries in a per-kind symbol map
+// nocommit clean up
 fn entries_in_scope<T: Copy>(
     map: &FxHashMap<ScopeKey, T>,
     scope_id: ScopeId,

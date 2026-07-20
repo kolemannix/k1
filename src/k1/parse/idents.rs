@@ -101,7 +101,7 @@ pub(crate) struct BuiltinIdents {
     pub it_index: StringId,
     pub as_: StringId,
     pub list: StringId,
-    pub withCapacity: StringId,
+    pub with_capacity: StringId,
     pub dest: StringId,
     pub block_expr_val: StringId,
     pub optelse_lhs: StringId,
@@ -170,7 +170,7 @@ pub(crate) struct BuiltinIdents {
     pub param_6: StringId,
     pub param_7: StringId,
     pub param_8: StringId,
-    pub StringBuilder: StringId,
+    pub string_builder: StringId,
     pub builder: StringId,
     pub bitwise: StringId,
     pub arena_tmp: StringId,
@@ -181,7 +181,7 @@ pub(crate) struct BuiltinIdents {
     pub return_: StringId,
     pub break_: StringId,
     pub continue_: StringId,
-    pub testCompile: StringId,
+    pub test_compile: StringId,
     pub writef: StringId,
     pub writelnf: StringId,
     pub stringf: StringId,
@@ -215,7 +215,7 @@ pub(crate) struct BuiltinIdents {
 
 #[allow(non_snake_case)]
 pub(crate) struct BuiltinFunctions {
-    pub List_withCapacity: QIdent,
+    pub List_with_capacity: QIdent,
     pub List_push: QIdent,
     pub Iterator_next: QIdent,
     pub Iterable_iterator: QIdent,
@@ -318,7 +318,7 @@ impl IdentPool {
             it_index: intern!("it-index"),
             as_: intern!("as"),
             list: intern!("list"),
-            withCapacity: intern!("withCapacity"),
+            with_capacity: intern!("with-capacity"),
             dest: intern!("dest"),
             block_expr_val: intern!("block-expr-val"),
             optelse_lhs: intern!("optelse_lhs"),
@@ -387,7 +387,7 @@ impl IdentPool {
             param_6: intern!("param_6"),
             param_7: intern!("param_7"),
             param_8: intern!("param_8"),
-            StringBuilder: intern!("StringBuilder"),
+            string_builder: intern!("string-builder"),
             builder: intern!("builder"),
             bitwise: intern!("bitwise"),
             arena_tmp: intern!("arena-tmp"),
@@ -398,7 +398,7 @@ impl IdentPool {
             return_: intern!("return"),
             break_: intern!("break"),
             continue_: intern!("continue"),
-            testCompile: intern!("testCompile"),
+            test_compile: intern!("test-compile"),
             writef: intern!("writef"),
             writelnf: intern!("writelnf"),
             stringf: intern!("stringf"),
@@ -436,7 +436,7 @@ impl IdentPool {
         }
 
         let path_core_list = intern_path!(b.core, b.list);
-        let List_withCapacity = make_fn!(path_core_list, b.withCapacity);
+        let List_with_capacity = make_fn!(path_core_list, b.with_capacity);
         let List_push = make_fn!(path_core_list, intern!("push"));
 
         let path_core_iterator = intern_path!(b.core, b.iterator);
@@ -490,7 +490,7 @@ impl IdentPool {
         let ScalarCmp_gt: QIdent = make_fn!(path_scalar_cmp, b.gt);
         let ScalarCmp_ge: QIdent = make_fn!(path_scalar_cmp, b.ge);
 
-        let path_stringbuilder = intern_path!(b.core, b.StringBuilder);
+        let path_stringbuilder = intern_path!(b.core, b.string_builder);
         let StringBuilder_new: QIdent = make_fn!(path_stringbuilder, intern!("new"));
         let StringBuilder_build_tmp: QIdent = make_fn!(path_stringbuilder, intern!("build-tmp"));
 
@@ -502,7 +502,7 @@ impl IdentPool {
         let bitwise_shr = make_fn!(path_core_bitwise, intern!("shift-right"));
 
         let f = BuiltinFunctions {
-            List_withCapacity,
+            List_with_capacity,
             List_push,
             Iterator_next,
             Iterable_iterator,

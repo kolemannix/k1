@@ -73,8 +73,8 @@ ns pubsub {
 
   fn init(uv-loop: *mut uv-loop) {
     let bus: *mut bus = system-heap.new({
-      async-handle: system-heap.allocT[uv/async],
-      mutex: system-heap.allocT[uv/mutex],
+      async-handle: system-heap.alloc-t[uv/async],
+      mutex: system-heap.alloc-t[uv/mutex],
       pending: list/empty[event](),
       dispatching: list/empty[event](),
       subscribers: list/empty[subscriber](),
@@ -148,9 +148,9 @@ ns pubsub {
         let f = switch frame {
           :some(existing) -> existing,
           :none -> {
-            mem/pushMode(:tmp);
+            mem/push-mode(:tmp);
             let rendered = sse-frame(event);
-            mem/popMode();
+            mem/pop-mode();
             let made = rc-buffer/make(rendered.span-bytes());
             frame := :some(made);
             made
@@ -181,9 +181,9 @@ ns pubsub {
 
   // SSE wire format, rendered into the ambient allocator
   fn sse-frame(event: event): string {
-    let out = StringBuilder/new();
+    let out = string-builder/new();
     out.string("event: {event.topic}\n");
-    for line in event.data.splitByChar('\n') {
+    for line in event.data.split-by-char('\n') {
       out.string("data: {line}\n");
     };
     out.string("\n");

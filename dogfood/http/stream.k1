@@ -54,10 +54,10 @@ ns chunked {
       stream: streaming.stream,
       finishing: false,
     });
-    mem/pushMode(:custom-arena(connection.request-arena));
+    mem/push-mode(:custom-arena(connection.request-arena));
     let headers = stringf(
       "HTTP/1.1 200 OK\r\nContent-Type: {streaming.content-type}\r\nTransfer-Encoding: chunked\r\n\r\n");
-    mem/popMode();
+    mem/pop-mode();
     write-frame(encoder, headers.span-bytes());
   }
 
@@ -65,7 +65,7 @@ ns chunked {
     let connection = encoder.connection;
     let req = connection.request-arena.alloc[uv/write]();
     req.set-data(encoder);
-    let buf: uv/buf = uv/buf/from-span(bytes);
+    let buf: uv/buf = uv/buf/wrap-span(bytes);
     let rc = uv/write(req, connection.client.as-stream(), &buf, 1, on-write-complete);
     if rc != 0 {
       tprintln("chunked encoder uv_write failed: {rc}");
@@ -97,14 +97,14 @@ ns chunked {
     let connection = encoder.connection;
     switch (encoder.stream.next)(encoder.stream.state) {
       :chunk(bytes) -> {
-        mem/pushMode(:custom-arena(connection.request-arena));
-        let out = StringBuilder/new();
+        mem/push-mode(:custom-arena(connection.request-arena));
+        let out = string-builder/new();
         append-hex(&out, bytes.len());
         out.string("\r\n");
         out.write-bytes(bytes);
         out.string("\r\n");
         let frame = out.build();
-        mem/popMode();
+        mem/pop-mode();
         write-frame(encoder, frame.span-bytes());
       },
       :done -> {
@@ -115,8 +115,8 @@ ns chunked {
   }
 
   let hex-digits: string = "0123456789abcdef"
-  fn append-hex(out: *mut StringBuilder, value: size) {
+  fn append-hex(out: *mut string-builder, value: size) {
     if value >= 16 { append-hex(out, value / 16) };
-    out.string(string/fromRaw(hex-digits.data-ptr().add-bytes(value % 16), 1));
+    out.string(string/wrap-raw(hex-digits.data-ptr().add-bytes(value % 16), 1));
   }
 }

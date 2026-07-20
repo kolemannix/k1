@@ -2,7 +2,7 @@ ns enum_construction;
 
 type state = either { on(empty), off(empty), zilch }
 type state-hard = either { on(?int), off(?int) }
-type contrived[A, B] = either { stuff({ a: A, b: B }), empty }
+type contrived[a, b] = either { stuff({ a: a, b: b }), empty }
 
 fn test() {
 

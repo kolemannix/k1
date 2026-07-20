@@ -1,37 +1,37 @@
-// Copyright (C) 2025 Koleman Nix 
+// Copyright (c) 2025 Koleman Nix 
 ns uci;
 
-type Command = either {
-  Uci,
-  IsReady,
-  NewGame,
-  Quit,
-  Position(string),
-  Go(string),
-  Perft({ depth: u32 })
+type command = either {
+  uci,
+  is-ready,
+  new-game,
+  quit,
+  position(string),
+  go(string),
+  perft({ depth: u32 })
 }
 
-fn parseCommand(cmd: string): result[Command, string] {
+fn parse-command(cmd: string): result[command, string] {
   println("[debug] received: `{cmd}`");
   
   switch cmd {
     // Initial handshake: GUI sends "uci", engine responds with id and options
-    "uci" -> :ok(:Uci),
+    "uci" -> :ok(:uci),
 
     // GUI checking if engine is initialized and ready
-    "isready" -> :ok(:IsReady),
+    "isready" -> :ok(:is-ready),
 
     // Request to start a new game
-    "ucinewgame" -> :ok(:NewGame),
+    "ucinewgame" -> :ok(:new-game),
 
     // GUI wants to quit
-    "quit" -> :ok(:Quit),
+    "quit" -> :ok(:quit),
     
     // Commands that require more complex parsing
     _ -> {
       if cmd.starts-with("perft ") {
-         let parsedDepth = cmd.drop(6).toInt();
-         if parsedDepth is :some(depth) { :ok(:Perft({ depth: depth.as[u32] })) }
+         let parsed-depth = cmd.drop(6).to-int();
+         if parsed-depth is :some(depth) { :ok(:perft({ depth: depth.as[u32] })) }
          else :err("Invalid perft command: {cmd}")
       } else if cmd.starts-with("position ") {
         // "position" command sets up a position to analyze:
@@ -47,7 +47,7 @@ fn parseCommand(cmd: string): result[Command, string] {
         //   
         //   // Check if there are moves to apply
         //   if cmd.starts-with("position startpos moves ") {
-        //     let movesStr = cmd.substring(24, cmd.len());
+        //     let movesStr = cmd.slice(24, cmd.len());
         //     println("[debug] applying moves: \{movesStr}");
         //   }
         //   
@@ -56,7 +56,7 @@ fn parseCommand(cmd: string): result[Command, string] {
         //   // Would parse FEN and any moves here
         // }
 
-        :ok(:Position(cmd.substring(8, cmd.len())))
+        :ok(:position(cmd.slice(8, cmd.len())))
       } else if cmd.starts-with("go ") {
         // "go" command tells engine to start calculating. Examples:
         //   "go infinite" - search until "stop" command
@@ -65,7 +65,7 @@ fn parseCommand(cmd: string): result[Command, string] {
         //   "go nodes 10000" - search fixed number of nodes
         //   "go movetime 1000" - search for exactly 1 second
         
-        :ok(:Go(cmd.substring(2, cmd.len())))
+        :ok(:go(cmd.slice(2, cmd.len())))
       } else :err("Unsupported command: {cmd}")
     }
   }

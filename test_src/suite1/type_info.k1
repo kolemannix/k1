@@ -5,11 +5,11 @@ use core/types/stride
 use core/types/align
 use core/types/type-id
 
-fn doIt(_foo: bool, _bar: u32): u32 {
+fn do-it(_foo: bool, _bar: u32): u32 {
   32
 }
 
-fn testSizeOf() {
+fn test-size-of() {
   assert-equals(size[string], 16);
   assert-equals(stride[string], 16);
   assert-equals(align[string], 8);
@@ -17,13 +17,13 @@ fn testSizeOf() {
   assert-equals(stride[{ x: u64, c: u8 }], 16);
 }
 
-fn testFnTypeInfo() {
-  assert-equals(type-id[doIt.return](), type-id[u32]());
-  assert-equals(type-id[doIt._foo](), type-id[bool]());
-  assert-equals(type-id[doIt._bar](), type-id[doIt.return]());
+fn test-fn-type-info() {
+  assert-equals(type-id[do-it.return](), type-id[u32]());
+  assert-equals(type-id[do-it._foo](), type-id[bool]());
+  assert-equals(type-id[do-it._bar](), type-id[do-it.return]());
 }
 
 fn test() {
-  testSizeOf();
-  testFnTypeInfo();
+  test-size-of();
+  test-fn-type-info();
 }

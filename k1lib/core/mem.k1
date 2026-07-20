@@ -3,22 +3,22 @@
 
 ns mem {
 
-  // For now here's all I can do until I have dyn traits
-  type Allocator = {
+  // For now here's all i can do until i have dyn traits
+  type allocator = {
     malloc:  *(fn(size, size) -> ptr),
     zalloc:  *(fn(size, size) -> ptr),
     realloc: *(fn(ptr, size, size, size) -> ptr),
     free:    *(fn(ptr, size, size) -> empty),
   }
 
-  fn virtualAlloc(size): ptr {
+  fn virtual-alloc(size): ptr {
     let rw = posix/PROT_READ | posix/PROT_WRITE;
-    let privateAnon = posix/MAP_PRIVATE | posix/MAP_ANON;
+    let private-anon = posix/MAP_PRIVATE | posix/MAP_ANON;
     let addr = posix/mmap(
       addr = ptr/null,
       len = size,
       prot = rw,
-      flags = privateAnon,
+      flags = private-anon,
       fd = -1i32,
       offset = 0
     );
@@ -29,7 +29,7 @@ ns mem {
     addr
   }
 
-  fn virtualRelease(base: ptr, len: size): empty {
+  fn virtual-release(base: ptr, len: size): empty {
     let result = posix/munmap(base, len);
     if result == -1 crash("munmap of ptr {base} x {len} failed");
     {}
@@ -42,7 +42,7 @@ ns mem {
     tmp,
     // The system libc heap (malloc/free and friends)
     system-heap,
-    custom-heap(*mut Allocator),
+    custom-heap(*mut allocator),
     custom-arena(*mut arena),
     gc
   }
@@ -56,7 +56,7 @@ ns mem {
 
   ns for alloc-mode {
 
-    fn requiresFree(self: alloc-mode): bool { switch self {
+    fn requires-free(self: alloc-mode): bool { switch self {
       :current         -> crash("unreachable"),
       :system-heap     -> true,
       :custom-heap(_)  -> true,
@@ -96,21 +96,21 @@ ns mem {
       }
     }
 
-    fn realloc(self: alloc-mode, oldPtr: ptr, oldSize: size, align: size, newSize: size): ptr {
+    fn realloc(self: alloc-mode, old-ptr: ptr, old-size: size, align: size, new-size: size): ptr {
       switch self.resolve() {
         :current -> { crash("unreachable") },
-        :system-heap -> mem/realloc(oldPtr, oldSize, align, newSize),
+        :system-heap -> mem/realloc(old-ptr, old-size, align, new-size),
         :custom-heap(alloc) -> {
-          let reallocFn = alloc.*.realloc;
-          reallocFn(oldPtr, oldSize, align, newSize)
+          let realloc-fn = alloc.*.realloc;
+          realloc-fn(old-ptr, old-size, align, new-size)
         },
         :custom-arena(arena) -> {
-          arena.try-realloc(oldPtr, oldSize, newSize, align)
+          arena.try-realloc(old-ptr, old-size, new-size, align)
         },
         :tmp -> {
-          tmp().try-realloc(oldPtr, oldSize, newSize, align)
+          tmp().try-realloc(old-ptr, old-size, new-size, align)
         },
-        :gc -> oldPtr
+        :gc -> old-ptr
       }
     }
 
@@ -119,8 +119,8 @@ ns mem {
         :current -> { crash("unreachable") },
         :system-heap -> mem/free(ptr, size, align),
         :custom-heap(alloc) -> {
-          let freeFn = alloc.*.free;
-          freeFn(ptr, size, align)
+          let free-fn = alloc.*.free;
+          free-fn(ptr, size, align)
         },
         :custom-arena(bump) -> crash("UnsupportedOperation: free"),
         :tmp -> crash("UnsupportedOperation: free"),
@@ -129,15 +129,15 @@ ns mem {
     }
 
 
-    fn allocT[T](self: alloc-mode): *mut T {
-      self.alloc(size = types/size[T], align = types/align[T]).as()
+    fn alloc-t[t](self: alloc-mode): *mut t {
+      self.alloc(size = types/size[t], align = types/align[t]).as()
     }
-    fn freeT[T](self: alloc-mode, t: *mut T) {
-      self.free(ptr = t.as(), size = types/size[T], align = types/align[T])
+    fn free-t[t](self: alloc-mode, t: *mut t) {
+      self.free(ptr = t.as(), size = types/size[t], align = types/align[t])
     }
 
-    fn new[T](self: alloc-mode, t: T): *mut T {
-      let ref = self.allocT[T];
+    fn new[t](self: alloc-mode, t: t): *mut t {
+      let ref = self.alloc-t[t];
       ref <- t;
       ref
     }
@@ -146,28 +146,28 @@ ns mem {
 
   let system-heap: alloc-mode = :system-heap
 
-  fn new[T](t: T): *mut T { alloc-mode:current.new(t) }
+  fn new[t](t: t): *mut t { alloc-mode:current.new(t) }
 
   fn alloc-layout(size: size, align: size): ptr { alloc-mode:current.alloc(size, align) }
-  fn alloc-t[t](): *t { alloc-mode:current.allocT() }
+  fn alloc-t[t](): *t { alloc-mode:current.alloc-t() }
 
   let mutable tls arena-tmp: *arena = ptr/null.rw[arena]
 
   type alias ALLOC_STACK_MAX = 64
-  let mutable tls allocStack: fixlist[alloc-mode, ALLOC_STACK_MAX] = { 
+  let mutable tls alloc-stack: fixlist[alloc-mode, ALLOC_STACK_MAX] = { 
     let s = zeroed[fixlist[alloc-mode, ALLOC_STACK_MAX]];
     s.push(:tmp);
     s
   }
 
-  fn pushMode(mode: alloc-mode) {
-    allocStack.push(mode)
+  fn push-mode(mode: alloc-mode) {
+    alloc-stack.push(mode)
   }
-  fn popMode(): alloc-mode {
-    allocStack.pop().!
+  fn pop-mode(): alloc-mode {
+    alloc-stack.pop().!
   }
   fn current(): alloc-mode {
-    let s = allocStack.last().!;
+    let s = alloc-stack.last().!;
     s
   }
 

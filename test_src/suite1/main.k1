@@ -16,6 +16,7 @@ fn low() {
   ability_01/test();
   ability_overload_ish/test();
   ability_default_fns/test();
+  ability_blanket_ref/test();
   bits_test/test();
   ordering_test/test();
   test_uninit/test();
@@ -68,8 +69,8 @@ fn moderate() {
   lambdas/test();
   condcomp/test();
   struct_composition/test();
-  zero_test/testZero();
-  zero_test/testBitcast();
+  zero_test/test-zero();
+  zero_test/test-bitcast();
   type_schema/test();
   array_type_test/test();
   ability_complex/test();
@@ -78,7 +79,7 @@ fn moderate() {
   type-predicate-test/test();
 }
 
-fn coreLib() {
+fn core-lib() {
   // core lib coverage
   for_yield_test/test();
   allocator_test/test();
@@ -108,8 +109,8 @@ fn main(): i32 {
 
   test_meta/test();
 
-  coreLib();
-  #static coreLib();
+  core-lib();
+  #static core-lib();
 
   println("[suite1] All tests passed!");
 

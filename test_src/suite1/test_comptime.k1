@@ -3,7 +3,7 @@ ns test_comptime;
 let e: ?int = :some(42)
 let n: ?int = :none
 
-fn simpleEnum() {
+fn simple-enum() {
   assert-equals(e.!, 42);
   assert(e != n);
   assert-equals(e, some(42));
@@ -12,12 +12,12 @@ fn simpleEnum() {
 
 let p: { x: int, y: ?int } = { x: 1, y: :some(2) }
 
-fn simpleStruct() {
+fn simple-struct() {
   assert-equals(p.x, 1);
   assert-equals(p.y, some(2));
 }
 
 fn test() {
-  simpleEnum();
-  simpleStruct();
+  simple-enum();
+  simple-struct();
 }

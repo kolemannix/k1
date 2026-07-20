@@ -1,31 +1,31 @@
 ns struct_test;
 
-type Point = { x: int, y: int, z: int, isGood: bool }
-fn basicStruct(): int {
-  let zero: Point = {
-    x: 0, y: 298, z: 42, isGood: true
+type point = { x: int, y: int, z: int, is-good: bool }
+fn basic-struct(): int {
+  let zero: point = {
+    x: 0, y: 298, z: 42, is-good: true
   };
   assert(zero.x == 0);
   assert(zero.z == 42);
-  assert(zero.isGood);
+  assert(zero.is-good);
   assert(zero.y == 298);
   0
 }
 
-type Foo = { x: int, y: bool }
-ns for Foo {
-  fn getValue(self: Foo): int { self.x }
-  fn setValue(self: *mut Foo, x: int) { self.x <- x; }
-  fn new(x: int): Foo { { x: x, y: false } }
+type foo = { x: int, y: bool }
+ns for foo {
+  fn get-value(self: foo): int { self.x }
+  fn set-value(self: *mut foo, x: int) { self.x <- x; }
+  fn new(x: int): foo { { x: x, y: false } }
 }
 
-fn structArgMut() {
-  let x = Foo/new(42);
+fn struct-arg-mut() {
+  let x = foo/new(42);
   let x = &x;
   assert(x.x == 42);
-  assert(x.getValue() == 42);
-  x.setValue(41);
-  assert(x.getValue() == 41);
+  assert(x.get-value() == 42);
+  x.set-value(41);
+  assert(x.get-value() == 41);
   assert(not x.y);
 }
 
@@ -34,7 +34,7 @@ impl equals for { a: int } {
     self.a == other.a
   }
 }
-fn eqAnon() {
+fn eq-anon() {
   let foo = { a: 3 };
   let bar = { a: 4 };
   assert(foo != bar);
@@ -42,16 +42,16 @@ fn eqAnon() {
 }
 
 
-type Block = {
+type block = {
   position: { x: int, y: int, width: int, height: int },
   text: int
 }
 
-fn block_area(b: Block): int { b.position.width * b.position.height }
+fn block_area(b: block): int { b.position.width * b.position.height }
 
-fn structNested() {
+fn struct-nested() {
   let width = 50;
-  let b: Block = {
+  let b: block = {
     position: { x: 1, y: 1, width, height: 50 },
     text: 42
   };
@@ -61,11 +61,11 @@ fn structNested() {
   assert(area2 == 2500);
 }
 
-fn withFields() {
+fn with-fields() {
   let breaker = false; let breaker = &breaker;
 
-  let makeStruct = fn. { if breaker.* crash(""); breaker <- true; { a: 1, b: true, c: "hello", d: { inside: 0 } } };
-  let s: { a: int, b: bool, c: string, d: { inside: int } } = makeStruct().with({ a: 4, b: false, d: { inside: 1 }});
+  let make-struct = fn. { if breaker.* crash(""); breaker <- true; { a: 1, b: true, c: "hello", d: { inside: 0 } } };
+  let s: { a: int, b: bool, c: string, d: { inside: int } } = make-struct().with({ a: 4, b: false, d: { inside: 1 }});
 
   assert-equals(s.a, 4);
   assert-equals(s.b, false);
@@ -86,10 +86,10 @@ fn auto-equals() {
 }
 
 fn test() {
-  basicStruct();
-  structArgMut();
-  eqAnon();
-  structNested();
-  withFields();
+  basic-struct();
+  struct-arg-mut();
+  eq-anon();
+  struct-nested();
+  with-fields();
   auto-equals();
 }

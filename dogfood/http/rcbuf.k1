@@ -21,7 +21,7 @@ ns for rc-buffer {
     inner.count <- inner.count - 1;
     if inner.count == 0 {
       system-heap.free(inner.bytes.data-ptr(), inner.bytes.len(), 1);
-      system-heap.freeT(inner);
+      system-heap.free-t(inner);
     }
   }
 

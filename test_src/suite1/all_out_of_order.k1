@@ -1,36 +1,36 @@
 ns all_out_of_order;
 
-impl SayHello for Foo {
-  fn hello(self: Foo): MyString { 
+impl say-hello for foo {
+  fn hello(self: foo): my-string { 
     { s: self.name  }
   }
 }
 
-fn takesHelloer[T](t: T): MyString where T: SayHello {
+fn takes-helloer[t](t: t): my-string where t: say-hello {
   t.hello()
 }
 
-ability SayHello {
-  fn hello(self): MyString {
+ability say-hello {
+  fn hello(self): my-string {
     { s: "Hello" }
   }
 }
 
 
 fn test() {
-  let foo: Foo = { name: "Joe" };
+  let foo: foo = { name: "Joe" };
   foo.hello();
-  assert(takesHelloer(foo).s == "Joe");
+  assert(takes-helloer(foo).s == "Joe");
 }
 
-type MyString = { s: string }
+type my-string = { s: string }
 
-type Foo = { name: string }
+type foo = { name: string }
 
 ns bar {
   // Type with NS used before defined
   use foo/core/nested
-  fn doIt(_t: nested): nested { 
+  fn do-it(_t: nested): nested { 
     // before called
     before();
     nested/default
@@ -46,9 +46,9 @@ ns secret {
 
 ns foo {
   ns core {
-    type nested = either { A, B }
+    type nested = either { a, b }
     ns for nested {
-      let default: nested = :A
+      let default: nested = :a
     }
   }
 }

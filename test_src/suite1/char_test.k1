@@ -3,12 +3,12 @@ ns char_test;
 fn basic() {
   let c: char = '!';
   assert(c == '!');
-  let s = c.toString();
+  let s = c.to-string();
   //println(s);
   assert(s.len() == 1);
   assert(s.get(0) == '!');
 
-  assert(s.appendChar('!') == "!!");
+  assert(s.concat-char('!') == "!!");
 }
 
 fn escape() {

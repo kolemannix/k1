@@ -1,0 +1,33 @@
+use core/spill-list
+
+type string-builder = { list: list[u8] }
+ns for string-builder {
+  fn new(): string-builder {
+    { list: list/empty() }
+  }
+
+  fn reset(self: *mut string-builder) {
+    self.list.clear()
+  }
+
+  fn peek(self: *string-builder): span[char] {
+    self.list.as-span().as-char-span()
+  }
+
+  fn build(self: *string-builder): string {
+    string/wrap-bytes(self.list.as-span()).cloned()
+  }
+
+  fn build-tmp(self: *string-builder): string {
+    string/wrap-bytes(self.list.as-span()).cloned-in(context :tmp)()
+  }
+}
+
+impl writer for *string-builder {
+  fn write-byte(self, b: u8): empty {
+    self.list.push(b)
+  }
+  fn write-bytes(self, b: span[u8]): empty {
+    self.list.append-span(b)
+  }
+}

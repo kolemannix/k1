@@ -1,31 +1,31 @@
 ns match_exhaust;
 
-fn matchBool(b: bool): string {
+fn match-bool(b: bool): string {
   switch b {
     false -> identity("false"),
     true -> identity("true")
   }
 }
 
-type TriState = either { Yes, No, Failure({ reason: string }) }
-fn matchTristateOpt(t: ?TriState): string {
+type tri-state = either { yes, no, failure({ reason: string }) }
+fn match-tristate-opt(t: ?tri-state): string {
   switch t {
-    :some(:Yes) -> "yes",
-    :some(:No) -> "no",
-    :some(:Failure(s)) -> "failure: {s.reason}",
+    :some(:yes) -> "yes",
+    :some(:no) -> "no",
+    :some(:failure(s)) -> "failure: {s.reason}",
     :none -> "none"
   }
 }
 
-fn failedWithBaz(t: TriState): bool {
+fn failed-with-baz(t: tri-state): bool {
   switch t {
-    :Yes -> false,
-    :No -> false,
-    :Failure(s) -> s.reason == "baz"
+    :yes -> false,
+    :no -> false,
+    :failure(s) -> s.reason == "baz"
   }
 }
 
-fn matchOptBool(b: ?bool): string {
+fn match-opt-bool(b: ?bool): string {
   switch b {
     :none -> identity("None"),
     :some(false) -> identity("false"),
@@ -33,7 +33,7 @@ fn matchOptBool(b: ?bool): string {
   }
 }
 
-fn bothTrue(bb: { a: bool, b: bool }): bool {
+fn both-true(bb: { a: bool, b: bool }): bool {
   switch bb {
     { a: false, b: false } -> false,
     { a: false, b: true } -> false,
@@ -48,20 +48,20 @@ fn main(): i32 {
     a -> {}
   };
 
-  assert-equals(matchBool(false), "false");
-  assert-equals(matchOptBool(:some(false)), "false");
-  assert-equals(matchOptBool(:none), "None");
+  assert-equals(match-bool(false), "false");
+  assert-equals(match-opt-bool(:some(false)), "false");
+  assert-equals(match-opt-bool(:none), "None");
 
-  let yes: TriState = :Yes;
-  assert-equals(matchTristateOpt(:some(yes)), "yes");
-  assert-equals(matchTristateOpt(:some(:Yes)), "yes");
-  assert-equals(matchTristateOpt(:some(:Failure({ reason: "because" }))), "failure: because");
+  let yes: tri-state = :yes;
+  assert-equals(match-tristate-opt(:some(yes)), "yes");
+  assert-equals(match-tristate-opt(:some(:yes)), "yes");
+  assert-equals(match-tristate-opt(:some(:failure({ reason: "because" }))), "failure: because");
 
-  assert(not bothTrue({ a: true, b: false }));
-  assert(bothTrue({ a: true, b: true }));
+  assert(not both-true({ a: true, b: false }));
+  assert(both-true({ a: true, b: true }));
 
-  assert(failedWithBaz(:Failure({ reason: "baz" })));
-  assert(not failedWithBaz(:No));
+  assert(failed-with-baz(:failure({ reason: "baz" })));
+  assert(not failed-with-baz(:no));
 
   switch some(42) {
     :some(x) if x == 42 -> {},

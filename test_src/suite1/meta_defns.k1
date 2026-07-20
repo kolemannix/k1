@@ -3,42 +3,42 @@ ns meta_defns;
 $ "let n: u64 = 255"
 $ "let x: u64 = 256"
 
-$ p"fn isPow2(x: u64): bool { (x - 1) || bitwise/bit-and(x) == 0 }"
+$ p"fn is-pow2(x: u64): bool { (x - 1) || bitwise/bit-and(x) == 0 }"
 
 $ {
   let name1 = "1";
   let name2 = "2";
-  let a = "ns Secret {{ fn secret{name1}(): int {{ 42 } }\n";
-  let b = "ns Secret {{ fn secret{name2}(): int {{ 43 } }\n";
+  let a = "ns secret {{ fn secret{name1}(): int {{ 42 } }\n";
+  let b = "ns secret {{ fn secret{name2}(): int {{ 43 } }\n";
   "{a}{b}"
 }
 
 $ {
-  p"type Frob = { b: bool }"
+  p"type frob = { b: bool }"
 }
 
 $ {
-  p"ability Named { fn getName(self): string }"
+  p"ability named { fn get-name(self): string }"
 }
 
 $ {
-  p`impl Named for Frob {
-    fn getName(self): string { if self.b "Bob" else "Joe" }
+  p`impl named for frob {
+    fn get-name(self): string { if self.b "Bob" else "Joe" }
   }`
 }
 
-$ core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List")
+$ core/meta/define-soa[{ x: u32, y: u32, z: u8 }]("point3-list")
 
 fn test() {
-  let frob: Frob = { b: false };
+  let frob: frob = { b: false };
 
-  assert-equals(frob.getName(), "Joe");
-  assert-equals(isPow2(n), false);
-  assert-equals(isPow2(x), true);
-  assert-equals(Secret/secret1(), 42);
-  assert-equals(Secret/secret2(), 43);
+  assert-equals(frob.get-name(), "Joe");
+  assert-equals(is-pow2(n), false);
+  assert-equals(is-pow2(x), true);
+  assert-equals(secret/secret1(), 42);
+  assert-equals(secret/secret2(), 43);
 
-  let ps = Point3List/empty();
+  let ps = point3-list/empty();
   ps.push({ x: 5, y: 10, z: 15 });
   let p = ps.get(0);
   assert-equals(p.x, 5);

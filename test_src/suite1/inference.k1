@@ -1,20 +1,20 @@
 ns inference;
 
-fn combine[T](a: T, _b: T): T { a }
-fn combine3[T](a: T, b: T, c: { one: T, two: T }): T { a }
-fn getOrElse[T](a: opt[T], b: T): T { if a is :some(a) a else b }
-fn some[U](value: U): opt[U] { opt:some[U](value) }
+fn combine[t](a: t, _b: t): t { a }
+fn combine3[t](a: t, b: t, c: { one: t, two: t }): t { a }
+fn get-or-else[t](a: opt[t], b: t): t { if a is :some(a) a else b }
+fn some[u](value: u): opt[u] { opt:some[u](value) }
 
 fn get[UU](value: opt[UU]): UU { if value is :some(u) u else core/sys/exit(1) }
-fn identity[T](value: T): T { value }
+fn identity[t](value: t): t { value }
 
-fn identityNested[T](t: T): T {
+fn identity-nested[t](t: t): t {
   identity(t)
 }
 
-fn occursCheckTest[T](x: T): T {
+fn occurs-check-test[t](x: t): t {
   assert(
-    testCompile( combine(x, some(x)) ) is :some(_)
+    test-compile( combine(x, some(x)) ) is :some(_)
   );
   x
 }
@@ -28,9 +28,9 @@ fn test() {
 
   identity(identity([])): list[bool];
 
-  assert(identityNested(4) == 4);
-  assert(identityNested(true));
-  assert(identityNested({ value: 42 }).value == 42);
+  assert(identity-nested(4) == 4);
+  assert(identity-nested(true));
+  assert(identity-nested({ value: 42 }).value == 42);
 
   identity(true): bool;
   identity(true);
@@ -42,19 +42,19 @@ fn test() {
   combine(identity(4000), get(some(5000))): u32;
   combine(identity(8000), identity(get(some(9000)))): u32;
 
-  assert-equals(getOrElse(some(1000), -1), 1000);
+  assert-equals(get-or-else(some(1000), -1), 1000);
 
-  occursCheckTest(42);
+  occurs-check-test(42);
 
   combine(opt:some(4), some(23));
   combine(opt:some(4), some(23)): opt[u32];
 
   let x = opt:some(42);
 
-  let withNever = testCompile(
+  let with-never = test-compile(
     combine3((&x).*, core/sys/exit(1), { one: some(-1), two: some(3), })
   );
-  assert-equals(withNever, :none);
+  assert-equals(with-never, :none);
 
   {}
 }

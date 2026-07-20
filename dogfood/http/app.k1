@@ -45,7 +45,7 @@ fn handle(req: http/request, deps: *mut deps): http-response {
   // `GET /game/{id}/events`: SSE subscription to topic "game.{id}".
   // The mock publisher thread feeds "game.42" once a second.
   if req.header.url.starts-with("/game/") {
-    let parts = req.header.url.splitByChar('/');
+    let parts = req.header.url.split-by-char('/');
     // ["", "game", "{id}", "events"]
     let id = parts.get(2);
     if parts.len() == 4 and parts.get(3) == "events" {
@@ -63,7 +63,7 @@ fn handle(req: http/request, deps: *mut deps): http-response {
   // `GET /static/big-file.json`: stream a large body without buffering the
   // response frames up front; the harness drains us chunk by chunk.
   if req.header.url == "/static/big-file.json" {
-    let out = StringBuilder/new();
+    let out = string-builder/new();
     render-big-json(&out, rows = 20000);
     let body = out.build();
     return(:stream({
@@ -73,11 +73,11 @@ fn handle(req: http/request, deps: *mut deps): http-response {
   };
 
   if req.header.url.starts-with("/app/starry-night") {
-    // let out = StringBuilder/new();
-    // let body-out = StringBuilder/new();
+    // let out = string-builder/new();
+    // let body-out = string-builder/new();
     // render(&body-out, deps.pixels);
     // write-response(&out, body-out.build());
-    // To avoid the double-buffer situation, we could support 'chunks' instead of
+    // to avoid the double-buffer situation, we could support 'chunks' instead of
     // just 'complete'; libuv supports this vectored write
     // :complete(out.build());
     :complete([make-header(4), "todo"])
@@ -93,10 +93,10 @@ fn handle(req: http/request, deps: *mut deps): http-response {
     let header = make-header(output.len());
     :complete([header, output]);
   }
-  // :complete("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror")
+  // :complete("HTTP/1.1 500 Internal Server error\r\nContent-Length: 5\r\n\r\nerror")
 }
 
-fn render-big-json(out: *mut StringBuilder, rows: size) {
+fn render-big-json(out: *mut string-builder, rows: size) {
   out.string("[");
   let i: size = 0;
   while i < rows {
@@ -130,20 +130,20 @@ fn mock-publisher-main(arg: ptr) {
 
 fn start-mock-publisher() {
   let publisher = system-heap.new(pubsub/publisher());
-  let tid: *mut uv/thread = system-heap.allocT();
+  let tid: *mut uv/thread = system-heap.alloc-t();
   let rc = uv/thread_create(tid, mock-publisher-main, publisher.as[ptr]);
   if rc != 0 crash("failed to spawn publisher thread: {rc}");
 }
 
 fn template(template: string, values: span[{ key: string, value: string }]): ?string {
-  let out = StringBuilder/new();
+  let out = string-builder/new();
   let i = 0;
   while i < template.len() {
     let c = template.get(i);
     // TODO: simd scan
     if c == '{' and template.get(i + 1) == '{' {
       let rest = template.drop(i + 2);
-      let close = rest.indexOf('}');
+      let close = rest.index-of('}');
       if close == -1 return(:none);
       let key = rest.take(close);
       switch core/iter/find(values, fn p. p.key == key) {
@@ -167,7 +167,7 @@ fn template(template: string, values: span[{ key: string, value: string }]): ?st
 #if false ns wip-pixel-grid {
 
 let gridsize: u32 = 256
-fn render(out: *StringBuilder, pixels: *array[u8, 65536]) {
+fn render(out: *string-builder, pixels: *array[u8, 65536]) {
   out.string(`<div id="grid" style="position: relative">`);
   let size = 3;
   for pixels {

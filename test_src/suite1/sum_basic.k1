@@ -1,10 +1,10 @@
 ns sum_basic;
 
-type Maybe = either(i8) { a = -1, b(char) = 0, c(string) = 100 }
-fn sumPayload() {
-  let a: Maybe = :a;
-  let b: Maybe = :b('x');
-  let c: Maybe = :c("hello, sums");
+type maybe = either(i8) { a = -1, b(char) = 0, c(string) = 100 }
+fn sum-payload() {
+  let a: maybe = :a;
+  let b: maybe = :b('x');
+  let c: maybe = :c("hello, sums");
   if a is :a {} else crash("");
   assert(a is :a);
 
@@ -33,12 +33,12 @@ fn sumPayload() {
 
 }
 
-type MyResult[T, E] = either { ok(T), err(E) }
-ns for MyResult {
-  fn myGet[T, E](self: MyResult[T, E]): T {
+type my-result[t, e] = either { ok(t), err(e) }
+ns for my-result {
+  fn my-get[t, e](self: my-result[t, e]): t {
     self.as-ok().!
   }
-  fn show[T: print, E: print](self: MyResult[T, E]): string {
+  fn show[t: print, e: print](self: my-result[t, e]): string {
     switch self {
       :ok(v) -> { "Ok: {v}\n" },
       :err(e) -> { "Error: {e}\n" }
@@ -46,46 +46,46 @@ ns for MyResult {
   }
 }
 
-fn genericSum() {
-    let x1: MyResult[int, string] = :ok(-3);
-    let x2: MyResult[int, string] = :err("Some error message");
+fn generic-sum() {
+    let x1: my-result[int, string] = :ok(-3);
+    let x2: my-result[int, string] = :err("Some error message");
 
-    let x1Ok = x1.as-ok();
+    let x1-ok = x1.as-ok();
 
     // This tests type inference for sums
-    assert(MyResult/myGet(x1) == -3);
-    assert(x1.myGet() == -3);
-    assert(x1Ok == :some(-3));
+    assert(my-result/my-get(x1) == -3);
+    assert(x1.my-get() == -3);
+    assert(x1-ok == :some(-3));
 
     // shows that we can talk about the payload type
-    let _: MyResult[int, string]:ok = 42;
+    let _: my-result[int, string]:ok = 42;
 
     assert-equals(x1.show(), "Ok: -3\n");
     assert-equals(x2.show(), "Error: Some error message\n");
 
-    assert(types/size[MyResult[int, string]]() == 24);
-    assert(types/stride[MyResult[int, string]]() == 24);
-    assert(types/align[MyResult[int, string]]() == 8);
+    assert(types/size[my-result[int, string]]() == 24);
+    assert(types/stride[my-result[int, string]]() == 24);
+    assert(types/align[my-result[int, string]]() == 8);
 }
 
-type E = either(u8) { A = 4, B = 8, C(int) = 9 }
+type e = either(u8) { a = 4, b = 8, c(int) = 9 }
 fn tags() {
-  let a: E = :A;
-  let b: E = :B;
-  let c: E = :C(0);
+  let a: e = :a;
+  let b: e = :b;
+  let c: e = :c(0);
   assert-equals(a.tag, 4);
   assert-equals(b.tag, 8);
   assert-equals(c.tag, 9);
 
-  assert-equals(a.sum-name(), "A");
-  assert-equals(b.sum-name(), "B");
-  assert-equals(c.sum-name(), "C");
+  assert-equals(a.sum-name(), "a");
+  assert-equals(b.sum-name(), "b");
+  assert-equals(c.sum-name(), "c");
 
   {}
 }
 
 fn test() {
   tags();
-  sumPayload();
-  genericSum();
+  sum-payload();
+  generic-sum();
 }

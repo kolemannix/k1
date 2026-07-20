@@ -1,0 +1,102 @@
+type spill-list[t, n: static size] = either {
+  inline(fixlist[t, n]),
+  spilled(list[t])
+}
+ns for spill-list {
+
+  fn new[t, n: static int](): spill-list[t, n] {
+    :inline(mem/zeroed[fixlist[t, n]]())
+  }
+
+  // Retains allocated memory, if we've already spilled, intended for re-use
+  fn clear[t, n: static size](self: *mut spill-list[t, n]) {
+    switch self {
+      :inline(fixlist)* -> fixlist.clear(),
+      :spilled(list)* -> list.clear()
+    }
+  }
+
+  fn len[t, n: static size](self: spill-list[t, n]): size {
+    switch self {
+      :inline(fixlist) -> fixlist.len(),
+      :spilled(list) -> list.len,
+    }
+  }
+
+  fn as-span[t, n: static size](self: *spill-list[t, n]): span[t] {
+    switch self {
+      :spilled(list)* -> list.as-span(),
+      :inline(fixlist)* -> fixlist.as-span()
+    }
+  }
+
+  fn _spill[t, n: static size](fixlist: *mut fixlist[t, n]): list[t] {
+    let list = list/with-capacity-in[t](context :current)(fixlist.cap() * 2);
+
+    let srcbuffer = fixlist.as-buffer();
+    list.append-buffer(srcbuffer);
+
+    list
+  }
+
+  fn push[t, n: static size](self: *mut spill-list[t, n], t: t) {
+    switch self {
+      :spilled(list)* -> { list.push(t) },
+      :inline(fixlist)* -> {
+        if fixlist.try-push(t) is :ok(_) {}
+        else {
+          let list = _spill(fixlist);
+  
+          list.push(t);
+  
+          self <- :spilled(list)
+        }
+      }
+    }
+  }
+
+  fn push-n[t, n: static size](self: *mut spill-list[t, n], ts: span[t]) {
+    switch self {
+      :spilled(list)* -> { list.append-span(ts) },
+      :inline(fixlist)* -> {
+        if fixlist.try-push-n(ts) is :ok(_) {}
+        else {
+          // Correctness: The only error case is the out of capacity one
+          let list = _spill(fixlist);
+  
+          list.append-span(ts);
+  
+          self <- :spilled(list)
+        }
+      }
+    }
+  }
+
+  fn push-string[n: static size](self: *mut spill-list[u8, n], s: string) {
+    self.push-n[u8, n](s.span-bytes())
+  }
+
+}
+
+impl[t, n: static size] print for spill-list[t, n] {
+  fn print-to[w: writer](self, w) {
+     switch self {
+       :inline(fix) -> {
+         w.string("inline ");
+       },
+       :spilled(list) -> {
+         w.string("spilled ");
+       }
+     };
+     self.len().print-to(w);
+  }
+}
+
+impl[n: static size] writer for *mut spill-list[u8, n] {
+  fn write-byte(self, b: u8) {
+    self.push(b)
+  }
+  fn write-bytes(self, b: span[u8]) {
+    self.push-n(b)
+  }
+}

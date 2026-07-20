@@ -7,13 +7,13 @@ fn part1(input: string) {
   let hi: char = '0';
   let lo: char = '0';
   let sum: int = 0;
-  for bank in input.splitByChar('\n') {
+  for bank in input.split-by-char('\n') {
     hi := bank.get(0);
     lo := bank.get(1);
     let rest = bank.drop(1);
     let iter = rest.iterator();
     while iter.next() is :some(c) {
-      let last = iter.isDone();
+      let last = iter.is-done();
       if not last {
         // Consider new hi
         if c > hi {
@@ -28,7 +28,7 @@ fn part1(input: string) {
         if c > lo { lo := c }
       };
     };
-    let joltage = (hi.AsciiDigit().! * 10 + lo.AsciiDigit().!);
+    let joltage = (hi.ascii-digit().! * 10 + lo.ascii-digit().!);
     sum := sum + joltage;
     println("Result {it-index} for bank `{bank}`: {joltage} {sum}")
   };
@@ -37,25 +37,25 @@ fn part1(input: string) {
 
 fn part2(input: string) {
   let sum: uint = 0;
-  let sels: list[char] = list/withCapacity(12);
-  for bank in input.splitByChar('\n') {
+  let sels: list[char] = list/with-capacity(12);
+  for bank in input.split-by-char('\n') {
     sels.clear();
-    let rangeSize = 12;
+    let range-size = 12;
     let start = 0;
-    while rangeSize > 0 {
-      let end = bank.len() - rangeSize + 1;
-      let candidateRange = bank.slice(start, end);
-      println("picking ({start},{end}) {rangeSize} from {candidateRange}");
+    while range-size > 0 {
+      let end = bank.len() - range-size + 1;
+      let candidate-range = bank.slice(start, end);
+      println("picking ({start},{end}) {range-size} from {candidate-range}");
       let best = { index: start, value: bank.get(start) };
-      for cand in candidateRange {
+      for cand in candidate-range {
         if cand > best.value { best := { index: it-index + start, value: cand } }
       };
       sels.push(best.value);
       start := best.index + 1;
-      rangeSize := rangeSize - 1;
+      range-size := range-size - 1;
     };
 
-    let joltage = string/from-span(sels.as-span()).parseBase10();
+    let joltage = string/wrap-span(sels.as-span()).parse-base10();
     sum := sum + joltage.!;
     println("Result {it-index} for bank `{bank}`: {sels.*} {sum}")
   };

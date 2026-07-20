@@ -1,15 +1,15 @@
 ns try_test;
 
-type alias Error = string
+type alias error = string
 
-type Foo = {
+type foo = {
   a: bool
 }
 
-fn canFailInt(): result[int, Error] { :ok(42) }
-fn canFailBool(): result[bool, Error] { :ok(false) }
+fn can-fail-int(): result[int, error] { :ok(42) }
+fn can-fail-bool(): result[bool, error] { :ok(false) }
 
-impl try[t = int, e = Error] for Foo {
+impl try[t = int, e = error] for foo {
   fn error(_e: e): self   { { a: false } }
   fn value(_t: t): self { { a: true  } }
 
@@ -18,19 +18,19 @@ impl try[t = int, e = Error] for Foo {
   fn get-error(_self: self): e { "FooError" }
 }
 
-fn fails(): result[bool, Error] {
-  let value: result[int, Error] = :err("woops");
+fn fails(): result[bool, error] {
+  let value: result[int, error] = :err("woops");
   let i = value.try;
   :ok(i % 2 == 0)
 }
 
-fn run(): result[i32, Error] {
-  let result: int = canFailInt().try;
+fn run(): result[i32, error] {
+  let result: int = can-fail-int().try;
   assert(result == 42);
-  let result: int = ({ a: true }: Foo).try;
+  let result: int = ({ a: true }: foo).try;
   assert(result == 3);
 
-  let c = fn(-> result[bool, Error]) {
+  let c = fn(-> result[bool, error]) {
     let i = fails().try;
     :ok(not i)
   };

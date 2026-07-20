@@ -12,7 +12,7 @@ let sample: string =
 11
 17
 32`;
-let inputFile: string = core/files/read-to-string(context .arena)("day5_input.txt");
+let input-file: string = core/files/read-to-string(context .arena)("day5_input.txt");
 
 // The fresh ID ranges are inclusive: the range 3-5 means that ingredient IDs 3, 4, and 5 are all fresh. The ranges can also overlap; an ingredient ID is fresh if it is in any range.
 // 
@@ -27,27 +27,27 @@ let inputFile: string = core/files/read-to-string(context .arena)("day5_input.tx
 // So, in this example, 3 of the available ingredient IDs are fresh.
 
 use core/assertdbg
-type Range = { start: uint, end: uint }
-ns Range {
-  fn parse(s: string): Result[Range, string] {
-     let r = s.splitByChar('-');
+type range = { start: uint, end: uint }
+ns range {
+  fn parse(s: string): result[range, string] {
+     let r = s.split-by-char('-');
      assertdbg(r.len() == 2);
-     let start = r.get(0).parseBase10().!;
-     let end   = r.get(1).parseBase10().!;
+     let start = r.get(0).parse-base10().!;
+     let end   = r.get(1).parse-base10().!;
      :ok({ start, end });
   }
 }
 
-fn partOne(input: string) {
-  let lines = input.splitByChar('\n');
-  let parseMode: either { Ranges, Ingredients } = .Ranges;
-  let ranges = list/empty[Range]();
+fn part-one(input: string) {
+  let lines = input.split-by-char('\n');
+  let parse-mode: either { ranges, ingredients } = .ranges;
+  let ranges = list/empty[range]();
   let ing = list/empty[uint]();
   for lines {
-    if it.is-empty() { parseMode := .Ingredients; } else {
-      switch parseMode {
-        .Ranges -> { ranges.push(Range/parse(it).!) },
-        .Ingredients -> { ing.push(it.parseBase10().!) }
+    if it.is-empty() { parse-mode := .ingredients; } else {
+      switch parse-mode {
+        .ranges -> { ranges.push(range/parse(it).!) },
+        .ingredients -> { ing.push(it.parse-base10().!) }
       }
     }
   };
@@ -63,5 +63,5 @@ fn partOne(input: string) {
   println("Fresh Count: {fresh.len()}");
 }
 
-#static partOne(inputFile)
-//#static partOne(sample)
+#static part-one(input-file)
+//#static part-one(sample)

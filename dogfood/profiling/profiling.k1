@@ -1,14 +1,14 @@
 // Port of basic block profiler from Casey Muratori's Computer Enhance
 
 // Core profiling data structures
-type ProfileAnchor = {
+type profile-anchor = {
     tsc_elapsed_exclusive: u64,   // Does NOT include children
     tsc_elapsed_inclusive: u64,  // DOES include children  
     hit_count: u64,
     label: string,
 }
 
-type ProfileBlock = {
+type profile-block = {
     label: string,
     old_tsc_elapsed_inclusive: u64,
     start_tsc: u64,
@@ -17,14 +17,14 @@ type ProfileBlock = {
 }
 
 // Global profiler state
-let mutable global_profiler_anchors: array[ProfileAnchor, 4096] = zeroed()
+let mutable global_profiler_anchors: array[profile-anchor, 4096] = zeroed()
 let mutable global_profiler_parent: u32 = 0
 let mutable global_profile_start_tsc: u64 = 0
 let mutable global_profile_end_tsc: u64 = 0
 
 use std/time/read-cpu-counter
 
-fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
+fn begin_profile_block(label: string, anchor_index: u32): profile-block {
     let parent_index = global_profiler_parent;
     //eprintln("begin {label} with index {anchor_index}");
     //eprintln("  parent: {parent_index}");
@@ -54,7 +54,7 @@ fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
     }
 }
 
-fn end_profile_block(block: ProfileBlock) {
+fn end_profile_block(block: profile-block) {
     let elapsed = read-cpu-counter() - block.start_tsc;
     global_profiler_parent <- block.parent_index;
     
@@ -71,7 +71,7 @@ fn end_profile_block(block: ProfileBlock) {
 }
 
 // Print timing results for a single anchor
-fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *ProfileAnchor) {
+fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *profile-anchor) {
     let percent = 100.0: f64 * anchor.tsc_elapsed_exclusive.as[f64] / total_tsc_elapsed.as[f64];
     print("  {anchor.label}[{anchor.hit_count}]: {percent}% ");
     if anchor.tsc_elapsed_inclusive != anchor.tsc_elapsed_exclusive {
@@ -84,7 +84,7 @@ fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *ProfileAnchor) {
 
 // Print all anchor profiling data
 fn print_anchor_data(total_cpu_elapsed: u64) {
-    for anchor in (&global_profiler_anchors).as-buffer().refIter() {
+    for anchor in (&global_profiler_anchors).as-buffer().ref-iter() {
         if anchor.hit_count != 0 {
             print_time_elapsed(total_cpu_elapsed, anchor)
         }
@@ -108,7 +108,7 @@ fn end_and_print_profile() {
     print_anchor_data(total_tsc_elapsed)
 }
 
-fn time_block[Label: static string](label: Label, anchor_index: u32): ProfileBlock {
+fn time_block[label: static string](label: label, anchor_index: u32): profile-block {
   let anchor_index = anchor_index;
   begin_profile_block(label, anchor_index)
 }
@@ -118,7 +118,7 @@ fn cheap_computation(n: int): int {
   defer end_profile_block(block);
     
   let result = 0;
-  for IntRange/upTo(n) {
+  for int-range/up-to(n) {
     if it-index % 2 == 0 { result := result + 3 }
     else { result := result - 2 }
   };
@@ -131,7 +131,7 @@ fn expensive_computation(n: int): int {
   defer end_profile_block(block);
     
   let result = 0;
-  for IntRange/upTo(n) {
+  for int-range/up-to(n) {
     if it-index % 2 == 0 { result := result + 3 }
     else { result := result - 2 }
   };
@@ -149,7 +149,7 @@ fn main(): i32 {
   defer end_profile_block(main_block);
   
   let result = 0;
-  for IntRange/upTo(10) {
+  for int-range/up-to(10) {
     result := result + expensive_computation(1_000_000);
   };
 

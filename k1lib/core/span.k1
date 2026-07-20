@@ -2,7 +2,7 @@
 // All rights reserved.
 
 // Represents a contiguously allocated segment of memory that
-// stores values of type T.
+// stores values of type t.
 
 // spans are read-only.
 
@@ -17,48 +17,48 @@ ns for span {
   // Constructor functions
 
   // Only safe if you have exclusive access to buffer
-  fn wrap-buffer[T](buffer: buffer[T]): span[T] {
+  fn wrap-buffer[t](buffer: buffer[t]): span[t] {
     { buffer }
   }
 
-  fn from-raw[T](ptr: ptr, len: size): span[T] {
-    { buffer: buffer/fromPtrAndCount(ptr, len) }
+  fn wrap-raw[t](ptr: ptr, len: size): span[t] {
+    { buffer: buffer/wrap-raw(ptr, len) }
   }
 
-  fn inner-buffer[T](self: span[T]): buffer[T] {
+  fn inner-buffer[t](self: span[t]): buffer[t] {
     self.buffer
   }
 
-  fn data-ptr[T](self: span[T]): ptr {
+  fn data-ptr[t](self: span[t]): ptr {
     self.buffer.data-ptr()
   }
 
-  fn empty[T](): span[T] {
-    { buffer: buffer/empty[T]() }
+  fn empty[t](): span[t] {
+    { buffer: buffer/empty[t]() }
   }
 
-  fn copy-from-array[T, N: static size](array: *array[T, N]): span[T] {
-    let buffer = buffer/copy-from-array[T, N](array);
+  fn from-array[t, n: static size](array: *array[t, n]): span[t] {
+    let buffer = buffer/from-array[t, n](array);
     { buffer }
   }
 
-  fn cloned[T](self: span[T]): span[T] {
+  fn cloned[t](self: span[t]): span[t] {
     { buffer: self.buffer.cloned() }
   }
 
-  fn cloned-in[T](context alloc: mem/alloc-mode)(self: span[T]): span[T] {
+  fn cloned-in[t](context alloc: mem/alloc-mode)(self: span[t]): span[t] {
     { buffer: self.buffer.cloned-in() }
   }
 
-  fn len[T](self: span[T]): size { self.buffer.len }
+  fn len[t](self: span[t]): size { self.buffer.len }
 
-  fn getRef[T](self: span[T], index: size): *T {
-    self.buffer.getRefRead[T](index)
+  fn get-ref[t](self: span[t], index: size): *t {
+    self.buffer.get-ref[t](index)
   }
 
-  fn get[T](self: span[T], index: size): T {
-    let tRef = self.getRef(index);
-    tRef.*
+  fn get[t](self: span[t], index: size): t {
+    let t-ref = self.get-ref(index);
+    t-ref.*
   }
 
   fn get-opt[t](self: span[t], index: size): ?t {
@@ -66,12 +66,12 @@ ns for span {
     else :some(self.get(index))
   }
 
-  fn slice[T](self: span[T], start: size, end: size): span[T] {
+  fn slice[t](self: span[t], start: size, end: size): span[t] {
     { buffer: self.buffer.slice(start, end) }
   }
 
-  fn take[T](self: span[T], count: size): span[T] { self.slice(0,     count) }
-  fn drop[T](self: span[T], count: size): span[T] { self.slice(count, self.len()) }
+  fn take[t](self: span[t], count: size): span[t] { self.slice(0,     count) }
+  fn drop[t](self: span[t], count: size): span[t] { self.slice(count, self.len()) }
   fn take-right[t](self: span[t], count: size): span[t] {
     self.slice(self.len() - count, self.len())
   }
@@ -87,58 +87,58 @@ ns for span {
     self.buffer.ends-with(other.buffer)
   }
 
-  fn chunks[T](self: span[T], size: size): span[span[T]] {
-    let bufferChunks = self.buffer.chunks(size);
-    mem/bitcast(bufferChunks)
+  fn chunks[t](self: span[t], size: size): span[span[t]] {
+    let buffer-chunks = self.buffer.chunks(size);
+    mem/bitcast(buffer-chunks)
   }
 
-  fn is-empty[T](self: span[T]): bool {
+  fn is-empty[t](self: span[t]): bool {
     self.len() == 0
   }
 
-  fn non-empty[T](self: span[T]): bool {
+  fn non-empty[t](self: span[t]): bool {
     self.len() > 0
   }
 
-  fn firstRef[T](self: span[T]): ?*T {
+  fn first-ref[t](self: span[t]): ?*t {
     if not self.is-empty() {
-      :some(self.getRef(0))
+      :some(self.get-ref(0))
     } else {
       :none
     }
   }
 
-  fn first[T](self: span[T]): ?T {
-    switch self.firstRef() {
+  fn first[t](self: span[t]): ?t {
+    switch self.first-ref() {
       :none -> :none,
-      :some(firstRef) -> :some(firstRef.*)
+      :some(first-ref) -> :some(first-ref.*)
     }
   }
 
-  fn lastRef[T](self: span[T]): ?*T {
+  fn last-ref[t](self: span[t]): ?*t {
     if not self.is-empty() {
-      :some(self.getRef(self.len() - 1))
+      :some(self.get-ref(self.len() - 1))
     } else {
       :none
     }
   }
 
-  fn last[T](self: span[T]): ?T {
-    switch self.lastRef() {
+  fn last[t](self: span[t]): ?t {
+    switch self.last-ref() {
       :none -> :none,
-      :some(lastRef) -> :some(lastRef.*)
+      :some(last-ref) -> :some(last-ref.*)
     }
   }
 
-  fn concat[T](self: span[T], other: span[T]): span[T] {
-    let concatedBuffer = self.inner-buffer().concat(other.inner-buffer());
-    wrap-buffer(concatedBuffer)
+  fn concat[t](self: span[t], other: span[t]): span[t] {
+    let concated-buffer = self.inner-buffer().concat(other.inner-buffer());
+    wrap-buffer(concated-buffer)
   }
 
-  fn sorted[T](self: span[T]): span[T] where T: comparable {
-    let newBuffer = self.buffer.cloned();
-    newBuffer.sort();
-    wrap-buffer(newBuffer)
+  fn sorted[t](self: span[t]): span[t] where t: comparable {
+    let new-buffer = self.buffer.cloned();
+    new-buffer.sort();
+    wrap-buffer(new-buffer)
   }
 
   fn as-char-span(self: span[byte]): span[char] {
@@ -146,18 +146,18 @@ ns for span {
   }
 
   fn as-byte-span(self: span[char]): span[byte] {
-    { buffer: self.buffer.asByteBuffer() }
+    { buffer: self.buffer.as-byte-buffer() }
   }
 
 }
 
-impl[T] iterable[item = T, i = BufferIterator[T]] for span[T] {
+impl[t] iterable[item = t, i = buffer-iterator[t]] for span[t] {
   fn iterator(self): i {
-    BufferIterator/fromBuffer(self.inner-buffer())
+    buffer-iterator/from-buffer(self.inner-buffer())
   }
 }
 
-impl[T: print] print for span[T] {
+impl[t: print] print for span[t] {
   fn print-to[w: writer](self, w): empty {
     w.write-char('[');
     for self {
@@ -171,8 +171,8 @@ impl[T: print] print for span[T] {
   }
 }
 
-impl[T: equals] equals for span[T] {
-  fn equals(self: span[T], other: span[T]): bool {
+impl[t: equals] equals for span[t] {
+  fn equals(self: span[t], other: span[t]): bool {
     self.buffer == other.buffer
   }
 }
@@ -180,48 +180,48 @@ impl[T: equals] equals for span[T] {
 // Eventually, we can create some abstractions like this to DRY up working
 // with these sequential containers
 //ability as-span {
-//  fn as-span[T](self): view[T]
+//  fn as-span[t](self): view[t]
 //}
 //
 //ability span-like {
-//  fn len[T](self): size
-//  fn getRef[T](self, index: size): *T
-//  fn get[T](self, index: size): T { self.getRef.* }
-//  fn slice[T](self, start: size, end: size): view[T]
-//  fn take[T](self: view[T], count: size): view[T] { self.slice(0,     count) }
-//  fn drop[T](self: view[T], count: size): view[T] { self.slice(count, self.len()) }
+//  fn len[t](self): size
+//  fn get-ref[t](self, index: size): *t
+//  fn get[t](self, index: size): t { self.get-ref.* }
+//  fn slice[t](self, start: size, end: size): view[t]
+//  fn take[t](self: view[t], count: size): view[t] { self.slice(0,     count) }
+//  fn drop[t](self: view[t], count: size): view[t] { self.slice(count, self.len()) }
 //
-//  fn is-empty[T](self: view[T]): bool { self.len() == 0 }
+//  fn is-empty[t](self: view[t]): bool { self.len() == 0 }
 //
-//  fn non-empty[T](self: view[T]): bool { self.len() > 0 }
+//  fn non-empty[t](self: view[t]): bool { self.len() > 0 }
 //
-//  fn firstRef[T](self: view[T]): ?*T {
+//  fn first-ref[t](self: view[t]): ?*t {
 //    if not self.is-empty() {
-//      :some(self.getRef(0))
+//      :some(self.get-ref(0))
 //    } else {
 //      :none
 //    }
 //  }
 //
-//  fn first[T](self: view[T]): ?T {
-//    switch self.firstRef() {
+//  fn first[t](self: view[t]): ?t {
+//    switch self.first-ref() {
 //      :none -> :none,
-//      :some(firstRef) -> :some(firstRef.*)
+//      :some(first-ref) -> :some(first-ref.*)
 //    }
 //  }
 //
-//  fn lastRef[T](self: view[T]): ?*T {
+//  fn last-ref[t](self: view[t]): ?*t {
 //    if not self.is-empty() {
-//      :some(self.getRef(self.len() - 1))
+//      :some(self.get-ref(self.len() - 1))
 //    } else {
 //      :none
 //    }
 //  }
 //
-//  fn last[T](self: view[T]): ?T {
-//    switch self.lastRef() {
+//  fn last[t](self: view[t]): ?t {
+//    switch self.last-ref() {
 //      :none -> :none,
-//      :some(lastRef) -> :some(lastRef.*)
+//      :some(last-ref) -> :some(last-ref.*)
 //    }
 //  }
 //

@@ -1,9 +1,9 @@
 ns bitfield;
 
 // Lets you create bitfields with masks, bindings, and getters/setters. Example usage:
-// $bitfield/define[u16]("FlagsAuto", [b1("shielded"), b1("cloaked"), b1("damaged"), { name: "sectorId", bits: 5 }, b8("foo")])
+// $bitfield/define[u16]("flags-auto", [b1("shielded"), b1("cloaked"), b1("damaged"), { name: "sector-id", bits: 5 }, b8("foo")])
 
-fn intWidthForBits(bits: size): size {
+fn int-width-for-bits(bits: size): size {
   if bits <= 8 8
   else if bits <= 16 16
   else if bits <= 32 32
@@ -13,67 +13,64 @@ fn intWidthForBits(bits: size): size {
 fn bn(name: string, bits: size): { name: string, bits: size } { { name, bits } }
 fn b1(name: string): { name: string, bits: size } { bn(name = name, bits = 1) }
 fn b8(name: string): { name: string, bits: size } { bn(name = name, bits = 8) }
-fn define[Base](type-name: string, members: span[{ name: string, bits: size }]): string {
-  use meta/CodeWriter;
+fn define[base](type-name: string, members: span[{ name: string, bits: size }]): string {
+  use meta/code-writer;
 
-  let baseTypeId: u64 = types/type-id[Base]();
-  let baseSchema = types/type-id-schema(baseTypeId);
-  let baseName = types/type-id-name(baseTypeId);
-  require baseSchema is :int(intKind) else { crash("Base should be an int; got {baseName}") };
-  let totalBits = intKind.bit-width();
+  let base-type-id: u64 = types/type-id[base]();
+  let base-schema = types/type-id-schema(base-type-id);
+  let base-name = types/type-id-name(base-type-id);
+  require base-schema is :int(int-kind) else { crash("Base should be an int; got {base-name}") };
+  let total-bits = int-kind.bit-width();
 
-  // This is just a regular StringBuilder that gets some extra methods since we've
-  // brought the meta/CodeWriter ability into scope
-  let code = StringBuilder/new();
+  // This is just a regular string-builder that gets some extra methods since we've
+  // brought the meta/code-writer ability into scope
+  let code = string-builder/new();
 
   // This defines a named struct type with one field, which is a common newtype pattern
-  writelnf(code, "type {type-name} = {{ bits: {baseName} }");
+  writelnf(code, "type {type-name} = {{ bits: {base-name} }");
 
   // We crack open a namespace to put some goodies inside
   writelnf(code, "ns for {type-name} {{");
 
   // This actually gets captured by the lambda below
-  let bitIndexVal = 0;
-  let bitIndex: *mut size = &bitIndexVal;
+  let bit-index-val = 0;
+  let bit-index: *mut size = &bit-index-val;
 
   // Let's analyze each member we were passed, and perform the actual bitfield layouting work once.
   // We'll make a list of an unnamed (anonymous) little struct type for our info we'll need later
-  let memberInfo: list[{ 
+  let member-info: list[{ 
     // mask: the positioned mask
     mask: usize,
-    // typeWidth: the smallest type that can hold these bits; see `intWidthForBits`
-    typeWidth: size,
-    // invMask: the negation of the mask, but also masked down to typeWidth size (to generate constants that fit)
-    invMask: usize,
-    // rawValue: the mask shifted to the start, the 'magnitude' of the used bits
-    rawValue: usize,
+    // type-width: the smallest type that can hold these bits; see `int-width-for-bits`
+    type-width: size,
+    // inv-mask: the negation of the mask, but also masked down to type-width size (to generate constants that fit)
+    inv-mask: usize,
+    // raw-value: the mask shifted to the start, the 'magnitude' of the used bits
+    raw-value: usize,
     // offset: the bit pos that the mask starts at; where the value lives; how much to shift
-    offset: size,
-    // nameCap: the name of the field, capitalized
-    nameCap: string
-  }] = list/fromMapping(members, fn member. {
+    offset: size
+  }] = list/from-mapping(members, fn member. {
     let bits = member.bits;
-    if bitIndex.* + bits > totalBits crash("Too big: {bitIndex.* + bits}");
-    let rawValue = u64/bitmaskLow(bits);
-    let typeWidth = intWidthForBits(bits);
-    let nameCap = member.name.capitalizeAscii();
-    let mask = rawValue << bitIndex.*.as();
-    let offset = bitIndex.*;
-    let sizeMask = u64/bitmaskLow(typeWidth);
-    let invMask = mask.bit-not() & sizeMask;
+    if bit-index.* + bits > total-bits crash("Too big: {bit-index.* + bits}");
+    let raw-value = u64/bitmask-low(bits);
+    let type-width = int-width-for-bits(bits);
+    let mask = raw-value << bit-index.*.as();
+    let offset = bit-index.*;
+    let size-mask = u64/bitmask-low(type-width);
+    let inv-mask = mask.bit-not() & size-mask;
 
-    bitIndex <- bitIndex.* + bits;
+    bit-index <- bit-index.* + bits;
 
-    { mask, typeWidth, invMask, rawValue, offset, nameCap }
+    { mask, type-width, inv-mask, raw-value, offset }
   });
 
   // The for loop works on any type that implements iterable or iterator
   // The item being iterated over is named `it` if no binding is supplied
   // `it-index` is also given to us
   for members {
-    let info = memberInfo.get(it-index);
+    let info = member-info.get(it-index);
     // Emit globals, or constants, for each field's mask
-    writelnf(code, "  let {it.name}Mask: {baseName} = {info.mask}");
+    writelnf(code, "  let {it.name}-mask: {base-name} = {info.mask}");
   };
 
   writelnf(code, "  let zero: {type-name} = {{ bits: 0 }");
@@ -82,53 +79,49 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
   // we'll use bool since that's what the people likely want. Note that we could configure
   // any of this behavior because this is just a regular function
   for members {
-    let info = memberInfo.get(it-index);
-    let nameCap = info.nameCap;
-    let isBool = it.bits == 1;
-    let fieldType = if isBool "bool" else "u{info.typeWidth}";
+    let info = member-info.get(it-index);
+    let is-bool = it.bits == 1;
+    let field-type = if is-bool "bool" else "u{info.type-width}";
 
     // Getter
-    writelnf(code, "  fn get{nameCap}(self: {type-name}): {fieldType} {{");
+    writelnf(code, "  fn get-{it.name}(self: {type-name}): {field-type} {{");
 
-    writelnf(code, "    let bits: {baseName} = self.bits;");
-    writelnf(code, "    let shifted: {baseName} = bits >> {info.offset};");
-    writelnf(code, "    let cleared: {baseName} = shifted & {info.rawValue};");
-    if isBool {
+    writelnf(code, "    let bits: {base-name} = self.bits;");
+    writelnf(code, "    let shifted: {base-name} = bits >> {info.offset};");
+    writelnf(code, "    let cleared: {base-name} = shifted & {info.raw-value};");
+    if is-bool {
       writelnf(code, "    cleared == 1");
     } else {
-      writelnf(code, "    cleared.as[{fieldType}]");
+      writelnf(code, "    cleared.as[{field-type}]");
     };
 
     writelnf(code, "  }"); // End Getter
 
     // Setter
-    writelnf(code, "  fn set{nameCap}(self: {type-name}, value: {fieldType}): {type-name} {{");
-    if isBool {
-      writelnf(code, "    let maskedValue: {baseName} = value.as-u8();")
+    writelnf(code, "  fn set-{it.name}(self: {type-name}, value: {field-type}): {type-name} {{");
+    if is-bool {
+      writelnf(code, "    let masked-value: {base-name} = value.as-u8();")
     } else {
-      writelnf(code, "    let maskedValue: {baseName} = value & {info.rawValue};")
+      writelnf(code, "    let masked-value: {base-name} = value & {info.raw-value};")
     };
-    let clearMask = info.invMask;
-    writelnf(code, "    let clearedBits: {baseName} = self.bits & {clearMask};");
-    writelnf(code, "    let insertedBits: {baseName} = clearedBits | (maskedValue << {info.offset});");
-    writelnf(code, "    {{ bits: insertedBits }");
+    let clear-mask = info.inv-mask;
+    writelnf(code, "    let cleared-bits: {base-name} = self.bits & {clear-mask};");
+    writelnf(code, "    let inserted-bits: {base-name} = cleared-bits | (masked-value << {info.offset});");
+    writelnf(code, "    {{ bits: inserted-bits }");
     writelnf(code, "  }"); // End setter
   };
 
   writelnf(code, "}"); // End ns
 
-  let printBody = StringBuilder/new();
+  let print-body = string-builder/new();
   for members {
-    let info = memberInfo.get(it-index);
-    let getName = "get{info.nameCap}";
+    let get-name = "get-{it.name}";
     let last = it-index + 1 == members.len();
     let sep = if last "" else ",";
-    writelnf(printBody, `    w.string("{it.name}={{self.{getName}()}{sep}");`);
+    writelnf(print-body, `    w.string("{it.name}={{self.{get-name}()}{sep}");`);
   };
 
-  // Have to use address of so the blanket impl applies
-  // FIXME: Use the address of trick on blanket impl search as well
-  (&code).implPrint(type-name, printBody.build(), indent = 0);
+  code.impl-print(type-name, print-body.build(), indent = 0);
 
   code.build()
 }
