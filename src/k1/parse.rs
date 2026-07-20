@@ -2711,7 +2711,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     }
                 }
                 k if k.is_string() => {
-                    let StringTokenInfo { delim, interp_exprs, done } = k.as_string().unwrap();
+                    let StringTokenInfo { delim, interp_exprs: _, done } = k.as_string().unwrap();
                     // Accessing the tok_chars this way achieves a partial borrow of self
                     let text = Parser::tok_chars(
                         &self.ast.spans,
@@ -2740,23 +2740,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     }
                     let is_terminated = done;
                     while let Some(c) = chars.next() {
-                        if c == '{' && interp_exprs {
-                            let Some(next) = chars.next() else {
-                                return Err(error("String ended with '{'", first));
-                            };
-                            if next == '{' {
-                                buf.push('{');
-                            } else {
-                                // If this were a {} hole, then it'd would have been lexed
-                                // as brace tokens, not chars
-                                // So that means the lexer decided just to push it, so it means no
-                                // interp
-                                return Err(error(
-                                    "Internal Compiler Error: contains non-escaped '{'",
-                                    first,
-                                ));
-                            }
-                        } else if c == '\\' {
+                        if c == '\\' {
                             let Some(next) = chars.next() else {
                                 return Err(error("String ended with '\\'", first));
                             };

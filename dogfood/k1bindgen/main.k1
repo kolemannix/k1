@@ -258,7 +258,7 @@ fn write-k1-type(context w: *mut string-builder, name-config)(k1-type, indent: s
       w.string("}")
     },
     :enum(e) -> {
-      w.line("either({e.int-type}) {{");
+      w.line("either({e.int-type}) \{");
       for e.members {
         w.repeat("  ", indent + 1);
         writelnf(w, "{name} = {explicit-value},", it)

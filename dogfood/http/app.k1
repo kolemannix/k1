@@ -102,7 +102,7 @@ fn render-big-json(out: *mut string-builder, rows: size) {
   while i < rows {
     if i > 0 { out.string(",") };
     let score = i * 7 % 1000;
-    writef(out, `{{"id": {i}, "name": "row-{i}", "flags": [true, false], "score": {score}}`);
+    writef(out, `\{"id": {i}, "name": "row-{i}", "flags": [true, false], "score": {score}}`);
     i := i + 1;
   };
   out.string("]");
@@ -121,9 +121,9 @@ fn mock-publisher-main(arg: ptr) {
     // this thread's tmp arena holds the interpolated event data
     mem/tmp().reset(clear = false);
     game-tick <- game-tick + 1;
-    publisher.publish("game.42", `{{"tick": {game-tick}}`);
+    publisher.publish("game.42", `\{"tick": {game-tick}}`);
     if game-tick % 5 == 0 {
-      publisher.publish("global", `{{"uptime-seconds": {game-tick}}`);
+      publisher.publish("global", `\{"uptime-seconds": {game-tick}}`);
     };
   }
 }

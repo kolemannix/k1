@@ -193,10 +193,10 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
   let code = string-builder/new();
 
   // This defines a named struct type with one field, which is a common newtype pattern
-  writelnf(code, "type {type-name} = {{ bits: {base-name} }");
+  writelnf(code, "type {type-name} = \{ bits: {base-name} }");
 
   // We crack open a namespace to put some goodies inside
-  writelnf(code, "ns for {type-name} {{");
+  writelnf(code, "ns for {type-name} \{");
 
   // This actually gets captured by the lambda below
   let bit-index-val = 0;
@@ -239,7 +239,7 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
     writelnf(code, "  let {it.name}-mask: {base-name} = {info.mask}");
   };
 
-  writelnf(code, "  let zero: {type-name} = {{ bits: 0 }");
+  writelnf(code, "  let zero: {type-name} = \{ bits: 0 }");
 
   // Now let's do a getter and setter for each bitfield. If the width is 1,
   // we'll use bool since that's what the people likely want. Note that we could configure
@@ -250,7 +250,7 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
     let field-type = if is-bool "bool" else "u{info.type-width}";
 
     // Getter
-    writelnf(code, "  fn get-{it.name}(self: {type-name}): {field-type} {{");
+    writelnf(code, "  fn get-{it.name}(self: {type-name}): {field-type} \{");
 
     writelnf(code, "    let bits: {base-name} = self.bits;");
     writelnf(code, "    let shifted: {base-name} = bits >> {info.offset};");
@@ -264,7 +264,7 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
     writelnf(code, "  }"); // End Getter
 
     // Setter
-    writelnf(code, "  fn set-{it.name}(self: {type-name}, value: {field-type}): {type-name} {{");
+    writelnf(code, "  fn set-{it.name}(self: {type-name}, value: {field-type}): {type-name} \{");
     if is-bool {
       writelnf(code, "    let masked-value: {base-name} = value.as-u8();")
     } else {
@@ -273,7 +273,7 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
     let clear-mask = info.inv-mask;
     writelnf(code, "    let cleared-bits: {base-name} = self.bits & {clear-mask};");
     writelnf(code, "    let inserted-bits: {base-name} = cleared-bits | (masked-value << {info.offset});");
-    writelnf(code, "    {{ bits: inserted-bits }");
+    writelnf(code, "    \{ bits: inserted-bits }");
     writelnf(code, "  }"); // End setter
   };
 
@@ -284,7 +284,7 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
     let get-name = "get-{it.name}";
     let last = it-index + 1 == members.len();
     let sep = if last "" else ",";
-    writelnf(print-body, `    w.string("{it.name}={{self.{get-name}()}{sep}");`);
+    writelnf(print-body, `    w.string("{it.name}=\{self.{get-name}()}{sep}");`);
   };
   (&code).impl-print(type-name, print-body.build(), indent = 0);
 

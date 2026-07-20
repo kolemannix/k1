@@ -56,24 +56,24 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
 
     // Initialize a loop through the args
     writelnf(code, `let i = 1;`);
-    writelnf(code, `while i < args.len() {{`);
+    writelnf(code, `while i < args.len() \{`);
     writelnf(code, `  let cur = args.get(i);`);
-    writelnf(code, `  switch cur {{`);
+    writelnf(code, `  switch cur \{`);
 
     // Parse the argument using a switch - generate a case or two for each arg field
     // The switch arms update the locals
     for s.fields {
       switch get-arg-kind(it.type-id) {
         :string or :opt-string -> {
-          writelnf(code, `    "-{it.name}" -> {{ if parse-next(&i, args) is :some(next) {{ {it.name}-val := :some(next) } },`);
-          writelnf(code, `    "/{it.name}" -> {{ if parse-next(&i, args) is :some(next) {{} },`);
+          writelnf(code, `    "-{it.name}" -> \{ if parse-next(&i, args) is :some(next) \{ {it.name}-val := :some(next) } },`);
+          writelnf(code, `    "/{it.name}" -> \{ if parse-next(&i, args) is :some(next) \{} },`);
         },
         :list-string -> {
-          writelnf(code, `    "+{it.name}" -> {{ if parse-next(&i, args) is :some(next) {{ {it.name}-val.push(next) } },`);
+          writelnf(code, `    "+{it.name}" -> \{ if parse-next(&i, args) is :some(next) \{ {it.name}-val.push(next) } },`);
         },
       };
     };
-    code.line(`    _ -> crash("Unrecognized arg {{cur}")`);
+    code.line(`    _ -> crash("Unrecognized arg \{cur}")`);
     code.line(`  }`);
     code.line(`};`);
 
@@ -86,7 +86,7 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
     };
 
     // Construct the final output struct
-    writelnf(code, ":ok({{");
+    writelnf(code, ":ok(\{");
     for s.fields {
       writelnf(code, "{it.name}: {it.name}-out,")
     };

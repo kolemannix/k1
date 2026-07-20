@@ -494,7 +494,7 @@ impl print for string {
 }
 
 impl print for {} {
-  fn print-to[w: writer](self: {}, w) { w.write-string("{{}") }
+  fn print-to[w: writer](self: {}, w) { w.write-string("\{}") }
 }
 
 

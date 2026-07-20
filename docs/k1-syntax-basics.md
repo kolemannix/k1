@@ -699,6 +699,8 @@ let name = "k1";
 assert-equals("hello {name}", "hello k1");
 ```
 
+Escape a literal `{` as `\{`; `}` needs no escape.
+
 Use `writef` to write formatted text to any value that implements the `writer`
 ability. The first argument is the writer, the second is the format string, and
 the optional third argument supplies format values:

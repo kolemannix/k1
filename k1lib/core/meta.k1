@@ -16,7 +16,7 @@ ns meta {
      
     fn impl-print(self, type-name: string, body: string, indent: size) {
       self.indent(indent);
-      self.line("impl print for {type-name} {{");
+      self.line("impl print for {type-name} \{");
 
       self.indent(indent + 1);
       self.line(p"fn print-to[w: writer](self, w) {");
@@ -57,17 +57,17 @@ ns meta {
     if fields.is-empty() { crash("Input struct must have at least one field") };
 
     let code = string-builder/new();
-    code.line("type {name} = {{");
+    code.line("type {name} = \{");
     for f in fields {
       code.line("  ARR_{f.name}: list[type-from-id({f.type-id})],");
     };
     code.line("}");
 
     // begin ns
-    code.line(`ns for {name} {{`);
+    code.line(`ns for {name} \{`);
 
     // begin fn get
-    code.line(`  fn get(self: {name}, index: size): {tt} {{`);
+    code.line(`  fn get(self: {name}, index: size): {tt} \{`);
     code.line(`    let returned ret: {tt} = mem/zeroed();`);
     for f in fields {
       code.line(`    ret.{f.name} <- self.ARR_{f.name}.get(index);`)
@@ -76,14 +76,14 @@ ns meta {
     code.line(`  }`); // end fn get
 
     // begin fn empty
-    code.line(`  fn empty(): {name} {{ {{`);
+    code.line(`  fn empty(): {name} \{ \{`);
     for f in fields {
       code.line(`    ARR_{f.name}: list/empty(),`);
     };
     code.line(`  } }`); // end fn empty
 
     // begin fn push
-    code.line(`  fn push(self: *mut {name}, value: {tt}) {{`);
+    code.line(`  fn push(self: *mut {name}, value: {tt}) \{`);
     for f in fields {
       code.line(`    self.ARR_{f.name}.push(value.{f.name});`)
     };

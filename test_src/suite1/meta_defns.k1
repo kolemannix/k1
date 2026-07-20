@@ -8,8 +8,8 @@ $ p"fn is-pow2(x: u64): bool { (x - 1) || bitwise/bit-and(x) == 0 }"
 $ {
   let name1 = "1";
   let name2 = "2";
-  let a = "ns secret {{ fn secret{name1}(): int {{ 42 } }\n";
-  let b = "ns secret {{ fn secret{name2}(): int {{ 43 } }\n";
+  let a = "ns secret \{ fn secret{name1}(): int \{ 42 } }\n";
+  let b = "ns secret \{ fn secret{name2}(): int \{ 43 } }\n";
   "{a}{b}"
 }
 
@@ -50,5 +50,5 @@ fn test() {
 // Only "static, true" and "meta, true" should appear
 // #if true #static { println("static, true"); {} } 
 // #if false #static { println("static, false"); {} } 
-// #if true ${ println("meta, true"); "let u1: empty = {{};" } 
-// #if false ${ println("meta, false"); "let u2: empty = {{};" } 
+// #if true ${ println("meta, true"); "let u1: empty = \{};" } 
+// #if false ${ println("meta, false"); "let u2: empty = \{};" } 

@@ -536,12 +536,13 @@ pub struct EscapedChar {
     pub sentinel: char,
     pub output: u8,
 }
-pub const SHARED_STRING_ESCAPED_CHARS: [EscapedChar; 5] = [
+pub const SHARED_STRING_ESCAPED_CHARS: [EscapedChar; 6] = [
     EscapedChar { sentinel: 'n', output: b'\n' },
     EscapedChar { sentinel: '0', output: b'\0' },
     EscapedChar { sentinel: 't', output: b'\t' },
     EscapedChar { sentinel: 'r', output: b'\r' },
     EscapedChar { sentinel: '\\', output: b'\\' },
+    EscapedChar { sentinel: '{', output: b'{' },
 ];
 
 pub const DOUBLE_QUOTE_STRING_ESCAPED_CHARS: [EscapedChar; 1] =
@@ -810,33 +811,26 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 self.advance();
                             }
                         }
-                        // { is only special when interp_exprs is true
+                        // { is only special when interp_exprs is true; \{ escapes it
                         '{' if interp_exprs => {
-                            let next = self.peek_n(1);
-                            if next == '{' {
-                                self.advance();
-                                self.advance();
-                                tok_len += 2;
-                            } else {
-                                self.advance();
-                                // Track brace depth and done when == 0
-                                debug!("[lex] starting code at {n} with tok_len = {tok_len}");
-                                let string_delim_kind = lex_mode.string_delim_kind().unwrap();
-                                state.mode_stack.push(LexMode::Interp { brace_depth: 1 });
-                                tokens.push(make_buffered_token(
-                                    self,
-                                    K::string(string_delim_kind, interp_exprs, false),
-                                    n,
-                                    tok_len,
-                                ));
-                                tokens.push(make_token(
-                                    self,
-                                    K::OpenBrace,
-                                    n,
-                                    1,
-                                ));
-                                return Ok(Some(()));
-                            }
+                            self.advance();
+                            // Track brace depth and done when == 0
+                            debug!("[lex] starting code at {n} with tok_len = {tok_len}");
+                            let string_delim_kind = lex_mode.string_delim_kind().unwrap();
+                            state.mode_stack.push(LexMode::Interp { brace_depth: 1 });
+                            tokens.push(make_buffered_token(
+                                self,
+                                K::string(string_delim_kind, interp_exprs, false),
+                                n,
+                                tok_len,
+                            ));
+                            tokens.push(make_token(
+                                self,
+                                K::OpenBrace,
+                                n,
+                                1,
+                            ));
+                            return Ok(Some(()));
                         }
                         '"' if lex_mode.is_dq_string() => {
                             // Terminates a double-quoted string
@@ -1571,8 +1565,8 @@ mod test {
     }
 
     #[test]
-    fn interpolation_escape_doublebrace() -> anyhow::Result<()> {
-        let input = "\"Method 'sum' does not exist on type: '{{ x: iword, y: iword }'\"";
+    fn interpolation_escape_brace() -> anyhow::Result<()> {
+        let input = r#""Method 'sum' does not exist on type: '\{ x: iword, y: iword }'""#;
         expect_token_kinds(input, vec![K::StringDoneDqInterp])
     }
 
@@ -1605,7 +1599,7 @@ mod test {
 
     #[test]
     fn backtick_string_1() -> anyhow::Result<()> {
-        let input = "`Method 'sum' does not exist on type: '{{ x: iword, y: iword }'`";
+        let input = r#"`Method 'sum' does not exist on type: '\{ x: iword, y: iword }'`"#;
         expect_token_kinds(input, vec![K::StringDoneBtInterp])
     }
 

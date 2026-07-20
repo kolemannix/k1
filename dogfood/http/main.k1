@@ -543,7 +543,7 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
 
 ${
   let template = fn(name: string, ptr-type: string) `
-type {name} = {{
+type {name} = \{
   body-mode: http/body-mode,
   path-pattern: string,
   logic-fn: *fn(http/request, {ptr-type}) -> http-response,

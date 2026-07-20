@@ -57,6 +57,12 @@ Simple but missing
 - [x] implement iterator for array
 - [x] static #switch
 
+Feedback
+- [ ] else { cap } is a struct literal. Field shorthand makes any { ident } ambiguous with a block, and it resolved to { cap: cap }, giving "Expected i64 but got { cap: i64 }". I could decode it, but this will bite everyone eventually. Worth a deliberate rule — e.g. struct literal requires : or , or the type being expected, or a parse-time warning when a block position resolves to a shorthand struct.
+- [ ] A #static infinite loop hangs the compiler with zero output. Ten minutes of nothing. A VM step budget that errors out ("static execution exceeded N instructions, last function: ...") would have turned a hang-bisect into an instant diagnosis.
+- [ ] For loop with never body ir crash
+- [ ] Iterator ability: why is peek the primitive? With peek(self: *self) immutable, a filtering iterator like mine can't cache what it found — next() = scan (peek) + scan again (advance-by). Also every nth impl in the codebase is the identical advance-by(n); self.next() — could that be a default? Was peek chosen for for-loop desugaring reasons, or would nextced-as-primitive with peek-via-buffering be on the table?
+
 bindgen dogfood list
 - [ ] dogfood(k1): implement 'continue'
 - [x] dogfood(lsp): failed call still ls entity

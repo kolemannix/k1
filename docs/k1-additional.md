@@ -123,7 +123,7 @@ $ "let n: u64 = 255"
 
 $ {
   let name = "point";
-  "type {name} = {{ x: int, y: int }"
+  "type {name} = \{ x: int, y: int }"
 }
 ```
 
@@ -134,7 +134,7 @@ $pre/make-point("my-point")
 
 ns pre {
   fn make-point(name: string): string {
-    "type {name} = {{ x: int, y: int }"
+    "type {name} = \{ x: int, y: int }"
   }
 }
 ```

@@ -13,7 +13,7 @@ $pre/make-point("my-meta-point")
 ns pre {
   let pi: f32 = 3.14
   fn make-point(name: string): string {
-    "type {name} = {{ x: i32, y: i32 }";
+    "type {name} = \{ x: i32, y: i32 }";
   }
 }
 
