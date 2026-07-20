@@ -10701,10 +10701,6 @@ impl TypedProgram {
         let mut loop_block =
             self.new_block_builder(outer_for_expr_scope, ScopeType::LexicalBlock, body_span, 3);
         let loop_scope_id = loop_block.scope_id;
-        let expected_block_type = ctx
-            .expected_type_id
-            .and_then(|t| self.types.get_as_list_instance(t))
-            .map(|list_type| list_type.element_type);
 
         let mut consequent_block =
             self.new_block_builder(loop_scope_id, ScopeType::LexicalBlock, iterable_span, 3);
@@ -10737,21 +10733,14 @@ impl TypedProgram {
         );
         let body_block = self.eval_block(
             &for_expr.body_block,
-            ctx.with_scope(consequent_block.scope_id).with_expected_type(expected_block_type),
+            ctx.with_scope(consequent_block.scope_id).with_no_expected_type(),
             false,
         )?;
 
         self.push_block_stmt_id(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
 
-        let user_body_block_id = body_block;
-        let user_block_variable = self.synth_variable_defn_simple(
-            self.ast.idents.b.block_expr_val,
-            user_body_block_id,
-            consequent_block.scope_id,
-        );
-
         consequent_block.statements.push(binding_variable.defn_stmt);
-        consequent_block.statements.push(user_block_variable.defn_stmt);
+        self.push_block_expr_id(&mut consequent_block, body_block);
 
         let next_is_some_call = self.synth_sum_is_variant(next_variable.variable_expr, 1, None)?;
         let empty_break = self.synth_empty_struct(body_span);
@@ -10764,8 +10753,9 @@ impl TypedProgram {
             NEVER_TYPE_ID,
             body_span,
         );
+        let consequent_type = self.exprs.get_type(body_block);
         let consequent_block_id =
-            self.exprs.add_block(&mut self.mem, consequent_block, self.types.builtins.empty);
+            self.exprs.add_block(&mut self.mem, consequent_block, consequent_type);
         let if_next_loop_else_break_expr = self.synth_if_else(
             self.types.builtins.empty,
             next_is_some_call,

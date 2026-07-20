@@ -49,7 +49,17 @@ fn in-break(): never {
   core/sys/exit(0)
 }
 
+fn for-body(run: bool): i64 {
+  if run {
+    for i in core/int-range/up-to(5) {
+      crash("for-body")
+    };
+  };
+  42
+}
+
 fn test() {
   let crashy-args-error = test-compile(#static call-arguments());
   assert(crashy-args-error is :none);
+  assert(for-body(false) == 42);
 }
