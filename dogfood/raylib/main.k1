@@ -2,12 +2,12 @@ let MODULE_INFO: k1/module-manifest = {
   let frameworks = ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"];
   let link-args = list/empty[string]();
   for frameworks { link-args.push("-framework"); link-args.push(it) };
-  {
-    .kind = :executable,
-    .deps = [],
-    .multithreading = false,
-    .libs = [{ .name = "raylib", .link-type = :static }],
-    .link-args = link-args.as-span(),
+  .{
+    kind = :executable,
+    deps = [],
+    multithreading = false,
+    libs = [.{ name = "raylib", link-type = :static }],
+    link-args = link-args.as-span(),
   }
 }
 ns raylib {
@@ -33,10 +33,10 @@ ns raylib {
 
 }
 
-let RED: raylib/color    = { .r = 255, .g = 0, .b = 0, .a = 255 }
-let GRAY: raylib/color   = { .r = 200, .g = 200, .b = 200, .a = 255 }
-let PINK: raylib/color   = { .r = 255, .g = 109, .b = 194, .a = 255 }
-let PURPLE: raylib/color = { .r = 200, .g = 122, .b = 255, .a = 255 }
+let RED: raylib/color    = .{ r = 255, g = 0, b = 0, a = 255 }
+let GRAY: raylib/color   = .{ r = 200, g = 200, b = 200, a = 255 }
+let PINK: raylib/color   = .{ r = 255, g = 109, b = 194, a = 255 }
+let PURPLE: raylib/color = .{ r = 200, g = 122, b = 255, a = 255 }
 
 type thing-kind = either {
   bits64(u64),
@@ -62,9 +62,9 @@ fn run(title: string): i32 {
 
   let perm = alloc-mode:custom-arena(core/arena/init-virtual(1));
   let things: list[thing] = list/with-capacity-in(context perm)(1024);
-  things.push-in(context perm)({
-    .pos = { .x = 200, .y = 300 },
-    .kind = :bits64(10)
+  things.push-in(context perm)(.{
+    pos = .{ x = 200, y = 300 },
+    kind = :bits64(10)
   });
   raylib/init(800, 450, title-c.ptr);
   raylib/set-target-fps(60);

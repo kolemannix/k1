@@ -28,17 +28,17 @@ fn unwrap-b[
 }
 
 fn get-nothin[a, b, t: as-pair[AA=a, BB=b]](_t: t) {
-  {}
+  .{}
 }
 
 fn test() {
   // Phase 1
-  let my-pair: pair[int, bool] = { .a = mem/new(10), .b = some(true) };
+  let my-pair: pair[int, bool] = .{ a = mem/new(10), b = some(true) };
   get-nothin(_t = my-pair);
   let b = unwrap-b[int, bool, pair[int, bool]](my-pair);
   assert(b);
   let i = unwrap-b[bool, int, pair[int, bool]](my-pair);
   assert-equals(i, 10);
 
-  {}
+  .{}
 }

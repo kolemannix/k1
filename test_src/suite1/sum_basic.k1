@@ -5,7 +5,7 @@ fn sum-payload() {
   let a: maybe = :a;
   let b: maybe = :b('x');
   let c: maybe = :c("hello, sums");
-  if a is :a {} else crash("");
+  if a is :a .{} else crash("");
   assert(a is :a);
 
   if b is :b(x) {
@@ -15,7 +15,7 @@ fn sum-payload() {
   assert(b is :b('x'));
   assert(b.as-b().! == 'x');
 
-  if c is :c("hello, sums") {} else crash("");
+  if c is :c("hello, sums") .{} else crash("");
   assert(c is :c(_));
   assert(c.as-c().! == "hello, sums");
 
@@ -44,7 +44,7 @@ fn sum-quiet() {
   assert(b is :b _);
   assert(b is :b 'x' or b is :a);
 
-  let msg = switch c {
+  let msg = c is {
     :a -> "a",
     :b _ -> "b",
     :c s if s.len() > 0 -> s,
@@ -66,7 +66,7 @@ ns for my-result {
     self.as-ok().!
   }
   fn show[t: print, e: print](self: my-result[t, e]): string {
-    switch self {
+    self is {
       :ok(v) -> { "Ok: {v}\n" },
       :err(e) -> { "Error: {e}\n" }
     }
@@ -108,7 +108,7 @@ fn tags() {
   assert-equals(b.sum-name(), "b");
   assert-equals(c.sum-name(), "c");
 
-  {}
+  .{}
 }
 
 fn test() {

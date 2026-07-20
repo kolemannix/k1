@@ -30,7 +30,7 @@ fn test() {
 
   assert(identity-nested(4) == 4);
   assert(identity-nested(true));
-  assert(identity-nested({ .value = 42 }).value == 42);
+  assert(identity-nested(.{ value = 42 }).value == 42);
 
   identity(true): bool;
   identity(true);
@@ -52,9 +52,9 @@ fn test() {
   let x = opt:some(42);
 
   let with-never = test-compile(
-    combine3((&x).*, core/sys/exit(1), { .one = some(-1), .two = some(3), })
+    combine3((&x).*, core/sys/exit(1), .{ one = some(-1), two = some(3), })
   );
   assert-equals(with-never, :none);
 
-  {}
+  .{}
 }

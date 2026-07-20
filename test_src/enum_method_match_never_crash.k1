@@ -3,7 +3,7 @@ ns enum_method_match_never {
   type e = either { a(int), b }
   ns for e {
     fn value-if-a(self: e): int {
-      switch self {
+      self is {
         :a(i) -> i,
         :b -> crash("This is a B!"),
       }

@@ -11,7 +11,7 @@ fn test() {
   assert-equals(types/align[u], 4);
   let u: u = uninit;
 
-  require types/schema[u] is :union({ .fields })
+  require types/schema[u] is :union(.{ fields })
     and fields.len() == 3
     and fields.get(0).name == "a"
     and fields.get(0).offset == 0
@@ -23,5 +23,5 @@ fn test() {
 
   identity-u(u);
 
-  {}
+  .{}
 }

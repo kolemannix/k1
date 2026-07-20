@@ -15,5 +15,5 @@ fn test() {
     string/wrap-bytes(bytes.as-span())
   };
 
-  {}
+  .{}
 }

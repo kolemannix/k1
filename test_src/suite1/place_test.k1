@@ -7,7 +7,7 @@ type shape = either { circle({ radius: int, filled: bool }), point }
 let global-place-val: int = 77
 
 fn make-inner(): inner {
-  { .a = 1, .b = 2 }
+  .{ a = 1, b = 2 }
 }
 
 ns for inner {
@@ -19,7 +19,7 @@ ns for inner {
 // outer-ref.inner.me() got the address of a stack temp (dogfood/http hit this
 // as a corrupted libuv handle).
 fn receiver-coercion() {
-  let outer: outer = { .name = "hi", .inner = { .a = 11, .b = 22 } };
+  let outer: outer = .{ name = "hi", inner = .{ a = 11, b = 22 } };
   let outer-ref = &outer;
   let inner-ref = outer-ref.inner.&;
   assert(outer-ref.inner.me().as[ptr] == inner-ref.as[ptr]);
@@ -65,7 +65,7 @@ fn test() {
   assert-equals(x-ref2.*, 10);
 
   // Address of a nested struct field, and writing through it
-  let outer: outer = { .name = "hi", .inner = { .a = 5, .b = 6 } };
+  let outer: outer = .{ name = "hi", inner = .{ a = 5, b = 6 } };
   let a-ref = &outer.inner.a;
   assert-equals(a-ref.*, 5);
   a-ref <- 42;
@@ -107,16 +107,16 @@ fn test() {
   assert-equals(points.get(1).b, 201);
 
   // Mixed aggregates: store to struct members inside a sum payload, through a
-  // reference binding from a switch on the variant
-  let shape: shape = :circle({ .radius = 5, .filled = false });
-  switch &shape {
+  // reference binding from a match on the variant
+  let shape: shape = :circle(.{ radius = 5, filled = false });
+  (&shape) is {
     :circle(c)* -> {
       c.radius <- 10;
       c.filled <- true;
     },
     _ -> crash("expected a circle")
   };
-  switch shape {
+  shape is {
     :circle(c) -> {
       assert-equals(c.radius, 10);
       assert(c.filled);
@@ -126,5 +126,5 @@ fn test() {
 
   receiver-coercion();
 
-  negative-cases(3, { .a = 1, .b = 2 }, arr);
+  negative-cases(3, .{ a = 1, b = 2 }, arr);
 }

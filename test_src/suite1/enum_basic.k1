@@ -2,14 +2,14 @@ ns enum_basic;
 
 fn enum-no-payload() {
   let v: either { yes, no } = :no;
-  if v is :no {} else crash("");
+  if v is :no .{} else crash("");
   v := :yes;
-  if v is :yes {} else crash("");
+  if v is :yes .{} else crash("");
 }
 
 type enum-abc = either(u8) { a, b, c }
 impl print for enum-abc {
-  fn print-to[w: writer](self, w) { switch self { 
+  fn print-to[w: writer](self, w) { self is { 
     :a -> w.write-char('a'),
     :b -> w.write-char('b'),
     :c -> w.write-char('c'),

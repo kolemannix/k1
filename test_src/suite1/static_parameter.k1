@@ -15,5 +15,5 @@ fn test() {
   let result3 = add-static[5](3);
   assert-equals(result3, 8);
 
-  {}
+  .{}
 }

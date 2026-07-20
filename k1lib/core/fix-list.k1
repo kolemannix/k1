@@ -14,7 +14,7 @@ ns for fixlist {
   fn zeroed[t, n: static size](): fixlist[t, n] { mem/zeroed() }
 
   fn uninit[t, n: static size](): core/fixlist[t, n] {
-    { .used = 0, .data = uninit }
+    .{ used = 0, data = uninit }
   }
 
   fn clear[t, n: static size](self: *mut fixlist[t, n]): empty {
@@ -37,9 +37,9 @@ ns for fixlist {
     if used < self.cap() {
       self.data.set(used, value);
       self.used <- used.as[u32] + 1;
-      :ok({})
+      :ok(.{})
     } else {
-      :err({})
+      :err(.{})
     }
   }
 
@@ -49,9 +49,9 @@ ns for fixlist {
       let dst-slice = self.data.as-buffer().slice(start = self.len(), end = needed);
       buffer/copy(src = values.inner-buffer(), dst = dst-slice);
       self.used <- needed.as[u32];
-      :ok({})
+      :ok(.{})
     } else {
-      :err({})
+      :err(.{})
       //:err("{typename} cannot fulfill push-n. {needed} (needed) > {self.capacity()}")
     }
   }
@@ -90,7 +90,7 @@ ns for fixlist {
   }
 
   fn pop[t, n: static size](self: *mut fixlist[t, n]): ?t {
-    switch self.last() {
+    self.last() is {
        :some(t) -> {
          self.used <- self.used - 1;
          :some(t)

@@ -50,7 +50,7 @@ fn test() {
 }
 
 fn test-parse(s: string, f: some fn json -> bool) {
-  switch json/parse-from-string(s) {
+  json/parse-from-string(s) is {
     :err(msg) -> crash("Failed: {msg}"),
     :ok(json) -> if not f(json) crash("Failed '{s}'")
   }

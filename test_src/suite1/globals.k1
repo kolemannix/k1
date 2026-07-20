@@ -31,5 +31,5 @@ fn test() {
    assert-equals(global-string.len(), 8);
    assert-equals(global-string, "imglobal");
 
-  {}
+  .{}
 }

@@ -1,7 +1,7 @@
 ns match_exhaust;
 
 fn match-bool(b: bool): string {
-  switch b {
+  b is {
     false -> identity("false"),
     true -> identity("true")
   }
@@ -9,7 +9,7 @@ fn match-bool(b: bool): string {
 
 type tri-state = either { yes, no, failure({ reason: string }) }
 fn match-tristate-opt(t: ?tri-state): string {
-  switch t {
+  t is {
     :some(:yes) -> "yes",
     :some(:no) -> "no",
     :some(:failure(s)) -> "failure: {s.reason}",
@@ -18,7 +18,7 @@ fn match-tristate-opt(t: ?tri-state): string {
 }
 
 fn failed-with-baz(t: tri-state): bool {
-  switch t {
+  t is {
     :yes -> false,
     :no -> false,
     :failure(s) -> s.reason == "baz"
@@ -26,7 +26,7 @@ fn failed-with-baz(t: tri-state): bool {
 }
 
 fn match-opt-bool(b: ?bool): string {
-  switch b {
+  b is {
     :none -> identity("None"),
     :some(false) -> identity("false"),
     :some(true) -> identity("true")
@@ -34,18 +34,18 @@ fn match-opt-bool(b: ?bool): string {
 }
 
 fn both-true(bb: { a: bool, b: bool }): bool {
-  switch bb {
-    { .a = false, .b = false } -> false,
-    { .a = false, .b = true } -> false,
-    { .a = true, .b = false } -> false,
-    { .a = true, .b = true } -> true
+  bb is {
+    .{ a = false, b = false } -> false,
+    .{ a = false, b = true } -> false,
+    .{ a = true, b = false } -> false,
+    .{ a = true, b = true } -> true
   }
 }
 
 fn main(): i32 {
-  switch 'x' {
-    'x' -> {},
-    a -> {}
+  'x' is {
+    'x' -> .{},
+    a -> .{}
   };
 
   assert-equals(match-bool(false), "false");
@@ -55,16 +55,16 @@ fn main(): i32 {
   let yes: tri-state = :yes;
   assert-equals(match-tristate-opt(:some(yes)), "yes");
   assert-equals(match-tristate-opt(:some(:yes)), "yes");
-  assert-equals(match-tristate-opt(:some(:failure({ .reason = "because" }))), "failure: because");
+  assert-equals(match-tristate-opt(:some(:failure(.{ reason = "because" }))), "failure: because");
 
-  assert(not both-true({ .a = true, .b = false }));
-  assert(both-true({ .a = true, .b = true }));
+  assert(not both-true(.{ a = true, b = false }));
+  assert(both-true(.{ a = true, b = true }));
 
-  assert(failed-with-baz(:failure({ .reason = "baz" })));
+  assert(failed-with-baz(:failure(.{ reason = "baz" })));
   assert(not failed-with-baz(:no));
 
-  switch some(42) {
-    :some(x) if x == 42 -> {},
+  some(42) is {
+    :some(x) if x == 42 -> .{},
     _ -> assert(false),
   };
 
@@ -74,7 +74,7 @@ fn main(): i32 {
   require foo is :ok(i);
 
   assert-equals(i, 42);
-  switch foo {
+  foo is {
     :ok(i) -> assert-equals(i, 42),
   };
 

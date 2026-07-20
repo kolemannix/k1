@@ -4,7 +4,7 @@
   extern("mach_absolute_time") fn mach_absolute_time(): u64
   extern("mach_timebase_info") fn mach_timebase_info(timebase: *mut mach_timebase_info_data_t): u64
 
-  let mutable timebase: mach_timebase_info_data_t = { .numer = 0, .denom = 0 }
+  let mutable timebase: mach_timebase_info_data_t = .{ numer = 0, denom = 0 }
 
   fn counter-to-nanos(counter: u64): u64 {
     if (timebase.denom == 0) {
@@ -18,7 +18,7 @@
 
 ns time {
   fn read-cpu-counter(): u64 {
-    #switch k1/os {
+    k1/os #is {
       :macos -> macos-time/mach_absolute_time(),
       :linux -> {
         let ts: core/posix/timespec = uninit;
@@ -29,7 +29,7 @@ ns time {
     }
   }
   fn counter-to-nanos(counter: u64): u64 {
-    #switch k1/os {
+    k1/os #is {
       :macos -> macos-time/counter-to-nanos(counter),
       :linux -> counter,
       :wasm -> #static crash("Unimplemented: counter-to-nanos for wasm")

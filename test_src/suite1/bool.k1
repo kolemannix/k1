@@ -26,5 +26,5 @@ fn test() {
   assert-equals(t.as[i32], 1);
   assert-equals(f.as[i32], 0);
 
-  {}
+  .{}
 }

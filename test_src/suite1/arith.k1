@@ -91,6 +91,6 @@ fn test() {
   // Not directly allowed
   assert(test-compile(-1i16.as[u32]).is-some());
 
-  {}
+  .{}
 
 }

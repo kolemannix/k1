@@ -8419,12 +8419,12 @@ impl TypedProgram {
                     false,
                     None,
                 );
-                let true_case = parse::ParsedSwitchCase {
+                let true_case = parse::ParsedMatchCase {
                     patterns: MSpillSlice::one(is_expr.pattern),
                     guard_condition_expr: None,
                     expression: true_expression,
                 };
-                let as_match_expr = parse::ParsedSwitch {
+                let as_match_expr = parse::ParsedMatch {
                     match_subject: is_expr.target_expression,
                     cases: self.ast.mem.pushn(&[true_case]),
                     span: is_expr.span,
@@ -9699,7 +9699,10 @@ impl TypedProgram {
             return self.eval_static_match_expr(match_expr_id, ctx);
         };
         if parsed_match.cases.is_empty() {
-            return Err(make_error("switch expression with no arms", parsed_match.span));
+            return Err(make_error(
+                "match with no arms; note `x is {}` is an empty match, `x is .{}` matches the empty struct",
+                parsed_match.span,
+            ));
         }
         let match_scope_id =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);

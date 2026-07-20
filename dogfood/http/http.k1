@@ -3,7 +3,7 @@ ns http;
 // a fake silly 'stream' for now
 type stream = { source: list[span[u8]], read-cursor: size }
 ns for stream {
-  fn empty(): stream { { .source = list/empty(), .read-cursor = 0 } }
+  fn empty(): stream { .{ source = list/empty(), read-cursor = 0 } }
   fn clear(self: *mut stream) { 
     self.source.clear();
     self.read-cursor <- 0;
@@ -39,11 +39,11 @@ type parse-state = {
 }
 ns for parse-state {
   fn empty[t](arena: *mut arena, user-data: *mut t, on-header-complete: *fn(ptr, header) -> body-mode, on-body-complete: *fn(ptr, span[span[byte]]) -> {}): parse-state {
-    zeroed[parse-state].with({
-      .user-data = user-data.as[ptr],
-      .arena,
-      .on-header-complete,
-      .on-body-complete,
+    zeroed[parse-state].with(.{
+      user-data = user-data.as[ptr],
+      arena,
+      on-header-complete,
+      on-body-complete,
     })
   }
 
@@ -130,9 +130,9 @@ fn on-header-value-complete(parser: *mut parser): i32 {
   let value-string = string/wrap-span(state.current-header-value.as-span().cloned-in());
 
   state.headers.reserve-in(64);
-  let header = { 
-    .field = field-string,
-    .value = value-string,
+  let header = .{ 
+    field = field-string,
+    value = value-string,
   };
   state.headers.push-in(header);
   state.current-header-field.clear();
@@ -146,13 +146,13 @@ fn on-headers-complete(parser: *mut parser): i32 {
   let url = string/wrap-span(state.url.as-span());
 
   let keep-alive = llhttp/should_keep_alive(parser.parser.&).as-bool();
-  let header: header = {
-    .url,
-    .headers = state.headers,
-    .method = mem/bitcast(llhttp/get_method(parser.as()).as[u32]),
+  let header: header = .{
+    url,
+    headers = state.headers,
+    method = mem/bitcast(llhttp/get_method(parser.as()).as[u32]),
 
-    .keep-alive,
-    .content-length = state.content-length,
+    keep-alive,
+    content-length = state.content-length,
   };
 
   state.body-mode <- (state.on-header-complete)(state.user-data, header);
@@ -164,7 +164,7 @@ fn impl-on-body(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let context a = state.alloc-mode();
   let bytes: span[byte] = span/wrap-raw(data.as[ptr], count.as());
   // println("on_body: appending {bytes}...");
-  switch state.body-mode {
+  state.body-mode is {
     :strict -> {
       // println("on_body: appending chunk of {bytes.len()}...");
       state.body-chunks.push-in(bytes)
@@ -178,7 +178,7 @@ fn impl-on-body(parser: *mut parser, data: *mut u8, count: usize): i32 {
 }
 fn impl-on-body-complete(parser: *mut parser): i32 {
   let state = parser.data();
-  switch state.body-mode {
+  state.body-mode is {
     :strict -> {
       (state.on-body-complete)(state.user-data, state.body-chunks.as-span());
     },
@@ -201,18 +201,18 @@ fn parser-init[user-data](
 ): parser {
   let settings: llhttp/settings = zeroed();
   llhttp/settings_init(&settings);
-  let settings = connection-arena.push(settings.with({
+  let settings = connection-arena.push(settings.with(.{
     // on_message_begin    : on_message_begin,    
-    .on_method            = fn(_p, _, _) 0,
-    .on_url               = on-url-part.as(),
-    .on_url_complete      = on-url-complete.as(),
-    .on_header_field      = on-header-field.as(),
-    .on_header_field_complete = on-header-field-complete.as(),
-    .on_header_value      = on-header-value.as(),
-    .on_header_value_complete = on-header-value-complete.as(),
-    .on_headers_complete  = on-headers-complete.as(),
-    .on_body              = impl-on-body.as(),
-    .on_message_complete  = impl-on-body-complete.as(),
+    on_method            = fn(_p, _, _) 0,
+    on_url               = on-url-part.as(),
+    on_url_complete      = on-url-complete.as(),
+    on_header_field      = on-header-field.as(),
+    on_header_field_complete = on-header-field-complete.as(),
+    on_header_value      = on-header-value.as(),
+    on_header_value_complete = on-header-value-complete.as(),
+    on_headers_complete  = on-headers-complete.as(),
+    on_body              = impl-on-body.as(),
+    on_message_complete  = impl-on-body-complete.as(),
   }));
 
   let parser: parser = uninit;
@@ -237,14 +237,14 @@ fn tick(
 
 fn example-http() {
 
-  let user-data: empty = {};
+  let user-data: empty = .{};
   let arena = arena/init-default();
   let parser = parser-init[empty](
     arena,
     arena,
     &user-data,
     on-header-complete = fn(_d, _h) :strict,
-    on-body-complete = fn(_d, _h) {}
+    on-body-complete = fn(_d, _h) .{}
   );
 
   let chunks = ["GET /index.ht",
@@ -256,13 +256,13 @@ fn example-http() {
   for chunks {
     last-res := llhttp/execute((&parser).as(), it.data-ptr().as(), it.len().as[usize])
   };
-  switch last-res {
+  last-res is {
     :HPE_OK -> println("Success!"),
     _ -> {
       let err-name = string/wrap-c(llhttp/errno_name(last-res).as[ptr]);
       let err-reason = string/wrap-c(llhttp/get_error_reason((&parser).as()).as[ptr]);
       println("ERROR: {err-name} {err-reason}");
-      writelnf(core/io/stdout, "ERROR: {} {}", { .err-name, .err-reason });
+      writelnf(core/io/stdout, "ERROR: {} {}", .{ err-name, err-reason });
     }
   };
 }

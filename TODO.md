@@ -4,7 +4,7 @@
 Minor and ideas
 - [x] allow opaques to be named / nominal; bindgen them that way. The name is really more useful than the size/align
 - [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
-- [ ] Better in-place construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
+- [ ] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
       way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
 
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
@@ -15,17 +15,12 @@ Minor and ideas
 - [ ] 'newtype' solution; 'distinct' types? `type handle = distinct[size]`
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
 - [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
-- [ ] Finish removing let*
-- [ ] remove 'swtich' keyword, unify everything under 'if':
-      `if x           then <a> else <b>`
-      `if x is <pat>` then <a> else <b>
-      `if x           { <pat>, <pat>, <pat> }
+- [x] Finish removing let*
+- [x] remove 'switch' keyword: shipped as `x is { <pat> -> <arm>, ... }` match expressions (`#is` for the comptime form), plus struct literals/patterns respelled `.{ x = 1, y }` (dot moved outside the brace, inner dots dropped; bare `{` is always a block)
 - [x] New struct literal syntax : `{ x: 1, y: 2 }` -> `{ .x = 1, .y = 2 }`. Why? clarity of meaning of "=", consistent meaning of '.', and parsing ambiguity resolution
-      We still allow `{ .x, .y }` to mean `{ .x = x, .y = y }`
-      Done for values and patterns; type syntax keeps ':'. `{` not followed by `.` (or `}`) is now unambiguously a block, and `{ .` structs are valid quiet variant payloads.
+- [ ] type-from-id({types/type-id[t]()}). add a types/spelling[t]() sugar
 - [x] 'Quiet' sum construction syntax: elide the parentheses. Current: `:some("foo")`, allow also `:some "foo"`. Why? Noise, ease of editing (don't have to mess with a surround), and
       it looks less like a function call `()`, which is a nice little bonus
-      Done for construction and patterns. Quiet payloads start with an ident, literal, list literal, or nested `:variant`; `{` payloads keep parens so `if x == :none { .. }` still reads as a block.
 - [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
 - [ ] c"" string literals that are of type ptr (no interpolation)
 - [ ] [design/flags_in_tags.k1.wip]

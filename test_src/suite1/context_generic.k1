@@ -3,17 +3,17 @@ ns context_generic;
 type my-box[t] = { value: t }
 
 fn box[t](context _foo: t)(value: t): my-box[t] {
-  { .value = value }
+  .{ value = value }
 }
 
 fn test-box() {
   let context b = true;
-  let context c = { .b = true };
+  let context c = .{ b = true };
   box(context 10)(10);
   box[bool](true);
   box(false);
-  box({ .b = false });
-  {}
+  box(.{ b = false });
+  .{}
 }
 
 fn context-c[t: equals](context t: t, name: string)(value: t) {
@@ -35,11 +35,11 @@ fn test-generic-passing() {
   let context i = 3;
   let context name: string = "Joe";
   context-a(3);
-  {}
+  .{}
 }
 
 fn test() {
   test-box();
   test-generic-passing();
-  {}
+  .{}
 }

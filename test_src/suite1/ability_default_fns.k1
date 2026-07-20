@@ -53,5 +53,5 @@ fn test() {
   // Ensures that our specialized implementation is used over the default
   assert-equals(I32_SPEC_COUNTER, 6);
   
-  {}
+  .{}
 }

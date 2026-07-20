@@ -14,7 +14,7 @@ fn if-no-else(): int {
     x := 42;
   };
   assert(x == 42);
-  assert(expr == {});
+  assert(expr == .{});
 
   // Even if one branch is 'never'
   let _expr: {} = if false {
@@ -79,7 +79,7 @@ fn test() {
   assert(return-from-if() == 1);
 
   // Short-circuiting is guaranteed
-  if (false and do-crash()) {};
+  if (false and do-crash()) .{};
 
   loop-break();
   loop-nested();

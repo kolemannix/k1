@@ -10,7 +10,7 @@ impl foo for string {
     self.b()
   }
   fn b(_self: self) {
-    {}
+    .{}
   }
 }
 

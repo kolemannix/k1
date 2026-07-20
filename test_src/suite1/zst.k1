@@ -1,6 +1,6 @@
 ns zst_test;
 
-let global-zst: {} = {}
+let global-zst: {} = .{}
 
 fn test-global(): empty {
   assert-equals(0, types/size[type-of(global-zst)]);
@@ -9,7 +9,7 @@ fn test-global(): empty {
 }
 
 fn test-local(_a: empty, _b: empty, _c: empty, _d: empty): empty {
-  let l = {};
+  let l = .{};
   assert-equals(types/size[type-of(l)], 0);
   l
 }
@@ -19,12 +19,12 @@ fn test() {
   &global-zst;
   (&global-zst).*; // no-op yielding Value::Empty
 
-  test-local({}, {}, {}, {});
+  test-local(.{}, .{}, .{}, .{});
   static-zst();
 }
 
 fn static-zst() {
-  let point = #static { .x = 1, .y = (#static 2): int };
+  let point = #static .{ x = 1, y = (#static 2): int };
   assert-equals(point.x.from-static(), 1);
 }
 

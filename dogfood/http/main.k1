@@ -1,12 +1,12 @@
-let MODULE_INFO: k1/module-manifest = {
-  .kind = :executable,
-  .libs = [
-    { .link-type = :static, .name = "llhttp" },
-    { .link-type = :static, .name = "uv" },
+let MODULE_INFO: k1/module-manifest = .{
+  kind = :executable,
+  libs = [
+    .{ link-type = :static, name = "llhttp" },
+    .{ link-type = :static, name = "uv" },
   ],
-  .deps = [],
-  .multithreading = true,
-  .link-args = [],
+  deps = [],
+  multithreading = true,
+  link-args = [],
 }
 
 use uv/uv-loop
@@ -32,11 +32,11 @@ ns for db-conn {
     task/spawn(
       uv-loop,
       fake-database-query,
-      { .query },
+      .{ query },
     )
   }
   fn run-query(_self: db-conn, query: string): result[int, string] {
-    fake-database-query({ .query })
+    fake-database-query(.{ query })
   }
 }
 
@@ -102,7 +102,7 @@ fn do-work(req: *mut uv/work) {
   work.http-response <- :some(response);
   mem/pop-mode();
 
-  {}
+  .{}
 }
 
 // Called on the main event loop after the http handler is done
@@ -152,7 +152,7 @@ fn after-do-work(req: *mut uv/work, status: i32) {
     // since the harness is in control of this opt, so we close
     crash("[bug] handler did not set work.http-response");
   };
-  switch response {
+  response is {
     :complete(chunks) -> {
       let write-req = connection.request-arena.alloc[uv/write]();
       write-req.set-data(connection);
@@ -201,7 +201,7 @@ fn after-do-work(req: *mut uv/work, status: i32) {
       pubsub/subscribe(connection, sub.topic);
     },
   };
-  {}
+  .{}
 }
 
 // Writes a shared frame, releasing the reference it was given when the
@@ -210,7 +210,7 @@ fn after-do-work(req: *mut uv/work, status: i32) {
 type frame-write = { connection: *mut connection, frame: rc-buffer }
 
 fn write-shared-frame(connection: *mut connection, frame: rc-buffer) {
-  let ctx: *mut frame-write = system-heap.new({ .connection, .frame });
+  let ctx: *mut frame-write = system-heap.new(.{ connection, frame });
   let req = system-heap.alloc-t[uv/write];
   req.set-data(ctx);
   let buf: uv/buf = uv/buf/wrap-span(frame.bytes());
@@ -293,13 +293,13 @@ fn queue-http-handler(connection: *mut connection, request: http/request, handle
   let connection = client.get-data[connection]();
   tprintln("read complete: {request.header.url}\n-----------");
 
-  let work: *mut http-handler-work = connection.request-arena.push({
-    .connection,
-    .request,
+  let work: *mut http-handler-work = connection.request-arena.push(.{
+    connection,
+    request,
 
-    .handler,
+    handler,
 
-    .http-response = :none,
+    http-response = :none,
   });
   // let work-req = connection.request-arena.alloc[uv/work];
   let work-req = system-heap.alloc-t[uv/work];
@@ -320,7 +320,7 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
   if nread < 0 {
     let raw-errno = nread.as[i32];
     let uv-errno = uv/errno/from-i32(raw-errno);
-    switch uv-errno {
+    uv-errno is {
       :UV_EOF or :UV_ECONNRESET -> {
         tprintln("client reached EOF");
         if connection.current-work is :none {
@@ -345,14 +345,14 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
     let chunk-bytes = span/wrap-raw[byte](buf.base.as[ptr], nread);
     let parse-result = http/tick(connection.request-parser.&, chunk-bytes);
     use llhttp/errno;
-    if parse-result is errno:HPE_OK {
+    if parse-result is errno:HPE_OK .{
     } else {
       tprintln("http parse error {parse-result.enum-name()}; closing connection");
       close-connection(connection);
       return();
     }
   };
-  {}
+  .{}
 }
 
 type connection = {
@@ -389,22 +389,22 @@ ns for connection {
       request-arena.set-name("request");
       let conn: *mut connection = system-heap.alloc-t();
 
-      conn <- {
-        .connection-arena,
-        .client = uninit,
-        .serial-no = { conn-serial <- conn-serial + 1; conn-serial },
-        .close-state = {
-          .lock = uninit,
-          .is-closing = false,
-          .should-close = false,
+      conn <- .{
+        connection-arena,
+        client = uninit,
+        serial-no = { conn-serial <- conn-serial + 1; conn-serial },
+        close-state = .{
+          lock = uninit,
+          is-closing = false,
+          should-close = false,
         },
         // for calling cancel
-        .current-work = :none,
+        current-work = :none,
 
-        .route-handlers,
+        route-handlers,
 
-        .request-arena, 
-        .request-parser = http/parser-init[connection](
+        request-arena, 
+        request-parser = http/parser-init[connection](
           connection-arena = connection-arena,
           request-arena = request-arena,
           user-data = conn,
@@ -412,9 +412,9 @@ ns for connection {
           on-body-complete = on-complete-http-body,
         ),
 
-        .make-user-deps,
-        .matched-handler = :none,
-        .parsed-header = :none,
+        make-user-deps,
+        matched-handler = :none,
+        parsed-header = :none,
       };
       assert(not conn.connection-arena.base-ptr.is-null());
 
@@ -453,7 +453,7 @@ ns for connection {
 
   fn get-close-state-sync(self: *mut connection): { is-closing: bool, should-close: bool } {
     uv/mutex_lock(self.close-state.lock.&);
-    let state = { .is-closing = self.close-state.is-closing, .should-close = self.close-state.should-close };
+    let state = .{ is-closing = self.close-state.is-closing, should-close = self.close-state.should-close };
     uv/mutex_unlock(self.close-state.lock.&);
     state
   }
@@ -473,7 +473,7 @@ let mutable conn-count: u64 = 0
 fn on-complete-http-header(connection: *mut connection, header: http/header): http/body-mode {
   // eprintln("matching handler");
   connection.parsed-header <- :some(header);
-  switch match-route(header, connection.route-handlers) {
+  match-route(header, connection.route-handlers) is {
     :none -> { 
       // Respond with 404
       close-connection(connection);
@@ -483,7 +483,7 @@ fn on-complete-http-header(connection: *mut connection, header: http/header): ht
     },
     :some(handler) -> {
       connection.matched-handler <- :some(handler);
-      switch handler.body-mode {
+      handler.body-mode is {
           :strict -> {
             // continue reading; do not enqueue handler yet
             :strict
@@ -497,9 +497,9 @@ fn on-complete-http-header(connection: *mut connection, header: http/header): ht
 }
 
 fn on-complete-http-body(connection: *mut connection, chunks: span[span[u8]]) {
-  let request: http/request = {
-    .header = connection.parsed-header.get(),
-    .body = :buffered(chunks)
+  let request: http/request = .{
+    header = connection.parsed-header.get(),
+    body = :buffered(chunks)
   };
   let total-size = 0;
   for chunks { total-size := total-size + it.len() };
@@ -538,7 +538,7 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
     close-connection(connection);
     return();
   };
-  {}
+  .{}
 }
 
 ${
@@ -548,7 +548,7 @@ type {name} = \{
   path-pattern: string,
   logic-fn: *fn(http/request, {ptr-type}) -> http-response,
 }`;
-  stringf("{raw}\n{typed}", { .raw = template("route-handler", "ptr"), .typed = template("user-route-handler[deps]", "*mut deps") });  
+  stringf("{raw}\n{typed}", .{ raw = template("route-handler", "ptr"), typed = template("user-route-handler[deps]", "*mut deps") });  
 }
 #static types/assert-layout[route-handler](32, 8, [0, 8, 24])
 #static types/assert-layout[user-route-handler[empty]](32, 8, [0, 8, 24])
@@ -573,9 +573,9 @@ fn start-app[deps](context arena: *mut arena)(make-deps: *fn() -> *mut deps, rou
 
   let erased-handlers = mem/bitcast[span[user-route-handler[deps]], span[route-handler]](route-handlers);
   let erased-make-deps = make-deps.as[*fn() -> ptr];
-  let server-data: *mut server-data = arena.push({ 
-    .route-handlers = erased-handlers,
-    .make-deps = erased-make-deps
+  let server-data: *mut server-data = arena.push(.{ 
+    route-handlers = erased-handlers,
+    make-deps = erased-make-deps
   });
   server.as-handle().set-data[server-data](server-data);
   if tcp-init-rc != 0 {
@@ -602,7 +602,7 @@ fn start-app[deps](context arena: *mut arena)(make-deps: *fn() -> *mut deps, rou
   eprintln("listening on {port}...");
 
   uv/run(l, :UV_RUN_DEFAULT);
-  :ok({})
+  :ok(.{})
 }
 
 let mutable tls worker-user-data: ptr = ptr/null
@@ -615,10 +615,10 @@ fn main(): i32 {
 
   mem/push-mode(:custom-arena(arena));
   let route-handlers: span[user-route-handler[app/deps]] = [
-    { 
-      .body-mode = :strict,
-      .path-pattern = "*",
-      .logic-fn = app/handle
+    .{ 
+      body-mode = :strict,
+      path-pattern = "*",
+      logic-fn = app/handle
     }
   ];
   mem/pop-mode();

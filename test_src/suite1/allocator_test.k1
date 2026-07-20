@@ -4,7 +4,7 @@ fn test() {
   let a = core/arena/init-default();
 
   a.push(true);
-  a.push({ .x = 10, .y = 10 });
+  a.push(.{ x = 10, y = 10 });
   let s = a.push("Hello, memory");
   assert(s.len() == 13);
   assert-equals(s.*, "Hello, memory");

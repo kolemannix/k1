@@ -2,12 +2,12 @@ let MODULE_INFO: k1/module-manifest = {
   let llvm-path = if k1/os is :linux { "/Users/knix/dev/k1-linux/llvm/install-llvm/lib" }
                   else               { "/Users/knix/dev/k1/llvm/install-llvm/lib" };
   // print("using llvm path {llvm-path}");
-  {
-    .kind = :executable,
-    .deps = [],
-    .multithreading = false,
-    .libs = [{ .name = "clang", .link-type = :default }],
-    .link-args = [
+  .{
+    kind = :executable,
+    deps = [],
+    multithreading = false,
+    libs = [.{ name = "clang", link-type = :default }],
+    link-args = [
       "-L{llvm-path}",
       "-Wl,-rpath,{llvm-path}"
     ],
@@ -51,7 +51,7 @@ type bindgen-args = {
   rename: list[string],
 }
 fn start(args: span[string]): string {
-  let args = switch std/sys/parse-args[bindgen-args](args, []) { :ok(args) -> args, :err(msg) -> return("Failed to parse arguments: {msg}") };
+  let args = std/sys/parse-args[bindgen-args](args, []) is { :ok(args) -> args, :err(msg) -> return("Failed to parse arguments: {msg}") };
 
   let context alloc: mem/alloc-mode = :tmp;
 
@@ -85,15 +85,15 @@ fn start(args: span[string]): string {
     if parts.len() != 2 eprintln("Bad rename: {s}");
     parsed-renames.insert-in(parts.get(0), parts.get(1));
   };
-  let state: bindgen-state = {
-    .lib-name = args.lib-name,
-    .out-path = args.out-path,
-    .defns = list/empty(),
-    .skip-system-defns = args.system != "true",
-    .exclude-substrings = args.exclude,
-    .include-names = set/from-span-in(args.include.as-span()),
-    .opaque-names = set/from-span-in(args.opaque.as-span()),
-    .name-config = { .suffix-strips = args.strip-suffix, .prefix-strips = args.strip-prefix, .renames = parsed-renames },
+  let state: bindgen-state = .{
+    lib-name = args.lib-name,
+    out-path = args.out-path,
+    defns = list/empty(),
+    skip-system-defns = args.system != "true",
+    exclude-substrings = args.exclude,
+    include-names = set/from-span-in(args.include.as-span()),
+    opaque-names = set/from-span-in(args.opaque.as-span()),
+    name-config = .{ suffix-strips = args.strip-suffix, prefix-strips = args.strip-prefix, renames = parsed-renames },
   };
   clang/visitChildren(
     parent = cursor,
@@ -124,7 +124,7 @@ fn start(args: span[string]): string {
     if state.should-include-name(raw-name) {
       let name = state.name-config.transformed-name(raw-name);
       if name != it.name debug("mapped {it.name} to {name}");
-      switch it.kind {
+      it.kind is {
         :typedef(typedef) -> {
           let skip = false;
           if typedef.alias {
@@ -175,7 +175,7 @@ fn start(args: span[string]): string {
   };
 
   let s = out.build();
-  switch state.out-path {
+  state.out-path is {
     :none -> { print(s); s },
     :some(path) -> { core/files/write-entire-file(out-path = path, contents = s); s }
   }
@@ -184,7 +184,7 @@ fn start(args: span[string]): string {
 fn write-layout-assertions(context w: *mut string-builder)(name: string, type: k1-type, layout: ?layout) {
   if layout is :some(layout) {
     writef(w, "#static assert-layout[{name}]({layout.size}, {layout.align}, [");
-    if type is :struct({ .fields, .kind = :struct }) {
+    if type is :struct(.{ fields, kind = :struct }) {
       for fields {
         writef(w, "{it.offset ? 0}, ");
       }
@@ -225,7 +225,7 @@ type k1-type = either {
 }
 
 fn mangle-name(name: string): string {
-  switch name {
+  name is {
     "loop" -> "loop_c",
     "in" -> "in_c",
     _ -> name
@@ -238,7 +238,7 @@ fn write-named-type(context w: *mut string-builder, name-config)(name: string, k
 }
 
 fn write-k1-type(context w: *mut string-builder, name-config)(k1-type, indent: size) {
-  switch k1-type {
+  k1-type is {
     :error-c(msg) -> writef(w, "ERROR: {msg}"),
     :k1(s) -> w.string(s),
     :name(name) -> {
@@ -270,7 +270,7 @@ fn write-k1-type(context w: *mut string-builder, name-config)(k1-type, indent: s
       for f.fn-type.params {
         if it-index > 0 w.line("");
         w.repeat("  ", indent + 1);
-        switch it.name {
+        it.name is {
           :none -> write-k1-type(it.type, indent + 1),
           :some(name) -> write-named-type(name, it.type, indent + 1),
         };
@@ -391,10 +391,10 @@ fn visit-struct-member(
   let cursor-spelling = clang/getCursorSpelling(current).to-string();
   debug("visit-struct-member {cursor-display-name}");
   let cursor-kind = clang/getCursorKind(current);
-  switch cursor-kind {
+  cursor-kind is {
     :FieldDecl -> {
       let field-name = cursor-spelling;
-      let typ = switch result.pending-anon-decl {
+      let typ = result.pending-anon-decl is {
         :none -> {
           let cx-type = clang/getCursorType(current);
           let is-bitfield = clang/Cursor_isBitField(current).as-bool();
@@ -402,7 +402,7 @@ fn visit-struct-member(
             result.error <- :some("bitfields are not supported yet");
             return(:Break)
           };
-          switch map-type(cx-type) {
+          map-type(cx-type) is {
             :error-c(msg) -> {
               result.error <- :some("Failed to map type of struct field '{field-name}': {msg}");
               return(:Break)
@@ -415,7 +415,7 @@ fn visit-struct-member(
       result.pending-anon-decl <- :none;
       let offset-bits = clang/Cursor_getOffsetOfField(current);
       let offset: ?size = if offset-bits >= 0 :some(offset-bits / 8) else :none;
-      result.fields.push({ .name = field-name, .type = typ, .offset });
+      result.fields.push(.{ name = field-name, type = typ, offset });
       :Continue
     },
     :StructDecl or :UnionDecl -> {
@@ -429,7 +429,7 @@ fn visit-struct-member(
           result.error <- :some(msg);
           :Break
         } else {
-           result.pending-anon-decl <- :some(:struct({ .fields = anon-result.fields, .kind }));
+           result.pending-anon-decl <- :some(:struct(.{ fields = anon-result.fields, kind }));
           :Continue
         }
       } else {
@@ -437,7 +437,7 @@ fn visit-struct-member(
         let cx-type = clang/getCursorType(current);
         let type = map-type(cx-type);
         
-        result.fields.push({ .name = field-name, .type, .offset = :none });
+        result.fields.push(.{ name = field-name, type, offset = :none });
         :Continue
       }
     },
@@ -451,7 +451,7 @@ fn visit-struct-member(
 fn visit-enum(enum-root: CXCursor): { enum: k1-type:enum, error: ?string } {
   let returned result = zeroed();
   let int-cx-type = clang/getEnumDeclIntegerType(enum-root);
-  let int-type = switch map-type(int-cx-type) {
+  let int-type = map-type(int-cx-type) is {
     :error-c(c-type) -> { result.error <- :some("Failed to map type: {c-type}"); return(result) },
     :k1(t) -> t,
     other -> { result.error <- :some("bad int type"); return(result) },
@@ -467,12 +467,12 @@ fn visit-enum(enum-root: CXCursor): { enum: k1-type:enum, error: ?string } {
     let cursor-spelling = clang/getCursorSpelling(current).to-string();
     let cursor-kind = clang/getCursorKind(current);
     //log("visit-enum-member {cursor-name} {cursor-kind.enum-name()}");
-    switch cursor-kind {
+    cursor-kind is {
       :EnumConstantDecl -> {
         let member-name = cursor-spelling;
         let value-i64 = clang/getEnumConstantDeclValue(current);
         let value: string = value-i64.show();
-        result.enum.members.push({ .name = member-name, .explicit-value = value });
+        result.enum.members.push(.{ name = member-name, explicit-value = value });
         :Continue
       },
       _ -> {
@@ -499,7 +499,7 @@ fn get-location(cursor: CXCursor): { location: clang/CXSourceLocation, filename:
   let line: u32 = uninit;
   clang/getFileLocation(location, &file, &line, ptr/null.as(), ptr/null.as());
   let filename = clang/getFileName(file).to-string();
-  { .location, .filename, .line }
+  .{ location, filename, line }
 }
 
 fn visit-root(
@@ -519,7 +519,7 @@ fn visit-root(
     return(:Continue)
   };
 
-  switch cursor-kind {
+  cursor-kind is {
     :StructDecl or :UnionDecl -> {
       let name = clang/getCursorSpelling(current).to-string();
       let kind = if cursor-kind is :StructDecl { :struct: k1-type:struct.kind } else :union;
@@ -527,22 +527,22 @@ fn visit-root(
 
         if bg.is-opaque-name(name) {
           let opaque = visit-opaque(bg, current);
-          bg.defns.push({
-            .name,
-            .error = :none,
-            .kind = :typedef({ .type = opaque, .alias = false }),
-            .layout = layout-for-cursor(current)
+          bg.defns.push(.{
+            name,
+            error = :none,
+            kind = :typedef(.{ type = opaque, alias = false }),
+            layout = layout-for-cursor(current)
           });
           return(:Continue)
         };
 
         let struct-decl-result = visit-struct(current);
 
-        bg.defns.push({
-          .name,
-          .error = struct-decl-result.error,
-          .kind = :typedef({ .type = :struct({ .fields = struct-decl-result.fields, .kind }), .alias = false }), 
-          .layout = layout-for-cursor(current),
+        bg.defns.push(.{
+          name,
+          error = struct-decl-result.error,
+          kind = :typedef(.{ type = :struct(.{ fields = struct-decl-result.fields, kind }), alias = false }), 
+          layout = layout-for-cursor(current),
         });
       };
       :Continue
@@ -555,11 +555,11 @@ fn visit-root(
       // FIXME: Use in-place filter
       enum-decl-result.enum.members <- enum-decl-result.enum.members.filter(fn m. bg.should-include-name(m.name));
 
-      bg.defns.push({
-        .name,
-        .error = enum-decl-result.error,
-        .kind = :typedef({ .type = :enum(enum-decl-result.enum), .alias = false }),
-        .layout = layout-for-cursor(current)
+      bg.defns.push(.{
+        name,
+        error = enum-decl-result.error,
+        kind = :typedef(.{ type = :enum(enum-decl-result.enum), alias = false }),
+        layout = layout-for-cursor(current)
       });
       :Continue
     },
@@ -568,22 +568,22 @@ fn visit-root(
 
       if bg.is-opaque-name(name) {
         let opaque = visit-opaque(bg, current);
-        bg.defns.push({
-          .name,
-          .error = :none,
-          .kind = :typedef({ .type = opaque, .alias = false }),
-          .layout = layout-for-cursor(current)
+        bg.defns.push(.{
+          name,
+          error = :none,
+          kind = :typedef(.{ type = opaque, alias = false }),
+          layout = layout-for-cursor(current)
         });
         return(:Continue)
       };
 
       let cx-type = clang/getTypedefDeclUnderlyingType(current);
       let type = map-type(cx-type);
-      bg.defns.push({
-        .name,
-        .error = :none,
-        .kind = :typedef({ .type, .alias = true }),
-        .layout = layout-for-cursor(current)
+      bg.defns.push(.{
+        name,
+        error = :none,
+        kind = :typedef(.{ type, alias = true }),
+        layout = layout-for-cursor(current)
       });
       :Continue
     },
@@ -592,7 +592,7 @@ fn visit-root(
       debug("Name of VarDecl: {name}");
       let cx-type = clang/getCursorType(current);
       let type = map-type(cx-type);
-      let defn: k1-defn = { .name, .kind = :global({ .type, .value = :none }), .error = :none, .layout = :none };
+      let defn: k1-defn = .{ name, kind = :global(.{ type, value = :none }), error = :none, layout = :none };
       bg.defns.push(defn);
       :Continue
     },
@@ -602,11 +602,11 @@ fn visit-root(
       debug("FunctionDecl {name} {cx-type.kind.enum-name()}");
       let fn-decl = map-fn-decl(current);
 
-      bg.defns.push({
-        .name,
-        .error = fn-decl.error,
-        .kind = :function({ .fn-type = fn-decl.fn-type }),
-        .layout = :none,
+      bg.defns.push(.{
+        name,
+        error = fn-decl.error,
+        kind = :function(.{ fn-type = fn-decl.fn-type }),
+        layout = :none,
       });
 
       :Continue
@@ -624,13 +624,13 @@ fn layout-for-cursor(cursor: CXCursor): ?layout {
   let size = clang/Type_getSizeOf(cx-type);
   let align = clang/Type_getAlignOf(cx-type);
   if size < 0 or align < 0 return(:none);
-  :some({ .size, .align })
+  :some(.{ size, align })
 }
 
 fn visit-opaque(_bg: *mut bindgen-state, cursor: CXCursor): k1-type {
   let size = clang/Type_getSizeOf(clang/getCursorType(cursor));
   let align = clang/Type_getAlignOf(clang/getCursorType(cursor));
-  :opaque({ .size, .align })
+  :opaque(.{ size, align })
 }
 
 fn map-fn-decl(cursor: CXCursor): { fn-type: fn-type, error: ?string } {
@@ -638,12 +638,12 @@ fn map-fn-decl(cursor: CXCursor): { fn-type: fn-type, error: ?string } {
     let cx-type = clang/getCursorType(cursor);
     let ret-cx-type = clang/getResultType(cx-type);
     let return-type = map-type(ret-cx-type);
-    {
-      .fn-type = {
-        .params = list/empty(),
-        .return-type,
+    .{
+      fn-type = .{
+        params = list/empty(),
+        return-type,
       },
-      .error = :none
+      error = :none
     }
   };
 
@@ -663,13 +663,13 @@ fn visit-fn-param(
 ): clang/CXChildVisitResult {
   let result = data.as[*mut map-fn-decl.return];
   let cursor-kind = clang/getCursorKind(current);
-  switch cursor-kind {
+  cursor-kind is {
     :ParmDecl -> {
       let name-spelling = clang/getCursorSpelling(current).to-string();
       let name: ?string = if name-spelling.is-empty() :none else :some(name-spelling);
       let cx-type = clang/getCursorType(current);
       let arg-type = map-type-ext(cx-type, :fn-param);
-      result.fn-type.params.push({ .name, .type = arg-type });
+      result.fn-type.params.push(.{ name, type = arg-type });
       :Continue
     },
     _ -> :Continue
@@ -687,11 +687,11 @@ fn map-fn-type(cx-type: clang/CXType): fn-type {
     let arg-cx-type = clang/getArgType(cx-type, it.as[u32]);
     let arg-type = map-type-ext(arg-cx-type, :fn-param);
     let name: ?string = :none;
-    args.push({ .name, .type = arg-type })
+    args.push(.{ name, type = arg-type })
   };
 
   let ret-type = map-type(ret-type);
-  { .return-type = ret-type, .params = args }
+  .{ return-type = ret-type, params = args }
 }
 
 // Experimenting with an 'error free' style, where
@@ -706,7 +706,7 @@ fn map-type(cx-type: clang/CXType): k1-type {
 }
 fn map-type-ext(cx-type: clang/CXType, c-context: either { default, fn-param }): k1-type {
   // debug("  map-type {cx-type.kind.enum-name()}");
-  let s: k1-type = switch cx-type.kind {
+  let s: k1-type = cx-type.kind is {
     :Void      -> :k1(p"{}"),
     :Bool      -> :k1("bool"),
     :Char_U    -> :k1("u8"),
@@ -731,7 +731,7 @@ fn map-type-ext(cx-type: clang/CXType, c-context: either { default, fn-param }):
         :k1("ptr")
       } else {
         let inner: *k1-type = mem/new(inner-mapped);
-        :ref({ .inner })
+        :ref(.{ inner })
       }
     },
     :Float     -> :k1("f32"),
@@ -745,7 +745,7 @@ fn map-type-ext(cx-type: clang/CXType, c-context: either { default, fn-param }):
     },
     :Typedef -> {
       let name = clang/getTypedefName(cx-type).to-string();
-      switch name {
+      name is {
         "uintptr_t" -> :k1("ptr"),
         "intptr_t"  -> :k1("ptr"),
         "ptrdiff_t" -> :k1("size"),
@@ -784,20 +784,20 @@ fn map-type-ext(cx-type: clang/CXType, c-context: either { default, fn-param }):
       let elem-type = clang/getArrayElementType(cx-type);
       let elem-type-mapped = mem/new(map-type(elem-type));
       let size = clang/getArraySize(cx-type);
-      :array({ .elem-type = elem-type-mapped, .size })
+      :array(.{ elem-type = elem-type-mapped, size })
     },
     :IncompleteArray -> {
       let elem-type = clang/getArrayElementType(cx-type);
       let elem-mapped = mem/new(map-type(elem-type));
-      switch c-context {
+      c-context is {
         :default -> {
           // Typically, an IncompleteArray means a Flexible Array member
           // Which we can model very nicely as 0-sized array
-          :array({ .elem-type = elem-mapped, .size = 0 })
+          :array(.{ elem-type = elem-mapped, size = 0 })
         },
         :fn-param -> {
           // If it occurs in a function param, it just decays to a pointer
-          :ref({ .inner = elem-mapped })
+          :ref(.{ inner = elem-mapped })
         }
       }
     },
@@ -814,7 +814,7 @@ fn map-type-ext(cx-type: clang/CXType, c-context: either { default, fn-param }):
       // typedef struct {
       //   int (*abortQuery)(CXClientData client_data, void *reserved);
       // }
-      :fn-type({ .fn-type = mem/new(map-fn-type(cx-type)) })
+      :fn-type(.{ fn-type = mem/new(map-fn-type(cx-type)) })
     },
     o -> {
       :error-c("other type: {o.enum-name()} ({cx-type.kind.value})")

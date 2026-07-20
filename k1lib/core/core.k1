@@ -96,14 +96,14 @@ fn eprintln(s: string) {
 ns io {
   // TODO: Add buffering to stdout and stderr!
   type out-stream = { file-no: i32 }
-  let stdout: out-stream = { .file-no = posix/stdout }
-  let stderr: out-stream = { .file-no = posix/stderr }
+  let stdout: out-stream = .{ file-no = posix/stdout }
+  let stderr: out-stream = .{ file-no = posix/stderr }
 
   impl writer for out-stream {
     fn write-byte(self, value: u8) {
       let value_spot = value;
       posix/write(file-no = self.file-no, data = (&value_spot).as[ptr], count = 1);
-      {}
+      .{}
     }
     fn write-bytes(self, bytes: span[byte]) {
       posix/write(
@@ -111,7 +111,7 @@ ns io {
         data = bytes.data-ptr(),
         count = bytes.len().as[c-sizet]
       );
-      {}
+      .{}
     }
   }
 }
@@ -278,7 +278,7 @@ fn format-uint[w: writer](context w)(value: u64, base: u64) {
 
     w.write-bytes(digits.as-span().as-byte-span());
 
-    {}
+    .{}
   }
 }
 
@@ -342,13 +342,13 @@ impl[s, f: print] try[t = s, e = f] for result[s, f] {
 
   fn is-ok(self): bool { self is :ok(_) }
   fn get-value(self): t  {
-    switch self {
+    self is {
       :ok(s) -> s,
       :err(e) -> crash("get-value() on :err: {e}")
     }
   }
   fn get-error(self): e {
-    switch self {
+    self is {
       :ok(_) -> crash("get-error() on :ok"),
       :err(e) -> e
     }
@@ -361,13 +361,13 @@ impl[s, f] try[t = s, e = f] for result[s, f] {
 
   fn is-ok(self): bool { self is :ok(_) }
   fn get-value(self): t  {
-    switch self {
+    self is {
       :ok(s) -> s,
       :err(e) -> crash("get-value() on :err")
     }
   }
   fn get-error(self): e {
-    switch self {
+    self is {
       :ok(_) -> crash("get-error() on :ok"),
       :err(e) -> e
     }
@@ -498,7 +498,7 @@ ns for f64 {
       if require-total and len != s.len() {
         :err("Parsed an f64 but there was stuff at the end: {len} vs {s.len()}")
       } else {
-        :ok({ .value = out, .len })
+        :ok(.{ value = out, len })
       }
     }
   }

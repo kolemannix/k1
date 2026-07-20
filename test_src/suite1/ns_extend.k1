@@ -15,7 +15,7 @@ ns foo {
 
 
 fn test() {
-  let baz = { .b = 32 }: foo/baz;
+  let baz = .{ b = 32 }: foo/baz;
   assert(foo/baz/get(baz) + foo/baz/get2(baz) == 64);
   assert(baz.get() + baz.get2() == 64);
 }

@@ -39,13 +39,13 @@ fn test() {
   assert(1337.1 is 1337.1);
   assert(not 1337.1 is 1337.2);
 
-  switch 42.0 {
+  42.0 is {
     41.0 -> crash("should not equal"),
-    42.0 -> {},
+    42.0 -> .{},
     f -> crash("should not fall through")
   };
 
   // TODO: div by zero
   // pi / 0.0;
-  {}
+  .{}
 }

@@ -9,12 +9,12 @@ fn test-bitcast() {
 
   // from agg to agg
   let s: string = "foo";
-  let s-wrap = { .inner = s };
+  let s-wrap = .{ inner = s };
   let s-again: string = mem/bitcast(s-wrap);
   assert-equals(s, s-again);
 
   // from agg to scalar
-  let p2: { x: f32, y: f32 } = { .x = 1.0, .y = -1.0 };
+  let p2: { x: f32, y: f32 } = .{ x = 1.0, y = -1.0 };
   let scalar = mem/bitcast[_, i64](p2);
   let p3: { x: f32, y: f32 } = mem/bitcast(scalar);
   assert-equals(p2.x, p3.x);
@@ -78,5 +78,5 @@ fn test-zero() {
   let o: ?type-of(point) = zeroed();
   assert-equals(o.tag, 0);
 
-  {}
+  .{}
 }

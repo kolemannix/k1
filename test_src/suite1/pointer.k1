@@ -4,7 +4,7 @@ type point3 = { x: int, y: int, z: int }
 type point2 = _struct_remove[point3, { z: int }]
 
 fn test() {
-  let point: point3 = { .x = 10, .y = 20, .z = 30 };
+  let point: point3 = .{ x = 10, y = 20, z = 30 };
   // By taking the address of point, we generate an LLVM ptrtoint
   // this makes points address 'exposed' and thus immune to SROA
   // So we can talk about the stack memory in k1 as long as we stay within the allocation

@@ -21,21 +21,21 @@ ns for buffer {
 
   fn len[t](self: buffer[t]): size { self.len }
 
-  fn raw-parts[t](self: buffer[t]): { ptr: ptr, len: size } { { .ptr = self.data.as[ptr], .len = self.len } }
+  fn raw-parts[t](self: buffer[t]): { ptr: ptr, len: size } { .{ ptr = self.data.as[ptr], len = self.len } }
 
   ////////////////////////
   // Constructor functions
 
   fn empty[t](): buffer[t] {
-    { .len = 0, .data = ptr/null.as[*mut t] }
+    .{ len = 0, data = ptr/null.as[*mut t] }
   }
 
   fn wrap-raw[t](ptr, count: size): buffer[t] {
-    { .len = count, .data = ptr.as[*mut t] }
+    .{ len = count, data = ptr.as[*mut t] }
   }
 
   fn wrap-ref[t](data: *mut t, len: size): buffer[t] {
-    { .len, .data }
+    .{ len, data }
   }
 
   fn wrap-array[t, n: static size](array: *mut array[t, n]): buffer[t] {
@@ -61,7 +61,7 @@ ns for buffer {
   fn filled-in[t](context mode: mem/alloc-mode)(size: size, value: t): buffer[t] {
     let buf: buffer[t] = allocate-in[t](size);
 
-    switch value {
+    value is {
       type[u8](byte) -> {
         buf.memset(byte)
       },
@@ -92,7 +92,7 @@ ns for buffer {
       alloc.alloc(size-bytes, core/types/align[t]())
     };
     let data = ptr.rw[t];
-    { .len = count, .data }
+    .{ len = count, data }
   }
 
   fn allocate[t](count: size): buffer[t] {
@@ -111,7 +111,7 @@ ns for buffer {
       align = core/types/align[t](),
       new-size = new-size,
     );
-    self <- { .len = new-count, .data = new-ptr.rw[t] }
+    self <- .{ len = new-count, data = new-ptr.rw[t] }
   }
 
   fn _enlarged-clone-in[t](context alloc: mem/alloc-mode)(self: buffer[t], new-count: size): buffer[t] {
@@ -213,7 +213,7 @@ ns for buffer {
     
     let new-len = end-clamp - start;
     let new-base = self.get-ref(start);
-    { .len = new-len, .data = new-base }
+    .{ len = new-len, data = new-base }
   }
 
   fn take[t](self: buffer[t], count: size): buffer[t] { self.slice(0,     count) }
@@ -269,7 +269,7 @@ ns for buffer {
   }
 
   fn first[t](self: buffer[t]): ?t {
-    switch self.first-ref() {
+    self.first-ref() is {
       :none -> :none,
       :some(first-ref) -> :some(first-ref.*)
     }
@@ -284,7 +284,7 @@ ns for buffer {
   }
 
   fn last[t](self: buffer[t]): ?t {
-    switch self.last-ref() {
+    self.last-ref() is {
       :none -> :none,
       :some(last-ref) -> :some(last-ref.*)
     }
@@ -348,7 +348,7 @@ type buffer-iterator[t] = {
 }
 ns for buffer-iterator {
   fn from-buffer[t](buf: buffer[t]): buffer-iterator[t] { 
-    { .buf, .pos = 0 }
+    .{ buf, pos = 0 }
   }
 }
 
@@ -361,7 +361,7 @@ impl[t] iterator[item = t] for buffer-iterator[t] {
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } { 
     let rem = self.buf.len - self.pos;
-    { .at-least = rem, .at-most = :some(rem) }
+    .{ at-least = rem, at-most = :some(rem) }
   }
   fn advance-by(self: *mut self, n: size): empty {
     self.pos <- self.pos + n
@@ -398,7 +398,7 @@ type buffer-ref-iterator[t] = {
 }
 ns for buffer-ref-iterator {
   fn from-buffer[t](buf: buffer[t]): buffer-ref-iterator[t] { 
-    { .buf, .pos = 0 }
+    .{ buf, pos = 0 }
   }
 }
 
@@ -411,7 +411,7 @@ impl[t] iterator[item = *mut t] for buffer-ref-iterator[t] {
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } { 
     let rem = self.buf.len - self.pos;
-    { .at-least = rem, .at-most = some(rem) }
+    .{ at-least = rem, at-most = some(rem) }
   }
   fn advance-by(self: *mut self, n: size): empty {
     self.pos <- self.pos + n

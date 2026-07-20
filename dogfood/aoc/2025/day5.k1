@@ -34,7 +34,7 @@ ns for range {
      assertdbg(r.len() == 2);
      let start = r.get(0).parse-base10().!;
      let end   = r.get(1).parse-base10().!;
-     :ok { .start, .end }
+     :ok .{ start, end }
   }
 }
 
@@ -45,7 +45,7 @@ fn part-one(input: string) {
   let ing = list/empty[uint]();
   for lines {
     if it.is-empty() { parse-mode := :ingredients; } else {
-      switch parse-mode {
+      parse-mode is {
         :ranges -> { ranges.push(range/parse(it).!) },
         :ingredients -> { ing.push(it.parse-base10().!) }
       }

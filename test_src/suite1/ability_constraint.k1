@@ -16,7 +16,7 @@ ns ability_constraint {
   
   fn test() {
     assert(add(1, 2) == 3);
-    {}
+    .{}
   }
 
 }

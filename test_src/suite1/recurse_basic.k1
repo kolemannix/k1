@@ -4,7 +4,7 @@ ns recurse_basic {
 
   fn make(n: size): *node {
     //println("make {n}");
-    if n <= 0 ptr/null.r[node] else mem/new({ .node = make(n - 1) })
+    if n <= 0 ptr/null.r[node] else mem/new(.{ node = make(n - 1) })
    }
 
   fn count(n: *node): size {
@@ -19,7 +19,7 @@ ns recurse_basic {
 
   fn ecount(en: tree): size {
     //println("ecount");
-    switch en {
+    en is {
       :leaf -> 0,
       :node(child) -> 1 + ecount(child.*)
     }

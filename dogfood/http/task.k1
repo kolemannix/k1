@@ -49,18 +49,18 @@ ns for task {
     handler: *fn(params) -> t,
     params: params,
   ): task[t] {
-    let state: *mut task-state[t] = system-heap.new({
-      .req      = system-heap.alloc-t[uv/work],
-      .mutex    = system-heap.alloc-t[uv/mutex],
-      .cond     = system-heap.alloc-t[uv/cond],
-      .handler-done = false,
-      .libuv-done = false,
-      .output = :none,
+    let state: *mut task-state[t] = system-heap.new(.{
+      req      = system-heap.alloc-t[uv/work],
+      mutex    = system-heap.alloc-t[uv/mutex],
+      cond     = system-heap.alloc-t[uv/cond],
+      handler-done = false,
+      libuv-done = false,
+      output = :none,
     });
-    let work: *mut task-work[t, params] = system-heap.new({
-      .state,
-      .params,
-      .handler,
+    let work: *mut task-work[t, params] = system-heap.new(.{
+      state,
+      params,
+      handler,
     });
 
     let mutex-rc = uv/mutex_init(state.mutex);
@@ -82,7 +82,7 @@ ns for task {
         let task-work = req.get-data[task-work[t, params]];
         let handler = task-work.handler;
         task/complete(task-work.state, handler(task-work.params));
-        {}
+        .{}
       },
       fn (req, status) {
         let task-work = req.get-data[task-work[t, params]];
@@ -97,7 +97,7 @@ ns for task {
       }
     );
 
-    { .state }
+    .{ state }
   }
 
 

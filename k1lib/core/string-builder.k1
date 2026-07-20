@@ -3,7 +3,7 @@ use core/spill-list
 type string-builder = { list: list[u8] }
 ns for string-builder {
   fn new(): string-builder {
-    { .list = list/empty() }
+    .{ list = list/empty() }
   }
 
   fn reset(self: *mut string-builder) {

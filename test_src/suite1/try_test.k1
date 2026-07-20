@@ -10,8 +10,8 @@ fn can-fail-int(): result[int, error] { :ok(42) }
 fn can-fail-bool(): result[bool, error] { :ok(false) }
 
 impl try[t = int, e = error] for foo {
-  fn error(_e: e): self   { { .a = false } }
-  fn value(_t: t): self { { .a = true  } }
+  fn error(_e: e): self   { .{ a = false } }
+  fn value(_t: t): self { .{ a = true  } }
 
   fn is-ok(self): bool { self.a }
   fn get-value(_self: self): t  { 3 }
@@ -27,7 +27,7 @@ fn fails(): result[bool, error] {
 fn run(): result[i32, error] {
   let result: int = can-fail-int().try;
   assert(result == 42);
-  let result: int = ({ .a = true }: foo).try;
+  let result: int = (.{ a = true }: foo).try;
   assert(result == 3);
 
   let c = fn(-> result[bool, error]) {

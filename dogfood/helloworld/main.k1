@@ -8,7 +8,7 @@ ns megarepl {
   }
 }
 fn render(data: *interesting-data): megarepl/render-output {
-  :scene([:rect({ .color = 0, .x = 10, .y = 10, .w = 10, .h = 10 })])
+  :scene([:rect(.{ color = 0, x = 10, y = 10, w = 10, h = 10 })])
 }
 
 ns orders {
@@ -35,14 +35,14 @@ ns orders {
   fn parse-line(line: string): order {
     let fields = line.split-by-char(',');
     require fields.len() == 7 else { crash("bad csv row: {line}") };
-    {
-      .id = fields.get(0).parse-base10().!,
-      .customer = fields.get(1),
-      .item = fields.get(2),
-      .quantity = fields.get(3).parse-base10().!,
-      .unit-cents = fields.get(4).parse-base10().!,
-      .status = parse-status(fields.get(5)),
-      .country = fields.get(6),
+    .{
+      id = fields.get(0).parse-base10().!,
+      customer = fields.get(1),
+      item = fields.get(2),
+      quantity = fields.get(3).parse-base10().!,
+      unit-cents = fields.get(4).parse-base10().!,
+      status = parse-status(fields.get(5)),
+      country = fields.get(6),
     }
   }
 

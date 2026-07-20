@@ -10,7 +10,7 @@ fn loop-test(sensor: *mut int) {
     defer { assert-equals(i - 1, sensor.*); inc(sensor) };
     i := i + 1;
   };
-  {}
+  .{}
 }
 
 // An early return causes 'unwinding' of all defers in scope,
@@ -20,14 +20,14 @@ fn return-test(sensor: *mut int) {
   defer { assert-equals(sensor.*, 2); inc(sensor) };
   if true {
     defer { assert-equals(sensor.*, 1); inc(sensor) };
-    if false {} else {
+    if false .{} else {
       defer { assert-equals(sensor.*, 0); inc(sensor) };
       return()
     }
   } else {
     assert(false)
   };
-  {}
+  .{}
 }
 
 fn test() {
@@ -41,5 +41,5 @@ fn test() {
   return-test(&sensor);
   assert-equals(sensor, 3);
   
-  {}
+  .{}
 }

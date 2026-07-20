@@ -13,7 +13,7 @@ fn ret-byte(): u8 {
 }
 
 fn big-struct(): { x: i64, y: i64, z: i64, foo: array[u64, 1024] } {
-  { .x = 10, .y = 20, .z = 30, .foo = uninit }
+  .{ x = 10, y = 20, z = 30, foo = uninit }
 }
 
 fn big-struct-rvo(): { x: i64, y: i64, z: i64, foo: array[u64, 1024] } {
@@ -27,7 +27,7 @@ fn big-struct-rvo(): { x: i64, y: i64, z: i64, foo: array[u64, 1024] } {
 fn ret-string(): string { "fdsa" }
 
 fn small-struct(c: u8): { a: u8, b: u8, c: u8 } {
-  { .a = 1, .b = 2, .c }
+  .{ a = 1, b = 2, c }
 }
 
 fn test() {
@@ -60,5 +60,5 @@ fn test() {
   assert-equals(some(false), :some(false));
   assert-equals(some(true), :some(true));
 
-  {}
+  .{}
 }

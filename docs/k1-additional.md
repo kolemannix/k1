@@ -37,12 +37,12 @@ Executable modules can declare `MODULE_INFO` with dependencies, threading mode,
 libraries, and linker args. FFI declarations use `extern("lib", "symbol")`.
 
 ```rust
-let MODULE_INFO: k1/module-manifest = {
-  .kind = :executable,
-  .deps = [],
-  .multithreading = false,
-  .libs = [{ .name = "foo", .link-type = :static }],
-  .link-args = [],
+let MODULE_INFO: k1/module-manifest = .{
+  kind = :executable,
+  deps = [],
+  multithreading = false,
+  libs = [.{ name = "foo", link-type = :static }],
+  link-args = [],
 }
 
 extern("foo", "very_small")
@@ -270,10 +270,10 @@ See `test_src/suite1/struct_composition.k1`.
 
 Beyond ordinary struct and sum patterns, tests use:
 
-- Literal patterns for ints, floats, strings, chars, booleans, and `{}`.
+- Literal patterns for ints, floats, strings, chars, booleans, and `.{}`.
 - Wildcard `_` and binding patterns.
 - Type patterns such as `type[int](x)` and `type[string](s)`.
-- `or` patterns in `switch` arms.
+- `or` patterns in match arms.
 - Guards with `if`.
 - Reference-depth patterns such as `true***`.
 - Reference-through payload patterns such as `:some(value-ref)*`.
@@ -316,7 +316,7 @@ scope resolution.
 
 ```rust
 ns foo { type bar = { value: int } }
-ns foo { fn make(): bar { { .value = 1 } } }
+ns foo { fn make(): bar { .{ value = 1 } } }
 ```
 
 See `test_src/suite1/ns_extend.k1`,

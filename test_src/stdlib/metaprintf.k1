@@ -19,7 +19,7 @@ fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
     let parts = fmt-string.split-by-char('?');
 
     code.var("parts", parts.as-span());
-    switch schema {
+    schema is {
       :string -> {
         if parts.len != 1 {
           crash("Got 1 format argument (a string) but format string has {parts.len}")
@@ -28,7 +28,7 @@ fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
         code.line("parts.get(0).print-to(w);");
         code.line("w.string(args);");
       },
-      :struct({.fields}) -> {
+      :struct(.{fields}) -> {
         if parts.len != fields.len() {
           crash("Mismatching format arg count")
         };
@@ -56,10 +56,10 @@ fn fmt-string[fmt: static string, args](fmt-string: fmt, args: args): string {
 }
 
 fn test-format() {
-  let s1 = fmt-string("My value is: ? ?", {.a = 42, .b = true});
+  let s1 = fmt-string("My value is: ? ?", .{a = 42, b = true});
   //let s1 = sprintf(args.get(1), {a: 42, b: true});
   assert-equals(s1, "My value is: 42 true");
-  let s3 = fmt-string("My values are: ? and ?", {.a = "asdf", .b = true});
+  let s3 = fmt-string("My values are: ? and ?", .{a = "asdf", b = true});
   assert-equals(s3, "My values are: asdf and true");
 
   let s4 = fmt-string("My string is ?", "Hello, World!");
@@ -68,5 +68,5 @@ fn test-format() {
   let res: int = static-add(#static 3, #static 2);
   assert-equals(res, 5);
 
-  {}
+  .{}
 }

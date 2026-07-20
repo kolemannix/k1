@@ -669,7 +669,7 @@ impl TypedProgram {
                 for stmt in self.mem.getn(typed_match.initial_let_statements) {
                     self.display_stmt(*stmt, w, indentation)?;
                 }
-                w.write_str("switch {\n")?;
+                w.write_str("is {\n")?;
                 for (idx, case) in self.mem.getn(typed_match.arms).iter().enumerate() {
                     w.write_str(&"  ".repeat(indentation + 1))?;
                     writeln!(w, "ARM {idx}").unwrap();

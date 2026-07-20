@@ -13,5 +13,5 @@ fn test() {
   assert-equals(p.as[ptr], (&GLOB).as[ptr]);
   assert-equals(p.*, 50);
 
-  {}
+  .{}
 }

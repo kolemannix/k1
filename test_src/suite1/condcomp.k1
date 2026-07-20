@@ -19,5 +19,5 @@ fn test() {
   let comptime-check = #if false "foo" else "bar";
   assert(comptime-check == "bar");
 
-  {}
+  .{}
 }

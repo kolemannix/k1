@@ -20,12 +20,12 @@ fn test() {
   assert-equals(null-callback-ptr, ptr/null);
 
   let x = static-add-one;
-  let _has-fn: has-fn = { .myfn = x };
-  let has-fn: has-fn = { .myfn = static-add-one };
+  let _has-fn: has-fn = .{ myfn = x };
+  let has-fn: has-fn = .{ myfn = static-add-one };
 
   assert-equals((has-fn.myfn)(4), 5);
   assert(test-compile( (has-fn.myfn)() ) is :some(_));
   assert(test-compile( (has-fn.myfn)(4)() ) is :some(_));
 
-  {}
+  .{}
 }

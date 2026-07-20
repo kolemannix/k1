@@ -10,21 +10,21 @@ ns for spill-list {
 
   // Retains allocated memory, if we've already spilled, intended for re-use
   fn clear[t, n: static size](self: *mut spill-list[t, n]) {
-    switch self {
+    self is {
       :inline(fixlist)* -> fixlist.clear(),
       :spilled(list)* -> list.clear()
     }
   }
 
   fn len[t, n: static size](self: spill-list[t, n]): size {
-    switch self {
+    self is {
       :inline(fixlist) -> fixlist.len(),
       :spilled(list) -> list.len,
     }
   }
 
   fn as-span[t, n: static size](self: *spill-list[t, n]): span[t] {
-    switch self {
+    self is {
       :spilled(list)* -> list.as-span(),
       :inline(fixlist)* -> fixlist.as-span()
     }
@@ -40,10 +40,10 @@ ns for spill-list {
   }
 
   fn push[t, n: static size](self: *mut spill-list[t, n], t: t) {
-    switch self {
+    self is {
       :spilled(list)* -> { list.push(t) },
       :inline(fixlist)* -> {
-        if fixlist.try-push(t) is :ok(_) {}
+        if fixlist.try-push(t) is :ok(_) .{}
         else {
           let list = _spill(fixlist);
   
@@ -56,10 +56,10 @@ ns for spill-list {
   }
 
   fn push-n[t, n: static size](self: *mut spill-list[t, n], ts: span[t]) {
-    switch self {
+    self is {
       :spilled(list)* -> { list.append-span(ts) },
       :inline(fixlist)* -> {
-        if fixlist.try-push-n(ts) is :ok(_) {}
+        if fixlist.try-push-n(ts) is :ok(_) .{}
         else {
           // Correctness: The only error case is the out of capacity one
           let list = _spill(fixlist);
@@ -80,7 +80,7 @@ ns for spill-list {
 
 impl[t, n: static size] print for spill-list[t, n] {
   fn print-to[w: writer](self, w) {
-     switch self {
+     self is {
        :inline(fix) -> {
          w.string("inline ");
        },

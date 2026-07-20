@@ -41,7 +41,7 @@ fn escape() {
   let c = '\\';
   assert(c.as[u8] == 92);
 
-  {}
+  .{}
 }
 
 fn test() {

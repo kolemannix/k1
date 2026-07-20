@@ -13,7 +13,7 @@ ns for opt {
   }
 
   fn contains[t: equals](self: ?t, t: t): bool {
-    switch self {
+    self is {
       :none -> false,
       :some(v) -> v == t
     }
@@ -30,7 +30,7 @@ ns for opt {
   }
 
   fn map[t, u](self: opt[t], f: some fn t -> u): opt[u] {
-    switch self {
+    self is {
       :none -> :none,
       :some(t) -> :some(f(t))
     }
@@ -57,8 +57,8 @@ impl[a] try[t = a, e = empty] for opt[a] {
 
   fn is-ok(self: opt[t]): bool { self is :some(_) }
   fn get-error(self: opt[t]): empty {
-    switch self {
-      :none -> {},
+    self is {
+      :none -> .{},
       :some(_) -> crash("getError on opt:some")
     }
   }

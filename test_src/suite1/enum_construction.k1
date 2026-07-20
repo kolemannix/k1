@@ -8,11 +8,11 @@ fn test() {
 
   let _: state = state:zilch;
 
-  enum_construction/state:on({});
-  enum_construction/state:off({});
+  enum_construction/state:on(.{});
+  enum_construction/state:off(.{});
 
-  let _: enum_construction/state = enum_construction/state:off({});
-  let _: enum_construction/state = enum_construction/state:on({});
+  let _: enum_construction/state = enum_construction/state:off(.{});
+  let _: enum_construction/state = enum_construction/state:on(.{});
 
   state-hard:on(:some(42));
 
@@ -35,7 +35,7 @@ fn test() {
   let _: opt[i32] = opt:none[i32];
   let _: opt[i32] = opt:none;
 
-  contrived:stuff({ .a = 42, .b = "hello"});
+  contrived:stuff(.{ a = 42, b = "hello"});
 
   opt:none[int];
 
@@ -52,5 +52,5 @@ fn test() {
   let q5: state-hard = state-hard:on :some 42;
   assert(q5 is :on(:some 42));
 
-  {}
+  .{}
 }

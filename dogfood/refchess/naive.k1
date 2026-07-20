@@ -7,7 +7,7 @@ type square-state = either {
 
 ns for square-state {
   fn char-symbol(self: square-state): char {
-    switch self {
+    self is {
        :blank  -> '-',
        :w-pawn   -> 'P',
        :w-knight -> 'N',
@@ -29,10 +29,10 @@ type square = { rank: u8, file: u8 }
 
 ns square {
   fn from-rank-file(x: u8, y: u8): square {
-    { .rank = y, .file = x }
+    .{ rank = y, file = x }
   }
   fn from-name(s: string): square {
-    let file: u8 = switch s.first().! {
+    let file: u8 = s.first().! is {
        'a' or 'A' -> 0,
        'b' or 'B' -> 1,
        'c' or 'C' -> 2,
@@ -50,7 +50,7 @@ ns square {
 
 impl show for square {
   fn show(self: square): string {
-    let file = switch self.file {
+    let file = self.file is {
       0 -> 'a',
       1 -> 'b',
       2 -> 'c',

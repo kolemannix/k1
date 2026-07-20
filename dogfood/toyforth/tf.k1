@@ -1,6 +1,6 @@
 type obj-common = { rc: u32, line: u32 }
 ns for obj-common {
-  let empty: obj-common = { .rc = 0, .line = 0 }
+  let empty: obj-common = .{ rc = 0, line = 0 }
 }
 
 type tf-obj = either(u32) {
@@ -16,12 +16,12 @@ type parser = { input: string, cursor: size }
 type ctx = { stack: list[tf-obj] }
 
 use mem/new
-fn mk-str(value: string): *tf-obj { new(:str { .common = obj-common/empty, .value }) }
-fn mk-sym(name: string): *tf-obj { new(:symbol { .common = obj-common/empty, .name }) }
-fn mk-int(i: i64): *tf-obj { new(:int { .common = obj-common/empty, .i }) }
-fn mk-bool(b: bool): *tf-obj { new(:bool { .common = obj-common/empty, .b }) }
+fn mk-str(value: string): *tf-obj { new(:str .{ common = obj-common/empty, value }) }
+fn mk-sym(name: string): *tf-obj { new(:symbol .{ common = obj-common/empty, name }) }
+fn mk-int(i: i64): *tf-obj { new(:int .{ common = obj-common/empty, i }) }
+fn mk-bool(b: bool): *tf-obj { new(:bool .{ common = obj-common/empty, b }) }
 fn mk-list(): *tf-obj { 
-  new(:list { .common = obj-common/empty, .elems = list/empty(), .len = 0 })
+  new(:list .{ common = obj-common/empty, elems = list/empty(), len = 0 })
 }
 
 fn compile(program-text: string): *tf-obj {

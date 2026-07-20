@@ -205,7 +205,6 @@ pub enum TokenKind {
     KeywordAbility,
     KeywordImpl,
     KeywordIs,
-    KeywordSwitch,
     KeywordNot,
     KeywordBuiltin,
     KeywordWhere,
@@ -350,7 +349,6 @@ impl TokenKind {
             K::KeywordAbility => "ability",
             K::KeywordImpl => "impl",
             K::KeywordIs => "is",
-            K::KeywordSwitch => "switch",
             K::KeywordNot => "not",
             K::KeywordBuiltin => "builtin",
             K::KeywordWhere => "where",
@@ -439,7 +437,6 @@ impl TokenKind {
             b"in" => Some(K::KeywordIn),
             b"ability" => Some(K::KeywordAbility),
             b"impl" => Some(K::KeywordImpl),
-            b"switch" => Some(K::KeywordSwitch),
             b"not" => Some(K::KeywordNot),
             b"is" => Some(K::KeywordIs),
             b"builtin" => Some(K::KeywordBuiltin),
@@ -454,34 +451,6 @@ impl TokenKind {
             b">=" => Some(K::GreaterEqual),
             b":=" => Some(K::ColonEquals),
             _ => None,
-        }
-    }
-    pub fn is_keyword(&self) -> bool {
-        match self {
-            K::KeywordFn => true,
-            K::KeywordLet => true,
-            K::KeywordMut => true,
-            K::KeywordAnd => true,
-            K::KeywordOr => true,
-            K::KeywordIf => true,
-            K::KeywordWhile => true,
-            K::KeywordLoop => true,
-            K::KeywordNamespace => true,
-            K::KeywordIntern => true,
-            K::KeywordFor => true,
-            K::KeywordIn => true,
-            K::KeywordAbility => true,
-            K::KeywordImpl => true,
-            K::KeywordIs => true,
-            K::KeywordSwitch => true,
-            K::KeywordNot => true,
-            K::KeywordBuiltin => true,
-            K::KeywordWhere => true,
-            K::KeywordContext => true,
-            K::KeywordUse => true,
-            K::KeywordRequire => true,
-            K::KeywordDefer => true,
-            _ => false,
         }
     }
     pub fn is_binary_operator(&self) -> bool {

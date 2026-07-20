@@ -1,9 +1,9 @@
-let MODULE_INFO: k1/module-manifest = {
-  .kind = :executable,
-  .deps = [],
-  .multithreading = false,
-  .libs = [{ .name = "pq", .link-type = :default }],
-  .link-args = ["-L/opt/homebrew/opt/libpq/include"]
+let MODULE_INFO: k1/module-manifest = .{
+  kind = :executable,
+  deps = [],
+  multithreading = false,
+  libs = [.{ name = "pq", link-type = :default }],
+  link-args = ["-L/opt/homebrew/opt/libpq/include"]
 }
 
 ns pg {
@@ -44,7 +44,7 @@ fn connect(context alloc: mem/alloc-mode)(conninfo: string): result[connection, 
   };
 
   if pg/status(conn) == pg/CONNECTION_OK {
-    :ok { .raw = conn }
+    :ok .{ raw = conn }
   } else {
     let err = c-string-or-default(pg/error-message(conn), "failed to connect");
     pg/finish(conn);
@@ -57,7 +57,7 @@ ns for connection {
     if not self.raw.is-null() {
       pg/finish(self.raw)
     };
-    {}
+    .{}
   }
 
   fn exec(context alloc: mem/alloc-mode)(self: connection, query: string): result[query-result, string] {
@@ -69,7 +69,7 @@ ns for connection {
 
     let status = pg/result-status(raw-result);
     if status == pg/PGRES_COMMAND_OK or status == pg/PGRES_TUPLES_OK {
-      :ok { .raw = raw-result }
+      :ok .{ raw = raw-result }
     } else {
       let err = c-string-or-default(pg/result-error-message(raw-result), "query failed");
       pg/clear(raw-result);
@@ -83,7 +83,7 @@ ns for query-result {
     if not self.raw.is-null() {
       pg/clear(self.raw)
     };
-    {}
+    .{}
   }
 
   fn row-count(self: query-result): size {
@@ -115,7 +115,7 @@ fn print-result-table(result: query-result) {
   let cols = result.col-count();
   if cols == 0 {
     println("(command ok)");
-    return({})
+    return(.{})
   };
 
   let col = 0;
@@ -131,7 +131,7 @@ fn print-result-table(result: query-result) {
     col := 0;
     while col < cols {
       if col > 0 { print("\t") };
-      switch result.value(row, col) {
+      result.value(row, col) is {
         :none -> print("NULL"),
         :some(value) -> print(value)
       };
@@ -141,14 +141,14 @@ fn print-result-table(result: query-result) {
     row := row + 1;
   };
 
-  {}
+  .{}
 }
 
 fn usage(program-name: string) {
   eprintln("Usage: {program-name} <conninfo> [query]");
   eprintln("Example:");
   eprintln("  {program-name} \"postgresql://localhost/postgres\" \"select now()\"");
-  {}
+  .{}
 }
 
 fn main(argc: core/c-int, argv: ptr): i32 {
@@ -167,7 +167,7 @@ fn main(argc: core/c-int, argv: ptr): i32 {
     "select 'hello from k1/libpq'::text as message"
   };
 
-  let conn = switch connect(conninfo) {
+  let conn = connect(conninfo) is {
     :ok(conn) -> conn,
     :err(msg) -> {
       eprintln("connect failed: {msg}");
@@ -176,7 +176,7 @@ fn main(argc: core/c-int, argv: ptr): i32 {
   };
   defer conn.close();
 
-  let query-result = switch conn.exec(query) {
+  let query-result = conn.exec(query) is {
     :ok(result) -> result,
     :err(msg) -> {
       eprintln("query failed: {msg}");

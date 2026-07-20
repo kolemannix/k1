@@ -1,9 +1,9 @@
-let MODULE_INFO: k1/module-manifest = {
-  .kind = :executable,
-  .deps = [],
-  .multithreading = false,
-  .libs = [{ .name = "foo", .link-type = :static }],
-  .link-args = [],
+let MODULE_INFO: k1/module-manifest = .{
+  kind = :executable,
+  deps = [],
+  multithreading = false,
+  libs = [.{ name = "foo", link-type = :static }],
+  link-args = [],
 }
 
 ns foo {
@@ -81,67 +81,67 @@ ns foo {
 
 fn test-all() {
   assert-equals(
-    foo/very_small({ .x = 10 }, { .x = 20 }),
-    { .x = 30 }
+    foo/very_small(.{ x = 10 }, .{ x = 20 }),
+    .{ x = 30 }
   );
 
-  let small-result = foo/small({.r = 1, .g = 10, .b = 20, .a = 30 }, { .r = 1, .g = 1, .b = 1, .a = 1 });
+  let small-result = foo/small(.{r = 1, g = 10, b = 20, a = 30 }, .{ r = 1, g = 1, b = 1, a = 1 });
   assert-equals(small-result.r, 2);
   assert-equals(small-result.g, 11);
   assert-equals(small-result.b, 21);
   assert-equals(small-result.a, 31);
 
-  let int-wrap-result = foo/int-wrap({ .inner = -5 }, { .inner = 10 });
+  let int-wrap-result = foo/int-wrap(.{ inner = -5 }, .{ inner = 10 });
   assert-equals(int-wrap-result.inner, 5);
 
-  let rgb3 = foo/rgb3({ .r = 1, .g = 2, .b = 3 }, { .r = 10, .g = 20, .b = 30 });
+  let rgb3 = foo/rgb3(.{ r = 1, g = 2, b = 3 }, .{ r = 10, g = 20, b = 30 });
   assert-equals(rgb3.r, 11);
   assert-equals(rgb3.g, 22);
   assert-equals(rgb3.b, 33);
 
-  let ts = foo/three-shorts({ .a = 1, .b = 2, .c = 3 }, { .a = -10, .b = 20, .c = -30 });
+  let ts = foo/three-shorts(.{ a = 1, b = 2, c = 3 }, .{ a = -10, b = 20, c = -30 });
   assert-equals(ts.a, -9);
   assert-equals(ts.b, 22);
   assert-equals(ts.c, -27);
 
-  let medium-result = foo/medium({ .a = 10, .b = 100 }, { .a = 1, .b = 20 });
+  let medium-result = foo/medium(.{ a = 10, b = 100 }, .{ a = 1, b = 20 });
   assert-equals(medium-result.a, 11);
   assert-equals(medium-result.b, 120);
 
   let large-result = foo/large(
-    { .med1 = { .a = 1, .b = 2 }, .med2 = { .a = 3, .b = 4 } },
-    { .med1 = { .a = 10, .b = 20 }, .med2 = { .a = 30, .b = 40 } }
+    .{ med1 = .{ a = 1, b = 2 }, med2 = .{ a = 3, b = 4 } },
+    .{ med1 = .{ a = 10, b = 20 }, med2 = .{ a = 30, b = 40 } }
   );
   assert-equals(large-result.med1.a, 11);
   assert-equals(large-result.med1.b, 22);
   assert-equals(large-result.med2.a, 33);
   assert-equals(large-result.med2.b, 44);
 
-  let hfa2 = foo/hfa2-add({ .x = 1.0, .y = 2.0 }, { .x = 10.0, .y = 20.0 });
+  let hfa2 = foo/hfa2-add(.{ x = 1.0, y = 2.0 }, .{ x = 10.0, y = 20.0 });
   assert-equals(hfa2.x, 11.0);
   assert-equals(hfa2.y, 22.0);
 
   let hfa-nested3 = foo/hfa-nested3-add(
-    { .a = { .x = 1.0 }, .b = 2.0, .c = 3.0 },
-    { .a = { .x = 10.0 }, .b = 20.0, .c = 30.0 }
+    .{ a = .{ x = 1.0 }, b = 2.0, c = 3.0 },
+    .{ a = .{ x = 10.0 }, b = 20.0, c = 30.0 }
   );
   assert-equals(hfa-nested3.a.x, 11.0);
   assert-equals(hfa-nested3.b, 22.0);
   assert-equals(hfa-nested3.c, 33.0);
 
   let hfa4 = foo/hfa4-add(
-    { .a = 1.0, .b = 2.0, .c = 3.0, .d = 4.0 },
-    { .a = 10.0, .b = 20.0, .c = 30.0, .d = 40.0 }
+    .{ a = 1.0, b = 2.0, c = 3.0, d = 4.0 },
+    .{ a = 10.0, b = 20.0, c = 30.0, d = 40.0 }
   );
   assert-equals(hfa4.a, 11.0);
   assert-equals(hfa4.b, 22.0);
   assert-equals(hfa4.c, 33.0);
   assert-equals(hfa4.d, 44.0);
 
-  let cursor: foo/cx-cursor = {
-    .kind = :unexposed-decl,
-    .xdata = -42,
-    .data = [1.as[ptr], 2.as[ptr], 3.as[ptr]]
+  let cursor: foo/cx-cursor = .{
+    kind = :unexposed-decl,
+    xdata = -42,
+    data = [1.as[ptr], 2.as[ptr], 3.as[ptr]]
   };
   let rt = foo/rt-cursor(cursor);
   assert-equals(cursor.kind.enum-value(), rt.kind.enum-value());
@@ -192,7 +192,7 @@ fn test-fn-ptr() {
 }
 
 fn bump-rgb3(x: foo/rgb3): foo/rgb3 {
-  { .r = x.r + 1, .g = x.g + 1, .b = x.b + 1 }
+  .{ r = x.r + 1, g = x.g + 1, b = x.b + 1 }
 }
 
 fn sum-fn(a: u64, b: u64, c: u64, d: u64): i32 {

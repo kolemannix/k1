@@ -35,12 +35,12 @@ ns for arena {
     let memory-size = size - types/stride[arena];
     let arena: *arena = base-ptr.rw[arena];
     // #static assert(types/align[arena] <= MIN_ALIGN);
-    arena <- {
-      .base-ptr = memory-start,
-      .cur-addr = memory-start,
-      .end-addr = memory-start.add-bytes(memory-size),
-      .alloc-kind,
-      .name = "",
+    arena <- .{
+      base-ptr = memory-start,
+      cur-addr = memory-start,
+      end-addr = memory-start.add-bytes(memory-size),
+      alloc-kind,
+      name = "",
     };
     arena
   }
@@ -63,7 +63,7 @@ ns for arena {
   }
 
   fn release(self: *arena) {
-    switch self.alloc-kind {
+    self.alloc-kind is {
       :virtual -> mem/virtual-release(self.get-alloc-base(), self.allocation-size-bytes()),
       :malloc -> mem/free(self.get-alloc-base(), self.allocation-size-bytes(), MIN_ALIGN)
     };
@@ -160,7 +160,7 @@ ns for arena {
   }
 
   fn mark(self: *arena): arena-mark {
-    { .start = self.cur-addr }
+    .{ start = self.cur-addr }
   }
 
   fn pop-to-mark(self: *arena, arena-mark) {

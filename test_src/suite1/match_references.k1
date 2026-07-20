@@ -10,9 +10,9 @@ fn test() {
     }
   };
 
-  let point = { .x = 5, .y = 2 };
+  let point = .{ x = 5, y = 2 };
   let point = &point;
-  if point is { .x, .y = 2 }* {
+  if point is .{ x, y = 2 }* {
     assert-equals(x.*, 5);
   };
 
@@ -34,20 +34,20 @@ fn test() {
   if b is true*** { crash("b was true!") };
   assert(b.*.*.* == false);
 
-  switch b {
+  b is {
      true*** -> crash("b was true!"),
-     false*** -> {}
+     false*** -> .{}
   };
 
-  switch b {
+  b is {
     null -> crash("b was null"),
-    _ -> {}
+    _ -> .{}
   };
 
-  switch b.as[ptr] {
+  b.as[ptr] is {
     null -> crash("b was null as ptr"),
-    _ -> {},
+    _ -> .{},
   };
 
-  {}
+  .{}
 }

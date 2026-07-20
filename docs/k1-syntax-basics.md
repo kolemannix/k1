@@ -19,7 +19,7 @@ ns example-test;
 type point = { x: int, y: int }
 
 fn origin(): point {
-  { .x = 0, .y = 0 }
+  .{ x = 0, y = 0 }
 }
 
 fn test() {
@@ -63,7 +63,7 @@ ns allocator-test;
 type http-request = { status-code: int }
 
 fn parse-request(): http-request {
-  { .status-code = 200 }
+  .{ status-code = 200 }
 }
 ```
 
@@ -125,17 +125,17 @@ let answer = {
 ```
 
 Semicolons separate statements and are required; the parser does not use
-newlines to separate expressions. A block with no meaningful value yields `{}`,
-the empty/unit value:
+newlines to separate expressions. A block with no meaningful value yields `.{}`,
+the empty/unit value (the unit *type* is spelled `{}`):
 
 ```rust
 let result: {} = if true {
   println("done");
 };
-assert(result == {});
+assert(result == .{});
 ```
 
-K1 code commonly ends test helpers with `{}` when the intent is "return unit".
+K1 code commonly ends test helpers with `.{}` when the intent is "return unit".
 
 ## Variables And Mutation
 
@@ -161,7 +161,7 @@ to read through a reference, and `<-` to write through it. Field access often
 auto-dereferences when the target type makes that clear:
 
 ```rust
-let* item = { .value = 41 };
+let* item = .{ value = 41 };
 item.value <- 42;
 assert-equals(item.value, 42);
 ```
@@ -211,16 +211,16 @@ nominal types can be created for structs, enums, and opaque types:
 ```rust
 type point = { x: int, y: int }
 
-let p: point = { .x = 1, .y = 2 };
+let p: point = .{ x = 1, y = 2 };
 assert-equals(p.x, 1);
 ```
 
-Struct *values* use leading dots and `=` (`{ .x = 1 }`), while struct *types*
-use `:` (`{ x: int }`): `:` always means "type" and `=` always means "value".
-The leading dot is also what distinguishes a struct literal from a block — a
-`{` not followed by `.` (or immediately closed: `{}` is the empty struct) is a
-block, so `{ cap }` is a block yielding `cap` and `{ .cap }` is the shorthand
-struct.
+Struct *values* are marked by a leading `.{` and use `=` (`.{ x = 1 }`), while
+struct *types* use bare braces and `:` (`{ x: int }`): `:` always means "type"
+and `=` always means "value". The `.{` marker is what distinguishes a struct
+literal from a block — a bare `{` in expression position is always a block, so
+`{ cap }` is a block yielding `cap` and `.{ cap }` is the shorthand struct.
+Fields use the same `name = value` shape as named call arguments.
 
 `type alias name = ...` creates a plain alias for the type on the right-hand
 side. This is how to name an existing scalar or structural type without creating
@@ -243,13 +243,13 @@ Field shorthand is supported when a local has the same name:
 
 ```rust
 let width = 50;
-let rect = { .width, .height = 20 };
+let rect = .{ width, height = 20 };
 ```
 
 Use `.with(...)` to copy a struct with selected fields changed:
 
 ```rust
-let next = current.with({ .count = current.count + 1 });
+let next = current.with(.{ count = current.count + 1 });
 ```
 
 Attach methods to a type with `ns for`:
@@ -281,10 +281,10 @@ ReferenceThrough
 The source syntax is intentionally small:
 
 ```rust
-let p = { .x = 1, .y = 2 };
+let p = .{ x = 1, y = 2 };
 let x: int = p.x;
 
-let* p-ref = { .x = 1, .y = 2 };
+let* p-ref = .{ x = 1, y = 2 };
 let x-value: int = p-ref.x;
 let x-ref: *mut int = p-ref.x*;
 ```
@@ -306,7 +306,7 @@ to the field."
 Use reference-through access when mutating a field through a struct reference:
 
 ```rust
-let* p = { .x = 1 };
+let* p = .{ x = 1 };
 p.x* <- 2;
 assert-equals(p.x, 2);
 ```
@@ -364,9 +364,9 @@ assert-equals(result.as-ok().!, 42);
 
 Payload parentheses are optional in both constructors and patterns — the
 'quiet' form. The payload must start with an identifier, literal, list
-literal, struct literal (`{ .`), or another `:variant`; anything else (an
-operator, a lambda, an empty `{}`) needs the parenthesized form, so a trailing
-variant never captures a following block:
+literal, nonempty struct literal (`.{ x = 1 }`), or another `:variant`;
+anything else (an operator, a lambda, an empty `.{}`) needs the parenthesized
+form, so a trailing variant never captures a following block or a bare unit:
 
 ```rust
 let result: parse-result[int] = :ok 42;
@@ -402,20 +402,23 @@ The compiler represents sum payload access with the same `FieldAccessKind` enum
 used for struct fields. Internally this is "get the sum data"; with
 reference-through access, the result is a reference to that data.
 
-This works in `if`, `while`, `require`, and `switch` patterns:
+This works in every pattern position — `if`/`while`/`require` conditions and
+match arms:
 
 ```rust
-switch result-ref {
+result-ref is {
   :ok(value-ref)* -> { value-ref <- value-ref.* + 1 },
   :err(message-ref)* -> { crash(message-ref.*) }
 }
 ```
 
-Use `switch` for exhaustive branching:
+`is` with a brace block of arms is the match expression: exhaustive, and
+usable anywhere an expression is. `x is <pattern>` (a bool) is just its
+two-arm degenerate case.
 
 ```rust
 fn show-result(result: parse-result[int]): string {
-  switch result {
+  result is {
     :ok(value) -> { "ok {value}" },
     :err(message) -> { "err {message}" }
   }
@@ -491,12 +494,13 @@ if value is :some(x) and x > 0 {
 }
 ```
 
-Struct patterns work in `if`, `require`, and `switch`:
+Struct patterns work in `if`, `require`, and match arms. Arms support `or`
+patterns, `if` guards, and a `_` default:
 
 ```rust
-switch point {
-  { .x = 0, .y } -> y,
-  { x, y } if x == y -> x,
+point is {
+  .{ x = 0, y } -> y,
+  .{ x, y } if x == y -> x,
   _ -> 0
 }
 ```
@@ -519,7 +523,7 @@ See `test_src/suite1/matching_if.k1`, `test_src/suite1/match_fails.k1`,
 
 ## Loops
 
-`while` loops are statement-like and usually yield `{}`:
+`while` loops are statement-like and usually yield `.{}`:
 
 ```rust
 while i < 10 {
@@ -735,7 +739,7 @@ the optional third argument supplies format values:
 ```rust
 let* w = string-builder/new();
 writef(w, "hello {}", 42);
-writef(w, " {name}", { .name = "k1" });
+writef(w, " {name}", .{ name = "k1" });
 ```
 
 Use `writelnf` the same way when you want a trailing newline:
@@ -749,7 +753,7 @@ first and an optional values argument second:
 
 ```rust
 let s = stringf("hello {name}");
-let dated = stringf("{yyyy}-{mm}-{dd}", { .yyyy = 2026, .mm = 6, .dd = 25 });
+let dated = stringf("{yyyy}-{mm}-{dd}", .{ yyyy = 2026, mm = 6, dd = 25 });
 ```
 
 Bare `{}` placeholders consume the value argument directly. Named placeholders

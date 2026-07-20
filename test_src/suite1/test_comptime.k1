@@ -7,10 +7,10 @@ fn simple-enum() {
   assert-equals(e.!, 42);
   assert(e != n);
   assert-equals(e, some(42));
-  {}
+  .{}
 }
 
-let p: { x: int, y: ?int } = { .x = 1, .y = :some(2) }
+let p: { x: int, y: ?int } = .{ x = 1, y = :some(2) }
 
 fn simple-struct() {
   assert-equals(p.x, 1);

@@ -39,7 +39,7 @@ use core/writer
 use types/type-schema
 
 fn _write-json-from-schema(code: *mut string-builder, name: string, type-id: u64) {
-  switch types/type-id-schema(type-id) {
+  types/type-id-schema(type-id) is {
     :struct(s) -> {
       code.line(p"w.write-char('{');");
       for f in s.fields {
@@ -92,10 +92,10 @@ fn to-json[t](t: t): string {
 
 fn test-to-json() {
   assert-equals(to-json(true), "true");
-  let json1 = to-json({ .x = 1, .y = 2, .z = {}, .d = false });
+  let json1 = to-json(.{ x = 1, y = 2, z = .{}, d = false });
   assert-equals(json1, p`{"x":1,"y":2,"z":{},"d":false}`);
 
-  {}
+  .{}
 }
 
 
@@ -103,8 +103,8 @@ fn test() {
   simple-increment();
   test-to-json();
 
-  let _x: my-meta-point = { .x = 0, .y = 42 };
+  let _x: my-meta-point = .{ x = 0, y = 42 };
   pre/pi;
   
-  {}
+  .{}
 }

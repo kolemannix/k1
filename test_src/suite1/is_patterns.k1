@@ -2,8 +2,8 @@ ns is_patterns;
 
 fn test() {
   // Empty
-  let e = {};
-  assert(e is {});
+  let e = .{};
+  assert(e is .{});
 
   let i = 42;
   assert(not (i is 41));
@@ -31,7 +31,7 @@ fn test() {
   assert(not (opt is :none));
 
 
-  let foo = { .x = 1, .y = "asdf" };
+  let foo = .{ x = 1, y = "asdf" };
   // Wildcard pattern
   if foo is _ {
     assert(true);
@@ -44,26 +44,26 @@ fn test() {
 
   // Else works
   let else_ran = false;
-  if foo is { .x = 200 } {} else {
+  if foo is .{ x = 200 } .{} else {
     else_ran := true;
   };
   assert(else_ran);
 
   // record pattern, with integer pattern
   // and nested variable pattern
-  if foo is { .x = 1, .y } {
+  if foo is .{ x = 1, y } {
     assert(y == "asdf");
   };
 
   // record pattern where inner has condition statements
-  let bar = { .x = :some(1): ?int };
-  if bar is { .x = :some(x) } {
+  let bar = .{ x = :some(1): ?int };
+  if bar is .{ x = :some(x) } {
     assert(x == 1);
   };
 
   // Optionals
-  let opt: ?{ x: i64 } = :some({ .x = 1 });
-  if opt is :some({ .x = 2 }) {} else assert(true);
+  let opt: ?{ x: i64 } = :some(.{ x = 1 });
+  if opt is :some(.{ x = 2 }) .{} else assert(true);
 
   // Quiet sum patterns: payload without parens
   let qo: ?int = :some 42;

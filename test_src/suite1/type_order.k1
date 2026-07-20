@@ -9,7 +9,7 @@ ability to-point {
 }
 
 fn test() {
-  let _x: type_order/point = { .x = 1, .y = 2 };
+  let _x: type_order/point = .{ x = 1, y = 2 };
 }
 
 

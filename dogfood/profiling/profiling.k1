@@ -32,11 +32,11 @@ fn begin_profile_block(label: string, anchor_index: u32): profile-block {
     
     // Initialize anchor on first use
     if anchor.label == "" {
-        anchor <- {
-            .tsc_elapsed_exclusive = 0,
-            .tsc_elapsed_inclusive = 0,
-            .hit_count = 0,
-            .label = label,
+        anchor <- .{
+            tsc_elapsed_exclusive = 0,
+            tsc_elapsed_inclusive = 0,
+            hit_count = 0,
+            label = label,
         }
     };
     
@@ -45,12 +45,12 @@ fn begin_profile_block(label: string, anchor_index: u32): profile-block {
     global_profiler_parent <- anchor_index;
     let start_tsc = read-cpu-counter();
     
-    {
-      .label,
-      .old_tsc_elapsed_inclusive,
-      .start_tsc,
-      .parent_index,
-      .anchor_index
+    .{
+      label,
+      old_tsc_elapsed_inclusive,
+      start_tsc,
+      parent_index,
+      anchor_index
     }
 }
 
@@ -62,11 +62,11 @@ fn end_profile_block(block: profile-block) {
     let anchor = global_profiler_anchors.get(block.anchor_index.as[size]).&;
     
     parent.tsc_elapsed_exclusive <- parent.tsc_elapsed_exclusive - elapsed;
-    anchor <- {
-      .tsc_elapsed_exclusive = anchor.tsc_elapsed_exclusive + elapsed,
-      .tsc_elapsed_inclusive = block.old_tsc_elapsed_inclusive + elapsed,
-      .hit_count = anchor.hit_count + 1,
-      .label = block.label,
+    anchor <- .{
+      tsc_elapsed_exclusive = anchor.tsc_elapsed_exclusive + elapsed,
+      tsc_elapsed_inclusive = block.old_tsc_elapsed_inclusive + elapsed,
+      hit_count = anchor.hit_count + 1,
+      label = block.label,
     }
 }
 

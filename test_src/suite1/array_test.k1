@@ -68,5 +68,5 @@ fn test() {
   assert(buf.get(0) == array.get(0));
   assert-equals(buf.get(0), array.get(0));
 
-  {}
+  .{}
 }

@@ -2,7 +2,7 @@ ns for result {
 
   impl[t: print, e: print] print for result[t, e] {
     fn print-to[w: writer](self, w) {
-      switch self {
+      self is {
         :ok(t) -> writef(w, ":ok({t})"),
         :err(e) -> writef(w, ":err({e})"),
       }

@@ -30,7 +30,7 @@ $ {
 $ core/meta/define-soa[{ x: u32, y: u32, z: u8 }]("point3-list")
 
 fn test() {
-  let frob: frob = { .b = false };
+  let frob: frob = .{ b = false };
 
   assert-equals(frob.get-name(), "Joe");
   assert-equals(is-pow2(n), false);
@@ -39,7 +39,7 @@ fn test() {
   assert-equals(secret/secret2(), 43);
 
   let ps = point3-list/empty();
-  ps.push({ .x = 5, .y = 10, .z = 15 });
+  ps.push(.{ x = 5, y = 10, z = 15 });
   let p = ps.get(0);
   assert-equals(p.x, 5);
   assert-equals(p.y, 10);
@@ -48,7 +48,7 @@ fn test() {
 }
 
 // Only "static, true" and "meta, true" should appear
-// #if true #static { println("static, true"); {} } 
-// #if false #static { println("static, false"); {} } 
-// #if true ${ println("meta, true"); "let u1: empty = \{};" } 
-// #if false ${ println("meta, false"); "let u2: empty = \{};" } 
+// #if true #static { println("static, true"); .{} } 
+// #if false #static { println("static, false"); .{} } 
+// #if true ${ println("meta, true"); "let u1: empty = .\{};" } 
+// #if false ${ println("meta, false"); "let u2: empty = .\{};" } 

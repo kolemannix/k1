@@ -101,7 +101,7 @@ ns types {
   type int-kind = either(u8) { u8 = 0, u16 = 1, u32 = 2, u64 = 3, i8 = 4, i16 = 5, i32 = 6, i64 = 7 }
   ns for int-kind {
     fn bit-width(self: int-kind): size {
-      switch self {
+      self is {
         :u8  -> 8,
         :u16 -> 16,
         :u32 -> 32,
@@ -679,7 +679,7 @@ impl equals for i64 { intern fn equals(self: i64, other: i64): bool }
 
 impl equals for char { intern fn equals(self: char, other: char): bool }
 
-fn discard[t](_t: t): empty { {} }
+fn discard[t](_t: t): empty { .{} }
 fn phony[t](): t { crash("phony") }
 
 ns array {
@@ -723,7 +723,7 @@ ns array {
   }
 
   fn as-buffer[t, n](array: *mut array[t, n]): buffer[t] where n: static size {
-    { .len = array.len(), .data = array.get-base() }
+    .{ len = array.len(), data = array.get-base() }
   }
 
   fn as-span[t, n](array: *array[t, n]): span[t] where n: static size {
@@ -829,7 +829,7 @@ fn assert(context locn: k1/source-location)(value: bool) {
 
 fn assertdbg(context locn: k1/source-location)(value: bool) {
   #if k1/debug { if not value { crash("ASSERT FAILED") } }
-  else         { locn; value; {} }
+  else         { locn; value; .{} }
 }
 
 fn print-backtrace() {

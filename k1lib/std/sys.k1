@@ -3,7 +3,7 @@ ns sys;
 #if k1/os-macos extern("arc4random_uniform") fn arc4random_uniform(upper-bound: u32): u32
 
 fn random(upper-bound: u32): u32 {
-  #switch k1/os {
+  k1/os #is {
     :macos -> arc4random_uniform(upper-bound),
     :linux -> crash("linux 'random' unimpl"),
     :wasm -> #static crash("wasm 'random' unimpl")

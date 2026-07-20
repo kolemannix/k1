@@ -22,7 +22,7 @@ fn type-variant-name(type-id: u64): string {
 fn test() {
   let i: int = 10;
   let int-ptr = make-any(&i);
-  let s = { .x = 1, .y = 100 };
+  let s = .{ x = 1, y = 100 };
   let struct-ptr = make-any(&s);
   assert-equals(kind-of-any(int-ptr), "int");
   assert-equals(kind-of-any(struct-ptr), "struct");

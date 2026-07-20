@@ -14,7 +14,7 @@ type command = either {
 fn parse-command(cmd: string): result[command, string] {
   println("[debug] received: `{cmd}`");
   
-  switch cmd {
+  cmd is {
     // Initial handshake: GUI sends "uci", engine responds with id and options
     "uci" -> :ok(:uci),
 
@@ -31,7 +31,7 @@ fn parse-command(cmd: string): result[command, string] {
     _ -> {
       if cmd.starts-with("perft ") {
          let parsed-depth = cmd.drop(6).to-int();
-         if parsed-depth is :some(depth) { :ok(:perft({ .depth = depth.as[u32] })) }
+         if parsed-depth is :some(depth) { :ok(:perft(.{ depth = depth.as[u32] })) }
          else :err("Invalid perft command: {cmd}")
       } else if cmd.starts-with("position ") {
         // "position" command sets up a position to analyze:

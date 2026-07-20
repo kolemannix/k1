@@ -105,8 +105,27 @@ fn infix() -> Result<(), ParseError> {
 
 #[test]
 fn struct_1() -> Result<(), ParseError> {
-    let (_ast, result) = test_single_expr("{ .a = 4, .b = x.a, .c = true }")?;
+    let (_ast, result) = test_single_expr(".{ a = 4, b = x.a, c = true }")?;
     assert!(matches!(result, ParsedExpr::Struct(_)));
+    Ok(())
+}
+
+#[test]
+fn struct_shorthand() -> Result<(), ParseError> {
+    let (_ast, result) = test_single_expr(".{ x, y = 2 }")?;
+    assert!(matches!(result, ParsedExpr::Struct(_)));
+    Ok(())
+}
+
+#[test]
+fn bare_brace_is_block() -> Result<(), ParseError> {
+    let (_ast, result) = test_single_expr("{ f(); g() }")?;
+    assert!(matches!(result, ParsedExpr::Block(_)));
+    // Old struct spelling is no longer an expression; the statement parse
+    // fails (recovered into ast.errors, yielding an empty block)
+    let (ast, result) = test_single_expr("{ .a = 4 }")?;
+    assert!(matches!(result, ParsedExpr::Block(_)));
+    assert!(!ast.errors.is_empty());
     Ok(())
 }
 
@@ -390,11 +409,11 @@ impl print for bool {
 }
 
 #[test]
-fn switch_struct_patterns() -> ParseResult<()> {
+fn is_match_struct_patterns() -> ParseResult<()> {
     let input = r#"
-        switch x {
-           { .x = 1, .y = 2 } -> 1,
-           { .x = 2, .y } -> { 2 },
+        x is {
+           .{ x = 1, y = 2 } -> 1,
+           .{ x = 2, y } -> { 2 },
            _ -> { 3 }
         }
 "#;
@@ -404,8 +423,37 @@ fn switch_struct_patterns() -> ParseResult<()> {
 }
 
 #[test]
+fn is_match_arms() -> ParseResult<()> {
+    let (ast, expr, _expr_id) = test_single_expr_with_id("x is { :a -> 1, _ -> 2 }")?;
+    let ParsedExpr::Match(m) = expr else { panic!("expected match") };
+    assert!(!m.is_static);
+    assert_eq!(ast.mem.getn(m.cases).len(), 2);
+    Ok(())
+}
+
+#[test]
+fn is_static_match_arms() -> ParseResult<()> {
+    let (_ast, expr, _expr_id) = test_single_expr_with_id("x #is { :a -> 1, _ -> 2 }")?;
+    let ParsedExpr::Match(m) = expr else { panic!("expected match") };
+    assert!(m.is_static);
+    Ok(())
+}
+
+#[test]
+fn is_struct_pattern_bool() -> ParseResult<()> {
+    let (ast, expr, _expr_id) = test_single_expr_with_id("x is .{ x = 1 }")?;
+    let ParsedExpr::Is(is_expr) = expr else { panic!("expected is") };
+    assert!(matches!(ast.patterns.get(is_expr.pattern), ParsedPattern::Struct(_)));
+
+    let (ast, expr, _expr_id) = test_single_expr_with_id("e is .{}")?;
+    let ParsedExpr::Is(is_expr) = expr else { panic!("expected is") };
+    assert!(matches!(ast.patterns.get(is_expr.pattern), ParsedPattern::Struct(_)));
+    Ok(())
+}
+
+#[test]
 fn empty_struct() -> ParseResult<()> {
-    let input = r#"{}"#;
+    let input = r#".{}"#;
     let (_ast, expr, _expr_id) = test_single_expr_with_id(input)?;
     assert!(matches!(expr, ParsedExpr::Struct(_)));
     Ok(())

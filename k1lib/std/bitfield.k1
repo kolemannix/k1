@@ -1,7 +1,7 @@
 ns bitfield;
 
 // Lets you create bitfields with masks, bindings, and getters/setters. Example usage:
-// $bitfield/define[u16]("flags-auto", [b1("shielded"), b1("cloaked"), b1("damaged"), { .name = "sector-id", .bits = 5 }, b8("foo")])
+// $bitfield/define[u16]("flags-auto", [b1("shielded"), b1("cloaked"), b1("damaged"), .{ name = "sector-id", bits = 5 }, b8("foo")])
 
 fn int-width-for-bits(bits: size): size {
   if bits <= 8 8
@@ -10,7 +10,7 @@ fn int-width-for-bits(bits: size): size {
   else if bits <= 64 64
   else crash("Too many bits: {bits}")
 }
-fn bn(name: string, bits: size): { name: string, bits: size } { { .name, .bits } }
+fn bn(name: string, bits: size): { name: string, bits: size } { .{ name, bits } }
 fn b1(name: string): { name: string, bits: size } { bn(name = name, bits = 1) }
 fn b8(name: string): { name: string, bits: size } { bn(name = name, bits = 8) }
 fn define[base](type-name: string, members: span[{ name: string, bits: size }]): string {
@@ -61,7 +61,7 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
 
     bit-index <- bit-index.* + bits;
 
-    { .mask, .type-width, .inv-mask, .raw-value, .offset }
+    .{ mask, type-width, inv-mask, raw-value, offset }
   });
 
   // The for loop works on any type that implements iterable or iterator
@@ -73,7 +73,7 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
     writelnf(code, "  let {it.name}-mask: {base-name} = {info.mask}");
   };
 
-  writelnf(code, "  let zero: {type-name} = \{ .bits = 0 }");
+  writelnf(code, "  let zero: {type-name} = .\{ bits = 0 }");
 
   // Now let's do a getter and setter for each bitfield. If the width is 1,
   // we'll use bool since that's what the people likely want. Note that we could configure
@@ -107,7 +107,7 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
     let clear-mask = info.inv-mask;
     writelnf(code, "    let cleared-bits: {base-name} = self.bits & {clear-mask};");
     writelnf(code, "    let inserted-bits: {base-name} = cleared-bits | (masked-value << {info.offset});");
-    writelnf(code, "    \{ .bits = inserted-bits }");
+    writelnf(code, "    .\{ bits = inserted-bits }");
     writelnf(code, "  }"); // End setter
   };
 
