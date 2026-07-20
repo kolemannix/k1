@@ -1,10 +1,10 @@
-ns arith;
+ns arith
 
 let z: int = 1337
 
 fn add_stuff(x: int, y: int): int {
-  let b: int = x + 1;
-  let foo: int = b + z;
+  let b: int = x + 1
+  let foo: int = b + z
   foo + y
 }
 
@@ -13,83 +13,83 @@ fn mult(x: int, y: int): int {
 }
 
 fn test() {
-  let x = (1 * 100 * 2) / 3;
-  assert(x == 66);
+  let x = (1 * 100 * 2) / 3
+  assert(x == 66)
 
-  assert(50 >= 50);
-  assert(51 >= 50);
+  assert(50 >= 50)
+  assert(51 >= 50)
 
-  assert(50 <= 50);
-  assert(49 <= 50);
+  assert(50 <= 50)
+  assert(49 <= 50)
 
-  let y = x - 14;
+  let y = x - 14
 
-  assert(y == 52);
-  assert(y > 51);
-  assert(y < 53);
+  assert(y == 52)
+  assert(y > 51)
+  assert(y < 53)
 
-  assert-equals(2 % 2, 0);
-  assert-equals(2 % 3, 2);
-  assert-equals(-1 % 2, -1);
-  assert-equals(-10 % 2, 0);
+  assert-equals(2 % 2, 0)
+  assert-equals(2 % 3, 2)
+  assert-equals(-1 % 2, -1)
+  assert-equals(-10 % 2, 0)
 
-  assert(add_stuff(y = 2, x = 1) == 1341);
+  assert(add_stuff(y = 2, x = 1) == 1341)
 
   let mult-result: int = mult(
     55,
     2 + 3 + 3,
-  );
-  assert(mult-result == 440);
+  )
+  assert(mult-result == 440)
 
-  assert(1 != 2);
-  assert(2 == 2);
+  assert(1 != 2)
+  assert(2 == 2)
 
-  let z = 0.show();
-  assert-equals(z, "0");
-  assert-equals(1.show(), "1");
-  assert-equals(2.show(), "2");
-  assert-equals(3.show(), "3");
-  assert-equals(4.show(), "4");
-  assert-equals(5.show(), "5");
-  assert-equals(15.show(), "15");
-  assert-equals(16.show(), "16");
-  assert-equals(99.show(), "99");
-  assert-equals(101.show(), "101");
-  assert-equals(-101.show(), "-101");
-  assert-equals(-99.show(), "-99");
-  assert-equals(-11.show(), "-11");
+  let z = 0.show()
+  assert-equals(z, "0")
+  assert-equals(1.show(), "1")
+  assert-equals(2.show(), "2")
+  assert-equals(3.show(), "3")
+  assert-equals(4.show(), "4")
+  assert-equals(5.show(), "5")
+  assert-equals(15.show(), "15")
+  assert-equals(16.show(), "16")
+  assert-equals(99.show(), "99")
+  assert-equals(101.show(), "101")
+  assert-equals(-101.show(), "-101")
+  assert-equals(-99.show(), "-99")
+  assert-equals(-11.show(), "-11")
 
   // Integer suffixes
-  let _a: u8 = 255u8;
-  let _b: i8 = -128i8;
-  let _c: u16 = 65535u16;
-  let _d: i16 = -32768i16;
-  let _e: u32 = 4294967295u32;
-  let _f: i32 = -2147483648i32;
-  let _g: u64 = 18446744073709551615u64;
-  let _h: i64 = -9223372036854775808i64;
+  let _a: u8 = 255u8
+  let _b: i8 = -128i8
+  let _c: u16 = 65535u16
+  let _d: i16 = -32768i16
+  let _e: u32 = 4294967295u32
+  let _f: i32 = -2147483648i32
+  let _g: u64 = 18446744073709551615u64
+  let _h: i64 = -9223372036854775808i64
 
   // Coercions
   // Unsigned widen
-  assert-equals(3u8.as[u16], 3);
-  assert-equals(3u8.as[u32], 3);
-  assert-equals(3u8.as[u64], 3);
+  assert-equals(3u8.as[u16], 3)
+  assert-equals(3u8.as[u32], 3)
+  assert-equals(3u8.as[u64], 3)
 
   // Signed widen
-  assert-equals(3i8.as[i16], 3);
-  assert-equals(3i8.as[i32], 3);
-  assert-equals(3i8.as[i64], 3);
-  assert-equals(-3i8.as[i16], -3);
-  assert-equals(-3i8.as[i32], -3);
-  assert-equals(-3i8.as[i64], -3);
+  assert-equals(3i8.as[i16], 3)
+  assert-equals(3i8.as[i32], 3)
+  assert-equals(3i8.as[i64], 3)
+  assert-equals(-3i8.as[i16], -3)
+  assert-equals(-3i8.as[i32], -3)
+  assert-equals(-3i8.as[i64], -3)
 
   // Unsigned widen to signed
-  assert-equals(3u32.as[u64], 3u64);
+  assert-equals(3u32.as[u64], 3u64)
 
   // Signed widen to unsigned
-  assert-equals(-1i16.as[i32].as[u32], 0xFFFF_FFFF); 
+  assert-equals(-1i16.as[i32].as[u32], 0xFFFF_FFFF)
   // Not directly allowed
-  assert(test-compile(-1i16.as[u32]).is-some());
+  assert(test-compile(-1i16.as[u32]).is-some())
 
   .{}
 

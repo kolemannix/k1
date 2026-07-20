@@ -28,12 +28,12 @@ type task-state[t] = {
 
 ns for task-state {
   fn release[t](self: *mut task-state[t]) {
-    uv/cond_destroy(self.cond);
-    uv/mutex_destroy(self.mutex);
-    system-heap.free-t(self.req);
-    system-heap.free-t(self.mutex);
-    system-heap.free-t(self.cond);
-    system-heap.free-t(self);
+    uv/cond_destroy(self.cond)
+    uv/mutex_destroy(self.mutex)
+    system-heap.free-t(self.req)
+    system-heap.free-t(self.mutex)
+    system-heap.free-t(self.cond)
+    system-heap.free-t(self)
   }
 }
 
@@ -56,70 +56,70 @@ ns for task {
       handler-done = false,
       libuv-done = false,
       output = :none,
-    });
+    })
     let work: *mut task-work[t, params] = system-heap.new(.{
       state,
       params,
       handler,
-    });
+    })
 
-    let mutex-rc = uv/mutex_init(state.mutex);
+    let mutex-rc = uv/mutex_init(state.mutex)
     if mutex-rc != 0 {
-      crash("uv_mutex_init failed: {mutex-rc}");
-    };
+      crash("uv_mutex_init failed: {mutex-rc}")
+    }
 
-    let cond-rc = uv/cond_init(state.cond);
+    let cond-rc = uv/cond_init(state.cond)
     if cond-rc != 0 {
-      uv/mutex_destroy(state.mutex);
-      crash("uv_cond_init failed: {cond-rc}");
-    };
+      uv/mutex_destroy(state.mutex)
+      crash("uv_cond_init failed: {cond-rc}")
+    }
 
-    state.req.set-data(work);
+    state.req.set-data(work)
 
     work/submit-work(
       state.req,
       fn req. {
-        let task-work = req.get-data[task-work[t, params]];
-        let handler = task-work.handler;
-        task/complete(task-work.state, handler(task-work.params));
+        let task-work = req.get-data[task-work[t, params]]
+        let handler = task-work.handler
+        task/complete(task-work.state, handler(task-work.params))
         .{}
       },
       fn (req, status) {
-        let task-work = req.get-data[task-work[t, params]];
+        let task-work = req.get-data[task-work[t, params]]
         if status != 0 {
-          tprintln("task work failed with status {status}");
-        };
-        uv/mutex_lock(task-work.state.mutex);
-        task-work.state.libuv-done <- true;
-        uv/cond_signal(task-work.state.cond);
-        uv/mutex_unlock(task-work.state.mutex);
-        system-heap.free-t(task-work);
+          tprintln("task work failed with status {status}")
+        }
+        uv/mutex_lock(task-work.state.mutex)
+        task-work.state.libuv-done <- true
+        uv/cond_signal(task-work.state.cond)
+        uv/mutex_unlock(task-work.state.mutex)
+        system-heap.free-t(task-work)
       }
-    );
+    )
 
     .{ state }
   }
 
 
   fn await[t](self: task[t]): t {
-    let state = self.state;
+    let state = self.state
 
-    uv/mutex_lock(state.mutex);
+    uv/mutex_lock(state.mutex)
     while state.handler-done == false or state.libuv-done == false {
-      uv/cond_wait(state.cond, state.mutex);
-    };
-    uv/mutex_unlock(state.mutex);
+      uv/cond_wait(state.cond, state.mutex)
+    }
+    uv/mutex_unlock(state.mutex)
     
-    let output = state.output.!;
-    state.release();
+    let output = state.output.!
+    state.release()
     output
   }
 
   fn complete[t](state: *mut task-state[t], output: t) {
-    uv/mutex_lock(state.mutex);
-    state.output <- :some output;
-    state.handler-done <- true;
-    uv/cond_signal(state.cond);
-    uv/mutex_unlock(state.mutex);
+    uv/mutex_lock(state.mutex)
+    state.output <- :some output
+    state.handler-done <- true
+    uv/cond_signal(state.cond)
+    uv/mutex_unlock(state.mutex)
   }
 }

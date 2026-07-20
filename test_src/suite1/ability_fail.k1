@@ -1,4 +1,4 @@
-ns ability_fail;
+ns ability_fail
 ability num {
   fn num(self): i32
 }
@@ -6,8 +6,8 @@ ability num {
 type tool = either { yes, no, iono }
 
 fn test() {
-  let p: tool = :yes;
-  let result = test-compile(p.num());
+  let p: tool = :yes
+  let result = test-compile(p.num())
   assert-equals(result, :some(
 `Call to num/num with self := tool does not work
 No matching implementations found`

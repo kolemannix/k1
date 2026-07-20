@@ -1,215 +1,215 @@
-ns hash_test;
+ns hash_test
 
 use std/map
 use std/set
 
 fn test-basic() {
-  let my-map = map/new[string, int]();
-  assert(my-map.is-empty());
-  my-map.insert("a", 10);
-  my-map.insert("b", 11);
-  my-map.insert("c", 12);
-  assert-equals(my-map.len(), 3);
-  assert-equals(my-map.get("a"), :some 10);
-  assert-equals(my-map.get("b"), :some 11);
-  assert-equals(my-map.get("c"), :some 12);
-  assert-equals(my-map.get("d"), :none);
-  assert(my-map.contains("a"));
-  assert(not my-map.contains("d"));
-  assert-equals(my-map.remove("a"), :some 10);
-  assert-equals(my-map.remove("a"), :none);
-  assert-equals(my-map.get("a"), :none);
-  assert-equals(my-map.get("b"), :some 11);
-  assert-equals(my-map.len(), 2);
-  my-map.insert("a", 20);
-  assert-equals(my-map.get("a"), :some 20);
-  my-map.insert("b", 21);
-  assert-equals(my-map.get("b"), :some 21);
-  assert-equals(my-map.len(), 3);
+  let my-map = map/new[string, int]()
+  assert(my-map.is-empty())
+  my-map.insert("a", 10)
+  my-map.insert("b", 11)
+  my-map.insert("c", 12)
+  assert-equals(my-map.len(), 3)
+  assert-equals(my-map.get("a"), :some 10)
+  assert-equals(my-map.get("b"), :some 11)
+  assert-equals(my-map.get("c"), :some 12)
+  assert-equals(my-map.get("d"), :none)
+  assert(my-map.contains("a"))
+  assert(not my-map.contains("d"))
+  assert-equals(my-map.remove("a"), :some 10)
+  assert-equals(my-map.remove("a"), :none)
+  assert-equals(my-map.get("a"), :none)
+  assert-equals(my-map.get("b"), :some 11)
+  assert-equals(my-map.len(), 2)
+  my-map.insert("a", 20)
+  assert-equals(my-map.get("a"), :some 20)
+  my-map.insert("b", 21)
+  assert-equals(my-map.get("b"), :some 21)
+  assert-equals(my-map.len(), 3)
 }
 
 fn test-int-keys() {
-  let m = map/new[int, string]();
-  let i = 0;
+  let m = map/new[int, string]()
+  let i = 0
   while i < 50 {
-    m.insert(i, "v{i}");
+    m.insert(i, "v{i}")
     i := i + 1
-  };
-  assert-equals(m.len(), 50);
-  assert-equals(m.get(17), :some "v17");
-  assert-equals(m.get(50), :none);
-  assert-equals(m.remove(17), :some "v17");
-  assert-equals(m.get(17), :none);
-  assert-equals(m.get(18), :some "v18");
+  }
+  assert-equals(m.len(), 50)
+  assert-equals(m.get(17), :some "v17")
+  assert-equals(m.get(50), :none)
+  assert-equals(m.remove(17), :some "v17")
+  assert-equals(m.get(17), :none)
+  assert-equals(m.get(18), :some "v18")
 }
 
 fn test-get-ref() {
-  let m = map/new[string, int]();
-  m.insert("a", 1);
-  let vref = m.get-ref("a").!;
-  vref <- 100;
-  assert-equals(m.get("a"), :some 100);
-  assert(m.get-ref("missing") is :none);
+  let m = map/new[string, int]()
+  m.insert("a", 1)
+  let vref = m.get-ref("a").!
+  vref <- 100
+  assert-equals(m.get("a"), :some 100)
+  assert(m.get-ref("missing") is :none)
 }
 
 fn test-iterate() {
-  let m = map/new[string, int]();
-  m.insert("a", 1);
-  m.insert("b", 2);
-  m.insert("c", 3);
-  m.remove("b");
-  let total = 0;
-  let seen = 0;
+  let m = map/new[string, int]()
+  m.insert("a", 1)
+  m.insert("b", 2)
+  m.insert("c", 3)
+  m.remove("b")
+  let total = 0
+  let seen = 0
   for kv in m {
-    total := total + kv.value;
+    total := total + kv.value
     seen := seen + 1
-  };
-  assert-equals(seen, 2);
-  assert-equals(total, 4);
+  }
+  assert-equals(seen, 2)
+  assert-equals(total, 4)
 }
 
 fn test-empty() {
-  let e = map/new[string, int]();
-  assert(e.get("x") is :none);
-  assert(not e.contains("x"));
-  assert(e.remove("x") is :none);
-  e.clear();
-  assert(e.is-empty());
-  let iterated = 0;
+  let e = map/new[string, int]()
+  assert(e.get("x") is :none)
+  assert(not e.contains("x"))
+  assert(e.remove("x") is :none)
+  e.clear()
+  assert(e.is-empty())
+  let iterated = 0
   for kv in e {
     iterated := iterated + 1
-  };
-  assert-equals(iterated, 0);
-  assert-equals("{e}", "\{}");
+  }
+  assert-equals(iterated, 0)
+  assert-equals("{e}", "\{}")
 }
 
 fn test-clear() {
-  let m = map/new[string, int]();
-  m.insert("a", 1);
-  m.insert("b", 2);
-  m.clear();
-  assert(m.is-empty());
-  assert-equals(m.get("a"), :none);
-  m.insert("a", 3);
-  assert-equals(m.get("a"), :some 3);
-  assert-equals(m.len(), 1);
+  let m = map/new[string, int]()
+  m.insert("a", 1)
+  m.insert("b", 2)
+  m.clear()
+  assert(m.is-empty())
+  assert-equals(m.get("a"), :none)
+  m.insert("a", 3)
+  assert-equals(m.get("a"), :some 3)
+  assert-equals(m.len(), 1)
 }
 
 fn test-with-capacity() {
-  let m = map/with-capacity[string, int](100);
-  let capacity-before = m.capacity();
-  let i = 0;
+  let m = map/with-capacity[string, int](100)
+  let capacity-before = m.capacity()
+  let i = 0
   while i < 100 {
-    m.insert("key{i}", i);
+    m.insert("key{i}", i)
     i := i + 1
-  };
-  assert-equals(m.capacity(), capacity-before);
-  assert-equals(m.len(), 100);
+  }
+  assert-equals(m.capacity(), capacity-before)
+  assert-equals(m.len(), 100)
 }
 
 fn test-get-or-insert() {
-  let m = map/new[string, int]();
-  let a = m.get-or-insert("a", fn. 10);
-  assert-equals(a.*, 10);
-  a <- 11;
-  let a2 = m.get-or-insert("a", fn. 99);
-  assert-equals(a2.*, 11);
-  assert-equals(m.len(), 1);
-  assert-equals(m.get("a"), :some 11);
+  let m = map/new[string, int]()
+  let a = m.get-or-insert("a", fn. 10)
+  assert-equals(a.*, 10)
+  a <- 11
+  let a2 = m.get-or-insert("a", fn. 99)
+  assert-equals(a2.*, 11)
+  assert-equals(m.len(), 1)
+  assert-equals(m.get("a"), :some 11)
 
-  let words: list[string] = ["x", "y", "x", "x"];
-  let counts = map/new[string, int]();
+  let words: list[string] = ["x", "y", "x", "x"]
+  let counts = map/new[string, int]()
   for w in words {
-    let c = counts.get-or-insert(w, fn. 0);
-    c <- c.* + 1;
-  };
-  assert-equals(counts.get("x"), :some 3);
-  assert-equals(counts.get("y"), :some 1);
-  assert-equals(counts.get("z"), :none);
+    let c = counts.get-or-insert(w, fn. 0)
+    c <- c.* + 1
+  }
+  assert-equals(counts.get("x"), :some 3)
+  assert-equals(counts.get("y"), :some 1)
+  assert-equals(counts.get("z"), :none)
 }
 
 fn test-print() {
-  let m = map/new[string, int]();
-  m.insert("a", 1);
-  assert-equals("{m}", "\{a: 1}");
-  if false { m.dump() };
+  let m = map/new[string, int]()
+  m.insert("a", 1)
+  assert-equals("{m}", "\{a: 1}")
+  if false { m.dump() }
 }
 
 fn test-set() {
-  let s = set/new[string]();
-  assert(s.is-empty());
-  assert(s.add("a"));
-  assert(s.add("b"));
-  assert(not s.add("a"));
-  assert-equals(s.len(), 2);
-  assert(s.contains("a"));
-  assert(not s.contains("c"));
-  assert(s.remove("a"));
-  assert(not s.remove("a"));
-  assert(not s.contains("a"));
-  assert-equals(s.len(), 1);
-  assert-equals("{s}", "\{b}");
-  s.clear();
-  assert(s.is-empty());
+  let s = set/new[string]()
+  assert(s.is-empty())
+  assert(s.add("a"))
+  assert(s.add("b"))
+  assert(not s.add("a"))
+  assert-equals(s.len(), 2)
+  assert(s.contains("a"))
+  assert(not s.contains("c"))
+  assert(s.remove("a"))
+  assert(not s.remove("a"))
+  assert(not s.contains("a"))
+  assert-equals(s.len(), 1)
+  assert-equals("{s}", "\{b}")
+  s.clear()
+  assert(s.is-empty())
 
-  let vals: list[int] = [1, 2, 3, 2, 1];
-  let nums = set/from-span(vals.as-span());
-  assert-equals(nums.len(), 3);
-  assert(nums.non-empty());
-  let total = 0;
+  let vals: list[int] = [1, 2, 3, 2, 1]
+  let nums = set/from-span(vals.as-span())
+  assert-equals(nums.len(), 3)
+  assert(nums.non-empty())
+  let total = 0
   for n in nums {
     total := total + n
-  };
-  assert-equals(total, 6);
+  }
+  assert-equals(total, 6)
 }
 
 fn test-resize(size: int) {
-  let my-map = map/new[string, int]();
-  let i = 0;
+  let my-map = map/new[string, int]()
+  let i = 0
   while i < size {
-    my-map.insert(i.show(), i);
+    my-map.insert(i.show(), i)
     if i % 5 == 0 {
-      my-map.remove(i.show());
-    };
+      my-map.remove(i.show())
+    }
     i := i + 1
-  };
-  i := 0;
+  }
+  i := 0
   while i < size {
-    let result = my-map.get(i.show());
+    let result = my-map.get(i.show())
     if i % 5 == 0 {
-      assert-msg("{i} should be empty", result is :none);
+      assert-msg("{i} should be empty", result is :none)
     } else {
       if result is :some v { assert-equals(v, i) } else { crash("Missing value {i}") }
-    };
+    }
     i := i + 1
-  };
+  }
 }
 
 // removing and re-inserting in place must reuse tombstones
 // rather than accumulate load
 fn test-churn() {
-  let m = map/new[int, int]();
-  let round = 0;
+  let m = map/new[int, int]()
+  let round = 0
   while round < 1000 {
-    m.insert(round % 4, round);
-    m.remove(round % 4);
+    m.insert(round % 4, round)
+    m.remove(round % 4)
     round := round + 1
-  };
-  assert-equals(m.len(), 0);
-  assert(m.capacity() <= 16);
+  }
+  assert-equals(m.len(), 0)
+  assert(m.capacity() <= 16)
 }
 
 fn test() {
-  test-basic();
-  test-int-keys();
-  test-get-ref();
-  test-iterate();
-  test-empty();
-  test-clear();
-  test-with-capacity();
-  test-get-or-insert();
-  test-print();
-  test-set();
-  test-resize(100);
-  test-churn();
+  test-basic()
+  test-int-keys()
+  test-get-ref()
+  test-iterate()
+  test-empty()
+  test-clear()
+  test-with-capacity()
+  test-get-or-insert()
+  test-print()
+  test-set()
+  test-resize(100)
+  test-churn()
 }

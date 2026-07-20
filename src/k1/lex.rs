@@ -14,7 +14,9 @@ use TokenKind as K;
 
 pub const EOF_CHAR: char = 27 as char; // esc
 // pub const EOF_CHAR: char = '\0' as char;
-pub const EOF_TOKEN: Token = Token { kind: TokenKind::Eof, span: SpanId::NONE, flags: 0 };
+// EOF acts like a line end: whitespace- and newline-preceded
+pub const EOF_TOKEN: Token =
+    Token { kind: TokenKind::Eof, span: SpanId::NONE, flags: 0x01 | 0x04 };
 
 #[derive(Debug, Clone)]
 pub struct LexError {
@@ -532,6 +534,7 @@ pub const CHAR_ESCAPED_CHARS: [EscapedChar; 6] = [
 const TOKEN_FLAG_IS_WHITESPACE_PRECEDED: u8 = 0x01;
 #[allow(unused)]
 const TOKEN_FLAG_IS_WHITESPACE_FOLLOWED: u8 = 0x02;
+const TOKEN_FLAG_IS_NEWLINE_PRECEDED: u8 = 0x04;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Token {
@@ -542,13 +545,28 @@ pub struct Token {
 static_assert_size!(Token, 8);
 
 impl Token {
-    pub fn new(kind: TokenKind, span_id: SpanId, whitespace_preceeded: bool) -> Token {
-        let flags = if whitespace_preceeded { TOKEN_FLAG_IS_WHITESPACE_PRECEDED } else { 0 };
-
+    pub fn new(
+        kind: TokenKind,
+        span_id: SpanId,
+        whitespace_preceeded: bool,
+        newline_preceded: bool,
+    ) -> Token {
+        let mut flags = 0;
+        if whitespace_preceeded {
+            flags |= TOKEN_FLAG_IS_WHITESPACE_PRECEDED
+        };
+        if newline_preceded {
+            flags |= TOKEN_FLAG_IS_NEWLINE_PRECEDED
+        };
         Token { kind, span: span_id, flags }
     }
     pub fn is_whitespace_preceded(&self) -> bool {
         self.flags & TOKEN_FLAG_IS_WHITESPACE_PRECEDED == TOKEN_FLAG_IS_WHITESPACE_PRECEDED
+    }
+    /// True when a line break (or start of file) separates this token from
+    /// the previous one; line comments count since they run to end of line
+    pub fn is_newline_preceded(&self) -> bool {
+        self.flags & TOKEN_FLAG_IS_NEWLINE_PRECEDED == TOKEN_FLAG_IS_NEWLINE_PRECEDED
     }
 
     pub fn is_kind_nonspaced(&self, kind: TokenKind) -> bool {
@@ -711,7 +729,27 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 .content
                 .get((start as usize).saturating_sub(1))
                 .is_some_and(|c| (*c as char).is_whitespace());
-            Token::new(kind, span, whitespace_preceded)
+            // Walk back over the whitespace run; comment text stops the walk,
+            // but a line comment's own terminating newline sits after it, so
+            // any token after a comment is still seen as newline-preceded
+            let mut newline_preceded = false;
+            let mut i = start as usize;
+            loop {
+                if i == 0 {
+                    newline_preceded = true;
+                    break;
+                }
+                let c = lex.content[i - 1];
+                if c == b'\n' || c == b'\r' {
+                    newline_preceded = true;
+                    break;
+                }
+                if !(c as char).is_whitespace() {
+                    break;
+                }
+                i -= 1;
+            }
+            Token::new(kind, span, whitespace_preceded, newline_preceded)
         }
 
         #[inline]

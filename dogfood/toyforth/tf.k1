@@ -25,22 +25,22 @@ fn mk-list(): *tf-obj {
 }
 
 fn compile(program-text: string): *tf-obj {
-  println("compiling {program-text}");  
+  println("compiling {program-text}")
   crash("todo")
 }
 
 fn main(argc: core/c-int, argv: ptr): i32 {
-  let context alloc: mem/alloc-mode = :system-heap;
+  let context alloc: mem/alloc-mode = :system-heap
 
-  let args: span[string] = core/sys/parse-main-args(argc, argv);
+  let args: span[string] = core/sys/parse-main-args(argc, argv)
   if args.len() != 2 {
-    eprintln("Usage: {args.get(0)} <fname>");
-    return(1);
-  };
-  let program-text-path = args.get(1);
-  let program-text = core/files/read-to-string(program-text-path);
+    eprintln("Usage: {args.get(0)} <fname>")
+    return 1
+  }
+  let program-text-path = args.get(1)
+  let program-text = core/files/read-to-string(program-text-path)
 
-  let program = compile(program-text-path);
+  let program = compile(program-text-path)
 
   0
 }

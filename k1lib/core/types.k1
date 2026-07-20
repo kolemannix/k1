@@ -1,5 +1,5 @@
 // core types code that does not need to live in builtin.k1
-ns types;
+ns types
 
 impl print for int-value {
    fn print-to[w: writer](self, w) {
@@ -26,26 +26,26 @@ fn make-any[t](t: *t): any {
 }
 
 fn assert-wrapper-type[wrapper, inner]() {
-  let schema-a = types/schema[wrapper];
-  let b-type-id = types/type-id[inner];
-  require schema-a is :struct .{ fields } else { crash("is-wrapper-type: Wrapper must be a struct") };
-  require fields.first() is :some field and fields.len() == 1 else crash("Wrapper must have one field, got {fields.len()}");
-  let equal = field.type-id == b-type-id;
-  if not equal { crash("Expected {types/name[inner]} but got {types/type-id-name(field.type-id)}") };
+  let schema-a = types/schema[wrapper]
+  let b-type-id = types/type-id[inner]
+  require schema-a is :struct .{ fields } else { crash("is-wrapper-type: Wrapper must be a struct") }
+  require fields.first() is :some field and fields.len() == 1 else crash("Wrapper must have one field, got {fields.len()}")
+  let equal = field.type-id == b-type-id
+  if not equal crash("Expected {types/name[inner]} but got {types/type-id-name(field.type-id)}")
 }
 
 fn type-eq[a, b](): bool { types/type-id[a] == types/type-id[b] }
 
 fn assert-layout[t](size: size, align: size, struct-fields: span[size]) {
-  let actual-size = types/stride[t];
-  let actual-align = types/align[t];
-  assert-equals(size, actual-size);
-  assert-equals(align, actual-align);
+  let actual-size = types/stride[t]
+  let actual-align = types/align[t]
+  assert-equals(size, actual-size)
+  assert-equals(align, actual-align)
   if struct-fields.non-empty() {
-    let schema-fields = types/schema[t].as-struct().!.fields;
+    let schema-fields = types/schema[t].as-struct().!.fields
     for offset in struct-fields {
-      let actual-field = schema-fields.get(it-index);
-      assert-msg("offset of {actual-field.name} {actual-field.offset} != {offset}", actual-field.offset == offset);
+      let actual-field = schema-fields.get(it-index)
+      assert-msg("offset of {actual-field.name} {actual-field.offset} != {offset}", actual-field.offset == offset)
     }
   }
 }

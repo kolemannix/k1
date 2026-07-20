@@ -1,4 +1,4 @@
-ns ability_default_fns;
+ns ability_default_fns
 
 let mutable I32_SPEC_COUNTER: int = 0
 
@@ -6,18 +6,18 @@ ability increment {
   fn inc(self): self
   fn inc-twice(self): self {
     // Testing scope bindings
-    let me: self = self;
-    let again: self = me;
+    let me: self = self
+    let again: self = me
     again.inc().inc()
   }
 }
 impl increment for i32 {
   fn inc(self): self { self + 1 }
   fn inc-twice(self): i32 {
-    I32_SPEC_COUNTER <- I32_SPEC_COUNTER + 1;
+    I32_SPEC_COUNTER <- I32_SPEC_COUNTER + 1
     // Testing scope bindings
-    let me: self = self;
-    let again: i32 = me;
+    let me: self = self
+    let again: i32 = me
     again + 2
   }
 }
@@ -40,18 +40,18 @@ impl[t: increment] incr-four for t {
 
 
 fn test() {
-  let i: i32 = 554;
-  assert-equals(i.inc(), 555);
-  assert-equals(i.inc-twice(), 556);
-  assert-equals(i.inc-twice().inc-twice(), 558);
-  assert-equals(i.inc-four(), 558);
-  assert-equals(i.inc-eight(), 562);
+  let i: i32 = 554
+  assert-equals(i.inc(), 555)
+  assert-equals(i.inc-twice(), 556)
+  assert-equals(i.inc-twice().inc-twice(), 558)
+  assert-equals(i.inc-four(), 558)
+  assert-equals(i.inc-eight(), 562)
 
-  let u: u32 = 0;
-  assert-equals(u.inc-twice(), 2);
+  let u: u32 = 0
+  assert-equals(u.inc-twice(), 2)
 
   // Ensures that our specialized implementation is used over the default
-  assert-equals(I32_SPEC_COUNTER, 6);
+  assert-equals(I32_SPEC_COUNTER, 6)
   
   .{}
 }

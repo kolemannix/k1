@@ -1,18 +1,18 @@
-ns ability_constraint_fail;
+ns ability_constraint_fail
 
 ability num {
   fn num(self): i32
 }
 
 fn add[t](a: t, b: t): i32 where t: num, t: show {
-  println(a.show());
-  println("+");
-  println(b.show());
+  println(a.show())
+  println("+")
+  println(b.show())
   a.num() + b.num()
 }
 
 fn test() {
-  let result = test-compile(add("asdf": string, "asdf": string));
+  let result = test-compile(add("asdf": string, "asdf": string))
   assert-equals(
     result,
     :some("Invalid call to add\n    Could not satisfy ability constraint num for given type 't := string due to: No matching implementations found")

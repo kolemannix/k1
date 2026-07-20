@@ -1,25 +1,25 @@
-ns for_yield_test;
+ns for_yield_test
 
 fn for-string(): int {
-  let s = "asdf";
-  let char-codes = list/from-mapping(s, fn c. c.as[int]);
-  assert(char-codes.get(0) == 97);
-  assert(char-codes.get(1) == 115);
-  assert(char-codes.get(2) == 100);
-  assert(char-codes.get(3) == 102);
+  let s = "asdf"
+  let char-codes = list/from-mapping(s, fn c. c.as[int])
+  assert(char-codes.get(0) == 97)
+  assert(char-codes.get(1) == 115)
+  assert(char-codes.get(2) == 100)
+  assert(char-codes.get(3) == 102)
   0
 }
 
 fn for-yield() {
-  let squares: list[int] = list/from-mapping([1, 5, 9, 12], fn it. it * it);
-  assert(squares.len == 4);
-  assert(squares.get(0) == 1);
-  assert(squares.get(1) == 25);
-  assert(squares.get(2) == 81);
-  assert(squares.get(3) == 144);
+  let squares: list[int] = list/from-mapping([1, 5, 9, 12], fn it. it * it)
+  assert(squares.len == 4)
+  assert(squares.get(0) == 1)
+  assert(squares.get(1) == 25)
+  assert(squares.get(2) == 81)
+  assert(squares.get(3) == 144)
 }
 
 fn test() {
-  for-string();
-  for-yield();
+  for-string()
+  for-yield()
 }

@@ -180,27 +180,27 @@ fn b8(name: string): { name: string, bits: size } { bn(name = name, bits = 8) }
 Here comes a big wall of advanced metaprogramming code; but it may look strikingly like dumb string-building code to you.
 ```rust
 fn define[base](type-name: string, members: span[{ name: string, bits: size }]): string {
-  use meta/code-writer;
+  use meta/code-writer
 
-  let base-type-id: u64 = types/type-id[base]();
-  let base-schema = types/type-id-schema(base-type-id);
-  let base-name = types/type-id-name(base-type-id);
-  require base-schema is :int(int-kind) else { crash("Base should be an int; got {base-name}") };
-  let total-bits = int-kind.bit-width();
+  let base-type-id: u64 = types/type-id[base]()
+  let base-schema = types/type-id-schema(base-type-id)
+  let base-name = types/type-id-name(base-type-id)
+  require base-schema is :int(int-kind) else { crash("Base should be an int; got {base-name}") }
+  let total-bits = int-kind.bit-width()
 
   // This is just a regular string-builder that gets some extra methods since we've
   // brought the meta/code-writer ability into scope
-  let code = string-builder/new();
+  let code = string-builder/new()
 
   // This defines a named struct type with one field, which is a common newtype pattern
-  writelnf(code, "type {type-name} = \{ bits: {base-name} }");
+  writelnf(code, "type {type-name} = \{ bits: {base-name} }")
 
   // We crack open a namespace to put some goodies inside
-  writelnf(code, "ns for {type-name} \{");
+  writelnf(code, "ns for {type-name} \{")
 
   // This actually gets captured by the lambda below
-  let bit-index-val = 0;
-  let bit-index: *mut size = &bit-index-val;
+  let bit-index-val = 0
+  let bit-index: *mut size = &bit-index-val
 
   // Let's analyze each member we were passed, and perform the actual bitfield layouting work once.
   // We'll make a list of an unnamed (anonymous) little struct type for our info we'll need later
@@ -216,77 +216,77 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
     // offset: the bit pos that the mask starts at; where the value lives; how much to shift
     offset: size
   }] = list/from-mapping(members, fn member. {
-    let bits = member.bits;
-    if bit-index.* + bits > total-bits crash("Too big: {bit-index.* + bits}");
-    let raw-value = u64/bitmask-low(bits);
-    let type-width = int-width-for-bits(bits);
-    let mask = raw-value << bit-index.*.as();
-    let offset = bit-index.*;
-    let size-mask = u64/bitmask-low(type-width);
-    let inv-mask = mask.bit-not() & size-mask;
+    let bits = member.bits
+    if bit-index.* + bits > total-bits crash("Too big: {bit-index.* + bits}")
+    let raw-value = u64/bitmask-low(bits)
+    let type-width = int-width-for-bits(bits)
+    let mask = raw-value << bit-index.*.as()
+    let offset = bit-index.*
+    let size-mask = u64/bitmask-low(type-width)
+    let inv-mask = mask.bit-not() & size-mask
 
-    bit-index <- bit-index.* + bits;
+    bit-index <- bit-index.* + bits
 
     { mask, type-width, inv-mask, raw-value, offset }
-  });
+  })
 
   // The for loop works on any type that implements iterable or iterator
   // The item being iterated over is named `it` if no binding is supplied
   // `it-index` is also given to us
   for members {
-    let info = member-info.get(it-index);
+    let info = member-info.get(it-index)
     // Emit globals, or constants, for each field's mask
-    writelnf(code, "  let {it.name}-mask: {base-name} = {info.mask}");
-  };
+    writelnf(code, "  let {it.name}-mask: {base-name} = {info.mask}")
+  }
 
-  writelnf(code, "  let zero: {type-name} = \{ bits: 0 }");
+  writelnf(code, "  let zero: {type-name} = \{ bits: 0 }")
 
   // Now let's do a getter and setter for each bitfield. If the width is 1,
   // we'll use bool since that's what the people likely want. Note that we could configure
   // any of this behavior because this is just a regular function
   for members {
-    let info = member-info.get(it-index);
-    let is-bool = it.bits == 1;
-    let field-type = if is-bool "bool" else "u{info.type-width}";
+    let info = member-info.get(it-index)
+    let is-bool = it.bits == 1
+    let field-type = if is-bool "bool" else "u{info.type-width}"
 
     // Getter
-    writelnf(code, "  fn get-{it.name}(self: {type-name}): {field-type} \{");
+    writelnf(code, "  fn get-{it.name}(self: {type-name}): {field-type} \{")
 
-    writelnf(code, "    let bits: {base-name} = self.bits;");
-    writelnf(code, "    let shifted: {base-name} = bits >> {info.offset};");
-    writelnf(code, "    let cleared: {base-name} = shifted & {info.raw-value};");
+    writelnf(code, "    let bits: {base-name} = self.bits;")
+    writelnf(code, "    let shifted: {base-name} = bits >> {info.offset};")
+    writelnf(code, "    let cleared: {base-name} = shifted & {info.raw-value};")
     if is-bool {
-      writelnf(code, "    cleared == 1");
+      writelnf(code, "    cleared == 1")
     } else {
-      writelnf(code, "    cleared.as[{field-type}]");
-    };
+      writelnf(code, "    cleared.as[{field-type}]")
+    }
 
-    writelnf(code, "  }"); // End Getter
+    writelnf(code, "  }") // End Getter
 
     // Setter
-    writelnf(code, "  fn set-{it.name}(self: {type-name}, value: {field-type}): {type-name} \{");
+    writelnf(code, "  fn set-{it.name}(self: {type-name}, value: {field-type}): {type-name} \{")
     if is-bool {
       writelnf(code, "    let masked-value: {base-name} = value.as-u8();")
     } else {
       writelnf(code, "    let masked-value: {base-name} = value & {info.raw-value};")
-    };
-    let clear-mask = info.inv-mask;
-    writelnf(code, "    let cleared-bits: {base-name} = self.bits & {clear-mask};");
-    writelnf(code, "    let inserted-bits: {base-name} = cleared-bits | (masked-value << {info.offset});");
-    writelnf(code, "    \{ bits: inserted-bits }");
-    writelnf(code, "  }"); // End setter
-  };
+    }
+    let clear-mask = info.inv-mask
+    writelnf(code, "    let cleared-bits: {base-name} = self.bits & {clear-mask};")
+    writelnf(code, "    let inserted-bits: {base-name} = cleared-bits | (masked-value << {info.offset});")
+    writelnf(code, "    \{ bits: inserted-bits }")
+    writelnf(code, "  }") // End setter
+  }
 
-  writelnf(code, "}"); // End ns
+  writelnf(code, "}") // End ns
 
-  let print-body = string-builder/new();
+  let print-body = string-builder/new()
   for members {
-    let get-name = "get-{it.name}";
-    let last = it-index + 1 == members.len();
-    let sep = if last "" else ",";
-    writelnf(print-body, `    w.string("{it.name}=\{self.{get-name}()}{sep}");`);
-  };
-  (&code).impl-print(type-name, print-body.build(), indent = 0);
+    let get-name = "get-{it.name}"
+    let last = it-index + 1 == members.len()
+    let sep = if last "" else ","
+    writelnf(print-body, `    w.string("{it.name}=\{self.{get-name}()}{sep}");`)
+  }
+  (&code).impl-print(type-name, print-body.build(), indent = 0)
 
   code.build()
 }
@@ -310,15 +310,15 @@ $std/bitfield/define[u16]("starship-flags",
 And now we can use the type and namespace `starship-flags` to pack some bits!
 ```rust
 fn test-bitfield() {
-  let y: starship-flags = { bits: 0b1111_0000_1000_1101 };
+  let y: starship-flags = { bits: 0b1111_0000_1000_1101 }
   //                                foo......|secto||||
   //                                                |||- shielded
   //                                                ||- cloaked
   //                                                |- damaged
-  let x: starship-flags = starship-flags/zero.set-shielded(true).set-damaged(true).set-sector-id(17).set-foo(0b1111_0000);
-  assert-equals(y.get-shielded(), x.get-shielded());
-  assert-equals(y.get-cloaked(), x.get-cloaked());
-  assert-equals(y.get-damaged(), x.get-damaged());
-  assert-equals(y.get-sector-id(), x.get-sector-id());
+  let x: starship-flags = starship-flags/zero.set-shielded(true).set-damaged(true).set-sector-id(17).set-foo(0b1111_0000)
+  assert-equals(y.get-shielded(), x.get-shielded())
+  assert-equals(y.get-cloaked(), x.get-cloaked())
+  assert-equals(y.get-damaged(), x.get-damaged())
+  assert-equals(y.get-sector-id(), x.get-sector-id())
 }
 ```

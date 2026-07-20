@@ -1,22 +1,22 @@
 use core/fixlist
 fn test-fixlist() {
-  let fl: fixlist[int, 4] = zeroed();
-  assert-equals(fl.len(), 0);
-  fl.push(40);
-  assert-equals(fl.len(), 1);
-  fl.push(41);
-  fl.push(42);
-  fl.push(43);
+  let fl: fixlist[int, 4] = zeroed()
+  assert-equals(fl.len(), 0)
+  fl.push(40)
+  assert-equals(fl.len(), 1)
+  fl.push(41)
+  fl.push(42)
+  fl.push(43)
 
-  fl.clear();
-  assert-equals(fl.len(), 0);
+  fl.clear()
+  assert-equals(fl.len(), 0)
 
-  fl.push-n([-1, -2, -3, -5]);
-  assert-equals(fl.len(), 4);
-  assert-equals(fl.get(0), -1);
-  assert-equals(fl.get(3), -5);
-  fl.set(1, 10);
-  assert-equals(fl.get(1), 10);
-  assert-equals(fl.len(), 4);
+  fl.push-n([-1, -2, -3, -5])
+  assert-equals(fl.len(), 4)
+  assert-equals(fl.get(0), -1)
+  assert-equals(fl.get(3), -5)
+  fl.set(1, 10)
+  assert-equals(fl.get(1), 10)
+  assert-equals(fl.len(), 4)
 
 }

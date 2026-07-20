@@ -24,10 +24,10 @@ ns ability_generic {
     g-add[rhs = generic-point[t], output = generic-point[t]]
     for generic-point[t] {
       fn gadd(self: generic-point[t], other: generic-point[t]): generic-point[t] {
-        let new-x: t = self.x.gadd(other.x);
+        let new-x: t = self.x.gadd(other.x)
         //let a = self.x; let b = other.x;
         //println("generic-point.add x {a} + {b} = {new-x}");
-        let new-y: t = self.y.gadd(other.y);
+        let new-y: t = self.y.gadd(other.y)
         //let a = self.y; let b = other.y;
         //println("generic-point.add y {a} + {b} = {new-y}");
         .{ x = new-x, y = new-y }
@@ -57,25 +57,25 @@ ns ability_generic {
 
   fn test() {
 
-    let _btoc: char = (101: u8).to();
+    let _btoc: char = (101: u8).to()
 
-    let x: i32 = 4;
+    let x: i32 = 4
 
-    let add32 = x.gadd(10: i32);
-    assert(add32 == 14);
+    let add32 = x.gadd(10: i32)
+    assert(add32 == 14)
 
-    let add64 = x.gadd(12: i64);
-    assert(add64 == 16: i64);
+    let add64 = x.gadd(12: i64)
+    assert(add64 == 16: i64)
 
     // Blanket Impls
-    let p: generic-point[i32] = .{ x = 1, y = 2 };
+    let p: generic-point[i32] = .{ x = 1, y = 2 }
 
-    let added: generic-point[i32] = p.gadd(p);
-    assert-equals(added.x, 1i32 + 1);
-    assert-equals(added.y, 2i32 + 2);
+    let added: generic-point[i32] = p.gadd(p)
+    assert-equals(added.x, 1i32 + 1)
+    assert-equals(added.y, 2i32 + 2)
 
-    assert-equals((3: i32).to(): string, "3");
-    assert-equals(from/from(3: i32): string, "3");
+    assert-equals((3: i32).to(): string, "3")
+    assert-equals(from/from(3: i32): string, "3")
   }
 
 }

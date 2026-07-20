@@ -1,23 +1,23 @@
-ns condcomp;
+ns condcomp
 
 
 let MY_VALUE: bool = true
 let MY_VALUE_NEG: bool = not MY_VALUE
 
 fn test() {
-  use core/k1;
-  assert-equals(k1/test, false);
+  use core/k1
+  assert-equals(k1/test, false)
 
-  let trip = false;
+  let trip = false
   #if MY_VALUE_NEG {
     crash("does not happen")
   } else {
-    trip := true;
-  };
-  assert(trip);
+    trip := true
+  }
+  assert(trip)
 
-  let comptime-check = #if false "foo" else "bar";
-  assert(comptime-check == "bar");
+  let comptime-check = #if false "foo" else "bar"
+  assert(comptime-check == "bar")
 
   .{}
 }

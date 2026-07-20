@@ -13,24 +13,24 @@ $pre/make-point("my-meta-point")
 ns pre {
   let pi: f32 = 3.14
   fn make-point(name: string): string {
-    "type {name} = \{ x: i32, y: i32 }";
+    "type {name} = \{ x: i32, y: i32 }"
   }
 }
 
-ns test_meta;
+ns test_meta
 
 use core/meta/code-writer
 
 fn simple-increment(): i32 {
-  let x = 10;
+  let x = 10
   ${
-    let code = string-builder/new();
+    let code = string-builder/new()
     for core/int-range/up-to(5) {
-      code.line("x := x + 1;");
-    };
+      code.line("x := x + 1;")
+    }
     code.build()
-  };
-  assert-equals(x, 15);
+  }
+  assert-equals(x, 15)
 
   0
 }
@@ -41,70 +41,70 @@ use types/type-schema
 fn _write-json-from-schema(code: *mut string-builder, name: string, type-id: u64) {
   types/type-id-schema(type-id) is {
     :struct s -> {
-      code.line(p"w.write-char('{');");
+      code.line(p"w.write-char('{');")
       for f in s.fields {
 
-        let field-let-name = `_{name}{f.name}`;
+        let field-let-name = `_{name}{f.name}`
 
         code.string(
 `let {field-let-name} = {name}.{f.name};
 w.string("\"{f.name}\":");
 `
-       ); //" fix quote
+       ) //" fix quote
 
-        _write-json-from-schema(code, field-let-name, f.type-id);
-        let last = it-index == s.fields.len() - 1;
+        _write-json-from-schema(code, field-let-name, f.type-id)
+        let last = it-index == s.fields.len() - 1
         if not last {
-          code.line(`w.string(",");`);
+          code.line(`w.string(",");`)
         }
-      };
-      code.line(`w.write-char('}');`);
+      }
+      code.line(`w.write-char('}');`)
     },
     :bool -> {
       code.line(`w.string(if {name} "true": string else "false");`)
     },
     :int _ -> code.line(`{name}.print-to(w);`),
     :either _ -> {
-      let t-name = types/type-id-name(type-id);
+      let t-name = types/type-id-name(type-id)
       crash("Cannot yet create a JSON writer for either: {t-name}")
     },
     _ -> {
       code.line(`w.string(\`"other"\`)`)
     }
-  };
+  }
 }
 
 fn write-json[t, w: writer](context w)(t: t) {
   ${
-    let type-id = types/type-id[t]();
-    let code = string-builder/new();
-    _write-json-from-schema(&code, "t", type-id);
+    let type-id = types/type-id[t]()
+    let code = string-builder/new()
+    _write-json-from-schema(&code, "t", type-id)
     code.build()
   }
 }
 
 fn to-json[t](t: t): string {
-  let w = list/empty[char]();
-  write-json(context &w)(t);
-  let s = string/wrap-list(w);
+  let w = list/empty[char]()
+  write-json(context &w)(t)
+  let s = string/wrap-list(w)
   s
 }
 
 fn test-to-json() {
-  assert-equals(to-json(true), "true");
-  let json1 = to-json(.{ x = 1, y = 2, z = .{}, d = false });
-  assert-equals(json1, p`{"x":1,"y":2,"z":{},"d":false}`);
+  assert-equals(to-json(true), "true")
+  let json1 = to-json(.{ x = 1, y = 2, z = .{}, d = false })
+  assert-equals(json1, p`{"x":1,"y":2,"z":{},"d":false}`)
 
   .{}
 }
 
 
 fn test() {
-  simple-increment();
-  test-to-json();
+  simple-increment()
+  test-to-json()
 
-  let _x: my-meta-point = .{ x = 0, y = 42 };
-  pre/pi;
+  let _x: my-meta-point = .{ x = 0, y = 42 }
+  pre/pi
   
   .{}
 }

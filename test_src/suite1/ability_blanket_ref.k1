@@ -1,4 +1,4 @@
-ns ability_blanket_ref;
+ns ability_blanket_ref
 
 // Repro for the blanket ref-self gap: `speak` is implemented for *thing, not
 // thing. `greet` is provided by a blanket impl whose param is bounded by
@@ -31,12 +31,12 @@ impl[t: speak] greet for t {
 }
 
 fn test() {
-  let th: thing = .{ x = 1 };
+  let th: thing = .{ x = 1 }
   // By-value calls first: an earlier (&th) call would instantiate and cache
   // the blanket impl for *thing, letting the ref-self retry find it and
   // masking the bug this test guards against.
-  assert-equals(th.greet(), "hi ref1");
-  assert-equals(th.cheer(), "hi ref1!");
-  assert-equals((&th).greet(), "hi ref1");
-  assert-equals((&th).cheer(), "hi ref1!");
+  assert-equals(th.greet(), "hi ref1")
+  assert-equals(th.cheer(), "hi ref1!")
+  assert-equals((&th).greet(), "hi ref1")
+  assert-equals((&th).cheer(), "hi ref1!")
 }

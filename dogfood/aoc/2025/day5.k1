@@ -1,4 +1,4 @@
-ns day5;
+ns day5
 
 let sample: string =
 `3-5
@@ -30,19 +30,19 @@ use core/assertdbg
 type range = { start: uint, end: uint }
 ns for range {
   fn parse(s: string): result[range, string] {
-     let r = s.split-by-char('-');
-     assertdbg(r.len() == 2);
-     let start = r.get(0).parse-base10().!;
-     let end   = r.get(1).parse-base10().!;
+     let r = s.split-by-char('-')
+     assertdbg(r.len() == 2)
+     let start = r.get(0).parse-base10().!
+     let end   = r.get(1).parse-base10().!
      :ok .{ start, end }
   }
 }
 
 fn part-one(input: string) {
-  let lines = input.split-by-char('\n');
-  let parse-mode: either { ranges, ingredients } = :ranges;
-  let ranges = list/empty[range]();
-  let ing = list/empty[uint]();
+  let lines = input.split-by-char('\n')
+  let parse-mode: either { ranges, ingredients } = :ranges
+  let ranges = list/empty[range]()
+  let ing = list/empty[uint]()
   for lines {
     if it.is-empty() { parse-mode := :ingredients; } else {
       parse-mode is {
@@ -50,17 +50,17 @@ fn part-one(input: string) {
         :ingredients -> { ing.push(it.parse-base10().!) }
       }
     }
-  };
+  }
 
   let fresh = ing.filter(fn i. {
     for range in ranges {
-      let fresh = range.start <= i and range.end >= i;
-      if fresh return(true)
-    };
-    return(false)
-  });
+      let fresh = range.start <= i and range.end >= i
+      if fresh return true
+    }
+    return false
+  })
 
-  println("Fresh Count: {fresh.len()}");
+  println("Fresh Count: {fresh.len()}")
 }
 
 #static part-one(input-file)

@@ -1,4 +1,4 @@
-ns struct_composition;
+ns struct_composition
 
 type positioned = {
   x: int, y: int, width: int, height: int
@@ -13,14 +13,14 @@ type user = {
 type user-view = _struct_remove[user, { password: string }]
 
 fn test() {
-  let t: text = .{ text = "Hello, Builder!", x = 0, y = 0, width = 0, height = 0 };
-  assert(t is .{ text = "Hello, Builder!" });
-  assert(t.x == 0);
-  assert(t.y == 0);
+  let t: text = .{ text = "Hello, Builder!", x = 0, y = 0, width = 0, height = 0 }
+  assert(t is .{ text = "Hello, Builder!" })
+  assert(t.x == 0)
+  assert(t.y == 0)
   // assert(t is { x: 0, y: 0 });
-  assert(t is .{ width = 0, height = 0 });
+  assert(t is .{ width = 0, height = 0 })
 
-  assert(types/size[text]() == 48);
+  assert(types/size[text]() == 48)
 
-  assert(types/size[user-view]() == types/size[{ name: string }]());
+  assert(types/size[user-view]() == types/size[{ name: string }]())
 }

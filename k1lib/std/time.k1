@@ -8,10 +8,10 @@
 
   fn counter-to-nanos(counter: u64): u64 {
     if (timebase.denom == 0) {
-      mach_timebase_info(&timebase);
-    };
-    eprintln("timebase is {timebase.numer} / {timebase.denom}");
-    (counter * (timebase.numer.as[u64])) / (timebase.denom.as[u64]);
+      mach_timebase_info(&timebase)
+    }
+    eprintln("timebase is {timebase.numer} / {timebase.denom}")
+    (counter * (timebase.numer.as[u64])) / (timebase.denom.as[u64])
   }
 
 }
@@ -21,8 +21,8 @@ ns time {
     k1/os #is {
       :macos -> macos-time/mach_absolute_time(),
       :linux -> {
-        let ts: core/posix/timespec = uninit;
-        core/posix/clock_gettime(core/posix/CLOCK_MONOTONIC, &ts);
+        let ts: core/posix/timespec = uninit
+        core/posix/clock_gettime(core/posix/CLOCK_MONOTONIC, &ts)
         (ts.tv_sec * 1_000_000_000) + ts.tv_nsec
       },
       :wasm -> #static crash("Unimplemented: read-cpu-counter for wasm")

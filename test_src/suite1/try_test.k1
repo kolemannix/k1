@@ -1,4 +1,4 @@
-ns try_test;
+ns try_test
 
 type alias error = string
 
@@ -19,27 +19,27 @@ impl try[t = int, e = error] for foo {
 }
 
 fn fails(): result[bool, error] {
-  let value: result[int, error] = :err "woops";
-  let i = value.try;
+  let value: result[int, error] = :err "woops"
+  let i = value.try
   :ok(i % 2 == 0)
 }
 
 fn run(): result[i32, error] {
-  let result: int = can-fail-int().try;
-  assert(result == 42);
-  let result: int = (.{ a = true }: foo).try;
-  assert(result == 3);
+  let result: int = can-fail-int().try
+  assert(result == 42)
+  let result: int = (.{ a = true }: foo).try
+  assert(result == 3)
 
   let c = fn(-> result[bool, error]) {
-    let i = fails().try;
+    let i = fails().try
     :ok(not i)
-  };
-  let res = c();
-  assert(res is :err "woops");
+  }
+  let res = c()
+  assert(res is :err "woops")
 
   :ok 0
 }
 
 fn test() {
-  assert(run().is-ok());
+  assert(run().is-ok())
 }

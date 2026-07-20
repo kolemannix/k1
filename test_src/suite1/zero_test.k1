@@ -1,82 +1,82 @@
-ns zero_test;
+ns zero_test
 
 use core/mem/zeroed
 
 fn test-bitcast() {
-  let x: i32 = -1;
-  let y: u32 = mem/bitcast(x);
-  assert-equals(y, 0xffff_ffff);
+  let x: i32 = -1
+  let y: u32 = mem/bitcast(x)
+  assert-equals(y, 0xffff_ffff)
 
   // from agg to agg
-  let s: string = "foo";
-  let s-wrap = .{ inner = s };
-  let s-again: string = mem/bitcast(s-wrap);
-  assert-equals(s, s-again);
+  let s: string = "foo"
+  let s-wrap = .{ inner = s }
+  let s-again: string = mem/bitcast(s-wrap)
+  assert-equals(s, s-again)
 
   // from agg to scalar
-  let p2: { x: f32, y: f32 } = .{ x = 1.0, y = -1.0 };
-  let scalar = mem/bitcast[_, i64](p2);
-  let p3: { x: f32, y: f32 } = mem/bitcast(scalar);
-  assert-equals(p2.x, p3.x);
-  assert-equals(p2.y, p3.y);
+  let p2: { x: f32, y: f32 } = .{ x = 1.0, y = -1.0 }
+  let scalar = mem/bitcast[_, i64](p2)
+  let p3: { x: f32, y: f32 } = mem/bitcast(scalar)
+  assert-equals(p2.x, p3.x)
+  assert-equals(p2.y, p3.y)
 
   // from scalar to scalar
-  let f: f32 = -3.14159;
-  let i: i32 = mem/bitcast(f);
-  let f2: f32 = mem/bitcast(i);
-  assert-equals(f, f2);
+  let f: f32 = -3.14159
+  let i: i32 = mem/bitcast(f)
+  let f2: f32 = mem/bitcast(i)
+  assert-equals(f, f2)
 
   // from scalar to agg
-  let ipoint: u32 = 0b0000_0000_0000_0001_0000_0000_0000_0010;
-  let p: { x: i16, y: u16 } = mem/bitcast(ipoint);
+  let ipoint: u32 = 0b0000_0000_0000_0001_0000_0000_0000_0010
+  let p: { x: i16, y: u16 } = mem/bitcast(ipoint)
   // Note: endianness-dependent result
-  assert-equals(p.y, 1);
-  assert-equals(p.x, 2);
+  assert-equals(p.y, 1)
+  assert-equals(p.x, 2)
 
   assert(test-compile(
     mem/bitcast[u8, u16](4)
-  ).is-some());
+  ).is-some())
 }
 
 fn test-zero() {
-  let v8: u8 = zeroed();
-  let v16: u16 = zeroed();
-  let v32: u32 = zeroed();
-  let v64: u64 = zeroed();
-  assert-equals(v8, 0);
-  assert-equals(v16, 0);
-  assert-equals(v32, 0);
-  assert-equals(v64, 0);
+  let v8: u8 = zeroed()
+  let v16: u16 = zeroed()
+  let v32: u32 = zeroed()
+  let v64: u64 = zeroed()
+  assert-equals(v8, 0)
+  assert-equals(v16, 0)
+  assert-equals(v32, 0)
+  assert-equals(v64, 0)
 
-  let vi8: i8 = zeroed();
-  let vi16: i16 = zeroed();
-  let vi32: i32 = zeroed();
-  let vi64: i64 = zeroed();
-  assert-equals(vi8, 0);
-  assert-equals(vi16, 0);
-  assert-equals(vi32, 0);
-  assert-equals(vi64, 0);
+  let vi8: i8 = zeroed()
+  let vi16: i16 = zeroed()
+  let vi32: i32 = zeroed()
+  let vi64: i64 = zeroed()
+  assert-equals(vi8, 0)
+  assert-equals(vi16, 0)
+  assert-equals(vi32, 0)
+  assert-equals(vi64, 0)
 
-  let vword: i64 = zeroed();
-  let vuword: u64 = zeroed();
-  assert-equals(vword, 0);
-  assert-equals(vuword, 0);
+  let vword: i64 = zeroed()
+  let vuword: u64 = zeroed()
+  assert-equals(vword, 0)
+  assert-equals(vuword, 0)
 
-  let vf32: f32 = zeroed();
-  assert(vf32 == 0.0);
-  let vf64: f64 = zeroed();
-  assert(vf64 == 0.0);
+  let vf32: f32 = zeroed()
+  assert(vf32 == 0.0)
+  let vf64: f64 = zeroed()
+  assert(vf64 == 0.0)
 
-  let i32-null: *i32 = zeroed();
-  assert(i32-null.as[ptr] == ptr/null);
+  let i32-null: *i32 = zeroed()
+  assert(i32-null.as[ptr] == ptr/null)
 
-  let point: { x: u8, y: u8, z: i32 } = zeroed();
-  assert-equals(point.x, 0);
-  assert-equals(point.y, 0);
-  assert-equals(point.z, 0);
+  let point: { x: u8, y: u8, z: i32 } = zeroed()
+  assert-equals(point.x, 0)
+  assert-equals(point.y, 0)
+  assert-equals(point.z, 0)
 
-  let o: ?type-of(point) = zeroed();
-  assert-equals(o.tag, 0);
+  let o: ?type-of(point) = zeroed()
+  assert-equals(o.tag, 0)
 
   .{}
 }

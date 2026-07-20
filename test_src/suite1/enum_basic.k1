@@ -1,10 +1,10 @@
-ns enum_basic;
+ns enum_basic
 
 fn enum-no-payload() {
-  let v: either { yes, no } = :no;
-  if v is :no .{} else crash("");
-  v := :yes;
-  if v is :yes .{} else crash("");
+  let v: either { yes, no } = :no
+  if v is :no .{} else crash("")
+  v := :yes
+  if v is :yes .{} else crash("")
 }
 
 type enum-abc = either(u8) { a, b, c }
@@ -16,25 +16,25 @@ impl print for enum-abc {
   } }
 }
 fn enum-test() {
-  let a: enum-abc = :a;
-  let b: enum-abc = :b;
-  let c: enum-abc = :c;
-  assert-equals(a.value, 0);
-  assert-equals(b.value, 1);
-  assert-equals(c.value, 2);
-  assert-equals(a, enum-abc:a);
-  assert-equals(b, enum-abc:b);
-  assert-equals(c, enum-abc:c);
+  let a: enum-abc = :a
+  let b: enum-abc = :b
+  let c: enum-abc = :c
+  assert-equals(a.value, 0)
+  assert-equals(b.value, 1)
+  assert-equals(c.value, 2)
+  assert-equals(a, enum-abc:a)
+  assert-equals(b, enum-abc:b)
+  assert-equals(c, enum-abc:c)
 
-  assert-equals[string](a.enum-name(), "a");
-  assert-equals[string](b.enum-name(), "b");
-  assert-equals[string](c.enum-name(), "c");
+  assert-equals[string](a.enum-name(), "a")
+  assert-equals[string](b.enum-name(), "b")
+  assert-equals[string](c.enum-name(), "c")
 
-  assert-equals(get-enum-value(c), 2);
-  assert-equals(get-enum-value(b), 1);
-  assert-equals(c, c);
-  assert-equals(b, b);
-  core/assert-not-equals(c, b);
+  assert-equals(get-enum-value(c), 2)
+  assert-equals(get-enum-value(b), 1)
+  assert-equals(c, c)
+  assert-equals(b, b)
+  core/assert-not-equals(c, b)
 }
 
 fn get-enum-value[i, e: types/enum[v = i]](e: e): i {
@@ -43,14 +43,14 @@ fn get-enum-value[i, e: types/enum[v = i]](e: e): i {
 
 type custom-enum-tags = either { a = 10, b = 11, c = 12 }
 fn custom-tags-test() {
-  assert-equals(custom-enum-tags:a.value, 10);
-  assert-equals(custom-enum-tags:b.value, 11);
-  assert-equals(custom-enum-tags:c.value, 12);
+  assert-equals(custom-enum-tags:a.value, 10)
+  assert-equals(custom-enum-tags:b.value, 11)
+  assert-equals(custom-enum-tags:c.value, 12)
 }
 
 fn test() {
-  custom-tags-test();
-  enum-no-payload();
-  enum-test();
+  custom-tags-test()
+  enum-no-payload()
+  enum-test()
 }
 

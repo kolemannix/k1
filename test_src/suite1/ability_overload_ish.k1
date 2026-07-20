@@ -1,4 +1,4 @@
-ns ability_overload_ish;
+ns ability_overload_ish
 
 // We test 2 abilities in scope with the same name
 // and different signatures. The compiler should just
@@ -20,9 +20,9 @@ impl frob for i32 {
 }
 
 fn test() {
-  let x: i32 = 10;
-  assert-equals(x.foo(), 10);
-  assert-equals(x.foo(10), 20);
+  let x: i32 = 10
+  assert-equals(x.foo(), 10)
+  assert-equals(x.foo(10), 20)
 
   .{}
 }

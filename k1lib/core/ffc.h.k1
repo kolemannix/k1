@@ -1,4 +1,4 @@
-ns ffc;
+ns ffc
 
 type alias ffc_outcome = u32
 let FFC_OUTCOME_OK           : ffc_outcome = 0

@@ -26,10 +26,10 @@ ns recurse_basic {
   }
 
   fn test() {
-    let node = make(4);
-    assert-equals(count(node), 4);
-    let enode = emake(10);
-    assert-equals(ecount(enode), 10);
+    let node = make(4)
+    assert-equals(count(node), 4)
+    let enode = emake(10)
+    assert-equals(ecount(enode), 10)
   }
 
 }

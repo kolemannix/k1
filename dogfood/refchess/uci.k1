@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Koleman Nix 
-ns uci;
+ns uci
 
 type command = either {
   uci,
@@ -12,7 +12,7 @@ type command = either {
 }
 
 fn parse-command(cmd: string): result[command, string] {
-  println("[debug] received: `{cmd}`");
+  println("[debug] received: `{cmd}`")
   
   cmd is {
     // Initial handshake: GUI sends "uci", engine responds with id and options
@@ -30,7 +30,7 @@ fn parse-command(cmd: string): result[command, string] {
     // Commands that require more complex parsing
     _ -> {
       if cmd.starts-with("perft ") {
-         let parsed-depth = cmd.drop(6).to-int();
+         let parsed-depth = cmd.drop(6).to-int()
          if parsed-depth is :some depth { :ok :perft .{ depth = depth.as[u32] } }
          else :err "Invalid perft command: {cmd}"
       } else if cmd.starts-with("position ") {

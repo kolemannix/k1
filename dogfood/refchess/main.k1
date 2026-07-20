@@ -45,8 +45,8 @@ type game-state = {
 }
 
 fn value-at-square(b: bitboard, index: u64): u64 {
-  let shifted = b >> index.as();
-  let masked = shifted & 1u64;
+  let shifted = b >> index.as()
+  let masked = shifted & 1u64
   masked
 }
 
@@ -55,9 +55,9 @@ fn is-set(b: bitboard, index: u64): bool {
 }
 
 fn value-at-rank(b: bitboard, rank: u64): u64 {
-  let rank-start = rank * 8;
-  let shifted = b >> rank-start.as[u32]();
-  let masked = shifted & RANK_1;
+  let rank-start = rank * 8
+  let shifted = b >> rank-start.as[u32]()
+  let masked = shifted & RANK_1
   masked
 }
 
@@ -66,54 +66,54 @@ fn index-to-bit(index: u64): bitboard {
 }
 
 fn print-bitboard(b: bitboard) {
-  let l = list/empty[char]();
-  write-bitboard(&l, b);
+  let l = list/empty[char]()
+  write-bitboard(&l, b)
   println(string/wrap-list(l))
 }
 
 fn write-bitboard[w: writer](writer: w, b: bitboard) {
   // Scanlines by rank backwards so it reads naturally
-  let rank = 7;
+  let rank = 7
   while rank >= 0 {
-    let rank-start = rank * 8;
+    let rank-start = rank * 8
     // TODO(dogfood): format-uint(base = 2) (also need padding specifier)
     //format-uint(context writer)(value-at-rank(b, rank.as[u64]), base = 2);
 
     for square in int-range/make(rank-start, rank-start + 8) {
-      let bit = value-at-square(b, square.as[u64]);
-      writer.write-char(u8/to-ascii-digit(bit.as[u8]));
-    };
-    writer.write-char('\n');
-    rank := rank - 1;
+      let bit = value-at-square(b, square.as[u64])
+      writer.write-char(u8/to-ascii-digit(bit.as[u8]))
+    }
+    writer.write-char('\n')
+    rank := rank - 1
   }
 }
 
 ns for game-state {
   fn start-pos(): game-state {
-    let w-pawns   = 0b0000000000000000000000000000000000000000000000001111111100000000: bitboard;
-    let w-knights = 0b0000000000000000000000000000000000000000000000000000000001000010: bitboard;
-    let w-bishops = 0b0000000000000000000000000000000000000000000000000000000000100100: bitboard;
-    let w-rooks   = 0b0000000000000000000000000000000000000000000000000000000010000001: bitboard;
-    let w-queens  = 0b0000000000000000000000000000000000000000000000000000000000001000: bitboard;
-    let w-kings   = 0b0000000000000000000000000000000000000000000000000000000000010000: bitboard;
-    let b-pawns   = 0b0000000011111111000000000000000000000000000000000000000000000000: bitboard;
-    let b-knights = 0b0100001000000000000000000000000000000000000000000000000000000000: bitboard;
-    let b-bishops = 0b0010010000000000000000000000000000000000000000000000000000000000: bitboard;
-    let b-rooks   = 0b1000000100000000000000000000000000000000000000000000000000000000: bitboard;
-    let b-queens  = 0b0000100000000000000000000000000000000000000000000000000000000000: bitboard;
-    let b-kings   = 0b0001000000000000000000000000000000000000000000000000000000000000: bitboard;
+    let w-pawns   = 0b0000000000000000000000000000000000000000000000001111111100000000: bitboard
+    let w-knights = 0b0000000000000000000000000000000000000000000000000000000001000010: bitboard
+    let w-bishops = 0b0000000000000000000000000000000000000000000000000000000000100100: bitboard
+    let w-rooks   = 0b0000000000000000000000000000000000000000000000000000000010000001: bitboard
+    let w-queens  = 0b0000000000000000000000000000000000000000000000000000000000001000: bitboard
+    let w-kings   = 0b0000000000000000000000000000000000000000000000000000000000010000: bitboard
+    let b-pawns   = 0b0000000011111111000000000000000000000000000000000000000000000000: bitboard
+    let b-knights = 0b0100001000000000000000000000000000000000000000000000000000000000: bitboard
+    let b-bishops = 0b0010010000000000000000000000000000000000000000000000000000000000: bitboard
+    let b-rooks   = 0b1000000100000000000000000000000000000000000000000000000000000000: bitboard
+    let b-queens  = 0b0000100000000000000000000000000000000000000000000000000000000000: bitboard
+    let b-kings   = 0b0001000000000000000000000000000000000000000000000000000000000000: bitboard
     .{ w-pawns, w-knights, w-bishops, w-rooks, w-queens, w-kings, 
       b-pawns, b-knights, b-bishops, b-rooks, b-queens, b-kings, 
       castle-rights = 0b00000011, en-passant-file = -1, turn = :white }
   }
 
   fn print-grid(self: game-state) {
-    let writer = list/with-capacity[char](128);
-    let rank = 7;
+    let writer = list/with-capacity[char](128)
+    let rank = 7
     while rank >= 0 {
-      let rank-start = rank * 8;
+      let rank-start = rank * 8
       for i in int-range/make(rank-start, rank-start + 8) {
-        let i = i.as[u64];
+        let i = i.as[u64]
         if is-set(self.w-pawns, i) { writer.write-char('P') }
         else if is-set(self.w-knights, i) { writer.write-char('N') }
         else if is-set(self.w-bishops, i) { writer.write-char('B') }
@@ -126,19 +126,19 @@ ns for game-state {
         else if is-set(self.b-rooks, i) { writer.write-char('r') }
         else if is-set(self.b-queens, i) { writer.write-char('q') }
         else if is-set(self.b-kings, i) { writer.write-char('k') }
-        else { writer.write-char('.') };
-      };
-      writer.write-char('\n');
-      rank := rank - 1;
-    };
-    print(string/wrap-list(writer));
-    println("--------\nabcdefgh");
+        else { writer.write-char('.') }
+      }
+      writer.write-char('\n')
+      rank := rank - 1
+    }
+    print(string/wrap-list(writer))
+    println("--------\nabcdefgh")
   }
 
   fn gen-moves(self: game-state): list[move] {
-    self.print-grid();
-    println("");
-    self.gen-white-pawn-moves();
+    self.print-grid()
+    println("")
+    self.gen-white-pawn-moves()
   }
 
   fn w-occupied(self: game-state): bitboard {
@@ -160,26 +160,26 @@ ns for game-state {
   }
 
   fn gen-white-pawn-moves(self: game-state): list[move] {
-     let returned moves = list/empty[move]();
-     let not-occupied = self.not-occupied();
+     let returned moves = list/empty[move]()
+     let not-occupied = self.not-occupied()
 
      // Single push: shift pawns up one rank if square is empty
-     let single-push = (self.w-pawns << 8) & not-occupied;
-     let _single-push-sources = self.w-pawns & (single-push >> 8);
-     println("White single push");
-     print-bitboard(single-push);
+     let single-push = (self.w-pawns << 8) & not-occupied
+     let _single-push-sources = self.w-pawns & (single-push >> 8)
+     println("White single push")
+     print-bitboard(single-push)
      // double push: for pawns on rank 2, shift up two ranks if both squares empty
-     let double-push = ((single-push & RANK_3) << 8) & not-occupied;
-     println("White double push");
-     print-bitboard(double-push);
+     let double-push = ((single-push & RANK_3) << 8) & not-occupied
+     println("White double push")
+     print-bitboard(double-push)
      if self.en-passant-file != -1 {
-        let en-passant-target-square-index: u64 = self.en-passant-file.as[u8].as[u64] + 5*8;
-        let en-passant-target-square-bit = index-to-bit(en-passant-target-square-index);
-        let en-passant-target-square-occupied = en-passant-target-square-bit & self.b-occupied();
+        let en-passant-target-square-index: u64 = self.en-passant-file.as[u8].as[u64] + 5*8
+        let en-passant-target-square-bit = index-to-bit(en-passant-target-square-index)
+        let en-passant-target-square-occupied = en-passant-target-square-bit & self.b-occupied()
         let _en-passant-attackers = 
-          en-passant-target-square-occupied & (en-passant-target-square-bit << 1) & (en-passant-target-square-bit >> 1);
-        print-bitboard(en-passant-target-square-occupied);
-     };
+          en-passant-target-square-occupied & (en-passant-target-square-bit << 1) & (en-passant-target-square-bit >> 1)
+        print-bitboard(en-passant-target-square-occupied)
+     }
      moves
   }
 }
@@ -219,16 +219,16 @@ fn handle-command(context eng: engine)(command: uci/command): ?string {
     :is-ready -> some(cmd-is-ready()),
     :new-game -> { cmd-new-game(); none() },
     :quit -> {
-      eprintln("Quitting");
+      eprintln("Quitting")
       sys/exit(0)
     },
     :position s -> {
-      debug-log("Setting position: {s}");
+      debug-log("Setting position: {s}")
       none()
     },
     :perft .{ depth } -> {
-      debug-log("Handling perft depth {depth}");
-      eng.game.gen-moves();
+      debug-log("Handling perft depth {depth}")
+      eng.game.gen-moves()
       none()
     }
 
@@ -242,27 +242,27 @@ ns for engine {
 
 fn debug-log(context eng: engine)(s: string) {
   if eng.in-debug-mode() {
-    println("[debug] {s}");
+    println("[debug] {s}")
   }
 }
 
 fn run(_args: span[string]): result[i32, string] {
-  let context eng: engine = .{ game = game-state/start-pos() };
+  let context eng: engine = .{ game = game-state/start-pos() }
   loop {
     // TODO(dogfood): easy mapError before try
-    let cmd = sys/read-line(2048).try; 
+    let cmd = sys/read-line(2048).try
     uci/parse-command(cmd) is {
       :err msg -> eprintln("[debug] {msg}"),
       :ok cmd -> {
-        let response = handle-command(cmd);
+        let response = handle-command(cmd)
         // If a command produces output, it goes to stdout with a newline added
-        if response is :some r { println(r) };
+        if response is :some r { println(r) }
       }
     }
-  };
+  }
 }
 
 fn main(arg-count: i32, args: ptr): i32 {
-  let args = sys/parse-main-args(arg-count, args);
+  let args = sys/parse-main-args(arg-count, args)
   run(args).!
 }

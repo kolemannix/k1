@@ -1,0 +1,82 @@
+// Newline-terminated statements: no semicolons except the same-line
+// separator test
+ns newline-stmt
+
+type point = { x: int, y: int }
+
+fn origin(): point {
+  .{ x = 0, y = 0 }
+}
+
+fn guard(x: int): int {
+  if x > 100 return 100
+  x
+}
+
+fn pipe-chain(): int {
+  use list/filter; use list/map
+  let xs: list[int] = [1, 2, 3]
+  let doubled = xs
+    || map(fn x. x * 2)
+    || filter(fn x. x > 2)
+  doubled.len().as[int]
+}
+
+fn leading-dot(): int {
+  let s = "hello world"
+  let n = s
+    .len()
+    .as[int]
+  n
+}
+
+fn leading-and(flag: bool): int {
+  let base = if flag 1 else 2
+  let big = base == 1
+    and flag
+  if big { 10 } else { 20 }
+}
+
+fn no-semi-while(): int {
+  let i = 0
+  let total = 0
+  while i < 5 {
+    total := total + i
+    i := i + 1
+  }
+  total
+}
+
+fn same-line-separator(): int {
+  let a = 1; let b = 2
+  a + b
+}
+
+// A variant at end of line is bare; its payload would have to be same-line
+fn bare-variant-at-eol(): ?int {
+  let v: ?int = :some 5
+  if v is :some n {
+    :some n
+  } else :none
+}
+
+// `.{` after a newline starts a fresh struct-literal statement, not a
+// postfix chain
+fn dot-brace-statement(): {} {
+  let p = origin()
+  assert-equals(p.x, 0)
+  .{}
+}
+
+fn test() {
+  assert-equals(guard(50), 50)
+  assert-equals(guard(500), 100)
+  assert-equals(pipe-chain(), 2)
+  assert-equals(leading-dot(), 11)
+  assert-equals(leading-and(true), 10)
+  assert-equals(leading-and(false), 20)
+  assert-equals(no-semi-while(), 10)
+  assert-equals(same-line-separator(), 3)
+  assert-equals(bare-variant-at-eol().!, 5)
+  dot-brace-statement()
+}

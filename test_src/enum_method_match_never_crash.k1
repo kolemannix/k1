@@ -12,22 +12,22 @@ ns enum_method_match_never {
   
   
   fn is-variant() {
-    let x: either { a(int), b(int), c } = :a 42;
-    assert(x.as-b().is-none());
-    assert(not x is :c);
-    assert(x.as-b().is-none());
+    let x: either { a(int), b(int), c } = :a 42
+    assert(x.as-b().is-none())
+    assert(not x is :c)
+    assert(x.as-b().is-none())
   }
 
 }
 
 fn main(): i32 {
-    enum_method_match_never/is-variant();
+    enum_method_match_never/is-variant()
 
-    use enum_method_match_never/e;
-    let x = e:a 42;
-    let y = e:a 42;
-    assert(x.value-if-a() == y.value-if-a());
-    assert((:b: e).value-if-a() == 0);
+    use enum_method_match_never/e
+    let x = e:a 42
+    let y = e:a 42
+    assert(x.value-if-a() == y.value-if-a())
+    assert((:b: e).value-if-a() == 0)
     1
   }
 //exitcode: 1 This is a B!

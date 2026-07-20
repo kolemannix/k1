@@ -2,7 +2,7 @@
 // Initial pass for bootstrap, Koleman Nix, May 2026
 use core/c-int
 
-ns clang;
+ns clang
 
 type alias CXIndex = ptr
 
@@ -39,9 +39,9 @@ type CXCursor = {
 #static assert-equals(types/size[CXCursor], 32)
 
 fn k1-string-from-cx-string(cxs: CXString): string {
-  let c-str = clang/getCString(cxs);
-  let s = string/from-c(c-str);
-  clang/disposeString(cxs);
+  let c-str = clang/getCString(cxs)
+  let s = string/from-c(c-str)
+  clang/disposeString(cxs)
   s
 }
 

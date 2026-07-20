@@ -1,23 +1,23 @@
-ns optionals;
+ns optionals
 
 type point-maybe-y = { x: int, y: ?int }
 
 fn test-basics(): int {
-  let p: ?point-maybe-y = :some .{ x = 1, y = :some 2 };
-  assert(p.!.x == 1);
-  assert(p.!.y.! == 2);
+  let p: ?point-maybe-y = :some .{ x = 1, y = :some 2 }
+  assert(p.!.x == 1)
+  assert(p.!.y.! == 2)
 
-  let b = :some(true): ?bool;
+  let b = :some(true): ?bool
   if b is :some x {
-    assert(x);
-  };
+    assert(x)
+  }
 
-  assert(opt/is-some[bool](b));
-  let c: ?int = :none;
-  assert(not c.is-some());
+  assert(opt/is-some[bool](b))
+  let c: ?int = :none
+  assert(not c.is-some())
 
-  use types/type-id;
-  assert(type-id[point-maybe-y.y:some] == type-id[int]);
+  use types/type-id
+  assert(type-id[point-maybe-y.y:some] == type-id[int])
 
   0
 }
@@ -25,17 +25,17 @@ fn test-basics(): int {
 type weird-point = { x: ?int, y: int }
 
 fn test-complex(): int {
-  let my_point: weird-point = .{ x = :some 42, y = 0 };
+  let my_point: weird-point = .{ x = :some 42, y = 0 }
   if my_point.x is :some my_x {
-    assert(my_x == 42);
+    assert(my_x == 42)
   } else {
-    assert(false);
-  };
+    assert(false)
+  }
 
-  let my_arr: list[?weird-point] = [:some .{ x = :some 42, y = 3}, :none];
+  let my_arr: list[?weird-point] = [:some .{ x = :some 42, y = 3}, :none]
   if my_arr.get(0) is :some a {
-    assert(a.y == 3);
-  };
+    assert(a.y == 3)
+  }
 
   0
 }
@@ -44,24 +44,24 @@ fn no-num(): ?int { :none }
 fn some-num(): ?int { :some 100 }
 
 fn opt-else-operator() {
-  let result = no-num() ? 42;
-  assert(result == 42);
+  let result = no-num() ? 42
+  assert(result == 42)
 
-  let result = some-num() ? 41;
-  assert(result == 100);
+  let result = some-num() ? 41
+  assert(result == 100)
 }
 
 fn blanket-impls() {
-  assert(some(4) == some(4));
-  assert(some(2).get-value() == 2);
-  assert(some(true).get-value() != false);
+  assert(some(4) == some(4))
+  assert(some(2).get-value() == 2)
+  assert(some(true).get-value() != false)
 }
 
 fn test() {
 
-  test-basics();
-  test-complex();
-  opt-else-operator();
-  blanket-impls();
+  test-basics()
+  test-complex()
+  opt-else-operator()
+  blanket-impls()
 
 }

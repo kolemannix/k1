@@ -16,7 +16,7 @@ type stream-response = { content-type: string, stream: response-stream }
 // Allocates its cursor state in the ambient mode; callers inside a request
 // handler get the request arena, which is exactly the lifetime we need.
 fn stream-of-buffer(bytes: span[u8], chunk-size: size): response-stream {
-  let state: *mut buffer-stream = mem/new(.{ bytes, cursor = 0, chunk-size });
+  let state: *mut buffer-stream = mem/new(.{ bytes, cursor = 0, chunk-size })
   .{ state = state.as[ptr], next = buffer-stream-next }
 }
 
@@ -27,12 +27,12 @@ type buffer-stream = {
 }
 
 fn buffer-stream-next(state: ptr): stream-pull {
-  let bs: *mut buffer-stream = state.rw[buffer-stream]();
-  let remaining = bs.bytes.len() - bs.cursor;
-  if remaining == 0 { return(:done) };
-  let n = if remaining < bs.chunk-size remaining else bs.chunk-size;
-  let chunk = bs.bytes.slice(bs.cursor, bs.cursor + n);
-  bs.cursor <- bs.cursor + n;
+  let bs: *mut buffer-stream = state.rw[buffer-stream]()
+  let remaining = bs.bytes.len() - bs.cursor
+  if remaining == 0 { return :done }
+  let n = if remaining < bs.chunk-size remaining else bs.chunk-size
+  let chunk = bs.bytes.slice(bs.cursor, bs.cursor + n)
+  bs.cursor <- bs.cursor + n
   :chunk chunk
 }
 
@@ -53,70 +53,70 @@ ns chunked {
       connection,
       stream = streaming.stream,
       finishing = false,
-    });
-    mem/push-mode(:custom-arena connection.request-arena);
+    })
+    mem/push-mode(:custom-arena connection.request-arena)
     let headers = stringf(
-      "HTTP/1.1 200 OK\r\nContent-Type: {streaming.content-type}\r\nTransfer-Encoding: chunked\r\n\r\n");
-    mem/pop-mode();
-    write-frame(encoder, headers.span-bytes());
+      "HTTP/1.1 200 OK\r\nContent-Type: {streaming.content-type}\r\nTransfer-Encoding: chunked\r\n\r\n")
+    mem/pop-mode()
+    write-frame(encoder, headers.span-bytes())
   }
 
   fn write-frame(encoder: *mut encoder, bytes: span[u8]) {
-    let connection = encoder.connection;
-    let req = connection.request-arena.alloc[uv/write]();
-    req.set-data(encoder);
-    let buf: uv/buf = uv/buf/wrap-span(bytes);
-    let rc = uv/write(req, connection.client.as-stream(), &buf, 1, on-write-complete);
+    let connection = encoder.connection
+    let req = connection.request-arena.alloc[uv/write]()
+    req.set-data(encoder)
+    let buf: uv/buf = uv/buf/wrap-span(bytes)
+    let rc = uv/write(req, connection.client.as-stream(), &buf, 1, on-write-complete)
     if rc != 0 {
-      tprintln("chunked encoder uv_write failed: {rc}");
-      close-connection(connection);
+      tprintln("chunked encoder uv_write failed: {rc}")
+      close-connection(connection)
     }
   }
 
   fn on-write-complete(req: *mut uv/write, status: i32) {
-    let encoder: *mut encoder = req.get-data();
-    let connection = encoder.connection;
+    let encoder: *mut encoder = req.get-data()
+    let connection = encoder.connection
     // Main thread; direct close-state access is fine
-    if connection.close-state.is-closing { return() };
-    if connection.close-state.should-close { close-connection(connection); return() };
+    if connection.close-state.is-closing { return }
+    if connection.close-state.should-close { close-connection(connection); return }
     if status != 0 {
-      let errno = uv/errno/from-i32(status);
-      tprintln("chunked write failed: {errno.enum-name()}");
-      close-connection(connection);
-      return();
-    };
+      let errno = uv/errno/from-i32(status)
+      tprintln("chunked write failed: {errno.enum-name()}")
+      close-connection(connection)
+      return
+    }
     if encoder.finishing {
-      connection.finish-request();
+      connection.finish-request()
     } else {
-      encode-next-chunk(encoder);
+      encode-next-chunk(encoder)
     }
   }
 
   // chunk frame: hex size, CRLF, data, CRLF; terminal frame: "0\r\n\r\n"
   fn encode-next-chunk(encoder: *mut encoder) {
-    let connection = encoder.connection;
+    let connection = encoder.connection
     (encoder.stream.next)(encoder.stream.state) is {
       :chunk bytes -> {
-        mem/push-mode(:custom-arena connection.request-arena);
-        let out = string-builder/new();
-        append-hex(&out, bytes.len());
-        out.string("\r\n");
-        out.write-bytes(bytes);
-        out.string("\r\n");
-        let frame = out.build();
-        mem/pop-mode();
-        write-frame(encoder, frame.span-bytes());
+        mem/push-mode(:custom-arena connection.request-arena)
+        let out = string-builder/new()
+        append-hex(&out, bytes.len())
+        out.string("\r\n")
+        out.write-bytes(bytes)
+        out.string("\r\n")
+        let frame = out.build()
+        mem/pop-mode()
+        write-frame(encoder, frame.span-bytes())
       },
       :done -> {
-        encoder.finishing <- true;
-        write-frame(encoder, "0\r\n\r\n".span-bytes());
+        encoder.finishing <- true
+        write-frame(encoder, "0\r\n\r\n".span-bytes())
       },
     }
   }
 
   let hex-digits: string = "0123456789abcdef"
   fn append-hex(out: *mut string-builder, value: size) {
-    if value >= 16 { append-hex(out, value / 16) };
-    out.string(string/wrap-raw(hex-digits.data-ptr().add-bytes(value % 16), 1));
+    if value >= 16 { append-hex(out, value / 16) }
+    out.string(string/wrap-raw(hex-digits.data-ptr().add-bytes(value % 16), 1))
   }
 }

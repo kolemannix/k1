@@ -1,10 +1,10 @@
-ns string_interp_test;
+ns string_interp_test
 
 impl print for { name: string, weight: int } {
   fn print-to[w: writer](self, w) {
-    w.string(self.name);
-    w.string(": ");
-    self.weight.print-to(w);
+    w.string(self.name)
+    w.string(": ")
+    self.weight.print-to(w)
     .{}
   }
 }
@@ -12,22 +12,22 @@ impl print for { name: string, weight: int } {
 fn test-raw-strings() {
   let s1 = `Hello,
 
-  "world"`;
+  "world"`
   assert-equals(s1, "Hello,\n\n  \"world\"")
 }
 
 fn test() {
-  let user = .{ name = "Bob", weight = 199 };
-  assert-equals("Hello, '{user}'!", "Hello, 'Bob: 199'!");
+  let user = .{ name = "Bob", weight = 199 }
+  assert-equals("Hello, '{user}'!", "Hello, 'Bob: 199'!")
 
-  let p = .{ outer = .{ inner = true } };
-  assert-equals("{not p.outer.inner}", "false");
+  let p = .{ outer = .{ inner = true } }
+  assert-equals("{not p.outer.inner}", "false")
 
-  let with-braces = "{42.show()} + {20} = {(.{ value = 62}.value)}";
-  assert-equals(with-braces, "42 + 20 = 62");
+  let with-braces = "{42.show()} + {20} = {(.{ value = 62}.value)}"
+  assert-equals(with-braces, "42 + 20 = 62")
 
-  let nested = "{"String has {10 + 10} in"} it";
-  assert-equals(nested, "String has 20 in it");
+  let nested = "{"String has {10 + 10} in"} it"
+  assert-equals(nested, "String has 20 in it")
 
-  test-raw-strings();
+  test-raw-strings()
 }

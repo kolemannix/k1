@@ -33,8 +33,8 @@ ns orders {
   }
 
   fn parse-line(line: string): order {
-    let fields = line.split-by-char(',');
-    require fields.len() == 7 else { crash("bad csv row: {line}") };
+    let fields = line.split-by-char(',')
+    require fields.len() == 7 else { crash("bad csv row: {line}") }
     .{
       id = fields.get(0).parse-base10().!,
       customer = fields.get(1),
@@ -47,14 +47,14 @@ ns orders {
   }
 
   fn load(path: string): list[order] {
-    let lines = core/files/read-to-string(context :current)(path).split-by-char('\n');
-    let orders = list/empty[order]();
+    let lines = core/files/read-to-string(context :current)(path).split-by-char('\n')
+    let orders = list/empty[order]()
     for line in lines {
       // Skip the header; split-by-char already drops the trailing empty line
       if it-index > 0 and line.len() > 0 {
-        orders.push(parse-line(line));
-      };
-    };
+        orders.push(parse-line(line))
+      }
+    }
     orders
   }
 

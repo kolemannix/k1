@@ -5,38 +5,38 @@ ns work {
       async-handle = system-heap.alloc-t[uv/async],
       mutex = system-heap.alloc-t[uv/mutex],
       submissions = list/empty[uv-work-submission](),
-    });
+    })
   
-    let mutex-rc = uv/mutex_init(queue.mutex);
+    let mutex-rc = uv/mutex_init(queue.mutex)
     if mutex-rc != 0 {
-      crash("uv_mutex_init for work queue failed: {mutex-rc}");
-    };
+      crash("uv_mutex_init for work queue failed: {mutex-rc}")
+    }
   
-    let async-rc = uv/async_init(uv-loop, queue.async-handle, drain-work-queue);
+    let async-rc = uv/async_init(uv-loop, queue.async-handle, drain-work-queue)
     if async-rc != 0 {
-      uv/mutex_destroy(queue.mutex);
-      system-heap.free-t(queue.async-handle);
-      system-heap.free-t(queue.mutex);
-      system-heap.free-t(queue);
-      crash("uv_async_init for work queue failed: {async-rc}");
-    };
+      uv/mutex_destroy(queue.mutex)
+      system-heap.free-t(queue.async-handle)
+      system-heap.free-t(queue.mutex)
+      system-heap.free-t(queue)
+      crash("uv_async_init for work queue failed: {async-rc}")
+    }
   
-    queue.async-handle.set-data(queue);
-    work-queue <- queue.as[ptr];
+    queue.async-handle.set-data(queue)
+    work-queue <- queue.as[ptr]
   }
   
   fn submit-work(req: *mut uv/work, work-cb: uv/work_cb, after-cb: uv/after_work_cb) {
     if work-queue.is-null() {
-      crash("uv work queue not initialized");
-    };
-    let queue = work-queue.as[*mut uv-work-queue];
+      crash("uv work queue not initialized")
+    }
+    let queue = work-queue.as[*mut uv-work-queue]
   
-    uv/mutex_lock(queue.mutex);
-    queue.submissions.push-in(context :system-heap)(.{ req, work-cb, after-cb });
-    uv/mutex_unlock(queue.mutex);
+    uv/mutex_lock(queue.mutex)
+    queue.submissions.push-in(context :system-heap)(.{ req, work-cb, after-cb })
+    uv/mutex_unlock(queue.mutex)
   
-    let send-rc = uv/async_send(queue.async-handle);
-    if send-rc < 0 crash("uv_async_send for work queue failed: {send-rc}");
+    let send-rc = uv/async_send(queue.async-handle)
+    if send-rc < 0 crash("uv_async_send for work queue failed: {send-rc}")
   }
   
   type uv-work-submission = {
@@ -55,13 +55,13 @@ ns work {
   let mutable work-queue: ptr = ptr/null
   
   fn drain-work-queue(handle: *mut uv/async) {
-    let queue = handle.get-data[uv-work-queue]();
+    let queue = handle.get-data[uv-work-queue]()
     loop {
-      uv/mutex_lock(queue.mutex);
+      uv/mutex_lock(queue.mutex)
       if queue.submissions.is-empty() {
-        uv/mutex_unlock(queue.mutex);
-        break();
-      };
+        uv/mutex_unlock(queue.mutex)
+        break
+      }
   
       for submission in queue.submissions {
         let queue-rc = uv/queue_work(
@@ -69,13 +69,13 @@ ns work {
           submission.req,
           submission.work-cb,
           submission.after-cb,
-        );
+        )
         if queue-rc != 0 {
-          crash("uv_queue_work failed: {queue-rc}");
-        };
-      };
-      queue.submissions.clear();
-      uv/mutex_unlock(queue.mutex);
+          crash("uv_queue_work failed: {queue-rc}")
+        }
+      }
+      queue.submissions.clear()
+      uv/mutex_unlock(queue.mutex)
     }
   }
 }

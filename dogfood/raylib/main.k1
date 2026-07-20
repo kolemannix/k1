@@ -1,7 +1,7 @@
 let MODULE_INFO: k1/module-manifest = {
-  let frameworks = ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"];
-  let link-args = list/empty[string]();
-  for frameworks { link-args.push("-framework"); link-args.push(it) };
+  let frameworks = ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"]
+  let link-args = list/empty[string]()
+  for frameworks { link-args.push("-framework"); link-args.push(it) }
   .{
     kind = :executable,
     deps = [],
@@ -53,36 +53,36 @@ use raylib/clear-background
 
 fn render(context frame-arena: alloc-mode)(things: *list[thing]) {
   for things {
-    draw-text("thing {it-index}".to-c().ptr, it.pos.x, it.pos.y, 32, PINK);
-  };
+    draw-text("thing {it-index}".to-c().ptr, it.pos.x, it.pos.y, 32, PINK)
+  }
 }
 
 fn run(title: string): i32 {
-  let title-c = title.to-c(context :tmp)();
+  let title-c = title.to-c(context :tmp)()
 
-  let perm = alloc-mode:custom-arena core/arena/init-virtual(1);
-  let things: list[thing] = list/with-capacity-in(context perm)(1024);
+  let perm = alloc-mode:custom-arena core/arena/init-virtual(1)
+  let things: list[thing] = list/with-capacity-in(context perm)(1024)
   things.push-in(context perm)(.{
     pos = .{ x = 200, y = 300 },
     kind = :bits64 10
-  });
-  raylib/init(800, 450, title-c.ptr);
-  raylib/set-target-fps(60);
+  })
+  raylib/init(800, 450, title-c.ptr)
+  raylib/set-target-fps(60)
 
 
-  let context frame = alloc-mode:custom-arena core/arena/init-virtual(1);
-  mem/push-mode(frame);
+  let context frame = alloc-mode:custom-arena core/arena/init-virtual(1)
+  mem/push-mode(frame)
   while not raylib/window-should-close() {
-    let fps = raylib/get-fps();
-    raylib/begin-drawing();
-    clear-background(GRAY);
-    draw-text("Congrats! (fps: {fps})".to-c().ptr, 200, 200, 32, PINK);
-    render(things.&);
-    raylib/end-drawing();
-    frame.as-custom-arena().!.reset(false);
-  };
+    let fps = raylib/get-fps()
+    raylib/begin-drawing()
+    clear-background(GRAY)
+    draw-text("Congrats! (fps: {fps})".to-c().ptr, 200, 200, 32, PINK)
+    render(things.&)
+    raylib/end-drawing()
+    frame.as-custom-arena().!.reset(false)
+  }
 
-  raylib/close-window();
+  raylib/close-window()
   if k1/is-static 11 else 1
 }
 
@@ -93,8 +93,8 @@ fn main(): i32 {
   //  ctResult
   //};
 
-  let rt-result = run("runtime!");
-  println("Hey, the runtime result was {rt-result}");
+  let rt-result = run("runtime!")
+  println("Hey, the runtime result was {rt-result}")
   0
 }
 

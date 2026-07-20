@@ -1,4 +1,4 @@
-ns sys;
+ns sys
 
 #if k1/os-macos extern("arc4random_uniform") fn arc4random_uniform(upper-bound: u32): u32
 
@@ -14,26 +14,26 @@ fn parse-main-args(arg-count: c-int, args: ptr): span[string] {
   let buf = buffer/wrap-raw[ptr](
     count = arg-count.as[size],
     ptr = args
-  );
-  let strings = list/from-mapping(buf, fn cstr. string/wrap-c(cstr));
+  )
+  let strings = list/from-mapping(buf, fn cstr. string/wrap-c(cstr))
   strings.as-span()
 }
 
 fn read-line(max-length-bytes: size): result[string, string] {
-  let buffer = buffer/allocate[byte](max-length-bytes);
-  let bytes-read: i64 = posix/read(0, buffer.data.as[ptr], buffer.len.as[c-sizet]);
+  let buffer = buffer/allocate[byte](max-length-bytes)
+  let bytes-read: i64 = posix/read(0, buffer.data.as[ptr], buffer.len.as[c-sizet])
 
   if bytes-read < 0 {
-    return(:err "Failed to read line");
-  };
+    return :err "Failed to read line"
+  }
   if bytes-read == 0 {
-    return(:err "EOF");
-  };
+    return :err "EOF"
+  }
 
   // The last line before EOF may not be newline-terminated
-  let length: size = if buffer.get(bytes-read - 1) == '\n'.as[u8] bytes-read - 1 else bytes-read;
-  buffer.len <- length;
+  let length: size = if buffer.get(bytes-read - 1) == '\n'.as[u8] bytes-read - 1 else bytes-read
+  buffer.len <- length
 
-  let result = string/wrap-byte-buffer(buffer);
+  let result = string/wrap-byte-buffer(buffer)
   :ok result
 }

@@ -1,4 +1,4 @@
-ns fib; 
+ns fib
 
 fn fib(n: int): int {
   n is {
@@ -9,6 +9,6 @@ fn fib(n: int): int {
 }
 
 fn test() {
-  let result = fib(8);
-  assert(result == 21);
+  let result = fib(8)
+  assert(result == 21)
 }

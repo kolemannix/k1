@@ -8,32 +8,32 @@ let MODULE_INFO: k1/module-manifest = zeroed().with(.{
 let mutable tls myvar: i32 = 0
 
 fn run(input: *mut int): ptr {
-  assert-equals(input.*, 42);
-  myvar <- myvar + 1;
-  input <- input.* + 1;
-  assert-equals(myvar, 1);
+  assert-equals(input.*, 42)
+  myvar <- myvar + 1
+  input <- input.* + 1
+  assert-equals(myvar, 1)
   input.as()
 }
 
 fn main(): i32 {
-  myvar <- 1000;
+  myvar <- 1000
   // TODO: We could hugely improve this api now
   //       using current idioms and features; provide
   //       a highly ergonomic shim that lets us just have a fn that
   //       takes a t and returns a u, and handle all the allocations
   //       and ptr-munging internally
-  let arena = arena/init-default();
-  let input = arena.push(42);
-  let output = arena.alloc[*int]();
+  let arena = arena/init-default()
+  let input = arena.push(42)
+  let output = arena.alloc[*int]()
 
-  let thread = std/thread/start(arena, run, input);
-  std/thread/join(thread.*, output);
+  let thread = std/thread/start(arena, run, input)
+  std/thread/join(thread.*, output)
 
   // output returned has been incremented 
-  assert-equals(input.as[ptr], output.*.as[ptr]);
-  assert-equals(output.*.*, 43);
+  assert-equals(input.as[ptr], output.*.as[ptr])
+  assert-equals(output.*.*, 43)
 
   // myvar is unchanged by the thread since its threadlocal
-  assert-equals(myvar, 1000);
+  assert-equals(myvar, 1000)
   0
 }

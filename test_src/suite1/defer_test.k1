@@ -1,15 +1,15 @@
-ns defer_test;
+ns defer_test
 
 use core/inc
 
 fn loop-test(sensor: *mut int) {
-  let i = 0;
+  let i = 0
   // Every iteration, we increment i, then check that the sensor is right behind it,
   // then increment the sensor
   while i < 10 {
-    defer { assert-equals(i - 1, sensor.*); inc(sensor) };
-    i := i + 1;
-  };
+    defer { assert-equals(i - 1, sensor.*); inc(sensor) }
+    i := i + 1
+  }
   .{}
 }
 
@@ -17,29 +17,29 @@ fn loop-test(sensor: *mut int) {
 // and if it appears at the end of a block, does NOT cause
 // duplicate insertion of that block's defers
 fn return-test(sensor: *mut int) {
-  defer { assert-equals(sensor.*, 2); inc(sensor) };
+  defer { assert-equals(sensor.*, 2); inc(sensor) }
   if true {
-    defer { assert-equals(sensor.*, 1); inc(sensor) };
+    defer { assert-equals(sensor.*, 1); inc(sensor) }
     if false .{} else {
-      defer { assert-equals(sensor.*, 0); inc(sensor) };
-      return()
+      defer { assert-equals(sensor.*, 0); inc(sensor) }
+      return
     }
   } else {
     assert(false)
-  };
+  }
   .{}
 }
 
 fn test() {
   // We use an integer so that we can detect if a defer
   // runs too few or too many times!
-  let sensor = 0;
-  loop-test(&sensor);
-  assert-equals(sensor, 10);
+  let sensor = 0
+  loop-test(&sensor)
+  assert-equals(sensor, 10)
 
-  &sensor <- 0;
-  return-test(&sensor);
-  assert-equals(sensor, 3);
+  &sensor <- 0
+  return-test(&sensor)
+  assert-equals(sensor, 3)
   
   .{}
 }

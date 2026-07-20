@@ -1,149 +1,149 @@
-ns buffer_test;
+ns buffer_test
 
 fn buffer-empty() {
-  let empty = buffer/empty[int]();
-  assert(empty.len == 0);
-  assert(empty.is-empty());
-  assert(not empty.non-empty());
-  assert(empty.first() == :none);
-  assert(empty.last() == :none);
+  let empty = buffer/empty[int]()
+  assert(empty.len == 0)
+  assert(empty.is-empty())
+  assert(not empty.non-empty())
+  assert(empty.first() == :none)
+  assert(empty.last() == :none)
 }
 
 fn buffer-filled() {
-  let buf = buffer/filled[i8](5, 42);
-  assert(buf.len == 5);
-  assert(not buf.is-empty());
-  assert(buf.non-empty());
+  let buf = buffer/filled[i8](5, 42)
+  assert(buf.len == 5)
+  assert(not buf.is-empty())
+  assert(buf.non-empty())
 
-  let i = 0;
+  let i = 0
   while i < 5 {
-    assert(buf.get(i) == 42);
-    i := i + 1;
-  };
+    assert(buf.get(i) == 42)
+    i := i + 1
+  }
 }
 
 fn buffer-get-set() {
-  let buf = buffer/filled(3, 0);
-  buf.set(0, 10);
-  buf.set(1, 20);
-  buf.set(2, 30);
+  let buf = buffer/filled(3, 0)
+  buf.set(0, 10)
+  buf.set(1, 20)
+  buf.set(2, 30)
 
-  assert(buf.get(0) == 10);
-  assert(buf.get(1) == 20);
-  assert(buf.get(2) == 30);
+  assert(buf.get(0) == 10)
+  assert(buf.get(1) == 20)
+  assert(buf.get(2) == 30)
 }
 
 fn buffer-first-last() {
-  let buf = buffer/filled(3, 0);
-  buf.set(0, 10);
-  buf.set(1, 20);
-  buf.set(2, 30);
+  let buf = buffer/filled(3, 0)
+  buf.set(0, 10)
+  buf.set(1, 20)
+  buf.set(2, 30)
 
-  assert(buf.first() == :some 10);
-  assert(buf.last() == :some 30);
+  assert(buf.first() == :some 10)
+  assert(buf.last() == :some 30)
 }
 
 fn buffer-slice() {
-  let buf = buffer/filled(5, 0);
-  let i = 0;
+  let buf = buffer/filled(5, 0)
+  let i = 0
   while i < 5 {
-    buf.set(i, i);
-    i := i + 1;
-  };
+    buf.set(i, i)
+    i := i + 1
+  }
 
-  let slice = buf.slice(1, 4);
-  assert(slice.len == 3);
-  assert(slice.get(0) == 1);
-  assert(slice.get(1) == 2);
-  assert(slice.get(2) == 3);
+  let slice = buf.slice(1, 4)
+  assert(slice.len == 3)
+  assert(slice.get(0) == 1)
+  assert(slice.get(1) == 2)
+  assert(slice.get(2) == 3)
 }
 
 fn buffer-take-drop() {
-  let buf = buffer/filled(5, 0);
-  let i = 0;
+  let buf = buffer/filled(5, 0)
+  let i = 0
   while i < 5 {
-    buf.set(i, i);
-    i := i + 1;
-  };
+    buf.set(i, i)
+    i := i + 1
+  }
 
-  let taken = buf.take(3);
-  assert(taken.len == 3);
-  assert(taken.get(0) == 0);
-  assert(taken.get(1) == 1);
-  assert(taken.get(2) == 2);
+  let taken = buf.take(3)
+  assert(taken.len == 3)
+  assert(taken.get(0) == 0)
+  assert(taken.get(1) == 1)
+  assert(taken.get(2) == 2)
 
-  let dropped = buf.drop(2);
-  assert(dropped.len == 3);
-  assert(dropped.get(0) == 2);
-  assert(dropped.get(1) == 3);
-  assert(dropped.get(2) == 4);
+  let dropped = buf.drop(2)
+  assert(dropped.len == 3)
+  assert(dropped.get(0) == 2)
+  assert(dropped.get(1) == 3)
+  assert(dropped.get(2) == 4)
 }
 
 fn buffer-concat() {
-  let buf1 = buffer/filled(2, 1);
-  let buf2 = buffer/filled(2, 2);
+  let buf1 = buffer/filled(2, 1)
+  let buf2 = buffer/filled(2, 2)
 
-  let combined = buf1.concat(buf2);
-  assert-equals(combined.len, 4);
-  assert-equals(combined.get(0), 1);
-  assert-equals(combined.get(1), 1);
-  assert-equals(combined.get(2), 2);
-  assert-equals(combined.get(3), 2);
+  let combined = buf1.concat(buf2)
+  assert-equals(combined.len, 4)
+  assert-equals(combined.get(0), 1)
+  assert-equals(combined.get(1), 1)
+  assert-equals(combined.get(2), 2)
+  assert-equals(combined.get(3), 2)
 }
 
 fn buffer-chunks() {
-  let b = [1,2,3,4]: buffer[int];
-  assert-equals(b.chunks(1).get(0), [1]);
-  assert-equals(b.chunks(1).get(1), [2]);
-  assert-equals(b.chunks(1).get(2), [3]);
-  assert-equals(b.chunks(1).get(3), [4]);
-  assert-equals(b.chunks(1).len(), 4);
+  let b = [1,2,3,4]: buffer[int]
+  assert-equals(b.chunks(1).get(0), [1])
+  assert-equals(b.chunks(1).get(1), [2])
+  assert-equals(b.chunks(1).get(2), [3])
+  assert-equals(b.chunks(1).get(3), [4])
+  assert-equals(b.chunks(1).len(), 4)
 
-  assert-equals(b.chunks(4).get(0), [1,2,3,4]);
-  assert-equals(b.chunks(7).get(0), [1,2,3,4]);
+  assert-equals(b.chunks(4).get(0), [1,2,3,4])
+  assert-equals(b.chunks(7).get(0), [1,2,3,4])
 
-  assert-equals(b.chunks(3).get(0), [1,2,3]);
-  assert-equals(b.chunks(3).get(1), [4]);
+  assert-equals(b.chunks(3).get(0), [1,2,3])
+  assert-equals(b.chunks(3).get(1), [4])
   .{}
 }
 
 fn buffer-swap() {
-  let buf = buffer/filled(3, 0);
-  buf.set(0, 10);
-  buf.set(1, 20);
-  buf.set(2, 30);
+  let buf = buffer/filled(3, 0)
+  buf.set(0, 10)
+  buf.set(1, 20)
+  buf.set(2, 30)
 
-  buf.swap(0, 2);
+  buf.swap(0, 2)
 
-  assert-equals(buf.get(0), 30);
-  assert-equals(buf.get(1), 20);
-  assert-equals(buf.get(2), 10);
+  assert-equals(buf.get(0), 30)
+  assert-equals(buf.get(1), 20)
+  assert-equals(buf.get(2), 10)
 }
 
 fn buffer-clone() {
-  let original = buffer/filled(3, 0);
-  original.set(0, 10);
-  original.set(1, 20);
-  original.set(2, 30);
+  let original = buffer/filled(3, 0)
+  original.set(0, 10)
+  original.set(1, 20)
+  original.set(2, 30)
 
-  let cloned = original.cloned();
-  assert(cloned == original);
+  let cloned = original.cloned()
+  assert(cloned == original)
 
   // Modify clone and verify original is unchanged
-  cloned.set(0, 99);
-  assert(original.get(0) == 10);
-  assert(cloned.get(0) == 99);
+  cloned.set(0, 99)
+  assert(original.get(0) == 10)
+  assert(cloned.get(0) == 99)
 }
 
 fn test() {
-  buffer-empty();
-  buffer-filled();
-  buffer-get-set();
-  buffer-first-last();
-  buffer-slice();
-  buffer-take-drop();
-  buffer-concat();
-  buffer-swap();
-  buffer-clone();
-  buffer-chunks();
+  buffer-empty()
+  buffer-filled()
+  buffer-get-set()
+  buffer-first-last()
+  buffer-slice()
+  buffer-take-drop()
+  buffer-concat()
+  buffer-swap()
+  buffer-clone()
+  buffer-chunks()
 }

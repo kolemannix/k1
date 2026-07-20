@@ -1,10 +1,10 @@
-ns lexical_scope;
+ns lexical_scope
 
 fn test() {
   let result = test-compile({
-    { let _foo = 100 };
-    assert(_foo == 100);
-  });
+    { let _foo = 100 }
+    assert(_foo == 100)
+  })
   assert(
     result is :some msg
     and msg.starts-with("No value '_foo' is in scope")

@@ -1,13 +1,13 @@
 fn print-if-10(x: int) {
-  if x == 10 println("work");
+  if x == 10 println("work")
 }
 
 let global-x: int = 5
  
 #debug fn main(): i32 {
 
-  print-if-10(global-x);
-  print-if-10(12);
+  print-if-10(global-x)
+  print-if-10(12)
 
   0
 }

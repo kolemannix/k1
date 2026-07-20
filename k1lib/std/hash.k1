@@ -17,23 +17,23 @@ ability hash {
 // murmur3's 64-bit finalizer: full avalanche, cheap, and good enough
 // that low-quality inputs (sequential ints, FNV output) mask cleanly
 fn fmix64(h0: u64): u64 {
-  let m1: u64 = 0xff51afd7ed558ccd;
-  let m2: u64 = 0xc4ceb9fe1a85ec53;
-  let h = h0 ^ (h0 >> 33);
-  h := h * m1;
-  h := h ^ (h >> 33);
-  h := h * m2;
+  let m1: u64 = 0xff51afd7ed558ccd
+  let m2: u64 = 0xc4ceb9fe1a85ec53
+  let h = h0 ^ (h0 >> 33)
+  h := h * m1
+  h := h ^ (h >> 33)
+  h := h * m2
   h ^ (h >> 33)
 }
 
 impl hash for string {
   fn hash(self): u64 {
-    let FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    let FNV_PRIME: u64 = 0x100000001b3;
-    let h = FNV_OFFSET;
+    let FNV_OFFSET: u64 = 0xcbf29ce484222325
+    let FNV_PRIME: u64 = 0x100000001b3
+    let h = FNV_OFFSET
     for b in self.span-bytes() {
-      h := (h ^ b.as[u64]) * FNV_PRIME;
-    };
+      h := (h ^ b.as[u64]) * FNV_PRIME
+    }
     fmix64(h)
   }
 }
@@ -49,7 +49,7 @@ impl hash for i64 { fn hash(self): u64 { fmix64(self.as[u64]) } }
 impl hash for char { fn hash(self): u64 { fmix64(self.as[u8].as[u64]) } }
 impl hash for bool {
   fn hash(self): u64 {
-    let v: u64 = if self 1 else 0;
+    let v: u64 = if self 1 else 0
     fmix64(v)
   }
 }
@@ -70,7 +70,7 @@ ns for map {
   let TOMBSTONE: u64 = 1
 
   fn _slot-hash[k](key: k): u64 where k: hash {
-    let h = key.hash();
+    let h = key.hash()
     if h < 2 h + 2 else h
   }
 
@@ -81,10 +81,10 @@ ns for map {
   // smallest power-of-two capacity that holds min-capacity live
   // entries below the 3/4 load limit
   fn _capacity-for(min-capacity: size): size {
-    let cap: size = 8;
+    let cap: size = 8
     while min-capacity * 4 > cap * 3 {
-      cap := cap * 2;
-    };
+      cap := cap * 2
+    }
     cap
   }
 
@@ -109,51 +109,51 @@ ns for map {
   fn capacity[k, v](self: map[k, v]): size { self.slots.len }
 
   fn _rehash[k, v](context mode: alloc-mode)(self: *mut map[k, v], new-cap: size) {
-    let old = self.slots;
-    let new-slots = _allocate-slots[k, v](new-cap);
-    let mask = new-cap - 1;
+    let old = self.slots
+    let new-slots = _allocate-slots[k, v](new-cap)
+    let mask = new-cap - 1
     for s in old {
       if s.hash >= 2 {
-        let idx = s.hash.as[size] & mask;
+        let idx = s.hash.as[size] & mask
         while new-slots.get-unchecked(idx).hash != EMPTY {
-          idx := (idx + 1) & mask;
-        };
-        new-slots.get-ref-unchecked(idx) <- s;
+          idx := (idx + 1) & mask
+        }
+        new-slots.get-ref-unchecked(idx) <- s
       }
-    };
-    self <- .{ count = self.count, tombstones = 0, slots = new-slots };
+    }
+    self <- .{ count = self.count, tombstones = 0, slots = new-slots }
     if old.non-empty() {
-      let resolved = mode.resolve();
+      let resolved = mode.resolve()
       if resolved.requires-free() {
-        resolved.free(old.data-ptr(), old.size-bytes(), core/types/align[map-slot[k, v]]());
+        resolved.free(old.data-ptr(), old.size-bytes(), core/types/align[map-slot[k, v]]())
       }
-    };
+    }
   }
 
   // Keeps at least a quarter of the table empty so probe sequences
   // always terminate. Doubles only when live entries justify it;
   // otherwise rehashes at the same size to purge tombstones.
   fn _ensure-room[k, v](context mode: alloc-mode)(self: *mut map[k, v]) {
-    let cap = self.slots.len;
+    let cap = self.slots.len
     if cap == 0 {
-      self._rehash(8);
-      return()
-    };
+      self._rehash(8)
+      return
+    }
     if (self.count + self.tombstones + 1) * 4 > cap * 3 {
-      let new-cap = if (self.count + 1) * 2 > cap { cap * 2 } else cap;
-      self._rehash(new-cap);
-    };
+      let new-cap = if (self.count + 1) * 2 > cap { cap * 2 } else cap
+      self._rehash(new-cap)
+    }
   }
 
   fn _find-index[k, v](self: map[k, v], key: k, h: u64): ?size where k: equals {
-    if self.count == 0 { return(:none) };
-    let mask = self.slots.len - 1;
-    let idx = h.as[size] & mask;
+    if self.count == 0 return :none
+    let mask = self.slots.len - 1
+    let idx = h.as[size] & mask
     loop {
-      let s = self.slots.get-ref-unchecked(idx);
-      if s.hash == h and s.key == key { break(:some idx) };
-      if s.hash == EMPTY { break(:none) };
-      idx := (idx + 1) & mask;
+      let s = self.slots.get-ref-unchecked(idx)
+      if s.hash == h and s.key == key break :some idx
+      if s.hash == EMPTY break :none
+      idx := (idx + 1) & mask
     }
   }
 
@@ -161,41 +161,41 @@ ns for map {
   // the best open slot on its probe path (first tombstone, else first empty)
   fn _probe-insert[k, v](self: map[k, v], key: k, h: u64): { idx: size, found: bool, from-tombstone: bool }
     where k: equals {
-    let mask = self.slots.len - 1;
-    let idx = h.as[size] & mask;
-    let tombstone: ?size = :none;
+    let mask = self.slots.len - 1
+    let idx = h.as[size] & mask
+    let tombstone: ?size = :none
     loop {
-      let s = self.slots.get-ref-unchecked(idx);
+      let s = self.slots.get-ref-unchecked(idx)
       if s.hash == h and s.key == key {
-        break(.{ idx, found = true, from-tombstone = false })
-      };
+        break .{ idx, found = true, from-tombstone = false }
+      }
       if s.hash == EMPTY {
-        break(tombstone is {
+        break tombstone is {
           :some t -> .{ idx = t, found = false, from-tombstone = true },
           :none -> .{ idx, found = false, from-tombstone = false }
-        })
-      };
-      if s.hash == TOMBSTONE and tombstone is :none { tombstone := :some idx };
-      idx := (idx + 1) & mask;
+        }
+      }
+      if s.hash == TOMBSTONE and tombstone is :none { tombstone := :some idx }
+      idx := (idx + 1) & mask
     }
   }
 
   fn _place[k, v](self: *mut map[k, v], probe: { idx: size, found: bool, from-tombstone: bool }, slot: map-slot[k, v]) {
-    if probe.from-tombstone { self.tombstones <- self.tombstones - 1 };
-    self.slots.get-ref-unchecked(probe.idx) <- slot;
-    self.count <- self.count + 1;
+    if probe.from-tombstone { self.tombstones <- self.tombstones - 1 }
+    self.slots.get-ref-unchecked(probe.idx) <- slot
+    self.count <- self.count + 1
   }
 
   fn insert-in[k, v](context mode: alloc-mode)(self: *mut map[k, v], key: k, value: v)
     where k: hash, k: equals {
-    self._ensure-room();
-    let h = _slot-hash(key);
-    let probe = self._probe-insert(key, h);
+    self._ensure-room()
+    let h = _slot-hash(key)
+    let probe = self._probe-insert(key, h)
     if probe.found {
-      self.slots.get-ref-unchecked(probe.idx).value <- value;
+      self.slots.get-ref-unchecked(probe.idx).value <- value
     } else {
-      self._place(probe, .{ hash = h, key, value });
-    };
+      self._place(probe, .{ hash = h, key, value })
+    }
   }
 
   fn insert[k, v](self: *mut map[k, v], key: k, value: v) where k: hash, k: equals {
@@ -205,12 +205,12 @@ ns for map {
   // The reference is valid until the next insert or rehash
   fn get-or-insert-in[k, v](context mode: alloc-mode)(self: *mut map[k, v], key: k, make: some fn() -> v): *mut v
     where k: hash, k: equals {
-    self._ensure-room();
-    let h = _slot-hash(key);
-    let probe = self._probe-insert(key, h);
+    self._ensure-room()
+    let h = _slot-hash(key)
+    let probe = self._probe-insert(key, h)
     if not probe.found {
-      self._place(probe, .{ hash = h, key, value = make() });
-    };
+      self._place(probe, .{ hash = h, key, value = make() })
+    }
     self.slots.get-ref-unchecked(probe.idx).value.&
   }
 
@@ -218,12 +218,12 @@ ns for map {
   // passed to another some-fn param nor captured by a wrapping lambda today
   fn get-or-insert[k, v](self: *mut map[k, v], key: k, make: some fn() -> v): *mut v
     where k: hash, k: equals {
-    self._ensure-room(context :current)();
-    let h = _slot-hash(key);
-    let probe = self._probe-insert(key, h);
+    self._ensure-room(context :current)()
+    let h = _slot-hash(key)
+    let probe = self._probe-insert(key, h)
     if not probe.found {
-      self._place(probe, .{ hash = h, key, value = make() });
-    };
+      self._place(probe, .{ hash = h, key, value = make() })
+    }
     self.slots.get-ref-unchecked(probe.idx).value.&
   }
 
@@ -249,35 +249,35 @@ ns for map {
     self._find-index(key, _slot-hash(key)) is {
       :none -> :none,
       :some idx -> {
-        let s = self.slots.get-ref-unchecked(idx);
-        let evicted = s.value;
-        s.hash <- TOMBSTONE;
-        self.count <- self.count - 1;
-        self.tombstones <- self.tombstones + 1;
+        let s = self.slots.get-ref-unchecked(idx)
+        let evicted = s.value
+        s.hash <- TOMBSTONE
+        self.count <- self.count - 1
+        self.tombstones <- self.tombstones + 1
         :some evicted
       }
     }
   }
 
   fn clear[k, v](self: *mut map[k, v]) {
-    self.slots.memset(0);
-    self.count <- 0;
-    self.tombstones <- 0;
+    self.slots.memset(0)
+    self.count <- 0
+    self.tombstones <- 0
   }
 
   fn dump[k, v](self: map[k, v]) where k: print, v: print {
-    let count = self.count;
-    let tombstones = self.tombstones;
-    let capacity = self.slots.len;
-    println("count: {count}, tombstones: {tombstones}, capacity: {capacity}");
+    let count = self.count
+    let tombstones = self.tombstones
+    let capacity = self.slots.len
+    println("count: {count}, tombstones: {tombstones}, capacity: {capacity}")
     for s in self.slots {
-      print("  slot {it-index}: ");
+      print("  slot {it-index}: ")
       if s.hash == EMPTY { println("empty") }
       else if s.hash == TOMBSTONE { println("tombstone") }
       else {
-        let key = s.key;
-        let value = s.value;
-        println("{key} -> {value}");
+        let key = s.key
+        let value = s.value
+        println("{key} -> {value}")
       }
     }
   }
@@ -292,19 +292,19 @@ type map-iterator[k, v] = {
 
 ns for map-iterator {
   fn _next-live[k, v](self: *map-iterator[k, v], from: size): size {
-    let i = from;
+    let i = from
     while i < self.slots.len and self.slots.get-ref-unchecked(i).hash < 2 {
-      i := i + 1;
-    };
+      i := i + 1
+    }
     i
   }
 }
 
 impl[k, v] iterator[item = { key: k, value: v }] for map-iterator[k, v] {
   fn peek(self: *map-iterator[k, v]): ?item {
-    let i = self._next-live(self.pos);
+    let i = self._next-live(self.pos)
     if i < self.slots.len {
-      let s = self.slots.get-ref-unchecked(i);
+      let s = self.slots.get-ref-unchecked(i)
       :some .{ key = s.key, value = s.value }
     } else :none
   }
@@ -312,21 +312,21 @@ impl[k, v] iterator[item = { key: k, value: v }] for map-iterator[k, v] {
     .{ at-least = self.remaining, at-most = :some self.remaining }
   }
   fn advance-by(self: *mut self, n: size): empty {
-    let advanced = 0;
+    let advanced = 0
     while advanced < n {
-      let i = self._next-live(self.pos);
+      let i = self._next-live(self.pos)
       if i < self.slots.len {
-        self.pos <- i + 1;
-        self.remaining <- self.remaining - 1;
-        advanced := advanced + 1;
+        self.pos <- i + 1
+        self.remaining <- self.remaining - 1
+        advanced := advanced + 1
       } else {
-        self.pos <- i;
-        return()
+        self.pos <- i
+        return
       }
     }
   }
   fn nth(self: *mut self, n: size): ?item {
-    self.advance-by(n);
+    self.advance-by(n)
     self.next()
   }
 }
@@ -339,16 +339,16 @@ impl[k, v] iterable[item = { key: k, value: v }, i = map-iterator[k, v]] for map
 
 impl[k: print, v: print] print for map[k, v] {
   fn print-to[w: writer](self, w): empty {
-    w.write-char('{');
-    let first = true;
+    w.write-char('{')
+    let first = true
     for kv in self {
-      if not first { w.write-string(", ") };
-      first := false;
-      kv.key.print-to(w);
-      w.write-string(": ");
-      kv.value.print-to(w);
-    };
-    w.write-char('}');
+      if not first { w.write-string(", ") }
+      first := false
+      kv.key.print-to(w)
+      w.write-string(": ")
+      kv.value.print-to(w)
+    }
+    w.write-char('}')
   }
 }
 
@@ -371,10 +371,10 @@ ns for set {
   }
 
   fn from-span-in[t](context mode: alloc-mode)(values: span[t]): set[t] where t: hash, t: equals {
-    let s = with-capacity-in[t](values.len());
+    let s = with-capacity-in[t](values.len())
     for v in values {
-      s.add-in(v);
-    };
+      s.add-in(v)
+    }
     s
   }
 
@@ -390,8 +390,8 @@ ns for set {
 
   // true if the value was newly added
   fn add-in[t](context mode: alloc-mode)(self: *mut set[t], value: t): bool where t: hash, t: equals {
-    let before = self.inner.len();
-    self.inner.insert-in(value, .{});
+    let before = self.inner.len()
+    self.inner.insert-in(value, .{})
     self.inner.len() != before
   }
 
@@ -408,7 +408,7 @@ ns for set {
   }
 
   fn clear[t](self: *mut set[t]) {
-    self.inner.clear();
+    self.inner.clear()
   }
 
 }
@@ -429,7 +429,7 @@ impl[t] iterator[item = t] for set-iterator[t] {
     self.inner.advance-by(n)
   }
   fn nth(self: *mut self, n: size): ?item {
-    self.advance-by(n);
+    self.advance-by(n)
     self.next()
   }
 }
@@ -442,13 +442,13 @@ impl[t] iterable[item = t, i = set-iterator[t]] for set[t] {
 
 impl[t: print] print for set[t] {
   fn print-to[w: writer](self, w): empty {
-    w.write-char('{');
-    let first = true;
+    w.write-char('{')
+    let first = true
     for v in self {
-      if not first { w.write-string(", ") };
-      first := false;
-      v.print-to(w);
-    };
-    w.write-char('}');
+      if not first { w.write-string(", ") }
+      first := false
+      v.print-to(w)
+    }
+    w.write-char('}')
   }
 }

@@ -1,4 +1,4 @@
-ns ability_01;
+ns ability_01
 
 ability num {
   fn num(self): i32
@@ -54,15 +54,15 @@ ns qualified_syntax {
   }
 
   fn test() {
-    let s-foo: int = has-secret-gen[a = int]@(foo)/secret();
-    assert-equals(s-foo, 10);
-    let s-bar: int = has-secret-gen[a = int]@(bar)/secret();
-    assert-equals(s-bar, 20);
+    let s-foo: int = has-secret-gen[a = int]@(foo)/secret()
+    assert-equals(s-foo, 10)
+    let s-bar: int = has-secret-gen[a = int]@(bar)/secret()
+    assert-equals(s-bar, 20)
 
-    let s-foo-int: int = has-secret-int@(foo)/secret();
-    assert-equals(s-foo-int, 10);
-    let s-bar-int: int = has-secret-int@(bar)/secret();
-    assert-equals(s-bar-int, 20);
+    let s-foo-int: int = has-secret-int@(foo)/secret()
+    assert-equals(s-foo-int, 10)
+    let s-bar-int: int = has-secret-int@(bar)/secret()
+    assert-equals(s-bar-int, 20)
   }
 }
 
@@ -70,22 +70,22 @@ ns qualified_syntax {
 fn test() {
 
   // Method-style call
-  let three = 3: i32;
-  assert(three.num() == 3);
+  let three = 3: i32
+  assert(three.num() == 3)
 
   // Qualified call
-  assert(num/num(3: i32) == 3);
+  assert(num/num(3: i32) == 3)
 
   // Method-style call on user-defined type
-  let p = .{ x = 1, y = 2 }: point;
-  assert(p.num() == 3);
+  let p = .{ x = 1, y = 2 }: point
+  assert(p.num() == 3)
 
-  let buf: span[u8] = [104: u8, 101, 108, 108, 111].as-span();
-  let x: string = codec/read(buf);
-  assert-equals(x, "hello");
-  assert-equals[string]("asdf", codec/read("asdf".write()));
+  let buf: span[u8] = [104: u8, 101, 108, 108, 111].as-span()
+  let x: string = codec/read(buf)
+  assert-equals(x, "hello")
+  assert-equals[string]("asdf", codec/read("asdf".write()))
 
-  qualified_syntax/test();
+  qualified_syntax/test()
 }
 
 // This is below 'main' so that

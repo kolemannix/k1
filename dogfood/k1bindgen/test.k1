@@ -1,5 +1,5 @@
 fn test(): i32 {
-  let context alloc-mode: alloc-mode = :tmp;
+  let context alloc-mode: alloc-mode = :tmp
   let core-args: span[string] = [
     "k1bindgen",
     "-lib-name",     "testlib",
@@ -13,7 +13,7 @@ fn test(): i32 {
     "+strip-suffix", "_u",      
     "+strip-prefix", "cinput_", 
     "+rename"      , "cinput_custom_name:my-custom-name"
-  ];
+  ]
   let args = #if k1/os-macos {
     core-args.concat([
       "+clangarg", "-isystem",
@@ -21,12 +21,12 @@ fn test(): i32 {
       "+clangarg", "-isysroot",
       "+clangarg", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk"
     ])
-  } else core-args;
-  let output = start(args);
+  } else core-args
+  let output = start(args)
 
   // TODO: Use 'diff' instead sys/cmd("diff", "input.c", "test/output.k1")
-  let expected = core/files/read-to-string("test/expected.k1");
-  assert-equals(output, expected);
+  let expected = core/files/read-to-string("test/expected.k1")
+  assert-equals(output, expected)
 
   0
 }

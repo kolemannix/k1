@@ -1,4 +1,4 @@
-ns type_pattern;
+ns type_pattern
 
 fn inspect[t](v: t): int {
   v is {
@@ -12,15 +12,15 @@ fn inspect[t](v: t): int {
 }
 
 fn test() {
-  assert-equals(13,inspect(.{ x = 3, y = 10 }));
+  assert-equals(13,inspect(.{ x = 3, y = 10 }))
 
-  assert-equals(2,inspect(#static "hello"));
-  assert-equals(4,inspect("hell"));
-  assert-equals(5,inspect("hello": string));
+  assert-equals(2,inspect(#static "hello"))
+  assert-equals(4,inspect("hell"))
+  assert-equals(5,inspect("hello": string))
 
-  assert-equals(1000,inspect(1000));
+  assert-equals(1000,inspect(1000))
 
-  assert-equals(-42,inspect(42));
+  assert-equals(-42,inspect(42))
 
-  assert-equals(inspect(true), 6);
+  assert-equals(inspect(true), 6)
 }

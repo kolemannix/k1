@@ -12,8 +12,8 @@ ns mem {
   }
 
   fn virtual-alloc(size): ptr {
-    let rw = posix/PROT_READ | posix/PROT_WRITE;
-    let private-anon = posix/MAP_PRIVATE | posix/MAP_ANON;
+    let rw = posix/PROT_READ | posix/PROT_WRITE
+    let private-anon = posix/MAP_PRIVATE | posix/MAP_ANON
     let addr = posix/mmap(
       addr = ptr/null,
       len = size,
@@ -21,17 +21,17 @@ ns mem {
       flags = private-anon,
       fd = -1i32,
       offset = 0
-    );
+    )
     if addr == posix/MAP_FAILED.as[ptr] {
-      libc/perror(ptr/null);
-      crash("mmap failed");
-    };
+      libc/perror(ptr/null)
+      crash("mmap failed")
+    }
     addr
   }
 
   fn virtual-release(base: ptr, len: size): empty {
-    let result = posix/munmap(base, len);
-    if result == -1 crash("munmap of ptr {base} x {len} failed");
+    let result = posix/munmap(base, len)
+    if result == -1 crash("munmap of ptr {base} x {len} failed")
     .{}
   }
 
@@ -49,7 +49,7 @@ ns mem {
 
   impl print for alloc-mode {
     fn print-to[w: writer](self, w) {
-      use types/sum;
+      use types/sum
       w.string(self.sum-name())
     }
   }
@@ -68,8 +68,8 @@ ns mem {
     fn resolve(self: alloc-mode): alloc-mode {
       self is {
         :current -> {
-          let mode = mem/current();
-          if mode is :current { crash("currentalloc-mode.kind is current; this will never resolve") };
+          let mode = mem/current()
+          if mode is :current { crash("currentalloc-mode.kind is current; this will never resolve") }
           mode
         },
         _ -> self,
@@ -81,7 +81,7 @@ ns mem {
         :current -> { crash("unreachable") },
         :system-heap -> mem/alloc-zeroed(size, align),
         :custom-heap alloc -> {
-          let zalloc = alloc.*.zalloc;
+          let zalloc = alloc.*.zalloc
           zalloc(size, align)
         },
         :custom-arena bump -> {
@@ -101,7 +101,7 @@ ns mem {
         :current -> { crash("unreachable") },
         :system-heap -> mem/realloc(old-ptr, old-size, align, new-size),
         :custom-heap alloc -> {
-          let realloc-fn = alloc.*.realloc;
+          let realloc-fn = alloc.*.realloc
           realloc-fn(old-ptr, old-size, align, new-size)
         },
         :custom-arena arena -> {
@@ -119,7 +119,7 @@ ns mem {
         :current -> { crash("unreachable") },
         :system-heap -> mem/free(ptr, size, align),
         :custom-heap alloc -> {
-          let free-fn = alloc.*.free;
+          let free-fn = alloc.*.free
           free-fn(ptr, size, align)
         },
         :custom-arena bump -> crash("UnsupportedOperation: free"),
@@ -137,8 +137,8 @@ ns mem {
     }
 
     fn new[t](self: alloc-mode, t: t): *mut t {
-      let ref = self.alloc-t[t];
-      ref <- t;
+      let ref = self.alloc-t[t]
+      ref <- t
       ref
     }
 
@@ -155,8 +155,8 @@ ns mem {
 
   type alias ALLOC_STACK_MAX = 64
   let mutable tls alloc-stack: fixlist[alloc-mode, ALLOC_STACK_MAX] = { 
-    let s = zeroed[fixlist[alloc-mode, ALLOC_STACK_MAX]];
-    s.push(:tmp);
+    let s = zeroed[fixlist[alloc-mode, ALLOC_STACK_MAX]]
+    s.push(:tmp)
     s
   }
 
@@ -167,17 +167,17 @@ ns mem {
     alloc-stack.pop().!
   }
   fn current(): alloc-mode {
-    let s = alloc-stack.last().!;
+    let s = alloc-stack.last().!
     s
   }
 
   fn init-tmp-arena() {
-    if not arena-tmp.as[ptr].is-null() crash("arena-tmp already initialized");
-    &arena-tmp <- arena/init-default();
+    if not arena-tmp.as[ptr].is-null() crash("arena-tmp already initialized")
+    &arena-tmp <- arena/init-default()
   }
 
   fn tmp(): *arena {
-    if arena-tmp.as[ptr].is-null() { init-tmp-arena() };
+    if arena-tmp.as[ptr].is-null() { init-tmp-arena() }
     arena-tmp
   }
 

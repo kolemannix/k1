@@ -1,4 +1,4 @@
-ns match_exhaust;
+ns match_exhaust
 
 fn match-bool(b: bool): string {
   b is {
@@ -46,37 +46,37 @@ fn main(): i32 {
   'x' is {
     'x' -> .{},
     a -> .{}
-  };
+  }
 
-  assert-equals(match-bool(false), "false");
-  assert-equals(match-opt-bool(:some false), "false");
-  assert-equals(match-opt-bool(:none), "None");
+  assert-equals(match-bool(false), "false")
+  assert-equals(match-opt-bool(:some false), "false")
+  assert-equals(match-opt-bool(:none), "None")
 
-  let yes: tri-state = :yes;
-  assert-equals(match-tristate-opt(:some yes), "yes");
-  assert-equals(match-tristate-opt(:some :yes), "yes");
-  assert-equals(match-tristate-opt(:some :failure .{ reason = "because" }), "failure: because");
+  let yes: tri-state = :yes
+  assert-equals(match-tristate-opt(:some yes), "yes")
+  assert-equals(match-tristate-opt(:some :yes), "yes")
+  assert-equals(match-tristate-opt(:some :failure .{ reason = "because" }), "failure: because")
 
-  assert(not both-true(.{ a = true, b = false }));
-  assert(both-true(.{ a = true, b = true }));
+  assert(not both-true(.{ a = true, b = false }))
+  assert(both-true(.{ a = true, b = true }))
 
-  assert(failed-with-baz(:failure .{ reason = "baz" }));
-  assert(not failed-with-baz(:no));
+  assert(failed-with-baz(:failure .{ reason = "baz" }))
+  assert(not failed-with-baz(:no))
 
   some(42) is {
     :some x if x == 42 -> .{},
     _ -> assert(false),
-  };
+  }
 
   // matching understands 'never'
-  let foo: result[int, { asdf: never }] = :ok 42;
+  let foo: result[int, { asdf: never }] = :ok 42
 
-  require foo is :ok i;
+  require foo is :ok i
 
-  assert-equals(i, 42);
+  assert-equals(i, 42)
   foo is {
     :ok i -> assert-equals(i, 42),
-  };
+  }
 
   0
 }

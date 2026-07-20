@@ -1,14 +1,14 @@
-ns char_test;
+ns char_test
 
 fn basic() {
-  let c: char = '!';
-  assert(c == '!');
-  let s = c.to-string();
+  let c: char = '!'
+  assert(c == '!')
+  let s = c.to-string()
   //println(s);
-  assert(s.len() == 1);
-  assert(s.get(0) == '!');
+  assert(s.len() == 1)
+  assert(s.get(0) == '!')
 
-  assert(s.concat-char('!') == "!!");
+  assert(s.concat-char('!') == "!!")
 }
 
 fn escape() {
@@ -20,31 +20,31 @@ fn escape() {
   // EscapedChar { sentinel: '"', output: b'\"' },
   // EscapedChar { sentinel: '\\', output: b'\\' },
 
-  let c = '\n';
-  assert(c.as[u8] == 10);
+  let c = '\n'
+  assert(c.as[u8] == 10)
 
-  let c = '\0';
-  assert(c.as[u8] == 0);
+  let c = '\0'
+  assert(c.as[u8] == 0)
 
-  let c = '\t';
-  assert(c.as[u8] == 9);
+  let c = '\t'
+  assert(c.as[u8] == 9)
 
-  let c = '\r';
-  assert(c.as[u8] == 13);
+  let c = '\r'
+  assert(c.as[u8] == 13)
 
-  let c = '\'';
-  assert(c.as[u8] == 39);
+  let c = '\''
+  assert(c.as[u8] == 39)
 
-  let c = '"';
-  assert(c.as[u8] == 34);
+  let c = '"'
+  assert(c.as[u8] == 34)
 
-  let c = '\\';
-  assert(c.as[u8] == 92);
+  let c = '\\'
+  assert(c.as[u8] == 92)
 
   .{}
 }
 
 fn test() {
-  basic();
-  escape();
+  basic()
+  escape()
 }

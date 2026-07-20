@@ -1,4 +1,4 @@
-ns any_test;
+ns any_test
 
 use types/any
 use types/type-schema
@@ -10,20 +10,20 @@ fn kind-of-any(any: any): string {
 }
 
 fn type-variant-name(type-id: u64): string {
-  let schema = types/type-id-schema(type-id);
-  let schema-schema = types/schema[type-schema];
-  require schema-schema is :either e else { crash("type-schema of type-schema should be a sum") };
+  let schema = types/type-id-schema(type-id)
+  let schema-schema = types/schema[type-schema]
+  require schema-schema is :either e else { crash("type-schema of type-schema should be a sum") }
   let variant = core/iter/find(e.variants, fn v.
     if v.tag is :u8 t and t == schema.tag true else false
-  ).!;
+  ).!
   variant.name
 }
 
 fn test() {
-  let i: int = 10;
-  let int-ptr = make-any(&i);
-  let s = .{ x = 1, y = 100 };
-  let struct-ptr = make-any(&s);
-  assert-equals(kind-of-any(int-ptr), "int");
-  assert-equals(kind-of-any(struct-ptr), "struct");
+  let i: int = 10
+  let int-ptr = make-any(&i)
+  let s = .{ x = 1, y = 100 }
+  let struct-ptr = make-any(&s)
+  assert-equals(kind-of-any(int-ptr), "int")
+  assert-equals(kind-of-any(struct-ptr), "struct")
 }

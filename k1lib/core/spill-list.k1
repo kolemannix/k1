@@ -31,10 +31,10 @@ ns for spill-list {
   }
 
   fn _spill[t, n: static size](fixlist: *mut fixlist[t, n]): list[t] {
-    let list = list/with-capacity-in[t](context :current)(fixlist.cap() * 2);
+    let list = list/with-capacity-in[t](context :current)(fixlist.cap() * 2)
 
-    let srcbuffer = fixlist.as-buffer();
-    list.append-buffer(srcbuffer);
+    let srcbuffer = fixlist.as-buffer()
+    list.append-buffer(srcbuffer)
 
     list
   }
@@ -45,9 +45,9 @@ ns for spill-list {
       :inline fixlist* -> {
         if fixlist.try-push(t) is :ok .{}
         else {
-          let list = _spill(fixlist);
+          let list = _spill(fixlist)
   
-          list.push(t);
+          list.push(t)
   
           self <- :spilled list
         }
@@ -62,9 +62,9 @@ ns for spill-list {
         if fixlist.try-push-n(ts) is :ok .{}
         else {
           // Correctness: The only error case is the out of capacity one
-          let list = _spill(fixlist);
+          let list = _spill(fixlist)
   
-          list.append-span(ts);
+          list.append-span(ts)
   
           self <- :spilled list
         }
@@ -82,13 +82,13 @@ impl[t, n: static size] print for spill-list[t, n] {
   fn print-to[w: writer](self, w) {
      self is {
        :inline fix -> {
-         w.string("inline ");
+         w.string("inline ")
        },
        :spilled list -> {
-         w.string("spilled ");
+         w.string("spilled ")
        }
-     };
-     self.len().print-to(w);
+     }
+     self.len().print-to(w)
   }
 }
 

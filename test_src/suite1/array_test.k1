@@ -1,4 +1,4 @@
-ns array_test;
+ns array_test
 
 type thing = {
   data: array[u8, 1024],
@@ -6,67 +6,67 @@ type thing = {
 }
 
 fn test-literals() {
-  let array: array[bool, 3] = [false, true, true];
-  let buffer: buffer[bool] = [false, true, true];
-  let list: list[bool] = [false, true, true];
-  assert-equals((&array).as-buffer(), buffer);
-  assert-equals(list.as-buffer(), buffer);
+  let array: array[bool, 3] = [false, true, true]
+  let buffer: buffer[bool] = [false, true, true]
+  let list: list[bool] = [false, true, true]
+  assert-equals((&array).as-buffer(), buffer)
+  assert-equals(list.as-buffer(), buffer)
 }
 
 fn test-filled() {
-  let context alloc: mem/alloc-mode = :tmp;
-  let buffer: buffer[u8] = buffer/filled-in(size = 64, value = 3);
-  let array: *array[u8, 64] = array/filled-in(3, 64);
-  let list: list[u8] = list/filled-in(size = 64, value = 3);
-  assert-equals(buffer.len, 64);
-  assert-equals(array.len(), 64);
-  assert-equals(list.len, 64);
+  let context alloc: mem/alloc-mode = :tmp
+  let buffer: buffer[u8] = buffer/filled-in(size = 64, value = 3)
+  let array: *array[u8, 64] = array/filled-in(3, 64)
+  let list: list[u8] = list/filled-in(size = 64, value = 3)
+  assert-equals(buffer.len, 64)
+  assert-equals(array.len(), 64)
+  assert-equals(list.len, 64)
   for buffer {
-    assert-equals(buffer.get(it-index), 3);
-    assert-equals(list.get(it-index), 3);
-    assert-equals(array.get(it-index), 3);
+    assert-equals(buffer.get(it-index), 3)
+    assert-equals(list.get(it-index), 3)
+    assert-equals(array.get(it-index), 3)
   }
 }
 
 fn test-array() {
-  let context alloc: mem/alloc-mode = :tmp;
-  let ls: list[u8] = list/filled-in(size = 10, value = 3);
+  let context alloc: mem/alloc-mode = :tmp
+  let ls: list[u8] = list/filled-in(size = 10, value = 3)
 
-  let a: *mut array[u8, 10] = list/to-array(ls, 10);
+  let a: *mut array[u8, 10] = list/to-array(ls, 10)
   for core/int-range/up-to(a.len()) {
-    if it % 2 == 0 { a.get(it) <- 1 };
-  };
+    if it % 2 == 0 { a.get(it) <- 1 }
+  }
   for core/int-range/up-to(a.len()) {
     if it % 2 == 0 {
-      assert-equals(a.get(it), 1);
+      assert-equals(a.get(it), 1)
     } else {
-      assert-equals(a.get(it), 3);
+      assert-equals(a.get(it), 3)
     }
-  };
+  }
   for a {
     if it-index % 2 == 0 {
-      assert-equals(it, 1);
+      assert-equals(it, 1)
     } else {
-      assert-equals(it, 3);
+      assert-equals(it, 3)
     }
   }
 
 }
 
 fn test() {
-  assert-equals(types/size[thing](), 9216);
+  assert-equals(types/size[thing](), 9216)
 
-  test-array();
+  test-array()
 
-  test-literals();
-  test-filled();
+  test-literals()
+  test-filled()
 
-  let array: array[f32, 10] = mem/zeroed();
-  assert(test-compile(array.get(11)) is :some _);
-  array.set(0, 3.14);
-  let buf = buffer/wrap-array(&array);
-  assert(buf.get(0) == array.get(0));
-  assert-equals(buf.get(0), array.get(0));
+  let array: array[f32, 10] = mem/zeroed()
+  assert(test-compile(array.get(11)) is :some _)
+  array.set(0, 3.14)
+  let buf = buffer/wrap-array(&array)
+  assert(buf.get(0) == array.get(0))
+  assert-equals(buf.get(0), array.get(0))
 
   .{}
 }

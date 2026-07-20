@@ -1,4 +1,4 @@
-ns math;
+ns math
 
 ability exp {
   fn exp(self): self

@@ -11,76 +11,76 @@ L82`
 
 fn day1(input: string) {
 
-  let commands = input.split-by-char('\n');
+  let commands = input.split-by-char('\n')
 
   //println(input);
 
-  let pos = 50;
+  let pos = 50
   // Part 2 count
-  let mzs = 0;
+  let mzs = 0
   // Part 1 count
-  let szs = 0;
+  let szs = 0
   for commands {
-    let negative = it.get(0) == 'L';
-    let magnitude-str = it.drop(1);
-    let is-zero = pos == 0;
-    let _last-pos = pos;
-    require string/parse-base10(magnitude-str) is :some magnitude else { return() };
+    let negative = it.get(0) == 'L'
+    let magnitude-str = it.drop(1)
+    let is-zero = pos == 0
+    let _last-pos = pos
+    require string/parse-base10(magnitude-str) is :some magnitude else { return }
 
-    let change = if negative { magnitude.as[int] * -1 } else magnitude.as[int];
+    let change = if negative { magnitude.as[int] * -1 } else magnitude.as[int]
 
-    pos := pos + change;
+    pos := pos + change
     
-    if (pos < 0 and not is-zero) { mzs := mzs + 1 };
-    mzs := mzs + (pos.abs() / 100);
-    if (pos == 0) { mzs := mzs + 1 };
+    if (pos < 0 and not is-zero) { mzs := mzs + 1 }
+    mzs := mzs + (pos.abs() / 100)
+    if (pos == 0) { mzs := mzs + 1 }
 
-    pos := ((pos % 100) + 100) % 100;
+    pos := ((pos % 100) + 100) % 100
 
-    if (pos == 0) { szs := szs + 1 };
-  };
+    if (pos == 0) { szs := szs + 1 }
+  }
 
 
-  println("Day 1 part Z: {szs}");
-  println("Day 1 part CLICK: {mzs}");
+  println("Day 1 part Z: {szs}")
+  println("Day 1 part CLICK: {mzs}")
 }
 
 fn brute(input: string) {
-  let commands = input.split-by-char('\n');
+  let commands = input.split-by-char('\n')
 
-  let pos = 50;
-  let zeroes = 0;
+  let pos = 50
+  let zeroes = 0
   for commands {
-    let negative = it.get(0) == 'L';
-    let magnitude-str = it.drop(1);
-    require string/parse-base10(magnitude-str) is :some magnitude else { return() };
-    let m = magnitude.as[int];
+    let negative = it.get(0) == 'L'
+    let magnitude-str = it.drop(1)
+    require string/parse-base10(magnitude-str) is :some magnitude else { return }
+    let m = magnitude.as[int]
     while m > 0 {
-      if negative { pos := pos - 1 } else { pos := pos + 1 };
-      if pos < 0 { pos := pos + 100 };
-      if pos > 99 { pos := pos - 100 };
+      if negative { pos := pos - 1 } else { pos := pos + 1 }
+      if pos < 0 { pos := pos + 100 }
+      if pos > 99 { pos := pos - 100 }
       if pos == 0 {
         zeroes := zeroes + 1
-      };
+      }
 
-      m := m - 1;
-    };
+      m := m - 1
+    }
 
     
-  };
-  println("Zeroes: {zeroes}");
+  }
+  println("Zeroes: {zeroes}")
 }
 
 let input: string = core/files/read-to-string(context :tmp)("day1_input.txt")
 
 fn main(): i32 {
-  println("Hello, AoC 2025!");
+  println("Hello, AoC 2025!")
   //#static brute(input);
   //#static day1(input);
   //brute(input);
   //day1(input);
 
-  day2/day2(part = 2, input = day2/input);
+  day2/day2(part = 2, input = day2/input)
 
   //day3/part1(day3/input);
   //day3/part2(day3/input);

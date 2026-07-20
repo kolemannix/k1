@@ -1,4 +1,4 @@
-ns ns_collision;
+ns ns_collision
 
 ns baz {
   ns bazi {
@@ -11,6 +11,6 @@ ns bazi {
 }
 
 fn test() {
-  assert(baz/bazi/name() == "baz/bazi");
-  assert(bazi/name() == "bazi");
+  assert(baz/bazi/name() == "baz/bazi")
+  assert(bazi/name() == "bazi")
 }

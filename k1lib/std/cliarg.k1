@@ -1,33 +1,33 @@
 // a utility for parsing command line arguments into a given
 // struct type. Also generates a help string
 
-ns sys;
+ns sys
 
 fn parse-next(i: *mut size, args: span[string]): ?string {
-  let r = args.get-opt(i + 1);
-  i <- i.* + 2;
+  let r = args.get-opt(i + 1)
+  i <- i.* + 2
   r
 }
 fn get-arg-kind(type-id: u64): either { string, list-string, opt-string } {
   if      type-id == types/type-id[string]       :string
   else if type-id == types/type-id[list[string]] :list-string
   else if type-id == types/type-id[opt[string]]  :opt-string
-  else crash("Unsupported arg type: {types/type-id-name(type-id)}. Must be string, ?string, or list[string] for now");
+  else crash("Unsupported arg type: {types/type-id-name(type-id)}. Must be string, ?string, or list[string] for now")
 }
 
 fn gen-help-text[t](summary: string): string {
-  let s = types/schema[t] is { :struct s -> s, _ -> crash("need a struct") };
-  let sb = string-builder/new();
-  if summary.non-empty() sb.line(summary);
-  writelnf(sb, `supported command line arguments`);
+  let s = types/schema[t] is { :struct s -> s, _ -> crash("need a struct") }
+  let sb = string-builder/new()
+  if summary.non-empty() sb.line(summary)
+  writelnf(sb, `supported command line arguments`)
   for s.fields {
     get-arg-kind(it.type-id) is {
       :string -> writelnf(sb, `  -{it.name} - required. (/-{it.name} to comment out)`),
       :opt-string -> writelnf(sb, `  -{it.name} - optional. (/-{it.name} to comment out)`),
       :list-string -> writelnf(sb, `  -{it.name} - list. (/-{it.name} to comment out)`),
-    };
-  };
-  sb.build-tmp();
+    }
+  }
+  sb.build-tmp()
 }
 
 // fn make-parse-args-fn(args-type-id: u64, customizations: span[{ name: string, settings: {} }]): string {
@@ -37,13 +37,13 @@ fn gen-help-text[t](summary: string): string {
 fn parse-args[t](args: span[string], customizations: span[{ name: string, settings: {} }]): result[t, string] {
   // Note: it would be better to move these two lines inside the meta call
   // But this exercises the compiler better
-  let _t-id = #static types/type-id[t];
-  let _s = #static types/schema[t] is { :struct s -> s, _ -> crash("need a struct") };
+  let _t-id = #static types/type-id[t]
+  let _s = #static types/schema[t] is { :struct s -> s, _ -> crash("need a struct") }
 
   let result: result[t, string] = $(_s, _t-id) {
-    let args-type-id = _t-id;
-    let s: types/type-schema:struct = _s.from-static();
-    let code = string-builder/new();
+    let args-type-id = _t-id
+    let s: types/type-schema:struct = _s.from-static()
+    let code = string-builder/new()
 
     // For each field in the target type, create a local variable to house our parsed data
     for s.fields {
@@ -51,49 +51,49 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
         :string      -> writelnf(code, "let {it.name}-val: ?type-from-id({args-type-id}).{it.name} = :none;"),
         :opt-string  -> writelnf(code, "let {it.name}-val: type-from-id({args-type-id}).{it.name} = :none;"),
         :list-string -> writelnf(code, "let {it.name}-val: type-from-id({args-type-id}).{it.name} = list/empty();"),
-      };
-    };
+      }
+    }
 
     // Initialize a loop through the args
-    writelnf(code, `let i = 1;`);
-    writelnf(code, `while i < args.len() \{`);
-    writelnf(code, `  let cur = args.get(i);`);
-    writelnf(code, `  cur is \{`);
+    writelnf(code, `let i = 1;`)
+    writelnf(code, `while i < args.len() \{`)
+    writelnf(code, `  let cur = args.get(i);`)
+    writelnf(code, `  cur is \{`)
 
     // Parse the argument using a match - generate a case or two for each arg field
     // The match arms update the locals
     for s.fields {
       get-arg-kind(it.type-id) is {
         :string or :opt-string -> {
-          writelnf(code, `    "-{it.name}" -> \{ if parse-next(&i, args) is :some next \{ {it.name}-val := :some next } },`);
-          writelnf(code, `    "/{it.name}" -> \{ if parse-next(&i, args) is :some(next) .\{} },`);
+          writelnf(code, `    "-{it.name}" -> \{ if parse-next(&i, args) is :some next \{ {it.name}-val := :some next } },`)
+          writelnf(code, `    "/{it.name}" -> \{ if parse-next(&i, args) is :some(next) .\{} },`)
         },
         :list-string -> {
-          writelnf(code, `    "+{it.name}" -> \{ if parse-next(&i, args) is :some next \{ {it.name}-val.push(next) } },`);
+          writelnf(code, `    "+{it.name}" -> \{ if parse-next(&i, args) is :some next \{ {it.name}-val.push(next) } },`)
         },
-      };
-    };
-    code.line(`    _ -> crash("Unrecognized arg \{cur}")`);
-    code.line(`  }`);
-    code.line(`};`);
+      }
+    }
+    code.line(`    _ -> crash("Unrecognized arg \{cur}")`)
+    code.line(`  }`)
+    code.line(`};`)
 
     // validate
     for s.fields {
       get-arg-kind(it.type-id) is {
-        :string                     -> writelnf(code, `require {it.name}-val is :some {it.name}-out else return(:err "{it.name} is missing");`),
+        :string                     -> writelnf(code, `require {it.name}-val is :some {it.name}-out else return :err "{it.name} is missing";`),
         :list-string or :opt-string -> writelnf(code, "let {it.name}-out = {it.name}-val;"),
       }
-    };
+    }
 
     // Construct the final output struct
-    writelnf(code, ":ok(.\{");
+    writelnf(code, ":ok(.\{")
     for s.fields {
       writelnf(code, "{it.name} = {it.name}-out,")
-    };
-    writelnf(code, "})");
+    }
+    writelnf(code, "})")
 
-    code.build-tmp();
-  };
+    code.build-tmp()
+  }
 
   result
 }
@@ -102,7 +102,7 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
 // fn main(argc: i32, argv: ptr): i32 {
 //   let args-span: span[string] = core/sys/parse-main-args(argc, argv);
 //   let args: args = parse-args[args](args-span, customizations = [.{ name = "name", settings = .{} }]) is {
-//     :err msg -> { println(msg); println(gen-help-text[args]("welcome to the derived args parser test program.")); return(1) },
+//     :err msg -> { println(msg); println(gen-help-text[args]("welcome to the derived args parser test program.")); return 1 },
 //     :ok args -> args,
 //   };
 //   println("args result: {args}");

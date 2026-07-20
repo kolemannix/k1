@@ -14,7 +14,7 @@ A typical test file starts with a namespace, then declarations, then a `test`
 function:
 
 ```rust
-ns example-test;
+ns example-test
 
 type point = { x: int, y: int }
 
@@ -23,18 +23,18 @@ fn origin(): point {
 }
 
 fn test() {
-  let p = origin();
-  assert-equals(p.x, 0);
+  let p = origin()
+  assert-equals(p.x, 0)
 }
 ```
 
-Namespaces may use semicolon form:
+A whole-file namespace is declared on its own line:
 
 ```rust
-ns format-test;
+ns format-test
 ```
 
-or block form:
+or with block form:
 
 ```rust
 ns lambdas {
@@ -45,7 +45,7 @@ ns lambdas {
 Call across namespaces with `/`:
 
 ```rust
-format-test/test();
+format-test/test()
 core/types/type-id[int]
 ```
 
@@ -58,7 +58,7 @@ K1 code uses kebab-case for everything: namespaces, functions, types, fields,
 and enum variants. Constants are SCREAMING_SNAKE.
 
 ```rust
-ns allocator-test;
+ns allocator-test
 
 type http-request = { status-code: int }
 
@@ -68,7 +68,7 @@ fn parse-request(): http-request {
 ```
 
 Prefer short, concrete names in tests. A file named `range_test.k1` may still use
-`ns range-test;` in new code.
+`ns range-test` in new code.
 
 ## Functions
 
@@ -81,17 +81,18 @@ fn add-one(x: int): int {
 }
 
 fn log-message(message: string) {
-  println(message);
+  println(message)
 }
 ```
 
-Use `return(value)` for early returns:
+Use `return value` for early returns; the payload is a full expression, and a
+bare `return` returns unit:
 
 ```rust
 fn choose(flag: bool): int {
   if flag {
-    return(1)
-  };
+    return 1
+  }
   0
 }
 ```
@@ -107,7 +108,7 @@ fn unwrap-box[T](b: box[box[T]]): T {
 Use `_` at call sites when a type argument should be inferred:
 
 ```rust
-takes-poly-au-pair[int, _](value);
+takes-poly-au-pair[int, _](value)
 ```
 
 See `test_src/suite1/control_flow.k1` and
@@ -119,20 +120,46 @@ Blocks are expressions. The last expression is the block value:
 
 ```rust
 let answer = {
-  let base = 40;
+  let base = 40
   base + 2
-};
+}
 ```
 
-Semicolons separate statements and are required; the parser does not use
-newlines to separate expressions. A block with no meaningful value yields `.{}`,
-the empty/unit value (the unit *type* is spelled `{}`):
+A line break ends a statement. `;` also ends one, for putting several
+statements on one line (`let a = 1; let b = 2`); it is never required at end
+of line.
+
+An expression continues across a line break when the next line starts with a
+token that could not begin a new statement: a binary operator (`and`, `or`,
+`||`, `==`, `+`, `?`, comparisons), `is`, `else`, or `.` followed by a name
+(leading-dot method chains):
+
+```rust
+let result = [1, 2, 3]
+  || map(fn x. x + 1)
+  || filter(fn x. x % 2 == 0)
+
+let n = "hello"
+  .len()
+  .as[int]
+```
+
+Tokens that can begin a statement end the previous one instead, even where a
+binary reading exists: `-` (negative literal), `&` (address-of), `(`, `[`,
+and string literals. To continue with one of those, put the operator at the
+end of the previous line (`let x = a -` ... `b`). Call parens, type-arg
+brackets, and juxtaposed string concatenation bind only on the same line.
+Payloads never cross a line break: `return`, `break`, or a `:variant` at end
+of line is bare.
+
+A block with no meaningful value yields `.{}`, the empty/unit value (the unit
+*type* is spelled `{}`):
 
 ```rust
 let result: {} = if true {
-  println("done");
-};
-assert(result == .{});
+  println("done")
+}
+assert(result == .{})
 ```
 
 K1 code commonly ends test helpers with `.{}` when the intent is "return unit".
@@ -142,8 +169,8 @@ K1 code commonly ends test helpers with `.{}` when the intent is "return unit".
 Use `let` for local bindings:
 
 ```rust
-let count = 0;
-count := count + 1;
+let count = 0
+count := count + 1
 ```
 
 Use `:=` to reassign a local variable.
@@ -151,9 +178,9 @@ Use `:=` to reassign a local variable.
 Use `let*` when you need a stack reference:
 
 ```rust
-let* counter = 0;
-counter <- counter.* + 1;
-assert-equals(counter.*, 1);
+let* counter = 0
+counter <- counter.* + 1
+assert-equals(counter.*, 1)
 ```
 
 `let*` is deprecated, but it still appears in tests and existing code. Use `.*`
@@ -161,9 +188,9 @@ to read through a reference, and `<-` to write through it. Field access often
 auto-dereferences when the target type makes that clear:
 
 ```rust
-let* item = .{ value = 41 };
-item.value <- 42;
-assert-equals(item.value, 42);
+let* item = .{ value = 41 }
+item.value <- 42
+assert-equals(item.value, 42)
 ```
 
 See `test_src/suite1/assign.k1`, `test_src/suite1/pointer.k1`,
@@ -192,15 +219,15 @@ f64
 Integer literals can be annotated inline:
 
 ```rust
-let byte = 10: u8;
-let signed = -3i8;
+let byte = 10: u8
+let signed = -3i8
 ```
 
 Type assertions and casts use `:` and `.as[...]`:
 
 ```rust
-let three = 3: i32;
-let raw = ptr-value.as[size];
+let three = 3: i32
+let raw = ptr-value.as[size]
 ```
 
 ## Structs
@@ -211,8 +238,8 @@ nominal types can be created for structs, enums, and opaque types:
 ```rust
 type point = { x: int, y: int }
 
-let p: point = .{ x = 1, y = 2 };
-assert-equals(p.x, 1);
+let p: point = .{ x = 1, y = 2 }
+assert-equals(p.x, 1)
 ```
 
 Struct *values* are marked by a leading `.{` and use `=` (`.{ x = 1 }`), while
@@ -242,14 +269,14 @@ fn area(rect: { width: int, height: int }): int {
 Field shorthand is supported when a local has the same name:
 
 ```rust
-let width = 50;
-let rect = .{ width, height = 20 };
+let width = 50
+let rect = .{ width, height = 20 }
 ```
 
 Use `.with(...)` to copy a struct with selected fields changed:
 
 ```rust
-let next = current.with(.{ count = current.count + 1 });
+let next = current.with(.{ count = current.count + 1 })
 ```
 
 Attach methods to a type with `ns for`:
@@ -259,7 +286,7 @@ type counter = { value: int }
 
 ns for counter {
   fn inc(self: *mut counter) {
-    self.value <- self.value + 1;
+    self.value <- self.value + 1
   }
 }
 ```
@@ -281,12 +308,12 @@ ReferenceThrough
 The source syntax is intentionally small:
 
 ```rust
-let p = .{ x = 1, y = 2 };
-let x: int = p.x;
+let p = .{ x = 1, y = 2 }
+let x: int = p.x
 
-let* p-ref = .{ x = 1, y = 2 };
-let x-value: int = p-ref.x;
-let x-ref: *mut int = p-ref.x*;
+let* p-ref = .{ x = 1, y = 2 }
+let x-value: int = p-ref.x
+let x-ref: *mut int = p-ref.x*
 ```
 
 The three cases are:
@@ -306,9 +333,9 @@ to the field."
 Use reference-through access when mutating a field through a struct reference:
 
 ```rust
-let* p = .{ x = 1 };
-p.x* <- 2;
-assert-equals(p.x, 2);
+let* p = .{ x = 1 }
+p.x* <- 2
+assert-equals(p.x, 2)
 ```
 
 The same trailing `*` idea applies to aggregate-like access elsewhere. Arrays
@@ -331,17 +358,17 @@ Payload-less enums expose their scalar value through `.value` and through the
 ```rust
 type color = either(u8) { red, green, blue }
 
-let c: color = :red;
-assert(c is :red);
-assert-equals(color:green.value, 1);
-assert-equals(c.enum-value(), 0);
+let c: color = :red
+assert(c is :red)
+assert-equals(color:green.value, 1)
+assert-equals(c.enum-value(), 0)
 ```
 
 Enum tags may be explicit:
 
 ```rust
 type status = either { ok = 10, missing = 20 }
-assert-equals(status:missing.value, 20);
+assert-equals(status:missing.value, 20)
 ```
 
 Payload-carrying sums expose their active tag through `.tag`, and generated
@@ -350,32 +377,33 @@ variant helpers such as `.as-ok()` return an optional payload:
 ```rust
 type parse-result[T] = either { ok(T), err(string) }
 
-let result: parse-result[int] = :ok(42);
-assert-equals(result.tag, 0);
+let result: parse-result[int] = :ok(42)
+assert-equals(result.tag, 0)
 
 if result is :ok(value) {
-  assert-equals(value, 42);
+  assert-equals(value, 42)
 } else {
-  crash("expected ok");
+  crash("expected ok")
 }
 
-assert-equals(result.as-ok().!, 42);
+assert-equals(result.as-ok().!, 42)
 ```
 
 Payload parentheses are optional in both constructors and patterns — the
-'quiet' form. The payload must start with an identifier, literal, list
-literal, nonempty struct literal (`.{ x = 1 }`), or another `:variant`;
-anything else (an operator, a lambda, an empty `.{}`) needs the parenthesized
-form, so a trailing variant never captures a following block or a bare unit:
+'quiet' form. The payload must start on the same line, with an identifier,
+literal, list literal, nonempty struct literal (`.{ x = 1 }`), or another
+`:variant`; anything else (an operator, a lambda, an empty `.{}`, a line
+break) needs the parenthesized form, so a trailing variant never captures a
+following block or a bare unit:
 
 ```rust
-let result: parse-result[int] = :ok 42;
+let result: parse-result[int] = :ok 42
 
 if result is :ok value {
-  assert-equals(value, 42);
-};
+  assert-equals(value, 42)
+}
 
-require result is :ok v else crash("expected ok");
+require result is :ok v else crash("expected ok")
 ```
 
 A quiet payload binds one postfix expression: `:ok f(x).y` means
@@ -393,15 +421,15 @@ reference-through rule as struct fields. Ask for the value when you want the
 payload value; use trailing `*` when you want a reference to the variant's data:
 
 ```rust
-let* result-ref: *mut parse-result[int] = :ok(42);
+let* result-ref: *mut parse-result[int] = :ok(42)
 
 if result-ref is :ok(ok-ref)* {
-  ok-ref <- 100;
+  ok-ref <- 100
 } else {
-  crash("expected ok");
+  crash("expected ok")
 }
 
-assert-equals(result-ref.as-ok().!, 100);
+assert-equals(result-ref.as-ok().!, 100)
 ```
 
 The compiler represents sum payload access with the same `FieldAccessKind` enum
@@ -442,10 +470,10 @@ See `test_src/suite1/enum_basic.k1`, `test_src/suite1/sum_basic.k1`,
 Optional values use `?T`, with `:some(value)` and `:none`:
 
 ```rust
-let maybe-name: ?string = :some("k1");
+let maybe-name: ?string = :some("k1")
 
 if maybe-name is :some(name) {
-  assert-equals(name, "k1");
+  assert-equals(name, "k1")
 }
 ```
 
@@ -457,7 +485,7 @@ The postfix `.!` unwraps an optional-like value when the code expects it to be
 present. It is good style when the invariant is clear:
 
 ```rust
-assert-equals(maybe-name.!, "k1");
+assert-equals(maybe-name.!, "k1")
 ```
 
 This syntax is user-accessible through abilities rather than hardcoded as a
@@ -467,7 +495,7 @@ for the relevant ability before assuming a parser or compiler intrinsic.
 The `?` operator provides a fallback for optionals:
 
 ```rust
-let value = maybe-int ? 42;
+let value = maybe-int ? 42
 ```
 
 Results are sums with `:ok` and `:err`. The `.try` form propagates errors
@@ -475,7 +503,7 @@ through the active `try` ability:
 
 ```rust
 fn run(): result[int, string] {
-  let value = can-fail().try;
+  let value = can-fail().try
   :ok(value + 1)
 }
 ```
@@ -487,16 +515,16 @@ See `test_src/suite1/optionals.k1` and `test_src/suite1/try_test.k1`.
 `if` is an expression:
 
 ```rust
-let n = if flag 1 else 2;
+let n = if flag 1 else 2
 ```
 
 Use `is` for pattern checks and bindings:
 
 ```rust
 if value is :some(x) and x > 0 {
-  assert(x > 0);
+  assert(x > 0)
 } else {
-  assert(false);
+  assert(false)
 }
 ```
 
@@ -519,8 +547,8 @@ of an `and` chain. An `or` breaks that property.
 ```rust
 require value is :some(x) else {
   crash("missing value")
-};
-assert(x > 0);
+}
+assert(x > 0)
 ```
 
 See `test_src/suite1/matching_if.k1`, `test_src/suite1/match_fails.k1`,
@@ -533,16 +561,16 @@ See `test_src/suite1/matching_if.k1`, `test_src/suite1/match_fails.k1`,
 
 ```rust
 while i < 10 {
-  i := i + 1;
-};
+  i := i + 1
+}
 ```
 
-`loop` can yield a value through `break(value)`:
+`loop` can yield a value through `break value`; a bare `break` exits with unit:
 
 ```rust
 let found: int = loop {
-  break(42)
-};
+  break 42
+}
 ```
 
 `for` loops iterate over iterable values. The loop body can use `it` and
@@ -550,14 +578,14 @@ let found: int = loop {
 
 ```rust
 for values {
-  println("{it-index}: {it}");
+  println("{it-index}: {it}")
 }
 ```
 
 `defer` runs when leaving the current scope, including early returns:
 
 ```rust
-defer cleanup();
+defer cleanup()
 ```
 
 See `test_src/suite1/while.k1`, `test_src/suite1/control_flow.k1`,
@@ -568,9 +596,9 @@ See `test_src/suite1/while.k1`, `test_src/suite1/control_flow.k1`,
 Array, buffer, list, and span types are written with square brackets:
 
 ```rust
-let fixed: array[bool, 3] = [false, true, true];
-let dynamic: list[bool] = [false, true, true];
-let view: span[bool] = dynamic.as-span();
+let fixed: array[bool, 3] = [false, true, true]
+let dynamic: list[bool] = [false, true, true]
+let view: span[bool] = dynamic.as-span()
 ```
 
 Arrays have a compile-time length in their type. Buffers, lists, and spans are
@@ -598,19 +626,19 @@ See `test_src/suite1/array_test.k1`, `test_src/suite1/list_test.k1`,
 Lambda forms include typed parameters:
 
 ```rust
-let add-one = fn(x: int) x + 1;
+let add-one = fn(x: int) x + 1
 ```
 
 inferred parameters:
 
 ```rust
-let add-one = fn x. x + 1;
+let add-one = fn x. x + 1
 ```
 
 and nullary thunks:
 
 ```rust
-let thunk = fn. { println("later") };
+let thunk = fn. { println("later") }
 ```
 
 Function parameters can accept static function values, closure-like values, or
@@ -633,7 +661,7 @@ The pipe operator `||` passes a value through functions:
 ```rust
 let result = [1,2,3]
   || map(fn x. x + 1)
-  || filter(fn x. x % 2 == 0);
+  || filter(fn x. x % 2 == 0)
 ```
 
 See `test_src/suite1/lambdas.k1` and `test_src/suite1/pipe.k1`.
@@ -667,13 +695,13 @@ fn show[T: print](value: T): string {
 Qualified ability calls use `/`:
 
 ```rust
-print/print-to(value, writer);
+print/print-to(value, writer)
 ```
 
 When multiple impls could apply, tests also use explicit ability/type selection:
 
 ```rust
-some-ability@(some-type)/function-name();
+some-ability@(some-type)/function-name()
 ```
 
 See `test_src/suite1/ability.k1`,
@@ -690,8 +718,8 @@ use core/types/type-id
 use core/libc/files/SEEK_END as seek-end
 
 fn test() {
-  use core/string as str;
-  let hello: str = "hello";
+  use core/string as str
+  let hello: str = "hello"
 }
 ```
 
@@ -706,13 +734,13 @@ See `test_src/suite1/use_test.k1`.
 ```rust
 let answer: 42 = #static {
   40 + 2
-};
+}
 ```
 
 Static values can carry literal types:
 
 ```rust
-let greeting: "hello" = #static "hello";
+let greeting: "hello" = #static "hello"
 ```
 
 `#if` conditionally includes code at compile time:
@@ -732,8 +760,8 @@ See `test_src/suite1/static_run.k1`,
 String interpolation is supported inside string literals and formatting helpers:
 
 ```rust
-let name = "k1";
-assert-equals("hello {name}", "hello k1");
+let name = "k1"
+assert-equals("hello {name}", "hello k1")
 ```
 
 Escape a literal `{` as `\{`; `}` needs no escape.
@@ -743,23 +771,23 @@ ability. The first argument is the writer, the second is the format string, and
 the optional third argument supplies format values:
 
 ```rust
-let* w = string-builder/new();
-writef(w, "hello {}", 42);
-writef(w, " {name}", .{ name = "k1" });
+let* w = string-builder/new()
+writef(w, "hello {}", 42)
+writef(w, " {name}", .{ name = "k1" })
 ```
 
 Use `writelnf` the same way when you want a trailing newline:
 
 ```rust
-writelnf(w, "status: {}", 200);
+writelnf(w, "status: {}", 200)
 ```
 
 Use `stringf` to build and return a formatted string. It takes the format string
 first and an optional values argument second:
 
 ```rust
-let s = stringf("hello {name}");
-let dated = stringf("{yyyy}-{mm}-{dd}", .{ yyyy = 2026, mm = 6, dd = 25 });
+let s = stringf("hello {name}")
+let dated = stringf("{yyyy}-{mm}-{dd}", .{ yyyy = 2026, mm = 6, dd = 25 })
 ```
 
 Bare `{}` placeholders consume the value argument directly. Named placeholders
@@ -767,8 +795,8 @@ such as `{name}` read fields from the values struct. Interpolated expressions ca
 also refer to locals in scope:
 
 ```rust
-let place = "Budapest";
-assert-equals(stringf("hello {place}"), "hello Budapest");
+let place = "Budapest"
+assert-equals(stringf("hello {place}"), "hello Budapest")
 ```
 
 `writef`, `writelnf`, and `stringf` are special syntax hooks checked by the
@@ -780,7 +808,7 @@ Raw strings use backticks:
 ```rust
 let raw = `Hello,
 
-  "world"`;
+  "world"`
 ```
 
 See `test_src/suite1/format.k1` and
@@ -793,10 +821,10 @@ Language regression tests live under `test_src`.
 Use this shape for a new positive test:
 
 ```rust
-ns feature-test;
+ns feature-test
 
 fn test() {
-  assert-equals(1 + 1, 2);
+  assert-equals(1 + 1, 2)
 }
 ```
 
@@ -805,7 +833,7 @@ Then add it to `test_src/suite1/main.k1` if it belongs in suite1.
 Use `test-compile(...)` when a snippet should fail to compile:
 
 ```rust
-assert(test-compile(bad-expression()).is-some());
+assert(test-compile(bad-expression()).is-some())
 ```
 
 Use `assert`, `assert-equals`, and `core/assert-not-equals` for expectations.

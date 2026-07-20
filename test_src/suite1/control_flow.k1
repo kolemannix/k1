@@ -1,37 +1,37 @@
-ns control_flow;
+ns control_flow
 
 fn if-basic(): int {
-  let cond: bool = false;
-  let result: int = if cond 42 else 1337;
-  assert(result == 1337);
+  let cond: bool = false
+  let result: int = if cond 42 else 1337
+  assert(result == 1337)
   0
 }
 
 fn if-no-else(): int {
   // Gets empty type
-  let x = 0;
+  let x = 0
   let expr: {} = if true {
-    x := 42;
-  };
-  assert(x == 42);
-  assert(expr == .{});
+    x := 42
+  }
+  assert(x == 42)
+  assert(expr == .{})
 
   // Even if one branch is 'never'
   let _expr: {} = if false {
-    crash("never happens");
-  };
+    crash("never happens")
+  }
   0
 }
 
 fn return-simple(): bool {
-  return(true)
+  return true
 }
 
 fn rand(): bool { true }
 fn return-from-if(): int {
   let _x: {} = if rand() {
-    return(1)
-  };
+    return 1
+  }
 
   0
 }
@@ -40,48 +40,48 @@ fn loop-break() {
   // break with scalar
   let x: int = loop {
     let _inner: int = if true {
-      break(3)
+      break 3
     } else 4
     
-  };
-  assert-equals(x, 3);
+  }
+  assert-equals(x, 3)
 
   // break with aggregate
   let y: string = loop {
-    break("asdf")
-  };
+    break "asdf"
+  }
   assert-equals(y, "asdf")
 }
 
 fn loop-nested() {
   let result = loop {
-    break(loop { break(10) })
-  };
+    break loop { break(10) }
+  }
   assert-equals(result, 10)
 }
 
 fn loop-false() {
   let x = loop {
-    break(3);
-  };
+    break 3
+  }
   assert(x == 3)
 }
 
 fn do-crash(): bool {
-  crash("should not run");
+  crash("should not run")
 }
 
 fn test() {
 
-  if-basic();
-  if-no-else();
-  assert(return-simple());
-  assert(return-from-if() == 1);
+  if-basic()
+  if-no-else()
+  assert(return-simple())
+  assert(return-from-if() == 1)
 
   // Short-circuiting is guaranteed
-  if (false and do-crash()) .{};
+  if (false and do-crash()) .{}
 
-  loop-break();
-  loop-nested();
-  loop-false();
+  loop-break()
+  loop-nested()
+  loop-false()
 }

@@ -12,16 +12,16 @@ ns for rc-buffer {
   }
 
   fn retain(self: rc-buffer): rc-buffer {
-    self.inner.count <- self.inner.count + 1;
+    self.inner.count <- self.inner.count + 1
     self
   }
 
   fn release(self: rc-buffer) {
-    let inner = self.inner;
-    inner.count <- inner.count - 1;
+    let inner = self.inner
+    inner.count <- inner.count - 1
     if inner.count == 0 {
-      system-heap.free(inner.bytes.data-ptr(), inner.bytes.len(), 1);
-      system-heap.free-t(inner);
+      system-heap.free(inner.bytes.data-ptr(), inner.bytes.len(), 1)
+      system-heap.free-t(inner)
     }
   }
 

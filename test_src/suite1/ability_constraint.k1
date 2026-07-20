@@ -5,8 +5,8 @@ ns ability_constraint {
   }
   
   fn add[t](a: t, b: t): i32 where t: num, t: show {
-    a.show();
-    b.show();
+    a.show()
+    b.show()
     a.num() + b.num()
   }
   
@@ -15,7 +15,7 @@ ns ability_constraint {
   }
   
   fn test() {
-    assert(add(1, 2) == 3);
+    assert(add(1, 2) == 3)
     .{}
   }
 

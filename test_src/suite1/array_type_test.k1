@@ -1,4 +1,4 @@
-ns array_type_test;
+ns array_type_test
 
 use core/types/type-id-name
 use core/types/type-id
@@ -20,94 +20,94 @@ fn get-array-info[t](): { element-name: string, five-size: size, ten-size: size 
 
 // Generic function with Array parameter type to test substitution
 fn describe-array[t](): string {
-  let schema = types/schema[array[t, 3]];
+  let schema = types/schema[array[t, 3]]
   require schema is :array .{ element-type-id, size } else {
-    return("Failed to get Array schema")
-  };
-  let actual-element-name = type-id-name(element-type-id);
+    return "Failed to get Array schema"
+  }
+  let actual-element-name = type-id-name(element-type-id)
   "array[{actual-element-name}, {size.!}]"
 }
 
 fn test() {
 
   // Basic Array type names
-  assert-equals(types/name[array[i32, 10]], "array[i32, 10]");
-  assert-equals(types/name[array[u64, 5]], "array[u64, 5]");
-  assert-equals(types/name[array[bool, 3]], "array[bool, 3]");
+  assert-equals(types/name[array[i32, 10]], "array[i32, 10]")
+  assert-equals(types/name[array[u64, 5]], "array[u64, 5]")
+  assert-equals(types/name[array[bool, 3]], "array[bool, 3]")
 
   // Array type schemas
-  let i32-array-schema = types/schema[array[i32, 10]];
+  let i32-array-schema = types/schema[array[i32, 10]]
   require i32-array-schema is :array .{ element-type-id, size } else {
     crash("Expected Array schema for array[i32, 10]")
-  };
-  assert-equals(type-id-name(element-type-id), "i32");
-  assert-equals(size, :some 10);
+  }
+  assert-equals(type-id-name(element-type-id), "i32")
+  assert-equals(size, :some 10)
 
-  let string-array-schema = types/schema[array[string, 7]];
+  let string-array-schema = types/schema[array[string, 7]]
   require string-array-schema is :array .{ element-type-id, size } else {
     crash("Expected Array schema for array[string, 7]")
-  };
-  assert-equals(type-id-name(element-type-id), "string");
-  assert-equals(size, :some 7);
+  }
+  assert-equals(type-id-name(element-type-id), "string")
+  assert-equals(size, :some 7)
 
   // Layout and size information
   // u8 arrays: 1 byte per element, 1-byte aligned
-  assert-equals(size[array[u8, 4]], 4);
-  assert-equals(align[array[u8, 4]], 1);
+  assert-equals(size[array[u8, 4]], 4)
+  assert-equals(align[array[u8, 4]], 1)
 
   // u32 arrays: 4 bytes per element, 4-byte aligned
-  assert-equals(size[array[u32, 3]], 12);
-  assert-equals(align[array[u32, 3]], 4);
+  assert-equals(size[array[u32, 3]], 12)
+  assert-equals(align[array[u32, 3]], 4)
 
   // u64 arrays: 8 bytes per element, 8-byte aligned
-  assert-equals(size[array[u64, 2]], 16);
-  assert-equals(align[array[u64, 2]], 8);
+  assert-equals(size[array[u64, 2]], 16)
+  assert-equals(align[array[u64, 2]], 8)
 
   // point arrays: point is 8 bytes (2 * i32), 4-byte aligned
-  assert-equals(align[point], 4);
-  assert-equals(size[point], 8);
-  assert-equals(stride[point], 8);
+  assert-equals(align[point], 4)
+  assert-equals(size[point], 8)
+  assert-equals(stride[point], 8)
 
-  assert-equals(size[array[point, 2]], 16);
-  assert-equals(align[array[point, 2]], 4);
+  assert-equals(size[array[point, 2]], 16)
+  assert-equals(align[array[point, 2]], 4)
 
   // Generic functions with Arrays (tests type substitution)
-  let u8-info = get-array-info[u8]();
-  assert-equals(u8-info.element-name, "u8");
-  assert-equals(u8-info.five-size, 5);    // array[u8, 5] = 5 bytes
-  assert-equals(u8-info.ten-size, 10);   // array[u8, 10] = 10 bytes
+  let u8-info = get-array-info[u8]()
+  assert-equals(u8-info.element-name, "u8")
+  assert-equals(u8-info.five-size, 5) // array[u8, 5] = 5 bytes
+  assert-equals(u8-info.ten-size, 10) // array[u8, 10] = 10 bytes
 
-  let i64-info = get-array-info[i64]();
-  assert-equals(i64-info.element-name, "i64");
-  assert-equals(i64-info.five-size, 40);  // array[i64, 5] = 5 * 8 = 40 bytes
-  assert-equals(i64-info.ten-size, 80);  // array[i64, 10] = 10 * 8 = 80 bytes
+  let i64-info = get-array-info[i64]()
+  assert-equals(i64-info.element-name, "i64")
+  assert-equals(i64-info.five-size, 40) // array[i64, 5] = 5 * 8 = 40 bytes
+  assert-equals(i64-info.ten-size, 80) // array[i64, 10] = 10 * 8 = 80 bytes
 
-  let point-info = get-array-info[point]();
-  assert-equals(point-info.element-name, "point");
-  assert-equals(point-info.five-size, 40);  // array[5 x point] = 5 * 8 = 40 bytes
-  assert-equals(point-info.ten-size, 80);  // array[10 x point] = 10 * 8 = 80 bytes
+  let point-info = get-array-info[point]()
+  assert-equals(point-info.element-name, "point")
+  assert-equals(point-info.five-size, 40) // array[5 x point] = 5 * 8 = 40 bytes
+  assert-equals(point-info.ten-size, 80) // array[10 x point] = 10 * 8 = 80 bytes
 
-  assert-equals(describe-array[i32](), "array[i32, 3]");
-  assert-equals(describe-array[string](), "array[string, 3]");
-  assert-equals(describe-array[point](), "array[point, 3]");
+  assert-equals(describe-array[i32](), "array[i32, 3]")
+  assert-equals(describe-array[string](), "array[string, 3]")
+  assert-equals(describe-array[point](), "array[point, 3]")
 
-  let array1-type-id = type-id[array[i32, 5]];
-  let array2-type-id = type-id[array[i32, 5]];
-  let array3-type-id = type-id[array[i32, 6]];
-  let array4-type-id = type-id[array[i64, 5]];
+  let array1-type-id = type-id[array[i32, 5]]
+  let array2-type-id = type-id[array[i32, 5]]
+  let array3-type-id = type-id[array[i32, 6]]
+  let array4-type-id = type-id[array[i64, 5]]
 
-  assert-equals(array1-type-id, array2-type-id);  // Same size, same element type
-  assert(array1-type-id != array3-type-id);     // Different size - keeping assert for != checks
-  assert(array1-type-id != array4-type-id);     // Different element type - keeping assert for != checks
+  assert-equals(array1-type-id, array2-type-id) // Same size, same element type
+  assert(array1-type-id != array3-type-id) // Different size - keeping assert for != checks
+  assert(array1-type-id != array4-type-id) // Different element type - keeping assert for != checks
 
-  assert-equals(size[array[i32, 0]], 0);
-  assert-equals(align[array[i32, 0]], 1);  // Zero-length arrays should have alignment 1
+  assert-equals(size[array[i32, 0]], 0)
+  assert-equals(align[array[i32, 0]], 1) // Zero-length arrays should have alignment 1
 
-  assert-equals(size[array[u8, 1]], 1);
-  assert-equals(align[array[u8, 1]], 1);
+  assert-equals(size[array[u8, 1]], 1)
+  assert-equals(align[array[u8, 1]], 1)
 
-  let t1 = type-id[array[string, 0].element];
-  let t2 = type-id[string];
-  assert-equals(t1, t2);
+  let t1 = type-id[array[string, 0].element]
+  let t2 = type-id[string]
+  assert-equals(t1, t2)
 
 }

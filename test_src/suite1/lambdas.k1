@@ -4,38 +4,38 @@ fn static-add-one(x: int): int { x + 1 }
 fn static-add-two(x: int): int { x + 2 }
 
 fn captures() {
-  let closed-over: int = 3;
+  let closed-over: int = 3
 
   let add = fn(x: int) {
-    let add-one = fn(y: int) y + 1;
-    add-one(x) + closed-over + add-one(closed-over) + (if closed-over == 3 1 else 0);
-  };
+    let add-one = fn(y: int) y + 1
+    add-one(x) + closed-over + add-one(closed-over) + (if closed-over == 3 1 else 0)
+  }
 
-  assert-equals(add(3), 12);
+  assert-equals(add(3), 12)
 }
 
 fn capture-mut() {
-  let counter = 3;
-  let counter = &counter;
+  let counter = 3
+  let counter = &counter
 
   // We have to capture the variable pointed at the address of counter
   // TODO: rework captures
   let my-inc = fn() {
-    counter <- counter.* + 1;
-  };
+    counter <- counter.* + 1
+  }
 
-  my-inc();
-  my-inc();
-  my-inc();
+  my-inc()
+  my-inc()
+  my-inc()
 
-  assert(counter.* == 6);
+  assert(counter.* == 6)
 }
 
 fn closure-return() {
-  let get-three = fn(-> int) { return(3) };
-  let nullary = fn() 4;
-  assert(get-three() == 3);
-  assert(nullary() == 4);
+  let get-three = fn(-> int) { return 3 }
+  let nullary = fn() 4
+  assert(get-three() == 3)
+  assert(nullary() == 4)
 }
 
 fn simple-dyn(thunk: dyn[fn() -> {}]) {
@@ -59,57 +59,57 @@ fn run-things(thunks: list[dyn[fn() -> empty]]) {
 }
 
 fn thunks-test() {
-  let counter = { let x = 0; &x };
+  let counter = { let x = 0; &x }
   let thunks: list[dyn[fn() -> empty]] = [
     fn. { counter <- counter.* + 1 },
     fn. { counter <- counter.* + 1 },
     fn. { counter <- counter.* + 1 },
-  ];
+  ]
 
-  run-things(thunks);
-  assert-equals(counter.*, 3);
+  run-things(thunks)
+  assert-equals(counter.*, 3)
 }
 
 fn test() {
 
-  let static-add-one-var = static-add-one;
-  let static-result = some-fn-param2(5, static-add-one, static-add-one-var);
-  assert-equals(static-result, 6 + 6);
+  let static-add-one-var = static-add-one
+  let static-result = some-fn-param2(5, static-add-one, static-add-one-var)
+  assert-equals(static-result, 6 + 6)
 
-  let lam1-result-ptr = some-fn-param1(5, static-add-one);
-  assert-equals(lam1-result-ptr, 6);
+  let lam1-result-ptr = some-fn-param1(5, static-add-one)
+  assert-equals(lam1-result-ptr, 6)
 
-  let lam1-result-dyn = some-fn-param1(5, static-add-one.to-dyn());
-  assert-equals(lam1-result-dyn, 6);
+  let lam1-result-dyn = some-fn-param1(5, static-add-one.to-dyn())
+  assert-equals(lam1-result-dyn, 6)
 
-  let c1 = .{ x = 3 };
-  let c2 = 2;
+  let c1 = .{ x = 3 }
+  let c2 = 2
 
-  let with-closures = some-fn-param2(5, fn x. x + 1 + c1.x, fn x. x + 2 + c2);
-  assert-equals(with-closures, (5 + 1 + 3) + (5 + 2 + 2));
+  let with-closures = some-fn-param2(5, fn x. x + 1 + c1.x, fn x. x + 2 + c2)
+  assert-equals(with-closures, (5 + 1 + 3) + (5 + 2 + 2))
 
-  let with-generics = some-fn-param-gen(true, fn b. not b, fn b. some(b));
-  assert(with-generics == some(false));
+  let with-generics = some-fn-param-gen(true, fn b. not b, fn b. some(b))
+  assert(with-generics == some(false))
 
-  use list/filter; use list/map;
+  use list/filter; use list/map
   let result = [1,2,3,5,6,7,8]
     || map(fn x. x + 1)
-    || filter(fn x. x % 2 == 0);
-  assert(result == [2, 4, 6, 8]);
+    || filter(fn x. x % 2 == 0)
+  assert(result == [2, 4, 6, 8])
 
-  let x = { let tmp = 10; &tmp };
+  let x = { let tmp = 10; &tmp }
   // Coerce lambdas to lambda objects
-  simple-dyn(fn. {"Thunk! {x.*}"; x <- 11 });
-  assert-equals(x.*, 11);
+  simple-dyn(fn. {"Thunk! {x.*}"; x <- 11 })
+  assert-equals(x.*, 11)
   // Coerce function refs to lambda objects
-  simple-dyn(fn. {"Thunk!"; x <- 12 });
-  assert-equals(x.*, 12);
+  simple-dyn(fn. {"Thunk!"; x <- 12 })
+  assert-equals(x.*, 12)
 
-  thunks-test();
+  thunks-test()
 
-  captures();
-  capture-mut();
-  closure-return();
+  captures()
+  capture-mut()
+  closure-return()
   .{}
 }
 

@@ -1,4 +1,4 @@
-ns type_info;
+ns type_info
 
 use core/types/size
 use core/types/stride
@@ -10,20 +10,20 @@ fn do-it(_foo: bool, _bar: u32): u32 {
 }
 
 fn test-size-of() {
-  assert-equals(size[string], 16);
-  assert-equals(stride[string], 16);
-  assert-equals(align[string], 8);
-  assert-equals(size[{ x: u64, c: u8 }], 9);
-  assert-equals(stride[{ x: u64, c: u8 }], 16);
+  assert-equals(size[string], 16)
+  assert-equals(stride[string], 16)
+  assert-equals(align[string], 8)
+  assert-equals(size[{ x: u64, c: u8 }], 9)
+  assert-equals(stride[{ x: u64, c: u8 }], 16)
 }
 
 fn test-fn-type-info() {
-  assert-equals(type-id[do-it.return](), type-id[u32]());
-  assert-equals(type-id[do-it._foo](), type-id[bool]());
-  assert-equals(type-id[do-it._bar](), type-id[do-it.return]());
+  assert-equals(type-id[do-it.return](), type-id[u32]())
+  assert-equals(type-id[do-it._foo](), type-id[bool]())
+  assert-equals(type-id[do-it._bar](), type-id[do-it.return]())
 }
 
 fn test() {
-  test-size-of();
-  test-fn-type-info();
+  test-size-of()
+  test-fn-type-info()
 }

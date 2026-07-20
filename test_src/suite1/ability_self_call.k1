@@ -1,4 +1,4 @@
-ns ability_self_call;
+ns ability_self_call
 
 ability foo {
   fn a(self)
@@ -15,6 +15,6 @@ impl foo for string {
 }
 
 fn test() {
-  "".a();
-  "".b();
+  "".a()
+  "".b()
 }

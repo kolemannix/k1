@@ -8,65 +8,65 @@ use meta/code-writer
 //           and other things
 fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
   $(fmt-string) {
-    let code = string-builder/new();
-    let args-type-id = types/type-id[args];
-    let schema = types/type-id-schema(args-type-id);
+    let code = string-builder/new()
+    let args-type-id = types/type-id[args]
+    let schema = types/type-id-schema(args-type-id)
     // This naive splitting doesn't work; we need to walk the format string
     // emitting "string parts" or "arg specifiers"
     // Then iterate that structure to produce the runtime
     // code, which will need the baked string parts
-    let fmt-string: string = fmt-string.from-static();
-    let parts = fmt-string.split-by-char('?');
+    let fmt-string: string = fmt-string.from-static()
+    let parts = fmt-string.split-by-char('?')
 
-    code.var("parts", parts.as-span());
+    code.var("parts", parts.as-span())
     schema is {
       :string -> {
         if parts.len != 1 {
           crash("Got 1 format argument (a string) but format string has {parts.len}")
-        };
+        }
         //meta/emitLine("its a string baby");
-        code.line("parts.get(0).print-to(w);");
-        code.line("w.string(args);");
+        code.line("parts.get(0).print-to(w);")
+        code.line("w.string(args);")
       },
       :struct .{fields} -> {
         if parts.len != fields.len() {
           crash("Mismatching format arg count")
-        };
+        }
 
         for field in fields {
           code.line("let f{it-index} = args.{field.name};")
-        };
+        }
 
         for part in parts {
-          code.line("parts.get({it-index}).print-to(w);");
-          code.line("f{it-index}.print-to(w);");
-        };
+          code.line("parts.get({it-index}).print-to(w);")
+          code.line("f{it-index}.print-to(w);")
+        }
 
       },
       _ -> crash("Unsupported format arguments: {types/name[args]}")
-    };
+    }
     code.build()
   }
 }
 
 fn fmt-string[fmt: static string, args](fmt-string: fmt, args: args): string {
-  let result = string-builder/new();
-  fmt(&result, fmt-string, args);
+  let result = string-builder/new()
+  fmt(&result, fmt-string, args)
   result.build()
 }
 
 fn test-format() {
-  let s1 = fmt-string("My value is: ? ?", .{a = 42, b = true});
+  let s1 = fmt-string("My value is: ? ?", .{a = 42, b = true})
   //let s1 = sprintf(args.get(1), {a: 42, b: true});
-  assert-equals(s1, "My value is: 42 true");
-  let s3 = fmt-string("My values are: ? and ?", .{a = "asdf", b = true});
-  assert-equals(s3, "My values are: asdf and true");
+  assert-equals(s1, "My value is: 42 true")
+  let s3 = fmt-string("My values are: ? and ?", .{a = "asdf", b = true})
+  assert-equals(s3, "My values are: asdf and true")
 
-  let s4 = fmt-string("My string is ?", "Hello, World!");
-  assert-equals(s4, "My string is Hello, World!");
+  let s4 = fmt-string("My string is ?", "Hello, World!")
+  assert-equals(s4, "My string is Hello, World!")
 
-  let res: int = static-add(#static 3, #static 2);
-  assert-equals(res, 5);
+  let res: int = static-add(#static 3, #static 2)
+  assert-equals(res, 5)
 
   .{}
 }

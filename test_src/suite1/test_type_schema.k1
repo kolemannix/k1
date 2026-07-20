@@ -10,44 +10,44 @@ ns type_schema {
   use types/type-id-schema
 
   fn print-struct-shape[t](): string {
-    let id = type-id[t];
-    require schema[t] is :struct .{ fields } else { return("") };
-    let sb = string-builder/new();
-    let name = types/type-id-name(id);
-    sb.string("Struct {name} \{\n");
+    let id = type-id[t]
+    require schema[t] is :struct .{ fields } else { return "" }
+    let sb = string-builder/new()
+    let name = types/type-id-name(id)
+    sb.string("Struct {name} \{\n")
     for field in fields {
-      writelnf(sb, "  {field.name}: {types/type-id-name(field.type-id)}", );
-    };
-    sb.string("}");
+      writelnf(sb, "  {field.name}: {types/type-id-name(field.type-id)}", )
+    }
+    sb.string("}")
     sb.build()
   }
 
   fn test() {
 
-    assert(schema[u8]   is :int :u8);
-    assert(schema[u16]  is :int :u16);
-    assert(schema[u32]  is :int :u32);
-    assert(schema[u64]  is :int :u64);
-    assert(schema[i8]   is :int :i8);
-    assert(schema[i16]  is :int :i16);
-    assert(schema[i32]  is :int :i32);
-    assert(schema[i64]  is :int :i64);
+    assert(schema[u8]   is :int :u8)
+    assert(schema[u16]  is :int :u16)
+    assert(schema[u32]  is :int :u32)
+    assert(schema[u64]  is :int :u64)
+    assert(schema[i8]   is :int :i8)
+    assert(schema[i16]  is :int :i16)
+    assert(schema[i32]  is :int :i32)
+    assert(schema[i64]  is :int :i64)
 
-    assert(schema[f32]  is :float :f32);
-    assert(schema[f64]  is :float :f64);
+    assert(schema[f32]  is :float :f32)
+    assert(schema[f64]  is :float :f64)
 
-    let point-byte-schema = schema[point3[u8]];
-    require point-byte-schema is :struct .{ fields } else crash("");
-    assert-equals(fields.len(), 3);
+    let point-byte-schema = schema[point3[u8]]
+    require point-byte-schema is :struct .{ fields } else crash("")
+    assert-equals(fields.len(), 3)
     require schema[*i32]
       is :reference .{ inner-type-id }
-      and inner-type-id == type-id[i32] else crash("");
+      and inner-type-id == type-id[i32] else crash("")
     assert-equals(
       schema[**bool].as-reference().!.inner-type-id,
       type-id[*bool]
-    );
+    )
 
-    assert(schema[either { yes }] is :enum _);
+    assert(schema[either { yes }] is :enum _)
 
     require schema[either { yes, no, maybe-so(string) }]
       is :either .{ variants, payload-offset }
@@ -58,31 +58,31 @@ ns type_schema {
       and variants.get(2).name == "maybe-so"
       and variants.get(2).payload is :some .{ type-id }
       and type-id == type-id[string]
-      else crash("");
+      else crash("")
 
     require schema[either { yes(int) }:yes ]
       is :int :i64
-      else crash("");
+      else crash("")
 
-    assert(schema[array[i32, 10]] is :array _);
+    assert(schema[array[i32, 10]] is :array _)
     require schema[array[string, 5]]
       is :array .{ element-type-id, size }
       and element-type-id == type-id[string]
       and size == :some 5
-      else crash("");
+      else crash("")
 
-    assert-equals(print-struct-shape[point3[u8]], p"Struct point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
+    assert-equals(print-struct-shape[point3[u8]], p"Struct point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}")
 
-    let is-zero-ptr: *fn(int) -> bool = is-zero;
+    let is-zero-ptr: *fn(int) -> bool = is-zero
     require schema[type-of(is-zero-ptr)]
-      is :function-pointer .{ function-type-id } else crash("");
+      is :function-pointer .{ function-type-id } else crash("")
 
     require type-id-schema(function-type-id)
-      is :function .{ params, return-type-id } else crash("");
+      is :function .{ params, return-type-id } else crash("")
 
-    assert(type-id-schema(return-type-id) is :bool);
-    assert-equals(params.get(0).name, "x");
-    assert(type-id-schema(params.get(0).type-id) is :int _);
+    assert(type-id-schema(return-type-id) is :bool)
+    assert-equals(params.get(0).name, "x")
+    assert(type-id-schema(params.get(0).type-id) is :int _)
 
     require schema[union { a: int, b: f64, c: f32 }]
       is :union .{ fields }
@@ -93,9 +93,9 @@ ns type_schema {
       and fields.get(1).offset == 0
       and fields.get(2).name   == "c"
       and fields.get(2).offset == 0
-      else crash("");
+      else crash("")
 
-    require schema[recursive-type] is :struct _ else crash("");
+    require schema[recursive-type] is :struct _ else crash("")
 
     .{}
   }

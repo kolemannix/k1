@@ -1,53 +1,53 @@
-ns match_references;
+ns match_references
 
 fn test() {
-  let x = some(42);
-  let x = &x;
+  let x = some(42)
+  let x = &x
   while x.* is :some xx {
-    if xx == 0 break()
+    if xx == 0 break
     else { 
-      x <- some(xx - 1);
+      x <- some(xx - 1)
     }
-  };
+  }
 
-  let point = .{ x = 5, y = 2 };
-  let point = &point;
+  let point = .{ x = 5, y = 2 }
+  let point = &point
   if point is .{ x, y = 2 }* {
-    assert-equals(x.*, 5);
-  };
+    assert-equals(x.*, 5)
+  }
 
-  x <- some(5);
+  x <- some(5)
   while x is :some xx* {
-    if xx.* == 0 break()
+    if xx.* == 0 break
     else { 
-      xx <- xx.* - 1;
+      xx <- xx.* - 1
     }
-  };
-  assert-equals(x.*, :some 0);
+  }
+  assert-equals(x.*, :some 0)
 
-  use core/mem/new;
-  let b: ***bool = new[**bool](new[*bool](new[bool](true)));
-  if not b is true*** { crash("b was false!") };
-  assert(b.*.*.* == true);
+  use core/mem/new
+  let b: ***bool = new[**bool](new[*bool](new[bool](true)))
+  if not b is true*** { crash("b was false!") }
+  assert(b.*.*.* == true)
 
-  b.*.* <- false;
-  if b is true*** { crash("b was true!") };
-  assert(b.*.*.* == false);
+  b.*.* <- false
+  if b is true*** { crash("b was true!") }
+  assert(b.*.*.* == false)
 
   b is {
      true*** -> crash("b was true!"),
      false*** -> .{}
-  };
+  }
 
   b is {
     null -> crash("b was null"),
     _ -> .{}
-  };
+  }
 
   b.as[ptr] is {
     null -> crash("b was null as ptr"),
     _ -> .{},
-  };
+  }
 
   .{}
 }

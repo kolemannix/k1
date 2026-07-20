@@ -38,7 +38,7 @@ ns for span {
   }
 
   fn from-array[t, n: static size](array: *array[t, n]): span[t] {
-    let buffer = buffer/from-array[t, n](array);
+    let buffer = buffer/from-array[t, n](array)
     .{ buffer }
   }
 
@@ -57,7 +57,7 @@ ns for span {
   }
 
   fn get[t](self: span[t], index: size): t {
-    let t-ref = self.get-ref(index);
+    let t-ref = self.get-ref(index)
     t-ref.*
   }
 
@@ -88,7 +88,7 @@ ns for span {
   }
 
   fn chunks[t](self: span[t], size: size): span[span[t]] {
-    let buffer-chunks = self.buffer.chunks(size);
+    let buffer-chunks = self.buffer.chunks(size)
     mem/bitcast(buffer-chunks)
   }
 
@@ -131,13 +131,13 @@ ns for span {
   }
 
   fn concat[t](self: span[t], other: span[t]): span[t] {
-    let concated-buffer = self.inner-buffer().concat(other.inner-buffer());
+    let concated-buffer = self.inner-buffer().concat(other.inner-buffer())
     wrap-buffer(concated-buffer)
   }
 
   fn sorted[t](self: span[t]): span[t] where t: comparable {
-    let new-buffer = self.buffer.cloned();
-    new-buffer.sort();
+    let new-buffer = self.buffer.cloned()
+    new-buffer.sort()
     wrap-buffer(new-buffer)
   }
 
@@ -159,15 +159,15 @@ impl[t] iterable[item = t, i = buffer-iterator[t]] for span[t] {
 
 impl[t: print] print for span[t] {
   fn print-to[w: writer](self, w): empty {
-    w.write-char('[');
+    w.write-char('[')
     for self {
-      it.print-to(w);
-      let last = it-index == self.len() - 1;
+      it.print-to(w)
+      let last = it-index == self.len() - 1
       if not last {
-        w.write-char(',');
-      };
-    };
-    w.write-char(']');
+        w.write-char(',')
+      }
+    }
+    w.write-char(']')
   }
 }
 

@@ -37,17 +37,17 @@ fn c-string-or-default(c-str: ptr, fallback: string): string {
 }
 
 fn connect(context alloc: mem/alloc-mode)(conninfo: string): result[connection, string] {
-  let conninfo-c = conninfo.to-c();
-  let conn = pg/connectdb(conninfo-c.ptr);
+  let conninfo-c = conninfo.to-c()
+  let conn = pg/connectdb(conninfo-c.ptr)
   if conn.is-null() {
-    return(:err "PQconnectdb returned null")
-  };
+    return :err "PQconnectdb returned null"
+  }
 
   if pg/status(conn) == pg/CONNECTION_OK {
     :ok .{ raw = conn }
   } else {
-    let err = c-string-or-default(pg/error-message(conn), "failed to connect");
-    pg/finish(conn);
+    let err = c-string-or-default(pg/error-message(conn), "failed to connect")
+    pg/finish(conn)
     :err err
   }
 }
@@ -56,23 +56,23 @@ ns for connection {
   fn close(self: connection) {
     if not self.raw.is-null() {
       pg/finish(self.raw)
-    };
+    }
     .{}
   }
 
   fn exec(context alloc: mem/alloc-mode)(self: connection, query: string): result[query-result, string] {
-    let query-c = query.to-c();
-    let raw-result = pg/exec(self.raw, query-c.ptr);
+    let query-c = query.to-c()
+    let raw-result = pg/exec(self.raw, query-c.ptr)
     if raw-result.is-null() {
-      return(:err "PQexec returned null")
-    };
+      return :err "PQexec returned null"
+    }
 
-    let status = pg/result-status(raw-result);
+    let status = pg/result-status(raw-result)
     if status == pg/PGRES_COMMAND_OK or status == pg/PGRES_TUPLES_OK {
       :ok .{ raw = raw-result }
     } else {
-      let err = c-string-or-default(pg/result-error-message(raw-result), "query failed");
-      pg/clear(raw-result);
+      let err = c-string-or-default(pg/result-error-message(raw-result), "query failed")
+      pg/clear(raw-result)
       :err err
     }
   }
@@ -82,7 +82,7 @@ ns for query-result {
   fn clear(self: query-result) {
     if not self.raw.is-null() {
       pg/clear(self.raw)
-    };
+    }
     .{}
   }
 
@@ -95,96 +95,96 @@ ns for query-result {
   }
 
   fn column-name(self: query-result, column: size): string {
-    let c-name = pg/field-name(self.raw, column.as[core/c-int]);
+    let c-name = pg/field-name(self.raw, column.as[core/c-int])
     c-string-or-default(c-name, "<unnamed>")
   }
 
   fn value(self: query-result, row: size, column: size): ?string {
-    let row-c = row.as[core/c-int];
-    let col-c = column.as[core/c-int];
+    let row-c = row.as[core/c-int]
+    let col-c = column.as[core/c-int]
     if pg/is-null(self.raw, row-c, col-c) != 0 {
-      return(:none)
-    };
-    let c-value = pg/get-value(self.raw, row-c, col-c);
+      return :none
+    }
+    let c-value = pg/get-value(self.raw, row-c, col-c)
     :some c-string-or-default(c-value, "")
   }
 }
 
 fn print-result-table(result: query-result) {
-  let rows = result.row-count();
-  let cols = result.col-count();
+  let rows = result.row-count()
+  let cols = result.col-count()
   if cols == 0 {
-    println("(command ok)");
-    return(.{})
-  };
+    println("(command ok)")
+    return .{}
+  }
 
-  let col = 0;
+  let col = 0
   while col < cols {
-    if col > 0 { print("\t") };
-    print(result.column-name(col));
-    col := col + 1;
-  };
-  print("\n");
+    if col > 0 { print("\t") }
+    print(result.column-name(col))
+    col := col + 1
+  }
+  print("\n")
 
-  let row = 0;
+  let row = 0
   while row < rows {
-    col := 0;
+    col := 0
     while col < cols {
-      if col > 0 { print("\t") };
+      if col > 0 { print("\t") }
       result.value(row, col) is {
         :none -> print("NULL"),
         :some value -> print(value)
-      };
-      col := col + 1;
-    };
-    print("\n");
-    row := row + 1;
-  };
+      }
+      col := col + 1
+    }
+    print("\n")
+    row := row + 1
+  }
 
   .{}
 }
 
 fn usage(program-name: string) {
-  eprintln("Usage: {program-name} <conninfo> [query]");
-  eprintln("Example:");
-  eprintln("  {program-name} \"postgresql://localhost/postgres\" \"select now()\"");
+  eprintln("Usage: {program-name} <conninfo> [query]")
+  eprintln("Example:")
+  eprintln("  {program-name} \"postgresql://localhost/postgres\" \"select now()\"")
   .{}
 }
 
 fn main(argc: core/c-int, argv: ptr): i32 {
-  let context alloc: mem/alloc-mode = :system-heap;
+  let context alloc: mem/alloc-mode = :system-heap
 
-  let args = core/sys/parse-main-args(argc, argv);
+  let args = core/sys/parse-main-args(argc, argv)
   if args.len() < 2 {
-    usage(args.get(0));
-    return(1);
-  };
+    usage(args.get(0))
+    return 1
+  }
 
-  let conninfo = args.get(1);
+  let conninfo = args.get(1)
   let query = if args.len() >= 3 {
     args.get(2)
   } else {
     "select 'hello from k1/libpq'::text as message"
-  };
+  }
 
   let conn = connect(conninfo) is {
     :ok conn -> conn,
     :err msg -> {
-      eprintln("connect failed: {msg}");
-      return(1)
+      eprintln("connect failed: {msg}")
+      return 1
     }
-  };
-  defer conn.close();
+  }
+  defer conn.close()
 
   let query-result = conn.exec(query) is {
     :ok result -> result,
     :err msg -> {
-      eprintln("query failed: {msg}");
-      return(1)
+      eprintln("query failed: {msg}")
+      return 1
     }
-  };
-  defer query-result.clear();
+  }
+  defer query-result.clear()
 
-  print-result-table(query-result);
+  print-result-table(query-result)
   0
 }

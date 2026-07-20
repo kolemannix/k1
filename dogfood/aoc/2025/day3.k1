@@ -1,24 +1,24 @@
-ns day3;
+ns day3
 
 let sample: string = "987654321111111\n811111111111119\n234234234234278\n818181911112111"
 let input: string = core/files/read-to-string(context :tmp)("day3_input.txt")
 
 fn part1(input: string) {
-  let hi: char = '0';
-  let lo: char = '0';
-  let sum: int = 0;
+  let hi: char = '0'
+  let lo: char = '0'
+  let sum: int = 0
   for bank in input.split-by-char('\n') {
-    hi := bank.get(0);
-    lo := bank.get(1);
-    let rest = bank.drop(1);
-    let iter = rest.iterator();
+    hi := bank.get(0)
+    lo := bank.get(1)
+    let rest = bank.drop(1)
+    let iter = rest.iterator()
     while iter.next() is :some c {
-      let last = iter.is-done();
+      let last = iter.is-done()
       if not last {
         // Consider new hi
         if c > hi {
-          hi := c;
-          lo := iter.peek().!;
+          hi := c
+          lo := iter.peek().!
         } else {
           // Consider new lo
           if c > lo { lo := c }
@@ -26,38 +26,38 @@ fn part1(input: string) {
       } else {
         // Consider new lo only
         if c > lo { lo := c }
-      };
-    };
-    let joltage = (hi.to-ascii-digit().!.as[int] * 10 + lo.to-ascii-digit().!.as[int]);
-    sum := sum + joltage;
+      }
+    }
+    let joltage = (hi.to-ascii-digit().!.as[int] * 10 + lo.to-ascii-digit().!.as[int])
+    sum := sum + joltage
     println("Result {it-index} for bank `{bank}`: {joltage} {sum}")
-  };
+  }
   println("Sum: {sum}")
 }
 
 fn part2(input: string) {
-  let sum: uint = 0;
-  let sels: list[char] = list/with-capacity(12);
+  let sum: uint = 0
+  let sels: list[char] = list/with-capacity(12)
   for bank in input.split-by-char('\n') {
-    sels.clear();
-    let range-size = 12;
-    let start = 0;
+    sels.clear()
+    let range-size = 12
+    let start = 0
     while range-size > 0 {
-      let end = bank.len() - range-size + 1;
-      let candidate-range = bank.slice(start, end);
-      println("picking ({start},{end}) {range-size} from {candidate-range}");
-      let best = .{ index = start, value = bank.get(start) };
+      let end = bank.len() - range-size + 1
+      let candidate-range = bank.slice(start, end)
+      println("picking ({start},{end}) {range-size} from {candidate-range}")
+      let best = .{ index = start, value = bank.get(start) }
       for cand in candidate-range {
         if cand > best.value { best := .{ index = it-index + start, value = cand } }
-      };
-      sels.push(best.value);
-      start := best.index + 1;
-      range-size := range-size - 1;
-    };
+      }
+      sels.push(best.value)
+      start := best.index + 1
+      range-size := range-size - 1
+    }
 
-    let joltage = string/wrap-span(sels.as-span()).parse-base10();
-    sum := sum + joltage.!;
+    let joltage = string/wrap-span(sels.as-span()).parse-base10()
+    sum := sum + joltage.!
     println("Result {it-index} for bank `{bank}`: {string/wrap-span(sels.as-span())} {sum}")
-  };
+  }
   println("Sum: {sum}")
 }

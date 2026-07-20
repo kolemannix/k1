@@ -1,4 +1,4 @@
-ns app;
+ns app
 
 type deps = {
   config: { jwt-secret: string },
@@ -23,54 +23,52 @@ fn make-deps(): *deps {
 // let template: string = core/files/read-to-string(context :tmp)("web/header.html")
 fn handle(req: http/request, deps: *mut deps): http-response {
   // let query-result: task[result[int, string]] = db-conn.run-query("select count(*) from fake_users where active = true");
-  let context alloc = alloc-mode:current;
+  let context alloc = alloc-mode:current
 
-  let styles = core/files/read-to-string("web/styles.css");
+  let styles = core/files/read-to-string("web/styles.css")
 
 
-  tprintln("user-code/handle: request {req.header.method.enum-name()} `{req.header.url}`");
+  tprintln("user-code/handle: request {req.header.method.enum-name()} `{req.header.url}`")
 
   let make-header = fn(len: size) {
-    // tprintln("responding with string {text}");
-    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: "
-    "{len}\r\n\r\n"
-  };
+    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {len}\r\n\r\n"
+  }
 
   // `GET /events`: SSE subscription to the app-wide "global" topic,
   // which the mock publisher heartbeats every 5 ticks.
   if req.header.url == "/events" {
-    return(:subscribe .{ topic = "global" })
-  };
+    return :subscribe .{ topic = "global" }
+  }
 
   // `GET /game/{id}/events`: SSE subscription to topic "game.{id}".
   // The mock publisher thread feeds "game.42" once a second.
   if req.header.url.starts-with("/game/") {
-    let parts = req.header.url.split-by-char('/');
+    let parts = req.header.url.split-by-char('/')
     // ["", "game", "{id}", "events"]
-    let id = parts.get(2);
+    let id = parts.get(2)
     if parts.len() == 4 and parts.get(3) == "events" {
-      return(:subscribe .{ topic = "game.{id}" })
-    };
+      return :subscribe .{ topic = "game.{id}" }
+    }
     // `GET /game/{id}/poke`: publish from user code on a worker thread,
     // through the handle carried in deps.
     if parts.len() == 4 and parts.get(3) == "poke" {
-      deps.publisher.publish("game.{id}", "poked\nover http");
-      return(:complete ["HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\npoked\n"])
-    };
-    return(:complete ["HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"])
-  };
+      deps.publisher.publish("game.{id}", "poked\nover http")
+      return :complete ["HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\npoked\n"]
+    }
+    return :complete ["HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"]
+  }
 
   // `GET /static/big-file.json`: stream a large body without buffering the
   // response frames up front; the harness drains us chunk by chunk.
   if req.header.url == "/static/big-file.json" {
-    let out = string-builder/new();
-    render-big-json(&out, rows = 20000);
-    let body = out.build();
-    return(:stream .{
+    let out = string-builder/new()
+    render-big-json(&out, rows = 20000)
+    let body = out.build()
+    return :stream .{
       content-type = "application/json",
       stream = stream-of-buffer(body.span-bytes(), chunk-size = 65536),
-    })
-  };
+    }
+  }
 
   if req.header.url.starts-with("/app/starry-night") {
     // let out = string-builder/new();
@@ -83,29 +81,29 @@ fn handle(req: http/request, deps: *mut deps): http-response {
     :complete [make-header(4), "todo"]
   } else if req.header.url.starts-with("/app/sync") {
     // TODO: push styles as script maybe + new body
-    let template: string = core/files/read-to-string("web/header.html");
-    let output = template(template, [.{ key = "styles.css", value = styles }]).!;
-    let header = make-header(output.len());
-    :complete [header, output];
+    let template: string = core/files/read-to-string("web/header.html")
+    let output = template(template, [.{ key = "styles.css", value = styles }]).!
+    let header = make-header(output.len())
+    :complete [header, output]
   } else {
-    let template: string = core/files/read-to-string("web/header.html");
-    let output = template(template, [.{ key = "styles.css", value = styles }]).!;
-    let header = make-header(output.len());
-    :complete [header, output];
+    let template: string = core/files/read-to-string("web/header.html")
+    let output = template(template, [.{ key = "styles.css", value = styles }]).!
+    let header = make-header(output.len())
+    :complete [header, output]
   }
   // :complete("HTTP/1.1 500 Internal Server error\r\nContent-Length: 5\r\n\r\nerror")
 }
 
 fn render-big-json(out: *mut string-builder, rows: size) {
-  out.string("[");
-  let i: size = 0;
+  out.string("[")
+  let i: size = 0
   while i < rows {
-    if i > 0 { out.string(",") };
-    let score = i * 7 % 1000;
-    writef(out, `\{"id": {i}, "name": "row-{i}", "flags": [true, false], "score": {score}}`);
-    i := i + 1;
-  };
-  out.string("]");
+    if i > 0 { out.string(",") }
+    let score = i * 7 % 1000
+    writef(out, `\{"id": {i}, "name": "row-{i}", "flags": [true, false], "score": {score}}`)
+    i := i + 1
+  }
+  out.string("]")
 }
 
 // The independent publisher: an OS thread with no connection to the event
@@ -114,53 +112,53 @@ fn render-big-json(out: *mut string-builder, rows: size) {
 let mutable game-tick: u64 = 0
 
 fn mock-publisher-main(arg: ptr) {
-  uv/thread_setname("publisher\0".data-ptr().as());
-  let publisher = arg.r[pubsub/publisher]().*;
+  uv/thread_setname("publisher\0".data-ptr().as())
+  let publisher = arg.r[pubsub/publisher]().*
   loop {
-    uv/sleep(1000);
+    uv/sleep(1000)
     // this thread's tmp arena holds the interpolated event data
-    mem/tmp().reset(clear = false);
-    game-tick <- game-tick + 1;
-    publisher.publish("game.42", `\{"tick": {game-tick}}`);
+    mem/tmp().reset(clear = false)
+    game-tick <- game-tick + 1
+    publisher.publish("game.42", `\{"tick": {game-tick}}`)
     if game-tick % 5 == 0 {
-      publisher.publish("global", `\{"uptime-seconds": {game-tick}}`);
-    };
+      publisher.publish("global", `\{"uptime-seconds": {game-tick}}`)
+    }
   }
 }
 
 fn start-mock-publisher() {
-  let publisher = system-heap.new(pubsub/publisher());
-  let tid: *mut uv/thread = system-heap.alloc-t();
-  let rc = uv/thread_create(tid, mock-publisher-main, publisher.as[ptr]);
-  if rc != 0 crash("failed to spawn publisher thread: {rc}");
+  let publisher = system-heap.new(pubsub/publisher())
+  let tid: *mut uv/thread = system-heap.alloc-t()
+  let rc = uv/thread_create(tid, mock-publisher-main, publisher.as[ptr])
+  if rc != 0 crash("failed to spawn publisher thread: {rc}")
 }
 
 fn template(template: string, values: span[{ key: string, value: string }]): ?string {
-  let out = string-builder/new();
-  let i = 0;
+  let out = string-builder/new()
+  let i = 0
   while i < template.len() {
-    let c = template.get(i);
+    let c = template.get(i)
     // TODO: simd scan
     if c == '{' and template.get(i + 1) == '{' {
-      let rest = template.drop(i + 2);
-      let close = rest.index-of('}');
-      if close == -1 return(:none);
-      let key = rest.take(close);
+      let rest = template.drop(i + 2)
+      let close = rest.index-of('}')
+      if close == -1 return :none
+      let key = rest.take(close)
       core/iter/find(values, fn p. p.key == key) is {
-        :none -> return(:none),
+        :none -> return :none,
         :some pair -> out.write-string(pair.value)
-      };
-      i := i + 2 + close + 2;
+      }
+      i := i + 2 + close + 2
     } else {
-      out.write-char(c);
-      i := i + 1;
+      out.write-char(c)
+      i := i + 1
     }
-  };
+  }
   :some out.build()
 }
 
 #static {
-  let result = template(p"my favorite food is {{x}}{{punct}}", [.{ key = "x", value = "Ice Cream" }, .{ key = "punct", value = "!"}]);
+  let result = template(p"my favorite food is {{x}}{{punct}}", [.{ key = "x", value = "Ice Cream" }, .{ key = "punct", value = "!"}])
   println(result.!)
 }
 
@@ -168,22 +166,22 @@ fn template(template: string, values: span[{ key: string, value: string }]): ?st
 
 let gridsize: u32 = 256
 fn render(out: *string-builder, pixels: *array[u8, 65536]) {
-  out.string(`<div id="grid" style="position: relative">`);
-  let size = 3;
+  out.string(`<div id="grid" style="position: relative">`)
+  let size = 3
   for pixels {
-    let y = it-index / gridsize;
-    let x = it-index % gridsize;
-    writelnf(out, `<div class="{if it == 0 "off-pixel" else "on-pixel"}" style="top: {y * size}px; left: {x * size}px" id="pixel-{x},{y}"></div>`);
-  };
-  out.string(`</div">`);
+    let y = it-index / gridsize
+    let x = it-index % gridsize
+    writelnf(out, `<div class="{if it == 0 "off-pixel" else "on-pixel"}" style="top: {y * size}px; left: {x * size}px" id="pixel-{x},{y}"></div>`)
+  }
+  out.string(`</div">`)
 }
 
 fn update(pixels: *array[u8, 65536]): { x: u32, y: u32 } {
-  let x = sys/random(gridsize);
-  let y = sys/random(gridsize);
-  let pix = pixels.get(y*gridsize + x).&;
+  let x = sys/random(gridsize)
+  let y = sys/random(gridsize)
+  let pix = pixels.get(y*gridsize + x).&
   // pix <- pix ^ 1;
-  pix <- 1;
+  pix <- 1
   .{ x, y }
 }
 }

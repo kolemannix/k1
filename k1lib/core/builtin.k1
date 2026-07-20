@@ -216,16 +216,16 @@ ability writer {
   fn string(self, string) { self.write-string(string) }
 
   fn repeat(self, value: string, n: size) {
-    let i = 0;
+    let i = 0
     while i < n {
-      self.string(value);
-      i := i + 1;
+      self.string(value)
+      i := i + 1
     }
   }
 
   fn line(self, line: string) {
-    self.string(line);
-    self.string("\n");
+    self.string(line)
+    self.string("\n")
   }
 }
 
@@ -393,8 +393,8 @@ ability try[impl t, impl e] {
 
 ability iterator[impl item] {
   fn next(self: *mut self): ?item {
-    let p = self.peek();
-    if p is :some _ { self.advance-by(1) };
+    let p = self.peek()
+    if p is :some _ { self.advance-by(1) }
     p
   }
   fn peek(self: *self): ?item
@@ -713,12 +713,12 @@ ns array {
   }
 
   fn filled-in[t, n: static size](context alloc: mem/alloc-mode)(t: t, n: n): *mut array[t, n] {
-    let array-uninit = allocate[t, n]();
-    let i = 0;
+    let array-uninit = allocate[t, n]()
+    let i = 0
     while i < n.from-static() {
-      array-uninit.get(i) <- t;
-      i := i + 1;
-    };
+      array-uninit.get(i) <- t
+      i := i + 1
+    }
     array-uninit
   }
 
@@ -727,7 +727,7 @@ ns array {
   }
 
   fn as-span[t, n](array: *array[t, n]): span[t] where n: static size {
-    let temp = array.as-buffer();
+    let temp = array.as-buffer()
     span/wrap-buffer(temp)
   }
 
@@ -798,7 +798,7 @@ ns libc {
   extern("strerror") fn strerror(errno: c-int): *char 
   extern("perror") fn perror(msg: ptr)
   fn errno-k1-string(): string {
-    let msg-c = strerror(errno);
+    let msg-c = strerror(errno)
     string/wrap-c(msg-c.as[ptr])
   }
 
@@ -824,17 +824,17 @@ ns libc {
 }
 
 fn assert(context locn: k1/source-location)(value: bool) {
-  if not value { crash("ASSERT FAILED") };
+  if not value crash("ASSERT FAILED")
 }
 
 fn assertdbg(context locn: k1/source-location)(value: bool) {
-  #if k1/debug { if not value { crash("ASSERT FAILED") } }
+  #if k1/debug { if not value crash("ASSERT FAILED") }
   else         { locn; value; .{} }
 }
 
 fn print-backtrace() {
   #if k1/os-posix {
-    k1rt/_k1_print_backtrace(frame_count = 128);
+    k1rt/_k1_print_backtrace(frame_count = 128)
   } else {
     println("non-posix backtrace TODO")
   }
@@ -842,26 +842,26 @@ fn print-backtrace() {
 
 fn crash(context locn: k1/source-location)(msg: string): never {
   if k1/no-std {
-    let s = "exiting (nostd)\n\0";
+    let s = "exiting (nostd)\n\0"
     posix/write(
       file-no = 1,
       data = s.data-ptr(),
       count = (s.len() - 1).as[c-sizet],
-    );
+    )
     sys/exit(1)
   } else if k1/is-static {
-    k1/emit-compiler-message(locn, :error, msg);
+    k1/emit-compiler-message(locn, :error, msg)
     sys/exit(111)
   } else {
-    print-backtrace();
+    print-backtrace()
 
     // We print this way to avoid calling our format code
-    eprint(msg);
-    eprint(" at ");
-    eprint(locn.filename);
-    eprint(":");
-    core/format-uint(context core/io/stderr)(locn.line, 10);
-    eprint("\n");
+    eprint(msg)
+    eprint(" at ")
+    eprint(locn.filename)
+    eprint(":")
+    core/format-uint(context core/io/stderr)(locn.line, 10)
+    eprint("\n")
     //let s = "{msg} at {filename}:{line}\n";
     //eprint(s);
 

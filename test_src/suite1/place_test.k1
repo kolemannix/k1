@@ -1,4 +1,4 @@
-ns place_test;
+ns place_test
 
 type inner = { a: int, b: int }
 type outer = { name: string, inner: inner }
@@ -19,112 +19,112 @@ ns for inner {
 // outer-ref.inner.me() got the address of a stack temp (dogfood/http hit this
 // as a corrupted libuv handle).
 fn receiver-coercion() {
-  let outer: outer = .{ name = "hi", inner = .{ a = 11, b = 22 } };
-  let outer-ref = &outer;
-  let inner-ref = outer-ref.inner.&;
-  assert(outer-ref.inner.me().as[ptr] == inner-ref.as[ptr]);
-  outer-ref.inner.me().a <- 99;
-  assert-equals(outer.inner.a, 99);
+  let outer: outer = .{ name = "hi", inner = .{ a = 11, b = 22 } }
+  let outer-ref = &outer
+  let inner-ref = outer-ref.inner.&
+  assert(outer-ref.inner.me().as[ptr] == inner-ref.as[ptr])
+  outer-ref.inner.me().a <- 99
+  assert-equals(outer.inner.a, 99)
 }
 
 fn negative-cases(p: int, s: inner, arr: array[int, 3]) {
   // Element address rooted at a by-value param is rejected like any param place
-  let param-elem-result = test-compile(arr.get(0).&);
+  let param-elem-result = test-compile(arr.get(0).&)
   assert-equals(
     param-elem-result,
     :some "Cannot take address of a function parameter; re-declare it or use a * type"
-  );
+  )
   // Address of a function parameter is rejected at the place root
-  let param-result = test-compile(&p);
+  let param-result = test-compile(&p)
   assert-equals(
     param-result,
     :some "Cannot take address of a function parameter; re-declare it or use a * type"
-  );
+  )
   // ...even through a field chain rooted at the parameter
-  let param-field-result = test-compile(&s.a);
+  let param-field-result = test-compile(&s.a)
   assert-equals(
     param-field-result,
     :some "Cannot take address of a function parameter; re-declare it or use a * type"
-  );
+  )
   // a call result is not a place
-  let rvalue-result = test-compile(&make-inner().a);
+  let rvalue-result = test-compile(&make-inner().a)
   assert-equals(
     rvalue-result,
     :some "Cannot take the address of a call; only places (variables, struct fields, array elements, sum payloads, and dereferences) have addresses"
-  );
+  )
 }
 
 fn test() {
   // Address of a local
-  let x = 10;
-  let x-ref = &x;
-  assert-equals(x-ref.*, 10);
+  let x = 10
+  let x-ref = &x
+  assert-equals(x-ref.*, 10)
 
   // Postfix .& is the same operation
-  let x-ref2 = x.&;
-  assert-equals(x-ref2.*, 10);
+  let x-ref2 = x.&
+  assert-equals(x-ref2.*, 10)
 
   // Address of a nested struct field, and writing through it
-  let outer: outer = .{ name = "hi", inner = .{ a = 5, b = 6 } };
-  let a-ref = &outer.inner.a;
-  assert-equals(a-ref.*, 5);
-  a-ref <- 42;
-  assert-equals(outer.inner.a, 42);
+  let outer: outer = .{ name = "hi", inner = .{ a = 5, b = 6 } }
+  let a-ref = &outer.inner.a
+  assert-equals(a-ref.*, 5)
+  a-ref <- 42
+  assert-equals(outer.inner.a, 42)
 
   // Re-borrow: field address through an existing reference
   // AddressOf(FieldAccess(FieldAccess(Deref(outer-ref)))) -> allowed
-  let outer-ref = &outer;
-  let b-ref = &outer-ref.inner.b;
-  assert-equals(b-ref.*, 6);
+  let outer-ref = &outer
+  let b-ref = &outer-ref.inner.b
+  assert-equals(b-ref.*, 6)
 
   // Address of a global
-  let g-ref = &global-place-val;
-  assert-equals(g-ref.*, 77);
+  let g-ref = &global-place-val
+  assert-equals(g-ref.*, 77)
 
-  let arr: array[int, 3] = zeroed();
-  arr.get(0) <- 10;
-  arr.get(1) <- 20;
-  let elem-ref = arr.get(1).&;
-  assert-equals(elem-ref.*, 20);
-  elem-ref <- 21;
-  assert-equals(arr.get(1), 21);
+  let arr: array[int, 3] = zeroed()
+  arr.get(0) <- 10
+  arr.get(1) <- 20
+  let elem-ref = arr.get(1).&
+  assert-equals(elem-ref.*, 20)
+  elem-ref <- 21
+  assert-equals(arr.get(1), 21)
 
   // ...and through an array reference
-  let arr-ref = &arr;
-  let elem-ref2 = arr-ref.get(2).&;
-  elem-ref2 <- 30;
-  assert-equals(arr.get(2), 30);
+  let arr-ref = &arr
+  let elem-ref2 = arr-ref.get(2).&
+  elem-ref2 <- 30
+  assert-equals(arr.get(2), 30)
 
   // Mixed aggregates: store to a struct member inside an array element
   // (place chain: field -> block -> array element -> variable)
-  let points: array[inner, 2] = zeroed();
-  points.get(0).a <- 100;
-  points.get(1).b <- 200;
-  assert-equals(points.get(0).a, 100);
-  assert-equals(points.get(0).b, 0);
-  let point-b-ref = points.get(1).b.&;
-  point-b-ref <- 201;
-  assert-equals(points.get(1).b, 201);
+  let points: array[inner, 2] = zeroed()
+  points.get(0).a <- 100
+  points.get(1).b <- 200
+  assert-equals(points.get(0).a, 100)
+  assert-equals(points.get(0).b, 0)
+  let point-b-ref = points.get(1).b.&
+  point-b-ref <- 201
+  assert-equals(points.get(1).b, 201)
 
   // Mixed aggregates: store to struct members inside a sum payload, through a
   // reference binding from a match on the variant
-  let shape: shape = :circle .{ radius = 5, filled = false };
+  let shape: shape = :circle .{ radius = 5, filled = false }
   (&shape) is {
     :circle c* -> {
-      c.radius <- 10;
-      c.filled <- true;
+      c.radius <- 10
+      c.filled <- true
     },
     _ -> crash("expected a circle")
-  };
+  }
   shape is {
     :circle c -> {
-      assert-equals(c.radius, 10);
-      assert(c.filled);
+      assert-equals(c.radius, 10)
+      assert(c.filled)
     },
     _ -> crash("expected a circle")
-  };
+  }
 
-  receiver-coercion();
+  receiver-coercion()
 
-  negative-cases(3, .{ a = 1, b = 2 }, arr);
+  negative-cases(3, .{ a = 1, b = 2 }, arr)
 }

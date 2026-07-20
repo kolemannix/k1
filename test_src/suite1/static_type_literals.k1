@@ -1,19 +1,19 @@
-ns static_literals;
+ns static_literals
 fn test() {
-  assert-equals[?string](test-compile(1: 5), :some "Expression did not conform to hint: Static lift resulted in wrong value: Different static values of same type: 5 vs 1");
-  let _c: 'c' = 'c';
-  let _pi: 3.14 = 3.14;
-  let _hello: "hello" = "hello";
+  assert-equals[?string](test-compile(1: 5), :some "Expression did not conform to hint: Static lift resulted in wrong value: Different static values of same type: 5 vs 1")
+  let _c: 'c' = 'c'
+  let _pi: 3.14 = 3.14
+  let _hello: "hello" = "hello"
 
   let _hello2: "hello!" = #static {
-    let bytes = [104u8];
-    bytes.push(101);
-    bytes.push(108);
-    bytes.push(108);
-    bytes.push(111);
-    bytes.push(33);
+    let bytes = [104u8]
+    bytes.push(101)
+    bytes.push(108)
+    bytes.push(108)
+    bytes.push(111)
+    bytes.push(33)
     string/wrap-bytes(bytes.as-span())
-  };
+  }
 
   .{}
 }

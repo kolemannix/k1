@@ -25,17 +25,17 @@ ns pubsub {
     // Thread-safe: topic and data are copied to the system heap before
     // queuing, so the caller's memory can be reclaimed immediately.
     fn publish(self: publisher, topic: string, data: string) {
-      let bus = self.bus;
+      let bus = self.bus
       let event: event = .{
         topic = topic.cloned-in(context :system-heap)(),
         data = data.cloned-in(context :system-heap)(),
-      };
-      uv/mutex_lock(bus.mutex);
-      bus.pending.push-in(context :system-heap)(event);
-      uv/mutex_unlock(bus.mutex);
+      }
+      uv/mutex_lock(bus.mutex)
+      bus.pending.push-in(context :system-heap)(event)
+      uv/mutex_unlock(bus.mutex)
 
-      let send-rc = uv/async_send(bus.async-handle);
-      if send-rc < 0 crash("uv_async_send for pubsub failed: {send-rc}");
+      let send-rc = uv/async_send(bus.async-handle)
+      if send-rc < 0 crash("uv_async_send for pubsub failed: {send-rc}")
     }
   }
 
@@ -78,115 +78,115 @@ ns pubsub {
       pending = list/empty[event](),
       dispatching = list/empty[event](),
       subscribers = list/empty[subscriber](),
-    });
-    if uv/mutex_init(bus.mutex) != 0 crash("uv_mutex_init for pubsub failed");
-    if uv/async_init(uv-loop, bus.async-handle, dispatch-pending) != 0 crash("uv_async_init for pubsub failed");
-    bus.async-handle.set-data(bus);
-    the-bus <- bus.as[ptr];
+    })
+    if uv/mutex_init(bus.mutex) != 0 crash("uv_mutex_init for pubsub failed")
+    if uv/async_init(uv-loop, bus.async-handle, dispatch-pending) != 0 crash("uv_async_init for pubsub failed")
+    bus.async-handle.set-data(bus)
+    the-bus <- bus.as[ptr]
   }
 
   fn get(): *mut bus {
-    if the-bus.is-null() crash("pubsub bus not initialized");
+    if the-bus.is-null() crash("pubsub bus not initialized")
     the-bus.as[*mut bus]
   }
 
   // Main thread only
   fn subscribe(connection: *mut connection, topic: string) {
-    let bus = get();
-    tprintln("pubsub: conn{connection.serial-no} subscribed to `{topic}`");
+    let bus = get()
+    tprintln("pubsub: conn{connection.serial-no} subscribed to `{topic}`")
     bus.subscribers.push-in(context :system-heap)(.{
       connection,
       topic = topic.cloned-in(context :system-heap)(),
-    });
+    })
   }
 
   // Main thread only. No-op if the connection has no subscriptions.
   fn unsubscribe(connection: *mut connection) {
-    let bus = get();
-    let conn-ptr = connection.as[ptr];
-    let i: size = 0;
+    let bus = get()
+    let conn-ptr = connection.as[ptr]
+    let i: size = 0
     while i < bus.subscribers.len() {
-      let sub = bus.subscribers.get(i);
+      let sub = bus.subscribers.get(i)
       if sub.connection.as[ptr] == conn-ptr {
-        tprintln("pubsub: conn{connection.serial-no} unsubscribed from `{sub.topic}`");
-        free-heap-string(sub.topic);
-        bus.subscribers.remove(i);
+        tprintln("pubsub: conn{connection.serial-no} unsubscribed from `{sub.topic}`")
+        free-heap-string(sub.topic)
+        bus.subscribers.remove(i)
       } else {
-        i := i + 1;
+        i := i + 1
       }
-    };
+    }
   }
 
   // uv_async callback, main thread
   fn dispatch-pending(handle: *mut uv/async) {
-    let bus = handle.get-data[bus]();
+    let bus = handle.get-data[bus]()
     loop {
-      uv/mutex_lock(bus.mutex);
+      uv/mutex_lock(bus.mutex)
       if bus.pending.is-empty() {
-        uv/mutex_unlock(bus.mutex);
-        break();
-      };
-      let batch = bus.pending;
-      bus.pending <- bus.dispatching;
-      bus.dispatching <- batch;
-      uv/mutex_unlock(bus.mutex);
+        uv/mutex_unlock(bus.mutex)
+        break
+      }
+      let batch = bus.pending
+      bus.pending <- bus.dispatching
+      bus.dispatching <- batch
+      uv/mutex_unlock(bus.mutex)
 
       for event in bus.dispatching {
-        dispatch-event(bus, event);
-        free-heap-string(event.topic);
-        free-heap-string(event.data);
-      };
-      bus.dispatching.clear();
+        dispatch-event(bus, event)
+        free-heap-string(event.topic)
+        free-heap-string(event.data)
+      }
+      bus.dispatching.clear()
     }
   }
 
   fn dispatch-event(bus: *mut bus, event: event) {
     // The SSE frame is rendered and copied once, shared by every subscriber's write
-    let frame: ?rc-buffer = :none;
+    let frame: ?rc-buffer = :none
     for sub in bus.subscribers {
       if sub.topic == event.topic {
         let f = frame is {
           :some existing -> existing,
           :none -> {
-            mem/push-mode(:tmp);
-            let rendered = sse-frame(event);
-            mem/pop-mode();
-            let made = rc-buffer/make(rendered.span-bytes());
-            frame := :some made;
+            mem/push-mode(:tmp)
+            let rendered = sse-frame(event)
+            mem/pop-mode()
+            let made = rc-buffer/make(rendered.span-bytes())
+            frame := :some made
             made
           }
-        };
-        send-event(sub.connection, f.retain());
+        }
+        send-event(sub.connection, f.retain())
       }
-    };
-    if frame is :some f { f.release() };
+    }
+    if frame is :some f { f.release() }
   }
 
   // Takes ownership of one reference to `frame`, released when the write
   // completes or the subscriber is skipped/dropped.
   fn send-event(connection: *mut connection, frame: rc-buffer) {
     // Main thread; direct close-state access is fine
-    if connection.close-state.is-closing { frame.release(); return() };
+    if connection.close-state.is-closing { frame.release(); return }
 
-    let queued = uv/stream_get_write_queue_size(connection.client.as-stream());
+    let queued = uv/stream_get_write_queue_size(connection.client.as-stream())
     if queued > max-queued-bytes {
-      tprintln("conn{connection.serial-no} has {queued} bytes of SSE backlog; dropping subscriber");
-      frame.release();
-      close-connection(connection);
-      return();
-    };
+      tprintln("conn{connection.serial-no} has {queued} bytes of SSE backlog; dropping subscriber")
+      frame.release()
+      close-connection(connection)
+      return
+    }
 
-    write-shared-frame(connection, frame);
+    write-shared-frame(connection, frame)
   }
 
   // SSE wire format, rendered into the ambient allocator
   fn sse-frame(event: event): string {
-    let out = string-builder/new();
-    out.string("event: {event.topic}\n");
+    let out = string-builder/new()
+    out.string("event: {event.topic}\n")
     for line in event.data.split-by-char('\n') {
-      out.string("data: {line}\n");
-    };
-    out.string("\n");
+      out.string("data: {line}\n")
+    }
+    out.string("\n")
     out.build()
   }
 

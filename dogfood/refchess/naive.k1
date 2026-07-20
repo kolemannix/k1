@@ -21,7 +21,7 @@ ns for square-state {
        :b-rook   -> 'r',
        :b-queen  -> 'q',
        :b-king   -> 'k',
-    };
+    }
   }
 }
 
@@ -42,8 +42,8 @@ ns square {
        'g' or 'G' -> 6,
        'h' or 'H' -> 7,
        _ -> crash("bad tile name: {s}")
-    };
-    let rank = (s.get(1).to-ascii-digit().! - 1);
+    }
+    let rank = (s.get(1).to-ascii-digit().! - 1)
     from-rank-file(file, rank)
   }
 }
@@ -60,8 +60,8 @@ impl show for square {
       6 -> 'g',
       7 -> 'h',
       _ -> crash("Bad file")
-    };
-    let rank = self.rank + 1;
+    }
+    let rank = self.rank + 1
     "{file}{rank}"
   }
 }
@@ -69,9 +69,9 @@ impl show for square {
 
 fn dump(board: list[square-state]) {
   for square in board {
-    let symbol = square.char-symbol();
+    let symbol = square.char-symbol()
     if it-index % 8 == 7 {
-      println("{symbol}");
+      println("{symbol}")
     } else {
       print("{symbol}")
     }
@@ -79,25 +79,25 @@ fn dump(board: list[square-state]) {
 }
 
 fn start-pos(): list[square-state] {
-  let board = list/filled[square-state](64, :blank);
-  board.set(0, :w-rook);
-  board.set(1, :w-knight);
-  board.set(2, :w-bishop);
-  board.set(3, :w-queen);
-  board.set(4, :w-king);
-  board.set(5, :w-bishop);
-  board.set(6, :w-knight);
-  board.set(7, :w-rook);
-  { let i = 0; while i < 8 { board.set(i + 8, :w-pawn); i := i + 1 } };
+  let board = list/filled[square-state](64, :blank)
+  board.set(0, :w-rook)
+  board.set(1, :w-knight)
+  board.set(2, :w-bishop)
+  board.set(3, :w-queen)
+  board.set(4, :w-king)
+  board.set(5, :w-bishop)
+  board.set(6, :w-knight)
+  board.set(7, :w-rook)
+  { let i = 0; while i < 8 { board.set(i + 8, :w-pawn); i := i + 1 } }
 
-  { let i = 0; while i < 8 { board.set(i + 48, :b-pawn); i := i + 1 } };
-  board.set(56, :b-rook);
-  board.set(57, :b-knight);
-  board.set(58, :b-bishop);
-  board.set(59, :b-queen);
-  board.set(60, :b-king);
-  board.set(61, :b-bishop);
-  board.set(62, :b-knight);
-  board.set(63, :b-rook);
+  { let i = 0; while i < 8 { board.set(i + 48, :b-pawn); i := i + 1 } }
+  board.set(56, :b-rook)
+  board.set(57, :b-knight)
+  board.set(58, :b-bishop)
+  board.set(59, :b-queen)
+  board.set(60, :b-king)
+  board.set(61, :b-bishop)
+  board.set(62, :b-knight)
+  board.set(63, :b-rook)
   board
 }

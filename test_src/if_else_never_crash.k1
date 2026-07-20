@@ -1,6 +1,6 @@
 fn single-never(b: bool): int {
-  let x: int = if not b crash("Uh oh!") else 0;
-  let y: int = if b 0 else crash("Uh oh!");
+  let x: int = if not b crash("Uh oh!") else 0
+  let y: int = if b 0 else crash("Uh oh!")
   x + y
 }
 
@@ -13,8 +13,8 @@ fn both-never(b: bool): int {
 }
 
 fn main(): i32 {
-  assert(single-never(true) == 0);
-  both-never(false);
+  assert(single-never(true) == 0)
+  both-never(false)
   0
 }
 //exitcode: 1 Uh oh! at if_else_never_crash.k1:9

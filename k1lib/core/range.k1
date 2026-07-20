@@ -14,8 +14,8 @@ ns for int-range-iterator {
   fn position(self: int-range-iterator): int { self.range.start + self.offset }
   fn size(self: int-range-iterator): int { self.range.end - self.range.start }
   fn step-by(self: *mut int-range-iterator, n: size): bool { 
-    self.offset <- self.offset + n;
-    let is-in-bounds = self.position() < self.range.end;
+    self.offset <- self.offset + n
+    let is-in-bounds = self.position() < self.range.end
     is-in-bounds
   }
   fn current(self: int-range-iterator): int {
@@ -28,20 +28,20 @@ impl iterator[item = int] for int-range-iterator {
      if self.position() >= self.range.end {
        :none
      } else {
-       let current = self.current();
+       let current = self.current()
        :some current
      }
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } {
-    let remaining = self.range.end - self.position();
+    let remaining = self.range.end - self.position()
     .{ at-least = remaining, at-most = :some remaining }
   }
   fn advance-by(self: *mut self, n: size) {
-    self.step-by(n);
+    self.step-by(n)
     .{}
   }
   fn nth(self: *mut self, n: size): ?size {
-    self.step-by(n); 
+    self.step-by(n)
     self.next()
   }
 }

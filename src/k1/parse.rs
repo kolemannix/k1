@@ -2395,12 +2395,17 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             };
             let variant_name_token = self.expect_kind(K::Ident)?;
             let variant_name_ident = self.make_ident(variant_name_token);
-            let (payload_pattern, span) = if self.peek().kind == K::OpenParen {
+            // Payload patterns never cross a line break: a variant at end of
+            // line is bare
+            let next = self.peek();
+            let (payload_pattern, span) = if !next.is_newline_preceded()
+                && next.kind == K::OpenParen
+            {
                 self.advance();
                 let payload_pattern_id = self.expect_parse_pattern()?;
                 let close_paren = self.expect_kind(K::CloseParen)?;
                 (Some(payload_pattern_id), self.ast.spans.extend(first.span, close_paren.span))
-            } else if self.peek_starts_quiet_payload() {
+            } else if !next.is_newline_preceded() && self.peek_starts_quiet_payload() {
                 // Quiet payload: `:some v`, `:ok 42`. A postfix `*` still wraps
                 // the whole sum pattern, matching `:some(v)*`; use parens for a
                 // reference payload: `:some(v*)`.
@@ -2759,7 +2764,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.emit_semantic_token(current_token, SemanticTokenKind::String);
 
                     if is_terminated {
-                        if self.peek().kind.is_string() {
+                        // Juxtaposed strings concatenate only on the same
+                        // line; a string at the start of a line begins a new
+                        // statement
+                        let next = self.peek();
+                        if next.kind.is_string() && !next.is_newline_preceded() {
                             first_segment = true;
                             continue;
                         } else {
@@ -3174,8 +3183,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let call = ParsedExprCall { called_expr: result, args: args_handle, span };
                 let call_expr_id = self.add_expression(ParsedExpr::CallOnExpr(call));
                 Some(call_expr_id)
-            } else if next.is_kind_nonspaced(K::Dot) {
-                // Field access syntax; a.b with optional bracketed type args []
+            } else if next.kind == K::Dot
+                && (!next.is_whitespace_preceded()
+                    || (next.is_newline_preceded()
+                        && self.tokens.peek_n(1).kind != K::OpenBrace))
+            {
+                // Field access syntax; a.b with optional bracketed type args [].
+                // A leading dot continues the chain across a line break
+                // (`expr\n  .method()`), except `.{`, which always starts a
+                // fresh struct-literal statement
                 self.advance();
                 let target = match self.peek().kind {
                     K::Ident => self.tokens.next(),
@@ -3191,8 +3207,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 };
                 let (type_args, _) = self.parse_bracketed_type_args()?;
                 let next = self.peek();
-                // a.b[int](...)
-                if next.kind == K::OpenParen {
+                // a.b[int](...); call parens bind only same-line, so a
+                // parenthesized statement can follow on the next line
+                if next.kind == K::OpenParen && !next.is_newline_preceded() {
                     let (mut args, args_span) = self.expect_fn_call_args()?;
                     let self_arg = result;
                     let span = self.extend_span(self.get_expression_span(self_arg), args_span);
@@ -3264,6 +3281,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     /// "Sometimes go right" parser for binary operators with precedence climbing.
     /// This is a Pratt parser that recurses when the next operator binds tighter,
     /// otherwise stays at the current level to build left-associative chains.
+    ///
+    /// Newlines end statements, so an operator at the start of a line continues
+    /// the expression only if it could not begin a new statement. `-` (negative
+    /// literal) and `&` (address-of) can, so they terminate: put them at the
+    /// end of the previous line to continue
     fn parse_binary_op_rhs(
         &mut self,
         mut lhs: ParsedExprId,
@@ -3274,6 +3296,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let Some(op_kind) = BinaryOpKind::from_tokenkind(tok.kind) else {
                 break;
             };
+            if Self::newline_terminates(tok) {
+                break;
+            }
             let op_precedence = op_kind.precedence();
 
             // If this operator's precedence is too low, return to caller
@@ -3296,6 +3321,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let Some(next_op_kind) = BinaryOpKind::from_tokenkind(next_tok.kind) else {
                     break;
                 };
+                if Self::newline_terminates(next_tok) {
+                    break;
+                }
                 let next_precedence = next_op_kind.precedence();
 
                 // Decide whether to "go right" (recurse) or "go left" (stay here)
@@ -3322,6 +3350,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
 
         Ok(lhs)
+    }
+
+    fn newline_terminates(tok: Token) -> bool {
+        tok.is_newline_preceded() && matches!(tok.kind, K::Minus | K::Amp)
     }
 
     fn extend_expr_span(&mut self, expr1: ParsedExprId, expr2: ParsedExprId) -> SpanId {
@@ -3390,6 +3422,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_variant_payload(&mut self) -> ParseResult<Option<ParsedExprId>> {
+        // Payloads never cross a line break: a variant at end of line is bare
+        if self.peek().is_newline_preceded() {
+            return Ok(None);
+        }
         if self.maybe_consume(K::OpenParen).is_some() {
             let payload = self.expect_expression()?;
             self.expect_kind(K::CloseParen)?;
@@ -3435,6 +3471,39 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance_n(2);
         }
         is_debug
+    }
+
+    /// `return`, `break`, and `continue` take an optional paren-free payload
+    /// expression: `return x + 1`, `break 42`, bare `return`. Being
+    /// keyword-led, the payload is a full expression (`return 1 == x` returns
+    /// the comparison). They lower to the zero-or-one-arg call shape the
+    /// typer's builtin-lookalike path consumes
+    fn parse_control_flow_expr(&mut self, first: Token) -> ParseResult<ParsedExprId> {
+        self.advance();
+        let name = self.make_ident(first);
+        // The payload never crosses a line break: `return` at end of line is bare
+        let payload = if self.peek().is_newline_preceded() {
+            None
+        } else {
+            self.parse_expression()?
+        };
+        let args = match payload {
+            None => MSlice::empty(),
+            Some(value) => self.ast.mem.pushn(&[ParsedCallArg {
+                name: None,
+                value,
+                is_explicit_context: false,
+            }]),
+        };
+        let span = self.extend_to_here(first.span);
+        Ok(self.add_expression(ParsedExpr::Call(ParsedCall {
+            name: QIdent::naked(name, first.span),
+            type_args: MSlice::empty(),
+            args,
+            span,
+            is_method: false,
+            id: ParsedExprId::PENDING,
+        })))
     }
 
     /// "Base" in "base expression" simply means ignoring postfix and
@@ -3599,6 +3668,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
             }
             _ => {
+                if first.kind == K::Ident {
+                    let chars = self.token_chars(first);
+                    if chars == "return" || chars == "break" || chars == "continue" {
+                        return self.parse_control_flow_expr(first).map(Some);
+                    }
+                }
                 // Follows below the bad part of this function
                 // parse_literal_atom handles _some_ Idents, but not all.
                 if let Some(literal_id) = self.parse_literal_atom()? {
@@ -3624,9 +3699,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             }));
                         Ok(Some(variant_expr))
                     } else if second.kind == K::At
-                        || second.kind == K::OpenBracket
-                        || second.kind == K::OpenParen
+                        || (!second.is_newline_preceded()
+                            && (second.kind == K::OpenBracket || second.kind == K::OpenParen))
                     {
+                        // Call parens and type-arg brackets bind only
+                        // same-line: `f\n(x)` and `xs\n[1]` are two statements
                         let first_type_args = match second.kind {
                             K::OpenBracket => self.parse_bracketed_type_args()?.0,
                             K::At => MSlice::empty(),
@@ -4175,6 +4252,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             let found_delim = self.maybe_consume(delim);
             if found_delim.is_none() {
+                // A line break separates statements; `;` remains the explicit
+                // same-line separator
+                if delim == K::Semicolon && self.peek().is_newline_preceded() {
+                    continue;
+                }
                 self.ast.report_error(
                     self.error_here(format!("Expected '{delim}' in between each {name}")),
                 );
@@ -4777,10 +4859,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
 
         let (name_token, name) = self.expect_ident()?;
-        let is_braced = match self.tokens.next() {
-            t if t.kind == K::OpenBrace => true,  // namespace asdf {
-            t if t.kind == K::Semicolon => false, // namespace asdf;
-            t => return Err(error_expected("{ or ;", t)),
+        let is_braced = match self.peek() {
+            t if t.kind == K::OpenBrace => {
+                self.advance();
+                true // namespace asdf {
+            }
+            t if t.kind == K::Semicolon => {
+                self.advance();
+                false // namespace asdf;
+            }
+            t if t.is_newline_preceded() => false, // namespace asdf <end of line>
+            t => return Err(error_expected("{, ;, or line break", t)),
         };
         let terminator = if is_braced { K::CloseBrace } else { K::Eof };
         let definitions = self.parse_definitions(terminator)?;

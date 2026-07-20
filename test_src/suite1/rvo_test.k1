@@ -1,14 +1,14 @@
-ns rvo_test;
+ns rvo_test
 
 fn ret-byte(): u8 {
-  let returned x: u8 = 0;
-  x := 10;
-  x := 30;
+  let returned x: u8 = 0
+  x := 10
+  x := 30
   let f = fn(-> u8) {
-    let returned x = 10;
+    let returned x = 10
     x
-  };
-  assert-equals(f(), 10);
+  }
+  assert-equals(f(), 10)
   x
 }
 
@@ -17,10 +17,10 @@ fn big-struct(): { x: i64, y: i64, z: i64, foo: array[u64, 1024] } {
 }
 
 fn big-struct-rvo(): { x: i64, y: i64, z: i64, foo: array[u64, 1024] } {
-  let returned v = zeroed();
-  v.x <- 10;
-  v.y <- 20;
-  v.z <- 30;
+  let returned v = zeroed()
+  v.x <- 10
+  v.y <- 20
+  v.z <- 30
   v
 }
 
@@ -31,34 +31,34 @@ fn small-struct(c: u8): { a: u8, b: u8, c: u8 } {
 }
 
 fn test() {
-  let fl = core/fixlist/uninit[i64, 128];
-  fl.push(0); fl.push(0); fl.push(0);
-  assert-equals(fl.len(), 3);
-  let flz = core/fixlist/zeroed[i64, 16];
-  assert-equals(flz.len(), 0);
-  let s = big-struct();
-  assert-equals(s.x, 10);
-  assert-equals(s.y, 20);
-  assert-equals(s.z, 30);
-  let s-rvo = big-struct-rvo();
-  assert-equals(s-rvo.x, 10);
-  assert-equals(s-rvo.y, 20);
-  assert-equals(s-rvo.z, 30);
+  let fl = core/fixlist/uninit[i64, 128]
+  fl.push(0); fl.push(0); fl.push(0)
+  assert-equals(fl.len(), 3)
+  let flz = core/fixlist/zeroed[i64, 16]
+  assert-equals(flz.len(), 0)
+  let s = big-struct()
+  assert-equals(s.x, 10)
+  assert-equals(s.y, 20)
+  assert-equals(s.z, 30)
+  let s-rvo = big-struct-rvo()
+  assert-equals(s-rvo.x, 10)
+  assert-equals(s-rvo.y, 20)
+  assert-equals(s-rvo.z, 30)
 
-  let byte = ret-byte();
-  assert-equals(byte, 30);
+  let byte = ret-byte()
+  assert-equals(byte, 30)
 
-  let x = ret-string();
-  assert-equals(x, "fdsa");
+  let x = ret-string()
+  assert-equals(x, "fdsa")
 
-  small-struct(100);
-  let ss = small-struct(21);
-  assert(ss.a == 1);
-  assert(ss.b == 2);
-  assert(ss.c == 21);
+  small-struct(100)
+  let ss = small-struct(21)
+  assert(ss.a == 1)
+  assert(ss.b == 2)
+  assert(ss.c == 21)
 
-  assert-equals(some(false), :some false);
-  assert-equals(some(true), :some true);
+  assert-equals(some(false), :some false)
+  assert-equals(some(true), :some true)
 
   .{}
 }

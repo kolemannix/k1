@@ -53,12 +53,12 @@ ns for string {
   }
 
   fn from-bytes(buffer: buffer[byte]): string {
-    let copied: buffer[byte] = buffer.cloned();
+    let copied: buffer[byte] = buffer.cloned()
     wrap-byte-buffer(copied)
   }
 
   fn from-buffer(buffer: buffer[char]): string {
-    let copied = buffer.cloned();
+    let copied = buffer.cloned()
     wrap-buffer(copied)
   }
 
@@ -77,8 +77,8 @@ ns for string {
 
   fn index-of(self: string, c: char): i64 {
     for self.span {
-      if it == c return(it-index)
-    };
+      if it == c return it-index
+    }
     -1
   }
 
@@ -87,9 +87,9 @@ ns for string {
   }
 
   fn concat-char-in(context alloc: mem/alloc-mode)(self: string, c: char): string {
-    let new-length = self.len() + 1;
-    let new-buffer = self.span.inner-buffer()._enlarged-clone-in(new-length);
-    new-buffer.set(self.len(), c);
+    let new-length = self.len() + 1
+    let new-buffer = self.span.inner-buffer()._enlarged-clone-in(new-length)
+    new-buffer.set(self.len(), c)
     wrap-buffer(new-buffer)
   }
 
@@ -98,37 +98,37 @@ ns for string {
   }
 
   fn split-by-char(self: string, delim: char): list[string] {
-    let ranges = list/empty[{ start: size, len: size }]();
-    let r = .{ start = 0: size, len = 0: size };
+    let ranges = list/empty[{ start: size, len: size }]()
+    let r = .{ start = 0: size, len = 0: size }
 
     for c in self {
       if c == delim {
-        ranges.push(r);
-        r <- .{ start = it-index + 1, len = 0 };
+        ranges.push(r)
+        r <- .{ start = it-index + 1, len = 0 }
       } else {
         r.len <- r.len + 1
-      };
-    };
+      }
+    }
 
     if r.len != 0 {
-      ranges.push(r);
-    };
+      ranges.push(r)
+    }
 
     ranges.map(fn range. {
-      let end = range.start + range.len;
+      let end = range.start + range.len
       self.slice(range.start, end)
     })
   }
 
   fn index-of-string(self: string, target: string): ?size {
     for self.span {
-      let i = it-index;
+      let i = it-index
       if i + target.len() > self.len() {
-        return(:none)
-      };
-      let sub = self.slice(i, i + target.len());
-      if sub == target { return(:some i) };
-    };
+        return :none
+      }
+      let sub = self.slice(i, i + target.len())
+      if sub == target return :some i
+    }
     :none
   }
 
@@ -152,7 +152,7 @@ ns for string {
   }
 
   fn chunks(self: string, size: size): span[string] {
-    let char-spans: span[span[char]] = self.span.chunks(size);
+    let char-spans: span[span[char]] = self.span.chunks(size)
     mem/bitcast[span[span[char]], span[string]](char-spans)
   }
 
@@ -170,31 +170,31 @@ ns for string {
   }
 
   fn wrap-c(c-string: ptr): string {
-    let len = libc/strlen(c-string);
+    let len = libc/strlen(c-string)
     wrap-raw(ptr = c-string, len = len)
   }
 
   fn from-c(c-string: ptr): string {
-    let wrapped = wrap-c(c-string);
-    let copy = wrapped.cloned();
+    let wrapped = wrap-c(c-string)
+    let copy = wrapped.cloned()
     copy
   }
 
   // TODO(stdlib perf): use snprintf for string to int
   fn to-int(self: string): ?int {
-    if self.is-empty() { return(:none) };
+    if self.is-empty() return :none
 
-    let neg = self.get(0) == '-';
-    let i = if neg 1 else 0;
-    let total = 0;
+    let neg = self.get(0) == '-'
+    let i = if neg 1 else 0
+    let total = 0
     while i < self.len() {
       if self.get(i).to-ascii-digit() is :some digit {
-        total := (total * 10) + digit.as[int];
+        total := (total * 10) + digit.as[int]
       } else {
-        return(:none);
-      };
-      i := i + 1;
-    };
+        return :none
+      }
+      i := i + 1
+    }
 
     some(
       if neg { total * -1 } else { (total) }
@@ -203,21 +203,21 @@ ns for string {
 
   fn capitalize-ascii(self: string): string {
     if self.first() is :some c and c.is-ascii-lower() {
-      let clone-chars: buffer[char] = self.span.buffer.cloned();
-      clone-chars.set(0, c.to-ascii-upper());
+      let clone-chars: buffer[char] = self.span.buffer.cloned()
+      clone-chars.set(0, c.to-ascii-upper())
       wrap-buffer(clone-chars)
     } else self
   }
  
   fn parse-base10(self: string): ?uint {
-    let o: uint = 0;
+    let o: uint = 0
     for c in self {
-      require c.to-ascii-digit() is :some digit-value else { return(:none) };
+      require c.to-ascii-digit() is :some digit-value else { return :none }
       // FIXME char to digit LUT
-      let digit-value: uint = (c.as[u8] - 48).as[uint];
-      o := o * 10;
-      o := o + digit-value;
-    };
+      let digit-value: uint = (c.as[u8] - 48).as[uint]
+      o := o * 10
+      o := o + digit-value
+    }
     :some o
   }
 

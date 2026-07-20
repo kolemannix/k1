@@ -1,4 +1,4 @@
-ns context_generic;
+ns context_generic
 
 type my-box[t] = { value: t }
 
@@ -7,39 +7,39 @@ fn box[t](context _foo: t)(value: t): my-box[t] {
 }
 
 fn test-box() {
-  let context b = true;
-  let context c = .{ b = true };
-  box(context 10)(10);
-  box[bool](true);
-  box(false);
-  box(.{ b = false });
+  let context b = true
+  let context c = .{ b = true }
+  box(context 10)(10)
+  box[bool](true)
+  box(false)
+  box(.{ b = false })
   .{}
 }
 
 fn context-c[t: equals](context t: t, name: string)(value: t) {
-  assert(name == "Joe");
-  assert(t == value);
+  assert(name == "Joe")
+  assert(t == value)
 }
 
 fn context-b[t: equals](context t: t, name: string)(value: t) {
-  assert(t == value);
+  assert(t == value)
   context-c(value)
 }
 
 fn context-a[t: equals](context t: t, name: string)(value: t) {
-  assert(t == value);
+  assert(t == value)
   context-b(value)
 }
 
 fn test-generic-passing() {
-  let context i = 3;
-  let context name: string = "Joe";
-  context-a(3);
+  let context i = 3
+  let context name: string = "Joe"
+  context-a(3)
   .{}
 }
 
 fn test() {
-  test-box();
-  test-generic-passing();
+  test-box()
+  test-generic-passing()
   .{}
 }

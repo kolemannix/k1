@@ -1,7 +1,7 @@
 // An alternate solution to Day 1 to try out a few different features of the language.
 // The original implementation of Day 1 is in ./main.k1.
 
-ns day1-alt;
+ns day1-alt
 
 ns cmath {
   extern("cos") fn cos(x: f64): f64
@@ -15,29 +15,29 @@ let step: f64 = tau / num-positions
 let initial-theta: f64 = 50.0 * step
 
 fn solve(p: (either { part-1, part-2 }), input: string): int {
-  let acc = 0;
-  let theta = initial-theta;
-  let commands: list[string] = input.split-by-char('\n');
+  let acc = 0
+  let theta = initial-theta
+  let commands: list[string] = input.split-by-char('\n')
   for commands {
-    let dir: char = it.get(0);
-    let scale: f64 = if (dir == 'L') { -1.0 } else { 1.0 };
-    let amount: u64 = string/parse-base10(it.drop(1)).!;
-    let n: i64 = if p is :part-1 { 1 } else amount.as[i64];
-    let delta: f64 = if p is :part-1 { scale * step * amount.as[f64] } else scale * step;
+    let dir: char = it.get(0)
+    let scale: f64 = if (dir == 'L') { -1.0 } else { 1.0 }
+    let amount: u64 = string/parse-base10(it.drop(1)).!
+    let n: i64 = if p is :part-1 { 1 } else amount.as[i64]
+    let delta: f64 = if p is :part-1 { scale * step * amount.as[f64] } else scale * step
     for core/int-range/up-to(n) {
-      theta := theta + delta;
+      theta := theta + delta
       if (cmath/cos(theta) == 1.0) {
-        acc := acc + 1;
-      };
-    };
-  };
+        acc := acc + 1
+      }
+    }
+  }
   acc
 }
 
 let input: string = core/files/read-to-string(context :tmp)("day1_input.txt")
 
 fn run(): i32 {
-  println("Day 1 part 1: {solve(:part-1, input)}");
-  println("Day 1 part 2: {solve(:part-2, input)}");
+  println("Day 1 part 1: {solve(:part-1, input)}")
+  println("Day 1 part 2: {solve(:part-2, input)}")
   0
 }

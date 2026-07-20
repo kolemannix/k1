@@ -1,84 +1,84 @@
-ns is_patterns;
+ns is_patterns
 
 fn test() {
   // Empty
-  let e = .{};
-  assert(e is .{});
+  let e = .{}
+  assert(e is .{})
 
-  let i = 42;
-  assert(not (i is 41));
-  assert(i is 42);
+  let i = 42
+  assert(not (i is 41))
+  assert(i is 42)
 
-  let s = "hello";
-  assert(s is "hello");
-  assert(not (s is "world"));
+  let s = "hello"
+  assert(s is "hello")
+  assert(not (s is "world"))
 
-  let c = 'x';
-  assert(c is 'x');
-  assert(not (c is 'f'));
+  let c = 'x'
+  assert(c is 'x')
+  assert(not (c is 'f'))
 
-  let b = true;
-  assert(not (b is false));
-  assert(b is true);
+  let b = true
+  assert(not (b is false))
+  assert(b is true)
 
   // float pattern
-  let f = 3.14;
-  assert(f is 3.14);
-  assert(not (f is 2.71));
+  let f = 3.14
+  assert(f is 3.14)
+  assert(not (f is 2.71))
 
-  let opt: ?int = :some(42);
-  assert(opt is :some(_));
-  assert(not (opt is :none));
+  let opt: ?int = :some(42)
+  assert(opt is :some(_))
+  assert(not (opt is :none))
 
 
-  let foo = .{ x = 1, y = "asdf" };
+  let foo = .{ x = 1, y = "asdf" }
   // Wildcard pattern
   if foo is _ {
-    assert(true);
-  };
+    assert(true)
+  }
 
   // Variable pattern
   if foo is f {
-    assert(f.x == 1 and f.y == "asdf");
-  };
+    assert(f.x == 1 and f.y == "asdf")
+  }
 
   // Else works
-  let else_ran = false;
+  let else_ran = false
   if foo is .{ x = 200 } .{} else {
-    else_ran := true;
-  };
-  assert(else_ran);
+    else_ran := true
+  }
+  assert(else_ran)
 
   // record pattern, with integer pattern
   // and nested variable pattern
   if foo is .{ x = 1, y } {
-    assert(y == "asdf");
-  };
+    assert(y == "asdf")
+  }
 
   // record pattern where inner has condition statements
-  let bar = .{ x = :some(1): ?int };
+  let bar = .{ x = :some(1): ?int }
   if bar is .{ x = :some(x) } {
-    assert(x == 1);
-  };
+    assert(x == 1)
+  }
 
   // Optionals
-  let opt: ?{ x: i64 } = :some(.{ x = 1 });
-  if opt is :some(.{ x = 2 }) .{} else assert(true);
+  let opt: ?{ x: i64 } = :some(.{ x = 1 })
+  if opt is :some(.{ x = 2 }) .{} else assert(true)
 
   // Quiet sum patterns: payload without parens
-  let qo: ?int = :some 42;
-  assert(qo is :some 42);
-  assert(qo is :some _);
-  assert(not (qo is :some 41));
+  let qo: ?int = :some 42
+  assert(qo is :some 42)
+  assert(qo is :some _)
+  assert(not (qo is :some 41))
   if qo is :some v {
-    assert(v == 42);
-  } else crash("");
-  require qo is :some w else crash("");
-  assert(w == 42);
+    assert(v == 42)
+  } else crash("")
+  require qo is :some w else crash("")
+  assert(w == 42)
 
   // Postfix * still wraps the whole sum pattern, like :some(r)*
-  let qr = &qo;
+  let qr = &qo
   if qr is :some r* {
-    assert(r.* == 42);
-  } else crash("");
+    assert(r.* == 42)
+  } else crash("")
 }

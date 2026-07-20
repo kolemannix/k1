@@ -1,52 +1,52 @@
-ns string_test;
+ns string_test
 
 fn escape() {
-  let s = "\n\0\t\r\"\\";
-  let codes = list/from-mapping(s, fn c. c.as_u8());
-  assert(codes == [10, 0, 9, 13, 34, 92]);
-  assert(s.get(0) == '\n');
-  assert(s.get(1) == '\0');
-  assert(s.get(2) == '\t');
-  assert(s.get(3) == '\r');
-  assert(s.get(4) == '"');
-  assert(s.get(5) == '\\');
+  let s = "\n\0\t\r\"\\"
+  let codes = list/from-mapping(s, fn c. c.as_u8())
+  assert(codes == [10, 0, 9, 13, 34, 92])
+  assert(s.get(0) == '\n')
+  assert(s.get(1) == '\0')
+  assert(s.get(2) == '\t')
+  assert(s.get(3) == '\r')
+  assert(s.get(4) == '"')
+  assert(s.get(5) == '\\')
 }
 
 fn test() {
 
-  let abc: string = "abc";
-  let conc = abc.concat(abc);
-  assert(conc == "abcabc");
-  assert(conc.len() == 6);
+  let abc: string = "abc"
+  let conc = abc.concat(abc)
+  assert(conc == "abcabc")
+  assert(conc.len() == 6)
 
-  assert("abc" != "123");
-  assert("abc" != "abcc");
-  assert("abc" == "abc");
+  assert("abc" != "123")
+  assert("abc" != "abcc")
+  assert("abc" == "abc")
 
-  assert("abc".concat-char('x') == "abcx");
+  assert("abc".concat-char('x') == "abcx")
 
-  assert("".split-by-char('.') == []);
+  assert("".split-by-char('.') == [])
 
-  assert-equals("a.".split-by-char('.'), ["a"]);
-  assert("bbb.".split-by-char('.') == ["bbb"]);
-  assert-equals("a.b.cc.d".split-by-char('.'), ["a", "b", "cc", "d"]);
-  assert("a...".split-by-char('.') == ["a", "", ""]);
-  assert("..".split-by-char('.') == ["", ""]);
+  assert-equals("a.".split-by-char('.'), ["a"])
+  assert("bbb.".split-by-char('.') == ["bbb"])
+  assert-equals("a.b.cc.d".split-by-char('.'), ["a", "b", "cc", "d"])
+  assert("a...".split-by-char('.') == ["a", "", ""])
+  assert("..".split-by-char('.') == ["", ""])
 
-  assert("hello".index-of-string("hel").! == 0);
-  assert("hello".index-of-string("").! == 0);
-  assert("hello".index-of-string("e").! == 1);
-  assert("hello".index-of-string("x") is :none);
-  assert("hello".index-of-string("hello") is :some 0);
+  assert("hello".index-of-string("hel").! == 0)
+  assert("hello".index-of-string("").! == 0)
+  assert("hello".index-of-string("e").! == 1)
+  assert("hello".index-of-string("x") is :none)
+  assert("hello".index-of-string("hello") is :some 0)
 
-  assert("hello".index-of('e') == 1);
-  assert("hello".index-of('x') == -1);
+  assert("hello".index-of('e') == 1)
+  assert("hello".index-of('x') == -1)
 
-  assert("123".to-int().! == 123);
-  assert("-123".to-int().! == -123);
-  assert(not "--".to-int().is-ok());
-  assert(not "123a".to-int().is-ok());
-  assert("12399999".to-int().! == 12399999);
+  assert("123".to-int().! == 123)
+  assert("-123".to-int().! == -123)
+  assert(not "--".to-int().is-ok())
+  assert(not "123a".to-int().is-ok())
+  assert("12399999".to-int().! == 12399999)
 
-  escape();
+  escape()
 }

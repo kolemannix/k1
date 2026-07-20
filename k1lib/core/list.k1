@@ -25,28 +25,28 @@ ns for list {
   }
 
   fn filled[t](size: size, value: t): list[t] {
-    let buffer = buffer/filled(size, value);
-    .{ len = size, buffer = buffer }
+    let buffer = buffer/filled(size, value)
+    .{ len = size, buffer }
   }
 
   fn filled-in[t](context mode: alloc-mode)(size: size, value: t): list[t] {
-    let buffer = buffer/filled-in(size, value);
-    .{ len = size, buffer = buffer }
+    let buffer = buffer/filled-in(size, value)
+    .{ len = size, buffer }
   }
 
   fn with-capacity[t](cap: size): list[t] {
-    let buffer = buffer/allocate[t](cap);
-    .{ len = 0, buffer = buffer }
+    let buffer = buffer/allocate[t](cap)
+    .{ len = 0, buffer }
   }
 
   fn with-capacity-in[t](context mode: alloc-mode)(cap: size): list[t] {
-    let buffer = buffer/allocate-in[t](cap);
-    .{ len = 0, buffer = buffer }
+    let buffer = buffer/allocate-in[t](cap)
+    .{ len = 0, buffer }
   }
 
   fn reserve-in[t](context alloc: alloc-mode)(self: *mut list[t], count: size) {
-    if self.cap() >= count { return() };
-    self.buffer._grow-to[t](count);
+    if self.cap() >= count return
+    self.buffer._grow-to[t](count)
   }
 
   fn reserve[t](self: *mut list[t], count: size) {
@@ -58,7 +58,7 @@ ns for list {
   }
 
   fn wrap-buffer[t](buffer: buffer[t]): list[t] {
-    .{ len = buffer.len, buffer = buffer }
+    .{ len = buffer.len, buffer }
   }
 
   // Return only the part of our buffer with Ts in it!!!
@@ -76,9 +76,9 @@ ns for list {
   }
 
   fn to-array[t, n: static size](self: list[t], count: n): *mut array[t, n] {
-    let count-val = count.from-static();
-    assert-equals(self.len, count-val);
-    let base: ptr = self.as-buffer().cloned().data-ptr();
+    let count-val = count.from-static()
+    assert-equals(self.len, count-val)
+    let base: ptr = self.as-buffer().cloned().data-ptr()
     base.as()
   }
 
@@ -88,21 +88,21 @@ ns for list {
   fn get-ref[t](self: *mut list[t], index: size): *mut t {
     if index < 0 or index >= self.len {
       crash("list index out of bounds: {index} >= {self.len}")
-    };
+    }
     self.buffer.get-ref-unchecked[t](index)
   }
 
   fn set[t](self: *mut list[t], index: size, elem: t) {
     if index >= self.len {
       crash("list index out of bounds: {index} >= {self.len}")
-    };
-    self.buffer.set(index, elem);
+    }
+    self.buffer.set(index, elem)
   }
 
   fn get[t](self: list[t], index: size): t {
     if index >= self.len {
       crash("list index out of bounds: {index} >= {self.len}")
-    };
+    }
     self.buffer.get(index)
   }
 
@@ -115,12 +115,12 @@ ns for list {
   fn _grow[t](context mode: alloc-mode)(self: *mut list[t]) {
     let new-cap: size = if self.buffer.is-empty() {
       // For large elements, just allocate what's needed - Rust's RawVec does this :)
-      let elem-size = types/size[t];
+      let elem-size = types/size[t]
       if elem-size >= 1024 1 else 8
     } else {
       self.cap() * 2
-    };
-    self.reserve-in(new-cap);
+    }
+    self.reserve-in(new-cap)
   }
 
   fn cloned-in[t](context mode: alloc-mode)(self: list[t]): list[t] {
@@ -132,12 +132,12 @@ ns for list {
   }
 
   fn push-in[t](context mode: alloc-mode)(self: *mut list[t], elem: t) {
-    let start-length = self.len;
+    let start-length = self.len
     if start-length == self.*.cap() {
-      self._grow();
-    };
-    self.len <- start-length + 1;
-    self.set(start-length, elem);
+      self._grow()
+    }
+    self.len <- start-length + 1
+    self.set(start-length, elem)
   }
 
   fn push[t](self: *mut list[t], elem: t) {
@@ -145,8 +145,8 @@ ns for list {
   }
 
   fn slice[t](self: list[t], start: size, end: size): span[t] {
-    if self.len == 0 return(span/empty[t]());
-    if end > self.len { crash("list slice end out of bounds: {end}") };
+    if self.len == 0 return span/empty[t]()
+    if end > self.len crash("list slice end out of bounds: {end}")
     span/wrap-buffer(self.buffer.slice(start, end))
   }
 
@@ -190,24 +190,24 @@ ns for list {
   }
 
   fn reverse[t](self: *mut list[t]) {
-    let i = 0;
+    let i = 0
     while (i < (self.len / 2)) {
-      let j = self.len - i - 1;
-      self.swap(i, j);
-      i := i + 1;
+      let j = self.len - i - 1
+      self.swap(i, j)
+      i := i + 1
     }
   }
 
   fn reversed[t](self: list[t]): list[t] {
-    let clone = self.cloned();
-    clone.reverse[t]();
+    let clone = self.cloned()
+    clone.reverse[t]()
     clone
   }
 
   fn concat[t](self: list[t], other: list[t]): list[t] {
     // FIXME: 2 copies, possibly
-    let dst = self.cloned();
-    dst.append-list(other);
+    let dst = self.cloned()
+    dst.append-list(other)
     dst
   }
 
@@ -219,10 +219,10 @@ ns for list {
     self.append-buffer-in[t](context :current)(other)
   }
   fn append-buffer-in[t](context alloc-mode)(self: *mut list[t], other: buffer[t]) {
-    self.reserve-in(self.len + other.len);
-    let dst = self.inner-buffer().slice(start = self.len, end = self.len + other.len);
-    buffer/copy(src = other, dst = dst);
-    self.len <- self.len + other.len;
+    self.reserve-in(self.len + other.len)
+    let dst = self.inner-buffer().slice(start = self.len, end = self.len + other.len)
+    buffer/copy(src = other, dst = dst)
+    self.len <- self.len + other.len
   }
 
   fn append-span[t](self: *mut list[t], other: span[t]) {
@@ -233,26 +233,26 @@ ns for list {
   }
 
   fn swap[t](self: *mut list[t], index-a: size, index-b: size) {
-    if index-a == index-b { return() };
+    if index-a == index-b return
     if index-a >= self.len {
       crash("list index out of bounds: {index-a} >= {self.len}")
-    };
+    }
     if index-a >= self.len {
       crash("list index out of bounds: {index-b} >= {self.len}")
-    };
-    self.buffer.swap[t](index-a, index-b);
+    }
+    self.buffer.swap[t](index-a, index-b)
   }
 
   fn sort[t](input: *mut list[t]) where t: comparable {
   
-    if input.len <= 1 return();
+    if input.len <= 1 return
   
-    let half-index = input.len / 2;
-    let pivot = input.get(half-index);
+    let half-index = input.len / 2
+    let pivot = input.get(half-index)
   
-    let left = list/with-capacity[t](half-index);
-    let right = list/with-capacity[t](half-index);
-    let equal = list/with-capacity[t](4);
+    let left = list/with-capacity[t](half-index)
+    let right = list/with-capacity[t](half-index)
+    let equal = list/with-capacity[t](4)
   
     for item in input.* {
       item.compare(pivot) is {
@@ -260,80 +260,80 @@ ns for list {
         :equal   -> equal.push(item),
         :greater -> right.push(item)
       }
-    };
+    }
   
-    left.sort();
-    right.sort();
+    left.sort()
+    right.sort()
   
-    let i = 0;
+    let i = 0
     for item in left {
-      input.set(i, item);
-      i := i + 1;
-    };
+      input.set(i, item)
+      i := i + 1
+    }
   
     for item in equal {
-      input.set(i, item);
-      i := i + 1;
-    };
+      input.set(i, item)
+      i := i + 1
+    }
   
     for item in right {
-      input.set(i, item);
-      i := i + 1;
-    };
+      input.set(i, item)
+      i := i + 1
+    }
   }
 
   fn sorted[t](self: list[t]): list[t] where t: comparable {
-    let copy = self.cloned();
-    copy.sort();
+    let copy = self.cloned()
+    copy.sort()
     copy
   }
 
   fn join[t: print](self: list[t], sep: string): string {
-    let b = string-builder/new();
+    let b = string-builder/new()
     for s in self {
-      s.print-to(&b);
-      let is-last = it-index + 1 == self.len;
+      s.print-to(&b)
+      let is-last = it-index + 1 == self.len
       if not is-last { b.string(sep) }
-    };
+    }
     b.build()
   }
 
   fn from-mapping[t, iter, iterable, u](input: iterable, f: some fn t -> u): list[u]
   where iter: iterator[item = t], iterable: iterable[item = t, i = iter]
   {
-    let iter = input.iterator();
-    let us = list/with-capacity[u](iter.size-hint().at-least);
+    let iter = input.iterator()
+    let us = list/with-capacity[u](iter.size-hint().at-least)
     for iter {
-      let u = f(it);
+      let u = f(it)
       us.push(u)
-    };
+    }
     us
   }
 
   fn map[t, u](self: list[t], f: some fn t -> u): list[u] {
-    let us = list/with-capacity[u](self.len);
-    for i in self { us.push[u](f(i)) };
+    let us = list/with-capacity[u](self.len)
+    for i in self { us.push[u](f(i)) }
     us
   }
   
   fn flat-map[t, u](self: list[t], f: some fn t -> list[u]): list[u] {
-    let us = list/empty[u]();
-    for i in self { us.append-list[u](f(i)) };
+    let us = list/empty[u]()
+    for i in self { us.append-list[u](f(i)) }
     us
   }
   
   fn filter[t](self: list[t], f: some fn t -> bool): list[t] {
-    let keep = list/empty[t]();
-    for i in self { if f(i) keep.push(i) };
+    let keep = list/empty[t]()
+    for i in self { if f(i) keep.push(i) }
     keep
   }
 
   fn remove[t](self: *mut list[t], index: size) {
     if index.as[u64] >= self.len.as[u64] {
       crash("list index out of bounds. index {index}, len {self.len}")
-    };
-    self.buffer.remove(index);
-    self.len <- self.len - 1;
+    }
+    self.buffer.remove(index)
+    self.len <- self.len - 1
   }
 
   fn filter-in-place[t](self: *mut list[t], f: some fn t -> bool) {
@@ -370,15 +370,15 @@ impl[t: equals] equals for list[t] {
 
 impl[t: print] print for list[t] {
   fn print-to[w: writer](self: list[t], w) {
-    w.write-char('[');
+    w.write-char('[')
     for self {
-      it.print-to(w);
-      let last = it-index + 1 == self.len;
+      it.print-to(w)
+      let last = it-index + 1 == self.len
       if not last {
-        w.string(",");
-      };
-    };
-    w.write-char(']');
+        w.string(",")
+      }
+    }
+    w.write-char(']')
   }
 }
 

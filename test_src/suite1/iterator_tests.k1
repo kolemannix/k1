@@ -1,22 +1,22 @@
-ns iterator_tests;
+ns iterator_tests
 
 use iter/find
 use iter/position
 
 fn test() {
 
-  let first-even = find([1,2,3,4], fn(x) x % 2 == 0);
-  assert-equals(first-even, some(2));
+  let first-even = find([1,2,3,4], fn(x) x % 2 == 0)
+  assert-equals(first-even, some(2))
 
-  let index-of-three = position([1,2,3,4], 3);
-  assert-equals(index-of-three, some(2));
+  let index-of-three = position([1,2,3,4], 3)
+  assert-equals(index-of-three, some(2))
 
-  assert(not core/iter/exists([1,2,3,5,7,9,11], fn(t) t == 0));
-  assert(iter/exists([1,2,3,5,7,9,11], fn(t) t == 2));
+  assert(not core/iter/exists([1,2,3,5,7,9,11], fn(t) t == 0))
+  assert(iter/exists([1,2,3,5,7,9,11], fn(t) t == 2))
 
-  assert(iter/forall([1,3,5,7,9,11], fn(t) t % 2 == 1));
+  assert(iter/forall([1,3,5,7,9,11], fn(t) t % 2 == 1))
 
-  assert(iter/sum([1,3,5,7,9,11]) == 36);
+  assert(iter/sum([1,3,5,7,9,11]) == 36)
 
   .{}
 }

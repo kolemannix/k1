@@ -1,4 +1,4 @@
-ns ability_complex;
+ns ability_complex
 
 type pair[PA, PB] = { a: *PA, b: ?PB }
 ability as-pair[AA, BB] {
@@ -23,7 +23,7 @@ fn unwrap-b[
   t: as-pair[AA=x, BB=y] and as-pair[AA=y, BB=x]
 ](t: t): y {
   // Ability call resolution picks the implementation that results in the call working!
-  let y: ?y = t.get-b();
+  let y: ?y = t.get-b()
   y.!
 }
 
@@ -33,12 +33,12 @@ fn get-nothin[a, b, t: as-pair[AA=a, BB=b]](_t: t) {
 
 fn test() {
   // Phase 1
-  let my-pair: pair[int, bool] = .{ a = mem/new(10), b = some(true) };
-  get-nothin(_t = my-pair);
-  let b = unwrap-b[int, bool, pair[int, bool]](my-pair);
-  assert(b);
-  let i = unwrap-b[bool, int, pair[int, bool]](my-pair);
-  assert-equals(i, 10);
+  let my-pair: pair[int, bool] = .{ a = mem/new(10), b = some(true) }
+  get-nothin(_t = my-pair)
+  let b = unwrap-b[int, bool, pair[int, bool]](my-pair)
+  assert(b)
+  let i = unwrap-b[bool, int, pair[int, bool]](my-pair)
+  assert-equals(i, 10)
 
   .{}
 }

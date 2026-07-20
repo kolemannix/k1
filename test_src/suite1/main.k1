@@ -1,118 +1,119 @@
 fn low() {
-  arith/test();
-  bool_test/test();
-  char_test/test();
-  assign/test();
-  pointer/test();
-  fib/test();
-  float_test/test();
-  pipe/test();
-  lexical_scope/test();
-  ability_fail/test();
-  ability_constraint/test();
-  ability_generic/test();
-  ability_self_call/test();
-  ability_constraint_fail/test();
-  ability_01/test();
-  ability_overload_ish/test();
-  ability_default_fns/test();
-  ability_blanket_ref/test();
-  bits_test/test();
-  ordering_test/test();
-  test_uninit/test();
-  control_flow/test();
-  union_basic/test();
-  enum_basic/test();
-  sum_basic/test();
-  function_pointer/test();
-  ns_collision/test();
-  enum_construction/test();
-  scopes/test();
-  while_test/test();
-  use_test/test();
-  type_order/test();
-  opaque_test/test();
-  test_comptime/test();
-  test_globals/test();
+  arith/test()
+  bool_test/test()
+  char_test/test()
+  assign/test()
+  pointer/test()
+  fib/test()
+  float_test/test()
+  pipe/test()
+  lexical_scope/test()
+  ability_fail/test()
+  ability_constraint/test()
+  ability_generic/test()
+  ability_self_call/test()
+  ability_constraint_fail/test()
+  ability_01/test()
+  ability_overload_ish/test()
+  ability_default_fns/test()
+  ability_blanket_ref/test()
+  bits_test/test()
+  ordering_test/test()
+  test_uninit/test()
+  control_flow/test()
+  union_basic/test()
+  enum_basic/test()
+  sum_basic/test()
+  function_pointer/test()
+  ns_collision/test()
+  enum_construction/test()
+  scopes/test()
+  while_test/test()
+  newline-stmt/test()
+  use_test/test()
+  type_order/test()
+  opaque_test/test()
+  test_comptime/test()
+  test_globals/test()
 }
 
 fn moderate() {
-  rvo_test/test();
-  recurse_basic/test();
-  defer_test/test();
-  zst_test/test();
-  structural/test();
-  never_everywhere/test();
-  ns_extend/test();
-  optionals/test();
-  type_info/test();
-  all_out_of_order/test();
-  try_test/test();
-  match_exhaust/main();
-  match_references/test();
-  place_test/test();
-  meta_defns/test();
-  type_pattern/test();
-  generic_struct/test();
-  context_params/test();
-  context_generic/test();
-  static_literals/test();
-  inference/test();
-  is_patterns/test();
-  struct_anon_nomethod/test();
-  struct_test/test();
-  enum_fail/inner/test();
-  match_fails/test();
-  require_test/test();
-  array_test/test();
-  matching_if/test();
-  lambdas/test();
-  condcomp/test();
-  struct_composition/test();
-  zero_test/test-zero();
-  zero_test/test-bitcast();
-  type_schema/test();
-  array_type_test/test();
-  ability_complex/test();
-  any_test/test();
-  format-test/test();
-  type-predicate-test/test();
+  rvo_test/test()
+  recurse_basic/test()
+  defer_test/test()
+  zst_test/test()
+  structural/test()
+  never_everywhere/test()
+  ns_extend/test()
+  optionals/test()
+  type_info/test()
+  all_out_of_order/test()
+  try_test/test()
+  match_exhaust/main()
+  match_references/test()
+  place_test/test()
+  meta_defns/test()
+  type_pattern/test()
+  generic_struct/test()
+  context_params/test()
+  context_generic/test()
+  static_literals/test()
+  inference/test()
+  is_patterns/test()
+  struct_anon_nomethod/test()
+  struct_test/test()
+  enum_fail/inner/test()
+  match_fails/test()
+  require_test/test()
+  array_test/test()
+  matching_if/test()
+  lambdas/test()
+  condcomp/test()
+  struct_composition/test()
+  zero_test/test-zero()
+  zero_test/test-bitcast()
+  type_schema/test()
+  array_type_test/test()
+  ability_complex/test()
+  any_test/test()
+  format-test/test()
+  type-predicate-test/test()
 }
 
 fn core-lib() {
   // core lib coverage
-  for_yield_test/test();
-  allocator_test/test();
-  iterator_tests/test();
-  buffer_test/test();
-  string_test/test();
-  list_test/test();
-  range_test/test();
-  string_interp_test/test();
-  lib_compiler_test/test();
+  for_yield_test/test()
+  allocator_test/test()
+  iterator_tests/test()
+  buffer_test/test()
+  string_test/test()
+  list_test/test()
+  range_test/test()
+  string_interp_test/test()
+  lib_compiler_test/test()
 }
 
 // Compiler Core test coverage, ideally increasing complexity
 fn main(): i32 {
   // Low
-  low();
-  #static low();
+  low()
+  #static low()
 
   // Moderate
-  moderate();
-  #static moderate();
+  moderate()
+  #static moderate()
 
   // "Advanced"
-  test-ffi();
-  static_parameter/test();
-  static_run/test();
+  test-ffi()
+  static_parameter/test()
+  static_run/test()
 
-  test_meta/test();
+  test_meta/test()
 
-  core-lib();
-  #static core-lib();
+  core-lib()
+  #static core-lib()
 
-  println("[suite1] All tests passed!");
+  println("[suite1] All tests passed!")
 
   0
 }

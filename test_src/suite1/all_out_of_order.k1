@@ -1,4 +1,4 @@
-ns all_out_of_order;
+ns all_out_of_order
 
 impl say-hello for foo {
   fn hello(self: foo): my-string { 
@@ -18,9 +18,9 @@ ability say-hello {
 
 
 fn test() {
-  let foo: foo = .{ name = "Joe" };
-  foo.hello();
-  assert(takes-helloer(foo).s == "Joe");
+  let foo: foo = .{ name = "Joe" }
+  foo.hello()
+  assert(takes-helloer(foo).s == "Joe")
 }
 
 type my-string = { s: string }
@@ -32,7 +32,7 @@ ns bar {
   use foo/core/nested
   fn do-it(_t: nested): nested { 
     // before called
-    before();
+    before()
     nested/default
   }
   // before imported (below where called)

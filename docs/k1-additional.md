@@ -10,7 +10,7 @@ K1 supports context parameter lists before ordinary parameters:
 
 ```rust
 fn add-tracked(context hist: *mut list[string])(x: int, y: int): int {
-  hist.push("{x} + {y}");
+  hist.push("{x} + {y}")
   x + y
 }
 ```
@@ -24,7 +24,7 @@ add-tracked(context history)(1, 2)
 or bind them locally for implicit passing:
 
 ```rust
-let context history: *mut list[string] = core/mem/new([]);
+let context history: *mut list[string] = core/mem/new([])
 add-tracked(1, 2)
 ```
 
@@ -59,8 +59,8 @@ used as values, stored in structs, reassigned, and called through the pointer.
 ```rust
 fn add-one(x: int): int { x + 1 }
 
-let f: *fn(int) -> int = add-one;
-assert-equals(f(10), 11);
+let f: *fn(int) -> int = add-one
+assert-equals(f(10), 11)
 
 type has-fn = { callback: *fn(x: int) -> int }
 ```
@@ -79,7 +79,7 @@ let answer: int = 42
 let mutable counter: int = 0
 let mutable tls my-thread-local: i32 = 0
 
-&counter <- counter + 1;
+&counter <- counter + 1
 ```
 
 See `test_src/suite1/globals.k1`, `test_src/suite1/ability_default_fns.k1`, and
@@ -91,21 +91,21 @@ Static values can participate in types and generic arguments:
 
 ```rust
 fn add-static[i: static int](x: int): int {
-  let value: int = core/meta/static-type-to-value[_, i]();
+  let value: int = core/meta/static-type-to-value[_, i]()
   value + x
 }
 
-let three: static int = 3;
-add-static[type-of(three)](3);
-add-static[3](3);
+let three: static int = 3
+add-static[type-of(three)](3)
+add-static[3](3)
 ```
 
 Literal types also appear directly:
 
 ```rust
-let c: 'c' = 'c';
-let pi: 3.14 = 3.14;
-let hello: "hello" = "hello";
+let c: 'c' = 'c'
+let pi: 3.14 = 3.14
+let hello: "hello" = "hello"
 ```
 
 Static values can be converted back to runtime values with `.from-static()`.
@@ -122,7 +122,7 @@ K1 supports source-generating metaprogramming with `$`.
 $ "let n: u64 = 255"
 
 $ {
-  let name = "point";
+  let name = "point"
   "type {name} = \{ x: int, y: int }"
 }
 ```
@@ -152,12 +152,12 @@ as a statement or expression, and supports `else`.
 
 ```rust
 #if feature-enabled {
-  run-enabled-code();
+  run-enabled-code()
 } else {
-  run-disabled-code();
-};
+  run-disabled-code()
+}
 
-let value = #if false "foo" else "bar";
+let value = #if false "foo" else "bar"
 ```
 
 See `test_src/suite1/condcomp.k1` and `test_src/suite1/static_run.k1`.
@@ -363,7 +363,7 @@ See `test_src/suite1/char_test.k1`,
 value optimization or return-slot feature.
 
 ```rust
-let returned v = zeroed();
+let returned v = zeroed()
 ```
 
 See `test_src/suite1/rvo_test.k1`.

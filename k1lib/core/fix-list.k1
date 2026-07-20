@@ -22,21 +22,21 @@ ns for fixlist {
   }
 
   fn push[t, n: static size](self: *mut fixlist[t, n], value: t): empty {
-    let used: size = self.len();
+    let used: size = self.len()
     if used < self.cap() {
-      self.data.set(used, value);
-      self.used <- used.as[u32] + 1;
+      self.data.set(used, value)
+      self.used <- used.as[u32] + 1
     } else {
-      let typename = types/name[type-of(self).value];
+      let typename = types/name[type-of(self).value]
       crash("{typename} cannot fulfill push. {used + 1} > {self.cap()}")
     }
   }
 
   fn try-push[t, n: static size](self: *mut fixlist[t, n], value: t): result[empty, empty] {
-    let used: size = self.len();
+    let used: size = self.len()
     if used < self.cap() {
-      self.data.set(used, value);
-      self.used <- used.as[u32] + 1;
+      self.data.set(used, value)
+      self.used <- used.as[u32] + 1
       :ok
     } else {
       :err
@@ -44,11 +44,11 @@ ns for fixlist {
   }
 
   fn try-push-n[t, n: static size](self: *mut fixlist[t, n], values: span[t]): result[empty, empty] {
-    let needed = self.len() + values.len();
+    let needed = self.len() + values.len()
     if needed <= self.cap() {
-      let dst-slice = self.data.as-buffer().slice(start = self.len(), end = needed);
-      buffer/copy(src = values.inner-buffer(), dst = dst-slice);
-      self.used <- needed.as[u32];
+      let dst-slice = self.data.as-buffer().slice(start = self.len(), end = needed)
+      buffer/copy(src = values.inner-buffer(), dst = dst-slice)
+      self.used <- needed.as[u32]
       :ok
     } else {
       :err
@@ -56,7 +56,7 @@ ns for fixlist {
   }
 
   fn push-n[t, n: static size](self: *mut fixlist[t, n], values: span[t]): empty {
-    let result = self.try-push-n[t, n](values);
+    let result = self.try-push-n[t, n](values)
     if result is :err { crash("fixlist out of space") }
   }
 
@@ -91,7 +91,7 @@ ns for fixlist {
   fn pop[t, n: static size](self: *mut fixlist[t, n]): ?t {
     self.last() is {
        :some t -> {
-         self.used <- self.used - 1;
+         self.used <- self.used - 1
          :some t
        },
        :none -> :none

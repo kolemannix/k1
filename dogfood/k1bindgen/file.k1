@@ -1,4 +1,4 @@
-ns file; // file.cpp
+ns file // file.cpp
 type i2 = {
   x: c-int,
   y: c-int,

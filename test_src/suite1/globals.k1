@@ -1,4 +1,4 @@
-ns test_globals;
+ns test_globals
 
 let foo: int = 42
 let bar: int = 31
@@ -13,23 +13,23 @@ let global-string: string = "imglobal"
 
 fn test() {
 
-   assert-equals(foo, 42);
-   assert-equals(bar, 31);
+   assert-equals(foo, 42)
+   assert-equals(bar, 31)
 
-   assert-equals(global-int, 0);
-   assert-equals(static-int, 2);
+   assert-equals(global-int, 0)
+   assert-equals(static-int, 2)
 
    while global-int-mut > static-int {
-     global-int-mut <- global-int-mut - 1;
-   };
-   assert(global-int-mut == 2);
+     global-int-mut <- global-int-mut - 1
+   }
+   assert(global-int-mut == 2)
 
-   global-mut-ptr <- (&global-int-mut).as[ptr];
-   assert-equals(global-mut-ptr.as[*int].*, 2);
-   assert((&global-int-mut).as[ptr] == global-mut-ptr);
+   global-mut-ptr <- (&global-int-mut).as[ptr]
+   assert-equals(global-mut-ptr.as[*int].*, 2)
+   assert((&global-int-mut).as[ptr] == global-mut-ptr)
 
-   assert-equals(global-string.len(), 8);
-   assert-equals(global-string, "imglobal");
+   assert-equals(global-string.len(), 8)
+   assert-equals(global-string, "imglobal")
 
   .{}
 }

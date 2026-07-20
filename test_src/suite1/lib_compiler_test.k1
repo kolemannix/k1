@@ -1,8 +1,8 @@
-ns lib_compiler_test;
+ns lib_compiler_test
 
 fn test() {
-  let loc = core/k1/location();
-  assert(loc.filename == "lib_compiler_test.k1");
-  assert(loc.line == 4);
-  assert(test-compile(2 + "asdf") is :some _);
+  let loc = core/k1/location()
+  assert(loc.filename == "lib_compiler_test.k1")
+  assert(loc.line == 4)
+  assert(test-compile(2 + "asdf") is :some _)
 }

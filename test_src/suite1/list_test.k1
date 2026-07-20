@@ -1,59 +1,59 @@
-ns list_test;
+ns list_test
 
 fn list-fill(): int {
-  let xs = list/empty[int]();
-  assert(xs.cap() == 0);
-  assert(xs.len == 0);
+  let xs = list/empty[int]()
+  assert(xs.cap() == 0)
+  assert(xs.len == 0)
 
-  let i = 0;
+  let i = 0
   while i < 5 {
-    assert(xs.len == i);
-    xs.push(i);
-    i := i + 1;
-  };
-  assert(xs.len == 5);
-  assert(xs.get(0) == 0);
-  assert(xs.get(1) == 1);
-  assert(xs.get(2) == 2);
-  assert(xs.get(3) == 3);
-  assert(xs.get(4) == 4);
-  assert(xs.first().! == 0);
-  assert(xs.last().! == 4);
+    assert(xs.len == i)
+    xs.push(i)
+    i := i + 1
+  }
+  assert(xs.len == 5)
+  assert(xs.get(0) == 0)
+  assert(xs.get(1) == 1)
+  assert(xs.get(2) == 2)
+  assert(xs.get(3) == 3)
+  assert(xs.get(4) == 4)
+  assert(xs.first().! == 0)
+  assert(xs.last().! == 4)
 
-  let exp = [0,1,2,3,4];
-  assert(xs == exp);
+  let exp = [0,1,2,3,4]
+  assert(xs == exp)
 
-  let xs2 = xs.cloned();
-  assert(xs2 == xs);
+  let xs2 = xs.cloned()
+  assert(xs2 == xs)
 
-  let empty = []: list[byte];
-  let empty-cloned = empty.cloned();
-  assert(empty.len == empty-cloned.len);
-  assert(empty.cloned() == empty);
+  let empty = []: list[byte]
+  let empty-cloned = empty.cloned()
+  assert(empty.len == empty-cloned.len)
+  assert(empty.cloned() == empty)
 
-  xs.remove(0);
-  xs.remove(3);
-  assert(xs == [1,2,3]);
+  xs.remove(0)
+  xs.remove(3)
+  assert(xs == [1,2,3])
 
   0
 }
 
 fn list-slice() {
-  let a =  [1,2,3];
-  let slice = a.slice(0,2);
-  assert(slice.len() == 2);
-  assert(slice.get(0) == 1);
-  assert(slice.get(1) == 2);
+  let a =  [1,2,3]
+  let slice = a.slice(0,2)
+  assert(slice.len() == 2)
+  assert(slice.get(0) == 1)
+  assert(slice.get(1) == 2)
 
-  let empty-list = []: list[int];
-  let empty-slice = empty-list.slice(0,0);
-  assert(empty-slice.len() == 0);
+  let empty-list = []: list[int]
+  let empty-slice = empty-list.slice(0,0)
+  assert(empty-slice.len() == 0)
 
-  let full-slice = a.slice(0,3);
-  assert(full-slice.len() == 3);
-  assert(full-slice.get(0) == 1);
-  assert(full-slice.get(1) == 2);
-  assert(full-slice.get(2) == 3);
+  let full-slice = a.slice(0,3)
+  assert(full-slice.len() == 3)
+  assert(full-slice.get(0) == 1)
+  assert(full-slice.get(1) == 2)
+  assert(full-slice.get(2) == 3)
 }
 
 type point = {
@@ -63,25 +63,25 @@ type point = {
 }
 
 fn list-of-structs(): int {
-  let xs = [.{ x = 1, y = 2, z = 3}: point];
-  let i = 0;
+  let xs = [.{ x = 1, y = 2, z = 3}: point]
+  let i = 0
   while i < 100 {
-    xs.push(.{ x = 1, y = 2, z = 3});
-    i := i + 1;
-  };
+    xs.push(.{ x = 1, y = 2, z = 3})
+    i := i + 1
+  }
 
-  assert(xs.len == 101);
-  assert(xs.cap() == 128);
+  assert(xs.len == 101)
+  assert(xs.cap() == 128)
 
   0
 }
 
 fn list-equality(): int {
-  let empty: list[int] = [];
-  assert(empty != [1]);
-  assert(empty == empty);
-  assert([3] == [3]);
-  assert(["asdf", "2"] != ["asdf", "3"]);
+  let empty: list[int] = []
+  assert(empty != [1])
+  assert(empty == empty)
+  assert([3] == [3])
+  assert(["asdf", "2"] != ["asdf", "3"])
   0
 }
 
@@ -89,8 +89,8 @@ fn list-equality(): int {
 
 impl show for { rank: int, payload: string } {
   fn show(self): string {
-    let rank = self.rank;
-    let payload = self.payload;
+    let rank = self.rank
+    let payload = self.payload
     "Payload: {payload} (rank={rank})"
   }
 }
@@ -108,20 +108,20 @@ impl equals for { rank: int, payload: string } {
 }
 
 fn test-sort-int(input: list[int], expected: list[int]) {
-  let sorted = input.sorted();
-  assert(sorted == expected);
+  let sorted = input.sorted()
+  assert(sorted == expected)
 }
 
 fn test-sort-other(input: list[{ rank: int, payload: string }], expected: list[{ rank: int, payload: string }]) {
-  let sorted = input.sorted();
-  assert(sorted == expected);
+  let sorted = input.sorted()
+  assert(sorted == expected)
 }
 
 fn test-sort() {
-  test-sort-int([], []);
-  test-sort-int([0], [0]);
-  test-sort-int([5,4], [4,5]);
-  test-sort-int([5,3,1], [1,3,5]);
+  test-sort-int([], [])
+  test-sort-int([0], [0])
+  test-sort-int([5,4], [4,5])
+  test-sort-int([5,3,1], [1,3,5])
   test-sort-other([
     .{ rank = 1, payload = "third" },
     .{ rank = 0, payload = "first" },
@@ -130,41 +130,41 @@ fn test-sort() {
     .{ rank = 0, payload = "first" },
     .{ rank = 0, payload = "second" },
     .{ rank = 1, payload = "third" }
-  ]);
+  ])
 }
 
 fn test-swap() {
-  let a = [1,2];
-  a.swap(0,1);
-  assert(a == [2,1]);
-  a.swap(1,0);
-  assert(a == [1,2]);
-  a.swap(1,1);
-  assert(a == [1,2]);
+  let a = [1,2]
+  a.swap(0,1)
+  assert(a == [2,1])
+  a.swap(1,0)
+  assert(a == [1,2])
+  a.swap(1,1)
+  assert(a == [1,2])
 }
 
 fn iterator(): int {
-  let l = [1,2,3];
-  let i = l.iterator();
-  assert(i.size-hint().at-least == 3);
-  assert(i.next().! == 1);
-  assert(i.next().! == 2);
-  assert(i.next().! == 3);
-  assert(i.next().is-none());
-  let i2 = l.iterator();
-  assert(i2.nth(2) == :some 3);
-  let i3 = l.iterator();
-  assert(i3.nth(10) == :none);
+  let l = [1,2,3]
+  let i = l.iterator()
+  assert(i.size-hint().at-least == 3)
+  assert(i.next().! == 1)
+  assert(i.next().! == 2)
+  assert(i.next().! == 3)
+  assert(i.next().is-none())
+  let i2 = l.iterator()
+  assert(i2.nth(2) == :some 3)
+  let i3 = l.iterator()
+  assert(i3.nth(10) == :none)
   0
 }
 
 fn test() {
-  list_test/list-of-structs();
-  list_test/list-slice();
-  list_test/list-fill();
-  list_test/list-equality();
-  list_test/test-sort();
-  list_test/test-swap();
-  list_test/iterator();
-  assert([1,2,3].show() == "[1,2,3]");
+  list_test/list-of-structs()
+  list_test/list-slice()
+  list_test/list-fill()
+  list_test/list-equality()
+  list_test/test-sort()
+  list_test/test-swap()
+  list_test/iterator()
+  assert([1,2,3].show() == "[1,2,3]")
 }

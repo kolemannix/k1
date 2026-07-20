@@ -1,63 +1,63 @@
-ns sum_basic;
+ns sum_basic
 
 type maybe = either(i8) { a = -1, b(char) = 0, c(string) = 100 }
 fn sum-payload() {
-  let a: maybe = :a;
-  let b: maybe = :b('x');
-  let c: maybe = :c("hello, sums");
-  if a is :a .{} else crash("");
-  assert(a is :a);
+  let a: maybe = :a
+  let b: maybe = :b('x')
+  let c: maybe = :c("hello, sums")
+  if a is :a .{} else crash("")
+  assert(a is :a)
 
   if b is :b(x) {
-    assert(x == 'x');
-  } else crash("");
-  assert(b is :b(_));
-  assert(b is :b('x'));
-  assert(b.as-b().! == 'x');
+    assert(x == 'x')
+  } else crash("")
+  assert(b is :b(_))
+  assert(b is :b('x'))
+  assert(b.as-b().! == 'x')
 
-  if c is :c("hello, sums") .{} else crash("");
-  assert(c is :c(_));
-  assert(c.as-c().! == "hello, sums");
+  if c is :c("hello, sums") .{} else crash("")
+  assert(c is :c(_))
+  assert(c.as-c().! == "hello, sums")
 
-  assert(a == a);
-  assert(a != b);
-  assert(a != c);
+  assert(a == a)
+  assert(a != b)
+  assert(a != c)
 
-  assert(b == b);
-  assert(b != a);
-  assert(b != c);
+  assert(b == b)
+  assert(b != a)
+  assert(b != c)
 
-  assert(c == c);
-  assert(c != a);
-  assert(c != b);
+  assert(c == c)
+  assert(c != a)
+  assert(c != b)
 
 }
 
 // 'Quiet' construction and patterns: payload without parentheses
 fn sum-quiet() {
-  let b: maybe = :b 'x';
-  let c: maybe = :c "hello, sums";
+  let b: maybe = :b 'x'
+  let c: maybe = :c "hello, sums"
 
   if b is :b x {
-    assert(x == 'x');
-  } else crash("");
-  assert(b is :b _);
-  assert(b is :b 'x' or b is :a);
+    assert(x == 'x')
+  } else crash("")
+  assert(b is :b _)
+  assert(b is :b 'x' or b is :a)
 
   let msg = c is {
     :a -> "a",
     :b _ -> "b",
     :c s if s.len() > 0 -> s,
     :c _ -> "empty"
-  };
-  assert(msg == "hello, sums");
+  }
+  assert(msg == "hello, sums")
 
-  let r: my-result[?int, string] = :ok :some 3;
-  assert(r is :ok(:some 3));
-  assert(r.as-ok().! == :some 3);
+  let r: my-result[?int, string] = :ok :some 3
+  assert(r is :ok(:some 3))
+  assert(r.as-ok().! == :some 3)
 
-  let l: ?list[int] = :some [1, 2, 3];
-  assert(l.!.len() == 3);
+  let l: ?list[int] = :some [1, 2, 3]
+  assert(l.!.len() == 3)
 }
 
 type my-result[t, e] = either { ok(t), err(e) }
@@ -74,46 +74,46 @@ ns for my-result {
 }
 
 fn generic-sum() {
-    let x1: my-result[int, string] = :ok(-3);
-    let x2: my-result[int, string] = :err("Some error message");
+    let x1: my-result[int, string] = :ok(-3)
+    let x2: my-result[int, string] = :err("Some error message")
 
-    let x1-ok = x1.as-ok();
+    let x1-ok = x1.as-ok()
 
     // This tests type inference for sums
-    assert(my-result/my-get(x1) == -3);
-    assert(x1.my-get() == -3);
-    assert(x1-ok == :some(-3));
+    assert(my-result/my-get(x1) == -3)
+    assert(x1.my-get() == -3)
+    assert(x1-ok == :some(-3))
 
     // shows that we can talk about the payload type
-    let _: my-result[int, string]:ok = 42;
+    let _: my-result[int, string]:ok = 42
 
-    assert-equals(x1.show(), "Ok: -3\n");
-    assert-equals(x2.show(), "Error: Some error message\n");
+    assert-equals(x1.show(), "Ok: -3\n")
+    assert-equals(x2.show(), "Error: Some error message\n")
 
-    assert(types/size[my-result[int, string]]() == 24);
-    assert(types/stride[my-result[int, string]]() == 24);
-    assert(types/align[my-result[int, string]]() == 8);
+    assert(types/size[my-result[int, string]]() == 24)
+    assert(types/stride[my-result[int, string]]() == 24)
+    assert(types/align[my-result[int, string]]() == 8)
 }
 
 type e = either(u8) { a = 4, b = 8, c(int) = 9 }
 fn tags() {
-  let a: e = :a;
-  let b: e = :b;
-  let c: e = :c(0);
-  assert-equals(a.tag, 4);
-  assert-equals(b.tag, 8);
-  assert-equals(c.tag, 9);
+  let a: e = :a
+  let b: e = :b
+  let c: e = :c(0)
+  assert-equals(a.tag, 4)
+  assert-equals(b.tag, 8)
+  assert-equals(c.tag, 9)
 
-  assert-equals(a.sum-name(), "a");
-  assert-equals(b.sum-name(), "b");
-  assert-equals(c.sum-name(), "c");
+  assert-equals(a.sum-name(), "a")
+  assert-equals(b.sum-name(), "b")
+  assert-equals(c.sum-name(), "c")
 
   .{}
 }
 
 fn test() {
-  tags();
-  sum-payload();
-  sum-quiet();
-  generic-sum();
+  tags()
+  sum-payload()
+  sum-quiet()
+  generic-sum()
 }

@@ -1,4 +1,4 @@
-ns union_basic;
+ns union_basic
 
 type u = union { a: u32, b: f32, c: i32 }
 
@@ -7,9 +7,9 @@ fn identity-u(u: u): u {
 }
 
 fn test() {
-  assert-equals(types/size[u], 4);
-  assert-equals(types/align[u], 4);
-  let u: u = uninit;
+  assert-equals(types/size[u], 4)
+  assert-equals(types/align[u], 4)
+  let u: u = uninit
 
   require types/schema[u] is :union .{ fields }
     and fields.len() == 3
@@ -19,9 +19,9 @@ fn test() {
     and fields.get(1).offset == 0
     and fields.get(2).name == "c"
     and fields.get(2).offset == 0
-    else crash("");
+    else crash("")
 
-  identity-u(u);
+  identity-u(u)
 
   .{}
 }
