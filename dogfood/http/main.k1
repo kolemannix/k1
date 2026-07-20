@@ -44,9 +44,14 @@ use core/arena
 
 type http-handler-deps = { }
 
+type subscribe-response = { topic: string }
+
 type http-response = either {
   complete(span[string]),
-  stream,
+  // Send headers, then drain the stream as a chunked-transfer body
+  stream(stream-response),
+  // Send SSE headers, register on the pubsub topic, hold the connection open
+  subscribe(subscribe-response),
 }
 type http-handler-work = {
   connection: *mut connection,
@@ -111,7 +116,7 @@ fn after-do-work(req: *mut uv/work, status: i32) {
   work.connection.current-work <- :none;
   defer {
     tprintln("freeing work");
-    alloc-mode:system-heap.free-t(req)
+    system-heap.free-t(req)
   };
 
   // If the work was cancelled using uv_cancel() status will be UV_ECANCELED.
@@ -182,11 +187,53 @@ fn after-do-work(req: *mut uv/work, status: i32) {
         return();
       };
     },
-    :stream -> {
-      tprintln("streaming unimplemented");
+    :stream(streaming) -> {
+      chunked/begin(connection, streaming);
+    },
+    :subscribe(sub) -> {
+      // SSE: send headers, register with the bus, and leave the connection
+      // open. finish-request is never called for subscriptions; the request
+      // arena stays live until the client disconnects and close-connection
+      // unsubscribes us.
+      write-shared-frame(
+        connection,
+        rc-buffer/make("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n".span-bytes()));
+      pubsub/subscribe(connection, sub.topic);
     },
   };
   {}
+}
+
+// Writes a shared frame, releasing the reference it was given when the
+// write completes. Used for writes that outlive any arena we control (SSE
+// frames, subscription headers). Closes the connection on failure.
+type frame-write = { connection: *mut connection, frame: rc-buffer }
+
+fn write-shared-frame(connection: *mut connection, frame: rc-buffer) {
+  let ctx: *mut frame-write = system-heap.new({ connection, frame });
+  let req = system-heap.alloc-t[uv/write];
+  req.set-data(ctx);
+  let buf: uv/buf = uv/buf/wrap-span(frame.bytes());
+  let rc = uv/write(req, connection.client.as-stream(), &buf, 1, fn (req, status) {
+    let ctx: *mut frame-write = req.get-data();
+    let connection = ctx.connection;
+    ctx.frame.release();
+    system-heap.free-t(ctx);
+    system-heap.free-t(req);
+    if connection.close-state.is-closing { return() };
+    if status != 0 {
+      let errno = uv/errno/from-i32(status);
+      tprintln("frame write failed: {errno.enum-name()}");
+      close-connection(connection);
+    }
+  });
+  if rc != 0 {
+    tprintln("uv_write for frame failed: {rc}");
+    ctx.frame.release();
+    system-heap.free-t(ctx);
+    system-heap.free-t(req);
+    close-connection(connection);
+  }
 }
 
 let tlog: bool = true
@@ -208,6 +255,8 @@ fn tprintln[t: print](t) {
 
 fn close-connection(conn: *mut connection) {
   conn.set-is-closing-sync(true);
+  // Must happen before the close callback releases the connection
+  pubsub/unsubscribe(conn);
   if uv/is_closing(conn.client-handle()).as-bool() {
     tprintln("not closing connection{conn.serial-no}");
     return();
@@ -253,7 +302,7 @@ fn queue-http-handler(connection: *mut connection, request: http/request, handle
     http-response: :none,
   });
   // let work-req = connection.request-arena.alloc[uv/work];
-  let work-req = alloc-mode:system-heap.alloc-t[uv/work];
+  let work-req = system-heap.alloc-t[uv/work];
   work-req.set-data(work);
   let queue-rc = uv/queue_work(uv-loop, work-req, do-work, after-do-work);
   if queue-rc != 0 {
@@ -338,7 +387,7 @@ ns for connection {
       connection-arena.set-name("connection");
       let request-arena: *mut arena = core/arena/init-virtual(usage-hint-mb = 1);
       request-arena.set-name("request");
-      let conn: *mut connection = alloc-mode:system-heap.alloc-t();
+      let conn: *mut connection = system-heap.alloc-t();
 
       conn <- {
         connection-arena,
@@ -388,7 +437,7 @@ ns for connection {
     self.request-arena.release();
     tprintln("conn{self.serial-no} connection arena close used-bytes: {self.connection-arena.used-bytes()}");
     self.connection-arena.release();
-    alloc-mode:system-heap.free-t(self);
+    system-heap.free-t(self);
   }
   fn finish-request(self: *mut connection) {
     tprintln("finish-request");
@@ -573,6 +622,9 @@ fn main(): i32 {
     }
   ];
   mem/pop-mode();
+
+  pubsub/init(uv/default_loop());
+  app/start-mock-publisher();
 
   start-app[app/deps](app/make-deps, route-handlers);
 

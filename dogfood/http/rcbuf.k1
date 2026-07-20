@@ -1,0 +1,29 @@
+// A reference-counted byte buffer for sharing one allocation across
+// concurrent uv writes. Single-threaded by design: references are taken on
+// the main thread and released from write callbacks (also the main thread),
+// so the count needs no atomics.
+type rc-buffer = { inner: *mut rc-buffer-inner }
+type rc-buffer-inner = { count: size, bytes: span[u8] }
+
+ns for rc-buffer {
+  // Copies `bytes` to the system heap; the new buffer holds one reference.
+  fn make(bytes: span[u8]): rc-buffer {
+    { inner: system-heap.new({ count: 1, bytes: bytes.cloned-in(context :system-heap)() }) }
+  }
+
+  fn retain(self: rc-buffer): rc-buffer {
+    self.inner.count <- self.inner.count + 1;
+    self
+  }
+
+  fn release(self: rc-buffer) {
+    let inner = self.inner;
+    inner.count <- inner.count - 1;
+    if inner.count == 0 {
+      system-heap.free(inner.bytes.data-ptr(), inner.bytes.len(), 1);
+      system-heap.free-t(inner);
+    }
+  }
+
+  fn bytes(self: rc-buffer): span[u8] { self.inner.bytes }
+}

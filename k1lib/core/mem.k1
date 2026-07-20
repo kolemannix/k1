@@ -144,6 +144,8 @@ ns mem {
 
   }
 
+  let system-heap: alloc-mode = :system-heap
+
   fn new[t](t: t): *mut t { alloc-mode:current.new(t) }
 
   fn alloc-layout(size: size, align: size): ptr { alloc-mode:current.alloc(size, align) }
