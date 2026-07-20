@@ -48,7 +48,6 @@ ns for arena {
   fn init-virtual(usage-hint-mb: size): *arena {
     let size-bytes = 1 * gb;
     let base-ptr: ptr = mem/virtual-alloc(size-bytes);
-    #if k1/debug mem/set(dst = base-ptr, value = 0xCD, count = usage-hint-mb * mb);
     posix/madvise(base-ptr, (usage-hint-mb * mb).as[c-sizet], advice = posix/MADV_SEQUENTIAL);
     store-header(base-ptr, size-bytes, :virtual)
   }
@@ -70,6 +69,12 @@ ns for arena {
     };
   }
 
+  fn poison(self: *arena, count: size) {
+    let available = self.end-addr.diff(self.cur-addr);
+    let n = if count > available available else count;
+    mem/set(dst = self.cur-addr, value = 0xCD, count = n);
+  }
+
   fn reset(self: *arena, clear: bool) {
     let used-bytes = self.used-bytes();
     self.cur-addr <- self.base-ptr;
@@ -81,22 +86,23 @@ ns for arena {
 
   let MIN_ALIGN: size = types/size[ptr]
   fn alloc-layout(self: *arena, size: size, align: size): ptr {
-    let cursor = self.cur-addr.as[size];
+    let cursor = self.cur-addr;
 
     // cursor is already MIN_ALIGN-aligned, so only stricter
     // alignments need extra padding before the returned allocation.
-    let prefix-padding = if align > MIN_ALIGN ptr/get-align-offset(cursor, align) else 0;
+    let prefix-padding =
+      if align > MIN_ALIGN ptr/get-align-offset(cursor.as[size], align) else 0;
 
     let raw-bump = size + prefix-padding;
 
-    let available = self.end-addr.as[size] - cursor;
+    let available = self.end-addr.diff(cursor);
     if available >= raw-bump {
       // Keep the arena cursor MIN_ALIGN-aligned for the next allocation.
       let offset-to-min-align = ptr/get-align-offset(raw-bump, MIN_ALIGN);
       let total-bump = raw-bump + offset-to-min-align;
-      let alloc-ptr = cursor + prefix-padding;
-      self.cur-addr <- (cursor + total-bump).as[ptr];
-      alloc-ptr.as[ptr]
+      let alloc-ptr = cursor.add-bytes(prefix-padding);
+      self.cur-addr <- cursor.add-bytes(total-bump);
+      alloc-ptr
     } else {
        mem/push-mode(:system-heap);
        crash("arena {self.name} is out of space to allocate {size} bytes. available: {available}")

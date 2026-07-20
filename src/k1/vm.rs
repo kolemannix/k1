@@ -540,9 +540,8 @@ impl Value {
         p
     }
 
-    fn as_ptr_unchecked(&self) -> *const u8 {
-        let p = self.0 as *const u8;
-        p
+    pub(crate) fn as_ptr_unchecked(&self) -> *mut u8 {
+        self.0 as *mut u8
     }
 
     pub fn as_f32(&self) -> f32 {
@@ -805,21 +804,21 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
             }
             Inst::StructOffset { base, vm_offset, .. } => {
                 let base_value = resolve_value!(base);
-                let base_ptr = base_value.as_ptr();
-                let field_ptr = unsafe { base_ptr.byte_add(vm_offset as usize) };
+                let base_ptr = base_value.as_ptr_unchecked();
+                let field_ptr = base_ptr.wrapping_byte_add(vm_offset as usize);
 
                 vm.stack.set_cur_inst_value(inst_id, Value::ptr(field_ptr));
                 ip = inst_node.next
             }
             Inst::ArrayOffset { element_t, base, element_index } => {
                 let base_value = resolve_value!(base);
-                let base_ptr = base_value.as_ptr();
+                let base_ptr = base_value.as_ptr_unchecked();
                 let index_value = resolve_value!(element_index);
                 let index = index_value.bits();
                 let elem_layout = k1.types.get_pt_layout(element_t);
 
                 let element_ptr =
-                    unsafe { base_ptr.byte_add(elem_layout.offset_at_index(index as usize)) };
+                    base_ptr.wrapping_byte_add(elem_layout.offset_at_index(index as usize));
 
                 vm.stack.set_cur_inst_value(inst_id, Value::ptr(element_ptr));
                 ip = inst_node.next
