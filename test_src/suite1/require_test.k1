@@ -1,17 +1,17 @@
 ns require_test;
 
 fn test() {
-  let foo = { x: 1, y: some(2) };
-  require foo is { y } and y is :some(2) and 2 == (1 + 1) else {
+  let foo = { .x = 1, .y = some(2) };
+  require foo is { .y } and y is :some(2) and 2 == (1 + 1) else {
     crash("")
   };
 
   { // Infallible
-    require foo is { x, y };
+    require foo is { .x, .y };
     assert-equals(x, 1);
     assert-equals(y, :some(2));
 
-    require foo is { y };
+    require foo is { .y };
     assert-equals(y, :some(2));
   };
 
@@ -24,8 +24,8 @@ fn test() {
     crash("")
   };
 
-  let my-entity = { id: "abc123", health: 99, opacity: 0.5, alive: true };
-  require (&my-entity) is { health, opacity, alive: true }* and health.* > 50 and opacity.* > 0.0 else {
+  let my-entity = { .id = "abc123", .health = 99, .opacity = 0.5, .alive = true };
+  require (&my-entity) is { .health, .opacity, .alive = true }* and health.* > 50 and opacity.* > 0.0 else {
     crash("")
   };
 

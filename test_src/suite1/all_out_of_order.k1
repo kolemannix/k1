@@ -2,7 +2,7 @@ ns all_out_of_order;
 
 impl say-hello for foo {
   fn hello(self: foo): my-string { 
-    { s: self.name  }
+    { .s = self.name  }
   }
 }
 
@@ -12,13 +12,13 @@ fn takes-helloer[t](t: t): my-string where t: say-hello {
 
 ability say-hello {
   fn hello(self): my-string {
-    { s: "Hello" }
+    { .s = "Hello" }
   }
 }
 
 
 fn test() {
-  let foo: foo = { name: "Joe" };
+  let foo: foo = { .name = "Joe" };
   foo.hello();
   assert(takes-helloer(foo).s == "Joe");
 }

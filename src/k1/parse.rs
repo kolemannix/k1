@@ -550,11 +550,11 @@ pub struct FieldAccess {
 
 #[derive(Clone, Copy)]
 pub enum StructValueFieldKind {
-    // { x: "hello" }
+    // { .x = "hello" }
     Expr(ParsedExprId),
-    // { x }
+    // { .x }
     VarShorthand,
-    // { x: uninit }
+    // { .x = uninit }
     Uninit,
 }
 
@@ -567,8 +567,8 @@ pub struct StructValueField {
 
 #[derive(Clone)]
 /// Example:
-/// { foo: 1, bar: false }
-/// ^....................^ fields
+/// { .foo = 1, .bar = false }
+/// ^........................^ fields
 pub struct ParsedStruct {
     pub fields: AstSlice<StructValueField>,
     pub span: SpanId,
@@ -604,13 +604,6 @@ pub struct ParsedSwitch {
     pub cases: AstSlice<ParsedSwitchCase>,
     pub span: SpanId,
     pub is_static: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ParsedCast {
-    pub base_expr: ParsedExprId,
-    pub dest_type: ParsedTypeExprId,
-    pub span: SpanId,
 }
 
 #[derive(Clone, Copy)]
@@ -777,7 +770,6 @@ pub enum ParsedExpr {
     /// ```md
     /// x as u64, y as .Color
     /// ```
-    Cast(ParsedCast),
     Lambda(ParsedLambda),
     Builtin(SpanId),
     Static(ParsedStaticExpr),
@@ -816,7 +808,6 @@ impl ParsedExpr {
             Self::Variant(tag_expr) => tag_expr.span,
             Self::Is(is_expr) => is_expr.span,
             Self::Match(match_expr) => match_expr.span,
-            Self::Cast(as_cast) => as_cast.span,
             Self::Lambda(lambda) => lambda.span,
             Self::Builtin(span) => *span,
             Self::Static(s) => s.span,
@@ -827,14 +818,6 @@ impl ParsedExpr {
 
     pub fn as_match(&self) -> Option<&ParsedSwitch> {
         if let Self::Match(v) = self { Some(v) } else { None }
-    }
-
-    #[track_caller]
-    pub fn expect_cast(&self) -> &ParsedCast {
-        match self {
-            ParsedExpr::Cast(as_cast) => as_cast,
-            _ => panic!("expected cast expression"),
-        }
     }
 
     #[track_caller]
@@ -2383,11 +2366,10 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             let open_brace = self.tokens.next();
             let mut fields = self.ast.mem.new_list(0);
             while self.peek().kind != K::CloseBrace {
+                self.expect_kind(K::Dot)?;
                 let ident_token = self.expect_kind(K::Ident)?;
                 let ident = self.make_ident(ident_token);
-                let maybe_colon = self.peek();
-                let pattern_id = if maybe_colon.kind == K::Colon {
-                    self.advance();
+                let pattern_id = if self.maybe_consume(K::Equals).is_some() {
                     self.expect_parse_pattern()?
                 } else {
                     // Assume variable binding pattern with same name as field
@@ -2426,6 +2408,13 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 let payload_pattern_id = self.expect_parse_pattern()?;
                 let close_paren = self.expect_kind(K::CloseParen)?;
                 (Some(payload_pattern_id), self.ast.spans.extend(first.span, close_paren.span))
+            } else if self.peek_starts_quiet_payload() {
+                // Quiet payload: `:some v`, `:ok 42`. A postfix `*` still wraps
+                // the whole sum pattern, matching `:some(v)*`; use parens for a
+                // reference payload: `:some(v*)`.
+                let payload_pattern_id = self.expect_pattern_base()?;
+                let payload_span = self.ast.get_pattern_span(payload_pattern_id);
+                (Some(payload_pattern_id), self.ast.spans.extend(first.span, payload_span))
             } else {
                 (None, self.ast.spans.extend(first.span, variant_name_token.span))
             };
@@ -3118,8 +3107,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_struct_field(&mut self) -> ParseResult<StructValueField> {
+        self.expect_kind(K::Dot)?;
         let name = self.expect_kind(K::Ident)?;
-        let value = if let Some(_colon) = self.maybe_consume(K::Colon) {
+        let value = if self.maybe_consume(K::Equals).is_some() {
             if let Some(_t) = self.maybe_consume_ident_chars("uninit") {
                 StructValueFieldKind::Uninit
             } else {
@@ -3134,13 +3124,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_struct_value(&mut self) -> ParseResult<Option<ParsedStruct>> {
-        let (first, second, third) = self.peek_three();
-        let is_empty_struct = first.kind == K::OpenBrace && second.kind == K::CloseBrace;
-        let is_non_empty_struct = first.kind == K::OpenBrace
-            && second.kind == K::Ident
-            // Covers single-field shorthand struct and regular structs
-            && (third.kind == K::Comma || third.kind == K::CloseBrace || third.kind == K::Colon);
-        let is_struct = is_empty_struct || is_non_empty_struct;
+        // A struct value is `{}` or starts `{ .`; any other `{` is a block
+        let (first, second) = self.peek_two();
+        let is_struct = first.kind == K::OpenBrace
+            && (second.kind == K::CloseBrace || second.kind == K::Dot);
         if !is_struct {
             return Ok(None);
         };
@@ -3164,20 +3151,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         // Looping for postfix ops inspired by Jakt's parser
         let with_postfix: ParsedExprId = loop {
             let next = self.peek();
-            // FIXME: Remove old cast syntax
-            let new_result = if next.kind == K::Ident && self.token_chars(next) == "as" {
-                self.advance();
-                let type_expr_id = self.expect_type_expression()?;
-                let span = self.extend_span(
-                    self.get_expression_span(result),
-                    self.ast.get_type_expr_span(type_expr_id),
-                );
-                Some(self.add_expression(ParsedExpr::Cast(ParsedCast {
-                    base_expr: result,
-                    dest_type: type_expr_id,
-                    span,
-                })))
-            } else if next.kind == K::KeywordIs {
+            let new_result = if next.kind == K::KeywordIs {
                 self.advance();
                 let pattern = self.expect_parse_pattern()?;
 
@@ -3382,6 +3356,44 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok((slice, span))
     }
 
+    /// Variant type args bind only when the bracket touches the variant name
+    /// (`:some[int]`); a spaced `[` is a quiet list-literal payload.
+    fn parse_variant_type_args(&mut self) -> ParseResult<AstSlice<NamedTypeArg>> {
+        if self.peek().is_kind_nonspaced(K::OpenBracket) {
+            Ok(self.parse_bracketed_type_args()?.0)
+        } else {
+            Ok(MSlice::empty())
+        }
+    }
+
+    /// Decides whether the token can begin a 'quiet' (paren-free) variant
+    /// payload: `:some 42`, `:err "oops"`, `:point { .x = 1 }`. A `{` counts
+    /// only when it opens a struct (`{ .`), so a trailing variant never eats a
+    /// following block (`if x == :none { .. }`)
+    fn peek_starts_quiet_payload(&self) -> bool {
+        let (one, two) = self.tokens.peek_two();
+        match one.kind {
+            K::Ident | K::Numeric | K::Char | K::OpenBracket => true,
+            K::OpenBrace => two.kind == K::Dot,
+            // A nested variant like `:ok :some`; a spaced ident is a type hint: `:foo: t`
+            K::Colon => two.is_kind_nonspaced(K::Ident),
+            K::Minus => two.is_kind_nonspaced(K::Numeric),
+            k => k.is_string(),
+        }
+    }
+
+    fn parse_variant_payload(&mut self) -> ParseResult<Option<ParsedExprId>> {
+        if self.maybe_consume(K::OpenParen).is_some() {
+            let payload = self.expect_expression()?;
+            self.expect_kind(K::CloseParen)?;
+            Ok(Some(payload))
+        } else if self.peek_starts_quiet_payload() {
+            Ok(Some(self.expect_expression_with_postfix_ops()?))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn expect_namespaced_ident(&mut self) -> ParseResult<QIdent> {
         let (first, second) = self.tokens.peek_two();
         let mut namespaces: SV8<IdentSpanned> = smallvec![];
@@ -3424,8 +3436,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn parse_base_expression(&mut self) -> ParseResult<Option<ParsedExprId>> {
         let compiler_debug = self.parse_compiler_debug();
         let first = self.tokens.peek();
-        let third = self.tokens.peek_n(2);
-        // trace!("parse_base_expression {} {} {}", first.kind, second.kind, third.kind);
         let resulting_expression = match first.kind {
             K::OpenParen => {
                 self.advance();
@@ -3480,35 +3490,22 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let (name_token, variant_name) = self.expect_ident()?;
                 // :none
                 // ^^^^^
-                // :some(42)
-                // ^^^^^
+                // :some(42)   :some 42
+                // ^^^^^       ^^^^^
                 // :some[int](42)
                 // ^^^^^
                 // We set the span to just the name component
                 let span = self.extend_token_span(first, name_token);
 
-                let type_args = self.parse_bracketed_type_args()?.0;
-
-                if third.kind == K::OpenParen {
-                    self.advance();
-                    let payload = self.expect_expression()?;
-                    self.expect_kind(K::CloseParen)?;
-                    Ok(Some(self.add_expression(ParsedExpr::Variant(ParsedVariant {
-                        type_name: None,
-                        variant_name,
-                        type_args,
-                        payload: Some(payload),
-                        span,
-                    }))))
-                } else {
-                    Ok(Some(self.add_expression(ParsedExpr::Variant(ParsedVariant {
-                        type_name: None,
-                        variant_name,
-                        type_args,
-                        payload: None,
-                        span,
-                    }))))
-                }
+                let type_args = self.parse_variant_type_args()?;
+                let payload = self.parse_variant_payload()?;
+                Ok(Some(self.add_expression(ParsedExpr::Variant(ParsedVariant {
+                    type_name: None,
+                    variant_name,
+                    type_args,
+                    payload,
+                    span,
+                }))))
             }
             K::KeywordBuiltin => {
                 self.advance();
@@ -3517,7 +3514,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             K::OpenBrace => {
                 // The syntax {} means empty struct, not empty block
                 // If you want an block, use a unit block { () }
-                // trace!("parse_expr {:?} {:?} {:?}", first, second, third);
                 if let Some(struct_value) = self.parse_struct_value()? {
                     Ok(Some(self.add_expression(ParsedExpr::Struct(struct_value))))
                 } else {
@@ -3616,14 +3612,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         self.advance();
                         let (variant_name_token, variant_name) = self.expect_ident()?;
                         let span = self.extend_token_span(second, variant_name_token);
-                        let type_args = self.parse_bracketed_type_args()?.0;
-                        let payload = if self.maybe_consume(K::OpenParen).is_some() {
-                            let p = self.expect_expression()?;
-                            self.expect_kind(K::CloseParen)?;
-                            Some(p)
-                        } else {
-                            None
-                        };
+                        let type_args = self.parse_variant_type_args()?;
+                        let payload = self.parse_variant_payload()?;
 
                         let variant_expr =
                             self.add_expression(ParsedExpr::Variant(ParsedVariant {
@@ -4992,15 +4982,16 @@ impl ParsedProgram {
             ParsedExpr::Struct(struc) => {
                 w.write_str("struct({")?;
                 for (is_last, f) in self.mem.iter_with_is_last(struc.fields) {
+                    w.write_str(".")?;
                     self.display_ident(w, f.name)?;
                     match f.value {
                         StructValueFieldKind::VarShorthand => {}
                         StructValueFieldKind::Expr(expr) => {
-                            w.write_str(": ")?;
+                            w.write_str(" = ")?;
                             self.display_expr_id(w, expr)?;
                         }
                         StructValueFieldKind::Uninit => {
-                            w.write_str(": uninit")?;
+                            w.write_str(" = uninit")?;
                         }
                     };
                     if !is_last {
@@ -5066,11 +5057,6 @@ impl ParsedProgram {
                     w.write_str(",\n")?;
                 }
                 w.write_str(" }")
-            }
-            ParsedExpr::Cast(cast) => {
-                self.display_expr_id(w, cast.base_expr)?;
-                w.write_str(" as ")?;
-                self.display_type_expr_id(cast.dest_type, w)
             }
             ParsedExpr::Lambda(lambda) => {
                 w.write_char('\\')?;

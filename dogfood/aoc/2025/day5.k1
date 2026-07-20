@@ -11,8 +11,8 @@ let sample: string =
 8
 11
 17
-32`;
-let input-file: string = core/files/read-to-string(context .arena)("day5_input.txt");
+32`
+let input-file: string = core/files/read-to-string(context :tmp)("day5_input.txt")
 
 // The fresh ID ranges are inclusive: the range 3-5 means that ingredient IDs 3, 4, and 5 are all fresh. The ranges can also overlap; an ingredient ID is fresh if it is in any range.
 // 
@@ -28,26 +28,26 @@ let input-file: string = core/files/read-to-string(context .arena)("day5_input.t
 
 use core/assertdbg
 type range = { start: uint, end: uint }
-ns range {
+ns for range {
   fn parse(s: string): result[range, string] {
      let r = s.split-by-char('-');
      assertdbg(r.len() == 2);
      let start = r.get(0).parse-base10().!;
      let end   = r.get(1).parse-base10().!;
-     :ok({ start, end });
+     :ok { .start, .end }
   }
 }
 
 fn part-one(input: string) {
   let lines = input.split-by-char('\n');
-  let parse-mode: either { ranges, ingredients } = .ranges;
+  let parse-mode: either { ranges, ingredients } = :ranges;
   let ranges = list/empty[range]();
   let ing = list/empty[uint]();
   for lines {
-    if it.is-empty() { parse-mode := .ingredients; } else {
+    if it.is-empty() { parse-mode := :ingredients; } else {
       switch parse-mode {
-        .ranges -> { ranges.push(range/parse(it).!) },
-        .ingredients -> { ing.push(it.parse-base10().!) }
+        :ranges -> { ranges.push(range/parse(it).!) },
+        :ingredients -> { ing.push(it.parse-base10().!) }
       }
     }
   };

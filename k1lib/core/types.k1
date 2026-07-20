@@ -22,13 +22,13 @@ type any = {
 }
 
 fn make-any[t](t: *t): any {
-  { type-id: type-id[t], value: t.as[ptr] }
+  { .type-id = type-id[t], .value = t.as[ptr] }
 }
 
 fn assert-wrapper-type[wrapper, inner]() {
   let schema-a = types/schema[wrapper];
   let b-type-id = types/type-id[inner];
-  require schema-a is :struct({ fields }) else { crash("is-wrapper-type: Wrapper must be a struct") };
+  require schema-a is :struct({ .fields }) else { crash("is-wrapper-type: Wrapper must be a struct") };
   require fields.first() is :some(field) and fields.len() == 1 else crash("Wrapper must have one field, got {fields.len()}");
   let equal = field.type-id == b-type-id;
   if not equal { crash("Expected {types/name[inner]} but got {types/type-id-name(field.type-id)}") };

@@ -16,8 +16,8 @@ type stream-response = { content-type: string, stream: response-stream }
 // Allocates its cursor state in the ambient mode; callers inside a request
 // handler get the request arena, which is exactly the lifetime we need.
 fn stream-of-buffer(bytes: span[u8], chunk-size: size): response-stream {
-  let state: *mut buffer-stream = mem/new({ bytes, cursor: 0, chunk-size });
-  { state: state.as[ptr], next: buffer-stream-next }
+  let state: *mut buffer-stream = mem/new({ .bytes, .cursor = 0, .chunk-size });
+  { .state = state.as[ptr], .next = buffer-stream-next }
 }
 
 type buffer-stream = {
@@ -50,9 +50,9 @@ ns chunked {
 
   fn begin(connection: *mut connection, streaming: stream-response) {
     let encoder: *mut encoder = connection.request-arena.push({
-      connection,
-      stream: streaming.stream,
-      finishing: false,
+      .connection,
+      .stream = streaming.stream,
+      .finishing = false,
     });
     mem/push-mode(:custom-arena(connection.request-arena));
     let headers = stringf(

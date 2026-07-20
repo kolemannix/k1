@@ -10,7 +10,7 @@ fn simple-enum() {
   {}
 }
 
-let p: { x: int, y: ?int } = { x: 1, y: :some(2) }
+let p: { x: int, y: ?int } = { .x = 1, .y = :some(2) }
 
 fn simple-struct() {
   assert-equals(p.x, 1);

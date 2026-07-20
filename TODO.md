@@ -20,11 +20,15 @@ Minor and ideas
       `if x           then <a> else <b>`
       `if x is <pat>` then <a> else <b>
       `if x           { <pat>, <pat>, <pat> }
-- [ ] New struct literal syntax : `{ x: 1, y: 2 }` -> `{ .x = 1, .y = 2 }`. Why? clarity of meaning of "=", consistent meaning of '.', and parsing ambiguity resolution
+- [x] New struct literal syntax : `{ x: 1, y: 2 }` -> `{ .x = 1, .y = 2 }`. Why? clarity of meaning of "=", consistent meaning of '.', and parsing ambiguity resolution
       We still allow `{ .x, .y }` to mean `{ .x = x, .y = y }`
+      Done for values and patterns; type syntax keeps ':'. `{` not followed by `.` (or `}`) is now unambiguously a block, and `{ .` structs are valid quiet variant payloads.
+- [x] 'Quiet' sum construction syntax: elide the parentheses. Current: `:some("foo")`, allow also `:some "foo"`. Why? Noise, ease of editing (don't have to mess with a surround), and
+      it looks less like a function call `()`, which is a nice little bonus
+      Done for construction and patterns. Quiet payloads start with an ident, literal, list literal, or nested `:variant`; `{` payloads keep parens so `if x == :none { .. }` still reads as a block.
 - [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
 - [ ] c"" string literals that are of type ptr (no interpolation)
-- [ ] [design/flags_in_tags.k1]
+- [ ] [design/flags_in_tags.k1.wip]
 - [ ] Inspired by fast_float, char to digit lookup table
 Simple but missing
 - [x] auto-equals implementation on-demand for structs
@@ -58,8 +62,10 @@ Simple but missing
 - [x] static #switch
 
 Feedback
-- [ ] else { cap } is a struct literal. Field shorthand makes any { ident } ambiguous with a block, and it resolved to { cap: cap }, giving "Expected i64 but got { cap: i64 }". I could decode it, but this will bite everyone eventually. Worth a deliberate rule — e.g. struct literal requires : or , or the type being expected, or a parse-time warning when a block position resolves to a shorthand struct.
+- [x] else { cap } is a struct literal. Field shorthand makes any { ident } ambiguous with a block, and it resolved to { cap: cap }, giving "Expected i64 but got { cap: i64 }". I could decode it, but this will bite everyone eventually. Worth a deliberate rule — e.g. struct literal requires : or , or the type being expected, or a parse-time warning when a block position resolves to a shorthand struct.
+      Fixed by the dotted struct literal syntax: { cap } is a block, { .cap } is the struct.
 - [ ] A #static infinite loop hangs the compiler with zero output. Ten minutes of nothing. A VM step budget that errors out ("static execution exceeded N instructions, last function: ...") would have turned a hang-bisect into an instant diagnosis.
+- [ ] Static-execution file reads (`#static` + `files/read-to-string`, global initializers) resolve relative paths against the compiler's cwd, so `k1 c dogfood/aoc/2025` only works from inside that dir. Consider resolving against the module dir (or the source file's dir) during static execution.
 - [ ] Iterator ability: why is peek the primitive? With peek(self: *self) immutable, a filtering iterator like mine can't cache what it found — next() = scan (peek) + scan again (advance-by). Also every nth impl in the codebase is the identical advance-by(n); self.next() — could that be a default? Was peek chosen for for-loop desugaring reasons, or would nextced-as-primitive with peek-via-buffering be on the table?
 
 bindgen dogfood list

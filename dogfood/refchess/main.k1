@@ -102,9 +102,9 @@ ns for game-state {
     let b-rooks   = 0b1000000100000000000000000000000000000000000000000000000000000000: bitboard;
     let b-queens  = 0b0000100000000000000000000000000000000000000000000000000000000000: bitboard;
     let b-kings   = 0b0001000000000000000000000000000000000000000000000000000000000000: bitboard;
-    { w-pawns, w-knights, w-bishops, w-rooks, w-queens, w-kings, 
-      b-pawns, b-knights, b-bishops, b-rooks, b-queens, b-kings, 
-      castle-rights: 0b00000011, en-passant-file: -1, turn: :white }
+    { .w-pawns, .w-knights, .w-bishops, .w-rooks, .w-queens, .w-kings, 
+      .b-pawns, .b-knights, .b-bishops, .b-rooks, .b-queens, .b-kings, 
+      .castle-rights = 0b00000011, .en-passant-file = -1, .turn = :white }
   }
 
   fn print-grid(self: game-state) {
@@ -226,7 +226,7 @@ fn handle-command(context eng: engine)(command: uci/command): ?string {
       debug-log("Setting position: {s}");
       none()
     },
-    :perft({ depth }) -> {
+    :perft({ .depth }) -> {
       debug-log("Handling perft depth {depth}");
       eng.game.gen-moves();
       none()
@@ -247,7 +247,7 @@ fn debug-log(context eng: engine)(s: string) {
 }
 
 fn run(_args: span[string]): result[i32, string] {
-  let context eng: engine = { game: game-state/start-pos() };
+  let context eng: engine = { .game = game-state/start-pos() };
   loop {
     // TODO(dogfood): easy mapError before try
     let cmd = sys/read-line(2048).try; 

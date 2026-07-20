@@ -12,17 +12,17 @@ fn takes-structural(_s: { index: size}) { {} }
 fn get-nominal(_h: handle): string { "mock" }
 
 fn test() {
-  let handle-anon = { index: 10 };
+  let handle-anon = { .index = 10 };
 
-  let h1 = { index: 10 }: handle;
-  let h2: handle2 = { index: 10 };
+  let h1 = { .index = 10 }: handle;
+  let h2: handle2 = { .index = 10 };
 
   takes-structural(handle-anon);
   assert(test-compile(takes-structural(h2)).is-none());
 
 
   //:ok; structural type 'promoted' to nominal at creation time
-  get-nominal({ index: 10 });
+  get-nominal({ .index = 10 });
 
   // not ok; get takes `handle` nominally; h is anonymous.
   assert(test-compile(get-nominal(handle-anon)).is-some());

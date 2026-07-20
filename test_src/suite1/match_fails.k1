@@ -2,22 +2,22 @@ ns match_fails;
 
 type foo = { x: int, y: ?bool }
 fn useless() {
-  let foo: foo = { x: 1, y: :none };
+  let foo: foo = { .x = 1, .y = :none };
   let result = test-compile(switch foo {
-    { x, y: :some(true) } -> x,
-    { x, y: :some(false) } -> x,
-    { x, y: :some(false) } -> x,
-    { x, y: :none } -> x + 2
+    { .x, .y = :some(true) } -> x,
+    { .x, .y = :some(false) } -> x,
+    { .x, .y = :some(false) } -> x,
+    { .x, .y = :none } -> x + 2
   });
   assert(result is :some(_));
 }
 
 type blub = { x: int, y: ?bool }
 fn unhandled() {
-  let blub: blub = { x: 1, y: :none };
+  let blub: blub = { .x = 1, .y = :none };
   let result = test-compile(switch blub {
-    { x, y: :some(true) } -> x,
-    { x, y: :none } -> x + 2
+    { .x, .y = :some(true) } -> x,
+    { .x, .y = :none } -> x + 2
   });
   assert(result is :some(_));
 }

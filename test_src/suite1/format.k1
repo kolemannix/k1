@@ -16,13 +16,13 @@ fn test() {
   assert-equals("-3", stringf("{}", -3i8));
   
   assert(test-compile(stringf("{}", 1, 1)).is-some());
-  assert(test-compile(stringf("{missing}", {x:1})).is-some());
+  assert(test-compile(stringf("{missing}", {.x =1})).is-some());
   // this works now because { nested: "asdf" } implements print. hah!
-  assert(test-compile(stringf("{x}", {x: { nested: "asdf" }})).is-none());
+  assert(test-compile(stringf("{x}", {.x = { .nested = "asdf" }})).is-none());
 
   // Or you can just make strings directly, mixing interpolated expressions
   // with struct specifiers
-  let s = stringf("hello {get-world()} {yyyy}-{mm}-{dd}", {yyyy:2021,mm:10,dd:3});
+  let s = stringf("hello {get-world()} {yyyy}-{mm}-{dd}", {.yyyy =2021,.mm =10,.dd =3});
   // TODO left pad, get it from npm!
   assert-equals(s, "hello Budapest 2021-10-3");
 }

@@ -35,10 +35,10 @@ fn match-opt-bool(b: ?bool): string {
 
 fn both-true(bb: { a: bool, b: bool }): bool {
   switch bb {
-    { a: false, b: false } -> false,
-    { a: false, b: true } -> false,
-    { a: true, b: false } -> false,
-    { a: true, b: true } -> true
+    { .a = false, .b = false } -> false,
+    { .a = false, .b = true } -> false,
+    { .a = true, .b = false } -> false,
+    { .a = true, .b = true } -> true
   }
 }
 
@@ -55,12 +55,12 @@ fn main(): i32 {
   let yes: tri-state = :yes;
   assert-equals(match-tristate-opt(:some(yes)), "yes");
   assert-equals(match-tristate-opt(:some(:yes)), "yes");
-  assert-equals(match-tristate-opt(:some(:failure({ reason: "because" }))), "failure: because");
+  assert-equals(match-tristate-opt(:some(:failure({ .reason = "because" }))), "failure: because");
 
-  assert(not both-true({ a: true, b: false }));
-  assert(both-true({ a: true, b: true }));
+  assert(not both-true({ .a = true, .b = false }));
+  assert(both-true({ .a = true, .b = true }));
 
-  assert(failed-with-baz(:failure({ reason: "baz" })));
+  assert(failed-with-baz(:failure({ .reason = "baz" })));
   assert(not failed-with-baz(:no));
 
   switch some(42) {

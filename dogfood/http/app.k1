@@ -13,9 +13,9 @@ type deps = {
 fn make-deps(): *deps {
   system-heap.new(
     {
-      config: { jwt-secret: "asdf" },
-      db-conn: {},
-      publisher: pubsub/publisher(),
+      .config = { .jwt-secret = "asdf" },
+      .db-conn = {},
+      .publisher = pubsub/publisher(),
     }: app/deps
   )
 }
@@ -39,7 +39,7 @@ fn handle(req: http/request, deps: *mut deps): http-response {
   // `GET /events`: SSE subscription to the app-wide "global" topic,
   // which the mock publisher heartbeats every 5 ticks.
   if req.header.url == "/events" {
-    return(:subscribe({ topic: "global" }))
+    return(:subscribe({ .topic = "global" }))
   };
 
   // `GET /game/{id}/events`: SSE subscription to topic "game.{id}".
@@ -49,7 +49,7 @@ fn handle(req: http/request, deps: *mut deps): http-response {
     // ["", "game", "{id}", "events"]
     let id = parts.get(2);
     if parts.len() == 4 and parts.get(3) == "events" {
-      return(:subscribe({ topic: "game.{id}" }))
+      return(:subscribe({ .topic = "game.{id}" }))
     };
     // `GET /game/{id}/poke`: publish from user code on a worker thread,
     // through the handle carried in deps.
@@ -67,8 +67,8 @@ fn handle(req: http/request, deps: *mut deps): http-response {
     render-big-json(&out, rows = 20000);
     let body = out.build();
     return(:stream({
-      content-type: "application/json",
-      stream: stream-of-buffer(body.span-bytes(), chunk-size = 65536),
+      .content-type = "application/json",
+      .stream = stream-of-buffer(body.span-bytes(), chunk-size = 65536),
     }))
   };
 
@@ -84,12 +84,12 @@ fn handle(req: http/request, deps: *mut deps): http-response {
   } else if req.header.url.starts-with("/app/sync") {
     // TODO: push styles as script maybe + new body
     let template: string = core/files/read-to-string("web/header.html");
-    let output = template(template, [{ key: "styles.css", value: styles }]).!;
+    let output = template(template, [{ .key = "styles.css", .value = styles }]).!;
     let header = make-header(output.len());
     :complete([header, output]);
   } else {
     let template: string = core/files/read-to-string("web/header.html");
-    let output = template(template, [{ key: "styles.css", value: styles }]).!;
+    let output = template(template, [{ .key = "styles.css", .value = styles }]).!;
     let header = make-header(output.len());
     :complete([header, output]);
   }
@@ -160,7 +160,7 @@ fn template(template: string, values: span[{ key: string, value: string }]): ?st
 }
 
 #static {
-  let result = template(p"my favorite food is {{x}}{{punct}}", [{ key: "x", value: "Ice Cream" }, { key: "punct", value: "!"}]);
+  let result = template(p"my favorite food is {{x}}{{punct}}", [{ .key = "x", .value = "Ice Cream" }, { .key = "punct", .value = "!"}]);
   println(result.!)
 }
 
@@ -184,6 +184,6 @@ fn update(pixels: *array[u8, 65536]): { x: u32, y: u32 } {
   let pix = pixels.get(y*gridsize + x).&;
   // pix <- pix ^ 1;
   pix <- 1;
-  { x, y }
+  { .x, .y }
 }
 }

@@ -10,9 +10,9 @@ fn test() {
     }
   };
 
-  let point = { x: 5, y: 2 };
+  let point = { .x = 5, .y = 2 };
   let point = &point;
-  if point is { x, y: 2 }* {
+  if point is { .x, .y = 2 }* {
     assert-equals(x.*, 5);
   };
 

@@ -11,7 +11,7 @@ ns type_schema {
 
   fn print-struct-shape[t](): string {
     let id = type-id[t];
-    require schema[t] is :struct({ fields }) else { return("") };
+    require schema[t] is :struct({ .fields }) else { return("") };
     let sb = string-builder/new();
     let name = types/type-id-name(id);
     sb.string("Struct {name} \{\n");
@@ -37,10 +37,10 @@ ns type_schema {
     assert(schema[f64]  is :float(:f64));
 
     let point-byte-schema = schema[point3[u8]];
-    require point-byte-schema is :struct({ fields }) else crash("");
+    require point-byte-schema is :struct({ .fields }) else crash("");
     assert-equals(fields.len(), 3);
     require schema[*i32]
-      is :reference({ inner-type-id })
+      is :reference({ .inner-type-id })
       and inner-type-id == type-id[i32] else crash("");
     assert-equals(
       schema[**bool].as-reference().!.inner-type-id,
@@ -50,13 +50,13 @@ ns type_schema {
     assert(schema[either { yes }] is :enum(_));
 
     require schema[either { yes, no, maybe-so(string) }]
-      is :either({ variants, payload-offset })
+      is :either({ .variants, .payload-offset })
       and payload-offset == 8
       and variants.len() == 3
       and variants.get(0).name == "yes"
       and variants.get(1).name == "no"
       and variants.get(2).name == "maybe-so"
-      and variants.get(2).payload is :some({ type-id })
+      and variants.get(2).payload is :some({ .type-id })
       and type-id == type-id[string]
       else crash("");
 
@@ -66,7 +66,7 @@ ns type_schema {
 
     assert(schema[array[i32, 10]] is :array(_));
     require schema[array[string, 5]]
-      is :array({ element-type-id, size })
+      is :array({ .element-type-id, .size })
       and element-type-id == type-id[string]
       and size == :some(5)
       else crash("");
@@ -75,17 +75,17 @@ ns type_schema {
 
     let is-zero-ptr: *fn(int) -> bool = is-zero;
     require schema[type-of(is-zero-ptr)]
-      is :function-pointer({ function-type-id }) else crash("");
+      is :function-pointer({ .function-type-id }) else crash("");
 
     require type-id-schema(function-type-id)
-      is :function({ params, return-type-id }) else crash("");
+      is :function({ .params, .return-type-id }) else crash("");
 
     assert(type-id-schema(return-type-id) is :bool);
     assert-equals(params.get(0).name, "x");
     assert(type-id-schema(params.get(0).type-id) is :int(_));
 
     require schema[union { a: int, b: f64, c: f32 }]
-      is :union({ fields })
+      is :union({ .fields })
       and fields.len()         == 3
       and fields.get(0).name   == "a"
       and fields.get(0).offset == 0

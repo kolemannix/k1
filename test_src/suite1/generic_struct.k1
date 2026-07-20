@@ -18,51 +18,51 @@ fn takes-poly-au-pair[c, d](_x: au-pair[c, d]) { {} }
 type constrained-box[a, b: try[t = a, e = empty]] = { inner: b }
 fn test-constraints() {
   // Should typecheck just fine since the constraint is satisfied
-  let x: constrained-box[int, ?int] = { inner: some(4) };
+  let x: constrained-box[int, ?int] = { .inner = some(4) };
   assert-equals(types/type-id[type-of(x).a], types/type-id[int]);
   assert-equals[?string](
-    test-compile({ inner: some(4) }: constrained-box[int, ?bool]),
+    test-compile({ .inner = some(4) }: constrained-box[int, ?bool]),
     :some("Provided type b := opt[bool] does implement required ability try, but the implementation parameter t is wrong: Expected type was i64 but the actual implementation uses bool")
   );
   {}
 }
 
 fn test() {
-  let b: box[int] = { value: 0 };
+  let b: box[int] = { .value = 0 };
   b.value;
-  let c: box[bool] = { value: true };
-  let c2: box[bool] = { value: false };
-  let c3: box[?bool] = { value: :some(false) };
-  let c4: box[*bool] = { value: core/mem/new(false) };
+  let c: box[bool] = { .value = true };
+  let c2: box[bool] = { .value = false };
+  let c3: box[?bool] = { .value = :some(false) };
+  let c4: box[*bool] = { .value = core/mem/new(false) };
   assert-equals(b.value, 0);
   assert-equals(c.value, true);
   assert-equals(c2.value, false);
   assert-equals(c3.value.!, false);
   assert-equals(c4.value.*, false);
 
-  let p: au-pair[int, bool] = { t: some(0), u: some(true) };
+  let p: au-pair[int, bool] = { .t = some(0), .u = some(true) };
   assert(p.t.! == 0);
   assert(p.u.! == true);
   assert(p.t[int, bool]().! == 0);
   assert(p.t().! == 0);
 
-  let nested: box[box[box[int]]] = { value: { value: { value: 42 } } };
+  let nested: box[box[box[int]]] = { .value = { .value = { .value = 42 } } };
   assert(unbox-it(nested) == 42);
 
-  takes-poly-au-pair({ t: some(42), u: opt:some(true) });
-  takes-poly-au-pair({ t: some(42), u: some(true) });
-  takes-poly-au-pair({ t: some(42), u: some(true) });
+  takes-poly-au-pair({ .t = some(42), .u = opt:some(true) });
+  takes-poly-au-pair({ .t = some(42), .u = some(true) });
+  takes-poly-au-pair({ .t = some(42), .u = some(true) });
 
-  takes-poly-au-pair[int, _]({ t: some(42), u: some(true) });
-  takes-poly-au-pair[_, bool]({ t: some(42), u: some(true) });
-  takes-poly-au-pair[_, _]({ t: some(42), u: some(true) });
+  takes-poly-au-pair[int, _]({ .t = some(42), .u = some(true) });
+  takes-poly-au-pair[_, bool]({ .t = some(42), .u = some(true) });
+  takes-poly-au-pair[_, _]({ .t = some(42), .u = some(true) });
 
   assert(
-    test-compile(takes-poly-au-pair[ptr, _]({ t: some(42), u: some(true) }))
+    test-compile(takes-poly-au-pair[ptr, _]({ .t = some(42), .u = some(true) }))
     is :some(_)
   );
   assert(
-    test-compile(takes-poly-au-pair[_, ptr]({ t: some(42), u: some(true) }))
+    test-compile(takes-poly-au-pair[_, ptr]({ .t = some(42), .u = some(true) }))
     is :some(_)
   );
 

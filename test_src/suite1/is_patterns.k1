@@ -31,7 +31,7 @@ fn test() {
   assert(not (opt is :none));
 
 
-  let foo = { x: 1, y: "asdf" };
+  let foo = { .x = 1, .y = "asdf" };
   // Wildcard pattern
   if foo is _ {
     assert(true);
@@ -44,24 +44,41 @@ fn test() {
 
   // Else works
   let else_ran = false;
-  if foo is { x: 200 } {} else {
+  if foo is { .x = 200 } {} else {
     else_ran := true;
   };
   assert(else_ran);
 
   // record pattern, with integer pattern
   // and nested variable pattern
-  if foo is { x: 1, y } {
+  if foo is { .x = 1, .y } {
     assert(y == "asdf");
   };
 
   // record pattern where inner has condition statements
-  let bar = { x: :some(1): ?int };
-  if bar is { x: :some(x) } {
+  let bar = { .x = :some(1): ?int };
+  if bar is { .x = :some(x) } {
     assert(x == 1);
   };
 
   // Optionals
-  let opt: ?{ x: i64 } = :some({ x: 1 });
-  if opt is :some({ x: 2 }) {} else assert(true);
+  let opt: ?{ x: i64 } = :some({ .x = 1 });
+  if opt is :some({ .x = 2 }) {} else assert(true);
+
+  // Quiet sum patterns: payload without parens
+  let qo: ?int = :some 42;
+  assert(qo is :some 42);
+  assert(qo is :some _);
+  assert(not (qo is :some 41));
+  if qo is :some v {
+    assert(v == 42);
+  } else crash("");
+  require qo is :some w else crash("");
+  assert(w == 42);
+
+  // Postfix * still wraps the whole sum pattern, like :some(r)*
+  let qr = &qo;
+  if qr is :some r* {
+    assert(r.* == 42);
+  } else crash("");
 }

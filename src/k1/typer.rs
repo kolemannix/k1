@@ -8451,11 +8451,6 @@ impl TypedProgram {
                 let allow_bindings = true;
                 self.eval_match_expr(expr_id, ctx, check_exhaustive, allow_bindings, None)
             }
-            ParsedExpr::Cast(cast) => {
-                let cast = *cast;
-                let dest_type = self.eval_type_expr(cast.dest_type, ctx.scope_id)?;
-                self.eval_cast(cast.base_expr, dest_type, cast.span, ctx)
-            }
             ParsedExpr::Lambda(_lambda) => self.eval_lambda(expr_id, ctx),
             ParsedExpr::InterpolatedString(_is) => {
                 let res = self.synth_interpolated_string(expr_id, ctx, None)?;

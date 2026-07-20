@@ -33,6 +33,33 @@ fn sum-payload() {
 
 }
 
+// 'Quiet' construction and patterns: payload without parentheses
+fn sum-quiet() {
+  let b: maybe = :b 'x';
+  let c: maybe = :c "hello, sums";
+
+  if b is :b x {
+    assert(x == 'x');
+  } else crash("");
+  assert(b is :b _);
+  assert(b is :b 'x' or b is :a);
+
+  let msg = switch c {
+    :a -> "a",
+    :b _ -> "b",
+    :c s if s.len() > 0 -> s,
+    :c _ -> "empty"
+  };
+  assert(msg == "hello, sums");
+
+  let r: my-result[?int, string] = :ok :some 3;
+  assert(r is :ok(:some 3));
+  assert(r.as-ok().! == :some 3);
+
+  let l: ?list[int] = :some [1, 2, 3];
+  assert(l.!.len() == 3);
+}
+
 type my-result[t, e] = either { ok(t), err(e) }
 ns for my-result {
   fn my-get[t, e](self: my-result[t, e]): t {
@@ -87,5 +114,6 @@ fn tags() {
 fn test() {
   tags();
   sum-payload();
+  sum-quiet();
   generic-sum();
 }

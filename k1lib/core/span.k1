@@ -18,11 +18,11 @@ ns for span {
 
   // Only safe if you have exclusive access to buffer
   fn wrap-buffer[t](buffer: buffer[t]): span[t] {
-    { buffer }
+    { .buffer }
   }
 
   fn wrap-raw[t](ptr: ptr, len: size): span[t] {
-    { buffer: buffer/wrap-raw(ptr, len) }
+    { .buffer = buffer/wrap-raw(ptr, len) }
   }
 
   fn inner-buffer[t](self: span[t]): buffer[t] {
@@ -34,20 +34,20 @@ ns for span {
   }
 
   fn empty[t](): span[t] {
-    { buffer: buffer/empty[t]() }
+    { .buffer = buffer/empty[t]() }
   }
 
   fn from-array[t, n: static size](array: *array[t, n]): span[t] {
     let buffer = buffer/from-array[t, n](array);
-    { buffer }
+    { .buffer }
   }
 
   fn cloned[t](self: span[t]): span[t] {
-    { buffer: self.buffer.cloned() }
+    { .buffer = self.buffer.cloned() }
   }
 
   fn cloned-in[t](context alloc: mem/alloc-mode)(self: span[t]): span[t] {
-    { buffer: self.buffer.cloned-in() }
+    { .buffer = self.buffer.cloned-in() }
   }
 
   fn len[t](self: span[t]): size { self.buffer.len }
@@ -67,7 +67,7 @@ ns for span {
   }
 
   fn slice[t](self: span[t], start: size, end: size): span[t] {
-    { buffer: self.buffer.slice(start, end) }
+    { .buffer = self.buffer.slice(start, end) }
   }
 
   fn take[t](self: span[t], count: size): span[t] { self.slice(0,     count) }
@@ -142,11 +142,11 @@ ns for span {
   }
 
   fn as-char-span(self: span[byte]): span[char] {
-    { buffer: self.buffer.as-char-buffer() }
+    { .buffer = self.buffer.as-char-buffer() }
   }
 
   fn as-byte-span(self: span[char]): span[byte] {
-    { buffer: self.buffer.as-byte-buffer() }
+    { .buffer = self.buffer.as-byte-buffer() }
   }
 
 }

@@ -88,7 +88,7 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
     // Construct the final output struct
     writelnf(code, ":ok(\{");
     for s.fields {
-      writelnf(code, "{it.name}: {it.name}-out,")
+      writelnf(code, ".{it.name} = {it.name}-out,")
     };
     writelnf(code, "})");
 

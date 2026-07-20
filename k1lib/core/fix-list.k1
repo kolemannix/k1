@@ -14,7 +14,7 @@ ns for fixlist {
   fn zeroed[t, n: static size](): fixlist[t, n] { mem/zeroed() }
 
   fn uninit[t, n: static size](): core/fixlist[t, n] {
-    { used: 0, data: uninit }
+    { .used = 0, .data = uninit }
   }
 
   fn clear[t, n: static size](self: *mut fixlist[t, n]): empty {

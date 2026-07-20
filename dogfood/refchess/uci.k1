@@ -31,7 +31,7 @@ fn parse-command(cmd: string): result[command, string] {
     _ -> {
       if cmd.starts-with("perft ") {
          let parsed-depth = cmd.drop(6).to-int();
-         if parsed-depth is :some(depth) { :ok(:perft({ depth: depth.as[u32] })) }
+         if parsed-depth is :some(depth) { :ok(:perft({ .depth = depth.as[u32] })) }
          else :err("Invalid perft command: {cmd}")
       } else if cmd.starts-with("position ") {
         // "position" command sets up a position to analyze:

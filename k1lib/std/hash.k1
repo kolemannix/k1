@@ -75,7 +75,7 @@ ns for map {
   }
 
   fn new[k, v](): map[k, v] {
-    { count: 0, tombstones: 0, slots: buffer/empty() }
+    { .count = 0, .tombstones = 0, .slots = buffer/empty() }
   }
 
   // smallest power-of-two capacity that holds min-capacity live
@@ -89,7 +89,7 @@ ns for map {
   }
 
   fn with-capacity-in[k, v](context mode: alloc-mode)(min-capacity: size): map[k, v] {
-    { count: 0, tombstones: 0, slots: _allocate-slots[k, v](_capacity-for(min-capacity)) }
+    { .count = 0, .tombstones = 0, .slots = _allocate-slots[k, v](_capacity-for(min-capacity)) }
   }
 
   fn with-capacity[k, v](min-capacity: size): map[k, v] {
@@ -121,7 +121,7 @@ ns for map {
         new-slots.get-ref-unchecked(idx) <- s;
       }
     };
-    self <- { count: self.count, tombstones: 0, slots: new-slots };
+    self <- { .count = self.count, .tombstones = 0, .slots = new-slots };
     if old.non-empty() {
       let resolved = mode.resolve();
       if resolved.requires-free() {
@@ -167,12 +167,12 @@ ns for map {
     loop {
       let s = self.slots.get-ref-unchecked(idx);
       if s.hash == h and s.key == key {
-        break({ idx, found: true, from-tombstone: false })
+        break({ .idx, .found = true, .from-tombstone = false })
       };
       if s.hash == EMPTY {
         break(switch tombstone {
-          :some(t) -> { idx: t, found: false, from-tombstone: true },
-          :none -> { idx, found: false, from-tombstone: false }
+          :some(t) -> { .idx = t, .found = false, .from-tombstone = true },
+          :none -> { .idx, .found = false, .from-tombstone = false }
         })
       };
       if s.hash == TOMBSTONE and tombstone is :none { tombstone := :some(idx) };
@@ -194,7 +194,7 @@ ns for map {
     if probe.found {
       self.slots.get-ref-unchecked(probe.idx).value <- value;
     } else {
-      self._place(probe, { hash: h, key, value });
+      self._place(probe, { .hash = h, .key, .value });
     };
   }
 
@@ -209,7 +209,7 @@ ns for map {
     let h = _slot-hash(key);
     let probe = self._probe-insert(key, h);
     if not probe.found {
-      self._place(probe, { hash: h, key, value: make() });
+      self._place(probe, { .hash = h, .key, .value = make() });
     };
     self.slots.get-ref-unchecked(probe.idx).value.&
   }
@@ -222,7 +222,7 @@ ns for map {
     let h = _slot-hash(key);
     let probe = self._probe-insert(key, h);
     if not probe.found {
-      self._place(probe, { hash: h, key, value: make() });
+      self._place(probe, { .hash = h, .key, .value = make() });
     };
     self.slots.get-ref-unchecked(probe.idx).value.&
   }
@@ -305,11 +305,11 @@ impl[k, v] iterator[item = { key: k, value: v }] for map-iterator[k, v] {
     let i = self._next-live(self.pos);
     if i < self.slots.len {
       let s = self.slots.get-ref-unchecked(i);
-      :some({ key: s.key, value: s.value })
+      :some({ .key = s.key, .value = s.value })
     } else :none
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } {
-    { at-least: self.remaining, at-most: :some(self.remaining) }
+    { .at-least = self.remaining, .at-most = :some(self.remaining) }
   }
   fn advance-by(self: *mut self, n: size): empty {
     let advanced = 0;
@@ -333,7 +333,7 @@ impl[k, v] iterator[item = { key: k, value: v }] for map-iterator[k, v] {
 
 impl[k, v] iterable[item = { key: k, value: v }, i = map-iterator[k, v]] for map[k, v] {
   fn iterator(self): i {
-    { slots: self.slots, pos: 0, remaining: self.count }
+    { .slots = self.slots, .pos = 0, .remaining = self.count }
   }
 }
 
@@ -359,11 +359,11 @@ ns for set {
   use mem/alloc-mode
 
   fn new[t](): set[t] {
-    { inner: map/new() }
+    { .inner = map/new() }
   }
 
   fn with-capacity-in[t](context mode: alloc-mode)(min-capacity: size): set[t] {
-    { inner: map/with-capacity-in[t, empty](min-capacity) }
+    { .inner = map/with-capacity-in[t, empty](min-capacity) }
   }
 
   fn with-capacity[t](min-capacity: size): set[t] {
@@ -436,7 +436,7 @@ impl[t] iterator[item = t] for set-iterator[t] {
 
 impl[t] iterable[item = t, i = set-iterator[t]] for set[t] {
   fn iterator(self): i {
-    { inner: self.inner.iterator() }
+    { .inner = self.inner.iterator() }
   }
 }
 

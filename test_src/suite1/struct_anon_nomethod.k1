@@ -16,11 +16,11 @@ ns point-alias {
 
 fn test() {
   // Should work because point-named is a proper type
-  let p: point-named = { x: 0, y: 0 };
+  let p: point-named = { .x = 0, .y = 0 };
   p.sum();
 
   // Should not work because point-alias is a type alias
-  let p2: point-alias = { x: 0, y: 0 };
+  let p2: point-alias = { .x = 0, .y = 0 };
   assert-equals[?string](
     test-compile(p2.sum()),
     opt:some(p"Method 'sum' does not exist on type '{ x: i64, y: i64 }'")

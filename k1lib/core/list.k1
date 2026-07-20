@@ -26,22 +26,22 @@ ns for list {
 
   fn filled[t](size: size, value: t): list[t] {
     let buffer = buffer/filled(size, value);
-    { len: size, buffer: buffer }
+    { .len = size, .buffer = buffer }
   }
 
   fn filled-in[t](context mode: alloc-mode)(size: size, value: t): list[t] {
     let buffer = buffer/filled-in(size, value);
-    { len: size, buffer: buffer }
+    { .len = size, .buffer = buffer }
   }
 
   fn with-capacity[t](cap: size): list[t] {
     let buffer = buffer/allocate[t](cap);
-    { len: 0, buffer: buffer }
+    { .len = 0, .buffer = buffer }
   }
 
   fn with-capacity-in[t](context mode: alloc-mode)(cap: size): list[t] {
     let buffer = buffer/allocate-in[t](cap);
-    { len: 0, buffer: buffer }
+    { .len = 0, .buffer = buffer }
   }
 
   fn reserve-in[t](context alloc: alloc-mode)(self: *mut list[t], count: size) {
@@ -58,7 +58,7 @@ ns for list {
   }
 
   fn wrap-buffer[t](buffer: buffer[t]): list[t] {
-    { len: buffer.len, buffer: buffer }
+    { .len = buffer.len, .buffer = buffer }
   }
 
   // Return only the part of our buffer with Ts in it!!!
@@ -124,7 +124,7 @@ ns for list {
   }
 
   fn cloned-in[t](context mode: alloc-mode)(self: list[t]): list[t] {
-    { len: self.len, buffer: self.buffer.cloned-in() }
+    { .len = self.len, .buffer = self.buffer.cloned-in() }
   }
 
   fn cloned[t](self: list[t]): list[t] {

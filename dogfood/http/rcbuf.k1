@@ -8,7 +8,7 @@ type rc-buffer-inner = { count: size, bytes: span[u8] }
 ns for rc-buffer {
   // Copies `bytes` to the system heap; the new buffer holds one reference.
   fn make(bytes: span[u8]): rc-buffer {
-    { inner: system-heap.new({ count: 1, bytes: bytes.cloned-in(context :system-heap)() }) }
+    { .inner = system-heap.new({ .count = 1, .bytes = bytes.cloned-in(context :system-heap)() }) }
   }
 
   fn retain(self: rc-buffer): rc-buffer {

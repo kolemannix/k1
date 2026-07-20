@@ -35,9 +35,22 @@ fn test() {
   let _: opt[i32] = opt:none[i32];
   let _: opt[i32] = opt:none;
 
-  contrived:stuff({ a: 42, b: "hello"});
+  contrived:stuff({ .a = 42, .b = "hello"});
 
   opt:none[int];
+
+  // Quiet payloads: no parens needed, on anonymous and qualified constructors,
+  // with and without explicit type args
+  let q1: opt[bool] = :some true;
+  assert(q1 is :some(true));
+  let q2 = opt:some 42;
+  assert(q2 is :some 42);
+  let q3: opt[bool] = :some[bool](true);
+  assert(q3 is :some true);
+  let q4 = opt:some[i64] 42;
+  assert(q4 is :some 42);
+  let q5: state-hard = state-hard:on :some 42;
+  assert(q5 is :on(:some 42));
 
   {}
 }

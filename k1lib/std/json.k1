@@ -57,7 +57,7 @@ ns for parser {
   }
 
   fn new-from-here(self: parser): parser {
-    { input: self.remaining-input(), cursor: 0 }
+    { .input = self.remaining-input(), .cursor = 0 }
   }
 
 }
@@ -146,7 +146,7 @@ fn _expect-object(context p: *mut parser)(): result[json, string] {
     if not p.expect(':') { return(:err("expected colon")) };
     p.eat-whitespace();
     let value = _parse-next-value().try;
-    members.push({ key: key-name, value });
+    members.push({ .key = key-name, .value });
 
     p.eat-whitespace();
     switch p.peek() {
@@ -193,7 +193,7 @@ fn _parse-next-value(context p: *mut parser)(): result[json, string] {
 }
 
 fn parse-from-string(input: string): result[json, string] {
-  let p: parser = { input, cursor: 0 };
+  let p: parser = { .input, .cursor = 0 };
   switch _parse-next-value(context &p)() {
     :err(msg) -> :err("Failed at pos {p.cursor}: {msg}"),
     :ok(json) -> :ok(json)

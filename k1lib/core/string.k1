@@ -29,7 +29,7 @@ ns for string {
   }
 
   fn wrap-span(span: span[char]): string {
-    { span }
+    { .span }
   }
 
   fn wrap-raw(ptr: ptr, len: size): string {
@@ -37,19 +37,19 @@ ns for string {
   }
 
   fn wrap-bytes(span: span[byte]): string {
-    { span: span.as-char-span() }
+    { .span = span.as-char-span() }
   }
 
   fn wrap-list(list: list[char]): string {
-    { span: list.as-span() }
+    { .span = list.as-span() }
   }
 
   fn wrap-buffer(buffer: buffer[char]): string {
-    { span: span/wrap-buffer(buffer) }
+    { .span = span/wrap-buffer(buffer) }
   }
 
   fn wrap-byte-buffer(buffer: buffer[byte]): string {
-    { span: span/wrap-buffer(buffer.as-char-buffer()) }
+    { .span = span/wrap-buffer(buffer.as-char-buffer()) }
   }
 
   fn from-bytes(buffer: buffer[byte]): string {
@@ -99,12 +99,12 @@ ns for string {
 
   fn split-by-char(self: string, delim: char): list[string] {
     let ranges = list/empty[{ start: size, len: size }]();
-    let r = { start: 0: size, len: 0: size };
+    let r = { .start = 0: size, .len = 0: size };
 
     for c in self {
       if c == delim {
         ranges.push(r);
-        r <- { start: it-index + 1, len: 0 };
+        r <- { .start = it-index + 1, .len = 0 };
       } else {
         r.len <- r.len + 1
       };
@@ -135,13 +135,13 @@ ns for string {
   fn contains-string(self: string, target: string): bool { self.index-of-string(target) is :some(_) }
 
   fn slice(self: string, start: size, end: size): string {
-    { span: self.span.slice(start, end) }
+    { .span = self.span.slice(start, end) }
   }
 
-  fn take(self: string, count: size): string { { span: self.span.take(count) } }
-  fn drop(self: string, count: size): string { { span: self.span.drop(count) } }
-  fn take-right(self: string, count: size): string { { span: self.span.take-right(count) } }
-  fn drop-right(self: string, count: size): string { { span: self.span.drop-right(count) } }
+  fn take(self: string, count: size): string { { .span = self.span.take(count) } }
+  fn drop(self: string, count: size): string { { .span = self.span.drop(count) } }
+  fn take-right(self: string, count: size): string { { .span = self.span.take-right(count) } }
+  fn drop-right(self: string, count: size): string { { .span = self.span.drop-right(count) } }
   
   fn starts-with(self: string, other: string): bool {
     self.span.starts-with(other.span)
@@ -160,9 +160,9 @@ ns for string {
 
   // Converts self to a c-style (NUL byte terminated) string
   fn to-c(context alloc: mem/alloc-mode)(self: string): { ptr: ptr, len: size } {
-    if self.is-empty()                  { ptr: "\0".data-ptr(), len: 0 }
-    else if self.last() is :some('\0') { ptr: self.data-ptr(), len: self.len() - 1 }
-    else                               { ptr: self.concat-char-in('\0').data-ptr(), len: self.len() }
+    if self.is-empty()                  { .ptr = "\0".data-ptr(), .len = 0 }
+    else if self.last() is :some('\0') { .ptr = self.data-ptr(), .len = self.len() - 1 }
+    else                               { .ptr = self.concat-char-in('\0').data-ptr(), .len = self.len() }
   }
 
   fn to-c-tmp(self: string): { ptr: ptr, len: size } {

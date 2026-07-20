@@ -38,11 +38,11 @@ libraries, and linker args. FFI declarations use `extern("lib", "symbol")`.
 
 ```rust
 let MODULE_INFO: k1/module-manifest = {
-  kind: :executable,
-  deps: [],
-  multithreading: false,
-  libs: [{ name: "foo", link-type: :static }],
-  link-args: [],
+  .kind = :executable,
+  .deps = [],
+  .multithreading = false,
+  .libs = [{ .name = "foo", .link-type = :static }],
+  .link-args = [],
 }
 
 extern("foo", "very_small")
@@ -316,7 +316,7 @@ scope resolution.
 
 ```rust
 ns foo { type bar = { value: int } }
-ns foo { fn make(): bar { { value: 1 } } }
+ns foo { fn make(): bar { { .value = 1 } } }
 ```
 
 See `test_src/suite1/ns_extend.k1`,

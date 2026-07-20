@@ -96,8 +96,8 @@ fn eprintln(s: string) {
 ns io {
   // TODO: Add buffering to stdout and stderr!
   type out-stream = { file-no: i32 }
-  let stdout: out-stream = { file-no: posix/stdout }
-  let stderr: out-stream = { file-no: posix/stderr }
+  let stdout: out-stream = { .file-no = posix/stdout }
+  let stderr: out-stream = { .file-no = posix/stderr }
 
   impl writer for out-stream {
     fn write-byte(self, value: u8) {
@@ -498,7 +498,7 @@ ns for f64 {
       if require-total and len != s.len() {
         :err("Parsed an f64 but there was stuff at the end: {len} vs {s.len()}")
       } else {
-        :ok({ value: out, len })
+        :ok({ .value = out, .len })
       }
     }
   }

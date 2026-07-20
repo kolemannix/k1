@@ -723,7 +723,7 @@ ns array {
   }
 
   fn as-buffer[t, n](array: *mut array[t, n]): buffer[t] where n: static size {
-    { len: array.len(), data: array.get-base() }
+    { .len = array.len(), .data = array.get-base() }
   }
 
   fn as-span[t, n](array: *array[t, n]): span[t] where n: static size {

@@ -1,9 +1,9 @@
 let MODULE_INFO: k1/module-manifest = {
-  kind: .executable,
-  deps: [],
-  multithreading: false,
-  libs: [{ name: "pq", link-type: .default }],
-  link-args: ["-L/opt/homebrew/opt/libpq/include"]
+  .kind = :executable,
+  .deps = [],
+  .multithreading = false,
+  .libs = [{ .name = "pq", .link-type = :default }],
+  .link-args = ["-L/opt/homebrew/opt/libpq/include"]
 }
 
 ns pg {
@@ -44,7 +44,7 @@ fn connect(context alloc: mem/alloc-mode)(conninfo: string): result[connection, 
   };
 
   if pg/status(conn) == pg/CONNECTION_OK {
-    :ok({ raw: conn })
+    :ok { .raw = conn }
   } else {
     let err = c-string-or-default(pg/error-message(conn), "failed to connect");
     pg/finish(conn);
@@ -52,7 +52,7 @@ fn connect(context alloc: mem/alloc-mode)(conninfo: string): result[connection, 
   }
 }
 
-ns connection {
+ns for connection {
   fn close(self: connection) {
     if not self.raw.is-null() {
       pg/finish(self.raw)
@@ -69,7 +69,7 @@ ns connection {
 
     let status = pg/result-status(raw-result);
     if status == pg/PGRES_COMMAND_OK or status == pg/PGRES_TUPLES_OK {
-      :ok({ raw: raw-result })
+      :ok { .raw = raw-result }
     } else {
       let err = c-string-or-default(pg/result-error-message(raw-result), "query failed");
       pg/clear(raw-result);
@@ -78,7 +78,7 @@ ns connection {
   }
 }
 
-ns query-result {
+ns for query-result {
   fn clear(self: query-result) {
     if not self.raw.is-null() {
       pg/clear(self.raw)
@@ -151,8 +151,8 @@ fn usage(program-name: string) {
   {}
 }
 
-fn main(argc: u32, argv: ptr): i32 {
-  let context alloc: mem/alloc-mode = .system-heap;
+fn main(argc: core/c-int, argv: ptr): i32 {
+  let context alloc: mem/alloc-mode = :system-heap;
 
   let args = core/sys/parse-main-args(argc, argv);
   if args.len() < 2 {

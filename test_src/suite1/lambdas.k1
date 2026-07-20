@@ -82,7 +82,7 @@ fn test() {
   let lam1-result-dyn = some-fn-param1(5, static-add-one.to-dyn());
   assert-equals(lam1-result-dyn, 6);
 
-  let c1 = { x: 3 };
+  let c1 = { .x = 3 };
   let c2 = 2;
 
   let with-closures = some-fn-param2(5, fn x. x + 1 + c1.x, fn x. x + 2 + c2);

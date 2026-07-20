@@ -19,7 +19,7 @@ ns pubsub {
 
   type publisher = { bus: *mut bus }
 
-  fn publisher(): publisher { { bus: get() } }
+  fn publisher(): publisher { { .bus = get() } }
 
   ns for publisher {
     // Thread-safe: topic and data are copied to the system heap before
@@ -27,8 +27,8 @@ ns pubsub {
     fn publish(self: publisher, topic: string, data: string) {
       let bus = self.bus;
       let event: event = {
-        topic: topic.cloned-in(context :system-heap)(),
-        data: data.cloned-in(context :system-heap)(),
+        .topic = topic.cloned-in(context :system-heap)(),
+        .data = data.cloned-in(context :system-heap)(),
       };
       uv/mutex_lock(bus.mutex);
       bus.pending.push-in(context :system-heap)(event);
@@ -73,11 +73,11 @@ ns pubsub {
 
   fn init(uv-loop: *mut uv-loop) {
     let bus: *mut bus = system-heap.new({
-      async-handle: system-heap.alloc-t[uv/async],
-      mutex: system-heap.alloc-t[uv/mutex],
-      pending: list/empty[event](),
-      dispatching: list/empty[event](),
-      subscribers: list/empty[subscriber](),
+      .async-handle = system-heap.alloc-t[uv/async],
+      .mutex = system-heap.alloc-t[uv/mutex],
+      .pending = list/empty[event](),
+      .dispatching = list/empty[event](),
+      .subscribers = list/empty[subscriber](),
     });
     if uv/mutex_init(bus.mutex) != 0 crash("uv_mutex_init for pubsub failed");
     if uv/async_init(uv-loop, bus.async-handle, dispatch-pending) != 0 crash("uv_async_init for pubsub failed");
@@ -95,8 +95,8 @@ ns pubsub {
     let bus = get();
     tprintln("pubsub: conn{connection.serial-no} subscribed to `{topic}`");
     bus.subscribers.push-in(context :system-heap)({
-      connection,
-      topic: topic.cloned-in(context :system-heap)(),
+      .connection,
+      .topic = topic.cloned-in(context :system-heap)(),
     });
   }
 

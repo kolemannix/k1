@@ -24,7 +24,7 @@ fn test() {
 }
 
 fn static-zst() {
-  let point = #static { x: 1, y: (#static 2): int };
+  let point = #static { .x = 1, .y = (#static 2): int };
   assert-equals(point.x.from-static(), 1);
 }
 

@@ -3,13 +3,13 @@
 
 type int-range = { start: int, end: int }
 ns for int-range {
-  fn make(start: int, end: int): int-range { { start, end } }
-  fn up-to(end: int): int-range { { start: 0, end } }
+  fn make(start: int, end: int): int-range { { .start, .end } }
+  fn up-to(end: int): int-range { { .start = 0, .end } }
 }
 type int-range-iterator = { range: int-range, offset: int }
 
 ns for int-range-iterator {
-  fn make(range: int-range): int-range-iterator { { range, offset: 0 } }
+  fn make(range: int-range): int-range-iterator { { .range, .offset = 0 } }
 
   fn position(self: int-range-iterator): int { self.range.start + self.offset }
   fn size(self: int-range-iterator): int { self.range.end - self.range.start }
@@ -34,7 +34,7 @@ impl iterator[item = int] for int-range-iterator {
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } {
     let remaining = self.range.end - self.position();
-    { at-least: remaining, at-most: :some(remaining) }
+    { .at-least = remaining, .at-most = :some(remaining) }
   }
   fn advance-by(self: *mut self, n: size) {
     self.step-by(n);

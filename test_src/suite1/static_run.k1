@@ -22,7 +22,7 @@ fn statics-and-coercion(): i32 {
 }
 
 fn get-point(): { x: u8, y: u32, z: i64 } {
-  { x: 1, y: 300, z: -222 }
+  { .x = 1, .y = 300, .z = -222 }
 }
 fn test() {
   // String creation (special case)
@@ -30,7 +30,7 @@ fn test() {
 
   // Struct creation
   let point = #static {
-    ({ x: 1, y: 2 })
+    ({ .x = 1, .y = 2 })
   };
 
   // Type assertions
@@ -71,7 +71,7 @@ fn test() {
   assert-equals[int](let-assign, 10);
 
   let padded = #static {
-    let padded = { a: 1: u8, b: 2: u8, c: 3: u8, d: 4: u64, e: 5 };
+    let padded = { .a = 1: u8, .b = 2: u8, .c = 3: u8, .d = 4: u64, .e = 5 };
     padded
   };
   (padded.a: 1u8);
@@ -102,7 +102,7 @@ fn test() {
 
   let field-ptr-test: int = #static {
     let x = 21;
-    let s = { ptr: &x };
+    let s = { .ptr = &x };
     s.ptr.*
   };
   assert-equals(field-ptr-test, 21);
@@ -110,7 +110,7 @@ fn test() {
 
   let ptr-in-structs = #static {
     let b: u8 = 10;
-    let f = { asdf: &b };
+    let f = { .asdf = &b };
     f.asdf.*
   };
   assert-equals[u8](ptr-in-structs, 10);
@@ -197,7 +197,7 @@ fn test() {
   assert-equals(vov.get(1).get(2), 6);
 
 
-  let point = #static { x: 1, y: (#static 2): int };
+  let point = #static { .x = 1, .y = (#static 2): int };
   assert-equals(point.from-static().x, 1);
 
   {}

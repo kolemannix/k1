@@ -24,7 +24,7 @@ ns scopes {
   
   // Tests that the method gets assigned to the right foo/value()
   fn namespace-alias() {
-    let x: foo-alias = {x:1};
+    let x: foo-alias = {.x =1};
     assert(x.value() == 1);
   }
 

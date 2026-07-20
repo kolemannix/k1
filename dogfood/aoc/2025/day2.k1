@@ -1,15 +1,15 @@
 ns day2;
-let input: string = "5959566378-5959623425,946263-1041590,7777713106-7777870316,35289387-35394603,400-605,9398763-9592164,74280544-74442206,85684682-85865536,90493-179243,202820-342465,872920-935940,76905692-76973065,822774704-822842541,642605-677786,3759067960-3759239836,1284-3164,755464-833196,52-128,3-14,30481-55388,844722790-844967944,83826709-83860070,9595933151-9595993435,4216-9667,529939-579900,1077949-1151438,394508-486310,794-1154,10159-17642,5471119-5683923,16-36,17797-29079,187-382";
-let sample-input: string = "11-22,95-115,998-1012,1188511880-1188511890,222220-222224,1698522-1698528,446443-446449,38593856-38593862,565653-565659,824824821-824824827,2121212118-2121212124";
+let input: string = "5959566378-5959623425,946263-1041590,7777713106-7777870316,35289387-35394603,400-605,9398763-9592164,74280544-74442206,85684682-85865536,90493-179243,202820-342465,872920-935940,76905692-76973065,822774704-822842541,642605-677786,3759067960-3759239836,1284-3164,755464-833196,52-128,3-14,30481-55388,844722790-844967944,83826709-83860070,9595933151-9595993435,4216-9667,529939-579900,1077949-1151438,394508-486310,794-1154,10159-17642,5471119-5683923,16-36,17797-29079,187-382"
+let sample-input: string = "11-22,95-115,998-1012,1188511880-1188511890,222220-222224,1698522-1698528,446443-446449,38593856-38593862,565653-565659,824824821-824824827,2121212118-2121212124"
 use core/iter/forall
 
 fn day2(part: int, input: string) {
-  mem/push-mode(.system-heap);
+  mem/push-mode(:system-heap);
   let ranges = input.split-by-char(',');
   mem/pop-mode();
 
 
-  println("{mem/arena().used-bytes()/(1024*1024)}mb");
+  println("{mem/tmp().used-bytes()/(1024*1024)}mb");
   let invalid-sum = 0;
   let values-processed = 0;
   let total-mem = 0;
@@ -29,8 +29,8 @@ fn day2(part: int, input: string) {
       value := value + 1;
     };
     values-processed := values-processed + (end - start);
-    total-mem := total-mem + mem/arena().used-bytes();
-    mem/arena().reset(false);
+    total-mem := total-mem + mem/tmp().used-bytes();
+    mem/tmp().reset(false);
   };
 
   println("Day 1 part {part}: {invalid-sum} (processed {values-processed} values)");
@@ -38,11 +38,11 @@ fn day2(part: int, input: string) {
   crash("{invalid-sum}");
 }
 
-let mutable buffer: string-builder = string-builder/new();
+let mutable buffer: string-builder = string-builder/new()
 fn check-invalid-part1(value: i64): bool {
   buffer.reset();
-  value.print-to(buffer);
-  let value-str = string/wrap-span(buffer.raw-span());
+  value.print-to(&buffer);
+  let value-str = string/wrap-span(buffer.peek());
   if value-str.len() & 1 == 1 {
     //println("skipping odd len {value-str}");
     return(false)
@@ -57,8 +57,8 @@ fn check-invalid-part1(value: i64): bool {
 }
 fn check-invalid-part2(value: i64): bool {
   buffer.reset();
-  value.print-to(buffer);
-  let value-str = string/wrap-span(buffer.raw-span());
+  value.print-to(&buffer);
+  let value-str = string/wrap-span(buffer.peek());
   //println("check-invalid-part2 {value-str}");
   for int-range/make(1, (value-str.len() / 2) + 1) {
     //println("Testing {value} for {it}");

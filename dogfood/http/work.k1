@@ -1,10 +1,10 @@
 ns work {
   fn init-work-queue(uv-loop: *mut uv-loop) {
     let queue: *mut uv-work-queue = system-heap.new({
-      uv-loop,
-      async-handle: system-heap.alloc-t[uv/async],
-      mutex: system-heap.alloc-t[uv/mutex],
-      submissions: list/empty[uv-work-submission](),
+      .uv-loop,
+      .async-handle = system-heap.alloc-t[uv/async],
+      .mutex = system-heap.alloc-t[uv/mutex],
+      .submissions = list/empty[uv-work-submission](),
     });
   
     let mutex-rc = uv/mutex_init(queue.mutex);
@@ -32,7 +32,7 @@ ns work {
     let queue = work-queue.as[*mut uv-work-queue];
   
     uv/mutex_lock(queue.mutex);
-    queue.submissions.push-in(context :system-heap)({ req, work-cb, after-cb });
+    queue.submissions.push-in(context :system-heap)({ .req, .work-cb, .after-cb });
     uv/mutex_unlock(queue.mutex);
   
     let send-rc = uv/async_send(queue.async-handle);

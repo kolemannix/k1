@@ -105,7 +105,7 @@ fn infix() -> Result<(), ParseError> {
 
 #[test]
 fn struct_1() -> Result<(), ParseError> {
-    let (_ast, result) = test_single_expr("{ a: 4, b: x.a, c: true }")?;
+    let (_ast, result) = test_single_expr("{ .a = 4, .b = x.a, .c = true }")?;
     assert!(matches!(result, ParsedExpr::Struct(_)));
     Ok(())
 }
@@ -342,6 +342,25 @@ fn variants_no_payload() -> ParseResult<()> {
 }
 
 #[test]
+fn variants_quiet_payload() -> ParseResult<()> {
+    let (_ast, expr, _) = test_single_expr_with_id(":foo 42")?;
+    let ParsedExpr::Variant(v) = expr else { panic!() };
+    assert!(v.payload.is_some());
+
+    let (ast, expr, _) = test_single_expr_with_id(":ok :some bar.baz")?;
+    let ParsedExpr::Variant(v) = expr else { panic!() };
+    let ParsedExpr::Variant(inner) = ast.exprs.get(v.payload.unwrap()) else { panic!() };
+    assert_eq!(ast.idents.get_string(inner.variant_name), "some");
+    assert_eq!(&ast.expr_id_to_string(inner.payload.unwrap()), "bar.baz");
+
+    let (ast, expr, _) = test_single_expr_with_id("opt:some[int] [1, 2]")?;
+    let ParsedExpr::Variant(v) = expr else { panic!() };
+    assert_eq!(v.type_args.len(), 1);
+    let ParsedExpr::ListLiteral(_) = ast.exprs.get(v.payload.unwrap()) else { panic!() };
+    Ok(())
+}
+
+#[test]
 fn variants_payload() -> ParseResult<()> {
     let input = "veni/vidi/vici:foo[t, u](bar.bar)";
     let (ast, expr, expr_id) = test_single_expr_with_id(input)?;
@@ -371,16 +390,16 @@ impl print for bool {
 }
 
 #[test]
-fn when_pattern() -> ParseResult<()> {
+fn switch_struct_patterns() -> ParseResult<()> {
     let input = r#"
-        when x {
-           { x: 1, y: 2 } -> 1,
-           { x: 2, y: 2 } -> { 2 },
+        switch x {
+           { .x = 1, .y = 2 } -> 1,
+           { .x = 2, .y } -> { 2 },
            _ -> { 3 }
-        };
+        }
 "#;
-    let (ast, _expr, expr_id) = test_single_expr_with_id(input)?;
-    println!("{}", &ast.expr_id_to_string(expr_id));
+    let (_ast, expr, _expr_id) = test_single_expr_with_id(input)?;
+    assert!(matches!(expr, ParsedExpr::Match(_)));
     Ok(())
 }
 

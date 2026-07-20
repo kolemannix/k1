@@ -17,7 +17,7 @@ fn assign-var-ref() {
 }
 
 fn complex-references() {
-  let struct-ref = { x: 42 };
+  let struct-ref = { .x = 42 };
   let struct-ref = &struct-ref;
 
   let x-value: int = struct-ref.x;
@@ -47,7 +47,7 @@ fn complex-references() {
   assert(yes-ref.* == -3);
   assert(either-ref.as-yes().!.* == -3);
 
-  let inner-struct-ref = { x: 42 };
+  let inner-struct-ref = { .x = 42 };
   let inner-struct-ref = &inner-struct-ref;
   let struct-opt-ref: ?*{ x: int } = :some(inner-struct-ref);
 
