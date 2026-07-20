@@ -77,6 +77,8 @@ enum AbiParamMapping {
         abi_width: u32,
         active_width: u32,
     },
+    /// Same registers as an i64 but keeps pointer provenance
+    StructAsPointer,
     /// How clang does X86 9-16 byte structs
     StructByEightbytePair {
         class1: RegisterClass,
@@ -99,12 +101,17 @@ enum RegisterClass {
     Initial,
     Int,
     Float,
+    Ptr,
 }
 
 impl RegisterClass {
     fn combine(&self, other: RegisterClass) -> RegisterClass {
         match (self, other) {
             (RegisterClass::Initial, _) => other,
+            // A pointer eightbyte is a GPR just like Int, so this never changes
+            // which register is used; preferring Ptr for union overlaps keeps
+            // the pointer type (and thus provenance/capabilities) in the IR
+            (RegisterClass::Ptr, _) | (_, RegisterClass::Ptr) => RegisterClass::Ptr,
             (RegisterClass::Int, RegisterClass::Int) => RegisterClass::Int,
             (RegisterClass::Float, RegisterClass::Float) => RegisterClass::Float,
             // Anything can go in a general purpose register like an int, but
@@ -517,7 +524,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let debug_context = Cg::init_debug(ctx, &llvm_module, module, optimize, debug);
 
-        let machine = Cg::set_up_machine(&mut llvm_module, optimize);
+        let machine = Cg::set_up_machine(&mut llvm_module, optimize, module.config.filc);
         let target_data = machine.get_target_data();
 
         let ptr = ctx.ptr_type(AddressSpace::default());
@@ -1053,6 +1060,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::VoidReturnEmpty => false,
             AbiParamMapping::ScalarInRegister => false,
             AbiParamMapping::StructInInteger { .. } => false,
+            AbiParamMapping::StructAsPointer => false,
             AbiParamMapping::StructByEightbytePair { .. } => false,
             AbiParamMapping::StructByHfa { .. } => false,
             AbiParamMapping::StructByIntPairArray => false,
@@ -1139,15 +1147,18 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .as_basic_type_enum();
                 int_type
             }
+            AbiParamMapping::StructAsPointer => self.builtin_types.ptr.as_basic_type_enum(),
             AbiParamMapping::StructByEightbytePair { class1, class2, active_bits2 } => {
                 // We know field 1 is a full 8 bits
                 let f1 = match class1 {
                     RegisterClass::Initial => panic!("Got Initial EightbyteClass"),
                     RegisterClass::Int => self.ctx.i64_type().as_basic_type_enum(),
                     RegisterClass::Float => self.ctx.f64_type().as_basic_type_enum(),
+                    RegisterClass::Ptr => self.builtin_types.ptr.as_basic_type_enum(),
                 };
                 let f2 = match (class2, active_bits2) {
                     (RegisterClass::Initial, _) => panic!("Got Initial EightbyteClass"),
+                    (RegisterClass::Ptr, _) => self.builtin_types.ptr.as_basic_type_enum(),
                     (RegisterClass::Int, bits) => {
                         if bits <= 8 {
                             self.ctx.i8_type().as_basic_type_enum()
@@ -1222,6 +1233,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .unwrap();
                 let ptr = self.build_k1_alloca(cg_ty, "struct_in_integer_storage");
                 self.builder.build_store(ptr, truncated).unwrap();
+                ptr.as_basic_value_enum()
+            }
+            AbiParamMapping::StructAsPointer => {
+                let ptr = self.build_k1_alloca(cg_ty, "struct_as_ptr_storage");
+                self.builder.build_store(ptr, abi_value).unwrap();
                 ptr.as_basic_value_enum()
             }
             AbiParamMapping::StructByEightbytePair { .. } => {
@@ -1321,6 +1337,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let integer_value = self.builder.build_load(abi_type, integer_ptr, "").unwrap();
                 integer_value
             }
+            AbiParamMapping::StructAsPointer => self
+                .builder
+                .build_load(self.builtin_types.ptr, k1_value.into_pointer_value(), "")
+                .unwrap(),
             AbiParamMapping::StructByEightbytePair { .. } => {
                 //define dso_local void @call_eb_pair_mixed() #0 {
                 //  %1 = alloca %struct.Classes, align 4
@@ -1521,7 +1541,65 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn build_k1_alloca(&mut self, ty: &CgType<'ctx>, name: &str) -> PointerValue<'ctx> {
         let ptr = self.build_alloca(ty.rich_type(), name);
         ptr.as_instruction().unwrap().set_alignment(ty.rich_repr_layout().align).unwrap();
+        if self.k1.config.filc && self.pt_has_pointer_in_union(ty.pt()) {
+            self.build_zhas_union_marker(ptr);
+        }
         ptr
+    }
+
+    /// Fil-C's pizlonator tracks pointer capabilities per alloca based on the
+    /// pointer operations it can see; a union payload holding pointers is only
+    /// visible through untyped copies, so it must be marked with the fork's
+    /// `zhas_union` intrinsic (as Fil-C's clang does for union-typed locals)
+    /// or capabilities are dropped in transit.
+    fn build_zhas_union_marker(&mut self, alloca: PointerValue<'ctx>) {
+        let zhas_union = self.llvm_module.get_function("zhas_union").unwrap_or_else(|| {
+            let fn_type =
+                self.ctx.void_type().fn_type(&[self.builtin_types.ptr.into()], false);
+            self.llvm_module.add_function("zhas_union", fn_type, Some(LlvmLinkage::External))
+        });
+        self.builder.build_call(zhas_union, &[alloca.into()], "").unwrap();
+    }
+
+    fn pt_has_pointer_in_union(&self, pt: PhysicalType) -> bool {
+        fn pt_contains_pointer(c: &Cg, pt: PhysicalType) -> bool {
+            match pt.as_enum() {
+                PhysicalTypeEnum::Empty => false,
+                PhysicalTypeEnum::Scalar(st) => matches!(st, ScalarType::Pointer),
+                PhysicalTypeEnum::Agg(agg_id) => match c.k1.types.agg_types.get(agg_id).agg_type {
+                    AggType::Struct { fields } => {
+                        c.k1.types.mem.getn(fields).iter().any(|f| pt_contains_pointer(c, f.field_t))
+                    }
+                    AggType::Array { element_pt, .. } => pt_contains_pointer(c, element_pt),
+                    AggType::Union { members } => {
+                        c.k1.types.mem.getn(members).iter().any(|m| pt_contains_pointer(c, m.ty))
+                    }
+                    AggType::Sum(e) => pt_contains_pointer(c, PhysicalType::agg(e.struct_repr)),
+                    AggType::Opaque { .. } => false,
+                },
+            }
+        }
+        fn walk(c: &Cg, pt: PhysicalType) -> bool {
+            match pt.as_enum() {
+                PhysicalTypeEnum::Empty | PhysicalTypeEnum::Scalar(_) => false,
+                PhysicalTypeEnum::Agg(agg_id) => match c.k1.types.agg_types.get(agg_id).agg_type {
+                    AggType::Struct { fields } => {
+                        c.k1.types.mem.getn(fields).iter().any(|f| walk(c, f.field_t))
+                    }
+                    AggType::Array { element_pt, .. } => walk(c, element_pt),
+                    AggType::Union { members } => c
+                        .k1
+                        .types
+                        .mem
+                        .getn(members)
+                        .iter()
+                        .any(|m| pt_contains_pointer(c, m.ty)),
+                    AggType::Sum(e) => walk(c, PhysicalType::agg(e.struct_repr)),
+                    AggType::Opaque { .. } => false,
+                },
+            }
+        }
+        walk(self, pt)
     }
 
     /// Inserts an alloca in the entry block of the function
@@ -2772,6 +2850,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     | AggType::Array { .. }
                     | AggType::Opaque { .. } => {
                         let size_bytes = agg_record.layout.size;
+                        if size_bytes == 8 {
+                            let ([class1, _], _) = self.collect_aggregate_eightbytes(pt);
+                            if class1 == RegisterClass::Ptr {
+                                return AbiParamMapping::StructAsPointer;
+                            }
+                        }
                         match callconv {
                             CallConv::InternalK1 => {
                                 if size_bytes <= 8 {
@@ -2818,8 +2902,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 } else if size_bytes <= 16 {
                                     // "If the size is between 8 and 16 bytes, the logic is a little more difficult."
                                     // Pass by classified eightbytes
-                                    let (eb1, eb2, eb2_bits) =
+                                    let ([eb1, eb2], eb2_bits) =
                                         self.collect_aggregate_eightbytes(pt);
+                                    if eb1 == RegisterClass::Initial
+                                        || eb2 == RegisterClass::Initial
+                                    {
+                                        panic!(
+                                            "Failed to collect 2 eightbytes for 9-16 byte struct {}. Likely a bug.",
+                                            self.k1.types.pt_to_string(pt)
+                                        )
+                                    }
                                     AbiParamMapping::StructByEightbytePair {
                                         class1: eb1,
                                         class2: eb2,
@@ -2891,10 +2983,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     // What a horrible amount of code for such a small transformation!
-    fn collect_aggregate_eightbytes(
-        &self,
-        pt: PhysicalType,
-    ) -> (RegisterClass, RegisterClass, u32) {
+    fn collect_aggregate_eightbytes(&self, pt: PhysicalType) -> ([RegisterClass; 2], u32) {
         // This whole thing could be generalized to collect N eightbytes, rather than 2, which would let me use it
         // for the HFA detection
         fn mark_bits(
@@ -2932,7 +3021,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 ScalarType::I64 => RegisterClass::Int,
                 ScalarType::F32 => RegisterClass::Float,
                 ScalarType::F64 => RegisterClass::Float,
-                ScalarType::Pointer => RegisterClass::Int,
+                ScalarType::Pointer => RegisterClass::Ptr,
             }
         }
 
@@ -2982,13 +3071,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 )
                             }
                         }
-                        AggType::Union { .. } => mark_bits(
-                            classes,
-                            active_bits2,
-                            offset_bits,
-                            agg_record.layout.size_bits(),
-                            RegisterClass::Int,
-                        ),
+                        AggType::Union { members } => {
+                            // Classify every member at the same offset; combine()
+                            // prefers Ptr so pointer-bearing unions travel as ptr
+                            for m in c.k1.types.mem.getn(members) {
+                                handle_type_rec(c, classes, active_bits2, offset_bits, m.ty)
+                            }
+                            // Members may not cover the union's full (max) size
+                            mark_bits(
+                                classes,
+                                active_bits2,
+                                offset_bits,
+                                agg_record.layout.size_bits(),
+                                RegisterClass::Int,
+                            )
+                        }
                         AggType::Sum(e) => {
                             // Just handle the sum's struct representation
                             handle_type_rec(
@@ -3015,13 +3112,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         handle_type_rec(self, &mut classes, &mut active_bits2, 0, pt);
 
-        match classes {
-            [RegisterClass::Initial, _] | [_, RegisterClass::Initial] => panic!(
-                "Failed to collect 2 eightbytes for 9-16 byte struct {}. Likely a bug.",
-                self.k1.types.pt_to_string(pt)
-            ),
-            [class1, class2] => (class1, class2, active_bits2),
-        }
+        (classes, active_bits2)
     }
 
     fn codegen_function_body(
@@ -3716,12 +3807,18 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.k1.program_name()
     }
 
-    fn set_up_machine(module: &mut LlvmModule, optimize: bool) -> TargetMachine {
+    fn set_up_machine(module: &mut LlvmModule, optimize: bool, filc: bool) -> TargetMachine {
         // Target::initialize_aarch64(&InitializationConfig::default());
         Target::initialize_native(&InitializationConfig::default()).unwrap();
         // let triple_str = &format!("arm64-apple-macosx{}", MAC_SDK_VERSION);
         // let triple = TargetTriple::create(triple_str);
-        let triple = TargetMachine::get_default_triple();
+        let triple = if filc {
+            // Fil-C's clang targets the unknown vendor; hosts often default to
+            // pc and clang warns on the mismatch
+            inkwell::targets::TargetTriple::create("x86_64-unknown-linux-gnu")
+        } else {
+            TargetMachine::get_default_triple()
+        };
 
         let target = Target::from_triple(&triple).unwrap();
         let cpu = TargetMachine::get_host_cpu_name().to_string();
@@ -3816,6 +3913,28 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     pub fn emit_llvm_ir_text(&self) -> String {
         self.llvm_module.print_to_string().to_string()
+    }
+
+    /// Textual IR shaped for Fil-C's LLVM fork, which stock LLVM cannot
+    /// express through its API: the input datalayout must mark address space 0
+    /// non-integral (`ni:0`, rejected by upstream DataLayout parsing), and the
+    /// fork reads the post-instrumentation layout from its own
+    /// `datalayout_after_filc` module field. Patch both into the header.
+    pub fn emit_llvm_ir_text_filc(&self) -> String {
+        let text = self.emit_llvm_ir_text();
+        let dl_prefix = "target datalayout = \"";
+        let dl_start = text.find(dl_prefix).expect("module has no datalayout line");
+        let layout_start = dl_start + dl_prefix.len();
+        let layout_end = layout_start + text[layout_start..].find('"').unwrap();
+        let layout = &text[layout_start..layout_end];
+        let line_end = layout_end + 1;
+        format!(
+            "{}target datalayout = \"e-m:e-ni:0-{}\"\ntarget datalayout_after_filc = \"{}\"{}",
+            &text[..dl_start],
+            layout.strip_prefix("e-m:e-").expect("expected x86_64 linux datalayout"),
+            layout,
+            &text[line_end..]
+        )
     }
 
     pub fn emit_bitcode_to_path(&self, path: impl AsRef<Path>) -> bool {

@@ -525,7 +525,9 @@ fn exec_loop(
             Opcode::PtrAddImm => {
                 let base = read_src!(operand!(1));
                 let offset = operand!(2) as usize;
-                let result = unsafe { base.as_ptr().byte_add(offset) };
+                // Address computation is legal on any address (e.g. aligning a
+                // null-derived pointer); only access is sanity-checked
+                let result = base.as_ptr_unchecked().wrapping_byte_add(offset);
                 write_slot!(operand!(0), Value::ptr(result));
                 advance!(Opcode::PtrAddImm);
             }
@@ -533,7 +535,7 @@ fn exec_loop(
                 let base = read_src!(operand!(1));
                 let index = read_src!(operand!(2)).bits() as usize;
                 let stride = operand!(3) as usize;
-                let result = unsafe { base.as_ptr().byte_add(stride * index) };
+                let result = base.as_ptr_unchecked().wrapping_byte_add(stride.wrapping_mul(index));
                 write_slot!(operand!(0), Value::ptr(result));
                 advance!(Opcode::PtrIndex);
             }

@@ -26,8 +26,12 @@ fn read-line(max-length-bytes: size): result[string, string] {
   if bytes-read < 0 {
     return(:err("Failed to read line"));
   };
+  if bytes-read == 0 {
+    return(:err("EOF"));
+  };
 
-  let length: size = bytes-read - 1;
+  // The last line before EOF may not be newline-terminated
+  let length: size = if buffer.get(bytes-read - 1) == '\n'.as[u8] bytes-read - 1 else bytes-read;
   buffer.len <- length;
 
   let result = string/wrap-byte-buffer(buffer);

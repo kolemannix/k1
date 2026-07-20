@@ -128,6 +128,7 @@ ns for buffer {
     if src.len > dst.len {
       crash("Buffer copy dst index out of bounds: {src.len} > {dst.len}")
     };
+    if src.len == 0 return();
     let num-bytes = buffer-size-bytes[t](src.len);
     mem/copy(dst = dst.data-ptr(), src = src.data-ptr(), count = num-bytes);
   }
@@ -136,6 +137,7 @@ ns for buffer {
     if src.len > dst.len {
       crash("Buffer copy dst index out of bounds: {src.len} > {dst.len}")
     };
+    if src.len == 0 return();
     let num-bytes = buffer-size-bytes[t](src.len);
     mem/move(dst = dst.data-ptr(), src = src.data-ptr(), count = num-bytes);
   }

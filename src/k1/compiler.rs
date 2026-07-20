@@ -243,6 +243,12 @@ pub struct Args {
     #[arg(long)]
     pub sanitize: bool,
 
+    /// Compile and link through a Fil-C toolchain (memory-safe C runtime).
+    /// Requires target linux-intel64 and the K1_FILC env var pointing at a
+    /// Fil-C installation
+    #[arg(long, default_value_t = false)]
+    pub filc: bool,
+
     #[arg(long)]
     pub profile: bool,
 
@@ -281,6 +287,7 @@ pub struct CompilerConfig {
     pub target: Target,
     pub debug: bool,
     pub sanitize: bool,
+    pub filc: bool,
     pub out_dir: PathBuf,
     pub optimize: bool,
     pub chatty: bool,
@@ -412,6 +419,14 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
         .or(detect_host_target())
         .unwrap_or_else(|| panic!("Unsupported host platform; provide your target explicitly"));
 
+    if args.filc {
+        assert!(
+            target == Target::LinuxIntel64,
+            "--filc requires target linux-intel64; Fil-C only supports Linux/x86_64"
+        );
+        assert!(!args.sanitize, "--filc and --sanitize are mutually exclusive");
+    }
+
     // Find the installation. env var overrides, otherwise release mode says co-located with the
     // binary. dev mode says cwd
     let k1_home_pathbuf = std::env::var("K1_HOME").map(PathBuf::from).unwrap_or_else(|_| {
@@ -444,6 +459,7 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
         target,
         debug: args.debug,
         sanitize: args.sanitize,
+        filc: args.filc,
         out_dir,
         optimize: args.optimize,
         chatty: args.chatty,
@@ -538,10 +554,23 @@ pub fn write_executable(
     let out_dir = &k1.config.out_dir;
     let optimize = k1.config.optimize;
     let sanitize = k1.config.sanitize;
+    let filc = k1.config.filc;
     let clang_time = std::time::Instant::now();
 
-    let mut build_cmd = std::process::Command::new("cc");
-    let object_name = out_dir.join(module_name.with_extension("o"));
+    let mut build_cmd = if filc {
+        let filc_home = std::env::var("K1_FILC").map(PathBuf::from).map_err(|_| {
+            anyhow::anyhow!("--filc requires K1_FILC to point at a Fil-C installation")
+        })?;
+        std::process::Command::new(filc_home.join("build/bin/clang"))
+    } else {
+        std::process::Command::new("cc")
+    };
+    // Fil-C consumes llvm IR rather than the object file
+    let object_name = if filc {
+        out_dir.join(module_name.with_extension("ll"))
+    } else {
+        out_dir.join(module_name.with_extension("o"))
+    };
     let out_name = out_dir.join(module_name);
 
     let _macos_version_flag = if target.target_os() == TargetOs::MacOs {
@@ -550,7 +579,9 @@ pub fn write_executable(
         None
     };
 
-    if optimize {
+    if filc {
+        build_cmd.arg("-O2");
+    } else if optimize {
         build_cmd.arg("-O3");
     } else if debug {
         build_cmd.arg("-O0");
@@ -595,11 +626,13 @@ pub fn write_executable(
         }
         for lib in &module.manifest.libs {
             let logical_name_str = k1.get_string(lib.name);
+            let logical_name =
+                if filc { format!("{logical_name_str}-filc") } else { logical_name_str.into() };
             let filename = logical_name_to_lib_filename(
                 &module_libs_dir,
                 target.target_os(),
                 lib.link_type,
-                logical_name_str,
+                &logical_name,
             );
             match lib.link_type {
                 // Link via linker arg, since the name has no extension
@@ -666,22 +699,30 @@ pub fn codegen_module<'ctx, 'module>(
         eprintln!("iropt: {}ms", codegen.k1.timing.total_iropt_nanos / 1_000_000);
     }
 
-    let optimize_ir = args.optimize;
+    // Under --filc, Fil-C's clang runs the whole optimization pipeline
+    let optimize_ir = args.optimize && !codegen.k1.config.filc;
     if let Err(e) = codegen.optimize_verify(optimize_ir) {
         eprintln!("Codegen error: {}", e);
         anyhow::bail!(e)
     };
 
-    if args.emit_llvm {
-        let llvm_text = codegen.emit_llvm_ir_text();
-        let mut f = File::create(out_dir.join(module_name_path.with_extension("ll")))
-            .expect("Failed to create .ll file");
-        f.write_all(llvm_text.as_bytes()).unwrap();
-    }
+    if codegen.k1.config.filc {
+        let llvm_text = codegen.emit_llvm_ir_text_filc();
+        let ll_path = out_dir.join(module_name_path.with_extension("ll"));
+        std::fs::write(&ll_path, llvm_text)
+            .map_err(|e| anyhow::anyhow!("Failed to write {}: {e}", ll_path.display()))?;
+    } else {
+        if args.emit_llvm {
+            let llvm_text = codegen.emit_llvm_ir_text();
+            let mut f = File::create(out_dir.join(module_name_path.with_extension("ll")))
+                .expect("Failed to create .ll file");
+            f.write_all(llvm_text.as_bytes()).unwrap();
+        }
 
-    let path = out_dir.join(module_name_path.with_extension("o"));
-    if codegen.emit_object_file(&path).is_err() {
-        bail!("Error writing object file to path: {}", path.display());
+        let path = out_dir.join(module_name_path.with_extension("o"));
+        if codegen.emit_object_file(&path).is_err() {
+            bail!("Error writing object file to path: {}", path.display());
+        }
     }
 
     write_executable(codegen.k1, &module_name_path, &[])?;

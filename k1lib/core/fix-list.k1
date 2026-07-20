@@ -18,7 +18,6 @@ ns for fixlist {
   }
 
   fn clear[t, n: static size](self: *mut fixlist[t, n]): empty {
-    #if k1/debug self.data.memset(0xCD);
     self.used <- 0
   }
 
