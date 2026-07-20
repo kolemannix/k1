@@ -8,7 +8,7 @@ export RUST_BACKTRACE=1
 profile=dev
 target_dir=debug
 
-cargo test --lib
+cargo test --lib --features=llvm-sys/prefer-dynamic
 cargo build --features=llvm-sys/prefer-dynamic --profile $profile --bin k1_test --bin k1
 
 
