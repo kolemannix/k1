@@ -59,9 +59,9 @@ ns mem {
     fn requires-free(self: alloc-mode): bool { self is {
       :current         -> crash("unreachable"),
       :system-heap     -> true,
-      :custom-heap(_)  -> true,
+      :custom-heap _   -> true,
       :tmp             -> false,
-      :custom-arena(_) -> false,
+      :custom-arena _  -> false,
       :gc              -> false
     } }
 
@@ -80,11 +80,11 @@ ns mem {
       self.resolve() is {
         :current -> { crash("unreachable") },
         :system-heap -> mem/alloc-zeroed(size, align),
-        :custom-heap(alloc) -> {
+        :custom-heap alloc -> {
           let zalloc = alloc.*.zalloc;
           zalloc(size, align)
         },
-        :custom-arena(bump) -> {
+        :custom-arena bump -> {
           bump.alloc-layout(size, align)
         },
         :tmp -> {
@@ -100,11 +100,11 @@ ns mem {
       self.resolve() is {
         :current -> { crash("unreachable") },
         :system-heap -> mem/realloc(old-ptr, old-size, align, new-size),
-        :custom-heap(alloc) -> {
+        :custom-heap alloc -> {
           let realloc-fn = alloc.*.realloc;
           realloc-fn(old-ptr, old-size, align, new-size)
         },
-        :custom-arena(arena) -> {
+        :custom-arena arena -> {
           arena.try-realloc(old-ptr, old-size, new-size, align)
         },
         :tmp -> {
@@ -118,11 +118,11 @@ ns mem {
       self.resolve() is {
         :current -> { crash("unreachable") },
         :system-heap -> mem/free(ptr, size, align),
-        :custom-heap(alloc) -> {
+        :custom-heap alloc -> {
           let free-fn = alloc.*.free;
           free-fn(ptr, size, align)
         },
-        :custom-arena(bump) -> crash("UnsupportedOperation: free"),
+        :custom-arena bump -> crash("UnsupportedOperation: free"),
         :tmp -> crash("UnsupportedOperation: free"),
         :gc -> crash("UnsupportedOperation: free")
       }

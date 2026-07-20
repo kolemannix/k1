@@ -63,7 +63,7 @@ ns for span {
 
   fn get-opt[t](self: span[t], index: size): ?t {
     if index >= self.len() :none
-    else :some(self.get(index))
+    else :some self.get(index)
   }
 
   fn slice[t](self: span[t], start: size, end: size): span[t] {
@@ -102,7 +102,7 @@ ns for span {
 
   fn first-ref[t](self: span[t]): ?*t {
     if not self.is-empty() {
-      :some(self.get-ref(0))
+      :some self.get-ref(0)
     } else {
       :none
     }
@@ -111,13 +111,13 @@ ns for span {
   fn first[t](self: span[t]): ?t {
     self.first-ref() is {
       :none -> :none,
-      :some(first-ref) -> :some(first-ref.*)
+      :some first-ref -> :some first-ref.*
     }
   }
 
   fn last-ref[t](self: span[t]): ?*t {
     if not self.is-empty() {
-      :some(self.get-ref(self.len() - 1))
+      :some self.get-ref(self.len() - 1)
     } else {
       :none
     }
@@ -126,7 +126,7 @@ ns for span {
   fn last[t](self: span[t]): ?t {
     self.last-ref() is {
       :none -> :none,
-      :some(last-ref) -> :some(last-ref.*)
+      :some last-ref -> :some last-ref.*
     }
   }
 
@@ -176,54 +176,4 @@ impl[t: equals] equals for span[t] {
     self.buffer == other.buffer
   }
 }
-
-// Eventually, we can create some abstractions like this to DRY up working
-// with these sequential containers
-//ability as-span {
-//  fn as-span[t](self): view[t]
-//}
-//
-//ability span-like {
-//  fn len[t](self): size
-//  fn get-ref[t](self, index: size): *t
-//  fn get[t](self, index: size): t { self.get-ref.* }
-//  fn slice[t](self, start: size, end: size): view[t]
-//  fn take[t](self: view[t], count: size): view[t] { self.slice(0,     count) }
-//  fn drop[t](self: view[t], count: size): view[t] { self.slice(count, self.len()) }
-//
-//  fn is-empty[t](self: view[t]): bool { self.len() == 0 }
-//
-//  fn non-empty[t](self: view[t]): bool { self.len() > 0 }
-//
-//  fn first-ref[t](self: view[t]): ?*t {
-//    if not self.is-empty() {
-//      :some(self.get-ref(0))
-//    } else {
-//      :none
-//    }
-//  }
-//
-//  fn first[t](self: view[t]): ?t {
-//    self.first-ref() is {
-//      :none -> :none,
-//      :some(first-ref) -> :some(first-ref.*)
-//    }
-//  }
-//
-//  fn last-ref[t](self: view[t]): ?*t {
-//    if not self.is-empty() {
-//      :some(self.get-ref(self.len() - 1))
-//    } else {
-//      :none
-//    }
-//  }
-//
-//  fn last[t](self: view[t]): ?t {
-//    self.last-ref() is {
-//      :none -> :none,
-//      :some(last-ref) -> :some(last-ref.*)
-//    }
-//  }
-//
-//}
 

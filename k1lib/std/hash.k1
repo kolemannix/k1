@@ -151,7 +151,7 @@ ns for map {
     let idx = h.as[size] & mask;
     loop {
       let s = self.slots.get-ref-unchecked(idx);
-      if s.hash == h and s.key == key { break(:some(idx)) };
+      if s.hash == h and s.key == key { break(:some idx) };
       if s.hash == EMPTY { break(:none) };
       idx := (idx + 1) & mask;
     }
@@ -171,11 +171,11 @@ ns for map {
       };
       if s.hash == EMPTY {
         break(tombstone is {
-          :some(t) -> .{ idx = t, found = false, from-tombstone = true },
+          :some t -> .{ idx = t, found = false, from-tombstone = true },
           :none -> .{ idx, found = false, from-tombstone = false }
         })
       };
-      if s.hash == TOMBSTONE and tombstone is :none { tombstone := :some(idx) };
+      if s.hash == TOMBSTONE and tombstone is :none { tombstone := :some idx };
       idx := (idx + 1) & mask;
     }
   }
@@ -229,14 +229,14 @@ ns for map {
 
   fn get[k, v](self: map[k, v], key: k): ?v where k: hash, k: equals {
     self._find-index(key, _slot-hash(key)) is {
-      :some(idx) -> :some(self.slots.get-ref-unchecked(idx).value),
+      :some idx -> :some self.slots.get-ref-unchecked(idx).value,
       :none -> :none
     }
   }
 
   fn get-ref[k, v](self: *mut map[k, v], key: k): ?(*mut v) where k: hash, k: equals {
     self._find-index(key, _slot-hash(key)) is {
-      :some(idx) -> :some(self.slots.get-ref-unchecked(idx).value.&),
+      :some idx -> :some self.slots.get-ref-unchecked(idx).value.&,
       :none -> :none
     }
   }
@@ -248,13 +248,13 @@ ns for map {
   fn remove[k, v](self: *mut map[k, v], key: k): ?v where k: hash, k: equals {
     self._find-index(key, _slot-hash(key)) is {
       :none -> :none,
-      :some(idx) -> {
+      :some idx -> {
         let s = self.slots.get-ref-unchecked(idx);
         let evicted = s.value;
         s.hash <- TOMBSTONE;
         self.count <- self.count - 1;
         self.tombstones <- self.tombstones + 1;
-        :some(evicted)
+        :some evicted
       }
     }
   }
@@ -305,11 +305,11 @@ impl[k, v] iterator[item = { key: k, value: v }] for map-iterator[k, v] {
     let i = self._next-live(self.pos);
     if i < self.slots.len {
       let s = self.slots.get-ref-unchecked(i);
-      :some(.{ key = s.key, value = s.value })
+      :some .{ key = s.key, value = s.value }
     } else :none
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } {
-    .{ at-least = self.remaining, at-most = :some(self.remaining) }
+    .{ at-least = self.remaining, at-most = :some self.remaining }
   }
   fn advance-by(self: *mut self, n: size): empty {
     let advanced = 0;
@@ -418,7 +418,7 @@ type set-iterator[t] = { inner: map-iterator[t, empty] }
 impl[t] iterator[item = t] for set-iterator[t] {
   fn peek(self: *set-iterator[t]): ?item {
     self.inner.peek() is {
-      :some(kv) -> :some(kv.key),
+      :some kv -> :some kv.key,
       :none -> :none
     }
   }

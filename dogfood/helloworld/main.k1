@@ -8,7 +8,7 @@ ns megarepl {
   }
 }
 fn render(data: *interesting-data): megarepl/render-output {
-  :scene([:rect(.{ color = 0, x = 10, y = 10, w = 10, h = 10 })])
+  :scene [:rect .{ color = 0, x = 10, y = 10, w = 10, h = 10 }]
 }
 
 ns orders {

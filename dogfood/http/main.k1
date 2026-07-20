@@ -20,7 +20,7 @@ fn fake-database-query(params: db-query-params): result[int, string] {
 
   // uv/sleep(250);
 
-  :ok(3)
+  :ok 3
 }
 
 type db-conn = {
@@ -97,9 +97,9 @@ fn do-work(req: *mut uv/work) {
   };
   let user-deps-baton: ptr = worker-user-data;
 
-  mem/push-mode(:custom-arena(work.connection.request-arena));
+  mem/push-mode(:custom-arena work.connection.request-arena);
   let response = (work.handler.logic-fn)(work.request, user-deps-baton);
-  work.http-response <- :some(response);
+  work.http-response <- :some response;
   mem/pop-mode();
 
   .{}
@@ -147,13 +147,13 @@ fn after-do-work(req: *mut uv/work, status: i32) {
 // [x] dogfood language struct access lsp entity
 // [x] dogfood language remove *mut distinction
 // [x] dogfood language swap data and len in k1 buffer struct
-  require work.http-response is :some(response) else {
+  require work.http-response is :some response else {
     // This is a bug; it shouldn't be possible to have not set this to some
     // since the harness is in control of this opt, so we close
     crash("[bug] handler did not set work.http-response");
   };
   response is {
-    :complete(chunks) -> {
+    :complete chunks -> {
       let write-req = connection.request-arena.alloc[uv/write]();
       write-req.set-data(connection);
 
@@ -187,10 +187,10 @@ fn after-do-work(req: *mut uv/work, status: i32) {
         return();
       };
     },
-    :stream(streaming) -> {
+    :stream streaming -> {
       chunked/begin(connection, streaming);
     },
-    :subscribe(sub) -> {
+    :subscribe sub -> {
       // SSE: send headers, register with the bus, and leave the connection
       // open. finish-request is never called for subscriptions; the request
       // arena stays live until the client disconnects and close-connection
@@ -263,7 +263,7 @@ fn close-connection(conn: *mut connection) {
   } else {
     tprintln("close-connection {conn.serial-no}");
   };
-  if conn.current-work is :some(work) {
+  if conn.current-work is :some work {
     tprintln("cancelling work");
     let cancel-rc = uv/cancel(work.as-request());
     if cancel-rc != 0 {
@@ -310,7 +310,7 @@ fn queue-http-handler(connection: *mut connection, request: http/request, handle
     close-connection(connection);
   } else {
     core/assert(connection.current-work is :none);
-    connection.current-work <- :some(work-req);
+    connection.current-work <- :some work-req;
   }
 }
 
@@ -472,7 +472,7 @@ let mutable conn-count: u64 = 0
 
 fn on-complete-http-header(connection: *mut connection, header: http/header): http/body-mode {
   // eprintln("matching handler");
-  connection.parsed-header <- :some(header);
+  connection.parsed-header <- :some header;
   match-route(header, connection.route-handlers) is {
     :none -> { 
       // Respond with 404
@@ -481,8 +481,8 @@ fn on-complete-http-header(connection: *mut connection, header: http/header): ht
       // the parser again
       :strict
     },
-    :some(handler) -> {
-      connection.matched-handler <- :some(handler);
+    :some handler -> {
+      connection.matched-handler <- :some handler;
       handler.body-mode is {
           :strict -> {
             // continue reading; do not enqueue handler yet
@@ -499,7 +499,7 @@ fn on-complete-http-header(connection: *mut connection, header: http/header): ht
 fn on-complete-http-body(connection: *mut connection, chunks: span[span[u8]]) {
   let request: http/request = .{
     header = connection.parsed-header.get(),
-    body = :buffered(chunks)
+    body = :buffered chunks
   };
   let total-size = 0;
   for chunks { total-size := total-size + it.len() };
@@ -579,14 +579,14 @@ fn start-app[deps](context arena: *mut arena)(make-deps: *fn() -> *mut deps, rou
   });
   server.as-handle().set-data[server-data](server-data);
   if tcp-init-rc != 0 {
-    return(:err("tcp init failed: {string/wrap-c(uv/strerror(tcp-init-rc).as[ptr])}"));
+    return(:err "tcp init failed: {string/wrap-c(uv/strerror(tcp-init-rc).as[ptr])}");
   };
 
   let addr: uv/sockaddr_in = uninit;
   let a = "0.0.0.0\0".data-ptr().rw[u8];
   let port: i32 = 3000;
   if uv/ip4_addr(a, port, &addr) != 0 {
-    return(:err("uv_ip4_addr failed"));
+    return(:err "uv_ip4_addr failed");
   };
 
   uv/thread_setname("mainthread\0".data-ptr().as());
@@ -597,7 +597,7 @@ fn start-app[deps](context arena: *mut arena)(make-deps: *fn() -> *mut deps, rou
   let r: i32 = uv/listen(server.as-stream(), backlog = 128, on-new-connection);
   if (r != 0) {
       let listen-error = string/wrap-c(uv/strerror(r).as[ptr]);
-      return(:err("Listen error {listen-error}"));
+      return(:err "Listen error {listen-error}");
   };
   eprintln("listening on {port}...");
 
@@ -613,7 +613,7 @@ fn main(): i32 {
   let context arena = arena/init-default();
   arena.set-name("mainthread");
 
-  mem/push-mode(:custom-arena(arena));
+  mem/push-mode(:custom-arena arena);
   let route-handlers: span[user-route-handler[app/deps]] = [
     .{ 
       body-mode = :strict,

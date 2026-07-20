@@ -33,7 +33,7 @@ fn complex-references() {
   struct-ref.x <- 42;
   assert(x-ref.* == 42);
 
-  let either-ref: either { yes(int), no } = :yes(3);
+  let either-ref: either { yes(int), no } = :yes 3;
   let either-ref = &either-ref;
 
   let yes-ref: *(type-of(either-ref).value:yes) = either-ref.as-yes().!;
@@ -49,9 +49,9 @@ fn complex-references() {
 
   let inner-struct-ref = .{ x = 42 };
   let inner-struct-ref = &inner-struct-ref;
-  let struct-opt-ref: ?*{ x: int } = :some(inner-struct-ref);
+  let struct-opt-ref: ?*{ x: int } = :some inner-struct-ref;
 
-  if struct-opt-ref is :some(x) {
+  if struct-opt-ref is :some x {
     assert(x.x == 42);
     x.x <- 43;
     assert(x.x == 43);

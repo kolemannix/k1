@@ -6,8 +6,8 @@ type foo = {
   a: bool
 }
 
-fn can-fail-int(): result[int, error] { :ok(42) }
-fn can-fail-bool(): result[bool, error] { :ok(false) }
+fn can-fail-int(): result[int, error] { :ok 42 }
+fn can-fail-bool(): result[bool, error] { :ok false }
 
 impl try[t = int, e = error] for foo {
   fn error(_e: e): self   { .{ a = false } }
@@ -19,7 +19,7 @@ impl try[t = int, e = error] for foo {
 }
 
 fn fails(): result[bool, error] {
-  let value: result[int, error] = :err("woops");
+  let value: result[int, error] = :err "woops";
   let i = value.try;
   :ok(i % 2 == 0)
 }
@@ -35,9 +35,9 @@ fn run(): result[i32, error] {
     :ok(not i)
   };
   let res = c();
-  assert(res is :err("woops"));
+  assert(res is :err "woops");
 
-  :ok(0)
+  :ok 0
 }
 
 fn test() {

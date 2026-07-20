@@ -28,7 +28,7 @@ fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
         code.line("parts.get(0).print-to(w);");
         code.line("w.string(args);");
       },
-      :struct(.{fields}) -> {
+      :struct .{fields} -> {
         if parts.len != fields.len() {
           crash("Mismatching format arg count")
         };

@@ -132,7 +132,7 @@ ns for arena {
   }
 
   fn alloc-buffer[t](self: *arena, size): buffer[t] {
-    buffer/allocate-in[t](context :custom-arena(self))(size)
+    buffer/allocate-in[t](context :custom-arena self)(size)
   }
 
   fn push-string(self: *arena, s: string): string {
@@ -141,7 +141,7 @@ ns for arena {
   }
 
   fn alloc-list[t](self: *arena, cap: size): list[t] {
-    list/with-capacity-in(context :custom-arena(self))(cap)
+    list/with-capacity-in(context :custom-arena self)(cap)
   }
 
   fn try-realloc(self: *arena, old-ptr: ptr, old-size: size, new-size: size, align: size): ptr {

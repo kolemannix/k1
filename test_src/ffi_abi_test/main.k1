@@ -159,13 +159,13 @@ fn test-all() {
   assert-equals(locn.ptr_data.get(1), 2.as[ptr]);
   assert-equals(locn.int_data, 42);
 
-  assert(not foo/tag-union-iszero(:a(10)).as-bool());
-  assert(    foo/tag-union-iszero(:a(0)).as-bool());
+  assert(not foo/tag-union-iszero(:a 10).as-bool());
+  assert(    foo/tag-union-iszero(:a 0).as-bool());
 
-  assert(not foo/tag-union-iszero(:b(10)).as-bool());
-  assert(    foo/tag-union-iszero(:b(0)).as-bool());
+  assert(not foo/tag-union-iszero(:b 10).as-bool());
+  assert(    foo/tag-union-iszero(:b 0).as-bool());
 
-  assert(foo/tag-union-iszero(:c(ptr/null)).as-bool());
+  assert(foo/tag-union-iszero(:c ptr/null).as-bool());
   let x = 10;
   assert(not foo/tag-union-iszero(:c((&x).as())).as-bool());
 

@@ -215,18 +215,18 @@ fn cmd-new-game() {
 fn handle-command(context eng: engine)(command: uci/command): ?string {
   command is {
     :uci -> some(cmd-info()),
-    :go(s) -> some(cmd-go(s)),
+    :go s -> some(cmd-go(s)),
     :is-ready -> some(cmd-is-ready()),
     :new-game -> { cmd-new-game(); none() },
     :quit -> {
       eprintln("Quitting");
       sys/exit(0)
     },
-    :position(s) -> {
+    :position s -> {
       debug-log("Setting position: {s}");
       none()
     },
-    :perft(.{ depth }) -> {
+    :perft .{ depth } -> {
       debug-log("Handling perft depth {depth}");
       eng.game.gen-moves();
       none()
@@ -252,11 +252,11 @@ fn run(_args: span[string]): result[i32, string] {
     // TODO(dogfood): easy mapError before try
     let cmd = sys/read-line(2048).try; 
     uci/parse-command(cmd) is {
-      :err(msg) -> eprintln("[debug] {msg}"),
-      :ok(cmd) -> {
+      :err msg -> eprintln("[debug] {msg}"),
+      :ok cmd -> {
         let response = handle-command(cmd);
         // If a command produces output, it goes to stdout with a newline added
-        if response is :some(r) { println(r) };
+        if response is :some r { println(r) };
       }
     }
   };

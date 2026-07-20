@@ -39,8 +39,8 @@ fn buffer-first-last() {
   buf.set(1, 20);
   buf.set(2, 30);
 
-  assert(buf.first() == :some(10));
-  assert(buf.last() == :some(30));
+  assert(buf.first() == :some 10);
+  assert(buf.last() == :some 30);
 }
 
 fn buffer-slice() {

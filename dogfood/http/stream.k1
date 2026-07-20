@@ -33,7 +33,7 @@ fn buffer-stream-next(state: ptr): stream-pull {
   let n = if remaining < bs.chunk-size remaining else bs.chunk-size;
   let chunk = bs.bytes.slice(bs.cursor, bs.cursor + n);
   bs.cursor <- bs.cursor + n;
-  :chunk(chunk)
+  :chunk chunk
 }
 
 // HTTP/1.1 chunked transfer encoding of a response-stream: headers first,
@@ -54,7 +54,7 @@ ns chunked {
       stream = streaming.stream,
       finishing = false,
     });
-    mem/push-mode(:custom-arena(connection.request-arena));
+    mem/push-mode(:custom-arena connection.request-arena);
     let headers = stringf(
       "HTTP/1.1 200 OK\r\nContent-Type: {streaming.content-type}\r\nTransfer-Encoding: chunked\r\n\r\n");
     mem/pop-mode();
@@ -96,8 +96,8 @@ ns chunked {
   fn encode-next-chunk(encoder: *mut encoder) {
     let connection = encoder.connection;
     (encoder.stream.next)(encoder.stream.state) is {
-      :chunk(bytes) -> {
-        mem/push-mode(:custom-arena(connection.request-arena));
+      :chunk bytes -> {
+        mem/push-mode(:custom-arena connection.request-arena);
         let out = string-builder/new();
         append-hex(&out, bytes.len());
         out.string("\r\n");

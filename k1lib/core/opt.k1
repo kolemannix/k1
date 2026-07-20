@@ -3,7 +3,7 @@
 
 ns for opt {
 
-  fn is-some[t](self: ?t): bool { self is :some(_) }
+  fn is-some[t](self: ?t): bool { self is :some _ }
   fn is-none[t](self: ?t): bool { self is :none }
 
   fn get[t](context locn: k1/source-location)(self: ?t): t {
@@ -15,14 +15,14 @@ ns for opt {
   fn contains[t: equals](self: ?t, t: t): bool {
     self is {
       :none -> false,
-      :some(v) -> v == t
+      :some v -> v == t
     }
   }
 
   // i'm leaving this separate function here 
   // because at one point it exercised a really weird compiler bug
   fn equals[t](a: opt[t], b: opt[t]): bool where t: equals {
-    if a is :some(at) {
+    if a is :some at {
       if b is :some(bt) at == bt else false
     } else {
       b is :none
@@ -32,7 +32,7 @@ ns for opt {
   fn map[t, u](self: opt[t], f: some fn t -> u): opt[u] {
     self is {
       :none -> :none,
-      :some(t) -> :some(f(t))
+      :some t -> :some f(t)
     }
   }
 
@@ -40,7 +40,7 @@ ns for opt {
 
 // Convenience constructors in the global scope for opt instances
 fn none[t](): opt[t] { opt:none[t] }
-fn some[t](value: t): opt[t] { opt:some[t](value) }
+fn some[t](value: t): opt[t] { opt:some[t] value }
 
 
 impl[t: equals] equals for opt[t] {
@@ -53,13 +53,13 @@ impl[t: equals] equals for opt[t] {
 
 impl[a] try[t = a, e = empty] for opt[a] {
   fn error(_e: empty): opt[t] { :none }
-  fn value(t: t): opt[t] { opt:some(t) }
+  fn value(t: t): opt[t] { opt:some t }
 
-  fn is-ok(self: opt[t]): bool { self is :some(_) }
+  fn is-ok(self: opt[t]): bool { self is :some _ }
   fn get-error(self: opt[t]): empty {
     self is {
       :none -> .{},
-      :some(_) -> crash("getError on opt:some")
+      :some _ -> crash("getError on opt:some")
     }
   }
   fn get-value(self: opt[t]): t { self.get() }

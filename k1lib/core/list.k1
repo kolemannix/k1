@@ -109,7 +109,7 @@ ns for list {
   fn get-opt[t](self: list[t], index: size): ?t {
     if index >= self.len {
       :none
-    } else :some(self.buffer.get(index))
+    } else :some self.buffer.get(index)
   }
 
   fn _grow[t](context mode: alloc-mode)(self: *mut list[t]) {
@@ -160,24 +160,24 @@ ns for list {
 
   fn first-ref[t](self: *mut list[t]): ?(*mut t) {
     if self.non-empty() {
-      :some(self.get-ref(0))
+      :some self.get-ref(0)
     } else {
       :none
     }
   }
 
   fn first[t](self: list[t]): ?t {
-    if self.non-empty() :some(self.get(0)) 
+    if self.non-empty() :some self.get(0)
     else :none
   }
 
   fn last-ref[t](self: *mut list[t]): ?(*mut t) {
-    if self.non-empty() :some(self.get-ref(self.len - 1))
+    if self.non-empty() :some self.get-ref(self.len - 1)
     else :none
   }
 
   fn last[t](self: list[t]): ?t {
-    if self.non-empty() :some(self.get(self.len - 1))
+    if self.non-empty() :some self.get(self.len - 1)
     else :none
   }
 

@@ -8,35 +8,35 @@ fn test-basic-enum() {
   assert-equals(size, 32);
   assert-equals(align, 8);
 
-  let obj: json = :str("hello");
+  let obj: json = :str "hello";
   let null: json = :null;
-  assert(obj is :str("hello"));
+  assert(obj is :str "hello");
   assert(null is :null);
 
-  let obj2: json = :array([:str("hello"), :number(123.0)]);
-  assert(obj2.as-array().!.get(0) is :str("hello"));
-  assert(obj2.as-array().!.get(1) is :number(123.0));
+  let obj2: json = :array [:str "hello", :number 123.0];
+  assert(obj2.as-array().!.get(0) is :str "hello");
+  assert(obj2.as-array().!.get(1) is :number 123.0);
 }
 
 fn test-parsing() {
   test-parse(`null`      , fn j. j is :null);
-  test-parse(`"asdf"`    , fn j. j is :str("asdf"));
-  test-parse(`"as\"df"`  , fn j. j is :str("as\"df"));
-  test-parse(`"as\\\\df"`, fn j. j is :str("as\\df"));
-  test-parse(`""`        , fn j. j is :str(""));
-  test-parse(`  ""`      , fn j. j is :str(""));
+  test-parse(`"asdf"`    , fn j. j is :str "asdf");
+  test-parse(`"as\"df"`  , fn j. j is :str "as\"df");
+  test-parse(`"as\\\\df"`, fn j. j is :str "as\\df");
+  test-parse(`""`        , fn j. j is :str "");
+  test-parse(`  ""`      , fn j. j is :str "");
 
-  test-parse(`false`, fn j. j is :bool(false));
-  test-parse(`true`,  fn j. j is :bool(true));
-  test-parse(`\{}`,   fn j. j is :object(m) and m.is-empty());
+  test-parse(`false`, fn j. j is :bool false);
+  test-parse(`true`,  fn j. j is :bool true);
+  test-parse(`\{}`,   fn j. j is :object m and m.is-empty());
   test-parse(
     `\{ "foo": true, "baz": false }`,
-    fn j. j is :object(m) and
+    fn j. j is :object m and
         m.map(fn f. f.key) == ["foo", "baz"] and
         m.map(fn f. f.value.as-bool().!) == [true, false]
   );
 
-  test-parse(" [ ] ", fn j. j is :array(es) and es.is-empty());
+  test-parse(" [ ] ", fn j. j is :array es and es.is-empty());
   //test-parse(`[]`, fn j. j is :array(_));
 }
 
@@ -44,15 +44,15 @@ fn test() {
   test-basic-enum();
   test-parsing();
   test-parse(example-json, fn o. {
-    o is :object(members)
+    o is :object members
     and members.len() == 5
   });
 }
 
 fn test-parse(s: string, f: some fn json -> bool) {
   json/parse-from-string(s) is {
-    :err(msg) -> crash("Failed: {msg}"),
-    :ok(json) -> if not f(json) crash("Failed '{s}'")
+    :err msg -> crash("Failed: {msg}"),
+    :ok json -> if not f(json) crash("Failed '{s}'")
   }
 }
 

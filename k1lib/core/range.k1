@@ -29,12 +29,12 @@ impl iterator[item = int] for int-range-iterator {
        :none
      } else {
        let current = self.current();
-       :some(current)
+       :some current
      }
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } {
     let remaining = self.range.end - self.position();
-    .{ at-least = remaining, at-most = :some(remaining) }
+    .{ at-least = remaining, at-most = :some remaining }
   }
   fn advance-by(self: *mut self, n: size) {
     self.step-by(n);

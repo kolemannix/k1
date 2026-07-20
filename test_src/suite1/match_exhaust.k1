@@ -10,9 +10,9 @@ fn match-bool(b: bool): string {
 type tri-state = either { yes, no, failure({ reason: string }) }
 fn match-tristate-opt(t: ?tri-state): string {
   t is {
-    :some(:yes) -> "yes",
-    :some(:no) -> "no",
-    :some(:failure(s)) -> "failure: {s.reason}",
+    :some :yes -> "yes",
+    :some :no -> "no",
+    :some :failure s -> "failure: {s.reason}",
     :none -> "none"
   }
 }
@@ -21,15 +21,15 @@ fn failed-with-baz(t: tri-state): bool {
   t is {
     :yes -> false,
     :no -> false,
-    :failure(s) -> s.reason == "baz"
+    :failure s -> s.reason == "baz"
   }
 }
 
 fn match-opt-bool(b: ?bool): string {
   b is {
     :none -> identity("None"),
-    :some(false) -> identity("false"),
-    :some(true) -> identity("true")
+    :some false -> identity("false"),
+    :some true -> identity("true")
   }
 }
 
@@ -49,33 +49,33 @@ fn main(): i32 {
   };
 
   assert-equals(match-bool(false), "false");
-  assert-equals(match-opt-bool(:some(false)), "false");
+  assert-equals(match-opt-bool(:some false), "false");
   assert-equals(match-opt-bool(:none), "None");
 
   let yes: tri-state = :yes;
-  assert-equals(match-tristate-opt(:some(yes)), "yes");
-  assert-equals(match-tristate-opt(:some(:yes)), "yes");
-  assert-equals(match-tristate-opt(:some(:failure(.{ reason = "because" }))), "failure: because");
+  assert-equals(match-tristate-opt(:some yes), "yes");
+  assert-equals(match-tristate-opt(:some :yes), "yes");
+  assert-equals(match-tristate-opt(:some :failure .{ reason = "because" }), "failure: because");
 
   assert(not both-true(.{ a = true, b = false }));
   assert(both-true(.{ a = true, b = true }));
 
-  assert(failed-with-baz(:failure(.{ reason = "baz" })));
+  assert(failed-with-baz(:failure .{ reason = "baz" }));
   assert(not failed-with-baz(:no));
 
   some(42) is {
-    :some(x) if x == 42 -> .{},
+    :some x if x == 42 -> .{},
     _ -> assert(false),
   };
 
   // matching understands 'never'
-  let foo: result[int, { asdf: never }] = :ok(42);
+  let foo: result[int, { asdf: never }] = :ok 42;
 
-  require foo is :ok(i);
+  require foo is :ok i;
 
   assert-equals(i, 42);
   foo is {
-    :ok(i) -> assert-equals(i, 42),
+    :ok i -> assert-equals(i, 42),
   };
 
   0

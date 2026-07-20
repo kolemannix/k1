@@ -32,25 +32,25 @@ fn negative-cases(p: int, s: inner, arr: array[int, 3]) {
   let param-elem-result = test-compile(arr.get(0).&);
   assert-equals(
     param-elem-result,
-    :some("Cannot take address of a function parameter; re-declare it or use a * type")
+    :some "Cannot take address of a function parameter; re-declare it or use a * type"
   );
   // Address of a function parameter is rejected at the place root
   let param-result = test-compile(&p);
   assert-equals(
     param-result,
-    :some("Cannot take address of a function parameter; re-declare it or use a * type")
+    :some "Cannot take address of a function parameter; re-declare it or use a * type"
   );
   // ...even through a field chain rooted at the parameter
   let param-field-result = test-compile(&s.a);
   assert-equals(
     param-field-result,
-    :some("Cannot take address of a function parameter; re-declare it or use a * type")
+    :some "Cannot take address of a function parameter; re-declare it or use a * type"
   );
   // a call result is not a place
   let rvalue-result = test-compile(&make-inner().a);
   assert-equals(
     rvalue-result,
-    :some("Cannot take the address of a call; only places (variables, struct fields, array elements, sum payloads, and dereferences) have addresses")
+    :some "Cannot take the address of a call; only places (variables, struct fields, array elements, sum payloads, and dereferences) have addresses"
   );
 }
 
@@ -108,16 +108,16 @@ fn test() {
 
   // Mixed aggregates: store to struct members inside a sum payload, through a
   // reference binding from a match on the variant
-  let shape: shape = :circle(.{ radius = 5, filled = false });
+  let shape: shape = :circle .{ radius = 5, filled = false };
   (&shape) is {
-    :circle(c)* -> {
+    :circle c* -> {
       c.radius <- 10;
       c.filled <- true;
     },
     _ -> crash("expected a circle")
   };
   shape is {
-    :circle(c) -> {
+    :circle c -> {
       assert-equals(c.radius, 10);
       assert(c.filled);
     },

@@ -14,14 +14,14 @@ ns recurse_basic {
 
   fn emake(n: size): tree {
     //println("emake {n}");
-    if n == 0 :leaf else :node(mem/new(emake(n - 1)))
+    if n == 0 :leaf else :node mem/new(emake(n - 1))
   }
 
   fn ecount(en: tree): size {
     //println("ecount");
     en is {
       :leaf -> 0,
-      :node(child) -> 1 + ecount(child.*)
+      :node child -> 1 + ecount(child.*)
     }
   }
 

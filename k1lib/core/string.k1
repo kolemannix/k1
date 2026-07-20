@@ -13,7 +13,7 @@ ns for string {
 
   fn get-opt(self: string, index: size): ?char {
     if index >= self.len() :none
-    else :some(self.get(index))
+    else :some self.get(index)
   }
 
   fn span-bytes(self: string): span[byte] {
@@ -68,11 +68,11 @@ ns for string {
   fn non-empty(self: string): bool { self.len() != 0 }
 
   fn first(self: string): ?char {
-    if self.non-empty() :some(self.get(0)) else :none
+    if self.non-empty() :some self.get(0) else :none
   }
 
   fn last(self: string): ?char {
-    if self.is-empty() :some(self.get(self.len() - 1)) else :none
+    if self.is-empty() :some self.get(self.len() - 1) else :none
   }
 
   fn index-of(self: string, c: char): i64 {
@@ -127,12 +127,12 @@ ns for string {
         return(:none)
       };
       let sub = self.slice(i, i + target.len());
-      if sub == target { return(:some(i)) };
+      if sub == target { return(:some i) };
     };
     :none
   }
 
-  fn contains-string(self: string, target: string): bool { self.index-of-string(target) is :some(_) }
+  fn contains-string(self: string, target: string): bool { self.index-of-string(target) is :some _ }
 
   fn slice(self: string, start: size, end: size): string {
     .{ span = self.span.slice(start, end) }
@@ -188,7 +188,7 @@ ns for string {
     let i = if neg 1 else 0;
     let total = 0;
     while i < self.len() {
-      if self.get(i).to-ascii-digit() is :some(digit) {
+      if self.get(i).to-ascii-digit() is :some digit {
         total := (total * 10) + digit.as[int];
       } else {
         return(:none);
@@ -202,7 +202,7 @@ ns for string {
   }
 
   fn capitalize-ascii(self: string): string {
-    if self.first() is :some(c) and c.is-ascii-lower() {
+    if self.first() is :some c and c.is-ascii-lower() {
       let clone-chars: buffer[char] = self.span.buffer.cloned();
       clone-chars.set(0, c.to-ascii-upper());
       wrap-buffer(clone-chars)
@@ -212,13 +212,13 @@ ns for string {
   fn parse-base10(self: string): ?uint {
     let o: uint = 0;
     for c in self {
-      require c.to-ascii-digit() is :some(digit-value) else { return(:none) };
+      require c.to-ascii-digit() is :some digit-value else { return(:none) };
       // FIXME char to digit LUT
       let digit-value: uint = (c.as[u8] - 48).as[uint];
       o := o * 10;
       o := o + digit-value;
     };
-    :some(o)
+    :some o
   }
 
 }

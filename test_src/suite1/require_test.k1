@@ -2,17 +2,17 @@ ns require_test;
 
 fn test() {
   let foo = .{ x = 1, y = some(2) };
-  require foo is .{ y } and y is :some(2) and 2 == (1 + 1) else {
+  require foo is .{ y } and y is :some 2 and 2 == (1 + 1) else {
     crash("")
   };
 
   { // Infallible
     require foo is .{ x, y };
     assert-equals(x, 1);
-    assert-equals(y, :some(2));
+    assert-equals(y, :some 2);
 
     require foo is .{ y };
-    assert-equals(y, :some(2));
+    assert-equals(y, :some 2);
   };
 
   require not false else {

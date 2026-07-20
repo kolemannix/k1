@@ -10,21 +10,21 @@ fn test-basic() {
   my-map.insert("b", 11);
   my-map.insert("c", 12);
   assert-equals(my-map.len(), 3);
-  assert-equals(my-map.get("a"), :some(10));
-  assert-equals(my-map.get("b"), :some(11));
-  assert-equals(my-map.get("c"), :some(12));
+  assert-equals(my-map.get("a"), :some 10);
+  assert-equals(my-map.get("b"), :some 11);
+  assert-equals(my-map.get("c"), :some 12);
   assert-equals(my-map.get("d"), :none);
   assert(my-map.contains("a"));
   assert(not my-map.contains("d"));
-  assert-equals(my-map.remove("a"), :some(10));
+  assert-equals(my-map.remove("a"), :some 10);
   assert-equals(my-map.remove("a"), :none);
   assert-equals(my-map.get("a"), :none);
-  assert-equals(my-map.get("b"), :some(11));
+  assert-equals(my-map.get("b"), :some 11);
   assert-equals(my-map.len(), 2);
   my-map.insert("a", 20);
-  assert-equals(my-map.get("a"), :some(20));
+  assert-equals(my-map.get("a"), :some 20);
   my-map.insert("b", 21);
-  assert-equals(my-map.get("b"), :some(21));
+  assert-equals(my-map.get("b"), :some 21);
   assert-equals(my-map.len(), 3);
 }
 
@@ -36,11 +36,11 @@ fn test-int-keys() {
     i := i + 1
   };
   assert-equals(m.len(), 50);
-  assert-equals(m.get(17), :some("v17"));
+  assert-equals(m.get(17), :some "v17");
   assert-equals(m.get(50), :none);
-  assert-equals(m.remove(17), :some("v17"));
+  assert-equals(m.remove(17), :some "v17");
   assert-equals(m.get(17), :none);
-  assert-equals(m.get(18), :some("v18"));
+  assert-equals(m.get(18), :some "v18");
 }
 
 fn test-get-ref() {
@@ -48,7 +48,7 @@ fn test-get-ref() {
   m.insert("a", 1);
   let vref = m.get-ref("a").!;
   vref <- 100;
-  assert-equals(m.get("a"), :some(100));
+  assert-equals(m.get("a"), :some 100);
   assert(m.get-ref("missing") is :none);
 }
 
@@ -91,7 +91,7 @@ fn test-clear() {
   assert(m.is-empty());
   assert-equals(m.get("a"), :none);
   m.insert("a", 3);
-  assert-equals(m.get("a"), :some(3));
+  assert-equals(m.get("a"), :some 3);
   assert-equals(m.len(), 1);
 }
 
@@ -115,7 +115,7 @@ fn test-get-or-insert() {
   let a2 = m.get-or-insert("a", fn. 99);
   assert-equals(a2.*, 11);
   assert-equals(m.len(), 1);
-  assert-equals(m.get("a"), :some(11));
+  assert-equals(m.get("a"), :some 11);
 
   let words: list[string] = ["x", "y", "x", "x"];
   let counts = map/new[string, int]();
@@ -123,8 +123,8 @@ fn test-get-or-insert() {
     let c = counts.get-or-insert(w, fn. 0);
     c <- c.* + 1;
   };
-  assert-equals(counts.get("x"), :some(3));
-  assert-equals(counts.get("y"), :some(1));
+  assert-equals(counts.get("x"), :some 3);
+  assert-equals(counts.get("y"), :some 1);
   assert-equals(counts.get("z"), :none);
 }
 
@@ -179,7 +179,7 @@ fn test-resize(size: int) {
     if i % 5 == 0 {
       assert-msg("{i} should be empty", result is :none);
     } else {
-      if result is :some(v) { assert-equals(v, i) } else { crash("Missing value {i}") }
+      if result is :some v { assert-equals(v, i) } else { crash("Missing value {i}") }
     };
     i := i + 1
   };

@@ -23,9 +23,9 @@ fn assgn-rhs(): never { let _x = 123; _x := crash("assgn rhs") }
 fn binop-rhs(): int { 4 + crash("") }
 fn unop(): never { not crash("") }
 fn while-cond(): never { while crash("asdf") { .{} } }
-fn enum-constr-payload(): never { opt:some(crash("asdf")) }
+fn enum-constr-payload(): never { opt:some crash("asdf") }
 fn get-enum-payload(): i64 { 
-  let x: ?int = opt:some(crash(""));
+  let x: ?int = opt:some crash("");
 }
 fn cast-target(): i64 { crash(""): i64 }
 fn in-return(): never { 
@@ -44,7 +44,7 @@ fn in-break(): never {
     test-compile(
       loop { break(crash("in-break")) }
     ),
-    :some("break is dead since returned expression is divergent; consider removing the 'break'")
+    :some "break is dead since returned expression is divergent; consider removing the 'break'"
   );
   core/sys/exit(0)
 }

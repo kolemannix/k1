@@ -46,7 +46,7 @@ fn test() {
   let foo = 3;
   let x = some("foo");
   let y = some("bar");
-  let result = if x is :some(v) and y is :some("bar") and foo == 3 {
+  let result = if x is :some v and y is :some "bar" and foo == 3 {
     v == "foo";
   } else {
     // Fails parsing without parens since 'false' isn't a keyword! hm
@@ -60,7 +60,7 @@ fn test() {
       illegal_binding
     }
   );
-  assert(failure1 is :some(_));
+  assert(failure1 is :some _);
 
   let my-point = .{ x = 1, y = 2 };
   let struct-result = if my-point is .{ x = 1, y = yy } and my-point is .{ x = xx, y = 2 } {
@@ -70,14 +70,14 @@ fn test() {
 
   // Test nested pattern matching with Options containing structs
   let nested = some(.{ x = some(42), y = some(24) });
-  let nested-result = if nested is :some(.{ x = :some(x-val), y = :some(y-val) }) {
+  let nested-result = if nested is :some .{ x = :some x-val, y = :some y-val } {
     x-val == 42 and y-val == 24
   } else (false);
   assert(nested-result);
 
   // Test that partial nested matches fail appropriately
   let partial = some(.{ x = some(42), y = none[int]() });
-  let partial-result = if partial is :some(.{ x = :some(x-val), y = :some(y-val) }) {
+  let partial-result = if partial is :some .{ x = :some x-val, y = :some y-val } {
     (false)  // Should never reach here
   } else (true);
   assert(partial-result);
@@ -87,7 +87,7 @@ fn test() {
     point = .{ x = 1, y = 2 },
     value = some("test")
   });
-  let complex-result = if complex is :some(.{ point = .{ x = 1, y = yy }, value = :some(v) }) {
+  let complex-result = if complex is :some .{ point = .{ x = 1, y = yy }, value = :some v } {
     yy == 2 and v == "test"
   } else (false);
   assert(complex-result);
@@ -97,7 +97,7 @@ fn test() {
     outer = 1,
     inner = some(.{ value = 1 })
   });
-  let mixed-result = if mixed is :some(.{ outer = o, inner = :some(.{ value = v })}) {
+  let mixed-result = if mixed is :some .{ outer = o, inner = :some .{ value = v } } {
     o == v  // Both should be 1
   } else (false);
   assert(mixed-result);
@@ -111,7 +111,7 @@ fn test() {
 
   let my-opt = some(42);
   let your-opt = some(false);
-  if my-opt is :some(x) and x == 42 .{} else assert(false);
+  if my-opt is :some x and x == 42 .{} else assert(false);
 
   assert-equals(binding-if-struct(.{ x = 1, y = 2 }), :a);
   assert-equals(binding-if-struct(.{ x = 2, y = 2 }), :b);
@@ -120,7 +120,7 @@ fn test() {
   assert-equals(match-struct(.{ x = 1, y = 3 }), :b);
   assert-equals(match-struct(.{ x = 0, y = 2 }), :b);
 
-  if my-opt is :some(42) and your-opt is :some(f) and 3 == 3 and not false {
+  if my-opt is :some 42 and your-opt is :some f and 3 == 3 and not false {
     assert(f == false)
   } else assert(false);
 

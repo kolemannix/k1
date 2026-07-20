@@ -3,7 +3,7 @@ ns inference;
 fn combine[t](a: t, _b: t): t { a }
 fn combine3[t](a: t, b: t, c: { one: t, two: t }): t { a }
 fn get-or-else[t](a: opt[t], b: t): t { if a is :some(a) a else b }
-fn some[u](value: u): opt[u] { opt:some[u](value) }
+fn some[u](value: u): opt[u] { opt:some[u] value }
 
 fn get[UU](value: opt[UU]): UU { if value is :some(u) u else core/sys/exit(1) }
 fn identity[t](value: t): t { value }
@@ -14,7 +14,7 @@ fn identity-nested[t](t: t): t {
 
 fn occurs-check-test[t](x: t): t {
   assert(
-    test-compile( combine(x, some(x)) ) is :some(_)
+    test-compile( combine(x, some(x)) ) is :some _
   );
   x
 }
@@ -46,10 +46,10 @@ fn test() {
 
   occurs-check-test(42);
 
-  combine(opt:some(4), some(23));
-  combine(opt:some(4), some(23)): opt[u32];
+  combine(opt:some 4, some(23));
+  combine(opt:some 4, some(23)): opt[u32];
 
-  let x = opt:some(42);
+  let x = opt:some 42;
 
   let with-never = test-compile(
     combine3((&x).*, core/sys/exit(1), .{ one = some(-1), two = some(3), })

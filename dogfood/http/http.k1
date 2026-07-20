@@ -56,7 +56,7 @@ ns for parse-state {
   }
 
   fn alloc-mode(self: *mut parse-state): alloc-mode {
-    :custom-arena(self.arena)
+    :custom-arena self.arena
   }
 }
 

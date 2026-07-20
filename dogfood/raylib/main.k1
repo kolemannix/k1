@@ -60,17 +60,17 @@ fn render(context frame-arena: alloc-mode)(things: *list[thing]) {
 fn run(title: string): i32 {
   let title-c = title.to-c(context :tmp)();
 
-  let perm = alloc-mode:custom-arena(core/arena/init-virtual(1));
+  let perm = alloc-mode:custom-arena core/arena/init-virtual(1);
   let things: list[thing] = list/with-capacity-in(context perm)(1024);
   things.push-in(context perm)(.{
     pos = .{ x = 200, y = 300 },
-    kind = :bits64(10)
+    kind = :bits64 10
   });
   raylib/init(800, 450, title-c.ptr);
   raylib/set-target-fps(60);
 
 
-  let context frame = alloc-mode:custom-arena(core/arena/init-virtual(1));
+  let context frame = alloc-mode:custom-arena core/arena/init-virtual(1);
   mem/push-mode(frame);
   while not raylib/window-should-close() {
     let fps = raylib/get-fps();

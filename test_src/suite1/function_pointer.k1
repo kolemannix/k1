@@ -24,8 +24,8 @@ fn test() {
   let has-fn: has-fn = .{ myfn = static-add-one };
 
   assert-equals((has-fn.myfn)(4), 5);
-  assert(test-compile( (has-fn.myfn)() ) is :some(_));
-  assert(test-compile( (has-fn.myfn)(4)() ) is :some(_));
+  assert(test-compile( (has-fn.myfn)() ) is :some _);
+  assert(test-compile( (has-fn.myfn)(4)() ) is :some _);
 
   .{}
 }

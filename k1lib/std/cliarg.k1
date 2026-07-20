@@ -4,7 +4,7 @@
 ns sys;
 
 fn parse-next(i: *mut size, args: span[string]): ?string {
-  let r: ?string = if args.get-opt(i + 1) is :some(next) :some(next) else :none;
+  let r = args.get-opt(i + 1);
   i <- i.* + 2;
   r
 }
@@ -16,7 +16,7 @@ fn get-arg-kind(type-id: u64): either { string, list-string, opt-string } {
 }
 
 fn gen-help-text[t](summary: string): string {
-  let s = types/schema[t] is { :struct(s) -> s, _ -> crash("need a struct") };
+  let s = types/schema[t] is { :struct s -> s, _ -> crash("need a struct") };
   let sb = string-builder/new();
   if summary.non-empty() sb.line(summary);
   writelnf(sb, `supported command line arguments`);
@@ -38,7 +38,7 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
   // Note: it would be better to move these two lines inside the meta call
   // But this exercises the compiler better
   let _t-id = #static types/type-id[t];
-  let _s = #static types/schema[t] is { :struct(s) -> s, _ -> crash("need a struct") };
+  let _s = #static types/schema[t] is { :struct s -> s, _ -> crash("need a struct") };
 
   let result: result[t, string] = $(_s, _t-id) {
     let args-type-id = _t-id;
@@ -65,11 +65,11 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
     for s.fields {
       get-arg-kind(it.type-id) is {
         :string or :opt-string -> {
-          writelnf(code, `    "-{it.name}" -> \{ if parse-next(&i, args) is :some(next) \{ {it.name}-val := :some(next) } },`);
+          writelnf(code, `    "-{it.name}" -> \{ if parse-next(&i, args) is :some next \{ {it.name}-val := :some next } },`);
           writelnf(code, `    "/{it.name}" -> \{ if parse-next(&i, args) is :some(next) .\{} },`);
         },
         :list-string -> {
-          writelnf(code, `    "+{it.name}" -> \{ if parse-next(&i, args) is :some(next) \{ {it.name}-val.push(next) } },`);
+          writelnf(code, `    "+{it.name}" -> \{ if parse-next(&i, args) is :some next \{ {it.name}-val.push(next) } },`);
         },
       };
     };
@@ -80,7 +80,7 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
     // validate
     for s.fields {
       get-arg-kind(it.type-id) is {
-        :string                     -> writelnf(code, `require {it.name}-val is :some({it.name}-out) else return(:err("{it.name} is missing"));`),
+        :string                     -> writelnf(code, `require {it.name}-val is :some {it.name}-out else return(:err "{it.name} is missing");`),
         :list-string or :opt-string -> writelnf(code, "let {it.name}-out = {it.name}-val;"),
       }
     };
@@ -102,8 +102,8 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
 // fn main(argc: i32, argv: ptr): i32 {
 //   let args-span: span[string] = core/sys/parse-main-args(argc, argv);
 //   let args: args = parse-args[args](args-span, customizations = [.{ name = "name", settings = .{} }]) is {
-//     :err(msg) -> { println(msg); println(gen-help-text[args]("welcome to the derived args parser test program.")); return(1) },
-//     :ok(args) -> args,
+//     :err msg -> { println(msg); println(gen-help-text[args]("welcome to the derived args parser test program.")); return(1) },
+//     :ok args -> args,
 //   };
 //   println("args result: {args}");
 //   0

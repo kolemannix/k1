@@ -40,7 +40,7 @@ fn connect(context alloc: mem/alloc-mode)(conninfo: string): result[connection, 
   let conninfo-c = conninfo.to-c();
   let conn = pg/connectdb(conninfo-c.ptr);
   if conn.is-null() {
-    return(:err("PQconnectdb returned null"))
+    return(:err "PQconnectdb returned null")
   };
 
   if pg/status(conn) == pg/CONNECTION_OK {
@@ -48,7 +48,7 @@ fn connect(context alloc: mem/alloc-mode)(conninfo: string): result[connection, 
   } else {
     let err = c-string-or-default(pg/error-message(conn), "failed to connect");
     pg/finish(conn);
-    :err(err)
+    :err err
   }
 }
 
@@ -64,7 +64,7 @@ ns for connection {
     let query-c = query.to-c();
     let raw-result = pg/exec(self.raw, query-c.ptr);
     if raw-result.is-null() {
-      return(:err("PQexec returned null"))
+      return(:err "PQexec returned null")
     };
 
     let status = pg/result-status(raw-result);
@@ -73,7 +73,7 @@ ns for connection {
     } else {
       let err = c-string-or-default(pg/result-error-message(raw-result), "query failed");
       pg/clear(raw-result);
-      :err(err)
+      :err err
     }
   }
 }
@@ -106,7 +106,7 @@ ns for query-result {
       return(:none)
     };
     let c-value = pg/get-value(self.raw, row-c, col-c);
-    :some(c-string-or-default(c-value, ""))
+    :some c-string-or-default(c-value, "")
   }
 }
 
@@ -133,7 +133,7 @@ fn print-result-table(result: query-result) {
       if col > 0 { print("\t") };
       result.value(row, col) is {
         :none -> print("NULL"),
-        :some(value) -> print(value)
+        :some value -> print(value)
       };
       col := col + 1;
     };
@@ -168,8 +168,8 @@ fn main(argc: core/c-int, argv: ptr): i32 {
   };
 
   let conn = connect(conninfo) is {
-    :ok(conn) -> conn,
-    :err(msg) -> {
+    :ok conn -> conn,
+    :err msg -> {
       eprintln("connect failed: {msg}");
       return(1)
     }
@@ -177,8 +177,8 @@ fn main(argc: core/c-int, argv: ptr): i32 {
   defer conn.close();
 
   let query-result = conn.exec(query) is {
-    :ok(result) -> result,
-    :err(msg) -> {
+    :ok result -> result,
+    :err msg -> {
       eprintln("query failed: {msg}");
       return(1)
     }

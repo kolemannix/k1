@@ -62,7 +62,7 @@ fn test() {
   test-filled();
 
   let array: array[f32, 10] = mem/zeroed();
-  assert(test-compile(array.get(11)) is :some(_));
+  assert(test-compile(array.get(11)) is :some _);
   array.set(0, 3.14);
   let buf = buffer/wrap-array(&array);
   assert(buf.get(0) == array.get(0));

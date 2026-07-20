@@ -117,7 +117,7 @@ ns for task {
 
   fn complete[t](state: *mut task-state[t], output: t) {
     uv/mutex_lock(state.mutex);
-    state.output <- :some(output);
+    state.output <- :some output;
     state.handler-done <- true;
     uv/cond_signal(state.cond);
     uv/mutex_unlock(state.mutex);

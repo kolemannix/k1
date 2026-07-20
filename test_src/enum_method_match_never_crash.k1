@@ -4,7 +4,7 @@ ns enum_method_match_never {
   ns for e {
     fn value-if-a(self: e): int {
       self is {
-        :a(i) -> i,
+        :a i -> i,
         :b -> crash("This is a B!"),
       }
     }
@@ -12,7 +12,7 @@ ns enum_method_match_never {
   
   
   fn is-variant() {
-    let x: either { a(int), b(int), c } = :a(42);
+    let x: either { a(int), b(int), c } = :a 42;
     assert(x.as-b().is-none());
     assert(not x is :c);
     assert(x.as-b().is-none());
@@ -24,8 +24,8 @@ fn main(): i32 {
     enum_method_match_never/is-variant();
 
     use enum_method_match_never/e;
-    let x = e:a(42);
-    let y = e:a(42);
+    let x = e:a 42;
+    let y = e:a 42;
     assert(x.value-if-a() == y.value-if-a());
     assert((:b: e).value-if-a() == 0);
     1

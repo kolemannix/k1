@@ -146,20 +146,20 @@ ns pubsub {
     for sub in bus.subscribers {
       if sub.topic == event.topic {
         let f = frame is {
-          :some(existing) -> existing,
+          :some existing -> existing,
           :none -> {
             mem/push-mode(:tmp);
             let rendered = sse-frame(event);
             mem/pop-mode();
             let made = rc-buffer/make(rendered.span-bytes());
-            frame := :some(made);
+            frame := :some made;
             made
           }
         };
         send-event(sub.connection, f.retain());
       }
     };
-    if frame is :some(f) { f.release() };
+    if frame is :some f { f.release() };
   }
 
   // Takes ownership of one reference to `frame`, released when the write

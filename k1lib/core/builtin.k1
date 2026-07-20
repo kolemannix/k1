@@ -394,7 +394,7 @@ ability try[impl t, impl e] {
 ability iterator[impl item] {
   fn next(self: *mut self): ?item {
     let p = self.peek();
-    if p is :some(_) { self.advance-by(1) };
+    if p is :some _ { self.advance-by(1) };
     p
   }
   fn peek(self: *self): ?item

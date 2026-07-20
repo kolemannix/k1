@@ -16,23 +16,23 @@ fn parse-command(cmd: string): result[command, string] {
   
   cmd is {
     // Initial handshake: GUI sends "uci", engine responds with id and options
-    "uci" -> :ok(:uci),
+    "uci" -> :ok :uci,
 
     // GUI checking if engine is initialized and ready
-    "isready" -> :ok(:is-ready),
+    "isready" -> :ok :is-ready,
 
     // Request to start a new game
-    "ucinewgame" -> :ok(:new-game),
+    "ucinewgame" -> :ok :new-game,
 
     // GUI wants to quit
-    "quit" -> :ok(:quit),
+    "quit" -> :ok :quit,
     
     // Commands that require more complex parsing
     _ -> {
       if cmd.starts-with("perft ") {
          let parsed-depth = cmd.drop(6).to-int();
-         if parsed-depth is :some(depth) { :ok(:perft(.{ depth = depth.as[u32] })) }
-         else :err("Invalid perft command: {cmd}")
+         if parsed-depth is :some depth { :ok :perft .{ depth = depth.as[u32] } }
+         else :err "Invalid perft command: {cmd}"
       } else if cmd.starts-with("position ") {
         // "position" command sets up a position to analyze:
         //   "position startpos" - start from initial position
@@ -56,7 +56,7 @@ fn parse-command(cmd: string): result[command, string] {
         //   // Would parse FEN and any moves here
         // }
 
-        :ok(:position(cmd.slice(8, cmd.len())))
+        :ok :position cmd.slice(8, cmd.len())
       } else if cmd.starts-with("go ") {
         // "go" command tells engine to start calculating. Examples:
         //   "go infinite" - search until "stop" command
@@ -65,8 +65,8 @@ fn parse-command(cmd: string): result[command, string] {
         //   "go nodes 10000" - search fixed number of nodes
         //   "go movetime 1000" - search for exactly 1 second
         
-        :ok(:go(cmd.slice(2, cmd.len())))
-      } else :err("Unsupported command: {cmd}")
+        :ok :go cmd.slice(2, cmd.len())
+      } else :err "Unsupported command: {cmd}"
     }
   }
 }

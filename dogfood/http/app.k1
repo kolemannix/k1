@@ -39,7 +39,7 @@ fn handle(req: http/request, deps: *mut deps): http-response {
   // `GET /events`: SSE subscription to the app-wide "global" topic,
   // which the mock publisher heartbeats every 5 ticks.
   if req.header.url == "/events" {
-    return(:subscribe(.{ topic = "global" }))
+    return(:subscribe .{ topic = "global" })
   };
 
   // `GET /game/{id}/events`: SSE subscription to topic "game.{id}".
@@ -49,15 +49,15 @@ fn handle(req: http/request, deps: *mut deps): http-response {
     // ["", "game", "{id}", "events"]
     let id = parts.get(2);
     if parts.len() == 4 and parts.get(3) == "events" {
-      return(:subscribe(.{ topic = "game.{id}" }))
+      return(:subscribe .{ topic = "game.{id}" })
     };
     // `GET /game/{id}/poke`: publish from user code on a worker thread,
     // through the handle carried in deps.
     if parts.len() == 4 and parts.get(3) == "poke" {
       deps.publisher.publish("game.{id}", "poked\nover http");
-      return(:complete(["HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\npoked\n"]))
+      return(:complete ["HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\npoked\n"])
     };
-    return(:complete(["HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"]))
+    return(:complete ["HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"])
   };
 
   // `GET /static/big-file.json`: stream a large body without buffering the
@@ -66,10 +66,10 @@ fn handle(req: http/request, deps: *mut deps): http-response {
     let out = string-builder/new();
     render-big-json(&out, rows = 20000);
     let body = out.build();
-    return(:stream(.{
+    return(:stream .{
       content-type = "application/json",
       stream = stream-of-buffer(body.span-bytes(), chunk-size = 65536),
-    }))
+    })
   };
 
   if req.header.url.starts-with("/app/starry-night") {
@@ -80,18 +80,18 @@ fn handle(req: http/request, deps: *mut deps): http-response {
     // to avoid the double-buffer situation, we could support 'chunks' instead of
     // just 'complete'; libuv supports this vectored write
     // :complete(out.build());
-    :complete([make-header(4), "todo"])
+    :complete [make-header(4), "todo"]
   } else if req.header.url.starts-with("/app/sync") {
     // TODO: push styles as script maybe + new body
     let template: string = core/files/read-to-string("web/header.html");
     let output = template(template, [.{ key = "styles.css", value = styles }]).!;
     let header = make-header(output.len());
-    :complete([header, output]);
+    :complete [header, output];
   } else {
     let template: string = core/files/read-to-string("web/header.html");
     let output = template(template, [.{ key = "styles.css", value = styles }]).!;
     let header = make-header(output.len());
-    :complete([header, output]);
+    :complete [header, output];
   }
   // :complete("HTTP/1.1 500 Internal Server error\r\nContent-Length: 5\r\n\r\nerror")
 }
@@ -148,7 +148,7 @@ fn template(template: string, values: span[{ key: string, value: string }]): ?st
       let key = rest.take(close);
       core/iter/find(values, fn p. p.key == key) is {
         :none -> return(:none),
-        :some(pair) -> out.write-string(pair.value)
+        :some pair -> out.write-string(pair.value)
       };
       i := i + 2 + close + 2;
     } else {
@@ -156,7 +156,7 @@ fn template(template: string, values: span[{ key: string, value: string }]): ?st
       i := i + 1;
     }
   };
-  :some(out.build())
+  :some out.build()
 }
 
 #static {

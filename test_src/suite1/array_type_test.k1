@@ -21,7 +21,7 @@ fn get-array-info[t](): { element-name: string, five-size: size, ten-size: size 
 // Generic function with Array parameter type to test substitution
 fn describe-array[t](): string {
   let schema = types/schema[array[t, 3]];
-  require schema is :array(.{ element-type-id, size }) else {
+  require schema is :array .{ element-type-id, size } else {
     return("Failed to get Array schema")
   };
   let actual-element-name = type-id-name(element-type-id);
@@ -37,18 +37,18 @@ fn test() {
 
   // Array type schemas
   let i32-array-schema = types/schema[array[i32, 10]];
-  require i32-array-schema is :array(.{ element-type-id, size }) else {
+  require i32-array-schema is :array .{ element-type-id, size } else {
     crash("Expected Array schema for array[i32, 10]")
   };
   assert-equals(type-id-name(element-type-id), "i32");
-  assert-equals(size, :some(10));
+  assert-equals(size, :some 10);
 
   let string-array-schema = types/schema[array[string, 7]];
-  require string-array-schema is :array(.{ element-type-id, size }) else {
+  require string-array-schema is :array .{ element-type-id, size } else {
     crash("Expected Array schema for array[string, 7]")
   };
   assert-equals(type-id-name(element-type-id), "string");
-  assert-equals(size, :some(7));
+  assert-equals(size, :some 7);
 
   // Layout and size information
   // u8 arrays: 1 byte per element, 1-byte aligned

@@ -37,7 +37,7 @@ fn test() {
   assert("hello".index-of-string("").! == 0);
   assert("hello".index-of-string("e").! == 1);
   assert("hello".index-of-string("x") is :none);
-  assert("hello".index-of-string("hello") is :some(0));
+  assert("hello".index-of-string("hello") is :some 0);
 
   assert("hello".index-of('e') == 1);
   assert("hello".index-of('x') == -1);

@@ -262,7 +262,7 @@ ns for buffer {
 
   fn first-ref[t](self: buffer[t]): ?(*mut t) {
     if not self.is-empty() {
-      :some(self.get-ref(0))
+      :some self.get-ref(0)
     } else {
       :none
     }
@@ -271,13 +271,13 @@ ns for buffer {
   fn first[t](self: buffer[t]): ?t {
     self.first-ref() is {
       :none -> :none,
-      :some(first-ref) -> :some(first-ref.*)
+      :some first-ref -> :some first-ref.*
     }
   }
 
   fn last-ref[t](self: buffer[t]): ?(*mut t) {
     if not self.is-empty() {
-      :some(self.get-ref(self.len - 1))
+      :some self.get-ref(self.len - 1)
     } else {
       :none
     }
@@ -286,7 +286,7 @@ ns for buffer {
   fn last[t](self: buffer[t]): ?t {
     self.last-ref() is {
       :none -> :none,
-      :some(last-ref) -> :some(last-ref.*)
+      :some last-ref -> :some last-ref.*
     }
   }
 
@@ -356,12 +356,12 @@ impl[t] iterator[item = t] for buffer-iterator[t] {
   fn peek(self: *buffer-iterator[t]): ?item {
     if self.pos < self.buf.len {
       let item = self.buf.get(self.pos);
-      :some(item)
+      :some item
     } else :none
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } { 
     let rem = self.buf.len - self.pos;
-    .{ at-least = rem, at-most = :some(rem) }
+    .{ at-least = rem, at-most = :some rem }
   }
   fn advance-by(self: *mut self, n: size): empty {
     self.pos <- self.pos + n
@@ -406,7 +406,7 @@ impl[t] iterator[item = *mut t] for buffer-ref-iterator[t] {
   fn peek(self: *buffer-ref-iterator[t]): ?item {
     if self.pos < self.buf.len {
       let item = self.buf.get-ref(self.pos);
-      :some(item)
+      :some item
     } else :none
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } { 

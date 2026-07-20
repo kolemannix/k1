@@ -3,12 +3,12 @@ ns optionals;
 type point-maybe-y = { x: int, y: ?int }
 
 fn test-basics(): int {
-  let p: ?point-maybe-y = :some(.{ x = 1, y = :some(2) });
+  let p: ?point-maybe-y = :some .{ x = 1, y = :some 2 };
   assert(p.!.x == 1);
   assert(p.!.y.! == 2);
 
   let b = :some(true): ?bool;
-  if b is :some(x) {
+  if b is :some x {
     assert(x);
   };
 
@@ -25,15 +25,15 @@ fn test-basics(): int {
 type weird-point = { x: ?int, y: int }
 
 fn test-complex(): int {
-  let my_point: weird-point = .{ x = :some(42), y = 0 };
-  if my_point.x is :some(my_x) {
+  let my_point: weird-point = .{ x = :some 42, y = 0 };
+  if my_point.x is :some my_x {
     assert(my_x == 42);
   } else {
     assert(false);
   };
 
-  let my_arr: list[?weird-point] = [:some(.{ x = :some(42), y = 3}), :none];
-  if my_arr.get(0) is :some(a) {
+  let my_arr: list[?weird-point] = [:some .{ x = :some 42, y = 3}, :none];
+  if my_arr.get(0) is :some a {
     assert(a.y == 3);
   };
 
@@ -41,7 +41,7 @@ fn test-complex(): int {
 }
 
 fn no-num(): ?int { :none }
-fn some-num(): ?int { :some(100) }
+fn some-num(): ?int { :some 100 }
 
 fn opt-else-operator() {
   let result = no-num() ? 42;
