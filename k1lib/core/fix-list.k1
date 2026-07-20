@@ -37,9 +37,9 @@ ns for fixlist {
     if used < self.cap() {
       self.data.set(used, value);
       self.used <- used.as[u32] + 1;
-      :ok(.{})
+      :ok
     } else {
-      :err(.{})
+      :err
     }
   }
 
@@ -49,15 +49,15 @@ ns for fixlist {
       let dst-slice = self.data.as-buffer().slice(start = self.len(), end = needed);
       buffer/copy(src = values.inner-buffer(), dst = dst-slice);
       self.used <- needed.as[u32];
-      :ok(.{})
+      :ok
     } else {
-      :err(.{})
+      :err
     }
   }
 
   fn push-n[t, n: static size](self: *mut fixlist[t, n], values: span[t]): empty {
     let result = self.try-push-n[t, n](values);
-    if result is :err(_) crash("fixlist out of space")
+    if result is :err { crash("fixlist out of space") }
   }
 
   fn as-buffer[t, n: static size](self: *mut fixlist[t, n]): buffer[t] {

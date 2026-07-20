@@ -382,6 +382,12 @@ A quiet payload binds one postfix expression: `:ok f(x).y` means
 `:ok(f(x).y)`, while binary operators apply to the whole variant:
 `:ok 1 == x` means `(:ok 1) == x`.
 
+A payload of type `empty` can be elided entirely: constructing `:ok` for a
+`result[empty, e]` means `:ok(.{})`, and the pattern `:ok` matches it (and
+counts as exhaustive coverage). Spelling the payload out (`:ok(.{})`,
+`:ok _`) remains valid. Variants with any other payload type still require
+it.
+
 When the sum itself is a reference, payload access follows the same value versus
 reference-through rule as struct fields. Ask for the value when you want the
 payload value; use trailing `*` when you want a reference to the variant's data:

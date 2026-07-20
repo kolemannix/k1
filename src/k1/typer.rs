@@ -5215,6 +5215,9 @@ impl TypedProgram {
                         );
 
                         let payload_pattern = match &sum_pattern.payload_pattern {
+                            None if matching_variant.payload == Some(EMPTY_TYPE_ID) => {
+                                Some(self.patterns.add(TypedPattern::Wildcard(sum_pattern_span)))
+                            }
                             None => None,
                             Some(payload_expr) => {
                                 let payload_type_id =
@@ -12912,13 +12915,10 @@ impl TypedProgram {
                 let g_params = g.params;
 
                 let payload_if_needed = match (generic_variant.payload, parsed_variant.payload) {
-                    (Some(_), None) => {
-                        return failf!(
-                            span,
-                            "Variant {} requires a payload",
-                            self.ident_str(generic_variant.name)
-                        );
-                    }
+                    // `empty` payloads can be elided, so we let this through without a payload; it
+                    // will be rejected later; all we care about here is collecting information for
+                    // inference, and there's no information in an elided payload
+                    (Some(_), None) => None,
                     (Some(generic_payload_type_id), Some(payload_parsed_expr)) => {
                         Some((generic_payload_type_id, payload_parsed_expr))
                     }
@@ -15053,6 +15053,8 @@ impl TypedProgram {
                         true,
                     )?;
                     Ok(Some(payload_value))
+                } else if payload_type == EMPTY_TYPE_ID {
+                    Ok(Some(self.synth_empty_struct(variant_span)))
                 } else {
                     failf!(
                         variant_span,

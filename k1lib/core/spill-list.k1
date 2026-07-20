@@ -43,7 +43,7 @@ ns for spill-list {
     self is {
       :spilled list* -> { list.push(t) },
       :inline fixlist* -> {
-        if fixlist.try-push(t) is :ok(_) .{}
+        if fixlist.try-push(t) is :ok .{}
         else {
           let list = _spill(fixlist);
   
@@ -59,7 +59,7 @@ ns for spill-list {
     self is {
       :spilled list* -> { list.append-span(ts) },
       :inline fixlist* -> {
-        if fixlist.try-push-n(ts) is :ok(_) .{}
+        if fixlist.try-push-n(ts) is :ok .{}
         else {
           // Correctness: The only error case is the out of capacity one
           let list = _spill(fixlist);

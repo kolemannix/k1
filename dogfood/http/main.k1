@@ -602,7 +602,7 @@ fn start-app[deps](context arena: *mut arena)(make-deps: *fn() -> *mut deps, rou
   eprintln("listening on {port}...");
 
   uv/run(l, :UV_RUN_DEFAULT);
-  :ok(.{})
+  :ok
 }
 
 let mutable tls worker-user-data: ptr = ptr/null

@@ -52,5 +52,18 @@ fn test() {
   let q5: state-hard = state-hard:on :some 42;
   assert(q5 is :on(:some 42));
 
+  // `empty` payloads elide: `:on` means `:on(.{})`, and pattern `:on` covers it
+  let e1: state = :on;
+  assert(e1 is :on);
+  let e2 = state:on;
+  assert(e2 is :on(.{}));
+  assert(e2 is { :on -> true, :off -> false, :zilch -> false });
+  let e3: result[empty, string] = :ok;
+  assert(e3 is :ok);
+  let e4: ?empty = :some;
+  assert(e4 is :some);
+  // ...but only `empty` payloads
+  assert(test-compile(state-hard:on) is :some _);
+
   .{}
 }
