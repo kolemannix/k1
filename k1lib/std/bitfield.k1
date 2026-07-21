@@ -1,7 +1,7 @@
 ns bitfield
 
 // Lets you create bitfields with masks, bindings, and getters/setters. Example usage:
-// $bitfield/define[u16]("flags-auto", [b1("shielded"), b1("cloaked"), b1("damaged"), .{ name = "sector-id", bits = 5 }, b8("foo")])
+// $bitfield/define[u16](flags-auto, [b1(shielded), b1(cloaked), b1(damaged), .{ name = "sector-id", bits = 5 }, b8(foo)])
 
 fn int-width-for-bits(bits: size): size {
   if bits <= 8 8
@@ -11,12 +11,7 @@ fn int-width-for-bits(bits: size): size {
   else crash("Too many bits: $bits")
 }
 fn bn(name: string, bits: size): { name: string, bits: size } { .{ name, bits } }
-fn b1(name: string): { name: string, bits: size } { bn(name = name, bits = 1) }
-fn b8(name: string): { name: string, bits: size } { bn(name = name, bits = 8) }
-fn define[base](type-name: string, members: span[{ name: string, bits: size }]): string {
-  use meta/code-writer
-
-  let base-type-id: u64 = types/type-id[base]()
+fn define-impl(base-type-id: u64, type-name: string, members: span[{ name: string, bits: size }]): string {
   let base-schema = types/type-id-schema(base-type-id)
   let base-name = types/type-id-name(base-type-id)
   require base-schema is :int int-kind else { crash("Base should be an int; got $base-name") }
@@ -24,6 +19,7 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
 
   // This is just a regular string-builder that gets some extra methods since we've
   // brought the meta/code-writer ability into scope
+  use meta/code-writer
   let code = string-builder/new()
 
   // This defines a named struct type with one field, which is a common newtype pattern
@@ -125,3 +121,10 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
 
   code.build()
 }
+
+macro define[int-type](type-name, members: span[{ name: string, bits: size}]) {
+  let code = define[int-type](type-name, members)
+  code
+}
+macro b1(name) { `.{ name = "$name", bits = 1 }` }
+macro b8(name) { `bn("$name", 8)` }

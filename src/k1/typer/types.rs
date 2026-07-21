@@ -383,6 +383,7 @@ pub struct FnParamType {
     pub name: StringId,
     pub is_context: bool,
     pub is_lambda_env: bool,
+    pub is_macro_code: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -583,7 +584,9 @@ impl TypePool {
                         .getn(f1.physical_params)
                         .iter()
                         .zip(self.mem.getn(f2.physical_params))
-                        .all(|(p1, p2)| p1.type_id == p2.type_id)
+                        .all(|(p1, p2)| {
+                            p1.type_id == p2.type_id && p1.is_macro_code == p2.is_macro_code
+                        })
                 } else {
                     false
                 }
@@ -680,6 +683,7 @@ impl TypePool {
                     param.name.hash(state);
                     param.is_context.hash(state);
                     param.is_lambda_env.hash(state);
+                    param.is_macro_code.hash(state);
                 }
             }
             Type::FunctionPointer(fp) => fp.function_type_id.hash(state),

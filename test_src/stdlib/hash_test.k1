@@ -57,7 +57,7 @@ fn test-iterate() {
   m.insert("a", 1)
   m.insert("b", 2)
   m.insert("c", 3)
-  m.remove("b")
+  let _ = m.remove("b")
   let total = 0
   let seen = 0
   for kv in m {
@@ -192,7 +192,7 @@ fn test-churn() {
   let round = 0
   while round < 1000 {
     m.insert(round % 4, round)
-    m.remove(round % 4)
+    let _ = m.remove(round % 4)
     round = round + 1
   }
   assert-equals(m.len(), 0)

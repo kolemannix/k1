@@ -40,7 +40,7 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
   let _t-id = #static types/type-id[t]
   let _s = #static types/schema[t] is { :struct s -> s, _ -> crash("need a struct") }
 
-  let result: result[t, string] = $(_s, _t-id) {
+  let result: result[t, string] = #meta(_s, _t-id) {
     let args-type-id = _t-id
     let s: types/type-schema:struct = _s.from-static()
     let code = string-builder/new()

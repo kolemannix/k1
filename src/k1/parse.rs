@@ -54,6 +54,7 @@ where
 
 nz_u32_id!(ParsedTypeDefnId);
 nz_u32_id!(ParsedFunctionId);
+nz_u32_id!(ParsedMacroId);
 nz_u32_id!(ParsedGlobalId);
 
 nz_u32_id!(ParsedAbilityId);
@@ -103,6 +104,7 @@ mod idents;
 pub enum ParsedId {
     Use(ParsedUseId),
     Function(ParsedFunctionId),
+    Macro(ParsedMacroId),
     TypeDefn(ParsedTypeDefnId),
     Namespace(ParsedNamespaceId),
     Ability(ParsedAbilityId),
@@ -119,6 +121,7 @@ impl Display for ParsedId {
         match self {
             ParsedId::Use(id) => write!(f, "use#{}", id.0),
             ParsedId::Function(id) => write!(f, "fn#{}", id.0),
+            ParsedId::Macro(id) => write!(f, "macro#{}", id.0),
             ParsedId::TypeDefn(id) => write!(f, "type#{}", id.0),
             ParsedId::Namespace(id) => write!(f, "ns#{}", id.0),
             ParsedId::Ability(id) => write!(f, "ability#{}", id.0),
@@ -143,6 +146,13 @@ impl ParsedId {
     pub fn as_function_id(&self) -> Option<ParsedFunctionId> {
         match self {
             ParsedId::Function(fn_id) => Some(*fn_id),
+            _ => None,
+        }
+    }
+
+    pub fn as_macro_id(&self) -> Option<ParsedMacroId> {
+        match self {
+            ParsedId::Macro(macro_id) => Some(*macro_id),
             _ => None,
         }
     }
@@ -191,6 +201,7 @@ impl ParsedId {
     pub fn is_a_definition(&self) -> bool {
         match self {
             ParsedId::Function(_) => true,
+            ParsedId::Macro(_) => true,
             ParsedId::TypeDefn(_) => true,
             ParsedId::Ability(_) => true,
             ParsedId::AbilityImpl(_) => true,
@@ -651,11 +662,15 @@ pub enum ParsedStaticBlockKind {
     /// code-generating metaprograms, like derivations of pretty-printers
     /// or codecs
     Metaprogram,
+    /// Kind: MacroCall. `$name(args)` at definition level. The base expr must be
+    /// a call whose callee resolves to a macro; the expansion is compiled as
+    /// definitions in place
+    MacroCall,
 }
 
 impl ParsedStaticBlockKind {
     pub fn is_metaprogram(&self) -> bool {
-        matches!(self, ParsedStaticBlockKind::Metaprogram)
+        matches!(self, ParsedStaticBlockKind::Metaprogram | ParsedStaticBlockKind::MacroCall)
     }
 }
 
@@ -1236,6 +1251,18 @@ pub struct ParsedFunction {
     pub id: ParsedFunctionId,
 }
 
+pub struct ParsedMacro {
+    pub name: StringId,
+    pub params: AstSlice<ParsedFnParam>,
+    pub type_params: AstSlice<ParsedTypeParam>,
+    pub body: ParsedExprId,
+    pub signature_span: SpanId,
+    pub span: SpanId,
+    pub name_span: SpanId,
+    pub condition: Option<ParsedExprId>,
+    pub id: ParsedMacroId,
+}
+
 impl ParsedFunction {}
 
 #[derive(Clone, Copy)]
@@ -1570,6 +1597,7 @@ pub struct ParsedProgram {
     pub name_id: StringId,
     pub spans: Spans,
     pub functions: VPool<ParsedFunction, ParsedFunctionId>,
+    pub macros: VPool<ParsedMacro, ParsedMacroId>,
     pub globals: VPool<ParsedGlobal, ParsedGlobalId>,
     pub type_defns: VPool<ParsedTypeDefn, ParsedTypeDefnId>,
     pub namespaces: VPool<ParsedNamespace, ParsedNamespaceId>,
@@ -1607,6 +1635,7 @@ impl ParsedProgram {
             name_id,
             spans: Spans::new(),
             functions: VPool::make("functions"),
+            macros: VPool::make("macros"),
             globals: VPool::make("parsed_globals"),
             type_defns: VPool::make("parsed_type_defn"),
             namespaces: VPool::make("parsed_namespaces"),
@@ -1644,16 +1673,25 @@ impl ParsedProgram {
     pub fn add_function(&mut self, mut function: ParsedFunction) -> ParsedFunctionId {
         let id = self.functions.next_id();
         function.id = id;
-        let id2 = self.functions.add(function);
-        debug_assert_eq!(id, id2);
+        self.functions.add_expected_id(function, id);
+        id
+    }
+
+    pub fn get_macro(&self, id: ParsedMacroId) -> &ParsedMacro {
+        self.macros.get(id)
+    }
+
+    pub fn add_macro(&mut self, mut makro: ParsedMacro) -> ParsedMacroId {
+        let id = self.macros.next_id();
+        makro.id = id;
+        self.macros.add_expected_id(makro, id);
         id
     }
 
     pub fn add_namespace(&mut self, mut namespace: ParsedNamespace) -> ParsedNamespaceId {
         let id = self.namespaces.next_id();
         namespace.id = id;
-        let real_id = self.namespaces.add(namespace);
-        debug_assert_eq!(real_id, id);
+        self.namespaces.add_expected_id(namespace, id);
         id
     }
 
@@ -1753,6 +1791,7 @@ impl ParsedProgram {
         match parsed_id {
             ParsedId::Use(id) => self.uses.get_use(id).span,
             ParsedId::Function(id) => self.get_function(id).name_span,
+            ParsedId::Macro(id) => self.get_macro(id).name_span,
             ParsedId::Namespace(ns) => self.namespaces.get(ns).span,
             ParsedId::Global(id) => self.get_global(id).span,
             ParsedId::Ability(id) => self.get_ability(id).span,
@@ -2176,6 +2215,8 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             Ok(Some(ParsedId::Namespace(ns)))
         } else if let Some(global_id) = self.parse_global()? {
             Ok(Some(ParsedId::Global(global_id)))
+        } else if let Some(macro_id) = self.parse_macro_defn(condition)? {
+            Ok(Some(ParsedId::Macro(macro_id)))
         } else if let Some(function_id) = self.parse_function(condition)? {
             Ok(Some(ParsedId::Function(function_id)))
         } else if let Some(type_defn_id) = self.parse_type_defn()? {
@@ -2224,13 +2265,26 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 }
             }
         } else if maybe_hash.kind == K::Dollar {
+            if maybe_directive.kind != K::Ident || maybe_directive.is_whitespace_preceded() {
+                return Err(error_expected(
+                    "a macro name immediately following '$'",
+                    maybe_directive,
+                ));
+            }
             self.advance();
             self.emit_semantic_token(maybe_hash, SemanticTokenKind::Operator);
-            let expr_id = self.consume_static_expr(
-                maybe_hash,
-                condition,
-                ParsedStaticBlockKind::Metaprogram,
-            )?;
+            let call_expr = self.expect_expression()?;
+            if !matches!(self.ast.exprs.get(call_expr), ParsedExpr::Call(_)) {
+                return Err(error_expected("a macro call following '$'", maybe_directive));
+            }
+            let span = self.extend_to_here(maybe_hash.span);
+            let expr_id = self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
+                base_expr: call_expr,
+                kind: ParsedStaticBlockKind::MacroCall,
+                condition_if_definition: condition,
+                parameter_names: MSlice::empty(),
+                span,
+            }));
             Ok(Some(expr_id))
         } else {
             Ok(None)
@@ -2249,6 +2303,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             K::Ident if !maybe_directive.is_whitespace_preceded() => {
                 let chars = self.token_chars(maybe_directive);
                 match chars {
+                    // typo-tolerance joke do not remove my meat
                     "meta" | "meat" | "static" => {
                         let kind = match chars {
                             "meta" | "meat" => ParsedStaticBlockKind::Metaprogram,
@@ -2389,23 +2444,22 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             // Payload patterns never cross a line break: a variant at end of
             // line is bare
             let next = self.peek();
-            let (payload_pattern, span) = if !next.is_newline_preceded()
-                && next.kind == K::OpenParen
-            {
-                self.advance();
-                let payload_pattern_id = self.expect_parse_pattern()?;
-                let close_paren = self.expect_kind(K::CloseParen)?;
-                (Some(payload_pattern_id), self.ast.spans.extend(first.span, close_paren.span))
-            } else if !next.is_newline_preceded() && self.peek_starts_quiet_payload() {
-                // Quiet payload: `:some v`, `:ok 42`. A postfix `*` still wraps
-                // the whole sum pattern, matching `:some(v)*`; use parens for a
-                // reference payload: `:some(v*)`.
-                let payload_pattern_id = self.expect_pattern_base()?;
-                let payload_span = self.ast.get_pattern_span(payload_pattern_id);
-                (Some(payload_pattern_id), self.ast.spans.extend(first.span, payload_span))
-            } else {
-                (None, self.ast.spans.extend(first.span, variant_name_token.span))
-            };
+            let (payload_pattern, span) =
+                if !next.is_newline_preceded() && next.kind == K::OpenParen {
+                    self.advance();
+                    let payload_pattern_id = self.expect_parse_pattern()?;
+                    let close_paren = self.expect_kind(K::CloseParen)?;
+                    (Some(payload_pattern_id), self.ast.spans.extend(first.span, close_paren.span))
+                } else if !next.is_newline_preceded() && self.peek_starts_quiet_payload() {
+                    // Quiet payload: `:some v`, `:ok 42`. A postfix `*` still wraps
+                    // the whole sum pattern, matching `:some(v)*`; use parens for a
+                    // reference payload: `:some(v*)`.
+                    let payload_pattern_id = self.expect_pattern_base()?;
+                    let payload_span = self.ast.get_pattern_span(payload_pattern_id);
+                    (Some(payload_pattern_id), self.ast.spans.extend(first.span, payload_span))
+                } else {
+                    (None, self.ast.spans.extend(first.span, variant_name_token.span))
+                };
             let pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Sum(ParsedSumPattern {
                 sum_name,
                 variant_name: variant_name_ident,
@@ -2702,10 +2756,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let expr_id = self.add_expression(ParsedExpr::Variable(ParsedVariable {
                         name: QIdent::naked(string_id, current_token.span),
                     }));
-                    parts.push(InterpolatedStringPart::Expr(
-                        expr_id,
-                        ParsedFmtSettings::default(),
-                    ));
+                    parts.push(InterpolatedStringPart::Expr(expr_id, ParsedFmtSettings::default()));
                 }
                 k if k.is_string() => {
                     let StringTokenInfo { delim, done } = k.as_string().unwrap();
@@ -3189,8 +3240,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Some(call_expr_id)
             } else if next.kind == K::Dot
                 && (!next.is_whitespace_preceded()
-                    || (next.is_newline_preceded()
-                        && self.tokens.peek_n(1).kind != K::OpenBrace))
+                    || (next.is_newline_preceded() && self.tokens.peek_n(1).kind != K::OpenBrace))
             {
                 // Field access syntax; a.b with optional bracketed type args [].
                 // A leading dot continues the chain across a line break
@@ -3415,8 +3465,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         match one.kind {
             K::Ident | K::Numeric | K::Char | K::OpenBracket => true,
             K::Dot => {
-                two.is_kind_nonspaced(K::OpenBrace)
-                    && self.tokens.peek_n(2).kind != K::CloseBrace
+                two.is_kind_nonspaced(K::OpenBrace) && self.tokens.peek_n(2).kind != K::CloseBrace
             }
             // A nested variant like `:ok :some`; a spaced ident is a type hint: `:foo: t`
             K::Colon => two.is_kind_nonspaced(K::Ident),
@@ -3486,11 +3535,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.advance();
         let name = self.make_ident(first);
         // The payload never crosses a line break: `return` at end of line is bare
-        let payload = if self.peek().is_newline_preceded() {
-            None
-        } else {
-            self.parse_expression()?
-        };
+        let payload =
+            if self.peek().is_newline_preceded() { None } else { self.parse_expression()? };
         let args = match payload {
             None => MSlice::empty(),
             Some(value) => self.ast.mem.pushn(&[ParsedCallArg {
@@ -3620,12 +3666,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     elements: self.ast.mem.list_to_handle(elements),
                     span,
                 }))))
-            }
-            K::Dollar => {
-                self.advance();
-                let expr_id =
-                    self.consume_static_expr(first, None, ParsedStaticBlockKind::Metaprogram)?;
-                Ok(Some(expr_id))
             }
             K::BackSlash => {
                 self.advance();
@@ -4570,6 +4610,68 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             id: ParsedFunctionId::PENDING,
         });
         Ok(Some(function_id))
+    }
+
+    /// `macro name(params) { body }`. `macro` is a contextual keyword
+    fn parse_macro_defn(
+        &mut self,
+        condition: Option<ParsedExprId>,
+    ) -> ParseResult<Option<ParsedMacroId>> {
+        let (first, second) = self.peek_two();
+        let is_macro_defn =
+            first.kind == K::Ident && second.kind == K::Ident && self.token_chars(first) == "macro";
+        if !is_macro_defn {
+            return Ok(None);
+        }
+        self.advance();
+        self.emit_semantic_token(first, SemanticTokenKind::Keyword);
+        let (func_name, func_name_id) = self.expect_ident()?;
+        self.emit_semantic_token(func_name, SemanticTokenKind::Function);
+        let mut type_params: SV8<ParsedTypeParam> = smallvec![];
+        if self.maybe_consume(K::OpenBracket).is_some() {
+            self.eat_delimited_ext(
+                "macro type parameters",
+                &mut type_params,
+                TokenKind::Comma,
+                TokenKind::CloseBracket,
+                |p| p.expect_type_param(),
+            )?;
+        }
+        let (params, _params_span) = self.eat_fn_params()?;
+        for param in &params {
+            if param.modifiers.is_context() {
+                return Err(error("Macros cannot take context parameters", self.peek()));
+            }
+        }
+        if self.peek().kind == K::Colon {
+            return Err(error(
+                "A macro's return type is implicit; it always returns code",
+                self.peek(),
+            ));
+        }
+        let signature_span = self.extend_to_here(func_name.span);
+        let block = self.parse_block(ParsedBlockKind::FunctionBody)?;
+        let Some(block) = block else {
+            return Err(error("Macros must have a body", self.peek()));
+        };
+        let end_span = block.span;
+        let block = self.add_expression(ParsedExpr::Block(block));
+        let span = self.extend_span(first.span, end_span);
+        // nocommit build these right on the heap, and for function
+        let params_handle = self.ast.mem.pushn(&params);
+        let type_params_handle = self.ast.mem.pushn(&type_params);
+        let macro_id = self.ast.add_macro(ParsedMacro {
+            name: func_name_id,
+            params: params_handle,
+            type_params: type_params_handle,
+            body: block,
+            signature_span,
+            span,
+            name_span: func_name.span,
+            condition,
+            id: ParsedMacroId::PENDING,
+        });
+        Ok(Some(macro_id))
     }
 
     fn expect_dq_ident(&mut self) -> ParseResult<StringId> {

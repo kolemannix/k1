@@ -541,7 +541,7 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
   .{}
 }
 
-${
+#meta {
   let template = fn(name: string, ptr-type: string) `
 type $name = {
   body-mode: http/body-mode,
@@ -558,7 +558,7 @@ fn match-route(_request-header: http/header, all-routes: span[route-handler]): ?
 }
 
 // fn erased-fns(name: string)
-// $erased-fns("my-route-handler-test")
+// #meta erased-fns("my-route-handler-test")
 
 type server-data = {
   route-handlers: span[route-handler],

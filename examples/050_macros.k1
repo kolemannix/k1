@@ -1,24 +1,25 @@
-// Certainly looks like a macro to me, cotton
+// The metaprogramming operator, '#meta', runs its argument at compile-time and
+// expects a string. The returned string is compiled and inserted at the site of
+// the operator, replacing it.
 
-// The macro operator, '$', runs its argument at compile-time and expects a string.
-// The returned string is compiled and inserted at the site of the macro operator,
-// and the macro operator is replaced by the returned code
-
-// The macro operator can be used wherever a <definition> is expected,
+// '#meta' can be used wherever a <definition> is expected,
 // and wherever an <expression> is expected
 
 // This function uses generics and invokes meta internally to produce
 // some generic behavior, but its arguments will be eagerly evaluated
 // more like a function call than a 'macro' in the canonical understanding
 // that implies a more text-based approach.
-fn double[a](x: a, y: a): a { 
-  $ "x + x"
+fn addgen[a](x: a, y: a): a { 
+  #meta "x + y"
+}
+macro addmacro(x, y) {
+  "$x + $y"
 }
 
 // Armed with the macro operator, any function that returns a string could be considered
-// a macro. This one accepts two expressions as strings, and when invoked via $, will
-// behave a whole lot like a replacement macro a.la Rust's macro_rules! or even a c #define, although its
-// executing much later than a c macro would, of course
+// a macro. This one accepts two expressions as strings, and when invoked via '#meta', will
+// behave a whole lot like a replacement macro a.la Rust's macro_rules! or even a c #define,
+// although its executing much later than a c macro would, of course
 fn addlazy(x: string, y: string): string { 
   "$x + $y"
 }
@@ -26,11 +27,17 @@ fn addlazy(x: string, y: string): string {
 // This is a dynamic 'macro' that will repeat the given expression n times
 fn repeat(n: int, expr: string): string {
   let sb = string-builder/new()
-  for int-range/up-to(n) { sb.string("$expr;") }
+  for 0.until(n) { sb.string("$expr;") }
+  sb.build()
+}
+macro repeatm(n: int, expr) {
+  let sb = string-builder/new()
+  for 0.until(n) { sb.string("$expr;") }
   sb.build()
 }
 
 fn main(): i32 {
+
 
   // In order to invoke addlazy properly, we need to pass it our code
   // as strings. It would suck to have to put them in double quotes like
@@ -39,11 +46,18 @@ fn main(): i32 {
   // Use \ <stmt> and the provided statement will be turned into a string
 
   let thunk = fn.{ println("thunk"); 21 }
-  let x = $addlazy(\thunk(), \55)
+  let x = #meta addlazy(\thunk(), \55)
+  println(x);
 
-  // Here is how we would invoke the 'repeat' function as 
-  // a macro
-  $repeat(5, \println("hello ${double(x, x)}"))
+  let x2 = addmacro(thunk(), 55);
+  println(x2);
+
+  // Here is how we would invoke the 'repeat' function manually
+  #meta repeat(5, \println("hello ${addgen(x, x)}"))
+
+  // Here is how we would invoke the 'repeat' function as a macro
+  // nocommit can mask locals when compiling metaprogram output for opt-in hygiene
+  repeatm(5, println("hello ${addmacro(x, x)}"))
 
   0
 }

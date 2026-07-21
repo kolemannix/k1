@@ -7,7 +7,7 @@ use meta/code-writer
 // TODO: need to flesh this out more with format specifiers
 //           and other things
 fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
-  $(fmt-string) {
+  #meta(fmt-string) {
     let code = string-builder/new()
     let args-type-id = types/type-id[args]
     let schema = types/type-id-schema(args-type-id)

@@ -1,6 +1,14 @@
-// FIXME: Cannot 'use' functions for metaprogramming since they get deferred
 use std/bitfield/b1 use std/bitfield/bn
-$std/bitfield/define[u16]("flags-auto", [b1("shielded"), b1("cloaked"), b1("damaged"), .{ name = "sector-id", bits = 5 }, bn("foo", 8)])
+// #meta std/bitfield/define[u16]("flags-auto", [b1("shielded"), b1("cloaked"), b1("damaged"), .{ name = "sector-id", bits = 5 }, bn("foo", 8)])
+use std/bitfield/define
+use std/bitfield/define-m
+$define-m[u16](flags-auto, 
+  [b1(shielded),
+   b1(cloaked),
+   b1(damaged),
+   .{ name = "sector-id", bits = 5 },
+   bn("foo", 8)]
+)
 
 fn test-bitfield() {
   let y: flags-auto = .{ bits = 0b1111_0000_1000_1101 }

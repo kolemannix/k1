@@ -1,5 +1,3 @@
-// Newline-terminated statements: no semicolons except the same-line
-// separator test
 ns newline-stmt
 
 type point = { x: int, y: int }

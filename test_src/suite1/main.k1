@@ -109,6 +109,7 @@ fn main(): i32 {
   static_run/test()
 
   test_meta/test()
+  test_macro/test()
 
   core-lib()
   #static core-lib()

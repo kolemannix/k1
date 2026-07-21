@@ -9,7 +9,7 @@ fn example-fs() {
 
   let open-req: uv/fs = uninit
   let flags =  core/posix/O_RDWR
-  let uv-file = uv/fs_open(l, &open-req, ($string/c-lit("uv.k1")).rw[u8], flags, 0, ptr/null.as())
+  let uv-file = uv/fs_open(l, &open-req, (#meta string/c-lit("uv.k1")).rw[u8], flags, 0, ptr/null.as())
   if uv-file < 0 {
     println("open error: $uv-file")
     crash("")

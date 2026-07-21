@@ -58,10 +58,10 @@ use crate::parse::{
     ParsedBlockKind, ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFnParamType,
     ParsedFunctionId, ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedListLiteral, ParsedLiteral,
     ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram,
-    ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr,
-    ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId,
-    ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, SourceFiles, StringId,
-    StructValueField, StructValueFieldKind,
+    ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraint,
+    ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam,
+    ParsedUnaryOpKind, ParsedUseId, ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent,
+    SourceFiles, StringId, StructValueField, StructValueFieldKind,
 };
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -992,6 +992,7 @@ pub struct TypedFunction {
     pub kind: TypedFunctionKind,
     pub is_concrete: bool,
     pub is_recursive: bool,
+    pub is_macro: bool,
     /// If we've generated a 'dyn' copy of this function, we store its id
     pub dyn_fn_id: Option<FunctionId>,
     /// 'let returned', RVO
@@ -2714,6 +2715,7 @@ pub struct TypedProgram {
     pub function_name_to_ability: FxHashMap<StringId, EcoVec<AbilityId>>,
     pub namespace_ast_mappings: FxHashMap<ParsedNamespaceId, NamespaceId>,
     pub function_ast_mappings: FxHashMap<ParsedFunctionId, FunctionId>,
+    pub macro_ast_mappings: FxHashMap<parse::ParsedMacroId, FunctionId>,
     pub global_ast_mappings: FxHashMap<ParsedGlobalId, TypedGlobalId>,
     pub globals_in_progress: Vec<TypedGlobalId>,
     pub ability_impl_ast_mappings: FxHashMap<ParsedAbilityImplId, AbilityImplId>,
@@ -2755,6 +2757,8 @@ pub struct TypedProgram {
     // like how comptime code can't see runtime values. Each level
     // of static execution has the same relationship with its outer caller
     pub vm_alts: Vec<vm::Vm>,
+
+    pub macro_expansion_stack: Vec<FunctionId>,
 
     // For every static value, once evaluated, we store its runtime representation
     // here; the data lives in vm_static_stack
@@ -2921,6 +2925,7 @@ impl TypedProgram {
             function_name_to_ability: FxHashMap::with_capacity(1024),
             namespace_ast_mappings: FxHashMap::with_capacity(512),
             function_ast_mappings: FxHashMap::with_capacity(512),
+            macro_ast_mappings: FxHashMap::default(),
             global_ast_mappings: FxHashMap::new(),
             globals_in_progress: vec![],
             ability_impl_ast_mappings: FxHashMap::new(),
@@ -2955,6 +2960,7 @@ impl TypedProgram {
                 vm::Vm::make(),
                 vm::Vm::make(),
             ],
+            macro_expansion_stack: vec![],
             vm_shared_static_stack: vm_static_stack,
             vm_global_constant_lookups,
             vm_static_value_lookups: FxHashMap::default(),
@@ -4046,6 +4052,7 @@ impl TypedProgram {
                         name,
                         is_context: false,
                         is_lambda_env: false,
+                        is_macro_code: false,
                     });
                 }
                 let return_type = self.eval_type_expr(fun_type.return_type, scope_id)?;
@@ -4873,6 +4880,7 @@ impl TypedProgram {
                         type_id: new_param_type,
                         is_context: param.is_context,
                         is_lambda_env: param.is_lambda_env,
+                        is_macro_code: param.is_macro_code,
                     };
                     new_params.push(new_param);
                 }
@@ -7723,7 +7731,16 @@ impl TypedProgram {
                     "No value '{}' is in scope",
                     self.ast.idents.get_string(variable.name.name),
                 ),
-                Some(fn_id) => Ok((None, self.function_to_reference(fn_id, variable_name_span))),
+                Some(fn_id) => {
+                    if self.get_function(fn_id).is_macro {
+                        return failf!(
+                            variable.name.name_span,
+                            "Macro '{}' cannot be used as a value",
+                            self.ast.idents.get_string(variable.name.name),
+                        );
+                    }
+                    Ok((None, self.function_to_reference(fn_id, variable_name_span)))
+                }
             },
             Some((variable_id, variable_scope_id)) => {
                 let parent_lambda = self.scopes.nearest_parent_lambda(scope_id);
@@ -8745,6 +8762,29 @@ impl TypedProgram {
         let span = stat.span;
         let base_expr = stat.base_expr;
 
+        if matches!(stat.kind, ParsedStaticBlockKind::MacroCall) {
+            debug_assert!(is_definition);
+            let ParsedExpr::Call(call) = self.ast.exprs.get(base_expr) else {
+                return failf!(span, "Expected a macro call following '$'");
+            };
+            let call = call.clone();
+            let Some(function_id) = self.find_function_namespaced(ctx.scope_id, &call.name)? else {
+                return failf!(
+                    span,
+                    "Unknown macro '{}'; a definition-level macro must live in the module's `pre` namespace or an upstream module",
+                    self.qident_to_string(&call.name)
+                );
+            };
+            if !self.get_function(function_id).is_macro {
+                return failf!(
+                    span,
+                    "'{}' is not a macro; only macros can be invoked with '$'",
+                    self.qident_to_string(&call.name)
+                );
+            }
+            return self.execute_macro_call(&call, function_id, true, ctx);
+        }
+
         // We don't execute statics during the generic pass, since there's no point
         // 1. we don't know the real types of generics, thus values of things like schemas, etc
         // 2. There's not really a use-case for it, metaprograms always want to generate
@@ -8770,6 +8810,7 @@ impl TypedProgram {
                 }
             },
             ParsedStaticBlockKind::Metaprogram => Some(self.types.builtins.string()),
+            ParsedStaticBlockKind::MacroCall => unreachable!(),
         };
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
         for param in self.ast.mem.getn(stat.parameter_names) {
@@ -8843,97 +8884,253 @@ impl TypedProgram {
                 let StaticValue::String(string_id) = self.static_values.get(vm_result) else {
                     return failf!(span, "#meta block did not evaluate to a string");
                 };
-                let emitted_string = self.ast.idents.get_string(*string_id);
+                let string_id = *string_id;
+                self.compile_emitted_code(string_id, span, ctx, is_definition)
+            }
+            ParsedStaticBlockKind::MacroCall => unreachable!(),
+        }
+    }
 
-                if emitted_string.is_empty() {
-                    if is_definition {
-                        Ok(StaticExecutionResult::Definitions(MSlice::empty()))
-                    } else {
-                        Ok(StaticExecutionResult::TypedExpr(self.synth_empty_struct(span)))
-                    }
-                } else {
-                    // First, we write the emitted code to a text buffer
-                    //
-                    // Then we parse the code anew (so that we have cohesive spans and a source
-                    // containing the full code)
-                    //
-                    // Then we typecheck the code and emit a block in place of this #meta
-                    // invocation
-                    let mut content = std::mem::take(&mut self.buffers.emitted_code);
-                    let (source, line) = self.get_span_location(span);
-                    writeln!(
-                        &mut content,
-                        "// generated by #meta block at {}/{}:{}",
-                        source.directory,
-                        source.filename,
-                        line.line_number(),
-                    )
-                    .unwrap();
-                    if !is_definition {
-                        content.push_str("{\n");
-                    }
-                    // FIXME: generated_filename is not unique if we specialized on multiple types
-                    //        We need a specialization context, for both debugging and logging
-                    //        and for this
-                    //        This could be rolled in with `is_generic_pass` ->
-                    //        If its not generic pass, provide specialization info payload
-                    // TODO: if specializing, print what the types are at the top of the file.
-                    //       this is actually really important debugging context
-                    let generated_filename = format!(
-                        "meta_{}_{}.k1",
-                        source.filename.strip_suffix(".k1").unwrap(),
-                        line.line_number()
-                    );
+    /// parses emitted source as a fresh file, then compiles it in place of the invocation
+    fn compile_emitted_code(
+        &mut self,
+        string_id: StringId,
+        span: SpanId,
+        ctx: EvalExprContext,
+        is_definition: bool,
+    ) -> K1Result<StaticExecutionResult> {
+        let emitted_string = self.ast.idents.get_string(string_id);
 
-                    content.push_str(emitted_string);
-                    if !is_definition {
-                        content.push_str("\n}");
-                    }
-                    debug!("Emitted raw content:\n---\n{content}\n---");
-                    let generated_path = self.config.out_dir.join(&generated_filename);
-                    let source_for_emission =
-                        self.ast.sources.add_file(crate::parse::SourceFile::make(
-                            0,
-                            self.config.out_dir.to_str().unwrap().to_owned(),
-                            generated_filename,
-                            content.clone(),
-                        ));
-                    // TODO: Write #meta source files asynchronously
-                    // FIXME: General metaprogramming emission overhead
-                    self.report_hint_silent(span, &content);
-                    if let Err(e) = std::fs::write(&generated_path, &content) {
-                        eprintln!(
-                            "Failed to write out generated metaprogram at {}. {e}",
-                            generated_path.display()
-                        )
-                    }
+        if emitted_string.is_empty() {
+            if is_definition {
+                Ok(StaticExecutionResult::Definitions(MSlice::empty()))
+            } else {
+                Ok(StaticExecutionResult::TypedExpr(self.synth_empty_struct(span)))
+            }
+        } else {
+            // First, we write the emitted code to a text buffer
+            //
+            // Then we parse the code anew (so that we have cohesive spans and a source
+            // containing the full code)
+            //
+            // Then we typecheck the code and emit a block in place of this #meta
+            // invocation
+            let mut content = std::mem::take(&mut self.buffers.emitted_code);
+            let (source, line) = self.get_span_location(span);
+            writeln!(
+                &mut content,
+                "// generated by #meta block at {}/{}:{}",
+                source.directory,
+                source.filename,
+                line.line_number(),
+            )
+            .unwrap();
+            if !is_definition {
+                content.push_str("{\n");
+            }
+            // FIXME: generated_filename is not unique if we specialized on multiple types
+            //        We need a specialization context, for both debugging and logging
+            //        and for this
+            //        This could be rolled in with `is_generic_pass` ->
+            //        If its not generic pass, provide specialization info payload.
+            //        Really, we probably just want a 'what are we compiling stack'. This
+            //        info would go there.
+            // TODO: if specializing, print what the types are at the top of the file.
+            //       this is actually really important debugging context
+            let generated_filename = format!(
+                "meta_{}_{}.k1",
+                source.filename.strip_suffix(".k1").unwrap(),
+                line.line_number()
+            );
 
-                    let parse_kind = if is_definition {
-                        ParseAdHocKind::Definitions
-                    } else {
-                        ParseAdHocKind::Expr
-                    };
-                    let parsed_metaprogram_result =
-                        self.parse_metaprogram_source(source_for_emission, parse_kind);
-                    content.clear();
-                    self.buffers.emitted_code = content;
-                    let parsed_metaprogram = parsed_metaprogram_result?;
-                    match parsed_metaprogram {
-                        ParseMetaprogramResult::Expr(parsed_expr_id) => {
-                            let typed_metaprogram = self.eval_expr(parsed_expr_id, ctx)?;
-                            debug!(
-                                "Emitted compiled expr:\n{}",
-                                self.expr_to_string(typed_metaprogram)
-                            );
-                            Ok(StaticExecutionResult::TypedExpr(typed_metaprogram))
-                        }
-                        ParseMetaprogramResult::Definitions(defns_slice) => {
-                            Ok(StaticExecutionResult::Definitions(defns_slice))
-                        }
-                    }
+            content.push_str(emitted_string);
+            if !is_definition {
+                content.push_str("\n}");
+            }
+            debug!("Emitted raw content:\n---\n{content}\n---");
+            let generated_path = self.config.out_dir.join(&generated_filename);
+            let source_for_emission = self.ast.sources.add_file(crate::parse::SourceFile::make(
+                0,
+                self.config.out_dir.to_str().unwrap().to_owned(),
+                generated_filename,
+                content.clone(),
+            ));
+            // TODO: Write #meta source files asynchronously
+            // FIXME: General metaprogramming emission overhead
+            self.report_hint_silent(span, &content);
+            if let Err(e) = std::fs::write(&generated_path, &content) {
+                eprintln!(
+                    "Failed to write out generated metaprogram at {}. {e}",
+                    generated_path.display()
+                )
+            }
+
+            let parse_kind =
+                if is_definition { ParseAdHocKind::Definitions } else { ParseAdHocKind::Expr };
+            let parsed_metaprogram_result =
+                self.parse_metaprogram_source(source_for_emission, parse_kind);
+            content.clear();
+            self.buffers.emitted_code = content;
+            let parsed_metaprogram = parsed_metaprogram_result?;
+            match parsed_metaprogram {
+                ParseMetaprogramResult::Expr(parsed_expr_id) => {
+                    let typed_metaprogram = self.eval_expr(parsed_expr_id, ctx)?;
+                    debug!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
+                    Ok(StaticExecutionResult::TypedExpr(typed_metaprogram))
+                }
+                ParseMetaprogramResult::Definitions(defns_slice) => {
+                    Ok(StaticExecutionResult::Definitions(defns_slice))
                 }
             }
         }
+    }
+
+    fn execute_macro_call(
+        &mut self,
+        fn_call: &ParsedCall,
+        function_id: FunctionId,
+        is_definition: bool,
+        ctx: EvalExprContext,
+    ) -> K1Result<StaticExecutionResult> {
+        let span = fn_call.span;
+        let function = self.get_function(function_id);
+        let is_generic = !function.is_concrete;
+        let function_name = function.name;
+        let function_type_id = function.type_id;
+        let function_type_params = function.type_params;
+        let Some(parsed_macro_id) = function.parsed_id.as_macro_id() else {
+            self.ice_span(span, "Macro function without a parsed macro")
+        };
+        if self.macro_expansion_stack.contains(&function_id) {
+            return failf!(
+                span,
+                "Execution of macro '{}' recursively requires its own execution",
+                self.ident_str(function_name)
+            );
+        }
+
+        if function.type_params.len() != fn_call.type_args.len() {
+            return failf!(
+                span,
+                "Takes {} type arguments; got {}",
+                function.type_params.len(),
+                fn_call.type_args.len()
+            );
+        }
+
+        // No inference yet
+        // nocommit: I think we can factor out this idea of checking a series of type expressions
+        // against a series of constrained type parameters. The substitution-in-constraints part is
+        // just tricky enough to warrant keeping it in one place
+        let mut type_args = self.mem.new_list(function_type_params.len());
+        for (type_param, type_arg) in
+            self.mem.getn(function_type_params).iter().zip(self.ast.mem.getn(fn_call.type_args))
+        {
+            let Some(passed_type_expr) = type_arg.type_expr else {
+                return failf!(type_arg.span, "_ is not allowed for macro calls");
+            };
+            let passed_type = self.eval_type_expr(passed_type_expr, ctx.scope_id)?;
+
+            self.check_type_constraints(
+                type_param.name,
+                type_param.type_id,
+                passed_type,
+                &[], /* nocommit subst pairs */
+                ctx.scope_id,
+                type_arg.span,
+            )?;
+            type_args.push(NameAndType { name: type_param.name, type_id: passed_type });
+        }
+        let type_args_handle = self.mem.list_to_handle(type_args);
+
+        let parsed_params = self.ast.get_macro(parsed_macro_id).params;
+        if fn_call.args.len() != parsed_params.len() {
+            return failf!(
+                span,
+                "Macro '{}' takes {} arguments, got {}",
+                self.ident_str(function_name),
+                parsed_params.len(),
+                fn_call.args.len()
+            );
+        }
+        let fn_param_types =
+            self.types.get(function_type_id).as_function().unwrap().logical_params();
+
+        let mut static_args: SV8<StaticValueId> = smallvec![];
+        for (param, arg) in
+            self.types.mem.getn(fn_param_types).iter().zip(self.ast.mem.getn(fn_call.args))
+        {
+            if arg.name.is_some() {
+                return failf!(
+                    self.ast.exprs.get_span(arg.value),
+                    "Macro arguments cannot be named (yet)"
+                );
+            }
+            match param.is_macro_code {
+                true => {
+                    // Takes source
+                    let arg_span = self.ast.exprs.get_span(arg.value);
+                    let content = self.ast.sources.get_span_content(self.ast.spans.get(arg_span));
+                    let string_id = self.ast.idents.intern(content);
+                    static_args.push(self.static_values.add(StaticValue::String(string_id)));
+                }
+                false => {
+                    // nocommit We need to ensure these actually typecheck
+                    // we pass expected type but I'm not sure if that will force the check
+                    let value_id = self.execute_static_expr(
+                        arg.value,
+                        ctx.with_expected_type(Some(param.type_id)),
+                        &[],
+                    )?;
+                    static_args.push(value_id);
+                }
+            };
+        }
+
+        // We have to evaluate the body
+        self.eval_function_body(function_id)?;
+
+        let function_to_run = if is_generic {
+            // nocommit disallow fnlike type args in macros
+            let spec_fn_id = self.specialize_function_declaration(
+                type_args_handle,
+                MSlice::empty(),
+                function_id,
+            );
+            self.specialize_function_body(spec_fn_id)?;
+            spec_fn_id
+        } else {
+            function_id
+        };
+
+        self.macro_expansion_stack.push(function_to_run);
+        let result = self.run_macro_and_compile_output(
+            function_to_run,
+            &static_args,
+            span,
+            is_definition,
+            ctx,
+        );
+        self.macro_expansion_stack.pop();
+
+        result
+    }
+
+    fn run_macro_and_compile_output(
+        &mut self,
+        function_id: FunctionId,
+        static_args: &[StaticValueId],
+        span: SpanId,
+        is_definition: bool,
+        ctx: EvalExprContext,
+    ) -> K1Result<StaticExecutionResult> {
+        let vm_result = self.execute_static_function(function_id, static_args, span)?;
+        let StaticValue::String(emitted) = self.static_values.get(vm_result) else {
+            return failf!(span, "Macro expansion did not produce a string");
+        };
+        let emitted = *emitted;
+        let result = self.compile_emitted_code(emitted, span, ctx, is_definition)?;
+        Ok(result)
     }
 
     fn with_parser<R>(
@@ -9381,6 +9578,7 @@ impl TypedProgram {
                 type_id: arg_type_id,
                 is_context: false,
                 is_lambda_env: false,
+                is_macro_code: false,
             });
         }
 
@@ -9478,6 +9676,7 @@ impl TypedProgram {
                 kind: TypedFunctionKind::Lambda,
                 is_concrete: false,
                 is_recursive: false,
+                is_macro: false,
                 dyn_fn_id: None,
                 returned_variable: None,
                 body_failure: None,
@@ -9524,6 +9723,7 @@ impl TypedProgram {
             type_id: POINTER_TYPE_ID,
             is_context: false,
             is_lambda_env: true,
+            is_macro_code: false,
         };
         let body_function_id = self.functions.next_id();
         let environment_param_variable_id = self.variables.add(Variable {
@@ -9614,6 +9814,7 @@ impl TypedProgram {
             // Set by add_function
             is_concrete: false,
             is_recursive: false,
+            is_macro: false,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -12396,6 +12597,7 @@ impl TypedProgram {
             type_id: empty_env_struct_ref,
             is_context: false,
             is_lambda_env: true,
+            is_macro_code: false,
         });
         new_params.extend(self.types.mem.getn(physical_params));
 
@@ -13300,6 +13502,20 @@ impl TypedProgram {
                     self.functions.get_mut(function_id).is_recursive = true;
                 }
             }
+
+            if self.get_function(function_id).is_macro
+                && known_callee.is_none()
+                && known_args.is_none()
+            {
+                if method_receiver.is_some() {
+                    return failf!(span, "Method-position macros are not yet supported");
+                }
+                return match self.execute_macro_call(fn_call, function_id, false, ctx)? {
+                    StaticExecutionResult::TypedExpr(expr) => Ok(expr),
+                    StaticExecutionResult::Definitions(_) => self
+                        .ice_span(span, "Macro call in expression position produced definitions"),
+                };
+            }
         }
 
         // Now that we have resolved to a function id, we need to specialize it if generic
@@ -13389,7 +13605,13 @@ impl TypedProgram {
                     Some((type_args, _va)) if !type_args.is_empty() => {
                         // Need the name
                         if type_args.len() != signature.type_params.len() as usize {
-                            self.ice_span(span, "Bad known type args, wrong count")
+                            ice_span!(
+                                self,
+                                span,
+                                "Bad known type args, expected {} but got {}",
+                                signature.type_params.len(),
+                                type_args.len(),
+                            )
                         }
                         let args_with_names = type_args
                             .iter()
@@ -13950,23 +14172,11 @@ impl TypedProgram {
             generic_signature,
         );
         let specialized_function_id = self.functions.next_id();
-        // debug!(
-        //     "specialized function type: {}",
-        //     self.type_id_to_string(specialized_function_type_id)
-        // );
-        // let specialized_name_ident = self.build_ident_with(|m, s| {
-        //     let generic_function = m.get_function(generic_function_id);
-        //     let spec_num = generic_function.child_specializations.len() + 1;
-        //     write!(s, "{}__", m.ident_str(generic_function.name)).unwrap();
-        //     for (index, nt) in m.mem.getn(type_arguments).iter().enumerate() {
-        //         m.display_type_id(s, nt.type_id, false).unwrap();
-        //         if index < type_arguments.len() as usize - 1 {
-        //             write!(s, "_").unwrap();
-        //         }
-        //     }
-        //     write!(s, "_{spec_num}").unwrap();
-        // });
-        // eprintln!("built name: {}", self.ident_str(specialized_name_ident));
+        debug!(
+            "specialized function type using {}: {}",
+            self.pretty_print_named_type_slice(type_arguments, ", "),
+            self.type_id_to_string(specialized_function_type_id)
+        );
 
         let specialized_function_type =
             self.types.get(specialized_function_type_id).as_function().unwrap();
@@ -14022,11 +14232,11 @@ impl TypedProgram {
             specialized_function_type: specialized_function_type_id,
         };
         let generic_function = self.get_function(generic_function_id);
-        let has_body = self
-            .ast
-            .get_function(generic_function.parsed_id.as_function_id().unwrap())
-            .body
-            .is_some();
+        let has_body = match generic_function.parsed_id {
+            ParsedId::Function(f) => self.ast.get_function(f).body.is_some(),
+            ParsedId::Macro(_) => true,
+            _ => panic!("Expected function or macro"),
+        };
         let specialized_function = TypedFunction {
             name: generic_function.name,
             scope: spec_fn_scope,
@@ -14046,6 +14256,7 @@ impl TypedProgram {
             kind: generic_function.kind,
             is_concrete: false,
             is_recursive: generic_function.is_recursive,
+            is_macro: generic_function.is_macro,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -14057,11 +14268,6 @@ impl TypedProgram {
 
         self.scopes
             .set_scope_owner_id(spec_fn_scope, ScopeOwnerId::Function(specialized_function_id));
-
-        debug!(
-            "Specializing sig (has_body={has_body}, is_concrete={is_concrete}) of {}",
-            self.function_id_to_string(generic_function_id, false)
-        );
 
         if (has_body && is_concrete) || is_typer_function_builtin {
             self.functions_pending_body_specialization.push(specialized_function_id);
@@ -14106,12 +14312,11 @@ impl TypedProgram {
         debug_assert!(parent_function.body_block.is_some());
         debug_assert!(specialized_function.body_block.is_none());
 
-        let parsed_body = *self
-            .ast
-            .get_function(parent_function.parsed_id.as_function_id().unwrap())
-            .body
-            .as_ref()
-            .unwrap();
+        let parsed_body = match parent_function.parsed_id {
+            ParsedId::Function(f) => self.ast.get_function(f).body.unwrap(),
+            ParsedId::Macro(m) => self.ast.get_macro(m).body,
+            _ => panic!("expected function or macro"),
+        };
         let ParsedExpr::Block(parsed_body_block) = *self.ast.exprs.get(parsed_body) else {
             return failf!(
                 self.ast.exprs.get_span(parsed_body),
@@ -14452,7 +14657,10 @@ impl TypedProgram {
                         let (typed_variable_id, lhs) =
                             self.eval_variable(assignment.lhs, ctx.scope_id, true)?;
                         let Some(variable_id) = typed_variable_id else {
-                            return failf!(lhs_span, "Must be a regular variable, eg not a function");
+                            return failf!(
+                                lhs_span,
+                                "Must be a regular variable, eg not a function"
+                            );
                         };
                         let lhs_type = self.exprs.get_type(lhs);
                         match self.variables.get(variable_id).kind {
@@ -14485,8 +14693,10 @@ impl TypedProgram {
                         let lhs_type = self.exprs.get_type(lhs);
                         let dest =
                             self.synth_address_of(lhs, lhs_span, false).map_err(|mut e| {
-                                e.message =
-                                    format!("Assignment destination must be a place: {}", e.message);
+                                e.message = format!(
+                                    "Assignment destination must be a place: {}",
+                                    e.message
+                                );
                                 e
                             })?;
                         if let TypedExpr::AddressOf(addr_of) = self.exprs.get(dest) {
@@ -15611,74 +15821,14 @@ impl TypedProgram {
             ScopeOwnerId::None,
         );
 
-        // Instantiate type arguments.
-        let mut type_params: List<NameAndType, _> =
-            self_.mem.new_list(ast_fn.type_params.len() + 1);
+        let type_params = self_.compile_function_type_params(
+            fn_scope_id,
+            ast_fn.type_params,
+            ast_fn.additional_where_constraints,
+            if is_ability_decl { Some(ability_id.unwrap()) } else { None },
+        )?;
+
         let mut fnlike_type_params: List<FnlikeTypeParam, TypedProgram> = self_.mem.new_list(0);
-
-        // Inject the 'Self' type parameter
-        if is_ability_decl {
-            let self_type_id = self_.abilities.get(ability_id.unwrap()).self_type_id;
-            type_params.push(NameAndType { name: self_.ast.idents.b.self_, type_id: self_type_id })
-        }
-        for type_parameter in self_.ast.mem.getn(ast_fn.type_params) {
-            let mut ability_constraint_signatures = SmallVec::new();
-            let mut predicate_functions = self_.mem.new_list(0);
-            let mut static_constraint: Option<TypeId> = None;
-
-            for parsed_constraint in self_.ast.mem.getn(type_parameter.constraints).iter().chain(
-                self_
-                    .ast
-                    .mem
-                    .getn(ast_fn.additional_where_constraints)
-                    .iter()
-                    .filter(|c| c.name == type_parameter.name)
-                    .map(|c| &c.constraint_expr),
-            ) {
-                match parsed_constraint {
-                    ParsedTypeConstraintExpr::Ability(ability_expr) => {
-                        let ability_sig =
-                            self_.eval_ability_expr(*ability_expr, false, fn_scope_id)?;
-                        ability_constraint_signatures.push(ability_sig);
-                    }
-                    ParsedTypeConstraintExpr::Predicate(qident) => {
-                        predicate_functions.push_grow(&mut self_.mem, *qident);
-                    }
-                    ParsedTypeConstraintExpr::Static(static_expr) => {
-                        let static_type = self_.eval_type_expr(*static_expr, fn_scope_id)?;
-                        match &static_constraint {
-                            None => static_constraint = Some(static_type),
-                            Some(_) => {
-                                return failf!(
-                                    type_parameter.span,
-                                    "Cannot specify more than one static constraint for a parameter"
-                                );
-                            }
-                        }
-                    }
-                };
-            }
-            let predicate_functions_handle = self_.mem.list_to_handle(predicate_functions);
-            let type_variable_id = self_.add_type_parameter(
-                TypeParameter {
-                    name: type_parameter.name,
-                    static_constraint,
-                    predicate_functions: predicate_functions_handle,
-                    scope_id: fn_scope_id,
-                    span: type_parameter.span,
-                },
-                ability_constraint_signatures,
-            );
-            let type_param = NameAndType { name: type_parameter.name, type_id: type_variable_id };
-            type_params.push(type_param);
-            if !self_.scopes.add_type(fn_scope_id, type_parameter.name, type_variable_id) {
-                return failf!(
-                    type_parameter.span,
-                    "Duplicate type variable name: {}",
-                    type_parameter.name
-                );
-            }
-        }
 
         // Process parameters
         let param_count = ast_fn.params.len();
@@ -15779,6 +15929,7 @@ impl TypedProgram {
                 type_id,
                 is_context,
                 is_lambda_env: false,
+                is_macro_code: false,
             });
             params.push(TypedFunctionParam { variable_id, span: fn_param.span });
             if is_context {
@@ -15905,7 +16056,6 @@ impl TypedProgram {
             abi_mode: call_conv,
         }));
 
-        let type_params_handle = self_.mem.list_to_handle(type_params);
         let function_type_params_handle = self_.mem.list_to_handle(fnlike_type_params);
         let function_id = self_.functions.next_id();
         for v in params.iter() {
@@ -15916,7 +16066,7 @@ impl TypedProgram {
             name,
             scope: fn_scope_id,
             params: param_variables_handle,
-            type_params: type_params_handle,
+            type_params,
             fnlike_type_params: function_type_params_handle,
             body_block: None,
             builtin_type: intrinsic_type,
@@ -15929,6 +16079,7 @@ impl TypedProgram {
             type_id: function_type_id,
             is_concrete: false,
             is_recursive: false,
+            is_macro: false,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -15968,6 +16119,202 @@ impl TypedProgram {
         Ok(Some(function_id))
     }
 
+    fn compile_function_type_params(
+        &mut self,
+        fn_scope_id: ScopeId,
+        ast_type_params: AstSlice<ParsedTypeParam>,
+        where_constraints: AstSlice<ParsedTypeConstraint>,
+        ability_id: Option<AbilityId>,
+    ) -> K1Result<MSlice<NameAndType, TypedProgram>> {
+        // Instantiate type arguments.
+        let mut type_params: List<NameAndType, _> = self.mem.new_list(ast_type_params.len() + 1);
+
+        // Inject the 'Self' type parameter
+        if let Some(ability_id) = ability_id {
+            let self_type_id = self.abilities.get(ability_id).self_type_id;
+            type_params.push(NameAndType { name: self.ast.idents.b.self_, type_id: self_type_id })
+        }
+        for type_parameter in self.ast.mem.getn(ast_type_params) {
+            let mut ability_constraint_signatures = SmallVec::new();
+            let mut predicate_functions = self.mem.new_list(0);
+            let mut static_constraint: Option<TypeId> = None;
+
+            for parsed_constraint in self.ast.mem.getn(type_parameter.constraints).iter().chain(
+                self.ast
+                    .mem
+                    .getn(where_constraints)
+                    .iter()
+                    .filter(|c| c.name == type_parameter.name)
+                    .map(|c| &c.constraint_expr),
+            ) {
+                match parsed_constraint {
+                    ParsedTypeConstraintExpr::Ability(ability_expr) => {
+                        let ability_sig =
+                            self.eval_ability_expr(*ability_expr, false, fn_scope_id)?;
+                        ability_constraint_signatures.push(ability_sig);
+                    }
+                    ParsedTypeConstraintExpr::Predicate(qident) => {
+                        predicate_functions.push_grow(&mut self.mem, *qident);
+                    }
+                    ParsedTypeConstraintExpr::Static(static_expr) => {
+                        let static_type = self.eval_type_expr(*static_expr, fn_scope_id)?;
+                        match &static_constraint {
+                            None => static_constraint = Some(static_type),
+                            Some(_) => {
+                                return failf!(
+                                    type_parameter.span,
+                                    "Cannot specify more than one static constraint for a parameter"
+                                );
+                            }
+                        }
+                    }
+                };
+            }
+            let predicate_functions_handle = self.mem.list_to_handle(predicate_functions);
+            let type_variable_id = self.add_type_parameter(
+                TypeParameter {
+                    name: type_parameter.name,
+                    static_constraint,
+                    predicate_functions: predicate_functions_handle,
+                    scope_id: fn_scope_id,
+                    span: type_parameter.span,
+                },
+                ability_constraint_signatures,
+            );
+            let type_param = NameAndType { name: type_parameter.name, type_id: type_variable_id };
+            type_params.push(type_param);
+            if !self.scopes.add_type(fn_scope_id, type_parameter.name, type_variable_id) {
+                return failf!(
+                    type_parameter.span,
+                    "Duplicate type variable name: {}",
+                    type_parameter.name
+                );
+            }
+        }
+        Ok(self.mem.list_to_handle(type_params))
+    }
+
+    fn declare_macro(
+        &mut self,
+        parsed_macro_id: parse::ParsedMacroId,
+        parent_scope_id: ScopeId,
+    ) -> K1Result<Option<FunctionId>> {
+        let ast_macro = self.ast.get_macro(parsed_macro_id);
+        let name = ast_macro.name;
+        let name_span = ast_macro.name_span;
+        let signature_span = ast_macro.signature_span;
+        let params_slice = ast_macro.params;
+        let type_params_slice = ast_macro.type_params;
+        let condition = ast_macro.condition;
+        if !self.execute_static_condition(condition, parent_scope_id) {
+            return Ok(None);
+        }
+
+        let fn_scope_id = self.scopes.add_child_scope(
+            parent_scope_id,
+            ScopeType::FunctionScope,
+            ScopeOwnerId::None,
+        );
+        let string_type = self.types.builtins.string();
+
+        let type_params = self.compile_function_type_params(
+            fn_scope_id,
+            type_params_slice,
+            MSlice::empty(),
+            None,
+        )?;
+
+        let param_count = params_slice.len();
+        let mut param_types: List<FnParamType, _> = self.types.mem.new_list(param_count);
+        let mut params = self.mem.new_list(param_count);
+        for fn_param in self.ast.mem.getn(params_slice).iter() {
+            let (type_id, is_code) = match fn_param.type_expr {
+                ParsedFnParamType::Shorthand => (string_type, true),
+                ParsedFnParamType::Expr(type_expr) => {
+                    (self.eval_type_expr(type_expr, fn_scope_id)?, false)
+                }
+            };
+            let variable_id = self.variables.add(Variable {
+                name: fn_param.name,
+                type_id,
+                owner_scope: fn_scope_id,
+                flags: VariableFlags::empty(),
+                usage_count: 0,
+                usages: vec![],
+                kind: VariableKind::FnParam(FunctionId::PENDING),
+                defn_span: fn_param.span,
+            });
+            param_types.push(FnParamType {
+                name: fn_param.name,
+                type_id,
+                is_context: false,
+                is_lambda_env: false,
+                is_macro_code: is_code,
+            });
+            params.push(TypedFunctionParam { variable_id, span: fn_param.span });
+            if !self.scopes.add_variable(fn_scope_id, fn_param.name, variable_id) {
+                return failf!(
+                    fn_param.span,
+                    "Duplicate parameter name: {}",
+                    self.ident_str(fn_param.name)
+                );
+            }
+        }
+
+        let param_types_handle = self.types.mem.list_to_handle(param_types);
+        let function_type_id = self.types.add_anon(Type::Function(FunctionType {
+            physical_params: param_types_handle,
+            return_type: string_type,
+            is_lambda: false,
+            abi_mode: AbiMode::Internal,
+        }));
+
+        let function_id = self.functions.next_id();
+        for v in params.iter() {
+            self.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(function_id);
+        }
+        let param_variables_handle = self.mem.list_to_handle(params);
+        let actual_function_id = self.add_function(TypedFunction {
+            name,
+            scope: fn_scope_id,
+            params: param_variables_handle,
+            type_params,
+            fnlike_type_params: MSlice::empty(),
+            body_block: None,
+            builtin_type: None,
+            linkage: Linkage::Standard,
+            child_specializations: vec![],
+            specialization_info: None,
+            parsed_id: ParsedId::Macro(parsed_macro_id),
+            kind: TypedFunctionKind::Standard,
+            compiler_debug: false,
+            type_id: function_type_id,
+            is_concrete: false,
+            is_recursive: false,
+            is_macro: true,
+            dyn_fn_id: None,
+            returned_variable: None,
+            body_failure: None,
+            usages: vec![],
+        });
+        debug_assert_eq!(actual_function_id, function_id);
+
+        if !self.scopes.add_function(parent_scope_id, name, function_id) {
+            let error = errf!(
+                signature_span,
+                "Name {} is taken (macros and functions may not share names)",
+                self.ident_str(name)
+            );
+            self.report(error);
+        }
+        let existed = self.macro_ast_mappings.insert(parsed_macro_id, function_id).is_some();
+        debug_assert!(!existed);
+        self.scopes.set_scope_owner_id(fn_scope_id, ScopeOwnerId::Function(function_id));
+        self.emit_ls_entity(name_span, LsEntityKind::Function { function_id, is_defn: true });
+
+        Ok(Some(function_id))
+    }
+
     pub fn eval_function_body(&mut self, declaration_id: FunctionId) -> K1Result<()> {
         let function = self.get_function(declaration_id);
         if function.body_failure.is_some() || function.body_block.is_some() {
@@ -15982,7 +16329,6 @@ impl TypedProgram {
         let return_type = self.get_function_type(declaration_id).return_type;
         let is_extern = matches!(function.linkage, Linkage::External { .. });
         let is_concrete = function.is_concrete;
-        let ast_id = function.parsed_id.as_function_id().expect("expected function id");
         // Here. Which type of builtin is it? Some, we should synthesize here.
         let (builtin_type_phys_fn, other_intrinsic) = match function.builtin_type {
             Some(Builtin::TyperPhysicalFunction(f)) => (Some(f), false),
@@ -15991,14 +16337,23 @@ impl TypedProgram {
         };
         let is_ability_defn = matches!(function.kind, TypedFunctionKind::AbilityDefn(_));
 
-        let parsed_function = self.ast.get_function(ast_id);
-        let parsed_function_ret_type = parsed_function.ret_type;
-        let function_signature_span = parsed_function.signature_span;
+        let (parsed_function_ret_type, function_signature_span, parsed_body) =
+            match function.parsed_id {
+                ParsedId::Function(ast_id) => {
+                    let parsed_function = self.ast.get_function(ast_id);
+                    (parsed_function.ret_type, parsed_function.signature_span, parsed_function.body)
+                }
+                ParsedId::Macro(macro_id) => {
+                    let parsed_macro = self.ast.get_macro(macro_id);
+                    (None, parsed_macro.signature_span, Some(parsed_macro.body))
+                }
+                _ => self.ice("Function body for a non-function parsed id", None),
+            };
 
         let no_body_expected = other_intrinsic || is_extern || is_ability_defn;
         let is_generic = !is_concrete;
 
-        let body_block = match parsed_function.body.as_ref() {
+        let body_block = match parsed_body.as_ref() {
             None if builtin_type_phys_fn.is_some() => {
                 let block_id = self.generate_intrinsic_function_body(
                     declaration_id,
@@ -16057,7 +16412,8 @@ impl TypedProgram {
         if let Some(body_block) = body_block {
             let f = self.functions.get(declaration_id);
 
-            if !is_generic {
+            // Macros may conditionally ignore params, e.g. a disabled debug macro
+            if !is_generic && !f.is_macro {
                 for param_variable in self.mem.getn(f.params).iter() {
                     self.warn_variable_usage_counts(
                         "Parameter",
@@ -16895,6 +17251,17 @@ impl TypedProgram {
                     };
                 }
             }
+            ParsedId::Macro(parsed_macro_id) => {
+                if let Some(function_declaration_id) =
+                    self.macro_ast_mappings.get(&parsed_macro_id).copied()
+                {
+                    if let Err(e) = self.eval_function_body(function_declaration_id) {
+                        self.functions.get_mut(function_declaration_id).body_failure =
+                            Some(e.clone());
+                        self.report(e);
+                    };
+                }
+            }
             ParsedId::TypeDefn(_type_defn_id) => {
                 // Done in prior phase
             }
@@ -17119,6 +17486,7 @@ impl TypedProgram {
                 }
                 ParsedId::Use(_)
                 | ParsedId::Function(_)
+                | ParsedId::Macro(_)
                 | ParsedId::AbilityImpl(_)
                 | ParsedId::Global(_)
                 | ParsedId::Expression(_)
@@ -17161,6 +17529,11 @@ impl TypedProgram {
                         None,
                         namespace_id,
                     ) {
+                        self.report(e);
+                    }
+                }
+                ParsedId::Macro(parsed_macro_id) => {
+                    if let Err(e) = self.declare_macro(parsed_macro_id, namespace_scope_id) {
                         self.report(e);
                     }
                 }

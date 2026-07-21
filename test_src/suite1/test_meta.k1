@@ -8,11 +8,18 @@
 // separate module, but more convenient
 
 // Usage can even appear above the pre ns
-$pre/make-point("my-meta-point")
+#meta pre/make-point("my-meta-point")
+
+// Macros are invoked at definition level with the '$' sentinel;
+// bare params arrive as source text, so the name is a bare ident
+$pre/make-point-macro(my-macro-point)
 
 ns pre {
   let pi: f32 = 3.14
   fn make-point(name: string): string {
+    "type $name = { x: i32, y: i32 }"
+  }
+  macro make-point-macro(name) {
     "type $name = { x: i32, y: i32 }"
   }
 }
@@ -23,7 +30,7 @@ use core/meta/code-writer
 
 fn simple-increment(): i32 {
   let x = 10
-  ${
+  #meta {
     let code = string-builder/new()
     for 0.until(5) {
       code.line("x = x + 1;")
@@ -75,7 +82,7 @@ w.string("\"${f.name}\":");
 }
 
 fn write-json[t, w: writer](context w)(t: t) {
-  ${
+  #meta {
     let type-id = types/type-id[t]()
     let code = string-builder/new()
     _write-json-from-schema(&code, "t", type-id)
@@ -104,6 +111,7 @@ fn test() {
   test-to-json()
 
   let _x: my-meta-point = .{ x = 0, y = 42 }
+  let _y: my-macro-point = .{ x = 1, y = 2 }
   let _ = pre/pi
   
   .{}

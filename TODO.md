@@ -91,7 +91,8 @@ http dogfood list
 
 ## [ ] token stream based macros
 
-## [ ] expr-level macros
+## [x] expr-level macros
+- [ ] source-location preservation via 'code' type
 
 ## [x] meta-based macros
 

@@ -300,9 +300,9 @@ For an example input, let's encode some data about a starship into 16 bits.
 
 We could test this function by just running it and inspecting the string, since
 it is a normal function, or we could ask `k1` to run it for us and insert the result into our program
-using the `$` metaprogramming operator:
+using the `#meta` metaprogramming operator:
 ```rust
-$std/bitfield/define[u16]("starship-flags",
+#meta std/bitfield/define[u16]("starship-flags",
   [b1("shielded"), b1("cloaked"), b1("damaged"), { name: "sector-id", bits: 5 }, bn("foo", 8)]
 )
 ```

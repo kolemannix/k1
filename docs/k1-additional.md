@@ -116,12 +116,12 @@ See `test_src/suite1/static_parameter.k1`,
 
 ## Metaprogramming
 
-K1 supports source-generating metaprogramming with `$`.
+K1 supports source-generating metaprogramming with `#meta`.
 
 ```rust
-$ "let n: u64 = 255"
+#meta "let n: u64 = 255"
 
-$ {
+#meta {
   let name = "point"
   "type $name = { x: int, y: int }"
 }
@@ -130,7 +130,7 @@ $ {
 The `pre` namespace is compiled early for metaprogramming support:
 
 ```rust
-$pre/make-point("my-point")
+#meta pre/make-point("my-point")
 
 ns pre {
   fn make-point(name: string): string {
@@ -143,6 +143,52 @@ Braces are plain characters in strings, so generated code reads like K1;
 interpolation holes are `$ident`/`${expr}`, and a generated string that should
 itself interpolate at runtime escapes its holes as `\$`. `code-writer` helpers
 also appear in metaprograms.
+
+## Macros
+
+A `macro` is a compile-time function whose call sites pass code by source: bare
+params receive the argument's source text (as a `string`, for now), annotated
+params are statically evaluated (any type annotation on a macro param implies
+compile-time), and the returned string is compiled in place of the call. The
+return type is implicit. Callers write plain expressions:
+
+```rust
+macro debug(e) {
+  #if build-debug "log/debug($e)" else ""
+}
+
+macro repeat(n: int, body) {
+  let sb = string-builder/new()
+  for 0.until(n) { sb.line(body) }
+  sb.build()
+}
+
+debug(expensive-report())   // expands to nothing when build-debug is off
+repeat(3, counter.incr())
+```
+
+At definition level, macros are invoked with the `$` sentinel — the callee must
+be a macro (`$` binds tightly: no whitespace before the name), and its output is
+compiled as definitions in place:
+
+```rust
+$pre/make-point(my-point)
+
+ns pre {
+  macro make-point(name) {
+    "type $name = { x: i32, y: i32 }"
+  }
+}
+```
+
+Macros expand when the call is typechecked, so a macro must be defined in the
+same module (any namespace) or an upstream module; a definition-level `$`
+invocation runs early, so its macro must live in the module's `pre` namespace or
+an upstream module. Self-recursive expansion is an error. Macros cannot be used
+as values, and unused macro params get no warning (conditionally ignoring an
+argument is the point of a debug macro).
+
+See `test_src/suite1/test_macro.k1`.
 
 See `test_src/suite1/test_meta.k1`, `test_src/suite1/meta_defns.k1`, and
 `test_src/stdlib/metaprintf.k1`.

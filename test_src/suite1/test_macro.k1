@@ -1,0 +1,52 @@
+ns test_macro;
+
+let mutable twice-counter: int = 0
+let mutable repeat-counter: int = 0
+
+fn incr(): int {
+  twice-counter = twice-counter + 1
+  twice-counter
+}
+
+fn incr-repeat() {
+  repeat-counter = repeat-counter + 1
+}
+
+macro twice(e) {
+  "$e + $e"
+}
+
+macro repeat(n: int, body) {
+  let sb = string-builder/new()
+  for 0.until(n) {
+    sb.line(body)
+  }
+  sb.build()
+}
+
+macro debug(e) {
+  #if false "println($e)" else ""
+}
+
+fn test-twice() {
+  let x = twice(incr())
+  assert-equals(x, 3)
+  assert-equals(twice-counter, 2)
+}
+
+fn test-repeat() {
+  repeat(3, incr-repeat())
+  assert-equals(repeat-counter, 3)
+}
+
+fn test-debug-elided() {
+  debug(crash("this must never run"))
+}
+
+fn test() {
+  test-twice()
+  test-repeat()
+  test-debug-elided()
+
+  .{}
+}

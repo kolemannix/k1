@@ -140,7 +140,7 @@ ns files {
 
   fn write-entire-file(out-path: string, contents: string) {
     let out-path-c = out-path.to-c-tmp()
-    let FILE = libc/files/fopen(out-path-c.ptr, $string/c-lit("w"))
+    let FILE = libc/files/fopen(out-path-c.ptr, #meta string/c-lit("w"))
     defer libc/files/fclose(FILE)
 
     let write-res = libc/files/fwrite(contents.data-ptr(), 1, contents.len(), FILE)
