@@ -82,7 +82,7 @@ ns pubsub {
     if uv/mutex_init(bus.mutex) != 0 crash("uv_mutex_init for pubsub failed")
     if uv/async_init(uv-loop, bus.async-handle, dispatch-pending) != 0 crash("uv_async_init for pubsub failed")
     bus.async-handle.set-data(bus)
-    the-bus := bus.as[ptr]
+    the-bus = bus.as[ptr]
   }
 
   fn get(): *mut bus {
@@ -112,7 +112,7 @@ ns pubsub {
         free-heap-string(sub.topic)
         bus.subscribers.remove(i)
       } else {
-        i := i + 1
+        i = i + 1
       }
     }
   }
@@ -127,8 +127,8 @@ ns pubsub {
         break
       }
       let batch = bus.pending
-      bus.pending := bus.dispatching
-      bus.dispatching := batch
+      bus.pending = bus.dispatching
+      bus.dispatching = batch
       uv/mutex_unlock(bus.mutex)
 
       for event in bus.dispatching {
@@ -152,7 +152,7 @@ ns pubsub {
             let rendered = sse-frame(event)
             mem/pop-mode()
             let made = rc-buffer/make(rendered.span-bytes())
-            frame := :some made
+            frame = :some made
             made
           }
         }

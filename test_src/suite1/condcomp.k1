@@ -12,7 +12,7 @@ fn test() {
   #if MY_VALUE_NEG {
     crash("does not happen")
   } else {
-    trip := true
+    trip = true
   }
   assert(trip)
 

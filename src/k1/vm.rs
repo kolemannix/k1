@@ -1792,13 +1792,15 @@ pub(crate) fn resolve_global(
     }
 
     if let Some(initial_value_id) = initial_value_id {
-        debug!(
-            "shared global is: {}. the `t` of the instr is: {}",
-            k1.static_value_to_string(initial_value_id),
-            k1.types.pt_to_string(t)
-        );
-        let shared_vm_value = static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
-        store_value(&k1.types, t, dst, shared_vm_value);
+        if !t.is_empty() {
+            debug!(
+                "shared global is: {}. the `t` of the instr is: {}",
+                k1.static_value_to_string(initial_value_id),
+                k1.types.pt_to_string(t)
+            );
+            let shared_vm_value = static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
+            store_value(&k1.types, t, dst, shared_vm_value);
+        }
     }
     Ok(addr)
 }
@@ -2088,10 +2090,8 @@ pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn store_value(types: &TypePool, t: PhysicalType, dst: *mut u8, value: Value) {
     match t.as_enum() {
-        PhysicalTypeEnum::Empty => {
-            panic!("Storing Empty; should probably be illegal")
-            // eprintln!("Storing Empty; should probably be illegal")
-        }
+        // Lowering should never emit a load/store/copy of Empty
+        PhysicalTypeEnum::Empty => (),
         PhysicalTypeEnum::Scalar(scalar_type) => store_scalar(scalar_type, dst, value),
         PhysicalTypeEnum::Agg(pt_id) => {
             let record = types.agg_types.get(pt_id);

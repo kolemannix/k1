@@ -48,16 +48,16 @@ ns iter {
   fn sum[t: add and zero, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i): t {
     let t = zero@(t)/zero()
     for iterable {
-      t := t + it
+      t = t + it
     }
     t
   }
 
 }
 
-fn inc(i: *mut size) { i.* := i.* + 1 }
+fn inc(i: *mut size) { i.* = i.* + 1 }
 // TODO: Would be cool to have this
-// fn incNew[t: Add and KnowledgeOfOne](i: *mut t): t { i.* := i.* + KnowledgeOfOne@(t)/one() }
+// fn incNew[t: Add and KnowledgeOfOne](i: *mut t): t { i.* = i.* + KnowledgeOfOne@(t)/one() }
 
 fn identity[t](value: t): t { value }
 
@@ -102,11 +102,11 @@ ns io {
   impl writer for out-stream {
     fn write-byte(self, value: u8) {
       let value_spot = value
-      posix/write(file-no = self.file-no, data = (&value_spot).as[ptr], count = 1)
+      let _ = posix/write(file-no = self.file-no, data = (&value_spot).as[ptr], count = 1)
       .{}
     }
     fn write-bytes(self, bytes: span[byte]) {
-      posix/write(
+      let _ = posix/write(
         file-no = self.file-no,
         data = bytes.data-ptr(),
         count = bytes.len().as[c-sizet]
@@ -127,12 +127,12 @@ ns files {
     }
     defer libc/files/fclose(file)
 
-    libc/files/fseek(file, 0, libc/files/SEEK_END)
+    let _ = libc/files/fseek(file, 0, libc/files/SEEK_END)
     let file-size-bytes = libc/files/ftell(file)
     let buf = buffer/allocate-in[char](file-size-bytes)
 
-    libc/files/fseek(file, 0, libc/files/SEEK_SET)
-    libc/files/fread(buf.data-ptr(), buf.len(), 1, file)
+    let _ = libc/files/fseek(file, 0, libc/files/SEEK_SET)
+    let _ = libc/files/fread(buf.data-ptr(), buf.len(), 1, file)
     let string = string/wrap-buffer(buf)
 
     string
@@ -271,7 +271,7 @@ fn format-uint[w: writer](context w)(value: u64, base: u64) {
       let d = remaining % base
       let c = u8/to-ascii-digit(d.as[u8])
       digits.push(c)
-      remaining := remaining / base
+      remaining = remaining / base
     }
 
     digits.reverse()
@@ -447,12 +447,12 @@ ns for i64 {
 ns for u64 {
   fn next-pow2(self: u64): u64 {
     let v = self - 1
-    v := v | (v >> 1)
-    v := v | (v >> 2)
-    v := v | (v >> 4)
-    v := v | (v >> 8)
-    v := v | (v >> 16)
-    v := v | (v >> 32)
+    v = v | (v >> 1)
+    v = v | (v >> 2)
+    v = v | (v >> 4)
+    v = v | (v >> 8)
+    v = v | (v >> 16)
+    v = v | (v >> 32)
     v + 1
   }
 

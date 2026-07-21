@@ -29,15 +29,15 @@ fn day1(input: string) {
 
     let change = if negative { magnitude.as[int] * -1 } else magnitude.as[int]
 
-    pos := pos + change
+    pos = pos + change
     
-    if (pos < 0 and not is-zero) { mzs := mzs + 1 }
-    mzs := mzs + (pos.abs() / 100)
-    if (pos == 0) { mzs := mzs + 1 }
+    if (pos < 0 and not is-zero) { mzs = mzs + 1 }
+    mzs = mzs + (pos.abs() / 100)
+    if (pos == 0) { mzs = mzs + 1 }
 
-    pos := ((pos % 100) + 100) % 100
+    pos = ((pos % 100) + 100) % 100
 
-    if (pos == 0) { szs := szs + 1 }
+    if (pos == 0) { szs = szs + 1 }
   }
 
 
@@ -56,14 +56,14 @@ fn brute(input: string) {
     require string/parse-base10(magnitude-str) is :some magnitude else { return }
     let m = magnitude.as[int]
     while m > 0 {
-      if negative { pos := pos - 1 } else { pos := pos + 1 }
-      if pos < 0 { pos := pos + 100 }
-      if pos > 99 { pos := pos - 100 }
+      if negative { pos = pos - 1 } else { pos = pos + 1 }
+      if pos < 0 { pos = pos + 100 }
+      if pos > 99 { pos = pos - 100 }
       if pos == 0 {
-        zeroes := zeroes + 1
+        zeroes = zeroes + 1
       }
 
-      m := m - 1
+      m = m - 1
     }
 
     

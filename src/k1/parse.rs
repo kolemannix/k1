@@ -932,7 +932,7 @@ pub enum ParsedStmt {
     Use(UseStmt),                 // use core/list/new as foo
     Let(ParsedLet),               // let x = 42
     Require(ParsedRequire),       // require x is .Some(foo) else crash()
-    Assign(AssignStmt),           // x := 42, a.b.c := 42
+    Assign(AssignStmt),           // x = 42, a.b.c = 42
     Defer(ParsedDefer),           // defer arena.reset()
     LoneExpression(ParsedExprId), // println("asdfasdf")
 }
@@ -4107,7 +4107,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_assignment(&mut self, lhs: ParsedExprId) -> ParseResult<AssignStmt> {
-        self.expect_kind(K::ColonEquals)?;
+        self.expect_kind(K::Equals)?;
         let rhs = self.expect_expression()?;
         let span = self.extend_expr_span(lhs, rhs);
         Ok(AssignStmt { lhs, rhs, span })
@@ -4378,7 +4378,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // Assignment:
             // - Validate expr type, since only some exprs can be LHS of an assignment
             // - Build assignment
-            if peeked.kind == K::ColonEquals {
+            if peeked.kind == K::Equals {
                 let assgn = self.expect_assignment(expr)?;
                 Ok(Some(self.ast.stmts.add(ParsedStmt::Assign(assgn))))
             } else {
@@ -5398,9 +5398,9 @@ impl ParsedProgram {
                 Ok(())
             }
             ParsedStmt::Assign(assgn) => {
-                // <a> := <b>
+                // <a> = <b>
                 self.display_expr_id(w, assgn.lhs)?;
-                write!(w, " := ")?;
+                write!(w, " = ")?;
                 self.display_expr_id(w, assgn.rhs)?;
                 Ok(())
             }

@@ -71,8 +71,8 @@ ns for buffer {
       _ -> {
         let i = 0
         while i < size {
-          buf.get-ref-unchecked(i).* := value
-          i := i + 1
+          buf.get-ref-unchecked(i).* = value
+          i = i + 1
         }
       }
     }
@@ -111,7 +111,7 @@ ns for buffer {
       align = core/types/align[t](),
       new-size = new-size,
     )
-    self.* := .{ len = new-count, data = new-ptr.rw[t] }
+    self.* = .{ len = new-count, data = new-ptr.rw[t] }
   }
 
   fn _enlarged-clone-in[t](context alloc: mem/alloc-mode)(self: buffer[t], new-count: size): buffer[t] {
@@ -184,7 +184,7 @@ ns for buffer {
 
   fn set[t](self: buffer[t], index: size, elem: t): empty {
     let t-ref = self.get-ref(index)
-    t-ref.* := elem
+    t-ref.* = elem
   }
 
   fn memset[t](self: buffer[t], value: u8): empty {
@@ -246,8 +246,8 @@ ns for buffer {
     while i < self.len() {
       let chunk = self.slice(i, i + size)
       results.push(chunk)
-      i := i + size
-      j := j + 1
+      i = i + size
+      j = j + 1
     }
     results.as-span()
   }
@@ -304,8 +304,8 @@ ns for buffer {
     let a-ref = self.get-ref(index-a)
     let b-ref = self.get-ref(index-b)
     let b-value = b-ref.*
-    b-ref.* := a-ref.*
-    a-ref.* := b-value
+    b-ref.* = a-ref.*
+    a-ref.* = b-value
   }
 
   fn sort[t](self: buffer[t]) where t: comparable {
@@ -318,7 +318,7 @@ ns for buffer {
     while (i < (self.len / 2)) {
       let j = self.len - i - 1
       self.swap(i, j)
-      i := i + 1
+      i = i + 1
     }
   }
 
@@ -356,7 +356,7 @@ impl[t] iterator[item = t] for buffer-iterator[t] {
   fn next(self: *mut self): ?item {
     if self.pos < self.buf.len {
       let item = self.buf.get(self.pos)
-      self.pos := self.pos + 1
+      self.pos = self.pos + 1
       :some item
     } else :none
   }
@@ -365,7 +365,7 @@ impl[t] iterator[item = t] for buffer-iterator[t] {
     .{ at-least = rem, at-most = :some rem }
   }
   fn advance-by(self: *mut self, n: size): empty {
-    self.pos := self.pos + n
+    self.pos = self.pos + n
   }
 }
 
@@ -403,7 +403,7 @@ impl[t] iterator[item = *mut t] for buffer-ref-iterator[t] {
   fn next(self: *mut self): ?item {
     if self.pos < self.buf.len {
       let item = self.buf.get-ref(self.pos)
-      self.pos := self.pos + 1
+      self.pos = self.pos + 1
       :some item
     } else :none
   }
@@ -412,7 +412,7 @@ impl[t] iterator[item = *mut t] for buffer-ref-iterator[t] {
     .{ at-least = rem, at-most = some(rem) }
   }
   fn advance-by(self: *mut self, n: size): empty {
-    self.pos := self.pos + n
+    self.pos = self.pos + n
   }
 }
 

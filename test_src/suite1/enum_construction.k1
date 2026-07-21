@@ -8,13 +8,13 @@ fn test() {
 
   let _: state = state:zilch
 
-  enum_construction/state:on(.{})
-  enum_construction/state:off(.{})
+  let _ = enum_construction/state:on(.{})
+  let _ = enum_construction/state:off(.{})
 
   let _: enum_construction/state = enum_construction/state:off(.{})
   let _: enum_construction/state = enum_construction/state:on(.{})
 
-  state-hard:on(:some(42))
+  let _ = state-hard:on(:some(42))
 
   let _: state-hard = state-hard:on(:some(42))
   let _: state-hard = state-hard:on(:none)
@@ -35,9 +35,9 @@ fn test() {
   let _: opt[i32] = opt:none[i32]
   let _: opt[i32] = opt:none
 
-  contrived:stuff(.{ a = 42, b = "hello"})
+  let _ = contrived:stuff(.{ a = 42, b = "hello"})
 
-  opt:none[int]
+  let _ = opt:none[int]
 
   // Quiet payloads: no parens needed, on anonymous and qualified constructors,
   // with and without explicit type args

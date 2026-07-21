@@ -59,8 +59,8 @@ fn blanket-impls() {
 
 fn test() {
 
-  test-basics()
-  test-complex()
+  let _ = test-basics()
+  let _ = test-complex()
   opt-else-operator()
   blanket-impls()
 

@@ -88,9 +88,9 @@ fn start-pos(): list[square-state] {
   board.set(5, :w-bishop)
   board.set(6, :w-knight)
   board.set(7, :w-rook)
-  { let i = 0; while i < 8 { board.set(i + 8, :w-pawn); i := i + 1 } }
+  { let i = 0; while i < 8 { board.set(i + 8, :w-pawn); i = i + 1 } }
 
-  { let i = 0; while i < 8 { board.set(i + 48, :b-pawn); i := i + 1 } }
+  { let i = 0; while i < 8 { board.set(i + 48, :b-pawn); i = i + 1 } }
   board.set(56, :b-rook)
   board.set(57, :b-knight)
   board.set(58, :b-bishop)

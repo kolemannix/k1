@@ -11,7 +11,7 @@ fn test() {
   let _some-add-fn2: *fn(x: int) -> int = static-add-one
   let x = some-add-fn(10)
   assert-equals(x, 11)
-  some-add-fn := static-add-two
+  some-add-fn = static-add-two
   let y = some-add-fn(20)
   assert-equals(y, 22)
 

@@ -166,34 +166,41 @@ K1 code commonly ends test helpers with `.{}` when the intent is "return unit".
 
 ## Variables And Mutation
 
-Use `let` for local bindings and `:=` for assignment:
+Use `let` for local bindings and `=` for assignment:
 
 ```rust
 let count = 0
-count := count + 1
+count = count + 1
 ```
 
-`:=` assigns to any place, not just variables: struct fields, array elements,
+`=` assigns to any place, not just variables: struct fields, array elements,
 and dereferences are all valid destinations:
 
 ```rust
 let item = .{ value = 41 }
-item.value := 42
+item.value = 42
 assert-equals(item.value, 42)
 ```
 
-A bare variable on the left always means the variable itself: `r := v` rebinds
+A bare variable on the left always means the variable itself: `r = v` rebinds
 `r`. To store through a reference, dereference it explicitly on the left-hand
 side with `.*`:
 
 ```rust
 let counter = core/mem/new(0)
-counter.* := counter.* + 1
+counter.* = counter.* + 1
 assert-equals(counter.*, 1)
 ```
 
 Use `.*` to read through a reference, and the postfix `.&` operator to take the
 address of a place when you need a reference to it.
+
+A statement that discards a non-unit expression result gets a warning; bind to
+`_` to discard explicitly:
+
+```rust
+let _ = posix/madvise(base-ptr, len, advice = posix/MADV_SEQUENTIAL)
+```
 
 See `test_src/suite1/assign.k1`, `test_src/suite1/place_test.k1`,
 `test_src/suite1/pointer.k1`, and `test_src/suite1/struct.k1`.
@@ -288,7 +295,7 @@ type counter = { value: int }
 
 ns for counter {
   fn inc(self: *mut counter) {
-    self.value := self.value + 1
+    self.value = self.value + 1
   }
 }
 ```
@@ -301,21 +308,21 @@ See `test_src/suite1/struct.k1` and
 `a.foo` always means "the field's value", whether `a` is a struct value or a
 reference to one; K1 dereferences through the base as needed. When the access
 chain denotes a place (it roots in a variable or a dereference), it can be
-assigned with `:=` and its address taken with `.&`:
+assigned with `=` and its address taken with `.&`:
 
 ```rust
 let p = .{ x = 1, y = 2 }
 let x: int = p.x
-p.x := 2
+p.x = 2
 
 let p-ref = p.&
 let x-value: int = p-ref.x
 let x-ref: *mut int = p-ref.x.&
-p-ref.y := 20
+p-ref.y = 20
 ```
 
 The same applies to array elements: `arr.get(i)` yields the element value,
-`arr.get(i) := value` stores into the element, and `arr.get(i).&` takes its
+`arr.get(i) = value` stores into the element, and `arr.get(i).&` takes its
 address. Sum patterns use trailing `*` to bind references to payload data; see
 the next section.
 
@@ -393,14 +400,14 @@ it.
 
 When matching on a reference to a sum, plain patterns bind payload values; add
 trailing `*` to the pattern to bind a reference to the variant's data instead,
-then store through it with `.* :=`:
+then store through it with `.* =`:
 
 ```rust
 let result: parse-result[int] = :ok 42
 let result-ref = result.&
 
 if result-ref is :ok(ok-ref)* {
-  ok-ref.* := 100
+  ok-ref.* = 100
 } else {
   crash("expected ok")
 }
@@ -413,7 +420,7 @@ match arms:
 
 ```rust
 result-ref is {
-  :ok(value-ref)* -> { value-ref.* := value-ref.* + 1 },
+  :ok(value-ref)* -> { value-ref.* = value-ref.* + 1 },
   :err(message-ref)* -> { crash(message-ref.*) }
 }
 ```
@@ -533,7 +540,7 @@ See `test_src/suite1/matching_if.k1`, `test_src/suite1/match_fails.k1`,
 
 ```rust
 while i < 10 {
-  i := i + 1
+  i = i + 1
 }
 ```
 

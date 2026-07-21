@@ -7141,7 +7141,7 @@ impl TypedProgram {
             if let Some(constraint) = maybe_constraint {
                 if let Err(msg) = self.check_types(*constraint, impl_arg.type_id, scope_id) {
                     return Err(Cow::Owned(format!(
-                        "Implementation has {} := {}, but context requires it to be {}: {msg}",
+                        "Implementation has {} = {}, but context requires it to be {}: {msg}",
                         self.ident_str(impl_arg.name),
                         self.type_id_to_string(impl_arg.type_id),
                         self.type_id_to_string(*constraint),
@@ -7744,7 +7744,7 @@ impl TypedProgram {
                     if is_assignment_lhs {
                         return failf!(
                             variable_name_span,
-                            "Cannot assign to captured variable '{}'. Capture a reference and store through it with `.* :=` instead",
+                            "Cannot assign to captured variable '{}'. Capture a reference and store through it with `.* =` instead",
                             self.ast.idents.get_string(variable.name.name)
                         );
                     }
@@ -12073,7 +12073,7 @@ impl TypedProgram {
                 // We emit `{ if !in_bounds crash; array[index] }` rather than an if/else
                 // over the element so that the element access is the block's trailing
                 // expr: blocks are place-transparent, which is what makes
-                // `arr.get(i).&` and `arr.get(i) := v` work
+                // `arr.get(i).&` and `arr.get(i) = v` work
                 let unit_expr = self.synth_empty_struct(span);
                 let bounds_check_expr = self.synth_if_else(
                     self.types.builtins.empty,
@@ -12686,7 +12686,7 @@ impl TypedProgram {
                 kerr!(
                     self,
                     call_span,
-                    "Call to {}/{} with self := {} does not work\n{}",
+                    "Call to {}/{} with self = {} does not work\n{}",
                     &self.ability_impl_signature_to_string(base_ability_id, MSlice::empty()),
                     fn_call.name.name,
                     solved_self,
@@ -14446,7 +14446,7 @@ impl TypedProgram {
                 // A bare variable name rebinds a local (or writes a mutable
                 // global); any other lhs must denote a place, and we store to
                 // its address. Storing through a reference requires an
-                // explicit deref: `r.* := v`.
+                // explicit deref: `r.* = v`.
                 let (destination, expected_rhs_type, reassigned_variable_id) =
                     if let ParsedExpr::Variable(_) = self.ast.exprs.get(assignment.lhs) {
                         let (typed_variable_id, lhs) =
@@ -14459,13 +14459,13 @@ impl TypedProgram {
                             VariableKind::FnParam(_) => {
                                 return failf!(
                                     lhs_span,
-                                    "Cannot re-assign a function parameter; declare a local, or store through a reference with `param.* := ...`"
+                                    "Cannot re-assign a function parameter; declare a local, or store through a reference with `param.* = ...`"
                                 );
                             }
                             VariableKind::StackSynthetic(_) => {
                                 return failf!(
                                     lhs_span,
-                                    "Cannot re-assign a synthetic variable or binding; if this is a pattern-bound reference, store through it with `x.* := ...`"
+                                    "Cannot re-assign a synthetic variable or binding; if this is a pattern-bound reference, store through it with `x.* = ...`"
                                 );
                             }
                             VariableKind::Stack(_) => (lhs, lhs_type, Some(variable_id)),
@@ -14614,6 +14614,26 @@ impl TypedProgram {
             let stmt_span = self.get_stmt_span(stmt_id);
             last_expr_type = self.get_stmt_type(stmt_id);
             last_stmt_is_divergent = last_expr_type == NEVER_TYPE_ID;
+
+            if !is_last && !last_stmt_is_divergent {
+                let expr_type = match self.stmts.get(stmt_id) {
+                    TypedStmt::Expr(_, expr_type) => Some(*expr_type),
+                    _ => None,
+                };
+                if let Some(expr_type) = expr_type {
+                    let physically_empty = match self.get_physical_type(expr_type) {
+                        PhysicalTypeResult::Yes(pt) => pt.is_empty(),
+                        _ => true,
+                    };
+                    if !physically_empty {
+                        self.report(warnf!(
+                            stmt_span,
+                            "Discarded expression result of type {}",
+                            self.type_id_to_string(expr_type)
+                        ));
+                    }
+                }
+            }
 
             // Ensure termination because this is a 'real' control flow block
             // Not just a lexical block the user made. For example, a function body.
@@ -15123,7 +15143,7 @@ impl TypedProgram {
                 {
                     return failf!(
                         span,
-                        "Provided type {} := {} does implement required ability {}, but the implementation parameter {} is wrong: Expected type was {} but the actual implementation uses {}",
+                        "Provided type {} = {} does implement required ability {}, but the implementation parameter {} is wrong: Expected type was {} but the actual implementation uses {}",
                         self.ident_str(name),
                         self.type_id_to_string(target_type),
                         self.ident_str(self.abilities.get(signature.specialized_ability_id).name),

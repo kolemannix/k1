@@ -72,14 +72,14 @@ See `test_src/suite1/function_pointer.k1`.
 ## Globals And Mutable Globals
 
 Top-level `let` declarations create globals. Add `mutable` for globals that can
-be assigned with `:=` like any other place; immutable globals reject assignment.
+be assigned with `=` like any other place; immutable globals reject assignment.
 
 ```rust
 let answer: int = 42
 let mutable counter: int = 0
 let mutable tls my-thread-local: i32 = 0
 
-counter := counter + 1
+counter = counter + 1
 ```
 
 See `test_src/suite1/globals.k1`, `test_src/suite1/ability_default_fns.k1`, and

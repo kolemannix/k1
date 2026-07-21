@@ -18,7 +18,7 @@ fn buffer-filled() {
   let i = 0
   while i < 5 {
     assert(buf.get(i) == 42)
-    i := i + 1
+    i = i + 1
   }
 }
 
@@ -48,7 +48,7 @@ fn buffer-slice() {
   let i = 0
   while i < 5 {
     buf.set(i, i)
-    i := i + 1
+    i = i + 1
   }
 
   let slice = buf.slice(1, 4)
@@ -63,7 +63,7 @@ fn buffer-take-drop() {
   let i = 0
   while i < 5 {
     buf.set(i, i)
-    i := i + 1
+    i = i + 1
   }
 
   let taken = buf.take(3)

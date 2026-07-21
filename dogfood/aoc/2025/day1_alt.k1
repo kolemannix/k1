@@ -25,9 +25,9 @@ fn solve(p: (either { part-1, part-2 }), input: string): int {
     let n: i64 = if p is :part-1 { 1 } else amount.as[i64]
     let delta: f64 = if p is :part-1 { scale * step * amount.as[f64] } else scale * step
     for 0.until(n) {
-      theta := theta + delta
+      theta = theta + delta
       if (cmath/cos(theta) == 1.0) {
-        acc := acc + 1
+        acc = acc + 1
       }
     }
   }

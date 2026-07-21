@@ -22,14 +22,14 @@ fn test-constraints() {
   assert-equals(types/type-id[type-of(x).a], types/type-id[int])
   assert-equals[?string](
     test-compile(.{ inner = some(4) }: constrained-box[int, ?bool]),
-    :some "Provided type b := opt[bool] does implement required ability try, but the implementation parameter t is wrong: Expected type was i64 but the actual implementation uses bool"
+    :some "Provided type b = opt[bool] does implement required ability try, but the implementation parameter t is wrong: Expected type was i64 but the actual implementation uses bool"
   )
   .{}
 }
 
 fn test() {
   let b: box[int] = .{ value = 0 }
-  b.value
+  let _ = b.value
   let c: box[bool] = .{ value = true }
   let c2: box[bool] = .{ value = false }
   let c3: box[?bool] = .{ value = :some false }

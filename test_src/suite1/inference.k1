@@ -26,28 +26,28 @@ fn test() {
   let x = identity(12)
   assert(x == 12)
 
-  identity(identity([])): list[bool]
+  let _ = identity(identity([])): list[bool]
 
   assert(identity-nested(4) == 4)
   assert(identity-nested(true))
   assert(identity-nested(.{ value = 42 }).value == 42)
 
-  identity(true): bool
-  identity(true)
-  identity(true): bool
-  identity(identity(12))
-  some(identity(13))
+  let _ = identity(true): bool
+  let _ = identity(true)
+  let _ = identity(true): bool
+  let _ = identity(identity(12))
+  let _ = some(identity(13))
 
-  get(some(10)): u32
-  combine(identity(4000), get(some(5000))): u32
-  combine(identity(8000), identity(get(some(9000)))): u32
+  let _ = get(some(10)): u32
+  let _ = combine(identity(4000), get(some(5000))): u32
+  let _ = combine(identity(8000), identity(get(some(9000)))): u32
 
   assert-equals(get-or-else(some(1000), -1), 1000)
 
-  occurs-check-test(42)
+  let _ = occurs-check-test(42)
 
-  combine(opt:some 4, some(23))
-  combine(opt:some 4, some(23)): opt[u32]
+  let _ = combine(opt:some 4, some(23))
+  let _ = combine(opt:some 4, some(23)): opt[u32]
 
   let x = opt:some 42
 

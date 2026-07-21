@@ -20,9 +20,9 @@ fn fmix64(h0: u64): u64 {
   let m1: u64 = 0xff51afd7ed558ccd
   let m2: u64 = 0xc4ceb9fe1a85ec53
   let h = h0 ^ (h0 >> 33)
-  h := h * m1
-  h := h ^ (h >> 33)
-  h := h * m2
+  h = h * m1
+  h = h ^ (h >> 33)
+  h = h * m2
   h ^ (h >> 33)
 }
 
@@ -32,7 +32,7 @@ impl hash for string {
     let FNV_PRIME: u64 = 0x100000001b3
     let h = FNV_OFFSET
     for b in self.span-bytes() {
-      h := (h ^ b.as[u64]) * FNV_PRIME
+      h = (h ^ b.as[u64]) * FNV_PRIME
     }
     fmix64(h)
   }
@@ -83,7 +83,7 @@ ns for map {
   fn _capacity-for(min-capacity: size): size {
     let cap: size = 8
     while min-capacity * 4 > cap * 3 {
-      cap := cap * 2
+      cap = cap * 2
     }
     cap
   }
@@ -116,12 +116,12 @@ ns for map {
       if s.hash >= 2 {
         let idx = s.hash.as[size] & mask
         while new-slots.get-unchecked(idx).hash != EMPTY {
-          idx := (idx + 1) & mask
+          idx = (idx + 1) & mask
         }
-        new-slots.get-ref-unchecked(idx).* := s
+        new-slots.get-ref-unchecked(idx).* = s
       }
     }
-    self.* := .{ count = self.count, tombstones = 0, slots = new-slots }
+    self.* = .{ count = self.count, tombstones = 0, slots = new-slots }
     if old.non-empty() {
       let resolved = mode.resolve()
       if resolved.requires-free() {
@@ -153,7 +153,7 @@ ns for map {
       let s = self.slots.get-ref-unchecked(idx)
       if s.hash == h and s.key == key break :some idx
       if s.hash == EMPTY break :none
-      idx := (idx + 1) & mask
+      idx = (idx + 1) & mask
     }
   }
 
@@ -175,15 +175,15 @@ ns for map {
           :none -> .{ idx, found = false, from-tombstone = false }
         }
       }
-      if s.hash == TOMBSTONE and tombstone is :none { tombstone := :some idx }
-      idx := (idx + 1) & mask
+      if s.hash == TOMBSTONE and tombstone is :none { tombstone = :some idx }
+      idx = (idx + 1) & mask
     }
   }
 
   fn _place[k, v](self: *mut map[k, v], probe: { idx: size, found: bool, from-tombstone: bool }, slot: map-slot[k, v]) {
-    if probe.from-tombstone { self.tombstones := self.tombstones - 1 }
-    self.slots.get-ref-unchecked(probe.idx).* := slot
-    self.count := self.count + 1
+    if probe.from-tombstone { self.tombstones = self.tombstones - 1 }
+    self.slots.get-ref-unchecked(probe.idx).* = slot
+    self.count = self.count + 1
   }
 
   fn insert-in[k, v](context mode: alloc-mode)(self: *mut map[k, v], key: k, value: v)
@@ -192,7 +192,7 @@ ns for map {
     let h = _slot-hash(key)
     let probe = self._probe-insert(key, h)
     if probe.found {
-      self.slots.get-ref-unchecked(probe.idx).value := value
+      self.slots.get-ref-unchecked(probe.idx).value = value
     } else {
       self._place(probe, .{ hash = h, key, value })
     }
@@ -251,9 +251,9 @@ ns for map {
       :some idx -> {
         let s = self.slots.get-ref-unchecked(idx)
         let evicted = s.value
-        s.hash := TOMBSTONE
-        self.count := self.count - 1
-        self.tombstones := self.tombstones + 1
+        s.hash = TOMBSTONE
+        self.count = self.count - 1
+        self.tombstones = self.tombstones + 1
         :some evicted
       }
     }
@@ -261,8 +261,8 @@ ns for map {
 
   fn clear[k, v](self: *mut map[k, v]) {
     self.slots.memset(0)
-    self.count := 0
-    self.tombstones := 0
+    self.count = 0
+    self.tombstones = 0
   }
 
   fn dump[k, v](self: map[k, v]) where k: print, v: print {
@@ -294,7 +294,7 @@ ns for map-iterator {
   fn _next-live[k, v](self: *map-iterator[k, v], from: size): size {
     let i = from
     while i < self.slots.len and self.slots.get-ref-unchecked(i).hash < 2 {
-      i := i + 1
+      i = i + 1
     }
     i
   }
@@ -305,11 +305,11 @@ impl[k, v] iterator[item = { key: k, value: v }] for map-iterator[k, v] {
     let i = self._next-live(self.pos)
     if i < self.slots.len {
       let s = self.slots.get-ref-unchecked(i)
-      self.pos := i + 1
-      self.remaining := self.remaining - 1
+      self.pos = i + 1
+      self.remaining = self.remaining - 1
       :some .{ key = s.key, value = s.value }
     } else {
-      self.pos := i
+      self.pos = i
       :none
     }
   }
@@ -321,11 +321,11 @@ impl[k, v] iterator[item = { key: k, value: v }] for map-iterator[k, v] {
     while advanced < n {
       let i = self._next-live(self.pos)
       if i < self.slots.len {
-        self.pos := i + 1
-        self.remaining := self.remaining - 1
-        advanced := advanced + 1
+        self.pos = i + 1
+        self.remaining = self.remaining - 1
+        advanced = advanced + 1
       } else {
-        self.pos := i
+        self.pos = i
         return
       }
     }
@@ -344,7 +344,7 @@ impl[k: print, v: print] print for map[k, v] {
     let first = true
     for kv in self {
       if not first { w.write-string(", ") }
-      first := false
+      first = false
       kv.key.print-to(w)
       w.write-string(": ")
       kv.value.print-to(w)
@@ -443,7 +443,7 @@ impl[t: print] print for set[t] {
     let first = true
     for v in self {
       if not first { w.write-string(", ") }
-      first := false
+      first = false
       v.print-to(w)
     }
     w.write-char('}')

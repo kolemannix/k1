@@ -9,10 +9,10 @@ fn box[t](context _foo: t)(value: t): my-box[t] {
 fn test-box() {
   let context b = true
   let context c = .{ b = true }
-  box(context 10)(10)
-  box[bool](true)
-  box(false)
-  box(.{ b = false })
+  let _ = box(context 10)(10)
+  let _ = box[bool](true)
+  let _ = box(false)
+  let _ = box(.{ b = false })
   .{}
 }
 

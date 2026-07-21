@@ -22,7 +22,7 @@ ns work {
     }
   
     queue.async-handle.set-data(queue)
-    work-queue := queue.as[ptr]
+    work-queue = queue.as[ptr]
   }
   
   fn submit-work(req: *mut uv/work, work-cb: uv/work_cb, after-cb: uv/after_work_cb) {

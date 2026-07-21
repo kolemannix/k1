@@ -70,7 +70,7 @@ ns meta {
     code.line(`  fn get(self: {name}, index: size): {tt} \{`)
     code.line(`    let returned ret: {tt} = mem/zeroed();`)
     for f in fields {
-      code.line(`    ret.{f.name} := self.ARR_{f.name}.get(index);`)
+      code.line(`    ret.{f.name} = self.ARR_{f.name}.get(index);`)
     }
     code.line(`    ret`)
     code.line(`  }`) // end fn get

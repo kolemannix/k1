@@ -90,7 +90,7 @@ ns for task {
           tprintln("task work failed with status {status}")
         }
         uv/mutex_lock(task-work.state.mutex)
-        task-work.state.libuv-done := true
+        task-work.state.libuv-done = true
         uv/cond_signal(task-work.state.cond)
         uv/mutex_unlock(task-work.state.mutex)
         system-heap.free-t(task-work)
@@ -117,8 +117,8 @@ ns for task {
 
   fn complete[t](state: *mut task-state[t], output: t) {
     uv/mutex_lock(state.mutex)
-    state.output := :some output
-    state.handler-done := true
+    state.output = :some output
+    state.handler-done = true
     uv/cond_signal(state.cond)
     uv/mutex_unlock(state.mutex)
   }

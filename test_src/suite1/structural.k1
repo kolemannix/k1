@@ -22,13 +22,13 @@ fn test() {
 
 
   //:ok; structural type 'promoted' to nominal at creation time
-  get-nominal(.{ index = 10 })
+  let _ = get-nominal(.{ index = 10 })
 
   // not ok; get takes `handle` nominally; h is anonymous.
   assert(test-compile(get-nominal(handle-anon)).is-some())
 
   //:ok; correct nominal type
-  get-nominal(h1)
+  let _ = get-nominal(h1)
 
   // Not ok; different nominal types!
   assert(test-compile(get(h2)).is-some())

@@ -83,7 +83,7 @@ fn write-bitboard[w: writer](writer: w, b: bitboard) {
       writer.write-char(u8/to-ascii-digit(bit.as[u8]))
     }
     writer.write-char('\n')
-    rank := rank - 1
+    rank = rank - 1
   }
 }
 
@@ -128,7 +128,7 @@ ns for game-state {
         else { writer.write-char('.') }
       }
       writer.write-char('\n')
-      rank := rank - 1
+      rank = rank - 1
     }
     print(string/wrap-list(writer))
     println("--------\nabcdefgh")

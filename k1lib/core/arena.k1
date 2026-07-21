@@ -26,7 +26,7 @@ ns for arena {
   }
 
 
-  fn set-name(self: *arena, name: string) { self.name := name }
+  fn set-name(self: *arena, name: string) { self.name = name }
 
   fn get-alloc-base(self: *arena): ptr { self.base-ptr.sub-bytes(types/stride[arena]) }
   fn store-header(base-ptr: ptr, size, alloc-kind: arena.alloc-kind): *arena {
@@ -35,7 +35,7 @@ ns for arena {
     let memory-size = size - types/stride[arena]
     let arena: *arena = base-ptr.rw[arena]
     // #static assert(types/align[arena] <= MIN_ALIGN);
-    arena.* := .{
+    arena.* = .{
       base-ptr = memory-start,
       cur-addr = memory-start,
       end-addr = memory-start.add-bytes(memory-size),
@@ -48,7 +48,7 @@ ns for arena {
   fn init-virtual(usage-hint-mb: size): *arena {
     let size-bytes = 1 * gb
     let base-ptr: ptr = mem/virtual-alloc(size-bytes)
-    posix/madvise(base-ptr, (usage-hint-mb * mb).as[c-sizet], advice = posix/MADV_SEQUENTIAL)
+    let _ = posix/madvise(base-ptr, (usage-hint-mb * mb).as[c-sizet], advice = posix/MADV_SEQUENTIAL)
     store-header(base-ptr, size-bytes, :virtual)
   }
 
@@ -77,7 +77,7 @@ ns for arena {
 
   fn reset(self: *arena, clear: bool) {
     let used-bytes = self.used-bytes()
-    self.cur-addr := self.base-ptr
+    self.cur-addr = self.base-ptr
 
     if clear {
       mem/set(dst = self.base-ptr, value = 0, count = used-bytes)
@@ -101,7 +101,7 @@ ns for arena {
       let offset-to-min-align = ptr/get-align-offset(raw-bump, MIN_ALIGN)
       let total-bump = raw-bump + offset-to-min-align
       let alloc-ptr = cursor.add-bytes(prefix-padding)
-      self.cur-addr := cursor.add-bytes(total-bump)
+      self.cur-addr = cursor.add-bytes(total-bump)
       alloc-ptr
     } else {
        mem/push-mode(:system-heap)
@@ -118,7 +118,7 @@ ns for arena {
     let data-start = self.alloc-layout(types/size[t], types/align[t])
 
     let ref: *t = data-start.rw()
-    ref.* := t
+    ref.* = t
     ref
   }
 
@@ -150,7 +150,7 @@ ns for arena {
     let new-end-aligned = old-ptr.add-bytes(new-size).aligned(MIN_ALIGN)
     if old-end-aligned == self.cur-addr and new-end-aligned <= self.end-addr {
       // Grow in place
-      self.cur-addr := new-end-aligned
+      self.cur-addr = new-end-aligned
       old-ptr
     } else {
       let new-allocation = self.alloc-layout(new-size, align)
@@ -167,7 +167,7 @@ ns for arena {
     assert(arena-mark.start >= self.base-ptr)
     assert(arena-mark.start < self.end-addr)
     assert(arena-mark.start >= self.cur-addr)
-    self.cur-addr := arena-mark.start
+    self.cur-addr = arena-mark.start
   }
 
 }

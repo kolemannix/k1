@@ -2,32 +2,34 @@ let mutable g: int = 5
 
 fn main(): i32 {
   let x = 1
-  x := 2
+  x = 2
   assert(x == 2)
 
   let p = .{ x = 1, y = 2 }
-  p.x := 10
+  p.x = 10
   assert(p.x == 10)
 
   let n = .{ a = .{ b = 3 } }
-  n.a.b := 4
+  n.a.b = 4
   assert(n.a.b == 4)
 
   let r = p.x.&
-  r.* := 20
+  r.* = 20
   assert(p.x == 20)
 
   let pr = p.&
-  pr.y := 30
+  pr.y = 30
   assert(p.y == 30)
 
   let arr: array[int, 3] = [1, 2, 3]
-  arr.get(1) := 9
+  arr.get(1) = 9
   assert(arr.get(1) == 9)
 
-  g := g + 1
+  g = g + 1
   assert(g == 6)
 
-  println("unified := works")
+  println("unified = works")
   0
 }
+
+fn discard-check() { let _ = 42 }

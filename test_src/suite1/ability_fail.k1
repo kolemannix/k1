@@ -9,7 +9,7 @@ fn test() {
   let p: tool = :yes
   let result = test-compile(p.num())
   assert-equals(result, :some(
-`Call to num/num with self := tool does not work
+`Call to num/num with self = tool does not work
 No matching implementations found`
   ))
 }

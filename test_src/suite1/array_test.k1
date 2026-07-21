@@ -34,7 +34,7 @@ fn test-array() {
 
   let a: *mut array[u8, 10] = list/to-array(ls, 10)
   for 0.until(a.len()) {
-    if it % 2 == 0 { a.get(it) := 1 }
+    if it % 2 == 0 { a.get(it) = 1 }
   }
   for 0.until(a.len()) {
     if it % 2 == 0 {

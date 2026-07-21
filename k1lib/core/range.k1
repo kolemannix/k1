@@ -20,7 +20,7 @@ impl[t: add and scalar-cmp and one] iterator[item = t] for range-iterator[t] {
   fn next(self: *mut self): ?t {
     if self.current < self.end {
       let c = self.current
-      self.current := c + one@(t)/one()
+      self.current = c + one@(t)/one()
       :some c
     } else :none
   }

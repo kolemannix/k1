@@ -32,7 +32,7 @@ fn buffer-stream-next(state: ptr): stream-pull {
   if remaining == 0 { return :done }
   let n = if remaining < bs.chunk-size remaining else bs.chunk-size
   let chunk = bs.bytes.slice(bs.cursor, bs.cursor + n)
-  bs.cursor := bs.cursor + n
+  bs.cursor = bs.cursor + n
   :chunk chunk
 }
 
@@ -108,7 +108,7 @@ ns chunked {
         write-frame(encoder, frame.span-bytes())
       },
       :done -> {
-        encoder.finishing := true
+        encoder.finishing = true
         write-frame(encoder, "0\r\n\r\n".span-bytes())
       },
     }

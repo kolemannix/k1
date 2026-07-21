@@ -33,7 +33,7 @@ fn test-int-keys() {
   let i = 0
   while i < 50 {
     m.insert(i, "v{i}")
-    i := i + 1
+    i = i + 1
   }
   assert-equals(m.len(), 50)
   assert-equals(m.get(17), :some "v17")
@@ -47,7 +47,7 @@ fn test-get-ref() {
   let m = map/new[string, int]()
   m.insert("a", 1)
   let vref = m.get-ref("a").!
-  vref.* := 100
+  vref.* = 100
   assert-equals(m.get("a"), :some 100)
   assert(m.get-ref("missing") is :none)
 }
@@ -61,8 +61,8 @@ fn test-iterate() {
   let total = 0
   let seen = 0
   for kv in m {
-    total := total + kv.value
-    seen := seen + 1
+    total = total + kv.value
+    seen = seen + 1
   }
   assert-equals(seen, 2)
   assert-equals(total, 4)
@@ -77,7 +77,7 @@ fn test-empty() {
   assert(e.is-empty())
   let iterated = 0
   for kv in e {
-    iterated := iterated + 1
+    iterated = iterated + 1
   }
   assert-equals(iterated, 0)
   assert-equals("{e}", "\{}")
@@ -101,7 +101,7 @@ fn test-with-capacity() {
   let i = 0
   while i < 100 {
     m.insert("key{i}", i)
-    i := i + 1
+    i = i + 1
   }
   assert-equals(m.capacity(), capacity-before)
   assert-equals(m.len(), 100)
@@ -111,7 +111,7 @@ fn test-get-or-insert() {
   let m = map/new[string, int]()
   let a = m.get-or-insert("a", fn. 10)
   assert-equals(a.*, 10)
-  a.* := 11
+  a.* = 11
   let a2 = m.get-or-insert("a", fn. 99)
   assert-equals(a2.*, 11)
   assert-equals(m.len(), 1)
@@ -121,7 +121,7 @@ fn test-get-or-insert() {
   let counts = map/new[string, int]()
   for w in words {
     let c = counts.get-or-insert(w, fn. 0)
-    c.* := c.* + 1
+    c.* = c.* + 1
   }
   assert-equals(counts.get("x"), :some 3)
   assert-equals(counts.get("y"), :some 1)
@@ -158,7 +158,7 @@ fn test-set() {
   assert(nums.non-empty())
   let total = 0
   for n in nums {
-    total := total + n
+    total = total + n
   }
   assert-equals(total, 6)
 }
@@ -171,9 +171,9 @@ fn test-resize(size: int) {
     if i % 5 == 0 {
       my-map.remove(i.show())
     }
-    i := i + 1
+    i = i + 1
   }
-  i := 0
+  i = 0
   while i < size {
     let result = my-map.get(i.show())
     if i % 5 == 0 {
@@ -181,7 +181,7 @@ fn test-resize(size: int) {
     } else {
       if result is :some v { assert-equals(v, i) } else { crash("Missing value {i}") }
     }
-    i := i + 1
+    i = i + 1
   }
 }
 
@@ -193,7 +193,7 @@ fn test-churn() {
   while round < 1000 {
     m.insert(round % 4, round)
     m.remove(round % 4)
-    round := round + 1
+    round = round + 1
   }
   assert-equals(m.len(), 0)
   assert(m.capacity() <= 16)

@@ -24,12 +24,12 @@ fn day2(part: int, input: string) {
       let is-invalid = if part == 1 check-invalid-part1(value) else check-invalid-part2(value)
       if is-invalid {
         println("{value} is invalid! ({invalid-sum})")
-        invalid-sum := invalid-sum + value
+        invalid-sum = invalid-sum + value
       }
-      value := value + 1
+      value = value + 1
     }
-    values-processed := values-processed + (end - start)
-    total-mem := total-mem + mem/tmp().used-bytes()
+    values-processed = values-processed + (end - start)
+    total-mem = total-mem + mem/tmp().used-bytes()
     mem/tmp().reset(false)
   }
 

@@ -2,17 +2,17 @@ ns assign
 
 fn assign-var() {
   let count = 0
-  count := 1
+  count = 1
   assert(count == 1)
-  count := 2
+  count = 2
   assert(count == 2)
 }
 
 fn assign-var-ref() {
   let count = 0
-  count := 1
+  count = 1
   assert(count == 1)
-  count := 2
+  count = 2
   assert(count == 2)
 }
 
@@ -26,11 +26,11 @@ fn complex-references() {
   assert(x-ref.* == x-value)
   assert(struct-ref.*.x == struct-ref.x)
 
-  x-ref.* := -10
+  x-ref.* = -10
 
   assert(x-ref.* == -10)
 
-  struct-ref.x := 42
+  struct-ref.x = 42
   assert(x-ref.* == 42)
 
   let either-ref: either { yes(int), no } = :yes 3
@@ -42,7 +42,7 @@ fn complex-references() {
   let yes-value: int = either-ref.as-yes().!
   assert(yes-value == 3)
 
-  either-ref.as-yes().!.* := -3
+  either-ref.as-yes().!.* = -3
 
   assert(yes-ref.* == -3)
   assert(either-ref.as-yes().!.* == -3)
@@ -53,7 +53,7 @@ fn complex-references() {
 
   if struct-opt-ref is :some x {
     assert(x.x == 42)
-    x.x := 43
+    x.x = 43
     assert(x.x == 43)
   } else {
     crash("None")

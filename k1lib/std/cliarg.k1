@@ -5,7 +5,7 @@ ns sys
 
 fn parse-next(i: *mut size, args: span[string]): ?string {
   let r = args.get-opt(i + 1)
-  i.* := i.* + 2
+  i.* = i.* + 2
   r
 }
 fn get-arg-kind(type-id: u64): either { string, list-string, opt-string } {
@@ -65,7 +65,7 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
     for s.fields {
       get-arg-kind(it.type-id) is {
         :string or :opt-string -> {
-          writelnf(code, `    "-{it.name}" -> \{ if parse-next(&i, args) is :some next \{ {it.name}-val := :some next } },`)
+          writelnf(code, `    "-{it.name}" -> \{ if parse-next(&i, args) is :some next \{ {it.name}-val = :some next } },`)
           writelnf(code, `    "/{it.name}" -> \{ if parse-next(&i, args) is :some(next) .\{} },`)
         },
         :list-string -> {

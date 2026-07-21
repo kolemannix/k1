@@ -59,7 +59,7 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
     let size-mask = u64/bitmask-low(type-width)
     let inv-mask = mask.bit-not() & size-mask
 
-    bit-index.* := bit-index.* + bits
+    bit-index.* = bit-index.* + bits
 
     .{ mask, type-width, inv-mask, raw-value, offset }
   })

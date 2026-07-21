@@ -4,12 +4,12 @@ let GLOB: int = 50
 
 fn test() {
   let x: int = uninit
-  x := 42
+  x = 42
   assert-equals(x, 42)
 
   // pointer itself is uninitialized
   let p: *int = uninit
-  p := &GLOB
+  p = &GLOB
   assert-equals(p.as[ptr], (&GLOB).as[ptr])
   assert-equals(p.*, 50)
 

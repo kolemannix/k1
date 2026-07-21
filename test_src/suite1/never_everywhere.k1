@@ -5,7 +5,7 @@ fn call-arguments(): never {
   // We're going to do stuff in call arguments that ultimately crash, and ensure that
   // they do run in order up to the 'never' typed one
   let counter = { let tmp = 0; &tmp }
-  let incr = fn() { counter.* := counter.* + 1 }
+  let incr = fn() { counter.* = counter.* + 1 }
   // This should get compiled to:
   // { incr(); incr(), incr(), { if i.* == 3 core/sys/exit(0) else crash("i wasnt incremented") } }
   // no 'call' is even emitted
@@ -17,7 +17,7 @@ fn call-arguments(): never {
   )
 }
 fn let-rhs(): empty { let _x = crash("let-rhs") }
-fn assgn-rhs(): never { let _x = 123; _x := crash("assgn rhs") }
+fn assgn-rhs(): never { let _x = 123; _x = crash("assgn rhs") }
 // should fail to compile anyway
 // fn binopLhs(): never { crash("") + 4 }
 fn binop-rhs(): int { 4 + crash("") }

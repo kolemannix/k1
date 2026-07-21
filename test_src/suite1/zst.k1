@@ -16,7 +16,7 @@ fn test-local(_a: empty, _b: empty, _c: empty, _d: empty): empty {
 
 fn test() {
   global-zst // empty
-  &global-zst
+  let _ = &global-zst
   (&global-zst).* // no-op yielding Value::Empty
 
   test-local(.{}, .{}, .{}, .{})

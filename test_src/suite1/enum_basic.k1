@@ -3,7 +3,7 @@ ns enum_basic
 fn enum-no-payload() {
   let v: either { yes, no } = :no
   if v is :no .{} else crash("")
-  v := :yes
+  v = :yes
   if v is :yes .{} else crash("")
 }
 

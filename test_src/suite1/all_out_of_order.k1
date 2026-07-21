@@ -19,7 +19,7 @@ ability say-hello {
 
 fn test() {
   let foo: foo = .{ name = "Joe" }
-  foo.hello()
+  let _ = foo.hello()
   assert(takes-helloer(foo).s == "Joe")
 }
 

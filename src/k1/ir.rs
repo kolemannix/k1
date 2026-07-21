@@ -2740,6 +2740,8 @@ fn compile_arith_binop(
 /// A Dereference would the closest thing. But we take some liberties here;
 /// such as treating this as a no-op for values that are already represented
 /// by their location, aka IndirectValues
+///
+/// INVARIANT: we should never emits a load, store, or copy of Empty
 fn load_value(
     b: &mut Builder,
     pt: PhysicalType,

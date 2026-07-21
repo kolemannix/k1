@@ -539,8 +539,8 @@ impl TypedProgram {
             TypedStmt::Assignment(assignment) => {
                 self.display_expr_id(assignment.destination, w, indentation)?;
                 match assignment.kind {
-                    AssignmentKind::Store => w.write_str(" <store>:= ")?,
-                    AssignmentKind::Set => w.write_str(" := ")?,
+                    AssignmentKind::Store => w.write_str(" <store>= ")?,
+                    AssignmentKind::Set => w.write_str(" = ")?,
                 }
                 self.display_expr_id(assignment.value, w, indentation)
             }

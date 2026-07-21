@@ -8,8 +8,8 @@ fn part1(input: string) {
   let lo: char = '0'
   let sum: int = 0
   for bank in input.split-by-char('\n') {
-    hi := bank.get(0)
-    lo := bank.get(1)
+    hi = bank.get(0)
+    lo = bank.get(1)
     let rest = bank.drop(1)
     let n = rest.len()
     for i in 0.until(n) {
@@ -18,19 +18,19 @@ fn part1(input: string) {
       if not last {
         // Consider new hi
         if c > hi {
-          hi := c
-          lo := rest.get(i + 1)
+          hi = c
+          lo = rest.get(i + 1)
         } else {
           // Consider new lo
-          if c > lo { lo := c }
+          if c > lo { lo = c }
         }
       } else {
         // Consider new lo only
-        if c > lo { lo := c }
+        if c > lo { lo = c }
       }
     }
     let joltage = (hi.to-ascii-digit().!.as[int] * 10 + lo.to-ascii-digit().!.as[int])
-    sum := sum + joltage
+    sum = sum + joltage
     println("Result {it-index} for bank `{bank}`: {joltage} {sum}")
   }
   println("Sum: {sum}")
@@ -49,15 +49,15 @@ fn part2(input: string) {
       println("picking ({start},{end}) {range-size} from {candidate-range}")
       let best = .{ index = start, value = bank.get(start) }
       for cand in candidate-range {
-        if cand > best.value { best := .{ index = it-index + start, value = cand } }
+        if cand > best.value { best = .{ index = it-index + start, value = cand } }
       }
       sels.push(best.value)
-      start := best.index + 1
-      range-size := range-size - 1
+      start = best.index + 1
+      range-size = range-size - 1
     }
 
     let joltage = string/wrap-span(sels.as-span()).parse-base10()
-    sum := sum + joltage.!
+    sum = sum + joltage.!
     println("Result {it-index} for bank `{bank}`: {string/wrap-span(sels.as-span())} {sum}")
   }
   println("Sum: {sum}")

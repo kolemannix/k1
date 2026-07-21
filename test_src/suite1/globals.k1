@@ -20,11 +20,11 @@ fn test() {
    assert-equals(static-int, 2)
 
    while global-int-mut > static-int {
-     global-int-mut := global-int-mut - 1
+     global-int-mut = global-int-mut - 1
    }
    assert(global-int-mut == 2)
 
-   global-mut-ptr := (&global-int-mut).as[ptr]
+   global-mut-ptr = (&global-int-mut).as[ptr]
    assert-equals(global-mut-ptr.as[*int].*, 2)
    assert((&global-int-mut).as[ptr] == global-mut-ptr)
 

@@ -122,23 +122,23 @@ fn print-result-table(result: query-result) {
   while col < cols {
     if col > 0 { print("\t") }
     print(result.column-name(col))
-    col := col + 1
+    col = col + 1
   }
   print("\n")
 
   let row = 0
   while row < rows {
-    col := 0
+    col = 0
     while col < cols {
       if col > 0 { print("\t") }
       result.value(row, col) is {
         :none -> print("NULL"),
         :some value -> print(value)
       }
-      col := col + 1
+      col = col + 1
     }
     print("\n")
-    row := row + 1
+    row = row + 1
   }
 
   .{}

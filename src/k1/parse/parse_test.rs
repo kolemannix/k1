@@ -55,8 +55,8 @@ fn basic_fn() -> Result<(), ParseError> {
       println(42, 42, 42);
       let x = 0;
       let y = 2;
-      y := { 1; 2; 3 };
-      y := add(42, 42);
+      y = { 1; 2; 3 };
+      y = add(42, 42);
       add(x, y)
     }"#;
     let mut module = test_parse_input("basic_fn".to_string(), src.to_string())?;

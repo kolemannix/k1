@@ -219,7 +219,7 @@ ability writer {
     let i = 0
     while i < n {
       self.string(value)
-      i := i + 1
+      i = i + 1
     }
   }
 
@@ -400,7 +400,7 @@ ability iterator[impl item] {
     let i: size = 0
     while i < n {
       if self.next() is :none { break }
-      i := i + 1
+      i = i + 1
     }
   }
   fn nth(self: *mut self, n: size): ?item {
@@ -714,15 +714,15 @@ ns array {
   }
 
   fn set[t, n](array: *mut array[t, n], index: int, value: t) where n: static size {
-    array.get(index) := value
+    array.get(index) = value
   }
 
   fn filled-in[t, n: static size](context alloc: mem/alloc-mode)(t: t, n: n): *mut array[t, n] {
     let array-uninit = allocate[t, n]()
     let i = 0
     while i < n.from-static() {
-      array-uninit.get(i) := t
-      i := i + 1
+      array-uninit.get(i) = t
+      i = i + 1
     }
     array-uninit
   }
@@ -834,7 +834,7 @@ fn assert(context locn: k1/source-location)(value: bool) {
 
 fn assertdbg(context locn: k1/source-location)(value: bool) {
   #if k1/debug { if not value crash("ASSERT FAILED") }
-  else         { locn; value; .{} }
+  else         { let _ = locn; let _ = value; .{} }
 }
 
 fn print-backtrace() {
@@ -848,7 +848,7 @@ fn print-backtrace() {
 fn crash(context locn: k1/source-location)(msg: string): never {
   if k1/no-std {
     let s = "exiting (nostd)\n\0"
-    posix/write(
+    let _ = posix/write(
       file-no = 1,
       data = s.data-ptr(),
       count = (s.len() - 1).as[c-sizet],

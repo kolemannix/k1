@@ -45,7 +45,7 @@ fn test() {
   // Else works
   let else_ran = false
   if foo is .{ x = 200 } .{} else {
-    else_ran := true
+    else_ran = true
   }
   assert(else_ran)
 

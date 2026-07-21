@@ -15,6 +15,6 @@ fn test() {
   let result = test-compile(add("asdf": string, "asdf": string))
   assert-equals(
     result,
-    :some("Invalid call to add\n    Could not satisfy ability constraint num for given type 't := string due to: No matching implementations found")
+    :some("Invalid call to add\n    Could not satisfy ability constraint num for given type 't = string due to: No matching implementations found")
   )
 }

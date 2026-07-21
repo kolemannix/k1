@@ -104,9 +104,9 @@ ns for string {
     for c in self {
       if c == delim {
         ranges.push(r)
-        r := .{ start = it-index + 1, len = 0 }
+        r = .{ start = it-index + 1, len = 0 }
       } else {
-        r.len := r.len + 1
+        r.len = r.len + 1
       }
     }
 
@@ -189,11 +189,11 @@ ns for string {
     let total = 0
     while i < self.len() {
       if self.get(i).to-ascii-digit() is :some digit {
-        total := (total * 10) + digit.as[int]
+        total = (total * 10) + digit.as[int]
       } else {
         return :none
       }
-      i := i + 1
+      i = i + 1
     }
 
     some(
@@ -215,8 +215,8 @@ ns for string {
       require c.to-ascii-digit() is :some digit-value else { return :none }
       // FIXME char to digit LUT
       let digit-value: uint = (c.as[u8] - 48).as[uint]
-      o := o * 10
-      o := o + digit-value
+      o = o * 10
+      o = o + digit-value
     }
     :some o
   }

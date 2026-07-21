@@ -16,7 +16,7 @@ ns scopes {
   
   let x: int = 3
   fn scope-collision(x: int): int {
-    x
+    let _ = x
     let x: int = 42
     assert(x == 42)
     0
@@ -29,7 +29,7 @@ ns scopes {
   }
 
   fn test() {
-    scopes/scope-collision(12)
+    let _ = scopes/scope-collision(12)
     scopes/namespace-alias()
   }
 

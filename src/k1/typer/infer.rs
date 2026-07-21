@@ -464,7 +464,7 @@ impl TypedProgram {
                     let signature = self.ability_impls.get(constraint.full_impl_id).signature();
                     return failf!(
                         span,
-                        "Could not satisfy ability constraint {} for given type {} := {} due to: {msg}",
+                        "Could not satisfy ability constraint {} for given type {} = {} due to: {msg}",
                         self.ability_signature_to_string(signature),
                         self.type_id_to_string(type_param_id),
                         self.type_id_to_string(solution_type_id)

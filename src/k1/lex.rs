@@ -230,7 +230,6 @@ pub enum TokenKind {
     RAngle,
     RAngleRAngle,
     Colon,
-    ColonEquals,
     Semicolon,
     Equals,
     EqualsEquals,
@@ -372,7 +371,6 @@ impl TokenKind {
             K::RAngle => ">",
             K::RAngleRAngle => ">>",
             K::Colon => ":",
-            K::ColonEquals => ":=",
             K::Semicolon => ";",
             K::Equals => "=",
             K::EqualsEquals => "==",
@@ -449,7 +447,6 @@ impl TokenKind {
             b"!=" => Some(K::BangEquals),
             b"<=" => Some(K::LessEqual),
             b">=" => Some(K::GreaterEqual),
-            b":=" => Some(K::ColonEquals),
             _ => None,
         }
     }
@@ -985,13 +982,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                     return_single!(K::RAngle)
                                 }
                             }
-                            ':' => {
-                                if next == '=' {
-                                    return_double!(K::ColonEquals)
-                                } else {
-                                    return_single!(K::Colon)
-                                }
-                            }
+                            ':' => return_single!(K::Colon),
                             ';' => return_single!(K::Semicolon),
                             '=' => {
                                 if next == '=' {

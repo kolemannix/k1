@@ -17,7 +17,7 @@ ns point-alias {
 fn test() {
   // Should work because point-named is a proper type
   let p: point-named = .{ x = 0, y = 0 }
-  p.sum()
+  let _ = p.sum()
 
   // Should not work because point-alias is a type alias
   let p2: point-alias = .{ x = 0, y = 0 }

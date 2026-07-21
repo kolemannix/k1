@@ -11,7 +11,7 @@ fn if-no-else(): int {
   // Gets empty type
   let x = 0
   let expr: {} = if true {
-    x := 42
+    x = 42
   }
   assert(x == 42)
   assert(expr == .{})
@@ -73,8 +73,8 @@ fn do-crash(): bool {
 
 fn test() {
 
-  if-basic()
-  if-no-else()
+  let _ = if-basic()
+  let _ = if-no-else()
   assert(return-simple())
   assert(return-from-if() == 1)
 

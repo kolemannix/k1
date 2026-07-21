@@ -4,8 +4,8 @@ fn while-simple() {
   let i: int = 10
   let iters = 0
   while i > -10 {
-    i := i - 1
-    iters := iters + 1
+    i = i - 1
+    iters = iters + 1
   }
   assert-equals(iters, 20)
 }

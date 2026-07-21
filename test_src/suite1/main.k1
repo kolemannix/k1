@@ -49,7 +49,7 @@ fn moderate() {
   type_info/test()
   all_out_of_order/test()
   try_test/test()
-  match_exhaust/main()
+  let _ = match_exhaust/main()
   match_references/test()
   place_test/test()
   meta_defns/test()

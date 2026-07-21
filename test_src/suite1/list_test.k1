@@ -9,7 +9,7 @@ fn list-fill(): int {
   while i < 5 {
     assert(xs.len == i)
     xs.push(i)
-    i := i + 1
+    i = i + 1
   }
   assert(xs.len == 5)
   assert(xs.get(0) == 0)
@@ -67,7 +67,7 @@ fn list-of-structs(): int {
   let i = 0
   while i < 100 {
     xs.push(.{ x = 1, y = 2, z = 3})
-    i := i + 1
+    i = i + 1
   }
 
   assert(xs.len == 101)
@@ -159,12 +159,12 @@ fn iterator(): int {
 }
 
 fn test() {
-  list_test/list-of-structs()
+  let _ = list_test/list-of-structs()
   list_test/list-slice()
-  list_test/list-fill()
-  list_test/list-equality()
+  let _ = list_test/list-fill()
+  let _ = list_test/list-equality()
   list_test/test-sort()
   list_test/test-swap()
-  list_test/iterator()
+  let _ = list_test/iterator()
   assert([1,2,3].show() == "[1,2,3]")
 }

@@ -34,13 +34,13 @@ fn test-negative-range() {
 fn test-for-loop() {
   let sum = 0
   for i in 0.until(5) {
-    sum := sum + i
+    sum = sum + i
   }
   assert(sum == 10)
 
   let count = 0
   for 3.until(6) {
-    count := count + it
+    count = count + it
   }
   assert(count == 12)
 }
@@ -48,13 +48,13 @@ fn test-for-loop() {
 fn test-typed-ranges() {
   let byte-count = 0
   for b in (250: u8).until(255) {
-    byte-count := byte-count + 1
+    byte-count = byte-count + 1
   }
   assert(byte-count == 5)
 
   let float-sum: f64 = 0.0
   for f in 0.5.until(3.0) {
-    float-sum := float-sum + f
+    float-sum = float-sum + f
   }
   // 0.5 + 1.5 + 2.5
   assert(float-sum == 4.5)

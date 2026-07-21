@@ -44,7 +44,7 @@ fn part-one(input: string) {
   let ranges = list/empty[range]()
   let ing = list/empty[uint]()
   for lines {
-    if it.is-empty() { parse-mode := :ingredients; } else {
+    if it.is-empty() { parse-mode = :ingredients; } else {
       parse-mode is {
         :ranges -> { ranges.push(range/parse(it).!) },
         :ingredients -> { ing.push(it.parse-base10().!) }

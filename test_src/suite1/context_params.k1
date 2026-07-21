@@ -18,7 +18,7 @@ fn test() {
 
   let context u: u8 = 1
   let context v: u16 = 1
-  add-all(4, 5)
+  let _ = add-all(4, 5)
 
   assert(history.* == ["1 + 2","3 + 4"])
 }
