@@ -15,7 +15,7 @@ fn basic-struct(): int {
 type foo = { x: int, y: bool }
 ns for foo {
   fn get-value(self: foo): int { self.x }
-  fn set-value(self: *mut foo, x: int) { self.x <- x; }
+  fn set-value(self: *mut foo, x: int) { self.x := x; }
   fn new(x: int): foo { .{ x = x, y = false } }
 }
 
@@ -64,7 +64,7 @@ fn struct-nested() {
 fn with-fields() {
   let breaker = false; let breaker = &breaker
 
-  let make-struct = fn. { if breaker.* crash(""); breaker <- true; .{ a = 1, b = true, c = "hello", d = .{ inside = 0 } } }
+  let make-struct = fn. { if breaker.* crash(""); breaker.* := true; .{ a = 1, b = true, c = "hello", d = .{ inside = 0 } } }
   let s: { a: int, b: bool, c: string, d: { inside: int } } = make-struct().with(.{ a = 4, b = false, d = .{ inside = 1 }})
 
   assert-equals(s.a, 4)

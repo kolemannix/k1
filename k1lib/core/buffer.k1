@@ -71,7 +71,7 @@ ns for buffer {
       _ -> {
         let i = 0
         while i < size {
-          buf.get-ref-unchecked(i) <- value
+          buf.get-ref-unchecked(i).* := value
           i := i + 1
         }
       }
@@ -111,7 +111,7 @@ ns for buffer {
       align = core/types/align[t](),
       new-size = new-size,
     )
-    self <- .{ len = new-count, data = new-ptr.rw[t] }
+    self.* := .{ len = new-count, data = new-ptr.rw[t] }
   }
 
   fn _enlarged-clone-in[t](context alloc: mem/alloc-mode)(self: buffer[t], new-count: size): buffer[t] {
@@ -184,7 +184,7 @@ ns for buffer {
 
   fn set[t](self: buffer[t], index: size, elem: t): empty {
     let t-ref = self.get-ref(index)
-    t-ref <- elem
+    t-ref.* := elem
   }
 
   fn memset[t](self: buffer[t], value: u8): empty {
@@ -304,8 +304,8 @@ ns for buffer {
     let a-ref = self.get-ref(index-a)
     let b-ref = self.get-ref(index-b)
     let b-value = b-ref.*
-    b-ref <- a-ref.*
-    a-ref <- b-value
+    b-ref.* := a-ref.*
+    a-ref.* := b-value
   }
 
   fn sort[t](self: buffer[t]) where t: comparable {
@@ -353,22 +353,19 @@ ns for buffer-iterator {
 }
 
 impl[t] iterator[item = t] for buffer-iterator[t] {
-  fn peek(self: *buffer-iterator[t]): ?item {
+  fn next(self: *mut self): ?item {
     if self.pos < self.buf.len {
       let item = self.buf.get(self.pos)
+      self.pos := self.pos + 1
       :some item
     } else :none
   }
-  fn size-hint(self: *self): { at-least: size, at-most: ?size } { 
-    let rem = self.buf.len - self.pos
+  fn size-hint(self: *self): { at-least: size, at-most: ?size } {
+    let rem = if self.pos < self.buf.len self.buf.len - self.pos else 0
     .{ at-least = rem, at-most = :some rem }
   }
   fn advance-by(self: *mut self, n: size): empty {
-    self.pos <- self.pos + n
-  }
-  fn nth(self: *mut self, n: size): ?item {
-    self.advance-by(n)
-    self.next()
+    self.pos := self.pos + n
   }
 }
 
@@ -403,22 +400,19 @@ ns for buffer-ref-iterator {
 }
 
 impl[t] iterator[item = *mut t] for buffer-ref-iterator[t] {
-  fn peek(self: *buffer-ref-iterator[t]): ?item {
+  fn next(self: *mut self): ?item {
     if self.pos < self.buf.len {
       let item = self.buf.get-ref(self.pos)
+      self.pos := self.pos + 1
       :some item
     } else :none
   }
-  fn size-hint(self: *self): { at-least: size, at-most: ?size } { 
-    let rem = self.buf.len - self.pos
+  fn size-hint(self: *self): { at-least: size, at-most: ?size } {
+    let rem = if self.pos < self.buf.len self.buf.len - self.pos else 0
     .{ at-least = rem, at-most = some(rem) }
   }
   fn advance-by(self: *mut self, n: size): empty {
-    self.pos <- self.pos + n
-  }
-  fn nth(self: *mut self, n: size): ?item {
-    self.advance-by(n)
-    self.next()
+    self.pos := self.pos + n
   }
 }
 

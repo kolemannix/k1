@@ -93,13 +93,13 @@ fn do-work(req: *mut uv/work) {
     mem/pop-mode()
 
     tprintln("made deps: {deps-baton}")
-    worker-user-data <- deps-baton
+    worker-user-data := deps-baton
   }
   let user-deps-baton: ptr = worker-user-data
 
   mem/push-mode(:custom-arena work.connection.request-arena)
   let response = (work.handler.logic-fn)(work.request, user-deps-baton)
-  work.http-response <- :some response
+  work.http-response := :some response
   mem/pop-mode()
 
   .{}
@@ -113,7 +113,7 @@ fn after-do-work(req: *mut uv/work, status: i32) {
   let work: *mut http-handler-work = req.get-data()
   tprintln("after-do-work")
   tprintln("clearing current-work")
-  work.connection.current-work <- :none
+  work.connection.current-work := :none
   defer {
     tprintln("freeing work")
     system-heap.free-t(req)
@@ -275,7 +275,7 @@ fn close-connection(conn: *mut connection) {
     let connection = h.get-data[connection]()
     tprintln("closed connection{connection.serial-no}; releasing")
     connection.release()
-    conn-count <- conn-count - 1
+    conn-count := conn-count - 1
     tprintln("active connections: {conn-count}")
   })
 }
@@ -284,7 +284,7 @@ fn alloc-read-buffer(handle: *mut uv/handle, suggested-size: usize, buf: *mut uv
   let connection = handle.get-data[connection]()
   tprintln("[c{connection.serial-no}] alloc-read-buffer, size {suggested-size}")
   let byte-buffer = connection.request-arena.alloc-buffer[u8](suggested-size.as[size])
-  buf <- uv/buf/wrap-buffer(byte-buffer)
+  buf.* := uv/buf/wrap-buffer(byte-buffer)
 }
 
 fn queue-http-handler(connection: *mut connection, request: http/request, handler: route-handler) {
@@ -310,7 +310,7 @@ fn queue-http-handler(connection: *mut connection, request: http/request, handle
     close-connection(connection)
   } else {
     core/assert(connection.current-work is :none)
-    connection.current-work <- :some work-req
+    connection.current-work := :some work-req
   }
 }
 
@@ -389,10 +389,10 @@ ns for connection {
       request-arena.set-name("request")
       let conn: *mut connection = system-heap.alloc-t()
 
-      conn <- .{
+      conn.* := .{
         connection-arena,
         client = uninit,
-        serial-no = { conn-serial <- conn-serial + 1; conn-serial },
+        serial-no = { conn-serial := conn-serial + 1; conn-serial },
         close-state = .{
           lock = uninit,
           is-closing = false,
@@ -445,7 +445,7 @@ ns for connection {
       close-connection(self)
     } else {
       tprintln("keepalive! conn{self.serial-no} request arena reset used-bytes: {self.request-arena.used-bytes()}")
-      self.current-work <- :none
+      self.current-work := :none
       self.request-arena.reset(true)
       self.request-parser.reset()
     }
@@ -458,10 +458,10 @@ ns for connection {
     state
   }
   fn set-is-closing-sync(self: *connection, is-closing: bool) {
-    self.close-state.is-closing <- is-closing
+    self.close-state.is-closing := is-closing
   }
   fn set-should-close-sync(self: *connection, should-close: bool) {
-    self.close-state.should-close <- should-close
+    self.close-state.should-close := should-close
   }
 
   fn client-handle(self: *connection): *uv/handle { self.client.as-handle() }
@@ -472,7 +472,7 @@ let mutable conn-count: u64 = 0
 
 fn on-complete-http-header(connection: *mut connection, header: http/header): http/body-mode {
   // eprintln("matching handler");
-  connection.parsed-header <- :some header
+  connection.parsed-header := :some header
   match-route(header, connection.route-handlers) is {
     :none -> { 
       // Respond with 404
@@ -482,7 +482,7 @@ fn on-complete-http-header(connection: *mut connection, header: http/header): ht
       :strict
     },
     :some handler -> {
-      connection.matched-handler <- :some handler
+      connection.matched-handler := :some handler
       handler.body-mode is {
           :strict -> {
             // continue reading; do not enqueue handler yet
@@ -521,7 +521,7 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
   let connection: *connection = connection/make(l, server-data.make-deps, server-data.route-handlers)
   let client: *uv/tcp = connection.client.&
 
-  conn-count <- conn-count + 1
+  conn-count := conn-count + 1
   let accept-rc = uv/accept(server, client.as-stream())
   tprintln("connection arena new used-bytes: {connection.connection-arena.used-bytes()}")
   if accept-rc == 0 {

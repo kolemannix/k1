@@ -1,22 +1,33 @@
-fn print-if-10(x: int) {
-  if x == 10 println("work")
-}
+let mutable g: int = 5
 
-let global-x: int = 5
- 
-#debug fn main(): i32 {
+fn main(): i32 {
+  let x = 1
+  x := 2
+  assert(x == 2)
 
-  print-if-10(global-x)
-  print-if-10(12)
+  let p = .{ x = 1, y = 2 }
+  p.x := 10
+  assert(p.x == 10)
 
+  let n = .{ a = .{ b = 3 } }
+  n.a.b := 4
+  assert(n.a.b == 4)
+
+  let r = p.x.&
+  r.* := 20
+  assert(p.x == 20)
+
+  let pr = p.&
+  pr.y := 30
+  assert(p.y == 30)
+
+  let arr: array[int, 3] = [1, 2, 3]
+  arr.get(1) := 9
+  assert(arr.get(1) == 9)
+
+  g := g + 1
+  assert(g == 6)
+
+  println("unified := works")
   0
 }
-
-// main fn(): i32 (inst count=4, cfg_valid=true)
-// b260352 entry  preds: [], succs: []
-//  i5622 = load i64 from g54                                           ; fulfill variable usage| global-x                      |  9:15|
-//  i5623 = call {} print-if-10(i5622)                                  | print-if-10(global-x)         |  9:3|
-//  i5624 = call {} print-if-10(data32(i64, 12))                        | print-if-10(12)               | 10:3|
-//  i5625 = ret i32 data32(i32, 0)                                      | 0                             | 12:3|
-// END
-

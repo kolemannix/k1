@@ -118,7 +118,7 @@ fn mock-publisher-main(arg: ptr) {
     uv/sleep(1000)
     // this thread's tmp arena holds the interpolated event data
     mem/tmp().reset(clear = false)
-    game-tick <- game-tick + 1
+    game-tick := game-tick + 1
     publisher.publish("game.42", `\{"tick": {game-tick}}`)
     if game-tick % 5 == 0 {
       publisher.publish("global", `\{"uptime-seconds": {game-tick}}`)
@@ -180,8 +180,7 @@ fn update(pixels: *array[u8, 65536]): { x: u32, y: u32 } {
   let x = sys/random(gridsize)
   let y = sys/random(gridsize)
   let pix = pixels.get(y*gridsize + x).&
-  // pix <- pix ^ 1;
-  pix <- 1
+  pix.* := 1
   .{ x, y }
 }
 }

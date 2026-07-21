@@ -136,7 +136,7 @@ ns for list {
     if start-length == self.*.cap() {
       self._grow()
     }
-    self.len <- start-length + 1
+    self.len := start-length + 1
     self.set(start-length, elem)
   }
 
@@ -186,7 +186,7 @@ ns for list {
   }
 
   fn clear[t](self: *mut list[t]) {
-    self.len <- 0
+    self.len := 0
   }
 
   fn reverse[t](self: *mut list[t]) {
@@ -222,7 +222,7 @@ ns for list {
     self.reserve-in(self.len + other.len)
     let dst = self.inner-buffer().slice(start = self.len, end = self.len + other.len)
     buffer/copy(src = other, dst = dst)
-    self.len <- self.len + other.len
+    self.len := self.len + other.len
   }
 
   fn append-span[t](self: *mut list[t], other: span[t]) {
@@ -333,7 +333,7 @@ ns for list {
       crash("list index out of bounds. index {index}, len {self.len}")
     }
     self.buffer.remove(index)
-    self.len <- self.len - 1
+    self.len := self.len - 1
   }
 
   fn filter-in-place[t](self: *mut list[t], f: some fn t -> bool) {

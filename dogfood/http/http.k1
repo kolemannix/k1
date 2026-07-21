@@ -6,7 +6,7 @@ ns for stream {
   fn empty(): stream { .{ source = list/empty(), read-cursor = 0 } }
   fn clear(self: *mut stream) { 
     self.source.clear()
-    self.read-cursor <- 0
+    self.read-cursor := 0
   }
 }
 
@@ -52,7 +52,7 @@ ns for parse-state {
     let arena = self.arena
     let on-header-complete = self.on-header-complete
     let on-body-complete = self.on-body-complete
-    self <- empty[empty](arena, user-data.rw[empty], on-header-complete, on-body-complete)
+    self.* := empty[empty](arena, user-data.rw[empty], on-header-complete, on-body-complete)
   }
 
   fn alloc-mode(self: *mut parse-state): alloc-mode {
@@ -67,7 +67,7 @@ type parser = { parser: llhttp/t, phantom: array[parse-state, 0] }
 
 ns for parser {
   fn data(self: *mut parser): *mut parse-state { self.parser.data.rw[parse-state] }
-  fn set-data(self: *mut parser, data: *mut parse-state) { self.parser.data <- data.as[ptr] }
+  fn set-data(self: *mut parser, data: *mut parse-state) { self.parser.data := data.as[ptr] }
 
   fn flags(self: *mut parser): u16 { self.parser.flags }
 
@@ -155,7 +155,7 @@ fn on-headers-complete(parser: *mut parser): i32 {
     content-length = state.content-length,
   }
 
-  state.body-mode <- (state.on-header-complete)(state.user-data, header)
+  state.body-mode := (state.on-header-complete)(state.user-data, header)
   0
 }
 

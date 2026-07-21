@@ -11,14 +11,15 @@ fn part1(input: string) {
     hi := bank.get(0)
     lo := bank.get(1)
     let rest = bank.drop(1)
-    let iter = rest.iterator()
-    while iter.next() is :some c {
-      let last = iter.is-done()
+    let n = rest.len()
+    for i in 0.until(n) {
+      let c = rest.get(i)
+      let last = i == n - 1
       if not last {
         // Consider new hi
         if c > hi {
           hi := c
-          lo := iter.peek().!
+          lo := rest.get(i + 1)
         } else {
           // Consider new lo
           if c > lo { lo := c }

@@ -18,9 +18,9 @@ fn big-struct(): { x: i64, y: i64, z: i64, foo: array[u64, 1024] } {
 
 fn big-struct-rvo(): { x: i64, y: i64, z: i64, foo: array[u64, 1024] } {
   let returned v = zeroed()
-  v.x <- 10
-  v.y <- 20
-  v.z <- 30
+  v.x := 10
+  v.y := 20
+  v.z := 30
   v
 }
 

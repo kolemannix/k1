@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Koleman Nix 
 // The efficient representation, a bitboard encoding
 
-use core/int-range
 use core/eprintln
 use core/sys
 
@@ -79,7 +78,7 @@ fn write-bitboard[w: writer](writer: w, b: bitboard) {
     // TODO(dogfood): format-uint(base = 2) (also need padding specifier)
     //format-uint(context writer)(value-at-rank(b, rank.as[u64]), base = 2);
 
-    for square in int-range/make(rank-start, rank-start + 8) {
+    for square in rank-start.until(rank-start + 8) {
       let bit = value-at-square(b, square.as[u64])
       writer.write-char(u8/to-ascii-digit(bit.as[u8]))
     }
@@ -112,7 +111,7 @@ ns for game-state {
     let rank = 7
     while rank >= 0 {
       let rank-start = rank * 8
-      for i in int-range/make(rank-start, rank-start + 8) {
+      for i in rank-start.until(rank-start + 8) {
         let i = i.as[u64]
         if is-set(self.w-pawns, i) { writer.write-char('P') }
         else if is-set(self.w-knights, i) { writer.write-char('N') }

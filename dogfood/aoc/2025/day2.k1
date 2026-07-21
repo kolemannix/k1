@@ -60,7 +60,7 @@ fn check-invalid-part2(value: i64): bool {
   value.print-to(&buffer)
   let value-str = string/wrap-span(buffer.peek())
   //println("check-invalid-part2 {value-str}");
-  for int-range/make(1, (value-str.len() / 2) + 1) {
+  for 1.until((value-str.len() / 2) + 1) {
     //println("Testing {value} for {it}");
     let groups = value-str.chunks(it)
     if groups.len() > 1 {

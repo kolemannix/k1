@@ -138,7 +138,7 @@ ns mem {
 
     fn new[t](self: alloc-mode, t: t): *mut t {
       let ref = self.alloc-t[t]
-      ref <- t
+      ref.* := t
       ref
     }
 
@@ -173,7 +173,7 @@ ns mem {
 
   fn init-tmp-arena() {
     if not arena-tmp.as[ptr].is-null() crash("arena-tmp already initialized")
-    &arena-tmp <- arena/init-default()
+    arena-tmp := arena/init-default()
   }
 
   fn tmp(): *arena {

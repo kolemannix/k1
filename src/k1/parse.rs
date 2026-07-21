@@ -883,13 +883,6 @@ pub struct AssignStmt {
 }
 
 #[derive(Debug, Clone)]
-pub struct StoreStmt {
-    pub lhs: ParsedExprId,
-    pub rhs: ParsedExprId,
-    pub span: SpanId,
-}
-
-#[derive(Debug, Clone)]
 pub struct ParsedIfExpr {
     pub cond: ParsedExprId,
     pub cons: ParsedExprId,
@@ -939,8 +932,7 @@ pub enum ParsedStmt {
     Use(UseStmt),                 // use core/list/new as foo
     Let(ParsedLet),               // let x = 42
     Require(ParsedRequire),       // require x is .Some(foo) else crash()
-    Assign(AssignStmt),           // x := 42
-    Store(StoreStmt),             // x <- 42
+    Assign(AssignStmt),           // x := 42, a.b.c := 42
     Defer(ParsedDefer),           // defer arena.reset()
     LoneExpression(ParsedExprId), // println("asdfasdf")
 }
@@ -1683,7 +1675,6 @@ impl ParsedProgram {
             ParsedStmt::Let(v) => v.span,
             ParsedStmt::Require(g) => g.span,
             ParsedStmt::Assign(a) => a.span,
-            ParsedStmt::Store(s) => s.span,
             ParsedStmt::Defer(d) => d.span,
             ParsedStmt::LoneExpression(expr_id) => self.exprs.get_span(*expr_id),
         }
@@ -4122,13 +4113,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(AssignStmt { lhs, rhs, span })
     }
 
-    fn expect_set_stmt(&mut self, lhs: ParsedExprId) -> ParseResult<StoreStmt> {
-        self.expect_kind(K::LThinArrow)?;
-        let rhs = self.expect_expression()?;
-        let span = self.extend_expr_span(lhs, rhs);
-        Ok(StoreStmt { lhs, rhs, span })
-    }
-
     fn expect_fn_param(&mut self, is_context: bool) -> ParseResult<ParsedFnParam> {
         let (name_token, name) = self.expect_ident()?;
         let type_expr = if self.maybe_consume(K::Colon).is_some() {
@@ -4397,9 +4381,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if peeked.kind == K::ColonEquals {
                 let assgn = self.expect_assignment(expr)?;
                 Ok(Some(self.ast.stmts.add(ParsedStmt::Assign(assgn))))
-            } else if peeked.kind == K::LThinArrow {
-                let set = self.expect_set_stmt(expr)?;
-                Ok(Some(self.ast.stmts.add(ParsedStmt::Store(set))))
             } else {
                 Ok(Some(self.ast.stmts.add(ParsedStmt::LoneExpression(expr))))
             }
@@ -5421,13 +5402,6 @@ impl ParsedProgram {
                 self.display_expr_id(w, assgn.lhs)?;
                 write!(w, " := ")?;
                 self.display_expr_id(w, assgn.rhs)?;
-                Ok(())
-            }
-            ParsedStmt::Store(store) => {
-                // <a> <- <b>
-                self.display_expr_id(w, store.lhs)?;
-                write!(w, " <- ")?;
-                self.display_expr_id(w, store.rhs)?;
                 Ok(())
             }
             ParsedStmt::Defer(defer) => {

@@ -47,7 +47,7 @@ fn test-get-ref() {
   let m = map/new[string, int]()
   m.insert("a", 1)
   let vref = m.get-ref("a").!
-  vref <- 100
+  vref.* := 100
   assert-equals(m.get("a"), :some 100)
   assert(m.get-ref("missing") is :none)
 }
@@ -111,7 +111,7 @@ fn test-get-or-insert() {
   let m = map/new[string, int]()
   let a = m.get-or-insert("a", fn. 10)
   assert-equals(a.*, 10)
-  a <- 11
+  a.* := 11
   let a2 = m.get-or-insert("a", fn. 99)
   assert-equals(a2.*, 11)
   assert-equals(m.len(), 1)
@@ -121,7 +121,7 @@ fn test-get-or-insert() {
   let counts = map/new[string, int]()
   for w in words {
     let c = counts.get-or-insert(w, fn. 0)
-    c <- c.* + 1
+    c.* := c.* + 1
   }
   assert-equals(counts.get("x"), :some 3)
   assert-equals(counts.get("y"), :some 1)

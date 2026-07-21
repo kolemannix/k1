@@ -37,7 +37,7 @@ fn test() {
   loop-test(&sensor)
   assert-equals(sensor, 10)
 
-  &sensor <- 0
+  sensor := 0
   return-test(&sensor)
   assert-equals(sensor, 3)
   

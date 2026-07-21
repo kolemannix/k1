@@ -32,7 +32,7 @@ fn begin_profile_block(label: string, anchor_index: u32): profile-block {
     
     // Initialize anchor on first use
     if anchor.label == "" {
-        anchor <- .{
+        anchor.* := .{
             tsc_elapsed_exclusive = 0,
             tsc_elapsed_inclusive = 0,
             hit_count = 0,
@@ -42,7 +42,7 @@ fn begin_profile_block(label: string, anchor_index: u32): profile-block {
     
     let old_tsc_elapsed_inclusive = anchor.tsc_elapsed_inclusive
     
-    global_profiler_parent <- anchor_index
+    global_profiler_parent := anchor_index
     let start_tsc = read-cpu-counter()
     
     .{
@@ -56,13 +56,13 @@ fn begin_profile_block(label: string, anchor_index: u32): profile-block {
 
 fn end_profile_block(block: profile-block) {
     let elapsed = read-cpu-counter() - block.start_tsc
-    global_profiler_parent <- block.parent_index
+    global_profiler_parent := block.parent_index
     
     let parent = global_profiler_anchors.get(block.parent_index.as[size]).&
     let anchor = global_profiler_anchors.get(block.anchor_index.as[size]).&
     
-    parent.tsc_elapsed_exclusive <- parent.tsc_elapsed_exclusive - elapsed
-    anchor <- .{
+    parent.tsc_elapsed_exclusive := parent.tsc_elapsed_exclusive - elapsed
+    anchor.* := .{
       tsc_elapsed_exclusive = anchor.tsc_elapsed_exclusive + elapsed,
       tsc_elapsed_inclusive = block.old_tsc_elapsed_inclusive + elapsed,
       hit_count = anchor.hit_count + 1,
@@ -93,12 +93,12 @@ fn print_anchor_data(total_cpu_elapsed: u64) {
 
 // Begin overall profiling session
 fn begin_profile() {
-    global_profile_start_tsc <- read-cpu-counter()
+    global_profile_start_tsc := read-cpu-counter()
 }
 
 // End profiling session and print results
 fn end_and_print_profile() {
-    global_profile_end_tsc <- read-cpu-counter()
+    global_profile_end_tsc := read-cpu-counter()
     let total_tsc_elapsed = global_profile_end_tsc - global_profile_start_tsc
     
     let nanos_elapsed = std/time/counter-to-nanos(total_tsc_elapsed)
@@ -118,7 +118,7 @@ fn cheap_computation(n: int): int {
   defer end_profile_block(block)
     
   let result = 0
-  for int-range/up-to(n) {
+  for 0.until(n) {
     if it-index % 2 == 0 { result := result + 3 }
     else { result := result - 2 }
   }
@@ -131,7 +131,7 @@ fn expensive_computation(n: int): int {
   defer end_profile_block(block)
     
   let result = 0
-  for int-range/up-to(n) {
+  for 0.until(n) {
     if it-index % 2 == 0 { result := result + 3 }
     else { result := result - 2 }
   }
@@ -149,7 +149,7 @@ fn main(): i32 {
   defer end_profile_block(main_block)
   
   let result = 0
-  for int-range/up-to(10) {
+  for 0.until(10) {
     result := result + expensive_computation(1_000_000)
   }
 

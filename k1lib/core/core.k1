@@ -55,9 +55,9 @@ ns iter {
 
 }
 
-fn inc(i: *mut size) { i <- i.* + 1 }
+fn inc(i: *mut size) { i.* := i.* + 1 }
 // TODO: Would be cool to have this
-// fn incNew[t: Add and KnowledgeOfOne](i: *mut t): t { i <- i.* + KnowledgeOfOne@(t)/one() }
+// fn incNew[t: Add and KnowledgeOfOne](i: *mut t): t { i.* := i.* + KnowledgeOfOne@(t)/one() }
 
 fn identity[t](value: t): t { value }
 
@@ -575,6 +575,17 @@ impl zero for i8  { fn zero(): i8  { 0   } }
 impl zero for i16 { fn zero(): i16 { 0   } }
 impl zero for i32 { fn zero(): i32 { 0   } }
 impl zero for i64 { fn zero(): i64 { 0   } }
+
+impl one for f32 { fn one(): f32 { 1.0 } }
+impl one for f64 { fn one(): f64 { 1.0 } }
+impl one for u8  { fn one(): u8  { 1   } }
+impl one for u16 { fn one(): u16 { 1   } }
+impl one for u32 { fn one(): u32 { 1   } }
+impl one for u64 { fn one(): u64 { 1   } }
+impl one for i8  { fn one(): i8  { 1   } }
+impl one for i16 { fn one(): i16 { 1   } }
+impl one for i32 { fn one(): i32 { 1   } }
+impl one for i64 { fn one(): i64 { 1   } }
 
 impl print for f32 {
   fn print-to[w: writer](self: f32, w) {

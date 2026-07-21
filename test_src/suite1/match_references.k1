@@ -6,7 +6,7 @@ fn test() {
   while x.* is :some xx {
     if xx == 0 break
     else { 
-      x <- some(xx - 1)
+      x.* := some(xx - 1)
     }
   }
 
@@ -16,11 +16,11 @@ fn test() {
     assert-equals(x.*, 5)
   }
 
-  x <- some(5)
+  x.* := some(5)
   while x is :some xx* {
     if xx.* == 0 break
     else { 
-      xx <- xx.* - 1
+      xx.* := xx.* - 1
     }
   }
   assert-equals(x.*, :some 0)
@@ -30,7 +30,7 @@ fn test() {
   if not b is true*** { crash("b was false!") }
   assert(b.*.*.* == true)
 
-  b.*.* <- false
+  b.*.*.* := false
   if b is true*** { crash("b was true!") }
   assert(b.*.*.* == false)
 

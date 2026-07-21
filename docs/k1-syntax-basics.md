@@ -166,35 +166,37 @@ K1 code commonly ends test helpers with `.{}` when the intent is "return unit".
 
 ## Variables And Mutation
 
-Use `let` for local bindings:
+Use `let` for local bindings and `:=` for assignment:
 
 ```rust
 let count = 0
 count := count + 1
 ```
 
-Use `:=` to reassign a local variable.
-
-Use `let*` when you need a stack reference:
-
-```rust
-let* counter = 0
-counter <- counter.* + 1
-assert-equals(counter.*, 1)
-```
-
-`let*` is deprecated, but it still appears in tests and existing code. Use `.*`
-to read through a reference, and `<-` to write through it. Field access often
-auto-dereferences when the target type makes that clear:
+`:=` assigns to any place, not just variables: struct fields, array elements,
+and dereferences are all valid destinations:
 
 ```rust
-let* item = .{ value = 41 }
-item.value <- 42
+let item = .{ value = 41 }
+item.value := 42
 assert-equals(item.value, 42)
 ```
 
-See `test_src/suite1/assign.k1`, `test_src/suite1/pointer.k1`,
-`test_src/suite1/lambdas.k1`, and `test_src/suite1/struct.k1`.
+A bare variable on the left always means the variable itself: `r := v` rebinds
+`r`. To store through a reference, dereference it explicitly on the left-hand
+side with `.*`:
+
+```rust
+let counter = core/mem/new(0)
+counter.* := counter.* + 1
+assert-equals(counter.*, 1)
+```
+
+Use `.*` to read through a reference, and the postfix `.&` operator to take the
+address of a place when you need a reference to it.
+
+See `test_src/suite1/assign.k1`, `test_src/suite1/place_test.k1`,
+`test_src/suite1/pointer.k1`, and `test_src/suite1/struct.k1`.
 
 ## Core Types
 
@@ -286,7 +288,7 @@ type counter = { value: int }
 
 ns for counter {
   fn inc(self: *mut counter) {
-    self.value <- self.value + 1
+    self.value := self.value + 1
   }
 }
 ```
@@ -296,56 +298,29 @@ See `test_src/suite1/struct.k1` and
 
 ## Field Access
 
-Struct field access has three typed forms in the compiler. The Rust enum is
-`FieldAccessKind` in `src/k1/typer.rs`:
-
-```rust
-ValueToValue
-Dereference
-ReferenceThrough
-```
-
-The source syntax is intentionally small:
+`a.foo` always means "the field's value", whether `a` is a struct value or a
+reference to one; K1 dereferences through the base as needed. When the access
+chain denotes a place (it roots in a variable or a dereference), it can be
+assigned with `:=` and its address taken with `.&`:
 
 ```rust
 let p = .{ x = 1, y = 2 }
 let x: int = p.x
+p.x := 2
 
-let* p-ref = .{ x = 1, y = 2 }
+let p-ref = p.&
 let x-value: int = p-ref.x
-let x-ref: *mut int = p-ref.x*
+let x-ref: *mut int = p-ref.x.&
+p-ref.y := 20
 ```
 
-The three cases are:
+The same applies to array elements: `arr.get(i)` yields the element value,
+`arr.get(i) := value` stores into the element, and `arr.get(i).&` takes its
+address. Sum patterns use trailing `*` to bind references to payload data; see
+the next section.
 
-- `ValueToValue`: `a.foo` when `a` is a struct value. The result is the value of
-  `foo`.
-- `Dereference`: `a.foo` when `a` is a reference to a struct. The result is
-  still the value of `foo`; K1 dereferences the base and loads/copies the field
-  value.
-- `ReferenceThrough`: `a.foo*` when `a` is a reference to a struct. The result is
-  a reference to the `foo` field itself.
-
-In short, `a.foo` means "give me the field value whether `a` is a value or a
-reference." `a.foo*` means "`a` is a reference, and I want a reference through it
-to the field."
-
-Use reference-through access when mutating a field through a struct reference:
-
-```rust
-let* p = .{ x = 1 }
-p.x* <- 2
-assert-equals(p.x, 2)
-```
-
-The same trailing `*` idea applies to aggregate-like access elsewhere. Arrays
-have value element access through `.get(...)`; to get a reference to an element,
-take its address with the postfix `.&` operator: `arr.get(i).&`. Element stores
-also work directly: `arr.get(i) <- value`. Sum patterns also use trailing `*` to
-bind references to payload data; see the next section.
-
-See `test_src/suite1/assign.k1`, `test_src/suite1/struct.k1`, and
-`src/k1/typer.rs`.
+See `test_src/suite1/assign.k1`, `test_src/suite1/place_test.k1`, and
+`test_src/suite1/struct.k1`.
 
 ## Enums And Sums
 
@@ -416,15 +391,16 @@ counts as exhaustive coverage). Spelling the payload out (`:ok(.{})`,
 `:ok _`) remains valid. Variants with any other payload type still require
 it.
 
-When the sum itself is a reference, payload access follows the same value versus
-reference-through rule as struct fields. Ask for the value when you want the
-payload value; use trailing `*` when you want a reference to the variant's data:
+When matching on a reference to a sum, plain patterns bind payload values; add
+trailing `*` to the pattern to bind a reference to the variant's data instead,
+then store through it with `.* :=`:
 
 ```rust
-let* result-ref: *mut parse-result[int] = :ok(42)
+let result: parse-result[int] = :ok 42
+let result-ref = result.&
 
 if result-ref is :ok(ok-ref)* {
-  ok-ref <- 100
+  ok-ref.* := 100
 } else {
   crash("expected ok")
 }
@@ -432,16 +408,12 @@ if result-ref is :ok(ok-ref)* {
 assert-equals(result-ref.as-ok().!, 100)
 ```
 
-The compiler represents sum payload access with the same `FieldAccessKind` enum
-used for struct fields. Internally this is "get the sum data"; with
-reference-through access, the result is a reference to that data.
-
 This works in every pattern position — `if`/`while`/`require` conditions and
 match arms:
 
 ```rust
 result-ref is {
-  :ok(value-ref)* -> { value-ref <- value-ref.* + 1 },
+  :ok(value-ref)* -> { value-ref.* := value-ref.* + 1 },
   :err(message-ref)* -> { crash(message-ref.*) }
 }
 ```
@@ -574,11 +546,22 @@ let found: int = loop {
 ```
 
 `for` loops iterate over iterable values. The loop body can use `it` and
-`it-index`:
+`it-index`, or bind a name with `in`:
 
 ```rust
 for values {
   println("{it-index}: {it}")
+}
+```
+
+Numeric loops use ranges. `a.until(b)` (from the `rangeable` ability) builds the
+half-open `range[t]` value `[a, b)`, which iterates by an implied step of one.
+It works on any type with `add`, `scalar-cmp`, and `one` impls — all the
+integer types and floats:
+
+```rust
+for i in 0.until(10) {
+  println("{i}")
 }
 ```
 
@@ -771,7 +754,7 @@ ability. The first argument is the writer, the second is the format string, and
 the optional third argument supplies format values:
 
 ```rust
-let* w = string-builder/new()
+let w = string-builder/new()
 writef(w, "hello {}", 42)
 writef(w, " {name}", .{ name = "k1" })
 ```

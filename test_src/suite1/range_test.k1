@@ -1,11 +1,8 @@
 ns range_test
 
-use core/int-range
+fn test-basic-iteration() {
+  let iter = 0.until(5).iterator()
 
-fn test-basic-int-range-iteration() {
-  let iter = int-range/make(0, 5).iterator()
-  
-  // Test stepping through range one by one
   assert(iter.next().! == 0)
   assert(iter.next().! == 1)
   assert(iter.next().! == 2)
@@ -14,15 +11,18 @@ fn test-basic-int-range-iteration() {
   assert(iter.next().is-none())
 }
 
-fn test-empty-int-range() {
-  let iter = int-range/make(0, 0).iterator()
-  
+fn test-empty-range() {
+  let iter = 0.until(0).iterator()
   assert(iter.next().is-none())
+
+  // start > end is empty, not an error
+  let backwards = (5: int).until(2).iterator()
+  assert(backwards.next().is-none())
 }
 
-fn test-negative-int-range() {
-  let iter = int-range/make(-3, 2).iterator()
-  
+fn test-negative-range() {
+  let iter = (-3: int).until(2).iterator()
+
   assert(iter.next().! == -3)
   assert(iter.next().! == -2)
   assert(iter.next().! == -1)
@@ -31,73 +31,67 @@ fn test-negative-int-range() {
   assert(iter.next().is-none())
 }
 
-fn test-up-to() {
-  let iter = int-range/up-to(3).iterator()
-  
-  assert(iter.next().! == 0)
-  assert(iter.next().! == 1)
-  assert(iter.next().! == 2)
-  assert(iter.next().is-none())
+fn test-for-loop() {
+  let sum = 0
+  for i in 0.until(5) {
+    sum := sum + i
+  }
+  assert(sum == 10)
+
+  let count = 0
+  for 3.until(6) {
+    count := count + it
+  }
+  assert(count == 12)
 }
 
-fn test-step-by() {
-  let iter = int-range/up-to(10).iterator()
-  
-  assert(iter.step-by(2)) // move by 2 to position 2
-  assert(iter.current() == 2)
-  
-  assert(iter.step-by(3)) // move by 3 to position 5
-  assert(iter.current() == 5)
-  
-  assert(iter.step-by(4)) // move by 4 to position 9
-  assert(iter.current() == 9)
-  
-  assert(not iter.step-by(2)) // Try to move past end
-}
+fn test-typed-ranges() {
+  let byte-count = 0
+  for b in (250: u8).until(255) {
+    byte-count := byte-count + 1
+  }
+  assert(byte-count == 5)
 
-fn test-size-hint() {
-  let iter = int-range/make(0, 5).iterator()
-  
-  let hint = iter.size-hint()
-  assert(hint.at-least == 5)
-  assert(hint.at-most.! == 5)
-  
-  // After advancing, size hint should decrease
-  iter.next()
-  iter.next()
-  let hint2 = iter.size-hint()
-  assert(hint2.at-least == 3)
+  let float-sum: f64 = 0.0
+  for f in 0.5.until(3.0) {
+    float-sum := float-sum + f
+  }
+  // 0.5 + 1.5 + 2.5
+  assert(float-sum == 4.5)
 }
 
 fn test-nth() {
-  let iter = int-range/up-to(10).iterator()
-  
+  let iter = 0.until(10).iterator()
+
   assert(iter.nth(3).! == 3) // Skip to 4th element
   assert(iter.next().! == 4) // Next should be 4
-  
-  assert(iter.nth(4).! == 9) // Skip 4 more to get to 8
-  assert(iter.next().is-none()) // Next should be 9
-  
+
+  assert(iter.nth(4).! == 9) // Skip 4 more to get to 9
+  assert(iter.next().is-none())
+
   assert(iter.nth(1).is-none()) // Try to skip past end
 }
 
 fn test-advance-by() {
-  let iter = int-range/up-to(5).iterator()
-  
+  let iter = 0.until(5).iterator()
+
   iter.advance-by(2)
   assert(iter.next().! == 2)
-  
+
   iter.advance-by(1)
   assert(iter.next().! == 4)
+
+  // Advancing past the end is harmless
+  iter.advance-by(10)
+  assert(iter.next().is-none())
 }
 
 fn test() {
-  test-basic-int-range-iteration()
-  test-empty-int-range()
-  test-negative-int-range()
-  test-up-to()
-  test-step-by()
-  test-size-hint()
+  test-basic-iteration()
+  test-empty-range()
+  test-negative-range()
+  test-for-loop()
+  test-typed-ranges()
   test-nth()
   test-advance-by()
 }

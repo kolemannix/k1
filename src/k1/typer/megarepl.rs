@@ -640,7 +640,6 @@ impl TypedProgram {
                 ParsedStmt::Use(_)
                 | ParsedStmt::Require(_)
                 | ParsedStmt::Assign(_)
-                | ParsedStmt::Store(_)
                 | ParsedStmt::Defer(_) => {
                     if let Some(stmt_id) = self.eval_stmt(*stmt, ctx, false, index)? {
                         self.push_block_stmt_id(&mut cell_block, stmt_id);

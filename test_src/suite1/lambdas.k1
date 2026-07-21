@@ -21,7 +21,7 @@ fn capture-mut() {
   // We have to capture the variable pointed at the address of counter
   // TODO: rework captures
   let my-inc = fn() {
-    counter <- counter.* + 1
+    counter.* := counter.* + 1
   }
 
   my-inc()
@@ -61,9 +61,9 @@ fn run-things(thunks: list[dyn[fn() -> empty]]) {
 fn thunks-test() {
   let counter = { let x = 0; &x }
   let thunks: list[dyn[fn() -> empty]] = [
-    fn. { counter <- counter.* + 1 },
-    fn. { counter <- counter.* + 1 },
-    fn. { counter <- counter.* + 1 },
+    fn. { counter.* := counter.* + 1 },
+    fn. { counter.* := counter.* + 1 },
+    fn. { counter.* := counter.* + 1 },
   ]
 
   run-things(thunks)
@@ -99,10 +99,10 @@ fn test() {
 
   let x = { let tmp = 10; &tmp }
   // Coerce lambdas to lambda objects
-  simple-dyn(fn. {"Thunk! {x.*}"; x <- 11 })
+  simple-dyn(fn. {"Thunk! {x.*}"; x.* := 11 })
   assert-equals(x.*, 11)
   // Coerce function refs to lambda objects
-  simple-dyn(fn. {"Thunk!"; x <- 12 })
+  simple-dyn(fn. {"Thunk!"; x.* := 12 })
   assert-equals(x.*, 12)
 
   thunks-test()

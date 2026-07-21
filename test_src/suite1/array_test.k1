@@ -33,10 +33,10 @@ fn test-array() {
   let ls: list[u8] = list/filled-in(size = 10, value = 3)
 
   let a: *mut array[u8, 10] = list/to-array(ls, 10)
-  for core/int-range/up-to(a.len()) {
-    if it % 2 == 0 { a.get(it) <- 1 }
+  for 0.until(a.len()) {
+    if it % 2 == 0 { a.get(it) := 1 }
   }
-  for core/int-range/up-to(a.len()) {
+  for 0.until(a.len()) {
     if it % 2 == 0 {
       assert-equals(a.get(it), 1)
     } else {

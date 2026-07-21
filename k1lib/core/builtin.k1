@@ -392,17 +392,21 @@ ability try[impl t, impl e] {
 }
 
 ability iterator[impl item] {
-  fn next(self: *mut self): ?item {
-    let p = self.peek()
-    if p is :some _ { self.advance-by(1) }
-    p
+  fn next(self: *mut self): ?item
+  fn size-hint(self: *self): { at-least: size, at-most: ?size } {
+    .{ at-least = 0, at-most = :none }
   }
-  fn peek(self: *self): ?item
-  fn size-hint(self: *self): { at-least: size, at-most: ?size }
-  fn advance-by(self: *mut self, n: size)
-  fn nth(self: *mut self, n: size): ?item
-
-  fn is-done(self: *self): bool { self.peek().is-none() }
+  fn advance-by(self: *mut self, n: size) {
+    let i: size = 0
+    while i < n {
+      if self.next() is :none { break }
+      i := i + 1
+    }
+  }
+  fn nth(self: *mut self, n: size): ?item {
+    self.advance-by(n)
+    self.next()
+  }
 }
 
 ability iterable[impl item, impl i: iterator[item = item]] {
@@ -410,6 +414,7 @@ ability iterable[impl item, impl i: iterator[item = item]] {
 }
 
 ability zero { fn zero(): self }
+ability one { fn one(): self }
 
 // ability as-span[impl t] {
 //   fn as-span(self): span[t]
@@ -709,14 +714,14 @@ ns array {
   }
 
   fn set[t, n](array: *mut array[t, n], index: int, value: t) where n: static size {
-    array.get(index) <- value
+    array.get(index) := value
   }
 
   fn filled-in[t, n: static size](context alloc: mem/alloc-mode)(t: t, n: n): *mut array[t, n] {
     let array-uninit = allocate[t, n]()
     let i = 0
     while i < n.from-static() {
-      array-uninit.get(i) <- t
+      array-uninit.get(i) := t
       i := i + 1
     }
     array-uninit

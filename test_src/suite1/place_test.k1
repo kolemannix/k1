@@ -23,7 +23,7 @@ fn receiver-coercion() {
   let outer-ref = &outer
   let inner-ref = outer-ref.inner.&
   assert(outer-ref.inner.me().as[ptr] == inner-ref.as[ptr])
-  outer-ref.inner.me().a <- 99
+  outer-ref.inner.me().a := 99
   assert-equals(outer.inner.a, 99)
 }
 
@@ -68,7 +68,7 @@ fn test() {
   let outer: outer = .{ name = "hi", inner = .{ a = 5, b = 6 } }
   let a-ref = &outer.inner.a
   assert-equals(a-ref.*, 5)
-  a-ref <- 42
+  a-ref.* := 42
   assert-equals(outer.inner.a, 42)
 
   // Re-borrow: field address through an existing reference
@@ -82,28 +82,28 @@ fn test() {
   assert-equals(g-ref.*, 77)
 
   let arr: array[int, 3] = zeroed()
-  arr.get(0) <- 10
-  arr.get(1) <- 20
+  arr.get(0) := 10
+  arr.get(1) := 20
   let elem-ref = arr.get(1).&
   assert-equals(elem-ref.*, 20)
-  elem-ref <- 21
+  elem-ref.* := 21
   assert-equals(arr.get(1), 21)
 
   // ...and through an array reference
   let arr-ref = &arr
   let elem-ref2 = arr-ref.get(2).&
-  elem-ref2 <- 30
+  elem-ref2.* := 30
   assert-equals(arr.get(2), 30)
 
   // Mixed aggregates: store to a struct member inside an array element
   // (place chain: field -> block -> array element -> variable)
   let points: array[inner, 2] = zeroed()
-  points.get(0).a <- 100
-  points.get(1).b <- 200
+  points.get(0).a := 100
+  points.get(1).b := 200
   assert-equals(points.get(0).a, 100)
   assert-equals(points.get(0).b, 0)
   let point-b-ref = points.get(1).b.&
-  point-b-ref <- 201
+  point-b-ref.* := 201
   assert-equals(points.get(1).b, 201)
 
   // Mixed aggregates: store to struct members inside a sum payload, through a
@@ -111,8 +111,8 @@ fn test() {
   let shape: shape = :circle .{ radius = 5, filled = false }
   (&shape) is {
     :circle c* -> {
-      c.radius <- 10
-      c.filled <- true
+      c.radius := 10
+      c.filled := true
     },
     _ -> crash("expected a circle")
   }

@@ -5,7 +5,7 @@ ns sys
 
 fn parse-next(i: *mut size, args: span[string]): ?string {
   let r = args.get-opt(i + 1)
-  i <- i.* + 2
+  i.* := i.* + 2
   r
 }
 fn get-arg-kind(type-id: u64): either { string, list-string, opt-string } {

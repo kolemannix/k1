@@ -19,13 +19,13 @@ ns for parser {
     self.peek() is {
       :none -> :none,
       :some c -> {
-        self.cursor <- self.cursor + 1
+        self.cursor := self.cursor + 1
         :some c
       }
     }
   }
-  fn advance(self: *mut parser) { self.cursor <- self.cursor + 1 }
-  fn advance-n(self: *mut parser, n: size) { self.cursor <- self.cursor + n }
+  fn advance(self: *mut parser) { self.cursor := self.cursor + 1 }
+  fn advance-n(self: *mut parser, n: size) { self.cursor := self.cursor + n }
   fn expect(self: *mut parser, c: char): bool {
     self.peek() is {
       :some p -> {

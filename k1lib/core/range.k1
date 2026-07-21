@@ -1,51 +1,33 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-type int-range = { start: int, end: int }
-ns for int-range {
-  fn make(start: int, end: int): int-range { .{ start, end } }
-  fn up-to(end: int): int-range { .{ start = 0, end } }
-}
-type int-range-iterator = { range: int-range, offset: int }
+// Half-open interval [start, end) over any ordered type with an increment.
+// Iteration yields start, start + 1, ... up to but excluding end, stepping by
+// the type's one().
+type range[t] = { start: t, end: t }
 
-ns for int-range-iterator {
-  fn make(range: int-range): int-range-iterator { .{ range, offset = 0 } }
-
-  fn position(self: int-range-iterator): int { self.range.start + self.offset }
-  fn size(self: int-range-iterator): int { self.range.end - self.range.start }
-  fn step-by(self: *mut int-range-iterator, n: size): bool { 
-    self.offset <- self.offset + n
-    let is-in-bounds = self.position() < self.range.end
-    is-in-bounds
-  }
-  fn current(self: int-range-iterator): int {
-    self.range.start + self.offset
+ability rangeable {
+  fn until(self, end: self): range[self] {
+    .{ start = self, end }
   }
 }
 
-impl iterator[item = int] for int-range-iterator {
-  fn peek(self: *self): ?int {
-     if self.position() >= self.range.end {
-       :none
-     } else {
-       let current = self.current()
-       :some current
-     }
-  }
-  fn size-hint(self: *self): { at-least: size, at-most: ?size } {
-    let remaining = self.range.end - self.position()
-    .{ at-least = remaining, at-most = :some remaining }
-  }
-  fn advance-by(self: *mut self, n: size) {
-    self.step-by(n)
-    .{}
-  }
-  fn nth(self: *mut self, n: size): ?size {
-    self.step-by(n)
-    self.next()
+impl[t: add and scalar-cmp and one] rangeable for t {}
+
+type range-iterator[t] = { current: t, end: t }
+
+impl[t: add and scalar-cmp and one] iterator[item = t] for range-iterator[t] {
+  fn next(self: *mut self): ?t {
+    if self.current < self.end {
+      let c = self.current
+      self.current := c + one@(t)/one()
+      :some c
+    } else :none
   }
 }
 
-impl iterable[item = int, i = int-range-iterator] for int-range {
-  fn iterator(self: int-range): int-range-iterator { int-range-iterator/make(self) }
+impl[t: add and scalar-cmp and one] iterable[item = t, i = range-iterator[t]] for range[t] {
+  fn iterator(self): range-iterator[t] {
+    .{ current = self.start, end = self.end }
+  }
 }

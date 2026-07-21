@@ -258,7 +258,6 @@ pub enum TokenKind {
     Asterisk,
     LessEqual,
     GreaterEqual,
-    LThinArrow,
     RThinArrow,
 
     /// Not really a token but allows us to avoid Option<Token> everywhere
@@ -398,7 +397,6 @@ impl TokenKind {
             K::Asterisk => "*",
             K::LessEqual => "<=",
             K::GreaterEqual => ">=",
-            K::LThinArrow => "<-",
             K::RThinArrow => "->",
 
             K::DoubleQuote => "\"",
@@ -972,8 +970,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             '<' => {
                                 if next == '=' {
                                     return_double!(K::LessEqual)
-                                } else if next == '-' {
-                                    return_double!(K::LThinArrow)
                                 } else if next == '<' {
                                     return_double!(K::LAngleLAngle)
                                 } else {

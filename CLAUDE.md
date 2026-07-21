@@ -95,7 +95,8 @@ Before nontrivial work, read:
 - `k1lib/core/mem.k1`: allocation, zeroing, bitcast, and raw memory helpers.
 - `k1lib/core/list.k1`, `buffer.k1`, `span.k1`, `string.k1`: primary
   collection/string APIs.
-- `k1lib/core/range.k1`: `int-range`, iterators, and iterable impls.
+- `k1lib/core/range.k1`: `range[t]`, the `rangeable` ability (`0.until(n)`), and
+  its iterator/iterable impls.
 - `k1lib/core/opt.k1`: option helpers like `some`, `none`, and unwrap-related
   behavior.
 - `k1lib/core/types.k1`: type reflection helpers, `any`, and layout assertions.

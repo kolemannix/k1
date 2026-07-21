@@ -7744,7 +7744,7 @@ impl TypedProgram {
                     if is_assignment_lhs {
                         return failf!(
                             variable_name_span,
-                            "Cannot assign to captured variable '{}'. Declare it as a reference and use `<-` instead",
+                            "Cannot assign to captured variable '{}'. Capture a reference and store through it with `.* :=` instead",
                             self.ast.idents.get_string(variable.name.name)
                         );
                     }
@@ -12073,7 +12073,7 @@ impl TypedProgram {
                 // We emit `{ if !in_bounds crash; array[index] }` rather than an if/else
                 // over the element so that the element access is the block's trailing
                 // expr: blocks are place-transparent, which is what makes
-                // `arr.get(i).&` and `arr.get(i) <- v` work
+                // `arr.get(i).&` and `arr.get(i) := v` work
                 let unit_expr = self.synth_empty_struct(span);
                 let bounds_check_expr = self.synth_if_else(
                     self.types.builtins.empty,
@@ -14443,93 +14443,95 @@ impl TypedProgram {
                 static_assert_size!(parse::AssignStmt, 12);
                 let assignment = assign.clone();
                 let lhs_span = self.ast.exprs.get_span(assignment.lhs);
-                let ParsedExpr::Variable(_) = self.ast.exprs.get(assignment.lhs) else {
-                    return failf!(
-                        lhs_span,
-                        "Value assignment destination must be a plain variable expression"
-                    );
-                };
-                let (typed_variable_id, lhs) =
-                    self.eval_variable(assignment.lhs, ctx.scope_id, true)?;
-                let Some(typed_variable_id) = typed_variable_id else {
-                    return failf!(lhs_span, "Must be a regular variable, eg not a function");
-                };
-                match self.variables.get(typed_variable_id).kind {
-                    VariableKind::FnParam(_) => {
-                        return failf!(lhs_span, "Cannot re-assign a function parameter");
-                    }
-                    VariableKind::StackSynthetic(_) => {
-                        return failf!(
-                            lhs_span,
-                            "Cannot re-assign a synthetic variable or binding"
-                        );
-                    }
-                    VariableKind::Stack(_) => {}
-                    VariableKind::Global(_) => {
-                        return failf!(lhs_span, "Cannot re-assign a global");
-                    }
-                };
-                let lhs_type = self.exprs.get_type(lhs);
+                // A bare variable name rebinds a local (or writes a mutable
+                // global); any other lhs must denote a place, and we store to
+                // its address. Storing through a reference requires an
+                // explicit deref: `r.* := v`.
+                let (destination, expected_rhs_type, reassigned_variable_id) =
+                    if let ParsedExpr::Variable(_) = self.ast.exprs.get(assignment.lhs) {
+                        let (typed_variable_id, lhs) =
+                            self.eval_variable(assignment.lhs, ctx.scope_id, true)?;
+                        let Some(variable_id) = typed_variable_id else {
+                            return failf!(lhs_span, "Must be a regular variable, eg not a function");
+                        };
+                        let lhs_type = self.exprs.get_type(lhs);
+                        match self.variables.get(variable_id).kind {
+                            VariableKind::FnParam(_) => {
+                                return failf!(
+                                    lhs_span,
+                                    "Cannot re-assign a function parameter; declare a local, or store through a reference with `param.* := ...`"
+                                );
+                            }
+                            VariableKind::StackSynthetic(_) => {
+                                return failf!(
+                                    lhs_span,
+                                    "Cannot re-assign a synthetic variable or binding; if this is a pattern-bound reference, store through it with `x.* := ...`"
+                                );
+                            }
+                            VariableKind::Stack(_) => (lhs, lhs_type, Some(variable_id)),
+                            VariableKind::Global(global_id) => {
+                                if self.globals.get(global_id).is_constant {
+                                    return failf!(
+                                        lhs_span,
+                                        "Cannot assign an immutable global; declare it with `let mutable`"
+                                    );
+                                }
+                                let dest = self.synth_address_of(lhs, lhs_span, false)?;
+                                (dest, lhs_type, None)
+                            }
+                        }
+                    } else {
+                        let lhs = self.eval_expr(assignment.lhs, ctx.with_no_expected_type())?;
+                        let lhs_type = self.exprs.get_type(lhs);
+                        let dest =
+                            self.synth_address_of(lhs, lhs_span, false).map_err(|mut e| {
+                                e.message =
+                                    format!("Assignment destination must be a place: {}", e.message);
+                                e
+                            })?;
+                        if let TypedExpr::AddressOf(addr_of) = self.exprs.get(dest) {
+                            if let AddressOfKind::GlobalVariable(variable_id) = addr_of.kind {
+                                let global_id =
+                                    self.variables.get(variable_id).global_id().unwrap();
+                                if self.globals.get(global_id).is_constant {
+                                    return failf!(
+                                        lhs_span,
+                                        "Cannot assign an immutable global; declare it with `let mutable`"
+                                    );
+                                }
+                            }
+                        }
+                        (dest, lhs_type, None)
+                    };
                 let rhs = self
                     .eval_expr_with_coercion(
                         assignment.rhs,
-                        ctx.with_expected_type(Some(lhs_type)),
+                        ctx.with_expected_type(Some(expected_rhs_type)),
                         true,
                     )
                     .map_err(|mut e| {
                         e.message = format!("Invalid type for assignment: {}", e.message);
                         e
                     })?;
-                let rhs_type = self.exprs.get_type(rhs);
 
-                if rhs_type == NEVER_TYPE_ID {
-                    let rhs_as_stmt = self.add_expr_stmt(rhs);
-                    Ok(Some(rhs_as_stmt))
-                } else {
-                    self.variables
-                        .get_mut(typed_variable_id)
-                        .flags
-                        .set(VariableFlags::Reassigned, true);
-                    let stmt_id = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
-                        destination: lhs,
-                        value: rhs,
-                        span: assignment.span,
-                        kind: AssignmentKind::Set,
-                    }));
-                    Ok(Some(stmt_id))
+                if self.exprs.get_type(rhs) == NEVER_TYPE_ID {
+                    return Ok(Some(self.add_expr_stmt(rhs)));
                 }
-            }
-            ParsedStmt::Store(set_stmt) => {
-                static_assert_size!(parse::StoreStmt, 12);
-                let set_stmt = set_stmt.clone();
-                let lhs = self.eval_expr(set_stmt.lhs, ctx.with_no_expected_type())?;
-                // Coerce the lhs to an address, if possible
-                let lhs = match self.get_expr_type(lhs) {
-                    Type::Reference(_r) => lhs,
-                    _other => match self.synth_address_of(lhs, SpanId::NONE, false) {
-                        Ok(new_lhs) => new_lhs,
-                        Err(_) => lhs,
-                    },
+                let kind = match reassigned_variable_id {
+                    Some(variable_id) => {
+                        self.variables
+                            .get_mut(variable_id)
+                            .flags
+                            .set(VariableFlags::Reassigned, true);
+                        AssignmentKind::Set
+                    }
+                    None => AssignmentKind::Store,
                 };
-                let lhs_type = self.exprs.get_type(lhs);
-                let Some(lhs_type) = self.types.get(lhs_type).as_reference() else {
-                    return failf!(
-                        self.ast.exprs.get_span(set_stmt.lhs),
-                        "Expected a reference type for storing with <-; got {}",
-                        self.type_id_to_string(lhs_type)
-                    );
-                };
-                let expected_rhs = lhs_type.inner_type;
-                let rhs = self.eval_expr_with_coercion(
-                    set_stmt.rhs,
-                    ctx.with_expected_type(Some(expected_rhs)),
-                    true,
-                )?;
                 let stmt_id = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
-                    destination: lhs,
+                    destination,
                     value: rhs,
-                    span: set_stmt.span,
-                    kind: AssignmentKind::Store,
+                    span: assignment.span,
+                    kind,
                 }));
                 Ok(Some(stmt_id))
             }
@@ -18285,7 +18287,8 @@ impl TypedProgram {
             core!("mem"),
             core!("types"),
             core!("k1"),
-            core!("int-range"),
+            core!("range"),
+            core!("rangeable"),
             core!("add"),
             core!("sub"),
             core!("mul"),
