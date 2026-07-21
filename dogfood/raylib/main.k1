@@ -53,7 +53,7 @@ use raylib/clear-background
 
 fn render(context frame-arena: alloc-mode)(things: *list[thing]) {
   for things {
-    draw-text("thing {it-index}".to-c().ptr, it.pos.x, it.pos.y, 32, PINK)
+    draw-text("thing $it-index".to-c().ptr, it.pos.x, it.pos.y, 32, PINK)
   }
 }
 
@@ -76,7 +76,7 @@ fn run(title: string): i32 {
     let fps = raylib/get-fps()
     raylib/begin-drawing()
     clear-background(GRAY)
-    draw-text("Congrats! (fps: {fps})".to-c().ptr, 200, 200, 32, PINK)
+    draw-text("Congrats! (fps: $fps)".to-c().ptr, 200, 200, 32, PINK)
     render(things.&)
     raylib/end-drawing()
     frame.as-custom-arena().!.reset(false)
@@ -94,7 +94,7 @@ fn main(): i32 {
   //};
 
   let rt-result = run("runtime!")
-  println("Hey, the runtime result was {rt-result}")
+  println("Hey, the runtime result was $rt-result")
   0
 }
 

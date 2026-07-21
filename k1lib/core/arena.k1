@@ -105,7 +105,7 @@ ns for arena {
       alloc-ptr
     } else {
        mem/push-mode(:system-heap)
-       crash("arena {self.name} is out of space to allocate {size} bytes. available: {available}")
+       crash("arena ${self.name} is out of space to allocate $size bytes. available: $available")
     }
   }
 

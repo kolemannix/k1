@@ -28,10 +28,10 @@ fn handle(req: http/request, deps: *mut deps): http-response {
   let styles = core/files/read-to-string("web/styles.css")
 
 
-  tprintln("user-code/handle: request {req.header.method.enum-name()} `{req.header.url}`")
+  tprintln("user-code/handle: request ${req.header.method.enum-name()} `${req.header.url}`")
 
   let make-header = fn(len: size) {
-    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {len}\r\n\r\n"
+    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: $len\r\n\r\n"
   }
 
   // `GET /events`: SSE subscription to the app-wide "global" topic,
@@ -47,12 +47,12 @@ fn handle(req: http/request, deps: *mut deps): http-response {
     // ["", "game", "{id}", "events"]
     let id = parts.get(2)
     if parts.len() == 4 and parts.get(3) == "events" {
-      return :subscribe .{ topic = "game.{id}" }
+      return :subscribe .{ topic = "game.$id" }
     }
     // `GET /game/{id}/poke`: publish from user code on a worker thread,
     // through the handle carried in deps.
     if parts.len() == 4 and parts.get(3) == "poke" {
-      deps.publisher.publish("game.{id}", "poked\nover http")
+      deps.publisher.publish("game.$id", "poked\nover http")
       return :complete ["HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\npoked\n"]
     }
     return :complete ["HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"]
@@ -100,7 +100,7 @@ fn render-big-json(out: *mut string-builder, rows: size) {
   while i < rows {
     if i > 0 { out.string(",") }
     let score = i * 7 % 1000
-    writef(out, `\{"id": {i}, "name": "row-{i}", "flags": [true, false], "score": {score}}`)
+    writef(out, `{"id": $i, "name": "row-$i", "flags": [true, false], "score": $score}`)
     i = i + 1
   }
   out.string("]")
@@ -119,9 +119,9 @@ fn mock-publisher-main(arg: ptr) {
     // this thread's tmp arena holds the interpolated event data
     mem/tmp().reset(clear = false)
     game-tick = game-tick + 1
-    publisher.publish("game.42", `\{"tick": {game-tick}}`)
+    publisher.publish("game.42", `{"tick": $game-tick}`)
     if game-tick % 5 == 0 {
-      publisher.publish("global", `\{"uptime-seconds": {game-tick}}`)
+      publisher.publish("global", `{"uptime-seconds": $game-tick}`)
     }
   }
 }
@@ -130,7 +130,7 @@ fn start-mock-publisher() {
   let publisher = system-heap.new(pubsub/publisher())
   let tid: *mut uv/thread = system-heap.alloc-t()
   let rc = uv/thread_create(tid, mock-publisher-main, publisher.as[ptr])
-  if rc != 0 crash("failed to spawn publisher thread: {rc}")
+  if rc != 0 crash("failed to spawn publisher thread: $rc")
 }
 
 fn template(template: string, values: span[{ key: string, value: string }]): ?string {
@@ -158,7 +158,7 @@ fn template(template: string, values: span[{ key: string, value: string }]): ?st
 }
 
 #static {
-  let result = template(p"my favorite food is {{x}}{{punct}}", [.{ key = "x", value = "Ice Cream" }, .{ key = "punct", value = "!"}])
+  let result = template("my favorite food is {{x}}{{punct}}", [.{ key = "x", value = "Ice Cream" }, .{ key = "punct", value = "!"}])
   println(result.!)
 }
 
@@ -171,7 +171,7 @@ fn render(out: *string-builder, pixels: *array[u8, 65536]) {
   for pixels {
     let y = it-index / gridsize
     let x = it-index % gridsize
-    writelnf(out, `<div class="{if it == 0 "off-pixel" else "on-pixel"}" style="top: {y * size}px; left: {x * size}px" id="pixel-{x},{y}"></div>`)
+    writelnf(out, `<div class="${if it == 0 "off-pixel" else "on-pixel"}" style="top: ${y * size}px; left: ${x * size}px" id="pixel-$x,$y"></div>`)
   }
   out.string(`</div">`)
 }

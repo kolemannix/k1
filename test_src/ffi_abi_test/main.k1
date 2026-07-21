@@ -9,7 +9,7 @@ let MODULE_INFO: k1/module-manifest = .{
 ns foo {
 
   type very-small = { x: u8 }
-  impl print for very-small { fn print-to[w: writer](self: very-small, w) { w.string("{ {self.x} }") } }
+  impl print for very-small { fn print-to[w: writer](self: very-small, w) { w.string("${ {self.x} }") } }
   impl equals for very-small { fn equals(self: very-small, other: very-small): bool { self.x == other.x } }
   extern("foo", "very_small") fn very_small(x: very-small, y: very-small): very-small
 

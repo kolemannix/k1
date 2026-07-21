@@ -65,13 +65,13 @@ ns for task {
 
     let mutex-rc = uv/mutex_init(state.mutex)
     if mutex-rc != 0 {
-      crash("uv_mutex_init failed: {mutex-rc}")
+      crash("uv_mutex_init failed: $mutex-rc")
     }
 
     let cond-rc = uv/cond_init(state.cond)
     if cond-rc != 0 {
       uv/mutex_destroy(state.mutex)
-      crash("uv_cond_init failed: {cond-rc}")
+      crash("uv_cond_init failed: $cond-rc")
     }
 
     state.req.set-data(work)
@@ -87,7 +87,7 @@ ns for task {
       fn (req, status) {
         let task-work = req.get-data[task-work[t, params]]
         if status != 0 {
-          tprintln("task work failed with status {status}")
+          tprintln("task work failed with status $status")
         }
         uv/mutex_lock(task-work.state.mutex)
         task-work.state.libuv-done = true

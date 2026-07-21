@@ -14,9 +14,9 @@ ns type_schema {
     require schema[t] is :struct .{ fields } else { return "" }
     let sb = string-builder/new()
     let name = types/type-id-name(id)
-    sb.string("Struct {name} \{\n")
+    sb.string("Struct $name {\n")
     for field in fields {
-      writelnf(sb, "  {field.name}: {types/type-id-name(field.type-id)}", )
+      writelnf(sb, "  ${field.name}: ${types/type-id-name(field.type-id)}", )
     }
     sb.string("}")
     sb.build()
@@ -71,7 +71,7 @@ ns type_schema {
       and size == :some 5
       else crash("")
 
-    assert-equals(print-struct-shape[point3[u8]], p"Struct point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}")
+    assert-equals(print-struct-shape[point3[u8]], "Struct point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}")
 
     let is-zero-ptr: *fn(int) -> bool = is-zero
     require schema[type-of(is-zero-ptr)]

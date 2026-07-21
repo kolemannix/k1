@@ -2673,7 +2673,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         loop {
             let current_token = self.tokens.next();
             match current_token.kind {
-                // Interpolation case
+                // ${expr} interpolation case
                 K::OpenBrace => {
                     if let Some(close) = self.maybe_consume(K::CloseBrace) {
                         let span = self.extend_token_span(current_token, close);
@@ -2690,8 +2690,25 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         self.expect_kind(K::CloseBrace)?;
                     }
                 }
+                // Bare $ident interpolation case
+                K::Ident => {
+                    let text = Parser::tok_chars(
+                        &self.ast.spans,
+                        self.ast.sources.get(self.file_id),
+                        current_token,
+                    );
+                    let string_id = self.ast.idents.intern(text);
+                    self.emit_semantic_token(current_token, SemanticTokenKind::Variable);
+                    let expr_id = self.add_expression(ParsedExpr::Variable(ParsedVariable {
+                        name: QIdent::naked(string_id, current_token.span),
+                    }));
+                    parts.push(InterpolatedStringPart::Expr(
+                        expr_id,
+                        ParsedFmtSettings::default(),
+                    ));
+                }
                 k if k.is_string() => {
-                    let StringTokenInfo { delim, interp_exprs: _, done } = k.as_string().unwrap();
+                    let StringTokenInfo { delim, done } = k.as_string().unwrap();
                     // Accessing the tok_chars this way achieves a partial borrow of self
                     let text = Parser::tok_chars(
                         &self.ast.spans,
@@ -2702,17 +2719,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     buf.clear();
                     let mut chars = text.chars().peekable();
                     if first_segment {
-                        // Skip opening " or ` or p" or p`
+                        // Skip opening " or `
                         // Note(ugh!): Maybe we just lex the actual strings (with tok_buf)
                         // because this is very duplicative between here and lex
                         let c = chars.next();
-                        let c = if c == Some('p') { chars.next() } else { c };
                         if c != Some('"') && c != Some('`') {
                             return Err(error(
-                                format!(
-                                    "Internal Error: should start with p\" or p` or \" or `; got {:?}",
-                                    c
-                                ),
+                                format!("Internal Error: should start with \" or `; got {:?}", c),
                                 first,
                             ));
                         }
@@ -4560,7 +4573,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_dq_ident(&mut self) -> ParseResult<StringId> {
-        let external_name_token = self.expect_kind(K::StringDoneDqInterp)?;
+        let external_name_token = self.expect_kind(K::StringDoneDq)?;
         // Accessing the token chars this way achieves a partial borrow of self
         // allowing us to intern the identifier
         let string_text = Parser::tok_chars(
@@ -4971,12 +4984,12 @@ impl ParsedProgram {
                             w.write_str(self.get_string(*string_id))?
                         }
                         InterpolatedStringPart::Expr(expr_id, _) => {
-                            w.write_char('{')?;
+                            w.write_str("${")?;
                             self.display_expr_id(w, *expr_id)?;
-                            w.write_char('{')?;
+                            w.write_char('}')?;
                         }
                         InterpolatedStringPart::Hole { fmt_settings: _, span: _ } => {
-                            w.write_str("{}")?;
+                            w.write_str("${}")?;
                         }
                     }
                 }

@@ -29,12 +29,12 @@ ns orders {
     else if s == "shipped" :shipped
     else if s == "delivered" :delivered
     else if s == "cancelled" :cancelled
-    else crash("unknown order status: {s}")
+    else crash("unknown order status: $s")
   }
 
   fn parse-line(line: string): order {
     let fields = line.split-by-char(',')
-    require fields.len() == 7 else { crash("bad csv row: {line}") }
+    require fields.len() == 7 else { crash("bad csv row: $line") }
     .{
       id = fields.get(0).parse-base10().!,
       customer = fields.get(1),

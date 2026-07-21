@@ -31,7 +31,7 @@ ns mem {
 
   fn virtual-release(base: ptr, len: size): empty {
     let result = posix/munmap(base, len)
-    if result == -1 crash("munmap of ptr {base} x {len} failed")
+    if result == -1 crash("munmap of ptr $base x $len failed")
     .{}
   }
 

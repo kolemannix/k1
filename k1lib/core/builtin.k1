@@ -499,7 +499,7 @@ impl print for string {
 }
 
 impl print for {} {
-  fn print-to[w: writer](self: {}, w) { w.write-string("\{}") }
+  fn print-to[w: writer](self: {}, w) { w.write-string("{}") }
 }
 
 
@@ -878,5 +878,5 @@ fn crash(context locn: k1/source-location)(msg: string): never {
 }
 
 fn crash-bounds(context locn: k1/source-location)(size: size, index: size, msg: string): never {
-  crash("{msg}: {index} >= {size}")
+  crash("$msg: $index >= $size")
 }

@@ -15,19 +15,19 @@ ability speak {
 type thing = { x: i32 }
 
 impl speak for *thing {
-  fn speak(self): string { "ref{self.x}" }
+  fn speak(self): string { "ref${self.x}" }
 }
 
 ability greet {
   fn greet(self): string
 
   fn cheer(self): string {
-    "{self.greet()}!"
+    "${self.greet()}!"
   }
 }
 
 impl[t: speak] greet for t {
-  fn greet(self): string { "hi {self.speak()}" }
+  fn greet(self): string { "hi ${self.speak()}" }
 }
 
 fn test() {

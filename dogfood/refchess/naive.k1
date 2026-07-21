@@ -41,7 +41,7 @@ ns square {
        'f' or 'F' -> 5,
        'g' or 'G' -> 6,
        'h' or 'H' -> 7,
-       _ -> crash("bad tile name: {s}")
+       _ -> crash("bad tile name: $s")
     }
     let rank = (s.get(1).to-ascii-digit().! - 1)
     from-rank-file(file, rank)
@@ -62,7 +62,7 @@ impl show for square {
       _ -> crash("Bad file")
     }
     let rank = self.rank + 1
-    "{file}{rank}"
+    "$file$rank"
   }
 }
 
@@ -71,9 +71,9 @@ fn dump(board: list[square-state]) {
   for square in board {
     let symbol = square.char-symbol()
     if it-index % 8 == 7 {
-      println("{symbol}")
+      println("$symbol")
     } else {
-      print("{symbol}")
+      print("$symbol")
     }
   }
 }

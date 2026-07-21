@@ -67,8 +67,8 @@ ns for my-result {
   }
   fn show[t: print, e: print](self: my-result[t, e]): string {
     self is {
-      :ok(v) -> { "Ok: {v}\n" },
-      :err(e) -> { "Error: {e}\n" }
+      :ok(v) -> { "Ok: $v\n" },
+      :err(e) -> { "Error: $e\n" }
     }
   }
 }

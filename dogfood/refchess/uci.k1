@@ -12,7 +12,7 @@ type command = either {
 }
 
 fn parse-command(cmd: string): result[command, string] {
-  println("[debug] received: `{cmd}`")
+  println("[debug] received: `$cmd`")
   
   cmd is {
     // Initial handshake: GUI sends "uci", engine responds with id and options
@@ -32,7 +32,7 @@ fn parse-command(cmd: string): result[command, string] {
       if cmd.starts-with("perft ") {
          let parsed-depth = cmd.drop(6).to-int()
          if parsed-depth is :some depth { :ok :perft .{ depth = depth.as[u32] } }
-         else :err "Invalid perft command: {cmd}"
+         else :err "Invalid perft command: $cmd"
       } else if cmd.starts-with("position ") {
         // "position" command sets up a position to analyze:
         //   "position startpos" - start from initial position
@@ -66,7 +66,7 @@ fn parse-command(cmd: string): result[command, string] {
         //   "go movetime 1000" - search for exactly 1 second
         
         :ok :go cmd.slice(2, cmd.len())
-      } else :err "Unsupported command: {cmd}"
+      } else :err "Unsupported command: $cmd"
     }
   }
 }

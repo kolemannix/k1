@@ -123,7 +123,7 @@ $ "let n: u64 = 255"
 
 $ {
   let name = "point"
-  "type {name} = \{ x: int, y: int }"
+  "type $name = { x: int, y: int }"
 }
 ```
 
@@ -134,13 +134,15 @@ $pre/make-point("my-point")
 
 ns pre {
   fn make-point(name: string): string {
-    "type {name} = \{ x: int, y: int }"
+    "type $name = { x: int, y: int }"
   }
 }
 ```
 
-`p"..."` and ``p`...` `` strings are used heavily for generated code where
-literal braces are common. `code-writer` helpers also appear in metaprograms.
+Braces are plain characters in strings, so generated code reads like K1;
+interpolation holes are `$ident`/`${expr}`, and a generated string that should
+itself interpolate at runtime escapes its holes as `\$`. `code-writer` helpers
+also appear in metaprograms.
 
 See `test_src/suite1/test_meta.k1`, `test_src/suite1/meta_defns.k1`, and
 `test_src/stdlib/metaprintf.k1`.
@@ -350,8 +352,8 @@ Tests cover string and char escapes:
 '\\'
 ```
 
-String tests also cover `\n`, `\0`, `\t`, `\r`, `\"`, and `\\`, plus nested
-interpolation and raw backtick strings.
+String tests also cover `\n`, `\0`, `\t`, `\r`, `\"`, `\\`, and `\$`, plus
+nested interpolation and backtick strings.
 
 See `test_src/suite1/char_test.k1`,
 `test_src/suite1/string_test.k1`, and

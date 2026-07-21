@@ -16,7 +16,7 @@ type db-query-params = {
 }
 
 fn fake-database-query(params: db-query-params): result[int, string] {
-  tprintln("fake DB query started: {params.query}")
+  tprintln("fake DB query started: ${params.query}")
 
   // uv/sleep(250);
 
@@ -92,7 +92,7 @@ fn do-work(req: *mut uv/work) {
     let deps-baton = (work.connection.make-user-deps)()
     mem/pop-mode()
 
-    tprintln("made deps: {deps-baton}")
+    tprintln("made deps: $deps-baton")
     worker-user-data = deps-baton
   }
   let user-deps-baton: ptr = worker-user-data
@@ -173,7 +173,7 @@ fn after-do-work(req: *mut uv/work, status: i32) {
         }
         if status != 0 {
           let errno = uv/errno/from-i32(status)
-          tprintln("write failed: {errno.enum-name()}")
+          tprintln("write failed: ${errno.enum-name()}")
           close-connection(connection)
           return
         } else {
@@ -182,7 +182,7 @@ fn after-do-work(req: *mut uv/work, status: i32) {
       })
 
       if write-rc != 0 {
-        tprintln("uv_write failed: {write-rc}")
+        tprintln("uv_write failed: $write-rc")
         close-connection(connection)
         return
       }
@@ -223,12 +223,12 @@ fn write-shared-frame(connection: *mut connection, frame: rc-buffer) {
     if connection.close-state.is-closing { return }
     if status != 0 {
       let errno = uv/errno/from-i32(status)
-      tprintln("frame write failed: {errno.enum-name()}")
+      tprintln("frame write failed: ${errno.enum-name()}")
       close-connection(connection)
     }
   })
   if rc != 0 {
-    tprintln("uv_write for frame failed: {rc}")
+    tprintln("uv_write for frame failed: $rc")
     ctx.frame.release()
     system-heap.free-t(ctx)
     system-heap.free-t(req)
@@ -238,7 +238,7 @@ fn write-shared-frame(connection: *mut connection, frame: rc-buffer) {
 
 let tlog: bool = true
 fn mprintln(code: string): string {
-  #if tlog "tprintln({code})"
+  #if tlog "tprintln($code)"
   else ""
 }
 fn tprintln[t: print](t) {
@@ -250,7 +250,7 @@ fn tprintln[t: print](t) {
   let _rc = uv/thread_getname(&thread-self, thread-name-buf.get-base(), thread-name-buf.len().as())
   let thread-name = string/wrap-c(thread-name-buf.base-ptr())
 
-  println("[{thread-name}] {t}")
+  println("[$thread-name] $t")
 }
 
 fn close-connection(conn: *mut connection) {
@@ -258,31 +258,31 @@ fn close-connection(conn: *mut connection) {
   // Must happen before the close callback releases the connection
   pubsub/unsubscribe(conn)
   if uv/is_closing(conn.client-handle()).as-bool() {
-    tprintln("not closing connection{conn.serial-no}")
+    tprintln("not closing connection${conn.serial-no}")
     return
   } else {
-    tprintln("close-connection {conn.serial-no}")
+    tprintln("close-connection ${conn.serial-no}")
   }
   if conn.current-work is :some work {
     tprintln("cancelling work")
     let cancel-rc = uv/cancel(work.as-request())
     if cancel-rc != 0 {
       let errno = uv/errno/from-i32(cancel-rc)
-      tprintln("failed cancel work {errno.enum-name()}")
+      tprintln("failed cancel work ${errno.enum-name()}")
     }
   }
   uv/close(conn.client-handle(), fn h. {
     let connection = h.get-data[connection]()
-    tprintln("closed connection{connection.serial-no}; releasing")
+    tprintln("closed connection${connection.serial-no}; releasing")
     connection.release()
     conn-count = conn-count - 1
-    tprintln("active connections: {conn-count}")
+    tprintln("active connections: $conn-count")
   })
 }
 
 fn alloc-read-buffer(handle: *mut uv/handle, suggested-size: usize, buf: *mut uv/buf) {
   let connection = handle.get-data[connection]()
-  tprintln("[c{connection.serial-no}] alloc-read-buffer, size {suggested-size}")
+  tprintln("[c${connection.serial-no}] alloc-read-buffer, size $suggested-size")
   let byte-buffer = connection.request-arena.alloc-buffer[u8](suggested-size.as[size])
   buf.* = uv/buf/wrap-buffer(byte-buffer)
 }
@@ -291,7 +291,7 @@ fn queue-http-handler(connection: *mut connection, request: http/request, handle
   let client = connection.client
   let uv-loop = uv/handle_get_loop(client.as-handle())
   let connection = client.get-data[connection]()
-  tprintln("read complete: {request.header.url}\n-----------")
+  tprintln("read complete: ${request.header.url}\n-----------")
 
   let work: *mut http-handler-work = connection.request-arena.push(.{
     connection,
@@ -306,7 +306,7 @@ fn queue-http-handler(connection: *mut connection, request: http/request, handle
   work-req.set-data(work)
   let queue-rc = uv/queue_work(uv-loop, work-req, do-work, after-do-work)
   if queue-rc != 0 {
-    tprintln("uv_queue_work for request handler failed: {queue-rc}")
+    tprintln("uv_queue_work for request handler failed: $queue-rc")
     close-connection(connection)
   } else {
     core/assert(connection.current-work is :none)
@@ -316,7 +316,7 @@ fn queue-http-handler(connection: *mut connection, request: http/request, handle
 
 fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
   let connection = client.get-data[connection]()
-  tprintln("on_client_read {nread} conn {connection.serial-no}")
+  tprintln("on_client_read $nread conn ${connection.serial-no}")
   if nread < 0 {
     let raw-errno = nread.as[i32]
     let uv-errno = uv/errno/from-i32(raw-errno)
@@ -331,7 +331,7 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
         return
       },
       _ -> {
-        tprintln("uncategorized read error: {uv-errno.enum-name()}")
+        tprintln("uncategorized read error: ${uv-errno.enum-name()}")
         // FIXME: Are we sure we can do this, in the streaming case the worker could be on the other side and will try
         //        to access the 'connection', for example to use the request arena
         //        can we call uv_work cancel maybe? That won't do anything about that os thread though once its 'live'
@@ -347,7 +347,7 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
     use llhttp/errno
     if parse-result is errno:HPE_OK .{
     } else {
-      tprintln("http parse error {parse-result.enum-name()}; closing connection")
+      tprintln("http parse error ${parse-result.enum-name()}; closing connection")
       close-connection(connection)
       return
     }
@@ -423,7 +423,7 @@ ns for connection {
 
       let tcp-init-rc = uv/tcp_init(uv-loop, conn.client.&)
       if tcp-init-rc != 0 {
-        eprintln("tcp init failed: {string/wrap-c(uv/strerror(tcp-init-rc).as[ptr])}")
+        eprintln("tcp init failed: ${string/wrap-c(uv/strerror(tcp-init-rc).as[ptr])}")
       }
       conn.client.set-data(conn)
       uv/tcp_nodelay(conn.client.&, 1)
@@ -433,9 +433,9 @@ ns for connection {
     connection
   }
   fn release(self: *mut connection) {
-    tprintln("conn{self.serial-no} request arena close used-bytes: {self.request-arena.used-bytes()}")
+    tprintln("conn${self.serial-no} request arena close used-bytes: ${self.request-arena.used-bytes()}")
     self.request-arena.release()
-    tprintln("conn{self.serial-no} connection arena close used-bytes: {self.connection-arena.used-bytes()}")
+    tprintln("conn${self.serial-no} connection arena close used-bytes: ${self.connection-arena.used-bytes()}")
     self.connection-arena.release()
     system-heap.free-t(self)
   }
@@ -444,7 +444,7 @@ ns for connection {
     if not self.parsed-header.!.keep-alive {
       close-connection(self)
     } else {
-      tprintln("keepalive! conn{self.serial-no} request arena reset used-bytes: {self.request-arena.used-bytes()}")
+      tprintln("keepalive! conn${self.serial-no} request arena reset used-bytes: ${self.request-arena.used-bytes()}")
       self.current-work = :none
       self.request-arena.reset(true)
       self.request-parser.reset()
@@ -503,7 +503,7 @@ fn on-complete-http-body(connection: *mut connection, chunks: span[span[u8]]) {
   }
   let total-size = 0
   for chunks { total-size = total-size + it.len() }
-  tprintln("got the whole body! {chunks.len()} chunks; {total-size} total")
+  tprintln("got the whole body! ${chunks.len()} chunks; $total-size total")
   queue-http-handler(connection, request, connection.matched-handler.get())
 }
 
@@ -511,7 +511,7 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
   mem/tmp().reset(true)
   tprintln("------------ on_new_connection -------------")
   if status < 0 {
-    println("new connection error: {status}")
+    println("new connection error: $status")
     return
   }
 
@@ -523,18 +523,18 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
 
   conn-count = conn-count + 1
   let accept-rc = uv/accept(server, client.as-stream())
-  tprintln("connection arena new used-bytes: {connection.connection-arena.used-bytes()}")
+  tprintln("connection arena new used-bytes: ${connection.connection-arena.used-bytes()}")
   if accept-rc == 0 {
     uv/tcp_keepalive_ex(client, 1, idle = 60, intvl = 10, cnt = 3)
     tprintln("accepted connection; scheduling read")
     let read-rc = uv/read_start(client.as-stream(), alloc-read-buffer, on_client_read)
     if read-rc != 0 {
-      tprintln("read start error: {read-rc}")
+      tprintln("read start error: $read-rc")
       close-connection(connection)
       return
     }
   } else {
-    tprintln("accept error: {accept-rc}")
+    tprintln("accept error: $accept-rc")
     close-connection(connection)
     return
   }
@@ -543,12 +543,12 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
 
 ${
   let template = fn(name: string, ptr-type: string) `
-type {name} = \{
+type $name = {
   body-mode: http/body-mode,
   path-pattern: string,
-  logic-fn: *fn(http/request, {ptr-type}) -> http-response,
+  logic-fn: *fn(http/request, $ptr-type) -> http-response,
 }`
-  stringf("{raw}\n{typed}", .{ raw = template("route-handler", "ptr"), typed = template("user-route-handler[deps]", "*mut deps") })
+  stringf("$raw\n$typed", .{ raw = template("route-handler", "ptr"), typed = template("user-route-handler[deps]", "*mut deps") })
 }
 #static types/assert-layout[route-handler](32, 8, [0, 8, 24])
 #static types/assert-layout[user-route-handler[empty]](32, 8, [0, 8, 24])
@@ -579,7 +579,7 @@ fn start-app[deps](context arena: *mut arena)(make-deps: *fn() -> *mut deps, rou
   })
   server.as-handle().set-data[server-data](server-data)
   if tcp-init-rc != 0 {
-    return :err "tcp init failed: {string/wrap-c(uv/strerror(tcp-init-rc).as[ptr])}"
+    return :err "tcp init failed: ${string/wrap-c(uv/strerror(tcp-init-rc).as[ptr])}"
   }
 
   let addr: uv/sockaddr_in = uninit
@@ -592,14 +592,14 @@ fn start-app[deps](context arena: *mut arena)(make-deps: *fn() -> *mut deps, rou
   uv/thread_setname("mainthread\0".data-ptr().as())
   let bind-rc = uv/tcp_bind(server, (&addr).as(), 0)
   if bind-rc != 0 {
-    eprintln("bind failed: {string/wrap-c(uv/strerror(bind-rc).as[ptr])}")
+    eprintln("bind failed: ${string/wrap-c(uv/strerror(bind-rc).as[ptr])}")
   }
   let r: i32 = uv/listen(server.as-stream(), backlog = 128, on-new-connection)
   if (r != 0) {
       let listen-error = string/wrap-c(uv/strerror(r).as[ptr])
-      return :err "Listen error {listen-error}"
+      return :err "Listen error $listen-error"
   }
-  eprintln("listening on {port}...")
+  eprintln("listening on $port...")
 
   uv/run(l, :UV_RUN_DEFAULT)
   :ok

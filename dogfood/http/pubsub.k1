@@ -35,7 +35,7 @@ ns pubsub {
       uv/mutex_unlock(bus.mutex)
 
       let send-rc = uv/async_send(bus.async-handle)
-      if send-rc < 0 crash("uv_async_send for pubsub failed: {send-rc}")
+      if send-rc < 0 crash("uv_async_send for pubsub failed: $send-rc")
     }
   }
 
@@ -93,7 +93,7 @@ ns pubsub {
   // Main thread only
   fn subscribe(connection: *mut connection, topic: string) {
     let bus = get()
-    tprintln("pubsub: conn{connection.serial-no} subscribed to `{topic}`")
+    tprintln("pubsub: conn${connection.serial-no} subscribed to `$topic`")
     bus.subscribers.push-in(context :system-heap)(.{
       connection,
       topic = topic.cloned-in(context :system-heap)(),
@@ -108,7 +108,7 @@ ns pubsub {
     while i < bus.subscribers.len() {
       let sub = bus.subscribers.get(i)
       if sub.connection.as[ptr] == conn-ptr {
-        tprintln("pubsub: conn{connection.serial-no} unsubscribed from `{sub.topic}`")
+        tprintln("pubsub: conn${connection.serial-no} unsubscribed from `${sub.topic}`")
         free-heap-string(sub.topic)
         bus.subscribers.remove(i)
       } else {
@@ -170,7 +170,7 @@ ns pubsub {
 
     let queued = uv/stream_get_write_queue_size(connection.client.as-stream())
     if queued > max-queued-bytes {
-      tprintln("conn{connection.serial-no} has {queued} bytes of SSE backlog; dropping subscriber")
+      tprintln("conn${connection.serial-no} has $queued bytes of SSE backlog; dropping subscriber")
       frame.release()
       close-connection(connection)
       return
@@ -182,9 +182,9 @@ ns pubsub {
   // SSE wire format, rendered into the ambient allocator
   fn sse-frame(event: event): string {
     let out = string-builder/new()
-    out.string("event: {event.topic}\n")
+    out.string("event: ${event.topic}\n")
     for line in event.data.split-by-char('\n') {
-      out.string("data: {line}\n")
+      out.string("data: $line\n")
     }
     out.string("\n")
     out.build()

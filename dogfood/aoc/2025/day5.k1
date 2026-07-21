@@ -60,7 +60,7 @@ fn part-one(input: string) {
     return false
   })
 
-  println("Fresh Count: {fresh.len()}")
+  println("Fresh Count: ${fresh.len()}")
 }
 
 #static part-one(input-file)

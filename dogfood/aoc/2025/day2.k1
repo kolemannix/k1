@@ -9,7 +9,7 @@ fn day2(part: int, input: string) {
   mem/pop-mode()
 
 
-  println("{mem/tmp().used-bytes()/(1024*1024)}mb")
+  println("${mem/tmp().used-bytes()/(1024*1024)}mb")
   let invalid-sum = 0
   let values-processed = 0
   let total-mem = 0
@@ -23,7 +23,7 @@ fn day2(part: int, input: string) {
       //println("checking {value}");
       let is-invalid = if part == 1 check-invalid-part1(value) else check-invalid-part2(value)
       if is-invalid {
-        println("{value} is invalid! ({invalid-sum})")
+        println("$value is invalid! ($invalid-sum)")
         invalid-sum = invalid-sum + value
       }
       value = value + 1
@@ -33,9 +33,9 @@ fn day2(part: int, input: string) {
     mem/tmp().reset(false)
   }
 
-  println("Day 1 part {part}: {invalid-sum} (processed {values-processed} values)")
-  println("Total mem reclaimed: {total-mem / (1024*1024)}mb")
-  crash("{invalid-sum}")
+  println("Day 1 part $part: $invalid-sum (processed $values-processed values)")
+  println("Total mem reclaimed: ${total-mem / (1024*1024)}mb")
+  crash("$invalid-sum")
 }
 
 let mutable buffer: string-builder = string-builder/new()

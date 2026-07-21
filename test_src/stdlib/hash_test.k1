@@ -32,7 +32,7 @@ fn test-int-keys() {
   let m = map/new[int, string]()
   let i = 0
   while i < 50 {
-    m.insert(i, "v{i}")
+    m.insert(i, "v$i")
     i = i + 1
   }
   assert-equals(m.len(), 50)
@@ -80,7 +80,7 @@ fn test-empty() {
     iterated = iterated + 1
   }
   assert-equals(iterated, 0)
-  assert-equals("{e}", "\{}")
+  assert-equals("$e", "{}")
 }
 
 fn test-clear() {
@@ -100,7 +100,7 @@ fn test-with-capacity() {
   let capacity-before = m.capacity()
   let i = 0
   while i < 100 {
-    m.insert("key{i}", i)
+    m.insert("key$i", i)
     i = i + 1
   }
   assert-equals(m.capacity(), capacity-before)
@@ -131,7 +131,7 @@ fn test-get-or-insert() {
 fn test-print() {
   let m = map/new[string, int]()
   m.insert("a", 1)
-  assert-equals("{m}", "\{a: 1}")
+  assert-equals("$m", "{a: 1}")
   if false { m.dump() }
 }
 
@@ -148,7 +148,7 @@ fn test-set() {
   assert(not s.remove("a"))
   assert(not s.contains("a"))
   assert-equals(s.len(), 1)
-  assert-equals("{s}", "\{b}")
+  assert-equals("$s", "{b}")
   s.clear()
   assert(s.is-empty())
 
@@ -177,9 +177,9 @@ fn test-resize(size: int) {
   while i < size {
     let result = my-map.get(i.show())
     if i % 5 == 0 {
-      assert-msg("{i} should be empty", result is :none)
+      assert-msg("$i should be empty", result is :none)
     } else {
-      if result is :some v { assert-equals(v, i) } else { crash("Missing value {i}") }
+      if result is :some v { assert-equals(v, i) } else { crash("Missing value $i") }
     }
     i = i + 1
   }

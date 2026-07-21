@@ -176,18 +176,14 @@ impl StringDelimKind {
 pub enum TokenKind {
     Ident,
     Numeric,
-    // The 8 string variants must stay contiguous so is_string() lowers to a range check.
+    // The 4 string variants must stay contiguous so is_string() lowers to a range check.
     /// A completed string
-    StringDoneDqInterp,
-    StringDoneDqNoInterp,
-    StringDoneBtInterp,
-    StringDoneBtNoInterp,
+    StringDoneDq,
+    StringDoneBt,
     /// Used in string interpolation; any not-fully-completed string:
     /// the initial segment, or a connecting segment between 2 interpolations
-    StringOpenDqInterp,
-    StringOpenDqNoInterp,
-    StringOpenBtInterp,
-    StringOpenBtNoInterp,
+    StringOpenDq,
+    StringOpenBt,
 
     Char,
 
@@ -269,8 +265,7 @@ static_assert_niched!(TokenKind);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StringTokenInfo {
     pub delim: StringDelimKind,
-    pub interp_exprs: bool,
-    /// false = unterminated segment (ends at a `{` interpolation hole)
+    /// false = unterminated segment (ends at a `$` interpolation hole)
     pub done: bool,
 }
 
@@ -287,48 +282,30 @@ impl AsRef<str> for TokenKind {
 }
 
 impl TokenKind {
-    pub const fn string(delim: StringDelimKind, interp_exprs: bool, done: bool) -> TokenKind {
+    pub const fn string(delim: StringDelimKind, done: bool) -> TokenKind {
         use StringDelimKind as D;
-        match (done, delim, interp_exprs) {
-            (true, D::DoubleQuote, true) => K::StringDoneDqInterp,
-            (true, D::DoubleQuote, false) => K::StringDoneDqNoInterp,
-            (true, D::Backtick, true) => K::StringDoneBtInterp,
-            (true, D::Backtick, false) => K::StringDoneBtNoInterp,
-            (false, D::DoubleQuote, true) => K::StringOpenDqInterp,
-            (false, D::DoubleQuote, false) => K::StringOpenDqNoInterp,
-            (false, D::Backtick, true) => K::StringOpenBtInterp,
-            (false, D::Backtick, false) => K::StringOpenBtNoInterp,
+        match (done, delim) {
+            (true, D::DoubleQuote) => K::StringDoneDq,
+            (true, D::Backtick) => K::StringDoneBt,
+            (false, D::DoubleQuote) => K::StringOpenDq,
+            (false, D::Backtick) => K::StringOpenBt,
         }
     }
 
     pub const fn as_string(self) -> Option<StringTokenInfo> {
         use StringDelimKind as D;
-        let (done, delim, interp_exprs) = match self {
-            K::StringDoneDqInterp => (true, D::DoubleQuote, true),
-            K::StringDoneDqNoInterp => (true, D::DoubleQuote, false),
-            K::StringDoneBtInterp => (true, D::Backtick, true),
-            K::StringDoneBtNoInterp => (true, D::Backtick, false),
-            K::StringOpenDqInterp => (false, D::DoubleQuote, true),
-            K::StringOpenDqNoInterp => (false, D::DoubleQuote, false),
-            K::StringOpenBtInterp => (false, D::Backtick, true),
-            K::StringOpenBtNoInterp => (false, D::Backtick, false),
+        let (done, delim) = match self {
+            K::StringDoneDq => (true, D::DoubleQuote),
+            K::StringDoneBt => (true, D::Backtick),
+            K::StringOpenDq => (false, D::DoubleQuote),
+            K::StringOpenBt => (false, D::Backtick),
             _ => return None,
         };
-        Some(StringTokenInfo { delim, interp_exprs, done })
+        Some(StringTokenInfo { delim, done })
     }
 
     pub const fn is_string(self) -> bool {
-        matches!(
-            self,
-            K::StringDoneDqInterp
-                | K::StringDoneDqNoInterp
-                | K::StringDoneBtInterp
-                | K::StringDoneBtNoInterp
-                | K::StringOpenDqInterp
-                | K::StringOpenDqNoInterp
-                | K::StringOpenBtInterp
-                | K::StringOpenBtNoInterp
-        )
+        matches!(self, K::StringDoneDq | K::StringDoneBt | K::StringOpenDq | K::StringOpenBt)
     }
 
     pub fn get_repr(&self) -> &'static str {
@@ -402,14 +379,10 @@ impl TokenKind {
 
             K::Ident => "<ident>",
             K::Numeric => "<numeric>",
-            K::StringDoneBtInterp => "<f`string`>",
-            K::StringDoneBtNoInterp => "<`string`>",
-            K::StringDoneDqInterp => "<f\"string\">",
-            K::StringDoneDqNoInterp => "<\"string\">",
-            K::StringOpenBtInterp => "<f`string...>",
-            K::StringOpenBtNoInterp => "<`string...>",
-            K::StringOpenDqInterp => "<f\"string...>",
-            K::StringOpenDqNoInterp => "<\"string...>",
+            K::StringDoneBt => "<`string`>",
+            K::StringDoneDq => "<\"string\">",
+            K::StringOpenBt => "<`string...>",
+            K::StringOpenDq => "<\"string...>",
             K::Char => "<char>",
 
             K::Eof => "<EOF>",
@@ -508,14 +481,8 @@ pub const SHARED_STRING_ESCAPED_CHARS: [EscapedChar; 6] = [
     EscapedChar { sentinel: 't', output: b'\t' },
     EscapedChar { sentinel: 'r', output: b'\r' },
     EscapedChar { sentinel: '\\', output: b'\\' },
-    EscapedChar { sentinel: '{', output: b'{' },
+    EscapedChar { sentinel: '$', output: b'$' },
 ];
-
-pub const DOUBLE_QUOTE_STRING_ESCAPED_CHARS: [EscapedChar; 1] =
-    [EscapedChar { sentinel: '"', output: b'\"' }];
-
-pub const BACKTICK_STRING_ESCAPED_CHARS: [EscapedChar; 1] =
-    [EscapedChar { sentinel: '`', output: b'`' }];
 
 pub const CHAR_ESCAPED_CHARS: [EscapedChar; 6] = [
     EscapedChar { sentinel: 'n', output: b'\n' },
@@ -641,22 +608,22 @@ enum LexMode {
     /// (and requires!) that the language grammar has matched bracing
     Interp { brace_depth: u32 },
     /// A double-quote string. Escape patterns are different
-    DoubleQuoteString { exprs: bool },
+    DoubleQuoteString,
     /// A backtick string; only backticks must be escaped
-    BacktickString { exprs: bool },
+    BacktickString,
 }
 
 impl LexMode {
     pub fn is_dq_string(&self) -> bool {
-        matches!(self, LexMode::DoubleQuoteString { .. })
+        matches!(self, LexMode::DoubleQuoteString)
     }
     pub fn is_bt_string(&self) -> bool {
-        matches!(self, LexMode::BacktickString { .. })
+        matches!(self, LexMode::BacktickString)
     }
     pub fn string_delim_kind(&self) -> Option<StringDelimKind> {
         match self {
-            LexMode::DoubleQuoteString { .. } => Some(StringDelimKind::DoubleQuote),
-            LexMode::BacktickString { .. } => Some(StringDelimKind::Backtick),
+            LexMode::DoubleQuoteString => Some(StringDelimKind::DoubleQuote),
+            LexMode::BacktickString => Some(StringDelimKind::Backtick),
             LexMode::Tokens => None,
             LexMode::Interp { .. } => None,
         }
@@ -781,9 +748,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             }
             let lex_mode = state.mode_stack.last_mut().unwrap();
             match lex_mode {
-                LexMode::DoubleQuoteString { exprs: interp_exprs }
-                | LexMode::BacktickString { exprs: interp_exprs } => {
-                    let interp_exprs = *interp_exprs;
+                LexMode::DoubleQuoteString | LexMode::BacktickString => {
                     match c {
                         EOF_CHAR => {
                             // FIXME: We need to encode EOF_CHAR as something other than \0
@@ -813,24 +778,54 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 self.advance();
                             }
                         }
-                        // { is only special when interp_exprs is true; \{ escapes it
-                        '{' if interp_exprs => {
-                            self.advance();
-                            // Track brace depth and done when == 0
+                        // $ opens an interpolation hole: ${expr} or $ident; \$ escapes it.
+                        // A $ followed by anything else is a literal dollar.
+                        '$' if self.peek_n(1) == '{' => {
                             debug!("[lex] starting code at {n} with tok_len = {tok_len}");
                             let string_delim_kind = lex_mode.string_delim_kind().unwrap();
+                            // Track brace depth and done when == 0
                             state.mode_stack.push(LexMode::Interp { brace_depth: 1 });
                             tokens.push(make_buffered_token(
                                 self,
-                                K::string(string_delim_kind, interp_exprs, false),
+                                K::string(string_delim_kind, false),
                                 n,
                                 tok_len,
                             ));
+                            self.advance();
+                            self.advance();
                             tokens.push(make_token(
                                 self,
                                 K::OpenBrace,
                                 n,
-                                1,
+                                2,
+                            ));
+                            return Ok(Some(()));
+                        }
+                        '$' if is_ident_start(self.peek_n(1)) => {
+                            let string_delim_kind = lex_mode.string_delim_kind().unwrap();
+                            tokens.push(make_buffered_token(
+                                self,
+                                K::string(string_delim_kind, false),
+                                n,
+                                tok_len,
+                            ));
+                            // Eat the $, then the ident run; we stay in string mode.
+                            // A hyphen continues the ident only when followed by another
+                            // ident char, so "$n-th" is `n-th` but "$a-$b" is `a`, "-", `b`
+                            self.advance();
+                            let mut ident_len = 0;
+                            while is_ident_char(self.peek()) {
+                                if self.peek() == '-' && !is_ident_char(self.peek_n(1)) {
+                                    break;
+                                }
+                                ident_len += 1;
+                                self.advance();
+                            }
+                            tokens.push(make_token(
+                                self,
+                                K::Ident,
+                                n + 1,
+                                ident_len,
                             ));
                             return Ok(Some(()));
                         }
@@ -842,7 +837,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             state.mode_stack.pop();
                             tokens.push(make_buffered_token(
                                 self,
-                                K::string(string_delim_kind, interp_exprs, true),
+                                K::string(string_delim_kind, true),
                                 n + 1,
                                 tok_len,
                             ));
@@ -856,7 +851,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             state.mode_stack.pop();
                             tokens.push(make_buffered_token(
                                 self,
-                                K::string(string_delim_kind, interp_exprs, true),
+                                K::string(string_delim_kind, true),
                                 n + 1,
                                 tok_len,
                             ));
@@ -907,28 +902,14 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         }
                         match c {
                             EOF_CHAR => return Ok(None),
-                            'p' if next == '"' => {
-                                state.mode_stack.push(LexMode::DoubleQuoteString { exprs: false });
-                                tok_len += 2;
-                                self.advance();
-                                self.advance();
-                                continue;
-                            }
                             '"' => {
-                                state.mode_stack.push(LexMode::DoubleQuoteString { exprs: true });
+                                state.mode_stack.push(LexMode::DoubleQuoteString);
                                 tok_len += 1;
                                 self.advance();
                                 continue;
                             }
-                            'p' if next == '`' => {
-                                state.mode_stack.push(LexMode::BacktickString { exprs: false });
-                                tok_len += 2;
-                                self.advance();
-                                self.advance();
-                                continue;
-                            }
                             '`' => {
-                                state.mode_stack.push(LexMode::BacktickString { exprs: true });
+                                state.mode_stack.push(LexMode::BacktickString);
                                 tok_len += 1;
                                 self.advance();
                                 continue;
@@ -1266,6 +1247,13 @@ fn is_ident_or_num_start(c: char) -> bool {
     is_ident_char(c)
 }
 
+/// Whether c can start a bare `$ident` interpolation hole: an ident char that
+/// could not begin a number, so `"$5.99"` stays literal text
+#[inline]
+fn is_ident_start(c: char) -> bool {
+    is_ident_char(c) && c != '-' && !is_numeric_char(c)
+}
+
 #[inline]
 fn is_numeric_char(c: char) -> bool {
     match BYTE_CLASS.get(c as usize) {
@@ -1471,108 +1459,119 @@ mod test {
     #[test]
     fn literal_string_simple() -> anyhow::Result<()> {
         let (spans, tokens) = set_up("\"foobear\"")?;
-        assert_token(&spans, &tokens, 0, K::StringDoneDqInterp, 0, 9, false);
+        assert_token(&spans, &tokens, 0, K::StringDoneDq, 0, 9, false);
         Ok(())
     }
 
     #[test]
     fn literal_string_in_call() -> anyhow::Result<()> {
-        let (spans, tokens) = set_up("let x = println(p\"foobear\")")?;
+        let (spans, tokens) = set_up("let x = println(\"foobear\")")?;
         assert_token(&spans, &tokens, 0, K::KeywordLet, 0, 3, false);
         assert_token(&spans, &tokens, 1, K::Ident, 4, 1, true);
         assert_token(&spans, &tokens, 2, K::Equals, 6, 1, true);
         assert_token(&spans, &tokens, 3, K::Ident, 8, 7, true);
         assert_token(&spans, &tokens, 4, K::OpenParen, 15, 1, false);
-        assert_token(&spans, &tokens, 5, K::StringDoneDqNoInterp, 16, 10, false);
-        assert_token(&spans, &tokens, 6, K::CloseParen, 26, 1, false);
+        assert_token(&spans, &tokens, 5, K::StringDoneDq, 16, 9, false);
+        assert_token(&spans, &tokens, 6, K::CloseParen, 25, 1, false);
         Ok(())
     }
 
     #[test]
     fn interpolation_1() -> anyhow::Result<()> {
-        let input = r#""Hello, {world}""#;
+        let input = r#""Hello, ${world}""#;
         expect_token_kinds(
             input,
-            vec![
-                K::StringOpenDqInterp,
-                K::OpenBrace,
-                K::Ident,
-                K::CloseBrace,
-                K::StringDoneDqInterp,
-            ],
+            vec![K::StringOpenDq, K::OpenBrace, K::Ident, K::CloseBrace, K::StringDoneDq],
         )
     }
 
     #[test]
+    fn interpolation_bare_ident() -> anyhow::Result<()> {
+        let (spans, tokens) = set_up(r#""Hello, $wide-world!""#)?;
+        assert_token(&spans, &tokens, 0, K::StringOpenDq, 0, 8, false);
+        assert_token(&spans, &tokens, 1, K::Ident, 9, 10, false);
+        assert_token(&spans, &tokens, 2, K::StringDoneDq, 19, 2, false);
+        Ok(())
+    }
+
+    #[test]
+    fn interpolation_bare_ident_trailing_hyphen() -> anyhow::Result<()> {
+        let input = r#""$yyyy-$mm""#;
+        expect_token_kinds(
+            input,
+            vec![K::StringOpenDq, K::Ident, K::StringOpenDq, K::Ident, K::StringDoneDq],
+        )
+    }
+
+    #[test]
+    fn interpolation_literal_dollars() -> anyhow::Result<()> {
+        // $ before a non-ident-start char is literal; \$ is always literal
+        let input = r#""$5.99 + 100$ + \$x""#;
+        expect_token_kinds(input, vec![K::StringDoneDq])
+    }
+
+    #[test]
     fn interpolation_start_end() -> anyhow::Result<()> {
-        let input = r#" "{foo()}, {world}" "#;
+        let input = r#" "${foo()}, $world" "#;
         expect_token_kinds(
             input,
             vec![
-                K::StringOpenDqInterp,
+                K::StringOpenDq,
                 K::OpenBrace,
                 K::Ident,
                 K::OpenParen,
                 K::CloseParen,
                 K::CloseBrace,
-                K::StringOpenDqInterp,
-                K::OpenBrace,
+                K::StringOpenDq,
                 K::Ident,
-                K::CloseBrace,
-                K::StringDoneDqInterp,
+                K::StringDoneDq,
             ],
         )
     }
 
     #[test]
     fn interpolation_string() -> anyhow::Result<()> {
-        let input = r#""{p"hello"}""#;
+        let input = r#""${"hello"}""#;
         expect_token_kinds(
             input,
-            vec![
-                K::StringOpenDqInterp,
-                K::OpenBrace,
-                K::StringDoneDqNoInterp,
-                K::CloseBrace,
-                K::StringDoneDqInterp,
-            ],
+            vec![K::StringOpenDq, K::OpenBrace, K::StringDoneDq, K::CloseBrace, K::StringDoneDq],
         )
     }
 
     #[test]
     fn interpolation_nested() -> anyhow::Result<()> {
-        let input = r#" "{"hello {var}"}" "#;
+        let input = r#" "${"hello ${var}"}" "#;
         expect_token_kinds(
             input,
             vec![
-                K::StringOpenDqInterp,
+                K::StringOpenDq,
                 K::OpenBrace,
-                K::StringOpenDqInterp,
+                K::StringOpenDq,
                 K::OpenBrace,
                 K::Ident,
                 K::CloseBrace,
-                K::StringDoneDqInterp,
+                K::StringDoneDq,
                 K::CloseBrace,
-                K::StringDoneDqInterp,
+                K::StringDoneDq,
             ],
         )
     }
 
     #[test]
-    fn interpolation_escape_brace() -> anyhow::Result<()> {
-        let input = r#""Method 'sum' does not exist on type: '\{ x: iword, y: iword }'""#;
-        expect_token_kinds(input, vec![K::StringDoneDqInterp])
+    fn interpolation_literal_braces() -> anyhow::Result<()> {
+        let input = r#""Method 'sum' does not exist on type: '{ x: iword, y: iword }'""#;
+        expect_token_kinds(input, vec![K::StringDoneDq])
     }
 
     #[test]
     fn interpolation_nested_with_braces() -> anyhow::Result<()> {
-        let input = r#" "{"hello {({ x: 42 }).x}"}" "#;
+        let input = r#" "${"hello ${({ x: 42 }).x}"}" "#;
         expect_token_kinds(
             input,
             vec![
-                K::StringOpenDqInterp,
+                K::StringOpenDq,
                 K::OpenBrace,
-                K::StringOpenDqInterp,
+                K::StringOpenDq,
                 K::OpenBrace,
                 K::OpenParen,
                 K::OpenBrace,
@@ -1584,17 +1583,17 @@ mod test {
                 K::Dot,
                 K::Ident, // .x
                 K::CloseBrace,
-                K::StringDoneDqInterp,
+                K::StringDoneDq,
                 K::CloseBrace,
-                K::StringDoneDqInterp,
+                K::StringDoneDq,
             ],
         )
     }
 
     #[test]
     fn backtick_string_1() -> anyhow::Result<()> {
-        let input = r#"`Method 'sum' does not exist on type: '\{ x: iword, y: iword }'`"#;
-        expect_token_kinds(input, vec![K::StringDoneBtInterp])
+        let input = r#"`Method 'sum' does not exist on type: '{ x: iword, y: iword }'`"#;
+        expect_token_kinds(input, vec![K::StringDoneBt])
     }
 
     #[test]
@@ -1610,20 +1609,20 @@ mod test {
     fn backtick_interpolation_mixed() -> anyhow::Result<()> {
         // Tests mode stack by mixing string types
         let input = r#"`
-        {"hello {var}"}
+        ${"hello ${var}"}
         `"#;
         expect_token_kinds(
             input,
             vec![
-                K::StringOpenBtInterp,
+                K::StringOpenBt,
                 K::OpenBrace,
-                K::StringOpenDqInterp,
+                K::StringOpenDq,
                 K::OpenBrace,
                 K::Ident,
                 K::CloseBrace,
-                K::StringDoneDqInterp,
+                K::StringDoneDq,
                 K::CloseBrace,
-                K::StringDoneBtInterp,
+                K::StringDoneBt,
             ],
         )
     }

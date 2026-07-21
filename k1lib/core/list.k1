@@ -87,21 +87,21 @@ ns for list {
 
   fn get-ref[t](self: *mut list[t], index: size): *mut t {
     if index < 0 or index >= self.len {
-      crash("list index out of bounds: {index} >= {self.len}")
+      crash("list index out of bounds: $index >= ${self.len}")
     }
     self.buffer.get-ref-unchecked[t](index)
   }
 
   fn set[t](self: *mut list[t], index: size, elem: t) {
     if index >= self.len {
-      crash("list index out of bounds: {index} >= {self.len}")
+      crash("list index out of bounds: $index >= ${self.len}")
     }
     self.buffer.set(index, elem)
   }
 
   fn get[t](self: list[t], index: size): t {
     if index >= self.len {
-      crash("list index out of bounds: {index} >= {self.len}")
+      crash("list index out of bounds: $index >= ${self.len}")
     }
     self.buffer.get(index)
   }
@@ -146,7 +146,7 @@ ns for list {
 
   fn slice[t](self: list[t], start: size, end: size): span[t] {
     if self.len == 0 return span/empty[t]()
-    if end > self.len crash("list slice end out of bounds: {end}")
+    if end > self.len crash("list slice end out of bounds: $end")
     span/wrap-buffer(self.buffer.slice(start, end))
   }
 
@@ -235,10 +235,10 @@ ns for list {
   fn swap[t](self: *mut list[t], index-a: size, index-b: size) {
     if index-a == index-b return
     if index-a >= self.len {
-      crash("list index out of bounds: {index-a} >= {self.len}")
+      crash("list index out of bounds: $index-a >= ${self.len}")
     }
     if index-a >= self.len {
-      crash("list index out of bounds: {index-b} >= {self.len}")
+      crash("list index out of bounds: $index-b >= ${self.len}")
     }
     self.buffer.swap[t](index-a, index-b)
   }
@@ -330,7 +330,7 @@ ns for list {
 
   fn remove[t](self: *mut list[t], index: size) {
     if index.as[u64] >= self.len.as[u64] {
-      crash("list index out of bounds. index {index}, len {self.len}")
+      crash("list index out of bounds. index $index, len ${self.len}")
     }
     self.buffer.remove(index)
     self.len = self.len - 1

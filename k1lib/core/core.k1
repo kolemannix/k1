@@ -3,13 +3,13 @@
 
 fn assert-equals[t: print and equals](context locn: k1/source-location)(a: t, b: t) {
   if a != b {
-    crash("ASSERT FAILED: {a} != {b}")
+    crash("ASSERT FAILED: $a != $b")
   }
 }
 
 fn assert-not-equals[t: print and equals](context locn: k1/source-location)(a: t, b: t) {
   if a == b {
-    crash("ASSERT FAILED: {a} == {b}")
+    crash("ASSERT FAILED: $a == $b")
   }
 }
 
@@ -123,7 +123,7 @@ ns files {
 
     let file = libc/files/fopen(filename-c-string.ptr, "r\0".data-ptr())
     if file.is-null() {
-      crash("fopen failed: `{path}`")
+      crash("fopen failed: `$path`")
     }
     defer libc/files/fclose(file)
 
@@ -145,7 +145,7 @@ ns files {
 
     let write-res = libc/files/fwrite(contents.data-ptr(), 1, contents.len(), FILE)
     if write-res.as[size] != contents.len() {
-      crash("fwrite of {out-path} failed")
+      crash("fwrite of $out-path failed")
     }
   }
 
@@ -153,7 +153,7 @@ ns files {
 
 fn assert-msg(context locn: k1/source-location)(msg: string, value: bool) {
   if not value {
-    crash("ASSERT FAILED: {msg}")
+    crash("ASSERT FAILED: $msg")
   }
 }
 
@@ -344,7 +344,7 @@ impl[s, f: print] try[t = s, e = f] for result[s, f] {
   fn get-value(self): t  {
     self is {
       :ok s -> s,
-      :err e -> crash("get-value() on :err: {e}")
+      :err e -> crash("get-value() on :err: $e")
     }
   }
   fn get-error(self): e {
@@ -404,7 +404,7 @@ ns for u8 {
     } else if v < 62 {
       (v + 29).as[char] // 'a' + (v - 36)
     } else {
-      crash("u8/to-ascii-digit: value {v} is out of range (max 61)")
+      crash("u8/to-ascii-digit: value $v is out of range (max 61)")
     }
   }
 }
@@ -481,7 +481,7 @@ ns for f64 {
   fn format[w: writer](f: f64, w, places: i32) {
     let stack-buf = array/zeroed[u8, 32]()
     let written-len: i32 = k1rt/snprintf_f64(stack-buf.get-base().as[ptr], 32, f, places)
-    if written-len <= 0 crash("snprintf_f32 returned {written-len}")
+    if written-len <= 0 crash("snprintf_f32 returned $written-len")
     w.write-bytes(stack-buf.as-span().slice(0, written-len.as[size]))
   }
 
@@ -492,11 +492,11 @@ ns for f64 {
     let out: f64 = uninit
     let result = ffc/parse_double(s.len(), s.data-ptr(), &out)
     if not ffc/result_is_ok(result) {
-      :err "Could not parse '{s}' as f64"
+      :err "Could not parse '$s' as f64"
     } else {
       let len = result.ptr.diff(s.data-ptr())
       if require-total and len != s.len() {
-        :err "Parsed an f64 but there was stuff at the end: {len} vs {s.len()}"
+        :err "Parsed an f64 but there was stuff at the end: $len vs ${s.len()}"
       } else {
         :ok .{ value = out, len }
       }

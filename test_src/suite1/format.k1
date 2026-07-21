@@ -8,21 +8,21 @@ fn test() {
   let w = string-builder/new()
 
   // If you have a buffer already, or any writer at all, you can 'write' to it formatted
-  writef(w, "hello {world} -- ")
-  writef(w, "hello {world} {}", 42)
+  writef(w, "hello $world -- ")
+  writef(w, "hello $world ${}", 42)
   assert-equals(w.build-tmp(), "hello Budapest -- hello Budapest 42")
-  assert-equals("true", stringf("{}", true))
-  assert-equals("-3.140000", stringf("{}", -3.14))
-  assert-equals("-3", stringf("{}", -3i8))
+  assert-equals("true", stringf("${}", true))
+  assert-equals("-3.140000", stringf("${}", -3.14))
+  assert-equals("-3", stringf("${}", -3i8))
   
-  assert(test-compile(stringf("{}", 1, 1)).is-some())
-  assert(test-compile(stringf("{missing}", .{x =1})).is-some())
+  assert(test-compile(stringf("${}", 1, 1)).is-some())
+  assert(test-compile(stringf("$missing", .{x =1})).is-some())
   // this works now because { nested: "asdf" } implements print. hah!
-  assert(test-compile(stringf("{x}", .{x = .{ nested = "asdf" }})).is-none())
+  assert(test-compile(stringf("$x", .{x = .{ nested = "asdf" }})).is-none())
 
   // Or you can just make strings directly, mixing interpolated expressions
   // with struct specifiers
-  let s = stringf("hello {get-world()} {yyyy}-{mm}-{dd}", .{yyyy =2021,mm =10,dd =3})
+  let s = stringf("hello ${get-world()} ${yyyy}-${mm}-$dd", .{yyyy =2021,mm =10,dd =3})
   // TODO left pad, get it from npm!
   assert-equals(s, "hello Budapest 2021-10-3")
 }

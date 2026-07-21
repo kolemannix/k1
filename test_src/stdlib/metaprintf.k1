@@ -22,7 +22,7 @@ fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
     schema is {
       :string -> {
         if parts.len != 1 {
-          crash("Got 1 format argument (a string) but format string has {parts.len}")
+          crash("Got 1 format argument (a string) but format string has ${parts.len}")
         }
         //meta/emitLine("its a string baby");
         code.line("parts.get(0).print-to(w);")
@@ -34,16 +34,16 @@ fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
         }
 
         for field in fields {
-          code.line("let f{it-index} = args.{field.name};")
+          code.line("let f$it-index = args.${field.name};")
         }
 
         for part in parts {
-          code.line("parts.get({it-index}).print-to(w);")
-          code.line("f{it-index}.print-to(w);")
+          code.line("parts.get($it-index).print-to(w);")
+          code.line("f$it-index.print-to(w);")
         }
 
       },
-      _ -> crash("Unsupported format arguments: {types/name[args]}")
+      _ -> crash("Unsupported format arguments: ${types/name[args]}")
     }
     code.build()
   }

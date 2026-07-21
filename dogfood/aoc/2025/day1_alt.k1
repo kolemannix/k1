@@ -37,7 +37,7 @@ fn solve(p: (either { part-1, part-2 }), input: string): int {
 let input: string = core/files/read-to-string(context :tmp)("day1_input.txt")
 
 fn run(): i32 {
-  println("Day 1 part 1: {solve(:part-1, input)}")
-  println("Day 1 part 2: {solve(:part-2, input)}")
+  println("Day 1 part 1: ${solve(:part-1, input)}")
+  println("Day 1 part 2: ${solve(:part-2, input)}")
   0
 }

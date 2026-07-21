@@ -67,6 +67,6 @@ impl[a] try[t = a, e = empty] for opt[a] {
 
 impl[t: print] print for opt[t] {
   fn print-to[w: writer](self: opt[t], w) {
-    if self is :some(v) w.string("Some({v})") else w.string("None")
+    if self is :some(v) w.string("Some($v)") else w.string("None")
   }
 }

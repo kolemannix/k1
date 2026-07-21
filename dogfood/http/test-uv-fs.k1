@@ -11,7 +11,7 @@ fn example-fs() {
   let flags =  core/posix/O_RDWR
   let uv-file = uv/fs_open(l, &open-req, ($string/c-lit("uv.k1")).rw[u8], flags, 0, ptr/null.as())
   if uv-file < 0 {
-    println("open error: {uv-file}")
+    println("open error: $uv-file")
     crash("")
   }
   let data-buffer = buffer/allocate[u8](1024)
@@ -23,7 +23,7 @@ fn example-fs() {
     let data: *mut buffer[u8] = uv-fs.get-data()
     let result: size = uv/fs_get_result(uv-fs)
     let s = string/wrap-byte-buffer(data)
-    tprintln("done read: {result}. data={data.len}\n{s}")
+    tprintln("done read: $result. data=${data.len}\n$s")
   })
 
   println("idling")

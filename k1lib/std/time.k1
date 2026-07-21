@@ -10,7 +10,7 @@
     if (timebase.denom == 0) {
       mach_timebase_info(&timebase)
     }
-    eprintln("timebase is {timebase.numer} / {timebase.denom}")
+    eprintln("timebase is ${timebase.numer} / ${timebase.denom}")
     (counter * (timebase.numer.as[u64])) / (timebase.denom.as[u64])
   }
 

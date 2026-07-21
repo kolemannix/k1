@@ -28,9 +28,9 @@ fn test-parsing() {
 
   test-parse(`false`, fn j. j is :bool false)
   test-parse(`true`,  fn j. j is :bool true)
-  test-parse(`\{}`,   fn j. j is :object m and m.is-empty())
+  test-parse(`{}`,   fn j. j is :object m and m.is-empty())
   test-parse(
-    `\{ "foo": true, "baz": false }`,
+    `{ "foo": true, "baz": false }`,
     fn j. j is :object m and
         m.map(fn f. f.key) == ["foo", "baz"] and
         m.map(fn f. f.value.as-bool().!) == [true, false]
@@ -51,30 +51,30 @@ fn test() {
 
 fn test-parse(s: string, f: some fn json -> bool) {
   json/parse-from-string(s) is {
-    :err msg -> crash("Failed: {msg}"),
-    :ok json -> if not f(json) crash("Failed '{s}'")
+    :err msg -> crash("Failed: $msg"),
+    :ok json -> if not f(json) crash("Failed '$s'")
   }
 }
 
 let example-json: string =
-`\{
+`{
   "school": "Greenwood High",
-  "location": \{
+  "location": {
     "city": "New York",
     "state": "NY"
   },
   "students": [
-    \{
+    {
       "name": "Emma",
       "age": 15,
       "grade": "10"
     },
-    \{
+    {
       "name": "Liam",
       "age": 14,
       "grade": "9"
     },
-    \{
+    {
       "name": "Olivia",
       "age": 16,
       "grade": "11"

@@ -12,7 +12,7 @@ fn get-arg-kind(type-id: u64): either { string, list-string, opt-string } {
   if      type-id == types/type-id[string]       :string
   else if type-id == types/type-id[list[string]] :list-string
   else if type-id == types/type-id[opt[string]]  :opt-string
-  else crash("Unsupported arg type: {types/type-id-name(type-id)}. Must be string, ?string, or list[string] for now")
+  else crash("Unsupported arg type: ${types/type-id-name(type-id)}. Must be string, ?string, or list[string] for now")
 }
 
 fn gen-help-text[t](summary: string): string {
@@ -22,9 +22,9 @@ fn gen-help-text[t](summary: string): string {
   writelnf(sb, `supported command line arguments`)
   for s.fields {
     get-arg-kind(it.type-id) is {
-      :string -> writelnf(sb, `  -{it.name} - required. (/-{it.name} to comment out)`),
-      :opt-string -> writelnf(sb, `  -{it.name} - optional. (/-{it.name} to comment out)`),
-      :list-string -> writelnf(sb, `  -{it.name} - list. (/-{it.name} to comment out)`),
+      :string -> writelnf(sb, `  -${it.name} - required. (/-${it.name} to comment out)`),
+      :opt-string -> writelnf(sb, `  -${it.name} - optional. (/-${it.name} to comment out)`),
+      :list-string -> writelnf(sb, `  -${it.name} - list. (/-${it.name} to comment out)`),
     }
   }
   sb.build-tmp()
@@ -48,47 +48,47 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
     // For each field in the target type, create a local variable to house our parsed data
     for s.fields {
       get-arg-kind(it.type-id) is {
-        :string      -> writelnf(code, "let {it.name}-val: ?type-from-id({args-type-id}).{it.name} = :none;"),
-        :opt-string  -> writelnf(code, "let {it.name}-val: type-from-id({args-type-id}).{it.name} = :none;"),
-        :list-string -> writelnf(code, "let {it.name}-val: type-from-id({args-type-id}).{it.name} = list/empty();"),
+        :string      -> writelnf(code, "let ${it.name}-val: ?type-from-id($args-type-id).${it.name} = :none;"),
+        :opt-string  -> writelnf(code, "let ${it.name}-val: type-from-id($args-type-id).${it.name} = :none;"),
+        :list-string -> writelnf(code, "let ${it.name}-val: type-from-id($args-type-id).${it.name} = list/empty();"),
       }
     }
 
     // Initialize a loop through the args
     writelnf(code, `let i = 1;`)
-    writelnf(code, `while i < args.len() \{`)
+    writelnf(code, `while i < args.len() {`)
     writelnf(code, `  let cur = args.get(i);`)
-    writelnf(code, `  cur is \{`)
+    writelnf(code, `  cur is {`)
 
     // Parse the argument using a match - generate a case or two for each arg field
     // The match arms update the locals
     for s.fields {
       get-arg-kind(it.type-id) is {
         :string or :opt-string -> {
-          writelnf(code, `    "-{it.name}" -> \{ if parse-next(&i, args) is :some next \{ {it.name}-val = :some next } },`)
-          writelnf(code, `    "/{it.name}" -> \{ if parse-next(&i, args) is :some(next) .\{} },`)
+          writelnf(code, `    "-${it.name}" -> { if parse-next(&i, args) is :some next { ${it.name}-val = :some next } },`)
+          writelnf(code, `    "/${it.name}" -> { if parse-next(&i, args) is :some(next) .{} },`)
         },
         :list-string -> {
-          writelnf(code, `    "+{it.name}" -> \{ if parse-next(&i, args) is :some next \{ {it.name}-val.push(next) } },`)
+          writelnf(code, `    "+${it.name}" -> { if parse-next(&i, args) is :some next { ${it.name}-val.push(next) } },`)
         },
       }
     }
-    code.line(`    _ -> crash("Unrecognized arg \{cur}")`)
+    code.line(`    _ -> crash("Unrecognized arg \$cur")`)
     code.line(`  }`)
     code.line(`};`)
 
     // validate
     for s.fields {
       get-arg-kind(it.type-id) is {
-        :string                     -> writelnf(code, `require {it.name}-val is :some {it.name}-out else return :err "{it.name} is missing";`),
-        :list-string or :opt-string -> writelnf(code, "let {it.name}-out = {it.name}-val;"),
+        :string                     -> writelnf(code, `require ${it.name}-val is :some ${it.name}-out else return :err "${it.name} is missing";`),
+        :list-string or :opt-string -> writelnf(code, "let ${it.name}-out = ${it.name}-val;"),
       }
     }
 
     // Construct the final output struct
-    writelnf(code, ":ok(.\{")
+    writelnf(code, ":ok(.{")
     for s.fields {
-      writelnf(code, "{it.name} = {it.name}-out,")
+      writelnf(code, "${it.name} = ${it.name}-out,")
     }
     writelnf(code, "})")
 

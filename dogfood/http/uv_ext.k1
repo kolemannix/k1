@@ -68,7 +68,7 @@ ns uv {
 
   ns for errno {
     fn from-i32(i: i32): errno {
-      if i >= 0 crash("not an errno: {i}")
+      if i >= 0 crash("not an errno: $i")
       mem/bitcast[i32, uv/errno](i)
     }
   }

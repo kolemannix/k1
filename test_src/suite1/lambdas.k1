@@ -99,7 +99,7 @@ fn test() {
 
   let x = { let tmp = 10; &tmp }
   // Coerce lambdas to lambda objects
-  simple-dyn(fn. { let _ = "Thunk! {x.*}"; x.* = 11 })
+  simple-dyn(fn. { let _ = "Thunk! ${x.*}"; x.* = 11 })
   assert-equals(x.*, 11)
   // Coerce function refs to lambda objects
   simple-dyn(fn. { let _ = "Thunk!"; x.* = 12 })

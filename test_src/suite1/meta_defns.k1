@@ -3,26 +3,26 @@ ns meta_defns
 $ "let n: u64 = 255"
 $ "let x: u64 = 256"
 
-$ p"fn is-pow2(x: u64): bool { (x - 1) || bitwise/bit-and(x) == 0 }"
+$ "fn is-pow2(x: u64): bool { (x - 1) || bitwise/bit-and(x) == 0 }"
 
 $ {
   let name1 = "1"
   let name2 = "2"
-  let a = "ns secret \{ fn secret{name1}(): int \{ 42 } }\n"
-  let b = "ns secret \{ fn secret{name2}(): int \{ 43 } }\n"
-  "{a}{b}"
+  let a = "ns secret { fn secret$name1(): int { 42 } }\n"
+  let b = "ns secret { fn secret$name2(): int { 43 } }\n"
+  "$a$b"
 }
 
 $ {
-  p"type frob = { b: bool }"
+  "type frob = { b: bool }"
 }
 
 $ {
-  p"ability named { fn get-name(self): string }"
+  "ability named { fn get-name(self): string }"
 }
 
 $ {
-  p`impl named for frob {
+  `impl named for frob {
     fn get-name(self): string { if self.b "Bob" else "Joe" }
   }`
 }

@@ -126,7 +126,7 @@ ns for buffer {
 
   fn copy[t](src: buffer[t], dst: buffer[t]) {
     if src.len > dst.len {
-      crash("Buffer copy dst index out of bounds: {src.len} > {dst.len}")
+      crash("Buffer copy dst index out of bounds: ${src.len} > ${dst.len}")
     }
     if src.len == 0 return
     let num-bytes = buffer-size-bytes[t](src.len)
@@ -135,7 +135,7 @@ ns for buffer {
 
   fn move[t](src: buffer[t], dst: buffer[t]) {
     if src.len > dst.len {
-      crash("Buffer copy dst index out of bounds: {src.len} > {dst.len}")
+      crash("Buffer copy dst index out of bounds: ${src.len} > ${dst.len}")
     }
     if src.len == 0 return
     let num-bytes = buffer-size-bytes[t](src.len)
@@ -173,7 +173,7 @@ ns for buffer {
 
   fn check-bounds[t](self: buffer[t], index: size) {
     if index.as[u64] >= self.len.as[u64] {
-      crash("index out of bounds: {index} / {self.len}")
+      crash("index out of bounds: $index / ${self.len}")
     }
   }
 
@@ -202,7 +202,7 @@ ns for buffer {
 
   fn slice[t](self: buffer[t], start: size, end: size): buffer[t] {
     if start < 0 or start > self.len {
-      crash("slice start index out of bounds: {start}. length is: {self.len}")
+      crash("slice start index out of bounds: $start. length is: ${self.len}")
     }
     
     let end-clamp = if end > self.len self.len else end

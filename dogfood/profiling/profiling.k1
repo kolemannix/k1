@@ -73,12 +73,12 @@ fn end_profile_block(block: profile-block) {
 // Print timing results for a single anchor
 fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *profile-anchor) {
     let percent = 100.0: f64 * anchor.tsc_elapsed_exclusive.as[f64] / total_tsc_elapsed.as[f64]
-    print("  {anchor.label}[{anchor.hit_count}]: {percent}% ")
+    print("  ${anchor.label}[${anchor.hit_count}]: $percent% ")
     if anchor.tsc_elapsed_inclusive != anchor.tsc_elapsed_exclusive {
       let percent_with_children = 100.0: f64 * anchor.tsc_elapsed_inclusive.as[f64] / total_tsc_elapsed.as[f64]
-      print("({percent_with_children}% w/children) ")
+      print("($percent_with_children% w/children) ")
     }
-    println("({anchor.tsc_elapsed_exclusive} 'cycles')")
+    println("(${anchor.tsc_elapsed_exclusive} 'cycles')")
     // std.io.printf("  %s[%llu]: %llu (%.2f%%", anchor.label, anchor.hit_count, anchor.tsc_elapsed_exclusive, percent);
 }
 
@@ -103,7 +103,7 @@ fn end_and_print_profile() {
     
     let nanos_elapsed = std/time/counter-to-nanos(total_tsc_elapsed)
     let total_time_ms = nanos_elapsed / 1_000_000
-    println("\nTotal time: {total_time_ms}ms")
+    println("\nTotal time: ${total_time_ms}ms")
     
     print_anchor_data(total_tsc_elapsed)
 }
@@ -153,6 +153,6 @@ fn main(): i32 {
     result = result + expensive_computation(1_000_000)
   }
 
-  println("result: {result}")
+  println("result: $result")
   0
 }

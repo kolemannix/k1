@@ -82,7 +82,7 @@ fn _parse-string(context p: *mut parser)(): result[json, string] {
         '"' ->  { sb.write-char('"') },
         'n' ->  { sb.write-char('\n') },
         't' ->  { sb.write-char('\t') },
-        _ -> return :err "Unsupported escape sequence: {c2}"
+        _ -> return :err "Unsupported escape sequence: $c2"
       }
     } else if c1 == '"' {
       break :ok :str sb.build()
@@ -119,7 +119,7 @@ fn _expect-array(context p: *mut parser)(): result[json, string] {
       :some ',' -> {
         p.advance()
       },
-      :some c -> break :err "Expected comma or ], got {c}"
+      :some c -> break :err "Expected comma or ], got $c"
     }
   }
 }
@@ -195,7 +195,7 @@ fn _parse-next-value(context p: *mut parser)(): result[json, string] {
 fn parse-from-string(input: string): result[json, string] {
   let p: parser = .{ input, cursor = 0 }
   _parse-next-value(context &p)() is {
-    :err msg -> :err "Failed at pos {p.cursor}: {msg}",
+    :err msg -> :err "Failed at pos ${p.cursor}: $msg",
     :ok json -> :ok json
   }
 }

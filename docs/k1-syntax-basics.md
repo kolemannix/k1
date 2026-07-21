@@ -747,14 +747,20 @@ See `test_src/suite1/static_run.k1`,
 
 ## Formatting And Strings
 
-String interpolation is supported inside string literals and formatting helpers:
+String interpolation is supported inside string literals and formatting helpers.
+A hole is `$ident` for a bare identifier, or `${expr}` for any expression:
 
 ```rust
 let name = "k1"
-assert-equals("hello {name}", "hello k1")
+assert-equals("hello $name", "hello k1")
+assert-equals("len ${name.len()}", "len 2")
 ```
 
-Escape a literal `{` as `\{`; `}` needs no escape.
+`$ident` uses normal identifier rules, so it is greedy through kebab-case:
+`"$n-th"` reads the identifier `n-th`; write `"${n}-th"` to stop at `n`. A `$`
+followed by anything that cannot start an identifier is literal (`"$5.99"`), and
+`\$` escapes a `$` that would otherwise open a hole. Braces are ordinary
+characters in strings and need no escaping.
 
 Use `writef` to write formatted text to any value that implements the `writer`
 ability. The first argument is the writer, the second is the format string, and
@@ -762,31 +768,31 @@ the optional third argument supplies format values:
 
 ```rust
 let w = string-builder/new()
-writef(w, "hello {}", 42)
-writef(w, " {name}", .{ name = "k1" })
+writef(w, "hello ${}", 42)
+writef(w, " $name", .{ name = "k1" })
 ```
 
 Use `writelnf` the same way when you want a trailing newline:
 
 ```rust
-writelnf(w, "status: {}", 200)
+writelnf(w, "status: ${}", 200)
 ```
 
 Use `stringf` to build and return a formatted string. It takes the format string
 first and an optional values argument second:
 
 ```rust
-let s = stringf("hello {name}")
-let dated = stringf("{yyyy}-{mm}-{dd}", .{ yyyy = 2026, mm = 6, dd = 25 })
+let s = stringf("hello $name")
+let dated = stringf("$yyyy-${mm}-$dd", .{ yyyy = 2026, mm = 6, dd = 25 })
 ```
 
-Bare `{}` placeholders consume the value argument directly. Named placeholders
-such as `{name}` read fields from the values struct. Interpolated expressions can
+Bare `${}` placeholders consume the value argument directly. Named placeholders
+such as `$name` read fields from the values struct. Interpolated expressions can
 also refer to locals in scope:
 
 ```rust
 let place = "Budapest"
-assert-equals(stringf("hello {place}"), "hello Budapest")
+assert-equals(stringf("hello $place"), "hello Budapest")
 ```
 
 `writef`, `writelnf`, and `stringf` are special syntax hooks checked by the

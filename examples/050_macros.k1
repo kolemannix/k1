@@ -20,13 +20,13 @@ fn double[a](x: a, y: a): a {
 // behave a whole lot like a replacement macro a.la Rust's macro_rules! or even a c #define, although its
 // executing much later than a c macro would, of course
 fn addlazy(x: string, y: string): string { 
-  "{x} + {y}"
+  "$x + $y"
 }
 
 // This is a dynamic 'macro' that will repeat the given expression n times
 fn repeat(n: int, expr: string): string {
   let sb = string-builder/new()
-  for int-range/up-to(n) { sb.string("{expr};") }
+  for int-range/up-to(n) { sb.string("$expr;") }
   sb.build()
 }
 
@@ -43,7 +43,7 @@ fn main(): i32 {
 
   // Here is how we would invoke the 'repeat' function as 
   // a macro
-  $repeat(5, \println("hello {double(x, x)}"))
+  $repeat(5, \println("hello ${double(x, x)}"))
 
   0
 }

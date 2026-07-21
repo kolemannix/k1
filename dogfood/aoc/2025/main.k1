@@ -41,8 +41,8 @@ fn day1(input: string) {
   }
 
 
-  println("Day 1 part Z: {szs}")
-  println("Day 1 part CLICK: {mzs}")
+  println("Day 1 part Z: $szs")
+  println("Day 1 part CLICK: $mzs")
 }
 
 fn brute(input: string) {
@@ -68,7 +68,7 @@ fn brute(input: string) {
 
     
   }
-  println("Zeroes: {zeroes}")
+  println("Zeroes: $zeroes")
 }
 
 let input: string = core/files/read-to-string(context :tmp)("day1_input.txt")

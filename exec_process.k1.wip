@@ -57,15 +57,15 @@ fn testPosix() {
     
     // Test 1: Simple echo command
     let echoStatus = process/run-command(program = "/bin/echo", args = ["hello", "world"]).!;
-    println("Echo exit status: {echoStatus}");
+    println("Echo exit status: $echoStatus");
     
     // Test 2: List current directory  
     let lsStatus = process/run-command(program = "/bin/ls", args = []).!;
-    println("Ls exit status: {lsStatus}");
+    println("Ls exit status: $lsStatus");
     
     // Test 3: Test command that should fail
     let failStatus = process/run-command(program = "/nonexistent", args = []);
-    println("Nonexistent command isOk(): {failStatus.is-ok()}");
+    println("Nonexistent command isOk(): ${failStatus.is-ok()}");
 }
 
 fn main() {

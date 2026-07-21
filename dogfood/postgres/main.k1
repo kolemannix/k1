@@ -145,9 +145,9 @@ fn print-result-table(result: query-result) {
 }
 
 fn usage(program-name: string) {
-  eprintln("Usage: {program-name} <conninfo> [query]")
+  eprintln("Usage: $program-name <conninfo> [query]")
   eprintln("Example:")
-  eprintln("  {program-name} \"postgresql://localhost/postgres\" \"select now()\"")
+  eprintln("  $program-name \"postgresql://localhost/postgres\" \"select now()\"")
   .{}
 }
 
@@ -170,7 +170,7 @@ fn main(argc: core/c-int, argv: ptr): i32 {
   let conn = connect(conninfo) is {
     :ok conn -> conn,
     :err msg -> {
-      eprintln("connect failed: {msg}")
+      eprintln("connect failed: $msg")
       return 1
     }
   }
@@ -179,7 +179,7 @@ fn main(argc: core/c-int, argv: ptr): i32 {
   let query-result = conn.exec(query) is {
     :ok result -> result,
     :err msg -> {
-      eprintln("query failed: {msg}")
+      eprintln("query failed: $msg")
       return 1
     }
   }

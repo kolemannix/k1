@@ -3,7 +3,7 @@
 
 ns for string {
 
-  fn c-lit(s: string): string { `"{s}\\0".data-ptr()` }
+  fn c-lit(s: string): string { `"$s\\0".data-ptr()` }
   
   fn span(self: string): span[char] { self.span }
 

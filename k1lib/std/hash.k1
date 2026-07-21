@@ -269,15 +269,15 @@ ns for map {
     let count = self.count
     let tombstones = self.tombstones
     let capacity = self.slots.len
-    println("count: {count}, tombstones: {tombstones}, capacity: {capacity}")
+    println("count: $count, tombstones: $tombstones, capacity: $capacity")
     for s in self.slots {
-      print("  slot {it-index}: ")
+      print("  slot $it-index: ")
       if s.hash == EMPTY { println("empty") }
       else if s.hash == TOMBSTONE { println("tombstone") }
       else {
         let key = s.key
         let value = s.value
-        println("{key} -> {value}")
+        println("$key -> $value")
       }
     }
   }

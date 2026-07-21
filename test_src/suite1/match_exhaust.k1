@@ -12,7 +12,7 @@ fn match-tristate-opt(t: ?tri-state): string {
   t is {
     :some :yes -> "yes",
     :some :no -> "no",
-    :some :failure s -> "failure: {s.reason}",
+    :some :failure s -> "failure: ${s.reason}",
     :none -> "none"
   }
 }

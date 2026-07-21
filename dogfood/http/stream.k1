@@ -56,7 +56,7 @@ ns chunked {
     })
     mem/push-mode(:custom-arena connection.request-arena)
     let headers = stringf(
-      "HTTP/1.1 200 OK\r\nContent-Type: {streaming.content-type}\r\nTransfer-Encoding: chunked\r\n\r\n")
+      "HTTP/1.1 200 OK\r\nContent-Type: ${streaming.content-type}\r\nTransfer-Encoding: chunked\r\n\r\n")
     mem/pop-mode()
     write-frame(encoder, headers.span-bytes())
   }
@@ -68,7 +68,7 @@ ns chunked {
     let buf: uv/buf = uv/buf/wrap-span(bytes)
     let rc = uv/write(req, connection.client.as-stream(), &buf, 1, on-write-complete)
     if rc != 0 {
-      tprintln("chunked encoder uv_write failed: {rc}")
+      tprintln("chunked encoder uv_write failed: $rc")
       close-connection(connection)
     }
   }
@@ -81,7 +81,7 @@ ns chunked {
     if connection.close-state.should-close { close-connection(connection); return }
     if status != 0 {
       let errno = uv/errno/from-i32(status)
-      tprintln("chunked write failed: {errno.enum-name()}")
+      tprintln("chunked write failed: ${errno.enum-name()}")
       close-connection(connection)
       return
     }

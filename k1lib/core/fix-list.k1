@@ -28,7 +28,7 @@ ns for fixlist {
       self.used = used.as[u32] + 1
     } else {
       let typename = types/name[type-of(self).value]
-      crash("{typename} cannot fulfill push. {used + 1} > {self.cap()}")
+      crash("$typename cannot fulfill push. ${used + 1} > ${self.cap()}")
     }
   }
 
@@ -76,7 +76,7 @@ ns for fixlist {
     if index < self.len() {
       self.data.get(index).&
     } else {
-      crash("fixlist index out of bounds: {index} > {self.len()}")
+      crash("fixlist index out of bounds: $index > ${self.len()}")
     }
   }
 
