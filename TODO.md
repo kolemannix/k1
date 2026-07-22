@@ -7,6 +7,7 @@ Minor and ideas
 - [ ] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
       way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
 
+- [ ] top-level parser recovery (sync to next fn/ns/type/macro)
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [ ] assert and crash should trap a debugger. decide on 'assert' behavior in debug vs non debug mode.
@@ -71,8 +72,10 @@ bindgen dogfood list
 - [x] dogfood(lsp): sum patterns ls entities
 
 http dogfood list
-- [ ] design module 'params' / 'args' so we can toggle things like tlog
-- [ ] solution for lazily evaluated log arguments
+- [ ] design program 'params' / 'args' so we can toggle things like tlog
+      A program can take arguments; this replaces macro features in C.
+      Make it plain k1 data; pass it where you depend on the module.
+- [x] solution for lazily evaluated log arguments
 
 # Bugs
 - [ ] [major] Support (co)recursive Generics
@@ -97,7 +100,7 @@ http dogfood list
 ## [x] meta-based macros
 
 ## [ ] Context ability types (context system revamp?)
-- [ ] AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem *if it ends up an ability*)
+- [ ] AbilitySignature as context variable kind in addition to Type (enables context writer)
   - let context(impl Alloc) temp = mem/AllocMode.Arena;
   - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
 
