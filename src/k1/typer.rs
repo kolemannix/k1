@@ -51,7 +51,7 @@ use scopes::*;
 use types::*;
 
 use crate::compiler::CompilerConfig;
-use crate::lex::{self, SpanId, Spans, TokenKind};
+use crate::lex::{self, Span, SpanId, Spans, TokenKind};
 use crate::parse::{
     self, AstHandle, AstSlice, BinaryOpKind, FileId, ForExpr, InterpolatedStringPart, NamedTypeArg,
     NumericWidth, ParseError, ParsedAbilityExpr, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
@@ -2722,7 +2722,8 @@ impl TypeDefnContext {
     }
 }
 
-pub struct EmittedFileSpans {
+pub struct EmittedSource {
+    pub file_id: FileId,
     pub call_span: SpanId,
     /// (start, end, source), sorted by start; ranges are bytes in the emitted file
     pub entries: Vec<(u32, u32, SpanId)>,
@@ -2805,8 +2806,10 @@ pub struct TypedProgram {
 
     pub macro_expansion_stack: Vec<FunctionId>,
 
-    /// Per emitted file: which byte ranges came from which original spans
-    pub emitted_code_spans: FxHashMap<FileId, EmittedFileSpans>,
+    /// Every metaprogram-emitted source, in emission order; carries the byte
+    /// range provenance for diagnostics and the queue for the end-of-typecheck
+    /// file flush. Its index is the serial in emitted filenames.
+    pub emitted_sources: Vec<EmittedSource>,
 
     // For every static value, once evaluated, we store its runtime representation
     // here; the data lives in vm_static_stack
@@ -3009,7 +3012,7 @@ impl TypedProgram {
                 vm::Vm::make(),
             ],
             macro_expansion_stack: vec![],
-            emitted_code_spans: FxHashMap::default(),
+            emitted_sources: Vec::new(),
             vm_shared_static_stack: vm_static_stack,
             vm_global_constant_lookups,
             vm_static_value_lookups: FxHashMap::default(),
@@ -3620,8 +3623,8 @@ impl TypedProgram {
                 self.types.builtins.ordering = Some(type_id);
             } else if name == self.ast.idents.b.code {
                 self.types.builtins.code = Some(type_id);
-            } else if name == self.ast.idents.b.code_span {
-                self.types.builtins.code_span = Some(type_id);
+            } else if name == self.ast.idents.b.code_chunk {
+                self.types.builtins.code_chunk = Some(type_id);
             } else if name == self.ast.idents.b.code_builder {
                 self.types.builtins.code_builder = Some(type_id);
             }
@@ -8422,9 +8425,7 @@ impl TypedProgram {
                 if self.expected_type_is_code(ctx.expected_type_id) {
                     let string_id = *string_id;
                     let span = *span;
-                    let len = self.ast.idents.get_string(string_id).len() as u32;
-                    let entries: &[_] = if len == 0 { &[] } else { &[(0, len, span)] };
-                    let value_id = self.make_static_code_value(string_id, entries);
+                    let value_id = self.make_static_code_value(&[(string_id, span)]);
                     return Ok(self.add_static_constant_expr(value_id, span));
                 }
                 let static_value_id = self.static_values.add_string(*string_id);
@@ -8571,10 +8572,8 @@ impl TypedProgram {
                 let parsed_stmt_span = self.ast.get_stmt_span(code.parsed_stmt);
                 let span_content =
                     self.ast.sources.get_span_content(self.ast.spans.get(parsed_stmt_span));
-                let len = span_content.len() as u32;
                 let string_id = self.ast.idents.intern(span_content);
-                let value_id =
-                    self.make_static_code_value(string_id, &[(0, len, parsed_stmt_span)]);
+                let value_id = self.make_static_code_value(&[(string_id, parsed_stmt_span)]);
                 Ok(self.add_static_constant_expr(value_id, code_span))
             }
             ParsedExpr::QualifiedAbilityCall(qcall) => {
@@ -8655,36 +8654,29 @@ impl TypedProgram {
         self.exprs.add_static(value_id, type_id, false, span)
     }
 
-    /// A constant `code` value: text plus (offset, len, source span) entries
-    fn make_static_code_value(
-        &mut self,
-        text: StringId,
-        entries: &[(u32, u32, SpanId)],
-    ) -> StaticValueId {
+    /// A constant `code` value: a list of chunks, each text plus its source span
+    fn make_static_code_value(&mut self, chunks: &[(StringId, SpanId)]) -> StaticValueId {
         let code_type = self.types.builtins.code();
-        let code_span_type = self.types.builtins.code_span();
-        let spans_list_type =
-            self.instantiate_generic_type_from_slice(self.types.builtins.list(), &[code_span_type]);
-        let mut elements = self.static_values.mem.new_list(entries.len() as u32);
-        for (offset, len, source) in entries {
-            let offset_value = self.static_values.add_int(TypedIntValue::U64(*offset as u64));
-            let len_value = self.static_values.add_int(TypedIntValue::U64(*len as u64));
+        let chunk_type = self.types.builtins.code_chunk();
+        let chunks_list_type =
+            self.instantiate_generic_type_from_slice(self.types.builtins.list(), &[chunk_type]);
+        let mut elements = self.static_values.mem.new_list(chunks.len() as u32);
+        for (text, source) in chunks {
+            let text_value = self.static_values.add_string(*text);
             let source_value =
                 self.static_values.add_int(TypedIntValue::U64(source.as_u32() as u64));
-            let entry_value = self.static_values.add_struct_from_slice(
-                code_span_type,
-                &[offset_value, len_value, source_value],
-            );
-            elements.push(entry_value);
+            let chunk_value = self
+                .static_values
+                .add_struct_from_slice(chunk_type, &[text_value, source_value]);
+            elements.push(chunk_value);
         }
         let elements = elements.into_handle(&mut self.static_values.mem);
-        let spans_value = self.static_values.add(StaticValue::LinearContainer(StaticContainer {
+        let chunks_value = self.static_values.add(StaticValue::LinearContainer(StaticContainer {
             elements,
             kind: StaticContainerKind::List,
-            type_id: spans_list_type,
+            type_id: chunks_list_type,
         }));
-        let text_value = self.static_values.add_string(text);
-        self.static_values.add_struct_from_slice(code_type, &[text_value, spans_value])
+        self.static_values.add_struct_from_slice(code_type, &[chunks_value])
     }
 
     fn materialize_static_value(
@@ -8992,56 +8984,45 @@ impl TypedProgram {
                 Ok(StaticExecutionResult::TypedExpr(expr))
             }
             ParsedStaticBlockKind::Metaprogram => {
-                let Some((string_id, entries)) = self.static_value_as_emitted_code(vm_result)
-                else {
+                let Some(chunks) = self.static_value_as_emitted_code(vm_result) else {
                     return failf!(
                         span,
                         "#meta block did not evaluate to `code` or `string`; got {}",
                         self.type_id_to_string(self.get_static_value_type(vm_result))
                     );
                 };
-                self.compile_emitted_code(string_id, &entries, span, ctx, is_definition)
+                self.compile_emitted_code(&chunks, span, ctx, is_definition)
             }
             ParsedStaticBlockKind::MacroCall => unreachable!(),
         }
     }
 
-    /// A metaprogram may yield `code` (text plus source spans) or a plain
-    /// `string` (no source information)
+    /// A metaprogram may yield `code` (text chunks carrying source spans) or a
+    /// plain `string` (no source information)
     fn static_value_as_emitted_code(
         &self,
         value_id: StaticValueId,
-    ) -> Option<(StringId, Vec<(u32, u32, SpanId)>)> {
+    ) -> Option<Vec<(StringId, Option<SpanId>)>> {
         match self.static_values.get(value_id) {
-            StaticValue::String(string_id) => Some((*string_id, vec![])),
+            StaticValue::String(string_id) => Some(vec![(*string_id, None)]),
             StaticValue::Struct(st) if Some(st.type_id) == self.types.builtins.code => {
                 let fields = self.static_values.get_slice(st.fields);
-                let text = self.static_values.get(fields[0]).as_string()?;
-                let spans = self.static_values.get(fields[1]).as_container()?;
-                let mut entries = Vec::with_capacity(spans.len());
-                for element in self.static_values.get_slice(spans.elements) {
-                    let entry = self.static_values.get(*element).as_struct()?;
-                    let [offset, len, source] = self.static_values.get_slice(entry.fields) else {
+                let chunks = self.static_values.get(fields[0]).as_container()?;
+                let mut out = Vec::with_capacity(chunks.len());
+                for element in self.static_values.get_slice(chunks.elements) {
+                    let chunk = self.static_values.get(*element).as_struct()?;
+                    let [text, source] = self.static_values.get_slice(chunk.fields) else {
                         return None;
                     };
-                    let StaticValue::Int(TypedIntValue::U64(offset)) =
-                        self.static_values.get(*offset)
-                    else {
-                        return None;
-                    };
-                    let StaticValue::Int(TypedIntValue::U64(len)) = self.static_values.get(*len)
-                    else {
-                        return None;
-                    };
+                    let text = self.static_values.get(*text).as_string()?;
                     let StaticValue::Int(TypedIntValue::U64(source)) =
                         self.static_values.get(*source)
                     else {
                         return None;
                     };
-                    let source = SpanId::from_u32(*source as u32)?;
-                    entries.push((*offset as u32, *len as u32, source));
+                    out.push((text, SpanId::from_u32(*source as u32)));
                 }
-                Some((text, entries))
+                Some(out)
             }
             _ => None,
         }
@@ -9050,15 +9031,14 @@ impl TypedProgram {
     /// parses emitted source as a fresh file, then compiles it in place of the invocation
     fn compile_emitted_code(
         &mut self,
-        string_id: StringId,
-        entries: &[(u32, u32, SpanId)],
+        chunks: &[(StringId, Option<SpanId>)],
         span: SpanId,
         ctx: EvalExprContext,
         is_definition: bool,
     ) -> K1Result<StaticExecutionResult> {
-        let emitted_string = self.ast.idents.get_string(string_id);
-
-        if emitted_string.is_empty() {
+        let is_empty =
+            chunks.iter().all(|(text, _)| self.ast.idents.get_string(*text).is_empty());
+        if is_empty {
             if is_definition {
                 Ok(StaticExecutionResult::Definitions(MSlice::empty()))
             } else {
@@ -9085,54 +9065,41 @@ impl TypedProgram {
             if !is_definition {
                 content.push_str("{\n");
             }
-            // FIXME: generated_filename is not unique if we specialized on multiple types
-            //        We need a specialization context, for both debugging and logging
-            //        and for this
-            //        This could be rolled in with `is_generic_pass` ->
-            //        If its not generic pass, provide specialization info payload.
-            //        Really, we probably just want a 'what are we compiling stack'. This
-            //        info would go there.
-            // TODO: if specializing, print what the types are at the top of the file.
-            //       this is actually really important debugging context
-            let generated_filename = format!(
-                "meta_{}_{}.k1",
-                source.filename.strip_suffix(".k1").unwrap(),
-                line.line_number()
-            );
+            // TODO: when specializing, include the specialization context in the
+            //       filename and print the types at the top of the file; a
+            //       'what are we compiling' stack would provide it
+            let line_number = line.line_number();
+            let stem = source.filename.strip_suffix(".k1").unwrap();
+            let serial = self.emitted_sources.len() + 1;
+            let generated_filename = format!("meta_{stem}_{line_number}_{serial}.k1");
 
-            let prefix_len = content.len() as u32;
-            content.push_str(emitted_string);
+            let mut table: Vec<(u32, u32, SpanId)> = Vec::with_capacity(chunks.len());
+            for (text, source) in chunks {
+                let text = self.ast.idents.get_string(*text);
+                if text.is_empty() {
+                    continue;
+                }
+                let start = content.len() as u32;
+                content.push_str(text);
+                if let Some(source) = source {
+                    table.push((start, start + text.len() as u32, *source));
+                }
+            }
             if !is_definition {
                 content.push_str("\n}");
             }
             debug!("Emitted raw content:\n---\n{content}\n---");
-            let generated_path = self.config.out_dir.join(&generated_filename);
             let source_for_emission = self.ast.sources.add_file(crate::parse::SourceFile::make(
                 0,
                 self.config.out_dir.to_str().unwrap().to_owned(),
                 generated_filename,
                 content.clone(),
             ));
-            let mut table: Vec<(u32, u32, SpanId)> = entries
-                .iter()
-                .map(|(offset, len, source)| {
-                    (prefix_len + offset, prefix_len + offset + len, *source)
-                })
-                .collect();
-            table.sort_by_key(|entry| entry.0);
-            self.emitted_code_spans.insert(
-                source_for_emission,
-                EmittedFileSpans { call_span: span, entries: table },
-            );
-            // TODO: Write #meta source files asynchronously
-            // FIXME: General metaprogramming emission overhead
-            self.report_hint_silent(span, &content);
-            if let Err(e) = std::fs::write(&generated_path, &content) {
-                eprintln!(
-                    "Failed to write out generated metaprogram at {}. {e}",
-                    generated_path.display()
-                )
-            }
+            self.emitted_sources.push(EmittedSource {
+                file_id: source_for_emission,
+                call_span: span,
+                entries: table,
+            });
 
             let parse_kind =
                 if is_definition { ParseAdHocKind::Definitions } else { ParseAdHocKind::Expr };
@@ -9150,6 +9117,18 @@ impl TypedProgram {
                 ParseMetaprogramResult::Definitions(defns_slice) => {
                     Ok(StaticExecutionResult::Definitions(defns_slice))
                 }
+            }
+        }
+    }
+
+    /// Emitted sources accumulate in the sources pool during typechecking; this
+    /// writes them out for inspection in one pass, off the expansion path
+    pub fn write_emitted_sources(&self) {
+        for emitted in &self.emitted_sources {
+            let source = self.ast.sources.get(emitted.file_id);
+            let path = std::path::Path::new(&source.directory).join(&source.filename);
+            if let Err(e) = std::fs::write(&path, &source.content) {
+                eprintln!("Failed to write out generated metaprogram at {}. {e}", path.display());
             }
         }
     }
@@ -9240,9 +9219,8 @@ impl TypedProgram {
                     // Arrives as source
                     let arg_span = self.ast.exprs.get_span(arg.value);
                     let content = self.ast.sources.get_span_content(self.ast.spans.get(arg_span));
-                    let len = content.len() as u32;
                     let string_id = self.ast.idents.intern(content);
-                    static_args.push(self.make_static_code_value(string_id, &[(0, len, arg_span)]));
+                    static_args.push(self.make_static_code_value(&[(string_id, arg_span)]));
                 }
                 false => {
                     // nocommit We need to ensure these actually typecheck
@@ -9295,14 +9273,14 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> K1Result<StaticExecutionResult> {
         let vm_result = self.execute_static_function(function_id, static_args, span)?;
-        let Some((emitted, entries)) = self.static_value_as_emitted_code(vm_result) else {
+        let Some(chunks) = self.static_value_as_emitted_code(vm_result) else {
             return failf!(
                 span,
                 "Macro expansion did not produce `code` or `string`; got {}",
                 self.type_id_to_string(self.get_static_value_type(vm_result))
             );
         };
-        self.compile_emitted_code(emitted, &entries, span, ctx, is_definition)
+        self.compile_emitted_code(&chunks, span, ctx, is_definition)
     }
 
     fn with_parser<R>(
@@ -18271,15 +18249,23 @@ impl TypedProgram {
 
         debug_assert_eq!(self.types.types.len(), self.types.type_variable_counts.len());
 
-        for ns in self.namespaces.iter() {
-            if ns.namespace_type == NamespaceKind::TypeCompanion && ns.companion_type_id.is_none() {
+        let companion_errors: Vec<K1Message> = self
+            .namespaces
+            .iter()
+            .filter(|ns| {
+                ns.namespace_type == NamespaceKind::TypeCompanion && ns.companion_type_id.is_none()
+            })
+            .map(|ns| {
                 let span = self.ast.get_span_for_id(ns.parsed_id);
-                self.report(errf!(
+                errf!(
                     span,
                     "Unresolved companion namespace; we never found type {}",
                     self.ident_str(ns.name)
-                ));
-            }
+                )
+            })
+            .collect();
+        for e in companion_errors {
+            self.report(e)
         }
 
         if is_core {
@@ -18311,14 +18297,20 @@ impl TypedProgram {
         }
 
         self.resolve_pending_uses();
-        for pending_use in &self.uses_pending_resolution {
-            let parsed_use = self.ast.uses.get_use(pending_use.use_id);
-            let error = errf!(
-                parsed_use.span,
-                "Unresolved use of {}",
-                self.ident_str(parsed_use.target.name)
-            );
-            self.report(error)
+        let unresolved_use_errors: Vec<K1Message> = self
+            .uses_pending_resolution
+            .iter()
+            .map(|pending_use| {
+                let parsed_use = self.ast.uses.get_use(pending_use.use_id);
+                errf!(
+                    parsed_use.span,
+                    "Unresolved use of {}",
+                    self.ident_str(parsed_use.target.name)
+                )
+            })
+            .collect();
+        for e in unresolved_use_errors {
+            self.report(e)
         }
 
         debug_assert!(self.abilities.get(ABILITY_ID_EQUALS).name == self.ast.idents.b.equals);
@@ -19581,34 +19573,58 @@ impl TypedProgram {
 
     // Errors and logging
 
-    pub fn report(&self, e: K1Message) {
+    pub fn report(&mut self, e: K1Message) {
         self.report_ext(e, false)
     }
-    /// Follows the emitted-file tables back to the span the metaprogram received;
-    /// a span not covered by any entry stays put
-    pub fn remap_to_source_span(&self, span_id: SpanId) -> SpanId {
+    /// Follows the emitted-file tables back to the span the metaprogram received,
+    /// preserving the position within the containing chunk; a span not covered by
+    /// any entry stays put
+    pub fn remap_to_source_span(&mut self, span_id: SpanId) -> SpanId {
         let mut current = span_id;
         for _ in 0..16 {
             let span = self.ast.spans.get(current);
-            let Some(table) = self.emitted_code_spans.get(&span.file_id) else {
+            let Some(table) = self.emitted_sources.iter().find(|e| e.file_id == span.file_id)
+            else {
                 return current;
             };
             let candidate = table.entries.partition_point(|entry| entry.0 <= span.start);
-            let Some(entry) = candidate.checked_sub(1).map(|i| &table.entries[i]) else {
+            let Some(&(start, end, source)) = candidate.checked_sub(1).map(|i| &table.entries[i])
+            else {
                 return current;
             };
-            if span.start >= entry.1 {
+            if span.start >= end {
                 return current;
             }
-            current = entry.2;
+            let source_span = self.ast.spans.get(source);
+            let offset = span.start - start;
+            // Emitted text can differ in length from its source span (escapes,
+            // dedent); fall back to the whole source span past its end
+            current = if offset < source_span.len {
+                let len = span.len.min(end - span.start).min(source_span.len - offset);
+                self.ast.spans.add(Span {
+                    file_id: source_span.file_id,
+                    start: source_span.start + offset,
+                    len,
+                })
+            } else {
+                source
+            };
         }
         current
     }
 
-    pub fn report_ext(&self, e: K1Message, no_print: bool) {
+    pub fn report_ext(&mut self, e: K1Message, no_print: bool) {
         let e = K1Message { span: self.remap_to_source_span(e.span), ..e };
-        // Check for exact duplicates; happens a lot with generic code
-        if self.messages.borrow().contains(&e) {
+        // Check for duplicates (happens a lot with generic code); remapping mints
+        // fresh span ids, so spans compare by contents
+        let e_span = self.ast.spans.get(e.span);
+        let is_duplicate = self.messages.borrow().iter().any(|m| {
+            m.message == e.message
+                && m.level == e.level
+                && m.error_kind == e.error_kind
+                && self.ast.spans.get(m.span) == e_span
+        });
+        if is_duplicate {
             return;
         }
 
@@ -19636,18 +19652,6 @@ impl TypedProgram {
             level: MessageLevel::Hint,
             error_kind: ErrorKind::None,
         });
-    }
-
-    pub fn report_hint_silent(&mut self, span: SpanId, message: impl AsRef<str>) {
-        self.report_ext(
-            K1Message {
-                message: message.as_ref().to_string(),
-                span,
-                level: MessageLevel::Hint,
-                error_kind: ErrorKind::None,
-            },
-            true,
-        );
     }
 
     pub fn report_warn(&mut self, span: SpanId, message: impl AsRef<str>) {
@@ -19686,9 +19690,9 @@ impl TypedProgram {
             use_color,
         )?;
         let file_id = self.ast.spans.get(error.span).file_id;
-        if let Some(table) = self.emitted_code_spans.get(&file_id) {
+        if let Some(emitted) = self.emitted_sources.iter().find(|e| e.file_id == file_id) {
             writeln!(w, "note: in code compiled in place of this call:")?;
-            self.write_location(w, table.call_span, use_color);
+            self.write_location(w, emitted.call_span, use_color);
         }
         Ok(())
     }

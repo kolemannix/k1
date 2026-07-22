@@ -150,16 +150,18 @@ also appear in metaprograms.
 
 ### `code` and `code-builder`
 
-`core/code.k1` defines `code = { text: string, spans: list[code-span] }`, where
-each `code-span = { offset, len, source }` says which byte range of `text` came
-from which original span (`source` is a compiler span id, widened to u64).
-`\ <stmt>` (or `#code <stmt>`) produces a `code` value: the statement's source
-text plus the span it came from.
+`core/code.k1` defines `code = { chunks: list[code-chunk] }`, where each
+`code-chunk = { text, source }` is a run of text plus the original span it came
+from (`source` is a compiler span id widened to u64; 0 means no source).
+Final text and byte offsets only materialize at the compile boundary, so
+composing `code` values never copies or re-offsets text. `\ <stmt>` (or
+`#code <stmt>`) produces a `code` value: one chunk holding the statement's
+source text and span.
 
-A string template in `code`-expected position elaborates as `code`: the
-literal's text carries the literal's own spans, and a `code` part in a hole
-merges its span table in (shifted by its position); every other part is printed
-as bytes. This applies to any string literal (double-quoted or backtick, holes
+A string template in `code`-expected position elaborates as `code`: each
+literal part becomes a chunk carrying its own span, a `code` part in a hole
+appends its chunks, and every other part is printed as bytes into a sourceless
+chunk. This applies to any string literal (double-quoted or backtick, holes
 or not) whose expected type is `code` — a macro body's return position, a
 `code`-typed let or parameter, and so on. Only literals elaborate; a
 string-typed *value* in `code` position is still a type error, since a literal
@@ -169,14 +171,14 @@ supplies the type, ascribe it: `` `1 + 2`: code `` or
 `"let w = ${}".fmt(42): code`.
 
 Building imperatively works by writing to a code-builder (`cb.write(...)`,
-`cb.writeln(...)`) — the same hole rules apply; `cb.code(c)` merges another
-`code` value in, and `cb.build()` yields the `code`. `code/from-string(s)` is
-the explicit spanless wrap.
+`cb.writeln(...)`) — the same hole rules apply; `cb.code(c)` appends another
+`code` value's chunks, and `cb.build()` yields the `code`. `code/from-string(s)`
+is the explicit sourceless wrap.
 
 `code` does not implement `print`: interpolating one into an ordinary string is
-an error, since it would drop the spans silently — `.text` is the explicit
-escape. There is no implicit conversion between `string` and `code` in either
-direction.
+an error, since it would drop the source info silently — `.text()` is the
+explicit escape. There is no implicit conversion between `string` and `code` in
+either direction.
 
 ## Macros
 

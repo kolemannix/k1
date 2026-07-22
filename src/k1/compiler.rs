@@ -501,25 +501,15 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
 
     let mut k1 = TypedProgram::new(module_name.clone(), config);
 
-    if let Err(e) = k1.add_module(&corelib_dir, false) {
-        if args.dump_module {
-            write_program_dump(&k1);
+    let add_result = (|| {
+        k1.add_module(&corelib_dir, false)?;
+        if use_std {
+            k1.add_module(&stdlib_dir, false)?;
         }
-        eprintln!("{}", e);
-        return Err(CompileProgramError::TyperFailure(Box::new(k1)));
-    };
-
-    if use_std {
-        if let Err(e) = k1.add_module(&stdlib_dir, false) {
-            if args.dump_module {
-                write_program_dump(&k1);
-            }
-            eprintln!("{}", e);
-            return Err(CompileProgramError::TyperFailure(Box::new(k1)));
-        }
-    }
-
-    if let Err(e) = k1.add_module(&src_path, true) {
+        k1.add_module(&src_path, true)
+    })();
+    k1.write_emitted_sources();
+    if let Err(e) = add_result {
         if args.dump_module {
             write_program_dump(&k1);
         }

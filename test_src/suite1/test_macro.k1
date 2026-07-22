@@ -46,31 +46,31 @@ fn test-debug-elided() {
 
 fn test-code-value() {
   let c = \incr()
-  assert-equals(c.text, "incr()")
-  assert-equals(c.spans.len(), 1)
-  let entry = c.spans.get(0)
-  assert-equals(entry.offset, 0)
-  assert-equals(entry.len, 6)
+  assert-equals(c.chunks.len(), 1)
+  let chunk = c.chunks.get(0)
+  assert-equals(chunk.text, "incr()")
+  assert(chunk.source != 0)
 }
 
 fn test-code-literal() {
   let a = \9 * 9
   let c: code = "let q = $a"
-  assert-equals(c.text, "let q = 9 * 9")
-  assert-equals(c.spans.len(), 2)
-  assert-equals(c.spans.get(1).offset, 8)
-  assert-equals(c.spans.get(1).len, 5)
+  assert-equals(c.text(), "let q = 9 * 9")
+  assert-equals(c.chunks.len(), 2)
+  assert-equals(c.chunks.get(1).text, "9 * 9")
+  assert(c.chunks.get(1).source != 0)
 }
 
 fn test-code-fmt() {
   let c: code = "let w = ${}".fmt(42)
-  assert-equals(c.text, "let w = 42")
-  assert-equals(c.spans.len(), 1)
-  assert-equals(c.spans.get(0).len, 8)
+  assert-equals(c.text(), "let w = 42")
+  assert-equals(c.chunks.len(), 2)
+  assert-equals(c.chunks.get(0).text, "let w = ")
+  assert-equals(c.chunks.get(1).source, 0)
 
   // No expectation nearby? Ascribe.
   let d = "let v = ${}".fmt(7): code
-  assert-equals(d.text, "let v = 7")
+  assert-equals(d.text(), "let v = 7")
 }
 
 fn test-code-builder() {
@@ -78,10 +78,9 @@ fn test-code-builder() {
   let cb = code-builder/new()
   cb.write("let z = $a; z * 2")
   let built = cb.build()
-  assert-equals(built.text, "let z = 1 + 2; z * 2")
-  assert-equals(built.spans.len(), 3)
-  assert-equals(built.spans.get(1).offset, 8)
-  assert-equals(built.spans.get(1).len, 5)
+  assert-equals(built.text(), "let z = 1 + 2; z * 2")
+  assert-equals(built.chunks.len(), 3)
+  assert-equals(built.chunks.get(1).text, "1 + 2")
 }
 
 fn test() {

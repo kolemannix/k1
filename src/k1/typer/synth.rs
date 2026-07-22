@@ -673,10 +673,9 @@ impl TypedProgram {
                         // Per-part constants, so each keeps its own source span
                         let string_id = *string_id;
                         let part_span = *part_span;
-                        let len = self.ast.idents.get_string(string_id).len() as u32;
-                        if len != 0 {
+                        if !self.ast.idents.get_string(string_id).is_empty() {
                             let value_id =
-                                self.make_static_code_value(string_id, &[(0, len, part_span)]);
+                                self.make_static_code_value(&[(string_id, part_span)]);
                             let code_expr = self.add_static_constant_expr(value_id, part_span);
                             let code_call = self.synth_code_append_call(
                                 code_expr,
@@ -886,8 +885,7 @@ impl TypedProgram {
             {
                 let string_id = *string_id;
                 let part_span = *part_span;
-                let len = self.ast.idents.get_string(string_id).len() as u32;
-                let value_id = self.make_static_code_value(string_id, &[(0, len, part_span)]);
+                let value_id = self.make_static_code_value(&[(string_id, part_span)]);
                 return Ok(self.add_static_constant_expr(value_id, span));
             }
         }

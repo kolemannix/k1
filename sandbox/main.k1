@@ -1,34 +1,25 @@
-let mutable g: int = 5
+macro for-each(binding: ?string, iterable, body) {
+  // let iter   = meta/fresh-name("iter")
+  let iter = "iter"
+  let binding = binding ? "it"
+  `{
+    let $iter = $iterable.iterator()
+    let it-index: size = 0
+    loop {
+      if $iter.next() is :some($binding) {
+        $body
+        it-index = it-index + 1
+      } else break
+    }
+  }`
+}
 
-fn main(): i32 {
-  let x = 1
-  x = 2
-  assert(x == 2)
+#debug fn main(): i32 {
+  for-each(:none, [1,2,3], {
+    println(foo);
+    it;
+  })
 
-  let p = .{ x = 1, y = 2 }
-  p.x = 10
-  assert(p.x == 10)
-
-  let n = .{ a = .{ b = 3 } }
-  n.a.b = 4
-  assert(n.a.b == 4)
-
-  let r = p.x.&
-  r.* = 20
-  assert(p.x == 20)
-
-  let pr = p.&
-  pr.y = 30
-  assert(p.y == 30)
-
-  let arr: array[int, 3] = [1, 2, 3]
-  arr.get(1) = 9
-  assert(arr.get(1) == 9)
-
-  g = g + 1
-  assert(g == 6)
-
-  println("unified = works")
   0
 }
 

@@ -1,42 +1,54 @@
-// `code` is source text plus a table of source spans; metaprograms return it so
+// `code` is source text as a sequence of chunks; metaprograms return it so
 // diagnostics in compiled output can point back at the original source.
-// `source` is a compiler span id, widened to u64.
+// `source` is a compiler span id, widened to u64; 0 means no source.
 
-type code-span = { offset: u64, len: u64, source: u64 }
+type code-chunk = { text: string, source: u64 }
 
-type code = { text: string, spans: list[code-span] }
+type code = { chunks: list[code-chunk] }
 
 ns for code {
   fn from-string(s: string): code {
-    .{ text = s, spans = list/empty() }
+    .{ chunks = [.{ text = s, source = 0 }] }
+  }
+
+  fn text(self: code): string {
+    let sb = string-builder/new()
+    for c in self.chunks { sb.write(c.text) }
+    sb.build()
   }
 }
 
-type code-builder = { bytes: list[u8], spans: list[code-span] }
+// Bytes written via `writer` accumulate in `pending` until a chunk boundary
+// seals them into a sourceless chunk.
+type code-builder = { chunks: list[code-chunk], pending: list[u8] }
 
 ns for code-builder {
   fn new(): code-builder {
-    .{ bytes = list/empty(), spans = list/empty() }
+    .{ chunks = list/empty(), pending = list/empty() }
+  }
+
+  fn seal(self: *mut code-builder) {
+    if self.pending.is-empty() return
+    self.chunks.push(.{ text = string/wrap-bytes(self.pending.as-span()).cloned(), source = 0 })
+    self.pending.clear()
   }
 
   fn code(self: *mut code-builder, c: code) {
-    let base = self.bytes.len.as[u64]
-    self.bytes.append-span(c.text.span-bytes())
-    for entry in c.spans {
-      self.spans.push(.{ offset = base + entry.offset, len = entry.len, source = entry.source })
-    }
+    self.seal()
+    self.chunks.append-list(c.chunks)
   }
 
-  fn build(self: *code-builder): code {
-    .{ text = string/wrap-bytes(self.bytes.as-span()).cloned(), spans = self.spans }
+  fn build(self: *mut code-builder): code {
+    self.seal()
+    .{ chunks = self.chunks }
   }
 }
 
 impl writer for *code-builder {
   fn write-byte(self, b: u8): empty {
-    self.bytes.push(b)
+    self.pending.push(b)
   }
   fn write-bytes(self, b: span[u8]): empty {
-    self.bytes.append-span(b)
+    self.pending.append-span(b)
   }
 }
