@@ -14,11 +14,11 @@ ns type_schema {
     require schema[t] is :struct .{ fields } else { return "" }
     let sb = string-builder/new()
     let name = types/type-id-name(id)
-    sb.string("Struct $name {\n")
+    sb.write("Struct $name {\n")
     for field in fields {
-      writelnf(sb, "  ${field.name}: ${types/type-id-name(field.type-id)}", )
+      sb.writeln("  ${field.name}: ${types/type-id-name(field.type-id)}", )
     }
-    sb.string("}")
+    sb.write("}")
     sb.build()
   }
 

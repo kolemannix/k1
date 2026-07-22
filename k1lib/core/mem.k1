@@ -50,7 +50,7 @@ ns mem {
   impl print for alloc-mode {
     fn print-to[w: writer](self, w) {
       use types/sum
-      w.string(self.sum-name())
+      w.write(self.sum-name())
     }
   }
 

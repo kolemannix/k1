@@ -20,7 +20,7 @@ macro repeat(n: int, body) {
   let cb = code-builder/new()
   for 0.until(n) {
     cb.code(body)
-    cb.line("")
+    cb.writeln("")
   }
   cb.build()
 }
@@ -76,7 +76,7 @@ fn test-code-fmt() {
 fn test-code-builder() {
   let a = \1 + 2
   let cb = code-builder/new()
-  writef(&cb, "let z = $a; z * 2")
+  cb.write("let z = $a; z * 2")
   let built = cb.build()
   assert-equals(built.text, "let z = 1 + 2; z * 2")
   assert-equals(built.spans.len(), 3)

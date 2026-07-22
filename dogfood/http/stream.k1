@@ -100,9 +100,9 @@ ns chunked {
         mem/push-mode(:custom-arena connection.request-arena)
         let out = string-builder/new()
         append-hex(&out, bytes.len())
-        out.string("\r\n")
+        out.write("\r\n")
         out.write-bytes(bytes)
-        out.string("\r\n")
+        out.write("\r\n")
         let frame = out.build()
         mem/pop-mode()
         write-frame(encoder, frame.span-bytes())
@@ -117,6 +117,6 @@ ns chunked {
   let hex-digits: string = "0123456789abcdef"
   fn append-hex(out: *mut string-builder, value: size) {
     if value >= 16 { append-hex(out, value / 16) }
-    out.string(string/wrap-raw(hex-digits.data-ptr().add-bytes(value % 16), 1))
+    out.write(string/wrap-raw(hex-digits.data-ptr().add-bytes(value % 16), 1))
   }
 }

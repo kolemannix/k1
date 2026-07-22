@@ -8,8 +8,8 @@ fn test() {
   let w = string-builder/new()
 
   // If you have a buffer already, or any writer at all, you can 'write' to it formatted
-  writef(w, "hello $world -- ")
-  writef(w, "hello $world ${}", 42)
+  w.write("hello $world -- ")
+  w.write("hello $world ${}", 42)
   assert-equals(w.build-tmp(), "hello Budapest -- hello Budapest 42")
   assert-equals("true", "${}".fmt(true))
   assert-equals("-3.140000", "${}".fmt(-3.14))

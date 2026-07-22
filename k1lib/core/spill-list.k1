@@ -82,10 +82,10 @@ impl[t, n: static size] print for spill-list[t, n] {
   fn print-to[w: writer](self, w) {
      self is {
        :inline fix -> {
-         w.string("inline ")
+         w.write("inline ")
        },
        :spilled list -> {
-         w.string("spilled ")
+         w.write("spilled ")
        }
      }
      self.len().print-to(w)

@@ -4,14 +4,14 @@ ns types
 impl print for int-value {
    fn print-to[w: writer](self, w) {
      self is {
-       :u8 v  -> writef(w, "${v}u8"),
-       :u16 v -> writef(w, "${v}u16"),
-       :u32 v -> writef(w, "${v}u32"),
-       :u64 v -> writef(w, "${v}u64"),
-       :i8 v  -> writef(w, "${v}i8"),
-       :i16 v -> writef(w, "${v}i16"),
-       :i32 v -> writef(w, "${v}i32"),
-       :i64 v -> writef(w, "${v}i64"),
+       :u8 v  -> w.write("${v}u8"),
+       :u16 v -> w.write("${v}u16"),
+       :u32 v -> w.write("${v}u32"),
+       :u64 v -> w.write("${v}u64"),
+       :i8 v  -> w.write("${v}i8"),
+       :i16 v -> w.write("${v}i16"),
+       :i32 v -> w.write("${v}i32"),
+       :i64 v -> w.write("${v}i64"),
      }
    }
 }

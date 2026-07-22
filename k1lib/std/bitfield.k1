@@ -23,10 +23,10 @@ fn define-impl(base-type-id: u64, type-name: string, members: span[{ name: strin
   let code = string-builder/new()
 
   // This defines a named struct type with one field, which is a common newtype pattern
-  writelnf(code, "type $type-name = { bits: $base-name }")
+  code.writeln("type $type-name = { bits: $base-name }")
 
   // We crack open a namespace to put some goodies inside
-  writelnf(code, "ns for $type-name {")
+  code.writeln("ns for $type-name {")
 
   // This actually gets captured by the lambda below
   let bit-index-val = 0
@@ -66,10 +66,10 @@ fn define-impl(base-type-id: u64, type-name: string, members: span[{ name: strin
   for members {
     let info = member-info.get(it-index)
     // Emit globals, or constants, for each field's mask
-    writelnf(code, "  let ${it.name}-mask: $base-name = ${info.mask}")
+    code.writeln("  let ${it.name}-mask: $base-name = ${info.mask}")
   }
 
-  writelnf(code, "  let zero: $type-name = .{ bits = 0 }")
+  code.writeln("  let zero: $type-name = .{ bits = 0 }")
 
   // Now let's do a getter and setter for each bitfield. If the width is 1,
   // we'll use bool since that's what the people likely want. Note that we could configure
@@ -80,41 +80,41 @@ fn define-impl(base-type-id: u64, type-name: string, members: span[{ name: strin
     let field-type = if is-bool "bool" else "u${info.type-width}"
 
     // Getter
-    writelnf(code, "  fn get-${it.name}(self: $type-name): $field-type {")
+    code.writeln("  fn get-${it.name}(self: $type-name): $field-type {")
 
-    writelnf(code, "    let bits: $base-name = self.bits;")
-    writelnf(code, "    let shifted: $base-name = bits >> ${info.offset};")
-    writelnf(code, "    let cleared: $base-name = shifted & ${info.raw-value};")
+    code.writeln("    let bits: $base-name = self.bits;")
+    code.writeln("    let shifted: $base-name = bits >> ${info.offset};")
+    code.writeln("    let cleared: $base-name = shifted & ${info.raw-value};")
     if is-bool {
-      writelnf(code, "    cleared == 1")
+      code.writeln("    cleared == 1")
     } else {
-      writelnf(code, "    cleared.as[$field-type]")
+      code.writeln("    cleared.as[$field-type]")
     }
 
-    writelnf(code, "  }") // End Getter
+    code.writeln("  }") // End Getter
 
     // Setter
-    writelnf(code, "  fn set-${it.name}(self: $type-name, value: $field-type): $type-name {")
+    code.writeln("  fn set-${it.name}(self: $type-name, value: $field-type): $type-name {")
     if is-bool {
-      writelnf(code, "    let masked-value: $base-name = value.as-u8();")
+      code.writeln("    let masked-value: $base-name = value.as-u8();")
     } else {
-      writelnf(code, "    let masked-value: $base-name = value & ${info.raw-value};")
+      code.writeln("    let masked-value: $base-name = value & ${info.raw-value};")
     }
     let clear-mask = info.inv-mask
-    writelnf(code, "    let cleared-bits: $base-name = self.bits & $clear-mask;")
-    writelnf(code, "    let inserted-bits: $base-name = cleared-bits | (masked-value << ${info.offset});")
-    writelnf(code, "    .{ bits = inserted-bits }")
-    writelnf(code, "  }") // End setter
+    code.writeln("    let cleared-bits: $base-name = self.bits & $clear-mask;")
+    code.writeln("    let inserted-bits: $base-name = cleared-bits | (masked-value << ${info.offset});")
+    code.writeln("    .{ bits = inserted-bits }")
+    code.writeln("  }") // End setter
   }
 
-  writelnf(code, "}") // End ns
+  code.writeln("}") // End ns
 
   let print-body = string-builder/new()
   for members {
     let get-name = "get-${it.name}"
     let last = it-index + 1 == members.len()
     let sep = if last "" else ","
-    writelnf(print-body, `    w.string("${it.name}=\${self.$get-name()}$sep");`)
+    print-body.writeln(`    w.write("${it.name}=\${self.$get-name()}$sep");`)
   }
 
   code.impl-print(type-name, print-body.build(), indent = 0)

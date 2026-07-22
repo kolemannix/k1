@@ -262,7 +262,7 @@ fn example-http() {
       let err-name = string/wrap-c(llhttp/errno_name(last-res).as[ptr])
       let err-reason = string/wrap-c(llhttp/get_error_reason((&parser).as()).as[ptr])
       println("ERROR: $err-name $err-reason")
-      writelnf(core/io/stdout, "ERROR: ${} ${}", .{ err-name, err-reason })
+      core/io/stdout.writeln("ERROR: ${} ${}", .{ err-name, err-reason })
     }
   }
 }

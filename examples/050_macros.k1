@@ -30,16 +30,16 @@ fn addlazy(x: code, y: code): code {
 }
 
 // This is a dynamic 'macro' that will repeat the given expression n times.
-// Pointing writef at a code-builder makes a `code` part merge its source spans
-// in, while everything else is written as plain text
+// Writing a template to a code-builder makes a `code` part merge its source
+// spans in, while everything else is written as plain text
 fn repeat(n: int, expr: code): code {
   let cb = code-builder/new()
-  for 0.until(n) { writef(&cb, "$expr;") }
+  for 0.until(n) { cb.write("$expr;") }
   cb.build()
 }
 macro repeatm(n: int, expr) {
   let cb = code-builder/new()
-  for 0.until(n) { writef(&cb, "$expr;") }
+  for 0.until(n) { cb.write("$expr;") }
   cb.build()
 }
 

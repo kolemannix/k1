@@ -213,19 +213,19 @@ ability writer {
   fn write-char(self, value: char) { self.write-byte(value.as[u8]) }
   fn write-string(self, value: string) { self.write-bytes(value.span-bytes()) }
 
-  fn string(self, string) { self.write-string(string) }
+  fn write(self, value: string) { self.write-string(value) }
+
+  fn writeln(self, value: string) {
+    self.write-string(value)
+    self.write-char('\n')
+  }
 
   fn repeat(self, value: string, n: size) {
     let i = 0
     while i < n {
-      self.string(value)
+      self.write-string(value)
       i = i + 1
     }
-  }
-
-  fn line(self, line: string) {
-    self.string(line)
-    self.string("\n")
   }
 }
 

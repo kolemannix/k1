@@ -2,8 +2,8 @@ ns string_interp_test
 
 impl print for { name: string, weight: int } {
   fn print-to[w: writer](self, w) {
-    w.string(self.name)
-    w.string(": ")
+    w.write(self.name)
+    w.write(": ")
     self.weight.print-to(w)
     .{}
   }
@@ -14,6 +14,36 @@ fn test-raw-strings() {
 
   "world"`
   assert-equals(s1, "Hello,\n\n  \"world\"")
+}
+
+// A backtick literal whose content starts on the line after the opening
+// delimiter is a block: leading newline dropped, indentation common to every
+// line (the closing delimiter's line included) stripped, whitespace-only last
+// line removed
+fn test-block-strings() {
+  let plain = `
+    hello
+      world
+    `
+  assert-equals(plain, "hello\n  world\n")
+
+  let x = 42
+  let holes = `
+    let a = $x;
+    let b = ${x + 1};
+    `
+  assert-equals(holes, "let a = 42;\nlet b = 43;\n")
+
+  // The closing delimiter's column decides how much indentation is incidental
+  let keep-two = `
+    keep-two
+  `
+  assert-equals(keep-two, "  keep-two\n")
+
+  let no-trailing-newline = `
+    a
+    b`
+  assert-equals(no-trailing-newline, "a\nb")
 }
 
 fn test-dollar-rules() {
@@ -50,4 +80,5 @@ fn test() {
 
   test-dollar-rules()
   test-raw-strings()
+  test-block-strings()
 }

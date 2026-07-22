@@ -293,7 +293,7 @@ ns for list {
     for s in self {
       s.print-to(&b)
       let is-last = it-index + 1 == self.len
-      if not is-last { b.string(sep) }
+      if not is-last { b.write(sep) }
     }
     b.build()
   }
@@ -375,7 +375,7 @@ impl[t: print] print for list[t] {
       it.print-to(w)
       let last = it-index + 1 == self.len
       if not last {
-        w.string(",")
+        w.write(",")
       }
     }
     w.write-char(']')

@@ -168,10 +168,10 @@ works here too: with expected type `code` it yields `code`. When no context
 supplies the type, ascribe it: `` `1 + 2`: code `` or
 `"let w = ${}".fmt(42): code`.
 
-Building imperatively works by pointing any writer call (`writef`, `cb.line`,
-...) at a `*code-builder` — the same hole rules apply; `cb.code(c)` mirrors
-`sb.string(s)` and `cb.build()` yields the `code`. `code/from-string(s)` is the
-explicit spanless wrap.
+Building imperatively works by writing to a code-builder (`cb.write(...)`,
+`cb.writeln(...)`) — the same hole rules apply; `cb.code(c)` merges another
+`code` value in, and `cb.build()` yields the `code`. `code/from-string(s)` is
+the explicit spanless wrap.
 
 `code` does not implement `print`: interpolating one into an ordinary string is
 an error, since it would drop the spans silently — `.text` is the explicit
@@ -197,7 +197,7 @@ macro repeat(n: int, body) {
   let cb = code-builder/new()
   for 0.until(n) {
     cb.code(body)
-    cb.line("")
+    cb.writeln("")
   }
   cb.build()
 }

@@ -95,15 +95,15 @@ fn handle(req: http/request, deps: *mut deps): http-response {
 }
 
 fn render-big-json(out: *mut string-builder, rows: size) {
-  out.string("[")
+  out.write("[")
   let i: size = 0
   while i < rows {
-    if i > 0 { out.string(",") }
+    if i > 0 { out.write(",") }
     let score = i * 7 % 1000
-    writef(out, `{"id": $i, "name": "row-$i", "flags": [true, false], "score": $score}`)
+    out.write(`{"id": $i, "name": "row-$i", "flags": [true, false], "score": $score}`)
     i = i + 1
   }
-  out.string("]")
+  out.write("]")
 }
 
 // The independent publisher: an OS thread with no connection to the event
@@ -166,14 +166,14 @@ fn template(template: string, values: span[{ key: string, value: string }]): ?st
 
 let gridsize: u32 = 256
 fn render(out: *string-builder, pixels: *array[u8, 65536]) {
-  out.string(`<div id="grid" style="position: relative">`)
+  out.write(`<div id="grid" style="position: relative">`)
   let size = 3
   for pixels {
     let y = it-index / gridsize
     let x = it-index % gridsize
-    writelnf(out, `<div class="${if it == 0 "off-pixel" else "on-pixel"}" style="top: ${y * size}px; left: ${x * size}px" id="pixel-$x,$y"></div>`)
+    out.writeln(`<div class="${if it == 0 "off-pixel" else "on-pixel"}" style="top: ${y * size}px; left: ${x * size}px" id="pixel-$x,$y"></div>`)
   }
-  out.string(`</div">`)
+  out.write(`</div">`)
 }
 
 fn update(pixels: *array[u8, 65536]): { x: u32, y: u32 } {

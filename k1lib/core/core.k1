@@ -243,7 +243,7 @@ impl[t: print] show for t {
 impl print for bool {
   fn print-to[w: writer](self: bool, w) { 
     let s = if self "true" else "false"
-    w.string(s)
+    w.write(s)
   }
 }
 impl show for bool { fn show(self: bool): string { if self "true" else "false" } }
@@ -601,7 +601,7 @@ impl print for f64 {
 
 impl print for ptr {
   fn print-to[w: writer](self: ptr, w) {
-    w.string("0x")
+    w.write("0x")
     format-uint(context w)(self.as[usize], base = 16)
   }
 }

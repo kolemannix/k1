@@ -33,7 +33,7 @@ fn simple-increment(): i32 {
   #meta {
     let code = string-builder/new()
     for 0.until(5) {
-      code.line("x = x + 1;")
+      code.writeln("x = x + 1;")
     }
     code.build()
   }
@@ -48,35 +48,35 @@ use types/type-schema
 fn _write-json-from-schema(code: *mut string-builder, name: string, type-id: u64) {
   types/type-id-schema(type-id) is {
     :struct s -> {
-      code.line("w.write-char('{');")
+      code.writeln("w.write-char('{');")
       for f in s.fields {
 
         let field-let-name = `_$name${f.name}`
 
-        code.string(
+        code.write(
 `let $field-let-name = $name.${f.name};
-w.string("\"${f.name}\":");
+w.write("\"${f.name}\":");
 `
        ) //" fix quote
 
         _write-json-from-schema(code, field-let-name, f.type-id)
         let last = it-index == s.fields.len() - 1
         if not last {
-          code.line(`w.string(",");`)
+          code.writeln(`w.write(",");`)
         }
       }
-      code.line(`w.write-char('}');`)
+      code.writeln(`w.write-char('}');`)
     },
     :bool -> {
-      code.line(`w.string(if $name "true": string else "false");`)
+      code.writeln(`w.write(if $name "true": string else "false");`)
     },
-    :int _ -> code.line(`$name.print-to(w);`),
+    :int _ -> code.writeln(`$name.print-to(w);`),
     :either _ -> {
       let t-name = types/type-id-name(type-id)
       crash("Cannot yet create a JSON writer for either: $t-name")
     },
     _ -> {
-      code.line(`w.string(\`"other"\`)`)
+      code.writeln(`w.write(\`"other"\`)`)
     }
   }
 }

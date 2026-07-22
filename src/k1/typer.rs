@@ -12227,81 +12227,6 @@ impl TypedProgram {
                     Ok(_expr) => self.synth_optional_none(self.types.builtins.string(), call_span),
                 };
                 Ok(Some(expr))
-            } else if n == self.ast.idents.b.writef || n == self.ast.idents.b.writelnf {
-                let newline = n == self.ast.idents.b.writelnf;
-                if fn_call.args.len() < 2 {
-                    return failf!(call_span, "writef requires at least 2 arguments");
-                }
-                let ctx_no_hint = ctx.with_no_expected_type();
-
-                let writer_arg = self.ast.mem.get_nth(fn_call.args, 0);
-                if let ParsedExpr::InterpolatedString(is) = self.ast.exprs.get(writer_arg.value) {
-                    return failf!(
-                        is.span,
-                        "first argument should be the writer, not the format string"
-                    );
-                }
-                let writer_expr = self.eval_expr(writer_arg.value, ctx_no_hint)?;
-                let (_writer_impl, needs_addr_of) = self.expect_ability_impl(
-                    self.exprs.get_type(writer_expr),
-                    ABILITY_ID_WRITER,
-                    true,
-                    ctx.scope_id,
-                    self.exprs.get_span(writer_expr),
-                )?;
-                let writer = if needs_addr_of {
-                    self.synth_address_of(writer_expr, call_span, true).map_err(|e| {
-                        errf!(call_span, "The thing you gave as writer is not immediately a writer, but a reference to it is. So we tried to take its address, which is not allowed because it is not a place: {}", e.message)
-                    })?
-                } else {
-                    writer_expr
-                };
-                let fmt_string_arg = self.ast.mem.get_nth(fn_call.args, 1);
-                let fmt_string_arg_span = self.ast.exprs.get_span(fmt_string_arg.value);
-                let fmt_string = match self.ast.exprs.get(fmt_string_arg.value) {
-                    ParsedExpr::Literal(ParsedLiteral::String(string_id, _)) => {
-                        let string_part = InterpolatedStringPart::String {
-                            string_id: *string_id,
-                            span: fmt_string_arg_span,
-                        };
-                        let newline_string_id = self.ast.idents.b.newline;
-                        let parts = if newline {
-                            self.ast.mem.pushn(&[
-                                string_part,
-                                InterpolatedStringPart::String {
-                                    string_id: newline_string_id,
-                                    span: fmt_string_arg_span,
-                                },
-                            ])
-                        } else {
-                            self.ast.mem.pushn(&[string_part])
-                        };
-                        parts
-                    }
-                    ParsedExpr::InterpolatedString(is) => {
-                        let mut parts = self
-                            .ast
-                            .mem
-                            .new_list_from_slice(is.parts, is.parts.len() + newline as u32);
-                        if newline {
-                            let newline_string_id = self.ast.idents.b.newline;
-                            parts.push(InterpolatedStringPart::String {
-                                string_id: newline_string_id,
-                                span: fmt_string_arg_span,
-                            })
-                        }
-                        self.ast.mem.list_to_handle(parts)
-                    }
-                    _ => kbail!(self, call_span, "Expected a format string"),
-                };
-                let args = match self.ast.mem.get_nth_opt(fn_call.args, 2) {
-                    None => self.synth_empty_struct(call_span),
-                    Some(args_arg) => self.eval_expr(args_arg.value, ctx_no_hint)?,
-                };
-                let format_block =
-                    self.synth_format_calls(writer, fmt_string, args, call_span, ctx_no_hint)?;
-
-                Ok(Some(format_block))
             } else {
                 Ok(None)
             }
@@ -12562,6 +12487,87 @@ impl TypedProgram {
         } else {
             debug!("companion scope not found for call to {}", self.ident_str(fn_name))
         };
+
+        // "w.write(template)" / "w.writeln(template, values?)": when the receiver
+        // is a writer and the argument is a string template, this call is the
+        // format machinery (code mode when the writer is a *code-builder).
+        // Inherent `write` methods were checked above; a non-writer receiver or a
+        // string-valued argument falls through to ordinary ability resolution.
+        if (fn_name == self.ast.idents.b.write || fn_name == self.ast.idents.b.writeln)
+            && known_args.is_none()
+            && (call.args.len() == 2 || call.args.len() == 3)
+        {
+            let newline = fn_name == self.ast.idents.b.writeln;
+            let template_arg = self.ast.mem.get_nth(call.args, 1).value;
+            let is_template = matches!(
+                self.ast.exprs.get(template_arg),
+                ParsedExpr::InterpolatedString(_) | ParsedExpr::Literal(ParsedLiteral::String(..))
+            );
+            let writer_impl = if is_template {
+                self.expect_ability_impl(
+                    base_expr_type,
+                    ABILITY_ID_WRITER,
+                    true,
+                    ctx.scope_id,
+                    call_span,
+                )
+                .ok()
+            } else {
+                None
+            };
+            if let Some((_writer_impl, needs_addr_of)) = writer_impl {
+                let ctx_no_hint = ctx.with_no_expected_type();
+                let writer = if needs_addr_of {
+                    self.synth_address_of(base_expr, call_span, true).map_err(|e| {
+                        errf!(
+                            call_span,
+                            "The receiver is not immediately a writer, but a reference to it is. So we tried to take its address, which is not allowed because it is not a place: {}",
+                            e.message
+                        )
+                    })?
+                } else {
+                    base_expr
+                };
+                let template_span = self.ast.exprs.get_span(template_arg);
+                let newline_part = InterpolatedStringPart::String {
+                    string_id: self.ast.idents.b.newline,
+                    span: template_span,
+                };
+                let parts = match self.ast.exprs.get(template_arg) {
+                    ParsedExpr::Literal(ParsedLiteral::String(string_id, _)) => {
+                        let string_part = InterpolatedStringPart::String {
+                            string_id: *string_id,
+                            span: template_span,
+                        };
+                        if newline {
+                            self.ast.mem.pushn(&[string_part, newline_part])
+                        } else {
+                            self.ast.mem.pushn(&[string_part])
+                        }
+                    }
+                    ParsedExpr::InterpolatedString(is) => {
+                        if newline {
+                            let mut parts = self
+                                .ast
+                                .mem
+                                .new_list_from_slice(is.parts, is.parts.len() + 1);
+                            parts.push(newline_part);
+                            self.ast.mem.list_to_handle(parts)
+                        } else {
+                            is.parts
+                        }
+                    }
+                    _ => unreachable!(),
+                };
+                let values = match self.ast.mem.get_nth_opt(call.args, 2) {
+                    None => self.synth_empty_struct(call_span),
+                    Some(values_arg) => self.eval_expr(values_arg.value, ctx_no_hint)?,
+                };
+                let format_block =
+                    self.synth_format_calls(writer, parts, values, call_span, ctx_no_hint)?;
+                return Ok(CallResolution::OtherExpr(format_block));
+            }
+        }
 
         let Some(abilities_with_function_name) = self.function_name_to_ability.get(&fn_name) else {
             return failf!(

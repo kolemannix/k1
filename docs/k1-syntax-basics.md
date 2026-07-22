@@ -762,21 +762,24 @@ followed by anything that cannot start an identifier is literal (`"$5.99"`), and
 `\$` escapes a `$` that would otherwise open a hole. Braces are ordinary
 characters in strings and need no escaping.
 
-Use `writef` to write formatted text to any value that implements the `writer`
-ability. The first argument is the writer, the second is the format string, and
-the optional third argument supplies format values:
+Call `.write` on any value that implements the `writer` ability to write
+formatted text to it. The argument is the template, and an optional second
+argument supplies format values:
 
 ```rust
 let w = string-builder/new()
-writef(w, "hello ${}", 42)
-writef(w, " $name", .{ name = "k1" })
+w.write("hello ${}", 42)
+w.write(" $name", .{ name = "k1" })
 ```
 
-Use `writelnf` the same way when you want a trailing newline:
+Use `.writeln` the same way when you want a trailing newline:
 
 ```rust
-writelnf(w, "status: ${}", 200)
+w.writeln("status: ${}", 200)
 ```
+
+A non-template argument is a plain write — `w.write(some-string)` and
+`w.writeln(some-string)` are ordinary `writer` ability methods.
 
 To format a string template with values, call `.fmt(values)` on the literal —
 a string with holes, _format_ with these values:
@@ -795,10 +798,11 @@ let place = "Budapest"
 assert-equals("hello $place", "hello Budapest")
 ```
 
-`writef`, `writelnf`, and `.fmt` on a string template are special syntax hooks
-checked by the typer, but they still rely on normal K1 abilities for the actual
-output. In particular, `writef` and `writelnf` require a `writer`, and `.fmt`
-requires a literal receiver so the template's parts are known at compile time.
+`.write`/`.writeln` with a template argument and `.fmt` on a string template
+are special syntax hooks checked by the typer, but they still rely on normal K1
+abilities for the actual output. The templates must be literals so their parts
+are known at compile time; an inherent `write` method on a type, or a `write`
+from another ability on a non-writer type, resolves normally.
 
 Raw strings use backticks:
 
@@ -806,6 +810,19 @@ Raw strings use backticks:
 let raw = `Hello,
 
   "world"`
+```
+
+A backtick literal whose content starts on the line after the opening backtick
+is a block: the leading newline is dropped, indentation common to every line is
+stripped — the closing backtick's line included, so its column decides how much
+indentation is incidental — and a whitespace-only last line is removed:
+
+```rust
+let block = `
+  let i = 1;
+  while i < args.len() {
+  `
+// == "let i = 1;\nwhile i < args.len() {\n"
 ```
 
 See `test_src/suite1/format.k1` and

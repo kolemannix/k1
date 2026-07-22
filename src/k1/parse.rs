@@ -2717,13 +2717,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn expect_string(&mut self) -> ParseResult<ParsedExprId> {
         let first = self.tokens.peek();
 
-        let mut buf = std::mem::take(&mut self.string_buffer);
+        enum Pending {
+            Raw { token: Token, starts_fresh: bool },
+            Part(InterpolatedStringPart),
+        }
 
-        let mut parts: SV8<InterpolatedStringPart> = smallvec![];
+        let mut pending: SV8<Pending> = smallvec![];
         let mut first_segment = true;
 
-        // First we transform a series of lexer tokens into a sequence of parts
-        // Where each part is either a string constant, a hole expecting a postfix fmt arg, or an expression
+        // First we collect the token sequence: string segments stay raw for now
+        // (a block literal's indentation can only be judged across all of them),
+        // while interpolations parse to parts immediately
         loop {
             let current_token = self.tokens.next();
             match current_token.kind {
@@ -2731,16 +2735,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 K::OpenBrace => {
                     if let Some(close) = self.maybe_consume(K::CloseBrace) {
                         let span = self.extend_token_span(current_token, close);
-                        parts.push(InterpolatedStringPart::Hole {
+                        pending.push(Pending::Part(InterpolatedStringPart::Hole {
                             fmt_settings: ParsedFmtSettings::default(),
                             span,
-                        });
+                        }));
                     } else {
                         let expr_id = self.expect_expression()?;
-                        parts.push(InterpolatedStringPart::Expr(
+                        pending.push(Pending::Part(InterpolatedStringPart::Expr(
                             expr_id,
                             ParsedFmtSettings::default(),
-                        ));
+                        )));
                         self.expect_kind(K::CloseBrace)?;
                     }
                 }
@@ -2756,20 +2760,138 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let expr_id = self.add_expression(ParsedExpr::Variable(ParsedVariable {
                         name: QIdent::naked(string_id, current_token.span),
                     }));
-                    parts.push(InterpolatedStringPart::Expr(expr_id, ParsedFmtSettings::default()));
+                    pending.push(Pending::Part(InterpolatedStringPart::Expr(
+                        expr_id,
+                        ParsedFmtSettings::default(),
+                    )));
                 }
                 k if k.is_string() => {
-                    let StringTokenInfo { delim, done } = k.as_string().unwrap();
+                    let StringTokenInfo { delim: _, done } = k.as_string().unwrap();
+                    pending.push(Pending::Raw {
+                        token: current_token,
+                        starts_fresh: first_segment,
+                    });
+                    first_segment = false;
+                    self.emit_semantic_token(current_token, SemanticTokenKind::String);
+
+                    if done {
+                        // Juxtaposed strings concatenate only on the same
+                        // line; a string at the start of a line begins a new
+                        // statement
+                        let next = self.peek();
+                        if next.kind.is_string() && !next.is_newline_preceded() {
+                            first_segment = true;
+                            continue;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                _k => {
+                    return Err(error("Unexpected token kind in string sequence", current_token));
+                }
+            }
+        }
+
+        // A literal whose content starts with a newline is a block (only
+        // backticks can contain raw newlines): the leading newline is dropped,
+        // indentation common to every line — the closing delimiter's line
+        // included — is stripped, and a whitespace-only last line is removed
+        let is_block = match pending.first() {
+            Some(Pending::Raw { token, .. }) => {
+                let text = Parser::tok_chars(
+                    &self.ast.spans,
+                    self.ast.sources.get(self.file_id),
+                    *token,
+                );
+                text.as_bytes().get(1) == Some(&b'\n')
+            }
+            _ => false,
+        };
+        let mut strip: u32 = 0;
+        let mut drop_trailing_ws_line = false;
+        if is_block {
+            let mut min_indent: Option<u32> = None;
+            let mut at_line_start = false;
+            let mut ws_count = 0u32;
+            macro_rules! commit_line {
+                () => {
+                    min_indent = Some(min_indent.map_or(ws_count, |m| m.min(ws_count)));
+                    at_line_start = false;
+                };
+            }
+            for p in pending.iter() {
+                match p {
+                    Pending::Part(_) => {
+                        if at_line_start {
+                            commit_line!();
+                        }
+                    }
+                    Pending::Raw { token, starts_fresh } => {
+                        let info = token.kind.as_string().unwrap();
+                        let text = Parser::tok_chars(
+                            &self.ast.spans,
+                            self.ast.sources.get(self.file_id),
+                            *token,
+                        );
+                        let mut chars = text.chars().peekable();
+                        if *starts_fresh {
+                            chars.next();
+                        }
+                        while let Some(c) = chars.next() {
+                            if c == '\\' {
+                                chars.next();
+                                if at_line_start {
+                                    commit_line!();
+                                }
+                            } else if c == info.delim.char()
+                                && info.done
+                                && chars.peek().is_none()
+                            {
+                                // Closing delimiter; its line's indent already counted
+                            } else if c == '\n' {
+                                at_line_start = true;
+                                ws_count = 0;
+                            } else if at_line_start && (c == ' ' || c == '\t') {
+                                ws_count += 1;
+                            } else if at_line_start {
+                                commit_line!();
+                            }
+                        }
+                    }
+                }
+            }
+            if at_line_start {
+                min_indent = Some(min_indent.map_or(ws_count, |m| m.min(ws_count)));
+                drop_trailing_ws_line = true;
+            }
+            strip = min_indent.unwrap_or(0);
+        }
+
+        let mut buf = std::mem::take(&mut self.string_buffer);
+        let mut parts: SV8<InterpolatedStringPart> = smallvec![];
+        let mut skip_ws: u32 = 0;
+        let mut drop_first_newline = is_block;
+        let pending_len = pending.len();
+        for (i, p) in pending.iter().enumerate() {
+            match p {
+                Pending::Part(part) => {
+                    skip_ws = 0;
+                    parts.push(*part);
+                }
+                Pending::Raw { token, starts_fresh } => {
+                    let info = token.kind.as_string().unwrap();
+                    let delim = info.delim;
                     // Accessing the tok_chars this way achieves a partial borrow of self
                     let text = Parser::tok_chars(
                         &self.ast.spans,
                         self.ast.sources.get(self.file_id),
-                        current_token,
+                        *token,
                     );
 
                     buf.clear();
                     let mut chars = text.chars().peekable();
-                    if first_segment {
+                    if *starts_fresh {
                         // Skip opening " or `
                         // Note(ugh!): Maybe we just lex the actual strings (with tok_buf)
                         // because this is very duplicative between here and lex
@@ -2780,11 +2902,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 first,
                             ));
                         }
-                        first_segment = false;
                     }
-                    let is_terminated = done;
+                    let is_terminated = info.done;
                     while let Some(c) = chars.next() {
                         if c == '\\' {
+                            skip_ws = 0;
                             let Some(next) = chars.next() else {
                                 return Err(error("String ended with '\\'", first));
                             };
@@ -2804,38 +2926,38 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             // Skip closing delimiters of terminated string tokens
                             if chars.peek().is_none() && is_terminated {
                             } else {
+                                skip_ws = 0;
                                 buf.push(c)
                             }
+                        } else if c == '\n' {
+                            if drop_first_newline {
+                                drop_first_newline = false;
+                            } else {
+                                buf.push('\n');
+                            }
+                            skip_ws = strip;
+                        } else if skip_ws > 0 && (c == ' ' || c == '\t') {
+                            skip_ws -= 1;
                         } else {
+                            skip_ws = 0;
                             buf.push(c)
+                        }
+                    }
+                    if drop_trailing_ws_line && i == pending_len - 1 {
+                        while buf.ends_with(' ') || buf.ends_with('\t') {
+                            buf.pop();
                         }
                     }
                     let string_id = self.ast.idents.intern(&buf);
 
                     parts.push(InterpolatedStringPart::String {
                         string_id,
-                        span: current_token.span,
+                        span: token.span,
                     });
-                    self.emit_semantic_token(current_token, SemanticTokenKind::String);
-
-                    if is_terminated {
-                        // Juxtaposed strings concatenate only on the same
-                        // line; a string at the start of a line begins a new
-                        // statement
-                        let next = self.peek();
-                        if next.kind.is_string() && !next.is_newline_preceded() {
-                            first_segment = true;
-                            continue;
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                _k => {
-                    return Err(error("Unexpected token kind in string sequence", current_token));
                 }
             }
         }
+
         let result = if parts.len() == 1 {
             let InterpolatedStringPart::String { string_id, .. } =
                 parts.into_iter().next().unwrap()

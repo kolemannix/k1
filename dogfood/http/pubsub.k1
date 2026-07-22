@@ -182,11 +182,11 @@ ns pubsub {
   // SSE wire format, rendered into the ambient allocator
   fn sse-frame(event: event): string {
     let out = string-builder/new()
-    out.string("event: ${event.topic}\n")
+    out.write("event: ${event.topic}\n")
     for line in event.data.split-by-char('\n') {
-      out.string("data: $line\n")
+      out.write("data: $line\n")
     }
-    out.string("\n")
+    out.write("\n")
     out.build()
   }
 
