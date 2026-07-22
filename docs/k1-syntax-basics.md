@@ -669,7 +669,7 @@ type user = { id: int }
 
 impl printable-id for user {
   fn printable-id(self): string {
-    stringf("user-{id}", self)
+    "user-${self.id}"
   }
 }
 ```
@@ -678,7 +678,7 @@ Ability bounds go on type parameters:
 
 ```rust
 fn show[T: print](value: T): string {
-  stringf("{}", value)
+  "${}".fmt(value)
 }
 ```
 
@@ -778,26 +778,27 @@ Use `writelnf` the same way when you want a trailing newline:
 writelnf(w, "status: ${}", 200)
 ```
 
-Use `stringf` to build and return a formatted string. It takes the format string
-first and an optional values argument second:
+To format a string template with values, call `.fmt(values)` on the literal —
+a string with holes, _format_ with these values:
 
 ```rust
-let s = stringf("hello $name")
-let dated = stringf("$yyyy-${mm}-$dd", .{ yyyy = 2026, mm = 6, dd = 25 })
+let dated = "$yyyy-${mm}-$dd".fmt(.{ yyyy = 2026, mm = 6, dd = 25 })
 ```
 
 Bare `${}` placeholders consume the value argument directly. Named placeholders
 such as `$name` read fields from the values struct. Interpolated expressions can
-also refer to locals in scope:
+also refer to locals in scope, and a template whose holes all resolve in scope
+needs no `.fmt` at all:
 
 ```rust
 let place = "Budapest"
-assert-equals(stringf("hello $place"), "hello Budapest")
+assert-equals("hello $place", "hello Budapest")
 ```
 
-`writef`, `writelnf`, and `stringf` are special syntax hooks checked by the
-typer, but they still rely on normal K1 abilities for the actual output. In
-particular, `writef` and `writelnf` require a `writer`.
+`writef`, `writelnf`, and `.fmt` on a string template are special syntax hooks
+checked by the typer, but they still rely on normal K1 abilities for the actual
+output. In particular, `writef` and `writelnf` require a `writer`, and `.fmt`
+requires a literal receiver so the template's parts are known at compile time.
 
 Raw strings use backticks:
 

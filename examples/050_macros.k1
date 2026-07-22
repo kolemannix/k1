@@ -1,6 +1,8 @@
 // The metaprogramming operator, '#meta', runs its argument at compile-time and
-// expects a string. The returned string is compiled and inserted at the site of
-// the operator, replacing it.
+// expects a `code` value or a plain string. The compiler compiles what the
+// metaprogram returns in place of the operator. A `code` value carries source
+// spans, so errors inside the compiled output point back at the original
+// source; a string carries no source information.
 
 // '#meta' can be used wherever a <definition> is expected,
 // and wherever an <expression> is expected
@@ -12,38 +14,44 @@
 fn addgen[a](x: a, y: a): a { 
   #meta "x + y"
 }
+// A string template in `code`-expected position — like a macro body's return —
+// elaborates as `code`, so the template's spans come along for free
 macro addmacro(x, y) {
   "$x + $y"
 }
 
-// Armed with the macro operator, any function that returns a string could be considered
-// a macro. This one accepts two expressions as strings, and when invoked via '#meta', will
-// behave a whole lot like a replacement macro a.la Rust's macro_rules! or even a c #define,
-// although its executing much later than a c macro would, of course
-fn addlazy(x: string, y: string): string { 
+// Armed with the macro operator, any function that returns `code` (or a string)
+// could be considered a macro. This one accepts two expressions that arrive as
+// `code` values, and when invoked via '#meta', will behave a whole lot like a
+// replacement macro a.la Rust's macro_rules! or even a c #define, although its
+// executing much later than a c macro would, of course
+fn addlazy(x: code, y: code): code {
   "$x + $y"
 }
 
-// This is a dynamic 'macro' that will repeat the given expression n times
-fn repeat(n: int, expr: string): string {
-  let sb = string-builder/new()
-  for 0.until(n) { sb.string("$expr;") }
-  sb.build()
+// This is a dynamic 'macro' that will repeat the given expression n times.
+// Pointing writef at a code-builder makes a `code` part merge its source spans
+// in, while everything else is written as plain text
+fn repeat(n: int, expr: code): code {
+  let cb = code-builder/new()
+  for 0.until(n) { writef(&cb, "$expr;") }
+  cb.build()
 }
 macro repeatm(n: int, expr) {
-  let sb = string-builder/new()
-  for 0.until(n) { sb.string("$expr;") }
-  sb.build()
+  let cb = code-builder/new()
+  for 0.until(n) { writef(&cb, "$expr;") }
+  cb.build()
 }
 
 fn main(): i32 {
 
 
   // In order to invoke addlazy properly, we need to pass it our code
-  // as strings. It would suck to have to put them in double quotes like
+  // as `code` values. It would suck to have to put them in double quotes like
   // a regular string, and also send the wrong signal. The 'escape code' command,
   // invoked with backslash, is the solution for this.
-  // Use \ <stmt> and the provided statement will be turned into a string
+  // Use \ <stmt> and the provided statement arrives as a `code` value: its
+  // source text plus the span it came from
 
   let thunk = fn.{ println("thunk"); 21 }
   let x = #meta addlazy(\thunk(), \55)

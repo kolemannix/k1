@@ -1,8 +1,6 @@
 use std/bitfield/b1 use std/bitfield/bn
-// #meta std/bitfield/define[u16]("flags-auto", [b1("shielded"), b1("cloaked"), b1("damaged"), .{ name = "sector-id", bits = 5 }, bn("foo", 8)])
 use std/bitfield/define
-use std/bitfield/define-m
-$define-m[u16](flags-auto, 
+$define[u16](flags-auto,
   [b1(shielded),
    b1(cloaked),
    b1(damaged),

@@ -1,0 +1,42 @@
+// `code` is source text plus a table of source spans; metaprograms return it so
+// diagnostics in compiled output can point back at the original source.
+// `source` is a compiler span id, widened to u64.
+
+type code-span = { offset: u64, len: u64, source: u64 }
+
+type code = { text: string, spans: list[code-span] }
+
+ns for code {
+  fn from-string(s: string): code {
+    .{ text = s, spans = list/empty() }
+  }
+}
+
+type code-builder = { bytes: list[u8], spans: list[code-span] }
+
+ns for code-builder {
+  fn new(): code-builder {
+    .{ bytes = list/empty(), spans = list/empty() }
+  }
+
+  fn code(self: *mut code-builder, c: code) {
+    let base = self.bytes.len.as[u64]
+    self.bytes.append-span(c.text.span-bytes())
+    for entry in c.spans {
+      self.spans.push(.{ offset = base + entry.offset, len = entry.len, source = entry.source })
+    }
+  }
+
+  fn build(self: *code-builder): code {
+    .{ text = string/wrap-bytes(self.bytes.as-span()).cloned(), spans = self.spans }
+  }
+}
+
+impl writer for *code-builder {
+  fn write-byte(self, b: u8): empty {
+    self.bytes.push(b)
+  }
+  fn write-bytes(self, b: span[u8]): empty {
+    self.bytes.append-span(b)
+  }
+}

@@ -950,6 +950,9 @@ pub struct BuiltinTypes {
     pub list: Option<TypeId>,
     pub string: Option<TypeId>,
     pub opt: Option<TypeId>,
+    pub code: Option<TypeId>,
+    pub code_span: Option<TypeId>,
+    pub code_builder: Option<TypeId>,
     pub dyn_lambda_obj: Option<TypeId>,
     pub source_location: Option<TypeId>,
     pub ordering: Option<TypeId>,
@@ -969,6 +972,9 @@ impl BuiltinTypes {
         debug_assert!(self.list.is_some());
         debug_assert!(self.string.is_some());
         debug_assert!(self.opt.is_some());
+        debug_assert!(self.code.is_some());
+        debug_assert!(self.code_span.is_some());
+        debug_assert!(self.code_builder.is_some());
         debug_assert!(self.dyn_lambda_obj.is_some());
         debug_assert!(self.types_layout.is_some());
         debug_assert!(self.types_type_schema.is_some());
@@ -991,6 +997,15 @@ impl BuiltinTypes {
     }
     pub fn opt(&self) -> TypeId {
         self.opt.expect("opt builtin missing")
+    }
+    pub fn code(&self) -> TypeId {
+        self.code.expect("code builtin missing")
+    }
+    pub fn code_span(&self) -> TypeId {
+        self.code_span.expect("code-span builtin missing")
+    }
+    pub fn code_builder(&self) -> TypeId {
+        self.code_builder.expect("code-builder builtin missing")
     }
 }
 

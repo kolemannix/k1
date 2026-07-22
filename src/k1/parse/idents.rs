@@ -170,6 +170,9 @@ pub(crate) struct BuiltinIdents {
     pub param_7: StringId,
     pub param_8: StringId,
     pub string_builder: StringId,
+    pub code: StringId,
+    pub code_span: StringId,
+    pub code_builder: StringId,
     pub builder: StringId,
     pub bitwise: StringId,
     pub arena_tmp: StringId,
@@ -183,7 +186,7 @@ pub(crate) struct BuiltinIdents {
     pub test_compile: StringId,
     pub writef: StringId,
     pub writelnf: StringId,
-    pub stringf: StringId,
+    pub fmt: StringId,
     pub v: StringId,
     pub subject: StringId,
     pub fmtargs: StringId,
@@ -243,6 +246,9 @@ pub(crate) struct BuiltinFunctions {
     pub ScalarCmp_ge: QIdent,
     pub StringBuilder_new: QIdent,
     pub StringBuilder_build_tmp: QIdent,
+    pub CodeBuilder_new: QIdent,
+    pub CodeBuilder_build: QIdent,
+    pub CodeBuilder_code: QIdent,
     pub bitwise_and: QIdent,
     pub bitwise_or: QIdent,
     pub bitwise_xor: QIdent,
@@ -386,6 +392,9 @@ impl IdentPool {
             param_7: intern!("param_7"),
             param_8: intern!("param_8"),
             string_builder: intern!("string-builder"),
+            code: intern!("code"),
+            code_span: intern!("code-span"),
+            code_builder: intern!("code-builder"),
             builder: intern!("builder"),
             bitwise: intern!("bitwise"),
             arena_tmp: intern!("arena-tmp"),
@@ -399,7 +408,7 @@ impl IdentPool {
             test_compile: intern!("test-compile"),
             writef: intern!("writef"),
             writelnf: intern!("writelnf"),
-            stringf: intern!("stringf"),
+            fmt: intern!("fmt"),
             v: intern!("v"),
             subject: intern!("subject"),
             fmtargs: intern!("fmtargs"),
@@ -492,6 +501,11 @@ impl IdentPool {
         let StringBuilder_new: QIdent = make_fn!(path_stringbuilder, intern!("new"));
         let StringBuilder_build_tmp: QIdent = make_fn!(path_stringbuilder, intern!("build-tmp"));
 
+        let path_codebuilder = intern_path!(b.core, b.code_builder);
+        let CodeBuilder_new: QIdent = make_fn!(path_codebuilder, intern!("new"));
+        let CodeBuilder_build: QIdent = make_fn!(path_codebuilder, intern!("build"));
+        let CodeBuilder_code: QIdent = make_fn!(path_codebuilder, b.code);
+
         let path_core_bitwise = intern_path!(b.core, b.bitwise);
         let bitwise_and = make_fn!(path_core_bitwise, intern!("bit-and"));
         let bitwise_or = make_fn!(path_core_bitwise, intern!("bit-or"));
@@ -529,6 +543,9 @@ impl IdentPool {
             ScalarCmp_ge,
             StringBuilder_new,
             StringBuilder_build_tmp,
+            CodeBuilder_new,
+            CodeBuilder_build,
+            CodeBuilder_code,
             bitwise_and,
             bitwise_or,
             bitwise_xor,

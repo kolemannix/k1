@@ -55,8 +55,8 @@ ns chunked {
       finishing = false,
     })
     mem/push-mode(:custom-arena connection.request-arena)
-    let headers = stringf(
-      "HTTP/1.1 200 OK\r\nContent-Type: ${streaming.content-type}\r\nTransfer-Encoding: chunked\r\n\r\n")
+    let headers =
+      "HTTP/1.1 200 OK\r\nContent-Type: ${streaming.content-type}\r\nTransfer-Encoding: chunked\r\n\r\n"
     mem/pop-mode()
     write-frame(encoder, headers.span-bytes())
   }

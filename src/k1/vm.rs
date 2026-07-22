@@ -141,11 +141,13 @@ pub mod k1_types {
         pub len: i64,
     }
 
+    /// k1 list is { buffer, len }: the buffer's len is the capacity,
+    /// the trailing len is the element count
     #[repr(C)]
     #[derive(Clone, Copy)]
     pub struct K1List {
         pub k1_buffer: K1BufferLike,
-        pub capacity: i64,
+        pub len: i64,
     }
 
     #[derive(Clone, Copy)]
@@ -1905,7 +1907,7 @@ pub fn static_value_to_vm_value(
                     // k1 list is a growable buffer; { buffer, capacity }.
                     let rust_list = k1_types::K1List {
                         k1_buffer: k1_types::K1BufferLike { data: array_base_ptr, len: len as i64 },
-                        capacity: len as i64,
+                        len: len as i64,
                     };
                     let rust_struct_ptr = k1.vm_shared_static_stack.push_t(rust_list);
                     Value::ptr(rust_struct_ptr)
@@ -1996,7 +1998,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
                     // Store the struct to dst
                     let rust_list = k1_types::K1List {
                         k1_buffer: k1_types::K1BufferLike { data: array_base_ptr, len: len as i64 },
-                        capacity: len as i64,
+                        len: len as i64,
                     };
 
                     unsafe { *(dst as *mut k1_types::K1List) = rust_list };
@@ -2511,7 +2513,13 @@ pub fn vm_value_to_static_value(
                     ContainerKind::Array(_) => unreachable!(),
                     ContainerKind::Span | ContainerKind::List | ContainerKind::Buffer => {
                         let k1_span: k1_types::K1BufferLike = match container_kind {
-                            ContainerKind::List => value_as_list(vm_value).k1_buffer,
+                            ContainerKind::List => {
+                                let list = value_as_list(vm_value);
+                                k1_types::K1BufferLike {
+                                    data: list.k1_buffer.data,
+                                    len: list.len,
+                                }
+                            }
                             ContainerKind::Span => value_as_span(vm_value),
                             ContainerKind::Buffer => value_as_span(vm_value),
                             _ => unreachable!(),

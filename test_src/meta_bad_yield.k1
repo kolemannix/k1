@@ -1,0 +1,7 @@
+fn gen(): int { 42 }
+
+fn main(): i32 {
+  #meta gen()
+  0
+}
+//errmsg: #meta block did not evaluate to `code` or `string`

@@ -390,6 +390,22 @@ impl TypedProgram {
         )
     }
 
+    pub(super) fn synth_code_append_call(
+        &mut self,
+        code_expr: TypedExprId,
+        writer: TypedExprId,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
+        let span = self.exprs.get_span(code_expr);
+        self.synth_typed_call_typed_args(
+            self.ast.idents.f.CodeBuilder_code.with_span(span),
+            &[],
+            &[writer, code_expr],
+            ctx.with_no_expected_type(),
+            false,
+        )
+    }
+
     pub(super) fn synth_string_literal(
         &mut self,
         string_id: StringId,
@@ -568,6 +584,10 @@ impl TypedProgram {
         span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
+        let code_mode = match self.types.get(self.exprs.get_type(writer_expr)) {
+            Type::Reference(r) => Some(r.inner_type) == self.types.builtins.code_builder,
+            _ => false,
+        };
         let mut block =
             self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, parts.len() + 1);
         let block_scope = block.scope_id;
@@ -648,34 +668,54 @@ impl TypedProgram {
         let mut i = 0usize;
         while i < parts.len() as usize {
             match self.ast.mem.get_nth(parts, i) {
-                parse::InterpolatedStringPart::String { string_id, .. } => {
-                    // Combine consecutive strings into a single constant
-                    let mut string_to_print = *string_id;
-                    let mut combined: Option<String> = None;
-                    while i + 1 < parts.len() as usize {
-                        let next = self.ast.mem.get_nth(parts, i + 1);
-                        if let InterpolatedStringPart::String { string_id: next_string, .. } = next
-                        {
-                            let buf = combined.get_or_insert_with(|| {
-                                String::from(self.ast.idents.get_string(string_to_print))
-                            });
-                            buf.push_str(self.ast.idents.get_string(*next_string));
-                            i += 1;
-                        } else {
-                            break;
+                parse::InterpolatedStringPart::String { string_id, span: part_span } => {
+                    if code_mode {
+                        // Per-part constants, so each keeps its own source span
+                        let string_id = *string_id;
+                        let part_span = *part_span;
+                        let len = self.ast.idents.get_string(string_id).len() as u32;
+                        if len != 0 {
+                            let value_id =
+                                self.make_static_code_value(string_id, &[(0, len, part_span)]);
+                            let code_expr = self.add_static_constant_expr(value_id, part_span);
+                            let code_call = self.synth_code_append_call(
+                                code_expr,
+                                writer_expr,
+                                block_ctx.with_hidden_calls(true),
+                            )?;
+                            self.push_block_expr_id(&mut block, code_call);
                         }
-                    }
-                    if let Some(combined) = combined {
-                        string_to_print = self.ast.idents.intern(combined);
-                    }
-                    if !self.ast.idents.get_string(string_to_print).is_empty() {
-                        let string_expr = self.synth_string_literal(string_to_print, span);
-                        let print_call = self.synth_printto_call(
-                            string_expr,
-                            writer_expr,
-                            block_ctx.with_hidden_calls(true),
-                        )?;
-                        self.push_block_expr_id(&mut block, print_call);
+                    } else {
+                        // Combine consecutive strings into a single constant
+                        let mut string_to_print = *string_id;
+                        let mut combined: Option<String> = None;
+                        while i + 1 < parts.len() as usize {
+                            let next = self.ast.mem.get_nth(parts, i + 1);
+                            if let InterpolatedStringPart::String {
+                                string_id: next_string, ..
+                            } = next
+                            {
+                                let buf = combined.get_or_insert_with(|| {
+                                    String::from(self.ast.idents.get_string(string_to_print))
+                                });
+                                buf.push_str(self.ast.idents.get_string(*next_string));
+                                i += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        if let Some(combined) = combined {
+                            string_to_print = self.ast.idents.intern(combined);
+                        }
+                        if !self.ast.idents.get_string(string_to_print).is_empty() {
+                            let string_expr = self.synth_string_literal(string_to_print, span);
+                            let print_call = self.synth_printto_call(
+                                string_expr,
+                                writer_expr,
+                                block_ctx.with_hidden_calls(true),
+                            )?;
+                            self.push_block_expr_id(&mut block, print_call);
+                        }
                     }
                 }
                 parse::InterpolatedStringPart::Expr(expr_id, _fmt_settings) => {
@@ -706,19 +746,31 @@ impl TypedProgram {
                         }
                     };
 
-                    let print_expr_call = self.synth_printto_call(
-                        typed_expr,
-                        writer_expr,
-                        block_ctx.with_hidden_calls(true),
-                    )?;
-                    self.push_block_expr_id(&mut block, print_expr_call);
+                    let part_call = if code_mode && self.expr_type_is_code(typed_expr) {
+                        self.synth_code_append_call(
+                            typed_expr,
+                            writer_expr,
+                            block_ctx.with_hidden_calls(true),
+                        )?
+                    } else {
+                        self.synth_printto_call(
+                            typed_expr,
+                            writer_expr,
+                            block_ctx.with_hidden_calls(true),
+                        )?
+                    };
+                    self.push_block_expr_id(&mut block, part_call);
                 }
                 parse::InterpolatedStringPart::Hole { fmt_settings: _, span } => {
                     // Grab the hole_index'th argument from args_variable.
                     let arg = get_nth_arg(self, args_variable.variable_expr, hole_index, *span)?;
                     hole_index += 1;
-                    let print_expr_call = self.synth_printto_call(arg, writer_expr, ctx)?;
-                    self.push_block_expr_id(&mut block, print_expr_call);
+                    let part_call = if code_mode && self.expr_type_is_code(arg) {
+                        self.synth_code_append_call(arg, writer_expr, ctx)?
+                    } else {
+                        self.synth_printto_call(arg, writer_expr, ctx)?
+                    };
+                    self.push_block_expr_id(&mut block, part_call);
                 }
             }
             i += 1
@@ -798,6 +850,81 @@ impl TypedProgram {
         self.push_block_expr_id(&mut block, build_call);
 
         // build_call_type should definitely be string
+        let build_call_type = self.exprs.get_type(build_call);
+        Ok(self.exprs.add_block(&mut self.mem, block, build_call_type))
+    }
+
+    fn expr_type_is_code(&self, expr: TypedExprId) -> bool {
+        let type_id = self.types.get_static_family_id_if_static(self.exprs.get_type(expr));
+        Some(type_id) == self.types.builtins.code
+    }
+
+    pub(super) fn expected_type_is_code(&self, expected: Option<TypeId>) -> bool {
+        let Some(expected) = expected else { return false };
+        let expected = match self.types.get_static_type_of_type(expected) {
+            Some(stat) => stat.family_type_id,
+            None => expected,
+        };
+        Some(expected) == self.types.builtins.code
+    }
+
+    /// Produces a `code` value, resulting from using a core/code-builder
+    /// to write the given format parts + arguments into it
+    pub(super) fn synth_interpolated_code(
+        &mut self,
+        parts: MSlice<InterpolatedStringPart, ParsedProgram>,
+        span: SpanId,
+        ctx: EvalExprContext,
+        args_expr: Option<TypedExprId>,
+    ) -> K1Result<TypedExprId> {
+        if self.config.no_std {
+            return failf!(span, "Interpolated strings are not supported in no_std mode");
+        }
+        if parts.len() == 1 {
+            if let parse::InterpolatedStringPart::String { string_id, span: part_span } =
+                self.ast.mem.get_nth(parts, 0)
+            {
+                let string_id = *string_id;
+                let part_span = *part_span;
+                let len = self.ast.idents.get_string(string_id).len() as u32;
+                let value_id = self.make_static_code_value(string_id, &[(0, len, part_span)]);
+                return Ok(self.add_static_constant_expr(value_id, span));
+            }
+        }
+
+        let mut block = self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 3);
+        let block_ctx = ctx.with_scope(block.scope_id).with_no_expected_type();
+        let ctx_for_calls = block_ctx.with_hidden_calls(true);
+        let new_code_builder = self.synth_typed_call_typed_args(
+            self.ast.idents.f.CodeBuilder_new.with_span(span),
+            &[],
+            &[],
+            ctx_for_calls,
+            false,
+        )?;
+        let code_builder_var = self.synth_variable_defn(
+            self.ast.idents.b.builder,
+            new_code_builder,
+            false,
+            block.scope_id,
+            None,
+        );
+        let code_builder_expr =
+            self.synth_address_of(code_builder_var.variable_expr, SpanId::NONE, true).unwrap();
+        self.push_block_stmt_id(&mut block, code_builder_var.defn_stmt);
+        let args_expr = args_expr.unwrap_or(self.synth_empty_struct(span));
+        let format_block =
+            self.synth_format_calls(code_builder_expr, parts, args_expr, span, ctx)?;
+        self.push_block_expr_id(&mut block, format_block);
+        let build_call = self.synth_typed_call_typed_args(
+            self.ast.idents.f.CodeBuilder_build.with_span(span),
+            &[],
+            &[code_builder_expr],
+            ctx_for_calls,
+            false,
+        )?;
+        self.push_block_expr_id(&mut block, build_call);
+
         let build_call_type = self.exprs.get_type(build_call);
         Ok(self.exprs.add_block(&mut self.mem, block, build_call_type))
     }

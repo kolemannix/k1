@@ -116,7 +116,11 @@ See `test_src/suite1/static_parameter.k1`,
 
 ## Metaprogramming
 
-K1 supports source-generating metaprogramming with `#meta`.
+K1 supports source-generating metaprogramming with `#meta`. A metaprogram may
+yield `code` — text plus a table of source spans — or a plain `string`, which
+simply carries no source information. The compiler compiles what the
+metaprogram returns in place of the invocation; errors inside compiled output
+whose bytes came from a `code` span point back at the original source.
 
 ```rust
 #meta "let n: u64 = 255"
@@ -144,13 +148,45 @@ interpolation holes are `$ident`/`${expr}`, and a generated string that should
 itself interpolate at runtime escapes its holes as `\$`. `code-writer` helpers
 also appear in metaprograms.
 
+### `code` and `code-builder`
+
+`core/code.k1` defines `code = { text: string, spans: list[code-span] }`, where
+each `code-span = { offset, len, source }` says which byte range of `text` came
+from which original span (`source` is a compiler span id, widened to u64).
+`\ <stmt>` (or `#code <stmt>`) produces a `code` value: the statement's source
+text plus the span it came from.
+
+A string template in `code`-expected position elaborates as `code`: the
+literal's text carries the literal's own spans, and a `code` part in a hole
+merges its span table in (shifted by its position); every other part is printed
+as bytes. This applies to any string literal (double-quoted or backtick, holes
+or not) whose expected type is `code` — a macro body's return position, a
+`code`-typed let or parameter, and so on. Only literals elaborate; a
+string-typed *value* in `code` position is still a type error, since a literal
+carries its own spans while a value has none. `.fmt(values)` on a template
+works here too: with expected type `code` it yields `code`. When no context
+supplies the type, ascribe it: `` `1 + 2`: code `` or
+`"let w = ${}".fmt(42): code`.
+
+Building imperatively works by pointing any writer call (`writef`, `cb.line`,
+...) at a `*code-builder` — the same hole rules apply; `cb.code(c)` mirrors
+`sb.string(s)` and `cb.build()` yields the `code`. `code/from-string(s)` is the
+explicit spanless wrap.
+
+`code` does not implement `print`: interpolating one into an ordinary string is
+an error, since it would drop the spans silently — `.text` is the explicit
+escape. There is no implicit conversion between `string` and `code` in either
+direction.
+
 ## Macros
 
 A `macro` is a compile-time function whose call sites pass code by source: bare
-params receive the argument's source text (as a `string`, for now), annotated
-params are statically evaluated (any type annotation on a macro param implies
-compile-time), and the returned string is compiled in place of the call. The
-return type is implicit. Callers write plain expressions:
+params receive the argument as a `code` value (source text plus its span),
+annotated params are statically evaluated (any type annotation on a macro param
+implies compile-time), and the returned `code` is compiled in place of the
+call. The return type is implicit, and is `code`, so a string template in
+return position elaborates as `code` with its spans intact. Callers write
+plain expressions:
 
 ```rust
 macro debug(e) {
@@ -158,14 +194,23 @@ macro debug(e) {
 }
 
 macro repeat(n: int, body) {
-  let sb = string-builder/new()
-  for 0.until(n) { sb.line(body) }
-  sb.build()
+  let cb = code-builder/new()
+  for 0.until(n) {
+    cb.code(body)
+    cb.line("")
+  }
+  cb.build()
 }
 
 debug(expensive-report())   // expands to nothing when build-debug is off
 repeat(3, counter.incr())
 ```
+
+Because arguments arrive as `code`, a type error inside the expansion points at
+the argument expression the caller wrote, not at the generated file. Error
+spans in emitted bytes not covered by any span (e.g. text from
+`code/from-string`) stay in the generated file, with a note naming the call the
+code was compiled in place of.
 
 At definition level, macros are invoked with the `$` sentinel — the callee must
 be a macro (`$` binds tightly: no whitespace before the name), and its output is

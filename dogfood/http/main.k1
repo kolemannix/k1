@@ -548,7 +548,7 @@ type $name = {
   path-pattern: string,
   logic-fn: *fn(http/request, $ptr-type) -> http-response,
 }`
-  stringf("$raw\n$typed", .{ raw = template("route-handler", "ptr"), typed = template("user-route-handler[deps]", "*mut deps") })
+  "$raw\n$typed".fmt(.{ raw = template("route-handler", "ptr"), typed = template("user-route-handler[deps]", "*mut deps") })
 }
 #static types/assert-layout[route-handler](32, 8, [0, 8, 24])
 #static types/assert-layout[user-route-handler[empty]](32, 8, [0, 8, 24])

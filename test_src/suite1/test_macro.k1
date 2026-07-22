@@ -17,11 +17,12 @@ macro twice(e) {
 }
 
 macro repeat(n: int, body) {
-  let sb = string-builder/new()
+  let cb = code-builder/new()
   for 0.until(n) {
-    sb.line(body)
+    cb.code(body)
+    cb.line("")
   }
-  sb.build()
+  cb.build()
 }
 
 macro debug(e) {
@@ -43,10 +44,54 @@ fn test-debug-elided() {
   debug(crash("this must never run"))
 }
 
+fn test-code-value() {
+  let c = \incr()
+  assert-equals(c.text, "incr()")
+  assert-equals(c.spans.len(), 1)
+  let entry = c.spans.get(0)
+  assert-equals(entry.offset, 0)
+  assert-equals(entry.len, 6)
+}
+
+fn test-code-literal() {
+  let a = \9 * 9
+  let c: code = "let q = $a"
+  assert-equals(c.text, "let q = 9 * 9")
+  assert-equals(c.spans.len(), 2)
+  assert-equals(c.spans.get(1).offset, 8)
+  assert-equals(c.spans.get(1).len, 5)
+}
+
+fn test-code-fmt() {
+  let c: code = "let w = ${}".fmt(42)
+  assert-equals(c.text, "let w = 42")
+  assert-equals(c.spans.len(), 1)
+  assert-equals(c.spans.get(0).len, 8)
+
+  // No expectation nearby? Ascribe.
+  let d = "let v = ${}".fmt(7): code
+  assert-equals(d.text, "let v = 7")
+}
+
+fn test-code-builder() {
+  let a = \1 + 2
+  let cb = code-builder/new()
+  writef(&cb, "let z = $a; z * 2")
+  let built = cb.build()
+  assert-equals(built.text, "let z = 1 + 2; z * 2")
+  assert-equals(built.spans.len(), 3)
+  assert-equals(built.spans.get(1).offset, 8)
+  assert-equals(built.spans.get(1).len, 5)
+}
+
 fn test() {
   test-twice()
   test-repeat()
   test-debug-elided()
+  test-code-value()
+  test-code-literal()
+  test-code-fmt()
+  test-code-builder()
 
   .{}
 }
