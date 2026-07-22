@@ -282,7 +282,7 @@ pub fn main() -> Result<()> {
     for dir_entry in std::fs::read_dir(test_dir)? {
         let dir_entry = dir_entry?;
         let metadata = dir_entry.metadata()?;
-        let path = dir_entry.path();
+        let path = dir_entry.path().canonicalize().unwrap();
         eprintln!("{path:?}");
 
         if path.file_name().unwrap().to_str().unwrap().starts_with(".") {

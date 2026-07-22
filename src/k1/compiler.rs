@@ -379,7 +379,12 @@ fn write_idents_dump(p: &TypedProgram) {
     let content_bytes = idents.content_bytes();
     let mut out = String::with_capacity(content_bytes + count * 16);
     let avg = if count == 0 { 0.0 } else { content_bytes as f64 / count as f64 };
-    writeln!(out, "; ident pool: {} strings, {} content bytes, avg len {:.1}", count, content_bytes, avg).unwrap();
+    writeln!(
+        out,
+        "; ident pool: {} strings, {} content bytes, avg len {:.1}",
+        count, content_bytes, avg
+    )
+    .unwrap();
 
     let mut by_len: Vec<(StringId, &str)> = idents.iter().collect();
     by_len.sort_by_key(|(_, s)| std::cmp::Reverse(s.len()));
@@ -462,6 +467,9 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
     let k1_home_pathbuf = k1_home_pathbuf
         .canonicalize()
         .unwrap_or_else(|e| panic!("K1 home {} is not usable: {e}", k1_home_pathbuf.display()));
+    if args.chatty {
+        eprintln!("using k1 home: {}", k1_home_pathbuf.display());
+    }
     let k1lib_dir_pathbuf = k1_home_pathbuf.join("k1lib");
 
     let corelib_dir = k1lib_dir_pathbuf.join("core");

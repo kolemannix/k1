@@ -1,5 +1,10 @@
 "C with generics, live interactive programming, typeclasses, next-gen macros, full compile-time execution, and ADTs"
 
+next up
+- all the macro nocommits
+- clean up the lsp completions and test them
+- more dogfooding, do the 2 static sites
+
 
 Minor and ideas
 - [x] allow opaques to be named / nominal; bindgen them that way. The name is really more useful than the size/align

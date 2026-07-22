@@ -11,7 +11,8 @@ cargo build --features=llvm-sys/prefer-dynamic --bin k1_test --bin k1
 # export MallocScribble=1
 make -C k1lib/core/libs clean build
 make -C test_src/ffi_abi_test/libs clean build
-target/debug/k1_test $1
+# set k1 home to absolute cwd
+K1_HOME=$(pwd) target/debug/k1_test $1
 # unset MallocScribble
 
 export RUST_LOG=info
