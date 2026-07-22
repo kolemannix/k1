@@ -385,9 +385,18 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     }
 }
 
-#[cfg(feature = "profile")]
 impl<T, Index: PoolIndex> Drop for VPool<T, Index> {
     fn drop(&mut self) {
+
+        // If T has drop glue, call drop on all elements in the pool
+        if std::mem::needs_drop::<T>() {
+            for i in 0..self.len {
+                let ptr = unsafe { self.data_mut().as_mut_ptr().add(i) };
+                unsafe { core::ptr::drop_in_place(ptr) }
+            }
+        }
+
+        #[cfg(feature = "profile")]
         self.print_size_info()
     }
 }
