@@ -617,6 +617,49 @@ fn emit_inst(
             ctx.push(dst);
             ctx.push(addr);
         }
+        Inst::AtomicLoad { t, src, ord } => {
+            let addr = resolve_src(k1, ctx, src);
+            let dst = ctx.slot_of(inst_id);
+            ctx.emit(Opcode::AtomicLoad, wbits(t), ord.to_tag() as u16);
+            ctx.push(dst);
+            ctx.push(addr);
+        }
+        Inst::AtomicStore { dst, value, t, ord } => {
+            let addr = resolve_src(k1, ctx, dst);
+            let val = resolve_src(k1, ctx, value);
+            ctx.emit(Opcode::AtomicStore, wbits(t), ord.to_tag() as u16);
+            ctx.push(addr);
+            ctx.push(val);
+        }
+        Inst::AtomicRmw { op, t, dst, operand, ord } => {
+            let addr = resolve_src(k1, ctx, dst);
+            let operand = resolve_src(k1, ctx, operand);
+            let slot = ctx.slot_of(inst_id);
+            let b = ((op.to_tag() as u16) << 8) | ord.to_tag() as u16;
+            ctx.emit(Opcode::AtomicRmw, wbits(t), b);
+            ctx.push(slot);
+            ctx.push(addr);
+            ctx.push(operand);
+        }
+        Inst::AtomicCmpxchg { id } => {
+            let cas = *k1.ir.cmpxchgs.get(id);
+            let result = resolve_src(k1, ctx, cas.result);
+            let addr = resolve_src(k1, ctx, cas.dst);
+            let expected = resolve_src(k1, ctx, cas.expected);
+            let desired = resolve_src(k1, ctx, cas.desired);
+            let b = cas.success.to_tag() as u16
+                | (cas.failure.to_tag() as u16) << 4
+                | (cas.weak as u16) << 8;
+            ctx.emit(Opcode::AtomicCmpxchg, wbits(cas.t), b);
+            ctx.push(result);
+            ctx.push(addr);
+            ctx.push(expected);
+            ctx.push(desired);
+            ctx.push(cas.ok_vm_offset);
+        }
+        Inst::Fence { ord } => {
+            ctx.emit(Opcode::Fence, 0, ord.to_tag() as u16);
+        }
         Inst::Copy { dst, src, vm_size, .. } => {
             let dst_addr = resolve_src(k1, ctx, dst);
             let src_addr = resolve_src(k1, ctx, src);

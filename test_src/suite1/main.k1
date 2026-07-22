@@ -58,6 +58,7 @@ fn moderate() {
   context_params/test()
   context_generic/test()
   static_literals/test()
+  atomics/test()
   inference/test()
   is_patterns/test()
   struct_anon_nomethod/test()

@@ -1,0 +1,125 @@
+// Copyright (c) 2026 knix
+// All rights reserved.
+
+// Platform atomics as operations, not types: every intrinsic acts on ordinary
+// memory through a reference. Orderings must be literals like `:seq-cst`.
+// To dispatch over a runtime ordering, match on it (see `cell` below), which the
+// optimizer folds away when the ordering is constant.
+// Element types are integer-sized scalars; the non-arithmetic ops also take
+// pointers
+ns atomic {
+
+  type ordering = either(u8) { relaxed, acquire, release, acq-rel, seq-cst }
+
+  impl print for ordering {
+    fn print-to[w: writer](self, w) {
+      use types/enum
+      w.write(self.enum-name())
+    }
+  }
+
+  intern fn load[t](src: *t, ord: ordering): t
+  intern fn store[t](dst: *mut t, value: t, ord: ordering)
+
+  // All rmw operations return the previous value
+  intern fn xchg[t](dst: *mut t, value: t, ord: ordering): t
+  intern fn fetch-add[t](dst: *mut t, value: t, ord: ordering): t
+  intern fn fetch-sub[t](dst: *mut t, value: t, ord: ordering): t
+  intern fn fetch-and[t](dst: *mut t, value: t, ord: ordering): t
+  intern fn fetch-or[t](dst: *mut t, value: t, ord: ordering): t
+  intern fn fetch-xor[t](dst: *mut t, value: t, ord: ordering): t
+  intern fn fetch-min[t](dst: *mut t, value: t, ord: ordering): t
+  intern fn fetch-max[t](dst: *mut t, value: t, ord: ordering): t
+
+  type cmpxchg-result[t] = { prev: t, ok: bool }
+
+  // `ok` distinguishes success from spurious failure for the weak variant;
+  // `prev == expected` is not equivalent there
+  intern fn cmpxchg[t](
+    dst: *mut t,
+    expected: t,
+    desired: t,
+    success: ordering,
+    failure: ordering
+  ): cmpxchg-result[t]
+  intern fn cmpxchg-weak[t](
+    dst: *mut t,
+    expected: t,
+    desired: t,
+    success: ordering,
+    failure: ordering
+  ): cmpxchg-result[t]
+
+  intern fn fence(ord: ordering)
+
+  // A plain wrapper over the operations; the type carries no compiler magic
+  type cell[t] = { raw: t }
+
+  ns for cell {
+
+    fn new[t](t: t): cell[t] { .{ raw = t } }
+
+    fn load[t](self: *cell[t], ord: ordering): t {
+      let p = self.raw.&
+      ord is {
+        :relaxed -> atomic/load(p, :relaxed),
+        :acquire -> atomic/load(p, :acquire),
+        :seq-cst -> atomic/load(p, :seq-cst),
+        :release or :acq-rel -> crash("invalid ordering for atomic load: $ord")
+      }
+    }
+
+    fn store[t](self: *mut cell[t], value: t, ord: ordering) {
+      let p = self.raw.&
+      ord is {
+        :relaxed -> atomic/store(p, value, :relaxed),
+        :release -> atomic/store(p, value, :release),
+        :seq-cst -> atomic/store(p, value, :seq-cst),
+        :acquire or :acq-rel -> crash("invalid ordering for atomic store: $ord")
+      }
+    }
+
+    fn swap[t](self: *mut cell[t], value: t, ord: ordering): t {
+      let p = self.raw.&
+      ord is {
+        :relaxed -> atomic/xchg(p, value, :relaxed),
+        :acquire -> atomic/xchg(p, value, :acquire),
+        :release -> atomic/xchg(p, value, :release),
+        :acq-rel -> atomic/xchg(p, value, :acq-rel),
+        :seq-cst -> atomic/xchg(p, value, :seq-cst)
+      }
+    }
+
+    fn add[t](self: *mut cell[t], value: t, ord: ordering): t {
+      let p = self.raw.&
+      ord is {
+        :relaxed -> atomic/fetch-add(p, value, :relaxed),
+        :acquire -> atomic/fetch-add(p, value, :acquire),
+        :release -> atomic/fetch-add(p, value, :release),
+        :acq-rel -> atomic/fetch-add(p, value, :acq-rel),
+        :seq-cst -> atomic/fetch-add(p, value, :seq-cst)
+      }
+    }
+
+    fn sub[t](self: *mut cell[t], value: t, ord: ordering): t {
+      let p = self.raw.&
+      ord is {
+        :relaxed -> atomic/fetch-sub(p, value, :relaxed),
+        :acquire -> atomic/fetch-sub(p, value, :acquire),
+        :release -> atomic/fetch-sub(p, value, :release),
+        :acq-rel -> atomic/fetch-sub(p, value, :acq-rel),
+        :seq-cst -> atomic/fetch-sub(p, value, :seq-cst)
+      }
+    }
+
+    fn cas[t](self: *mut cell[t], expected: t, desired: t): cmpxchg-result[t] {
+      atomic/cmpxchg(self.raw.&, expected, desired, :seq-cst, :seq-cst)
+    }
+
+    fn cas-weak[t](self: *mut cell[t], expected: t, desired: t): cmpxchg-result[t] {
+      atomic/cmpxchg-weak(self.raw.&, expected, desired, :seq-cst, :seq-cst)
+    }
+
+  }
+
+}

@@ -1,0 +1,53 @@
+use core/arena
+use atomic/cell
+
+let MODULE_INFO: k1/module-manifest = zeroed().with(.{
+  multithreading = true,
+  kind = :executable,
+})
+
+let N_THREADS: u64 = 4
+let N_ITERS: u64 = 10000
+
+fn counter-worker(counter: *mut cell[u64]): ptr {
+  let i: u64 = 0
+  while i < N_ITERS {
+    let _ = counter.add(1, :relaxed)
+    i = i + 1
+  }
+  ptr/null
+}
+
+type handoff = { data: u64, flag: cell[u64] }
+
+fn producer(h: *mut handoff): ptr {
+  h.data = 123
+  h.flag.&.store(1, :release)
+  ptr/null
+}
+
+fn main(): i32 {
+  let arena = arena/init-default()
+
+  // n threads hammering one counter
+  let counter = mem/new(cell/new(0u64))
+  let t1 = std/thread/start(arena, counter-worker, counter)
+  let t2 = std/thread/start(arena, counter-worker, counter)
+  let t3 = std/thread/start(arena, counter-worker, counter)
+  let t4 = std/thread/start(arena, counter-worker, counter)
+  let out = arena.alloc[ptr]()
+  std/thread/join(t1.*, out)
+  std/thread/join(t2.*, out)
+  std/thread/join(t3.*, out)
+  std/thread/join(t4.*, out)
+  assert-equals(counter.load(:seq-cst), N_THREADS * N_ITERS)
+
+  let h = mem/new(.{ data = 0, flag = cell/new(0u64) }: handoff)
+  let t = std/thread/start(arena, producer, h)
+  while h.flag.&.load(:acquire) == 0 { .{} }
+  assert-equals(h.data, 123)
+  std/thread/join(t.*, out)
+
+  println("atomic_threads ok")
+  0
+}

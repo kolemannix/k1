@@ -26,7 +26,9 @@ use inkwell::values::{
     ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
     GlobalValue, InstructionValue, IntValue, PointerValue, StructValue, ValueKind,
 };
-use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode};
+use inkwell::{
+    AddressSpace, AtomicOrdering, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode,
+};
 use itertools::Itertools;
 use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueRecordAtEnd;
 use llvm_sys::debuginfo::LLVMDIBuilderInsertDeclareRecordAtEnd;
@@ -1530,6 +1532,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         block
     }
 
+    fn llvm_atomic_ordering(ord: ir::AtomicOrderingIr) -> AtomicOrdering {
+        match ord {
+            ir::AtomicOrderingIr::Relaxed => AtomicOrdering::Monotonic,
+            ir::AtomicOrderingIr::Acquire => AtomicOrdering::Acquire,
+            ir::AtomicOrderingIr::Release => AtomicOrdering::Release,
+            ir::AtomicOrderingIr::AcqRel => AtomicOrdering::AcquireRelease,
+            ir::AtomicOrderingIr::SeqCst => AtomicOrdering::SequentiallyConsistent,
+        }
+    }
+
     fn bool_to_i1(&self, bool: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
         self.builder.build_int_truncate(bool, self.builtin_types.i1, name).unwrap()
     }
@@ -2220,6 +2232,104 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let src_ptr = self.resolve_value(inst_mappings, src)?.into_pointer_value();
                 let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
                 inst_mappings.insert(inst_id, load);
+                Ok(())
+            }
+            Inst::AtomicLoad { t, src, ord } => {
+                let cg_ty = self.codegen_type(PhysicalType::scalar(t));
+                let src_ptr = self.resolve_value(inst_mappings, src)?.into_pointer_value();
+                let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
+                let instr = load.as_instruction_value().unwrap();
+                instr.set_alignment(t.get_layout().align).unwrap();
+                instr.set_atomic_ordering(Self::llvm_atomic_ordering(ord)).unwrap();
+                inst_mappings.insert(inst_id, load);
+                Ok(())
+            }
+            Inst::AtomicStore { dst, value, t, ord } => {
+                let dst_pointer = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
+                let value = self.resolve_value(inst_mappings, value)?;
+                let store = self.builder.build_store(dst_pointer, value).unwrap();
+                store.set_alignment(t.get_layout().align).unwrap();
+                store.set_atomic_ordering(Self::llvm_atomic_ordering(ord)).unwrap();
+                Ok(())
+            }
+            Inst::AtomicRmw { op, t, dst, operand, ord } => {
+                use inkwell::AtomicRMWBinOp as RmwOp;
+                let dst_pointer = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
+                let operand = self.resolve_value(inst_mappings, operand)?;
+                // atomicrmw only takes integer operands; a pointer-typed element
+                // round-trips through the word-sized integer
+                let is_ptr = t == ScalarType::Pointer;
+                let int_operand = if is_ptr {
+                    self.builder
+                        .build_ptr_to_int(
+                            operand.into_pointer_value(),
+                            self.builtin_types.ptr_sized_int,
+                            "",
+                        )
+                        .unwrap()
+                } else {
+                    operand.into_int_value()
+                };
+                let rmw_op = match op {
+                    ir::AtomicRmwOpIr::Xchg => RmwOp::Xchg,
+                    ir::AtomicRmwOpIr::Add => RmwOp::Add,
+                    ir::AtomicRmwOpIr::Sub => RmwOp::Sub,
+                    ir::AtomicRmwOpIr::And => RmwOp::And,
+                    ir::AtomicRmwOpIr::Or => RmwOp::Or,
+                    ir::AtomicRmwOpIr::Xor => RmwOp::Xor,
+                    ir::AtomicRmwOpIr::MinS => RmwOp::Min,
+                    ir::AtomicRmwOpIr::MaxS => RmwOp::Max,
+                    ir::AtomicRmwOpIr::MinU => RmwOp::UMin,
+                    ir::AtomicRmwOpIr::MaxU => RmwOp::UMax,
+                };
+                let prev = self
+                    .builder
+                    .build_atomicrmw(rmw_op, dst_pointer, int_operand, Self::llvm_atomic_ordering(ord))
+                    .unwrap();
+                let result: BasicValueEnum<'ctx> = if is_ptr {
+                    self.builder.build_int_to_ptr(prev, self.builtin_types.ptr, "").unwrap().into()
+                } else {
+                    prev.into()
+                };
+                inst_mappings.insert(inst_id, result);
+                Ok(())
+            }
+            Inst::AtomicCmpxchg { id } => {
+                let cas = *self.k1.ir.cmpxchgs.get(id);
+                let dst_pointer =
+                    self.resolve_value(inst_mappings, cas.dst)?.into_pointer_value();
+                let expected = self.resolve_value(inst_mappings, cas.expected)?;
+                let desired = self.resolve_value(inst_mappings, cas.desired)?;
+                let result_ptr =
+                    self.resolve_value(inst_mappings, cas.result)?.into_pointer_value();
+                let pair = self
+                    .builder
+                    .build_cmpxchg(
+                        dst_pointer,
+                        expected,
+                        desired,
+                        Self::llvm_atomic_ordering(cas.success),
+                        Self::llvm_atomic_ordering(cas.failure),
+                    )
+                    .unwrap();
+                if cas.weak {
+                    unsafe { llvm_sys::core::LLVMSetWeak(pair.as_value_ref(), 1) };
+                }
+                let prev = self.builder.build_extract_value(pair, 0, "").unwrap();
+                let ok_i1 = self.builder.build_extract_value(pair, 1, "").unwrap().into_int_value();
+                let ok_bool = self.i1_to_bool(ok_i1, "");
+                self.builder.build_store(result_ptr, prev).unwrap();
+                let ok_offset = self.ctx.i32_type().const_int(cas.ok_vm_offset as u64, false);
+                let ok_ptr = unsafe {
+                    self.builder
+                        .build_gep(self.ctx.i8_type(), result_ptr, &[ok_offset], "")
+                        .unwrap()
+                };
+                self.builder.build_store(ok_ptr, ok_bool).unwrap();
+                Ok(())
+            }
+            Inst::Fence { ord } => {
+                self.builder.build_fence(Self::llvm_atomic_ordering(ord), false, "").unwrap();
                 Ok(())
             }
             Inst::Copy { dst, src, t, .. } => {

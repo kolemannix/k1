@@ -786,6 +786,50 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 vm.stack.set_cur_inst_value(inst_id, loaded_value);
                 ip = inst_node.next;
             }
+            Inst::AtomicLoad { t, src, ord } => {
+                let src_ptr = resolve_value!(src).as_ptr();
+                let loaded_value = atomic_load_bits(t.width().bits() as u8, src_ptr, ord);
+
+                vm.stack.set_cur_inst_value(inst_id, loaded_value);
+                ip = inst_node.next;
+            }
+            Inst::AtomicStore { dst, value, t, ord } => {
+                let dst_ptr = resolve_value!(dst).as_ptr();
+                let vm_value = resolve_value!(value);
+                atomic_store_bits(t.width().bits() as u8, dst_ptr, vm_value, ord);
+                ip = inst_node.next;
+            }
+            Inst::AtomicRmw { op, t, dst, operand, ord } => {
+                let dst_ptr = resolve_value!(dst).as_ptr();
+                let operand = resolve_value!(operand);
+                let prev = atomic_rmw_bits(op, t.width().bits() as u8, dst_ptr, operand, ord);
+
+                vm.stack.set_cur_inst_value(inst_id, prev);
+                ip = inst_node.next;
+            }
+            Inst::AtomicCmpxchg { id } => {
+                let cas = *k1.ir.cmpxchgs.get(id);
+                let dst_ptr = resolve_value!(cas.dst).as_ptr();
+                let expected = resolve_value!(cas.expected);
+                let desired = resolve_value!(cas.desired);
+                let result_ptr = resolve_value!(cas.result).as_ptr();
+                let (prev, ok) = atomic_cmpxchg_bits(
+                    cas.t.width().bits() as u8,
+                    dst_ptr,
+                    expected,
+                    desired,
+                    cas.success,
+                    cas.failure,
+                    cas.weak,
+                );
+                store_scalar(cas.t, result_ptr, prev);
+                unsafe { result_ptr.add(cas.ok_vm_offset as usize).write(ok as u8) };
+                ip = inst_node.next;
+            }
+            Inst::Fence { ord } => {
+                std::sync::atomic::fence(rust_atomic_ordering(ord));
+                ip = inst_node.next;
+            }
             Inst::Copy { dst, src, vm_size, .. } => {
                 let dst_value = resolve_value!(dst);
                 let src_value = resolve_value!(src);
@@ -2067,6 +2111,143 @@ pub fn store_typed_int(dst: *mut u8, int: TypedIntValue) {
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn rust_atomic_ordering(ord: ir::AtomicOrderingIr) -> std::sync::atomic::Ordering {
+    use std::sync::atomic::Ordering as RO;
+    match ord {
+        ir::AtomicOrderingIr::Relaxed => RO::Relaxed,
+        ir::AtomicOrderingIr::Acquire => RO::Acquire,
+        ir::AtomicOrderingIr::Release => RO::Release,
+        ir::AtomicOrderingIr::AcqRel => RO::AcqRel,
+        ir::AtomicOrderingIr::SeqCst => RO::SeqCst,
+    }
+}
+
+#[cfg(debug_assertions)]
+fn check_atomic_align(width_bits: u8, ptr: *const u8) {
+    let align = width_bits as usize / 8;
+    assert!(
+        (ptr as usize) % align == 0,
+        "misaligned atomic .{width_bits} operation on {ptr:p} (requires {align}-byte alignment)"
+    );
+}
+
+/// Dispatches over width to `std::sync::atomic` types viewed in place over the
+/// target memory; used by both the tree-walking and bytecode VMs. Width is all
+/// they need: signedness only matters to min/max, and that lives in the rmw op
+/// tag; pointers are just word-sized bits.
+macro_rules! with_unsigned_atomic {
+    ($width_bits:expr, $ptr:expr, |$a:ident, $uty:ident| $body:expr) => {{
+        #[cfg(debug_assertions)]
+        check_atomic_align($width_bits, $ptr.cast_const());
+        match $width_bits {
+            8 => {
+                type $uty = u8;
+                let $a = unsafe { std::sync::atomic::AtomicU8::from_ptr($ptr) };
+                Value::u8($body)
+            }
+            16 => {
+                type $uty = u16;
+                let $a = unsafe { std::sync::atomic::AtomicU16::from_ptr($ptr.cast()) };
+                Value::u16($body)
+            }
+            32 => {
+                type $uty = u32;
+                let $a = unsafe { std::sync::atomic::AtomicU32::from_ptr($ptr.cast()) };
+                Value::u32($body)
+            }
+            64 => {
+                type $uty = u64;
+                let $a = unsafe { std::sync::atomic::AtomicU64::from_ptr($ptr.cast()) };
+                Value::u64($body)
+            }
+            w => unreachable!("atomic op on width {w}"),
+        }
+    }};
+}
+
+pub fn atomic_load_bits(width_bits: u8, src: *mut u8, ord: ir::AtomicOrderingIr) -> Value {
+    let ord = rust_atomic_ordering(ord);
+    with_unsigned_atomic!(width_bits, src, |a, _U| a.load(ord))
+}
+
+pub fn atomic_store_bits(width_bits: u8, dst: *mut u8, value: Value, ord: ir::AtomicOrderingIr) {
+    let ord = rust_atomic_ordering(ord);
+    let bits = value.bits();
+    with_unsigned_atomic!(width_bits, dst, |a, U| {
+        a.store(bits as U, ord);
+        0 as U
+    });
+}
+
+pub fn atomic_rmw_bits(
+    op: ir::AtomicRmwOpIr,
+    width_bits: u8,
+    dst: *mut u8,
+    operand: Value,
+    ord: ir::AtomicOrderingIr,
+) -> Value {
+    use ir::AtomicRmwOpIr as Op;
+    let ord = rust_atomic_ordering(ord);
+    let bits = operand.bits();
+    // Signed min/max are the only ops whose result depends on signedness;
+    // everything else is identical on the unsigned view of the bits
+    macro_rules! signed_minmax {
+        ($A:ty, $ity:ident, $uty:ident, $uctor:ident) => {{
+            #[cfg(debug_assertions)]
+            check_atomic_align(width_bits, dst.cast_const());
+            let a = unsafe { <$A>::from_ptr(dst.cast()) };
+            let v = bits as $ity;
+            let prev = if op == Op::MinS { a.fetch_min(v, ord) } else { a.fetch_max(v, ord) };
+            Value::$uctor(prev as $uty)
+        }};
+    }
+    match (op, width_bits) {
+        (Op::MinS | Op::MaxS, 8) => signed_minmax!(std::sync::atomic::AtomicI8, i8, u8, u8),
+        (Op::MinS | Op::MaxS, 16) => signed_minmax!(std::sync::atomic::AtomicI16, i16, u16, u16),
+        (Op::MinS | Op::MaxS, 32) => signed_minmax!(std::sync::atomic::AtomicI32, i32, u32, u32),
+        (Op::MinS | Op::MaxS, 64) => signed_minmax!(std::sync::atomic::AtomicI64, i64, u64, u64),
+        (Op::MinS | Op::MaxS, w) => unreachable!("signed atomic min/max on width {w}"),
+        _ => with_unsigned_atomic!(width_bits, dst, |a, U| match op {
+            Op::Xchg => a.swap(bits as U, ord),
+            Op::Add => a.fetch_add(bits as U, ord),
+            Op::Sub => a.fetch_sub(bits as U, ord),
+            Op::And => a.fetch_and(bits as U, ord),
+            Op::Or => a.fetch_or(bits as U, ord),
+            Op::Xor => a.fetch_xor(bits as U, ord),
+            Op::MinU => a.fetch_min(bits as U, ord),
+            Op::MaxU => a.fetch_max(bits as U, ord),
+            Op::MinS | Op::MaxS => unreachable!(),
+        }),
+    }
+}
+
+/// Returns (previous value, success)
+pub fn atomic_cmpxchg_bits(
+    width_bits: u8,
+    dst: *mut u8,
+    expected: Value,
+    desired: Value,
+    success: ir::AtomicOrderingIr,
+    failure: ir::AtomicOrderingIr,
+    weak: bool,
+) -> (Value, bool) {
+    let success = rust_atomic_ordering(success);
+    let failure = rust_atomic_ordering(failure);
+    let expected_bits = expected.bits();
+    let desired_bits = desired.bits();
+    let ok;
+    let prev = with_unsigned_atomic!(width_bits, dst, |a, U| {
+        let result = if weak {
+            a.compare_exchange_weak(expected_bits as U, desired_bits as U, success, failure)
+        } else {
+            a.compare_exchange(expected_bits as U, desired_bits as U, success, failure)
+        };
+        ok = result.is_ok();
+        result.unwrap_or_else(|prev| prev)
+    });
+    (prev, ok)
+}
+
 pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
     #[cfg(debug_assertions)]
     sanity_check_ptr(dst.cast_const());

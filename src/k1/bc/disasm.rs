@@ -6,6 +6,7 @@
 
 use std::fmt::Write;
 
+use crate::ir;
 use crate::typer::TypedProgram;
 
 use super::{
@@ -142,6 +143,58 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write_src(w, k1, ops[0]);
             write!(w, "] <- ").unwrap();
             write_src(w, k1, ops[1]);
+        }
+        Opcode::AtomicLoad => {
+            write!(w, "atomic_load.{} {} ", a, ir::AtomicOrderingIr::from_tag(b as u8).name())
+                .unwrap();
+            write_dst(w, ops[0]);
+            write!(w, " <- [").unwrap();
+            write_src(w, k1, ops[1]);
+            write!(w, "]").unwrap();
+        }
+        Opcode::AtomicStore => {
+            write!(w, "atomic_store.{} {} [", a, ir::AtomicOrderingIr::from_tag(b as u8).name())
+                .unwrap();
+            write_src(w, k1, ops[0]);
+            write!(w, "] <- ").unwrap();
+            write_src(w, k1, ops[1]);
+        }
+        Opcode::AtomicRmw => {
+            write!(
+                w,
+                "atomic_{}.{} {} ",
+                ir::AtomicRmwOpIr::from_tag((b >> 8) as u8).name(),
+                a,
+                ir::AtomicOrderingIr::from_tag((b & 0xff) as u8).name()
+            )
+            .unwrap();
+            write_dst(w, ops[0]);
+            write!(w, " <- [").unwrap();
+            write_src(w, k1, ops[1]);
+            write!(w, "], ").unwrap();
+            write_src(w, k1, ops[2]);
+        }
+        Opcode::AtomicCmpxchg => {
+            write!(
+                w,
+                "atomic_cmpxchg{}.{} {}/{} result [",
+                if b >> 8 & 1 == 1 { "_weak" } else { "" },
+                a,
+                ir::AtomicOrderingIr::from_tag((b & 0xf) as u8).name(),
+                ir::AtomicOrderingIr::from_tag((b >> 4 & 0xf) as u8).name()
+            )
+            .unwrap();
+            write_src(w, k1, ops[0]);
+            write!(w, "] <- [").unwrap();
+            write_src(w, k1, ops[1]);
+            write!(w, "], expected ").unwrap();
+            write_src(w, k1, ops[2]);
+            write!(w, ", desired ").unwrap();
+            write_src(w, k1, ops[3]);
+            write!(w, ", ok_offset={}", ops[4]).unwrap();
+        }
+        Opcode::Fence => {
+            write!(w, "fence {}", ir::AtomicOrderingIr::from_tag(b as u8).name()).unwrap();
         }
         Opcode::Copy => {
             write!(w, "copy [").unwrap();

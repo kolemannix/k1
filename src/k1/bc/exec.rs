@@ -508,6 +508,58 @@ fn exec_loop(
                 store_bits(header_a(h), addr.as_ptr(), v);
                 advance!(Opcode::Store);
             }
+            Opcode::AtomicLoad => {
+                let ord = ir::AtomicOrderingIr::from_tag(header_b(h) as u8);
+                let addr = read_src!(operand!(1));
+                write_slot!(operand!(0), vm::atomic_load_bits(header_a(h), addr.as_ptr(), ord));
+                advance!(Opcode::AtomicLoad);
+            }
+            Opcode::AtomicStore => {
+                let ord = ir::AtomicOrderingIr::from_tag(header_b(h) as u8);
+                let addr = read_src!(operand!(0));
+                let v = read_src!(operand!(1));
+                vm::atomic_store_bits(header_a(h), addr.as_ptr(), v, ord);
+                advance!(Opcode::AtomicStore);
+            }
+            Opcode::AtomicRmw => {
+                let b = header_b(h);
+                let op = ir::AtomicRmwOpIr::from_tag((b >> 8) as u8);
+                let ord = ir::AtomicOrderingIr::from_tag((b & 0xff) as u8);
+                let addr = read_src!(operand!(1));
+                let operand = read_src!(operand!(2));
+                let prev = vm::atomic_rmw_bits(op, header_a(h), addr.as_ptr(), operand, ord);
+                write_slot!(operand!(0), prev);
+                advance!(Opcode::AtomicRmw);
+            }
+            Opcode::AtomicCmpxchg => {
+                let width = header_a(h);
+                let b = header_b(h);
+                let success = ir::AtomicOrderingIr::from_tag((b & 0xf) as u8);
+                let failure = ir::AtomicOrderingIr::from_tag((b >> 4 & 0xf) as u8);
+                let weak = b >> 8 & 1 == 1;
+                let result_ptr = read_src!(operand!(0)).as_ptr();
+                let addr = read_src!(operand!(1));
+                let expected = read_src!(operand!(2));
+                let desired = read_src!(operand!(3));
+                let ok_offset = operand!(4) as usize;
+                let (prev, ok) = vm::atomic_cmpxchg_bits(
+                    width,
+                    addr.as_ptr(),
+                    expected,
+                    desired,
+                    success,
+                    failure,
+                    weak,
+                );
+                store_bits(width, result_ptr, prev);
+                unsafe { result_ptr.add(ok_offset).write(ok as u8) };
+                advance!(Opcode::AtomicCmpxchg);
+            }
+            Opcode::Fence => {
+                let ord = ir::AtomicOrderingIr::from_tag(header_b(h) as u8);
+                std::sync::atomic::fence(vm::rust_atomic_ordering(ord));
+                advance!(Opcode::Fence);
+            }
             Opcode::Copy => {
                 let size = operand!(2) as usize;
                 if size != 0 {

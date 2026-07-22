@@ -62,6 +62,7 @@ pub struct ProgramIr {
     pub exprs: FxHashMap<TypedExprId, IrUnit>,
     pub module_config: IrModuleConfig,
     pub calls: VPool<IrCall, IrCallId>,
+    pub cmpxchgs: VPool<AtomicCmpxchgData, AtomicCmpxchgId>,
     pub phys_fn_type_cache: FxHashMap<TypeId, PhysicalFunctionType>,
 
     // Builder data
@@ -100,6 +101,7 @@ impl ProgramIr {
             debug_info: VPool::make("ir_soa_debug_info"),
             functions: VPool::make("ir_functions"),
             calls: VPool::make("ir_calls"),
+            cmpxchgs: VPool::make("ir_cmpxchgs"),
             phys_fn_type_cache: FxHashMap::new(),
             exprs: FxHashMap::new(),
             module_config: IrModuleConfig {},
@@ -235,6 +237,113 @@ impl BackendBuiltin {
             BackendBuiltin::ReplCheckbox => "repl_checkbox",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomicOrderingIr {
+    Relaxed,
+    Acquire,
+    Release,
+    AcqRel,
+    SeqCst,
+}
+
+impl AtomicOrderingIr {
+    pub const fn to_tag(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_tag(tag: u8) -> AtomicOrderingIr {
+        match tag {
+            0 => AtomicOrderingIr::Relaxed,
+            1 => AtomicOrderingIr::Acquire,
+            2 => AtomicOrderingIr::Release,
+            3 => AtomicOrderingIr::AcqRel,
+            4 => AtomicOrderingIr::SeqCst,
+            _ => unreachable!("bad atomic ordering tag {tag}"),
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            AtomicOrderingIr::Relaxed => "relaxed",
+            AtomicOrderingIr::Acquire => "acquire",
+            AtomicOrderingIr::Release => "release",
+            AtomicOrderingIr::AcqRel => "acq-rel",
+            AtomicOrderingIr::SeqCst => "seq-cst",
+        }
+    }
+}
+
+/// Min/Max signedness is baked in here, resolved from the element type at lowering
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomicRmwOpIr {
+    Xchg,
+    Add,
+    Sub,
+    And,
+    Or,
+    Xor,
+    MinS,
+    MaxS,
+    MinU,
+    MaxU,
+}
+
+impl AtomicRmwOpIr {
+    pub const fn to_tag(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_tag(tag: u8) -> AtomicRmwOpIr {
+        match tag {
+            0 => AtomicRmwOpIr::Xchg,
+            1 => AtomicRmwOpIr::Add,
+            2 => AtomicRmwOpIr::Sub,
+            3 => AtomicRmwOpIr::And,
+            4 => AtomicRmwOpIr::Or,
+            5 => AtomicRmwOpIr::Xor,
+            6 => AtomicRmwOpIr::MinS,
+            7 => AtomicRmwOpIr::MaxS,
+            8 => AtomicRmwOpIr::MinU,
+            9 => AtomicRmwOpIr::MaxU,
+            _ => unreachable!("bad atomic rmw op tag {tag}"),
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            AtomicRmwOpIr::Xchg => "xchg",
+            AtomicRmwOpIr::Add => "add",
+            AtomicRmwOpIr::Sub => "sub",
+            AtomicRmwOpIr::And => "and",
+            AtomicRmwOpIr::Or => "or",
+            AtomicRmwOpIr::Xor => "xor",
+            AtomicRmwOpIr::MinS => "mins",
+            AtomicRmwOpIr::MaxS => "maxs",
+            AtomicRmwOpIr::MinU => "minu",
+            AtomicRmwOpIr::MaxU => "maxu",
+        }
+    }
+}
+
+nz_u32_id!(AtomicCmpxchgId);
+
+/// Too big to inline in `Inst` (32-byte cap), so it lives in `ProgramIr::cmpxchgs`,
+/// like `IrCall` in `ProgramIr::calls`.
+/// Writes `{ prev: t, ok: bool }` through `result`; `ok_vm_offset` is the byte
+/// offset of `ok` within that aggregate.
+#[derive(Clone, Copy)]
+pub struct AtomicCmpxchgData {
+    pub t: ScalarType,
+    pub dst: Value,
+    pub expected: Value,
+    pub desired: Value,
+    pub success: AtomicOrderingIr,
+    pub failure: AtomicOrderingIr,
+    pub weak: bool,
+    pub result: Value,
+    pub ok_vm_offset: u32,
 }
 
 #[derive(Copy, Clone)]
@@ -375,6 +484,30 @@ pub enum Inst {
     Load {
         t: ScalarType,
         src: Value,
+    },
+    AtomicLoad {
+        t: ScalarType,
+        src: Value,
+        ord: AtomicOrderingIr,
+    },
+    AtomicStore {
+        dst: Value,
+        value: Value,
+        t: ScalarType,
+        ord: AtomicOrderingIr,
+    },
+    AtomicRmw {
+        op: AtomicRmwOpIr,
+        t: ScalarType,
+        dst: Value,
+        operand: Value,
+        ord: AtomicOrderingIr,
+    },
+    AtomicCmpxchg {
+        id: AtomicCmpxchgId,
+    },
+    Fence {
+        ord: AtomicOrderingIr,
     },
     Copy {
         dst: Value,
@@ -682,6 +815,11 @@ pub fn get_inst_kind(ir: &ProgramIr, types: &TypePool, inst_id: InstId) -> InstK
         Inst::Alloca { .. } => InstKind::PTR,
         Inst::Store { .. } => InstKind::Void,
         Inst::Load { t, .. } => InstKind::scalar(t),
+        Inst::AtomicLoad { t, .. } => InstKind::scalar(t),
+        Inst::AtomicStore { .. } => InstKind::Void,
+        Inst::AtomicRmw { t, .. } => InstKind::scalar(t),
+        Inst::AtomicCmpxchg { .. } => InstKind::Void,
+        Inst::Fence { .. } => InstKind::Void,
         Inst::Copy { .. } => InstKind::Void,
         Inst::StructOffset { .. } => InstKind::PTR,
         Inst::ArrayOffset { .. } => InstKind::PTR,
@@ -2488,7 +2626,116 @@ fn compile_ir_builtin(
             let stored = store_scalar_if_dst(b, dst, offset.as_value());
             Ok(stored)
         }
+        BuiltinIr::AtomicLoad => {
+            // intern fn load[t](src: *t, ord: ordering): t
+            let t = atomic_element_type(b, &call, true)?;
+            let ord = b.k1.atomic_ordering_arg(&call, 1)?;
+            let src = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let inst = b.push_inst_anon(Inst::AtomicLoad { t, src, ord });
+            Ok(store_scalar_if_dst(b, dst, inst.as_value()))
+        }
+        BuiltinIr::AtomicStore => {
+            // intern fn store[t](dst: *mut t, value: t, ord: ordering)
+            let t = atomic_element_type(b, &call, true)?;
+            let ord = b.k1.atomic_ordering_arg(&call, 2)?;
+            let store_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            b.push_inst_anon(Inst::AtomicStore { dst: store_dst, value, t, ord });
+            Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, ""))
+        }
+        BuiltinIr::AtomicRmw(op) => {
+            // intern fn <op>[t](dst: *mut t, value: t, ord: ordering): t
+            use crate::typer::AtomicRmwOp as Op;
+            let allow_pointer = op == Op::Xchg;
+            let t = atomic_element_type(b, &call, allow_pointer)?;
+            let signed = matches!(
+                t,
+                ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64
+            );
+            let op = match op {
+                Op::Xchg => AtomicRmwOpIr::Xchg,
+                Op::Add => AtomicRmwOpIr::Add,
+                Op::Sub => AtomicRmwOpIr::Sub,
+                Op::And => AtomicRmwOpIr::And,
+                Op::Or => AtomicRmwOpIr::Or,
+                Op::Xor => AtomicRmwOpIr::Xor,
+                Op::Min if signed => AtomicRmwOpIr::MinS,
+                Op::Min => AtomicRmwOpIr::MinU,
+                Op::Max if signed => AtomicRmwOpIr::MaxS,
+                Op::Max => AtomicRmwOpIr::MaxU,
+            };
+            let ord = b.k1.atomic_ordering_arg(&call, 2)?;
+            let rmw_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let operand = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            let inst = b.push_inst_anon(Inst::AtomicRmw { op, t, dst: rmw_dst, operand, ord });
+            Ok(store_scalar_if_dst(b, dst, inst.as_value()))
+        }
+        BuiltinIr::AtomicCmpxchg { weak } => {
+            // intern fn cmpxchg[t](dst: *mut t, expected: t, desired: t,
+            //                      success: ordering, failure: ordering): cmpxchg-result[t]
+            let t = atomic_element_type(b, &call, true)?;
+            let success = b.k1.atomic_ordering_arg(&call, 3)?;
+            let failure = b.k1.atomic_ordering_arg(&call, 4)?;
+            let cas_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let expected = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            let desired = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 2))?;
+            let ret_pt = callee_fn_type.return_type;
+            let PhysicalTypeEnum::Agg(agg_id) = ret_pt.as_enum() else {
+                b_ice!(b, "cmpxchg return type must be an aggregate");
+            };
+            let Some(ok_vm_offset) = b.k1.types.get_struct_field_offset(agg_id, 1) else {
+                b_ice!(b, "cmpxchg result missing ok field");
+            };
+            let result = match dst {
+                None => b.push_alloca(ret_pt, "cmpxchg result").as_value(),
+                Some(dst) => dst,
+            };
+            let id = b.k1.ir.cmpxchgs.add(AtomicCmpxchgData {
+                t,
+                dst: cas_dst,
+                expected,
+                desired,
+                success,
+                failure,
+                weak,
+                result,
+                ok_vm_offset,
+            });
+            b.push_inst_anon(Inst::AtomicCmpxchg { id });
+            Ok(result)
+        }
+        BuiltinIr::AtomicFence => {
+            // intern fn fence(ord: ordering)
+            let ord = b.k1.atomic_ordering_arg(&call, 0)?;
+            b.push_inst_anon(Inst::Fence { ord });
+            Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, ""))
+        }
     }
+}
+
+/// The element type of an atomic intrinsic: type_args[0], which must be an
+/// integer-class scalar (pointers allowed for the non-arithmetic ops).
+fn atomic_element_type(b: &mut Builder, call: &Call, allow_pointer: bool) -> K1Result<ScalarType> {
+    let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+    let pt = b.get_physical_type(type_id);
+    let scalar = match pt.as_enum() {
+        PhysicalTypeEnum::Scalar(st) => Some(st),
+        _ => None,
+    };
+    let supported = match scalar {
+        Some(st) if st.is_int() => true,
+        Some(ScalarType::Pointer) => allow_pointer,
+        _ => false,
+    };
+    if !supported {
+        return failf!(
+            b.cur_span,
+            "atomic operations are not supported for type {}; supported are integer-sized scalars{}",
+            b.k1.type_id_to_string(type_id),
+            if allow_pointer { " and pointers" } else { "" }
+        );
+    }
+    Ok(scalar.unwrap())
 }
 
 #[inline]
@@ -2934,6 +3181,33 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         errors.push(format!("i{inst_id}: load src is not storage"))
                     }
                 }
+                Inst::AtomicLoad { src, .. } => {
+                    let src_kind = get_value_kind(ir, &k1.types, src);
+                    if !src_kind.is_storage() {
+                        errors.push(format!("i{inst_id}: atomic load src is not storage"))
+                    }
+                }
+                Inst::AtomicStore { dst, .. } => {
+                    let dst_kind = get_value_kind(ir, &k1.types, dst);
+                    if !dst_kind.is_storage() {
+                        errors.push(format!("i{inst_id}: atomic store dst is not storage"))
+                    }
+                }
+                Inst::AtomicRmw { dst, .. } => {
+                    let dst_kind = get_value_kind(ir, &k1.types, dst);
+                    if !dst_kind.is_storage() {
+                        errors.push(format!("i{inst_id}: atomic rmw dst is not storage"))
+                    }
+                }
+                Inst::AtomicCmpxchg { id } => {
+                    let cas = ir.cmpxchgs.get(id);
+                    for (v, what) in [(cas.dst, "dst"), (cas.result, "result")] {
+                        if !get_value_kind(ir, &k1.types, v).is_storage() {
+                            errors.push(format!("i{inst_id}: atomic cmpxchg {what} is not storage"))
+                        }
+                    }
+                }
+                Inst::Fence { .. } => (),
                 Inst::Copy { dst, src, .. } => {
                     let src_type = get_value_kind(ir, &k1.types, src);
                     if !src_type.is_storage() {
@@ -3337,6 +3611,40 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
             write!(w, "load ")?;
             display_scalar_type(w, t)?;
             write!(w, " from {}", src)?;
+        }
+        Inst::AtomicLoad { t, src, ord } => {
+            write!(w, "atomic load {} ", ord.name())?;
+            display_scalar_type(w, t)?;
+            write!(w, " from {}", src)?;
+        }
+        Inst::AtomicStore { dst, value, t, ord } => {
+            write!(w, "atomic store {} to {}, ", ord.name(), dst)?;
+            display_scalar_type(w, t)?;
+            write!(w, " {}", value)?;
+        }
+        Inst::AtomicRmw { op, t, dst, operand, ord } => {
+            write!(w, "atomic {} {} ", op.name(), ord.name())?;
+            display_scalar_type(w, t)?;
+            write!(w, " at {}, {}", dst, operand)?;
+        }
+        Inst::AtomicCmpxchg { id } => {
+            let cas = k1.ir.cmpxchgs.get(id);
+            write!(
+                w,
+                "atomic cmpxchg{} {}/{} ",
+                if cas.weak { " weak" } else { "" },
+                cas.success.name(),
+                cas.failure.name()
+            )?;
+            display_scalar_type(w, cas.t)?;
+            write!(
+                w,
+                " at {}, expected {}, desired {}, into {}",
+                cas.dst, cas.expected, cas.desired, cas.result
+            )?;
+        }
+        Inst::Fence { ord } => {
+            write!(w, "fence {}", ord.name())?;
         }
         Inst::Copy { dst, src, t: _, vm_size } => {
             write!(w, "copy {} {}, src {}", vm_size, dst, src)?;

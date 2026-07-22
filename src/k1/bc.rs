@@ -114,9 +114,15 @@ pub enum Opcode {
     Cast, // A = CastKind, B = (from_bits << 8) | to_bits
     // Metaprogramming
     BakeStaticValue,
+    // Atomics (A = width in bits; B packs ordering / op, see operand_count comments)
+    AtomicLoad,
+    AtomicStore,
+    AtomicRmw,
+    AtomicCmpxchg,
+    Fence,
 }
 
-pub const OPCODE_COUNT: u8 = Opcode::BakeStaticValue as u8 + 1;
+pub const OPCODE_COUNT: u8 = Opcode::Fence as u8 + 1;
 
 impl Opcode {
     pub fn from_u8(v: u8) -> Opcode {
@@ -171,6 +177,13 @@ impl Opcode {
             Opcode::BoolNegate | Opcode::BitNot => 2, // [dst][src]
             Opcode::Cast => 2,       // A = CastKind, B = from_bits << 8 | to_bits; [dst][src]
             Opcode::BakeStaticValue => 3, // [dst][type_id][src]
+            Opcode::AtomicLoad => 2,      // A = width in bits, B = ordering; [dst][addr src]
+            Opcode::AtomicStore => 2,     // A = width in bits, B = ordering; [addr src][val src]
+            Opcode::AtomicRmw => 3, // A = width in bits, B = op << 8 | ordering; [dst][addr src][operand src]
+            // A = width in bits, B = success | failure << 4 | weak << 8;
+            // [result src][addr src][expected src][desired src][ok byte offset]
+            Opcode::AtomicCmpxchg => 5,
+            Opcode::Fence => 0, // B = ordering
         }
     }
 
@@ -221,12 +234,17 @@ impl Opcode {
             Opcode::BitNot => "bit_not",
             Opcode::Cast => "cast",
             Opcode::BakeStaticValue => "bake_static",
+            Opcode::AtomicLoad => "atomic_load",
+            Opcode::AtomicStore => "atomic_store",
+            Opcode::AtomicRmw => "atomic_rmw",
+            Opcode::AtomicCmpxchg => "atomic_cmpxchg",
+            Opcode::Fence => "fence",
         }
     }
 }
 
 /// Cast kinds for the `Cast` opcode. The `B` field of the header packs
-/// `(from_scalar_tag << 8) | to_scalar_tag`; not all kinds use both.
+/// `(from_width_bits << 8) | to_width_bits`; not all kinds use both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CastKind {

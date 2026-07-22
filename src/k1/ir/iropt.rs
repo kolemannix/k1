@@ -514,6 +514,30 @@ fn rewrite_instr(ir: &mut ProgramIr, mappings: &mut RewriteMappings, inst: &mut 
         Inst::Load { src, .. } => {
             rewrite_value(mappings, src);
         }
+        Inst::AtomicLoad { src, .. } => {
+            rewrite_value(mappings, src);
+        }
+        Inst::AtomicStore { dst, value, .. } => {
+            rewrite_value(mappings, dst);
+            rewrite_value(mappings, value);
+        }
+        Inst::AtomicRmw { dst, operand, .. } => {
+            rewrite_value(mappings, dst);
+            rewrite_value(mappings, operand);
+        }
+        Inst::AtomicCmpxchg { id } => {
+            let mut cas = *ir.cmpxchgs.get(*id);
+            let mut changed = false;
+            for v in [&mut cas.dst, &mut cas.expected, &mut cas.desired, &mut cas.result] {
+                if rewrite_value(mappings, v) {
+                    changed = true;
+                }
+            }
+            if changed {
+                *id = ir.cmpxchgs.add(cas);
+            }
+        }
+        Inst::Fence { .. } => {}
         Inst::Copy { dst, src, .. } => {
             rewrite_value(mappings, dst);
             rewrite_value(mappings, src);

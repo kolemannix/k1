@@ -12,7 +12,7 @@ pub(crate) mod typed_int_value;
 pub(crate) mod types;
 pub(crate) mod visit;
 
-use crate::ir::{BackendBuiltin, IrUnitId};
+use crate::ir::{AtomicOrderingIr, BackendBuiltin, IrUnitId};
 use crate::typer::dump::K1DisplayArgs;
 use crate::typer::megarepl::MegareplState;
 use crate::{bc, clock, compiler, debug, ir, k1_format, k1_format_user, kbail, kerr, vm};
@@ -2082,6 +2082,24 @@ pub enum BuiltinIr {
     ArithBinop(ArithOpKind),
     BitwiseBinop(BitwiseBinopKind),
     PointerIndex,
+    AtomicLoad,
+    AtomicStore,
+    AtomicRmw(AtomicRmwOp),
+    AtomicCmpxchg { weak: bool },
+    AtomicFence,
+}
+
+/// Signedness of Min/Max is resolved at IR lowering from the element type
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AtomicRmwOp {
+    Xchg,
+    Add,
+    Sub,
+    And,
+    Or,
+    Xor,
+    Min,
+    Max,
 }
 
 impl BuiltinIr {
@@ -2095,6 +2113,27 @@ impl BuiltinIr {
             BuiltinIr::ArithBinop(op_kind) => op_kind.kind_name(),
             BuiltinIr::BitwiseBinop(op_kind) => op_kind.kind_name(),
             BuiltinIr::PointerIndex => "pointer_index",
+            BuiltinIr::AtomicLoad => "atomic_load",
+            BuiltinIr::AtomicStore => "atomic_store",
+            BuiltinIr::AtomicRmw(op) => op.kind_name(),
+            BuiltinIr::AtomicCmpxchg { weak: false } => "atomic_cmpxchg",
+            BuiltinIr::AtomicCmpxchg { weak: true } => "atomic_cmpxchg_weak",
+            BuiltinIr::AtomicFence => "atomic_fence",
+        }
+    }
+}
+
+impl AtomicRmwOp {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            AtomicRmwOp::Xchg => "atomic_xchg",
+            AtomicRmwOp::Add => "atomic_fetch_add",
+            AtomicRmwOp::Sub => "atomic_fetch_sub",
+            AtomicRmwOp::And => "atomic_fetch_and",
+            AtomicRmwOp::Or => "atomic_fetch_or",
+            AtomicRmwOp::Xor => "atomic_fetch_xor",
+            AtomicRmwOp::Min => "atomic_fetch_min",
+            AtomicRmwOp::Max => "atomic_fetch_max",
         }
     }
 }
@@ -14115,7 +14154,90 @@ impl TypedProgram {
                 }
                 Ok(())
             }
+            Builtin::Ir(
+                b @ (BuiltinIr::AtomicLoad
+                | BuiltinIr::AtomicStore
+                | BuiltinIr::AtomicRmw(_)
+                | BuiltinIr::AtomicCmpxchg { .. }
+                | BuiltinIr::AtomicFence),
+            ) => self.check_atomic_builtin(call, b),
             _ => Ok(()),
+        }
+    }
+
+    /// Atomic orderings must be compile-time-known
+    pub fn atomic_ordering_arg(&self, call: &Call, arg_index: usize) -> K1Result<AtomicOrderingIr> {
+        let expr_id = *self.mem.get_nth(call.args, arg_index);
+        let span = self.exprs.get_span(expr_id);
+        let TypedExpr::Enum(ec) = self.exprs.get(expr_id) else {
+            return failf!(span, "atomic ordering must be an ordering literal like `:seq-cst`");
+        };
+        let type_id = self.exprs.get_type(expr_id);
+        let Some(enum_type) = self.types.get(type_id).as_enum() else {
+            return failf!(span, "atomic ordering must be an `atomic/ordering` literal");
+        };
+        let member = self.types.mem.getn(enum_type.member_values)[ec.value_index as usize];
+        match self.ident_str(member.name) {
+            "relaxed" => Ok(AtomicOrderingIr::Relaxed),
+            "acquire" => Ok(AtomicOrderingIr::Acquire),
+            "release" => Ok(AtomicOrderingIr::Release),
+            "acq-rel" => Ok(AtomicOrderingIr::AcqRel),
+            "seq-cst" => Ok(AtomicOrderingIr::SeqCst),
+            other => failf!(span, "unknown atomic ordering `:{}`", other),
+        }
+    }
+
+    fn check_atomic_builtin(&self, call: &Call, builtin: BuiltinIr) -> K1Result<()> {
+        match builtin {
+            BuiltinIr::AtomicLoad => {
+                let ord = self.atomic_ordering_arg(call, 1)?;
+                if matches!(ord, AtomicOrderingIr::Release | AtomicOrderingIr::AcqRel) {
+                    return failf!(call.span, "atomic load cannot use `:{}` ordering", ord.name());
+                }
+                Ok(())
+            }
+            BuiltinIr::AtomicStore => {
+                let ord = self.atomic_ordering_arg(call, 2)?;
+                if matches!(ord, AtomicOrderingIr::Acquire | AtomicOrderingIr::AcqRel) {
+                    return failf!(call.span, "atomic store cannot use `:{}` ordering", ord.name());
+                }
+                Ok(())
+            }
+            BuiltinIr::AtomicRmw(_) => {
+                self.atomic_ordering_arg(call, 2)?;
+                Ok(())
+            }
+            BuiltinIr::AtomicCmpxchg { .. } => {
+                let success = self.atomic_ordering_arg(call, 3)?;
+                let failure = self.atomic_ordering_arg(call, 4)?;
+                if matches!(failure, AtomicOrderingIr::Release | AtomicOrderingIr::AcqRel) {
+                    return failf!(
+                        call.span,
+                        "atomic cmpxchg failure ordering cannot be `:{}`",
+                        failure.name()
+                    );
+                }
+                if failure.to_tag() > success.to_tag() {
+                    return failf!(
+                        call.span,
+                        "atomic cmpxchg failure ordering `:{}` cannot be stronger than success ordering `:{}`",
+                        failure.name(),
+                        success.name()
+                    );
+                }
+                Ok(())
+            }
+            BuiltinIr::AtomicFence => {
+                let ord = self.atomic_ordering_arg(call, 0)?;
+                if ord == AtomicOrderingIr::Relaxed {
+                    return failf!(
+                        call.span,
+                        "atomic fence requires an ordering stronger than `:relaxed`"
+                    );
+                }
+                Ok(())
+            }
+            _ => unreachable!("check_atomic_builtin on non-atomic builtin"),
         }
     }
 
@@ -15336,6 +15458,22 @@ impl TypedProgram {
                 Some("char") => None,
                 Some("ptr") => match fn_name_str {
                     "ref-at-index" => Some(Builtin::Ir(BuiltinIr::PointerIndex)),
+                    _ => None,
+                },
+                Some("atomic") => match fn_name_str {
+                    "load" => Some(Builtin::Ir(BuiltinIr::AtomicLoad)),
+                    "store" => Some(Builtin::Ir(BuiltinIr::AtomicStore)),
+                    "xchg" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Xchg))),
+                    "fetch-add" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Add))),
+                    "fetch-sub" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Sub))),
+                    "fetch-and" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::And))),
+                    "fetch-or" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Or))),
+                    "fetch-xor" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Xor))),
+                    "fetch-min" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Min))),
+                    "fetch-max" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Max))),
+                    "cmpxchg" => Some(Builtin::Ir(BuiltinIr::AtomicCmpxchg { weak: false })),
+                    "cmpxchg-weak" => Some(Builtin::Ir(BuiltinIr::AtomicCmpxchg { weak: true })),
+                    "fence" => Some(Builtin::Ir(BuiltinIr::AtomicFence)),
                     _ => None,
                 },
                 Some("meta") => match fn_name_str {
@@ -18812,6 +18950,7 @@ impl TypedProgram {
             core!("crash"),
             core!("meta"),
             core!("mem"),
+            core!("atomic"),
             core!("types"),
             core!("k1"),
             core!("range"),

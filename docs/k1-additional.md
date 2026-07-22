@@ -472,3 +472,26 @@ Thread tests combine several runtime features:
 
 See `test_src/threads.k1`.
 
+## Atomics
+
+Atomics are operations, not types: `ns atomic` in `k1lib/core/atomic.k1`
+exposes intrinsics over ordinary memory through references.
+
+```
+let x = mem/new(41u64)
+atomic/fetch-add(x, 1, :seq-cst)      // returns the previous value
+atomic/load(x, :acquire)
+atomic/store(x, 10, :release)
+let r = atomic/cmpxchg(x, 10, 20, :seq-cst, :seq-cst)  // { prev, ok }
+atomic/fence(:seq-cst)
+```
+
+The full set: `load`, `store`, `xchg`, `fetch-add/sub/and/or/xor/min/max`,
+`cmpxchg`, `cmpxchg-weak`, `fence`. Element types are integer-sized scalars;
+the non-arithmetic ops also take `ptr`. Orderings
+(`:relaxed`/`:acquire`/`:release`/`:acq-rel`/`:seq-cst`) must be literals at
+the call site — to dispatch over a runtime ordering, match on it, as
+`atomic/cell[t]` (the plain-K1 wrapper type in the same file) does.
+
+See `test_src/suite1/atomics.k1` and `test_src/atomic_threads.k1`.
+

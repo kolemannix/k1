@@ -1,0 +1,131 @@
+ns atomics
+
+fn ops-test() {
+  let x = mem/new(41u64)
+  assert-equals(atomic/fetch-add(x, 1, :seq-cst), 41)
+  assert-equals(atomic/load(x, :acquire), 42)
+
+  atomic/store(x, 10, :release)
+  assert-equals(atomic/xchg(x, 7, :acq-rel), 10)
+  assert-equals(atomic/fetch-sub(x, 2, :relaxed), 7)
+
+  // 5 & 6 = 4; 4 | 8 = 12; 12 ^ 15 = 3
+  assert-equals(atomic/fetch-and(x, 6, :seq-cst), 5)
+  assert-equals(atomic/fetch-or(x, 8, :seq-cst), 4)
+  assert-equals(atomic/fetch-xor(x, 15, :seq-cst), 12)
+  assert-equals(atomic/load(x, :seq-cst), 3)
+
+  atomic/fence(:seq-cst)
+  atomic/fence(:acquire)
+  atomic/fence(:release)
+}
+
+fn minmax-test() {
+  // Unsigned: 200 > 3 as u8
+  let u = mem/new(10u8)
+  assert-equals(atomic/fetch-min(u, 3, :seq-cst), 10)
+  assert-equals(atomic/fetch-max(u, 200, :seq-cst), 3)
+  assert-equals(atomic/load(u, :relaxed), 200)
+
+  // Signed: -100 < 1 as i32
+  let i = mem/new(-5: i32)
+  assert-equals(atomic/fetch-max(i, 1, :seq-cst), -5)
+  assert-equals(atomic/fetch-min(i, -100, :seq-cst), 1)
+  assert-equals(atomic/load(i, :relaxed), -100)
+}
+
+fn cmpxchg-test() {
+  let x = mem/new(7u64)
+  let hit = atomic/cmpxchg(x, 7, 100, :seq-cst, :seq-cst)
+  assert(hit.ok)
+  assert-equals(hit.prev, 7)
+
+  let miss = atomic/cmpxchg(x, 7, 200, :acq-rel, :acquire)
+  assert(not miss.ok)
+  assert-equals(miss.prev, 100)
+
+  // Weak may fail spuriously, so it gets a retry loop
+  let done = false
+  while not done {
+    let r = atomic/cmpxchg-weak(x, 100, 50, :seq-cst, :relaxed)
+    if r.ok { done = true } else { assert-equals(r.prev, 100) }
+  }
+  assert-equals(atomic/load(x, :seq-cst), 50)
+}
+
+fn ptr-test() {
+  let a = mem/new(1u8)
+  let slot = mem/new(ptr/null)
+  let prev = atomic/xchg(slot, a.as[ptr], :seq-cst)
+  assert(prev.is-null())
+  assert(atomic/load(slot, :acquire) == a.as[ptr])
+
+  let r = atomic/cmpxchg(slot, a.as[ptr], ptr/null, :seq-cst, :seq-cst)
+  assert(r.ok)
+  assert(atomic/load(slot, :relaxed).is-null())
+}
+
+fn cell-test() {
+  use atomic/cell
+
+  let c = mem/new(cell/new(5u32))
+  assert-equals(c.swap(9, :seq-cst), 5)
+  assert-equals(c.load(:acquire), 9)
+  c.store(12, :release)
+  assert-equals(c.add(3, :relaxed), 12)
+  assert-equals(c.sub(5, :seq-cst), 15)
+
+  // The wrapper dispatches over a runtime ordering value
+  let ord: atomic/ordering = :seq-cst
+  assert-equals(c.load(ord), 10)
+
+  let r = c.cas(10, 20)
+  assert(r.ok)
+  let miss = c.cas(10, 30)
+  assert(not miss.ok)
+  assert-equals(miss.prev, 20)
+
+  let done = false
+  while not done {
+    done = c.cas-weak(20, 21).ok
+  }
+  assert-equals(c.load(:seq-cst), 21)
+}
+
+fn errors-test() {
+  let x = mem/new(1u64)
+  let o: atomic/ordering = :seq-cst
+  assert-equals[?string](
+    test-compile(atomic/load(x, o)),
+    :some "atomic ordering must be an ordering literal like `:seq-cst`"
+  )
+  assert-equals[?string](
+    test-compile(atomic/load(x, :release)),
+    :some "atomic load cannot use `:release` ordering"
+  )
+  assert-equals[?string](
+    test-compile(atomic/store(x, 1, :acquire)),
+    :some "atomic store cannot use `:acquire` ordering"
+  )
+  assert-equals[?string](
+    test-compile(atomic/cmpxchg(x, 1, 2, :seq-cst, :release)),
+    :some "atomic cmpxchg failure ordering cannot be `:release`"
+  )
+  assert-equals[?string](
+    test-compile(atomic/cmpxchg(x, 1, 2, :relaxed, :acquire)),
+    :some "atomic cmpxchg failure ordering `:acquire` cannot be stronger than success ordering `:relaxed`"
+  )
+  assert-equals[?string](
+    test-compile(atomic/fence(:relaxed)),
+    :some "atomic fence requires an ordering stronger than `:relaxed`"
+  )
+}
+
+fn test() {
+  ops-test()
+  minmax-test()
+  cmpxchg-test()
+  ptr-test()
+  cell-test()
+  errors-test()
+}
