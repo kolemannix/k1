@@ -15,11 +15,12 @@ use crate::{errf, failf};
 
 /// Wiring for reusing argument evaluations done during inference (see infer_types):
 /// when a value argument's expected type is already fully concrete, it can no longer be
-/// changed by later learning, so the argument is evaluated for real (with the caller's
-/// context, not throwaway inference mode) and recorded here for eval_function_call to
-/// reuse instead of re-evaluating
+/// changed by later learning, so the argument is evaluated once with the caller's
+/// context and recorded here for eval_function_call to reuse instead of re-evaluating
 pub(crate) struct InferArgStash<'a> {
-    /// The caller's evaluation context; never inference-mode
+    /// The caller's evaluation context; when it is inference-mode, stashed exprs are
+    /// inference-mode results, which is exactly what the later argument walks of the
+    /// same (discarded) call would produce
     pub ctx: EvalExprContext,
     /// Pair index of the first value-argument pair; earlier pairs (explicitly passed
     /// type args, the return-type pair) are never stashable
@@ -27,8 +28,9 @@ pub(crate) struct InferArgStash<'a> {
     /// Value-argument indices that must not be stashed; fnlike type params get their
     /// values from determine_fnlike_type_args_for_call instead of the argument pass
     pub excluded_args: SV4<u32>,
-    /// Output: (argument index, typed expr) for each argument evaluated for real
-    pub stashed: &'a mut SV8<(u32, TypedExprId)>,
+    /// Output: each stashed argument keyed by its parsed expr, so consumers splice by
+    /// identity rather than depending on argument alignment order
+    pub stashed: &'a mut SV8<(ParsedExprId, TypedExprId)>,
 }
 
 impl TypedProgram {
@@ -151,59 +153,51 @@ impl TypedProgram {
                     let expected_is_concrete = expected_counts.inference_variable_count == 0
                         && expected_counts.unresolved_static_count == 0;
 
-                    // If the expected type is fully concrete, this argument can't teach us
-                    // anything (unify would return NoHoles), and its expected type can no
-                    // longer change: evaluate it for real, once, with the caller's context,
-                    // and stash the result for the post-inference argument pass to reuse
-                    let stash_arg_index = match &stash {
+                    // If the expected type is fully concrete (no holes) this argument can't teach us anything
+                    // and its expected type can no longer change: 
+                    // evaluate it once with the caller's context and stash the
+                    // result for the later argument passes to reuse
+                    let stashable = match &stash {
                         Some(st)
                             if expected_is_concrete
                                 && index as u32 >= st.first_value_pair_index =>
                         {
-                            let arg_index = index as u32 - st.first_value_pair_index;
-                            if st.excluded_args.contains(&arg_index) {
-                                None
-                            } else {
-                                Some(arg_index)
-                            }
+                            !st.excluded_args.contains(&(index as u32 - st.first_value_pair_index))
                         }
-                        _ => None,
+                        _ => false,
                     };
 
-                    let evaluation_result = match stash_arg_index {
-                        Some(arg_index) => {
-                            let stash = stash.as_mut().unwrap();
-                            let real_ctx = stash
-                                .ctx
-                                .with_expected_type(Some(expected_type_so_far))
-                                .with_is_method_receiver(false);
-                            match self.eval_expr(*parsed_expr, real_ctx) {
-                                Err(e) => Err(e),
-                                Ok(expr_id) => {
-                                    match self.check_and_coerce_expr(
-                                        expected_type_so_far,
-                                        expr_id,
-                                        real_ctx.scope_id,
-                                        false,
-                                    ) {
-                                        Ok(coerced) => {
-                                            stash.stashed.push((arg_index, coerced));
-                                            Ok(coerced)
-                                        }
-                                        // On coercion failure, don't stash: the
-                                        // post-inference pass re-evaluates and produces
-                                        // its usual error
-                                        Err(_) => Ok(expr_id),
+                    let evaluation_result = if stashable {
+                        let stash = stash.as_mut().unwrap();
+                        let eval_ctx = stash
+                            .ctx
+                            .with_expected_type(Some(expected_type_so_far))
+                            .with_is_method_receiver(false);
+                        match self.eval_expr(*parsed_expr, eval_ctx) {
+                            Err(e) => Err(e),
+                            Ok(expr_id) => {
+                                match self.check_and_coerce_expr(
+                                    expected_type_so_far,
+                                    expr_id,
+                                    eval_ctx.scope_id,
+                                    false,
+                                ) {
+                                    Ok(coerced) => {
+                                        stash.stashed.push((*parsed_expr, coerced));
+                                        Ok(coerced)
                                     }
+                                    // On coercion failure, don't stash: the
+                                    // post-inference pass re-evaluates and produces
+                                    // its usual error
+                                    Err(_) => Ok(expr_id),
                                 }
                             }
                         }
-                        None => {
-                            let inference_context = EvalExprContext::make(scope_id)
-                                .with_inference(true)
-                                .with_expected_type(Some(expected_type_so_far));
-                            self.eval_expr_with_coercion(*parsed_expr, inference_context, false)
-                        }
+                    } else {
+                        let inference_context = EvalExprContext::make(scope_id)
+                            .with_inference(true)
+                            .with_expected_type(Some(expected_type_so_far));
+                        self.eval_expr_with_coercion(*parsed_expr, inference_context, false)
                     };
                     match evaluation_result {
                         Ok(expr_id) => {
@@ -475,16 +469,17 @@ impl TypedProgram {
         Ok(())
     }
 
-    /// Returns the solved type params, plus (argument index, typed expr) for each value
-    /// argument that inference already evaluated for real and the caller should reuse
-    /// instead of re-evaluating
+    /// Returns the solved type params; each value argument that inference already
+    /// evaluated is appended to `stashed_args` for the caller to splice in instead of
+    /// re-evaluating
     pub(crate) fn infer_and_constrain_call_type_args(
         &mut self,
         fn_call: &ParsedCall,
         generic_function_sig: FunctionSignature,
         ctx: EvalExprContext,
         args_and_params: &ArgsAndParams,
-    ) -> K1Result<(NamedTypeSlice, SV8<(u32, TypedExprId)>)> {
+        stashed_args: &mut SV8<(ParsedExprId, TypedExprId)>,
+    ) -> K1Result<NamedTypeSlice> {
         debug!("infer_and_constrain_call_type_args");
         debug_assert!(generic_function_sig.has_type_params());
         let passed_type_args = fn_call.type_args;
@@ -503,7 +498,6 @@ impl TypedProgram {
         let all_params_were_passed = passed_type_args.len() == type_params.len()
             && self.ast.mem.getn(passed_type_args).iter().all(|nt| nt.type_expr.is_some());
         debug!("all_passed={all_params_were_passed}");
-        let mut stashed_args: SV8<(u32, TypedExprId)> = smallvec![];
         let solved_type_params = if all_params_were_passed {
             let mut evaled_params: List<NameAndType, _> = self.mem.new_list(type_params.len());
             for (type_param, type_arg) in
@@ -581,25 +575,18 @@ impl TypedProgram {
                 }
             }));
 
-            // Nested inference keeps today's throwaway-eval path: real evaluation would
-            // specialize callees the inference pass deliberately leaves abstract, and the
-            // enclosing inference discards this whole call node anyway
-            let stash = if ctx.is_inference() {
-                None
-            } else {
-                let excluded_args: SV4<u32> = self
-                    .mem
-                    .getn(generic_function_sig.fnlike_type_params)
-                    .iter()
-                    .map(|ftp| ftp.value_param_index)
-                    .collect();
-                Some(InferArgStash {
-                    ctx,
-                    first_value_pair_index,
-                    excluded_args,
-                    stashed: &mut stashed_args,
-                })
-            };
+            let excluded_args: SV4<u32> = self
+                .mem
+                .getn(generic_function_sig.fnlike_type_params)
+                .iter()
+                .map(|ftp| ftp.value_param_index)
+                .collect();
+            let stash = Some(InferArgStash {
+                ctx,
+                first_value_pair_index,
+                excluded_args,
+                stashed: stashed_args,
+            });
 
             let (solutions, _all_solutions) = self
                 .infer_types(
@@ -645,7 +632,7 @@ impl TypedProgram {
                 )
             })?;
         }
-        Ok((solved_type_params, stashed_args))
+        Ok(solved_type_params)
     }
 
     pub(crate) fn determine_fnlike_type_args_for_call(

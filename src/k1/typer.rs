@@ -11846,6 +11846,7 @@ impl TypedProgram {
         fn_call: &ParsedCall,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
+        stashed_args: &mut SV8<(ParsedExprId, TypedExprId)>,
     ) -> K1Result<CallResolution> {
         let call_span = fn_call.span;
         if let Some(builtin_result) = self.handle_builtin_function_call_lookalikes(fn_call, ctx)? {
@@ -11872,6 +11873,7 @@ impl TypedProgram {
                 fn_call,
                 known_args,
                 ctx,
+                stashed_args,
             ),
             false => {
                 if let Some(function_id) =
@@ -11891,6 +11893,7 @@ impl TypedProgram {
                             None,
                             known_args,
                             ctx,
+                            stashed_args,
                         )?;
                         Ok(CallResolution::Call(Callee::from_ability_impl_fn(
                             &ability_impl_function,
@@ -12384,6 +12387,7 @@ impl TypedProgram {
         call: &ParsedCall,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
+        stashed_args: &mut SV8<(ParsedExprId, TypedExprId)>,
     ) -> K1Result<CallResolution> {
         debug_assert!(call.name.path.is_empty());
         let fn_name = call.name.name;
@@ -12619,6 +12623,7 @@ impl TypedProgram {
                     Some(base_expr),
                     known_args,
                     ctx,
+                    stashed_args,
                 ) {
                     Ok(ability_impl_fn) => {
                         return Ok(CallResolution::MethodCall {
@@ -12627,6 +12632,7 @@ impl TypedProgram {
                         });
                     }
                     Err(e) => {
+                        stashed_args.clear();
                         errors.push(e);
                         continue;
                     }
@@ -12913,28 +12919,17 @@ impl TypedProgram {
         receiver_if_method: Option<TypedExprId>,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
+        stashed_args: &mut SV8<(ParsedExprId, TypedExprId)>,
     ) -> K1Result<AbilityImplFunction> {
         let call_span = fn_call.span;
-        let function_type_id = self.get_function(ability_function_ref.function_id).type_id;
+        let ability_fn_sig = self.get_function(ability_function_ref.function_id).signature();
         let base_ability_id = ability_function_ref.ability_id;
-        let ability_fn_type = *self.types.get(function_type_id).as_function().unwrap();
+        let ability_fn_type =
+            *self.types.get(ability_fn_sig.function_type).as_function().unwrap();
         let ability_fn_return_type = ability_fn_type.return_type;
         let ability_params = self.abilities.get(base_ability_id).parameters;
         let ability_self_type_id = self.abilities.get(base_ability_id).self_type_id;
 
-        let passed_len = known_args.map(|ka| ka.1.len()).unwrap_or(fn_call.args.len() as usize);
-        if passed_len != ability_fn_type.logical_params().len() as usize {
-            return failf!(
-                call_span,
-                "Mismatching arg count when trying to resolve ability call to {}. expected {}, got {} [[this probably doesn't handle context params properly]]",
-                self.ident_str(fn_call.name.name),
-                ability_fn_type.logical_params().len(),
-                passed_len,
-            );
-        }
-
-        // TODO: Make sure we handle context params in ability functions correctly,
-        // Probably by: skipping them if not passed explicitly, and utilizing them if passed explicitly
         let mut all_type_params = self.tmp.new_list(ability_params.len() + 1);
         all_type_params
             .push(NameAndType { name: self.ast.idents.b.self_, type_id: ability_self_type_id });
@@ -12949,25 +12944,16 @@ impl TypedProgram {
             .mem
             .pushn(&[NameAndType { name: self.ast.idents.b.self_, type_id: ability_self_type_id }]);
 
-        let mut passed_args: List<MaybeTypedExpr, MemTmp> = self.tmp.new_list(passed_len as u32);
-        match known_args {
-            Some(known_args) => {
-                for known_arg_expr in known_args.1 {
-                    passed_args.push(MaybeTypedExpr::Typed(*known_arg_expr))
-                }
-            }
-            None => {
-                if let Some(receiver) = receiver_if_method {
-                    passed_args.push(MaybeTypedExpr::Typed(receiver))
-                }
-                let rest =
-                    if receiver_if_method.is_some() { fn_call.args.skip(1) } else { fn_call.args };
-                for arg in self.ast.mem.getn(rest) {
-                    passed_args.push(MaybeTypedExpr::Parsed(arg.value))
-                }
-            }
-        };
-        let mut args_and_params = self.tmp.new_list(passed_len as u32 + 1);
+        let aligned = self.align_call_arguments_with_parameters(
+            fn_call,
+            &ability_fn_sig,
+            receiver_if_method,
+            ability_fn_type.logical_params(),
+            known_args.map(|ka| ka.1),
+            ctx.scope_id,
+            true,
+        )?;
+        let mut args_and_params = self.tmp.new_list(aligned.len() + 1);
         if let Some(expected_type) = ctx.expected_type_id {
             args_and_params.push(InferenceInputPair {
                 arg: TypeOrParsedExpr::Type(expected_type),
@@ -12975,25 +12961,17 @@ impl TypedProgram {
                 allow_mismatch: false,
             });
         }
-        for (arg, param) in
-            passed_args.iter().zip(self.types.mem.getn(ability_fn_type.logical_params()))
-        {
-            let arg_and_param = match arg {
-                MaybeTypedExpr::Typed(expr) => {
-                    let type_id = self.exprs.get_type(*expr);
-                    InferenceInputPair {
-                        arg: TypeOrParsedExpr::Type(type_id),
-                        param_type: param.type_id,
-                        allow_mismatch: false,
-                    }
-                }
-                MaybeTypedExpr::Parsed(parsed_expr) => InferenceInputPair {
-                    arg: TypeOrParsedExpr::Parsed(*parsed_expr),
-                    param_type: param.type_id,
-                    allow_mismatch: false,
-                },
+        let first_value_pair_index = args_and_params.len() as u32;
+        for (arg, param) in aligned.iter(&self.tmp) {
+            let arg = match arg {
+                MaybeTypedExpr::Typed(expr) => TypeOrParsedExpr::Type(self.exprs.get_type(*expr)),
+                MaybeTypedExpr::Parsed(parsed_expr) => TypeOrParsedExpr::Parsed(*parsed_expr),
             };
-            args_and_params.push(arg_and_param);
+            args_and_params.push(InferenceInputPair {
+                arg,
+                param_type: param.type_id,
+                allow_mismatch: false,
+            });
         }
 
         debug!("all ability params: {}", self.pretty_print_named_types(&all_type_params, ", "));
@@ -13002,13 +12980,24 @@ impl TypedProgram {
             self.pretty_print_named_type_slice(self_only_type_params_handle, ", ")
         );
 
+        let excluded_args: SV4<u32> = self
+            .mem
+            .getn(ability_fn_sig.fnlike_type_params)
+            .iter()
+            .map(|ftp| ftp.value_param_index)
+            .collect();
         let (self_solution, other_solved) = self.infer_types(
             &all_type_params,
             self_only_type_params_handle,
             &args_and_params,
             fn_call.span,
             ctx.scope_id,
-            None,
+            Some(infer::InferArgStash {
+                ctx,
+                first_value_pair_index,
+                excluded_args,
+                stashed: stashed_args,
+            }),
         )?;
 
         let mut parameter_constraints: List<Option<TypeId>, MemTmp> =
@@ -13541,6 +13530,23 @@ impl TypedProgram {
         })
     }
 
+    fn splice_stashed_args(
+        &mut self,
+        args: TmpSlice<MaybeTypedExpr>,
+        stashed_args: &[(ParsedExprId, TypedExprId)],
+    ) {
+        if stashed_args.is_empty() {
+            return;
+        }
+        for arg in self.tmp.getn_mut(args) {
+            if let MaybeTypedExpr::Parsed(p) = arg {
+                if let Some((_, typed)) = stashed_args.iter().find(|(parsed, _)| parsed == p) {
+                    *arg = MaybeTypedExpr::Typed(*typed);
+                }
+            }
+        }
+    }
+
     pub fn get_callee_function_signature(&self, callee: &Callee) -> FunctionSignature {
         match callee {
             Callee::StaticFunction(function_id) => self.get_function(*function_id).signature(),
@@ -13624,8 +13630,10 @@ impl TypedProgram {
             fn_call.args.is_empty() || known_args.is_none(),
             "cannot pass both typed value args and parsed value args to eval_function_call"
         );
+        // Arguments already evaluated during resolution/inference; avoids double-compiles where possible
+        let mut stashed_args: SV8<(ParsedExprId, TypedExprId)> = smallvec![];
         let call_resolution = match known_callee {
-            None => self.resolve_parsed_call(fn_call, known_args.as_ref(), ctx)?,
+            None => self.resolve_parsed_call(fn_call, known_args.as_ref(), ctx, &mut stashed_args)?,
             Some(callee) => CallResolution::Call(callee),
         };
         let (callee, method_receiver) = match call_resolution {
@@ -13689,6 +13697,7 @@ impl TypedProgram {
                     ctx.scope_id,
                     false,
                 )?;
+                self.splice_stashed_args(args_and_params.args, &stashed_args);
                 let mut typechecked_args = self.mem.new_list(args_and_params.len());
                 // The receiver is the first non-context param; context params come first
                 // in the aligned args
@@ -13750,9 +13759,10 @@ impl TypedProgram {
                     ctx.scope_id,
                     true,
                 )?;
+                self.splice_stashed_args(original_args_and_params.args, &stashed_args);
 
                 // We infer the type arguments, or just use them if the user has supplied them
-                let (type_args, stashed_args) = match &known_args {
+                let type_args = match &known_args {
                     Some((type_args, _va)) if !type_args.is_empty() => {
                         // Need the name
                         if type_args.len() != signature.type_params.len() as usize {
@@ -13771,13 +13781,14 @@ impl TypedProgram {
                                 name: type_param.name,
                                 type_id: *type_arg,
                             });
-                        (self.mem.pushn_iter(args_with_names), smallvec![])
+                        self.mem.pushn_iter(args_with_names)
                     }
                     _ => self.infer_and_constrain_call_type_args(
                         fn_call,
                         signature,
                         ctx,
                         &original_args_and_params,
+                        &mut stashed_args,
                     )?,
                 };
 
@@ -13838,14 +13849,7 @@ impl TypedProgram {
                     false,
                 )?;
 
-                // Splice in arguments that inference already evaluated for real: their
-                // expected types were fully concrete, so the results are exactly what the
-                // loop below would produce by re-evaluating
-                for (arg_index, stashed_expr) in &stashed_args {
-                    let arg = &mut self.tmp.getn_mut(args_and_params.args)[*arg_index as usize];
-                    debug_assert!(matches!(arg, MaybeTypedExpr::Parsed(_)));
-                    *arg = MaybeTypedExpr::Typed(*stashed_expr);
-                }
+                self.splice_stashed_args(args_and_params.args, &stashed_args);
 
                 // We've finished inference and all types are known; we now compile all the expressions
                 // again to generate code with no holes and fully concrete types.
