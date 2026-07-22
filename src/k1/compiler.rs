@@ -315,6 +315,25 @@ pub enum CompileProgramError {
     TyperFailure(Box<TypedProgram>),
 }
 
+struct CwdGuard {
+    prev: PathBuf,
+}
+
+impl CwdGuard {
+    fn enter(dir: &Path) -> CwdGuard {
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir)
+            .unwrap_or_else(|e| panic!("Failed to set cwd to {}: {e}", dir.display()));
+        CwdGuard { prev }
+    }
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.prev);
+    }
+}
+
 pub fn module_home_from_src_path(src_path: &Path) -> (bool, PathBuf) {
     let is_dir = src_path.is_dir();
     let src_dir = if is_dir {
@@ -440,6 +459,9 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
             exe_parent.parent().unwrap().to_path_buf()
         }
     });
+    let k1_home_pathbuf = k1_home_pathbuf
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("K1 home {} is not usable: {e}", k1_home_pathbuf.display()));
     let k1lib_dir_pathbuf = k1_home_pathbuf.join("k1lib");
 
     let corelib_dir = k1lib_dir_pathbuf.join("core");
@@ -466,6 +488,8 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
         static_exec: args.static_exec,
         optimize_ir: args.optimize_ir,
     };
+
+    let _cwd = CwdGuard::enter(&config.home_dir);
 
     let mut k1 = TypedProgram::new(module_name.clone(), config);
 
