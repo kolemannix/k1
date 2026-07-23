@@ -224,6 +224,26 @@ pub struct LsEntity {
     pub span: lex::Span,
 }
 
+/// Spliced into the buffer at the cursor by the LSP so the file parses; the
+/// typer records the CompletionSite when it evaluates the marker ident
+pub const COMPLETION_MARKER: &str = "__k1_completion__";
+
+pub struct CompletionState {
+    pub marker: StringId,
+    pub site: Option<CompletionSite>,
+}
+
+/// Where in the program the completion cursor sits, and what completes there
+#[derive(Clone, Copy)]
+pub enum CompletionSite {
+    /// value.<marker>
+    Member { raw_base_type_id: TypeId, base_type_id: TypeId, scope_id: ScopeId },
+    /// ns/path/<marker>
+    Path { path_scope_id: ScopeId },
+    /// bare <marker>
+    Scope { scope_id: ScopeId },
+}
+
 #[derive(Clone, Copy)]
 pub struct TypeDefnStackEntry {
     pub parsed_id: ParsedTypeDefnId,
@@ -2786,6 +2806,7 @@ pub struct TypedProgram {
     module_in_progress: Option<ModuleId>,
 
     pub ls_entities: RefCell<FxHashMap<FileId, Vec<LsEntity>>>,
+    pub completion: Option<CompletionState>,
 
     /// Interned filename per file, so synthesizing source locations (e.g. for
     /// every assert call) doesn't re-hash the filename string each time
@@ -2907,7 +2928,11 @@ impl Timing {
 
 impl TypedProgram {
     pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
-        let ast = ParsedProgram::make(program_name);
+        let mut ast = ParsedProgram::make(program_name);
+        let completion = config.lsp.completion.then(|| CompletionState {
+            marker: ast.idents.intern(COMPLETION_MARKER),
+            site: None,
+        });
 
         let mut types = TypePool::empty(ast.idents.b.tag, ast.idents.b.payload);
         let empty_struct_id = types.add_anon(Type::Struct(StructType::struc(MSlice::empty())));
@@ -3000,6 +3025,7 @@ impl TypedProgram {
             ast,
             module_in_progress: None,
             ls_entities: RefCell::new(ls_entities),
+            completion,
             filename_string_ids: FxHashMap::default(),
             inference_context_stack: Vec::new(),
             inference_context_extras: (0..4).map(|_| InferenceContext::make()).collect(),
@@ -3099,8 +3125,11 @@ impl TypedProgram {
         debug!("Parsing {} discovered files for module {src_path_name}", files_to_compile.len());
 
         for path in &files_to_compile {
-            let content = std::fs::read_to_string(path)
-                .unwrap_or_else(|_| panic!("Failed to open file to parse: {:?}", path));
+            let content = match self.config.lsp.source_overrides.get(path) {
+                Some(content) => content.clone(),
+                None => std::fs::read_to_string(path)
+                    .unwrap_or_else(|_| panic!("Failed to open file to parse: {:?}", path)),
+            };
             let name = path.file_name().unwrap();
             let file_id = self.ast.sources.next_file_id();
             let source = parse::SourceFile::make(
@@ -3140,7 +3169,9 @@ impl TypedProgram {
         let parse_elapsed_ms = parse_elapsed_us / 1_000;
         self.modules.get_mut(module_id).parse_elapsed_ms = parse_elapsed_ms;
 
-        if !self.ast.errors.is_empty() {
+        // In completion mode, typecheck whatever parsed; broken definitions are
+        // already tolerated per-definition downstream
+        if !self.ast.errors.is_empty() && !self.config.lsp.completion {
             bail!("Parsing module {} failed with {} errors", src_path_name, self.ast.errors.len());
         }
 
@@ -7726,6 +7757,22 @@ impl TypedProgram {
     ) -> K1Result<(Option<VariableId>, TypedExprId)> {
         let ParsedExpr::Variable(variable) = self.ast.exprs.get(variable_expr_id) else { panic!() };
         let variable_name_span = variable.name.name_span;
+
+        if let Some(cs) = &self.completion
+            && cs.site.is_none()
+            && variable.name.name == cs.marker
+        {
+            let site = if variable.name.path.is_empty() {
+                CompletionSite::Scope { scope_id }
+            } else {
+                match self.resolve_qident(scope_id, &variable.name) {
+                    Ok(path_scope_id) => CompletionSite::Path { path_scope_id },
+                    Err(_) => CompletionSite::Scope { scope_id },
+                }
+            };
+            self.completion.as_mut().unwrap().site = Some(site);
+        }
+
         let variable_id = self.find_variable_namespaced(scope_id, &variable.name)?;
         match variable_id {
             None => match self.find_function_namespaced(scope_id, &variable.name)? {
@@ -7878,6 +7925,17 @@ impl TypedProgram {
             }
             _other => (raw_base_expr, raw_base_expr_type),
         };
+
+        if let Some(cs) = &mut self.completion
+            && cs.site.is_none()
+            && field_access.field_name == cs.marker
+        {
+            cs.site = Some(CompletionSite::Member {
+                raw_base_type_id: raw_base_expr_type,
+                base_type_id,
+                scope_id: ctx.scope_id,
+            });
+        }
 
         // Optional fork case: sum.tag
         if field_access.field_name == self.ast.idents.b.tag {

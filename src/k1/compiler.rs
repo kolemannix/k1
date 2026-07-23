@@ -269,6 +269,16 @@ pub struct CompilerConfig {
     pub optimize: bool,
     pub chatty: bool,
     pub optimize_ir: bool,
+    pub lsp: LspCompileOptions,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LspCompileOptions {
+    /// canonicalized path -> content to compile instead of the file on disk
+    pub source_overrides: fxhash::FxHashMap<PathBuf, String>,
+    /// Arms completion-marker recording and parse-error tolerance; see
+    /// TypedProgram::completion
+    pub completion: bool,
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -389,6 +399,13 @@ fn write_idents_dump(p: &TypedProgram) {
 /// - compile that file only.
 /// - program name is the name of the file.
 pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, CompileProgramError> {
+    compile_program_ext(args, LspCompileOptions::default())
+}
+
+pub fn compile_program_ext(
+    args: &Args,
+    lsp: LspCompileOptions,
+) -> std::result::Result<TypedProgram, CompileProgramError> {
     #[cfg(feature = "profile")]
     let profiler_guard = if args.profile {
         Some(
@@ -474,6 +491,7 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
         optimize: args.optimize,
         chatty: args.chatty,
         optimize_ir: args.optimize_ir,
+        lsp,
     };
 
     let _cwd = CwdGuard::enter(&config.home_dir);

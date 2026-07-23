@@ -1,7 +1,9 @@
-use crate::lex::{Span, SpanId};
-use crate::parse::{FileId, ParsedId, SourceFiles};
-use crate::typer::types::Type;
+use crate::lex::{Span, SpanId, is_ident_char};
+use crate::parse::{FileId, ParsedId, SourceFiles, StringId};
+use crate::typer::scopes::{ScopeId, VariableInScope};
+use crate::typer::types::{Type, TypeId};
 use crate::{SV8, typer::*};
+use fxhash::FxHashSet;
 use smallvec::smallvec;
 
 pub enum LangItem {
@@ -10,16 +12,12 @@ pub enum LangItem {
 }
 
 pub fn is_point_in_span(sources: &SourceFiles, line: u32, col: u32, span: Span) -> bool {
-    if let Some((entity_start_line, _entity_end_line)) = sources.get_lines_for_span(span) {
-        // Only works for single-line spans
-        if entity_start_line.line_index == line {
-            let char_index_abs = entity_start_line.start_char + col;
-            if span.start <= char_index_abs && char_index_abs < span.end() {
-                return true;
-            }
-        }
-    }
-    false
+    let source = sources.get(span.file_id);
+    let Some(line_info) = source.get_line(line as usize) else {
+        return false;
+    };
+    let char_index_abs = line_info.start_char + col;
+    span.start <= char_index_abs && char_index_abs < span.end()
 }
 
 pub fn find_entity_at_point(
@@ -168,6 +166,384 @@ pub fn get_function_generic_id(k1: &TypedProgram, function_id: FunctionId) -> Fu
     match function.specialization_info {
         Some(info) => info.parent_function,
         None => function_id,
+    }
+}
+
+/// Replace the identifier word containing `offset` with the completion marker
+/// (pure insertion when there is no word), so the buffer parses and the typer
+/// records the CompletionSite at the cursor
+pub fn splice_completion_marker(content: &str, mut offset: usize) -> String {
+    offset = offset.min(content.len());
+    while offset > 0 && !content.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    let bytes = content.as_bytes();
+    let mut wstart = offset;
+    while wstart > 0 && bytes[wstart - 1].is_ascii() && is_ident_char(bytes[wstart - 1] as char) {
+        wstart -= 1;
+    }
+    let mut wend = offset;
+    while wend < bytes.len() && bytes[wend].is_ascii() && is_ident_char(bytes[wend] as char) {
+        wend += 1;
+    }
+    format!("{}{}{}", &content[..wstart], COMPLETION_MARKER, &content[wend..])
+}
+
+/// Innermost typed block containing the point; the completion fallback when no
+/// CompletionSite was recorded
+pub fn scope_at_point(k1: &TypedProgram, file_id: FileId, line: u32, col: u32) -> Option<ScopeId> {
+    let mut best: Option<(ScopeId, u32)> = None;
+    for (expr_id, span_id) in k1.exprs.spans.iter_with_ids() {
+        let span = k1.ast.spans.get(*span_id);
+        if span.file_id != file_id || !is_point_in_span(&k1.ast.sources, line, col, span) {
+            continue;
+        }
+        if let TypedExpr::Block(block) = k1.exprs.get(expr_id)
+            && best.is_none_or(|(_, len)| span.len < len)
+        {
+            best = Some((block.scope_id, span.len));
+        }
+    }
+    best.map(|(scope_id, _)| scope_id)
+}
+
+pub struct CompletionCandidate {
+    pub label: String,
+    pub kind: CompletionCandidateKind,
+    pub detail: String,
+    pub sort_group: u8,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CompletionCandidateKind {
+    Field,
+    Method,
+    Variable,
+    Function,
+    Type,
+    Namespace,
+    Ability,
+    Keyword,
+}
+
+const KEYWORDS: &[&str] = &[
+    "fn", "let", "mut", "and", "or", "if", "else", "while", "loop", "ns", "intern", "for", "in",
+    "ability", "impl", "is", "not", "builtin", "where", "context", "use", "require", "defer",
+];
+
+pub fn collect_completions(
+    k1: &TypedProgram,
+    site: CompletionSite,
+) -> Vec<CompletionCandidate> {
+    let mut items: Vec<CompletionCandidate> = vec![];
+    match site {
+        CompletionSite::Member { base_type_id, .. } => {
+            let base_type_id = k1.types.get_static_family_id_if_static(base_type_id);
+            if let Type::Struct(st) = k1.types.get(base_type_id) {
+                for field in k1.types.mem.getn(st.fields) {
+                    items.push(CompletionCandidate {
+                        label: k1.ident_str(field.name).to_string(),
+                        kind: CompletionCandidateKind::Field,
+                        detail: k1.type_id_to_string(field.type_id),
+                        sort_group: 0,
+                    });
+                }
+            }
+            if let Some(companion_ns) = k1.types.get_companion_namespace(base_type_id) {
+                let companion_scope = k1.namespaces.get(companion_ns).scope_id;
+                for (name, function_id) in k1.scopes.iter_scope_functions(companion_scope) {
+                    if is_method_shaped(k1, function_id, base_type_id) {
+                        items.push(CompletionCandidate {
+                            label: k1.ident_str(name).to_string(),
+                            kind: CompletionCandidateKind::Method,
+                            detail: k1.function_id_to_string(function_id, false),
+                            sort_group: 1,
+                        });
+                    }
+                }
+            }
+        }
+        CompletionSite::Scope { scope_id } => {
+            collect_scope_chain(k1, scope_id, &mut items);
+            for kw in KEYWORDS {
+                items.push(CompletionCandidate {
+                    label: kw.to_string(),
+                    kind: CompletionCandidateKind::Keyword,
+                    detail: String::new(),
+                    sort_group: 9,
+                });
+            }
+        }
+        CompletionSite::Path { path_scope_id } => {
+            collect_one_scope(k1, path_scope_id, &mut Seen::default(), &mut items);
+        }
+    }
+    items.sort_by(|a, b| (a.sort_group, &a.label).cmp(&(b.sort_group, &b.label)));
+    items
+}
+
+fn is_method_shaped(k1: &TypedProgram, function_id: FunctionId, base_type_id: TypeId) -> bool {
+    let function = k1.get_function(function_id);
+    if function.is_generic() {
+        return true;
+    }
+    let Type::Function(ft) = k1.types.get(function.type_id) else { return false };
+    let Some(first) = k1.types.mem.getn(ft.physical_params).iter().find(|p| !p.is_context) else {
+        return false;
+    };
+    first.type_id == base_type_id || k1.types.get_base_for_method(first.type_id) == base_type_id
+}
+
+#[derive(Default)]
+struct Seen {
+    variables: FxHashSet<StringId>,
+    functions: FxHashSet<StringId>,
+    types: FxHashSet<StringId>,
+    namespaces: FxHashSet<StringId>,
+    abilities: FxHashSet<StringId>,
+}
+
+fn collect_scope_chain(k1: &TypedProgram, scope_id: ScopeId, items: &mut Vec<CompletionCandidate>) {
+    let mut seen = Seen::default();
+    let mut current = Some(scope_id);
+    while let Some(scope_id) = current {
+        collect_one_scope(k1, scope_id, &mut seen, items);
+        current = k1.scopes.get_scope(scope_id).parent;
+    }
+}
+
+fn collect_one_scope(
+    k1: &TypedProgram,
+    scope_id: ScopeId,
+    seen: &mut Seen,
+    items: &mut Vec<CompletionCandidate>,
+) {
+    for (name, in_scope) in k1.scopes.iter_scope_variables(scope_id) {
+        // A masked name still hides outer definitions, so it claims the seen-slot
+        if !seen.variables.insert(name) {
+            continue;
+        }
+        let VariableInScope::Defined(variable_id) = in_scope else { continue };
+        items.push(CompletionCandidate {
+            label: k1.ident_str(name).to_string(),
+            kind: CompletionCandidateKind::Variable,
+            detail: k1.type_id_to_string(k1.variables.get(variable_id).type_id),
+            sort_group: 2,
+        });
+    }
+    for (name, function_id) in k1.scopes.iter_scope_functions(scope_id) {
+        if seen.functions.insert(name) {
+            items.push(CompletionCandidate {
+                label: k1.ident_str(name).to_string(),
+                kind: CompletionCandidateKind::Function,
+                detail: k1.function_id_to_string(function_id, false),
+                sort_group: 3,
+            });
+        }
+    }
+    for (name, type_id) in k1.scopes.iter_scope_types(scope_id) {
+        if seen.types.insert(name) {
+            items.push(CompletionCandidate {
+                label: k1.ident_str(name).to_string(),
+                kind: CompletionCandidateKind::Type,
+                detail: k1.type_id_to_string(type_id),
+                sort_group: 4,
+            });
+        }
+    }
+    for (name, _ns_id) in k1.scopes.iter_scope_namespaces(scope_id) {
+        if seen.namespaces.insert(name) {
+            items.push(CompletionCandidate {
+                label: k1.ident_str(name).to_string(),
+                kind: CompletionCandidateKind::Namespace,
+                detail: "ns".to_string(),
+                sort_group: 5,
+            });
+        }
+    }
+    for (name, _ability_id) in k1.scopes.abilities_in_scope(scope_id) {
+        if seen.abilities.insert(name) {
+            items.push(CompletionCandidate {
+                label: k1.ident_str(name).to_string(),
+                kind: CompletionCandidateKind::Ability,
+                detail: "ability".to_string(),
+                sort_group: 6,
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+    use crate::compiler::{
+        Args, Command, CompileProgramError, LspCompileOptions, compile_program_ext,
+    };
+
+    const M: &str = COMPLETION_MARKER;
+
+    #[test]
+    fn splice_marker() {
+        assert_eq!(splice_completion_marker("foo.", 4), format!("foo.{M}"));
+        assert_eq!(splice_completion_marker("foo.ba", 6), format!("foo.{M}"));
+        // Mid-word: the whole word is replaced
+        assert_eq!(splice_completion_marker("let ab = cd", 5), format!("let {M} = cd"));
+        assert_eq!(splice_completion_marker("x = ", 4), format!("x = {M}"));
+        assert_eq!(splice_completion_marker("ns/", 3), format!("ns/{M}"));
+        // Kebab idents are one word
+        assert_eq!(splice_completion_marker("a-long-name", 6), M.to_string());
+    }
+
+    /// Compiles `src` (cursor sigil `@@`) in completion mode: the file goes to
+    /// disk verbatim, the marker-spliced version is the source override
+    fn compile_with_cursor(test_name: &str, src: &str) -> Box<TypedProgram> {
+        static SET_HOME: std::sync::Once = std::sync::Once::new();
+        SET_HOME.call_once(|| unsafe {
+            std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
+        });
+        let cursor = src.find("@@").expect("fixture needs an @@ cursor");
+        let content = src.replace("@@", "");
+        let spliced = splice_completion_marker(&content, cursor);
+        let dir = std::env::temp_dir().join("k1_completion_tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{test_name}.k1"));
+        std::fs::write(&path, &content).unwrap();
+        let mut source_overrides = fxhash::FxHashMap::default();
+        source_overrides.insert(path.canonicalize().unwrap(), spliced);
+        let args = Args {
+            no_std: false,
+            emit_llvm: false,
+            optimize: false,
+            dump_module: false,
+            debug: false,
+            sanitize: false,
+            profile: false,
+            chatty: false,
+            optimize_ir: true,
+            target: None,
+            filc: false,
+            command: Command::Check { file: path },
+            dump_idents: false,
+        };
+        match compile_program_ext(&args, LspCompileOptions { source_overrides, completion: true }) {
+            Ok(program) => Box::new(program),
+            Err(CompileProgramError::TyperFailure(program)) => program,
+        }
+    }
+
+    fn labels(k1: &TypedProgram) -> Vec<String> {
+        let site =
+            k1.completion.as_ref().and_then(|cs| cs.site).expect("expected a completion site");
+        collect_completions(k1, site).into_iter().map(|c| c.label).collect()
+    }
+
+    #[test]
+    fn member_completion_on_struct() {
+        let k1 = compile_with_cursor(
+            "member",
+            r#"
+ns completion-member
+
+type point = { x: int, y: int }
+
+ns for point {
+  fn magnitude(self: point): int {
+    self.x * self.x + self.y * self.y
+  }
+}
+
+fn use-it(): int {
+  let p: point = .{ x = 1, y = 2 }
+  p.@@
+  0
+}
+"#,
+        );
+        assert!(matches!(
+            k1.completion.as_ref().unwrap().site,
+            Some(CompletionSite::Member { .. })
+        ));
+        let labels = labels(&k1);
+        assert!(labels.contains(&"x".to_string()));
+        assert!(labels.contains(&"y".to_string()));
+        assert!(labels.contains(&"magnitude".to_string()));
+    }
+
+    #[test]
+    fn scope_completion() {
+        let k1 = compile_with_cursor(
+            "scope",
+            r#"
+ns completion-scope
+
+fn helper(): int { 3 }
+
+fn use-it(): int {
+  let alpha = 1
+  let beta = 2
+  let gamma = @@
+  gamma
+}
+"#,
+        );
+        assert!(matches!(
+            k1.completion.as_ref().unwrap().site,
+            Some(CompletionSite::Scope { .. })
+        ));
+        let labels = labels(&k1);
+        assert!(labels.contains(&"alpha".to_string()));
+        assert!(labels.contains(&"beta".to_string()));
+        assert!(labels.contains(&"helper".to_string()));
+        assert!(labels.contains(&"fn".to_string()));
+        // Not yet defined at the cursor
+        assert!(!labels.contains(&"gamma".to_string()));
+    }
+
+    #[test]
+    fn path_completion() {
+        let k1 = compile_with_cursor(
+            "path",
+            r#"
+ns completion-path
+
+ns util {
+  fn helper(): int { 3 }
+  fn helper-two(): int { 4 }
+}
+
+fn use-it(): int {
+  util/@@
+  0
+}
+"#,
+        );
+        assert!(matches!(
+            k1.completion.as_ref().unwrap().site,
+            Some(CompletionSite::Path { .. })
+        ));
+        let labels = labels(&k1);
+        assert!(labels.contains(&"helper".to_string()));
+        assert!(labels.contains(&"helper-two".to_string()));
+        // Path enumeration is local to the namespace: no keywords, no outer names
+        assert!(!labels.contains(&"use-it".to_string()));
+        assert!(!labels.contains(&"fn".to_string()));
+    }
+
+    #[test]
+    fn earlier_error_yields_no_site() {
+        let k1 = compile_with_cursor(
+            "earlier_error",
+            r#"
+ns completion-fallback
+
+fn use-it(): int {
+  let bad: int = "nope"
+  let x = @@
+  0
+}
+"#,
+        );
+        assert!(k1.completion.as_ref().unwrap().site.is_none());
     }
 }
 

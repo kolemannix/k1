@@ -7,7 +7,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use k1::compiler::CompileProgramError;
+use k1::compiler::{CompileProgramError, LspCompileOptions};
+use k1::lsp_support::CompletionCandidateKind;
 use k1::lex::{self, Span, SpanId, Spans};
 use k1::parse;
 use k1::parse::{ParsedProgram, SourceFile};
@@ -168,7 +169,7 @@ fn source_to_uri(directory: impl AsRef<Path>, file: impl AsRef<str>) -> Url {
 fn uri_from_span(k1: &TypedProgram, span_id: SpanId) -> Url {
     let span = k1.ast.spans.get(span_id);
     let source = k1.ast.sources.get(span.file_id);
-    source_to_uri(&source.directory, &source.filename)
+    source_to_uri(source.directory.as_str(), &source.filename)
 }
 
 fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast SourceFile> {
@@ -191,12 +192,34 @@ fn uri_to_edited_source(backend: &Backend, url: &Url) -> Option<(SourceFile, boo
     }
 }
 
+fn candidate_to_item(candidate: k1::lsp_support::CompletionCandidate) -> CompletionItem {
+    let kind = match candidate.kind {
+        CompletionCandidateKind::Field => CompletionItemKind::FIELD,
+        CompletionCandidateKind::Method => CompletionItemKind::METHOD,
+        CompletionCandidateKind::Variable => CompletionItemKind::VARIABLE,
+        CompletionCandidateKind::Function => CompletionItemKind::FUNCTION,
+        CompletionCandidateKind::Type => CompletionItemKind::STRUCT,
+        CompletionCandidateKind::Namespace => CompletionItemKind::MODULE,
+        CompletionCandidateKind::Ability => CompletionItemKind::INTERFACE,
+        CompletionCandidateKind::Keyword => CompletionItemKind::KEYWORD,
+    };
+    CompletionItem {
+        kind: Some(kind),
+        sort_text: Some(format!("{:02}_{}", candidate.sort_group, &candidate.label)),
+        detail: if candidate.detail.is_empty() { None } else { Some(candidate.detail) },
+        label: candidate.label,
+        ..CompletionItem::default()
+    }
+}
+
 struct Backend {
     client: Client,
     module: k1::server::SharedProgram,
     edited_sources: Mutex<HashMap<Url, ParsedProgram>>,
     workspace_uri: RwLock<Option<Url>>,
     compile_iteration: AtomicU32,
+    completion_generation: AtomicU32,
+    completion_compile_lock: tokio::sync::Mutex<()>,
 }
 
 impl Backend {
@@ -210,6 +233,8 @@ impl Backend {
             edited_sources: Mutex::new(HashMap::new()),
             workspace_uri: RwLock::new(None),
             compile_iteration: AtomicU32::new(0),
+            completion_generation: AtomicU32::new(0),
+            completion_compile_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -223,7 +248,7 @@ impl Backend {
 
     fn all_file_urls(&self) -> Vec<Url> {
         self.with_k1(|k1| {
-            k1.ast.sources.iter().map(|s| source_to_uri(&s.1.directory, &s.1.filename)).collect()
+            k1.ast.sources.iter().map(|s| source_to_uri(s.1.directory.as_str(), &s.1.filename)).collect()
         })
         .unwrap_or_default()
     }
@@ -669,30 +694,99 @@ impl LanguageServer for Backend {
             .await;
     }
 
-    async fn completion(&self, _params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        Ok(Some(CompletionResponse::List(CompletionList {
-            is_incomplete: false,
-            items: vec![CompletionItem {
-                label: "foo".to_string(),
-                kind: Some(CompletionItemKind::KEYWORD),
-                detail: Some("Example completion item".to_string()),
-                label_details: None,
-                documentation: None,
-                deprecated: None,
-                preselect: None,
-                sort_text: None,
-                filter_text: None,
-                insert_text: None,
-                insert_text_format: None,
-                insert_text_mode: None,
-                text_edit: None,
-                additional_text_edits: None,
-                command: None,
-                commit_characters: None,
-                data: None,
-                tags: None,
-            }],
-        })))
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let start = std::time::Instant::now();
+        let position = params.text_document_position;
+        let file_url = position.text_document.uri;
+        let line = position.position.line;
+        let col = position.position.character;
+        info!("completion: {}:{}:{}", file_url.path(), line, col);
+
+        // Latest buffer content: unsaved edits first, else the compiled source.
+        // SourceFile is not Send; keep it scoped so only the spliced String
+        // crosses the awaits below
+        let spliced = {
+            let source = {
+                let edited_sources = self.edited_sources.lock().unwrap();
+                edited_sources.get(&file_url).map(|ast| ast.sources.get_main().clone())
+            };
+            let source = match source {
+                Some(source) => Some(source),
+                None => self.with_k1(|k1| uri_to_source(&k1.ast, &file_url).cloned()).flatten(),
+            };
+            let Some(source) = source else {
+                info!("completion: no source for {}", file_url.path());
+                return Ok(None);
+            };
+            let Some(line_info) = source.get_line(line as usize) else { return Ok(None) };
+            let offset = (line_info.start_char + col.min(line_info.len)) as usize;
+            k1::lsp_support::splice_completion_marker(&source.content, offset)
+        };
+
+        let Ok(canonical_path) = std::fs::canonicalize(file_url.path()) else { return Ok(None) };
+        let root_path: std::path::PathBuf = {
+            let root_uri = self.workspace_uri.read().unwrap();
+            let Some(root) = root_uri.as_ref() else { return Ok(None) };
+            root.path().into()
+        };
+
+        let mut source_overrides = fxhash::FxHashMap::default();
+        source_overrides.insert(canonical_path, spliced);
+        let lsp_options = LspCompileOptions { source_overrides, completion: true };
+        let args = k1::compiler::Args {
+            no_std: false,
+            emit_llvm: false,
+            optimize: false,
+            dump_module: false,
+            debug: true,
+            sanitize: false,
+            profile: false,
+            chatty: false,
+            optimize_ir: true,
+            target: None,
+            filc: false,
+            command: k1::compiler::Command::Check { file: root_path },
+            dump_idents: false,
+        };
+
+        // Newer requests win; a queued stale compile bails as soon as it gets the lock
+        let my_generation = self.completion_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let _compile_guard = self.completion_compile_lock.lock().await;
+        if self.completion_generation.load(Ordering::SeqCst) != my_generation {
+            return Err(Error::request_cancelled());
+        }
+        let program = tokio::task::spawn_blocking(move || {
+            match k1::compiler::compile_program_ext(&args, lsp_options) {
+                Ok(program) => program,
+                Err(CompileProgramError::TyperFailure(program)) => *program,
+            }
+        })
+        .await
+        .map_err(|_| Error::internal_error())?;
+
+        let site = program.completion.as_ref().and_then(|cs| cs.site);
+        let (candidates, is_incomplete) = match site {
+            Some(site) => (k1::lsp_support::collect_completions(&program, site), false),
+            None => {
+                info!("completion: no site recorded, falling back to enclosing scope");
+                let fallback = self
+                    .with_k1(|k1| {
+                        let source = uri_to_source(&k1.ast, &file_url)?;
+                        let scope_id =
+                            k1::lsp_support::scope_at_point(k1, source.file_id, line, col)?;
+                        Some(k1::lsp_support::collect_completions(
+                            k1,
+                            CompletionSite::Scope { scope_id },
+                        ))
+                    })
+                    .flatten();
+                (fallback.unwrap_or_default(), true)
+            }
+        };
+
+        let items: Vec<CompletionItem> = candidates.into_iter().map(candidate_to_item).collect();
+        info!("completion: {} items in {}ms", items.len(), start.elapsed().as_millis());
+        Ok(Some(CompletionResponse::List(CompletionList { is_incomplete, items })))
     }
 
     async fn goto_definition(
@@ -733,7 +827,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let definition_uri =
-            source_to_uri(&definition_source.directory, &definition_source.filename);
+            source_to_uri(definition_source.directory.as_str(), &definition_source.filename);
         info!("goto_definition response: {}, {:?}", definition_uri, range);
         Ok(Some(GotoDefinitionResponse::Scalar(Location { uri: definition_uri, range })))
     }
