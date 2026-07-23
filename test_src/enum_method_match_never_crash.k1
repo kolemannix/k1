@@ -30,4 +30,4 @@ fn main(): i32 {
     assert((:b: e).value-if-a() == 0)
     1
   }
-//exitcode: 1 This is a B!
+//abortmsg: This is a B!

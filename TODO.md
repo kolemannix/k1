@@ -15,10 +15,10 @@ Minor and ideas
 - [ ] top-level parser recovery (sync to next fn/ns/type/macro)
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
-- [ ] assert and crash should trap a debugger. decide on 'assert' behavior in debug vs non debug mode.
+- [x] decide on 'assert' behavior in debug vs non debug mode and improve bactraces (need line numbers)
 - [ ] `#[must_use]` equivalent
 - [ ] enum-from-sum type operator
-- [ ] 'newtype' solution; 'distinct' types? `type handle = distinct[size]`
+- [x] 'newtype' solution; 'distinct' types? `type handle = distinct[size]` (wrapper struct is working great)
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
 - [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
 - [x] Finish removing let*
@@ -34,7 +34,7 @@ Minor and ideas
 Simple but missing
 - [x] auto-equals implementation on-demand for structs
 - [x] auto-print implementation on-demand for structs
-- [ ] atomics
+- [x] atomics
 - [ ] auto-print implementation on-demand for sums
 - [ ] Exported functions
 - [ ] Tail calls

@@ -6,4 +6,4 @@ fn main(): i32 {
 
   0
 }
-//exitcode: 1
+//abortmsg: Array index out of bounds: 44 >= 10

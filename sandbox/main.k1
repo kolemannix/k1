@@ -1,12 +1,10 @@
-macro for-each(binding: ?string, iterable, body) {
-  // let iter   = meta/fresh-name("iter")
-  let iter = "iter"
+macro for-each(binding: ?code, iterable, body) {
   let binding = binding ? "it"
   `{
-    let $iter = $iterable.iterator()
+    let iter = $iterable.iterator()
     let it-index: size = 0
     loop {
-      if $iter.next() is :some($binding) {
+      if iter.next() is :some($binding) {
         $body
         it-index = it-index + 1
       } else break
@@ -15,9 +13,14 @@ macro for-each(binding: ?string, iterable, body) {
 }
 
 #debug fn main(): i32 {
+
   for-each(:none, [1,2,3], {
-    println(foo);
-    it;
+    println(it);
+  })
+
+  for-each(:some("c"), [1,2,3], {
+    c;
+    println(cc)
   })
 
   0

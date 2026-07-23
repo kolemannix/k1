@@ -68,6 +68,10 @@ Before nontrivial work, read:
   compile; export it before running the `just` recipes too.
 - Binaries outside `target/debug` (e.g. `target/profiling/k1`) resolve k1lib
   from the exe path and fail in worktrees; set `K1_HOME=<repo root>`.
+- Run the K1 test suite via `./test.sh` (or `just test`), not `k1_test` by hand.
+  If you must invoke `target/debug/k1_test` directly, set
+  `K1_HOME=<abs repo root>` — without it parallel runs fail nondeterministically
+  with "Failed but had no errors".
 - The full test suite needs native libs built first:
   `make -C k1lib/core/libs clean build` and
   `make -C test_src/ffi_abi_test/libs clean build` (`just test` handles this).

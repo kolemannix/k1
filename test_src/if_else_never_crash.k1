@@ -17,4 +17,4 @@ fn main(): i32 {
   both-never(false)
   0
 }
-//exitcode: 1 Uh oh! at if_else_never_crash.k1:9
+//abortmsg: Uh oh! at if_else_never_crash.k1:9

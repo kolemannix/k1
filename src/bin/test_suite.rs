@@ -64,7 +64,6 @@ impl TestExpectation {
     }
     fn expected_message(&self) -> Option<&str> {
         match self {
-            Self::AbortErrorMessage { message } => Some(message),
             Self::ExitCode { message, .. } => message.as_ref().map(|s| s.as_str()),
             _ => None,
         }
@@ -218,30 +217,29 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                             let stderr_lines = stderr_str.lines();
                             let last_stderr_line = stderr_lines.last();
                             if let Some(signal) = run_status.signal() {
-                                if signal == 5 {
-                                    bail!("{name} terminated by trap signal: {signal}");
-                                } else if signal == 6 {
-                                    if let TestExpectation::AbortErrorMessage {
-                                        message: expected_abort_message,
-                                    } = &expectation
-                                    {
-                                        match last_stderr_line {
-                                            None => bail!(
-                                                "{name} Expected abortmsg {expected_abort_message} but got abort with no output",
-                                            ),
-                                            Some(abort_msg) => {
-                                                if !abort_msg.contains(expected_abort_message) {
-                                                    bail!(
-                                                        "{name} abort message '{abort_msg}' did not match expected message: {expected_abort_message}"
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
+                                if signal != 6 {
                                     bail!("{name} terminated by signal: {signal}");
                                 }
-                            };
+                                let TestExpectation::AbortErrorMessage {
+                                    message: expected_abort_message,
+                                } = &expectation
+                                else {
+                                    bail!("{name} terminated by SIGABRT");
+                                };
+                                match last_stderr_line {
+                                    None => bail!(
+                                        "{name} Expected abortmsg {expected_abort_message} but got abort with no output",
+                                    ),
+                                    Some(abort_msg) => {
+                                        if !abort_msg.contains(expected_abort_message) {
+                                            bail!(
+                                                "{name} abort message '{abort_msg}' did not match expected message: {expected_abort_message}"
+                                            )
+                                        }
+                                        return Ok(());
+                                    }
+                                }
+                            }
                             if run_status.code() != expectation.exit_code() {
                                 bail!(
                                     "{name} failed wrong exit code: exp {:?}, actual status: {:?}",

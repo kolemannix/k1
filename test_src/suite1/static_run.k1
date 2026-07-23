@@ -158,7 +158,7 @@ fn test() {
   }, "Hello")
 
   assert-equals[?string](
-    test-compile( #static assert(false) ).map(fn(s) s.take(38)),
+    test-compile( #static sys/exit(111) ).map(fn(s) s.take(38)),
     some("Static execution exited with code: 111")
   )
 

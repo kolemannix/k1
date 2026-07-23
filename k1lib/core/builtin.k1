@@ -413,6 +413,10 @@ ability iterable[impl item, impl i: iterator[item = item]] {
   fn iterator(self): i
 }
 
+impl[item2, t: iterator[item = item2]] iterable[item = item2, i = t] for t {
+  fn iterator(self): t { self }
+}
+
 ability zero { fn zero(): self }
 ability one { fn one(): self }
 
@@ -789,6 +793,7 @@ ns array {
 ns libc {
 
   extern("exit") fn exit(code: i32): never
+  extern("abort") fn abort(): never
 
   // Used by the llvm backend, currently
   extern("memcmp") fn memcmp(s1: ptr, s2: ptr, size: size): i32
@@ -867,13 +872,8 @@ fn crash(context locn: k1/source-location)(msg: string): never {
     eprint(":")
     core/format-uint(context core/io/stderr)(locn.line, 10)
     eprint("\n")
-    //let s = "{msg} at {filename}:{line}\n";
-    //eprint(s);
 
-    // use this to make crash trap!
-    // let x = ptr/null.as[*mut i32].*;
-    // sys/exit(x)
-    sys/exit(1)
+    libc/abort()
   }
 }
 
