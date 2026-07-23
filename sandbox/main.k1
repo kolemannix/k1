@@ -1,26 +1,7 @@
-macro for-each(binding: ?code, iterable, body) {
-  let binding = binding ? "it"
-  `{
-    let iter = $iterable.iterator()
-    let it-index: size = 0
-    loop {
-      if iter.next() is :some($binding) {
-        $body
-        it-index = it-index + 1
-      } else break
-    }
-  }`
-}
-
 #debug fn main(): i32 {
 
-  for-each(:none, [1,2,3], {
+  core/for-each(it, [1,2,3].as-span(), {
     println(it);
-  })
-
-  for-each(:some("c"), [1,2,3], {
-    c;
-    println(cc)
   })
 
   0

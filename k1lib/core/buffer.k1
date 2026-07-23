@@ -436,7 +436,7 @@ impl[n: static size, t] iterable[item = t, i = buffer-iterator[t]] for *array[t,
   }
 }
 
-impl[n: static size, t] iterable[item = *mut t, i = buffer-ref-iterator[t]] for *mut array[t, n] {
+impl[n: static size, t] iterable[item = *mut t, i = buffer-ref-iterator[t]] for *array[t, n] {
   fn iterator(self): i {
     buffer-ref-iterator/from-buffer(
       self.as-span().inner-buffer()

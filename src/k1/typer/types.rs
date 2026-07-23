@@ -165,6 +165,9 @@ impl StructType {
     }
 }
 
+pub const OPT_NONE_VARIANT_INDEX: usize = 0;
+pub const OPT_SOME_VARIANT_INDEX: usize = 1;
+
 pub const EMPTY_TYPE_ID: TypeId = TypeId(NonZeroU32::new(1).unwrap());
 pub const U8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(2).unwrap());
 pub const U16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(3).unwrap());
@@ -945,6 +948,8 @@ impl TypeVariableInfo {
 #[derive(Default)]
 pub struct BuiltinTypes {
     pub empty: TypeId,
+    pub bool: Option<TypeId>,
+    pub char: Option<TypeId>,
     pub buffer: Option<TypeId>,
     pub span: Option<TypeId>,
     pub list: Option<TypeId>,
@@ -967,6 +972,8 @@ pub struct BuiltinTypes {
 impl BuiltinTypes {
     pub fn assert_complete(&self) {
         assert!(self.empty != TypeId::PENDING);
+        debug_assert!(self.bool.is_some());
+        debug_assert!(self.char.is_some());
         debug_assert!(self.buffer.is_some());
         debug_assert!(self.span.is_some());
         debug_assert!(self.list.is_some());
@@ -982,6 +989,12 @@ impl BuiltinTypes {
         debug_assert!(self.types_int_value.is_some());
         debug_assert!(self.types_float_kind.is_some());
         debug_assert!(self.types_float_value.is_some());
+    }
+    pub fn bool(&self) -> TypeId {
+        self.bool.expect("bool builtin missing")
+    }
+    pub fn char(&self) -> TypeId {
+        self.char.expect("char builtin missing")
     }
     pub fn string(&self) -> TypeId {
         self.string.expect("string builtin missing")

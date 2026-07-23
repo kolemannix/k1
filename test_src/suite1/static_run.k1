@@ -200,6 +200,10 @@ fn test() {
   let point = #static .{ x = 1, y = (#static 2): int }
   assert-equals(point.from-static().x, 1)
 
+  #for [0,2,4] {
+    assert-equals(it % 2, 0)
+  };
+
   .{}
 }
 

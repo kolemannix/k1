@@ -178,6 +178,7 @@ pub(crate) struct BuiltinIdents {
     pub arena_tmp: StringId,
     pub t: StringId,
     pub phony: StringId,
+    pub none: StringId,
     pub some: StringId,
     pub with: StringId,
     pub return_: StringId,
@@ -213,6 +214,7 @@ pub(crate) struct BuiltinIdents {
     pub crash_msg_no_cases: StringId,
     pub crash_msg_no_cases_exhaustive: StringId,
     pub crash_msg_array_oob: StringId,
+    pub for_each: StringId,
 }
 
 #[allow(non_snake_case)]
@@ -400,6 +402,7 @@ impl IdentPool {
             arena_tmp: intern!("arena-tmp"),
             t: intern!("t"),
             phony: intern!("phony"),
+            none: intern!("none"),
             some: intern!("some"),
             with: intern!("with"),
             return_: intern!("return"),
@@ -436,6 +439,7 @@ impl IdentPool {
                 Either the match subject is corrupt, or there is a compiler bug."
             ),
             crash_msg_array_oob: intern!("Array index out of bounds"),
+            for_each: intern!("for-each"),
         };
 
         macro_rules! make_fn {

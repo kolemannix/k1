@@ -397,6 +397,12 @@ enum MaybeTypedExpr {
 }
 
 #[derive(Debug, Clone, Copy)]
+enum MacroArg {
+    Parsed(ParsedCallArg),
+    Typed(TypedExprId),
+}
+
+#[derive(Debug, Clone, Copy)]
 enum TypeOrParsedExpr {
     Type(TypeId),
     Parsed(ParsedExprId),
@@ -3611,6 +3617,10 @@ impl TypedProgram {
         if namespace_scope_id == self.scopes.core_scope_id {
             if name == self.ast.idents.b.string {
                 self.types.builtins.string = Some(type_id);
+            } else if name == self.ast.idents.b.bool {
+                self.types.builtins.bool = Some(type_id);
+            } else if name == self.ast.idents.b.char {
+                self.types.builtins.char = Some(type_id);
             } else if name == self.ast.idents.b.buffer {
                 self.types.builtins.buffer = Some(type_id);
             } else if name == self.ast.idents.b.span {
@@ -8665,9 +8675,8 @@ impl TypedProgram {
             let text_value = self.static_values.add_string(*text);
             let source_value =
                 self.static_values.add_int(TypedIntValue::U64(source.as_u32() as u64));
-            let chunk_value = self
-                .static_values
-                .add_struct_from_slice(chunk_type, &[text_value, source_value]);
+            let chunk_value =
+                self.static_values.add_struct_from_slice(chunk_type, &[text_value, source_value]);
             elements.push(chunk_value);
         }
         let elements = elements.into_handle(&mut self.static_values.mem);
@@ -8677,6 +8686,14 @@ impl TypedProgram {
             type_id: chunks_list_type,
         }));
         self.static_values.add_struct_from_slice(code_type, &[chunks_value])
+    }
+
+    fn code_from_parsed_expr(&mut self, parsed_expr: ParsedExprId) -> StaticValueId {
+        let arg_span = self.ast.exprs.get_span(parsed_expr);
+        let content = self.ast.sources.get_span_content(self.ast.spans.get(arg_span));
+        let string_id = self.ast.idents.intern(content);
+        let value_id = self.make_static_code_value(&[(string_id, arg_span)]);
+        value_id
     }
 
     fn materialize_static_value(
@@ -8885,7 +8902,18 @@ impl TypedProgram {
                     self.qident_to_string(&call.name)
                 );
             }
-            return self.execute_macro_call(&call, function_id, true, ctx);
+            let mut macro_args: SV8<_> = smallvec![];
+            for parsed_arg in self.ast.mem.getn(call.args) {
+                macro_args.push(MacroArg::Parsed(*parsed_arg))
+            }
+            return self.execute_macro_call(
+                self.ast.mem.getn(call.type_args),
+                &macro_args,
+                span,
+                function_id,
+                true,
+                ctx,
+            );
         }
 
         // We don't execute statics during the generic pass, since there's no point
@@ -9036,8 +9064,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
         is_definition: bool,
     ) -> K1Result<StaticExecutionResult> {
-        let is_empty =
-            chunks.iter().all(|(text, _)| self.ast.idents.get_string(*text).is_empty());
+        let is_empty = chunks.iter().all(|(text, _)| self.ast.idents.get_string(*text).is_empty());
         if is_empty {
             if is_definition {
                 Ok(StaticExecutionResult::Definitions(MSlice::empty()))
@@ -9135,12 +9162,13 @@ impl TypedProgram {
 
     fn execute_macro_call(
         &mut self,
-        fn_call: &ParsedCall,
+        type_args: &[NamedTypeArg],
+        args: &[MacroArg],
+        span: SpanId,
         function_id: FunctionId,
         is_definition: bool,
         ctx: EvalExprContext,
     ) -> K1Result<StaticExecutionResult> {
-        let span = fn_call.span;
         let function = self.get_function(function_id);
         let is_generic = !function.is_concrete;
         let function_name = function.name;
@@ -9157,12 +9185,12 @@ impl TypedProgram {
             );
         }
 
-        if function.type_params.len() != fn_call.type_args.len() {
+        if function.type_params.len() as usize != type_args.len() {
             return failf!(
                 span,
                 "Takes {} type arguments; got {}",
                 function.type_params.len(),
-                fn_call.type_args.len()
+                type_args.len()
             );
         }
 
@@ -9170,9 +9198,9 @@ impl TypedProgram {
         // nocommit: I think we can factor out this idea of checking a series of type expressions
         // against a series of constrained type parameters. The substitution-in-constraints part is
         // just tricky enough to warrant keeping it in one place
-        let mut type_args = self.mem.new_list(function_type_params.len());
+        let mut typed_type_args = self.mem.new_list(function_type_params.len() as u32);
         for (type_param, type_arg) in
-            self.mem.getn(function_type_params).iter().zip(self.ast.mem.getn(fn_call.type_args))
+            self.mem.getn(function_type_params).iter().zip(type_args.iter())
         {
             let Some(passed_type_expr) = type_arg.type_expr else {
                 return failf!(type_arg.span, "_ is not allowed for macro calls");
@@ -9187,52 +9215,91 @@ impl TypedProgram {
                 ctx.scope_id,
                 type_arg.span,
             )?;
-            type_args.push(NameAndType { name: type_param.name, type_id: passed_type });
+            typed_type_args.push(NameAndType { name: type_param.name, type_id: passed_type });
         }
-        let type_args_handle = self.mem.list_to_handle(type_args);
+        let type_args_handle = self.mem.list_to_handle(typed_type_args);
 
         let parsed_params = self.ast.get_macro(parsed_macro_id).params;
-        if fn_call.args.len() != parsed_params.len() {
+        if args.len() != parsed_params.len() as usize {
             return failf!(
                 span,
                 "Macro '{}' takes {} arguments, got {}",
                 self.ident_str(function_name),
                 parsed_params.len(),
-                fn_call.args.len()
+                args.len()
             );
         }
         let fn_param_types =
             self.types.get(function_type_id).as_function().unwrap().logical_params();
 
         let mut static_args: SV8<StaticValueId> = smallvec![];
-        for (param, arg) in
-            self.types.mem.getn(fn_param_types).iter().zip(self.ast.mem.getn(fn_call.args))
-        {
-            if arg.name.is_some() {
-                return failf!(
-                    self.ast.exprs.get_span(arg.value),
-                    "Macro arguments cannot be named (yet)"
-                );
+        for (param, arg) in self.types.mem.getn(fn_param_types).iter().zip(args.iter()) {
+            match *arg {
+                MacroArg::Parsed(parsed_arg) => {
+                    if let Some(passed_name) = parsed_arg.name {
+                        if passed_name != param.name {
+                            kbail!(
+                                self,
+                                span,
+                                "Macro argument name mismatch: expected {}, got {}",
+                                param.name,
+                                passed_name,
+                            );
+                        }
+                    }
+                    match param.is_macro_code {
+                        true => {
+                            // when the parameter is of type code,
+                            // it gets auto 'quoted' at the callsite
+                            // So we just yoink the source text from its span
+                            // and actually ignore the previously parsed value.
+                            // This means its kinda hard to synthesize one of these arguments
+                            //
+                            // which is why we're accepting MaybeTypedExpr here
+                            let code_value_id = self.code_from_parsed_expr(parsed_arg.value);
+                            static_args.push(code_value_id);
+                        }
+                        false => {
+                            let value_id = self.execute_static_expr(
+                                parsed_arg.value,
+                                ctx.with_expected_type(Some(param.type_id)),
+                                &[],
+                            )?;
+                            let value_type = self.get_static_value_type(value_id);
+                            if let Err(msg) =
+                                self.check_types(param.type_id, value_type, ctx.scope_id)
+                            {
+                                kbail!(
+                                    self,
+                                    span,
+                                    "Macro argument '{}' type mismatch: {}",
+                                    param.name,
+                                    msg,
+                                );
+                            }
+                            static_args.push(value_id);
+                        }
+                    };
+                }
+                MacroArg::Typed(typed_arg) => {
+                    // We require a static value
+                    if !param.is_macro_code {
+                        kbail!(
+                            self,
+                            span, /* call span since we want to point the finger at the bad caller */
+                            "bug: we only allow pre-typed macro arguments for code args",
+                        );
+                    }
+                    let TypedExpr::StaticValue(sce) = self.exprs.get(typed_arg) else {
+                        kbail!(
+                            self,
+                            span,
+                            "bug: we expect a static value for pre-typed macro arguments",
+                        );
+                    };
+                    static_args.push(sce.value_id)
+                }
             }
-            match param.is_macro_code {
-                true => {
-                    // Arrives as source
-                    let arg_span = self.ast.exprs.get_span(arg.value);
-                    let content = self.ast.sources.get_span_content(self.ast.spans.get(arg_span));
-                    let string_id = self.ast.idents.intern(content);
-                    static_args.push(self.make_static_code_value(&[(string_id, arg_span)]));
-                }
-                false => {
-                    // nocommit We need to ensure these actually typecheck
-                    // we pass expected type but I'm not sure if that will force the check
-                    let value_id = self.execute_static_expr(
-                        arg.value,
-                        ctx.with_expected_type(Some(param.type_id)),
-                        &[],
-                    )?;
-                    static_args.push(value_id);
-                }
-            };
         }
 
         // We have to evaluate the body
@@ -10958,8 +11025,50 @@ impl TypedProgram {
         if for_expr.is_static {
             return self.eval_static_for_expr(for_expr, ctx);
         };
+        if true {
+            let body_block_expr =
+                self.ast.exprs.add(ParsedExpr::Block(for_expr.body_block), false, None);
 
-        let binding_ident = for_expr.binding.unwrap_or(self.ast.idents.b.it);
+            let binding = match for_expr.binding {
+                None => {
+                    let code_value_id =
+                        self.make_static_code_value(&[(self.ast.idents.b.it, for_expr.span)]);
+                    let code_expr = self.add_static_constant_expr(code_value_id, for_expr.span);
+                    MacroArg::Typed(code_expr)
+                }
+                Some(binding) => MacroArg::Parsed(ParsedCallArg::unnamed(binding)),
+            };
+
+            let function_id = self
+                .scopes
+                .find_function_local(self.scopes.core_scope_id, self.ast.idents.b.for_each)
+                .unwrap();
+            let StaticExecutionResult::TypedExpr(macro_result) = self.execute_macro_call(
+                &[],
+                &[
+                    binding,
+                    MacroArg::Parsed(ParsedCallArg::unnamed(for_expr.iterable_expr)),
+                    MacroArg::Parsed(ParsedCallArg::unnamed(body_block_expr)),
+                ],
+                for_expr.span,
+                function_id,
+                false,
+                ctx,
+            )?
+            else {
+                unreachable!()
+            };
+            return Ok(macro_result);
+        }
+
+        let binding_ident = match for_expr.binding {
+            None => self.ast.idents.b.it,
+            Some(b) => self.ast.exprs.get(b).expect_variable().name.name,
+        };
+        let binding_span = match for_expr.binding {
+            None => for_expr.span,
+            Some(binding_expr) => self.ast.exprs.get_span(binding_expr),
+        };
         let iterable_expr = self.eval_expr(for_expr.iterable_expr, ctx.with_no_expected_type())?;
         let iterable_type = self.exprs.get_type(iterable_expr);
         let iterable_span = self.exprs.get_span(iterable_expr);
@@ -11081,7 +11190,7 @@ impl TypedProgram {
             binding_ident,
             next_getvalue_call,
             consequent_block.scope_id,
-            for_expr.binding_span,
+            binding_span,
         );
         let body_block = self.eval_block(
             &for_expr.body_block,
@@ -11163,6 +11272,7 @@ impl TypedProgram {
         Ok(final_expr)
     }
 
+    // nocommit: chopping block in light of new 'macro'?
     fn eval_static_for_expr(
         &mut self,
         for_expr: &ForExpr,
@@ -11189,7 +11299,11 @@ impl TypedProgram {
         );
         let binding_name = match for_expr.binding {
             None => self.ast.idents.b.it,
-            Some(binding) => binding,
+            Some(binding) => self.ast.exprs.get(binding).expect_variable().name.name,
+        };
+        let binding_span = match for_expr.binding {
+            None => for_expr.span,
+            Some(binding_expr) => self.ast.exprs.get_span(binding_expr),
         };
         let eval_context = ctx.with_scope(block.scope_id).with_no_expected_type();
         for elem in self.static_values.mem.getn(elements) {
@@ -11198,7 +11312,7 @@ impl TypedProgram {
                 binding_name,
                 elem_expr,
                 block.scope_id,
-                for_expr.binding_span,
+                binding_span,
             );
             let user_expr = self.eval_block(&for_expr.body_block, eval_context, false)?;
             self.push_block_stmt_id(&mut block, v.defn_stmt);
@@ -12108,8 +12222,10 @@ impl TypedProgram {
         // Non-literal receivers fall through to ordinary method resolution.
         if fn_call.is_method && n == self.ast.idents.b.fmt && fn_call.args.len() == 2 {
             let receiver = self.ast.mem.get_nth(fn_call.args, 0).value;
-            if matches!(self.ast.exprs.get(receiver), ParsedExpr::Literal(ParsedLiteral::String(..)))
-            {
+            if matches!(
+                self.ast.exprs.get(receiver),
+                ParsedExpr::Literal(ParsedLiteral::String(..))
+            ) {
                 return failf!(
                     call_span,
                     "this string has no holes or interpolations to format; write it bare"
@@ -12568,10 +12684,8 @@ impl TypedProgram {
                     }
                     ParsedExpr::InterpolatedString(is) => {
                         if newline {
-                            let mut parts = self
-                                .ast
-                                .mem
-                                .new_list_from_slice(is.parts, is.parts.len() + 1);
+                            let mut parts =
+                                self.ast.mem.new_list_from_slice(is.parts, is.parts.len() + 1);
                             parts.push(newline_part);
                             self.ast.mem.list_to_handle(parts)
                         } else {
@@ -12924,8 +13038,7 @@ impl TypedProgram {
         let call_span = fn_call.span;
         let ability_fn_sig = self.get_function(ability_function_ref.function_id).signature();
         let base_ability_id = ability_function_ref.ability_id;
-        let ability_fn_type =
-            *self.types.get(ability_fn_sig.function_type).as_function().unwrap();
+        let ability_fn_type = *self.types.get(ability_fn_sig.function_type).as_function().unwrap();
         let ability_fn_return_type = ability_fn_type.return_type;
         let ability_params = self.abilities.get(base_ability_id).parameters;
         let ability_self_type_id = self.abilities.get(base_ability_id).self_type_id;
@@ -13633,7 +13746,9 @@ impl TypedProgram {
         // Arguments already evaluated during resolution/inference; avoids double-compiles where possible
         let mut stashed_args: SV8<(ParsedExprId, TypedExprId)> = smallvec![];
         let call_resolution = match known_callee {
-            None => self.resolve_parsed_call(fn_call, known_args.as_ref(), ctx, &mut stashed_args)?,
+            None => {
+                self.resolve_parsed_call(fn_call, known_args.as_ref(), ctx, &mut stashed_args)?
+            }
             Some(callee) => CallResolution::Call(callee),
         };
         let (callee, method_receiver) = match call_resolution {
@@ -13669,7 +13784,19 @@ impl TypedProgram {
                 if method_receiver.is_some() {
                     return failf!(span, "Method-position macros are not yet supported");
                 }
-                return match self.execute_macro_call(fn_call, function_id, false, ctx)? {
+                let type_args = self.ast.mem.getn(fn_call.type_args);
+                let mut macro_args: SV8<_> = smallvec![];
+                for arg in self.ast.mem.getn(fn_call.args) {
+                    macro_args.push(MacroArg::Parsed(*arg))
+                }
+                return match self.execute_macro_call(
+                    type_args,
+                    &macro_args,
+                    fn_call.span,
+                    function_id,
+                    false,
+                    ctx,
+                )? {
                     StaticExecutionResult::TypedExpr(expr) => Ok(expr),
                     StaticExecutionResult::Definitions(_) => self
                         .ice_span(span, "Macro call in expression position produced definitions"),
@@ -16485,7 +16612,9 @@ impl TypedProgram {
             let (type_id, is_code) = match fn_param.type_expr {
                 ParsedFnParamType::Shorthand => (code_type, true),
                 ParsedFnParamType::Expr(type_expr) => {
-                    (self.eval_type_expr(type_expr, fn_scope_id)?, false)
+                    let t = self.eval_type_expr(type_expr, fn_scope_id)?;
+                    let is_code = t == code_type;
+                    (t, is_code)
                 }
             };
             let variable_id = self.variables.add(Variable {
@@ -18388,7 +18517,10 @@ impl TypedProgram {
             let info = self.types.get_defn_info(self.types.builtins.opt()).unwrap();
             let inner = self.types.get(optional_generic.inner);
             debug_assert!(info.name == self.ast.idents.b.opt);
-            debug_assert!(inner.as_sum().unwrap().variants.len() == 2);
+            let variants = self.types.mem.getn(inner.as_sum().unwrap().variants);
+            debug_assert_eq!(variants.len(), 2);
+            debug_assert_eq!(variants[OPT_NONE_VARIANT_INDEX].name, self.ast.idents.b.none);
+            debug_assert_eq!(variants[OPT_SOME_VARIANT_INDEX].name, self.ast.idents.b.some);
         }
         {
             let ordering_enum = self.types.get(self.types.builtins.ordering.unwrap()).expect_enum();

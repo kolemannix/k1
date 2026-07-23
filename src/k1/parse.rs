@@ -850,6 +850,13 @@ impl ParsedExpr {
             _ => panic!("expected lambda"),
         }
     }
+
+    pub fn expect_variable(&self) -> &ParsedVariable {
+        match self {
+            ParsedExpr::Variable(var) => var,
+            _ => panic!("expected variable"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -922,8 +929,8 @@ pub struct ParsedLoopExpr {
 #[derive(Debug, Clone)]
 pub struct ForExpr {
     pub iterable_expr: ParsedExprId,
-    pub binding: Option<StringId>,
-    pub binding_span: SpanId,
+    /// Must be a variable expr
+    pub binding: Option<ParsedExprId>,
     pub body_block: ParsedBlock,
     pub is_static: bool,
     pub span: SpanId,
@@ -2767,10 +2774,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
                 k if k.is_string() => {
                     let StringTokenInfo { delim: _, done } = k.as_string().unwrap();
-                    pending.push(Pending::Raw {
-                        token: current_token,
-                        starts_fresh: first_segment,
-                    });
+                    pending
+                        .push(Pending::Raw { token: current_token, starts_fresh: first_segment });
                     first_segment = false;
                     self.emit_semantic_token(current_token, SemanticTokenKind::String);
 
@@ -2799,11 +2804,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         // included — is stripped, and a whitespace-only last line is removed
         let is_block = match pending.first() {
             Some(Pending::Raw { token, .. }) => {
-                let text = Parser::tok_chars(
-                    &self.ast.spans,
-                    self.ast.sources.get(self.file_id),
-                    *token,
-                );
+                let text =
+                    Parser::tok_chars(&self.ast.spans, self.ast.sources.get(self.file_id), *token);
                 text.as_bytes().get(1) == Some(&b'\n')
             }
             _ => false,
@@ -2844,9 +2846,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 if at_line_start {
                                     commit_line!();
                                 }
-                            } else if c == info.delim.char()
-                                && info.done
-                                && chars.peek().is_none()
+                            } else if c == info.delim.char() && info.done && chars.peek().is_none()
                             {
                                 // Closing delimiter; its line's indent already counted
                             } else if c == '\n' {
@@ -2950,10 +2950,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     }
                     let string_id = self.ast.idents.intern(&buf);
 
-                    parts.push(InterpolatedStringPart::String {
-                        string_id,
-                        span: token.span,
-                    });
+                    parts.push(InterpolatedStringPart::String { string_id, span: token.span });
                 }
             }
         }
@@ -3687,7 +3684,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let resulting_expression = match first.kind {
             K::OpenParen => {
                 self.advance();
-                // Note: Here would be where we would parse tuples
                 let expr = self.expect_expression()?;
                 self.expect_kind(K::CloseParen)?;
                 Ok(Some(expr))
@@ -4056,21 +4052,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             let binding_ident = self.make_ident(second);
             self.advance_n(2);
-            Some(binding_ident)
+            let binding_expr = self.add_expression(ParsedExpr::Variable(ParsedVariable {
+                name: QIdent::naked(binding_ident, second.span),
+            }));
+            Some(binding_expr)
         } else {
             None
         };
         let iterable_expr = self.expect_expression()?;
         let body_expr = self.expect_block(ParsedBlockKind::LoopBody)?;
         let span = self.extend_span(first.span, body_expr.span);
-        let binding_span = match binding {
-            None => first.span,
-            Some(_) => second.span,
-        };
         let expr_id = self.add_expression(ParsedExpr::For(ForExpr {
             iterable_expr,
             binding,
-            binding_span,
             body_block: body_expr,
             is_static,
             span,
