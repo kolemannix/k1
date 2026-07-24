@@ -27,8 +27,10 @@
 //!
 //! Instruction encoding: header word `[opcode:u8 | A:u8 | B:u16]` followed by
 //! a fixed (per-opcode) number of u32 operand words.
-//! - `src` operands are tagged: bit 31 clear = frame word index, bit 31 set =
-//!   index into the program-wide constant pool (`consts: Vec<u64>`).
+//! - `src` operands are tagged: bit 31 set = index into the program-wide
+//!   constant pool (`consts: Vec<u64>`); else bit 30 set = the address
+//!   `fp + byte offset` itself (frame storage of allocas and agg call temps);
+//!   both clear = frame word index.
 //! - `dst` operands are untagged frame word indices (they may point past the
 //!   caller's own frame, into the callee's future param slots).
 //!
@@ -49,8 +51,14 @@ use crate::lex::SpanId;
 use crate::typer::types::PhysicalType;
 use crate::typer::{FunctionId, TypedExprId};
 
-/// Bit 31 of a src operand: set = constant pool index, clear = frame word index.
+/// Bit 31 of a src operand: set = constant pool index.
 pub const SRC_CONST_BIT: u32 = 0x8000_0000;
+
+/// Bit 30 of a src operand (when bit 31 is clear): the operand's value is the
+/// address `fp + payload` — alloca and agg-call-temp storage, baked at
+/// lowering time so no instruction materializes it. Both bits clear = frame
+/// word index.
+pub const SRC_FP_BIT: u32 = 0x4000_0000;
 
 /// Frame header size in words: [caller_fp][return_pc][sret_addr]
 pub const FRAME_HEADER_WORDS: u32 = 3;
@@ -78,7 +86,6 @@ pub enum Opcode {
     RetStore,
     // Memory / data
     Mov,
-    Lea,
     LoadGlobal,
     Load,
     Store,
@@ -147,7 +154,6 @@ impl Opcode {
             Opcode::RetGet => 1,     // [dst]
             Opcode::RetStore => 1,   // A = width in bits; [addr src]
             Opcode::Mov => 2,        // [dst][src]
-            Opcode::Lea => 2,        // [dst][frame byte offset]
             Opcode::LoadGlobal => 3, // [dst][global_id][storage_pt]
             Opcode::Load => 2,       // A = width in bits; [dst][addr src]
             Opcode::Store => 2,      // A = width in bits; [addr src][val src]
@@ -203,7 +209,6 @@ impl Opcode {
             Opcode::RetGet => "ret_get",
             Opcode::RetStore => "ret_store",
             Opcode::Mov => "mov",
-            Opcode::Lea => "lea",
             Opcode::LoadGlobal => "load_global",
             Opcode::Load => "load",
             Opcode::Store => "store",

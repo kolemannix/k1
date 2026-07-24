@@ -40,7 +40,7 @@ libc = "0.2.177"
 
 # LLVM / compiler toolchain stuff
 llvm-sys = { version = "211.0.0" }
-inkwell = { git = "https://github.com/TheDan64/inkwell", version = "0.8.0", features = ["llvm21-1"] }
+inkwell = { git = "https://github.com/TheDan64/inkwell", version = "0.8.0", default-features = false, features = ["llvm21-1", "target-x86", "target-aarch64", "target-webassembly"] }
 zstd-sys = "2.0.8"
 libffi = "5.0.0"
 # libffi-sys = "4.0.0"
@@ -76,8 +76,8 @@ required-features = ["lsp"]
 name = "repl"
 path = "src/bin/repl_main.rs"
 
-# [profile.dev]
-# debug = 0
+[profile.dev]
+debug = 0
 # strip = "debuginfo"
 
 [profile.release]

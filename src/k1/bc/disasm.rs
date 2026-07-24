@@ -10,8 +10,8 @@ use crate::ir;
 use crate::typer::TypedProgram;
 
 use super::{
-    CastKind, Opcode, SRC_CONST_BIT, builtin_from_tag, float_pred_from_tag, header_a, header_b,
-    header_op, int_pred_from_tag,
+    CastKind, Opcode, SRC_CONST_BIT, SRC_FP_BIT, builtin_from_tag, float_pred_from_tag, header_a,
+    header_b, header_op, int_pred_from_tag,
 };
 
 fn write_src(w: &mut String, k1: &TypedProgram, src: u32) {
@@ -21,6 +21,8 @@ fn write_src(w: &mut String, k1: &TypedProgram, src: u32) {
             Some(v) => write!(w, "c[{}]={:#x}", idx, v).unwrap(),
             None => write!(w, "c[{}]=<oob>", idx).unwrap(),
         }
+    } else if src & SRC_FP_BIT != 0 {
+        write!(w, "fp+{}", src & !SRC_FP_BIT).unwrap();
     } else {
         write!(w, "f[{}]", src).unwrap();
     }
@@ -120,11 +122,6 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write_dst(w, ops[0]);
             write!(w, " <- ").unwrap();
             write_src(w, k1, ops[1]);
-        }
-        Opcode::Lea => {
-            write!(w, "lea ").unwrap();
-            write_dst(w, ops[0]);
-            write!(w, " <- fp+{}", ops[1]).unwrap();
         }
         Opcode::LoadGlobal => {
             write!(w, "load_global ").unwrap();

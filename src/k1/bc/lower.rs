@@ -28,7 +28,7 @@ use crate::typer::{FunctionId, K1Result, TypedExprId, TypedFloatValue, TypedProg
 use crate::vm;
 
 use super::{
-    CastKind, FRAME_HEADER_WORDS, Opcode, PENDING_PC, UnitInfo, UnitKind, builtin_tag,
+    CastKind, FRAME_HEADER_WORDS, Opcode, PENDING_PC, SRC_FP_BIT, UnitInfo, UnitKind, builtin_tag,
     float_pred_tag, header, int_pred_tag,
 };
 
@@ -116,10 +116,11 @@ pub(crate) struct LowerCtx {
     scratch1: u32,
     scratch_flip: bool,
 
+    /// Operand encoding per value inst: a frame word index, or `SRC_FP_BIT |
+    /// byte offset` for allocas and agg call temps (their frame address is
+    /// baked into consumers; nothing materializes it)
     slots: FxHashMap<InstId, u32>,
     fwd: FxHashMap<InstId, ir::Value>,
-    alloca_offsets: FxHashMap<InstId, u32>,
-    call_temp_offsets: FxHashMap<InstId, u32>,
     /// Flat (block, phi) pairs in block-then-phi order; blocks with phis are
     /// rare, so edge-copy emission just scans this
     block_phis: Vec<(BlockId, InstId)>,
@@ -151,8 +152,6 @@ impl LowerCtx {
             scratch_flip: false,
             slots: FxHashMap::default(),
             fwd: FxHashMap::default(),
-            alloca_offsets: FxHashMap::default(),
-            call_temp_offsets: FxHashMap::default(),
             block_phis: Vec::new(),
             allocas: Vec::new(),
             agg_call_temps: Vec::new(),
@@ -175,8 +174,6 @@ impl LowerCtx {
         self.scratch_flip = false;
         self.slots.clear();
         self.fwd.clear();
-        self.alloca_offsets.clear();
-        self.call_temp_offsets.clear();
         self.block_phis.clear();
         self.allocas.clear();
         self.agg_call_temps.clear();
@@ -386,8 +383,6 @@ fn lower_unit_with_ctx(
                     ctx.fwd.insert(inst_id, v);
                 }
                 Inst::Alloca { vm_layout, .. } => {
-                    ctx.slots.insert(inst_id, next_word);
-                    next_word += 1;
                     ctx.allocas.push((inst_id, vm_layout));
                 }
                 Inst::Phi { t, .. } => {
@@ -399,15 +394,15 @@ fn lower_unit_with_ctx(
                 }
                 Inst::Call { call_id } => {
                     let call = *k1.ir.calls.get(call_id);
-                    if !call.ret_type.is_empty() {
+                    if call.dst.is_none() && call.ret_type.is_agg() {
+                        // Value = the temp's frame address; encoded fp-relative
+                        let layout = k1.types.get_pt_layout(call.ret_type);
+                        ctx.agg_call_temps.push((inst_id, layout));
+                    } else if !call.ret_type.is_empty() {
                         ctx.slots.insert(inst_id, next_word);
                         next_word += 1;
                     } else {
                         debug_assert!(call.dst.is_none(), "call with dst but empty return type");
-                    }
-                    if call.dst.is_none() && call.ret_type.is_agg() {
-                        let layout = k1.types.get_pt_layout(call.ret_type);
-                        ctx.agg_call_temps.push((inst_id, layout));
                     }
                 }
                 _ => {
@@ -439,7 +434,7 @@ fn lower_unit_with_ctx(
             align
         );
         area_bytes = align_up(area_bytes, align);
-        ctx.alloca_offsets.insert(inst_id, area_bytes);
+        ctx.slots.insert(inst_id, SRC_FP_BIT | area_bytes);
         area_bytes += layout.size;
     }
     for i in 0..ctx.agg_call_temps.len() {
@@ -447,10 +442,11 @@ fn lower_unit_with_ctx(
         let align = layout.align.max(1);
         assert!(align <= 16, "bc: agg return temp alignment {} > 16 unsupported", align);
         area_bytes = align_up(area_bytes, align);
-        ctx.call_temp_offsets.insert(inst_id, area_bytes);
+        ctx.slots.insert(inst_id, SRC_FP_BIT | area_bytes);
         area_bytes += layout.size;
     }
     ctx.frame_bytes = align_up(area_bytes.max(16), 16);
+    assert!(ctx.frame_bytes < SRC_FP_BIT, "bc: frame too large for fp-relative operand encoding");
 
     // -------------------------- Pass B: emit ---------------------------
     let mut first = true;
@@ -467,7 +463,7 @@ fn lower_unit_with_ctx(
         let mut inst_h = block_node.data.instrs.first;
         while !inst_h.is_nil() {
             let inst_node = *k1.ir.mem.get(inst_h);
-            emit_inst(k1, ctx, block_h, inst_node.data)?;
+            emit_inst(k1, ctx, block_h, block_node.next, inst_node.data)?;
             inst_h = inst_node.next;
         }
         block_h = block_node.next;
@@ -550,6 +546,7 @@ fn emit_inst(
     k1: &mut TypedProgram,
     ctx: &mut LowerCtx,
     block_id: BlockId,
+    next_block: BlockId,
     inst_id: InstId,
 ) -> K1Result<()> {
     let inst = *k1.ir.instrs.get(inst_id);
@@ -588,21 +585,15 @@ fn emit_inst(
 
     match inst {
         // No code: constants and no-op conversions are handled at operand
-        // resolution; phis are handled as edge copies.
+        // resolution; phis are handled as edge copies; alloca addresses are
+        // baked into consumers as fp-relative operands.
         Inst::Data(_) => {}
         Inst::BitCast { .. }
         | Inst::IntExtU { .. }
         | Inst::PtrToWord { .. }
         | Inst::WordToPtr { .. } => {}
         Inst::Phi { .. } => {}
-
-        Inst::Alloca { .. } => {
-            let offset = *ctx.alloca_offsets.get(&inst_id).unwrap();
-            let dst = ctx.slot_of(inst_id);
-            ctx.emit(Opcode::Lea, 0, 0);
-            ctx.push(dst);
-            ctx.push(offset);
-        }
+        Inst::Alloca { .. } => {}
         Inst::Store { dst, value, t } => {
             let addr = resolve_src(k1, ctx, dst);
             let val = resolve_src(k1, ctx, value);
@@ -692,8 +683,12 @@ fn emit_inst(
         }
         Inst::Jump(target) => {
             emit_phi_copies(k1, ctx, block_id, target);
-            ctx.emit(Opcode::Jump, 0, 0);
-            ctx.push_block_target(target);
+            // Fall through when the target is emitted next; only one pred of
+            // a join can be laid out before it, every other pred still jumps
+            if target != next_block {
+                ctx.emit(Opcode::Jump, 0, 0);
+                ctx.push_block_target(target);
+            }
         }
         Inst::JumpIf { cond, cons, alt } => {
             let cond_src = resolve_src(k1, ctx, cond);
@@ -814,9 +809,9 @@ fn emit_call(
         ctx.push(src);
     }
 
-    // 2. Return-destination setup. Mirrors the old VM: the call's slot holds
-    //    the destination *address* when there is one (dst given, or agg
-    //    return via a statically reserved temp), otherwise the scalar result.
+    // 2. Return-destination setup. With a dst, the call's slot holds the
+    //    destination *address*; scalar returns without one hold the result;
+    //    agg returns without one encode their reserved temp fp-relative.
     let call_slot = if ret_pt.is_empty() { None } else { Some(ctx.slot_of(inst_id)) };
     match call.dst {
         Some(dst_value) => {
@@ -834,15 +829,11 @@ fn emit_call(
             }
         }
         None if is_agg => {
-            let temp_off = *ctx.call_temp_offsets.get(&inst_id).unwrap();
-            let call_slot = call_slot.expect("agg call ret with no slot");
-            ctx.emit(Opcode::Lea, 0, 0);
-            ctx.push(call_slot);
-            ctx.push(temp_off);
+            let temp_src = call_slot.expect("agg call ret with no temp");
             let sret = ctx.out_sret_word();
             ctx.emit(Opcode::Mov, 0, 0);
             ctx.push(sret);
-            ctx.push(call_slot);
+            ctx.push(temp_src);
         }
         None => {}
     }

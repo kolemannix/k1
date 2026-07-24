@@ -28,8 +28,8 @@ use crate::vm::{
 
 use super::lower;
 use super::{
-    CastKind, OPCODE_COUNT, Opcode, SRC_CONST_BIT, UnitKind, builtin_from_tag, float_pred_from_tag,
-    header_a, header_b, header_op, int_pred_from_tag,
+    CastKind, OPCODE_COUNT, Opcode, SRC_CONST_BIT, SRC_FP_BIT, UnitKind, builtin_from_tag,
+    float_pred_from_tag, header_a, header_b, header_op, int_pred_from_tag,
 };
 
 pub fn execute_compiled_expr(
@@ -287,11 +287,13 @@ fn exec_loop(
             }
         }};
     }
-    // Tagged src operand: frame word or constant pool entry
+    // Tagged src operand: frame word, constant pool entry, or fp-relative address
     macro_rules! read_src {
         ($w:expr) => {{
             let w: u32 = $w;
-            if w & SRC_CONST_BIT != 0 {
+            if w & (SRC_CONST_BIT | SRC_FP_BIT) == 0 {
+                Value::u64(unsafe { *word_ptr!(w) })
+            } else if w & SRC_CONST_BIT != 0 {
                 let idx = (w & !SRC_CONST_BIT) as usize;
                 if cfg!(debug_assertions) {
                     Value::u64(k1.bc.consts[idx])
@@ -299,7 +301,7 @@ fn exec_loop(
                     Value::u64(unsafe { *k1.bc.consts.get_unchecked(idx) })
                 }
             } else {
-                Value::u64(unsafe { *word_ptr!(w) })
+                Value::ptr(unsafe { fp.add((w & !SRC_FP_BIT) as usize) })
             }
         }};
     }
@@ -309,6 +311,7 @@ fn exec_loop(
             // their own unsafe, e.g. unchecked code reads)
             let w: u32 = $w;
             let v: Value = $v;
+            debug_assert!(w & (SRC_CONST_BIT | SRC_FP_BIT) == 0, "tagged dst operand");
             unsafe { *word_ptr!(w) = v.bits() }
         }};
     }
@@ -545,12 +548,6 @@ fn exec_loop(
                 let v = read_src!(operand!(1));
                 write_slot!(operand!(0), v);
                 advance!(Opcode::Mov);
-            }
-            Opcode::Lea => {
-                let offset = operand!(1) as usize;
-                let addr = unsafe { fp.add(offset) };
-                write_slot!(operand!(0), Value::ptr(addr));
-                advance!(Opcode::Lea);
             }
             Opcode::LoadGlobal => {
                 let dst = operand!(0);
