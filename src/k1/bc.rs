@@ -137,6 +137,14 @@ impl Opcode {
         unsafe { core::mem::transmute::<u8, Opcode>(v) }
     }
 
+    /// Total operand words for an instruction with header B field `b`
+    pub const fn operand_count_with(self, b: u16) -> usize {
+        match self {
+            Opcode::Call | Opcode::CallIndirect => self.operand_count() + b as usize,
+            _ => self.operand_count(),
+        }
+    }
+
     pub const fn operand_count(self) -> usize {
         // TODO(perf): I think we could bake the operand count into the opcode bits.
         match self {
@@ -147,8 +155,10 @@ impl Opcode {
             Opcode::Unreachable => 0,
             Opcode::Ret => 1,          // [src]
             Opcode::RetAgg => 2,       // [src][size]
-            Opcode::Call => 2,         // [target pc][fp_delta bytes]
-            Opcode::CallIndirect => 2, // [fn src][fp_delta]
+            // Call forms carry B = nargs additional arg-src operands beyond
+            // the base count here (see operand_count_with)
+            Opcode::Call => 3,         // [target pc][fp_delta bytes][sret src] + args
+            Opcode::CallIndirect => 3, // [fn src][fp_delta][sret src] + args
             Opcode::CallExtern => 6, // [function_id][lib_name(0=none)][fn_name][ret_pt][fp_delta][nargs]
             Opcode::CallBuiltin => 3, // A = builtin tag; [ret_pt][fp_delta][nargs]
             Opcode::RetGet => 1,     // [dst]

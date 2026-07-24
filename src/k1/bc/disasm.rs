@@ -32,6 +32,20 @@ fn write_dst(w: &mut String, dst: u32) {
     write!(w, "f[{}]", dst).unwrap();
 }
 
+/// [sret src][arg srcs...] tail shared by call and call_indirect
+fn write_call_tail(w: &mut String, k1: &TypedProgram, ops: &[u32]) {
+    write!(w, " sret=").unwrap();
+    write_src(w, k1, ops[2]);
+    write!(w, " args(").unwrap();
+    for (i, arg) in ops[3..].iter().enumerate() {
+        if i > 0 {
+            write!(w, ", ").unwrap();
+        }
+        write_src(w, k1, *arg);
+    }
+    write!(w, ")").unwrap();
+}
+
 pub fn disasm_range(k1: &TypedProgram, start: u32, end: u32) -> String {
     let mut s = String::new();
     let mut pc = start as usize;
@@ -54,7 +68,7 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
     let op = Opcode::from_u8(header_op(h));
     let a = header_a(h);
     let b = header_b(h);
-    let n = op.operand_count();
+    let n = op.operand_count_with(b);
     let ops: &[u32] = &code[pc + 1..pc + 1 + n];
 
     write!(w, "{:6} ", pc).unwrap();
@@ -84,11 +98,13 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
         }
         Opcode::Call => {
             write!(w, "call @{} fp+={}", ops[0], ops[1]).unwrap();
+            write_call_tail(w, k1, ops);
         }
         Opcode::CallIndirect => {
             write!(w, "call_indirect ").unwrap();
             write_src(w, k1, ops[0]);
             write!(w, " fp+={}", ops[1]).unwrap();
+            write_call_tail(w, k1, ops);
         }
         Opcode::CallExtern => {
             write!(
@@ -133,11 +149,17 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write_dst(w, ops[0]);
             write!(w, " <- [").unwrap();
             write_src(w, k1, ops[1]);
+            if b != 0 {
+                write!(w, "+{}", b).unwrap();
+            }
             write!(w, "]").unwrap();
         }
         Opcode::Store => {
             write!(w, "store.{} [", a).unwrap();
             write_src(w, k1, ops[0]);
+            if b != 0 {
+                write!(w, "+{}", b).unwrap();
+            }
             write!(w, "] <- ").unwrap();
             write_src(w, k1, ops[1]);
         }

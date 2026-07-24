@@ -121,6 +121,12 @@ pub(crate) struct LowerCtx {
     /// baked into consumers; nothing materializes it)
     slots: FxHashMap<InstId, u32>,
     fwd: FxHashMap<InstId, ir::Value>,
+    /// StructOffsets that emit nothing: every use is a Load address or Store
+    /// destination, so the (base, byte offset) bakes into those instructions'
+    /// B field instead
+    so_folded: FxHashMap<InstId, (ir::Value, u16)>,
+    /// Per-call operand staging, pooled across emit_call invocations
+    arg_srcs: Vec<u32>,
     /// Flat (block, phi) pairs in block-then-phi order; blocks with phis are
     /// rare, so edge-copy emission just scans this
     block_phis: Vec<(BlockId, InstId)>,
@@ -152,6 +158,8 @@ impl LowerCtx {
             scratch_flip: false,
             slots: FxHashMap::default(),
             fwd: FxHashMap::default(),
+            so_folded: FxHashMap::default(),
+            arg_srcs: Vec::new(),
             block_phis: Vec::new(),
             allocas: Vec::new(),
             agg_call_temps: Vec::new(),
@@ -174,6 +182,8 @@ impl LowerCtx {
         self.scratch_flip = false;
         self.slots.clear();
         self.fwd.clear();
+        self.so_folded.clear();
+        self.arg_srcs.clear();
         self.block_phis.clear();
         self.allocas.clear();
         self.agg_call_temps.clear();
@@ -274,19 +284,23 @@ fn const_of_data(imm: DataInst) -> u64 {
     }
 }
 
+/// Chase forwarding chains: no-op conversions (BitCast/IntExtU/PtrToWord/
+/// WordToPtr) and dst-carrying calls, whose value is their destination
+fn chase_fwd(fwd: &FxHashMap<InstId, ir::Value>, mut value: ir::Value) -> ir::Value {
+    while let ir::Value::Inst(id) = value {
+        match fwd.get(&id) {
+            Some(f) => value = *f,
+            None => break,
+        }
+    }
+    value
+}
+
 /// Resolve an ir operand to a tagged src word. May emit a `LoadGlobal` into a
 /// scratch slot (globals are lazy and per-VM-mutable, so they cannot be baked).
 /// Everything else becomes a frame word index or a baked constant.
 fn resolve_src(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::Value) -> u32 {
-    // Chase forwarding chains (BitCast/IntExtU/PtrToWord/WordToPtr are no-ops)
-    let mut value = value;
-    while let ir::Value::Inst(id) = value {
-        match ctx.fwd.get(&id) {
-            Some(fwd) => value = *fwd,
-            None => break,
-        }
-    }
-    match value {
+    match chase_fwd(&ctx.fwd, value) {
         ir::Value::Inst(inst_id) => {
             if let Some(slot) = ctx.slots.get(&inst_id) {
                 return *slot;
@@ -327,6 +341,17 @@ fn resolve_src(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::Value) -> u
             scratch
         }
     }
+}
+
+/// Resolve a memory operand for Load/Store, baking a folded StructOffset's
+/// byte offset into the returned B value instead of an address computation.
+fn resolve_addr(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::Value) -> (u32, u16) {
+    if let ir::Value::Inst(id) = chase_fwd(&ctx.fwd, value) {
+        if let Some((base, off)) = ctx.so_folded.get(&id).copied() {
+            return (resolve_src(k1, ctx, base), off);
+        }
+    }
+    (resolve_src(k1, ctx, value), 0)
 }
 
 fn lower_unit(k1: &mut TypedProgram, unit: IrUnit) -> K1Result<UnitInfo> {
@@ -394,15 +419,32 @@ fn lower_unit_with_ctx(
                 }
                 Inst::Call { call_id } => {
                     let call = *k1.ir.calls.get(call_id);
-                    if call.dst.is_none() && call.ret_type.is_agg() {
-                        // Value = the temp's frame address; encoded fp-relative
-                        let layout = k1.types.get_pt_layout(call.ret_type);
-                        ctx.agg_call_temps.push((inst_id, layout));
-                    } else if !call.ret_type.is_empty() {
-                        ctx.slots.insert(inst_id, next_word);
-                        next_word += 1;
-                    } else {
-                        debug_assert!(call.dst.is_none(), "call with dst but empty return type");
+                    match call.dst {
+                        Some(dst) => {
+                            debug_assert!(
+                                !call.ret_type.is_empty(),
+                                "call with dst but empty return type"
+                            );
+                            // The call's value IS its destination
+                            ctx.fwd.insert(inst_id, dst);
+                        }
+                        None if call.ret_type.is_agg() => {
+                            // Value = the temp's frame address; encoded fp-relative
+                            let layout = k1.types.get_pt_layout(call.ret_type);
+                            ctx.agg_call_temps.push((inst_id, layout));
+                        }
+                        None if !call.ret_type.is_empty() => {
+                            ctx.slots.insert(inst_id, next_word);
+                            next_word += 1;
+                        }
+                        None => {}
+                    }
+                }
+                Inst::StructOffset { base, vm_offset, .. } => {
+                    ctx.slots.insert(inst_id, next_word);
+                    next_word += 1;
+                    if vm_offset <= u16::MAX as u32 {
+                        ctx.so_folded.insert(inst_id, (base, vm_offset as u16));
                     }
                 }
                 _ => {
@@ -417,6 +459,32 @@ fn lower_unit_with_ctx(
             inst_h = inst_node.next;
         }
         block_h = block_node.next;
+    }
+
+    // A StructOffset use anywhere but a Load address or Store destination
+    // forces it to materialize as PtrAddImm; drop those from the fold set
+    if !ctx.so_folded.is_empty() {
+        fn unfold_use(ctx: &mut LowerCtx, v: ir::Value) {
+            if let ir::Value::Inst(id) = chase_fwd(&ctx.fwd, v) {
+                ctx.so_folded.remove(&id);
+            }
+        }
+        let mut block_h = unit.blocks.first;
+        while !block_h.is_nil() {
+            let block_node = *k1.ir.mem.get(block_h);
+            let mut inst_h = block_node.data.instrs.first;
+            while !inst_h.is_nil() {
+                let inst_node = *k1.ir.mem.get(inst_h);
+                let inst = *k1.ir.instrs.get(inst_node.data);
+                match inst {
+                    Inst::Load { .. } => {}
+                    Inst::Store { value, .. } => unfold_use(ctx, value),
+                    _ => ir::visit_inst_values(&k1.ir, &inst, &mut |v| unfold_use(ctx, v)),
+                }
+                inst_h = inst_node.next;
+            }
+            block_h = block_node.next;
+        }
     }
 
     ctx.scratch0 = next_word;
@@ -595,16 +663,16 @@ fn emit_inst(
         Inst::Phi { .. } => {}
         Inst::Alloca { .. } => {}
         Inst::Store { dst, value, t } => {
-            let addr = resolve_src(k1, ctx, dst);
+            let (addr, off) = resolve_addr(k1, ctx, dst);
             let val = resolve_src(k1, ctx, value);
-            ctx.emit(Opcode::Store, wbits(t), 0);
+            ctx.emit(Opcode::Store, wbits(t), off);
             ctx.push(addr);
             ctx.push(val);
         }
         Inst::Load { t, src } => {
-            let addr = resolve_src(k1, ctx, src);
+            let (addr, off) = resolve_addr(k1, ctx, src);
             let dst = ctx.slot_of(inst_id);
-            ctx.emit(Opcode::Load, wbits(t), 0);
+            ctx.emit(Opcode::Load, wbits(t), off);
             ctx.push(dst);
             ctx.push(addr);
         }
@@ -660,12 +728,14 @@ fn emit_inst(
             ctx.push(vm_size);
         }
         Inst::StructOffset { base, vm_offset, .. } => {
-            let base_src = resolve_src(k1, ctx, base);
-            let dst = ctx.slot_of(inst_id);
-            ctx.emit(Opcode::PtrAddImm, 0, 0);
-            ctx.push(dst);
-            ctx.push(base_src);
-            ctx.push(vm_offset);
+            if !ctx.so_folded.contains_key(&inst_id) {
+                let base_src = resolve_src(k1, ctx, base);
+                let dst = ctx.slot_of(inst_id);
+                ctx.emit(Opcode::PtrAddImm, 0, 0);
+                ctx.push(dst);
+                ctx.push(base_src);
+                ctx.push(vm_offset);
+            }
         }
         Inst::ArrayOffset { element_t, base, element_index } => {
             let base_src = resolve_src(k1, ctx, base);
@@ -797,80 +867,102 @@ fn emit_call(
     let is_agg = ret_pt.is_agg();
     let args: &[ir::Value] = k1.ir.mem.getn(call.args);
     let nargs = args.len() as u32;
+    assert!(nargs <= u16::MAX as u32, "call with more than u16::MAX args");
     let frame_bytes = ctx.frame_bytes;
 
-    // 1. Write args into the callee's future param slots
-    for (k, arg) in args.iter().enumerate() {
+    // The sret src: the destination address for agg returns, else const 0
+    // (the callee only reads sret when it returns an aggregate)
+    let mut resolve_sret = |k1: &mut TypedProgram, ctx: &mut LowerCtx| -> u32 {
+        if !is_agg {
+            return k1.bc.intern_const(0);
+        }
         ctx.begin_inst();
-        let src = resolve_src(k1, ctx, *arg);
-        let dst = ctx.out_arg_word(k as u32);
-        ctx.emit(Opcode::Mov, 0, 0);
-        ctx.push(dst);
-        ctx.push(src);
-    }
+        match call.dst {
+            Some(dst) => resolve_src(k1, ctx, dst),
+            None => ctx.slot_of(inst_id), // fp-relative reserved temp
+        }
+    };
 
-    // 2. Return-destination setup. With a dst, the call's slot holds the
-    //    destination *address*; scalar returns without one hold the result;
-    //    agg returns without one encode their reserved temp fp-relative.
-    let call_slot = if ret_pt.is_empty() { None } else { Some(ctx.slot_of(inst_id)) };
-    match call.dst {
-        Some(dst_value) => {
-            ctx.begin_inst();
-            let dst_src = resolve_src(k1, ctx, dst_value);
-            let call_slot = call_slot.expect("call with dst but empty ret");
-            ctx.emit(Opcode::Mov, 0, 0);
-            ctx.push(call_slot);
-            ctx.push(dst_src);
+    match call.callee {
+        // Direct and indirect calls carry sret + args as operands (nargs in
+        // the header B field); the exec arm writes them into the new frame
+        IrCallee::Direct(_) | IrCallee::Indirect(_, _) => {
+            // Resolve operands up front; they are all live at the Call, so a
+            // value in a LoadGlobal scratch slot is parked in the callee slot
+            // it is destined for anyway (the Call arm rewrites it in place)
+            ctx.arg_srcs.clear();
+            for (k, arg) in args.iter().enumerate() {
+                ctx.begin_inst();
+                let mut src = resolve_src(k1, ctx, *arg);
+                if src == ctx.scratch0 || src == ctx.scratch1 {
+                    let park = ctx.out_arg_word(k as u32);
+                    ctx.emit(Opcode::Mov, 0, 0);
+                    ctx.push(park);
+                    ctx.push(src);
+                    src = park;
+                }
+                ctx.arg_srcs.push(src);
+            }
+            let mut sret_src = resolve_sret(k1, ctx);
+            if sret_src == ctx.scratch0 || sret_src == ctx.scratch1 {
+                let park = ctx.out_sret_word();
+                ctx.emit(Opcode::Mov, 0, 0);
+                ctx.push(park);
+                ctx.push(sret_src);
+                sret_src = park;
+            }
+
+            match call.callee {
+                IrCallee::Direct(function_id) => {
+                    if k1.bc.in_progress.contains(&function_id) {
+                        // Recursion cycle: patch when the callee's code_start lands
+                        ctx.emit(Opcode::Call, 0, nargs as u16);
+                        let at = ctx.buf.len() as u32;
+                        ctx.push(PENDING_PC);
+                        ctx.call_fixups.push((at, function_id));
+                        ctx.push(frame_bytes);
+                    } else {
+                        let info = get_or_lower_function(k1, function_id, ctx.cur_span)?;
+                        if info.kind != UnitKind::Body {
+                            return failf!(
+                                ctx.cur_span,
+                                "Direct call to bodyless ({:?}) function: {}",
+                                info.kind,
+                                k1.function_id_to_string(function_id, false)
+                            );
+                        }
+                        ctx.emit(Opcode::Call, 0, nargs as u16);
+                        ctx.push(info.code_start);
+                        ctx.push(frame_bytes);
+                    }
+                }
+                IrCallee::Indirect(_, fn_value) => {
+                    // Resolved last: nothing after it can clobber its scratch
+                    ctx.begin_inst();
+                    let fn_src = resolve_src(k1, ctx, fn_value);
+                    ctx.emit(Opcode::CallIndirect, 0, nargs as u16);
+                    ctx.push(fn_src);
+                    ctx.push(frame_bytes);
+                }
+                _ => unreachable!(),
+            }
+            ctx.push(sret_src);
+            for i in 0..ctx.arg_srcs.len() {
+                let s = ctx.arg_srcs[i];
+                ctx.push(s);
+            }
+        }
+        // Extern/builtin handlers read args from the callee param slots, so
+        // those are staged with Movs as before
+        IrCallee::Extern { library_name, function_name, function_id } => {
+            emit_arg_movs(k1, ctx, args);
             if is_agg {
+                let sret_src = resolve_sret(k1, ctx);
                 let sret = ctx.out_sret_word();
                 ctx.emit(Opcode::Mov, 0, 0);
                 ctx.push(sret);
-                ctx.push(call_slot);
+                ctx.push(sret_src);
             }
-        }
-        None if is_agg => {
-            let temp_src = call_slot.expect("agg call ret with no temp");
-            let sret = ctx.out_sret_word();
-            ctx.emit(Opcode::Mov, 0, 0);
-            ctx.push(sret);
-            ctx.push(temp_src);
-        }
-        None => {}
-    }
-
-    // 3. The call itself
-    match call.callee {
-        IrCallee::Direct(function_id) => {
-            if k1.bc.in_progress.contains(&function_id) {
-                // Recursion cycle: patch when the callee's code_start lands
-                ctx.emit(Opcode::Call, 0, 0);
-                let at = ctx.buf.len() as u32;
-                ctx.push(PENDING_PC);
-                ctx.call_fixups.push((at, function_id));
-                ctx.push(frame_bytes);
-            } else {
-                let info = get_or_lower_function(k1, function_id, ctx.cur_span)?;
-                if info.kind != UnitKind::Body {
-                    return failf!(
-                        ctx.cur_span,
-                        "Direct call to bodyless ({:?}) function: {}",
-                        info.kind,
-                        k1.function_id_to_string(function_id, false)
-                    );
-                }
-                ctx.emit(Opcode::Call, 0, 0);
-                ctx.push(info.code_start);
-                ctx.push(frame_bytes);
-            }
-        }
-        IrCallee::Indirect(_, fn_value) => {
-            ctx.begin_inst();
-            let fn_src = resolve_src(k1, ctx, fn_value);
-            ctx.emit(Opcode::CallIndirect, 0, 0);
-            ctx.push(fn_src);
-            ctx.push(frame_bytes);
-        }
-        IrCallee::Extern { library_name, function_name, function_id } => {
             ctx.emit(Opcode::CallExtern, 0, 0);
             ctx.push(function_id.as_u32());
             // StringIds are 0-based indices; bias by 1 so 0 can mean "none"
@@ -881,6 +973,14 @@ fn emit_call(
             ctx.push(nargs);
         }
         IrCallee::BackendBuiltin(_, builtin) => {
+            emit_arg_movs(k1, ctx, args);
+            if is_agg {
+                let sret_src = resolve_sret(k1, ctx);
+                let sret = ctx.out_sret_word();
+                ctx.emit(Opcode::Mov, 0, 0);
+                ctx.push(sret);
+                ctx.push(sret_src);
+            }
             ctx.emit(Opcode::CallBuiltin, builtin_tag(builtin), 0);
             ctx.push(ret_pt.to_u32());
             ctx.push(frame_bytes);
@@ -888,25 +988,36 @@ fn emit_call(
         }
     }
 
-    // 4. Result delivery for scalar returns (agg results were written through
-    //    sret by the callee/handler; empty returns produce nothing).
+    // Result delivery for scalar returns (agg results were written through
+    // sret by the callee/handler; empty returns produce nothing).
     if !ret_pt.is_empty() && !is_agg {
-        let call_slot = call_slot.unwrap();
         match call.dst {
-            Some(_) => {
-                // The call slot holds the destination address; store through it
+            Some(dst) => {
+                ctx.begin_inst();
+                let d = resolve_src(k1, ctx, dst);
                 let t = ret_pt.expect_scalar();
                 ctx.emit(Opcode::RetStore, wbits(t), 0);
-                ctx.push(call_slot);
+                ctx.push(d);
             }
             None => {
                 ctx.emit(Opcode::RetGet, 0, 0);
-                ctx.push(call_slot);
+                ctx.push(ctx.slot_of(inst_id));
             }
         }
     }
 
     Ok(())
+}
+
+fn emit_arg_movs(k1: &mut TypedProgram, ctx: &mut LowerCtx, args: &[ir::Value]) {
+    for (k, arg) in args.iter().enumerate() {
+        ctx.begin_inst();
+        let src = resolve_src(k1, ctx, *arg);
+        let dst = ctx.out_arg_word(k as u32);
+        ctx.emit(Opcode::Mov, 0, 0);
+        ctx.push(dst);
+        ctx.push(src);
+    }
 }
 
 /// Sequential phi copies for the CFG edge `from -> target`, in phi order —

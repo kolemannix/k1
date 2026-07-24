@@ -736,6 +736,102 @@ impl Inst {
     }
 }
 
+/// Visit every `Value` operand of `inst`, read-only. Calls, phis, and
+/// cmpxchgs read their out-of-line payloads from the arenas.
+pub fn visit_inst_values(ir: &ProgramIr, inst: &Inst, f: &mut impl FnMut(Value)) {
+    match *inst {
+        Inst::Data(_)
+        | Inst::Alloca { .. }
+        | Inst::Fence { .. }
+        | Inst::Jump(_)
+        | Inst::Unreachable => {}
+        Inst::Store { dst, value, .. } | Inst::AtomicStore { dst, value, .. } => {
+            f(dst);
+            f(value);
+        }
+        Inst::Load { src, .. } | Inst::AtomicLoad { src, .. } => f(src),
+        Inst::AtomicRmw { dst, operand, .. } => {
+            f(dst);
+            f(operand);
+        }
+        Inst::AtomicCmpxchg { id } => {
+            let cas = *ir.cmpxchgs.get(id);
+            f(cas.dst);
+            f(cas.expected);
+            f(cas.desired);
+            f(cas.result);
+        }
+        Inst::Copy { dst, src, .. } => {
+            f(dst);
+            f(src);
+        }
+        Inst::StructOffset { base, .. } => f(base),
+        Inst::ArrayOffset { base, element_index, .. } => {
+            f(base);
+            f(element_index);
+        }
+        Inst::Call { call_id } => {
+            let call = *ir.calls.get(call_id);
+            if let IrCallee::Indirect(_, v) = call.callee {
+                f(v);
+            }
+            if let Some(dst) = call.dst {
+                f(dst);
+            }
+            for arg in ir.mem.getn(call.args) {
+                f(*arg);
+            }
+        }
+        Inst::JumpIf { cond, .. } => f(cond),
+        Inst::Phi { incomings, .. } => {
+            for case in ir.mem.getn(incomings) {
+                f(case.value);
+            }
+        }
+        Inst::Ret { v, .. } => f(v),
+        Inst::BakeStaticValue { value, .. } => f(value),
+        Inst::BoolNegate { v }
+        | Inst::BitNot { v }
+        | Inst::BitCast { v, .. }
+        | Inst::IntTrunc { v, .. }
+        | Inst::IntExtU { v, .. }
+        | Inst::IntExtS { v, .. }
+        | Inst::FloatTrunc { v, .. }
+        | Inst::FloatExt { v, .. }
+        | Inst::Float32ToIntUnsigned { v, .. }
+        | Inst::Float64ToIntUnsigned { v, .. }
+        | Inst::Float32ToIntSigned { v, .. }
+        | Inst::Float64ToIntSigned { v, .. }
+        | Inst::IntToFloatUnsigned { v, .. }
+        | Inst::IntToFloatSigned { v, .. }
+        | Inst::PtrToWord { v }
+        | Inst::WordToPtr { v } => f(v),
+        Inst::IntAdd { lhs, rhs, .. }
+        | Inst::IntSub { lhs, rhs, .. }
+        | Inst::IntMul { lhs, rhs, .. }
+        | Inst::IntDivUnsigned { lhs, rhs, .. }
+        | Inst::IntDivSigned { lhs, rhs, .. }
+        | Inst::IntRemUnsigned { lhs, rhs, .. }
+        | Inst::IntRemSigned { lhs, rhs, .. }
+        | Inst::IntCmp { lhs, rhs, .. }
+        | Inst::FloatAdd { lhs, rhs, .. }
+        | Inst::FloatSub { lhs, rhs, .. }
+        | Inst::FloatMul { lhs, rhs, .. }
+        | Inst::FloatDiv { lhs, rhs, .. }
+        | Inst::FloatRem { lhs, rhs, .. }
+        | Inst::FloatCmp { lhs, rhs, .. }
+        | Inst::BitAnd { lhs, rhs, .. }
+        | Inst::BitOr { lhs, rhs, .. }
+        | Inst::BitXor { lhs, rhs, .. }
+        | Inst::BitShiftLeft { lhs, rhs, .. }
+        | Inst::BitUnsignedShiftRight { lhs, rhs, .. }
+        | Inst::BitSignedShiftRight { lhs, rhs, .. } => {
+            f(lhs);
+            f(rhs);
+        }
+    }
+}
+
 static_assert_size!(Inst, 32);
 
 #[derive(Clone, Copy, PartialEq, Eq)]

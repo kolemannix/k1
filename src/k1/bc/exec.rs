@@ -408,12 +408,19 @@ fn exec_loop(
             Opcode::Call => {
                 let target = operand!(0);
                 let fp_delta = operand!(1) as usize;
+                let nargs = header_b(h) as usize;
                 debug_assert_ne!(target, super::PENDING_PC, "unpatched recursive call target");
                 let new_fp = unsafe { fp.add(fp_delta) };
+                let words = new_fp as *mut u64;
+                for k in 0..nargs {
+                    let v = read_src!(operand!(3 + k));
+                    unsafe { words.add(3 + k).write(v.bits()) };
+                }
+                let sret = read_src!(operand!(2));
                 unsafe {
-                    let words = new_fp as *mut u64;
                     words.write(fp as u64);
-                    words.add(1).write((pc + 3) as u64);
+                    words.add(1).write((pc + 4 + nargs) as u64);
+                    words.add(2).write(sret.bits());
                 }
                 fp = new_fp;
                 pc = target as usize;
@@ -449,11 +456,18 @@ fn exec_loop(
                         k1.function_id_to_string(function_id, false)
                     );
                 }
+                let nargs = header_b(h) as usize;
                 let new_fp = unsafe { fp.add(fp_delta) };
+                let words = new_fp as *mut u64;
+                for k in 0..nargs {
+                    let v = read_src!(operand!(3 + k));
+                    unsafe { words.add(3 + k).write(v.bits()) };
+                }
+                let sret = read_src!(operand!(2));
                 unsafe {
-                    let words = new_fp as *mut u64;
                     words.write(fp as u64);
-                    words.add(1).write((pc + 3) as u64);
+                    words.add(1).write((pc + 4 + nargs) as u64);
+                    words.add(2).write(sret.bits());
                 }
                 fp = new_fp;
                 pc = info.code_start as usize;
@@ -570,14 +584,15 @@ fn exec_loop(
                 advance!(Opcode::LoadGlobal);
             }
             Opcode::Load => {
-                let addr = read_src!(operand!(1));
-                write_slot!(operand!(0), load_bits(header_a(h), addr.as_ptr()));
+                // B = folded byte offset (0 when the address is used directly)
+                let addr = read_src!(operand!(1)).as_ptr().wrapping_byte_add(header_b(h) as usize);
+                write_slot!(operand!(0), load_bits(header_a(h), addr));
                 advance!(Opcode::Load);
             }
             Opcode::Store => {
-                let addr = read_src!(operand!(0));
+                let addr = read_src!(operand!(0)).as_ptr().wrapping_byte_add(header_b(h) as usize);
                 let v = read_src!(operand!(1));
-                store_bits(header_a(h), addr.as_ptr(), v);
+                store_bits(header_a(h), addr, v);
                 advance!(Opcode::Store);
             }
             Opcode::AtomicLoad => {
