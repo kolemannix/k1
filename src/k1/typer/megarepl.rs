@@ -213,7 +213,7 @@ impl TypedProgram {
         let filename = format!("{}_repl_cell_{}.{}.k1", self.program_name(), cell_id, iteration);
         let source_id = self.ast.sources.add_file(crate::parse::SourceFile::make(
             0,
-            self.config.out_dir.to_str().unwrap().to_owned(),
+            Rc::new(self.config.out_dir.to_str().unwrap().to_owned()),
             filename,
             code,
         ));

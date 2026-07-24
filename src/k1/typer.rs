@@ -35,6 +35,7 @@ use std::fmt::{Display, Formatter};
 use std::io::IsTerminal;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
@@ -74,6 +75,10 @@ nz_u32_id!(VariableId);
 
 nz_u32_id!(NamespaceId);
 pub const ROOT_NAMESPACE_ID: NamespaceId = NamespaceId(NonZeroU32::new(1).unwrap());
+
+/// A/B switch for `for` lowering: library `for-each` macro vs the native typed
+/// desugar. Build with `--features native-for` for the native lowering
+pub const FOR_VIA_MACRO: bool = !cfg!(feature = "native-for");
 
 nz_u32_id!(AbilityId);
 nz_u32_id!(AbilityImplId);
@@ -2489,7 +2494,6 @@ pub struct AbilityImplHandle {
 /// Allocations that we re-use
 pub struct TypedModuleBuffers {
     name_builder: String,
-    emitted_code: String,
     lexer_tokens: Vec<lex::Token>,
     /// For Pattern matching trials
     trial_ctors: Vec<PatternCtorTrialEntry>,
@@ -2731,8 +2735,9 @@ impl TypeDefnContext {
 pub struct EmittedSource {
     pub file_id: FileId,
     pub call_span: SpanId,
-    /// (start, end, source), sorted by start; ranges are bytes in the emitted file
-    pub entries: Vec<(u32, u32, SpanId)>,
+    /// (start, end, source), sorted by start
+    pub entries: MSlice<(u32, u32, SpanId), TypedProgram>,
+    has_diagnostic: bool,
 }
 
 pub struct TypedProgram {
@@ -2810,8 +2815,6 @@ pub struct TypedProgram {
     // of static execution has the same relationship with its outer caller
     pub vm_alts: Vec<vm::Vm>,
 
-    pub macro_expansion_stack: Vec<FunctionId>,
-
     /// Every metaprogram-emitted source, in emission order; carries the byte
     /// range provenance for diagnostics and the queue for the end-of-typecheck
     /// file flush. Its index is the serial in emitted filenames.
@@ -2866,6 +2869,10 @@ pub struct Timing {
     pub total_infer_nanos: i64,
     pub total_vm_nanos: i64,
     pub total_vm_instrs: i64,
+    pub opcode_counts: [i64; crate::bc::OPCODE_COUNT as usize],
+    /// static_value <-> vm memory conversion at unit boundaries (args in,
+    /// result out); excluded from total_vm_nanos
+    pub total_ferry_nanos: i64,
     pub total_ir_nanos: i64,
     pub total_iropt_nanos: i64,
     pub total_bcgen_nanos: i64,
@@ -2999,7 +3006,6 @@ impl TypedProgram {
             type_defn_context: TypeDefnContext::default(),
             buffers: TypedModuleBuffers {
                 name_builder: String::new(),
-                emitted_code: String::new(),
                 lexer_tokens: Vec::new(),
                 trial_ctors: Vec::new(),
                 field_ctors: (0..128).map(|_| Vec::new()).collect::<Vec<_>>(),
@@ -3017,7 +3023,6 @@ impl TypedProgram {
                 vm::Vm::make(),
                 vm::Vm::make(),
             ],
-            macro_expansion_stack: vec![],
             emitted_sources: Vec::new(),
             vm_shared_static_stack: vm_static_stack,
             vm_global_constant_lookups,
@@ -3038,6 +3043,8 @@ impl TypedProgram {
                 total_infer_nanos: 0,
                 total_vm_nanos: 0,
                 total_vm_instrs: 0,
+                opcode_counts: [0; crate::bc::OPCODE_COUNT as usize],
+                total_ferry_nanos: 0,
                 total_ir_nanos: 0,
                 total_iropt_nanos: 0,
                 total_bcgen_nanos: 0,
@@ -3084,7 +3091,7 @@ impl TypedProgram {
                 .unwrap();
             files_to_compile.swap(0, builtin_index);
         };
-        let directory_string = module_dir.to_str().unwrap().to_string();
+        let directory_string = Rc::new(module_dir.to_str().unwrap().to_string());
         let parse_start = self.timing.raw();
 
         let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
@@ -3888,7 +3895,7 @@ impl TypedProgram {
                             None => next_tag,
                             Some(explicit_value) => {
                                 let parsed = self.eval_integer_value(
-                                    explicit_value.span,
+                                    explicit_value.text_span,
                                     Some(tag_type.type_id()),
                                 )?;
                                 parsed
@@ -3935,7 +3942,7 @@ impl TypedProgram {
                             None => next_tag,
                             Some(explicit_value) => {
                                 let parsed = self.eval_integer_value(
-                                    explicit_value.span,
+                                    explicit_value.text_span,
                                     Some(tag_type.type_id()),
                                 )?;
                                 parsed
@@ -4244,7 +4251,8 @@ impl TypedProgram {
                 // Use the expected type hint if provided (e.g., i64 for array sizes)
                 let eval_context =
                     EvalExprContext::make(scope_id).with_expected_type(expected_type_hint);
-                let num_static_value_id = self.eval_numeric_value(numeric.span, eval_context)?;
+                let num_static_value_id =
+                    self.eval_numeric_value(numeric.text_span, eval_context)?;
                 Ok((num_static_value_id, self.get_static_value_type(num_static_value_id)))
             }
         }
@@ -4675,12 +4683,12 @@ impl TypedProgram {
             return failf!(ty_app.span, "Expected a static literal for opaque alignment");
         };
         let TypedIntValue::U32(size) =
-            self.eval_integer_value(size_lit.span, Some(IntegerType::U32.type_id()))?
+            self.eval_integer_value(size_lit.text_span, Some(IntegerType::U32.type_id()))?
         else {
             return failf!(size_lit.span, "Expected a u32 value for opaque size");
         };
         let TypedIntValue::U32(align) =
-            self.eval_integer_value(align_lit.span, Some(IntegerType::U32.type_id()))?
+            self.eval_integer_value(align_lit.text_span, Some(IntegerType::U32.type_id()))?
         else {
             return failf!(align_lit.span, "Expected a u32 value for opaque alignment");
         };
@@ -5155,7 +5163,7 @@ impl TypedProgram {
                     ParsedLiteral::Numeric(num_lit) => {
                         let num_lit = *num_lit;
                         let num_value_id = self.eval_numeric_value(
-                            num_lit.span,
+                            num_lit.text_span,
                             EvalExprContext::make(scope_id)
                                 .with_expected_type(Some(target_type_id)),
                         )?;
@@ -6113,14 +6121,26 @@ impl TypedProgram {
         input_parameters: &[(VariableId, StaticValueId)],
     ) -> K1Result<StaticValueId> {
         if let Some(shortcut_value_id) = self.eval_trivial_static_expr(parsed_expr, ctx)? {
-            //eprintln!(
-            //    "shortcut value {} expected type: {}",
-            //    self.static_value_to_string(shortcut_value_id),
-            //    self.type_id_to_string_opt(ctx.expected_type_id)
-            //);
             return Ok(shortcut_value_id);
         }
 
+        let expr = self.compile_parsed_expr_for_exec(parsed_expr, ctx, input_parameters)?;
+        let execution_result = bc::exec::execute_compiled_expr(self, vm, expr, true);
+
+        vm.reset(self.global_id_k1_arena);
+
+        let static_value_id = execution_result?;
+
+        Ok(static_value_id)
+    }
+
+    /// Typecheck, compile, and optimize a static expr's unit for execution
+    fn compile_parsed_expr_for_exec(
+        &mut self,
+        parsed_expr: ParsedExprId,
+        ctx: EvalExprContext,
+        input_parameters: &[(VariableId, StaticValueId)],
+    ) -> K1Result<TypedExprId> {
         if let ParsedExpr::Static(_static) = self.ast.exprs.get(parsed_expr) {
             self.report_warn(
                 self.ast.exprs.get_span(parsed_expr),
@@ -6159,87 +6179,7 @@ impl TypedProgram {
                 ir::unit_to_string(self, IrUnitId::Expr(expr), false)
             );
         }
-
-        let execution_result = match self.config.static_exec {
-            compiler::StaticExecMode::Ir => {
-                vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
-                    let stack_trace = vm::make_stack_trace(self, &vm.stack);
-                    e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
-                    e
-                })
-            }
-            compiler::StaticExecMode::Bc => bc::exec::execute_compiled_expr(self, vm, expr, true),
-            compiler::StaticExecMode::Both => {
-                let ir_result = vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
-                    let stack_trace = vm::make_stack_trace(self, &vm.stack);
-                    e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
-                    e
-                });
-                vm.reset(self.global_id_k1_arena);
-                // Messages are reported by the primary (ir) run; suppress dupes
-                let bc_result = crate::bc::exec::execute_compiled_expr(self, vm, expr, false);
-                self.compare_static_exec_results("expr", &ir_result, &bc_result, expr_span);
-                ir_result
-            }
-        };
-
-        vm.reset(self.global_id_k1_arena);
-
-        let static_value_id = execution_result?;
-
-        Ok(static_value_id)
-    }
-
-    /// Parity check for StaticExecMode::Both: both engines ran, compare what
-    /// they produced and log any divergence. The ir engine's result is the
-    /// one we actually use during bring-up.
-    fn compare_static_exec_results(
-        &self,
-        what: &str,
-        ir_result: &K1Result<StaticValueId>,
-        bc_result: &K1Result<StaticValueId>,
-        span: SpanId,
-    ) {
-        let location = {
-            let (source, line) = self.get_span_location(span);
-            format!("{}:{}", source.filename, line.line_number())
-        };
-        match (ir_result, bc_result) {
-            (Ok(ir_id), Ok(bc_id)) => {
-                if ir_id != bc_id {
-                    // Interning may or may not dedupe; compare rendered forms
-                    let ir_str = self.static_value_to_string(*ir_id);
-                    let bc_str = self.static_value_to_string(*bc_id);
-                    if ir_str != bc_str {
-                        eprintln!(
-                            "[bc] DIVERGENCE in static {} at {}:\n  ir: {}\n  bc: {}",
-                            what, location, ir_str, bc_str
-                        );
-                    }
-                }
-            }
-            (Ok(ir_id), Err(bc_err)) => {
-                eprintln!(
-                    "[bc] DIVERGENCE in static {} at {}: ir ok ({}), bc failed: {}",
-                    what,
-                    location,
-                    self.static_value_to_string(*ir_id),
-                    bc_err.message
-                );
-            }
-            (Err(ir_err), Ok(bc_id)) => {
-                eprintln!(
-                    "[bc] DIVERGENCE in static {} at {}: ir failed ({}), bc ok ({})",
-                    what,
-                    location,
-                    ir_err.message,
-                    self.static_value_to_string(*bc_id)
-                );
-            }
-            (Err(_), Err(_)) => {
-                // Both failed; close enough for parity purposes
-            }
-        }
+        Ok(expr)
     }
 
     fn execute_static_expr(
@@ -6256,7 +6196,7 @@ impl TypedProgram {
 
     fn do_with_vm<T>(
         &mut self,
-        span: SpanId,
+        _span: SpanId,
         mut f: impl FnMut(&mut TypedProgram, &mut vm::Vm) -> T,
     ) -> T {
         let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
@@ -6264,7 +6204,7 @@ impl TypedProgram {
                 let maybe_alt = self.vm_alts.pop();
                 let alt_vm = match maybe_alt {
                     None => {
-                        self.report_warn(span, "Had to make a new alt VM");
+                        // self.report_warn(span, "Had to make a new alt VM");
                         let new_vm = vm::Vm::make();
                         new_vm
                     }
@@ -6292,53 +6232,39 @@ impl TypedProgram {
         span: SpanId,
     ) -> K1Result<StaticValueId> {
         self.do_with_vm(span, |k1, vm| {
-            ir::compile_function(k1, function_id)?;
-            k1.compile_all_pending_ir(span)?;
-
-            let execution_result = match k1.config.static_exec {
-                crate::compiler::StaticExecMode::Ir => {
-                    vm::execute_compiled_function(k1, vm, function_id, function_parameters).map_err(
-                        |mut e| {
-                            let stack_trace = vm::make_stack_trace(k1, &vm.stack);
-                            e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
-                            e
-                        },
-                    )
-                }
-                crate::compiler::StaticExecMode::Bc => crate::bc::exec::execute_compiled_function(
-                    k1,
-                    vm,
-                    function_id,
-                    function_parameters,
-                    true,
-                ),
-                crate::compiler::StaticExecMode::Both => {
-                    let ir_result =
-                        vm::execute_compiled_function(k1, vm, function_id, function_parameters)
-                            .map_err(|mut e| {
-                                let stack_trace = vm::make_stack_trace(k1, &vm.stack);
-                                e.message =
-                                    format!("{}\nExecution Trace\n{}", e.message, stack_trace);
-                                e
-                            });
-                    vm.reset(k1.global_id_k1_arena);
-                    let bc_result = crate::bc::exec::execute_compiled_function(
-                        k1,
-                        vm,
-                        function_id,
-                        function_parameters,
-                        false,
-                    );
-                    k1.compare_static_exec_results("function", &ir_result, &bc_result, span);
-                    ir_result
-                }
-            };
-
+            let result =
+                Self::static_exec_function_with_vm(k1, vm, function_id, function_parameters, span);
             vm.reset(k1.global_id_k1_arena);
-
-            let static_value_id = execution_result?;
-            Ok(static_value_id)
+            result
         })
+    }
+
+    fn static_exec_prepare_function(
+        k1: &mut TypedProgram,
+        function_id: FunctionId,
+        span: SpanId,
+    ) -> K1Result<()> {
+        ir::compile_function(k1, function_id)?;
+        k1.compile_all_pending_ir(span)?;
+        // Macros execute repeatedly; inline_done guards re-optimizing
+        let unit_id = IrUnitId::Function(function_id);
+        if !ir::get_compiled_unit(&k1.ir, unit_id).unwrap().inline_done {
+            ir::optimize_unit(k1, unit_id);
+        }
+        Ok(())
+    }
+
+    /// Compile, optimize, and run; no VM reset, so callers control when the
+    /// result's VM memory dies
+    fn static_exec_function_with_vm(
+        k1: &mut TypedProgram,
+        vm: &mut vm::Vm,
+        function_id: FunctionId,
+        function_parameters: &[StaticValueId],
+        span: SpanId,
+    ) -> K1Result<StaticValueId> {
+        Self::static_exec_prepare_function(k1, function_id, span)?;
+        bc::exec::execute_compiled_function(k1, vm, function_id, function_parameters, true)
     }
 
     fn execute_static_condition(&mut self, cond: Option<ParsedExprId>, scope_id: ScopeId) -> bool {
@@ -8426,7 +8352,7 @@ impl TypedProgram {
             }
             ParsedExpr::Literal(ParsedLiteral::Numeric(int)) => {
                 let span = int.span;
-                let value_id = self.eval_numeric_value(span, ctx)?;
+                let value_id = self.eval_numeric_value(int.text_span, ctx)?;
                 let expr_id = self.add_static_constant_expr(value_id, span);
                 Ok(expr_id)
             }
@@ -8940,7 +8866,7 @@ impl TypedProgram {
                     }
                 }
             },
-            ParsedStaticBlockKind::Metaprogram => None,
+            ParsedStaticBlockKind::Metaprogram => self.types.builtins.code,
             ParsedStaticBlockKind::MacroCall => unreachable!(),
         };
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
@@ -8948,6 +8874,7 @@ impl TypedProgram {
             let variable_expr = self.ast.exprs.add(
                 ParsedExpr::Variable(ParsedVariable {
                     name: QIdent::naked(param.name, param.span),
+                    span: param.span,
                 }),
                 false,
                 None,
@@ -8998,152 +8925,175 @@ impl TypedProgram {
                 }
             }
         }
-        let vm_result = self.execute_static_expr(
-            base_expr,
-            ctx.with_expected_type(expected_type_for_execution).with_static_ctx(Some(
-                StaticExecContext { expected_return_type: expected_type_for_execution },
-            )),
-            &static_parameters,
-        )?;
-
+        let exec_ctx = ctx.with_expected_type(expected_type_for_execution).with_static_ctx(Some(
+            StaticExecContext { expected_return_type: expected_type_for_execution },
+        ));
         match kind {
             ParsedStaticBlockKind::Value => {
+                let vm_result = self.execute_static_expr(base_expr, exec_ctx, &static_parameters)?;
                 let expr = self.add_static_value_expr(vm_result, span);
                 Ok(StaticExecutionResult::TypedExpr(expr))
             }
             ParsedStaticBlockKind::Metaprogram => {
-                let Some(chunks) = self.static_value_as_emitted_code(vm_result) else {
-                    return failf!(
-                        span,
-                        "#meta block did not evaluate to `code` or `string`; got {}",
-                        self.type_id_to_string(self.get_static_value_type(vm_result))
-                    );
-                };
-                self.compile_emitted_code(&chunks, span, ctx, is_definition)
+                let emitted = self.do_with_vm(span, |k1, vm| {
+                    let result = (|| {
+                        let expr = k1.compile_parsed_expr_for_exec(
+                            base_expr,
+                            exec_ctx,
+                            &static_parameters,
+                        )?;
+                        let raw = bc::exec::execute_compiled_expr_raw(k1, vm, expr, true)?;
+                        Self::read_emitted_code_raw(k1, &raw, span, is_definition)
+                    })();
+                    vm.reset(k1.global_id_k1_arena);
+                    result
+                })?;
+                self.compile_emitted_code(emitted, span, ctx, is_definition)
             }
             ParsedStaticBlockKind::MacroCall => unreachable!(),
         }
     }
 
-    /// A metaprogram may yield `code` (text chunks carrying source spans) or a
-    /// plain `string` (no source information)
-    fn static_value_as_emitted_code(
-        &self,
-        value_id: StaticValueId,
-    ) -> Option<Vec<(StringId, Option<SpanId>)>> {
-        match self.static_values.get(value_id) {
-            StaticValue::String(string_id) => Some(vec![(*string_id, None)]),
-            StaticValue::Struct(st) if Some(st.type_id) == self.types.builtins.code => {
-                let fields = self.static_values.get_slice(st.fields);
-                let chunks = self.static_values.get(fields[0]).as_container()?;
-                let mut out = Vec::with_capacity(chunks.len());
-                for element in self.static_values.get_slice(chunks.elements) {
-                    let chunk = self.static_values.get(*element).as_struct()?;
-                    let [text, source] = self.static_values.get_slice(chunk.fields) else {
-                        return None;
-                    };
-                    let text = self.static_values.get(*text).as_string()?;
-                    let StaticValue::Int(TypedIntValue::U64(source)) =
-                        self.static_values.get(*source)
-                    else {
-                        return None;
-                    };
-                    out.push((text, SpanId::from_u32(*source as u32)));
-                }
-                Some(out)
-            }
-            _ => None,
+    /// must run while vm memory is still good
+    fn read_emitted_code_raw(
+        k1: &mut TypedProgram,
+        raw: &bc::exec::RawUnitResult,
+        span: SpanId,
+        is_definition: bool,
+    ) -> K1Result<Option<(String, MSlice<(u32, u32, SpanId), TypedProgram>)>> {
+        use crate::vm::k1_types::{K1Code, K1CodeChunk};
+        if !raw.returns_value || Some(raw.result_type_id) != k1.types.builtins.code {
+            return failf!(
+                span,
+                "Metaprogram must evaluate to `code`; got {}. Wrap a plain string with code/from-string",
+                k1.type_id_to_string(raw.result_type_id)
+            );
         }
+        #[cfg(debug_assertions)]
+        k1.assert_code_layouts();
+        let ferry_start = k1.timing.clock.raw();
+        let code = unsafe { *(raw.ret_addr as *const K1Code) };
+        let chunks = unsafe {
+            std::slice::from_raw_parts(
+                code.chunks.k1_buffer.data as *const K1CodeChunk,
+                code.chunks.len as usize,
+            )
+        };
+        let emitted = k1.build_emitted_source(span, is_definition, chunks);
+        k1.timing.total_ferry_nanos += k1.timing.elapsed_nanos(ferry_start) as i64;
+        emitted
+    }
+
+    fn build_emitted_source(
+        &mut self,
+        span: SpanId,
+        is_definition: bool,
+        chunks: &[vm::k1_types::K1CodeChunk],
+    ) -> K1Result<Option<(String, MSlice<(u32, u32, SpanId), TypedProgram>)>> {
+        let chunks_len: usize = chunks.iter().map(|c| c.text.len as usize).sum();
+        if chunks_len == 0 {
+            return Ok(None);
+        }
+        let (source, line) = self.get_span_location(span);
+        // The source keeps `content` forever, so size it exactly and move it
+        // in; 48 covers the header boilerplate and block wrapper
+        let mut content = String::with_capacity(
+            chunks_len + source.directory.len() + source.filename.len() + 48,
+        );
+        writeln!(
+            &mut content,
+            "// generated by #meta block at {}/{}:{}",
+            source.directory,
+            source.filename,
+            line.line_number(),
+        )
+        .unwrap();
+        if !is_definition {
+            content.push_str("{\n");
+        }
+        let mut table: List<(u32, u32, SpanId), _> = self.mem.new_list(chunks.len() as u32);
+        for chunk in chunks {
+            let Ok(text) = (unsafe { chunk.text.to_str() }) else {
+                return failf!(span, "Metaprogram produced a non-utf8 chunk");
+            };
+            if text.is_empty() {
+                continue;
+            }
+            let start = content.len() as u32;
+            content.push_str(text);
+            if let Some(source) = SpanId::from_u32(chunk.source as u32) {
+                table.push((start, start + text.len() as u32, source));
+            }
+        }
+        if !is_definition {
+            content.push_str("\n}");
+        }
+        Ok(Some((content, self.mem.list_to_handle(table))))
+    }
+
+    #[cfg(debug_assertions)]
+    fn assert_code_layouts(&mut self) {
+        use crate::vm::k1_types::{K1Code, K1CodeChunk};
+        let code_type = self.types.builtins.code.unwrap();
+        let chunk_type = self.types.builtins.code_chunk.unwrap();
+        assert_eq!(self.get_layout(code_type).unwrap().size as usize, size_of::<K1Code>());
+        assert_eq!(self.get_layout(chunk_type).unwrap().size as usize, size_of::<K1CodeChunk>());
+        let fields = self.get_struct_layout(chunk_type);
+        assert_eq!(fields[0].offset as usize, std::mem::offset_of!(K1CodeChunk, text));
+        assert_eq!(fields[1].offset as usize, std::mem::offset_of!(K1CodeChunk, source));
     }
 
     /// parses emitted source as a fresh file, then compiles it in place of the invocation
     fn compile_emitted_code(
         &mut self,
-        chunks: &[(StringId, Option<SpanId>)],
+        emitted: Option<(String, MSlice<(u32, u32, SpanId), TypedProgram>)>,
         span: SpanId,
         ctx: EvalExprContext,
         is_definition: bool,
     ) -> K1Result<StaticExecutionResult> {
-        let is_empty = chunks.iter().all(|(text, _)| self.ast.idents.get_string(*text).is_empty());
-        if is_empty {
-            if is_definition {
+        let Some((content, table)) = emitted else {
+            return if is_definition {
                 Ok(StaticExecutionResult::Definitions(MSlice::empty()))
             } else {
                 Ok(StaticExecutionResult::TypedExpr(self.synth_empty_struct(span)))
-            }
-        } else {
-            // First, we write the emitted code to a text buffer
-            //
-            // Then we parse the code anew (so that we have cohesive spans and a source
-            // containing the full code)
-            //
-            // Then we typecheck the code and emit a block in place of this #meta
-            // invocation
-            let mut content = std::mem::take(&mut self.buffers.emitted_code);
-            let (source, line) = self.get_span_location(span);
-            writeln!(
-                &mut content,
-                "// generated by #meta block at {}/{}:{}",
-                source.directory,
-                source.filename,
-                line.line_number(),
-            )
-            .unwrap();
-            if !is_definition {
-                content.push_str("{\n");
-            }
-            // TODO: when specializing, include the specialization context in the
-            //       filename and print the types at the top of the file; a
-            //       'what are we compiling' stack would provide it
-            let line_number = line.line_number();
-            let stem = source.filename.strip_suffix(".k1").unwrap();
-            let serial = self.emitted_sources.len() + 1;
-            let generated_filename = format!("meta_{stem}_{line_number}_{serial}.k1");
+            };
+        };
+        // Parse the code as its own file (cohesive spans, a source containing
+        // the full text), then compile it in place of the invocation
+        //
+        // TODO: when specializing, include the specialization context in the
+        //       filename and print the types at the top of the file; a
+        //       'what are we compiling' stack would provide it
+        let (source, line) = self.get_span_location(span);
+        let line_number = line.line_number();
+        let stem = source.filename.strip_suffix(".k1").unwrap();
+        let serial = self.emitted_sources.len() + 1;
+        let generated_filename = format!("meta_{stem}_{line_number}_{serial}.k1");
+        debug!("Emitted raw content:\n---\n{content}\n---");
+        let source_for_emission = self.ast.sources.add_file(crate::parse::SourceFile::make(
+            0,
+            self.config.out_dir_generated.clone(),
+            generated_filename,
+            content,
+        ));
+        self.emitted_sources.push(EmittedSource {
+            file_id: source_for_emission,
+            call_span: span,
+            entries: table,
+            has_diagnostic: false,
+        });
 
-            let mut table: Vec<(u32, u32, SpanId)> = Vec::with_capacity(chunks.len());
-            for (text, source) in chunks {
-                let text = self.ast.idents.get_string(*text);
-                if text.is_empty() {
-                    continue;
-                }
-                let start = content.len() as u32;
-                content.push_str(text);
-                if let Some(source) = source {
-                    table.push((start, start + text.len() as u32, *source));
-                }
+        let parse_kind =
+            if is_definition { ParseAdHocKind::Definitions } else { ParseAdHocKind::Expr };
+        let parsed_metaprogram = self.parse_metaprogram_source(source_for_emission, parse_kind)?;
+        match parsed_metaprogram {
+            ParseMetaprogramResult::Expr(parsed_expr_id) => {
+                let typed_metaprogram = self.eval_expr(parsed_expr_id, ctx)?;
+                debug!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
+                Ok(StaticExecutionResult::TypedExpr(typed_metaprogram))
             }
-            if !is_definition {
-                content.push_str("\n}");
-            }
-            debug!("Emitted raw content:\n---\n{content}\n---");
-            let source_for_emission = self.ast.sources.add_file(crate::parse::SourceFile::make(
-                0,
-                self.config.out_dir.to_str().unwrap().to_owned(),
-                generated_filename,
-                content.clone(),
-            ));
-            self.emitted_sources.push(EmittedSource {
-                file_id: source_for_emission,
-                call_span: span,
-                entries: table,
-            });
-
-            let parse_kind =
-                if is_definition { ParseAdHocKind::Definitions } else { ParseAdHocKind::Expr };
-            let parsed_metaprogram_result =
-                self.parse_metaprogram_source(source_for_emission, parse_kind);
-            content.clear();
-            self.buffers.emitted_code = content;
-            let parsed_metaprogram = parsed_metaprogram_result?;
-            match parsed_metaprogram {
-                ParseMetaprogramResult::Expr(parsed_expr_id) => {
-                    let typed_metaprogram = self.eval_expr(parsed_expr_id, ctx)?;
-                    debug!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
-                    Ok(StaticExecutionResult::TypedExpr(typed_metaprogram))
-                }
-                ParseMetaprogramResult::Definitions(defns_slice) => {
-                    Ok(StaticExecutionResult::Definitions(defns_slice))
-                }
+            ParseMetaprogramResult::Definitions(defns_slice) => {
+                Ok(StaticExecutionResult::Definitions(defns_slice))
             }
         }
     }
@@ -9151,12 +9101,22 @@ impl TypedProgram {
     /// Emitted sources accumulate in the sources pool during typechecking; this
     /// writes them out for inspection in one pass, off the expansion path
     pub fn write_emitted_sources(&self) {
+        let start = std::time::Instant::now();
         for emitted in &self.emitted_sources {
-            let source = self.ast.sources.get(emitted.file_id);
-            let path = std::path::Path::new(&source.directory).join(&source.filename);
-            if let Err(e) = std::fs::write(&path, &source.content) {
-                eprintln!("Failed to write out generated metaprogram at {}. {e}", path.display());
+            if emitted.has_diagnostic {
+                let source = self.ast.sources.get(emitted.file_id);
+                let path = std::path::Path::new(source.directory.as_ref()).join(&source.filename);
+                if let Err(e) = std::fs::write(&path, &source.content) {
+                    eprintln!(
+                        "Failed to write out generated metaprogram at {}. {e}",
+                        path.display()
+                    );
+                }
             }
+        }
+        if self.config.chatty {
+            let elapsed = start.elapsed();
+            eprintln!("Wrote {} emitted sources in {:.2?}", self.emitted_sources.len(), elapsed);
         }
     }
 
@@ -9177,14 +9137,6 @@ impl TypedProgram {
         let Some(parsed_macro_id) = function.parsed_id.as_macro_id() else {
             self.ice_span(span, "Macro function without a parsed macro")
         };
-        if self.macro_expansion_stack.contains(&function_id) {
-            return failf!(
-                span,
-                "Execution of macro '{}' recursively requires its own execution",
-                self.ident_str(function_name)
-            );
-        }
-
         if function.type_params.len() as usize != type_args.len() {
             return failf!(
                 span,
@@ -9198,7 +9150,9 @@ impl TypedProgram {
         // nocommit: I think we can factor out this idea of checking a series of type expressions
         // against a series of constrained type parameters. The substitution-in-constraints part is
         // just tricky enough to warrant keeping it in one place
-        let mut typed_type_args = self.mem.new_list(function_type_params.len() as u32);
+        // Needs a first pass to do this zip, then second pass to check constraints
+        let mut typed_type_args = self.mem.new_list(function_type_params.len());
+
         for (type_param, type_arg) in
             self.mem.getn(function_type_params).iter().zip(type_args.iter())
         {
@@ -9318,17 +9272,7 @@ impl TypedProgram {
             function_id
         };
 
-        self.macro_expansion_stack.push(function_to_run);
-        let result = self.run_macro_and_compile_output(
-            function_to_run,
-            &static_args,
-            span,
-            is_definition,
-            ctx,
-        );
-        self.macro_expansion_stack.pop();
-
-        result
+        self.run_macro_and_compile_output(function_to_run, &static_args, span, is_definition, ctx)
     }
 
     fn run_macro_and_compile_output(
@@ -9339,15 +9283,26 @@ impl TypedProgram {
         is_definition: bool,
         ctx: EvalExprContext,
     ) -> K1Result<StaticExecutionResult> {
-        let vm_result = self.execute_static_function(function_id, static_args, span)?;
-        let Some(chunks) = self.static_value_as_emitted_code(vm_result) else {
-            return failf!(
-                span,
-                "Macro expansion did not produce `code` or `string`; got {}",
-                self.type_id_to_string(self.get_static_value_type(vm_result))
-            );
-        };
-        self.compile_emitted_code(&chunks, span, ctx, is_definition)
+        let emitted = self.do_with_vm(span, |k1, vm| {
+            let result =
+                Self::macro_emit_with_vm(k1, vm, function_id, static_args, span, is_definition);
+            vm.reset(k1.global_id_k1_arena);
+            result
+        })?;
+        self.compile_emitted_code(emitted, span, ctx, is_definition)
+    }
+
+    fn macro_emit_with_vm(
+        k1: &mut TypedProgram,
+        vm: &mut vm::Vm,
+        function_id: FunctionId,
+        static_args: &[StaticValueId],
+        span: SpanId,
+        is_definition: bool,
+    ) -> K1Result<Option<(String, MSlice<(u32, u32, SpanId), TypedProgram>)>> {
+        Self::static_exec_prepare_function(k1, function_id, span)?;
+        let raw = bc::exec::execute_compiled_function_raw(k1, vm, function_id, static_args, true)?;
+        Self::read_emitted_code_raw(k1, &raw, span, is_definition)
     }
 
     fn with_parser<R>(
@@ -11025,7 +10980,7 @@ impl TypedProgram {
         if for_expr.is_static {
             return self.eval_static_for_expr(for_expr, ctx);
         };
-        if true {
+        if FOR_VIA_MACRO {
             let body_block_expr =
                 self.ast.exprs.add(ParsedExpr::Block(for_expr.body_block), false, None);
 
@@ -12377,7 +12332,7 @@ impl TypedProgram {
         array_type_id: TypeId,
         call: &ParsedCall,
         ctx: EvalExprContext,
-    ) -> K1Result<CallResolution> {
+    ) -> K1Result<Option<CallResolution>> {
         let span = call.span;
         let array_type = self.types.get(array_type_id).as_array().unwrap();
         let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
@@ -12394,7 +12349,7 @@ impl TypedProgram {
                     }
                     Some(size) => self.synth_i64(size, span),
                 };
-                Ok(CallResolution::OtherExpr(array_length))
+                Ok(Some(CallResolution::OtherExpr(array_length)))
             }
             n if n == self.ast.idents.b.get => {
                 if call.args.len() != 2 {
@@ -12480,18 +12435,18 @@ impl TypedProgram {
                     BlockBuilder { scope_id: ctx.scope_id, statements, span },
                     array_type.element_type,
                 );
-                Ok(CallResolution::OtherExpr(block_expr))
+                Ok(Some(CallResolution::OtherExpr(block_expr)))
             }
             _ => {
                 if let Some(method_id) =
                     self.scopes.find_function_local(self.scopes.array_scope_id, call.name.name)
                 {
-                    Ok(CallResolution::MethodCall {
+                    Ok(Some(CallResolution::MethodCall {
                         callee: Callee::make_static(method_id),
                         receiver,
-                    })
+                    }))
                 } else {
-                    failf!(span, "No such method on Array: {}", self.qident_to_string(&call.name))
+                    Ok(None)
                 }
             }
         }
@@ -12599,7 +12554,11 @@ impl TypedProgram {
         let base_for_method = self.types.get_base_for_method(base_expr_type);
 
         if let Type::Array(_array_type) = self.types.get(base_for_method) {
-            return self.handle_array_method_call(base_expr, base_for_method, call, ctx);
+            if let Some(resolution) =
+                self.handle_array_method_call(base_expr, base_for_method, call, ctx)?
+            {
+                return Ok(resolution);
+            }
         }
 
         if let Some(companion_ns) =
@@ -13326,7 +13285,7 @@ impl TypedProgram {
                     span,
                 );
                 self.emit_ls_entity(
-                    parsed_variant.span,
+                    parsed_variant.name_span,
                     LsEntityKind::Variant {
                         type_id: provided_type,
                         variant_index: matching_value_index as u32,
@@ -13341,7 +13300,7 @@ impl TypedProgram {
                         variant_name,
                         parsed_variant.payload,
                         ctx,
-                        span,
+                        parsed_variant.name_span,
                     )?;
                     Ok(sum_constructor)
                 } else {
@@ -16586,6 +16545,7 @@ impl TypedProgram {
         let signature_span = ast_macro.signature_span;
         let params_slice = ast_macro.params;
         let type_params_slice = ast_macro.type_params;
+        let compiler_debug = ast_macro.compiler_debug;
         let condition = ast_macro.condition;
         if !self.execute_static_condition(condition, parent_scope_id) {
             return Ok(None);
@@ -16670,7 +16630,7 @@ impl TypedProgram {
             specialization_info: None,
             parsed_id: ParsedId::Macro(parsed_macro_id),
             kind: TypedFunctionKind::Standard,
-            compiler_debug: false,
+            compiler_debug,
             type_id: function_type_id,
             is_concrete: false,
             is_recursive: false,
@@ -19723,9 +19683,9 @@ impl TypedProgram {
             else {
                 return current;
             };
-            let candidate = table.entries.partition_point(|entry| entry.0 <= span.start);
-            let Some(&(start, end, source)) = candidate.checked_sub(1).map(|i| &table.entries[i])
-            else {
+            let entries = self.mem.getn(table.entries);
+            let candidate = entries.partition_point(|entry| entry.0 <= span.start);
+            let Some(&(start, end, source)) = candidate.checked_sub(1).map(|i| &entries[i]) else {
                 return current;
             };
             if span.start >= end {
@@ -19751,8 +19711,11 @@ impl TypedProgram {
 
     pub fn report_ext(&mut self, e: K1Message, no_print: bool) {
         let e = K1Message { span: self.remap_to_source_span(e.span), ..e };
-        // Check for duplicates (happens a lot with generic code); remapping mints
+        // Check for duplicates (happens a lot with generic code); remapping makes
         // fresh span ids, so spans compare by contents
+        //
+        // This will be kind quadraticy if we ever have a lot of diagnostics, which could
+        // happen in happy path if we're doing a lot of hints
         let e_span = self.ast.spans.get(e.span);
         let is_duplicate = self.messages.borrow().iter().any(|m| {
             m.message == e.message
@@ -19763,6 +19726,12 @@ impl TypedProgram {
         if is_duplicate {
             return;
         }
+
+        if let Some(table) = self.emitted_sources.iter_mut().find(|e| e.file_id == e_span.file_id) {
+            if e.level == MessageLevel::Error {
+                table.has_diagnostic = true
+            }
+        };
 
         let skip_print = no_print || {
             if e.level != MessageLevel::Error {
@@ -19950,7 +19919,47 @@ impl TypedProgram {
         let vm_us_per_instr = vm_us / self.timing.total_vm_instrs as f64;
 
         writeln!(out, "\t{:.2}ms vm, avg {:.2}us/instr", vm_ms, vm_us_per_instr)?;
+        let total_ops: i64 = self.timing.opcode_counts.iter().sum();
+        if total_ops > 0 {
+            let mut counts: Vec<(crate::bc::Opcode, i64)> = self
+                .timing
+                .opcode_counts
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (crate::bc::Opcode::from_u8(i as u8), *n))
+                .collect();
+            counts.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+            let mut parts = Vec::with_capacity(counts.len());
+            let mut other = 0i64;
+            for (op, n) in counts {
+                let pct = n as f64 * 100.0 / total_ops as f64;
+                if pct >= 1.0 {
+                    parts.push(format!("{} {:.0}% ({})", op.name(), pct, human_count(n)));
+                } else {
+                    other += n;
+                }
+            }
+            if other > 0 {
+                parts.push(format!("other {:.0}% ({})", other as f64 * 100.0 / total_ops as f64, human_count(other)));
+            }
+            writeln!(out, "\t  ops: {}", parts.join(", "))?;
+        }
+        writeln!(
+            out,
+            "\t{:.2}ms ferry (static_value <-> vm memory)",
+            self.timing.total_ferry_nanos as f64 / 1_000_000.0
+        )?;
         Ok(())
+    }
+}
+
+fn human_count(n: i64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1e6)
+    } else if n >= 10_000 {
+        format!("{}k", n / 1000)
+    } else {
+        n.to_string()
     }
 }
 

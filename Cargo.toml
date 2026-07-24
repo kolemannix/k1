@@ -14,6 +14,8 @@ lsp = ["tokio", "tower-lsp", "tokio-util", "tracing", "tracing-appender", "traci
 profile = ["pprof"]
 # Our project-specific debug mode, not the same thing as the compiler's!
 dbg = []
+# A/B: lower `for` via the native typed desugar instead of the for-each macro
+native-for = []
 
 [dependencies]
 # Core dependencies

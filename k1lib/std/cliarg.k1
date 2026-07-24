@@ -96,7 +96,7 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
     }
     code.writeln("})")
 
-    code.build-tmp()
+    code/from-string(code.build-tmp())
   }
 
   result

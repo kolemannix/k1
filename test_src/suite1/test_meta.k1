@@ -16,7 +16,7 @@ $pre/make-point-macro(my-macro-point)
 
 ns pre {
   let pi: f32 = 3.14
-  fn make-point(name: string): string {
+  fn make-point(name: string): code {
     "type $name = { x: i32, y: i32 }"
   }
   macro make-point-macro(name) {
@@ -35,7 +35,7 @@ fn simple-increment(): i32 {
     for 0.until(5) {
       code.writeln("x = x + 1;")
     }
-    code.build()
+    code/from-string(code.build())
   }
   assert-equals(x, 15)
 
@@ -86,7 +86,7 @@ fn write-json[t, w: writer](context w)(t: t) {
     let type-id = types/type-id[t]()
     let code = string-builder/new()
     _write-json-from-schema(&code, "t", type-id)
-    code.build()
+    code/from-string(code.build())
   }
 }
 

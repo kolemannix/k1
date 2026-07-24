@@ -6,6 +6,9 @@ type code-chunk = { text: string, source: u64 }
 
 type code = { chunks: list[code-chunk] }
 
+#static types/assert-layout[code-chunk](24, 8, [0, 16].as-span())
+#static types/assert-layout[code](24, 8, [0].as-span())
+
 ns for code {
   fn from-string(s: string): code {
     .{ chunks = [.{ text = s, source = 0 }] }
@@ -24,7 +27,7 @@ type code-builder = { chunks: list[code-chunk], pending: list[u8] }
 
 ns for code-builder {
   fn new(): code-builder {
-    .{ chunks = list/empty(), pending = list/empty() }
+    .{ chunks = list/with-capacity(8), pending = list/empty() }
   }
 
   fn seal(self: *mut code-builder) {

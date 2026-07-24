@@ -11,7 +11,7 @@ fn make_test_ast() -> ParsedProgram {
 
 fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'ast> {
     let source =
-        SourceFile::make(0, "unit_test".to_string(), "unit_test.k1".to_string(), input.to_string());
+        SourceFile::make(0, "unit_test".to_string().into(), "unit_test.k1".to_string(), input.to_string());
     let file_id = source.file_id;
     let module_id = ModuleId::from_u32(1).unwrap();
     let module_name = ast.idents.intern("unit_test");
@@ -220,6 +220,22 @@ fn core_only() -> Result<(), ParseError> {
     let core_source = fs::read_to_string("k1lib/core/core.k1").unwrap();
     let ast = test_parse_input("core.k1".to_string(), core_source)?;
     assert!(!ast.get_root_namespace().definitions.is_empty());
+    Ok(())
+}
+
+#[test]
+fn macro_defn_compiler_debug() -> Result<(), ParseError> {
+    let src = r#"
+    #debug macro m1(a) { `{ $a }` }
+    macro m2(a) { `{ $a }` }
+    "#;
+    let mut ast = test_parse_input("macro_debug".to_string(), src.to_string())?;
+    let m1_name = ast.idents.intern("m1");
+    let m1 = ast.get_macro(ParsedMacroId::from_u32(1).unwrap());
+    let m2 = ast.get_macro(ParsedMacroId::from_u32(2).unwrap());
+    assert_eq!(m1.name, m1_name);
+    assert!(m1.compiler_debug);
+    assert!(!m2.compiler_debug);
     Ok(())
 }
 

@@ -41,8 +41,6 @@ pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         }
     }
 
-    // Analysis escape hatch: measure what inlining actually buys the VM
-    // (with the bc engine, calls are cheap; the answer may have changed)
     let skip_inline = std::env::var("K1_IROPT_NO_INLINE").is_ok();
 
     let inline_start = k1.timing.raw();

@@ -5,9 +5,7 @@ next up
 - clean up the lsp completions and test them
 - more dogfooding, do the 2 static sites
 
-
 Minor and ideas
-- [x] allow opaques to be named / nominal; bindgen them that way. The name is really more useful than the size/align
 - [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
 - [ ] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
       way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
@@ -15,26 +13,16 @@ Minor and ideas
 - [ ] top-level parser recovery (sync to next fn/ns/type/macro)
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
-- [x] decide on 'assert' behavior in debug vs non debug mode and improve bactraces (need line numbers)
 - [ ] `#[must_use]` equivalent
 - [ ] enum-from-sum type operator
-- [x] 'newtype' solution; 'distinct' types? `type handle = distinct[size]` (wrapper struct is working great)
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
 - [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
-- [x] Finish removing let*
-- [x] remove 'switch' keyword: shipped as `x is { <pat> -> <arm>, ... }` match expressions (`#is` for the comptime form), plus struct literals/patterns respelled `.{ x = 1, y }` (dot moved outside the brace, inner dots dropped; bare `{` is always a block)
-- [x] New struct literal syntax : `{ x: 1, y: 2 }` -> `{ .x = 1, .y = 2 }`. Why? clarity of meaning of "=", consistent meaning of '.', and parsing ambiguity resolution
 - [ ] type-from-id({types/type-id[t]()}). add a types/spelling[t]() sugar
-- [x] 'Quiet' sum construction syntax: elide the parentheses. Current: `:some("foo")`, allow also `:some "foo"`. Why? Noise, ease of editing (don't have to mess with a surround), and
-      it looks less like a function call `()`, which is a nice little bonus
 - [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
 - [ ] c"" string literals that are of type ptr (no interpolation)
 - [ ] [design/flags_in_tags.k1.wip]
 - [ ] Inspired by fast_float, char to digit lookup table
 Simple but missing
-- [x] auto-equals implementation on-demand for structs
-- [x] auto-print implementation on-demand for structs
-- [x] atomics
 - [ ] auto-print implementation on-demand for sums
 - [ ] Exported functions
 - [ ] Tail calls
@@ -43,6 +31,18 @@ Simple but missing
 - [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
       currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
+- [ ] A #static infinite loop hangs the compiler with zero output. Ten minutes of nothing. A VM step budget that errors out ("static execution exceeded N instructions, last function: ...") would have turned a hang-bisect into an instant diagnosis.
+- [x] allow opaques to be named / nominal; bindgen them that way. The name is really more useful than the size/align
+- [x] decide on 'assert' behavior in debug vs non debug mode and improve bactraces (need line numbers)
+- [x] 'newtype' solution; 'distinct' types? `type handle = distinct[size]` (wrapper struct is working great)
+- [x] Finish removing let*
+- [x] remove 'switch' keyword: shipped as `x is { <pat> -> <arm>, ... }` match expressions (`#is` for the comptime form), plus struct literals/patterns respelled `.{ x = 1, y }` (dot moved outside the brace, inner dots dropped; bare `{` is always a block)
+- [x] New struct literal syntax : `{ x: 1, y: 2 }` -> `{ .x = 1, .y = 2 }`. Why? clarity of meaning of "=", consistent meaning of '.', and parsing ambiguity resolution
+- [x] 'Quiet' sum construction syntax: elide the parentheses. Current: `:some("foo")`, allow also `:some "foo"`. Why? Noise, ease of editing (don't have to mess with a surround), and
+      it looks less like a function call `()`, which is a nice little bonus
+- [x] auto-equals implementation on-demand for structs
+- [x] auto-print implementation on-demand for structs
+- [x] atomics
 - [X] Specialization solution (when types are known by the function)
 - [x] Destructuring, (in)fallible patterns
 - [x] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
@@ -61,11 +61,8 @@ Simple but missing
 - [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
 - [x] implement iterator for array
 - [x] static #switch
-
-Feedback
 - [x] else { cap } is a struct literal. Field shorthand makes any { ident } ambiguous with a block, and it resolved to { cap: cap }, giving "Expected i64 but got { cap: i64 }". I could decode it, but this will bite everyone eventually. Worth a deliberate rule — e.g. struct literal requires : or , or the type being expected, or a parse-time warning when a block position resolves to a shorthand struct.
       Fixed by the dotted struct literal syntax: { cap } is a block, { .cap } is the struct.
-- [ ] A #static infinite loop hangs the compiler with zero output. Ten minutes of nothing. A VM step budget that errors out ("static execution exceeded N instructions, last function: ...") would have turned a hang-bisect into an instant diagnosis.
 - [x] Static-execution file reads (`#static` + `files/read-to-string`, global initializers) resolve relative paths against the compiler's cwd, so `k1 c dogfood/aoc/2025` only works from inside that dir. Consider resolving against the module dir (or the source file's dir) during static execution.
 - [x] Iterator ability: why is peek the primitive? With peek(self: *self) immutable, a filtering iterator like mine can't cache what it found — next() = scan (peek) + scan again (advance-by). Also every nth impl in the codebase is the identical advance-by(n); self.next() — could that be a default? Was peek chosen for for-loop desugaring reasons, or would nextced-as-primitive with peek-via-buffering be on the table?
 

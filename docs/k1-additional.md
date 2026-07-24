@@ -116,11 +116,14 @@ See `test_src/suite1/static_parameter.k1`,
 
 ## Metaprogramming
 
-K1 supports source-generating metaprogramming with `#meta`. A metaprogram may
-yield `code` — text plus a table of source spans — or a plain `string`, which
-simply carries no source information. The compiler compiles what the
-metaprogram returns in place of the invocation; errors inside compiled output
-whose bytes came from a `code` span point back at the original source.
+K1 supports source-generating metaprogramming with `#meta`. A metaprogram must
+yield `code` — text plus a table of source spans. The compiler compiles what
+the metaprogram returns in place of the invocation; errors inside compiled
+output whose bytes came from a `code` span point back at the original source.
+String templates in the `#meta` body elaborate as `code` (the expected type is
+`code`), so literal-returning metaprograms need no ceremony; a string *value*
+must be wrapped with `code/from-string`, which marks it as sourceless emitted
+text on purpose rather than by accident.
 
 ```rust
 #meta "let n: u64 = 255"

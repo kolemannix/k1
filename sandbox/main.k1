@@ -1,4 +1,14 @@
+macro mem-construct[t](alloc-mode, expr) {
+  `
+  let addr = alloc-mode.alloc-t[t]();
+  addr = $expr
+  addr
+  `
+}
+
 #debug fn main(): i32 {
+
+  mem-construct[point](mem/heap, { x: 4, y: 5 })
 
   core/for-each(it, [1,2,3].as-span(), {
     println(it);

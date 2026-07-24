@@ -315,6 +315,7 @@ impl IdentPool {
         let b = BuiltinIdents {
             null: intern!("null"),
             main: intern!("main"),
+            next: intern!("next"),
             _self: intern!("_self"),
             self_: intern!("self"),
             it: intern!("it"),
@@ -362,6 +363,8 @@ impl IdentPool {
             source_location: intern!("source-location"),
             array: intern!("array"),
             pre: intern!("pre"),
+            iterator: intern!("iterator"),
+            iterable: intern!("iterable"),
             opt: intern!("opt"),
             ordering: intern!("ordering"),
             buffer: intern!("buffer"),
@@ -381,9 +384,6 @@ impl IdentPool {
             le: intern!("le"),
             gt: intern!("gt"),
             ge: intern!("ge"),
-            iterator: intern!("iterator"),
-            iterable: intern!("iterable"),
-            next: intern!("next"),
             param_0: intern!("param_0"),
             param_1: intern!("param_1"),
             param_2: intern!("param_2"),
@@ -454,7 +454,6 @@ impl IdentPool {
         let Iterator_next = make_fn!(path_core_iterator, b.next);
 
         let path_core_iterable = intern_path!(b.core, b.iterable);
-
         let Iterable_iterator = make_fn!(path_core_iterable, intern!("iterator"));
 
         let path_core_bool = intern_path!(b.core, intern!("bool"));

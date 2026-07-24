@@ -5,35 +5,16 @@ use libffi::raw::ffi_cif;
 use libffi::{low::*, raw};
 
 use crate::errf;
-use crate::ir::{self, PhysicalFunctionType, ProgramIr};
+use crate::ir::PhysicalFunctionType;
 use crate::lex::SpanId;
 use crate::typer::types::{AggType, Layout, PhysicalType, PhysicalTypeEnum, ScalarType};
 use crate::typer::{FunctionId, K1Result, TypedProgram};
 use crate::vm;
 use crate::vm::{Value, Vm};
-use crate::{failf, kmem::MSlice, parse::StringId};
+use crate::{failf, parse::StringId};
 
-pub(super) fn handle_ffi_call(
-    k1: &mut TypedProgram,
-    vm: &mut Vm,
-    frame_index: u32,
-    return_pt: PhysicalType,
-    args: MSlice<ir::Value, ProgramIr>,
-    lib_name: Option<StringId>,
-    fn_name: StringId,
-    function_id: FunctionId,
-) -> K1Result<Value> {
-    let mut resolved: smallvec::SmallVec<[Value; 8]> =
-        smallvec::SmallVec::with_capacity(args.len() as usize);
-    for arg_value in k1.ir.mem.getn(args).iter() {
-        resolved.push(vm::resolve_value(k1, vm, frame_index, *arg_value)?);
-    }
-    handle_ffi_call_resolved(k1, vm, return_pt, &resolved, lib_name, fn_name, function_id, None)
-}
-
-/// Core FFI dispatch on already-resolved argument values. Used directly by
-/// the bc VM (which has the args contiguous in its out-arg region) and via
-/// the resolving wrapper above by the old IR interpreter.
+/// Core FFI dispatch on already-resolved argument values; the bc VM has the
+/// args contiguous in its out-arg region.
 ///
 /// `ret_dst`: caller-provided storage for an aggregate return. When given,
 /// libffi writes the struct directly into it (the bc VM passes its sret

@@ -45,7 +45,7 @@ fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
       },
       _ -> crash("Unsupported format arguments: ${types/name[args]}")
     }
-    code.build()
+    code/from-string(code.build())
   }
 }
 

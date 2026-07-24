@@ -49,7 +49,7 @@ ns meta {
 
   // Note: If we had an ability for "growable collection", we could implement it.
   //       len, get, empty, (push)
-  fn define-soa[t](name: string): string {
+  fn define-soa[t](name: string): code {
     let struct-type-id = types/type-id[t]
     let tt = "type-from-id($struct-type-id)"
     require types/type-id-schema(struct-type-id) is :struct .{ fields } else
@@ -90,7 +90,7 @@ ns meta {
     code.writeln(`}`) // end fn push
 
     code.writeln(`}`) // end ns
-    code.build()
+    code/from-string(code.build())
   } 
 
 }

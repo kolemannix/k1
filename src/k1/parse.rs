@@ -3,6 +3,7 @@
 
 use std::fmt::{Display, Formatter, Write};
 use std::io::IsTerminal;
+use std::rc::Rc;
 
 use crate::kmem::{self, Handle, List, MSL2, MSS2, MSlice, MSpillList};
 use crate::rawref::RawRef;
@@ -225,6 +226,9 @@ pub struct ParsedListLiteral {
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedNumericLiteral {
     pub span: SpanId,
+    /// The digits (and optional sign/suffix) alone; the value is parsed from
+    /// this text, while `span` may widen to cover parens or a type hint
+    pub text_span: SpanId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -242,6 +246,15 @@ impl ParsedLiteral {
             ParsedLiteral::Numeric(i) => i.span,
             ParsedLiteral::Bool(_, span) => *span,
             ParsedLiteral::String(_, span) => *span,
+        }
+    }
+
+    pub fn set_span(&mut self, new_span: SpanId) {
+        match self {
+            ParsedLiteral::Char(_, span) => *span = new_span,
+            ParsedLiteral::Numeric(i) => i.span = new_span,
+            ParsedLiteral::Bool(_, span) => *span = new_span,
+            ParsedLiteral::String(_, span) => *span = new_span,
         }
     }
 }
@@ -549,6 +562,9 @@ impl BinaryOpKind {
 #[derive(Clone)]
 pub struct ParsedVariable {
     pub name: QIdent,
+    /// Covers the full qualified path (and any widening parens); `name.name_span`
+    /// remains the final segment alone
+    pub span: SpanId,
 }
 
 #[derive(Clone)]
@@ -590,6 +606,8 @@ impl_copy_if_small!(16, ParsedStruct);
 pub struct ParsedVariant {
     pub type_name: Option<QIdent>,
     pub variant_name: StringId,
+    /// The `:name` component alone, for LSP entities and name-level errors
+    pub name_span: SpanId,
     pub type_args: AstSlice<NamedTypeArg>,
     pub payload: Option<ParsedExprId>,
     pub span: SpanId,
@@ -811,7 +829,7 @@ impl ParsedExpr {
             Self::InterpolatedString(is) => is.span,
             Self::Call(call) => call.span,
             Self::CallOnExpr(call) => call.span,
-            Self::Variable(var) => var.name.name_span,
+            Self::Variable(var) => var.span,
             Self::FieldAccess(acc) => acc.span,
             Self::Block(block) => block.span,
             Self::If(if_expr) => if_expr.span,
@@ -828,6 +846,34 @@ impl ParsedExpr {
             Self::Static(s) => s.span,
             Self::Code(c) => c.span,
             Self::QualifiedAbilityCall(c) => c.span,
+        }
+    }
+
+    pub fn set_span(&mut self, span: SpanId) {
+        match self {
+            Self::BinaryOp(op) => op.span = span,
+            Self::UnaryOp(op) => op.span = span,
+            Self::Literal(lit) => lit.set_span(span),
+            Self::InterpolatedString(is) => is.span = span,
+            Self::Call(call) => call.span = span,
+            Self::CallOnExpr(call) => call.span = span,
+            Self::Variable(var) => var.span = span,
+            Self::FieldAccess(acc) => acc.span = span,
+            Self::Block(block) => block.span = span,
+            Self::If(if_expr) => if_expr.span = span,
+            Self::While(while_expr) => while_expr.span = span,
+            Self::Loop(loop_expr) => loop_expr.span = span,
+            Self::Struct(struc) => struc.span = span,
+            Self::ListLiteral(list_expr) => list_expr.span = span,
+            Self::For(for_expr) => for_expr.span = span,
+            Self::Variant(tag_expr) => tag_expr.span = span,
+            Self::Is(is_expr) => is_expr.span = span,
+            Self::Match(match_expr) => match_expr.span = span,
+            Self::Lambda(lambda) => lambda.span = span,
+            Self::Builtin(s) => *s = span,
+            Self::Static(s) => s.span = span,
+            Self::Code(c) => c.span = span,
+            Self::QualifiedAbilityCall(c) => c.span = span,
         }
     }
 
@@ -1266,6 +1312,7 @@ pub struct ParsedMacro {
     pub signature_span: SpanId,
     pub span: SpanId,
     pub name_span: SpanId,
+    pub compiler_debug: bool,
     pub condition: Option<ParsedExprId>,
     pub id: ParsedMacroId,
 }
@@ -1465,6 +1512,10 @@ impl ParsedExpressionPool {
 
     pub fn get_span(&self, id: ParsedExprId) -> SpanId {
         self.get(id).get_span()
+    }
+
+    pub fn set_span(&mut self, id: ParsedExprId, span: SpanId) {
+        self.expressions.get_mut(id).set_span(span)
     }
 
     pub fn iter_exprs(&self) -> impl Iterator<Item = &ParsedExpr> {
@@ -2020,7 +2071,7 @@ impl Line {
 #[derive(Debug, Clone)]
 pub struct SourceFile {
     pub file_id: FileId,
-    pub directory: String,
+    pub directory: Rc<String>,
     pub filename: String,
     pub content: String,
     newline_positions: Vec<u32>,
@@ -2031,7 +2082,7 @@ pub struct SourceFile {
 impl SourceFile {
     pub fn make(
         file_id: FileId,
-        directory: String,
+        directory: Rc<String>,
         filename: String,
         content: String,
     ) -> SourceFile {
@@ -2259,7 +2310,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         let (maybe_hash, maybe_directive) = self.peek_two();
         if maybe_hash.kind == K::Hash {
             // Leave `#debug` entirely alone
-            if self.get_token_chars(maybe_directive) == "debug" {
+            if self.token_chars(maybe_directive) == "debug" {
                 Ok(None)
             } else {
                 self.advance();
@@ -2692,13 +2743,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             (K::Minus, K::Numeric) if !second.is_whitespace_preceded() => {
                 self.advance_n(2);
                 let span = self.extend_token_span(first, second);
-                let numeric = ParsedLiteral::Numeric(ParsedNumericLiteral { span });
+                let numeric =
+                    ParsedLiteral::Numeric(ParsedNumericLiteral { span, text_span: span });
                 Ok(Some(self.add_expression(ParsedExpr::Literal(numeric))))
             }
             (K::Numeric, _) => {
                 self.advance();
                 Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Numeric(
-                    ParsedNumericLiteral { span: first.span },
+                    ParsedNumericLiteral { span: first.span, text_span: first.span },
                 )))))
             }
             (K::Ident, _) => {
@@ -2766,6 +2818,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.emit_semantic_token(current_token, SemanticTokenKind::Variable);
                     let expr_id = self.add_expression(ParsedExpr::Variable(ParsedVariable {
                         name: QIdent::naked(string_id, current_token.span),
+                        span: current_token.span,
                     }));
                     pending.push(Pending::Part(InterpolatedStringPart::Expr(
                         expr_id,
@@ -3015,10 +3068,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(result))
     }
 
-    fn get_token_chars(&self, token: Token) -> &str {
-        Parser::tok_chars(&self.ast.spans, self.source(), token)
-    }
-
     fn parse_base_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExprId>> {
         let first = self.peek();
         if first.kind == K::OpenParen {
@@ -3042,7 +3091,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 span,
                 kind: reference_kind,
             }))))
-        } else if first.kind == K::OpenBrace || self.get_token_chars(first) == "union" {
+        } else if first.kind == K::OpenBrace || self.token_chars(first) == "union" {
             let is_union = first.kind != K::OpenBrace;
             if is_union {
                 self.advance();
@@ -3085,7 +3134,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Err(error("This literal can't be used as a type", first))
             }
         } else if first.kind == K::Ident {
-            let first_chars = self.get_token_chars(first);
+            let first_chars = self.token_chars(first);
             if first_chars == "either" {
                 let sum = self.expect_sum_type_expression()?;
                 let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::Sum(sum));
@@ -3258,7 +3307,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.peek(),
                 ));
             };
-            Some(ParsedNumericLiteral { span: num.span })
+            Some(*num)
         } else {
             None
         };
@@ -3383,9 +3432,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 // a.b[int](...); call parens bind only same-line, so a
                 // parenthesized statement can follow on the next line
                 if next.kind == K::OpenParen && !next.is_newline_preceded() {
-                    let (mut args, args_span) = self.expect_fn_call_args()?;
+                    let (mut args, _) = self.expect_fn_call_args()?;
                     let self_arg = result;
-                    let span = self.extend_span(self.get_expression_span(self_arg), args_span);
                     let name = self.make_ident(target);
 
                     let index_of_first_explicit_arg =
@@ -3397,6 +3445,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let args_handle = self.ast.mem.pushn(&args);
 
                     self.emit_semantic_token(target, SemanticTokenKind::Function);
+                    let span = self.extend_to_here(self.get_expression_span(self_arg));
                     Some(self.add_expression(ParsedExpr::Call(ParsedCall {
                         name: QIdent::naked(name, target.span),
                         type_args,
@@ -3430,6 +3479,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.advance();
                 let type_hint = self.expect_type_expression()?;
                 self.ast.exprs.set_type_hint(with_postfix, type_hint);
+                let span = self.extend_to_here(self.get_expression_span(with_postfix));
+                self.ast.exprs.set_span(with_postfix, span);
             }
         }
         Ok(Some(with_postfix))
@@ -3549,7 +3600,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 None
             };
             let peeked = p.peek();
-            let type_expr = if peeked.kind == K::Ident && p.get_token_chars(peeked) == "_" {
+            let type_expr = if peeked.kind == K::Ident && p.token_chars(peeked) == "_" {
                 p.advance();
                 None
             } else {
@@ -3638,7 +3689,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let (first, second) = self.peek_two();
         let is_debug = first.kind == K::Hash
             && second.is_kind_nonspaced(K::Ident)
-            && self.get_token_chars(second) == "debug";
+            && self.token_chars(second) == "debug";
         if is_debug {
             self.advance_n(2);
         }
@@ -3685,7 +3736,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             K::OpenParen => {
                 self.advance();
                 let expr = self.expect_expression()?;
-                self.expect_kind(K::CloseParen)?;
+                let close_paren = self.expect_kind(K::CloseParen)?;
+                let span = self.extend_token_span(first, close_paren);
+                self.ast.exprs.set_span(expr, span);
                 Ok(Some(expr))
             }
             K::KeywordFn => Ok(Some(self.expect_lambda()?)),
@@ -3707,10 +3760,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             K::Amp => {
                 self.advance();
                 let expr = self.expect_expression_with_postfix_ops()?;
+                let span = self.extend_span(first.span, self.get_expression_span(expr));
                 Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp {
                     expr,
                     op_kind: ParsedUnaryOpKind::AddressOf,
-                    span: first.span,
+                    span,
                 }))))
             }
             K::KeywordNot => {
@@ -3719,11 +3773,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 };
                 self.advance();
                 let expr = self.expect_expression()?;
-                Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp {
-                    expr,
-                    op_kind,
-                    span: first.span,
-                }))))
+                let span = self.extend_span(first.span, self.get_expression_span(expr));
+                Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp { expr, op_kind, span }))))
             }
             K::Colon => {
                 self.advance();
@@ -3732,16 +3783,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 // ^^^^^
                 // :some(42)   :some 42
                 // ^^^^^       ^^^^^
-                // :some[int](42)
-                // ^^^^^
-                // We set the span to just the name component
-                let span = self.extend_token_span(first, name_token);
+                let name_span = self.extend_token_span(first, name_token);
 
                 let type_args = self.parse_variant_type_args()?;
                 let payload = self.parse_variant_payload()?;
+                let span = self.extend_to_here(first.span);
                 Ok(Some(self.add_expression(ParsedExpr::Variant(ParsedVariant {
                     type_name: None,
                     variant_name,
+                    name_span,
                     type_args,
                     payload,
                     span,
@@ -3847,14 +3897,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     if second.is_kind_nonspaced(K::Colon) && !third.is_whitespace_preceded() {
                         self.advance();
                         let (variant_name_token, variant_name) = self.expect_ident()?;
-                        let span = self.extend_token_span(second, variant_name_token);
+                        let name_span = self.extend_token_span(second, variant_name_token);
                         let type_args = self.parse_variant_type_args()?;
                         let payload = self.parse_variant_payload()?;
 
+                        let span = self.extend_to_here(first.span);
                         let variant_expr =
                             self.add_expression(ParsedExpr::Variant(ParsedVariant {
                                 type_name: Some(namespaced_ident),
                                 variant_name,
+                                name_span,
                                 type_args,
                                 payload,
                                 span,
@@ -3878,7 +3930,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 // Call with type params above
                                 let (args, args_span) = self.expect_fn_call_args()?;
                                 let args_handle = self.ast.mem.pushn(&args);
-                                let span = self.extend_span(namespaced_ident.name_span, args_span);
+                                let span = self.extend_span(first.span, args_span);
                                 self.emit_semantic_token_span(
                                     name_span,
                                     SemanticTokenKind::Function,
@@ -3958,8 +4010,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             namespaced_ident.name_span,
                             SemanticTokenKind::Variable,
                         );
+                        let span = self.extend_to_here(first.span);
                         Ok(Some(self.add_expression(ParsedExpr::Variable(ParsedVariable {
                             name: namespaced_ident,
+                            span,
                         }))))
                     }
                 } else {
@@ -3978,6 +4032,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.advance();
                     let type_hint = self.expect_type_expression()?;
                     self.ast.exprs.set_type_hint(expression_id, type_hint);
+                    let span = self.extend_to_here(self.get_expression_span(expression_id));
+                    self.ast.exprs.set_span(expression_id, span);
                 }
             }
             self.ast.exprs.get_metadata_mut(expression_id).is_debug = compiler_debug;
@@ -4054,6 +4110,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance_n(2);
             let binding_expr = self.add_expression(ParsedExpr::Variable(ParsedVariable {
                 name: QIdent::naked(binding_ident, second.span),
+                span: second.span,
             }));
             Some(binding_expr)
         } else {
@@ -4186,7 +4243,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.advance();
                     flags |= ParsedLet::FLAG_CONTEXT
                 }
-                K::Ident if self.get_token_chars(p) == "returned" => {
+                K::Ident if self.token_chars(p) == "returned" => {
                     self.advance();
                     flags |= ParsedLet::FLAG_RETURNED
                 }
@@ -4384,7 +4441,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             match parse(self) {
                 Err(e) => {
                     self.ast.report_error(e);
-                    match self.scan_to_kind(&[delim, terminator])? {
+                    match self.scan_to_kind(&[delim, terminator], None)? {
                         t if t.kind == delim => continue,
                         t if t.kind == terminator => break Ok(()),
                         _ => {
@@ -4413,7 +4470,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.ast.report_error(
                     self.error_here(format!("Expected '{delim}' in between each {name}")),
                 );
-                match self.scan_to_kind(&[delim, terminator])? {
+                match self.scan_to_kind(&[delim, terminator], None)? {
                     t if t.kind == delim => continue,
                     t if t.kind == terminator => break Ok(()),
                     _ => {
@@ -4446,7 +4503,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             match parse(self) {
                 Err(e) => {
                     self.ast.report_error(e);
-                    match self.scan_to_kind(&[delim, terminator])? {
+                    match self.scan_to_kind(&[delim, terminator], None)? {
                         t if t.kind == delim => continue,
                         t if t.kind == terminator => break Ok(()),
                         _ => {
@@ -4470,7 +4527,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.ast.report_error(
                     self.error_here(format!("Expected '{delim}' in between each {name}")),
                 );
-                match self.scan_to_kind(&[delim, terminator])? {
+                match self.scan_to_kind(&[delim, terminator], None)? {
                     t if t.kind == delim => continue,
                     t if t.kind == terminator => break Ok(()),
                     _ => {
@@ -4483,7 +4540,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    fn scan_to_kind(&mut self, kinds: &[TokenKind]) -> ParseResult<Token> {
+    fn scan_to_kind(
+        &mut self,
+        kinds: &[TokenKind],
+        ident_pred: Option<fn(&str) -> bool>,
+    ) -> ParseResult<Token> {
         loop {
             let n = self.tokens.next();
             if n.kind == K::Eof {
@@ -4492,7 +4553,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     kinds.iter().map(|k| format!("{k}")).join(", ")
                 )));
             } else if kinds.contains(&n.kind) {
-                return Ok(n);
+                if let Some(ident_pred) = ident_pred.as_ref()
+                    && n.kind == K::Ident
+                {
+                    if ident_pred(self.token_chars(n)) {
+                        return Ok(n);
+                    } else {
+                        // continue
+                    }
+                } else {
+                    return Ok(n);
+                }
             }
         }
     }
@@ -4733,6 +4804,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         &mut self,
         condition: Option<ParsedExprId>,
     ) -> ParseResult<Option<ParsedMacroId>> {
+        let (first, second, third) = self.peek_three();
+        let compiler_debug = first.kind == K::Hash
+            && second.is_kind_nonspaced(K::Ident)
+            && self.token_chars(second) == "debug"
+            && third.kind == K::Ident
+            && self.token_chars(third) == "macro";
+        if compiler_debug {
+            self.advance_n(2);
+        }
         let (first, second) = self.peek_two();
         let is_macro_defn =
             first.kind == K::Ident && second.kind == K::Ident && self.token_chars(first) == "macro";
@@ -4784,6 +4864,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             signature_span,
             span,
             name_span: func_name.span,
+            compiler_debug,
             condition,
             id: ParsedMacroId::PENDING,
         });
@@ -4940,7 +5021,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let name = self.make_ident(name_token);
         self.expect_kind(K::Equals)?;
         let peeked = self.peek();
-        let type_expr = if peeked.kind == K::Ident && self.get_token_chars(peeked) == "_" {
+        let type_expr = if peeked.kind == K::Ident && self.token_chars(peeked) == "_" {
             self.advance();
             None
         } else {
@@ -5018,7 +5099,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         loop {
             let name_or_modifier = self.peek();
 
-            let text = self.get_token_chars(name_or_modifier);
+            let text = self.token_chars(name_or_modifier);
             if text == "alias" {
                 flags.set_alias();
                 self.advance()
@@ -5673,7 +5754,7 @@ pub fn lex_file_into_program(
 pub fn parse_standalone(program_name: String, content: String) -> ParsedProgram {
     let mut ast = ParsedProgram::make(program_name.clone());
 
-    let source = SourceFile::make(0, ".".to_string(), program_name.clone(), content);
+    let source = SourceFile::make(0, ".".to_string().into(), program_name.clone(), content);
     let mut token_vec = vec![];
     let file_id = match lex_file_into_program(&mut ast, source, &mut token_vec) {
         Err(e) => {

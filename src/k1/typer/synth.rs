@@ -301,7 +301,7 @@ impl TypedProgram {
             defn_stmt,
         );
         let parsed_expr = self.ast.exprs.add(
-            ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span) }),
+            ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span), span }),
             false,
             None,
         );
@@ -538,7 +538,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> ParsedExprId {
         self.ast.exprs.add(
-            ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span) }),
+            ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span), span }),
             false,
             None,
         )
@@ -721,7 +721,7 @@ impl TypedProgram {
                     let parsed_expr = self.ast.exprs.get(*expr_id);
                     let expr_span = self.ast.exprs.get_span(*expr_id);
                     let naked_variable_name = match parsed_expr {
-                        ParsedExpr::Variable(ParsedVariable { name }) if name.path.is_empty() => {
+                        ParsedExpr::Variable(ParsedVariable { name, .. }) if name.path.is_empty() => {
                             Some(name.name)
                         }
                         _ => None,

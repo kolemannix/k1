@@ -27,15 +27,13 @@ fn main() -> anyhow::Result<ExitCode> {
 
 fn run() -> anyhow::Result<ExitCode> {
     let l = Box::leak(Box::new(
-        env_logger::Builder::new()
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
             .format_timestamp(None)
-            .filter_level(log::LevelFilter::Debug)
             .build(),
     ));
+    let max_level = l.filter();
     log::set_logger(l).unwrap();
-    // For permanent debug:
-    // log::set_max_level(log::LevelFilter::Debug);
-    log::set_max_level(log::LevelFilter::Info);
+    log::set_max_level(max_level);
     let args = Args::parse();
     log::debug!("{:#?}", args);
 

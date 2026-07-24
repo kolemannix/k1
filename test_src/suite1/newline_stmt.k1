@@ -20,11 +20,11 @@ fn pipe-chain(): int {
   doubled.len().as[int]
 }
 
-fn leading-dot(): int {
+fn leading-dot(): u64 {
   let s = "hello world"
   let n = s
     .len()
-    .as[int]
+    .as[u64]
   n
 }
 

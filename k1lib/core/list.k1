@@ -219,10 +219,14 @@ ns for list {
     self.append-buffer-in[t](context :current)(other)
   }
   fn append-buffer-in[t](context alloc-mode)(self: *mut list[t], other: buffer[t]) {
-    self.reserve-in(self.len + other.len)
-    let dst = self.inner-buffer().slice(start = self.len, end = self.len + other.len)
+    let needed = self.len + other.len
+    if needed > self.cap() {
+      let doubled = self.cap() * 2
+      self.reserve-in(if doubled > needed doubled else needed)
+    }
+    let dst = self.inner-buffer().slice(start = self.len, end = needed)
     buffer/copy(src = other, dst = dst)
-    self.len = self.len + other.len
+    self.len = needed
   }
 
   fn append-span[t](self: *mut list[t], other: span[t]) {

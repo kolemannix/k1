@@ -2,84 +2,6 @@
 // All rights reserved.
 
 #[cfg(test)]
-mod stack_tests {
-
-    use crate::kmem::Dlist;
-    use crate::kmem::MSlice;
-    use crate::typer::types::AbiMode;
-    use crate::typer::types::EMPTY_TYPE_ID;
-    use crate::typer::*;
-    use crate::vm::*;
-
-    fn fake_unit() -> IrUnit {
-        IrUnit {
-            result_type_id: EMPTY_TYPE_ID,
-            unit_id: IrUnitId::Function(FunctionId::PENDING),
-            fn_type: ir::PhysicalFunctionType {
-                return_type: PhysicalType::EMPTY,
-                diverges: false,
-                params: MSlice::empty(),
-                abi_mode: AbiMode::Internal,
-            },
-            inst_count: 0,
-            last_alloca_index: None,
-            blocks: Dlist::empty(),
-            is_debug: false,
-            function_builtin_kind: None,
-
-            inline_done: false,
-            cfg_valid: false,
-        }
-    }
-
-    fn fake_ret_info() -> RetInfo {
-        RetInfo {
-            pt: PhysicalType::scalar(ScalarType::U32),
-            frame_index: 0,
-            call_inst_node: DlNode::singleton(InstId::PENDING),
-            has_dst: false,
-            block: Handle::nil(),
-        }
-    }
-
-    fn test_stack() -> Stack {
-        let mut s = Stack::make();
-        s.push_new_frame(None, &fake_unit(), fake_ret_info());
-        s
-    }
-
-    #[test]
-    fn test_params_and_instrs() {
-        let mut stack = test_stack();
-        let mut unit = fake_unit();
-        unit.inst_count = 42;
-        unit.fn_type.params = MSlice::forged(1, 10);
-        stack.push_new_frame(None, &unit, fake_ret_info());
-        let frame_space_for_registers =
-            stack.cursor().addr() - stack.current_frame().base_ptr.addr();
-        assert_eq!(frame_space_for_registers, (10) * size_of::<Value>());
-        let x_addr = stack.push_t(b'X');
-        stack.set_param_value(1, 0, Value(23));
-        stack.set_param_value(1, 9, Value(24));
-
-        // This test makes less sense now that the inst values are just a simple hashmap
-        // vs an intricate stack layout, but oh well
-        stack.set_inst_value(1, InstId::from_u32(41).unwrap(), Value(41));
-        stack.set_inst_value(1, InstId::from_u32(1).unwrap(), Value(1));
-        stack.set_inst_value(1, InstId::from_u32(2).unwrap(), Value(2));
-
-        assert_eq!(stack.get_param_value(1, 0).bits(), Value(23).bits());
-        assert_eq!(stack.get_param_value(1, 9).bits(), Value(24).bits());
-
-        assert_eq!(stack.get_inst_value(1, InstId::from_u32(41).unwrap()).bits(), Value(41).bits());
-        assert_eq!(stack.get_inst_value(1, InstId::from_u32(1).unwrap()).bits(), Value(1).bits());
-        assert_eq!(stack.get_inst_value(1, InstId::from_u32(2).unwrap()).bits(), Value(2).bits());
-
-        assert_eq!(unsafe { *x_addr }, b'X');
-    }
-}
-
-#[cfg(test)]
 mod value_tests {}
 
 #[cfg(test)]
@@ -192,19 +114,19 @@ mod value_roundtrip_tests {
     fn test_sign_extend() {
         assert_eq!(
             Value::i16(-3)
-                .sign_extended(NumericWidth::B16, NumericWidth::B32)
+                .sign_extended_raw(16, 32)
                 .as_typed_int(IntegerType::I32),
             TypedIntValue::I32(-3)
         );
         assert_eq!(
             Value::i16(-3)
-                .sign_extended(NumericWidth::B16, NumericWidth::B64)
+                .sign_extended_raw(16, 64)
                 .as_typed_int(IntegerType::I64),
             TypedIntValue::I64(-3)
         );
         assert_eq!(
             Value::i8(-3)
-                .sign_extended(NumericWidth::B8, NumericWidth::B32)
+                .sign_extended_raw(8, 32)
                 .as_typed_int(IntegerType::I32),
             TypedIntValue::I32(-3)
         )

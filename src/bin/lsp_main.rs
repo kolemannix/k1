@@ -282,7 +282,6 @@ impl Backend {
             optimize_ir: true,
             target: None,
             filc: false,
-            static_exec: k1::compiler::StaticExecMode::Bc,
             command: k1::compiler::Command::Check {
                 file: root_uri.as_ref().unwrap().path().into(),
             },

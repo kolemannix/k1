@@ -28,8 +28,8 @@ use crate::vm::{
 
 use super::lower;
 use super::{
-    CastKind, Opcode, SRC_CONST_BIT, UnitKind, builtin_from_tag, float_pred_from_tag, header_a,
-    header_b, header_op, int_pred_from_tag,
+    CastKind, OPCODE_COUNT, Opcode, SRC_CONST_BIT, UnitKind, builtin_from_tag, float_pred_from_tag,
+    header_a, header_b, header_op, int_pred_from_tag,
 };
 
 pub fn execute_compiled_expr(
@@ -53,6 +53,44 @@ pub fn execute_compiled_function(
     execute_compiled_unit(k1, vm, IrUnitId::Function(function_id), arguments, span, report_messages)
 }
 
+pub fn execute_compiled_expr_raw(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    expr_id: TypedExprId,
+    report_messages: bool,
+) -> K1Result<RawUnitResult> {
+    let span = k1.exprs.get_span(expr_id);
+    execute_compiled_unit_raw(k1, vm, IrUnitId::Expr(expr_id), &[], span, report_messages)
+}
+
+pub fn execute_compiled_function_raw(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    function_id: FunctionId,
+    arguments: &[StaticValueId],
+    report_messages: bool,
+) -> K1Result<RawUnitResult> {
+    let span = k1.get_function_span(function_id);
+    execute_compiled_unit_raw(
+        k1,
+        vm,
+        IrUnitId::Function(function_id),
+        arguments,
+        span,
+        report_messages,
+    )
+}
+
+/// A unit's result as raw VM memory; every pointer is valid only until
+/// `vm.reset`, so consumers must copy out within the executing VM scope
+pub struct RawUnitResult {
+    pub ret_addr: *mut u8,
+    pub ret_pt: PhysicalType,
+    pub result_type_id: TypeId,
+    /// false when the unit diverges or returns empty; ret_addr holds nothing
+    pub returns_value: bool,
+}
+
 pub fn execute_compiled_unit(
     k1: &mut TypedProgram,
     vm: &mut Vm,
@@ -61,6 +99,25 @@ pub fn execute_compiled_unit(
     span: SpanId,
     report_messages: bool,
 ) -> K1Result<StaticValueId> {
+    let raw = execute_compiled_unit_raw(k1, vm, unit_id, arguments, span, report_messages)?;
+    if !raw.returns_value {
+        return Ok(k1.static_values.empty_id());
+    }
+    let ferry_start = k1.timing.clock.raw();
+    let loaded = load_value(raw.ret_pt, raw.ret_addr);
+    let result = vm::vm_value_to_static_value(k1, raw.result_type_id, loaded, span);
+    k1.timing.total_ferry_nanos += k1.timing.elapsed_nanos(ferry_start) as i64;
+    result
+}
+
+pub fn execute_compiled_unit_raw(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    unit_id: IrUnitId,
+    arguments: &[StaticValueId],
+    span: SpanId,
+    report_messages: bool,
+) -> K1Result<RawUnitResult> {
     vm.eval_span = span;
     vm.bc_fault = None;
 
@@ -83,6 +140,7 @@ pub fn execute_compiled_unit(
     // Top frame: 16-aligned base, header links to Halt (pc 0, fp 0)
     let fp0: *mut u8 = vm.stack.mem.cursor().map_addr(|a| (a + 15) & !15);
     vm.stack.mem.set_cursor(fp0);
+    let ferry_start = k1.timing.clock.raw();
     unsafe {
         let words = fp0 as *mut u64;
         words.write(0); // caller_fp: none
@@ -94,11 +152,13 @@ pub fn execute_compiled_unit(
             words.add(super::FRAME_HEADER_WORDS as usize + i).write(vm_value.bits());
         }
     }
+    let ferry_in_nanos = k1.timing.elapsed_nanos(ferry_start) as i64;
+    k1.timing.total_ferry_nanos += ferry_in_nanos;
 
     let exec_result = exec_loop(k1, vm, info.code_start, fp0, ret_pt);
 
     let elapsed_nanos = k1.timing.elapsed_nanos(start);
-    k1.timing.total_vm_nanos += elapsed_nanos as i64;
+    k1.timing.total_vm_nanos += elapsed_nanos as i64 - ferry_in_nanos;
 
     let exit_code = match exec_result {
         Ok(exit_code) => exit_code,
@@ -115,16 +175,17 @@ pub fn execute_compiled_unit(
         vm::report_execution_messages(k1, vm, span, exit_code);
     }
 
-    let result = if exit_code != 0 {
-        failf!(span, "Static execution exited with code: {}", exit_code)
-    } else if info.diverges || ret_pt.is_empty() {
-        Ok(k1.static_values.empty_id())
-    } else {
-        let loaded = load_value(ret_pt, ret_addr);
-        vm::vm_value_to_static_value(k1, result_type_id, loaded, span)
-    };
     vm.overall_return_addr = core::ptr::null_mut();
-    result
+    if exit_code != 0 {
+        failf!(span, "Static execution exited with code: {}", exit_code)
+    } else {
+        Ok(RawUnitResult {
+            ret_addr,
+            ret_pt,
+            result_type_id,
+            returns_value: !(info.diverges || ret_pt.is_empty()),
+        })
+    }
 }
 
 /// Walk the caller_fp chain, naming each frame's unit via the pc range table.
@@ -206,6 +267,7 @@ fn exec_loop(
     let mut fp: *mut u8 = top_fp;
     let mut ret_reg: Value = Value::u64(0);
     let mut instrs_run = 0;
+    let mut op_counts = [0u64; OPCODE_COUNT as usize];
 
     // Callers wrap uses in `unsafe`; pointer arithmetic + deref together
     macro_rules! word_ptr {
@@ -293,6 +355,7 @@ fn exec_loop(
         let h = code_at!(pc);
         instrs_run += 1;
         let op = Opcode::from_u8(header_op(h));
+        op_counts[op as usize] += 1;
 
         match op {
             Opcode::Halt => {
@@ -302,6 +365,9 @@ fn exec_loop(
                     store_value(&k1.types, top_ret_pt, vm.overall_return_addr, ret_reg);
                 }
                 k1.timing.total_vm_instrs += instrs_run;
+                for (i, n) in op_counts.iter().enumerate() {
+                    k1.timing.opcode_counts[i] += *n as i64;
+                }
                 return Ok(0);
             }
             Opcode::Enter => {
@@ -489,11 +555,20 @@ fn exec_loop(
             Opcode::LoadGlobal => {
                 let dst = operand!(0);
                 let global_id = TypedGlobalId::from_u32(operand!(1)).unwrap();
-                let storage_pt = PhysicalType::from_u32(operand!(2));
-                vm.eval_span = k1.bc.span_for_pc(pc as u32);
-                // May run the global's initializer: nested typechecking and
-                // nested static execution (on alt VMs), possibly more lowering.
-                let v = vmtry!(vm::resolve_global(k1, vm, global_id, storage_pt));
+                let v = match k1.vm_global_constant_lookups.get(&global_id) {
+                    Some(v) => *v,
+                    None => match vm.globals.get(&global_id) {
+                        Some(v) => *v,
+                        None => {
+                            // First use: may run the global's initializer -> nested
+                            // typechecking and nested static execution (on alt VMs),
+                            // possibly more lowering.
+                            let storage_pt = PhysicalType::from_u32(operand!(2));
+                            vm.eval_span = k1.bc.span_for_pc(pc as u32);
+                            vmtry!(vm::resolve_global(k1, vm, global_id, storage_pt))
+                        }
+                    },
+                };
                 write_slot!(dst, v);
                 advance!(Opcode::LoadGlobal);
             }

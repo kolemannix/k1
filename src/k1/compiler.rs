@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{IsTerminal, Write};
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
+use std::rc::Rc;
 
 use crate::parse::{StringId, write_source_location};
 use crate::typer::{LibRefLinkType, MessageLevel, TypedProgram};
@@ -61,27 +62,6 @@ pub enum Arch {
     Intel,
     Arm,
     Wasm,
-}
-
-/// Which engine executes comptime (static) code.
-/// `Both` runs both the IR interpreter and the bc VM on every static execution and
-/// logs divergences
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum StaticExecMode {
-    Ir,
-    Bc,
-    Both,
-}
-
-impl std::fmt::Display for StaticExecMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            StaticExecMode::Ir => "ir",
-            StaticExecMode::Bc => "bc",
-            StaticExecMode::Both => "both",
-        };
-        write!(f, "{}", s)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -264,10 +244,6 @@ pub struct Args {
     #[arg(long)]
     pub target: Option<Target>,
 
-    /// Engine for comptime execution: the ir interpreter, the bc VM, or both
-    #[arg(long, value_enum, default_value_t = StaticExecMode::Bc)]
-    pub static_exec: StaticExecMode,
-
     #[command(subcommand)]
     pub command: Command,
 }
@@ -289,9 +265,9 @@ pub struct CompilerConfig {
     pub sanitize: bool,
     pub filc: bool,
     pub out_dir: PathBuf,
+    pub out_dir_generated: Rc<String>,
     pub optimize: bool,
     pub chatty: bool,
-    pub static_exec: StaticExecMode,
     pub optimize_ir: bool,
 }
 
@@ -434,7 +410,10 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
 
     let (_is_dir, home_dir) = module_home_from_src_path(&src_path);
     let out_dir: PathBuf = home_dir.join(".k1-out");
+    let out_dir_gen = out_dir.join("generated");
     std::fs::create_dir_all(&out_dir).unwrap();
+    std::fs::create_dir_all(&out_dir_gen).unwrap();
+    let out_dir_generated: Rc<String> = Rc::new(out_dir_gen.to_str().unwrap().to_string());
 
     let use_std = !args.no_std;
 
@@ -491,9 +470,9 @@ pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, Compile
         sanitize: args.sanitize,
         filc: args.filc,
         out_dir,
+        out_dir_generated,
         optimize: args.optimize,
         chatty: args.chatty,
-        static_exec: args.static_exec,
         optimize_ir: args.optimize_ir,
     };
 

@@ -884,11 +884,13 @@ fn crash-bounds(context locn: k1/source-location)(size: size, index: size, msg: 
 macro for-each(binding, iterable, body) {
   `{
     let iter = ($iterable).iterator()
-    let it-index: size = 0
+    let it-index-next: size = 0
     loop {
       if iter.next() is :some($binding) {
+        let it-index = it-index-next
+        it-index-next = it-index + 1
+        // work around 'never' bodies for now
         $body
-        it-index = it-index + 1
       } else break
     }
   }`
