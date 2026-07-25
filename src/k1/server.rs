@@ -101,12 +101,8 @@ fn exec_time_display(exec_time: std::time::Duration) -> impl fmt::Display {
 //                  emitted data
 //nocommit TODO Data panel as an instantiation of a list widget; tabled until it emerges — once we
 //              can implement Data with a widget, it's time
-//nocommit TODO [x] 'connect' this server to the lsp. We should be able to re-compile underneath and
-//              keep all the cell sources; submit a cell from your editor via Conjure and see it in
-//              the server page
-//              x Render UI for exploring your program: namespaces, types, abilities (their impls), functions
 //nocommit TODO stop going through static value and instead work with the raw memory layout more and
-//              more (StaticValue::Raw(...)) is an option
+//              more. This is how the new macro invocation works; saves a ton of cost
 
 fn render_output_panes(k1: &TypedProgram, cell: &MegareplCell) -> maud::Markup {
     let (values, is_error, stdout, stderr) = match &cell.last_result {

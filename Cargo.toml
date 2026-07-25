@@ -77,7 +77,7 @@ name = "repl"
 path = "src/bin/repl_main.rs"
 
 [profile.dev]
-debug = 0
+# debug = 0
 # strip = "debuginfo"
 
 [profile.release]

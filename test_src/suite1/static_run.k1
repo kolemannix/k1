@@ -202,9 +202,22 @@ fn test() {
 
   #for [0,2,4] {
     assert-equals(it % 2, 0)
-  };
+  }
+
+  // static-for[int]([0,2,4]: span[int], {
+  //   assert-equals(it % 2, 0)
+  // })
 
   .{}
+}
+
+macro static-for[t](items: span[t], expr) {
+  let code = code-builder/new()
+  for items {
+    code.writeln(core/meta/baked-variable("it", it))
+    code.code(expr)
+  }
+  code.build()
 }
 
 fn get-one(): int { 1 }

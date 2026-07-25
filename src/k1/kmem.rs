@@ -1503,12 +1503,7 @@ impl<T, Tag> List<T, Tag> {
         if self.len >= self.cap() {
             *self = self.grow(mem)
         }
-        unsafe {
-            let slice = &mut *self.buf;
-            slice.copy_within(index..self.len, index + 1);
-            slice[index] = val;
-        }
-        self.len += 1;
+        self.insert(index, val)
     }
 
     pub fn extend(&mut self, vals: &[T])

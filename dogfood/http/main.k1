@@ -114,6 +114,7 @@ fn after-do-work(req: *mut uv/work, status: i32) {
   tprintln("after-do-work")
   tprintln("clearing current-work")
   work.connection.current-work = :none
+
   defer {
     tprintln("freeing work")
     system-heap.free-t(req)

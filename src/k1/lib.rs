@@ -11,6 +11,7 @@ mod fixmap;
 pub mod ir;
 mod kmem;
 pub mod lex;
+#[cfg(feature = "lsp")]
 pub mod lsp_support;
 pub mod parse;
 mod rawref;

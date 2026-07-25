@@ -146,7 +146,16 @@ ns mem {
 
   let system-heap: alloc-mode = :system-heap
 
-  fn new[t](t: t): *mut t { alloc-mode:current.new(t) }
+  fn new[t](t: t): *t { alloc-mode:current.new(t) }
+
+  macro new-in-place[t](alloc-mode, expr) {
+    let type-id = types/type-id[t]
+    `
+    let addr = $alloc-mode.alloc-t[type-from-id($type-id)]();
+    addr.* = $expr
+    addr
+    `
+  }
 
   fn alloc-layout(size: size, align: size): ptr { alloc-mode:current.alloc(size, align) }
   fn alloc-t[t](): *t { alloc-mode:current.alloc-t() }

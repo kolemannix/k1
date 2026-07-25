@@ -2,6 +2,15 @@
 
 This extension starts `k1lsp` and wires it to VS Code using LSP. Diagnostics, hover, and any other server-provided features are handled through the language server.
 
+## Project roots
+
+`k1lsp` compiles its root directory as one module, so the extension starts one
+server instance per k1 project rather than one per VS Code workspace. When a
+`.k1` file is opened, its project root is the nearest ancestor directory
+containing `main.k1`, `proj.k1`, or `.git` (the same markers k1.nvim uses),
+falling back to the file's own directory. The server runs with that root as its
+working directory.
+
 ## Server discovery order
 
 If `k1.languageServer.path` is not set, the extension tries:

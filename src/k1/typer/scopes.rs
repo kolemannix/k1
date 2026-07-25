@@ -134,14 +134,19 @@ fn skey_name_part(key: ScopeKey) -> StringId {
     StringId::from_usize((key & 0xFFFF_FFFF) as usize)
 }
 
+#[inline]
+fn skey_parts(key: ScopeKey) -> (StringId, u32) {
+    (skey_name_part(key), skey_scope_part(key))
+}
+
 /// One scope's entries in a per-kind symbol map
-// nocommit clean up the key construction at least
 fn entries_in_scope<T: Copy>(
     map: &FxHashMap<ScopeKey, T>,
     scope_id: ScopeId,
 ) -> impl Iterator<Item = (StringId, T)> + '_ {
     map.iter().filter_map(move |(key, v)| {
-        (skey_scope_part(*key) == scope_id.as_u32()).then(|| (skey_name_part(*key), *v))
+        let (name, key_scope_id) = skey_parts(*key);
+        (key_scope_id == scope_id.as_u32()).then_some((name, *v))
     })
 }
 

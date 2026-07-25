@@ -8,7 +8,10 @@ import {
   ServerOptions
 } from "vscode-languageclient/node";
 
-let client: LanguageClient | undefined;
+const ROOT_MARKERS = ["main.k1", "proj.k1", ".git"];
+
+const clients = new Map<string, LanguageClient>();
+let missingServerReported = false;
 
 function expandPath(rawPath: string): string {
   const home = os.homedir();
@@ -69,23 +72,57 @@ function resolveServerPath(): { path?: string; searched: string[] } {
   return { searched };
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+// The server compiles its root_uri directory as one module, so the root must be
+// the k1 project containing the file, not the VS Code workspace folder. Same
+// markers as k1.nvim: nearest ancestor containing main.k1, proj.k1, or .git.
+function findProjectRoot(filePath: string): string {
+  let dir = path.dirname(filePath);
+  while (true) {
+    if (ROOT_MARKERS.some((marker) => fs.existsSync(path.join(dir, marker)))) {
+      return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      return path.dirname(filePath);
+    }
+    dir = parent;
+  }
+}
+
+function reportMissingServer(searched: string[]): void {
+  if (missingServerReported) {
+    return;
+  }
+  missingServerReported = true;
+  const searchedPaths = searched.length > 0 ? searched.join(", ") : "none";
+  void vscode.window
+    .showErrorMessage(
+      `k1 language server was not found. Looked in: ${searchedPaths}`,
+      "Open Settings"
+    )
+    .then((selection) => {
+      if (selection === "Open Settings") {
+        void vscode.commands.executeCommand(
+          "workbench.action.openSettings",
+          "k1.languageServer.path"
+        );
+      }
+    });
+}
+
+function ensureClientForDocument(document: vscode.TextDocument): void {
+  if (document.languageId !== "k1" || document.uri.scheme !== "file") {
+    return;
+  }
+
+  const root = findProjectRoot(document.uri.fsPath);
+  if (clients.has(root)) {
+    return;
+  }
+
   const resolved = resolveServerPath();
   if (!resolved.path) {
-    const searchedPaths = resolved.searched.length > 0 ? resolved.searched.join(", ") : "none";
-    void vscode.window
-      .showErrorMessage(
-        `k1 language server was not found. Looked in: ${searchedPaths}`,
-        "Open Settings"
-      )
-      .then((selection) => {
-        if (selection === "Open Settings") {
-          void vscode.commands.executeCommand(
-            "workbench.action.openSettings",
-            "k1.languageServer.path"
-          );
-        }
-      });
+    reportMissingServer(resolved.searched);
     return;
   }
 
@@ -94,24 +131,46 @@ export function activate(context: vscode.ExtensionContext): void {
     .get<string[]>("languageServer.args", []);
   const serverOptions: ServerOptions = {
     command: resolved.path,
-    args: serverArgs
+    args: serverArgs,
+    options: { cwd: root }
   };
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ language: "k1", scheme: "file" }],
+    documentSelector: [
+      { language: "k1", scheme: "file", pattern: `${root}/**/*.k1` }
+    ],
+    workspaceFolder: {
+      uri: vscode.Uri.file(root),
+      name: path.basename(root),
+      index: 0
+    },
     synchronize: {
-      fileEvents: vscode.workspace.createFileSystemWatcher("**/*.k1")
+      fileEvents: vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(root, "**/*.k1")
+      )
     }
   };
 
-  client = new LanguageClient("k1LanguageServer", "k1 Language Server", serverOptions, clientOptions);
-  context.subscriptions.push(client);
+  const client = new LanguageClient(
+    "k1LanguageServer",
+    `k1 Language Server (${path.basename(root)})`,
+    serverOptions,
+    clientOptions
+  );
+  clients.set(root, client);
   void client.start();
 }
 
-export async function deactivate(): Promise<void> {
-  if (!client) {
-    return;
+export function activate(context: vscode.ExtensionContext): void {
+  context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument(ensureClientForDocument)
+  );
+  for (const document of vscode.workspace.textDocuments) {
+    ensureClientForDocument(document);
   }
-  await client.stop();
-  client = undefined;
+}
+
+export async function deactivate(): Promise<void> {
+  const stopping = [...clients.values()].map((client) => client.stop());
+  clients.clear();
+  await Promise.all(stopping);
 }

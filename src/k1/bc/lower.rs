@@ -872,7 +872,7 @@ fn emit_call(
 
     // The sret src: the destination address for agg returns, else const 0
     // (the callee only reads sret when it returns an aggregate)
-    let mut resolve_sret = |k1: &mut TypedProgram, ctx: &mut LowerCtx| -> u32 {
+    let resolve_sret = |k1: &mut TypedProgram, ctx: &mut LowerCtx| -> u32 {
         if !is_agg {
             return k1.bc.intern_const(0);
         }
