@@ -413,7 +413,7 @@ ability iterable[impl item, impl i: iterator[item = item]] {
   fn iterator(self): i
 }
 
-impl[item2, t: iterator[item = item2]] iterable[item = item2, i = t] for t {
+impl[item, t: iterator[item = item]] iterable[item = item, i = t] for t {
   fn iterator(self): t { self }
 }
 

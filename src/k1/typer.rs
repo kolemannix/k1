@@ -5508,25 +5508,15 @@ impl TypedProgram {
         }
     }
 
+    /// Resolves a type parameter to its meaning in `scope_id` via the id-keyed
+    /// substitution bindings; a miss means the parameter stands for itself
+    /// (the normal case inside its own generic context).
     fn get_type_id_resolved(&self, type_id: TypeId, scope_id: ScopeId) -> TypeId {
-        let lookup_result = self.types.get(type_id);
-        match lookup_result {
-            Type::TypeParameter(tvar) => match self.scopes.find_type(scope_id, tvar.name) {
-                None => {
-                    debug!(
-                        "*********************\nUnresolved type parameter. {} in {}",
-                        self.ident_str(tvar.name),
-                        self.scope_id_to_string(scope_id)
-                    );
-                    type_id
-                }
-                Some((resolved, _)) => {
-                    if resolved == type_id {
-                        type_id
-                    } else {
-                        self.get_type_id_resolved(resolved, scope_id)
-                    }
-                }
+        match self.types.get(type_id) {
+            Type::TypeParameter(_) => match self.scopes.find_type_substitution(scope_id, type_id) {
+                None => type_id,
+                Some((to, _)) if to == type_id => type_id,
+                Some((to, _)) => self.get_type_id_resolved(to, scope_id),
             },
             _ => type_id,
         }
@@ -6614,18 +6604,44 @@ impl TypedProgram {
         let ability = self.abilities.get(impl_signature.specialized_ability_id);
         let functions = ability.functions;
         let base_ability_id = ability.base_ability_id;
+        let ability_self_type = ability.self_type_id;
+        let all_params = self.abilities.get(base_ability_id).parameters;
 
         // Add self
         let _ = self.scopes.add_type(scope_id, self.ast.idents.b.self_, implementor_self_type_id);
+        let _ =
+            self.scopes.add_type_substitution(scope_id, ability_self_type, implementor_self_type_id);
 
         // Add ability-side params
         let ability_args = self.mem.getn(ability.kind.arguments());
-        for ability_arg in ability_args.iter() {
+        for (parent_ability_param, ability_arg) in self
+            .mem
+            .getn(all_params)
+            .iter()
+            .filter(|p| p.is_ability_side_param())
+            .zip(ability_args.iter())
+        {
             let _ = self.scopes.add_type(scope_id, ability_arg.name, ability_arg.type_id);
+            let _ = self.scopes.add_type_substitution(
+                scope_id,
+                parent_ability_param.type_variable_id,
+                ability_arg.type_id,
+            );
         }
         // Add impl params
-        for impl_arg in self.mem.getn(impl_signature.impl_arguments).iter() {
+        for (parent_impl_param, impl_arg) in self
+            .mem
+            .getn(all_params)
+            .iter()
+            .filter(|p| p.is_impl_param)
+            .zip(self.mem.getn(impl_signature.impl_arguments).iter())
+        {
             let _ = self.scopes.add_type(scope_id, impl_arg.name, impl_arg.type_id);
+            let _ = self.scopes.add_type_substitution(
+                scope_id,
+                parent_impl_param.type_variable_id,
+                impl_arg.type_id,
+            );
         }
 
         let mut impl_functions = self.mem.new_list(functions.len());
@@ -6681,7 +6697,8 @@ impl TypedProgram {
         let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
         // Add self
         subst_pairs.push(spair! {ability.self_type_id => implementor_self_type_id});
-        let _ = self.scopes.add_type(scope_id, self.ast.idents.b.self_, implementor_self_type_id);
+        let _ =
+            self.scopes.add_type_substitution(scope_id, ability_self_type, implementor_self_type_id);
 
         // Add ability-side params
         for (parent_ability_param, ability_arg) in self
@@ -6692,7 +6709,11 @@ impl TypedProgram {
             .zip(ability_args.iter())
         {
             subst_pairs.push(spair! {parent_ability_param.type_variable_id => ability_arg.type_id});
-            let _ = self.scopes.add_type(scope_id, ability_arg.name, ability_arg.type_id);
+            let _ = self.scopes.add_type_substitution(
+                scope_id,
+                parent_ability_param.type_variable_id,
+                ability_arg.type_id,
+            );
         }
         // Add impl params
         for (parent_impl_param, impl_arg) in self
@@ -6703,7 +6724,11 @@ impl TypedProgram {
             .zip(self.mem.getn(impl_signature.impl_arguments).iter())
         {
             subst_pairs.push(spair! {parent_impl_param.type_variable_id => impl_arg.type_id});
-            let _ = self.scopes.add_type(scope_id, impl_arg.name, impl_arg.type_id);
+            let _ = self.scopes.add_type_substitution(
+                scope_id,
+                parent_impl_param.type_variable_id,
+                impl_arg.type_id,
+            );
         }
 
         let functions = self.abilities.get(impl_signature.specialized_ability_id).functions;
@@ -7369,6 +7394,11 @@ impl TypedProgram {
                 parsed_param.name,
                 solution.type_id,
             );
+            let _ = self.scopes.add_type_substitution(
+                constraint_checking_scope,
+                typed_param.type_id,
+                solution.type_id,
+            );
             let tp = self.types.get_type_parameter(typed_param.type_id);
             if let Some(static_constraint) = tp.static_constraint {
                 let static_type = self.types.get(static_constraint).as_value_type().unwrap();
@@ -7450,22 +7480,38 @@ impl TypedProgram {
             .map(|(index, param)| {
                 let solution = *self.mem.get_nth(solutions, index);
                 let _ = self.scopes.add_type(new_impl_scope, param.name, solution.type_id);
+                let _ = self.scopes.add_type_substitution(
+                    new_impl_scope,
+                    param.type_id,
+                    solution.type_id,
+                );
                 TypeSubstitutionPair { from: param.type_id, to: solution.type_id }
             })
             .collect();
 
         let blanket_ability_args_handle =
             self.abilities.get(blanket_impl.ability_id).kind.arguments();
+        let base_ability_params = self.abilities.get(generic_base_ability_id).parameters;
         let mut substituted_ability_args: List<NameAndType, _> =
             self.mem.new_list(blanket_ability_args_handle.len());
-        for blanket_arg in self.mem.getn(blanket_ability_args_handle) {
+        for (blanket_arg, base_param) in self.mem.getn(blanket_ability_args_handle).iter().zip(
+            self.mem.getn(base_ability_params).iter().filter(|p| p.is_ability_side_param()),
+        ) {
             // Substitute T, U, V, in for each
             let substituted_type = self.substitute_in_type(blanket_arg.type_id, &pairs);
             let nt = NameAndType { name: blanket_arg.name, type_id: substituted_type };
             substituted_ability_args.push(nt);
-            if !self.scopes.add_type(new_impl_scope, blanket_arg.name, substituted_type) {
+            if !self.scopes.add_type(new_impl_scope, blanket_arg.name, substituted_type)
+                && self.scopes.find_type_local(new_impl_scope, blanket_arg.name)
+                    != Some(substituted_type)
+            {
                 panic!("blanket impl scope unexpectedly contained type name")
             };
+            let _ = self.scopes.add_type_substitution(
+                new_impl_scope,
+                base_param.type_variable_id,
+                substituted_type,
+            );
         }
         let substituted_ability_args_handle = self.mem.list_to_handle(substituted_ability_args);
         let concrete_ability_id = self.specialize_ability(
@@ -7477,17 +7523,33 @@ impl TypedProgram {
 
         let mut substituted_impl_arguments: List<NameAndType, _> =
             self.mem.new_list(blanket_impl.impl_arguments.len());
-        for blanket_impl_arg in self.mem.getn(blanket_impl.impl_arguments) {
+        let target_ability_impl_params = self.abilities.get(blanket_impl.ability_id).parameters;
+        for (blanket_impl_arg, impl_param) in
+            self.mem.getn(blanket_impl.impl_arguments).iter().zip(
+                self.mem.getn(target_ability_impl_params).iter().filter(|p| p.is_impl_param),
+            )
+        {
             // Substitute T, U, V, in for each
             let substituted_type = self.substitute_in_type(blanket_impl_arg.type_id, &pairs);
             let nt = NameAndType { name: blanket_impl_arg.name, type_id: substituted_type };
             substituted_impl_arguments.push(nt);
-            if !self.scopes.add_type(new_impl_scope, blanket_impl_arg.name, substituted_type) {
-                panic!("uh oh")
+            if !self.scopes.add_type(new_impl_scope, blanket_impl_arg.name, substituted_type)
+                && self.scopes.find_type_local(new_impl_scope, blanket_impl_arg.name)
+                    != Some(substituted_type)
+            {
+                panic!("blanket impl scope unexpectedly contained type name")
             };
+            let _ = self.scopes.add_type_substitution(
+                new_impl_scope,
+                impl_param.type_variable_id,
+                substituted_type,
+            );
         }
 
         let _ = self.scopes.add_type(new_impl_scope, self.ast.idents.b.self_, self_type_id);
+        let concrete_ability_self = self.abilities.get(concrete_ability_id).self_type_id;
+        let _ =
+            self.scopes.add_type_substitution(new_impl_scope, concrete_ability_self, self_type_id);
 
         let mut specialized_functions = self.mem.new_list(blanket_impl.functions.len());
         let kind = AbilityImplKind::DerivedFromBlanket { blanket_impl_id };
@@ -14571,8 +14633,12 @@ impl TypedProgram {
             ScopeOwnerId::None,
         );
 
-        for nt in self.mem.getn(type_arguments) {
+        for (gen_param, nt) in
+            self.mem.getn(generic_signature.type_params).iter().zip(self.mem.getn(type_arguments))
+        {
+            debug_assert_eq!(gen_param.name, nt.name);
             let _ = self.scopes.add_type(spec_fn_scope, nt.name, nt.type_id);
+            let _ = self.scopes.add_type_substitution(spec_fn_scope, gen_param.type_id, nt.type_id);
         }
 
         let mut param_variables =
@@ -16016,10 +16082,15 @@ impl TypedProgram {
             ScopeOwnerId::None,
         );
 
-        for (arg_type, param) in
-            self.mem.getn(arguments).iter().zip(self.mem.getn(ability_parameters).iter())
-        {
+        for (arg_type, param) in self.mem.getn(arguments).iter().zip(
+            self.mem.getn(ability_parameters).iter().filter(|p| p.is_ability_side_param()),
+        ) {
             let _ = self.scopes.add_type(specialized_ability_scope, param.name, arg_type.type_id);
+            let _ = self.scopes.add_type_substitution(
+                specialized_ability_scope,
+                param.type_variable_id,
+                arg_type.type_id,
+            );
         }
 
         // The implementor is responsible for providing the impl_params, so those are the
@@ -17418,17 +17489,36 @@ impl TypedProgram {
         // Bind 'Self' = target_type
         // Discarded because we just made this scope
         let _ = self.scopes.add_type(impl_scope_id, self.ast.idents.b.self_, impl_self_type);
+        let _ =
+            self.scopes.add_type_substitution(impl_scope_id, ability_self_type, impl_self_type);
 
         // We also need to bind any ability parameters that this
         // ability is already specialized on; they aren't in our fresh scope
         for argument in self.mem.getn(ability.kind.arguments()) {
-            if !self.scopes.add_type(impl_scope_id, argument.name, argument.type_id) {
+            if !self.scopes.add_type(impl_scope_id, argument.name, argument.type_id)
+                && self.scopes.find_type_local(impl_scope_id, argument.name)
+                    != Some(argument.type_id)
+            {
                 return failf!(
                     span,
                     "Type parameter name {} is already used by an ability parameter",
                     self.ident_str(argument.name)
                 );
             }
+        }
+        let base_params = self.abilities.get(ability.base_ability_id).parameters;
+        for (base_param, argument) in self
+            .mem
+            .getn(base_params)
+            .iter()
+            .filter(|p| p.is_ability_side_param())
+            .zip(self.mem.getn(ability.kind.arguments()))
+        {
+            let _ = self.scopes.add_type_substitution(
+                impl_scope_id,
+                base_param.type_variable_id,
+                argument.type_id,
+            );
         }
 
         let mut impl_arguments: List<NameAndType, _> = self.mem.new_list(ability.parameters.len());
@@ -17468,13 +17558,19 @@ impl TypedProgram {
                 self.type_id_to_string(arg_type)
             );
             let added = self.scopes.add_type(impl_scope_id, impl_param.name, arg_type);
-            if !added {
+            if !added && self.scopes.find_type_local(impl_scope_id, impl_param.name) != Some(arg_type)
+            {
                 return failf!(
                     matching_arg.span,
                     "Variable name collision: {}",
                     self.ident_str(impl_param.name)
                 );
             }
+            let _ = self.scopes.add_type_substitution(
+                impl_scope_id,
+                impl_param.type_variable_id,
+                arg_type,
+            );
             impl_arguments.push(NameAndType { name: impl_param.name, type_id: arg_type })
         }
 
@@ -17552,17 +17648,31 @@ impl TypedProgram {
 
             let specialized_fun = self.get_function(impl_function_id);
             let specialized_fn_type = specialized_fun.type_id;
+            let impl_fn_type_params = specialized_fun.type_params;
 
             let spec_fn_scope = specialized_fun.scope;
 
-            let generic_type = self.get_function(ability_function_ref.function_id).type_id;
+            let generic_function = self.get_function(ability_function_ref.function_id);
+            let generic_type = generic_function.type_id;
+            let generic_fn_type_params = generic_function.type_params;
 
             // We check that the signature of the provided impl function matches
-            // the signature of the generic function with target_type substituted for Self
-            let substituted_root_type = self.substitute_in_type(
-                generic_type,
-                &[TypeSubstitutionPair { from: ability_self_type, to: impl_self_type }],
-            );
+            // the signature of the generic function with target_type substituted for Self,
+            // and with the ability function's own type params (which follow the injected
+            // Self) mapped positionally to the impl function's
+            let mut sig_subst: SV4<TypeSubstitutionPair> =
+                smallvec![spair! {ability_self_type => impl_self_type}];
+            let self_ident = self.ast.idents.b.self_;
+            for (gen_tp, impl_tp) in self
+                .mem
+                .getn(generic_fn_type_params)
+                .iter()
+                .filter(|nt| nt.name != self_ident)
+                .zip(self.mem.getn(impl_fn_type_params))
+            {
+                sig_subst.push(spair! {gen_tp.type_id => impl_tp.type_id});
+            }
+            let substituted_root_type = self.substitute_in_type(generic_type, &sig_subst);
 
             let impl_function_span = self.ast.get_function(parsed_impl_function_id).name_span;
             if let Err(msg) =

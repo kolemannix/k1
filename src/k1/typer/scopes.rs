@@ -150,9 +150,6 @@ fn entries_in_scope<T: Copy>(
     })
 }
 
-/// Bits for `Scope::kinds`: which symbol kinds a scope has at least one entry
-/// of. Chain walks test the bit before probing the global maps, so scopes that
-/// contain nothing of a kind (most of them) cost no hashing at all.
 pub mod kinds {
     pub const CONTEXT_VARIABLES: u8 = 1 << 0;
     pub const FUNCTIONS: u8 = 1 << 1;
@@ -161,6 +158,7 @@ pub mod kinds {
     pub const ABILITIES: u8 = 1 << 4;
     pub const PENDING_TYPES: u8 = 1 << 5;
     pub const PENDING_ABILITIES: u8 = 1 << 6;
+    pub const TYPE_PARAM_SUBSTS: u8 = 1 << 7;
 }
 
 pub struct Scopes {
@@ -171,6 +169,7 @@ pub struct Scopes {
     functions: FxHashMap<ScopeKey, FunctionId>,
     namespaces: FxHashMap<ScopeKey, NamespaceId>,
     types: FxHashMap<ScopeKey, TypeId>,
+    type_param_substs: FxHashMap<ScopeKey, TypeId>,
     abilities: FxHashMap<ScopeKey, AbilityId>,
     pending_type_defns: FxHashMap<ScopeKey, TypePendingDefinition>,
     pending_ability_defns: FxHashMap<ScopeKey, ParsedAbilityId>,
@@ -197,6 +196,7 @@ impl Scopes {
             functions: FxHashMap::new(),
             namespaces: FxHashMap::new(),
             types: FxHashMap::new(),
+            type_param_substs: FxHashMap::new(),
             abilities: FxHashMap::new(),
             pending_type_defns: FxHashMap::new(),
             pending_ability_defns: FxHashMap::new(),
@@ -444,6 +444,30 @@ impl Scopes {
             self.get_scope_mut(scope_id).kinds |= kinds::TYPES;
         }
         added
+    }
+
+    pub fn add_type_substitution(&mut self, scope_id: ScopeId, from: TypeId, to: TypeId) -> bool {
+        let added = match self.type_param_substs.entry(skey(scope_id, from.as_u32())) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(e) => {
+                e.insert(to);
+                true
+            }
+        };
+        if added {
+            self.get_scope_mut(scope_id).kinds |= kinds::TYPE_PARAM_SUBSTS;
+        }
+        added
+    }
+
+    pub fn find_type_substitution(
+        &self,
+        scope_id: ScopeId,
+        from: TypeId,
+    ) -> Option<(TypeId, ScopeId)> {
+        self.walk_chain(scope_id, kinds::TYPE_PARAM_SUBSTS, |sid| {
+            self.type_param_substs.get(&skey(sid, from.as_u32())).copied()
+        })
     }
 
     pub fn overwrite_type(&mut self, scope_id: ScopeId, ident: StringId, ty: TypeId) -> bool {
