@@ -1500,12 +1500,33 @@ impl TypePool {
         self.types.next_id()
     }
 
+    /// The `Type` slot of a reserved id stays unset until `set_type`; instance info and
+    /// variable counts are initialized so the id can be referenced by other types meanwhile
     pub fn reserve_id(&mut self) -> TypeId {
         let id = self.types.reserve_id();
-        let id2 = self.instance_info.reserve_id();
-        let id3 = self.type_variable_counts.reserve_id();
+        let id2 = self.instance_info.add_expected_id(None, id);
+        let id3 = self.type_variable_counts.add_expected_id(TypeVariableInfo::EMPTY, id);
         debug_assert_eq!(id, id2);
         debug_assert_eq!(id, id3);
+        id
+    }
+
+    /// Reserve the result id for an in-flight or deferred generic instantiation and register
+    /// it in the specialization cache, so that a recursive mention of the same (generic, args)
+    /// resolves to this id instead of recursing forever
+    pub fn reserve_instance_id(
+        &mut self,
+        generic_parent: TypeId,
+        type_args: TypeIdSlice,
+    ) -> TypeId {
+        let id = self.reserve_id();
+        let mut counts = TypeVariableInfo::EMPTY;
+        for arg in self.mem.getn(type_args) {
+            counts = counts.add(self.type_variable_counts.get(*arg));
+        }
+        *self.type_variable_counts.get_mut(id) = counts;
+        *self.instance_info.get_mut(id) = Some(GenericInstanceInfo { generic_parent, type_args });
+        self.insert_specialization(generic_parent, type_args, id);
         id
     }
 

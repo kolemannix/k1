@@ -1,0 +1,6 @@
+type node[t] = { value: t, next: *node[?t] }
+
+fn main(): i32 {
+  0
+}
+//errmsg: Polymorphic recursion is not supported

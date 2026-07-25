@@ -40,6 +40,7 @@ fn low() {
 fn moderate() {
   rvo_test/test()
   recurse_basic/test()
+  recursive_generics/test()
   defer_test/test()
   zst_test/test()
   structural/test()

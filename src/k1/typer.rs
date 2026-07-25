@@ -2734,6 +2734,13 @@ pub struct UsePendingResolution {
     pub use_id: ParsedUseId,
 }
 
+#[derive(Clone, Copy)]
+pub struct PendingRecursiveInstance {
+    pub type_id: TypeId,
+    pub generic_parent: TypeId,
+    pub type_args: TypeIdSlice,
+}
+
 #[derive(Clone, Default)]
 pub struct TypeDefnContext {
     /// Each entry in this stack contains a set of type ids that are being defined
@@ -2744,11 +2751,20 @@ pub struct TypeDefnContext {
 
     /// Includes co-recursive mentions, like Foo -> Bar -> Foo
     pub recursive_mentions: Vec<TypeId>,
+
+    /// Reserved instance ids for recursive generic applications, e.g. the `node[t]` inside
+    /// node's own definition; filled by substitution once every defn in the cluster is complete
+    pub pending_instances: Vec<PendingRecursiveInstance>,
+
+    /// Defns completed in this cluster; finiteness-checked once pending instances are resolved
+    pub completed: Vec<(TypeId, SpanId)>,
 }
 impl TypeDefnContext {
     fn reset(&mut self) {
         self.stack.clear();
         self.recursive_mentions.clear();
+        self.pending_instances.clear();
+        self.completed.clear();
     }
 }
 
@@ -3550,11 +3566,28 @@ impl TypedProgram {
                 self.types.set_type(defn_type_id, type_value, None, None);
                 defn_type_id
             }
-            _ => self.eval_type_expr_ext(
-                parsed_type_defn.value_expr,
-                defn_scope_id,
-                type_eval_context,
-            )?,
+            _ => {
+                let rhs_type_id = self.eval_type_expr_ext(
+                    parsed_type_defn.value_expr,
+                    defn_scope_id,
+                    type_eval_context,
+                )?;
+                let rhs_is_reserved =
+                    self.type_defn_context.stack.iter().any(|e| e.reserved_type_id == rhs_type_id);
+                let rhs_is_pending = self
+                    .type_defn_context
+                    .pending_instances
+                    .iter()
+                    .any(|p| p.type_id == rhs_type_id);
+                let rhs_still_defining = !is_alias && (rhs_is_reserved || rhs_is_pending);
+                if rhs_still_defining {
+                    return failf!(
+                        parsed_type_defn.span,
+                        "The right-hand side of a type definition cannot be a bare reference to a type that is still being defined; wrap it in a struct or either, or use an alias"
+                    );
+                }
+                rhs_type_id
+            }
         };
 
         // not an alias, so only allow named struct or sum or builtin
@@ -3613,14 +3646,12 @@ impl TypedProgram {
                 scope: namespace_scope_id,
                 companion_namespace: companion_namespace_id,
                 ast_id: ParsedId::TypeDefn(parsed_type_defn_id),
-                recursive: false,
+                // Over-approximate: anything defined while the cluster has recursive mentions
+                // is treated as recursive
+                recursive: !self.type_defn_context.recursive_mentions.is_empty(),
             })
         };
 
-        // Recursive generic types do not work.
-        //
-        // We aren't properly running the TypeApplication expr
-        // if its recursive, we just point at the generic, which is very wrong
         let type_id = if is_generic_defn {
             let gen_type = GenericType { params: type_params_handle, inner: rhs_type_id };
             self.types.set_type(
@@ -3701,28 +3732,10 @@ impl TypedProgram {
                 self.ice_span(parsed_type_defn.span, "No defn stack entry");
             };
             debug_assert_eq!(defn_stack_entry.reserved_type_id, type_id);
+            self.type_defn_context.completed.push((type_id, parsed_type_defn.span));
 
-            if !self.type_defn_context.recursive_mentions.is_empty() {
-                let mut seen =
-                    self.tmp.new_list(self.type_defn_context.recursive_mentions.len() as u32);
-                if let Some(cycled_type_id) = self.check_type_finite_rec(
-                    &self.type_defn_context.recursive_mentions,
-                    type_id,
-                    false,
-                    &mut seen,
-                ) {
-                    self.report(errf!(
-                        parsed_type_defn.span,
-                        "This type has an infinite size due to a cycle; {} was mentioned inside {} with no indirection",
-                        self.type_id_to_string(cycled_type_id),
-                        self.type_id_to_string(type_id),
-                    ));
-                }
-            }
-
-            // After popping the last definition, clear the recursive mentions too
             if self.type_defn_context.stack.is_empty() {
-                self.type_defn_context.reset()
+                self.finish_type_defn_cluster()
             }
         }
         if let Some(idx) = self
@@ -4556,32 +4569,72 @@ impl TypedProgram {
                     }
                 }
                 Some((pending_defn, _scope_id)) => {
-                    if let Some(entry) = self
+                    let stack_entry = self
                         .type_defn_context
                         .stack
                         .iter()
                         .find(|e| e.parsed_id == pending_defn.parsed_id)
-                    {
-                        if !ty_app.args.is_empty() {
-                            // FIXME let's do recursive generics now
-                            // What do I even store in here? A "ToApply[reserved_type_id, param a, param b]?
-                            // Yes, exactly that. The RHS of a generic isn't a fully baked type
-                            // anyway, because its got type variables in it!
-                            // In instantiate_generic_type, we keep track of the exact types we are
-                            // instantiating (e.g., node[t]) and if we see a node[t], just use
-                            // the reserved type id instead
-                            return failf!(ty_app.span, "cant do recursive generics yet");
+                        .map(|e| e.reserved_type_id);
+                    if let Some(reserved_type_id) = stack_entry {
+                        let params = self.ast.get_type_defn(pending_defn.parsed_id).type_params;
+                        if ty_app.args.len() != params.len() {
+                            return failf!(
+                                ty_app.span,
+                                "Type {} expects {} type arguments, got {}",
+                                self.qident_to_string(&ty_app.name),
+                                params.len(),
+                                ty_app.args.len()
+                            );
                         }
-
-                        self.type_defn_context.recursive_mentions.push(entry.reserved_type_id);
-                        self.emit_ls_entity(
-                            ty_app.name.name_span,
-                            LsEntityKind::Type {
-                                type_id: entry.reserved_type_id,
-                                applied_type_id: None,
-                            },
-                        );
-                        Ok(entry.reserved_type_id)
+                        if ty_app.args.is_empty() {
+                            self.type_defn_context.recursive_mentions.push(reserved_type_id);
+                            self.emit_ls_entity(
+                                ty_app.name.name_span,
+                                LsEntityKind::Type {
+                                    type_id: reserved_type_id,
+                                    applied_type_id: None,
+                                },
+                            );
+                            Ok(reserved_type_id)
+                        } else {
+                            // A recursive application like the `node[t]` inside node's own
+                            // definition: the generic doesn't exist yet, so reserve the
+                            // instance's id now; it is filled once the defn cluster completes
+                            let mut type_arguments: SV4<TypeId> = smallvec![];
+                            for parsed_arg in self.ast.mem.getn(ty_app.args) {
+                                let Some(parsed_arg_expr) = parsed_arg.type_expr else {
+                                    return failf!(
+                                        parsed_arg.span,
+                                        "Wildcard _ type not accepted here"
+                                    );
+                                };
+                                let arg_type_id = self.eval_type_expr_ext(
+                                    parsed_arg_expr,
+                                    scope_id,
+                                    context.descended(),
+                                )?;
+                                if self.recursive_arg_violates_uniformity(arg_type_id) {
+                                    return failf!(
+                                        parsed_arg.span,
+                                        "Polymorphic recursion is not supported: a recursive type argument must be a bare type parameter or contain no type parameters, got {}",
+                                        self.type_id_to_string(arg_type_id)
+                                    );
+                                }
+                                type_arguments.push(arg_type_id);
+                            }
+                            let instance_type_id = self.get_or_reserve_recursive_instance(
+                                reserved_type_id,
+                                &type_arguments,
+                            );
+                            self.emit_ls_entity(
+                                ty_app.name.name_span,
+                                LsEntityKind::Type {
+                                    type_id: reserved_type_id,
+                                    applied_type_id: Some(instance_type_id),
+                                },
+                            );
+                            Ok(instance_type_id)
+                        }
                     } else {
                         debug!(
                             "Evaluating {} inside {} on demand",
@@ -4662,23 +4715,144 @@ impl TypedProgram {
             .collect();
         let inner = gen_type.inner;
 
+        // For a recursive generic, register the result id in the specialization cache before
+        // walking the template, so the recursive mention inside it resolves to this id
+        let reserved_result = if defn_info.recursive {
+            Some(self.types.reserve_instance_id(generic_type, type_arguments))
+        } else {
+            None
+        };
         let specialized_type = self.substitute_in_type_ext(
             inner,
             &substitution_pairs,
             Some(generic_type),
             Some(defn_info),
         );
+        let result_type = match reserved_result {
+            None => {
+                self.types.insert_specialization(generic_type, type_arguments, specialized_type);
+                specialized_type
+            }
+            Some(reserved) => {
+                let t = self.types.get(specialized_type).clone();
+                self.types.set_type(
+                    reserved,
+                    t,
+                    Some(GenericInstanceInfo {
+                        generic_parent: generic_type,
+                        type_args: type_arguments,
+                    }),
+                    Some(defn_info),
+                );
+                reserved
+            }
+        };
         if log::log_enabled!(log::Level::Debug) {
-            let inst_info = self.types.get_instance_info(specialized_type).unwrap().type_args;
             eprintln!(
                 "instantiated\n{} with params\n{} got expanded type:\n{}\n\n",
                 self.type_id_to_string_ext(inner, true),
-                self.pretty_print_type_slice(inst_info, ", "),
-                self.type_id_to_string_ext(specialized_type, true)
+                self.pretty_print_type_slice(type_arguments, ", "),
+                self.type_id_to_string_ext(result_type, true)
             );
         }
-        self.types.insert_specialization(generic_type, type_arguments, specialized_type);
-        specialized_type
+        result_type
+    }
+
+    /// A recursive application's args must be bare type parameters or contain no type
+    /// parameters at all; anything else is polymorphic recursion, whose instantiations
+    /// would never terminate
+    fn recursive_arg_violates_uniformity(&self, arg: TypeId) -> bool {
+        self.types.type_variable_counts.get(arg).type_parameter_count > 0
+            && !matches!(self.types.get(arg), Type::TypeParameter(_))
+    }
+
+    fn get_or_reserve_recursive_instance(
+        &mut self,
+        generic_parent: TypeId,
+        type_args: &[TypeId],
+    ) -> TypeId {
+        if let Some(existing) = self.types.get_specialization_slice(generic_parent, type_args) {
+            return existing;
+        }
+        let args_handle = self.types.mem.pushn(type_args);
+        let type_id = self.types.reserve_instance_id(generic_parent, args_handle);
+        self.type_defn_context.pending_instances.push(PendingRecursiveInstance {
+            type_id,
+            generic_parent,
+            type_args: args_handle,
+        });
+        self.type_defn_context.recursive_mentions.push(type_id);
+        type_id
+    }
+
+    /// Runs when the type defn stack empties: every defn in the cluster is complete, so fill
+    /// the reserved recursive instances by substitution, then check the cluster for infinite
+    /// (indirection-free) cycles
+    fn finish_type_defn_cluster(&mut self) {
+        let pending = std::mem::take(&mut self.type_defn_context.pending_instances);
+        for p in &pending {
+            let gen_type = self.types.get(p.generic_parent).expect_generic();
+            let gen_params = gen_type.params;
+            let inner = gen_type.inner;
+            let defn_info = self.types.get_defn_info(p.generic_parent).unwrap();
+            let defn_span = self.ast.get_span_for_id(defn_info.ast_id);
+            for arg in self.types.mem.getn(p.type_args) {
+                if self.recursive_arg_violates_uniformity(*arg) {
+                    self.report(errf!(
+                        defn_span,
+                        "Polymorphic recursion is not supported: a recursive type argument must be a bare type parameter or contain no type parameters, got {}",
+                        self.type_id_to_string(*arg)
+                    ));
+                }
+            }
+            let substitution_pairs: SV8<TypeSubstitutionPair> = self
+                .mem
+                .getn(gen_params)
+                .iter()
+                .zip(self.types.mem.getn(p.type_args))
+                .map(|(param, arg)| spair! { param.type_id => *arg })
+                .collect();
+            let specialized = self.substitute_in_type_ext(
+                inner,
+                &substitution_pairs,
+                Some(p.generic_parent),
+                Some(defn_info),
+            );
+            let t = self.types.get(specialized).clone();
+            self.types.set_type(
+                p.type_id,
+                t,
+                Some(GenericInstanceInfo {
+                    generic_parent: p.generic_parent,
+                    type_args: p.type_args,
+                }),
+                Some(defn_info),
+            );
+        }
+
+        if !self.type_defn_context.recursive_mentions.is_empty() {
+            let completed = std::mem::take(&mut self.type_defn_context.completed);
+            // Outermost defn first; one cycle report is enough for the whole cluster
+            for (type_id, span) in completed.iter().rev() {
+                let mut seen =
+                    self.tmp.new_list(self.type_defn_context.recursive_mentions.len() as u32);
+                if let Some(cycled_type_id) = self.check_type_finite_rec(
+                    &self.type_defn_context.recursive_mentions,
+                    *type_id,
+                    false,
+                    &mut seen,
+                ) {
+                    self.report(errf!(
+                        *span,
+                        "This type has an infinite size due to a cycle; {} was mentioned inside {} with no indirection",
+                        self.type_id_to_string(cycled_type_id),
+                        self.type_id_to_string(*type_id),
+                    ));
+                    break;
+                }
+            }
+        }
+        self.type_defn_context.reset()
     }
 
     fn handle_opaque_tyapp(&mut self, ty_app: &parse::TypeApplication) -> K1Result<Option<TypeId>> {
@@ -4770,8 +4944,6 @@ impl TypedProgram {
         substitution_pairs: &[TypeSubstitutionPair],
         generic_parent_to_attach: Option<TypeId>,
         defn_info_to_attach: Option<TypeDefnInfo>,
-        // TODO: for full recursive types support, we need breadcrumbs
-        // breadcrumbs: &mut Vec<TypeId>,
     ) -> TypeId {
         // The empty substitution is the identity; without this check the guards below
         // pass vacuously and we do a full (allocating) traversal for nothing
@@ -4838,8 +5010,14 @@ impl TypedProgram {
                 }
                 new_type_args.push(new_type);
             }
+            let parent_pending =
+                self.type_defn_context.stack.iter().any(|e| e.reserved_type_id == generic_parent);
             // On no change, or a cache hit, we avoid committing the args to types.mem
-            return if any_change {
+            return if parent_pending {
+                // The parent generic is still being defined (mutual recursion), so its
+                // template cannot be substituted yet; defer to a reserved instance id
+                self.get_or_reserve_recursive_instance(generic_parent, new_type_args.as_slice())
+            } else if any_change {
                 self.instantiate_generic_type_from_slice(generic_parent, new_type_args.as_slice())
             } else {
                 self.instantiate_generic_type(generic_parent, original_args)
@@ -6609,8 +6787,11 @@ impl TypedProgram {
 
         // Add self
         let _ = self.scopes.add_type(scope_id, self.ast.idents.b.self_, implementor_self_type_id);
-        let _ =
-            self.scopes.add_type_substitution(scope_id, ability_self_type, implementor_self_type_id);
+        let _ = self.scopes.add_type_substitution(
+            scope_id,
+            ability_self_type,
+            implementor_self_type_id,
+        );
 
         // Add ability-side params
         let ability_args = self.mem.getn(ability.kind.arguments());
@@ -6697,8 +6878,11 @@ impl TypedProgram {
         let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
         // Add self
         subst_pairs.push(spair! {ability.self_type_id => implementor_self_type_id});
-        let _ =
-            self.scopes.add_type_substitution(scope_id, ability_self_type, implementor_self_type_id);
+        let _ = self.scopes.add_type_substitution(
+            scope_id,
+            ability_self_type,
+            implementor_self_type_id,
+        );
 
         // Add ability-side params
         for (parent_ability_param, ability_arg) in self
@@ -7494,9 +7678,11 @@ impl TypedProgram {
         let base_ability_params = self.abilities.get(generic_base_ability_id).parameters;
         let mut substituted_ability_args: List<NameAndType, _> =
             self.mem.new_list(blanket_ability_args_handle.len());
-        for (blanket_arg, base_param) in self.mem.getn(blanket_ability_args_handle).iter().zip(
-            self.mem.getn(base_ability_params).iter().filter(|p| p.is_ability_side_param()),
-        ) {
+        for (blanket_arg, base_param) in
+            self.mem.getn(blanket_ability_args_handle).iter().zip(
+                self.mem.getn(base_ability_params).iter().filter(|p| p.is_ability_side_param()),
+            )
+        {
             // Substitute T, U, V, in for each
             let substituted_type = self.substitute_in_type(blanket_arg.type_id, &pairs);
             let nt = NameAndType { name: blanket_arg.name, type_id: substituted_type };
@@ -7524,10 +7710,11 @@ impl TypedProgram {
         let mut substituted_impl_arguments: List<NameAndType, _> =
             self.mem.new_list(blanket_impl.impl_arguments.len());
         let target_ability_impl_params = self.abilities.get(blanket_impl.ability_id).parameters;
-        for (blanket_impl_arg, impl_param) in
-            self.mem.getn(blanket_impl.impl_arguments).iter().zip(
-                self.mem.getn(target_ability_impl_params).iter().filter(|p| p.is_impl_param),
-            )
+        for (blanket_impl_arg, impl_param) in self
+            .mem
+            .getn(blanket_impl.impl_arguments)
+            .iter()
+            .zip(self.mem.getn(target_ability_impl_params).iter().filter(|p| p.is_impl_param))
         {
             // Substitute T, U, V, in for each
             let substituted_type = self.substitute_in_type(blanket_impl_arg.type_id, &pairs);
@@ -16082,9 +16269,12 @@ impl TypedProgram {
             ScopeOwnerId::None,
         );
 
-        for (arg_type, param) in self.mem.getn(arguments).iter().zip(
-            self.mem.getn(ability_parameters).iter().filter(|p| p.is_ability_side_param()),
-        ) {
+        for (arg_type, param) in self
+            .mem
+            .getn(arguments)
+            .iter()
+            .zip(self.mem.getn(ability_parameters).iter().filter(|p| p.is_ability_side_param()))
+        {
             let _ = self.scopes.add_type(specialized_ability_scope, param.name, arg_type.type_id);
             let _ = self.scopes.add_type_substitution(
                 specialized_ability_scope,
@@ -17489,8 +17679,7 @@ impl TypedProgram {
         // Bind 'Self' = target_type
         // Discarded because we just made this scope
         let _ = self.scopes.add_type(impl_scope_id, self.ast.idents.b.self_, impl_self_type);
-        let _ =
-            self.scopes.add_type_substitution(impl_scope_id, ability_self_type, impl_self_type);
+        let _ = self.scopes.add_type_substitution(impl_scope_id, ability_self_type, impl_self_type);
 
         // We also need to bind any ability parameters that this
         // ability is already specialized on; they aren't in our fresh scope
@@ -17558,7 +17747,8 @@ impl TypedProgram {
                 self.type_id_to_string(arg_type)
             );
             let added = self.scopes.add_type(impl_scope_id, impl_param.name, arg_type);
-            if !added && self.scopes.find_type_local(impl_scope_id, impl_param.name) != Some(arg_type)
+            if !added
+                && self.scopes.find_type_local(impl_scope_id, impl_param.name) != Some(arg_type)
             {
                 return failf!(
                     matching_arg.span,
@@ -18740,6 +18930,10 @@ impl TypedProgram {
 
             Type::Reference(reference_type) => {
                 self.check_type_finite_rec(targets, reference_type.inner_type, true, stack)
+            }
+
+            Type::Generic(generic) => {
+                self.check_type_finite_rec(targets, generic.inner, behind_indirection, stack)
             }
 
             Type::Array(array_type) => {

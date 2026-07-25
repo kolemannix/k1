@@ -1,0 +1,68 @@
+ns recursive_generics {
+
+  type node[t] = { value: t, next: ?*node[t] }
+
+  fn make(n: int): ?*node[int] {
+    if n == 0 :none else :some mem/new(.{ value = n, next = make(n - 1) })
+  }
+
+  fn sum(n0: ?*node[int]): int {
+    n0 is {
+      :none -> 0,
+      :some n -> n.value + sum(n.next)
+    }
+  }
+
+  fn length[t](n0: ?*node[t]): int {
+    n0 is {
+      :none -> 0,
+      :some n -> 1 + length[t](n.next)
+    }
+  }
+
+  type tree[t] = either { leaf(t), branch({ l: *tree[t], r: *tree[t] }) }
+
+  fn tree-sum(tr: tree[int]): int {
+    tr is {
+      :leaf v -> v,
+      :branch b -> tree-sum(b.l.*) + tree-sum(b.r.*)
+    }
+  }
+
+  // mutual recursion: mua's rhs evaluates mub on demand, whose rhs mentions pending mua
+  type mua[t] = { value: t, b: ?*mub[t] }
+  type mub[t] = { a: *mua[t] }
+
+  // self-application with concrete args: every conc[x] links to conc[int]
+  type conc[t] = { v: t, link: ?*conc[int] }
+
+  fn test() {
+    let l = make(4)
+    assert-equals(sum(l), 10)
+    assert-equals(length[int](l), 4)
+
+    let sb: *node[string] = mem/new(.{ value = "b", next = :none })
+    let sa: *node[string] = mem/new(.{ value = "a", next = :some sb })
+    assert-equals(length[string](:some sa), 2)
+    assert-equals(sa.next.!.value, "b")
+
+    let tr: tree[int] = :branch .{
+      l = mem/new(:leaf 1),
+      r = mem/new(:branch .{ l = mem/new(:leaf 2), r = mem/new(:leaf 3) })
+    }
+    assert-equals(tree-sum(tr), 6)
+
+    let a2: *mua[int] = mem/new(.{ value = 2, b = :none })
+    let b1: *mub[int] = mem/new(.{ a = a2 })
+    let a1: *mua[int] = mem/new(.{ value = 1, b = :some b1 })
+    assert-equals(a1.b.!.a.value, 2)
+
+    let ci: *conc[int] = mem/new(.{ v = 5, link = :none })
+    let cb: conc[bool] = .{ v = true, link = :some ci }
+    assert-equals(cb.link.!.v, 5)
+    let ci2: conc[int] = .{ v = 7, link = :some ci }
+    assert-equals(ci2.link.!.v + ci2.v, 12)
+    assert(cb.v)
+  }
+
+}
