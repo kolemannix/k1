@@ -80,7 +80,7 @@ http dogfood list
 - [x] solution for lazily evaluated log arguments
 
 # Bugs
-- [ ] [major] Support (co)recursive Generics
+- [x] [major] Support (co)recursive Generics
 - [ ] [major] Allow pattern matching *into* recursive types (currently we just terminate)
 - [ ] captured context parameter results in 'Missing variable' in ir
 - [x] Out of order type definitions don't work with aliases

@@ -4463,86 +4463,53 @@ impl TypedProgram {
         };
 
         match self.find_type_namespaced(scope_id, &ty_app.name)? {
-            Some((type_id, _)) => {
-                match self.types.get(type_id) {
-                    Type::Generic(g) => {
-                        if ty_app.args.len() != g.params.len() {
-                            return failf!(
-                                ty_app.span,
-                                "Type {} expects {} type arguments, got {}",
-                                self.qident_to_string(&ty_app.name),
-                                g.params.len(),
-                                ty_app.args.len()
-                            );
-                        }
-                        let g_params = g.params;
-                        let mut type_arguments = self.types.mem.new_list(ty_app.args.len());
-                        let mut subst_pairs: List<TypeSubstitutionPair, MemTmp> =
-                            self.tmp.new_list(ty_app.args.len());
-                        // nocommit its this loop actually
-                        // let type_arguments_slice = self.check_type_args_against_params(g_params, ty_app.args);
-                        for (param, parsed_arg) in
-                            self.mem.getn(g_params).iter().zip(self.ast.mem.getn(ty_app.args))
-                        {
-                            let Some(parsed_arg_expr) = parsed_arg.type_expr else {
-                                return failf!(
-                                    parsed_arg.span,
-                                    "Wildcard _ type not accepted here"
-                                );
-                            };
-                            let arg_type_id = self.eval_type_expr_ext(
-                                parsed_arg_expr,
-                                scope_id,
-                                context.descended(),
-                            )?;
-                            subst_pairs.push(spair! { param.type_id => arg_type_id });
-                            type_arguments.push(arg_type_id);
-                        }
-                        // Repeat the loop, this time checking constraints
-                        for (param, arg_type) in
-                            self.mem.getn(g_params).iter().zip(type_arguments.as_slice())
-                        {
-                            self.check_type_constraints(
-                                param.name,
-                                param.type_id,
-                                *arg_type,
-                                subst_pairs.as_slice(),
-                                scope_id,
-                                ty_app.span,
-                            )?;
-                        }
-
-                        let type_arguments_slice = self.types.mem.list_to_handle(type_arguments);
-                        let instantiated_type_id =
-                            self.instantiate_generic_type(type_id, type_arguments_slice);
-
-                        self.emit_ls_entity(
-                            ty_app.name.name_span,
-                            LsEntityKind::Type {
-                                type_id,
-                                applied_type_id: Some(instantiated_type_id),
-                            },
+            Some((type_id, _)) => match self.types.get(type_id) {
+                Type::Generic(g) => {
+                    if ty_app.args.len() != g.params.len() {
+                        return failf!(
+                            ty_app.span,
+                            "Type {} expects {} type arguments, got {}",
+                            self.qident_to_string(&ty_app.name),
+                            g.params.len(),
+                            ty_app.args.len()
                         );
-                        Ok(instantiated_type_id)
                     }
-                    _other => {
-                        if !ty_app.args.is_empty() {
-                            return failf!(
-                                ty_app.span,
-                                "Type {} is not generic, but got {} type arguments",
-                                self.qident_to_string(&ty_app.name),
-                                ty_app.args.len()
-                            );
-                        }
-                        let resolved_type_id = self.get_type_id_resolved(type_id, scope_id);
-                        self.emit_ls_entity(
-                            ty_app.name.name_span,
-                            LsEntityKind::Type { type_id, applied_type_id: None },
-                        );
-                        Ok(resolved_type_id)
-                    }
+                    let g_params = g.params;
+                    let (type_arguments_slice, _subst_pairs) = self
+                        .check_type_args_against_params(
+                            g_params,
+                            self.ast.mem.getn(ty_app.args),
+                            scope_id,
+                            context,
+                        )?;
+                    let type_ids = self.types.mem.pushn_iter(
+                        self.mem.getn(type_arguments_slice).iter().map(|pair| pair.type_id),
+                    );
+                    let instantiated_type_id = self.instantiate_generic_type(type_id, type_ids);
+
+                    self.emit_ls_entity(
+                        ty_app.name.name_span,
+                        LsEntityKind::Type { type_id, applied_type_id: Some(instantiated_type_id) },
+                    );
+                    Ok(instantiated_type_id)
                 }
-            }
+                _other => {
+                    if !ty_app.args.is_empty() {
+                        return failf!(
+                            ty_app.span,
+                            "Type {} is not generic, but got {} type arguments",
+                            self.qident_to_string(&ty_app.name),
+                            ty_app.args.len()
+                        );
+                    }
+                    let resolved_type_id = self.get_type_id_resolved(type_id, scope_id);
+                    self.emit_ls_entity(
+                        ty_app.name.name_span,
+                        LsEntityKind::Type { type_id, applied_type_id: None },
+                    );
+                    Ok(resolved_type_id)
+                }
+            },
             None => match self.find_pending_type_namespaced(scope_id, &ty_app.name)? {
                 None => {
                     if ty_app.args.is_empty() {
@@ -4853,6 +4820,43 @@ impl TypedProgram {
             }
         }
         self.type_defn_context.reset()
+    }
+
+    fn check_type_args_against_params(
+        &mut self,
+        params: PermSlice<NameAndType>,
+        parsed_args: &[NamedTypeArg],
+        scope_id: ScopeId,
+        context: EvalTypeExprContext,
+    ) -> K1Result<(MSlice<NameAndType, TypedProgram>, TmpList<TypeSubstitutionPair>)> {
+        let mut type_arguments = self.mem.new_list(params.len());
+        let mut subst_pairs: List<TypeSubstitutionPair, MemTmp> = self.tmp.new_list(params.len());
+        for (param, parsed_arg) in self.mem.getn(params).iter().zip(parsed_args) {
+            let Some(parsed_arg_expr) = parsed_arg.type_expr else {
+                return failf!(parsed_arg.span, "Wildcard _ type not accepted here");
+            };
+            let arg_type_id =
+                self.eval_type_expr_ext(parsed_arg_expr, scope_id, context.descended())?;
+            subst_pairs.push(spair! { param.type_id => arg_type_id });
+            type_arguments.push(NameAndType { name: param.name, type_id: arg_type_id });
+        }
+
+        // Repeat the loop, this time checking constraints
+        // now that we have all the pairs
+        for ((param, parsed_arg), arg_type) in
+            self.mem.getn(params).iter().zip(parsed_args).zip(type_arguments.as_slice())
+        {
+            self.check_type_constraints(
+                param.name,
+                param.type_id,
+                arg_type.type_id,
+                subst_pairs.as_slice(),
+                scope_id,
+                parsed_arg.span,
+            )?;
+        }
+
+        Ok((self.mem.list_to_handle(type_arguments), subst_pairs))
     }
 
     fn handle_opaque_tyapp(&mut self, ty_app: &parse::TypeApplication) -> K1Result<Option<TypeId>> {
@@ -9378,7 +9382,7 @@ impl TypedProgram {
         let stem = source.filename.strip_suffix(".k1").unwrap();
         let serial = self.emitted_sources.len() + 1;
         let generated_filename = format!("meta_{stem}_{line_number}_{serial}.k1");
-        debug!("Emitted raw content:\n---\n{content}\n---");
+        debug!("Emitted source:\n---\n{content}\n---");
         let source_for_emission = self.ast.sources.add_file(crate::parse::SourceFile::make(
             0,
             self.config.out_dir_generated.clone(),
@@ -9441,7 +9445,6 @@ impl TypedProgram {
         let function = self.get_function(function_id);
         let is_generic = !function.is_concrete;
         let function_name = function.name;
-        let function_type_id = function.type_id;
         let function_type_params = function.type_params;
         let Some(parsed_macro_id) = function.parsed_id.as_macro_id() else {
             self.ice_span(span, "Macro function without a parsed macro")
@@ -9455,32 +9458,17 @@ impl TypedProgram {
             );
         }
 
-        // No inference yet
-        // nocommit: I think we can factor out this idea of checking a series of type expressions
-        // against a series of constrained type parameters. The substitution-in-constraints part is
-        // just tricky enough to warrant keeping it in one place
-        // Needs a first pass to do this zip, then second pass to check constraints
-        let mut typed_type_args = self.mem.new_list(function_type_params.len());
-
-        for (type_param, type_arg) in
-            self.mem.getn(function_type_params).iter().zip(type_args.iter())
-        {
-            let Some(passed_type_expr) = type_arg.type_expr else {
-                return failf!(type_arg.span, "_ is not allowed for macro calls");
-            };
-            let passed_type = self.eval_type_expr(passed_type_expr, ctx.scope_id)?;
-
-            self.check_type_constraints(
-                type_param.name,
-                type_param.type_id,
-                passed_type,
-                &[], /* nocommit subst pairs */
-                ctx.scope_id,
-                type_arg.span,
-            )?;
-            typed_type_args.push(NameAndType { name: type_param.name, type_id: passed_type });
-        }
-        let type_args_handle = self.mem.list_to_handle(typed_type_args);
+        let type_expr_context = EvalTypeExprContext {
+            is_direct_function_parameter: true,
+            is_inside_type_definition_rhs: false,
+            is_inside_static_type: false,
+        };
+        let (typed_type_args, _subst_pairs) = self.check_type_args_against_params(
+            function_type_params,
+            type_args,
+            ctx.scope_id,
+            type_expr_context,
+        )?;
 
         let parsed_params = self.ast.get_macro(parsed_macro_id).params;
         if args.len() != parsed_params.len() as usize {
@@ -9492,11 +9480,28 @@ impl TypedProgram {
                 args.len()
             );
         }
-        let fn_param_types =
-            self.types.get(function_type_id).as_function().unwrap().logical_params();
+
+        // Ensure the function is compiled.
+        self.eval_function_body(function_id)?;
+
+        // Specialize if needed
+        let function_to_run = if is_generic {
+            let spec_fn_id =
+                self.specialize_function_declaration(typed_type_args, MSlice::empty(), function_id);
+            self.specialize_function_body(spec_fn_id)?;
+            spec_fn_id
+        } else {
+            function_id
+        };
+
+        let fn_param_types = self
+            .types
+            .get(self.get_function(function_to_run).type_id)
+            .as_function()
+            .unwrap()
+            .logical_params();
 
         let mut static_args: SV8<StaticValueId> = smallvec![];
-        // nocommit: use specialized param types here
         for (param, arg) in self.types.mem.getn(fn_param_types).iter().zip(args.iter()) {
             match *arg {
                 MacroArg::Parsed(parsed_arg) => {
@@ -9565,21 +9570,6 @@ impl TypedProgram {
                 }
             }
         }
-
-        // We have to evaluate the body
-        self.eval_function_body(function_id)?;
-
-        let function_to_run = if is_generic {
-            let spec_fn_id = self.specialize_function_declaration(
-                type_args_handle,
-                MSlice::empty(),
-                function_id,
-            );
-            self.specialize_function_body(spec_fn_id)?;
-            spec_fn_id
-        } else {
-            function_id
-        };
 
         self.run_macro_and_compile_output(function_to_run, &static_args, span, is_definition, ctx)
     }
@@ -11536,7 +11526,7 @@ impl TypedProgram {
         Ok(final_expr)
     }
 
-    // nocommit: chopping block in light of new 'macro'?
+    // FIXME: Can we remove this in light of new 'macro'? Not quite; inference isn't quite there
     fn eval_static_for_expr(
         &mut self,
         for_expr: &ForExpr,
