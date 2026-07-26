@@ -1,3 +1,5 @@
+Disclaimer: this file is written for and maintained by LLMs.
+
 # K1 Syntax And Basics
 
 This guide is a practical map for reading and writing K1 in this repo. It is

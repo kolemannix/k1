@@ -1,20 +1,29 @@
-A language for the joy of programming
-
 `k1` is a next-generation programming language with
 - typeclasses
 - full compile-time execution
 - programmable, stuctural types and rich type expressions (like Typescript)
-- modern generics, including typeclass bounds
+- modern generics, including typeclass bounds and compile-time parameters (`fixlist[char, 64]`)
 - advanced sum and enum types
+- transparent and guaranteed layout and ABI (like C)
 - pattern matching
 - semi-automatic memory management
+- opt-in memory safety and garbage collection via Fil-C
 - capturing lambdas
-- next-generation metaprogramming
+- arbitrarily powerful metaprogramming
+
+### Getting Started
+
+To use `k1`, it is recommended to download the release bundle for your platform from [releases](https://github.com/kolemannix/k1/releases) and run `install.sh`
+after unzipping, and after reading it of course! There is a [neovim plugin](https://github.com/kolemannix/k1.nvim) as well as a VSCode extension located here in the repo
+inside [tools/vscode-k1](tools/vscode-k1).
+
+For now, the language server support really helps bridge the complete lack of documentation, just let your editor teach you the language!
 
 ## Tenets
-### Programming should be joyful
-I believe programming is more like writing than manufacturing, and I believe the literature, research, and countless body of testimonials
-support this claim. As such, we can be relatively confident that we'll do our best work when we are willing, inspired, and 'feeling it'.
+### Give the programmer power and control
+k1 is designed around what it makes possible, not what it prevents, with a focus on freedom, control, and speed, while also providing
+advanced features, rather than punting on them, to empower programmers to make their programs exactly what they want them to be, not what
+the language wants them to be.
 ### Compile fast
 Shortening the feedback cycle preserves flow and greatly increases joy, as well as literally temporally enabling more iterations.
 This results in better software that is fun to work on. There are a number of language design decisions in `k1` that were
@@ -31,42 +40,14 @@ Compile-time execution and reflection enables powerful metaprogramming that is j
 
 As programmers, we've become exceedingly good at expressing and solving our problems using programming. Why can't
 we also solve our programming, and build, problems this way?
-### Typeclasses + structs and enums. No inheritance
+### Plain old data everywhere, zero-is-initialized wherever possible, no RAII
+De-coupling data from behavior allows for huge efficiency gains, free serialization, simple and obvious program structure, discourages convoluted structure.
+### Typeclasses, not inheritance
 [Just so good](https://dl.acm.org/doi/10.1145/75277.75283)
 ### No forced abstractions or costs
 Pay for what you use, and use what you want. And what you use costs as little as possible. This is
 exactly Rust's philosophy and definition of 'zero-cost' functionality. I think it holds up and is a fantastic
 north star.
-### Tools should empower not restrict
-While I don't take safety and stability lightly, I'm more concerned with making awesome things possible than making bad things impossible.
-
-As a case study I like to pick on Rust a bit. Fantastic achievement that it is, Rust undeniably feels bad to write.
-
-By a stark contrast, C is widely regarded as super fun to write. You feel empowered, and in control.
-
-I'm most interested in adding safety, guardrails, and guarantees in a way that does **not** strip away this core feeling of being in control.
-Even C has some frustrating gotchas surrounding the "C virtual machine", TBAA, and certain "as if" semantics where we don't truly know the
-code will be exactly as we wrote it without writing assembly. However, I dub these 'gotchas' rather than limitations for a reason; they
-can certainly be navigated around. But the limitations Rust imposes on our programs cannot. You can't really escape the "I know better than
-you" vibe that Rust gives off, and it is offputting in a way that standard typechecking or other checks and controls really aren't.
-
-## Status
-Long todo list still!
-[Check it out](TODO.md) for a glimpse into the development flow, or the [test_src/](test_src/) dir to see what the language can currently do!
-For a compact language reference based on the executable tests, see [K1 Syntax And Basics](docs/k1-syntax-basics.md).
-
-Still exploring and heavily experimenting, but I really like using this language these days. 
-
-**Disclaimer**: `k1` is not ready for use; it needs to evolve much more and will require a lot of elbow grease if things ever
-get to that point. I'd like to push the language further, as well as correct a number of design mistakes, before allowing it to begin to crystallize
-
-Please reach out to me on X @kolemannix or here if you're interested in the project!
-
-### Installation
-
-To use `k1`, it is recommended to download the release bundle for your platform from [releases](https://github.com/kolemannix/k1/releases) and run `install.sh`
-after unzipping, and after reading it of course! There is a [neovim plugin](https://github.com/kolemannix/k1.nvim) as well as a VSCode extension located here in the repo
-inside [tools/vscode-k1](tools/vscode-k1). The language server support really helps bridge the complete lack of documentation, just let the errors teach you the language!
 
 ### Contributing setup
 

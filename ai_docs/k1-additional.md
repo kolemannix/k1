@@ -1,3 +1,5 @@
+Disclaimer: this file is written for and maintained by LLMs.
+
 # K1 Additional Feature Map
 
 This is a companion to `docs/k1-syntax-basics.md`. It lists language surfaces
