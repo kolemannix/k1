@@ -90,7 +90,7 @@ fn exec_time_display(exec_time: std::time::Duration) -> impl fmt::Display {
     })
 }
 
-//nocommit TODO widget kinds, in rough order:
+// TODO widget kinds, in rough order:
 //              [ ] Pretty: generic html rendering by type shape (table for list-of-struct, ...)
 //              [ ] read/write presets, closed set per type (slider for ints, checkbox for bool,
 //                  select for no-payload enums); write path: decode scalar -> write VM global ->
@@ -99,9 +99,9 @@ fn exec_time_display(exec_time: std::time::Duration) -> impl fmt::Display {
 //              [ ] arbitrary JS / web-component: takes input, emits output events; needs
 //                  static_value_to_js_value written once, and js_value_to_static_value for the
 //                  emitted data
-//nocommit TODO Data panel as an instantiation of a list widget; tabled until it emerges — once we
+// TODO Data panel as an instantiation of a list widget; tabled until it emerges — once we
 //              can implement Data with a widget, it's time
-//nocommit TODO stop going through static value and instead work with the raw memory layout more and
+// TODO stop going through static value and instead work with the raw memory layout more and
 //              more. This is how the new macro invocation works; saves a ton of cost
 
 fn render_output_panes(k1: &TypedProgram, cell: &MegareplCell) -> maud::Markup {
