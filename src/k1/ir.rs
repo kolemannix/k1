@@ -63,6 +63,7 @@ pub struct ProgramIr {
     pub module_config: IrModuleConfig,
     pub calls: VPool<IrCall, IrCallId>,
     pub cmpxchgs: VPool<AtomicCmpxchgData, AtomicCmpxchgId>,
+    pub vec_ops: VPool<VecOpData, VecOpId>,
     pub phys_fn_type_cache: FxHashMap<TypeId, PhysicalFunctionType>,
 
     // Builder data
@@ -102,6 +103,7 @@ impl ProgramIr {
             functions: VPool::make("ir_functions"),
             calls: VPool::make("ir_calls"),
             cmpxchgs: VPool::make("ir_cmpxchgs"),
+            vec_ops: VPool::make("ir_vec_ops"),
             phys_fn_type_cache: FxHashMap::new(),
             exprs: FxHashMap::new(),
             module_config: IrModuleConfig {},
@@ -346,6 +348,59 @@ pub struct AtomicCmpxchgData {
     pub ok_vm_offset: u32,
 }
 
+nz_u32_id!(VecOpId);
+
+/// A lane-wise vector operation. Vectors are memory-backed aggregates in this IR:
+/// `dst`/vector operands are addresses. Int/float class and shift signedness
+/// are derived from `elem` by the backends.
+///
+/// Operand shapes: Splat lhs=scalar; unary ops rhs=Empty; Shl/Shr rhs=scalar
+/// count; ToMask dst=Empty and the inst itself is the scalar u64 result.
+#[derive(Clone, Copy)]
+pub struct VecOpData {
+    pub op: VecOpIr,
+    pub elem: ScalarType,
+    pub lanes: u32,
+    pub dst: Value,
+    pub lhs: Value,
+    pub rhs: Value,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum VecOpIr {
+    Splat,
+    Add,
+    Sub,
+    Mul,
+    BitNot,
+    BitAnd,
+    BitOr,
+    Xor,
+    Shl,
+    Shr,
+    EqLanes,
+    ToMask,
+}
+
+impl VecOpIr {
+    pub fn name(&self) -> &'static str {
+        match self {
+            VecOpIr::Splat => "splat",
+            VecOpIr::Add => "add",
+            VecOpIr::Sub => "sub",
+            VecOpIr::Mul => "mul",
+            VecOpIr::BitNot => "bit_not",
+            VecOpIr::BitAnd => "bit_and",
+            VecOpIr::BitOr => "bit_or",
+            VecOpIr::Xor => "xor",
+            VecOpIr::Shl => "shl",
+            VecOpIr::Shr => "shr",
+            VecOpIr::EqLanes => "eq_lanes",
+            VecOpIr::ToMask => "to_mask",
+        }
+    }
+}
+
 #[derive(Copy, Clone)]
 pub struct PhysicalFunctionParam {
     pub original_index: Option<u16>,
@@ -387,6 +442,10 @@ pub enum IrCallee {
         function_name: parse::StringId,
         function_id: FunctionId,
     },
+    /// A named LLVM intrinsic (`intern("llvm.cttz.i64")`). The llvm backend
+    /// declares and calls it verbatim; the VM emulates by name from a host
+    /// table, erroring lazily on names it does not know
+    LlvmIntrinsic { name: parse::StringId, function_id: FunctionId },
     // (No lambda call; been compiled down to just calls and args by now)
 }
 
@@ -395,6 +454,7 @@ impl IrCallee {
         match self {
             IrCallee::Direct(fid) => Some(*fid),
             IrCallee::Extern { function_id, .. } => Some(*function_id),
+            IrCallee::LlvmIntrinsic { function_id, .. } => Some(*function_id),
             _ => None,
         }
     }
@@ -505,6 +565,9 @@ pub enum Inst {
     },
     AtomicCmpxchg {
         id: AtomicCmpxchgId,
+    },
+    VecOp {
+        id: VecOpId,
     },
     Fence {
         ord: AtomicOrderingIr,
@@ -761,6 +824,12 @@ pub fn visit_inst_values(ir: &ProgramIr, inst: &Inst, f: &mut impl FnMut(Value))
             f(cas.desired);
             f(cas.result);
         }
+        Inst::VecOp { id } => {
+            let vop = *ir.vec_ops.get(id);
+            f(vop.dst);
+            f(vop.lhs);
+            f(vop.rhs);
+        }
         Inst::Copy { dst, src, .. } => {
             f(dst);
             f(src);
@@ -915,6 +984,10 @@ pub fn get_inst_kind(ir: &ProgramIr, types: &TypePool, inst_id: InstId) -> InstK
         Inst::AtomicStore { .. } => InstKind::Void,
         Inst::AtomicRmw { t, .. } => InstKind::scalar(t),
         Inst::AtomicCmpxchg { .. } => InstKind::Void,
+        Inst::VecOp { id } => match ir.vec_ops.get(id).op {
+            VecOpIr::ToMask => InstKind::U64,
+            _ => InstKind::Void,
+        },
         Inst::Fence { .. } => InstKind::Void,
         Inst::Copy { .. } => InstKind::Void,
         Inst::StructOffset { .. } => InstKind::PTR,
@@ -1101,7 +1174,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
         match f.linkage {
             Linkage::Standard => panic!("ir: function should have a body I think"),
             Linkage::External { .. } => {}
-            Linkage::Intrinsic => {}
+            Linkage::Intrinsic | Linkage::LlvmIntrinsic(_) => {}
         }
     };
 
@@ -1904,6 +1977,10 @@ fn compile_expr(
                     Builtin::Backend(backend_builtin) => {
                         let function_id = maybe_function_id.unwrap();
                         callee = IrCallee::BackendBuiltin(function_id, backend_builtin)
+                    }
+                    Builtin::LlvmIntrinsic(name) => {
+                        let function_id = maybe_function_id.unwrap();
+                        callee = IrCallee::LlvmIntrinsic { name, function_id }
                     }
                     Builtin::TyperPhysicalFunction(_) => {
                         let function_id = maybe_function_id.unwrap();
@@ -2744,10 +2821,8 @@ fn compile_ir_builtin(
             use crate::typer::AtomicRmwOp as Op;
             let allow_pointer = op == Op::Xchg;
             let t = atomic_element_type(b, &call, allow_pointer)?;
-            let signed = matches!(
-                t,
-                ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64
-            );
+            let signed =
+                matches!(t, ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64);
             let op = match op {
                 Op::Xchg => AtomicRmwOpIr::Xchg,
                 Op::Add => AtomicRmwOpIr::Add,
@@ -2806,6 +2881,195 @@ fn compile_ir_builtin(
             b.push_inst_anon(Inst::Fence { ord });
             Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, ""))
         }
+        BuiltinIr::VectorOp(op) => compile_vector_op(b, op, &call, callee_fn_type, dst),
+    }
+}
+
+fn compile_vector_op(
+    b: &mut Builder,
+    op: crate::typer::VecOpKind,
+    call: &Call,
+    callee_fn_type: PhysicalFunctionType,
+    dst: Option<Value>,
+) -> K1Result<Value> {
+    use crate::typer::VecOpKind;
+    match op {
+        VecOpKind::Splat => {
+            // intern fn splat[t, n: static size](value: t): vector[t, n]
+            let (elem, lanes) = vector_pt_parts(b, callee_fn_type.return_type)?;
+            let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let locn = match dst {
+                None => b.push_alloca(callee_fn_type.return_type, "splat result").as_value(),
+                Some(dst) => dst,
+            };
+            let id = b.k1.ir.vec_ops.add(VecOpData {
+                op: VecOpIr::Splat,
+                elem,
+                lanes,
+                dst: locn,
+                lhs: value,
+                rhs: Value::Empty,
+            });
+            b.push_inst_anon(Inst::VecOp { id });
+            Ok(locn)
+        }
+        VecOpKind::Add
+        | VecOpKind::Sub
+        | VecOpKind::Mul
+        | VecOpKind::BitAnd
+        | VecOpKind::BitOr
+        | VecOpKind::Xor
+        | VecOpKind::EqLanes => {
+            // (lhs: vector[t, n], rhs: vector[t, n]): vector[t, n]
+            let op = match op {
+                VecOpKind::Add => VecOpIr::Add,
+                VecOpKind::Sub => VecOpIr::Sub,
+                VecOpKind::Mul => VecOpIr::Mul,
+                VecOpKind::BitAnd => VecOpIr::BitAnd,
+                VecOpKind::BitOr => VecOpIr::BitOr,
+                VecOpKind::Xor => VecOpIr::Xor,
+                VecOpKind::EqLanes => VecOpIr::EqLanes,
+                _ => unreachable!(),
+            };
+            let ret_pt = callee_fn_type.return_type;
+            let (elem, lanes) = vector_pt_parts(b, ret_pt)?;
+            let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            let locn = match dst {
+                None => b.push_alloca(ret_pt, "vec binop result").as_value(),
+                Some(dst) => dst,
+            };
+            let id = b.k1.ir.vec_ops.add(VecOpData { op, elem, lanes, dst: locn, lhs, rhs });
+            b.push_inst_anon(Inst::VecOp { id });
+            Ok(locn)
+        }
+        VecOpKind::BitNot => {
+            let ret_pt = callee_fn_type.return_type;
+            let (elem, lanes) = vector_pt_parts(b, ret_pt)?;
+            let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let locn = match dst {
+                None => b.push_alloca(ret_pt, "vec not result").as_value(),
+                Some(dst) => dst,
+            };
+            let id = b.k1.ir.vec_ops.add(VecOpData {
+                op: VecOpIr::BitNot,
+                elem,
+                lanes,
+                dst: locn,
+                lhs,
+                rhs: Value::Empty,
+            });
+            b.push_inst_anon(Inst::VecOp { id });
+            Ok(locn)
+        }
+        VecOpKind::ShiftLeft | VecOpKind::ShiftRight => {
+            // (lhs: vector[t, n], count: u32): vector[t, n]
+            let op = if op == VecOpKind::ShiftLeft { VecOpIr::Shl } else { VecOpIr::Shr };
+            let ret_pt = callee_fn_type.return_type;
+            let (elem, lanes) = vector_pt_parts(b, ret_pt)?;
+            let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let count = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            let locn = match dst {
+                None => b.push_alloca(ret_pt, "vec shift result").as_value(),
+                Some(dst) => dst,
+            };
+            let id = b.k1.ir.vec_ops.add(VecOpData { op, elem, lanes, dst: locn, lhs, rhs: count });
+            b.push_inst_anon(Inst::VecOp { id });
+            Ok(locn)
+        }
+        VecOpKind::ToMask => {
+            // (v: vector[t, n]): u64
+            let vec_pt = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt;
+            let (elem, lanes) = vector_pt_parts(b, vec_pt)?;
+            let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let id = b.k1.ir.vec_ops.add(VecOpData {
+                op: VecOpIr::ToMask,
+                elem,
+                lanes,
+                dst: Value::Empty,
+                lhs,
+                rhs: Value::Empty,
+            });
+            let inst = b.push_inst_anon(Inst::VecOp { id });
+            Ok(store_scalar_if_dst(b, dst, inst.as_value()))
+        }
+        VecOpKind::Load => {
+            // intern fn load-unchecked[t, n: static size](src: ptr): vector[t, n]
+            let ret_pt = callee_fn_type.return_type;
+            let _ = vector_pt_parts(b, ret_pt)?;
+            let src = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let locn = match dst {
+                None => b.push_alloca(ret_pt, "vector load result").as_value(),
+                Some(dst) => dst,
+            };
+            b.push_copy(locn, src, ret_pt, "vector load");
+            Ok(locn)
+        }
+        VecOpKind::Store => {
+            // intern fn store-unchecked[t, n](self: vector[t, n], dst: ptr)
+            let vec_pt = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt;
+            let _ = vector_pt_parts(b, vec_pt)?;
+            let vec_value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let dst_ptr = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            b.push_copy(dst_ptr, vec_value, vec_pt, "vector store");
+            Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, ""))
+        }
+        VecOpKind::GetLane => {
+            // intern fn get-lane[t, n](self: vector[t, n], index: size): t
+            let vec_pt = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt;
+            let (elem, _) = vector_pt_parts(b, vec_pt)?;
+            let base = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let element_index = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            let offset = b.push_inst(
+                Inst::ArrayOffset { element_t: PhysicalType::scalar(elem), base, element_index },
+                "get-lane offset",
+            );
+            let loaded = b.push_load(elem, offset.as_value(), "get-lane load");
+            Ok(store_scalar_if_dst(b, dst, loaded.as_value()))
+        }
+        VecOpKind::WithLane => {
+            // intern fn with-lane[t, n](self: vector[t, n], index: size, value: t): vector[t, n]
+            let ret_pt = callee_fn_type.return_type;
+            let (elem, _) = vector_pt_parts(b, ret_pt)?;
+            let src_vec = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let element_index = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 2))?;
+            let locn = match dst {
+                None => b.push_alloca(ret_pt, "with-lane result").as_value(),
+                Some(dst) => dst,
+            };
+            b.push_copy(locn, src_vec, ret_pt, "with-lane copy");
+            let offset = b.push_inst(
+                Inst::ArrayOffset {
+                    element_t: PhysicalType::scalar(elem),
+                    base: locn,
+                    element_index,
+                },
+                "with-lane offset",
+            );
+            b.push_store(offset.as_value(), value, "with-lane store");
+            Ok(locn)
+        }
+    }
+}
+
+/// The (element, lane-count) of a concrete vector physical type; errors with a
+/// source span for still-abstract or non-vector instantiations
+fn vector_pt_parts(b: &mut Builder, pt: PhysicalType) -> K1Result<(ScalarType, u32)> {
+    let PhysicalTypeEnum::Agg(agg_id) = pt.as_enum() else {
+        return failf!(
+            b.cur_span,
+            "vector intrinsic requires a concrete vector type; got {}",
+            b.k1.types.pt_to_string(pt)
+        );
+    };
+    match b.k1.types.agg_types.get(agg_id).agg_type {
+        AggType::Vector { element_pt, len } => Ok((element_pt, len)),
+        _ => failf!(
+            b.cur_span,
+            "vector intrinsic requires a vector type; got {}",
+            b.k1.types.pt_to_string(pt)
+        ),
     }
 }
 
@@ -3303,6 +3567,14 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         }
                     }
                 }
+                Inst::VecOp { id } => {
+                    let vop = ir.vec_ops.get(id);
+                    if vop.op != VecOpIr::ToMask
+                        && !get_value_kind(ir, &k1.types, vop.dst).is_storage()
+                    {
+                        errors.push(format!("i{inst_id}: vec op dst is not storage"))
+                    }
+                }
                 Inst::Fence { .. } => (),
                 Inst::Copy { dst, src, .. } => {
                     let src_type = get_value_kind(ir, &k1.types, src);
@@ -3739,6 +4011,12 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
                 cas.dst, cas.expected, cas.desired, cas.result
             )?;
         }
+        Inst::VecOp { id } => {
+            let vop = k1.ir.vec_ops.get(id);
+            write!(w, "vec {} <{} x ", vop.op.name(), vop.lanes)?;
+            display_scalar_type(w, vop.elem)?;
+            write!(w, "> into {}, {}, {}", vop.dst, vop.lhs, vop.rhs)?;
+        }
         Inst::Fence { ord } => {
             write!(w, "fence {}", ord.name())?;
         }
@@ -3774,6 +4052,9 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
                 }
                 IrCallee::Indirect(_, callee_inst) => {
                     write!(w, " indirect {}", *callee_inst)?;
+                }
+                IrCallee::LlvmIntrinsic { name, .. } => {
+                    write!(w, " llvm {}", k1.ident_str(*name))?;
                 }
                 IrCallee::Extern { library_name, function_name, .. } => {
                     write!(

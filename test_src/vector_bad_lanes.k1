@@ -1,0 +1,5 @@
+fn main(): i32 {
+  let _v: vector[u8, 3] = vector/zeroed[u8, 3]()
+  0
+}
+//errmsg: Vector lane count must be a power of two between 2 and 64

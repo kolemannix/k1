@@ -1,0 +1,7 @@
+type point = { x: i32, y: i32 }
+
+fn main(): i32 {
+  let _v: vector[point, 4] = vector/zeroed[point, 4]()
+  0
+}
+//errmsg: Vector elements must be an int, char, or float type

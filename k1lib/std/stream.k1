@@ -1,0 +1,157 @@
+// Disclaimer: This is a temporary, ai-generated utility to test the compiler and push the http project forward
+// Pull-based chunk streams with async support via wakers
+
+// Loop-thread-only wake: exactly one party holds a waker and calls it from
+// the thread that runs the stream. For cross-thread signaling use notify.
+type waker = { state: ptr, wake-fn: *fn(ptr) -> {} }
+ns for waker {
+  fn wake(self: waker) { (self.wake-fn)(self.state) }
+  fn noop(): waker { .{ state = ptr/null, wake-fn = fn(_p: ptr) .{} } }
+}
+
+type pull[t] = either { chunk(span[span[t]]), pending, done, fail(string) }
+
+// Authoring interface for sources. Implement this, then dyn-source/erase
+// gives the harness a storable handle.
+ability source[impl t] {
+  fn next(self: *mut self): pull[t]
+}
+
+// Lifecycle for sources that emit asynchronously: start delivers the waker
+// to call when a :pending source has data again; stop must release
+// everything the source owns. Erase with dyn-source/erase-async.
+ability source-async {
+  fn start(self: *mut self, waker: waker)
+  fn stop(self: *mut self)
+}
+
+// Consumes a stream chunk by chunk, then yields a single result value.
+ability sink[impl t, impl out] {
+  fn receive(self: *mut self, chunk: span[t])
+  fn finish(self: *mut self): out
+}
+
+// A hand-rolled ability object: source (+ source-async) erased to fn ptrs so
+// non-generic harness code can hold and drive any source. Delete when the
+// language gets real ability objects.
+type dyn-source[t] = {
+  state: ptr,
+  start-fn: *fn(ptr, waker) -> {},
+  next-fn: *fn(ptr) -> pull[t],
+  stop-fn: *fn(ptr) -> {},
+}
+
+ns for dyn-source {
+  fn start[t](self: dyn-source[t], waker: waker) { (self.start-fn)(self.state, waker) }
+  fn next[t](self: dyn-source[t]): pull[t] { (self.next-fn)(self.state) }
+  fn stop[t](self: dyn-source[t]) { (self.stop-fn)(self.state) }
+
+  fn erase[t, s](inst: *mut s): dyn-source[t] where s: source[t = t] {
+    .{
+      state = inst.as[ptr],
+      start-fn = fn(_p: ptr, _w: waker) .{},
+      next-fn = fn(p: ptr) source@(s)/next(p.rw[s]()),
+      stop-fn = fn(_p: ptr) .{},
+    }
+  }
+
+  fn erase-async[t, s](inst: *mut s): dyn-source[t] where s: source[t = t], s: source-async {
+    .{
+      state = inst.as[ptr],
+      start-fn = fn(p: ptr, w: waker) source-async@(s)/start(p.rw[s](), w),
+      next-fn = fn(p: ptr) source@(s)/next(p.rw[s]()),
+      stop-fn = fn(p: ptr) source-async@(s)/stop(p.rw[s]()),
+    }
+  }
+
+  // Drain a synchronous source through a sink, returning the sink's value.
+  fn run-to[t, out, k](self: dyn-source[t], into: *mut k): out where k: sink[t = t, out = out] {
+    self.start(waker/noop())
+    loop {
+      self.next() is {
+        :chunk group -> for c in group { sink@(k)/receive(into, c) },
+        :pending -> crash("run-to: source returned pending; drive async sources from an event loop"),
+        :done -> break,
+        :fail message -> crash("run-to: stream failed: $message"),
+      }
+    }
+    self.stop()
+    sink@(k)/finish(into)
+  }
+
+}
+
+// Constructors: `source/` is the place to look for ways to make a stream
+ns source {
+  // A source over an in-memory span, yielding fixed-size chunks. Allocates its
+  // cursor state in the ambient mode
+  fn from-span[t](items: span[t], chunk-size: size): dyn-source[t] {
+    let state: *mut buffer-source[t] = mem/new(.{
+      items,
+      cursor = 0,
+      chunk-size,
+      part = span/empty(),
+    })
+    dyn-source/erase(state)
+  }
+
+  // One printed item per pull, rendered into a reused buffer: each element
+  // becomes its own chunk (and so, downstream, its own SSE event or message)
+  fn from-items[t: print](items: span[t]): dyn-source[u8] {
+    let state: *mut item-source[t] = mem/new(.{
+      items,
+      cursor = 0,
+      buf = list/empty[u8](),
+      part = span/empty(),
+    })
+    dyn-source/erase(state)
+  }
+}
+
+type buffer-source[t] = {
+  items: span[t],
+  cursor: size,
+  chunk-size: size,
+  // backing for the emitted single-segment group
+  part: span[t],
+}
+
+impl[t] source[t = t] for buffer-source[t] {
+  fn next(self: *mut buffer-source[t]): pull[t] {
+    let remaining = self.items.len() - self.cursor
+    if remaining == 0 { return :done }
+    let n = if remaining < self.chunk-size remaining else self.chunk-size
+    self.part = self.items.slice(self.cursor, self.cursor + n)
+    self.cursor = self.cursor + n
+    :chunk span/wrap-single(self.part.&)
+  }
+}
+
+type item-source[t] = {
+  items: span[t],
+  cursor: size,
+  // rendering buffer, overwritten each pull
+  buf: list[u8],
+  part: span[u8],
+}
+
+impl[t: print] source[t = u8] for item-source[t] {
+  fn next(self: *mut item-source[t]): pull[u8] {
+    if self.cursor == self.items.len() { return :done }
+    self.buf.clear()
+    self.items.get(self.cursor).print-to(self.buf.&)
+    self.cursor = self.cursor + 1
+    self.part = self.buf.as-span()
+    :chunk span/wrap-single(self.part.&)
+  }
+}
+
+// The canonical sink: fold a stream of addable values into their sum.
+type sum-sink[t] = { total: t }
+
+impl[t: add] sink[t = t, out = t] for sum-sink[t] {
+  fn receive(self: *mut sum-sink[t], chunk: span[t]) {
+    for x in chunk { self.total = self.total + x }
+  }
+  fn finish(self: *mut sum-sink[t]): t { self.total }
+}

@@ -535,6 +535,18 @@ fn rewrite_instr(ir: &mut ProgramIr, mappings: &mut RewriteMappings, inst: &mut 
                 *id = ir.cmpxchgs.add(cas);
             }
         }
+        Inst::VecOp { id } => {
+            let mut vop = *ir.vec_ops.get(*id);
+            let mut changed = false;
+            for v in [&mut vop.dst, &mut vop.lhs, &mut vop.rhs] {
+                if rewrite_value(mappings, v) {
+                    changed = true;
+                }
+            }
+            if changed {
+                *id = ir.vec_ops.add(vop);
+            }
+        }
         Inst::Fence { .. } => {}
         Inst::Copy { dst, src, .. } => {
             rewrite_value(mappings, dst);

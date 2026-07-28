@@ -15,8 +15,7 @@ use TokenKind as K;
 pub const EOF_CHAR: char = 27 as char; // esc
 // pub const EOF_CHAR: char = '\0' as char;
 // EOF acts like a line end: whitespace- and newline-preceded
-pub const EOF_TOKEN: Token =
-    Token { kind: TokenKind::Eof, span: SpanId::NONE, flags: 0x01 | 0x04 };
+pub const EOF_TOKEN: Token = Token { kind: TokenKind::Eof, span: SpanId::NONE, flags: 0x01 | 0x04 };
 
 #[derive(Debug, Clone)]
 pub struct LexError {
@@ -649,7 +648,13 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         spans: &'spans mut Spans,
         file_id: FileId,
     ) -> Lexer<'content, 'spans> {
-        Lexer { file_id, content: input.as_bytes(), spans, pos: 0, trivia: TokenTriviaTable::default() }
+        Lexer {
+            file_id,
+            content: input.as_bytes(),
+            spans,
+            pos: 0,
+            trivia: TokenTriviaTable::default(),
+        }
     }
 
     fn make_error(&mut self, message: String, start: u32, len: u32) -> LexError {
@@ -730,7 +735,9 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             let len = tok_len;
             if is_number {
                 make_token(lex, K::Numeric, start, len)
-            } else if let Some(kind) = TokenKind::token_from_bytes(&lex.content[start as usize..(start + len) as usize]) {
+            } else if let Some(kind) =
+                TokenKind::token_from_bytes(&lex.content[start as usize..(start + len) as usize])
+            {
                 make_token(lex, kind, start, len)
             } else {
                 make_token(lex, K::Ident, start, len)
@@ -793,12 +800,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             ));
                             self.advance();
                             self.advance();
-                            tokens.push(make_token(
-                                self,
-                                K::OpenBrace,
-                                n,
-                                2,
-                            ));
+                            tokens.push(make_token(self, K::OpenBrace, n, 2));
                             return Ok(Some(()));
                         }
                         '$' if is_ident_start(self.peek_n(1)) => {
@@ -821,12 +823,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 ident_len += 1;
                                 self.advance();
                             }
-                            tokens.push(make_token(
-                                self,
-                                K::Ident,
-                                n + 1,
-                                ident_len,
-                            ));
+                            tokens.push(make_token(self, K::Ident, n + 1, ident_len));
                             return Ok(Some(()));
                         }
                         '"' if lex_mode.is_dq_string() => {
@@ -878,12 +875,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         macro_rules! return_single {
                             ($kind: expr) => {{
                                 self.advance();
-                                tokens.push(make_token(
-                                    self,
-                                    $kind,
-                                    n,
-                                    1,
-                                ));
+                                tokens.push(make_token(self, $kind, n, 1));
                                 return Ok(Some(()));
                             }};
                         }
@@ -891,12 +883,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             ($kind: expr) => {{
                                 self.advance();
                                 self.advance();
-                                tokens.push(make_token(
-                                    self,
-                                    $kind,
-                                    n,
-                                    2,
-                                ));
+                                tokens.push(make_token(self, $kind, n, 2));
                                 return Ok(Some(()));
                             }};
                         }
@@ -992,12 +979,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                             "Expected closing ' for char literal at {q}"
                                         ));
                                     }
-                                    tokens.push(make_token(
-                                        self,
-                                        TokenKind::Char,
-                                        n,
-                                        4,
-                                    ));
+                                    tokens.push(make_token(self, TokenKind::Char, n, 4));
                                     return Ok(Some(()));
                                 } else {
                                     // Eat Closing ''
@@ -1010,12 +992,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                         ));
                                     }
                                     // `n` is the index of the opening quote
-                                    tokens.push(make_token(
-                                        self,
-                                        TokenKind::Char,
-                                        n,
-                                        3,
-                                    ));
+                                    tokens.push(make_token(self, TokenKind::Char, n, 3));
                                     return Ok(Some(()));
                                 }
                             }
@@ -1136,12 +1113,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                     // Flush the ident buffer
                                     tokens.push(make_from_buffer!(n));
                                     // Lex the dot
-                                    tokens.push(make_token(
-                                        self,
-                                        K::Dot,
-                                        n,
-                                        1,
-                                    ));
+                                    tokens.push(make_token(self, K::Dot, n, 1));
                                     self.advance();
                                     return Ok(Some(()));
                                 }

@@ -76,8 +76,27 @@ ns for string {
   }
 
   fn index-of(self: string, c: char): i64 {
-    for self.span {
-      if it == c return it-index
+    let len = self.len()
+    let w: size = k1/simd-bytes
+    if len < w return self.index-of-from(c, 0)
+
+    let needle = vector/splat[u8, type-of(k1/simd-bytes)](c.as[u8])
+    let base = self.data-ptr()
+    let i = 0: size
+    while i + w <= len {
+      let chunk = vector/load-unchecked[u8, type-of(k1/simd-bytes)](base.ref-at-index[u8](i).as[ptr])
+      let lane = chunk.eq-lanes(needle).first-true-lane()
+      if lane >= 0 return i + lane
+      i = i + w
+    }
+    self.index-of-from(c, i)
+  }
+
+  fn index-of-from(self: string, c: char, start: size): i64 {
+    let i = start
+    while i < self.len() {
+      if self.get(i) == c return i
+      i = i + 1
     }
     -1
   }
@@ -97,37 +116,55 @@ ns for string {
     concat-char-in(context :current)(self, c)
   }
 
+  // Splits at every delimiter, keeping interior empty pieces but dropping a
+  // trailing empty piece
   fn split-by-char(self: string, delim: char): list[string] {
-    let ranges = list/empty[{ start: size, len: size }]()
-    let r = .{ start = 0: size, len = 0: size }
-
-    for c in self {
-      if c == delim {
-        ranges.push(r)
-        r = .{ start = it-index + 1, len = 0 }
-      } else {
-        r.len = r.len + 1
+    let pieces = list/empty[string]()
+    let start = 0: size
+    while start < self.len() {
+      let idx = self.drop(start).index-of(delim)
+      if idx < 0 {
+        pieces.push(self.slice(start, self.len()))
+        return pieces
       }
+      pieces.push(self.slice(start, start + idx))
+      start = start + idx + 1
     }
-
-    if r.len != 0 {
-      ranges.push(r)
-    }
-
-    ranges.map(fn range. {
-      let end = range.start + range.len
-      self.slice(range.start, end)
-    })
+    pieces
   }
 
+  // SIMD candidate filter: positions matching the needle's first and last
+  // byte at the right distance, verified with a full compare
   fn index-of-string(self: string, target: string): ?size {
-    for self.span {
-      let i = it-index
-      if i + target.len() > self.len() {
-        return :none
+    let n = self.len()
+    let k = target.len()
+    if k == 0 return if n == 0 :none else :some 0
+    if k > n return :none
+    if k == 1 {
+      let r = self.index-of(target.get(0))
+      return if r < 0 :none else :some r
+    }
+
+    let w: size = k1/simd-bytes
+    let first = vector/splat[u8, type-of(k1/simd-bytes)](target.get(0).as[u8])
+    let last = vector/splat[u8, type-of(k1/simd-bytes)](target.get(k - 1).as[u8])
+    let base = self.data-ptr()
+    let i = 0: size
+    // Both loads must stay in bounds: lanes [i, i+w) paired with [i+k-1, i+k-1+w)
+    while i + w + k - 1 <= n {
+      let block-first = vector/load-unchecked[u8, type-of(k1/simd-bytes)](base.ref-at-index[u8](i).as[ptr])
+      let block-last = vector/load-unchecked[u8, type-of(k1/simd-bytes)](base.ref-at-index[u8](i + k - 1).as[ptr])
+      let m = block-first.eq-lanes(first).bit-and(block-last.eq-lanes(last)).to-mask()
+      while m != 0 {
+        let j = m.trailing-zeros().as[size]
+        if self.slice(i + j, i + j + k) == target return :some (i + j)
+        m = m.bit-and(m - 1)
       }
-      let sub = self.slice(i, i + target.len())
-      if sub == target return :some i
+      i = i + w
+    }
+    while i + k <= n {
+      if self.slice(i, i + k) == target return :some i
+      i = i + 1
     }
     :none
   }
@@ -180,27 +217,6 @@ ns for string {
     copy
   }
 
-  // TODO(stdlib perf): use snprintf for string to int
-  fn to-int(self: string): ?int {
-    if self.is-empty() return :none
-
-    let neg = self.get(0) == '-'
-    let i = if neg 1 else 0
-    let total = 0
-    while i < self.len() {
-      if self.get(i).to-ascii-digit() is :some digit {
-        total = (total * 10) + digit.as[int]
-      } else {
-        return :none
-      }
-      i = i + 1
-    }
-
-    some(
-      if neg { total * -1 } else { (total) }
-    )
-  }
-
   fn capitalize-ascii(self: string): string {
     if self.first() is :some c and c.is-ascii-lower() {
       let clone-chars: buffer[char] = self.span.buffer.cloned()
@@ -208,19 +224,19 @@ ns for string {
       wrap-buffer(clone-chars)
     } else self
   }
- 
-  fn parse-base10(self: string): ?uint {
-    let o: uint = 0
+
+  fn to-ascii-upper(self: string): string {
+    let clone-chars: buffer[char] = self.span.buffer.cloned()
     for c in self {
-      require c.to-ascii-digit() is :some digit-value else { return :none }
-      // FIXME char to digit LUT
-      let digit-value: uint = (c.as[u8] - 48).as[uint]
-      o = o * 10
-      o = o + digit-value
+      if c.is-ascii-lower() { clone-chars.set(it-index, c.to-ascii-upper()) }
     }
-    :some o
+    wrap-buffer(clone-chars)
   }
 
+}
+
+impl from-string[e = never] for string {
+  fn from-string(s: string): result[string, never] { :ok s }
 }
 
 impl show for string {

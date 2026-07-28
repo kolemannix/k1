@@ -387,7 +387,6 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
 
 impl<T, Index: PoolIndex> Drop for VPool<T, Index> {
     fn drop(&mut self) {
-
         // If T has drop glue, call drop on all elements in the pool
         if std::mem::needs_drop::<T>() {
             for i in 0..self.len {

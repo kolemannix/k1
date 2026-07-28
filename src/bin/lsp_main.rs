@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use k1::compiler::{CompileProgramError, LspCompileOptions};
-use k1::lsp_support::CompletionCandidateKind;
 use k1::lex::{self, Span, SpanId, Spans};
+use k1::lsp_support::CompletionCandidateKind;
 use k1::parse;
 use k1::parse::{ParsedProgram, SourceFile};
 use k1::typer::*;
@@ -117,7 +117,11 @@ fn span_to_range(k1: &TypedProgram, span: Span) -> Option<Range> {
     span_to_range_with_source(source, span)
 }
 
-fn span_id_to_range_with_source(source: &SourceFile, spans: &Spans, span_id: SpanId) -> Option<Range> {
+fn span_id_to_range_with_source(
+    source: &SourceFile,
+    spans: &Spans,
+    span_id: SpanId,
+) -> Option<Range> {
     let span = spans.get(span_id);
     span_to_range_with_source(source, span)
 }
@@ -248,7 +252,11 @@ impl Backend {
 
     fn all_file_urls(&self) -> Vec<Url> {
         self.with_k1(|k1| {
-            k1.ast.sources.iter().map(|s| source_to_uri(s.1.directory.as_str(), &s.1.filename)).collect()
+            k1.ast
+                .sources
+                .iter()
+                .map(|s| source_to_uri(s.1.directory.as_str(), &s.1.filename))
+                .collect()
         })
         .unwrap_or_default()
     }
@@ -380,7 +388,6 @@ impl Backend {
         .unwrap_or_default()
     }
 }
-
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
@@ -755,14 +762,15 @@ impl LanguageServer for Backend {
         if self.completion_generation.load(Ordering::SeqCst) != my_generation {
             return Err(Error::request_cancelled());
         }
-        let program = tokio::task::spawn_blocking(move || {
-            match k1::compiler::compile_program_ext(&args, lsp_options) {
-                Ok(program) => program,
-                Err(CompileProgramError::TyperFailure(program)) => *program,
-            }
-        })
-        .await
-        .map_err(|_| Error::internal_error())?;
+        let program =
+            tokio::task::spawn_blocking(move || {
+                match k1::compiler::compile_program_ext(&args, lsp_options) {
+                    Ok(program) => program,
+                    Err(CompileProgramError::TyperFailure(program)) => *program,
+                }
+            })
+            .await
+            .map_err(|_| Error::internal_error())?;
 
         let site = program.completion.as_ref().and_then(|cs| cs.site);
         let (candidates, is_incomplete) = match site {

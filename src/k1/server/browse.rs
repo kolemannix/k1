@@ -2,7 +2,7 @@
 //! per-namespace member listings.
 
 use fxhash::FxHashMap;
-use maud::{html, Markup};
+use maud::{Markup, html};
 
 use crate::lex::SpanId;
 use crate::parse::StringId;
@@ -142,12 +142,7 @@ fn ns_kind_label(k1: &TypedProgram, ns_id: NamespaceId) -> String {
     }
 }
 
-fn render_ns_main(
-    k1: &TypedProgram,
-    tree: &NsTree,
-    ns_id: NamespaceId,
-    path: &[&str],
-) -> Markup {
+fn render_ns_main(k1: &TypedProgram, tree: &NsTree, ns_id: NamespaceId, path: &[&str]) -> Markup {
     let ns = k1.namespaces.get(ns_id);
     let scope_id = ns.scope_id;
 

@@ -1,3 +1,53 @@
-#debug fn main(): i32 {
+ability a-source[impl t] {
+  fn next(self: *mut self): ?span[t]
+}
+
+type source[t] = {
+  state: ptr,
+  next-fn: *fn(ptr) -> ?span[t],
+}
+
+ns for source {
+  fn next[t](self: source[t]): ?span[t] {
+    (self.next-fn)(self.state)
+  }
+
+  fn erase[t, s](inst: *mut s): source[t] where s: a-source[t = t] {
+    .{
+      state = inst.as[ptr],
+      next-fn = fn(p: ptr) p.rw[s]().next(),
+    }
+  }
+}
+
+type repeats[t] = { data: t }
+impl[t] a-source[t = t] for repeats[t] {
+  fn next(self: *mut repeats[t]): ?span[t] {
+    :some span/single(self.data)
+  }
+}
+
+type count-up = { current: int, limit: int }
+impl a-source[t = int] for count-up {
+  fn next(self: *mut count-up): ?span[int] {
+    if self.current >= self.limit { return :none }
+    self.current = self.current + 1
+    :some span/single(self.current)
+  }
+}
+
+fn main(): i32 {
+  let r: *mut repeats[int] = mem/new(.{ data = 42 })
+  let src: source[int] = source/erase(r)
+  println(src.next())
+
+  let c: *mut count-up = mem/new(.{ current = 0, limit = 2 })
+  let src2: source[int] = source/erase(c)
+  println(src2.next())
+  println(src2.next())
+  println(src2.next())
+
+  let sources: list[source[int]] = [src, src2]
+  for s in sources { println(s.next()) }
   0
 }

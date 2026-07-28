@@ -53,6 +53,12 @@ ns iter {
     t
   }
 
+  fn to-list[t, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i): list[t] {
+    let out = list/empty[t]()
+    for iterable { out.push(it) }
+    out
+  }
+
 }
 
 fn inc(i: *mut size) { i.* = i.* + 1 }
@@ -426,6 +432,20 @@ ns for i32 {
 ns for i64 {
   let max-value: i64 = 0x7FFFFFFFFFFFFFFF
   let min-value: i64 = -0x8000000000000000
+
+  fn from-string(s: string): result[i64, string] {
+    if s.is-empty() return :err "empty string"
+    let neg = s.get(0) == '-'
+    let magnitude = u64/from-string(if neg s.drop(1) else s).try
+    if neg {
+      if magnitude > 0x8000000000000000 return :err "i64 overflow"
+      if magnitude == 0x8000000000000000 return :ok i64/min-value
+      :ok (magnitude.as[i64] * -1)
+    } else {
+      if magnitude > i64/max-value.as[u64] return :err "i64 overflow"
+      :ok magnitude.as[i64]
+    }
+  }
   fn next-pow2(self: i64): i64 {
     // TODO: We could call ctlz instead when available
     if self < 0 crash("i64/next-pow2: value must be positive") else
@@ -445,6 +465,21 @@ ns for i64 {
 }
 
 ns for u64 {
+  let min-value: u64 = 0
+  let max-value: u64 = 0xFFFFFFFFFFFFFFFF
+
+  fn from-string(s: string): result[u64, string] {
+    if s.is-empty() return :err "empty string"
+    let o: u64 = 0
+    for c in s {
+      require c.to-ascii-digit() is :some d else { return :err "not a digit" }
+      let d = d.as[u64]
+      if o > (u64/max-value - d) / 10 return :err "u64 overflow"
+      o = o * 10 + d
+    }
+    :ok o
+  }
+
   fn next-pow2(self: u64): u64 {
     let v = self - 1
     v = v | (v >> 1)
@@ -458,7 +493,13 @@ ns for u64 {
 
   fn bitmask-low(n: size): u64 {
     assert(n <= 64)
-    (1usize << n.as[u32]) - 1
+    if n == 64 18446744073709551615: u64 else (1usize << n.as[u32]) - 1
+  }
+
+  intern("llvm.cttz.i64") fn _cttz(x: u64, zero-poison: bool): u64
+
+  fn trailing-zeros(self: u64): u64 {
+    _cttz(self, false)
   }
 
 }
@@ -485,8 +526,8 @@ ns for f64 {
     w.write-bytes(stack-buf.as-span().slice(0, written-len.as[size]))
   }
 
-  fn from-string(s: string): result[{ value: f64, len: size }, string] {
-    parse-string(s = s, require-total = true)
+  fn from-string(s: string): result[f64, string] {
+    :ok parse-string(s = s, require-total = true).try.value
   }
   fn parse-string(s: string, require-total: bool): result[{ value: f64, len: size }, string] {
     let out: f64 = uninit
@@ -521,6 +562,16 @@ ns for f32 {
 
 impl equals for f32 { intern fn equals(self: f32, other: f32): bool }
 impl equals for f64 { intern fn equals(self: f64, other: f64): bool }
+
+impl from-string[e = string] for u64 {
+  fn from-string(s: string): result[u64, string] { u64/from-string(s) }
+}
+impl from-string[e = string] for i64 {
+  fn from-string(s: string): result[i64, string] { i64/from-string(s) }
+}
+impl from-string[e = string] for f64 {
+  fn from-string(s: string): result[f64, string] { f64/from-string(s) }
+}
 
 impl add for f32 { intern fn add(self, other: self): self }
 impl add for f64 { intern fn add(self, other: self): self }

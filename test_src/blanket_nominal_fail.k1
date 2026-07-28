@@ -1,0 +1,23 @@
+ability a-source[impl t] {
+  fn next(self: *mut self): ?t
+}
+
+type repeats[t] = { data: t }
+impl[t] a-source[t = t] for repeats[t] {
+  fn next(self: *mut repeats[t]): ?t {
+    :some self.data
+  }
+}
+
+fn take[t, s](inst: *mut s): ?t where s: a-source[t = t] {
+  a-source@(s)/next(inst)
+}
+
+fn main(): i32 {
+  // No ascription: mem/new yields *mut { data: i64 }, which is structurally
+  // like repeats[i64] but must not match the blanket impl's nominal Self.
+  let r = mem/new(.{ data = 42 })
+  let _: ?int = take(r)
+  0
+}
+//errmsg: Could not satisfy ability constraint a-source

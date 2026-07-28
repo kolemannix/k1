@@ -12,6 +12,40 @@ fn escape() {
   assert(s.get(5) == '\\')
 }
 
+// The SIMD search paths engage at 16 bytes; hit matches on every side of the
+// chunk boundary, misaligned starts, and the scalar tail
+fn simd-boundaries() {
+  //         0123456789012345678901234567890123456789
+  let s37 = "abcdefghijklmnopqrstuvwxyz0123456789!"
+  assert-equals(s37.len(), 37)
+  assert-equals(s37.index-of('a'), 0)
+  assert-equals(s37.index-of('p'), 15)
+  assert-equals(s37.index-of('q'), 16)
+  assert-equals(s37.index-of('r'), 17)
+  assert-equals(s37.index-of('5'), 31)
+  assert-equals(s37.index-of('6'), 32) // in the 5-byte scalar tail
+  assert-equals(s37.index-of('!'), 36) // last byte
+  assert-equals(s37.index-of('#'), -1)
+  assert-equals(s37.drop(1).index-of('q'), 15) // misaligned base pointer
+
+  let s16 = s37.take(16)
+  assert-equals(s16.index-of('p'), 15)
+  assert-equals(s16.index-of('q'), -1)
+
+  assert("hello, this string exceeds sixteen".index-of-string("exceeds") is :some 19)
+  assert(s37.index-of-string("pqr") is :some 15)  // straddles the chunk boundary
+  assert(s37.index-of-string("789!") is :some 33) // ends at the last byte
+  assert(s37.index-of-string("89!x") is :none)
+  assert(s37.index-of-string(s37) is :some 0)
+  assert(s37.index-of-string("!#") is :none)      // candidate at the very end, verify fails
+  // first/last bytes match at many positions; only one verifies
+  let reps = "aXa aYa aZa aQa aWa aEa aRa aTa"
+  assert(reps.index-of-string("aQa") is :some 12)
+  assert(reps.index-of-string("aBa") is :none)
+
+  assert-equals("aaaa.bbbb.cccc.dddd.eeee.ffff.gggg".split-by-char('.').len(), 7)
+}
+
 fn test() {
 
   let abc: string = "abc"
@@ -42,11 +76,31 @@ fn test() {
   assert("hello".index-of('e') == 1)
   assert("hello".index-of('x') == -1)
 
-  assert("123".to-int().! == 123)
-  assert("-123".to-int().! == -123)
-  assert(not "--".to-int().is-ok())
-  assert(not "123a".to-int().is-ok())
-  assert("12399999".to-int().! == 12399999)
+  simd-boundaries()
+
+  assert(u64/from-string("123").! == 123)
+  assert(u64/from-string("0").! == 0)
+  assert(not u64/from-string("").is-ok())
+  assert(not u64/from-string("12a").is-ok())
+  assert(not u64/from-string("-1").is-ok())
+  assert(u64/from-string("18446744073709551615").! == u64/max-value)
+  assert(not u64/from-string("18446744073709551616").is-ok())
+
+  assert(i64/from-string("123").! == 123)
+  assert(i64/from-string("-123").! == -123)
+  assert(not i64/from-string("-").is-ok())
+  assert(not i64/from-string("--1").is-ok())
+  assert(not i64/from-string("123a").is-ok())
+  assert(i64/from-string("9223372036854775807").! == i64/max-value)
+  assert(i64/from-string("-9223372036854775808").! == i64/min-value)
+  assert(not i64/from-string("9223372036854775808").is-ok())
+  assert(not i64/from-string("-9223372036854775809").is-ok())
+
+  assert(f64/from-string("1.5").! == 1.5)
+  assert(not f64/from-string("1.5x").is-ok())
+
+  assert(from-string@(u64)/from-string("42").! == 42)
+  assert(from-string@(string)/from-string("hello").! == "hello")
 
   escape()
 }

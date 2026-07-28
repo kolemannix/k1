@@ -113,21 +113,15 @@ mod value_roundtrip_tests {
     #[test]
     fn test_sign_extend() {
         assert_eq!(
-            Value::i16(-3)
-                .sign_extended_raw(16, 32)
-                .as_typed_int(IntegerType::I32),
+            Value::i16(-3).sign_extended_raw(16, 32).as_typed_int(IntegerType::I32),
             TypedIntValue::I32(-3)
         );
         assert_eq!(
-            Value::i16(-3)
-                .sign_extended_raw(16, 64)
-                .as_typed_int(IntegerType::I64),
+            Value::i16(-3).sign_extended_raw(16, 64).as_typed_int(IntegerType::I64),
             TypedIntValue::I64(-3)
         );
         assert_eq!(
-            Value::i8(-3)
-                .sign_extended_raw(8, 32)
-                .as_typed_int(IntegerType::I32),
+            Value::i8(-3).sign_extended_raw(8, 32).as_typed_int(IntegerType::I32),
             TypedIntValue::I32(-3)
         )
     }

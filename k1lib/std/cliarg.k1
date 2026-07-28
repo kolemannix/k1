@@ -30,9 +30,61 @@ fn gen-help-text[t](summary: string): string {
   sb.build-tmp()
 }
 
-// fn make-parse-args-fn(args-type-id: u64, customizations: span[{ name: string, settings: {} }]): string {
-//   
-// }
+// For each field in the target type, a local variable to house its parsed data
+fn emit-arg-locals(cb: *mut code-builder, s: types/type-schema:struct, args-type-id: u64) {
+  for s.fields {
+    get-arg-kind(it.type-id) is {
+      :string      -> cb.line("let ${it.name}-val: ?type-from-id($args-type-id).${it.name} = :none"),
+      :opt-string  -> cb.line("let ${it.name}-val: type-from-id($args-type-id).${it.name} = :none"),
+      :list-string -> cb.line("let ${it.name}-val: type-from-id($args-type-id).${it.name} = list/empty()"),
+    }
+  }
+}
+
+// A case or two per arg field; the match arms update the locals
+fn emit-arg-match(cb: *mut code-builder, s: types/type-schema:struct) {
+  cb.block("cur is", fn. {
+    for s.fields {
+      get-arg-kind(it.type-id) is {
+        :string or :opt-string -> {
+          cb.line(`"-${it.name}" -> { if parse-next(&i, args) is :some next { ${it.name}-val = :some next } },`)
+          cb.line(`"/${it.name}" -> { if parse-next(&i, args) is :some(next) .{} },`)
+        },
+        :list-string -> {
+          cb.line(`"+${it.name}" -> { if parse-next(&i, args) is :some next { ${it.name}-val.push(next) } },`)
+        },
+      }
+    }
+    cb.line(`_ -> crash("Unrecognized arg \$cur")`)
+  })
+}
+
+fn emit-arg-loop(cb: *mut code-builder, s: types/type-schema:struct) {
+  cb.line("let i = 1")
+  cb.block("while i < args.len()", fn. {
+    cb.line("let cur = args.get(i)")
+    emit-arg-match(cb, s)
+  })
+}
+
+fn emit-arg-validate(cb: *mut code-builder, s: types/type-schema:struct) {
+  for s.fields {
+    get-arg-kind(it.type-id) is {
+      :string                     -> cb.line(`require ${it.name}-val is :some ${it.name}-out else return :err "${it.name} is missing"`),
+      :list-string or :opt-string -> cb.line("let ${it.name}-out = ${it.name}-val"),
+    }
+  }
+}
+
+fn emit-arg-construct(cb: *mut code-builder, s: types/type-schema:struct) {
+  cb.line(":ok(.{")
+  cb.indent()
+  for s.fields {
+    cb.line("${it.name} = ${it.name}-out,")
+  }
+  cb.dedent()
+  cb.line("})")
+}
 
 fn parse-args[t](args: span[string], customizations: span[{ name: string, settings: {} }]): result[t, string] {
   // Note: it would be better to move these two lines inside the meta call
@@ -43,60 +95,13 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
   let result: result[t, string] = #meta(_s, _t-id) {
     let args-type-id = _t-id
     let s: types/type-schema:struct = _s.from-static()
-    let code = string-builder/new()
-
-    // For each field in the target type, create a local variable to house our parsed data
-    for s.fields {
-      get-arg-kind(it.type-id) is {
-        :string      -> code.writeln("let ${it.name}-val: ?type-from-id($args-type-id).${it.name} = :none;"),
-        :opt-string  -> code.writeln("let ${it.name}-val: type-from-id($args-type-id).${it.name} = :none;"),
-        :list-string -> code.writeln("let ${it.name}-val: type-from-id($args-type-id).${it.name} = list/empty();"),
-      }
-    }
-
-    // Initialize a loop through the args
-    code.write(`
-      let i = 1;
-      while i < args.len() {
-        let cur = args.get(i);
-        cur is {
-      `)
-
-    // Parse the argument using a match - generate a case or two for each arg field
-    // The match arms update the locals
-    for s.fields {
-      get-arg-kind(it.type-id) is {
-        :string or :opt-string -> {
-          code.writeln(`    "-${it.name}" -> { if parse-next(&i, args) is :some next { ${it.name}-val = :some next } },`)
-          code.writeln(`    "/${it.name}" -> { if parse-next(&i, args) is :some(next) .{} },`)
-        },
-        :list-string -> {
-          code.writeln(`    "+${it.name}" -> { if parse-next(&i, args) is :some next { ${it.name}-val.push(next) } },`)
-        },
-      }
-    }
-    code.write(`
-          _ -> crash("Unrecognized arg \$cur")
-        }
-      };
-      `)
-
-    // validate
-    for s.fields {
-      get-arg-kind(it.type-id) is {
-        :string                     -> code.writeln(`require ${it.name}-val is :some ${it.name}-out else return :err "${it.name} is missing";`),
-        :list-string or :opt-string -> code.writeln("let ${it.name}-out = ${it.name}-val;"),
-      }
-    }
-
-    // Construct the final output struct
-    code.writeln(":ok(.{")
-    for s.fields {
-      code.writeln("${it.name} = ${it.name}-out,")
-    }
-    code.writeln("})")
-
-    code/from-string(code.build-tmp())
+    let cb-storage = code-builder/new()
+    let cb = cb-storage.&
+    emit-arg-locals(cb, s, args-type-id)
+    emit-arg-loop(cb, s)
+    emit-arg-validate(cb, s)
+    emit-arg-construct(cb, s)
+    cb.build()
   }
 
   result

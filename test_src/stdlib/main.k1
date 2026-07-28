@@ -1,9 +1,12 @@
 fn test-all() {
+  stream_test/test()
+  pubsub_test/test()
   hash_test/test()
   test-fixlist()
   test-bitfield()
   test-format()
   json_test/test()
+  simd_test/test()
 }
 fn main(): i32 {
   #static test-all()

@@ -299,7 +299,6 @@ impl Vm {
             bc_fault: None,
         }
     }
-
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -630,13 +629,20 @@ pub fn static_value_to_vm_value(
             Value::ptr(sum_base)
         }
         StaticValue::LinearContainer(container) => {
-            let (element_type, _container_kind) =
-                k1.types.get_as_container_instance(container.type_id).unwrap();
+            let container_type_id = container.type_id;
+            let element_type = k1.types.get_linear_container_element(container_type_id).unwrap();
             let kind = container.kind;
             let len = container.len();
             let container_elements = container.elements;
             let layout = k1.get_layout(element_type).unwrap();
-            let array_allocation_layout = layout.array_me(len);
+            // Inline containers (arrays, vectors) use their own layout so vectors
+            // get their natural alignment
+            let array_allocation_layout = match kind {
+                StaticContainerKind::Array | StaticContainerKind::Vector => {
+                    k1.get_layout(container_type_id).unwrap()
+                }
+                _ => layout.array_me(len),
+            };
 
             let array_base_ptr =
                 k1.vm_shared_static_stack.push_layout_uninit(array_allocation_layout);
@@ -661,8 +667,10 @@ pub fn static_value_to_vm_value(
                     let rust_struct_ptr = k1.vm_shared_static_stack.push_t(rust_list);
                     Value::ptr(rust_struct_ptr)
                 }
-                // k1 array is an aggregate value, so we represent it by its base address
-                StaticContainerKind::Array => Value::ptr(array_base_ptr),
+                // k1 arrays and vectors are aggregate values, represented by base address
+                StaticContainerKind::Array | StaticContainerKind::Vector => {
+                    Value::ptr(array_base_ptr)
+                }
             }
         }
     };
@@ -716,8 +724,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             };
         }
         StaticValue::LinearContainer(container) => {
-            let (element_type, _container_kind) =
-                k1.types.get_as_container_instance(container.type_id).unwrap();
+            let element_type = k1.types.get_linear_container_element(container.type_id).unwrap();
             let kind = container.kind;
             let len = container.len();
             let container_elements = container.elements;
@@ -730,7 +737,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
                 | StaticContainerKind::List => {
                     k1.vm_shared_static_stack.push_layout_uninit(array_allocation_layout)
                 }
-                StaticContainerKind::Array => dst,
+                StaticContainerKind::Array | StaticContainerKind::Vector => dst,
             };
 
             store_static_array_elements(k1, array_base_ptr, element_type, container_elements);
@@ -752,7 +759,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
 
                     unsafe { *(dst as *mut k1_types::K1List) = rust_list };
                 }
-                StaticContainerKind::Array => {}
+                StaticContainerKind::Array | StaticContainerKind::Vector => {}
             }
         }
     };
@@ -1149,11 +1156,14 @@ pub fn vm_value_to_static_value(
             let float_value = vm_value.as_typed_float(*float_type);
             k1.static_values.add(StaticValue::Float(float_value))
         }
-        Type::Array(array_type) => {
-            let element_type = array_type.element_type;
-            let concrete_count = k1.get_concrete_count_of_array(array_type.size_type);
-            let Some(count) = concrete_count else {
-                return failf!(span, "Cannot convert array of unknown size to static value");
+        Type::Array(_) | Type::Vector(_) => {
+            let (element_type, size_type, kind) = match k1.types.get(type_id) {
+                Type::Array(a) => (a.element_type, a.size_type, StaticContainerKind::Array),
+                Type::Vector(v) => (v.element_type, v.size_type, StaticContainerKind::Vector),
+                _ => unreachable!(),
+            };
+            let Some(count) = k1.get_concrete_count_of_array(size_type) else {
+                return failf!(span, "Cannot convert container of unknown size to static value");
             };
             let count = count as usize;
             let mut elements = k1.static_values.mem.new_list(count as u32);
@@ -1172,7 +1182,7 @@ pub fn vm_value_to_static_value(
             let elements_slice = elements.into_handle(&mut k1.static_values.mem);
             k1.static_values.add(StaticValue::LinearContainer(StaticContainer {
                 elements: elements_slice,
-                kind: StaticContainerKind::Array,
+                kind,
                 type_id,
             }))
         }

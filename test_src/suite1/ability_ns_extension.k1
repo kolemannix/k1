@@ -1,0 +1,35 @@
+ns ability_ns_extension
+
+// A plain `ns <name>` sharing an ability's name extends the ability's
+// namespace: statics live beside the ability fns (callable as counter/next),
+// but in the outer namespace scope, so they never see Self or the params.
+
+ns counter {
+  fn from-int(n: int): counter-impl { .{ n } }
+}
+
+ability counter[impl t] {
+  fn next(self: *mut self): t
+}
+
+type counter-impl = { n: int }
+
+impl counter[t = int] for counter-impl {
+  fn next(self: *mut counter-impl): int {
+    self.n = self.n + 1
+    self.n
+  }
+}
+
+// A second extension block; from-int resolves unqualified as a sibling
+ns counter {
+  fn zero(): counter-impl { from-int(0) }
+}
+
+fn test() {
+  let c = counter/from-int(41)
+  assert(c.&.next() == 42)
+  let z = counter/zero()
+  assert(counter/next(z.&) == 1)
+  assert(z.&.next() == 2)
+}

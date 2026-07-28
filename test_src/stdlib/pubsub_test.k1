@@ -1,0 +1,57 @@
+ns pubsub_test
+
+use std/pubsub
+use std/notify
+use std/waker
+use std/dyn-source
+use std/source
+use std/pull
+use std/rc
+use std/rc-bytes
+use std/rc-byte-stream
+use std/owned
+use std/heap-bytes
+
+let mutable notify-count: int = 0
+fn count-notify(_p: ptr) { notify-count = notify-count + 1 }
+
+fn test() {
+  let bus = pubsub/create[span[u8]](
+    on-event = .{ state = ptr/null, notify-fn = count-notify },
+    subscriber-cap-weight = 1024,
+    weight-fn = fn(payload: rc-bytes) payload.bytes().len(),
+  )
+
+  let src = bus.subscribe("news") || rc-byte-stream
+  let wakes = 0
+  src.start(.{ state = (&wakes).as[ptr], wake-fn = fn(p: ptr) { p.rw[int]().* = p.rw[int]().* + 1 } })
+
+  bus.publish("news", heap-bytes/cloned("hi".span-bytes()).to-rc())
+  bus.publish("sports", heap-bytes/cloned("ignored".span-bytes()).to-rc())
+  assert-equals(notify-count, 2)
+
+  // Nothing delivered until the consumer dispatches
+  assert(src.next() is :pending)
+  bus.dispatch()
+  assert-equals(wakes, 1)
+  src.next() is {
+    :chunk group -> assert(group.get(0) == "hi".span-bytes()),
+    _ -> crash("expected the news payload"),
+  }
+  assert(src.next() is :pending)
+
+  // Batched events coalesce into one wake
+  bus.publish("news", heap-bytes/cloned("a".span-bytes()).to-rc())
+  bus.publish("news", heap-bytes/cloned("b".span-bytes()).to-rc())
+  bus.dispatch()
+  assert-equals(wakes, 2)
+  src.next() is { :chunk group -> assert(group.get(0) == "a".span-bytes()), _ -> crash("expected a") }
+  src.next() is { :chunk group -> assert(group.get(0) == "b".span-bytes()), _ -> crash("expected b") }
+
+  // Detach, then publishing to a subscriber-less topic is a no-op
+  src.stop()
+  bus.publish("news", heap-bytes/cloned("late".span-bytes()).to-rc())
+  bus.dispatch()
+  assert-equals(wakes, 2)
+  assert-equals(rc/live-count(), 0)
+}

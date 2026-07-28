@@ -1,0 +1,171 @@
+ns vector_test
+
+use core/types/size
+use core/types/align
+
+// A statically-produced vector bakes as a Vector static container: into an LLVM
+// constant for runtime, and back into (64-aligned) VM memory under #static
+let BAKED: vector[u8, 32] = vector/splat[u8, 32](9).with-lane(31, 4)
+
+fn test() {
+  // Layout: natural (total-size) alignment, up to 512-bit
+  assert-equals(size[vector[u8, 16]], 16)
+  assert-equals(align[vector[u8, 16]], 16)
+  assert-equals(size[vector[u32, 4]], 16)
+  assert-equals(align[vector[u32, 4]], 16)
+  assert-equals(size[vector[f32, 8]], 32)
+  assert-equals(align[vector[f32, 8]], 32) // natural alignment
+  assert-equals(size[vector[u64, 8]], 64)
+  assert-equals(align[vector[u64, 8]], 64)
+  assert-equals(size[vector[u8, 2]], 2)
+
+  assert-equals(types/name[vector[i32, 4]], "vector[i32, 4]")
+
+  let schema = types/schema[vector[u8, 16]]
+  require schema is :vector .{ element-type-id, size } else {
+    crash("Expected vector schema for vector[u8, 16]")
+  }
+  assert-equals(types/type-id-name(element-type-id), "u8")
+  assert-equals(size, :some 16)
+
+  // Splat + lane reads
+  let v = vector/splat[u8, 16](7)
+  assert-equals(v.lane-count(), 16)
+  assert-equals(v.size-bytes(), 16)
+  let i = 0: size
+  while i < 16 {
+    assert-equals(v.get-lane(i), 7)
+    i = i + 1
+  }
+
+  // with-lane returns a new vector; the source is untouched
+  let v2 = v.with-lane(3, 9)
+  assert-equals(v2.get-lane(3), 9)
+  assert-equals(v2.get-lane(2), 7)
+  assert-equals(v.get-lane(3), 7)
+
+  // Non-u8 lanes
+  let w = vector/splat[u32, 4](70000)
+  assert-equals(w.get-lane(0), 70000)
+  assert-equals(w.get-lane(3), 70000)
+  let f = vector/splat[f64, 2](1.5)
+  assert-equals(f.get-lane(1), 1.5)
+
+  let z = vector/zeroed[u32, 4]()
+  assert-equals(z.get-lane(0), 0)
+  assert-equals(z.get-lane(3), 0)
+
+  // Unaligned load from a span, including a misaligned start
+  let bytes: span[u8] = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]
+  let loaded = vector/from-span[u8, 16](bytes, 1)
+  assert-equals(loaded.get-lane(0), 1)
+  assert-equals(loaded.get-lane(15), 16)
+
+  // Store roundtrip
+  let dst-list = list/filled(32, 0: u8)
+  let dst-span = dst-list.as-span()
+  v2.store-unchecked(dst-span.data-ptr())
+  assert-equals(dst-span.get(0), 7)
+  assert-equals(dst-span.get(3), 9)
+  assert-equals(dst-span.get(15), 7)
+  assert-equals(dst-span.get(16), 0)
+  let reloaded = vector/load-unchecked[u8, 16](dst-span.data-ptr())
+  assert-equals(reloaded.get-lane(3), 9)
+
+  test-ops()
+  test-compare()
+}
+
+fn test-ops() {
+  // Lane arithmetic through the ability operators, cross-checked per lane
+  let a = vector/splat[u8, 16](200)
+  let b = vector/splat[u8, 16](100)
+  let sum = a + b
+  let i = 0: size
+  while i < 16 {
+    assert-equals(sum.get-lane(i), 44) // 300 wraps to 44 in u8
+    i = i + 1
+  }
+  assert-equals((a - b).get-lane(5), 100)
+  assert-equals((b * b).get-lane(0), 16) // 10000 wraps to 16 in u8
+
+  let w1 = vector/splat[i32, 4](-5).with-lane(2, 7)
+  let w2 = vector/splat[i32, 4](3)
+  assert-equals((w1 + w2).get-lane(0), -2)
+  assert-equals((w1 + w2).get-lane(2), 10)
+  assert-equals((w1 * w2).get-lane(1), -15)
+
+  let f1 = vector/splat[f32, 4](1.5)
+  let f2 = vector/splat[f32, 4](2.0)
+  assert-equals((f1 + f2).get-lane(3), 3.5)
+  assert-equals((f1 * f2).get-lane(0), 3.0)
+
+  // Bitwise
+  let x = vector/splat[u8, 16](0b1100)
+  let y = vector/splat[u8, 16](0b1010)
+  assert-equals(x.bit-and(y).get-lane(0), 0b1000)
+  assert-equals(x.bit-or(y).get-lane(0), 0b1110)
+  assert-equals(x.xor(y).get-lane(0), 0b0110)
+  assert-equals(x.bit-not().get-lane(0), 0b11110011)
+  assert-equals(x.shift-left(2).get-lane(0), 0b110000)
+  assert-equals(x.shift-right(2).get-lane(0), 0b11)
+  let neg = vector/splat[i16, 8](-8)
+  assert-equals(neg.shift-right(1).get-lane(0), -4)
+}
+
+fn test-compare() {
+  // eq-lanes yields all-ones/all-zero lanes; to-mask packs lane MSBs
+  let hay = vector/splat[u8, 16](5).with-lane(2, 9).with-lane(15, 9)
+  let needle = vector/splat[u8, 16](9)
+  let hits = hay.eq-lanes(needle)
+  assert-equals(hits.get-lane(2), 255)
+  assert-equals(hits.get-lane(3), 0)
+  let mask = hits.to-mask()
+  assert-equals(mask, 32772) // bits 2 and 15
+
+  assert(hits.any())
+  assert(not hits.all())
+  assert-equals(vector/splat[u8, 16](1).eq-mask(vector/splat[u8, 16](1)), 65535)
+  assert(vector/splat[u8, 16](3).eq-lanes(vector/splat[u8, 16](3)).all())
+  assert(not vector/splat[u8, 16](3).any()) // MSBs clear on small positive lanes
+
+  // equals ability
+  assert(hay == hay)
+  assert(not (hay == needle))
+  let wide = vector/splat[u64, 8](123456789012345)
+  assert(wide == wide)
+  assert-equals(wide.eq-mask(wide), 255)
+
+  // 64-lane mask fills the whole u64
+  let v64 = vector/splat[u8, 64](1)
+  assert-equals(v64.eq-mask(v64), 18446744073709551615: u64)
+
+  // Float compares
+  let fa = vector/splat[f32, 4](1.5).with-lane(1, 2.5)
+  let fb = vector/splat[f32, 4](1.5)
+  assert-equals(fa.eq-mask(fb), 0b1101)
+  assert(fb == fb)
+  assert(not (fa == fb))
+
+  // trailing-zeros rides the named-intrinsic lane (llvm.cttz.i64 at runtime,
+  // host emulation under #static)
+  assert-equals((0b1000: u64).trailing-zeros(), 3)
+  assert-equals((1: u64).trailing-zeros(), 0)
+  assert-equals((0: u64).trailing-zeros(), 64)
+
+  assert-equals(hits.first-true-lane(), 2)
+  assert-equals(vector/zeroed[u8, 16]().first-true-lane(), -1)
+
+  assert-equals(BAKED.get-lane(0), 9)
+  assert-equals(BAKED.get-lane(31), 4)
+  assert-equals(BAKED.lane-count(), 32)
+
+  // k1/simd-bytes: target SIMD width as a static, usable as a lane count
+  let native = vector/splat[u8, type-of(k1/simd-bytes)](5)
+  let width: size = k1/simd-bytes
+  assert(width == 16 or width == 32 or width == 64)
+  assert-equals(native.lane-count(), width)
+  assert-equals(native.size-bytes(), width)
+  assert(native == native)
+  assert-equals(native.get-lane(width - 1), 5)
+}

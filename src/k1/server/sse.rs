@@ -87,12 +87,7 @@ mod tests {
     fn payload_formatted_in_fragments_still_frames_correctly() {
         // framing must depend on newlines, not write_str chunk boundaries
         let mut out = String::new();
-        event(
-            &mut out,
-            "e",
-            "p",
-            format_args!("a{}\n{}c", "b", ""),
-        );
+        event(&mut out, "e", "p", format_args!("a{}\n{}c", "b", ""));
         assert_eq!(out, "event: e\ndata: p ab\ndata: p c\n\n");
     }
 

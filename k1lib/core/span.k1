@@ -42,6 +42,16 @@ ns for span {
     .{ buffer }
   }
 
+  fn single[t](t): span[t] {
+    let buf = buffer/allocate[t](1)
+    buf.set(0, t)
+    wrap-buffer(buf)
+  }
+
+  fn wrap-single[t](t: *t): span[t] {
+    wrap-raw(t.as[ptr], 1)
+  }
+
   fn cloned[t](self: span[t]): span[t] {
     .{ buffer = self.buffer.cloned() }
   }

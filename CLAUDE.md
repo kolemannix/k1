@@ -20,8 +20,8 @@ commands, generated-file noise, and library layout.
 
 For K1 language details, use:
 
-- `docs/k1-syntax-basics.md`
-- `docs/k1-additional.md`
+- `ai_docs/k1-syntax-basics.md`
+- `ai_docs/k1-additional.md`
 
 ## Repo Purpose
 
@@ -34,8 +34,8 @@ Before nontrivial work, read:
 
 - `Justfile` for common commands and command intent.
 - `README.md` for project overview and setup.
-- `docs/k1-syntax-basics.md` for core K1 syntax and conventions.
-- `docs/k1-additional.md` for less-common K1 language features exercised in
+- `ai_docs/k1-syntax-basics.md` for core K1 syntax and conventions.
+- `ai_docs/k1-additional.md` for less-common K1 language features exercised in
   `test_src`.
 
 ## Architecture Map
@@ -137,7 +137,7 @@ rg --glob '!.k1-out/**' --glob '!target/**' ...
 
 - `test_src/`: language regression and feature tests.
 - `dogfood/`: larger K1 programs used as integration coverage.
-- `docs/`: K1 language notes for agents and contributors.
+- `ai_docs/`: K1 language notes for agents and contributors.
 - `design/`: exploratory design notes; useful context, not always current.
 - `resources/c/`: helper scripts moved out of the root.
 - `builds/`: bundle/install/cross-build support.

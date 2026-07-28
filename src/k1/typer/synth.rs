@@ -634,6 +634,7 @@ impl TypedProgram {
                 | Type::Float(_)
                 | Type::Reference(_)
                 | Type::Array(_)
+                | Type::Vector(_)
                 | Type::Sum(_) => Ok(args),
                 Type::Struct(s) => {
                     if type_id == k1.types.builtins.string() {
@@ -674,8 +675,7 @@ impl TypedProgram {
                         let string_id = *string_id;
                         let part_span = *part_span;
                         if !self.ast.idents.get_string(string_id).is_empty() {
-                            let value_id =
-                                self.make_static_code_value(&[(string_id, part_span)]);
+                            let value_id = self.make_static_code_value(&[(string_id, part_span)]);
                             let code_expr = self.add_static_constant_expr(value_id, part_span);
                             let code_call = self.synth_code_append_call(
                                 code_expr,
@@ -721,7 +721,9 @@ impl TypedProgram {
                     let parsed_expr = self.ast.exprs.get(*expr_id);
                     let expr_span = self.ast.exprs.get_span(*expr_id);
                     let naked_variable_name = match parsed_expr {
-                        ParsedExpr::Variable(ParsedVariable { name, .. }) if name.path.is_empty() => {
+                        ParsedExpr::Variable(ParsedVariable { name, .. })
+                            if name.path.is_empty() =>
+                        {
                             Some(name.name)
                         }
                         _ => None,

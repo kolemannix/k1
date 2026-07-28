@@ -410,6 +410,18 @@ impl TypedProgram {
                 }
                 w.write_str("]")
             }
+            Type::Vector(vector_type) => {
+                w.write_str("vector[")?;
+                self.display_type_id_ext(w, vector_type.element_type, expand, visiting)?;
+                w.write_str(", ")?;
+                let concrete_count = self.get_concrete_count_of_array(vector_type.size_type);
+                if let Some(size) = concrete_count {
+                    write!(w, "{}", size)?;
+                } else {
+                    self.display_type_id_rec(w, vector_type.size_type, expand, visiting)?;
+                }
+                w.write_str("]")
+            }
         }?;
         let popped = visiting.pop().unwrap();
         debug_assert_eq!(popped, type_id);
@@ -929,6 +941,7 @@ impl TypedProgram {
                     match cont.kind {
                         StaticContainerKind::Span => write!(w, "span")?,
                         StaticContainerKind::Array => write!(w, "array")?,
+                        StaticContainerKind::Vector => write!(w, "vector")?,
                         StaticContainerKind::Buffer => write!(w, "buffer")?,
                         StaticContainerKind::List => write!(w, "list")?,
                     }

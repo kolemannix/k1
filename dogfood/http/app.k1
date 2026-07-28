@@ -1,97 +1,144 @@
 ns app
 
+use std/dyn-source
+use std/source
+use std/rc-byte-stream
+use std/owned
+use std/heap-bytes
+use std/pubsub
+
 type deps = {
   config: { jwt-secret: string },
   db-conn: db-conn,
-  publisher: pubsub/publisher,
+  bus: *mut pubsub/bus[span[u8]],
 }
 
-// TODO load header.html globally
-// Template together index.html
-
 // only once per thread
-fn make-deps(): *deps {
+fn make-deps(framework: *mut framework-deps): *deps {
   system-heap.new(
     .{
       config = .{ jwt-secret = "asdf" },
       db-conn = .{},
-      publisher = pubsub/publisher(),
+      bus = framework.bus,
     }: app/deps
   )
 }
 
-// let template: string = core/files/read-to-string(context :tmp)("web/header.html")
+$pre/routing/define(route, {
+  use pre/routing/get
+  use pre/routing/post
+  use pre/routing/delete
+  let game: span[pre/routing/seg] = [:text "game", :u64 "id"]
+
+  [
+    get("home", []),
+    get("events", [:text "events"]),
+    get("counter", [:text "counter", :text "events"]),
+    get("game-events", game.concat([:text "events"])),
+    post("game-poke", game.concat([:text "poke"])),
+    get("big-file", [:text "static", :text "big-file.json"]),
+    get("starry", [:text "app", :text "starry-night"]),
+    delete("delete-game", game),
+  ]
+})
+
 fn handle(req: http/request, deps: *mut deps): http-response {
-  // let query-result: task[result[int, string]] = db-conn.run-query("select count(*) from fake_users where active = true");
-  let context alloc = alloc-mode:current
-
-  let styles = core/files/read-to-string("web/styles.css")
-
-
   tprintln("user-code/handle: request ${req.header.method.enum-name()} `${req.header.url}`")
 
-  let make-header = fn(len: size) {
-    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: $len\r\n\r\n"
-  }
-
-  // `GET /events`: SSE subscription to the app-wide "global" topic,
-  // which the mock publisher heartbeats every 5 ticks.
-  if req.header.url == "/events" {
-    return :subscribe .{ topic = "global" }
-  }
-
-  // `GET /game/{id}/events`: SSE subscription to topic "game.{id}".
-  // The mock publisher thread feeds "game.42" once a second.
-  if req.header.url.starts-with("/game/") {
-    let parts = req.header.url.split-by-char('/')
-    // ["", "game", "{id}", "events"]
-    let id = parts.get(2)
-    if parts.len() == 4 and parts.get(3) == "events" {
-      return :subscribe .{ topic = "game.$id" }
-    }
-    // `GET /game/{id}/poke`: publish from user code on a worker thread,
-    // through the handle carried in deps.
-    if parts.len() == 4 and parts.get(3) == "poke" {
-      deps.publisher.publish("game.$id", "poked\nover http")
-      return :complete ["HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\npoked\n"]
-    }
-    return :complete ["HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"]
-  }
-
-  // `GET /static/big-file.json`: stream a large body without buffering the
-  // response frames up front; the harness drains us chunk by chunk.
-  if req.header.url == "/static/big-file.json" {
-    let out = string-builder/new()
-    render-big-json(&out, rows = 20000)
-    let body = out.build()
-    return :stream .{
-      content-type = "application/json",
-      stream = stream-of-buffer(body.span-bytes(), chunk-size = 65536),
+  route/parse(req.header) is {
+    :err e -> error-response(e),
+    :ok r -> r is {
+      :home -> home-page(),
+      :events -> global-events(deps),
+      :counter -> counter-events(),
+      :game-events p -> game-events(deps, p.id),
+      :game-poke p -> game-poke(deps, p.id),
+      :big-file -> big-file(),
+      :starry -> response/html("todo"),
+      :delete-game p -> response/html("todo ${p.id}"),
     }
   }
+}
 
-  if req.header.url.starts-with("/app/starry-night") {
-    // let out = string-builder/new();
-    // let body-out = string-builder/new();
-    // render(&body-out, deps.pixels);
-    // write-response(&out, body-out.build());
-    // to avoid the double-buffer situation, we could support 'chunks' instead of
-    // just 'complete'; libuv supports this vectored write
-    // :complete(out.build());
-    :complete [make-header(4), "todo"]
-  } else if req.header.url.starts-with("/app/sync") {
-    // TODO: push styles as script maybe + new body
-    let template: string = core/files/read-to-string("web/header.html")
-    let output = template(template, [.{ key = "styles.css", value = styles }]).!
-    let header = make-header(output.len())
-    :complete [header, output]
-  } else {
-    let template: string = core/files/read-to-string("web/header.html")
-    let output = template(template, [.{ key = "styles.css", value = styles }]).!
-    let header = make-header(output.len())
-    :complete [header, output]
+let global-topic: string = "global"
+fn game-topic(id: u64): string { "game.$id" }
+
+fn global-events(deps: *mut deps): http-response {
+  let source = deps.bus.subscribe(global-topic) || rc-byte-stream
+  sse-response(source, event-name = global-topic)
+}
+
+fn game-events(deps: *mut deps, id: u64): http-response {
+  let topic = game-topic(id)
+  let source = deps.bus.subscribe(topic) || rc-byte-stream
+  sse-response(source, event-name = topic)
+}
+
+fn game-poke(deps: *mut deps, id: u64): http-response {
+  publish-text(deps.bus, game-topic(id), "poked\nover http")
+  response/text("poked; events at ${route/url-string(:game-events .{ id })}\n")
+}
+
+// One SSE event per number, rendered into the ambient request arena
+fn counter-events(): http-response {
+  let counts = core/iter/to-list(1.until(11))
+  sse-response(source/from-items(counts.as-span()), event-name = "counter")
+}
+
+fn big-file(): http-response {
+  let out = string-builder/new()
+  render-big-json(&out, rows = 20000)
+  response/stream("application/json", source/from-span(out.build().span-bytes(), chunk-size = 65536))
+}
+
+fn error-response(e: routing/route-error): http-response {
+  e is {
+    :not-found -> response/not-found(),
+    :bad-encoding b -> response/status(400, "Bad percent-encoding in `${b.segment}`\n"),
+    :bad-param b -> response/status(400, "Expected ${b.pattern}: `${b.got}` is not a valid ${b.ty} for ${b.name}\n"),
+    :bad-method b -> response/method-not-allowed(b.allowed),
   }
-  // :complete("HTTP/1.1 500 Internal Server error\r\nContent-Length: 5\r\n\r\nerror")
+}
+
+fn home-page(): http-response {
+  let context alloc = alloc-mode:current
+  let styles = core/files/read-to-string("web/styles.css")
+  let template: string = core/files/read-to-string("web/header.html")
+  let output = template(template, [.{ key = "styles.css", value = styles }]).!
+  response/html(output)
+}
+
+#static {
+  let th = fn(method: llhttp/method, url: string) {
+    let h: http/header = .{
+      url,
+      headers = list/empty[{ field: string, value: string }](),
+      method,
+      keep-alive = true,
+      content-length = :none,
+    }
+    route/parse(h)
+  }
+
+  assert(route/url-string(:home) == "/")
+  assert(route/url-string(:game-poke .{ id = 42 }) == "/game/42/poke")
+  assert(route/url-string(:big-file) == "/static/big-file.json")
+
+  assert(th(:GET, "/") is :ok :home)
+  assert(th(:GET, "/events") is :ok :events)
+  assert(th(:HEAD, "/events") is :ok :events)
+  assert(th(:GET, "/events?foo=1") is :ok :events)
+  assert(th(:GET, "/%65vents") is :ok :events)
+  assert(th(:POST, "/game/42/poke") is :ok :game-poke p and p.id == 42)
+  assert(th(:POST, "/game/42/poke/") is :ok :game-poke _)
+  assert(th(:GET, "/game/42/poke") is :err :bad-method _)
+  assert(th(:POST, "/game/abc/poke") is :err :bad-param b and b.got == "abc")
+  assert(th(:POST, "/game/18446744073709551617/poke") is :err :bad-param _)
+  assert(th(:GET, "/game/42/zzz") is :err :not-found)
+  assert(th(:GET, "/nope") is :err :not-found)
+  assert(th(:GET, "/game/%zz/poke") is :err :bad-encoding _)
+  assert(th(:OPTIONS, "*") is :err :not-found)
+  println("route comptime asserts passed")
 }
 
 fn render-big-json(out: *mut string-builder, rows: size) {
@@ -107,29 +154,32 @@ fn render-big-json(out: *mut string-builder, rows: size) {
 }
 
 // The independent publisher: an OS thread with no connection to the event
-// loop. It gets the publish handle as its thread argument — the same value
-// the request handlers carry in deps.
+// loop. It gets the bus as its thread argument — the same value the request
+// handlers carry in deps.
 let mutable game-tick: u64 = 0
 
-fn mock-publisher-main(arg: ptr) {
-  uv/thread_setname("publisher\0".data-ptr().as())
-  let publisher = arg.r[pubsub/publisher]().*
-  loop {
-    uv/sleep(1000)
-    // this thread's tmp arena holds the interpolated event data
-    mem/tmp().reset(clear = false)
-    game-tick = game-tick + 1
-    publisher.publish("game.42", `{"tick": $game-tick}`)
-    if game-tick % 5 == 0 {
-      publisher.publish("global", `{"uptime-seconds": $game-tick}`)
-    }
-  }
+// The bus takes rc'd payloads; text publishers copy to the heap once here.
+// A publisher already holding heap-bytes would .to-rc() them directly.
+fn publish-text(bus: *mut pubsub/bus[span[u8]], topic: string, data: string) {
+  bus.publish(topic, heap-bytes/cloned(data.span-bytes()).to-rc())
 }
 
-fn start-mock-publisher() {
-  let publisher = system-heap.new(pubsub/publisher())
+fn start-mock-publisher(bus: *mut pubsub/bus[span[u8]]) {
   let tid: *mut uv/thread = system-heap.alloc-t()
-  let rc = uv/thread_create(tid, mock-publisher-main, publisher.as[ptr])
+  let rc = uv/thread_create(tid, fn arg. {
+    let _ = uv/thread_setname("publisher\0".data-ptr().as())
+    let bus = arg.rw[pubsub/bus[span[u8]]]()
+    loop {
+      uv/sleep(1000)
+      // this thread's tmp arena holds the interpolated event data
+      mem/tmp().reset(clear = false)
+      game-tick = game-tick + 1
+      publish-text(bus, game-topic(42), `{"tick": $game-tick}`)
+      if game-tick % 5 == 0 {
+        publish-text(bus, global-topic, `{"uptime-seconds": $game-tick}`)
+      }
+    }
+  }, bus.as[ptr])
   if rc != 0 crash("failed to spawn publisher thread: $rc")
 }
 
@@ -155,11 +205,6 @@ fn template(template: string, values: span[{ key: string, value: string }]): ?st
     }
   }
   :some out.build()
-}
-
-#static {
-  let result = template("my favorite food is {{x}}{{punct}}", [.{ key = "x", value = "Ice Cream" }, .{ key = "punct", value = "!"}])
-  println(result.!)
 }
 
 #if false ns wip-pixel-grid {

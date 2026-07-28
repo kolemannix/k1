@@ -21,6 +21,7 @@ use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine};
 use inkwell::types::{
     AnyType, AnyTypeEnum, ArrayType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
     FunctionType as LlvmFunctionType, IntType, PointerType, StructType,
+    VectorType as LlvmVectorType,
 };
 use inkwell::values::{
     ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
@@ -155,6 +156,18 @@ struct CgArrayType<'ctx> {
 }
 
 #[derive(Copy, Clone)]
+struct CgVectorType<'ctx> {
+    pt: PhysicalType,
+    #[allow(unused)]
+    count: u32,
+    vector_type: LlvmVectorType<'ctx>,
+    #[allow(unused)]
+    element_type: Handle<CgType<'ctx>, CgPerm>,
+    di_type: DIType<'ctx>,
+    layout: Layout,
+}
+
+#[derive(Copy, Clone)]
 struct CgUnionType<'ctx> {
     pt: PhysicalType,
     aligned_opaque_repr: StructType<'ctx>,
@@ -169,6 +182,7 @@ enum CgType<'ctx> {
     Scalar(LlvmScalarType<'ctx>),
     StructType(CgStructType<'ctx>),
     ArrayType(CgArrayType<'ctx>),
+    Vector(CgVectorType<'ctx>),
     Union(CgUnionType<'ctx>),
 }
 
@@ -190,6 +204,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(s) => s.pt,
             CgType::StructType(s) => s.pt,
             CgType::ArrayType(a) => a.pt,
+            CgType::Vector(v) => v.pt,
             CgType::Union(u) => u.pt,
         }
     }
@@ -199,6 +214,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(_) => "Scalar",
             CgType::StructType(_) => "StructType",
             CgType::ArrayType(_) => "ArrayType",
+            CgType::Vector(_) => "Vector",
             CgType::Union(_) => "Union",
         }
     }
@@ -208,6 +224,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(_) => false,
             CgType::StructType(_) => true,
             CgType::ArrayType(_) => true,
+            CgType::Vector(_) => true,
             CgType::Union(_) => true,
         }
     }
@@ -234,6 +251,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(value) => value.layout,
             CgType::StructType(s) => s.layout,
             CgType::ArrayType(a) => a.layout,
+            CgType::Vector(v) => v.layout,
             CgType::Union(u) => u.layout,
         }
     }
@@ -243,6 +261,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(value) => value.basic_type,
             CgType::StructType(s) => s.struct_type.as_basic_type_enum(),
             CgType::ArrayType(a) => a.array_type.as_basic_type_enum(),
+            CgType::Vector(v) => v.vector_type.as_basic_type_enum(),
             CgType::Union(u) => u.aligned_opaque_repr.as_basic_type_enum(),
         }
     }
@@ -252,6 +271,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(value) => value.di_type,
             CgType::StructType(s) => s.di_type,
             CgType::ArrayType(a) => a.di_type,
+            CgType::Vector(v) => v.di_type,
             CgType::Union(u) => u.di_type,
         }
     }
@@ -526,7 +546,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let debug_context = Cg::init_debug(ctx, &llvm_module, module, optimize, debug);
 
-        let machine = Cg::set_up_machine(&mut llvm_module, optimize, module.config.filc);
+        let machine = Cg::set_up_machine(
+            &mut llvm_module,
+            optimize,
+            module.config.filc,
+            module.config.target,
+        );
         let target_data = machine.get_target_data();
 
         let ptr = ctx.ptr_type(AddressSpace::default());
@@ -870,6 +895,33 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             element_type: self.mem.push_h(element_type),
                             di_type,
                             layout: array_layout,
+                        })
+                    }
+                    AggType::Vector { element_pt, len } => {
+                        let element_type = self.codegen_type(PhysicalType::scalar(element_pt));
+                        let vector_type = match element_type.rich_type() {
+                            BasicTypeEnum::IntType(it) => it.vec_type(len),
+                            BasicTypeEnum::FloatType(ft) => ft.vec_type(len),
+                            other => panic!("Non-scalar vector element type: {other}"),
+                        };
+                        let vector_layout = self.k1.types.get_pt_layout(pt);
+                        let di_type = self
+                            .debug
+                            .debug_builder
+                            .create_array_type(
+                                element_type.debug_type(),
+                                vector_layout.size_bits() as u64,
+                                vector_layout.align_bits(),
+                                &[],
+                            )
+                            .as_type();
+                        CgType::Vector(CgVectorType {
+                            pt,
+                            count: len,
+                            vector_type,
+                            element_type: self.mem.push_h(element_type),
+                            di_type,
+                            layout: vector_layout,
                         })
                     }
                     AggType::Union { members } => {
@@ -1566,8 +1618,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     /// or capabilities are dropped in transit.
     fn build_zhas_union_marker(&mut self, alloca: PointerValue<'ctx>) {
         let zhas_union = self.llvm_module.get_function("zhas_union").unwrap_or_else(|| {
-            let fn_type =
-                self.ctx.void_type().fn_type(&[self.builtin_types.ptr.into()], false);
+            let fn_type = self.ctx.void_type().fn_type(&[self.builtin_types.ptr.into()], false);
             self.llvm_module.add_function("zhas_union", fn_type, Some(LlvmLinkage::External))
         });
         self.builder.build_call(zhas_union, &[alloca.into()], "").unwrap();
@@ -1580,9 +1631,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 PhysicalTypeEnum::Scalar(st) => matches!(st, ScalarType::Pointer),
                 PhysicalTypeEnum::Agg(agg_id) => match c.k1.types.agg_types.get(agg_id).agg_type {
                     AggType::Struct { fields } => {
-                        c.k1.types.mem.getn(fields).iter().any(|f| pt_contains_pointer(c, f.field_t))
+                        c.k1.types
+                            .mem
+                            .getn(fields)
+                            .iter()
+                            .any(|f| pt_contains_pointer(c, f.field_t))
                     }
                     AggType::Array { element_pt, .. } => pt_contains_pointer(c, element_pt),
+                    AggType::Vector { .. } => false,
                     AggType::Union { members } => {
                         c.k1.types.mem.getn(members).iter().any(|m| pt_contains_pointer(c, m.ty))
                     }
@@ -1599,13 +1655,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         c.k1.types.mem.getn(fields).iter().any(|f| walk(c, f.field_t))
                     }
                     AggType::Array { element_pt, .. } => walk(c, element_pt),
-                    AggType::Union { members } => c
-                        .k1
-                        .types
-                        .mem
-                        .getn(members)
-                        .iter()
-                        .any(|m| pt_contains_pointer(c, m.ty)),
+                    AggType::Vector { .. } => false,
+                    AggType::Union { members } => {
+                        c.k1.types.mem.getn(members).iter().any(|m| pt_contains_pointer(c, m.ty))
+                    }
                     AggType::Sum(e) => walk(c, PhysicalType::agg(e.struct_repr)),
                     AggType::Opaque { .. } => false,
                 },
@@ -1666,6 +1719,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.declare_llvm_function(function_id)?;
                 let fn_type = self.llvm_functions.get(&function_id).unwrap().function_type.clone();
                 (CallKind::Direct(function_id), fn_type)
+            }
+            IrCallee::LlvmIntrinsic { name, function_id } => {
+                return self.codegen_llvm_intrinsic_call(
+                    inst_mappings,
+                    name,
+                    function_id,
+                    call_args,
+                    call_dst,
+                    span,
+                );
             }
             IrCallee::Indirect(fn_type, value) => {
                 let callee_value = self.resolve_value(inst_mappings, value)?.into_pointer_value();
@@ -1770,6 +1833,126 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     Ok(None)
                 }
             }
+        }
+    }
+
+    /// Named-intrinsic calls (`intern("llvm.*")`) speak LLVM's type language:
+    /// bool <-> i1, vectors by value as <n x t>, other scalars as-is. The
+    /// declared K1 signature is trusted; the LLVM verifier is the backstop.
+    /// Constant bool args fold to constant i1, satisfying immarg parameters
+    fn codegen_llvm_intrinsic_call(
+        &mut self,
+        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        name: StringId,
+        function_id: FunctionId,
+        call_args: MSlice<ir::Value, ProgramIr>,
+        call_dst: Option<ir::Value>,
+        span: SpanId,
+    ) -> K1Result<Option<BasicValueEnum<'ctx>>> {
+        let fn_type_id = self.k1.get_function(function_id).type_id;
+        let fn_type = *self.k1.types.get(fn_type_id).expect_function();
+
+        let intrinsic_param_type =
+            |c: &mut Self, type_id: TypeId| -> K1Result<BasicTypeEnum<'ctx>> {
+                match c.k1.types.get(type_id) {
+                    Type::Bool => Ok(c.builtin_types.i1.as_basic_type_enum()),
+                    Type::Vector(vt) => {
+                        let vt = *vt;
+                        let pt = c.k1.get_physical_type(type_id).unwrap().expect_agg();
+                        let (elem, lanes) = c.k1.types.agg_types.get(pt).agg_type.expect_vector();
+                        let _ = vt;
+                        Ok(c.vec_llvm_type(elem, lanes).as_basic_type_enum())
+                    }
+                    Type::Char | Type::Integer(_) | Type::Float(_) | Type::Pointer => {
+                        let pt = c.k1.get_physical_type(type_id).unwrap();
+                        Ok(c.codegen_type(pt).rich_type())
+                    }
+                    _ => failf!(
+                        span,
+                        "llvm intrinsic signatures support bool, scalar, and vector types; got {}",
+                        c.k1.type_id_to_string(type_id)
+                    ),
+                }
+            };
+
+        let params = self.k1.types.mem.getn_sv4(fn_type.physical_params);
+        let mut param_types: SV8<BasicMetadataTypeEnum<'ctx>> = smallvec::smallvec![];
+        for p in params.iter() {
+            param_types.push(intrinsic_param_type(self, p.type_id)?.into());
+        }
+        let return_type_id = fn_type.return_type;
+        let returns_empty = match self.k1.get_physical_type(return_type_id) {
+            PhysicalTypeResult::Yes(pt) => pt.is_empty(),
+            _ => false,
+        };
+        let llvm_fn_type = if returns_empty {
+            self.ctx.void_type().fn_type(&param_types, false)
+        } else {
+            match self.k1.types.get(return_type_id) {
+                Type::Vector(_) => {
+                    return failf!(
+                        span,
+                        "llvm intrinsics with vector returns are not yet supported"
+                    );
+                }
+                _ => intrinsic_param_type(self, return_type_id)?.fn_type(&param_types, false),
+            }
+        };
+
+        let name_str = self.k1.ident_str(name).to_string();
+        let function_value = match self.llvm_module.get_function(&name_str) {
+            Some(f) => f,
+            None => self.llvm_module.add_function(&name_str, llvm_fn_type, None),
+        };
+
+        let mut args: SV8<BasicMetadataValueEnum<'ctx>> = smallvec::smallvec![];
+        for (index, arg_ir_value) in self.k1.ir.mem.getn(call_args).iter().enumerate() {
+            let arg_value = self.resolve_value(inst_mappings, *arg_ir_value)?;
+            let param_type_id = params[index].type_id;
+            let marshalled: BasicValueEnum<'ctx> = match self.k1.types.get(param_type_id) {
+                Type::Bool => self
+                    .builder
+                    .build_int_truncate(arg_value.into_int_value(), self.builtin_types.i1, "")
+                    .unwrap()
+                    .as_basic_value_enum(),
+                Type::Vector(_) => {
+                    // Vector args arrive as addresses; pass by value
+                    let pt = self.k1.get_physical_type(param_type_id).unwrap().expect_agg();
+                    let (elem, lanes) = self.k1.types.agg_types.get(pt).agg_type.expect_vector();
+                    let vec_type = self.vec_llvm_type(elem, lanes);
+                    let load = self
+                        .builder
+                        .build_load(vec_type, arg_value.into_pointer_value(), "")
+                        .unwrap();
+                    let align = elem.get_layout().stride() * lanes;
+                    load.as_instruction_value().unwrap().set_alignment(align).unwrap();
+                    load
+                }
+                _ => arg_value,
+            };
+            args.push(marshalled.into());
+        }
+
+        self.set_debug_location_from_span(span);
+        let callsite = self.builder.build_call(function_value, &args, "").unwrap();
+        match callsite.try_as_basic_value() {
+            ValueKind::Basic(returned) => {
+                let canonical = match self.k1.types.get(return_type_id) {
+                    Type::Bool => {
+                        self.i1_to_bool(returned.into_int_value(), "").as_basic_value_enum()
+                    }
+                    _ => returned,
+                };
+                match call_dst {
+                    None => Ok(Some(canonical)),
+                    Some(dst) => {
+                        let dst_ptr = self.resolve_value(inst_mappings, dst)?;
+                        self.builder.build_store(dst_ptr.into_pointer_value(), canonical).unwrap();
+                        Ok(Some(dst_ptr))
+                    }
+                }
+            }
+            ValueKind::Instruction(_) => Ok(None),
         }
     }
 
@@ -2144,6 +2327,192 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
+    fn vec_llvm_type(&mut self, elem: ScalarType, lanes: u32) -> LlvmVectorType<'ctx> {
+        match self.codegen_type(PhysicalType::scalar(elem)).rich_type() {
+            BasicTypeEnum::IntType(it) => it.vec_type(lanes),
+            BasicTypeEnum::FloatType(ft) => ft.vec_type(lanes),
+            other => panic!("Non-scalar vector element type: {other}"),
+        }
+    }
+
+    /// Vector operands/results live in memory; loads and stores here use the
+    /// vector's natural alignment, which every vector-typed place has
+    fn vec_load(
+        &mut self,
+        vop: &ir::VecOpData,
+        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        addr: ir::Value,
+    ) -> K1Result<inkwell::values::VectorValue<'ctx>> {
+        let ptr = self.resolve_value(inst_mappings, addr)?.into_pointer_value();
+        let vec_type = self.vec_llvm_type(vop.elem, vop.lanes);
+        let load = self.builder.build_load(vec_type, ptr, "").unwrap();
+        load.as_instruction_value().unwrap().set_alignment(self.vec_align(vop)).unwrap();
+        Ok(load.into_vector_value())
+    }
+
+    fn vec_store(
+        &mut self,
+        vop: &ir::VecOpData,
+        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        value: inkwell::values::VectorValue<'ctx>,
+    ) -> K1Result<()> {
+        let dst_ptr = self.resolve_value(inst_mappings, vop.dst)?.into_pointer_value();
+        let store = self.builder.build_store(dst_ptr, value).unwrap();
+        store.set_alignment(self.vec_align(vop)).unwrap();
+        Ok(())
+    }
+
+    fn vec_align(&self, vop: &ir::VecOpData) -> u32 {
+        vop.elem.get_layout().stride() * vop.lanes
+    }
+
+    /// Returns the scalar result for value-producing ops (to-mask), None otherwise
+    fn codegen_vec_op(
+        &mut self,
+        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        vop: ir::VecOpData,
+    ) -> K1Result<Option<BasicValueEnum<'ctx>>> {
+        use ir::VecOpIr;
+        let is_float = matches!(vop.elem, ScalarType::F32 | ScalarType::F64);
+        match vop.op {
+            VecOpIr::Splat => {
+                let scalar = self.resolve_value(inst_mappings, vop.lhs)?;
+                let vec_type = self.vec_llvm_type(vop.elem, vop.lanes);
+                let i32t = self.ctx.i32_type();
+                let undef = vec_type.get_undef();
+                let v0 = self
+                    .builder
+                    .build_insert_element(undef, scalar, i32t.const_zero(), "")
+                    .unwrap();
+                let mask_zeroes: Vec<IntValue<'ctx>> = vec![i32t.const_zero(); vop.lanes as usize];
+                let mask = LlvmVectorType::const_vector(&mask_zeroes);
+                let splat = self.builder.build_shuffle_vector(v0, undef, mask, "").unwrap();
+                self.vec_store(&vop, inst_mappings, splat)?;
+                Ok(None)
+            }
+            VecOpIr::Add | VecOpIr::Sub | VecOpIr::Mul => {
+                let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
+                let r = self.vec_load(&vop, inst_mappings, vop.rhs)?;
+                let result = if is_float {
+                    let (l, r) = (l.as_basic_value_enum(), r.as_basic_value_enum());
+                    let (l, r) = (l.into_vector_value(), r.into_vector_value());
+                    match vop.op {
+                        VecOpIr::Add => self.builder.build_float_add(l, r, "").unwrap(),
+                        VecOpIr::Sub => self.builder.build_float_sub(l, r, "").unwrap(),
+                        VecOpIr::Mul => self.builder.build_float_mul(l, r, "").unwrap(),
+                        _ => unreachable!(),
+                    }
+                } else {
+                    match vop.op {
+                        VecOpIr::Add => self.builder.build_int_add(l, r, "").unwrap(),
+                        VecOpIr::Sub => self.builder.build_int_sub(l, r, "").unwrap(),
+                        VecOpIr::Mul => self.builder.build_int_mul(l, r, "").unwrap(),
+                        _ => unreachable!(),
+                    }
+                };
+                self.vec_store(&vop, inst_mappings, result)?;
+                Ok(None)
+            }
+            VecOpIr::BitAnd | VecOpIr::BitOr | VecOpIr::Xor => {
+                let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
+                let r = self.vec_load(&vop, inst_mappings, vop.rhs)?;
+                let result = match vop.op {
+                    VecOpIr::BitAnd => self.builder.build_and(l, r, "").unwrap(),
+                    VecOpIr::BitOr => self.builder.build_or(l, r, "").unwrap(),
+                    VecOpIr::Xor => self.builder.build_xor(l, r, "").unwrap(),
+                    _ => unreachable!(),
+                };
+                self.vec_store(&vop, inst_mappings, result)?;
+                Ok(None)
+            }
+            VecOpIr::BitNot => {
+                let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
+                let result = self.builder.build_not(l, "").unwrap();
+                self.vec_store(&vop, inst_mappings, result)?;
+                Ok(None)
+            }
+            VecOpIr::Shl | VecOpIr::Shr => {
+                let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
+                let count = self.resolve_value(inst_mappings, vop.rhs)?.into_int_value();
+                let elem_int_type = l.get_type().get_element_type().into_int_type();
+                let count = self.builder.build_int_cast(count, elem_int_type, "").unwrap();
+                // Splat the uniform count across lanes
+                let i32t = self.ctx.i32_type();
+                let undef = l.get_type().get_undef();
+                let c0 =
+                    self.builder.build_insert_element(undef, count, i32t.const_zero(), "").unwrap();
+                let mask_zeroes: Vec<IntValue<'ctx>> = vec![i32t.const_zero(); vop.lanes as usize];
+                let counts = self
+                    .builder
+                    .build_shuffle_vector(c0, undef, LlvmVectorType::const_vector(&mask_zeroes), "")
+                    .unwrap();
+                let is_signed = matches!(
+                    vop.elem,
+                    ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64
+                );
+                let result = match vop.op {
+                    VecOpIr::Shl => self.builder.build_left_shift(l, counts, "").unwrap(),
+                    _ => self.builder.build_right_shift(l, counts, is_signed, "").unwrap(),
+                };
+                self.vec_store(&vop, inst_mappings, result)?;
+                Ok(None)
+            }
+            VecOpIr::EqLanes => {
+                let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
+                let r = self.vec_load(&vop, inst_mappings, vop.rhs)?;
+                let cmp_i1 = if is_float {
+                    self.builder.build_float_compare(FloatPredicate::OEQ, l, r, "").unwrap()
+                } else {
+                    self.builder.build_int_compare(IntPredicate::EQ, l, r, "").unwrap()
+                };
+                let elem_bits = vop.elem.get_layout().size_bits();
+                let int_lane_vec = self
+                    .ctx
+                    .custom_width_int_type(std::num::NonZeroU32::new(elem_bits).unwrap())
+                    .unwrap()
+                    .vec_type(vop.lanes);
+                let mask_lanes = self.builder.build_int_s_extend(cmp_i1, int_lane_vec, "").unwrap();
+                let result = if is_float {
+                    let float_vec = self.vec_llvm_type(vop.elem, vop.lanes);
+                    self.builder
+                        .build_bit_cast(mask_lanes, float_vec, "")
+                        .unwrap()
+                        .into_vector_value()
+                } else {
+                    mask_lanes
+                };
+                self.vec_store(&vop, inst_mappings, result)?;
+                Ok(None)
+            }
+            VecOpIr::ToMask => {
+                let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
+                let elem_bits = vop.elem.get_layout().size_bits();
+                let int_lane_vec = self
+                    .ctx
+                    .custom_width_int_type(std::num::NonZeroU32::new(elem_bits).unwrap())
+                    .unwrap()
+                    .vec_type(vop.lanes);
+                let as_ints = if is_float {
+                    self.builder.build_bit_cast(l, int_lane_vec, "").unwrap().into_vector_value()
+                } else {
+                    l
+                };
+                let zero = int_lane_vec.const_zero();
+                let msbs =
+                    self.builder.build_int_compare(IntPredicate::SLT, as_ints, zero, "").unwrap();
+                let mask_int_type = self
+                    .ctx
+                    .custom_width_int_type(std::num::NonZeroU32::new(vop.lanes).unwrap())
+                    .unwrap();
+                let mask_small =
+                    self.builder.build_bit_cast(msbs, mask_int_type, "").unwrap().into_int_value();
+                let mask =
+                    self.builder.build_int_z_extend(mask_small, self.ctx.i64_type(), "").unwrap();
+                Ok(Some(mask.as_basic_value_enum()))
+            }
+        }
+    }
+
     fn codegen_inst(
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
@@ -2284,7 +2653,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 };
                 let prev = self
                     .builder
-                    .build_atomicrmw(rmw_op, dst_pointer, int_operand, Self::llvm_atomic_ordering(ord))
+                    .build_atomicrmw(
+                        rmw_op,
+                        dst_pointer,
+                        int_operand,
+                        Self::llvm_atomic_ordering(ord),
+                    )
                     .unwrap();
                 let result: BasicValueEnum<'ctx> = if is_ptr {
                     self.builder.build_int_to_ptr(prev, self.builtin_types.ptr, "").unwrap().into()
@@ -2296,8 +2670,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             Inst::AtomicCmpxchg { id } => {
                 let cas = *self.k1.ir.cmpxchgs.get(id);
-                let dst_pointer =
-                    self.resolve_value(inst_mappings, cas.dst)?.into_pointer_value();
+                let dst_pointer = self.resolve_value(inst_mappings, cas.dst)?.into_pointer_value();
                 let expected = self.resolve_value(inst_mappings, cas.expected)?;
                 let desired = self.resolve_value(inst_mappings, cas.desired)?;
                 let result_ptr =
@@ -2326,6 +2699,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         .unwrap()
                 };
                 self.builder.build_store(ok_ptr, ok_bool).unwrap();
+                Ok(())
+            }
+            Inst::VecOp { id } => {
+                let vop = *self.k1.ir.vec_ops.get(id);
+                if let Some(result) = self.codegen_vec_op(inst_mappings, vop)? {
+                    inst_mappings.insert(inst_id, result);
+                }
                 Ok(())
             }
             Inst::Fence { ord } => {
@@ -2790,7 +3170,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let llvm_linkage = match typed_function.linkage {
             TyperLinkage::Standard => LlvmLinkage::Internal,
             TyperLinkage::External { .. } => LlvmLinkage::External,
-            TyperLinkage::Intrinsic => LlvmLinkage::Internal,
+            TyperLinkage::Intrinsic | TyperLinkage::LlvmIntrinsic(_) => LlvmLinkage::Internal,
         };
         let is_definition = llvm_linkage != LlvmLinkage::External;
         let llvm_name = match typed_function.linkage {
@@ -2958,6 +3338,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     | AggType::Union { .. }
                     | AggType::Struct { .. }
                     | AggType::Array { .. }
+                    | AggType::Vector { .. }
                     | AggType::Opaque { .. } => {
                         let size_bytes = agg_record.layout.size;
                         if size_bytes == 8 {
@@ -3077,7 +3458,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         AggType::Array { element_pt, len } => {
                             (0..len).all(|_| visit(c, element, count, element_pt))
                         }
-                        AggType::Union { .. } | AggType::Sum(_) | AggType::Opaque { .. } => false,
+                        AggType::Vector { .. }
+                        | AggType::Union { .. }
+                        | AggType::Sum(_)
+                        | AggType::Opaque { .. } => false,
                     }
                 }
             }
@@ -3178,6 +3562,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                     active_bits2,
                                     offset_bits + element_offset as u32 * 8,
                                     element_t,
+                                )
+                            }
+                        }
+                        AggType::Vector { element_pt, len } => {
+                            let element_layout = element_pt.get_layout();
+                            for i in 0..len {
+                                let element_offset = element_layout.offset_at_index(i as usize);
+                                handle_type_rec(
+                                    c,
+                                    classes,
+                                    active_bits2,
+                                    offset_bits + element_offset as u32 * 8,
+                                    PhysicalType::scalar(element_pt),
                                 )
                             }
                         }
@@ -3594,8 +3991,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             StaticValue::LinearContainer(cont) => {
                 let cont = *cont;
-                let (element_type, _) =
-                    self.k1.types.get_as_container_instance(cont.type_id).unwrap();
+                let element_type =
+                    self.k1.types.get_linear_container_element(cont.type_id).unwrap();
                 let span_elements = self.k1.static_values.mem.getn(cont.elements);
                 let array_value =
                     self.codegen_static_elements_array(element_type, span_elements, depth)?;
@@ -3622,7 +4019,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             data_global.as_pointer_value(),
                         );
                         let final_struct = match cont.kind {
-                            StaticContainerKind::Array => unreachable!(),
+                            StaticContainerKind::Array | StaticContainerKind::Vector => {
+                                unreachable!()
+                            }
                             StaticContainerKind::Span | StaticContainerKind::Buffer => span_struct,
                             StaticContainerKind::List => {
                                 self.make_list_struct(cont.type_id, span_struct, cont.len() as u64)
@@ -3630,7 +4029,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         };
                         final_struct.as_basic_value_enum()
                     }
-                    StaticContainerKind::Array => array_value.as_basic_value_enum(),
+                    StaticContainerKind::Array | StaticContainerKind::Vector => {
+                        array_value.as_basic_value_enum()
+                    }
                 }
             }
         };
@@ -3917,7 +4318,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.k1.program_name()
     }
 
-    fn set_up_machine(module: &mut LlvmModule, optimize: bool, filc: bool) -> TargetMachine {
+    fn set_up_machine(
+        module: &mut LlvmModule,
+        optimize: bool,
+        filc: bool,
+        k1_target: compiler::Target,
+    ) -> TargetMachine {
         // Target::initialize_aarch64(&InitializationConfig::default());
         Target::initialize_native(&InitializationConfig::default()).unwrap();
         // let triple_str = &format!("arm64-apple-macosx{}", MAC_SDK_VERSION);
@@ -3931,8 +4337,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let target = Target::from_triple(&triple).unwrap();
-        let cpu = TargetMachine::get_host_cpu_name().to_string();
-        let features = TargetMachine::get_host_cpu_features().to_string();
+        // Same native-vs-baseline rule as compiler::detect_simd_bytes, so the
+        // machine's features always cover the width `k1/simd-bytes` promised
+        let is_native = compiler::detect_host_target() == Some(k1_target);
+        let (cpu, features) = if is_native {
+            (
+                TargetMachine::get_host_cpu_name().to_string(),
+                TargetMachine::get_host_cpu_features().to_string(),
+            )
+        } else {
+            match k1_target {
+                // SSE2 is the x86-64 baseline
+                compiler::Target::LinuxIntel64 => ("x86-64".to_string(), "".to_string()),
+                compiler::Target::MacOsArm64 => ("generic".to_string(), "+neon".to_string()),
+                compiler::Target::Wasm64 => ("generic".to_string(), "+simd128".to_string()),
+            }
+        };
         let opt_level =
             if !optimize { OptimizationLevel::None } else { OptimizationLevel::Aggressive };
         let machine = target

@@ -125,6 +125,17 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             )
             .unwrap();
         }
+        Opcode::CallLlvm => {
+            write!(
+                w,
+                "call_llvm {} ret_pt={} fp+={} nargs={}",
+                k1.ident_str(crate::parse::StringId::from_usize(ops[0] as usize - 1)),
+                ops[1],
+                ops[2],
+                ops[3]
+            )
+            .unwrap();
+        }
         Opcode::RetGet => {
             write!(w, "ret_get ").unwrap();
             write_dst(w, ops[0]);

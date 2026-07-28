@@ -26,6 +26,7 @@ pub enum StaticContainerKind {
     Span,
     Buffer,
     Array,
+    Vector,
     List,
 }
 
@@ -43,10 +44,6 @@ impl StaticContainer {
 
     pub fn len(&self) -> usize {
         self.elements.len() as usize
-    }
-
-    pub fn is_array(&self) -> bool {
-        matches!(self.kind, StaticContainerKind::Array)
     }
 }
 
@@ -87,6 +84,7 @@ impl StaticValue {
             StaticValue::LinearContainer(c) => match c.kind {
                 StaticContainerKind::Span => "span",
                 StaticContainerKind::Array => "array",
+                StaticContainerKind::Vector => "vector",
                 StaticContainerKind::Buffer => "buffer",
                 StaticContainerKind::List => "list",
             },

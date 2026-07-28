@@ -25,6 +25,7 @@ use std/set
 // - [ ] implement value of globals (woops)
 // - [x] Extract fn param names by traversing the children, not just cheating by only looking at its 'cx-type' like we are now
 // - [ ] Detect varargs and emit error
+// - [ ] support bitfields (track bitfield start/end; if possible emit a std/bitfield call
 // - [x] Use derived cli arg parser
 // - [x] Embed sizeof / alignof / offsetof assertions
 // - [x] Support Unions
@@ -32,7 +33,8 @@ fn main(argc: c-int, argv: ptr): i32 {
   #if k1/test
     test()
   else {
-    let _output = start(core/sys/parse-main-args(argc, argv))
+    let output = start(core/sys/parse-main-args(argc, argv))
+    if output is :err msg { eprintln("ERROR: $msg"); return 1 }
     0
   }
 }
@@ -41,7 +43,7 @@ type bindgen-args = {
   in-path: string,
   out-path: ?string,
   clangarg: list[string],
-  system: string,
+  system: ?string,
   prelude-file: ?string,
   exclude: list[string],
   include: list[string],
@@ -50,8 +52,8 @@ type bindgen-args = {
   strip-prefix: list[string],
   rename: list[string],
 }
-fn start(args: span[string]): string {
-  let args = std/sys/parse-args[bindgen-args](args, []) is { :ok args -> args, :err msg -> return "Failed to parse arguments: $msg" }
+fn start(args: span[string]): result[string, string] {
+  let args = std/sys/parse-args[bindgen-args](args, []) is { :ok args -> args, :err msg -> return :err "Failed to parse arguments: $msg" }
 
   let context alloc: mem/alloc-mode = :tmp
 
@@ -89,7 +91,7 @@ fn start(args: span[string]): string {
     lib-name = args.lib-name,
     out-path = args.out-path,
     defns = list/empty(),
-    skip-system-defns = args.system != "true",
+    skip-system-defns = args.system != :some "true",
     exclude-substrings = args.exclude,
     include-names = set/from-span-in(args.include.as-span()),
     opaque-names = set/from-span-in(args.opaque.as-span()),
@@ -176,9 +178,10 @@ fn start(args: span[string]): string {
 
   let s = out.build()
   state.out-path is {
-    :none -> { print(s); s },
-    :some path -> { core/files/write-entire-file(out-path = path, contents = s); s }
+    :none -> { print(s) },
+    :some path -> { core/files/write-entire-file(out-path = path, contents = s) }
   }
+  :ok s
 }
 
 fn write-layout-assertions(context w: *mut string-builder)(name: string, type: k1-type, layout: ?layout) {
@@ -261,7 +264,8 @@ fn write-k1-type(context w: *mut string-builder, name-config)(k1-type, indent: s
       w.writeln("either(${e.int-type}) {")
       for e.members {
         w.repeat("  ", indent + 1)
-        w.writeln("$name = $explicit-value,", it)
+        let transformed-name = name-config.transformed-name(it.name)
+        w.writeln("$transformed-name = ${it.explicit-value},")
       }
       w.write("}")
     },

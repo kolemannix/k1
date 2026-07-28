@@ -31,7 +31,7 @@ Simple but missing
 - [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
       currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
-- [ ] A #static infinite loop hangs the compiler with zero output. Ten minutes of nothing. A VM step budget that errors out ("static execution exceeded N instructions, last function: ...") would have turned a hang-bisect into an instant diagnosis.
+- [x] A #static infinite loop hangs the compiler with zero output. Ten minutes of nothing. A VM step budget that errors out ("static execution exceeded N instructions, last function: ...") would have turned a hang-bisect into an instant diagnosis.
 - [x] allow opaques to be named / nominal; bindgen them that way. The name is really more useful than the size/align
 - [x] decide on 'assert' behavior in debug vs non debug mode and improve bactraces (need line numbers)
 - [x] 'newtype' solution; 'distinct' types? `type handle = distinct[size]` (wrapper struct is working great)

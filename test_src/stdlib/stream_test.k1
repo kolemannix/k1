@@ -1,0 +1,133 @@
+ns stream_test
+
+use std/dyn-source
+use std/source
+use std/source-async
+use std/sink
+use std/pull
+use std/waker
+use std/sum-sink
+use std/channel
+use std/mpsc
+use std/notify
+use std/rc
+use std/rc-bytes
+use std/owned
+use std/heap-bytes
+use std/heap-string
+use std/rc-byte-stream
+
+fn test-run-to-sum() {
+  let nums: span[int] = [1, 2, 3, 4, 5]
+  let summer: sum-sink[int] = .{ total = 0 }
+  assert-equals(source/from-span(nums, chunk-size = 2).run-to(&summer), 15)
+}
+
+fn expect-one(p: pull[int]): int {
+  p is {
+    :chunk group -> {
+      assert-equals(group.len(), 1)
+      assert-equals(group.get(0).len(), 1)
+      group.get(0).get(0)
+    },
+    _ -> {
+      crash("expected a chunk")
+    },
+  }
+}
+
+fn test-channel() {
+  let chan = channel/make[int](
+    cap-weight = 3,
+    weight-fn = fn(_x: int) 1,
+    drop-fn = fn(_x: int) .{},
+  )
+  assert(chan.push(10))
+  assert(chan.push(20))
+  assert(chan.push(30))
+  assert(not chan.push(40))
+
+  let src = dyn-source/erase-async(chan)
+  let wakes = 0
+  src.start(.{ state = (&wakes).as[ptr], wake-fn = fn(p: ptr) { p.rw[int]().* = p.rw[int]().* + 1 } })
+  chan.flush()
+  assert-equals(wakes, 1)
+  chan.flush()
+  assert-equals(wakes, 1)
+
+  assert-equals(expect-one(src.next()), 10)
+  assert-equals(expect-one(src.next()), 20)
+  assert-equals(expect-one(src.next()), 30)
+  assert(src.next() is :pending)
+
+  assert(chan.push(11))
+  chan.flush()
+  assert-equals(wakes, 2)
+  assert-equals(expect-one(src.next()), 11)
+
+  chan.fail("boom")
+  assert(src.next() is :fail _)
+  src.stop()
+}
+
+let mutable drop-count: int = 0
+fn count-drop(_v: *mut int) { drop-count = drop-count + 1 }
+
+fn test-rc() {
+  let r = rc/new-with-drop(7, count-drop)
+  let r2 = r.retain()
+  assert-equals(r.get().*, 7)
+  r.release()
+  assert-equals(drop-count, 0)
+  r2.release()
+  assert-equals(drop-count, 1)
+
+  let payload = heap-bytes/cloned("hello".span-bytes()).to-rc()
+  assert-equals(payload.bytes().len(), 5)
+  payload.release()
+
+  let s = heap-string/cloned("topic").to-rc()
+  assert(s.get().* == "topic")
+  let s2 = s.retain()
+  s.release()
+  s2.release()
+}
+
+fn test-rc-byte-stream() {
+  let payloads: span[rc-bytes] = [heap-bytes/cloned("ab".span-bytes()).to-rc(), heap-bytes/cloned("cde".span-bytes()).to-rc()]
+  let src = source/from-span(payloads, chunk-size = 1) || rc-byte-stream
+  src.start(waker/noop())
+  src.next() is { :chunk g -> assert-equals(g.get(0).len(), 2), _ -> crash("expected chunk") }
+  src.next() is { :chunk g -> assert-equals(g.get(0).len(), 3), _ -> crash("expected chunk") }
+  assert(src.next() is :done)
+  src.stop()
+}
+
+let mutable notify-count: int = 0
+fn count-notify(_p: ptr) { notify-count = notify-count + 1 }
+
+fn test-mpsc() {
+  let q = mpsc/make[int](.{ state = ptr/null, notify-fn = count-notify })
+  q.send(1)
+  q.send(2)
+  q.send(3)
+  assert-equals(notify-count, 3)
+  let out = list/empty[int]()
+  q.take(&out)
+  assert-equals(out.len(), 3)
+  assert-equals(out.get(0), 1)
+  assert-equals(out.get(1), 2)
+  assert-equals(out.get(2), 3)
+  out.clear()
+  q.take(&out)
+  assert(out.is-empty())
+}
+
+fn test() {
+  test-run-to-sum()
+  test-channel()
+  test-rc()
+  test-rc-byte-stream()
+  test-mpsc()
+  assert-equals(rc/live-count(), 0)
+}

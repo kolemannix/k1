@@ -231,10 +231,7 @@ const KEYWORDS: &[&str] = &[
     "ability", "impl", "is", "not", "builtin", "where", "context", "use", "require", "defer",
 ];
 
-pub fn collect_completions(
-    k1: &TypedProgram,
-    site: CompletionSite,
-) -> Vec<CompletionCandidate> {
+pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<CompletionCandidate> {
     let mut items: Vec<CompletionCandidate> = vec![];
     match site {
         CompletionSite::Member { base_type_id, .. } => {
@@ -517,10 +514,7 @@ fn use-it(): int {
 }
 "#,
         );
-        assert!(matches!(
-            k1.completion.as_ref().unwrap().site,
-            Some(CompletionSite::Scope { .. })
-        ));
+        assert!(matches!(k1.completion.as_ref().unwrap().site, Some(CompletionSite::Scope { .. })));
         let labels = labels(&k1);
         assert!(labels.contains(&"alpha".to_string()));
         assert!(labels.contains(&"beta".to_string()));
@@ -548,10 +542,7 @@ fn use-it(): int {
 }
 "#,
         );
-        assert!(matches!(
-            k1.completion.as_ref().unwrap().site,
-            Some(CompletionSite::Path { .. })
-        ));
+        assert!(matches!(k1.completion.as_ref().unwrap().site, Some(CompletionSite::Path { .. })));
         let labels = labels(&k1);
         assert!(labels.contains(&"helper".to_string()));
         assert!(labels.contains(&"helper-two".to_string()));

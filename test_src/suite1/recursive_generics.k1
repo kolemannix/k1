@@ -36,6 +36,18 @@ ns recursive_generics {
   // self-application with concrete args: every conc[x] links to conc[int]
   type conc[t] = { v: t, link: ?*conc[int] }
 
+  // wrapper-first order: fwd-node is evaluated on demand mid-cluster, and its
+  // instance fwd-node[t-of-wrapper] is self-referential; the cluster finiteness
+  // walk used to overflow on it (wart 3a)
+  type fwd-wrapper[t] = { head: *mut fwd-node[t] }
+  type fwd-node[t] = { value: t, next: *mut fwd-node[t] }
+
+  // a recursive-generic instance (node[int]) reached from inside a mutual
+  // pointer cycle between plain structs; same walk overflow (wart 3b)
+  type q[t] = { head: *mut node[t] }
+  type bus = { ingress: *mut q[int], subscribers: list[*mut subscription] }
+  type subscription = { bus: *mut bus }
+
   fn test() {
     let l = make(4)
     assert-equals(sum(l), 10)
@@ -63,6 +75,19 @@ ns recursive_generics {
     let ci2: conc[int] = .{ v = 7, link = :some ci }
     assert-equals(ci2.link.!.v + ci2.v, 12)
     assert(cb.v)
+
+    let f2: *mut fwd-node[int] = mem/new(.{ value = 2, next = ptr/null.rw[fwd-node[int]] })
+    let f1: *mut fwd-node[int] = mem/new(.{ value = 1, next = f2 })
+    let w: fwd-wrapper[int] = .{ head = f1 }
+    assert-equals(w.head.value + w.head.next.value, 3)
+
+    let qn: *mut node[int] = mem/new(.{ value = 9, next = :none })
+    let ingress: *mut q[int] = mem/new(.{ head = qn })
+    let bus0: *mut bus = mem/new(.{ ingress = ingress, subscribers = list/empty() })
+    let sub0: *mut subscription = mem/new(.{ bus = bus0 })
+    bus0.subscribers.push(sub0)
+    assert-equals(sub0.bus.ingress.head.value, 9)
+    assert-equals(bus0.subscribers.len(), 1)
   }
 
 }

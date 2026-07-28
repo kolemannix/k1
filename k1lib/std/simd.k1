@@ -1,0 +1,182 @@
+ns simd
+
+//   $simd/map(scale, u8, x, [c("k", 3)], x * k + x)
+//     -> fn scale(dst: buffer[u8], src: span[u8])
+//   $simd/reduce(total, u8, a, b, a + b, 0)
+//     -> fn total(src: span[u8]): u8
+//   $simd/first-of(delims, [',', ':', '"'])
+//     -> ns delims { fn scan(s: string, from: size): { index: i64, which: i64 } }
+//
+// Generated loops process `natural-bytes` at a time with a scalar tail. Map
+// and reduce bodies are emitted into both worlds, which works because the
+// arithmetic/bitwise operators dispatch through abilities both implement;
+// declared constants are `let`s in the tail and splats in the vector loop.
+// Reduce bodies must be commutative and associative.
+
+let natural-bytes: size = k1/simd-bytes
+
+// A named integer constant available to a kernel body
+fn c(name: string, value: i64): { name: string, value: i64 } { .{ name, value } }
+
+fn lanes-for(elem-name: string, elem-size: size): size {
+  let lanes = natural-bytes / elem-size
+  if lanes < 2 crash("simd kernels need an element half a vector or smaller; got $elem-name")
+  lanes
+}
+
+fn map-impl(
+  name: string,
+  elem-name: string,
+  elem-size: size,
+  binding: string,
+  consts: span[{ name: string, value: i64 }],
+  body: string
+): string {
+  use meta/code-writer
+  let lanes = lanes-for(elem-name, elem-size)
+  let code = string-builder/new()
+  code.writeln("fn $name(dst: buffer[$elem-name], src: span[$elem-name]) {")
+  code.writeln("  assert(dst.len == src.len())")
+  code.writeln("  let len = src.len()")
+  code.writeln("  let sbase = src.data-ptr()")
+  code.writeln("  let dbase = dst.data-ptr()")
+  code.writeln("  let i = 0: size")
+  code.writeln("  {")
+  for consts {
+    code.writeln("    let ${it.name} = vector/splat[$elem-name, $lanes](${it.value})")
+  }
+  code.writeln("    while i + $lanes <= len {")
+  code.writeln("      let $binding = vector/load-unchecked[$elem-name, $lanes](sbase.ref-at-index[$elem-name](i).as[ptr])")
+  code.writeln("      ($body).store-unchecked(dbase.ref-at-index[$elem-name](i).as[ptr])")
+  code.writeln("      i = i + $lanes")
+  code.writeln("    }")
+  code.writeln("  }")
+  code.writeln("  while i < len {")
+  for consts {
+    code.writeln("    let ${it.name}: $elem-name = ${it.value}")
+  }
+  code.writeln("    let $binding = src.get(i)")
+  code.writeln("    dst.set(i, $body)")
+  code.writeln("    i = i + 1")
+  code.writeln("  }")
+  code.writeln("}")
+  code.build()
+}
+
+macro map[t](name, binding, consts: span[{ name: string, value: i64 }], body) {
+  code/from-string(map-impl(
+    name.text(),
+    types/name[t],
+    types/size[t],
+    binding.text(),
+    consts,
+    body.text()
+  ))
+}
+
+fn reduce-impl(
+  name: string,
+  elem-name: string,
+  elem-size: size,
+  acc-binding: string,
+  item-binding: string,
+  body: string,
+  identity: i64
+): string {
+  use meta/code-writer
+  let lanes = lanes-for(elem-name, elem-size)
+  let code = string-builder/new()
+  code.writeln("fn $name(src: span[$elem-name]): $elem-name {")
+  code.writeln("  let len = src.len()")
+  code.writeln("  let sbase = src.data-ptr()")
+  code.writeln("  let i = 0: size")
+  code.writeln("  let vacc = vector/splat[$elem-name, $lanes]($identity)")
+  code.writeln("  while i + $lanes <= len {")
+  code.writeln("    let $acc-binding = vacc")
+  code.writeln("    let $item-binding = vector/load-unchecked[$elem-name, $lanes](sbase.ref-at-index[$elem-name](i).as[ptr])")
+  code.writeln("    vacc = $body")
+  code.writeln("    i = i + $lanes")
+  code.writeln("  }")
+  code.writeln("  let acc: $elem-name = $identity")
+  code.writeln("  let lane = 0: size")
+  code.writeln("  while lane < $lanes {")
+  code.writeln("    let $acc-binding = acc")
+  code.writeln("    let $item-binding = vacc.get-lane(lane)")
+  code.writeln("    acc = $body")
+  code.writeln("    lane = lane + 1")
+  code.writeln("  }")
+  code.writeln("  while i < len {")
+  code.writeln("    let $acc-binding = acc")
+  code.writeln("    let $item-binding = src.get(i)")
+  code.writeln("    acc = $body")
+  code.writeln("    i = i + 1")
+  code.writeln("  }")
+  code.writeln("  acc")
+  code.writeln("}")
+  code.build()
+}
+
+macro reduce[t](name, acc-binding, item-binding, body, identity: i64) {
+  code/from-string(reduce-impl(
+    name.text(),
+    types/name[t],
+    types/size[t],
+    acc-binding.text(),
+    item-binding.text(),
+    body.text(),
+    identity
+  ))
+}
+
+fn first-of-impl(name: string, needles: span[char]): string {
+  use meta/code-writer
+  if needles.len() == 0 crash("first-of needs at least one needle")
+  if needles.len() > 8 crash("first-of supports at most 8 needles; got ${needles.len()}")
+  let lanes = natural-bytes
+  let code = string-builder/new()
+  code.writeln("ns $name {")
+  code.writeln("  fn scan(s: string, from: size): { index: i64, which: i64 } {")
+  code.writeln("    let len = s.len()")
+  code.writeln("    let base = s.data-ptr()")
+  code.writeln("    let i = from")
+  for needles {
+    code.writeln("    let needle$it-index = vector/splat[u8, $lanes](${it.as[u8]})")
+  }
+  code.writeln("    while i + $lanes <= len {")
+  code.writeln("      let chunk = vector/load-unchecked[u8, $lanes](base.ref-at-index[u8](i).as[ptr])")
+  for needles {
+    code.writeln("      let m$it-index = chunk.eq-mask(needle$it-index)")
+  }
+  let all-masks = string-builder/new()
+  for needles {
+    if it-index > 0 { all-masks.write(".bit-or(m$it-index)") }
+    else { all-masks.write("m0") }
+  }
+  code.writeln("      let all = ${all-masks.build()}")
+  code.writeln("      if all != 0 {")
+  code.writeln("        let lane = all.trailing-zeros()")
+  for needles {
+    code.writeln("        if m$it-index.shift-right(lane.as[u32]).bit-and(1) == 1 {")
+    code.writeln("          return .{ index = i + lane.as[i64], which = $it-index }")
+    code.writeln("        }")
+  }
+  code.writeln("        crash(\"unreachable: mask bit vanished\")")
+  code.writeln("      }")
+  code.writeln("      i = i + $lanes")
+  code.writeln("    }")
+  code.writeln("    while i < len {")
+  code.writeln("      let ch = s.get(i)")
+  for needles {
+    code.writeln("      if ch.as[u8] == ${it.as[u8]} return .{ index = i, which = $it-index }")
+  }
+  code.writeln("      i = i + 1")
+  code.writeln("    }")
+  code.writeln("    .{ index = -1, which = -1 }")
+  code.writeln("  }")
+  code.writeln("}")
+  code.build()
+}
+
+macro first-of(name, needles: span[char]) {
+  code/from-string(first-of-impl(name.text(), needles))
+}

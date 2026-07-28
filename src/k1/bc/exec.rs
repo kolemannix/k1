@@ -32,6 +32,8 @@ use super::{
     float_pred_from_tag, header_a, header_b, header_op, int_pred_from_tag,
 };
 
+const STATIC_EXEC_INSTR_LIMIT: i64 = 2_000_000_000;
+
 pub fn execute_compiled_expr(
     k1: &mut TypedProgram,
     vm: &mut Vm,
@@ -137,8 +139,9 @@ pub fn execute_compiled_unit_raw(
     let ret_addr = vm.stack.push_layout_uninit(ret_layout);
     vm.overall_return_addr = ret_addr;
 
-    // Top frame: 16-aligned base, header links to Halt (pc 0, fp 0)
-    let fp0: *mut u8 = vm.stack.mem.cursor().map_addr(|a| (a + 15) & !15);
+    // Top frame: FRAME_ALIGN-aligned base, header links to Halt (pc 0, fp 0)
+    let align_mask = super::FRAME_ALIGN as usize - 1;
+    let fp0: *mut u8 = vm.stack.mem.cursor().map_addr(|a| (a + align_mask) & !align_mask);
     vm.stack.mem.set_cursor(fp0);
     let ferry_start = k1.timing.clock.raw();
     unsafe {
@@ -357,6 +360,12 @@ fn exec_loop(
         debug_assert!(pc < k1.bc.code.len(), "bc pc out of bounds");
         let h = code_at!(pc);
         instrs_run += 1;
+        if instrs_run > STATIC_EXEC_INSTR_LIMIT {
+            vmerr!(
+                "Static execution exceeded {} instructions; likely an infinite loop",
+                STATIC_EXEC_INSTR_LIMIT
+            );
+        }
         let op = Opcode::from_u8(header_op(h));
         op_counts[op as usize] += 1;
 
@@ -519,6 +528,35 @@ fn exec_loop(
                     ret_reg = result;
                 }
                 advance!(Opcode::CallExtern);
+            }
+            Opcode::CallLlvm => {
+                let fn_name = crate::parse::StringId::from_usize(operand!(0) as usize - 1);
+                let _ret_pt = PhysicalType::from_u32(operand!(1));
+                let fp_delta = operand!(2) as usize;
+                let nargs = operand!(3) as usize;
+                vm.eval_span = k1.bc.span_for_pc(pc as u32);
+
+                let new_fp = unsafe { fp.add(fp_delta) };
+                let args: &[Value] = unsafe {
+                    core::slice::from_raw_parts(
+                        new_fp.add(super::FRAME_HEADER_WORDS as usize * 8) as *const Value,
+                        nargs,
+                    )
+                };
+                let result = match k1.ident_str(fn_name) {
+                    "llvm.cttz.i64" => Value::u64(args[0].bits().trailing_zeros() as u64),
+                    "llvm.ctlz.i64" => Value::u64(args[0].bits().leading_zeros() as u64),
+                    "llvm.ctpop.i64" => Value::u64(args[0].bits().count_ones() as u64),
+                    other => {
+                        let other = other.to_string();
+                        vmerr!(
+                            "No comptime emulation for {} — this intrinsic is runtime-only",
+                            other
+                        )
+                    }
+                };
+                ret_reg = result;
+                advance!(Opcode::CallLlvm);
             }
             Opcode::CallBuiltin => {
                 let builtin = builtin_from_tag(header_a(h));

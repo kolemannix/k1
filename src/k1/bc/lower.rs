@@ -28,8 +28,8 @@ use crate::typer::{FunctionId, K1Result, TypedExprId, TypedFloatValue, TypedProg
 use crate::vm;
 
 use super::{
-    CastKind, FRAME_HEADER_WORDS, Opcode, PENDING_PC, SRC_FP_BIT, UnitInfo, UnitKind, builtin_tag,
-    float_pred_tag, header, int_pred_tag,
+    CastKind, FRAME_ALIGN, FRAME_HEADER_WORDS, Opcode, PENDING_PC, SRC_FP_BIT, UnitInfo, UnitKind,
+    builtin_tag, float_pred_tag, header, int_pred_tag,
 };
 
 pub fn get_or_lower_unit(
@@ -491,14 +491,16 @@ fn lower_unit_with_ctx(
     ctx.scratch1 = next_word + 1;
     next_word += 2;
 
-    // Frame layout: [header|params|slots|scratch] then allocas, then agg temps
+    // Frame layout: [header|params|slots|scratch] then allocas, then agg temps.
+    // Frame bases and sizes are 64-aligned so allocas may align up to 64
+    // (512-bit vectors get natural alignment)
     let mut area_bytes: u32 = next_word * 8;
     for i in 0..ctx.allocas.len() {
         let (inst_id, layout) = ctx.allocas[i];
         let align = layout.align.max(1);
         assert!(
-            align <= 16,
-            "bc: alloca alignment {} > 16 unsupported (frame base is 16-aligned)",
+            align <= FRAME_ALIGN,
+            "bc: alloca alignment {} > {FRAME_ALIGN} unsupported (frame base alignment)",
             align
         );
         area_bytes = align_up(area_bytes, align);
@@ -508,12 +510,16 @@ fn lower_unit_with_ctx(
     for i in 0..ctx.agg_call_temps.len() {
         let (inst_id, layout) = ctx.agg_call_temps[i];
         let align = layout.align.max(1);
-        assert!(align <= 16, "bc: agg return temp alignment {} > 16 unsupported", align);
+        assert!(
+            align <= FRAME_ALIGN,
+            "bc: agg return temp alignment {} > {FRAME_ALIGN} unsupported",
+            align
+        );
         area_bytes = align_up(area_bytes, align);
         ctx.slots.insert(inst_id, SRC_FP_BIT | area_bytes);
         area_bytes += layout.size;
     }
-    ctx.frame_bytes = align_up(area_bytes.max(16), 16);
+    ctx.frame_bytes = align_up(area_bytes.max(FRAME_ALIGN), FRAME_ALIGN);
     assert!(ctx.frame_bytes < SRC_FP_BIT, "bc: frame too large for fp-relative operand encoding");
 
     // -------------------------- Pass B: emit ---------------------------
@@ -715,6 +721,168 @@ fn emit_inst(
             ctx.push(expected);
             ctx.push(desired);
             ctx.push(cas.ok_vm_offset);
+        }
+        // Vector ops unroll to scalar opcodes per lane; no vector opcodes exist
+        Inst::VecOp { id } => {
+            use ir::VecOpIr;
+            let vop = *k1.ir.vec_ops.get(id);
+            let elem_bits = wbits(vop.elem);
+            let stride = vop.elem.get_layout().stride() as u16;
+            let is_float = matches!(vop.elem, ScalarType::F32 | ScalarType::F64);
+            let is_signed = matches!(
+                vop.elem,
+                ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64
+            );
+            match vop.op {
+                VecOpIr::Splat => {
+                    let (addr, base_off) = resolve_addr(k1, ctx, vop.dst);
+                    let val = resolve_src(k1, ctx, vop.lhs);
+                    for lane in 0..vop.lanes as u16 {
+                        ctx.emit(Opcode::Store, elem_bits, base_off + lane * stride);
+                        ctx.push(addr);
+                        ctx.push(val);
+                    }
+                }
+                VecOpIr::Add
+                | VecOpIr::Sub
+                | VecOpIr::Mul
+                | VecOpIr::BitAnd
+                | VecOpIr::BitOr
+                | VecOpIr::Xor
+                | VecOpIr::EqLanes => {
+                    let (lhs_addr, lhs_off) = resolve_addr(k1, ctx, vop.lhs);
+                    let (rhs_addr, rhs_off) = resolve_addr(k1, ctx, vop.rhs);
+                    let (dst_addr, dst_off) = resolve_addr(k1, ctx, vop.dst);
+                    let s0 = ctx.next_scratch();
+                    let s1 = ctx.next_scratch();
+                    let zero = k1.bc.intern_const(0);
+                    for lane in 0..vop.lanes as u16 {
+                        let off = lane * stride;
+                        ctx.emit(Opcode::Load, elem_bits, lhs_off + off);
+                        ctx.push(s0);
+                        ctx.push(lhs_addr);
+                        ctx.emit(Opcode::Load, elem_bits, rhs_off + off);
+                        ctx.push(s1);
+                        ctx.push(rhs_addr);
+                        match vop.op {
+                            VecOpIr::EqLanes => {
+                                if is_float {
+                                    ctx.emit(
+                                        Opcode::FloatCmp,
+                                        elem_bits,
+                                        float_pred_tag(ir::FloatCmpPred::Eq),
+                                    );
+                                } else {
+                                    ctx.emit(
+                                        Opcode::IntCmp,
+                                        elem_bits,
+                                        int_pred_tag(ir::IntCmpPred::Eq),
+                                    );
+                                }
+                                ctx.push(s0);
+                                ctx.push(s0);
+                                ctx.push(s1);
+                                // Fan the 0/1 out to a 0/all-ones lane: s0 = 0 - s0
+                                ctx.emit(Opcode::IntSub, elem_bits, 0);
+                                ctx.push(s0);
+                                ctx.push(zero);
+                                ctx.push(s0);
+                            }
+                            _ => {
+                                let opcode = match (vop.op, is_float) {
+                                    (VecOpIr::Add, false) => Opcode::IntAdd,
+                                    (VecOpIr::Add, true) => Opcode::FloatAdd,
+                                    (VecOpIr::Sub, false) => Opcode::IntSub,
+                                    (VecOpIr::Sub, true) => Opcode::FloatSub,
+                                    (VecOpIr::Mul, false) => Opcode::IntMul,
+                                    (VecOpIr::Mul, true) => Opcode::FloatMul,
+                                    (VecOpIr::BitAnd, _) => Opcode::BitAnd,
+                                    (VecOpIr::BitOr, _) => Opcode::BitOr,
+                                    (VecOpIr::Xor, _) => Opcode::BitXor,
+                                    _ => unreachable!(),
+                                };
+                                ctx.emit(opcode, elem_bits, 0);
+                                ctx.push(s0);
+                                ctx.push(s0);
+                                ctx.push(s1);
+                            }
+                        }
+                        ctx.emit(Opcode::Store, elem_bits, dst_off + off);
+                        ctx.push(dst_addr);
+                        ctx.push(s0);
+                    }
+                }
+                VecOpIr::BitNot => {
+                    let (lhs_addr, lhs_off) = resolve_addr(k1, ctx, vop.lhs);
+                    let (dst_addr, dst_off) = resolve_addr(k1, ctx, vop.dst);
+                    let s0 = ctx.next_scratch();
+                    for lane in 0..vop.lanes as u16 {
+                        let off = lane * stride;
+                        ctx.emit(Opcode::Load, elem_bits, lhs_off + off);
+                        ctx.push(s0);
+                        ctx.push(lhs_addr);
+                        ctx.emit(Opcode::BitNot, 0, 0);
+                        ctx.push(s0);
+                        ctx.push(s0);
+                        ctx.emit(Opcode::Store, elem_bits, dst_off + off);
+                        ctx.push(dst_addr);
+                        ctx.push(s0);
+                    }
+                }
+                VecOpIr::Shl | VecOpIr::Shr => {
+                    let (lhs_addr, lhs_off) = resolve_addr(k1, ctx, vop.lhs);
+                    let (dst_addr, dst_off) = resolve_addr(k1, ctx, vop.dst);
+                    let count = resolve_src(k1, ctx, vop.rhs);
+                    let s0 = ctx.next_scratch();
+                    let opcode = match vop.op {
+                        VecOpIr::Shl => Opcode::Shl,
+                        _ if is_signed => Opcode::ShrS,
+                        _ => Opcode::ShrU,
+                    };
+                    for lane in 0..vop.lanes as u16 {
+                        let off = lane * stride;
+                        ctx.emit(Opcode::Load, elem_bits, lhs_off + off);
+                        ctx.push(s0);
+                        ctx.push(lhs_addr);
+                        ctx.emit(opcode, elem_bits, 0);
+                        ctx.push(s0);
+                        ctx.push(s0);
+                        ctx.push(count);
+                        ctx.emit(Opcode::Store, elem_bits, dst_off + off);
+                        ctx.push(dst_addr);
+                        ctx.push(s0);
+                    }
+                }
+                VecOpIr::ToMask => {
+                    // acc |= lane_msb << lane, for each lane
+                    let (lhs_addr, lhs_off) = resolve_addr(k1, ctx, vop.lhs);
+                    let acc = ctx.slot_of(inst_id);
+                    let s0 = ctx.next_scratch();
+                    let zero = k1.bc.intern_const(0);
+                    let msb_shift = k1.bc.intern_const((elem_bits - 1) as u64);
+                    ctx.emit(Opcode::Mov, 0, 0);
+                    ctx.push(acc);
+                    ctx.push(zero);
+                    for lane in 0..vop.lanes as u16 {
+                        ctx.emit(Opcode::Load, elem_bits, lhs_off + lane * stride);
+                        ctx.push(s0);
+                        ctx.push(lhs_addr);
+                        ctx.emit(Opcode::ShrU, elem_bits, 0);
+                        ctx.push(s0);
+                        ctx.push(s0);
+                        ctx.push(msb_shift);
+                        let lane_shift = k1.bc.intern_const(lane as u64);
+                        ctx.emit(Opcode::Shl, 64, 0);
+                        ctx.push(s0);
+                        ctx.push(s0);
+                        ctx.push(lane_shift);
+                        ctx.emit(Opcode::BitOr, 64, 0);
+                        ctx.push(acc);
+                        ctx.push(acc);
+                        ctx.push(s0);
+                    }
+                }
+            }
         }
         Inst::Fence { ord } => {
             ctx.emit(Opcode::Fence, 0, ord.to_tag() as u16);
@@ -982,6 +1150,21 @@ fn emit_call(
                 ctx.push(sret_src);
             }
             ctx.emit(Opcode::CallBuiltin, builtin_tag(builtin), 0);
+            ctx.push(ret_pt.to_u32());
+            ctx.push(frame_bytes);
+            ctx.push(nargs);
+        }
+        IrCallee::LlvmIntrinsic { name, .. } => {
+            emit_arg_movs(k1, ctx, args);
+            if is_agg {
+                let sret_src = resolve_sret(k1, ctx);
+                let sret = ctx.out_sret_word();
+                ctx.emit(Opcode::Mov, 0, 0);
+                ctx.push(sret);
+                ctx.push(sret_src);
+            }
+            ctx.emit(Opcode::CallLlvm, 0, 0);
+            ctx.push(name.as_usize() as u32 + 1);
             ctx.push(ret_pt.to_u32());
             ctx.push(frame_bytes);
             ctx.push(nargs);

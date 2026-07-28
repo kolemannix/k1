@@ -1,11 +1,11 @@
 //! TCP transport: connection threads, request parsing, response writing, and
 //! the /events connection.
 
-use super::{bus, sse, SharedProgram};
+use super::{SharedProgram, bus, sse};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 pub enum Response {

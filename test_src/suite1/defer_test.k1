@@ -30,6 +30,68 @@ fn return-test(sensor: *mut int) {
   .{}
 }
 
+type action = either { accept, reject }
+
+// A block that yields a value runs its defers after the value is computed,
+// and still yields the value
+fn value-block-test(sensor: *mut int): action {
+  let r: action = 0 is {
+    0 -> {
+      defer { assert-equals(sensor.*, 1); inc(sensor) }
+      inc(sensor)
+      :reject
+    },
+    _ -> :accept
+  }
+  assert-equals(sensor.*, 2)
+  r
+}
+
+// A function body's final value is computed before its defers run
+fn value-return-test(sensor: *mut int): int {
+  defer { assert-equals(sensor.*, 1); inc(sensor) }
+  inc(sensor)
+  sensor.* + 41
+}
+
+// A final statement that diverges through returns runs defers exactly once
+fn branchy-test(sensor: *mut int): int {
+  defer inc(sensor)
+  if sensor.* == 0 { return 1 } else { return 2 }
+}
+
+// break computes its value, then runs the defers of every scope it exits
+fn break-test(sensor: *mut int): int {
+  loop {
+    defer inc(sensor)
+    if sensor.* == 3 {
+      break(sensor.* * 10)
+    }
+  }
+}
+
+// The .try error path runs pending defers on its way out
+fn try-defers(sensor: *mut int): result[int, string] {
+  defer inc(sensor)
+  let v: result[int, string] = :err "boom"
+  let i = v.try
+  :ok i
+}
+
+// Defers in one scope run last-declared-first, both at block end...
+fn lifo-block-test(sensor: *mut int) {
+  defer { assert-equals(sensor.*, 1); inc(sensor) }
+  defer { assert-equals(sensor.*, 0); inc(sensor) }
+}
+
+// ...and at an early return
+fn lifo-return-test(sensor: *mut int) {
+  defer { assert-equals(sensor.*, 1); inc(sensor) }
+  defer { assert-equals(sensor.*, 0); inc(sensor) }
+  if sensor.* == 0 { return }
+  assert(false)
+}
+
 fn test() {
   // We use an integer so that we can detect if a defer
   // runs too few or too many times!
@@ -40,6 +102,34 @@ fn test() {
   sensor = 0
   return-test(&sensor)
   assert-equals(sensor, 3)
-  
+
+  sensor = 0
+  assert(value-block-test(&sensor) is :reject)
+  assert-equals(sensor, 2)
+
+  sensor = 0
+  assert-equals(value-return-test(&sensor), 42)
+  assert-equals(sensor, 2)
+
+  sensor = 0
+  assert-equals(branchy-test(&sensor), 1)
+  assert-equals(sensor, 1)
+
+  sensor = 0
+  assert-equals(break-test(&sensor), 30)
+  assert-equals(sensor, 4)
+
+  sensor = 0
+  assert(try-defers(&sensor) is :err "boom")
+  assert-equals(sensor, 1)
+
+  sensor = 0
+  lifo-block-test(&sensor)
+  assert-equals(sensor, 2)
+
+  sensor = 0
+  lifo-return-test(&sensor)
+  assert-equals(sensor, 2)
+
   .{}
 }

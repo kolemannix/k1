@@ -2200,6 +2200,7 @@ pub struct Parser<'toks, 'module> {
     tokens: TokenIter<'toks>,
     file_id: FileId,
     string_buffer: String,
+    scratch_defns: Vec<ParsedId>,
 }
 
 impl<'toks, 'ast> Parser<'toks, 'ast> {
@@ -2219,16 +2220,15 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             tokens: TokenIter::make(tokens),
             file_id,
             string_buffer: String::with_capacity(1024),
+            scratch_defns: Vec::with_capacity(128),
         }
     }
     pub fn parse_file_into_module(&mut self) {
-        let mut definitions = RawRef::from_mut(
-            &mut self.ast.namespaces.get_mut(self.module_namespace_id).definitions,
-        );
+        let scratch_start = self.scratch_defns.len();
         loop {
             match self.parse_definition(K::Eof) {
                 Ok(Some(def)) => {
-                    definitions.push_grow(&mut self.ast.mem, def);
+                    self.scratch_defns.push(def);
                 }
                 Err(err) => {
                     self.ast.report_error(err);
@@ -2238,6 +2238,11 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 Ok(None) => break,
             }
         }
+        let mut definitions = RawRef::from_mut(
+            &mut self.ast.namespaces.get_mut(self.module_namespace_id).definitions,
+        );
+        definitions.extend_grow(&mut self.ast.mem, &self.scratch_defns[scratch_start..]);
+        self.scratch_defns.truncate(scratch_start);
     }
 
     fn error_here(&self, message: impl AsRef<str>) -> ParseError {
@@ -4724,7 +4729,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let initial_pos = self.cursor_position();
         let is_intrinsic = self.maybe_consume(K::KeywordIntern).is_some();
         let linkage = if is_intrinsic {
-            Linkage::Intrinsic
+            if self.peek().kind == K::OpenParen {
+                self.advance();
+                let llvm_name = self.expect_dq_ident()?;
+                self.expect_kind(K::CloseParen)?;
+                Linkage::LlvmIntrinsic(llvm_name)
+            } else {
+                Linkage::Intrinsic
+            }
         } else if let Some((_extern_token, _)) = self.maybe_consume_ident_chars("extern") {
             let (lib_name, fn_name) = if self.peek().kind == K::OpenParen {
                 self.advance();
@@ -5194,10 +5206,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         &mut self,
         terminator: TokenKind,
     ) -> ParseResult<List<ParsedId, ParsedProgram>> {
-        let mut definitions = self.ast.mem.new_list(0);
-        while let Some(def) = self.parse_definition(terminator)? {
-            definitions.push_grow(&mut self.ast.mem, def);
+        let scratch_start = self.scratch_defns.len();
+        loop {
+            match self.parse_definition(terminator) {
+                Ok(Some(def)) => self.scratch_defns.push(def),
+                Ok(None) => break,
+                Err(e) => {
+                    self.scratch_defns.truncate(scratch_start);
+                    return Err(e);
+                }
+            }
         }
+        let defns = &self.scratch_defns[scratch_start..];
+        let mut definitions = self.ast.mem.new_list(defns.len() as u32);
+        definitions.extend(defns);
+        self.scratch_defns.truncate(scratch_start);
         Ok(definitions)
     }
 
@@ -5750,6 +5773,7 @@ pub fn lex_file_into_program(
     source: SourceFile,
     tokens: &mut Vec<Token>,
 ) -> ParseResult<FileId> {
+    tokens.clear();
     let file_id = module.sources.add_file(source);
     let text = &module.sources.get(file_id).content;
     let mut lexer = Lexer::make(text, &mut module.spans, file_id);

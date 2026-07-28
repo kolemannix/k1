@@ -36,11 +36,11 @@ ns orders {
     let fields = line.split-by-char(',')
     require fields.len() == 7 else { crash("bad csv row: $line") }
     .{
-      id = fields.get(0).parse-base10().!,
+      id = u64/from-string(fields.get(0)).!,
       customer = fields.get(1),
       item = fields.get(2),
-      quantity = fields.get(3).parse-base10().!,
-      unit-cents = fields.get(4).parse-base10().!,
+      quantity = u64/from-string(fields.get(3)).!,
+      unit-cents = u64/from-string(fields.get(4)).!,
       status = parse-status(fields.get(5)),
       country = fields.get(6),
     }

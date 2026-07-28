@@ -1,0 +1,5 @@
+fn main(): i32 {
+  let _v: vector[u64, 16] = vector/zeroed[u64, 16]()
+  0
+}
+//errmsg: Vector total size must not exceed 64 bytes

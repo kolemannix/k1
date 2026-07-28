@@ -643,9 +643,7 @@ fn handle_request(
                 return Response::BadRequest;
             };
             match widget.data {
-                WidgetDataSource::Binding(_) | WidgetDataSource::Watcher(_) => {
-                    Response::BadRequest
-                }
+                WidgetDataSource::Binding(_) | WidgetDataSource::Watcher(_) => Response::BadRequest,
                 WidgetDataSource::Checkbox { .. } => {
                     let submitted = submitted_widget_control(body, widget_id);
                     if let Some(serde_json::Value::Bool(value)) = submitted {

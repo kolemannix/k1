@@ -32,8 +32,8 @@ ns for range {
   fn parse(s: string): result[range, string] {
      let r = s.split-by-char('-')
      assertdbg(r.len() == 2)
-     let start = r.get(0).parse-base10().!
-     let end   = r.get(1).parse-base10().!
+     let start = u64/from-string(r.get(0)).!
+     let end   = u64/from-string(r.get(1)).!
      :ok .{ start, end }
   }
 }
@@ -47,7 +47,7 @@ fn part-one(input: string) {
     if it.is-empty() { parse-mode = :ingredients; } else {
       parse-mode is {
         :ranges -> { ranges.push(range/parse(it).!) },
-        :ingredients -> { ing.push(it.parse-base10().!) }
+        :ingredients -> { ing.push(u64/from-string(it).!) }
       }
     }
   }

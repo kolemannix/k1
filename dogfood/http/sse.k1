@@ -1,0 +1,71 @@
+// Server-Sent Events framing as a pipe: each upstream group becomes one SSE
+// event — an "event: <name>" line, each payload line as a "data: " line, a
+// blank-line terminator. Payload segments pass through zero-copy; only the
+// framing segments and the reused segment list are the pipe's own.
+
+use std/dyn-source
+use std/source
+use std/source-async
+use std/pull
+use std/waker
+
+type sse-encoder = {
+  upstream: dyn-source[u8],
+  event-name: string,
+  parts: list[span[u8]],
+}
+
+fn sse-events(upstream: dyn-source[u8], event-name: string): dyn-source[u8] {
+  let state: *mut sse-encoder = mem/new(.{
+    upstream,
+    event-name,
+    parts = list/empty[span[u8]](),
+  })
+  dyn-source/erase-async(state)
+}
+
+impl source[t = u8] for sse-encoder {
+  fn next(self: *mut sse-encoder): pull[u8] {
+    self.upstream.next() is {
+      :chunk group -> {
+        self.parts.clear()
+        self.parts.push("event: ".span-bytes())
+        self.parts.push(self.event-name.span-bytes())
+        self.parts.push("\ndata: ".span-bytes())
+        let newline: u8 = 10
+        for seg in group {
+          let line-start: size = 0
+          let i: size = 0
+          while i < seg.len() {
+            if seg.get(i) == newline {
+              if i > line-start { self.parts.push(seg.slice(line-start, i)) }
+              self.parts.push("\ndata: ".span-bytes())
+              line-start = i + 1
+            }
+            i = i + 1
+          }
+          if line-start < seg.len() { self.parts.push(seg.slice(line-start, seg.len())) }
+        }
+        self.parts.push("\n\n".span-bytes())
+        :chunk self.parts.as-span()
+      },
+      :pending -> :pending,
+      :done -> :done,
+      :fail message -> :fail message,
+    }
+  }
+}
+
+impl source-async for sse-encoder {
+  fn start(self: *mut sse-encoder, waker: waker) { self.upstream.start(waker) }
+  fn stop(self: *mut sse-encoder) { self.upstream.stop() }
+}
+
+fn sse-response(stream: dyn-source[u8], event-name: string): http-response {
+  .{
+    status = 200,
+    content-type = "text/event-stream",
+    extra-headers = ["Cache-Control: no-cache"],
+    body = :stream (stream || sse-events(event-name)),
+  }
+}

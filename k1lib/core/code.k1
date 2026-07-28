@@ -23,11 +23,11 @@ ns for code {
 
 // Bytes written via `writer` accumulate in `pending` until a chunk boundary
 // seals them into a sourceless chunk.
-type code-builder = { chunks: list[code-chunk], pending: list[u8] }
+type code-builder = { chunks: list[code-chunk], pending: list[u8], indent-level: size }
 
 ns for code-builder {
   fn new(): code-builder {
-    .{ chunks = list/with-capacity(8), pending = list/empty() }
+    .{ chunks = list/with-capacity(8), pending = list/empty(), indent-level = 0 }
   }
 
   fn seal(self: *mut code-builder) {
@@ -44,6 +44,50 @@ ns for code-builder {
   fn build(self: *mut code-builder): code {
     self.seal()
     .{ chunks = self.chunks }
+  }
+
+  fn indent(self: *mut code-builder) { self.indent-level = self.indent-level + 1 }
+  fn dedent(self: *mut code-builder) {
+    if self.indent-level == 0 crash("code-builder/dedent below zero")
+    self.indent-level = self.indent-level - 1
+  }
+  fn pad(self: *mut code-builder) { self.repeat("  ", self.indent-level) }
+
+  fn line(self: *mut code-builder, c: code) {
+    self.pad()
+    self.code(c)
+    self.write-char('\n')
+  }
+
+  fn block(self: *mut code-builder, header: code, body: some fn() -> {}) {
+    self.pad()
+    self.code(header)
+    self.write(" {\n")
+    self.indent()
+    body()
+    self.dedent()
+    self.pad()
+    self.write("}\n")
+  }
+
+  fn block-close(self: *mut code-builder, header: code, close: string, body: some fn() -> {}) {
+    self.pad()
+    self.code(header)
+    self.write(" {\n")
+    self.indent()
+    body()
+    self.dedent()
+    self.pad()
+    self.write(close)
+    self.write-char('\n')
+  }
+
+  fn sep[t, iter, i](self: *mut code-builder, items: i, separator: string, each: some fn t -> {})
+    where iter: iterator[item = t], i: iterable[item = t, i = iter] {
+    for x in items {
+      if it-index > 0 { self.write(separator) }
+      each(x)
+    }
   }
 }
 

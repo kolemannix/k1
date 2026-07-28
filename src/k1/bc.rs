@@ -63,6 +63,10 @@ pub const SRC_FP_BIT: u32 = 0x4000_0000;
 /// Frame header size in words: [caller_fp][return_pc][sret_addr]
 pub const FRAME_HEADER_WORDS: u32 = 3;
 
+/// Frame bases and sizes are aligned to this, allowing allocas up to the
+/// widest vector's natural alignment (512-bit)
+pub const FRAME_ALIGN: u32 = 64;
+
 /// Placeholder for a direct-call target whose callee is still being lowered
 /// (recursion cycle); patched via `pending_call_fixups` when the callee lands.
 pub const PENDING_PC: u32 = u32::MAX;
@@ -82,6 +86,7 @@ pub enum Opcode {
     CallIndirect,
     CallExtern,
     CallBuiltin,
+    CallLlvm,
     RetGet,
     RetStore,
     // Memory / data
@@ -153,14 +158,15 @@ impl Opcode {
             Opcode::Jump => 1,   // [pc]
             Opcode::JumpIf => 3, // [cond src][cons pc][alt pc]
             Opcode::Unreachable => 0,
-            Opcode::Ret => 1,          // [src]
-            Opcode::RetAgg => 2,       // [src][size]
+            Opcode::Ret => 1,    // [src]
+            Opcode::RetAgg => 2, // [src][size]
             // Call forms carry B = nargs additional arg-src operands beyond
             // the base count here (see operand_count_with)
-            Opcode::Call => 3,         // [target pc][fp_delta bytes][sret src] + args
+            Opcode::Call => 3, // [target pc][fp_delta bytes][sret src] + args
             Opcode::CallIndirect => 3, // [fn src][fp_delta][sret src] + args
             Opcode::CallExtern => 6, // [function_id][lib_name(0=none)][fn_name][ret_pt][fp_delta][nargs]
             Opcode::CallBuiltin => 3, // A = builtin tag; [ret_pt][fp_delta][nargs]
+            Opcode::CallLlvm => 4,   // [fn_name + 1][ret_pt][fp_delta][nargs]
             Opcode::RetGet => 1,     // [dst]
             Opcode::RetStore => 1,   // A = width in bits; [addr src]
             Opcode::Mov => 2,        // [dst][src]
@@ -193,8 +199,8 @@ impl Opcode {
             Opcode::BoolNegate | Opcode::BitNot => 2, // [dst][src]
             Opcode::Cast => 2,       // A = CastKind, B = from_bits << 8 | to_bits; [dst][src]
             Opcode::BakeStaticValue => 3, // [dst][type_id][src]
-            Opcode::AtomicLoad => 2,      // A = width in bits, B = ordering; [dst][addr src]
-            Opcode::AtomicStore => 2,     // A = width in bits, B = ordering; [addr src][val src]
+            Opcode::AtomicLoad => 2, // A = width in bits, B = ordering; [dst][addr src]
+            Opcode::AtomicStore => 2, // A = width in bits, B = ordering; [addr src][val src]
             Opcode::AtomicRmw => 3, // A = width in bits, B = op << 8 | ordering; [dst][addr src][operand src]
             // A = width in bits, B = success | failure << 4 | weak << 8;
             // [result src][addr src][expected src][desired src][ok byte offset]
@@ -216,6 +222,7 @@ impl Opcode {
             Opcode::CallIndirect => "call_indirect",
             Opcode::CallExtern => "call_extern",
             Opcode::CallBuiltin => "call_builtin",
+            Opcode::CallLlvm => "call_llvm",
             Opcode::RetGet => "ret_get",
             Opcode::RetStore => "ret_store",
             Opcode::Mov => "mov",

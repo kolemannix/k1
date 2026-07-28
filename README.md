@@ -66,7 +66,7 @@ from source, with the flags k1 needs to enable fully static linking of llvm.
 With the dependencies installed, `k1` and the language server may be built via:
 
 ```bash
-just build-k1r
+just build-r
 just lsprelease
 ```
 
@@ -97,20 +97,6 @@ k1 run <(echo 'fn main(): i32 { println("hello k1!"); 0 }')
 
 > You can just do things
 - Popular memes archive, 2024
-
-https://justforfunnoreally.dev/
-
-Some Heroes: Casey Muratori, Linus Torvalds, Andreas Kling, Jonathan Blow, Ken Thompson, Chris Lattner, Bjarne Stroustrup, [Rob Pike](https://docs.google.com/presentation/d/e/2PACX-1vSmIbSwh1_DXKEMU5YKgYpt5_b4yfOfpfEOKS5_cvtLdiHsX6zt-gNeisamRuCtDtCb2SbTafTI8V47/pub?start=false&loop=false&delayms=3000#slide=id.p)
-
-## Reflections
-I simply started because I was curious what LLVM was, and had a lot of ideas about how programming could be better (20,000 hours will do that to you), and
-I specifically wanted to understand performance from the inside. Why were my tools and programs so slow?
-Mainly I wanted to see if a compiler could be fast and also do nice things for you. There are some core decisions (functions must declare
-their return types) designed to protect the performance of the compiler. (I think they are good decisions for software engineering anyway)
-I had no expectation that I could do better, having never designed a language or made a compiler, but I just wanted to explore. So I just started studying and
-practicing using this project.
-
-More later I'm sure... everything evolves...
 
 ## Case Study: implementing bitfields
 

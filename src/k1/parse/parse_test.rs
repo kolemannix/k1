@@ -10,8 +10,12 @@ fn make_test_ast() -> ParsedProgram {
 }
 
 fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'ast> {
-    let source =
-        SourceFile::make(0, "unit_test".to_string().into(), "unit_test.k1".to_string(), input.to_string());
+    let source = SourceFile::make(
+        0,
+        "unit_test".to_string().into(),
+        "unit_test.k1".to_string(),
+        input.to_string(),
+    );
     let file_id = source.file_id;
     let module_id = ModuleId::from_u32(1).unwrap();
     let module_name = ast.idents.intern("unit_test");
@@ -526,4 +530,23 @@ fn consecutive_strings() -> ParseResult<()> {
     assert_eq!(span.start, 0);
     assert_eq!(span.len, 18);
     Ok(())
+}
+
+#[test]
+fn lex_error_does_not_poison_reused_token_buffer() {
+    let mut ast = make_test_ast();
+    let dir: std::rc::Rc<String> = "unit_test".to_string().into();
+    let bad = SourceFile::make(0, dir.clone(), "bad.k1".to_string(), "let x = \"unterminated\nfn f(): i32 { 0 }".to_string());
+    let good = SourceFile::make(1, dir, "good.k1".to_string(), "fn g(): i32 { 42 }".to_string());
+
+    let mut tokens = vec![];
+    assert!(lex_file_into_program(&mut ast, bad, &mut tokens).is_err());
+    assert!(!tokens.is_empty());
+
+    lex_file_into_program(&mut ast, good, &mut tokens).unwrap();
+    for t in &tokens {
+        if t.kind != TokenKind::Eof {
+            assert_eq!(ast.spans.get(t.span).file_id, 1);
+        }
+    }
 }

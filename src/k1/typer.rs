@@ -90,8 +90,14 @@ nz_u32_id!(TypedExprId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Linkage {
     Standard,
-    External { module_id: ModuleId, lib_name: Option<StringId>, fn_name: Option<StringId> },
+    External {
+        module_id: ModuleId,
+        lib_name: Option<StringId>,
+        fn_name: Option<StringId>,
+    },
     Intrinsic,
+    /// `intern("llvm.cttz.i64")`
+    LlvmIntrinsic(StringId),
 }
 
 impl Linkage {
@@ -1674,6 +1680,15 @@ pub struct TypedDeferStmt {
     pub span: SpanId,
 }
 
+/// How far up the scope tree a scope exit travels, for defer gathering:
+/// a `return` leaves every scope up to the function top, a `break` leaves
+/// every scope up to its enclosing loop.
+#[derive(Clone, Copy)]
+enum DeferExtent {
+    FunctionTop,
+    LoopScope(ScopeId),
+}
+
 static_assert_size!(TypedStmt, 20);
 #[derive(Clone)]
 pub enum TypedStmt {
@@ -2118,6 +2133,51 @@ pub enum BuiltinIr {
     AtomicRmw(AtomicRmwOp),
     AtomicCmpxchg { weak: bool },
     AtomicFence,
+    VectorOp(VecOpKind),
+}
+
+/// Signedness/float class of lane ops is resolved at IR lowering from the element type
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum VecOpKind {
+    Splat,
+    Load,
+    Store,
+    GetLane,
+    WithLane,
+    Add,
+    Sub,
+    Mul,
+    BitNot,
+    BitAnd,
+    BitOr,
+    Xor,
+    ShiftLeft,
+    ShiftRight,
+    EqLanes,
+    ToMask,
+}
+
+impl VecOpKind {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            VecOpKind::Splat => "vector_splat",
+            VecOpKind::Load => "vector_load",
+            VecOpKind::Store => "vector_store",
+            VecOpKind::GetLane => "vector_get_lane",
+            VecOpKind::WithLane => "vector_with_lane",
+            VecOpKind::Add => "vector_add",
+            VecOpKind::Sub => "vector_sub",
+            VecOpKind::Mul => "vector_mul",
+            VecOpKind::BitNot => "vector_bit_not",
+            VecOpKind::BitAnd => "vector_bit_and",
+            VecOpKind::BitOr => "vector_bit_or",
+            VecOpKind::Xor => "vector_xor",
+            VecOpKind::ShiftLeft => "vector_shift_left",
+            VecOpKind::ShiftRight => "vector_shift_right",
+            VecOpKind::EqLanes => "vector_eq_lanes",
+            VecOpKind::ToMask => "vector_to_mask",
+        }
+    }
 }
 
 /// Signedness of Min/Max is resolved at IR lowering from the element type
@@ -2150,6 +2210,7 @@ impl BuiltinIr {
             BuiltinIr::AtomicCmpxchg { weak: false } => "atomic_cmpxchg",
             BuiltinIr::AtomicCmpxchg { weak: true } => "atomic_cmpxchg_weak",
             BuiltinIr::AtomicFence => "atomic_fence",
+            BuiltinIr::VectorOp(op) => op.kind_name(),
         }
     }
 }
@@ -2178,6 +2239,9 @@ pub enum Builtin {
     TyperPhysicalFunction(BuiltinTyperFunction),
     /// The Backend will do this; current backends include: [llvm, vm]
     Backend(BackendBuiltin),
+    /// An LLVM intrinsic named verbatim by `intern("llvm.*")`
+    /// llvm calls it directly, the VM emulates it by name
+    LlvmIntrinsic(StringId),
 }
 
 impl Builtin {
@@ -2194,6 +2258,7 @@ impl Builtin {
             Builtin::TyperPhysicalFunction(f) => f.kind_name(),
             Builtin::Backend(backend_builtin) => backend_builtin.kind_name(),
             Builtin::Ir(kind) => kind.kind_name(),
+            Builtin::LlvmIntrinsic(_) => "llvm_intrinsic",
         }
     }
 }
@@ -3176,7 +3241,6 @@ impl TypedProgram {
                 file_id,
             );
             parser.parse_file_into_module();
-            token_buffer.clear();
         }
 
         self.buffers.lexer_tokens = token_buffer;
@@ -4526,6 +4590,10 @@ impl TypedProgram {
                     } else {
                         if let Some(opaque_type_id) = self.handle_opaque_tyapp(&ty_app)? {
                             Ok(opaque_type_id)
+                        } else if let Some(vector_type_id) =
+                            self.handle_vector_tyapp(&ty_app, scope_id, context)?
+                        {
+                            Ok(vector_type_id)
                         } else {
                             failf!(
                                 ty_app.name.name_span,
@@ -4800,15 +4868,11 @@ impl TypedProgram {
         if !self.type_defn_context.recursive_mentions.is_empty() {
             let completed = std::mem::take(&mut self.type_defn_context.completed);
             // Outermost defn first; one cycle report is enough for the whole cluster
+            let mut seen: List<TypeId, MemTmp> = self.tmp.new_list(16);
             for (type_id, span) in completed.iter().rev() {
-                let mut seen =
-                    self.tmp.new_list(self.type_defn_context.recursive_mentions.len() as u32);
-                if let Some(cycled_type_id) = self.check_type_finite_rec(
-                    &self.type_defn_context.recursive_mentions,
-                    *type_id,
-                    false,
-                    &mut seen,
-                ) {
+                debug_assert!(seen.is_empty());
+                if let Some(cycled_type_id) = self.check_type_finite_rec(*type_id, false, &mut seen)
+                {
                     self.report(errf!(
                         *span,
                         "This type has an infinite size due to a cycle; {} was mentioned inside {} with no indirection",
@@ -4914,6 +4978,116 @@ impl TypedProgram {
 
         let opaque_type = self.types.add(Type::Opaque(OpaqueType { size, align }), None, None);
         Ok(Some(opaque_type))
+    }
+
+    fn handle_vector_tyapp(
+        &mut self,
+        ty_app: &parse::TypeApplication,
+        scope_id: ScopeId,
+        context: EvalTypeExprContext,
+    ) -> K1Result<Option<TypeId>> {
+        if ty_app.name.name != self.ast.idents.b.vector {
+            return Ok(None);
+        }
+        if !ty_app.name.path.is_empty() {
+            return failf!(
+                ty_app.span,
+                "Expected 'vector' with no namespace, got '{}'",
+                self.qident_to_string(&ty_app.name)
+            );
+        }
+        if ty_app.args.len() != 2 {
+            return failf!(
+                ty_app.span,
+                "Expected 2 type parameters for vector, got {}",
+                ty_app.args.len()
+            );
+        }
+        let Some(element_expr) = self.ast.mem.get_nth(ty_app.args, 0).type_expr else {
+            return failf!(ty_app.span, "Wildcard _ type not accepted here");
+        };
+        let Some(size_expr) = self.ast.mem.get_nth(ty_app.args, 1).type_expr else {
+            return failf!(ty_app.span, "Wildcard _ type not accepted here");
+        };
+        let element_type = self.eval_type_expr_ext(element_expr, scope_id, context.descended())?;
+
+        let size_type_id = match self.ast.type_exprs.get(size_expr).clone() {
+            ParsedTypeExpr::StaticLiteral(parsed_literal) => {
+                let (static_value_id, inner_type_id) = self.literal_to_static_value_and_type(
+                    &parsed_literal,
+                    scope_id,
+                    Some(I64_TYPE_ID),
+                )?;
+                let value_type = StaticValueType {
+                    family_type_id: inner_type_id,
+                    value_id: Some(static_value_id),
+                };
+                self.types.add_anon(Type::StaticValue(value_type))
+            }
+            _ => self.eval_type_expr_ext(size_expr, scope_id, context.descended())?,
+        };
+
+        let Some(static_type) = self.types.get_static_type_of_type(size_type_id) else {
+            return failf!(ty_app.span, "Vector lane count must be a static type");
+        };
+        if static_type.family_type_id != I64_TYPE_ID {
+            return failf!(
+                ty_app.span,
+                "Vector lane count must be an int; got {}",
+                self.type_id_to_string(static_type.family_type_id)
+            );
+        }
+
+        self.validate_vector_parts(element_type, size_type_id, ty_app.span)?;
+
+        let vector_type = Type::Vector(VectorType { element_type, size_type: size_type_id });
+        Ok(Some(self.types.add_anon(vector_type)))
+    }
+
+    /// Checks whatever is concrete; abstract element/lane-count parts are checked
+    /// again at instantiation sites (IR lowering re-validates for intrinsics)
+    fn validate_vector_parts(
+        &self,
+        element_type: TypeId,
+        size_type_id: TypeId,
+        span: SpanId,
+    ) -> K1Result<()> {
+        let element_size = match self.types.get(element_type) {
+            Type::Integer(it) => Some(it.width().bits() / 8),
+            Type::Char => Some(1),
+            Type::Float(ft) => Some(ft.size().bits() / 8),
+            Type::TypeParameter(_) | Type::InferenceHole(_) | Type::FunctionTypeParameter(_) => {
+                None
+            }
+            _ => {
+                return failf!(
+                    span,
+                    "Vector elements must be an int, char, or float type; got {}",
+                    self.type_id_to_string(element_type)
+                );
+            }
+        };
+        let Some(count) = self.types.get_type_as_i64(&self.static_values, size_type_id) else {
+            return Ok(());
+        };
+        if count < 2 || count > 64 || !(count as u64).is_power_of_two() {
+            return failf!(
+                span,
+                "Vector lane count must be a power of two between 2 and 64; got {}",
+                count
+            );
+        }
+        if let Some(element_size) = element_size {
+            let total = element_size as i64 * count;
+            if total > 64 {
+                return failf!(
+                    span,
+                    "Vector total size must not exceed 64 bytes (512 bits); got {}",
+                    total
+                );
+            }
+        }
+        Ok(())
     }
 
     fn substitute_in_type(
@@ -5243,6 +5417,20 @@ impl TypedProgram {
                         size_type: new_size_type,
                     });
                     self.types.add_anon(new_array_type)
+                }
+            }
+            Type::Vector(vec) => {
+                let vec = *vec;
+                let new_element_type =
+                    self.substitute_in_type(vec.element_type, substitution_pairs);
+                let new_size_type = self.substitute_in_type(vec.size_type, substitution_pairs);
+                if new_element_type == vec.element_type && new_size_type == vec.size_type {
+                    type_id
+                } else {
+                    self.types.add_anon(Type::Vector(VectorType {
+                        element_type: new_element_type,
+                        size_type: new_size_type,
+                    }))
                 }
             }
         };
@@ -6240,6 +6428,22 @@ impl TypedProgram {
                     Ok(())
                 }
             }
+            (Type::Vector(expected_vector), Type::Vector(actual_vector)) => {
+                let elem_check = self.check_types(
+                    expected_vector.element_type,
+                    actual_vector.element_type,
+                    scope_id,
+                );
+                let size_check =
+                    self.check_types(expected_vector.size_type, actual_vector.size_type, scope_id);
+                if let Err(msg) = elem_check {
+                    Err(k1_format_user!(self, "Vectors have different element types: {msg}"))
+                } else if let Err(msg) = size_check {
+                    Err(k1_format_user!(self, "Vectors have different lane counts: {msg}"))
+                } else {
+                    Ok(())
+                }
+            }
             (_expected, Type::Never) => Ok(()),
             (_exp, _act) => Err(k1_format_user!(self, "Expected {} but got {}", expected, actual,)),
         }
@@ -6588,6 +6792,7 @@ impl TypedProgram {
         let parsed_expr = typed_global.parsed_expr;
         let scope_id = typed_global.parent_scope;
         let declared_type = typed_global.type_id;
+        let variable_id = typed_global.variable_id;
         let value_expr_id = if is_external {
             match parsed_expr {
                 None => {
@@ -6640,20 +6845,24 @@ impl TypedProgram {
                 }
             }
             Some(static_type) => {
-                let Some(expected_value_id) = static_type.value_id else {
-                    return failf!(
-                        global_span,
-                        "A global can't have an abstract static type: {}",
-                        self.type_id_to_string(declared_type)
-                    );
-                };
-                if expected_value_id != static_value_id {
-                    return failf!(
-                        global_span,
-                        "Wrong static value: expected {} but got {}",
-                        self.static_value_to_string(expected_value_id),
-                        self.static_value_to_string(static_value_id)
-                    );
+                // declared static, with a specific value, must match
+                if let Some(expected_value_id) = static_type.value_id {
+                    if expected_value_id != static_value_id {
+                        return failf!(
+                            global_span,
+                            "Wrong static value: expected {} but got {}",
+                            self.static_value_to_string(expected_value_id),
+                            self.static_value_to_string(static_value_id)
+                        );
+                    }
+                } else {
+                    // declared static, without a value, we must
+                    // update the type of the global as well as the type of its tracking variable
+                    let static_type_id_with_value = self
+                        .types
+                        .add_value_type(static_type.family_type_id, Some(static_value_id));
+                    self.globals.get_mut(global_id).type_id = static_type_id_with_value;
+                    self.variables.get_mut(variable_id).type_id = static_type_id_with_value
                 }
             }
         }
@@ -6687,6 +6896,10 @@ impl TypedProgram {
                 let static_enum =
                     StaticValue::Enum(expected_type_id, TypedIntValue::U8(os_tag_value));
                 return Ok(self.static_values.add(static_enum));
+            }
+            "simd-bytes" => {
+                let width = self.config.simd_bytes as i64;
+                return Ok(self.static_values.add(StaticValue::Int(TypedIntValue::I64(width))));
             }
             s => return failf!(span, "Unknown builtin name: {s}"),
         };
@@ -7541,6 +7754,12 @@ impl TypedProgram {
         // See if that is even what is needed, which is in parameter_constraints.
         let solutions_as_pairs: SV4<TypeSubstitutionPair> =
             self.zip_named_types_to_subst_pairs(blanket_impl_type_params_handle, solutions);
+        let substituted_self =
+            self.substitute_in_type(blanket_impl_self_type_id, &solutions_as_pairs);
+        if let Err(msg) = self.check_types(substituted_self, self_type_id, root_scope_id) {
+            debug!("blanket impl self type does not accept candidate: {msg}");
+            return None;
+        }
         for (blanket_arg, required_arg) in
             self.mem.getn(blanket_arguments).iter().zip(target_ability_args)
         {
@@ -7691,12 +7910,8 @@ impl TypedProgram {
             let substituted_type = self.substitute_in_type(blanket_arg.type_id, &pairs);
             let nt = NameAndType { name: blanket_arg.name, type_id: substituted_type };
             substituted_ability_args.push(nt);
-            if !self.scopes.add_type(new_impl_scope, blanket_arg.name, substituted_type)
-                && self.scopes.find_type_local(new_impl_scope, blanket_arg.name)
-                    != Some(substituted_type)
-            {
-                panic!("blanket impl scope unexpectedly contained type name")
-            };
+            // Blanket param bindings added above shadow ability param names
+            let _ = self.scopes.add_type(new_impl_scope, blanket_arg.name, substituted_type);
             let _ = self.scopes.add_type_substitution(
                 new_impl_scope,
                 base_param.type_variable_id,
@@ -7724,12 +7939,7 @@ impl TypedProgram {
             let substituted_type = self.substitute_in_type(blanket_impl_arg.type_id, &pairs);
             let nt = NameAndType { name: blanket_impl_arg.name, type_id: substituted_type };
             substituted_impl_arguments.push(nt);
-            if !self.scopes.add_type(new_impl_scope, blanket_impl_arg.name, substituted_type)
-                && self.scopes.find_type_local(new_impl_scope, blanket_impl_arg.name)
-                    != Some(substituted_type)
-            {
-                panic!("blanket impl scope unexpectedly contained type name")
-            };
+            let _ = self.scopes.add_type(new_impl_scope, blanket_impl_arg.name, substituted_type);
             let _ = self.scopes.add_type_substitution(
                 new_impl_scope,
                 impl_param.type_variable_id,
@@ -8478,11 +8688,20 @@ impl TypedProgram {
             span,
         });
         let make_error_call = self.exprs.add(TypedExpr::Call { call_id }, block_return_type, span);
-        let return_error_expr = self.exprs.add(
-            TypedExpr::Return(TypedReturn { value: make_error_call, returned_variable: None }),
-            NEVER_TYPE_ID,
+        let defers = self.gather_defers(result_block.scope_id, span, DeferExtent::FunctionTop);
+        let return_error_expr = self.synth_defers_then_exit(
+            defers,
+            make_error_call,
+            result_block_ctx,
             span,
-        );
+            |k1, value| {
+                k1.exprs.add(
+                    TypedExpr::Return(TypedReturn { value, returned_variable: None }),
+                    NEVER_TYPE_ID,
+                    span,
+                )
+            },
+        )?;
         let if_expr = self.synth_if_else(
             value_success_type,
             is_ok_call,
@@ -10527,7 +10746,12 @@ impl TypedProgram {
                         condition: MatchingCondition { instrs: self.mem.list_to_handle(instrs) },
                         consequent_expr,
                     };
-                    typed_arms.push(match_arm);
+                    // An arm over an uninhabited variant can never match: it is
+                    // typechecked but not lowered, so codegen never sees its
+                    // impossible bindings
+                    if !self.pattern_matches_uninhabited(pattern) {
+                        typed_arms.push(match_arm);
+                    }
                 }
             }
         }
@@ -10655,6 +10879,37 @@ impl TypedProgram {
         }
     }
 
+    /// A pattern over an uninhabited variant (e.g. `:err e` on result[t, never])
+    /// kills no ctors, but is not useless: generic code must write the arm
+    fn pattern_matches_uninhabited(&self, pattern_id: TypedPatternId) -> bool {
+        match self.patterns.get(pattern_id) {
+            TypedPattern::Sum(sp) => {
+                let payload_is_never = match self.types.get(sp.sum_type_id) {
+                    Type::Sum(sum_type) => self
+                        .types
+                        .mem
+                        .getn(sum_type.variants)
+                        .get(sp.variant_index as usize)
+                        .and_then(|v| v.payload)
+                        .is_some_and(|p| p == NEVER_TYPE_ID),
+                    _ => false,
+                };
+                payload_is_never
+                    || sp.payload.is_some_and(|p| self.pattern_matches_uninhabited(p))
+            }
+            TypedPattern::Struct(stp) => self
+                .patterns
+                .mem
+                .getn(stp.fields)
+                .iter()
+                .any(|f| self.pattern_matches_uninhabited(f.pattern)),
+            TypedPattern::Reference(refer) => {
+                self.pattern_matches_uninhabited(refer.inner_pattern)
+            }
+            _ => false,
+        }
+    }
+
     fn check_pattern_exhaustiveness(
         &mut self,
         subject_type: TypeId,
@@ -10718,7 +10973,9 @@ impl TypedProgram {
             .zip(kill_counts.as_slice())
             .find(|(_, kill_count)| **kill_count == 0)
         {
-            if !self.patterns.pattern_never_useless(*useless_pattern_id) {
+            if !self.patterns.pattern_never_useless(*useless_pattern_id)
+                && !self.pattern_matches_uninhabited(*useless_pattern_id)
+            {
                 return failf!(
                     self.patterns.get(*useless_pattern_id).span_id(),
                     "This pattern handled no cases: {}",
@@ -12403,50 +12660,84 @@ impl TypedProgram {
         if return_value_type == NEVER_TYPE_ID {
             return Ok(return_value);
         }
-        let mut gathered_defers: SV4<ParsedExprId> = smallvec![];
-        let mut search_scope_id = ctx.scope_id;
+        let defers = self.gather_defers(ctx.scope_id, span, DeferExtent::FunctionTop);
+        self.synth_defers_then_exit(defers, return_value, ctx, span, |k1, value| {
+            k1.exprs.add_return(value, returned_variable, span)
+        })
+    }
+
+    /// Collects the pending `defer` expressions of every scope exited when control leaves
+    /// `from_scope` for the given extent, in execution order: innermost scope first,
+    /// last-declared first within a scope.
+    fn gather_defers(
+        &self,
+        from_scope: ScopeId,
+        span: SpanId,
+        extent: DeferExtent,
+    ) -> SV4<ParsedExprId> {
+        let mut gathered: SV4<ParsedExprId> = smallvec![];
+        let mut scope_id = from_scope;
         loop {
-            if let Some(defers) = self.scopes.block_defers.get(&search_scope_id) {
-                gathered_defers.extend(defers.deferred_exprs.iter().copied());
+            if let Some(defers) = self.scopes.block_defers.get(&scope_id) {
+                gathered.extend(defers.deferred_exprs.iter().rev().copied());
             }
-            let current_scope = self.scopes.get_scope(search_scope_id);
-            if current_scope.scope_type.is_top_of_function() {
-                break;
-            } else {
-                if let Some(parent_scope_id) = current_scope.parent {
-                    search_scope_id = parent_scope_id;
-                } else {
-                    self.ice_span(
-                        span,
-                        "Recursed all the way up without finding a Function or Lambda scope",
-                    )
-                }
+            let scope = self.scopes.get_scope(scope_id);
+            let at_boundary = match extent {
+                DeferExtent::FunctionTop => scope.scope_type.is_top_of_function(),
+                DeferExtent::LoopScope(loop_scope) => scope_id == loop_scope,
+            };
+            if at_boundary {
+                return gathered;
+            }
+            let overshot_function = matches!(extent, DeferExtent::LoopScope(_))
+                && scope.scope_type.is_top_of_function();
+            match scope.parent {
+                Some(parent) if !overshot_function => scope_id = parent,
+                _ => self.ice_span(span, "Defer gathering walked past its boundary scope"),
             }
         }
-        let return_expr = self.exprs.add_return(return_value, returned_variable, span);
-        if gathered_defers.is_empty() {
-            Ok(return_expr)
+    }
+
+    /// At a divergent scope exit (return or break) with pending `defers`: computes `value`,
+    /// runs the defers, then hands the computed value to `make_exit` so the exit carries it
+    /// out past the deferred code. Returns `make_exit(value)` alone when nothing is deferred.
+    fn synth_defers_then_exit(
+        &mut self,
+        defers: SV4<ParsedExprId>,
+        value: TypedExprId,
+        ctx: EvalExprContext,
+        span: SpanId,
+        make_exit: impl FnOnce(&mut Self, TypedExprId) -> TypedExprId,
+    ) -> K1Result<TypedExprId> {
+        if defers.is_empty() {
+            return Ok(make_exit(self, value));
+        }
+        let mut block = self.new_block_builder(
+            ctx.scope_id,
+            ScopeType::LexicalBlock,
+            span,
+            defers.len() as u32 + 2,
+        );
+        let value = if matches!(self.exprs.get(value), TypedExpr::Variable(_)) {
+            value
         } else {
-            let mut block = self.new_block_builder(
-                ctx.scope_id,
-                ScopeType::LexicalBlock,
-                span,
-                gathered_defers.len() as u32 + 1,
+            let bound = self.synth_variable_defn_simple(
+                self.ast.idents.b.defer_value,
+                value,
+                block.scope_id,
             );
-            // No need to reverse; they are already in fifo order due to the way
-            // we traverse upwards when gathering them
-            for deferred_parsed_expr in gathered_defers.into_iter() {
-                let deferred_expr =
-                    self.eval_expr(deferred_parsed_expr, ctx.with_no_expected_type())?;
-                let deferred_expr_type_id = self.exprs.get_type(deferred_expr);
-                self.push_block_stmt(
-                    &mut block,
-                    TypedStmt::Expr(deferred_expr, deferred_expr_type_id),
-                );
-            }
-            self.push_block_stmt(&mut block, TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
-            Ok(self.exprs.add_block(&mut self.mem, block, NEVER_TYPE_ID))
+            self.push_block_stmt_id(&mut block, bound.defn_stmt);
+            bound.variable_expr
+        };
+        for deferred_parsed_expr in defers.into_iter() {
+            let deferred_expr = self
+                .eval_expr(deferred_parsed_expr, ctx.with_no_expected_type().with_is_defer(true))?;
+            let deferred_expr_type_id = self.exprs.get_type(deferred_expr);
+            self.push_block_stmt(&mut block, TypedStmt::Expr(deferred_expr, deferred_expr_type_id));
         }
+        let exit = make_exit(self, value);
+        self.push_block_stmt(&mut block, TypedStmt::Expr(exit, NEVER_TYPE_ID));
+        Ok(self.exprs.add_block(&mut self.mem, block, NEVER_TYPE_ID))
     }
 
     ////////////////////////////////////////
@@ -12573,15 +12864,29 @@ impl TypedProgram {
                     )
                 }
 
-                Ok(Some(self.exprs.add(
-                    TypedExpr::Break(TypedBreak {
-                        value: break_value,
-                        loop_scope: enclosing_loop_scope_id,
-                        loop_type,
-                    }),
-                    NEVER_TYPE_ID,
+                let defers = self.gather_defers(
+                    calling_scope,
                     call_span,
-                )))
+                    DeferExtent::LoopScope(enclosing_loop_scope_id),
+                );
+                let break_expr = self.synth_defers_then_exit(
+                    defers,
+                    break_value,
+                    ctx,
+                    call_span,
+                    |k1, value| {
+                        k1.exprs.add(
+                            TypedExpr::Break(TypedBreak {
+                                value,
+                                loop_scope: enclosing_loop_scope_id,
+                                loop_type,
+                            }),
+                            NEVER_TYPE_ID,
+                            call_span,
+                        )
+                    },
+                )?;
+                Ok(Some(break_expr))
             } else if n == self.ast.idents.b.continue_ {
                 if ctx.flags.contains(EvalExprFlags::Defer) {
                     return failf!(fn_call.span, "continue cannot be used inside `defer` blocks");
@@ -12857,6 +13162,17 @@ impl TypedProgram {
                 self.handle_array_method_call(base_expr, base_for_method, call, ctx)?
             {
                 return Ok(resolution);
+            }
+        }
+
+        if let Type::Vector(_) = self.types.get(base_for_method) {
+            if let Some(method_id) =
+                self.scopes.find_function_local(self.scopes.vector_scope_id, call.name.name)
+            {
+                return Ok(CallResolution::MethodCall {
+                    callee: Callee::make_static(method_id),
+                    receiver: base_expr,
+                });
             }
         }
 
@@ -14924,6 +15240,12 @@ impl TypedProgram {
             return Err(err.clone());
         }
 
+        // Intrinsics from generic impls (e.g. `impl add for vector[t, n]`) have no
+        // body to specialize; calls resolve through the copied builtin_type
+        if parent_function.linkage == Linkage::Intrinsic && parent_function.body_block.is_none() {
+            return Ok(());
+        }
+
         // Approach: Synthesize the implementation for this builtin
         if let Some(Builtin::TyperPhysicalFunction(kind @ BuiltinTyperFunction::StructPrintTo)) =
             parent_function.builtin_type
@@ -15447,99 +15769,113 @@ impl TypedProgram {
                 }
             }
 
-            // If this statement early returns, we need to insert deferred code.
-            let is_return =
-                if let TypedStmt::Expr(id, _) = stmt { self.expr_is_return(*id) } else { false };
-
             let stmt_span = self.get_stmt_span(stmt_id);
             last_expr_type = self.get_stmt_type(stmt_id);
             last_stmt_is_divergent = last_expr_type == NEVER_TYPE_ID;
 
-            if !is_last && !last_stmt_is_divergent {
-                let expr_type = match self.stmts.get(stmt_id) {
-                    TypedStmt::Expr(_, expr_type) => Some(*expr_type),
-                    _ => None,
-                };
-                if let Some(expr_type) = expr_type {
-                    let physically_empty = match self.get_physical_type(expr_type) {
-                        PhysicalTypeResult::Yes(pt) => pt.is_empty(),
-                        _ => true,
+            if !is_last {
+                if !last_stmt_is_divergent {
+                    let expr_type = match self.stmts.get(stmt_id) {
+                        TypedStmt::Expr(_, expr_type) => Some(*expr_type),
+                        _ => None,
                     };
-                    if !physically_empty {
-                        self.report(warnf!(
-                            stmt_span,
-                            "Discarded expression result of type {}",
-                            self.type_id_to_string(expr_type)
-                        ));
+                    if let Some(expr_type) = expr_type {
+                        let physically_empty = match self.get_physical_type(expr_type) {
+                            PhysicalTypeResult::Yes(pt) => pt.is_empty(),
+                            _ => true,
+                        };
+                        if !physically_empty {
+                            self.report(warnf!(
+                                stmt_span,
+                                "Discarded expression result of type {}",
+                                self.type_id_to_string(expr_type)
+                            ));
+                        }
                     }
                 }
+                stmts.push(stmt_id);
+                continue;
             }
 
+            // Falling off the end of the block exits its scope, so the block's pending defers
+            // run now after the final value is computed, which we ensure by binding a
+            // non-trivial final expression and yielding the binding. We typecheck deferred
+            // exprs NOW, as if the deferred code were textually pasted here. A divergent final
+            // statement instead exits through return/break, which emit defers for every scope
+            // they leave themselves.
+            let deferred_exprs = if last_stmt_is_divergent {
+                smallvec![]
+            } else {
+                self.scopes
+                    .block_defers
+                    .get(&block_scope)
+                    .map(|d| d.deferred_exprs.clone())
+                    .unwrap_or_default()
+            };
+
+            let final_value = match self.stmts.get(stmt_id) {
+                TypedStmt::Expr(expr, _) if !last_stmt_is_divergent => Some(*expr),
+                _ => None,
+            };
+            let yielded = match final_value {
+                None => {
+                    stmts.push(stmt_id);
+                    None
+                }
+                Some(final_expr) => {
+                    if deferred_exprs.is_empty() {
+                        if needs_terminator {
+                            Some(final_expr)
+                        } else {
+                            stmts.push(stmt_id);
+                            None
+                        }
+                    } else if matches!(self.exprs.get(final_expr), TypedExpr::Variable(_)) {
+                        Some(final_expr)
+                    } else {
+                        let bound = self.synth_variable_defn_simple(
+                            self.ast.idents.b.defer_value,
+                            final_expr,
+                            block_scope,
+                        );
+                        stmts.push_grow(&mut self.mem, bound.defn_stmt);
+                        Some(bound.variable_expr)
+                    }
+                }
+            };
+            for deferred_parsed_expr in deferred_exprs.iter().rev() {
+                let deferred_code = self.eval_expr(
+                    *deferred_parsed_expr,
+                    ctx.with_no_expected_type().with_is_defer(true),
+                )?;
+                let defer_type = self.exprs.get_type(deferred_code);
+                let defer_stmt_id = self.stmts.add(TypedStmt::Expr(deferred_code, defer_type));
+                stmts.push_grow(&mut self.mem, defer_stmt_id);
+            }
             // Ensure termination because this is a 'real' control flow block
             // Not just a lexical block the user made. For example, a function body.
-            if is_last && needs_terminator {
-                if last_stmt_is_divergent {
-                    // No action needed; terminator exists
-                    stmts.push(stmt_id);
-                } else {
-                    match self.stmts.get(stmt_id) {
-                        TypedStmt::Expr(expr, _expr_type_id) => {
-                            // Last block expression, and this block needs a termiantor: so return this expr
-                            let expr = *expr;
-                            let returned_variable =
-                                self.check_returned_value_expr(expr, block_scope)?;
-                            let expr_span = self.exprs.get_span(expr);
-                            let return_expr =
-                                self.exprs.add_return(expr, returned_variable, expr_span);
-                            let return_stmt =
-                                self.stmts.add(TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
-                            stmts.push(return_stmt);
-                        }
-                        TypedStmt::Assignment(_)
-                        | TypedStmt::Let(_)
-                        | TypedStmt::Require(_)
-                        | TypedStmt::Defer(_) => {
-                            // Return an empty
-                            let empty = self.synth_empty_struct(stmt_span);
-                            let return_empty_expr = self.exprs.add_return(empty, None, stmt_span);
-                            let return_empty = TypedStmt::Expr(return_empty_expr, NEVER_TYPE_ID);
-                            let return_empty_id = self.stmts.add(return_empty);
-                            stmts.push(stmt_id);
-                            stmts.push(return_empty_id);
-                        }
-                    };
+            match yielded {
+                Some(yielded_expr) if needs_terminator => {
+                    let returned_variable =
+                        self.check_returned_value_expr(yielded_expr, block_scope)?;
+                    let expr_span = self.exprs.get_span(yielded_expr);
+                    let return_expr =
+                        self.exprs.add_return(yielded_expr, returned_variable, expr_span);
+                    let return_stmt = self.stmts.add(TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
+                    stmts.push_grow(&mut self.mem, return_stmt);
                 }
-            } else {
-                stmts.push(stmt_id);
-            }
-
-            // Generate deferred expressions. We typecheck them NOW, meaning
-            // its as if the deferred code were textually pasted to the end of the function.
-            // There are more robust ways to handle this; namely, allow a closure like Go, where
-            // the user can decide exactly what to capture at defer-time and what to evaluate at
-            // block close time
-            // eval_return(...) handles deferred expressions itself
-
-            // Unlike eval_return(), this needs only be concerned with closing out the current block scope, since its not an early return
-            if is_last && !is_return {
-                let terminating = self.get_stmt_type(*stmts.last().unwrap()) == NEVER_TYPE_ID;
-                if let Some(this_scope_defers) = self.scopes.block_defers.get(&block_scope) {
-                    let deferred_exprs = this_scope_defers.deferred_exprs.clone();
-                    for deferred_parsed_expr in deferred_exprs.iter().rev() {
-                        let deferred_code = self.eval_expr(
-                            *deferred_parsed_expr,
-                            ctx.with_no_expected_type().with_is_defer(true),
-                        )?;
-                        let defer_type = self.exprs.get_type(deferred_code);
-                        let defer_stmt_id =
-                            self.stmts.add(TypedStmt::Expr(deferred_code, defer_type));
-                        if terminating {
-                            stmts.insert_grow(&mut self.mem, stmts.len() - 1, defer_stmt_id);
-                        } else {
-                            stmts.push_grow(&mut self.mem, defer_stmt_id)
-                        }
-                    }
-                };
+                Some(yielded_expr) => {
+                    let yield_stmt = self.stmts.add(TypedStmt::Expr(yielded_expr, last_expr_type));
+                    stmts.push_grow(&mut self.mem, yield_stmt);
+                }
+                None if needs_terminator && !last_stmt_is_divergent => {
+                    let empty = self.synth_empty_struct(stmt_span);
+                    let return_empty_expr = self.exprs.add_return(empty, None, stmt_span);
+                    let return_empty =
+                        self.stmts.add(TypedStmt::Expr(return_empty_expr, NEVER_TYPE_ID));
+                    stmts.push_grow(&mut self.mem, return_empty);
+                }
+                None => {}
             }
         }
 
@@ -15588,24 +15924,6 @@ impl TypedProgram {
             Ok(Some(returned_variable_id))
         } else {
             Ok(None)
-        }
-    }
-
-    fn expr_is_return(&self, mut expr_id: TypedExprId) -> bool {
-        loop {
-            match self.exprs.get(expr_id) {
-                TypedExpr::Return(_) => return true,
-                TypedExpr::Block(b) => {
-                    if let Some(s) = self.mem.get_last_opt(b.statements) {
-                        if let TypedStmt::Expr(e2, _) = self.stmts.get(*s) {
-                            expr_id = *e2;
-                            continue;
-                        }
-                    }
-                    return false;
-                }
-                _ => return false,
-            }
         }
     }
 
@@ -15701,6 +16019,18 @@ impl TypedProgram {
                         mk_bitwise!(BitwiseBinopKind::UnsignedShiftRight)
                     }
                 }
+                (ABILITY_ID_BITWISE, bitwise_fn) if matches!(t, Some(Type::Vector(_))) => {
+                    let op = match bitwise_fn {
+                        "bit-not" => Some(VecOpKind::BitNot),
+                        "bit-and" => Some(VecOpKind::BitAnd),
+                        "bit-or" => Some(VecOpKind::BitOr),
+                        "xor" => Some(VecOpKind::Xor),
+                        "shift-left" => Some(VecOpKind::ShiftLeft),
+                        "shift-right" => Some(VecOpKind::ShiftRight),
+                        _ => None,
+                    };
+                    op.map(|op| Builtin::Ir(BuiltinIr::VectorOp(op)))
+                }
                 (ABILITY_ID_ADD, "add") => match t {
                     Some(Type::Integer(i)) => {
                         // Even though signedness is irrelevant here, we still set it properly
@@ -15715,6 +16045,7 @@ impl TypedProgram {
                     Some(Type::Float(_)) => {
                         mk_arith!(ArithOpKind::float(Op::Add))
                     }
+                    Some(Type::Vector(_)) => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Add))),
                     _ => None,
                 },
                 (ABILITY_ID_SUB, "sub") => match t {
@@ -15728,6 +16059,7 @@ impl TypedProgram {
                     Some(Type::Float(_)) => {
                         mk_arith!(ArithOpKind::float(Op::Sub))
                     }
+                    Some(Type::Vector(_)) => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Sub))),
                     _ => None,
                 },
                 (ABILITY_ID_MUL, "mul") => match t {
@@ -15741,6 +16073,7 @@ impl TypedProgram {
                     Some(Type::Float(_)) => {
                         mk_arith!(ArithOpKind::float(Op::Mul))
                     }
+                    Some(Type::Vector(_)) => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Mul))),
                     _ => None,
                 },
                 (ABILITY_ID_DIV, "div") => match t {
@@ -15832,6 +16165,16 @@ impl TypedProgram {
                 Some("char") => None,
                 Some("ptr") => match fn_name_str {
                     "ref-at-index" => Some(Builtin::Ir(BuiltinIr::PointerIndex)),
+                    _ => None,
+                },
+                Some("vector") => match fn_name_str {
+                    "splat" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Splat))),
+                    "load-unchecked" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Load))),
+                    "store-unchecked" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Store))),
+                    "get-lane" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::GetLane))),
+                    "with-lane" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::WithLane))),
+                    "eq-lanes" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::EqLanes))),
+                    "to-mask" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::ToMask))),
                     _ => None,
                 },
                 Some("atomic") => match fn_name_str {
@@ -16615,19 +16958,21 @@ impl TypedProgram {
             Some(info) if info.impl_kind == AbilityImplKind::BuiltinDerived => Linkage::Intrinsic,
             _ => ast_fn.linkage,
         };
-        let intrinsic_type = if linkage == Linkage::Intrinsic {
-            let namespace_chain = self_.name_chain(namespace_id);
-            let resolved = self_
-                .resolve_intrinsic_function_type(
-                    ast_fn.name,
-                    namespace_chain,
-                    ability_id,
-                    impl_self_type,
-                )
-                .map_err(|msg| errf!(ast_fn.span, "Error typechecking function: {}", msg,))?;
-            Some(resolved)
-        } else {
-            None
+        let intrinsic_type = match linkage {
+            Linkage::Intrinsic => {
+                let namespace_chain = self_.name_chain(namespace_id);
+                let resolved = self_
+                    .resolve_intrinsic_function_type(
+                        ast_fn.name,
+                        namespace_chain,
+                        ability_id,
+                        impl_self_type,
+                    )
+                    .map_err(|msg| errf!(ast_fn.span, "Error typechecking function: {}", msg,))?;
+                Some(resolved)
+            }
+            Linkage::LlvmIntrinsic(llvm_name) => Some(Builtin::LlvmIntrinsic(llvm_name)),
+            _ => None,
         };
         let return_type = match ast_fn.ret_type {
             None => self_.types.builtins.empty,
@@ -16701,7 +17046,7 @@ impl TypedProgram {
         let call_conv = match linkage {
             Linkage::Standard => AbiMode::Internal,
             Linkage::External { .. } => AbiMode::Native,
-            Linkage::Intrinsic => AbiMode::Internal,
+            Linkage::Intrinsic | Linkage::LlvmIntrinsic(_) => AbiMode::Internal,
         };
         let function_type_id = self_.types.add_anon(Type::Function(FunctionType {
             physical_params: param_types_handle,
@@ -17366,8 +17711,60 @@ impl TypedProgram {
         }
         let parsed_ability = self.ast.get_ability(parsed_ability_id).clone();
         let parent_namespace_id = self.scopes.get_scope_owner(scope_id).as_namespace().unwrap();
+
+        // If an ability namespace and a regular namespace exist as siblings with the same name,
+        // they share a scope, and we put the ability stuff "Self" type, other type params,
+        // as well as ability functions, in a child scope. This way everyone can find stuff
+        // with a single search, but we also keep the generic stuff tucked away.
+        //
+        // In this case, the mechanism is just to 'adopt' the existing scope/ns and start putting our stuff inside it
+        let (namespace_id, ns_scope_id) = match self
+            .scopes
+            .find_namespace_local(scope_id, parsed_ability.name)
+        {
+            Some(existing_ns_id) => {
+                let existing = self.namespaces.get(existing_ns_id);
+                let adoptable = existing.namespace_type == NamespaceKind::User
+                    && existing.owner_module == Some(self.module_in_progress.unwrap());
+                if !adoptable {
+                    return failf!(
+                        parsed_ability.span,
+                        "Namespace with name {} already exists",
+                        self.ident_str(parsed_ability.name)
+                    );
+                }
+                let ns_scope_id = existing.scope_id;
+                self.namespaces.get_mut(existing_ns_id).namespace_type = NamespaceKind::Ability;
+                (existing_ns_id, ns_scope_id)
+            }
+            None => {
+                let ns_scope_id =
+                    self.scopes.add_child_scope(scope_id, ScopeType::Namespace, ScopeOwnerId::None);
+                let ability_namespace = Namespace {
+                    name: parsed_ability.name,
+                    scope_id: ns_scope_id,
+                    namespace_type: NamespaceKind::Ability,
+                    companion_type_id: None,
+                    parent_id: Some(parent_namespace_id),
+                    owner_module: Some(self.module_in_progress.unwrap()),
+                    parsed_id: ParsedId::Ability(parsed_ability_id),
+                };
+                let namespace_id = self.namespaces.add(ability_namespace);
+                if !self.scopes.add_namespace(scope_id, parsed_ability.name, namespace_id) {
+                    return failf!(
+                        parsed_ability.span,
+                        "Namespace with name {} already exists",
+                        self.ident_str(parsed_ability.name)
+                    );
+                }
+                self.scopes
+                    .set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
+                (namespace_id, ns_scope_id)
+            }
+        };
+
         let ability_scope_id =
-            self.scopes.add_child_scope(scope_id, ScopeType::AbilityDefn, ScopeOwnerId::None);
+            self.scopes.add_child_scope(ns_scope_id, ScopeType::AbilityDefn, ScopeOwnerId::None);
 
         let self_ident_id = self.ast.idents.b.self_;
         let mut ability_params: List<TypedAbilityParam, _> =
@@ -17444,26 +17841,6 @@ impl TypedProgram {
             TypedAbilityKind::Concrete
         };
 
-        // Make a namespace for the ability
-        let ability_namespace = Namespace {
-            name: parsed_ability.name,
-            scope_id: ability_scope_id,
-            namespace_type: NamespaceKind::Ability,
-            companion_type_id: None,
-            parent_id: Some(parent_namespace_id),
-            owner_module: Some(self.module_in_progress.unwrap()),
-            parsed_id: ParsedId::Ability(parsed_ability_id),
-        };
-        let namespace_id = self.namespaces.add(ability_namespace);
-        let ns_added = self.scopes.add_namespace(scope_id, parsed_ability.name, namespace_id);
-        if !ns_added {
-            return failf!(
-                parsed_ability.span,
-                "Namespace with name {} already exists",
-                self.ident_str(parsed_ability.name)
-            );
-        }
-
         let ability_id = self.abilities.next_id();
         let typed_ability = TypedAbility {
             name: parsed_ability.name,
@@ -17508,6 +17885,14 @@ impl TypedProgram {
                 continue;
             };
             let function_name = self.get_function(function_id).name;
+            // Also resolvable through the namespace scope, alongside extension members
+            if !self.scopes.add_function(ns_scope_id, function_name, function_id) {
+                return failf!(
+                    self.ast.get_function(*parsed_function_id).signature_span,
+                    "Ability function name {} is taken by a namespace member",
+                    self.ident_str(function_name)
+                );
+            }
             match self.function_name_to_ability.entry(function_name) {
                 Entry::Occupied(mut ability_ids) => {
                     ability_ids.get_mut().push(ability_id);
@@ -17672,18 +18057,12 @@ impl TypedProgram {
         let _ = self.scopes.add_type_substitution(impl_scope_id, ability_self_type, impl_self_type);
 
         // We also need to bind any ability parameters that this
-        // ability is already specialized on; they aren't in our fresh scope
+        // ability is already specialized on; they aren't in our fresh scope.
+        // Name binds are FE convenience only; if the impl declares a generic
+        // param with the same name, it shadows, and the id-keyed substitution
+        // below still binds the ability param
         for argument in self.mem.getn(ability.kind.arguments()) {
-            if !self.scopes.add_type(impl_scope_id, argument.name, argument.type_id)
-                && self.scopes.find_type_local(impl_scope_id, argument.name)
-                    != Some(argument.type_id)
-            {
-                return failf!(
-                    span,
-                    "Type parameter name {} is already used by an ability parameter",
-                    self.ident_str(argument.name)
-                );
-            }
+            let _ = self.scopes.add_type(impl_scope_id, argument.name, argument.type_id);
         }
         let base_params = self.abilities.get(ability.base_ability_id).parameters;
         for (base_param, argument) in self
@@ -17736,16 +18115,7 @@ impl TypedProgram {
                 self.ident_str(impl_param.name),
                 self.type_id_to_string(arg_type)
             );
-            let added = self.scopes.add_type(impl_scope_id, impl_param.name, arg_type);
-            if !added
-                && self.scopes.find_type_local(impl_scope_id, impl_param.name) != Some(arg_type)
-            {
-                return failf!(
-                    matching_arg.span,
-                    "Variable name collision: {}",
-                    self.ident_str(impl_param.name)
-                );
-            }
+            let _ = self.scopes.add_type(impl_scope_id, impl_param.name, arg_type);
             let _ = self.scopes.add_type_substitution(
                 impl_scope_id,
                 impl_param.type_variable_id,
@@ -18329,6 +18699,11 @@ impl TypedProgram {
         if is_array {
             self.scopes.array_scope_id = ns_scope_id;
         }
+        let is_vector =
+            parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.vector;
+        if is_vector {
+            self.scopes.vector_scope_id = ns_scope_id;
+        }
 
         let namespace_type = if ast_namespace.is_type_companion {
             NamespaceKind::TypeCompanion
@@ -18868,84 +19243,76 @@ impl TypedProgram {
     }
 
     fn check_type_finite_rec(
-        &self,
-        targets: &[TypeId],
+        &mut self,
         type_id: TypeId,
         behind_indirection: bool,
         stack: &mut List<TypeId, MemTmp>,
     ) -> Option<TypeId> {
-        let pushed = if targets.contains(&type_id) {
-            if stack.contains(&type_id) {
-                return if behind_indirection { None } else { Some(type_id) };
-            }
+        // Any repeat on the current path is a cycle; only indirection-free ones are
+        // infinite. Guarding on every visited id (not just the cluster's recursive
+        // mentions) is what terminates the walk on self-referential instances minted
+        // by instantiate_generic_type_miss, which are in no mentions list
+        if stack.contains(&type_id) {
+            return if behind_indirection { None } else { Some(type_id) };
+        }
+        stack.push_grow(&mut self.tmp, type_id);
 
-            stack.push(type_id);
-            true
-        } else {
-            false
-        };
-
-        let result = match self.types.get(type_id) {
-            Type::Struct(struct_type) => {
-                for f in self.types.mem.getn(struct_type.fields) {
-                    if let Some(t) =
-                        self.check_type_finite_rec(targets, f.type_id, behind_indirection, stack)
-                    {
-                        if pushed {
-                            stack.pop();
-                        }
-                        return Some(t);
-                    }
-                }
-
-                None
-            }
-
-            Type::Sum(sum_type) => {
-                for v in self.types.mem.getn(sum_type.variants) {
-                    if let Some(payload) = v.payload {
+        let result = 'walk: {
+            match self.types.get(type_id) {
+                Type::Struct(struct_type) => {
+                    let fields = struct_type.fields;
+                    for i in 0..fields.len() as usize {
+                        let field_type_id = self.types.mem.get_nth(fields, i).type_id;
                         if let Some(t) =
-                            self.check_type_finite_rec(targets, payload, behind_indirection, stack)
+                            self.check_type_finite_rec(field_type_id, behind_indirection, stack)
                         {
-                            if pushed {
-                                stack.pop();
-                            }
-                            return Some(t);
+                            break 'walk Some(t);
                         }
                     }
-                }
 
-                None
-            }
-
-            Type::Reference(reference_type) => {
-                self.check_type_finite_rec(targets, reference_type.inner_type, true, stack)
-            }
-
-            Type::Generic(generic) => {
-                self.check_type_finite_rec(targets, generic.inner, behind_indirection, stack)
-            }
-
-            Type::Array(array_type) => {
-                if self.get_concrete_count_of_array(array_type.size_type) != Some(0) {
-                    self.check_type_finite_rec(
-                        targets,
-                        array_type.element_type,
-                        behind_indirection,
-                        stack,
-                    )
-                } else {
                     None
                 }
-            }
 
-            _ => None,
+                Type::Sum(sum_type) => {
+                    let variants = sum_type.variants;
+                    for i in 0..variants.len() as usize {
+                        if let Some(payload) = self.types.mem.get_nth(variants, i).payload {
+                            if let Some(t) =
+                                self.check_type_finite_rec(payload, behind_indirection, stack)
+                            {
+                                break 'walk Some(t);
+                            }
+                        }
+                    }
+
+                    None
+                }
+
+                Type::Reference(reference_type) => {
+                    let inner_type = reference_type.inner_type;
+                    self.check_type_finite_rec(inner_type, true, stack)
+                }
+
+                Type::Generic(generic) => {
+                    let inner = generic.inner;
+                    self.check_type_finite_rec(inner, behind_indirection, stack)
+                }
+
+                Type::Array(array_type) => {
+                    let size_type = array_type.size_type;
+                    let element_type = array_type.element_type;
+                    if self.get_concrete_count_of_array(size_type) != Some(0) {
+                        self.check_type_finite_rec(element_type, behind_indirection, stack)
+                    } else {
+                        None
+                    }
+                }
+
+                _ => None,
+            }
         };
 
-        if pushed {
-            stack.pop();
-        }
-
+        stack.pop();
         result
     }
 
@@ -19387,6 +19754,7 @@ impl TypedProgram {
             core!("bitwise"),
             core!("comparable"),
             core!("try"),
+            core!("from-string"),
             core!("iterator"),
             core!("iterable"),
             core!("iter"),
@@ -19402,6 +19770,7 @@ impl TypedProgram {
             core!("meta"),
             core!("mem"),
             core!("atomic"),
+            core!("vector"),
             core!("types"),
             core!("k1"),
             core!("range"),
@@ -19670,6 +20039,32 @@ impl TypedProgram {
                 );
                 make_variant(self, self.ast.idents.b.array, Some(payload_struct_id))
             }
+            Type::Vector(vector_type) => {
+                let vector_type = *vector_type;
+                let concrete_count = self.get_concrete_count_of_array(vector_type.size_type);
+                let vector_schema_payload_type_id =
+                    get_schema_variant(self, self.ast.idents.b.vector).payload.unwrap();
+                let element_type_id_value_id =
+                    self.static_values.add_type_id_int_value(vector_type.element_type);
+                self.register_type_metainfo(vector_type.element_type);
+
+                let maybe_concrete_size_value_id = match concrete_count {
+                    None => None,
+                    Some(size) => Some(self.static_values.add_size(size)),
+                };
+                let option_size = self.synth_optional_type(SIZE_TYPE_ID);
+                let size_value_id = synth::synth_static_option(
+                    &mut self.static_values,
+                    option_size,
+                    maybe_concrete_size_value_id,
+                );
+
+                let payload_struct_id = self.static_values.add_struct_from_slice(
+                    vector_schema_payload_type_id,
+                    &[element_type_id_value_id, size_value_id],
+                );
+                make_variant(self, self.ast.idents.b.vector, Some(payload_struct_id))
+            }
             Type::Sum(typed_sum) => {
                 let target_sum_variants = typed_sum.variants;
                 let either_payload_type_id =
@@ -19859,9 +20254,11 @@ impl TypedProgram {
             return *existing;
         }
 
-        // FIXME: get_type_name should re-use a buffer, really.
-        let type_string = self.type_id_to_string(type_id);
-        let string_id = self.ast.idents.intern(type_string);
+        let mut s = std::mem::take(&mut self.buffers.name_builder);
+        self.display_type_id(&mut s, type_id, false).unwrap();
+        let string_id = self.ast.idents.intern(&s);
+        s.clear();
+        self.buffers.name_builder = s;
         let value_id = self.static_values.add_string(string_id);
 
         self.type_names.insert(type_id, value_id);

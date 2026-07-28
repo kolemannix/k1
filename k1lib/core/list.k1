@@ -205,8 +205,8 @@ ns for list {
   }
 
   fn concat[t](self: list[t], other: list[t]): list[t] {
-    // FIXME: 2 copies, possibly
-    let dst = self.cloned()
+    let dst = list/with-capacity[t](self.len + other.len)
+    dst.append-list(self)
     dst.append-list(other)
     dst
   }

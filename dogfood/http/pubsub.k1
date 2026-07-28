@@ -1,193 +1,172 @@
-// Topic-based publish/subscribe for the http harness.
+// Topic-based publish/subscribe: an mpsc ingress, a topic router, and a
+// channel per subscriber.
 //
-// -- User-facing API ------------------------------------------------------
-//
-//   pubsub/publisher()                the thread-safe publish handle; a plain
-//                                     value, store it in deps / pass it to threads
-//   publisher.publish(topic, data)    from any thread; copies before queuing
-//   :subscribe({ topic })             returned from a request handler
-//
-// Topics are unique strings that exist by use: publish to "global", or
-// compose "game.{id}" yourself. The topic doubles as the SSE event name.
-// Everything below the marked line is harness plumbing called from main.k1;
-// user code has no business with it.
-//
-// Delivery is at-most-once, no replay: subscribers only see events published
-// while they're connected. A subscriber whose socket backs up past
-// max-queued-bytes is dropped (SSE clients are built to reconnect).
+//   pubsub/create(uv-loop)          the bus; owned by whoever runs the loop
+//   bus.publisher()                 thread-safe handle carrying publish + subscribe
+//   publisher.publish(topic, data)  from any thread; one copy, into an rc-bytes
+//   publisher.subscribe(topic)      a dyn-source[u8] of raw payloads, one event per pull
+
+use std/mpsc
+use std/notify
+use std/channel
+use std/rc
+use std/rc-bytes
+use std/rc-byte-stream
+use std/dyn-source
+use std/source
+use std/source-async
+use std/pull
+use std/waker
+
 ns pubsub {
 
-  type publisher = { bus: *mut bus }
-
-  fn publisher(): publisher { .{ bus = get() } }
-
-  ns for publisher {
-    // Thread-safe: topic and data are copied to the system heap before
-    // queuing, so the caller's memory can be reclaimed immediately.
-    fn publish(self: publisher, topic: string, data: string) {
-      let bus = self.bus
-      let event: event = .{
-        topic = topic.cloned-in(context :system-heap)(),
-        data = data.cloned-in(context :system-heap)(),
-      }
-      uv/mutex_lock(bus.mutex)
-      bus.pending.push-in(context :system-heap)(event)
-      uv/mutex_unlock(bus.mutex)
-
-      let send-rc = uv/async_send(bus.async-handle)
-      if send-rc < 0 crash("uv_async_send for pubsub failed: $send-rc")
-    }
-  }
-
-  // -- Harness internals; called from main.k1 only --------------------------
-
-  // Drop a subscriber once this much SSE data is queued on its socket:
-  // a client that isn't draining would otherwise grow the write queue forever.
-  let max-queued-bytes: usize = 1048576
-
+  // Declared before bus: instantiating the (recursive-generic-backed) mpsc
+  // with a forward-declared type overflows the typer (repro in sandbox/main.k1)
   type event = {
-    // Both strings are system-heap copies owned by the bus; freed after dispatch
+    // topic is a system-heap copy freed after dispatch; data is an rc-bytes
+    // reference retained per matching subscriber during dispatch
     topic: string,
-    data: string,
-  }
-
-  type subscriber = {
-    connection: *mut connection,
-    // system-heap copy owned by the bus; freed on unsubscribe
-    topic: string,
+    data: rc-bytes,
   }
 
   type bus = {
     async-handle: *mut uv/async,
-    mutex: *mut uv/mutex,
-    // guarded by mutex; touched by publishers on any thread
-    pending: list[event],
-    // main thread only: swapped with pending under the lock, then drained
-    // without it so publishers never wait on socket writes
-    dispatching: list[event],
+    ingress: *mut mpsc[event],
+    // main thread: reused drain buffer
+    scratch: list[event],
     // main thread only
-    subscribers: list[subscriber],
+    subscribers: list[*mut subscription],
   }
 
-  let mutable the-bus: ptr = ptr/null
-
-  fn init(uv-loop: *mut uv-loop) {
+  fn create(uv-loop: *mut uv-loop): *mut bus {
+    let async-handle = system-heap.alloc-t[uv/async]
     let bus: *mut bus = system-heap.new(.{
-      async-handle = system-heap.alloc-t[uv/async],
-      mutex = system-heap.alloc-t[uv/mutex],
-      pending = list/empty[event](),
-      dispatching = list/empty[event](),
-      subscribers = list/empty[subscriber](),
+      async-handle,
+      ingress = mpsc/make[event](.{ state = async-handle.as[ptr], notify-fn = send-async }),
+      scratch = list/empty[event](),
+      subscribers = list/empty[*mut subscription](),
     })
-    if uv/mutex_init(bus.mutex) != 0 crash("uv_mutex_init for pubsub failed")
-    if uv/async_init(uv-loop, bus.async-handle, dispatch-pending) != 0 crash("uv_async_init for pubsub failed")
+    if uv/async_init(uv-loop, async-handle, dispatch-pending) != 0 crash("uv_async_init for pubsub failed")
     bus.async-handle.set-data(bus)
-    the-bus = bus.as[ptr]
+    bus
   }
 
-  fn get(): *mut bus {
-    if the-bus.is-null() crash("pubsub bus not initialized")
-    the-bus.as[*mut bus]
+  fn send-async(state: ptr) {
+    let rc = uv/async_send(state.rw[uv/async]())
+    if rc < 0 crash("uv_async_send for pubsub failed: $rc")
   }
 
-  // Main thread only
-  fn subscribe(connection: *mut connection, topic: string) {
-    let bus = get()
-    tprintln("pubsub: conn${connection.serial-no} subscribed to `$topic`")
-    bus.subscribers.push-in(context :system-heap)(.{
-      connection,
-      topic = topic.cloned-in(context :system-heap)(),
-    })
+  ns for bus {
+    fn publisher(self: *mut bus): publisher { .{ bus = self } }
   }
 
-  // Main thread only. No-op if the connection has no subscriptions.
-  fn unsubscribe(connection: *mut connection) {
-    let bus = get()
-    let conn-ptr = connection.as[ptr]
-    let i: size = 0
-    while i < bus.subscribers.len() {
-      let sub = bus.subscribers.get(i)
-      if sub.connection.as[ptr] == conn-ptr {
-        tprintln("pubsub: conn${connection.serial-no} unsubscribed from `${sub.topic}`")
-        free-heap-string(sub.topic)
-        bus.subscribers.remove(i)
-      } else {
-        i = i + 1
-      }
+  type publisher = { bus: *mut bus }
+
+  ns for publisher {
+    // Thread-safe: the topic is copied and the data lands in a fresh
+    // rc-bytes, so the caller's memory can be reclaimed immediately.
+    fn publish(self: publisher, topic: string, data: string) {
+      self.bus.ingress.send(.{
+        topic = topic.cloned-in(context :system-heap)(),
+        data = rc/of-bytes(data.span-bytes()),
+      })
+    }
+
+    // May run on a worker thread: only allocates; the bus learns about the
+    // subscription when the harness start()s the stream on the main thread.
+    fn subscribe(self: publisher, topic: string): dyn-source[u8] {
+      let chan = channel/make[rc-bytes](
+        cap-weight = max-queued-bytes,
+        weight-fn = fn(payload: rc-bytes) payload.bytes().len(),
+        drop-fn = fn(payload: rc-bytes) payload.release(),
+      )
+      let sub: *mut subscription = system-heap.new(.{
+        bus = self.bus.as[ptr],
+        topic = topic.cloned-in(context :system-heap)(),
+        chan,
+      })
+      dyn-source/erase-async(sub) || rc-byte-stream
     }
   }
+
+  // -- Harness-driven stream side -------------------------------------------
+
+  // Fail a subscriber once this much payload is queued and undelivered: a
+  // client that isn't draining its socket would otherwise grow it forever.
+  let max-queued-bytes: size = 1048576
+
+  // The channel receiver wearing a topic: registers with the bus in start(),
+  // detaches and frees everything it owns in stop().
+  type subscription = {
+    // *mut bus, erased: a typed back-pointer closes a struct cycle around the
+    // mpsc's recursive generic, which overflows the typer (sandbox/main.k1)
+    bus: ptr,
+    topic: string,
+    chan: *mut channel[rc-bytes],
+  }
+
+  impl source[t = rc-bytes] for subscription {
+    fn next(self: *mut subscription): pull[rc-bytes] {
+      source@(channel[rc-bytes])/next(self.chan)
+    }
+  }
+
+  impl source-async for subscription {
+    fn start(self: *mut subscription, waker: waker) {
+      source-async@(channel[rc-bytes])/start(self.chan, waker)
+      self.bus.rw[bus]().subscribers.push-in(context :system-heap)(self)
+      tprintln("pubsub: subscribed to `${self.topic}`")
+    }
+
+    fn stop(self: *mut subscription) {
+      let bus = self.bus.rw[bus]()
+      let sub-ptr = self.as[ptr]
+      let i: size = 0
+      while i < bus.subscribers.len() {
+        if bus.subscribers.get(i).as[ptr] == sub-ptr {
+          bus.subscribers.remove(i)
+        } else {
+          i = i + 1
+        }
+      }
+      tprintln("pubsub: unsubscribed from `${self.topic}`")
+      self.chan.close-and-free()
+      free-heap-string(self.topic)
+      system-heap.free-t(self)
+    }
+  }
+
+  // -- Bus internals --------------------------------------------------------
 
   // uv_async callback, main thread
   fn dispatch-pending(handle: *mut uv/async) {
     let bus = handle.get-data[bus]()
-    loop {
-      uv/mutex_lock(bus.mutex)
-      if bus.pending.is-empty() {
-        uv/mutex_unlock(bus.mutex)
-        break
-      }
-      let batch = bus.pending
-      bus.pending = bus.dispatching
-      bus.dispatching = batch
-      uv/mutex_unlock(bus.mutex)
-
-      for event in bus.dispatching {
-        dispatch-event(bus, event)
-        free-heap-string(event.topic)
-        free-heap-string(event.data)
-      }
-      bus.dispatching.clear()
-    }
-  }
-
-  fn dispatch-event(bus: *mut bus, event: event) {
-    // The SSE frame is rendered and copied once, shared by every subscriber's write
-    let frame: ?rc-buffer = :none
-    for sub in bus.subscribers {
-      if sub.topic == event.topic {
-        let f = frame is {
-          :some existing -> existing,
-          :none -> {
-            mem/push-mode(:tmp)
-            let rendered = sse-frame(event)
-            mem/pop-mode()
-            let made = rc-buffer/make(rendered.span-bytes())
-            frame = :some made
-            made
+    bus.scratch.clear()
+    bus.ingress.take(bus.scratch.&)
+    for event in bus.scratch {
+      for sub in bus.subscribers {
+        if sub.topic == event.topic {
+          let payload = event.data.retain()
+          if not sub.chan.push(payload) {
+            tprintln("pubsub: `${sub.topic}` subscriber is over its backlog cap; failing it")
+            payload.release()
+            sub.chan.fail("subscriber exceeded backlog cap")
           }
         }
-        send-event(sub.connection, f.retain())
       }
+      free-heap-string(event.topic)
+      event.data.release()
     }
-    if frame is :some f { f.release() }
-  }
+    bus.scratch.clear()
 
-  // Takes ownership of one reference to `frame`, released when the write
-  // completes or the subscriber is skipped/dropped.
-  fn send-event(connection: *mut connection, frame: rc-buffer) {
-    // Main thread; direct close-state access is fine
-    if connection.close-state.is-closing { frame.release(); return }
-
-    let queued = uv/stream_get_write_queue_size(connection.client.as-stream())
-    if queued > max-queued-bytes {
-      tprintln("conn${connection.serial-no} has $queued bytes of SSE backlog; dropping subscriber")
-      frame.release()
-      close-connection(connection)
-      return
-    }
-
-    write-shared-frame(connection, frame)
-  }
-
-  // SSE wire format, rendered into the ambient allocator
-  fn sse-frame(event: event): string {
-    let out = string-builder/new()
-    out.write("event: ${event.topic}\n")
-    for line in event.data.split-by-char('\n') {
-      out.write("data: $line\n")
-    }
-    out.write("\n")
-    out.build()
+    // Flush after dispatch, on a snapshot: a woken stream can fail
+    // synchronously and detach its subscription from bus.subscribers, so
+    // never wake while iterating that list. One flush per subscriber also
+    // coalesces multi-event batches.
+    mem/push-mode(:tmp)
+    let to-flush = bus.subscribers.cloned()
+    mem/pop-mode()
+    for sub in to-flush { sub.chan.flush() }
   }
 
   fn free-heap-string(s: string) {

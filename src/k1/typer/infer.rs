@@ -134,8 +134,7 @@ impl TypedProgram {
                 inference_pairs.len()
             );
 
-            let frame_subst: SV8<TypeSubstitutionPair> = self.ictx().slots
-                [frame_start as usize..]
+            let frame_subst: SV8<TypeSubstitutionPair> = self.ictx().slots[frame_start as usize..]
                 .iter()
                 .map(|s| spair! { s.param_type => s.solution.unwrap_or(s.hole_type) })
                 .collect();
@@ -148,13 +147,12 @@ impl TypedProgram {
             let (argument_type, argument_span) = match expr {
                 TypeOrParsedExpr::Type(type_id) => (*type_id, span),
                 TypeOrParsedExpr::Parsed(parsed_expr) => {
-                    let expected_counts =
-                        self.types.get_type_variable_counts(expected_type_so_far);
+                    let expected_counts = self.types.get_type_variable_counts(expected_type_so_far);
                     let expected_is_concrete = expected_counts.inference_variable_count == 0
                         && expected_counts.unresolved_static_count == 0;
 
                     // If the expected type is fully concrete (no holes) this argument can't teach us anything
-                    // and its expected type can no longer change: 
+                    // and its expected type can no longer change:
                     // evaluate it once with the caller's context and stash the
                     // result for the later argument passes to reuse
                     let stashable = match &stash {
@@ -1054,6 +1052,16 @@ impl TypedProgram {
                     passed_array_element_type,
                     slot_array_element_type,
                 );
+                TypeUnificationResult::Matching
+            }
+            (Type::Vector(passed_vector), Type::Vector(slot_vector)) => {
+                let passed_element_type = passed_vector.element_type;
+                let slot_element_type = slot_vector.element_type;
+                self.unify_and_find_substitutions_rec(
+                    passed_vector.size_type,
+                    slot_vector.size_type,
+                );
+                self.unify_and_find_substitutions_rec(passed_element_type, slot_element_type);
                 TypeUnificationResult::Matching
             }
             (Type::Function(passed_fn), Type::Function(slot_fn)) => {

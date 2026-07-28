@@ -22,11 +22,11 @@ fn test(): i32 {
       "+clangarg", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk"
     ])
   } else core-args
-  let output = start(args)
 
   // TODO: Use 'diff' instead sys/cmd("diff", "input.c", "test/output.k1")
   let expected = core/files/read-to-string("test/expected.k1")
-  assert-equals(output, expected)
-
-  0
+  start(args) is {
+    :err msg -> { eprintln("FAIL: $msg"); 1 },
+    :ok output -> { assert-equals(output, expected); 0 }
+  }
 }

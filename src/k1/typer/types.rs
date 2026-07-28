@@ -80,6 +80,15 @@ impl Layout {
         let array_size = element_size_padded * (len as u32);
         Layout { size: array_size, align: if array_size == 0 { 1 } else { self.align } }
     }
+
+    /// Vectors get natural (total-size) alignment, matching the C ABI for
+    /// __m128/__m256/__m512; the typer guarantees size is a power of two <= 64,
+    /// and bc VM frames are 64-aligned to honor this
+    pub fn vector_me(&self, len: usize) -> Layout {
+        let vector_size = self.stride() * (len as u32);
+        debug_assert!(vector_size.is_power_of_two() && vector_size <= 64);
+        Layout { size: vector_size, align: vector_size }
+    }
 }
 
 impl Display for Layout {
@@ -226,6 +235,13 @@ pub struct ArrayType {
     pub size_type: TypeId,
 }
 impl_copy_if_small!(8, ArrayType);
+
+#[derive(Clone)]
+pub struct VectorType {
+    pub element_type: TypeId,
+    pub size_type: TypeId,
+}
+impl_copy_if_small!(8, VectorType);
 
 #[derive(Clone, Copy)]
 pub struct TypedSumVariant {
@@ -469,6 +485,7 @@ pub enum Type {
     Enum(ScalarEnumType),
     Reference(ReferenceType),
     Array(ArrayType),
+    Vector(VectorType),
     Struct(StructType),
     Sum(SumType),
     Opaque(OpaqueType),
@@ -542,6 +559,9 @@ impl TypePool {
             (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
             (Type::Array(a1), Type::Array(a2)) => {
                 a1.element_type == a2.element_type && a1.size_type == a2.size_type
+            }
+            (Type::Vector(v1), Type::Vector(v2)) => {
+                v1.element_type == v2.element_type && v1.size_type == v2.size_type
             }
             (Type::TypeParameter(t1), Type::TypeParameter(t2)) => {
                 t1.name == t2.name && t1.scope_id == t2.scope_id
@@ -713,6 +733,10 @@ impl TypePool {
                 arr.element_type.hash(state);
                 arr.size_type.hash(state);
             }
+            Type::Vector(vec) => {
+                vec.element_type.hash(state);
+                vec.size_type.hash(state);
+            }
         }
         state.finish()
     }
@@ -742,6 +766,7 @@ impl Type {
             Type::LambdaObject(_) => "lambdaobj",
             Type::StaticValue(_) => "value",
             Type::Array(_) => "array",
+            Type::Vector(_) => "vector",
         }
     }
 
@@ -1302,6 +1327,7 @@ pub struct UnionMember {
 pub enum AggType {
     Struct { fields: MSlice<StructField, TypePool> },
     Array { element_pt: PhysicalType, len: u32 },
+    Vector { element_pt: ScalarType, len: u32 },
     Union { members: MSlice<UnionMember, TypePool> },
     Sum(SumPt),
     Opaque { size: u32, align: u32 },
@@ -1313,6 +1339,14 @@ impl AggType {
         match self {
             AggType::Array { element_pt: element_t, len } => (*element_t, *len),
             _ => panic!("Expected array agg type"),
+        }
+    }
+
+    #[track_caller]
+    pub fn expect_vector(&self) -> (ScalarType, u32) {
+        match self {
+            AggType::Vector { element_pt, len } => (*element_pt, *len),
+            _ => panic!("Expected vector agg type"),
         }
     }
 
@@ -1891,6 +1925,10 @@ impl TypePool {
                     .get(arr.element_type)
                     .add(self.type_variable_counts.get(arr.size_type))
             }
+            Type::Vector(vec) => self
+                .type_variable_counts
+                .get(vec.element_type)
+                .add(self.type_variable_counts.get(vec.size_type)),
         }
     }
 
@@ -1972,6 +2010,28 @@ impl TypePool {
                             let id = self.agg_types.add(record);
                             PhysicalTypeResult::Yes(PhysicalType::agg(id))
                         }
+                    },
+                }
+            }
+            Type::Vector(vec) => {
+                let count = self.get_type_as_i64(static_values, vec.size_type);
+                match count {
+                    None => PhysicalTypeResult::No,
+                    Some(len) => match self.get_physical_type(static_values, vec.element_type) {
+                        PhysicalTypeResult::Yes(element_pt) if element_pt.as_scalar().is_some() => {
+                            let element_scalar = element_pt.expect_scalar();
+                            let record = AggregateTypeRecord {
+                                agg_type: AggType::Vector {
+                                    element_pt: element_scalar,
+                                    len: len as u32,
+                                },
+                                origin_type_id: type_id,
+                                layout: element_scalar.get_layout().vector_me(len as usize),
+                            };
+                            let id = self.agg_types.add(record);
+                            PhysicalTypeResult::Yes(PhysicalType::agg(id))
+                        }
+                        _ => PhysicalTypeResult::No,
                     },
                 }
             }
@@ -2169,6 +2229,7 @@ impl TypePool {
                 }
             }
             AggType::Array { .. } => None,
+            AggType::Vector { .. } => None,
             AggType::Union { .. } => None,
             AggType::Opaque { .. } => None,
         }
@@ -2179,6 +2240,7 @@ impl TypePool {
             AggType::Sum(e) => self.get_agg_struct_layout(e.struct_repr),
             AggType::Struct { fields } => self.mem.getn_sv4(fields),
             AggType::Array { .. } => panic!("Array is not a struct"),
+            AggType::Vector { .. } => panic!("vector is not a struct"),
             AggType::Union { .. } => panic!("union has no struct-like layout"),
             AggType::Opaque { .. } => panic!("opaque has no struct-like layout"),
         }
@@ -2305,6 +2367,16 @@ impl TypePool {
         }
     }
 
+    /// Element type of a static linear container: one of the container generics,
+    /// or an inline-element array/vector
+    pub fn get_linear_container_element(&self, type_id: TypeId) -> Option<TypeId> {
+        match self.types.get(type_id) {
+            Type::Array(a) => Some(a.element_type),
+            Type::Vector(v) => Some(v.element_type),
+            _ => self.get_as_container_instance(type_id).map(|p| p.0),
+        }
+    }
+
     pub fn get_as_opt_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == self.builtins.opt() {
@@ -2385,6 +2457,9 @@ impl TypePool {
                     self.display_pt(w, t)?;
                     write!(w, " x {}]", len)?;
                     Ok(())
+                }
+                AggType::Vector { len, element_pt } => {
+                    write!(w, "<{} x {}>", element_pt, len)
                 }
                 AggType::Union { members } => {
                     write!(w, "union {{ ")?;

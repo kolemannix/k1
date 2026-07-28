@@ -180,6 +180,22 @@ Building imperatively works by writing to a code-builder (`cb.write(...)`,
 `code` value's chunks, and `cb.build()` yields the `code`. `code/from-string(s)`
 is the explicit sourceless wrap.
 
+Emitters should use the code-builder emission helpers: `cb.line(c)` (indent +
+append + newline), `cb.block(header, fn. ...)` / `cb.block-close(header, close,
+fn. ...)` (braces + indentation around the body), `cb.sep(items, ", ", fn x.
+...)`, and `cb.indent()`/`cb.dedent()` for manual runs. `line`/`block` take
+`code`, so literal templates at their call sites keep spans — note that
+`cb.writeln("...")` does NOT (writer takes `string`), which makes `line` the
+default for emission. Two sharp edges: a block body that lexically nests
+another block must factor the inner level into a fn taking the builder
+(transitive capture through nested lambdas is unsupported), and to inspect an
+expansion put `#debug` on the macro *definition* — definition-level
+`#debug $call(...)` does not parse. Write emitted conditions as raw template
+text with explicit parens — `not` is low-precedence, so `not a and b` parses
+as `not (a and b)`; emit `(not a) and b`. `meta/str-lit(s)` escapes any string
+into a valid K1 literal, interpolation sigil included, so emitted literals
+need no character restrictions.
+
 `code` does not implement `print`: interpolating one into an ordinary string is
 an error, since it would drop the source info silently — `.text()` is the
 explicit escape. There is no implicit conversion between `string` and `code` in

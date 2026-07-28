@@ -4,27 +4,19 @@
 ns meta {
 
   ability code-writer {
-    fn lines[iter: iterator[item = string]](self, lines: iter) {
-      for l in lines { self.writeln(l) }
-    }
+    fn var[t](self, name: string, value: t)
 
-    fn var[t](self, name: string, value: t) 
-
-    fn indent(self, n: size) {
-      self.repeat("  ", n)
-    }
-     
     fn impl-print(self, type-name: string, body: string, indent: size) {
-      self.indent(indent)
+      self.repeat("  ", indent)
       self.writeln("impl print for $type-name {")
 
-      self.indent(indent + 1)
+      self.repeat("  ", indent + 1)
       self.writeln("fn print-to[w: writer](self, w) {")
       self.write(body)
-      self.indent(indent + 1)
+      self.repeat("  ", indent + 1)
       self.writeln("}")
 
-      self.indent(indent)
+      self.repeat("  ", indent)
       self.writeln("}")
     }
   }
@@ -34,6 +26,24 @@ ns meta {
       let baked-var = meta/baked-variable[t](name, value)
       self.write(baked-var)
     }
+  }
+
+  // Escapes into a valid K1 double-quoted string literal, including the
+  // interpolation sigil — emitted literals need no character restrictions
+  fn str-lit(s: string): string {
+    let b = string-builder/new()
+    b.write-char('"')
+    for c in s {
+      if c == '\\' b.write("\\\\")
+      else if c == '"' b.write("\\\"")
+      else if c == '$' b.write("\\$")
+      else if c == '\n' b.write("\\n")
+      else if c == '\r' b.write("\\r")
+      else if c == '\t' b.write("\\t")
+      else b.write-char(c)
+    }
+    b.write-char('"')
+    b.build()
   }
 
   fn baked-value-expr[t](value: t): string {

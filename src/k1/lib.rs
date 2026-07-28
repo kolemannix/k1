@@ -15,11 +15,11 @@ pub mod lex;
 pub mod lsp_support;
 pub mod parse;
 mod rawref;
+pub mod server;
 pub mod typer;
 mod vecpool;
 pub mod vm;
 mod vpool;
-pub mod server;
 //pub mod codegen_llvm_old;
 //pub mod vmtw;
 

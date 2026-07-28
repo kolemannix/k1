@@ -56,7 +56,7 @@ fn part2(input: string) {
       range-size = range-size - 1
     }
 
-    let joltage = string/wrap-span(sels.as-span()).parse-base10()
+    let joltage = u64/from-string(string/wrap-span(sels.as-span()))
     sum = sum + joltage.!
     println("Result $it-index for bank `$bank`: ${string/wrap-span(sels.as-span())} $sum")
   }

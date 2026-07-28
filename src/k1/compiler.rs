@@ -99,6 +99,34 @@ impl Target {
     }
 }
 
+pub fn detect_simd_bytes(target: Target) -> u32 {
+    if detect_host_target() != Some(target) {
+        // Cross builds assume the target's baseline
+        return 16;
+    }
+    match target.arch() {
+        Arch::Intel => {
+            #[cfg(target_arch = "x86_64")]
+            {
+                if std::arch::is_x86_feature_detected!("avx512f") {
+                    64
+                } else if std::arch::is_x86_feature_detected!("avx2") {
+                    32
+                } else {
+                    16
+                }
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                16
+            }
+        }
+        // NEON is baseline; SVE detection can widen this later
+        Arch::Arm => 16,
+        Arch::Wasm => 16,
+    }
+}
+
 pub const LIBS_DIR_NAME: &str = "libs";
 
 pub fn logical_name_to_lib_filename(
@@ -261,6 +289,8 @@ pub struct CompilerConfig {
     pub is_test_build: bool,
     pub no_std: bool,
     pub target: Target,
+    /// See detect_simd_bytes
+    pub simd_bytes: u32,
     pub debug: bool,
     pub sanitize: bool,
     pub filc: bool,
@@ -483,6 +513,7 @@ pub fn compile_program_ext(
         is_test_build: args.command.is_test(),
         no_std: args.no_std,
         target,
+        simd_bytes: detect_simd_bytes(target),
         debug: args.debug,
         sanitize: args.sanitize,
         filc: args.filc,

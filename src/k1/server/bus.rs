@@ -3,7 +3,7 @@
 //! while holding the compiler lock; slow or dead subscribers never stall a
 //! request.
 
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 pub struct EventBus {

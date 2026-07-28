@@ -1,0 +1,63 @@
+ns simd_test
+
+$std/simd/map[u8](scale-add, x, [std/simd/c("k", 3)], x * k + x)
+$std/simd/reduce[u8](sum-wrapping, a, b, a + b, 0)
+$std/simd/first-of(json-delims, [',', ':', '"'])
+
+fn assert-map-matches(input: list[u8]) {
+  let dst = list/filled(input.len, 0: u8)
+  scale-add(dst.as-buffer(), input.as-span())
+  for input {
+    // x * 3 + x == 4x, wrapping in u8
+    assert-equals(dst.get(it-index), it * 4)
+  }
+}
+
+fn test-map() {
+  // Boundary lengths around the 16-lane chunk size
+  let lengths: span[size] = [0, 1, 15, 16, 17, 31, 32, 33]
+  for len in lengths {
+    let input = list/with-capacity[u8](len)
+    for 0.until(len) {
+      input.push((it % 251).as[u8])
+    }
+    assert-map-matches(input)
+  }
+}
+
+fn test-reduce() {
+  let input = list/with-capacity[u8](33)
+  let expected = 0: u8
+  for 0.until(33) {
+    input.push(it.as[u8])
+    expected = expected + it.as[u8]
+  }
+  assert-equals(sum-wrapping(input.as-span()), expected)
+  assert-equals(sum-wrapping(input.slice(0, 16)), 120)
+  assert-equals(sum-wrapping(input.slice(0, 0)), 0)
+  assert-equals(sum-wrapping(input.slice(0, 1)), 0)
+  assert-equals(sum-wrapping(input.slice(1, 3)), 3)
+}
+
+fn test-first-of() {
+  let r1 = json-delims/scan("{\"name\": \"a longer value here\"}", 0)
+  assert-equals(r1.index, 1)
+  assert-equals(r1.which, 2) // the '"'
+  let r2 = json-delims/scan("aaaaaaaaaaaaaaaaaaaaaaaaaa:b", 0)
+  assert-equals(r2.index, 26) // found past the first chunk
+  assert-equals(r2.which, 1)
+  let r3 = json-delims/scan("aaaaaaaaaaaaaaaaaaaaaaaaaa:b", 27)
+  assert-equals(r3.index, -1) // scan from past the match, short tail
+  let r4 = json-delims/scan("no delimiters in this string at all", 0)
+  assert-equals(r4.index, -1)
+  assert-equals(r4.which, -1)
+  let r5 = json-delims/scan("xy,", 0)
+  assert-equals(r5.index, 2) // scalar-tail-only path
+  assert-equals(r5.which, 0)
+}
+
+fn test() {
+  test-map()
+  test-reduce()
+  test-first-of()
+}

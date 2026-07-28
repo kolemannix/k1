@@ -83,6 +83,49 @@ fn test-code-builder() {
   assert-equals(built.chunks.get(1).text, "1 + 2")
 }
 
+// Factored out: a lexically nested block would need transitive lambda
+// capture, which is not yet supported
+fn emit-inner(cb: *mut code-builder) {
+  cb.block-close(":ok v ->", "},", fn. {
+    cb.line("v")
+  })
+}
+
+fn test-emitter() {
+  let cb-storage = code-builder/new()
+  let cb = cb-storage.&
+  cb.block("fn f()", fn. {
+    cb.line("let x = 1")
+    emit-inner(cb)
+  })
+  assert-equals(cb.build().text(), "fn f() {\n  let x = 1\n  :ok v -> {\n    v\n  },\n}\n")
+
+  // line's code param makes call-site literals span-carrying
+  let cb2 = code-builder/new()
+  cb2.line("let y = 2")
+  let built = cb2.build()
+  assert-equals(built.text(), "let y = 2\n")
+  let has-sourced = {
+    let found = false
+    for c in built.chunks { if c.source != 0 { found = true } }
+    found
+  }
+  assert(has-sourced)
+
+  let cb3-storage = code-builder/new()
+  let cb3 = cb3-storage.&
+  cb3.sep(["a", "b", "c"], ", ", fn s. cb3.write(s))
+  assert-equals(cb3.build().text(), "a, b, c")
+}
+
+use core/meta/str-lit
+
+fn test-str-lit() {
+  assert-equals(str-lit("plain"), "\"plain\"")
+  assert-equals(str-lit("a\"b\\c\$d"), "\"a\\\"b\\\\c\\\$d\"")
+  assert-equals(str-lit("nl\n"), "\"nl\\n\"")
+}
+
 fn test() {
   test-twice()
   test-repeat()
@@ -91,6 +134,8 @@ fn test() {
   test-code-literal()
   test-code-fmt()
   test-code-builder()
+  test-emitter()
+  test-str-lit()
 
   .{}
 }

@@ -233,6 +233,15 @@ fn pt_to_ffi_type(
                 let t = make_struct_ffi_type(k1, element_storage.as_slice_mut(), 0, 0);
                 Ok(t)
             }
+            AggType::Vector { element_pt, len } => {
+                let mut element_storage = k1.mem.new_list(len);
+                let element_ffi_type = scalar_to_ffi_type(element_pt);
+                for _ in 0..len {
+                    element_storage.push(element_ffi_type);
+                }
+                let t = make_struct_ffi_type(k1, element_storage.as_slice_mut(), 0, 0);
+                Ok(t)
+            }
             AggType::Union { members } => {
                 // Default is zeroed()
                 let mut max_size_member: ffi_type = ffi_type::default();

@@ -1,0 +1,10 @@
+ns counter {
+  fn next(n: int): int { n }
+}
+
+ability counter[impl t] {
+  fn next(self: *mut self): t
+}
+
+fn main(): i32 { 0 }
+//errmsg: Ability function name next is taken by a namespace member

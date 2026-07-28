@@ -163,7 +163,7 @@ pub mod kinds {
 
 pub struct Scopes {
     pub scopes: VPool<Scope, ScopeId>,
-    /// maps scopes to their parent lambda scope, if any. used for capture detection. 
+    /// maps scopes to their parent lambda scope, if any. used for capture detection.
     lambda_cache: RefCell<FxHashMap<ScopeId, Option<ScopeId>>>,
     context_variables_by_type: FxHashMap<ScopeKey, VariableId>,
     functions: FxHashMap<ScopeKey, FunctionId>,
@@ -183,6 +183,7 @@ pub struct Scopes {
     pub libc_scope_id: ScopeId,
     pub types_scope_id: ScopeId,
     pub array_scope_id: ScopeId,
+    pub vector_scope_id: ScopeId,
 }
 
 impl Scopes {
@@ -210,6 +211,7 @@ impl Scopes {
             libc_scope_id: ScopeId::PENDING,
             types_scope_id: ScopeId::PENDING,
             array_scope_id: ScopeId::PENDING,
+            vector_scope_id: ScopeId::PENDING,
         };
         let id = scopes.scopes.add(root_scope);
         debug_assert_eq!(id, Self::ROOT_SCOPE_ID);

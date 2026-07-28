@@ -144,6 +144,10 @@ ns types {
       element-type-id: u64,
       size: ?int
     }),
+    vector({
+      element-type-id: u64,
+      size: ?int
+    }),
     struct({
       fields: span[{
         name: string,
@@ -417,6 +421,14 @@ impl[item, t: iterator[item = item]] iterable[item = item, i = t] for t {
   fn iterator(self): t { self }
 }
 
+// Every ability above this line, `enum` through `iterable`, has a
+// hard-coded id dependent on declaration order (typer.rs ABILITY_ID_*).
+// ------------------------------------------------------------------
+
+ability from-string[impl e] {
+  fn from-string(s: string): result[self, e]
+}
+
 ability zero { fn zero(): self }
 ability one { fn one(): self }
 
@@ -567,6 +579,10 @@ ns k1 {
   let os-posix: bool = os is :macos or os is :linux
 
   let multithreading: bool = builtin
+
+  // The widest SIMD register the target supports;
+  // `vector[u8, type-of(k1/simd-bytes)]`
+  let simd-bytes: static size = builtin
 
   intern fn location(): source-location
 

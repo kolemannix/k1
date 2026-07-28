@@ -10,6 +10,11 @@ let MODULE_INFO: k1/module-manifest = .{
 }
 
 use uv/uv-loop
+use std/dyn-source
+use std/rc
+use std/rc-bytes
+use std/pubsub
+use std/notify
 
 type db-query-params = {
   query: string,
@@ -17,9 +22,6 @@ type db-query-params = {
 
 fn fake-database-query(params: db-query-params): result[int, string] {
   tprintln("fake DB query started: ${params.query}")
-
-  // uv/sleep(250);
-
   :ok 3
 }
 
@@ -42,28 +44,10 @@ ns for db-conn {
 
 use core/arena
 
-type http-handler-deps = { }
-
-type subscribe-response = { topic: string }
-
-type http-response = either {
-  complete(span[string]),
-  // Send headers, then drain the stream as a chunked-transfer body
-  stream(stream-response),
-  // Send SSE headers, register on the pubsub topic, hold the connection open
-  subscribe(subscribe-response),
-}
 type http-handler-work = {
   connection: *mut connection,
   request: http/request,
-
-  handler: route-handler,
-
   http-response: ?http-response,
-}
-
-type http-request = {
-  raw: string,
 }
 
 fn do-work(req: *mut uv/work) {
@@ -89,7 +73,7 @@ fn do-work(req: *mut uv/work) {
 
     // These are create once and never-free
     mem/push-mode(:system-heap)
-    let deps-baton = (work.connection.make-user-deps)()
+    let deps-baton = (work.connection.make-user-deps)(work.connection.framework)
     mem/pop-mode()
 
     tprintln("made deps: $deps-baton")
@@ -98,7 +82,7 @@ fn do-work(req: *mut uv/work) {
   let user-deps-baton: ptr = worker-user-data
 
   mem/push-mode(:custom-arena work.connection.request-arena)
-  let response = (work.handler.logic-fn)(work.request, user-deps-baton)
+  let response = (work.connection.handle)(work.request, user-deps-baton)
   work.http-response = :some response
   mem/pop-mode()
 
@@ -132,120 +116,37 @@ fn after-do-work(req: *mut uv/work, status: i32) {
   let connection = work.connection
   let close-state = connection.get-close-state-sync()
   if close-state.is-closing {
+    abandon-response(work)
     return
   }
   if close-state.should-close {
+    abandon-response(work)
     close-connection(connection)
     return
   }
 
-// [ ] enum from int (using bitcast currently)
-// [ ] dogfood language match fallback arm hidden
-// [ ] atomics
-// [ ] take specialized generic function pointers
-// [x] dogfood bindgen strip prefix
-// [x] dogfood bindgen strip suffix
-// [x] dogfood language struct access lsp entity
-// [x] dogfood language remove *mut distinction
-// [x] dogfood language swap data and len in k1 buffer struct
   require work.http-response is :some response else {
     // This is a bug; it shouldn't be possible to have not set this to some
     // since the harness is in control of this opt, so we close
     crash("[bug] handler did not set work.http-response")
   }
-  response is {
-    :complete chunks -> {
-      let write-req = connection.request-arena.alloc[uv/write]()
-      write-req.set-data(connection)
-
-      let bufs = connection.request-arena.alloc-list[uv/buf](chunks.len())
-      for chunks {
-        bufs.push(uv/buf/wrap-span(it.span-bytes()))
-      }
-      let write-rc = uv/write(write-req, connection.client.as-stream(), bufs.as-buffer().data-ptr().as(), bufs.len().as[u32], fn (req, status) {
-        let connection: *mut connection = req.get-data()
-        // Direct access is fine as we are on the main thread
-        if connection.close-state.is-closing {
-          return
-        }
-        if connection.close-state.should-close {
-          close-connection(connection)
-          return
-        }
-        if status != 0 {
-          let errno = uv/errno/from-i32(status)
-          tprintln("write failed: ${errno.enum-name()}")
-          close-connection(connection)
-          return
-        } else {
-          connection.finish-request()
-        }
-      })
-
-      if write-rc != 0 {
-        tprintln("uv_write failed: $write-rc")
-        close-connection(connection)
-        return
-      }
-    },
-    :stream streaming -> {
-      chunked/begin(connection, streaming)
-    },
-    :subscribe sub -> {
-      // SSE: send headers, register with the bus, and leave the connection
-      // open. finish-request is never called for subscriptions; the request
-      // arena stays live until the client disconnects and close-connection
-      // unsubscribes us.
-      write-shared-frame(
-        connection,
-        rc-buffer/make("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n".span-bytes()))
-      pubsub/subscribe(connection, sub.topic)
-    },
-  }
+  response-writer/begin(connection, response)
   .{}
 }
 
-// Writes a shared frame, releasing the reference it was given when the
-// write completes. Used for writes that outlive any arena we control (SSE
-// frames, subscription headers). Closes the connection on failure.
-type frame-write = { connection: *mut connection, frame: rc-buffer }
-
-fn write-shared-frame(connection: *mut connection, frame: rc-buffer) {
-  let ctx: *mut frame-write = system-heap.new(.{ connection, frame })
-  let req = system-heap.alloc-t[uv/write]
-  req.set-data(ctx)
-  let buf: uv/buf = uv/buf/wrap-span(frame.bytes())
-  let rc = uv/write(req, connection.client.as-stream(), &buf, 1, fn (req, status) {
-    let ctx: *mut frame-write = req.get-data()
-    let connection = ctx.connection
-    ctx.frame.release()
-    system-heap.free-t(ctx)
-    system-heap.free-t(req)
-    if connection.close-state.is-closing { return }
-    if status != 0 {
-      let errno = uv/errno/from-i32(status)
-      tprintln("frame write failed: ${errno.enum-name()}")
-      close-connection(connection)
-    }
-  })
-  if rc != 0 {
-    tprintln("uv_write for frame failed: $rc")
-    ctx.frame.release()
-    system-heap.free-t(ctx)
-    system-heap.free-t(req)
-    close-connection(connection)
+// A handler response that will never be delivered: release any stream source
+// it carries, which response-writer/begin never got the chance to start.
+fn abandon-response(work: *mut http-handler-work) {
+  if work.http-response is :some response {
+    if response.body is :stream s { s.stop() }
   }
 }
 
-let tlog: bool = true
-fn mprintln(code: string): string {
-  #if tlog "tprintln($code)"
-  else ""
+let tlog: bool = false
+macro tprintln(arg) {
+  if tlog `tprintln-log($arg)` else `.{}`
 }
-fn tprintln[t: print](t) {
-  if not tlog return
-
-  // get thread name
+fn tprintln-log[t: print](t) {
   let thread-self = uv/thread_self()
   let thread-name-buf = array/zeroed[u8, 256]()
   let _rc = uv/thread_getname(&thread-self, thread-name-buf.get-base(), thread-name-buf.len().as())
@@ -256,8 +157,12 @@ fn tprintln[t: print](t) {
 
 fn close-connection(conn: *mut connection) {
   conn.set-is-closing-sync(true)
-  // Must happen before the close callback releases the connection
-  pubsub/unsubscribe(conn)
+  // Release any live stream (e.g. a pubsub subscription) before the close
+  // callback releases the connection
+  if conn.active-stream is :some s {
+    conn.active-stream = :none
+    s.stop()
+  }
   if uv/is_closing(conn.client-handle()).as-bool() {
     tprintln("not closing connection${conn.serial-no}")
     return
@@ -288,21 +193,16 @@ fn alloc-read-buffer(handle: *mut uv/handle, suggested-size: usize, buf: *mut uv
   buf.* = uv/buf/wrap-buffer(byte-buffer)
 }
 
-fn queue-http-handler(connection: *mut connection, request: http/request, handler: route-handler) {
-  let client = connection.client
+fn queue-http-handler(connection: *mut connection, request: http/request) {
+  let client = connection.client()
   let uv-loop = uv/handle_get_loop(client.as-handle())
-  let connection = client.get-data[connection]()
   tprintln("read complete: ${request.header.url}\n-----------")
 
   let work: *mut http-handler-work = connection.request-arena.push(.{
     connection,
     request,
-
-    handler,
-
     http-response = :none,
   })
-  // let work-req = connection.request-arena.alloc[uv/work];
   let work-req = system-heap.alloc-t[uv/work]
   work-req.set-data(work)
   let queue-rc = uv/queue_work(uv-loop, work-req, do-work, after-do-work)
@@ -312,6 +212,9 @@ fn queue-http-handler(connection: *mut connection, request: http/request, handle
   } else {
     core/assert(connection.current-work is :none)
     connection.current-work = :some work-req
+    // No reads while a request is in flight: the worker owns the request
+    // arena, and the paused parser isn't ticked again until finish-request
+    let _ = uv/read_stop(client.as-stream())
   }
 }
 
@@ -333,9 +236,6 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
       },
       _ -> {
         tprintln("uncategorized read error: ${uv-errno.enum-name()}")
-        // FIXME: Are we sure we can do this, in the streaming case the worker could be on the other side and will try
-        //        to access the 'connection', for example to use the request arena
-        //        can we call uv_work cancel maybe? That won't do anything about that os thread though once its 'live'
         close-connection(connection)
         return
       }
@@ -344,13 +244,22 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
 
   if nread > 0 {
     let chunk-bytes = span/wrap-raw[byte](buf.base.as[ptr], nread)
-    let parse-result = http/tick(connection.request-parser.&, chunk-bytes)
-    use llhttp/errno
-    if parse-result is errno:HPE_OK .{
-    } else {
-      tprintln("http parse error ${parse-result.enum-name()}; closing connection")
-      close-connection(connection)
-      return
+    http/tick(connection.request-parser.&, chunk-bytes) is {
+      :ok -> .{},
+      :paused leftover -> {
+        if leftover > 0 {
+          // Pipelined bytes we'll never parse: answer the in-flight request,
+          // then close so the client retries on a fresh connection
+          tprintln("client pipelined $leftover unparsed bytes; closing after response")
+          if connection.parsed-header is :some h {
+            connection.parsed-header = :some h.with(.{ keep-alive = false })
+          }
+        }
+      },
+      :fail e -> {
+        tprintln("http parse error ${e.enum-name()}; closing connection")
+        close-connection(connection)
+      },
     }
   }
   .{}
@@ -358,7 +267,9 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
 
 type connection = {
   connection-arena: *arena,
-  client: uv/tcp,
+  // Inline uv_tcp_t storage: a by-value copy is a dead handle libuv never
+  // sees, so always go through client()
+  client-storage: uv/tcp,
   serial-no: u64,
   close-state: {
     lock: uv/mutex,
@@ -370,18 +281,21 @@ type connection = {
   },
   current-work: ?*uv/work,
 
-  route-handlers: span[route-handler],
+  handle: *fn(http/request, ptr) -> http-response,
 
   request-arena: *arena,
   request-parser: http/parser,
 
-  make-user-deps: *fn() -> ptr,
-  matched-handler: ?route-handler,
+  // The source being drained by response-writer/, stopped on finish or close
+  active-stream: ?dyn-source[u8],
+
+  framework: *mut framework-deps,
+  make-user-deps: *fn(*mut framework-deps) -> ptr,
   parsed-header: ?http/header,
 }
 
 ns for connection {
-  fn make(uv-loop: *uv-loop, make-user-deps: *fn() -> ptr, route-handlers: span[route-handler]): *mut connection {
+  fn make(uv-loop: *uv-loop, framework: *mut framework-deps, make-user-deps: *fn(*mut framework-deps) -> ptr, handle: *fn(http/request, ptr) -> http-response): *mut connection {
     let connection = {
       // We need a stable pointer to connection-arena
       let connection-arena = core/arena/init-virtual(usage-hint-mb = 1)
@@ -392,7 +306,7 @@ ns for connection {
 
       conn.* = .{
         connection-arena,
-        client = uninit,
+        client-storage = uninit,
         serial-no = { conn-serial = conn-serial + 1; conn-serial },
         close-state = .{
           lock = uninit,
@@ -402,9 +316,10 @@ ns for connection {
         // for calling cancel
         current-work = :none,
 
-        route-handlers,
+        handle,
 
-        request-arena, 
+        request-arena,
+        active-stream = :none,
         request-parser = http/parser-init[connection](
           connection-arena = connection-arena,
           request-arena = request-arena,
@@ -413,8 +328,8 @@ ns for connection {
           on-body-complete = on-complete-http-body,
         ),
 
+        framework,
         make-user-deps,
-        matched-handler = :none,
         parsed-header = :none,
       }
       assert(not conn.connection-arena.base-ptr.is-null())
@@ -422,12 +337,12 @@ ns for connection {
       let mutex-rc = uv/mutex_init(conn.close-state.lock.&)
       if mutex-rc != 0 crash("uv_mutex_init failed")
 
-      let tcp-init-rc = uv/tcp_init(uv-loop, conn.client.&)
+      let tcp-init-rc = uv/tcp_init(uv-loop, conn.client())
       if tcp-init-rc != 0 {
         eprintln("tcp init failed: ${string/wrap-c(uv/strerror(tcp-init-rc).as[ptr])}")
       }
-      conn.client.set-data(conn)
-      uv/tcp_nodelay(conn.client.&, 1)
+      conn.client().set-data(conn)
+      uv/tcp_nodelay(conn.client(), 1)
 
       conn
     }
@@ -449,6 +364,11 @@ ns for connection {
       self.current-work = :none
       self.request-arena.reset(true)
       self.request-parser.reset()
+      let read-rc = uv/read_start(self.client().as-stream(), alloc-read-buffer, on_client_read)
+      if read-rc != 0 {
+        tprintln("read restart error: $read-rc")
+        close-connection(self)
+      }
     }
   }
 
@@ -459,53 +379,35 @@ ns for connection {
     state
   }
   fn set-is-closing-sync(self: *connection, is-closing: bool) {
+    uv/mutex_lock(self.close-state.lock.&)
     self.close-state.is-closing = is-closing
+    uv/mutex_unlock(self.close-state.lock.&)
   }
   fn set-should-close-sync(self: *connection, should-close: bool) {
+    uv/mutex_lock(self.close-state.lock.&)
     self.close-state.should-close = should-close
+    uv/mutex_unlock(self.close-state.lock.&)
   }
 
-  fn client-handle(self: *connection): *uv/handle { self.client.as-handle() }
+  fn client(self: *connection): *mut uv/tcp { self.client-storage.& }
+  fn client-handle(self: *connection): *uv/handle { self.client().as-handle() }
 }
 
 let mutable conn-serial: u64 = 0
 let mutable conn-count: u64 = 0
 
-fn on-complete-http-header(connection: *mut connection, header: http/header): http/body-mode {
-  // eprintln("matching handler");
+fn on-complete-http-header(connection: *mut connection, header: http/header): http/header-action {
   connection.parsed-header = :some header
-  match-route(header, connection.route-handlers) is {
-    :none -> { 
-      // Respond with 404
-      close-connection(connection)
-      // doesn't matter what we return since we'll never 'tick'
-      // the parser again
-      :strict
-    },
-    :some handler -> {
-      connection.matched-handler = :some handler
-      handler.body-mode is {
-          :strict -> {
-            // continue reading; do not enqueue handler yet
-            :strict
-          },
-          :stream -> {
-            :stream
-          }
-      }
-    }
-  }
+  :proceed
 }
 
 fn on-complete-http-body(connection: *mut connection, chunks: span[span[u8]]) {
   let request: http/request = .{
     header = connection.parsed-header.get(),
-    body = :buffered chunks
+    body = chunks
   }
-  let total-size = 0
-  for chunks { total-size = total-size + it.len() }
-  tprintln("got the whole body! ${chunks.len()} chunks; $total-size total")
-  queue-http-handler(connection, request, connection.matched-handler.get())
+  tprintln("request complete: ${chunks.len()} body chunks")
+  queue-http-handler(connection, request)
 }
 
 fn on-new-connection(server: *mut uv/stream, status: i32) {
@@ -519,10 +421,12 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
   let l = uv/handle_get_loop(server.as-handle())
 
   let server-data = server.as-handle().get-data[server-data]
-  let connection: *connection = connection/make(l, server-data.make-deps, server-data.route-handlers)
-  let client: *uv/tcp = connection.client.&
+  let connection: *connection = connection/make(l, server-data.framework, server-data.make-deps, server-data.handle)
+  let client = connection.client()
 
   conn-count = conn-count + 1
+  // FIXME: no header-read timeout — a half-sent request holds the connection
+  // (and its two arenas) forever (slowloris)
   let accept-rc = uv/accept(server, client.as-stream())
   tprintln("connection arena new used-bytes: ${connection.connection-arena.used-bytes()}")
   if accept-rc == 0 {
@@ -542,40 +446,55 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
   .{}
 }
 
-#meta {
-  let template = fn(name: string, ptr-type: string) `
-type $name = {
-  body-mode: http/body-mode,
-  path-pattern: string,
-  logic-fn: *fn(http/request, $ptr-type) -> http-response,
-}`
-  "$raw\n$typed".fmt(.{ raw = template("route-handler", "ptr"), typed = template("user-route-handler[deps]", "*mut deps") })
-}
-#static types/assert-layout[route-handler](32, 8, [0, 8, 24])
-#static types/assert-layout[user-route-handler[empty]](32, 8, [0, 8, 24])
-
-fn match-route(_request-header: http/header, all-routes: span[route-handler]): ?route-handler {
-  all-routes.first()
+// Framework-provided capabilities, created by the harness and handed to the
+// app's deps constructor
+type framework-deps = {
+  uv-loop: *mut uv-loop,
+  bus: *mut pubsub/bus[span[u8]],
 }
 
-// fn erased-fns(name: string)
-// #meta erased-fns("my-route-handler-test")
+// The bus is loop-agnostic: publishes fire a notify that pokes a uv_async,
+// whose main-thread callback drives bus.dispatch()
+fn framework-init(uv-loop: *mut uv-loop): *mut framework-deps {
+  let async-handle = system-heap.alloc-t[uv/async]
+  // Fail a subscriber once 1MB of payload is queued and undelivered: a
+  // client that isn't draining its socket would otherwise grow it forever
+  let bus = pubsub/create[span[u8]](
+    on-event = .{ state = async-handle.as[ptr], notify-fn = notify-pubsub-async },
+    subscriber-cap-weight = 1048576,
+    weight-fn = fn(payload: rc-bytes) payload.bytes().len(),
+  )
+  if uv/async_init(uv-loop, async-handle, dispatch-pubsub) != 0 crash("uv_async_init for pubsub failed")
+  async-handle.set-data(bus)
+  system-heap.new(.{ uv-loop, bus })
+}
+
+fn notify-pubsub-async(state: ptr) {
+  let rc = uv/async_send(state.rw[uv/async]())
+  if rc < 0 crash("uv_async_send for pubsub failed: $rc")
+}
+
+fn dispatch-pubsub(handle: *mut uv/async) {
+  handle.get-data[pubsub/bus[span[u8]]]().dispatch()
+}
 
 type server-data = {
-  route-handlers: span[route-handler],
-  make-deps: *fn() -> ptr,
+  handle: *fn(http/request, ptr) -> http-response,
+  framework: *mut framework-deps,
+  make-deps: *fn(*mut framework-deps) -> ptr,
 }
-fn start-app[deps](context arena: *mut arena)(make-deps: *fn() -> *mut deps, route-handlers: span[user-route-handler[deps]]): result[{}, string] {
+fn start-app[deps](context arena: *mut arena)(framework: *mut framework-deps, make-deps: *fn(*mut framework-deps) -> *mut deps, handle: *fn(http/request, *mut deps) -> http-response): result[{}, string] {
   let l = uv/default_loop()
   work/init-work-queue(l)
 
   let server: *mut uv/tcp = arena.alloc[uv/tcp]
   let tcp-init-rc = uv/tcp_init(l, server)
 
-  let erased-handlers = mem/bitcast[span[user-route-handler[deps]], span[route-handler]](route-handlers)
-  let erased-make-deps = make-deps.as[*fn() -> ptr]
-  let server-data: *mut server-data = arena.push(.{ 
-    route-handlers = erased-handlers,
+  let erased-handle = handle.as[*fn(http/request, ptr) -> http-response]
+  let erased-make-deps = make-deps.as[*fn(*mut framework-deps) -> ptr]
+  let server-data: *mut server-data = arena.push(.{
+    handle = erased-handle,
+    framework,
     make-deps = erased-make-deps
   })
   server.as-handle().set-data[server-data](server-data)
@@ -614,22 +533,10 @@ fn main(): i32 {
   let context arena = arena/init-default()
   arena.set-name("mainthread")
 
-  mem/push-mode(:custom-arena arena)
-  let route-handlers: span[user-route-handler[app/deps]] = [
-    .{ 
-      body-mode = :strict,
-      path-pattern = "*",
-      logic-fn = app/handle
-    }
-  ]
-  mem/pop-mode()
+  let framework = framework-init(uv/default_loop())
+  app/start-mock-publisher(framework.bus)
 
-  pubsub/init(uv/default_loop())
-  app/start-mock-publisher()
-
-  start-app[app/deps](app/make-deps, route-handlers)
-
-  // http/example-http();
+  start-app[app/deps](framework, app/make-deps, app/handle)
 
   0
 }

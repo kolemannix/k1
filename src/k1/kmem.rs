@@ -1409,25 +1409,25 @@ impl<T, Tag> List<T, Tag> {
         }
     }
 
-    #[track_caller]
-    fn grow(&mut self, mem: &mut Mem<Tag>) -> Self
+    fn grow_to(&mut self, mem: &mut Mem<Tag>, min_cap: usize) -> Self
     where
         T: Copy + Sized,
     {
-        let loc = std::panic::Location::caller();
         // Growth doesnt invalidate the old pointers
-        let new_cap = if self.len == 0 {
+        let mut new_cap_usize = if self.len == 0 {
             let size_of_t = size_of::<T>();
-            let initial_cap = if size_of_t >= 1024 { 1 } else { 8 };
-            initial_cap
+            if size_of_t >= 1024 { 1 } else { 8 }
         } else {
-            let new_cap_usize = self.cap() * 2;
-            #[cfg(debug_assertions)]
-            if new_cap_usize > u32::MAX as usize {
-                panic!("MList capacity exceeds 32-bit handle limit: {}", new_cap_usize);
-            }
-            new_cap_usize as u32
+            self.cap() * 2
         };
+        while new_cap_usize < min_cap {
+            new_cap_usize *= 2;
+        }
+        #[cfg(debug_assertions)]
+        if new_cap_usize > u32::MAX as usize {
+            panic!("MList capacity exceeds 32-bit handle limit: {}", new_cap_usize);
+        }
+        let new_cap = new_cap_usize as u32;
 
         if self.end_ptr() == mem.cursor() {
             // Fast path for growth when this list is the last thing in the arena; just move the cursor forward
@@ -1438,19 +1438,6 @@ impl<T, Tag> List<T, Tag> {
             debug_assert_eq!(new_me.end_ptr().addr(), mem.cursor().addr());
             new_me
         } else {
-            if cfg!(debug_assertions) {
-                // No need to log grows from 0
-                if self.len != 0 {
-                    // eprintln!("{}", std::backtrace::Backtrace::capture());
-                    eprintln!(
-                        "{}:{} mlist true realloc from {} -> {}",
-                        loc.file(),
-                        loc.line(),
-                        self.cap(),
-                        new_cap
-                    );
-                }
-            }
             let mut new_me = mem.new_list(new_cap);
             new_me.extend(self.as_slice());
             new_me
@@ -1461,13 +1448,12 @@ impl<T, Tag> List<T, Tag> {
     // For now we'll constrain the tag, but we should provide
     // a separate method that returns a new list in whatever
     // arena is passed
-    #[track_caller]
     pub fn push_grow(&mut self, mem: &mut Mem<Tag>, val: T)
     where
         T: Copy,
     {
         if self.len >= self.cap() {
-            *self = self.grow(mem);
+            *self = self.grow_to(mem, self.len + 1);
         }
         self.push_unchecked(val)
     }
@@ -1501,7 +1487,7 @@ impl<T, Tag> List<T, Tag> {
             panic!("MList insert index out of bounds: {} > {}", index, self.len);
         }
         if self.len >= self.cap() {
-            *self = self.grow(mem)
+            *self = self.grow_to(mem, self.len + 1)
         }
         self.insert(index, val)
     }
@@ -1520,13 +1506,12 @@ impl<T, Tag> List<T, Tag> {
         self.len += vals.len();
     }
 
-    #[track_caller]
     pub fn extend_grow(&mut self, mem: &mut Mem<Tag>, vals: &[T])
     where
         T: Copy,
     {
         if self.len + vals.len() > self.buf.len() {
-            *self = self.grow(mem);
+            *self = self.grow_to(mem, self.len + vals.len());
         }
         self.extend(vals)
     }

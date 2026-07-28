@@ -1,0 +1,74 @@
+use std/time
+
+let simd-bytes: static size = 32
+
+let v: vector[u8, type-of(simd-bytes)] = vector/zeroed[u8, type-of(simd-bytes)]()
+
+// SIMD vs naive byte-search benchmark
+fn find-byte-simd(haystack: string, c: char): i64 {
+  let len = haystack.len()
+  let needle = vector/splat[u8, 16](c.as[u8])
+  let base = haystack.data-ptr()
+  let i = 0: size
+  while i + 16 <= len {
+    let chunk = vector/load-unchecked[u8, 16](base.ref-at-index[u8](i).as[ptr])
+    let lane = chunk.eq-lanes(needle).first-true-lane()
+    if lane >= 0 {
+      return i.as[i64] + lane
+    }
+    i = i + 16
+  }
+  while i < len {
+    if haystack.get(i) == c {
+      return i.as[i64]
+    }
+    i = i + 1
+  }
+  -1
+}
+
+fn find-byte-naive(haystack: string, c: char): i64 {
+  for haystack.span {
+    if it == c return it-index
+  }
+  -1
+}
+
+fn main(argc: u32, argv: ptr): i32 {
+  let n = 1048576: size
+  let chars = list/filled(n, 'a')
+  chars.set(n - 1, 'z')
+  let s = string/wrap-span(chars.as-span())
+  let expected = n.as[i64] - 1
+  let iters = 100: size
+
+  let t0 = time/read-cpu-counter()
+  let acc-naive = 0: i64
+  for 0.until(iters) {
+    acc-naive = acc-naive + find-byte-naive(s, 'z')
+  }
+  let t1 = time/read-cpu-counter()
+  let acc-simd = 0: i64
+  for 0.until(iters) {
+    acc-simd = acc-simd + find-byte-simd(s, 'z')
+  }
+  let t2 = time/read-cpu-counter()
+
+  assert-equals(acc-naive, expected * iters.as[i64])
+  assert-equals(acc-simd, expected * iters.as[i64])
+
+  let naive-nanos = time/counter-to-nanos(t1 - t0)
+  let simd-nanos = time/counter-to-nanos(t2 - t1)
+  print("naive: ")
+  print(naive-nanos / iters.as[u64])
+  println(" ns/iter")
+  print("simd:  ")
+  print(simd-nanos / iters.as[u64])
+  println(" ns/iter")
+  print("speedup: ")
+  print(naive-nanos / simd-nanos)
+  print(".")
+  print((naive-nanos * 10 / simd-nanos) % 10)
+  println("x")
+  0
+}
