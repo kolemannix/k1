@@ -204,7 +204,7 @@ impl TypedProgram {
             let e_type_id = self.exprs.get_type(*e);
             self.push_block_stmt(&mut b, TypedStmt::Expr(*e, e_type_id));
         }
-        self.exprs.add_block(&mut self.mem, b, NEVER_TYPE_ID)
+        self.exprs.add_block(b, NEVER_TYPE_ID)
     }
 
     pub(super) fn make_never_condition_block(
@@ -223,7 +223,7 @@ impl TypedProgram {
                 }
             }
         }
-        self.exprs.add_block(&mut self.mem, b, NEVER_TYPE_ID)
+        self.exprs.add_block(b, NEVER_TYPE_ID)
     }
 
     /// Creates a non-mutable, mangled, non-referencing variable defn.
@@ -779,7 +779,7 @@ impl TypedProgram {
         if block.statements.is_empty() {
             Ok(self.synth_empty_struct(span))
         } else {
-            Ok(self.exprs.add_block(&mut self.mem, block, EMPTY_TYPE_ID))
+            Ok(self.exprs.add_block(block, EMPTY_TYPE_ID))
         }
     }
 
@@ -852,7 +852,7 @@ impl TypedProgram {
 
         // build_call_type should definitely be string
         let build_call_type = self.exprs.get_type(build_call);
-        Ok(self.exprs.add_block(&mut self.mem, block, build_call_type))
+        Ok(self.exprs.add_block(block, build_call_type))
     }
 
     fn expr_type_is_code(&self, expr: TypedExprId) -> bool {
@@ -926,7 +926,7 @@ impl TypedProgram {
         self.push_block_expr_id(&mut block, build_call);
 
         let build_call_type = self.exprs.get_type(build_call);
-        Ok(self.exprs.add_block(&mut self.mem, block, build_call_type))
+        Ok(self.exprs.add_block(block, build_call_type))
     }
 
     pub(crate) fn synth_variable_expr(

@@ -1179,7 +1179,7 @@ pub fn vm_value_to_static_value(
                 let elem_static = vm_value_to_static_value(k1, element_type, elem_result, span)?;
                 elements.push(elem_static);
             }
-            let elements_slice = elements.into_handle(&mut k1.static_values.mem);
+            let elements_slice = elements.to_slice();
             k1.static_values.add(StaticValue::LinearContainer(StaticContainer {
                 elements: elements_slice,
                 kind,
@@ -1215,7 +1215,7 @@ pub fn vm_value_to_static_value(
                                 vm_value_to_static_value(k1, element_type, elem_vm, span)?;
                             elements.push(elem_static);
                         }
-                        let elements_slice = elements.into_handle(&mut k1.static_values.mem);
+                        let elements_slice = elements.to_slice();
                         let static_kind = match container_kind {
                             ContainerKind::Array(_) => unreachable!(),
                             ContainerKind::Buffer => StaticContainerKind::Buffer,
@@ -1245,7 +1245,7 @@ pub fn vm_value_to_static_value(
                 }
                 k1.static_values.add(StaticValue::Struct(StaticStruct {
                     type_id,
-                    fields: k1.static_values.mem.list_to_handle(field_value_ids),
+                    fields: field_value_ids.to_slice(),
                 }))
             }
         }

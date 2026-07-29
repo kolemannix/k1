@@ -869,7 +869,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         CgType::StructType(CgStructType {
                             pt,
                             struct_type,
-                            fields: cg_field_types.into_handle(&mut self.mem),
+                            fields: cg_field_types.to_slice(),
                             di_type,
                             layout: agg_layout,
                         })
@@ -956,7 +956,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         CgType::Union(CgUnionType {
                             pt,
                             aligned_opaque_repr,
-                            members: self.mem.list_to_handle(cg_members),
+                            members: cg_members.to_slice(),
                             layout: agg_layout,
                             di_type,
                         })
@@ -1168,8 +1168,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         Ok(CgFunctionType {
             llvm_function_type: fn_type,
-            param_k1_types: self.mem.list_to_handle(param_llvm_types),
-            param_abi_mappings: self.mem.list_to_handle(param_abi_mappings),
+            param_k1_types: param_llvm_types.to_slice(),
+            param_abi_mappings: param_abi_mappings.to_slice(),
             return_logical_cg_type,
             return_abi_mapping: return_type_abi_mapping,
             is_sret,

@@ -2708,16 +2708,11 @@ impl TypedExprPool {
         )
     }
 
-    pub fn add_block(
-        &mut self,
-        mem: &mut Mem<TypedProgram>,
-        builder: BlockBuilder,
-        type_id: TypeId,
-    ) -> TypedExprId {
+    pub fn add_block(&mut self, builder: BlockBuilder, type_id: TypeId) -> TypedExprId {
         self.add(
             TypedExpr::Block(TypedBlock {
                 scope_id: builder.scope_id,
-                statements: mem.list_to_handle(builder.statements),
+                statements: builder.statements.to_slice(),
             }),
             type_id,
             builder.span,
@@ -3575,7 +3570,7 @@ impl TypedProgram {
                     ParsedTypeConstraintExpr::Static(_) => {}
                 };
             }
-            let predicate_functions_handle = self.mem.list_to_handle(predicate_functions);
+            let predicate_functions_handle = predicate_functions.to_slice();
             let type_variable_id = self.add_type_parameter(
                 TypeParameter {
                     name: type_param.name,
@@ -3596,7 +3591,7 @@ impl TypedProgram {
                 );
             }
         }
-        let type_params_handle = self.mem.list_to_handle(type_params);
+        let type_params_handle = type_params.to_slice();
 
         // Actually compile the RHS
         let rhs_type_id = match self.ast.type_exprs.get(parsed_type_defn.value_expr) {
@@ -3873,7 +3868,7 @@ impl TypedProgram {
                 }
 
                 let struct_defn = Type::Struct(StructType {
-                    fields: self.types.mem.list_to_handle(fields),
+                    fields: fields.to_slice(),
                     record_kind: kind,
                 });
                 let type_id = self.types.add_anon(struct_defn);
@@ -4045,7 +4040,7 @@ impl TypedProgram {
                             .join("\n")
                     );
                     let sum_type = Type::Sum(SumType {
-                        variants: variants.into_handle(&mut self.types.mem),
+                        variants: variants.to_slice(),
                         tag_type,
                     });
                     let sum_type_id = self.types.add_anon(sum_type);
@@ -4091,7 +4086,7 @@ impl TypedProgram {
                             .join("\n")
                     );
                     let enum_type = Type::Enum(ScalarEnumType {
-                        member_values: member_values.into_handle(&mut self.types.mem),
+                        member_values: member_values.to_slice(),
                         int_type: tag_type,
                     });
                     let sum_type_id = self.types.add_anon(enum_type);
@@ -4248,7 +4243,7 @@ impl TypedProgram {
                     });
                 }
                 let return_type = self.eval_type_expr(fun_type.return_type, scope_id)?;
-                let params_handle = self.types.mem.list_to_handle(params);
+                let params_handle = params.to_slice();
                 let function_type_id = self.types.add_anon(Type::Function(FunctionType {
                     physical_params: params_handle,
                     is_lambda: false,
@@ -4485,7 +4480,7 @@ impl TypedProgram {
                 }
 
                 let new_struct = Type::Struct(StructType {
-                    fields: self.types.mem.list_to_handle(combined_fields),
+                    fields: combined_fields.to_slice(),
                     record_kind,
                 });
                 let type_id = self.types.add_anon(new_struct);
@@ -4949,7 +4944,7 @@ impl TypedProgram {
             )?;
         }
 
-        Ok((self.mem.list_to_handle(type_arguments), subst_pairs))
+        Ok((type_arguments.to_slice(), subst_pairs))
     }
 
     fn handle_opaque_tyapp(&mut self, ty_app: &parse::TypeApplication) -> K1Result<Option<TypeId>> {
@@ -5890,7 +5885,7 @@ impl TypedProgram {
                 }
                 let struct_pattern = TypedStructPattern {
                     struct_type_id: target_type_id,
-                    fields: self.patterns.mem.list_to_handle(fields),
+                    fields: fields.to_slice(),
                     span: struct_pattern.span,
                 };
                 Ok(self.patterns.add(TypedPattern::Struct(struct_pattern)))
@@ -7124,7 +7119,7 @@ impl TypedProgram {
             base_ability_id,
             ability_id: impl_signature.specialized_ability_id,
             impl_arguments: impl_signature.impl_arguments,
-            functions: self.mem.list_to_handle(impl_functions),
+            functions: impl_functions.to_slice(),
             scope_id,
             span,
             compile_errors: vec![],
@@ -7223,7 +7218,7 @@ impl TypedProgram {
             base_ability_id,
             ability_id: impl_signature.specialized_ability_id,
             impl_arguments: impl_signature.impl_arguments,
-            functions: self.mem.list_to_handle(impl_functions),
+            functions: impl_functions.to_slice(),
             scope_id,
             span,
             compile_errors: vec![],
@@ -7971,7 +7966,7 @@ impl TypedProgram {
                 substituted_type,
             );
         }
-        let substituted_ability_args_handle = self.mem.list_to_handle(substituted_ability_args);
+        let substituted_ability_args_handle = substituted_ability_args.to_slice();
         let concrete_ability_id = self.specialize_ability(
             generic_base_ability_id,
             substituted_ability_args_handle,
@@ -8047,7 +8042,7 @@ impl TypedProgram {
             specialized_functions.push(specialized_function);
         }
 
-        let substituted_impl_arguments_handle = self.mem.list_to_handle(substituted_impl_arguments);
+        let substituted_impl_arguments_handle = substituted_impl_arguments.to_slice();
         let id = self.add_ability_impl(TypedAbilityImpl {
             kind,
             blanket_type_params: MSlice::empty(),
@@ -8055,7 +8050,7 @@ impl TypedProgram {
             ability_id: concrete_ability_id,
             base_ability_id: generic_base_ability_id,
             impl_arguments: substituted_impl_arguments_handle,
-            functions: self.mem.list_to_handle(specialized_functions),
+            functions: specialized_functions.to_slice(),
             scope_id: new_impl_scope,
             span: blanket_impl.span,
             compile_errors: vec![],
@@ -8758,7 +8753,7 @@ impl TypedProgram {
         self.push_block_stmt_id(&mut result_block, try_value_var.defn_stmt);
         self.push_block_expr_id(&mut result_block, if_expr);
 
-        Ok(self.exprs.add_block(&mut self.mem, result_block, value_success_type))
+        Ok(self.exprs.add_block(result_block, value_success_type))
     }
 
     fn eval_unwrap_operator(
@@ -9199,7 +9194,7 @@ impl TypedProgram {
                 self.static_values.add_struct_from_slice(chunk_type, &[text_value, source_value]);
             elements.push(chunk_value);
         }
-        let elements = elements.into_handle(&mut self.static_values.mem);
+        let elements = elements.to_slice();
         let chunks_value = self.static_values.add(StaticValue::LinearContainer(StaticContainer {
             elements,
             kind: StaticContainerKind::List,
@@ -9388,7 +9383,7 @@ impl TypedProgram {
         };
         self.push_block_expr_id(&mut list_lit_block, final_expr);
         let final_expr_type = self.exprs.get_type(final_expr);
-        Ok(self.exprs.add_block(&mut self.mem, list_lit_block, final_expr_type))
+        Ok(self.exprs.add_block(list_lit_block, final_expr_type))
     }
 
     /// Compiles `#static <expr>` and `#meta <expr>` constructs
@@ -9622,7 +9617,7 @@ impl TypedProgram {
         if !is_definition {
             content.push_str("\n}");
         }
-        Ok(Some((content, self.mem.list_to_handle(table))))
+        Ok(Some((content, table.to_slice())))
     }
 
     #[cfg(debug_assertions)]
@@ -9950,7 +9945,7 @@ impl TypedProgram {
                             let e = p.ast.errors.last().unwrap();
                             failf!(e.span(), "{msg_base}{}", e.clone())
                         } else {
-                            Ok(ParseMetaprogramResult::Definitions(p.ast.mem.list_to_handle(defns)))
+                            Ok(ParseMetaprogramResult::Definitions(defns.to_slice()))
                         }
                     }
                 },
@@ -9991,9 +9986,9 @@ impl TypedProgram {
             field_values.push(StructLiteralField { name: ast_field.name, expr: Some(expr) });
         }
 
-        let struct_type = StructType::struc(self.types.mem.list_to_handle(field_defns));
+        let struct_type = StructType::struc(field_defns.to_slice());
         let struct_type_id = self.types.add_anon(Type::Struct(struct_type));
-        let typed_struct = StructLiteral { fields: self.mem.list_to_handle(field_values) };
+        let typed_struct = StructLiteral { fields: field_values.to_slice() };
         Ok(self.exprs.add(TypedExpr::Struct(typed_struct), struct_type_id, parsed_struct.span))
     }
 
@@ -10171,7 +10166,7 @@ impl TypedProgram {
             }
         };
         let output_struct = StructType {
-            fields: self.types.mem.list_to_handle(field_types),
+            fields: field_types.to_slice(),
             record_kind: RecordKind::Struct,
         };
         let output_struct_type_id = self.types.add(
@@ -10180,7 +10175,7 @@ impl TypedProgram {
             output_instance_info,
         );
 
-        let typed_struct = StructLiteral { fields: self.mem.list_to_handle(field_values) };
+        let typed_struct = StructLiteral { fields: field_values.to_slice() };
         Ok(self.exprs.add(
             TypedExpr::Struct(typed_struct),
             output_struct_type_id,
@@ -10364,8 +10359,8 @@ impl TypedProgram {
             });
             env_field_exprs.push(StructLiteralField { name: capture.name, expr: Some(field_expr) });
         }
-        let env_fields_handle = self.types.mem.list_to_handle(env_field_types);
-        let env_field_exprs_handle = self.mem.list_to_handle(env_field_exprs);
+        let env_fields_handle = env_field_types.to_slice();
+        let env_field_exprs_handle = env_field_exprs.to_slice();
 
         let lambda_scope_id =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LambdaScope, ScopeOwnerId::None);
@@ -10572,7 +10567,7 @@ impl TypedProgram {
         // No captures: this is just a regular function
         if !is_closure {
             let function_type = self.types.add_anon(Type::Function(FunctionType {
-                physical_params: self.types.mem.list_to_handle(typed_params),
+                physical_params: typed_params.to_slice(),
                 return_type,
                 is_lambda: false,
                 abi_mode: AbiMode::Internal,
@@ -10591,7 +10586,7 @@ impl TypedProgram {
             self.add_function(TypedFunction {
                 name,
                 scope: lambda_scope_id,
-                params: self.mem.list_to_handle(param_variables),
+                params: param_variables.to_slice(),
                 type_params: MSlice::empty(),
                 fnlike_type_params: MSlice::empty(),
                 body_block: Some(body_expr_id),
@@ -10646,7 +10641,7 @@ impl TypedProgram {
             new_stmts.extend(&prologue_stmts);
             new_stmts.extend(self.mem.getn(body.statements));
 
-            body.statements = self.mem.list_to_handle(new_stmts);
+            body.statements = new_stmts.to_slice();
         } else {
             panic!()
         }
@@ -10657,7 +10652,7 @@ impl TypedProgram {
         }
 
         let function_type = self.types.add_anon(Type::Function(FunctionType {
-            physical_params: self.types.mem.list_to_handle(typed_params),
+            physical_params: typed_params.to_slice(),
             return_type,
             is_lambda: true,
             abi_mode: AbiMode::Internal,
@@ -10666,7 +10661,7 @@ impl TypedProgram {
         let actual_body_function_id = self.add_function(TypedFunction {
             name,
             scope: lambda_scope_id,
-            params: self.mem.list_to_handle(param_variables),
+            params: param_variables.to_slice(),
             type_params: MSlice::empty(),
             fnlike_type_params: MSlice::empty(),
             body_block: Some(body_expr_id),
@@ -10894,7 +10889,7 @@ impl TypedProgram {
                     }
 
                     let match_arm = TypedMatchArm {
-                        condition: MatchingCondition { instrs: self.mem.list_to_handle(instrs) },
+                        condition: MatchingCondition { instrs: instrs.to_slice() },
                         consequent_expr,
                     };
                     // An arm over an uninhabited variant can never match: it is
@@ -10950,7 +10945,7 @@ impl TypedProgram {
         Ok(self.exprs.add(
             TypedExpr::Match(TypedMatchExpr {
                 initial_let_statements: self.mem.pushn(&[match_subject_variable.defn_stmt]),
-                arms: self.mem.list_to_handle(typed_arms),
+                arms: typed_arms.to_slice(),
             }),
             match_result_type,
             match_expr_span,
@@ -11881,7 +11876,7 @@ impl TypedProgram {
         );
         let consequent_type = self.exprs.get_type(body_block);
         let consequent_block_id =
-            self.exprs.add_block(&mut self.mem, consequent_block, consequent_type);
+            self.exprs.add_block(consequent_block, consequent_type);
         let if_next_loop_else_break_expr = self.synth_if_else(
             self.types.builtins.empty,
             next_is_some_call,
@@ -11907,7 +11902,7 @@ impl TypedProgram {
         });
         self.push_block_stmt(&mut loop_block, index_increment_statement);
 
-        let body_block = self.exprs.add_block(&mut self.mem, loop_block, self.types.builtins.empty);
+        let body_block = self.exprs.add_block(loop_block, self.types.builtins.empty);
         let loop_expr = self.exprs.add(
             TypedExpr::LoopExpr(LoopExpr { body_block }),
             self.types.builtins.empty,
@@ -11926,7 +11921,6 @@ impl TypedProgram {
         let final_type =
             self.get_stmt_type(*for_expr_initial_statements.as_slice().last().unwrap());
         let final_expr = self.exprs.add_block(
-            &mut self.mem,
             BlockBuilder {
                 scope_id: outer_for_expr_scope,
                 statements: for_expr_initial_statements,
@@ -11983,7 +11977,7 @@ impl TypedProgram {
             self.push_block_stmt_id(&mut block, v.defn_stmt);
             self.push_block_expr_id(&mut block, user_expr);
         }
-        let block_id = self.exprs.add_block(&mut self.mem, block, self.types.builtins.empty);
+        let block_id = self.exprs.add_block(block, self.types.builtins.empty);
 
         Ok(block_id)
     }
@@ -12553,7 +12547,7 @@ impl TypedProgram {
         let if_else = self.synth_if_else(output_type, lhs_has_value, lhs_get_expr, rhs, span);
         self.push_block_stmt_id(&mut coalesce_block, lhs_variable.defn_stmt);
         self.push_block_expr_id(&mut coalesce_block, if_else);
-        Ok(self.exprs.add_block(&mut self.mem, coalesce_block, output_type))
+        Ok(self.exprs.add_block(coalesce_block, output_type))
     }
 
     fn eval_equality_expr(
@@ -12611,7 +12605,7 @@ impl TypedProgram {
                 let mut args_with_piped = self.ast.mem.new_list(fn_call.args.len() + 1);
                 args_with_piped.push(ParsedCallArg::unnamed(lhs));
                 args_with_piped.extend(self.ast.mem.getn(fn_call.args));
-                let args_with_piped_h = self.ast.mem.list_to_handle(args_with_piped);
+                let args_with_piped_h = args_with_piped.to_slice();
                 ParsedCall {
                     name: fn_call.name,
                     type_args: fn_call.type_args,
@@ -12906,7 +12900,7 @@ impl TypedProgram {
         }
         let exit = make_exit(self, value);
         self.push_block_stmt(&mut block, TypedStmt::Expr(exit, NEVER_TYPE_ID));
-        Ok(self.exprs.add_block(&mut self.mem, block, NEVER_TYPE_ID))
+        Ok(self.exprs.add_block(block, NEVER_TYPE_ID))
     }
 
     ////////////////////////////////////////
@@ -13204,7 +13198,6 @@ impl TypedProgram {
                 statements.push(self.add_expr_stmt(bounds_check_expr));
                 statements.push(self.add_expr_stmt(get_element_expr));
                 let block_expr = self.exprs.add_block(
-                    &mut self.mem,
                     BlockBuilder { scope_id: ctx.scope_id, statements, span },
                     array_type.element_type,
                 );
@@ -13549,7 +13542,7 @@ impl TypedProgram {
                             let mut parts =
                                 self.ast.mem.new_list_from_slice(is.parts, is.parts.len() + 1);
                             parts.push(newline_part);
-                            self.ast.mem.list_to_handle(parts)
+                            parts.to_slice()
                         } else {
                             is.parts
                         }
@@ -13674,7 +13667,7 @@ impl TypedProgram {
                 span: function_defn_span,
             });
             new_variables.extend(self.mem.getn(new_function.params));
-            new_function.params = self.mem.list_to_handle(new_variables);
+            new_function.params = new_variables.to_slice();
 
             let new_function_type = self.add_lambda_env_to_function_type(new_function.type_id);
             new_function.type_id = new_function_type;
@@ -13768,7 +13761,7 @@ impl TypedProgram {
         new_params.extend(self.types.mem.getn(physical_params));
 
         let new_function_type = FunctionType {
-            physical_params: self.types.mem.list_to_handle(new_params),
+            physical_params: new_params.to_slice(),
             return_type,
             is_lambda: true,
             abi_mode: call_conv,
@@ -13906,14 +13899,14 @@ impl TypedProgram {
                 "Some fields in the patch struct did not match any fields in the base struct (todo: name them)",
             );
         }
-        let final_fields_handle = self.mem.list_to_handle(final_fields);
+        let final_fields_handle = final_fields.to_slice();
         let new_struct = self.exprs.add(
             TypedExpr::Struct(StructLiteral { fields: final_fields_handle }),
             base_struct_type_id,
             span,
         );
         self.push_block_expr_id(&mut block, new_struct);
-        let block_id = self.exprs.add_block(&mut self.mem, block, base_struct_type_id);
+        let block_id = self.exprs.add_block(block, base_struct_type_id);
         Ok(block_id)
     }
 
@@ -14370,7 +14363,7 @@ impl TypedProgram {
                         let type_id = self.eval_type_expr(passed_type_expr, ctx.scope_id)?;
                         passed_params.push(NameAndType { name: generic_param.name, type_id });
                     }
-                    self.mem.list_to_handle(passed_params)
+                    passed_params.to_slice()
                 };
 
                 let passed_type_ids = self.types.mem.pushn_iter(
@@ -14589,8 +14582,8 @@ impl TypedProgram {
         }
 
         Ok(ArgsAndParams {
-            args: self.tmp.list_to_handle(final_args),
-            params: self.tmp.list_to_handle(final_params),
+            args: final_args.to_slice(),
+            params: final_params.to_slice(),
         })
     }
 
@@ -14834,7 +14827,7 @@ impl TypedProgram {
                     };
                     typechecked_args.push(checked_expr);
                 }
-                (callee, typechecked_args.into_handle(&mut self.mem), MSlice::empty())
+                (callee, typechecked_args.to_slice(), MSlice::empty())
             }
             true => {
                 let original_args_and_params = self.align_call_arguments_with_parameters(
@@ -15004,7 +14997,7 @@ impl TypedProgram {
                     }
                 }
 
-                (final_callee, typechecked_args.into_handle(&mut self.mem), type_args)
+                (final_callee, typechecked_args.to_slice(), type_args)
             }
         };
 
@@ -15365,8 +15358,8 @@ impl TypedProgram {
                 self.type_id_to_string_ext(substituted, true)
             );
         }
-        let ability_args_new_handle = self.mem.list_to_handle(ability_args_new);
-        let impl_args_new_handle = self.mem.list_to_handle(impl_args_new);
+        let ability_args_new_handle = ability_args_new.to_slice();
+        let impl_args_new_handle = impl_args_new.to_slice();
         let specialized_base =
             self.specialize_ability(base_ability_id, ability_args_new_handle, span, scope_id);
         TypedAbilitySignature {
@@ -15587,7 +15580,7 @@ impl TypedProgram {
         let specialized_function = TypedFunction {
             name: generic_function.name,
             scope: spec_fn_scope,
-            params: self.mem.list_to_handle(param_variables),
+            params: param_variables.to_slice(),
             // Must be empty for correctness; a specialized function has no type parameters!
             type_params: MSlice::empty(),
             // Must be empty for correctness; a specialized function has no function type parameters!
@@ -16316,7 +16309,6 @@ impl TypedProgram {
         }
 
         let id = self.exprs.add_block(
-            &mut self.mem,
             BlockBuilder { scope_id: block_scope, statements: stmts, span: block.span },
             last_expr_type,
         );
@@ -16984,8 +16976,8 @@ impl TypedProgram {
             )?;
         }
 
-        let ability_arguments_handle = self.mem.list_to_handle(ability_arguments);
-        let impl_arguments_handle = self.mem.list_to_handle(impl_arguments);
+        let ability_arguments_handle = ability_arguments.to_slice();
+        let impl_arguments_handle = impl_arguments.to_slice();
         Ok((ability_arguments_handle, impl_arguments_handle))
     }
 
@@ -17112,7 +17104,7 @@ impl TypedProgram {
         }
 
         self.abilities.get_mut(specialized_ability_id).functions =
-            self.mem.list_to_handle(specialized_functions);
+            specialized_functions.to_slice();
         {
             let parent_ability = self.abilities.get_mut(generic_ability_id);
             let TypedAbilityKind::Generic { specializations } = &mut parent_ability.kind else {
@@ -17152,7 +17144,7 @@ impl TypedProgram {
             arguments.push(NameAndType { name, type_id: arg_type });
         }
 
-        let arguments_handle = self.mem.list_to_handle(arguments);
+        let arguments_handle = arguments.to_slice();
         let (ability_args, impl_args) = self.check_ability_arguments(
             ability_id,
             arguments_handle,
@@ -17412,7 +17404,7 @@ impl TypedProgram {
             return Err("its return type mentions self".to_string());
         }
         let slot_fn_type = self.types.add_anon(Type::Function(FunctionType {
-            physical_params: self.types.mem.list_to_handle(slot_params),
+            physical_params: slot_params.to_slice(),
             return_type: substituted_return,
             is_lambda: has_receiver,
             abi_mode: AbiMode::Internal,
@@ -17467,7 +17459,7 @@ impl TypedProgram {
                 self.ident_str(ability_name)
             );
         }
-        let fields_handle = self.types.mem.list_to_handle(fields);
+        let fields_handle = fields.to_slice();
         let struct_representation =
             self.types.add_anon(Type::Struct(StructType::struc(fields_handle)));
         let impl_arguments_copy = self.types.mem.pushn(self.mem.getn(signature.impl_arguments));
@@ -17581,7 +17573,7 @@ impl TypedProgram {
                 }
             }
         }
-        let fields_handle = self.mem.list_to_handle(literal_fields);
+        let fields_handle = literal_fields.to_slice();
         Ok(self.exprs.add(
             TypedExpr::Struct(StructLiteral { fields: fields_handle }),
             target_dyn_type,
@@ -17883,7 +17875,7 @@ impl TypedProgram {
             },
         };
 
-        let param_types_handle = self_.types.mem.list_to_handle(param_types);
+        let param_types_handle = param_types.to_slice();
         let call_conv = match linkage {
             Linkage::Standard => AbiMode::Internal,
             Linkage::External { .. } => AbiMode::Native,
@@ -17896,12 +17888,12 @@ impl TypedProgram {
             abi_mode: call_conv,
         }));
 
-        let function_type_params_handle = self_.mem.list_to_handle(fnlike_type_params);
+        let function_type_params_handle = fnlike_type_params.to_slice();
         let function_id = self_.functions.next_id();
         for v in params.iter() {
             self_.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(function_id);
         }
-        let param_variables_handle = self_.mem.list_to_handle(params);
+        let param_variables_handle = params.to_slice();
         let actual_function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
@@ -18049,7 +18041,7 @@ impl TypedProgram {
                     }
                 };
             }
-            let predicate_functions_handle = self.mem.list_to_handle(predicate_functions);
+            let predicate_functions_handle = predicate_functions.to_slice();
             let unconstrained = ability_constraint_signatures.is_empty()
                 && predicate_functions_handle.is_empty()
                 && static_constraint.is_none();
@@ -18091,7 +18083,7 @@ impl TypedProgram {
                 );
             }
         }
-        Ok(self.mem.list_to_handle(type_params))
+        Ok(type_params.to_slice())
     }
 
     fn declare_macro(
@@ -18172,7 +18164,7 @@ impl TypedProgram {
             }
         }
 
-        let param_types_handle = self.types.mem.list_to_handle(param_types);
+        let param_types_handle = param_types.to_slice();
         let function_type_id = self.types.add_anon(Type::Function(FunctionType {
             physical_params: param_types_handle,
             return_type: code_type,
@@ -18184,7 +18176,7 @@ impl TypedProgram {
         for v in params.iter() {
             self.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(function_id);
         }
-        let param_variables_handle = self.mem.list_to_handle(params);
+        let param_variables_handle = params.to_slice();
         let actual_function_id = self.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
@@ -18386,7 +18378,7 @@ impl TypedProgram {
                 }
                 let match_expr = TypedExpr::Match(TypedMatchExpr {
                     initial_let_statements: MSlice::empty(),
-                    arms: self.mem.list_to_handle(arms),
+                    arms: arms.to_slice(),
                 });
                 Ok(self.exprs.add(match_expr, self.types.builtins.string(), fn_span))
             }
@@ -18443,7 +18435,7 @@ impl TypedProgram {
                             conditions.push(MatchingConditionInstr::cond(payload_equals))
                         }
                     }
-                    let conditions = self.mem.list_to_handle(conditions);
+                    let conditions = conditions.to_slice();
                     arms.push(TypedMatchArm {
                         condition: MatchingCondition { instrs: conditions },
                         consequent_expr: self.synth_bool(true, fn_span),
@@ -18455,7 +18447,7 @@ impl TypedProgram {
                 });
                 let match_expr = TypedExpr::Match(TypedMatchExpr {
                     initial_let_statements: MSlice::empty(),
-                    arms: self.mem.list_to_handle(arms),
+                    arms: arms.to_slice(),
                 });
                 let match_expr_id = self.exprs.add(match_expr, BOOL_TYPE_ID, fn_span);
                 // eprintln!("SUM EQUALS MATCH\n{}", self.expr_to_string(match_expr_id));
@@ -18483,7 +18475,7 @@ impl TypedProgram {
                 }
                 let match_expr = TypedExpr::Match(TypedMatchExpr {
                     initial_let_statements: MSlice::empty(),
-                    arms: self.mem.list_to_handle(arms),
+                    arms: arms.to_slice(),
                 });
                 Ok(self.exprs.add(match_expr, self.types.builtins.string(), fn_span))
             }
@@ -18503,7 +18495,7 @@ impl TypedProgram {
                     conditions.push(MatchingConditionInstr::cond(equals_expr))
                 }
                 let equals_arm = TypedMatchArm {
-                    condition: MatchingCondition { instrs: self.mem.list_to_handle(conditions) },
+                    condition: MatchingCondition { instrs: conditions.to_slice() },
                     consequent_expr: self.synth_bool(true, fn_span),
                 };
                 let false_arm = TypedMatchArm {
@@ -18568,7 +18560,7 @@ impl TypedProgram {
                 let write_cbrace = self.synth_printto_call(cbrace_expr, writer_expr, ctx)?;
                 self.push_block_expr_id(&mut block, write_cbrace);
 
-                let block_expr_id = self.exprs.add_block(&mut self.mem, block, EMPTY_TYPE_ID);
+                let block_expr_id = self.exprs.add_block(block, EMPTY_TYPE_ID);
                 // eprintln!("STRUCT PRINT TO\n{}", self.expr_to_string(block_expr_id));
                 Ok(block_expr_id)
             }
@@ -18585,7 +18577,7 @@ impl TypedProgram {
             fn_span,
         );
         self.push_block_expr_id(&mut block, ret);
-        let block_id = self.exprs.add_block(&mut self.mem, block, NEVER_TYPE_ID);
+        let block_id = self.exprs.add_block(block, NEVER_TYPE_ID);
         Ok(block_id)
     }
 
@@ -18710,7 +18702,7 @@ impl TypedProgram {
                     Err(msg) => return failf!(ability_param.span, "{}", msg),
                 };
 
-            let predicate_functions_handle = self.mem.list_to_handle(predicate_functions);
+            let predicate_functions_handle = predicate_functions.to_slice();
             let param_type_id = self.add_type_parameter(
                 TypeParameter {
                     name: ability_param.name,
@@ -18748,7 +18740,7 @@ impl TypedProgram {
             name: parsed_ability.name,
             base_ability_id: ability_id,
             self_type_id,
-            parameters: self.mem.list_to_handle(ability_params),
+            parameters: ability_params.to_slice(),
             functions: MSlice::empty(),
             scope_id: ability_scope_id,
             ast_id: parsed_ability.id,
@@ -18810,7 +18802,7 @@ impl TypedProgram {
                 function_id,
             });
         }
-        self.abilities.get_mut(ability_id).functions = self.mem.list_to_handle(typed_functions);
+        self.abilities.get_mut(ability_id).functions = typed_functions.to_slice();
         Ok(ability_id)
     }
 
@@ -19151,8 +19143,8 @@ impl TypedProgram {
             typed_functions.push(AbilityImplFunction::FunctionId(impl_function_id));
         }
 
-        let blanked_type_params_handle = self.mem.list_to_handle(blanket_type_params);
-        let impl_arguments_handle = self.mem.list_to_handle(impl_arguments);
+        let blanked_type_params_handle = blanket_type_params.to_slice();
+        let impl_arguments_handle = impl_arguments.to_slice();
         let typed_impl_id = self.add_ability_impl(TypedAbilityImpl {
             kind,
             blanket_type_params: blanked_type_params_handle,
@@ -19160,7 +19152,7 @@ impl TypedProgram {
             ability_id,
             base_ability_id,
             impl_arguments: impl_arguments_handle,
-            functions: self.mem.list_to_handle(typed_functions),
+            functions: typed_functions.to_slice(),
             scope_id: impl_scope_id,
             span,
             compile_errors: vec![],
@@ -20832,7 +20824,7 @@ impl TypedProgram {
                         ],
                     ))
                 }
-                let variant_values_slice = self.static_values.mem.list_to_handle(member_values);
+                let variant_values_slice = member_values.to_slice();
                 let variants_span_value_id =
                     self.static_values.add_span(values_span_type_id, variant_values_slice);
                 let payload_value_id = self.static_values.add_struct_from_slice(
@@ -20894,7 +20886,7 @@ impl TypedProgram {
                         ),
                     );
                 }
-                let values_slice = self.static_values.mem.list_to_handle(field_values);
+                let values_slice = field_values.to_slice();
                 let span_value_id =
                     self.static_values.add_span(struct_schema_fields_span_type_id, values_slice);
                 let payload = self
@@ -21049,7 +21041,7 @@ impl TypedProgram {
                         ],
                     ))
                 }
-                let variant_values_slice = self.static_values.mem.list_to_handle(variant_values);
+                let variant_values_slice = variant_values.to_slice();
                 let variants_span_value_id =
                     self.static_values.add_span(variants_span_type_id, variant_values_slice);
                 let payload_value_id = self.static_values.add_struct_from_slice(
@@ -21109,7 +21101,7 @@ impl TypedProgram {
                 }
 
                 let params_value_ids_slice =
-                    self.static_values.mem.list_to_handle(params_value_ids);
+                    params_value_ids.to_slice();
                 let params_span_value_id = self
                     .static_values
                     .add_span(function_params_span_type_id, params_value_ids_slice);

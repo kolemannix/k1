@@ -1589,7 +1589,7 @@ impl<'k1> Builder<'k1> {
             phys_params.push(PhysicalFunctionParam { original_index: Some(index as u16), pt })
         }
         let fn_ty = PhysicalFunctionType {
-            params: phys_params.into_handle(&mut self.k1.ir.mem),
+            params: phys_params.to_slice(),
             diverges,
             return_type,
             abi_mode: function_type.abi_mode,
@@ -2106,7 +2106,7 @@ fn compile_expr(
                 }
             }
             debug_assert_eq!(callee_fn_type.params.len(), args.len() as u32);
-            let args_handle = b.k1.ir.mem.list_to_handle(args);
+            let args_handle = args.to_slice();
             let call_id = b.k1.ir.calls.add(IrCall {
                 ret_type: callee_fn_type.return_type,
                 callee,
@@ -2210,7 +2210,7 @@ fn compile_expr(
                                 let value = if incomings.len() == 1 && b.optimize_enabled() {
                                     incomings[0].value
                                 } else {
-                                    let incomings_handle = b.k1.ir.mem.list_to_handle(incomings);
+                                    let incomings_handle = incomings.to_slice();
                                     let phi_inst = b.push_inst(
                                         Inst::Phi { t: pt, incomings: incomings_handle },
                                         "match phi",

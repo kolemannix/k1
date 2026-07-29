@@ -670,7 +670,7 @@ impl TypedProgram {
                 self.types.builtins.empty
             }
         };
-        let cell_expr = self.exprs.add_block(&mut self.mem, cell_block, type_id);
+        let cell_expr = self.exprs.add_block(cell_block, type_id);
         eprintln!("compiled megarepl block: \n{}", self.expr_to_string(cell_expr));
 
         ir::compile_top_level_expr(self, cell_expr, &[], false)?;

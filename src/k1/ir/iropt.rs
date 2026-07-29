@@ -403,7 +403,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         if let InlinedReturnInfo::ScalarInPhi(phi, actual_incomings) = return_info {
             let mut inst = b.k1.ir.instrs.get_raw(phi);
             let Inst::Phi { incomings, .. } = inst.as_mut() else { panic!() };
-            *incomings = b.k1.ir.mem.list_to_handle(actual_incomings);
+            *incomings = actual_incomings.to_slice();
             rewrite_instr(&mut b.k1.ir, &mut inlined_rewrites, &mut inst);
         }
 
@@ -626,7 +626,7 @@ fn rewrite_instr(ir: &mut ProgramIr, mappings: &mut RewriteMappings, inst: &mut 
                 }
             }
 
-            *incomings = ir.mem.list_to_handle(new_incomings);
+            *incomings = new_incomings.to_slice();
         }
         Inst::Ret { v, .. } => {
             // Store to dst_alloca, and jmp to after block
@@ -1092,7 +1092,7 @@ fn rewrite_phi_incoming(ir: &mut ProgramIr, phi_block_id: BlockId, from: BlockId
                 new_incomings.push(*phi_case)
             }
         }
-        *incomings = ir.mem.list_to_handle(new_incomings);
+        *incomings = new_incomings.to_slice();
     }
 }
 
@@ -1111,6 +1111,6 @@ fn remove_phi_incomings(ir: &mut ProgramIr, phi_block_id: BlockId, dead_block_id
                 new_incomings.push(*phi_case)
             }
         }
-        *incomings = ir.mem.list_to_handle(new_incomings);
+        *incomings = new_incomings.to_slice();
     }
 }

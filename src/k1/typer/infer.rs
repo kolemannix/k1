@@ -327,8 +327,8 @@ impl TypedProgram {
             );
         }
         debug!("INFER DONE {}", self.pretty_print_named_types(&solutions, ", "));
-        let solutions_handle = self.mem.list_to_handle(solutions);
-        let all_solutions_handle = self.mem.list_to_handle(all_solutions);
+        let solutions_handle = solutions.to_slice();
+        let all_solutions_handle = all_solutions.to_slice();
         Ok((solutions_handle, all_solutions_handle))
     }
 
@@ -505,7 +505,7 @@ impl TypedProgram {
                 let passed_type = self.eval_type_expr(passed_expr, ctx.scope_id)?;
                 evaled_params.push(NameAndType { name: type_param.name, type_id: passed_type });
             }
-            self.mem.list_to_handle(evaled_params)
+            evaled_params.to_slice()
         } else {
             let generic_function_type =
                 *self.types.get(generic_function_sig.function_type).as_function().unwrap();
@@ -755,7 +755,7 @@ impl TypedProgram {
                 self.pretty_print_named_types(&fnlike_type_args, ", ")
             );
         }
-        let fnlike_type_args_handle = self.mem.list_to_handle(fnlike_type_args);
+        let fnlike_type_args_handle = fnlike_type_args.to_slice();
         Ok((fnlike_type_args_handle, fnlike_type_arg_values))
     }
 

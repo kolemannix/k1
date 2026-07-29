@@ -113,6 +113,25 @@ fn grow() {
 }
 
 #[test]
+fn list_to_slice() {
+    let mut mem: Mem<()> = Mem::make();
+    let mut v = mem.new_list(4);
+    v.extend(&[10, 20, 30]);
+    let h = v.to_slice();
+    assert_eq!(mem.getn(h), &[10, 20, 30]);
+
+    let mut grown = v;
+    grown.push_grow(&mut mem, 40);
+    grown.push_grow(&mut mem, 50);
+    assert_eq!(mem.getn(grown.to_slice()), &[10, 20, 30, 40, 50]);
+
+    let empty: crate::kmem::List<i32, ()> = crate::kmem::List::empty();
+    let empty_h = empty.to_slice();
+    assert!(empty_h.is_empty());
+    assert!(mem.getn(empty_h).is_empty());
+}
+
+#[test]
 fn grow_from_zero() {
     let mut mem: Mem<()> = Mem::make();
     let mut v = mem.new_list(0);
@@ -146,7 +165,7 @@ fn spill_list_inline_and_spill() {
 }
 
 #[test]
-fn spill_list_into_handle_both_paths() {
+fn spill_list_into_slice_both_paths() {
     let mut mem: Mem<()> = Mem::make();
 
     // Inline -> handle allocates exactly and matches contents

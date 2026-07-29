@@ -464,11 +464,6 @@ impl<Tag> Mem<Tag> {
         self.offset_to_ptr::<T>(handle.0.unwrap())
     }
 
-    pub fn list_to_handle<T: Copy>(&self, list: List<T, Tag>) -> MSlice<T, Tag> {
-        let offset = self.ptr_to_offset(list.buf.cast_const());
-        MSlice::make(offset, list.len() as u32)
-    }
-
     #[track_caller]
     #[inline]
     fn check_in_bounds(&self, ptr: usize) {
@@ -630,15 +625,14 @@ impl<Tag> Mem<Tag> {
         }
         let mut l = self.new_list_from_slice(s, s.len() + other.len() as u32);
         l.extend(other);
-        self.list_to_handle(l)
+        l.to_slice()
     }
 
     /// We know we can't address more than 4GB (to keep handles small), so we accept a u32 len, not a usize
     pub fn new_list<T>(&mut self, cap: u32) -> List<T, Tag> {
         let dst = self.push_slice_uninit(cap as usize);
-
-        let raw_slice: *mut [T] = core::ptr::slice_from_raw_parts_mut(dst, cap as usize);
-        List { buf: raw_slice, len: 0, _tag: PhantomData }
+        let offset = self.ptr_to_offset(dst).get();
+        List { ptr: dst, offset, cap, len: 0, _tag: PhantomData }
     }
 
     /// We know we can't address more than 4GB (to keep handles small), so we accept a u32 len, not a usize
@@ -1351,35 +1345,48 @@ impl<Tag> Mem<Tag> {
 
 /// A fixed-size Vec-like collection pointing into a Mem's data
 /// Can behave like an auto-growing list if the `_grow` variants are used
+/// Carries its own arena byte offset, so `to_slice` needs no `Mem`.
 pub struct List<T, Tag = ()> {
-    buf: *mut [T],
-    len: usize,
+    ptr: *mut T,
+    /// Byte offset of `ptr` from the owning arena's base; 0 only for `empty()`
+    offset: u32,
+    cap: u32,
+    len: u32,
     _tag: PhantomData<Tag>,
 }
 
 impl<T, Tag> List<T, Tag> {
     pub fn len(&self) -> usize {
-        self.len
+        self.len as usize
     }
 
     pub fn cap(&self) -> usize {
-        self.buf.len()
+        self.cap as usize
     }
 
     pub fn empty() -> Self {
         List {
-            buf: core::ptr::slice_from_raw_parts_mut(core::ptr::null_mut(), 0),
+            ptr: core::ptr::NonNull::dangling().as_ptr(),
+            offset: 0,
+            cap: 0,
             len: 0,
             _tag: PhantomData,
         }
     }
 
+    pub fn to_slice(&self) -> MSlice<T, Tag> {
+        match NonZeroU32::new(self.offset) {
+            None => MSlice::empty(),
+            Some(offset) => MSlice::make(offset, self.len),
+        }
+    }
+
     pub fn base_ptr(&self) -> *mut T {
-        unsafe { (*self.buf).as_mut_ptr() }
+        self.ptr
     }
 
     fn end_ptr(&self) -> *mut u8 {
-        unsafe { (self.buf as *mut u8).add(self.buf.len() * size_of::<T>()) }
+        unsafe { (self.ptr as *mut u8).add(self.cap as usize * size_of::<T>()) }
     }
 
     pub fn clear(&mut self) {
@@ -1387,21 +1394,19 @@ impl<T, Tag> List<T, Tag> {
     }
 
     fn push_unchecked(&mut self, val: T) {
-        unsafe {
-            (*self.buf)[self.len] = val;
-        }
+        unsafe { self.ptr.add(self.len as usize).write(val) };
         self.len += 1;
     }
 
     pub fn push(&mut self, val: T) {
-        if self.len == self.cap() {
-            panic!("MList is full {}", self.buf.len());
+        if self.len == self.cap {
+            panic!("MList is full {}", self.cap);
         }
         self.push_unchecked(val)
     }
 
     pub fn try_push(&mut self, val: T) -> Result<(), T> {
-        if self.len == self.cap() {
+        if self.len == self.cap {
             Err(val)
         } else {
             self.push_unchecked(val);
@@ -1429,12 +1434,12 @@ impl<T, Tag> List<T, Tag> {
         }
         let new_cap = new_cap_usize as u32;
 
-        if self.end_ptr() == mem.cursor() {
+        if self.offset != 0 && self.end_ptr() == mem.cursor() {
             // Fast path for growth when this list is the last thing in the arena; just move the cursor forward
             let additional_ts = new_cap as usize - self.cap();
             mem.push_slice_uninit_prealigned::<T>(additional_ts);
-            let new_buf = core::ptr::slice_from_raw_parts_mut(self.buf as *mut T, new_cap as usize);
-            let new_me = List { buf: new_buf, len: self.len, _tag: PhantomData };
+            let new_me =
+                List { ptr: self.ptr, offset: self.offset, cap: new_cap, len: self.len, _tag: PhantomData };
             debug_assert_eq!(new_me.end_ptr().addr(), mem.cursor().addr());
             new_me
         } else {
@@ -1452,8 +1457,8 @@ impl<T, Tag> List<T, Tag> {
     where
         T: Copy,
     {
-        if self.len >= self.cap() {
-            *self = self.grow_to(mem, self.len + 1);
+        if self.len >= self.cap {
+            *self = self.grow_to(mem, self.len as usize + 1);
         }
         self.push_unchecked(val)
     }
@@ -1463,16 +1468,16 @@ impl<T, Tag> List<T, Tag> {
     where
         T: Copy,
     {
-        if index > self.len {
+        if index > self.len() {
             panic!("MList insert index out of bounds: {} > {}", index, self.len);
         }
-        if self.len == self.cap() {
-            panic!("MList.insert is full {}", self.buf.len());
+        if self.len == self.cap {
+            panic!("MList.insert is full {}", self.cap);
         }
         unsafe {
-            let slice = &mut *self.buf;
-            slice.copy_within(index..self.len, index + 1);
-            slice[index] = val;
+            let src = self.ptr.add(index);
+            core::ptr::copy(src, src.add(1), self.len as usize - index);
+            src.write(val);
         }
         self.len += 1;
     }
@@ -1483,11 +1488,11 @@ impl<T, Tag> List<T, Tag> {
     where
         T: Copy,
     {
-        if index > self.len {
+        if index > self.len() {
             panic!("MList insert index out of bounds: {} > {}", index, self.len);
         }
-        if self.len >= self.cap() {
-            *self = self.grow_to(mem, self.len + 1)
+        if self.len >= self.cap {
+            *self = self.grow_to(mem, self.len as usize + 1)
         }
         self.insert(index, val)
     }
@@ -1496,22 +1501,25 @@ impl<T, Tag> List<T, Tag> {
     where
         T: Copy,
     {
-        if self.len + vals.len() > self.buf.len() {
-            panic!("MList is full {} + {} > {}", self.len, vals.len(), self.buf.len());
+        if self.len() + vals.len() > self.cap() {
+            panic!("MList is full {} + {} > {}", self.len, vals.len(), self.cap);
         }
         unsafe {
-            let dst = &mut (&mut (*self.buf))[self.len..self.len + vals.len()];
-            dst.copy_from_slice(vals);
+            core::ptr::copy_nonoverlapping(
+                vals.as_ptr(),
+                self.ptr.add(self.len as usize),
+                vals.len(),
+            );
         }
-        self.len += vals.len();
+        self.len += vals.len() as u32;
     }
 
     pub fn extend_grow(&mut self, mem: &mut Mem<Tag>, vals: &[T])
     where
         T: Copy,
     {
-        if self.len + vals.len() > self.buf.len() {
-            *self = self.grow_to(mem, self.len + vals.len());
+        if self.len() + vals.len() > self.cap() {
+            *self = self.grow_to(mem, self.len() + vals.len());
         }
         self.extend(vals)
     }
@@ -1526,14 +1534,14 @@ impl<T, Tag> List<T, Tag> {
         }
     }
     pub fn as_slice_lt<'a>(&self) -> &'a [T] {
-        unsafe { &(&(*self.buf))[..self.len] }
+        unsafe { slice::from_raw_parts(self.ptr, self.len as usize) }
     }
     pub fn as_slice<'a>(&self) -> &'a [T] {
-        unsafe { &(&(*self.buf))[..self.len] }
+        unsafe { slice::from_raw_parts(self.ptr, self.len as usize) }
     }
 
     pub fn as_slice_mut(&mut self) -> &mut [T] {
-        unsafe { &mut (&mut (*self.buf))[..self.len] }
+        unsafe { slice::from_raw_parts_mut(self.ptr, self.len as usize) }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
@@ -1544,18 +1552,11 @@ impl<T, Tag> List<T, Tag> {
         self.as_slice_mut().iter_mut()
     }
 
-    pub fn into_handle(self, mem: &mut Mem<Tag>) -> MSlice<T, Tag>
-    where
-        T: Copy,
-    {
-        mem.list_to_handle(self)
-    }
-
     pub fn fill_to_cap(&mut self, value: T)
     where
         T: Copy,
     {
-        while self.len < self.cap() {
+        while self.len < self.cap {
             self.push_unchecked(value);
         }
     }
@@ -1575,17 +1576,15 @@ impl<T, Tag> List<T, Tag> {
     where
         T: Copy,
     {
-        if index >= self.len {
+        if index >= self.len() {
             panic!("MList swap_remove index out of bounds: {} >= {}", index, self.len);
         }
-        let last_index = self.len - 1;
-        unsafe {
-            let slice = &mut *self.buf;
-            slice.swap(index, last_index);
-            let val = slice[last_index];
-            self.len -= 1;
-            val
-        }
+        let last_index = self.len() - 1;
+        let slice = self.as_slice_mut();
+        slice.swap(index, last_index);
+        let val = slice[last_index];
+        self.len -= 1;
+        val
     }
 
     pub fn pop(&mut self) -> Option<T>
@@ -1802,7 +1801,7 @@ impl<T: Copy + 'static, Tag, const N: usize> MSpillList<T, N, Tag> {
         if self.is_spilled() {
             // SAFETY: spilled variant active. We consume self, so we can move the list out.
             let list: List<T, Tag> = unsafe { ManuallyDrop::into_inner(self.storage.spill) };
-            mem.list_to_handle(list)
+            list.to_slice()
         } else {
             if len == 0 {
                 return MSlice::empty();
@@ -1816,11 +1815,10 @@ impl<T: Copy + 'static, Tag, const N: usize> MSpillList<T, N, Tag> {
         }
     }
 
-    pub fn into_spill_slice(self, mem: &mut Mem<Tag>) -> MSpillSlice<T, N, Tag> {
+    pub fn into_spill_slice(self) -> MSpillSlice<T, N, Tag> {
         let len = self.len();
         if self.is_spilled() {
-            let mslice =
-                unsafe { mem.list_to_handle(ManuallyDrop::into_inner(self.storage.spill)) };
+            let mslice = unsafe { ManuallyDrop::into_inner(self.storage.spill) }.to_slice();
             MSpillSlice::spilled(len, mslice)
         } else {
             let array = unsafe { self.storage.inline };
@@ -1909,27 +1907,6 @@ impl<T: Copy, Tag, const N: usize> MSpillSlice<T, N, Tag> {
                 let ptr = self.storage.inline.as_ptr() as *const T;
                 slice::from_raw_parts(ptr, len as usize)
             }
-        }
-    }
-
-    // Similar to MSpillList::into_handle but returns MSlice directly.
-    pub fn into_handle(self, mem: &mut Mem<Tag>) -> MSlice<T, Tag> {
-        let len = self.len();
-
-        if self.is_spilled() {
-            // SAFETY: spilled variant active. We consume self, so we can move the slice out.
-            let slice: MSlice<T, Tag> = unsafe { self.storage.spill };
-            slice
-        } else {
-            if len == 0 {
-                return MSlice::empty();
-            }
-            // SAFETY: inline active; first `len` initialized.
-            let slice: &[T] = unsafe {
-                let ptr = self.storage.inline.as_ptr() as *const T;
-                slice::from_raw_parts(ptr, len as usize)
-            };
-            mem.pushn(slice)
         }
     }
 

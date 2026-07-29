@@ -2129,7 +2129,7 @@ impl TypePool {
                     if layout.size == 0 {
                         PhysicalTypeResult::Yes(PhysicalType::EMPTY)
                     } else {
-                        let fields_handle = self.mem.list_to_handle(fields);
+                        let fields_handle = fields.to_slice();
                         let agg_id = self.agg_types.add(AggregateTypeRecord {
                             agg_type: AggType::Struct { fields: fields_handle },
                             origin_type_id: type_id,
@@ -2152,7 +2152,7 @@ impl TypePool {
                         }
                     }
 
-                    let members_handle = self.mem.list_to_handle(members);
+                    let members_handle = members.to_slice();
                     let union = self.make_union_type(type_id, members_handle);
                     PhysicalTypeResult::Yes(union)
                 }
@@ -2195,7 +2195,7 @@ impl TypePool {
                     }
                 }
 
-                let members_handle = self.mem.list_to_handle(union_members);
+                let members_handle = union_members.to_slice();
                 let union_id = self.make_union_type(type_id, members_handle);
                 let union_layout = self.get_pt_layout(union_id);
 
@@ -2220,7 +2220,7 @@ impl TypePool {
                 let agg_sum = AggType::Sum(SumPt {
                     tag_type: tag_scalar,
                     struct_repr,
-                    variants: self.mem.list_to_handle(physical_variants),
+                    variants: physical_variants.to_slice(),
                     payload_offset: union_offset,
                 });
                 let sum_agg_id = self.agg_types.add(AggregateTypeRecord {
