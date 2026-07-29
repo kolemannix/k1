@@ -222,7 +222,7 @@ fn render_ns_main(k1: &TypedProgram, tree: &NsTree, ns_id: NamespaceId, path: &[
                             span .member-kw { "type" }
                             span .member-name { (k1.ident_str(*name)) }
                             span .member-sig { (k1.types.get(*type_id).kind_name()) }
-                            @if let Some(layout) = k1.types.get_layout_nonmut(*type_id) {
+                            @if let Some(layout) = k1.get_layout_nonmut(*type_id) {
                                 span .member-meta { "size=" (layout.size) " align=" (layout.align) }
                             }
                         }

@@ -181,7 +181,7 @@ impl TypedProgram {
         visited: &mut Vec<TypeId>,
     ) -> std::fmt::Result {
         w.write_str("[")?;
-        for (index, t) in self.types.mem.getn(spec_info.type_args).iter().enumerate() {
+        for (index, t) in self.mem.getn(spec_info.type_args).iter().enumerate() {
             self.display_type_id_ext(w, *t, expand, visited)?;
             let last = index == spec_info.type_args.len() as usize - 1;
             if !last {
@@ -199,7 +199,7 @@ impl TypedProgram {
         expand: bool,
         visiting: &mut Vec<TypeId>,
     ) -> std::fmt::Result {
-        let defn_info = self.types.get_defn_info(type_id);
+        let defn_info = self.get_defn_info(type_id);
         if visiting.contains(&type_id) {
             if let Some(defn_info) = defn_info {
                 self.write_ident(w, defn_info.name)?;
@@ -217,7 +217,7 @@ impl TypedProgram {
             Type::Enum(se) => {
                 if let Some(defn_info) = defn_info {
                     self.write_ident(w, defn_info.name)?;
-                    if let Some(spec_info) = self.types.get_instance_info(type_id) {
+                    if let Some(spec_info) = self.get_instance_info(type_id) {
                         self.display_instance_info(w, spec_info, expand, visiting)?;
                     }
                     if expand {
@@ -239,7 +239,7 @@ impl TypedProgram {
             Type::Struct(struc) => {
                 if let Some(defn_info) = defn_info {
                     self.write_ident(w, defn_info.name)?;
-                    if let Some(spec_info) = self.types.get_instance_info(type_id) {
+                    if let Some(spec_info) = self.get_instance_info(type_id) {
                         self.display_instance_info(w, spec_info, expand, visiting)?;
                     }
                     if expand {
@@ -290,7 +290,7 @@ impl TypedProgram {
             Type::Sum(e) => {
                 if let Some(defn_info) = defn_info {
                     self.write_ident(w, defn_info.name)?;
-                    if let Some(spec_info) = self.types.get_instance_info(type_id) {
+                    if let Some(spec_info) = self.get_instance_info(type_id) {
                         self.display_instance_info(w, spec_info, expand, visiting)?;
                     }
                     if expand {
@@ -300,7 +300,7 @@ impl TypedProgram {
                 let is_named = defn_info.is_some();
                 if !is_named || expand {
                     w.write_str("either ")?;
-                    for (idx, v) in self.types.mem.getn(e.variants).iter().enumerate() {
+                    for (idx, v) in self.mem.getn(e.variants).iter().enumerate() {
                         self.write_ident(w, v.name)?;
                         if let Some(payload) = &v.payload {
                             w.write_str("(")?;
@@ -352,7 +352,7 @@ impl TypedProgram {
             }
             Type::Function(fun) => {
                 w.write_str("fn(")?;
-                for (idx, param) in self.types.mem.getn(fun.physical_params).iter().enumerate() {
+                for (idx, param) in self.mem.getn(fun.physical_params).iter().enumerate() {
                     if param.is_lambda_env {
                         w.write_str("(env)")?;
                     }
@@ -377,7 +377,7 @@ impl TypedProgram {
             }
             Type::Lambda(lam_id) => {
                 write!(w, "fnlam(")?;
-                let lam = self.types.lambda_types.get(*lam_id);
+                let lam = self.lambda_types.get(*lam_id);
                 self.display_type_id_rec(w, lam.function_type, expand, visiting)?;
                 w.write_str(")")?;
                 Ok(())
@@ -392,7 +392,7 @@ impl TypedProgram {
                 let ability = self.abilities.get(ao.specialized_ability_id);
                 w.write_str("dyn[")?;
                 self.write_ident(w, ability.name)?;
-                let args = self.types.mem.getn(ao.impl_arguments);
+                let args = self.mem.getn(ao.impl_arguments);
                 if !args.is_empty() {
                     w.write_str("[")?;
                     for (index, arg) in args.iter().enumerate() {
@@ -464,7 +464,7 @@ impl TypedProgram {
         }
 
         w.write_str("{ ")?;
-        for (index, field) in self.types.mem.getn(struc.fields).iter().enumerate() {
+        for (index, field) in self.mem.getn(struc.fields).iter().enumerate() {
             if index > 0 {
                 w.write_str(", ")?;
             }
@@ -639,7 +639,7 @@ impl TypedProgram {
                 w.write_str(".")?;
                 let struct_type = self.exprs.get_type(field_access.base_struct);
                 let fields = self.types.get(struct_type).expect_struct().fields;
-                let name = self.types.mem.get_nth(fields, field_access.field_index as usize).name;
+                let name = self.mem.get_nth(fields, field_access.field_index as usize).name;
                 self.write_ident(w, name)?;
                 Ok(())
             }
@@ -749,7 +749,7 @@ impl TypedProgram {
                 w.write_str(".")?;
                 let enum_type = self.types.get(expr_type).expect_sum();
                 let variant =
-                    self.types.sum_variant_by_index(enum_type.variants, enum_constr.variant_index);
+                    self.sum_variant_by_index(enum_type.variants, enum_constr.variant_index);
                 self.write_ident(w, variant.name)?;
                 if let Some(payload) = &enum_constr.payload {
                     w.write_str("(")?;
@@ -773,14 +773,14 @@ impl TypedProgram {
                 w.write_str(".")?;
                 let enum_type = self.get_expr_type(get_payload_expr.sum_expr).expect_sum();
                 let variant = self
-                    .types
+                    
                     .sum_variant_by_index(enum_type.variants, get_payload_expr.variant_index);
                 self.write_ident(w, variant.name)?;
                 Ok(())
             }
             TypedExpr::Enum(e) => {
                 let enum_type = self.types.get(expr_type).expect_enum();
-                let value = self.types.mem.get_nth(enum_type.member_values, e.value_index as usize);
+                let value = self.mem.get_nth(enum_type.member_values, e.value_index as usize);
                 w.write_str(".")?;
                 self.write_ident(w, value.name)?;
                 Ok(())
@@ -803,12 +803,12 @@ impl TypedProgram {
             TypedExpr::Lambda(lambda_expr) => {
                 w.write_char('\\')?;
                 let lambda_type_id = self.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
-                let lambda_type = self.types.lambda_types.get(lambda_type_id);
+                let lambda_type = self.lambda_types.get(lambda_type_id);
                 let fn_type = self.types.get(lambda_type.function_type).as_function().unwrap();
                 w.write_str("env=[")?;
                 self.display_type_id(w, lambda_type.env_type, false).unwrap();
                 w.write_str("]")?;
-                for arg in self.types.mem.getn(fn_type.logical_params()) {
+                for arg in self.mem.getn(fn_type.logical_params()) {
                     self.write_ident(w, arg.name)?;
                     w.write_str(": ")?;
                     self.display_type_id(w, arg.type_id, false)?;
@@ -873,7 +873,7 @@ impl TypedProgram {
                 if pretty {
                     let enum_type = self.types.get(*enum_type_id).expect_enum();
                     let value_name = self
-                        .types
+                        
                         .mem
                         .getn(enum_type.member_values)
                         .iter()
@@ -918,7 +918,7 @@ impl TypedProgram {
                     .static_values
                     .get_slice(static_struct.fields)
                     .iter()
-                    .zip(self.types.mem.getn(fields).iter())
+                    .zip(self.mem.getn(fields).iter())
                     .enumerate()
                 {
                     if idx > 0 {
@@ -932,7 +932,7 @@ impl TypedProgram {
             }
             StaticValue::Sum(static_enum) => {
                 let sum_type = self.types.get(static_enum.sum_type_id).expect_sum();
-                let sum_defn = self.types.get_defn_info(static_enum.sum_type_id);
+                let sum_defn = self.get_defn_info(static_enum.sum_type_id);
                 match sum_defn {
                     Some(defn) => {
                         self.write_ident(w, defn.name)?;
@@ -941,7 +941,7 @@ impl TypedProgram {
                 };
                 write!(w, ".")?;
                 let variant =
-                    self.types.sum_variant_by_index(sum_type.variants, static_enum.variant_index);
+                    self.sum_variant_by_index(sum_type.variants, static_enum.variant_index);
                 self.write_ident(w, variant.name)?;
                 match static_enum.payload {
                     None => {}
@@ -1267,7 +1267,7 @@ impl TypedProgram {
     }
 
     pub fn pretty_print_type_slice(&self, type_slice: TypeIdSlice, sep: &str) -> String {
-        self.pretty_print_types(self.types.mem.getn(type_slice), sep)
+        self.pretty_print_types(self.mem.getn(type_slice), sep)
     }
 
     pub fn pretty_print_type_substitutions(
@@ -1370,7 +1370,7 @@ impl TypedProgram {
         }
         w.write_char('(')?;
         let function_type = self.types.get(signature.function_type).as_function().unwrap();
-        for (idx, param) in self.types.mem.getn(function_type.physical_params).iter().enumerate() {
+        for (idx, param) in self.mem.getn(function_type.physical_params).iter().enumerate() {
             if idx > 0 {
                 w.write_str(", ")?;
             }
@@ -1392,12 +1392,12 @@ impl TypedProgram {
 
     pub fn dump_type(&self, w: &mut impl Write, id: TypeId) -> std::fmt::Result {
         write!(w, "type #{:02} {:10} ", id, self.types.get(id).kind_name())?;
-        let tvar_info = self.types.get_type_variable_counts(id);
-        let l = match self.types.get_layout_nonmut(id) {
+        let tvar_info = self.get_type_variable_counts(id);
+        let l = match self.get_layout_nonmut(id) {
             Some(layout) => format!("layout: size={},align={}", layout.size, layout.align),
             None => "layout: none".to_string(),
         };
-        let defn_name = self.types.get_defn_info(id).map(|i| self.ident_str(i.name));
+        let defn_name = self.get_defn_info(id).map(|i| self.ident_str(i.name));
         write!(w, "defn_name={} {}", defn_name.unwrap_or("-"), l)?;
         write!(
             w,

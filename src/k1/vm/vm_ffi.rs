@@ -199,9 +199,9 @@ fn pt_to_ffi_type(
     match pt.as_enum() {
         PhysicalTypeEnum::Empty => Ok(unsafe { types::void }),
         PhysicalTypeEnum::Scalar(st) => Ok(scalar_to_ffi_type(st)),
-        PhysicalTypeEnum::Agg(agg_id) => match k1.types.agg_types.get(agg_id).agg_type {
+        PhysicalTypeEnum::Agg(agg_id) => match k1.agg_types.get(agg_id).agg_type {
             AggType::Sum(_e) => {
-                let (tag_field, payload_field) = k1.types.get_sums_struct_layout(agg_id);
+                let (tag_field, payload_field) = k1.get_sums_struct_layout(agg_id);
                 let count = if payload_field.is_some() { 2 } else { 1 };
                 let mut element_storage = k1.mem.new_list(count as u32);
 
@@ -215,7 +215,7 @@ fn pt_to_ffi_type(
             }
             AggType::Struct { fields } => {
                 let mut element_storage = k1.mem.new_list(fields.len());
-                for field in k1.types.mem.getn(fields).iter() {
+                for field in k1.mem.getn(fields).iter() {
                     let field_ffi_type = pt_to_ffi_type(k1, field.field_t)?;
                     element_storage.push(field_ffi_type);
                 }
@@ -247,7 +247,7 @@ fn pt_to_ffi_type(
                 let mut max_size_member: ffi_type = ffi_type::default();
                 let mut max_align_member: ffi_type = ffi_type::default();
 
-                for member in k1.types.mem.getn(members) {
+                for member in k1.mem.getn(members) {
                     let member_ffi_type = pt_to_ffi_type(k1, member.ty)?;
                     if member_ffi_type.size > max_size_member.size {
                         max_size_member = member_ffi_type;

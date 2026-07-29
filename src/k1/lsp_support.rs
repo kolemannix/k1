@@ -93,7 +93,7 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
         }
         LsEntityKind::StructField { type_id, field_index } => {
             let struct_type = k1.types.get(type_id).as_struct().unwrap();
-            let field = k1.types.mem.get_nth(struct_type.fields, field_index as usize);
+            let field = k1.mem.get_nth(struct_type.fields, field_index as usize);
             let field_type_string = k1.type_id_to_string(field.type_id);
             format!("{}: {}", k1.ident_str(field.name), field_type_string)
         }
@@ -124,7 +124,7 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
             span_id
         }
         LsEntityKind::Type { type_id, .. } => {
-            let defn_info = k1.types.defn_info.get(&type_id);
+            let defn_info = k1.type_defn_info.get(&type_id);
             match defn_info {
                 Some(d) => {
                     let span_id = k1.ast.get_span_for_id(d.ast_id);
@@ -135,11 +135,11 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
         }
         LsEntityKind::Variant { type_id, variant_index } => match k1.types.get(type_id) {
             Type::Sum(sum) => {
-                let variant = k1.types.sum_variant_by_index(sum.variants, variant_index);
+                let variant = k1.sum_variant_by_index(sum.variants, variant_index);
                 variant.name_span
             }
             Type::Enum(enum_type) => {
-                let member = k1.types.mem.get_nth(enum_type.member_values, variant_index as usize);
+                let member = k1.mem.get_nth(enum_type.member_values, variant_index as usize);
                 member.name_span
             }
             _ => {
@@ -149,7 +149,7 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
         },
         LsEntityKind::StructField { type_id, field_index, .. } => match k1.types.get(type_id) {
             Type::Struct(struct_type) => {
-                let field = k1.types.mem.get_nth(struct_type.fields, field_index as usize);
+                let field = k1.mem.get_nth(struct_type.fields, field_index as usize);
                 field.span
             }
             _ => {
@@ -235,9 +235,9 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
     let mut items: Vec<CompletionCandidate> = vec![];
     match site {
         CompletionSite::Member { base_type_id, .. } => {
-            let base_type_id = k1.types.get_static_family_id_if_static(base_type_id);
+            let base_type_id = k1.get_static_family_id_if_static(base_type_id);
             if let Type::Struct(st) = k1.types.get(base_type_id) {
-                for field in k1.types.mem.getn(st.fields) {
+                for field in k1.mem.getn(st.fields) {
                     items.push(CompletionCandidate {
                         label: k1.ident_str(field.name).to_string(),
                         kind: CompletionCandidateKind::Field,
@@ -246,7 +246,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                     });
                 }
             }
-            if let Some(companion_ns) = k1.types.get_companion_namespace(base_type_id) {
+            if let Some(companion_ns) = k1.get_companion_namespace(base_type_id) {
                 let companion_scope = k1.namespaces.get(companion_ns).scope_id;
                 for (name, function_id) in k1.scopes.iter_scope_functions(companion_scope) {
                     if is_method_shaped(k1, function_id, base_type_id) {
@@ -285,10 +285,10 @@ fn is_method_shaped(k1: &TypedProgram, function_id: FunctionId, base_type_id: Ty
         return true;
     }
     let Type::Function(ft) = k1.types.get(function.type_id) else { return false };
-    let Some(first) = k1.types.mem.getn(ft.physical_params).iter().find(|p| !p.is_context) else {
+    let Some(first) = k1.mem.getn(ft.physical_params).iter().find(|p| !p.is_context) else {
         return false;
     };
-    first.type_id == base_type_id || k1.types.get_base_for_method(first.type_id) == base_type_id
+    first.type_id == base_type_id || k1.get_base_for_method(first.type_id) == base_type_id
 }
 
 #[derive(Default)]

@@ -105,7 +105,7 @@ impl TypedProgram {
 
             let static_type = self.types.get(param.type_id).as_tvar().unwrap().static_constraint;
 
-            let type_hole = self.types.get_inference_hole(hole_index, static_type);
+            let type_hole = self.get_inference_hole(hole_index, static_type);
 
             self.ictx_mut().slots.push(InferenceSlot {
                 param_type: param.type_id(),
@@ -147,7 +147,7 @@ impl TypedProgram {
             let (argument_type, argument_span) = match expr {
                 TypeOrParsedExpr::Type(type_id) => (*type_id, span),
                 TypeOrParsedExpr::Parsed(parsed_expr) => {
-                    let expected_counts = self.types.get_type_variable_counts(expected_type_so_far);
+                    let expected_counts = self.get_type_variable_counts(expected_type_so_far);
                     let expected_is_concrete = expected_counts.inference_variable_count == 0
                         && expected_counts.unresolved_static_count == 0;
 
@@ -352,14 +352,14 @@ impl TypedProgram {
         span: SpanId,
     ) -> K1Result<()> {
         let infer_depth = self.ictx().origin_stack.len();
-        if let Some(static_type) = self.types.get_type_parameter(type_param_id).static_constraint {
+        if let Some(static_type) = self.get_type_parameter(type_param_id).static_constraint {
             debug!(
                 "[infer {infer_depth}] > learning from STATIC param {} := {}. static type: {}",
                 self.type_id_to_string(type_param_id),
                 self.type_id_to_string(solution_type_id),
                 self.type_id_to_string(static_type),
             );
-            let Some(solution_static_type) = self.types.get_value_type_id_of_type(solution_type_id)
+            let Some(solution_static_type) = self.get_value_type_id_of_type(solution_type_id)
             else {
                 error!(
                     "The solution was not a static type; this is probably crashworthy because we shouldn't have accepted it"
@@ -735,7 +735,7 @@ impl TypedProgram {
                     let original_param_function_type = ftp.function_type;
                     let substituted_function_type =
                         self.substitute_in_type(original_param_function_type, &subst_pairs);
-                    let fp_type = self.types.add_function_pointer_type(substituted_function_type);
+                    let fp_type = self.add_function_pointer_type(substituted_function_type);
                     (fp_type, expr)
                 }
                 PhysicalPassedFunction::LambdaObject(expr, lambda_object_type) => {
@@ -807,7 +807,7 @@ impl TypedProgram {
     fn set_slot_solution(&mut self, index: usize, to: TypeId) {
         // Normalize the incoming solution against everything solved so far, so that
         // solutions stay maximally resolved regardless of learning order
-        let to = if self.types.get_type_variable_counts(to).inference_variable_count > 0 {
+        let to = if self.get_type_variable_counts(to).inference_variable_count > 0 {
             let known: SV8<TypeSubstitutionPair> = self
                 .ictx()
                 .slots
@@ -824,7 +824,7 @@ impl TypedProgram {
             slot.solution = Some(to);
             slot.hole_type
         };
-        if self.types.get_type_variable_counts(to).inference_variable_count == 0 {
+        if self.get_type_variable_counts(to).inference_variable_count == 0 {
             let slot = &mut self.ictx_mut().slots[index];
             if !slot.fully_solved {
                 slot.fully_solved = true;
@@ -848,7 +848,7 @@ impl TypedProgram {
                 continue;
             }
             let now_solved =
-                self.types.get_type_variable_counts(new_sol).inference_variable_count == 0;
+                self.get_type_variable_counts(new_sol).inference_variable_count == 0;
             let slot = &mut self.ictx_mut().slots[i];
             slot.solution = Some(new_sol);
             if now_solved {
@@ -909,7 +909,7 @@ impl TypedProgram {
             self.type_id_to_string(passed_type).blue(),
             self.type_id_to_string(slot_type).blue()
         );
-        let counts = self.types.type_variable_counts.get(slot_type);
+        let counts = self.type_variable_counts.get(slot_type);
         if counts.inference_variable_count == 0 {
             debug!("no type holes: {}", self.type_id_to_string(slot_type));
             return TypeUnificationResult::NoHoles;
@@ -918,7 +918,7 @@ impl TypedProgram {
         // This special case is removable, all tests pass, but I believe its currently
         // a slight optimization, and would be more of one with more complex types
         if let (Some(passed_info), Some(arg_info)) =
-            (self.types.get_instance_info(passed_type), self.types.get_instance_info(slot_type))
+            (self.get_instance_info(passed_type), self.get_instance_info(slot_type))
         {
             // expr: NewList[int] arg: NewList['0]
             if passed_info.generic_parent == arg_info.generic_parent {
@@ -928,7 +928,7 @@ impl TypedProgram {
                 );
                 // We can directly 'solve' every appearance of a type param here
                 for (passed_type, arg_slot) in
-                    self.types.mem.getn_zip(passed_info.type_args, arg_info.type_args)
+                    self.mem.getn_zip(passed_info.type_args, arg_info.type_args)
                 {
                     self.unify_and_find_substitutions_rec(*passed_type, *arg_slot);
                 }
@@ -1007,8 +1007,8 @@ impl TypedProgram {
                 if passed_fields.len() != fields.len() {
                     return TypeUnificationResult::NonMatching("field count");
                 }
-                for (idx, field) in self.types.mem.getn(fields).iter().enumerate() {
-                    let passed_field = self.types.mem.get_nth(passed_fields, idx);
+                for (idx, field) in self.mem.getn(fields).iter().enumerate() {
+                    let passed_field = self.mem.get_nth(passed_fields, idx);
                     if field.name != passed_field.name {
                         return TypeUnificationResult::NonMatching("field names");
                     }
@@ -1032,7 +1032,7 @@ impl TypedProgram {
                     return TypeUnificationResult::NonMatching("variant count");
                 }
                 for (variant, passed_variant) in
-                    self.types.mem.getn(variants).iter().zip(self.types.mem.getn(passed_variants))
+                    self.mem.getn(variants).iter().zip(self.mem.getn(passed_variants))
                 {
                     if variant.name != passed_variant.name {
                         return TypeUnificationResult::NonMatching("variant names");
@@ -1073,11 +1073,11 @@ impl TypedProgram {
                     let passed_fn = *passed_fn;
                     let slot_fn = *slot_fn;
                     for (passed_param, slot_param) in self
-                        .types
+                        
                         .mem
                         .getn(passed_fn.logical_params())
                         .iter()
-                        .zip(self.types.mem.getn(slot_fn.logical_params()))
+                        .zip(self.mem.getn(slot_fn.logical_params()))
                     {
                         self.unify_and_find_substitutions_rec(
                             passed_param.type_id,
@@ -1112,7 +1112,7 @@ impl TypedProgram {
                 }
             }
             (Type::Lambda(passed_lambda_id), Type::LambdaObject(slot_lambda_obj)) => {
-                let passed_lambda = self.types.lambda_types.get(*passed_lambda_id);
+                let passed_lambda = self.lambda_types.get(*passed_lambda_id);
                 self.unify_and_find_substitutions_rec(
                     passed_lambda.function_type,
                     slot_lambda_obj.function_type,
@@ -1129,8 +1129,8 @@ impl TypedProgram {
                 {
                     return TypeUnificationResult::NonMatching("Unrelated dyn ability types");
                 }
-                let passed_args = self.types.mem.getn(passed_ao.impl_arguments);
-                let slot_args = self.types.mem.getn(slot_ao.impl_arguments);
+                let passed_args = self.mem.getn(passed_ao.impl_arguments);
+                let slot_args = self.mem.getn(slot_ao.impl_arguments);
                 for (passed_arg, slot_arg) in passed_args.iter().zip(slot_args) {
                     let result =
                         self.unify_and_find_substitutions_rec(passed_arg.type_id, slot_arg.type_id);

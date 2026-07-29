@@ -430,7 +430,7 @@ fn lower_unit_with_ctx(
                         }
                         None if call.ret_type.is_agg() => {
                             // Value = the temp's frame address; encoded fp-relative
-                            let layout = k1.types.get_pt_layout(call.ret_type);
+                            let layout = k1.get_pt_layout(call.ret_type);
                             ctx.agg_call_temps.push((inst_id, layout));
                         }
                         None if !call.ret_type.is_empty() => {
@@ -448,7 +448,7 @@ fn lower_unit_with_ctx(
                     }
                 }
                 _ => {
-                    if let InstKind::Value(pt) = ir::get_inst_kind(&k1.ir, &k1.types, inst_id) {
+                    if let InstKind::Value(pt) = ir::get_inst_kind(&k1.ir, inst_id) {
                         if !pt.is_empty() {
                             ctx.slots.insert(inst_id, next_word);
                             next_word += 1;
@@ -908,7 +908,7 @@ fn emit_inst(
         Inst::ArrayOffset { element_t, base, element_index } => {
             let base_src = resolve_src(k1, ctx, base);
             let idx_src = resolve_src(k1, ctx, element_index);
-            let stride = k1.types.get_pt_layout(element_t).stride();
+            let stride = k1.get_pt_layout(element_t).stride();
             let dst = ctx.slot_of(inst_id);
             ctx.emit(Opcode::PtrIndex, 0, 0);
             ctx.push(dst);
@@ -949,7 +949,7 @@ fn emit_inst(
         Inst::Ret { v, agg: _ } => {
             let ret_pt = ctx.ret_pt;
             if ret_pt.is_agg() {
-                let size = k1.types.get_pt_layout(ret_pt).size;
+                let size = k1.get_pt_layout(ret_pt).size;
                 let src = resolve_src(k1, ctx, v);
                 ctx.emit(Opcode::RetAgg, 0, 0);
                 ctx.push(src);

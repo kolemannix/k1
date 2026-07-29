@@ -5,11 +5,9 @@ use std::collections::hash_map::Entry;
 use std::fmt::{Display, Formatter};
 use std::hash::Hasher;
 
-use fxhash::FxHashMap;
-
 use crate::typer::scopes::*;
 
-use crate::parse::{IdentPool, ParsedId, StringId};
+use crate::parse::{ParsedId, StringId};
 
 use crate::{SV4, impl_copy_if_small, nz_u32_id, typer::*};
 
@@ -156,18 +154,18 @@ impl RecordKind {
 
 #[derive(Clone, Copy)]
 pub struct StructType {
-    pub fields: MSlice<StructTypeField, TypePool>,
+    pub fields: MSlice<StructTypeField, TypedProgram>,
     pub record_kind: RecordKind,
 }
 
 impl StructType {
-    pub fn struc(fields: MSlice<StructTypeField, TypePool>) -> StructType {
+    pub fn struc(fields: MSlice<StructTypeField, TypedProgram>) -> StructType {
         StructType { fields, record_kind: RecordKind::Struct }
     }
 
     pub fn find_field(
         &self,
-        m: &kmem::Mem<TypePool>,
+        m: &kmem::Mem<TypedProgram>,
         field_name: StringId,
     ) -> Option<(usize, &StructTypeField)> {
         m.getn(self.fields).iter().enumerate().find(|(_, field)| field.name == field_name)
@@ -254,7 +252,7 @@ pub struct TypedSumVariant {
 
 #[derive(Clone, Copy)]
 pub struct SumType {
-    pub variants: MSlice<TypedSumVariant, TypePool>,
+    pub variants: MSlice<TypedSumVariant, TypedProgram>,
     pub tag_type: IntegerType,
 }
 
@@ -267,7 +265,7 @@ pub struct ScalarEnumValue {
 
 #[derive(Copy, Clone)]
 pub struct ScalarEnumType {
-    pub member_values: MSlice<ScalarEnumValue, TypePool>,
+    pub member_values: MSlice<ScalarEnumValue, TypedProgram>,
     pub int_type: IntegerType,
 }
 
@@ -413,7 +411,7 @@ pub enum AbiMode {
 
 #[derive(Clone)]
 pub struct FunctionType {
-    pub physical_params: MSlice<FnParamType, TypePool>,
+    pub physical_params: MSlice<FnParamType, TypedProgram>,
     pub return_type: TypeId,
     pub is_lambda: bool,
     pub abi_mode: AbiMode,
@@ -421,7 +419,7 @@ pub struct FunctionType {
 impl_copy_if_small!(16, FunctionType);
 
 impl FunctionType {
-    pub fn logical_params(&self) -> MSlice<FnParamType, TypePool> {
+    pub fn logical_params(&self) -> MSlice<FnParamType, TypedProgram> {
         if self.is_lambda { self.physical_params.skip(1) } else { self.physical_params }
     }
 }
@@ -451,15 +449,14 @@ pub struct LambdaObjectType {
 
 /// `dyn[some-ability[args...]]`: an ability erased to an inline table.
 /// Ability-side arguments are baked into the specialized ability id;
-/// impl-side arguments are stored here (types-arena copy, so TypePool can
-/// hash/compare/count without the program arena). The runtime value is
+/// impl-side arguments are stored here. The runtime value is
 /// `struct_representation`: `{ state: ptr, <fn-name>: *fn(ptr, ...), .. }`
 /// with one field per dyn-dispatchable ability function, in ability
 /// declaration order.
 #[derive(Clone, Copy)]
 pub struct AbilityObjectType {
     pub specialized_ability_id: AbilityId,
-    pub impl_arguments: MSlice<NameAndType, TypePool>,
+    pub impl_arguments: MSlice<NameAndType, TypedProgram>,
     pub struct_representation: TypeId,
 }
 
@@ -526,7 +523,7 @@ pub enum Type {
     InferenceHole(InferenceHoleType),
 }
 
-impl TypePool {
+impl TypedProgram {
     fn type_eq(
         &self,
         t1: &Type,
@@ -1204,7 +1201,7 @@ impl PhysicalType {
     pub const U8: PhysicalType = PhysicalType(ScalarType::U8 as u32);
     pub const PTR: PhysicalType = PhysicalType(ScalarType::Pointer as u32);
 
-    const MIN_AGG_ID: u32 = 16;
+    pub(crate) const MIN_AGG_ID: u32 = 16;
 
     /// Raw representation, for encoding into bytecode operands
     pub const fn to_u32(self) -> u32 {
@@ -1349,7 +1346,7 @@ pub struct StructField {
 pub struct SumPt {
     pub tag_type: ScalarType,
     pub struct_repr: AggregateTypeId,
-    pub variants: MSlice<SumVariantPt, TypePool>,
+    pub variants: MSlice<SumVariantPt, TypedProgram>,
     pub payload_offset: u32,
 }
 
@@ -1367,10 +1364,10 @@ pub struct UnionMember {
 
 #[derive(Clone, Copy)]
 pub enum AggType {
-    Struct { fields: MSlice<StructField, TypePool> },
+    Struct { fields: MSlice<StructField, TypedProgram> },
     Array { element_pt: PhysicalType, len: u32 },
     Vector { element_pt: ScalarType, len: u32 },
-    Union { members: MSlice<UnionMember, TypePool> },
+    Union { members: MSlice<UnionMember, TypedProgram> },
     Sum(SumPt),
     Opaque { size: u32, align: u32 },
 }
@@ -1401,7 +1398,7 @@ impl AggType {
     }
 
     #[track_caller]
-    pub fn expect_struct(&self) -> MSlice<StructField, TypePool> {
+    pub fn expect_struct(&self) -> MSlice<StructField, TypedProgram> {
         match self {
             AggType::Struct { fields } => *fields,
             _ => panic!("Expected struct agg type"),
@@ -1416,122 +1413,30 @@ pub struct AggregateTypeRecord {
     pub layout: Layout,
 }
 
-pub struct TypePoolIdents {
-    tag: StringId,
-    payload: StringId,
+pub struct TypeIdents {
+    pub(crate) tag: StringId,
+    pub(crate) payload: StringId,
 }
 
-pub struct TypePool {
-    pub types: VPool<Type, TypeId>,
-    /// We use this to efficiently check if we already have seen a type,
-    /// and retrieve its ID if so. We used to iterate the pool but it
-    /// got slow
-    pub hashes: FxHashMap<u64, TypeId>,
-
-    pub type_variable_counts: VPool<TypeVariableInfo, TypeId>,
-    pub instance_info: VPool<Option<GenericInstanceInfo>, TypeId>,
-
-    pub defn_info: FxHashMap<TypeId, TypeDefnInfo>,
-    pub specializations: FxHashMap<(TypeId, SV4<TypeId>), TypeId>,
-    pub phys_types: FxHashMap<TypeId, PhysicalTypeResult>,
-
-    /// InferenceHole type ids by hole index, for holes with no static constraint.
-    /// `add` hash-conses holes to one id per (index, static_type) anyway; this skips
-    /// the hash+probe on the common path. PENDING marks not-yet-created indices.
-    hole_type_cache: Vec<TypeId>,
-
-    /// Lookup mappings for parsed -> typed ids
-    pub ast_ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
-
-    pub builtins: BuiltinTypes,
-
-    pub agg_types: VPool<AggregateTypeRecord, AggregateTypeId>,
-
-    pub mem: kmem::Mem<TypePool>,
-
-    /// Lambda types are big, they get extended storage
-    pub lambda_types: VPool<LambdaType, LambdaTypeId>,
-
-    pub idents: TypePoolIdents,
-}
-
-impl TypePool {
-    pub fn empty(tag_ident: StringId, payload_ident: StringId) -> TypePool {
-        let mut agg_types = VPool::make("phys_types");
-        // Reserve the lower values so they dont conflict with scalars once packed
-        agg_types.skip_next_n_slots(PhysicalType::MIN_AGG_ID as usize);
-
-        TypePool {
-            types: VPool::make("types"),
-            hashes: FxHashMap::new(),
-
-            type_variable_counts: VPool::make("type_variable_counts"),
-            instance_info: VPool::make("instance_info"),
-
-            defn_info: FxHashMap::new(),
-            specializations: FxHashMap::new(),
-            phys_types: FxHashMap::new(),
-
-            hole_type_cache: Vec::new(),
-
-            ast_ability_mapping: FxHashMap::default(),
-
-            builtins: BuiltinTypes::default(),
-
-            agg_types,
-
-            mem: kmem::Mem::make(),
-
-            lambda_types: VPool::make("lambdas"),
-
-            idents: TypePoolIdents { tag: tag_ident, payload: payload_ident },
-        }
-    }
-
-    #[cfg(test)]
-    pub fn with_builtin_types() -> TypePool {
-        let mut this = TypePool::empty(StringId::forged(), StringId::forged());
-        this.add_anon(Type::Integer(IntegerType::U8));
-        this.add_anon(Type::Integer(IntegerType::U16));
-        this.add_anon(Type::Integer(IntegerType::U32));
-        this.add_anon(Type::Integer(IntegerType::U64));
-        this.add_anon(Type::Integer(IntegerType::I8));
-        this.add_anon(Type::Integer(IntegerType::I16));
-        this.add_anon(Type::Integer(IntegerType::I32));
-        this.add_anon(Type::Integer(IntegerType::I64));
-
-        this.add_anon(Type::Struct(StructType {
-            fields: MSlice::empty(),
-            record_kind: RecordKind::Struct,
-        }));
-        this.add_anon(Type::Char);
-        this.add_anon(Type::Bool);
-        this.add_anon(Type::Never);
-        this.add_anon(Type::Pointer);
-        this.add_anon(Type::Float(FloatType::F32));
-        this.add_anon(Type::Float(FloatType::F64));
-
-        this
-    }
-
-    pub fn add(
+impl TypedProgram {
+    pub fn add_type(
         &mut self,
         typ: Type,
         defn_info: Option<TypeDefnInfo>,
         instance_info: Option<GenericInstanceInfo>,
     ) -> TypeId {
         let hash = self.hash_type(&typ, defn_info);
-        if let Entry::Occupied(entry) = self.hashes.entry(hash) {
+        if let Entry::Occupied(entry) = self.type_hashes.entry(hash) {
             let existing_id = *entry.get();
             let existing = self.types.get(existing_id);
-            let existing_defn_info = self.defn_info.get(&existing_id);
+            let existing_defn_info = self.type_defn_info.get(&existing_id);
             if self.type_eq(&typ, existing, defn_info.as_ref(), existing_defn_info) {
                 return existing_id;
             }
         }
 
         let type_id = self.types.add(typ);
-        self.hashes.insert(hash, type_id);
+        self.type_hashes.insert(hash, type_id);
 
         // 2 AoS fields to handle
         // pub type_variable_counts
@@ -1540,14 +1445,14 @@ impl TypePool {
         let variable_counts = self.count_type_variables(type_id);
         self.type_variable_counts.add_expected_id(variable_counts, type_id);
 
-        self.instance_info.add_expected_id(instance_info, type_id);
+        self.type_instance_info.add_expected_id(instance_info, type_id);
 
         if let Some(defn_info) = defn_info {
-            self.defn_info.insert(type_id, defn_info);
+            self.type_defn_info.insert(type_id, defn_info);
         }
 
         debug_assert_eq!(self.type_variable_counts.len(), self.types.len());
-        debug_assert_eq!(self.instance_info.len(), self.types.len());
+        debug_assert_eq!(self.type_instance_info.len(), self.types.len());
 
         type_id
     }
@@ -1560,42 +1465,42 @@ impl TypePool {
         defn_info: Option<TypeDefnInfo>,
     ) {
         let hash = self.hash_type(&type_value, defn_info);
-        *self.get_mut(id) = type_value;
-        self.hashes.insert(hash, id);
+        *self.types.get_mut(id) = type_value;
+        self.type_hashes.insert(hash, id);
 
         let variable_counts = self.count_type_variables(id);
         *self.type_variable_counts.get_mut(id) = variable_counts;
 
         if let Some(defn_info) = defn_info {
-            self.defn_info.insert(id, defn_info);
+            self.type_defn_info.insert(id, defn_info);
         }
-        *self.instance_info.get_mut(id) = instance_info;
+        *self.type_instance_info.get_mut(id) = instance_info;
     }
 
     pub fn next_type_id(&self) -> TypeId {
         self.types.next_id()
     }
 
-    pub fn discard_if_last(&mut self, id: TypeId) -> bool {
+    pub fn discard_type_if_last(&mut self, id: TypeId) -> bool {
         if self.types.next_id() != id + 1u32 {
             return false;
         }
-        let hash = self.hash_type(self.types.get(id), self.defn_info.get(&id).copied());
-        if self.hashes.get(&hash) == Some(&id) {
-            self.hashes.remove(&hash);
+        let hash = self.hash_type(self.types.get(id), self.type_defn_info.get(&id).copied());
+        if self.type_hashes.get(&hash) == Some(&id) {
+            self.type_hashes.remove(&hash);
         }
-        self.defn_info.remove(&id);
+        self.type_defn_info.remove(&id);
         self.types.pop_expected(id);
         self.type_variable_counts.pop_expected(id);
-        self.instance_info.pop_expected(id);
+        self.type_instance_info.pop_expected(id);
         true
     }
 
     /// The `Type` slot of a reserved id stays unset until `set_type`; instance info and
     /// variable counts are initialized so the id can be referenced by other types meanwhile
-    pub fn reserve_id(&mut self) -> TypeId {
+    pub fn reserve_type_id(&mut self) -> TypeId {
         let id = self.types.reserve_id();
-        let id2 = self.instance_info.add_expected_id(None, id);
+        let id2 = self.type_instance_info.add_expected_id(None, id);
         let id3 = self.type_variable_counts.add_expected_id(TypeVariableInfo::EMPTY, id);
         debug_assert_eq!(id, id2);
         debug_assert_eq!(id, id3);
@@ -1610,29 +1515,29 @@ impl TypePool {
         generic_parent: TypeId,
         type_args: TypeIdSlice,
     ) -> TypeId {
-        let id = self.reserve_id();
+        let id = self.reserve_type_id();
         let mut counts = TypeVariableInfo::EMPTY;
         for arg in self.mem.getn(type_args) {
             counts = counts.add(self.type_variable_counts.get(*arg));
         }
         *self.type_variable_counts.get_mut(id) = counts;
-        *self.instance_info.get_mut(id) = Some(GenericInstanceInfo { generic_parent, type_args });
+        *self.type_instance_info.get_mut(id) = Some(GenericInstanceInfo { generic_parent, type_args });
         self.insert_specialization(generic_parent, type_args, id);
         id
     }
 
     pub fn add_reference_type(&mut self, inner_type: TypeId) -> TypeId {
-        self.add_anon(Type::Reference(ReferenceType { inner_type }))
+        self.add_anon_type(Type::Reference(ReferenceType { inner_type }))
     }
 
     pub fn add_function_pointer_type(&mut self, function_type_id: TypeId) -> TypeId {
-        self.add_anon(Type::FunctionPointer(FunctionPointerType { function_type_id }))
+        self.add_anon_type(Type::FunctionPointer(FunctionPointerType { function_type_id }))
     }
 
     fn make_union_type(
         &mut self,
         origin_type_id: TypeId,
-        members: MSlice<UnionMember, TypePool>,
+        members: MSlice<UnionMember, TypedProgram>,
     ) -> PhysicalType {
         let mut size = 0;
         let mut align = 1;
@@ -1663,11 +1568,11 @@ impl TypePool {
         family_type_id: TypeId,
         value_id: Option<StaticValueId>,
     ) -> TypeId {
-        self.add_anon(Type::StaticValue(StaticValueType { family_type_id, value_id }))
+        self.add_anon_type(Type::StaticValue(StaticValueType { family_type_id, value_id }))
     }
 
-    pub fn add_anon(&mut self, typ: Type) -> TypeId {
-        self.add(typ, None, None)
+    pub fn add_anon_type(&mut self, typ: Type) -> TypeId {
+        self.add_type(typ, None, None)
     }
 
     pub fn get_inference_hole(&mut self, index: u32, static_type: Option<TypeId>) -> TypeId {
@@ -1678,7 +1583,7 @@ impl TypePool {
                 }
             }
         }
-        let type_id = self.add_anon(Type::InferenceHole(InferenceHoleType { index, static_type }));
+        let type_id = self.add_anon_type(Type::InferenceHole(InferenceHoleType { index, static_type }));
         if static_type.is_none() {
             let index = index as usize;
             if self.hole_type_cache.len() <= index {
@@ -1693,16 +1598,16 @@ impl TypePool {
     /// and type parameters with a constraint to a specific static, which is basically the same
     /// thing since it can have no other constraints
     pub fn get_value_type_id_of_type(&self, type_id: TypeId) -> Option<TypeId> {
-        match self.get(type_id) {
+        match self.types.get(type_id) {
             Type::StaticValue(_vt) => Some(type_id),
             Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
                 let t = tp.static_constraint.unwrap();
-                debug_assert!(self.get(t).as_value_type().is_some());
+                debug_assert!(self.types.get(t).as_value_type().is_some());
                 Some(t)
             }
             Type::InferenceHole(ih) if ih.static_type.is_some() => {
                 let t = ih.static_type.unwrap();
-                debug_assert!(self.get(t).as_value_type().is_some());
+                debug_assert!(self.types.get(t).as_value_type().is_some());
                 Some(t)
             }
             _ => None,
@@ -1712,7 +1617,7 @@ impl TypePool {
     pub fn get_static_type_of_type(&self, type_id: TypeId) -> Option<StaticValueType> {
         match self.get_value_type_id_of_type(type_id) {
             None => None,
-            Some(type_id) => Some(*self.get(type_id).as_value_type().unwrap()),
+            Some(type_id) => Some(*self.types.get(type_id).as_value_type().unwrap()),
         }
     }
 
@@ -1721,12 +1626,8 @@ impl TypePool {
     }
 
     #[inline]
-    pub fn get(&self, type_id: TypeId) -> &Type {
-        self.types.get(type_id)
-    }
-
     pub fn get_struct_field(&self, type_id: TypeId, field_index: usize) -> &StructTypeField {
-        self.mem.get_nth(self.get(type_id).expect_struct().fields, field_index)
+        self.mem.get_nth(self.types.get(type_id).expect_struct().fields, field_index)
     }
 
     pub fn get_struct_field_by_name(
@@ -1734,11 +1635,11 @@ impl TypePool {
         type_id: TypeId,
         name: StringId,
     ) -> Option<(usize, &StructTypeField)> {
-        self.get(type_id).expect_struct().find_field(&self.mem, name)
+        self.types.get(type_id).expect_struct().find_field(&self.mem, name)
     }
 
     pub fn get_static_family_id_if_static(&self, type_id: TypeId) -> TypeId {
-        match self.get(type_id) {
+        match self.types.get(type_id) {
             Type::StaticValue(svt) => svt.family_type_id,
             _ => type_id,
         }
@@ -1746,7 +1647,7 @@ impl TypePool {
 
     pub fn get_base_for_method(&self, type_id: TypeId) -> TypeId {
         // Follow references
-        match self.get(type_id) {
+        match self.types.get(type_id) {
             Type::Reference(r) => r.inner_type,
             _ => type_id,
         }
@@ -1754,7 +1655,7 @@ impl TypePool {
 
     #[track_caller]
     pub fn get_type_parameter(&self, type_id: TypeId) -> &TypeParameter {
-        if let Type::TypeParameter(tv) = self.get(type_id) {
+        if let Type::TypeParameter(tv) = self.types.get(type_id) {
             tv
         } else {
             panic!("Expected type variable on type {}", type_id)
@@ -1762,7 +1663,7 @@ impl TypePool {
     }
 
     pub fn get_type_variable_mut(&mut self, type_id: TypeId) -> &mut TypeParameter {
-        if let Type::TypeParameter(tv) = self.get_mut(type_id) {
+        if let Type::TypeParameter(tv) = self.types.get_mut(type_id) {
             tv
         } else {
             panic!("Expected type variable on type {}", type_id)
@@ -1770,18 +1671,18 @@ impl TypePool {
     }
 
     pub fn get_as_sum(&self, type_id: TypeId) -> Option<&SumType> {
-        match self.get(type_id) {
+        match self.types.get(type_id) {
             Type::Sum(e) => Some(e),
             _ => None,
         }
     }
 
     pub fn get_instance_info(&self, type_id: TypeId) -> Option<&GenericInstanceInfo> {
-        self.instance_info.get(type_id).as_ref()
+        self.type_instance_info.get(type_id).as_ref()
     }
 
     pub fn get_defn_info(&self, type_id: TypeId) -> Option<TypeDefnInfo> {
-        self.defn_info.get(&type_id).copied()
+        self.type_defn_info.get(&type_id).copied()
     }
 
     pub fn get_companion_namespace(&self, type_id: TypeId) -> Option<NamespaceId> {
@@ -1803,7 +1704,7 @@ impl TypePool {
             function_id: body_function_id,
             environment_struct,
         });
-        let lambda_type_id = self.add_anon(Type::Lambda(lambda_type_id));
+        let lambda_type_id = self.add_anon_type(Type::Lambda(lambda_type_id));
         lambda_type_id
     }
 
@@ -1812,63 +1713,44 @@ impl TypePool {
     /// Ability objects: field 0 is the state pointer; fn-ptr fields follow
     pub const ABILITY_OBJECT_STATE_INDEX: usize = 0;
 
-    pub fn add_lambda_object(
-        &mut self,
-        identifiers: &IdentPool,
-        function_type_id: TypeId,
-        parsed_id: ParsedId,
-    ) -> TypeId {
-        // Unlike types.builtins.dyn_lam_obj, this contains the actual function type
+    pub fn add_lambda_object(&mut self, function_type_id: TypeId, parsed_id: ParsedId) -> TypeId {
+        // Unlike builtin_types.dyn_lam_obj, this contains the actual function type
         // for typechecking calls
         // The other one is just concerned with mapping to the right physical type.
         // Which is just { ptr, ptr }
         let fn_ptr_type = self.add_function_pointer_type(function_type_id);
         let fields = self.mem.pushn(&[
             StructTypeField {
-                name: identifiers.b.fn_ptr,
+                name: self.ast.idents.b.fn_ptr,
                 type_id: fn_ptr_type,
                 span: SpanId::NONE,
             },
             StructTypeField {
-                name: identifiers.b.env_ptr,
+                name: self.ast.idents.b.env_ptr,
                 type_id: POINTER_TYPE_ID,
                 span: SpanId::NONE,
             },
         ]);
-        let struct_representation = self.add_anon(Type::Struct(StructType::struc(fields)));
-        self.add_anon(Type::LambdaObject(LambdaObjectType {
+        let struct_representation = self.add_anon_type(Type::Struct(StructType::struc(fields)));
+        self.add_anon_type(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
             parsed_id,
             struct_representation,
         }))
     }
 
-    pub fn get_mut(&mut self, type_id: TypeId) -> &mut Type {
-        self.types.get_mut(type_id)
-    }
-
-    pub fn iter_ids(&self) -> impl Iterator<Item = TypeId> {
-        (0..self.types.len()).map(|i| TypeId(NonZeroU32::new(i as u32 + 1).unwrap()))
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (TypeId, &Type)> {
-        self.types
-            .iter()
-            .enumerate()
-            .map(|(i, t)| (TypeId(NonZeroU32::new(i as u32 + 1).unwrap()), t))
-    }
 
     pub fn get_type_id_dereferenced(&self, type_id: TypeId) -> TypeId {
-        match self.get(type_id) {
+        match self.types.get(type_id) {
             Type::Reference(r) => r.inner_type,
             _ => type_id,
         }
     }
 
     pub fn get_type_dereferenced(&self, type_id: TypeId) -> &Type {
-        match self.get(type_id) {
-            Type::Reference(r) => self.get(r.inner_type),
-            _ => self.get(type_id),
+        match self.types.get(type_id) {
+            Type::Reference(r) => self.types.get(r.inner_type),
+            _ => self.types.get(type_id),
         }
     }
 
@@ -1897,9 +1779,9 @@ impl TypePool {
 
     pub fn count_type_variables(&self, type_id: TypeId) -> TypeVariableInfo {
         const EMPTY: TypeVariableInfo = TypeVariableInfo::EMPTY;
-        debug!("count_type_variables of {} {}", type_id, self.get(type_id).kind_name());
+        debug!("count_type_variables of {} {}", type_id, self.types.get(type_id).kind_name());
 
-        match self.get(type_id) {
+        match self.types.get(type_id) {
             Type::TypeParameter(_tp) => TypeVariableInfo {
                 type_parameter_count: 1,
                 inference_variable_count: 0,
@@ -2012,36 +1894,24 @@ impl TypePool {
         }
     }
 
-    pub fn get_value_of_static_type<'a>(
-        &self,
-        static_values: &'a StaticValuePool,
-        type_id: TypeId,
-    ) -> Option<&'a StaticValue> {
-        match self.get(type_id) {
+    pub fn get_value_of_static_type(&self, type_id: TypeId) -> Option<&StaticValue> {
+        match self.types.get(type_id) {
             Type::StaticValue(StaticValueType { value_id: Some(value_id), .. }) => {
-                Some(static_values.get(*value_id))
+                Some(self.static_values.get(*value_id))
             }
             _ => None,
         }
     }
 
-    pub fn get_type_as_i64(
-        &self,
-        static_values: &StaticValuePool,
-        size_type: TypeId,
-    ) -> Option<i64> {
-        match self.get_value_of_static_type(static_values, size_type) {
+    pub fn get_type_as_i64(&self, size_type: TypeId) -> Option<i64> {
+        match self.get_value_of_static_type(size_type) {
             Some(StaticValue::Int(TypedIntValue::I64(i))) => Some(*i),
             _ => None,
         }
     }
 
-    pub fn compute_physical_type(
-        &mut self,
-        static_values: &StaticValuePool,
-        type_id: TypeId,
-    ) -> PhysicalTypeResult {
-        match self.get(type_id) {
+    pub fn compute_physical_type(&mut self, type_id: TypeId) -> PhysicalTypeResult {
+        match self.types.get(type_id) {
             Type::Char | Type::Bool => PhysicalTypeResult::Yes(PhysicalType::U8),
 
             Type::Integer(i) => {
@@ -2062,11 +1932,11 @@ impl TypePool {
                 PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::Pointer))
             }
             Type::Array(array) => {
-                let count = self.get_type_as_i64(static_values, array.size_type);
+                let count = self.get_type_as_i64(array.size_type);
                 match count {
                     None => PhysicalTypeResult::No,
                     Some(0) => PhysicalTypeResult::Yes(PhysicalType::EMPTY),
-                    Some(len) => match self.get_physical_type(static_values, array.element_type) {
+                    Some(len) => match self.get_physical_type(array.element_type) {
                         PhysicalTypeResult::No => PhysicalTypeResult::No,
                         PhysicalTypeResult::Never => PhysicalTypeResult::Never,
                         PhysicalTypeResult::Infinite => PhysicalTypeResult::No,
@@ -2084,10 +1954,10 @@ impl TypePool {
                 }
             }
             Type::Vector(vec) => {
-                let count = self.get_type_as_i64(static_values, vec.size_type);
+                let count = self.get_type_as_i64(vec.size_type);
                 match count {
                     None => PhysicalTypeResult::No,
-                    Some(len) => match self.get_physical_type(static_values, vec.element_type) {
+                    Some(len) => match self.get_physical_type(vec.element_type) {
                         PhysicalTypeResult::Yes(element_pt) if element_pt.as_scalar().is_some() => {
                             let element_scalar = element_pt.expect_scalar();
                             let record = AggregateTypeRecord {
@@ -2111,7 +1981,7 @@ impl TypePool {
                     let mut fields = self.mem.new_list(s.fields.len());
                     let mut layout = Layout::ZERO_SIZED;
                     for field in self.mem.getn(s_fields) {
-                        match self.get_physical_type(static_values, field.type_id) {
+                        match self.get_physical_type(field.type_id) {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
                             PhysicalTypeResult::Never => return PhysicalTypeResult::Never,
                             PhysicalTypeResult::Infinite => return PhysicalTypeResult::Infinite,
@@ -2142,7 +2012,7 @@ impl TypePool {
                     let u_fields = s.fields;
                     let mut members = self.mem.new_list(u_fields.len());
                     for field in self.mem.getn(u_fields) {
-                        match self.get_physical_type(static_values, field.type_id) {
+                        match self.get_physical_type(field.type_id) {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
                             PhysicalTypeResult::Never => return PhysicalTypeResult::Never,
                             PhysicalTypeResult::Infinite => return PhysicalTypeResult::Infinite,
@@ -2166,11 +2036,11 @@ impl TypePool {
                 let mut physical_variants = self.mem.new_list(variant_count);
                 let mut union_members = self.mem.new_list(variant_count);
 
-                let e = self.get(type_id).expect_sum();
+                let e = self.types.get(type_id).expect_sum();
 
                 for v in self.mem.getn(e.variants) {
                     if let Some(payload) = &v.payload {
-                        match self.get_physical_type(static_values, *payload) {
+                        match self.get_physical_type(*payload) {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
                             PhysicalTypeResult::Never => {
                                 // We simply skip this variant!
@@ -2203,13 +2073,13 @@ impl TypePool {
                 let tag_field = StructField {
                     offset: 0,
                     field_t: PhysicalType::scalar(tag_scalar),
-                    name: self.idents.tag,
+                    name: self.type_idents.tag,
                 };
                 let union_offset = struct_layout.append_to_aggregate(union_layout);
                 let payload_field = StructField {
                     offset: union_offset,
                     field_t: union_id,
-                    name: self.idents.payload,
+                    name: self.type_idents.payload,
                 };
                 let fields = self.mem.pushn(&[tag_field, payload_field]);
                 let struct_repr = self.agg_types.add(AggregateTypeRecord {
@@ -2240,13 +2110,13 @@ impl TypePool {
             }
             Type::Lambda(lam_id) => {
                 let lam = self.lambda_types.get(*lam_id);
-                self.add_physical_duplicate(static_values, type_id, lam.env_type)
+                self.add_physical_duplicate(type_id, lam.env_type)
             }
             Type::LambdaObject(lam_obj) => {
-                self.add_physical_duplicate(static_values, type_id, lam_obj.struct_representation)
+                self.add_physical_duplicate(type_id, lam_obj.struct_representation)
             }
             Type::AbilityObject(ao) => {
-                self.add_physical_duplicate(static_values, type_id, ao.struct_representation)
+                self.add_physical_duplicate(type_id, ao.struct_representation)
             }
             Type::StaticValue(_vt) => PhysicalTypeResult::Yes(PhysicalType::EMPTY),
             Type::Never => PhysicalTypeResult::Never,
@@ -2258,13 +2128,8 @@ impl TypePool {
         }
     }
 
-    pub fn add_physical_duplicate(
-        &mut self,
-        static_values: &StaticValuePool,
-        origin_type_id: TypeId,
-        other: TypeId,
-    ) -> PhysicalTypeResult {
-        match self.get_physical_type(static_values, other) {
+    pub fn add_physical_duplicate(&mut self, origin_type_id: TypeId, other: TypeId) -> PhysicalTypeResult {
+        match self.get_physical_type(other) {
             PhysicalTypeResult::No => PhysicalTypeResult::No,
             PhysicalTypeResult::Never => PhysicalTypeResult::Never,
             PhysicalTypeResult::Infinite => PhysicalTypeResult::Infinite,
@@ -2332,35 +2197,31 @@ impl TypePool {
 
     pub fn enum_value_by_name(
         &self,
-        values: MSlice<ScalarEnumValue, TypePool>,
+        values: MSlice<ScalarEnumValue, TypedProgram>,
         name: StringId,
     ) -> Option<(usize, &'static ScalarEnumValue)> {
         self.mem.getn(values).iter().find_position(|v| v.name == name)
     }
     pub fn sum_variant_by_name(
         &self,
-        variants: MSlice<TypedSumVariant, TypePool>,
+        variants: MSlice<TypedSumVariant, TypedProgram>,
         name: StringId,
     ) -> Option<&'static TypedSumVariant> {
         self.mem.getn(variants).iter().find(|v| v.name == name)
     }
     pub fn sum_variant_by_index(
         &self,
-        variants: MSlice<TypedSumVariant, TypePool>,
+        variants: MSlice<TypedSumVariant, TypedProgram>,
         index: u32,
     ) -> &TypedSumVariant {
         self.mem.get_nth(variants, index as usize)
     }
 
-    pub fn get_physical_type(
-        &mut self,
-        static_values: &StaticValuePool,
-        type_id: TypeId,
-    ) -> PhysicalTypeResult {
+    pub fn get_physical_type(&mut self, type_id: TypeId) -> PhysicalTypeResult {
         match self.phys_types.get(&type_id) {
             Some(result) => *result,
             None => {
-                let pt_result = self.compute_physical_type(static_values, type_id);
+                let pt_result = self.compute_physical_type(type_id);
                 self.phys_types.insert(type_id, pt_result);
                 pt_result
             }
@@ -2379,12 +2240,8 @@ impl TypePool {
         }
     }
 
-    pub fn get_layout(
-        &mut self,
-        static_values: &StaticValuePool,
-        type_id: TypeId,
-    ) -> Option<Layout> {
-        match self.get_physical_type(static_values, type_id) {
+    pub fn get_layout(&mut self, type_id: TypeId) -> Option<Layout> {
+        match self.get_physical_type(type_id) {
             PhysicalTypeResult::No => None,
             PhysicalTypeResult::Never => None,
             PhysicalTypeResult::Infinite => None,
@@ -2393,8 +2250,8 @@ impl TypePool {
     }
 
     pub fn get_as_list_instance(&self, type_id: TypeId) -> Option<ListType> {
-        self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
-            if spec_info.generic_parent == self.builtins.list() {
+        self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
+            if spec_info.generic_parent == self.builtin_types.list() {
                 Some(ListType { element_type: *self.mem.get_nth(spec_info.type_args, 0) })
             } else {
                 None
@@ -2403,8 +2260,8 @@ impl TypePool {
     }
 
     pub fn get_as_buffer_instance(&self, type_id: TypeId) -> Option<TypeId> {
-        self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
-            if spec_info.generic_parent == self.builtins.buffer() {
+        self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
+            if spec_info.generic_parent == self.builtin_types.buffer() {
                 Some(*self.mem.get_nth(spec_info.type_args, 0))
             } else {
                 None
@@ -2413,8 +2270,8 @@ impl TypePool {
     }
 
     pub fn get_as_span_instance(&self, type_id: TypeId) -> Option<TypeId> {
-        self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
-            if spec_info.generic_parent == self.builtins.span() {
+        self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
+            if spec_info.generic_parent == self.builtin_types.span() {
                 Some(*self.mem.get_nth(spec_info.type_args, 0))
             } else {
                 None
@@ -2424,11 +2281,11 @@ impl TypePool {
 
     pub fn get_as_container_instance(&self, type_id: TypeId) -> Option<(TypeId, ContainerKind)> {
         if let Some(info) = self.get_instance_info(type_id) {
-            if info.generic_parent == self.builtins.list() {
+            if info.generic_parent == self.builtin_types.list() {
                 Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::List))
-            } else if info.generic_parent == self.builtins.buffer() {
+            } else if info.generic_parent == self.builtin_types.buffer() {
                 Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::Buffer))
-            } else if info.generic_parent == self.builtins.span() {
+            } else if info.generic_parent == self.builtin_types.span() {
                 Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::Span))
             } else {
                 None
@@ -2451,8 +2308,8 @@ impl TypePool {
     }
 
     pub fn get_as_opt_instance(&self, type_id: TypeId) -> Option<TypeId> {
-        self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
-            if spec_info.generic_parent == self.builtins.opt() {
+        self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
+            if spec_info.generic_parent == self.builtin_types.opt() {
                 Some(*self.mem.get_nth(spec_info.type_args, 0))
             } else {
                 None
@@ -2467,13 +2324,13 @@ impl TypePool {
 
     pub fn get_specialization_slice(&mut self, base: TypeId, args: &[TypeId]) -> Option<TypeId> {
         let key = (base, SV4::from_slice(args));
-        let result = *self.specializations.get(&key)?;
+        let result = *self.type_specializations.get(&key)?;
         Some(result)
     }
 
     pub fn insert_specialization(&mut self, base: TypeId, args: TypeIdSlice, specialized: TypeId) {
         let key = (base, SV4::from_slice(self.mem.getn(args)));
-        self.specializations.insert(key, specialized);
+        self.type_specializations.insert(key, specialized);
     }
 
     pub fn pt_to_string(&self, t: PhysicalType) -> String {

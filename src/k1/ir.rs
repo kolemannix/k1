@@ -955,9 +955,9 @@ impl std::fmt::Display for FloatCmpPred {
     }
 }
 
-pub fn get_value_kind(ir: &ProgramIr, types: &TypePool, value: Value) -> InstKind {
+pub fn get_value_kind(ir: &ProgramIr, value: Value) -> InstKind {
     match value {
-        Value::Inst(inst_id) => get_inst_kind(ir, types, inst_id),
+        Value::Inst(inst_id) => get_inst_kind(ir, inst_id),
         Value::GlobalAddr { storage_pt: _, id: _ } => InstKind::PTR,
         Value::StaticValue { t, id: _ } => InstKind::Value(t),
         Value::FunctionAddr(_) => InstKind::PTR,
@@ -969,7 +969,7 @@ pub fn get_value_kind(ir: &ProgramIr, types: &TypePool, value: Value) -> InstKin
     }
 }
 
-pub fn get_inst_kind(ir: &ProgramIr, types: &TypePool, inst_id: InstId) -> InstKind {
+pub fn get_inst_kind(ir: &ProgramIr, inst_id: InstId) -> InstKind {
     match *ir.instrs.get(inst_id) {
         Inst::Data(imm) => match imm {
             DataInst::I64(_) => InstKind::scalar(ScalarType::I64),
@@ -999,7 +999,7 @@ pub fn get_inst_kind(ir: &ProgramIr, types: &TypePool, inst_id: InstId) -> InstK
         Inst::Phi { t, .. } => InstKind::Value(t),
         Inst::Ret { .. } => InstKind::Terminator,
         Inst::BoolNegate { .. } => InstKind::BOOL,
-        Inst::BitNot { v } => get_value_kind(ir, types, v),
+        Inst::BitNot { v } => get_value_kind(ir, v),
         Inst::BitCast { to, .. } => InstKind::Value(to),
         Inst::IntTrunc { to, .. } => InstKind::scalar(to),
         Inst::IntExtU { to, .. } => InstKind::scalar(to),
@@ -1014,26 +1014,26 @@ pub fn get_inst_kind(ir: &ProgramIr, types: &TypePool, inst_id: InstId) -> InstK
         Inst::IntToFloatSigned { to, .. } => InstKind::scalar(to),
         Inst::PtrToWord { .. } => InstKind::scalar(ir.word_sized_int()),
         Inst::WordToPtr { .. } => InstKind::PTR,
-        Inst::IntAdd { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::IntSub { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::IntMul { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::IntDivUnsigned { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::IntDivSigned { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::IntRemUnsigned { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::IntRemSigned { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::IntAdd { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::IntSub { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::IntMul { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::IntDivUnsigned { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::IntDivSigned { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::IntRemUnsigned { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::IntRemSigned { lhs, .. } => get_value_kind(ir, lhs),
         Inst::IntCmp { .. } => InstKind::BOOL,
-        Inst::FloatAdd { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::FloatSub { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::FloatMul { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::FloatDiv { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::FloatRem { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::FloatAdd { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::FloatSub { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::FloatMul { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::FloatDiv { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::FloatRem { lhs, .. } => get_value_kind(ir, lhs),
         Inst::FloatCmp { .. } => InstKind::BOOL,
-        Inst::BitAnd { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::BitOr { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::BitXor { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::BitShiftLeft { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::BitUnsignedShiftRight { lhs, .. } => get_value_kind(ir, types, lhs),
-        Inst::BitSignedShiftRight { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::BitAnd { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::BitOr { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::BitXor { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::BitShiftLeft { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::BitUnsignedShiftRight { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::BitSignedShiftRight { lhs, .. } => get_value_kind(ir, lhs),
         Inst::BakeStaticValue { .. } => InstKind::scalar(ScalarType::U64),
     }
 }
@@ -1359,7 +1359,7 @@ impl<'k1> Builder<'k1> {
         debug_info: IrDebugInfo,
         returned: bool,
     ) -> InstId {
-        let layout = self.k1.types.get_pt_layout(pt);
+        let layout = self.k1.get_pt_layout(pt);
         let index = match self.last_alloca_index {
             None => 0,
             Some(i) => i as usize + 1,
@@ -1378,11 +1378,11 @@ impl<'k1> Builder<'k1> {
     }
 
     pub fn get_inst_kind(&self, inst: InstId) -> InstKind {
-        get_inst_kind(&self.k1.ir, &self.k1.types, inst)
+        get_inst_kind(&self.k1.ir, inst)
     }
 
     pub fn get_value_kind(&self, value: Value) -> InstKind {
-        get_value_kind(&self.k1.ir, &self.k1.types, value)
+        get_value_kind(&self.k1.ir, value)
     }
 
     #[allow(unused)]
@@ -1427,7 +1427,7 @@ impl<'k1> Builder<'k1> {
         if field_index == 0 {
             return base;
         }
-        let Some(offset) = self.k1.types.get_struct_field_offset(struct_agg_id, field_index) else {
+        let Some(offset) = self.k1.get_struct_field_offset(struct_agg_id, field_index) else {
             b_ice!(self, "Failed getting offset for field")
         };
         self.push_inst(
@@ -1472,7 +1472,7 @@ impl<'k1> Builder<'k1> {
         pt: PhysicalType,
         comment: impl Into<IrStr>,
     ) -> Option<InstId> {
-        let layout = self.k1.types.get_pt_layout(pt);
+        let layout = self.k1.get_pt_layout(pt);
         if pt.is_empty() {
             None
         } else {
@@ -1577,7 +1577,7 @@ impl<'k1> Builder<'k1> {
 
         let mut phys_params = self.k1.ir.mem.new_list(function_type.physical_params.len());
         for (index, param) in
-            self.k1.types.mem.getn(function_type.physical_params).iter().enumerate()
+            self.k1.mem.getn(function_type.physical_params).iter().enumerate()
         {
             let pt = self.get_physical_type(param.type_id);
             if pt.is_empty() {
@@ -2007,20 +2007,20 @@ fn compile_expr(
                     }
                     Callee::DynamicLambda(dl) => {
                         let lambda_obj = compile_expr(b, None, *dl)?;
-                        let lam_obj_type_id = b.k1.types.builtins.dyn_lambda_obj.unwrap();
+                        let lam_obj_type_id = b.k1.builtin_types.dyn_lambda_obj.unwrap();
                         let lam_obj_pt = b.get_physical_type(lam_obj_type_id).expect_agg();
                         let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
                         let fn_ptr_addr = b.push_struct_offset(
                             lam_obj_pt,
                             lambda_obj,
-                            TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
+                            TypedProgram::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
                             "dyn lam fn ptr offset",
                         );
                         let fn_ptr = load_value(b, ptr_pt, fn_ptr_addr, false, "");
                         let env_addr = b.push_struct_offset(
                             lam_obj_pt,
                             lambda_obj,
-                            TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
+                            TypedProgram::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
                             "dyn lam env ptr offset",
                         );
                         let env = load_value(b, ptr_pt, env_addr, false, "");
@@ -2051,7 +2051,7 @@ fn compile_expr(
                             let state_addr = b.push_struct_offset(
                                 object_pt,
                                 object,
-                                TypePool::ABILITY_OBJECT_STATE_INDEX as u32,
+                                TypedProgram::ABILITY_OBJECT_STATE_INDEX as u32,
                                 "dyn ability state offset",
                             );
                             let state = load_value(b, ptr_pt, state_addr, false, "");
@@ -2264,7 +2264,7 @@ fn compile_expr(
 
             let break_pt_id = b.get_physical_type(expr_type);
 
-            let break_value = if expr_type != b.k1.types.builtins.empty {
+            let break_value = if expr_type != b.k1.builtin_types.empty {
                 Some(b.push_alloca(break_pt_id, "loop break value"))
             } else {
                 None
@@ -2316,7 +2316,7 @@ fn compile_expr(
         TypedExpr::SumConstructor(sum_c) => {
             let sum_pt = b.get_physical_type(expr_type);
             let sum_agg_id = sum_pt.expect_agg();
-            let sum_pt_agg = b.k1.types.agg_types.get(sum_agg_id).agg_type.expect_sum();
+            let sum_pt_agg = b.k1.agg_types.get(sum_agg_id).agg_type.expect_sum();
             let variants = sum_pt_agg.variants;
             let sum_struct_repr = sum_pt_agg.struct_repr;
             let sum_base = match dst {
@@ -2325,7 +2325,7 @@ fn compile_expr(
             };
 
             let tag_base = sum_base;
-            let sum_variant = b.k1.types.mem.get_nth(variants, sum_c.variant_index as usize);
+            let sum_variant = b.k1.mem.get_nth(variants, sum_c.variant_index as usize);
             let tag_int_value = sum_variant.tag;
             let int_imm = b.make_int_value(&tag_int_value, "sum tag");
             b.push_store(tag_base, int_imm, "store sum lit tag");
@@ -2364,7 +2364,7 @@ fn compile_expr(
         TypedExpr::Enum(e) => {
             // Just compile to the integer
             let Type::Enum(enum_type) = b.k1.types.get(expr_type) else { unreachable!() };
-            let value = b.k1.types.mem.get_nth(enum_type.member_values, e.value_index as usize);
+            let value = b.k1.mem.get_nth(enum_type.member_values, e.value_index as usize);
             let value = b.make_int_value(&value.int_value, "enum int");
             let stored = store_scalar_if_dst(b, dst, value);
             Ok(stored)
@@ -2406,7 +2406,7 @@ fn compile_expr(
         }
         TypedExpr::Lambda(lam_expr) => {
             let lambda_type_id = b.k1.types.get(lam_expr.lambda_type).as_lambda().unwrap();
-            let l = b.k1.types.lambda_types.get(lambda_type_id);
+            let l = b.k1.lambda_types.get(lambda_type_id);
             let function_id = l.function_id;
             let env_struct = l.environment_struct;
             b.k1.ir.units_pending_compile.insert(function_id, ());
@@ -2446,7 +2446,7 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
             let (array_base, frozen) = compile_expr_place(b, array_get.base_array)?;
             let array_type = b.k1.exprs.get_type(array_get.base_array);
             let array_agg_id = b.get_physical_type(array_type).expect_agg();
-            let (element_pt, _len) = b.k1.types.agg_types.get(array_agg_id).agg_type.expect_array();
+            let (element_pt, _len) = b.k1.agg_types.get(array_agg_id).agg_type.expect_array();
             let index = compile_expr(b, None, array_get.index)?;
             let element_ptr = b.push_inst(
                 Inst::ArrayOffset { element_t: element_pt, base: array_base, element_index: index },
@@ -2486,7 +2486,7 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
             let (sum_base, frozen) = compile_expr_place(b, sum_get_payload.sum_expr)?;
             let sum_type_id = b.k1.exprs.get_type(sum_get_payload.sum_expr);
             let sum_agg_id = b.k1.get_physical_type(sum_type_id).unwrap().expect_agg();
-            let sum_pt = b.k1.types.agg_types.get(sum_agg_id).agg_type.expect_sum();
+            let sum_pt = b.k1.agg_types.get(sum_agg_id).agg_type.expect_sum();
             let sum_struct_repr = sum_pt.struct_repr;
             let payload_offset =
                 b.push_struct_offset(sum_struct_repr, sum_base, 1, "sum payload offset");
@@ -2685,7 +2685,7 @@ fn compile_ir_builtin(
             match pt.as_enum() {
                 PhysicalTypeEnum::Empty => Ok(Value::Empty),
                 PhysicalTypeEnum::Agg(agg_id) => {
-                    let pt_layout = b.k1.types.agg_types.get(agg_id).layout;
+                    let pt_layout = b.k1.agg_types.get(agg_id).layout;
                     let dst = match dst {
                         None => b.push_alloca(pt, "zeroed no dst").as_value(),
                         Some(dst) => dst,
@@ -2795,7 +2795,7 @@ fn compile_ir_builtin(
             let arg1 = *b.k1.mem.get_nth(call.args, 1);
             let rhs = compile_expr(b, None, arg1)?;
             let lhs_pt = b.get_value_kind(lhs).expect_value().unwrap();
-            let width = b.k1.types.get_pt_layout(lhs_pt).size_bits() as u8;
+            let width = b.k1.get_pt_layout(lhs_pt).size_bits() as u8;
             let inst = match op {
                 BitwiseBinopKind::And => Inst::BitAnd { lhs, rhs, width },
                 BitwiseBinopKind::Or => Inst::BitOr { lhs, rhs, width },
@@ -2880,7 +2880,7 @@ fn compile_ir_builtin(
             let PhysicalTypeEnum::Agg(agg_id) = ret_pt.as_enum() else {
                 b_ice!(b, "cmpxchg return type must be an aggregate");
             };
-            let Some(ok_vm_offset) = b.k1.types.get_struct_field_offset(agg_id, 1) else {
+            let Some(ok_vm_offset) = b.k1.get_struct_field_offset(agg_id, 1) else {
                 b_ice!(b, "cmpxchg result missing ok field");
             };
             let result = match dst {
@@ -3086,15 +3086,15 @@ fn vector_pt_parts(b: &mut Builder, pt: PhysicalType) -> K1Result<(ScalarType, u
         return failf!(
             b.cur_span,
             "vector intrinsic requires a concrete vector type; got {}",
-            b.k1.types.pt_to_string(pt)
+            b.k1.pt_to_string(pt)
         );
     };
-    match b.k1.types.agg_types.get(agg_id).agg_type {
+    match b.k1.agg_types.get(agg_id).agg_type {
         AggType::Vector { element_pt, len } => Ok((element_pt, len)),
         _ => failf!(
             b.cur_span,
             "vector intrinsic requires a vector type; got {}",
-            b.k1.types.pt_to_string(pt)
+            b.k1.pt_to_string(pt)
         ),
     }
 }
@@ -3250,7 +3250,7 @@ fn compile_arith_binop(
     use ArithOpOp as Op;
     let lhs_type = b.k1.exprs.get_type(arg0);
     let lhs_pt = b.get_physical_type(lhs_type);
-    let lhs_width = b.k1.types.get_pt_layout(lhs_pt).size_bits() as u8;
+    let lhs_width = b.k1.get_pt_layout(lhs_pt).size_bits() as u8;
     let inst = match (op.op, op.class) {
         (Op::Add, Class::SignedInt | Class::UnsignedInt) => {
             Inst::IntAdd { lhs, rhs, width: lhs_width }
@@ -3495,7 +3495,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
             let inst_id = inst_node.data;
             let is_last = inst_node.is_last();
             let inst = ir.instrs.get(inst_id);
-            let inst_kind = get_inst_kind(ir, &k1.types, inst_id);
+            let inst_kind = get_inst_kind(ir, inst_id);
             if !is_last && inst_kind.is_terminator() {
                 errors.push(format!("b{}: stray terminator", block_id.raw_index()))
             };
@@ -3507,31 +3507,31 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 Inst::Data(_imm) => (),
                 Inst::Alloca { .. } => (),
                 Inst::Store { dst, .. } => {
-                    let dst_type = get_value_kind(ir, &k1.types, dst);
+                    let dst_type = get_value_kind(ir, dst);
                     if !dst_type.is_storage() {
                         errors.push(format!("store dst v{} is not a ptr", inst_id))
                     }
                 }
                 Inst::Load { src, .. } => {
-                    let src_kind = get_value_kind(ir, &k1.types, src);
+                    let src_kind = get_value_kind(ir, src);
                     if !src_kind.is_storage() {
                         errors.push(format!("i{inst_id}: load src is not storage"))
                     }
                 }
                 Inst::AtomicLoad { src, .. } => {
-                    let src_kind = get_value_kind(ir, &k1.types, src);
+                    let src_kind = get_value_kind(ir, src);
                     if !src_kind.is_storage() {
                         errors.push(format!("i{inst_id}: atomic load src is not storage"))
                     }
                 }
                 Inst::AtomicStore { dst, .. } => {
-                    let dst_kind = get_value_kind(ir, &k1.types, dst);
+                    let dst_kind = get_value_kind(ir, dst);
                     if !dst_kind.is_storage() {
                         errors.push(format!("i{inst_id}: atomic store dst is not storage"))
                     }
                 }
                 Inst::AtomicRmw { dst, .. } => {
-                    let dst_kind = get_value_kind(ir, &k1.types, dst);
+                    let dst_kind = get_value_kind(ir, dst);
                     if !dst_kind.is_storage() {
                         errors.push(format!("i{inst_id}: atomic rmw dst is not storage"))
                     }
@@ -3539,7 +3539,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 Inst::AtomicCmpxchg { id } => {
                     let cas = ir.cmpxchgs.get(id);
                     for (v, what) in [(cas.dst, "dst"), (cas.result, "result")] {
-                        if !get_value_kind(ir, &k1.types, v).is_storage() {
+                        if !get_value_kind(ir, v).is_storage() {
                             errors.push(format!("i{inst_id}: atomic cmpxchg {what} is not storage"))
                         }
                     }
@@ -3547,31 +3547,31 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 Inst::VecOp { id } => {
                     let vop = ir.vec_ops.get(id);
                     if vop.op != VecOpIr::ToMask
-                        && !get_value_kind(ir, &k1.types, vop.dst).is_storage()
+                        && !get_value_kind(ir, vop.dst).is_storage()
                     {
                         errors.push(format!("i{inst_id}: vec op dst is not storage"))
                     }
                 }
                 Inst::Fence { .. } => (),
                 Inst::Copy { dst, src, .. } => {
-                    let src_type = get_value_kind(ir, &k1.types, src);
+                    let src_type = get_value_kind(ir, src);
                     if !src_type.is_storage() {
                         errors.push(format!("i{inst_id}: copy src is not a ptr"))
                     }
-                    let dst_type = get_value_kind(ir, &k1.types, dst);
+                    let dst_type = get_value_kind(ir, dst);
                     if !dst_type.is_storage() {
                         errors.push(format!("i{inst_id}: copy dst v{} is not a ptr", inst_id))
                     }
                 }
                 Inst::StructOffset { base, .. } => {
-                    let base_type = get_value_kind(ir, &k1.types, base);
+                    let base_type = get_value_kind(ir, base);
                     if !base_type.is_storage() {
                         errors.push(format!("i{inst_id}: struct_offset base is not a ptr"))
                     }
                 }
                 Inst::ArrayOffset { base, element_index, .. } => {
-                    let base_type = get_value_kind(ir, &k1.types, base);
-                    let index_type = get_value_kind(ir, &k1.types, element_index);
+                    let base_type = get_value_kind(ir, base);
+                    let index_type = get_value_kind(ir, element_index);
                     if !base_type.is_storage() {
                         errors.push(format!("i{inst_id}: array_offset base is not a ptr"))
                     }
@@ -3591,7 +3591,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::JumpIf { cond, cons, alt } => {
-                    let cond_type = get_value_kind(ir, &k1.types, cond);
+                    let cond_type = get_value_kind(ir, cond);
                     if !cond_type.is_value() {
                         errors.push(format!("i{inst_id}: jumpif cond is not a value"))
                     }
@@ -3607,7 +3607,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 Inst::Phi { incomings, .. } => {
                     for incoming in ir.mem.getn(incomings) {
                         let Ok(_value_type) =
-                            get_value_kind(ir, &k1.types, incoming.value).expect_value()
+                            get_value_kind(ir, incoming.value).expect_value()
                         else {
                             errors.push(format!("i{inst_id}: phi type not a value kind"));
                             continue;
@@ -3620,19 +3620,19 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::Ret { v, .. } => {
-                    let ret_val_type = get_value_kind(ir, &k1.types, v);
+                    let ret_val_type = get_value_kind(ir, v);
                     if ret_val_type.is_terminator() || ret_val_type.is_void() {
                         errors.push(format!("i{inst_id}: ret value is not a value"))
                     }
                 }
                 Inst::BoolNegate { v } => {
-                    let inst_type = get_value_kind(ir, &k1.types, v);
+                    let inst_type = get_value_kind(ir, v);
                     if !inst_type.is_u8() {
                         errors.push(format!("i{inst_id}: bool_negate src is not a bool"))
                     }
                 }
                 Inst::BitNot { v } => {
-                    let inst_type = get_value_kind(ir, &k1.types, v);
+                    let inst_type = get_value_kind(ir, v);
                     if !inst_type.is_int() {
                         errors.push(format!("i{inst_id}: bit_not src is not an int"))
                     }
@@ -3644,7 +3644,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::IntExtU { v, to } | Inst::IntExtS { v, to, .. } => {
-                    let inst_type = get_value_kind(ir, &k1.types, v);
+                    let inst_type = get_value_kind(ir, v);
                     if !inst_type.is_int() {
                         errors.push(format!("i{inst_id}: int_ext_u src is not an int"))
                     }
@@ -3653,7 +3653,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::FloatTrunc { v, to } => {
-                    let inst_type = get_value_kind(ir, &k1.types, v);
+                    let inst_type = get_value_kind(ir, v);
                     if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F64))
                     {
                         errors.push(format!("i{inst_id}: float_trunc src is not f64"))
@@ -3663,7 +3663,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::FloatExt { v, to } => {
-                    let inst_type = get_value_kind(ir, &k1.types, v);
+                    let inst_type = get_value_kind(ir, v);
                     if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F32))
                     {
                         errors.push(format!("i{inst_id}: float_ext src is not f32"))
@@ -3673,7 +3673,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::Float32ToIntUnsigned { v, to } | Inst::Float32ToIntSigned { v, to } => {
-                    let inst_type = get_value_kind(ir, &k1.types, v);
+                    let inst_type = get_value_kind(ir, v);
                     if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F32))
                     {
                         errors.push(format!("i{inst_id}: float32_to_int src is not f32"))
@@ -3683,7 +3683,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::Float64ToIntUnsigned { v, to } | Inst::Float64ToIntSigned { v, to } => {
-                    let inst_type = get_value_kind(ir, &k1.types, v);
+                    let inst_type = get_value_kind(ir, v);
                     if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F64))
                     {
                         errors.push(format!("i{inst_id}: float64_to_int src is not f64"))
@@ -3695,13 +3695,13 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 Inst::IntToFloatUnsigned { .. } => (),
                 Inst::IntToFloatSigned { .. } => (),
                 Inst::PtrToWord { v } => {
-                    let inst_type = get_value_kind(ir, &k1.types, v);
+                    let inst_type = get_value_kind(ir, v);
                     if !inst_type.is_storage() {
                         errors.push(format!("i{inst_id}: ptr_to_word src is not a ptr"))
                     }
                 }
                 Inst::WordToPtr { v } => {
-                    let inst_type = get_value_kind(ir, &k1.types, v);
+                    let inst_type = get_value_kind(ir, v);
                     if inst_type.as_value().and_then(|t| t.as_scalar()).is_none() {
                         errors.push(format!("i{inst_id}: word_to_ptr src is not a scalar int",))
                     }
@@ -3801,14 +3801,14 @@ pub fn display_phys_fn_type(
     w.write_str("fn(")?;
     for (index, param) in k1.ir.mem.getn(p_fn_ty.params).iter().enumerate() {
         write!(w, "p{}: ", index)?;
-        k1.types.display_pt(w, param.pt)?;
+        k1.display_pt(w, param.pt)?;
         let last = index == p_fn_ty.params.len() as usize - 1;
         if !last {
             w.write_str(", ")?;
         }
     }
     w.write_str("): ")?;
-    k1.types.display_pt(w, p_fn_ty.return_type)?;
+    k1.display_pt(w, p_fn_ty.return_type)?;
     Ok(())
 }
 
@@ -3944,7 +3944,7 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
             if returned {
                 w.write_str("returned ")?;
             }
-            k1.types.display_pt(w, t)?;
+            k1.display_pt(w, t)?;
             write!(w, ", align {}", vm_layout.align)?;
         }
         Inst::Store { dst, value, t } => {
@@ -4002,12 +4002,12 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
         }
         Inst::StructOffset { struct_t, base, field_index, vm_offset } => {
             write!(w, "struct_offset ")?;
-            k1.types.display_pt(w, PhysicalType::agg(struct_t))?;
+            k1.display_pt(w, PhysicalType::agg(struct_t))?;
             write!(w, ".{}, {} ({})", field_index, base, vm_offset)?;
         }
         Inst::ArrayOffset { element_t, base, element_index } => {
             write!(w, "array_offset ")?;
-            k1.types.display_pt(w, element_t)?;
+            k1.display_pt(w, element_t)?;
             write!(w, " {}[{}]", base, element_index)?;
         }
         Inst::Call { call_id: id } => {
@@ -4018,7 +4018,7 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
                 display_value(w, &dst)?;
                 w.write_str(" ")?;
             }
-            k1.types.display_pt(w, call.ret_type)?;
+            k1.display_pt(w, call.ret_type)?;
             match &call.callee {
                 IrCallee::BackendBuiltin(_, backend_builtin) => {
                     write!(w, " builtin {}", backend_builtin.kind_name())?;
@@ -4071,7 +4071,7 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
         }
         Inst::Phi { t, incomings } => {
             write!(w, "phi ")?;
-            k1.types.display_pt(w, t)?;
+            k1.display_pt(w, t)?;
             write!(w, " [")?;
             for (i, incoming) in k1.ir.mem.getn(incomings).iter().enumerate() {
                 if i > 0 {
@@ -4092,7 +4092,7 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
             if agg {
                 w.write_str("agg ")?;
             }
-            display_inst_kind(w, &k1.types, get_value_kind(&k1.ir, &k1.types, v))?;
+            display_inst_kind(w, k1, get_value_kind(&k1.ir, v))?;
             write!(w, " {}", v)?;
         }
         Inst::BoolNegate { v } => {
@@ -4103,7 +4103,7 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
         }
         Inst::BitCast { v, to } => {
             write!(w, "bitcast ")?;
-            k1.types.display_pt(w, to)?;
+            k1.display_pt(w, to)?;
             write!(w, " {}", v)?;
         }
         Inst::IntTrunc { v, to } => {
@@ -4237,11 +4237,11 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
 
 pub fn display_inst_kind(
     w: &mut impl std::fmt::Write,
-    types: &TypePool,
+    k1: &TypedProgram,
     kind: InstKind,
 ) -> std::fmt::Result {
     match kind {
-        InstKind::Value(t) => types.display_pt(w, t),
+        InstKind::Value(t) => k1.display_pt(w, t),
         InstKind::Void => write!(w, "void"),
         InstKind::Terminator => write!(w, "terminator"),
     }

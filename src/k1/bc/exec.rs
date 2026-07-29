@@ -135,7 +135,7 @@ pub fn execute_compiled_unit_raw(
     let ret_pt = info.ret_pt;
 
     // Return-value storage lives just below the first frame
-    let ret_layout = k1.types.get_pt_layout(ret_pt);
+    let ret_layout = k1.get_pt_layout(ret_pt);
     let ret_addr = vm.stack.push_layout_uninit(ret_layout);
     vm.overall_return_addr = ret_addr;
 
@@ -374,7 +374,7 @@ fn exec_loop(
                 // Aggregate results were already copied through the top
                 // frame's sret; scalars ride ret_reg.
                 if !top_ret_pt.is_empty() && !top_ret_pt.is_agg() {
-                    store_value(&k1.types, top_ret_pt, vm.overall_return_addr, ret_reg);
+                    store_value(k1, top_ret_pt, vm.overall_return_addr, ret_reg);
                 }
                 k1.timing.total_vm_instrs += instrs_run;
                 for (i, n) in op_counts.iter().enumerate() {
@@ -578,7 +578,7 @@ fn exec_loop(
                     BuiltinOutcome::Value(v) => {
                         if ret_pt.is_agg() {
                             let sret = unsafe { *(new_fp as *const u64).add(2) } as *mut u8;
-                            store_value(&k1.types, ret_pt, sret, v);
+                            store_value(k1, ret_pt, sret, v);
                         } else {
                             ret_reg = v;
                         }

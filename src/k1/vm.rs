@@ -15,8 +15,7 @@ mod vm_test;
 use crate::ir;
 use crate::typer::types::{
     ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, PhysicalTypeEnum,
-    PhysicalTypeResult, ScalarType, Type, TypeId, TypePool,
-};
+    PhysicalTypeResult, ScalarType, Type, TypeId};
 use crate::typer::{
     ErrorKind, FunctionId, GlobalInitialValue, K1Message, K1Result, MessageLevel, StaticContainer,
     StaticContainerKind, StaticStruct, StaticSum, StaticValue, StaticValueId, StaticValuePool,
@@ -562,7 +561,7 @@ pub(crate) fn resolve_global(
         GlobalInitialValue::Value(value_id) => Some(value_id),
     };
 
-    let layout = k1.types.get_pt_layout(t);
+    let layout = k1.get_pt_layout(t);
     let dst = if is_constant {
         k1.vm_shared_static_stack.push_layout_uninit(layout)
     } else {
@@ -581,10 +580,10 @@ pub(crate) fn resolve_global(
             debug!(
                 "shared global is: {}. the `t` of the instr is: {}",
                 k1.static_value_to_string(initial_value_id),
-                k1.types.pt_to_string(t)
+                k1.pt_to_string(t)
             );
             let shared_vm_value = static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
-            store_value(&k1.types, t, dst, shared_vm_value);
+            store_value(k1, t, dst, shared_vm_value);
         }
     }
     Ok(addr)
@@ -630,7 +629,7 @@ pub fn static_value_to_vm_value(
         }
         StaticValue::LinearContainer(container) => {
             let container_type_id = container.type_id;
-            let element_type = k1.types.get_linear_container_element(container_type_id).unwrap();
+            let element_type = k1.get_linear_container_element(container_type_id).unwrap();
             let kind = container.kind;
             let len = container.len();
             let container_elements = container.elements;
@@ -691,7 +690,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             let value = string_id_to_value(k1, *string_id);
             let string_type_id = k1.string_type_id();
             let string_pt = k1.get_physical_type(string_type_id).unwrap();
-            store_value(&k1.types, string_pt, dst, value);
+            store_value(k1, string_pt, dst, value);
         }
         StaticValue::Zero(type_id) => {
             let layout = k1.get_layout(*type_id).unwrap();
@@ -712,8 +711,8 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             let variant_index = e.variant_index;
             let payload = e.payload;
             let sum_agg_id = k1.get_physical_type(e.sum_type_id).unwrap().expect_agg();
-            let sum_pt = k1.types.agg_types.get(sum_agg_id).agg_type.expect_sum();
-            let variant_pt = k1.types.mem.get_nth(sum_pt.variants, variant_index as usize);
+            let sum_pt = k1.agg_types.get(sum_agg_id).agg_type.expect_sum();
+            let variant_pt = k1.mem.get_nth(sum_pt.variants, variant_index as usize);
 
             store_typed_int(dst, variant_pt.tag);
 
@@ -724,7 +723,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             };
         }
         StaticValue::LinearContainer(container) => {
-            let element_type = k1.types.get_linear_container_element(container.type_id).unwrap();
+            let element_type = k1.get_linear_container_element(container.type_id).unwrap();
             let kind = container.kind;
             let len = container.len();
             let container_elements = container.elements;
@@ -794,7 +793,7 @@ pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
     let k1_string = k1_types::K1BufferLike { len: s.len() as i64, data: s.as_ptr().cast_mut() };
     if cfg!(debug_assertions) {
         let string_type_id = k1.string_type_id();
-        let char_span_type_id = k1.types.get_struct_field(string_type_id, 0).type_id;
+        let char_span_type_id = k1.get_struct_field(string_type_id, 0).type_id;
         let string_layout = k1.get_layout(string_type_id).unwrap();
         debug_assert_eq!(string_layout, k1.get_layout(char_span_type_id).unwrap());
         debug_assert_eq!(size_of_val(&k1_string), string_layout.size as usize);
@@ -983,13 +982,13 @@ pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn store_value(types: &TypePool, t: PhysicalType, dst: *mut u8, value: Value) {
+pub fn store_value(k1: &TypedProgram, t: PhysicalType, dst: *mut u8, value: Value) {
     match t.as_enum() {
         // Lowering should never emit a load/store/copy of Empty
         PhysicalTypeEnum::Empty => (),
         PhysicalTypeEnum::Scalar(scalar_type) => store_scalar(scalar_type, dst, value),
         PhysicalTypeEnum::Agg(pt_id) => {
-            let record = types.agg_types.get(pt_id);
+            let record = k1.agg_types.get(pt_id);
             let src = value.as_ptr();
             memmove(src, dst, record.layout.size as usize)
         }
@@ -1193,7 +1192,7 @@ pub fn vm_value_to_static_value(
                 })?;
                 k1.static_values.add(StaticValue::String(string_id))
             } else if let Some((element_type, container_kind)) =
-                k1.types.get_as_container_instance(type_id)
+                k1.get_as_container_instance(type_id)
             {
                 match container_kind {
                     ContainerKind::Array(_) => unreachable!(),
@@ -1235,7 +1234,7 @@ pub fn vm_value_to_static_value(
                 let mut field_value_ids = k1.static_values.mem.new_list(struct_type.fields.len());
                 let struct_shape = k1.get_struct_layout(type_id);
                 for (physical_field, k1_field) in
-                    struct_shape.iter().zip(k1.types.mem.getn(struct_type_fields))
+                    struct_shape.iter().zip(k1.mem.getn(struct_type_fields))
                 {
                     let field_ptr = unsafe { struct_ptr.byte_add(physical_field.offset as usize) };
                     let field_value = load_value(physical_field.field_t, field_ptr);
@@ -1255,12 +1254,12 @@ pub fn vm_value_to_static_value(
             let tag_int_type = typed_sum.tag_type;
             let variants = typed_sum.variants;
             let sum_agg_id = k1.get_physical_type(type_id).unwrap().expect_agg();
-            let sum_pt = k1.types.agg_types.get(sum_agg_id).agg_type.expect_sum();
+            let sum_pt = k1.agg_types.get(sum_agg_id).agg_type.expect_sum();
             let payload_offset = sum_pt.payload_offset;
 
             let tag_scalar_type = sum_pt.tag_type;
             let tag = load_scalar(tag_scalar_type, sum_ptr).as_typed_int(tag_int_type);
-            let Some(variant) = k1.types.mem.getn(variants).iter().find(|v| v.tag_value == tag)
+            let Some(variant) = k1.mem.getn(variants).iter().find(|v| v.tag_value == tag)
             else {
                 return failf!(span, "No variant found with tag value {}", tag);
             };
@@ -1334,7 +1333,7 @@ pub fn get_span_element(
     elem_pt: PhysicalType,
     index: usize,
 ) -> Value {
-    let elem_offset = k1.types.get_pt_layout(elem_pt).offset_at_index(index);
+    let elem_offset = k1.get_pt_layout(elem_pt).offset_at_index(index);
     let elem_ptr = unsafe { data_ptr.byte_add(elem_offset) };
     load_value(elem_pt, elem_ptr)
 }
@@ -1352,7 +1351,7 @@ fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Va
         PhysicalTypeResult::Yes(pt) => match pt.as_enum() {
             PhysicalTypeEnum::Scalar(_) => Value(0),
             PhysicalTypeEnum::Agg(agg_id) => {
-                let layout = k1.types.agg_types.get(agg_id).layout;
+                let layout = k1.agg_types.get(agg_id).layout;
                 let data: *mut u8 = k1.vm_shared_static_stack.push_layout_uninit(layout);
                 unsafe { std::ptr::write_bytes(data, 0, layout.size as usize) };
 
@@ -1481,7 +1480,7 @@ pub fn read_global_as_static(
     type_id: TypeId,
 ) -> K1Result<StaticValueId> {
     let span = vm.eval_span;
-    let pt = match k1.types.get_physical_type(&k1.static_values, type_id) {
+    let pt = match k1.get_physical_type(type_id) {
         PhysicalTypeResult::Yes(pt) => pt,
         _ => return Ok(k1.static_values.empty_id()),
     };

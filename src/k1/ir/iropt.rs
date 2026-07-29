@@ -263,7 +263,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
             AggInStorage(Value),
             ScalarInPhi(InstId, List<PhiCase, ProgramIr>),
         }
-        let ret_layout = b.k1.types.get_pt_layout(call.ret_type);
+        let ret_layout = b.k1.get_pt_layout(call.ret_type);
         let mut return_info = match call.dst {
             None => {
                 match call.ret_type.as_enum() {

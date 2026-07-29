@@ -601,8 +601,8 @@ impl TypedProgram {
                         if let TypedStmt::Expr(expr_id, expr_type) = self.stmts.get(stmt_id) {
                             let (expr_id, expr_type) = (*expr_id, *expr_type);
                             let has_value = match self
-                                .types
-                                .get_physical_type(&self.static_values, expr_type)
+                                
+                                .get_physical_type(expr_type)
                             {
                                 PhysicalTypeResult::Yes(pt) => !pt.is_empty(),
                                 _ => false,
@@ -660,14 +660,14 @@ impl TypedProgram {
                     let empty = self.synth_empty_struct(span);
                     let return_expr = self.exprs.add_return(empty, None, span);
                     self.push_block_expr_id(&mut cell_block, return_expr);
-                    self.types.builtins.empty
+                    self.builtin_types.empty
                 }
             }
             None => {
                 let empty = self.synth_empty_struct(span);
                 let return_expr = self.exprs.add_return(empty, None, span);
                 self.push_block_expr_id(&mut cell_block, return_expr);
-                self.types.builtins.empty
+                self.builtin_types.empty
             }
         };
         let cell_expr = self.exprs.add_block(cell_block, type_id);

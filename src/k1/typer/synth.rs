@@ -107,8 +107,8 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_optional_type(&mut self, inner_type: TypeId) -> TypeId {
-        let args = self.types.mem.pushn(&[inner_type]);
-        self.instantiate_generic_type(self.types.builtins.opt(), args)
+        let args = self.mem.pushn(&[inner_type]);
+        self.instantiate_generic_type(self.builtin_types.opt(), args)
     }
 
     pub(super) fn synth_optional_some(&mut self, expr_id: TypedExprId) -> (TypedExprId, TypeId) {
@@ -455,7 +455,7 @@ impl TypedProgram {
                 StructLiteralField { name: self.ast.idents.b.line, expr: Some(line_number_expr) },
             ]),
         });
-        let source_location_type_id = self.types.builtins.source_location.unwrap();
+        let source_location_type_id = self.builtin_types.source_location.unwrap();
         self.exprs.add(struct_expr, source_location_type_id, span)
     }
 
@@ -520,7 +520,7 @@ impl TypedProgram {
         let Type::Struct(_s) = self.types.get(struct_type_id) else {
             self.ice_span(span, "bad struct field access: base is not a struct");
         };
-        let field = self.types.get_struct_field(struct_type_id, field_index);
+        let field = self.get_struct_field(struct_type_id, field_index);
         let expr_id = self.exprs.add(
             TypedExpr::StructFieldAccess(FieldAccess {
                 base_struct: struct_expr,
@@ -565,7 +565,7 @@ impl TypedProgram {
         let sum_type = self.types.get(self.exprs.get_type(sum_expr)).expect_sum();
         let tag_type = sum_type.tag_type;
         let variant_tag =
-            self.types.sum_variant_by_index(sum_type.variants, variant_index).tag_value;
+            self.sum_variant_by_index(sum_type.variants, variant_index).tag_value;
         let span = span.unwrap_or(self.exprs.get_span(sum_expr));
         let get_tag =
             self.exprs.add(TypedExpr::SumGetTag(GetSumTag { sum_expr }), tag_type.type_id(), span);
@@ -585,7 +585,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let code_mode = match self.types.get(self.exprs.get_type(writer_expr)) {
-            Type::Reference(r) => Some(r.inner_type) == self.types.builtins.code_builder,
+            Type::Reference(r) => Some(r.inner_type) == self.builtin_types.code_builder,
             _ => false,
         };
         let mut block =
@@ -608,11 +608,11 @@ impl TypedProgram {
             let type_id = k1.exprs.get_type(args);
             match k1.types.get(type_id) {
                 Type::Struct(_) => {
-                    if type_id == k1.types.builtins.string() {
+                    if type_id == k1.builtin_types.string() {
                         return None;
                     }
 
-                    let (field_index, _field) = k1.types.get_struct_field_by_name(type_id, name)?;
+                    let (field_index, _field) = k1.get_struct_field_by_name(type_id, name)?;
                     let field_expr = k1.synth_field_access(args, field_index, span);
                     Some(field_expr)
                 }
@@ -637,7 +637,7 @@ impl TypedProgram {
                 | Type::Vector(_)
                 | Type::Sum(_) => Ok(args),
                 Type::Struct(s) => {
-                    if type_id == k1.types.builtins.string() {
+                    if type_id == k1.builtin_types.string() {
                         if n == 0 {
                             Ok(args)
                         } else {
@@ -856,17 +856,17 @@ impl TypedProgram {
     }
 
     fn expr_type_is_code(&self, expr: TypedExprId) -> bool {
-        let type_id = self.types.get_static_family_id_if_static(self.exprs.get_type(expr));
-        Some(type_id) == self.types.builtins.code
+        let type_id = self.get_static_family_id_if_static(self.exprs.get_type(expr));
+        Some(type_id) == self.builtin_types.code
     }
 
     pub(super) fn expected_type_is_code(&self, expected: Option<TypeId>) -> bool {
         let Some(expected) = expected else { return false };
-        let expected = match self.types.get_static_type_of_type(expected) {
+        let expected = match self.get_static_type_of_type(expected) {
             Some(stat) => stat.family_type_id,
             None => expected,
         };
-        Some(expected) == self.types.builtins.code
+        Some(expected) == self.builtin_types.code
     }
 
     /// Produces a `code` value, resulting from using a core/code-builder
