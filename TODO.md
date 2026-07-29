@@ -3,6 +3,17 @@
 next up
 - more dogfooding, do the 2 static sites
 
+macro with-tmp(expr) {
+  `
+  mem/push-mode(:tmp)
+  $expr
+  mem/pop-mode()
+  `
+}
+tmp {
+
+}
+
 Minor and ideas
 - [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
 - [ ] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a

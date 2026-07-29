@@ -17,7 +17,7 @@ fn pipe-chain(): int {
   let doubled = xs
     || map(fn x. x * 2)
     || filter(fn x. x > 2)
-  doubled.len().as[int]
+  doubled.len().as[i32]
 }
 
 fn leading-dot(): u64 {

@@ -2865,6 +2865,9 @@ pub struct TypedProgram {
     /// for that type
     pub blanket_impls: FxHashMap<AbilityId, EcoVec<AbilityImplId>>,
     pub function_name_to_ability: FxHashMap<StringId, EcoVec<AbilityId>>,
+    /// If a namespace is a companion for a generic type, we remember that types
+    /// params here by name so we can re-use them; saves type pool and spec pool bloat
+    pub namespace_type_params: FxHashMap<(NamespaceId, StringId), TypeId>,
     pub namespace_ast_mappings: FxHashMap<ParsedNamespaceId, NamespaceId>,
     pub function_ast_mappings: FxHashMap<ParsedFunctionId, FunctionId>,
     pub macro_ast_mappings: FxHashMap<parse::ParsedMacroId, FunctionId>,
@@ -3087,6 +3090,7 @@ impl TypedProgram {
             ability_impl_table: FxHashMap::new(),
             blanket_impls: FxHashMap::new(),
             function_name_to_ability: FxHashMap::with_capacity(1024),
+            namespace_type_params: FxHashMap::new(),
             namespace_ast_mappings: FxHashMap::with_capacity(512),
             function_ast_mappings: FxHashMap::with_capacity(512),
             macro_ast_mappings: FxHashMap::default(),
@@ -3712,13 +3716,24 @@ impl TypedProgram {
 
         let type_id = if is_generic_defn {
             let gen_type = GenericType { params: type_params_handle, inner: rhs_type_id };
-            self.types.set_type(
-                reserved_type_id.unwrap(),
-                Type::Generic(gen_type),
-                None,
-                defn_info,
-            );
-            reserved_type_id.unwrap()
+            let generic_id = reserved_type_id.unwrap();
+            self.types.set_type(generic_id, Type::Generic(gen_type), None, defn_info);
+            let own_args: SV8<TypeId> =
+                self.mem.getn(type_params_handle).iter().map(|p| p.type_id).collect();
+            if self.types.get_specialization_slice(generic_id, &own_args).is_none() {
+                let inner_content = self.types.get(rhs_type_id).clone();
+                let args_handle = self.types.mem.pushn(&own_args);
+                let self_instance = self.types.add(
+                    inner_content,
+                    defn_info,
+                    Some(GenericInstanceInfo {
+                        generic_parent: generic_id,
+                        type_args: args_handle,
+                    }),
+                );
+                self.types.insert_specialization(generic_id, args_handle, self_instance);
+            }
+            generic_id
         } else {
             if is_alias {
                 rhs_type_id
@@ -4792,6 +4807,7 @@ impl TypedProgram {
                     }),
                     Some(defn_info),
                 );
+                self.types.discard_if_last(specialized_type);
                 reserved
             }
         };
@@ -8961,9 +8977,26 @@ impl TypedProgram {
                     ParsedBlockKind::LexicalBlock => ScopeType::LexicalBlock,
                     ParsedBlockKind::LoopBody => ScopeType::LoopExprBody,
                 };
-                let block_scope =
-                    self.scopes.add_child_scope(ctx.scope_id, scope_type, ScopeOwnerId::None);
-                let block_ctx = ctx.with_scope(block_scope);
+                let declares = self.ast.mem.getn(block.stmts).iter().any(|stmt_id| {
+                    match self.ast.stmts.get(*stmt_id) {
+                        ParsedStmt::Use(_)
+                        | ParsedStmt::Let(_)
+                        | ParsedStmt::Require(_)
+                        | ParsedStmt::Defer(_) => true,
+                        ParsedStmt::Assign(_) | ParsedStmt::LoneExpression(_) => false,
+                    }
+                });
+                // be thrifty with scopes
+                let needs_scope = declares
+                    || block.kind == ParsedBlockKind::LoopBody
+                    || self.scopes.block_defers.contains_key(&ctx.scope_id);
+                let block_ctx = if needs_scope {
+                    let block_scope =
+                        self.scopes.add_child_scope(ctx.scope_id, scope_type, ScopeOwnerId::None);
+                    ctx.with_scope(block_scope)
+                } else {
+                    ctx
+                };
                 let needs_terminator = match block.kind {
                     ParsedBlockKind::FunctionBody => true,
                     ParsedBlockKind::LexicalBlock => false,
@@ -10164,21 +10197,25 @@ impl TypedProgram {
             return failf!(while_expr.span, "'while' body must be a block");
         };
 
-        let condition_block_scope_id =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
+        let cond_ctx = if self.matching_condition_binds(while_expr.cond) {
+            let condition_scope_id = self.scopes.add_child_scope(
+                ctx.scope_id,
+                ScopeType::LexicalBlock,
+                ScopeOwnerId::None,
+            );
+            ctx.with_scope(condition_scope_id)
+        } else {
+            ctx
+        };
 
-        let condition_or_block = self.eval_matching_condition(
-            while_expr.cond,
-            None,
-            ctx.with_scope(condition_block_scope_id),
-        )?;
+        let condition_or_block = self.eval_matching_condition(while_expr.cond, None, cond_ctx)?;
         let condition = match condition_or_block {
             MatchingConditionResult::MatchingCondition(mc) => mc,
             MatchingConditionResult::NeverBlock(never_block) => return Ok(never_block),
         };
 
         let body_block_scope_id = self.scopes.add_child_scope(
-            condition_block_scope_id,
+            cond_ctx.scope_id,
             ScopeType::WhileLoopBody,
             ScopeOwnerId::None,
         );
@@ -10711,8 +10748,6 @@ impl TypedProgram {
                 parsed_match.span,
             ));
         }
-        let match_scope_id =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
         let subject_expr =
             self.eval_expr(parsed_match.match_subject, ctx.with_no_expected_type())?;
 
@@ -10720,7 +10755,6 @@ impl TypedProgram {
             self.synth_variable_defn_simple(self.ast.idents.b.subject, subject_expr, ctx.scope_id);
 
         let match_expr_span = parsed_match.span;
-        let arms_ctx = ctx.with_scope(match_scope_id);
 
         let parsed_cases = parsed_match.cases;
         let parsed_pattern_count: u32 = self
@@ -10749,19 +10783,20 @@ impl TypedProgram {
                 let pattern = self.compile_pattern_to_type(
                     *parsed_pattern_id,
                     subject_type,
-                    match_scope_id,
+                    ctx.scope_id,
                     allow_bindings,
                 )?;
+                let pattern_bindings = self.patterns.get_pattern_bindings(pattern);
 
                 // If a match arm has multiple patterns, they must produce the exact same
                 // set of variable bindings: matching name and type
                 if multi_pattern {
                     match &expected_bindings {
                         None => {
-                            expected_bindings = Some(self.patterns.get_pattern_bindings(pattern));
+                            expected_bindings = Some(pattern_bindings.clone());
                         }
                         Some(expected_bindings) => {
-                            let this_pattern_bindings = self.patterns.get_pattern_bindings(pattern);
+                            let this_pattern_bindings = &pattern_bindings;
                             if this_pattern_bindings.is_empty() && !expected_bindings.is_empty() {
                                 return failf!(
                                     self.patterns.get(pattern).span_id(),
@@ -10805,13 +10840,16 @@ impl TypedProgram {
                 // The solution once again is to compile things multiple times if needed, and just make
                 // compilation fast
                 {
-                    let arm_scope_id = self.scopes.add_child_scope(
-                        match_scope_id,
-                        ScopeType::MatchArm,
-                        ScopeOwnerId::None,
-                    );
-                    let pattern_eval_ctx =
-                        arms_ctx.with_scope(arm_scope_id).with_no_expected_type();
+                    let pattern_eval_ctx = if pattern_bindings.is_empty() {
+                        ctx.with_no_expected_type()
+                    } else {
+                        let arm_scope_id = self.scopes.add_child_scope(
+                            ctx.scope_id,
+                            ScopeType::MatchArm,
+                            ScopeOwnerId::None,
+                        );
+                        ctx.with_scope(arm_scope_id).with_no_expected_type()
+                    };
                     let mut instrs = self.mem.new_list(8);
                     self.compile_pattern_into_values(
                         pattern,
@@ -10891,7 +10929,7 @@ impl TypedProgram {
                     self.ast.idents.b.crash_msg_no_cases
                 },
                 match_expr_span,
-                arms_ctx.with_no_expected_type(),
+                ctx.with_no_expected_type(),
             )?,
         };
         let fallback_arm = TypedMatchArm {
@@ -12025,20 +12063,25 @@ impl TypedProgram {
         if if_expr.is_static {
             return self.eval_static_if_expr(if_expr, ctx);
         }
-        let match_scope_id =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
+        let cond_ctx = if self.matching_condition_binds(if_expr.cond) {
+            let condition_scope_id = self.scopes.add_child_scope(
+                ctx.scope_id,
+                ScopeType::LexicalBlock,
+                ScopeOwnerId::None,
+            );
+            ctx.with_scope(condition_scope_id)
+        } else {
+            ctx
+        };
 
-        let condition_or_block = self.eval_matching_condition(
-            if_expr.cond,
-            None,
-            ctx.with_scope(match_scope_id).with_no_expected_type(),
-        )?;
+        let condition_or_block =
+            self.eval_matching_condition(if_expr.cond, None, cond_ctx.with_no_expected_type())?;
         let condition = match condition_or_block {
             MatchingConditionResult::MatchingCondition(mc) => mc,
             MatchingConditionResult::NeverBlock(never_block) => return Ok(never_block),
         };
 
-        let consequent = self.eval_expr(if_expr.cons, ctx.with_scope(match_scope_id))?;
+        let consequent = self.eval_expr(if_expr.cons, cond_ctx)?;
         let consequent_original_type = self.exprs.get_type(consequent);
 
         let cons_original_never = consequent_original_type == NEVER_TYPE_ID;
@@ -12220,6 +12263,16 @@ impl TypedProgram {
             }
         }
         None
+    }
+
+    fn matching_condition_binds(&self, parsed_expr_id: ParsedExprId) -> bool {
+        match self.ast.exprs.get(parsed_expr_id) {
+            ParsedExpr::Is(_) => true,
+            ParsedExpr::BinaryOp(b) if b.op_kind == BinaryOpKind::And => {
+                self.matching_condition_binds(b.lhs) || self.matching_condition_binds(b.rhs)
+            }
+            _ => false,
+        }
     }
 
     /// Handles chains of booleans and pattern statements (IsExprs).
@@ -17608,6 +17661,8 @@ impl TypedProgram {
             ast_fn.type_params,
             ast_fn.additional_where_constraints,
             if is_ability_decl { Some(ability_id.unwrap()) } else { None },
+            if ability_info.is_none() { companion_type_id } else { None },
+            if ability_info.is_none() { Some(namespace_id) } else { None },
         )?;
 
         let mut fnlike_type_params: List<FnlikeTypeParam, TypedProgram> = self_.mem.new_list(0);
@@ -17904,12 +17959,51 @@ impl TypedProgram {
         Ok(Some(function_id))
     }
 
+    fn find_companion_type_param(
+        &self,
+        companion_type_id: TypeId,
+        name: StringId,
+    ) -> Option<TypeId> {
+        let Type::Generic(generic) = self.types.get(companion_type_id) else {
+            return None;
+        };
+        let param = self.mem.getn(generic.params).iter().find(|p| p.name == name)?;
+        self.types.get(param.type_id).as_type_parameter()?;
+        Some(param.type_id)
+    }
+
+    fn get_namespace_type_param(
+        &mut self,
+        namespace_id: NamespaceId,
+        name: StringId,
+        span: SpanId,
+    ) -> TypeId {
+        if let Some(existing) = self.namespace_type_params.get(&(namespace_id, name)) {
+            return *existing;
+        }
+        let ns_scope_id = self.namespaces.get_scope(namespace_id);
+        let id = self.add_type_parameter(
+            TypeParameter {
+                name,
+                static_constraint: None,
+                predicate_functions: MSlice::empty(),
+                scope_id: ns_scope_id,
+                span,
+            },
+            smallvec![],
+        );
+        self.namespace_type_params.insert((namespace_id, name), id);
+        id
+    }
+
     fn compile_function_type_params(
         &mut self,
         fn_scope_id: ScopeId,
         ast_type_params: AstSlice<ParsedTypeParam>,
         where_constraints: AstSlice<ParsedTypeConstraint>,
         ability_id: Option<AbilityId>,
+        companion_type_id: Option<TypeId>,
+        namespace_id: Option<NamespaceId>,
     ) -> K1Result<MSlice<NameAndType, TypedProgram>> {
         // Instantiate type arguments.
         let mut type_params: List<NameAndType, _> = self.mem.new_list(ast_type_params.len() + 1);
@@ -17956,16 +18050,37 @@ impl TypedProgram {
                 };
             }
             let predicate_functions_handle = self.mem.list_to_handle(predicate_functions);
-            let type_variable_id = self.add_type_parameter(
-                TypeParameter {
-                    name: type_parameter.name,
-                    static_constraint,
-                    predicate_functions: predicate_functions_handle,
-                    scope_id: fn_scope_id,
-                    span: type_parameter.span,
-                },
-                ability_constraint_signatures,
-            );
+            let unconstrained = ability_constraint_signatures.is_empty()
+                && predicate_functions_handle.is_empty()
+                && static_constraint.is_none();
+            let shared_param = if unconstrained {
+                companion_type_id
+                    .and_then(|ct| self.find_companion_type_param(ct, type_parameter.name))
+                    .or_else(|| {
+                        namespace_id.map(|ns| {
+                            self.get_namespace_type_param(
+                                ns,
+                                type_parameter.name,
+                                type_parameter.span,
+                            )
+                        })
+                    })
+            } else {
+                None
+            };
+            let type_variable_id = match shared_param {
+                Some(id) => id,
+                None => self.add_type_parameter(
+                    TypeParameter {
+                        name: type_parameter.name,
+                        static_constraint,
+                        predicate_functions: predicate_functions_handle,
+                        scope_id: fn_scope_id,
+                        span: type_parameter.span,
+                    },
+                    ability_constraint_signatures,
+                ),
+            };
             let type_param = NameAndType { name: type_parameter.name, type_id: type_variable_id };
             type_params.push(type_param);
             if !self.scopes.add_type(fn_scope_id, type_parameter.name, type_variable_id) {
@@ -18007,6 +18122,8 @@ impl TypedProgram {
             fn_scope_id,
             type_params_slice,
             MSlice::empty(),
+            None,
+            None,
             None,
         )?;
 

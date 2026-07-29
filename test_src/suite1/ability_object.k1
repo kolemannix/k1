@@ -1,7 +1,7 @@
 ns ability_object {
 
 ability counter[impl t] {
-  fn label(self: *mut self): string { "counter" }
+  fn label(_self: *mut self): string { "counter" }
   fn kind(): string { "counter-kind" }
   fn bump(self: *mut self): t
 }
@@ -16,7 +16,7 @@ impl counter[t = int] for by-ones {
 
 type by-tens = { current: int }
 impl counter[t = int] for by-tens {
-  fn label(self: *mut by-tens): string { "tens" }
+  fn label(_self: *mut by-tens): string { "tens" }
   fn kind(): string { "tens-kind" }
   fn bump(self: *mut by-tens): int {
     self.current = self.current + 10
@@ -125,7 +125,7 @@ fn optional-of-dyn() {
 // through dyn; the generic one is excluded per-function
 ability mixed {
   fn plain(self: *mut self): int
-  fn fancy[x](self: *mut self, x: x): x { x }
+  fn fancy[x](_self: *mut self, x: x): x { x }
 }
 
 type mixed-impl = { n: int }

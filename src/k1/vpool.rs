@@ -231,6 +231,19 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
         id
     }
 
+    /// Remove the last element; `id` must be that element's id. Returns false (and
+    /// does nothing) if `id` is not the last element.
+    pub fn pop_expected(&mut self, id: Index) -> bool {
+        let index = Self::id_to_actual_index(id);
+        if index + 1 != self.len {
+            return false;
+        }
+        let ptr = unsafe { self.data_mut().as_mut_ptr().add(index) };
+        drop(unsafe { core::ptr::read(ptr) });
+        self.len -= 1;
+        true
+    }
+
     pub fn add_slice_from_iter(&mut self, items: impl Iterator<Item = T>) -> SliceHandle<Index> {
         let id = self.next_id();
         let mut count: u32 = 0;

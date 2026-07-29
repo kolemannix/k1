@@ -1432,7 +1432,7 @@ pub struct TypePool {
     pub instance_info: VPool<Option<GenericInstanceInfo>, TypeId>,
 
     pub defn_info: FxHashMap<TypeId, TypeDefnInfo>,
-    pub specializations: FxHashMap<TypeId, Vec<(TypeIdSlice, TypeId)>>,
+    pub specializations: FxHashMap<(TypeId, SV4<TypeId>), TypeId>,
     pub phys_types: FxHashMap<TypeId, PhysicalTypeResult>,
 
     /// InferenceHole type ids by hole index, for holes with no static constraint.
@@ -1574,6 +1574,21 @@ impl TypePool {
 
     pub fn next_type_id(&self) -> TypeId {
         self.types.next_id()
+    }
+
+    pub fn discard_if_last(&mut self, id: TypeId) -> bool {
+        if self.types.next_id() != id + 1u32 {
+            return false;
+        }
+        let hash = self.hash_type(self.types.get(id), self.defn_info.get(&id).copied());
+        if self.hashes.get(&hash) == Some(&id) {
+            self.hashes.remove(&hash);
+        }
+        self.defn_info.remove(&id);
+        self.types.pop_expected(id);
+        self.type_variable_counts.pop_expected(id);
+        self.instance_info.pop_expected(id);
+        true
     }
 
     /// The `Type` slot of a reserved id stays unset until `set_type`; instance info and
@@ -2445,37 +2460,20 @@ impl TypePool {
         })
     }
 
-    pub fn get_specialization(&self, base: TypeId, args: TypeIdSlice) -> Option<TypeId> {
-        if let Some(specializations) = self.specializations.get(&base) {
-            for candidate in specializations {
-                if self.mem.slices_equal_copy(candidate.0, args) {
-                    return Some(candidate.1);
-                }
-            }
-        }
-        None
+    pub fn get_specialization(&mut self, base: TypeId, args: TypeIdSlice) -> Option<TypeId> {
+        let args: SV4<TypeId> = SV4::from_slice(self.mem.getn(args));
+        self.get_specialization_slice(base, &args)
     }
 
-    /// Cache lookup against args that don't (yet) live in `self.mem`; lets callers
-    /// avoid committing an args slice to the permanent arena until a cache miss
-    pub fn get_specialization_slice(&self, base: TypeId, args: &[TypeId]) -> Option<TypeId> {
-        if let Some(specializations) = self.specializations.get(&base) {
-            for candidate in specializations {
-                if self.mem.getn(candidate.0) == args {
-                    return Some(candidate.1);
-                }
-            }
-        }
-        None
+    pub fn get_specialization_slice(&mut self, base: TypeId, args: &[TypeId]) -> Option<TypeId> {
+        let key = (base, SV4::from_slice(args));
+        let result = *self.specializations.get(&key)?;
+        Some(result)
     }
 
     pub fn insert_specialization(&mut self, base: TypeId, args: TypeIdSlice, specialized: TypeId) {
-        match self.specializations.entry(base) {
-            Entry::Occupied(mut o) => o.get_mut().push((args, specialized)),
-            Entry::Vacant(v) => {
-                v.insert(vec![(args, specialized)]);
-            }
-        }
+        let key = (base, SV4::from_slice(self.mem.getn(args)));
+        self.specializations.insert(key, specialized);
     }
 
     pub fn pt_to_string(&self, t: PhysicalType) -> String {

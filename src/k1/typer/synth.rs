@@ -199,7 +199,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> TypedExprId {
         let mut b =
-            self.new_block_builder(scope_id, ScopeType::LexicalBlock, span, exprs.len() as u32);
+            BlockBuilder { statements: self.mem.new_list(exprs.len() as u32), scope_id, span };
         for e in exprs {
             let e_type_id = self.exprs.get_type(*e);
             self.push_block_stmt(&mut b, TypedStmt::Expr(*e, e_type_id));

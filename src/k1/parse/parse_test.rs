@@ -536,7 +536,12 @@ fn consecutive_strings() -> ParseResult<()> {
 fn lex_error_does_not_poison_reused_token_buffer() {
     let mut ast = make_test_ast();
     let dir: std::rc::Rc<String> = "unit_test".to_string().into();
-    let bad = SourceFile::make(0, dir.clone(), "bad.k1".to_string(), "let x = \"unterminated\nfn f(): i32 { 0 }".to_string());
+    let bad = SourceFile::make(
+        0,
+        dir.clone(),
+        "bad.k1".to_string(),
+        "let x = \"unterminated\nfn f(): i32 { 0 }".to_string(),
+    );
     let good = SourceFile::make(1, dir, "good.k1".to_string(), "fn g(): i32 { 42 }".to_string());
 
     let mut tokens = vec![];

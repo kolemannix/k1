@@ -193,12 +193,12 @@ impl DepEq<StaticValuePool> for StaticValue {
     fn dep_eq(&self, other: &Self, pool: &StaticValuePool) -> bool {
         match (self, other) {
             (StaticValue::Empty, StaticValue::Empty) => true,
-            (StaticValue::Bool(a), StaticValue::Bool(b)) => a == b,
-            (StaticValue::Char(a), StaticValue::Char(b)) => a == b,
-            (StaticValue::Int(a), StaticValue::Int(b)) => a == b,
+            (StaticValue::Bool(a), StaticValue::Bool(b)) => *a == *b,
+            (StaticValue::Char(a), StaticValue::Char(b)) => *a == *b,
+            (StaticValue::Int(a), StaticValue::Int(b)) => *a == *b,
             (StaticValue::Enum(ta, va), StaticValue::Enum(tb, vb)) => *ta == *tb && *va == *vb,
-            (StaticValue::Float(a), StaticValue::Float(b)) => a == b,
-            (StaticValue::String(a), StaticValue::String(b)) => a == b,
+            (StaticValue::Float(a), StaticValue::Float(b)) => *a == *b,
+            (StaticValue::String(a), StaticValue::String(b)) => *a == *b,
             (StaticValue::Zero(t1), StaticValue::Zero(t2)) => *t1 == *t2,
             (StaticValue::Struct(a), StaticValue::Struct(b)) => {
                 a.type_id == b.type_id

@@ -862,9 +862,14 @@ impl TypedProgram {
     /// For each param they mention, if its solved, use the solution, otherwise use the
     /// inference hole so we can learn more about it
     fn make_inference_substitution_set(&self) -> SV8<TypeSubstitutionPair> {
+        // Innermost frame first: nested frames can hold slots for the same param type
+        // (self-recursion, or companion fns sharing their generic's params), and
+        // substitution takes the first matching pair
+        // nocommit: I worry about the need for this rev; lets revisit
         self.ictx()
             .slots
             .iter()
+            .rev()
             .map(|slot| {
                 let solved = if slot.fully_solved { slot.solution } else { None };
                 spair! { slot.param_type => solved.unwrap_or(slot.hole_type) }
@@ -1127,8 +1132,8 @@ impl TypedProgram {
                 let passed_args = self.types.mem.getn(passed_ao.impl_arguments);
                 let slot_args = self.types.mem.getn(slot_ao.impl_arguments);
                 for (passed_arg, slot_arg) in passed_args.iter().zip(slot_args) {
-                    let result = self
-                        .unify_and_find_substitutions_rec(passed_arg.type_id, slot_arg.type_id);
+                    let result =
+                        self.unify_and_find_substitutions_rec(passed_arg.type_id, slot_arg.type_id);
                     if let TypeUnificationResult::NonMatching(_) = result {
                         return result;
                     }
