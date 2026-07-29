@@ -85,21 +85,27 @@ type alias rc-bytes = rc[span[u8]]
 // handed-out payload is retired (released) on the following pull, matching
 // the chunk-validity contract.
 type rc-byte-stream = {
-  upstream: dyn-source[rc-bytes],
+  upstream: dyn[source[t = rc-bytes]],
   inflight: list[rc-bytes],
   parts: list[span[u8]],
 }
 
-fn rc-byte-stream(upstream: dyn-source[rc-bytes]): dyn-source[u8] {
+fn rc-byte-stream(upstream: dyn[source[t = rc-bytes]]): dyn[source[t = u8]] {
   let state: *mut rc-byte-stream = mem/new(.{
     upstream,
     inflight = list/empty[rc-bytes](),
     parts = list/empty[span[u8]](),
   })
-  dyn-source/erase-async(state)
+  state.to-dyn()
 }
 
 impl source[t = u8] for rc-byte-stream {
+  fn start(self: *mut rc-byte-stream, waker: waker) { self.upstream.start(waker) }
+  fn stop(self: *mut rc-byte-stream) {
+    for payload in self.inflight { payload.release() }
+    self.inflight.clear()
+    self.upstream.stop()
+  }
   fn next(self: *mut rc-byte-stream): pull[u8] {
     for payload in self.inflight { payload.release() }
     self.inflight.clear()
@@ -121,11 +127,3 @@ impl source[t = u8] for rc-byte-stream {
   }
 }
 
-impl source-async for rc-byte-stream {
-  fn start(self: *mut rc-byte-stream, waker: waker) { self.upstream.start(waker) }
-  fn stop(self: *mut rc-byte-stream) {
-    for payload in self.inflight { payload.release() }
-    self.inflight.clear()
-    self.upstream.stop()
-  }
-}

@@ -557,7 +557,7 @@ fn visit-root(
       let name = clang/getCursorSpelling(current).to-string()
       let enum-decl-result = visit-enum(current)
       // FIXME: Use in-place filter
-      enum-decl-result.enum.members = enum-decl-result.enum.members.filter(fn m. bg.should-include-name(m.name))
+      enum-decl-result.enum.members = enum-decl-result.enum.members.filter(fn[bg] m. bg.should-include-name(m.name))
 
       bg.defns.push(.{
         name,

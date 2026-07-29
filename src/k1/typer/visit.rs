@@ -180,7 +180,6 @@ impl TypedProgram {
                 recurse!(function.body_block.expect("lambdas have bodies"));
             }
             TypedExpr::FunctionPointer(_) => {}
-            TypedExpr::PendingCapture(_) => {}
             TypedExpr::StaticValue(_) => {}
         };
         None

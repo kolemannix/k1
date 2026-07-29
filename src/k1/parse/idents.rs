@@ -108,6 +108,7 @@ pub(crate) struct BuiltinIdents {
     pub env: StringId,
     pub fn_ptr: StringId,
     pub env_ptr: StringId,
+    pub state: StringId,
     pub asterisk: StringId,
     pub bang: StringId,
     pub amp: StringId,
@@ -237,6 +238,7 @@ pub(crate) struct BuiltinFunctions {
     pub buffer_set: QIdent,
     pub Array_set: QIdent,
     pub mem_zeroed: QIdent,
+    pub mem_new: QIdent,
     pub span_wrapBuffer: QIdent,
     pub equals__equals: QIdent,
     pub add__add: QIdent,
@@ -335,6 +337,7 @@ impl IdentPool {
             env: intern!("env"),
             fn_ptr: intern!("fn_ptr"),
             env_ptr: intern!("env_ptr"),
+            state: intern!("state"),
             asterisk: intern!("*"),
             bang: intern!("!"),
             amp: intern!("&"),
@@ -485,6 +488,7 @@ impl IdentPool {
 
         let path_mem = intern_path!(b.mem);
         let mem_zeroed: QIdent = make_fn!(path_mem, intern!("zeroed"));
+        let mem_new: QIdent = make_fn!(path_mem, intern!("new"));
 
         let path_core_span = intern_path!(b.core, b.span);
         let span_wrapBuffer: QIdent = make_fn!(path_core_span, intern!("wrap-buffer"));
@@ -537,6 +541,7 @@ impl IdentPool {
             buffer_set,
             Array_set: array__set,
             mem_zeroed,
+            mem_new,
             span_wrapBuffer,
             equals__equals,
             add__add,

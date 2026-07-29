@@ -10,7 +10,6 @@ let MODULE_INFO: k1/module-manifest = .{
 }
 
 use uv/uv-loop
-use std/dyn-source
 use std/rc
 use std/rc-bytes
 use std/pubsub
@@ -287,7 +286,7 @@ type connection = {
   request-parser: http/parser,
 
   // The source being drained by response-writer/, stopped on finish or close
-  active-stream: ?dyn-source[u8],
+  active-stream: ?dyn[source[t = u8]],
 
   framework: *mut framework-deps,
   make-user-deps: *fn(*mut framework-deps) -> ptr,

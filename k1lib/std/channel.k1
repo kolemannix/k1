@@ -117,6 +117,7 @@ ns for channel {
 }
 
 impl[t] source[t = t] for channel[t] {
+  fn start(self: *mut channel[t], waker: waker) { self.waker = :some waker }
   fn next(self: *mut channel[t]): pull[t] {
     if self.failure is :some message { return :fail message }
     if self.queue.is-empty() { return :pending }
@@ -127,9 +128,5 @@ impl[t] source[t = t] for channel[t] {
     self.seg = span/wrap-single(self.part.&)
     :chunk span/wrap-single(self.seg.&)
   }
-}
-
-impl[t] source-async for channel[t] {
-  fn start(self: *mut channel[t], waker: waker) { self.waker = :some waker }
   fn stop(self: *mut channel[t]) { channel/close-and-free(self) }
 }

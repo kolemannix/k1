@@ -3,7 +3,6 @@
 
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
-use smallvec::SmallVec;
 
 use std::{cell::RefCell, collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
@@ -15,7 +14,7 @@ use crate::{
     static_assert_niched, static_assert_size,
     typer::{
         AbilityId, FunctionId, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId, StringId,
-        TypeId, TypePendingDefinition, TypedExprId, TypedProgram, VariableId,
+        TypeId, TypePendingDefinition, TypedProgram, VariableId,
     },
     vpool::VPool,
 };
@@ -96,8 +95,6 @@ pub struct ScopeEnclosingFunctions {
 
 pub struct ScopeLambdaInfo {
     pub expected_return_type: Option<TypeId>,
-    pub capture_exprs_for_fixup: SmallVec<[TypedExprId; 8]>,
-    pub captured_variables: SmallVec<[VariableId; 8]>,
     // We have to store this here, instead of on the function, since no function
     // declaration exists while we're evaluating a lambda body
     pub returned_variable: Option<VariableId>,
@@ -109,6 +106,15 @@ pub struct ScopeLoopInfo {
 
 pub struct ScopeDefers {
     pub deferred_exprs: SV4<ParsedExprId>,
+}
+
+/// A context variable registered under an ability key. `Ambiguous` marks a key
+/// claimed by more than one context param of the same function (legal to declare;
+/// an implicit lookup that lands on it must fail and ask for explicit passing).
+#[derive(Debug, Clone, Copy)]
+pub enum ContextAbilityEntry {
+    Unique(VariableId),
+    Ambiguous,
 }
 
 /// A packed (scope, symbol) key for the global per-kind symbol maps
@@ -166,6 +172,7 @@ pub struct Scopes {
     /// maps scopes to their parent lambda scope, if any. used for capture detection.
     lambda_cache: RefCell<FxHashMap<ScopeId, Option<ScopeId>>>,
     context_variables_by_type: FxHashMap<ScopeKey, VariableId>,
+    context_variables_by_ability: FxHashMap<ScopeKey, ContextAbilityEntry>,
     functions: FxHashMap<ScopeKey, FunctionId>,
     namespaces: FxHashMap<ScopeKey, NamespaceId>,
     types: FxHashMap<ScopeKey, TypeId>,
@@ -194,6 +201,7 @@ impl Scopes {
             scopes: VPool::make("scopes"),
             lambda_cache: RefCell::new(FxHashMap::new()),
             context_variables_by_type: FxHashMap::new(),
+            context_variables_by_ability: FxHashMap::new(),
             functions: FxHashMap::new(),
             namespaces: FxHashMap::new(),
             types: FxHashMap::new(),
@@ -763,6 +771,52 @@ impl Scopes {
         true
     }
 
+    /// Register a context variable under an ability key. Returns false if the key is
+    /// already claimed in this scope. Explicit `let context(impl ..)` declarations
+    /// should treat false as an error; derived registrations (function context params
+    /// typed by constrained type params) should instead call
+    /// [`Self::poison_context_ability_key`] so the collision only fails at lookup time.
+    pub fn add_context_variable_by_ability(
+        &mut self,
+        scope_id: ScopeId,
+        ability_id: AbilityId,
+        variable_id: VariableId,
+    ) -> bool {
+        match self.context_variables_by_ability.entry(skey(scope_id, ability_id.as_u32())) {
+            Entry::Occupied(_) => return false,
+            Entry::Vacant(e) => e.insert(ContextAbilityEntry::Unique(variable_id)),
+        };
+        self.get_scope_mut(scope_id).kinds |= kinds::CONTEXT_VARIABLES;
+        true
+    }
+
+    pub fn poison_context_ability_key(&mut self, scope_id: ScopeId, ability_id: AbilityId) {
+        self.context_variables_by_ability
+            .insert(skey(scope_id, ability_id.as_u32()), ContextAbilityEntry::Ambiguous);
+    }
+
+    pub fn find_context_variable_by_ability(
+        &self,
+        scope: ScopeId,
+        ability_id: AbilityId,
+    ) -> Option<ContextAbilityEntry> {
+        let mut scope_id = scope;
+        loop {
+            let scope = self.get_scope(scope_id);
+            if scope.kinds & kinds::CONTEXT_VARIABLES != 0
+                && let Some(entry) =
+                    self.context_variables_by_ability.get(&skey(scope_id, ability_id.as_u32()))
+            {
+                return Some(*entry);
+            }
+            // Same walk and namespace stop as find_context_variable_by_type
+            if scope.scope_type == ScopeType::Namespace {
+                return None;
+            }
+            scope_id = scope.parent?;
+        }
+    }
+
     pub fn add_use_binding(
         &mut self,
         scope_id: ScopeId,
@@ -792,28 +846,6 @@ impl Scopes {
                 // Discard because 'use's should shadow
                 let _ = self.add_ability(scope_id, name_to_use, ability_id);
                 let _ = self.add_namespace(scope_id, name_to_use, namespace_id);
-            }
-        }
-    }
-
-    pub fn add_capture(
-        &mut self,
-        scope_id: ScopeId,
-        variable_id: VariableId,
-        fixup_expr_id: TypedExprId,
-    ) {
-        match self.lambda_info.entry(scope_id) {
-            Entry::Occupied(mut lambda_info) => {
-                let info = lambda_info.get_mut();
-                if !info.captured_variables.contains(&variable_id) {
-                    info.captured_variables.push(variable_id);
-                };
-                // Even if we mention the captured variable multiple times,
-                // every occurrence needs to be patched later
-                info.capture_exprs_for_fixup.push(fixup_expr_id)
-            }
-            Entry::Vacant(_entry) => {
-                unreachable!("All lambda scopes should have info by block eval")
             }
         }
     }

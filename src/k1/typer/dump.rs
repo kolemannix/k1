@@ -388,6 +388,26 @@ impl TypedProgram {
                 w.write_str(")")?;
                 Ok(())
             }
+            Type::AbilityObject(ao) => {
+                let ability = self.abilities.get(ao.specialized_ability_id);
+                w.write_str("dyn[")?;
+                self.write_ident(w, ability.name)?;
+                let args = self.types.mem.getn(ao.impl_arguments);
+                if !args.is_empty() {
+                    w.write_str("[")?;
+                    for (index, arg) in args.iter().enumerate() {
+                        if index > 0 {
+                            w.write_str(", ")?;
+                        }
+                        self.write_ident(w, arg.name)?;
+                        w.write_str(" = ")?;
+                        self.display_type_id_rec(w, arg.type_id, expand, visiting)?;
+                    }
+                    w.write_str("]")?;
+                }
+                w.write_str("]")?;
+                Ok(())
+            }
             Type::StaticValue(svt) => {
                 w.write_str("static[")?;
                 self.display_type_id_rec(w, svt.family_type_id, expand, visiting)?;
@@ -662,6 +682,10 @@ impl TypedProgram {
                     Callee::DynamicLambda(callee_expr) => {
                         self.display_expr_id(*callee_expr, w, indentation)?;
                     }
+                    Callee::DynamicAbilityFn { object_expr, field_index, .. } => {
+                        self.display_expr_id(*object_expr, w, indentation)?;
+                        write!(w, ".dyn[{}]", field_index)?;
+                    }
                     Callee::DynamicAbstract { variable_id, .. } => {
                         let variable = self.variables.get(*variable_id);
                         self.write_ident(w, variable.name)?;
@@ -799,13 +823,6 @@ impl TypedProgram {
                 let fun = self.get_function(fr.function_id);
                 self.write_ident(w, fun.name)?;
                 w.write_str(".toRef()")
-            }
-            TypedExpr::PendingCapture(pending_capture) => {
-                w.write_str("capture(")?;
-                let variable = self.variables.get(pending_capture.captured_variable_id);
-                self.write_ident(w, variable.name)?;
-                w.write_str(")")?;
-                Ok(())
             }
             TypedExpr::StaticValue(s) => {
                 if s.is_typed_as_static {

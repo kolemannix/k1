@@ -1,6 +1,5 @@
 ns app
 
-use std/dyn-source
 use std/source
 use std/rc-byte-stream
 use std/owned
@@ -28,16 +27,17 @@ $pre/routing/define(route, {
   use pre/routing/get
   use pre/routing/post
   use pre/routing/delete
-  let game: span[pre/routing/seg] = [:text "game", :u64 "id"]
+  use pre/routing/seg
+  let game: span[seg] = [:text "game", :u64 "id"]
 
   [
-    get("home", []),
-    get("events", [:text "events"]),
-    get("counter", [:text "counter", :text "events"]),
-    get("game-events", game.concat([:text "events"])),
-    post("game-poke", game.concat([:text "poke"])),
-    get("big-file", [:text "static", :text "big-file.json"]),
-    get("starry", [:text "app", :text "starry-night"]),
+    get(   "home",                    []),
+    get(   "events",                  [:text "events"]),
+    get(   "counter",                 [:text "counter", :text "events"]),
+    get(   "big-file",                [:text "static", :text "big-file.json"]),
+    get(   "starry",                  [:text "app", :text "starry-night"]),
+    get(   "game-events", game.concat([:text "events"])),
+    post(  "game-poke",   game.concat([:text "poke"])),
     delete("delete-game", game),
   ]
 })
@@ -51,8 +51,8 @@ fn handle(req: http/request, deps: *mut deps): http-response {
       :home -> home-page(),
       :events -> global-events(deps),
       :counter -> counter-events(),
-      :game-events p -> game-events(deps, p.id),
-      :game-poke p -> game-poke(deps, p.id),
+      :game-events .{ id } -> game-events(deps, id),
+      :game-poke .{ id } -> game-poke(deps, id),
       :big-file -> big-file(),
       :starry -> response/html("todo"),
       :delete-game p -> response/html("todo ${p.id}"),
@@ -153,17 +153,13 @@ fn render-big-json(out: *mut string-builder, rows: size) {
   out.write("]")
 }
 
-// The independent publisher: an OS thread with no connection to the event
-// loop. It gets the bus as its thread argument — the same value the request
-// handlers carry in deps.
-let mutable game-tick: u64 = 0
-
 // The bus takes rc'd payloads; text publishers copy to the heap once here.
 // A publisher already holding heap-bytes would .to-rc() them directly.
 fn publish-text(bus: *mut pubsub/bus[span[u8]], topic: string, data: string) {
   bus.publish(topic, heap-bytes/cloned(data.span-bytes()).to-rc())
 }
 
+let mutable game-tick: u64 = 0
 fn start-mock-publisher(bus: *mut pubsub/bus[span[u8]]) {
   let tid: *mut uv/thread = system-heap.alloc-t()
   let rc = uv/thread_create(tid, fn arg. {
@@ -194,7 +190,7 @@ fn template(template: string, values: span[{ key: string, value: string }]): ?st
       let close = rest.index-of('}')
       if close == -1 return :none
       let key = rest.take(close)
-      core/iter/find(values, fn p. p.key == key) is {
+      core/iter/find(values, fn[key] p. p.key == key) is {
         :none -> return :none,
         :some pair -> out.write-string(pair.value)
       }

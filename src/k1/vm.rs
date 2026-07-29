@@ -1295,7 +1295,7 @@ pub fn vm_value_to_static_value(
                 return failf!(span, "Cannot yet bake non-null references");
             }
         }
-        Type::Lambda(_) | Type::LambdaObject(_) | Type::Opaque(_) => {
+        Type::Lambda(_) | Type::LambdaObject(_) | Type::AbilityObject(_) | Type::Opaque(_) => {
             return failf!(
                 span,
                 "Only plain old data (scalars, structs, arrays, eithers, etc) can be statically baked. Got: {}",

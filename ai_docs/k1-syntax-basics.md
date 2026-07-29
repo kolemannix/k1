@@ -633,6 +633,24 @@ and nullary thunks:
 let thunk = fn. { println("later") }
 ```
 
+A plain `fn` lambda is non-capturing: referencing an enclosing local is a
+compile error. To capture, declare the captures in brackets after `fn` —
+the meta-parameter slot, where named functions put type parameters. A bare
+name copies the value into the closure's environment at creation; `name.&`
+stores the variable's address, and the body sees `name` as a reference to
+store through:
+
+```rust
+let base = 10
+let counter = 0
+let bump = fn[base, counter.&](x: int) {
+  counter.* = counter.* + base + x
+}
+```
+
+Captures bind like `let`s at closure entry, so a nested lambda captures an
+outer lambda's captures by naming them again in its own list.
+
 Function parameters can accept static function values, closure-like values, or
 dynamic function objects depending on the type. Prefer `some fn ...` for
 beginner-facing examples and ordinary function parameters; reach for

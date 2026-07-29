@@ -6,7 +6,7 @@ fn static-add-two(x: int): int { x + 2 }
 fn captures() {
   let closed-over: int = 3
 
-  let add = fn(x: int) {
+  let add = fn[closed-over](x: int) {
     let add-one = fn(y: int) y + 1
     add-one(x) + closed-over + add-one(closed-over) + (if closed-over == 3 1 else 0)
   }
@@ -16,11 +16,8 @@ fn captures() {
 
 fn capture-mut() {
   let counter = 3
-  let counter = &counter
 
-  // We have to capture the variable pointed at the address of counter
-  // TODO: rework captures
-  let my-inc = fn() {
+  let my-inc = fn[counter.&]() {
     counter.* = counter.* + 1
   }
 
@@ -28,7 +25,26 @@ fn capture-mut() {
   my-inc()
   my-inc()
 
-  assert(counter.* == 6)
+  assert(counter == 6)
+}
+
+fn capture-transitive() {
+  let a = 10
+  let outer = fn[a](x: int) {
+    // `a` here is the outer lambda's capture binding; the inner lambda captures it again
+    let inner = fn[a](y: int) a + y
+    inner(x) + a
+  }
+  assert-equals(outer(5), 25)
+}
+
+fn capture-snapshot() {
+  // By-value captures copy at creation; later writes to the source are invisible
+  let n = 1
+  let get-n = fn[n]. n
+  n = 2
+  assert-equals(get-n(), 1)
+  assert-equals(n, 2)
 }
 
 fn closure-return() {
@@ -61,9 +77,9 @@ fn run-things(thunks: list[dyn[fn() -> empty]]) {
 fn thunks-test() {
   let counter = { let x = 0; &x }
   let thunks: list[dyn[fn() -> empty]] = [
-    fn. { counter.* = counter.* + 1 },
-    fn. { counter.* = counter.* + 1 },
-    fn. { counter.* = counter.* + 1 },
+    fn[counter]. { counter.* = counter.* + 1 },
+    fn[counter]. { counter.* = counter.* + 1 },
+    fn[counter]. { counter.* = counter.* + 1 },
   ]
 
   run-things(thunks)
@@ -85,7 +101,7 @@ fn test() {
   let c1 = .{ x = 3 }
   let c2 = 2
 
-  let with-closures = some-fn-param2(5, fn x. x + 1 + c1.x, fn x. x + 2 + c2)
+  let with-closures = some-fn-param2(5, fn[c1] x. x + 1 + c1.x, fn[c2] x. x + 2 + c2)
   assert-equals(with-closures, (5 + 1 + 3) + (5 + 2 + 2))
 
   let with-generics = some-fn-param-gen(true, fn b. not b, fn b. some(b))
@@ -99,18 +115,91 @@ fn test() {
 
   let x = { let tmp = 10; &tmp }
   // Coerce lambdas to lambda objects
-  simple-dyn(fn. { let _ = "Thunk! ${x.*}"; x.* = 11 })
+  simple-dyn(fn[x]. { let _ = "Thunk! ${x.*}"; x.* = 11 })
   assert-equals(x.*, 11)
-  // Coerce function refs to lambda objects
-  simple-dyn(fn. { let _ = "Thunk!"; x.* = 12 })
+  simple-dyn(fn[x]. { let _ = "Thunk!"; x.* = 12 })
   assert-equals(x.*, 12)
 
   thunks-test()
 
   captures()
   capture-mut()
+  capture-transitive()
+  capture-snapshot()
+  capture-errors()
   closure-return()
+  escape-test()
+  escape-list-test()
+  arena-mode-test()
+  static-closure-test()
   .{}
+}
+
+// Returning as dyn allocates the env in the ambient allocator, so the object
+// survives the frame that created it
+fn make-adder(n: int): dyn[fn(int) -> int] {
+  fn[n](x: int) x + n
+}
+
+fn escape-test() {
+  let add5 = make-adder(5)
+  let add7 = make-adder(7)
+  assert-equals(add5(1), 6)
+  assert-equals(add7(1), 8)
+  assert-equals(add5(2), 7)
+}
+
+fn make-thunks(counter: *mut int): list[dyn[fn() -> empty]] {
+  [
+    fn[counter]. { counter.* = counter.* + 1 },
+    fn[counter]. { counter.* = counter.* + 10 },
+  ]
+}
+
+fn escape-list-test() {
+  let counter = 0
+  let thunks = make-thunks(counter.&)
+  for thunk in thunks { thunk() }
+  assert-equals(counter, 11)
+}
+
+fn arena-mode-test() {
+  let a = core/arena/init-default()
+  mem/push-mode(:custom-arena a)
+  let n = 5
+  let in-arena = fn[n](x: int) x + n
+  let _ = mem/pop-mode()
+  // The env is a by-value local, so no allocation happened and the mode is irrelevant
+  assert-equals(in-arena(1), 6)
+}
+
+fn static-closure-test() {
+  // Closures work at comptime
+  let r: int = #static { let a = 40; let f = fn[a](x: int) x + a; f(2) }
+  assert-equals(r, 42)
+  // But a closure value cannot cross the static boundary into a runtime constant
+  #static assert(test-compile(
+    { let outer = #static { let b = 2; fn[b]. b }; outer() }
+  ).is-some())
+}
+
+fn capture-errors() {
+  // Undeclared capture
+  #static assert(test-compile(
+    { let a = 1; let f = fn. a; f() }
+  ).is-some())
+  // Duplicate capture
+  #static assert(test-compile(
+    { let a = 1; let f = fn[a, a]. a; f() }
+  ).is-some())
+  // Capture colliding with a parameter name
+  #static assert(test-compile(
+    { let a = 1; let f = fn[a](a: int) a; f(2) }
+  ).is-some())
+  // Unknown name
+  #static assert(test-compile(
+    { let f = fn[nonexistent]. 1; f() }
+  ).is-some())
 }
 
 }

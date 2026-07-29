@@ -1,0 +1,190 @@
+ns ability_object {
+
+ability counter[impl t] {
+  fn label(self: *mut self): string { "counter" }
+  fn kind(): string { "counter-kind" }
+  fn bump(self: *mut self): t
+}
+
+type by-ones = { current: int }
+impl counter[t = int] for by-ones {
+  fn bump(self: *mut by-ones): int {
+    self.current = self.current + 1
+    self.current
+  }
+}
+
+type by-tens = { current: int }
+impl counter[t = int] for by-tens {
+  fn label(self: *mut by-tens): string { "tens" }
+  fn kind(): string { "tens-kind" }
+  fn bump(self: *mut by-tens): int {
+    self.current = self.current + 10
+    self.current
+  }
+}
+
+fn basic() {
+  let ones: *mut by-ones = mem/new(.{ current = 0 })
+  let d1 = ones.to-dyn[counter[t = int]]()
+  assert-equals(d1.bump(), 1)
+  assert-equals(d1.bump(), 2)
+  // default method through dyn
+  assert-equals(d1.label(), "counter")
+  // no-self fn: the object is a type witness, no state is passed
+  assert-equals(d1.kind(), "counter-kind")
+
+  // expected-type form and as-cast form
+  let tens: *mut by-tens = mem/new(.{ current = 0 })
+  let d2: dyn[counter[t = int]] = tens.to-dyn()
+  assert-equals(d2.bump(), 10)
+  // overridden default dispatches to the override
+  assert-equals(d2.label(), "tens")
+  assert-equals(d2.kind(), "tens-kind")
+  let d3 = tens.as[dyn[counter[t = int]]]()
+  assert-equals(d3.bump(), 20)
+
+  // value form ambient-allocates before erasing
+  let start: by-ones = .{ current = 100 }
+  let d4 = start.to-dyn[counter[t = int]]()
+  assert-equals(d4.bump(), 101)
+}
+
+fn make-counter(start: int): dyn[counter[t = int]] {
+  let state: *mut by-ones = mem/new(.{ current = start })
+  state.to-dyn()
+}
+
+fn escapes() {
+  let escaped = make-counter(5)
+  assert-equals(escaped.bump(), 6)
+  assert-equals(escaped.bump(), 7)
+}
+
+fn heterogeneous() {
+  let ones: *mut by-ones = mem/new(.{ current = 0 })
+  let tens: *mut by-tens = mem/new(.{ current = 0 })
+  let counters: list[dyn[counter[t = int]]] = [ones.to-dyn(), tens.to-dyn()]
+  let total = 0
+  for c in counters { total = total + c.bump() }
+  assert-equals(total, 11)
+}
+
+// Generic pass-through: dyn[counter[t = t]] in a generic signature
+// specializes and infers at the call site
+fn drive[t](c: dyn[counter[t = t]]): t {
+  c.bump()
+}
+
+fn generic-pass-through() {
+  let ones: *mut by-ones = mem/new(.{ current = 0 })
+  let d = ones.to-dyn[counter[t = int]]()
+  assert-equals(drive(d), 1)
+  assert-equals(drive(d), 2)
+}
+
+// Erasure inside a where-bound generic body: the impl is abstract here and
+// only resolves at specialization
+fn erase-generic[s](state: *mut s): dyn[counter[t = int]] where s: counter[t = int] {
+  state.to-dyn()
+}
+
+fn erase-in-generic() {
+  let tens: *mut by-tens = mem/new(.{ current = 0 })
+  let d = erase-generic(tens)
+  assert-equals(d.bump(), 10)
+}
+
+fn comptime-dispatch() {
+  let r: int = #static {
+    let state: *mut by-ones = mem/new(.{ current = 40 })
+    let d = state.to-dyn[counter[t = int]]()
+    d.bump() + d.bump()
+  }
+  assert-equals(r, 83)
+  // no-self dispatch through the VM
+  let k: string = #static {
+    let state: *mut by-tens = mem/new(.{ current = 0 })
+    let d = state.to-dyn[counter[t = int]]()
+    d.kind()
+  }
+  assert-equals(k, "tens-kind")
+}
+
+fn optional-of-dyn() {
+  let ones: *mut by-ones = mem/new(.{ current = 0 })
+  let maybe: ?dyn[counter[t = int]] = :some ones.to-dyn()
+  let value = maybe is {
+    :some c -> c.bump(),
+    :none -> -1,
+  }
+  assert-equals(value, 1)
+}
+
+// An ability mixing a generic fn with plain fns: the plain fns dispatch
+// through dyn; the generic one is excluded per-function
+ability mixed {
+  fn plain(self: *mut self): int
+  fn fancy[x](self: *mut self, x: x): x { x }
+}
+
+type mixed-impl = { n: int }
+impl mixed for mixed-impl {
+  fn plain(self: *mut mixed-impl): int { self.n }
+}
+
+fn per-fn-exclusion() {
+  let m: *mut mixed-impl = mem/new(.{ n = 7 })
+  // static dispatch of the generic fn still works on the concrete type
+  assert-equals(m.fancy(3), 3)
+  let d = m.to-dyn[mixed]()
+  assert-equals(d.plain(), 7)
+  // calling the excluded fn through the object is an error
+  #static assert(test-compile(
+    { let m2: *mut mixed-impl = mem/new(.{ n = 1 }); let d2 = m2.to-dyn[mixed](); d2.fancy(3) }
+  ).is-some())
+}
+
+// Every fn generic or self-by-value: no dyn-dispatchable functions at all
+ability undynable {
+  fn only[x](self: *mut self, x: x): x
+}
+
+type undyn-impl = { n: int }
+impl undynable for undyn-impl {
+  fn only[x](self: *mut undyn-impl, x: x): x { x }
+}
+
+fn compile-errors() {
+  // ability with zero eligible fns rejected at dyn-type formation
+  #static assert(test-compile(
+    { let u: *mut undyn-impl = mem/new(.{ n = 1 }); u.to-dyn[undynable]() }
+  ).is-some())
+  // missing impl arg in the dyn type
+  #static assert(test-compile(
+    { let o: *mut by-ones = mem/new(.{ current = 0 }); o.to-dyn[counter]() }
+  ).is-some())
+  // type without the impl
+  #static assert(test-compile(
+    { let x: *mut int = mem/new(3); x.to-dyn[counter[t = int]]() }
+  ).is-some())
+  // dyn objects hold fn ptrs; cannot cross the static boundary
+  #static assert(test-compile(
+    { let d: dyn[counter[t = int]] = #static { let o: *mut by-ones = mem/new(.{ current = 0 }); o.to-dyn() }; d }
+  ).is-some())
+}
+
+fn test() {
+  basic()
+  escapes()
+  heterogeneous()
+  generic-pass-through()
+  erase-in-generic()
+  comptime-dispatch()
+  optional-of-dyn()
+  per-fn-exclusion()
+  compile-errors()
+  .{}
+}
+
+}

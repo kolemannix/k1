@@ -3,28 +3,28 @@
 // blank-line terminator. Payload segments pass through zero-copy; only the
 // framing segments and the reused segment list are the pipe's own.
 
-use std/dyn-source
 use std/source
-use std/source-async
 use std/pull
 use std/waker
 
 type sse-encoder = {
-  upstream: dyn-source[u8],
+  upstream: dyn[source[t = u8]],
   event-name: string,
   parts: list[span[u8]],
 }
 
-fn sse-events(upstream: dyn-source[u8], event-name: string): dyn-source[u8] {
+fn sse-events(upstream: dyn[source[t = u8]], event-name: string): dyn[source[t = u8]] {
   let state: *mut sse-encoder = mem/new(.{
     upstream,
     event-name,
     parts = list/empty[span[u8]](),
   })
-  dyn-source/erase-async(state)
+  state.to-dyn()
 }
 
 impl source[t = u8] for sse-encoder {
+  fn start(self: *mut sse-encoder, waker: waker) { self.upstream.start(waker) }
+  fn stop(self: *mut sse-encoder) { self.upstream.stop() }
   fn next(self: *mut sse-encoder): pull[u8] {
     self.upstream.next() is {
       :chunk group -> {
@@ -56,12 +56,7 @@ impl source[t = u8] for sse-encoder {
   }
 }
 
-impl source-async for sse-encoder {
-  fn start(self: *mut sse-encoder, waker: waker) { self.upstream.start(waker) }
-  fn stop(self: *mut sse-encoder) { self.upstream.stop() }
-}
-
-fn sse-response(stream: dyn-source[u8], event-name: string): http-response {
+fn sse-response(stream: dyn[source[t = u8]], event-name: string): http-response {
   .{
     status = 200,
     content-type = "text/event-stream",

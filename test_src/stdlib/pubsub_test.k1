@@ -3,7 +3,6 @@ ns pubsub_test
 use std/pubsub
 use std/notify
 use std/waker
-use std/dyn-source
 use std/source
 use std/pull
 use std/rc

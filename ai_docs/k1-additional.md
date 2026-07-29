@@ -30,8 +30,36 @@ let context history: *mut list[string] = core/mem/new([])
 add-tracked(1, 2)
 ```
 
-See `test_src/suite1/context_params.k1` and
-`test_src/suite1/context_generic.k1`.
+A context variable can also be declared by ability, so it satisfies generic
+context params constrained to that ability (the constraint's type param is
+inferred from the variable):
+
+```rust
+fn greet[w: writer](context out: w)(name: string) {
+  out.write("Hello, ")
+  out.write(name)
+}
+
+let sb = string-builder/new()
+let context(impl writer) out: *string-builder = sb.&
+greet("Joe") // writes into sb
+```
+
+The lookup key is the declared ability — a plain type-keyed context variable
+never matches an ability-constrained param during inference (though it still
+satisfies one whose type param was solved from other arguments). An
+ability-keyed variable, when found, is authoritative: it determines the type
+param, and disagreement with the call's other arguments is an error whose
+escape hatch is passing the context explicitly. The ability check is strict:
+the variable's declared type must implement the ability itself, so
+writer-style abilities implemented on references need a reference-typed
+binding, as above. Ability-keyed variables also register under their concrete
+type, so they satisfy concrete-typed context params too. A param constrained
+by several abilities picks the variable hit by the most ability keys; a tie is
+an ambiguity error.
+
+See `test_src/suite1/context_params.k1`, `test_src/suite1/context_generic.k1`,
+and `test_src/suite1/context_ability.k1`.
 
 ## Module Manifests And FFI
 
@@ -181,16 +209,15 @@ Building imperatively works by writing to a code-builder (`cb.write(...)`,
 is the explicit sourceless wrap.
 
 Emitters should use the code-builder emission helpers: `cb.line(c)` (indent +
-append + newline), `cb.block(header, fn. ...)` / `cb.block-close(header, close,
-fn. ...)` (braces + indentation around the body), `cb.sep(items, ", ", fn x.
-...)`, and `cb.indent()`/`cb.dedent()` for manual runs. `line`/`block` take
+append + newline), `cb.block(header, fn[cb]. ...)` / `cb.block-close(header,
+close, fn[cb]. ...)` (braces + indentation around the body), `cb.sep(items,
+", ", fn[cb] x. ...)`, and `cb.indent()`/`cb.dedent()` for manual runs. `line`/`block` take
 `code`, so literal templates at their call sites keep spans — note that
 `cb.writeln("...")` does NOT (writer takes `string`), which makes `line` the
-default for emission. Two sharp edges: a block body that lexically nests
-another block must factor the inner level into a fn taking the builder
-(transitive capture through nested lambdas is unsupported), and to inspect an
-expansion put `#debug` on the macro *definition* — definition-level
-`#debug $call(...)` does not parse. Write emitted conditions as raw template
+default for emission. Nested blocks capture the builder at each level
+(`cb.block(h, fn[cb]. { ... cb.block-close(h2, c2, fn[cb]. ...) ... })`).
+One sharp edge: to inspect an expansion put `#debug` on the macro
+*definition* — definition-level `#debug $call(...)` does not parse. Write emitted conditions as raw template
 text with explicit parens — `not` is low-precedence, so `not a and b` parses
 as `not (a and b)`; emit `(not a) and b`. `meta/str-lit(s)` escapes any string
 into a valid K1 literal, interpolation sigil included, so emitted literals
@@ -350,6 +377,35 @@ See `test_src/suite1/ability_default_fns.k1`,
 `test_src/suite1/ability_complex.k1`,
 `test_src/suite1/ability_overload_ish.k1`, and
 `test_src/suite1/ability_generic.k1`.
+
+## Ability Objects (dyn)
+
+`dyn[ability[args...]]` erases an implementor to a dynamically-dispatched
+object: `{ state: ptr, one fn ptr per dispatchable ability function }`. All
+ability parameters must be bound in the type. Construction is always
+explicit — from `*mut s` it wraps the pointer; from a value it allocates in
+the ambient mode first:
+
+```rust
+let d = state.to-dyn[source[t = u8]]()      // from *mut s, no alloc
+let d: dyn[source[t = u8]] = state.to-dyn() // target from expected type
+let d = state.as[dyn[source[t = u8]]]()     // as-cast form
+let d = my-value.to-dyn[source[t = u8]]()   // value: mem/new then erase
+```
+
+Methods dispatch through the object (`d.next()`), including ability default
+methods and impl overrides. Functions that mention self nowhere in their
+signature also dispatch (`d.kind()`); the object acts as a type witness and
+no state is passed. `dyn[source[t = t]]` may appear in generic signatures
+and specializes at instantiation. Functions that take self by value, mention
+self outside the receiver, have their own type params, or take context
+params are excluded per-function from the object (they still dispatch
+statically on concrete types); an ability with no dispatchable functions
+cannot form a dyn type. Dyn objects contain function pointers, so
+they cannot cross the `#static` boundary into runtime constants; comptime
+creation and dispatch inside `#static` works.
+
+See `test_src/suite1/ability_object.k1` and `k1lib/std/stream.k1`.
 
 ## Opaque, Union, Uninit, Zeroed, And Bitcast
 

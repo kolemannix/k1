@@ -6,7 +6,7 @@
 //                                            wire it to wake your loop, then call
 //                                            bus.dispatch() on the consumer thread
 //   bus.publish(topic, value: rc[t])         from any thread; takes one reference
-//   bus.subscribe(topic)                     a dyn-source[rc[t]], one event per pull;
+//   bus.subscribe(topic)                     a dyn[source[t = rc[t]]], one event per pull;
 //                                            any thread
 //
 // Topics are unique strings that exist by use. The bus knows nothing about
@@ -59,7 +59,7 @@ ns pubsub {
 
     // Any thread: only allocates; the bus learns about the subscription when
     // the consumer start()s the stream on its own thread.
-    fn subscribe[t](self: *mut bus[t], topic: string): dyn-source[rc[t]] {
+    fn subscribe[t](self: *mut bus[t], topic: string): dyn[source[t = rc[t]]] {
       let chan = channel/make[rc[t]](
         cap-weight = self.subscriber-cap-weight,
         weight-fn = self.weight-fn,
@@ -70,7 +70,7 @@ ns pubsub {
         topic = heap-string/cloned(topic).to-rc(),
         chan,
       })
-      dyn-source/erase-async(sub)
+      sub.to-dyn()
     }
 
     // Consumer thread only: route every queued event to its subscribers,
@@ -116,11 +116,9 @@ ns pubsub {
     fn next(self: *mut subscription[t]): pull[rc[t]] {
       source@(channel[rc[t]])/next(self.chan)
     }
-  }
 
-  impl[t] source-async for subscription[t] {
     fn start(self: *mut subscription[t], waker: waker) {
-      source-async@(channel[rc[t]])/start(self.chan, waker)
+      source@(channel[rc[t]])/start(self.chan, waker)
       self.bus.subscribers.push-in(context :system-heap)(self)
     }
 

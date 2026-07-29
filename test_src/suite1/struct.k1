@@ -62,9 +62,9 @@ fn struct-nested() {
 }
 
 fn with-fields() {
-  let breaker = false; let breaker = &breaker
+  let breaker = false
 
-  let make-struct = fn. { if breaker.* crash(""); breaker.* = true; .{ a = 1, b = true, c = "hello", d = .{ inside = 0 } } }
+  let make-struct = fn[breaker.&]. { if breaker.* crash(""); breaker.* = true; .{ a = 1, b = true, c = "hello", d = .{ inside = 0 } } }
   let s: { a: int, b: bool, c: string, d: { inside: int } } = make-struct().with(.{ a = 4, b = false, d = .{ inside = 1 }})
 
   assert-equals(s.a, 4)

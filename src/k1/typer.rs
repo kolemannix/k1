@@ -636,8 +636,8 @@ impl From<&TypedAbilityParam> for NameAndType {
 ///         Ability Id
 ///```
 pub struct TypedAbilitySignature {
-    specialized_ability_id: AbilityId,
-    impl_arguments: NamedTypeSlice,
+    pub specialized_ability_id: AbilityId,
+    pub impl_arguments: NamedTypeSlice,
 }
 
 pub(crate) struct ArgsAndParams {
@@ -919,15 +919,6 @@ enum MatchingConditionResult {
     MatchingCondition(MatchingCondition),
 }
 
-#[derive(Debug, Clone)]
-pub struct TypedLambda {
-    pub scope: ScopeId,
-    pub environment_struct_reference_type: TypeId,
-    pub parsed_expression_id: ParsedExprId,
-    pub captures: Vec<VariableId>,
-    pub span: SpanId,
-}
-
 pub struct BlockBuilder {
     pub scope_id: ScopeId,
     pub statements: List<TypedStmtId, TypedProgram>,
@@ -1193,6 +1184,15 @@ pub enum Callee {
     },
     /// Must contain a LambdaObject
     DynamicLambda(TypedExprId),
+    /// Dynamic dispatch through an ability object. object_expr is typed
+    /// Type::AbilityObject; slot_function_type is the Function type inside the
+    /// object's fn-ptr field (is_lambda, param 0 = state ptr); field_index is
+    /// the object struct field holding the fn ptr (state is field 0)
+    DynamicAbilityFn {
+        object_expr: TypedExprId,
+        field_index: u32,
+        slot_function_type: TypeId,
+    },
     /// Must contain a Function pointer
     DynamicFunction {
         function_pointer_expr: TypedExprId,
@@ -1224,6 +1224,7 @@ impl Callee {
             Callee::Abstract { .. } => None,
             Callee::Builtin { .. } => None,
             Callee::DynamicLambda(_) => None,
+            Callee::DynamicAbilityFn { .. } => None,
             Callee::DynamicFunction { .. } => None,
             Callee::DynamicAbstract { .. } => None,
         }
@@ -1427,7 +1428,10 @@ pub enum CastType {
     FloatToSignedInteger,
     IntegerUnsignedToFloat,
     IntegerSignedToFloat,
-    LambdaToLambdaObject,
+    /// Placeholder for erasing an ability impl to a dyn object inside an
+    /// abstract (where-bound generic) body; these are not lowered
+    /// since specialization re-evaluates the body and lowers to an allocation of a struct literal
+    AbilityImplToDynObject,
 }
 
 impl Display for CastType {
@@ -1451,7 +1455,7 @@ impl Display for CastType {
             CastType::FloatToSignedInteger => write!(f, "ftosint"),
             CastType::IntegerUnsignedToFloat => write!(f, "uinttof"),
             CastType::IntegerSignedToFloat => write!(f, "sinttof"),
-            CastType::LambdaToLambdaObject => write!(f, "lam2dyn"),
+            CastType::AbilityImplToDynObject => write!(f, "impl2dyn"),
         }
     }
 }
@@ -1483,12 +1487,6 @@ pub struct LambdaExpr {
 #[derive(Debug, Clone)]
 pub struct FunctionPointerExpr {
     pub function_id: FunctionId,
-}
-
-#[derive(Debug, Clone)]
-pub struct PendingCaptureExpr {
-    pub captured_variable_id: VariableId,
-    pub resolved_expr: Option<TypedExprId>,
 }
 
 #[derive(Clone, Copy)]
@@ -1584,9 +1582,6 @@ pub enum TypedExpr {
     Lambda(LambdaExpr),
     /// Calling .toRef() on a function by name
     FunctionPointer(FunctionPointerExpr),
-    /// These get re-written into struct access expressions once we know all captures and have
-    /// generated the lambda's capture struct
-    PendingCapture(PendingCaptureExpr),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -1619,7 +1614,6 @@ impl TypedExpr {
             TypedExpr::Break(_) => "break",
             TypedExpr::Lambda(_) => "lambda",
             TypedExpr::FunctionPointer(_) => "function_pointer",
-            TypedExpr::PendingCapture(_) => "pending_capture",
             TypedExpr::StaticValue(_) => "static_value",
         }
     }
@@ -4385,15 +4379,34 @@ impl TypedProgram {
                 if ty_app.args.len() != 1 {
                     return failf!(ty_app.span, "Expected 1 type parameter for dyn");
                 }
-                let Some(fn_type_expr_id) = self.ast.mem.get_nth(ty_app.args, 0).type_expr else {
+                let Some(inner_type_expr_id) = self.ast.mem.get_nth(ty_app.args, 0).type_expr
+                else {
                     return failf!(ty_app.span, "Wildcard type `_` not accepted here");
                 };
+                // dyn over an ability: the inner expr names an ability, which is not
+                // a type, so it must be intercepted before type evaluation
+                if let ParsedTypeExpr::TypeApplication(inner_app) =
+                    self.ast.type_exprs.get(inner_type_expr_id)
+                {
+                    let inner_app = inner_app.clone();
+                    if self.name_resolves_to_ability(scope_id, &inner_app.name)? {
+                        let ability_expr = self.ast.mem.push_h(ParsedAbilityExpr {
+                            name: inner_app.name,
+                            arguments: inner_app.args,
+                            span: inner_app.span,
+                        });
+                        let signature = self.eval_ability_expr(ability_expr, false, scope_id)?;
+                        let object_type =
+                            self.eval_dyn_ability_object_type(signature, inner_app.span)?;
+                        return Ok(Some(object_type));
+                    }
+                }
                 let inner =
-                    self.eval_type_expr_ext(fn_type_expr_id, scope_id, context.descended())?;
+                    self.eval_type_expr_ext(inner_type_expr_id, scope_id, context.descended())?;
                 if self.types.get(inner).as_function().is_none() {
                     return failf!(
                         ty_app.span,
-                        "Expected function type, or eventually, ability name, for dyn"
+                        "Expected function type or ability signature for dyn"
                     );
                 }
                 let new_function_type = self.add_lambda_env_to_function_type(inner);
@@ -5385,6 +5398,33 @@ impl TypedProgram {
                     type_id
                 }
             }
+            Type::AbilityObject(ao) => {
+                let ao = *ao;
+                let mut any_change = false;
+                let mut new_args = self.tmp.new_list(ao.impl_arguments.len());
+                for arg in self.types.mem.getn(ao.impl_arguments) {
+                    let new_arg_type = self.substitute_in_type(arg.type_id, substitution_pairs);
+                    if new_arg_type != arg.type_id {
+                        any_change = true;
+                    }
+                    new_args.push(NameAndType { name: arg.name, type_id: new_arg_type });
+                }
+                if any_change {
+                    let impl_arguments = self.mem.pushn(new_args.as_slice());
+                    let new_signature = TypedAbilitySignature {
+                        specialized_ability_id: ao.specialized_ability_id,
+                        impl_arguments,
+                    };
+                    match self.eval_dyn_ability_object_type(new_signature, SpanId::NONE) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            self.ice("dyn ability substitution produced invalid object", Some(&e))
+                        }
+                    }
+                } else {
+                    type_id
+                }
+            }
             Type::StaticValue(value_type) => {
                 if value_type.value_id.is_some() {
                     // Can't substitute inside the type "static[string; "hello"]"
@@ -5958,8 +5998,8 @@ impl TypedProgram {
         // If we expect a lambda object and you pass a lambda
         if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected) {
             if let Type::Lambda(lambda_type_id) = self.get_expr_type(expr) {
-                let span = self.exprs.get_span(expr);
-                let lambda_type = self.types.lambda_types.get(*lambda_type_id);
+                let lambda_type_id = *lambda_type_id;
+                let lambda_type = self.types.lambda_types.get(lambda_type_id);
                 let lambda_object_type = self.types.add_lambda_object(
                     &self.ast.idents,
                     lambda_type.function_type,
@@ -5967,15 +6007,12 @@ impl TypedProgram {
                 );
                 match self.check_types(expected, lambda_object_type, scope_id) {
                     Ok(_) => {
-                        return CheckExprTypeResult::Coerce(
-                            self.synth_cast(
-                                expr,
-                                lambda_object_type,
-                                CastType::LambdaToLambdaObject,
-                                Some(span),
-                            ),
-                            "lam->lamobj".into(),
-                        );
+                        return match self.lambda_to_lambda_object(expr, lambda_type_id, scope_id) {
+                            Ok(lambda_object) => {
+                                CheckExprTypeResult::Coerce(lambda_object, "lam->lamobj".into())
+                            }
+                            Err(e) => CheckExprTypeResult::Err(e.message),
+                        };
                     }
                     Err(msg) => {
                         eprintln!("coerce: detected lam obj case failed: {msg}");
@@ -8258,61 +8295,53 @@ impl TypedProgram {
                 }
             },
             Some((variable_id, variable_scope_id)) => {
-                let parent_lambda = self.scopes.nearest_parent_lambda(scope_id);
-                let (is_capture, lambda_scope_id) = if let Some(lambda_scope_id) = parent_lambda {
-                    let variable_is_above_lambda =
-                        self.scopes.scope_has_ancestor(lambda_scope_id, variable_scope_id);
-                    let variable_is_global = self.variables.get(variable_id).global_id().is_some();
-
-                    let is_capture = variable_is_above_lambda && !variable_is_global;
-                    debug!("{}, is_capture={is_capture}", self.ident_str(variable.name.name));
-                    (is_capture, Some(lambda_scope_id))
-                } else {
-                    (false, None)
-                };
-
+                self.check_lambda_capture_boundary(
+                    scope_id,
+                    variable_id,
+                    variable_scope_id,
+                    variable.name.name,
+                    variable_name_span,
+                )?;
                 let v = self.variables.get(variable_id);
-                if is_capture {
-                    if is_assignment_lhs {
-                        return failf!(
-                            variable_name_span,
-                            "Cannot assign to captured variable '{}'. Capture a reference and store through it with `.* =` instead",
-                            self.ast.idents.get_string(variable.name.name)
-                        );
-                    }
-                    if !variable.name.path.is_empty() {
-                        return failf!(
-                            variable_name_span,
-                            "Should not capture namespaced things, I think?"
-                        );
-                    }
+                let expr = self.exprs.add(
+                    TypedExpr::Variable(VariableExpr { variable_id }),
+                    v.type_id,
+                    variable_name_span,
+                );
 
-                    let fixup_expr_id = self.exprs.add(
-                        TypedExpr::PendingCapture(PendingCaptureExpr {
-                            captured_variable_id: variable_id,
-                            resolved_expr: None,
-                        }),
-                        v.type_id,
-                        variable_name_span,
-                    );
-                    self.scopes.add_capture(lambda_scope_id.unwrap(), variable_id, fixup_expr_id);
-
+                if !is_assignment_lhs {
                     self.register_variable_usage(variable_id, variable.name.name_span);
-                    Ok((Some(variable_id), fixup_expr_id))
-                } else {
-                    let expr = self.exprs.add(
-                        TypedExpr::Variable(VariableExpr { variable_id }),
-                        v.type_id,
-                        variable_name_span,
-                    );
-
-                    if !is_assignment_lhs {
-                        self.register_variable_usage(variable_id, variable.name.name_span);
-                    }
-                    Ok((Some(variable_id), expr))
                 }
+                Ok((Some(variable_id), expr))
             }
         }
+    }
+
+    /// Captures are declared in a lambda's capture list and bind ordinary body-scope
+    /// variables, so a use inside a lambda that reaches a local declared outside it
+    /// is always an undeclared capture.
+    fn check_lambda_capture_boundary(
+        &self,
+        use_scope: ScopeId,
+        variable_id: VariableId,
+        variable_scope_id: ScopeId,
+        name: StringId,
+        span: SpanId,
+    ) -> K1Result<()> {
+        let Some(lambda_scope_id) = self.scopes.nearest_parent_lambda(use_scope) else {
+            return Ok(());
+        };
+        let variable_is_above_lambda =
+            self.scopes.scope_has_ancestor(lambda_scope_id, variable_scope_id);
+        let variable_is_global = self.variables.get(variable_id).global_id().is_some();
+        if variable_is_above_lambda && !variable_is_global {
+            let name = self.ident_str(name);
+            return failf!(
+                span,
+                "Lambda does not capture '{name}'. Declare it in the capture list: `fn[{name}]` copies its value, `fn[{name}.&]` captures its address",
+            );
+        }
+        Ok(())
     }
 
     pub fn register_variable_usage(&mut self, variable_id: VariableId, span: SpanId) {
@@ -10203,14 +10232,22 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
+        struct ClosureSetup {
+            environment_struct: TypedExprId,
+            environment_struct_type: TypeId,
+            environment_param: FnParamType,
+            environment_param_variable_id: VariableId,
+            prologue_stmts: SV8<TypedStmtId>,
+            capture_bindings: SV4<(VariableId, SpanId)>,
+        }
+
         let lambda = self.ast.exprs.get(expr_id).expect_lambda();
-        let lambda_scope_id =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LambdaScope, ScopeOwnerId::None);
+        let lambda_captures = lambda.captures;
         let lambda_arguments = lambda.arguments;
         let lambda_body = lambda.body;
         let span = lambda.span;
         let body_span = self.ast.exprs.get_span(lambda.body);
-        let mut typed_params = self.types.mem.new_list(lambda_arguments.len() + 1);
+        let is_closure = !lambda_captures.is_empty();
         if let Some(t) = ctx.expected_type_id {
             debug!(
                 "lambda expected type is {} {}",
@@ -10230,15 +10267,76 @@ impl TypedProgram {
         let expected_return_type = declared_expected_return_type
             .or(expected_function_type.as_ref().map(|f| f.return_type));
 
+        // Captures resolve at the creation site, in the enclosing scope; each becomes a
+        // field of the environment struct. Resolving through eval_variable applies the
+        // lambda-boundary check when this lambda is itself nested inside another one.
+        let captures = self.ast.mem.getn(lambda_captures);
+        let mut capture_field_types: SV4<TypeId> = smallvec![];
+        let mut env_field_types = self.types.mem.new_list(lambda_captures.len());
+        let mut env_field_exprs = self.mem.new_list(lambda_captures.len());
+        for (index, capture) in captures.iter().enumerate() {
+            if captures[..index].iter().any(|prior| prior.name == capture.name) {
+                return failf!(
+                    capture.span,
+                    "Duplicate capture '{}'",
+                    self.ident_str(capture.name)
+                );
+            }
+            if self.ast.mem.getn(lambda_arguments).iter().any(|a| a.binding == capture.name) {
+                return failf!(
+                    capture.span,
+                    "Capture '{}' collides with a parameter name",
+                    self.ident_str(capture.name)
+                );
+            }
+            let parsed_var = self.ast.exprs.add(
+                ParsedExpr::Variable(parse::ParsedVariable {
+                    name: QIdent::naked(capture.name, capture.span),
+                    span: capture.span,
+                }),
+                false,
+                None,
+            );
+            let (variable_id, variable_expr) =
+                self.eval_variable(parsed_var, ctx.scope_id, false)?;
+            let Some(variable_id) = variable_id else {
+                return failf!(
+                    capture.span,
+                    "Captures must name variables; '{}' is not one",
+                    self.ident_str(capture.name)
+                );
+            };
+            if self.variables.get(variable_id).global_id().is_some() {
+                return failf!(
+                    capture.span,
+                    "'{}' is a global; globals are always in scope and need not be captured",
+                    self.ident_str(capture.name)
+                );
+            }
+            let field_expr = if capture.by_ref {
+                self.synth_address_of(variable_expr, capture.span, false)?
+            } else {
+                variable_expr
+            };
+            let field_type = self.exprs.get_type(field_expr);
+            capture_field_types.push(field_type);
+            env_field_types.push(StructTypeField {
+                type_id: field_type,
+                name: capture.name,
+                span: capture.span,
+            });
+            env_field_exprs.push(StructLiteralField { name: capture.name, expr: Some(field_expr) });
+        }
+        let env_fields_handle = self.types.mem.list_to_handle(env_field_types);
+        let env_field_exprs_handle = self.mem.list_to_handle(env_field_exprs);
+
+        let lambda_scope_id =
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LambdaScope, ScopeOwnerId::None);
         self.scopes.add_lambda_info(
             lambda_scope_id,
-            ScopeLambdaInfo {
-                expected_return_type,
-                captured_variables: smallvec![],
-                capture_exprs_for_fixup: smallvec![],
-                returned_variable: None,
-            },
+            ScopeLambdaInfo { expected_return_type, returned_variable: None },
         );
+        let mut typed_params = self.types.mem.new_list(lambda_arguments.len() + 1);
 
         for (index, arg) in self.ast.mem.getn(lambda_arguments).iter().enumerate() {
             let arg_type_id = match arg.ty {
@@ -10291,6 +10389,112 @@ impl TypedProgram {
             param_variables.push(TypedFunctionParam { variable_id, span: parsed_arg.span })
         }
 
+        // For closures, the environment param, its casted alias, and one `let` per capture
+        // are all in place before the body is evaluated, so capture references in the body
+        // resolve as ordinary variables.
+        let closure_setup: Option<ClosureSetup> = if is_closure {
+            let environment_struct_type =
+                self.types.add_anon(Type::Struct(StructType::struc(env_fields_handle)));
+            let environment_struct = self.exprs.add(
+                TypedExpr::Struct(StructLiteral { fields: env_field_exprs_handle }),
+                environment_struct_type,
+                span,
+            );
+            let environment_struct_reference_type =
+                self.types.add_reference_type(environment_struct_type);
+
+            // We decay down to POINTER so that the function calls typecheck
+            let environment_param = FnParamType {
+                name: self.ast.idents.b.lambda_env_var_name,
+                type_id: POINTER_TYPE_ID,
+                is_context: false,
+                is_lambda_env: true,
+                is_macro_code: false,
+            };
+            let environment_param_variable_id = self.variables.add(Variable {
+                name: environment_param.name,
+                type_id: POINTER_TYPE_ID,
+                owner_scope: lambda_scope_id,
+                kind: VariableKind::FnParam(FunctionId::PENDING),
+                flags: VariableFlags::empty(),
+                usage_count: 0,
+                usages: vec![],
+                defn_span: span,
+            });
+
+            let environment_param_access_expr = self.exprs.add(
+                TypedExpr::Variable(VariableExpr { variable_id: environment_param_variable_id }),
+                POINTER_TYPE_ID,
+                body_span,
+            );
+            let cast_env_param = self.synth_cast(
+                environment_param_access_expr,
+                environment_struct_reference_type,
+                CastType::PointerToReference,
+                None,
+            );
+            let environment_casted_variable = self.synth_variable_defn(
+                self.ast.idents.b.env,
+                cast_env_param,
+                false,
+                lambda_scope_id,
+                None,
+            );
+
+            let mut prologue_stmts: SV8<TypedStmtId> = smallvec![];
+            prologue_stmts.push(environment_casted_variable.defn_stmt);
+            let mut capture_bindings: SV4<(VariableId, SpanId)> = smallvec![];
+            for (field_index, capture) in captures.iter().enumerate() {
+                let field_type = capture_field_types[field_index];
+                let env_variable_expr =
+                    self.synth_variable_expr(environment_casted_variable.variable_id, capture.span);
+                let env_deref = self.synth_dereference(env_variable_expr);
+                let field_access = self.exprs.add(
+                    TypedExpr::StructFieldAccess(FieldAccess {
+                        base_struct: env_deref,
+                        field_index: field_index as u32,
+                    }),
+                    field_type,
+                    capture.span,
+                );
+                // The binding behaves exactly like a user-written `let <name> = env.<name>`
+                let defn_stmt = self.stmts.next_id();
+                let variable_id = self.variables.add(Variable {
+                    name: capture.name,
+                    owner_scope: lambda_scope_id,
+                    type_id: field_type,
+                    kind: VariableKind::Stack(defn_stmt),
+                    flags: VariableFlags::empty(),
+                    usage_count: 0,
+                    usages: vec![],
+                    defn_span: capture.span,
+                });
+                self.stmts.add_expected_id(
+                    TypedStmt::Let(LetStmt {
+                        variable_id,
+                        variable_type: field_type,
+                        initializer: Some(field_access),
+                        span: capture.span,
+                    }),
+                    defn_stmt,
+                );
+                self.scopes.add_variable(lambda_scope_id, capture.name, variable_id);
+                self.emit_ls_entity(capture.span, LsEntityKind::Variable { variable_id });
+                prologue_stmts.push(defn_stmt);
+                capture_bindings.push((variable_id, capture.span));
+            }
+            Some(ClosureSetup {
+                environment_struct,
+                environment_struct_type,
+                environment_param,
+                environment_param_variable_id,
+                prologue_stmts,
+                capture_bindings,
+            })
+        } else {
+            None
+        };
+
         // Coerce parsed expr to block, call eval_block with needs_terminator = true
         let ast_body_block =
             self.ensure_parsed_expr_to_block(lambda_body, ParsedBlockKind::FunctionBody);
@@ -10328,10 +10532,8 @@ impl TypedProgram {
             write!(s, "{}", lambda_scope_id.as_u32()).unwrap();
         });
 
-        let lambda_info = self.scopes.get_lambda_info(lambda_scope_id);
-
-        // NO CAPTURES! Optimize this lambda down into a regular function
-        if lambda_info.captured_variables.is_empty() {
+        // No captures: this is just a regular function
+        if !is_closure {
             let function_type = self.types.add_anon(Type::Function(FunctionType {
                 physical_params: self.types.mem.list_to_handle(typed_params),
                 return_type,
@@ -10382,78 +10584,29 @@ impl TypedProgram {
             return Ok(expr_id);
         }
 
-        let mut env_field_types =
-            self.types.mem.new_list(lambda_info.captured_variables.len() as u32);
-        let mut env_exprs = self.mem.new_list(lambda_info.captured_variables.len() as u32);
-        for captured_variable_id in lambda_info.captured_variables.iter() {
-            let v = self.variables.get(*captured_variable_id);
-            env_field_types.push(StructTypeField { type_id: v.type_id, name: v.name, span });
-            let var_expr = self.exprs.add(
-                TypedExpr::Variable(VariableExpr { variable_id: *captured_variable_id }),
-                v.type_id,
-                span,
-            );
-            env_exprs.push(StructLiteralField { name: v.name, expr: Some(var_expr) });
-        }
-        let env_fields_handle = self.types.mem.list_to_handle(env_field_types);
-        let environment_struct_type =
-            self.types.add_anon(Type::Struct(StructType::struc(env_fields_handle)));
-
-        let environment_struct = self.exprs.add(
-            TypedExpr::Struct(StructLiteral { fields: self.mem.list_to_handle(env_exprs) }),
+        let ClosureSetup {
+            environment_struct,
             environment_struct_type,
-            body_span,
-        );
+            environment_param,
+            environment_param_variable_id,
+            prologue_stmts,
+            capture_bindings,
+        } = closure_setup.unwrap();
 
-        let environment_struct_reference_type =
-            self.types.add_reference_type(environment_struct_type);
-        // We decay down to POINTER so that the function calls typecheck
-        let environment_param = FnParamType {
-            name: self.ast.idents.b.lambda_env_var_name,
-            type_id: POINTER_TYPE_ID,
-            is_context: false,
-            is_lambda_env: true,
-            is_macro_code: false,
-        };
-        let body_function_id = self.functions.next_id();
-        let environment_param_variable_id = self.variables.add(Variable {
-            name: environment_param.name,
-            type_id: POINTER_TYPE_ID,
-            owner_scope: lambda_scope_id,
-            kind: VariableKind::FnParam(body_function_id),
-            flags: VariableFlags::empty(),
-            usage_count: 0,
-            usages: vec![],
-            defn_span: span,
-        });
+        for (variable_id, capture_span) in capture_bindings.iter() {
+            self.warn_variable_usage_counts("Captured variable", *variable_id, *capture_span);
+        }
+
         typed_params.insert(0, environment_param);
         param_variables.insert(
             0,
             TypedFunctionParam { variable_id: environment_param_variable_id, span: body_span },
         );
 
-        // We decay down to POINTER so that the function calls typecheck
-        let environment_param_access_expr = self.exprs.add(
-            TypedExpr::Variable(VariableExpr { variable_id: param_variables[0].variable_id }),
-            POINTER_TYPE_ID,
-            body_span,
-        );
-        let cast_env_param = self.synth_cast(
-            environment_param_access_expr,
-            environment_struct_reference_type,
-            CastType::PointerToReference,
-            None,
-        );
-        let environment_casted_variable = self.synth_variable_defn(
-            self.ast.idents.b.env,
-            cast_env_param,
-            false,
-            lambda_scope_id,
-            None,
-        );
         if let TypedExpr::Block(body) = self.exprs.get_mut(body_expr_id) {
-            let mut new_stmts = self.mem.new_list(body.statements.len() + 1);
-            new_stmts.push(environment_casted_variable.defn_stmt);
+            let mut new_stmts =
+                self.mem.new_list(body.statements.len() + prologue_stmts.len() as u32);
+            new_stmts.extend(&prologue_stmts);
             new_stmts.extend(self.mem.getn(body.statements));
 
             body.statements = self.mem.list_to_handle(new_stmts);
@@ -10461,22 +10614,9 @@ impl TypedProgram {
             panic!()
         }
 
-        let pending_fixups =
-            self.scopes.get_lambda_info(lambda_scope_id).capture_exprs_for_fixup.clone();
-
-        for pending_fixup in pending_fixups {
-            let TypedExpr::PendingCapture(pc) = self.exprs.get(pending_fixup) else {
-                unreachable!()
-            };
-            let pc_span = self.exprs.get_span(pending_fixup);
-            let (field_access_expr, type_id, span_id) = fixup_capture_expr_new(
-                self,
-                environment_casted_variable.variable_id,
-                pc.captured_variable_id,
-                environment_struct_type,
-                pc_span,
-            );
-            self.exprs.set_full(pending_fixup, field_access_expr, type_id, span_id);
+        let body_function_id = self.functions.next_id();
+        for v in param_variables.iter() {
+            self.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(body_function_id)
         }
 
         let function_type = self.types.add_anon(Type::Function(FunctionType {
@@ -10524,39 +10664,12 @@ impl TypedProgram {
             ScopeOwnerId::Lambda(lambda_type_id, body_function_id, lambda_scope_id),
         );
 
-        return Ok(self.exprs.add(
+        Ok(self.exprs.add(
             // Seems lambda is the only TypedExpr that is representable as only its type!
             TypedExpr::Lambda(LambdaExpr { lambda_type: lambda_type_id }),
             lambda_type_id,
             span,
-        ));
-
-        fn fixup_capture_expr_new(
-            k1: &mut TypedProgram,
-            environment_param_variable_id: VariableId,
-            captured_variable_id: VariableId,
-            env_struct_type: TypeId,
-            span: SpanId,
-        ) -> (TypedExpr, TypeId, SpanId) {
-            let v = k1.variables.get(captured_variable_id);
-            let variable_type = v.type_id;
-            let env_struct_reference_type = k1.types.add_reference_type(env_struct_type);
-            // Note: Can't capture 2 variables of the same name in a lambda. Might not
-            //       actually be a problem
-            let (field_index, _env_struct_field) =
-                k1.types.get_struct_field_by_name(env_struct_type, v.name).unwrap();
-            let env_variable_expr = k1.exprs.add(
-                TypedExpr::Variable(VariableExpr { variable_id: environment_param_variable_id }),
-                env_struct_reference_type,
-                span,
-            );
-            k1.register_variable_usage(environment_param_variable_id, span);
-            let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
-                base_struct: k1.synth_dereference(env_variable_expr),
-                field_index: field_index as u32,
-            });
-            (env_field_access, variable_type, span)
-        }
+        ))
     }
 
     fn ensure_parsed_expr_to_block(
@@ -10894,8 +11007,7 @@ impl TypedProgram {
                         .is_some_and(|p| p == NEVER_TYPE_ID),
                     _ => false,
                 };
-                payload_is_never
-                    || sp.payload.is_some_and(|p| self.pattern_matches_uninhabited(p))
+                payload_is_never || sp.payload.is_some_and(|p| self.pattern_matches_uninhabited(p))
             }
             TypedPattern::Struct(stp) => self
                 .patterns
@@ -10903,9 +11015,7 @@ impl TypedProgram {
                 .getn(stp.fields)
                 .iter()
                 .any(|f| self.pattern_matches_uninhabited(f.pattern)),
-            TypedPattern::Reference(refer) => {
-                self.pattern_matches_uninhabited(refer.inner_pattern)
-            }
+            TypedPattern::Reference(refer) => self.pattern_matches_uninhabited(refer.inner_pattern),
             _ => false,
         }
     }
@@ -11414,6 +11524,12 @@ impl TypedProgram {
             },
             Type::Reference(_refer) => match self.types.get(target_type) {
                 Type::Pointer => Ok(Outcome::Cast(CastType::ReferenceToPointer)),
+                Type::AbilityObject(_) => Ok(Outcome::Expr(self.ability_impl_to_dyn_object(
+                    base_expr,
+                    target_type,
+                    ctx.scope_id,
+                    span,
+                )?)),
                 Type::Reference(_) => {
                     self.report_warn(
                         span,
@@ -13096,6 +13212,70 @@ impl TypedProgram {
                         ));
                     }
                 }
+                // Dyn ability erasure: `x.to-dyn[source[t = u8]]()`, or with the
+                // target coming from the expected type
+                let target_dyn_type: Option<TypeId> = match self
+                    .ast
+                    .mem
+                    .get_nth_opt(call.type_args, 0)
+                {
+                    Some(type_arg) => match type_arg.type_expr {
+                        None => None,
+                        Some(type_expr) => {
+                            let mut from_ability = None;
+                            if let ParsedTypeExpr::TypeApplication(app) =
+                                self.ast.type_exprs.get(type_expr)
+                            {
+                                let app = app.clone();
+                                if self.name_resolves_to_ability(ctx.scope_id, &app.name)? {
+                                    let ability_expr = self.ast.mem.push_h(ParsedAbilityExpr {
+                                        name: app.name,
+                                        arguments: app.args,
+                                        span: app.span,
+                                    });
+                                    let signature =
+                                        self.eval_ability_expr(ability_expr, false, ctx.scope_id)?;
+                                    from_ability = Some(
+                                        self.eval_dyn_ability_object_type(signature, app.span)?,
+                                    );
+                                }
+                            }
+                            match from_ability {
+                                Some(t) => Some(t),
+                                None => {
+                                    let evaled = self.eval_type_expr(type_expr, ctx.scope_id)?;
+                                    self.types.get(evaled).as_ability_object().map(|_| evaled)
+                                }
+                            }
+                        }
+                    },
+                    None => ctx
+                        .expected_type_id
+                        .filter(|et| self.types.get(*et).as_ability_object().is_some()),
+                };
+                if let Some(target_dyn_type) = target_dyn_type {
+                    let base = self.eval_expr(base_arg.value, ctx.with_no_expected_type())?;
+                    let base_type = self.exprs.get_type(base);
+                    let base_ref = if self.types.get(base_type).as_reference().is_some() {
+                        base
+                    } else {
+                        // Value form: allocate in the ambient mode, like a closure env
+                        self.synth_typed_call_typed_args(
+                            self.ast.idents.f.mem_new.with_span(call_span),
+                            &[base_type],
+                            &[base],
+                            ctx.with_no_expected_type(),
+                            false,
+                        )?
+                    };
+                    let result = self.ability_impl_to_dyn_object(
+                        base_ref,
+                        target_dyn_type,
+                        ctx.scope_id,
+                        call_span,
+                    )?;
+                    return Ok(CallResolution::OtherExpr(result));
+                }
             } else if fn_name == self.ast.idents.b.as_ {
                 let dest_type = match self.ast.mem.get_nth_opt(call.type_args, 0) {
                     None => match ctx.expected_type_id {
@@ -13173,6 +13353,61 @@ impl TypedProgram {
                     callee: Callee::make_static(method_id),
                     receiver: base_expr,
                 });
+            }
+        }
+
+        // Dynamic dispatch on ability objects: the method must be one of the
+        // object's slots; the object itself supplies the self pointer
+        if let Type::AbilityObject(ao) = self.types.get(base_for_method) {
+            let ao = *ao;
+            let ability = self.abilities.get(ao.specialized_ability_id);
+            let ability_self_type = ability.self_type_id;
+            if let Some(fn_ref) = ability.find_function_by_name(&self.mem, call.name.name) {
+                let object_expr = if self.types.get(base_expr_type).as_reference().is_some() {
+                    self.synth_dereference(base_expr)
+                } else {
+                    base_expr
+                };
+                let repr_fields = self.types.get(ao.struct_representation).expect_struct().fields;
+                let repr_fields = self.types.mem.getn(repr_fields);
+                match repr_fields[1..].iter().position(|f| f.name == call.name.name) {
+                    Some(position) => {
+                        let field_index = (position + 1) as u32;
+                        let slot_ptr_type = repr_fields[position + 1].type_id;
+                        let slot_function_type = self
+                            .types
+                            .get(slot_ptr_type)
+                            .as_function_pointer()
+                            .unwrap()
+                            .function_type_id;
+                        return Ok(CallResolution::MethodCall {
+                            callee: Callee::DynamicAbilityFn {
+                                object_expr,
+                                field_index,
+                                slot_function_type,
+                            },
+                            receiver: object_expr,
+                        });
+                    }
+                    None => {
+                        let impl_arguments = self.mem.pushn(self.types.mem.getn(ao.impl_arguments));
+                        let signature = TypedAbilitySignature {
+                            specialized_ability_id: ao.specialized_ability_id,
+                            impl_arguments,
+                        };
+                        let subst_pairs = self.dyn_ability_subst_pairs(signature);
+                        let reason = self
+                            .dyn_slot_fn_type(ability_self_type, &subst_pairs, fn_ref.function_id)
+                            .err()
+                            .unwrap_or_else(|| "unknown".to_string());
+                        return failf!(
+                            call_span,
+                            "'{}' is not dyn-dispatchable: {}",
+                            self.ident_str(call.name.name),
+                            reason
+                        );
+                    }
+                }
             }
         }
 
@@ -13428,6 +13663,39 @@ impl TypedProgram {
         lambda_object_struct_literal
     }
 
+    pub fn lambda_to_lambda_object(
+        &mut self,
+        lambda_expr: TypedExprId,
+        lambda_type_id: LambdaTypeId,
+        scope_id: ScopeId,
+    ) -> K1Result<TypedExprId> {
+        let span = self.exprs.get_span(lambda_expr);
+        let lambda_type = self.types.lambda_types.get(lambda_type_id);
+        let function_id = lambda_type.function_id;
+        let function_type = lambda_type.function_type;
+        let parsed_id = lambda_type.parsed_id;
+        let lambda_object_type_id =
+            self.types.add_lambda_object(&self.ast.idents, function_type, parsed_id);
+
+        let env_ref = self.synth_typed_call_typed_args(
+            self.ast.idents.f.mem_new.with_span(span),
+            &[self.exprs.get_type(lambda_expr)],
+            &[lambda_expr],
+            EvalExprContext::make(scope_id),
+            false,
+        )?;
+        let env_ptr = self.synth_cast(env_ref, POINTER_TYPE_ID, CastType::ReferenceToPointer, None);
+
+        let fn_ptr_field = StructLiteralField {
+            name: self.ast.idents.b.fn_ptr,
+            expr: Some(self.function_to_reference(function_id, span)),
+        };
+        let env_ptr_field =
+            StructLiteralField { name: self.ast.idents.b.env_ptr, expr: Some(env_ptr) };
+        let fields = self.mem.pushn(&[fn_ptr_field, env_ptr_field]);
+        Ok(self.exprs.add(TypedExpr::Struct(StructLiteral { fields }), lambda_object_type_id, span))
+    }
+
     fn add_lambda_env_to_function_type(&mut self, function_type_id: TypeId) -> TypeId {
         let function_type = self.types.get(function_type_id).as_function().unwrap();
         let call_conv = function_type.abi_mode;
@@ -13639,6 +13907,8 @@ impl TypedProgram {
             known_args.map(|ka| ka.1),
             ctx.scope_id,
             true,
+            false,
+            None,
         )?;
         let mut args_and_params = self.tmp.new_list(aligned.len() + 1);
         if let Some(expected_type) = ctx.expected_type_id {
@@ -14081,10 +14351,13 @@ impl TypedProgram {
         known_typed_args: Option<&[TypedExprId]>,
         calling_scope: ScopeId,
         tolerate_missing_context_args: bool,
+        skip_leading_receiver_arg: bool,
+        generic_params: Option<MSlice<FnParamType, TypePool>>,
     ) -> K1Result<ArgsAndParams> {
         let fn_name = fn_call.name.name;
         let span = fn_call.span;
         let args_slice = self.ast.mem.getn(fn_call.args);
+        let args_slice = if skip_leading_receiver_arg { &args_slice[1..] } else { args_slice };
         let explicit_context_args = args_slice.iter().any(|a| a.is_explicit_context);
         let named = args_slice.first().is_some_and(|arg| arg.name.is_some());
         let mut final_args: TmpList<MaybeTypedExpr> = self.tmp.new_list(params.len());
@@ -14092,9 +14365,60 @@ impl TypedProgram {
         let all_params = self.types.mem.getn(params);
         if !explicit_context_args {
             for context_param in all_params.iter().filter(|p| p.is_context) {
-                let matching_context_variable =
-                    self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id);
+                let constraint_source_type = match generic_params {
+                    None => context_param.type_id,
+                    Some(gp) => self
+                        .types
+                        .mem
+                        .getn(gp)
+                        .iter()
+                        .find(|p| p.name == context_param.name)
+                        .map(|p| p.type_id)
+                        .unwrap_or(context_param.type_id),
+                };
+                let ability_match = self.find_context_variable_by_ability_constraints(
+                    calling_scope,
+                    constraint_source_type,
+                    span,
+                )?;
+                let matching_context_variable = match ability_match {
+                    Some(v) => {
+                        if generic_params.is_some()
+                            && self.variables.get(v).type_id != context_param.type_id
+                        {
+                            let found = self.variables.get(v);
+                            return failf!(
+                                span,
+                                "Context variable '{}' has type {}, but this call requires context parameter '{}' of type {}; pass the context argument explicitly",
+                                self.ident_str(found.name),
+                                self.type_id_to_string(found.type_id),
+                                self.ident_str(context_param.name),
+                                self.type_id_to_string(context_param.type_id)
+                            );
+                        }
+                        Some(v)
+                    }
+                    None => self
+                        .scopes
+                        .find_context_variable_by_type(calling_scope, context_param.type_id),
+                };
                 if let Some(matching_context_variable) = matching_context_variable {
+                    let found = self.variables.get(matching_context_variable);
+                    self.check_lambda_capture_boundary(
+                        calling_scope,
+                        matching_context_variable,
+                        found.owner_scope,
+                        context_param.name,
+                        span,
+                    )
+                    .map_err(|mut e| {
+                        e.message = format!(
+                            "This call needs context parameter '{}' from outside the lambda: {}",
+                            self.ident_str(context_param.name),
+                            e.message
+                        );
+                        e
+                    })?;
                     let found = self.variables.get(matching_context_variable);
                     final_args.push(MaybeTypedExpr::Typed(self.exprs.add(
                         TypedExpr::Variable(VariableExpr {
@@ -14248,6 +14572,9 @@ impl TypedProgram {
                 let function_type = self.get_callee_function_type(callee);
                 FunctionSignature::make_no_generics(None, function_type)
             }
+            Callee::DynamicAbilityFn { slot_function_type, .. } => {
+                FunctionSignature::make_no_generics(None, *slot_function_type)
+            }
             // Should always be false...
             Callee::DynamicAbstract { function_sig, .. } => *function_sig,
         }
@@ -14274,6 +14601,7 @@ impl TypedProgram {
                     )
                 }
             },
+            Callee::DynamicAbilityFn { slot_function_type, .. } => *slot_function_type,
             Callee::DynamicAbstract { function_sig, .. } => function_sig.function_type,
         }
     }
@@ -14287,6 +14615,7 @@ impl TypedProgram {
             Callee::Builtin { builtin, .. } => Some(*builtin),
             Callee::DynamicFunction { .. } => None,
             Callee::DynamicLambda(_) => None,
+            Callee::DynamicAbilityFn { .. } => None,
             Callee::DynamicAbstract { .. } => None,
         }
     }
@@ -14330,6 +14659,8 @@ impl TypedProgram {
             CallResolution::Call(callee) => (callee, None),
             CallResolution::MethodCall { callee, receiver } => (callee, Some(receiver)),
         };
+        let skip_leading_receiver_arg = matches!(callee, Callee::DynamicAbilityFn { .. });
+        let method_receiver = if skip_leading_receiver_arg { None } else { method_receiver };
         let is_method = method_receiver.is_some();
 
         if let Some(function_id) = callee.maybe_function_id() {
@@ -14397,6 +14728,8 @@ impl TypedProgram {
                     known_args.map(|(_known_types, known_args)| known_args),
                     ctx.scope_id,
                     false,
+                    skip_leading_receiver_arg,
+                    None,
                 )?;
                 self.splice_stashed_args(args_and_params.args, &stashed_args);
                 let mut typechecked_args = self.mem.new_list(args_and_params.len());
@@ -14459,6 +14792,8 @@ impl TypedProgram {
                     known_args.map(|(_known_types, known_args)| known_args),
                     ctx.scope_id,
                     true,
+                    skip_leading_receiver_arg,
+                    None,
                 )?;
                 self.splice_stashed_args(original_args_and_params.args, &stashed_args);
 
@@ -14548,6 +14883,8 @@ impl TypedProgram {
                     known_args.map(|(_known_types, known_args)| known_args),
                     ctx.scope_id,
                     false,
+                    skip_leading_receiver_arg,
+                    Some(params),
                 )?;
 
                 self.splice_stashed_args(args_and_params.args, &stashed_args);
@@ -15157,14 +15494,28 @@ impl TypedProgram {
                 defn_span: generic_param.span,
             });
             if specialized_param_type.is_context {
-                self.scopes.add_context_variable(
+                let added = self.scopes.add_context_variable(
                     spec_fn_scope,
                     name,
                     variable_id,
                     specialized_param_type.type_id,
                 );
+                if !added {
+                    // Substitution collapsed two context param types into one; the first
+                    // registration wins the type key, but the name must still bind
+                    self.scopes.add_variable(spec_fn_scope, name, variable_id);
+                }
+                // Ability keys derive from the *generic* param's constraints so generic
+                // and specialized bodies resolve identically
+                let generic_param_type = self.variables.get(generic_param.variable_id).type_id;
+                self.register_context_param_ability_keys(
+                    spec_fn_scope,
+                    variable_id,
+                    generic_param_type,
+                );
+            } else {
+                self.scopes.add_variable(spec_fn_scope, name, variable_id);
             }
-            self.scopes.add_variable(spec_fn_scope, name, variable_id);
             param_variables.push(TypedFunctionParam { variable_id, span: generic_param.span })
         }
         let specialization_info = SpecializationInfo {
@@ -15379,7 +15730,7 @@ impl TypedProgram {
                 Ok(None)
             }
             ParsedStmt::Let(parsed_let) => {
-                static_assert_size!(parse::ParsedLet, 20);
+                static_assert_size!(parse::ParsedLet, 28);
                 let parsed_let = parsed_let.clone();
                 let annotated_type = match parsed_let.type_expr.as_ref() {
                     None => None,
@@ -15507,12 +15858,34 @@ impl TypedProgram {
                         span: parsed_let.span,
                     });
                     if parsed_let.is_context() {
-                        self.scopes.add_context_variable(
+                        let added = self.scopes.add_context_variable(
                             ctx.scope_id,
                             parsed_let.name,
                             variable_id,
                             variable_type,
                         );
+                        if !added {
+                            return failf!(
+                                parsed_let.span,
+                                "A context variable of type {} already exists in this scope",
+                                self.type_id_to_string(variable_type)
+                            );
+                        }
+                        let ability_exprs: SV4<AstHandle<ParsedAbilityExpr>> = self
+                            .ast
+                            .mem
+                            .getn(parsed_let.context_abilities)
+                            .iter()
+                            .copied()
+                            .collect();
+                        for ability_expr in ability_exprs {
+                            self.add_ability_context_variable(
+                                ability_expr,
+                                variable_id,
+                                variable_type,
+                                ctx.scope_id,
+                            )?;
+                        }
                     } else {
                         self.scopes.add_variable(ctx.scope_id, parsed_let.name, variable_id);
                     }
@@ -16751,6 +17124,418 @@ impl TypedProgram {
         Ok(TypedAbilitySignature { specialized_ability_id: new_ability_id, impl_arguments })
     }
 
+    /// `let context(impl <ability>) x`: check the variable's type implements the ability
+    /// and register it under the ability key. The check is strict (no ref-self coercion)
+    /// because call sites discharge `[t: <ability>]` constraints strictly; accepting a
+    /// by-value binding here would make every consuming call fail, or worse, write into
+    /// a copy.
+    fn add_ability_context_variable(
+        &mut self,
+        ability_expr: AstHandle<ParsedAbilityExpr>,
+        variable_id: VariableId,
+        variable_type: TypeId,
+        scope_id: ScopeId,
+    ) -> K1Result<()> {
+        let signature = self.eval_ability_expr(ability_expr, true, scope_id)?;
+        let ability_span = self.ast.mem.get(ability_expr).span;
+        let ability_id = signature.specialized_ability_id;
+        if let Err(msg) = self.find_or_generate_specialized_ability_impl_for_type(
+            variable_type,
+            ability_id,
+            false,
+            scope_id,
+            ability_span,
+        ) {
+            let reference_would = self
+                .find_or_generate_specialized_ability_impl_for_type(
+                    variable_type,
+                    ability_id,
+                    true,
+                    scope_id,
+                    ability_span,
+                )
+                .is_ok();
+            return failf!(
+                ability_span,
+                "{} does not implement {}: {}{}",
+                self.type_id_to_string(variable_type),
+                self.ident_str(self.abilities.get(ability_id).name),
+                msg,
+                if reference_would {
+                    "\n  A reference to it does; bind one instead: `let context(impl ..) x = value.&`"
+                } else {
+                    ""
+                }
+            );
+        }
+        if !self.scopes.add_context_variable_by_ability(scope_id, ability_id, variable_id) {
+            return failf!(
+                ability_span,
+                "A context variable for ability {} already exists in this scope",
+                self.ident_str(self.abilities.get(ability_id).name)
+            );
+        }
+        Ok(())
+    }
+
+    /// True if every ability-side argument of this (possibly specialized) ability is a
+    /// concrete type. Only such abilities can serve as context-variable lookup keys.
+    fn ability_arguments_all_concrete(&self, ability_id: AbilityId) -> bool {
+        let args = self.abilities.get(ability_id).kind.arguments();
+        self.mem
+            .getn(args)
+            .iter()
+            .all(|nt| !self.types.type_variable_counts.get(nt.type_id).is_abstract())
+    }
+
+    /// Register a function's context param under the ability keys of its type-param
+    /// constraints, so the param can satisfy ability-keyed lookups in the body
+    /// (transitive context threading). Best-effort: a key collision (two context params
+    /// sharing a constraint) poisons the key rather than failing the declaration; only
+    /// a lookup that lands on it errors.
+    fn register_context_param_ability_keys(
+        &mut self,
+        scope_id: ScopeId,
+        variable_id: VariableId,
+        param_type_id: TypeId,
+    ) {
+        if self.types.get(param_type_id).as_type_parameter().is_none() {
+            return;
+        }
+        for handle in self.get_constrained_ability_impls_for_type(param_type_id) {
+            let ability_id = handle.specialized_ability_id;
+            if !self.ability_arguments_all_concrete(ability_id) {
+                continue;
+            }
+            if !self.scopes.add_context_variable_by_ability(scope_id, ability_id, variable_id) {
+                self.scopes.poison_context_ability_key(scope_id, ability_id);
+            }
+        }
+    }
+
+    /// Implicit context lookup for a param whose (generic) type is a type parameter:
+    /// its ability constraints with concrete arguments become lookup keys. Among
+    /// distinct candidate variables, the one hit by the most keys wins; a tie is an
+    /// ambiguity error, as is landing on a poisoned key.
+    fn find_context_variable_by_ability_constraints(
+        &self,
+        scope_id: ScopeId,
+        param_type_id: TypeId,
+        span: SpanId,
+    ) -> K1Result<Option<VariableId>> {
+        if self.types.get(param_type_id).as_type_parameter().is_none() {
+            return Ok(None);
+        }
+        let handles = self.get_constrained_ability_impls_for_type(param_type_id);
+        let mut hits: SV4<(AbilityId, VariableId)> = smallvec![];
+        for handle in &handles {
+            let ability_id = handle.specialized_ability_id;
+            if !self.ability_arguments_all_concrete(ability_id) {
+                continue;
+            }
+            match self.scopes.find_context_variable_by_ability(scope_id, ability_id) {
+                None => {}
+                Some(ContextAbilityEntry::Ambiguous) => {
+                    return failf!(
+                        span,
+                        "Multiple context variables in scope provide ability {}; pass the context argument explicitly",
+                        self.ident_str(self.abilities.get(ability_id).name)
+                    );
+                }
+                Some(ContextAbilityEntry::Unique(v)) => hits.push((ability_id, v)),
+            }
+        }
+        let mut candidates: SV4<(VariableId, usize)> = smallvec![];
+        for &(_, v) in &hits {
+            match candidates.iter_mut().find(|(c, _)| *c == v) {
+                Some((_, n)) => *n += 1,
+                None => candidates.push((v, 1)),
+            }
+        }
+        if candidates.len() <= 1 {
+            return Ok(candidates.first().map(|(v, _)| *v));
+        }
+        let max_keys_hit = candidates.iter().map(|(_, n)| *n).max().unwrap();
+        let mut maximal = candidates.iter().filter(|(_, n)| *n == max_keys_hit);
+        let first = maximal.next().unwrap().0;
+        if maximal.next().is_none() {
+            return Ok(Some(first));
+        }
+        let names = hits
+            .iter()
+            .map(|(a, v)| {
+                format!(
+                    "'{}' (impl {})",
+                    self.ident_str(self.variables.get(*v).name),
+                    self.ident_str(self.abilities.get(*a).name)
+                )
+            })
+            .unique()
+            .join(", ");
+        failf!(
+            span,
+            "Ambiguous context: multiple context variables satisfy this parameter's constraints: {}; pass the context argument explicitly",
+            names
+        )
+    }
+
+    fn dyn_ability_subst_pairs(
+        &self,
+        signature: TypedAbilitySignature,
+    ) -> SV8<TypeSubstitutionPair> {
+        let ability = self.abilities.get(signature.specialized_ability_id);
+        let mut pairs: SV8<TypeSubstitutionPair> = smallvec![];
+        for (param, arg) in self
+            .mem
+            .getn(ability.parameters)
+            .iter()
+            .filter(|p| p.is_impl_param)
+            .zip(self.mem.getn(signature.impl_arguments))
+        {
+            pairs.push(spair! { param.type_variable_id => arg.type_id });
+        }
+        pairs
+    }
+
+    /// Computes the slot function type an ability function gets inside a dyn object,
+    /// or the reason it is excluded from dynamic dispatch. Two shapes are accepted:
+    /// a `self: *mut self` receiver, whose slot replaces self with an opaque state
+    /// pointer in lambda-env position; or a function mentioning self nowhere, whose
+    /// slot is just the substituted signature (the object acts as a type witness and
+    /// no state is passed). Both are physically identical to the impl function, so
+    /// its address is directly callable through the slot.
+    fn dyn_slot_fn_type(
+        &mut self,
+        ability_self_type: TypeId,
+        subst_pairs: &[TypeSubstitutionPair],
+        function_id: FunctionId,
+    ) -> Result<TypeId, String> {
+        let function = self.get_function(function_id);
+        let signature = function.signature();
+        let function_type_id = function.type_id;
+        let has_own_type_params =
+            self.mem.getn(signature.type_params).iter().any(|tp| tp.type_id != ability_self_type);
+        if has_own_type_params {
+            return Err("it has type parameters; call it on a concrete type instead".to_string());
+        }
+        let fn_type = self.types.get(function_type_id).as_function().unwrap();
+        let physical_params = fn_type.physical_params;
+        let return_type = fn_type.return_type;
+        let params = self.types.mem.getn(physical_params);
+        if params.iter().any(|p| p.is_context) {
+            return Err("it takes context parameters".to_string());
+        }
+        let self_probe = [spair! { ability_self_type => NEVER_TYPE_ID }];
+        let has_receiver = params.first().is_some_and(|p| match self.types.get(p.type_id) {
+            Type::Reference(r) => r.inner_type == ability_self_type,
+            _ => false,
+        });
+
+        let mut slot_params = self.types.mem.new_list(physical_params.len());
+        let value_params = if has_receiver {
+            slot_params.push(FnParamType {
+                name: self.ast.idents.b.lambda_env_var_name,
+                type_id: POINTER_TYPE_ID,
+                is_context: false,
+                is_lambda_env: true,
+                is_macro_code: false,
+            });
+            &params[1..]
+        } else {
+            if params.first().is_some_and(|p| p.type_id == ability_self_type) {
+                return Err("it must take self by reference: `self: *mut self`".to_string());
+            }
+            params
+        };
+        for param in value_params {
+            let substituted = self.substitute_in_type(param.type_id, subst_pairs);
+            if self.substitute_in_type(substituted, &self_probe) != substituted {
+                return Err(format!("parameter '{}' mentions self", self.ident_str(param.name)));
+            }
+            slot_params.push(FnParamType { type_id: substituted, ..*param });
+        }
+        let substituted_return = self.substitute_in_type(return_type, subst_pairs);
+        if self.substitute_in_type(substituted_return, &self_probe) != substituted_return {
+            return Err("its return type mentions self".to_string());
+        }
+        let slot_fn_type = self.types.add_anon(Type::Function(FunctionType {
+            physical_params: self.types.mem.list_to_handle(slot_params),
+            return_type: substituted_return,
+            is_lambda: has_receiver,
+            abi_mode: AbiMode::Internal,
+        }));
+        Ok(slot_fn_type)
+    }
+
+    fn eval_dyn_ability_object_type(
+        &mut self,
+        signature: TypedAbilitySignature,
+        span: SpanId,
+    ) -> K1Result<TypeId> {
+        let ability = self.abilities.get(signature.specialized_ability_id);
+        let ability_name = ability.name;
+        let ability_self_type = ability.self_type_id;
+        let ability_functions = ability.functions;
+
+        for arg in self.mem.getn(ability.kind.arguments()) {
+            if self.types.get_type_variable_counts(arg.type_id).type_parameter_count > 0 {
+                return failf!(
+                    span,
+                    "dyn does not yet support generic ability-side arguments; bind '{}' to a concrete type",
+                    self.ident_str(arg.name)
+                );
+            }
+        }
+
+        let subst_pairs = self.dyn_ability_subst_pairs(signature);
+        let mut fields = self.types.mem.new_list(ability_functions.len() + 1);
+        fields.push(StructTypeField {
+            name: self.ast.idents.b.state,
+            type_id: POINTER_TYPE_ID,
+            span,
+        });
+        for fn_ref in self.mem.getn(ability_functions) {
+            match self.dyn_slot_fn_type(ability_self_type, &subst_pairs, fn_ref.function_id) {
+                Ok(slot_fn_type) => {
+                    let slot_ptr_type = self.types.add_function_pointer_type(slot_fn_type);
+                    fields.push(StructTypeField {
+                        name: fn_ref.function_name,
+                        type_id: slot_ptr_type,
+                        span,
+                    });
+                }
+                Err(_reason) => {}
+            }
+        }
+        if fields.len() == 1 {
+            return failf!(
+                span,
+                "Ability '{}' has no dyn-dispatchable functions",
+                self.ident_str(ability_name)
+            );
+        }
+        let fields_handle = self.types.mem.list_to_handle(fields);
+        let struct_representation =
+            self.types.add_anon(Type::Struct(StructType::struc(fields_handle)));
+        let impl_arguments_copy = self.types.mem.pushn(self.mem.getn(signature.impl_arguments));
+        Ok(self.types.add_anon(Type::AbilityObject(AbilityObjectType {
+            specialized_ability_id: signature.specialized_ability_id,
+            impl_arguments: impl_arguments_copy,
+            struct_representation,
+        })))
+    }
+
+    fn ability_impl_to_dyn_object(
+        &mut self,
+        base_expr: TypedExprId,
+        target_dyn_type: TypeId,
+        scope_id: ScopeId,
+        span: SpanId,
+    ) -> K1Result<TypedExprId> {
+        let ao = *self.types.get(target_dyn_type).as_ability_object().unwrap();
+        let base_type = self.exprs.get_type(base_expr);
+        let Some(reference) = self.types.get(base_type).as_reference() else {
+            return failf!(
+                span,
+                "Only references erase to dyn ability objects; got {}. Use `.to-dyn()` on a value to allocate it first",
+                self.type_id_to_string(base_type)
+            );
+        };
+        let implementor_type = reference.inner_type;
+
+        let Ok((impl_handle, _)) = self.find_or_generate_specialized_ability_impl_for_type(
+            implementor_type,
+            ao.specialized_ability_id,
+            false,
+            scope_id,
+            span,
+        ) else {
+            return failf!(
+                span,
+                "{} does not implement ability '{}'",
+                self.type_id_to_string(implementor_type),
+                self.ident_str(self.abilities.get(ao.specialized_ability_id).name)
+            );
+        };
+        let found_impl = self.ability_impls.get(impl_handle.full_impl_id);
+        let found_impl_arguments = found_impl.impl_arguments;
+        debug_assert!(ao.impl_arguments.len() == found_impl_arguments.len());
+        for (dyn_arg, impl_arg) in self
+            .types
+            .mem
+            .getn(ao.impl_arguments)
+            .iter()
+            .zip(self.mem.getn(found_impl_arguments).iter())
+        {
+            debug_assert!(dyn_arg.name == impl_arg.name);
+            if self.get_type_id_resolved(dyn_arg.type_id, scope_id)
+                != self.get_type_id_resolved(impl_arg.type_id, scope_id)
+            {
+                kbail!(
+                    self,
+                    span,
+                    "{} implements '{}', but with {} = {}, not {} = {}",
+                    implementor_type,
+                    self.abilities.get(ao.specialized_ability_id).name,
+                    impl_arg.name,
+                    impl_arg.type_id,
+                    dyn_arg.name,
+                    dyn_arg.type_id,
+                );
+            }
+        }
+
+        let repr_fields = self.types.get(ao.struct_representation).expect_struct().fields;
+        let repr_fields = self.types.mem.getn(repr_fields);
+
+        let state_expr =
+            self.synth_cast(base_expr, POINTER_TYPE_ID, CastType::ReferenceToPointer, None);
+        let mut literal_fields = self.mem.new_list(repr_fields.len() as u32);
+        literal_fields
+            .push(StructLiteralField { name: self.ast.idents.b.state, expr: Some(state_expr) });
+        for field in &repr_fields[1..] {
+            let fn_ref = self
+                .abilities
+                .get(ao.specialized_ability_id)
+                .find_function_by_name(&self.mem, field.name)
+                .unwrap();
+            let fn_index = fn_ref.index;
+            let impl_function = *self
+                .ability_impls
+                .get(impl_handle.full_impl_id)
+                .function_at_index(&self.mem, fn_index);
+            match impl_function {
+                AbilityImplFunction::FunctionId(impl_fn_id) => {
+                    // Typing the fn-pointer expr with the slot's type is the erasure:
+                    // physically identical; a self receiver arrives as the state pointer
+                    let fn_ptr_expr = self.exprs.add(
+                        TypedExpr::FunctionPointer(FunctionPointerExpr { function_id: impl_fn_id }),
+                        field.type_id,
+                        span,
+                    );
+                    literal_fields
+                        .push(StructLiteralField { name: field.name, expr: Some(fn_ptr_expr) });
+                }
+                AbilityImplFunction::Abstract(_) => {
+                    // Inside an abstract (where-bound generic) body; never lowered.
+                    let placeholder = self.synth_cast(
+                        base_expr,
+                        target_dyn_type,
+                        CastType::AbilityImplToDynObject,
+                        Some(span),
+                    );
+                    return Ok(placeholder);
+                }
+            }
+        }
+        let fields_handle = self.mem.list_to_handle(literal_fields);
+        Ok(self.exprs.add(
+            TypedExpr::Struct(StructLiteral { fields: fields_handle }),
+            target_dyn_type,
+            span,
+        ))
+    }
+
     fn declare_function(
         &mut self,
         parsed_function_id: ParsedFunctionId,
@@ -16943,6 +17728,7 @@ impl TypedProgram {
                         self_.type_id_to_string(type_id)
                     );
                 }
+                self_.register_context_param_ability_keys(fn_scope_id, variable_id, type_id);
             } else {
                 if !self_.scopes.add_variable(fn_scope_id, fn_param.name, variable_id) {
                     return failf!(
@@ -17757,8 +18543,7 @@ impl TypedProgram {
                         self.ident_str(parsed_ability.name)
                     );
                 }
-                self.scopes
-                    .set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
+                self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
                 (namespace_id, ns_scope_id)
             }
         };
@@ -17910,6 +18695,13 @@ impl TypedProgram {
         }
         self.abilities.get_mut(ability_id).functions = self.mem.list_to_handle(typed_functions);
         Ok(ability_id)
+    }
+
+    fn name_resolves_to_ability(&self, scope_id: ScopeId, name: &QIdent) -> K1Result<bool> {
+        if self.find_ability_namespaced(scope_id, name)?.is_some() {
+            return Ok(true);
+        }
+        Ok(name.path.is_empty() && self.scopes.find_pending_ability(scope_id, name.name).is_some())
     }
 
     fn find_ability_or_declare(
@@ -19549,6 +20341,9 @@ impl TypedProgram {
             Type::LambdaObject(_) => {
                 dst.push(alive(self.pattern_ctors.add(PatternCtor::LambdaObject)))
             }
+            Type::AbilityObject(_) => {
+                dst.push(alive(PatternCtorId::OPAQUE)) // An opaque atom: only bindings match
+            }
             Type::StaticValue(_) => dst.push(alive(self.pattern_ctors.add(PatternCtor::ValueType))),
             Type::Never => {}
             _ => self.report_hint(
@@ -20233,6 +21028,7 @@ impl TypedProgram {
             }
             Type::Lambda(_)
             | Type::LambdaObject(_)
+            | Type::AbilityObject(_)
             | Type::TypeParameter(_)
             | Type::Generic(_)
             | Type::FunctionTypeParameter(_)

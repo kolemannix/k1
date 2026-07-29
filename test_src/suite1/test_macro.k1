@@ -83,20 +83,16 @@ fn test-code-builder() {
   assert-equals(built.chunks.get(1).text, "1 + 2")
 }
 
-// Factored out: a lexically nested block would need transitive lambda
-// capture, which is not yet supported
-fn emit-inner(cb: *mut code-builder) {
-  cb.block-close(":ok v ->", "},", fn. {
-    cb.line("v")
-  })
-}
-
 fn test-emitter() {
   let cb-storage = code-builder/new()
   let cb = cb-storage.&
-  cb.block("fn f()", fn. {
+  // The nested block exercises transitive capture: the inner lambda captures
+  // `cb` from the outer lambda's body scope
+  cb.block("fn f()", fn[cb]. {
     cb.line("let x = 1")
-    emit-inner(cb)
+    cb.block-close(":ok v ->", "},", fn[cb]. {
+      cb.line("v")
+    })
   })
   assert-equals(cb.build().text(), "fn f() {\n  let x = 1\n  :ok v -> {\n    v\n  },\n}\n")
 
@@ -114,7 +110,7 @@ fn test-emitter() {
 
   let cb3-storage = code-builder/new()
   let cb3 = cb3-storage.&
-  cb3.sep(["a", "b", "c"], ", ", fn s. cb3.write(s))
+  cb3.sep(["a", "b", "c"], ", ", fn[cb3] s. cb3.write(s))
   assert-equals(cb3.build().text(), "a, b, c")
 }
 

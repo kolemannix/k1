@@ -28,9 +28,7 @@ fn define-impl(base-type-id: u64, type-name: string, members: span[{ name: strin
   // We crack open a namespace to put some goodies inside
   code.writeln("ns for $type-name {")
 
-  // This actually gets captured by the lambda below
-  let bit-index-val = 0
-  let bit-index: *mut size = &bit-index-val
+  let bit-index = 0
 
   // Let's analyze each member we were passed, and perform the actual bitfield layouting work once.
   // We'll make a list of an unnamed (anonymous) little struct type for our info we'll need later
@@ -45,7 +43,7 @@ fn define-impl(base-type-id: u64, type-name: string, members: span[{ name: strin
     raw-value: usize,
     // offset: the bit pos that the mask starts at; where the value lives; how much to shift
     offset: size
-  }] = list/from-mapping(members, fn member. {
+  }] = list/from-mapping(members, fn[bit-index.&, total-bits] member. {
     let bits = member.bits
     if bit-index.* + bits > total-bits crash("Too big: ${bit-index.* + bits}")
     let raw-value = u64/bitmask-low(bits)

@@ -557,7 +557,6 @@ impl TypedProgram {
                 });
             }
 
-            // An Inference Pair for each parameter/argument pair
             let first_value_pair_index = inference_pairs.len() as u32;
             inference_pairs.extend(args_and_params.iter(&self.tmp).map(|(expr, param)| {
                 let passed_type = match expr {
@@ -1119,6 +1118,23 @@ impl TypedProgram {
                     passed_lambda.function_type,
                     param_lambda.function_type,
                 ),
+            (Type::AbilityObject(passed_ao), Type::AbilityObject(slot_ao)) => {
+                if passed_ao.specialized_ability_id != slot_ao.specialized_ability_id
+                    || passed_ao.impl_arguments.len() != slot_ao.impl_arguments.len()
+                {
+                    return TypeUnificationResult::NonMatching("Unrelated dyn ability types");
+                }
+                let passed_args = self.types.mem.getn(passed_ao.impl_arguments);
+                let slot_args = self.types.mem.getn(slot_ao.impl_arguments);
+                for (passed_arg, slot_arg) in passed_args.iter().zip(slot_args) {
+                    let result = self
+                        .unify_and_find_substitutions_rec(passed_arg.type_id, slot_arg.type_id);
+                    if let TypeUnificationResult::NonMatching(_) = result {
+                        return result;
+                    }
+                }
+                TypeUnificationResult::Matching
+            }
             (Type::StaticValue(passed_value_type), Type::StaticValue(param_value_type)) => self
                 .unify_and_find_substitutions_rec(
                     passed_value_type.family_type_id,

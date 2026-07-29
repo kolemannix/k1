@@ -201,7 +201,7 @@ fn emit-leafs(cb: *mut code-builder, entries: span[entry], idxs: list[size], d: 
     if en.method is :get and not head-present {
       cond = "$cond or header.method == llhttp/method:HEAD"
     }
-    cb.block("if $cond", fn. emit-leaf-body(cb, entries.get(gi), d))
+    cb.block("if $cond", fn[cb, entries, gi, d]. emit-leaf-body(cb, entries.get(gi), d))
   }
   let first = entries.get(idxs.get(0))
   let allowed = list/empty[string]()
@@ -219,7 +219,7 @@ fn emit-seg-edges(cb: *mut code-builder, entries: span[entry], group: list[size]
       let en = entries.get(gi)
       if en.path.len() > d and en.path.get(d) is :text lt and lt == t { sub.push(gi) }
     }
-    cb.block("if sd$d == ${str-lit(t)}", fn. emit-node(cb, entries, sub, d + 1))
+    cb.block("if sd$d == ${str-lit(t)}", fn[cb, entries, sub, d]. emit-node(cb, entries, sub, d + 1))
   }
   if caps.len() > 0 {
     emit-node(cb, entries, caps, d + 1)
@@ -264,10 +264,10 @@ fn emit-node(cb: *mut code-builder, entries: span[entry], group: list[size], d: 
   }
 
   if lit-texts.len() > 0 or caps.len() > 0 {
-    cb.block("if sp.more or sp.count > $d", fn. emit-seg-edges(cb, entries, group, d, lit-texts, caps))
+    cb.block("if sp.more or sp.count > $d", fn[cb, entries, group, d, lit-texts, caps]. emit-seg-edges(cb, entries, group, d, lit-texts, caps))
   }
   if exact.len() > 0 {
-    cb.block("if (not sp.more) and sp.count == $d", fn. emit-leafs(cb, entries, exact, d))
+    cb.block("if (not sp.more) and sp.count == $d", fn[cb, entries, exact, d]. emit-leafs(cb, entries, exact, d))
   }
   if rests.len() > 0 {
     emit-leafs(cb, entries, rests, d)
@@ -279,7 +279,7 @@ fn emit-node(cb: *mut code-builder, entries: span[entry], group: list[size], d: 
 fn emit-parse-fn(cb: *mut code-builder, base: string, entries: span[entry]) {
   // Captures in the parsed route are views into the url's memory (the request
   // arena): a route value must not outlive its request
-  cb.block("fn parse(header: http/header): result[$base, routing/route-error]", fn. {
+  cb.block("fn parse(header: http/header): result[$base, routing/route-error]", fn[cb, entries]. {
     cb.line(`let url = header.url`)
     cb.line(`if url.is-empty() or url.get(0) != '/' { return :err :not-found }`)
     cb.line(`let qi = url.index-of('?')`)
@@ -329,23 +329,23 @@ fn emit-url-arm(cb: *mut code-builder, en: entry) {
 fn emit-url-arms(cb: *mut code-builder, entries: span[entry]) {
   for en in entries {
     if params(en).len() == 0 {
-      cb.block-close(":${en.name} ->", "},", fn. emit-url-arm(cb, en))
+      cb.block-close(":${en.name} ->", "},", fn[cb, en]. emit-url-arm(cb, en))
     } else {
-      cb.block-close(":${en.name} p ->", "},", fn. emit-url-arm(cb, en))
+      cb.block-close(":${en.name} p ->", "},", fn[cb, en]. emit-url-arm(cb, en))
     }
   }
 }
 
 fn emit-url-match(cb: *mut code-builder, entries: span[entry]) {
-  cb.block("self is", fn. emit-url-arms(cb, entries))
+  cb.block("self is", fn[cb, entries]. emit-url-arms(cb, entries))
 }
 
 fn emit-url-fn(cb: *mut code-builder, base: string, entries: span[entry]) {
-  cb.block("fn url[w: writer](self: $base, w)", fn. emit-url-match(cb, entries))
+  cb.block("fn url[w: writer](self: $base, w)", fn[cb, entries]. emit-url-match(cb, entries))
 }
 
 fn emit-url-string-fn(cb: *mut code-builder, base: string) {
-  cb.block("fn url-string(self: $base): string", fn. {
+  cb.block("fn url-string(self: $base): string", fn[cb]. {
     cb.line(`let b = string-builder/new()`)
     cb.line(`self.url(b.&)`)
     cb.line(`b.build()`)
@@ -373,7 +373,7 @@ fn define-impl(base: string, entries: span[entry]): code {
   }
   cb.line("type $base = either { ${join(variants, ", ")} }")
 
-  cb.block("ns for $base", fn. {
+  cb.block("ns for $base", fn[cb, base, entries]. {
     emit-parse-fn(cb, base, entries)
     emit-url-fn(cb, base, entries)
     emit-url-string-fn(cb, base)

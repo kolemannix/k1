@@ -1,8 +1,6 @@
 ns stream_test
 
-use std/dyn-source
 use std/source
-use std/source-async
 use std/sink
 use std/pull
 use std/waker
@@ -20,7 +18,7 @@ use std/rc-byte-stream
 fn test-run-to-sum() {
   let nums: span[int] = [1, 2, 3, 4, 5]
   let summer: sum-sink[int] = .{ total = 0 }
-  assert-equals(source/from-span(nums, chunk-size = 2).run-to(&summer), 15)
+  assert-equals(source/run-to(source/from-span(nums, chunk-size = 2), &summer), 15)
 }
 
 fn expect-one(p: pull[int]): int {
@@ -47,7 +45,7 @@ fn test-channel() {
   assert(chan.push(30))
   assert(not chan.push(40))
 
-  let src = dyn-source/erase-async(chan)
+  let src = chan.to-dyn[source[t = int]]()
   let wakes = 0
   src.start(.{ state = (&wakes).as[ptr], wake-fn = fn(p: ptr) { p.rw[int]().* = p.rw[int]().* + 1 } })
   chan.flush()

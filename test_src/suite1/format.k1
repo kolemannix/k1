@@ -2,7 +2,7 @@ ns format-test
 
 fn test() {
   let world = "Budapest"
-  let get-world = fn. world
+  let get-world = fn[world]. world
 
   // string-builder implements `writer`
   let w = string-builder/new()

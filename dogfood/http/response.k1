@@ -2,9 +2,7 @@
 // A strict body is just a one-group stream with a known Content-Length; a
 // streamed body goes out chunked-transfer-encoded.
 
-use std/dyn-source
 use std/source
-use std/source-async
 use std/pull
 use std/waker
 
@@ -12,7 +10,7 @@ type http-response = {
   status: u16,
   content-type: string,
   extra-headers: span[string],
-  body: either { complete(span[span[u8]]), stream(dyn-source[u8]) },
+  body: either { complete(span[span[u8]]), stream(dyn[source[t = u8]]) },
 }
 
 ns response {
@@ -34,7 +32,7 @@ ns response {
       body = :complete span/single("Method Not Allowed\n".span-bytes()),
     }
   }
-  fn stream(content-type: string, source: dyn-source[u8]): http-response {
+  fn stream(content-type: string, source: dyn[source[t = u8]]): http-response {
     .{ status = 200, content-type, extra-headers = [], body = :stream source }
   }
 
@@ -65,23 +63,25 @@ impl source[t = u8] for group-source {
 // reusable buffers overwritten on each next(), so long-lived streams don't
 // grow the request arena.
 type chunked-encoder = {
-  upstream: dyn-source[u8],
+  upstream: dyn[source[t = u8]],
   prefix: list[u8],
   parts: list[span[u8]],
   finished: bool,
 }
 
-fn chunked(upstream: dyn-source[u8]): dyn-source[u8] {
+fn chunked(upstream: dyn[source[t = u8]]): dyn[source[t = u8]] {
   let state: *mut chunked-encoder = mem/new(.{
     upstream,
     prefix = list/empty[u8](),
     parts = list/empty[span[u8]](),
     finished = false,
   })
-  dyn-source/erase-async(state)
+  state.to-dyn()
 }
 
 impl source[t = u8] for chunked-encoder {
+  fn start(self: *mut chunked-encoder, waker: waker) { self.upstream.start(waker) }
+  fn stop(self: *mut chunked-encoder) { self.upstream.stop() }
   fn next(self: *mut chunked-encoder): pull[u8] {
     if self.finished { return :done }
     self.upstream.next() is {
@@ -109,11 +109,6 @@ impl source[t = u8] for chunked-encoder {
   }
 }
 
-impl source-async for chunked-encoder {
-  fn start(self: *mut chunked-encoder, waker: waker) { self.upstream.start(waker) }
-  fn stop(self: *mut chunked-encoder) { self.upstream.stop() }
-}
-
 let hex-digits: string = "0123456789abcdef"
 fn push-hex(out: *mut list[u8], value: size) {
   if value >= 16 { push-hex(out, value / 16) }
@@ -129,7 +124,7 @@ ns response-writer {
 
   type driver = {
     connection: *mut connection,
-    stream: dyn-source[u8],
+    stream: dyn[source[t = u8]],
     write-req: *mut uv/write,
     bufs: list[uv/buf],
     parked: bool,
@@ -147,7 +142,7 @@ ns response-writer {
         for seg in segments { total = total + seg.len() }
         out.write("Content-Length: $total\r\n\r\n")
         let group: *mut group-source = mem/new(.{ group = segments, done = false })
-        dyn-source/erase(group)
+        group.to-dyn[source[t = u8]]()
       },
       :stream source -> {
         out.write("Transfer-Encoding: chunked\r\n\r\n")

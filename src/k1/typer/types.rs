@@ -437,7 +437,8 @@ pub struct LambdaType {
     // This kinda crosses the streams; its a value expression in a type, but
     // that's because a lambda's environment is basically values baked into a function
     // Its almost like a comptime-known value, aka the type 5
-    // This expression must be run from the spot the lambda is defined
+    // This expression must be run from the spot the lambda is defined; the env
+    // struct by value is the lambda's entire runtime value.
     pub environment_struct: TypedExprId,
 }
 
@@ -445,6 +446,20 @@ pub struct LambdaType {
 pub struct LambdaObjectType {
     pub function_type: TypeId,
     pub parsed_id: ParsedId,
+    pub struct_representation: TypeId,
+}
+
+/// `dyn[some-ability[args...]]`: an ability erased to an inline table.
+/// Ability-side arguments are baked into the specialized ability id;
+/// impl-side arguments are stored here (types-arena copy, so TypePool can
+/// hash/compare/count without the program arena). The runtime value is
+/// `struct_representation`: `{ state: ptr, <fn-name>: *fn(ptr, ...), .. }`
+/// with one field per dyn-dispatchable ability function, in ability
+/// declaration order.
+#[derive(Clone, Copy)]
+pub struct AbilityObjectType {
+    pub specialized_ability_id: AbilityId,
+    pub impl_arguments: MSlice<NameAndType, TypePool>,
     pub struct_representation: TypeId,
 }
 
@@ -499,6 +514,7 @@ pub enum Type {
     FunctionPointer(FunctionPointerType),
     Lambda(LambdaTypeId),
     LambdaObject(LambdaObjectType),
+    AbilityObject(AbilityObjectType),
 
     StaticValue(StaticValueType),
 
@@ -631,6 +647,18 @@ impl TypePool {
                 }
             }
             (Type::LambdaObject(_co1), Type::LambdaObject(_co2)) => false,
+            // Unlike lambda objects, ability objects are interned by content:
+            // every mention of dyn[a[x = t]] must be the same type
+            (Type::AbilityObject(ao1), Type::AbilityObject(ao2)) => {
+                ao1.specialized_ability_id == ao2.specialized_ability_id
+                    && ao1.impl_arguments.len() == ao2.impl_arguments.len()
+                    && self
+                        .mem
+                        .getn(ao1.impl_arguments)
+                        .iter()
+                        .zip(self.mem.getn(ao2.impl_arguments))
+                        .all(|(a1, a2)| a1.name == a2.name && a1.type_id == a2.type_id)
+            }
             (Type::StaticValue(vt1), Type::StaticValue(vt2)) => vt1.value_id == vt2.value_id,
             (t1, t2) => {
                 if t1.kind_name() == t2.kind_name() {
@@ -725,6 +753,13 @@ impl TypePool {
                 co.function_type.hash(state);
                 co.struct_representation.hash(state);
             }
+            Type::AbilityObject(ao) => {
+                ao.specialized_ability_id.hash(state);
+                for arg in self.mem.getn(ao.impl_arguments) {
+                    arg.name.hash(state);
+                    arg.type_id.hash(state);
+                }
+            }
             Type::StaticValue(svt) => {
                 svt.family_type_id.hash(state);
                 svt.value_id.hash(state)
@@ -764,6 +799,7 @@ impl Type {
             Type::FunctionPointer(_) => "function_ptr",
             Type::Lambda(_) => "lambda",
             Type::LambdaObject(_) => "lambdaobj",
+            Type::AbilityObject(_) => "abilityobj",
             Type::StaticValue(_) => "value",
             Type::Array(_) => "array",
             Type::Vector(_) => "vector",
@@ -900,6 +936,12 @@ impl Type {
     pub fn as_lambda(&self) -> Option<LambdaTypeId> {
         match self {
             Type::Lambda(l) => Some(*l),
+            _ => None,
+        }
+    }
+    pub fn as_ability_object(&self) -> Option<&AbilityObjectType> {
+        match self {
+            Type::AbilityObject(ao) => Some(ao),
             _ => None,
         }
     }
@@ -1752,6 +1794,8 @@ impl TypePool {
 
     pub const LAMBDA_OBJECT_FN_PTR_INDEX: usize = 0;
     pub const LAMBDA_OBJECT_ENV_PTR_INDEX: usize = 1;
+    /// Ability objects: field 0 is the state pointer; fn-ptr fields follow
+    pub const ABILITY_OBJECT_STATE_INDEX: usize = 0;
 
     pub fn add_lambda_object(
         &mut self,
@@ -1905,6 +1949,17 @@ impl TypePool {
             }
             // But a lambda object is generic if its function is generic
             Type::LambdaObject(co) => *self.type_variable_counts.get(co.function_type),
+            // An ability object is generic if any of its impl arguments are:
+            // dyn[source[t = t]] inside a generic fn must substitute at instantiation.
+            // Ability-side args are baked into the specialized ability id and are
+            // required to be concrete at dyn-type formation, so they contribute none.
+            Type::AbilityObject(ao) => {
+                let mut result = EMPTY;
+                for arg in self.mem.getn(ao.impl_arguments) {
+                    result = result.add(self.type_variable_counts.get(arg.type_id));
+                }
+                result
+            }
             Type::StaticValue(svt) => {
                 let this = if svt.value_id.is_none() {
                     TypeVariableInfo {
@@ -2174,6 +2229,9 @@ impl TypePool {
             }
             Type::LambdaObject(lam_obj) => {
                 self.add_physical_duplicate(static_values, type_id, lam_obj.struct_representation)
+            }
+            Type::AbilityObject(ao) => {
+                self.add_physical_duplicate(static_values, type_id, ao.struct_representation)
             }
             Type::StaticValue(_vt) => PhysicalTypeResult::Yes(PhysicalType::EMPTY),
             Type::Never => PhysicalTypeResult::Never,

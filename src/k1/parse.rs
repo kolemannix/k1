@@ -313,6 +313,8 @@ pub struct ParsedLet {
     pub name: StringId,
     pub type_expr: Option<ParsedTypeExprId>,
     pub value: Option<ParsedExprId>,
+    /// `let context(impl <ability>, ..) x`: abilities keying this context variable
+    pub context_abilities: AstSlice<AstHandle<ParsedAbilityExpr>>,
     pub span: SpanId,
     flags: u8,
 }
@@ -320,17 +322,6 @@ pub struct ParsedLet {
 impl ParsedLet {
     pub const FLAG_CONTEXT: u8 = 1 << 0;
     pub const FLAG_RETURNED: u8 = 1 << 2;
-
-    pub fn make_flags(context: bool, returned: bool) -> u8 {
-        let mut flags = 0;
-        if context {
-            flags |= Self::FLAG_CONTEXT;
-        }
-        if returned {
-            flags |= Self::FLAG_RETURNED;
-        }
-        flags
-    }
 
     pub fn set_context(&mut self) {
         self.flags |= Self::FLAG_CONTEXT;
@@ -642,8 +633,18 @@ pub struct LambdaArgDefn {
     pub span: SpanId,
 }
 
+/// One entry of a lambda's capture list: `fn[a, b.&](...)`.
+/// `by_ref` means the env stores the variable's address.
+#[derive(Clone, Copy)]
+pub struct LambdaCapture {
+    pub name: StringId,
+    pub by_ref: bool,
+    pub span: SpanId,
+}
+
 #[derive(Clone)]
 pub struct ParsedLambda {
+    pub captures: AstSlice<LambdaCapture>,
     pub arguments: AstSlice<LambdaArgDefn>,
     pub return_type: Option<ParsedTypeExprId>,
     pub body: ParsedExprId,
@@ -1004,7 +1005,7 @@ pub enum ParsedStmt {
     Defer(ParsedDefer),           // defer arena.reset()
     LoneExpression(ParsedExprId), // println("asdfasdf")
 }
-static_assert_size!(ParsedStmt, 24);
+static_assert_size!(ParsedStmt, 32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParsedBlockKind {
@@ -4164,9 +4165,45 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let start = self.peek();
         match start.kind {
             K::KeywordFn => Ok(()),
-            _ => Err(error_expected("lambda starting with \\ or fn", start)),
+            _ => Err(error_expected("lambda starting with fn", start)),
         }?;
         self.advance();
+
+        let mut captures: SV4<LambdaCapture> = smallvec![];
+        if let Some(open_bracket) = self.maybe_consume(K::OpenBracket) {
+            loop {
+                let next = self.peek();
+                match next.kind {
+                    K::CloseBracket => {
+                        self.advance();
+                        break;
+                    }
+                    K::Comma => {
+                        self.advance();
+                    }
+                    K::Ident => {
+                        let (name_token, name) = self.expect_ident()?;
+                        let mut span = name_token.span;
+                        let mut by_ref = false;
+                        let (dot, amp) = self.peek_two();
+                        if dot.is_kind_nonspaced(K::Dot) && amp.kind == K::Amp {
+                            self.advance();
+                            let amp_token = self.tokens.next();
+                            by_ref = true;
+                            span = self.extend_span(span, amp_token.span);
+                        }
+                        captures.push(LambdaCapture { name, by_ref, span });
+                    }
+                    _ => return Err(error_expected("capture name, `.&`, `,`, or `]`", next)),
+                }
+            }
+            if captures.is_empty() {
+                return Err(error(
+                    "Empty capture list; use plain `fn` for a non-capturing function literal",
+                    open_bracket,
+                ));
+            }
+        }
 
         let maybe_open_paren = self.maybe_consume(K::OpenParen);
         let mut arguments: SV4<LambdaArgDefn> = smallvec![];
@@ -4220,8 +4257,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let body = self.expect_expression()?;
         let span = self.extend_span(start.span, self.get_expression_span(body));
-        let lambda =
-            ParsedLambda { arguments: self.ast.mem.pushn(&arguments), return_type, body, span };
+        let lambda = ParsedLambda {
+            captures: self.ast.mem.pushn(&captures),
+            arguments: self.ast.mem.pushn(&arguments),
+            return_type,
+            body,
+            span,
+        };
         Ok(self.add_expression(ParsedExpr::Lambda(lambda)))
     }
 
@@ -4257,12 +4299,28 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let Some(eaten_keyword) = self.maybe_consume(K::KeywordLet) else { return Ok(None) };
         self.emit_semantic_token(eaten_keyword, SemanticTokenKind::Keyword);
         let mut flags = 0u8;
+        let mut context_abilities: List<AstHandle<ParsedAbilityExpr>, _> = self.ast.mem.new_list(0);
         loop {
             let p = self.peek();
             match p.kind {
                 K::KeywordContext => {
                     self.advance();
-                    flags |= ParsedLet::FLAG_CONTEXT
+                    flags |= ParsedLet::FLAG_CONTEXT;
+                    // `let context(impl <ability>, ..) x = ...`: an ability-keyed context variable
+                    if self.peek().kind == K::OpenParen {
+                        self.advance();
+                        self.expect_kind(K::KeywordImpl)?;
+                        self.eat_delimited_arena(
+                            "Context abilities",
+                            &mut context_abilities,
+                            K::Comma,
+                            K::CloseParen,
+                            |p| {
+                                let ability_expr = p.expect_ability_expr()?;
+                                Ok(p.ast.mem.push_h(ability_expr))
+                            },
+                        )?;
+                    }
                 }
                 K::Ident if self.token_chars(p) == "returned" => {
                     self.advance();
@@ -4287,6 +4345,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name: self.make_ident(name_token),
             type_expr: typ,
             value: initializer_expression,
+            context_abilities: self.ast.mem.list_to_handle(context_abilities),
             flags,
             span: name_token.span,
         }))
@@ -5474,7 +5533,21 @@ impl ParsedProgram {
                 w.write_str(" }")
             }
             ParsedExpr::Lambda(lambda) => {
-                w.write_char('\\')?;
+                w.write_str("fn")?;
+                if !lambda.captures.is_empty() {
+                    w.write_char('[')?;
+                    for (index, capture) in self.mem.getn(lambda.captures).iter().enumerate() {
+                        if index > 0 {
+                            w.write_str(", ")?;
+                        }
+                        self.display_ident(w, capture.name)?;
+                        if capture.by_ref {
+                            w.write_str(".&")?;
+                        }
+                    }
+                    w.write_char(']')?;
+                }
+                w.write_char('(')?;
                 for (index, arg) in self.mem.getn(lambda.arguments).iter().enumerate() {
                     self.display_ident(w, arg.binding)?;
                     if let Some(ty) = arg.ty {
@@ -5486,7 +5559,7 @@ impl ParsedProgram {
                         w.write_str(", ")?;
                     }
                 }
-                w.write_str(" -> ")?;
+                w.write_str(") ")?;
                 self.display_expr_id(w, lambda.body)?;
                 Ok(())
             }

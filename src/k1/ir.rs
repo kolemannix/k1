@@ -1992,13 +1992,10 @@ fn compile_expr(
                 match &call.callee {
                     Callee::StaticFunction(function_id) => callee = IrCallee::Direct(*function_id),
                     Callee::StaticLambda { function_id, lambda_value_expr, .. } => {
+                        // The body takes its env by pointer; spill the by-value env
                         let lambda_env = compile_expr(b, None, *lambda_value_expr)?;
                         let lambda_env_type_id = b.k1.exprs.get_type(*lambda_value_expr);
                         let env_pt = b.get_physical_type(lambda_env_type_id);
-                        //b.k1.write_location(&mut stderr(), b.cur_span);
-                        // TODO: Lambda environments really need to go on the arena
-                        // Here is where we literally put the env on the stack, even if it contains
-                        // no stack-volatile things!
                         let env_ptr = b.push_alloca(env_pt, "lambda env location").as_value();
                         store_value(b, env_pt, env_ptr, lambda_env, "store lambda env for call");
                         callee = IrCallee::Direct(*function_id);
@@ -2030,6 +2027,36 @@ fn compile_expr(
 
                         callee = IrCallee::Indirect(callee_fn_type, fn_ptr);
                         environment_arg = Some(env);
+                    }
+                    Callee::DynamicAbilityFn { object_expr, field_index, slot_function_type } => {
+                        let object = compile_expr(b, None, *object_expr)?;
+                        let object_type_id = b.k1.exprs.get_type(*object_expr);
+                        let object_pt = b.get_physical_type(object_type_id).expect_agg();
+                        let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
+                        let fn_ptr_addr = b.push_struct_offset(
+                            object_pt,
+                            object,
+                            *field_index,
+                            "dyn ability fn ptr offset",
+                        );
+                        let fn_ptr = load_value(b, ptr_pt, fn_ptr_addr, false, "");
+                        callee = IrCallee::Indirect(callee_fn_type, fn_ptr);
+
+                        // Receiver-shape slots take self via the state pointer as
+                        // physical arg 0; no-self slots use the object as a type
+                        // witness only and pass no state
+                        let takes_state =
+                            b.k1.types.get(*slot_function_type).as_function().unwrap().is_lambda;
+                        if takes_state {
+                            let state_addr = b.push_struct_offset(
+                                object_pt,
+                                object,
+                                TypePool::ABILITY_OBJECT_STATE_INDEX as u32,
+                                "dyn ability state offset",
+                            );
+                            let state = load_value(b, ptr_pt, state_addr, false, "");
+                            environment_arg = Some(state);
+                        }
                     }
                     Callee::DynamicFunction { function_pointer_expr } => {
                         let callee_inst = compile_expr(b, None, *function_pointer_expr)?;
@@ -2392,7 +2419,6 @@ fn compile_expr(
             b.k1.ir.units_pending_compile.insert(fpe.function_id, ());
             Ok(stored)
         }
-        TypedExpr::PendingCapture(_) => b_ice!(b, "ir on PendingCapture"),
         TypedExpr::StaticValue(stat) => {
             let t = b.get_physical_type(expr_type);
             let value = compile_static_value(b, stat.value_id, t);
@@ -3204,58 +3230,9 @@ fn compile_cast(
             let stored = store_scalar_if_dst(b, dst, inst.as_value());
             Ok(stored)
         }
-        CastType::LambdaToLambdaObject => {
-            let lambda_type_id = b.k1.get_expr_type(c.base_expr).as_lambda().unwrap();
-            let lambda_type = b.k1.types.lambda_types.get(lambda_type_id);
-            let lambda_function_id = lambda_type.function_id;
-
-            let lambda_env_type = b.get_physical_type(lambda_type.env_type);
-            // Representing the environment of lambda objects as a pointer
-            // is problematic since the lambda object will only be 'good' as long as that pointer
-            // is 'good', and currently we use stack space for it. But it could be that the
-            // environment itself is very stable, for example 2 integers and a pointer to the heap.
-            // But, all lambda objects must be the same size. It seems maybe we should
-            // heap-allocate the environments, but in k1 that would mean using the current
-            // allocator, or requiring one.
-            // So I think I need to finalize a bit more what the 'current allocator' means, then
-            // can update this to put it there. Likely an arena push
-            let obj_struct_type = b.get_physical_type(b.k1.types.builtins.dyn_lambda_obj.unwrap());
-
-            // Now we need a pointer to the environment
-            // dyn lambda durability: Change to arena.push_struct call. This feels like
-            //           code that might be able to live in typer.rs
-            let lambda_env_ptr = b.push_alloca(lambda_env_type, "lambda env storage").as_value();
-
-            // Produces just the lambda's environment as a value. We don't need the function
-            // pointer because we know it from the type still
-            // We store the environment directly into our stack pointer
-            let _lambda_env_inst = compile_expr(b, Some(lambda_env_ptr), c.base_expr)?;
-
-            let fn_ptr = Value::FunctionAddr(lambda_function_id);
-
-            let lam_obj_ptr = match dst {
-                Some(dst) => dst,
-                None => b.push_alloca(obj_struct_type, "lambda object storage").as_value(),
-            };
-            // Store fn ptr, then env ptr into the object
-            let lam_obj_fn_ptr_addr = b.push_struct_offset(
-                obj_struct_type.expect_agg(),
-                lam_obj_ptr,
-                TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
-                "",
-            );
-            b.push_store(lam_obj_fn_ptr_addr, fn_ptr, "");
-
-            let lam_obj_env_ptr_addr = b.push_struct_offset(
-                obj_struct_type.expect_agg(),
-                lam_obj_ptr,
-                TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
-                "",
-            );
-            b.push_store(lam_obj_env_ptr_addr, lambda_env_ptr, "");
-
-            Ok(lam_obj_ptr)
-        }
+        // Only occurs in abstract (where-bound generic) bodies, which are never
+        // lowered; specialization re-evaluates and produces the struct literal
+        CastType::AbilityImplToDynObject => b_ice!(b, "ir on abstract dyn-ability erasure"),
     }
 }
 

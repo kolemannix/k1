@@ -1,8 +1,6 @@
 "C with generics, live interactive programming, typeclasses, next-gen macros, full compile-time execution, and ADTs"
 
 next up
-- all the macro nocommits
-- clean up the lsp completions and test them
 - more dogfooding, do the 2 static sites
 
 Minor and ideas
@@ -82,13 +80,13 @@ http dogfood list
 # Bugs
 - [x] [major] Support (co)recursive Generics
 - [ ] [major] Allow pattern matching *into* recursive types (currently we just terminate)
-- [ ] captured context parameter results in 'Missing variable' in ir
+- [x] accidentally captured context parameter results in 'Missing variable' in ir
 - [x] Out of order type definitions don't work with aliases
 - [x] same-level recursion is not caught behind option
 - [ ] Require that a blanket impl's params appear in the Self type
 - [ ] Test handling of NaN and Infinity literals, other float edge cases
 
-## [ ] vector types
+## [x] vector types
 
 ## [ ] inline asm
 
@@ -97,14 +95,9 @@ http dogfood list
 ## [ ] token stream based macros
 
 ## [x] expr-level macros
-- [ ] source-location preservation via 'code' type
+- [x] source-location preservation via 'code' type
 
 ## [x] meta-based macros
-
-## [ ] Context ability types (context system revamp?)
-- [ ] AbilitySignature as context variable kind in addition to Type (enables context writer)
-  - let context(impl Alloc) temp = mem/AllocMode.Arena;
-  - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
 
 ## [ ] very readable compiler trace, incl specialization args, for debugging
 
@@ -194,6 +187,8 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: system interface, 'Write' ability and intrinsic fix.
 
 ## Project: More LSP features
+- [ ] Workspace symbols
+- [ ] Rest of the completion sites (fill in as I hit them)
 - [x] Hover first pass
 - [x] Hover much better
 - [x] Hover no more markdown
@@ -202,12 +197,11 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] Proper handling of 'trivia' (whitespace and comments)
 - [x] Go-to
 - [x] find references
-- [ ] Workspace symbols
-- [ ] Rest of the entity kinds
-  - [ ] Types
+- [x] Rest of the entity kinds
+  - [x] Types
   - [x] Variables (locals, globals, fn params)
+- [x] Completion
 
-- [ ] Completion
 
 ## Project: Actual modules, library vs binary compile, allow linker options
 - [x] Introduce 'module' w/ kind (lib/bin/core), deps, and namespace+scope
