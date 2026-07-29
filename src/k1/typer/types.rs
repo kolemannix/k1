@@ -1521,7 +1521,8 @@ impl TypedProgram {
             counts = counts.add(self.type_variable_counts.get(*arg));
         }
         *self.type_variable_counts.get_mut(id) = counts;
-        *self.type_instance_info.get_mut(id) = Some(GenericInstanceInfo { generic_parent, type_args });
+        *self.type_instance_info.get_mut(id) =
+            Some(GenericInstanceInfo { generic_parent, type_args });
         self.insert_specialization(generic_parent, type_args, id);
         id
     }
@@ -1583,7 +1584,8 @@ impl TypedProgram {
                 }
             }
         }
-        let type_id = self.add_anon_type(Type::InferenceHole(InferenceHoleType { index, static_type }));
+        let type_id =
+            self.add_anon_type(Type::InferenceHole(InferenceHoleType { index, static_type }));
         if static_type.is_none() {
             let index = index as usize;
             if self.hole_type_cache.len() <= index {
@@ -1738,7 +1740,6 @@ impl TypedProgram {
             struct_representation,
         }))
     }
-
 
     pub fn get_type_id_dereferenced(&self, type_id: TypeId) -> TypeId {
         match self.types.get(type_id) {
@@ -2128,7 +2129,11 @@ impl TypedProgram {
         }
     }
 
-    pub fn add_physical_duplicate(&mut self, origin_type_id: TypeId, other: TypeId) -> PhysicalTypeResult {
+    pub fn add_physical_duplicate(
+        &mut self,
+        origin_type_id: TypeId,
+        other: TypeId,
+    ) -> PhysicalTypeResult {
         match self.get_physical_type(other) {
             PhysicalTypeResult::No => PhysicalTypeResult::No,
             PhysicalTypeResult::Never => PhysicalTypeResult::Never,
@@ -2173,10 +2178,13 @@ impl TypedProgram {
         }
     }
 
-    pub fn get_agg_struct_layout(&self, struct_agg_id: AggregateTypeId) -> SV4<StructField> {
+    pub fn get_agg_struct_layout(
+        &self,
+        struct_agg_id: AggregateTypeId,
+    ) -> MSlice<StructField, TypedProgram> {
         match self.agg_types.get(struct_agg_id).agg_type {
             AggType::Sum(e) => self.get_agg_struct_layout(e.struct_repr),
-            AggType::Struct { fields } => self.mem.getn_sv4(fields),
+            AggType::Struct { fields } => fields,
             AggType::Array { .. } => panic!("Array is not a struct"),
             AggType::Vector { .. } => panic!("vector is not a struct"),
             AggType::Union { .. } => panic!("union has no struct-like layout"),
@@ -2318,8 +2326,7 @@ impl TypedProgram {
     }
 
     pub fn get_specialization(&mut self, base: TypeId, args: TypeIdSlice) -> Option<TypeId> {
-        let args: SV4<TypeId> = SV4::from_slice(self.mem.getn(args));
-        self.get_specialization_slice(base, &args)
+        self.get_specialization_slice(base, self.mem.getn(args))
     }
 
     pub fn get_specialization_slice(&mut self, base: TypeId, args: &[TypeId]) -> Option<TypeId> {

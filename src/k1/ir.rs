@@ -1576,9 +1576,7 @@ impl<'k1> Builder<'k1> {
         let (return_type, diverges) = self.get_function_return_type(function_type.return_type);
 
         let mut phys_params = self.k1.ir.mem.new_list(function_type.physical_params.len());
-        for (index, param) in
-            self.k1.mem.getn(function_type.physical_params).iter().enumerate()
-        {
+        for (index, param) in self.k1.mem.getn(function_type.physical_params).iter().enumerate() {
             let pt = self.get_physical_type(param.type_id);
             if pt.is_empty() {
                 continue;
@@ -3546,9 +3544,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 }
                 Inst::VecOp { id } => {
                     let vop = ir.vec_ops.get(id);
-                    if vop.op != VecOpIr::ToMask
-                        && !get_value_kind(ir, vop.dst).is_storage()
-                    {
+                    if vop.op != VecOpIr::ToMask && !get_value_kind(ir, vop.dst).is_storage() {
                         errors.push(format!("i{inst_id}: vec op dst is not storage"))
                     }
                 }
@@ -3606,8 +3602,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 Inst::Unreachable => (),
                 Inst::Phi { incomings, .. } => {
                     for incoming in ir.mem.getn(incomings) {
-                        let Ok(_value_type) =
-                            get_value_kind(ir, incoming.value).expect_value()
+                        let Ok(_value_type) = get_value_kind(ir, incoming.value).expect_value()
                         else {
                             errors.push(format!("i{inst_id}: phi type not a value kind"));
                             continue;

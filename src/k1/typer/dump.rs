@@ -772,9 +772,8 @@ impl TypedProgram {
                 self.display_expr_id(get_payload_expr.sum_expr, w, indentation)?;
                 w.write_str(".")?;
                 let enum_type = self.get_expr_type(get_payload_expr.sum_expr).expect_sum();
-                let variant = self
-                    
-                    .sum_variant_by_index(enum_type.variants, get_payload_expr.variant_index);
+                let variant =
+                    self.sum_variant_by_index(enum_type.variants, get_payload_expr.variant_index);
                 self.write_ident(w, variant.name)?;
                 Ok(())
             }
@@ -873,7 +872,6 @@ impl TypedProgram {
                 if pretty {
                     let enum_type = self.types.get(*enum_type_id).expect_enum();
                     let value_name = self
-                        
                         .mem
                         .getn(enum_type.member_values)
                         .iter()

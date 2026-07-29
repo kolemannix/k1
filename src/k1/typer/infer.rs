@@ -847,8 +847,7 @@ impl TypedProgram {
             if new_sol == sol {
                 continue;
             }
-            let now_solved =
-                self.get_type_variable_counts(new_sol).inference_variable_count == 0;
+            let now_solved = self.get_type_variable_counts(new_sol).inference_variable_count == 0;
             let slot = &mut self.ictx_mut().slots[i];
             slot.solution = Some(new_sol);
             if now_solved {
@@ -1073,7 +1072,6 @@ impl TypedProgram {
                     let passed_fn = *passed_fn;
                     let slot_fn = *slot_fn;
                     for (passed_param, slot_param) in self
-                        
                         .mem
                         .getn(passed_fn.logical_params())
                         .iter()

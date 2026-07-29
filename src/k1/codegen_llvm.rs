@@ -1349,12 +1349,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         is_return: bool,
     ) -> BasicValueEnum<'ctx> {
         let pt = cg_ty.pt();
-        debug!(
-            "marshalling k1 {}: {} with {:?}",
-            k1_value,
-            self.k1.pt_to_string(pt),
-            mapping
-        );
+        debug!("marshalling k1 {}: {} with {:?}", k1_value, self.k1.pt_to_string(pt), mapping);
         match mapping {
             AbiParamMapping::VoidReturnEmpty => panic!("VoidReturnEmpty should be handled"),
             AbiParamMapping::ScalarInRegister => k1_value,
@@ -1631,11 +1626,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 PhysicalTypeEnum::Scalar(st) => matches!(st, ScalarType::Pointer),
                 PhysicalTypeEnum::Agg(agg_id) => match c.k1.agg_types.get(agg_id).agg_type {
                     AggType::Struct { fields } => {
-                        c.k1
-                            .mem
-                            .getn(fields)
-                            .iter()
-                            .any(|f| pt_contains_pointer(c, f.field_t))
+                        c.k1.mem.getn(fields).iter().any(|f| pt_contains_pointer(c, f.field_t))
                     }
                     AggType::Array { element_pt, .. } => pt_contains_pointer(c, element_pt),
                     AggType::Vector { .. } => false,
@@ -1875,7 +1866,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 }
             };
 
-        let params = self.k1.mem.getn_sv4(fn_type.physical_params);
+        let params = self.k1.mem.getn(fn_type.physical_params);
         let mut param_types: SV8<BasicMetadataTypeEnum<'ctx>> = smallvec::smallvec![];
         for p in params.iter() {
             param_types.push(intrinsic_param_type(self, p.type_id)?.into());
@@ -3449,8 +3440,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     let agg_record = c.k1.agg_types.get(agg_id);
                     match agg_record.agg_type {
                         AggType::Struct { fields } => {
-                            c.k1
-                                .mem
+                            c.k1.mem
                                 .getn(fields)
                                 .iter()
                                 .all(|f| visit(c, element, count, f.field_t))
@@ -3936,8 +3926,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let sum_agg_id = self.k1.get_physical_type(sum.sum_type_id).unwrap().expect_agg();
                 let sum_agg_record = self.k1.agg_types.get(sum_agg_id);
                 let sum_pt = sum_agg_record.agg_type.expect_sum();
-                let variant =
-                    self.k1.mem.get_nth(sum_pt.variants, sum.variant_index as usize);
+                let variant = self.k1.mem.get_nth(sum_pt.variants, sum.variant_index as usize);
                 let variant_tag = variant.tag;
                 let envelope_layout = sum_agg_record.layout;
                 let variant_payload_pt = variant.payload;
@@ -3991,8 +3980,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             StaticValue::LinearContainer(cont) => {
                 let cont = *cont;
-                let element_type =
-                    self.k1.get_linear_container_element(cont.type_id).unwrap();
+                let element_type = self.k1.get_linear_container_element(cont.type_id).unwrap();
                 let span_elements = self.k1.static_values.mem.getn(cont.elements);
                 let array_value =
                     self.codegen_static_elements_array(element_type, span_elements, depth)?;
@@ -4289,7 +4277,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     ) -> StructValue<'ctx> {
         let buffer_type_id = self
             .k1
-            
             .mem
             .get_nth_lt(self.k1.types.get(span_type_id).expect_struct().fields, 0)
             .type_id;

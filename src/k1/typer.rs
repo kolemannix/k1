@@ -761,7 +761,6 @@ pub struct TypePattern {
 // <type> ::= "type["<ty expr>"]("<pattern>")"
 
 type TypedPatternId = Handle<TypedPattern, TypedPatternPool>;
-type TypedPatternSlice = MSlice<TypedPatternId, TypedPatternPool>;
 
 pub struct TypedPatternPool {
     mem: kmem::Mem<TypedPatternPool>,
@@ -782,10 +781,6 @@ impl TypedPatternPool {
 
     pub fn add(&mut self, pattern: TypedPattern) -> TypedPatternId {
         self.mem.push_h(pattern)
-    }
-
-    pub fn add_pattern_slice(&mut self, data: &[TypedPatternId]) -> TypedPatternSlice {
-        self.mem.pushn(data)
     }
 
     pub fn get_pattern_bindings(
@@ -3898,10 +3893,8 @@ impl TypedProgram {
                     })
                 }
 
-                let struct_defn = Type::Struct(StructType {
-                    fields: fields.to_slice(),
-                    record_kind: kind,
-                });
+                let struct_defn =
+                    Type::Struct(StructType { fields: fields.to_slice(), record_kind: kind });
                 let type_id = self.add_anon_type(struct_defn);
 
                 Ok(type_id)
@@ -4019,8 +4012,7 @@ impl TypedProgram {
                 let has_payloads =
                     self.ast.mem.getn(sum.variants).iter().any(|v| v.payload.is_some());
                 if has_payloads {
-                    let mut variants: List<TypedSumVariant, _> =
-                        self.mem.new_list(variant_count);
+                    let mut variants: List<TypedSumVariant, _> = self.mem.new_list(variant_count);
                     let mut next_tag = tag_type.zero();
                     for (index, v) in self.ast.mem.getn(sum.variants).iter().enumerate() {
                         let payload_type_id = match &v.payload {
@@ -4070,10 +4062,7 @@ impl TypedProgram {
                             .map(|v| format!("  {} {}", self.ident_str(v.name), v.tag_value))
                             .join("\n")
                     );
-                    let sum_type = Type::Sum(SumType {
-                        variants: variants.to_slice(),
-                        tag_type,
-                    });
+                    let sum_type = Type::Sum(SumType { variants: variants.to_slice(), tag_type });
                     let sum_type_id = self.add_anon_type(sum_type);
                     Ok(sum_type_id)
                 } else {
@@ -4204,7 +4193,6 @@ impl TypedProgram {
                             "return" => Ok(fun.return_type),
                             _other => {
                                 if let Some(param) = self
-                                    
                                     .mem
                                     .getn(fun.logical_params())
                                     .iter()
@@ -4365,8 +4353,7 @@ impl TypedProgram {
                 let parsed_literal = *parsed_literal;
                 let (static_value_id, inner_type_id) =
                     self.literal_to_static_value_and_type(&parsed_literal, scope_id, None)?;
-                let static_type_id =
-                    self.add_value_type(inner_type_id, Some(static_value_id));
+                let static_type_id = self.add_value_type(inner_type_id, Some(static_value_id));
                 Ok(static_type_id)
             }
         }?;
@@ -4451,9 +4438,8 @@ impl TypedProgram {
                     );
                 }
                 let new_function_type = self.add_lambda_env_to_function_type(inner);
-                let lambda_object_type = self.add_lambda_object(new_function_type,
-                    ty_app_id.into(),
-                );
+                let lambda_object_type =
+                    self.add_lambda_object(new_function_type, ty_app_id.into());
 
                 Ok(Some(lambda_object_type))
             }
@@ -4508,10 +4494,8 @@ impl TypedProgram {
                     combined_fields.push(*field);
                 }
 
-                let new_struct = Type::Struct(StructType {
-                    fields: combined_fields.to_slice(),
-                    record_kind,
-                });
+                let new_struct =
+                    Type::Struct(StructType { fields: combined_fields.to_slice(), record_kind });
                 let type_id = self.add_anon_type(new_struct);
 
                 Ok(Some(type_id))
@@ -4551,7 +4535,6 @@ impl TypedProgram {
                 }
                 let struct2_fields = self.mem.getn(struct2.fields);
                 let new_fields = self
-                    
                     .mem
                     .getn(struct1.fields)
                     .iter()
@@ -4751,8 +4734,7 @@ impl TypedProgram {
                     "Using cached generic instance {} for {} args {:?}",
                     self.type_id_to_string(existing),
                     self.name_of_type(generic_type),
-                    self
-                        .mem
+                    self.mem
                         .getn(type_arguments)
                         .iter()
                         .map(|p| self.type_id_to_string(*p))
@@ -5188,8 +5170,7 @@ impl TypedProgram {
             .iter()
             .all(|p| self.type_variable_counts.get(p.from).inference_variable_count > 0);
         if is_all_holes {
-            let no_holes =
-                self.type_variable_counts.get(type_id).inference_variable_count == 0;
+            let no_holes = self.type_variable_counts.get(type_id).inference_variable_count == 0;
             // Optimization: if every 'from' type is an inference hole, and the type
             // contains no inference holes, which we compute on creation, its a no-op
             // This prevents useless deep type traversals
@@ -5234,9 +5215,9 @@ impl TypedProgram {
             let original_args = spec_info.type_args;
             let mut new_type_args = self.tmp.new_list(original_args.len());
             let mut any_change = false;
-            for prev_arg in self.mem.getn_sv4(original_args) {
-                let new_type = self.substitute_in_type(prev_arg, substitution_pairs);
-                if new_type != prev_arg {
+            for prev_arg in self.mem.getn(original_args) {
+                let new_type = self.substitute_in_type(*prev_arg, substitution_pairs);
+                if new_type != *prev_arg {
                     any_change = true;
                 }
                 new_type_args.push(new_type);
@@ -5291,10 +5272,7 @@ impl TypedProgram {
                     let generic_instance_info = generic_parent_to_attach
                         .map(|parent| GenericInstanceInfo {
                             generic_parent: parent,
-                            type_args: self
-                                
-                                .mem
-                                .pushn_iter(substitution_pairs.iter().map(|p| p.to)),
+                            type_args: self.mem.pushn_iter(substitution_pairs.iter().map(|p| p.to)),
                         })
                         .or_else(|| self.get_instance_info(type_id).cloned());
 
@@ -5332,10 +5310,7 @@ impl TypedProgram {
                     let generic_instance_info = generic_parent_to_attach
                         .map(|parent| GenericInstanceInfo {
                             generic_parent: parent,
-                            type_args: self
-                                
-                                .mem
-                                .pushn_iter(substitution_pairs.iter().map(|p| p.to)),
+                            type_args: self.mem.pushn_iter(substitution_pairs.iter().map(|p| p.to)),
                         })
                         .or_else(|| self.get_instance_info(type_id).cloned());
                     let new_variants_handle = self.mem.pushn(new_variants.as_slice());
@@ -5743,11 +5718,10 @@ impl TypedProgram {
                                 Some((named_type, _)) => {
                                     // Consider generics: 'Opt.Some' applies to all Opt[T]s, so we consider
                                     // the 'base' type
-                                    let base_type =
-                                        match self.get_instance_info(target_type_id) {
-                                            Some(info) => info.generic_parent,
-                                            None => target_type_id,
-                                        };
+                                    let base_type = match self.get_instance_info(target_type_id) {
+                                        Some(info) => info.generic_parent,
+                                        None => target_type_id,
+                                    };
                                     if base_type != named_type {
                                         return failf!(
                                             sum_pattern.span,
@@ -5759,9 +5733,8 @@ impl TypedProgram {
                                 }
                             }
                         }
-                        let Some(matching_variant) = self
-                            
-                            .sum_variant_by_name(sum_type.variants, sum_pattern.variant_name)
+                        let Some(matching_variant) =
+                            self.sum_variant_by_name(sum_type.variants, sum_pattern.variant_name)
                         else {
                             return failf!(
                                 sum_pattern.span,
@@ -5837,9 +5810,8 @@ impl TypedProgram {
                                 }
                             }
                         }
-                        let Some((matching_value_index, matching_value)) = self
-                            
-                            .enum_value_by_name(e.member_values, sum_pattern.variant_name)
+                        let Some((matching_value_index, matching_value)) =
+                            self.enum_value_by_name(e.member_values, sum_pattern.variant_name)
                         else {
                             return failf!(
                                 sum_pattern.span,
@@ -5889,9 +5861,8 @@ impl TypedProgram {
                 for (field_name, field_parsed_pattern_id) in
                     self.ast.mem.getn(struct_pattern.fields)
                 {
-                    let (expected_field_index, expected_field) = expected_struct
-                        .find_field(&self.mem, *field_name)
-                        .ok_or_else(|| {
+                    let (expected_field_index, expected_field) =
+                        expected_struct.find_field(&self.mem, *field_name).ok_or_else(|| {
                             errf!(
                                 self.ast.get_pattern_span(*field_parsed_pattern_id),
                                 "Impossible pattern: Struct has no field named '{}'",
@@ -6040,9 +6011,8 @@ impl TypedProgram {
             if let Type::Lambda(lambda_type_id) = self.get_expr_type(expr) {
                 let lambda_type_id = *lambda_type_id;
                 let lambda_type = self.lambda_types.get(lambda_type_id);
-                let lambda_object_type = self.add_lambda_object(lambda_type.function_type,
-                    lambda_type.parsed_id,
-                );
+                let lambda_object_type =
+                    self.add_lambda_object(lambda_type.function_type, lambda_type.parsed_id);
                 match self.check_types(expected, lambda_object_type, scope_id) {
                     Ok(_) => {
                         return match self.lambda_to_lambda_object(expr, lambda_type_id, scope_id) {
@@ -6238,20 +6208,17 @@ impl TypedProgram {
         {
             return if spec1.generic_parent == spec2.generic_parent {
                 for (index, (exp_param, act_param)) in self
-                    
                     .mem
-                    .getn_sv4(spec1.type_args)
+                    .getn(spec1.type_args)
                     .iter()
-                    .zip(self.mem.getn_sv4(spec2.type_args).iter())
+                    .zip(self.mem.getn(spec2.type_args).iter())
                     .enumerate()
                 {
                     debug!(
                         "Comparing params {} and {} inside {}",
                         self.type_id_to_string(*exp_param),
                         self.type_id_to_string(*act_param),
-                        self.ident_str(
-                            self.get_defn_info(spec1.generic_parent).unwrap().name
-                        )
+                        self.ident_str(self.get_defn_info(spec1.generic_parent).unwrap().name)
                     );
                     if let Err(msg) = self.check_types(*exp_param, *act_param, scope_id) {
                         let generic = self.types.get(spec1.generic_parent).expect_generic();
@@ -6344,9 +6311,7 @@ impl TypedProgram {
                         actual
                     ));
                 }
-                for (f1, f2) in
-                    self.mem.getn(s1.fields).iter().zip(self.mem.getn(s2.fields))
-                {
+                for (f1, f2) in self.mem.getn(s1.fields).iter().zip(self.mem.getn(s2.fields)) {
                     if f1.name != f2.name {
                         return Err(k1_format_user!(
                             self,
@@ -6391,7 +6356,6 @@ impl TypedProgram {
                     ))
                 } else {
                     for (p1, p2) in self
-                        
                         .mem
                         .getn(f1.logical_params())
                         .iter()
@@ -6933,9 +6897,8 @@ impl TypedProgram {
                 } else {
                     // declared static, without a value, we must
                     // update the type of the global as well as the type of its tracking variable
-                    let static_type_id_with_value = self
-                        
-                        .add_value_type(static_type.family_type_id, Some(static_value_id));
+                    let static_type_id_with_value =
+                        self.add_value_type(static_type.family_type_id, Some(static_value_id));
                     self.globals.get_mut(global_id).type_id = static_type_id_with_value;
                     self.variables.get_mut(variable_id).type_id = static_type_id_with_value
                 }
@@ -8538,8 +8501,7 @@ impl TypedProgram {
                             "Field {} not found on struct {}\nFields are: {}",
                             self.ast.idents.get_string(field_access.field_name),
                             self.type_id_to_string(base_type_id),
-                            self
-                                .mem
+                            self.mem
                                 .getn(struct_type.fields)
                                 .iter()
                                 .map(|f| self.ast.idents.get_string(f.name))
@@ -9475,12 +9437,10 @@ impl TypedProgram {
         let expected_type_for_execution = match kind {
             ParsedStaticBlockKind::Value => match ctx.expected_type_id {
                 None => None,
-                Some(expected_type_id) => {
-                    match self.get_static_type_of_type(expected_type_id) {
-                        Some(s) => Some(s.family_type_id),
-                        None => Some(expected_type_id),
-                    }
-                }
+                Some(expected_type_id) => match self.get_static_type_of_type(expected_type_id) {
+                    Some(s) => Some(s.family_type_id),
+                    None => Some(expected_type_id),
+                },
             },
             ParsedStaticBlockKind::Metaprogram => self.builtin_types.code,
             ParsedStaticBlockKind::MacroCall => unreachable!(),
@@ -10052,9 +10012,7 @@ impl TypedProgram {
         )> = smallvec![];
 
         let struct_span = parsed_struct.span;
-        for (index, expected_field) in
-            self.mem.getn(expected_struct.fields).iter().enumerate()
-        {
+        for (index, expected_field) in self.mem.getn(expected_struct.fields).iter().enumerate() {
             let Some(passed_field) = self
                 .ast
                 .mem
@@ -10182,20 +10140,16 @@ impl TypedProgram {
                         "I reverse-engineered these: {}",
                         self.pretty_print_named_type_slice(solutions, ", ")
                     );
-                    gi.type_args = self
-                        
-                        .mem
-                        .pushn_iter(self.mem.getn(solutions).iter().map(|s| s.type_id));
+                    gi.type_args =
+                        self.mem.pushn_iter(self.mem.getn(solutions).iter().map(|s| s.type_id));
                     Some(gi)
                 } else {
                     Some(gi)
                 }
             }
         };
-        let output_struct = StructType {
-            fields: field_types.to_slice(),
-            record_kind: RecordKind::Struct,
-        };
+        let output_struct =
+            StructType { fields: field_types.to_slice(), record_kind: RecordKind::Struct };
         let output_struct_type_id = self.add_type(
             Type::Struct(output_struct),
             expected_struct_defn_info,
@@ -11059,7 +11013,6 @@ impl TypedProgram {
             TypedPattern::Sum(sp) => {
                 let payload_is_never = match self.types.get(sp.sum_type_id) {
                     Type::Sum(sum_type) => self
-                        
                         .mem
                         .getn(sum_type.variants)
                         .get(sp.variant_index as usize)
@@ -11226,9 +11179,8 @@ impl TypedProgram {
                 if let Some(payload_pattern) = sum_pattern.payload {
                     let sum_type_id = sum_pattern.sum_type_id;
                     let sum_type = self.types.get(sum_type_id).expect_sum();
-                    let variant = self
-                        
-                        .sum_variant_by_index(sum_type.variants, sum_pattern.variant_index);
+                    let variant =
+                        self.sum_variant_by_index(sum_type.variants, sum_pattern.variant_index);
                     let variant_name = variant.name;
                     let variant_index = variant.index;
                     let Some(payload_type_id) = variant.payload else {
@@ -11902,8 +11854,7 @@ impl TypedProgram {
             body_span,
         );
         let consequent_type = self.exprs.get_type(body_block);
-        let consequent_block_id =
-            self.exprs.add_block(consequent_block, consequent_type);
+        let consequent_block_id = self.exprs.add_block(consequent_block, consequent_type);
         let if_next_loop_else_break_expr = self.synth_if_else(
             self.builtin_types.empty,
             next_is_some_call,
@@ -12131,8 +12082,7 @@ impl TypedProgram {
                 // We chase down the type because, if its a static, it doesn't really make
                 // sense to expect every arm to evaluate to the same static, but rather to
                 // the static's inner type
-                let consequent_type_chased =
-                    self.get_static_family_id_if_static(consequent_type);
+                let consequent_type_chased = self.get_static_family_id_if_static(consequent_type);
                 Some(consequent_type_chased)
             };
             self.eval_expr(parsed_alt, ctx.with_expected_type(type_hint))?
@@ -12263,7 +12213,7 @@ impl TypedProgram {
             Ok(MatchingConditionResult::NeverBlock(never_block))
         } else {
             Ok(MatchingConditionResult::MatchingCondition(MatchingCondition {
-                instrs: self.mem.pushn(&instrs),
+                instrs: instrs.to_slice(),
             }))
         }
     }
@@ -13705,9 +13655,8 @@ impl TypedProgram {
             new_function_id
         };
         let dyn_function = self.get_function(dyn_function_id);
-        let lambda_object_type_id = self.add_lambda_object(dyn_function.type_id,
-            dyn_function.parsed_id,
-        );
+        let lambda_object_type_id =
+            self.add_lambda_object(dyn_function.type_id, dyn_function.parsed_id);
 
         let null_value_id = self.static_values.add(StaticValue::Zero(POINTER_TYPE_ID));
         let null_ptr_expr = self.exprs.add(
@@ -13744,8 +13693,7 @@ impl TypedProgram {
         let function_id = lambda_type.function_id;
         let function_type = lambda_type.function_type;
         let parsed_id = lambda_type.parsed_id;
-        let lambda_object_type_id =
-            self.add_lambda_object(function_type, parsed_id);
+        let lambda_object_type_id = self.add_lambda_object(function_type, parsed_id);
 
         let env_ref = self.synth_typed_call_typed_args(
             self.ast.idents.f.mem_new.with_span(span),
@@ -13838,9 +13786,7 @@ impl TypedProgram {
         };
 
         let mut final_fields = self.mem.new_list(base_struct_fields.len());
-        for (base_field_index, base_field) in
-            self.mem.getn(base_struct_fields).iter().enumerate()
-        {
+        for (base_field_index, base_field) in self.mem.getn(base_struct_fields).iter().enumerate() {
             let name = base_field.name;
             let expr_value_for_field: TypedExprId = match patch_struct {
                 ProvidedPatchStruct::ParsedFields(parsed) => {
@@ -14307,8 +14253,7 @@ impl TypedProgram {
                 {
                     match payload_if_needed {
                         None => {
-                            match ctx.expected_type_id.map(|t| (t, self.get_instance_info(t)))
-                            {
+                            match ctx.expected_type_id.map(|t| (t, self.get_instance_info(t))) {
                                 Some((expected_type, Some(spec_info))) => {
                                     // We're expecting a specific instance of a generic sum
                                     if spec_info.generic_parent == provided_type {
@@ -14438,7 +14383,6 @@ impl TypedProgram {
                 let constraint_source_type = match generic_params {
                     None => context_param.type_id,
                     Some(gp) => self
-                        
                         .mem
                         .getn(gp)
                         .iter()
@@ -14605,10 +14549,7 @@ impl TypedProgram {
             );
         }
 
-        Ok(ArgsAndParams {
-            args: final_args.to_slice(),
-            params: final_params.to_slice(),
-        })
+        Ok(ArgsAndParams { args: final_args.to_slice(), params: final_params.to_slice() })
     }
 
     fn splice_stashed_args(
@@ -15544,7 +15485,6 @@ impl TypedProgram {
         let mut param_variables =
             self.mem.new_list(specialized_function_type.physical_params.len());
         for (specialized_param_type, generic_param) in self
-            
             .mem
             .getn(specialized_function_type.physical_params)
             .iter()
@@ -17127,8 +17067,7 @@ impl TypedProgram {
             });
         }
 
-        self.abilities.get_mut(specialized_ability_id).functions =
-            specialized_functions.to_slice();
+        self.abilities.get_mut(specialized_ability_id).functions = specialized_functions.to_slice();
         {
             let parent_ability = self.abilities.get_mut(generic_ability_id);
             let TypedAbilityKind::Generic { specializations } = &mut parent_ability.kind else {
@@ -17528,12 +17467,8 @@ impl TypedProgram {
         let found_impl = self.ability_impls.get(impl_handle.full_impl_id);
         let found_impl_arguments = found_impl.impl_arguments;
         debug_assert!(ao.impl_arguments.len() == found_impl_arguments.len());
-        for (dyn_arg, impl_arg) in self
-            
-            .mem
-            .getn(ao.impl_arguments)
-            .iter()
-            .zip(self.mem.getn(found_impl_arguments).iter())
+        for (dyn_arg, impl_arg) in
+            self.mem.getn(ao.impl_arguments).iter().zip(self.mem.getn(found_impl_arguments).iter())
         {
             debug_assert!(dyn_arg.name == impl_arg.name);
             if self.get_type_id_resolved(dyn_arg.type_id, scope_id)
@@ -17731,9 +17666,7 @@ impl TypedProgram {
                         if self_.get_type_id_dereferenced(type_id) != companion_type_id {
                             match (
                                 self_.types.get(companion_type_id),
-                                self_.get_instance_info(
-                                    self_.get_type_id_dereferenced(type_id),
-                                ),
+                                self_.get_instance_info(self_.get_type_id_dereferenced(type_id)),
                             ) {
                                 (Type::Generic(_g), Some(spec_info)) => {
                                     let ok = spec_info.generic_parent == companion_type_id;
@@ -20097,8 +20030,7 @@ impl TypedProgram {
             // );
             debug_assert!(buffer_struct.fields.len() == 2);
             debug_assert!(
-                self
-                    .mem
+                self.mem
                     .getn(buffer_struct.fields)
                     .iter()
                     .map(|f| self.ident_str(f.name))
@@ -20113,8 +20045,7 @@ impl TypedProgram {
             let list_struct = self.types.get(list_generic.inner).expect_struct();
             debug_assert!(info.name == self.ast.idents.b.list);
             debug_assert!(
-                self
-                    .mem
+                self.mem
                     .getn(list_struct.fields)
                     .iter()
                     .map(|f| self.ident_str(f.name))
@@ -20361,9 +20292,7 @@ impl TypedProgram {
                             ));
                         } else {
                             let mut has_unreachable_field = false;
-                            for (index, field) in
-                                self.mem.getn(struc.fields).iter().enumerate()
-                            {
+                            for (index, field) in self.mem.getn(struc.fields).iter().enumerate() {
                                 let prev_len = dst.len();
                                 self.generate_constructors_for_type(
                                     field.type_id,
@@ -20588,14 +20517,12 @@ impl TypedProgram {
     }
 
     /// Works for sum variants too
-    // Note: feels clumsy to return an SV4 here but nothing better comes to mind.
-    // I wanna return a slice but with what backing memory?
-    pub fn get_struct_layout(&mut self, struct_type_id: TypeId) -> SV4<StructField> {
+    pub fn get_struct_layout(&mut self, struct_type_id: TypeId) -> &'static [StructField] {
         let struct_pt = self.get_physical_type(struct_type_id).unwrap();
         if struct_pt.is_empty() {
-            smallvec![]
+            &[]
         } else {
-            self.get_agg_struct_layout(struct_pt.expect_agg())
+            self.mem.getn(self.get_agg_struct_layout(struct_pt.expect_agg()))
         }
     }
 
@@ -20805,8 +20732,7 @@ impl TypedProgram {
                     get_schema_variant(self, self.ast.idents.b.enum_).payload.unwrap();
                 let values_span_type_id =
                     self.get_struct_field(enum_schema_payload_type_id, 1).type_id;
-                let value_struct_type_id =
-                    self.get_as_span_instance(values_span_type_id).unwrap();
+                let value_struct_type_id = self.get_as_span_instance(values_span_type_id).unwrap();
                 let int_type = enum_type.int_type;
                 let int_type_value_id =
                     self.static_values.add(TypedProgram::make_int_kind(int_kind_type_id, int_type));
@@ -21115,8 +21041,7 @@ impl TypedProgram {
                     params_value_ids.push(param_struct_value_id)
                 }
 
-                let params_value_ids_slice =
-                    params_value_ids.to_slice();
+                let params_value_ids_slice = params_value_ids.to_slice();
                 let params_span_value_id = self
                     .static_values
                     .add_span(function_params_span_type_id, params_value_ids_slice);

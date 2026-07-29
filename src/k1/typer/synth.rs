@@ -564,8 +564,7 @@ impl TypedProgram {
     ) -> K1Result<TypedExprId> {
         let sum_type = self.types.get(self.exprs.get_type(sum_expr)).expect_sum();
         let tag_type = sum_type.tag_type;
-        let variant_tag =
-            self.sum_variant_by_index(sum_type.variants, variant_index).tag_value;
+        let variant_tag = self.sum_variant_by_index(sum_type.variants, variant_index).tag_value;
         let span = span.unwrap_or(self.exprs.get_span(sum_expr));
         let get_tag =
             self.exprs.add(TypedExpr::SumGetTag(GetSumTag { sum_expr }), tag_type.type_id(), span);

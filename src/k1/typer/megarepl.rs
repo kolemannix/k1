@@ -600,10 +600,7 @@ impl TypedProgram {
                     if !is_last {
                         if let TypedStmt::Expr(expr_id, expr_type) = self.stmts.get(stmt_id) {
                             let (expr_id, expr_type) = (*expr_id, *expr_type);
-                            let has_value = match self
-                                
-                                .get_physical_type(expr_type)
-                            {
+                            let has_value = match self.get_physical_type(expr_type) {
                                 PhysicalTypeResult::Yes(pt) => !pt.is_empty(),
                                 _ => false,
                             };

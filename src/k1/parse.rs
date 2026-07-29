@@ -3027,8 +3027,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(self.add_expression(ParsedExpr::Literal(literal)))
         } else {
             let span = self.extend_to_here(first.span);
-            let string_interp =
-                ParsedInterpolatedString { parts: parts.to_slice(), span };
+            let string_interp = ParsedInterpolatedString { parts: parts.to_slice(), span };
             Ok(self.add_expression(ParsedExpr::InterpolatedString(string_interp)))
         };
         self.string_buffer = buf;
@@ -3411,11 +3410,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let (call_args, _span) = self.expect_fn_call_args()?;
                 let self_arg = result;
                 let span = self.extend_to_here(self.get_expression_span(self_arg));
-                let call = ParsedExprCall {
-                    called_expr: result,
-                    args: call_args.to_slice(),
-                    span,
-                };
+                let call = ParsedExprCall { called_expr: result, args: call_args.to_slice(), span };
                 let call_expr_id = self.add_expression(ParsedExpr::CallOnExpr(call));
                 Some(call_expr_id)
             } else if next.kind == K::Dot

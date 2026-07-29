@@ -15,7 +15,8 @@ mod vm_test;
 use crate::ir;
 use crate::typer::types::{
     ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, PhysicalTypeEnum,
-    PhysicalTypeResult, ScalarType, Type, TypeId};
+    PhysicalTypeResult, ScalarType, Type, TypeId,
+};
 use crate::typer::{
     ErrorKind, FunctionId, GlobalInitialValue, K1Message, K1Result, MessageLevel, StaticContainer,
     StaticContainerKind, StaticStruct, StaticSum, StaticValue, StaticValueId, StaticValuePool,
@@ -1259,8 +1260,7 @@ pub fn vm_value_to_static_value(
 
             let tag_scalar_type = sum_pt.tag_type;
             let tag = load_scalar(tag_scalar_type, sum_ptr).as_typed_int(tag_int_type);
-            let Some(variant) = k1.mem.getn(variants).iter().find(|v| v.tag_value == tag)
-            else {
+            let Some(variant) = k1.mem.getn(variants).iter().find(|v| v.tag_value == tag) else {
                 return failf!(span, "No variant found with tag value {}", tag);
             };
             let variant_index = variant.index;

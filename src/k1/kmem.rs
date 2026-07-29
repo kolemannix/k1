@@ -1438,8 +1438,13 @@ impl<T, Tag> List<T, Tag> {
             // Fast path for growth when this list is the last thing in the arena; just move the cursor forward
             let additional_ts = new_cap as usize - self.cap();
             mem.push_slice_uninit_prealigned::<T>(additional_ts);
-            let new_me =
-                List { ptr: self.ptr, offset: self.offset, cap: new_cap, len: self.len, _tag: PhantomData };
+            let new_me = List {
+                ptr: self.ptr,
+                offset: self.offset,
+                cap: new_cap,
+                len: self.len,
+                _tag: PhantomData,
+            };
             debug_assert_eq!(new_me.end_ptr().addr(), mem.cursor().addr());
             new_me
         } else {
