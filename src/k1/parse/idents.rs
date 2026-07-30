@@ -1,50 +1,22 @@
-use std::fmt::{Display, Formatter};
-
-use string_interner::{Symbol, backend::StringBackend};
-
 use crate::kmem::MSlice;
 use crate::kmem::Mem;
+use crate::nz_u32_id;
 use crate::parse::AstSlice;
 use crate::parse::ParsedProgram;
+use crate::vpool::VPool;
 use crate::{impl_copy_if_small, lex::SpanId};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct StringId(string_interner::symbol::SymbolU32);
-
-impl StringId {
-    pub fn forged() -> StringId {
-        StringId(string_interner::symbol::SymbolU32::try_from_usize(1).unwrap())
-    }
-    pub fn as_usize(&self) -> usize {
-        self.0.to_usize()
-    }
-    /// Inverse of `as_usize`
-    pub fn from_usize(v: usize) -> StringId {
-        StringId(string_interner::symbol::SymbolU32::try_from_usize(v).unwrap())
-    }
-}
+nz_u32_id!(StringId);
 
 impl Ord for StringId {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.cmp(&other.0)
+        self.as_u32().cmp(&other.as_u32())
     }
 }
 
 impl PartialOrd for StringId {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
-    }
-}
-
-impl From<StringId> for usize {
-    fn from(value: StringId) -> Self {
-        value.0.to_usize()
-    }
-}
-
-impl Display for StringId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.to_usize())
     }
 }
 
@@ -262,10 +234,73 @@ pub(crate) struct BuiltinFunctions {
     pub bitwise_shr: QIdent,
 }
 
-// We use the default StringInterner, which uses a contiguous string as its backend
-// and u32 symbols
+/// Long strings get a sampled hash: O(1) instead of hashing megabytes of
+/// metaprogram output. Dedup stays exact — a hash hit is always confirmed by a
+/// full content compare in `Interner::intern`/`lookup`, which must both use
+/// this same function so probes and inserts agree.
+fn content_hash(b: &[u8]) -> u64 {
+    use std::hash::Hasher;
+    let mut h = fxhash::FxHasher::default();
+    if b.len() <= 256 {
+        h.write(b);
+    } else {
+        let mid = b.len() / 2;
+        h.write_usize(b.len());
+        h.write(&b[..64]);
+        h.write(&b[mid..mid + 64]);
+        h.write(&b[b.len() - 64..]);
+    }
+    h.finish()
+}
+
+struct Interner {
+    bytes: Mem<IdentPool>,
+    entries: VPool<MSlice<u8, IdentPool>, StringId>,
+    dedup: hashbrown::HashTable<StringId>,
+}
+
+impl Interner {
+    fn make() -> Interner {
+        Interner {
+            bytes: Mem::make(),
+            entries: VPool::make_with_hint("idents", 65536),
+            dedup: hashbrown::HashTable::with_capacity(65536),
+        }
+    }
+
+    fn get_str(
+        bytes: &Mem<IdentPool>,
+        entries: &VPool<MSlice<u8, IdentPool>, StringId>,
+        id: StringId,
+    ) -> &'static str {
+        unsafe { std::str::from_utf8_unchecked(bytes.getn(*entries.get(id))) }
+    }
+
+    fn get(&self, id: StringId) -> &'static str {
+        Self::get_str(&self.bytes, &self.entries, id)
+    }
+
+    fn intern(&mut self, s: &str) -> StringId {
+        let hash = content_hash(s.as_bytes());
+        let Interner { bytes, entries, dedup } = self;
+        if let Some(id) = dedup.find(hash, |&id| Self::get_str(bytes, entries, id) == s) {
+            return *id;
+        }
+        let id = entries.add(bytes.pushn(s.as_bytes()));
+        dedup.insert_unique(hash, id, |&id| {
+            content_hash(Self::get_str(bytes, entries, id).as_bytes())
+        });
+        id
+    }
+
+    fn lookup(&self, s: &str) -> Option<StringId> {
+        let hash = content_hash(s.as_bytes());
+        self.dedup.find(hash, |&id| self.get(id) == s).copied()
+    }
+}
+
 pub struct IdentPool {
-    intern_pool: string_interner::StringInterner<StringBackend, fxhash::FxBuildHasher>,
+    pool: Interner,
     /// b for builtins
     pub(crate) b: BuiltinIdents,
     /// f for functions
@@ -273,40 +308,38 @@ pub struct IdentPool {
 }
 impl IdentPool {
     pub fn intern(&mut self, s: impl AsRef<str>) -> StringId {
-        let s = self.intern_pool.get_or_intern(&s);
-        StringId(s)
+        self.pool.intern(s.as_ref())
     }
     pub fn lookup(&self, s: impl AsRef<str>) -> Option<StringId> {
-        self.intern_pool.get(&s).map(StringId)
+        self.pool.lookup(s.as_ref())
     }
-    pub fn get_string(&self, id: StringId) -> &str {
-        self.intern_pool.resolve(id.0).expect("failed to resolve identifier")
+    pub fn get_string(&self, id: StringId) -> &'static str {
+        self.pool.get(id)
     }
 
     pub fn len(&self) -> usize {
-        self.intern_pool.len()
+        self.pool.entries.len()
     }
 
     /// All interned strings in insertion order.
-    pub fn iter(&self) -> impl Iterator<Item = (StringId, &str)> {
-        self.intern_pool.iter().map(|(sym, s)| (StringId(sym), s))
+    pub fn iter(&self) -> impl Iterator<Item = (StringId, &'static str)> {
+        self.pool.entries.iter_with_ids().map(|(id, slice)| {
+            (id, unsafe { std::str::from_utf8_unchecked(self.pool.bytes.getn(*slice)) })
+        })
     }
 
     /// Total bytes of string content in the pool.
     pub fn content_bytes(&self) -> usize {
-        self.intern_pool.iter().map(|(_, s)| s.len()).sum()
+        self.pool.entries.iter().map(|s| s.len() as usize).sum()
     }
 
     #[allow(non_snake_case)]
     pub fn make(mem: &mut Mem<ParsedProgram>) -> Self {
-        let mut pool = string_interner::StringInterner::with_capacity_and_hasher(
-            65536,
-            fxhash::FxBuildHasher::default(),
-        );
+        let mut pool = Interner::make();
 
         macro_rules! intern {
             ($name: expr) => {
-                StringId(pool.get_or_intern_static($name))
+                pool.intern($name)
             };
         }
 
@@ -565,6 +598,68 @@ impl IdentPool {
             bitwise_shr,
         };
 
-        Self { intern_pool: pool, b, f }
+        Self { pool, b, f }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn make_pool() -> IdentPool {
+        let mut mem = Mem::make();
+        IdentPool::make(&mut mem)
+    }
+
+    #[test]
+    fn intern_dedup_and_roundtrip() {
+        let mut p = make_pool();
+        let a = p.intern("hello");
+        let b = p.intern("hello");
+        let c = p.intern("world");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(p.get_string(a), "hello");
+        assert_eq!(p.get_string(c), "world");
+        assert_eq!(p.lookup("hello"), Some(a));
+        assert_eq!(p.lookup("nope"), None);
+        assert_eq!(p.intern(""), p.intern(""));
+    }
+
+    #[test]
+    fn builtins_resolve() {
+        let mut p = make_pool();
+        assert_eq!(p.lookup("null"), Some(p.b.null));
+        assert_eq!(p.intern("for-each"), p.b.for_each);
+        assert_eq!(p.get_string(p.b.self_), "self");
+    }
+
+    #[test]
+    fn big_strings_use_sampled_hash_and_still_dedup() {
+        let mut p = make_pool();
+        let big_a: String = "a".repeat(100_000);
+        let mut big_b = big_a.clone();
+        // Differs only outside the sampled windows (head/mid/tail 64 bytes)
+        big_b.replace_range(200..201, "b");
+
+        let a1 = p.intern(&big_a);
+        let a2 = p.intern(&big_a);
+        let b1 = p.intern(&big_b);
+        assert_eq!(a1, a2);
+        assert_ne!(a1, b1);
+        assert_eq!(p.get_string(a1), big_a);
+        assert_eq!(p.get_string(b1), big_b);
+        assert_eq!(p.lookup(&big_a), Some(a1));
+    }
+
+    #[test]
+    fn pointers_stable_across_growth() {
+        let mut p = make_pool();
+        let id = p.intern("stable");
+        let ptr_before = p.get_string(id).as_ptr();
+        for i in 0..100_000 {
+            p.intern(format!("filler_{i}"));
+        }
+        assert_eq!(p.get_string(id).as_ptr(), ptr_before);
     }
 }

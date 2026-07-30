@@ -789,8 +789,7 @@ fn store_static_array_elements(
 
 pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
     let s = k1.get_string(string_id);
-    // This just points into the Rust memory for the string's data. Teehee uwuu
-    // I need to guarantee it can't re-allocate because that's still using the string interner library
+    // Points into the ident pool's arena, which never moves
     let k1_string = k1_types::K1BufferLike { len: s.len() as i64, data: s.as_ptr().cast_mut() };
     if cfg!(debug_assertions) {
         let string_type_id = k1.string_type_id();

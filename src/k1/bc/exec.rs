@@ -483,12 +483,9 @@ fn exec_loop(
             }
             Opcode::CallExtern => {
                 let function_id = FunctionId::from_u32(operand!(0)).unwrap();
-                // StringId operands are biased by 1; 0 means "none"
-                let lib_name = match operand!(1) {
-                    0 => None,
-                    biased => Some(crate::parse::StringId::from_usize(biased as usize - 1)),
-                };
-                let fn_name = crate::parse::StringId::from_usize(operand!(2) as usize - 1);
+                // StringIds are nonzero, so 0 means "none"
+                let lib_name = crate::parse::StringId::from_u32(operand!(1));
+                let fn_name = crate::parse::StringId::from_u32(operand!(2)).unwrap();
                 let ret_pt = PhysicalType::from_u32(operand!(3));
                 let fp_delta = operand!(4) as usize;
                 let nargs = operand!(5) as usize;
@@ -530,7 +527,7 @@ fn exec_loop(
                 advance!(Opcode::CallExtern);
             }
             Opcode::CallLlvm => {
-                let fn_name = crate::parse::StringId::from_usize(operand!(0) as usize - 1);
+                let fn_name = crate::parse::StringId::from_u32(operand!(0)).unwrap();
                 let _ret_pt = PhysicalType::from_u32(operand!(1));
                 let fp_delta = operand!(2) as usize;
                 let nargs = operand!(3) as usize;

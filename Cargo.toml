@@ -28,7 +28,7 @@ log = "0.4.17"
 itertools = "0.13.0"
 bitflags = { version = "2.9.1" }
 smallvec = "1.15.1"
-string-interner = "0.17.0"
+hashbrown = { version = "0.15", default-features = false, features = ["inline-more"] }
 ahash = "0.8.11"
 fxhash = "0.2.1"
 scopeguard = "1.2.0"

@@ -1133,9 +1133,9 @@ fn emit_call(
             }
             ctx.emit(Opcode::CallExtern, 0, 0);
             ctx.push(function_id.as_u32());
-            // StringIds are 0-based indices; bias by 1 so 0 can mean "none"
-            ctx.push(library_name.map(|s| s.as_usize() as u32 + 1).unwrap_or(0));
-            ctx.push(function_name.as_usize() as u32 + 1);
+            // StringIds are nonzero, so 0 means "none"
+            ctx.push(library_name.map(|s| s.as_u32()).unwrap_or(0));
+            ctx.push(function_name.as_u32());
             ctx.push(ret_pt.to_u32());
             ctx.push(frame_bytes);
             ctx.push(nargs);
@@ -1164,7 +1164,7 @@ fn emit_call(
                 ctx.push(sret_src);
             }
             ctx.emit(Opcode::CallLlvm, 0, 0);
-            ctx.push(name.as_usize() as u32 + 1);
+            ctx.push(name.as_u32());
             ctx.push(ret_pt.to_u32());
             ctx.push(frame_bytes);
             ctx.push(nargs);

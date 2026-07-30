@@ -127,7 +127,7 @@ fn skey(scope: ScopeId, sym: u32) -> ScopeKey {
 
 #[inline]
 fn skey_name(scope: ScopeId, name: StringId) -> ScopeKey {
-    skey(scope, name.as_usize() as u32)
+    skey(scope, name.as_u32())
 }
 
 #[inline]
@@ -137,7 +137,7 @@ fn skey_scope_part(key: ScopeKey) -> u32 {
 
 #[inline]
 fn skey_name_part(key: ScopeKey) -> StringId {
-    StringId::from_usize((key & 0xFFFF_FFFF) as usize)
+    StringId::from_u32((key & 0xFFFF_FFFF) as u32).unwrap()
 }
 
 #[inline]
