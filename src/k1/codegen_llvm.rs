@@ -3739,8 +3739,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let llvm_function = self.get_current_function().function_value;
 
         for (block, block_node) in self.k1.ir.mem.dlist_iter_handles(blocks) {
-            let name = block_node.data.name;
-            let b = self.ctx.append_basic_block(llvm_function, name);
+            let b = self.ctx.append_basic_block(llvm_function, block_node.data.kind.str());
             block_mapping.insert(block, b);
         }
         self.get_current_function_mut().blocks = block_mapping;

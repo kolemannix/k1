@@ -14,7 +14,7 @@ use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
 use crate::{failf, static_assert_size};
 use crate::{
-    kmem::{self, MSlice, MStr},
+    kmem::{self, MSlice},
     lex::SpanId,
     nz_u32_id,
     typer::{types::*, *},
@@ -54,7 +54,7 @@ pub struct ProgramIr {
     pub mem: kmem::Mem<ProgramIr>,
     pub instrs: VPool<Inst, InstId>,
     pub sources: VPool<SpanId, InstId>,
-    pub comments: VPool<IrStr, InstId>,
+    pub comments: VPool<IrComment, InstId>,
     pub debug_info: VPool<IrDebugInfo, InstId>,
     /// Compiled ir for actual functions
     pub functions: VPool<Option<IrUnit>, FunctionId>,
@@ -82,7 +82,186 @@ pub struct ProgramIr {
     opt_buf_inline_inlined_rewrites: iropt::RewriteMappings,
     opt_buf_cfg_simpl_rewrites: iropt::RewriteMappings,
 }
-type IrStr = MStr<ProgramIr>;
+
+/// Provenance notes attached to every instruction for IR dumps.
+#[derive(Clone, Copy)]
+pub enum IrComment {
+    ArrayGetOffsetPlace,
+    BitcastAggToAggCopy,
+    BitcastAggToAggPlace,
+    BitcastAggToScalar,
+    BitcastScalarToAggPlace,
+    BitcastScalarToAggStore,
+    BoolToInt,
+    BreakLoopNoValue,
+    BreakLoopWithValue,
+    CmpxchgResult,
+    DaCapoMaestro,
+    DeliverFnPointer,
+    DeliverSumPayload,
+    DirectVariable,
+    DivergentMatch,
+    DynAbilityFnPtrOffset,
+    DynAbilityStateOffset,
+    DynLamEnvPtrOffset,
+    DynLamFnPtrOffset,
+    EmptyCondition,
+    EnterInlinedCode,
+    EnterLoop,
+    EnterMatch,
+    EnterWhileCond,
+    EnumInt,
+    ExitInlinedCode,
+    FieldAccessNoCopy,
+    FieldAccessWCopy,
+    FoldedVariable,
+    FulfillBitcastDestination,
+    FulfillCastDestination,
+    FulfillLoopBreakDst,
+    FulfillMatchDst,
+    FulfillVariableUsage,
+    GetLaneLoad,
+    GetLaneOffset,
+    GetSumTagLoadOrCopyToDst,
+    GotoWhileCond,
+    InfallibleMatchingCondContinue,
+    InlineRet,
+    InlinedAggRet,
+    InlinedScalarReturn,
+    LambdaEnvLocation,
+    LangDerefFulfillToDst,
+    LangDerefNoDst,
+    LoopBreakValue,
+    MatchArmResultStore,
+    MatchPhi,
+    MatchingCondBindingFallthroughToCons,
+    MatchingCondCond,
+    MemsetSize,
+    None,
+    RefAtIndexOffset,
+    ReturnAggregateAtAddress,
+    RvoStorage,
+    SourceLet,
+    SplatResult,
+    StaticEnum,
+    StaticFloat,
+    StaticInt,
+    StoreLambdaEnvForCall,
+    StoreScalarToDst,
+    StoreStaticValueToDst,
+    StoreSumLitTag,
+    StructAccessPlace,
+    StructLitFieldPtr,
+    StructLiteral,
+    SumLiteralStorage,
+    SumPayloadOffset,
+    SumPayloadPtr,
+    SumTag,
+    VecBinopResult,
+    VecNotResult,
+    VecShiftResult,
+    VectorLoad,
+    VectorLoadResult,
+    VectorStore,
+    WithLaneCopy,
+    WithLaneOffset,
+    WithLaneResult,
+    WithLaneStore,
+    ZeroedMemset,
+    ZeroedNoDst,
+}
+
+impl IrComment {
+    pub fn str(&self) -> &'static str {
+        match self {
+            IrComment::ArrayGetOffsetPlace => "array get offset place",
+            IrComment::BitcastAggToAggCopy => "bitcast agg to agg copy",
+            IrComment::BitcastAggToAggPlace => "bitcast agg to agg place",
+            IrComment::BitcastAggToScalar => "bitcast agg to scalar",
+            IrComment::BitcastScalarToAggPlace => "bitcast scalar to agg place",
+            IrComment::BitcastScalarToAggStore => "bitcast scalar to agg store",
+            IrComment::BoolToInt => "bool_to_int",
+            IrComment::BreakLoopNoValue => "break loop (no value)",
+            IrComment::BreakLoopWithValue => "break loop (with value)",
+            IrComment::CmpxchgResult => "cmpxchg result",
+            IrComment::DaCapoMaestro => "da capo maestro",
+            IrComment::DeliverFnPointer => "deliver fn pointer",
+            IrComment::DeliverSumPayload => "deliver sum payload",
+            IrComment::DirectVariable => "direct variable",
+            IrComment::DivergentMatch => "divergent match",
+            IrComment::DynAbilityFnPtrOffset => "dyn ability fn ptr offset",
+            IrComment::DynAbilityStateOffset => "dyn ability state offset",
+            IrComment::DynLamEnvPtrOffset => "dyn lam env ptr offset",
+            IrComment::DynLamFnPtrOffset => "dyn lam fn ptr offset",
+            IrComment::EmptyCondition => "empty condition",
+            IrComment::EnterInlinedCode => "enter inlined code",
+            IrComment::EnterLoop => "enter loop",
+            IrComment::EnterMatch => "enter match",
+            IrComment::EnterWhileCond => "enter while cond",
+            IrComment::EnumInt => "enum int",
+            IrComment::ExitInlinedCode => "exit inlined code",
+            IrComment::FieldAccessNoCopy => "field access no copy",
+            IrComment::FieldAccessWCopy => "field access w copy",
+            IrComment::FoldedVariable => "folded variable",
+            IrComment::FulfillBitcastDestination => "fulfill bitcast destination",
+            IrComment::FulfillCastDestination => "fulfill cast destination",
+            IrComment::FulfillLoopBreakDst => "fulfill loop break dst",
+            IrComment::FulfillMatchDst => "fulfill match dst",
+            IrComment::FulfillVariableUsage => "fulfill variable usage",
+            IrComment::GetLaneLoad => "get-lane load",
+            IrComment::GetLaneOffset => "get-lane offset",
+            IrComment::GetSumTagLoadOrCopyToDst => "get sum tag, load or copy to dst",
+            IrComment::GotoWhileCond => "goto while cond",
+            IrComment::InfallibleMatchingCondContinue => "infallible matching cond continue",
+            IrComment::InlineRet => "inline ret",
+            IrComment::InlinedAggRet => "inlined agg ret",
+            IrComment::InlinedScalarReturn => "inlined scalar return",
+            IrComment::LambdaEnvLocation => "lambda env location",
+            IrComment::LangDerefFulfillToDst => "lang deref fulfill to dst",
+            IrComment::LangDerefNoDst => "lang deref no dst",
+            IrComment::LoopBreakValue => "loop break value",
+            IrComment::MatchArmResultStore => "match arm result store",
+            IrComment::MatchPhi => "match phi",
+            IrComment::MatchingCondBindingFallthroughToCons => {
+                "matching cond binding fallthrough to cons"
+            }
+            IrComment::MatchingCondCond => "matching cond cond",
+            IrComment::MemsetSize => "memset size",
+            IrComment::None => "",
+            IrComment::RefAtIndexOffset => "refAtIndex offset",
+            IrComment::ReturnAggregateAtAddress => "return aggregate at address",
+            IrComment::RvoStorage => "rvo storage",
+            IrComment::SourceLet => "source let",
+            IrComment::SplatResult => "splat result",
+            IrComment::StaticEnum => "static enum",
+            IrComment::StaticFloat => "static float",
+            IrComment::StaticInt => "static int",
+            IrComment::StoreLambdaEnvForCall => "store lambda env for call",
+            IrComment::StoreScalarToDst => "store scalar to dst",
+            IrComment::StoreStaticValueToDst => "store static value to dst",
+            IrComment::StoreSumLitTag => "store sum lit tag",
+            IrComment::StructAccessPlace => "struct access place",
+            IrComment::StructLitFieldPtr => "struct lit field ptr",
+            IrComment::StructLiteral => "struct literal",
+            IrComment::SumLiteralStorage => "sum literal storage",
+            IrComment::SumPayloadOffset => "sum payload offset",
+            IrComment::SumPayloadPtr => "sum payload ptr",
+            IrComment::SumTag => "sum tag",
+            IrComment::VecBinopResult => "vec binop result",
+            IrComment::VecNotResult => "vec not result",
+            IrComment::VecShiftResult => "vec shift result",
+            IrComment::VectorLoad => "vector load",
+            IrComment::VectorLoadResult => "vector load result",
+            IrComment::VectorStore => "vector store",
+            IrComment::WithLaneCopy => "with-lane copy",
+            IrComment::WithLaneOffset => "with-lane offset",
+            IrComment::WithLaneResult => "with-lane result",
+            IrComment::WithLaneStore => "with-lane store",
+            IrComment::ZeroedMemset => "zeroed memset",
+            IrComment::ZeroedNoDst => "zeroed no dst",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IrUnitId {
@@ -131,7 +310,7 @@ impl ProgramIr {
     pub fn add_inst(
         &mut self,
         inst: Inst,
-        comment: IrStr,
+        comment: IrComment,
         debug_info: IrDebugInfo,
         span: SpanId,
     ) -> InstId {
@@ -145,9 +324,49 @@ impl ProgramIr {
 
 pub type IrList<T> = Dlist<T, ProgramIr>;
 
+/// Which source construct produced a block; also its display name in dumps
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BlockSourceKind {
+    Entry,
+    ExprToplevel,
+    RequireContinue,
+    RequireElse,
+    ArmCond,
+    ArmCons,
+    MatchFail,
+    MatchEnd,
+    WhileLoopCondition,
+    WhileLoopBody,
+    WhileLoopEnd,
+    LoopBody,
+    LoopEnd,
+    MatchingCondContinue,
+}
+
+impl BlockSourceKind {
+    pub fn str(&self) -> &'static str {
+        match self {
+            BlockSourceKind::Entry => "entry",
+            BlockSourceKind::ExprToplevel => "expr_toplevel",
+            BlockSourceKind::RequireContinue => "require_continue",
+            BlockSourceKind::RequireElse => "require_else",
+            BlockSourceKind::ArmCond => "arm_cond",
+            BlockSourceKind::ArmCons => "arm_cons",
+            BlockSourceKind::MatchFail => "match_fail",
+            BlockSourceKind::MatchEnd => "match_end",
+            BlockSourceKind::WhileLoopCondition => "while_loop_condition",
+            BlockSourceKind::WhileLoopBody => "while_loop_body",
+            BlockSourceKind::WhileLoopEnd => "while_loop_end",
+            BlockSourceKind::LoopBody => "loop_body",
+            BlockSourceKind::LoopEnd => "loop_end",
+            BlockSourceKind::MatchingCondContinue => "matching_cond_continue",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Block {
-    pub name: &'static str,
+    pub kind: BlockSourceKind,
     pub instrs: IrList<InstId>,
 
     pub preds: IrList<BlockId>,
@@ -155,11 +374,11 @@ pub struct Block {
 }
 
 impl Block {
-    pub fn empty(name: &'static str) -> Block {
-        Block { name, instrs: IrList::empty(), preds: IrList::empty(), succs: IrList::empty() }
+    pub fn empty(kind: BlockSourceKind) -> Block {
+        Block { kind, instrs: IrList::empty(), preds: IrList::empty(), succs: IrList::empty() }
     }
     pub fn identical(&self, other: &Block) -> bool {
-        self.name == other.name
+        self.kind == other.kind
             && self.instrs.first == other.instrs.first
             && self.instrs.last == other.instrs.last
     }
@@ -1167,7 +1386,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
 
     let f = b.k1.get_function(function_id);
     if let Some(body_block) = f.body_block {
-        let entry_block = b.push_block("entry");
+        let entry_block = b.push_block(BlockSourceKind::Entry);
         b.goto_block(entry_block);
         compile_block_stmts(&mut b, None, body_block)?;
     } else {
@@ -1228,7 +1447,7 @@ pub fn compile_top_level_expr(
     b.fn_type = phys_fn_type;
 
     debug!("Compiling expr {}", b.k1.expr_to_string(expr));
-    let entry_block = b.push_block("expr_toplevel");
+    let entry_block = b.push_block(BlockSourceKind::ExprToplevel);
     b.goto_block(entry_block);
     let _result = compile_expr(&mut b, None, expr)?;
     let unit_id = IrUnitId::Expr(expr);
@@ -1343,19 +1562,19 @@ impl<'k1> Builder<'k1> {
         self.k1.config.optimize_ir
     }
 
-    fn make_inst(&mut self, inst: Inst, comment: IrStr, debug_info: IrDebugInfo) -> InstId {
+    fn make_inst(&mut self, inst: Inst, comment: IrComment, debug_info: IrDebugInfo) -> InstId {
         let span = self.cur_span;
         self.k1.ir.add_inst(inst, comment, debug_info, span)
     }
 
-    fn push_alloca(&mut self, pt: PhysicalType, comment: impl Into<IrStr>) -> InstId {
+    fn push_alloca(&mut self, pt: PhysicalType, comment: IrComment) -> InstId {
         self.push_alloca_ext(pt, comment, IrDebugInfo::default(), false)
     }
 
     fn push_alloca_ext(
         &mut self,
         pt: PhysicalType,
-        comment: impl Into<IrStr>,
+        comment: IrComment,
         debug_info: IrDebugInfo,
         returned: bool,
     ) -> InstId {
@@ -1367,7 +1586,7 @@ impl<'k1> Builder<'k1> {
         let alloca_span = self.entry_span;
         let inst_id = self.k1.ir.add_inst(
             Inst::Alloca { t: pt, vm_layout: layout, returned },
-            comment.into(),
+            comment,
             debug_info,
             alloca_span,
         );
@@ -1397,16 +1616,16 @@ impl<'k1> Builder<'k1> {
         self.k1.ir.mem.dlist_insert_after(&mut blocks.data.instrs, inst_node, inst_id);
     }
 
-    fn push_inst_front(&mut self, inst: Inst, comment: impl Into<IrStr>) -> InstId {
-        let id = self.make_inst(inst, comment.into(), IrDebugInfo::default());
+    fn push_inst_front(&mut self, inst: Inst, comment: IrComment) -> InstId {
+        let id = self.make_inst(inst, comment, IrDebugInfo::default());
 
         let blocks = self.k1.ir.mem.get_raw_ref(self.cur_block).as_mut();
         self.k1.ir.mem.dlist_push_front(&mut blocks.data.instrs, id);
         id
     }
 
-    fn push_inst(&mut self, inst: Inst, comment: impl Into<IrStr>) -> InstId {
-        let id = self.make_inst(inst, comment.into(), IrDebugInfo::default());
+    fn push_inst(&mut self, inst: Inst, comment: IrComment) -> InstId {
+        let id = self.make_inst(inst, comment, IrDebugInfo::default());
 
         let blocks = self.k1.ir.mem.get_raw_ref(self.cur_block).as_mut();
         self.k1.ir.mem.dlist_push(&mut blocks.data.instrs, id);
@@ -1414,7 +1633,7 @@ impl<'k1> Builder<'k1> {
     }
 
     fn push_inst_anon(&mut self, inst: Inst) -> InstId {
-        self.push_inst(inst, "")
+        self.push_inst(inst, IrComment::None)
     }
 
     fn push_struct_offset(
@@ -1422,7 +1641,7 @@ impl<'k1> Builder<'k1> {
         struct_agg_id: AggregateTypeId,
         base: Value,
         field_index: u32,
-        comment: impl Into<IrStr>,
+        comment: IrComment,
     ) -> Value {
         if field_index == 0 {
             return base;
@@ -1432,12 +1651,12 @@ impl<'k1> Builder<'k1> {
         };
         self.push_inst(
             Inst::StructOffset { struct_t: struct_agg_id, base, field_index, vm_offset: offset },
-            comment.into(),
+            comment,
         )
         .as_value()
     }
 
-    fn push_jump(&mut self, block_id: BlockId, comment: impl Into<IrStr>) -> InstId {
+    fn push_jump(&mut self, block_id: BlockId, comment: IrComment) -> InstId {
         self.push_inst(Inst::Jump(block_id), comment)
     }
 
@@ -1446,7 +1665,7 @@ impl<'k1> Builder<'k1> {
         cond: Value,
         cons: BlockId,
         alt: BlockId,
-        comment: impl Into<IrStr>,
+        comment: IrComment,
     ) -> InstId {
         if let Value::Data32 { t: ScalarType::U8, data: b32 } = cond
             && self.optimize_enabled()
@@ -1470,7 +1689,7 @@ impl<'k1> Builder<'k1> {
         dst: Value,
         src: Value,
         pt: PhysicalType,
-        comment: impl Into<IrStr>,
+        comment: IrComment,
     ) -> Option<InstId> {
         let layout = self.k1.get_pt_layout(pt);
         if pt.is_empty() {
@@ -1482,16 +1701,16 @@ impl<'k1> Builder<'k1> {
         }
     }
 
-    fn push_load(&mut self, st: ScalarType, src: Value, comment: impl Into<IrStr>) -> InstId {
+    fn push_load(&mut self, st: ScalarType, src: Value, comment: IrComment) -> InstId {
         self.push_inst(Inst::Load { t: st, src }, comment)
     }
 
-    fn push_store(&mut self, dst: Value, value: Value, comment: impl Into<IrStr>) -> InstId {
+    fn push_store(&mut self, dst: Value, value: Value, comment: IrComment) -> InstId {
         let t = self.get_value_kind(value).expect_value().unwrap().expect_scalar();
         self.push_inst(Inst::Store { dst, value, t }, comment)
     }
 
-    fn make_int_value(&mut self, int_value: &TypedIntValue, comment: impl Into<IrStr>) -> Value {
+    fn make_int_value(&mut self, int_value: &TypedIntValue, comment: IrComment) -> Value {
         match int_value {
             TypedIntValue::U8(i) => Value::Data32 { t: ScalarType::U8, data: *i as u32 },
             TypedIntValue::U16(i) => Value::Data32 { t: ScalarType::U16, data: *i as u32 },
@@ -1518,8 +1737,8 @@ impl<'k1> Builder<'k1> {
         }
     }
 
-    fn push_block(&mut self, name: &'static str) -> BlockId {
-        let node = self.k1.ir.mem.dlist_push(&mut self.blocks, Block::empty(name));
+    fn push_block(&mut self, kind: BlockSourceKind) -> BlockId {
+        let node = self.k1.ir.mem.dlist_push(&mut self.blocks, Block::empty(kind));
         node
     }
 
@@ -1636,12 +1855,12 @@ impl<'k1> Builder<'k1> {
         inst_node: IrHandle<InstNode>,
     ) -> Handle<BlockNode, ProgramIr> {
         let mut block_ref = self.k1.ir.mem.get_raw_ref(block_node);
-        let name = block_ref.data.name;
+        let kind = block_ref.data.kind;
         let after_insts = self.k1.ir.mem.dlist_split_at_node(&mut block_ref.data.instrs, inst_node);
         let after_block = self.k1.ir.mem.dlist_insert_after(
             &mut self.blocks,
             block_node,
-            Block { name, instrs: after_insts, preds: Dlist::empty(), succs: Dlist::empty() },
+            Block { kind, instrs: after_insts, preds: Dlist::empty(), succs: Dlist::empty() },
         );
         after_block
     }
@@ -1651,7 +1870,7 @@ fn store_scalar_if_dst(b: &mut Builder, dst: Option<Value>, value: Value) -> Val
     match dst {
         None => value,
         Some(dst) => {
-            b.push_store(dst, value, "store scalar to dst");
+            b.push_store(dst, value, IrComment::StoreScalarToDst);
             dst
         }
     }
@@ -1662,7 +1881,7 @@ fn store_rich_if_dst(
     dst: Option<Value>,
     pt: PhysicalType,
     value: Value,
-    comment: impl Into<IrStr>,
+    comment: IrComment,
 ) -> Value {
     match dst {
         None => {
@@ -1748,7 +1967,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
                 Ok(Value::Empty)
             } else {
                 let variable_alloca =
-                    b.push_alloca_ext(rich_pt, "source let", debug_info, returned);
+                    b.push_alloca_ext(rich_pt, IrComment::SourceLet, debug_info, returned);
 
                 if let Some(init) = let_stmt.initializer {
                     compile_expr(b, Some(variable_alloca.as_value()), init)?;
@@ -1799,10 +2018,10 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
         }
         TypedStmt::Require(req) => {
             let req = req.clone();
-            let require_continue_block = b.push_block("require_continue");
+            let require_continue_block = b.push_block(BlockSourceKind::RequireContinue);
             let require_else_block = match req.else_body {
                 None => None,
-                Some(_) => Some(b.push_block("require_else")),
+                Some(_) => Some(b.push_block(BlockSourceKind::RequireElse)),
             };
 
             compile_matching_condition(
@@ -1851,7 +2070,7 @@ fn compile_expr(
             let struct_agg_id = struct_pt.expect_agg();
             let struct_base = match dst {
                 Some(dst) => dst,
-                None => b.push_alloca(struct_pt, "struct literal").as_value(),
+                None => b.push_alloca(struct_pt, IrComment::StructLiteral).as_value(),
             };
             for (field_index, field) in b.k1.mem.getn(struct_literal.fields).iter().enumerate() {
                 match field.expr {
@@ -1863,7 +2082,7 @@ fn compile_expr(
                             struct_agg_id,
                             struct_base,
                             field_index as u32,
-                            "struct lit field ptr",
+                            IrComment::StructLitFieldPtr,
                         );
                         compile_expr(b, Some(struct_offset), expr)?;
                     }
@@ -1889,7 +2108,7 @@ fn compile_expr(
             let var_result = compile_variable_to_address(b, variable_expr.variable_id, false);
             match var_result {
                 CompileVariableResult::FoldedValue { value, pt } => {
-                    let stored = store_rich_if_dst(b, dst, pt, value, "folded variable");
+                    let stored = store_rich_if_dst(b, dst, pt, value, IrComment::FoldedVariable);
                     Ok(stored)
                 }
                 CompileVariableResult::Address { addr, pt, indirect, constant } => {
@@ -1902,13 +2121,13 @@ fn compile_expr(
                             dst,
                             addr,
                             copy_aggregates,
-                            "fulfill variable usage",
+                            IrComment::FulfillVariableUsage,
                         );
                         Ok(loaded_or_copied)
                     } else {
                         // direct; var_value is already a canonical representation of the value; just have to
                         // fulfill dst
-                        let stored = store_rich_if_dst(b, dst, pt, addr, "direct variable");
+                        let stored = store_rich_if_dst(b, dst, pt, addr, IrComment::DirectVariable);
                         Ok(stored)
                     }
                 }
@@ -1930,7 +2149,11 @@ fn compile_expr(
                 dst,
                 src,
                 copy_aggregates,
-                if dst.is_some() { "lang deref fulfill to dst" } else { "lang deref no dst" },
+                if dst.is_some() {
+                    IrComment::LangDerefFulfillToDst
+                } else {
+                    IrComment::LangDerefNoDst
+                },
             );
             Ok(loaded)
         }
@@ -1994,8 +2217,15 @@ fn compile_expr(
                         let lambda_env = compile_expr(b, None, *lambda_value_expr)?;
                         let lambda_env_type_id = b.k1.exprs.get_type(*lambda_value_expr);
                         let env_pt = b.get_physical_type(lambda_env_type_id);
-                        let env_ptr = b.push_alloca(env_pt, "lambda env location").as_value();
-                        store_value(b, env_pt, env_ptr, lambda_env, "store lambda env for call");
+                        let env_ptr =
+                            b.push_alloca(env_pt, IrComment::LambdaEnvLocation).as_value();
+                        store_value(
+                            b,
+                            env_pt,
+                            env_ptr,
+                            lambda_env,
+                            IrComment::StoreLambdaEnvForCall,
+                        );
                         callee = IrCallee::Direct(*function_id);
                         environment_arg = Some(env_ptr);
                     }
@@ -2012,16 +2242,16 @@ fn compile_expr(
                             lam_obj_pt,
                             lambda_obj,
                             TypedProgram::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
-                            "dyn lam fn ptr offset",
+                            IrComment::DynLamFnPtrOffset,
                         );
-                        let fn_ptr = load_value(b, ptr_pt, fn_ptr_addr, false, "");
+                        let fn_ptr = load_value(b, ptr_pt, fn_ptr_addr, false, IrComment::None);
                         let env_addr = b.push_struct_offset(
                             lam_obj_pt,
                             lambda_obj,
                             TypedProgram::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
-                            "dyn lam env ptr offset",
+                            IrComment::DynLamEnvPtrOffset,
                         );
-                        let env = load_value(b, ptr_pt, env_addr, false, "");
+                        let env = load_value(b, ptr_pt, env_addr, false, IrComment::None);
 
                         callee = IrCallee::Indirect(callee_fn_type, fn_ptr);
                         environment_arg = Some(env);
@@ -2035,9 +2265,9 @@ fn compile_expr(
                             object_pt,
                             object,
                             *field_index,
-                            "dyn ability fn ptr offset",
+                            IrComment::DynAbilityFnPtrOffset,
                         );
-                        let fn_ptr = load_value(b, ptr_pt, fn_ptr_addr, false, "");
+                        let fn_ptr = load_value(b, ptr_pt, fn_ptr_addr, false, IrComment::None);
                         callee = IrCallee::Indirect(callee_fn_type, fn_ptr);
 
                         // Receiver-shape slots take self via the state pointer as
@@ -2050,9 +2280,9 @@ fn compile_expr(
                                 object_pt,
                                 object,
                                 TypedProgram::ABILITY_OBJECT_STATE_INDEX as u32,
-                                "dyn ability state offset",
+                                IrComment::DynAbilityStateOffset,
                             );
-                            let state = load_value(b, ptr_pt, state_addr, false, "");
+                            let state = load_value(b, ptr_pt, state_addr, false, IrComment::None);
                             environment_arg = Some(state);
                         }
                     }
@@ -2132,19 +2362,19 @@ fn compile_expr(
 
             let mut arm_blocks = b.k1.ir.mem.new_list(match_expr.arms.len());
             for _arm in b.k1.mem.getn(match_expr.arms).iter() {
-                let arm_block = b.push_block("arm_cond");
-                let arm_consequent_block = b.push_block("arm_cons");
+                let arm_block = b.push_block(BlockSourceKind::ArmCond);
+                let arm_consequent_block = b.push_block(BlockSourceKind::ArmCons);
                 arm_blocks.push((arm_block, arm_consequent_block));
             }
 
             let first_arm_block = arm_blocks[0].0;
-            b.push_jump(first_arm_block, "enter match");
+            b.push_jump(first_arm_block, IrComment::EnterMatch);
 
-            let fail_block = b.push_block("match_fail");
+            let fail_block = b.push_block(BlockSourceKind::MatchFail);
             b.goto_block(fail_block);
             b.push_inst_anon(Inst::Unreachable);
 
-            let match_end_block = b.push_block("match_end");
+            let match_end_block = b.push_block(BlockSourceKind::MatchEnd);
 
             enum MatchDst {
                 Phi(List<PhiCase, ProgramIr>),
@@ -2190,10 +2420,10 @@ fn compile_expr(
                         }
                         MatchDst::CallerDst(dst) => {
                             let pt = result_inst_kind.expect_value().unwrap();
-                            store_value(b, pt, *dst, arm_result, "match arm result store");
+                            store_value(b, pt, *dst, arm_result, IrComment::MatchArmResultStore);
                         }
                     };
-                    b.push_jump(match_end_block, "");
+                    b.push_jump(match_end_block, IrComment::None);
                 }
             }
 
@@ -2211,13 +2441,18 @@ fn compile_expr(
                                     let incomings_handle = incomings.to_slice();
                                     let phi_inst = b.push_inst(
                                         Inst::Phi { t: pt, incomings: incomings_handle },
-                                        "match phi",
+                                        IrComment::MatchPhi,
                                     );
                                     phi_inst.as_value()
                                 };
                                 debug_assert!(dst.is_none());
-                                let fulfilled =
-                                    store_rich_if_dst(b, dst, pt, value, "fulfill match dst");
+                                let fulfilled = store_rich_if_dst(
+                                    b,
+                                    dst,
+                                    pt,
+                                    value,
+                                    IrComment::FulfillMatchDst,
+                                );
                                 Ok(fulfilled)
                             }
                             MatchDst::CallerDst(dst) => Ok(dst),
@@ -2229,20 +2464,20 @@ fn compile_expr(
                 }
                 InstKind::Terminator => {
                     // match is divergent
-                    let inst = b.push_inst(Inst::Unreachable, "divergent match");
+                    let inst = b.push_inst(Inst::Unreachable, IrComment::DivergentMatch);
                     Ok(inst.as_value())
                 }
             }
         }
         TypedExpr::WhileLoop(w) => {
-            let cond_block = b.push_block("while_loop_condition");
-            let loop_body_block = b.push_block("while_loop_body");
-            let end_block = b.push_block("while_loop_end");
+            let cond_block = b.push_block(BlockSourceKind::WhileLoopCondition);
+            let loop_body_block = b.push_block(BlockSourceKind::WhileLoopBody);
+            let end_block = b.push_block(BlockSourceKind::WhileLoopEnd);
             let TypedExpr::Block(body_block) = b.k1.exprs.get(w.body) else { unreachable!() };
             let loop_scope_id = body_block.scope_id;
             b.k1.ir.b_loops.insert(loop_scope_id, LoopInfo { break_value: None, end_block });
 
-            b.push_jump(cond_block, "enter while cond");
+            b.push_jump(cond_block, IrComment::EnterWhileCond);
 
             b.goto_block(cond_block);
             compile_matching_condition(b, &w.condition, loop_body_block, Some(end_block))?;
@@ -2250,20 +2485,20 @@ fn compile_expr(
             b.goto_block(loop_body_block);
             let last = compile_block_stmts(b, None, w.body)?;
             if last.is_some_and(|v| !b.get_value_kind(v).is_terminator()) {
-                b.push_jump(cond_block, "goto while cond");
+                b.push_jump(cond_block, IrComment::GotoWhileCond);
             }
 
             b.goto_block(end_block);
             Ok(Value::Empty)
         }
         TypedExpr::LoopExpr(loop_expr) => {
-            let loop_body_block = b.push_block("loop_body");
-            let loop_end_block = b.push_block("loop_end");
+            let loop_body_block = b.push_block(BlockSourceKind::LoopBody);
+            let loop_end_block = b.push_block(BlockSourceKind::LoopEnd);
 
             let break_pt_id = b.get_physical_type(expr_type);
 
             let break_value = if expr_type != b.k1.builtin_types.empty {
-                Some(b.push_alloca(break_pt_id, "loop break value"))
+                Some(b.push_alloca(break_pt_id, IrComment::LoopBreakValue))
             } else {
                 None
             };
@@ -2276,11 +2511,11 @@ fn compile_expr(
                 .insert(body_scope_id, LoopInfo { break_value, end_block: loop_end_block });
 
             // Go to the body
-            b.push_jump(loop_body_block, "enter loop");
+            b.push_jump(loop_body_block, IrComment::EnterLoop);
             b.goto_block(loop_body_block);
             let body_value = compile_block_stmts(b, None, loop_expr.body_block)?;
             if body_value.is_some_and(|v| !b.get_value_kind(v).is_terminator()) {
-                b.push_jump(loop_body_block, "da capo maestro");
+                b.push_jump(loop_body_block, IrComment::DaCapoMaestro);
             }
 
             b.goto_block(loop_end_block);
@@ -2291,7 +2526,7 @@ fn compile_expr(
                     dst,
                     break_alloca.as_value(),
                     false,
-                    "fulfill loop break dst",
+                    IrComment::FulfillLoopBreakDst,
                 );
                 Ok(stored)
             } else {
@@ -2303,11 +2538,11 @@ fn compile_expr(
             let end_block = loop_info.end_block;
             if let Some(break_dst) = loop_info.break_value {
                 let _stored = compile_expr(b, Some(break_dst.as_value()), brk.value)?;
-                let jmp = b.push_jump(end_block, "break loop (with value)");
+                let jmp = b.push_jump(end_block, IrComment::BreakLoopWithValue);
                 Ok(jmp.as_value())
             } else {
                 compile_expr(b, None, brk.value)?;
-                let jmp = b.push_jump(end_block, "break loop (no value)");
+                let jmp = b.push_jump(end_block, IrComment::BreakLoopNoValue);
                 Ok(jmp.as_value())
             }
         }
@@ -2319,18 +2554,18 @@ fn compile_expr(
             let sum_struct_repr = sum_pt_agg.struct_repr;
             let sum_base = match dst {
                 Some(dst) => dst,
-                None => b.push_alloca(sum_pt, "sum literal storage").as_value(),
+                None => b.push_alloca(sum_pt, IrComment::SumLiteralStorage).as_value(),
             };
 
             let tag_base = sum_base;
             let sum_variant = b.k1.mem.get_nth(variants, sum_c.variant_index as usize);
             let tag_int_value = sum_variant.tag;
-            let int_imm = b.make_int_value(&tag_int_value, "sum tag");
-            b.push_store(tag_base, int_imm, "store sum lit tag");
+            let int_imm = b.make_int_value(&tag_int_value, IrComment::SumTag);
+            b.push_store(tag_base, int_imm, IrComment::StoreSumLitTag);
 
             if let Some(payload_expr) = &sum_c.payload {
                 let payload_offset =
-                    b.push_struct_offset(sum_struct_repr, sum_base, 1, "sum payload ptr");
+                    b.push_struct_offset(sum_struct_repr, sum_base, 1, IrComment::SumPayloadPtr);
                 let _payload_value = compile_expr(b, Some(payload_offset), *payload_expr)?;
             }
 
@@ -2348,22 +2583,28 @@ fn compile_expr(
                 dst,
                 sum_base,
                 false,
-                "get sum tag, load or copy to dst",
+                IrComment::GetSumTagLoadOrCopyToDst,
             ))
         }
         TypedExpr::SumGetPayload(_sum_get_payload) => {
             let (payload_place, frozen) = compile_expr_place(b, expr)?;
             let result_type = b.get_physical_type(expr_type);
             let make_copy = !frozen;
-            let copied =
-                load_or_copy(b, result_type, dst, payload_place, make_copy, "deliver sum payload");
+            let copied = load_or_copy(
+                b,
+                result_type,
+                dst,
+                payload_place,
+                make_copy,
+                IrComment::DeliverSumPayload,
+            );
             Ok(copied)
         }
         TypedExpr::Enum(e) => {
             // Just compile to the integer
             let Type::Enum(enum_type) = b.k1.types.get(expr_type) else { unreachable!() };
             let value = b.k1.mem.get_nth(enum_type.member_values, e.value_index as usize);
-            let value = b.make_int_value(&value.int_value, "enum int");
+            let value = b.make_int_value(&value.int_value, IrComment::EnumInt);
             let stored = store_scalar_if_dst(b, dst, value);
             Ok(stored)
         }
@@ -2381,7 +2622,7 @@ fn compile_expr(
                     None => {
                         let rvo_storage = b.push_alloca_ext(
                             return_pt,
-                            "rvo storage",
+                            IrComment::RvoStorage,
                             IrDebugInfo::default(),
                             true,
                         );
@@ -2398,7 +2639,7 @@ fn compile_expr(
             let returned_value = if return_pt.is_empty() { Value::Empty } else { value };
             let ret = b.push_inst(
                 Inst::Ret { v: returned_value, agg: is_agg_return },
-                if is_agg_return { "return aggregate at address" } else { "" },
+                if is_agg_return { IrComment::ReturnAggregateAtAddress } else { IrComment::None },
             );
             Ok(ret.as_value())
         }
@@ -2413,14 +2654,14 @@ fn compile_expr(
         TypedExpr::FunctionPointer(fpe) => {
             let fp = Value::FunctionAddr(fpe.function_id);
             let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
-            let stored = store_rich_if_dst(b, dst, ptr_pt, fp, "deliver fn pointer");
+            let stored = store_rich_if_dst(b, dst, ptr_pt, fp, IrComment::DeliverFnPointer);
             b.k1.ir.units_pending_compile.insert(fpe.function_id, ());
             Ok(stored)
         }
         TypedExpr::StaticValue(stat) => {
             let t = b.get_physical_type(expr_type);
             let value = compile_static_value(b, stat.value_id, t);
-            let stored = store_rich_if_dst(b, dst, t, value, "store static value to dst");
+            let stored = store_rich_if_dst(b, dst, t, value, IrComment::StoreStaticValueToDst);
             Ok(stored)
         }
     }
@@ -2436,7 +2677,7 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
                 struct_pt_id,
                 base_ptr,
                 field_access.field_index,
-                "struct access place",
+                IrComment::StructAccessPlace,
             );
             Ok((field_ptr, frozen))
         }
@@ -2448,7 +2689,7 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
             let index = compile_expr(b, None, array_get.index)?;
             let element_ptr = b.push_inst(
                 Inst::ArrayOffset { element_t: element_pt, base: array_base, element_index: index },
-                "array get offset place",
+                IrComment::ArrayGetOffsetPlace,
             );
             Ok((element_ptr.as_value(), frozen))
         }
@@ -2487,7 +2728,7 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
             let sum_pt = b.k1.agg_types.get(sum_agg_id).agg_type.expect_sum();
             let sum_struct_repr = sum_pt.struct_repr;
             let payload_offset =
-                b.push_struct_offset(sum_struct_repr, sum_base, 1, "sum payload offset");
+                b.push_struct_offset(sum_struct_repr, sum_base, 1, IrComment::SumPayloadOffset);
             Ok((payload_offset, frozen))
         }
         TypedExpr::AddressOf(_address_of_expr) => {
@@ -2516,18 +2757,18 @@ fn compile_static_value(b: &mut Builder, value_id: StaticValueId, pt: PhysicalTy
         }
         StaticValue::Int(int) => {
             let int = *int;
-            let int_value = b.make_int_value(&int, "static int");
+            let int_value = b.make_int_value(&int, IrComment::StaticInt);
             int_value
         }
         StaticValue::Enum(_, int) => {
             let int = *int;
-            let int_value = b.make_int_value(&int, "static enum");
+            let int_value = b.make_int_value(&int, IrComment::StaticEnum);
             int_value
         }
         StaticValue::Float(float) => {
             let float = *float;
             //task(ir): Pack small floats
-            let imm = b.push_inst(Inst::Data(DataInst::Float(float)), "static float");
+            let imm = b.push_inst(Inst::Data(DataInst::Float(float)), IrComment::StaticFloat);
             imm.as_value()
         }
         StaticValue::String(_)
@@ -2648,8 +2889,8 @@ fn build_field_access(
 ) -> Value {
     let make_copy = needs_copy;
     let comment = match make_copy {
-        false => "field access no copy",
-        true => "field access w copy",
+        false => IrComment::FieldAccessNoCopy,
+        true => IrComment::FieldAccessWCopy,
     };
     let loaded = load_or_copy(b, result_pt, dst, field_ptr, make_copy, comment);
     loaded
@@ -2674,7 +2915,13 @@ fn compile_ir_builtin(
             let bake = b.push_inst_anon(Inst::BakeStaticValue { type_id, value });
 
             // Produces a type id, which is a scalar
-            let stored = store_rich_if_dst(b, dst, callee_fn_type.return_type, bake.as_value(), "");
+            let stored = store_rich_if_dst(
+                b,
+                dst,
+                callee_fn_type.return_type,
+                bake.as_value(),
+                IrComment::None,
+            );
             Ok(stored)
         }
         BuiltinIr::Zeroed => {
@@ -2685,13 +2932,15 @@ fn compile_ir_builtin(
                 PhysicalTypeEnum::Agg(agg_id) => {
                     let pt_layout = b.k1.agg_types.get(agg_id).layout;
                     let dst = match dst {
-                        None => b.push_alloca(pt, "zeroed no dst").as_value(),
+                        None => b.push_alloca(pt, IrComment::ZeroedNoDst).as_value(),
                         Some(dst) => dst,
                     };
                     let zero_u8 = Value::byte(0);
                     // intern fn set(dst: ptr, value: u8, count: size): unit
-                    let count =
-                        b.make_int_value(&TypedIntValue::I64(pt_layout.size as i64), "memset size");
+                    let count = b.make_int_value(
+                        &TypedIntValue::I64(pt_layout.size as i64),
+                        IrComment::MemsetSize,
+                    );
                     let memset_args = b.k1.ir.mem.pushn(&[dst, zero_u8, count]);
                     let Some(memset_function_id) =
                         b.k1.scopes.find_function(b.k1.scopes.mem_scope_id, b.k1.ast.idents.b.set)
@@ -2708,7 +2957,7 @@ fn compile_ir_builtin(
                         dst: None,
                     };
                     let call_id = b.k1.ir.calls.add(memset_call);
-                    b.push_inst(Inst::Call { call_id }, "zeroed memset");
+                    b.push_inst(Inst::Call { call_id }, IrComment::ZeroedMemset);
                     Ok(dst)
                 }
                 PhysicalTypeEnum::Scalar(st) => {
@@ -2753,7 +3002,7 @@ fn compile_ir_builtin(
                         dst,
                         to_pt,
                         bitcast.as_value(),
-                        "fulfill bitcast destination",
+                        IrComment::FulfillBitcastDestination,
                     );
                     Ok(stored)
                 }
@@ -2761,27 +3010,35 @@ fn compile_ir_builtin(
                     // We need a place, so its alloca time
                     let locn = match dst {
                         Some(dst) => dst,
-                        None => b.push_alloca(to_pt, "bitcast scalar to agg place").as_value(),
+                        None => b.push_alloca(to_pt, IrComment::BitcastScalarToAggPlace).as_value(),
                     };
 
                     // We know a scalar store will work
-                    let _stored = b.push_store(locn, from_value, "bitcast scalar to agg store");
+                    let _stored =
+                        b.push_store(locn, from_value, IrComment::BitcastScalarToAggStore);
                     Ok(locn)
                 }
                 (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Scalar(_)) => {
                     // Perform a 'load' of the scalar type _from_ the
                     // aggregate's memory
-                    let loaded =
-                        load_or_copy(b, to_pt, dst, from_value, false, "bitcast agg to scalar");
+                    let loaded = load_or_copy(
+                        b,
+                        to_pt,
+                        dst,
+                        from_value,
+                        false,
+                        IrComment::BitcastAggToScalar,
+                    );
                     Ok(loaded)
                 }
                 (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Agg(_)) => {
                     // Make a copy to a definitely-aligned destination.
                     let locn = match dst {
                         Some(dst) => dst,
-                        None => b.push_alloca(to_pt, "bitcast agg to agg place").as_value(),
+                        None => b.push_alloca(to_pt, IrComment::BitcastAggToAggPlace).as_value(),
                     };
-                    let _copied = b.push_copy(locn, from_value, from_pt, "bitcast agg to agg copy");
+                    let _copied =
+                        b.push_copy(locn, from_value, from_pt, IrComment::BitcastAggToAggCopy);
                     Ok(locn)
                 }
             }
@@ -2818,7 +3075,7 @@ fn compile_ir_builtin(
             let element_index = compile_expr(b, None, arg1)?;
             let offset = b.push_inst(
                 Inst::ArrayOffset { element_t: elem_pt, base, element_index },
-                "refAtIndex offset",
+                IrComment::RefAtIndexOffset,
             );
             let stored = store_scalar_if_dst(b, dst, offset.as_value());
             Ok(stored)
@@ -2838,7 +3095,7 @@ fn compile_ir_builtin(
             let store_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
             b.push_inst_anon(Inst::AtomicStore { dst: store_dst, value, t, ord });
-            Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, ""))
+            Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
         }
         BuiltinIr::AtomicRmw(op) => {
             // intern fn <op>[t](dst: *mut t, value: t, ord: ordering): t
@@ -2882,7 +3139,7 @@ fn compile_ir_builtin(
                 b_ice!(b, "cmpxchg result missing ok field");
             };
             let result = match dst {
-                None => b.push_alloca(ret_pt, "cmpxchg result").as_value(),
+                None => b.push_alloca(ret_pt, IrComment::CmpxchgResult).as_value(),
                 Some(dst) => dst,
             };
             let id = b.k1.ir.cmpxchgs.add(AtomicCmpxchgData {
@@ -2903,7 +3160,7 @@ fn compile_ir_builtin(
             // intern fn fence(ord: ordering)
             let ord = b.k1.atomic_ordering_arg(&call, 0)?;
             b.push_inst_anon(Inst::Fence { ord });
-            Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, ""))
+            Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
         }
         BuiltinIr::VectorOp(op) => compile_vector_op(b, op, &call, callee_fn_type, dst),
     }
@@ -2923,7 +3180,9 @@ fn compile_vector_op(
             let (elem, lanes) = vector_pt_parts(b, callee_fn_type.return_type)?;
             let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let locn = match dst {
-                None => b.push_alloca(callee_fn_type.return_type, "splat result").as_value(),
+                None => {
+                    b.push_alloca(callee_fn_type.return_type, IrComment::SplatResult).as_value()
+                }
                 Some(dst) => dst,
             };
             let id = b.k1.ir.vec_ops.add(VecOpData {
@@ -2960,7 +3219,7 @@ fn compile_vector_op(
             let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
             let locn = match dst {
-                None => b.push_alloca(ret_pt, "vec binop result").as_value(),
+                None => b.push_alloca(ret_pt, IrComment::VecBinopResult).as_value(),
                 Some(dst) => dst,
             };
             let id = b.k1.ir.vec_ops.add(VecOpData { op, elem, lanes, dst: locn, lhs, rhs });
@@ -2972,7 +3231,7 @@ fn compile_vector_op(
             let (elem, lanes) = vector_pt_parts(b, ret_pt)?;
             let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let locn = match dst {
-                None => b.push_alloca(ret_pt, "vec not result").as_value(),
+                None => b.push_alloca(ret_pt, IrComment::VecNotResult).as_value(),
                 Some(dst) => dst,
             };
             let id = b.k1.ir.vec_ops.add(VecOpData {
@@ -2994,7 +3253,7 @@ fn compile_vector_op(
             let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let count = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
             let locn = match dst {
-                None => b.push_alloca(ret_pt, "vec shift result").as_value(),
+                None => b.push_alloca(ret_pt, IrComment::VecShiftResult).as_value(),
                 Some(dst) => dst,
             };
             let id = b.k1.ir.vec_ops.add(VecOpData { op, elem, lanes, dst: locn, lhs, rhs: count });
@@ -3023,10 +3282,10 @@ fn compile_vector_op(
             let _ = vector_pt_parts(b, ret_pt)?;
             let src = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let locn = match dst {
-                None => b.push_alloca(ret_pt, "vector load result").as_value(),
+                None => b.push_alloca(ret_pt, IrComment::VectorLoadResult).as_value(),
                 Some(dst) => dst,
             };
-            b.push_copy(locn, src, ret_pt, "vector load");
+            b.push_copy(locn, src, ret_pt, IrComment::VectorLoad);
             Ok(locn)
         }
         VecOpKind::Store => {
@@ -3035,8 +3294,8 @@ fn compile_vector_op(
             let _ = vector_pt_parts(b, vec_pt)?;
             let vec_value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let dst_ptr = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
-            b.push_copy(dst_ptr, vec_value, vec_pt, "vector store");
-            Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, ""))
+            b.push_copy(dst_ptr, vec_value, vec_pt, IrComment::VectorStore);
+            Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
         }
         VecOpKind::GetLane => {
             // intern fn get-lane[t, n](self: vector[t, n], index: size): t
@@ -3046,9 +3305,9 @@ fn compile_vector_op(
             let element_index = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
             let offset = b.push_inst(
                 Inst::ArrayOffset { element_t: PhysicalType::scalar(elem), base, element_index },
-                "get-lane offset",
+                IrComment::GetLaneOffset,
             );
-            let loaded = b.push_load(elem, offset.as_value(), "get-lane load");
+            let loaded = b.push_load(elem, offset.as_value(), IrComment::GetLaneLoad);
             Ok(store_scalar_if_dst(b, dst, loaded.as_value()))
         }
         VecOpKind::WithLane => {
@@ -3059,19 +3318,19 @@ fn compile_vector_op(
             let element_index = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
             let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 2))?;
             let locn = match dst {
-                None => b.push_alloca(ret_pt, "with-lane result").as_value(),
+                None => b.push_alloca(ret_pt, IrComment::WithLaneResult).as_value(),
                 Some(dst) => dst,
             };
-            b.push_copy(locn, src_vec, ret_pt, "with-lane copy");
+            b.push_copy(locn, src_vec, ret_pt, IrComment::WithLaneCopy);
             let offset = b.push_inst(
                 Inst::ArrayOffset {
                     element_t: PhysicalType::scalar(elem),
                     base: locn,
                     element_index,
                 },
-                "with-lane offset",
+                IrComment::WithLaneOffset,
             );
-            b.push_store(offset.as_value(), value, "with-lane store");
+            b.push_store(offset.as_value(), value, IrComment::WithLaneStore);
             Ok(locn)
         }
     }
@@ -3143,7 +3402,8 @@ fn compile_cast(
         | CastType::ReferenceToPointer => {
             let base_noop = compile_expr(b, None, c.base_expr)?;
             let to_pt = b.get_physical_type(target_type_id);
-            let stored = store_rich_if_dst(b, dst, to_pt, base_noop, "fulfill cast destination");
+            let stored =
+                store_rich_if_dst(b, dst, to_pt, base_noop, IrComment::FulfillCastDestination);
             Ok(stored)
         }
         CastType::IntegerCast(IntegerCastDirection::Extend)
@@ -3183,7 +3443,8 @@ fn compile_cast(
                 v: base,
                 to: PhysicalType::scalar(ScalarType::U8),
             });
-            let extend = b.push_inst(Inst::IntExtU { v: bitcast.as_value(), to }, "bool_to_int");
+            let extend =
+                b.push_inst(Inst::IntExtU { v: bitcast.as_value(), to }, IrComment::BoolToInt);
             let stored = store_scalar_if_dst(b, dst, extend.as_value());
             Ok(stored)
         }
@@ -3311,7 +3572,7 @@ fn compile_arith_binop(
             Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Ge, width: lhs_width }
         }
     };
-    let res = b.push_inst(inst, "");
+    let res = b.push_inst(inst, IrComment::None);
     let stored = store_scalar_if_dst(b, dst, res.as_value());
     Ok(stored)
 }
@@ -3329,12 +3590,11 @@ fn load_value(
     pt: PhysicalType,
     src: Value,
     make_copy: bool,
-    comment: impl Into<IrStr>,
+    comment: IrComment,
 ) -> Value {
     match pt.as_enum() {
         PhysicalTypeEnum::Agg(_) => {
             if make_copy {
-                let comment = comment.into();
                 let dst = b.push_alloca(pt, comment);
                 b.push_copy(dst.as_value(), src, pt, comment);
                 dst.as_value()
@@ -3352,7 +3612,7 @@ fn store_value(
     pt: PhysicalType,
     dst: Value,
     value: Value,
-    comment: impl Into<IrStr>,
+    comment: IrComment,
 ) -> Option<InstId> {
     match pt.as_enum() {
         PhysicalTypeEnum::Agg(_) => {
@@ -3376,7 +3636,7 @@ fn load_or_copy(
     dst: Option<Value>,
     src: Value,
     copy_aggregates: bool,
-    comment: impl Into<IrStr>,
+    comment: IrComment,
 ) -> Value {
     match dst {
         Some(dst) => {
@@ -3395,7 +3655,7 @@ fn compile_matching_condition(
 ) -> K1Result<()> {
     if mc.instrs.is_empty() {
         // Always true
-        b.push_jump(cons_block, "empty condition");
+        b.push_jump(cons_block, IrComment::EmptyCondition);
         return Ok(());
     }
     for (index, inst) in b.k1.mem.getn(mc.instrs).iter().enumerate() {
@@ -3404,21 +3664,27 @@ fn compile_matching_condition(
             MatchingConditionInstr::Binding { let_stmt, .. } => {
                 compile_stmt(b, None, *let_stmt)?;
                 if is_last {
-                    b.push_jump(cons_block, "matching cond binding fallthrough to cons");
+                    b.push_jump(cons_block, IrComment::MatchingCondBindingFallthroughToCons);
                 }
             }
             MatchingConditionInstr::Cond { value } => {
                 let cond_value: Value = compile_expr(b, None, *value)?;
-                let continue_block =
-                    if is_last { cons_block } else { b.push_block("matching_cond_continue") };
+                let continue_block = if is_last {
+                    cons_block
+                } else {
+                    b.push_block(BlockSourceKind::MatchingCondContinue)
+                };
 
                 // If the matching condition was typechecked as 'infallible', we don't have a fail
                 // block, and we just jump to continue.
                 match condition_fail_block {
-                    None => b.push_jump(continue_block, "infallible matching cond continue"),
-                    Some(fail_block) => {
-                        b.push_jump_if(cond_value, continue_block, fail_block, "matching cond cond")
-                    }
+                    None => b.push_jump(continue_block, IrComment::InfallibleMatchingCondContinue),
+                    Some(fail_block) => b.push_jump_if(
+                        cond_value,
+                        continue_block,
+                        fail_block,
+                        IrComment::MatchingCondCond,
+                    ),
                 };
 
                 b.goto_block(continue_block);
@@ -3891,7 +4157,7 @@ pub fn display_block(
 ) -> std::fmt::Result {
     let ir = &k1.ir;
     let block = ir.mem.get(block_id).data;
-    write!(w, "b{} {}", block_id.raw_index(), block.name)?;
+    write!(w, "b{} {}", block_id.raw_index(), block.kind.str())?;
     if cfg_valid {
         let preds_string =
             ir.mem.dlist_iter(block.preds).map(|pred| format!("b{}", pred.raw_index())).join(", ");
@@ -3905,7 +4171,7 @@ pub fn display_block(
         let inst_str = inst_to_string(k1, *inst_id);
         write!(w, "{:60}", inst_str)?;
         let comment = ir.comments.get(*inst_id);
-        write!(w, "; {:30}", comment)?;
+        write!(w, "; {:30}", comment.str())?;
 
         if show_source {
             let span_id = *ir.sources.get(*inst_id);
@@ -4048,7 +4314,7 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
             w.write_str(")")?;
         }
         Inst::Jump(block_id) => {
-            write!(w, "jmp b{} {}", block_id.raw_index(), k1.ir.mem.get(block_id).data.name)?;
+            write!(w, "jmp b{} {}", block_id.raw_index(), k1.ir.mem.get(block_id).data.kind.str())?;
         }
         Inst::JumpIf { cond, cons, alt } => {
             write!(
@@ -4056,9 +4322,9 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
                 "jmpif {}, b{} {}, b{} {}",
                 cond,
                 cons.raw_index(),
-                k1.ir.mem.get(cons).data.name,
+                k1.ir.mem.get(cons).data.kind.str(),
                 alt.raw_index(),
-                k1.ir.mem.get(alt).data.name
+                k1.ir.mem.get(alt).data.kind.str()
             )?;
         }
         Inst::Unreachable => {
@@ -4076,7 +4342,7 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
                     w,
                     "(b{} {}: {})",
                     incoming.from.raw_index(),
-                    k1.ir.mem.get(incoming.from).data.name,
+                    k1.ir.mem.get(incoming.from).data.kind.str(),
                     incoming.value
                 )?;
             }

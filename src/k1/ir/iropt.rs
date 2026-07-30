@@ -274,7 +274,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                         b.goto_block(call_post_block.unwrap());
                         let phi = b.push_inst_front(
                             Inst::Phi { t: call.ret_type, incomings: MSlice::empty() },
-                            "inlined scalar return",
+                            IrComment::InlinedScalarReturn,
                         );
                         result_rewrites.values.insert(call_inst_id, Value::Inst(phi));
                         InlinedReturnInfo::ScalarInPhi(phi, incomings)
@@ -286,7 +286,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                                 vm_layout: ret_layout,
                                 returned: false,
                             },
-                            "inline ret".into(),
+                            IrComment::InlineRet,
                             IrDebugInfo::default(),
                             call_span,
                         );
@@ -334,7 +334,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                 &mut b.blocks,
                 b.cur_block,
                 Block {
-                    name: callee_block.data.name,
+                    kind: callee_block.data.kind,
                     instrs: Dlist::empty(),
                     preds: Dlist::empty(),
                     succs: Dlist::empty(),
@@ -348,7 +348,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
             inlined_rewrites.block_enters.insert(callee_block_id, inlined_block);
             inlined_rewrites.block_exits.insert(callee_block_id, inlined_block);
             if index == 0 {
-                b.push_jump(inlined_block, "enter inlined code");
+                b.push_jump(inlined_block, IrComment::EnterInlinedCode);
             }
             b.cur_block = inlined_block;
             for callee_inst in b.k1.ir.mem.dlist_iter(callee_block.data.instrs) {
@@ -372,7 +372,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                                     call.ret_type,
                                     *dst_storage,
                                     *v,
-                                    "inlined agg ret",
+                                    IrComment::InlinedAggRet,
                                 )
                                 .expect("call.ret_type is not Empty");
                                 rewritten_returns.push_grow(&mut b.k1.tmp, store_id);
@@ -383,7 +383,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                             ),
                         }
                         if let Some(call_post_block) = call_post_block {
-                            b.push_jump(call_post_block, "exit inlined code");
+                            b.push_jump(call_post_block, IrComment::ExitInlinedCode);
                         }
                         include = false;
                     }
