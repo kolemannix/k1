@@ -1,5 +1,5 @@
 use super::*;
-use crate::failf;
+use crate::kbail;
 
 pub type CellId = u32;
 pub type WidgetId = u32;
@@ -102,16 +102,29 @@ impl TypedProgram {
             let p_result = p.parse_function(None);
             let new_errors = p.ast.errors.len() - error_count_start;
             match p_result {
-                Err(e) => {
-                    failf!(e.span(), "{msg_base}{}", e)
-                }
+                Err(e) => Err(make_message(
+                    &p.ast.idents,
+                    format!("{msg_base}{e}"),
+                    e.span(),
+                    MessageLevel::Error,
+                )),
                 Ok(_) if new_errors > 0 => {
                     let e = p.ast.errors.last().unwrap();
-                    failf!(e.span(), "{msg_base}{}", e)
+                    Err(make_message(
+                        &p.ast.idents,
+                        format!("{msg_base}{e}"),
+                        e.span(),
+                        MessageLevel::Error,
+                    ))
                 }
                 Ok(Some(defn)) => Ok(ParseReplSourceResult::Defn(ParsedId::Function(defn))),
                 Ok(None) => match p.parse_block_statements(TokenKind::Eof) {
-                    Err(e) => failf!(e.span(), "{msg_base}{}", e),
+                    Err(e) => Err(make_message(
+                        &p.ast.idents,
+                        format!("{msg_base}{e}"),
+                        e.span(),
+                        MessageLevel::Error,
+                    )),
                     Ok(stmts) => Ok(ParseReplSourceResult::Stmts(stmts)),
                 },
             }
@@ -224,6 +237,7 @@ impl TypedProgram {
         let mr = self.megarepl.as_mut().unwrap();
         let cell_id = mr.cells.len() as CellId;
         let source_id = self.megarepl_create_source(cell_id, 0, code);
+        let uninit_warning = self.make_warning("uninit", SpanId::NONE);
         let mr = self.megarepl.as_mut().unwrap();
         mr.cells.push(MegareplCell {
             id: cell_id,
@@ -232,7 +246,7 @@ impl TypedProgram {
             expr_id: None,
             iteration: 0,
             source_id,
-            last_result: CellResult::error(make_warning("uninit", SpanId::NONE)),
+            last_result: CellResult::error(uninit_warning),
             last_exec_time: None,
             output_globals: vec![],
             last_ir: String::new(),
@@ -446,7 +460,7 @@ impl TypedProgram {
             bc::exec::execute_compiled_function(k1, vm, set_fn, &[static_bool], false)
         });
         if let Err(e) = result {
-            eprintln!("megarepl checkbox set failed: {}", e.message);
+            eprintln!("megarepl checkbox set failed: {}", self.ident_str(e.message));
         }
 
         self.megarepl_run_observers(&[]);
@@ -542,7 +556,8 @@ impl TypedProgram {
                         None => None,
                     };
                     if rhs.is_none() && expected_type.is_none() {
-                        return failf!(
+                        kbail!(
+                            self,
                             parsed_let.span,
                             "let without type or initializer is not allowed"
                         );

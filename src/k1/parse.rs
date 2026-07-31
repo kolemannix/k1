@@ -1685,7 +1685,7 @@ unsafe impl Send for ParsedProgram {}
 impl ParsedProgram {
     pub fn make(name: String) -> ParsedProgram {
         let mut mem = kmem::Mem::make();
-        let mut idents = IdentPool::make(&mut mem);
+        let idents = IdentPool::make(&mut mem);
         let name_id = idents.intern(&name);
 
         let semantic_tokens = VPool::make("semantic_tokens");

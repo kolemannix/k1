@@ -12,7 +12,7 @@ use crate::kmem::{DlNode, Dlist, Handle, List, NodeHandle};
 use crate::parse::{self, NumericWidth, StringId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
-use crate::{failf, static_assert_size};
+use crate::{kbail, kerr, static_assert_size};
 use crate::{
     kmem::{self, MSlice},
     lex::SpanId,
@@ -1336,12 +1336,12 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
     let f = b.k1.get_function(function_id);
     let function_type = b.k1.types.get(f.type_id).expect_function();
     let return_type_id = function_type.return_type;
-    if let Some(err) = f.body_failure.clone() {
+    if let Some(err) = f.body_failure {
         return Err(K1Message {
-            message: format!(
+            message: b.k1.ast.idents.intern(format!(
                 "Cannot generate ir for function {}, which failed compilation",
                 b.k1.ident_str(f.name)
-            ),
+            )),
             span: err.span,
             level: err.level,
             error_kind: ErrorKind::Malformed,
@@ -1904,7 +1904,7 @@ fn compile_block_stmts(
     body: TypedExprId,
 ) -> K1Result<Option<Value>> {
     let TypedExpr::Block(body) = b.k1.exprs.get(body) else {
-        return failf!(b.cur_span, "body is not a block");
+        kbail!(b.k1, b.cur_span, "body is not a block");
     };
     debug!("compiling block {}", b.k1.block_to_string(body));
 
@@ -2229,9 +2229,11 @@ fn compile_expr(
                         callee = IrCallee::Direct(*function_id);
                         environment_arg = Some(env_ptr);
                     }
-                    Callee::Abstract { .. } => return failf!(b.cur_span, "ir abstract callee"),
+                    Callee::Abstract { .. } => {
+                        kbail!(b.k1, b.cur_span, "ir abstract callee");
+                    }
                     Callee::Builtin { builtin, .. } => {
-                        return failf!(b.cur_span, "ir builtin callee: {}", builtin.kind_name());
+                        kbail!(b.k1, b.cur_span, "ir builtin callee: {}", builtin.kind_name());
                     }
                     Callee::DynamicLambda(dl) => {
                         let lambda_obj = compile_expr(b, None, *dl)?;
@@ -2291,7 +2293,7 @@ fn compile_expr(
                         callee = IrCallee::Indirect(callee_fn_type, callee_inst);
                     }
                     Callee::DynamicAbstract { .. } => {
-                        return failf!(b.cur_span, "ir abstract call");
+                        kbail!(b.k1, b.cur_span, "ir abstract call");
                     }
                 }
             }
@@ -2459,9 +2461,7 @@ fn compile_expr(
                         }
                     }
                 }
-                InstKind::Void => {
-                    failf!(b.cur_span, "match result void")
-                }
+                InstKind::Void => Err(kerr!(b.k1, b.cur_span, "match result void")),
                 InstKind::Terminator => {
                     // match is divergent
                     let inst = b.push_inst(Inst::Unreachable, IrComment::DivergentMatch);
@@ -2992,7 +2992,7 @@ fn compile_ir_builtin(
             let from_value = compile_expr(b, None, arg0)?;
             match (from_pt.as_enum(), to_pt.as_enum()) {
                 (PhysicalTypeEnum::Empty, _) | (_, PhysicalTypeEnum::Empty) => {
-                    failf!(b.cur_span, "Cannot bitcast to or from empty type")
+                    Err(kerr!(b.k1, b.cur_span, "Cannot bitcast to or from empty type"))
                 }
                 (PhysicalTypeEnum::Scalar(_), PhysicalTypeEnum::Scalar(_)) => {
                     // Note that this also covers Pointer to Pointer
@@ -3340,7 +3340,8 @@ fn compile_vector_op(
 /// source span for still-abstract or non-vector instantiations
 fn vector_pt_parts(b: &mut Builder, pt: PhysicalType) -> K1Result<(ScalarType, u32)> {
     let PhysicalTypeEnum::Agg(agg_id) = pt.as_enum() else {
-        return failf!(
+        kbail!(
+            b.k1,
             b.cur_span,
             "vector intrinsic requires a concrete vector type; got {}",
             b.k1.pt_to_string(pt)
@@ -3348,11 +3349,12 @@ fn vector_pt_parts(b: &mut Builder, pt: PhysicalType) -> K1Result<(ScalarType, u
     };
     match b.k1.agg_types.get(agg_id).agg_type {
         AggType::Vector { element_pt, len } => Ok((element_pt, len)),
-        _ => failf!(
+        _ => Err(kerr!(
+            b.k1,
             b.cur_span,
             "vector intrinsic requires a vector type; got {}",
             b.k1.pt_to_string(pt)
-        ),
+        )),
     }
 }
 
@@ -3371,10 +3373,11 @@ fn atomic_element_type(b: &mut Builder, call: &Call, allow_pointer: bool) -> K1R
         _ => false,
     };
     if !supported {
-        return failf!(
+        kbail!(
+            b.k1,
             b.cur_span,
             "atomic operations are not supported for type {}; supported are integer-sized scalars{}",
-            b.k1.type_id_to_string(type_id),
+            type_id,
             if allow_pointer { " and pointers" } else { "" }
         );
     }
@@ -3745,7 +3748,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
     let ir = &k1.ir;
     let span = get_unit_span(k1, unit_id);
     let Some(unit) = get_compiled_unit(&k1.ir, unit_id) else {
-        return failf!(span, "Not compiled");
+        kbail!(k1, span, "Not compiled");
     };
     // eprintln!("validate_unit: {}", unit_name_to_string(k1, unit_id));
     // eprintln!("blocks.first: {}", unit.blocks.first.raw_index());
@@ -3995,11 +3998,11 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
         let error_string = errors.into_iter().join("\n");
         Err(K1Message {
             span,
-            message: format!(
+            message: k1.ast.idents.intern(format!(
                 "IR Unit failed validation\n{}\n{}",
                 unit_to_string(k1, unit_id, true),
                 error_string
-            ),
+            )),
             level: MessageLevel::Error,
             error_kind: ErrorKind::Internal,
         })

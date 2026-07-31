@@ -17,7 +17,6 @@
 
 use std::num::NonZeroU32;
 
-use crate::failf;
 use crate::ir::{self, BackendBuiltin, IrUnitId};
 use crate::lex::SpanId;
 use crate::typer::types::{PhysicalType, TypeId};
@@ -25,6 +24,7 @@ use crate::typer::{FunctionId, K1Result, StaticValueId, TypedExprId, TypedGlobal
 use crate::vm::{
     self, Value, Vm, casted_float_op, casted_iop, casted_uop, load_value, store_value,
 };
+use crate::{kbail, kerr};
 
 use super::lower;
 use super::{
@@ -127,7 +127,7 @@ pub fn execute_compiled_unit_raw(
     let info = lower::get_or_lower_unit(k1, unit_id, span)?;
     k1.timing.total_bcgen_nanos += k1.timing.elapsed_nanos(bcgen_start) as i64;
     if info.kind != UnitKind::Body {
-        return failf!(span, "Cannot execute a bodyless ({:?}) unit", info.kind);
+        kbail!(k1, span, "Cannot execute a bodyless ({}) unit", info.kind);
     }
     let start = k1.timing.clock.raw();
     let ir_unit = ir::get_compiled_unit(&k1.ir, unit_id).unwrap();
@@ -168,7 +168,11 @@ pub fn execute_compiled_unit_raw(
         Err(mut e) => {
             if let Some((fault_fp, fault_pc)) = vm.bc_fault {
                 let trace = make_stack_trace(k1, fault_fp as *const u8, fault_pc);
-                e.message = format!("{}\nbc Execution Trace\n{}", e.message, trace);
+                e.message = k1.ast.idents.intern(format!(
+                    "{}\nbc Execution Trace\n{}",
+                    k1.ident_str(e.message),
+                    trace
+                ));
             }
             return Err(e);
         }
@@ -180,7 +184,7 @@ pub fn execute_compiled_unit_raw(
 
     vm.overall_return_addr = core::ptr::null_mut();
     if exit_code != 0 {
-        failf!(span, "Static execution exited with code: {}", exit_code)
+        Err(kerr!(k1, span, "Static execution exited with code: {}", exit_code))
     } else {
         Ok(RawUnitResult {
             ret_addr,
@@ -332,7 +336,7 @@ fn exec_loop(
     macro_rules! vmerr {
         ($($args:expr),*) => {{
             vm.bc_fault = Some((fp as u64, pc as u32));
-            return failf!(k1.bc.span_for_pc(pc as u32), $($args),*);
+            kbail!(k1, k1.bc.span_for_pc(pc as u32), $($args),*);
         }};
     }
     // `?` with fault recording
@@ -460,7 +464,7 @@ fn exec_loop(
                 };
                 if info.kind != UnitKind::Body {
                     vmerr!(
-                        "Indirect call to bodyless ({:?}) function: {}",
+                        "Indirect call to bodyless ({}) function: {}",
                         info.kind,
                         k1.function_id_to_string(function_id, false)
                     );
@@ -1094,11 +1098,7 @@ fn exec_builtin(
             let type_id_arg = args[0].bits();
             let type_id = TypeId::from_nzu32(NonZeroU32::new(type_id_arg as u32).unwrap());
             let Some(schema_static_value_id) = k1.type_schemas.get(&type_id) else {
-                return failf!(
-                    vm.eval_span,
-                    "Missing type schema: {}",
-                    k1.type_id_to_string(type_id)
-                );
+                kbail!(k1, vm.eval_span, "Missing type schema: {}", type_id);
             };
             let schema_vm_value =
                 vm::static_value_to_vm_value(k1, *schema_static_value_id, vm.eval_span);
@@ -1118,7 +1118,8 @@ fn exec_builtin(
             let Ok(layout) =
                 std::alloc::Layout::from_size_align(size.bits() as usize, align.bits() as usize)
             else {
-                return failf!(
+                kbail!(
+                    k1,
                     vm.eval_span,
                     "Rust didn't like this layout: size={size}, align={align}"
                 );

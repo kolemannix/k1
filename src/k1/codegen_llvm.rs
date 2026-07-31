@@ -51,7 +51,7 @@ use crate::typer::{
     FunctionId, K1Result, Linkage as TyperLinkage, StaticContainerKind, StaticValue, StaticValueId,
     TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
 };
-use crate::{SV8, failf, ir, kmem};
+use crate::{SV8, ir, kbail, kerr, kmem};
 
 #[allow(unused)]
 fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
@@ -616,7 +616,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         // }
 
         let Some(main_function_id) = self.k1.get_main_function_id() else {
-            return failf!(SpanId::NONE, "Program {} has no main function", self.k1.program_name());
+            kbail!(
+                self.k1,
+                SpanId::NONE,
+                "Program {} has no main function",
+                self.k1.program_name()
+            );
         };
 
         let function_value = self.declare_llvm_function(main_function_id)?;
@@ -670,7 +675,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let llvm_global = if global.is_external {
             let PhysicalTypeResult::Yes(global_pt) = self.k1.get_physical_type(global.type_id)
             else {
-                return failf!(global.span, "ICE: Not physical; todo reject this in typer");
+                kbail!(self.k1, global.span, "ICE: Not physical; todo reject this in typer");
             };
             let basic_type = self.codegen_type(global_pt);
             self.make_external_global(basic_type.rich_type(), &name, global.is_constant)
@@ -1534,9 +1539,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         // We skip our 'prelude' block which exists only in the llvm ir
         match self.get_current_function().blocks.get(&block_id) {
             Some(bb) => Ok(*bb),
-            None => {
-                failf!(self.debug.current_span(), "Failed to get block: b{}", block_id.raw_index())
-            }
+            None => Err(kerr!(
+                self.k1,
+                self.debug.current_span(),
+                "Failed to get block: b{}",
+                block_id.raw_index()
+            )),
         }
     }
 
@@ -1858,11 +1866,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         let pt = c.k1.get_physical_type(type_id).unwrap();
                         Ok(c.codegen_type(pt).rich_type())
                     }
-                    _ => failf!(
+                    _ => Err(kerr!(
+                        c.k1,
                         span,
                         "llvm intrinsic signatures support bool, scalar, and vector types; got {}",
-                        c.k1.type_id_to_string(type_id)
-                    ),
+                        type_id
+                    )),
                 }
             };
 
@@ -1881,7 +1890,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         } else {
             match self.k1.types.get(return_type_id) {
                 Type::Vector(_) => {
-                    return failf!(
+                    kbail!(
+                        self.k1,
                         span,
                         "llvm intrinsics with vector returns are not yet supported"
                     );
@@ -1978,7 +1988,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 let malloc_ident = self.k1.ast.idents.intern("malloc");
                 let Some(malloc_fn_id) = self.find_libc_function_id(malloc_ident) else {
-                    return failf!(
+                    kbail!(
+                        self.k1,
                         function_span,
                         "Failed to find libc malloc function for Allocate builtin"
                     );
@@ -2257,14 +2268,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         match value {
             ir::Value::Inst(inst_id) => match inst_mappings.get(&inst_id) {
                 Some(v) => Ok(*v),
-                None => {
-                    failf!(
-                        self.debug.current_span(),
-                        "codegen llvm has no value for this instruction: i{} {}",
-                        inst_id.as_u32(),
-                        ir::inst_to_string(self.k1, inst_id)
-                    )
-                }
+                None => Err(kerr!(
+                    self.k1,
+                    self.debug.current_span(),
+                    "codegen llvm has no value for this instruction: i{} {}",
+                    inst_id.as_u32(),
+                    ir::inst_to_string(self.k1, inst_id)
+                )),
             },
             ir::Value::GlobalAddr { id, .. } => {
                 let global_value = self.codegen_global(id)?;
@@ -3088,12 +3098,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, ashr.as_basic_value_enum());
                 Ok(())
             }
-            Inst::BakeStaticValue { .. } => {
-                failf!(
-                    self.debug.current_span(),
-                    "BakeStaticValue is only available to compile-time code"
-                )
-            }
+            Inst::BakeStaticValue { .. } => Err(kerr!(
+                self.k1,
+                self.debug.current_span(),
+                "BakeStaticValue is only available to compile-time code"
+            )),
         }
     }
 
@@ -3181,7 +3190,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             if let LlvmLinkage::External = llvm_linkage {
                 eprintln!("Allowing duplicate external name declaration: {}", llvm_name)
             } else {
-                return failf!(
+                kbail!(
+                    self.k1,
                     self.k1.ast.get_span_for_id(typed_function.parsed_id),
                     "Dupe function name: {}",
                     llvm_name
@@ -3191,7 +3201,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         ir::compile_function(self.k1, function_id)?;
         let Some(ir_fn) = self.k1.ir.functions.get(function_id) else {
-            return failf!(
+            kbail!(
+                self.k1,
                 function_span,
                 "Internal Compiler Error: missing ir for function {}",
                 self.k1.function_id_to_string(function_id, false)
@@ -3771,7 +3782,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         if !llvm_function.verify(true) {
             self.write_failure_file();
-            return failf!(
+            kbail!(
+                self.k1,
                 self.k1.get_function_span(function_id),
                 "Function {} failed validation; failed module file is written",
                 self.k1.function_id_to_string(function_id, false),

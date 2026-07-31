@@ -114,9 +114,12 @@ fn render_output_panes(k1: &TypedProgram, cell: &MegareplCell) -> maud::Markup {
             }
             (values, false, stdout.as_str(), stderr.as_str())
         }
-        CellResult::Error { k1_message, stdout, stderr } => {
-            (vec![k1_message.message.clone()], true, stdout.as_str(), stderr.as_str())
-        }
+        CellResult::Error { k1_message, stdout, stderr } => (
+            vec![k1.ident_str(k1_message.message).to_string()],
+            true,
+            stdout.as_str(),
+            stderr.as_str(),
+        ),
     };
     html! {
         @if !values.is_empty() {

@@ -11,7 +11,7 @@
 /// <todo, one day a write up about our inference
 use super::*;
 use crate::spair;
-use crate::{errf, failf};
+use crate::{kbail, kerr};
 
 /// Wiring for reusing argument evaluations done during inference (see infer_types):
 /// when a value argument's expected type is already fully concrete, it can no longer be
@@ -224,11 +224,12 @@ impl TypedProgram {
                             if should_skip {
                                 continue;
                             } else {
-                                return failf!(
+                                kbail!(
+                                    self,
                                     e.span,
                                     "{}\nOccurred while trying to determine type of argument for inference using expected type: {}",
                                     e.message,
-                                    self.type_id_to_string(expected_type_so_far)
+                                    expected_type_so_far
                                 );
                             }
                         }
@@ -249,11 +250,12 @@ impl TypedProgram {
                 // before we're able to learn more about the rest of the inference. We get a better
                 // error message if we wait to report the mismatch until the end
                 if !allow_mismatch {
-                    return failf!(
+                    kbail!(
+                        self,
                         argument_span,
                         "(unify fail) Passed value does not match expected type: expected {} but got {}\nReason: {msg}",
-                        self.type_id_to_string(expected_type_so_far),
-                        self.type_id_to_string(argument_type)
+                        expected_type_so_far,
+                        argument_type
                     );
                 }
             };
@@ -303,7 +305,8 @@ impl TypedProgram {
                 .iter()
                 .filter_map(|s| s.solution.map(|sol| spair! { s.param_type => sol }))
                 .collect();
-            return failf!(
+            kbail!(
+                self,
                 span,
                 "Could not solve for {} given arguments:\n{}\nSolutions:{}",
                 unsolved_params
@@ -454,12 +457,13 @@ impl TypedProgram {
                 }
                 Err(msg) => {
                     let signature = self.ability_impls.get(constraint.full_impl_id).signature();
-                    return failf!(
+                    kbail!(
+                        self,
                         span,
                         "Could not satisfy ability constraint {} for given type {} = {} due to: {msg}",
                         self.ability_signature_to_string(signature),
-                        self.type_id_to_string(type_param_id),
-                        self.type_id_to_string(solution_type_id)
+                        type_param_id,
+                        solution_type_id
                     );
                 }
             };
@@ -486,7 +490,8 @@ impl TypedProgram {
         // Fuse these two paths; where for a given type param,
         // - X *if ALL PASSED, special case to skip inference altogether of course
         if !passed_type_args.is_empty() && passed_type_args.len() != type_params.len() {
-            return failf!(
+            kbail!(
+                self,
                 fn_call.span,
                 "Expected {} type arguments but got {}",
                 type_params.len(),
@@ -541,7 +546,7 @@ impl TypedProgram {
                             allow_mismatch: false,
                         })
                     } else {
-                        return failf!(fn_call.span, "Unable to line up your type arguments");
+                        kbail!(self, fn_call.span, "Unable to line up your type arguments");
                     }
                 }
             }
@@ -595,7 +600,8 @@ impl TypedProgram {
                     stash,
                 )
                 .map_err(|e| {
-                    errf!(
+                    kerr!(
+                        self,
                         e.span,
                         "Invalid call to {}\n    {}",
                         self.ident_str_opt(generic_function_sig.name),
@@ -620,11 +626,12 @@ impl TypedProgram {
                 fn_call.span,
             )
             .map_err(|e| {
-                errf!(
+                kerr!(
+                    self,
                     e.span,
                     "{}. Therefore, cannot call function '{}' with given types: {}",
                     e.message,
-                    self.ident_str(fn_call.name.name),
+                    fn_call.name.name,
                     self.pretty_print_named_type_slice(solved_type_params, ", ")
                 )
             })?;
@@ -710,11 +717,12 @@ impl TypedProgram {
                             }
                             _ => {
                                 let span = self.exprs.get_span(expr);
-                                return failf!(
+                                kbail!(
+                                    self,
                                     span,
                                     "Expected {}, which is an existential function type (lambdas, dynamic lambdas, and function pointers all work), but got: {}",
-                                    self.type_id_to_string(function_type_param.type_id),
-                                    self.type_id_to_string(type_id)
+                                    function_type_param.type_id,
+                                    type_id
                                 );
                             }
                         }

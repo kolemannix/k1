@@ -300,37 +300,42 @@ impl Interner {
 }
 
 pub struct IdentPool {
-    pool: Interner,
+    pool: std::cell::RefCell<Interner>,
     /// b for builtins
     pub(crate) b: BuiltinIdents,
     /// f for functions
     pub(crate) f: BuiltinFunctions,
 }
 impl IdentPool {
-    pub fn intern(&mut self, s: impl AsRef<str>) -> StringId {
-        self.pool.intern(s.as_ref())
+    pub fn intern(&self, s: impl AsRef<str>) -> StringId {
+        self.pool.borrow_mut().intern(s.as_ref())
     }
     pub fn lookup(&self, s: impl AsRef<str>) -> Option<StringId> {
-        self.pool.lookup(s.as_ref())
+        self.pool.borrow().lookup(s.as_ref())
     }
     pub fn get_string(&self, id: StringId) -> &'static str {
-        self.pool.get(id)
+        self.pool.borrow().get(id)
     }
 
     pub fn len(&self) -> usize {
-        self.pool.entries.len()
+        self.pool.borrow().entries.len()
     }
 
     /// All interned strings in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = (StringId, &'static str)> {
-        self.pool.entries.iter_with_ids().map(|(id, slice)| {
-            (id, unsafe { std::str::from_utf8_unchecked(self.pool.bytes.getn(*slice)) })
-        })
+        let pool = self.pool.borrow();
+        pool.entries
+            .iter_with_ids()
+            .map(|(id, slice)| {
+                (id, unsafe { std::str::from_utf8_unchecked(pool.bytes.getn(*slice)) })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     /// Total bytes of string content in the pool.
     pub fn content_bytes(&self) -> usize {
-        self.pool.entries.iter().map(|s| s.len() as usize).sum()
+        self.pool.borrow().entries.iter().map(|s| s.len() as usize).sum()
     }
 
     #[allow(non_snake_case)]
@@ -598,7 +603,7 @@ impl IdentPool {
             bitwise_shr,
         };
 
-        Self { pool, b, f }
+        Self { pool: std::cell::RefCell::new(pool), b, f }
     }
 }
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
-use crate::failf;
+use crate::{kbail, kerr};
 
 /// `synth`, synthesis, aka spitting out typed code, used for features that desugar, as well
 /// as some general lowering
@@ -595,7 +595,7 @@ impl TypedProgram {
         self.push_block_stmt_id(&mut block, args_variable.defn_stmt);
         let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
         if self.config.no_std {
-            return failf!(span, "Interpolated strings are not supported in no_std mode");
+            kbail!(self, span, "Interpolated strings are not supported in no_std mode");
         }
         let mut hole_index = 0;
         fn get_named_arg(
@@ -640,15 +640,17 @@ impl TypedProgram {
                         if n == 0 {
                             Ok(args)
                         } else {
-                            failf!(
+                            Err(kerr!(
+                                k1,
                                 span,
                                 "this hole asks for field {} on a string, which provides just 1 value",
                                 n + 1
-                            )
+                            ))
                         }
                     } else {
                         if n >= s.fields.len() as usize {
-                            return failf!(
+                            kbail!(
+                                k1,
                                 span,
                                 "Format args struct only has {} fields, but this hole asks for field {}",
                                 s.fields.len(),
@@ -659,9 +661,7 @@ impl TypedProgram {
                         Ok(field_expr)
                     }
                 }
-                _ => {
-                    failf!(span, "Not formattable currently: {}", k1.type_id_to_string(type_id))
-                }
+                _ => Err(kerr!(k1, span, "Not formattable currently: {}", type_id)),
             }
         }
 
@@ -811,7 +811,7 @@ impl TypedProgram {
         let block_scope = block.scope_id;
         let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
         if self.config.no_std {
-            return failf!(span, "Interpolated strings are not supported in no_std mode");
+            kbail!(self, span, "Interpolated strings are not supported in no_std mode");
         }
         let ctx_for_calls = block_ctx.with_hidden_calls(true);
         let new_string_builder = self.synth_typed_call_typed_args(
@@ -878,7 +878,7 @@ impl TypedProgram {
         args_expr: Option<TypedExprId>,
     ) -> K1Result<TypedExprId> {
         if self.config.no_std {
-            return failf!(span, "Interpolated strings are not supported in no_std mode");
+            kbail!(self, span, "Interpolated strings are not supported in no_std mode");
         }
         if parts.len() == 1 {
             if let parse::InterpolatedStringPart::String { string_id, span: part_span } =

@@ -20,8 +20,8 @@
 use crate::debug;
 use fxhash::FxHashMap;
 
-use crate::failf;
 use crate::ir::{self, BlockId, DataInst, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId};
+use crate::kbail;
 use crate::lex::SpanId;
 use crate::typer::types::{Layout, PhysicalType, ScalarType};
 use crate::typer::{FunctionId, K1Result, TypedExprId, TypedFloatValue, TypedProgram};
@@ -56,7 +56,8 @@ pub fn get_or_lower_function(
         "get_or_lower_function called on in-progress function; caller must check"
     );
     let Some(unit) = *k1.ir.functions.get(function_id) else {
-        return failf!(
+        kbail!(
+            k1,
             span,
             "Call to uncompiled function: {}. ({} are pending)",
             k1.function_id_to_string(function_id, false),
@@ -96,7 +97,7 @@ pub fn get_or_lower_expr(
         return Ok(*info);
     }
     let Some(unit) = k1.ir.exprs.get(&expr_id).copied() else {
-        return failf!(span, "Expr unit was never compiled to ir");
+        kbail!(k1, span, "Expr unit was never compiled to ir");
     };
     lower_unit(k1, unit)
 }
@@ -326,7 +327,10 @@ fn resolve_src(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::Value) -> u
                 && !k1.bc.in_progress.contains(&function_id)
             {
                 if let Err(e) = get_or_lower_function(k1, function_id, ctx.cur_span) {
-                    debug!("[bc] deferred: address-taken function failed to lower: {}", e.message);
+                    debug!(
+                        "[bc] deferred: address-taken function failed to lower: {}",
+                        k1.ident_str(e.message)
+                    );
                 }
             }
             k1.bc.intern_const(function_id.as_u32() as u64)
@@ -1092,9 +1096,10 @@ fn emit_call(
                     } else {
                         let info = get_or_lower_function(k1, function_id, ctx.cur_span)?;
                         if info.kind != UnitKind::Body {
-                            return failf!(
+                            kbail!(
+                                k1,
                                 ctx.cur_span,
-                                "Direct call to bodyless ({:?}) function: {}",
+                                "Direct call to bodyless ({}) function: {}",
                                 info.kind,
                                 k1.function_id_to_string(function_id, false)
                             );

@@ -7,7 +7,7 @@ use fxhash::FxHashMap;
 use std::{cell::RefCell, collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
 use crate::{
-    SV4, errf,
+    SV4, kbail, kerr,
     kmem::Dlist,
     nz_u32_id,
     parse::{ParsedAbilityId, ParsedExprId, QIdent},
@@ -971,12 +971,13 @@ impl TypedProgram {
         };
         // First lookup is special and recursive because it's in the current scope
         let Some(first_ns) = self.scopes.find_namespace(cur_scope_id, first.name) else {
-            return Err(errf!(
+            kbail!(
+                self,
                 first.span,
                 "Namespace not found: {} from scope: {}",
-                self.ident_str(first.name),
+                first.name,
                 self.scope_name_to_string(cur_scope_id,)
-            ));
+            );
         };
         self.emit_ls_entity(first.span, LsEntityKind::Namespace(first_ns));
         cur_scope_id = self.namespaces.get(first_ns).scope_id;
@@ -984,11 +985,15 @@ impl TypedProgram {
         for ident in ns_iter {
             let namespace_id =
                 self.scopes.find_namespace_local(cur_scope_id, ident.name).ok_or_else(|| {
-                    errf!(
+                    kerr!(
+                        self,
                         ident.span,
-                        "Namespace not found: {} in scope: {:?}",
-                        self.ident_str(ident.name),
-                        self.scope_owner_name(cur_scope_id).map(|n| self.ident_str(n))
+                        "Namespace not found: {} in scope: {}",
+                        ident.name,
+                        format!(
+                            "{:?}",
+                            self.scope_owner_name(cur_scope_id).map(|n| self.ident_str(n))
+                        )
                     )
                 })?;
             let namespace = self.namespaces.get(namespace_id);

@@ -736,12 +736,12 @@ pub fn codegen_module<'ctx, 'module>(
             e.span,
             MessageLevel::Error,
             6,
-            Some(&e.message),
+            Some(codegen.k1.ident_str(e.message)),
             use_color,
         )
         .unwrap();
         write_program_dump(codegen.k1);
-        anyhow::bail!(e)
+        anyhow::bail!(codegen.k1.message_to_anyhow(e))
     }
 
     if args.chatty {

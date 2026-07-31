@@ -132,7 +132,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                         .write_error(
                             &mut std::io::stderr(),
                             &K1Message {
-                                message: parse_error.message().to_string(),
+                                message: module.ast.idents.intern(parse_error.message()),
                                 span: parse_error.span(),
                                 error_kind: ErrorKind::ParseError,
                                 level: MessageLevel::Error,
@@ -148,8 +148,11 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
             match expectation {
                 TestExpectation::CompileErrorMessage { message } => {
                     // Check for message!
-                    if !err.message.contains(&message) {
-                        bail!("{filename}: Failed with unexpected message: {}", err.message)
+                    if !module.ident_str(err.message).contains(&message) {
+                        bail!(
+                            "{filename}: Failed with unexpected message: {}",
+                            module.ident_str(err.message)
+                        )
                     }
                 }
                 TestExpectation::CompileErrorLine { .. } => {

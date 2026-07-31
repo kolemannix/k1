@@ -1298,20 +1298,23 @@ macro_rules! mformat {
 #[macro_export]
 macro_rules! k1_format_user {
     ($k1:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
-        k1_format!($k1, &K1DisplayArgs::user_facing(), $fmt, $($arg),*)
+        $crate::k1_format!($k1, &$crate::typer::dump::K1DisplayArgs::user_facing(), $fmt, $($arg),*)
     }};
 }
 
 #[macro_export]
 macro_rules! kerr {
     ($k1:expr, $span:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
-        let msg: String = k1_format_user!($k1, $fmt, $($arg),*).to_string();
-        K1Message {
-            span: $span,
-            message: msg,
-            level: MessageLevel::Error,
-            error_kind: ErrorKind::Malformed,
-        }
+        let msg: String = $crate::k1_format_user!($k1, $fmt, $($arg),*).to_string();
+        $k1.make_error(&msg, $span)
+    }}
+}
+
+#[macro_export]
+macro_rules! kwarn {
+    ($k1:expr, $span:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
+        let msg: String = $crate::k1_format_user!($k1, $fmt, $($arg),*).to_string();
+        $k1.make_warning(&msg, $span)
     }}
 }
 

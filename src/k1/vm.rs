@@ -23,7 +23,7 @@ use crate::typer::{
     TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
 };
 use crate::{
-    errf, failf, ice_span,
+    ice_span, kbail, kerr,
     kmem::{self, MSlice},
     lex::SpanId,
     parse::StringId,
@@ -542,18 +542,20 @@ pub(crate) fn resolve_global(
             // Globals referenced by compiled code are evaluated by the pre-execution
             // drain (compile_all_pending_ir); re-entering the compiler mid-run to
             // evaluate one is no longer allowed
-            return failf!(
+            kbail!(
+                k1,
                 vm.eval_span,
                 "VM encountered un-evaluated global '{}'; all globals referenced by compiled code should have been evaluated before execution. This is a compiler bug",
-                k1.ident_str(k1.variables.get(global.variable_id).name)
+                k1.variables.get(global.variable_id).name
             );
         }
         GlobalInitialValue::Uninit => {
             if global.is_external {
-                return failf!(
+                kbail!(
+                    k1,
                     vm.eval_span,
                     "Cannot read external global '{}' at compile time; its storage only exists at link time",
-                    k1.ident_str(k1.variables.get(global.variable_id).name)
+                    k1.variables.get(global.variable_id).name
                 );
             } else {
                 None
@@ -1122,11 +1124,7 @@ pub fn vm_value_to_static_value(
 ) -> K1Result<StaticValueId> {
     debug!("vm_to_static: {:?}: {}", vm_value, k1.type_id_to_string(type_id));
     let PhysicalTypeResult::Yes(pt) = k1.get_physical_type(type_id) else {
-        return failf!(
-            span,
-            "Not a physical type, cannot bake to static: {}",
-            k1.type_id_to_string(type_id)
-        );
+        kbail!(k1, span, "Not a physical type, cannot bake to static: {}", type_id);
     };
     if pt.is_empty() {
         return Ok(k1.static_values.empty_id());
@@ -1140,7 +1138,12 @@ pub fn vm_value_to_static_value(
             if addr.is_null() || addr.addr() == 0 {
                 k1.static_values.add(StaticValue::Zero(POINTER_TYPE_ID))
             } else {
-                return failf!(span, "Only null Pointers can be statically baked; got {:p}", addr);
+                kbail!(
+                    k1,
+                    span,
+                    "Only null Pointers can be statically baked; got {}",
+                    format!("{addr:p}")
+                );
             }
         }
         Type::Integer(integer_type) => {
@@ -1162,16 +1165,12 @@ pub fn vm_value_to_static_value(
                 _ => unreachable!(),
             };
             let Some(count) = k1.get_concrete_count_of_array(size_type) else {
-                return failf!(span, "Cannot convert container of unknown size to static value");
+                kbail!(k1, span, "Cannot convert container of unknown size to static value");
             };
             let count = count as usize;
             let mut elements = k1.static_values.mem.new_list(count as u32);
             let PhysicalTypeResult::Yes(element_pt) = k1.get_physical_type(element_type) else {
-                return failf!(
-                    span,
-                    "Element type is not physical: {}",
-                    k1.type_id_to_string(element_type)
-                );
+                kbail!(k1, span, "Element type is not physical: {}", element_type);
             };
             for index in 0..count {
                 let elem_result = get_span_element(k1, vm_value.as_ptr(), element_pt, index);
@@ -1188,7 +1187,7 @@ pub fn vm_value_to_static_value(
         Type::Struct(struct_type) => {
             if type_id == k1.string_type_id() {
                 let string_id = value_to_string_id(k1, vm_value).map_err(|msg| {
-                    errf!(span, "Could not convert string to static value: {msg}")
+                    kerr!(k1, span, "Could not convert string to static value: {msg}")
                 })?;
                 k1.static_values.add(StaticValue::String(string_id))
             } else if let Some((element_type, container_kind)) =
@@ -1260,7 +1259,7 @@ pub fn vm_value_to_static_value(
             let tag_scalar_type = sum_pt.tag_type;
             let tag = load_scalar(tag_scalar_type, sum_ptr).as_typed_int(tag_int_type);
             let Some(variant) = k1.mem.getn(variants).iter().find(|v| v.tag_value == tag) else {
-                return failf!(span, "No variant found with tag value {}", tag);
+                kbail!(k1, span, "No variant found with tag value {}", tag);
             };
             let variant_index = variant.index;
 
@@ -1283,21 +1282,22 @@ pub fn vm_value_to_static_value(
             }))
         }
         Type::FunctionPointer(_) => {
-            return failf!(span, "Cannot bake function pointers");
+            kbail!(k1, span, "Cannot bake function pointers");
         }
         Type::Reference(_) => {
             let addr = vm_value.as_ptr();
             if addr.is_null() || addr.addr() == 0 {
                 k1.static_values.add(StaticValue::Zero(type_id))
             } else {
-                return failf!(span, "Cannot yet bake non-null references");
+                kbail!(k1, span, "Cannot yet bake non-null references");
             }
         }
         Type::Lambda(_) | Type::LambdaObject(_) | Type::AbilityObject(_) | Type::Opaque(_) => {
-            return failf!(
+            kbail!(
+                k1,
                 span,
                 "Only plain old data (scalars, structs, arrays, eithers, etc) can be statically baked. Got: {}",
-                k1.type_id_to_string(type_id)
+                type_id
             );
         }
         Type::Function(_)
@@ -1408,10 +1408,10 @@ pub(crate) fn builtin_compiler_message(
         k1_types::CompilerMessageLevel::Error => MessageLevel::Error,
     };
     let message = value_to_string_id(k1, message_arg).map_err(|msg| {
-        errf!(vm.eval_span, "Bad message string passed to EmitCompilerMessage: {msg}")
+        kerr!(k1, vm.eval_span, "Bad message string passed to EmitCompilerMessage: {msg}")
     })?;
     let filename = unsafe { location.filename.to_str() }.map_err(|msg| {
-        errf!(vm.eval_span, "Bad filename string passed to EmitCompilerMessage: {msg}")
+        kerr!(k1, vm.eval_span, "Bad filename string passed to EmitCompilerMessage: {msg}")
     })?;
 
     if !vm.quiet_messages {
@@ -1444,12 +1444,12 @@ pub(crate) fn builtin_repl_checkbox(
     set_arg: Value,
 ) -> K1Result<()> {
     let name = value_to_string_id(k1, name_arg)
-        .map_err(|msg| errf!(vm.eval_span, "Bad name string passed to repl/checkbox: {msg}"))?;
+        .map_err(|msg| kerr!(k1, vm.eval_span, "Bad name string passed to repl/checkbox: {msg}"))?;
     let Some(get) = FunctionId::from_u32(get_arg.bits() as u32) else {
-        return failf!(vm.eval_span, "repl/checkbox: `get` is a null function pointer");
+        kbail!(k1, vm.eval_span, "repl/checkbox: `get` is a null function pointer");
     };
     let Some(set) = FunctionId::from_u32(set_arg.bits() as u32) else {
-        return failf!(vm.eval_span, "repl/checkbox: `set` is a null function pointer");
+        kbail!(k1, vm.eval_span, "repl/checkbox: `set` is a null function pointer");
     };
     vm.repl_commands.push(ReplCommand::Checkbox { name, get, set });
     Ok(())
@@ -1545,10 +1545,8 @@ pub(crate) fn report_execution_messages(
         };
     }
     let level = MessageLevel::Info;
-    k1.report_ext(
-        K1Message { message: formatted_messages, span, level, error_kind: ErrorKind::None },
-        true,
-    );
+    let message = k1.ast.idents.intern(&formatted_messages);
+    k1.report_ext(K1Message { message, span, level, error_kind: ErrorKind::None }, true);
 }
 
 #[track_caller]

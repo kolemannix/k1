@@ -4,14 +4,13 @@ use crate::debug;
 use libffi::raw::ffi_cif;
 use libffi::{low::*, raw};
 
-use crate::errf;
 use crate::ir::PhysicalFunctionType;
 use crate::lex::SpanId;
 use crate::typer::types::{AggType, Layout, PhysicalType, PhysicalTypeEnum, ScalarType};
 use crate::typer::{FunctionId, K1Result, TypedProgram};
 use crate::vm;
 use crate::vm::{Value, Vm};
-use crate::{failf, parse::StringId};
+use crate::{kbail, kerr, parse::StringId};
 
 /// Core FFI dispatch on already-resolved argument values; the bc VM has the
 /// args contiguous in its out-arg region.
@@ -62,11 +61,7 @@ pub(crate) fn handle_ffi_call_resolved(
             let name_cstr = std::ffi::CString::new(k1.ident_str(fn_name)).unwrap();
             let fn_ptr: *mut c_void = unsafe { libc::dlsym(handle_for_search, name_cstr.as_ptr()) };
             if fn_ptr.is_null() {
-                return failf!(
-                    vm.eval_span,
-                    "Could not find extern function symbol: {}",
-                    k1.ident_str(fn_name)
-                );
+                kbail!(k1, vm.eval_span, "Could not find extern function symbol: {}", fn_name);
             }
             let cif = prep_ffi_cif(k1, fn_type, vm.eval_span)?;
             let handle = vm::VmFfiHandle {
@@ -146,7 +141,7 @@ fn prep_ffi_cif(
     let mut ffi_args_types_ptrs = k1.mem.new_list(param_count as u32);
     for fn_param in k1.ir.mem.getn(fn_params) {
         let ffi_type: ffi_type = pt_to_ffi_type(k1, fn_param.pt)
-            .map_err(|msg| errf!(span, "parameter type is not FFI compatible: {msg}"))?;
+            .map_err(|msg| kerr!(k1, span, "parameter type is not FFI compatible: {msg}"))?;
 
         // We need a stable address to each type here; so we push them to
         // a parallel collection
@@ -157,7 +152,7 @@ fn prep_ffi_cif(
     let atypes: *mut *mut ffi_type = ffi_args_types_ptrs.as_mut_ptr().cast();
 
     let ffi_ret_type: ffi_type = pt_to_ffi_type(k1, return_type)
-        .map_err(|msg| errf!(span, "return type is not FFI compatible: {msg}"))?;
+        .map_err(|msg| kerr!(k1, span, "return type is not FFI compatible: {msg}"))?;
     let ffi_ret_type_alloced: &mut ffi_type = k1.mem.push(ffi_ret_type);
 
     let mut cif: ffi_cif = ffi_cif::default();
@@ -169,7 +164,7 @@ fn prep_ffi_cif(
             ffi_ret_type_alloced,
             atypes,
         )
-        .map_err(|e| errf!(span, "failed to set up ffi context: {:?}", e))?;
+        .map_err(|e| kerr!(k1, span, "failed to set up ffi context: {}", format!("{e:?}")))?;
     }
     Ok(cif)
 }

@@ -1565,13 +1565,40 @@ impl DepDisplay<TypedProgram, K1DisplayArgs> for StaticValueId {
     }
 }
 
-impl DepDisplay<TypedProgram, K1DisplayArgs> for u32 {
+macro_rules! dep_display_via_display {
+    ($($t:ty),* $(,)?) => { $(
+        impl DepDisplay<TypedProgram, K1DisplayArgs> for $t {
+            fn fmt(
+                &self,
+                f: &mut dyn Write,
+                _k1: &TypedProgram,
+                _args: &K1DisplayArgs,
+            ) -> std::fmt::Result {
+                write!(f, "{self}")
+            }
+        }
+    )* };
+}
+
+dep_display_via_display!(
+    u32,
+    u64,
+    usize,
+    i32,
+    i64,
+    colored::ColoredString,
+    IntegerType,
+    TypedIntValue,
+    std::path::Display<'_>,
+);
+
+impl DepDisplay<TypedProgram, K1DisplayArgs> for crate::bc::UnitKind {
     fn fmt(
         &self,
         f: &mut dyn Write,
         _k1: &TypedProgram,
         _args: &K1DisplayArgs,
     ) -> std::fmt::Result {
-        write!(f, "{self}")
+        write!(f, "{self:?}")
     }
 }

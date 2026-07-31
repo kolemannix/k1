@@ -276,7 +276,12 @@ impl Backend {
                         )
                     })
                     .chain(k1.messages.borrow().iter().filter_map(|e| {
-                        error_to_diagnostic(k1, e.message.clone(), e.level, e.span)
+                        error_to_diagnostic(
+                            k1,
+                            k1.ident_str(e.message).to_string(),
+                            e.level,
+                            e.span,
+                        )
                     }))
                     .collect()
             })
@@ -377,7 +382,7 @@ impl Backend {
                 .filter_map(|k1_message| {
                     error_to_diagnostic(
                         k1,
-                        k1_message.message.clone(),
+                        k1.ident_str(k1_message.message).to_string(),
                         k1_message.level,
                         k1_message.span,
                     )
