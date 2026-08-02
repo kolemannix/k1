@@ -1,54 +1,23 @@
-ability counter[impl t] {
-  fn label(self: *mut self): string { "counter" }
-  fn bump(self: *mut self): t
+fn testPosix() {
+    println("Testing process execution...")
+    
+    // Test 1: Simple echo command
+    let echoStatus = std/process/run-command-sync("/bin/echo", ["hello", "world"], :drop).!
+    println("Echo exit status: $echoStatus")
+    
+    // Test 2: List current directory  
+    let lsStatus = std/process/run-command-sync("/bin/ls", [], :drop).!
+    println("Ls exit status: $lsStatus")
+    
+    // Test 3: Test command that should fail
+    let failStatus = std/process/run-command-sync("/nonexistent", [], :drop)
+    println("Nonexistent command isOk(): ${failStatus.is-ok()}")
 }
 
-type by-ones = { current: int }
-impl counter[t = int] for by-ones {
-  fn bump(self: *mut by-ones): int {
-    self.current = self.current + 1
-    self.current
+fn main() {
+  #if core/k1/os-posix {
+    testPosix()
+  } else {
+    println("Process execution only supported on POSIX systems")
   }
-}
-
-type by-tens = { current: int }
-impl counter[t = int] for by-tens {
-  fn label(self: *mut by-tens): string { "tens" }
-  fn bump(self: *mut by-tens): int {
-    self.current = self.current + 10
-    self.current
-  }
-}
-
-fn make-counter(start: int): dyn[counter[t = int]] {
-  let state: *mut by-ones = mem/new(.{ current = start })
-  state.to-dyn()
-}
-
-fn main(): i32 {
-  let ones-state: *mut by-ones = mem/new(.{ current = 0 })
-  let d1 = ones-state.to-dyn[counter[t = int]]()
-  assert-equals(d1.bump(), 1)
-  assert-equals(d1.bump(), 2)
-  assert-equals(d1.label(), "counter")
-
-  let tens-state: *mut by-tens = mem/new(.{ current = 0 })
-  let d2: dyn[counter[t = int]] = tens-state.to-dyn()
-  assert-equals(d2.bump(), 10)
-  assert-equals(d2.label(), "tens")
-
-  let d3 = tens-state.as[dyn[counter[t = int]]]()
-  assert-equals(d3.bump(), 20)
-
-  // value form: ambient-allocates
-  let start-struct: by-ones = .{ current = 100 }
-  let d4 = start-struct.to-dyn[counter[t = int]]()
-  assert-equals(d4.bump(), 101)
-
-  // escapes its creating frame
-  let escaped = make-counter(5)
-  assert-equals(escaped.bump(), 6)
-
-  println("dyn ability objects work")
-  0
 }

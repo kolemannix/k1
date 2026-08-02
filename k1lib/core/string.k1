@@ -196,14 +196,17 @@ ns for string {
   fn data-ptr(self: string): ptr { self.span.data-ptr() }
 
   // Converts self to a c-style (NUL byte terminated) string
-  fn to-c(context alloc: mem/alloc-mode)(self: string): { ptr: ptr, len: size } {
+  fn to-c(self: string): { ptr: ptr, len: size } {
     if self.is-empty()                  .{ ptr = "\0".data-ptr(), len = 0 }
     else if self.last() is :some('\0') .{ ptr = self.data-ptr(), len = self.len() - 1 }
-    else                               .{ ptr = self.concat-char-in('\0').data-ptr(), len = self.len() }
+    else                               .{ ptr = self.concat-char('\0').data-ptr(), len = self.len() }
   }
 
   fn to-c-tmp(self: string): { ptr: ptr, len: size } {
-    self.to-c(context :tmp)()
+    mem/push-mode(:tmp)
+    let r = self.to-c()
+    mem/pop-mode()
+    r
   }
 
   fn wrap-c(c-string: ptr): string {

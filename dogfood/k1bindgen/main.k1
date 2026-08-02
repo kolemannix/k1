@@ -59,7 +59,7 @@ fn start(args: span[string]): result[string, string] {
 
   let index: CXIndex = clang/createIndex(1, 1)
   let unit: CXTranslationUnit = uninit
-  let clang-args-c-strs: list[ptr] = args.clangarg.map(fn s. s.to-c(context :tmp)().ptr)
+  let clang-args-c-strs: list[ptr] = args.clangarg.map(fn s. s.to-c-tmp().ptr)
 
   let err = clang/parseTranslationUnit2(
     index,

@@ -1,0 +1,34 @@
+ns process_test
+
+use std/process
+
+fn test() {
+  // PATH lookup + argument passing
+  let echo = process/run("echo", ["hello", "world"]).!
+  assert(echo.succeeded())
+  assert-equals(echo.output, "hello world\n")
+
+  // stdout and stderr are merged, in order
+  let merged = process/sh("echo out; echo err 1>&2").!
+  assert(merged.succeeded())
+  assert-equals(merged.output, "out\nerr\n")
+
+  // A nonzero exit is data, not an err
+  let failed = process/sh("exit 3").!
+  assert(not failed.succeeded())
+  assert-equals(failed.exit-code, 3)
+  assert-equals(failed.signal, 0)
+
+  // Spawn failure is the err
+  assert(process/run("definitely-not-a-real-cmd-k1", []) is :err _)
+
+  // :drop discards output
+  let dropped = process/run-command("echo", ["ignored"], :drop).!
+  assert(dropped.succeeded())
+  assert-equals(dropped.output, "")
+
+  // Output larger than the pipe buffer exercises the read loop
+  let big = process/sh("head -c 131072 /dev/zero | tr '\\0' 'a'").!
+  assert(big.succeeded())
+  assert-equals(big.output.len(), 131072)
+}

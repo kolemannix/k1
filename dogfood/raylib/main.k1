@@ -58,7 +58,7 @@ fn render(context frame-arena: alloc-mode)(things: *list[thing]) {
 }
 
 fn run(title: string): i32 {
-  let title-c = title.to-c(context :tmp)()
+  let title-c = title.to-c-tmp()
 
   let perm = alloc-mode:custom-arena core/arena/init-virtual(1)
   let things: list[thing] = list/with-capacity-in(context perm)(1024)

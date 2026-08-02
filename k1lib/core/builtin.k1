@@ -803,6 +803,26 @@ ns array {
   let CLOCK_MONOTONIC: clockid_t = 1
   extern("clock_gettime") fn clock_gettime(clockid: clockid_t, tp: *mut timespec): c-int
 
+  extern("fork")    fn fork(): i32
+  extern("execve")  fn execve(path: ptr, argv: ptr, envp: ptr): i32
+  extern("waitpid") fn waitpid(pid: i32, status: *mut i32, options: i32): i32
+
+  extern("pipe")  fn pipe(fds: ptr): c-int
+  extern("close") fn close(fd: c-int): c-int
+
+  extern("posix_spawnp") fn posix_spawnp(pid: *mut i32, file: ptr, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
+  extern("posix_spawn_file_actions_init")     fn posix_spawn_file_actions_init(file-actions: ptr): c-int
+  extern("posix_spawn_file_actions_destroy")  fn posix_spawn_file_actions_destroy(file-actions: ptr): c-int
+  extern("posix_spawn_file_actions_adddup2")  fn posix_spawn_file_actions_adddup2(file-actions: ptr, fd: c-int, new-fd: c-int): c-int
+  extern("posix_spawn_file_actions_addclose") fn posix_spawn_file_actions_addclose(file-actions: ptr, fd: c-int): c-int
+
+  extern("_NSGetEnviron") fn _NSGetEnviron(): ptr
+  let extern environ: ptr
+  fn environ-ptr(): ptr {
+    #if k1/os-macos _NSGetEnviron().r[ptr].*
+    else environ
+  }
+
 }
 
 // Could if ifdef'd behind a 'crt' flag if we wanted one #if k1/c-runtime
@@ -820,12 +840,20 @@ ns libc {
 
   extern("strlen") fn strlen(c-str: ptr): size
 
-  let extern errno: c-int
-  extern("strerror") fn strerror(errno: c-int): *char 
+  extern("__error") fn __error(): ptr
+  extern("__errno_location") fn __errno_location(): ptr
+  fn errno(): c-int {
+    let loc = #if k1/os-macos __error() else __errno_location()
+    loc.r[c-int].*
+  }
+  let EINTR: c-int = 4
+  extern("strerror") fn strerror(errno: c-int): *char
   extern("perror") fn perror(msg: ptr)
+  fn strerror-string(code: c-int): string {
+    string/wrap-c(strerror(code).as[ptr])
+  }
   fn errno-k1-string(): string {
-    let msg-c = strerror(errno)
-    string/wrap-c(msg-c.as[ptr])
+    strerror-string(errno())
   }
 
   ns files {

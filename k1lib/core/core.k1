@@ -125,7 +125,7 @@ ns io {
 ns files {
 
   fn read-to-string(context alloc-mode: mem/alloc-mode)(path: string): string {
-    let filename-c-string = path.to-c(context :tmp)()
+    let filename-c-string = path.to-c-tmp()
 
     let file = libc/files/fopen(filename-c-string.ptr, "r\0".data-ptr())
     if file.is-null() {

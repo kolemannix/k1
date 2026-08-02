@@ -551,12 +551,20 @@ pub(crate) fn resolve_global(
         }
         GlobalInitialValue::Uninit => {
             if global.is_external {
-                kbail!(
-                    k1,
-                    vm.eval_span,
-                    "Cannot read external global '{}' at compile time; its storage only exists at link time",
-                    k1.variables.get(global.variable_id).name
-                );
+                let name = k1.variables.get(global.variable_id).name;
+                let name_cstr = std::ffi::CString::new(k1.ident_str(name)).unwrap();
+                let sym = unsafe { libc::dlsym(k1.vm_process_dlopen_handle, name_cstr.as_ptr()) };
+                if sym.is_null() {
+                    kbail!(
+                        k1,
+                        vm.eval_span,
+                        "Could not resolve external global symbol '{}' at compile time; the platform does not export it dynamically",
+                        k1.ident_str(name)
+                    );
+                }
+                let addr = Value::ptr(sym as *const u8);
+                vm.globals.insert(global_id, addr);
+                return Ok(addr);
             } else {
                 None
             }
