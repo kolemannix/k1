@@ -538,11 +538,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let char_type = ctx.i8_type();
         let mut llvm_module = ctx.create_module(&module.ast.name);
         llvm_module.set_source_file_name(&module.ast.sources.get_main().filename);
-        // Example of linking an LLVM module
-        // let stdlib_module = ctx
-        //     .create_module_from_ir(MemoryBuffer::create_from_file(Path::new("k1lib/llvm")).unwrap())
-        //     .unwrap();
-        // llvm_module.link_in_module(stdlib_module).unwrap();
 
         let debug_context = Cg::init_debug(ctx, &llvm_module, module, optimize, debug);
 
@@ -4471,13 +4466,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     pub fn interpret_module(&self) -> anyhow::Result<u64> {
         let engine = self.llvm_module.create_jit_execution_engine(OptimizationLevel::None).unwrap();
-        // let base_lib_module = self
-        //     .ctx
-        //     .create_module_from_ir(
-        //         MemoryBuffer::create_from_file(Path::new("k1lib/k1lib.ll")).unwrap(),
-        //     )
-        //     .unwrap();
-        // self.llvm_module.link_in_module(base_lib_module).unwrap();
         let Some(main_fn_id) = self.k1.get_main_function_id() else { bail!("No main function") };
         let llvm_function = self.llvm_functions.get(&main_fn_id).unwrap();
         eprintln!("Interpreting {}", self.k1.program_name());

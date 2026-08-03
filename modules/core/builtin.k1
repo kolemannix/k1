@@ -636,6 +636,15 @@ ns k1 {
 
     fn dep(self: *mut module, name: string) {
       if name.is-empty() { crash("empty dep name") }
+      if not name.get(0).is-ascii-lower() {
+        crash("invalid dep name '$name': dep names start with a lowercase ascii letter")
+      }
+      for name {
+        let ok = it.is-ascii-lower() or it.is-ascii-digit() or it == '-' or it == '_'
+        if not ok {
+          crash("invalid dep name '$name': dep names contain only lowercase ascii letters, digits, '-' and '_'")
+        }
+      }
       for self.deps { if it == name { crash("duplicate dep '$name'") } }
       self.deps.push(name)
     }

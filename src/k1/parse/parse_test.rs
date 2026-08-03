@@ -212,7 +212,8 @@ fn type_parameter_multi() -> ParseResult<()> {
 
 #[test]
 fn builtin_only() -> Result<(), ParseError> {
-    let builtin_source = fs::read_to_string("k1lib/core/builtin.k1").unwrap();
+    let builtin_source =
+        fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/modules/core/builtin.k1")).unwrap();
     let ast = test_parse_input("builtin.k1".to_string(), builtin_source)?;
     assert!(!ast.get_root_namespace().definitions.is_empty());
     Ok(())
@@ -220,7 +221,8 @@ fn builtin_only() -> Result<(), ParseError> {
 
 #[test]
 fn core_only() -> Result<(), ParseError> {
-    let core_source = fs::read_to_string("k1lib/core/core.k1").unwrap();
+    let core_source =
+        fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/modules/core/core.k1")).unwrap();
     let ast = test_parse_input("core.k1".to_string(), core_source)?;
     assert!(!ast.get_root_namespace().definitions.is_empty());
     Ok(())

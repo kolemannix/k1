@@ -71,9 +71,18 @@ impl TestExpectation {
 }
 
 fn get_test_expectation(test_file: &Path) -> TestExpectation {
-    let path = test_file.canonicalize().unwrap();
+    let mut path = test_file.canonicalize().unwrap();
     if path.is_dir() {
-        return TestExpectation::ExitCode { code: 0, message: None };
+        let dir_name = path.file_name().unwrap().to_str().unwrap();
+        let module_root = path.join("module.k1");
+        let named_root = path.join(format!("{dir_name}.k1"));
+        if module_root.is_file() {
+            path = module_root;
+        } else if named_root.is_file() {
+            path = named_root;
+        } else {
+            return TestExpectation::ExitCode { code: 0, message: None };
+        }
     }
     let src = std::fs::read_to_string(path).expect("could not read source file for test {}");
 

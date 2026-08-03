@@ -2566,6 +2566,15 @@ impl ModuleManifest {
     }
 }
 
+struct LoadedModule {
+    module_id: ModuleId,
+    parsed_namespace_id: ParsedNamespaceId,
+    root_file_id: FileId,
+    manifest_fn_defn: Option<ParsedId>,
+    directory_string: Rc<String>,
+    remaining: crate::compiler::ModuleRemainingSourcesHandle,
+}
+
 pub struct Module {
     pub id: ModuleId,
     pub name: StringId,
@@ -2760,6 +2769,7 @@ pub struct EmittedSource {
 
 pub struct TypedProgram {
     pub modules: VPool<Module, ModuleId>,
+    pub module_order: Vec<ModuleId>,
     pub config: CompilerConfig,
     pub program_settings: ProgramSettings,
     pub ast: ParsedProgram,
@@ -2769,7 +2779,6 @@ pub struct TypedProgram {
     pub variables: VPool<Variable, VariableId>,
 
     pub types: VPool<Type, TypeId>,
-    /// Type hash-consing: check if we've already seen a type and reuse its id
     pub type_hashes: FxHashMap<u64, TypeId>,
     pub type_variable_counts: VPool<TypeVariableInfo, TypeId>,
     pub type_instance_info: VPool<Option<GenericInstanceInfo>, TypeId>,
@@ -3011,6 +3020,7 @@ impl TypedProgram {
 
         let mut k1 = TypedProgram {
             modules: VPool::make("modules"),
+            module_order: vec![],
             config,
             program_settings: ProgramSettings { multithreaded: false, executable: false },
             functions: VPool::make("typed_functions"),
@@ -3127,81 +3137,102 @@ impl TypedProgram {
 
     pub fn add_module(
         &mut self,
-        plan: crate::compiler::ModuleSourcesThreadHandle,
+        root_handle: crate::compiler::ModuleRootHandle,
         primary_module: bool,
     ) -> anyhow::Result<ModuleId> {
-        debug!("Loading module {:?}...", plan.src_path);
-        let module_name =
-            self.ast.idents.intern(plan.src_path.file_stem().unwrap().to_string_lossy());
-        if let Some(m) = self.modules.iter().find(|m| m.name == module_name) {
-            eprintln!("Module already included: {}", self.ident_str(m.name),);
-            return Ok(m.id);
-        }
+        let mut load_stack: Vec<StringId> = vec![];
+        let mut loaded: Vec<LoadedModule> = vec![];
+        let added_module_id =
+            self.load_module_tree(root_handle, primary_module, &mut load_stack, &mut loaded)?;
 
-        let module_id = self.modules.next_id();
-        let module_id =
-            self.modules.add_expected_id(Module::pending(module_id, module_name), module_id);
-
-        let is_core = module_id == MODULE_ID_CORE;
-
-        let crate::compiler::ModuleSources { module_dir, files, root_file_index } = plan.join()?;
-        let directory_string = Rc::new(module_dir.to_str().unwrap().to_string());
-
-        let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
-        let mut token_buffer = std::mem::take(&mut self.buffers.lexer_tokens);
-        debug!("Parsing {} files for module {}", files.len(), self.ident_str(module_name));
-
-        let mut root_file_id: Option<FileId> = None;
-        let mut source_file_hashes: Vec<(FileId, u64)> = Vec::with_capacity(files.len());
-        for (file_index, file) in files.into_iter().enumerate() {
-            let name = file.path.file_name().unwrap();
-            let source = parse::SourceFile::make(
-                directory_string.clone(),
-                name.to_str().unwrap().to_string(),
-                file.content,
-            );
-            let (file_id, lex_result) =
-                parse::lex_file_into_program(&mut self.ast, source, &mut token_buffer);
-            source_file_hashes.push((file_id, file.content_hash));
-            if root_file_index == file_index {
-                root_file_id = Some(file_id);
+        for lm in loaded {
+            let module_name = self.modules.get(lm.module_id).name;
+            for file in lm.remaining.join()? {
+                self.parse_module_source_file(
+                    lm.module_id,
+                    module_name,
+                    lm.parsed_namespace_id,
+                    lm.directory_string.clone(),
+                    file,
+                );
             }
-            if let Err(e) = lex_result {
-                self.ast.report_error(e);
-                // Keep going man! to the next file
-                continue;
-            }
-
-            if cfg!(feature = "lsp") {
-                self.ast.sources.get_mut(file_id).tokens = token_buffer.clone();
-            };
-
-            let mut parser = parse::Parser::make_for_file(
-                module_id,
-                module_name,
-                parsed_namespace_id,
-                &mut self.ast,
-                &token_buffer,
-                file_id,
-            );
-            parser.parse_file_into_module();
-            source_file_hashes.push((file_id, file.content_hash));
-        }
-
-        self.buffers.lexer_tokens = token_buffer;
-        self.modules.get_mut(module_id).source_file_hashes = source_file_hashes;
-
-        if !self.ast.errors.is_empty() {
-            if !self.config.lsp.completion {
+            if !self.ast.errors.is_empty() && !self.config.lsp.completion {
                 bail!(
                     "Parsing module {} failed with {} errors",
                     self.ident_str(module_name),
                     self.ast.errors.len()
                 );
             }
+            if let Err(e) =
+                self.check_manifest_fn_placement(lm.parsed_namespace_id, lm.root_file_id)
+            {
+                self.report(e);
+                bail!("Module {} has a misplaced fn module", self.ident_str(module_name));
+            }
+            self.run_on_module(lm.module_id, lm.parsed_namespace_id, lm.manifest_fn_defn)?;
+            self.module_order.push(lm.module_id);
         }
 
-        let (module_manifest, manifest_fn_defn) = if is_core {
+        #[cfg(feature = "profile")]
+        {
+            let mut exprs_by_kind = FxHashMap::new();
+            for expr in self.exprs.exprs.iter() {
+                let i = exprs_by_kind.entry(expr.kind_name()).or_insert(0);
+                *i += 1
+            }
+            eprintln!("\tExpression kinds:");
+            let exprs_by_kind_sorted =
+                exprs_by_kind.iter().sorted_by_key(|i| -i.1).collect::<Vec<_>>();
+            for (k, v) in exprs_by_kind_sorted.iter() {
+                eprintln!("\t\t{}: {}", k, v);
+            }
+        }
+
+        Ok(added_module_id)
+    }
+
+    fn load_module_tree(
+        &mut self,
+        root_handle: crate::compiler::ModuleRootHandle,
+        primary_module: bool,
+        load_stack: &mut Vec<StringId>,
+        loaded: &mut Vec<LoadedModule>,
+    ) -> anyhow::Result<ModuleId> {
+        debug!("Loading module {:?}...", root_handle.src_path);
+        let module_name =
+            self.ast.idents.intern(root_handle.src_path.file_stem().unwrap().to_string_lossy());
+        if let Some(m) = self.modules.iter().find(|m| m.name == module_name) {
+            debug!("Module already included: {}", self.ident_str(m.name));
+            return Ok(m.id);
+        }
+
+        let module_id = self.modules.next_id();
+        let module_id =
+            self.modules.add_expected_id(Module::pending(module_id, module_name), module_id);
+        let is_core = module_id == MODULE_ID_CORE;
+        load_stack.push(module_name);
+
+        let module_dir = root_handle.module_dir.clone();
+        let (root_file, remaining_sources) = root_handle.join_root()?;
+        let directory_string = Rc::new(module_dir.to_str().unwrap().to_string());
+
+        let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
+        let root_file_id = self.parse_module_source_file(
+            module_id,
+            module_name,
+            parsed_namespace_id,
+            directory_string.clone(),
+            root_file,
+        );
+        if !self.ast.errors.is_empty() && !self.config.lsp.completion {
+            bail!(
+                "Parsing module {} failed with {} errors",
+                self.ident_str(module_name),
+                self.ast.errors.len()
+            );
+        }
+
+        let (manifest, manifest_fn_defn) = if is_core {
             let manifest = ModuleManifest {
                 kind: ModuleKind::Library,
                 deps: vec![],
@@ -3214,8 +3245,11 @@ impl TypedProgram {
             };
             (manifest, None)
         } else {
-            match self.evaluate_module_manifest(parsed_namespace_id, root_file_id, primary_module)
-            {
+            self.module_in_progress = Some(module_id);
+            let manifest_result =
+                self.evaluate_module_manifest(parsed_namespace_id, primary_module);
+            self.module_in_progress = None;
+            match manifest_result {
                 Err(e) => {
                     self.report(e);
                     bail!(
@@ -3236,7 +3270,7 @@ impl TypedProgram {
             }
         };
 
-        if module_manifest.kind == ModuleKind::Executable {
+        if manifest.kind == ModuleKind::Executable {
             if let Some(m) = self
                 .modules
                 .iter()
@@ -3251,48 +3285,163 @@ impl TypedProgram {
         }
 
         if primary_module {
-            self.program_settings.multithreaded = module_manifest.multithreading;
-            self.program_settings.executable = module_manifest.kind == ModuleKind::Executable;
+            self.program_settings.multithreaded = manifest.multithreading;
+            self.program_settings.executable = manifest.kind == ModuleKind::Executable;
         }
 
-        if let Some(dep_name) = module_manifest.deps.first() {
-            bail!(
-                "Module {} depends on '{}', but dep resolution is not implemented yet",
-                self.ident_str(module_name),
-                self.ident_str(*dep_name)
-            );
+        let deps = manifest.deps.clone();
+        let module = self.modules.get_mut(module_id);
+        module.home_dir = module_dir;
+        module.manifest = manifest;
+
+        let remaining = remaining_sources.spawn_read(&self.config.lsp.source_overrides);
+
+        let manifest_span =
+            manifest_fn_defn.map(|d| self.ast.get_span_for_id(d)).unwrap_or(SpanId::NONE);
+        let mut dep_handles: Vec<crate::compiler::ModuleRootHandle> = vec![];
+        for dep_name_id in &deps {
+            let dep_str = self.get_string(*dep_name_id).to_string();
+            let dep_ident = self.ast.idents.intern(&dep_str);
+            if dep_str == self.program_name() {
+                let msg = format!(
+                    "Module '{}' depends on '{}': module name collision with the program itself",
+                    self.ident_str(module_name),
+                    dep_str
+                );
+                return Err(self.module_error(manifest_span, msg));
+            }
+            if load_stack.contains(&dep_ident) {
+                let mut cycle: Vec<String> = load_stack
+                    .iter()
+                    .skip_while(|n| **n != dep_ident)
+                    .map(|n| self.ident_str(*n).to_string())
+                    .collect();
+                cycle.push(dep_str);
+                let msg = format!("Module dependency cycle: {}", cycle.join(" -> "));
+                return Err(self.module_error(manifest_span, msg));
+            }
+            if self.modules.iter().any(|m| m.name == dep_ident) {
+                continue;
+            }
+            // nocommit these never change; re-use them
+            let deps_probe = self.config.home_dir.join("deps").join(&dep_str);
+            let modules_probe = self.config.k1_home.join("modules").join(&dep_str);
+            let dep_path = if deps_probe.exists() {
+                deps_probe
+            } else if modules_probe.exists() {
+                modules_probe
+            } else {
+                let msg = format!(
+                    "Module '{}' depends on '{}', which was not found. Probed: {}, {}",
+                    self.ident_str(module_name),
+                    dep_str,
+                    deps_probe.display(),
+                    modules_probe.display()
+                );
+                return Err(self.module_error(manifest_span, msg));
+            };
+            match crate::compiler::ModuleRootHandle::spawn(
+                &dep_path,
+                false,
+                &self.config.lsp.source_overrides,
+            ) {
+                Ok(handle) => dep_handles.push(handle),
+                Err(e) => {
+                    let msg = format!(
+                        "Module '{}' depends on '{}', which failed to load: {}",
+                        self.ident_str(module_name),
+                        dep_str,
+                        e
+                    );
+                    return Err(self.module_error(manifest_span, msg));
+                }
+            }
         }
 
-        let module_id = self.run_on_module(
+        for handle in dep_handles {
+            self.load_module_tree(handle, false, load_stack, loaded)?;
+        }
+
+        load_stack.pop();
+        loaded.push(LoadedModule {
             module_id,
             parsed_namespace_id,
-            module_manifest,
-            module_dir,
+            root_file_id,
             manifest_fn_defn,
-        )?;
-        if is_core {
-            debug_assert_eq!(module_id, MODULE_ID_CORE);
-        }
-        #[cfg(feature = "profile")]
-        {
-            let mut exprs_by_kind = FxHashMap::new();
-            for expr in self.exprs.exprs.iter() {
-                let i = exprs_by_kind.entry(expr.kind_name()).or_insert(0);
-                *i += 1
-            }
-            eprintln!("\tExpression kinds:");
-            let exprs_by_kind_sorted =
-                exprs_by_kind.iter().sorted_by_key(|i| -i.1).collect::<Vec<_>>();
-            for (k, v) in exprs_by_kind_sorted.iter() {
-                eprintln!("\t\t{}: {}", k, v);
-            }
-        }
-
-        // for g in self.globals.iter().cloned().collect_vec() {
-        //     self.warn_variable_usage_counts("Global", g.variable_id, g.span);
-        // }
-
+            directory_string,
+            remaining,
+        });
         Ok(module_id)
+    }
+
+    fn module_error(&mut self, span: SpanId, msg: String) -> anyhow::Error {
+        let e = self.make_error(&msg, span);
+        self.report(e);
+        anyhow::anyhow!(msg)
+    }
+
+    fn parse_module_source_file(
+        &mut self,
+        module_id: ModuleId,
+        module_name: StringId,
+        parsed_namespace_id: ParsedNamespaceId,
+        directory_string: Rc<String>,
+        file: crate::compiler::SourceFile,
+    ) -> FileId {
+        let name = file.path.file_name().unwrap();
+        // nocommit claude probably should be interned strings. for one we're going to have
+        // snapshotting soon (though maybe we rebuild this) but for two it just feels cleaner
+        let source = parse::SourceFile::make(
+            directory_string,
+            name.to_str().unwrap().to_string(),
+            file.content,
+        );
+        let mut token_buffer = std::mem::take(&mut self.buffers.lexer_tokens);
+        let (file_id, lex_result) =
+            parse::lex_file_into_program(&mut self.ast, source, &mut token_buffer);
+        self.modules.get_mut(module_id).source_file_hashes.push((file_id, file.content_hash));
+        if let Err(e) = lex_result {
+            self.ast.report_error(e);
+            self.buffers.lexer_tokens = token_buffer;
+            return file_id;
+        }
+
+        if cfg!(feature = "lsp") {
+            self.ast.sources.get_mut(file_id).tokens = token_buffer.clone();
+        };
+
+        let mut parser = parse::Parser::make_for_file(
+            module_id,
+            module_name,
+            parsed_namespace_id,
+            &mut self.ast,
+            &token_buffer,
+            file_id,
+        );
+        parser.parse_file_into_module();
+        self.buffers.lexer_tokens = token_buffer;
+        file_id
+    }
+
+    fn check_manifest_fn_placement(
+        &self,
+        parsed_namespace_id: ParsedNamespaceId,
+        root_file_id: FileId,
+    ) -> K1Result<()> {
+        let module_ident = self.ast.idents.b.module;
+        let namespace = self.ast.namespaces.get(parsed_namespace_id);
+        for fn_id in namespace.definitions.as_slice().iter().filter_map(|d| d.as_function_id()) {
+            let f = self.ast.get_function(fn_id);
+            if f.name == module_ident && self.ast.spans.get(f.span).file_id != root_file_id {
+                kbail!(
+                    self,
+                    f.span,
+                    "fn module is the module's manifest and must live in its root file \
+                     (module.k1 or <module-name>.k1)"
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Retrieve the current inference context
@@ -5465,28 +5614,16 @@ impl TypedProgram {
     fn evaluate_module_manifest(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
-        root_file_id: Option<FileId>,
         primary_module: bool,
     ) -> K1Result<Option<(ModuleManifest, ParsedId)>> {
         let module_ident = self.ast.idents.b.module;
         let namespace = self.ast.namespaces.get(parsed_namespace_id);
-        let mut manifest_fn_id = None;
-        for fn_id in namespace.definitions.as_slice().iter().filter_map(|d| d.as_function_id()) {
-            let f = self.ast.get_function(fn_id);
-            if f.name != module_ident {
-                continue;
-            }
-            if root_file_id.is_some_and(|rf| self.ast.spans.get(f.span).file_id == rf) {
-                manifest_fn_id = Some(fn_id);
-            } else {
-                kbail!(
-                    self,
-                    f.span,
-                    "fn module is the module's manifest and must live in its root file \
-                     (module.k1 or <module-name>.k1)"
-                );
-            }
-        }
+        let manifest_fn_id = namespace
+            .definitions
+            .as_slice()
+            .iter()
+            .filter_map(|d| d.as_function_id())
+            .find(|fn_id| self.ast.get_function(*fn_id).name == module_ident);
         let Some(manifest_fn_id) = manifest_fn_id else {
             return Ok(None);
         };
@@ -5542,7 +5679,8 @@ impl TypedProgram {
         let deps_container = *self.static_values.get(fields[1]).as_container().unwrap();
         let mut deps = vec![];
         for dep_value_id in self.static_values.get_slice(deps_container.elements) {
-            deps.push(self.static_values.get(*dep_value_id).as_string().unwrap());
+            let dep_string_id = self.static_values.get(*dep_value_id).as_string().unwrap();
+            deps.push(dep_string_id);
         }
 
         let libs_container = *self.static_values.get(fields[2]).as_container().unwrap();
@@ -19852,10 +19990,8 @@ impl TypedProgram {
         &mut self,
         module_id: ModuleId,
         module_root_parsed_namespace: ParsedNamespaceId,
-        manifest: ModuleManifest,
-        home_dir: PathBuf,
         manifest_fn_defn: Option<ParsedId>,
-    ) -> anyhow::Result<ModuleId> {
+    ) -> anyhow::Result<()> {
         self.module_in_progress = Some(module_id);
         let is_core = module_id == MODULE_ID_CORE;
 
@@ -19876,8 +20012,6 @@ impl TypedProgram {
         let module_root_namespace_scope_id = self.namespaces.get(typed_namespace_id).scope_id;
 
         let module = self.modules.get_mut(module_id);
-        module.home_dir = home_dir;
-        module.manifest = manifest;
         module.namespace_id = typed_namespace_id;
         module.namespace_scope_id = module_root_namespace_scope_id;
 
@@ -19936,7 +20070,7 @@ impl TypedProgram {
         //     self.report_warning(span, "Unused function");
         // }
 
-        Ok(module_id)
+        Ok(())
     }
 
     fn resolve_pending_uses(&mut self) {

@@ -70,7 +70,7 @@ just build-r
 just lsprelease
 ```
 
-The resulting binaries will be available under `./target/release`. You can install the binaries and the dependent `k1lib` to `~/.k1` via:
+The resulting binaries will be available under `./target/release`. You can install the binaries and the dependent `modules` to `~/.k1` via:
 
 ```bash
 just install-macos-from-macos # Or: just install-linux-from-linux
@@ -103,7 +103,7 @@ k1 run <(echo 'fn main(): i32 { println("hello k1!"); 0 }')
 Let's add a feature to `k1` using metaprogramming to support bitfields.
 [Video Version](https://youtu.be/bSxzW6lGWlc) (the video predates some syntax
 changes; the code below is the current implementation, live at
-`k1lib/std/bitfield.k1`)
+`modules/std/bitfield.k1`)
 
 I'd like to be able to define a bitfield by providing a name, a 'base' integer type
 big enough to house all the fields I provide, and a series of fields as a collection of (name, bit width) pairs.

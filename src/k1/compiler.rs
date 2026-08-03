@@ -286,6 +286,7 @@ impl Args {
 pub struct CompilerConfig {
     pub src_path: PathBuf,
     pub home_dir: PathBuf,
+    pub k1_home: PathBuf,
     pub is_test_build: bool,
     pub no_std: bool,
     pub target: Target,
@@ -362,28 +363,6 @@ pub fn module_home_from_src_path(src_path: &Path) -> (bool, PathBuf) {
     (is_dir, src_dir)
 }
 
-/// Requires a canonicalized src_path
-/// Returned pair is (parent_dir, source_files)
-fn discover_source_files(src_path: &Path) -> (PathBuf, Vec<PathBuf>) {
-    let (is_dir, src_dir) = module_home_from_src_path(src_path);
-    let src_filter: &dyn Fn(&Path) -> bool =
-        &|p: &Path| p.extension().is_some_and(|ext| ext == "k1");
-    let dir_entries = if is_dir {
-        let mut ents = fs::read_dir(&src_dir)
-            .unwrap()
-            .filter_map(|item| item.ok())
-            .map(|item| item.path())
-            .filter(|item| src_filter(item))
-            .collect::<Vec<_>>();
-        ents.sort_by_key(|ent| ent.file_name().unwrap().to_os_string());
-        ents
-    } else {
-        vec![src_path.to_owned()]
-    };
-
-    (src_dir, dir_entries)
-}
-
 pub struct SourceFile {
     /// canonical absolute
     pub path: PathBuf,
@@ -391,83 +370,130 @@ pub struct SourceFile {
     pub content_hash: u64,
 }
 
-pub struct ModuleSources {
-    pub module_dir: PathBuf,
-    pub files: Vec<SourceFile>,
-    pub root_file_index: usize,
+fn read_source_file(path: PathBuf, override_content: Option<String>) -> Result<SourceFile, String> {
+    let content = match override_content {
+        Some(content) => content,
+        None => fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read source file {}: {e}", path.display()))?,
+    };
+    let content_hash = content_hash64(content.as_bytes());
+    Ok(SourceFile { path, content, content_hash })
 }
 
-pub struct ModuleSourcesThreadHandle {
+pub struct ModuleRootHandle {
     /// canonicalized module path (dir or single file)
     pub src_path: PathBuf,
-    reader: std::thread::JoinHandle<Result<ModuleSources, String>>,
+    pub module_dir: PathBuf,
+    pub root_path: PathBuf,
+    is_dir: bool,
+    reader: std::thread::JoinHandle<Result<SourceFile, String>>,
 }
 
-impl ModuleSourcesThreadHandle {
-    /// core_module=true must be passed for (exactly) the corelib module: it forces
-    /// builtin.k1 to the front of the file order.
+impl ModuleRootHandle {
+    /// core_module=true must be passed for (exactly) the corelib module, whose root
+    /// file is builtin.k1
     pub fn spawn(
         src_path: &Path,
         core_module: bool,
         source_overrides: &fxhash::FxHashMap<PathBuf, String>,
-    ) -> anyhow::Result<ModuleSourcesThreadHandle> {
+    ) -> anyhow::Result<ModuleRootHandle> {
         let src_path = src_path.canonicalize().map_err(|e| {
             anyhow::anyhow!("Error loading module '{}': {}", src_path.to_string_lossy(), e)
         })?;
-        let (module_dir, mut files) = discover_source_files(&src_path);
-        if core_module {
-            let builtin_index = files
-                .iter()
-                .position(|path| path.file_name().unwrap() == "builtin.k1")
-                .expect("corelib module must contain builtin.k1");
-            files.swap(0, builtin_index);
-        }
-        let root_file_index = if core_module {
-            0
-        } else if src_path.is_dir() {
-            let module_name = src_path.file_name().unwrap().to_string_lossy();
-            let named_root = format!("{module_name}.k1");
-            files
-                .iter()
-                .position(|path| path.file_name().unwrap() == "module.k1")
-                .or_else(|| {
-                    files.iter().position(|path| path.file_name().unwrap() == named_root.as_str())
-                })
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Directory module '{module_name}' has no root file: create module.k1 or {named_root}"
-                    )
-                })?
+        let (is_dir, module_dir) = module_home_from_src_path(&src_path);
+        let root_path = if !is_dir {
+            src_path.clone()
+        } else if core_module {
+            let builtin = module_dir.join("builtin.k1");
+            if !builtin.is_file() {
+                bail!("corelib module must contain builtin.k1");
+            }
+            builtin
         } else {
-            0
+            let module_name = src_path.file_name().unwrap().to_string_lossy();
+            let module_root = module_dir.join("module.k1");
+            let named_root = module_dir.join(format!("{module_name}.k1"));
+            if module_root.is_file() {
+                module_root
+            } else if named_root.is_file() {
+                named_root
+            } else {
+                bail!(
+                    "Directory module '{module_name}' has no root file: create module.k1 or {module_name}.k1"
+                );
+            }
         };
-        let overrides: Vec<Option<String>> =
-            files.iter().map(|path| source_overrides.get(path).cloned()).collect();
-        let reader = std::thread::spawn(move || {
-            let files = files
-                .into_iter()
-                .zip(overrides)
-                .map(|(path, override_content)| {
-                    let content = match override_content {
-                        Some(content) => content,
-                        None => fs::read_to_string(&path).map_err(|e| {
-                            format!("Failed to read source file {}: {e}", path.display())
-                        })?,
-                    };
-                    let content_hash = content_hash64(content.as_bytes());
-                    Ok(SourceFile { path, content, content_hash })
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            Ok(ModuleSources { module_dir, files, root_file_index })
-        });
-        Ok(ModuleSourcesThreadHandle { src_path, reader })
+        let override_content = source_overrides.get(&root_path).cloned();
+        let read_path = root_path.clone();
+        let reader = std::thread::spawn(move || read_source_file(read_path, override_content));
+        Ok(ModuleRootHandle { src_path, module_dir, root_path, is_dir, reader })
     }
 
+    pub fn join_root(self) -> anyhow::Result<(SourceFile, ModuleRemainingSources)> {
+        let root = self
+            .reader
+            .join()
+            .expect("module root reader thread panicked")
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let remaining = ModuleRemainingSources {
+            module_dir: self.module_dir,
+            root_path: self.root_path,
+            is_dir: self.is_dir,
+        };
+        Ok((root, remaining))
+    }
+}
+
+/// The module's non-root sources; the glob is deferred to spawn_read, called only
+/// once the module is loaded (manifest evaluated, eventually setup run), so
+/// setup-generated sources are discovered by the same single glob as committed ones
+pub struct ModuleRemainingSources {
+    module_dir: PathBuf,
+    root_path: PathBuf,
+    is_dir: bool,
+}
+
+impl ModuleRemainingSources {
+    pub fn spawn_read(
+        self,
+        source_overrides: &fxhash::FxHashMap<PathBuf, String>,
+    ) -> ModuleRemainingSourcesHandle {
+        let overrides = source_overrides.clone();
+        let reader = std::thread::spawn(move || {
+            if !self.is_dir {
+                return Ok(vec![]);
+            }
+            let mut files = fs::read_dir(&self.module_dir)
+                .map_err(|e| {
+                    format!("Failed to list module dir {}: {e}", self.module_dir.display())
+                })?
+                .filter_map(|item| item.ok())
+                .map(|item| item.path())
+                .filter(|p| p.extension().is_some_and(|ext| ext == "k1") && *p != self.root_path)
+                .collect::<Vec<_>>();
+            files.sort_by_key(|ent| ent.file_name().unwrap().to_os_string());
+            files
+                .into_iter()
+                .map(|path| {
+                    let override_content = overrides.get(&path).cloned();
+                    read_source_file(path, override_content)
+                })
+                .collect::<Result<Vec<_>, String>>()
+        });
+        ModuleRemainingSourcesHandle { reader }
+    }
+}
+
+pub struct ModuleRemainingSourcesHandle {
+    reader: std::thread::JoinHandle<Result<Vec<SourceFile>, String>>,
+}
+
+impl ModuleRemainingSourcesHandle {
     /// Err is the first failure
-    pub fn join(self) -> anyhow::Result<ModuleSources> {
+    pub fn join(self) -> anyhow::Result<Vec<SourceFile>> {
         self.reader
             .join()
-            .expect("module reader thread panicked")
+            .expect("module sources reader thread panicked")
             .map_err(|e| anyhow::anyhow!(e))
     }
 }
@@ -591,16 +617,16 @@ pub fn compile_program_ext(
     if args.chatty {
         eprintln!("using k1 home: {}", k1_home_pathbuf.display());
     }
-    let k1lib_dir_pathbuf = k1_home_pathbuf.join("k1lib");
+    let modules_dir = k1_home_pathbuf.join("modules");
 
-    let corelib_dir = k1lib_dir_pathbuf.join("core");
-    let stdlib_dir = k1lib_dir_pathbuf.join("std");
+    let corelib_dir = modules_dir.join("core");
+    let stdlib_dir = modules_dir.join("std");
 
     // All planned paths are absolute, so spawning before the CwdGuard chdir is safe;
     // reads overlap TypedProgram::new's ident/scope init and core's typecheck.
-    let core_plan = ModuleSourcesThreadHandle::spawn(&corelib_dir, true, &lsp.source_overrides);
-    let std_plan = use_std.then(|| ModuleSourcesThreadHandle::spawn(&stdlib_dir, false, &lsp.source_overrides));
-    let main_plan = ModuleSourcesThreadHandle::spawn(&src_path, false, &lsp.source_overrides);
+    let core_plan = ModuleRootHandle::spawn(&corelib_dir, true, &lsp.source_overrides);
+    let std_plan = use_std.then(|| ModuleRootHandle::spawn(&stdlib_dir, false, &lsp.source_overrides));
+    let main_plan = ModuleRootHandle::spawn(&src_path, false, &lsp.source_overrides);
 
     let module_name = if src_path.is_dir() {
         src_path.file_name().unwrap().to_str().unwrap().to_string()
@@ -611,6 +637,7 @@ pub fn compile_program_ext(
     let config = CompilerConfig {
         src_path: src_path.clone(),
         home_dir,
+        k1_home: k1_home_pathbuf,
         is_test_build: args.command.is_test(),
         no_std: args.no_std,
         target,
@@ -879,6 +906,47 @@ pub fn codegen_module<'ctx, 'module>(
     write_executable(codegen.k1, &module_name_path, &[])?;
 
     Ok(codegen)
+}
+
+#[cfg(test)]
+mod compiler_test {
+    use super::*;
+
+    #[test]
+    fn dep_source_overrides_reach_dep_modules() {
+        static SET_HOME: std::sync::Once = std::sync::Once::new();
+        SET_HOME.call_once(|| unsafe {
+            std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
+        });
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let dep_file = root
+            .join("test_src/dep_diamond_test/deps/shared/shared.k1")
+            .canonicalize()
+            .unwrap();
+        let args = Args {
+            no_std: false,
+            emit_llvm: false,
+            optimize: false,
+            dump_module: false,
+            dump_idents: false,
+            debug: false,
+            sanitize: false,
+            filc: false,
+            profile: false,
+            chatty: false,
+            optimize_ir: true,
+            target: None,
+            command: Command::Check { file: root.join("test_src/dep_diamond_test") },
+        };
+        let mut source_overrides = fxhash::FxHashMap::default();
+        source_overrides.insert(dep_file, "fn renamed-base(): int { 21 }\n".to_string());
+        let result =
+            compile_program_ext(&args, LspCompileOptions { source_overrides, completion: false });
+        assert!(
+            result.is_err(),
+            "an overridden dep source must be compiled in place of the on-disk file"
+        );
+    }
 }
 
 // Eventually, we want to return output and exit code to the application

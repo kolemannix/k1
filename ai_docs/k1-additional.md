@@ -410,7 +410,7 @@ cannot form a dyn type. Dyn objects contain function pointers, so
 they cannot cross the `#static` boundary into runtime constants; comptime
 creation and dispatch inside `#static` works.
 
-See `test_src/suite1/ability_object.k1` and `k1lib/std/stream.k1`.
+See `test_src/suite1/ability_object.k1` and `modules/std/stream.k1`.
 
 ## Opaque, Union, Uninit, Zeroed, And Bitcast
 
@@ -558,7 +558,7 @@ See `test_src/threads.k1`.
 
 ## Atomics
 
-Atomics are operations, not types: `ns atomic` in `k1lib/core/atomic.k1`
+Atomics are operations, not types: `ns atomic` in `modules/core/atomic.k1`
 exposes intrinsics over ordinary memory through references.
 
 ```

@@ -26,7 +26,7 @@ lsp:
   rm ~/.k1/bin/k1lsp
   cp target/debug/lsp ~/.k1/bin/k1lsp
 
-  just install-k1lib
+  just install-modules
 
 lsprelease:
   cargo build --profile release --features lsp --features=llvm-sys/force-static --bin lsp
@@ -55,9 +55,9 @@ install: bundle
   tar -xzf builds/{{bundle-name}}.tar.gz -C builds
   cd builds/{{bundle-name}} && ./install.sh
 
-install-k1lib:
-  # rm -r ~/.k1/k1lib
-  cp -r k1lib/. ~/.k1/k1lib
+install-modules:
+  # rm -r ~/.k1/modules
+  cp -r modules/. ~/.k1/modules
 
 repl +args:
   RUST_BACKTRACE=1 RUST_LOG=info \
