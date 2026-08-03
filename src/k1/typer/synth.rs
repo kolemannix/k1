@@ -437,15 +437,7 @@ impl TypedProgram {
         let the_span = self.ast.spans.get(span);
         let source = self.ast.sources.get(the_span.file_id);
         let line_number = source.get_line_for_span_start(the_span).unwrap().line_number();
-
-        let filename_string_id = match self.filename_string_ids.get(&the_span.file_id) {
-            Some(id) => *id,
-            None => {
-                let id = self.ast.idents.intern(&source.filename);
-                self.filename_string_ids.insert(the_span.file_id, id);
-                id
-            }
-        };
+        let filename_string_id = source.filename;
         let filename_expr = self.synth_string_literal(filename_string_id, span);
 
         let line_number_expr = self.synth_int(TypedIntValue::U64(line_number as u64), span);

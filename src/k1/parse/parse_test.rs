@@ -10,11 +10,9 @@ fn make_test_ast() -> ParsedProgram {
 }
 
 fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'ast> {
-    let source = SourceFile::make(
-        "unit_test".to_string().into(),
-        "unit_test.k1".to_string(),
-        input.to_string(),
-    );
+    let directory = ast.idents.intern("unit_test");
+    let filename = ast.idents.intern("unit_test.k1");
+    let source = SourceFile::make(directory, filename, input.to_string());
     let module_id = ModuleId::from_u32(1).unwrap();
     let module_name = ast.idents.intern("unit_test");
     let mut token_vec = vec![];
@@ -62,7 +60,7 @@ fn basic_fn() -> Result<(), ParseError> {
       y = add(42, 42);
       add(x, y)
     }"#;
-    let mut module = test_parse_input("basic_fn".to_string(), src.to_string())?;
+    let module = test_parse_input("basic_fn".to_string(), src.to_string())?;
     let fndef = module.functions.get_opt(ParsedFunctionId::from_u32(1).unwrap()).unwrap();
     assert_eq!(fndef.name, module.idents.intern("basic"));
     Ok(())
@@ -234,7 +232,7 @@ fn macro_defn_compiler_debug() -> Result<(), ParseError> {
     #debug macro m1(a) { `{ $a }` }
     macro m2(a) { `{ $a }` }
     "#;
-    let mut ast = test_parse_input("macro_debug".to_string(), src.to_string())?;
+    let ast = test_parse_input("macro_debug".to_string(), src.to_string())?;
     let m1_name = ast.idents.intern("m1");
     let m1 = ast.get_macro(ParsedMacroId::from_u32(1).unwrap());
     let m2 = ast.get_macro(ParsedMacroId::from_u32(2).unwrap());
@@ -302,7 +300,7 @@ fn generic_fn_call() -> Result<(), ParseError> {
 #[test]
 fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     let input = "getFn().baz[u64](42)";
-    let (mut ast, result) = test_single_expr(input)?;
+    let (ast, result) = test_single_expr(input)?;
     let ParsedExpr::Call(call) = result else { panic!() };
     let args = ast.mem.getn(call.args);
     let ParsedExpr::Call(fn_call) = ast.exprs.get(args[0].value).clone() else { panic!() };
@@ -326,7 +324,7 @@ fn char_value() -> ParseResult<()> {
 #[test]
 fn namespaced_fncall() -> ParseResult<()> {
     let input = "foo/bar/baz()";
-    let (mut ast, result) = test_single_expr(input)?;
+    let (ast, result) = test_single_expr(input)?;
     let ParsedExpr::Call(fn_call) = result else { panic!("not fncall") };
     assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path, 0).name), "foo");
     assert_eq!(
@@ -345,7 +343,7 @@ fn namespaced_fncall() -> ParseResult<()> {
 #[test]
 fn namespaced_val() -> ParseResult<()> {
     let input = "foo/bar/baz";
-    let (mut ast, result) = test_single_expr(input)?;
+    let (ast, result) = test_single_expr(input)?;
     let ParsedExpr::Variable(variable) = result else { panic!("not variable") };
     assert_eq!(ast.idents.get_string(ast.mem.get_nth(variable.name.path, 0).name), "foo");
     assert_eq!(ast.idents.get_string(ast.mem.get_nth(variable.name.path, 1).name), "bar");
@@ -536,13 +534,14 @@ fn consecutive_strings() -> ParseResult<()> {
 #[test]
 fn lex_error_does_not_poison_reused_token_buffer() {
     let mut ast = make_test_ast();
-    let dir: std::rc::Rc<String> = "unit_test".to_string().into();
+    let dir = ast.idents.intern("unit_test");
     let bad = SourceFile::make(
-        dir.clone(),
-        "bad.k1".to_string(),
+        dir,
+        ast.idents.intern("bad.k1"),
         "let x = \"unterminated\nfn f(): i32 { 0 }".to_string(),
     );
-    let good = SourceFile::make(dir, "good.k1".to_string(), "fn g(): i32 { 42 }".to_string());
+    let good =
+        SourceFile::make(dir, ast.idents.intern("good.k1"), "fn g(): i32 { 42 }".to_string());
 
     let mut tokens = vec![];
     assert!(lex_file_into_program(&mut ast, bad, &mut tokens).1.is_err());

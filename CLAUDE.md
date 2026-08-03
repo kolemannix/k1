@@ -40,6 +40,8 @@ Before nontrivial work, read:
 
 ## Architecture Map
 
+- `src/k1/kpath.rs`: path handling; compiler-internal paths are canonical UTF-8
+  strings interned in the ident pool, `std::path` only at OS call sites.
 - `src/k1/lex.rs`: lexer/tokenization.
 - `src/k1/parse.rs` and `src/k1/parse/idents.rs`: parser, AST, identifiers, and
   parsed source model.

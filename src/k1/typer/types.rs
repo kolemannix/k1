@@ -980,31 +980,51 @@ impl Type {
 }
 
 #[derive(Default, Clone, Copy)]
-pub struct TypeVariableInfo {
-    pub inference_variable_count: u32,
+pub struct TypeInfo {
+    pub inference_hole_count: u32,
     pub type_parameter_count: u32,
     pub unresolved_static_count: u32,
+    pub is_zero_safe: bool,
 }
 
-impl TypeVariableInfo {
-    const EMPTY: TypeVariableInfo = TypeVariableInfo {
-        inference_variable_count: 0,
+impl TypeInfo {
+    const EMPTY: TypeInfo = TypeInfo {
+        inference_hole_count: 0,
         type_parameter_count: 0,
         unresolved_static_count: 0,
+        is_zero_safe: true,
     };
 
+    pub fn type_param() -> TypeInfo {
+        TypeInfo {
+            inference_hole_count: 0,
+            type_parameter_count: 1,
+            unresolved_static_count: 0,
+            is_zero_safe: true,
+        }
+    }
+
+    pub fn inference_hole() -> TypeInfo {
+        TypeInfo {
+            inference_hole_count: 1,
+            type_parameter_count: 0,
+            unresolved_static_count: 0,
+            is_zero_safe: true,
+        }
+    }
+
     pub fn is_abstract(&self) -> bool {
-        self.inference_variable_count > 0
+        self.inference_hole_count > 0
             || self.type_parameter_count > 0
             || self.unresolved_static_count > 0
     }
 
     fn add(self, other: &Self) -> Self {
         Self {
-            inference_variable_count: self.inference_variable_count
-                + other.inference_variable_count,
+            inference_hole_count: self.inference_hole_count + other.inference_hole_count,
             type_parameter_count: self.type_parameter_count + other.type_parameter_count,
             unresolved_static_count: self.unresolved_static_count + other.unresolved_static_count,
+            is_zero_safe: self.is_zero_safe && other.is_zero_safe,
         }
     }
 }
@@ -1444,7 +1464,7 @@ impl TypedProgram {
         // pub type_variable_counts
         // pub instance_info
 
-        let variable_counts = self.count_type_variables(type_id);
+        let variable_counts = self.compute_type_info(type_id);
         self.type_variable_counts.add_expected_id(variable_counts, type_id);
 
         self.type_instance_info.add_expected_id(instance_info, type_id);
@@ -1470,7 +1490,7 @@ impl TypedProgram {
         *self.types.get_mut(id) = type_value;
         self.type_hashes.insert(hash, id);
 
-        let variable_counts = self.count_type_variables(id);
+        let variable_counts = self.compute_type_info(id);
         *self.type_variable_counts.get_mut(id) = variable_counts;
 
         if let Some(defn_info) = defn_info {
@@ -1503,7 +1523,7 @@ impl TypedProgram {
     pub fn reserve_type_id(&mut self) -> TypeId {
         let id = self.types.reserve_id();
         let id2 = self.type_instance_info.add_expected_id(None, id);
-        let id3 = self.type_variable_counts.add_expected_id(TypeVariableInfo::EMPTY, id);
+        let id3 = self.type_variable_counts.add_expected_id(TypeInfo::EMPTY, id);
         debug_assert_eq!(id, id2);
         debug_assert_eq!(id, id3);
         id
@@ -1518,7 +1538,7 @@ impl TypedProgram {
         type_args: TypeIdSlice,
     ) -> TypeId {
         let id = self.reserve_type_id();
-        let mut counts = TypeVariableInfo::EMPTY;
+        let mut counts = TypeInfo::EMPTY;
         for arg in self.mem.getn(type_args) {
             counts = counts.add(self.type_variable_counts.get(*arg));
         }
@@ -1776,34 +1796,24 @@ impl TypedProgram {
         self.ast_ability_mapping.get(&parsed_ability_id).copied()
     }
 
-    pub fn get_type_variable_counts(&self, type_id: TypeId) -> TypeVariableInfo {
+    pub fn get_type_variable_counts(&self, type_id: TypeId) -> TypeInfo {
         *self.type_variable_counts.get(type_id)
     }
 
-    pub fn count_type_variables(&self, type_id: TypeId) -> TypeVariableInfo {
-        const EMPTY: TypeVariableInfo = TypeVariableInfo::EMPTY;
+    /// Computes 'supplementary' type info like type hole counts, zero-safeness, other flags
+    /// Prefer to add stuff here rather than creating a new traversal
+    pub fn compute_type_info(&self, type_id: TypeId) -> TypeInfo {
+        const EMPTY: TypeInfo = TypeInfo::EMPTY;
         debug!("count_type_variables of {} {}", type_id, self.types.get(type_id).kind_name());
 
         match self.types.get(type_id) {
-            Type::TypeParameter(_tp) => TypeVariableInfo {
-                type_parameter_count: 1,
-                inference_variable_count: 0,
-                unresolved_static_count: 0,
-            },
+            Type::TypeParameter(_tp) => TypeInfo::type_param(),
             Type::FunctionTypeParameter(ftp) => {
-                let base_info = TypeVariableInfo {
-                    type_parameter_count: 1,
-                    inference_variable_count: 0,
-                    unresolved_static_count: 0,
-                };
+                let base_info = TypeInfo::type_param();
                 let fn_info = self.type_variable_counts.get(ftp.function_type);
                 base_info.add(fn_info)
             }
-            Type::InferenceHole(_hole) => TypeVariableInfo {
-                type_parameter_count: 0,
-                inference_variable_count: 1,
-                unresolved_static_count: 0,
-            },
+            Type::InferenceHole(_hole) => TypeInfo::inference_hole(),
             Type::Char => EMPTY,
             Type::Integer(_) => EMPTY,
             Type::Float(_) => EMPTY,
@@ -1816,18 +1826,49 @@ impl TypedProgram {
                 }
                 result
             }
-            Type::Reference(refer) => *self.type_variable_counts.get(refer.inner_type),
+            Type::Reference(refer) => {
+                let mut counts = *self.type_variable_counts.get(refer.inner_type);
+                // References are nullable
+                counts.is_zero_safe = true;
+                counts
+            }
             Type::Sum(e) => {
                 let mut result = EMPTY;
+                let mut has_zero_variant = false;
                 for v in self.mem.getn(e.variants) {
+                    let valid_zero_variant = if v.tag_value.is_zero() {
+                        if let Some(payload) = v.payload {
+                            let payload_info = self.type_variable_counts.get(payload);
+                            payload_info.is_zero_safe
+                        } else {
+                            true
+                        }
+                    } else {
+                        false
+                    };
+                    if valid_zero_variant {
+                        has_zero_variant = true;
+                    }
+
                     if let Some(payload) = v.payload {
                         result = result.add(self.type_variable_counts.get(payload));
                     }
                 }
+                result.is_zero_safe = has_zero_variant;
                 result
             }
             Type::Opaque(_) => EMPTY,
-            Type::Enum(_) => EMPTY,
+            Type::Enum(enum_type) => {
+                let mut result = EMPTY;
+                let mut has_zero_member = false;
+                for member in self.mem.getn(enum_type.member_values) {
+                    if member.int_value.is_zero() {
+                        has_zero_member = true
+                    }
+                }
+                result.is_zero_safe = has_zero_member;
+                result
+            }
             Type::Never => EMPTY,
             // The real answer here would be, all the type variables on the RHS that aren't one of
             // the params. In other words, all FREE type variables
@@ -1838,9 +1879,14 @@ impl TypedProgram {
                     result = result.add(self.type_variable_counts.get(param.type_id))
                 }
                 result = result.add(self.type_variable_counts.get(fun.return_type));
+                result.is_zero_safe = true;
                 result
             }
-            Type::FunctionPointer(fp) => *self.type_variable_counts.get(fp.function_type_id),
+            Type::FunctionPointer(fp) => {
+                let mut result = *self.type_variable_counts.get(fp.function_type_id);
+                result.is_zero_safe = true;
+                result
+            }
             Type::Lambda(lambda_id) => {
                 let lambda = self.lambda_types.get(*lambda_id);
                 self.type_variable_counts
@@ -1848,24 +1894,27 @@ impl TypedProgram {
                     .add(self.type_variable_counts.get(lambda.env_type))
             }
             // But a lambda object is generic if its function is generic
-            Type::LambdaObject(co) => *self.type_variable_counts.get(co.function_type),
+            Type::LambdaObject(co) => {
+                let mut result = *self.type_variable_counts.get(co.function_type);
+                result.is_zero_safe = false;
+                result
+            }
             // An ability object is generic if any of its impl arguments are:
-            // dyn[source[t = t]] inside a generic fn must substitute at instantiation.
-            // Ability-side args are baked into the specialized ability id and are
-            // required to be concrete at dyn-type formation, so they contribute none.
             Type::AbilityObject(ao) => {
                 let mut result = EMPTY;
                 for arg in self.mem.getn(ao.impl_arguments) {
                     result = result.add(self.type_variable_counts.get(arg.type_id));
                 }
+                result.is_zero_safe = false;
                 result
             }
             Type::StaticValue(svt) => {
                 let this = if svt.value_id.is_none() {
-                    TypeVariableInfo {
-                        inference_variable_count: 0,
+                    TypeInfo {
+                        inference_hole_count: 0,
                         type_parameter_count: 0,
                         unresolved_static_count: 1,
+                        is_zero_safe: true,
                     }
                 } else {
                     EMPTY
@@ -1876,9 +1925,11 @@ impl TypedProgram {
             Type::Array(arr) => {
                 // Arrays contain 2 types, the element type and the size type,
                 // which is usually a `static uword`, but can be a type parameter
-                self.type_variable_counts
+                let mut result = self.type_variable_counts
                     .get(arr.element_type)
-                    .add(self.type_variable_counts.get(arr.size_type))
+                    .add(self.type_variable_counts.get(arr.size_type));
+                result.is_zero_safe = true;
+                result
             }
             Type::Vector(vec) => self
                 .type_variable_counts

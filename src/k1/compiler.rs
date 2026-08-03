@@ -6,8 +6,8 @@ use std::fs::File;
 use std::io::{IsTerminal, Write};
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
-use std::rc::Rc;
 
+use crate::kpath;
 use crate::parse::{StringId, write_source_location};
 use crate::typer::{LibRefLinkType, MessageLevel, TypedProgram};
 use anyhow::{Result, bail};
@@ -130,26 +130,26 @@ pub fn detect_simd_bytes(target: Target) -> u32 {
 pub const LIBS_DIR_NAME: &str = "libs";
 
 pub fn logical_name_to_lib_filename(
-    module_libs_dir: &Path,
+    module_libs_dir: &str,
     target_os: TargetOs,
     link_type: LibRefLinkType,
     logical_name: &str,
-) -> PathBuf {
+) -> String {
     match (target_os, link_type) {
         (TargetOs::Linux, LibRefLinkType::Static) => {
-            module_libs_dir.join(Path::new(&format!("lib{}", logical_name)).with_extension("a"))
+            kpath::join(module_libs_dir, &format!("lib{logical_name}.a"))
         }
         (TargetOs::Linux, LibRefLinkType::Dynamic) => {
-            module_libs_dir.join(Path::new(&format!("lib{}", logical_name)).with_extension("so"))
+            kpath::join(module_libs_dir, &format!("lib{logical_name}.so"))
         }
-        (TargetOs::Linux, LibRefLinkType::Default) => PathBuf::from(logical_name),
+        (TargetOs::Linux, LibRefLinkType::Default) => logical_name.to_string(),
         (TargetOs::MacOs, LibRefLinkType::Static) => {
-            module_libs_dir.join(Path::new(&format!("lib{}", logical_name)).with_extension("a"))
+            kpath::join(module_libs_dir, &format!("lib{logical_name}.a"))
         }
         (TargetOs::MacOs, LibRefLinkType::Dynamic) => {
-            module_libs_dir.join(Path::new(&format!("lib{}", logical_name)).with_extension("dylib"))
+            kpath::join(module_libs_dir, &format!("lib{logical_name}.dylib"))
         }
-        (TargetOs::MacOs, LibRefLinkType::Default) => PathBuf::from(logical_name),
+        (TargetOs::MacOs, LibRefLinkType::Default) => logical_name.to_string(),
         // In Windows we'd skip the 'lib' prefix and add extension dll or lib
         (TargetOs::Wasm, _) => {
             panic!("Dynamic libraries are not supported on the wasm target")
@@ -282,11 +282,12 @@ impl Args {
     }
 }
 
+/// All paths are canonical UTF-8 strings; see kpath
 #[derive(Debug, Clone)]
 pub struct CompilerConfig {
-    pub src_path: PathBuf,
-    pub home_dir: PathBuf,
-    pub k1_home: PathBuf,
+    pub src_path: String,
+    pub home_dir: String,
+    pub k1_home: String,
     pub is_test_build: bool,
     pub no_std: bool,
     pub target: Target,
@@ -295,8 +296,8 @@ pub struct CompilerConfig {
     pub debug: bool,
     pub sanitize: bool,
     pub filc: bool,
-    pub out_dir: PathBuf,
-    pub out_dir_generated: Rc<String>,
+    pub out_dir: String,
+    pub out_dir_generated: String,
     pub optimize: bool,
     pub chatty: bool,
     pub optimize_ir: bool,
@@ -306,7 +307,7 @@ pub struct CompilerConfig {
 #[derive(Debug, Clone, Default)]
 pub struct LspCompileOptions {
     /// canonicalized path -> content to compile instead of the file on disk
-    pub source_overrides: fxhash::FxHashMap<PathBuf, String>,
+    pub source_overrides: fxhash::FxHashMap<String, String>,
     /// Arms completion-marker recording and parse-error tolerance; see
     /// TypedProgram::completion
     pub completion: bool,
@@ -337,10 +338,10 @@ struct CwdGuard {
 }
 
 impl CwdGuard {
-    fn enter(dir: &Path) -> CwdGuard {
+    fn enter(dir: &str) -> CwdGuard {
         let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir)
-            .unwrap_or_else(|e| panic!("Failed to set cwd to {}: {e}", dir.display()));
+        std::env::set_current_dir(Path::new(dir))
+            .unwrap_or_else(|e| panic!("Failed to set cwd to {dir}: {e}"));
         CwdGuard { prev }
     }
 }
@@ -351,30 +352,28 @@ impl Drop for CwdGuard {
     }
 }
 
-pub fn module_home_from_src_path(src_path: &Path) -> (bool, PathBuf) {
-    let is_dir = src_path.is_dir();
-    let src_dir = if is_dir {
-        let src_dir = src_path;
-        src_dir.to_path_buf()
+/// Requires a canonicalized src_path
+pub fn module_home_from_src_path(src_path: &str) -> (bool, String) {
+    let is_dir = Path::new(src_path).is_dir();
+    if is_dir {
+        (true, src_path.to_string())
     } else {
-        let src_dir = src_path.parent().unwrap().to_path_buf();
-        src_dir
-    };
-    (is_dir, src_dir)
+        (false, kpath::parent(src_path).to_string())
+    }
 }
 
 pub struct SourceFile {
     /// canonical absolute
-    pub path: PathBuf,
+    pub path: String,
     pub content: String,
     pub content_hash: u64,
 }
 
-fn read_source_file(path: PathBuf, override_content: Option<String>) -> Result<SourceFile, String> {
+fn read_source_file(path: String, override_content: Option<String>) -> Result<SourceFile, String> {
     let content = match override_content {
         Some(content) => content,
-        None => fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read source file {}: {e}", path.display()))?,
+        None => fs::read_to_string(Path::new(&path))
+            .map_err(|e| format!("Failed to read source file {path}: {e}"))?,
     };
     let content_hash = content_hash64(content.as_bytes());
     Ok(SourceFile { path, content, content_hash })
@@ -382,9 +381,9 @@ fn read_source_file(path: PathBuf, override_content: Option<String>) -> Result<S
 
 pub struct ModuleRootHandle {
     /// canonicalized module path (dir or single file)
-    pub src_path: PathBuf,
-    pub module_dir: PathBuf,
-    pub root_path: PathBuf,
+    pub src_path: String,
+    pub module_dir: String,
+    pub root_path: String,
     is_dir: bool,
     reader: std::thread::JoinHandle<Result<SourceFile, String>>,
 }
@@ -393,29 +392,28 @@ impl ModuleRootHandle {
     /// core_module=true must be passed for (exactly) the corelib module, whose root
     /// file is builtin.k1
     pub fn spawn(
-        src_path: &Path,
+        src_path: &str,
         core_module: bool,
-        source_overrides: &fxhash::FxHashMap<PathBuf, String>,
+        source_overrides: &fxhash::FxHashMap<String, String>,
     ) -> anyhow::Result<ModuleRootHandle> {
-        let src_path = src_path.canonicalize().map_err(|e| {
-            anyhow::anyhow!("Error loading module '{}': {}", src_path.to_string_lossy(), e)
-        })?;
+        let src_path = kpath::canonicalize(src_path)
+            .map_err(|e| anyhow::anyhow!("Error loading module '{src_path}': {e}"))?;
         let (is_dir, module_dir) = module_home_from_src_path(&src_path);
         let root_path = if !is_dir {
             src_path.clone()
         } else if core_module {
-            let builtin = module_dir.join("builtin.k1");
-            if !builtin.is_file() {
+            let builtin = kpath::join(&module_dir, "builtin.k1");
+            if !Path::new(&builtin).is_file() {
                 bail!("corelib module must contain builtin.k1");
             }
             builtin
         } else {
-            let module_name = src_path.file_name().unwrap().to_string_lossy();
-            let module_root = module_dir.join("module.k1");
-            let named_root = module_dir.join(format!("{module_name}.k1"));
-            if module_root.is_file() {
+            let module_name = kpath::file_name(&src_path);
+            let module_root = kpath::join(&module_dir, "module.k1");
+            let named_root = kpath::join(&module_dir, &format!("{module_name}.k1"));
+            if Path::new(&module_root).is_file() {
                 module_root
-            } else if named_root.is_file() {
+            } else if Path::new(&named_root).is_file() {
                 named_root
             } else {
                 bail!(
@@ -448,30 +446,33 @@ impl ModuleRootHandle {
 /// once the module is loaded (manifest evaluated, eventually setup run), so
 /// setup-generated sources are discovered by the same single glob as committed ones
 pub struct ModuleRemainingSources {
-    module_dir: PathBuf,
-    root_path: PathBuf,
+    module_dir: String,
+    root_path: String,
     is_dir: bool,
 }
 
 impl ModuleRemainingSources {
     pub fn spawn_read(
         self,
-        source_overrides: &fxhash::FxHashMap<PathBuf, String>,
+        source_overrides: &fxhash::FxHashMap<String, String>,
     ) -> ModuleRemainingSourcesHandle {
         let overrides = source_overrides.clone();
         let reader = std::thread::spawn(move || {
             if !self.is_dir {
                 return Ok(vec![]);
             }
-            let mut files = fs::read_dir(&self.module_dir)
-                .map_err(|e| {
-                    format!("Failed to list module dir {}: {e}", self.module_dir.display())
-                })?
+            let mut files = fs::read_dir(Path::new(&self.module_dir))
+                .map_err(|e| format!("Failed to list module dir {}: {e}", self.module_dir))?
                 .filter_map(|item| item.ok())
-                .map(|item| item.path())
-                .filter(|p| p.extension().is_some_and(|ext| ext == "k1") && *p != self.root_path)
-                .collect::<Vec<_>>();
-            files.sort_by_key(|ent| ent.file_name().unwrap().to_os_string());
+                .filter(|item| item.path().extension().is_some_and(|ext| ext == "k1"))
+                .map(|item| {
+                    item.path().into_os_string().into_string().map_err(|s| {
+                        format!("Source file name is not valid UTF-8: {}", s.to_string_lossy())
+                    })
+                })
+                .collect::<Result<Vec<String>, String>>()?;
+            files.retain(|p| *p != self.root_path);
+            files.sort();
             files
                 .into_iter()
                 .map(|path| {
@@ -571,17 +572,13 @@ pub fn compile_program_ext(
     };
     let start_time = std::time::Instant::now();
 
-    let src_path = args
-        .file()
-        .canonicalize()
-        .unwrap_or_else(|_| panic!("Failed to load source path: {:?}", args.file()));
+    let src_path = kpath::canonicalize(args.file())
+        .unwrap_or_else(|e| panic!("Failed to load source path: {e}"));
 
-    let (_is_dir, home_dir) = module_home_from_src_path(&src_path);
-    let out_dir: PathBuf = home_dir.join(".k1-out");
-    let out_dir_gen = out_dir.join("generated");
-    std::fs::create_dir_all(&out_dir).unwrap();
-    std::fs::create_dir_all(&out_dir_gen).unwrap();
-    let out_dir_generated: Rc<String> = Rc::new(out_dir_gen.to_str().unwrap().to_string());
+    let (is_dir, home_dir) = module_home_from_src_path(&src_path);
+    let out_dir = kpath::join(&home_dir, ".k1-out");
+    let out_dir_generated = kpath::join(&out_dir, "generated");
+    std::fs::create_dir_all(Path::new(&out_dir_generated)).unwrap();
 
     let use_std = !args.no_std;
 
@@ -600,7 +597,7 @@ pub fn compile_program_ext(
 
     // Find the installation. env var overrides, otherwise release mode says co-located with the
     // binary. dev mode says cwd
-    let k1_home_pathbuf = std::env::var("K1_HOME").map(PathBuf::from).unwrap_or_else(|_| {
+    let k1_home_raw = std::env::var("K1_HOME").map(PathBuf::from).unwrap_or_else(|_| {
         let current_exe = std::env::current_exe().unwrap();
         let exe_parent = current_exe.parent().unwrap();
         if exe_parent.ends_with("debug") {
@@ -611,16 +608,15 @@ pub fn compile_program_ext(
             exe_parent.parent().unwrap().to_path_buf()
         }
     });
-    let k1_home_pathbuf = k1_home_pathbuf
-        .canonicalize()
-        .unwrap_or_else(|e| panic!("K1 home {} is not usable: {e}", k1_home_pathbuf.display()));
+    let k1_home = kpath::canonicalize(&k1_home_raw)
+        .unwrap_or_else(|e| panic!("K1 home {} is not usable: {e}", k1_home_raw.display()));
     if args.chatty {
-        eprintln!("using k1 home: {}", k1_home_pathbuf.display());
+        eprintln!("using k1 home: {k1_home}");
     }
-    let modules_dir = k1_home_pathbuf.join("modules");
+    let modules_dir = kpath::join(&k1_home, "modules");
 
-    let corelib_dir = modules_dir.join("core");
-    let stdlib_dir = modules_dir.join("std");
+    let corelib_dir = kpath::join(&modules_dir, "core");
+    let stdlib_dir = kpath::join(&modules_dir, "std");
 
     // All planned paths are absolute, so spawning before the CwdGuard chdir is safe;
     // reads overlap TypedProgram::new's ident/scope init and core's typecheck.
@@ -628,16 +624,16 @@ pub fn compile_program_ext(
     let std_plan = use_std.then(|| ModuleRootHandle::spawn(&stdlib_dir, false, &lsp.source_overrides));
     let main_plan = ModuleRootHandle::spawn(&src_path, false, &lsp.source_overrides);
 
-    let module_name = if src_path.is_dir() {
-        src_path.file_name().unwrap().to_str().unwrap().to_string()
+    let module_name = if is_dir {
+        kpath::file_name(&src_path).to_string()
     } else {
-        src_path.file_stem().unwrap().to_str().unwrap().to_string()
+        kpath::file_stem(&src_path).to_string()
     };
 
     let config = CompilerConfig {
         src_path: src_path.clone(),
         home_dir,
-        k1_home: k1_home_pathbuf,
+        k1_home,
         is_test_build: args.command.is_test(),
         no_std: args.no_std,
         target,
@@ -679,12 +675,7 @@ pub fn compile_program_ext(
         eprintln!("Completed with {} warnings", warning_count);
     }
     if args.chatty {
-        k1.print_timing_info(
-            &src_path.to_string_lossy(),
-            total_elapsed_ns as u64,
-            &mut std::io::stderr(),
-        )
-        .unwrap();
+        k1.print_timing_info(&src_path, total_elapsed_ns as u64, &mut std::io::stderr()).unwrap();
     }
 
     #[cfg(feature = "profile")]
@@ -724,7 +715,7 @@ pub fn compile_program_ext(
 
 pub fn write_executable(
     k1: &TypedProgram,
-    module_name: &Path,
+    module_name: &str,
     extra_options: &[String],
 ) -> Result<()> {
     let target = k1.config.target;
@@ -745,11 +736,11 @@ pub fn write_executable(
     };
     // Fil-C consumes llvm IR rather than the object file
     let object_name = if filc {
-        out_dir.join(module_name.with_extension("ll"))
+        kpath::join(out_dir, &format!("{module_name}.ll"))
     } else {
-        out_dir.join(module_name.with_extension("o"))
+        kpath::join(out_dir, &format!("{module_name}.o"))
     };
-    let out_name = out_dir.join(module_name);
+    let out_name = kpath::join(out_dir, module_name);
 
     let _macos_version_flag = if target.target_os() == TargetOs::MacOs {
         Some(format!("-mmacosx-version-min={}", MAC_SDK_VERSION))
@@ -795,9 +786,9 @@ pub fn write_executable(
     // Linking with libraries.
     // For each module, for each of its libraries, link with it as specified by the link_type
     for module in k1.modules.iter() {
-        let module_libs_dir = module.home_dir.join(LIBS_DIR_NAME);
+        let module_libs_dir = kpath::join(k1.ident_str(module.home_dir), LIBS_DIR_NAME);
         if !module.manifest.libs.is_empty() {
-            build_cmd.arg(format!("-L{}", module_libs_dir.display()));
+            build_cmd.arg(format!("-L{module_libs_dir}"));
         }
         for link_arg_string_id in &module.manifest.link_args {
             build_cmd.arg(k1.get_string(*link_arg_string_id));
@@ -814,7 +805,7 @@ pub fn write_executable(
             );
             match lib.link_type {
                 // Link via linker arg, since the name has no extension
-                LibRefLinkType::Default => build_cmd.arg(format!("-l{}", filename.display())),
+                LibRefLinkType::Default => build_cmd.arg(format!("-l{filename}")),
                 // 'Link' via direct clang arg, since its an exact filepath
                 _ => build_cmd.arg(filename),
             };
@@ -852,15 +843,13 @@ pub fn codegen_module<'ctx, 'module>(
     if args.command.is_test() {
         module_name.push_str("_test");
     };
-    let module_name_path = PathBuf::from(&module_name);
     let out_dir = codegen.k1.config.out_dir.clone();
 
     if let Err(e) = codegen.codegen_program() {
         let use_color = std::io::stderr().is_terminal();
         write_source_location(
             &mut std::io::stderr(),
-            &codegen.k1.ast.spans,
-            &codegen.k1.ast.sources,
+            &codegen.k1.ast,
             e.span,
             MessageLevel::Error,
             6,
@@ -886,24 +875,24 @@ pub fn codegen_module<'ctx, 'module>(
 
     if codegen.k1.config.filc {
         let llvm_text = codegen.emit_llvm_ir_text_filc();
-        let ll_path = out_dir.join(module_name_path.with_extension("ll"));
-        std::fs::write(&ll_path, llvm_text)
-            .map_err(|e| anyhow::anyhow!("Failed to write {}: {e}", ll_path.display()))?;
+        let ll_path = kpath::join(&out_dir, &format!("{module_name}.ll"));
+        std::fs::write(Path::new(&ll_path), llvm_text)
+            .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
     } else {
         if args.emit_llvm {
             let llvm_text = codegen.emit_llvm_ir_text();
-            let mut f = File::create(out_dir.join(module_name_path.with_extension("ll")))
+            let mut f = File::create(kpath::join(&out_dir, &format!("{module_name}.ll")))
                 .expect("Failed to create .ll file");
             f.write_all(llvm_text.as_bytes()).unwrap();
         }
 
-        let path = out_dir.join(module_name_path.with_extension("o"));
+        let path = kpath::join(&out_dir, &format!("{module_name}.o"));
         if codegen.emit_object_file(&path).is_err() {
-            bail!("Error writing object file to path: {}", path.display());
+            bail!("Error writing object file to path: {path}");
         }
     }
 
-    write_executable(codegen.k1, &module_name_path, &[])?;
+    write_executable(codegen.k1, &module_name, &[])?;
 
     Ok(codegen)
 }
@@ -918,11 +907,10 @@ mod compiler_test {
         SET_HOME.call_once(|| unsafe {
             std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
         });
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let dep_file = root
-            .join("test_src/dep_diamond_test/deps/shared/shared.k1")
-            .canonicalize()
-            .unwrap();
+        let root = env!("CARGO_MANIFEST_DIR");
+        let dep_file =
+            kpath::canonicalize(kpath::join(root, "test_src/dep_diamond_test/deps/shared/shared.k1"))
+                .unwrap();
         let args = Args {
             no_std: false,
             emit_llvm: false,
@@ -936,7 +924,7 @@ mod compiler_test {
             chatty: false,
             optimize_ir: true,
             target: None,
-            command: Command::Check { file: root.join("test_src/dep_diamond_test") },
+            command: Command::Check { file: PathBuf::from(kpath::join(root, "test_src/dep_diamond_test")) },
         };
         let mut source_overrides = fxhash::FxHashMap::default();
         source_overrides.insert(dep_file, "fn renamed-base(): int { 21 }\n".to_string());
@@ -951,17 +939,14 @@ mod compiler_test {
 
 // Eventually, we want to return output and exit code to the application
 pub fn run_compiled_program(
-    out_dir: &Path,
-    program_home_dir: &Path,
+    out_dir: &str,
+    program_home_dir: &str,
     module_name: &str,
     is_test: bool,
 ) -> Option<i32> {
-    let mut run_cmd = std::process::Command::new(format!(
-        "{}/{}{}",
-        out_dir.display(),
-        module_name,
-        if is_test { "_test" } else { "" }
-    ));
+    let exe_name =
+        format!("{}{}", module_name, if is_test { "_test" } else { "" });
+    let mut run_cmd = std::process::Command::new(kpath::join(out_dir, &exe_name));
     run_cmd.current_dir(program_home_dir);
     log::debug!("Run Command: {:?}", run_cmd);
     let run_status = run_cmd.status().unwrap();

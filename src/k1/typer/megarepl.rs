@@ -223,12 +223,13 @@ impl TypedProgram {
     }
 
     fn megarepl_create_source(&mut self, cell_id: CellId, iteration: u32, code: String) -> FileId {
-        let filename = format!("{}_repl_cell_{}.{}.k1", self.program_name(), cell_id, iteration);
-        let source_id = self.ast.sources.add_file(crate::parse::SourceFile::make(
-            Rc::new(self.config.out_dir.to_str().unwrap().to_owned()),
-            filename,
-            code,
-        ));
+        let filename = self
+            .ast
+            .idents
+            .intern(format!("{}_repl_cell_{}.{}.k1", self.program_name(), cell_id, iteration));
+        let directory = self.ast.idents.intern(&self.config.out_dir);
+        let source_id =
+            self.ast.sources.add_file(crate::parse::SourceFile::make(directory, filename, code));
         source_id
     }
 

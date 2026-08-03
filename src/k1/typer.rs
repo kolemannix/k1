@@ -32,8 +32,7 @@ use std::fmt::Write;
 use std::fmt::{Display, Formatter};
 use std::io::IsTerminal;
 use std::num::NonZeroU32;
-use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::path::Path;
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
@@ -50,7 +49,8 @@ use scopes::*;
 use types::*;
 
 use crate::compiler::CompilerConfig;
-use crate::lex::{self, Span, SpanId, Spans, TokenKind};
+use crate::kpath;
+use crate::lex::{self, Span, SpanId, TokenKind};
 use crate::parse::{
     self, AstHandle, AstSlice, BinaryOpKind, FileId, ForExpr, IdentPool, InterpolatedStringPart,
     NamedTypeArg, NumericWidth, ParseError, ParsedAbilityExpr, ParsedAbilityId,
@@ -60,7 +60,7 @@ use crate::parse::{
     ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt,
     ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr,
     ParsedTypeExprId, ParsedTypeParam, ParsedUnaryOpKind, ParsedUseId, ParsedVariable,
-    ParsedVariant, ParsedWhileExpr, QIdent, SourceFiles, StringId, StructValueField,
+    ParsedVariant, ParsedWhileExpr, QIdent, StringId, StructValueField,
     StructValueFieldKind,
 };
 use crate::vpool::VPool;
@@ -2299,23 +2299,13 @@ fn make_fail_ast_id<A>(ast: &ParsedProgram, message: &str, parsed_id: ParsedId) 
 
 pub fn write_error(
     w: &mut impl std::io::Write,
-    spans: &Spans,
-    sources: &SourceFiles,
+    ast: &ParsedProgram,
     message: impl AsRef<str>,
     level: MessageLevel,
     span: SpanId,
     use_color: bool,
 ) -> std::io::Result<()> {
-    parse::write_source_location(
-        w,
-        spans,
-        sources,
-        span,
-        level,
-        6,
-        Some(message.as_ref()),
-        use_color,
-    )?;
+    parse::write_source_location(w, ast, span, level, 6, Some(message.as_ref()), use_color)?;
     Ok(())
 }
 
@@ -2554,7 +2544,7 @@ pub struct LibRef {
 
 pub struct ModuleManifest {
     pub kind: ModuleKind,
-    pub deps: Vec<StringId>,
+    pub deps: PermSlice<StringId>,
     pub multithreading: bool,
     pub libs: Vec<LibRef>,
     pub link_args: Vec<StringId>,
@@ -2562,7 +2552,7 @@ pub struct ModuleManifest {
 
 impl ModuleManifest {
     fn defaulted(kind: ModuleKind) -> Self {
-        Self { kind, deps: vec![], multithreading: false, libs: vec![], link_args: vec![] }
+        Self { kind, deps: MSlice::empty(), multithreading: false, libs: vec![], link_args: vec![] }
     }
 }
 
@@ -2571,14 +2561,13 @@ struct LoadedModule {
     parsed_namespace_id: ParsedNamespaceId,
     root_file_id: FileId,
     manifest_fn_defn: Option<ParsedId>,
-    directory_string: Rc<String>,
     remaining: crate::compiler::ModuleRemainingSourcesHandle,
 }
 
 pub struct Module {
     pub id: ModuleId,
     pub name: StringId,
-    pub home_dir: PathBuf,
+    pub home_dir: StringId,
     pub manifest: ModuleManifest,
     pub namespace_id: NamespaceId,
     pub namespace_scope_id: ScopeId,
@@ -2588,11 +2577,11 @@ pub struct Module {
 
 impl Module {
     // Used to 'reserve' a spot for module so that parser can know its module id
-    pub fn pending(id: ModuleId, name: StringId) -> Self {
+    pub fn pending(id: ModuleId, name: StringId, home_dir: StringId) -> Self {
         Module {
             id,
             name,
-            home_dir: PathBuf::new(),
+            home_dir,
             manifest: ModuleManifest::defaulted(ModuleKind::Library),
             namespace_id: NamespaceId::PENDING,
             namespace_scope_id: ScopeId::PENDING,
@@ -2780,7 +2769,7 @@ pub struct TypedProgram {
 
     pub types: VPool<Type, TypeId>,
     pub type_hashes: FxHashMap<u64, TypeId>,
-    pub type_variable_counts: VPool<TypeVariableInfo, TypeId>,
+    pub type_variable_counts: VPool<TypeInfo, TypeId>,
     pub type_instance_info: VPool<Option<GenericInstanceInfo>, TypeId>,
     pub type_defn_info: FxHashMap<TypeId, TypeDefnInfo>,
     pub type_specializations: FxHashMap<(TypeId, SV4<TypeId>), TypeId>,
@@ -2839,7 +2828,6 @@ pub struct TypedProgram {
 
     /// Interned filename per file, so synthesizing source locations (e.g. for
     /// every assert call) doesn't re-hash the filename string each time
-    filename_string_ids: FxHashMap<FileId, StringId>,
 
     inference_context_stack: Vec<InferenceContext>,
     inference_context_extras: Vec<InferenceContext>,
@@ -3068,7 +3056,6 @@ impl TypedProgram {
             module_in_progress: None,
             ls_entities: RefCell::new(ls_entities),
             completion,
-            filename_string_ids: FxHashMap::default(),
             inference_context_stack: Vec::new(),
             inference_context_extras: (0..4).map(|_| InferenceContext::make()).collect(),
             type_defn_context: TypeDefnContext::default(),
@@ -3146,13 +3133,14 @@ impl TypedProgram {
             self.load_module_tree(root_handle, primary_module, &mut load_stack, &mut loaded)?;
 
         for lm in loaded {
-            let module_name = self.modules.get(lm.module_id).name;
+            let module = self.modules.get(lm.module_id);
+            let (module_name, home_dir) = (module.name, module.home_dir);
             for file in lm.remaining.join()? {
                 self.parse_module_source_file(
                     lm.module_id,
                     module_name,
                     lm.parsed_namespace_id,
-                    lm.directory_string.clone(),
+                    home_dir,
                     file,
                 );
             }
@@ -3198,30 +3186,29 @@ impl TypedProgram {
         load_stack: &mut Vec<StringId>,
         loaded: &mut Vec<LoadedModule>,
     ) -> anyhow::Result<ModuleId> {
-        debug!("Loading module {:?}...", root_handle.src_path);
-        let module_name =
-            self.ast.idents.intern(root_handle.src_path.file_stem().unwrap().to_string_lossy());
+        debug!("Loading module {}...", root_handle.src_path);
+        let module_name = self.ast.idents.intern(kpath::file_stem(&root_handle.src_path));
         if let Some(m) = self.modules.iter().find(|m| m.name == module_name) {
             debug!("Module already included: {}", self.ident_str(m.name));
             return Ok(m.id);
         }
 
+        let home_dir = self.ast.idents.intern(&root_handle.module_dir);
         let module_id = self.modules.next_id();
-        let module_id =
-            self.modules.add_expected_id(Module::pending(module_id, module_name), module_id);
+        let module_id = self
+            .modules
+            .add_expected_id(Module::pending(module_id, module_name, home_dir), module_id);
         let is_core = module_id == MODULE_ID_CORE;
         load_stack.push(module_name);
 
-        let module_dir = root_handle.module_dir.clone();
         let (root_file, remaining_sources) = root_handle.join_root()?;
-        let directory_string = Rc::new(module_dir.to_str().unwrap().to_string());
 
         let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
         let root_file_id = self.parse_module_source_file(
             module_id,
             module_name,
             parsed_namespace_id,
-            directory_string.clone(),
+            home_dir,
             root_file,
         );
         if !self.ast.errors.is_empty() && !self.config.lsp.completion {
@@ -3235,7 +3222,7 @@ impl TypedProgram {
         let (manifest, manifest_fn_defn) = if is_core {
             let manifest = ModuleManifest {
                 kind: ModuleKind::Library,
-                deps: vec![],
+                deps: MSlice::empty(),
                 multithreading: false,
                 libs: vec![LibRef {
                     name: self.ast.idents.intern("k1rt"),
@@ -3259,11 +3246,8 @@ impl TypedProgram {
                     )
                 }
                 Ok(None) => {
-                    let kind = if primary_module {
-                        ModuleKind::Executable
-                    } else {
-                        ModuleKind::Library
-                    };
+                    let kind =
+                        if primary_module { ModuleKind::Executable } else { ModuleKind::Library };
                     (ModuleManifest::defaulted(kind), None)
                 }
                 Ok(Some((manifest, fn_defn))) => (manifest, Some(fn_defn)),
@@ -3289,54 +3273,50 @@ impl TypedProgram {
             self.program_settings.executable = manifest.kind == ModuleKind::Executable;
         }
 
-        let deps = manifest.deps.clone();
-        let module = self.modules.get_mut(module_id);
-        module.home_dir = module_dir;
-        module.manifest = manifest;
+        let deps = manifest.deps;
+        self.modules.get_mut(module_id).manifest = manifest;
 
         let remaining = remaining_sources.spawn_read(&self.config.lsp.source_overrides);
 
         let manifest_span =
             manifest_fn_defn.map(|d| self.ast.get_span_for_id(d)).unwrap_or(SpanId::NONE);
         let mut dep_handles: Vec<crate::compiler::ModuleRootHandle> = vec![];
-        for dep_name_id in &deps {
-            let dep_str = self.get_string(*dep_name_id).to_string();
-            let dep_ident = self.ast.idents.intern(&dep_str);
-            if dep_str == self.program_name() {
+        for i in 0..deps.len() {
+            let dep_name_id = self.mem.getn(deps)[i as usize];
+            if self.ast.idents.get_string(dep_name_id) == self.program_name() {
                 let msg = format!(
                     "Module '{}' depends on '{}': module name collision with the program itself",
                     self.ident_str(module_name),
-                    dep_str
+                    self.ast.idents.get_string(dep_name_id)
                 );
                 return Err(self.module_error(manifest_span, msg));
             }
-            if load_stack.contains(&dep_ident) {
-                let mut cycle: Vec<String> = load_stack
+            if load_stack.contains(&dep_name_id) {
+                let mut cycle: Vec<&str> = load_stack
                     .iter()
-                    .skip_while(|n| **n != dep_ident)
-                    .map(|n| self.ident_str(*n).to_string())
+                    .skip_while(|n| **n != dep_name_id)
+                    .map(|n| self.ast.idents.get_string(*n))
                     .collect();
-                cycle.push(dep_str);
+                cycle.push(self.ast.idents.get_string(dep_name_id));
                 let msg = format!("Module dependency cycle: {}", cycle.join(" -> "));
                 return Err(self.module_error(manifest_span, msg));
             }
-            if self.modules.iter().any(|m| m.name == dep_ident) {
+            if self.modules.iter().any(|m| m.name == dep_name_id) {
                 continue;
             }
-            // nocommit these never change; re-use them
-            let deps_probe = self.config.home_dir.join("deps").join(&dep_str);
-            let modules_probe = self.config.k1_home.join("modules").join(&dep_str);
-            let dep_path = if deps_probe.exists() {
+            let dep_str = self.ast.idents.get_string(dep_name_id);
+            let deps_probe = kpath::join(&kpath::join(&self.config.home_dir, "deps"), dep_str);
+            let modules_probe =
+                kpath::join(&kpath::join(&self.config.k1_home, "modules"), dep_str);
+            let dep_path = if Path::new(&deps_probe).exists() {
                 deps_probe
-            } else if modules_probe.exists() {
+            } else if Path::new(&modules_probe).exists() {
                 modules_probe
             } else {
                 let msg = format!(
-                    "Module '{}' depends on '{}', which was not found. Probed: {}, {}",
+                    "Module '{}' depends on '{}', which was not found. Probed: {deps_probe}, {modules_probe}",
                     self.ident_str(module_name),
                     dep_str,
-                    deps_probe.display(),
-                    modules_probe.display()
                 );
                 return Err(self.module_error(manifest_span, msg));
             };
@@ -3368,7 +3348,6 @@ impl TypedProgram {
             parsed_namespace_id,
             root_file_id,
             manifest_fn_defn,
-            directory_string,
             remaining,
         });
         Ok(module_id)
@@ -3385,17 +3364,11 @@ impl TypedProgram {
         module_id: ModuleId,
         module_name: StringId,
         parsed_namespace_id: ParsedNamespaceId,
-        directory_string: Rc<String>,
+        directory: StringId,
         file: crate::compiler::SourceFile,
     ) -> FileId {
-        let name = file.path.file_name().unwrap();
-        // nocommit claude probably should be interned strings. for one we're going to have
-        // snapshotting soon (though maybe we rebuild this) but for two it just feels cleaner
-        let source = parse::SourceFile::make(
-            directory_string,
-            name.to_str().unwrap().to_string(),
-            file.content,
-        );
+        let filename = self.ast.idents.intern(kpath::file_name(&file.path));
+        let source = parse::SourceFile::make(directory, filename, file.content);
         let mut token_buffer = std::mem::take(&mut self.buffers.lexer_tokens);
         let (file_id, lex_result) =
             parse::lex_file_into_program(&mut self.ast, source, &mut token_buffer);
@@ -5281,9 +5254,9 @@ impl TypedProgram {
         }
         let is_all_holes = substitution_pairs
             .iter()
-            .all(|p| self.type_variable_counts.get(p.from).inference_variable_count > 0);
+            .all(|p| self.type_variable_counts.get(p.from).inference_hole_count > 0);
         if is_all_holes {
-            let no_holes = self.type_variable_counts.get(type_id).inference_variable_count == 0;
+            let no_holes = self.type_variable_counts.get(type_id).inference_hole_count == 0;
             // Optimization: if every 'from' type is an inference hole, and the type
             // contains no inference holes, which we compute on creation, its a no-op
             // This prevents useless deep type traversals
@@ -5677,11 +5650,12 @@ impl TypedProgram {
         };
 
         let deps_container = *self.static_values.get(fields[1]).as_container().unwrap();
-        let mut deps = vec![];
+        let mut deps: SV4<StringId> = SmallVec::new();
         for dep_value_id in self.static_values.get_slice(deps_container.elements) {
             let dep_string_id = self.static_values.get(*dep_value_id).as_string().unwrap();
             deps.push(dep_string_id);
         }
+        let deps = self.mem.pushn(&deps);
 
         let libs_container = *self.static_values.get(fields[2]).as_container().unwrap();
         let mut libs = vec![];
@@ -9732,15 +9706,18 @@ impl TypedProgram {
             return Ok(None);
         }
         let (source, line) = self.get_span_location(span);
+        let directory = self.ast.idents.get_string(source.directory);
+        let filename = self.ast.idents.get_string(source.filename);
         // The source keeps `content` forever, so size it exactly and move it
         // in; 48 covers the header boilerplate and block wrapper
         let mut content =
-            String::with_capacity(chunks_len + source.directory.len() + source.filename.len() + 48);
+            String::with_capacity(chunks_len + directory.len() + filename.len() + 48);
         writeln!(
             &mut content,
-            "// generated by #meta block at {}/{}:{}",
-            source.directory,
-            source.filename,
+            "// generated by #meta block at {}{}{}:{}",
+            directory,
+            std::path::MAIN_SEPARATOR,
+            filename,
             line.line_number(),
         )
         .unwrap();
@@ -9802,12 +9779,14 @@ impl TypedProgram {
         //       'what are we compiling' stack would provide it
         let (source, line) = self.get_span_location(span);
         let line_number = line.line_number();
-        let stem = source.filename.strip_suffix(".k1").unwrap();
+        let stem = self.ast.idents.get_string(source.filename).strip_suffix(".k1").unwrap();
         let serial = self.emitted_sources.len() + 1;
-        let generated_filename = format!("meta_{stem}_{line_number}_{serial}.k1");
+        let generated_filename =
+            self.ast.idents.intern(format!("meta_{stem}_{line_number}_{serial}.k1"));
+        let generated_dir = self.ast.idents.intern(&self.config.out_dir_generated);
         debug!("Emitted source:\n---\n{content}\n---");
         let source_for_emission = self.ast.sources.add_file(crate::parse::SourceFile::make(
-            self.config.out_dir_generated.clone(),
+            generated_dir,
             generated_filename,
             content,
         ));
@@ -9840,12 +9819,12 @@ impl TypedProgram {
         for emitted in &self.emitted_sources {
             if emitted.has_diagnostic {
                 let source = self.ast.sources.get(emitted.file_id);
-                let path = std::path::Path::new(source.directory.as_ref()).join(&source.filename);
-                if let Err(e) = std::fs::write(&path, &source.content) {
-                    eprintln!(
-                        "Failed to write out generated metaprogram at {}. {e}",
-                        path.display()
-                    );
+                let path = kpath::join(
+                    self.ast.idents.get_string(source.directory),
+                    self.ast.idents.get_string(source.filename),
+                );
+                if let Err(e) = std::fs::write(Path::new(&path), &source.content) {
+                    eprintln!("Failed to write out generated metaprogram at {path}. {e}");
                 }
             }
         }
@@ -11030,7 +11009,7 @@ impl TypedProgram {
                     );
                     let consequent_expr = match consequent_result {
                         Err(err) => {
-                            self.report(err.clone());
+                            self.report(err);
                             first_error = Some(err);
                             continue;
                         }
@@ -15802,7 +15781,7 @@ impl TypedProgram {
             );
         let parent_function = self.get_function(parent_function);
         if let Some(err) = parent_function.body_failure.as_ref() {
-            return Err(err.clone());
+            return Err(*err);
         }
 
         // Intrinsics from generic impls (e.g. `impl add for vector[t, n]`) have no
@@ -19362,8 +19341,8 @@ impl TypedProgram {
                 self.ice("Expected impl function id, not abstract, in eval_ability_impl", None);
             };
             if let Err(e) = self.eval_function_body(impl_fn) {
-                self.functions.get_mut(impl_fn).body_failure = Some(e.clone());
-                self.ability_impls.get_mut(ability_impl_id).compile_errors.push(e.clone());
+                self.functions.get_mut(impl_fn).body_failure = Some(e);
+                self.ability_impls.get_mut(ability_impl_id).compile_errors.push(e);
                 self.report(e);
             }
         }
@@ -19395,8 +19374,7 @@ impl TypedProgram {
                     self.function_ast_mappings.get(&parsed_function_id).copied()
                 {
                     if let Err(e) = self.eval_function_body(function_declaration_id) {
-                        self.functions.get_mut(function_declaration_id).body_failure =
-                            Some(e.clone());
+                        self.functions.get_mut(function_declaration_id).body_failure = Some(e);
                         self.report(e);
                     };
                 }
@@ -19406,8 +19384,7 @@ impl TypedProgram {
                     self.macro_ast_mappings.get(&parsed_macro_id).copied()
                 {
                     if let Err(e) = self.eval_function_body(function_declaration_id) {
-                        self.functions.get_mut(function_declaration_id).body_failure =
-                            Some(e.clone());
+                        self.functions.get_mut(function_declaration_id).body_failure = Some(e);
                         self.report(e);
                     };
                 }
@@ -20040,7 +20017,7 @@ impl TypedProgram {
             }
         }
 
-        let skip_defns = match (pre_ns_id, manifest_fn_defn)  {
+        let skip_defns = match (pre_ns_id, manifest_fn_defn) {
             (None, None) => &[][..],
             (None, Some(id)) => &[id],
             (Some(id), None) => &[id],
@@ -20299,7 +20276,7 @@ impl TypedProgram {
             for function_id in &function_ids {
                 let result = self.specialize_function_body(*function_id);
                 if let Err(e) = result {
-                    self.functions.get_mut(*function_id).body_failure = Some(e.clone());
+                    self.functions.get_mut(*function_id).body_failure = Some(e);
                     self.report(e)
                 }
             }
@@ -20842,6 +20819,7 @@ impl TypedProgram {
             core!("string-builder"),
             core!("code"),
             core!("code-builder"),
+            core!("optref"),
             QIdent { path: core_mem, name: get_ident!(self, "zeroed"), name_span: span },
             QIdent { path: core_mem, name: get_ident!(self, "alloc-mode"), name_span: span },
             QIdent { path: core_mem, name: get_ident!(self, "system-heap"), name_span: span },
@@ -21371,23 +21349,22 @@ impl TypedProgram {
         }
 
         let lib_name_str = self.ast.idents.get_string(lib_name_ident);
-        let lib_filename: PathBuf = match self.config.target.target_os() {
-            crate::compiler::TargetOs::Linux => {
-                Path::new(&format!("lib{}", lib_name_str)).with_extension("so")
-            }
-            crate::compiler::TargetOs::MacOs => {
-                Path::new(&format!("lib{}", lib_name_str)).with_extension("dylib")
-            }
+        let lib_filename = match self.config.target.target_os() {
+            crate::compiler::TargetOs::Linux => format!("lib{lib_name_str}.so"),
+            crate::compiler::TargetOs::MacOs => format!("lib{lib_name_str}.dylib"),
             crate::compiler::TargetOs::Wasm => {
                 kbail!(self, span, "Dynamic libraries are not supported on the wasm target");
             }
         };
         debug!("cwd is: {}", std::env::current_dir().unwrap().display());
-        debug!("src_path is: {}", self.config.src_path.display());
+        debug!("src_path is: {}", self.config.src_path);
 
-        let module_home_dir = &self.modules.get(module_id).home_dir;
-        let search_path = module_home_dir.join(compiler::LIBS_DIR_NAME).join(lib_filename);
-        if let Some(handle) = self.attempt_dlopen(search_path.to_str().unwrap()) {
+        let module_home_dir = self.ast.idents.get_string(self.modules.get(module_id).home_dir);
+        let search_path = kpath::join(
+            &kpath::join(module_home_dir, compiler::LIBS_DIR_NAME),
+            &lib_filename,
+        );
+        if let Some(handle) = self.attempt_dlopen(&search_path) {
             self.vm_dylib_handles.insert((module_id, lib_name_ident), handle);
             return Ok(handle);
         }
@@ -21406,7 +21383,7 @@ impl TypedProgram {
             span,
             "Failed to dlopen library: '{}'. I tried the project's libs: `{}`, then tried a system lookup: {}",
             lib_name_str,
-            search_path.display(),
+            search_path,
             dlopen_error_message
         ))
     }
@@ -21620,8 +21597,7 @@ impl TypedProgram {
     ) -> std::io::Result<()> {
         write_error(
             w,
-            &self.ast.spans,
-            &self.ast.sources,
+            &self.ast,
             self.ident_str(error.message),
             error.level,
             error.span,
@@ -21636,31 +21612,13 @@ impl TypedProgram {
     }
 
     pub fn write_location(&self, w: &mut impl std::io::Write, span: SpanId, use_color: bool) {
-        parse::write_source_location(
-            w,
-            &self.ast.spans,
-            &self.ast.sources,
-            span,
-            MessageLevel::Info,
-            6,
-            None,
-            use_color,
-        )
-        .unwrap()
+        parse::write_source_location(w, &self.ast, span, MessageLevel::Info, 6, None, use_color)
+            .unwrap()
     }
 
     pub fn write_location_error(&self, w: &mut impl std::io::Write, span: SpanId, use_color: bool) {
-        parse::write_source_location(
-            w,
-            &self.ast.spans,
-            &self.ast.sources,
-            span,
-            MessageLevel::Error,
-            6,
-            None,
-            use_color,
-        )
-        .unwrap()
+        parse::write_source_location(w, &self.ast, span, MessageLevel::Error, 6, None, use_color)
+            .unwrap()
     }
 
     #[track_caller]

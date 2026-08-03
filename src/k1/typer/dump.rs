@@ -1400,7 +1400,7 @@ impl TypedProgram {
         write!(
             w,
             "tparams={} holes={}",
-            tvar_info.type_parameter_count, tvar_info.inference_variable_count
+            tvar_info.type_parameter_count, tvar_info.inference_hole_count
         )?;
         writeln!(w)?;
         let mut visited = self.buffers.visited_types.borrow_mut();

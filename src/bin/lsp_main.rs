@@ -173,14 +173,20 @@ fn source_to_uri(directory: impl AsRef<Path>, file: impl AsRef<str>) -> Url {
 fn uri_from_span(k1: &TypedProgram, span_id: SpanId) -> Url {
     let span = k1.ast.spans.get(span_id);
     let source = k1.ast.sources.get(span.file_id);
-    source_to_uri(source.directory.as_str(), &source.filename)
+    source_to_uri(
+        k1.ast.idents.get_string(source.directory),
+        k1.ast.idents.get_string(source.filename),
+    )
 }
 
 fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast SourceFile> {
     let path = url.path();
     debug!("uri_to_source: {}", path);
     let source = ast.sources.iter().find(|s| {
-        let source_path = format!("{}/{}", s.1.directory, s.1.filename);
+        let source_path = k1::kpath::join(
+            ast.idents.get_string(s.1.directory),
+            ast.idents.get_string(s.1.filename),
+        );
         debug!("    source_path: {}", source_path);
         path == source_path
     });
@@ -255,7 +261,12 @@ impl Backend {
             k1.ast
                 .sources
                 .iter()
-                .map(|s| source_to_uri(s.1.directory.as_str(), &s.1.filename))
+                .map(|s| {
+                    source_to_uri(
+                        k1.ast.idents.get_string(s.1.directory),
+                        k1.ast.idents.get_string(s.1.filename),
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -735,7 +746,7 @@ impl LanguageServer for Backend {
             k1::lsp_support::splice_completion_marker(&source.content, offset)
         };
 
-        let Ok(canonical_path) = std::fs::canonicalize(file_url.path()) else { return Ok(None) };
+        let Ok(canonical_path) = k1::kpath::canonicalize(file_url.path()) else { return Ok(None) };
         let root_path: std::path::PathBuf = {
             let root_uri = self.workspace_uri.read().unwrap();
             let Some(root) = root_uri.as_ref() else { return Ok(None) };
@@ -839,8 +850,10 @@ impl LanguageServer for Backend {
             error!("Failed to convert span to range for goto_definition");
             return Ok(None);
         };
-        let definition_uri =
-            source_to_uri(definition_source.directory.as_str(), &definition_source.filename);
+        let definition_uri = source_to_uri(
+            k1.ast.idents.get_string(definition_source.directory),
+            k1.ast.idents.get_string(definition_source.filename),
+        );
         info!("goto_definition response: {}, {:?}", definition_uri, range);
         Ok(Some(GotoDefinitionResponse::Scalar(Location { uri: definition_uri, range })))
     }

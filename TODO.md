@@ -17,7 +17,7 @@ tmp {
 Minor and ideas
 - [ ] 'zeroable' story, i think i have a plan; check if zeroed will produce a valid bit-pattern for the given type
 - [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
-- [ ] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
+- [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
       way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
 
 - [ ] top-level parser recovery (sync to next fn/ns/type/macro)
@@ -41,7 +41,7 @@ Simple but missing
 - [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
       currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
-- [x] A #static infinite loop hangs the compiler with zero output. Ten minutes of nothing. A VM step budget that errors out ("static execution exceeded N instructions, last function: ...") would have turned a hang-bisect into an instant diagnosis.
+- [x] A #static infinite loop hangs the compiler
 - [x] allow opaques to be named / nominal; bindgen them that way. The name is really more useful than the size/align
 - [x] decide on 'assert' behavior in debug vs non debug mode and improve bactraces (need line numbers)
 - [x] 'newtype' solution; 'distinct' types? `type handle = distinct[size]` (wrapper struct is working great)
@@ -113,7 +113,7 @@ http dogfood list
 
 ## [ ] very readable compiler trace, incl specialization args, for debugging
 
-## [ ] Ability objects; dyn[<ability expr>]
+## [x] Ability objects; dyn[<ability expr>]
 
 ## [ ] Escape analysis
 - [ ] Use to report escaped stack pointers

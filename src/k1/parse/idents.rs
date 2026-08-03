@@ -618,7 +618,7 @@ mod test {
 
     #[test]
     fn intern_dedup_and_roundtrip() {
-        let mut p = make_pool();
+        let p = make_pool();
         let a = p.intern("hello");
         let b = p.intern("hello");
         let c = p.intern("world");
@@ -633,7 +633,7 @@ mod test {
 
     #[test]
     fn builtins_resolve() {
-        let mut p = make_pool();
+        let p = make_pool();
         assert_eq!(p.lookup("null"), Some(p.b.null));
         assert_eq!(p.intern("for-each"), p.b.for_each);
         assert_eq!(p.get_string(p.b.self_), "self");
@@ -641,7 +641,7 @@ mod test {
 
     #[test]
     fn big_strings_use_sampled_hash_and_still_dedup() {
-        let mut p = make_pool();
+        let p = make_pool();
         let big_a: String = "a".repeat(100_000);
         let mut big_b = big_a.clone();
         // Differs only outside the sampled windows (head/mid/tail 64 bytes)
@@ -659,7 +659,7 @@ mod test {
 
     #[test]
     fn pointers_stable_across_growth() {
-        let mut p = make_pool();
+        let p = make_pool();
         let id = p.intern("stable");
         let ptr_before = p.get_string(id).as_ptr();
         for i in 0..100_000 {

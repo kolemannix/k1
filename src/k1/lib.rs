@@ -10,6 +10,7 @@ pub mod compiler;
 mod fixmap;
 pub mod ir;
 mod kmem;
+pub mod kpath;
 pub mod lex;
 #[cfg(feature = "lsp")]
 pub mod lsp_support;

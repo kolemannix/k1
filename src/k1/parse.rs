@@ -3,7 +3,6 @@
 
 use std::fmt::{Display, Formatter, Write};
 use std::io::IsTerminal;
-use std::rc::Rc;
 
 use crate::kmem::{self, Handle, List, MSL2, MSS2, MSlice, MSpillList};
 use crate::rawref::RawRef;
@@ -1936,8 +1935,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
         ParseError::Lex(lex_error) => {
             write_source_location(
                 &mut stderr,
-                &module.spans,
-                &module.sources,
+                module,
                 lex_error.span,
                 MessageLevel::Error,
                 6,
@@ -1962,8 +1960,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
 
             write_source_location(
                 &mut stderr,
-                &module.spans,
-                &module.sources,
+                module,
                 span,
                 MessageLevel::Error,
                 6,
@@ -1978,16 +1975,15 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
 
 pub fn write_source_location(
     w: &mut impl std::io::Write,
-    spans: &Spans,
-    sources: &SourceFiles,
+    ast: &ParsedProgram,
     span_id: SpanId,
     level: MessageLevel,
     context_lines: usize,
     message: Option<&str>,
     use_color: bool,
 ) -> std::io::Result<()> {
-    let span = spans.get(span_id);
-    let source = sources.source_by_span(span);
+    let span = ast.spans.get(span_id);
+    let source = ast.sources.source_by_span(span);
     let Some(line) = source.get_line_for_span_start(span) else {
         writeln!(w, "Critical Error: could not find line for span {:?}", span)?;
         return Ok(());
@@ -2021,9 +2017,10 @@ pub fn write_source_location(
     writeln!(w, "┌────────────────────────────────────────╴")?;
     writeln!(
         w,
-        "{}/{}:{}:{}: {}",
-        colored!(source.directory),
-        colored!(source.filename),
+        "{}{}{}:{}:{}: {}",
+        colored!(ast.idents.get_string(source.directory)),
+        std::path::MAIN_SEPARATOR,
+        colored!(ast.idents.get_string(source.filename)),
         line.line_index + 1,
         column,
         level_name
@@ -2073,8 +2070,8 @@ impl Line {
 #[derive(Debug, Clone)]
 pub struct SourceFile {
     pub file_id: FileId,
-    pub directory: Rc<String>,
-    pub filename: String,
+    pub directory: StringId,
+    pub filename: StringId,
     pub content: String,
     newline_positions: Vec<u32>,
     pub tokens: Vec<Token>,
@@ -2082,7 +2079,7 @@ pub struct SourceFile {
 }
 
 impl SourceFile {
-    pub fn make(directory: Rc<String>, filename: String, content: String) -> SourceFile {
+    pub fn make(directory: StringId, filename: StringId, content: String) -> SourceFile {
         let newline_positions =
             memchr::memchr_iter(b'\n', content.as_bytes()).map(|pos| pos as u32).collect();
         SourceFile {
@@ -5851,7 +5848,9 @@ pub fn lex_file_into_program(
 pub fn parse_standalone(program_name: String, content: String) -> ParsedProgram {
     let mut ast = ParsedProgram::make(program_name.clone());
 
-    let source = SourceFile::make(".".to_string().into(), program_name.clone(), content);
+    let directory = ast.idents.intern(".");
+    let filename = ast.idents.intern(&program_name);
+    let source = SourceFile::make(directory, filename, content);
     let mut token_vec = vec![];
     let (file_id, lex_result) = lex_file_into_program(&mut ast, source, &mut token_vec);
     if let Err(e) = lex_result {

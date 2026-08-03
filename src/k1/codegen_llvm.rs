@@ -457,8 +457,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let (debug_builder, compile_unit) = llvm_module.create_debug_info_builder(
             false,
             DWARFSourceLanguage::C,
-            &source.filename,
-            &source.directory,
+            module.ast.idents.get_string(source.filename),
+            module.ast.idents.get_string(source.directory),
             "k1_compiler",
             optimize,
             "",
@@ -514,7 +514,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .sources
             .iter()
             .map(|(file_id, source)| {
-                (file_id, debug_builder.create_file(&source.filename, &source.directory))
+                let filename = module.ast.idents.get_string(source.filename);
+                let directory = module.ast.idents.get_string(source.directory);
+                (file_id, debug_builder.create_file(filename, directory))
             })
             .collect();
         let mut debug = DebugContext {
@@ -537,7 +539,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
         let mut llvm_module = ctx.create_module(&module.ast.name);
-        llvm_module.set_source_file_name(&module.ast.sources.get_main().filename);
+        llvm_module
+            .set_source_file_name(module.ast.idents.get_string(module.ast.sources.get_main().filename));
 
         let debug_context = Cg::init_debug(ctx, &llvm_module, module, optimize, debug);
 
@@ -620,7 +623,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let function_value = self.declare_llvm_function(main_function_id)?;
-        self.k1.compile_all_pending_ir(SpanId::NONE).unwrap();
+        self.k1.compile_all_pending_ir(SpanId::NONE)?;
         if self.k1.config.optimize {
             ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
         }

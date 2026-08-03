@@ -148,7 +148,7 @@ impl TypedProgram {
                 TypeOrParsedExpr::Type(type_id) => (*type_id, span),
                 TypeOrParsedExpr::Parsed(parsed_expr) => {
                     let expected_counts = self.get_type_variable_counts(expected_type_so_far);
-                    let expected_is_concrete = expected_counts.inference_variable_count == 0
+                    let expected_is_concrete = expected_counts.inference_hole_count == 0
                         && expected_counts.unresolved_static_count == 0;
 
                     // If the expected type is fully concrete (no holes) this argument can't teach us anything
@@ -815,7 +815,7 @@ impl TypedProgram {
     fn set_slot_solution(&mut self, index: usize, to: TypeId) {
         // Normalize the incoming solution against everything solved so far, so that
         // solutions stay maximally resolved regardless of learning order
-        let to = if self.get_type_variable_counts(to).inference_variable_count > 0 {
+        let to = if self.get_type_variable_counts(to).inference_hole_count > 0 {
             let known: SV8<TypeSubstitutionPair> = self
                 .ictx()
                 .slots
@@ -832,7 +832,7 @@ impl TypedProgram {
             slot.solution = Some(to);
             slot.hole_type
         };
-        if self.get_type_variable_counts(to).inference_variable_count == 0 {
+        if self.get_type_variable_counts(to).inference_hole_count == 0 {
             let slot = &mut self.ictx_mut().slots[index];
             if !slot.fully_solved {
                 slot.fully_solved = true;
@@ -855,7 +855,7 @@ impl TypedProgram {
             if new_sol == sol {
                 continue;
             }
-            let now_solved = self.get_type_variable_counts(new_sol).inference_variable_count == 0;
+            let now_solved = self.get_type_variable_counts(new_sol).inference_hole_count == 0;
             let slot = &mut self.ictx_mut().slots[i];
             slot.solution = Some(new_sol);
             if now_solved {
@@ -917,7 +917,7 @@ impl TypedProgram {
             self.type_id_to_string(slot_type).blue()
         );
         let counts = self.type_variable_counts.get(slot_type);
-        if counts.inference_variable_count == 0 {
+        if counts.inference_hole_count == 0 {
             debug!("no type holes: {}", self.type_id_to_string(slot_type));
             return TypeUnificationResult::NoHoles;
         }

@@ -656,3 +656,22 @@ impl print for ptr {
     format-uint(context w)(self.as[usize], base = 16)
   }
 }
+
+// A little abstraction over a reference that can be null
+// where you can pay a small cost (option construction)
+// to check it, but can still store it 'raw'
+// As opposed to storing the sum, which carries waste
+type optref[t] = { inner: *t }
+ns for optref {
+  fn make[t](inner: *t): optref[t] { .{ inner } }
+  fn null[t]()         : optref[t] { .{ inner = ptr/null.rw[t] } }
+  fn deref[t](self: optref[t]): ?t {
+    if self.inner.as[ptr].is-null() :none else :some(self.inner.*)
+  }
+  fn as-opt[t](self: optref[t]): ?*t {
+    if self.inner.as[ptr].is-null() :none else :some(self.inner)
+  }
+  fn is-null[t](self: optref[t]): bool {
+    self.inner.as[ptr].is-null()
+  }
+}
