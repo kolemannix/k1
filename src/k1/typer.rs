@@ -2585,9 +2585,8 @@ pub struct Module {
     pub manifest: ModuleManifest,
     pub namespace_id: NamespaceId,
     pub namespace_scope_id: ScopeId,
-
-    pub parse_elapsed_ms: u64,
-    pub typecheck_elapsed_ms: u64,
+    /// One entry per source file in compile order
+    pub source_file_hashes: Vec<(FileId, u64)>,
 }
 
 impl Module {
@@ -2600,9 +2599,7 @@ impl Module {
             manifest: ModuleManifest::default(),
             namespace_id: NamespaceId::PENDING,
             namespace_scope_id: ScopeId::PENDING,
-
-            parse_elapsed_ms: 0,
-            typecheck_elapsed_ms: 0,
+            source_file_hashes: vec![],
         }
     }
 }
@@ -3047,7 +3044,7 @@ impl TypedProgram {
             exprs: TypedExprPool::make(),
             calls: VPool::make("typed_calls"),
             stmts: VPool::make("typed_stmts"),
-            static_values: StaticValuePool::make_with_hint(0),
+            static_values: StaticValuePool::make(),
             type_schemas: FxHashMap::new(),
             type_names: FxHashMap::new(),
             scopes,
@@ -3142,15 +3139,12 @@ impl TypedProgram {
 
     pub fn add_module(
         &mut self,
-        src_path: &Path,
+        plan: crate::compiler::ModuleSourcesThreadHandle,
         primary_module: bool,
     ) -> anyhow::Result<ModuleId> {
-        debug!("Loading module {:?}...", src_path);
-        let src_path = src_path.canonicalize().map_err(|e| {
-            anyhow::anyhow!("Error loading module '{}': {}", src_path.to_string_lossy(), e)
-        })?;
-        let src_path_name = src_path.file_stem().unwrap().to_string_lossy();
-        let module_name = self.ast.idents.intern(&src_path_name);
+        debug!("Loading module {:?}...", plan.src_path);
+        let module_name =
+            self.ast.idents.intern(plan.src_path.file_stem().unwrap().to_string_lossy());
         if let Some(m) = self.modules.iter().find(|m| m.name == module_name) {
             eprintln!("Module already included: {}", self.ident_str(m.name),);
             return Ok(m.id);
@@ -3162,43 +3156,29 @@ impl TypedProgram {
 
         let is_core = module_id == MODULE_ID_CORE;
 
-        let (module_dir, mut files_to_compile) = crate::compiler::discover_source_files(&src_path);
-        if is_core {
-            let builtin_index = files_to_compile
-                .iter()
-                .position(|path| path.file_name().unwrap() == "builtin.k1")
-                .unwrap();
-            files_to_compile.swap(0, builtin_index);
-        };
+        let crate::compiler::ModuleSources { module_dir, files } = plan.join()?;
         let directory_string = Rc::new(module_dir.to_str().unwrap().to_string());
-        let parse_start = self.timing.raw();
 
         let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
         let mut token_buffer = std::mem::take(&mut self.buffers.lexer_tokens);
-        debug!("Parsing {} discovered files for module {src_path_name}", files_to_compile.len());
+        debug!("Parsing {} files for module {}", files.len(), self.ident_str(module_name));
 
-        for path in &files_to_compile {
-            let content = match self.config.lsp.source_overrides.get(path) {
-                Some(content) => content.clone(),
-                None => std::fs::read_to_string(path)
-                    .unwrap_or_else(|_| panic!("Failed to open file to parse: {:?}", path)),
-            };
-            let name = path.file_name().unwrap();
-            let file_id = self.ast.sources.next_file_id();
+        let mut source_file_hashes: Vec<(FileId, u64)> = Vec::with_capacity(files.len());
+        for file in files {
+            let name = file.path.file_name().unwrap();
             let source = parse::SourceFile::make(
-                file_id,
                 directory_string.clone(),
                 name.to_str().unwrap().to_string(),
-                content,
+                file.content,
             );
-            match parse::lex_file_into_program(&mut self.ast, source, &mut token_buffer) {
-                Err(e) => {
-                    self.ast.report_error(e);
-                    // Keep going man! to the next file
-                    continue;
-                }
-                Ok(_) => {}
-            };
+            let (file_id, lex_result) =
+                parse::lex_file_into_program(&mut self.ast, source, &mut token_buffer);
+            source_file_hashes.push((file_id, file.content_hash));
+            if let Err(e) = lex_result {
+                self.ast.report_error(e);
+                // Keep going man! to the next file
+                continue;
+            }
 
             if cfg!(feature = "lsp") {
                 self.ast.sources.get_mut(file_id).tokens = token_buffer.clone();
@@ -3213,18 +3193,20 @@ impl TypedProgram {
                 file_id,
             );
             parser.parse_file_into_module();
+            source_file_hashes.push((file_id, file.content_hash));
         }
 
         self.buffers.lexer_tokens = token_buffer;
+        self.modules.get_mut(module_id).source_file_hashes = source_file_hashes;
 
-        let parse_elapsed_us = self.timing.elapsed_nanos(parse_start) / 1_000;
-        let parse_elapsed_ms = parse_elapsed_us / 1_000;
-        self.modules.get_mut(module_id).parse_elapsed_ms = parse_elapsed_ms;
-
-        // In completion mode, typecheck whatever parsed; broken definitions are
-        // already tolerated per-definition downstream
-        if !self.ast.errors.is_empty() && !self.config.lsp.completion {
-            bail!("Parsing module {} failed with {} errors", src_path_name, self.ast.errors.len());
+        if !self.ast.errors.is_empty() {
+            if !self.config.lsp.completion {
+                bail!(
+                    "Parsing module {} failed with {} errors",
+                    self.ident_str(module_name),
+                    self.ast.errors.len()
+                );
+            }
         }
 
         let module_manifest = if is_core {
@@ -3270,35 +3252,37 @@ impl TypedProgram {
             }
         }
 
-        // We take various program-wide settings from the primary module's manifest
-        // So that we can compile dependencies with them applied
         if primary_module {
             self.program_settings.multithreaded = module_manifest.multithreading;
             self.program_settings.executable = module_manifest.kind == ModuleKind::Executable;
         }
 
-        for dep in module_manifest.deps.iter() {
-            let src_path = match dep {
-                ModuleRef::Github { .. } => todo!(),
-                ModuleRef::Local { path } => path,
-            };
-            // Actually, module names need to be unique identifiers and provided up front
-            self.add_module(src_path, false)?;
+        // Spawn every sibling's reader before the first join so each dep's IO
+        // overlaps the previous deps' typechecks
+        let dep_plans: Vec<_> = module_manifest
+            .deps
+            .iter()
+            .map(|dep| {
+                let src_path = match dep {
+                    ModuleRef::Github { .. } => todo!(),
+                    ModuleRef::Local { path } => path,
+                };
+                crate::compiler::ModuleSourcesThreadHandle::spawn(
+                    src_path,
+                    false,
+                    &self.config.lsp.source_overrides,
+                )
+            })
+            .collect();
+        for dep_plan in dep_plans {
+            self.add_module(dep_plan?, false)?;
         }
 
-        let type_start = self.timing.clock.raw();
-        let module_id = self.run_on_module(
-            module_id,
-            module_name,
-            parsed_namespace_id,
-            module_manifest,
-            module_dir,
-        )?;
+        let module_id =
+            self.run_on_module(module_id, parsed_namespace_id, module_manifest, module_dir)?;
         if is_core {
             debug_assert_eq!(module_id, MODULE_ID_CORE);
         }
-        let typing_elapsed_ms = self.timing.clock.elapsed_ms(type_start);
-        self.modules.get_mut(module_id).typecheck_elapsed_ms = typing_elapsed_ms;
         #[cfg(feature = "profile")]
         {
             let mut exprs_by_kind = FxHashMap::new();
@@ -9679,7 +9663,6 @@ impl TypedProgram {
         let generated_filename = format!("meta_{stem}_{line_number}_{serial}.k1");
         debug!("Emitted source:\n---\n{content}\n---");
         let source_for_emission = self.ast.sources.add_file(crate::parse::SourceFile::make(
-            0,
             self.config.out_dir_generated.clone(),
             generated_filename,
             content,
@@ -19862,7 +19845,6 @@ impl TypedProgram {
     pub fn run_on_module(
         &mut self,
         module_id: ModuleId,
-        module_name: StringId,
         module_root_parsed_namespace: ParsedNamespaceId,
         manifest: ModuleManifest,
         home_dir: PathBuf,
@@ -19885,17 +19867,12 @@ impl TypedProgram {
         }
         let typed_namespace_id = module_root_namespace_declare_result.unwrap();
         let module_root_namespace_scope_id = self.namespaces.get(typed_namespace_id).scope_id;
-        *self.modules.get_mut(module_id) = Module {
-            id: module_id,
-            name: module_name,
-            home_dir,
-            manifest,
-            namespace_id: typed_namespace_id,
-            namespace_scope_id: module_root_namespace_scope_id,
 
-            parse_elapsed_ms: 0,
-            typecheck_elapsed_ms: 0,
-        };
+        let module = self.modules.get_mut(module_id);
+        module.home_dir = home_dir;
+        module.manifest = manifest;
+        module.namespace_id = typed_namespace_id;
+        module.namespace_scope_id = module_root_namespace_scope_id;
 
         if !is_core {
             // takes 14us last I checked

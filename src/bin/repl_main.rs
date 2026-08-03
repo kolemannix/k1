@@ -24,28 +24,25 @@ fn main() -> anyhow::Result<ExitCode> {
     let cwd = std::env::current_dir().unwrap();
     let name = "repl.k1";
     let mut ast = ParsedProgram::make("repl".to_string());
-    let file_id = 0;
 
     let mut line = String::with_capacity(1024);
     loop {
         let _len = std::io::stdin().read_line(&mut line).unwrap();
         let mut tokens = vec![];
-        let lex_result = k1::parse::lex_file_into_program(
+        let (file_id, lex_result) = k1::parse::lex_file_into_program(
             &mut ast,
             SourceFile::make(
-                file_id,
-                cwd.to_str().unwrap().to_string(),
+                cwd.to_str().unwrap().to_string().into(),
                 name.to_string(),
                 line.clone(),
             ),
             &mut tokens,
         );
-        let tokens = match lex_result {
-            Ok(_) => {
+        match lex_result {
+            Ok(()) => {
                 for t in &tokens {
                     eprintln!("{:20} {:?}", t.kind, t)
                 }
-                tokens
             }
             Err(e) => {
                 eprintln!("Lexer failure: {}", e.message());

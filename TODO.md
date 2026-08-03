@@ -15,6 +15,7 @@ tmp {
 }
 
 Minor and ideas
+- [ ] 'zeroable' story, i think i have a plan; check if zeroed will produce a valid bit-pattern for the given type
 - [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
 - [ ] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
       way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?

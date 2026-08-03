@@ -364,7 +364,7 @@ pub fn module_home_from_src_path(src_path: &Path) -> (bool, PathBuf) {
 
 /// Requires a canonicalized src_path
 /// Returned pair is (parent_dir, source_files)
-pub fn discover_source_files(src_path: &Path) -> (PathBuf, Vec<PathBuf>) {
+fn discover_source_files(src_path: &Path) -> (PathBuf, Vec<PathBuf>) {
     let (is_dir, src_dir) = module_home_from_src_path(src_path);
     let src_filter: &dyn Fn(&Path) -> bool =
         &|p: &Path| p.extension().is_some_and(|ext| ext == "k1");
@@ -382,6 +382,81 @@ pub fn discover_source_files(src_path: &Path) -> (PathBuf, Vec<PathBuf>) {
     };
 
     (src_dir, dir_entries)
+}
+
+pub struct SourceFile {
+    /// canonical absolute
+    pub path: PathBuf,
+    pub content: String,
+    pub content_hash: u64,
+}
+
+pub struct ModuleSources {
+    pub module_dir: PathBuf,
+    pub files: Vec<SourceFile>,
+}
+
+pub struct ModuleSourcesThreadHandle {
+    /// canonicalized module path (dir or single file)
+    pub src_path: PathBuf,
+    reader: std::thread::JoinHandle<Result<ModuleSources, String>>,
+}
+
+impl ModuleSourcesThreadHandle {
+    /// core_module=true must be passed for (exactly) the corelib module: it forces
+    /// builtin.k1 to the front of the file order.
+    pub fn spawn(
+        src_path: &Path,
+        core_module: bool,
+        source_overrides: &fxhash::FxHashMap<PathBuf, String>,
+    ) -> anyhow::Result<ModuleSourcesThreadHandle> {
+        let src_path = src_path.canonicalize().map_err(|e| {
+            anyhow::anyhow!("Error loading module '{}': {}", src_path.to_string_lossy(), e)
+        })?;
+        let (module_dir, mut files) = discover_source_files(&src_path);
+        if core_module {
+            let builtin_index = files
+                .iter()
+                .position(|path| path.file_name().unwrap() == "builtin.k1")
+                .expect("corelib module must contain builtin.k1");
+            files.swap(0, builtin_index);
+        }
+        let overrides: Vec<Option<String>> =
+            files.iter().map(|path| source_overrides.get(path).cloned()).collect();
+        let reader = std::thread::spawn(move || {
+            let files = files
+                .into_iter()
+                .zip(overrides)
+                .map(|(path, override_content)| {
+                    let content = match override_content {
+                        Some(content) => content,
+                        None => fs::read_to_string(&path).map_err(|e| {
+                            format!("Failed to read source file {}: {e}", path.display())
+                        })?,
+                    };
+                    let content_hash = content_hash64(content.as_bytes());
+                    Ok(SourceFile { path, content, content_hash })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(ModuleSources { module_dir, files })
+        });
+        Ok(ModuleSourcesThreadHandle { src_path, reader })
+    }
+
+    /// Err is the first failure
+    pub fn join(self) -> anyhow::Result<ModuleSources> {
+        self.reader
+            .join()
+            .expect("module reader thread panicked")
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+}
+
+fn content_hash64(bytes: &[u8]) -> u64 {
+    use std::hash::Hasher;
+    let mut h = fxhash::FxHasher64::default();
+    h.write(bytes);
+    h.finish()
 }
 
 fn write_program_dump(p: &TypedProgram) {
@@ -501,6 +576,12 @@ pub fn compile_program_ext(
     let corelib_dir = k1lib_dir_pathbuf.join("core");
     let stdlib_dir = k1lib_dir_pathbuf.join("std");
 
+    // All planned paths are absolute, so spawning before the CwdGuard chdir is safe;
+    // reads overlap TypedProgram::new's ident/scope init and core's typecheck.
+    let core_plan = ModuleSourcesThreadHandle::spawn(&corelib_dir, true, &lsp.source_overrides);
+    let std_plan = use_std.then(|| ModuleSourcesThreadHandle::spawn(&stdlib_dir, false, &lsp.source_overrides));
+    let main_plan = ModuleSourcesThreadHandle::spawn(&src_path, false, &lsp.source_overrides);
+
     let module_name = if src_path.is_dir() {
         src_path.file_name().unwrap().to_str().unwrap().to_string()
     } else {
@@ -530,11 +611,11 @@ pub fn compile_program_ext(
     let mut k1 = TypedProgram::new(module_name.clone(), config);
 
     let add_result = (|| {
-        k1.add_module(&corelib_dir, false)?;
-        if use_std {
-            k1.add_module(&stdlib_dir, false)?;
+        k1.add_module(core_plan?, false)?;
+        if let Some(std_plan) = std_plan {
+            k1.add_module(std_plan?, false)?;
         }
-        k1.add_module(&src_path, true)
+        k1.add_module(main_plan?, true)
     })();
     k1.write_emitted_sources();
     if let Err(e) = add_result {

@@ -539,9 +539,6 @@ pub(crate) fn resolve_global(
     let is_constant = global.is_constant;
     let initial_value_id = match global.initial_value {
         GlobalInitialValue::Pending => {
-            // Globals referenced by compiled code are evaluated by the pre-execution
-            // drain (compile_all_pending_ir); re-entering the compiler mid-run to
-            // evaluate one is no longer allowed
             kbail!(
                 k1,
                 vm.eval_span,

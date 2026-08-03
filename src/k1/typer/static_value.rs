@@ -1,8 +1,6 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
-use std::collections::hash_map::Entry;
-
 use crate::nz_u32_id;
 use crate::typer::*;
 
@@ -227,7 +225,7 @@ impl DepEq<StaticValuePool> for StaticValue {
 pub struct StaticValuePool {
     pub mem: kmem::Mem<StaticValuePool>,
     pub pool: VPool<StaticValue, StaticValueId>,
-    pub hashes: FxHashMap<u64, StaticValueId>,
+    hashes: hashbrown::HashTable<(u64, StaticValueId)>,
 
     empty_id: StaticValueId,
     false_id: StaticValueId,
@@ -236,8 +234,8 @@ pub struct StaticValuePool {
 }
 
 impl StaticValuePool {
-    pub fn make_with_hint(size_hint: usize) -> StaticValuePool {
-        let mut pool = VPool::make_with_hint("static_values", size_hint);
+    pub fn make() -> StaticValuePool {
+        let mut pool = VPool::make("static_values");
         let false_id = pool.add(StaticValue::Bool(false));
         let true_id = pool.add(StaticValue::Bool(true));
         let empty_id = pool.add(StaticValue::Empty);
@@ -245,7 +243,7 @@ impl StaticValuePool {
         StaticValuePool {
             mem: kmem::Mem::make(),
             pool,
-            hashes: FxHashMap::with_capacity(size_hint),
+            hashes: hashbrown::HashTable::new(),
             empty_id,
             false_id,
             true_id,
@@ -339,22 +337,20 @@ impl StaticValuePool {
             _ => {}
         };
         let hash = self.hash(&value);
-        if let Entry::Occupied(entry) = self.hashes.entry(hash) {
-            let existing_id = *entry.get();
-            let existing = self.pool.get(existing_id);
-            if value.dep_eq(existing, self) {
-                return existing_id;
-            }
+        if let Some(&(_, existing_id)) =
+            self.hashes.find(hash, |&(_, id)| value.dep_eq(self.pool.get(id), self))
+        {
+            return existing_id;
         }
         let new_id = self.pool.add(value);
-        self.hashes.insert(hash, new_id);
+        self.hashes.insert_unique(hash, (hash, new_id), |&(h, _)| h);
         new_id
     }
 
     pub fn set(&mut self, reserved_id: StaticValueId, value: StaticValue) {
         let hash = self.hash(&value);
         *self.pool.get_mut(reserved_id) = value;
-        self.hashes.insert(hash, reserved_id);
+        self.hashes.insert_unique(hash, (hash, reserved_id), |&(h, _)| h);
     }
 
     pub fn get(&self, id: StaticValueId) -> &StaticValue {

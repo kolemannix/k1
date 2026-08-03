@@ -1623,7 +1623,7 @@ impl SourceFiles {
         self.sources.iter().map(|source| (source.file_id, source))
     }
 
-    pub fn next_file_id(&self) -> FileId {
+    fn next_file_id(&self) -> FileId {
         self.sources.len() as u32
     }
 
@@ -2082,16 +2082,11 @@ pub struct SourceFile {
 }
 
 impl SourceFile {
-    pub fn make(
-        file_id: FileId,
-        directory: Rc<String>,
-        filename: String,
-        content: String,
-    ) -> SourceFile {
+    pub fn make(directory: Rc<String>, filename: String, content: String) -> SourceFile {
         let newline_positions =
             memchr::memchr_iter(b'\n', content.as_bytes()).map(|pos| pos as u32).collect();
         SourceFile {
-            file_id,
+            file_id: 0,
             directory,
             filename,
             content,
@@ -5832,20 +5827,23 @@ impl ParsedProgram {
     }
 }
 
+/// The file joins the program's sources unconditionally — the FileId is
+/// returned even when lexing fails
 pub fn lex_file_into_program(
     module: &mut ParsedProgram,
     source: SourceFile,
     tokens: &mut Vec<Token>,
-) -> ParseResult<FileId> {
+) -> (FileId, ParseResult<()>) {
     tokens.clear();
     let file_id = module.sources.add_file(source);
     let text = &module.sources.get(file_id).content;
     let mut lexer = Lexer::make(text, &mut module.spans, file_id);
-    lexer.run(tokens).map_err(ParseError::Lex)?;
-    let trivia = std::mem::take(&mut lexer.trivia);
-    module.sources.get_mut(file_id).trivia = trivia;
-
-    Ok(file_id)
+    let result = lexer.run(tokens).map_err(ParseError::Lex);
+    if result.is_ok() {
+        let trivia = std::mem::take(&mut lexer.trivia);
+        module.sources.get_mut(file_id).trivia = trivia;
+    }
+    (file_id, result)
 }
 
 /// To be used by the lsp or other tools that are
@@ -5853,15 +5851,13 @@ pub fn lex_file_into_program(
 pub fn parse_standalone(program_name: String, content: String) -> ParsedProgram {
     let mut ast = ParsedProgram::make(program_name.clone());
 
-    let source = SourceFile::make(0, ".".to_string().into(), program_name.clone(), content);
+    let source = SourceFile::make(".".to_string().into(), program_name.clone(), content);
     let mut token_vec = vec![];
-    let file_id = match lex_file_into_program(&mut ast, source, &mut token_vec) {
-        Err(e) => {
-            ast.errors.push(e);
-            return ast;
-        }
-        Ok(file_id) => file_id,
-    };
+    let (file_id, lex_result) = lex_file_into_program(&mut ast, source, &mut token_vec);
+    if let Err(e) = lex_result {
+        ast.errors.push(e);
+        return ast;
+    }
 
     let module_id = ModuleId::from_u32(1).unwrap();
     let module_name = ast.idents.intern("test_module");
