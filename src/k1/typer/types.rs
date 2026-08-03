@@ -1024,6 +1024,7 @@ pub struct BuiltinTypes {
     pub code_builder: Option<TypeId>,
     pub dyn_lambda_obj: Option<TypeId>,
     pub source_location: Option<TypeId>,
+    pub k1_module: Option<TypeId>,
     pub ordering: Option<TypeId>,
     pub types_layout: Option<TypeId>,
     pub types_type_schema: Option<TypeId>,
@@ -1047,6 +1048,7 @@ impl BuiltinTypes {
         debug_assert!(self.code_chunk.is_some());
         debug_assert!(self.code_builder.is_some());
         debug_assert!(self.dyn_lambda_obj.is_some());
+        debug_assert!(self.k1_module.is_some());
         debug_assert!(self.types_layout.is_some());
         debug_assert!(self.types_type_schema.is_some());
         debug_assert!(self.types_int_kind.is_some());

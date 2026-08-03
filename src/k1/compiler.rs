@@ -394,6 +394,7 @@ pub struct SourceFile {
 pub struct ModuleSources {
     pub module_dir: PathBuf,
     pub files: Vec<SourceFile>,
+    pub root_file_index: usize,
 }
 
 pub struct ModuleSourcesThreadHandle {
@@ -421,6 +422,25 @@ impl ModuleSourcesThreadHandle {
                 .expect("corelib module must contain builtin.k1");
             files.swap(0, builtin_index);
         }
+        let root_file_index = if core_module {
+            0
+        } else if src_path.is_dir() {
+            let module_name = src_path.file_name().unwrap().to_string_lossy();
+            let named_root = format!("{module_name}.k1");
+            files
+                .iter()
+                .position(|path| path.file_name().unwrap() == "module.k1")
+                .or_else(|| {
+                    files.iter().position(|path| path.file_name().unwrap() == named_root.as_str())
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Directory module '{module_name}' has no root file: create module.k1 or {named_root}"
+                    )
+                })?
+        } else {
+            0
+        };
         let overrides: Vec<Option<String>> =
             files.iter().map(|path| source_overrides.get(path).cloned()).collect();
         let reader = std::thread::spawn(move || {
@@ -438,7 +458,7 @@ impl ModuleSourcesThreadHandle {
                     Ok(SourceFile { path, content, content_hash })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            Ok(ModuleSources { module_dir, files })
+            Ok(ModuleSources { module_dir, files, root_file_index })
         });
         Ok(ModuleSourcesThreadHandle { src_path, reader })
     }

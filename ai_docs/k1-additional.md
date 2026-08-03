@@ -63,23 +63,28 @@ and `test_src/suite1/context_ability.k1`.
 
 ## Module Manifests And FFI
 
-Executable modules can declare `MODULE_INFO` with dependencies, threading mode,
-libraries, and linker args. FFI declarations use `extern("lib", "symbol")`.
+A module declares its manifest with `fn module(): k1/module` in its root file.
+A directory module's root file is `module.k1` or `<module-name>.k1` (required —
+a directory module without one is an error); a single-file module is its own
+root file. A top-level `fn module` in any other file is an error. The compiler
+evaluates the fn before compiling the module and consumes it — it is never part
+of the program. No `fn module` means defaults: library, or executable for the
+primary module. FFI declarations use `extern("lib", "symbol")`.
 
 ```rust
-let MODULE_INFO: k1/module-manifest = .{
-  kind = :executable,
-  deps = [],
-  multithreading = false,
-  libs = [.{ name = "foo", link-type = :static }],
-  link-args = [],
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.multithreaded()
+  m.lib("foo", :static)
+  m.link-args(["-L/some/path"])
+  m
 }
 
 extern("foo", "very_small")
 fn very-small(x: very-small, y: very-small): very-small
 ```
 
-See `test_src/ffi_abi_test/main.k1` and `test_src/threads.k1`.
+See `test_src/ffi_abi_test/ffi_abi_test.k1` and `test_src/threads.k1`.
 
 ## Function Pointers
 
@@ -544,7 +549,7 @@ See `test_src/suite1/rvo_test.k1`.
 
 Thread tests combine several runtime features:
 
-- `MODULE_INFO` with `multithreading: true`.
+- `fn module(): k1/module` calling `m.multithreaded()`.
 - Thread-local mutable globals via `let mutable tls`.
 - `std/thread/start` and `std/thread/join`.
 - Arena-backed allocation for cross-thread values.

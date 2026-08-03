@@ -1,3 +1,11 @@
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.multithreaded()
+  m.lib("llhttp", :static)
+  m.lib("uv", :static)
+  m
+}
+
 ns http
 
 type header = {

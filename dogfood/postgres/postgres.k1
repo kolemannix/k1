@@ -1,9 +1,8 @@
-let MODULE_INFO: k1/module-manifest = .{
-  kind = :executable,
-  deps = [],
-  multithreading = false,
-  libs = [.{ name = "pq", link-type = :default }],
-  link-args = ["-L/opt/homebrew/opt/libpq/include"]
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.lib("pq", :default)
+  m.link-args(["-L/opt/homebrew/opt/libpq/include"])
+  m
 }
 
 ns pg {

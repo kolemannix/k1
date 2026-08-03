@@ -1,15 +1,12 @@
-let MODULE_INFO: k1/module-manifest = {
-  let frameworks = ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"]
-  let link-args = list/empty[string]()
-  for frameworks { link-args.push("-framework"); link-args.push(it) }
-  .{
-    kind = :executable,
-    deps = [],
-    multithreading = false,
-    libs = [.{ name = "raylib", link-type = :static }],
-    link-args = link-args.as-span(),
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.lib("raylib", :static)
+  for ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"] {
+    m.link-args(["-framework", it])
   }
+  m
 }
+
 ns raylib {
   type color = { r: u8, g: u8, b: u8, a: u8 }
 

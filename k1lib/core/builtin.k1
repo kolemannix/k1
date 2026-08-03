@@ -592,21 +592,61 @@ ns k1 {
     msg: string
   )
 
-  type module-kind = either(u8) { library, executable, script }
+  type module-kind = either(u8) { library, executable }
+
+  type link-kind = either(u8) { default, static, dynamic }
 
   type library-ref = {
     name: string,
-    link-type: either(u8) { default, static, dynamic },
+    link-type: link-kind,
   }
 
-  type module-manifest = {
-    kind: module-kind,
-    deps: span[string],
-
-    // Primary module settings
+  type module = {
+    kind: opt[module-kind],
+    deps: list[string],
+    libs: list[library-ref],
+    link-args: list[string],
     multithreading: bool,
-    libs: span[library-ref],
-    link-args: span[string],
+  }
+
+  ns for module {
+    fn new(): module {
+      .{
+        kind = :none,
+        deps = list/empty(),
+        libs = list/empty(),
+        link-args = list/empty(),
+        multithreading = false,
+      }
+    }
+
+    fn executable(self: *mut module) {
+      if self.kind.is-some() { crash("module kind set twice") }
+      self.kind = :some(:executable)
+    }
+
+    fn library(self: *mut module) {
+      if self.kind.is-some() { crash("module kind set twice") }
+      self.kind = :some(:library)
+    }
+
+    fn multithreaded(self: *mut module) {
+      self.multithreading = true
+    }
+
+    fn dep(self: *mut module, name: string) {
+      if name.is-empty() { crash("empty dep name") }
+      for self.deps { if it == name { crash("duplicate dep '$name'") } }
+      self.deps.push(name)
+    }
+
+    fn lib(self: *mut module, name: string, link-type: link-kind) {
+      self.libs.push(.{ name, link-type })
+    }
+
+    fn link-args(self: *mut module, args: span[string]) {
+      for args { self.link-args.push(it) }
+    }
   }
 
   ns repl {

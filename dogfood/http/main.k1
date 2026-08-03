@@ -1,14 +1,3 @@
-let MODULE_INFO: k1/module-manifest = .{
-  kind = :executable,
-  libs = [
-    .{ link-type = :static, name = "llhttp" },
-    .{ link-type = :static, name = "uv" },
-  ],
-  deps = [],
-  multithreading = true,
-  link-args = [],
-}
-
 use uv/uv-loop
 use std/rc
 use std/rc-bytes

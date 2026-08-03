@@ -51,7 +51,7 @@ format-test/test()
 core/types/type-id[int]
 ```
 
-See `test_src/suite1/main.k1`, `test_src/suite1/format.k1`, and
+See `test_src/suite1/suite1.k1`, `test_src/suite1/format.k1`, and
 `test_src/suite1/lambdas.k1`.
 
 ## Naming
@@ -862,7 +862,7 @@ fn test() {
 }
 ```
 
-Then add it to `test_src/suite1/main.k1` if it belongs in suite1.
+Then add it to `test_src/suite1/suite1.k1` if it belongs in suite1.
 
 Use `test-compile(...)` when a snippet should fail to compile:
 

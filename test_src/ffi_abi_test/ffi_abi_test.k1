@@ -1,9 +1,7 @@
-let MODULE_INFO: k1/module-manifest = .{
-  kind = :executable,
-  deps = [],
-  multithreading = false,
-  libs = [.{ name = "foo", link-type = :static }],
-  link-args = [],
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.lib("foo", :static)
+  m
 }
 
 ns foo {

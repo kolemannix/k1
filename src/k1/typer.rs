@@ -2534,12 +2534,6 @@ pub const MODULE_ID_CORE: ModuleId = ModuleId::ONE;
 pub enum ModuleKind {
     Library,
     Executable,
-    Script,
-}
-
-pub enum ModuleRef {
-    Github { url: String, branch: String },
-    Local { path: PathBuf },
 }
 
 #[derive(Clone, Copy)]
@@ -2560,21 +2554,15 @@ pub struct LibRef {
 
 pub struct ModuleManifest {
     pub kind: ModuleKind,
-    pub deps: Vec<ModuleRef>,
+    pub deps: Vec<StringId>,
     pub multithreading: bool,
     pub libs: Vec<LibRef>,
     pub link_args: Vec<StringId>,
 }
 
-impl Default for ModuleManifest {
-    fn default() -> Self {
-        Self {
-            kind: ModuleKind::Executable,
-            deps: vec![],
-            multithreading: false,
-            libs: vec![],
-            link_args: vec![],
-        }
+impl ModuleManifest {
+    fn defaulted(kind: ModuleKind) -> Self {
+        Self { kind, deps: vec![], multithreading: false, libs: vec![], link_args: vec![] }
     }
 }
 
@@ -2596,7 +2584,7 @@ impl Module {
             id,
             name,
             home_dir: PathBuf::new(),
-            manifest: ModuleManifest::default(),
+            manifest: ModuleManifest::defaulted(ModuleKind::Library),
             namespace_id: NamespaceId::PENDING,
             namespace_scope_id: ScopeId::PENDING,
             source_file_hashes: vec![],
@@ -3156,15 +3144,16 @@ impl TypedProgram {
 
         let is_core = module_id == MODULE_ID_CORE;
 
-        let crate::compiler::ModuleSources { module_dir, files } = plan.join()?;
+        let crate::compiler::ModuleSources { module_dir, files, root_file_index } = plan.join()?;
         let directory_string = Rc::new(module_dir.to_str().unwrap().to_string());
 
         let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
         let mut token_buffer = std::mem::take(&mut self.buffers.lexer_tokens);
         debug!("Parsing {} files for module {}", files.len(), self.ident_str(module_name));
 
+        let mut root_file_id: Option<FileId> = None;
         let mut source_file_hashes: Vec<(FileId, u64)> = Vec::with_capacity(files.len());
-        for file in files {
+        for (file_index, file) in files.into_iter().enumerate() {
             let name = file.path.file_name().unwrap();
             let source = parse::SourceFile::make(
                 directory_string.clone(),
@@ -3174,6 +3163,9 @@ impl TypedProgram {
             let (file_id, lex_result) =
                 parse::lex_file_into_program(&mut self.ast, source, &mut token_buffer);
             source_file_hashes.push((file_id, file.content_hash));
+            if root_file_index == file_index {
+                root_file_id = Some(file_id);
+            }
             if let Err(e) = lex_result {
                 self.ast.report_error(e);
                 // Keep going man! to the next file
@@ -3209,8 +3201,8 @@ impl TypedProgram {
             }
         }
 
-        let module_manifest = if is_core {
-            ModuleManifest {
+        let (module_manifest, manifest_fn_defn) = if is_core {
+            let manifest = ModuleManifest {
                 kind: ModuleKind::Library,
                 deps: vec![],
                 multithreading: false,
@@ -3219,22 +3211,28 @@ impl TypedProgram {
                     link_type: LibRefLinkType::Static,
                 }],
                 link_args: vec![],
-            }
+            };
+            (manifest, None)
         } else {
-            let manifest_result = self.get_module_manifest(parsed_namespace_id);
-            if let Err(e) = manifest_result {
-                self.report(e);
-                bail!("Failed to compile module manifest")
-            }
-            match manifest_result.unwrap() {
-                None => ModuleManifest {
-                    kind: ModuleKind::Executable,
-                    deps: vec![],
-                    multithreading: false,
-                    libs: vec![],
-                    link_args: vec![],
-                },
-                Some(manifest) => manifest,
+            match self.evaluate_module_manifest(parsed_namespace_id, root_file_id, primary_module)
+            {
+                Err(e) => {
+                    self.report(e);
+                    bail!(
+                        "Failed to evaluate module manifest. Note: fn module is evaluated \
+                         before the module compiles, so module-local definitions are not \
+                         visible in it"
+                    )
+                }
+                Ok(None) => {
+                    let kind = if primary_module {
+                        ModuleKind::Executable
+                    } else {
+                        ModuleKind::Library
+                    };
+                    (ModuleManifest::defaulted(kind), None)
+                }
+                Ok(Some((manifest, fn_defn))) => (manifest, Some(fn_defn)),
             }
         };
 
@@ -3257,29 +3255,21 @@ impl TypedProgram {
             self.program_settings.executable = module_manifest.kind == ModuleKind::Executable;
         }
 
-        // Spawn every sibling's reader before the first join so each dep's IO
-        // overlaps the previous deps' typechecks
-        let dep_plans: Vec<_> = module_manifest
-            .deps
-            .iter()
-            .map(|dep| {
-                let src_path = match dep {
-                    ModuleRef::Github { .. } => todo!(),
-                    ModuleRef::Local { path } => path,
-                };
-                crate::compiler::ModuleSourcesThreadHandle::spawn(
-                    src_path,
-                    false,
-                    &self.config.lsp.source_overrides,
-                )
-            })
-            .collect();
-        for dep_plan in dep_plans {
-            self.add_module(dep_plan?, false)?;
+        if let Some(dep_name) = module_manifest.deps.first() {
+            bail!(
+                "Module {} depends on '{}', but dep resolution is not implemented yet",
+                self.ident_str(module_name),
+                self.ident_str(*dep_name)
+            );
         }
 
-        let module_id =
-            self.run_on_module(module_id, parsed_namespace_id, module_manifest, module_dir)?;
+        let module_id = self.run_on_module(
+            module_id,
+            parsed_namespace_id,
+            module_manifest,
+            module_dir,
+            manifest_fn_defn,
+        )?;
         if is_core {
             debug_assert_eq!(module_id, MODULE_ID_CORE);
         }
@@ -3755,6 +3745,8 @@ impl TypedProgram {
         } else if namespace_scope_id == self.scopes.k1_scope_id {
             if name == self.ast.idents.b.source_location {
                 self.builtin_types.source_location = Some(type_id)
+            } else if name == self.ast.idents.b.module {
+                self.builtin_types.k1_module = Some(type_id)
             }
         }
 
@@ -5470,104 +5462,118 @@ impl TypedProgram {
         res
     }
 
-    fn get_module_manifest(
+    fn evaluate_module_manifest(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
-    ) -> K1Result<Option<ModuleManifest>> {
+        root_file_id: Option<FileId>,
+        primary_module: bool,
+    ) -> K1Result<Option<(ModuleManifest, ParsedId)>> {
+        let module_ident = self.ast.idents.b.module;
         let namespace = self.ast.namespaces.get(parsed_namespace_id);
-        let Some(manifest_function) = namespace
-            .definitions
-            .as_slice()
-            .iter()
-            .filter_map(|defn| defn.as_global_id())
-            .find(|id| self.ast.get_global(*id).name == self.ast.idents.b.MODULE_INFO)
-        else {
+        let mut manifest_fn_id = None;
+        for fn_id in namespace.definitions.as_slice().iter().filter_map(|d| d.as_function_id()) {
+            let f = self.ast.get_function(fn_id);
+            if f.name != module_ident {
+                continue;
+            }
+            if root_file_id.is_some_and(|rf| self.ast.spans.get(f.span).file_id == rf) {
+                manifest_fn_id = Some(fn_id);
+            } else {
+                kbail!(
+                    self,
+                    f.span,
+                    "fn module is the module's manifest and must live in its root file \
+                     (module.k1 or <module-name>.k1)"
+                );
+            }
+        }
+        let Some(manifest_fn_id) = manifest_fn_id else {
             return Ok(None);
         };
-        let manifest_global = self.ast.get_global(manifest_function).clone();
-        let type_id = self.eval_type_expr(manifest_global.type_expr, Scopes::ROOT_SCOPE_ID)?;
-        let Some(value_expr) = manifest_global.value_expr else {
-            kbail!(self, manifest_global.span, "Missing value");
+        let f = self.ast.get_function(manifest_fn_id);
+        let (fn_span, fn_body, fn_ret_type) = (f.span, f.body, f.ret_type);
+        if !f.type_params.is_empty() || !f.params.is_empty() {
+            kbail!(self, fn_span, "fn module takes no parameters");
+        }
+        let Some(body) = fn_body else {
+            kbail!(self, fn_span, "fn module must have a body");
         };
+        let module_type_id = self.builtin_types.k1_module.unwrap();
+        if let Some(ret_type_expr) = fn_ret_type {
+            let ret_type = self.eval_type_expr(ret_type_expr, Scopes::ROOT_SCOPE_ID)?;
+            if ret_type != module_type_id {
+                kbail!(self, fn_span, "fn module must return k1/module");
+            }
+        }
         let manifest_result = self.execute_static_expr(
-            value_expr,
+            body,
             EvalExprContext::make(Scopes::ROOT_SCOPE_ID)
-                .with_expected_type(Some(type_id))
-                .with_static_ctx(Some(StaticExecContext { expected_return_type: Some(type_id) })),
+                .with_expected_type(Some(module_type_id))
+                .with_static_ctx(Some(StaticExecContext {
+                    expected_return_type: Some(module_type_id),
+                })),
             &[],
         )?;
 
-        let manifest_value_type = self.get_static_value_type(manifest_result);
-        if let Err(msg) = self.check_types(type_id, manifest_value_type, Scopes::ROOT_SCOPE_ID) {
-            kbail!(self, manifest_global.span, "Module manifest type mismatch: {}", msg);
-        }
+        let StaticValue::Struct(value) = self.static_values.get(manifest_result) else {
+            self.ice_span(fn_span, "module manifest value was not a struct");
+        };
+        let fields: [StaticValueId; 5] =
+            self.static_values.mem.getn(value.fields).try_into().unwrap();
 
-        let manifest_value = self.static_values.get(manifest_result);
-        match manifest_value {
-            StaticValue::Struct(value) => {
-                let value_fields = self.static_values.mem.getn(value.fields);
-                let (_, int_value) = self.static_values.get(value_fields[0]).as_enum().unwrap();
-                let kind = match int_value {
-                    TypedIntValue::U8(0) => ModuleKind::Library,
-                    TypedIntValue::U8(1) => ModuleKind::Executable,
-                    TypedIntValue::U8(2) => ModuleKind::Script,
-                    _ => panic!("Unrecognized module kind index: {}", int_value),
-                };
-
-                let deps = vec![];
-
-                let multithreading = self.static_values.get(value_fields[2]).as_boolean().unwrap();
-
-                let libs = self.static_values.get(value_fields[3]).as_container().unwrap();
-                let mut lib_refs = vec![];
-                // deftype library-ref = { name: string, link-type: either(u8) default, static, dynamic }
-                for lib_ref_struct_value_id in self.static_values.get_slice(libs.elements) {
-                    let lib_ref_struct =
-                        self.static_values.get(*lib_ref_struct_value_id).as_struct().unwrap();
-                    let lib_ref_struct_fields = self.static_values.get_slice(lib_ref_struct.fields);
-                    let name_string_id =
-                        self.static_values.get(lib_ref_struct_fields[0]).as_string().unwrap();
-                    let link_type_u8: u8 = self
-                        .static_values
-                        .get(lib_ref_struct_fields[1])
-                        .as_enum()
-                        .unwrap()
-                        .1
-                        .as_u8()
-                        .unwrap();
-                    let link_type = match link_type_u8 {
-                        0 => LibRefLinkType::Default,
-                        1 => LibRefLinkType::Static,
-                        2 => LibRefLinkType::Dynamic,
-                        _ => panic!("Bad value for link-type enum"),
-                    };
-                    lib_refs.push(LibRef { name: name_string_id, link_type })
+        let kind = match self.static_values.get(fields[0]).as_sum().unwrap().payload {
+            None => {
+                if primary_module {
+                    ModuleKind::Executable
+                } else {
+                    ModuleKind::Library
                 }
-
-                let static_link_args =
-                    self.static_values.get(value_fields[4]).as_container().unwrap();
-                let mut link_args = vec![];
-                for link_arg in self.static_values.get_slice(static_link_args.elements) {
-                    // Grab the strings out for now. Eventually we can maybe just
-                    // interpret the memory
-                    let string_id = self.static_values.get(*link_arg).as_string().unwrap();
-                    link_args.push(string_id)
-                }
-
-                Ok(Some(ModuleManifest { kind, deps, multithreading, libs: lib_refs, link_args }))
             }
-            StaticValue::Zero(_) => Ok(Some(ModuleManifest {
-                kind: ModuleKind::Library,
-                deps: vec![],
-                multithreading: false,
-                libs: vec![],
-                link_args: vec![],
-            })),
-            _ => panic!(
-                "Expected module manifest to be a struct, got: {}",
-                self.static_value_to_string(manifest_result)
-            ),
+            Some(kind_value_id) => {
+                let (_, int_value) = self.static_values.get(kind_value_id).as_enum().unwrap();
+                match int_value.as_u8().unwrap() {
+                    0 => ModuleKind::Library,
+                    1 => ModuleKind::Executable,
+                    k => panic!("Unrecognized module kind index: {k}"),
+                }
+            }
+        };
+
+        let deps_container = *self.static_values.get(fields[1]).as_container().unwrap();
+        let mut deps = vec![];
+        for dep_value_id in self.static_values.get_slice(deps_container.elements) {
+            deps.push(self.static_values.get(*dep_value_id).as_string().unwrap());
         }
+
+        let libs_container = *self.static_values.get(fields[2]).as_container().unwrap();
+        let mut libs = vec![];
+        for lib_ref_value_id in self.static_values.get_slice(libs_container.elements) {
+            let lib_ref_struct = self.static_values.get(*lib_ref_value_id).as_struct().unwrap();
+            let lib_ref_fields = self.static_values.get_slice(lib_ref_struct.fields);
+            let name = self.static_values.get(lib_ref_fields[0]).as_string().unwrap();
+            let link_type_u8 =
+                self.static_values.get(lib_ref_fields[1]).as_enum().unwrap().1.as_u8().unwrap();
+            let link_type = match link_type_u8 {
+                0 => LibRefLinkType::Default,
+                1 => LibRefLinkType::Static,
+                2 => LibRefLinkType::Dynamic,
+                _ => panic!("Bad value for link-kind enum"),
+            };
+            libs.push(LibRef { name, link_type })
+        }
+
+        let link_args_container = *self.static_values.get(fields[3]).as_container().unwrap();
+        let mut link_args = vec![];
+        for link_arg in self.static_values.get_slice(link_args_container.elements) {
+            link_args.push(self.static_values.get(*link_arg).as_string().unwrap());
+        }
+
+        let multithreading = self.static_values.get(fields[4]).as_boolean().unwrap();
+
+        Ok(Some((
+            ModuleManifest { kind, deps, multithreading, libs, link_args },
+            ParsedId::Function(manifest_fn_id),
+        )))
     }
 
     fn compile_pattern_to_type(
@@ -19848,6 +19854,7 @@ impl TypedProgram {
         module_root_parsed_namespace: ParsedNamespaceId,
         manifest: ModuleManifest,
         home_dir: PathBuf,
+        manifest_fn_defn: Option<ParsedId>,
     ) -> anyhow::Result<ModuleId> {
         self.module_in_progress = Some(module_id);
         let is_core = module_id == MODULE_ID_CORE;
@@ -19899,9 +19906,11 @@ impl TypedProgram {
             }
         }
 
-        let skip_defns = match pre_ns_id {
-            None => &[][..],
-            Some(id) => &[id],
+        let skip_defns = match (pre_ns_id, manifest_fn_defn)  {
+            (None, None) => &[][..],
+            (None, Some(id)) => &[id],
+            (Some(id), None) => &[id],
+            (Some(id1), Some(id2)) => &[id1, id2],
         };
 
         self.run_all_phases_on_ns(module_root_parsed_namespace, module_id, skip_defns)?;

@@ -8,8 +8,6 @@
 // re-hashes keys. Hash values 0 and 1 are reserved to mark empty and
 // tombstone slots; real hashes are nudged out of that range.
 
-let MODULE_INFO: k1/module-manifest = zeroed()
-
 ability hash {
   fn hash(self): u64
 }

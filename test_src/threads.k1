@@ -1,9 +1,10 @@
 use core/arena
 
-let MODULE_INFO: k1/module-manifest = zeroed().with(.{
-  multithreading = true,
-  kind = :executable,
-})
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.multithreaded()
+  m
+}
 
 let mutable tls myvar: i32 = 0
 

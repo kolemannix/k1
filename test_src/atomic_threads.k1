@@ -1,10 +1,11 @@
 use core/arena
 use atomic/cell
 
-let MODULE_INFO: k1/module-manifest = zeroed().with(.{
-  multithreading = true,
-  kind = :executable,
-})
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.multithreaded()
+  m
+}
 
 let N_THREADS: u64 = 4
 let N_ITERS: u64 = 10000
