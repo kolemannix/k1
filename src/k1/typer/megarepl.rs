@@ -227,7 +227,7 @@ impl TypedProgram {
             .ast
             .idents
             .intern(format!("{}_repl_cell_{}.{}.k1", self.program_name(), cell_id, iteration));
-        let directory = self.ast.idents.intern(&self.config.out_dir);
+        let directory = self.config.out_dir;
         let source_id =
             self.ast.sources.add_file(crate::parse::SourceFile::make(directory, filename, code));
         source_id

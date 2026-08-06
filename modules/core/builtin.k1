@@ -601,12 +601,26 @@ ns k1 {
     link-type: link-kind,
   }
 
+  // A parsed expression id captured by the compiler; 0 = none
+  // claude: Lets kill this alias and lean on the field name; params-expr-id instead of params
+  type alias parsed-expr = u64
+
+  type dep-entry = { name: string, params: parsed-expr }
+
+  type setup-decl = {
+    outputs: list[string],
+    inputs: list[string],
+  }
+
+  type setup-ctx = { module-dir: string }
+
   type module = {
     kind: opt[module-kind],
-    deps: list[string],
+    deps: list[dep-entry],
     libs: list[library-ref],
     link-args: list[string],
     multithreading: bool,
+    setup: opt[setup-decl],
   }
 
   ns for module {
@@ -617,6 +631,7 @@ ns k1 {
         libs = list/empty(),
         link-args = list/empty(),
         multithreading = false,
+        setup = :none,
       }
     }
 
@@ -635,6 +650,13 @@ ns k1 {
     }
 
     fn dep(self: *mut module, name: string) {
+      self.add-dep(name, 0)
+    }
+
+    // The compiler rewrites `m.dep(name, .{ ... })` to target this fn, passing the
+    // captured params expression id; not meant to be called directly
+    // claude: this function's name should be more hidden and hard to call, add-dep-internal-impl or something
+    fn add-dep(self: *mut module, name: string, params: parsed-expr) {
       if name.is-empty() { crash("empty dep name") }
       if not name.get(0).is-ascii-lower() {
         crash("invalid dep name '$name': dep names start with a lowercase ascii letter")
@@ -645,8 +667,8 @@ ns k1 {
           crash("invalid dep name '$name': dep names contain only lowercase ascii letters, digits, '-' and '_'")
         }
       }
-      for self.deps { if it == name { crash("duplicate dep '$name'") } }
-      self.deps.push(name)
+      for self.deps { if it.name == name { crash("duplicate dep '$name'") } }
+      self.deps.push(.{ name, params })
     }
 
     fn lib(self: *mut module, name: string, link-type: link-kind) {
@@ -655,6 +677,15 @@ ns k1 {
 
     fn link-args(self: *mut module, args: span[string]) {
       for args { self.link-args.push(it) }
+    }
+
+    fn setup(self: *mut module, outputs: span[string], inputs: span[string]) {
+      if self.setup.is-some() { crash("module setup declared twice") }
+      let o: list[string] = list/with-capacity(outputs.len())
+      for outputs { o.push(it) }
+      let i: list[string] = list/with-capacity(inputs.len())
+      for inputs { i.push(it) }
+      self.setup = :some(.{ outputs = o, inputs = i })
     }
   }
 

@@ -40,7 +40,8 @@ fn run() -> anyhow::Result<ExitCode> {
     let Ok(mut program) = compiler::compile_program(&args) else {
         return Ok(ExitCode::FAILURE);
     };
-    if args.command.is_check() {
+    if args.command.is_check() || matches!(args.command, Command::Setup { .. }) {
+        // Setup runs as a module-load gate, so a successful compile means setup ran.
         // In release builds, just exit fast
         if cfg!(debug_assertions) {
             return Ok(ExitCode::SUCCESS);
@@ -60,16 +61,24 @@ fn run() -> anyhow::Result<ExitCode> {
             Command::Build { .. } => Ok(ExitCode::SUCCESS),
             Command::Run { .. } => {
                 info!("run executable: {}", cg.name());
-                let home_dir = &cg.k1.config.home_dir;
-                let out_dir = &cg.k1.config.out_dir;
-                compiler::run_compiled_program(out_dir, home_dir, cg.name(), false);
+                compiler::run_compiled_program(
+                    &cg.k1.ast.idents,
+                    cg.k1.config.out_dir,
+                    cg.k1.config.home_dir,
+                    cg.name(),
+                    false,
+                );
                 Ok(ExitCode::SUCCESS)
             }
             Command::Test { .. } => {
                 info!("test executable: {}", cg.name());
-                let home_dir = &cg.k1.config.home_dir;
-                let out_dir = &cg.k1.config.out_dir;
-                let exit_code = compiler::run_compiled_program(out_dir, home_dir, cg.name(), true);
+                let exit_code = compiler::run_compiled_program(
+                    &cg.k1.ast.idents,
+                    cg.k1.config.out_dir,
+                    cg.k1.config.home_dir,
+                    cg.name(),
+                    true,
+                );
                 if exit_code != Some(0) { Ok(ExitCode::FAILURE) } else { Ok(ExitCode::SUCCESS) }
             }
             Command::Repl { .. } => {
@@ -85,6 +94,7 @@ fn run() -> anyhow::Result<ExitCode> {
                 }
             }
             Command::Server { .. } => unreachable!("server runs before codegen"),
+            Command::Setup { .. } => unreachable!("setup exits after compile"),
         },
         Err(err) => {
             eprintln!("Codegen error: {err}");

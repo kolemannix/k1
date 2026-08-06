@@ -1,0 +1,40 @@
+// Compiles the vendored llhttp release C (v9.4.1, generated once from the
+// nodejs/llhttp repo) into libs/libllhttp.a and regenerates the llhttp
+// bindings. Runs in the compile-time VM with cwd = the module dir; needs cc
+// and k1bindgen on PATH.
+use std/process
+
+fn run(program: string, args: span[string]) {
+  // claude: why do we need this 'run' function here? Something is probably wrong with process/run-command's signature
+  //         We've already called .get() (.!), why are we _also_ checking succeeded? could we add a convenience wrapper for successful commands?
+  //         and puts failures in the error channel of the result[]?
+  let r = process/run-command(program, args, :inherit).!
+  if not r.succeeded() { crash("setup command failed: $program") }
+}
+
+fn setup(ctx: k1/setup-ctx) {
+  run("mkdir", ["-p", "libs", "generated", ".k1-out/llhttp"])
+
+  for ["llhttp", "api", "http"] {
+    run("cc", ["-O2", "-Ivendor", "-c", "vendor/${it}.c", "-o", ".k1-out/llhttp/${it}.o"])
+  }
+  run("/bin/sh", ["-c", "ar rcs libs/libllhttp.a .k1-out/llhttp/*.o"])
+
+  let args: list[string] = [
+    "-in-path", "vendor/llhttp.h",
+    "-out-path", "generated/llhttp.k1",
+    "-lib-name", "llhttp",
+    "+strip-prefix", "llhttp_",
+    "+strip-prefix", "HTTP_",
+    "+strip-suffix", "_t",
+  ]
+  // The host SDK, for system headers
+  if k1/os-macos {
+    let sdk = process/run("/bin/sh", ["-c", "printf %s $(xcrun --sdk macosx --show-sdk-path)"]).!
+    args.push("+clangarg")
+    args.push("-isysroot")
+    args.push("+clangarg")
+    args.push(sdk.output)
+  }
+  run("k1bindgen", args.as-span())
+}

@@ -27,6 +27,11 @@ fn test() {
   assert(dropped.succeeded())
   assert-equals(dropped.output, "")
 
+  // :inherit streams to our stdout/stderr; nothing is captured
+  let inherited = process/run-command("true", [], :inherit).!
+  assert(inherited.succeeded())
+  assert-equals(inherited.output, "")
+
   // Output larger than the pipe buffer exercises the read loop
   let big = process/sh("head -c 131072 /dev/zero | tr '\\0' 'a'").!
   assert(big.succeeded())

@@ -27,25 +27,32 @@
     let fa = fa-buf.data.as[ptr]
     let _ = posix/posix_spawn_file_actions_init(fa)
 
+    // :inherit leaves stdout/stderr alone (child-out < 0 = no redirection)
     let pipe-fds = buffer/allocate-in[i32](context :tmp)(2)
-    let child-out: i32 = if mode is :capture {
-      if posix/pipe(pipe-fds.data.as[ptr]) != 0 {
-        let _ = posix/posix_spawn_file_actions_destroy(fa)
-        return :err "pipe failed: ${libc/errno-k1-string()}"
+    let child-out: i32 = mode is {
+      :inherit -> -1,
+      :capture -> {
+        if posix/pipe(pipe-fds.data.as[ptr]) != 0 {
+          let _ = posix/posix_spawn_file_actions_destroy(fa)
+          return :err "pipe failed: ${libc/errno-k1-string()}"
+        }
+        pipe-fds.get(1)
+      },
+      :drop -> {
+        let dev-null = posix/open("/dev/null".to-c-tmp().ptr, posix/O_WRONLY)
+        if dev-null < 0 {
+          let _ = posix/posix_spawn_file_actions_destroy(fa)
+          return :err "open /dev/null failed: ${libc/errno-k1-string()}"
+        }
+        dev-null
       }
-      pipe-fds.get(1)
-    } else {
-      let dev-null = posix/open("/dev/null".to-c-tmp().ptr, posix/O_WRONLY)
-      if dev-null < 0 {
-        let _ = posix/posix_spawn_file_actions_destroy(fa)
-        return :err "open /dev/null failed: ${libc/errno-k1-string()}"
-      }
-      dev-null
     }
 
-    let _ = posix/posix_spawn_file_actions_adddup2(fa, child-out, 1)
-    let _ = posix/posix_spawn_file_actions_adddup2(fa, child-out, 2)
-    let _ = posix/posix_spawn_file_actions_addclose(fa, child-out)
+    if child-out >= 0 {
+      let _ = posix/posix_spawn_file_actions_adddup2(fa, child-out, 1)
+      let _ = posix/posix_spawn_file_actions_adddup2(fa, child-out, 2)
+      let _ = posix/posix_spawn_file_actions_addclose(fa, child-out)
+    }
     if mode is :capture {
       let _ = posix/posix_spawn_file_actions_addclose(fa, pipe-fds.get(0))
     }
@@ -60,7 +67,7 @@
       posix/environ-ptr()
     )
     let _ = posix/posix_spawn_file_actions_destroy(fa)
-    let _ = posix/close(child-out)
+    if child-out >= 0 { let _ = posix/close(child-out) }
     if spawn-rc != 0 {
       if mode is :capture { let _ = posix/close(pipe-fds.get(0)) }
       return :err "spawn '$program' failed: ${libc/strerror-string(spawn-rc)}"
@@ -118,11 +125,11 @@
 
 ns process {
 
-  // No inherit mode: this is about running short-lived commands, not spawning
-  // long-running processes
-  type output-mode = either { drop, capture }
+  // :inherit streams the child's stdout/stderr to ours (output is empty)
+  type output-mode = either { drop, capture, inherit }
 
-  // signal == 0 means normal exit; when killed by a signal, exit-code is -1
+  // signal == 0 means normal exit; when killed by a signal, exit-code is -1;
+  // output is empty for :drop and :inherit
   type run-output = { exit-code: i32, signal: i32, output: string }
 
   ns for run-output {

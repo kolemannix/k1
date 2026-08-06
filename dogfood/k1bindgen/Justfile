@@ -19,17 +19,6 @@ install:
   rm ~/.k1/bin/k1bindgen
   cp .k1-out/k1bindgen ~/.k1/bin/k1bindgen
 
-http: build
-  .k1-out/k1bindgen \
-    -n http \
-    -i http/httpserver.h \
-    -clangarg -xc \
-    -clangarg -DKQUEUE \
-    -clangarg -isysroot \
-    -clangarg  $(xcrun --sdk macosx --show-sdk-path) \
-    -clangarg -Ihttp/ \
-    > /Users/knix/dev/k1/dogfood/http/http.k1
-
 libclang: build
   .k1-out/k1bindgen -n libclang > libclang_auto.k1.wip
 
@@ -38,7 +27,6 @@ kqueue: build
     -clangarg -isysroot \
     -clangarg $(xcrun --sdk macosx --show-sdk-path) \
     > kqueue/kqueue.k1
-  cp kqueue/kqueue.k1 /Users/knix/dev/k1/dogfood/http/kqueue.k1
 
 kqueue-lite: build
   .k1-out/k1bindgen -system true -n kqueue -i kqueue/kqueue_bindings.c \
@@ -46,7 +34,6 @@ kqueue-lite: build
     -clangarg -isysroot \
     -clangarg $(xcrun --sdk macosx --show-sdk-path) \
     > kqueue/kqueue.k1
-  cp kqueue/kqueue.k1 /Users/knix/dev/k1/dogfood/http/kqueue.k1
 
 io_uring-linux: build
   .k1-out/k1bindgen -system true -n io_uring -i io_uring/io_uring_bindings.c \

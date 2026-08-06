@@ -1,0 +1,9 @@
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.dep("prova")
+  m.dep("provb")
+  m
+}
+
+fn main(): i32 { 0 }
+//errmsg: Conflicting values for parameter 'backlog' of module 'cfglib'

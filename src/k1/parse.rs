@@ -1510,6 +1510,10 @@ impl ParsedExpressionPool {
         self.expressions.get(id)
     }
 
+    pub fn get_opt(&self, id: ParsedExprId) -> Option<&ParsedExpr> {
+        self.expressions.get_opt(id)
+    }
+
     pub fn get_span(&self, id: ParsedExprId) -> SpanId {
         self.get(id).get_span()
     }

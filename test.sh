@@ -19,6 +19,9 @@ export RUST_LOG=info
 target/debug/k1 --emit-llvm build dogfood/refchess
 target/debug/k1 --emit-llvm build dogfood/profiling
 target/debug/k1             test  dogfood/k1bindgen
+# Exercises the module system end-to-end: deps (http -> libuv), setup steps
+# (cmake/cc/k1bindgen on first compile of a machine), cross-module linking
+K1_HOME=$(pwd) target/debug/k1 build dogfood/httpapp
 
 if rg --type-add 'k1:*.k1' -c 'nocommit' -t rust -t c -t k1 .
 then

@@ -128,6 +128,8 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         target: None,
         chatty: false,
         optimize_ir: true,
+        setup_disabled: false,
+        k1_home_override: None,
         command: Command::Build { file: path.as_ref().to_owned() },
     };
     let compile_result = compiler::compile_program(&args);
@@ -208,9 +210,10 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                         }
                     }
                 } else {
-                    let mut run_cmd = std::process::Command::new(k1::kpath::join(
-                        &codegen.k1.config.out_dir,
-                        &name,
+                    let mut run_cmd = std::process::Command::new(k1::kpath::join_buf(
+                        &codegen.k1.ast.idents,
+                        codegen.k1.config.out_dir,
+                        name.as_str(),
                     ));
                     let run_result = run_cmd.output();
                     match run_result {

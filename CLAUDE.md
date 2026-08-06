@@ -111,6 +111,11 @@ Before nontrivial work, read:
   `bitwise.k1`: core utility types/abilities.
 - `modules/core/ffc.h.k1` and `modules/core/libs/`: C runtime support, fast-float
   bridge, `k1rt.c`, and static/shared runtime libraries.
+- `modules/libuv/`: libuv wrapper module (vendored release source in vendor/,
+  cmake setup-built libs/libuv.a, bindgen-generated uv/net bindings in
+  generated/, uv_ext abilities).
+- `modules/http/`: http framework module (dep on libuv; vendored llhttp C in
+  vendor/, setup-built libs/libllhttp.a; response/routing/sse/task/work).
 - `modules/std/bitfield.k1`: metaprogrammed bitfield generation.
 - `modules/std/hash.k1`: the `hash` ability, `map`, and `set`.
 - `modules/std/json.k1`: JSON parser/model.

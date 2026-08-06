@@ -7,9 +7,10 @@ use std::io::{IsTerminal, Write};
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
+use crate::kmem::{MStr, Mem};
 use crate::kpath;
-use crate::parse::{StringId, write_source_location};
-use crate::typer::{LibRefLinkType, MessageLevel, TypedProgram};
+use crate::parse::{IdentPool, StringId, write_source_location};
+use crate::typer::{LibRefLinkType, MemTmp, MessageLevel, TypedProgram};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
 use log::error;
@@ -90,6 +91,13 @@ impl Target {
             Target::Wasm64 => TargetOs::Wasm,
         }
     }
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            Target::LinuxIntel64 => "linux-intel64",
+            Target::MacOsArm64 => "macos-arm64",
+            Target::Wasm64 => "wasm64",
+        }
+    }
     pub fn arch(&self) -> Arch {
         match self {
             Target::LinuxIntel64 => Arch::Intel,
@@ -129,27 +137,29 @@ pub fn detect_simd_bytes(target: Target) -> u32 {
 
 pub const LIBS_DIR_NAME: &str = "libs";
 
-pub fn logical_name_to_lib_filename(
+fn logical_name_to_lib_filename(
+    idents: &IdentPool,
+    mem: &mut Mem<MemTmp>,
     module_libs_dir: &str,
     target_os: TargetOs,
     link_type: LibRefLinkType,
     logical_name: &str,
-) -> String {
+) -> MStr<MemTmp> {
     match (target_os, link_type) {
         (TargetOs::Linux, LibRefLinkType::Static) => {
-            kpath::join(module_libs_dir, &format!("lib{logical_name}.a"))
+            kpath::join_tmp(mem, idents, module_libs_dir, format_args!("lib{logical_name}.a"))
         }
         (TargetOs::Linux, LibRefLinkType::Dynamic) => {
-            kpath::join(module_libs_dir, &format!("lib{logical_name}.so"))
+            kpath::join_tmp(mem, idents, module_libs_dir, format_args!("lib{logical_name}.so"))
         }
-        (TargetOs::Linux, LibRefLinkType::Default) => logical_name.to_string(),
+        (TargetOs::Linux, LibRefLinkType::Default) => mem.push_str(logical_name),
         (TargetOs::MacOs, LibRefLinkType::Static) => {
-            kpath::join(module_libs_dir, &format!("lib{logical_name}.a"))
+            kpath::join_tmp(mem, idents, module_libs_dir, format_args!("lib{logical_name}.a"))
         }
         (TargetOs::MacOs, LibRefLinkType::Dynamic) => {
-            kpath::join(module_libs_dir, &format!("lib{logical_name}.dylib"))
+            kpath::join_tmp(mem, idents, module_libs_dir, format_args!("lib{logical_name}.dylib"))
         }
-        (TargetOs::MacOs, LibRefLinkType::Default) => logical_name.to_string(),
+        (TargetOs::MacOs, LibRefLinkType::Default) => mem.push_str(logical_name),
         // In Windows we'd skip the 'lib' prefix and add extension dll or lib
         (TargetOs::Wasm, _) => {
             panic!("Dynamic libraries are not supported on the wasm target")
@@ -189,6 +199,15 @@ pub enum Command {
         /// File
         file: PathBuf,
     },
+    /// Run a module's setup step (setup.k1) if stale
+    #[clap()]
+    Setup {
+        /// Module directory
+        file: PathBuf,
+        /// Re-run the module's setup even if fresh
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
 }
 
 impl Command {
@@ -200,6 +219,7 @@ impl Command {
             Command::Test { file } => file,
             Command::Repl { file } => file,
             Command::Server { file } => file,
+            Command::Setup { file, .. } => file,
         }
     }
 
@@ -272,6 +292,16 @@ pub struct Args {
     #[arg(long)]
     pub target: Option<Target>,
 
+    /// Internal: disables setup; set for the nested compile of a setup.k1
+    /// program so setup trees never run setups themselves
+    #[arg(skip)]
+    pub setup_disabled: bool,
+
+    /// Internal: nested compiles inherit the outer compile's k1 home instead of
+    /// re-deriving it from the environment
+    #[arg(skip)]
+    pub k1_home_override: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -282,12 +312,29 @@ impl Args {
     }
 }
 
-/// All paths are canonical UTF-8 strings; see kpath
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupMode {
+    /// Run stale setup steps at module load (default)
+    Normal,
+    /// Never run setup steps (the nested compile of a setup.k1 program)
+    Disabled,
+    /// `k1 setup`: run the gates during load, then stop before the primary
+    /// tree typechecks; force treats the primary module's setup as stale
+    SetupOnly { force: bool },
+}
+
+impl SetupMode {
+    pub fn is_setup_only(&self) -> bool {
+        matches!(self, SetupMode::SetupOnly { .. })
+    }
+}
+
+/// All paths are canonical UTF-8 strings interned in the ident pool; see kpath
 #[derive(Debug, Clone)]
 pub struct CompilerConfig {
-    pub src_path: String,
-    pub home_dir: String,
-    pub k1_home: String,
+    pub src_path: StringId,
+    pub home_dir: StringId,
+    pub k1_home: StringId,
     pub is_test_build: bool,
     pub no_std: bool,
     pub target: Target,
@@ -296,11 +343,12 @@ pub struct CompilerConfig {
     pub debug: bool,
     pub sanitize: bool,
     pub filc: bool,
-    pub out_dir: String,
-    pub out_dir_generated: String,
+    pub out_dir: StringId,
+    pub out_dir_generated: StringId,
     pub optimize: bool,
     pub chatty: bool,
     pub optimize_ir: bool,
+    pub setup_mode: SetupMode,
     pub lsp: LspCompileOptions,
 }
 
@@ -379,6 +427,12 @@ fn read_source_file(path: String, override_content: Option<String>) -> Result<So
     Ok(SourceFile { path, content, content_hash })
 }
 
+/// kpath joins are UTF-8 by construction; recover the String when a join must
+/// cross a thread boundary as owned data
+fn pathbuf_into_string(p: PathBuf) -> String {
+    p.into_os_string().into_string().unwrap()
+}
+
 pub struct ModuleRootHandle {
     /// canonicalized module path (dir or single file)
     pub src_path: String,
@@ -392,29 +446,31 @@ impl ModuleRootHandle {
     /// core_module=true must be passed for (exactly) the corelib module, whose root
     /// file is builtin.k1
     pub fn spawn(
-        src_path: &str,
+        idents: &IdentPool,
+        src_path: &Path,
         core_module: bool,
         source_overrides: &fxhash::FxHashMap<String, String>,
     ) -> anyhow::Result<ModuleRootHandle> {
         let src_path = kpath::canonicalize(src_path)
-            .map_err(|e| anyhow::anyhow!("Error loading module '{src_path}': {e}"))?;
+            .map_err(|e| anyhow::anyhow!("Error loading module '{}': {e}", src_path.display()))?;
         let (is_dir, module_dir) = module_home_from_src_path(&src_path);
         let root_path = if !is_dir {
             src_path.clone()
         } else if core_module {
-            let builtin = kpath::join(&module_dir, "builtin.k1");
-            if !Path::new(&builtin).is_file() {
+            let builtin = kpath::join_buf(idents, module_dir.as_str(), "builtin.k1");
+            if !builtin.is_file() {
                 bail!("corelib module must contain builtin.k1");
             }
-            builtin
+            pathbuf_into_string(builtin)
         } else {
             let module_name = kpath::file_name(&src_path);
-            let module_root = kpath::join(&module_dir, "module.k1");
-            let named_root = kpath::join(&module_dir, &format!("{module_name}.k1"));
-            if Path::new(&module_root).is_file() {
-                module_root
-            } else if Path::new(&named_root).is_file() {
-                named_root
+            let module_root = kpath::join_buf(idents, module_dir.as_str(), "module.k1");
+            let named_root =
+                kpath::join_buf(idents, module_dir.as_str(), format_args!("{module_name}.k1"));
+            if module_root.is_file() {
+                pathbuf_into_string(module_root)
+            } else if named_root.is_file() {
+                pathbuf_into_string(named_root)
             } else {
                 bail!(
                     "Directory module '{module_name}' has no root file: create module.k1 or {module_name}.k1"
@@ -452,26 +508,45 @@ pub struct ModuleRemainingSources {
 }
 
 impl ModuleRemainingSources {
+    pub fn is_dir(&self) -> bool {
+        self.is_dir
+    }
+
     pub fn spawn_read(
         self,
+        idents: &IdentPool,
         source_overrides: &fxhash::FxHashMap<String, String>,
     ) -> ModuleRemainingSourcesHandle {
         let overrides = source_overrides.clone();
+        // Joined before the spawn: the ident pool must not cross the thread boundary
+        let generated_dir = kpath::join_buf(idents, self.module_dir.as_str(), "generated");
         let reader = std::thread::spawn(move || {
             if !self.is_dir {
                 return Ok(vec![]);
             }
-            let mut files = fs::read_dir(Path::new(&self.module_dir))
-                .map_err(|e| format!("Failed to list module dir {}: {e}", self.module_dir))?
-                .filter_map(|item| item.ok())
-                .filter(|item| item.path().extension().is_some_and(|ext| ext == "k1"))
-                .map(|item| {
-                    item.path().into_os_string().into_string().map_err(|s| {
-                        format!("Source file name is not valid UTF-8: {}", s.to_string_lossy())
+            // Module sources live at the top level plus the generated/ convention
+            // dir (where setup steps emit source)
+            let list_k1_files = |dir: &Path| -> Result<Vec<String>, String> {
+                let entries = match fs::read_dir(dir) {
+                    Ok(entries) => entries,
+                    Err(e) => return Err(format!("Failed to list module dir {}: {e}", dir.display())),
+                };
+                entries
+                    .filter_map(|item| item.ok())
+                    .filter(|item| item.path().extension().is_some_and(|ext| ext == "k1"))
+                    .map(|item| {
+                        item.path().into_os_string().into_string().map_err(|s| {
+                            format!("Source file name is not valid UTF-8: {}", s.to_string_lossy())
+                        })
                     })
-                })
-                .collect::<Result<Vec<String>, String>>()?;
-            files.retain(|p| *p != self.root_path);
+                    .collect()
+            };
+            let mut files = list_k1_files(Path::new(&self.module_dir))?;
+            if generated_dir.is_dir() {
+                files.extend(list_k1_files(&generated_dir)?);
+            }
+            // setup.k1 is the module's standalone setup program, not module source
+            files.retain(|p| *p != self.root_path && kpath::file_name(p) != "setup.k1");
             files.sort();
             files
                 .into_iter()
@@ -504,6 +579,211 @@ fn content_hash64(bytes: &[u8]) -> u64 {
     let mut h = fxhash::FxHasher64::default();
     h.write(bytes);
     h.finish()
+}
+
+pub struct SetupRequest<'a> {
+    pub idents: &'a IdentPool,
+    pub module_dir: StringId,
+    pub module_name: StringId,
+    pub outputs: &'a [StringId],
+    pub inputs: &'a [StringId],
+    pub target: Target,
+    pub k1_home: StringId,
+    pub force: bool,
+    pub chatty: bool,
+}
+
+pub fn run_setup_function(req: &SetupRequest) -> Result<()> {
+    let mut scratch: Mem<()> = Mem::make();
+    let module_name = req.idents.get_string(req.module_name);
+    let setup_k1_path = kpath::join_tmp(&mut scratch, req.idents, req.module_dir, "setup.k1");
+    let setup_src = fs::read_to_string(Path::new(setup_k1_path.as_str())).map_err(|e| {
+        anyhow::anyhow!(
+            "module '{module_name}' declares setup but {setup_k1_path} could not be read: {e}"
+        )
+    })?;
+
+    let fingerprint = setup_fingerprint(req, &mut scratch, &setup_src)?;
+    let setup_out_dir =
+        kpath::join_tmp(&mut scratch, req.idents, req.module_dir, (".k1-out", "setup"));
+    let stamp_path = kpath::join_tmp(&mut scratch, req.idents, setup_out_dir.as_str(), "stamp");
+
+    if !req.force && setup_is_fresh(req, &mut scratch, stamp_path.as_str(), &fingerprint) {
+        return Ok(());
+    }
+
+    fs::create_dir_all(Path::new(setup_out_dir.as_str()))?;
+    let lock_path = kpath::join_tmp(&mut scratch, req.idents, setup_out_dir.as_str(), "lock");
+    let _lock = SetupLock::acquire(lock_path.as_str())?;
+    // Another process may have completed this setup while we waited on the lock
+    if !req.force && setup_is_fresh(req, &mut scratch, stamp_path.as_str(), &fingerprint) {
+        return Ok(());
+    }
+
+    eprintln!("Setting up module '{module_name}' (running {setup_k1_path})...");
+    // Clean slate: outputs must be produced by this run, not inherited from a
+    // previous one, and a failed or partial run must read as stale
+    let _ = fs::remove_file(Path::new(stamp_path.as_str()));
+    for output in req.outputs {
+        let output_path = kpath::join_tmp(&mut scratch, req.idents, req.module_dir, *output);
+        let p = Path::new(output_path.as_str());
+        if p.is_dir() {
+            fs::remove_dir_all(p)?;
+        } else if p.exists() {
+            fs::remove_file(p)?;
+        }
+    }
+    run_setup_program(req, setup_k1_path.as_str())?;
+
+    let outputs = output_manifest(req, &mut scratch).map_err(|e| {
+        anyhow::anyhow!("setup.k1 for module '{module_name}' completed but {e}")
+    })?;
+    fs::write(Path::new(stamp_path.as_str()), format!("{fingerprint}{outputs}"))?;
+    Ok(())
+}
+
+/// Fresh means the whole stamp still holds: the input fingerprint matches and
+/// every declared output hashes to what the last run recorded. A missing or
+/// hand-modified output is simply dirty and reruns setup; version control is
+/// the safety net for edits to generated files.
+fn setup_is_fresh(
+    req: &SetupRequest,
+    scratch: &mut Mem<()>,
+    stamp_path: &str,
+    fingerprint: &str,
+) -> bool {
+    let Ok(existing) = fs::read_to_string(Path::new(stamp_path)) else {
+        return false;
+    };
+    let Ok(outputs) = output_manifest(req, scratch) else {
+        return false;
+    };
+    existing == format!("{fingerprint}{outputs}")
+}
+
+/// The output half of the stamp: every file under every declared output, hashed
+fn output_manifest(req: &SetupRequest, scratch: &mut Mem<()>) -> Result<String> {
+    use std::fmt::Write;
+    let module_dir = req.idents.get_string(req.module_dir);
+    let mut s = String::new();
+    for output in req.outputs {
+        let output_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *output);
+        if !Path::new(output_path.as_str()).exists() {
+            bail!("did not produce declared output '{}'", req.idents.get_string(*output));
+        }
+        let mut matched: Vec<String> = vec![];
+        collect_input_output_files(output_path.as_str(), &mut matched)?;
+        matched.sort();
+        for file in &matched {
+            let content = fs::read(Path::new(file))
+                .map_err(|e| anyhow::anyhow!("failed to read setup output {file}: {e}"))?;
+            let rel = file.strip_prefix(module_dir).unwrap_or(file).trim_start_matches('/');
+            writeln!(s, "output-file: {} {:016x}", rel, content_hash64(&content)).unwrap();
+        }
+    }
+    Ok(s)
+}
+
+fn setup_fingerprint(req: &SetupRequest, scratch: &mut Mem<()>, setup_src: &str) -> Result<String> {
+    use std::fmt::Write;
+    let module_dir = req.idents.get_string(req.module_dir);
+    let get_strings =
+        |ids: &[StringId]| ids.iter().map(|id| req.idents.get_string(*id)).collect::<Vec<_>>();
+    let mut s = String::new();
+    writeln!(s, "k1-setup-stamp v2").unwrap();
+    writeln!(s, "target: {}", req.target.to_str()).unwrap();
+    writeln!(s, "setup.k1: {:016x}", content_hash64(setup_src.as_bytes())).unwrap();
+    writeln!(s, "outputs: {}", get_strings(req.outputs).join("|")).unwrap();
+    writeln!(s, "inputs: {}", get_strings(req.inputs).join("|")).unwrap();
+    let output_paths: Vec<MStr<()>> = req
+        .outputs
+        .iter()
+        .map(|o| kpath::join_tmp(scratch, req.idents, req.module_dir, *o))
+        .collect();
+    for input in req.inputs {
+        let input_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *input);
+        let mut matched: Vec<String> = vec![];
+        collect_input_output_files(input_path.as_str(), &mut matched)?;
+        matched.sort();
+        for file in &matched {
+            if output_paths.iter().any(|o| o.as_str() == file) {
+                continue;
+            }
+            let content = fs::read(Path::new(file))
+                .map_err(|e| anyhow::anyhow!("failed to read setup input {file}: {e}"))?;
+            let rel = file.strip_prefix(module_dir).unwrap_or(file).trim_start_matches('/');
+            writeln!(s, "input-file: {} {:016x}", rel, content_hash64(&content)).unwrap();
+        }
+    }
+    Ok(s)
+}
+
+fn collect_input_output_files(path: &str, out: &mut Vec<String>) -> Result<()> {
+    let p = Path::new(path);
+    if p.is_file() {
+        out.push(path.to_string());
+    } else if p.is_dir() {
+        for entry in fs::read_dir(p)? {
+            let child = entry?.path().into_os_string().into_string().map_err(|s| {
+                anyhow::anyhow!("setup path is not valid UTF-8: {}", s.to_string_lossy())
+            })?;
+            collect_input_output_files(&child, out)?;
+        }
+    } else {
+        bail!("setup input '{path}' does not exist");
+    }
+    Ok(())
+}
+
+/// Advisory lock so concurrent compiles (LSP background + CLI) can't run a
+/// module's setup twice; released when the file handle drops
+struct SetupLock {
+    _file: File,
+}
+
+impl SetupLock {
+    fn acquire(path: &str) -> Result<SetupLock> {
+        let file = File::create(Path::new(path))
+            .map_err(|e| anyhow::anyhow!("failed to create setup lock {path}: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+            if rc != 0 {
+                bail!("failed to lock {path}: {}", std::io::Error::last_os_error());
+            }
+        }
+        Ok(SetupLock { _file: file })
+    }
+}
+
+fn run_setup_program(req: &SetupRequest, setup_k1_path: &str) -> Result<()> {
+    let module_dir = req.idents.get_string(req.module_dir);
+    let args = Args {
+        no_std: false,
+        emit_llvm: false,
+        optimize: false,
+        dump_module: false,
+        dump_idents: false,
+        debug: false,
+        sanitize: false,
+        filc: false,
+        profile: false,
+        chatty: req.chatty,
+        optimize_ir: true,
+        target: Some(req.target),
+        setup_disabled: true,
+        k1_home_override: Some(req.idents.get_string(req.k1_home).to_string()),
+        command: Command::Check { file: PathBuf::from(setup_k1_path) },
+    };
+    let _cwd = CwdGuard::enter(module_dir);
+    let mut program = match compile_program(&args) {
+        Ok(p) => p,
+        Err(CompileProgramError::TyperFailure(_)) => {
+            bail!("setup.k1 failed to compile (errors above)")
+        }
+    };
+    program.run_setup_entry(module_dir)
 }
 
 fn write_program_dump(p: &TypedProgram) {
@@ -576,9 +856,15 @@ pub fn compile_program_ext(
         .unwrap_or_else(|e| panic!("Failed to load source path: {e}"));
 
     let (is_dir, home_dir) = module_home_from_src_path(&src_path);
-    let out_dir = kpath::join(&home_dir, ".k1-out");
-    let out_dir_generated = kpath::join(&out_dir, "generated");
-    std::fs::create_dir_all(Path::new(&out_dir_generated)).unwrap();
+    let module_name =
+        if is_dir { kpath::file_name(&src_path) } else { kpath::file_stem(&src_path) };
+    let mut ast = crate::parse::ParsedProgram::make(module_name.to_string());
+
+    let src_path_id = ast.idents.intern(&src_path);
+    let home_dir_id = ast.idents.intern(&home_dir);
+    let out_dir = kpath::join_id(&ast.idents, &mut ast.mem, home_dir.as_str(), ".k1-out");
+    let out_dir_generated = kpath::join_id(&ast.idents, &mut ast.mem, out_dir, "generated");
+    std::fs::create_dir_all(Path::new(ast.idents.get_string(out_dir_generated))).unwrap();
 
     let use_std = !args.no_std;
 
@@ -595,9 +881,14 @@ pub fn compile_program_ext(
         assert!(!args.sanitize, "--filc and --sanitize are mutually exclusive");
     }
 
-    // Find the installation. env var overrides, otherwise release mode says co-located with the
-    // binary. dev mode says cwd
-    let k1_home_raw = std::env::var("K1_HOME").map(PathBuf::from).unwrap_or_else(|_| {
+    // Find the installation. Nested compiles inherit, env var overrides, otherwise
+    // release mode says co-located with the binary. dev mode says cwd
+    let k1_home_raw = args
+        .k1_home_override
+        .as_ref()
+        .map(PathBuf::from)
+        .or_else(|| std::env::var("K1_HOME").map(PathBuf::from).ok())
+        .unwrap_or_else(|| {
         let current_exe = std::env::current_exe().unwrap();
         let exe_parent = current_exe.parent().unwrap();
         if exe_parent.ends_with("debug") {
@@ -613,27 +904,22 @@ pub fn compile_program_ext(
     if args.chatty {
         eprintln!("using k1 home: {k1_home}");
     }
-    let modules_dir = kpath::join(&k1_home, "modules");
-
-    let corelib_dir = kpath::join(&modules_dir, "core");
-    let stdlib_dir = kpath::join(&modules_dir, "std");
+    let k1_home_id = ast.idents.intern(&k1_home);
+    let corelib_dir = kpath::join_buf(&ast.idents, k1_home.as_str(), ("modules", "core"));
+    let stdlib_dir = kpath::join_buf(&ast.idents, k1_home.as_str(), ("modules", "std"));
 
     // All planned paths are absolute, so spawning before the CwdGuard chdir is safe;
-    // reads overlap TypedProgram::new's ident/scope init and core's typecheck.
-    let core_plan = ModuleRootHandle::spawn(&corelib_dir, true, &lsp.source_overrides);
-    let std_plan = use_std.then(|| ModuleRootHandle::spawn(&stdlib_dir, false, &lsp.source_overrides));
-    let main_plan = ModuleRootHandle::spawn(&src_path, false, &lsp.source_overrides);
-
-    let module_name = if is_dir {
-        kpath::file_name(&src_path).to_string()
-    } else {
-        kpath::file_stem(&src_path).to_string()
-    };
+    // reads overlap the rest of TypedProgram::new (scope/VM init) and core's typecheck.
+    let core_plan = ModuleRootHandle::spawn(&ast.idents, &corelib_dir, true, &lsp.source_overrides);
+    let std_plan =
+        use_std.then(|| ModuleRootHandle::spawn(&ast.idents, &stdlib_dir, false, &lsp.source_overrides));
+    let main_plan =
+        ModuleRootHandle::spawn(&ast.idents, Path::new(&src_path), false, &lsp.source_overrides);
 
     let config = CompilerConfig {
-        src_path: src_path.clone(),
-        home_dir,
-        k1_home,
+        src_path: src_path_id,
+        home_dir: home_dir_id,
+        k1_home: k1_home_id,
         is_test_build: args.command.is_test(),
         no_std: args.no_std,
         target,
@@ -646,12 +932,19 @@ pub fn compile_program_ext(
         optimize: args.optimize,
         chatty: args.chatty,
         optimize_ir: args.optimize_ir,
+        setup_mode: if args.setup_disabled {
+            SetupMode::Disabled
+        } else if let Command::Setup { force, .. } = args.command {
+            SetupMode::SetupOnly { force }
+        } else {
+            SetupMode::Normal
+        },
         lsp,
     };
 
-    let _cwd = CwdGuard::enter(&config.home_dir);
+    let _cwd = CwdGuard::enter(&home_dir);
 
-    let mut k1 = TypedProgram::new(module_name.clone(), config);
+    let mut k1 = TypedProgram::new(ast, config);
 
     let add_result = (|| {
         k1.add_module(core_plan?, false)?;
@@ -688,14 +981,14 @@ pub fn compile_program_ext(
             options.frame_height = 20;
             options.font_size = 10;
 
-            let fname = format!("{}.svg", module_name);
+            let fname = format!("{}.svg", k1.program_name());
             eprintln!("Outputting profile flamegraph to {fname}");
             let file = File::create(fname).unwrap();
             options.reverse_stack_order = false;
             options.direction = pprof::flamegraph::Direction::Inverted;
             report.flamegraph_with_options(file, &mut options).unwrap();
 
-            let fname_rev = format!("{}_reverse.svg", module_name);
+            let fname_rev = format!("{}_reverse.svg", k1.program_name());
             let file_rev = File::create(fname_rev).unwrap();
             options.reverse_stack_order = true;
             options.direction = pprof::flamegraph::Direction::Straight;
@@ -720,7 +1013,8 @@ pub fn write_executable(
 ) -> Result<()> {
     let target = k1.config.target;
     let debug = k1.config.debug;
-    let out_dir = &k1.config.out_dir;
+    let idents = &k1.ast.idents;
+    let out_dir = k1.config.out_dir;
     let optimize = k1.config.optimize;
     let sanitize = k1.config.sanitize;
     let filc = k1.config.filc;
@@ -736,11 +1030,11 @@ pub fn write_executable(
     };
     // Fil-C consumes llvm IR rather than the object file
     let object_name = if filc {
-        kpath::join(out_dir, &format!("{module_name}.ll"))
+        kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("{module_name}.ll"))
     } else {
-        kpath::join(out_dir, &format!("{module_name}.o"))
+        kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("{module_name}.o"))
     };
-    let out_name = kpath::join(out_dir, module_name);
+    let out_name = kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, module_name);
 
     let _macos_version_flag = if target.target_os() == TargetOs::MacOs {
         Some(format!("-mmacosx-version-min={}", MAC_SDK_VERSION))
@@ -781,12 +1075,13 @@ pub fn write_executable(
     }
 
     // Our actual compiled k1 code!
-    build_cmd.arg(object_name);
+    build_cmd.arg(object_name.as_str());
 
     // Linking with libraries.
     // For each module, for each of its libraries, link with it as specified by the link_type
     for module in k1.modules.iter() {
-        let module_libs_dir = kpath::join(k1.ident_str(module.home_dir), LIBS_DIR_NAME);
+        let module_libs_dir =
+            kpath::join_tmp(k1.get_tmp_unsafe(), idents, module.home_dir, LIBS_DIR_NAME);
         if !module.manifest.libs.is_empty() {
             build_cmd.arg(format!("-L{module_libs_dir}"));
         }
@@ -798,7 +1093,9 @@ pub fn write_executable(
             let logical_name =
                 if filc { format!("{logical_name_str}-filc") } else { logical_name_str.into() };
             let filename = logical_name_to_lib_filename(
-                &module_libs_dir,
+                idents,
+                k1.get_tmp_unsafe(),
+                module_libs_dir.as_str(),
                 target.target_os(),
                 lib.link_type,
                 &logical_name,
@@ -807,7 +1104,7 @@ pub fn write_executable(
                 // Link via linker arg, since the name has no extension
                 LibRefLinkType::Default => build_cmd.arg(format!("-l{filename}")),
                 // 'Link' via direct clang arg, since its an exact filepath
-                _ => build_cmd.arg(filename),
+                _ => build_cmd.arg(filename.as_str()),
             };
         }
     }
@@ -815,7 +1112,7 @@ pub fn write_executable(
     build_cmd.args(extra_options);
 
     build_cmd.arg("-o");
-    build_cmd.arg(out_name);
+    build_cmd.arg(out_name.as_str());
 
     log::debug!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;
@@ -843,7 +1140,7 @@ pub fn codegen_module<'ctx, 'module>(
     if args.command.is_test() {
         module_name.push_str("_test");
     };
-    let out_dir = codegen.k1.config.out_dir.clone();
+    let out_dir = codegen.k1.config.out_dir;
 
     if let Err(e) = codegen.codegen_program() {
         let use_color = std::io::stderr().is_terminal();
@@ -875,19 +1172,35 @@ pub fn codegen_module<'ctx, 'module>(
 
     if codegen.k1.config.filc {
         let llvm_text = codegen.emit_llvm_ir_text_filc();
-        let ll_path = kpath::join(&out_dir, &format!("{module_name}.ll"));
-        std::fs::write(Path::new(&ll_path), llvm_text)
+        let ll_path = kpath::join_tmp(
+            codegen.k1.get_tmp_unsafe(),
+            &codegen.k1.ast.idents,
+            out_dir,
+            format_args!("{module_name}.ll"),
+        );
+        std::fs::write(Path::new(ll_path.as_str()), llvm_text)
             .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
     } else {
         if args.emit_llvm {
             let llvm_text = codegen.emit_llvm_ir_text();
-            let mut f = File::create(kpath::join(&out_dir, &format!("{module_name}.ll")))
-                .expect("Failed to create .ll file");
+            let ll_path = kpath::join_tmp(
+                codegen.k1.get_tmp_unsafe(),
+                &codegen.k1.ast.idents,
+                out_dir,
+                format_args!("{module_name}.ll"),
+            );
+            let mut f =
+                File::create(ll_path.as_str()).expect("Failed to create .ll file");
             f.write_all(llvm_text.as_bytes()).unwrap();
         }
 
-        let path = kpath::join(&out_dir, &format!("{module_name}.o"));
-        if codegen.emit_object_file(&path).is_err() {
+        let path = kpath::join_tmp(
+            codegen.k1.get_tmp_unsafe(),
+            &codegen.k1.ast.idents,
+            out_dir,
+            format_args!("{module_name}.o"),
+        );
+        if codegen.emit_object_file(path.as_str()).is_err() {
             bail!("Error writing object file to path: {path}");
         }
     }
@@ -909,7 +1222,7 @@ mod compiler_test {
         });
         let root = env!("CARGO_MANIFEST_DIR");
         let dep_file =
-            kpath::canonicalize(kpath::join(root, "test_src/dep_diamond_test/deps/shared/shared.k1"))
+            kpath::canonicalize(Path::new(root).join("test_src/dep_diamond_test/deps/shared/shared.k1"))
                 .unwrap();
         let args = Args {
             no_std: false,
@@ -924,7 +1237,9 @@ mod compiler_test {
             chatty: false,
             optimize_ir: true,
             target: None,
-            command: Command::Check { file: PathBuf::from(kpath::join(root, "test_src/dep_diamond_test")) },
+            setup_disabled: false,
+            k1_home_override: None,
+            command: Command::Check { file: PathBuf::from(root).join("test_src/dep_diamond_test") },
         };
         let mut source_overrides = fxhash::FxHashMap::default();
         source_overrides.insert(dep_file, "fn renamed-base(): int { 21 }\n".to_string());
@@ -935,19 +1250,112 @@ mod compiler_test {
             "an overridden dep source must be compiled in place of the on-disk file"
         );
     }
+
+    #[test]
+    fn setup_gate_runs_once_and_reruns_on_change() {
+        static SET_HOME: std::sync::Once = std::sync::Once::new();
+        SET_HOME.call_once(|| unsafe {
+            std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
+        });
+        let root = env!("CARGO_MANIFEST_DIR");
+        let dir = std::env::temp_dir().join(format!("k1_setup_gate_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let genlib = dir.join("deps/genlib");
+        fs::create_dir_all(&genlib).unwrap();
+        fs::write(
+            dir.join("app.k1"),
+            "fn module(): k1/module {\n  let m = k1/module/new()\n  m.dep(\"genlib\")\n  m\n}\n\
+             fn main(): i32 {\n  assert(genlib/gen-value() == 42)\n  0\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            genlib.join("genlib.k1"),
+            "fn module(): k1/module {\n  let m = k1/module/new()\n  m.setup([\"gen.k1\"], [])\n  m\n}\n",
+        )
+        .unwrap();
+        let setup_src = r#"fn setup(ctx: k1/setup-ctx) {
+  core/files/write-entire-file("${ctx.module-dir}/gen.k1", "fn gen-value(): int { 42 }\n")
+  core/files/write-entire-file("${ctx.module-dir}/witness.txt", "ran\n")
+}
+"#;
+        fs::write(genlib.join("setup.k1"), setup_src).unwrap();
+
+        let args = Args {
+            no_std: false,
+            emit_llvm: false,
+            optimize: false,
+            dump_module: false,
+            dump_idents: false,
+            debug: false,
+            sanitize: false,
+            filc: false,
+            profile: false,
+            chatty: false,
+            optimize_ir: true,
+            target: None,
+            setup_disabled: false,
+            k1_home_override: Some(root.to_string()),
+            command: Command::Check { file: dir.join("app.k1") },
+        };
+
+        assert!(compile_program(&args).is_ok(), "first compile (setup runs) must succeed");
+        let gen_path = genlib.join("gen.k1");
+        let witness_path = genlib.join("witness.txt");
+        let generated = fs::read_to_string(&gen_path).unwrap();
+
+        // A fresh gate must not rerun setup: the sentinel we plant in an
+        // undeclared file survives
+        fs::write(&witness_path, "sentinel\n").unwrap();
+        assert!(compile_program(&args).is_ok(), "second compile (fresh) must succeed");
+        assert_eq!(
+            fs::read_to_string(&witness_path).unwrap(),
+            "sentinel\n",
+            "a fresh setup gate must not rerun setup"
+        );
+
+        // A hand-modified declared output means dirty: setup reruns, regenerating it
+        fs::write(&gen_path, format!("{generated}// tampered\n")).unwrap();
+        assert!(compile_program(&args).is_ok(), "third compile (dirty output) must succeed");
+        assert_eq!(
+            fs::read_to_string(&gen_path).unwrap(),
+            generated,
+            "a modified output must rerun setup"
+        );
+
+        // A deleted declared output likewise
+        fs::remove_file(&gen_path).unwrap();
+        assert!(compile_program(&args).is_ok(), "fourth compile (missing output) must succeed");
+        assert_eq!(fs::read_to_string(&gen_path).unwrap(), generated);
+
+        // Changing setup.k1 content busts the input fingerprint
+        fs::write(&witness_path, "sentinel\n").unwrap();
+        fs::write(genlib.join("setup.k1"), format!("{setup_src}// changed\n")).unwrap();
+        assert!(compile_program(&args).is_ok(), "fifth compile (stale inputs) must succeed");
+        assert_eq!(
+            fs::read_to_string(&witness_path).unwrap(),
+            "ran\n",
+            "a changed setup.k1 must rerun setup"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
 
 // Eventually, we want to return output and exit code to the application
 pub fn run_compiled_program(
-    out_dir: &str,
-    program_home_dir: &str,
+    idents: &IdentPool,
+    out_dir: StringId,
+    program_home_dir: StringId,
     module_name: &str,
     is_test: bool,
 ) -> Option<i32> {
-    let exe_name =
-        format!("{}{}", module_name, if is_test { "_test" } else { "" });
-    let mut run_cmd = std::process::Command::new(kpath::join(out_dir, &exe_name));
-    run_cmd.current_dir(program_home_dir);
+    let exe_path = kpath::join_buf(
+        idents,
+        out_dir,
+        format_args!("{}{}", module_name, if is_test { "_test" } else { "" }),
+    );
+    let mut run_cmd = std::process::Command::new(exe_path);
+    run_cmd.current_dir(idents.get_string(program_home_dir));
     log::debug!("Run Command: {:?}", run_cmd);
     let run_status = run_cmd.status().unwrap();
 

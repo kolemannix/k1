@@ -1,0 +1,4 @@
+let cfg: { backlog: u32, tls: bool } = k1/module-params()
+
+fn backlog(): u32 { cfg.backlog }
+fn tls(): bool { cfg.tls }

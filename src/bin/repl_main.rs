@@ -22,8 +22,9 @@ fn main() -> anyhow::Result<ExitCode> {
     log::set_max_level(log::LevelFilter::Info);
 
     let cwd = std::env::current_dir().unwrap();
-    let name = "repl.k1";
     let mut ast = ParsedProgram::make("repl".to_string());
+    let directory = ast.idents.intern(cwd.to_str().unwrap());
+    let filename = ast.idents.intern("repl.k1");
 
     let mut line = String::with_capacity(1024);
     loop {
@@ -31,11 +32,7 @@ fn main() -> anyhow::Result<ExitCode> {
         let mut tokens = vec![];
         let (file_id, lex_result) = k1::parse::lex_file_into_program(
             &mut ast,
-            SourceFile::make(
-                cwd.to_str().unwrap().to_string().into(),
-                name.to_string(),
-                line.clone(),
-            ),
+            SourceFile::make(directory, filename, line.clone()),
             &mut tokens,
         );
         match lex_result {

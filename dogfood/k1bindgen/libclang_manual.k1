@@ -12,6 +12,9 @@ fn createIndex(
   displayDiagnostics: c-int
 ): CXIndex
 
+extern("clang", "clang_getClangVersion")
+fn getClangVersion(): CXString
+
 type alias c-unsigned = u32
 
 type alias CXUnsavedFile = { filename: *char, contents: *char, length: u64 }

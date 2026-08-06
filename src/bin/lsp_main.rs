@@ -183,12 +183,9 @@ fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast Sour
     let path = url.path();
     debug!("uri_to_source: {}", path);
     let source = ast.sources.iter().find(|s| {
-        let source_path = k1::kpath::join(
-            ast.idents.get_string(s.1.directory),
-            ast.idents.get_string(s.1.filename),
-        );
-        debug!("    source_path: {}", source_path);
-        path == source_path
+        let source_path = k1::kpath::join_buf(&ast.idents, s.1.directory, s.1.filename);
+        debug!("    source_path: {}", source_path.display());
+        Path::new(path) == source_path
     });
     source.map(|s| s.1)
 }
@@ -331,6 +328,8 @@ impl Backend {
             optimize_ir: true,
             target: None,
             filc: false,
+            setup_disabled: false,
+            k1_home_override: None,
             command: k1::compiler::Command::Check {
                 file: root_uri.as_ref().unwrap().path().into(),
             },
@@ -768,6 +767,8 @@ impl LanguageServer for Backend {
             optimize_ir: true,
             target: None,
             filc: false,
+            setup_disabled: false,
+            k1_home_override: None,
             command: k1::compiler::Command::Check { file: root_path },
             dump_idents: false,
         };

@@ -60,8 +60,7 @@ use crate::parse::{
     ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt,
     ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr,
     ParsedTypeExprId, ParsedTypeParam, ParsedUnaryOpKind, ParsedUseId, ParsedVariable,
-    ParsedVariant, ParsedWhileExpr, QIdent, StringId, StructValueField,
-    StructValueFieldKind,
+    ParsedVariant, ParsedWhileExpr, QIdent, StringId, StructValueField, StructValueFieldKind,
 };
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -304,6 +303,9 @@ bitflags! {
         const IsMethodReceiver = 1 << 4;
         /// We are compiling code for compile-time (static) execution
         const Static = 1 << 5;
+        /// Compiling a module manifest (fn module) body; enables the
+        /// dep-params capture special form
+        const ManifestEval = 1 << 6;
     }
 }
 
@@ -357,6 +359,16 @@ impl EvalExprContext {
             flags,
             ..*self
         }
+    }
+
+    #[inline(always)]
+    fn with_manifest_eval(&self) -> EvalExprContext {
+        EvalExprContext { flags: self.flags | EvalExprFlags::ManifestEval, ..*self }
+    }
+
+    #[inline(always)]
+    fn is_manifest_eval(&self) -> bool {
+        self.flags.contains(EvalExprFlags::ManifestEval)
     }
 
     #[inline(always)]
@@ -2542,17 +2554,39 @@ pub struct LibRef {
     pub link_type: LibRefLinkType,
 }
 
+#[derive(Clone, Copy)]
+pub struct DepEntry {
+    pub name: StringId,
+    /// Captured (not evaluated) at manifest typecheck; bound when the dep
+    /// module evaluates its k1/module-params declaration
+    pub params_struct_literal: Option<ParsedExprId>,
+}
+
+#[derive(Clone)]
+pub struct SetupDecl {
+    pub outputs: Vec<StringId>,
+    pub inputs: Vec<StringId>,
+}
+
 pub struct ModuleManifest {
     pub kind: ModuleKind,
-    pub deps: PermSlice<StringId>,
+    pub deps: PermSlice<DepEntry>,
     pub multithreading: bool,
     pub libs: Vec<LibRef>,
     pub link_args: Vec<StringId>,
+    pub setup: Option<SetupDecl>,
 }
 
 impl ModuleManifest {
     fn defaulted(kind: ModuleKind) -> Self {
-        Self { kind, deps: MSlice::empty(), multithreading: false, libs: vec![], link_args: vec![] }
+        Self {
+            kind,
+            deps: MSlice::empty(),
+            multithreading: false,
+            libs: vec![],
+            link_args: vec![],
+            setup: None,
+        }
     }
 }
 
@@ -2564,6 +2598,12 @@ struct LoadedModule {
     remaining: crate::compiler::ModuleRemainingSourcesHandle,
 }
 
+#[derive(Clone, Copy)]
+pub struct ModuleParams {
+    pub schema_type: TypeId,
+    pub value_id: StaticValueId,
+}
+
 pub struct Module {
     pub id: ModuleId,
     pub name: StringId,
@@ -2571,6 +2611,8 @@ pub struct Module {
     pub manifest: ModuleManifest,
     pub namespace_id: NamespaceId,
     pub namespace_scope_id: ScopeId,
+    /// Schema type and merged value of the module's k1/module-params declaration
+    pub params: Option<ModuleParams>,
     /// One entry per source file in compile order
     pub source_file_hashes: Vec<(FileId, u64)>,
 }
@@ -2585,8 +2627,14 @@ impl Module {
             manifest: ModuleManifest::defaulted(ModuleKind::Library),
             namespace_id: NamespaceId::PENDING,
             namespace_scope_id: ScopeId::PENDING,
+            params: None,
             source_file_hashes: vec![],
         }
+    }
+
+    /// The root file (module.k1 / <name>.k1 / the single file) is always parsed first
+    pub fn root_file_id(&self) -> FileId {
+        self.source_file_hashes[0].0
     }
 }
 
@@ -2828,7 +2876,6 @@ pub struct TypedProgram {
 
     /// Interned filename per file, so synthesizing source locations (e.g. for
     /// every assert call) doesn't re-hash the filename string each time
-
     inference_context_stack: Vec<InferenceContext>,
     inference_context_extras: Vec<InferenceContext>,
 
@@ -2944,8 +2991,7 @@ impl Timing {
 }
 
 impl TypedProgram {
-    pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
-        let ast = ParsedProgram::make(program_name);
+    pub fn new(ast: ParsedProgram, config: CompilerConfig) -> TypedProgram {
         let completion = config
             .lsp
             .completion
@@ -3132,6 +3178,10 @@ impl TypedProgram {
         let added_module_id =
             self.load_module_tree(root_handle, primary_module, &mut load_stack, &mut loaded)?;
 
+        if primary_module && self.config.setup_mode.is_setup_only() {
+            return Ok(added_module_id);
+        }
+
         for lm in loaded {
             let module = self.modules.get(lm.module_id);
             let (module_name, home_dir) = (module.name, module.home_dir);
@@ -3159,6 +3209,31 @@ impl TypedProgram {
             }
             self.run_on_module(lm.module_id, lm.parsed_namespace_id, lm.manifest_fn_defn)?;
             self.module_order.push(lm.module_id);
+        }
+
+        // Every parameterized module has bound its params by now (at its own typecheck
+        // turn); a provision whose target never declared k1/module-params is an error
+        let mut unheard: Option<(StringId, StringId, ParsedExprId)> = None;
+        'outer: for m in self.modules.iter() {
+            for entry in self.mem.getn(m.manifest.deps) {
+                if let Some(params_expr) = entry.params_struct_literal {
+                    let target = self.modules.iter().find(|t| t.name == entry.name).unwrap();
+                    if target.params.is_none() {
+                        unheard = Some((m.name, entry.name, params_expr));
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        if let Some((provider_name, target_name, params_expr)) = unheard {
+            let span = self.ast.exprs.get_span(params_expr);
+            let msg = format!(
+                "Module '{}' accepts no parameters (it has no k1/module-params declaration), \
+                 but '{}' provides some",
+                self.ast.idents.get_string(target_name),
+                self.ast.idents.get_string(provider_name),
+            );
+            return Err(self.module_error(span, msg));
         }
 
         #[cfg(feature = "profile")]
@@ -3229,6 +3304,7 @@ impl TypedProgram {
                     link_type: LibRefLinkType::Static,
                 }],
                 link_args: vec![],
+                setup: None,
             };
             (manifest, None)
         } else {
@@ -3276,13 +3352,45 @@ impl TypedProgram {
         let deps = manifest.deps;
         self.modules.get_mut(module_id).manifest = manifest;
 
-        let remaining = remaining_sources.spawn_read(&self.config.lsp.source_overrides);
-
         let manifest_span =
             manifest_fn_defn.map(|d| self.ast.get_span_for_id(d)).unwrap_or(SpanId::NONE);
+
+        let setup_decl = self.modules.get(module_id).manifest.setup.clone();
+        if let Some(setup) = setup_decl
+            && self.config.setup_mode != crate::compiler::SetupMode::Disabled
+        {
+            if !remaining_sources.is_dir() {
+                let msg = "single-file modules cannot declare setup; make it a \
+                           directory module (setup.k1 lives in the module directory)";
+                return Err(self.module_error(manifest_span, msg.to_string()));
+            }
+            let request = crate::compiler::SetupRequest {
+                idents: &self.ast.idents,
+                module_dir: home_dir,
+                module_name,
+                outputs: &setup.outputs,
+                inputs: &setup.inputs,
+                target: self.config.target,
+                k1_home: self.config.k1_home,
+                force: self.config.setup_mode
+                    == (crate::compiler::SetupMode::SetupOnly { force: true })
+                    && primary_module,
+                chatty: self.config.chatty,
+            };
+            if let Err(e) = crate::compiler::run_setup_function(&request) {
+                let msg = format!(
+                    "Setup failed for module '{}': {e:#} ",
+                    self.ast.idents.get_string(module_name),
+                );
+                return Err(self.module_error(manifest_span, msg));
+            }
+        }
+
+        let remaining =
+            remaining_sources.spawn_read(&self.ast.idents, &self.config.lsp.source_overrides);
         let mut dep_handles: Vec<crate::compiler::ModuleRootHandle> = vec![];
         for i in 0..deps.len() {
-            let dep_name_id = self.mem.getn(deps)[i as usize];
+            let dep_name_id = self.mem.getn(deps)[i as usize].name;
             if self.ast.idents.get_string(dep_name_id) == self.program_name() {
                 let msg = format!(
                     "Module '{}' depends on '{}': module name collision with the program itself",
@@ -3305,23 +3413,33 @@ impl TypedProgram {
                 continue;
             }
             let dep_str = self.ast.idents.get_string(dep_name_id);
-            let deps_probe = kpath::join(&kpath::join(&self.config.home_dir, "deps"), dep_str);
-            let modules_probe =
-                kpath::join(&kpath::join(&self.config.k1_home, "modules"), dep_str);
-            let dep_path = if Path::new(&deps_probe).exists() {
-                deps_probe
-            } else if Path::new(&modules_probe).exists() {
-                modules_probe
+            let module_deps_path = kpath::join_tmp(
+                self.get_tmp_unsafe(),
+                &self.ast.idents,
+                self.config.home_dir,
+                ("deps", dep_str),
+            );
+            let k1_home_modules_path = kpath::join_tmp(
+                self.get_tmp_unsafe(),
+                &self.ast.idents,
+                self.config.k1_home,
+                ("modules", dep_str),
+            );
+            let dep_path = if Path::new(module_deps_path.as_str()).exists() {
+                module_deps_path
+            } else if Path::new(k1_home_modules_path.as_str()).exists() {
+                k1_home_modules_path
             } else {
                 let msg = format!(
-                    "Module '{}' depends on '{}', which was not found. Probed: {deps_probe}, {modules_probe}",
+                    "Module '{}' depends on '{}', which was not found. Probed: {module_deps_path}, {k1_home_modules_path}",
                     self.ident_str(module_name),
                     dep_str,
                 );
                 return Err(self.module_error(manifest_span, msg));
             };
             match crate::compiler::ModuleRootHandle::spawn(
-                &dep_path,
+                &self.ast.idents,
+                Path::new(dep_path.as_str()),
                 false,
                 &self.config.lsp.source_overrides,
             ) {
@@ -3518,6 +3636,45 @@ impl TypedProgram {
     pub fn get_namespace_scope(&self, namespace_id: NamespaceId) -> &Scope {
         let scope_id = self.namespaces.get_scope(namespace_id);
         self.scopes.get_scope(scope_id)
+    }
+
+    pub fn run_setup_entry(&mut self, module_dir: &str) -> anyhow::Result<()> {
+        let primary = self
+            .modules
+            .iter()
+            .find(|m| m.manifest.kind == ModuleKind::Executable)
+            .unwrap_or_else(|| self.modules.iter().last().unwrap());
+        let ns_scope = primary.namespace_scope_id;
+        let Some(setup_fn_id) = self.scopes.find_function_local(ns_scope, self.ast.idents.b.setup)
+        else {
+            bail!("setup.k1 must define a top-level `fn setup(ctx: k1/setup-ctx)`");
+        };
+        let setup_ctx_type = self.builtin_types.k1_setup_ctx.unwrap();
+        let function = self.get_function(setup_fn_id);
+        let span = self.ast.get_span_for_id(function.parsed_id);
+        let params = self.mem.getn(self.get_function_type(setup_fn_id).logical_params());
+        if !function.type_params.is_empty()
+            || params.len() != 1
+            || params[0].type_id != setup_ctx_type
+        {
+            let e = self
+                .make_error("fn setup must take exactly one parameter of type k1/setup-ctx", span);
+            self.report(e);
+            bail!("fn setup has the wrong signature");
+        }
+
+        let dir_string_id = self.ast.idents.intern(module_dir);
+        let dir_value = self.static_values.add_string(dir_string_id);
+        let ctx_fields = self.static_values.mem.pushn(&[dir_value]);
+        let ctx_value = self
+            .static_values
+            .add(StaticValue::Struct(StaticStruct { type_id: setup_ctx_type, fields: ctx_fields }));
+        let result = self.execute_static_function(setup_fn_id, &[ctx_value], span);
+        if let Err(e) = result {
+            self.report(e);
+            bail!("fn setup failed");
+        }
+        Ok(())
     }
 
     pub fn get_main_function_id(&self) -> Option<FunctionId> {
@@ -3869,6 +4026,8 @@ impl TypedProgram {
                 self.builtin_types.source_location = Some(type_id)
             } else if name == self.ast.idents.b.module {
                 self.builtin_types.k1_module = Some(type_id)
+            } else if name == self.ast.idents.b.setup_ctx {
+                self.builtin_types.k1_setup_ctx = Some(type_id)
             }
         }
 
@@ -5621,14 +5780,15 @@ impl TypedProgram {
                 .with_expected_type(Some(module_type_id))
                 .with_static_ctx(Some(StaticExecContext {
                     expected_return_type: Some(module_type_id),
-                })),
+                }))
+                .with_manifest_eval(),
             &[],
         )?;
 
         let StaticValue::Struct(value) = self.static_values.get(manifest_result) else {
             self.ice_span(fn_span, "module manifest value was not a struct");
         };
-        let fields: [StaticValueId; 5] =
+        let fields: [StaticValueId; 6] =
             self.static_values.mem.getn(value.fields).try_into().unwrap();
 
         let kind = match self.static_values.get(fields[0]).as_sum().unwrap().payload {
@@ -5650,10 +5810,31 @@ impl TypedProgram {
         };
 
         let deps_container = *self.static_values.get(fields[1]).as_container().unwrap();
-        let mut deps: SV4<StringId> = SmallVec::new();
+        let mut deps: SV4<DepEntry> = SmallVec::new();
         for dep_value_id in self.static_values.get_slice(deps_container.elements) {
-            let dep_string_id = self.static_values.get(*dep_value_id).as_string().unwrap();
-            deps.push(dep_string_id);
+            let entry = self.static_values.get(*dep_value_id).as_struct().unwrap();
+            let entry_fields = self.static_values.get_slice(entry.fields);
+            let name = self.static_values.get(entry_fields[0]).as_string().unwrap();
+            let StaticValue::Int(TypedIntValue::U64(params_raw)) =
+                self.static_values.get(entry_fields[1])
+            else {
+                self.ice_span(fn_span, "dep-entry params was not a u64");
+            };
+            let params_struct_literal = match ParsedExprId::from_u32(*params_raw as u32) {
+                None => None,
+                Some(id) => {
+                    let valid = matches!(self.ast.exprs.get_opt(id), Some(ParsedExpr::Struct(_)));
+                    if !valid {
+                        kbail!(
+                            self,
+                            fn_span,
+                            "Invalid dep params id; must be a struct literal"
+                        );
+                    }
+                    Some(id)
+                }
+            };
+            deps.push(DepEntry { name, params_struct_literal });
         }
         let deps = self.mem.pushn(&deps);
 
@@ -5682,8 +5863,27 @@ impl TypedProgram {
 
         let multithreading = self.static_values.get(fields[4]).as_boolean().unwrap();
 
+        let setup = match self.static_values.get(fields[5]).as_sum().unwrap().payload {
+            None => None,
+            Some(setup_value_id) => {
+                let setup_struct = self.static_values.get(setup_value_id).as_struct().unwrap();
+                let setup_fields = self.static_values.get_slice(setup_struct.fields);
+                let string_list = |field: StaticValueId| -> Vec<StringId> {
+                    let container = *self.static_values.get(field).as_container().unwrap();
+                    self.static_values
+                        .get_slice(container.elements)
+                        .iter()
+                        .map(|id| self.static_values.get(*id).as_string().unwrap())
+                        .collect()
+                };
+                let outputs = string_list(setup_fields[0]);
+                let inputs = string_list(setup_fields[1]);
+                Some(SetupDecl { outputs, inputs })
+            }
+        };
+
         Ok(Some((
-            ModuleManifest { kind, deps, multithreading, libs, link_args },
+            ModuleManifest { kind, deps, multithreading, libs, link_args, setup },
             ParsedId::Function(manifest_fn_id),
         )))
     }
@@ -6972,6 +7172,21 @@ impl TypedProgram {
         let static_value_id = if let ParsedExpr::Builtin(span) = self.ast.exprs.get(value_expr_id) {
             let span = *span;
             self.eval_builtin_global(global_name, scope_id, expected_type_for_execution, span)?
+        } else if let ParsedExpr::Call(call) = self.ast.exprs.get(value_expr_id)
+            && call.name.name == self.ast.idents.b.module_params
+            && {
+                let path = self.ast.mem.getn(call.name.path);
+                path.len() == 1 && path[0].name == self.ast.idents.b.k1
+            }
+        {
+            let (call_span, call_args) = (call.span, call.args);
+            self.bind_module_params(
+                global_id,
+                call_span,
+                call_args,
+                expected_type_for_execution,
+                scope_id,
+            )?
         } else {
             let ctx = EvalExprContext::make(scope_id)
                 .with_expected_type(Some(expected_type_for_execution))
@@ -7048,6 +7263,198 @@ impl TypedProgram {
             s => kbail!(self, span, "Unknown builtin name: {s}"),
         };
         Ok(self.static_values.add(StaticValue::Bool(bool_value)))
+    }
+
+    /// Evaluates a `k1/module-params(<defaults?>)` global initializer: the global's type
+    /// annotation is the module's params schema; each provider's captured params literal
+    /// (see the dep special form) typechecks per-field against the schema here, at the
+    /// module's own typecheck turn, then merges over the defaults. Conflicts are plain
+    /// per-field StaticValueId compares (the pool content-dedups).
+    fn bind_module_params(
+        &mut self,
+        global_id: TypedGlobalId,
+        call_span: SpanId,
+        call_args: AstSlice<ParsedCallArg>,
+        schema_type: TypeId,
+        scope_id: ScopeId,
+    ) -> K1Result<StaticValueId> {
+        let global = self.globals.get(global_id);
+        let global_span = global.span;
+        let global_parent_scope = global.parent_scope;
+        let file_id = self.ast.spans.get(global_span).file_id;
+        let Some(module_id) =
+            self.modules.iter().find(|m| m.root_file_id() == file_id).map(|m| m.id)
+        else {
+            kbail!(
+                self,
+                call_span,
+                "k1/module-params must be declared in the module's root file \
+                 (module.k1 or <module-name>.k1)"
+            );
+        };
+        let module = self.modules.get(module_id);
+        let module_name = module.name;
+        if global_parent_scope != module.namespace_scope_id {
+            kbail!(
+                self,
+                global_span,
+                "k1/module-params must initialize a top-level global of module '{}'",
+                self.ident_str(module_name)
+            );
+        }
+        if module.params.is_some() {
+            kbail!(
+                self,
+                global_span,
+                "Module '{}' already declared its parameters; k1/module-params may \
+                 appear once per module",
+                self.ident_str(module_name)
+            );
+        }
+        let Some(schema_struct) = self.types.get(schema_type).as_struct() else {
+            kbail!(
+                self,
+                global_span,
+                "The type annotation of a k1/module-params global is the params schema \
+                 and must be a struct type"
+            );
+        };
+        let schema_fields: SV8<StructTypeField> =
+            self.mem.getn(schema_struct.fields).iter().copied().collect();
+
+        let args = self.ast.mem.getn(call_args);
+        let defaults: Option<SV8<StaticValueId>> = match args {
+            [] => None,
+            [defaults_arg] => {
+                let defaults_expr = defaults_arg.value;
+                let defaults_span = self.ast.exprs.get_span(defaults_expr);
+                let ctx = EvalExprContext::make(scope_id)
+                    .with_expected_type(Some(schema_type))
+                    .with_static_ctx(Some(StaticExecContext {
+                        expected_return_type: Some(schema_type),
+                    }));
+                let value_id = self.execute_static_expr(defaults_expr, ctx, &[])?;
+                let value_type = self.get_static_value_type(value_id);
+                if let Err(msg) = self.check_types(schema_type, value_type, scope_id) {
+                    kbail!(self, defaults_span, "Type mismatch in params defaults: {msg}");
+                }
+                let StaticValue::Struct(s) = self.static_values.get(value_id) else {
+                    kbail!(
+                        self,
+                        defaults_span,
+                        "params defaults did not evaluate to a struct value"
+                    );
+                };
+                Some(self.static_values.get_slice(s.fields).iter().copied().collect())
+            }
+            _ => kbail!(
+                self,
+                call_span,
+                "k1/module-params takes at most one argument: the defaults struct"
+            ),
+        };
+
+        let mut providers: SV4<(StringId, ParsedExprId)> = smallvec![];
+        for m in self.modules.iter() {
+            for entry in self.mem.getn(m.manifest.deps) {
+                if entry.name == module_name
+                    && let Some(params_expr) = entry.params_struct_literal
+                {
+                    providers.push((m.name, params_expr));
+                }
+            }
+        }
+
+        let mut bound: SV8<Option<(StaticValueId, StringId)>> =
+            smallvec![None; schema_fields.len()];
+        for (provider_name, params_expr) in providers {
+            let ParsedExpr::Struct(s) = self.ast.exprs.get(params_expr) else {
+                self.ice_span(call_span, "captured dep params was not a struct literal");
+            };
+            let literal_fields =
+                self.ast.mem.getn(s.fields);
+            for field in literal_fields {
+                let Some(field_index) = schema_fields.iter().position(|f| f.name == field.name)
+                else {
+                    kbail!(
+                        self,
+                        field.span,
+                        "Module '{}' has no parameter '{}'",
+                        self.ident_str(module_name),
+                        self.ident_str(field.name)
+                    );
+                };
+                let field_type = schema_fields[field_index].type_id;
+                let StructValueFieldKind::Expr(field_expr) = field.value else {
+                    kbail!(
+                        self,
+                        field.span,
+                        "module params must be provided as explicit field values"
+                    );
+                };
+                let ctx = EvalExprContext::make(Scopes::ROOT_SCOPE_ID)
+                    .with_expected_type(Some(field_type))
+                    .with_static_ctx(Some(StaticExecContext {
+                        expected_return_type: Some(field_type),
+                    }));
+                let value_id = self.execute_static_expr(field_expr, ctx, &[])?;
+                let value_type = self.get_static_value_type(value_id);
+                if let Err(msg) = self.check_types(field_type, value_type, Scopes::ROOT_SCOPE_ID) {
+                    kbail!(
+                        self,
+                        field.span,
+                        "Type mismatch for parameter '{}' of module '{}': {}",
+                        self.ident_str(field.name),
+                        self.ident_str(module_name),
+                        msg
+                    );
+                }
+                match bound[field_index] {
+                    None => bound[field_index] = Some((value_id, provider_name)),
+                    Some((existing_id, existing_provider)) => {
+                        if existing_id != value_id {
+                            kbail!(
+                                self,
+                                field.span,
+                                "Conflicting values for parameter '{}' of module '{}': \
+                                 {} (from '{}') vs {} (from '{}')",
+                                field.name,
+                                module_name,
+                                self.static_value_to_string(existing_id),
+                                existing_provider,
+                                self.static_value_to_string(value_id),
+                                provider_name,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut merged: SV8<StaticValueId> = smallvec![];
+        for (i, schema_field) in schema_fields.iter().enumerate() {
+            let value_id = match bound[i] {
+                Some((id, _)) => id,
+                None => match &defaults {
+                    Some(d) => d[i],
+                    None => kbail!(
+                        self,
+                        call_span,
+                        "Missing required parameter '{}' for module '{}'",
+                        self.ident_str(schema_field.name),
+                        self.ident_str(module_name)
+                    ),
+                },
+            };
+            merged.push(value_id);
+        }
+        let fields_slice = self.static_values.mem.pushn(&merged);
+        let merged_id = self
+            .static_values
+            .add(StaticValue::Struct(StaticStruct { type_id: schema_type, fields: fields_slice }));
+        self.modules.get_mut(module_id).params =
+            Some(ModuleParams { schema_type, value_id: merged_id });
+        Ok(merged_id)
     }
 
     fn add_function(&mut self, mut function: TypedFunction) -> FunctionId {
@@ -9710,8 +10117,7 @@ impl TypedProgram {
         let filename = self.ast.idents.get_string(source.filename);
         // The source keeps `content` forever, so size it exactly and move it
         // in; 48 covers the header boilerplate and block wrapper
-        let mut content =
-            String::with_capacity(chunks_len + directory.len() + filename.len() + 48);
+        let mut content = String::with_capacity(chunks_len + directory.len() + filename.len() + 48);
         writeln!(
             &mut content,
             "// generated by #meta block at {}{}{}:{}",
@@ -9783,7 +10189,7 @@ impl TypedProgram {
         let serial = self.emitted_sources.len() + 1;
         let generated_filename =
             self.ast.idents.intern(format!("meta_{stem}_{line_number}_{serial}.k1"));
-        let generated_dir = self.ast.idents.intern(&self.config.out_dir_generated);
+        let generated_dir = self.config.out_dir_generated;
         debug!("Emitted source:\n---\n{content}\n---");
         let source_for_emission = self.ast.sources.add_file(crate::parse::SourceFile::make(
             generated_dir,
@@ -9819,11 +10225,13 @@ impl TypedProgram {
         for emitted in &self.emitted_sources {
             if emitted.has_diagnostic {
                 let source = self.ast.sources.get(emitted.file_id);
-                let path = kpath::join(
-                    self.ast.idents.get_string(source.directory),
-                    self.ast.idents.get_string(source.filename),
+                let path = kpath::join_tmp(
+                    self.get_tmp_unsafe(),
+                    &self.ast.idents,
+                    source.directory,
+                    source.filename,
                 );
-                if let Err(e) = std::fs::write(Path::new(&path), &source.content) {
+                if let Err(e) = std::fs::write(Path::new(path.as_str()), &source.content) {
                     eprintln!("Failed to write out generated metaprogram at {path}. {e}");
                 }
             }
@@ -14896,6 +15304,47 @@ impl TypedProgram {
                 };
             }
         }
+
+        // Special form: during manifest eval, `m.dep(name, .{ ... })` captures the params
+        // struct literal as a ParsedExprId and retargets the call to k1/module/add-dep
+        let callee = 'dep_capture: {
+            if !ctx.is_manifest_eval() {
+                break 'dep_capture callee;
+            }
+            let Some(function_id) = callee.maybe_function_id() else {
+                break 'dep_capture callee;
+            };
+            if self.get_function(function_id).name != self.ast.idents.b.dep {
+                break 'dep_capture callee;
+            }
+            let args = self.ast.mem.getn(fn_call.args);
+            if args.len() != 3 {
+                break 'dep_capture callee;
+            }
+            let module_ns_scope = {
+                let k1_module = self.builtin_types.k1_module.unwrap();
+                let ns_id = self.get_companion_namespace(k1_module).unwrap();
+                self.namespaces.get(ns_id).scope_id
+            };
+            if self.scopes.find_function(module_ns_scope, self.ast.idents.b.dep)
+                != Some(function_id)
+            {
+                break 'dep_capture callee;
+            }
+            let params_arg = args[2].value;
+            let params_span = self.ast.exprs.get_span(params_arg);
+            let ParsedExpr::Struct(_) = self.ast.exprs.get(params_arg) else {
+                kbail!(self, params_span, "dep params must be a struct literal");
+            };
+            let add_dep_id =
+                self.scopes.find_function(module_ns_scope, self.ast.idents.b.add_dep).unwrap();
+            let params_value_id =
+                self.static_values.add_int(TypedIntValue::U64(params_arg.as_u32() as u64));
+            let params_expr =
+                self.exprs.add_static(params_value_id, U64_TYPE_ID, false, params_span);
+            stashed_args.push((params_arg, params_expr));
+            Callee::StaticFunction(add_dep_id)
+        };
 
         // Now that we have resolved to a function id, we need to specialize it if generic
         let callee_function_type_id = self.get_callee_function_type(&callee);
@@ -21349,22 +21798,23 @@ impl TypedProgram {
         }
 
         let lib_name_str = self.ast.idents.get_string(lib_name_ident);
-        let lib_filename = match self.config.target.target_os() {
-            crate::compiler::TargetOs::Linux => format!("lib{lib_name_str}.so"),
-            crate::compiler::TargetOs::MacOs => format!("lib{lib_name_str}.dylib"),
+        let ext = match self.config.target.target_os() {
+            crate::compiler::TargetOs::Linux => "so",
+            crate::compiler::TargetOs::MacOs => "dylib",
             crate::compiler::TargetOs::Wasm => {
                 kbail!(self, span, "Dynamic libraries are not supported on the wasm target");
             }
         };
         debug!("cwd is: {}", std::env::current_dir().unwrap().display());
-        debug!("src_path is: {}", self.config.src_path);
+        debug!("src_path is: {}", self.ast.idents.get_string(self.config.src_path));
 
-        let module_home_dir = self.ast.idents.get_string(self.modules.get(module_id).home_dir);
-        let search_path = kpath::join(
-            &kpath::join(module_home_dir, compiler::LIBS_DIR_NAME),
-            &lib_filename,
+        let search_path = kpath::join_tmp(
+            self.get_tmp_unsafe(),
+            &self.ast.idents,
+            self.modules.get(module_id).home_dir,
+            (compiler::LIBS_DIR_NAME, format_args!("lib{lib_name_str}.{ext}")),
         );
-        if let Some(handle) = self.attempt_dlopen(&search_path) {
+        if let Some(handle) = self.attempt_dlopen(search_path.as_str()) {
             self.vm_dylib_handles.insert((module_id, lib_name_ident), handle);
             return Ok(handle);
         }

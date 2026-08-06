@@ -450,6 +450,8 @@ mod completion_tests {
             optimize_ir: true,
             target: None,
             filc: false,
+            setup_disabled: false,
+            k1_home_override: None,
             command: Command::Check { file: path },
             dump_idents: false,
         };

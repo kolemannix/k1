@@ -31,6 +31,48 @@ fn main(argc: c-int, argv: ptr): i32 {
     0
   }
 }
+type dl-info = { fname: ptr, fbase: ptr, sname: ptr, saddr: ptr }
+extern("dlsym") fn dlsym(handle: ptr, symbol: ptr): ptr
+extern("dladdr") fn dladdr(addr: ptr, info: *dl-info): c-int
+
+fn dirname(path: string): string {
+  let last = -1: i64
+  let i = path.index-of('/')
+  while i >= 0 {
+    last = i
+    i = path.index-of-from('/', i.as[size] + 1)
+  }
+  if last <= 0 "/" else path.take(last.as[size])
+}
+
+// "clang version 21.1.7 (...)" -> "21"
+fn clang-major-version(version-string: string): ?string {
+  for tok in version-string.split-by-char(' ') {
+    if (not tok.is-empty()) and tok.get(0).is-ascii-digit() {
+      return :some tok.split-by-char('.').get(0)
+    }
+  }
+  :none
+}
+
+// libclang is supposed to find its builtin headers (stdbool.h etc.) relative to
+// its own load path, but its dladdr-based lookup yields a relative resource dir
+// here, so nothing resolves. Locate the loaded libclang ourselves and pass
+// -resource-dir explicitly.
+fn clang-resource-dir(): ?string {
+  let rtld-default: i64 = if k1/os-macos { -2 } else { 0 }
+  let sym = dlsym(rtld-default.as[ptr], "clang_createIndex".to-c-tmp().ptr)
+  if sym.is-null() return :none
+  let info: dl-info = uninit
+  if dladdr(sym, &info) == 0 return :none
+  let lib-dir = dirname(string/from-c(info.fname))
+  let major = clang-major-version(clang/getClangVersion().to-string()) is {
+    :some m -> m,
+    :none -> return :none
+  }
+  :some "$lib-dir/clang/$major"
+}
+
 type bindgen-args = {
   lib-name: string,
   in-path: string,
@@ -52,7 +94,15 @@ fn start(args: span[string]): result[string, string] {
 
   let index: CXIndex = clang/createIndex(1, 1)
   let unit: CXTranslationUnit = uninit
-  let clang-args-c-strs: list[ptr] = args.clangarg.map(fn s. s.to-c-tmp().ptr)
+
+  // Ours goes first so a caller-supplied -resource-dir wins
+  let clang-args: list[string] = list/empty()
+  if clang-resource-dir() is :some dir {
+    clang-args.push("-resource-dir")
+    clang-args.push(dir)
+  }
+  for args.clangarg { clang-args.push(it) }
+  let clang-args-c-strs: list[ptr] = clang-args.map(fn s. s.to-c-tmp().ptr)
 
   let err = clang/parseTranslationUnit2(
     index,

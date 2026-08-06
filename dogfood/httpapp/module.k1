@@ -1,0 +1,7 @@
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.executable()
+  m.multithreaded()
+  m.dep("http")
+  m
+}

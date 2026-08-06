@@ -16,7 +16,7 @@ ns for inner {
 
 // Receiver auto-address-of must resolve to the real field place, not a copy.
 // Regression: the non-generic call path discarded the coerced receiver, so
-// outer-ref.inner.me() got the address of a stack temp (dogfood/http hit this
+// outer-ref.inner.me() got the address of a stack temp (dogfood/httpapp hit this
 // as a corrupted libuv handle).
 fn receiver-coercion() {
   let outer: outer = .{ name = "hi", inner = .{ a = 11, b = 22 } }

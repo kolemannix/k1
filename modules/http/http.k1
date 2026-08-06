@@ -1,0 +1,248 @@
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.dep("libuv")
+  m.lib("llhttp", :static)
+  m.setup(["libs/libllhttp.a", "generated/llhttp.k1"], ["vendor"])
+  m
+}
+
+use core/arena
+use libuv/uv
+use libuv/uv/uv-loop
+use libuv/uv-request
+use libuv/uv-handle
+use libuv/uv-stream
+
+type header = {
+  url: string,
+  headers: list[{ field: string, value: string }],
+  method: llhttp/method,
+
+  // TODO: populate cache of important, known, parsed headers
+  keep-alive: bool,
+  content-length: ?size
+}
+
+ns for header {
+  fn get(url: string): header { make(:GET, url) }
+  fn post(url: string): header { make(:POST, url) }
+  fn make(method: llhttp/method, url: string): header { 
+    .{
+      url,
+      headers = list/empty(),
+      method,
+      keep-alive = true,
+      content-length = :none,
+    }
+  }
+}
+
+// The header callback's verdict: parse on toward the body, or pause the
+// parser for a request that will never be handled (the 404 path)
+type header-action = either { proceed, reject }
+
+type parse-state = {
+  user-data: ptr,
+  arena: *mut arena,
+  on-header-complete: *fn(ptr, header) -> header-action,
+  on-body-complete: *fn(ptr, span[span[byte]]) -> {},
+  url: list[char],
+  current-header-field: list[char],
+  current-header-value: list[char],
+  headers: list[{ field: string, value: string }],
+  content-length: ?size,
+  body-chunks: list[span[u8]],
+}
+ns for parse-state {
+  fn empty[t](arena: *mut arena, user-data: *mut t, on-header-complete: *fn(ptr, header) -> header-action, on-body-complete: *fn(ptr, span[span[byte]]) -> {}): parse-state {
+    zeroed[parse-state].with(.{
+      user-data = user-data.as[ptr],
+      arena,
+      on-header-complete,
+      on-body-complete,
+    })
+  }
+
+  fn reset(self: *mut parse-state) {
+    let user-data = self.user-data
+    let arena = self.arena
+    let on-header-complete = self.on-header-complete
+    let on-body-complete = self.on-body-complete
+    self.* = empty[empty](arena, user-data.rw[empty], on-header-complete, on-body-complete)
+  }
+
+  fn alloc-mode(self: *mut parse-state): alloc-mode {
+    :custom-arena self.arena
+  }
+}
+
+// Wraps a pointer to an llhttp_t with some stronger-ish typing
+// over our particular user-data, 'parse-state'
+type parser = { parser: llhttp/t, phantom: array[parse-state, 0] }
+#static { assert-equals(types/size[parser], types/size[llhttp/t]); assert-equals(types/align[parser], types/align[llhttp/t]) }
+
+ns for parser {
+  fn data(self: *mut parser): *mut parse-state { self.parser.data.rw[parse-state] }
+  fn set-data(self: *mut parser, data: *mut parse-state) { self.parser.data = data.as[ptr] }
+
+  fn reset(self: *mut parser) {
+    self.data().reset()
+
+    // Reset an already initialized parser back to the start state, preserving the existing parser type, callback settings, user data, and lenient flags.
+    // FIXME in the success case we're supposed to just call llhttp_finish on the parser rather than resetting it
+    llhttp/reset(self.parser.&)
+  }
+}
+
+// a fully parsed request
+type request = {
+  header: header,
+  body: span[span[u8]],
+}
+
+fn on-url-part(parser: *mut parser, data: *mut u8, count: usize): i32 {
+  let state = parser.data()
+  let bytes: span[char] = span/wrap-raw(data.as[ptr], count.as())
+  let context a = state.alloc-mode()
+  if state.url.is-empty() { state.url.reserve-in(1024) }
+  state.url.append-span-in(bytes)
+  if state.url.len() > 16384 {
+    return llhttp/errno:HPE_USER.value.as[i32]
+  }
+  0
+}
+fn on-url-complete(_parser: *mut parser): i32 {
+  0
+}
+
+fn on-header-field(parser: *mut parser, data: *mut u8, count: usize): i32 {
+  let state = parser.data()
+  let context a = state.alloc-mode()
+  let bytes: span[char] = span/wrap-raw(data.as[ptr], count.as())
+
+  if state.current-header-field.is-empty() { state.current-header-field.reserve-in(256) }
+  state.current-header-field.append-span-in(bytes)
+  0
+}
+fn on-header-field-complete(parser: *mut parser): i32 {
+  let _state = parser.data()
+  0
+}
+fn on-header-value(parser: *mut parser, data: *mut u8, count: usize): i32 {
+  let state = parser.data()
+  let context a = state.alloc-mode()
+  let bytes: span[char] = span/wrap-raw(data.as[ptr], count.as())
+
+  if state.current-header-value.is-empty() { state.current-header-value.reserve-in(256) }
+  state.current-header-value.append-span-in(bytes)
+  0
+}
+fn on-header-value-complete(parser: *mut parser): i32 {
+  let state = parser.data()
+  let context a = state.alloc-mode()
+  let field-string = string/wrap-span(state.current-header-field.as-span().cloned-in())
+  let value-string = string/wrap-span(state.current-header-value.as-span().cloned-in())
+
+  state.headers.reserve-in(64)
+  let header = .{
+    field = field-string,
+    value = value-string,
+  }
+  state.headers.push-in(header)
+  state.current-header-field.clear()
+  state.current-header-value.clear()
+
+  0
+}
+
+fn on-headers-complete(parser: *mut parser): i32 {
+  let state = parser.data()
+  let url = string/wrap-span(state.url.as-span())
+
+  let keep-alive = llhttp/should_keep_alive(parser.parser.&).as-bool()
+  let header: header = .{
+    url,
+    headers = state.headers,
+    method = mem/bitcast(llhttp/get_method(parser.as()).as[u32]),
+
+    keep-alive,
+    content-length = state.content-length,
+  }
+
+  (state.on-header-complete)(state.user-data, header) is {
+    :proceed -> 0,
+    :reject -> llhttp/errno:HPE_PAUSED.value.as[i32],
+  }
+}
+
+fn impl-on-body(parser: *mut parser, data: *mut u8, count: usize): i32 {
+  let state = parser.data()
+  let context a = state.alloc-mode()
+  let bytes: span[byte] = span/wrap-raw(data.as[ptr], count.as())
+  // FIXME: streamed request bodies — hand chunks to the handler as they
+  // arrive instead of buffering the whole body
+  state.body-chunks.push-in(bytes)
+  0
+}
+fn impl-on-body-complete(parser: *mut parser): i32 {
+  let state = parser.data()
+  (state.on-body-complete)(state.user-data, state.body-chunks.as-span())
+  // Pause at every message boundary: one request in flight per connection.
+  // finish-request resets the parser and restarts reads
+  llhttp/errno:HPE_PAUSED.value.as[i32]
+}
+
+fn parser-init[user-data](
+  connection-arena: *mut arena,
+  request-arena: *mut arena,
+  user-data: *mut user-data,
+  on-header-complete: *fn(*mut user-data, header) -> header-action,
+  on-body-complete: *fn(*mut user-data, span[span[u8]]) -> {}
+): parser {
+  let settings: llhttp/settings = zeroed()
+  llhttp/settings_init(&settings)
+  let settings = connection-arena.push(settings.with(.{
+    on_method            = fn(_p, _, _) 0,
+    on_url               = on-url-part.as(),
+    on_url_complete      = on-url-complete.as(),
+    on_header_field      = on-header-field.as(),
+    on_header_field_complete = on-header-field-complete.as(),
+    on_header_value      = on-header-value.as(),
+    on_header_value_complete = on-header-value-complete.as(),
+    on_headers_complete  = on-headers-complete.as(),
+    on_body              = impl-on-body.as(),
+    on_message_complete  = impl-on-body-complete.as(),
+  }))
+
+  let parser: parser = uninit
+  llhttp/init((&parser).as(), :BOTH, settings)
+  let parse-state: *mut parse-state = connection-arena.push(
+    parse-state/empty(request-arena, user-data, on-header-complete.as(), on-body-complete.as())
+  )
+  parser.set-data(parse-state)
+  parser
+}
+
+type tick-result = either { ok, paused(size), fail(llhttp/errno) }
+
+// Feed bytes to the parser. :paused means llhttp stopped at a message
+// boundary (or on a rejected header); its payload counts the bytes left
+// unparsed — nonzero only when a client pipelines requests
+fn tick(
+  parser: *mut parser,
+  bytes: span[u8],
+): tick-result {
+  let result = llhttp/execute(
+    parser = parser.parser.&,
+    data   = bytes.buffer.data,
+    len    = bytes.len().as[usize]
+  )
+  result is {
+    :HPE_OK -> :ok,
+    :HPE_PAUSED -> {
+      let end = bytes.data-ptr().add-bytes(bytes.len())
+      :paused end.diff(llhttp/get_error_pos(parser.parser.&).as[ptr])
+    },
+    _ -> :fail result
+  }
+}
