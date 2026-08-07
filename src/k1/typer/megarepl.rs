@@ -146,7 +146,7 @@ impl TypedProgram {
     /// Swaps in new source and recompiles, iff the code actually changed
     fn megarepl_update_code(&mut self, cell_id: CellId, code: String) {
         let existing = self.megarepl_get_cell(cell_id);
-        if self.ast.sources.get(existing.source_id).content == code {
+        if self.ast.sources.get(existing.source_id).content(&self.ast.mem) == code {
             return;
         }
         let iteration = existing.iteration + 1;
@@ -223,14 +223,15 @@ impl TypedProgram {
     }
 
     fn megarepl_create_source(&mut self, cell_id: CellId, iteration: u32, code: String) -> FileId {
-        let filename = self
-            .ast
-            .idents
-            .intern(format!("{}_repl_cell_{}.{}.k1", self.program_name(), cell_id, iteration));
+        let filename = self.ast.idents.intern(format!(
+            "{}_repl_cell_{}.{}.k1",
+            self.program_name(),
+            cell_id,
+            iteration
+        ));
         let directory = self.config.out_dir;
-        let source_id =
-            self.ast.sources.add_file(crate::parse::SourceFile::make(directory, filename, code));
-        source_id
+        let source = crate::parse::SourceFile::make(&mut self.ast.mem, directory, filename, &code);
+        self.ast.sources.add_file(source)
     }
 
     fn megarepl_new(&mut self, code: String) -> CellId {
@@ -494,7 +495,6 @@ impl TypedProgram {
             owner_scope: repl_ns_scope,
             flags: VariableFlags::Reassigned,
             usage_count: 0,
-            usages: vec![],
             kind: VariableKind::Global(global_id),
             defn_span: span,
         });

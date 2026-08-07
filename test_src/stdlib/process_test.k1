@@ -3,37 +3,41 @@ ns process_test
 use std/process
 
 fn test() {
-  // PATH lookup + argument passing
-  let echo = process/run("echo", ["hello", "world"]).!
-  assert(echo.succeeded())
-  assert-equals(echo.output, "hello world\n")
+  // PATH lookup + argument passing; ok is the captured output
+  assert-equals(process/run("echo", ["hello", "world"]).!, "hello world\n")
 
   // stdout and stderr are merged, in order
-  let merged = process/sh("echo out; echo err 1>&2").!
-  assert(merged.succeeded())
-  assert-equals(merged.output, "out\nerr\n")
+  assert-equals(process/sh("echo out; echo err 1>&2").!, "out\nerr\n")
 
-  // A nonzero exit is data, not an err
-  let failed = process/sh("exit 3").!
-  assert(not failed.succeeded())
+  // A nonzero exit is the err, carrying the full status
+  process/sh("exit 3") is {
+    :err :failed f -> {
+      assert-equals(f.status.exit-code, 3)
+      assert-equals(f.status.signal, 0)
+    },
+    _ -> crash("expected :err :failed")
+  }
+
+  // run-status keeps exit status as data
+  let failed = process/run-status("/bin/sh", ["-c", "exit 3"], :capture).!
   assert-equals(failed.exit-code, 3)
   assert-equals(failed.signal, 0)
 
-  // Spawn failure is the err
-  assert(process/run("definitely-not-a-real-cmd-k1", []) is :err _)
+  // Death by signal
+  let signaled = process/run-status("/bin/sh", ["-c", "kill -9 $$"], :capture).!
+  assert-equals(signaled.exit-code, -1)
+  assert-equals(signaled.signal, 9)
+
+  // Spawn failure is the err for both flavors
+  assert(process/run("definitely-not-a-real-cmd-k1", []) is :err :spawn _)
+  assert(process/run-status("definitely-not-a-real-cmd-k1", [], :capture) is :err :spawn _)
 
   // :drop discards output
-  let dropped = process/run-command("echo", ["ignored"], :drop).!
-  assert(dropped.succeeded())
-  assert-equals(dropped.output, "")
+  assert-equals(process/run-command("echo", ["ignored"], :drop).!, "")
 
   // :inherit streams to our stdout/stderr; nothing is captured
-  let inherited = process/run-command("true", [], :inherit).!
-  assert(inherited.succeeded())
-  assert-equals(inherited.output, "")
+  assert-equals(process/run-command("true", [], :inherit).!, "")
 
   // Output larger than the pipe buffer exercises the read loop
-  let big = process/sh("head -c 131072 /dev/zero | tr '\\0' 'a'").!
-  assert(big.succeeded())
-  assert-equals(big.output.len(), 131072)
+  assert-equals(process/sh("head -c 131072 /dev/zero | tr '\\0' 'a'").!.len(), 131072)
 }

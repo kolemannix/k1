@@ -19,7 +19,7 @@
     argv
   }
 
-  fn run(program: string, args: span[string], mode: process/output-mode): result[process/run-output, string] {
+  fn run(program: string, args: span[string], mode: process/output-mode): result[process/run-output, process/run-error] {
     let argv = make-argv(program, args)
 
     // posix_spawn_file_actions_t is opaque: 8 bytes on darwin, 80 on glibc
@@ -34,7 +34,7 @@
       :capture -> {
         if posix/pipe(pipe-fds.data.as[ptr]) != 0 {
           let _ = posix/posix_spawn_file_actions_destroy(fa)
-          return :err "pipe failed: ${libc/errno-k1-string()}"
+          return :err :spawn .{ program = program, message = "pipe failed: ${libc/errno-k1-string()}" }
         }
         pipe-fds.get(1)
       },
@@ -42,7 +42,7 @@
         let dev-null = posix/open("/dev/null".to-c-tmp().ptr, posix/O_WRONLY)
         if dev-null < 0 {
           let _ = posix/posix_spawn_file_actions_destroy(fa)
-          return :err "open /dev/null failed: ${libc/errno-k1-string()}"
+          return :err :spawn .{ program = program, message = "open /dev/null failed: ${libc/errno-k1-string()}" }
         }
         dev-null
       }
@@ -70,7 +70,7 @@
     if child-out >= 0 { let _ = posix/close(child-out) }
     if spawn-rc != 0 {
       if mode is :capture { let _ = posix/close(pipe-fds.get(0)) }
-      return :err "spawn '$program' failed: ${libc/strerror-string(spawn-rc)}"
+      return :err :spawn .{ program = program, message = "spawn failed: ${libc/strerror-string(spawn-rc)}" }
     }
 
     let output = if mode is :capture {
@@ -100,7 +100,7 @@
         // Reap before reporting so we never leave a zombie behind
         let status: i32 = 0
         let _ = posix/waitpid(pid, &status, 0)
-        return :err "read from '$program' pipe failed: ${libc/strerror-string(read-errno)}"
+        return :err :spawn .{ program = program, message = "pipe read failed: ${libc/strerror-string(read-errno)}" }
       }
       sb.build()
     } else ""
@@ -111,7 +111,7 @@
       wait-rc = posix/waitpid(pid, &status, 0)
     }
     if wait-rc < 0 {
-      return :err "waitpid for '$program' failed: ${libc/errno-k1-string()}"
+      return :err :spawn .{ program = program, message = "waitpid failed: ${libc/errno-k1-string()}" }
     }
 
     if status.bit-and(0x7f) == 0 {
@@ -132,25 +132,51 @@ ns process {
   // output is empty for :drop and :inherit
   type run-output = { exit-code: i32, signal: i32, output: string }
 
-  ns for run-output {
-    fn succeeded(self: run-output): bool {
-      self.exit-code == 0 and self.signal == 0
+  type run-error = either {
+    spawn({ program: string, message: string }),
+    failed({ program: string, status: run-output }),
+  }
+
+  impl print for run-error {
+    fn print-to[w: writer](self, w) {
+      self is {
+        :spawn s -> w.write("'${s.program}': ${s.message}"),
+        :failed f -> {
+          if f.status.signal != 0 {
+            w.write("'${f.program}' killed by signal ${f.status.signal}")
+          } else {
+            w.write("'${f.program}' exited with code ${f.status.exit-code}")
+          }
+          if not f.status.output.is-empty() {
+            w.write(": ")
+            w.write(f.status.output)
+          }
+        }
+      }
     }
   }
 
-  // Spawn failure (e.g. command not found) is the err; a nonzero exit is data,
-  // reported in run-output
-  fn run-command(program: string, args: span[string], mode: output-mode): result[run-output, string] {
+  // Exit status is data: a nonzero exit or signal death is still :ok, reported
+  // in run-output; the err is always :spawn
+  fn run-status(program: string, args: span[string], mode: output-mode): result[run-output, run-error] {
     #if k1/os-posix posix-process/run(program, args, mode)
-    else crash("process/run-command: unimplemented platform")
+    else crash("process/run-status: unimplemented platform")
   }
 
-  // Runs `program`, resolved via PATH, with stdout and stderr merged into output
-  fn run(program: string, args: span[string]): result[run-output, string] {
+  // Any failure -- spawn, nonzero exit, death by signal -- is the err; ok is
+  // the captured output (empty for :drop and :inherit)
+  fn run-command(program: string, args: span[string], mode: output-mode): result[string, run-error] {
+    let r = run-status(program, args, mode).try
+    if r.exit-code == 0 { :ok r.output }
+    else :err :failed .{ program = program, status = r }
+  }
+
+  // Runs `program`, resolved via PATH, with stdout and stderr merged into the output
+  fn run(program: string, args: span[string]): result[string, run-error] {
     run-command(program, args, :capture)
   }
 
-  fn sh(command: string): result[run-output, string] {
+  fn sh(command: string): result[string, run-error] {
     run("/bin/sh", ["-c", command])
   }
 

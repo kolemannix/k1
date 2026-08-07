@@ -3,33 +3,27 @@
 // Needs cmake and k1bindgen on PATH.
 use std/process
 
-fn run(program: string, args: span[string]) {
-  println("setup: running $program")
-  let r = process/run-command(program, args, :inherit).!
-  if not r.succeeded() { crash("setup command failed: $program") }
-}
-
 // The host SDK, for system headers
 fn sdk-args(): list[string] {
   if not k1/os-macos { return list/empty() }
   let sdk = process/run("/bin/sh", ["-c", "printf %s $(xcrun --sdk macosx --show-sdk-path)"]).!
   let args: list[string] = [
     "+clangarg", "-isysroot",
-    "+clangarg", sdk.output,
+    "+clangarg", sdk,
   ]
   args
 }
 
 fn setup(ctx: k1/setup-ctx) {
-  run("mkdir", ["-p", "libs", "generated"])
+  let _ = process/run-command("mkdir", ["-p", "libs"], :inherit).!
 
-  run("cmake", ["-S", "vendor", "-B", ".k1-out/libuv-build", "-DBUILD_TESTING=OFF", "-DCMAKE_BUILD_TYPE=Release"])
-  run("cmake", ["--build", ".k1-out/libuv-build", "-j", "8"])
-  run("cp", [".k1-out/libuv-build/libuv.a", "libs/libuv.a"])
+  let _ = process/run-command("cmake", ["-S", "vendor", "-B", ".k1-out/libuv-build", "-DBUILD_TESTING=OFF", "-DCMAKE_BUILD_TYPE=Release"], :inherit).!
+  let _ = process/run-command("cmake", ["--build", ".k1-out/libuv-build", "-j", "8"], :inherit).!
+  let _ = process/run-command("cp", [".k1-out/libuv-build/libuv.a", "libs/libuv.a"], :inherit).!
 
   let net-args: list[string] = [
     "-in-path", "net.c",
-    "-out-path", "generated/net.k1",
+    "-out-path", "net.k1",
     "-lib-name", "net",
     "-system", "true",
     "+include", "sockaddr_in",
@@ -47,11 +41,11 @@ fn setup(ctx: k1/setup-ctx) {
     "+opaque", "FILE",
   ]
   for sdk-args() { net-args.push(it) }
-  run("k1bindgen", net-args.as-span())
+  let _ = process/run-command("k1bindgen", net-args.as-span(), :inherit).!
 
   let uv-args: list[string] = [
     "-in-path", "vendor/include/uv.h",
-    "-out-path", "generated/uv.k1",
+    "-out-path", "uv.k1",
     "-lib-name", "uv",
     "-prelude-file", "uv_bindgen_prelude.k1.txt",
     "+clangarg", "-Ivendor/include",
@@ -134,5 +128,5 @@ fn setup(ctx: k1/setup-ctx) {
     "+exclude", "UV_OVERLAPPED_PIPE",
   ]
   for sdk-args() { uv-args.push(it) }
-  run("k1bindgen", uv-args.as-span())
+  let _ = process/run-command("k1bindgen", uv-args.as-span(), :inherit).!
 }

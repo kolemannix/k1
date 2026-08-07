@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use k1::compiler::{CompileProgramError, LspCompileOptions};
-use k1::lex::{self, Span, SpanId, Spans};
+use k1::lex::{self, Span, SpanId};
 use k1::lsp_support::CompletionCandidateKind;
 use k1::parse;
 use k1::parse::{ParsedProgram, SourceFile};
@@ -96,8 +96,9 @@ enum TokenModifiers {
     DefaultLibrary = 1 << 9,
 }
 
-fn span_to_range_with_source(source: &SourceFile, span: Span) -> Option<Range> {
-    let (start_line, end_line) = source.get_lines_for_span(span)?;
+fn span_to_range_in_ast(ast: &ParsedProgram, span: Span) -> Option<Range> {
+    let source = ast.sources.source_by_span(span);
+    let (start_line, end_line) = source.get_lines_for_span(&ast.mem, span)?;
     Some(Range {
         start: Position {
             line: start_line.line_index,
@@ -113,17 +114,7 @@ fn span_id_to_range(k1: &TypedProgram, span_id: SpanId) -> Option<Range> {
 }
 
 fn span_to_range(k1: &TypedProgram, span: Span) -> Option<Range> {
-    let source = k1.ast.sources.get(span.file_id);
-    span_to_range_with_source(source, span)
-}
-
-fn span_id_to_range_with_source(
-    source: &SourceFile,
-    spans: &Spans,
-    span_id: SpanId,
-) -> Option<Range> {
-    let span = spans.get(span_id);
-    span_to_range_with_source(source, span)
+    span_to_range_in_ast(&k1.ast, span)
 }
 
 fn error_to_diagnostic(
@@ -487,7 +478,6 @@ impl LanguageServer for Backend {
         let new_content = change.text;
         info!("textDocument/did_change: parsing file {}", &file_url);
         let ast = parse::parse_standalone(file_url.path().to_string(), new_content);
-        let new_source = ast.sources.get_main();
         let mut parse_diagnostics = vec![];
         info!(
             "textDocument/did_change: parsed file {} with {} errors",
@@ -495,7 +485,7 @@ impl LanguageServer for Backend {
             ast.errors.len()
         );
         for error in &ast.errors {
-            if let Some(range) = span_id_to_range_with_source(new_source, &ast.spans, error.span())
+            if let Some(range) = span_to_range_in_ast(&ast, ast.spans.get(error.span()))
             {
                 let diagnostic = Diagnostic {
                     range,
@@ -636,7 +626,7 @@ impl LanguageServer for Backend {
                     spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
                 }
             }
-            for entry in source.trivia.iter() {
+            for entry in ast_for_file.mem.getn_lt(source.trivia) {
                 match entry.trivia.kind {
                     lex::TokenTriviaKind::LineComment => {
                         let span = ast_for_file.spans.get(entry.trivia.span);
@@ -649,7 +639,7 @@ impl LanguageServer for Backend {
             for (span, token_type, bitflags) in spans_and_kinds {
                 // info!("spans_and_kinds sorted {} {}", span.start, span.len);
                 let length = span.len;
-                let Some(line) = source.get_line_for_span_start(span) else {
+                let Some(line) = source.get_line_for_span_start(&ast_for_file.mem, span) else {
                     continue;
                 };
                 let line_number = line.line_number();
@@ -725,24 +715,35 @@ impl LanguageServer for Backend {
         info!("completion: {}:{}:{}", file_url.path(), line, col);
 
         // Latest buffer content: unsaved edits first, else the compiled source.
-        // SourceFile is not Send; keep it scoped so only the spliced String
-        // crosses the awaits below
+        // Content is read while its owning program is in scope, so only the
+        // spliced String crosses the awaits below
+        let content_at_line = |ast: &ParsedProgram, source: &SourceFile| {
+            source
+                .get_line(&ast.mem, line as usize)
+                .map(|line_info| (source.content(&ast.mem).to_string(), line_info))
+        };
         let spliced = {
-            let source = {
+            let content_and_line = {
                 let edited_sources = self.edited_sources.lock().unwrap();
-                edited_sources.get(&file_url).map(|ast| ast.sources.get_main().clone())
+                edited_sources.get(&file_url).and_then(|ast| {
+                    content_at_line(ast, ast.sources.get_main())
+                })
             };
-            let source = match source {
-                Some(source) => Some(source),
-                None => self.with_k1(|k1| uri_to_source(&k1.ast, &file_url).cloned()).flatten(),
+            let content_and_line = match content_and_line {
+                Some(found) => Some(found),
+                None => self
+                    .with_k1(|k1| {
+                        uri_to_source(&k1.ast, &file_url)
+                            .and_then(|source| content_at_line(&k1.ast, source))
+                    })
+                    .flatten(),
             };
-            let Some(source) = source else {
-                info!("completion: no source for {}", file_url.path());
+            let Some((content, line_info)) = content_and_line else {
+                info!("completion: no source or line for {}", file_url.path());
                 return Ok(None);
             };
-            let Some(line_info) = source.get_line(line as usize) else { return Ok(None) };
             let offset = (line_info.start_char + col.min(line_info.len)) as usize;
-            k1::lsp_support::splice_completion_marker(&source.content, offset)
+            k1::lsp_support::splice_completion_marker(&content, offset)
         };
 
         let Ok(canonical_path) = k1::kpath::canonicalize(file_url.path()) else { return Ok(None) };
@@ -884,30 +885,47 @@ fn find_references(
         return Ok(None);
     };
 
+    // References are served by scanning ls_entities across all files: every
+    // usage the typer sees emits an entity at its span
     match ls_entity.kind {
         LsEntityKind::Function { function_id, .. } => {
-            let generic_function = k1::lsp_support::get_function_generic_id(k1, function_id);
-            let function = k1.functions.get(generic_function);
-            let defn_span = k1.get_function_span(generic_function);
-            let mut locations = Vec::with_capacity(function.usages.len());
-            for span_id in &function.usages {
-                // Skip the usage that is the function's declaration
-                if defn_span == *span_id && !include_declaration {
-                    continue;
-                }
-
-                if let Some(location) = location_from_span(k1, *span_id) {
-                    locations.push(location);
+            let target = k1::lsp_support::get_function_generic_id(k1, function_id);
+            let mut locations = Vec::new();
+            for entities in k1.ls_entities.borrow().values() {
+                for entity in entities {
+                    let LsEntityKind::Function { function_id: fid, is_defn } = entity.kind else {
+                        continue;
+                    };
+                    if is_defn && !include_declaration {
+                        continue;
+                    }
+                    if k1::lsp_support::get_function_generic_id(k1, fid) != target {
+                        continue;
+                    }
+                    if let Some(location) = location_from_resolved_span(k1, entity.span) {
+                        locations.push(location);
+                    }
                 }
             }
             Ok(Some(locations))
         }
         LsEntityKind::Variable { variable_id } => {
-            let v = k1.variables.get(variable_id);
-            let mut locations = Vec::with_capacity(v.usages.len());
-            for span_id in &v.usages {
-                if let Some(location) = location_from_span(k1, *span_id) {
-                    locations.push(location);
+            let defn_span = k1.ast.spans.get(k1.variables.get(variable_id).defn_span);
+            let mut locations = Vec::new();
+            for entities in k1.ls_entities.borrow().values() {
+                for entity in entities {
+                    let LsEntityKind::Variable { variable_id: vid } = entity.kind else {
+                        continue;
+                    };
+                    if vid != variable_id {
+                        continue;
+                    }
+                    if entity.span == defn_span && !include_declaration {
+                        continue;
+                    }
+                    if let Some(location) = location_from_resolved_span(k1, entity.span) {
+                        locations.push(location);
+                    }
                 }
             }
             Ok(Some(locations))
@@ -925,13 +943,14 @@ fn find_references(
     }
 }
 
-fn location_from_span(k1: &TypedProgram, span_id: SpanId) -> Option<Location> {
-    if let Some(range) = span_id_to_range(k1, span_id) {
-        let usage_uri = uri_from_span(k1, span_id);
-        Some(Location { uri: usage_uri, range })
-    } else {
-        None
-    }
+fn location_from_resolved_span(k1: &TypedProgram, span: Span) -> Option<Location> {
+    let range = span_to_range(k1, span)?;
+    let source = k1.ast.sources.get(span.file_id);
+    let uri = source_to_uri(
+        k1.ast.idents.get_string(source.directory),
+        k1.ast.idents.get_string(source.filename),
+    );
+    Some(Location { uri, range })
 }
 
 fn find_entity_and_source<'k1>(

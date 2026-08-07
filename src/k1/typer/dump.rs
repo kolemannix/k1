@@ -1041,6 +1041,7 @@ impl TypedProgram {
             }
             PatternCtor::Struct { fields } => {
                 w.write_str("{ ")?;
+                let fields = self.patterns.mem.getn_lt(*fields);
                 for (index, (field_name, field_pattern)) in fields.iter().enumerate() {
                     w.write_str(self.ident_str(*field_name))?;
                     w.write_str(": ")?;
@@ -1422,7 +1423,7 @@ impl TypedProgram {
     pub fn dump_ability_impls(&self, w: &mut impl Write) -> std::fmt::Result {
         for (self_type_id, impls) in self.ability_impl_table.iter() {
             writeln!(w, "impls for {}", self.type_id_to_string_ext(*self_type_id, true))?;
-            for impl_handle in impls {
+            for impl_handle in impls.as_slice(&self.mem) {
                 w.write_str("\t")?;
                 self.display_ability_impl(w, impl_handle.full_impl_id, true)?;
                 w.write_str("\n")?;

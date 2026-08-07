@@ -202,6 +202,7 @@ impl<T, Tag> Clone for Handle<T, Tag> {
     }
 }
 
+
 /// A handle to a slice of Ts inside a `Mem` pool with tag type `Tag`
 /// muh'slice <tips fedora>
 pub struct MSlice<T, Tag = ()> {
@@ -603,6 +604,14 @@ impl<Tag> Mem<Tag> {
         }
     }
 
+    pub fn pushn_uninit<T>(&mut self, len: u32) -> MSlice<T, Tag> {
+        if len == 0 {
+            return MSlice::empty();
+        }
+        let ptr = self.push_slice_uninit::<T>(len as usize);
+        MSlice::make(self.ptr_to_offset(ptr), len)
+    }
+
     pub fn pushn<T: Copy>(&mut self, ts: &[T]) -> MSlice<T, Tag> {
         let slice = self.pushn_raw(ts);
         let ptr = slice.as_ptr();
@@ -796,10 +805,6 @@ impl<Tag> Mem<Tag> {
         SmallVec::from_slice(slice)
     }
 
-    pub fn getn_sv4<T: Copy>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; 4]> {
-        self.getn_sv(handle)
-    }
-
     pub fn getn_sv8<T: Copy>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; 8]> {
         self.getn_sv(handle)
     }
@@ -849,6 +854,23 @@ impl<Tag> Mem<Tag> {
 
     pub fn bytes_used(&self) -> usize {
         self.cursor.addr() - self.base_ptr().addr()
+    }
+
+    pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
+        let used = self.bytes_used() - 8;
+        let bytes = unsafe { slice::from_raw_parts(self.base_ptr().add(8), used) };
+        w.write_len(used);
+        w.write_raw(bytes);
+    }
+
+    pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
+        self.reset(false);
+        let used = r.read_len();
+        let bytes = r.take(used);
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), self.cursor, used);
+            self.cursor = self.cursor.add(used);
+        }
     }
 }
 //////////////// Doubly Linked List Impl
@@ -1384,6 +1406,10 @@ impl<T, Tag> List<T, Tag> {
         }
     }
 
+    pub fn to_mlist(&self) -> MList<T, Tag> {
+        MList { offset: self.offset, cap: self.cap, len: self.len, _data: PhantomData, _tag: PhantomData }
+    }
+
     pub fn base_ptr(&self) -> *mut T {
         self.ptr
     }
@@ -1606,6 +1632,82 @@ impl<T, Tag> List<T, Tag> {
             self.len -= 1;
             t
         }
+    }
+}
+
+/// `List` minus the cached pointer: the pod handle for growable arena lists
+#[derive(Debug)]
+pub struct MList<T, Tag = ()> {
+    /// Byte offset from the owning arena's base; 0 when empty
+    offset: u32,
+    cap: u32,
+    len: u32,
+    _data: PhantomData<T>,
+    _tag: PhantomData<Tag>,
+}
+
+impl<T, Tag> Copy for MList<T, Tag> {}
+impl<T, Tag> Clone for MList<T, Tag> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T: 'static, Tag: 'static> Default for MList<T, Tag> {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl<T: 'static, Tag: 'static> MList<T, Tag> {
+    pub const fn empty() -> Self {
+        MList { offset: 0, cap: 0, len: 0, _data: PhantomData, _tag: PhantomData }
+    }
+
+    fn to_list(&self, mem: &Mem<Tag>) -> List<T, Tag> {
+        match NonZeroU32::new(self.offset) {
+            None => List::empty(),
+            Some(offset) => {
+                let ptr = unsafe { mem.base_ptr().add(offset.get() as usize) as *mut T };
+                List { ptr, offset: offset.get(), cap: self.cap, len: self.len, _tag: PhantomData }
+            }
+        }
+    }
+
+    pub fn push_grow(&mut self, mem: &mut Mem<Tag>, val: T)
+    where
+        T: Copy,
+    {
+        let mut list = self.to_list(mem);
+        list.push_grow(mem, val);
+        *self = list.to_mlist();
+    }
+
+    pub fn extend_grow(&mut self, mem: &mut Mem<Tag>, vals: &[T])
+    where
+        T: Copy,
+    {
+        let mut list = self.to_list(mem);
+        list.extend_grow(mem, vals);
+        *self = list.to_mlist();
+    }
+
+    pub fn to_mslice(&self) -> MSlice<T, Tag> {
+        match NonZeroU32::new(self.offset) {
+            None => MSlice::empty(),
+            Some(offset) => MSlice::make(offset, self.len),
+        }
+    }
+
+    pub fn as_slice(&self, mem: &Mem<Tag>) -> &'static [T] {
+        mem.getn(self.to_mslice())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn len(&self) -> u32 {
+        self.len
     }
 }
 

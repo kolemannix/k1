@@ -9,7 +9,7 @@ use crate::typer::scopes::*;
 
 use crate::parse::{ParsedId, StringId};
 
-use crate::{SV4, impl_copy_if_small, nz_u32_id, typer::*};
+use crate::{impl_copy_if_small, nz_u32_id, typer::*};
 
 nz_u32_id!(TypeId);
 
@@ -103,7 +103,7 @@ pub struct StructTypeField {
 }
 impl_copy_if_small!(12, StructTypeField);
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct GenericInstanceInfo {
     pub generic_parent: TypeId,
     pub type_args: TypeIdSlice,
@@ -208,7 +208,7 @@ pub struct TypeParameter {
 }
 impl_copy_if_small!(24, TypeParameter);
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct FunctionTypeParameter {
     pub name: StringId,
     pub scope_id: ScopeId,
@@ -216,7 +216,7 @@ pub struct FunctionTypeParameter {
     pub function_type: TypeId,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct InferenceHoleType {
     pub index: u32,
     pub static_type: Option<TypeId>,
@@ -271,7 +271,7 @@ pub struct ScalarEnumType {
 
 impl SumType {}
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct GenericType {
     pub params: MSlice<NameAndType, TypedProgram>,
     pub inner: TypeId,
@@ -426,7 +426,7 @@ impl FunctionType {
 
 nz_u32_id!(LambdaTypeId);
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct LambdaType {
     pub function_type: TypeId,
     pub env_type: TypeId,
@@ -440,7 +440,7 @@ pub struct LambdaType {
     pub environment_struct: TypedExprId,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct LambdaObjectType {
     pub function_type: TypeId,
     pub parsed_id: ParsedId,
@@ -484,7 +484,7 @@ impl OpaqueType {
 }
 
 static_assert_size!(Type, 28);
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum Type {
     Char,
     Bool,
@@ -1029,7 +1029,7 @@ impl TypeInfo {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct BuiltinTypes {
     pub empty: TypeId,
     pub bool: Option<TypeId>,
@@ -1430,12 +1430,14 @@ impl AggType {
 }
 
 nz_u32_id!(AggregateTypeId);
+#[derive(Clone, Copy)]
 pub struct AggregateTypeRecord {
     pub agg_type: AggType,
     pub origin_type_id: TypeId,
     pub layout: Layout,
 }
 
+#[derive(Clone, Copy)]
 pub struct TypeIdents {
     pub(crate) tag: StringId,
     pub(crate) payload: StringId,
@@ -1926,7 +1928,8 @@ impl TypedProgram {
             Type::Array(arr) => {
                 // Arrays contain 2 types, the element type and the size type,
                 // which is usually a `static uword`, but can be a type parameter
-                let mut result = self.type_variable_counts
+                let mut result = self
+                    .type_variable_counts
                     .get(arr.element_type)
                     .add(self.type_variable_counts.get(arr.size_type));
                 result.is_zero_safe = true;
@@ -2379,19 +2382,32 @@ impl TypedProgram {
         })
     }
 
+    fn specialization_hash(base: TypeId, args: &[TypeId]) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = fxhash::FxHasher::default();
+        base.hash(&mut h);
+        args.hash(&mut h);
+        h.finish()
+    }
+
     pub fn get_specialization(&mut self, base: TypeId, args: TypeIdSlice) -> Option<TypeId> {
         self.get_specialization_slice(base, self.mem.getn(args))
     }
 
     pub fn get_specialization_slice(&mut self, base: TypeId, args: &[TypeId]) -> Option<TypeId> {
-        let key = (base, SV4::from_slice(args));
-        let result = *self.type_specializations.get(&key)?;
-        Some(result)
+        let hash = Self::specialization_hash(base, args);
+        self.type_specializations
+            .find(hash, |e| e.base == base && self.mem.getn_lt(e.args) == args)
+            .map(|e| e.specialized)
     }
 
     pub fn insert_specialization(&mut self, base: TypeId, args: TypeIdSlice, specialized: TypeId) {
-        let key = (base, SV4::from_slice(self.mem.getn(args)));
-        self.type_specializations.insert(key, specialized);
+        let hash = Self::specialization_hash(base, self.mem.getn(args));
+        self.type_specializations.insert_unique(
+            hash,
+            TypeSpecialization { base, args, specialized },
+            |e| Self::specialization_hash(e.base, self.mem.getn(e.args)),
+        );
     }
 
     pub fn pt_to_string(&self, t: PhysicalType) -> String {

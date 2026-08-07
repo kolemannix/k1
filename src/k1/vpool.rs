@@ -398,8 +398,28 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     }
 }
 
-impl<T, Index: PoolIndex> Drop for VPool<T, Index> {
-    fn drop(&mut self) {
+impl<T: Copy, Index: PoolIndex> VPool<T, Index> {
+    pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
+        let bytes = unsafe {
+            core::slice::from_raw_parts(self.mmap.as_ptr(), self.len * std::mem::size_of::<T>())
+        };
+        w.write_len(self.len);
+        w.write_raw(bytes);
+    }
+
+    pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
+        self.len = 0;
+        let count = r.read_len();
+        let bytes = r.take(count * std::mem::size_of::<T>());
+        self.set_len_checked(count);
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), self.mmap.as_mut_ptr(), bytes.len());
+        }
+    }
+}
+
+impl<T, Index: PoolIndex> VPool<T, Index> {
+    pub fn drain(&mut self) {
         // If T has drop glue, call drop on all elements in the pool
         if std::mem::needs_drop::<T>() {
             for i in 0..self.len {
@@ -407,6 +427,12 @@ impl<T, Index: PoolIndex> Drop for VPool<T, Index> {
                 unsafe { core::ptr::drop_in_place(ptr) }
             }
         }
+    }
+}
+
+impl<T, Index: PoolIndex> Drop for VPool<T, Index> {
+    fn drop(&mut self) {
+        self.drain();
 
         #[cfg(feature = "profile")]
         self.print_size_info()

@@ -2,7 +2,7 @@ fn module(): k1/module {
   let m = k1/module/new()
   m.dep("libuv")
   m.lib("llhttp", :static)
-  m.setup(["libs/libllhttp.a", "generated/llhttp.k1"], ["vendor"])
+  m.setup(["libs/libllhttp.a", "llhttp.k1"], ["vendor"])
   m
 }
 

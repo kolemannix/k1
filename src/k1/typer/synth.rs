@@ -31,7 +31,9 @@ impl TypedProgram {
         let Some(impl_id) = self
             .ability_impl_table
             .get(&ty)
-            .and_then(|impls| impls.iter().find(|i| i.base_ability_id == ABILITY_ID_EQUALS))
+            .and_then(|impls| {
+                impls.as_slice(&self.mem).iter().find(|i| i.base_ability_id == ABILITY_ID_EQUALS)
+            })
         else {
             self.ice_span(span, "expected equals impl")
         };
@@ -282,7 +284,6 @@ impl TypedProgram {
             kind: VariableKind::StackSynthetic(defn_stmt),
             flags,
             usage_count: 0,
-            usages: vec![],
             defn_span: span,
         };
         let variable_id = self.variables.add(variable);
@@ -436,7 +437,8 @@ impl TypedProgram {
     pub(super) fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {
         let the_span = self.ast.spans.get(span);
         let source = self.ast.sources.get(the_span.file_id);
-        let line_number = source.get_line_for_span_start(the_span).unwrap().line_number();
+        let line_number =
+            source.get_line_for_span_start(&self.ast.mem, the_span).unwrap().line_number();
         let filename_string_id = source.filename;
         let filename_expr = self.synth_string_literal(filename_string_id, span);
 

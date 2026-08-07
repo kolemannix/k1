@@ -1,5 +1,0 @@
-fn main(): i32 {
-  let x: { a: u32 } = k1/module-params(.{ a = 1 })
-  0
-}
-//errmsg: k1/module-params is only valid as the initializer of a top-level global

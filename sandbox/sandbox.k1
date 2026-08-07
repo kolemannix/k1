@@ -1,17 +1,14 @@
 fn testPosix() {
     println("Testing process execution...")
-    
-    // Test 1: Simple echo command
-    let echoStatus = std/process/run-command-sync("/bin/echo", ["hello", "world"], :drop).!
-    println("Echo exit status: $echoStatus")
-    
-    // Test 2: List current directory  
-    let lsStatus = std/process/run-command-sync("/bin/ls", [], :drop).!
-    println("Ls exit status: $lsStatus")
-    
-    // Test 3: Test command that should fail
-    let failStatus = std/process/run-command-sync("/nonexistent", [], :drop)
-    println("Nonexistent command isOk(): ${failStatus.is-ok()}")
+
+    let echoOut = std/process/run("/bin/echo", ["hello", "world"]).!
+    println("Echo output: $echoOut")
+
+    let lsStatus = std/process/run-status("/bin/ls", [], :drop).!
+    println("Ls exit code: ${lsStatus.exit-code}")
+
+    let failStatus = std/process/run("/nonexistent", [])
+    println("Nonexistent command is-ok(): ${failStatus.is-ok()}")
 }
 
 fn main() {

@@ -17,12 +17,16 @@ pub mod lsp_support;
 pub mod parse;
 mod rawref;
 pub mod server;
+pub mod snap;
 pub mod typer;
 mod vecpool;
 pub mod vm;
 mod vpool;
 //pub mod codegen_llvm_old;
 //pub mod vmtw;
+
+pub const BUILD_ID: &str = env!("K1_BUILD_ID");
+pub const BUILD_DIRTY: bool = matches!(env!("K1_BUILD_DIRTY").as_bytes(), b"1");
 
 pub const KILOBYTE: usize = 1024;
 pub const MEGABYTE: usize = KILOBYTE * 1024;

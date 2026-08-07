@@ -2,7 +2,7 @@ fn module(): k1/module {
   let m = k1/module/new()
   m.lib("uv", :static)
   m.setup(
-    ["libs/libuv.a", "generated/uv.k1", "generated/net.k1"],
+    ["libs/libuv.a", "uv.k1", "net.k1"],
     ["net.c", "uv_bindgen_prelude.k1.txt"]
   )
   m

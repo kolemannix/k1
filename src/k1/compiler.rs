@@ -330,7 +330,7 @@ impl SetupMode {
 }
 
 /// All paths are canonical UTF-8 strings interned in the ident pool; see kpath
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct CompilerConfig {
     pub src_path: StringId,
     pub home_dir: StringId,
@@ -349,7 +349,6 @@ pub struct CompilerConfig {
     pub chatty: bool,
     pub optimize_ir: bool,
     pub setup_mode: SetupMode,
-    pub lsp: LspCompileOptions,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -403,11 +402,7 @@ impl Drop for CwdGuard {
 /// Requires a canonicalized src_path
 pub fn module_home_from_src_path(src_path: &str) -> (bool, String) {
     let is_dir = Path::new(src_path).is_dir();
-    if is_dir {
-        (true, src_path.to_string())
-    } else {
-        (false, kpath::parent(src_path).to_string())
-    }
+    if is_dir { (true, src_path.to_string()) } else { (false, kpath::parent(src_path).to_string()) }
 }
 
 pub struct SourceFile {
@@ -498,9 +493,6 @@ impl ModuleRootHandle {
     }
 }
 
-/// The module's non-root sources; the glob is deferred to spawn_read, called only
-/// once the module is loaded (manifest evaluated, eventually setup run), so
-/// setup-generated sources are discovered by the same single glob as committed ones
 pub struct ModuleRemainingSources {
     module_dir: String,
     root_path: String,
@@ -514,37 +506,28 @@ impl ModuleRemainingSources {
 
     pub fn spawn_read(
         self,
-        idents: &IdentPool,
         source_overrides: &fxhash::FxHashMap<String, String>,
     ) -> ModuleRemainingSourcesHandle {
         let overrides = source_overrides.clone();
-        // Joined before the spawn: the ident pool must not cross the thread boundary
-        let generated_dir = kpath::join_buf(idents, self.module_dir.as_str(), "generated");
         let reader = std::thread::spawn(move || {
             if !self.is_dir {
                 return Ok(vec![]);
             }
-            // Module sources live at the top level plus the generated/ convention
-            // dir (where setup steps emit source)
-            let list_k1_files = |dir: &Path| -> Result<Vec<String>, String> {
-                let entries = match fs::read_dir(dir) {
-                    Ok(entries) => entries,
-                    Err(e) => return Err(format!("Failed to list module dir {}: {e}", dir.display())),
-                };
-                entries
-                    .filter_map(|item| item.ok())
-                    .filter(|item| item.path().extension().is_some_and(|ext| ext == "k1"))
-                    .map(|item| {
-                        item.path().into_os_string().into_string().map_err(|s| {
-                            format!("Source file name is not valid UTF-8: {}", s.to_string_lossy())
-                        })
-                    })
-                    .collect()
+            let entries = match fs::read_dir(Path::new(&self.module_dir)) {
+                Ok(entries) => entries,
+                Err(e) => {
+                    return Err(format!("Failed to list module dir {}: {e}", self.module_dir));
+                }
             };
-            let mut files = list_k1_files(Path::new(&self.module_dir))?;
-            if generated_dir.is_dir() {
-                files.extend(list_k1_files(&generated_dir)?);
-            }
+            let mut files = entries
+                .filter_map(|item| item.ok())
+                .filter(|item| item.path().extension().is_some_and(|ext| ext == "k1"))
+                .map(|item| {
+                    item.path().into_os_string().into_string().map_err(|s| {
+                        format!("Source file name is not valid UTF-8: {}", s.to_string_lossy())
+                    })
+                })
+                .collect::<Result<Vec<String>, String>>()?;
             // setup.k1 is the module's standalone setup program, not module source
             files.retain(|p| *p != self.root_path && kpath::file_name(p) != "setup.k1");
             files.sort();
@@ -635,9 +618,8 @@ pub fn run_setup_function(req: &SetupRequest) -> Result<()> {
     }
     run_setup_program(req, setup_k1_path.as_str())?;
 
-    let outputs = output_manifest(req, &mut scratch).map_err(|e| {
-        anyhow::anyhow!("setup.k1 for module '{module_name}' completed but {e}")
-    })?;
+    let outputs = output_manifest(req, &mut scratch)
+        .map_err(|e| anyhow::anyhow!("setup.k1 for module '{module_name}' completed but {e}"))?;
     fs::write(Path::new(stamp_path.as_str()), format!("{fingerprint}{outputs}"))?;
     Ok(())
 }
@@ -889,16 +871,16 @@ pub fn compile_program_ext(
         .map(PathBuf::from)
         .or_else(|| std::env::var("K1_HOME").map(PathBuf::from).ok())
         .unwrap_or_else(|| {
-        let current_exe = std::env::current_exe().unwrap();
-        let exe_parent = current_exe.parent().unwrap();
-        if exe_parent.ends_with("debug") {
-            // its a cargo run
-            std::env::current_dir().unwrap()
-        } else {
-            // its in k1/bin, most likely
-            exe_parent.parent().unwrap().to_path_buf()
-        }
-    });
+            let current_exe = std::env::current_exe().unwrap();
+            let exe_parent = current_exe.parent().unwrap();
+            if exe_parent.ends_with("debug") {
+                // its a cargo run
+                std::env::current_dir().unwrap()
+            } else {
+                // its in k1/bin, most likely
+                exe_parent.parent().unwrap().to_path_buf()
+            }
+        });
     let k1_home = kpath::canonicalize(&k1_home_raw)
         .unwrap_or_else(|e| panic!("K1 home {} is not usable: {e}", k1_home_raw.display()));
     if args.chatty {
@@ -911,8 +893,8 @@ pub fn compile_program_ext(
     // All planned paths are absolute, so spawning before the CwdGuard chdir is safe;
     // reads overlap the rest of TypedProgram::new (scope/VM init) and core's typecheck.
     let core_plan = ModuleRootHandle::spawn(&ast.idents, &corelib_dir, true, &lsp.source_overrides);
-    let std_plan =
-        use_std.then(|| ModuleRootHandle::spawn(&ast.idents, &stdlib_dir, false, &lsp.source_overrides));
+    let std_plan = use_std
+        .then(|| ModuleRootHandle::spawn(&ast.idents, &stdlib_dir, false, &lsp.source_overrides));
     let main_plan =
         ModuleRootHandle::spawn(&ast.idents, Path::new(&src_path), false, &lsp.source_overrides);
 
@@ -939,12 +921,11 @@ pub fn compile_program_ext(
         } else {
             SetupMode::Normal
         },
-        lsp,
     };
 
     let _cwd = CwdGuard::enter(&home_dir);
 
-    let mut k1 = TypedProgram::new(ast, config);
+    let mut k1 = TypedProgram::new(ast, config, lsp);
 
     let add_result = (|| {
         k1.add_module(core_plan?, false)?;
@@ -1085,10 +1066,10 @@ pub fn write_executable(
         if !module.manifest.libs.is_empty() {
             build_cmd.arg(format!("-L{module_libs_dir}"));
         }
-        for link_arg_string_id in &module.manifest.link_args {
+        for link_arg_string_id in k1.mem.getn(module.manifest.link_args) {
             build_cmd.arg(k1.get_string(*link_arg_string_id));
         }
-        for lib in &module.manifest.libs {
+        for lib in k1.mem.getn(module.manifest.libs) {
             let logical_name_str = k1.get_string(lib.name);
             let logical_name =
                 if filc { format!("{logical_name_str}-filc") } else { logical_name_str.into() };
@@ -1189,8 +1170,7 @@ pub fn codegen_module<'ctx, 'module>(
                 out_dir,
                 format_args!("{module_name}.ll"),
             );
-            let mut f =
-                File::create(ll_path.as_str()).expect("Failed to create .ll file");
+            let mut f = File::create(ll_path.as_str()).expect("Failed to create .ll file");
             f.write_all(llvm_text.as_bytes()).unwrap();
         }
 
@@ -1210,6 +1190,38 @@ pub fn codegen_module<'ctx, 'module>(
     Ok(codegen)
 }
 
+// Eventually, we want to return output and exit code to the application
+pub fn run_compiled_program(
+    idents: &IdentPool,
+    out_dir: StringId,
+    program_home_dir: StringId,
+    module_name: &str,
+    is_test: bool,
+) -> Option<i32> {
+    let exe_path = kpath::join_buf(
+        idents,
+        out_dir,
+        format_args!("{}{}", module_name, if is_test { "_test" } else { "" }),
+    );
+    let mut run_cmd = std::process::Command::new(exe_path);
+    run_cmd.current_dir(idents.get_string(program_home_dir));
+    log::debug!("Run Command: {:?}", run_cmd);
+    let run_status = run_cmd.status().unwrap();
+
+    match run_status.code() {
+        Some(code) => {
+            if code != 0 {
+                error!("{} exited with code: {}", module_name, code);
+            }
+            Some(code)
+        }
+        None => {
+            error!("{} was terminated with signal: {:?}", module_name, run_status.signal());
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod compiler_test {
     use super::*;
@@ -1221,9 +1233,10 @@ mod compiler_test {
             std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
         });
         let root = env!("CARGO_MANIFEST_DIR");
-        let dep_file =
-            kpath::canonicalize(Path::new(root).join("test_src/dep_diamond_test/deps/shared/shared.k1"))
-                .unwrap();
+        let dep_file = kpath::canonicalize(
+            Path::new(root).join("test_src/dep_diamond_test/deps/shared/shared.k1"),
+        )
+        .unwrap();
         let args = Args {
             no_std: false,
             emit_llvm: false,
@@ -1338,37 +1351,5 @@ mod compiler_test {
         );
 
         let _ = fs::remove_dir_all(&dir);
-    }
-}
-
-// Eventually, we want to return output and exit code to the application
-pub fn run_compiled_program(
-    idents: &IdentPool,
-    out_dir: StringId,
-    program_home_dir: StringId,
-    module_name: &str,
-    is_test: bool,
-) -> Option<i32> {
-    let exe_path = kpath::join_buf(
-        idents,
-        out_dir,
-        format_args!("{}{}", module_name, if is_test { "_test" } else { "" }),
-    );
-    let mut run_cmd = std::process::Command::new(exe_path);
-    run_cmd.current_dir(idents.get_string(program_home_dir));
-    log::debug!("Run Command: {:?}", run_cmd);
-    let run_status = run_cmd.status().unwrap();
-
-    match run_status.code() {
-        Some(code) => {
-            if code != 0 {
-                error!("{} exited with code: {}", module_name, code);
-            }
-            Some(code)
-        }
-        None => {
-            error!("{} was terminated with signal: {:?}", module_name, run_status.signal());
-            None
-        }
     }
 }

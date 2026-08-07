@@ -576,7 +576,12 @@ pub struct TokenTriviaTable {
     entries: Vec<TriviaEntry>,
 }
 
+
 impl TokenTriviaTable {
+    pub fn entries(&self) -> &[TriviaEntry] {
+        &self.entries
+    }
+
     pub fn push(&mut self, entry: TriviaEntry) {
         debug_assert!(self.entries.last().is_none_or(|last| last.token_idx <= entry.token_idx));
         self.entries.push(entry)

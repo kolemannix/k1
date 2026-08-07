@@ -58,7 +58,9 @@ impl QIdent {
     }
 }
 
+
 #[allow(non_snake_case)]
+#[derive(Clone, Copy)]
 pub(crate) struct BuiltinIdents {
     pub null: StringId,
     pub main: StringId,
@@ -198,6 +200,7 @@ pub(crate) struct BuiltinIdents {
 }
 
 #[allow(non_snake_case)]
+#[derive(Clone, Copy)]
 pub(crate) struct BuiltinFunctions {
     pub List_with_capacity: QIdent,
     pub List_push: QIdent,
@@ -302,6 +305,24 @@ impl Interner {
         let hash = content_hash(s.as_bytes());
         self.dedup.find(hash, |&id| self.get(id) == s).copied()
     }
+
+    fn snap(&self, w: &mut crate::snap::SnapWriter) {
+        self.bytes.snap(w);
+        self.entries.snap(w);
+    }
+
+    fn restore(&mut self, r: &mut crate::snap::SnapReader) {
+        self.bytes.restore(r);
+        self.entries.restore(r);
+        self.dedup.clear();
+        let Interner { bytes, entries, dedup } = self;
+        for (id, slice) in entries.iter_with_ids() {
+            let hash = content_hash(bytes.getn(*slice));
+            dedup.insert_unique(hash, id, |&id| {
+                content_hash(Self::get_str(bytes, entries, id).as_bytes())
+            });
+        }
+    }
 }
 
 pub struct IdentPool {
@@ -320,6 +341,20 @@ impl IdentPool {
     }
     pub fn get_string(&self, id: StringId) -> &'static str {
         self.pool.borrow().get(id)
+    }
+
+    pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
+        w.write_section("idents");
+        self.pool.borrow().snap(w);
+        w.write_t(&self.b);
+        w.write_t(&self.f);
+    }
+
+    pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
+        r.section("idents");
+        self.pool.get_mut().restore(r);
+        self.b = r.read_t();
+        self.f = r.read_t();
     }
 
     pub fn len(&self) -> usize {

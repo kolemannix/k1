@@ -93,6 +93,7 @@ pub struct ScopeEnclosingFunctions {
     pub function: Option<FunctionId>,
 }
 
+#[derive(Clone, Copy)]
 pub struct ScopeLambdaInfo {
     pub expected_return_type: Option<TypeId>,
     // We have to store this here, instead of on the function, since no function
@@ -100,6 +101,7 @@ pub struct ScopeLambdaInfo {
     pub returned_variable: Option<VariableId>,
 }
 
+#[derive(Clone, Copy)]
 pub struct ScopeLoopInfo {
     pub break_type: Option<TypeId>,
 }
@@ -193,7 +195,112 @@ pub struct Scopes {
     pub vector_scope_id: ScopeId,
 }
 
+
 impl Scopes {
+    pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
+        use crate::snap::{write_map_snap, snap_map_with};
+        let Scopes {
+            scopes,
+            lambda_cache: _,
+            context_variables_by_type,
+            context_variables_by_ability,
+            functions,
+            namespaces,
+            types,
+            type_param_substs,
+            abilities,
+            pending_type_defns,
+            pending_ability_defns,
+            lambda_info,
+            loop_info,
+            block_defers,
+            core_scope_id,
+            k1_scope_id,
+            mem_scope_id,
+            sys_scope_id,
+            libc_scope_id,
+            types_scope_id,
+            array_scope_id,
+            vector_scope_id,
+        } = self;
+        w.write_section("scopes");
+        w.write_len(scopes.len());
+        for (_, scope) in scopes.iter_with_ids() {
+            let Scope { parent, scope_type, kinds, owner_id, variables } = scope;
+            w.write_t(parent);
+            w.write_t(scope_type);
+            w.write_t(kinds);
+            w.write_t(owner_id);
+            write_map_snap(w, variables);
+        }
+        write_map_snap(w, context_variables_by_type);
+        write_map_snap(w, context_variables_by_ability);
+        write_map_snap(w, functions);
+        write_map_snap(w, namespaces);
+        write_map_snap(w, types);
+        write_map_snap(w, type_param_substs);
+        write_map_snap(w, abilities);
+        write_map_snap(w, pending_type_defns);
+        write_map_snap(w, pending_ability_defns);
+        write_map_snap(w, lambda_info);
+        write_map_snap(w, loop_info);
+        snap_map_with(w, block_defers, |w, defers| w.write_slice(&defers.deferred_exprs));
+        for id in [
+            core_scope_id,
+            k1_scope_id,
+            mem_scope_id,
+            sys_scope_id,
+            libc_scope_id,
+            types_scope_id,
+            array_scope_id,
+            vector_scope_id,
+        ] {
+            w.write_t(id);
+        }
+    }
+
+    pub fn restore(r: &mut crate::snap::SnapReader) -> Scopes {
+        use crate::snap::{restore_map_snap, restore_map_with};
+        r.section("scopes");
+        let mut scopes = VPool::make("scopes");
+        let n = r.read_len();
+        for _ in 0..n {
+            let parent = r.read_t();
+            let scope_type = r.read_t();
+            let kinds = r.read_t();
+            let owner_id = r.read_t();
+            let variables = restore_map_snap(r);
+            scopes.add(Scope { parent, scope_type, kinds, owner_id, variables });
+        }
+        Scopes {
+            scopes,
+            // `lambda_cache` is rebuildable
+            lambda_cache: RefCell::new(FxHashMap::new()),
+            context_variables_by_type: restore_map_snap(r),
+            context_variables_by_ability: restore_map_snap(r),
+            functions: restore_map_snap(r),
+            namespaces: restore_map_snap(r),
+            types: restore_map_snap(r),
+            type_param_substs: restore_map_snap(r),
+            abilities: restore_map_snap(r),
+            pending_type_defns: restore_map_snap(r),
+            pending_ability_defns: restore_map_snap(r),
+            lambda_info: restore_map_snap(r),
+            loop_info: restore_map_snap(r),
+            block_defers: restore_map_with(r, |r| ScopeDefers {
+                deferred_exprs: SV4::from_slice(&r.read_vec::<ParsedExprId>()),
+            }),
+            core_scope_id: r.read_t(),
+            k1_scope_id: r.read_t(),
+            mem_scope_id: r.read_t(),
+            sys_scope_id: r.read_t(),
+            libc_scope_id: r.read_t(),
+            types_scope_id: r.read_t(),
+            array_scope_id: r.read_t(),
+            vector_scope_id: r.read_t(),
+        }
+    }
+
     pub const ROOT_SCOPE_ID: ScopeId = ScopeId(NonZeroU32::new(1).unwrap());
     pub fn make() -> Self {
         let root_scope = Scope::make(ScopeType::Namespace, ScopeOwnerId::None);

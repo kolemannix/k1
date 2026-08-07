@@ -48,7 +48,7 @@ impl StaticContainer {
 nz_u32_id!(StaticValueId);
 
 static_assert_size!(StaticValue, 24);
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum StaticValue {
     Empty,
     Bool(bool),
@@ -222,6 +222,7 @@ impl DepEq<StaticValuePool> for StaticValue {
     }
 }
 
+
 pub struct StaticValuePool {
     pub mem: kmem::Mem<StaticValuePool>,
     pub pool: VPool<StaticValue, StaticValueId>,
@@ -248,6 +249,32 @@ impl StaticValuePool {
             false_id,
             true_id,
             nullptr_id,
+        }
+    }
+
+    pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
+        w.write_section("static_values");
+        self.mem.snap(w);
+        self.pool.snap(w);
+        w.write_t(&self.empty_id);
+        w.write_t(&self.false_id);
+        w.write_t(&self.true_id);
+        w.write_t(&self.nullptr_id);
+    }
+
+    pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
+        r.section("static_values");
+        self.mem.restore(r);
+        self.pool.restore(r);
+        self.empty_id = r.read_t();
+        self.false_id = r.read_t();
+        self.true_id = r.read_t();
+        self.nullptr_id = r.read_t();
+        self.hashes.clear();
+        for i in 0..self.pool.len() {
+            let id = StaticValueId::from_u32(i as u32 + 1).unwrap();
+            let hash = self.hash(self.pool.get(id));
+            self.hashes.insert_unique(hash, (hash, id), |(h, _)| *h);
         }
     }
 

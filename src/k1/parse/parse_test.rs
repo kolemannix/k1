@@ -12,7 +12,7 @@ fn make_test_ast() -> ParsedProgram {
 fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'ast> {
     let directory = ast.idents.intern("unit_test");
     let filename = ast.idents.intern("unit_test.k1");
-    let source = SourceFile::make(directory, filename, input.to_string());
+    let source = SourceFile::make(&mut ast.mem, directory, filename, input);
     let module_id = ModuleId::from_u32(1).unwrap();
     let module_name = ast.idents.intern("unit_test");
     let mut token_vec = vec![];
@@ -211,7 +211,8 @@ fn type_parameter_multi() -> ParseResult<()> {
 #[test]
 fn builtin_only() -> Result<(), ParseError> {
     let builtin_source =
-        fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/modules/core/builtin.k1")).unwrap();
+        fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/modules/core/builtin.k1"))
+            .unwrap();
     let ast = test_parse_input("builtin.k1".to_string(), builtin_source)?;
     assert!(!ast.get_root_namespace().definitions.is_empty());
     Ok(())
@@ -535,13 +536,11 @@ fn consecutive_strings() -> ParseResult<()> {
 fn lex_error_does_not_poison_reused_token_buffer() {
     let mut ast = make_test_ast();
     let dir = ast.idents.intern("unit_test");
-    let bad = SourceFile::make(
-        dir,
-        ast.idents.intern("bad.k1"),
-        "let x = \"unterminated\nfn f(): i32 { 0 }".to_string(),
-    );
-    let good =
-        SourceFile::make(dir, ast.idents.intern("good.k1"), "fn g(): i32 { 42 }".to_string());
+    let bad_name = ast.idents.intern("bad.k1");
+    let bad =
+        SourceFile::make(&mut ast.mem, dir, bad_name, "let x = \"unterminated\nfn f(): i32 { 0 }");
+    let good_name = ast.idents.intern("good.k1");
+    let good = SourceFile::make(&mut ast.mem, dir, good_name, "fn g(): i32 { 42 }");
 
     let mut tokens = vec![];
     assert!(lex_file_into_program(&mut ast, bad, &mut tokens).1.is_err());

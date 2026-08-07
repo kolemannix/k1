@@ -1,5 +1,5 @@
 use crate::lex::{Span, SpanId, is_ident_char};
-use crate::parse::{FileId, ParsedId, SourceFiles, StringId};
+use crate::parse::{FileId, ParsedId, ParsedProgram, StringId};
 use crate::typer::scopes::{ScopeId, VariableInScope};
 use crate::typer::types::{Type, TypeId};
 use crate::{SV8, typer::*};
@@ -11,9 +11,9 @@ pub enum LangItem {
     Defn(ParsedId),
 }
 
-pub fn is_point_in_span(sources: &SourceFiles, line: u32, col: u32, span: Span) -> bool {
-    let source = sources.get(span.file_id);
-    let Some(line_info) = source.get_line(line as usize) else {
+pub fn is_point_in_span(ast: &ParsedProgram, line: u32, col: u32, span: Span) -> bool {
+    let source = ast.sources.get(span.file_id);
+    let Some(line_info) = source.get_line(&ast.mem, line as usize) else {
         return false;
     };
     let char_index_abs = line_info.start_char + col;
@@ -31,7 +31,7 @@ pub fn find_entity_at_point(
     let ls_entities = k1.ls_entities.borrow();
     if let Some(entities) = ls_entities.get(&file_id) {
         for entity in entities {
-            if is_point_in_span(&k1.ast.sources, line, col, entity.span) {
+            if is_point_in_span(&k1.ast, line, col, entity.span) {
                 return Some(*entity);
             }
         }
@@ -195,7 +195,7 @@ pub fn scope_at_point(k1: &TypedProgram, file_id: FileId, line: u32, col: u32) -
     let mut best: Option<(ScopeId, u32)> = None;
     for (expr_id, span_id) in k1.exprs.spans.iter_with_ids() {
         let span = k1.ast.spans.get(*span_id);
-        if span.file_id != file_id || !is_point_in_span(&k1.ast.sources, line, col, span) {
+        if span.file_id != file_id || !is_point_in_span(&k1.ast, line, col, span) {
             continue;
         }
         if let TypedExpr::Block(block) = k1.exprs.get(expr_id)
@@ -380,7 +380,7 @@ pub fn get_expr_at_point(
     for (expr_id, span_id) in k1.exprs.spans.iter_with_ids() {
         let span = k1.ast.spans.get(*span_id);
         if span.file_id == file {
-            if is_point_in_span(&k1.ast.sources, line_index, char_index, span) {
+            if is_point_in_span(&k1.ast, line_index, char_index, span) {
                 matching_exprs.push((expr_id, span.len));
             }
         }

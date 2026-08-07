@@ -4,25 +4,17 @@
 // and k1bindgen on PATH.
 use std/process
 
-fn run(program: string, args: span[string]) {
-  // claude: why do we need this 'run' function here? Something is probably wrong with process/run-command's signature
-  //         We've already called .get() (.!), why are we _also_ checking succeeded? could we add a convenience wrapper for successful commands?
-  //         and puts failures in the error channel of the result[]?
-  let r = process/run-command(program, args, :inherit).!
-  if not r.succeeded() { crash("setup command failed: $program") }
-}
-
 fn setup(ctx: k1/setup-ctx) {
-  run("mkdir", ["-p", "libs", "generated", ".k1-out/llhttp"])
+  let _ = process/run-command("mkdir", ["-p", "libs", ".k1-out/llhttp"], :inherit).!
 
   for ["llhttp", "api", "http"] {
-    run("cc", ["-O2", "-Ivendor", "-c", "vendor/${it}.c", "-o", ".k1-out/llhttp/${it}.o"])
+    let _ = process/run-command("cc", ["-O2", "-Ivendor", "-c", "vendor/${it}.c", "-o", ".k1-out/llhttp/${it}.o"], :inherit).!
   }
-  run("/bin/sh", ["-c", "ar rcs libs/libllhttp.a .k1-out/llhttp/*.o"])
+  let _ = process/run-command("/bin/sh", ["-c", "ar rcs libs/libllhttp.a .k1-out/llhttp/*.o"], :inherit).!
 
   let args: list[string] = [
     "-in-path", "vendor/llhttp.h",
-    "-out-path", "generated/llhttp.k1",
+    "-out-path", "llhttp.k1",
     "-lib-name", "llhttp",
     "+strip-prefix", "llhttp_",
     "+strip-prefix", "HTTP_",
@@ -34,7 +26,7 @@ fn setup(ctx: k1/setup-ctx) {
     args.push("+clangarg")
     args.push("-isysroot")
     args.push("+clangarg")
-    args.push(sdk.output)
+    args.push(sdk)
   }
-  run("k1bindgen", args.as-span())
+  let _ = process/run-command("k1bindgen", args.as-span(), :inherit).!
 }
