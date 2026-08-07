@@ -7,13 +7,13 @@ use std::io::{IsTerminal, Write};
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
-use crate::kmem::{MStr, Mem};
-use crate::kpath;
+use crate::kmem::{self, MStr, Mem};
 use crate::parse::{IdentPool, StringId, write_source_location};
 use crate::typer::{LibRefLinkType, MemTmp, MessageLevel, TypedProgram};
+use crate::{kpath, typer};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
-use log::error;
+use log::{error, info};
 
 use crate::codegen_llvm::Cg;
 
@@ -288,14 +288,18 @@ pub struct Args {
     #[arg(short, long, default_value_t = true, action = clap::ArgAction::Set)]
     pub optimize_ir: bool,
 
+    /// Disk-cached compiles
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub cache: bool,
+
     /// Target platform
     #[arg(long)]
     pub target: Option<Target>,
 
-    /// Internal: disables setup; set for the nested compile of a setup.k1
-    /// program so setup trees never run setups themselves
+    /// Internal: this compile is a module's setup.k1 program; see
+    /// SetupMode::SetupProgram
     #[arg(skip)]
-    pub setup_disabled: bool,
+    pub is_setup_program: bool,
 
     /// Internal: nested compiles inherit the outer compile's k1 home instead of
     /// re-deriving it from the environment
@@ -316,10 +320,11 @@ impl Args {
 pub enum SetupMode {
     /// Run stale setup steps at module load (default)
     Normal,
-    /// Never run setup steps (the nested compile of a setup.k1 program)
-    Disabled,
-    /// `k1 setup`: run the gates during load, then stop before the primary
-    /// tree typechecks; force treats the primary module's setup as stale
+    /// This compile IS a module's setup.k1 program: setup steps never run
+    /// inside one, so setup trees can't recurse
+    SetupProgram,
+    /// `k1 setup`: run setup function during load, then stop before the primary
+    /// tree typechecks; force runs even if fresh
     SetupOnly { force: bool },
 }
 
@@ -345,9 +350,11 @@ pub struct CompilerConfig {
     pub filc: bool,
     pub out_dir: StringId,
     pub out_dir_generated: StringId,
+    pub cache_dir: StringId,
     pub optimize: bool,
     pub chatty: bool,
     pub optimize_ir: bool,
+    pub cache: bool,
     pub setup_mode: SetupMode,
 }
 
@@ -422,9 +429,7 @@ fn read_source_file(path: String, override_content: Option<String>) -> Result<So
     Ok(SourceFile { path, content, content_hash })
 }
 
-/// kpath joins are UTF-8 by construction; recover the String when a join must
-/// cross a thread boundary as owned data
-fn pathbuf_into_string(p: PathBuf) -> String {
+pub(crate) fn pathbuf_into_string(p: PathBuf) -> String {
     p.into_os_string().into_string().unwrap()
 }
 
@@ -493,6 +498,33 @@ impl ModuleRootHandle {
     }
 }
 
+pub fn collect_module_source_paths(
+    module_dir: &str,
+    root_path: &str,
+) -> Result<Vec<String>, String> {
+    let entries = fs::read_dir(Path::new(module_dir))
+        .map_err(|e| format!("Failed to list module dir {module_dir}: {e}"))?;
+    let mut files = vec![];
+    for item in entries {
+        let Ok(item) = item else {
+            continue;
+        };
+        let path = item.path();
+        if path.extension().is_some_and(|ext| ext == "k1") {
+            let path_string = path.into_os_string().into_string().map_err(|s| {
+                format!("Source file name is not valid UTF-8: {}", s.to_string_lossy())
+            })?;
+
+            // The root is parsed separately; setup.k1 is a standalone program
+            if path_string != root_path && kpath::file_name(&path_string) != "setup.k1" {
+                files.push(path_string);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
 pub struct ModuleRemainingSources {
     module_dir: String,
     root_path: String,
@@ -500,6 +532,10 @@ pub struct ModuleRemainingSources {
 }
 
 impl ModuleRemainingSources {
+    pub fn new(module_dir: String, root_path: String, is_dir: bool) -> ModuleRemainingSources {
+        ModuleRemainingSources { module_dir, root_path, is_dir }
+    }
+
     pub fn is_dir(&self) -> bool {
         self.is_dir
     }
@@ -513,25 +549,7 @@ impl ModuleRemainingSources {
             if !self.is_dir {
                 return Ok(vec![]);
             }
-            let entries = match fs::read_dir(Path::new(&self.module_dir)) {
-                Ok(entries) => entries,
-                Err(e) => {
-                    return Err(format!("Failed to list module dir {}: {e}", self.module_dir));
-                }
-            };
-            let mut files = entries
-                .filter_map(|item| item.ok())
-                .filter(|item| item.path().extension().is_some_and(|ext| ext == "k1"))
-                .map(|item| {
-                    item.path().into_os_string().into_string().map_err(|s| {
-                        format!("Source file name is not valid UTF-8: {}", s.to_string_lossy())
-                    })
-                })
-                .collect::<Result<Vec<String>, String>>()?;
-            // setup.k1 is the module's standalone setup program, not module source
-            files.retain(|p| *p != self.root_path && kpath::file_name(p) != "setup.k1");
-            files.sort();
-            files
+            collect_module_source_paths(&self.module_dir, &self.root_path)?
                 .into_iter()
                 .map(|path| {
                     let override_content = overrides.get(&path).cloned();
@@ -624,10 +642,6 @@ pub fn run_setup_function(req: &SetupRequest) -> Result<()> {
     Ok(())
 }
 
-/// Fresh means the whole stamp still holds: the input fingerprint matches and
-/// every declared output hashes to what the last run recorded. A missing or
-/// hand-modified output is simply dirty and reruns setup; version control is
-/// the safety net for edits to generated files.
 fn setup_is_fresh(
     req: &SetupRequest,
     scratch: &mut Mem<()>,
@@ -753,8 +767,9 @@ fn run_setup_program(req: &SetupRequest, setup_k1_path: &str) -> Result<()> {
         profile: false,
         chatty: req.chatty,
         optimize_ir: true,
+        cache: true,
         target: Some(req.target),
-        setup_disabled: true,
+        is_setup_program: true,
         k1_home_override: Some(req.idents.get_string(req.k1_home).to_string()),
         command: Command::Check { file: PathBuf::from(setup_k1_path) },
     };
@@ -766,6 +781,188 @@ fn run_setup_program(req: &SetupRequest, setup_k1_path: &str) -> Result<()> {
         }
     };
     program.run_setup_entry(module_dir)
+}
+
+fn module_list_filename(config: &CompilerConfig) -> &'static str {
+    match config.setup_mode {
+        SetupMode::SetupProgram => "modules-setup",
+        _ => "modules",
+    }
+}
+
+struct ListedModule {
+    name: String,
+    home_dir: String,
+    root_filename: String,
+    is_dir: bool,
+    setup: Option<(Vec<String>, Vec<String>)>,
+}
+
+fn read_module_list(cache_dir: &Path, config: &CompilerConfig) -> Option<Vec<ListedModule>> {
+    let text = crate::snap::cache_load_text(cache_dir, module_list_filename(config))?;
+    let mut lines = text.lines();
+    if lines.next()? != format!("k1-modules v{}", crate::BUILD_ID) {
+        return None;
+    }
+    let mut modules: Vec<ListedModule> = vec![];
+    for line in lines {
+        if let Some(rest) = line.strip_prefix("module\t") {
+            let mut parts = rest.split('\t');
+            let name = parts.next()?.to_string();
+            let is_dir = parts.next()? == "1";
+            let home_dir = parts.next()?.to_string();
+            let root_filename = parts.next()?.to_string();
+            modules.push(ListedModule { name, home_dir, root_filename, is_dir, setup: None });
+        } else if let Some(rest) = line.strip_prefix("setup\t") {
+            let mut parts = rest.split('\t');
+            let n_out: usize = parts.next()?.parse().ok()?;
+            let mut outs: Vec<String> = parts.map(str::to_string).collect();
+            if outs.len() < n_out {
+                return None;
+            }
+            let ins = outs.split_off(n_out);
+            modules.last_mut()?.setup = Some((outs, ins));
+        } else if !line.is_empty() {
+            return None;
+        }
+    }
+    Some(modules)
+}
+
+/// Record which modules and files made up this compile, in typing order, so
+/// the next compile can compute inputs hashes without loading anything
+fn write_module_list(k1: &TypedProgram) {
+    use std::fmt::Write as _;
+    let mut s = format!("k1-modules v{}\n", crate::BUILD_ID);
+    for &module_id in &k1.modules_completed {
+        let m = k1.modules.get(module_id);
+        let root_source = k1.ast.sources.get(m.root_file_id(&k1.mem));
+        writeln!(
+            s,
+            "module\t{}\t{}\t{}\t{}",
+            k1.get_string(m.name),
+            m.is_dir as u8,
+            k1.get_string(m.home_dir),
+            k1.get_string(root_source.filename),
+        )
+        .unwrap();
+        if let Some(setup) = m.manifest.setup {
+            let outs = k1.mem.getn(setup.outputs);
+            let ins = k1.mem.getn(setup.inputs);
+            write!(s, "setup\t{}", outs.len()).unwrap();
+            for id in outs.iter().chain(ins.iter()) {
+                write!(s, "\t{}", k1.get_string(*id)).unwrap();
+            }
+            writeln!(s).unwrap();
+        }
+    }
+    crate::snap::cache_store_text(k1.cache_dir(), module_list_filename(&k1.config), &s);
+}
+
+fn inputs_hashes_from_module_list(
+    idents: &IdentPool,
+    config: &CompilerConfig,
+    overrides: &fxhash::FxHashMap<String, String>,
+    modules: &[ListedModule],
+) -> Vec<crate::snap::InputsHash> {
+    let hash_file = |path: &str| -> Option<u64> {
+        match overrides.get(path) {
+            Some(content) => Some(content_hash64(content.as_bytes())),
+            None => fs::read(Path::new(path)).ok().map(|b| content_hash64(&b)),
+        }
+    };
+    let mut scratch: Mem<()> = Mem::make();
+    let n = modules.len();
+    let mut group_ends = vec![1.min(n)];
+    if !config.no_std {
+        group_ends.push(2.min(n));
+    }
+    group_ends.push(n);
+
+    let mut hash = typer::snapshot::inputs_hash_from_settings(idents, config);
+    let mut hashes = vec![];
+    let mut start = 0;
+    for end in group_ends {
+        let group = &modules[start..end];
+        start = end;
+        for m in group {
+            let root_path = kpath::join_tmp(
+                &mut scratch,
+                idents,
+                m.home_dir.as_str(),
+                m.root_filename.as_str(),
+            );
+            let Some(root_hash) = hash_file(root_path.as_str()) else {
+                // An unreadable root invalidates the whole group and everything after
+                return hashes;
+            };
+            hash = hash.add_module_header(&m.name, &m.home_dir, &m.root_filename, root_hash);
+        }
+        for m in group {
+            if config.setup_mode != SetupMode::SetupProgram
+                && m.setup.as_ref().is_some_and(|(outputs, inputs)| {
+                    !listed_setup_is_fresh(&mut scratch, idents, config, m, outputs, inputs)
+                })
+            {
+                // If we're running setup, give up on getting a cache hit for this module this time
+                // around
+                return hashes;
+            }
+            let mut sources: kmem::List<(String, u64), _> = scratch.new_list(128);
+            if m.is_dir {
+                let root_path = kpath::join_tmp(
+                    &mut scratch,
+                    idents,
+                    m.home_dir.as_str(),
+                    m.root_filename.as_str(),
+                );
+                let Ok(files) = collect_module_source_paths(&m.home_dir, root_path.as_str()) else {
+                    return hashes;
+                };
+                for path in files {
+                    let Some(h) = hash_file(&path) else { return hashes };
+                    sources.push((path, h));
+                }
+            }
+            hash = hash.add_module_sources(&m.name, sources.iter().map(|(p, h)| (p.as_str(), *h)));
+            hashes.push(hash);
+        }
+    }
+    hashes
+}
+
+fn listed_setup_is_fresh(
+    scratch: &mut Mem<()>,
+    idents: &IdentPool,
+    config: &CompilerConfig,
+    m: &ListedModule,
+    outputs: &[String],
+    inputs: &[String],
+) -> bool {
+    let module_dir = idents.intern(&m.home_dir);
+    let setup_k1_path = kpath::join_tmp(scratch, idents, module_dir, "setup.k1");
+    let Ok(setup_src) = fs::read_to_string(Path::new(setup_k1_path.as_str())) else {
+        return false;
+    };
+    let outputs: Vec<StringId> = outputs.iter().map(|s| idents.intern(s)).collect();
+    let inputs: Vec<StringId> = inputs.iter().map(|s| idents.intern(s)).collect();
+    let req = SetupRequest {
+        idents,
+        module_dir,
+        module_name: idents.intern(&m.name),
+        outputs: &outputs,
+        inputs: &inputs,
+        target: config.target,
+        k1_home: config.k1_home,
+        force: false,
+        chatty: false,
+    };
+    let Ok(fingerprint) = setup_fingerprint(&req, scratch, &setup_src) else {
+        return false;
+    };
+    let setup_out_dir = kpath::join_tmp(scratch, idents, module_dir, (".k1-out", "setup"));
+    let stamp_path = kpath::join_tmp(scratch, idents, setup_out_dir.as_str(), "stamp");
+    setup_is_fresh(&req, scratch, stamp_path.as_str(), &fingerprint)
 }
 
 fn write_program_dump(p: &TypedProgram) {
@@ -846,6 +1043,7 @@ pub fn compile_program_ext(
     let home_dir_id = ast.idents.intern(&home_dir);
     let out_dir = kpath::join_id(&ast.idents, &mut ast.mem, home_dir.as_str(), ".k1-out");
     let out_dir_generated = kpath::join_id(&ast.idents, &mut ast.mem, out_dir, "generated");
+    let cache_dir = kpath::join_id(&ast.idents, &mut ast.mem, out_dir, crate::snap::CACHE_DIR_NAME);
     std::fs::create_dir_all(Path::new(ast.idents.get_string(out_dir_generated))).unwrap();
 
     let use_std = !args.no_std;
@@ -911,11 +1109,13 @@ pub fn compile_program_ext(
         filc: args.filc,
         out_dir,
         out_dir_generated,
+        cache_dir,
         optimize: args.optimize,
         chatty: args.chatty,
         optimize_ir: args.optimize_ir,
-        setup_mode: if args.setup_disabled {
-            SetupMode::Disabled
+        cache: args.cache,
+        setup_mode: if args.is_setup_program {
+            SetupMode::SetupProgram
         } else if let Command::Setup { force, .. } = args.command {
             SetupMode::SetupOnly { force }
         } else {
@@ -925,7 +1125,46 @@ pub fn compile_program_ext(
 
     let _cwd = CwdGuard::enter(&home_dir);
 
-    let mut k1 = TypedProgram::new(ast, config, lsp);
+    let mut k1 = 'program: {
+        let cache_dir = Path::new(ast.idents.get_string(cache_dir));
+        if args.cache
+            && let Some(modules) = read_module_list(cache_dir, &config)
+        {
+            let input_hashes_by_module = inputs_hashes_from_module_list(
+                &ast.idents,
+                &config,
+                &lsp.source_overrides,
+                &modules,
+            );
+
+            // The snapshot with the most modules in it is at the end
+            for (i, hash) in input_hashes_by_module.iter().enumerate().rev() {
+                // If we have a hit, the file exists by this name, and we restore
+                let Some(bytes) = crate::snap::cache_load(cache_dir, *hash) else { continue };
+                let module_count = i as u32 + 1;
+                match TypedProgram::restore(&bytes, config, lsp.clone()) {
+                    Ok(mut restored) => {
+                        restored.restored_module_count = module_count;
+                        let msg = format!(
+                            "restored {module_count} modules from cache ({:.1}mb)",
+                            bytes.len() as f64 / (1024.0 * 1024.0)
+                        );
+                        info!("{msg}");
+                        if args.chatty {
+                            eprintln!("{msg}");
+                        }
+                        break 'program restored;
+                    }
+                    Err(e) => {
+                        if args.chatty {
+                            eprintln!("ignoring cache entry: {e}");
+                        }
+                    }
+                }
+            }
+        }
+        TypedProgram::new(ast, config, lsp)
+    };
 
     let add_result = (|| {
         k1.add_module(core_plan?, false)?;
@@ -935,6 +1174,10 @@ pub fn compile_program_ext(
         k1.add_module(main_plan?, true)
     })();
     k1.write_emitted_sources();
+    if args.cache {
+        write_module_list(&k1);
+    }
+    k1.join_cache_writes();
     if let Err(e) = add_result {
         if args.dump_module {
             write_program_dump(&k1);
@@ -1249,8 +1492,9 @@ mod compiler_test {
             profile: false,
             chatty: false,
             optimize_ir: true,
+            cache: false,
             target: None,
-            setup_disabled: false,
+            is_setup_program: false,
             k1_home_override: None,
             command: Command::Check { file: PathBuf::from(root).join("test_src/dep_diamond_test") },
         };
@@ -1265,7 +1509,50 @@ mod compiler_test {
     }
 
     #[test]
-    fn setup_gate_runs_once_and_reruns_on_change() {
+    fn disk_cache_restores_longest_valid_prefix() {
+        static SET_HOME: std::sync::Once = std::sync::Once::new();
+        SET_HOME.call_once(|| unsafe {
+            std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
+        });
+        let dir = std::env::temp_dir().join(format!("k1_disk_cache_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("app.k1");
+        fs::write(&app, "fn main(): i32 {\n  println(\"v1\")\n  0\n}\n").unwrap();
+        let args = Args {
+            no_std: false,
+            emit_llvm: false,
+            optimize: false,
+            dump_module: false,
+            dump_idents: false,
+            debug: false,
+            sanitize: false,
+            filc: false,
+            profile: false,
+            chatty: false,
+            optimize_ir: true,
+            cache: true,
+            target: None,
+            is_setup_program: false,
+            k1_home_override: None,
+            command: Command::Check { file: app.clone() },
+        };
+
+        let cold = compile_program(&args).ok().expect("cold compile must succeed");
+        assert_eq!(cold.restored_module_count, 0, "first compile has nothing to restore");
+
+        let warm = compile_program(&args).ok().expect("warm compile must succeed");
+        assert_eq!(warm.restored_module_count, 3, "unchanged input restores core, std, app");
+
+        fs::write(&app, "fn main(): i32 {\n  println(\"v2\")\n  0\n}\n").unwrap();
+        let edited = compile_program(&args).ok().expect("edited compile must succeed");
+        assert_eq!(edited.restored_module_count, 2, "an edited app restores only core and std");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn setup_program_runs() {
         static SET_HOME: std::sync::Once = std::sync::Once::new();
         SET_HOME.call_once(|| unsafe {
             std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
@@ -1305,8 +1592,9 @@ mod compiler_test {
             profile: false,
             chatty: false,
             optimize_ir: true,
+            cache: false,
             target: None,
-            setup_disabled: false,
+            is_setup_program: false,
             k1_home_override: Some(root.to_string()),
             command: Command::Check { file: dir.join("app.k1") },
         };
@@ -1316,14 +1604,12 @@ mod compiler_test {
         let witness_path = genlib.join("witness.txt");
         let generated = fs::read_to_string(&gen_path).unwrap();
 
-        // A fresh gate must not rerun setup: the sentinel we plant in an
-        // undeclared file survives
         fs::write(&witness_path, "sentinel\n").unwrap();
         assert!(compile_program(&args).is_ok(), "second compile (fresh) must succeed");
         assert_eq!(
             fs::read_to_string(&witness_path).unwrap(),
             "sentinel\n",
-            "a fresh setup gate must not rerun setup"
+            "a fresh setup must not rerun setup"
         );
 
         // A hand-modified declared output means dirty: setup reruns, regenerating it

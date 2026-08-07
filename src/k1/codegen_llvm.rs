@@ -713,7 +713,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn get_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
         let span = self.k1.ast.spans.get(span);
-        let line = self.k1.ast.sources.get_line_for_span_start(&self.k1.ast.mem, span).expect("No line for span");
+        let line = self
+            .k1
+            .ast
+            .sources
+            .get_line_for_span_start(&self.k1.ast.mem, span)
+            .expect("No line for span");
         let column = span.start + 1 - line.start_char;
         let locn = self.debug.debug_builder.create_debug_location(
             self.ctx,
@@ -742,7 +747,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn get_line_number(&self, span: SpanId) -> u32 {
         let span = self.k1.ast.spans.get(span);
-        let line = self.k1.ast.sources.get_line_for_span_start(&self.k1.ast.mem, span).expect("No line for span");
+        let line = self
+            .k1
+            .ast
+            .sources
+            .get_line_for_span_start(&self.k1.ast.mem, span)
+            .expect("No line for span");
         line.line_index + 1
     }
 

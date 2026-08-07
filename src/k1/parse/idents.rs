@@ -58,7 +58,6 @@ impl QIdent {
     }
 }
 
-
 #[allow(non_snake_case)]
 #[derive(Clone, Copy)]
 pub(crate) struct BuiltinIdents {

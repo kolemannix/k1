@@ -222,7 +222,6 @@ impl DepEq<StaticValuePool> for StaticValue {
     }
 }
 
-
 pub struct StaticValuePool {
     pub mem: kmem::Mem<StaticValuePool>,
     pub pool: VPool<StaticValue, StaticValueId>,

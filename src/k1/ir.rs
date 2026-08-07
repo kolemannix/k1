@@ -83,6 +83,69 @@ pub struct ProgramIr {
     opt_buf_cfg_simpl_rewrites: iropt::RewriteMappings,
 }
 
+static_assert_size!(IrComment, 1);
+
+impl ProgramIr {
+    pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
+        use crate::snap::write_map_snap;
+        let ProgramIr {
+            mem,
+            instrs,
+            sources,
+            comments,
+            debug_info,
+            functions,
+            exprs,
+            module_config: IrModuleConfig {},
+            calls,
+            cmpxchgs,
+            vec_ops,
+            phys_fn_type_cache: _,
+            b_variables: _,
+            b_loops: _,
+            units_pending_compile,
+            globals_pending_eval,
+            opt_buf_stack: _,
+            opt_buf_order: _,
+            opt_buf_visited: _,
+            opt_buf_callees: _,
+            opt_buf_cfg_compute_work_stack: _,
+            opt_buf_cfg_compute_visited: _,
+            opt_buf_inline_self_rewrites: _,
+            opt_buf_inline_inlined_rewrites: _,
+            opt_buf_cfg_simpl_rewrites: _,
+        } = self;
+        w.write_section("ir");
+        mem.snap(w);
+        instrs.snap(w);
+        sources.snap(w);
+        comments.snap(w);
+        debug_info.snap(w);
+        functions.snap(w);
+        write_map_snap(w, exprs);
+        calls.snap(w);
+        cmpxchgs.snap(w);
+        vec_ops.snap(w);
+        assert!(units_pending_compile.is_empty());
+        assert!(globals_pending_eval.is_empty());
+    }
+
+    pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
+        r.section("ir");
+        self.mem.restore(r);
+        self.instrs.restore(r);
+        self.sources.restore(r);
+        self.comments.restore(r);
+        self.debug_info.restore(r);
+        self.functions.restore(r);
+        self.exprs = crate::snap::restore_map_snap(r);
+        self.calls.restore(r);
+        self.cmpxchgs.restore(r);
+        self.vec_ops.restore(r);
+        self.phys_fn_type_cache.clear();
+    }
+}
+
 /// Provenance notes attached to every instruction for IR dumps.
 #[derive(Clone, Copy)]
 pub enum IrComment {
@@ -550,8 +613,6 @@ impl AtomicRmwOpIr {
 
 nz_u32_id!(AtomicCmpxchgId);
 
-/// Too big to inline in `Inst` (32-byte cap), so it lives in `ProgramIr::cmpxchgs`,
-/// like `IrCall` in `ProgramIr::calls`.
 /// Writes `{ prev: t, ok: bool }` through `result`; `ok_vm_offset` is the byte
 /// offset of `ok` within that aggregate.
 #[derive(Clone, Copy)]

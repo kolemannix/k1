@@ -3,19 +3,37 @@
 next up
 - more dogfooding, do the 2 static sites
 
-macro with-tmp(expr) {
-  `
-  mem/push-mode(:tmp)
-  $expr
-  mem/pop-mode()
-  `
-}
-tmp {
+# Bugs
+- [x] [major] Support (co)recursive Generics
+- [ ] [major] Allow pattern matching *into* recursive types (currently we just terminate)
+- [x] accidentally captured context parameter results in 'Missing variable' in ir
+- [x] Out of order type definitions don't work with aliases
+- [x] same-level recursion is not caught behind option
+- [ ] Require that a blanket impl's params appear in the Self type
+- [ ] Test handling of NaN and Infinity literals, other float edge cases
 
-}
+## [x] vector types
 
-Minor and ideas
-- [ ] 'zeroable' story, i think i have a plan; check if zeroed will produce a valid bit-pattern for the given type
+## [ ] inline asm
+
+## [ ] Constant-folding, SCCP
+
+## [ ] token stream based macros
+
+## [x] expr-level macros
+- [x] source-location preservation via 'code' type
+
+## [x] meta-based macros
+
+## [ ] very readable compiler trace, incl specialization args, for debugging
+
+## [x] Ability objects; dyn[<ability expr>]
+
+## [ ] Escape analysis
+- [ ] Use to report escaped stack pointers
+
+## grab bag list mid2026
+- [ ] Warn on zeroed() for non zeroable type
 - [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
 - [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
       way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
@@ -82,41 +100,10 @@ bindgen dogfood list
 - [x] dogfood(lsp): sum/enum ctors ls entities
 - [x] dogfood(lsp): failed match arm still check others
 - [x] dogfood(lsp): sum patterns ls entities
-
-http dogfood list
-- [ ] design program 'params' / 'args' so we can toggle things like tlog
+- [x] design program 'params' / 'args' so we can toggle things like tlog
       A program can take arguments; this replaces macro features in C.
       Make it plain k1 data; pass it where you depend on the module.
 - [x] solution for lazily evaluated log arguments
-
-# Bugs
-- [x] [major] Support (co)recursive Generics
-- [ ] [major] Allow pattern matching *into* recursive types (currently we just terminate)
-- [x] accidentally captured context parameter results in 'Missing variable' in ir
-- [x] Out of order type definitions don't work with aliases
-- [x] same-level recursion is not caught behind option
-- [ ] Require that a blanket impl's params appear in the Self type
-- [ ] Test handling of NaN and Infinity literals, other float edge cases
-
-## [x] vector types
-
-## [ ] inline asm
-
-## [ ] Constant-folding, SCCP
-
-## [ ] token stream based macros
-
-## [x] expr-level macros
-- [x] source-location preservation via 'code' type
-
-## [x] meta-based macros
-
-## [ ] very readable compiler trace, incl specialization args, for debugging
-
-## [x] Ability objects; dyn[<ability expr>]
-
-## [ ] Escape analysis
-- [ ] Use to report escaped stack pointers
 
 ## [x] Distribute builds that work
 - [x] Test on linux
@@ -138,7 +125,7 @@ http dogfood list
 
 ## Project: di. Debug Info tidyups
 - [x] Fix random jumping to function header
-- [ ] Annotate U8s with boolean somehow where they are actually booleans
+- [ ] Add separate scalar types for char and boolean for debug info
 
 ## Project: Recursive types take 2
 - [x] Remove RecursiveReference; make visitors detect cycles

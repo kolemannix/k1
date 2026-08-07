@@ -195,10 +195,9 @@ pub struct Scopes {
     pub vector_scope_id: ScopeId,
 }
 
-
 impl Scopes {
     pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
-        use crate::snap::{write_map_snap, snap_map_with};
+        use crate::snap::{snap_map_with, write_map_snap};
         let Scopes {
             scopes,
             lambda_cache: _,

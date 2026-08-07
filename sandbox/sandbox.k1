@@ -1,20 +1,6 @@
-fn testPosix() {
-    println("Testing process execution...")
-
-    let echoOut = std/process/run("/bin/echo", ["hello", "world"]).!
-    println("Echo output: $echoOut")
-
-    let lsStatus = std/process/run-status("/bin/ls", [], :drop).!
-    println("Ls exit code: ${lsStatus.exit-code}")
-
-    let failStatus = std/process/run("/nonexistent", [])
-    println("Nonexistent command is-ok(): ${failStatus.is-ok()}")
-}
-
 fn main() {
-  #if core/k1/os-posix {
-    testPosix()
-  } else {
-    println("Process execution only supported on POSIX systems")
+  let x = #static 42
+  #static(x) {
+    x
   }
 }

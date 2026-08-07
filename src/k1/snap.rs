@@ -12,7 +12,7 @@ pub struct SnapWriter {
 
 impl SnapWriter {
     pub fn new() -> SnapWriter {
-        let mut w = SnapWriter { buf: Vec::with_capacity(1 << 20) };
+        let mut w = SnapWriter { buf: Vec::with_capacity(1 << 25) };
         w.buf.extend_from_slice(&SNAP_MAGIC);
         w.write_str(crate::BUILD_ID);
         w
@@ -36,10 +36,6 @@ impl SnapWriter {
     #[inline]
     pub fn write_len(&mut self, v: usize) {
         self.write_u64(v as u64);
-    }
-
-    pub fn write_bool(&mut self, v: bool) {
-        self.write_raw(&[v as u8]);
     }
 
     pub fn write_t<T: Copy>(&mut self, t: &T) {
@@ -69,17 +65,17 @@ impl SnapWriter {
         I: Iterator<Item = T>,
         F: FnMut(&mut SnapWriter, T),
     {
-        let mut encoded: Vec<Vec<u8>> = entries
-            .map(|e| {
-                let mut w = SnapWriter { buf: Vec::new() };
-                enc(&mut w, e);
-                w.buf
-            })
-            .collect();
-        encoded.sort_unstable();
-        self.write_len(encoded.len());
-        for e in &encoded {
-            self.write_raw(e);
+        let mut scratch = SnapWriter { buf: Vec::new() };
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        for e in entries {
+            let start = scratch.buf.len();
+            enc(&mut scratch, e);
+            ranges.push((start, scratch.buf.len()));
+        }
+        ranges.sort_unstable_by(|a, b| scratch.buf[a.0..a.1].cmp(&scratch.buf[b.0..b.1]));
+        self.write_len(ranges.len());
+        for (start, end) in ranges {
+            self.write_raw(&scratch.buf[start..end]);
         }
     }
 }
@@ -184,10 +180,6 @@ impl<'a> SnapReader<'a> {
         self.read_u64() as usize
     }
 
-    pub fn read_bool(&mut self) -> bool {
-        self.take(1)[0] != 0
-    }
-
     pub fn read_t<T: Copy>(&mut self) -> T {
         let bytes = self.take(size_of::<T>());
         unsafe { std::ptr::read_unaligned(bytes.as_ptr() as *const T) }
@@ -229,6 +221,129 @@ impl<'a> SnapReader<'a> {
             fxhash::hash32(name.as_bytes()),
             "snapshot section mismatch: expected '{name}'"
         );
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputsHash(pub u128);
+
+impl InputsHash {
+    /// Two independently-salted SipHashes give 128 bits; a false cache hit
+    /// would need a double collision
+    pub fn add(self, parts: &[&[u8]]) -> InputsHash {
+        use std::hash::Hasher;
+        let mut halves = [0u64; 2];
+        for (salt, half) in halves.iter_mut().enumerate() {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            h.write_u64(salt as u64);
+            h.write_u128(self.0);
+            for p in parts {
+                h.write(p);
+            }
+            *half = h.finish();
+        }
+        InputsHash((halves[0] as u128) << 64 | halves[1] as u128)
+    }
+
+    pub fn add_module_header(
+        self,
+        name: &str,
+        root_dir: &str,
+        root_filename: &str,
+        root_hash: u64,
+    ) -> InputsHash {
+        self.add(&[
+            name.as_bytes(),
+            root_dir.as_bytes(),
+            root_filename.as_bytes(),
+            &root_hash.to_le_bytes(),
+        ])
+    }
+
+    pub fn add_module_sources<S: AsRef<str>>(
+        self,
+        name: &str,
+        sources: impl Iterator<Item = (S, u64)>,
+    ) -> InputsHash {
+        let mut hash = self.add(&[name.as_bytes()]);
+        for (path, content_hash) in sources {
+            hash = hash.add(&[path.as_ref().as_bytes(), &content_hash.to_le_bytes()]);
+        }
+        hash
+    }
+
+    fn filename(&self) -> String {
+        format!("{:032x}.snap", self.0)
+    }
+}
+
+pub const CACHE_DIR_NAME: &str = "cache";
+const CACHE_MAX_ENTRIES: usize = 64;
+
+pub fn cache_load(cache_dir: &std::path::Path, hash: InputsHash) -> Option<memmap2::Mmap> {
+    let path = cache_dir.join(hash.filename());
+    let file = std::fs::File::open(&path).ok()?;
+    let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
+    let _ = mmap.advise(memmap2::Advice::Sequential);
+    touch(&path);
+    Some(mmap)
+}
+
+fn touch(path: &std::path::Path) {
+    if let Ok(f) = std::fs::OpenOptions::new().append(true).open(path) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    }
+}
+
+pub fn cache_load_text(cache_dir: &std::path::Path, filename: &str) -> Option<String> {
+    let path = cache_dir.join(filename);
+    let text = std::fs::read_to_string(&path).ok()?;
+    touch(&path);
+    Some(text)
+}
+
+pub fn cache_store_text(cache_dir: &std::path::Path, filename: &str, text: &str) {
+    if std::fs::create_dir_all(cache_dir).is_err() {
+        return;
+    }
+    let tmp = cache_dir.join(format!("{filename}.tmp.{}", std::process::id()));
+    if std::fs::write(&tmp, text).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    let _ = std::fs::rename(&tmp, cache_dir.join(filename));
+}
+
+pub fn cache_exists(cache_dir: &std::path::Path, hash: InputsHash) -> bool {
+    cache_dir.join(hash.filename()).exists()
+}
+
+pub fn cache_store(cache_dir: &std::path::Path, hash: InputsHash, bytes: &[u8]) {
+    if std::fs::create_dir_all(cache_dir).is_err() {
+        return;
+    }
+    let tmp = cache_dir.join(format!("{:032x}.tmp.{}", hash.0, std::process::id()));
+    if std::fs::write(&tmp, bytes).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    let _ = std::fs::rename(&tmp, cache_dir.join(hash.filename()));
+    evict(cache_dir);
+}
+
+fn evict(cache_dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(cache_dir) else { return };
+    let mut snaps: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "snap"))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    if snaps.len() <= CACHE_MAX_ENTRIES {
+        return;
+    }
+    snaps.sort_by_key(|(mtime, _)| *mtime);
+    for (_, path) in &snaps[..snaps.len() - CACHE_MAX_ENTRIES] {
+        let _ = std::fs::remove_file(path);
     }
 }
 

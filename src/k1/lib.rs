@@ -26,7 +26,6 @@ mod vpool;
 //pub mod vmtw;
 
 pub const BUILD_ID: &str = env!("K1_BUILD_ID");
-pub const BUILD_DIRTY: bool = matches!(env!("K1_BUILD_DIRTY").as_bytes(), b"1");
 
 pub const KILOBYTE: usize = 1024;
 pub const MEGABYTE: usize = KILOBYTE * 1024;

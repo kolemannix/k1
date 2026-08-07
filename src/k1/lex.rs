@@ -576,7 +576,6 @@ pub struct TokenTriviaTable {
     entries: Vec<TriviaEntry>,
 }
 
-
 impl TokenTriviaTable {
     pub fn entries(&self) -> &[TriviaEntry] {
         &self.entries

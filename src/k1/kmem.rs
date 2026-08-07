@@ -202,7 +202,6 @@ impl<T, Tag> Clone for Handle<T, Tag> {
     }
 }
 
-
 /// A handle to a slice of Ts inside a `Mem` pool with tag type `Tag`
 /// muh'slice <tips fedora>
 pub struct MSlice<T, Tag = ()> {
@@ -1407,7 +1406,13 @@ impl<T, Tag> List<T, Tag> {
     }
 
     pub fn to_mlist(&self) -> MList<T, Tag> {
-        MList { offset: self.offset, cap: self.cap, len: self.len, _data: PhantomData, _tag: PhantomData }
+        MList {
+            offset: self.offset,
+            cap: self.cap,
+            len: self.len,
+            _data: PhantomData,
+            _tag: PhantomData,
+        }
     }
 
     pub fn base_ptr(&self) -> *mut T {

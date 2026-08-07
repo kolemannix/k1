@@ -9,12 +9,65 @@ static_assert_size!(AbilitySpec9nInfo, 16);
 static_assert_size!(SourceFileHash, 16);
 static_assert_size!(NameInNamespace, 8);
 
+pub(crate) fn inputs_hash_from_settings(
+    idents: &IdentPool,
+    config: &crate::compiler::CompilerConfig,
+) -> crate::snap::InputsHash {
+    let crate::compiler::CompilerConfig {
+        src_path,
+        home_dir,
+        k1_home,
+        is_test_build,
+        no_std,
+        target,
+        simd_bytes,
+        debug,
+        sanitize,
+        filc,
+        out_dir,
+        out_dir_generated: _,
+        cache_dir: _,
+        optimize,
+        chatty: _,
+        optimize_ir,
+        cache: _,
+        setup_mode,
+    } = config;
+    let flags = [
+        *is_test_build,
+        *no_std,
+        *debug,
+        *sanitize,
+        *filc,
+        *optimize,
+        *optimize_ir,
+        cfg!(feature = "lsp"),
+    ]
+    .map(|b| b as u8);
+    let setup_mode = match setup_mode {
+        crate::compiler::SetupMode::Normal => 0u8,
+        crate::compiler::SetupMode::SetupProgram => 1,
+        crate::compiler::SetupMode::SetupOnly { .. } => 2,
+    };
+    crate::snap::InputsHash(0).add(&[
+        crate::BUILD_ID.as_bytes(),
+        idents.get_string(*src_path).as_bytes(),
+        idents.get_string(*home_dir).as_bytes(),
+        idents.get_string(*k1_home).as_bytes(),
+        idents.get_string(*out_dir).as_bytes(),
+        target.to_str().as_bytes(),
+        &simd_bytes.to_le_bytes(),
+        &flags,
+        &[setup_mode],
+    ])
+}
+
 impl TypedProgram {
     pub fn snap(&self) -> Vec<u8> {
         let TypedProgram {
             modules,
-            module_order,
-            config,
+            modules_completed,
+            config: _,
             program_settings,
             ast,
             functions,
@@ -59,9 +112,9 @@ impl TypedProgram {
             uses_pending_resolution,
             types_pending_definition,
             module_in_progress,
-            ls_entities: _,
+            ls_entities,
             completion: _,
-            lsp,
+            lsp: _,
             inference_context_stack,
             inference_context_extras: _,
             type_defn_context,
@@ -84,23 +137,20 @@ impl TypedProgram {
             timing: _,
             global_id_k1_arena,
             megarepl,
+            inputs_hash: _,
+            restored_module_count: _,
+            pending_cache_writes: _,
         } = self;
         assert!(megarepl.is_none(), "cannot snapshot a megarepl session");
         assert!(inference_context_stack.is_empty(), "cannot snapshot mid-inference");
-        assert!(
-            lsp.source_overrides.is_empty() && !lsp.completion,
-            "cannot snapshot an LSP session"
-        );
 
         let mut w = SnapWriter::new();
-        w.write_section("config");
-        w.write_t(config);
         ast.snap(&mut w);
         let w = &mut w;
         w.write_section("typed");
         mem.snap(w);
         modules.snap(w);
-        w.write_slice(module_order);
+        w.write_slice(modules_completed);
         w.write_t(program_settings);
         functions.snap(w);
         variables.snap(w);
@@ -128,6 +178,10 @@ impl TypedProgram {
         write_map_snap(w, type_names);
         scopes.snap(w);
         w.write_slice(&messages.borrow());
+        w.sorted_entries(ls_entities.borrow().iter(), |w, (file_id, entities)| {
+            w.write_t(file_id);
+            w.write_slice(entities);
+        });
         namespaces.namespaces.snap(w);
         abilities.snap(w);
         ability_impls.snap(w);
@@ -162,18 +216,21 @@ impl TypedProgram {
         std::mem::take(&mut w.buf)
     }
 
-    pub fn restore(bytes: &[u8]) -> Result<TypedProgram, String> {
+    pub fn restore(
+        bytes: &[u8],
+        // `config` and `lsp` come from the restoring session
+        // lets us preserve settings like chatty, cache, overrides, completion
+        config: CompilerConfig,
+        lsp: crate::compiler::LspCompileOptions,
+    ) -> Result<TypedProgram, String> {
         let mut reader = SnapReader::new(bytes)?;
         let r = &mut reader;
-        r.section("config");
-        let config: CompilerConfig = r.read_t();
         let ast = ParsedProgram::restore(r);
-        let mut k1 =
-            TypedProgram::new(ast, config, crate::compiler::LspCompileOptions::default());
+        let mut k1 = TypedProgram::new(ast, config, lsp);
         r.section("typed");
         k1.mem.restore(r);
         k1.modules.restore(r);
-        k1.module_order = r.read_vec();
+        k1.modules_completed = r.read_vec();
         k1.program_settings = r.read_t();
         k1.functions.restore(r);
         k1.variables.restore(r);
@@ -203,6 +260,12 @@ impl TypedProgram {
         k1.type_names = restore_map_snap(r);
         k1.scopes = Scopes::restore(r);
         k1.messages = RefCell::new(r.read_vec());
+        let mut ls_entities = FxHashMap::default();
+        for _ in 0..r.read_len() {
+            let file_id: FileId = r.read_t();
+            ls_entities.insert(file_id, r.read_vec());
+        }
+        k1.ls_entities = RefCell::new(ls_entities);
         k1.namespaces.namespaces.restore(r);
         k1.abilities.restore(r);
         k1.ability_impls.restore(r);
@@ -241,12 +304,15 @@ impl TypedProgram {
             first.len() as f64 / (1024.0 * 1024.0),
             snap_start.elapsed()
         );
-        let mut restored = match TypedProgram::restore(&first) {
+        let mut restored = match TypedProgram::restore(&first, self.config, self.lsp.clone()) {
             Ok(restored) => restored,
             Err(e) => panic!("snapshot restore failed: {e}"),
         };
         let second = restored.snap();
         crate::snap::assert_identical(&first, &second, "TypedProgram snapshot roundtrip");
+        restored.inputs_hash = self.inputs_hash;
+        restored.restored_module_count = self.restored_module_count;
+        restored.pending_cache_writes = std::mem::take(&mut self.pending_cache_writes);
         std::mem::swap(self, &mut restored);
     }
 }

@@ -11,7 +11,7 @@ fn test() {
 
   a.release()
 
-  let p = mem/new-in-place[point](mem/system-heap, .{ x = 4, y = 5 })
+  let p = mem/new-in-place[point](.{ x = 4, y = 5 })
   assert-equals(p.*, .{ x = 4, y = 5 })
 
 }

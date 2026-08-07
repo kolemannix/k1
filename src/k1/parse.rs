@@ -2931,11 +2931,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         // included — is stripped, and a whitespace-only last line is removed
         let is_block = match pending.first() {
             Some(Pending::Raw { token, .. }) => {
-                let text =
-                    Parser::tok_chars(
-            &self.ast.spans,
-            &self.ast.mem,
-            self.ast.sources.get(self.file_id), *token);
+                let text = Parser::tok_chars(
+                    &self.ast.spans,
+                    &self.ast.mem,
+                    self.ast.sources.get(self.file_id),
+                    *token,
+                );
                 text.as_bytes().get(1) == Some(&b'\n')
             }
             _ => false,
@@ -3358,11 +3359,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Parser::expect_sum_variant,
         )?;
         let span = self.extend_to_here(keyword.span);
-        Ok(ParsedSumType {
-            variants: variants.to_slice(),
-            tag_type: explicit_tag_type_expr,
-            span,
-        })
+        Ok(ParsedSumType { variants: variants.to_slice(), tag_type: explicit_tag_type_expr, span })
     }
 
     fn expect_sum_variant(&mut self) -> ParseResult<ParsedSumTypeVariant> {
@@ -4257,10 +4254,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             by_ref = true;
                             span = self.extend_span(span, amp_token.span);
                         }
-                        captures.push_grow(
-                            &mut self.ast.mem,
-                            LambdaCapture { name, by_ref, span },
-                        );
+                        captures.push_grow(&mut self.ast.mem, LambdaCapture { name, by_ref, span });
                     }
                     _ => return Err(error_expected("capture name, `.&`, `,`, or `]`", next)),
                 }
@@ -5012,11 +5006,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_ident_ext(&mut self, upper: bool, lower: bool) -> ParseResult<(Token, StringId)> {
         let token = self.expect_kind(K::Ident)?;
-        let tok_chars =
-            Parser::tok_chars(
+        let tok_chars = Parser::tok_chars(
             &self.ast.spans,
             &self.ast.mem,
-            self.ast.sources.get(self.file_id), token);
+            self.ast.sources.get(self.file_id),
+            token,
+        );
         if upper {
             let c = tok_chars.chars().next().unwrap();
             if c != '_' && !c.is_uppercase() {
@@ -5048,11 +5043,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn maybe_consume_ident_chars(&mut self, chars: &str) -> Option<(Token, StringId)> {
         let next = self.peek();
         if next.kind == K::Ident {
-            let tok_chars =
-                Parser::tok_chars(
-            &self.ast.spans,
-            &self.ast.mem,
-            self.ast.sources.get(self.file_id), next);
+            let tok_chars = Parser::tok_chars(
+                &self.ast.spans,
+                &self.ast.mem,
+                self.ast.sources.get(self.file_id),
+                next,
+            );
             if tok_chars == chars {
                 self.advance();
                 let ident = self.make_ident(next);

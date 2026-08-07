@@ -71,9 +71,9 @@ fn do-work(req: *mut uv/work) {
     tprintln("i have to make deps")
 
     // These are create once and never-free
-    mem/push-mode(:system-heap)
-    let deps-baton = (work.connection.make-user-deps)(work.connection.framework)
-    mem/pop-mode()
+    let deps-baton = mem/with(:system-heap, {
+      (work.connection.make-user-deps)(work.connection.framework)
+    })
 
     tprintln("made deps: $deps-baton")
     worker-user-data = deps-baton

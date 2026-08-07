@@ -318,8 +318,9 @@ impl Backend {
             chatty: false,
             optimize_ir: true,
             target: None,
+            cache: true,
             filc: false,
-            setup_disabled: false,
+            is_setup_program: false,
             k1_home_override: None,
             command: k1::compiler::Command::Check {
                 file: root_uri.as_ref().unwrap().path().into(),
@@ -485,8 +486,7 @@ impl LanguageServer for Backend {
             ast.errors.len()
         );
         for error in &ast.errors {
-            if let Some(range) = span_to_range_in_ast(&ast, ast.spans.get(error.span()))
-            {
+            if let Some(range) = span_to_range_in_ast(&ast, ast.spans.get(error.span())) {
                 let diagnostic = Diagnostic {
                     range,
                     severity: Some(DiagnosticSeverity::ERROR),
@@ -725,9 +725,9 @@ impl LanguageServer for Backend {
         let spliced = {
             let content_and_line = {
                 let edited_sources = self.edited_sources.lock().unwrap();
-                edited_sources.get(&file_url).and_then(|ast| {
-                    content_at_line(ast, ast.sources.get_main())
-                })
+                edited_sources
+                    .get(&file_url)
+                    .and_then(|ast| content_at_line(ast, ast.sources.get_main()))
             };
             let content_and_line = match content_and_line {
                 Some(found) => Some(found),
@@ -767,8 +767,9 @@ impl LanguageServer for Backend {
             chatty: false,
             optimize_ir: true,
             target: None,
+            cache: true,
             filc: false,
-            setup_disabled: false,
+            is_setup_program: false,
             k1_home_override: None,
             command: k1::compiler::Command::Check { file: root_path },
             dump_idents: false,

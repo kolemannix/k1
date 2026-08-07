@@ -16,11 +16,16 @@ K1_HOME=$(pwd) target/debug/k1_test $1
 # unset MallocScribble
 
 export RUST_LOG=info
-target/debug/k1 --emit-llvm build dogfood/refchess
-target/debug/k1 --emit-llvm build dogfood/profiling
-target/debug/k1             test  dogfood/k1bindgen
+# Correctness gates compile cold, never from cached state
+target/debug/k1 --emit-llvm --cache false build dogfood/refchess
+target/debug/k1 --emit-llvm --cache false build dogfood/profiling
+target/debug/k1 --cache false test  dogfood/k1bindgen
 # Exercises the module system end-to-end: deps (http -> libuv), setup steps
-# (cmake/cc/k1bindgen on first compile of a machine), cross-module linking
+# (cmake/cc/k1bindgen on first compile of a machine), cross-module linking.
+# First build starts from an empty cache (cold compile, writes snapshots);
+# second build restores them and re-links, covering the disk cache end-to-end
+rm -rf dogfood/httpapp/.k1-out/cache
+K1_HOME=$(pwd) target/debug/k1 build dogfood/httpapp
 K1_HOME=$(pwd) target/debug/k1 build dogfood/httpapp
 
 if rg --type-add 'k1:*.k1' -c 'nocommit' -t rust -t c -t k1 .

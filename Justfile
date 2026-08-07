@@ -10,11 +10,11 @@ export LLVM_SYS_211_PREFIX := env_var_or_default("LLVM_SYS_211_PREFIX", "./llvm/
 
 # Run the current scratch file; use for writing reproducers or not-yet-working code, then move it to test_src/ when done or fixed
 a:
-  ./run.sh sandbox
+  ./run.sh run sandbox
 
-# fastest path to checking compiler correctness; suite1 covers most features
+# fastest path to checking compiler correctness; suite1 covers most features.
 ts1:
-  ./run.sh test_src/suite1
+  ./run.sh --cache false run test_src/suite1
 
 # exhaustive path; notably runs larger projects in dogfood
 test:

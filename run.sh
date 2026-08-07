@@ -5,4 +5,4 @@ set -x
 set -e
 RUST_BACKTRACE=full \
   RUST_LOG=info \
-  cargo run --features=llvm-sys/prefer-dynamic -- --emit-llvm run $@
+  cargo run --features=llvm-sys/prefer-dynamic -- --emit-llvm $@

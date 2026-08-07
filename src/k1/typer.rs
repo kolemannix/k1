@@ -2571,14 +2571,6 @@ impl ModuleManifest {
     }
 }
 
-struct LoadedModule {
-    module_id: ModuleId,
-    parsed_namespace_id: ParsedNamespaceId,
-    root_file_id: FileId,
-    manifest_fn_defn: Option<ParsedId>,
-    remaining: crate::compiler::ModuleRemainingSourcesHandle,
-}
-
 #[derive(Clone, Copy)]
 pub struct ModuleParams {
     pub schema_type: TypeId,
@@ -2603,6 +2595,12 @@ pub struct Module {
     pub params: Option<ModuleParams>,
     /// One entry per source file in compile order
     pub source_file_hashes: PermList<SourceFileHash>,
+    /// The module's parsed root namespace
+    pub parsed_namespace_id: ParsedNamespaceId,
+    /// The fn module definition, evaluated at load; typing skips it
+    pub manifest_fn_defn: Option<ParsedId>,
+    /// Directory module vs single file
+    pub is_dir: bool,
 }
 
 impl Module {
@@ -2617,6 +2615,9 @@ impl Module {
             namespace_scope_id: ScopeId::PENDING,
             params: None,
             source_file_hashes: MList::empty(),
+            parsed_namespace_id: ParsedNamespaceId::PENDING,
+            manifest_fn_defn: None,
+            is_dir: false,
         }
     }
 
@@ -2808,7 +2809,8 @@ pub struct NameInNamespace {
 
 pub struct TypedProgram {
     pub modules: VPool<Module, ModuleId>,
-    pub module_order: Vec<ModuleId>,
+    /// Fully typechecked modules, in completion order (deps before dependents)
+    pub modules_completed: Vec<ModuleId>,
     pub config: CompilerConfig,
     pub program_settings: ProgramSettings,
     pub ast: ParsedProgram,
@@ -2931,6 +2933,13 @@ pub struct TypedProgram {
 
     pub global_id_k1_arena: Option<TypedGlobalId>,
     pub megarepl: Option<MegareplState>,
+
+    /// Hash of every compile input consumed so far: build, config, source files
+    pub inputs_hash: crate::snap::InputsHash,
+    /// Modules restored from the disk cache this session, for --chatty and tests
+    pub restored_module_count: u32,
+    /// In-flight snapshot disk writes
+    pub pending_cache_writes: Vec<std::thread::JoinHandle<()>>,
 }
 
 // SAFETY: TypedProgram's raw pointers point into its own heap allocations
@@ -3003,6 +3012,7 @@ impl TypedProgram {
         let completion = lsp
             .completion
             .then(|| CompletionState { marker: ast.idents.intern(COMPLETION_MARKER), site: None });
+        let inputs_hash = snapshot::inputs_hash_from_settings(&ast.idents, &config);
 
         let type_idents = TypeIdents { tag: ast.idents.b.tag, payload: ast.idents.b.payload };
         let mut agg_types = VPool::make("phys_types");
@@ -3061,7 +3071,7 @@ impl TypedProgram {
 
         let mut k1 = TypedProgram {
             modules: VPool::make("modules"),
-            module_order: vec![],
+            modules_completed: vec![],
             config,
             program_settings: ProgramSettings { multithreaded: false, executable: false },
             functions: VPool::make("typed_functions"),
@@ -3167,6 +3177,9 @@ impl TypedProgram {
             },
             global_id_k1_arena: None,
             megarepl: None,
+            inputs_hash,
+            restored_module_count: 0,
+            pending_cache_writes: vec![],
         };
 
         let empty_struct_id = k1.add_anon_type(Type::Struct(StructType::struc(MSlice::empty())));
@@ -3182,58 +3195,145 @@ impl TypedProgram {
         primary_module: bool,
     ) -> anyhow::Result<ModuleId> {
         let mut load_stack: Vec<StringId> = vec![];
-        let mut loaded: Vec<LoadedModule> = vec![];
-        let added_module_id =
-            self.load_module_tree(root_handle, primary_module, &mut load_stack, &mut loaded)?;
+        let mut modules_to_typecheck: Vec<(
+            ModuleId,
+            Option<crate::compiler::ModuleRemainingSourcesHandle>,
+        )> = vec![];
+        let added_module_id = self.discover_module_and_deps(
+            root_handle,
+            primary_module,
+            &mut load_stack,
+            &mut modules_to_typecheck,
+        )?;
 
         if primary_module && self.config.setup_mode.is_setup_only() {
             return Ok(added_module_id);
         }
 
-        for lm in loaded {
-            let module = self.modules.get(lm.module_id);
-            let (module_name, home_dir) = (module.name, module.home_dir);
-            for file in lm.remaining.join()? {
-                self.parse_module_source_file(
-                    lm.module_id,
-                    module_name,
-                    lm.parsed_namespace_id,
-                    home_dir,
-                    file,
-                );
-            }
-            if !self.ast.errors.is_empty() && !self.lsp.completion {
-                bail!(
-                    "Parsing module {} failed with {} errors",
-                    self.ident_str(module_name),
-                    self.ast.errors.len()
-                );
-            }
-            if let Err(e) =
-                self.check_manifest_fn_placement(lm.parsed_namespace_id, lm.root_file_id)
-            {
-                self.report(e);
-                bail!("Module {} has a misplaced fn module", self.ident_str(module_name));
-            }
-            self.run_on_module(lm.module_id, lm.parsed_namespace_id, lm.manifest_fn_defn)?;
-            self.module_order.push(lm.module_id);
+        let mut modules_to_typecheck: Vec<(
+            ModuleId,
+            Option<Vec<crate::compiler::SourceFile>>,
+            crate::snap::InputsHash,
+        )> = modules_to_typecheck
+            .into_iter()
+            .map(|(module_id, remaining)| {
+                Ok((
+                    module_id,
+                    remaining.map(|r| r.join()).transpose()?,
+                    crate::snap::InputsHash(0),
+                ))
+            })
+            .collect::<anyhow::Result<_>>()?;
+
+        // Every root is parsed before any typing, so all headers are hashed
+        // in discovery order first
+        let mut hash = self.inputs_hash;
+        for (module_id, _, _) in &modules_to_typecheck {
+            let module = self.modules.get(*module_id);
+            let root = module.source_file_hashes.as_slice(&self.mem)[0];
+            let source = self.ast.sources.get(root.file_id);
+            hash = hash.add_module_header(
+                self.ident_str(module.name),
+                self.ident_str(source.directory),
+                self.ident_str(source.filename),
+                root.hash,
+            );
+        }
+        for (module_id, files, module_hash) in modules_to_typecheck.iter_mut() {
+            let module = self.modules.get(*module_id);
+            let name = self.ident_str(module.name);
+            hash = match files {
+                Some(files) => hash.add_module_sources(
+                    name,
+                    files.iter().map(|f| (f.path.as_str(), f.content_hash)),
+                ),
+                None => {
+                    let file_hashes = module.source_file_hashes.as_slice(&self.mem);
+                    hash.add_module_sources(
+                        name,
+                        file_hashes[1..].iter().map(|sfh| {
+                            let s = self.ast.sources.get(sfh.file_id);
+                            let path = kpath::join_tmp(
+                                self.get_tmp_unsafe(),
+                                &self.ast.idents,
+                                s.directory,
+                                s.filename,
+                            );
+                            (path, sfh.hash)
+                        }),
+                    )
+                }
+            };
+            *module_hash = hash;
         }
 
-        // Every parameterized module has bound its params by now (at its own typecheck
-        // turn); a provision whose target never declared k1/module-params is an error
-        let mut unheard: Option<(StringId, StringId, ParsedExprId)> = None;
+        for (module_id, files, module_hash) in modules_to_typecheck.into_iter() {
+            let module = self.modules.get(module_id);
+            let (module_name, home_dir, parsed_namespace_id, manifest_fn_defn) =
+                (module.name, module.home_dir, module.parsed_namespace_id, module.manifest_fn_defn);
+            let root_file_id = module.root_file_id(&self.mem);
+            if let Some(files) = files {
+                for file in files {
+                    self.parse_module_source_file(
+                        module_id,
+                        module_name,
+                        parsed_namespace_id,
+                        home_dir,
+                        file,
+                    );
+                }
+                if !self.ast.errors.is_empty() && !self.lsp.completion {
+                    bail!(
+                        "Parsing module {} failed with {} errors",
+                        self.ident_str(module_name),
+                        self.ast.errors.len()
+                    );
+                }
+                if let Err(e) = self.check_manifest_fn_placement(parsed_namespace_id, root_file_id)
+                {
+                    self.report(e);
+                    bail!("Module {} has a misplaced fn module", self.ident_str(module_name));
+                }
+                self.typecheck_module(module_id, parsed_namespace_id, manifest_fn_defn)?;
+                self.modules_completed.push(module_id);
+                // Drain pending IR so a snapshot here contains only whole
+                // modules (pending queues empty)
+                if let Err(msg) = self.compile_all_pending_ir(SpanId::NONE) {
+                    self.report(msg);
+                    bail!("Failed to compile ir");
+                };
+            }
+            self.inputs_hash = module_hash;
+            // Sessions compiling overridden content (LSP buffers, completion
+            // splices) should not write to the cache
+            if self.config.cache
+                && self.lsp.source_overrides.is_empty()
+                && !self.lsp.completion
+                && self.megarepl.is_none()
+            {
+                if !crate::snap::cache_exists(self.cache_dir(), module_hash) {
+                    let cache_dir = self.cache_dir().to_path_buf();
+                    let bytes = self.snap();
+                    self.pending_cache_writes.push(std::thread::spawn(move || {
+                        crate::snap::cache_store(&cache_dir, module_hash, &bytes)
+                    }));
+                }
+            }
+        }
+
+        let mut spurious_provided_params: Option<(StringId, StringId, ParsedExprId)> = None;
         'outer: for m in self.modules.iter() {
             for entry in self.mem.getn(m.manifest.deps) {
                 if let Some(params_expr) = entry.params_struct_literal {
                     let target = self.modules.iter().find(|t| t.name == entry.name).unwrap();
                     if target.params.is_none() {
-                        unheard = Some((m.name, entry.name, params_expr));
+                        spurious_provided_params = Some((m.name, entry.name, params_expr));
                         break 'outer;
                     }
                 }
             }
         }
-        if let Some((provider_name, target_name, params_expr)) = unheard {
+        if let Some((provider_name, target_name, params_expr)) = spurious_provided_params {
             let span = self.ast.exprs.get_span(params_expr);
             let msg = format!(
                 "Module '{}' accepts no parameters (it has no k1/module-params declaration), \
@@ -3259,28 +3359,70 @@ impl TypedProgram {
             }
         }
 
-        if let Err(msg) = self.compile_all_pending_ir(SpanId::NONE) {
-            self.report(msg);
-            bail!("Failed to compile ir");
-        };
         #[cfg(debug_assertions)]
         self.debug_snapshot_roundtrip();
 
         Ok(added_module_id)
     }
 
-    fn load_module_tree(
+    pub(crate) fn cache_dir(&self) -> &Path {
+        Path::new(self.get_string(self.config.cache_dir))
+    }
+
+    pub fn join_cache_writes(&mut self) {
+        for handle in self.pending_cache_writes.drain(..) {
+            let _ = handle.join();
+        }
+    }
+
+    fn discover_module_and_deps(
         &mut self,
         root_handle: crate::compiler::ModuleRootHandle,
         primary_module: bool,
         load_stack: &mut Vec<StringId>,
-        loaded: &mut Vec<LoadedModule>,
+        modules_to_typecheck: &mut Vec<(
+            ModuleId,
+            Option<crate::compiler::ModuleRemainingSourcesHandle>,
+        )>,
     ) -> anyhow::Result<ModuleId> {
         debug!("Loading module {}...", root_handle.src_path);
         let module_name = self.ast.idents.intern(kpath::file_stem(&root_handle.src_path));
         if let Some(m) = self.modules.iter().find(|m| m.name == module_name) {
-            debug!("Module already included: {}", self.ident_str(m.name));
-            return Ok(m.id);
+            fn queue(
+                k1: &mut TypedProgram,
+                module_id: ModuleId,
+                modules_to_typecheck: &mut Vec<(
+                    ModuleId,
+                    Option<crate::compiler::ModuleRemainingSourcesHandle>,
+                )>,
+            ) {
+                if modules_to_typecheck.iter().any(|(id, _)| *id == module_id) {
+                    return;
+                }
+                let deps = k1.modules.get(module_id).manifest.deps;
+                for i in 0..deps.len() {
+                    let dep_name = k1.mem.getn(deps)[i as usize].name;
+                    let dep = k1
+                        .modules
+                        .iter()
+                        .find(|m| m.name == dep_name)
+                        .expect("restored state is missing a discovered module's dep");
+                    let dep_id = dep.id;
+                    // core and std are discovered by their own add_module calls
+                    if dep_id == MODULE_ID_CORE
+                        || (!k1.config.no_std && dep_name == k1.ast.idents.b.std)
+                    {
+                        continue;
+                    }
+                    queue(k1, dep_id, modules_to_typecheck);
+                }
+                let remaining = (!k1.modules_completed.contains(&module_id))
+                    .then(|| k1.spawn_remaining_sources(module_id));
+                modules_to_typecheck.push((module_id, remaining));
+            }
+            let module_id = m.id;
+            queue(self, module_id, modules_to_typecheck);
+            return Ok(module_id);
         }
 
         let home_dir = self.ast.idents.intern(&root_handle.module_dir);
@@ -3294,7 +3436,7 @@ impl TypedProgram {
         let (root_file, remaining_sources) = root_handle.join_root()?;
 
         let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
-        let root_file_id = self.parse_module_source_file(
+        self.parse_module_source_file(
             module_id,
             module_name,
             parsed_namespace_id,
@@ -3365,14 +3507,18 @@ impl TypedProgram {
         }
 
         let deps = manifest.deps;
-        self.modules.get_mut(module_id).manifest = manifest;
+        let m = self.modules.get_mut(module_id);
+        m.manifest = manifest;
+        m.parsed_namespace_id = parsed_namespace_id;
+        m.manifest_fn_defn = manifest_fn_defn;
+        m.is_dir = remaining_sources.is_dir();
 
         let manifest_span =
             manifest_fn_defn.map(|d| self.ast.get_span_for_id(d)).unwrap_or(SpanId::NONE);
 
         let setup_decl = self.modules.get(module_id).manifest.setup;
         if let Some(setup) = setup_decl
-            && self.config.setup_mode != crate::compiler::SetupMode::Disabled
+            && self.config.setup_mode != crate::compiler::SetupMode::SetupProgram
         {
             if !remaining_sources.is_dir() {
                 let msg = "single-file modules cannot declare setup; make it a \
@@ -3401,7 +3547,7 @@ impl TypedProgram {
             }
         }
 
-        let remaining = remaining_sources.spawn_read(&self.lsp.source_overrides);
+        let remaining = self.spawn_remaining_sources(module_id);
         let mut dep_handles: Vec<crate::compiler::ModuleRootHandle> = vec![];
         for i in 0..deps.len() {
             let dep_name_id = self.mem.getn(deps)[i as usize].name;
@@ -3471,18 +3617,32 @@ impl TypedProgram {
         }
 
         for handle in dep_handles {
-            self.load_module_tree(handle, false, load_stack, loaded)?;
+            self.discover_module_and_deps(handle, false, load_stack, modules_to_typecheck)?;
         }
 
         load_stack.pop();
-        loaded.push(LoadedModule {
-            module_id,
-            parsed_namespace_id,
-            root_file_id,
-            manifest_fn_defn,
-            remaining,
-        });
+        modules_to_typecheck.push((module_id, Some(remaining)));
         Ok(module_id)
+    }
+
+    fn spawn_remaining_sources(
+        &self,
+        module_id: ModuleId,
+    ) -> crate::compiler::ModuleRemainingSourcesHandle {
+        let module = self.modules.get(module_id);
+        let (home_dir, is_dir) = (module.home_dir, module.is_dir);
+        let root_filename = self.ast.sources.get(module.root_file_id(&self.mem)).filename;
+        let root_path = crate::compiler::pathbuf_into_string(kpath::join_buf(
+            &self.ast.idents,
+            home_dir,
+            root_filename,
+        ));
+        crate::compiler::ModuleRemainingSources::new(
+            self.ident_str(home_dir).to_string(),
+            root_path,
+            is_dir,
+        )
+        .spawn_read(&self.lsp.source_overrides)
     }
 
     fn module_error(&mut self, span: SpanId, msg: String) -> anyhow::Error {
@@ -6930,13 +7090,38 @@ impl TypedProgram {
             );
         }
 
-        // FIXME: We need to mask access from inside a static to outside variables!
-        //       Currently we'll just fail in ir gen with "missing variable"
         let parsed_expr_as_block =
             self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
         let expr_span = parsed_expr_as_block.span;
         let static_block_scope =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
+        let mut cur_scope = ctx.scope_id;
+        let mut locals_to_mask = self.tmp.new_list(0);
+
+        // Mask everything up to the nearest function scope that is not in input_parameters
+        // A better system would be just to run those expressions statically like we do for value macro args
+        loop {
+            let s = self.scopes.get_scope(cur_scope);
+            let parent = s.parent;
+            if s.scope_type == ScopeType::FunctionScope || s.scope_type == ScopeType::Namespace {
+                break;
+            }
+
+            for (name, vis) in &s.variables {
+                let Some(variable_id) = vis.variable_id() else {
+                    continue;
+                };
+                if !input_parameters.iter().any(|(input_var_id, _)| *input_var_id == variable_id) {
+                    locals_to_mask.push_grow(&mut self.tmp, *name);
+                }
+            }
+
+            if let Some(parent) = parent { cur_scope = parent } else { break }
+        }
+        for name in locals_to_mask.as_slice() {
+            self.scopes.mask_variable(static_block_scope, *name);
+        }
+
         let static_eval_ctx = ctx.with_scope(static_block_scope);
         let expr = self.eval_block(&parsed_expr_as_block, static_eval_ctx, true)?;
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
@@ -20436,7 +20621,7 @@ impl TypedProgram {
         Ok(ns_id)
     }
 
-    pub fn run_on_module(
+    pub fn typecheck_module(
         &mut self,
         module_id: ModuleId,
         module_root_parsed_namespace: ParsedNamespaceId,

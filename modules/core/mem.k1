@@ -148,12 +148,24 @@ ns mem {
 
   fn new[t](t: t): *t { alloc-mode:current.new(t) }
 
-  macro new-in-place[t](alloc-mode, expr) {
+  macro new-in-place[t](expr) {
     let type-id = types/type-id[t]
     `
-    let addr = $alloc-mode.alloc-t[type-from-id($type-id)]();
+    let addr = mem/alloc-t[type-from-id($type-id)];
     addr.* = $expr
     addr
+    `
+  }
+
+  macro with(alloc-mode, expr) {
+    `
+    let start-len = mem/mode-stack-len()
+    mem/push-mode(alloc-mode)
+    defer {
+      mem/pop-mode()
+      assert-equals[size](mem/mode-stack-len(), start-len)
+    }
+    ($expr)
     `
   }
 
@@ -175,6 +187,7 @@ ns mem {
   fn pop-mode(): alloc-mode {
     alloc-stack.pop().!
   }
+  fn mode-stack-len(): size { alloc-stack.len() }
   fn current(): alloc-mode {
     let s = alloc-stack.last().!
     s

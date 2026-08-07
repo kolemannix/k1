@@ -28,13 +28,9 @@ impl TypedProgram {
         let ty = self.exprs.get_type(lhs);
         let rhs_type = self.exprs.get_type(rhs);
         debug_assert_eq!(ty, rhs_type);
-        let Some(impl_id) = self
-            .ability_impl_table
-            .get(&ty)
-            .and_then(|impls| {
-                impls.as_slice(&self.mem).iter().find(|i| i.base_ability_id == ABILITY_ID_EQUALS)
-            })
-        else {
+        let Some(impl_id) = self.ability_impl_table.get(&ty).and_then(|impls| {
+            impls.as_slice(&self.mem).iter().find(|i| i.base_ability_id == ABILITY_ID_EQUALS)
+        }) else {
             self.ice_span(span, "expected equals impl")
         };
         let AbilityImplFunction::FunctionId(equals_function_id) =
