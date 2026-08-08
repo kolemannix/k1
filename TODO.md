@@ -14,6 +14,12 @@ next up
 
 ## [x] vector types
 
+## [ ] live reload featureset
+- [ ] `ns reloadable foo { <functions and globals in here go in a dylib> }`
+- [ ] `fn main() { foo/load(:watch); (foo/my-fn)(1,2,3) }
+
+pointer-free predicate - pod/serializable?
+
 ## [ ] inline asm
 
 ## [ ] Constant-folding, SCCP

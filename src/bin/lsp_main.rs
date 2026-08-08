@@ -193,6 +193,7 @@ fn uri_to_edited_source(backend: &Backend, url: &Url) -> Option<(SourceFile, boo
 fn candidate_to_item(candidate: k1::lsp_support::CompletionCandidate) -> CompletionItem {
     let kind = match candidate.kind {
         CompletionCandidateKind::Field => CompletionItemKind::FIELD,
+        CompletionCandidateKind::Variant => CompletionItemKind::ENUM_MEMBER,
         CompletionCandidateKind::Method => CompletionItemKind::METHOD,
         CompletionCandidateKind::Variable => CompletionItemKind::VARIABLE,
         CompletionCandidateKind::Function => CompletionItemKind::FUNCTION,
@@ -234,6 +235,88 @@ impl Backend {
             completion_generation: AtomicU32::new(0),
             completion_compile_lock: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// Insert the completion marker at the cursor, replacing whatever token is there, and run a check compile;
+    async fn compile_with_marker(
+        &self,
+        file_url: &Url,
+        line: u32,
+        col: u32,
+    ) -> Result<Option<TypedProgram>> {
+        let content_at_line = |ast: &ParsedProgram, source: &SourceFile| {
+            source
+                .get_line(&ast.mem, line as usize)
+                .map(|line_info| (source.content(&ast.mem).to_string(), line_info))
+        };
+        let spliced = {
+            let content_and_line = {
+                let edited_sources = self.edited_sources.lock().unwrap();
+                edited_sources
+                    .get(file_url)
+                    .and_then(|ast| content_at_line(ast, ast.sources.get_main()))
+            };
+            let content_and_line = match content_and_line {
+                Some(found) => Some(found),
+                None => self
+                    .with_k1(|k1| {
+                        uri_to_source(&k1.ast, file_url)
+                            .and_then(|source| content_at_line(&k1.ast, source))
+                    })
+                    .flatten(),
+            };
+            let Some((content, line_info)) = content_and_line else {
+                info!("compile_with_marker: no source or line for {}", file_url.path());
+                return Ok(None);
+            };
+            let offset = (line_info.start_char + col.min(line_info.len)) as usize;
+            k1::lsp_support::splice_completion_marker(&content, offset)
+        };
+
+        let Ok(canonical_path) = k1::kpath::canonicalize(file_url.path()) else { return Ok(None) };
+        let root_path: std::path::PathBuf = {
+            let root_uri = self.workspace_uri.read().unwrap();
+            let Some(root) = root_uri.as_ref() else { return Ok(None) };
+            root.path().into()
+        };
+
+        let mut source_overrides = fxhash::FxHashMap::default();
+        source_overrides.insert(canonical_path, spliced);
+        let lsp_options = LspCompileOptions { source_overrides, completion: true };
+        let args = k1::compiler::Args {
+            no_std: false,
+            emit_llvm: false,
+            optimize: false,
+            dump_module: false,
+            debug: true,
+            sanitize: false,
+            profile: false,
+            chatty: false,
+            optimize_ir: true,
+            target: None,
+            cache: true,
+            filc: false,
+            is_setup_program: false,
+            k1_home_override: None,
+            command: k1::compiler::Command::Check { file: root_path },
+            dump_idents: false,
+        };
+
+        let my_generation = self.completion_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let _compile_guard = self.completion_compile_lock.lock().await;
+        if self.completion_generation.load(Ordering::SeqCst) != my_generation {
+            return Err(Error::request_cancelled());
+        }
+        let program =
+            tokio::task::spawn_blocking(move || {
+                match k1::compiler::compile_program_ext(&args, lsp_options) {
+                    Ok(program) => program,
+                    Err(CompileProgramError::TyperFailure(program)) => *program,
+                }
+            })
+            .await
+            .map_err(|_| Error::internal_error())?;
+        Ok(Some(program))
     }
 
     fn with_k1<T>(&self, f: impl Fn(&TypedProgram) -> T) -> Option<T> {
@@ -433,12 +516,17 @@ impl LanguageServer for Backend {
         // res.capabilities.semantic_tokens_provider = None;
         res.capabilities.completion_provider = Some(CompletionOptions {
             resolve_provider: Some(false),
-            trigger_characters: Some(vec![".".to_string()]),
+            trigger_characters: Some(vec![".".to_string(), ":".to_string(), "/".to_string()]),
             all_commit_characters: Some(vec!["\n".to_string()]),
             work_done_progress_options: WorkDoneProgressOptions::default(),
             completion_item: Some(CompletionOptionsCompletionItem {
                 label_details_support: Some(false),
             }),
+        });
+        res.capabilities.signature_help_provider = Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+            retrigger_characters: Some(vec![",".to_string()]),
+            work_done_progress_options: WorkDoneProgressOptions::default(),
         });
         res.server_info =
             Some(ServerInfo { name: "k1lsp".to_string(), version: Some("ALPHA".to_string()) });
@@ -714,82 +802,9 @@ impl LanguageServer for Backend {
         let col = position.position.character;
         info!("completion: {}:{}:{}", file_url.path(), line, col);
 
-        // Latest buffer content: unsaved edits first, else the compiled source.
-        // Content is read while its owning program is in scope, so only the
-        // spliced String crosses the awaits below
-        let content_at_line = |ast: &ParsedProgram, source: &SourceFile| {
-            source
-                .get_line(&ast.mem, line as usize)
-                .map(|line_info| (source.content(&ast.mem).to_string(), line_info))
+        let Some(program) = self.compile_with_marker(&file_url, line, col).await? else {
+            return Ok(None);
         };
-        let spliced = {
-            let content_and_line = {
-                let edited_sources = self.edited_sources.lock().unwrap();
-                edited_sources
-                    .get(&file_url)
-                    .and_then(|ast| content_at_line(ast, ast.sources.get_main()))
-            };
-            let content_and_line = match content_and_line {
-                Some(found) => Some(found),
-                None => self
-                    .with_k1(|k1| {
-                        uri_to_source(&k1.ast, &file_url)
-                            .and_then(|source| content_at_line(&k1.ast, source))
-                    })
-                    .flatten(),
-            };
-            let Some((content, line_info)) = content_and_line else {
-                info!("completion: no source or line for {}", file_url.path());
-                return Ok(None);
-            };
-            let offset = (line_info.start_char + col.min(line_info.len)) as usize;
-            k1::lsp_support::splice_completion_marker(&content, offset)
-        };
-
-        let Ok(canonical_path) = k1::kpath::canonicalize(file_url.path()) else { return Ok(None) };
-        let root_path: std::path::PathBuf = {
-            let root_uri = self.workspace_uri.read().unwrap();
-            let Some(root) = root_uri.as_ref() else { return Ok(None) };
-            root.path().into()
-        };
-
-        let mut source_overrides = fxhash::FxHashMap::default();
-        source_overrides.insert(canonical_path, spliced);
-        let lsp_options = LspCompileOptions { source_overrides, completion: true };
-        let args = k1::compiler::Args {
-            no_std: false,
-            emit_llvm: false,
-            optimize: false,
-            dump_module: false,
-            debug: true,
-            sanitize: false,
-            profile: false,
-            chatty: false,
-            optimize_ir: true,
-            target: None,
-            cache: true,
-            filc: false,
-            is_setup_program: false,
-            k1_home_override: None,
-            command: k1::compiler::Command::Check { file: root_path },
-            dump_idents: false,
-        };
-
-        // Newer requests win; a queued stale compile bails as soon as it gets the lock
-        let my_generation = self.completion_generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let _compile_guard = self.completion_compile_lock.lock().await;
-        if self.completion_generation.load(Ordering::SeqCst) != my_generation {
-            return Err(Error::request_cancelled());
-        }
-        let program =
-            tokio::task::spawn_blocking(move || {
-                match k1::compiler::compile_program_ext(&args, lsp_options) {
-                    Ok(program) => program,
-                    Err(CompileProgramError::TyperFailure(program)) => *program,
-                }
-            })
-            .await
-            .map_err(|_| Error::internal_error())?;
 
         let site = program.completion.as_ref().and_then(|cs| cs.site);
         let (candidates, is_incomplete) = match site {
@@ -814,6 +829,42 @@ impl LanguageServer for Backend {
         let items: Vec<CompletionItem> = candidates.into_iter().map(candidate_to_item).collect();
         info!("completion: {} items in {}ms", items.len(), start.elapsed().as_millis());
         Ok(Some(CompletionResponse::List(CompletionList { is_incomplete, items })))
+    }
+
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let position = params.text_document_position_params;
+        let file_url = position.text_document.uri;
+        let line = position.position.line;
+        let col = position.position.character;
+        info!("signature_help: {}:{}:{}", file_url.path(), line, col);
+
+        let Some(program) = self.compile_with_marker(&file_url, line, col).await? else {
+            return Ok(None);
+        };
+        let Some(site) = program.completion.as_ref().and_then(|cs| cs.site) else {
+            return Ok(None);
+        };
+        let Some(info) = k1::lsp_support::signature_help_info(&program, site) else {
+            return Ok(None);
+        };
+        let parameters = info
+            .params
+            .iter()
+            .map(|p| ParameterInformation {
+                label: ParameterLabel::Simple(p.clone()),
+                documentation: None,
+            })
+            .collect();
+        Ok(Some(SignatureHelp {
+            signatures: vec![SignatureInformation {
+                label: info.label,
+                documentation: None,
+                parameters: Some(parameters),
+                active_parameter: Some(info.active_param),
+            }],
+            active_signature: Some(0),
+            active_parameter: Some(info.active_param),
+        }))
     }
 
     async fn goto_definition(

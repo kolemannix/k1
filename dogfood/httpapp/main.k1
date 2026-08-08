@@ -141,9 +141,8 @@ fn abandon-response(work: *mut http-handler-work) {
   }
 }
 
-let tlog: bool = false
 macro tprintln(arg) {
-  if tlog `tprintln-log($arg)` else `.{}`
+  if params.tlog `tprintln-log($arg)` else `.{}`
 }
 fn tprintln-log[t: print](t) {
   let thread-self = uv/thread_self()

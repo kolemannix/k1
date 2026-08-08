@@ -5,3 +5,5 @@ fn module(): k1/module {
   m.dep("http")
   m
 }
+
+let params: { tlog: bool } = k1/module-params(.{ tlog = false })

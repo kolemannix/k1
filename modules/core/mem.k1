@@ -160,7 +160,7 @@ ns mem {
   macro with(alloc-mode, expr) {
     `
     let start-len = mem/mode-stack-len()
-    mem/push-mode(alloc-mode)
+    mem/push-mode($alloc-mode)
     defer {
       mem/pop-mode()
       assert-equals[size](mem/mode-stack-len(), start-len)

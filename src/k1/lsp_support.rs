@@ -217,6 +217,7 @@ pub struct CompletionCandidate {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CompletionCandidateKind {
     Field,
+    Variant,
     Method,
     Variable,
     Function,
@@ -234,8 +235,7 @@ const KEYWORDS: &[&str] = &[
 pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<CompletionCandidate> {
     let mut items: Vec<CompletionCandidate> = vec![];
     match site {
-        CompletionSite::Member { base_type_id, .. } => {
-            let base_type_id = k1.get_static_family_id_if_static(base_type_id);
+        CompletionSite::Member { raw_base_type_id, base_type_id, .. } => {
             if let Type::Struct(st) = k1.types.get(base_type_id) {
                 for field in k1.mem.getn(st.fields) {
                     items.push(CompletionCandidate {
@@ -246,10 +246,12 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                     });
                 }
             }
+            let mut seen_methods = FxHashSet::default();
             if let Some(companion_ns) = k1.get_companion_namespace(base_type_id) {
                 let companion_scope = k1.namespaces.get(companion_ns).scope_id;
                 for (name, function_id) in k1.scopes.iter_scope_functions(companion_scope) {
                     if is_method_shaped(k1, function_id, base_type_id) {
+                        seen_methods.insert(name);
                         items.push(CompletionCandidate {
                             label: k1.ident_str(name).to_string(),
                             kind: CompletionCandidateKind::Method,
@@ -259,8 +261,36 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                     }
                 }
             }
+            // Ability methods: impls are keyed by self type, and the site's
+            // base_type_id is already dereferenced; raw covers impls declared
+            // on the reference type itself
+            for type_id in [base_type_id, raw_base_type_id] {
+                let Some(handles) = k1.ability_impl_table.get(&type_id) else { continue };
+                for handle in handles.as_slice(&k1.mem) {
+                    let ability = k1.abilities.get(handle.specialized_ability_id);
+                    let impl_functions = k1.ability_impls.get(handle.full_impl_id).functions;
+                    // Impl functions are ordered as declared in the ability
+                    for (fn_ref, impl_fn) in
+                        k1.mem.getn(ability.functions).iter().zip(k1.mem.getn(impl_functions))
+                    {
+                        let AbilityImplFunction::FunctionId(function_id) = *impl_fn else {
+                            continue;
+                        };
+                        if is_method_shaped(k1, function_id, type_id)
+                            && seen_methods.insert(fn_ref.function_name)
+                        {
+                            items.push(CompletionCandidate {
+                                label: k1.ident_str(fn_ref.function_name).to_string(),
+                                kind: CompletionCandidateKind::Method,
+                                detail: k1.function_id_to_string(function_id, false),
+                                sort_group: 1,
+                            });
+                        }
+                    }
+                }
+            }
         }
-        CompletionSite::Scope { scope_id } => {
+        CompletionSite::Scope { scope_id } | CompletionSite::CallArg { scope_id, .. } => {
             collect_scope_chain(k1, scope_id, &mut items);
             for kw in KEYWORDS {
                 items.push(CompletionCandidate {
@@ -274,9 +304,72 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
         CompletionSite::Path { path_scope_id } => {
             collect_one_scope(k1, path_scope_id, &mut Seen::default(), &mut items);
         }
+        CompletionSite::Variant { type_id } => {
+            let type_id = match k1.types.get(type_id) {
+                Type::Generic(g) => g.inner,
+                _ => type_id,
+            };
+            match k1.types.get(type_id) {
+                Type::Sum(sum) => {
+                    for v in k1.mem.getn(sum.variants) {
+                        items.push(CompletionCandidate {
+                            label: k1.ident_str(v.name).to_string(),
+                            kind: CompletionCandidateKind::Variant,
+                            detail: match v.payload {
+                                Some(payload) => k1.type_id_to_string(payload),
+                                None => String::new(),
+                            },
+                            sort_group: 0,
+                        });
+                    }
+                }
+                Type::Enum(e) => {
+                    for v in k1.mem.getn(e.member_values) {
+                        items.push(CompletionCandidate {
+                            label: k1.ident_str(v.name).to_string(),
+                            kind: CompletionCandidateKind::Variant,
+                            detail: format!("= {}", v.int_value),
+                            sort_group: 0,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
     }
     items.sort_by(|a, b| (a.sort_group, &a.label).cmp(&(b.sort_group, &b.label)));
     items
+}
+
+pub struct SignatureHelpInfo {
+    pub label: String,
+    /// Substrings of label, one per non-context param (including self)
+    pub params: Vec<String>,
+    /// Index into params of the arg the cursor is on
+    pub active_param: u32,
+}
+
+pub fn signature_help_info(k1: &TypedProgram, site: CompletionSite) -> Option<SignatureHelpInfo> {
+    let CompletionSite::CallArg { function_id, arg_index, .. } = site else { return None };
+    let function = k1.get_function(function_id);
+    let Type::Function(ft) = k1.types.get(function.type_id) else { return None };
+    // FIXME: Does not handle explicit context params properly\
+    // FIXME: Does not use our standard FunctionSignature display because we're not interested in
+    // 'special' params
+    let params: Vec<String> = k1
+        .mem
+        .getn(ft.physical_params)
+        .iter()
+        .filter(|p| !p.is_context && !p.is_lambda_env)
+        .map(|p| format!("{}: {}", k1.ident_str(p.name), k1.type_id_to_string(p.type_id)))
+        .collect();
+    let label = format!(
+        "fn {}({}): {}",
+        k1.ident_str(function.name),
+        params.join(", "),
+        k1.type_id_to_string(ft.return_type)
+    );
+    Some(SignatureHelpInfo { label, params, active_param: arg_index })
 }
 
 fn is_method_shaped(k1: &TypedProgram, function_id: FunctionId, base_type_id: TypeId) -> bool {
@@ -483,6 +576,25 @@ ns for point {
   }
 }
 
+ability describe {
+  fn describe(self: self): int
+}
+
+impl describe for point {
+  fn describe(self: point): int { self.x }
+}
+
+ability bump {
+  fn bump(self: *mut self): int
+}
+
+impl bump for point {
+  fn bump(self: *mut point): int {
+    self.x = self.x + 1
+    self.x
+  }
+}
+
 fn use-it(): int {
   let p: point = .{ x = 1, y = 2 }
   p.@@
@@ -498,6 +610,9 @@ fn use-it(): int {
         assert!(labels.contains(&"x".to_string()));
         assert!(labels.contains(&"y".to_string()));
         assert!(labels.contains(&"magnitude".to_string()));
+        assert!(labels.contains(&"describe".to_string()));
+        // Impl self param is *mut point; the deref'd base still finds it
+        assert!(labels.contains(&"bump".to_string()));
     }
 
     #[test]
@@ -552,6 +667,118 @@ fn use-it(): int {
         // Path enumeration is local to the namespace: no keywords, no outer names
         assert!(!labels.contains(&"use-it".to_string()));
         assert!(!labels.contains(&"fn".to_string()));
+    }
+
+    #[test]
+    fn variant_completion_named() {
+        let k1 = compile_with_cursor(
+            "variant_named",
+            r#"
+ns completion-variant-named
+
+type color = either(u8) { red, green, blue }
+
+fn use-it(): int {
+  color:@@
+  0
+}
+"#,
+        );
+        assert!(matches!(
+            k1.completion.as_ref().unwrap().site,
+            Some(CompletionSite::Variant { .. })
+        ));
+        assert_eq!(labels(&k1), vec!["blue", "green", "red"]);
+    }
+
+    #[test]
+    fn variant_completion_bare() {
+        let k1 = compile_with_cursor(
+            "variant_bare",
+            r#"
+ns completion-variant-bare
+
+type shape = either { circle(int), square }
+
+fn use-it(): int {
+  let s: shape = :@@
+  0
+}
+"#,
+        );
+        assert!(matches!(
+            k1.completion.as_ref().unwrap().site,
+            Some(CompletionSite::Variant { .. })
+        ));
+        assert_eq!(labels(&k1), vec!["circle", "square"]);
+    }
+
+    #[test]
+    fn variant_completion_in_pattern() {
+        let k1 = compile_with_cursor(
+            "variant_pattern",
+            r#"
+ns completion-variant-pattern
+
+type shape = either { circle(int), square }
+
+fn use-it(s: shape): int {
+  if s is :@@ { 1 } else { 0 }
+}
+"#,
+        );
+        assert!(matches!(
+            k1.completion.as_ref().unwrap().site,
+            Some(CompletionSite::Variant { .. })
+        ));
+        assert_eq!(labels(&k1), vec!["circle", "square"]);
+    }
+
+    #[test]
+    fn call_arg_signature_help() {
+        let k1 = compile_with_cursor(
+            "callarg",
+            r#"
+ns completion-callarg
+
+fn add2(a: int, b: int): int { a + b }
+
+fn use-it(): int {
+  add2(1, @@)
+}
+"#,
+        );
+        let site = k1.completion.as_ref().unwrap().site.expect("expected a site");
+        assert!(matches!(site, CompletionSite::CallArg { arg_index: 1, .. }));
+        let info = signature_help_info(&k1, site).unwrap();
+        assert_eq!(info.label, "fn add2(a: i64, b: i64): i64");
+        assert_eq!(info.params, vec!["a: i64", "b: i64"]);
+        assert_eq!(info.active_param, 1);
+        // The site still serves completions, as scope completions
+        assert!(labels(&k1).contains(&"add2".to_string()));
+    }
+
+    #[test]
+    fn call_arg_generic_method() {
+        let k1 = compile_with_cursor(
+            "callarg_generic",
+            r#"
+ns completion-callarg-generic
+
+fn use-it(): int {
+  let xs: list[int] = list/empty()
+  xs.push(@@)
+  0
+}
+"#,
+        );
+        let site = k1.completion.as_ref().unwrap().site.expect("expected a site");
+        assert!(matches!(site, CompletionSite::CallArg { arg_index: 1, .. }));
+        let info = signature_help_info(&k1, site).unwrap();
+        // Inference solved t=i64 from the receiver; the marker's phony filled elem
+        assert_eq!(info.label, "fn push(self: *list[i64], elem: i64): empty");
+        assert_eq!(info.params, vec!["self: *list[i64]", "elem: i64"]);
+        assert_eq!(info.active_param, 1);
     }
 
     #[test]

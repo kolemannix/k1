@@ -240,12 +240,17 @@ pub struct CompletionState {
 /// Where in the program the completion cursor sits, and what completes there
 #[derive(Clone, Copy)]
 pub enum CompletionSite {
-    /// value.<marker>
+    /// value.<cursor>
     Member { raw_base_type_id: TypeId, base_type_id: TypeId, scope_id: ScopeId },
-    /// ns/path/<marker>
+    /// ns/path/<cursor>
     Path { path_scope_id: ScopeId },
-    /// bare <marker>
+    /// bare <cursor>
     Scope { scope_id: ScopeId },
+    /// type:<cursor> or :<cursor>, in expressions and patterns
+    Variant { type_id: TypeId },
+    /// f(a, <cursor>): the cursor is a direct call argument; arg_index counts
+    /// parsed args, so it includes the receiver of a method call
+    CallArg { function_id: FunctionId, arg_index: u32, scope_id: ScopeId },
 }
 
 #[derive(Clone, Copy)]
@@ -306,6 +311,9 @@ bitflags! {
         /// Compiling a module manifest (fn module) body; enables the
         /// dep-params capture special form
         const ManifestEval = 1 << 6;
+        /// The completion cursor is a direct argument of the enclosing call,
+        /// which records the CallArg site itself
+        const CompletionCursorOwnedByCall = 1 << 7;
     }
 }
 
@@ -369,6 +377,16 @@ impl EvalExprContext {
     #[inline(always)]
     fn is_manifest_eval(&self) -> bool {
         self.flags.contains(EvalExprFlags::ManifestEval)
+    }
+
+    #[inline(always)]
+    fn with_ccursor_owned_by_call(&self) -> EvalExprContext {
+        EvalExprContext { flags: self.flags | EvalExprFlags::CompletionCursorOwnedByCall, ..*self }
+    }
+
+    #[inline(always)]
+    fn is_marker_owned_by_call(&self) -> bool {
+        self.flags.contains(EvalExprFlags::CompletionCursorOwnedByCall)
     }
 
     #[inline(always)]
@@ -2490,9 +2508,9 @@ impl UseStatus {
 
 #[derive(Debug, Clone, Copy)]
 pub struct AbilityImplHandle {
-    base_ability_id: AbilityId,
-    specialized_ability_id: AbilityId,
-    full_impl_id: AbilityImplId,
+    pub base_ability_id: AbilityId,
+    pub specialized_ability_id: AbilityId,
+    pub full_impl_id: AbilityImplId,
 }
 
 /// Allocations that we re-use
@@ -6177,7 +6195,16 @@ impl TypedProgram {
                 }
             }
             ParsedPattern::Sum(sum_pattern) => {
+                let sum_pattern = *sum_pattern;
                 let sum_pattern_span = sum_pattern.span;
+
+                if let Some(cs) = &mut self.completion
+                    && cs.site.is_none()
+                    && sum_pattern.variant_name == cs.marker
+                {
+                    cs.site = Some(CompletionSite::Variant { type_id: target_type_id });
+                }
+
                 match self.types.get(target_type_id) {
                     Type::Sum(sum_type) => {
                         if let Some(name) = sum_pattern.sum_name {
@@ -8977,26 +9004,32 @@ impl TypedProgram {
     fn eval_variable(
         &mut self,
         variable_expr_id: ParsedExprId,
-        scope_id: ScopeId,
+        ctx: EvalExprContext,
         // Currently, only used to determine if this counts as a usage
         is_assignment_lhs: bool,
     ) -> K1Result<(Option<VariableId>, TypedExprId)> {
+        let scope_id = ctx.scope_id;
         let ParsedExpr::Variable(variable) = self.ast.exprs.get(variable_expr_id) else { panic!() };
         let variable_name_span = variable.name.name_span;
 
         if let Some(cs) = &self.completion
-            && cs.site.is_none()
             && variable.name.name == cs.marker
         {
-            let site = if variable.name.path.is_empty() {
-                CompletionSite::Scope { scope_id }
-            } else {
-                match self.resolve_qident(scope_id, &variable.name) {
-                    Ok(path_scope_id) => CompletionSite::Path { path_scope_id },
-                    Err(_) => CompletionSite::Scope { scope_id },
-                }
-            };
-            self.completion.as_mut().unwrap().site = Some(site);
+            if cs.site.is_none() && !ctx.is_marker_owned_by_call() {
+                let site = if variable.name.path.is_empty() {
+                    CompletionSite::Scope { scope_id }
+                } else {
+                    match self.resolve_qident(scope_id, &variable.name) {
+                        Ok(path_scope_id) => CompletionSite::Path { path_scope_id },
+                        Err(_) => CompletionSite::Scope { scope_id },
+                    }
+                };
+                self.completion.as_mut().unwrap().site = Some(site);
+            }
+            // The marker evaluates as a phony of the expected type so the
+            // enclosing expression can finish typechecking
+            let phony_type = ctx.expected_type_id.unwrap_or(NEVER_TYPE_ID);
+            return Ok((None, self.synth_phony(phony_type, variable_name_span)));
         }
 
         let variable_id = self.find_variable_namespaced(scope_id, &variable.name)?;
@@ -9683,7 +9716,7 @@ impl TypedProgram {
                 Ok(static_expr)
             }
             ParsedExpr::Variable(_variable) => {
-                Ok(self.eval_variable(expr_id, ctx.scope_id, false)?.1)
+                Ok(self.eval_variable(expr_id, ctx, false)?.1)
             }
             ParsedExpr::FieldAccess(field_access) => {
                 let field_access = *field_access;
@@ -10201,7 +10234,7 @@ impl TypedProgram {
                 None,
             );
             let (variable_id, variable_expr) =
-                self.eval_variable(variable_expr, ctx.scope_id, false)?;
+                self.eval_variable(variable_expr, ctx, false)?;
             let Some(variable_id) = variable_id else {
                 kbail!(self, param.span, "Must be a plain variable");
             };
@@ -11081,7 +11114,7 @@ impl TypedProgram {
                 None,
             );
             let (variable_id, variable_expr) =
-                self.eval_variable(parsed_var, ctx.scope_id, false)?;
+                self.eval_variable(parsed_var, ctx, false)?;
             let Some(variable_id) = variable_id else {
                 kbail!(
                     self,
@@ -14949,6 +14982,14 @@ impl TypedProgram {
                 Some(type_id) => type_id,
             },
         };
+
+        if let Some(cs) = &mut self.completion
+            && cs.site.is_none()
+            && parsed_variant.variant_name == cs.marker
+        {
+            cs.site = Some(CompletionSite::Variant { type_id: provided_type });
+        }
+
         match self.types.get(provided_type) {
             Type::Sum(_s) => Ok(()),
             Type::Generic(g) => match self.types.get(g.inner).as_sum() {
@@ -15424,6 +15465,36 @@ impl TypedProgram {
         }
     }
 
+    /// A completion cursor among a call's direct args is claimed by the call as a CallArg
+    /// site, not by eval_variable; see EvalExprFlags::MarkerOwnedByCall
+    fn find_completion_cursor_arg(&self, fn_call: &ParsedCall) -> Option<u32> {
+        let cs = self.completion.as_ref()?;
+        let position = self.ast.mem.getn(fn_call.args).iter().position(|arg| {
+            match self.ast.exprs.get(arg.value) {
+                ParsedExpr::Variable(v) => v.name.path.is_empty() && v.name.name == cs.marker,
+                _ => false,
+            }
+        });
+        position.map(|i| i as u32)
+    }
+
+    fn record_call_arg_site(
+        &mut self,
+        marker_arg_index: Option<u32>,
+        function_id: Option<FunctionId>,
+        scope_id: ScopeId,
+    ) {
+        let Some(arg_index) = marker_arg_index else { return };
+        let Some(cs) = &mut self.completion else { return };
+        match (function_id, &cs.site) {
+            (Some(function_id), None | Some(CompletionSite::CallArg { .. })) => {
+                cs.site = Some(CompletionSite::CallArg { function_id, arg_index, scope_id });
+            }
+            (None, None) => cs.site = Some(CompletionSite::Scope { scope_id }),
+            _ => {}
+        }
+    }
+
     fn eval_function_call(
         &mut self,
         fn_call: &ParsedCall,
@@ -15452,17 +15523,30 @@ impl TypedProgram {
         );
         // Arguments already evaluated during resolution/inference; avoids double-compiles where possible
         let mut stashed_args: SV8<(ParsedExprId, TypedExprId)> = smallvec![];
+        let marker_arg_index = self.find_completion_cursor_arg(fn_call);
+        let ctx = if marker_arg_index.is_some() { ctx.with_ccursor_owned_by_call() } else { ctx };
         let call_resolution = match known_callee {
             None => {
-                self.resolve_parsed_call(fn_call, known_args.as_ref(), ctx, &mut stashed_args)?
+                match self.resolve_parsed_call(fn_call, known_args.as_ref(), ctx, &mut stashed_args)
+                {
+                    Ok(resolution) => resolution,
+                    Err(e) => {
+                        self.record_call_arg_site(marker_arg_index, None, ctx.scope_id);
+                        return Err(e);
+                    }
+                }
             }
             Some(callee) => CallResolution::Call(callee),
         };
         let (callee, method_receiver) = match call_resolution {
-            CallResolution::OtherExpr(typed_expr_id) => return Ok(typed_expr_id),
+            CallResolution::OtherExpr(typed_expr_id) => {
+                self.record_call_arg_site(marker_arg_index, None, ctx.scope_id);
+                return Ok(typed_expr_id);
+            }
             CallResolution::Call(callee) => (callee, None),
             CallResolution::MethodCall { callee, receiver } => (callee, Some(receiver)),
         };
+        self.record_call_arg_site(marker_arg_index, callee.maybe_function_id(), ctx.scope_id);
         let skip_leading_receiver_arg = matches!(callee, Callee::DynamicAbilityFn { .. });
         let method_receiver = if skip_leading_receiver_arg { None } else { method_receiver };
         let is_method = method_receiver.is_some();
@@ -15801,6 +15885,7 @@ impl TypedProgram {
                 (final_callee, typechecked_args.to_slice(), type_args)
             }
         };
+        self.record_call_arg_site(marker_arg_index, callee.maybe_function_id(), ctx.scope_id);
 
         // If any arguments definitely crash, we aren't calling the function at all.
         // So let's not generate a `Call`, but rather just the arguments expressions that should be
@@ -16833,7 +16918,7 @@ impl TypedProgram {
                 let (destination, expected_rhs_type, reassigned_variable_id) =
                     if let ParsedExpr::Variable(_) = self.ast.exprs.get(assignment.lhs) {
                         let (typed_variable_id, lhs) =
-                            self.eval_variable(assignment.lhs, ctx.scope_id, true)?;
+                            self.eval_variable(assignment.lhs, ctx, true)?;
                         let Some(variable_id) = typed_variable_id else {
                             kbail!(self, lhs_span, "Must be a regular variable, eg not a function");
                         };
