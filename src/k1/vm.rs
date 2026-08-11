@@ -965,7 +965,9 @@ pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
     }
     unsafe {
         match t {
-            ScalarType::I8 | ScalarType::U8 => dst.write(value.bits() as u8),
+            ScalarType::I8 | ScalarType::U8 | ScalarType::Char | ScalarType::Bool => {
+                dst.write(value.bits() as u8)
+            }
             ScalarType::I16 | ScalarType::U16 => (dst as *mut u16).write(value.bits() as u16),
             ScalarType::I32 | ScalarType::U32 | ScalarType::F32 => {
                 (dst as *mut u32).write(value.bits() as u32)
@@ -1010,7 +1012,9 @@ pub(crate) fn memcopy(src: *const u8, dst: *mut u8, size_bytes: usize) {
 pub fn load_scalar(t: ScalarType, ptr: *const u8) -> Value {
     unsafe {
         match t {
-            ScalarType::U8 | ScalarType::I8 => Value::u8(ptr.read()),
+            ScalarType::U8 | ScalarType::I8 | ScalarType::Char | ScalarType::Bool => {
+                Value::u8(ptr.read())
+            }
             ScalarType::U16 | ScalarType::I16 => Value::u16((ptr as *const u16).read()),
             ScalarType::U32 | ScalarType::I32 => Value::u32((ptr as *const u32).read()),
             ScalarType::U64 | ScalarType::I64 => Value::u64((ptr as *const u64).read()),

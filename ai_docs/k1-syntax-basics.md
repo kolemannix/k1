@@ -260,13 +260,13 @@ literal from a block — a bare `{` in expression position is always a block, so
 `{ cap }` is a block yielding `cap` and `.{ cap }` is the shorthand struct.
 Fields use the same `name = value` shape as named call arguments.
 
-`type alias name = ...` creates a plain alias for the type on the right-hand
+`type(alias) name = ...` creates a plain alias for the type on the right-hand
 side. This is how to name an existing scalar or structural type without creating
 a new nominal identity:
 
 ```rust
-type alias byte-count = u32
-type alias point-like = { x: int, y: int }
+type(alias) byte-count = u32
+type(alias) point-like = { x: int, y: int }
 ```
 
 Anonymous struct types are common:

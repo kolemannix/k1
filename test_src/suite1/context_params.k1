@@ -10,14 +10,14 @@ fn add-all(context _a: u8, _b: u16)(x: int, y: int): int {
 }
 
 fn test() {
-  let context history: *mut list[string] = core/mem/new([])
+  let(context) history: *mut list[string] = core/mem/new([])
 
   assert(add-tracked(context history)(1,2) == 3)
 
   assert(add-tracked(3,4) == 7)
 
-  let context u: u8 = 1
-  let context v: u16 = 1
+  let(context) u: u8 = 1
+  let(context) v: u16 = 1
   let _ = add-all(4, 5)
 
   assert(history.* == ["1 + 2","3 + 4"])

@@ -767,8 +767,6 @@ pub enum Value {
 }
 
 impl Value {
-    const PTR_ZERO: Value = Value::Data32 { t: ScalarType::Pointer, data: 0 };
-
     const fn byte(u8: u8) -> Value {
         Value::Data32 { t: ScalarType::U8, data: u8 as u32 }
     }
@@ -1318,7 +1316,7 @@ pub enum InstKind {
 
 impl InstKind {
     pub const EMPTY: InstKind = Self::Value(PhysicalType::EMPTY);
-    pub const BOOL: InstKind = Self::scalar(ScalarType::U8);
+    pub const BOOL: InstKind = Self::scalar(ScalarType::Bool);
     pub const PTR: InstKind = Self::scalar(ScalarType::Pointer);
     pub const U64: InstKind = Self::scalar(ScalarType::U64);
 
@@ -1332,8 +1330,8 @@ impl InstKind {
     fn is_int(&self) -> bool {
         matches!(self, InstKind::Value(pt) if pt.is_int())
     }
-    fn is_u8(&self) -> bool {
-        matches!(self, InstKind::Value(pt) if pt.is_u8())
+    fn is_bool(&self) -> bool {
+        matches!(self, InstKind::Value(pt) if pt.is_bool())
     }
     fn is_aggregate(&self) -> bool {
         matches!(self, InstKind::Value(pt) if pt.is_agg())
@@ -1719,7 +1717,7 @@ impl<'k1> Builder<'k1> {
         alt: BlockId,
         comment: IrComment,
     ) -> InstId {
-        if let Value::Data32 { t: ScalarType::U8, data: b32 } = cond
+        if let Value::Data32 { t: ScalarType::Bool, data: b32 } = cond
             && self.optimize_enabled()
         {
             if b32 == 1 {
@@ -2799,14 +2797,8 @@ fn compile_static_value(b: &mut Builder, value_id: StaticValueId, pt: PhysicalTy
     // but leave the aggregates as globals
     match b.k1.static_values.get(value_id) {
         StaticValue::Empty(_) => Value::Empty,
-        StaticValue::Bool(bv) => {
-            let imm = Value::byte(*bv as u8);
-            imm
-        }
-        StaticValue::Char(byte) => {
-            let imm = Value::byte(*byte);
-            imm
-        }
+        StaticValue::Bool(bv) => Value::imm32(ScalarType::Bool, *bv as u32),
+        StaticValue::Char(byte) => Value::imm32(ScalarType::Char, *byte as u32),
         StaticValue::Int(int) => {
             let int = *int;
             let int_value = b.make_int_value(&int, IrComment::StaticInt);
@@ -2958,7 +2950,7 @@ fn compile_ir_builtin(
 ) -> K1Result<Value> {
     match builtin {
         BuiltinIr::BakeStaticValue => {
-            // intern fn bakeStaticValue[T](value: T): u64
+            // fn(intern) bakeStaticValue[T](value: T): u64
             let type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let _physical_type = b.get_physical_type(type_id);
 
@@ -2988,7 +2980,7 @@ fn compile_ir_builtin(
                         Some(dst) => dst,
                     };
                     let zero_u8 = Value::byte(0);
-                    // intern fn set(dst: ptr, value: u8, count: size): unit
+                    // fn(intern) set(dst: ptr, value: u8, count: size): unit
                     let count = b.make_int_value(
                         &TypedIntValue::I64(pt_layout.size as i64),
                         IrComment::MemsetSize,
@@ -3118,7 +3110,7 @@ fn compile_ir_builtin(
             Ok(stored)
         }
         BuiltinIr::PointerIndex => {
-            // intern fn refAtIndex[T](self: Pointer, index: uword): T*
+            // fn(intern) refAtIndex[T](self: Pointer, index: uword): T*
             let elem_type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let elem_pt = b.get_physical_type(elem_type_id);
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
@@ -3133,7 +3125,7 @@ fn compile_ir_builtin(
             Ok(stored)
         }
         BuiltinIr::AtomicLoad => {
-            // intern fn load[t](src: *t, ord: ordering): t
+            // fn(intern) load[t](src: *t, ord: ordering): t
             let t = atomic_element_type(b, &call, true)?;
             let ord = b.k1.atomic_ordering_arg(&call, 1)?;
             let src = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3141,7 +3133,7 @@ fn compile_ir_builtin(
             Ok(store_scalar_if_dst(b, dst, inst.as_value()))
         }
         BuiltinIr::AtomicStore => {
-            // intern fn store[t](dst: *mut t, value: t, ord: ordering)
+            // fn(intern) store[t](dst: *mut t, value: t, ord: ordering)
             let t = atomic_element_type(b, &call, true)?;
             let ord = b.k1.atomic_ordering_arg(&call, 2)?;
             let store_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3150,7 +3142,7 @@ fn compile_ir_builtin(
             Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
         }
         BuiltinIr::AtomicRmw(op) => {
-            // intern fn <op>[t](dst: *mut t, value: t, ord: ordering): t
+            // fn(intern) <op>[t](dst: *mut t, value: t, ord: ordering): t
             use crate::typer::AtomicRmwOp as Op;
             let allow_pointer = op == Op::Xchg;
             let t = atomic_element_type(b, &call, allow_pointer)?;
@@ -3175,7 +3167,7 @@ fn compile_ir_builtin(
             Ok(store_scalar_if_dst(b, dst, inst.as_value()))
         }
         BuiltinIr::AtomicCmpxchg { weak } => {
-            // intern fn cmpxchg[t](dst: *mut t, expected: t, desired: t,
+            // fn(intern) cmpxchg[t](dst: *mut t, expected: t, desired: t,
             //                      success: ordering, failure: ordering): cmpxchg-result[t]
             let t = atomic_element_type(b, &call, true)?;
             let success = b.k1.atomic_ordering_arg(&call, 3)?;
@@ -3209,7 +3201,7 @@ fn compile_ir_builtin(
             Ok(result)
         }
         BuiltinIr::AtomicFence => {
-            // intern fn fence(ord: ordering)
+            // fn(intern) fence(ord: ordering)
             let ord = b.k1.atomic_ordering_arg(&call, 0)?;
             b.push_inst_anon(Inst::Fence { ord });
             Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
@@ -3228,7 +3220,7 @@ fn compile_vector_op(
     use crate::typer::VecOpKind;
     match op {
         VecOpKind::Splat => {
-            // intern fn splat[t, n: static size](value: t): vector[t, n]
+            // fn(intern) splat[t, n: static size](value: t): vector[t, n]
             let (elem, lanes) = vector_pt_parts(b, callee_fn_type.return_type)?;
             let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let locn = match dst {
@@ -3329,7 +3321,7 @@ fn compile_vector_op(
             Ok(store_scalar_if_dst(b, dst, inst.as_value()))
         }
         VecOpKind::Load => {
-            // intern fn load-unchecked[t, n: static size](src: ptr): vector[t, n]
+            // fn(intern) load-unchecked[t, n: static size](src: ptr): vector[t, n]
             let ret_pt = callee_fn_type.return_type;
             let _ = vector_pt_parts(b, ret_pt)?;
             let src = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3341,7 +3333,7 @@ fn compile_vector_op(
             Ok(locn)
         }
         VecOpKind::Store => {
-            // intern fn store-unchecked[t, n](self: vector[t, n], dst: ptr)
+            // fn(intern) store-unchecked[t, n](self: vector[t, n], dst: ptr)
             let vec_pt = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt;
             let _ = vector_pt_parts(b, vec_pt)?;
             let vec_value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3350,7 +3342,7 @@ fn compile_vector_op(
             Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
         }
         VecOpKind::GetLane => {
-            // intern fn get-lane[t, n](self: vector[t, n], index: size): t
+            // fn(intern) get-lane[t, n](self: vector[t, n], index: size): t
             let vec_pt = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt;
             let (elem, _) = vector_pt_parts(b, vec_pt)?;
             let base = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3363,7 +3355,7 @@ fn compile_vector_op(
             Ok(store_scalar_if_dst(b, dst, loaded.as_value()))
         }
         VecOpKind::WithLane => {
-            // intern fn with-lane[t, n](self: vector[t, n], index: size, value: t): vector[t, n]
+            // fn(intern) with-lane[t, n](self: vector[t, n], index: size, value: t): vector[t, n]
             let ret_pt = callee_fn_type.return_type;
             let (elem, _) = vector_pt_parts(b, ret_pt)?;
             let src_vec = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3750,23 +3742,8 @@ fn compile_matching_condition(
 }
 
 pub fn zero(t: ScalarType) -> Value {
-    match t {
-        ScalarType::U8 => Value::Data32 { t: ScalarType::U8, data: 0 },
-        ScalarType::U16 => Value::Data32 { t: ScalarType::U16, data: 0 },
-        ScalarType::U32 => Value::Data32 { t: ScalarType::U32, data: 0 },
-        ScalarType::U64 => Value::Data32 { t: ScalarType::U64, data: 0 },
-        ScalarType::I8 => Value::Data32 { t: ScalarType::I8, data: 0 },
-        ScalarType::I16 => Value::Data32 { t: ScalarType::I16, data: 0 },
-        ScalarType::I32 => Value::Data32 { t: ScalarType::I32, data: 0 },
-        ScalarType::I64 => Value::Data32 { t: ScalarType::I64, data: 0 },
-        ScalarType::F32 => Value::Data32 { t: ScalarType::F32, data: (0.0f32).to_bits() },
-        ScalarType::F64 => {
-            // Bit pattern is all zeroes anyway, but we still construct it via Rust's float
-            // machinery
-            Value::Data32 { t: ScalarType::F64, data: (0.0f64).to_bits() as u32 }
-        }
-        ScalarType::Pointer => Value::PTR_ZERO,
-    }
+    // The all-zeroes bit pattern is zero for every scalar, floats included
+    Value::Data32 { t, data: 0 }
 }
 
 pub fn get_compiled_unit(ir: &ProgramIr, unit: IrUnitId) -> Option<IrUnit> {
@@ -3943,7 +3920,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 }
                 Inst::BoolNegate { v } => {
                     let inst_type = get_value_kind(ir, v);
-                    if !inst_type.is_u8() {
+                    if !inst_type.is_bool() {
                         errors.push(format!("i{inst_id}: bool_negate src is not a bool"))
                     }
                 }
@@ -4588,6 +4565,8 @@ impl From<ScalarType> for &'static str {
             ScalarType::F32 => "f32",
             ScalarType::F64 => "f64",
             ScalarType::Pointer => "ptr",
+            ScalarType::Char => "char",
+            ScalarType::Bool => "bool",
         }
     }
 }

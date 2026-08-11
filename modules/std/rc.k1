@@ -5,7 +5,7 @@ type rc-inner[t] = { count: u64, drop-fn: ?*fn(*mut t) -> {}, value: t }
 // Census of live rc cells; tests assert it returns to zero to catch a dropped
 // release. Not debug-gated: the test suite builds without k1/debug, and two
 // relaxed atomics bracketing the cell's malloc/free are noise.
-let mutable live-cells: u64 = 0
+let(mutable) live-cells: u64 = 0
 
 ns for rc {
   fn alloc[t](value: t, drop-fn: ?*fn(*mut t) -> {}): rc[t] {
@@ -79,7 +79,7 @@ impl owned[raw = string] for heap-string {
 }
 
 // Refcounted byte payloads: the common currency for zero-copy fan-out.
-type alias rc-bytes = rc[span[u8]]
+type(alias) rc-bytes = rc[span[u8]]
 
 // Unwraps a stream of rc-bytes into the payload bytes, zero-copy. Each
 // handed-out payload is retired (released) on the following pull, matching

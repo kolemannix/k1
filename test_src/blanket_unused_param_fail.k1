@@ -1,0 +1,15 @@
+ability marker {
+  fn id(self): i32
+}
+
+// The Self type is concrete, so 't' could never be solved by matching it
+impl[t] marker for i32 {
+  fn id(self): i32 {
+    0
+  }
+}
+
+fn main(): i32 {
+  0
+}
+//errmsg: A blanket impl's Self type must mention at least one of its parameters

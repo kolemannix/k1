@@ -52,7 +52,7 @@ ns work {
     submissions: list[uv-work-submission],
   }
   
-  let mutable work-queue: ptr = ptr/null
+  let(mutable) work-queue: ptr = ptr/null
   
   fn drain-work-queue(handle: *mut uv/async) {
     let queue = handle.get-data[uv-work-queue]()

@@ -292,7 +292,7 @@ pub struct ParsedLet {
     pub name: StringId,
     pub type_expr: Option<ParsedTypeExprId>,
     pub value: Option<ParsedExprId>,
-    /// `let context(impl <ability>, ..) x`: abilities keying this context variable
+    /// `let(context(impl <ability>, ..)) x`: abilities keying this context variable
     pub context_abilities: AstSlice<AstHandle<ParsedAbilityExpr>>,
     pub span: SpanId,
     flags: u8,
@@ -2357,7 +2357,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             } else {
                 let p = self.peek();
                 let err = error_expected(
-                    format!("Definition (fn, deftype, or ns) or {terminator}"),
+                    format!("Definition (fn, type, or ns) or {terminator}"),
                     if p.kind == K::Eof { self.peek_back() } else { self.peek() },
                 );
                 Err(err)
@@ -2650,11 +2650,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     #[inline]
     fn peek(&self) -> Token {
         self.tokens.peek()
-    }
-
-    #[inline]
-    fn cursor_position(&self) -> usize {
-        self.tokens.cursor_position()
     }
 
     #[inline]
@@ -4361,34 +4356,40 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.emit_semantic_token(eaten_keyword, SemanticTokenKind::Keyword);
         let mut flags = 0u8;
         let mut context_abilities: List<AstHandle<ParsedAbilityExpr>, _> = self.ast.mem.new_list(0);
-        loop {
-            let p = self.peek();
-            match p.kind {
-                K::KeywordContext => {
-                    self.advance();
-                    flags |= ParsedLet::FLAG_CONTEXT;
-                    // `let context(impl <ability>, ..) x = ...`: an ability-keyed context variable
-                    if self.peek().kind == K::OpenParen {
+        if self.maybe_consume(K::OpenParen).is_some() {
+            loop {
+                let p = self.peek();
+                match p.kind {
+                    K::KeywordContext => {
                         self.advance();
-                        self.expect_kind(K::KeywordImpl)?;
-                        self.eat_delimited_arena(
-                            "Context abilities",
-                            &mut context_abilities,
-                            K::Comma,
-                            K::CloseParen,
-                            |p| {
-                                let ability_expr = p.expect_ability_expr()?;
-                                Ok(p.ast.mem.push_h(ability_expr))
-                            },
-                        )?;
+                        flags |= ParsedLet::FLAG_CONTEXT;
+                        // `let(context(impl <ability>, ..)) x = ...`: an ability-keyed context variable
+                        if self.peek().kind == K::OpenParen {
+                            self.advance();
+                            self.expect_kind(K::KeywordImpl)?;
+                            self.eat_delimited_arena(
+                                "Context abilities",
+                                &mut context_abilities,
+                                K::Comma,
+                                K::CloseParen,
+                                |p| {
+                                    let ability_expr = p.expect_ability_expr()?;
+                                    Ok(p.ast.mem.push_h(ability_expr))
+                                },
+                            )?;
+                        }
                     }
+                    K::Ident if self.token_chars(p) == "returned" => {
+                        self.advance();
+                        flags |= ParsedLet::FLAG_RETURNED
+                    }
+                    _ => return Err(error_expected("let modifier: context or returned", p)),
                 }
-                K::Ident if self.token_chars(p) == "returned" => {
-                    self.advance();
-                    flags |= ParsedLet::FLAG_RETURNED
+                if self.maybe_consume(K::Comma).is_none() {
+                    break;
                 }
-                _ => break,
             }
+            self.expect_kind(K::CloseParen)?;
         }
         let name_token = self.expect_kind(K::Ident)?;
         let typ = match self.maybe_consume(K::Colon) {
@@ -4437,17 +4438,28 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let mut is_export = false;
         let mut is_external = false;
         let mut is_mutable = false;
-        let name_token = loop {
-            let ident = self.expect_kind(K::Ident)?;
-            let tok_chars = self.token_chars(ident);
-            match tok_chars {
-                "tls" => is_thread_local = true,
-                "export" => is_export = true,
-                "extern" => is_external = true,
-                "mutable" => is_mutable = true,
-                _ => break ident,
+        if self.maybe_consume(K::OpenParen).is_some() {
+            loop {
+                let ident = self.expect_kind(K::Ident)?;
+                match self.token_chars(ident) {
+                    "tls" => is_thread_local = true,
+                    "export" => is_export = true,
+                    "extern" => is_external = true,
+                    "mutable" => is_mutable = true,
+                    _ => {
+                        return Err(error_expected(
+                            "global modifier: tls, export, extern, or mutable",
+                            ident,
+                        ));
+                    }
+                }
+                if self.maybe_consume(K::Comma).is_none() {
+                    break;
+                }
             }
-        };
+            self.expect_kind(K::CloseParen)?;
+        }
+        let name_token = self.expect_kind(K::Ident)?;
         let _colon = self.expect_kind(K::Colon)?;
         let type_expr = self.expect_type_expression()?;
         let value_expr = if is_external {
@@ -4793,47 +4805,50 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             Some(condition) => Some(condition),
         };
-        let initial_pos = self.cursor_position();
-        let is_intrinsic = self.maybe_consume(K::KeywordIntern).is_some();
-        let linkage = if is_intrinsic {
-            if self.peek().kind == K::OpenParen {
+        let Some(fn_keyword) = self.maybe_consume(K::KeywordFn) else {
+            return Ok(None);
+        };
+        let linkage = if self.maybe_consume(K::OpenParen).is_some() {
+            let modifier = self.peek();
+            let linkage = if modifier.kind == K::KeywordIntern {
                 self.advance();
-                let llvm_name = self.expect_dq_ident()?;
-                self.expect_kind(K::CloseParen)?;
-                Linkage::LlvmIntrinsic(llvm_name)
-            } else {
-                Linkage::Intrinsic
-            }
-        } else if let Some((_extern_token, _)) = self.maybe_consume_ident_chars("extern") {
-            let (lib_name, fn_name) = if self.peek().kind == K::OpenParen {
-                self.advance();
-                let ident1 = self.expect_dq_ident()?;
-                let ident2 = if let Some(_comma) = self.maybe_consume(K::Comma) {
-                    let ident2 = self.expect_dq_ident()?;
-                    Some(ident2)
+                if self.peek().kind == K::OpenParen {
+                    self.advance();
+                    let llvm_name = self.expect_dq_ident()?;
+                    self.expect_kind(K::CloseParen)?;
+                    Linkage::LlvmIntrinsic(llvm_name)
                 } else {
-                    None
-                };
-                let (lib_name, fn_name) = match ident2 {
-                    None => (None, Some(ident1)),
-                    Some(fn_name) => (Some(ident1), Some(fn_name)),
-                };
+                    Linkage::Intrinsic
+                }
+            } else if modifier.kind == K::Ident && self.token_chars(modifier) == "extern" {
+                self.advance();
+                let (lib_name, fn_name) = if self.peek().kind == K::OpenParen {
+                    self.advance();
+                    let ident1 = self.expect_dq_ident()?;
+                    let ident2 = if let Some(_comma) = self.maybe_consume(K::Comma) {
+                        let ident2 = self.expect_dq_ident()?;
+                        Some(ident2)
+                    } else {
+                        None
+                    };
+                    let (lib_name, fn_name) = match ident2 {
+                        None => (None, Some(ident1)),
+                        Some(fn_name) => (Some(ident1), Some(fn_name)),
+                    };
 
-                self.expect_kind(K::CloseParen)?;
-                (lib_name, fn_name)
+                    self.expect_kind(K::CloseParen)?;
+                    (lib_name, fn_name)
+                } else {
+                    (None, None)
+                };
+                Linkage::External { module_id: self.module_id, lib_name, fn_name }
             } else {
-                (None, None)
+                return Err(error_expected("fn modifier: intern or extern", modifier));
             };
-            Linkage::External { module_id: self.module_id, lib_name, fn_name }
+            self.expect_kind(K::CloseParen)?;
+            linkage
         } else {
             Linkage::Standard
-        };
-
-        let fn_keyword = match self.expect_kind(K::KeywordFn) {
-            Ok(f) => f,
-            Err(e) => {
-                return if self.cursor_position() != initial_pos { Err(e) } else { Ok(None) };
-            }
         };
         let (func_name, func_name_id) = self.expect_ident()?;
         self.emit_semantic_token(fn_keyword, SemanticTokenKind::Keyword);
@@ -5193,18 +5208,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return Ok(None);
         };
 
-        // Parse modifiers
         let mut flags = ParsedTypeDefnFlags::new(false);
-        loop {
-            let name_or_modifier = self.peek();
-
-            let text = self.token_chars(name_or_modifier);
-            if text == "alias" {
-                flags.set_alias();
-                self.advance()
-            } else {
-                break;
+        if self.maybe_consume(K::OpenParen).is_some() {
+            loop {
+                let modifier = self.expect_kind(K::Ident)?;
+                match self.token_chars(modifier) {
+                    "alias" => flags.set_alias(),
+                    _ => return Err(error_expected("type modifier: alias", modifier)),
+                }
+                if self.maybe_consume(K::Comma).is_none() {
+                    break;
+                }
             }
+            self.expect_kind(K::CloseParen)?;
         }
 
         let (name_token, name) = self.expect_ident()?;

@@ -9,7 +9,7 @@ ns ability_generic {
   }
 
   ns foob {
-    type alias my-int = int
+    type(alias) my-int = int
 
     impl g-add[rhs = my-int, output = my-int] for my-int {
       fn gadd(self: my-int, rhs: my-int): my-int { self + rhs }

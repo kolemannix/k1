@@ -1,6 +1,6 @@
 ns try_test
 
-type alias error = string
+type(alias) error = string
 
 type foo = {
   a: bool

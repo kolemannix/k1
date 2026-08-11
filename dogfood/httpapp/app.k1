@@ -165,7 +165,7 @@ fn publish-text(bus: *mut pubsub/bus[span[u8]], topic: string, data: string) {
   bus.publish(topic, heap-bytes/cloned(data.span-bytes()).to-rc())
 }
 
-let mutable game-tick: u64 = 0
+let(mutable) game-tick: u64 = 0
 fn start-mock-publisher(bus: *mut pubsub/bus[span[u8]]) {
   let tid: *mut uv/thread = heap.alloc-t()
   let rc = uv/thread_create(tid, fn arg. {

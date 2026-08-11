@@ -18,31 +18,31 @@ ns atomic {
     }
   }
 
-  intern fn load[t](src: *t, ord: ordering): t
-  intern fn store[t](dst: *mut t, value: t, ord: ordering)
+  fn(intern) load[t](src: *t, ord: ordering): t
+  fn(intern) store[t](dst: *mut t, value: t, ord: ordering)
 
   // All rmw operations return the previous value
-  intern fn xchg[t](dst: *mut t, value: t, ord: ordering): t
-  intern fn fetch-add[t](dst: *mut t, value: t, ord: ordering): t
-  intern fn fetch-sub[t](dst: *mut t, value: t, ord: ordering): t
-  intern fn fetch-and[t](dst: *mut t, value: t, ord: ordering): t
-  intern fn fetch-or[t](dst: *mut t, value: t, ord: ordering): t
-  intern fn fetch-xor[t](dst: *mut t, value: t, ord: ordering): t
-  intern fn fetch-min[t](dst: *mut t, value: t, ord: ordering): t
-  intern fn fetch-max[t](dst: *mut t, value: t, ord: ordering): t
+  fn(intern) xchg[t](dst: *mut t, value: t, ord: ordering): t
+  fn(intern) fetch-add[t](dst: *mut t, value: t, ord: ordering): t
+  fn(intern) fetch-sub[t](dst: *mut t, value: t, ord: ordering): t
+  fn(intern) fetch-and[t](dst: *mut t, value: t, ord: ordering): t
+  fn(intern) fetch-or[t](dst: *mut t, value: t, ord: ordering): t
+  fn(intern) fetch-xor[t](dst: *mut t, value: t, ord: ordering): t
+  fn(intern) fetch-min[t](dst: *mut t, value: t, ord: ordering): t
+  fn(intern) fetch-max[t](dst: *mut t, value: t, ord: ordering): t
 
   type cmpxchg-result[t] = { prev: t, ok: bool }
 
   // `ok` distinguishes success from spurious failure for the weak variant;
   // `prev == expected` is not equivalent there
-  intern fn cmpxchg[t](
+  fn(intern) cmpxchg[t](
     dst: *mut t,
     expected: t,
     desired: t,
     success: ordering,
     failure: ordering
   ): cmpxchg-result[t]
-  intern fn cmpxchg-weak[t](
+  fn(intern) cmpxchg-weak[t](
     dst: *mut t,
     expected: t,
     desired: t,
@@ -50,7 +50,7 @@ ns atomic {
     failure: ordering
   ): cmpxchg-result[t]
 
-  intern fn fence(ord: ordering)
+  fn(intern) fence(ord: ordering)
 
   // A plain wrapper over the operations; the type carries no compiler magic
   type cell[t] = { raw: t }

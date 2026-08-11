@@ -1122,6 +1122,10 @@ pub enum ScalarType {
     F32 = 9,
     F64 = 10,
     Pointer = 11,
+    // u8-layout unsigned ints in every backend sense; separate tags so debug
+    // info can carry the right name and DWARF encoding
+    Char = 12,
+    Bool = 13,
 }
 
 impl ScalarType {
@@ -1142,6 +1146,8 @@ impl ScalarType {
             9 => Self::F32,
             10 => Self::F64,
             11 => Self::Pointer,
+            12 => Self::Char,
+            13 => Self::Bool,
             _ => panic!("Not a scalartype tag"),
         }
     }
@@ -1157,12 +1163,16 @@ impl ScalarType {
                 | ScalarType::U16
                 | ScalarType::U32
                 | ScalarType::U64
+                | ScalarType::Char
+                | ScalarType::Bool
         )
     }
 
     pub fn get_layout(&self) -> Layout {
         match self {
-            ScalarType::U8 | ScalarType::I8 => Layout::from_scalar_bits(8),
+            ScalarType::U8 | ScalarType::I8 | ScalarType::Char | ScalarType::Bool => {
+                Layout::from_scalar_bits(8)
+            }
             ScalarType::U16 | ScalarType::I16 => Layout::from_scalar_bits(16),
             ScalarType::U32 | ScalarType::I32 => Layout::from_scalar_bits(32),
             ScalarType::U64 | ScalarType::I64 => Layout::from_scalar_bits(64),
@@ -1174,7 +1184,9 @@ impl ScalarType {
 
     pub fn width(&self) -> NumericWidth {
         match self {
-            ScalarType::U8 | ScalarType::I8 => NumericWidth::B8,
+            ScalarType::U8 | ScalarType::I8 | ScalarType::Char | ScalarType::Bool => {
+                NumericWidth::B8
+            }
             ScalarType::U16 | ScalarType::I16 => NumericWidth::B16,
             ScalarType::U32 | ScalarType::I32 => NumericWidth::B32,
             ScalarType::U64 | ScalarType::I64 => NumericWidth::B64,
@@ -1220,7 +1232,6 @@ impl std::fmt::Debug for PhysicalType {
 
 impl PhysicalType {
     pub const EMPTY: PhysicalType = PhysicalType(0);
-    pub const U8: PhysicalType = PhysicalType(ScalarType::U8 as u32);
     pub const PTR: PhysicalType = PhysicalType(ScalarType::Pointer as u32);
 
     pub(crate) const MIN_AGG_ID: u32 = 16;
@@ -1237,7 +1248,7 @@ impl PhysicalType {
 
     pub const fn as_scalar(self) -> Option<ScalarType> {
         match self.0 {
-            1..=11 => Some(ScalarType::from_tag(self.0)),
+            1..=13 => Some(ScalarType::from_tag(self.0)),
             _ => None,
         }
     }
@@ -1255,8 +1266,8 @@ impl PhysicalType {
         self.0 as u8 == ScalarType::Pointer as u8
     }
 
-    pub const fn is_u8(self) -> bool {
-        self.0 as u8 == ScalarType::U8 as u8
+    pub const fn is_bool(self) -> bool {
+        self.0 as u8 == ScalarType::Bool as u8
     }
 
     pub const fn is_agg(self) -> bool {
@@ -1264,11 +1275,13 @@ impl PhysicalType {
     }
 
     pub const fn is_scalar(self) -> bool {
-        self.0 >= ScalarType::U8 as u32 && self.0 <= ScalarType::Pointer as u32
+        self.0 >= ScalarType::U8 as u32 && self.0 <= ScalarType::Bool as u32
     }
 
     pub const fn is_int(self) -> bool {
-        self.0 >= ScalarType::U8 as u32 && self.0 <= ScalarType::I64 as u32
+        (self.0 >= ScalarType::U8 as u32 && self.0 <= ScalarType::I64 as u32)
+            || self.0 == ScalarType::Char as u32
+            || self.0 == ScalarType::Bool as u32
     }
 
     pub fn is_empty(self) -> bool {
@@ -1285,7 +1298,7 @@ impl PhysicalType {
     pub fn as_enum(self) -> PhysicalTypeEnum {
         match self.0 {
             0 => PhysicalTypeEnum::Empty,
-            t @ 1..=11 => PhysicalTypeEnum::Scalar(ScalarType::from_tag(t)),
+            t @ 1..=13 => PhysicalTypeEnum::Scalar(ScalarType::from_tag(t)),
             agg_id => PhysicalTypeEnum::Agg(AggregateTypeId::from_u32(agg_id).unwrap()),
         }
     }
@@ -1965,7 +1978,8 @@ impl TypedProgram {
 
     pub fn compute_physical_type(&mut self, type_id: TypeId) -> PhysicalTypeResult {
         match self.types.get(type_id) {
-            Type::Char | Type::Bool => PhysicalTypeResult::Yes(PhysicalType::U8),
+            Type::Char => PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::Char)),
+            Type::Bool => PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::Bool)),
 
             Type::Integer(i) => {
                 let st = i.get_scalar_type();

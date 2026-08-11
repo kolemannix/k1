@@ -789,13 +789,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     const DW_ATE_ADDRESS: u32 = 0x01;
-    const _DW_ATE_BOOLEAN: u32 = 0x02;
+    const DW_ATE_BOOLEAN: u32 = 0x02;
     const _DW_ATE_COMPLEX_FLOAT: u32 = 0x03;
     const DW_ATE_FLOAT: u32 = 0x04;
     const DW_ATE_SIGNED: u32 = 0x05;
     const _DW_ATE_CHAR: u32 = 0x06;
     const DW_ATE_UNSIGNED: u32 = 0x07;
-    const _DW_ATE_UNSIGNED_CHAR: u32 = 0x08;
+    const DW_ATE_UNSIGNED_CHAR: u32 = 0x08;
 
     fn codegen_type(&mut self, pt: PhysicalType) -> CgType<'ctx> {
         //eprintln!("codegen_type {}", self.k1.pt_to_string(pt));
@@ -814,6 +814,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     ScalarType::F32 => ("f32", Self::DW_ATE_FLOAT),
                     ScalarType::F64 => ("f64", Self::DW_ATE_FLOAT),
                     ScalarType::Pointer => ("ptr", Self::DW_ATE_ADDRESS),
+                    ScalarType::Char => ("char", Self::DW_ATE_UNSIGNED_CHAR),
+                    ScalarType::Bool => ("bool", Self::DW_ATE_BOOLEAN),
                 };
                 let basic_type = self.scalar_basic_type(st);
                 let di_type = self
@@ -1089,7 +1091,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn scalar_basic_type(&self, st: ScalarType) -> BasicTypeEnum<'ctx> {
         match st {
-            ScalarType::U8 => self.ctx.i8_type().into(),
+            ScalarType::U8 | ScalarType::Char | ScalarType::Bool => self.ctx.i8_type().into(),
             ScalarType::U16 => self.ctx.i16_type().into(),
             ScalarType::U32 => self.ctx.i32_type().into(),
             ScalarType::U64 => self.ctx.i64_type().into(),
@@ -1992,7 +1994,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let instr = match builtin_type {
             BackendBuiltin::MemCopy | BackendBuiltin::MemMove => {
-                // intern fn copy(
+                // fn(intern) copy(
                 //   dst: Pointer,
                 //   src: Pointer,
                 //   count: uword
@@ -2027,7 +2029,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(None).unwrap()
             }
             BackendBuiltin::MemSet => {
-                // intern fn set(dst: ptr, value: u8, count: int): unit
+                // fn(intern) set(dst: ptr, value: u8, count: int): unit
                 let dst_arg = self.load_function_argument(function_id, 0);
                 let value_arg = self.load_function_argument(function_id, 1);
                 let count_arg = self.load_function_argument(function_id, 2);
@@ -2043,7 +2045,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(None).unwrap()
             }
             BackendBuiltin::MemEquals => {
-                // intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
+                // fn(intern) equals(p1: Pointer, p2: Pointer, size: uword): bool
                 let p1_arg = self.load_function_argument(function_id, 0);
                 let p2_arg = self.load_function_argument(function_id, 1);
                 let size_arg = self.load_function_argument(function_id, 2);
@@ -2063,7 +2065,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(Some(&bool_equal)).unwrap()
             }
             BackendBuiltin::Exit => {
-                // intern fn exit(code: i32): never
+                // fn(intern) exit(code: i32): never
                 let code_arg = self.load_function_argument(function_id, 0);
 
                 let exit_ident = self.k1.ast.idents.intern("exit");
@@ -2075,7 +2077,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
 
             BackendBuiltin::TypeName => {
-                // intern fn type-name(id: u64): string
+                // fn(intern) type-name(id: u64): string
                 let type_id_arg = self.load_function_argument(function_id, 0).into_int_value();
                 let cg_fn = self.llvm_functions.get(&function_id).unwrap();
                 let return_llvm_type = cg_fn.function_type.return_logical_cg_type;
@@ -2142,7 +2144,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(Some(&marshalled)).unwrap()
             }
             BackendBuiltin::TypeSchema => {
-                // intern fn type-schema(id: u64): TypeSchema
+                // fn(intern) type-schema(id: u64): TypeSchema
                 let cg_fn = self.llvm_functions.get(&function_id).unwrap();
                 debug_assert!(cg_fn.function_type.is_sret);
                 let out_storage =
@@ -2247,7 +2249,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             ir::Value::Data32 { t, data } => {
                 let v: BasicValueEnum<'ctx> = match t {
-                    ScalarType::U8 => self.ctx.i8_type().const_int(data as u64, false).into(),
+                    ScalarType::U8 | ScalarType::Char | ScalarType::Bool => {
+                        self.ctx.i8_type().const_int(data as u64, false).into()
+                    }
                     ScalarType::U16 => self.ctx.i16_type().const_int(data as u64, false).into(),
                     ScalarType::U32 => self.ctx.i32_type().const_int(data as u64, false).into(),
                     ScalarType::U64 => self.ctx.i64_type().const_int(data as u64, false).into(),
@@ -3459,16 +3463,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         fn scalar_register_class(st: ScalarType) -> RegisterClass {
             match st {
-                ScalarType::U8 => RegisterClass::Int,
-                ScalarType::U16 => RegisterClass::Int,
-                ScalarType::U32 => RegisterClass::Int,
-                ScalarType::U64 => RegisterClass::Int,
-                ScalarType::I8 => RegisterClass::Int,
-                ScalarType::I16 => RegisterClass::Int,
-                ScalarType::I32 => RegisterClass::Int,
-                ScalarType::I64 => RegisterClass::Int,
-                ScalarType::F32 => RegisterClass::Float,
-                ScalarType::F64 => RegisterClass::Float,
+                ScalarType::U8
+                | ScalarType::U16
+                | ScalarType::U32
+                | ScalarType::U64
+                | ScalarType::I8
+                | ScalarType::I16
+                | ScalarType::I32
+                | ScalarType::I64
+                | ScalarType::Char
+                | ScalarType::Bool => RegisterClass::Int,
+                ScalarType::F32 | ScalarType::F64 => RegisterClass::Float,
                 ScalarType::Pointer => RegisterClass::Ptr,
             }
         }
@@ -4168,7 +4173,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         global_str_data.set_constant(true);
 
         // Ensure the string layout is what we expect
-        // deftype string = { private span: span[char] }
+        // type string = { private span: span[char] }
         let string_type_id = self.k1.string_type_id();
         let string_pt = self.k1.get_physical_type(string_type_id).unwrap();
         let string_type = self.codegen_type(string_pt).expect_struct();

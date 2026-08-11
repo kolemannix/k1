@@ -26,7 +26,7 @@ add-tracked(context history)(1, 2)
 or bind them locally for implicit passing:
 
 ```rust
-let context history: *mut list[string] = core/mem/new([])
+let(context) history: *mut list[string] = core/mem/new([])
 add-tracked(1, 2)
 ```
 
@@ -41,7 +41,7 @@ fn greet[w: writer](context out: w)(name: string) {
 }
 
 let sb = string-builder/new()
-let context(impl writer) out: *string-builder = sb.&
+let(context(impl writer)) out: *string-builder = sb.&
 greet("Joe") // writes into sb
 ```
 
@@ -69,7 +69,7 @@ a directory module without one is an error); a single-file module is its own
 root file. A top-level `fn module` in any other file is an error. The compiler
 evaluates the fn before compiling the module and consumes it — it is never part
 of the program. No `fn module` means defaults: library, or executable for the
-primary module. FFI declarations use `extern("lib", "symbol")`.
+primary module. FFI declarations use the `extern("lib", "symbol")` fn modifier.
 
 ```rust
 fn module(): k1/module {
@@ -80,8 +80,7 @@ fn module(): k1/module {
   m
 }
 
-extern("foo", "very_small")
-fn very-small(x: very-small, y: very-small): very-small
+fn(extern("foo", "very_small")) very-small(x: very-small, y: very-small): very-small
 ```
 
 See `test_src/ffi_abi_test/ffi_abi_test.k1` and `test_src/threads.k1`.
@@ -106,13 +105,15 @@ See `test_src/suite1/function_pointer.k1`.
 
 ## Globals And Mutable Globals
 
-Top-level `let` declarations create globals. Add `mutable` for globals that can
-be assigned with `=` like any other place; immutable globals reject assignment.
+Top-level `let` declarations create globals. Add the `mutable` modifier for
+globals that can be assigned with `=` like any other place; immutable globals
+reject assignment. Modifiers go in a parenthesized list after `let`:
+`mutable`, `tls`, `export`, `extern`.
 
 ```rust
 let answer: int = 42
-let mutable counter: int = 0
-let mutable tls my-thread-local: i32 = 0
+let(mutable) counter: int = 0
+let(mutable, tls) my-thread-local: i32 = 0
 
 counter = counter + 1
 ```
@@ -536,11 +537,11 @@ See `test_src/suite1/char_test.k1`,
 
 ## RVO And Returned Locals
 
-`let returned name = ...` appears in RVO tests and looks like a dedicated return
-value optimization or return-slot feature.
+`let(returned) name = ...` appears in RVO tests and looks like a dedicated
+return value optimization or return-slot feature.
 
 ```rust
-let returned v = zeroed()
+let(returned) v = zeroed()
 ```
 
 See `test_src/suite1/rvo_test.k1`.
@@ -550,7 +551,7 @@ See `test_src/suite1/rvo_test.k1`.
 Thread tests combine several runtime features:
 
 - `fn module(): k1/module` calling `m.multithreaded()`.
-- Thread-local mutable globals via `let mutable tls`.
+- Thread-local mutable globals via `let(mutable, tls)`.
 - `std/thread/start` and `std/thread/join`.
 - Arena-backed allocation for cross-thread values.
 

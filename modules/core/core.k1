@@ -500,7 +500,7 @@ ns for u64 {
     if n == 64 18446744073709551615: u64 else (1usize << n.as[u32]) - 1
   }
 
-  intern("llvm.cttz.i64") fn _cttz(x: u64, zero-poison: bool): u64
+  fn(intern("llvm.cttz.i64")) _cttz(x: u64, zero-poison: bool): u64
 
   fn trailing-zeros(self: u64): u64 {
     _cttz(self, false)
@@ -510,16 +510,16 @@ ns for u64 {
 
 ns k1rt {
   // TODO: Add ".c" dependency support; so we can go back to single compilation unit for k1rt:
-  // extern("k1rt.c", "_k1_show_backtrace") fn _k1_show_backtrace()
+  // fn(extern("k1rt.c", "_k1_show_backtrace")) _k1_show_backtrace()
   // Allowing you to mix and match .c and .k1 files
 
   // TODO: Doesn't even need to be written in c
-  extern("k1rt", "_k1_print_backtrace") fn _k1_print_backtrace(frame_count: c-int)
+  fn(extern("k1rt", "_k1_print_backtrace")) _k1_print_backtrace(frame_count: c-int)
 
-  extern("k1rt", "_k1_snprintf_f32") fn snprintf_f32(buf: ptr, size: c-sizet, float: f32, places: i32): i32
-  extern("k1rt", "_k1_snprintf_f64") fn snprintf_f64(buf: ptr, size: c-sizet, float: f64, places: i32): i32
+  fn(extern("k1rt", "_k1_snprintf_f32")) snprintf_f32(buf: ptr, size: c-sizet, float: f32, places: i32): i32
+  fn(extern("k1rt", "_k1_snprintf_f64")) snprintf_f64(buf: ptr, size: c-sizet, float: f64, places: i32): i32
 
-  extern("k1rt", "_k1_parse_f64") fn parse-f64()
+  fn(extern("k1rt", "_k1_parse_f64")) parse-f64()
 }
 
 ns for f64 {
@@ -564,8 +564,8 @@ ns for f32 {
   }
 }
 
-impl equals for f32 { intern fn equals(self: f32, other: f32): bool }
-impl equals for f64 { intern fn equals(self: f64, other: f64): bool }
+impl equals for f32 { fn(intern) equals(self: f32, other: f32): bool }
+impl equals for f64 { fn(intern) equals(self: f64, other: f64): bool }
 
 impl from-string[e = string] for u64 {
   fn from-string(s: string): result[u64, string] { u64/from-string(s) }
@@ -577,32 +577,32 @@ impl from-string[e = string] for f64 {
   fn from-string(s: string): result[f64, string] { f64/from-string(s) }
 }
 
-impl add for f32 { intern fn add(self, other: self): self }
-impl add for f64 { intern fn add(self, other: self): self }
+impl add for f32 { fn(intern) add(self, other: self): self }
+impl add for f64 { fn(intern) add(self, other: self): self }
 
-impl sub for f32 { intern fn sub(self, other: self): self }
-impl sub for f64 { intern fn sub(self, other: self): self }
+impl sub for f32 { fn(intern) sub(self, other: self): self }
+impl sub for f64 { fn(intern) sub(self, other: self): self }
 
-impl mul for f32 { intern fn mul(self, other: self): self }
-impl mul for f64 { intern fn mul(self, other: self): self }
+impl mul for f32 { fn(intern) mul(self, other: self): self }
+impl mul for f64 { fn(intern) mul(self, other: self): self }
 
-impl div for f32 { intern fn div(self, other: self): self }
-impl div for f64 { intern fn div(self, other: self): self }
+impl div for f32 { fn(intern) div(self, other: self): self }
+impl div for f64 { fn(intern) div(self, other: self): self }
 
-impl rem for f32 { intern fn rem(self, other: self): self }
-impl rem for f64 { intern fn rem(self, other: self): self }
+impl rem for f32 { fn(intern) rem(self, other: self): self }
+impl rem for f64 { fn(intern) rem(self, other: self): self }
 
 impl scalar-cmp for f32 {
-  intern fn lt(self, other: self): bool
-  intern fn le(self, other: self): bool
-  intern fn gt(self, other: self): bool
-  intern fn ge(self, other: self): bool
+  fn(intern) lt(self, other: self): bool
+  fn(intern) le(self, other: self): bool
+  fn(intern) gt(self, other: self): bool
+  fn(intern) ge(self, other: self): bool
 }
 impl scalar-cmp for f64 {
-  intern fn lt(self, other: self): bool
-  intern fn le(self, other: self): bool
-  intern fn gt(self, other: self): bool
-  intern fn ge(self, other: self): bool
+  fn(intern) lt(self, other: self): bool
+  fn(intern) le(self, other: self): bool
+  fn(intern) gt(self, other: self): bool
+  fn(intern) ge(self, other: self): bool
 }
 
 // float compare is IEEE-754 totalOrder, so it stays a consistent total order

@@ -7,8 +7,8 @@ fn box[t](context _foo: t)(value: t): my-box[t] {
 }
 
 fn test-box() {
-  let context b = true
-  let context c = .{ b = true }
+  let(context) b = true
+  let(context) c = .{ b = true }
   let _ = box(context 10)(10)
   let _ = box[bool](true)
   let _ = box(false)
@@ -32,8 +32,8 @@ fn context-a[t: equals](context t: t, name: string)(value: t) {
 }
 
 fn test-generic-passing() {
-  let context i = 3
-  let context name: string = "Joe"
+  let(context) i = 3
+  let(context) name: string = "Joe"
   context-a(3)
   .{}
 }

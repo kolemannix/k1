@@ -1,6 +1,6 @@
 ns sys
 
-#if k1/os-macos extern("arc4random_uniform") fn arc4random_uniform(upper-bound: u32): u32
+#if k1/os-macos fn(extern("arc4random_uniform")) arc4random_uniform(upper-bound: u32): u32
 
 fn random(upper-bound: u32): u32 {
   k1/os #is {

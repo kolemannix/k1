@@ -391,8 +391,8 @@ ns for connection {
   fn client-handle(self: *connection): *uv/handle { self.client().as-handle() }
 }
 
-let mutable conn-serial: u64 = 0
-let mutable conn-count: u64 = 0
+let(mutable) conn-serial: u64 = 0
+let(mutable) conn-count: u64 = 0
 
 fn on-complete-http-header(connection: *mut connection, header: http/header): http/header-action {
   connection.parsed-header = :some header
@@ -523,12 +523,12 @@ fn start-app[deps](context arena: *mut arena)(framework: *mut framework-deps, ma
   :ok
 }
 
-let mutable tls worker-user-data: ptr = ptr/null
+let(mutable, tls) worker-user-data: ptr = ptr/null
 
 
 fn main(): i32 { 
 
-  let context arena = arena/init-default()
+  let(context) arena = arena/init-default()
   arena.set-name("mainthread")
 
   let framework = framework-init(uv/default_loop())
@@ -540,4 +540,4 @@ fn main(): i32 {
 }
 
 // TODO: track entire server state. open connections in a pool, use a freelist, so we can debug/inspect
-// let mutable CONNECTIONS: core/fixlist[*mut connection, 1024] = zeroed()
+// let(mutable) CONNECTIONS: core/fixlist[*mut connection, 1024] = zeroed()

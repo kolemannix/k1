@@ -37,7 +37,7 @@ fn day2(part: int, input: string) {
   crash("$invalid-sum")
 }
 
-let mutable buffer: string-builder = string-builder/new()
+let(mutable) buffer: string-builder = string-builder/new()
 fn check-invalid-part1(value: i64): bool {
   buffer.reset()
   value.print-to(&buffer)

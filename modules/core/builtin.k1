@@ -10,17 +10,17 @@ type u8          = builtin
 type u16         = builtin
 type u32         = builtin
 type u64         = builtin
-type alias usize = u64
-type alias uint  = u64
+type(alias) usize = u64
+type(alias) uint  = u64
 type i8          = builtin
 type i16         = builtin
 type i32         = builtin
 type i64         = builtin
-type alias int   = i64
-type alias size  = i64
+type(alias) int   = i64
+type(alias) size  = i64
 
 // TODO: Incorporate this instead of a 64-bit align type
-type alias align = u16
+type(alias) align = u16
 
 type char    = builtin
 type bool    = builtin
@@ -45,31 +45,31 @@ type string = { span: span[char] }
 type opt[t] = either { none, some(t) }
 
 
-type alias c-sizet  = u64
-type alias c-ssizet = i64
-type alias c-int    = i32
-type alias c-long   = i64
+type(alias) c-sizet  = u64
+type(alias) c-ssizet = i64
+type(alias) c-int    = i32
+type(alias) c-long   = i64
 
 type ordering = either(i8) { less = -1, equal = 0, greater = 1 }
 
 type result[t, e] = either { ok(t), err(e) }
 
-type alias empty = {}
+type(alias) empty = {}
 
-type alias byte = u8
+type(alias) byte = u8
 
 ns types {
 
   // Magically implemented for all enums
   // enum must have ability id 1
   ability enum[impl v] {
-    intern fn enum-value(self): v
-    intern fn enum-name(self): string
+    fn(intern) enum-value(self): v
+    fn(intern) enum-name(self): string
   }
 
   ability sum[impl v] {
-    intern fn sum-tag(self): v
-    intern fn sum-name(self): string
+    fn(intern) sum-tag(self): v
+    fn(intern) sum-name(self): string
   }
 
   // This implements equals for all enums, in userspace B-)
@@ -80,16 +80,16 @@ ns types {
   // }
 
   // The size, in bytes, of type t. Unlike c's sizeof, does not include end padding
-  intern fn size[t](): size
+  fn(intern) size[t](): size
   // The stride, in bytes, of type t. includes end padding
-  intern fn stride[t](): size
+  fn(intern) stride[t](): size
 
   // The alignment, in bytes, of type t. Always a power of two
-  intern fn align[t](): int
+  fn(intern) align[t](): int
 
-  intern fn type-id[t](): u64
-  intern fn type-id-schema(id: u64): type-schema
-  intern fn type-id-name(id: u64): string
+  fn(intern) type-id[t](): u64
+  fn(intern) type-id-schema(id: u64): type-schema
+  fn(intern) type-id-name(id: u64): string
 
   fn type-id-of-val[t](_t: t): u64 { type-id[t] }
   fn name[t](): string { type-id-name(type-id[t]) }
@@ -191,12 +191,12 @@ ns meta {
 
   /////// Static value ferrying across the runtime/comptime border:
   /////// Likely marked internal eventually
-  intern fn bake-static-value[t](value: t): u64
+  fn(intern) bake-static-value[t](value: t): u64
   // Must be provided an integer literal.
   // Can only be called by generated code
-  intern fn get-static-value[t](id: u64): t
+  fn(intern) get-static-value[t](id: u64): t
 
-  intern fn static-type-to-value[t, st: static t](): t
+  fn(intern) static-type-to-value[t, st: static t](): t
 
 }
 
@@ -273,50 +273,50 @@ ability rem { fn rem(self, rhs: self): self }
 // we could default rhs and output to self, and also somehow use
 // that information while inferring... then maybe. But i don't want
 // to achieve it by doing "try the call with every impl" for performance reasons
-impl add for u8  {   intern fn add(self, rhs: self): self }
-impl add for u16 {   intern fn add(self, rhs: self): self }
-impl add for u32 {   intern fn add(self, rhs: self): self }
-impl add for u64 {   intern fn add(self, rhs: self): self }
-impl add for i8  {   intern fn add(self, rhs: self): self }
-impl add for i16 {   intern fn add(self, rhs: self): self }
-impl add for i32 {   intern fn add(self, rhs: self): self }
-impl add for i64 {   intern fn add(self, rhs: self): self }
+impl add for u8  {   fn(intern) add(self, rhs: self): self }
+impl add for u16 {   fn(intern) add(self, rhs: self): self }
+impl add for u32 {   fn(intern) add(self, rhs: self): self }
+impl add for u64 {   fn(intern) add(self, rhs: self): self }
+impl add for i8  {   fn(intern) add(self, rhs: self): self }
+impl add for i16 {   fn(intern) add(self, rhs: self): self }
+impl add for i32 {   fn(intern) add(self, rhs: self): self }
+impl add for i64 {   fn(intern) add(self, rhs: self): self }
 
-impl sub for u8  {   intern fn sub(self, rhs: self): self }
-impl sub for u16 {   intern fn sub(self, rhs: self): self }
-impl sub for u32 {   intern fn sub(self, rhs: self): self }
-impl sub for u64 {   intern fn sub(self, rhs: self): self }
-impl sub for i8  {   intern fn sub(self, rhs: self): self }
-impl sub for i16 {   intern fn sub(self, rhs: self): self }
-impl sub for i32 {   intern fn sub(self, rhs: self): self }
-impl sub for i64 {   intern fn sub(self, rhs: self): self }
+impl sub for u8  {   fn(intern) sub(self, rhs: self): self }
+impl sub for u16 {   fn(intern) sub(self, rhs: self): self }
+impl sub for u32 {   fn(intern) sub(self, rhs: self): self }
+impl sub for u64 {   fn(intern) sub(self, rhs: self): self }
+impl sub for i8  {   fn(intern) sub(self, rhs: self): self }
+impl sub for i16 {   fn(intern) sub(self, rhs: self): self }
+impl sub for i32 {   fn(intern) sub(self, rhs: self): self }
+impl sub for i64 {   fn(intern) sub(self, rhs: self): self }
 
-impl mul for u8    { intern fn mul(self, rhs: self): self }
-impl mul for u16   { intern fn mul(self, rhs: self): self }
-impl mul for u32   { intern fn mul(self, rhs: self): self }
-impl mul for u64   { intern fn mul(self, rhs: self): self }
-impl mul for i8    { intern fn mul(self, rhs: self): self }
-impl mul for i16   { intern fn mul(self, rhs: self): self }
-impl mul for i32   { intern fn mul(self, rhs: self): self }
-impl mul for i64   { intern fn mul(self, rhs: self): self }
+impl mul for u8    { fn(intern) mul(self, rhs: self): self }
+impl mul for u16   { fn(intern) mul(self, rhs: self): self }
+impl mul for u32   { fn(intern) mul(self, rhs: self): self }
+impl mul for u64   { fn(intern) mul(self, rhs: self): self }
+impl mul for i8    { fn(intern) mul(self, rhs: self): self }
+impl mul for i16   { fn(intern) mul(self, rhs: self): self }
+impl mul for i32   { fn(intern) mul(self, rhs: self): self }
+impl mul for i64   { fn(intern) mul(self, rhs: self): self }
 
-impl div for u8    { intern fn div(self, rhs: self): self }
-impl div for u16   { intern fn div(self, rhs: self): self }
-impl div for u32   { intern fn div(self, rhs: self): self }
-impl div for u64   { intern fn div(self, rhs: self): self }
-impl div for i8    { intern fn div(self, rhs: self): self }
-impl div for i16   { intern fn div(self, rhs: self): self }
-impl div for i32   { intern fn div(self, rhs: self): self }
-impl div for i64   { intern fn div(self, rhs: self): self }
+impl div for u8    { fn(intern) div(self, rhs: self): self }
+impl div for u16   { fn(intern) div(self, rhs: self): self }
+impl div for u32   { fn(intern) div(self, rhs: self): self }
+impl div for u64   { fn(intern) div(self, rhs: self): self }
+impl div for i8    { fn(intern) div(self, rhs: self): self }
+impl div for i16   { fn(intern) div(self, rhs: self): self }
+impl div for i32   { fn(intern) div(self, rhs: self): self }
+impl div for i64   { fn(intern) div(self, rhs: self): self }
 
-impl rem for u8    { intern fn rem(self, rhs: self): self }
-impl rem for u16   { intern fn rem(self, rhs: self): self }
-impl rem for u32   { intern fn rem(self, rhs: self): self }
-impl rem for u64   { intern fn rem(self, rhs: self): self }
-impl rem for i8    { intern fn rem(self, rhs: self): self }
-impl rem for i16   { intern fn rem(self, rhs: self): self }
-impl rem for i32   { intern fn rem(self, rhs: self): self }
-impl rem for i64   { intern fn rem(self, rhs: self): self }
+impl rem for u8    { fn(intern) rem(self, rhs: self): self }
+impl rem for u16   { fn(intern) rem(self, rhs: self): self }
+impl rem for u32   { fn(intern) rem(self, rhs: self): self }
+impl rem for u64   { fn(intern) rem(self, rhs: self): self }
+impl rem for i8    { fn(intern) rem(self, rhs: self): self }
+impl rem for i16   { fn(intern) rem(self, rhs: self): self }
+impl rem for i32   { fn(intern) rem(self, rhs: self): self }
+impl rem for i64   { fn(intern) rem(self, rhs: self): self }
 
 ability scalar-cmp {
   fn lt(self, other: self): bool
@@ -326,52 +326,52 @@ ability scalar-cmp {
 }
 
 impl scalar-cmp for u8 {
-  intern fn lt(self, other: self): bool
-  intern fn le(self, other: self): bool
-  intern fn gt(self, other: self): bool
-  intern fn ge(self, other: self): bool
+  fn(intern) lt(self, other: self): bool
+  fn(intern) le(self, other: self): bool
+  fn(intern) gt(self, other: self): bool
+  fn(intern) ge(self, other: self): bool
 }
 impl scalar-cmp for u16 {
-  intern fn lt(self, other: self): bool
-  intern fn le(self, other: self): bool
-  intern fn gt(self, other: self): bool
-  intern fn ge(self, other: self): bool
+  fn(intern) lt(self, other: self): bool
+  fn(intern) le(self, other: self): bool
+  fn(intern) gt(self, other: self): bool
+  fn(intern) ge(self, other: self): bool
 }
 impl scalar-cmp for u32 {
-  intern fn lt(self, other: self): bool
-  intern fn le(self, other: self): bool
-  intern fn gt(self, other: self): bool
-  intern fn ge(self, other: self): bool
+  fn(intern) lt(self, other: self): bool
+  fn(intern) le(self, other: self): bool
+  fn(intern) gt(self, other: self): bool
+  fn(intern) ge(self, other: self): bool
 }
 impl scalar-cmp for u64 {
-  intern fn lt(self, other: self): bool
-  intern fn le(self, other: self): bool
-  intern fn gt(self, other: self): bool
-  intern fn ge(self, other: self): bool
+  fn(intern) lt(self, other: self): bool
+  fn(intern) le(self, other: self): bool
+  fn(intern) gt(self, other: self): bool
+  fn(intern) ge(self, other: self): bool
 }
 impl scalar-cmp for i8 {
-  intern fn lt(self, other: self): bool
-  intern fn le(self, other: self): bool
-  intern fn gt(self, other: self): bool
-  intern fn ge(self, other: self): bool
+  fn(intern) lt(self, other: self): bool
+  fn(intern) le(self, other: self): bool
+  fn(intern) gt(self, other: self): bool
+  fn(intern) ge(self, other: self): bool
 }
 impl scalar-cmp for i16 {
-  intern fn lt(self, other: self): bool
-  intern fn le(self, other: self): bool
-  intern fn gt(self, other: self): bool
-  intern fn ge(self, other: self): bool
+  fn(intern) lt(self, other: self): bool
+  fn(intern) le(self, other: self): bool
+  fn(intern) gt(self, other: self): bool
+  fn(intern) ge(self, other: self): bool
 }
 impl scalar-cmp for i32 {
-  intern fn lt(self, other: self): bool
-  intern fn le(self, other: self): bool
-  intern fn gt(self, other: self): bool
-  intern fn ge(self, other: self): bool
+  fn(intern) lt(self, other: self): bool
+  fn(intern) le(self, other: self): bool
+  fn(intern) gt(self, other: self): bool
+  fn(intern) ge(self, other: self): bool
 }
 impl scalar-cmp for i64 {
-  intern fn lt(self, other: self): bool
-  intern fn le(self, other: self): bool
-  intern fn gt(self, other: self): bool
-  intern fn ge(self, other: self): bool
+  fn(intern) lt(self, other: self): bool
+  fn(intern) le(self, other: self): bool
+  fn(intern) gt(self, other: self): bool
+  fn(intern) ge(self, other: self): bool
 }
 
 impl scalar-cmp for ptr {
@@ -526,27 +526,27 @@ impl equals for {} {
 ns mem {
 
   // Does not handle overlaps; memcpy
-  intern fn copy(
+  fn(intern) copy(
     dst: ptr,
     src: ptr,
     count: size
   )
   // Handles overlaps; memmove
-  intern fn move(
+  fn(intern) move(
     dst: ptr,
     src: ptr,
     count: size
   )
-  intern fn set(
+  fn(intern) set(
     dst: ptr,
     value: u8,
     count: size
   )
-  intern fn equals(p1: ptr, p2: ptr, size: int): bool
+  fn(intern) equals(p1: ptr, p2: ptr, size: int): bool
 
-  intern fn zeroed[t](): t
+  fn(intern) zeroed[t](): t
 
-  intern fn bitcast[t, u](t: t): u
+  fn(intern) bitcast[t, u](t: t): u
 
 }
 
@@ -577,9 +577,9 @@ ns k1 {
   // `vector[u8, type-of(k1/simd-bytes)]`
   let simd-bytes: static size = builtin
 
-  intern fn location(): source-location
+  fn(intern) location(): source-location
 
-  intern fn emit-compiler-message(
+  fn(intern) emit-compiler-message(
     locn: k1/source-location,
     level: either(u8) { info, warn, error },
     msg: string
@@ -596,7 +596,7 @@ ns k1 {
 
   // A parsed expression id captured by the compiler; 0 = none
   // claude: Lets kill this alias and lean on the field name; params-expr-id instead of params
-  type alias parsed-expr = u64
+  type(alias) parsed-expr = u64
 
   type dep-entry = { name: string, params: parsed-expr }
 
@@ -699,7 +699,7 @@ ns k1 {
 
     // lets name it 'checkbox' not 'add-checkbox', immediate-mode style, since
     // the user's code is totally immediate mode style
-    intern fn checkbox(name: string, get: *fn() -> bool, set: *fn(bool) -> {})
+    fn(intern) checkbox(name: string, get: *fn() -> bool, set: *fn(bool) -> {})
 
   }
 
@@ -709,7 +709,7 @@ ns k1 {
 // Core sizing intrinsics
 
 ns sys {
-  intern fn exit(code: i32): never
+  fn(intern) exit(code: i32): never
 }
 
 ns for ptr {
@@ -725,7 +725,7 @@ ns for ptr {
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
   // But we _could_ do it in userland using size-of and arithmetic which is neat!
-  intern fn ref-at-index[t](self: ptr, index: size): *mut t
+  fn(intern) ref-at-index[t](self: ptr, index: size): *mut t
 
   // ret-at-index compiles to gep, which preserves provenance
   fn add-bytes(self: ptr, offset: size): ptr {
@@ -758,24 +758,24 @@ impl equals for ptr {
 }
 
 ns for bool {
-  intern fn negated(self: bool): bool
+  fn(intern) negated(self: bool): bool
   fn as-u8(self: bool): u8 { self.as[u8] }
   fn from-u8(value: u8): bool { value != 0u8 }
 }
 
-impl equals for bool { intern fn equals(self: bool, other: bool): bool }
+impl equals for bool { fn(intern) equals(self: bool, other: bool): bool }
 
-impl equals for u8 { intern fn equals(self: u8, other: u8): bool }
-impl equals for u16 { intern fn equals(self: u16, other: u16): bool }
-impl equals for u32 { intern fn equals(self: u32, other: u32): bool }
-impl equals for u64 { intern fn equals(self: u64, other: u64): bool }
+impl equals for u8 { fn(intern) equals(self: u8, other: u8): bool }
+impl equals for u16 { fn(intern) equals(self: u16, other: u16): bool }
+impl equals for u32 { fn(intern) equals(self: u32, other: u32): bool }
+impl equals for u64 { fn(intern) equals(self: u64, other: u64): bool }
 
-impl equals for i8 { intern fn equals(self: i8, other: i8): bool }
-impl equals for i16 { intern fn equals(self: i16, other: i16): bool }
-impl equals for i32 { intern fn equals(self: i32, other: i32): bool }
-impl equals for i64 { intern fn equals(self: i64, other: i64): bool }
+impl equals for i8 { fn(intern) equals(self: i8, other: i8): bool }
+impl equals for i16 { fn(intern) equals(self: i16, other: i16): bool }
+impl equals for i32 { fn(intern) equals(self: i32, other: i32): bool }
+impl equals for i64 { fn(intern) equals(self: i64, other: i64): bool }
 
-impl equals for char { intern fn equals(self: char, other: char): bool }
+impl equals for char { fn(intern) equals(self: char, other: char): bool }
 
 fn discard[t](_t: t): empty { .{} }
 fn phony[t](): t { crash("phony") }
@@ -842,9 +842,9 @@ ns array {
   let O_RDWR  : c-int = 0x0002
   let O_SEARCH: c-int = (if k1/os-macos 0x40100000 else 0x200000)
   let O_EXEC  : c-int = (if k1/os-macos 0x40000000 else 0x200000)
-  extern("open") fn open(path: ptr, oflag: c-int): c-int
-  extern("read") fn read(file-no: c-int, buffer: ptr, count: c-sizet): i64
-  extern("write") fn write(file-no: c-int, data: ptr, count: c-sizet): i64
+  fn(extern("open")) open(path: ptr, oflag: c-int): c-int
+  fn(extern("read")) read(file-no: c-int, buffer: ptr, count: c-sizet): i64
+  fn(extern("write")) write(file-no: c-int, data: ptr, count: c-sizet): i64
 
   let MAP_FILE   : c-int = 0x0000
   let MAP_SHARED : c-int = 0x0001
@@ -862,35 +862,35 @@ ns array {
   // Pages may be executed.
   let PROT_EXEC: c-int = 0x4
   let MAP_FAILED: i64 = -1
-  extern("mmap") fn mmap(addr: ptr, len: size, prot: i32, flags: c-int, fd: c-int, offset: size): ptr
+  fn(extern("mmap")) mmap(addr: ptr, len: size, prot: i32, flags: c-int, fd: c-int, offset: size): ptr
 
-  extern("munmap") fn munmap(addr: ptr, len: size): i32
+  fn(extern("munmap")) munmap(addr: ptr, len: size): i32
 
   let MADV_SEQUENTIAL: i32 = 2
-  extern("posix_madvise") fn madvise(addr: ptr, len: c-sizet, advice: c-int): c-int
+  fn(extern("posix_madvise")) madvise(addr: ptr, len: c-sizet, advice: c-int): c-int
 
-  extern("backtrace") fn backtrace(buffer: ptr, size: c-int)
+  fn(extern("backtrace")) backtrace(buffer: ptr, size: c-int)
 
   type timespec = { tv_sec: u64, tv_nsec: u64 }
-  type alias clockid_t = c-int
+  type(alias) clockid_t = c-int
   let CLOCK_MONOTONIC: clockid_t = 1
-  extern("clock_gettime") fn clock_gettime(clockid: clockid_t, tp: *mut timespec): c-int
+  fn(extern("clock_gettime")) clock_gettime(clockid: clockid_t, tp: *mut timespec): c-int
 
-  extern("fork")    fn fork(): i32
-  extern("execve")  fn execve(path: ptr, argv: ptr, envp: ptr): i32
-  extern("waitpid") fn waitpid(pid: i32, status: *mut i32, options: i32): i32
+  fn(extern("fork")) fork(): i32
+  fn(extern("execve")) execve(path: ptr, argv: ptr, envp: ptr): i32
+  fn(extern("waitpid")) waitpid(pid: i32, status: *mut i32, options: i32): i32
 
-  extern("pipe")  fn pipe(fds: ptr): c-int
-  extern("close") fn close(fd: c-int): c-int
+  fn(extern("pipe")) pipe(fds: ptr): c-int
+  fn(extern("close")) close(fd: c-int): c-int
 
-  extern("posix_spawnp") fn posix_spawnp(pid: *mut i32, file: ptr, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
-  extern("posix_spawn_file_actions_init")     fn posix_spawn_file_actions_init(file-actions: ptr): c-int
-  extern("posix_spawn_file_actions_destroy")  fn posix_spawn_file_actions_destroy(file-actions: ptr): c-int
-  extern("posix_spawn_file_actions_adddup2")  fn posix_spawn_file_actions_adddup2(file-actions: ptr, fd: c-int, new-fd: c-int): c-int
-  extern("posix_spawn_file_actions_addclose") fn posix_spawn_file_actions_addclose(file-actions: ptr, fd: c-int): c-int
+  fn(extern("posix_spawnp")) posix_spawnp(pid: *mut i32, file: ptr, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
+  fn(extern("posix_spawn_file_actions_init")) posix_spawn_file_actions_init(file-actions: ptr): c-int
+  fn(extern("posix_spawn_file_actions_destroy")) posix_spawn_file_actions_destroy(file-actions: ptr): c-int
+  fn(extern("posix_spawn_file_actions_adddup2")) posix_spawn_file_actions_adddup2(file-actions: ptr, fd: c-int, new-fd: c-int): c-int
+  fn(extern("posix_spawn_file_actions_addclose")) posix_spawn_file_actions_addclose(file-actions: ptr, fd: c-int): c-int
 
-  extern("_NSGetEnviron") fn _NSGetEnviron(): ptr
-  let extern environ: ptr
+  fn(extern("_NSGetEnviron")) _NSGetEnviron(): ptr
+  let(extern) environ: ptr
   fn environ-ptr(): ptr {
     #if k1/os-macos _NSGetEnviron().r[ptr].*
     else environ
@@ -901,27 +901,27 @@ ns array {
 // Could if ifdef'd behind a 'crt' flag if we wanted one #if k1/c-runtime
 ns libc {
 
-  extern("exit") fn exit(code: i32): never
-  extern("abort") fn abort(): never
+  fn(extern("exit")) exit(code: i32): never
+  fn(extern("abort")) abort(): never
 
   // Used by the llvm backend, currently
-  extern("memcmp") fn memcmp(s1: ptr, s2: ptr, size: size): i32
-  extern("malloc") fn malloc(size: size): ptr
-  extern("calloc") fn calloc(count: int, size: size): ptr
-  extern("free") fn free(ptr: ptr)
-  extern("realloc") fn realloc(ptr: ptr, size: size): ptr
+  fn(extern("memcmp")) memcmp(s1: ptr, s2: ptr, size: size): i32
+  fn(extern("malloc")) malloc(size: size): ptr
+  fn(extern("calloc")) calloc(count: int, size: size): ptr
+  fn(extern("free")) free(ptr: ptr)
+  fn(extern("realloc")) realloc(ptr: ptr, size: size): ptr
 
-  extern("strlen") fn strlen(c-str: ptr): size
+  fn(extern("strlen")) strlen(c-str: ptr): size
 
-  extern("__error") fn __error(): ptr
-  extern("__errno_location") fn __errno_location(): ptr
+  fn(extern("__error")) __error(): ptr
+  fn(extern("__errno_location")) __errno_location(): ptr
   fn errno(): c-int {
     let loc = #if k1/os-macos __error() else __errno_location()
     loc.r[c-int].*
   }
   let EINTR: c-int = 4
-  extern("strerror") fn strerror(errno: c-int): *char
-  extern("perror") fn perror(msg: ptr)
+  fn(extern("strerror")) strerror(errno: c-int): *char
+  fn(extern("perror")) perror(msg: ptr)
   fn strerror-string(code: c-int): string {
     string/wrap-c(strerror(code).as[ptr])
   }
@@ -932,20 +932,20 @@ ns libc {
   ns files {
     let SEEK_END: i32 = 2
     let SEEK_SET: i32 = 0
-    extern("fopen")  fn fopen(path-c-string: ptr, mode-c-string: ptr): ptr
-    extern("fseek")  fn fseek(file-desc: ptr, offset: i64, whence: i32): i32
-    extern("fread")  fn fread(buffer: ptr, size: size, num: size, stream: ptr): usize
-    extern("fclose") fn fclose(file-desc: ptr): c-int
-    extern("ftell")  fn ftell(file-desc: ptr): c-long
-    extern("fwrite") fn fwrite(data-ptr: ptr, item-size: size, item-count: size, file-desc: ptr): usize
+    fn(extern("fopen")) fopen(path-c-string: ptr, mode-c-string: ptr): ptr
+    fn(extern("fseek")) fseek(file-desc: ptr, offset: i64, whence: i32): i32
+    fn(extern("fread")) fread(buffer: ptr, size: size, num: size, stream: ptr): usize
+    fn(extern("fclose")) fclose(file-desc: ptr): c-int
+    fn(extern("ftell")) ftell(file-desc: ptr): c-long
+    fn(extern("fwrite")) fwrite(data-ptr: ptr, item-size: size, item-count: size, file-desc: ptr): usize
   }
 
-  extern("strtod") fn strtod(nptr: ptr, endptr: *mut ptr): f64
-  extern("strtof") fn strtof(nptr: ptr, endptr: *mut ptr): f32
+  fn(extern("strtod")) strtod(nptr: ptr, endptr: *mut ptr): f64
+  fn(extern("strtof")) strtof(nptr: ptr, endptr: *mut ptr): f32
 
   ns math {
-    extern("expf") fn exp_f32(f32): f32
-    extern("exp")  fn exp_f64(f64): f64
+    fn(extern("expf")) exp_f32(f32): f32
+    fn(extern("exp")) exp_f64(f64): f64
   }
 
 }

@@ -1,6 +1,6 @@
 ns scopes {
   type foo = { x: int }
-  type alias foo-alias = foo
+  type(alias) foo-alias = foo
   
   ns outer {
     type foo = { x: int }

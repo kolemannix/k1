@@ -4,20 +4,18 @@ use core/c-int
 
 ns clang
 
-type alias CXIndex = ptr
+type(alias) CXIndex = ptr
 
-extern("clang", "clang_createIndex")
-fn createIndex(
+fn(extern("clang", "clang_createIndex")) createIndex(
   excludeDeclarationsFromPCH: c-int,
   displayDiagnostics: c-int
 ): CXIndex
 
-extern("clang", "clang_getClangVersion")
-fn getClangVersion(): CXString
+fn(extern("clang", "clang_getClangVersion")) getClangVersion(): CXString
 
-type alias c-unsigned = u32
+type(alias) c-unsigned = u32
 
-type alias CXUnsavedFile = { filename: *char, contents: *char, length: u64 }
+type(alias) CXUnsavedFile = { filename: *char, contents: *char, length: u64 }
 
 type CXTranslationUnit_Flags = either(c-unsigned) {
   None = 0x0, 
@@ -25,7 +23,7 @@ type CXTranslationUnit_Flags = either(c-unsigned) {
   SkipFunctionBodies = 0x40
 }
 
-type alias CXClientData = ptr
+type(alias) CXClientData = ptr
 
 // The type of an element in the abstract syntax tree.
 type CXType = {
@@ -58,10 +56,9 @@ ns for CXString {
   }
 }
  
-type alias CXTranslationUnit = ptr
+type(alias) CXTranslationUnit = ptr
 
-extern("clang", "clang_parseTranslationUnit2")
-fn parseTranslationUnit2(
+fn(extern("clang", "clang_parseTranslationUnit2")) parseTranslationUnit2(
   index: CXIndex,
   source_filename: ptr,
   command_line_args: ptr,
@@ -72,13 +69,11 @@ fn parseTranslationUnit2(
   out_TU: *CXTranslationUnit
 ): c-int
 
-extern("clang", "clang_getTranslationUnitCursor")
-fn getTranslationUnitCursor(
+fn(extern("clang", "clang_getTranslationUnitCursor")) getTranslationUnitCursor(
   unit: CXTranslationUnit
 ): CXCursor
 
-extern("clang", "clang_getCursorKindSpelling")
-fn getCursorKindSpelling(kind: CXCursorKind): CXString
+fn(extern("clang", "clang_getCursorKindSpelling")) getCursorKindSpelling(kind: CXCursorKind): CXString
 
 // Describes how the traversal of the children of a particular
 // cursor should proceed after visiting a particular child cursor.
@@ -97,145 +92,104 @@ type CXChildVisitResult = either(c-unsigned) {
   Recurse
 }
 
-type alias CXCursorVisitor = *fn(current: CXCursor, parent: CXCursor, client-data: CXClientData) -> CXChildVisitResult
+type(alias) CXCursorVisitor = *fn(current: CXCursor, parent: CXCursor, client-data: CXClientData) -> CXChildVisitResult
 
-extern("clang", "clang_visitChildren")
-fn visitChildren(
+fn(extern("clang", "clang_visitChildren")) visitChildren(
   parent: CXCursor,
   visitor: CXCursorVisitor,
   client_data: CXClientData
 ): c-unsigned
 
 // wait for me, love
-// defrewrite clangdef = (name) => { extern("clang", "clang_{name}") fn {name} }
+// defrewrite clangdef = (name) => { fn(extern("clang", "clang_{name}")) {name} }
 // clangdef(getCursorDisplayName)(cursor: CXCursor): CXString
 
-extern("clang", "clang_getCursorDisplayName")
-fn getCursorDisplayName(cursor: CXCursor): CXString
+fn(extern("clang", "clang_getCursorDisplayName")) getCursorDisplayName(cursor: CXCursor): CXString
 
-extern("clang", "clang_getCString")
-fn getCString(cx-string: CXString): ptr
+fn(extern("clang", "clang_getCString")) getCString(cx-string: CXString): ptr
 
-extern("clang", "clang_disposeString")
-fn disposeString(cx-string: CXString)
+fn(extern("clang", "clang_disposeString")) disposeString(cx-string: CXString)
 
-extern("clang", "clang_getCursorKind")
-fn getCursorKind(cursor: CXCursor): CXCursorKind 
+fn(extern("clang", "clang_getCursorKind")) getCursorKind(cursor: CXCursor): CXCursorKind 
 
-extern("clang", "clang_getCursorType")
-fn getCursorType(cursor: CXCursor): CXType 
+fn(extern("clang", "clang_getCursorType")) getCursorType(cursor: CXCursor): CXType 
 
-extern("clang", "clang_getCursorSpelling")
-fn getCursorSpelling(CXCursor): CXString  
+fn(extern("clang", "clang_getCursorSpelling")) getCursorSpelling(CXCursor): CXString  
 
-extern("clang", "clang_getTypeKindSpelling")
-fn getTypeKindSpelling(kind: CXTypeKind): CXString
+fn(extern("clang", "clang_getTypeKindSpelling")) getTypeKindSpelling(kind: CXTypeKind): CXString
 
-extern("clang", "clang_isDeclaration")
-fn isDeclaration(cursor-kind: CXCursorKind): u32
+fn(extern("clang", "clang_isDeclaration")) isDeclaration(cursor-kind: CXCursorKind): u32
 
-extern("clang", "clang_isReference")
-fn isReference(cursor-kind: CXCursorKind): u32
+fn(extern("clang", "clang_isReference")) isReference(cursor-kind: CXCursorKind): u32
 
-extern("clang", "clang_isExpression")
-fn isExpression(cursor-kind: CXCursorKind): u32
+fn(extern("clang", "clang_isExpression")) isExpression(cursor-kind: CXCursorKind): u32
 
-extern("clang", "clang_isStatement")
-fn isStatement(cursor-kind: CXCursorKind): u32
+fn(extern("clang", "clang_isStatement")) isStatement(cursor-kind: CXCursorKind): u32
 
-extern("clang", "clang_isAttribute")
-fn isAttribute(cursor-kind: CXCursorKind): u32
+fn(extern("clang", "clang_isAttribute")) isAttribute(cursor-kind: CXCursorKind): u32
 
-extern("clang", "clang_Type_getNamedType")
-fn Type_getNamedType(t: CXType): CXType
+fn(extern("clang", "clang_Type_getNamedType")) Type_getNamedType(t: CXType): CXType
 
-extern("clang", "clang_getTypedefName")
-fn getTypedefName(t: CXType): CXString 
+fn(extern("clang", "clang_getTypedefName")) getTypedefName(t: CXType): CXString 
 
-extern("clang", "clang_getPointeeType")
-fn getPointeeType(t: CXType): CXType 
+fn(extern("clang", "clang_getPointeeType")) getPointeeType(t: CXType): CXType 
 
-extern("clang", "clang_getUnqualifiedType")
-fn getUnqualifiedType(t: CXType): CXType 
+fn(extern("clang", "clang_getUnqualifiedType")) getUnqualifiedType(t: CXType): CXType 
 
-extern("clang", "clang_getTypeDeclaration")
-fn getTypeDeclaration(t: CXType): CXCursor
+fn(extern("clang", "clang_getTypeDeclaration")) getTypeDeclaration(t: CXType): CXCursor
 
-extern("clang", "clang_Cursor_isAnonymousRecordDecl")
-fn Cursor_isAnonymousRecordDecl(declCursor: CXCursor): u32
+fn(extern("clang", "clang_Cursor_isAnonymousRecordDecl")) Cursor_isAnonymousRecordDecl(declCursor: CXCursor): u32
 
-extern("clang", "clang_Cursor_isAnonymous")
-fn Cursor_isAnonymous(C: CXCursor): u32
+fn(extern("clang", "clang_Cursor_isAnonymous")) Cursor_isAnonymous(C: CXCursor): u32
 
-extern("clang", "clang_getEnumDeclIntegerType")
-fn getEnumDeclIntegerType(C: CXCursor): CXType
+fn(extern("clang", "clang_getEnumDeclIntegerType")) getEnumDeclIntegerType(C: CXCursor): CXType
 
-extern("clang", "clang_getEnumConstantDeclValue")
-fn getEnumConstantDeclValue(C: CXCursor): i64
-extern("clang", "clang_getEnumConstantDeclUnsignedValue")
-fn getEnumConstantDeclUnsignedValue(C: CXCursor): u64
+fn(extern("clang", "clang_getEnumConstantDeclValue")) getEnumConstantDeclValue(C: CXCursor): i64
+fn(extern("clang", "clang_getEnumConstantDeclUnsignedValue")) getEnumConstantDeclUnsignedValue(C: CXCursor): u64
 
-extern("clang", "clang_Cursor_isBitField")
-fn Cursor_isBitField(C: CXCursor): u32
+fn(extern("clang", "clang_Cursor_isBitField")) Cursor_isBitField(C: CXCursor): u32
 
-extern("clang", "clang_getFieldDeclBitWidth")
-fn getFieldDeclBitWidth(C: CXCursor): int
+fn(extern("clang", "clang_getFieldDeclBitWidth")) getFieldDeclBitWidth(C: CXCursor): int
 
-extern("clang", "clang_getArrayElementType")
-fn getArrayElementType(T: CXType): CXType 
-extern("clang", "clang_getArraySize")
-fn getArraySize(T: CXType): i64
-extern("clang", "clang_getNumElements")
-fn getNumElements(T: CXType): i64
+fn(extern("clang", "clang_getArrayElementType")) getArrayElementType(T: CXType): CXType 
+fn(extern("clang", "clang_getArraySize")) getArraySize(T: CXType): i64
+fn(extern("clang", "clang_getNumElements")) getNumElements(T: CXType): i64
 
-extern("clang", "clang_getResultType")
-fn getResultType(T: CXType): CXType 
+fn(extern("clang", "clang_getResultType")) getResultType(T: CXType): CXType 
 
-extern("clang", "clang_getNumArgTypes")
-fn getNumArgTypes(T: CXType): c-int 
+fn(extern("clang", "clang_getNumArgTypes")) getNumArgTypes(T: CXType): c-int 
 
-extern("clang", "clang_getArgType")
-fn getArgType(T: CXType, i: u32): CXType 
+fn(extern("clang", "clang_getArgType")) getArgType(T: CXType, i: u32): CXType 
 
-extern("clang", "clang_Cursor_getArgument")
-fn Cursor_getArgument(C: CXCursor, i: u32): CXCursor 
+fn(extern("clang", "clang_Cursor_getArgument")) Cursor_getArgument(C: CXCursor, i: u32): CXCursor 
 
-extern("clang", "clang_getTypedefDeclUnderlyingType")
-fn getTypedefDeclUnderlyingType(C: CXCursor): CXType
+fn(extern("clang", "clang_getTypedefDeclUnderlyingType")) getTypedefDeclUnderlyingType(C: CXCursor): CXType
 
-extern("clang", "clang_isCursorDefinition")
-fn isCursorDefinition(C: CXCursor): u32
+fn(extern("clang", "clang_isCursorDefinition")) isCursorDefinition(C: CXCursor): u32
 
 type CXSourceLocation = {
   ptr_data: array[ptr, 2],
   int_data: u32,
 }
 
-extern("clang", "clang_getCursorLocation")
-fn getCursorLocation(C: CXCursor): CXSourceLocation 
+fn(extern("clang", "clang_getCursorLocation")) getCursorLocation(C: CXCursor): CXSourceLocation 
 
-extern("clang", "clang_getNullLocation")
-fn getNullLocation(): CXSourceLocation
+fn(extern("clang", "clang_getNullLocation")) getNullLocation(): CXSourceLocation
 
-extern("clang", "clang_equalLocations")
-fn equalLocations(la: CXSourceLocation, CXSourceLocation): c-unsigned
+fn(extern("clang", "clang_equalLocations")) equalLocations(la: CXSourceLocation, CXSourceLocation): c-unsigned
 
 // Returns non-zero if the given source location is in a system header.
-extern("clang", "clang_Location_isInSystemHeader")
-fn Location_isInSystemHeader(location: CXSourceLocation): c-int
+fn(extern("clang", "clang_Location_isInSystemHeader")) Location_isInSystemHeader(location: CXSourceLocation): c-int
 
 // Returns non-zero if the given source location is in the main file of
 // the corresponding translation unit.
-extern("clang", "clang_Location_isFromMainFile")
-fn Location_isFromMainFile(location: CXSourceLocation): c-int
+fn(extern("clang", "clang_Location_isFromMainFile")) Location_isFromMainFile(location: CXSourceLocation): c-int
 
-extern("clang", "clang_getNumDiagnostics")
-fn getNumDiagnostics(Unit: CXTranslationUnit ): u32
+fn(extern("clang", "clang_getNumDiagnostics")) getNumDiagnostics(Unit: CXTranslationUnit ): u32
 
-type alias CXDiagnostic = ptr
+type(alias) CXDiagnostic = ptr
 
-extern("clang", "clang_getDiagnostic")
-fn getDiagnostic(Unit: CXTranslationUnit, Index: u32): CXDiagnostic
+fn(extern("clang", "clang_getDiagnostic")) getDiagnostic(Unit: CXTranslationUnit, Index: u32): CXDiagnostic
 
 type CXDiagnosticSeverity = either(c-unsigned) {
   CXDiagnostic_Ignored = 0,
@@ -245,13 +199,11 @@ type CXDiagnosticSeverity = either(c-unsigned) {
   CXDiagnostic_Fatal = 4
 }
  
-extern("clang", "clang_getDiagnosticSeverity")
-fn getDiagnosticSeverity(CXDiagnostic): CXDiagnosticSeverity
+fn(extern("clang", "clang_getDiagnosticSeverity")) getDiagnosticSeverity(CXDiagnostic): CXDiagnosticSeverity
 
-type alias CXFile = ptr
+type(alias) CXFile = ptr
 
-extern("clang", "clang_getFileLocation")
-fn getFileLocation(
+fn(extern("clang", "clang_getFileLocation")) getFileLocation(
   location: CXSourceLocation,
   file: *mut CXFile,
   line: *mut u32,
@@ -259,15 +211,11 @@ fn getFileLocation(
   offset: *mut u32
 )
 
-extern("clang", "clang_Type_getAlignOf")
-fn Type_getAlignOf(T: CXType): i64
-extern("clang", "clang_Type_getSizeOf")
-fn Type_getSizeOf(T: CXType): i64
-extern("clang", "clang_Cursor_getOffsetOfField")
-fn Cursor_getOffsetOfField(C: CXCursor): i64
+fn(extern("clang", "clang_Type_getAlignOf")) Type_getAlignOf(T: CXType): i64
+fn(extern("clang", "clang_Type_getSizeOf")) Type_getSizeOf(T: CXType): i64
+fn(extern("clang", "clang_Cursor_getOffsetOfField")) Cursor_getOffsetOfField(C: CXCursor): i64
 
-extern("clang", "clang_getFileName")
-fn getFileName(SFile: CXFile): CXString 
+fn(extern("clang", "clang_getFileName")) getFileName(SFile: CXFile): CXString 
 
 type CXCursorKind = either(c-unsigned) {
   // Declarations

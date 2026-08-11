@@ -1038,7 +1038,7 @@ pub struct TypedFunction {
     pub is_macro: bool,
     /// If we've generated a 'dyn' copy of this function, we store its id
     pub dyn_fn_id: Option<FunctionId>,
-    /// 'let returned', RVO
+    /// 'let(returned)', RVO
     pub returned_variable: Option<VariableId>,
     pub body_failure: Option<K1Message>,
 }
@@ -4057,7 +4057,7 @@ impl TypedProgram {
                         kbail!(
                             self,
                             parsed_type_defn.span,
-                            "Non-alias type definition must be a struct or sum; not a '{}'. Perhaps you intended to create an alias `deftype alias <name> = <type>`",
+                            "Non-alias type definition must be a struct or sum; not a '{}'. Perhaps you intended to create an alias `type(alias) <name> = <type>`",
                             rhs_type_id
                         );
                     }
@@ -4068,7 +4068,7 @@ impl TypedProgram {
                     kbail!(
                         self,
                         parsed_type_defn.span,
-                        "Non-alias type definition must be a struct or either or opaque or builtin; not a '{}'. Perhaps you meant to create an alias `deftype alias <name> = <type>`",
+                        "Non-alias type definition must be a struct or either or opaque or builtin; not a '{}'. Perhaps you meant to create an alias `type(alias) <name> = <type>`",
                         rhs_type_id
                     );
                 }
@@ -16659,7 +16659,7 @@ impl TypedProgram {
                         kbail!(
                             self,
                             parsed_let.span,
-                            "let returned must be the first statement in a function block; (block type was {})",
+                            "let(returned) must be the first statement in a function block; (block type was {})",
                             scope_type.short_name()
                         );
                     }
@@ -18040,7 +18040,7 @@ impl TypedProgram {
         Ok(TypedAbilitySignature { specialized_ability_id: new_ability_id, impl_arguments })
     }
 
-    /// `let context(impl <ability>) x`: check the variable's type implements the ability
+    /// `let(context(impl <ability>)) x`: check the variable's type implements the ability
     /// and register it under the ability key. The check is strict (no ref-self coercion)
     /// because call sites discharge `[t: <ability>]` constraints strictly; accepting a
     /// by-value binding here would make every consuming call fail, or worse, write into
@@ -19782,6 +19782,21 @@ impl TypedProgram {
             self.eval_ability_expr(parsed_ability_impl.ability_expr, true, impl_scope_id)?;
         let ability_id = ability_sig.specialized_ability_id;
 
+        // A blanket impl is applied by matching its Self type against a target
+        // type, so its blanket-ness must come from the Self type: the only
+        // type params that can occur in it are the impl's own. If none does,
+        // the impl is really a family of impls for one concrete type
+        if !blanket_type_params.is_empty()
+            && self.get_type_variable_counts(impl_self_type).type_parameter_count == 0
+        {
+            kbail!(
+                self,
+                span,
+                "A blanket impl's Self type must mention at least one of its parameters; this impl's Self type {} is concrete",
+                self.type_id_to_string(impl_self_type).blue()
+            );
+        }
+
         // Uniqueness of implementation:
         // We allow only one implementation per Ability (+ unique params set)
         // Check for existing implementation
@@ -20001,11 +20016,11 @@ impl TypedProgram {
             typed_functions.push(AbilityImplFunction::FunctionId(impl_function_id));
         }
 
-        let blanked_type_params_handle = blanket_type_params.to_slice();
+        let blanket_type_params_handle = blanket_type_params.to_slice();
         let impl_arguments_handle = impl_arguments.to_slice();
         let typed_impl_id = self.add_ability_impl(TypedAbilityImpl {
             kind,
-            blanket_type_params: blanked_type_params_handle,
+            blanket_type_params: blanket_type_params_handle,
             self_type_id: impl_self_type,
             ability_id,
             base_ability_id,

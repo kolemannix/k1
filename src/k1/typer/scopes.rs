@@ -459,7 +459,7 @@ impl Scopes {
             {
                 return Some(*v);
             }
-            // Context variables are only ever function params or `let context`s
+            // Context variables are only ever function params or `let(context)`s
             // in function bodies -- never globals -- so once the walk climbs
             // out of function-land into a namespace, there's nothing left to
             // find. (Note some paths still evaluate a function body in its own
@@ -881,7 +881,7 @@ impl Scopes {
     }
 
     /// Register a context variable under an ability key. Returns false if the key is
-    /// already claimed in this scope. Explicit `let context(impl ..)` declarations
+    /// already claimed in this scope. Explicit `let(context(impl ..))` declarations
     /// should treat false as an error; derived registrations (function context params
     /// typed by constrained type params) should instead call
     /// [`Self::poison_context_ability_key`] so the collision only fails at lookup time.

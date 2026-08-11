@@ -6,19 +6,19 @@
 // most 64 bytes (512 bits)
 ns vector {
 
-  intern fn splat[t, n: static size](value: t): vector[t, n]
+  fn(intern) splat[t, n: static size](value: t): vector[t, n]
 
-  intern fn load-unchecked[t, n: static size](src: ptr): vector[t, n]
-  intern fn store-unchecked[t, n: static size](v: vector[t, n], dst: ptr)
+  fn(intern) load-unchecked[t, n: static size](src: ptr): vector[t, n]
+  fn(intern) store-unchecked[t, n: static size](v: vector[t, n], dst: ptr)
 
-  intern fn get-lane[t, n: static size](v: vector[t, n], index: size): t
-  intern fn with-lane[t, n: static size](v: vector[t, n], index: size, value: t): vector[t, n]
+  fn(intern) get-lane[t, n: static size](v: vector[t, n], index: size): t
+  fn(intern) with-lane[t, n: static size](v: vector[t, n], index: size, value: t): vector[t, n]
 
   // Lane-wise compare: each lane is all-ones on equal, all-zeros otherwise.
-  intern fn eq-lanes[t, n: static size](a: vector[t, n], b: vector[t, n]): vector[t, n]
+  fn(intern) eq-lanes[t, n: static size](a: vector[t, n], b: vector[t, n]): vector[t, n]
 
   // collapses lane MSBs into one bit per lane (movemask)
-  intern fn to-mask[t, n: static size](v: vector[t, n]): u64
+  fn(intern) to-mask[t, n: static size](v: vector[t, n]): u64
 
   fn zeroed[t, n: static size](): vector[t, n] {
     mem/zeroed[vector[t, n]]
@@ -59,17 +59,17 @@ ns vector {
   }
 }
 
-impl[t: add, n: static size] add for vector[t, n] { intern fn add(self, rhs: self): self }
-impl[t: sub, n: static size] sub for vector[t, n] { intern fn sub(self, rhs: self): self }
-impl[t: mul, n: static size] mul for vector[t, n] { intern fn mul(self, rhs: self): self }
+impl[t: add, n: static size] add for vector[t, n] { fn(intern) add(self, rhs: self): self }
+impl[t: sub, n: static size] sub for vector[t, n] { fn(intern) sub(self, rhs: self): self }
+impl[t: mul, n: static size] mul for vector[t, n] { fn(intern) mul(self, rhs: self): self }
 
 impl[t: bitwise, n: static size] bitwise for vector[t, n] {
-  intern fn bit-not(self): self
-  intern fn bit-and(self, other: self): self
-  intern fn bit-or(self, other: self): self
-  intern fn xor(self, other: self): self
-  intern fn shift-left(self, count: u32): self
-  intern fn shift-right(self, count: u32): self
+  fn(intern) bit-not(self): self
+  fn(intern) bit-and(self, other: self): self
+  fn(intern) bit-or(self, other: self): self
+  fn(intern) xor(self, other: self): self
+  fn(intern) shift-left(self, count: u32): self
+  fn(intern) shift-right(self, count: u32): self
 }
 
 impl[t, n: static size] equals for vector[t, n] {

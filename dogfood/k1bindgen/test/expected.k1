@@ -38,17 +38,14 @@ type foo = {
   _muh_floats: array[f32, 0],
 }
 #static assert-layout[foo](104, 8, [0, 1, 8, 16, 24, 32, 36, 40, 48, 56, 64, 72, 80, 88, 96, 100, ])
-extern("testlib", "myFunction")
-fn myFunction(
+fn(extern("testlib", "myFunction")) myFunction(
   incompleteArray: *mut u8,
 ): {}
-extern("testlib", "cinput_sum")
-fn sum(
+fn(extern("testlib", "cinput_sum")) sum(
   lhs: i32,
   rhs: u32,
 ): i32
-extern("testlib", "cinput_unnamed_param")
-fn unnamed_param(
+fn(extern("testlib", "cinput_unnamed_param")) unnamed_param(
   p0: i32,
   named: u32,
   loop_c: f32,
@@ -69,5 +66,4 @@ type loop_c = {}
 type my-custom-name = {}
 #static assert-layout[my-custom-name](0, 1, [])
 type opaq = opaque[104, 4]
-extern("testlib", "cinput_main")
-fn main(): i32
+fn(extern("testlib", "cinput_main")) main(): i32

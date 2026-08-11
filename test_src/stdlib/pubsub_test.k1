@@ -11,7 +11,7 @@ use std/rc-byte-stream
 use std/owned
 use std/heap-bytes
 
-let mutable notify-count: int = 0
+let(mutable) notify-count: int = 0
 fn count-notify(_p: ptr) { notify-count = notify-count + 1 }
 
 fn test() {

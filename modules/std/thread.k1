@@ -2,11 +2,11 @@ ns thread
 
 use core/arena
 
-type alias thread = *empty
+type(alias) thread = *empty
 
 ns pthread {
-  extern("pthread_create") fn pthread_create(thread: *thread, attrs: ptr, start_routine: ptr, input: ptr): i32
-  extern("pthread_join") fn pthread_join(thread: thread, retval: ptr): i32
+  fn(extern("pthread_create")) pthread_create(thread: *thread, attrs: ptr, start_routine: ptr, input: ptr): i32
+  fn(extern("pthread_join")) pthread_join(thread: thread, retval: ptr): i32
 }
 fn start[t](arena: *mut arena, function: *fn(*mut t) -> ptr, input: *t): *thread {
   let thread: *thread = arena.alloc-t[thread]()

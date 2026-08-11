@@ -7,7 +7,7 @@ ns for point-named {
   }
 }
 
-type alias point-alias = { x: int, y: int }
+type(alias) point-alias = { x: int, y: int }
 ns point-alias {
   fn sum(me: point-alias): int {
     me.x + me.y

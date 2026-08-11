@@ -4,8 +4,8 @@
 ns day1-alt
 
 ns cmath {
-  extern("cos") fn cos(x: f64): f64
-  extern("acos") fn acos(x: f64): f64
+  fn(extern("cos")) cos(x: f64): f64
+  fn(extern("acos")) acos(x: f64): f64
 }
 
 let pi: f64 = cmath/acos(-1.0)

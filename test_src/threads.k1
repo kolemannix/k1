@@ -6,7 +6,7 @@ fn module(): k1/module {
   m
 }
 
-let mutable tls myvar: i32 = 0
+let(mutable, tls) myvar: i32 = 0
 
 fn run(input: *mut int): ptr {
   assert-equals(input.*, 42)

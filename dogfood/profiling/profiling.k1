@@ -17,10 +17,10 @@ type profile-block = {
 }
 
 // Global profiler state
-let mutable global_profiler_anchors: array[profile-anchor, 4096] = zeroed()
-let mutable global_profiler_parent: u32 = 0
-let mutable global_profile_start_tsc: u64 = 0
-let mutable global_profile_end_tsc: u64 = 0
+let(mutable) global_profiler_anchors: array[profile-anchor, 4096] = zeroed()
+let(mutable) global_profiler_parent: u32 = 0
+let(mutable) global_profile_start_tsc: u64 = 0
+let(mutable) global_profile_end_tsc: u64 = 0
 
 use std/time/read-cpu-counter
 

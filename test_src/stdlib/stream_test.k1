@@ -68,7 +68,7 @@ fn test-channel() {
   src.stop()
 }
 
-let mutable drop-count: int = 0
+let(mutable) drop-count: int = 0
 fn count-drop(_v: *mut int) { drop-count = drop-count + 1 }
 
 fn test-rc() {
@@ -101,7 +101,7 @@ fn test-rc-byte-stream() {
   src.stop()
 }
 
-let mutable notify-count: int = 0
+let(mutable) notify-count: int = 0
 fn count-notify(_p: ptr) { notify-count = notify-count + 1 }
 
 fn test-mpsc() {

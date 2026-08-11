@@ -10,21 +10,21 @@ ns pg {
   let PGRES_COMMAND_OK: core/c-int = 1
   let PGRES_TUPLES_OK: core/c-int = 2
 
-  extern("pq", "PQconnectdb") fn connectdb(conninfo: ptr): ptr
-  extern("pq", "PQstatus") fn status(conn: ptr): core/c-int
-  extern("pq", "PQerrorMessage") fn error-message(conn: ptr): ptr
-  extern("pq", "PQfinish") fn finish(conn: ptr)
+  fn(extern("pq", "PQconnectdb")) connectdb(conninfo: ptr): ptr
+  fn(extern("pq", "PQstatus")) status(conn: ptr): core/c-int
+  fn(extern("pq", "PQerrorMessage")) error-message(conn: ptr): ptr
+  fn(extern("pq", "PQfinish")) finish(conn: ptr)
 
-  extern("pq", "PQexec") fn exec(conn: ptr, query: ptr): ptr
-  extern("pq", "PQresultStatus") fn result-status(result: ptr): core/c-int
-  extern("pq", "PQresultErrorMessage") fn result-error-message(result: ptr): ptr
-  extern("pq", "PQclear") fn clear(result: ptr)
+  fn(extern("pq", "PQexec")) exec(conn: ptr, query: ptr): ptr
+  fn(extern("pq", "PQresultStatus")) result-status(result: ptr): core/c-int
+  fn(extern("pq", "PQresultErrorMessage")) result-error-message(result: ptr): ptr
+  fn(extern("pq", "PQclear")) clear(result: ptr)
 
-  extern("pq", "PQntuples") fn n-tuples(result: ptr): core/c-int
-  extern("pq", "PQnfields") fn n-fields(result: ptr): core/c-int
-  extern("pq", "PQfname") fn field-name(result: ptr, column: core/c-int): ptr
-  extern("pq", "PQgetisnull") fn is-null(result: ptr, row: core/c-int, column: core/c-int): core/c-int
-  extern("pq", "PQgetvalue") fn get-value(result: ptr, row: core/c-int, column: core/c-int): ptr
+  fn(extern("pq", "PQntuples")) n-tuples(result: ptr): core/c-int
+  fn(extern("pq", "PQnfields")) n-fields(result: ptr): core/c-int
+  fn(extern("pq", "PQfname")) field-name(result: ptr, column: core/c-int): ptr
+  fn(extern("pq", "PQgetisnull")) is-null(result: ptr, row: core/c-int, column: core/c-int): core/c-int
+  fn(extern("pq", "PQgetvalue")) get-value(result: ptr, row: core/c-int, column: core/c-int): ptr
 }
 
 type connection = { raw: ptr }

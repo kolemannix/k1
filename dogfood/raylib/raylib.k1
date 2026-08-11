@@ -14,19 +14,19 @@ ns raylib {
     x: f32, y: f32, width: f32, height: f32
   }
 
-  extern("raylib","InitWindow") fn init(width: i32, height: i32, name: ptr)
-  extern("raylib","CloseWindow") fn close-window()
-  extern("raylib","WindowShouldClose") fn window-should-close(): bool
+  fn(extern("raylib", "InitWindow")) init(width: i32, height: i32, name: ptr)
+  fn(extern("raylib", "CloseWindow")) close-window()
+  fn(extern("raylib", "WindowShouldClose")) window-should-close(): bool
 
-  extern("raylib","BeginDrawing") fn begin-drawing()
-  extern("raylib","EndDrawing") fn end-drawing()
-  extern("raylib","ClearBackground") fn clear-background(color: color)
+  fn(extern("raylib", "BeginDrawing")) begin-drawing()
+  fn(extern("raylib", "EndDrawing")) end-drawing()
+  fn(extern("raylib", "ClearBackground")) clear-background(color: color)
 
   // define void @draw-text(ptr noundef %0, i32 noundef %1, i32 noundef %2, i64 %3) #0 {
-  extern("raylib","DrawText") fn draw-text(text: ptr, pos-x: i32, pos-y: i32, font-size: i32, color: color)
+  fn(extern("raylib", "DrawText")) draw-text(text: ptr, pos-x: i32, pos-y: i32, font-size: i32, color: color)
 
-  extern("raylib","SetTargetFPS") fn set-target-fps(fps: i32)
-  extern("raylib","GetFPS") fn get-fps(): i32
+  fn(extern("raylib", "SetTargetFPS")) set-target-fps(fps: i32)
+  fn(extern("raylib", "GetFPS")) get-fps(): i32
 
 }
 

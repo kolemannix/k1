@@ -59,13 +59,13 @@ ns mem {
   // 0.as[ptr] inlined rather than ptr/null: this global is demanded during
   // other globals' initializers, and referencing the null global from here
   // closes an initializer cycle.
-  let mutable tls arena-tmp: *arena = 0.as[ptr].rw[arena]
+  let(mutable, tls) arena-tmp: *arena = 0.as[ptr].rw[arena]
 
-  type alias ALLOC_STACK_MAX = 64
+  type(alias) ALLOC_STACK_MAX = 64
   // Empty stack means "the tmp arena"; tmp is lazily initialized, so it
   // cannot be pushed here eagerly at thread start. Elements are raw ptrs:
   // reference-typed slots in global initializers do not serialize yet.
-  let mutable tls arena-stack: fixlist[ptr, ALLOC_STACK_MAX] =
+  let(mutable, tls) arena-stack: fixlist[ptr, ALLOC_STACK_MAX] =
     zeroed[fixlist[ptr, ALLOC_STACK_MAX]]
 
   fn push-arena(a: *arena) {

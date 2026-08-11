@@ -272,7 +272,8 @@ fn const_of_data32(t: ScalarType, data: u32) -> u64 {
         ScalarType::Pointer => data as u64,
         ScalarType::I8 | ScalarType::I16 | ScalarType::I32 => data as u64,
         ScalarType::I64 => data as i32 as i64 as u64,
-        ScalarType::U8 | ScalarType::U16 | ScalarType::U32 | ScalarType::U64 => data as u64,
+        ScalarType::U8 | ScalarType::U16 | ScalarType::U32 | ScalarType::U64 | ScalarType::Char
+        | ScalarType::Bool => data as u64,
     }
 }
 

@@ -5,7 +5,7 @@ use core/eprintln
 use core/sys
 
 type color = either { white, black }
-type alias bitboard = u64
+type(alias) bitboard = u64
 
 let RANK_1 : bitboard = 0x00000000000000FF
 let RANK_2 : bitboard = 0x000000000000FF00
@@ -159,7 +159,7 @@ ns for game-state {
   }
 
   fn gen-white-pawn-moves(self: game-state): list[move] {
-     let returned moves = list/empty[move]()
+     let(returned) moves = list/empty[move]()
      let not-occupied = self.not-occupied()
 
      // Single push: shift pawns up one rank if square is empty
@@ -246,7 +246,7 @@ fn debug-log(context eng: engine)(s: string) {
 }
 
 fn run(_args: span[string]): result[i32, string] {
-  let context eng: engine = .{ game = game-state/start-pos() }
+  let(context) eng: engine = .{ game = game-state/start-pos() }
   loop {
     // TODO(dogfood): easy mapError before try
     let cmd = sys/read-line(2048).try

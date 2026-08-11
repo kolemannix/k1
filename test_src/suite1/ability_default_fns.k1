@@ -1,6 +1,6 @@
 ns ability_default_fns
 
-let mutable I32_SPEC_COUNTER: int = 0
+let(mutable) I32_SPEC_COUNTER: int = 0
 
 ability increment {
   fn inc(self): self
