@@ -84,7 +84,7 @@ ns mem {
 
   fn init-tmp-arena() {
     if not arena-tmp.as[ptr].is-null() crash("arena-tmp already initialized")
-    arena-tmp = arena/init-default()
+    arena-tmp = arena/init-fixed(1 * arena/gb)
   }
 
   fn tmp(): *arena {

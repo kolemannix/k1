@@ -12,6 +12,8 @@ type arena = {
   first-base: ptr,
   first-end: ptr,
   extra-chunks: ptr,
+  // Hard limit, no chaining
+  fixed: bool,
   name: string,
 }
 
@@ -46,6 +48,7 @@ ns for arena {
       first-base = memory-start,
       first-end = region-end,
       extra-chunks = ptr/null,
+      fixed = false,
       name = "",
     }
     arena
@@ -53,6 +56,12 @@ ns for arena {
 
   fn init(region-size: size): *arena {
     store-header(platform/memory/acquire(region-size))
+  }
+
+  fn init-fixed(region-size: size): *arena {
+    let a = init(region-size)
+    a.fixed = true
+    a
   }
 
   fn init-default(): *arena {
@@ -123,6 +132,9 @@ ns for arena {
   }
 
   fn _grow(self: *arena, size: size, align: size) {
+    // Static message: interpolation would allocate, possibly from this same
+    // exhausted arena when it is the ambient allocator
+    if self.fixed crash("fixed arena exhausted")
     let overhead = types/stride[arena-chunk] + MIN_ALIGN + align
     let needed = size + overhead
     let first-len = self.first-end.diff(self.first-base)

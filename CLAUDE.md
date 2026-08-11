@@ -77,7 +77,8 @@ Before nontrivial work, read:
   loops and a `let mut` accumulator: allocations and control flow stay explicit,
   loops survive edits better, and `?` works inside them. Scalar adapters that
   don't build collections (`any`, `all`, `find`, `zip`/`enumerate`/`rev` in a
-  for-loop header) are fine.
+  for-loop header) are fine. Exception: string-building for messages (error
+  reports, debug output) may use map/collect chains.
 
 ## Build Environment
 

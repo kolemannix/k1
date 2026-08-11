@@ -333,11 +333,16 @@ pub fn cache_store(cache_dir: &std::path::Path, hash: InputsHash, bytes: &[u8]) 
 
 fn evict(cache_dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(cache_dir) else { return };
-    let mut snaps: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|x| x == "snap"))
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
-        .collect();
+    let mut snaps: Vec<(std::time::SystemTime, std::path::PathBuf)> = vec![];
+    for entry in entries {
+        let Ok(e) = entry else { continue };
+        if !e.path().extension().is_some_and(|x| x == "snap") {
+            continue;
+        }
+        let Ok(metadata) = e.metadata() else { continue };
+        let Ok(mtime) = metadata.modified() else { continue };
+        snaps.push((mtime, e.path()));
+    }
     if snaps.len() <= CACHE_MAX_ENTRIES {
         return;
     }
