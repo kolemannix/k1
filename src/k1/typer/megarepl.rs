@@ -730,6 +730,7 @@ impl TypedProgram {
                         owner_module: Some(module_id),
                         parsed_id: ParsedId::Namespace(parsed_namespace_id),
                         lib_name: None,
+                        reload: false,
                     });
                     self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(ns_id));
                     let added = self.scopes.add_namespace(module_ns_scope, name, ns_id);

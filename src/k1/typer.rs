@@ -1819,9 +1819,12 @@ pub struct Namespace {
     pub parent_id: Option<NamespaceId>,
     pub owner_module: Option<ModuleId>,
     pub parsed_id: ParsedId,
-    /// `ns(lib("uv")) uv`: default library for extern fns in this namespace.
-    /// Whole-ns: any opening may declare it; disagreeing openings are an error.
+    /// default library for extern fns in this namespace.
+    /// re-opened ns: any opening may declare it; disagreeing openings are an error.
     pub lib_name: Option<StringId>,
+    /// fns compile into a dylib and are swappable at runtime.
+    /// re-opened ns: any opening may declare it; all openings share it.
+    pub reload: bool,
 }
 
 pub struct Namespaces {
@@ -3000,6 +3003,7 @@ impl TypedProgram {
             owner_module: None,
             parsed_id: ParsedId::Namespace(ParsedNamespaceId::ONE),
             lib_name: None,
+            reload: false,
         };
         let root_namespace_id = namespaces.add(root_namespace);
         scopes
@@ -18652,6 +18656,17 @@ impl TypedProgram {
             }
         }
 
+        if self_.namespaces.get(namespace_id).reload
+            && (!type_params.is_empty() || !fnlike_type_params.is_empty())
+        {
+            kbail!(
+                &**self_,
+                ast_fn.signature_span,
+                "Not allowed in ns(reload) {}: generic code cannot be included",
+                self_.namespaces.get(namespace_id).name,
+            );
+        }
+
         let linkage = match impl_info {
             Some(info) if info.impl_kind == AbilityImplKind::BuiltinDerived => Linkage::Intrinsic,
             _ => match ast_fn.linkage {
@@ -19511,6 +19526,7 @@ impl TypedProgram {
                     owner_module: Some(self.module_in_progress.unwrap()),
                     parsed_id: ParsedId::Ability(parsed_ability_id),
                     lib_name: None,
+                    reload: false,
                 };
                 let namespace_id = self.namespaces.add(ability_namespace);
                 if !self.scopes.add_namespace(scope_id, parsed_ability.name, namespace_id) {
@@ -20371,9 +20387,51 @@ impl TypedProgram {
         let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
         let namespace = self.namespaces.get(namespace_id);
         let namespace_scope_id = namespace.scope_id;
+        let ns_reload = namespace.reload;
+        let ns_name = namespace.name;
         for defn in parsed_namespace.definitions.as_slice(&self.ast.mem) {
             if skip_defns.contains(defn) {
                 continue;
+            }
+            if ns_reload {
+                let rejection: Option<(&str, SpanId)> = match *defn {
+                    ParsedId::Global(id) => {
+                        Some(("globals cannot be included", self.ast.get_global(id).span))
+                    }
+                    ParsedId::Macro(id) => {
+                        Some(("macros cannot be included", self.ast.get_macro(id).span))
+                    }
+                    ParsedId::AbilityImpl(id) => Some((
+                        "ability impls cannot be included",
+                        self.ast.get_ability_impl(id).span,
+                    )),
+                    ParsedId::Namespace(id) => {
+                        Some(("nested ns are not supported", self.ast.namespaces.get(id).span))
+                    }
+                    ParsedId::StaticDefn(id) => Some((
+                        "#static and #meta definitions cannot be included",
+                        self.ast.exprs.get_span(id),
+                    )),
+                    ParsedId::Ability(id) => Some((
+                        "ability definitions cannot be included",
+                        self.ast.get_ability(id).span,
+                    )),
+                    ParsedId::Function(id) => {
+                        let function = self.ast.get_function(id);
+                        match function.linkage {
+                            Linkage::Standard => None,
+                            _ => Some((
+                                "extern and intrinsic fns cannot be included",
+                                function.signature_span,
+                            )),
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some((why, span)) = rejection {
+                    self.report(kerr!(self, span, "Not allowed in ns(reload) {}: {}", ns_name, why));
+                    continue;
+                }
             }
             // Declarations write into permanent pools/mem; tmp is per-declaration scratch
             let tmp_mark = self.tmp.mark();
@@ -20512,6 +20570,7 @@ impl TypedProgram {
             owner_module: Some(self.module_in_progress.unwrap()),
             parsed_id: ParsedId::Namespace(parsed_namespace_id),
             lib_name: ast_namespace.lib_name,
+            reload: ast_namespace.reload,
         };
         let namespace_id = self.namespaces.add(namespace);
         self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
@@ -20544,6 +20603,9 @@ impl TypedProgram {
             // Map this separate namespace AST node to the same semantic namespace
             self.namespace_ast_mappings.insert(parsed_namespace_id, existing);
             debug!("Inserting re-definition node for ns {}", self.ident_str(ast_namespace.name));
+            if ast_namespace.reload {
+                self.namespaces.get_mut(existing).reload = true;
+            }
             if let Some(lib_name) = ast_namespace.lib_name {
                 let existing_ns = self.namespaces.get_mut(existing);
                 match existing_ns.lib_name {

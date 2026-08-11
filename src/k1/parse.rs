@@ -1424,6 +1424,7 @@ pub struct ParsedNamespace {
     pub is_type_companion: bool,
     /// `ns(lib("uv")) uv`: default library for extern fns in this namespace
     pub lib_name: Option<StringId>,
+    pub reload: bool,
 }
 
 impl ParsedNamespace {
@@ -1436,6 +1437,7 @@ impl ParsedNamespace {
             span: SpanId::NONE,
             is_type_companion: false,
             lib_name: None,
+            reload: false,
         }
     }
 }
@@ -5283,6 +5285,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.emit_semantic_token(keyword, SemanticTokenKind::Namespace);
         self.advance();
         let mut lib_name: Option<StringId> = None;
+        let mut reload = false;
         if self.maybe_consume(K::OpenParen).is_some() {
             loop {
                 let modifier = self.expect_kind(K::Ident)?;
@@ -5292,7 +5295,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         lib_name = Some(self.expect_dq_ident()?);
                         self.expect_kind(K::CloseParen)?;
                     }
-                    _ => return Err(error_expected("ns modifier: lib", modifier)),
+                    "reload" => reload = true,
+                    _ => return Err(error_expected("ns modifier: lib, reload", modifier)),
                 }
                 if self.maybe_consume(K::Comma).is_none() {
                     break;
@@ -5334,6 +5338,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             span,
             is_type_companion: is_type,
             lib_name,
+            reload,
         });
         Ok(Some(namespace_id))
     }

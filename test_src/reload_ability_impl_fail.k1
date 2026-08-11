@@ -1,0 +1,10 @@
+type point = { x: int, y: int }
+
+ns(reload) handlers {
+  impl equals for point {
+    fn equals(self: point, other: point): bool { self.x == other.x and self.y == other.y }
+  }
+}
+
+fn main(): i32 { 0 }
+//errmsg: Not allowed in ns(reload) handlers: ability impls cannot be included
