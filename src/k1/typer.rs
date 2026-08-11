@@ -1819,6 +1819,9 @@ pub struct Namespace {
     pub parent_id: Option<NamespaceId>,
     pub owner_module: Option<ModuleId>,
     pub parsed_id: ParsedId,
+    /// `ns(lib("uv")) uv`: default library for extern fns in this namespace.
+    /// Whole-ns: any opening may declare it; disagreeing openings are an error.
+    pub lib_name: Option<StringId>,
 }
 
 pub struct Namespaces {
@@ -1850,6 +1853,7 @@ impl Namespaces {
     pub fn get_scope(&self, namespace_id: NamespaceId) -> ScopeId {
         self.get(namespace_id).scope_id
     }
+
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2995,6 +2999,7 @@ impl TypedProgram {
             parent_id: None,
             owner_module: None,
             parsed_id: ParsedId::Namespace(ParsedNamespaceId::ONE),
+            lib_name: None,
         };
         let root_namespace_id = namespaces.add(root_namespace);
         scopes
@@ -18649,7 +18654,15 @@ impl TypedProgram {
 
         let linkage = match impl_info {
             Some(info) if info.impl_kind == AbilityImplKind::BuiltinDerived => Linkage::Intrinsic,
-            _ => ast_fn.linkage,
+            _ => match ast_fn.linkage {
+                // Fill in the containing ns's lib(..) unless the fn declares its own lib
+                Linkage::External { module_id, lib_name: None, fn_name } => Linkage::External {
+                    module_id,
+                    lib_name: self_.namespaces.get(namespace_id).lib_name,
+                    fn_name,
+                },
+                other => other,
+            },
         };
         let intrinsic_type = match linkage {
             Linkage::Intrinsic => {
@@ -19497,6 +19510,7 @@ impl TypedProgram {
                     parent_id: Some(parent_namespace_id),
                     owner_module: Some(self.module_in_progress.unwrap()),
                     parsed_id: ParsedId::Ability(parsed_ability_id),
+                    lib_name: None,
                 };
                 let namespace_id = self.namespaces.add(ability_namespace);
                 if !self.scopes.add_namespace(scope_id, parsed_ability.name, namespace_id) {
@@ -20497,6 +20511,7 @@ impl TypedProgram {
             parent_id: Some(parent_ns_id),
             owner_module: Some(self.module_in_progress.unwrap()),
             parsed_id: ParsedId::Namespace(parsed_namespace_id),
+            lib_name: ast_namespace.lib_name,
         };
         let namespace_id = self.namespaces.add(namespace);
         self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
@@ -20529,6 +20544,23 @@ impl TypedProgram {
             // Map this separate namespace AST node to the same semantic namespace
             self.namespace_ast_mappings.insert(parsed_namespace_id, existing);
             debug!("Inserting re-definition node for ns {}", self.ident_str(ast_namespace.name));
+            if let Some(lib_name) = ast_namespace.lib_name {
+                let existing_ns = self.namespaces.get_mut(existing);
+                match existing_ns.lib_name {
+                    None => existing_ns.lib_name = Some(lib_name),
+                    Some(existing_lib) if existing_lib != lib_name => {
+                        kbail!(
+                            self,
+                            name_span,
+                            "Namespace {} already declares lib \"{}\"; conflicting lib \"{}\"",
+                            self.ident_str(ast_namespace.name).blue(),
+                            self.ident_str(existing_lib),
+                            self.ident_str(lib_name)
+                        );
+                    }
+                    Some(_) => {}
+                }
+            }
             existing
         } else {
             self.create_namespace(parsed_namespace_id, parent_scope)?

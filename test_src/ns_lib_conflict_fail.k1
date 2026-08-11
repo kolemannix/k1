@@ -1,0 +1,12 @@
+ns(lib("liba")) foo {
+  fn(extern("do_a")) do-a(): i32
+}
+
+ns(lib("libb")) foo {
+  fn(extern("do_b")) do-b(): i32
+}
+
+fn main(): i32 {
+  0
+}
+//errmsg: already declares lib

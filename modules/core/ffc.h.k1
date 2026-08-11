@@ -11,8 +11,8 @@ type ffc_result = {
   outcome: ffc_outcome
 }
 
-fn(extern("k1rt", "ffc_parse_double")) parse_double(len: size, c-str: ptr, out: *mut f64): ffc_result
-fn(extern("k1rt", "ffc_parse_float")) parse_float(len: size, c-str: ptr, out: *mut f32): ffc_result
+fn(extern("ffc_parse_double"), lib("k1rt")) parse_double(len: size, c-str: ptr, out: *mut f64): ffc_result
+fn(extern("ffc_parse_float"), lib("k1rt")) parse_float(len: size, c-str: ptr, out: *mut f32): ffc_result
 
 fn result_is_ok(result: ffc_result): bool { result.outcome == FFC_OUTCOME_OK }
 //ffc_result ffc_from_chars_double_options(const char *start, const char *end, double* out, ffc_parse_options options);

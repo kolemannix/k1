@@ -9,7 +9,7 @@ next up
 - [x] accidentally captured context parameter results in 'Missing variable' in ir
 - [x] Out of order type definitions don't work with aliases
 - [x] same-level recursion is not caught behind option
-- [ ] Require that a blanket impl's params appear in the Self type
+- [x] Require that a blanket impl's params appear in the Self type
 - [ ] Test handling of NaN and Infinity literals, other float edge cases
 
 ## [x] vector types
@@ -51,13 +51,8 @@ pointer-free predicate - pod/serializable?
 - [ ] `#[must_use]` equivalent
 - [ ] enum-from-sum type operator
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
-- [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
-- [ ] type-from-id({types/type-id[t]()}). add a types/spelling[t]() sugar
 - [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
-- [ ] c"" string literals that are of type ptr (no interpolation)
 - [ ] [design/flags_in_tags.k1.wip]
-- [ ] Inspired by fast_float, char to digit lookup table
-Simple but missing
 - [ ] auto-print implementation on-demand for sums
 - [ ] Exported functions
 - [ ] Tail calls

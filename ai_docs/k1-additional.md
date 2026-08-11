@@ -69,7 +69,11 @@ a directory module without one is an error); a single-file module is its own
 root file. A top-level `fn module` in any other file is an error. The compiler
 evaluates the fn before compiling the module and consumes it — it is never part
 of the program. No `fn module` means defaults: library, or executable for the
-primary module. FFI declarations use the `extern("lib", "symbol")` fn modifier.
+primary module. FFI declarations use the `extern` fn modifier; its optional
+argument is the link symbol (defaults to the fn name). The providing library is
+declared once on the containing namespace with `ns(lib("foo"))` — whole-ns, any
+opening may declare it, disagreeing openings are an error — or per-fn with the
+`lib` modifier (`fn(extern("sym"), lib("foo"))`), which overrides the ns lib.
 
 ```rust
 fn module(): k1/module {
@@ -80,7 +84,9 @@ fn module(): k1/module {
   m
 }
 
-fn(extern("foo", "very_small")) very-small(x: very-small, y: very-small): very-small
+ns(lib("foo")) foo {
+  fn(extern("very_small")) very-small(x: very-small, y: very-small): very-small
+}
 ```
 
 See `test_src/ffi_abi_test/ffi_abi_test.k1` and `test_src/threads.k1`.

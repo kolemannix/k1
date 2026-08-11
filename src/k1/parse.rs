@@ -1422,6 +1422,8 @@ pub struct ParsedNamespace {
     pub name_span: SpanId,
     pub span: SpanId,
     pub is_type_companion: bool,
+    /// `ns(lib("uv")) uv`: default library for extern fns in this namespace
+    pub lib_name: Option<StringId>,
 }
 
 impl ParsedNamespace {
@@ -1433,6 +1435,7 @@ impl ParsedNamespace {
             name_span: SpanId::NONE,
             span: SpanId::NONE,
             is_type_companion: false,
+            lib_name: None,
         }
     }
 }
@@ -4809,44 +4812,66 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return Ok(None);
         };
         let linkage = if self.maybe_consume(K::OpenParen).is_some() {
-            let modifier = self.peek();
-            let linkage = if modifier.kind == K::KeywordIntern {
-                self.advance();
-                if self.peek().kind == K::OpenParen {
-                    self.advance();
-                    let llvm_name = self.expect_dq_ident()?;
-                    self.expect_kind(K::CloseParen)?;
-                    Linkage::LlvmIntrinsic(llvm_name)
-                } else {
-                    Linkage::Intrinsic
+            let mut linkage: Option<Linkage> = None;
+            let mut lib_name: Option<StringId> = None;
+            let mut lib_token: Option<Token> = None;
+            loop {
+                let modifier = self.peek();
+                if linkage.is_some() && modifier.kind != K::Ident {
+                    return Err(error_expected("a single intern or extern modifier", modifier));
                 }
-            } else if modifier.kind == K::Ident && self.token_chars(modifier) == "extern" {
-                self.advance();
-                let (lib_name, fn_name) = if self.peek().kind == K::OpenParen {
+                if modifier.kind == K::KeywordIntern {
                     self.advance();
-                    let ident1 = self.expect_dq_ident()?;
-                    let ident2 = if let Some(_comma) = self.maybe_consume(K::Comma) {
-                        let ident2 = self.expect_dq_ident()?;
-                        Some(ident2)
+                    linkage = Some(if self.peek().kind == K::OpenParen {
+                        self.advance();
+                        let llvm_name = self.expect_dq_ident()?;
+                        self.expect_kind(K::CloseParen)?;
+                        Linkage::LlvmIntrinsic(llvm_name)
+                    } else {
+                        Linkage::Intrinsic
+                    });
+                } else if modifier.kind == K::Ident && self.token_chars(modifier) == "extern" {
+                    if linkage.is_some() {
+                        return Err(error_expected("a single intern or extern modifier", modifier));
+                    }
+                    self.advance();
+                    let fn_name = if self.peek().kind == K::OpenParen {
+                        self.advance();
+                        let symbol = self.expect_dq_ident()?;
+                        self.expect_kind(K::CloseParen)?;
+                        Some(symbol)
                     } else {
                         None
                     };
-                    let (lib_name, fn_name) = match ident2 {
-                        None => (None, Some(ident1)),
-                        Some(fn_name) => (Some(ident1), Some(fn_name)),
-                    };
-
+                    linkage =
+                        Some(Linkage::External { module_id: self.module_id, lib_name: None, fn_name });
+                } else if modifier.kind == K::Ident && self.token_chars(modifier) == "lib" {
+                    self.advance();
+                    self.expect_kind(K::OpenParen)?;
+                    lib_name = Some(self.expect_dq_ident()?);
                     self.expect_kind(K::CloseParen)?;
-                    (lib_name, fn_name)
+                    lib_token = Some(modifier);
                 } else {
-                    (None, None)
-                };
-                Linkage::External { module_id: self.module_id, lib_name, fn_name }
-            } else {
-                return Err(error_expected("fn modifier: intern or extern", modifier));
-            };
+                    return Err(error_expected("fn modifier: intern, extern, or lib", modifier));
+                }
+                if self.maybe_consume(K::Comma).is_none() {
+                    break;
+                }
+            }
             self.expect_kind(K::CloseParen)?;
-            linkage
+            match (linkage, lib_name) {
+                (Some(Linkage::External { module_id, fn_name, .. }), lib_name) => {
+                    Linkage::External { module_id, lib_name, fn_name }
+                }
+                (_, Some(_)) => {
+                    return Err(error_expected(
+                        "lib(..) requires the extern modifier",
+                        lib_token.unwrap(),
+                    ));
+                }
+                (Some(linkage), None) => linkage,
+                (None, None) => Linkage::Standard,
+            }
         } else {
             Linkage::Standard
         };
@@ -5257,6 +5282,24 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         self.emit_semantic_token(keyword, SemanticTokenKind::Namespace);
         self.advance();
+        let mut lib_name: Option<StringId> = None;
+        if self.maybe_consume(K::OpenParen).is_some() {
+            loop {
+                let modifier = self.expect_kind(K::Ident)?;
+                match self.token_chars(modifier) {
+                    "lib" => {
+                        self.expect_kind(K::OpenParen)?;
+                        lib_name = Some(self.expect_dq_ident()?);
+                        self.expect_kind(K::CloseParen)?;
+                    }
+                    _ => return Err(error_expected("ns modifier: lib", modifier)),
+                }
+                if self.maybe_consume(K::Comma).is_none() {
+                    break;
+                }
+            }
+            self.expect_kind(K::CloseParen)?;
+        }
         let mut is_type = false;
         match self.peek().kind {
             K::KeywordFor => {
@@ -5290,6 +5333,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name_span: name_token.span,
             span,
             is_type_companion: is_type,
+            lib_name,
         });
         Ok(Some(namespace_id))
     }

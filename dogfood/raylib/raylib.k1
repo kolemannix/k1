@@ -7,26 +7,26 @@ fn module(): k1/module {
   m
 }
 
-ns raylib {
+ns(lib("raylib")) raylib {
   type color = { r: u8, g: u8, b: u8, a: u8 }
 
   type rectangle = {
     x: f32, y: f32, width: f32, height: f32
   }
 
-  fn(extern("raylib", "InitWindow")) init(width: i32, height: i32, name: ptr)
-  fn(extern("raylib", "CloseWindow")) close-window()
-  fn(extern("raylib", "WindowShouldClose")) window-should-close(): bool
+  fn(extern("InitWindow")) init(width: i32, height: i32, name: ptr)
+  fn(extern("CloseWindow")) close-window()
+  fn(extern("WindowShouldClose")) window-should-close(): bool
 
-  fn(extern("raylib", "BeginDrawing")) begin-drawing()
-  fn(extern("raylib", "EndDrawing")) end-drawing()
-  fn(extern("raylib", "ClearBackground")) clear-background(color: color)
+  fn(extern("BeginDrawing")) begin-drawing()
+  fn(extern("EndDrawing")) end-drawing()
+  fn(extern("ClearBackground")) clear-background(color: color)
 
   // define void @draw-text(ptr noundef %0, i32 noundef %1, i32 noundef %2, i64 %3) #0 {
-  fn(extern("raylib", "DrawText")) draw-text(text: ptr, pos-x: i32, pos-y: i32, font-size: i32, color: color)
+  fn(extern("DrawText")) draw-text(text: ptr, pos-x: i32, pos-y: i32, font-size: i32, color: color)
 
-  fn(extern("raylib", "SetTargetFPS")) set-target-fps(fps: i32)
-  fn(extern("raylib", "GetFPS")) get-fps(): i32
+  fn(extern("SetTargetFPS")) set-target-fps(fps: i32)
+  fn(extern("GetFPS")) get-fps(): i32
 
 }
 

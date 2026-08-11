@@ -5,26 +5,26 @@ fn module(): k1/module {
   m
 }
 
-ns pg {
+ns(lib("pq")) pg {
   let CONNECTION_OK: core/c-int = 0
   let PGRES_COMMAND_OK: core/c-int = 1
   let PGRES_TUPLES_OK: core/c-int = 2
 
-  fn(extern("pq", "PQconnectdb")) connectdb(conninfo: ptr): ptr
-  fn(extern("pq", "PQstatus")) status(conn: ptr): core/c-int
-  fn(extern("pq", "PQerrorMessage")) error-message(conn: ptr): ptr
-  fn(extern("pq", "PQfinish")) finish(conn: ptr)
+  fn(extern("PQconnectdb")) connectdb(conninfo: ptr): ptr
+  fn(extern("PQstatus")) status(conn: ptr): core/c-int
+  fn(extern("PQerrorMessage")) error-message(conn: ptr): ptr
+  fn(extern("PQfinish")) finish(conn: ptr)
 
-  fn(extern("pq", "PQexec")) exec(conn: ptr, query: ptr): ptr
-  fn(extern("pq", "PQresultStatus")) result-status(result: ptr): core/c-int
-  fn(extern("pq", "PQresultErrorMessage")) result-error-message(result: ptr): ptr
-  fn(extern("pq", "PQclear")) clear(result: ptr)
+  fn(extern("PQexec")) exec(conn: ptr, query: ptr): ptr
+  fn(extern("PQresultStatus")) result-status(result: ptr): core/c-int
+  fn(extern("PQresultErrorMessage")) result-error-message(result: ptr): ptr
+  fn(extern("PQclear")) clear(result: ptr)
 
-  fn(extern("pq", "PQntuples")) n-tuples(result: ptr): core/c-int
-  fn(extern("pq", "PQnfields")) n-fields(result: ptr): core/c-int
-  fn(extern("pq", "PQfname")) field-name(result: ptr, column: core/c-int): ptr
-  fn(extern("pq", "PQgetisnull")) is-null(result: ptr, row: core/c-int, column: core/c-int): core/c-int
-  fn(extern("pq", "PQgetvalue")) get-value(result: ptr, row: core/c-int, column: core/c-int): ptr
+  fn(extern("PQntuples")) n-tuples(result: ptr): core/c-int
+  fn(extern("PQnfields")) n-fields(result: ptr): core/c-int
+  fn(extern("PQfname")) field-name(result: ptr, column: core/c-int): ptr
+  fn(extern("PQgetisnull")) is-null(result: ptr, row: core/c-int, column: core/c-int): core/c-int
+  fn(extern("PQgetvalue")) get-value(result: ptr, row: core/c-int, column: core/c-int): ptr
 }
 
 type connection = { raw: ptr }

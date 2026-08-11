@@ -140,6 +140,11 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
             let messages = module.messages.borrow();
             let Some(err) = messages.iter().find(|e| e.level == MessageLevel::Error) else {
                 if let Some(parse_error) = module.ast.errors.first() {
+                    if let TestExpectation::CompileErrorMessage { message } = &expectation {
+                        if parse_error.message().contains(message.as_str()) {
+                            return Ok(());
+                        }
+                    }
                     module
                         .write_error(
                             &mut std::io::stderr(),

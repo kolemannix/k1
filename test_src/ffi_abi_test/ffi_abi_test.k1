@@ -4,45 +4,45 @@ fn module(): k1/module {
   m
 }
 
-ns foo {
+ns(lib("foo")) foo {
 
   type very-small = { x: u8 }
   impl print for very-small { fn print-to[w: writer](self: very-small, w) { w.write("${ {self.x} }") } }
   impl equals for very-small { fn equals(self: very-small, other: very-small): bool { self.x == other.x } }
-  fn(extern("foo", "very_small")) very_small(x: very-small, y: very-small): very-small
+  fn(extern("very_small")) very_small(x: very-small, y: very-small): very-small
 
   type int-wrap = { inner: i32 }
-  fn(extern("foo", "intWrap")) int-wrap(a: int-wrap, b: int-wrap): int-wrap
+  fn(extern("intWrap")) int-wrap(a: int-wrap, b: int-wrap): int-wrap
 
   // Odd-sized structs: 3 bytes (i24) and 6 bytes (i48) coercions
   type rgb3 = { r: u8, g: u8, b: u8 }
-  fn(extern("foo", "rgb3")) rgb3(a: rgb3, b: rgb3): rgb3
+  fn(extern("rgb3")) rgb3(a: rgb3, b: rgb3): rgb3
 
   type three-shorts = { a: i16, b: i16, c: i16 }
-  fn(extern("foo", "three_shorts")) three-shorts(a: three-shorts, b: three-shorts): three-shorts
+  fn(extern("three_shorts")) three-shorts(a: three-shorts, b: three-shorts): three-shorts
 
-  fn(extern("foo", "takesRgb3Fn")) takes-rgb3-fn(f: *fn(x: rgb3) -> rgb3): rgb3
+  fn(extern("takesRgb3Fn")) takes-rgb3-fn(f: *fn(x: rgb3) -> rgb3): rgb3
 
   type small = { r: u8, g: u8, b: u8, a: u8 }
-  fn(extern("foo", "small")) small(x: small, y: small): small
+  fn(extern("small")) small(x: small, y: small): small
 
   type medium = { a: u64, b: u64 }
-  fn(extern("foo", "medium")) medium(a: medium, b: medium): medium
+  fn(extern("medium")) medium(a: medium, b: medium): medium
 
   type mixed-class-medium = { f1: f32, f2: f32, i3: array[i16, 4] }
 
   type large = { med1: medium, med2: medium }
-  fn(extern("foo", "large")) large(a: large, b: large): large
+  fn(extern("large")) large(a: large, b: large): large
 
   type HFA2 = { x: f32, y: f32 }
-  fn(extern("foo", "hfa2_add")) hfa2-add(a: HFA2, b: HFA2): HFA2
+  fn(extern("hfa2_add")) hfa2-add(a: HFA2, b: HFA2): HFA2
 
   type HFA1 = { x: f32 }
   type hfa-nested3 = { a: HFA1, b: f32, c: f32 }
-  fn(extern("foo", "hfa_nested3_add")) hfa-nested3-add(a: hfa-nested3, b: hfa-nested3): hfa-nested3
+  fn(extern("hfa_nested3_add")) hfa-nested3-add(a: hfa-nested3, b: hfa-nested3): hfa-nested3
 
   type HFA4 = { a: f64, b: f64, c: f64, d: f64 }
-  fn(extern("foo", "hfa4_add")) hfa4-add(a: HFA4, b: HFA4): HFA4
+  fn(extern("hfa4_add")) hfa4-add(a: HFA4, b: HFA4): HFA4
 
   type cx-cursor-kind = either(u32) { unexposed-decl = 1, struct-decl = 2 }
   type cx-cursor = {
@@ -51,26 +51,27 @@ ns foo {
     data: array[ptr, 3]
   }
 
-  fn(extern("foo", "rtCursor")) rt-cursor(c: cx-cursor): cx-cursor
+  fn(extern("rtCursor")) rt-cursor(c: cx-cursor): cx-cursor
 
   type cx-string = {
     data: ptr,
     private_flags: u32,
   }
-  fn(extern("foo", "getFileName")) get-file-name(s-file: ptr): cx-string 
+  fn(extern("getFileName")) get-file-name(s-file: ptr): cx-string 
 
   type cx-source-location = {
     ptr_data: array[ptr, 2],
     int_data: u32,
   }
-  fn(extern("foo", "getCursorLocation")) get-cursor-location(c: cx-cursor): cx-source-location 
+  fn(extern("getCursorLocation")) get-cursor-location(c: cx-cursor): cx-source-location 
 
-  fn(extern("foo", "takesFn")) takes-fn(f: *fn(a: u64, b: u64, c: u64, d: u64) -> i32): i32
+  fn(extern("takesFn")) takes-fn(f: *fn(a: u64, b: u64, c: u64, d: u64) -> i32): i32
 
-  fn(extern("foo", "takesFnStruct")) takes-fn-struct(f: *fn(s: { a: u64, b: u64, c: u64, d: u64 }) -> i32): i32
+  fn(extern("takesFnStruct")) takes-fn-struct(f: *fn(s: { a: u64, b: u64, c: u64, d: u64 }) -> i32): i32
 
   type tag-union = either(u32) { a(i32) = 0, b(i64) = 1, c(ptr) = 2 }
-  fn(extern("foo", "TagUnion_iszero")) tag-union-iszero(x: tag-union): i32
+  // fn-level lib overrides the ns-level lib (same lib here; exercises the explicit form)
+  fn(extern("TagUnion_iszero"), lib("foo")) tag-union-iszero(x: tag-union): i32
 
 }
 
