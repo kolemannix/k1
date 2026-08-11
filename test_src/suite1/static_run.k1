@@ -55,6 +55,9 @@ fn test() {
   assert-equals[u32](#static get-point().y, 300)
   assert-equals[i64](#static get-point().z, -222)
 
+  // Non-trivial statics as generic args: compiled and executed during inference
+  assert-equals((#static { let m = 21; m * 2 }).from-static(), 42)
+
   // Variable assign
   let goodbye: "Goodbye, World!" = #static {
     let msg = "Hello, World"

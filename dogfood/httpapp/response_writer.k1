@@ -14,8 +14,8 @@ ns response-writer {
   }
 
   fn begin(connection: *mut connection, resp: http-response) {
-    mem/push-mode(:custom-arena connection.request-arena)
-    defer mem/pop-mode()
+    mem/push-arena(connection.request-arena)
+    defer { let _ = mem/pop-arena() }
     let out = string-builder/new()
     out.write("HTTP/1.1 ${resp.status} ${response/status-text(resp.status)}\r\nContent-Type: ${resp.content-type}\r\n")
     for h in resp.extra-headers { out.write("$h\r\n") }
@@ -37,7 +37,7 @@ ns response-writer {
     let driver: *mut driver = connection.request-arena.push(.{
       connection,
       stream = body,
-      write-req = connection.request-arena.alloc[uv/write](),
+      write-req = connection.request-arena.alloc-t[uv/write](),
       bufs = list/empty[uv/buf](),
       parked = false,
     })
@@ -107,8 +107,8 @@ ns response-writer {
 
   fn pump(driver: *mut driver) {
     let connection = driver.connection
-    mem/push-mode(:custom-arena connection.request-arena)
-    defer mem/pop-mode()
+    mem/push-arena(connection.request-arena)
+    defer { let _ = mem/pop-arena() }
     driver.stream.next() is {
       :chunk group -> write-group(driver, group),
       :pending -> { driver.parked = true },

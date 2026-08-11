@@ -179,20 +179,20 @@ impl TypedProgram {
     /// Re-reads every live global's current value out of the VM for display
     fn megarepl_refresh_globals(&mut self) {
         let mr = self.megarepl.as_ref().unwrap();
-        let live: Vec<(usize, TypedGlobalId, TypeId)> = mr
-            .globals
-            .iter()
-            .enumerate()
-            .filter(|(_, g)| self.megarepl_global_is_live(g))
-            .map(|(index, g)| (index, g.global_id, self.globals.get(g.global_id).type_id))
-            .collect();
+        let mut live: Vec<(usize, TypedGlobalId, TypeId)> = vec![];
+        for (index, g) in mr.globals.iter().enumerate() {
+            if !self.megarepl_global_is_live(g) {
+                continue;
+            }
+            live.push((index, g.global_id, self.globals.get(g.global_id).type_id));
+        }
 
         let values: Vec<Option<StaticValueId>> = self.megarepl_with_vm(|k1, vm| {
-            live.iter()
-                .map(|(_, global_id, type_id)| {
-                    vm::peek_global_as_static(k1, vm, *global_id, *type_id)
-                })
-                .collect()
+            let mut values: Vec<Option<StaticValueId>> = vec![];
+            for (_, global_id, type_id) in &live {
+                values.push(vm::peek_global_as_static(k1, vm, *global_id, *type_id));
+            }
+            values
         });
         let mr = self.megarepl.as_mut().unwrap();
         for ((index, _, _), value) in live.iter().zip(values) {
@@ -315,7 +315,10 @@ impl TypedProgram {
 
     // Watchers and widgets
     fn megarepl_run_observers(&mut self, skip_cells: &[CellId]) {
-        let cells = self.megarepl.as_ref().unwrap().cells.iter().map(|c| c.id).collect_vec();
+        let mut cells: Vec<CellId> = vec![];
+        for c in &self.megarepl.as_ref().unwrap().cells {
+            cells.push(c.id);
+        }
         for watcher_id in cells {
             if !skip_cells.contains(&watcher_id) && self.megarepl_get_cell(watcher_id).is_watcher {
                 self.megarepl_execute_cell_solo(watcher_id);
@@ -669,14 +672,14 @@ impl TypedProgram {
                     self.push_block_expr_id(&mut cell_block, return_expr);
                     type_id
                 } else {
-                    let empty = self.synth_empty_struct(span);
+                    let empty = self.synth_empty_value(span);
                     let return_expr = self.exprs.add_return(empty, None, span);
                     self.push_block_expr_id(&mut cell_block, return_expr);
                     self.builtin_types.empty
                 }
             }
             None => {
-                let empty = self.synth_empty_struct(span);
+                let empty = self.synth_empty_value(span);
                 let return_expr = self.exprs.add_return(empty, None, span);
                 self.push_block_expr_id(&mut cell_block, return_expr);
                 self.builtin_types.empty

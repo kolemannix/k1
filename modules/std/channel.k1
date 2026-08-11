@@ -12,12 +12,12 @@ type mpsc[t] = { head: *mut mpsc-node[t], on-send: notify }
 
 ns for mpsc {
   fn make[t](on-send: notify): *mut mpsc[t] {
-    system-heap.new(.{ head = ptr/null.rw[mpsc-node[t]](), on-send })
+    heap.new(.{ head = ptr/null.rw[mpsc-node[t]](), on-send })
   }
 
   // Any thread
   fn send[t](self: *mut mpsc[t], value: t) {
-    let node: *mut mpsc-node[t] = system-heap.new(.{ value, next = ptr/null.rw[mpsc-node[t]]() })
+    let node: *mut mpsc-node[t] = heap.new(.{ value, next = ptr/null.rw[mpsc-node[t]]() })
     loop {
       let old = atomic/load(self.head.&, :relaxed)
       node.next = old
@@ -32,9 +32,9 @@ ns for mpsc {
     let node = atomic/xchg(self.head.&, ptr/null.rw[mpsc-node[t]](), :acquire)
     let n = node
     while not n.as[ptr].is-null() {
-      out.push-in(context :system-heap)(n.value)
+      out.push-in(heap, n.value)
       let next = n.next
-      system-heap.free-t(n)
+      heap.free-t(n)
       n = next
     }
     out.reverse()
@@ -63,7 +63,7 @@ type channel[t] = {
 
 ns for channel {
   fn make[t](cap-weight: size, weight-fn: *fn(t) -> size, drop-fn: *fn(t) -> {}): *mut channel[t] {
-    system-heap.new(.{
+    heap.new(.{
       queue = list/empty[t](),
       queued-weight = 0,
       cap-weight,
@@ -84,7 +84,7 @@ ns for channel {
     if self.closed or self.failure.is-some() { return false }
     let w = (self.weight-fn)(value)
     if self.queued-weight + w > self.cap-weight { return false }
-    self.queue.push-in(context :system-heap)(value)
+    self.queue.push-in(heap, value)
     self.queued-weight = self.queued-weight + w
     self.pending-wake = true
     true
@@ -110,9 +110,9 @@ ns for channel {
     self.closed = true
     for item in self.queue { (self.drop-fn)(item) }
     if self.queue.cap() > 0 {
-      system-heap.free(self.queue.base-ptr(), self.queue.cap() * types/size[t], types/align[t])
+      heap.free(self.queue.base-ptr(), self.queue.cap() * types/size[t], types/align[t])
     }
-    system-heap.free-t(self)
+    heap.free-t(self)
   }
 }
 

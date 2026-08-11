@@ -5,7 +5,7 @@ use crate::snap::{SnapReader, SnapWriter, restore_map_snap, write_map_snap};
 use super::*;
 
 static_assert_size!(K1Message, 12);
-static_assert_size!(AbilitySpec9nInfo, 16);
+static_assert_size!(AbilitySpec9nInfo, 20);
 static_assert_size!(SourceFileHash, 16);
 static_assert_size!(NameInNamespace, 8);
 
@@ -98,8 +98,9 @@ impl TypedProgram {
             abilities,
             ability_impls,
             ability_impl_table,
+            ability_impl_table_by_ability,
             blanket_impls,
-            function_name_to_ability,
+            function_name_to_ability_names,
             namespace_type_params,
             namespace_ast_mappings,
             function_ast_mappings,
@@ -186,8 +187,9 @@ impl TypedProgram {
         abilities.snap(w);
         ability_impls.snap(w);
         write_map_snap(w, ability_impl_table);
+        write_map_snap(w, ability_impl_table_by_ability);
         write_map_snap(w, blanket_impls);
-        write_map_snap(w, function_name_to_ability);
+        write_map_snap(w, function_name_to_ability_names);
         write_map_snap(w, namespace_type_params);
         write_map_snap(w, namespace_ast_mappings);
         write_map_snap(w, function_ast_mappings);
@@ -270,8 +272,9 @@ impl TypedProgram {
         k1.abilities.restore(r);
         k1.ability_impls.restore(r);
         k1.ability_impl_table = restore_map_snap(r);
+        k1.ability_impl_table_by_ability = restore_map_snap(r);
         k1.blanket_impls = restore_map_snap(r);
-        k1.function_name_to_ability = restore_map_snap(r);
+        k1.function_name_to_ability_names = restore_map_snap(r);
         k1.namespace_type_params = restore_map_snap(r);
         k1.namespace_ast_mappings = restore_map_snap(r);
         k1.function_ast_mappings = restore_map_snap(r);
@@ -313,6 +316,7 @@ impl TypedProgram {
         restored.inputs_hash = self.inputs_hash;
         restored.restored_module_count = self.restored_module_count;
         restored.pending_cache_writes = std::mem::take(&mut self.pending_cache_writes);
+        std::mem::swap(&mut restored.timing, &mut self.timing);
         std::mem::swap(self, &mut restored);
     }
 }

@@ -19,7 +19,7 @@ ns for string-builder {
   }
 
   fn build-tmp(self: *string-builder): string {
-    string/wrap-bytes(self.list.as-span()).cloned-in(context :tmp)()
+    string/wrap-bytes(self.list.as-span()).cloned-in(mem/tmp())
   }
 }
 

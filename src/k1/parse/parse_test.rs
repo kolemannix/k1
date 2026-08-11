@@ -2,7 +2,6 @@
 // All rights reserved.
 
 use crate::parse::*;
-use itertools::Itertools;
 use std::fs;
 
 fn make_test_ast() -> ParsedProgram {
@@ -20,7 +19,11 @@ fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'a
     lex_result.unwrap();
     let token_vec = token_vec.leak();
     println!("{:#?}", token_vec);
-    println!("{:#?}", token_vec.iter().map(|t| t.kind).collect_vec());
+    let mut kinds = vec![];
+    for t in token_vec.iter() {
+        kinds.push(t.kind);
+    }
+    println!("{:#?}", kinds);
     let ns_id = init_module(module_name, ast);
     let parser = Parser::make_for_file(module_id, module_name, ns_id, ast, token_vec, file_id);
     parser

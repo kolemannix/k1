@@ -61,9 +61,24 @@ ns ability_generic {
     fn wrapped(self): w { self.to() }
   }
 
+  // Expected return type must flow into an ability method's own type params,
+  // so sum-typed fields in a literal argument can resolve
+  type infer-box[t] = { value: ?t, tag: u64 }
+  fn make-box[t](tag: u64): *mut infer-box[t] {
+    heap.new(.{ value = :none, tag })
+  }
+
   fn test() {
 
     let _btoc: char = (101: u8).to()
+
+    let b = make-box[int](42)
+    assert(b.tag == 42)
+    assert(b.value.is-none())
+    let b2 = heap.new[infer-box[int]](.{ value = :some 5, tag = 7 })
+    assert-equals(b2.value.get(), 5)
+    heap.free-t(b)
+    heap.free-t(b2)
 
     let x: i32 = 4
 

@@ -47,7 +47,7 @@ ns orders {
   }
 
   fn load(path: string): list[order] {
-    let lines = core/files/read-to-string(context :current)(path).split-by-char('\n')
+    let lines = core/files/read-to-string(path).split-by-char('\n')
     let orders = list/empty[order]()
     for line in lines {
       // Skip the header; split-by-char already drops the trailing empty line

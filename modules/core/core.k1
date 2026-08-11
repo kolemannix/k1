@@ -124,7 +124,11 @@ ns io {
 
 ns files {
 
-  fn read-to-string(context alloc-mode: mem/alloc-mode)(path: string): string {
+  fn read-to-string(path: string): string {
+    read-to-string-in(mem/current-arena(), path)
+  }
+
+  fn read-to-string-in[a: allocator](alloc: a, path: string): string {
     let filename-c-string = path.to-c-tmp()
 
     let file = libc/files/fopen(filename-c-string.ptr, "r\0".data-ptr())
@@ -135,7 +139,7 @@ ns files {
 
     let _ = libc/files/fseek(file, 0, libc/files/SEEK_END)
     let file-size-bytes = libc/files/ftell(file)
-    let buf = buffer/allocate-in[char](file-size-bytes)
+    let buf = buffer/allocate-in[char, _](alloc, file-size-bytes)
 
     let _ = libc/files/fseek(file, 0, libc/files/SEEK_SET)
     let _ = libc/files/fread(buf.data-ptr(), buf.len(), 1, file)

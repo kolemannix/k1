@@ -30,8 +30,6 @@ fn compile(program-text: string): *tf-obj {
 }
 
 fn main(argc: core/c-int, argv: ptr): i32 {
-  let context alloc: mem/alloc-mode = :system-heap
-
   let args: span[string] = core/sys/parse-main-args(argc, argv)
   if args.len() != 2 {
     eprintln("Usage: ${args.get(0)} <fname>")

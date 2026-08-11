@@ -21,7 +21,7 @@ type deps = {
 
 // only once per thread
 fn make-deps(framework: *mut framework-deps): *deps {
-  system-heap.new(
+  heap.new(
     .{
       config = .{ jwt-secret = "asdf" },
       db-conn = .{},
@@ -108,7 +108,6 @@ fn error-response(e: routing/route-error): http-response {
 }
 
 fn home-page(): http-response {
-  let context alloc = alloc-mode:current
   let styles = core/files/read-to-string("web/styles.css")
   let template: string = core/files/read-to-string("web/header.html")
   let output = template(template, [.{ key = "styles.css", value = styles }]).!
@@ -168,7 +167,7 @@ fn publish-text(bus: *mut pubsub/bus[span[u8]], topic: string, data: string) {
 
 let mutable game-tick: u64 = 0
 fn start-mock-publisher(bus: *mut pubsub/bus[span[u8]]) {
-  let tid: *mut uv/thread = system-heap.alloc-t()
+  let tid: *mut uv/thread = heap.alloc-t()
   let rc = uv/thread_create(tid, fn arg. {
     let _ = uv/thread_setname("publisher\0".data-ptr().as())
     let bus = arg.rw[pubsub/bus[span[u8]]]()

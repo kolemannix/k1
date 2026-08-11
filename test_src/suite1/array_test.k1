@@ -14,10 +14,9 @@ fn test-literals() {
 }
 
 fn test-filled() {
-  let context alloc: mem/alloc-mode = :tmp
-  let buffer: buffer[u8] = buffer/filled-in(size = 64, value = 3)
-  let array: *array[u8, 64] = array/filled-in(3, 64)
-  let list: list[u8] = list/filled-in(size = 64, value = 3)
+  let buffer: buffer[u8] = buffer/filled-in(mem/tmp(), size = 64, value = 3)
+  let array: *array[u8, 64] = array/filled-in(mem/tmp(), 3, 64)
+  let list: list[u8] = list/filled-in(mem/tmp(), size = 64, value = 3)
   assert-equals(buffer.len, 64)
   assert-equals(array.len(), 64)
   assert-equals(list.len, 64)
@@ -29,8 +28,7 @@ fn test-filled() {
 }
 
 fn test-array() {
-  let context alloc: mem/alloc-mode = :tmp
-  let ls: list[u8] = list/filled-in(size = 10, value = 3)
+  let ls: list[u8] = list/filled-in(mem/tmp(), size = 10, value = 3)
 
   let a: *mut array[u8, 10] = list/to-array(ls, 10)
   for 0.until(a.len()) {

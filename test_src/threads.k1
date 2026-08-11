@@ -25,7 +25,7 @@ fn main(): i32 {
   //       and ptr-munging internally
   let arena = arena/init-default()
   let input = arena.push(42)
-  let output = arena.alloc[*int]()
+  let output = arena.alloc-t[*int]()
 
   let thread = std/thread/start(arena, run, input)
   std/thread/join(thread.*, output)

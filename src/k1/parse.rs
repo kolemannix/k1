@@ -11,7 +11,6 @@ use crate::vpool::VPool;
 use crate::{SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
 pub use idents::{IdentPool, IdentSlice, IdentSpanned, QIdent, StringId};
-use itertools::Itertools;
 use smallvec::smallvec;
 
 /// Make a qualified, `NamespacedIdentifier` from components
@@ -4633,10 +4632,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         loop {
             let n = self.tokens.next();
             if n.kind == K::Eof {
-                return Err(self.error_here(format!(
-                    "Reached EOF without finding {}",
-                    kinds.iter().map(|k| format!("{k}")).join(", ")
-                )));
+                let mut kinds_str = String::new();
+                for (idx, k) in kinds.iter().enumerate() {
+                    if idx > 0 {
+                        kinds_str.push_str(", ");
+                    }
+                    write!(kinds_str, "{k}").unwrap();
+                }
+                return Err(self.error_here(format!("Reached EOF without finding {kinds_str}")));
             } else if kinds.contains(&n.kind) {
                 if let Some(ident_pred) = ident_pred.as_ref()
                     && n.kind == K::Ident

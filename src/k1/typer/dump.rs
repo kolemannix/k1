@@ -181,7 +181,7 @@ impl TypedProgram {
         visited: &mut Vec<TypeId>,
     ) -> std::fmt::Result {
         w.write_str("[")?;
-        for (index, t) in self.mem.getn(spec_info.type_args).iter().enumerate() {
+        for (index, t) in spec_info.type_args.as_slice(&self.mem).iter().enumerate() {
             self.display_type_id_ext(w, *t, expand, visited)?;
             let last = index == spec_info.type_args.len() as usize - 1;
             if !last {
@@ -336,7 +336,7 @@ impl TypedProgram {
                 self.write_ident(w, defn_info.name)?;
                 w.write_str("[")?;
                 for (idx, param) in self.mem.getn(generic.params).iter().enumerate() {
-                    self.write_ident(w, param.name)?;
+                    self.write_ident(w, self.get_type_parameter(*param).name)?;
                     let last = idx == generic.params.len() as usize - 1;
                     if !last {
                         w.write_str(", ")?;
@@ -394,14 +394,19 @@ impl TypedProgram {
                 self.write_ident(w, ability.name)?;
                 let args = self.mem.getn(ao.impl_arguments);
                 if !args.is_empty() {
+                    let base = self.abilities.get(ability.base_ability_id);
+                    let mut impl_params =
+                        self.mem.getn(base.parameters).iter().filter(|p| p.is_impl_param);
                     w.write_str("[")?;
                     for (index, arg) in args.iter().enumerate() {
                         if index > 0 {
                             w.write_str(", ")?;
                         }
-                        self.write_ident(w, arg.name)?;
-                        w.write_str(" = ")?;
-                        self.display_type_id_rec(w, arg.type_id, expand, visiting)?;
+                        if let Some(param) = impl_params.next() {
+                            self.write_ident(w, param.name)?;
+                            w.write_str(" = ")?;
+                        }
+                        self.display_type_id_rec(w, *arg, expand, visiting)?;
                     }
                     w.write_str("]")?;
                 }
@@ -617,7 +622,12 @@ impl TypedProgram {
         let expr_type = self.exprs.get_type(expr_id);
         match self.exprs.get(expr_id) {
             TypedExpr::Struct(struc) => {
-                w.write_str("{\n")?;
+                if struc.fields.is_empty() {
+                    w.write_str(".{}")?;
+                    return Ok(());
+                }
+
+                w.write_str(".{\n")?;
                 for (idx, field) in self.mem.getn(struc.fields).iter().enumerate() {
                     if idx > 0 {
                         w.write_str(",\n")?;
@@ -853,7 +863,16 @@ impl TypedProgram {
         pretty: bool,
     ) -> std::fmt::Result {
         match self.static_values.get(id) {
-            StaticValue::Empty => w.write_str("{}"),
+            StaticValue::Empty(type_id) => {
+                if pretty {
+                    w.write_str("empty")
+                } else {
+                    w.write_str("empty[")?;
+                    self.display_type_id(w, *type_id, false)?;
+                    w.write_str("]")?;
+                    Ok(())
+                }
+            }
             StaticValue::Bool(b) => write!(w, "{}", *b),
             StaticValue::Char(c) => write!(w, "{}", *c as char),
             StaticValue::Int(i) => {
@@ -910,7 +929,7 @@ impl TypedProgram {
                 }
             }
             StaticValue::Struct(static_struct) => {
-                w.write_str("{ ")?;
+                w.write_str(".{ ")?;
                 let fields = self.types.get(static_struct.type_id).expect_struct().fields;
                 for (idx, (field_value_id, field_type)) in self
                     .static_values
@@ -1141,40 +1160,38 @@ impl TypedProgram {
         }
     }
 
-    pub fn display_named_type(
-        &self,
-        w: &mut impl Write,
-        nt: impl NamedType,
-        sep: &'static str,
-    ) -> std::fmt::Result {
-        write!(w, "{}{} {}", self.ident_str(nt.name()), sep, self.type_id_to_string(nt.type_id()))
-    }
-
-    pub fn named_type_to_string(&self, nt: impl NamedType) -> String {
-        let mut s: String = String::with_capacity(128);
-        self.display_named_type(&mut s, nt, " :=").unwrap();
-        s
-    }
-
     pub fn display_ability_signature(
         &self,
         w: &mut impl Write,
         ability_id: AbilityId,
-        impl_arguments: &[NameAndType],
+        impl_arguments: TypeIdSlice,
     ) -> std::fmt::Result {
         let ability = self.abilities.get(ability_id);
         self.write_ident(w, ability.name)?;
-        if ability.parameters.is_empty() && ability.kind.arguments().is_empty() {
+        if ability.parameters.is_empty() && ability.kind.arguments(&self.mem).is_empty() {
             return Ok(());
         }
+        // Argument slices zip with the base ability's params: ability-side then impl-side
+        let base = self.abilities.get(ability.base_ability_id);
+        let base_params = self.mem.getn(base.parameters);
         write!(w, "[")?;
-        for arg in self.mem.getn(ability.kind.arguments()) {
-            self.display_named_type(w, arg, " :=")?;
+        let mut ability_params = base_params.iter().filter(|p| p.is_ability_side_param());
+        for arg in ability.kind.arguments(&self.mem) {
+            if let Some(param) = ability_params.next() {
+                self.write_ident(w, param.name)?;
+                w.write_str(" := ")?;
+            }
+            w.write_str(&self.type_id_to_string(*arg))?;
             w.write_str(", ")?;
         }
-        for arg in impl_arguments {
+        let mut impl_params = base_params.iter().filter(|p| !p.is_ability_side_param());
+        for arg in self.mem.getn(impl_arguments) {
             w.write_str("impl ")?;
-            self.display_named_type(w, arg, " :=")?;
+            if let Some(param) = impl_params.next() {
+                self.write_ident(w, param.name)?;
+                w.write_str(" := ")?;
+            }
+            w.write_str(&self.type_id_to_string(*arg))?;
             w.write_str(", ")?;
         }
         write!(w, "]")?;
@@ -1183,22 +1200,18 @@ impl TypedProgram {
 
     pub fn ability_signature_to_string(&self, sig: TypedAbilitySignature) -> String {
         let mut s = String::new();
-        self.display_ability_signature(
-            &mut s,
-            sig.specialized_ability_id,
-            self.mem.getn(sig.impl_arguments),
-        )
-        .unwrap();
+        self.display_ability_signature(&mut s, sig.specialized_ability_id, sig.impl_arguments)
+            .unwrap();
         s
     }
 
     pub fn ability_impl_signature_to_string(
         &self,
         ability_id: AbilityId,
-        impl_arguments: NamedTypeSlice,
+        impl_arguments: TypeIdSlice,
     ) -> String {
         let mut s = String::new();
-        self.display_ability_signature(&mut s, ability_id, self.mem.getn(impl_arguments)).unwrap();
+        self.display_ability_signature(&mut s, ability_id, impl_arguments).unwrap();
         s
     }
 
@@ -1217,7 +1230,7 @@ impl TypedProgram {
             AbilityImplKind::BuiltinDerived => "builtin_derived",
         };
         write!(w, "{kind_str:10} ")?;
-        self.display_ability_signature(w, i.ability_id, self.mem.getn(i.impl_arguments))?;
+        self.display_ability_signature(w, i.ability_id, i.impl_arguments)?;
         write!(w, " for ")?;
         self.display_type_id(w, i.self_type_id, false)?;
         if display_functions {
@@ -1292,28 +1305,6 @@ impl TypedProgram {
         s
     }
 
-    pub fn pretty_print_named_type_slice(
-        &self,
-        types: MSlice<NameAndType, TypedProgram>,
-        sep: &str,
-    ) -> String {
-        self.pretty_print_named_types(self.mem.getn(types), sep)
-    }
-
-    pub fn pretty_print_named_types(&self, types: &[impl NamedType], sep: &str) -> String {
-        let mut s = String::new();
-        let mut first = true;
-        for nt in types {
-            if !first {
-                s.push_str(sep)
-            }
-            write!(s, "{} := {}", self.ident_str(nt.name()), self.type_id_to_string(nt.type_id()))
-                .unwrap();
-            first = false;
-        }
-        s
-    }
-
     pub fn write_ident<W: Write + ?Sized>(&self, w: &mut W, ident: StringId) -> std::fmt::Result {
         w.write_str(self.ident_str(ident))
     }
@@ -1353,17 +1344,22 @@ impl TypedProgram {
                 if idx > 0 {
                     w.write_str(", ")?;
                 }
-                self.write_ident(w, tp.name)?;
+                self.write_ident(w, self.get_type_parameter(*tp).name)?;
                 // FIXME: render the type param constraints, including fnlikes
             }
             w.write_char(']')?;
         } else if let Some(spec_info) = specialization_info {
+            let parent_type_params = self.get_function(spec_info.parent_function).type_params;
             w.write_char('[')?;
-            for (index, arg) in self.mem.getn(spec_info.type_arguments).iter().enumerate() {
+            for (index, arg) in spec_info.type_arguments.as_slice(&self.mem).iter().enumerate() {
                 if index > 0 {
                     w.write_str(", ")?;
                 }
-                self.display_named_type(w, *arg, " :=")?;
+                if let Some(param) = self.mem.getn(parent_type_params).get(index) {
+                    self.write_ident(w, self.get_type_parameter(*param).name)?;
+                    w.write_str(" := ")?;
+                }
+                w.write_str(&self.type_id_to_string(*arg))?;
             }
             w.write_char(']')?;
         }

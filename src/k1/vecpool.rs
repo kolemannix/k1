@@ -327,6 +327,15 @@ impl<T: Copy, Index: PoolIndex> VecPool<T, Index> {
     }
 }
 
+
+// WHEN T IS EQ
+#[allow(unused)]
+impl<T: PartialEq, Index: PoolIndex> VecPool<T, Index> {
+    pub fn slice_contains(&self, handle: SliceHandle<Index>, elem: &T) -> bool {
+        self.get_slice(handle).contains(elem)
+    }
+}
+
 /// WHEN T IS COPY AND EQ
 #[allow(unused)]
 impl<T: Copy + PartialEq + Eq, Index: PoolIndex> VecPool<T, Index> {
@@ -341,14 +350,6 @@ impl<T: Copy + PartialEq + Eq, Index: PoolIndex> VecPool<T, Index> {
         let slice1 = self.get_slice(handle1);
         let slice2 = self.get_slice(handle2);
         slice1 == slice2
-    }
-}
-
-// WHEN T IS EQ
-#[allow(unused)]
-impl<T: PartialEq, Index: PoolIndex> VecPool<T, Index> {
-    pub fn slice_contains(&self, handle: SliceHandle<Index>, elem: &T) -> bool {
-        self.get_slice(handle).contains(elem)
     }
 }
 

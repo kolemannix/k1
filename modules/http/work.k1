@@ -1,9 +1,9 @@
 ns work {
   fn init-work-queue(uv-loop: *mut uv-loop) {
-    let queue: *mut uv-work-queue = system-heap.new(.{
+    let queue: *mut uv-work-queue = heap.new(.{
       uv-loop,
-      async-handle = system-heap.alloc-t[uv/async],
-      mutex = system-heap.alloc-t[uv/mutex],
+      async-handle = heap.alloc-t[uv/async],
+      mutex = heap.alloc-t[uv/mutex],
       submissions = list/empty[uv-work-submission](),
     })
   
@@ -15,9 +15,9 @@ ns work {
     let async-rc = uv/async_init(uv-loop, queue.async-handle, drain-work-queue)
     if async-rc != 0 {
       uv/mutex_destroy(queue.mutex)
-      system-heap.free-t(queue.async-handle)
-      system-heap.free-t(queue.mutex)
-      system-heap.free-t(queue)
+      heap.free-t(queue.async-handle)
+      heap.free-t(queue.mutex)
+      heap.free-t(queue)
       crash("uv_async_init for work queue failed: $async-rc")
     }
   
@@ -32,7 +32,7 @@ ns work {
     let queue = work-queue.as[*mut uv-work-queue]
   
     uv/mutex_lock(queue.mutex)
-    queue.submissions.push-in(context :system-heap)(.{ req, work-cb, after-cb })
+    queue.submissions.push-in(heap, .{ req, work-cb, after-cb })
     uv/mutex_unlock(queue.mutex)
   
     let send-rc = uv/async_send(queue.async-handle)

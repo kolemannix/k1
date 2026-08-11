@@ -10,7 +10,7 @@ let mutable live-cells: u64 = 0
 ns for rc {
   fn alloc[t](value: t, drop-fn: ?*fn(*mut t) -> {}): rc[t] {
     let _ = atomic/fetch-add(live-cells.&, 1, :relaxed)
-    .{ inner = system-heap.new(.{ count = 1, drop-fn, value }) }
+    .{ inner = heap.new(.{ count = 1, drop-fn, value }) }
   }
 
   fn new[t](value: t): rc[t] { alloc(value, :none) }
@@ -30,7 +30,7 @@ ns for rc {
     if prev == 1 {
       atomic/fence(:acquire)
       if self.inner.drop-fn is :some drop { drop(self.inner.value.&) }
-      system-heap.free-t(self.inner)
+      heap.free-t(self.inner)
       let _ = atomic/fetch-sub(live-cells.&, 1, :relaxed)
     }
   }
@@ -59,23 +59,23 @@ type heap-bytes = { raw: span[u8] }
 type heap-string = { raw: string }
 
 ns for heap-bytes {
-  fn cloned(bytes: span[u8]): heap-bytes { .{ raw = bytes.cloned-in(context :system-heap)() } }
+  fn cloned(bytes: span[u8]): heap-bytes { .{ raw = bytes.cloned-in(heap) } }
 }
 
 impl owned[raw = span[u8]] for heap-bytes {
   fn adopt(value: span[u8]): heap-bytes { .{ raw = value } }
   fn raw(self: heap-bytes): span[u8] { self.raw }
-  fn free(self: heap-bytes) { system-heap.free(self.raw.data-ptr(), self.raw.len(), 1) }
+  fn free(self: heap-bytes) { heap.free(self.raw.data-ptr(), self.raw.len(), 1) }
 }
 
 ns for heap-string {
-  fn cloned(s: string): heap-string { .{ raw = s.cloned-in(context :system-heap)() } }
+  fn cloned(s: string): heap-string { .{ raw = s.cloned-in(heap) } }
 }
 
 impl owned[raw = string] for heap-string {
   fn adopt(value: string): heap-string { .{ raw = value } }
   fn raw(self: heap-string): string { self.raw }
-  fn free(self: heap-string) { system-heap.free(self.raw.data-ptr(), self.raw.len(), 1) }
+  fn free(self: heap-string) { heap.free(self.raw.data-ptr(), self.raw.len(), 1) }
 }
 
 // Refcounted byte payloads: the common currency for zero-copy fan-out.

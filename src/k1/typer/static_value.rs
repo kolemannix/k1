@@ -50,7 +50,7 @@ nz_u32_id!(StaticValueId);
 static_assert_size!(StaticValue, 24);
 #[derive(Clone, Copy)]
 pub enum StaticValue {
-    Empty,
+    Empty(TypeId),
     Bool(bool),
     Char(u8),
     Int(TypedIntValue),
@@ -69,7 +69,7 @@ pub enum StaticValue {
 impl StaticValue {
     pub fn kind_name(&self) -> &'static str {
         match self {
-            StaticValue::Empty => "empty",
+            StaticValue::Empty(_) => "empty",
             StaticValue::Bool(_) => "bool",
             StaticValue::Char(_) => "char",
             StaticValue::Int(i) => i.kind_name(),
@@ -145,7 +145,7 @@ impl DepHash<StaticValuePool> for StaticValue {
         use std::hash::Hash;
         std::mem::discriminant(self).hash(state);
         match self {
-            StaticValue::Empty => {}
+            StaticValue::Empty(type_id) => type_id.hash(state),
             StaticValue::Bool(b) => b.hash(state),
             StaticValue::Char(c) => c.hash(state),
             StaticValue::Int(i) => i.hash(state),
@@ -190,7 +190,7 @@ impl DepHash<StaticValuePool> for StaticValue {
 impl DepEq<StaticValuePool> for StaticValue {
     fn dep_eq(&self, other: &Self, pool: &StaticValuePool) -> bool {
         match (self, other) {
-            (StaticValue::Empty, StaticValue::Empty) => true,
+            (StaticValue::Empty(t1), StaticValue::Empty(t2)) => *t1 == *t2,
             (StaticValue::Bool(a), StaticValue::Bool(b)) => *a == *b,
             (StaticValue::Char(a), StaticValue::Char(b)) => *a == *b,
             (StaticValue::Int(a), StaticValue::Int(b)) => *a == *b,
@@ -238,7 +238,7 @@ impl StaticValuePool {
         let mut pool = VPool::make("static_values");
         let false_id = pool.add(StaticValue::Bool(false));
         let true_id = pool.add(StaticValue::Bool(true));
-        let empty_id = pool.add(StaticValue::Empty);
+        let empty_id = pool.add(StaticValue::Empty(EMPTY_TYPE_ID));
         let nullptr_id = pool.add(StaticValue::Zero(POINTER_TYPE_ID));
         StaticValuePool {
             mem: kmem::Mem::make(),
@@ -327,6 +327,15 @@ impl StaticValuePool {
         self.add(StaticValue::Struct(StaticStruct { type_id, fields }))
     }
 
+    pub fn add_empty_typed(&mut self, type_id: TypeId) -> StaticValueId {
+        // the canonical anonymous empty vs a specific zero-sized type id
+        if type_id == EMPTY_TYPE_ID {
+            self.empty_id()
+        } else {
+            self.add(StaticValue::Empty(type_id))
+        }
+    }
+
     pub fn add_struct_from_slice(
         &mut self,
         type_id: TypeId,
@@ -357,7 +366,6 @@ impl StaticValuePool {
 
     pub fn add(&mut self, value: StaticValue) -> StaticValueId {
         match value {
-            StaticValue::Struct(s) if s.fields.is_empty() => return self.empty_id,
             StaticValue::Bool(false) => return self.false_id(),
             StaticValue::Bool(true) => return self.true_id(),
             _ => {}

@@ -1984,17 +1984,21 @@ impl<T: Copy, Tag, const N: usize> Default for MSpillSlice<T, N, Tag> {
 }
 
 impl<T: Copy, Tag, const N: usize> MSpillSlice<T, N, Tag> {
+    fn zeroed_inline() -> [MaybeUninit<T>; N] {
+        // SAFETY: MaybeUninit<T> does not require initialization.
+        unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::zeroed().assume_init() }
+    }
+
     pub fn empty() -> Self {
         assert!(N > 0);
-
-        // SAFETY: MaybeUninit<T> array does not require initialization.
-        let inline = unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init() };
-        Self { len_flags: 0, storage: MSpillSliceStorage { inline } }
+        Self { len_flags: 0, storage: MSpillSliceStorage { inline: Self::zeroed_inline() } }
     }
 
     fn spilled(len: u32, data: MSlice<T, Tag>) -> Self {
         debug_assert!(len <= LEN_MASK);
-        Self { len_flags: len | SPILLED_BIT, storage: MSpillSliceStorage { spill: data } }
+        let mut storage = MSpillSliceStorage { inline: Self::zeroed_inline() };
+        storage.spill = data;
+        Self { len_flags: len | SPILLED_BIT, storage }
     }
 
     fn inline(len: u32, data: [MaybeUninit<T>; N]) -> Self {
@@ -2031,7 +2035,7 @@ impl<T: Copy, Tag, const N: usize> MSpillSlice<T, N, Tag> {
 
     pub fn from_slice(ts: &[T]) -> MSpillSlice<T, N, Tag> {
         assert!(N >= ts.len());
-        let mut inline = [MaybeUninit::<T>::uninit(); N];
+        let mut inline = Self::zeroed_inline();
         for (i, t) in ts.iter().enumerate() {
             inline[i].write(*t);
         }
@@ -2040,11 +2044,25 @@ impl<T: Copy, Tag, const N: usize> MSpillSlice<T, N, Tag> {
 
     pub fn from_array<const M: usize>(ts: [T; M]) -> MSpillSlice<T, N, Tag> {
         debug_assert!(N >= M);
-        let mut inline = [MaybeUninit::<T>::uninit(); N];
+        let mut inline = Self::zeroed_inline();
         for (i, t) in ts.iter().enumerate() {
             inline[i].write(*t);
         }
         Self::inline(ts.len() as u32, inline)
+    }
+
+    pub fn from_slice_in(ts: &[T], mem: &mut Mem<Tag>) -> MSpillSlice<T, N, Tag> {
+        if ts.len() <= N {
+            Self::from_slice(ts)
+        } else {
+            Self::spilled(ts.len() as u32, mem.pushn(ts))
+        }
+    }
+}
+
+impl<T: Copy, Tag, const N: usize> std::fmt::Debug for MSpillSlice<T, N, Tag> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MSpillSlice(len={}, spilled={})", self.len(), self.is_spilled())
     }
 }
 

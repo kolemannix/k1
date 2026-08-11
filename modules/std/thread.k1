@@ -9,7 +9,7 @@ ns pthread {
   extern("pthread_join") fn pthread_join(thread: thread, retval: ptr): i32
 }
 fn start[t](arena: *mut arena, function: *fn(*mut t) -> ptr, input: *t): *thread {
-  let thread: *thread = arena.alloc[thread]()
+  let thread: *thread = arena.alloc-t[thread]()
   let ret = pthread/pthread_create(thread, ptr/null, function.as[ptr], input.as[ptr])
   if ret < 0 {
     crash("pthread_create failed")

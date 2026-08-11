@@ -103,7 +103,7 @@ pub fn execute_compiled_unit(
 ) -> K1Result<StaticValueId> {
     let raw = execute_compiled_unit_raw(k1, vm, unit_id, arguments, span, report_messages)?;
     if !raw.returns_value {
-        return Ok(k1.static_values.empty_id());
+        return Ok(k1.static_values.add_empty_typed(raw.result_type_id));
     }
     let ferry_start = k1.timing.clock.raw();
     let loaded = load_value(raw.ret_pt, raw.ret_addr);
@@ -1110,40 +1110,6 @@ fn exec_builtin(
             let name_value_id = *k1.type_names.get(&type_id).unwrap();
             let name_string_value = vm::static_value_to_vm_value(k1, name_value_id, vm.eval_span);
             Ok(BuiltinOutcome::Value(name_string_value))
-        }
-        BackendBuiltin::Allocate | BackendBuiltin::AllocateZeroed => {
-            let zero = builtin == BackendBuiltin::AllocateZeroed;
-            let size = args[0];
-            let align = args[1];
-            let Ok(layout) =
-                std::alloc::Layout::from_size_align(size.bits() as usize, align.bits() as usize)
-            else {
-                kbail!(
-                    k1,
-                    vm.eval_span,
-                    "Rust didn't like this layout: size={size}, align={align}"
-                );
-            };
-            let ptr = vm::allocate(layout, zero);
-            Ok(BuiltinOutcome::Value(Value::ptr(ptr)))
-        }
-        BackendBuiltin::Reallocate => {
-            let old_ptr = args[0];
-            let old_size = args[1];
-            let align = args[2];
-            let new_size = args[3];
-            let layout =
-                std::alloc::Layout::from_size_align(old_size.as_usize(), align.as_usize()).unwrap();
-            let ptr = unsafe { std::alloc::realloc(old_ptr.as_ptr(), layout, new_size.as_usize()) };
-            Ok(BuiltinOutcome::Value(Value::ptr(ptr)))
-        }
-        BackendBuiltin::Free => {
-            let ptr = args[0].as_ptr();
-            let size = args[1].as_usize();
-            let align = args[2].as_usize();
-            let layout = std::alloc::Layout::from_size_align(size, align).unwrap();
-            unsafe { std::alloc::dealloc(ptr, layout) };
-            Ok(BuiltinOutcome::Value(Value::ptr(ptr)))
         }
         BackendBuiltin::MemCopy | BackendBuiltin::MemMove => {
             let dst = args[0];

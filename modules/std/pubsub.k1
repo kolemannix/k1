@@ -39,7 +39,7 @@ ns pubsub {
     subscriber-cap-weight: size,
     weight-fn: *fn(rc[t]) -> size,
   ): *mut bus[t] {
-    system-heap.new(.{
+    heap.new(.{
       ingress = mpsc/make[event[t]](on-event),
       scratch = list/empty[event[t]](),
       subscribers = list/empty[*mut subscription[t]](),
@@ -65,7 +65,7 @@ ns pubsub {
         weight-fn = self.weight-fn,
         drop-fn = fn(value: rc[t]) value.release(),
       )
-      let sub: *mut subscription[t] = system-heap.new(.{
+      let sub: *mut subscription[t] = heap.new(.{
         bus = self,
         topic = heap-string/cloned(topic).to-rc(),
         chan,
@@ -97,9 +97,7 @@ ns pubsub {
       // synchronously and detach its subscription from subscribers, so never
       // wake while iterating that list. One flush per subscriber also
       // coalesces multi-event batches.
-      mem/push-mode(:tmp)
-      let to-flush = self.subscribers.cloned()
-      let _ = mem/pop-mode()
+      let to-flush = mem/with-arena(mem/tmp(), self.subscribers.cloned())
       for sub in to-flush { sub.chan.flush() }
     }
   }
@@ -119,7 +117,7 @@ ns pubsub {
 
     fn start(self: *mut subscription[t], waker: waker) {
       source@(channel[rc[t]])/start(self.chan, waker)
-      self.bus.subscribers.push-in(context :system-heap)(self)
+      self.bus.subscribers.push-in(heap, self)
     }
 
     fn stop(self: *mut subscription[t]) {
@@ -135,7 +133,7 @@ ns pubsub {
       }
       self.chan.close-and-free()
       self.topic.release()
-      system-heap.free-t(self)
+      heap.free-t(self)
     }
   }
 }

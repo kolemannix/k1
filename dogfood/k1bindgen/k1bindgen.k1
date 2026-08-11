@@ -90,7 +90,6 @@ type bindgen-args = {
 fn start(args: span[string]): result[string, string] {
   let args = std/sys/parse-args[bindgen-args](args, []) is { :ok args -> args, :err msg -> return :err "Failed to parse arguments: $msg" }
 
-  let context alloc: mem/alloc-mode = :tmp
 
   let index: CXIndex = clang/createIndex(1, 1)
   let unit: CXTranslationUnit = uninit
@@ -124,11 +123,11 @@ fn start(args: span[string]): result[string, string] {
   }
 
   let cursor: clang/CXCursor = clang/getTranslationUnitCursor(unit)
-  let parsed-renames = map/with-capacity-in[string, string](args.rename.len())
+  let parsed-renames = map/with-capacity-in[string, string, _](mem/tmp(), args.rename.len())
   for s in args.rename {
     let parts = s.split-by-char(':')
     if parts.len() != 2 eprintln("Bad rename: $s")
-    parsed-renames.insert-in(parts.get(0), parts.get(1))
+    parsed-renames.insert-in(mem/tmp(), parts.get(0), parts.get(1))
   }
   let state: bindgen-state = .{
     lib-name = args.lib-name,
@@ -136,8 +135,8 @@ fn start(args: span[string]): result[string, string] {
     defns = list/empty(),
     skip-system-defns = args.system != :some "true",
     exclude-substrings = args.exclude,
-    include-names = set/from-span-in(args.include.as-span()),
-    opaque-names = set/from-span-in(args.opaque.as-span()),
+    include-names = set/from-span-in(mem/tmp(), args.include.as-span()),
+    opaque-names = set/from-span-in(mem/tmp(), args.opaque.as-span()),
     name-config = .{ suffix-strips = args.strip-suffix, prefix-strips = args.strip-prefix, renames = parsed-renames },
   }
   clang/visitChildren(

@@ -39,6 +39,7 @@ pointer-free predicate - pod/serializable?
 - [ ] Use to report escaped stack pointers
 
 ## grab bag list mid2026
+- [ ] Add 'self -> *self' thunk adapters for ability objects, `dyn[allocator]` is impossible
 - [ ] Warn on zeroed() for non zeroable type
 - [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
 - [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
@@ -142,8 +143,9 @@ bindgen dogfood list
 ## Vendor'd Libraries
 - [ ] postgres client
 - [x] linker args / "use system lib"
-- [ ] http server: perhaps https://github.com/jeremycw/httpserver.h, or just libmicrohttpd
-- [ ] datastar
+- [x] libuv module
+- [x] http module
+- [ ] datastar-based web framework
 
 ## K1 Profiler
 Add `core` and/or compiler support to allow block profiling of k1 programs

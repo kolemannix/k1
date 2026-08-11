@@ -68,6 +68,17 @@ fn test() {
   let _f: i32 = -2147483648i32
   let _g: u64 = 18446744073709551615u64
   let _h: i64 = -9223372036854775808i64
+  let _i: size = 5size
+  let _j: usize = 7usize
+  let _k: int = -3int
+  let _l: uint = 9uint
+
+  // Prefixes, underscores, negatives
+  assert-equals(-0x1F, -31)
+  assert-equals(0b1010u8, 10)
+  assert-equals(-1_0_0, -100)
+  assert-equals(1_000_000, 1000000)
+  assert-equals(0xdead_beefu32, 3735928559u32)
 
   // Coercions
   // Unsigned widen

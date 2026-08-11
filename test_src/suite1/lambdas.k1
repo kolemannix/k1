@@ -165,11 +165,11 @@ fn escape-list-test() {
 
 fn arena-mode-test() {
   let a = core/arena/init-default()
-  mem/push-mode(:custom-arena a)
+  mem/push-arena(a)
   let n = 5
   let in-arena = fn[n](x: int) x + n
-  let _ = mem/pop-mode()
-  // The env is a by-value local, so no allocation happened and the mode is irrelevant
+  let _ = mem/pop-arena()
+  // The env is a by-value local, so no allocation happened and the arena is irrelevant
   assert-equals(in-arena(1), 6)
 }
 

@@ -84,6 +84,8 @@ panic = "abort"
 lto = "thin"
 
 [lints.clippy]
+# Question mark can be very brittle over return type changes
+question_mark = "allow"
 new_without_default = "allow"
 clone_on_copy = "allow"
 # Variable names can add value even if directly returned

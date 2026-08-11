@@ -58,8 +58,8 @@ ns for buffer {
     clone
   }
 
-  fn filled-in[t](context mode: mem/alloc-mode)(size: size, value: t): buffer[t] {
-    let buf: buffer[t] = allocate-in[t](size)
+  fn filled-in[t, a: allocator](alloc: a, size: size, value: t): buffer[t] {
+    let buf: buffer[t] = allocate-in[t, _](alloc, size)
 
     value is {
       type[u8](byte) -> {
@@ -81,10 +81,10 @@ ns for buffer {
   }
 
   fn filled[t](size: size, value: t): buffer[t] {
-    buffer/filled-in[t](context :current)(size, value)
+    buffer/filled-in[t, _](mem/current-arena(), size, value)
   }
 
-  fn allocate-in[t](context alloc: mem/alloc-mode)(count: size): buffer[t] {
+  fn allocate-in[t, a: allocator](alloc: a, count: size): buffer[t] {
     let ptr = if count == 0 {
       ptr/null
     } else {
@@ -96,17 +96,17 @@ ns for buffer {
   }
 
   fn allocate[t](count: size): buffer[t] {
-    allocate-in[t](context :current)(count)
+    allocate-in[t, _](mem/current-arena(), count)
   }
 
   ////////////////////////
   // Modification
 
-  fn _grow-to[t](context alloc: mem/alloc-mode)(self: *mut buffer[t], new-count: size): empty {
+  fn _grow-to[t, a: allocator](self: *mut buffer[t], alloc: a, new-count: size): empty {
     let new-size = buffer-size-bytes[t](new-count)
     let old-size = buffer-size-bytes[t](self.len)
     let new-ptr = alloc.realloc(
-      ptr = self.data-ptr(),
+      old-ptr = self.data-ptr(),
       old-size = old-size,
       align = core/types/align[t](),
       new-size = new-size,
@@ -114,14 +114,14 @@ ns for buffer {
     self.* = .{ len = new-count, data = new-ptr.rw[t] }
   }
 
-  fn _enlarged-clone-in[t](context alloc: mem/alloc-mode)(self: buffer[t], new-count: size): buffer[t] {
-    let new-buffer = allocate-in[t](new-count)
+  fn _enlarged-clone-in[t, a: allocator](self: buffer[t], alloc: a, new-count: size): buffer[t] {
+    let new-buffer = allocate-in[t, _](alloc, new-count)
     copy[t](src = self, dst = new-buffer)
     new-buffer
   }
 
   fn _enlarged-clone[t](self: buffer[t], new-count: size): buffer[t] {
-    _enlarged-clone-in[t](context :current)(self, new-count)
+    self._enlarged-clone-in[t, _](mem/current-arena(), new-count)
   }
 
   fn copy[t](src: buffer[t], dst: buffer[t]) {
@@ -142,9 +142,8 @@ ns for buffer {
     mem/move(dst = dst.data-ptr(), src = src.data-ptr(), count = num-bytes)
   }
 
-  fn cloned-in[t](context mode: mem/alloc-mode)(self: buffer[t]): buffer[t] {
-    let clone = self._enlarged-clone-in(new-count = self.len)
-    clone
+  fn cloned-in[t, a: allocator](self: buffer[t], alloc: a): buffer[t] {
+    self._enlarged-clone-in(alloc, new-count = self.len)
   }
 
   // Performs a shifting remove, but does not shrink buffer.len

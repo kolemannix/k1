@@ -549,13 +549,13 @@ impl ModuleRemainingSources {
             if !self.is_dir {
                 return Ok(vec![]);
             }
-            collect_module_source_paths(&self.module_dir, &self.root_path)?
-                .into_iter()
-                .map(|path| {
-                    let override_content = overrides.get(&path).cloned();
-                    read_source_file(path, override_content)
-                })
-                .collect::<Result<Vec<_>, String>>()
+            let paths = collect_module_source_paths(&self.module_dir, &self.root_path)?;
+            let mut sources = Vec::with_capacity(paths.len());
+            for path in paths {
+                let override_content = overrides.get(&path).cloned();
+                sources.push(read_source_file(path, override_content)?);
+            }
+            Ok(sources)
         });
         ModuleRemainingSourcesHandle { reader }
     }
@@ -683,19 +683,23 @@ fn output_manifest(req: &SetupRequest, scratch: &mut Mem<()>) -> Result<String> 
 fn setup_fingerprint(req: &SetupRequest, scratch: &mut Mem<()>, setup_src: &str) -> Result<String> {
     use std::fmt::Write;
     let module_dir = req.idents.get_string(req.module_dir);
-    let get_strings =
-        |ids: &[StringId]| ids.iter().map(|id| req.idents.get_string(*id)).collect::<Vec<_>>();
+    let get_strings = |ids: &[StringId]| {
+        let mut strings = Vec::with_capacity(ids.len());
+        for id in ids {
+            strings.push(req.idents.get_string(*id));
+        }
+        strings
+    };
     let mut s = String::new();
     writeln!(s, "k1-setup-stamp v2").unwrap();
     writeln!(s, "target: {}", req.target.to_str()).unwrap();
     writeln!(s, "setup.k1: {:016x}", content_hash64(setup_src.as_bytes())).unwrap();
     writeln!(s, "outputs: {}", get_strings(req.outputs).join("|")).unwrap();
     writeln!(s, "inputs: {}", get_strings(req.inputs).join("|")).unwrap();
-    let output_paths: Vec<MStr<()>> = req
-        .outputs
-        .iter()
-        .map(|o| kpath::join_tmp(scratch, req.idents, req.module_dir, *o))
-        .collect();
+    let mut output_paths: Vec<MStr<()>> = Vec::with_capacity(req.outputs.len());
+    for o in req.outputs {
+        output_paths.push(kpath::join_tmp(scratch, req.idents, req.module_dir, *o));
+    }
     for input in req.inputs {
         let input_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *input);
         let mut matched: Vec<String> = vec![];
@@ -816,7 +820,10 @@ fn read_module_list(cache_dir: &Path, config: &CompilerConfig) -> Option<Vec<Lis
         } else if let Some(rest) = line.strip_prefix("setup\t") {
             let mut parts = rest.split('\t');
             let n_out: usize = parts.next()?.parse().ok()?;
-            let mut outs: Vec<String> = parts.map(str::to_string).collect();
+            let mut outs: Vec<String> = vec![];
+            for part in parts {
+                outs.push(part.to_string());
+            }
             if outs.len() < n_out {
                 return None;
             }
@@ -944,8 +951,20 @@ fn listed_setup_is_fresh(
     let Ok(setup_src) = fs::read_to_string(Path::new(setup_k1_path.as_str())) else {
         return false;
     };
-    let outputs: Vec<StringId> = outputs.iter().map(|s| idents.intern(s)).collect();
-    let inputs: Vec<StringId> = inputs.iter().map(|s| idents.intern(s)).collect();
+    let outputs: Vec<StringId> = {
+        let mut ids = Vec::with_capacity(outputs.len());
+        for s in outputs {
+            ids.push(idents.intern(s));
+        }
+        ids
+    };
+    let inputs: Vec<StringId> = {
+        let mut ids = Vec::with_capacity(inputs.len());
+        for s in inputs {
+            ids.push(idents.intern(s));
+        }
+        ids
+    };
     let req = SetupRequest {
         idents,
         module_dir,

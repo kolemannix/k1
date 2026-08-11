@@ -8,8 +8,6 @@ ns for list {
   ///////////////////////////
   // Construction functions
 
-  use mem/alloc-mode
-
   fn empty[t](): list[t] {
     with-capacity[t](0)
   }
@@ -29,8 +27,8 @@ ns for list {
     .{ len = size, buffer }
   }
 
-  fn filled-in[t](context mode: alloc-mode)(size: size, value: t): list[t] {
-    let buffer = buffer/filled-in(size, value)
+  fn filled-in[t, a: allocator](alloc: a, size: size, value: t): list[t] {
+    let buffer = buffer/filled-in(alloc, size, value)
     .{ len = size, buffer }
   }
 
@@ -39,18 +37,18 @@ ns for list {
     .{ len = 0, buffer }
   }
 
-  fn with-capacity-in[t](context mode: alloc-mode)(cap: size): list[t] {
-    let buffer = buffer/allocate-in[t](cap)
+  fn with-capacity-in[t, a: allocator](alloc: a, cap: size): list[t] {
+    let buffer = buffer/allocate-in[t, _](alloc, cap)
     .{ len = 0, buffer }
   }
 
-  fn reserve-in[t](context alloc: alloc-mode)(self: *mut list[t], count: size) {
+  fn reserve-in[t, a: allocator](self: *mut list[t], alloc: a, count: size) {
     if self.cap() >= count return
-    self.buffer._grow-to[t](count)
+    self.buffer._grow-to[t, _](alloc, count)
   }
 
   fn reserve[t](self: *mut list[t], count: size) {
-    self.reserve-in[t](context :current)(count)
+    self.reserve-in[t, _](mem/current-arena(), count)
   }
 
   fn single[t](value: t): list[t] {
@@ -112,7 +110,7 @@ ns for list {
     } else :some self.buffer.get(index)
   }
 
-  fn _grow[t](context mode: alloc-mode)(self: *mut list[t]) {
+  fn _grow[t, a: allocator](self: *mut list[t], alloc: a) {
     let new-cap: size = if self.buffer.is-empty() {
       // For large elements, just allocate what's needed - Rust's RawVec does this :)
       let elem-size = types/size[t]
@@ -120,28 +118,28 @@ ns for list {
     } else {
       self.cap() * 2
     }
-    self.reserve-in(new-cap)
+    self.reserve-in(alloc, new-cap)
   }
 
-  fn cloned-in[t](context mode: alloc-mode)(self: list[t]): list[t] {
-    .{ len = self.len, buffer = self.buffer.cloned-in() }
+  fn cloned-in[t, a: allocator](self: list[t], alloc: a): list[t] {
+    .{ len = self.len, buffer = self.buffer.cloned-in(alloc) }
   }
 
   fn cloned[t](self: list[t]): list[t] {
-    self.cloned-in[t](context :current)()
+    self.cloned-in[t, _](mem/current-arena())
   }
 
-  fn push-in[t](context mode: alloc-mode)(self: *mut list[t], elem: t) {
+  fn push-in[t, a: allocator](self: *mut list[t], alloc: a, elem: t) {
     let start-length = self.len
     if start-length == self.*.cap() {
-      self._grow()
+      self._grow(alloc)
     }
     self.len = start-length + 1
     self.set(start-length, elem)
   }
 
   fn push[t](self: *mut list[t], elem: t) {
-    self.push-in[t](context :current)(elem)
+    self.push-in[t, _](mem/current-arena(), elem)
   }
 
   fn slice[t](self: list[t], start: size, end: size): span[t] {
@@ -216,13 +214,13 @@ ns for list {
   }
 
   fn append-buffer[t](self: *mut list[t], other: buffer[t]) {
-    self.append-buffer-in[t](context :current)(other)
+    self.append-buffer-in[t, _](mem/current-arena(), other)
   }
-  fn append-buffer-in[t](context alloc-mode)(self: *mut list[t], other: buffer[t]) {
+  fn append-buffer-in[t, a: allocator](self: *mut list[t], alloc: a, other: buffer[t]) {
     let needed = self.len + other.len
     if needed > self.cap() {
       let doubled = self.cap() * 2
-      self.reserve-in(if doubled > needed doubled else needed)
+      self.reserve-in(alloc, if doubled > needed doubled else needed)
     }
     let dst = self.inner-buffer().slice(start = self.len, end = needed)
     buffer/copy(src = other, dst = dst)
@@ -232,8 +230,8 @@ ns for list {
   fn append-span[t](self: *mut list[t], other: span[t]) {
     self.append-buffer(other.inner-buffer())
   }
-  fn append-span-in[t](context alloc-mode)(self: *mut list[t], other: span[t]) {
-    self.append-buffer-in(other.inner-buffer())
+  fn append-span-in[t, a: allocator](self: *mut list[t], alloc: a, other: span[t]) {
+    self.append-buffer-in(alloc, other.inner-buffer())
   }
 
   fn swap[t](self: *mut list[t], index-a: size, index-b: size) {

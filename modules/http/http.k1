@@ -71,9 +71,7 @@ ns for parse-state {
     self.* = empty[empty](arena, user-data.rw[empty], on-header-complete, on-body-complete)
   }
 
-  fn alloc-mode(self: *mut parse-state): alloc-mode {
-    :custom-arena self.arena
-  }
+
 }
 
 // Wraps a pointer to an llhttp_t with some stronger-ish typing
@@ -103,9 +101,9 @@ type request = {
 fn on-url-part(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let state = parser.data()
   let bytes: span[char] = span/wrap-raw(data.as[ptr], count.as())
-  let context a = state.alloc-mode()
-  if state.url.is-empty() { state.url.reserve-in(1024) }
-  state.url.append-span-in(bytes)
+  let a = state.arena
+  if state.url.is-empty() { state.url.reserve-in(a, 1024) }
+  state.url.append-span-in(a, bytes)
   if state.url.len() > 16384 {
     return llhttp/errno:HPE_USER.value.as[i32]
   }
@@ -117,11 +115,11 @@ fn on-url-complete(_parser: *mut parser): i32 {
 
 fn on-header-field(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let state = parser.data()
-  let context a = state.alloc-mode()
+  let a = state.arena
   let bytes: span[char] = span/wrap-raw(data.as[ptr], count.as())
 
-  if state.current-header-field.is-empty() { state.current-header-field.reserve-in(256) }
-  state.current-header-field.append-span-in(bytes)
+  if state.current-header-field.is-empty() { state.current-header-field.reserve-in(a, 256) }
+  state.current-header-field.append-span-in(a, bytes)
   0
 }
 fn on-header-field-complete(parser: *mut parser): i32 {
@@ -130,25 +128,25 @@ fn on-header-field-complete(parser: *mut parser): i32 {
 }
 fn on-header-value(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let state = parser.data()
-  let context a = state.alloc-mode()
+  let a = state.arena
   let bytes: span[char] = span/wrap-raw(data.as[ptr], count.as())
 
-  if state.current-header-value.is-empty() { state.current-header-value.reserve-in(256) }
-  state.current-header-value.append-span-in(bytes)
+  if state.current-header-value.is-empty() { state.current-header-value.reserve-in(a, 256) }
+  state.current-header-value.append-span-in(a, bytes)
   0
 }
 fn on-header-value-complete(parser: *mut parser): i32 {
   let state = parser.data()
-  let context a = state.alloc-mode()
-  let field-string = string/wrap-span(state.current-header-field.as-span().cloned-in())
-  let value-string = string/wrap-span(state.current-header-value.as-span().cloned-in())
+  let a = state.arena
+  let field-string = string/wrap-span(state.current-header-field.as-span().cloned-in(a))
+  let value-string = string/wrap-span(state.current-header-value.as-span().cloned-in(a))
 
-  state.headers.reserve-in(64)
+  state.headers.reserve-in(a, 64)
   let header = .{
     field = field-string,
     value = value-string,
   }
-  state.headers.push-in(header)
+  state.headers.push-in(a, header)
   state.current-header-field.clear()
   state.current-header-value.clear()
 
@@ -177,11 +175,11 @@ fn on-headers-complete(parser: *mut parser): i32 {
 
 fn impl-on-body(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let state = parser.data()
-  let context a = state.alloc-mode()
+  let a = state.arena
   let bytes: span[byte] = span/wrap-raw(data.as[ptr], count.as())
   // FIXME: streamed request bodies — hand chunks to the handler as they
   // arrive instead of buffering the whole body
-  state.body-chunks.push-in(bytes)
+  state.body-chunks.push-in(a, bytes)
   0
 }
 fn impl-on-body-complete(parser: *mut parser): i32 {

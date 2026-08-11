@@ -38,7 +38,11 @@ build-profile:
   cargo build --profile profiling --bin k1 --features=llvm-sys/force-static
 
 profile-suite1: build-profile
-  hyperfine --warmup 100 'K1_HOME=. target/profiling/k1 c test_src/suite1'
+  hyperfine --warmup 100 'K1_HOME=. target/profiling/k1 --cache false c test_src/suite1'
+
+profile-stress: build-profile
+  python3 perf/gen_stress.py 3600
+  hyperfine --warmup 2 'K1_HOME=. target/profiling/k1 --cache false c perf/stress100'
 
 valgrind-linux:
   git pull

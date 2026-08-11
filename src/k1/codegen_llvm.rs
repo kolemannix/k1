@@ -293,12 +293,12 @@ struct BuiltinTypes<'ctx> {
     char: IntType<'ctx>,
     ptr: PointerType<'ctx>,
     ptr_sized_int: IntType<'ctx>,
-    empty: StructType<'ctx>,
+    empty_struct: StructType<'ctx>,
 }
 
 impl<'ctx> BuiltinTypes<'ctx> {
-    fn empty_value(&self) -> BasicValueEnum<'ctx> {
-        self.empty.get_undef().as_basic_value_enum()
+    fn empty_struct_value(&self) -> BasicValueEnum<'ctx> {
+        self.empty_struct.get_undef().as_basic_value_enum()
     }
 }
 
@@ -509,16 +509,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
 
-        let di_files: FxHashMap<FileId, DIFile> = module
-            .ast
-            .sources
-            .iter()
-            .map(|(file_id, source)| {
-                let filename = module.ast.idents.get_string(source.filename);
-                let directory = module.ast.idents.get_string(source.directory);
-                (file_id, debug_builder.create_file(filename, directory))
-            })
-            .collect();
+        let mut di_files: FxHashMap<FileId, DIFile> = FxHashMap::default();
+        for (file_id, source) in module.ast.sources.iter() {
+            let filename = module.ast.idents.get_string(source.filename);
+            let directory = module.ast.idents.get_string(source.directory);
+            di_files.insert(file_id, debug_builder.create_file(filename, directory));
+        }
         let mut debug = DebugContext {
             files: di_files,
             debug_builder,
@@ -562,7 +558,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             char: char_type,
             ptr,
             ptr_sized_int: ctx.ptr_sized_int_type(&target_data, None),
-            empty: ctx.struct_type(&[], false),
+            empty_struct: ctx.struct_type(&[], false),
         };
 
         Cg {
@@ -640,8 +636,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let entrypoint = self.llvm_module.add_function("main", entrypoint_fn_type, None);
         let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
         self.builder.position_at_end(entry_block);
-        let params: Vec<BasicMetadataValueEnum<'ctx>> =
-            entrypoint.get_params().iter().map(|p| (*p).into()).collect();
+        let entrypoint_params = entrypoint.get_params();
+        let mut params: Vec<BasicMetadataValueEnum<'ctx>> =
+            Vec::with_capacity(entrypoint_params.len());
+        for p in &entrypoint_params {
+            params.push((*p).into());
+        }
         let res = self
             .builder
             .build_call(function_value, &params, "")
@@ -1105,7 +1105,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn pt_canon_type(&self, pt: PhysicalType) -> BasicTypeEnum<'ctx> {
         match pt.as_enum() {
-            PhysicalTypeEnum::Empty => self.builtin_types.empty.as_basic_type_enum(),
+            PhysicalTypeEnum::Empty => self.builtin_types.empty_struct.as_basic_type_enum(),
             PhysicalTypeEnum::Scalar(st) => self.scalar_basic_type(st),
             PhysicalTypeEnum::Agg(_) => self.builtin_types.ptr.as_basic_type_enum(),
         }
@@ -1991,60 +1991,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.set_debug_location_from_span(function_span);
 
         let instr = match builtin_type {
-            BackendBuiltin::Allocate => {
-                // intern fn alloc(size: uword, align: uword): Pointer
-                let size_arg = self.load_function_argument(function_id, 0);
-
-                let malloc_ident = self.k1.ast.idents.intern("malloc");
-                let Some(malloc_fn_id) = self.find_libc_function_id(malloc_ident) else {
-                    kbail!(
-                        self.k1,
-                        function_span,
-                        "Failed to find libc malloc function for Allocate builtin"
-                    );
-                };
-                let malloc_fv = self.declare_llvm_function(malloc_fn_id)?;
-                let call = self.builder.build_call(malloc_fv, &[size_arg], "").unwrap();
-                let result = call.try_as_basic_value().basic().unwrap();
-                self.builder.build_return(Some(&result)).unwrap()
-            }
-            BackendBuiltin::AllocateZeroed => {
-                // intern fn allocZeroed(size: uword, align: uword): Pointer
-                let size_arg = self.load_function_argument(function_id, 0);
-                let count_one =
-                    self.builtin_types.ptr_sized_int.const_int(1, false).as_basic_value_enum();
-
-                let calloc_ident = self.k1.ast.idents.intern("calloc");
-                let calloc_fn_id = self.find_libc_function_id(calloc_ident).unwrap();
-                let calloc_fv = self.declare_llvm_function(calloc_fn_id)?;
-                // libc/calloc(count = 1, size = size);
-                let call =
-                    self.builder.build_call(calloc_fv, &[count_one.into(), size_arg], "").unwrap();
-                let result = call.try_as_basic_value().expect_basic("calloc return");
-                self.builder.build_return(Some(&result)).unwrap()
-            }
-            BackendBuiltin::Reallocate => {
-                // intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
-                let old_ptr_arg = self.load_function_argument(function_id, 0);
-                let new_size_arg = self.load_function_argument(function_id, 3);
-
-                let realloc_ident = self.k1.ast.idents.intern("realloc");
-                let realloc_fn_id = self.find_libc_function_id(realloc_ident).unwrap();
-                let realloc_fv = self.declare_llvm_function(realloc_fn_id)?;
-                let call =
-                    self.builder.build_call(realloc_fv, &[old_ptr_arg, new_size_arg], "").unwrap();
-                let result = call.try_as_basic_value().expect_basic("realloc return");
-                self.builder.build_return(Some(&result)).unwrap()
-            }
-            BackendBuiltin::Free => {
-                let old_ptr_arg = self.load_function_argument(function_id, 0);
-
-                let free_ident = self.k1.ast.idents.intern("free");
-                let free_fn_id = self.find_libc_function_id(free_ident).unwrap();
-                let free_fv = self.declare_llvm_function(free_fn_id)?;
-                let _call = self.builder.build_call(free_fv, &[old_ptr_arg], "").unwrap();
-                self.builder.build_return(None).unwrap()
-            }
             BackendBuiltin::MemCopy | BackendBuiltin::MemMove => {
                 // intern fn copy(
                 //   dst: Pointer,
@@ -2333,7 +2279,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 };
                 Ok(v)
             }
-            ir::Value::Empty => Ok(self.builtin_types.empty_value()),
+            ir::Value::Empty => Ok(self.builtin_types.empty_struct_value()),
         }
     }
 
@@ -2758,7 +2704,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 if let Some(return_value) = self.codegen_function_call(inst_mappings, id, span)? {
                     inst_mappings.insert(inst_id, return_value);
                 } else {
-                    inst_mappings.insert(inst_id, self.builtin_types.empty_value());
+                    inst_mappings.insert(inst_id, self.builtin_types.empty_struct_value());
                 }
                 Ok(())
             }
@@ -3225,12 +3171,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             llvm_function_type.is_sret, llvm_function_type.llvm_function_type
         );
 
-        let di_types: SV8<_> = self
-            .mem
-            .getn_lt(llvm_function_type.param_k1_types)
-            .iter()
-            .map(|t| t.debug_type())
-            .collect();
+        let mut di_types: SV8<_> = smallvec::smallvec![];
+        for t in self.mem.getn_lt(llvm_function_type.param_k1_types).iter() {
+            di_types.push(t.debug_type());
+        }
         let (di_subprogram, di_file) = self.make_function_debug_info(
             &llvm_name,
             function_span,
@@ -3875,7 +3819,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         debug!("codegen_static_value_as_const {}", self.k1.static_value_to_string(static_value_id));
 
         let result = match self.k1.static_values.get(static_value_id) {
-            StaticValue::Empty => self.builtin_types.empty_value(),
+            StaticValue::Empty(_type_id) => {
+                // NOTE: We may need a few different representations of empty here
+                // to keep the type system happy: empty array, empty struct, at least
+                self.builtin_types.empty_struct_value()
+            }
             StaticValue::Bool(b) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
                 false => self.builtin_types.false_value.as_basic_value_enum(),
@@ -4152,7 +4100,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         );
         let v = self.k1.static_values.get(static_value_id);
         let result = match v {
-            StaticValue::Empty
+            StaticValue::Empty(_)
             | StaticValue::Bool(_)
             | StaticValue::Char(_)
             | StaticValue::Int(_)

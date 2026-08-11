@@ -22,7 +22,6 @@ use crate::{
 };
 use ahash::{HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
-use itertools::Itertools;
 use std::fmt::Write;
 
 macro_rules! b_ice {
@@ -487,10 +486,6 @@ pub enum BackendBuiltin {
     TypeName,
 
     // Platform-provided
-    Allocate,
-    AllocateZeroed,
-    Reallocate,
-    Free,
     MemCopy,
     MemMove,
     MemSet,
@@ -508,10 +503,6 @@ impl BackendBuiltin {
         match self {
             BackendBuiltin::TypeSchema => "type_schema",
             BackendBuiltin::TypeName => "type_name",
-            BackendBuiltin::Allocate => "allocate",
-            BackendBuiltin::AllocateZeroed => "allocate_zeroed",
-            BackendBuiltin::Reallocate => "reallocate",
-            BackendBuiltin::Free => "free",
             BackendBuiltin::MemCopy => "mem_copy",
             BackendBuiltin::MemMove => "mem_move",
             BackendBuiltin::MemSet => "mem_set",
@@ -2807,7 +2798,7 @@ fn compile_static_value(b: &mut Builder, value_id: StaticValueId, pt: PhysicalTy
     // We lower the simple static values
     // but leave the aggregates as globals
     match b.k1.static_values.get(value_id) {
-        StaticValue::Empty => Value::Empty,
+        StaticValue::Empty(_) => Value::Empty,
         StaticValue::Bool(bv) => {
             let imm = Value::byte(*bv as u8);
             imm
@@ -2918,14 +2909,14 @@ fn compile_variable_to_address(
         }
         None => {
             let Some(var) = b.get_variable(variable_id) else {
-                eprintln!(
-                    "Variables are: {}",
-                    b.k1.ir
-                        .b_variables
-                        .values()
-                        .map(|bv| format!("{} {}", bv.id, bv.value))
-                        .join("\n")
-                );
+                let mut variables = String::new();
+                for (idx, bv) in b.k1.ir.b_variables.values().enumerate() {
+                    if idx > 0 {
+                        variables.push('\n');
+                    }
+                    write!(variables, "{} {}", bv.id, bv.value).unwrap();
+                }
+                eprintln!("Variables are: {}", variables);
                 b.k1.ice_span(b.cur_span, "Missing variable")
             };
             let var_value = var.value;
@@ -2968,7 +2959,7 @@ fn compile_ir_builtin(
     match builtin {
         BuiltinIr::BakeStaticValue => {
             // intern fn bakeStaticValue[T](value: T): u64
-            let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let _physical_type = b.get_physical_type(type_id);
 
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
@@ -2986,7 +2977,7 @@ fn compile_ir_builtin(
             Ok(stored)
         }
         BuiltinIr::Zeroed => {
-            let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let pt = b.get_physical_type(type_id);
             match pt.as_enum() {
                 PhysicalTypeEnum::Empty => Ok(Value::Empty),
@@ -3043,8 +3034,8 @@ fn compile_ir_builtin(
             Ok(stored)
         }
         BuiltinIr::Bitcast => {
-            let from_type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
-            let to_type_id = b.k1.mem.get_nth(call.type_args, 1).type_id;
+            let from_type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let to_type_id = call.type_args.as_slice(&b.k1.mem)[1];
 
             let from_pt = b.get_physical_type(from_type_id);
             let to_pt = b.get_physical_type(to_type_id);
@@ -3128,7 +3119,7 @@ fn compile_ir_builtin(
         }
         BuiltinIr::PointerIndex => {
             // intern fn refAtIndex[T](self: Pointer, index: uword): T*
-            let elem_type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+            let elem_type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let elem_pt = b.get_physical_type(elem_type_id);
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
             let base = compile_expr(b, None, arg0)?;
@@ -3422,7 +3413,7 @@ fn vector_pt_parts(b: &mut Builder, pt: PhysicalType) -> K1Result<(ScalarType, u
 /// The element type of an atomic intrinsic: type_args[0], which must be an
 /// integer-class scalar (pointers allowed for the non-arithmetic ops).
 fn atomic_element_type(b: &mut Builder, call: &Call, allow_pointer: bool) -> K1Result<ScalarType> {
-    let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+    let type_id = call.type_args.as_slice(&b.k1.mem)[0];
     let pt = b.get_physical_type(type_id);
     let scalar = match pt.as_enum() {
         PhysicalTypeEnum::Scalar(st) => Some(st),
@@ -4056,7 +4047,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
         }
     }
     if !errors.is_empty() {
-        let error_string = errors.into_iter().join("\n");
+        let error_string = errors.join("\n");
         Err(K1Message {
             span,
             message: k1.ast.idents.intern(format!(
@@ -4154,7 +4145,8 @@ pub fn display_unit(
             let (source, line) = k1.get_span_location(expr_span);
             w.write_str("expr ")?;
             display_phys_fn_type(w, k1, &unit.fn_type)?;
-            write!(w, " from {}:{}", &source.filename, line.line_number())?;
+            write!(w, "(type id: {})", k1.type_id_to_string(unit.result_type_id))?;
+            write!(w, " from {}:{}", k1.ident_str(source.filename), line.line_number())?;
         }
     };
     writeln!(w, " (inst count={}, cfg_valid={})", unit.inst_count, unit.cfg_valid)?;
@@ -4223,11 +4215,21 @@ pub fn display_block(
     let block = ir.mem.get(block_id).data;
     write!(w, "b{} {}", block_id.raw_index(), block.kind.str())?;
     if cfg_valid {
-        let preds_string =
-            ir.mem.dlist_iter(block.preds).map(|pred| format!("b{}", pred.raw_index())).join(", ");
-        let succs_string =
-            ir.mem.dlist_iter(block.succs).map(|pred| format!("b{}", pred.raw_index())).join(", ");
-        write!(w, "  preds: [{}], succs: [{}]", preds_string, succs_string)?;
+        write!(w, "  preds: [")?;
+        for (idx, pred) in ir.mem.dlist_iter(block.preds).enumerate() {
+            if idx > 0 {
+                write!(w, ", ")?;
+            }
+            write!(w, "b{}", pred.raw_index())?;
+        }
+        write!(w, "], succs: [")?;
+        for (idx, succ) in ir.mem.dlist_iter(block.succs).enumerate() {
+            if idx > 0 {
+                write!(w, ", ")?;
+            }
+            write!(w, "b{}", succ.raw_index())?;
+        }
+        write!(w, "]")?;
     }
     writeln!(w)?;
     for inst_id in ir.mem.dlist_iter(block.instrs) {

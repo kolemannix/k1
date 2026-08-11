@@ -604,9 +604,13 @@ Collection API naming follows a doctrine:
 - `wrap-*` constructors are zero-copy views over existing memory (the dangerous
   ones, so they are explicitly named). `from-*` constructors make an owned copy.
 - `as-*` accessors return views; `to-*` methods return owned copies.
-- A bare operation allocates in the ambient `:current` alloc-mode; the `-in`
-  variant takes an explicit `context alloc-mode` (e.g. `cloned`/`cloned-in`,
-  `push`/`push-in`, `reserve`/`reserve-in`).
+- A bare operation allocates in the ambient current arena
+  (`mem/current-arena()`, a TLS stack defaulting to the tmp arena; scope one
+  with `mem/with-arena(a, expr)`). The `-in` variant takes an explicit
+  allocator as its first argument after self — any `allocator` impl: a
+  `*arena` or `heap` (e.g. `cloned`/`cloned-in`, `push`/`push-in`,
+  `reserve`/`reserve-in`). Long-lived data takes an explicit allocator;
+  transient data uses the ambient arena.
 - Mutators take `*mut self` and reuse the verb (`sort`, `reverse`); functional
   variants get `-ed` (`sorted`, `reversed`).
 

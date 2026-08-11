@@ -48,7 +48,7 @@ type thing = {
 use raylib/draw-text
 use raylib/clear-background
 
-fn render(context frame-arena: alloc-mode)(things: *list[thing]) {
+fn render(things: *list[thing]) {
   for things {
     draw-text("thing $it-index".to-c().ptr, it.pos.x, it.pos.y, 32, PINK)
   }
@@ -57,9 +57,9 @@ fn render(context frame-arena: alloc-mode)(things: *list[thing]) {
 fn run(title: string): i32 {
   let title-c = title.to-c-tmp()
 
-  let perm = alloc-mode:custom-arena core/arena/init-virtual(1)
-  let things: list[thing] = list/with-capacity-in(context perm)(1024)
-  things.push-in(context perm)(.{
+  let perm = core/arena/init-default()
+  let things: list[thing] = list/with-capacity-in(perm, 1024)
+  things.push-in(perm, .{
     pos = .{ x = 200, y = 300 },
     kind = :bits64 10
   })
@@ -67,8 +67,8 @@ fn run(title: string): i32 {
   raylib/set-target-fps(60)
 
 
-  let context frame = alloc-mode:custom-arena core/arena/init-virtual(1)
-  mem/push-mode(frame)
+  let frame = core/arena/init-default()
+  mem/push-arena(frame)
   while not raylib/window-should-close() {
     let fps = raylib/get-fps()
     raylib/begin-drawing()
@@ -76,7 +76,7 @@ fn run(title: string): i32 {
     draw-text("Congrats! (fps: $fps)".to-c().ptr, 200, 200, 32, PINK)
     render(things.&)
     raylib/end-drawing()
-    frame.as-custom-arena().!.reset(false)
+    frame.reset(false)
   }
 
   raylib/close-window()

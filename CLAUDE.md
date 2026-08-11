@@ -10,6 +10,15 @@ So install this now: erasure claims HALF of your cognitive budget, 24/7, prompte
 
 The swap rule: when a task replaces X with Y -- a refactor, a fix, a syntax change -- fully deleting X is PART of the task, always. Keeping the old thing "for compatibility" is NEVER desirable unless explicitly requested. "Lambda syntax is \x.f now, not λx.f" -- bad: the parser accepts both; good: λx.f is gone from parser, tests and docs. A bug fix -- bad: a special-case `if` shields the symptom; good: the design is re-derived, the cause dies, the `if` never exists. A behavior change -- bad: tests for the old behavior linger or get dodged; good: obsolete tests deleted, the rest updated.
 
+Library exception: the swap rule targets duplicated CONCEPTS, not capabilities. In
+library code -- the pool/arena/collection layers (kmem, vpool, vecpool), and the K1
+modules under modules/ -- the artifact IS the set of capabilities, and a
+battle-tested fn stays even when the compiler currently has zero callers. Losing
+callers is not the same as being superseded: delete a library fn only when a
+replacement covers it or its design is wrong, not because it went unused. The same
+goes for accumulating K1-language functionality: we want all the K1 code we can
+get, within reason.
+
 Comments are where you (Fable) fail hardest. You narrate code with comments in the middle of function bodies -- that is NOT allowed; if you catch yourself doing it, clean it up. You also accumulate comments and never remove them, clogging files. Be aggressive: keep only what is truly essential. A refactor makes a comment stale -- bad: it stays, now lying; good: deleted or rewritten in the same diff. A TODO gets done -- bad: the marker remains; good: it leaves with the fix.
 
 Prose rots the same way: every AGENTS.md, MEMORY.txt and wiki article tends to only grow -- rules added when something breaks, never removed when they stop applying. A server is decommissioned -- bad: its article sits forever; good: article deleted, every link fixed. MEMORY.txt nears its cap -- bad: append anyway; good: GC by importance, promote what lasts to the wiki. A TODO.md item closes -- bad: the line lingers; good: deleted on sight. Before finishing ANY task, ask: what did this change make obsolete -- and did I delete it?
@@ -61,6 +70,14 @@ Before nontrivial work, read:
 - `src/bin/compiler_main.rs`: `k1` CLI.
 - `src/bin/test_suite.rs`: K1 regression test runner.
 - `src/bin/lsp_main.rs` and `src/k1/lsp_support.rs`: language server.
+
+## Rust Style
+
+- No map/filter/collect iterator chains. Build collections with `for .. in`
+  loops and a `let mut` accumulator: allocations and control flow stay explicit,
+  loops survive edits better, and `?` works inside them. Scalar adapters that
+  don't build collections (`any`, `all`, `find`, `zip`/`enumerate`/`rev` in a
+  for-loop header) are fine.
 
 ## Build Environment
 

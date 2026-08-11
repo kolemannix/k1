@@ -24,8 +24,8 @@ ns for string {
     wrap-span(self.span.cloned())
   }
 
-  fn cloned-in(context alloc-mode: mem/alloc-mode)(self: string): string {
-    wrap-span(self.span.cloned-in())
+  fn cloned-in[a: allocator](self: string, alloc: a): string {
+    wrap-span(self.span.cloned-in(alloc))
   }
 
   fn wrap-span(span: span[char]): string {
@@ -105,15 +105,15 @@ ns for string {
     wrap-span(self.span.concat(other.span))
   }
 
-  fn concat-char-in(context alloc: mem/alloc-mode)(self: string, c: char): string {
+  fn concat-char-in[a: allocator](self: string, alloc: a, c: char): string {
     let new-length = self.len() + 1
-    let new-buffer = self.span.inner-buffer()._enlarged-clone-in(new-length)
+    let new-buffer = self.span.inner-buffer()._enlarged-clone-in(alloc, new-length)
     new-buffer.set(self.len(), c)
     wrap-buffer(new-buffer)
   }
 
   fn concat-char(self: string, c: char): string {
-    concat-char-in(context :current)(self, c)
+    self.concat-char-in(mem/current-arena(), c)
   }
 
   // Splits at every delimiter, keeping interior empty pieces but dropping a
@@ -203,10 +203,7 @@ ns for string {
   }
 
   fn to-c-tmp(self: string): { ptr: ptr, len: size } {
-    mem/push-mode(:tmp)
-    let r = self.to-c()
-    mem/pop-mode()
-    r
+    mem/with-arena(mem/tmp(), self.to-c())
   }
 
   fn wrap-c(c-string: ptr): string {

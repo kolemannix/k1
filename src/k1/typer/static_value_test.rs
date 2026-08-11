@@ -12,7 +12,7 @@ fn test_basic() {
     let s1 = system.add_struct(TypeId::from_u32(10).unwrap(), MSlice::empty());
     let s2 = system.add_struct(TypeId::from_u32(10).unwrap(), MSlice::empty());
     assert_eq!(s1, s2);
-    assert_eq!(system.pool.len(), BUILTIN_VALUE_COUNT);
+    assert_eq!(system.pool.len(), BUILTIN_VALUE_COUNT + 1);
 
     let true1 = system.add(StaticValue::Bool(true));
     let true2 = system.add(StaticValue::Bool(true));

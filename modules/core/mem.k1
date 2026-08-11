@@ -1,152 +1,36 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
+ability allocator {
+  // alloc must return zeroed memory
+  fn alloc(self, size: size, align: size): ptr
+
+  fn realloc(self, old-ptr: ptr, old-size: size, align: size, new-size: size): ptr
+
+  // free may no-op
+  fn free(self, ptr: ptr, size: size, align: size)
+
+  fn alloc-t[t](self): *mut t { allocator/alloc(self, types/size[t], types/align[t]).as() }
+  fn free-t[t](self, t: *mut t) { allocator/free(self, t.as(), types/size[t], types/align[t]) }
+  fn new[t](self, t: t): *mut t {
+    let ref = self.alloc-t[t]()
+    ref.* = t
+    ref
+  }
+}
+
+type heap = {}
+impl allocator for heap {
+  fn alloc(_self: heap, size: size, _align: size): ptr { libc/calloc(1, size) }
+  fn realloc(_self: heap, old-ptr: ptr, _old-size: size, _align: size, new-size: size): ptr {
+    libc/realloc(old-ptr, new-size)
+  }
+  fn free(_self: heap, ptr: ptr, _size: size, _align: size) { libc/free(ptr) }
+}
+
 ns mem {
 
-  // For now here's all i can do until i have dyn traits
-  type allocator = {
-    malloc:  *(fn(size, size) -> ptr),
-    zalloc:  *(fn(size, size) -> ptr),
-    realloc: *(fn(ptr, size, size, size) -> ptr),
-    free:    *(fn(ptr, size, size) -> empty),
-  }
-
-  fn virtual-alloc(size): ptr {
-    let rw = posix/PROT_READ | posix/PROT_WRITE
-    let private-anon = posix/MAP_PRIVATE | posix/MAP_ANON
-    let addr = posix/mmap(
-      addr = ptr/null,
-      len = size,
-      prot = rw,
-      flags = private-anon,
-      fd = -1i32,
-      offset = 0
-    )
-    if addr == posix/MAP_FAILED.as[ptr] {
-      libc/perror(ptr/null)
-      crash("mmap failed")
-    }
-    addr
-  }
-
-  fn virtual-release(base: ptr, len: size): empty {
-    let result = posix/munmap(base, len)
-    if result == -1 crash("munmap of ptr $base x $len failed")
-    .{}
-  }
-
-  type alloc-mode = either {
-    // Whatever alloc-mode is last on the stack (can never be :current itself)
-    current,
-    // The default, thread-local, temporary bump allocator
-    tmp,
-    // The system libc heap (malloc/free and friends)
-    system-heap,
-    custom-heap(*mut allocator),
-    custom-arena(*mut arena),
-    gc
-  }
-
-  impl print for alloc-mode {
-    fn print-to[w: writer](self, w) {
-      use types/sum
-      w.write(self.sum-name())
-    }
-  }
-
-  ns for alloc-mode {
-
-    fn requires-free(self: alloc-mode): bool { self is {
-      :current         -> crash("unreachable"),
-      :system-heap     -> true,
-      :custom-heap _   -> true,
-      :tmp             -> false,
-      :custom-arena _  -> false,
-      :gc              -> false
-    } }
-
-    fn resolve(self: alloc-mode): alloc-mode {
-      self is {
-        :current -> {
-          let mode = mem/current()
-          if mode is :current { crash("currentalloc-mode.kind is current; this will never resolve") }
-          mode
-        },
-        _ -> self,
-      }
-    }
-
-    fn alloc(self: alloc-mode, size: size, align: size): ptr {
-      self.resolve() is {
-        :current -> { crash("unreachable") },
-        :system-heap -> mem/alloc-zeroed(size, align),
-        :custom-heap alloc -> {
-          let zalloc = alloc.*.zalloc
-          zalloc(size, align)
-        },
-        :custom-arena bump -> {
-          bump.alloc-layout(size, align)
-        },
-        :tmp -> {
-          mem/tmp().alloc-layout(size, align)
-        },
-        :gc -> {
-          crash("gc is unimplemented; plan to support w/ bdwgc")
-        }
-      }
-    }
-
-    fn realloc(self: alloc-mode, old-ptr: ptr, old-size: size, align: size, new-size: size): ptr {
-      self.resolve() is {
-        :current -> { crash("unreachable") },
-        :system-heap -> mem/realloc(old-ptr, old-size, align, new-size),
-        :custom-heap alloc -> {
-          let realloc-fn = alloc.*.realloc
-          realloc-fn(old-ptr, old-size, align, new-size)
-        },
-        :custom-arena arena -> {
-          arena.try-realloc(old-ptr, old-size, new-size, align)
-        },
-        :tmp -> {
-          tmp().try-realloc(old-ptr, old-size, new-size, align)
-        },
-        :gc -> old-ptr
-      }
-    }
-
-    fn free(self: alloc-mode, ptr: ptr, size: size, align: size) {
-      self.resolve() is {
-        :current -> { crash("unreachable") },
-        :system-heap -> mem/free(ptr, size, align),
-        :custom-heap alloc -> {
-          let free-fn = alloc.*.free
-          free-fn(ptr, size, align)
-        },
-        :custom-arena bump -> crash("UnsupportedOperation: free"),
-        :tmp -> crash("UnsupportedOperation: free"),
-        :gc -> crash("UnsupportedOperation: free")
-      }
-    }
-
-
-    fn alloc-t[t](self: alloc-mode): *mut t {
-      self.alloc(size = types/size[t], align = types/align[t]).as()
-    }
-    fn free-t[t](self: alloc-mode, t: *mut t) {
-      self.free(ptr = t.as(), size = types/size[t], align = types/align[t])
-    }
-
-    fn new[t](self: alloc-mode, t: t): *mut t {
-      let ref = self.alloc-t[t]
-      ref.* = t
-      ref
-    }
-
-  }
-
-  let system-heap: alloc-mode = :system-heap
-
-  fn new[t](t: t): *t { alloc-mode:current.new(t) }
+  fn new[t](t: t): *t { current-arena().new(t) }
 
   macro new-in-place[t](expr) {
     let type-id = types/type-id[t]
@@ -157,40 +41,45 @@ ns mem {
     `
   }
 
-  macro with(alloc-mode, expr) {
+  macro with-arena(arena, expr) {
     `
-    let start-len = mem/mode-stack-len()
-    mem/push-mode($alloc-mode)
+    let start-len = mem/arena-stack-len()
+    mem/push-arena($arena)
     defer {
-      mem/pop-mode()
-      assert-equals[size](mem/mode-stack-len(), start-len)
+      let _ = mem/pop-arena()
+      assert-equals[size](mem/arena-stack-len(), start-len)
     }
     ($expr)
     `
   }
 
-  fn alloc-layout(size: size, align: size): ptr { alloc-mode:current.alloc(size, align) }
-  fn alloc-t[t](): *t { alloc-mode:current.alloc-t() }
+  fn alloc-layout(size: size, align: size): ptr { current-arena().alloc(size, align) }
+  fn alloc-t[t](): *t { current-arena().alloc-t() }
 
-  let mutable tls arena-tmp: *arena = ptr/null.rw[arena]
+  // 0.as[ptr] inlined rather than ptr/null: this global is demanded during
+  // other globals' initializers, and referencing the null global from here
+  // closes an initializer cycle.
+  let mutable tls arena-tmp: *arena = 0.as[ptr].rw[arena]
 
   type alias ALLOC_STACK_MAX = 64
-  let mutable tls alloc-stack: fixlist[alloc-mode, ALLOC_STACK_MAX] = { 
-    let s = zeroed[fixlist[alloc-mode, ALLOC_STACK_MAX]]
-    s.push(:tmp)
-    s
-  }
+  // Empty stack means "the tmp arena"; tmp is lazily initialized, so it
+  // cannot be pushed here eagerly at thread start. Elements are raw ptrs:
+  // reference-typed slots in global initializers do not serialize yet.
+  let mutable tls arena-stack: fixlist[ptr, ALLOC_STACK_MAX] =
+    zeroed[fixlist[ptr, ALLOC_STACK_MAX]]
 
-  fn push-mode(mode: alloc-mode) {
-    alloc-stack.push(mode)
+  fn push-arena(a: *arena) {
+    arena-stack.push(a.as[ptr])
   }
-  fn pop-mode(): alloc-mode {
-    alloc-stack.pop().!
+  fn pop-arena(): *arena {
+    arena-stack.pop().!.rw[arena]
   }
-  fn mode-stack-len(): size { alloc-stack.len() }
-  fn current(): alloc-mode {
-    let s = alloc-stack.last().!
-    s
+  fn arena-stack-len(): size { arena-stack.len() }
+  fn current-arena(): *arena {
+    arena-stack.last() is {
+      :some a -> a.rw[arena],
+      :none -> tmp()
+    }
   }
 
   fn init-tmp-arena() {
@@ -204,3 +93,7 @@ ns mem {
   }
 
 }
+
+// Positioned after the tls arena globals: global initializers run in decl
+// order through the VM, which needs the tmp arena machinery evaluated first.
+let heap: heap = .{}

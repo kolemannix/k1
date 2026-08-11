@@ -216,7 +216,10 @@ fn spill_list_many_pushes_growth_smoke() {
 
 #[allow(clippy::needless_range_loop)]
 fn assert_dlist(mem: &Mem<()>, l: Dlist<char, ()>, expected: &[char]) {
-    let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
+    let mut elems: Vec<char> = Vec::new();
+    for x in mem.dlist_iter(l) {
+        elems.push(*x);
+    }
     mem.dlist_assert_valid(l);
     assert_eq!(&elems, expected);
     assert_eq!(mem.dlist_compute_len(l), expected.len());

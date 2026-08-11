@@ -93,20 +93,20 @@ fn get_test_expectation(test_file: &Path) -> TestExpectation {
     let exit_code_prefix = "//exitcode: ";
     let abort_msg_prefix = "//abortmsg: ";
     if last_line.starts_with(error_message_prefix) {
-        let expected_error: String = last_line.chars().skip(error_message_prefix.len()).collect();
+        let expected_error: String = last_line[error_message_prefix.len()..].to_string();
         TestExpectation::CompileErrorMessage { message: expected_error }
     } else if last_line.starts_with(exit_code_prefix) {
-        let s: String = last_line.chars().skip(exit_code_prefix.len()).collect();
-        let exit_code_str: String = s.chars().take_while(|c| !c.is_whitespace()).collect();
+        let s = &last_line[exit_code_prefix.len()..];
+        let end = s.find(char::is_whitespace).unwrap_or(s.len());
+        let exit_code_str = &s[..end];
         let as_i32: i32 = exit_code_str.parse().unwrap();
-        let message: String =
-            s.chars().skip(exit_code_str.len()).skip_while(|c| c.is_whitespace()).collect();
+        let message: String = s[end..].trim_start().to_string();
         TestExpectation::ExitCode {
             code: as_i32,
             message: if message.is_empty() { None } else { Some(message) },
         }
     } else if last_line.starts_with(abort_msg_prefix) {
-        let expected_error: String = last_line.chars().skip(abort_msg_prefix.len()).collect();
+        let expected_error: String = last_line[abort_msg_prefix.len()..].to_string();
         TestExpectation::AbortErrorMessage { message: expected_error }
     } else {
         TestExpectation::ExitCode { code: 0, message: None }

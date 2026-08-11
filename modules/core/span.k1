@@ -56,8 +56,8 @@ ns for span {
     .{ buffer = self.buffer.cloned() }
   }
 
-  fn cloned-in[t](context alloc: mem/alloc-mode)(self: span[t]): span[t] {
-    .{ buffer = self.buffer.cloned-in() }
+  fn cloned-in[t, a: allocator](self: span[t], alloc: a): span[t] {
+    .{ buffer = self.buffer.cloned-in(alloc) }
   }
 
   fn len[t](self: span[t]): size { self.buffer.len }

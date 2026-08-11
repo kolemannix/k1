@@ -8,14 +8,14 @@
 
   // argv for exec-family calls: program, args, null terminator, all in tmp
   fn make-argv(program: string, args: span[string]): list[ptr] {
-    mem/push-mode(:tmp)
+    mem/push-arena(mem/tmp())
     let argv = list/with-capacity[ptr](args.len() + 2)
     argv.push(program.to-c().ptr)
     for arg in args {
       argv.push(arg.to-c().ptr)
     }
     argv.push(ptr/null)
-    let _ = mem/pop-mode()
+    let _ = mem/pop-arena()
     argv
   }
 
@@ -23,12 +23,12 @@
     let argv = make-argv(program, args)
 
     // posix_spawn_file_actions_t is opaque: 8 bytes on darwin, 80 on glibc
-    let fa-buf = buffer/allocate-in[u8](context :tmp)(128)
+    let fa-buf = buffer/allocate-in[u8, _](mem/tmp(), 128)
     let fa = fa-buf.data.as[ptr]
     let _ = posix/posix_spawn_file_actions_init(fa)
 
     // :inherit leaves stdout/stderr alone (child-out < 0 = no redirection)
-    let pipe-fds = buffer/allocate-in[i32](context :tmp)(2)
+    let pipe-fds = buffer/allocate-in[i32, _](mem/tmp(), 2)
     let child-out: i32 = mode is {
       :inherit -> -1,
       :capture -> {
@@ -75,7 +75,7 @@
 
     let output = if mode is :capture {
       let read-fd = pipe-fds.get(0)
-      mem/push-mode(:tmp)
+      mem/push-arena(mem/tmp())
       let sb = string-builder/new()
       let chunk = buffer/allocate[u8](4096)
       let read-errno: i32 = 0
@@ -94,7 +94,7 @@
           }
         }
       }
-      let _ = mem/pop-mode()
+      let _ = mem/pop-arena()
       let _ = posix/close(read-fd)
       if read-errno != 0 {
         // Reap before reporting so we never leave a zombie behind

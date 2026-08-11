@@ -106,7 +106,7 @@ impl_copy_if_small!(12, StructTypeField);
 #[derive(Clone, Copy)]
 pub struct GenericInstanceInfo {
     pub generic_parent: TypeId,
-    pub type_args: TypeIdSlice,
+    pub type_args: TypeArgs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -273,7 +273,7 @@ impl SumType {}
 
 #[derive(Clone, Copy)]
 pub struct GenericType {
-    pub params: MSlice<NameAndType, TypedProgram>,
+    pub params: TypeIdSlice,
     pub inner: TypeId,
 }
 
@@ -456,7 +456,7 @@ pub struct LambdaObjectType {
 #[derive(Clone, Copy)]
 pub struct AbilityObjectType {
     pub specialized_ability_id: AbilityId,
-    pub impl_arguments: MSlice<NameAndType, TypedProgram>,
+    pub impl_arguments: TypeIdSlice,
     pub struct_representation: TypeId,
 }
 
@@ -654,7 +654,7 @@ impl TypedProgram {
                         .getn(ao1.impl_arguments)
                         .iter()
                         .zip(self.mem.getn(ao2.impl_arguments))
-                        .all(|(a1, a2)| a1.name == a2.name && a1.type_id == a2.type_id)
+                        .all(|(a1, a2)| a1 == a2)
             }
             (Type::StaticValue(vt1), Type::StaticValue(vt2)) => vt1.value_id == vt2.value_id,
             (t1, t2) => {
@@ -753,8 +753,7 @@ impl TypedProgram {
             Type::AbilityObject(ao) => {
                 ao.specialized_ability_id.hash(state);
                 for arg in self.mem.getn(ao.impl_arguments) {
-                    arg.name.hash(state);
-                    arg.type_id.hash(state);
+                    arg.hash(state);
                 }
             }
             Type::StaticValue(svt) => {
@@ -1535,14 +1534,10 @@ impl TypedProgram {
     /// Reserve the result id for an in-flight or deferred generic instantiation and register
     /// it in the specialization cache, so that a recursive mention of the same (generic, args)
     /// resolves to this id instead of recursing forever
-    pub fn reserve_instance_id(
-        &mut self,
-        generic_parent: TypeId,
-        type_args: TypeIdSlice,
-    ) -> TypeId {
+    pub fn reserve_instance_id(&mut self, generic_parent: TypeId, type_args: TypeArgs) -> TypeId {
         let id = self.reserve_type_id();
         let mut counts = TypeInfo::EMPTY;
-        for arg in self.mem.getn(type_args) {
+        for arg in type_args.as_slice(&self.mem) {
             counts = counts.add(self.type_variable_counts.get(*arg));
         }
         *self.type_variable_counts.get_mut(id) = counts;
@@ -1906,7 +1901,7 @@ impl TypedProgram {
             Type::AbilityObject(ao) => {
                 let mut result = EMPTY;
                 for arg in self.mem.getn(ao.impl_arguments) {
-                    result = result.add(self.type_variable_counts.get(arg.type_id));
+                    result = result.add(self.type_variable_counts.get(*arg));
                 }
                 result.is_zero_safe = false;
                 result
@@ -2317,7 +2312,7 @@ impl TypedProgram {
     pub fn get_as_list_instance(&self, type_id: TypeId) -> Option<ListType> {
         self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == self.builtin_types.list() {
-                Some(ListType { element_type: *self.mem.get_nth(spec_info.type_args, 0) })
+                Some(ListType { element_type: spec_info.type_args.as_slice(&self.mem)[0] })
             } else {
                 None
             }
@@ -2327,7 +2322,7 @@ impl TypedProgram {
     pub fn get_as_buffer_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == self.builtin_types.buffer() {
-                Some(*self.mem.get_nth(spec_info.type_args, 0))
+                Some(spec_info.type_args.as_slice(&self.mem)[0])
             } else {
                 None
             }
@@ -2337,7 +2332,7 @@ impl TypedProgram {
     pub fn get_as_span_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == self.builtin_types.span() {
-                Some(*self.mem.get_nth(spec_info.type_args, 0))
+                Some(spec_info.type_args.as_slice(&self.mem)[0])
             } else {
                 None
             }
@@ -2347,11 +2342,11 @@ impl TypedProgram {
     pub fn get_as_container_instance(&self, type_id: TypeId) -> Option<(TypeId, ContainerKind)> {
         if let Some(info) = self.get_instance_info(type_id) {
             if info.generic_parent == self.builtin_types.list() {
-                Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::List))
+                Some((info.type_args.as_slice(&self.mem)[0], ContainerKind::List))
             } else if info.generic_parent == self.builtin_types.buffer() {
-                Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::Buffer))
+                Some((info.type_args.as_slice(&self.mem)[0], ContainerKind::Buffer))
             } else if info.generic_parent == self.builtin_types.span() {
-                Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::Span))
+                Some((info.type_args.as_slice(&self.mem)[0], ContainerKind::Span))
             } else {
                 None
             }
@@ -2375,7 +2370,7 @@ impl TypedProgram {
     pub fn get_as_opt_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == self.builtin_types.opt() {
-                Some(*self.mem.get_nth(spec_info.type_args, 0))
+                Some(spec_info.type_args.as_slice(&self.mem)[0])
             } else {
                 None
             }
@@ -2390,23 +2385,19 @@ impl TypedProgram {
         h.finish()
     }
 
-    pub fn get_specialization(&mut self, base: TypeId, args: TypeIdSlice) -> Option<TypeId> {
-        self.get_specialization_slice(base, self.mem.getn(args))
-    }
-
-    pub fn get_specialization_slice(&mut self, base: TypeId, args: &[TypeId]) -> Option<TypeId> {
+    pub fn get_specialization(&mut self, base: TypeId, args: &[TypeId]) -> Option<TypeId> {
         let hash = Self::specialization_hash(base, args);
         self.type_specializations
-            .find(hash, |e| e.base == base && self.mem.getn_lt(e.args) == args)
+            .find(hash, |e| e.base == base && e.args.as_slice(&self.mem) == args)
             .map(|e| e.specialized)
     }
 
-    pub fn insert_specialization(&mut self, base: TypeId, args: TypeIdSlice, specialized: TypeId) {
-        let hash = Self::specialization_hash(base, self.mem.getn(args));
+    pub fn insert_specialization(&mut self, base: TypeId, args: TypeArgs, specialized: TypeId) {
+        let hash = Self::specialization_hash(base, args.as_slice(&self.mem));
         self.type_specializations.insert_unique(
             hash,
             TypeSpecialization { base, args, specialized },
-            |e| Self::specialization_hash(e.base, self.mem.getn(e.args)),
+            |e| Self::specialization_hash(e.base, e.args.as_slice(&self.mem)),
         );
     }
 

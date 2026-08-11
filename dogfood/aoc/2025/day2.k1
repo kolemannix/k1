@@ -4,9 +4,8 @@ let sample-input: string = "11-22,95-115,998-1012,1188511880-1188511890,222220-2
 use core/iter/forall
 
 fn day2(part: int, input: string) {
-  mem/push-mode(:system-heap)
-  let ranges = input.split-by-char(',')
-  mem/pop-mode()
+  let ranges-arena = core/arena/init-default()
+  let ranges = mem/with-arena(ranges-arena, input.split-by-char(','))
 
 
   println("${mem/tmp().used-bytes()/(1024*1024)}mb")

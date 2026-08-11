@@ -525,13 +525,6 @@ impl equals for {} {
 
 ns mem {
 
-  // TODO: Possibly reduce to a single alloc with a 'zero' option to reduce the number of builtins
-  // FIXME: Rename these to, like, 'sys-alloc' or something so that we can use these names to mean alloc-mode aware functions
-  intern fn alloc(size: size, align: size): ptr
-  intern fn alloc-zeroed(size: size, align: size): ptr
-  intern fn realloc(ptr: ptr, old-size: size, align: size, new-size: size): ptr
-  intern fn free(ptr: ptr, size: size, align: size)
-
   // Does not handle overlaps; memcpy
   intern fn copy(
     dst: ptr,
@@ -805,7 +798,7 @@ ns array {
     mem/zeroed[array[t, n]]
   }
 
-  fn allocate[t, n: static size](context alloc: mem/alloc-mode)(): *mut array[t, n] {
+  fn allocate[t, n: static size, a: allocator](alloc: a): *mut array[t, n] {
     alloc.alloc-t[array[t, n]]()
   }
 
@@ -817,8 +810,8 @@ ns array {
     array.get(index) = value
   }
 
-  fn filled-in[t, n: static size](context alloc: mem/alloc-mode)(t: t, n: n): *mut array[t, n] {
-    let array-uninit = allocate[t, n]()
+  fn filled-in[t, n: static size, a: allocator](alloc: a, t: t, n: n): *mut array[t, n] {
+    let array-uninit = allocate[t, n, _](alloc)
     let i = 0
     while i < n.from-static() {
       array-uninit.get(i) = t

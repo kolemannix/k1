@@ -1,72 +1,78 @@
 // Copyright (c) 2025 kni
 // All rights reserved.
 
+// The bump window (base-ptr/cur-addr/end-addr) points into the current
+// chunk. The first chunk holds this header and is where reset restores the
+// window; chunks acquired by growth are chained through extra-chunks.
+// Field order is mirrored in the compiler (vm.rs k1_types::Arena).
 type arena = {
   base-ptr: ptr,
   cur-addr: ptr,
   end-addr: ptr,
-  alloc-kind: either(u64) { virtual, malloc },
+  first-base: ptr,
+  first-end: ptr,
+  extra-chunks: ptr,
   name: string,
-  // eventually we'll support chaining here
 }
+
+// At the start of each chunk acquired after the first
+type arena-chunk = { region: platform/memory/region, next: ptr }
+
 ns for arena {
   let kb: size = 1024
   let mb: size = 1048576
   let gb: size = 1073741824
 
-  fn region-size-bytes(self: *arena): size {
-    self.end-addr.diff(self.base-ptr)
-  }
-  fn allocation-size-bytes(self: *arena): size {
-    self.end-addr.diff(self.get-alloc-base())
-  }
-
   fn used-bytes(self: *arena): size {
     self.cur-addr.diff(self.base-ptr)
   }
 
-
   fn set-name(self: *arena, name: string) { self.name = name }
 
-  fn get-alloc-base(self: *arena): ptr { self.base-ptr.sub-bytes(types/stride[arena]) }
-  fn store-header(base-ptr: ptr, size, alloc-kind: arena.alloc-kind): *arena {
-    assert(size >= types/stride[arena])
-    let memory-start = base-ptr.add-bytes(types/stride[arena])
-    let memory-size = size - types/stride[arena]
-    let arena: *arena = base-ptr.rw[arena]
-    // #static assert(types/align[arena] <= MIN_ALIGN);
+  fn first-region(self: *arena): platform/memory/region {
+    let base = self.first-base.sub-bytes(types/stride[arena])
+    .{ base, len = self.first-end.diff(base) }
+  }
+
+  fn store-header(region: platform/memory/region): *arena {
+    assert(region.len >= types/stride[arena] * 2)
+    let memory-start = region.base.add-bytes(types/stride[arena])
+    let region-end = region.base.add-bytes(region.len)
+    let arena: *arena = region.base.rw[arena]
     arena.* = .{
       base-ptr = memory-start,
       cur-addr = memory-start,
-      end-addr = memory-start.add-bytes(memory-size),
-      alloc-kind,
+      end-addr = region-end,
+      first-base = memory-start,
+      first-end = region-end,
+      extra-chunks = ptr/null,
       name = "",
     }
     arena
   }
 
-  fn init-virtual(usage-hint-mb: size): *arena {
-    let size-bytes = 1 * gb
-    let base-ptr: ptr = mem/virtual-alloc(size-bytes)
-    let _ = posix/madvise(base-ptr, (usage-hint-mb * mb).as[c-sizet], advice = posix/MADV_SEQUENTIAL)
-    store-header(base-ptr, size-bytes, :virtual)
-  }
-
-  fn init-physical(size-bytes: size): *arena {
-    // simple single allocation for now, will do chunk chaining once i need it
-    let base-ptr = mem/alloc(size = size-bytes, align = MIN_ALIGN)
-    store-header(base-ptr, size-bytes, :malloc)
+  fn init(region-size: size): *arena {
+    store-header(platform/memory/acquire(region-size))
   }
 
   fn init-default(): *arena {
-    init-virtual(usage-hint-mb = 1)
+    init(1 * gb)
+  }
+
+  fn _release-extra-chunks(self: *arena) {
+    let chunk = self.extra-chunks
+    while not chunk.is-null() {
+      let record = chunk.rw[arena-chunk]
+      let next = record.next
+      platform/memory/release(record.region)
+      chunk = next
+    }
+    self.extra-chunks = ptr/null
   }
 
   fn release(self: *arena) {
-    self.alloc-kind is {
-      :virtual -> mem/virtual-release(self.get-alloc-base(), self.allocation-size-bytes()),
-      :malloc -> mem/free(self.get-alloc-base(), self.allocation-size-bytes(), MIN_ALIGN)
-    }
+    self._release-extra-chunks()
+    platform/memory/release(self.first-region())
   }
 
   fn poison(self: *arena, count: size) {
@@ -76,8 +82,14 @@ ns for arena {
   }
 
   fn reset(self: *arena, clear: bool) {
-    let used-bytes = self.used-bytes()
-    self.cur-addr = self.base-ptr
+    let chained = not self.extra-chunks.is-null()
+    self._release-extra-chunks()
+    // If growth left the first chunk, its exact high-water mark is gone;
+    // clear the whole first window in that case
+    let used-bytes = if chained self.first-end.diff(self.first-base) else self.used-bytes()
+    self.base-ptr = self.first-base
+    self.cur-addr = self.first-base
+    self.end-addr = self.first-end
 
     if clear {
       mem/set(dst = self.base-ptr, value = 0, count = used-bytes)
@@ -104,14 +116,25 @@ ns for arena {
       self.cur-addr = cursor.add-bytes(total-bump)
       alloc-ptr
     } else {
-       mem/push-mode(:system-heap)
-       crash("arena ${self.name} is out of space to allocate $size bytes. available: $available")
+      self._grow(size, align)
+      // The fresh chunk is sized to fit this allocation
+      self.alloc-layout(size, align)
     }
   }
 
-  fn alloc[t](self: *arena): *t {
-    let data-start = self.alloc-layout(types/size[t], types/align[t])
-    data-start.as[*t]
+  fn _grow(self: *arena, size: size, align: size) {
+    let overhead = types/stride[arena-chunk] + MIN_ALIGN + align
+    let needed = size + overhead
+    let first-len = self.first-end.diff(self.first-base)
+    let chunk-len = if needed > first-len needed else first-len
+    let region = platform/memory/acquire(chunk-len)
+    let record: *mut arena-chunk = region.base.rw[arena-chunk]
+    record.* = .{ region, next = self.extra-chunks }
+    self.extra-chunks = region.base
+    let data-start = region.base.add-bytes(types/stride[arena-chunk]).aligned(MIN_ALIGN)
+    self.base-ptr = data-start
+    self.cur-addr = data-start
+    self.end-addr = region.base.add-bytes(region.len)
   }
 
   fn push[t](self: *arena, t: t): *t {
@@ -132,7 +155,7 @@ ns for arena {
   }
 
   fn alloc-buffer[t](self: *arena, size): buffer[t] {
-    buffer/allocate-in[t](context :custom-arena self)(size)
+    buffer/allocate-in[t, _](self, size)
   }
 
   fn push-string(self: *arena, s: string): string {
@@ -141,7 +164,7 @@ ns for arena {
   }
 
   fn alloc-list[t](self: *arena, cap: size): list[t] {
-    list/with-capacity-in(context :custom-arena self)(cap)
+    list/with-capacity-in(self, cap)
   }
 
   fn try-realloc(self: *arena, old-ptr: ptr, old-size: size, new-size: size, align: size): ptr {
@@ -166,9 +189,19 @@ ns for arena {
   fn pop-to-mark(self: *arena, arena-mark) {
     assert(arena-mark.start >= self.base-ptr)
     assert(arena-mark.start < self.end-addr)
-    assert(arena-mark.start >= self.cur-addr)
+    assert(arena-mark.start <= self.cur-addr)
     self.cur-addr = arena-mark.start
   }
 
 }
 type arena-mark = { start: ptr }
+
+impl allocator for *arena {
+  fn alloc(self: *arena, size: size, align: size): ptr {
+    self.alloc-layout(size, align)
+  }
+  fn realloc(self: *arena, old-ptr: ptr, old-size: size, align: size, new-size: size): ptr {
+    self.try-realloc(old-ptr, old-size, new-size, align)
+  }
+  fn free(_self: *arena, _ptr: ptr, _size: size, _align: size) { .{} }
+}

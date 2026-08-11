@@ -14,6 +14,75 @@ fn test() {
   let p = mem/new-in-place[point](.{ x = 4, y = 5 })
   assert-equals(p.*, .{ x = 4, y = 5 })
 
+  mark-test()
+  ability-test()
+  chaining-test()
+}
+
+fn chaining-test() {
+  // Tiny first chunk so growth chains within a few pushes
+  let a = core/arena/init(4096)
+  let first = a.push(1: u64)
+  let ptrs = list/with-capacity-in[*u64, _](mem/tmp(), 128)
+  for i in 0.until(600) {
+    ptrs.push-in(mem/tmp(), a.push(i.as[u64]))
+  }
+  // Every allocation survives across chunk boundaries
+  assert-equals(first.*, 1)
+  for i in 0.until(600) {
+    assert-equals(ptrs.get(i).*, i.as[u64])
+  }
+  // 600 * 8 bytes exceeds one 4096 chunk: growth must have chained
+  assert(not a.extra-chunks.is-null())
+
+  a.reset(false)
+  assert(a.extra-chunks.is-null())
+  let after-reset = a.push(42: u64)
+  assert-equals(after-reset.*, 42)
+
+  a.release()
+}
+
+fn generic-new[a: allocator](alloc: a, value: int): *mut int {
+  alloc.new(value)
+}
+
+fn ability-test() {
+  let a = core/arena/init-default()
+  let p = generic-new(a, 42)
+  assert-equals(p.*, 42)
+  // free on an arena is a no-op
+  a.free-t(p)
+  assert-equals(p.*, 42)
+
+  let hp = generic-new(heap, 7)
+  assert-equals(hp.*, 7)
+  heap.free-t(hp)
+
+  // grow through the ability: realloc preserves contents
+  let base = a.alloc(8, 8)
+  base.rw[int].* = 55
+  let grown = a.realloc(base, old-size = 8, align = 8, new-size = 64)
+  assert-equals(grown.rw[int].*, 55)
+
+  a.release()
+}
+
+fn mark-test() {
+  let a = core/arena/init-default()
+  let before = a.push(11)
+  let m = a.mark()
+  let scratch1 = a.push(22)
+  let scratch1-addr = scratch1.as[ptr]
+  let _ = a.push("scratch string")
+  a.pop-to-mark(m)
+  assert-equals(before.*, 11)
+  // freed space is reused: next allocation lands where scratch1 was
+  let after = a.push(33)
+  assert-equals(after.as[ptr], scratch1-addr)
+  // popping to the same mark twice is legal (idempotent)
+  a.pop-to-mark(m)
+  a.release()
 }
 
 type point = { x: int, y: int }

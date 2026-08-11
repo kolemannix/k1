@@ -122,6 +122,8 @@ pub enum ContextAbilityEntry {
 /// A packed (scope, symbol) key for the global per-kind symbol maps
 type ScopeKey = u64;
 
+type ScopeMap<V> = ahash::HashMap<ScopeKey, V>;
+
 #[inline]
 fn skey(scope: ScopeId, sym: u32) -> ScopeKey {
     ((scope.as_u32() as u64) << 32) | sym as u64
@@ -149,7 +151,7 @@ fn skey_parts(key: ScopeKey) -> (StringId, u32) {
 
 /// One scope's entries in a per-kind symbol map
 fn entries_in_scope<T: Copy>(
-    map: &FxHashMap<ScopeKey, T>,
+    map: &ScopeMap<T>,
     scope_id: ScopeId,
 ) -> impl Iterator<Item = (StringId, T)> + '_ {
     map.iter().filter_map(move |(key, v)| {
@@ -173,15 +175,15 @@ pub struct Scopes {
     pub scopes: VPool<Scope, ScopeId>,
     /// maps scopes to their parent lambda scope, if any. used for capture detection.
     lambda_cache: RefCell<FxHashMap<ScopeId, Option<ScopeId>>>,
-    context_variables_by_type: FxHashMap<ScopeKey, VariableId>,
-    context_variables_by_ability: FxHashMap<ScopeKey, ContextAbilityEntry>,
-    functions: FxHashMap<ScopeKey, FunctionId>,
-    namespaces: FxHashMap<ScopeKey, NamespaceId>,
-    types: FxHashMap<ScopeKey, TypeId>,
-    type_param_substs: FxHashMap<ScopeKey, TypeId>,
-    abilities: FxHashMap<ScopeKey, AbilityId>,
-    pending_type_defns: FxHashMap<ScopeKey, TypePendingDefinition>,
-    pending_ability_defns: FxHashMap<ScopeKey, ParsedAbilityId>,
+    context_variables_by_type: ScopeMap<VariableId>,
+    context_variables_by_ability: ScopeMap<ContextAbilityEntry>,
+    functions: ScopeMap<FunctionId>,
+    namespaces: ScopeMap<NamespaceId>,
+    types: ScopeMap<TypeId>,
+    type_param_substs: ScopeMap<TypeId>,
+    abilities: ScopeMap<AbilityId>,
+    pending_type_defns: ScopeMap<TypePendingDefinition>,
+    pending_ability_defns: ScopeMap<ParsedAbilityId>,
     pub lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
     pub loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
     pub block_defers: FxHashMap<ScopeId, ScopeDefers>,
@@ -306,15 +308,15 @@ impl Scopes {
         let mut scopes = Scopes {
             scopes: VPool::make("scopes"),
             lambda_cache: RefCell::new(FxHashMap::new()),
-            context_variables_by_type: FxHashMap::new(),
-            context_variables_by_ability: FxHashMap::new(),
-            functions: FxHashMap::new(),
-            namespaces: FxHashMap::new(),
-            types: FxHashMap::new(),
-            type_param_substs: FxHashMap::new(),
-            abilities: FxHashMap::new(),
-            pending_type_defns: FxHashMap::new(),
-            pending_ability_defns: FxHashMap::new(),
+            context_variables_by_type: ScopeMap::new(),
+            context_variables_by_ability: ScopeMap::new(),
+            functions: ScopeMap::new(),
+            namespaces: ScopeMap::new(),
+            types: ScopeMap::new(),
+            type_param_substs: ScopeMap::new(),
+            abilities: ScopeMap::new(),
+            pending_type_defns: ScopeMap::new(),
+            pending_ability_defns: ScopeMap::new(),
             lambda_info: FxHashMap::new(),
             loop_info: FxHashMap::new(),
             block_defers: FxHashMap::new(),
@@ -425,21 +427,22 @@ impl Scopes {
         self.abilities.get(&skey_name(scope_id, name)).copied()
     }
 
-    /// Note: name-based, so an ability brought into scope only under a `use`
-    /// alias won't be found by its canonical name
-    pub fn is_ability_id_in_scope(
-        &self,
-        scope_id: ScopeId,
-        name: StringId,
-        target_ability_id: AbilityId,
-    ) -> bool {
-        self.walk_chain(scope_id, kinds::ABILITIES, |sid| {
-            match self.abilities.get(&skey_name(sid, name)) {
-                Some(found) if *found == target_ability_id => Some(()),
-                _ => None,
+    pub fn ability_ids_bound_to_name(&self, scope_id: ScopeId, name: StringId) -> SV4<AbilityId> {
+        let mut ids: SV4<AbilityId> = SV4::new();
+        let mut scope_id = scope_id;
+        loop {
+            let scope = self.get_scope(scope_id);
+            if scope.kinds & kinds::ABILITIES != 0
+                && let Some(found) = self.abilities.get(&skey_name(scope_id, name))
+                && !ids.contains(found)
+            {
+                ids.push(*found);
             }
-        })
-        .is_some()
+            match scope.parent {
+                Some(parent) => scope_id = parent,
+                None => return ids,
+            }
+        }
     }
 
     pub fn find_context_variable_by_type(
@@ -718,7 +721,7 @@ impl Scopes {
     /// Iterate the symbols of one kind defined directly in `scope_id`.
     /// A filtered scan of the whole map: for debugging/dumps and cold paths only.
     fn iter_scope_map<V: Copy>(
-        map: &FxHashMap<ScopeKey, V>,
+        map: &ScopeMap<V>,
         scope_id: ScopeId,
     ) -> impl Iterator<Item = (StringId, V)> + '_ {
         map.iter().filter_map(move |(k, v)| {
