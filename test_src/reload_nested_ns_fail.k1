@@ -1,8 +1,0 @@
-ns(reload) handlers {
-  ns inner {
-    fn get(): int { 0 }
-  }
-}
-
-fn main(): i32 { 0 }
-//errmsg: Not allowed in ns(reload) handlers: nested ns are not supported

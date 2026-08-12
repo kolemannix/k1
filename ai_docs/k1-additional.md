@@ -78,7 +78,6 @@ opening may declare it, disagreeing openings are an error — or per-fn with the
 ```rust
 fn module(): k1/module {
   let m = k1/module/new()
-  m.multithreaded()
   m.lib("foo", :static)
   m.link-args(["-L/some/path"])
   m
@@ -475,6 +474,11 @@ The basics guide does not yet enumerate operators. Tests cover:
 - Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`.
 - Boolean: `not`, `and`, `or`, with short-circuiting.
 - Bitwise: `&`, `|`, `^`, `<<`, `>>`.
+
+Binary operator precedence is C's, so ported C expressions parse identically
+(tightest first): `||` (pipe), then `* / %`, `+ -`, `<< >>`, `< <= > >=`,
+`== !=`, `&`, `^`, `|`, `and`, `or`, `?`. Note C's quirk is inherited:
+`a & b == c` is `a & (b == c)` — parenthesize mask tests.
 - Hex, binary, and underscore numeric literals.
 - Integer suffixes such as `255u8`, `-128i8`, and `3u64`.
 
@@ -556,7 +560,6 @@ See `test_src/suite1/rvo_test.k1`.
 
 Thread tests combine several runtime features:
 
-- `fn module(): k1/module` calling `m.multithreaded()`.
 - Thread-local mutable globals via `let(mutable, tls)`.
 - `std/thread/start` and `std/thread/join`.
 - Arena-backed allocation for cross-thread values.

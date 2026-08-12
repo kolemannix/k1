@@ -546,7 +546,9 @@ while i < 10 {
 }
 ```
 
-`loop` can yield a value through `break value`; a bare `break` exits with unit:
+`loop` can yield a value through `break value`; a bare `break` exits with unit.
+`continue` skips to the next iteration (the condition check of a `while`, the
+next `iter.next()` of a `for`):
 
 ```rust
 let found: int = loop {

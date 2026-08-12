@@ -1,8 +1,0 @@
-ns(reload) handlers {
-  macro twice(e) {
-    "$e + $e"
-  }
-}
-
-fn main(): i32 { 0 }
-//errmsg: Not allowed in ns(reload) handlers: macros cannot be included

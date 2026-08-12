@@ -8,13 +8,16 @@ bundle-name := if os == "linux" {
 }
 export LLVM_SYS_211_PREFIX := env_var_or_default("LLVM_SYS_211_PREFIX", "./llvm/install-llvm")
 
+run-frag +args:
+  RUST_BACKTRACE=full RUST_LOG=info cargo run --features=llvm-sys/prefer-dynamic --bin k1 -- {{args}}
+
 # Run the current scratch file; use for writing reproducers or not-yet-working code, then move it to test_src/ when done or fixed
 a:
-  ./run.sh run sandbox
+  just run-frag run sandbox
 
 # fastest path to checking compiler correctness; suite1 covers most features.
 ts1:
-  ./run.sh --cache false run test_src/suite1
+  just run-frag --cache false run test_src/suite1
 
 # exhaustive path; notably runs larger projects in dogfood
 test:
@@ -60,8 +63,7 @@ install: bundle
   cd builds/{{bundle-name}} && ./install.sh
 
 install-modules:
-  # rm -r ~/.k1/modules
-  cp -r modules/. ~/.k1/modules
+  rsync -a --exclude .k1-out modules/ ~/.k1/modules/
 
 repl +args:
   RUST_BACKTRACE=1 RUST_LOG=info \

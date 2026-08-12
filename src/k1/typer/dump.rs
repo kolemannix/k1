@@ -809,6 +809,7 @@ impl TypedProgram {
                 self.display_expr_id(brk.value, w, indentation)?;
                 w.write_char(')')
             }
+            TypedExpr::Continue { .. } => w.write_str("continue()"),
             TypedExpr::Lambda(lambda_expr) => {
                 w.write_char('\\')?;
                 let lambda_type_id = self.types.get(lambda_expr.lambda_type).as_lambda().unwrap();

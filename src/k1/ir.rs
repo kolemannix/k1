@@ -157,6 +157,7 @@ pub enum IrComment {
     BoolToInt,
     BreakLoopNoValue,
     BreakLoopWithValue,
+    ContinueLoop,
     CmpxchgResult,
     DaCapoMaestro,
     DeliverFnPointer,
@@ -245,6 +246,7 @@ impl IrComment {
             IrComment::BoolToInt => "bool_to_int",
             IrComment::BreakLoopNoValue => "break loop (no value)",
             IrComment::BreakLoopWithValue => "break loop (with value)",
+            IrComment::ContinueLoop => "continue loop",
             IrComment::CmpxchgResult => "cmpxchg result",
             IrComment::DaCapoMaestro => "da capo maestro",
             IrComment::DeliverFnPointer => "deliver fn pointer",
@@ -1570,6 +1572,7 @@ struct BuilderVariable {
 struct LoopInfo {
     break_value: Option<InstId>,
     end_block: BlockId,
+    continue_block: BlockId,
 }
 
 pub type BlockId = NodeHandle<Block, ProgramIr>;
@@ -2525,7 +2528,10 @@ fn compile_expr(
             let end_block = b.push_block(BlockSourceKind::WhileLoopEnd);
             let TypedExpr::Block(body_block) = b.k1.exprs.get(w.body) else { unreachable!() };
             let loop_scope_id = body_block.scope_id;
-            b.k1.ir.b_loops.insert(loop_scope_id, LoopInfo { break_value: None, end_block });
+            b.k1.ir.b_loops.insert(
+                loop_scope_id,
+                LoopInfo { break_value: None, end_block, continue_block: cond_block },
+            );
 
             b.push_jump(cond_block, IrComment::EnterWhileCond);
 
@@ -2556,9 +2562,14 @@ fn compile_expr(
                 unreachable!()
             };
             let body_scope_id = body_block.scope_id;
-            b.k1.ir
-                .b_loops
-                .insert(body_scope_id, LoopInfo { break_value, end_block: loop_end_block });
+            b.k1.ir.b_loops.insert(
+                body_scope_id,
+                LoopInfo {
+                    break_value,
+                    end_block: loop_end_block,
+                    continue_block: loop_body_block,
+                },
+            );
 
             // Go to the body
             b.push_jump(loop_body_block, IrComment::EnterLoop);
@@ -2595,6 +2606,11 @@ fn compile_expr(
                 let jmp = b.push_jump(end_block, IrComment::BreakLoopNoValue);
                 Ok(jmp.as_value())
             }
+        }
+        TypedExpr::Continue { loop_scope } => {
+            let continue_block = b.k1.ir.b_loops.get(&loop_scope).unwrap().continue_block;
+            let jmp = b.push_jump(continue_block, IrComment::ContinueLoop);
+            Ok(jmp.as_value())
         }
         TypedExpr::SumConstructor(sum_c) => {
             let sum_pt = b.get_physical_type(expr_type);

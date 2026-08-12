@@ -12,6 +12,14 @@ fn identity-nested[t](t: t): t {
   identity(t)
 }
 
+// t and iter are learnable only through i's iterable constraint; nesting a call
+// to this fn inside its own argument list overlaps two inference frames sharing
+// the same param TypeIds, so constraint fixup must prefer the innermost frame
+fn first-u[t, iter: iterator[item = t], i: iterable[item = t, i = iter], u](c: i, _extra: u): ?t {
+  let it = c.iterator()
+  it.&.next()
+}
+
 fn occurs-check-test[t](x: t): t {
   assert(
     test-compile( combine(x, some(x)) ) is :some _
@@ -45,6 +53,8 @@ fn test() {
   assert-equals(get-or-else(some(1000), -1), 1000)
 
   let _ = occurs-check-test(42)
+
+  assert(first-u(0.until(3), first-u(5.until(9), 0)) is :some(0))
 
   let _ = combine(opt:some 4, some(23))
   let _ = combine(opt:some 4, some(23)): opt[u32]

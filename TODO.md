@@ -42,6 +42,7 @@ pointer-free predicate - pod/serializable?
 - [ ] Add 'self -> *self' thunk adapters for ability objects, `dyn[allocator]` is impossible
 - [ ] Warn on zeroed() for non zeroable type
 - [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
+- [ ] unaligned load/store for scalars
 - [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
       way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
 
@@ -49,6 +50,14 @@ pointer-free predicate - pod/serializable?
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [ ] `#[must_use]` equivalent
+- [ ] labeled loops: `break :label` / `continue :label`. The brotli port's C `goto emit_remainder`
+      two-level exits became `done = true; break` + `if done break` flag chains (5 sites)
+- [ ] design min/max for scalars (comparable ability makes the generic trivial; brotli hand-rolled min-size)
+- [ ] integer inference gaps (repro: sandbox/sandbox.k1): (a) `2 * d` vs `d * 2` differ — literal-lhs
+      defaults i64 and widens the u32 rhs up, literal-rhs adopts u32 and wraps; (b) binary ops widen
+      rhs into lhs type but have no least-upper-bound, so `u32 + i64` errors while `i64 + u32` works;
+      (c) expected-type propagation into generic calls pins the type param before argument-driven
+      inference, so `write-bits(depth.get-unchecked(i), ...)` fails where the two-line form widens fine
 - [ ] enum-from-sum type operator
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
 - [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
@@ -56,7 +65,8 @@ pointer-free predicate - pod/serializable?
 - [ ] auto-print implementation on-demand for sums
 - [ ] Exported functions
 - [ ] Tail calls
-- [ ] Implement at least one format specifier (precision, pretty)
+- [ ] Implement at least one format specifier (precision, pretty). Do precision ('places') first:
+      the brotli bench needed `k1-mbps.format(sb.&, 1)` string-builder calls x3 where `${k1-mbps:.1}` should do
 - [ ] decide if overflow traps or not (in debug and release, if those are even different)
 - [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
@@ -97,7 +107,7 @@ pointer-free predicate - pod/serializable?
 - [x] Iterator ability: why is peek the primitive? With peek(self: *self) immutable, a filtering iterator like mine can't cache what it found — next() = scan (peek) + scan again (advance-by). Also every nth impl in the codebase is the identical advance-by(n); self.next() — could that be a default? Was peek chosen for for-loop desugaring reasons, or would nextced-as-primitive with peek-via-buffering be on the table?
 
 bindgen dogfood list
-- [ ] dogfood(k1): implement 'continue'
+- [x] dogfood(k1): implement 'continue'
 - [x] dogfood(lsp): failed call still ls entity
 - [x] dogfood(lsp): sum/enum ctors ls entities
 - [x] dogfood(lsp): failed match arm still check others

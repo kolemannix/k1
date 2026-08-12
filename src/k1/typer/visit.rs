@@ -173,6 +173,7 @@ impl TypedProgram {
             TypedExpr::Cast(cast) => recurse!(cast.base_expr),
             TypedExpr::Return(ret) => recurse!(ret.value),
             TypedExpr::Break(brk) => recurse!(brk.value),
+            TypedExpr::Continue { .. } => {}
             TypedExpr::Lambda(lam) => {
                 let lambda_type_id = self.types.get(lam.lambda_type).as_lambda().unwrap();
                 let lambda_type = self.lambda_types.get(lambda_type_id);

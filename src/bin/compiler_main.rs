@@ -59,16 +59,17 @@ fn run() -> anyhow::Result<ExitCode> {
         Ok(cg) => match args.command {
             Command::Check { .. } => unreachable!(),
             Command::Build { .. } => Ok(ExitCode::SUCCESS),
-            Command::Run { .. } => {
+            Command::Run { ref program_args, .. } => {
                 info!("run executable: {}", cg.name());
-                compiler::run_compiled_program(
+                let exit_code = compiler::run_compiled_program(
                     &cg.k1.ast.idents,
                     cg.k1.config.out_dir,
                     cg.k1.config.home_dir,
                     cg.name(),
                     false,
+                    program_args,
                 );
-                Ok(ExitCode::SUCCESS)
+                if exit_code != Some(0) { Ok(ExitCode::FAILURE) } else { Ok(ExitCode::SUCCESS) }
             }
             Command::Test { .. } => {
                 info!("test executable: {}", cg.name());
@@ -78,6 +79,7 @@ fn run() -> anyhow::Result<ExitCode> {
                     cg.k1.config.home_dir,
                     cg.name(),
                     true,
+                    &[],
                 );
                 if exit_code != Some(0) { Ok(ExitCode::FAILURE) } else { Ok(ExitCode::SUCCESS) }
             }

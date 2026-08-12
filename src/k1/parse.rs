@@ -459,16 +459,20 @@ enum AssocDir {
 }
 
 impl BinaryOpKind {
+    // C's precedence set, except bitwise ops bind above comparisons (as in Rust and
+    // Zig), rejecting C's historic `a & b == c` quirk
     fn precedence(&self) -> usize {
         use BinaryOpKind as B;
         match self {
             B::Pipe => 104,
-            B::BitShiftLeft | B::BitShiftRight => 103,
-            B::BitAnd | B::BitOr | B::BitXor => 102,
-            B::Rem => 101,
-            B::Multiply | B::Divide => 100,
+            B::Multiply | B::Divide | B::Rem => 100,
             B::Add | B::Subtract => 90,
-            B::Less | B::LessEqual | B::Greater | B::GreaterEqual | B::Equals | B::NotEquals => 80,
+            B::BitShiftLeft | B::BitShiftRight => 85,
+            B::BitAnd => 84,
+            B::BitXor => 83,
+            B::BitOr => 82,
+            B::Less | B::LessEqual | B::Greater | B::GreaterEqual => 80,
+            B::Equals | B::NotEquals => 78,
             B::And => 70,
             B::Or => 66,
             B::OptionalElse => 65,
@@ -4845,8 +4849,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     } else {
                         None
                     };
-                    linkage =
-                        Some(Linkage::External { module_id: self.module_id, lib_name: None, fn_name });
+                    linkage = Some(Linkage::External {
+                        module_id: self.module_id,
+                        lib_name: None,
+                        fn_name,
+                    });
                 } else if modifier.kind == K::Ident && self.token_chars(modifier) == "lib" {
                     self.advance();
                     self.expect_kind(K::OpenParen)?;

@@ -327,7 +327,6 @@ impl<T: Copy, Index: PoolIndex> VecPool<T, Index> {
     }
 }
 
-
 // WHEN T IS EQ
 #[allow(unused)]
 impl<T: PartialEq, Index: PoolIndex> VecPool<T, Index> {

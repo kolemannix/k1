@@ -31,8 +31,7 @@ fn main() -> anyhow::Result<ExitCode> {
         let _len = std::io::stdin().read_line(&mut line).unwrap();
         let mut tokens = vec![];
         let source = SourceFile::make(&mut ast.mem, directory, filename, &line);
-        let (file_id, lex_result) =
-            k1::parse::lex_file_into_program(&mut ast, source, &mut tokens);
+        let (file_id, lex_result) = k1::parse::lex_file_into_program(&mut ast, source, &mut tokens);
         match lex_result {
             Ok(()) => {
                 for t in &tokens {

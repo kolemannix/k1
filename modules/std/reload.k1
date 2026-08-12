@@ -1,0 +1,135 @@
+// The runtime side of the ns(reload) feature
+ns reload {
+
+  use core/posix
+  use core/libc
+
+  type load-error = either {
+    no-descriptor({ ns-path: heap-string }),
+    dlopen-failed({ path: heap-string, message: heap-string }),
+    symbol-missing({ symbol: heap-string, path: heap-string }),
+  }
+
+  impl print for load-error {
+    fn print-to[w: writer](self, w) {
+      self is {
+        :no-descriptor d -> w.write("no reload descriptor for ${d.ns-path.raw()}"),
+        :dlopen-failed d -> w.write("dlopen of ${d.path.raw()} failed: ${d.message.raw()}"),
+        :symbol-missing s -> w.write("${s.path.raw()} does not export ${s.symbol.raw()}"),
+      }
+    }
+  }
+
+  type descriptor = { dylib-file-name: ptr, entry-count: u64, entries: ptr }
+  type entry = { symbol: ptr, fn-addr: *mut ptr }
+
+  // A sloppy helper since we lack this in std
+  fn dir-of(path: string): string {
+    let i = path.len()
+    while i > 0 {
+      if path.get(i - 1) == '/' return path.slice(0, i - 1)
+      i = i - 1
+    }
+    "."
+  }
+
+  let(mutable) load-count: u64 = 0
+
+  fn load-ns(ns-path: string): result[empty, load-error] {
+    let self-handle = posix/dlopen(ptr/null, posix/RTLD_NOW)
+    let descriptor-raw = posix/dlsym(self-handle, "__k1_reload_ns_${ns-path}".to-c-tmp().ptr)
+    if descriptor-raw.is-null() {
+      return :err :no-descriptor .{ ns-path = heap-string/cloned(ns-path) }
+    }
+    let descriptor = descriptor-raw.r[descriptor].*
+
+    let dylib-path = "${dir-of(sys/exe-path())}/${string/wrap-c(descriptor.dylib-file-name)}"
+    let probe = libc/files/fopen(dylib-path.to-c-tmp().ptr, "r\0".data-ptr())
+    if probe.is-null() {
+      return :err :dlopen-failed .{
+        path = heap-string/cloned(dylib-path),
+        message = heap-string/cloned("artifact missing: ${libc/errno-k1-string()}"),
+      }
+    }
+    let _ = libc/files/fclose(probe)
+
+    // Loaders cache images by path (dyld on macos, glibc's by-name match on
+    // linux): dlopen of a replaced artifact would return the stale image.
+    // Load through a unique temp copy, unlinked once mapped, so every load
+    // sees the artifact's current bytes.
+    let n = atomic/fetch-add(load-count.&, 1, :seq-cst)
+    let temp-path = "${dylib-path}.load-${n}"
+    files/write-entire-file(temp-path, files/read-to-string(dylib-path))
+    let handle = posix/dlopen(temp-path.to-c-tmp().ptr, posix/RTLD_NOW | posix/RTLD_LOCAL)
+    let _ = posix/unlink(temp-path.to-c-tmp().ptr)
+    if handle.is-null() {
+      let e = posix/dlerror()
+      let message = if e.is-null() "unknown dlopen failure" else string/wrap-c(e)
+      return :err :dlopen-failed .{
+        path = heap-string/cloned(dylib-path),
+        message = heap-string/cloned(message),
+      }
+    }
+
+    // Resolve every fn before patching anything: a load either fully swaps
+    // or changes nothing. Old images are never dlclosed; in-flight call
+    // trees drain in their own version.
+    let entries = span/wrap-raw[entry](descriptor.entries, descriptor.entry-count.as[size])
+    let addrs = list/with-capacity[ptr](entries.len())
+    for e in entries {
+      let addr = posix/dlsym(handle, e.symbol)
+      if addr.is-null() {
+        return :err :symbol-missing .{
+          symbol = heap-string/cloned(string/wrap-c(e.symbol)),
+          path = heap-string/cloned(dylib-path),
+        }
+      }
+      addrs.push(addr)
+    }
+    for e in entries {
+      atomic/store(e.fn-addr, addrs.get(it-index), :release)
+    }
+    :ok
+  }
+
+  type pending-load = {
+    state: u8,
+    error: load-error,
+  }
+
+  ns for pending-load {
+    fn poll(self: *pending-load): ?result[empty, load-error] {
+      let state = atomic/load(self.state.&, :acquire)
+      if state == 0 return :none
+      if state == 1 return :some(:ok)
+      :some(:err self.error)
+    }
+  }
+
+  type async-load = { ns-path: string, cell: *mut pending-load }
+
+  fn load-ns-worker(input: *mut async-load): ptr {
+    let cell = input.cell
+    load-ns(input.ns-path) is {
+      :ok -> {
+        heap.free-t(input)
+        atomic/store(cell.state.&, 1: u8, :release)
+      },
+      :err e -> {
+        eprintln("reload of ${input.ns-path} failed: ${e}")
+        cell.error = e
+        heap.free-t(input)
+        atomic/store(cell.state.&, 2: u8, :release)
+      }
+    }
+    ptr/null
+  }
+
+  fn load-ns-async(ns-path: string): *pending-load {
+    // zeroed memory is a valid pending-load: state 0, :no-descriptor with an
+    // empty ns-path
+    let cell = heap.alloc-t[pending-load]()
+    thread/start-detached(load-ns-worker, heap.new(.{ ns-path = ns-path, cell = cell }: async-load))
+    cell
+  }
+}

@@ -1,20 +1,14 @@
+set -e
+
 echo "Installing k1 binaries in ~/.k1"
 mkdir -p ~/.k1/bin
 
-rm ~/.k1/bin/k1lsp
-cp k1lsp ~/.k1/bin/k1lsp
+rm -f ~/.k1/bin/k1 ~/.k1/bin/k1lsp ~/.k1/bin/k1_test
+cp k1 k1lsp k1_test ~/.k1/bin/
 
-rm ~/.k1/bin/k1
-cp k1 ~/.k1/bin/k1
-
-rm ~/.k1/bin/k1_test
-cp k1_test ~/.k1/bin/k1_test
-
-rm -r ~/.k1/modules
-cp -r modules/. ~/.k1/modules 
-
-rm -r ~/.k1/test_src
-cp -r test_src/. ~/.k1/test_src 
+rm -rf ~/.k1/modules ~/.k1/test_src
+cp -r modules/. ~/.k1/modules
+cp -r test_src/. ~/.k1/test_src
 
 echo "Compiling k1 runtime"
 make -C ~/.k1/modules/core/libs

@@ -1,6 +1,0 @@
-ns(reload) handlers {
-  #static assert(true)
-}
-
-fn main(): i32 { 0 }
-//errmsg: Not allowed in ns(reload) handlers: #static and #meta definitions cannot be included

@@ -1,0 +1,188 @@
+use core/c-int
+use std/sys
+
+// C encoder through the streaming API with our exact parameters (lgwin 18,
+// single FINISH call) — the byte-exact parity reference.
+fn c-compress(input: span[u8], quality: u32): list[u8] {
+  let st = cbrotli/encoder-create-instance(ptr/null, ptr/null, ptr/null)
+  defer cbrotli/encoder-destroy-instance(st)
+  let _ = cbrotli/encoder-set-parameter(st, :quality, quality)
+  let _ = cbrotli/encoder-set-parameter(st, :lgwin, 18)
+
+  let out-cap = cbrotli/encoder-max-compressed-size(input.len()) + 1024
+  let out = buffer/allocate[u8](out-cap)
+  let avail-in: size = input.len()
+  let next-in: ptr = input.data-ptr()
+  let avail-out: size = out-cap
+  let next-out: ptr = out.data-ptr()
+  let total-out: size = 0
+  let ok = cbrotli/encoder-compress-stream(
+    st, :finish, avail-in.&, next-in.&, avail-out.&, next-out.&, total-out.&)
+  if ok == 0 crash("BrotliEncoderCompressStream failed")
+  if avail-in != 0 crash("C encoder did not consume all input")
+
+  let result: list[u8] = list/empty()
+  result.append-span(span/wrap-buffer(out.slice(0, out-cap - avail-out)))
+  result
+}
+
+fn check-round-trip(name: string, input: span[u8], encoded: span[u8]) {
+  let decoded = cbrotli/decompress(encoded, input.len())
+  assert-equals(decoded.len(), input.len())
+  let i: size = 0
+  while i < input.len() {
+    if decoded.get-unchecked(i) != input.get(i) {
+      crash("$name: round-trip mismatch at byte $i")
+    }
+    i = i + 1
+  }
+}
+
+fn check-input(name: string, input: span[u8], quality: size) {
+  let c-out = c-compress(input, quality.as[u64].as[u32])
+
+  let e = encoder/new-with-quality-in(mem/current-arena(), quality)
+  let k1-out: list[u8] = list/empty()
+  e.compress(input, k1-out.&)
+
+  check-round-trip(name, input, k1-out.as-span())
+
+  if k1-out.len() != c-out.len() {
+    crash("$name: k1 ${k1-out.len()} bytes != c ${c-out.len()} bytes")
+  }
+  let i: size = 0
+  while i < c-out.len() {
+    if k1-out.get(i) != c-out.get(i) {
+      crash("$name: byte $i differs: k1 ${k1-out.get(i)} c ${c-out.get(i)}")
+    }
+    i = i + 1
+  }
+  println("$name q$quality: ${input.len()} -> ${k1-out.len()} bytes, byte-identical to C")
+}
+
+fn check-streaming(name: string, input: span[u8], quality: size, chunk-size: size) {
+  // process/flush per chunk, then finish; the result must round-trip.
+  let e = encoder/new-with-quality-in(mem/current-arena(), quality)
+  let out: list[u8] = list/empty()
+  let pos: size = 0
+  while pos < input.len() {
+    let n = min-size(chunk-size, input.len() - pos)
+    e.process(input.slice(pos, pos + n), out.&)
+    e.flush(out.&)
+    pos = pos + n
+  }
+  e.finish(out.&)
+  check-round-trip(name, input, out.as-span())
+  println("$name q$quality: streaming ${input.len()} -> ${out.len()} bytes, round-trips")
+}
+
+fn make-corpora(): list[{ name: string, data: span[u8] }] {
+  let corpora: list[{ name: string, data: span[u8] }] = list/empty()
+  corpora.push(.{ name = "empty", data = span/empty[u8]() })
+  corpora.push(.{ name = "one-byte", data = "x".span-bytes() })
+  corpora.push(.{ name = "tiny", data = "hello brotli".span-bytes() })
+
+  let repeated = list/empty[u8]()
+  let i: size = 0
+  while i < 100000 {
+    repeated.push((i % 251).as[u8])
+    i = i + 1
+  }
+  corpora.push(.{ name = "cycle-251", data = repeated.as-span() })
+
+  let zeros = buffer/filled[u8](1 << 20, 0)
+  corpora.push(.{ name = "zeros-1mb", data = span/wrap-buffer(zeros) })
+
+  // Pseudo-random: xorshift, incompressible.
+  let rand = list/empty[u8]()
+  let state: u64 = 0x9E3779B97F4A7C15
+  i = 0
+  while i < 300000 {
+    state = state ^ (state << 13)
+    state = state ^ (state >> 7)
+    state = state ^ (state << 17)
+    rand.push((state & 0xFF).as[u8])
+    i = i + 1
+  }
+  corpora.push(.{ name = "random-300k", data = rand.as-span() })
+
+  // Large mixed-content text; k1 run executes with cwd = the module dir.
+  let text = core/files/read-to-string("../../src/k1/typer.rs").span-bytes()
+  corpora.push(.{ name = "typer.rs", data = text })
+
+  corpora
+}
+
+fn bench-one(name: string, input: span[u8], quality: size, reps: size) {
+  use std/time
+
+  // Warmup + measure the K1 encoder, reusing one encoder across streams the
+  // way a server would (reset() per response).
+  let k1-bytes: size = 0
+  let e = encoder/new-with-quality-in(mem/current-arena(), quality)
+  let warm: list[u8] = list/empty()
+  e.compress(input, warm.&)
+  let k1-start = time/read-cpu-counter()
+  let r: size = 0
+  while r < reps {
+    e.reset()
+    let out: list[u8] = list/with-capacity(warm.len() + 64)
+    e.compress(input, out.&)
+    k1-bytes = out.len()
+    r = r + 1
+  }
+  let k1-nanos = time/counter-to-nanos(time/read-cpu-counter() - k1-start)
+
+  // Same shape for the C encoder (stream instance, lgwin 18).
+  let cq = quality.as[u64].as[u32]
+  let _ = c-compress(input, cq) // warmup
+  let c-start = time/read-cpu-counter()
+  r = 0
+  while r < reps {
+    let _ = c-compress(input, cq)
+    r = r + 1
+  }
+  let c-nanos = time/counter-to-nanos(time/read-cpu-counter() - c-start)
+
+  let total-mb = (input.len() * reps).as[f64] / 1000000.0
+  let k1-mbps = total-mb / (k1-nanos.as[f64] / 1000000000.0)
+  let c-mbps = total-mb / (c-nanos.as[f64] / 1000000000.0)
+  let ratio = k1-mbps / c-mbps
+  let sb = string-builder/new()
+  sb.write("$name q$quality: k1 ")
+  k1-mbps.format(sb.&, 1)
+  sb.write(" MB/s, c ")
+  c-mbps.format(sb.&, 1)
+  sb.write(" MB/s (")
+  ratio.format(sb.&, 2)
+  sb.write("x), ${input.len()} -> $k1-bytes bytes")
+  println(sb.&.build())
+}
+
+fn main(argc: c-int, argv: ptr): i32 {
+  let args = sys/parse-main-args(argc, argv)
+  let corpora = make-corpora()
+  for q in [0: size, 1] {
+    for c in corpora {
+      check-input(c.name, c.data, q)
+    }
+    for c in corpora {
+      if c.data.len() > 0 {
+        check-streaming("${c.name}/64k-chunks", c.data, q, 1 << 16)
+      }
+    }
+  }
+  println("all q0+q1 parity + round-trip checks passed")
+
+  if args.len() > 1 and args.get(1) == "bench" {
+    for q in [0: size, 1] {
+      println("")
+      for c in corpora {
+        if c.data.len() >= 100000 {
+          bench-one(c.name, c.data, q, 20)
+        }
+      }
+    }
+  }
+  0
+}

@@ -1,0 +1,86 @@
+// Bindings to the vendored google/brotli C library (v1.1 tree): encoder,
+// decoder, and streaming encoder API, plus one-shot compress/decompress
+// helpers. The K1-native encoder port lives in dogfood/brotli; this module is
+// the reference implementation for benchmarks and round-trip verification.
+use core/c-int
+
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.lib("brotli", :static)
+  m.setup(["libs/libbrotli.a"], ["vendor"])
+  m
+}
+
+type mode = either(u32) { generic = 0, text = 1, font = 2 }
+
+type decoder-result = either(u32) {
+  error = 0, success = 1, needs-more-input = 2, needs-more-output = 3
+}
+
+type encoder-op = either(u32) { process = 0, flush = 1, finish = 2, emit-metadata = 3 }
+
+type encoder-param = either(u32) { mode = 0, quality = 1, lgwin = 2 }
+
+fn(extern("BrotliEncoderCompress"), lib("brotli")) encoder-compress(
+  quality: c-int,
+  lgwin: c-int,
+  mode: mode,
+  input-size: size,
+  input: ptr,
+  encoded-size: *mut size,
+  encoded: ptr,
+): c-int
+
+fn(extern("BrotliEncoderMaxCompressedSize"), lib("brotli")) encoder-max-compressed-size(input-size: size): size
+
+fn(extern("BrotliDecoderDecompress"), lib("brotli")) decoder-decompress(
+  encoded-size: size,
+  encoded: ptr,
+  decoded-size: *mut size,
+  decoded: ptr,
+): decoder-result
+
+fn(extern("BrotliEncoderCreateInstance"), lib("brotli")) encoder-create-instance(
+  alloc-func: ptr, free-func: ptr, opaque: ptr
+): ptr
+
+fn(extern("BrotliEncoderDestroyInstance"), lib("brotli")) encoder-destroy-instance(state: ptr)
+
+fn(extern("BrotliEncoderSetParameter"), lib("brotli")) encoder-set-parameter(
+  state: ptr, param: encoder-param, value: u32
+): c-int
+
+fn(extern("BrotliEncoderCompressStream"), lib("brotli")) encoder-compress-stream(
+  state: ptr,
+  op: encoder-op,
+  available-in: *mut size,
+  next-in: *mut ptr,
+  available-out: *mut size,
+  next-out: *mut ptr,
+  total-out: *mut size,
+): c-int
+
+// One-shot compress at the given quality into a fresh ambient-arena buffer.
+fn compress(input: span[u8], quality: c-int, lgwin: c-int): buffer[u8] {
+  let max = encoder-max-compressed-size(input.len())
+  let out = buffer/allocate[u8](max)
+  let out-size: size = max
+  let ok = encoder-compress(
+    quality, lgwin, :generic,
+    input.len(), input.data-ptr(),
+    out-size.&, out.data-ptr())
+  if ok == 0 crash("BrotliEncoderCompress failed")
+  out.slice(0, out-size)
+}
+
+// Decompress into a caller-sized buffer; crashes unless the whole input
+// decodes exactly. expected-size must match the original size.
+fn decompress(encoded: span[u8], expected-size: size): buffer[u8] {
+  let out = buffer/allocate[u8](if expected-size == 0 1 else expected-size)
+  let out-size: size = out.len()
+  let res = decoder-decompress(
+    encoded.len(), encoded.data-ptr(),
+    out-size.&, out.data-ptr())
+  require res is :success else crash("BrotliDecoderDecompress: ${res.enum-name()}")
+  out.slice(0, out-size)
+}

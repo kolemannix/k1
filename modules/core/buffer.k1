@@ -38,15 +38,8 @@ ns for buffer {
     .{ len, data }
   }
 
-  fn wrap-array[t, n: static size](array: *mut array[t, n]): buffer[t] {
-    let l = array.len()
-    let wrapped = wrap-ref(array.get-base(), l)
-    wrapped
-  }
-
   fn from-array[t, n: static size](array: *array[t, n]): buffer[t] {
-    let wrapped = wrap-array[t, n](array)
-    wrapped.cloned()
+    array.as-span().inner-buffer().cloned()
   }
 
   fn from-span[t](span: span[t]): buffer[t] {

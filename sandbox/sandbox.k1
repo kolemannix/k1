@@ -1,6 +1,68 @@
-fn main() {
-  let x = #static 42
-  #static(x) {
-    x
-  }
+// Repro: lossless integer widening and literal inference, cases from the
+// brotli port. Cases 1-4 all WORK — widening exists and is solid. The three
+// FAIL cases at the bottom are the actual gaps; uncomment to see each error.
+
+fn takes-size(x: size): size { x }
+
+fn main(): i32 {
+  let b: u8 = 200
+  let w: u16 = 40000
+  let d: u32 = 3000000000
+  let s: size = 1000
+  let u: u64 = 7
+
+  // --- 1: lossless widening at let annotations: all fine ---
+  let c1a: u64 = b   // u8 -> u64
+  let c1b: size = b  // u8 -> i64
+  let c1c: u64 = d   // u32 -> u64
+  let c1d: size = d  // u32 -> i64
+  let c1e: i64 = w   // u16 -> i64
+  println("case1 ok: $c1a $c1b $c1c $c1d $c1e")
+
+  // --- 2: widening at (monomorphic) call args and index positions: fine ---
+  let c2a = takes-size(b)
+  let arr: array[u32, 4] = [10, 20, 30, 40]
+  let idx: u8 = 2
+  let c2b = arr.get(idx)
+  println("case2 ok: $c2a $c2b")
+
+  // --- 3: widening of the RHS in mixed binary ops: fine ---
+  let c3a = s + b   // size + u8
+  let c3b = u * d   // u64 * u32
+  let c3c = s - w   // size - u16
+  println("case3 ok: $c3a $c3b $c3c")
+
+  // --- 4: SURPRISE — literal side changes the arithmetic. Both compile,
+  // but `2 * d` defaults the literal to i64 and WIDENS d into it (i64 math,
+  // 6000000000), while `d * 2` adopts u32 from the lhs (u32 math, wraps to
+  // 1705032704). Multiplication is not inference-commutative.
+  let c4a = 2 * d
+  let c4b = d * 2
+  println("case4: 2*d = $c4a  but  d*2 = $c4b")
+
+  // --- 5 FAILS: no least-upper-bound in binary ops. The RHS widens into the
+  // LHS's type (case 3), but never the reverse:
+  let big: i64 = 3
+  let h: u32 = 5
+  let c5-ok = big + h    // u32 rhs widens into i64 lhs: fine
+  // let c5-bad = h + big   // "Expected u32 but got i64 in add/add.rhs"
+  println("case5 ok: $c5-ok")
+
+  // --- 6 FAILS: the big one from the port. Expected-type propagation into a
+  // GENERIC call pins the type param before argument-driven inference or
+  // widening runs: get-unchecked's `t` becomes i64 from the param's expected
+  // type, then buffer[u8] mismatches. The two-line form works.
+  let depths: buffer[u8] = buffer/filled(4, 7)
+  let dv = depths.get-unchecked(0)
+  let c6-ok = takes-size(dv)                       // monomorphic u8 arg widens
+  // let c6-bad = takes-size(depths.get-unchecked(0))
+  //   "Expected buffer[i64] but got buffer[u8]: Param 't' is incorrect"
+  println("case6 ok: $c6-ok")
+
+  // 7 (was 5a) FAILS via 4+5 combined: literal-lhs promotes the whole
+  // expression to i64, which then can't be the rhs of a u32 add:
+  // let adjust = 2 * (if h < 11 h else 11)   // i64 by case-4 defaulting
+  // let c7 = h + adjust                      // "Expected u32 but got i64"
+
+  0
 }

@@ -571,8 +571,6 @@ ns k1 {
   let os-macos: bool = os is :macos
   let os-posix: bool = os is :macos or os is :linux
 
-  let multithreading: bool = builtin
-
   // The widest SIMD register the target supports;
   // `vector[u8, type-of(k1/simd-bytes)]`
   let simd-bytes: static size = builtin
@@ -594,11 +592,8 @@ ns k1 {
     link-type: link-kind,
   }
 
-  // A parsed expression id captured by the compiler; 0 = none
-  // claude: Lets kill this alias and lean on the field name; params-expr-id instead of params
-  type(alias) parsed-expr = u64
-
-  type dep-entry = { name: string, params: parsed-expr }
+  // params-expr-id is a parsed expression id captured by the compiler; 0 = none
+  type dep-entry = { name: string, params-expr-id: u64 }
 
   type setup-decl = {
     outputs: list[string],
@@ -612,7 +607,6 @@ ns k1 {
     deps: list[dep-entry],
     libs: list[library-ref],
     link-args: list[string],
-    multithreading: bool,
     setup: opt[setup-decl],
   }
 
@@ -623,7 +617,6 @@ ns k1 {
         deps = list/empty(),
         libs = list/empty(),
         link-args = list/empty(),
-        multithreading = false,
         setup = :none,
       }
     }
@@ -638,18 +631,13 @@ ns k1 {
       self.kind = :some(:library)
     }
 
-    fn multithreaded(self: *mut module) {
-      self.multithreading = true
-    }
-
     fn dep(self: *mut module, name: string) {
-      self.add-dep(name, 0)
+      self.add-dep-impl(name, 0)
     }
 
     // The compiler rewrites `m.dep(name, .{ ... })` to target this fn, passing the
     // captured params expression id; not meant to be called directly
-    // claude: this function's name should be more hidden and hard to call, add-dep-internal-impl or something
-    fn add-dep(self: *mut module, name: string, params: parsed-expr) {
+    fn add-dep-impl(self: *mut module, name: string, params-expr-id: u64) {
       if name.is-empty() { crash("empty dep name") }
       if not name.get(0).is-ascii-lower() {
         crash("invalid dep name '$name': dep names start with a lowercase ascii letter")
@@ -661,7 +649,7 @@ ns k1 {
         }
       }
       for self.deps { if it.name == name { crash("duplicate dep '$name'") } }
-      self.deps.push(.{ name, params })
+      self.deps.push(.{ name, params-expr-id })
     }
 
     fn lib(self: *mut module, name: string, link-type: link-kind) {
@@ -889,6 +877,16 @@ ns array {
   fn(extern("posix_spawn_file_actions_adddup2")) posix_spawn_file_actions_adddup2(file-actions: ptr, fd: c-int, new-fd: c-int): c-int
   fn(extern("posix_spawn_file_actions_addclose")) posix_spawn_file_actions_addclose(file-actions: ptr, fd: c-int): c-int
 
+  let RTLD_NOW: c-int = 0x2
+  let RTLD_LOCAL: c-int = (if k1/os-macos 0x4 else 0)
+  fn(extern("dlopen")) dlopen(path: ptr, mode: c-int): ptr
+  fn(extern("dlsym")) dlsym(handle: ptr, symbol: ptr): ptr
+  fn(extern("dlerror")) dlerror(): ptr
+
+  fn(extern("readlink")) readlink(path: ptr, buf: ptr, bufsize: c-sizet): i64
+  fn(extern("unlink")) unlink(path: ptr): c-int
+  fn(extern("access")) access(path: ptr, mode: c-int): c-int
+
   fn(extern("_NSGetEnviron")) _NSGetEnviron(): ptr
   let(extern) environ: ptr
   fn environ-ptr(): ptr {
@@ -912,6 +910,7 @@ ns libc {
   fn(extern("realloc")) realloc(ptr: ptr, size: size): ptr
 
   fn(extern("strlen")) strlen(c-str: ptr): size
+  fn(extern("getenv")) getenv(name: ptr): ptr
 
   fn(extern("__error")) __error(): ptr
   fn(extern("__errno_location")) __errno_location(): ptr
@@ -946,6 +945,8 @@ ns libc {
   ns math {
     fn(extern("expf")) exp_f32(f32): f32
     fn(extern("exp")) exp_f64(f64): f64
+    fn(extern("log2f")) log2_f32(f32): f32
+    fn(extern("log2")) log2_f64(f64): f64
   }
 
 }
@@ -996,6 +997,15 @@ fn crash(context locn: k1/source-location)(msg: string): never {
 
 fn crash-bounds(context locn: k1/source-location)(size: size, index: size, msg: string): never {
   crash("$msg: $index >= $size")
+}
+
+ns k1 {
+  // Called by the codegen-emitted stub of a reloadable fn when its slot is
+  // still null; both args are NUL-terminated names baked into the stub
+  fn crash-unloaded-ns(ns-name: ptr, fn-name: ptr): never {
+    let loaded-ns = string/wrap-c(ns-name)
+    crash("reloadable ns ${loaded-ns} not loaded; call ${loaded-ns}/load() (called: ${string/wrap-c(fn-name)})")
+  }
 }
 
 macro for-each(binding, iterable, body) {

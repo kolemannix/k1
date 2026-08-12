@@ -9,13 +9,13 @@ use std::path::Path;
 
 use crate::kmem::{self, MStr, Mem};
 use crate::parse::{IdentPool, StringId, write_source_location};
-use crate::typer::{LibRefLinkType, MemTmp, MessageLevel, TypedProgram};
+use crate::typer::{LibRefLinkType, MemTmp, MessageLevel, NamespaceId, TypedProgram};
 use crate::{kpath, typer};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
 use log::{error, info};
 
-use crate::codegen_llvm::Cg;
+use crate::codegen_llvm::{Cg, CgUnit};
 
 use std::path::PathBuf;
 
@@ -38,6 +38,14 @@ impl TargetOs {
             TargetOs::Linux => "linux",
             TargetOs::MacOs => "macos",
             TargetOs::Wasm => "wasm",
+        }
+    }
+
+    pub fn dylib_ext(&self) -> &'static str {
+        match self {
+            TargetOs::Linux => "so",
+            TargetOs::MacOs => "dylib",
+            TargetOs::Wasm => unreachable!("no dylibs on wasm"),
         }
     }
 }
@@ -183,6 +191,9 @@ pub enum Command {
     Run {
         /// File
         file: PathBuf,
+        /// Arguments passed through to the program
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        program_args: Vec<String>,
     },
     #[clap(alias = "t")]
     Test {
@@ -215,7 +226,7 @@ impl Command {
         match self {
             Command::Check { file } => file,
             Command::Build { file } => file,
-            Command::Run { file } => file,
+            Command::Run { file, .. } => file,
             Command::Test { file } => file,
             Command::Repl { file } => file,
             Command::Server { file } => file,
@@ -1378,7 +1389,21 @@ pub fn codegen_module<'ctx, 'module>(
     k1: &'module mut TypedProgram,
 ) -> Result<Cg<'ctx, 'module>> {
     let codegen_start = std::time::Instant::now();
-    let mut codegen = Cg::create(ctx, k1, args.debug, args.optimize);
+
+    let mut reload_nss: Vec<NamespaceId> = vec![];
+    for (_, function) in k1.function_iter() {
+        if function.is_reloadable && !reload_nss.contains(&function.namespace_id) {
+            reload_nss.push(function.namespace_id);
+        }
+    }
+    if !reload_nss.is_empty() && args.filc {
+        bail!("ns(reload) is not supported under --filc");
+    }
+    for ns_id in &reload_nss {
+        write_reload_dylib(args, ctx, k1, *ns_id)?;
+    }
+
+    let mut codegen = Cg::create(ctx, k1, args.debug, args.optimize, CgUnit::Host);
     let mut module_name = codegen.name().to_string();
     if args.command.is_test() {
         module_name.push_str("_test");
@@ -1447,9 +1472,100 @@ pub fn codegen_module<'ctx, 'module>(
         }
     }
 
-    write_executable(codegen.k1, &module_name, &[])?;
+    let mut link_options: Vec<String> = vec![];
+    if !reload_nss.is_empty() {
+        // Ensure host globals are visible to dlopen'd reload dylibs
+        let export_flag = match codegen.k1.config.target.target_os() {
+            TargetOs::MacOs => "-Wl,-export_dynamic",
+            TargetOs::Linux => "-rdynamic",
+            TargetOs::Wasm => bail!("ns(reload) is not supported on wasm"),
+        };
+        link_options.push(export_flag.to_string());
+    }
+    write_executable(codegen.k1, &module_name, &link_options)?;
 
     Ok(codegen)
+}
+
+/// Codegens and links one reloadable ns's dylib:
+/// `.k1-out/<program>.<ns>.<dylib|so>` beside the executable
+fn write_reload_dylib(
+    args: &Args,
+    ctx: &Context,
+    k1: &mut TypedProgram,
+    ns_id: NamespaceId,
+) -> Result<()> {
+    let dylib_start = std::time::Instant::now();
+    let ns_name = k1.ident_str(k1.namespaces.get(ns_id).name).to_string();
+    let module_name = k1.ast.name.clone();
+    let target_os = k1.config.target.target_os();
+    let out_dir = k1.config.out_dir;
+
+    let mut cg = Cg::create(ctx, k1, args.debug, args.optimize, CgUnit::ReloadDylib(ns_id));
+    if let Err(e) = cg.codegen_reload_dylib() {
+        let use_color = std::io::stderr().is_terminal();
+        write_source_location(
+            &mut std::io::stderr(),
+            &cg.k1.ast,
+            e.span,
+            MessageLevel::Error,
+            6,
+            Some(cg.k1.ident_str(e.message)),
+            use_color,
+        )
+        .unwrap();
+        anyhow::bail!(cg.k1.message_to_anyhow(e))
+    }
+    let optimize_ir = args.optimize && !cg.k1.config.filc;
+    cg.optimize_verify(optimize_ir)?;
+
+    let idents = &cg.k1.ast.idents;
+    let unit_name = format!("{module_name}.{ns_name}");
+    if args.emit_llvm {
+        let ll_path = kpath::join_tmp(
+            cg.k1.get_tmp_unsafe(),
+            idents,
+            out_dir,
+            format_args!("{unit_name}.ll"),
+        );
+        std::fs::write(Path::new(ll_path.as_str()), cg.emit_llvm_ir_text())
+            .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
+    }
+    let obj_path =
+        kpath::join_tmp(cg.k1.get_tmp_unsafe(), idents, out_dir, format_args!("{unit_name}.o"));
+    if cg.emit_object_file(obj_path.as_str()).is_err() {
+        bail!("Error writing dylib object file to path: {obj_path}");
+    }
+
+    let dylib_ext = target_os.dylib_ext();
+    let dylib_path = kpath::join_tmp(
+        cg.k1.get_tmp_unsafe(),
+        idents,
+        out_dir,
+        format_args!("{unit_name}.{dylib_ext}"),
+    );
+    let mut link_cmd = std::process::Command::new("cc");
+    match target_os {
+        TargetOs::MacOs => {
+            link_cmd.arg("-dynamiclib");
+            link_cmd.arg("-undefined").arg("dynamic_lookup");
+        }
+        TargetOs::Linux => {
+            link_cmd.arg("-shared");
+        }
+        TargetOs::Wasm => unreachable!(),
+    }
+    link_cmd.arg(obj_path.as_str());
+    link_cmd.arg("-o");
+    link_cmd.arg(dylib_path.as_str());
+    log::debug!("Reload dylib link command: {:?}", link_cmd);
+    if !link_cmd.status()?.success() {
+        bail!("linking reload dylib {dylib_path} failed");
+    }
+    if args.chatty {
+        eprintln!("reload dylib {unit_name} took {}ms", dylib_start.elapsed().as_millis());
+    }
+    Ok(())
 }
 
 // Eventually, we want to return output and exit code to the application
@@ -1459,6 +1575,7 @@ pub fn run_compiled_program(
     program_home_dir: StringId,
     module_name: &str,
     is_test: bool,
+    program_args: &[String],
 ) -> Option<i32> {
     let exe_path = kpath::join_buf(
         idents,
@@ -1466,6 +1583,7 @@ pub fn run_compiled_program(
         format_args!("{}{}", module_name, if is_test { "_test" } else { "" }),
     );
     let mut run_cmd = std::process::Command::new(exe_path);
+    run_cmd.args(program_args);
     run_cmd.current_dir(idents.get_string(program_home_dir));
     log::debug!("Run Command: {:?}", run_cmd);
     let run_status = run_cmd.status().unwrap();

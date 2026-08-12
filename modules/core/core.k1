@@ -159,6 +159,26 @@ ns files {
     }
   }
 
+  fn exists(path: string): bool {
+    posix/access(path.to-c-tmp().ptr, 0) == 0
+  }
+
+}
+
+ns sys {
+  fn env(name: string): ?string {
+    let v = libc/getenv(name.to-c-tmp().ptr)
+    if v.is-null() :none else :some(string/wrap-c(v))
+  }
+
+  // The k1 installation root: the K1_HOME env var when set (dev workflows point
+  // it at a repo checkout), otherwise the installed location ~/.k1
+  fn k1-home(): string {
+    env("K1_HOME") is {
+      :some h -> h,
+      :none -> "${env("HOME").!}/.k1",
+    }
+  }
 }
 
 fn assert-msg(context locn: k1/source-location)(msg: string, value: bool) {
@@ -504,6 +524,12 @@ ns for u64 {
 
   fn trailing-zeros(self: u64): u64 {
     _cttz(self, false)
+  }
+
+  fn(intern("llvm.ctlz.i64")) _ctlz(x: u64, zero-poison: bool): u64
+
+  fn leading-zeros(self: u64): u64 {
+    _ctlz(self, false)
   }
 
 }

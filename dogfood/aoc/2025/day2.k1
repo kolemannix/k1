@@ -42,7 +42,7 @@ fn check-invalid-part1(value: i64): bool {
   buffer.reset()
   value.print-to(&buffer)
   let value-str = string/wrap-span(buffer.peek())
-  if value-str.len() & 1 == 1 {
+  if (value-str.len() & 1) == 1 {
     //println("skipping odd len {value-str}");
     return false
   }

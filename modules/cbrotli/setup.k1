@@ -1,0 +1,17 @@
+// Compiles the vendored google/brotli C sources (the reference implementation
+// we bench and verify against) into libs/libbrotli.a. Runs in the compile-time
+// VM with cwd = the module dir; needs cc on PATH.
+use std/process
+
+fn setup(_ctx: k1/setup-ctx) {
+  let script = `
+    set -e
+    mkdir -p libs .k1-out/cbrotli
+    for f in vendor/common/*.c vendor/dec/*.c vendor/enc/*.c; do
+      o=".k1-out/cbrotli/$(echo "\$f" | sed 's|vendor/||; s|/|_|g; s|\\.c\$|.o|')"
+      cc -O2 -Ivendor/include -c "\$f" -o "\$o"
+    done
+    ar rcs libs/libbrotli.a .k1-out/cbrotli/*.o
+    `
+  let _ = process/run-command("/bin/sh", ["-c", script], :inherit).!
+}

@@ -1,25 +1,32 @@
 ns thread
 
-use core/arena
-
 type(alias) thread = *empty
 
 ns pthread {
   fn(extern("pthread_create")) pthread_create(thread: *thread, attrs: ptr, start_routine: ptr, input: ptr): i32
   fn(extern("pthread_join")) pthread_join(thread: thread, retval: ptr): i32
+  fn(extern("pthread_detach")) pthread_detach(thread: thread): i32
 }
-fn start[t](arena: *mut arena, function: *fn(*mut t) -> ptr, input: *t): *thread {
-  let thread: *thread = arena.alloc-t[thread]()
-  let ret = pthread/pthread_create(thread, ptr/null, function.as[ptr], input.as[ptr])
-  if ret < 0 {
+
+fn start[t](handle: *mut thread, function: *fn(*mut t) -> ptr, input: *t) {
+  if pthread/pthread_create(handle, ptr/null, function.as[ptr], input.as[ptr]) != 0 {
     crash("pthread_create failed")
   }
-  thread
+}
+
+// Fire-and-forget: no join handle, the thread's resources release on exit.
+// `input` must outlive the thread; the caller can't know when it finishes,
+// so heap-allocate it and free it from the thread fn.
+fn start-detached[t](function: *fn(*mut t) -> ptr, input: *t) {
+  let handle: thread = ptr/null.rw[empty]()
+  start(handle.&, function, input)
+  if pthread/pthread_detach(handle) != 0 {
+    crash("pthread_detach failed")
+  }
 }
 
 fn join[t](thread: thread, retval: *mut t) {
-  let ret = pthread/pthread_join(thread, retval.as[ptr])
-  if ret < 0 {
+  if pthread/pthread_join(thread, retval.as[ptr]) != 0 {
     crash("pthread_join failed")
   }
 }

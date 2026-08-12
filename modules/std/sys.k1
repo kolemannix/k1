@@ -1,6 +1,29 @@
 ns sys
 
 #if k1/os-macos fn(extern("arc4random_uniform")) arc4random_uniform(upper-bound: u32): u32
+#if k1/os-macos fn(extern("_NSGetExecutablePath")) _NSGetExecutablePath(buf: ptr, bufsize: ptr): c-int
+
+fn exe-path(): string {
+  k1/os #is {
+    :macos -> {
+      let buf = buffer/allocate[u8](4096)
+      let cap-buf = buffer/allocate[u32](1)
+      cap-buf.get-ref-unchecked(0).* = 4096
+      if _NSGetExecutablePath(buf.data.as[ptr], cap-buf.data.as[ptr]) != 0 {
+        crash("exe-path: buffer too small")
+      }
+      string/wrap-c(buf.data.as[ptr])
+    },
+    :linux -> {
+      let buf = buffer/allocate[u8](4096)
+      let n = posix/readlink("/proc/self/exe".to-c-tmp().ptr, buf.data.as[ptr], 4096)
+      if n < 0 crash("exe-path: readlink /proc/self/exe failed")
+      buf.len = n.as[size]
+      string/wrap-byte-buffer(buf)
+    },
+    :wasm -> #static crash("wasm exe-path unimpl")
+  }
+}
 
 fn random(upper-bound: u32): u32 {
   k1/os #is {

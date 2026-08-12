@@ -32,6 +32,7 @@ fn low() {
   enum_construction/test()
   scopes/test()
   while_test/test()
+  continue_test/test()
   newline-stmt/test()
   use_test/test()
   type_order/test()

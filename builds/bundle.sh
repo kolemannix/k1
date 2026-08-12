@@ -1,22 +1,29 @@
+#!/bin/bash
 set -e
 set -x
 
 TT=$1
 DST=$2
 
+EXCLUDES=(
+  --exclude '.k1-out'
+  --exclude 'libs/*.a'
+  --exclude 'libs/*.so'
+  --exclude 'libs/*.dylib'
+  --exclude 'libs/*.o'
+  --exclude '*_module_dump.txt'
+  --exclude 'k1_lsp.log*'
+)
+
 mkdir -p $DST
 cp $TT/k1 $DST/k1
 cp $TT/lsp $DST/k1lsp
 cp $TT/k1_test $DST/k1_test
 
-# Hack to not ship compiled module libs
-make -C modules/core/libs clean
-cp -a modules/. "$DST/modules/"
-cp -a test_src/. "$DST/test_src/"
+rsync -a "${EXCLUDES[@]}" modules/ "$DST/modules/"
+rsync -a "${EXCLUDES[@]}" test_src/ "$DST/test_src/"
 cp builds/install.sh $DST
-rm $DST.tar.gz
-tar -czvf $DST.tar.gz -C "$(dirname "$DST")" "$(basename "$DST")"
-rm -r $DST
 
-# Hack to not ship compiled module libs
-make -C modules/core/libs
+rm -f $DST.tar.gz
+tar -czf $DST.tar.gz -C "$(dirname "$DST")" "$(basename "$DST")"
+rm -r $DST

@@ -52,15 +52,16 @@ use crate::compiler::CompilerConfig;
 use crate::kpath;
 use crate::lex::{self, Span, SpanId, TokenKind};
 use crate::parse::{
-    self, AstHandle, AstSlice, BinaryOpKind, FileId, ForExpr, IdentPool, InterpolatedStringPart,
-    NamedTypeArg, NumericWidth, ParseError, ParsedAbilityExpr, ParsedAbilityId,
-    ParsedAbilityImplId, ParsedBlock, ParsedBlockKind, ParsedCall, ParsedCallArg, ParsedExpr,
-    ParsedExprId, ParsedFnParamType, ParsedFunctionId, ParsedGlobalId, ParsedId, ParsedIfExpr,
-    ParsedListLiteral, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern,
-    ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt,
-    ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr,
-    ParsedTypeExprId, ParsedTypeParam, ParsedUnaryOpKind, ParsedUseId, ParsedVariable,
-    ParsedVariant, ParsedWhileExpr, QIdent, StringId, StructValueField, StructValueFieldKind,
+    self, AstHandle, AstSlice, BinaryOpKind, FileId, ForExpr, IdentPool, IdentSpanned,
+    InterpolatedStringPart, NamedTypeArg, NumericWidth, ParseError, ParsedAbilityExpr,
+    ParsedAbilityId, ParsedAbilityImplId, ParsedBlock, ParsedBlockKind, ParsedCall, ParsedCallArg,
+    ParsedExpr, ParsedExprId, ParsedFnParamType, ParsedFunctionId, ParsedGlobalId, ParsedId,
+    ParsedIfExpr, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId,
+    ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr,
+    ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr, ParsedTypeDefnId,
+    ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUnaryOpKind, ParsedUseId,
+    ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, StringId, StructValueField,
+    StructValueFieldKind,
 };
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -1019,6 +1020,7 @@ pub struct TypedFunctionParam {
 pub struct TypedFunction {
     pub name: StringId,
     pub scope: ScopeId,
+    pub namespace_id: NamespaceId,
     pub params: PermSlice<TypedFunctionParam>,
     pub type_params: TypeIdSlice,
     pub fnlike_type_params: PermSlice<FnlikeTypeParam>,
@@ -1036,6 +1038,7 @@ pub struct TypedFunction {
     pub is_concrete: bool,
     pub is_recursive: bool,
     pub is_macro: bool,
+    pub is_reloadable: bool,
     /// If we've generated a 'dyn' copy of this function, we store its id
     pub dyn_fn_id: Option<FunctionId>,
     /// 'let(returned)', RVO
@@ -1413,7 +1416,6 @@ pub struct TypedReturn {
 pub struct TypedBreak {
     pub value: TypedExprId,
     pub loop_scope: ScopeId,
-    pub loop_type: LoopType,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1511,6 +1513,11 @@ pub enum TypedExpr {
     /// break(<expr>)
     /// It has the expression type of 'never', but influences the return type of the enclosing loop
     Break(TypedBreak),
+    /// continue jumps to the top of the next iteration of the enclosing loop:
+    /// the condition check of a `while`, the body top of a `loop`
+    Continue {
+        loop_scope: ScopeId,
+    },
     /// Creating a lambda results in a Lambda expr.
     /// - A function is created
     /// - An environment capture expr is created
@@ -1549,6 +1556,7 @@ impl TypedExpr {
             TypedExpr::Cast(_) => "cast",
             TypedExpr::Return(_) => "return",
             TypedExpr::Break(_) => "break",
+            TypedExpr::Continue { .. } => "continue",
             TypedExpr::Lambda(_) => "lambda",
             TypedExpr::FunctionPointer(_) => "function_pointer",
             TypedExpr::StaticValue(_) => "static_value",
@@ -1856,7 +1864,6 @@ impl Namespaces {
     pub fn get_scope(&self, namespace_id: NamespaceId) -> ScopeId {
         self.get(namespace_id).scope_id
     }
-
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2025,6 +2032,7 @@ pub enum BuiltinTyperFunction {
     SumEquals,
     StructEquals,
     StructPrintTo,
+    SumPrintTo,
 }
 
 impl BuiltinTyperFunction {
@@ -2037,6 +2045,7 @@ impl BuiltinTyperFunction {
             BuiltinTyperFunction::SumEquals => "sum_equals",
             BuiltinTyperFunction::StructEquals => "struct_equals",
             BuiltinTyperFunction::StructPrintTo => "struct_print_to",
+            BuiltinTyperFunction::SumPrintTo => "sum_print_to",
         }
     }
 }
@@ -2515,7 +2524,6 @@ pub struct SetupDecl {
 pub struct ModuleManifest {
     pub kind: ModuleKind,
     pub deps: PermSlice<DepEntry>,
-    pub multithreading: bool,
     pub libs: PermSlice<LibRef>,
     pub link_args: PermSlice<StringId>,
     pub setup: Option<SetupDecl>,
@@ -2526,7 +2534,6 @@ impl ModuleManifest {
         Self {
             kind,
             deps: MSlice::empty(),
-            multithreading: false,
             libs: MSlice::empty(),
             link_args: MSlice::empty(),
             setup: None,
@@ -2592,7 +2599,6 @@ impl Module {
 
 #[derive(Clone, Copy)]
 pub struct ProgramSettings {
-    pub multithreaded: bool,
     pub executable: bool,
 }
 
@@ -3052,7 +3058,7 @@ impl TypedProgram {
             modules: VPool::make("modules"),
             modules_completed: vec![],
             config,
-            program_settings: ProgramSettings { multithreaded: false, executable: false },
+            program_settings: ProgramSettings { executable: false },
             functions: VPool::make("typed_functions"),
             variables: VPool::make("typed_variables"),
             types: VPool::make("types"),
@@ -3418,6 +3424,7 @@ impl TypedProgram {
         let (root_file, remaining_sources) = root_handle.join_root()?;
 
         let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
+        self.modules.get_mut(module_id).parsed_namespace_id = parsed_namespace_id;
         self.parse_module_source_file(
             module_id,
             module_name,
@@ -3437,7 +3444,6 @@ impl TypedProgram {
             let manifest = ModuleManifest {
                 kind: ModuleKind::Library,
                 deps: MSlice::empty(),
-                multithreading: false,
                 libs: self.mem.pushn(&[LibRef {
                     name: self.ast.idents.intern("k1rt"),
                     link_type: LibRefLinkType::Static,
@@ -3483,15 +3489,14 @@ impl TypedProgram {
             }
         }
 
+        // TODO: support building libraries as primary modules!
         if primary_module {
-            self.program_settings.multithreaded = manifest.multithreading;
             self.program_settings.executable = manifest.kind == ModuleKind::Executable;
         }
 
         let deps = manifest.deps;
         let m = self.modules.get_mut(module_id);
         m.manifest = manifest;
-        m.parsed_namespace_id = parsed_namespace_id;
         m.manifest_fn_defn = manifest_fn_defn;
         m.is_dir = remaining_sources.is_dir();
 
@@ -4979,8 +4984,8 @@ impl TypedProgram {
                             scope_id,
                             context,
                         )?;
-                    let instantiated_type_id = self
-                        .instantiate_generic_type(type_id, self.mem.getn(type_arguments_slice));
+                    let instantiated_type_id =
+                        self.instantiate_generic_type(type_id, self.mem.getn(type_arguments_slice));
 
                     self.emit_ls_entity(
                         ty_app.name.name_span,
@@ -5578,8 +5583,13 @@ impl TypedProgram {
             let mut new_type_args = self.tmp.new_list(original_args.len());
             let mut any_change = false;
             for prev_arg in original_args.as_slice(&self.mem) {
-                let new_type = self
-                    .substitute_in_type_ext_inner(*prev_arg, substitution_pairs, from_kinds, None, None);
+                let new_type = self.substitute_in_type_ext_inner(
+                    *prev_arg,
+                    substitution_pairs,
+                    from_kinds,
+                    None,
+                    None,
+                );
                 if new_type != *prev_arg {
                     any_change = true;
                 }
@@ -5674,8 +5684,13 @@ impl TypedProgram {
                 for variant in self.mem.getn(old_variants) {
                     let mut new_variant = *variant;
                     if let Some(p) = variant.payload {
-                        let new_payload_id = self
-                            .substitute_in_type_ext_inner(p, substitution_pairs, from_kinds, None, None);
+                        let new_payload_id = self.substitute_in_type_ext_inner(
+                            p,
+                            substitution_pairs,
+                            from_kinds,
+                            None,
+                            None,
+                        );
                         if new_payload_id != p {
                             any_changed = true;
                             new_variant.payload = Some(new_payload_id)
@@ -5821,8 +5836,13 @@ impl TypedProgram {
             Type::LambdaObject(lam_obj) => {
                 let fn_type = lam_obj.function_type;
                 let parsed_id = lam_obj.parsed_id;
-                let new_fn_type =
-                    self.substitute_in_type_ext_inner(fn_type, substitution_pairs, from_kinds, None, None);
+                let new_fn_type = self.substitute_in_type_ext_inner(
+                    fn_type,
+                    substitution_pairs,
+                    from_kinds,
+                    None,
+                    None,
+                );
                 if new_fn_type != fn_type {
                     self.add_lambda_object(new_fn_type, parsed_id)
                 } else {
@@ -5834,8 +5854,13 @@ impl TypedProgram {
                 let mut any_change = false;
                 let mut new_args = self.tmp.new_list(ao.impl_arguments.len());
                 for arg in self.mem.getn(ao.impl_arguments) {
-                    let new_arg_type = self
-                        .substitute_in_type_ext_inner(*arg, substitution_pairs, from_kinds, None, None);
+                    let new_arg_type = self.substitute_in_type_ext_inner(
+                        *arg,
+                        substitution_pairs,
+                        from_kinds,
+                        None,
+                        None,
+                    );
                     if new_arg_type != *arg {
                         any_change = true;
                     }
@@ -5884,8 +5909,13 @@ impl TypedProgram {
             Type::Array(arr) => {
                 let arr = *arr;
                 let element_type = arr.element_type;
-                let new_element_type = self
-                    .substitute_in_type_ext_inner(element_type, substitution_pairs, from_kinds, None, None);
+                let new_element_type = self.substitute_in_type_ext_inner(
+                    element_type,
+                    substitution_pairs,
+                    from_kinds,
+                    None,
+                    None,
+                );
                 let new_size_type = self.substitute_in_type_ext_inner(
                     arr.size_type,
                     substitution_pairs,
@@ -5986,7 +6016,7 @@ impl TypedProgram {
         let StaticValue::Struct(value) = self.static_values.get(manifest_result) else {
             self.ice_span(fn_span, "module manifest value was not a struct");
         };
-        let fields: [StaticValueId; 6] =
+        let fields: [StaticValueId; 5] =
             self.static_values.mem.getn(value.fields).try_into().unwrap();
 
         let kind = match self.static_values.get(fields[0]).as_sum().unwrap().payload {
@@ -6016,7 +6046,7 @@ impl TypedProgram {
             let StaticValue::Int(TypedIntValue::U64(params_raw)) =
                 self.static_values.get(entry_fields[1])
             else {
-                self.ice_span(fn_span, "dep-entry params was not a u64");
+                self.ice_span(fn_span, "dep-entry params-expr-id was not a u64");
             };
             let params_struct_literal = match ParsedExprId::from_u32(*params_raw as u32) {
                 None => None,
@@ -6059,9 +6089,7 @@ impl TypedProgram {
                 .map(|link_arg| statics.get(*link_arg).as_string().unwrap()),
         );
 
-        let multithreading = self.static_values.get(fields[4]).as_boolean().unwrap();
-
-        let setup = match self.static_values.get(fields[5]).as_sum().unwrap().payload {
+        let setup = match self.static_values.get(fields[4]).as_sum().unwrap().payload {
             None => None,
             Some(setup_value_id) => {
                 let setup_struct = self.static_values.get(setup_value_id).as_struct().unwrap();
@@ -6082,7 +6110,7 @@ impl TypedProgram {
         };
 
         Ok(Some((
-            ModuleManifest { kind, deps, multithreading, libs, link_args, setup },
+            ModuleManifest { kind, deps, libs, link_args, setup },
             ParsedId::Function(manifest_fn_id),
         )))
     }
@@ -7475,7 +7503,6 @@ impl TypedProgram {
             "debug" => self.config.debug,
             // The VM overrides this global's value during static execution
             "is-static" => false,
-            "multithreading" => self.program_settings.multithreaded,
             "os" => {
                 let os_tag_value = self.config.target.target_os() as u8;
                 let static_enum =
@@ -8217,6 +8244,38 @@ impl TypedProgram {
                         return Ok((impl_handle, false));
                     }
                 }
+                Type::Sum(sum_type) => {
+                    // Check if all payloads implement print
+                    let mut fail = false;
+                    for variant in self.mem.getn(sum_type.variants) {
+                        if let Some(payload) = variant.payload {
+                            if let Err(_err) = self.expect_ability_impl(
+                                payload,
+                                ABILITY_ID_PRINT,
+                                false,
+                                scope_id,
+                                span,
+                            ) {
+                                fail = true;
+                                err_msg = Some(k1_format_user!(
+                                    self,
+                                    ":{} variant's data {} does not implement print",
+                                    variant.name,
+                                    payload,
+                                ))
+                            };
+                        }
+                    }
+                    if !fail {
+                        let impl_handle = self.generate_builtin_ability_impl(
+                            self_type_id,
+                            target_base_ability_id,
+                            MSlice::empty(),
+                            span,
+                        );
+                        return Ok((impl_handle, false));
+                    }
+                }
                 _ => {}
             }
         }
@@ -8259,10 +8318,10 @@ impl TypedProgram {
         parameter_constraints: &[Option<TypeId>],
         scope_id: ScopeId,
     ) -> Result<Option<AbilityImplHandle>, MStr<MemTmp>> {
-        let Some(impl_handles) = self.ability_impl_table_by_ability.get(&TypeAbilityPair {
-            self_type_id,
-            base_ability_id: target_base_ability_id,
-        }) else {
+        let Some(impl_handles) = self
+            .ability_impl_table_by_ability
+            .get(&TypeAbilityPair { self_type_id, base_ability_id: target_base_ability_id })
+        else {
             return Ok(None);
         };
         let impl_handles = impl_handles.as_slice(&self.mem);
@@ -8395,11 +8454,8 @@ impl TypedProgram {
         let base_params = self.abilities.get(specialized_ability.base_ability_id).parameters;
         let mut ability_params =
             self.mem.getn(base_params).iter().filter(|p| p.is_ability_side_param());
-        for (impl_arg, maybe_constraint) in specialized_ability
-            .kind
-            .arguments(&self.mem)
-            .iter()
-            .zip(parameter_requirements.iter())
+        for (impl_arg, maybe_constraint) in
+            specialized_ability.kind.arguments(&self.mem).iter().zip(parameter_requirements.iter())
         {
             let param = ability_params.next();
             if let Some(constraint) = maybe_constraint {
@@ -8558,8 +8614,8 @@ impl TypedProgram {
         // Example: impl[A, B] AsPair[AA = A, BB = B] for Pair[A, B]
         // We now know A and B, so we know we'd get an AsPair[A, B] out.
         // See if that is even what is needed, which is in parameter_constraints.
-        let solutions_as_pairs: SV4<TypeSubstitutionPair> = self
-            .zip_types_to_subst_pairs(blanket_impl_type_params, solutions.as_slice(&self.mem));
+        let solutions_as_pairs: SV4<TypeSubstitutionPair> =
+            self.zip_types_to_subst_pairs(blanket_impl_type_params, solutions.as_slice(&self.mem));
         let substituted_self =
             self.substitute_in_type(blanket_impl_self_type_id, &solutions_as_pairs);
         if let Err(msg) = self.check_types(substituted_self, self_type_id, root_scope_id) {
@@ -8691,9 +8747,10 @@ impl TypedProgram {
         let base_ability_params = self.abilities.get(generic_base_ability_id).parameters;
         let mut substituted_ability_args: List<TypeId, _> =
             self.mem.new_list(blanket_ability_args.len() as u32);
-        for (blanket_arg, base_param) in blanket_ability_args.iter().zip(
-            self.mem.getn(base_ability_params).iter().filter(|p| p.is_ability_side_param()),
-        ) {
+        for (blanket_arg, base_param) in blanket_ability_args
+            .iter()
+            .zip(self.mem.getn(base_ability_params).iter().filter(|p| p.is_ability_side_param()))
+        {
             // Substitute T, U, V, in for each
             let substituted_type = self.substitute_in_type(*blanket_arg, &pairs);
             substituted_ability_args.push(substituted_type);
@@ -10628,8 +10685,7 @@ impl TypedProgram {
         tokens.clear();
 
         let module = self.modules.get(self.module_in_progress.unwrap());
-        let parsed_namespace_id =
-            self.namespaces.get(module.namespace_id).parsed_id.as_namespace_id().unwrap();
+        let parsed_namespace_id = module.parsed_namespace_id;
         let code_str = self.ast.sources.get(file_id).content(&self.ast.mem);
         let mut lexer = crate::lex::Lexer::make(code_str, &mut self.ast.spans, file_id);
         if let Err(e) = lexer.run(&mut tokens) {
@@ -11328,6 +11384,7 @@ impl TypedProgram {
             self.add_function(TypedFunction {
                 name,
                 scope: lambda_scope_id,
+                namespace_id: self.scopes.nearest_parent_namespace(lambda_scope_id),
                 params: param_variables.to_slice(),
                 type_params: MSlice::empty(),
                 fnlike_type_params: MSlice::empty(),
@@ -11343,6 +11400,7 @@ impl TypedProgram {
                 is_concrete: false,
                 is_recursive: false,
                 is_macro: false,
+                is_reloadable: false,
                 dyn_fn_id: None,
                 returned_variable: None,
                 body_failure: None,
@@ -11402,6 +11460,7 @@ impl TypedProgram {
         let actual_body_function_id = self.add_function(TypedFunction {
             name,
             scope: lambda_scope_id,
+            namespace_id: self.scopes.nearest_parent_namespace(lambda_scope_id),
             params: param_variables.to_slice(),
             type_params: MSlice::empty(),
             fnlike_type_params: MSlice::empty(),
@@ -11418,6 +11477,7 @@ impl TypedProgram {
             is_concrete: false,
             is_recursive: false,
             is_macro: false,
+            is_reloadable: false,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -12633,11 +12693,7 @@ impl TypedProgram {
         let next_is_some_call = self.synth_sum_is_variant(next_variable.variable_expr, 1, None)?;
         let empty_break = self.synth_empty_value(body_span);
         let break_expr = self.exprs.add(
-            TypedExpr::Break(TypedBreak {
-                value: empty_break,
-                loop_scope: loop_scope_id,
-                loop_type: LoopType::Loop,
-            }),
+            TypedExpr::Break(TypedBreak { value: empty_break, loop_scope: loop_scope_id }),
             NEVER_TYPE_ID,
             body_span,
         );
@@ -13820,7 +13876,6 @@ impl TypedProgram {
                             TypedExpr::Break(TypedBreak {
                                 value,
                                 loop_scope: enclosing_loop_scope_id,
-                                loop_type,
                             }),
                             NEVER_TYPE_ID,
                             call_span,
@@ -13832,7 +13887,34 @@ impl TypedProgram {
                 if ctx.flags.contains(EvalExprFlags::Defer) {
                     kbail!(self, fn_call.span, "continue cannot be used inside `defer` blocks");
                 }
-                todo!("implement continue")
+                if !fn_call.args.is_empty() {
+                    kbail!(self, call_span, "continue takes no arguments");
+                }
+                let Some((enclosing_loop_scope_id, _)) =
+                    self.scopes.nearest_parent_loop(calling_scope)
+                else {
+                    kbail!(self, call_span, "continue outside of loop");
+                };
+                let defers = self.gather_defers(
+                    calling_scope,
+                    call_span,
+                    DeferExtent::LoopScope(enclosing_loop_scope_id),
+                );
+                let empty_value = self.synth_empty_value(call_span);
+                let continue_expr = self.synth_defers_then_exit(
+                    defers,
+                    empty_value,
+                    ctx,
+                    call_span,
+                    |k1, _value| {
+                        k1.exprs.add(
+                            TypedExpr::Continue { loop_scope: enclosing_loop_scope_id },
+                            NEVER_TYPE_ID,
+                            call_span,
+                        )
+                    },
+                )?;
+                Ok(Some(continue_expr))
             } else if n == self.ast.idents.b.test_compile {
                 if fn_call.args.len() != 1 {
                     kbail!(self, call_span, "test-compile takes one argument");
@@ -14809,8 +14891,11 @@ impl TypedProgram {
 
             // If we've already solved for one of the params that appear in this ability signature,
             // we need to constrain our ability impl search with those solutions
-            parameter_constraints
-                .push(if solution == TypeId::PENDING { None } else { Some(solution) });
+            parameter_constraints.push(if solution == TypeId::PENDING {
+                None
+            } else {
+                Some(solution)
+            });
         }
         let solved_self = self_solution.as_slice(&self.mem)[0];
 
@@ -15062,9 +15147,7 @@ impl TypedProgram {
                     }
                 };
 
-                let solved_or_passed_type_params: TypeArgs = if parsed_variant
-                    .type_args
-                    .is_empty()
+                let solved_or_passed_type_params: TypeArgs = if parsed_variant.type_args.is_empty()
                 {
                     match payload_if_needed {
                         None => {
@@ -15125,8 +15208,7 @@ impl TypedProgram {
                         }
                     }
                 } else {
-                    let mut passed_params: List<TypeId, MemTmp> =
-                        self.tmp.new_list(g_params.len());
+                    let mut passed_params: List<TypeId, MemTmp> = self.tmp.new_list(g_params.len());
                     for passed_type_arg in self.ast.mem.getn(parsed_variant.type_args) {
                         let Some(passed_type_expr) = passed_type_arg.type_expr else {
                             kbail!(self, span, "Wildcard type _ is not yet supported here");
@@ -15567,7 +15649,7 @@ impl TypedProgram {
         }
 
         // Special form: during manifest eval, `m.dep(name, .{ ... })` captures the params
-        // struct literal as a ParsedExprId and retargets the call to k1/module/add-dep
+        // struct literal as a ParsedExprId and retargets the call to k1/module/add-dep-impl
         let callee = 'dep_capture: {
             if !ctx.is_manifest_eval() {
                 break 'dep_capture callee;
@@ -15731,11 +15813,9 @@ impl TypedProgram {
                 // A repeat call at already-specialized type args reuses that
                 // specialization's type rather than re-substituting the signature
                 let cached_specialization = match callee {
-                    Callee::StaticFunction(function_id) => self.find_function_specialization(
-                        function_id,
-                        type_args,
-                        fnlike_type_args,
-                    ),
+                    Callee::StaticFunction(function_id) => {
+                        self.find_function_specialization(function_id, type_args, fnlike_type_args)
+                    }
                     _ => None,
                 };
                 let specialized_function_type = match cached_specialization {
@@ -16379,11 +16459,11 @@ impl TypedProgram {
             ScopeOwnerId::None,
         );
 
-        for (gen_param, type_arg) in
-            self.mem
-                .getn(generic_signature.type_params)
-                .iter()
-                .zip(type_arguments.as_slice(&self.mem))
+        for (gen_param, type_arg) in self
+            .mem
+            .getn(generic_signature.type_params)
+            .iter()
+            .zip(type_arguments.as_slice(&self.mem))
         {
             let param_name = self.get_type_parameter(*gen_param).name;
             let _ = self.scopes.add_type(spec_fn_scope, param_name, *type_arg);
@@ -16451,6 +16531,7 @@ impl TypedProgram {
         let specialized_function = TypedFunction {
             name: generic_function.name,
             scope: spec_fn_scope,
+            namespace_id: generic_function.namespace_id,
             params: param_variables.to_slice(),
             // Must be empty for correctness; a specialized function has no type parameters!
             type_params: MSlice::empty(),
@@ -16468,6 +16549,8 @@ impl TypedProgram {
             is_concrete: false,
             is_recursive: generic_function.is_recursive,
             is_macro: generic_function.is_macro,
+            // we reject generics in reloadable places
+            is_reloadable: false,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -16514,8 +16597,9 @@ impl TypedProgram {
         }
 
         // Approach: Synthesize the implementation for this builtin
-        if let Some(Builtin::TyperPhysicalFunction(kind @ BuiltinTyperFunction::StructPrintTo)) =
-            parent_function.builtin_type
+        if let Some(Builtin::TyperPhysicalFunction(
+            kind @ (BuiltinTyperFunction::StructPrintTo | BuiltinTyperFunction::SumPrintTo),
+        )) = parent_function.builtin_type
         {
             let body_expr_id = self.generate_intrinsic_function_body(
                 function_id,
@@ -17288,6 +17372,9 @@ impl TypedProgram {
                     Some(Type::Struct(_)) => {
                         Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::StructPrintTo))
                     }
+                    Some(Type::Sum(_)) => {
+                        Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumPrintTo))
+                    }
                     _ => None,
                 },
                 (ABILITY_ID_BITWISE, "bit-not") if is_integer => {
@@ -17632,8 +17719,7 @@ impl TypedProgram {
                 if self.get_type_id_resolved(*constraint_arg, scope_id)
                     != self.get_type_id_resolved(*passed_arg, scope_id)
                 {
-                    let base_params =
-                        self.abilities.get(found_impl.base_ability_id).parameters;
+                    let base_params = self.abilities.get(found_impl.base_ability_id).parameters;
                     let param_name = self
                         .mem
                         .getn(base_params)
@@ -18461,6 +18547,7 @@ impl TypedProgram {
         namespace_id: NamespaceId,
     ) -> K1Result<Option<FunctionId>> {
         let namespace = self.namespaces.get(namespace_id);
+        let is_reloadable = namespace.reload;
         let companion_type_id = namespace.companion_type_id;
         let ast_fn = *self.ast.get_function(parsed_function_id);
         let name_span = ast_fn.name_span;
@@ -18785,6 +18872,7 @@ impl TypedProgram {
         let actual_function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
+            namespace_id,
             params: param_variables_handle,
             type_params,
             fnlike_type_params: function_type_params_handle,
@@ -18800,6 +18888,7 @@ impl TypedProgram {
             is_concrete: false,
             is_recursive: false,
             is_macro: false,
+            is_reloadable,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -18843,9 +18932,10 @@ impl TypedProgram {
         let Type::Generic(generic) = self.types.get(companion_type_id) else {
             return None;
         };
-        let param = self.mem.getn(generic.params).iter().find(|p| {
-            self.types.get(**p).as_type_parameter().is_some_and(|tp| tp.name == name)
-        })?;
+        let param =
+            self.mem.getn(generic.params).iter().find(|p| {
+                self.types.get(**p).as_type_parameter().is_some_and(|tp| tp.name == name)
+            })?;
         Some(*param)
     }
 
@@ -19062,6 +19152,7 @@ impl TypedProgram {
         let actual_function_id = self.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
+            namespace_id: self.scopes.nearest_parent_namespace(fn_scope_id),
             params: param_variables_handle,
             type_params,
             fnlike_type_params: MSlice::empty(),
@@ -19077,6 +19168,7 @@ impl TypedProgram {
             is_concrete: false,
             is_recursive: false,
             is_macro: true,
+            is_reloadable: false,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -19154,7 +19246,7 @@ impl TypedProgram {
             Some(_) if no_body_expected => {
                 kbail!(self, function_signature_span, "unexpected function implementation");
             }
-            Some(block_ast) => {
+            Some(body_ast) => {
                 if function.specialization_info.is_some() && !is_concrete {
                     debug!(
                         "Skipping typecheck of body for non-concrete specialization of {}",
@@ -19162,17 +19254,18 @@ impl TypedProgram {
                     );
                     return Ok(());
                 };
-                let block_ast = *block_ast;
-                let ParsedExpr::Block(block_itself) = self.ast.exprs.get(block_ast) else {
+                let body_ast = *body_ast;
+                let ParsedExpr::Block(block_itself) = self.ast.exprs.get(body_ast) else {
                     kbail!(self, function_signature_span, "[bug] function bodies must be blocks");
                 };
                 let block_itself = *block_itself;
+
                 let eval_ctx = EvalExprContext::make(fn_scope_id)
                     .with_expected_type(Some(return_type))
                     // Why do we care to indicate if the function is generic?
                     // Currently, its because we want to avoid running #static and #meta blocks
                     // until the types and static values are provided
-                    // There are now of other implications, like we only want to do
+                    // There are now other implications, like we only want to do
                     // lsp stuff in the generic pass, and not repeat it in every
                     // specialization pass
                     .with_is_generic_pass(is_generic);
@@ -19445,6 +19538,59 @@ impl TypedProgram {
                 // eprintln!("STRUCT PRINT TO\n{}", self.expr_to_string(block_expr_id));
                 Ok(block_expr_id)
             }
+            BuiltinTyperFunction::SumPrintTo => {
+                let sum_param = *self.mem.get_nth(params, 0);
+                let writer_param = *self.mem.get_nth(params, 1);
+
+                let sum_expr = self.synth_variable_expr(sum_param.variable_id, fn_span);
+                let writer_expr = self.synth_variable_expr(writer_param.variable_id, fn_span);
+                let sum_type_id = self.exprs.get_type(sum_expr);
+                let tag_expr = self.synth_sum_get_tag(sum_expr, fn_span);
+                let Type::Sum(sum_type) = self.types.get(sum_type_id) else {
+                    self.ice_span(fn_span, "not a sum");
+                };
+                let variants = sum_type.variants;
+
+                let mut arms: List<TypedMatchArm, _> = self.mem.new_list(variants.len());
+                for variant in self.mem.getn(variants) {
+                    let variant_tag_expr = self.synth_int(variant.tag_value, fn_span);
+                    let cond = self.synth_equals_call_simple(tag_expr, variant_tag_expr, fn_span);
+                    let instrs = self.mem.pushn(&[MatchingConditionInstr::cond(cond)]);
+
+                    let mut block =
+                        self.new_block_builder(fn_scope_id, ScopeType::LexicalBlock, fn_span, 3);
+                    let ctx = EvalExprContext::make(block.scope_id);
+                    let label = format!(":{}", self.ident_str(variant.name));
+                    let label_expr = self.synth_string_literal_from_str(&label, fn_span);
+                    let write_label = self.synth_printto_call(label_expr, writer_expr, ctx)?;
+                    self.push_block_expr_id(&mut block, write_label);
+                    if let Some(payload_type_id) = variant.payload {
+                        let space_expr = self.synth_string_literal_from_str(" ", fn_span);
+                        let write_space = self.synth_printto_call(space_expr, writer_expr, ctx)?;
+                        self.push_block_expr_id(&mut block, write_space);
+                        let payload_expr = self.exprs.add(
+                            TypedExpr::SumGetPayload(GetSumPayload {
+                                sum_expr,
+                                variant_index: variant.index,
+                            }),
+                            payload_type_id,
+                            fn_span,
+                        );
+                        let write_payload =
+                            self.synth_printto_call(payload_expr, writer_expr, ctx)?;
+                        self.push_block_expr_id(&mut block, write_payload);
+                    }
+                    arms.push(TypedMatchArm {
+                        condition: MatchingCondition { instrs },
+                        consequent_expr: self.exprs.add_block(block, EMPTY_TYPE_ID),
+                    });
+                }
+                let match_expr = TypedExpr::Match(TypedMatchExpr {
+                    initial_let_statements: MSlice::empty(),
+                    arms: arms.to_slice(),
+                });
+                Ok(self.exprs.add(match_expr, EMPTY_TYPE_ID, fn_span))
+            }
         }?;
 
         let body_expr_type = self.exprs.get_type(body_expr);
@@ -19670,7 +19816,8 @@ impl TypedProgram {
                     function_name
                 );
             }
-            let ability_names = self.function_name_to_ability_names.entry(function_name).or_default();
+            let ability_names =
+                self.function_name_to_ability_names.entry(function_name).or_default();
             if !ability_names.as_slice(&self.mem).contains(&parsed_ability.name) {
                 ability_names.push_grow(&mut self.mem, parsed_ability.name);
             }
@@ -20383,12 +20530,19 @@ impl TypedProgram {
         parsed_namespace_id: ParsedNamespaceId,
         skip_defns: &[ParsedId],
     ) {
-        let parsed_namespace = self.ast.namespaces.get(parsed_namespace_id);
         let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
         let namespace = self.namespaces.get(namespace_id);
         let namespace_scope_id = namespace.scope_id;
         let ns_reload = namespace.reload;
         let ns_name = namespace.name;
+        // Before the ns's own defns: a user fn named load/load-async then
+        // collides with the synthesized one and fails like any duplicate name
+        if ns_reload {
+            if let Err(e) = self.declare_reload_load_fn(namespace_id) {
+                self.report(e);
+            }
+        }
+        let parsed_namespace = self.ast.namespaces.get(parsed_namespace_id);
         for defn in parsed_namespace.definitions.as_slice(&self.ast.mem) {
             if skip_defns.contains(defn) {
                 continue;
@@ -20429,7 +20583,13 @@ impl TypedProgram {
                     _ => None,
                 };
                 if let Some((why, span)) = rejection {
-                    self.report(kerr!(self, span, "Not allowed in ns(reload) {}: {}", ns_name, why));
+                    self.report(kerr!(
+                        self,
+                        span,
+                        "Not allowed in ns(reload) {}: {}",
+                        ns_name,
+                        why
+                    ));
                     continue;
                 }
             }
@@ -20488,6 +20648,110 @@ impl TypedProgram {
             }
             self.tmp.reset_to(tmp_mark);
         }
+    }
+
+    /// Synthesize `fn load(): result[empty, reload/load-error]` and
+    /// `fn load-async(): empty` into a reloadable ns: one-call bodies passing
+    /// the ns's qualified path to std/reload. Idempotent across openings: the
+    /// first opening declares them, later ones find them in scope.
+    fn declare_reload_load_fn(&mut self, namespace_id: NamespaceId) -> K1Result<()> {
+        let ns = self.namespaces.get(namespace_id);
+        let ns_scope = ns.scope_id;
+        let load_ident = self.ast.idents.b.load;
+        if self.scopes.find_function_local(ns_scope, load_ident).is_some() {
+            return Ok(());
+        }
+        let mut ns_path = String::with_capacity(64);
+        self.write_scope_path(&mut ns_path, ns_scope, "/", true);
+        let ns_path_ident = self.ast.idents.intern(&ns_path);
+        self.declare_reload_ns_path_fn(namespace_id, load_ident, "load-ns", ns_path_ident)?;
+        let load_async_ident = self.ast.idents.b.load_async;
+        self.declare_reload_ns_path_fn(
+            namespace_id,
+            load_async_ident,
+            "load-ns-async",
+            ns_path_ident,
+        )
+    }
+
+    fn declare_reload_ns_path_fn(
+        &mut self,
+        namespace_id: NamespaceId,
+        name: StringId,
+        callee: &str,
+        ns_path_ident: StringId,
+    ) -> K1Result<()> {
+        let ns = self.namespaces.get(namespace_id);
+        let ns_scope = ns.scope_id;
+        let ns_parsed_id = ns.parsed_id;
+        let span = self.ast.get_span_for_id(ns_parsed_id);
+
+        let fn_scope =
+            self.scopes.add_child_scope(ns_scope, ScopeType::FunctionScope, ScopeOwnerId::None);
+        let function_id = self.functions.next_id();
+        self.scopes.set_scope_owner_id(fn_scope, ScopeOwnerId::Function(function_id));
+
+        let ns_path_arg = self.synth_string_literal(ns_path_ident, span);
+        let std_ident = self.ast.idents.intern("std");
+        let reload_ident = self.ast.idents.intern("reload");
+        let callee_ident = self.ast.idents.intern(callee);
+        let path = self
+            .ast
+            .mem
+            .pushn(&[IdentSpanned::make_anon(std_ident), IdentSpanned::make_anon(reload_ident)]);
+        let load_ns_name = QIdent { path, name: callee_ident, name_span: span };
+        let body = self
+            .synth_typed_call_typed_args(
+                load_ns_name,
+                &[],
+                &[ns_path_arg],
+                EvalExprContext::make(fn_scope),
+                false,
+            )
+            .map_err(|e| {
+                kerr!(self, span, "ns(reload) requires std/reload: {}", self.ident_str(e.message))
+            })?;
+        let return_type = self.exprs.get_type(body);
+        let return_expr = self.exprs.add_return(body, None, span);
+        let mut block_builder =
+            BlockBuilder { statements: self.mem.new_list(1), scope_id: fn_scope, span };
+        self.push_block_stmt(&mut block_builder, TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
+        let body_block = self.exprs.add_block(block_builder, NEVER_TYPE_ID);
+        let function_type = self.add_anon_type(Type::Function(FunctionType {
+            physical_params: MSlice::empty(),
+            return_type,
+            is_lambda: false,
+            abi_mode: AbiMode::Internal,
+        }));
+        let actual_function_id = self.add_function(TypedFunction {
+            name,
+            scope: fn_scope,
+            namespace_id,
+            params: MSlice::empty(),
+            type_params: MSlice::empty(),
+            fnlike_type_params: MSlice::empty(),
+            body_block: Some(body_block),
+            builtin_type: None,
+            linkage: Linkage::Standard,
+            child_specializations: MList::empty(),
+            specialization_info: None,
+            parsed_id: ns_parsed_id,
+            type_id: function_type,
+            compiler_debug: false,
+            kind: TypedFunctionKind::Standard,
+            is_concrete: false,
+            is_recursive: false,
+            is_macro: false,
+            // load/load-async are host code: they patch the ns, not live in it
+            is_reloadable: false,
+            dyn_fn_id: None,
+            returned_variable: None,
+            body_failure: None,
+        });
+        debug_assert_eq!(actual_function_id, function_id);
+        let added = self.scopes.add_function(ns_scope, name, function_id);
+        debug_assert!(added, "the name was free in the ns scope; we just checked");
+        Ok(())
     }
 
     fn compile_ns_body(&mut self, ast_namespace_id: ParsedNamespaceId, skip_defns: &[ParsedId]) {
@@ -21637,6 +21901,7 @@ impl TypedProgram {
             core!("div"),
             core!("rem"),
             core!("sys"),
+            core!("files"),
             core!("scalar-cmp"),
             core!("string-builder"),
             core!("code"),

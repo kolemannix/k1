@@ -1,0 +1,489 @@
+// The q1 (two-pass) brotli encoder, ported from the C's
+// compress_fragment_two_pass.c. Pass one records commands and literals into
+// buffers; pass two builds prefix codes from their real histograms and emits
+// the bit stream.
+
+let TWO-PASS-BLOCK-SIZE: size = 1 << 17
+let Q1-MAX-TABLE-SIZE: size = 1 << 17
+
+type two-pass-arena = {
+  lit-histo: array[u32, 256],
+  lit-depth: array[u8, 256],
+  lit-bits: array[u16, 256],
+  cmd-histo: array[u32, 128],
+  cmd-depth: array[u8, 128],
+  cmd-bits: array[u16, 128],
+  tmp-tree: array[huffman-tree, 513],
+  tmp-depth: array[u8, 704],
+  tmp-bits: array[u16, 64],
+}
+
+// Pass-one output: command words (code | extra << 8) and raw literal bytes.
+type cmd-sink = {
+  commands: buffer[u32],
+  num-commands: size,
+  literals: buffer[u8],
+  num-literals: size,
+}
+
+ns for cmd-sink {
+  fn push-cmd(self: *mut cmd-sink, v: u32) {
+    self.commands.get-ref-unchecked(self.num-commands).* = v
+    self.num-commands = self.num-commands + 1
+  }
+
+  fn push-literals(self: *mut cmd-sink, src: ptr, len: size) {
+    mem/copy(
+      dst = self.literals.data-ptr().add-bytes(self.num-literals),
+      src = src,
+      count = len)
+    self.num-literals = self.num-literals + len
+  }
+}
+
+fn hash-2p(p: ptr, shift: u32, min-match: size): size {
+  let h = (load64-le(p) << ((8 - min-match).as[u32] * 8)) * HASH-MUL32
+  (h >> shift).as[size]
+}
+
+fn hash-2p-at-offset(v: u64, offset: u32, shift: u32, min-match: size): size {
+  let h = ((v >> (8 * offset)) << ((8 - min-match).as[u32] * 8)) * HASH-MUL32
+  (h >> shift).as[size]
+}
+
+fn is-match-2p(p1: ptr, p2: ptr, min-match: size): bool {
+  if load32-le(p1) == load32-le(p2) {
+    if min-match == 4 true
+    else p1.add-bytes(4).r[u8].* == p2.add-bytes(4).r[u8].* and
+      p1.add-bytes(5).r[u8].* == p2.add-bytes(5).r[u8].*
+  } else false
+}
+
+fn emit-insert-len-2p(insertlen: size, sink: *mut cmd-sink) {
+  if insertlen < 6 {
+    sink.push-cmd(insertlen.as[u32])
+  } else if insertlen < 130 {
+    let tail = insertlen - 2
+    let nbits = log2-floor-nonzero(tail.as[u64]) - 1
+    let prefix = tail >> nbits.as[u32]
+    let inscode = (nbits << 1) + prefix + 2
+    let extra = tail - (prefix << nbits.as[u32])
+    sink.push-cmd((inscode | (extra << 8)).as[u32])
+  } else if insertlen < 2114 {
+    let tail = insertlen - 66
+    let nbits = log2-floor-nonzero(tail.as[u64])
+    let code = nbits + 10
+    let pow2: size = 1 << nbits.as[u32]
+    let extra = tail - pow2
+    sink.push-cmd((code | (extra << 8)).as[u32])
+  } else if insertlen < 6210 {
+    let extra = insertlen - 2114
+    sink.push-cmd((21 | (extra << 8)).as[u32])
+  } else if insertlen < 22594 {
+    let extra = insertlen - 6210
+    sink.push-cmd((22 | (extra << 8)).as[u32])
+  } else {
+    let extra = insertlen - 22594
+    sink.push-cmd((23 | (extra << 8)).as[u32])
+  }
+}
+
+fn emit-copy-len-2p(copylen: size, sink: *mut cmd-sink) {
+  if copylen < 10 {
+    sink.push-cmd((copylen + 38).as[u32])
+  } else if copylen < 134 {
+    let tail = copylen - 6
+    let nbits = log2-floor-nonzero(tail.as[u64]) - 1
+    let prefix = tail >> nbits.as[u32]
+    let code = (nbits << 1) + prefix + 44
+    let extra = tail - (prefix << nbits.as[u32])
+    sink.push-cmd((code | (extra << 8)).as[u32])
+  } else if copylen < 2118 {
+    let tail = copylen - 70
+    let nbits = log2-floor-nonzero(tail.as[u64])
+    let code = nbits + 52
+    let pow2: size = 1 << nbits.as[u32]
+    let extra = tail - pow2
+    sink.push-cmd((code | (extra << 8)).as[u32])
+  } else {
+    let extra = copylen - 2118
+    sink.push-cmd((63 | (extra << 8)).as[u32])
+  }
+}
+
+fn emit-copy-len-last-distance-2p(copylen: size, sink: *mut cmd-sink) {
+  if copylen < 12 {
+    sink.push-cmd((copylen + 20).as[u32])
+  } else if copylen < 72 {
+    let tail = copylen - 8
+    let nbits = log2-floor-nonzero(tail.as[u64]) - 1
+    let prefix = tail >> nbits.as[u32]
+    let code = (nbits << 1) + prefix + 28
+    let extra = tail - (prefix << nbits.as[u32])
+    sink.push-cmd((code | (extra << 8)).as[u32])
+  } else if copylen < 136 {
+    let tail = copylen - 8
+    let code = (tail >> 5) + 54
+    let extra = tail & 31
+    sink.push-cmd((code | (extra << 8)).as[u32])
+    sink.push-cmd(64)
+  } else if copylen < 2120 {
+    let tail = copylen - 72
+    let nbits = log2-floor-nonzero(tail.as[u64])
+    let code = nbits + 52
+    let pow2: size = 1 << nbits.as[u32]
+    let extra = tail - pow2
+    sink.push-cmd((code | (extra << 8)).as[u32])
+    sink.push-cmd(64)
+  } else {
+    let extra = copylen - 2120
+    sink.push-cmd((63 | (extra << 8)).as[u32])
+    sink.push-cmd(64)
+  }
+}
+
+fn emit-distance-2p(distance: size, sink: *mut cmd-sink) {
+  let d = distance + 3
+  let nbits = log2-floor-nonzero(d.as[u64]) - 1
+  let prefix = (d >> nbits.as[u32]) & 1
+  let offset = (2 + prefix) << nbits.as[u32]
+  let distcode = 2 * (nbits - 1) + prefix + 80
+  let extra = d - offset
+  sink.push-cmd((distcode | (extra << 8)).as[u32])
+}
+
+// Updates the hash table for positions inside the copy just emitted and
+// returns the candidate for the position at ip. third-offset is the hash
+// offset for position ip-1 in the min-match == 4 branch: the C's post-literal
+// update hashes offsets [0, 1, 0] (an upstream quirk — the last should
+// presumably be 2) while its greedy-loop update hashes [0, 1, 2]; callers
+// pass 0 or 2 to reproduce each exactly.
+fn update-table-after-copy(
+  ip: ptr, base-ip: ptr, table: buffer[i32], shift: u32, min-match: size, third-offset: u32,
+): ptr {
+  let pos = ip.diff(base-ip)
+  if min-match == 4 {
+    let input-bytes = load64-le(ip.sub-bytes(3))
+    let cur-hash = hash-2p-at-offset(input-bytes, 3, shift, min-match)
+    table.get-ref-unchecked(hash-2p-at-offset(input-bytes, 0, shift, min-match)).* = (pos - 3).as[i32]
+    table.get-ref-unchecked(hash-2p-at-offset(input-bytes, 1, shift, min-match)).* = (pos - 2).as[i32]
+    table.get-ref-unchecked(hash-2p-at-offset(input-bytes, third-offset, shift, min-match)).* = (pos - 1).as[i32]
+    let candidate = base-ip.add-bytes(table.get-unchecked(cur-hash).as[size])
+    table.get-ref-unchecked(cur-hash).* = pos.as[i32]
+    candidate
+  } else {
+    let input-bytes = load64-le(ip.sub-bytes(5))
+    table.get-ref-unchecked(hash-2p-at-offset(input-bytes, 0, shift, min-match)).* = (pos - 5).as[i32]
+    table.get-ref-unchecked(hash-2p-at-offset(input-bytes, 1, shift, min-match)).* = (pos - 4).as[i32]
+    table.get-ref-unchecked(hash-2p-at-offset(input-bytes, 2, shift, min-match)).* = (pos - 3).as[i32]
+    let input-bytes2 = load64-le(ip.sub-bytes(2))
+    let cur-hash = hash-2p-at-offset(input-bytes2, 2, shift, min-match)
+    table.get-ref-unchecked(hash-2p-at-offset(input-bytes2, 0, shift, min-match)).* = (pos - 2).as[i32]
+    table.get-ref-unchecked(hash-2p-at-offset(input-bytes2, 1, shift, min-match)).* = (pos - 1).as[i32]
+    let candidate = base-ip.add-bytes(table.get-unchecked(cur-hash).as[size])
+    table.get-ref-unchecked(cur-hash).* = pos.as[i32]
+    candidate
+  }
+}
+
+fn create-commands(
+  input: ptr, block-size: size, input-size: size, base-ip: ptr,
+  table: buffer[i32], table-bits: size, min-match: size, sink: *mut cmd-sink,
+) {
+  let ip = input
+  let shift = (64 - table-bits).as[u32]
+  let ip-end = input.add-bytes(block-size)
+  let next-emit = input
+  let last-distance: i64 = -1
+
+  if block-size >= INPUT-MARGIN {
+    let len-limit = min-size(block-size - min-match, input-size - INPUT-MARGIN)
+    let ip-limit = input.add-bytes(len-limit)
+
+    ip = ip.add-bytes(1)
+    let next-hash = hash-2p(ip, shift, min-match)
+    let done = false
+    while not done {
+      let skip: u32 = 32
+      let next-ip = ip
+      let candidate = ptr/null
+
+      // Scan for a match, widening the stride on incompressible stretches.
+      loop {
+        let h = next-hash
+        let bytes-between = (skip >> 5).as[size]
+        skip = skip + 1
+        ip = next-ip
+        next-ip = ip.add-bytes(bytes-between)
+        if next-ip.as[size] > ip-limit.as[size] {
+          done = true
+          break
+        }
+        next-hash = hash-2p(next-ip, shift, min-match)
+        let found = false
+        candidate = ip.add-bytes(0 - last-distance)
+        if is-match-2p(ip, candidate, min-match) and candidate.as[size] < ip.as[size] {
+          table.get-ref-unchecked(h).* = ip.diff(base-ip).as[i32]
+          found = true
+        } else {
+          candidate = base-ip.add-bytes(table.get-unchecked(h).as[size])
+          table.get-ref-unchecked(h).* = ip.diff(base-ip).as[i32]
+          found = is-match-2p(ip, candidate, min-match)
+        }
+        if found and ip.diff(candidate) <= MAX-DISTANCE {
+          break
+        }
+      }
+      if done break
+
+      // Emit the pending literals and the match, then keep matching greedily.
+      {
+        let base = ip
+        let matched = min-match + find-match-length(
+          candidate.add-bytes(min-match), ip.add-bytes(min-match), ip-end.diff(ip) - min-match)
+        let distance = base.diff(candidate)
+        let insert = base.diff(next-emit)
+        ip = ip.add-bytes(matched)
+        emit-insert-len-2p(insert, sink)
+        sink.push-literals(next-emit, insert)
+        if distance == last-distance {
+          sink.push-cmd(64)
+        } else {
+          emit-distance-2p(distance, sink)
+          last-distance = distance
+        }
+        emit-copy-len-last-distance-2p(matched, sink)
+
+        next-emit = ip
+        if ip.as[size] >= ip-limit.as[size] {
+          break
+        }
+        candidate = update-table-after-copy(ip, base-ip, table, shift, min-match, third-offset = 0)
+      }
+
+      while ip.diff(candidate) <= MAX-DISTANCE and is-match-2p(ip, candidate, min-match) {
+        let base = ip
+        let matched = min-match + find-match-length(
+          candidate.add-bytes(min-match), ip.add-bytes(min-match), ip-end.diff(ip) - min-match)
+        ip = ip.add-bytes(matched)
+        last-distance = base.diff(candidate)
+        emit-copy-len-2p(matched, sink)
+        emit-distance-2p(last-distance, sink)
+
+        next-emit = ip
+        if ip.as[size] >= ip-limit.as[size] {
+          done = true
+          break
+        }
+        candidate = update-table-after-copy(ip, base-ip, table, shift, min-match, third-offset = 2)
+      }
+      if done break
+
+      ip = ip.add-bytes(1)
+      next-hash = hash-2p(ip, shift, min-match)
+    }
+  }
+
+  // Emit the remaining bytes as literals.
+  if next-emit.as[size] < ip-end.as[size] {
+    let insert = ip-end.diff(next-emit)
+    emit-insert-len-2p(insert, sink)
+    sink.push-literals(next-emit, insert)
+  }
+}
+
+// The command+distance prefix codes from the recorded histograms; symbol
+// reorder differs from the one-pass layout.
+fn build-and-store-command-prefix-code-2p(s: *mut two-pass-arena, bw: *mut bit-writer) {
+  let histogram = s.cmd-histo.&.as-buffer()
+  let depth = s.cmd-depth.&.as-buffer()
+  let bits = s.cmd-bits.&.as-buffer()
+  let tree = s.tmp-tree.&.as-buffer()
+  let tmp-depth = s.tmp-depth.&.as-buffer()
+  let tmp-bits = s.tmp-bits.&.as-buffer()
+  tmp-depth.memset(0)
+
+  create-huffman-tree(histogram, 64, 15, tree, depth)
+  create-huffman-tree(histogram.drop(64), 64, 14, tree, depth.drop(64))
+
+  copy-u8(tmp-depth, 0, depth, 24, 24)
+  copy-u8(tmp-depth, 24, depth, 0, 8)
+  copy-u8(tmp-depth, 32, depth, 48, 8)
+  copy-u8(tmp-depth, 40, depth, 8, 8)
+  copy-u8(tmp-depth, 48, depth, 56, 8)
+  copy-u8(tmp-depth, 56, depth, 16, 8)
+  convert-bit-depths-to-symbols(tmp-depth, 64, tmp-bits)
+  copy-u16(bits, 0, tmp-bits, 24, 8)
+  copy-u16(bits, 8, tmp-bits, 40, 8)
+  copy-u16(bits, 16, tmp-bits, 56, 8)
+  copy-u16(bits, 24, tmp-bits, 0, 24)
+  copy-u16(bits, 48, tmp-bits, 32, 8)
+  copy-u16(bits, 56, tmp-bits, 48, 8)
+  convert-bit-depths-to-symbols(depth.drop(64), 64, bits.drop(64))
+
+  let i: size = 0
+  while i < 64 {
+    tmp-depth.get-ref-unchecked(i).* = 0
+    i = i + 1
+  }
+  copy-u8(tmp-depth, 0, depth, 24, 8)
+  copy-u8(tmp-depth, 64, depth, 32, 8)
+  copy-u8(tmp-depth, 128, depth, 40, 8)
+  copy-u8(tmp-depth, 192, depth, 48, 8)
+  copy-u8(tmp-depth, 384, depth, 56, 8)
+  i = 0
+  while i < 8 {
+    tmp-depth.get-ref-unchecked(128 + 8 * i).* = depth.get-unchecked(i)
+    tmp-depth.get-ref-unchecked(256 + 8 * i).* = depth.get-unchecked(8 + i)
+    tmp-depth.get-ref-unchecked(448 + 8 * i).* = depth.get-unchecked(16 + i)
+    i = i + 1
+  }
+  store-huffman-tree(tmp-depth, NUM_COMMAND_SYMBOLS, tree, bw)
+  store-huffman-tree(depth.drop(64), 64, tree, bw)
+}
+
+fn store-commands(
+  s: *mut two-pass-arena, sink: *cmd-sink, bw: *mut bit-writer,
+) {
+  let lit-histo = s.lit-histo.&.as-buffer()
+  let cmd-histo = s.cmd-histo.&.as-buffer()
+  let lit-depth = s.lit-depth.&.as-buffer()
+  let lit-bits = s.lit-bits.&.as-buffer()
+  let cmd-depth = s.cmd-depth.&.as-buffer()
+  let cmd-bits = s.cmd-bits.&.as-buffer()
+  let tree = s.tmp-tree.&.as-buffer()
+
+  lit-histo.memset(0)
+  cmd-depth.memset(0)
+  cmd-bits.memset(0)
+  cmd-histo.memset(0)
+
+  let i: size = 0
+  while i < sink.num-literals {
+    let lit = sink.literals.get-unchecked(i).as[size]
+    lit-histo.get-ref-unchecked(lit).* = lit-histo.get-unchecked(lit) + 1
+    i = i + 1
+  }
+  build-and-store-huffman-tree-fast(
+    tree, lit-histo, sink.num-literals, 8, lit-depth, lit-bits, bw)
+
+  i = 0
+  while i < sink.num-commands {
+    let code = (sink.commands.get-unchecked(i) & 0xFF).as[size]
+    cmd-histo.get-ref-unchecked(code).* = cmd-histo.get-unchecked(code) + 1
+    i = i + 1
+  }
+  cmd-histo.get-ref-unchecked(1).* = cmd-histo.get-unchecked(1) + 1
+  cmd-histo.get-ref-unchecked(2).* = cmd-histo.get-unchecked(2) + 1
+  cmd-histo.get-ref-unchecked(64).* = cmd-histo.get-unchecked(64) + 1
+  cmd-histo.get-ref-unchecked(84).* = cmd-histo.get-unchecked(84) + 1
+  build-and-store-command-prefix-code-2p(s, bw)
+
+  let lit-pos: size = 0
+  i = 0
+  while i < sink.num-commands {
+    let cmd = sink.commands.get-unchecked(i)
+    let code = (cmd & 0xFF).as[size]
+    let extra = (cmd >> 8).as[u64]
+    bw.write-bits(cmd-depth.get-unchecked(code).as[size], cmd-bits.get-unchecked(code).as[u64])
+    bw.write-bits(k-num-extra-bits.get(code).as[size], extra)
+    if code < 24 {
+      let insert = k-insert-offset.get(code).as[size] + extra.as[i64]
+      let j: size = 0
+      while j < insert {
+        let lit = sink.literals.get-unchecked(lit-pos).as[size]
+        bw.write-bits(lit-depth.get-unchecked(lit).as[size], lit-bits.get-unchecked(lit).as[u64])
+        lit-pos = lit-pos + 1
+        j = j + 1
+      }
+    }
+    i = i + 1
+  }
+}
+
+fn bits-entropy(population: buffer[u32], count: size): f64 {
+  let sum: size = 0
+  let retval = 0.0
+  let i: size = 0
+  while i < count {
+    let p = population.get-unchecked(i).as[size]
+    sum = sum + p
+    retval = retval - p.as[f64] * fast-log2(p)
+    i = i + 1
+  }
+  if sum != 0 {
+    retval = retval + sum.as[f64] * fast-log2(sum)
+  }
+  // At least one bit per literal is needed.
+  if retval < sum.as[f64] {
+    retval = sum.as[f64]
+  }
+  retval
+}
+
+// Skip compression when few backward references were found and the literal
+// entropy is close to 8 bits: an uncompressed block is ~3x faster to emit.
+fn should-compress-2p(s: *mut two-pass-arena, input: ptr, input-size: size, num-literals: size): bool {
+  let MIN-RATIO-2P = 0.98
+  let SAMPLE-RATE: size = 43
+  let corpus-size = input-size.as[f64]
+  if num-literals.as[f64] < MIN-RATIO-2P * corpus-size {
+    true
+  } else {
+    let lit-histo = s.lit-histo.&.as-buffer()
+    let max-total-bit-cost = corpus-size * 8.0 * MIN-RATIO-2P / SAMPLE-RATE.as[f64]
+    lit-histo.memset(0)
+    let i: size = 0
+    while i < input-size {
+      let b = input.add-bytes(i).r[u8].*
+      lit-histo.get-ref-unchecked(b).* = lit-histo.get-unchecked(b) + 1
+      i = i + SAMPLE-RATE
+    }
+    bits-entropy(lit-histo, 256) < max-total-bit-cost
+  }
+}
+
+fn compress-fragment-two-pass(
+  s: *mut two-pass-arena, input-start: ptr, fragment-size: size, is-last: bool,
+  command-buf: buffer[u32], literal-buf: buffer[u8],
+  table: buffer[i32], table-size: size, bw: *mut bit-writer,
+) {
+  let initial-pos = bw.pos
+  let table-bits = log2-floor-nonzero(table-size.as[u64]).as[size]
+  let min-match: size = if table-bits <= 15 4 else 6
+  let base-ip = input-start
+
+  let input = input-start
+  let input-size = fragment-size
+  while input-size > 0 {
+    let block-size = min-size(input-size, TWO-PASS-BLOCK-SIZE)
+    let sink: cmd-sink = .{
+      commands = command-buf,
+      num-commands = 0,
+      literals = literal-buf,
+      num-literals = 0,
+    }
+    create-commands(input, block-size, input-size, base-ip, table, table-bits, min-match, sink.&)
+    if should-compress-2p(s, input, block-size, sink.num-literals) {
+      store-metablock-header(block-size, false, bw)
+      bw.write-bits(13, 0) // no block splits, no contexts
+      store-commands(s, sink.&, bw)
+    } else {
+      store-metablock-header(block-size, true, bw)
+      emit-uncompressed-body(input, block-size, bw)
+    }
+    input = input.add-bytes(block-size)
+    input-size = input-size - block-size
+  }
+
+  // If output is larger than one uncompressed metablock, rewrite it.
+  if bw.pos - initial-pos > 31 + (fragment-size << 3) {
+    emit-uncompressed-meta-block(input-start, input-start.add-bytes(fragment-size), initial-pos, bw)
+  }
+
+  if is-last {
+    bw.write-bits(1, 1) // islast
+    bw.write-bits(1, 1) // isempty
+    bw.pos = ((bw.pos + 7) >> 3) << 3
+  }
+}

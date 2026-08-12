@@ -111,9 +111,17 @@ fn tags() {
   .{}
 }
 
+fn derived-print() {
+  let a: e = :a
+  let c: e = :c(42)
+  assert-equals("$a", ":a")
+  assert-equals("$c", ":c 42")
+}
+
 fn test() {
   tags()
   sum-payload()
   sum-quiet()
   generic-sum()
+  derived-print()
 }

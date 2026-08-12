@@ -506,8 +506,7 @@ impl TypedProgram {
             && self.ast.mem.getn(passed_type_args).iter().all(|nt| nt.type_expr.is_some());
         debug!("all_passed={all_params_were_passed}");
         let solved_type_params = if all_params_were_passed {
-            let mut evaled_params: List<TypeId, MemTmp> =
-                self.tmp.new_list(passed_type_args.len());
+            let mut evaled_params: List<TypeId, MemTmp> = self.tmp.new_list(passed_type_args.len());
             for type_arg in self.ast.mem.getn(passed_type_args).iter() {
                 let passed_expr = type_arg.type_expr.unwrap(); // checked by all_passed
                 let passed_type = self.eval_type_expr(passed_expr, ctx.scope_id)?;
@@ -876,10 +875,12 @@ impl TypedProgram {
     /// For each param they mention, if its solved, use the solution, otherwise use the
     /// inference hole so we can learn more about it
     fn make_inference_substitution_set(&self) -> SV8<TypeSubstitutionPair> {
-        // Innermost frame first: nested frames can hold slots for the same param type
-        // (self-recursion, or companion fns sharing their generic's params), and
-        // substitution takes the first matching pair
-        // nocommit: I worry about the need for this rev; lets revisit
+        // Innermost frame first: every call to a generic fn shares that fn's param
+        // TypeIds, so a call nested in its own argument list overlaps two frames with
+        // identical param_types. Substitution takes the first matching pair, and the
+        // signatures being fixed up belong to the innermost (current) call; without the
+        // rev, an outer frame's solved slot makes the signature concrete and the inner
+        // call learns nothing (inference.k1 covers this)
         let mut pairs: SV8<TypeSubstitutionPair> = smallvec![];
         for slot in self.ictx().slots.iter().rev() {
             let solved = if slot.fully_solved { slot.solution } else { None };
