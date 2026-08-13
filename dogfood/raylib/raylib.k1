@@ -6,6 +6,7 @@
 // The orbs and clock survive the swap. Click to spawn an orb.
 
 fn module(): k1/module {
+
   let m = k1/module/new()
   m.lib("raylib", :static)
   for ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"] {
@@ -47,12 +48,6 @@ ns libm {
 let KEY-R: i32 = 82
 let MOUSE-LEFT: i32 = 0
 
-let PINK: raylib/color   = .{ r = 255, g = 109, b = 194, a = 255 }
-let PURPLE: raylib/color = .{ r = 200, g = 122, b = 255, a = 255 }
-let CYAN: raylib/color   = .{ r = 109, g = 220, b = 255, a = 255 }
-let INK: raylib/color    = .{ r = 18,  g = 18,  b = 26,  a = 255 }
-let FAINT: raylib/color  = .{ r = 60,  g = 60,  b = 80,  a = 255 }
-
 type orb = { x: i32, y: i32, born: f64 }
 
 use raylib/draw-text
@@ -61,8 +56,16 @@ use raylib/draw-line
 use raylib/clear-background
 
 ns(reload) scene {
+
+  let PINK: raylib/color   = .{ r = 255, g = 109, b = 194, a = 255 }
+  let PURPLE: raylib/color = .{ r = 200, g = 122, b = 255, a = 255 }
+  let CYAN: raylib/color   = .{ r = 109, g = 220, b = 255, a = 255 }
+  let INK: raylib/color    = .{ r = 18,  g = 18,  b = 26,  a = 255 }
+  let FAINT: raylib/color  = .{ r = 60,  g = 60,  b = 80,  a = 255 }
+
   fn palette(i: u64): raylib/color {
-    if i % 3 == 0 PINK
+    let YELLOW: raylib/color = .{ r = 180, g = 150, b = 0, a = 255 }
+    if i % 3 == 0 YELLOW
     else if i % 3 == 1 PURPLE
     else CYAN
   }
@@ -74,7 +77,7 @@ ns(reload) scene {
       let color = palette(it-index.as[u64])
       let age = (t - o.born).as[f32]
 
-      let sats = 3
+      let sats = 5
       for k in 0.until(sats) {
         let phase = age * 1.5 + k.as[f32] * (6.2832 / sats.as[f32])
         let dist: f32 = 44.0 + 10.0 * libm/sin(age * 2.0 + k.as[f32])
@@ -102,7 +105,7 @@ fn main(): i32 {
   raylib/init(900, 560, "k1 ns(reload)".to-c-tmp().ptr)
   raylib/set-target-fps(60)
 
-  if let :err e = scene/load() {
+  if scene/load() is :err e {
     crash("load scene lib failed $e")
   }
   let reloads: u64 = 0

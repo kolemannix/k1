@@ -2,7 +2,7 @@
 // All rights reserved.
 
 use k1::debug;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -123,6 +123,9 @@ fn error_to_diagnostic(
     level: MessageLevel,
     span_id: SpanId,
 ) -> Option<(Url, Diagnostic)> {
+    if span_id == SpanId::NONE {
+        return None;
+    }
     let url = uri_from_span(k1, span_id);
     let severity = match level {
         MessageLevel::Error => DiagnosticSeverity::ERROR,
@@ -130,10 +133,6 @@ fn error_to_diagnostic(
         MessageLevel::Info => DiagnosticSeverity::INFORMATION,
         MessageLevel::Hint => DiagnosticSeverity::HINT,
     };
-    // let mut escaped_message = String::with_capacity(message.len() * 2);
-    // escaped_message.push_str("```txt\n");
-    // escaped_message.push_str(&message);
-    // escaped_message.push_str("\n```");
     match span_id_to_range(k1, span_id) {
         None => {
             error!("Failed span lookup for diagnostic: {}", &message);
@@ -215,8 +214,13 @@ struct Backend {
     client: Client,
     module: k1::server::SharedProgram,
     edited_sources: Mutex<HashMap<Url, ParsedProgram>>,
-    workspace_uri: RwLock<Option<Url>>,
+    /// Canonical src_path of the program we compile (a module dir or single
+    /// file), derived from the files the client opens and saves
+    src_path: RwLock<Option<String>>,
+    published_diagnostic_urls: Mutex<HashSet<Url>>,
     compile_iteration: AtomicU32,
+    retarget_generation: AtomicU32,
+    retarget_lock: tokio::sync::Mutex<()>,
     completion_generation: AtomicU32,
     completion_compile_lock: tokio::sync::Mutex<()>,
 }
@@ -230,8 +234,11 @@ impl Backend {
             client,
             module,
             edited_sources: Mutex::new(HashMap::new()),
-            workspace_uri: RwLock::new(None),
+            src_path: RwLock::new(None),
+            published_diagnostic_urls: Mutex::new(HashSet::new()),
             compile_iteration: AtomicU32::new(0),
+            retarget_generation: AtomicU32::new(0),
+            retarget_lock: tokio::sync::Mutex::new(()),
             completion_generation: AtomicU32::new(0),
             completion_compile_lock: tokio::sync::Mutex::new(()),
         }
@@ -274,11 +281,8 @@ impl Backend {
         };
 
         let Ok(canonical_path) = k1::kpath::canonicalize(file_url.path()) else { return Ok(None) };
-        let root_path: std::path::PathBuf = {
-            let root_uri = self.workspace_uri.read().unwrap();
-            let Some(root) = root_uri.as_ref() else { return Ok(None) };
-            root.path().into()
-        };
+        let Some(root_path) = self.target_file_for_url(file_url) else { return Ok(None) };
+        let root_path = std::path::PathBuf::from(root_path);
 
         let mut source_overrides = fxhash::FxHashMap::default();
         source_overrides.insert(canonical_path, spliced);
@@ -386,10 +390,61 @@ impl Backend {
         map
     }
 
+    fn target_file_for_url(&self, file_url: &Url) -> Option<String> {
+        let file_path = file_url.to_file_path().ok()?;
+        let in_program =
+            self.with_k1(|k1| uri_to_source(&k1.ast, file_url).is_some()).unwrap_or(false);
+        if in_program {
+            if let Some(stored) = self.src_path.read().unwrap().clone() {
+                return Some(stored);
+            }
+        }
+        match k1::compiler::find_check_target_for_file(&file_path) {
+            Ok(target) => Some(target),
+            Err(e) => {
+                info!("target_for {}: {e}", file_url.path());
+                None
+            }
+        }
+    }
+
+    /// Point the program at `file_url`'s module if it isn't already covered,
+    /// then compile when the target changed, no program exists yet, or
+    /// `force_compile` (saves). Publishes diagnostics after compiling.
+    /// Returns whether a compile ran.
+    async fn ensure_target_and_compile(&self, file_url: &Url, force_compile: bool) -> bool {
+        let my_generation = self.retarget_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let _guard = self.retarget_lock.lock().await;
+        if self.retarget_generation.load(Ordering::SeqCst) != my_generation {
+            // A newer open/save superseded this one while we waited
+            return false;
+        }
+        let Some(target) = self.target_file_for_url(file_url) else {
+            return false;
+        };
+        let changed = {
+            let mut src_path = self.src_path.write().unwrap();
+            let changed = src_path.as_deref() != Some(target.as_str());
+            *src_path = Some(target);
+            changed
+        };
+        let no_program = self.with_k1(|_| ()).is_none();
+        if !(changed || no_program || force_compile) {
+            return false;
+        }
+        self.compile();
+        self.send_diagnostics().await;
+        true
+    }
+
     fn compile(&self) -> u32 {
         let iteration_number = self.compile_iteration.load(Ordering::Relaxed);
-        info!("compiling version {}", iteration_number);
-        let root_uri = self.workspace_uri.read().unwrap();
+        let src_path = self.src_path.read().unwrap().clone();
+        let Some(src_path) = src_path else {
+            info!("compile {}: no target yet", iteration_number);
+            return iteration_number;
+        };
+        info!("compiling version {} target {}", iteration_number, src_path);
         let args = k1::compiler::Args {
             no_std: false,
             emit_llvm: false,
@@ -405,9 +460,7 @@ impl Backend {
             filc: false,
             is_setup_program: false,
             k1_home_override: None,
-            command: k1::compiler::Command::Check {
-                file: root_uri.as_ref().unwrap().path().into(),
-            },
+            command: k1::compiler::Command::Check { file: src_path.into() },
             dump_idents: false,
         };
         let compile_result = k1::compiler::compile_program(&args);
@@ -431,11 +484,43 @@ impl Backend {
     async fn send_diagnostics(&self) {
         let version = self.compile_iteration.load(Ordering::Relaxed);
         let errors_by_file = self.build_all_files_and_errors_map();
+        // Clear diagnostics for files that left the program (target switch)
+        let stale = {
+            let mut published = self.published_diagnostic_urls.lock().unwrap();
+            let mut stale = vec![];
+            for url in published.iter() {
+                if !errors_by_file.contains_key(url) {
+                    stale.push(url.clone());
+                }
+            }
+            published.clear();
+            published.extend(errors_by_file.keys().cloned());
+            stale
+        };
+        for url in stale {
+            self.client.publish_diagnostics(url, vec![], Some(version as i32)).await;
+        }
         for (file_url, errors) in errors_by_file.into_iter() {
             if !errors.is_empty() {
                 info!("Sending {} diagnostics for {file_url} with version {version}", errors.len());
             }
             self.client.publish_diagnostics(file_url, errors, Some(version as i32)).await;
+        }
+        // Errors with no source position (module resolution failures) can't
+        // be diagnostics; show them so a dead compile is never silent
+        let spanless = self
+            .with_k1(|k1| {
+                let mut messages = vec![];
+                for m in k1.messages.borrow().iter() {
+                    if m.level == MessageLevel::Error && m.span == SpanId::NONE {
+                        messages.push(k1.ident_str(m.message).to_string());
+                    }
+                }
+                messages
+            })
+            .unwrap_or_default();
+        for message in spanless {
+            self.client.show_message(MessageType::ERROR, message).await;
         }
     }
 
@@ -485,7 +570,7 @@ impl LanguageServer for Backend {
         let mut res = InitializeResult::default();
         res.capabilities.text_document_sync =
             Some(TextDocumentSyncCapability::Options(TextDocumentSyncOptions {
-                open_close: Some(false),
+                open_close: Some(true),
                 change: Some(TextDocumentSyncKind::FULL),
                 will_save: Some(false),
                 will_save_wait_until: Some(false),
@@ -531,12 +616,6 @@ impl LanguageServer for Backend {
         res.server_info =
             Some(ServerInfo { name: "k1lsp".to_string(), version: Some("ALPHA".to_string()) });
         info!("Got initialize params: {params:#?}");
-        let root_uri = params.root_uri.ok_or(Error::invalid_params("Need root_uri"))?;
-        assert!(root_uri.scheme() == "file");
-        self.workspace_uri.write().unwrap().replace(root_uri.clone());
-        info!("Set root uri: {}", root_uri.path());
-
-        self.compile();
         Ok(res)
     }
 
@@ -774,17 +853,29 @@ impl LanguageServer for Backend {
         )))
     }
 
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let file_url = params.text_document.uri;
+        info!("handling did_open for document: {}", file_url.path());
+        self.ensure_target_and_compile(&file_url, false).await;
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let mut es = self.edited_sources.lock().unwrap();
+        es.remove(&params.text_document.uri);
+    }
+
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         info!("handling did_save for document: {}", params.text_document.uri.path());
         {
             let mut es = self.edited_sources.lock().unwrap();
             es.remove(&params.text_document.uri);
         }
-        //info!("did_save file {:?}", params.text);
         let start = std::time::Instant::now();
-        self.compile();
+        let compiled = self.ensure_target_and_compile(&params.text_document.uri, true).await;
+        if !compiled {
+            return;
+        }
         let elapsed_ms = start.elapsed().as_millis();
-        self.send_diagnostics().await;
         self.client.semantic_tokens_refresh().await.unwrap();
         self.client
             .show_message(

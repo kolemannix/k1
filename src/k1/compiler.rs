@@ -8,6 +8,7 @@ use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
 use crate::kmem::{self, MStr, Mem};
+use crate::lex::SpanId;
 use crate::parse::{IdentPool, StringId, write_source_location};
 use crate::typer::{LibRefLinkType, MemTmp, MessageLevel, NamespaceId, TypedProgram};
 use crate::{kpath, typer};
@@ -421,6 +422,20 @@ impl Drop for CwdGuard {
 pub fn module_home_from_src_path(src_path: &str) -> (bool, String) {
     let is_dir = Path::new(src_path).is_dir();
     if is_dir { (true, src_path.to_string()) } else { (false, kpath::parent(src_path).to_string()) }
+}
+
+/// Given a .k1 source file, the src_path to compile: its directory when that
+/// directory is a module dir else the file itself
+pub fn find_check_target_for_file(file: &Path) -> anyhow::Result<String> {
+    let file = kpath::canonicalize(file)?;
+    if kpath::file_name(&file) == "setup.k1" {
+        return Ok(file);
+    }
+    let dir = kpath::parent(&file);
+    let dir_name = kpath::file_name(dir);
+    let has_root = Path::new(dir).join("module.k1").is_file()
+        || Path::new(dir).join(format!("{dir_name}.k1")).is_file();
+    if has_root { Ok(dir.to_string()) } else { Ok(file) }
 }
 
 pub struct SourceFile {
@@ -1213,6 +1228,10 @@ pub fn compile_program_ext(
             write_program_dump(&k1);
         }
         eprintln!("{}", e);
+        if k1.error_count(&[MessageLevel::Error]) == 0 {
+            let message = k1.make_error(format!("{e}"), SpanId::NONE);
+            k1.messages.borrow_mut().push(message);
+        }
         return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };
     let total_elapsed_ns = start_time.elapsed().as_nanos();
