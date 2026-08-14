@@ -1,0 +1,113 @@
+// tests ns(reload) across independent compiler runs
+use core/c-int
+use std/fd
+use std/process
+use std/thread
+
+let app-dir: string = "/tmp/k1-reload-driver/app"
+
+fn scene-source(greeting: string, two-arg-helper: bool): string {
+  let sb = string-builder/new()
+  sb.writeln("ns(reload) scene {")
+  sb.writeln("  fn greeting(): string { \"${greeting}\" }")
+  if two-arg-helper {
+    sb.writeln("  fn helper(x: i64, y: i64): i64 { x + y }")
+  } else {
+    sb.writeln("  fn helper(x: i64): i64 { x + 1 }")
+  }
+  sb.writeln("}")
+  sb.build()
+}
+
+fn build-app(k1-exe: string, greeting: string, two-arg-helper: bool) {
+  files/write-entire-file("${app-dir}/scene.k1", scene-source(greeting, two-arg-helper))
+  process/run(k1-exe, ["build", app-dir]) is {
+    :ok _ -> .{},
+    :err e -> crash("app build failed: ${e}"),
+  }
+}
+
+fn send(app: *mut process/child, line: string) {
+  fd/write-all(app.stdin-fd, "${line}\n".span-bytes()).!
+}
+
+fn expect(app: *mut process/child, expected: string) {
+  app.stdout.read-line() is {
+    :some line -> assert-equals(line, expected),
+    :none -> crash("app closed stdout; expected: $expected"),
+  }
+}
+
+fn main(argc: c-int, argv: ptr): i32 {
+  let args = sys/parse-main-args(argc, argv)
+  // `k1 run` starts us in the program's home dir, so the app template is ./app
+  let template-dir = args.get-opt(1) is {
+    :some d -> d,
+    :none -> "app",
+  }
+  let k1-exe = sys/env("K1_EXE") is { :some p -> p, :none -> "k1" }
+
+  process/sh("rm -rf /tmp/k1-reload-driver && mkdir -p ${app-dir}").!
+  files/write-entire-file(
+    "${app-dir}/app.k1",
+    files/read-to-string("${template-dir}/app.k1")
+  )
+
+  build-app(k1-exe, "one", false)
+  let app = process/spawn("${app-dir}/.k1-out/app", []).!
+
+  send(app.&, "version")
+  expect(app.&, "version: 0")
+  send(app.&, "load")
+  expect(app.&, "load ok")
+  send(app.&, "version")
+  expect(app.&, "version: 1")
+  send(app.&, "greet")
+  expect(app.&, "greet: one")
+
+  // Body-only rebuild: same api, the running app swaps to the new behavior
+  build-app(k1-exe, "two", false)
+  send(app.&, "load")
+  expect(app.&, "load ok")
+  send(app.&, "greet")
+  expect(app.&, "greet: two")
+  send(app.&, "version")
+  expect(app.&, "version: 2")
+
+  // Signature change on a fn main never calls: hash drifts, load refuses,
+  // nothing is patched
+  build-app(k1-exe, "three", true)
+  send(app.&, "load")
+  expect(app.&, "load err: restart required: api of app/scene changed")
+  send(app.&, "greet")
+  expect(app.&, "greet: two")
+  send(app.&, "version")
+  expect(app.&, "version: 2")
+
+  // watch(): the app now keeps itself current; a rebuild with the original
+  // api swaps in with no further poking
+  send(app.&, "watch")
+  expect(app.&, "watch ok")
+  build-app(k1-exe, "four", false)
+  let tries = 0
+  loop {
+    thread/sleep-ms(200)
+    send(app.&, "greet")
+    let greet = app.stdout.read-line() is {
+      :some line -> line,
+      :none -> crash("app closed stdout waiting for the watched swap"),
+    }
+    if greet == "greet: four" break
+    assert-equals(greet, "greet: two")
+    tries = tries + 1
+    if tries > 50 crash("watched rebuild never swapped in")
+  }
+  send(app.&, "version")
+  expect(app.&, "version: 3")
+
+  send(app.&, "quit")
+  let status = app.wait().!
+  assert-equals(status.exit-code, 0)
+  println("reload_test ok")
+  0
+}

@@ -1,0 +1,87 @@
+ns fd {
+
+  use core/posix
+  use core/libc
+
+  // Loops until every byte is written
+  fn write-all(fd: i32, bytes: span[u8]): result[empty, string] {
+    let written: size = 0
+    while written < bytes.len() {
+      let n = posix/write(fd, bytes.data-ptr().add-bytes(written), (bytes.len() - written).as[u64])
+      if n < 0 {
+        if libc/errno() == libc/EINTR continue
+        return :err libc/errno-k1-string()
+      }
+      written = written + n
+    }
+    :ok
+  }
+
+  fn read-all(fd: i32): result[string, string] {
+    let sb = string-builder/new()
+    let chunk = buffer/allocate[u8](4096)
+    loop {
+      let n = posix/read(fd, chunk.data.as[ptr], chunk.len.as[u64])
+      if n > 0 {
+        sb.write-bytes(span/wrap-buffer(chunk.slice(0, n)))
+      } else if n == 0 {
+        return :ok sb.build()
+      } else if libc/errno() != libc/EINTR {
+        return :err libc/errno-k1-string()
+      }
+    }
+  }
+
+  // Buffered line reads: pending/consumed hold fd bytes between calls
+  type reader = { fd: i32, pending: list[u8], consumed: size }
+
+  ns for reader {
+
+    fn new(fd: i32): reader {
+      .{ fd = fd, pending = list/empty[u8](), consumed = 0 }
+    }
+
+    // Blocking; :none only at EOF with nothing buffered. The last line before
+    // EOF may arrive without its newline.
+    fn read-line(self: *mut reader): ?string {
+      loop {
+        let i = self.consumed
+        while i < self.pending.len() {
+          if self.pending.get(i) == '\n'.as[u8] {
+            let line = self.take-line(i)
+            self.consumed = i + 1
+            if self.consumed == self.pending.len() {
+              self.pending.clear()
+              self.consumed = 0
+            }
+            return :some(line)
+          }
+          i = i + 1
+        }
+        let chunk = buffer/allocate-in[u8, _](mem/tmp(), 4096)
+        let n = posix/read(self.fd, chunk.data.as[ptr], chunk.len.as[u64])
+        if n > 0 {
+          self.pending.append-span(span/wrap-buffer(chunk.slice(0, n)))
+        } else if n == 0 {
+          if self.consumed < self.pending.len() {
+            let line = self.take-line(self.pending.len())
+            self.pending.clear()
+            self.consumed = 0
+            return :some(line)
+          }
+          return :none
+        } else if libc/errno() != libc/EINTR {
+          return :none
+        }
+      }
+    }
+
+    fn take-line(self: *mut reader, end: size): string {
+      let sb = string-builder/new()
+      sb.write-bytes(self.pending.slice(self.consumed, end))
+      sb.build()
+    }
+
+  }
+
+}

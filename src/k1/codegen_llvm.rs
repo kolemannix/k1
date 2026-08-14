@@ -696,6 +696,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let entry_type = self.ctx.struct_type(&[ptr_type.into(), ptr_type.into()], false);
         for (ns_id, mut fns) in ns_fns {
             fns.sort_by(|a, b| a.0.cmp(&b.0));
+            let api_hash = self.k1.reload_hash_for_ns(ns_id);
             let ns = self.k1.namespaces.get(ns_id);
             let ns_name = self.k1.ident_str(ns.name).to_string();
             let mut ns_path = String::with_capacity(64);
@@ -723,10 +724,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             entries_global.set_constant(true);
             entries_global.set_linkage(LlvmLinkage::Private);
 
-            // { dylib file name: cstr, entry count: u64, entries: ptr }
+            // The loader bumps this after each successful swap; loaded-version reads it
+            let version_global =
+                self.llvm_module.add_global(self.ctx.i64_type(), None, "reload_version");
+            version_global.set_initializer(&self.ctx.i64_type().const_zero());
+            version_global.set_alignment(8);
+            version_global.set_linkage(LlvmLinkage::Private);
+
+            // { dylib file name: cstr, api hash: u64, version: *mut u64, entry count: u64, entries: ptr }
             let descriptor = self.ctx.const_struct(
                 &[
                     file_name_ptr.into(),
+                    self.ctx.i64_type().const_int(api_hash, false).into(),
+                    version_global.as_pointer_value().into(),
                     self.ctx.i64_type().const_int(fns.len() as u64, false).into(),
                     entries_global.as_pointer_value().into(),
                 ],
@@ -750,6 +760,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let CgUnit::ReloadDylib(ns_id) = self.unit else {
             panic!("codegen_reload_dylib on a host Cg")
         };
+
+        // The load gate: the loader compares this stamp against the running
+        // host's descriptor hash and refuses a drifted api
+        let api_hash = self.k1.reload_hash_for_ns(ns_id);
+        let mut ns_path = String::with_capacity(64);
+        self.k1.write_scope_path(&mut ns_path, self.k1.namespaces.get(ns_id).scope_id, "/", true);
+        let hash_global = self.llvm_module.add_global(
+            self.ctx.i64_type(),
+            None,
+            &format!("__k1_reload_hash_{ns_path}"),
+        );
+        hash_global.set_initializer(&self.ctx.i64_type().const_int(api_hash, false));
+        hash_global.set_constant(true);
+        hash_global.set_alignment(8);
+        hash_global.set_linkage(LlvmLinkage::External);
+
         let mut roots: Vec<(String, FunctionId)> = vec![];
         for (function_id, function) in self.k1.function_iter() {
             if function.is_reloadable && function.namespace_id == ns_id {
@@ -841,7 +867,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let Some(not_loaded_fn_id) =
             self.k1.scopes.find_function_local(self.k1.scopes.k1_scope_id, not_loaded_ident)
         else {
-            return Err(self.k1.make_error("core is missing fn k1/crash-unloaded-ns", SpanId::NONE));
+            return Err(self
+                .k1
+                .make_error("core is missing fn k1/crash-unloaded-ns", SpanId::NONE));
         };
 
         let fn_addr_global = self.reload_fn_addr_global(function_id);

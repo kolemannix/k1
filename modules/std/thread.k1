@@ -25,6 +25,29 @@ fn start-detached[t](function: *fn(*mut t) -> ptr, input: *t) {
   }
 }
 
+fn sleep-ms(ms: u64) {
+  let req: core/posix/timespec = .{ tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
+  let _ = core/posix/nanosleep(req.&, ptr/null.rw[core/posix/timespec]())
+}
+
+type sleep-poll-mutex = { state: u64 }
+
+ns for sleep-poll-mutex {
+
+  fn new(): sleep-poll-mutex { .{ state = 0 } }
+
+  fn lock(self: *mut sleep-poll-mutex) {
+    while atomic/cmpxchg(self.state.&, 0: u64, 1, :acquire, :relaxed).ok == false {
+      sleep-ms(1)
+    }
+  }
+
+  fn unlock(self: *mut sleep-poll-mutex) {
+    atomic/store(self.state.&, 0: u64, :release)
+  }
+
+}
+
 fn join[t](thread: thread, retval: *mut t) {
   if pthread/pthread_join(thread, retval.as[ptr]) != 0 {
     crash("pthread_join failed")

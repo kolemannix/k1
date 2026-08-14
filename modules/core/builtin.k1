@@ -863,10 +863,14 @@ ns array {
   type(alias) clockid_t = c-int
   let CLOCK_MONOTONIC: clockid_t = 1
   fn(extern("clock_gettime")) clock_gettime(clockid: clockid_t, tp: *mut timespec): c-int
+  fn(extern("nanosleep")) nanosleep(req: *timespec, rem: *mut timespec): c-int
 
   fn(extern("fork")) fork(): i32
   fn(extern("execve")) execve(path: ptr, argv: ptr, envp: ptr): i32
   fn(extern("waitpid")) waitpid(pid: i32, status: *mut i32, options: i32): i32
+  let SIGTERM: c-int = 15
+  let SIGKILL: c-int = 9
+  fn(extern("kill")) kill(pid: i32, sig: c-int): c-int
 
   fn(extern("pipe")) pipe(fds: ptr): c-int
   fn(extern("close")) close(fd: c-int): c-int
@@ -971,7 +975,7 @@ fn print-backtrace() {
 fn crash(context locn: k1/source-location)(msg: string): never {
   if k1/no-std {
     let s = "exiting (nostd)\n\0"
-    let _ = posix/write(
+    posix/write(
       file-no = 1,
       data = s.data-ptr(),
       count = (s.len() - 1).as[c-sizet],

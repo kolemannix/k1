@@ -159,12 +159,12 @@ fn iterator(): int {
 }
 
 fn test() {
-  let _ = list_test/list-of-structs()
+  list_test/list-of-structs()
   list_test/list-slice()
-  let _ = list_test/list-fill()
-  let _ = list_test/list-equality()
+  list_test/list-fill()
+  list_test/list-equality()
   list_test/test-sort()
   list_test/test-swap()
-  let _ = list_test/iterator()
+  list_test/iterator()
   assert([1,2,3].show() == "[1,2,3]")
 }

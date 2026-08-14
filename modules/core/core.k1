@@ -108,11 +108,11 @@ ns io {
   impl writer for out-stream {
     fn write-byte(self, value: u8) {
       let value_spot = value
-      let _ = posix/write(file-no = self.file-no, data = (&value_spot).as[ptr], count = 1)
+      posix/write(file-no = self.file-no, data = (&value_spot).as[ptr], count = 1)
       .{}
     }
     fn write-bytes(self, bytes: span[byte]) {
-      let _ = posix/write(
+      posix/write(
         file-no = self.file-no,
         data = bytes.data-ptr(),
         count = bytes.len().as[c-sizet]
@@ -137,12 +137,12 @@ ns files {
     }
     defer libc/files/fclose(file)
 
-    let _ = libc/files/fseek(file, 0, libc/files/SEEK_END)
+    libc/files/fseek(file, 0, libc/files/SEEK_END)
     let file-size-bytes = libc/files/ftell(file)
     let buf = buffer/allocate-in[char, _](alloc, file-size-bytes)
 
-    let _ = libc/files/fseek(file, 0, libc/files/SEEK_SET)
-    let _ = libc/files/fread(buf.data-ptr(), buf.len(), 1, file)
+    libc/files/fseek(file, 0, libc/files/SEEK_SET)
+    libc/files/fread(buf.data-ptr(), buf.len(), 1, file)
     let string = string/wrap-buffer(buf)
 
     string

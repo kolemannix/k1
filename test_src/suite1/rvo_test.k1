@@ -51,7 +51,7 @@ fn test() {
   let x = ret-string()
   assert-equals(x, "fdsa")
 
-  let _ = small-struct(100)
+  small-struct(100)
   let ss = small-struct(21)
   assert(ss.a == 1)
   assert(ss.b == 2)

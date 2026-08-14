@@ -86,7 +86,7 @@ fn auto-equals() {
 }
 
 fn test() {
-  let _ = basic-struct()
+  basic-struct()
   struct-arg-mut()
   eq-anon()
   struct-nested()

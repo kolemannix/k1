@@ -46,7 +46,7 @@ ns mem {
     let start-len = mem/arena-stack-len()
     mem/push-arena($arena)
     defer {
-      let _ = mem/pop-arena()
+      mem/pop-arena()
       assert-equals[size](mem/arena-stack-len(), start-len)
     }
     ($expr)

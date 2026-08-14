@@ -19,6 +19,10 @@ a:
 ts1:
   just run-frag --cache false run test_src/suite1
 
+# Dev loop for a reloadable app: rebuild on source change
+watch dir:
+  watchexec -w {{dir}} -e k1 -- target/debug/k1 build {{dir}}
+
 # exhaustive path; notably runs larger projects in dogfood
 test:
   ./test.sh

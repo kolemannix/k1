@@ -9,7 +9,7 @@ let(mutable) live-cells: u64 = 0
 
 ns for rc {
   fn alloc[t](value: t, drop-fn: ?*fn(*mut t) -> {}): rc[t] {
-    let _ = atomic/fetch-add(live-cells.&, 1, :relaxed)
+    atomic/fetch-add(live-cells.&, 1, :relaxed)
     .{ inner = heap.new(.{ count = 1, drop-fn, value }) }
   }
 
@@ -21,7 +21,7 @@ ns for rc {
   fn get[t](self: rc[t]): *mut t { self.inner.value.& }
 
   fn retain[t](self: rc[t]): rc[t] {
-    let _ = atomic/fetch-add(self.inner.count.&, 1, :relaxed)
+    atomic/fetch-add(self.inner.count.&, 1, :relaxed)
     self
   }
 

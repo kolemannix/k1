@@ -413,6 +413,19 @@ impl TypedProgram {
         self.add_static_constant_expr(string_value, span)
     }
 
+    /// synth a block that just returns `expr`
+    pub(super) fn synth_return_only_block(
+        &mut self,
+        scope_id: ScopeId,
+        expr: TypedExprId,
+        span: SpanId,
+    ) -> TypedExprId {
+        let return_expr = self.exprs.add_return(expr, None, span);
+        let mut block_builder = BlockBuilder { statements: self.mem.new_list(1), scope_id, span };
+        self.push_block_stmt(&mut block_builder, TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
+        self.exprs.add_block(block_builder, NEVER_TYPE_ID)
+    }
+
     pub(super) fn synth_string_literal_from_str(
         &mut self,
         s: impl AsRef<str>,

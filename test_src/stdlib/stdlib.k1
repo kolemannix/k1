@@ -12,5 +12,7 @@ fn test-all() {
 fn main(): i32 {
   #static test-all()
   test-all()
+  // threads: runtime only, the VM cannot pass K1 fns to pthread_create
+  watch_test/test()
   0
 }

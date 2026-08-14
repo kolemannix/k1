@@ -169,7 +169,7 @@ let(mutable) game-tick: u64 = 0
 fn start-mock-publisher(bus: *mut pubsub/bus[span[u8]]) {
   let tid: *mut uv/thread = heap.alloc-t()
   let rc = uv/thread_create(tid, fn arg. {
-    let _ = uv/thread_setname("publisher\0".data-ptr().as())
+    uv/thread_setname("publisher\0".data-ptr().as())
     let bus = arg.rw[pubsub/bus[span[u8]]]()
     loop {
       uv/sleep(1000)

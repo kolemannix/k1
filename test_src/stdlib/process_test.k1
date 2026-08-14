@@ -1,6 +1,11 @@
 ns process_test
 
+use std/fd
 use std/process
+
+fn write-line(child: *mut process/child, line: string) {
+  fd/write-all(child.stdin-fd, "${line}\n".span-bytes()).!
+}
 
 fn test() {
   // PATH lookup + argument passing; ok is the captured output
@@ -40,4 +45,27 @@ fn test() {
 
   // Output larger than the pipe buffer exercises the read loop
   assert-equals(process/sh("head -c 131072 /dev/zero | tr '\\0' 'a'").!.len(), 131072)
+
+  // Interactive child: lines flow both ways, EOF on close, clean reap
+  let cat = process/spawn("cat", []).!
+  write-line(cat.&, "first")
+  assert-equals(cat.stdout.read-line().!, "first")
+  write-line(cat.&, "second")
+  write-line(cat.&, "third")
+  assert-equals(cat.stdout.read-line().!, "second")
+  assert-equals(cat.stdout.read-line().!, "third")
+  let cat-status = cat.wait().!
+  assert-equals(cat-status.exit-code, 0)
+
+  // read-line returns :none at EOF; a last line without a newline still arrives
+  let printer = process/spawn("/bin/sh", ["-c", "printf 'no-newline'"]).!
+  assert-equals(printer.stdout.read-line().!, "no-newline")
+  assert(printer.stdout.read-line() is :none)
+  printer.wait().!
+
+  // kill: the child dies by signal
+  let sleeper = process/spawn("sleep", ["100"]).!
+  sleeper.kill()
+  let sleeper-status = sleeper.wait().!
+  assert-equals(sleeper-status.signal, 9)
 }

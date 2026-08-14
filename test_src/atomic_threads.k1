@@ -12,7 +12,7 @@ let N_ITERS: u64 = 10000
 fn counter-worker(counter: *mut cell[u64]): ptr {
   let i: u64 = 0
   while i < N_ITERS {
-    let _ = counter.add(1, :relaxed)
+    counter.add(1, :relaxed)
     i = i + 1
   }
   ptr/null

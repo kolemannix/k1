@@ -5,12 +5,12 @@
 use std/process
 
 fn setup(ctx: k1/setup-ctx) {
-  let _ = process/run-command("mkdir", ["-p", "libs", ".k1-out/llhttp"], :inherit).!
+  process/run-command("mkdir", ["-p", "libs", ".k1-out/llhttp"], :inherit).!
 
   for ["llhttp", "api", "http"] {
-    let _ = process/run-command("cc", ["-O2", "-Ivendor", "-c", "vendor/${it}.c", "-o", ".k1-out/llhttp/${it}.o"], :inherit).!
+    process/run-command("cc", ["-O2", "-Ivendor", "-c", "vendor/${it}.c", "-o", ".k1-out/llhttp/${it}.o"], :inherit).!
   }
-  let _ = process/run-command("/bin/sh", ["-c", "ar rcs libs/libllhttp.a .k1-out/llhttp/*.o"], :inherit).!
+  process/run-command("/bin/sh", ["-c", "ar rcs libs/libllhttp.a .k1-out/llhttp/*.o"], :inherit).!
 
   let args: list[string] = [
     "-in-path", "vendor/llhttp.h",

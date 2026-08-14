@@ -73,8 +73,8 @@ fn do-crash(): bool {
 
 fn test() {
 
-  let _ = if-basic()
-  let _ = if-no-else()
+  if-basic()
+  if-no-else()
   assert(return-simple())
   assert(return-from-if() == 1)
 

@@ -29,7 +29,7 @@ fn test-constraints() {
 
 fn test() {
   let b: box[int] = .{ value = 0 }
-  let _ = b.value
+  b.value
   let c: box[bool] = .{ value = true }
   let c2: box[bool] = .{ value = false }
   let c3: box[?bool] = .{ value = :some false }

@@ -15,7 +15,7 @@ ns response-writer {
 
   fn begin(connection: *mut connection, resp: http-response) {
     mem/push-arena(connection.request-arena)
-    defer { let _ = mem/pop-arena() }
+    defer { mem/pop-arena() }
     let out = string-builder/new()
     out.write("HTTP/1.1 ${resp.status} ${response/status-text(resp.status)}\r\nContent-Type: ${resp.content-type}\r\n")
     for h in resp.extra-headers { out.write("$h\r\n") }
@@ -108,7 +108,7 @@ ns response-writer {
   fn pump(driver: *mut driver) {
     let connection = driver.connection
     mem/push-arena(connection.request-arena)
-    defer { let _ = mem/pop-arena() }
+    defer { mem/pop-arena() }
     driver.stream.next() is {
       :chunk group -> write-group(driver, group),
       :pending -> { driver.parked = true },

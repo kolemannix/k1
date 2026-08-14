@@ -6,8 +6,8 @@ use std/sys
 fn c-compress(input: span[u8], quality: u32): list[u8] {
   let st = cbrotli/encoder-create-instance(ptr/null, ptr/null, ptr/null)
   defer cbrotli/encoder-destroy-instance(st)
-  let _ = cbrotli/encoder-set-parameter(st, :quality, quality)
-  let _ = cbrotli/encoder-set-parameter(st, :lgwin, 18)
+  cbrotli/encoder-set-parameter(st, :quality, quality)
+  cbrotli/encoder-set-parameter(st, :lgwin, 18)
 
   let out-cap = cbrotli/encoder-max-compressed-size(input.len()) + 1024
   let out = buffer/allocate[u8](out-cap)
@@ -135,11 +135,11 @@ fn bench-one(name: string, input: span[u8], quality: size, reps: size) {
 
   // Same shape for the C encoder (stream instance, lgwin 18).
   let cq = quality.as[u64].as[u32]
-  let _ = c-compress(input, cq) // warmup
+  c-compress(input, cq) // warmup
   let c-start = time/read-cpu-counter()
   r = 0
   while r < reps {
-    let _ = c-compress(input, cq)
+    c-compress(input, cq)
     r = r + 1
   }
   let c-nanos = time/counter-to-nanos(time/read-cpu-counter() - c-start)

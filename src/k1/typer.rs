@@ -5197,9 +5197,9 @@ impl TypedProgram {
         if log::log_enabled!(log::Level::Debug) {
             eprintln!(
                 "instantiated\n{} with params\n{} got expanded type:\n{}\n\n",
-                self.type_id_to_string_ext(inner, true),
+                self.type_id_to_string_ext(inner, dump::TypeDisplayMode::Expand),
                 self.pretty_print_types(type_arguments.as_slice(&self.mem), ", "),
-                self.type_id_to_string_ext(result_type, true)
+                self.type_id_to_string_ext(result_type, dump::TypeDisplayMode::Expand)
             );
         }
         result_type
@@ -6260,8 +6260,16 @@ impl TypedProgram {
                                             self,
                                             sum_pattern.span,
                                             "Impossible pattern: sum pattern refers to type '{}' which is not the same as match target '{}'",
-                                            self.type_id_to_string_ext(named_type, true).blue(),
-                                            self.type_id_to_string_ext(base_type, true).blue()
+                                            self.type_id_to_string_ext(
+                                                named_type,
+                                                dump::TypeDisplayMode::Expand
+                                            )
+                                            .blue(),
+                                            self.type_id_to_string_ext(
+                                                base_type,
+                                                dump::TypeDisplayMode::Expand
+                                            )
+                                            .blue()
                                         );
                                     }
                                 }
@@ -10921,7 +10929,10 @@ impl TypedProgram {
                 if ctx.is_inference() {
                     debug!(
                         "I need to set the right info for {} from expected [{}] and my literal values [{}]",
-                        self.type_id_to_string_ext(gi.generic_parent, true),
+                        self.type_id_to_string_ext(
+                            gi.generic_parent,
+                            dump::TypeDisplayMode::Expand
+                        ),
                         self.pretty_print_types(gi.type_args.as_slice(&self.mem), ", "),
                         self.pretty_print_types(
                             &field_types.iter().map(|ft| ft.type_id).collect::<Vec<_>>(),
@@ -16290,8 +16301,11 @@ impl TypedProgram {
             ability_args_new.push(substituted);
             debug!(
                 "> Did ability param {} -> {}",
-                self.type_id_to_string_ext(ability_param.type_variable_id, true),
-                self.type_id_to_string_ext(substituted, true)
+                self.type_id_to_string_ext(
+                    ability_param.type_variable_id,
+                    dump::TypeDisplayMode::Expand
+                ),
+                self.type_id_to_string_ext(substituted, dump::TypeDisplayMode::Expand)
             );
         }
         for (index, impl_param) in
@@ -16302,8 +16316,11 @@ impl TypedProgram {
             impl_args_new.push(substituted);
             debug!(
                 "> Did impl param {} -> {}",
-                self.type_id_to_string_ext(impl_param.type_variable_id, true),
-                self.type_id_to_string_ext(substituted, true)
+                self.type_id_to_string_ext(
+                    impl_param.type_variable_id,
+                    dump::TypeDisplayMode::Expand
+                ),
+                self.type_id_to_string_ext(substituted, dump::TypeDisplayMode::Expand)
             );
         }
         let ability_args_new_handle = ability_args_new.to_slice();
@@ -17157,15 +17174,21 @@ impl TypedProgram {
                         _ => None,
                     };
                     if let Some(expr_type) = expr_type {
-                        let physically_empty = match self.get_physical_type(expr_type) {
-                            PhysicalTypeResult::Yes(pt) => pt.is_empty(),
-                            _ => true,
-                        };
-                        if !physically_empty {
+                        let implements_try = self
+                            .find_or_generate_ability_impl_for_type(
+                                expr_type,
+                                ABILITY_ID_TRY,
+                                &[],
+                                true,
+                                block_scope,
+                                stmt_span,
+                            )
+                            .is_ok();
+                        if implements_try {
                             self.report(kwarn!(
                                 self,
                                 stmt_span,
-                                "Discarded expression result of type {}",
+                                "Discarded expression result of type {}; handle it or discard with `let _`",
                                 expr_type
                             ));
                         }
@@ -20538,7 +20561,7 @@ impl TypedProgram {
         // Before the ns's own defns: a user fn named load/load-async then
         // collides with the synthesized one and fails like any duplicate name
         if ns_reload {
-            if let Err(e) = self.declare_reload_load_fn(namespace_id) {
+            if let Err(e) = self.get_or_declare_ns_reload_functions(namespace_id) {
                 self.report(e);
             }
         }
@@ -20650,35 +20673,27 @@ impl TypedProgram {
         }
     }
 
-    /// Synthesize `fn load(): result[empty, reload/load-error]` and
-    /// `fn load-async(): empty` into a reloadable ns: one-call bodies passing
-    /// the ns's qualified path to std/reload. Idempotent across openings: the
-    /// first opening declares them, later ones find them in scope.
-    fn declare_reload_load_fn(&mut self, namespace_id: NamespaceId) -> K1Result<()> {
+    fn get_or_declare_ns_reload_functions(&mut self, namespace_id: NamespaceId) -> K1Result<()> {
         let ns = self.namespaces.get(namespace_id);
         let ns_scope = ns.scope_id;
         let load_ident = self.ast.idents.b.load;
         if self.scopes.find_function_local(ns_scope, load_ident).is_some() {
             return Ok(());
         }
-        let mut ns_path = String::with_capacity(64);
-        self.write_scope_path(&mut ns_path, ns_scope, "/", true);
-        let ns_path_ident = self.ast.idents.intern(&ns_path);
-        self.declare_reload_ns_path_fn(namespace_id, load_ident, "load-ns", ns_path_ident)?;
-        let load_async_ident = self.ast.idents.b.load_async;
-        self.declare_reload_ns_path_fn(
-            namespace_id,
-            load_async_ident,
-            "load-ns-async",
-            ns_path_ident,
-        )
+        let ns_path_ident =
+            self.build_ident_with(|k1, s| k1.write_scope_path(s, ns_scope, "/", true));
+        let b = self.ast.idents.b;
+        self.declare_ns_reload_fn(namespace_id, load_ident, b.load_ns, ns_path_ident)?;
+        self.declare_ns_reload_fn(namespace_id, b.load_async, b.load_ns_async, ns_path_ident)?;
+        self.declare_ns_reload_fn(namespace_id, b.loaded_version, b.ns_version, ns_path_ident)?;
+        self.declare_ns_reload_fn(namespace_id, b.watch, b.watch_ns, ns_path_ident)
     }
 
-    fn declare_reload_ns_path_fn(
+    fn declare_ns_reload_fn(
         &mut self,
         namespace_id: NamespaceId,
         name: StringId,
-        callee: &str,
+        callee: StringId,
         ns_path_ident: StringId,
     ) -> K1Result<()> {
         let ns = self.namespaces.get(namespace_id);
@@ -20692,14 +20707,14 @@ impl TypedProgram {
         self.scopes.set_scope_owner_id(fn_scope, ScopeOwnerId::Function(function_id));
 
         let ns_path_arg = self.synth_string_literal(ns_path_ident, span);
-        let std_ident = self.ast.idents.intern("std");
-        let reload_ident = self.ast.idents.intern("reload");
-        let callee_ident = self.ast.idents.intern(callee);
+
+        let b = self.ast.idents.b;
         let path = self
             .ast
             .mem
-            .pushn(&[IdentSpanned::make_anon(std_ident), IdentSpanned::make_anon(reload_ident)]);
-        let load_ns_name = QIdent { path, name: callee_ident, name_span: span };
+            .pushn(&[IdentSpanned::make_anon(b.std), IdentSpanned::make_anon(b.reload)]);
+        let load_ns_name = QIdent { path, name: callee, name_span: span };
+
         let body = self
             .synth_typed_call_typed_args(
                 load_ns_name,
@@ -20708,15 +20723,9 @@ impl TypedProgram {
                 EvalExprContext::make(fn_scope),
                 false,
             )
-            .map_err(|e| {
-                kerr!(self, span, "ns(reload) requires std/reload: {}", self.ident_str(e.message))
-            })?;
+            .map_err(|e| kerr!(self, span, "ns(reload) requires std/reload: {}", e.message))?;
         let return_type = self.exprs.get_type(body);
-        let return_expr = self.exprs.add_return(body, None, span);
-        let mut block_builder =
-            BlockBuilder { statements: self.mem.new_list(1), scope_id: fn_scope, span };
-        self.push_block_stmt(&mut block_builder, TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
-        let body_block = self.exprs.add_block(block_builder, NEVER_TYPE_ID);
+        let body_block = self.synth_return_only_block(fn_scope, body, span);
         let function_type = self.add_anon_type(Type::Function(FunctionType {
             physical_params: MSlice::empty(),
             return_type,
@@ -20742,7 +20751,7 @@ impl TypedProgram {
             is_concrete: false,
             is_recursive: false,
             is_macro: false,
-            // load/load-async are host code: they patch the ns, not live in it
+            // these load functions are host code: they patch the reloadable lib and do not live in it
             is_reloadable: false,
             dyn_fn_id: None,
             returned_variable: None,
@@ -20752,6 +20761,33 @@ impl TypedProgram {
         let added = self.scopes.add_function(ns_scope, name, function_id);
         debug_assert!(added, "the name was free in the ns scope; we just checked");
         Ok(())
+    }
+
+    pub fn reload_hash_for_ns(&self, ns_id: NamespaceId) -> u64 {
+        let mut fns: Vec<(&str, TypeId)> = vec![];
+        for (_, function) in self.function_iter() {
+            if function.is_reloadable && function.namespace_id == ns_id {
+                fns.push((self.ident_str(function.name), function.type_id));
+            }
+        }
+        fns.sort_by(|a, b| a.0.cmp(b.0));
+        let mut hash = crate::snap::InputsHash(0).add(&[crate::BUILD_ID.as_bytes()]);
+        let mut signature = String::with_capacity(256);
+        let mut listing = String::new();
+        for (name, type_id) in &fns {
+            signature.clear();
+            self.display_type_id(&mut signature, *type_id, dump::TypeDisplayMode::Structural)
+                .unwrap();
+            hash = hash.add(&[name.as_bytes(), signature.as_bytes()]);
+            if self.config.chatty {
+                writeln!(listing, "  {name}: {signature}").unwrap();
+            }
+        }
+        if self.config.chatty {
+            let ns_name = self.ident_str(self.namespaces.get(ns_id).name);
+            eprint!("reload api of {ns_name} ({:016x}):\n{listing}", hash.0 as u64);
+        }
+        hash.0 as u64
     }
 
     fn compile_ns_body(&mut self, ast_namespace_id: ParsedNamespaceId, skip_defns: &[ParsedId]) {
@@ -22363,7 +22399,7 @@ impl TypedProgram {
         }
 
         let mut s = std::mem::take(&mut self.buffers.name_builder);
-        self.display_type_id(&mut s, type_id, false).unwrap();
+        self.display_type_id(&mut s, type_id, dump::TypeDisplayMode::Name).unwrap();
         let string_id = self.ast.idents.intern(&s);
         s.clear();
         self.buffers.name_builder = s;

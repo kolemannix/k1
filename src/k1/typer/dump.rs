@@ -5,6 +5,16 @@ use std::fmt::{Display, Formatter, Write};
 
 use super::*;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TypeDisplayMode {
+    /// Named types by name
+    Name,
+    /// Names plus expanded bodies
+    Expand,
+    /// Structure only for abi identity
+    Structural,
+}
+
 impl Display for TypedProgram {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let skip_variables = true;
@@ -96,7 +106,7 @@ impl TypedProgram {
             w.write_str("\t")?;
             self.write_ident(w, ident)?;
             w.write_str(" -> ")?;
-            self.display_type_id(w, type_id, true)?;
+            self.display_type_id(w, type_id, TypeDisplayMode::Expand)?;
             w.write_str("\n")?;
         }
         let mut first = true;
@@ -115,7 +125,7 @@ impl TypedProgram {
         w.write_str("(")?;
         self.write_ident(w, var.name)?;
         w.write_str(": ")?;
-        self.display_type_id(w, var.type_id, false)?;
+        self.display_type_id(w, var.type_id, TypeDisplayMode::Name)?;
         w.write_str(")")?;
         Ok(())
     }
@@ -124,22 +134,12 @@ impl TypedProgram {
         &self,
         w: &mut W,
         ty: TypeId,
-        expand: bool,
+        mode: TypeDisplayMode,
     ) -> std::fmt::Result {
         let mut visited = self.buffers.visited_types.borrow_mut();
-        let res = self.display_type_id_ext(w, ty, expand, &mut visited);
+        let res = self.display_type_id_ext(w, ty, mode, &mut visited);
         visited.clear();
         res
-    }
-
-    pub fn display_type_id_rec<W: fmt::Write + ?Sized>(
-        &self,
-        w: &mut W,
-        ty: TypeId,
-        expand: bool,
-        visiting: &mut Vec<TypeId>,
-    ) -> std::fmt::Result {
-        self.display_type_id_ext(w, ty, expand, visiting)
     }
 
     // Silly function but so commonly needed its worth the call-site ergonomics
@@ -148,7 +148,7 @@ impl TypedProgram {
     }
 
     pub fn type_id_to_string(&self, type_id: TypeId) -> String {
-        self.type_id_to_string_ext(type_id, false)
+        self.type_id_to_string_ext(type_id, TypeDisplayMode::Name)
     }
 
     pub fn dump_type_id_to_string(&self, type_id: TypeId) -> String {
@@ -162,13 +162,13 @@ impl TypedProgram {
         ty.kind_name()
     }
 
-    pub fn type_id_to_string_ext(&self, type_id: TypeId, expand: bool) -> String {
+    pub fn type_id_to_string_ext(&self, type_id: TypeId, mode: TypeDisplayMode) -> String {
         // Note: This is happy path code because we use the type names for more than errors
         // But I think its ok to allocate the string; idk its probably way too big of an allocation
         // for most types and we'd be better off using one of our arenas
         let mut s = String::with_capacity(1028);
         let mut visited = self.buffers.visited_types.borrow_mut();
-        self.display_type_id_ext(&mut s, type_id, expand, &mut visited).unwrap();
+        self.display_type_id_ext(&mut s, type_id, mode, &mut visited).unwrap();
         visited.clear();
         s
     }
@@ -177,12 +177,12 @@ impl TypedProgram {
         &self,
         w: &mut W,
         spec_info: &GenericInstanceInfo,
-        expand: bool,
+        mode: TypeDisplayMode,
         visited: &mut Vec<TypeId>,
     ) -> std::fmt::Result {
         w.write_str("[")?;
         for (index, t) in spec_info.type_args.as_slice(&self.mem).iter().enumerate() {
-            self.display_type_id_ext(w, *t, expand, visited)?;
+            self.display_type_id_ext(w, *t, mode, visited)?;
             let last = index == spec_info.type_args.len() as usize - 1;
             if !last {
                 w.write_str(", ")?;
@@ -196,11 +196,14 @@ impl TypedProgram {
         &self,
         w: &mut W,
         type_id: TypeId,
-        expand: bool,
+        mode: TypeDisplayMode,
         visiting: &mut Vec<TypeId>,
     ) -> std::fmt::Result {
         let defn_info = self.get_defn_info(type_id);
-        if visiting.contains(&type_id) {
+        if let Some(enclosing) = visiting.iter().position(|t| *t == type_id) {
+            if mode == TypeDisplayMode::Structural {
+                return write!(w, "#{enclosing}");
+            }
             if let Some(defn_info) = defn_info {
                 self.write_ident(w, defn_info.name)?;
             }
@@ -215,12 +218,22 @@ impl TypedProgram {
                 Ok(())
             }
             Type::Enum(se) => {
-                if let Some(defn_info) = defn_info {
+                if mode == TypeDisplayMode::Structural {
+                    // Member values are abi: they cross the boundary
+                    write!(w, "enum({}) ", se.int_type)?;
+                    for (idx, member) in self.mem.getn(se.member_values).iter().enumerate() {
+                        if idx > 0 {
+                            w.write_str(", ")?;
+                        }
+                        self.write_ident(w, member.name)?;
+                        write!(w, "={}", member.int_value.to_u64_bits())?;
+                    }
+                } else if let Some(defn_info) = defn_info {
                     self.write_ident(w, defn_info.name)?;
                     if let Some(spec_info) = self.get_instance_info(type_id) {
-                        self.display_instance_info(w, spec_info, expand, visiting)?;
+                        self.display_instance_info(w, spec_info, mode, visiting)?;
                     }
-                    if expand {
+                    if mode == TypeDisplayMode::Expand {
                         w.write_str("(")?;
                         write!(w, "enum {}", se.int_type)?;
                         w.write_str(")")?;
@@ -237,23 +250,24 @@ impl TypedProgram {
             Type::Bool => w.write_str("bool"),
             Type::Pointer => w.write_str("ptr"),
             Type::Struct(struc) => {
-                if let Some(defn_info) = defn_info {
-                    self.write_ident(w, defn_info.name)?;
-                    if let Some(spec_info) = self.get_instance_info(type_id) {
-                        self.display_instance_info(w, spec_info, expand, visiting)?;
+                match defn_info {
+                    Some(defn_info) if mode != TypeDisplayMode::Structural => {
+                        self.write_ident(w, defn_info.name)?;
+                        if let Some(spec_info) = self.get_instance_info(type_id) {
+                            self.display_instance_info(w, spec_info, mode, visiting)?;
+                        }
+                        if mode == TypeDisplayMode::Expand {
+                            w.write_str("(")?;
+                            self.display_struct_fields(w, struc, mode, visiting)?;
+                            w.write_str(")")?;
+                        }
                     }
-                    if expand {
-                        w.write_str("(")?;
-                        self.display_struct_fields(w, struc, expand, visiting)?;
-                        w.write_str(")")?;
-                    }
-                } else {
-                    self.display_struct_fields(w, struc, expand, visiting)?;
+                    _ => self.display_struct_fields(w, struc, mode, visiting)?,
                 }
                 Ok(())
             }
             Type::TypeParameter(tv) => {
-                if expand {
+                if mode == TypeDisplayMode::Expand {
                     self.display_scope_name(w, tv.scope_id)?;
                     w.write_str(".")?;
                     w.write_str("'")?;
@@ -264,13 +278,13 @@ impl TypedProgram {
                 }
                 if let Some(static_constraint) = tv.static_constraint {
                     w.write_str(": ")?;
-                    self.display_type_id_rec(w, static_constraint, expand, visiting)?;
+                    self.display_type_id_ext(w, static_constraint, mode, visiting)?;
                 }
                 Ok(())
             }
             Type::FunctionTypeParameter(ftp) => {
                 w.write_str("some ")?;
-                self.display_type_id_rec(w, ftp.function_type, expand, visiting)?;
+                self.display_type_id_ext(w, ftp.function_type, mode, visiting)?;
                 Ok(())
             }
             Type::InferenceHole(hole) => {
@@ -278,33 +292,50 @@ impl TypedProgram {
                 write!(w, "{}", hole.index)?;
                 if let Some(stat) = hole.static_type {
                     w.write_str(": ")?;
-                    self.display_type_id_rec(w, stat, expand, visiting)?;
+                    self.display_type_id_ext(w, stat, mode, visiting)?;
                 }
                 Ok(())
             }
             Type::Reference(r) => {
                 w.write_char('*')?;
-                self.display_type_id_rec(w, r.inner_type, expand, visiting)?;
+                self.display_type_id_ext(w, r.inner_type, mode, visiting)?;
+                Ok(())
+            }
+            Type::Sum(e) if mode == TypeDisplayMode::Structural => {
+                // Tag type and tag values are abi
+                write!(w, "either({}) ", e.tag_type)?;
+                for (idx, v) in self.mem.getn(e.variants).iter().enumerate() {
+                    if idx > 0 {
+                        w.write_str(", ")?;
+                    }
+                    self.write_ident(w, v.name)?;
+                    if let Some(payload) = &v.payload {
+                        w.write_str("(")?;
+                        self.display_type_id_ext(w, *payload, mode, visiting)?;
+                        w.write_str(")")?;
+                    }
+                    write!(w, "={}", v.tag_value.to_u64_bits())?;
+                }
                 Ok(())
             }
             Type::Sum(e) => {
                 if let Some(defn_info) = defn_info {
                     self.write_ident(w, defn_info.name)?;
                     if let Some(spec_info) = self.get_instance_info(type_id) {
-                        self.display_instance_info(w, spec_info, expand, visiting)?;
+                        self.display_instance_info(w, spec_info, mode, visiting)?;
                     }
-                    if expand {
+                    if mode == TypeDisplayMode::Expand {
                         w.write_str("(")?;
                     }
                 }
                 let is_named = defn_info.is_some();
-                if !is_named || expand {
+                if !is_named || mode == TypeDisplayMode::Expand {
                     w.write_str("either ")?;
                     for (idx, v) in self.mem.getn(e.variants).iter().enumerate() {
                         self.write_ident(w, v.name)?;
                         if let Some(payload) = &v.payload {
                             w.write_str("(")?;
-                            self.display_type_id_rec(w, *payload, expand, visiting)?;
+                            self.display_type_id_ext(w, *payload, mode, visiting)?;
                             w.write_str(")")?;
                         }
                         let last = idx == e.variants.len() as usize - 1;
@@ -319,16 +350,17 @@ impl TypedProgram {
                 Ok(())
             }
             Type::Opaque(opaque) => match defn_info {
-                None => write!(w, "opaque[{}, {}]", opaque.size, opaque.align),
-                Some(defn_info) => {
+                Some(defn_info) if mode != TypeDisplayMode::Structural => {
                     self.write_ident(w, defn_info.name)?;
-                    if expand {
+                    if mode == TypeDisplayMode::Expand {
                         w.write_str("(")?;
                         write!(w, "opaque[{}, {}]", opaque.size, opaque.align)?;
                         w.write_str(")")?;
                     }
                     Ok(())
                 }
+                // An opaque IS its layout; structural keeps the numbers
+                _ => write!(w, "opaque[{}, {}]", opaque.size, opaque.align),
             },
             Type::Never => w.write_str("never"),
             Type::Generic(generic) => {
@@ -343,9 +375,9 @@ impl TypedProgram {
                     }
                 }
                 w.write_str("]")?;
-                if expand {
+                if mode == TypeDisplayMode::Expand {
                     w.write_str("(")?;
-                    self.display_type_id_rec(w, generic.inner, expand, visiting)?;
+                    self.display_type_id_ext(w, generic.inner, mode, visiting)?;
                     w.write_str(")")?;
                 }
                 Ok(())
@@ -359,32 +391,43 @@ impl TypedProgram {
                     if param.is_context {
                         w.write_str("(ctx)")?;
                     }
-                    self.write_ident(w, param.name)?;
-                    w.write_str(": ")?;
-                    self.display_type_id_rec(w, param.type_id, expand, visiting)?;
+                    // Param names are not abi: a rename must not change the
+                    // structural signature
+                    if mode != TypeDisplayMode::Structural {
+                        self.write_ident(w, param.name)?;
+                        w.write_str(": ")?;
+                    }
+                    self.display_type_id_ext(w, param.type_id, mode, visiting)?;
                     let last = idx == fun.physical_params.len() as usize - 1;
                     if !last {
                         w.write_str(", ")?;
                     }
                 }
                 w.write_str(") -> ")?;
-                self.display_type_id_rec(w, fun.return_type, expand, visiting)
+                self.display_type_id_ext(w, fun.return_type, mode, visiting)
             }
             Type::FunctionPointer(fp) => {
                 w.write_str("*")?;
-                self.display_type_id_rec(w, fp.function_type_id, expand, visiting)?;
+                self.display_type_id_ext(w, fp.function_type_id, mode, visiting)?;
                 Ok(())
             }
             Type::Lambda(lam_id) => {
                 write!(w, "fnlam(")?;
                 let lam = self.lambda_types.get(*lam_id);
-                self.display_type_id_rec(w, lam.function_type, expand, visiting)?;
+                self.display_type_id_ext(w, lam.function_type, mode, visiting)?;
                 w.write_str(")")?;
                 Ok(())
             }
             Type::LambdaObject(lambda_object) => {
                 w.write_str("lambda_object(")?;
-                self.display_type_id_rec(w, lambda_object.struct_representation, expand, visiting)?;
+                self.display_type_id_ext(w, lambda_object.struct_representation, mode, visiting)?;
+                w.write_str(")")?;
+                Ok(())
+            }
+            Type::AbilityObject(ao) if mode == TypeDisplayMode::Structural => {
+                // The runtime value is the table struct; the ability name is not abi
+                w.write_str("dyn(")?;
+                self.display_type_id_ext(w, ao.struct_representation, mode, visiting)?;
                 w.write_str(")")?;
                 Ok(())
             }
@@ -406,7 +449,7 @@ impl TypedProgram {
                             self.write_ident(w, param.name)?;
                             w.write_str(" = ")?;
                         }
-                        self.display_type_id_rec(w, *arg, expand, visiting)?;
+                        self.display_type_id_ext(w, *arg, mode, visiting)?;
                     }
                     w.write_str("]")?;
                 }
@@ -415,35 +458,35 @@ impl TypedProgram {
             }
             Type::StaticValue(svt) => {
                 w.write_str("static[")?;
-                self.display_type_id_rec(w, svt.family_type_id, expand, visiting)?;
+                self.display_type_id_ext(w, svt.family_type_id, mode, visiting)?;
                 if let Some(value_id) = svt.value_id {
                     w.write_str(", ")?;
-                    self.display_static_value(w, value_id, !expand)?;
+                    self.display_static_value(w, value_id, mode != TypeDisplayMode::Expand)?;
                 }
                 w.write_str("]")?;
                 Ok(())
             }
             Type::Array(array_type) => {
                 w.write_str("array[")?;
-                self.display_type_id_ext(w, array_type.element_type, expand, visiting)?;
+                self.display_type_id_ext(w, array_type.element_type, mode, visiting)?;
                 w.write_str(", ")?;
                 let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
                 if let Some(size) = concrete_count {
                     write!(w, "{}", size)?;
                 } else {
-                    self.display_type_id_rec(w, array_type.size_type, expand, visiting)?;
+                    self.display_type_id_ext(w, array_type.size_type, mode, visiting)?;
                 }
                 w.write_str("]")
             }
             Type::Vector(vector_type) => {
                 w.write_str("vector[")?;
-                self.display_type_id_ext(w, vector_type.element_type, expand, visiting)?;
+                self.display_type_id_ext(w, vector_type.element_type, mode, visiting)?;
                 w.write_str(", ")?;
                 let concrete_count = self.get_concrete_count_of_array(vector_type.size_type);
                 if let Some(size) = concrete_count {
                     write!(w, "{}", size)?;
                 } else {
-                    self.display_type_id_rec(w, vector_type.size_type, expand, visiting)?;
+                    self.display_type_id_ext(w, vector_type.size_type, mode, visiting)?;
                 }
                 w.write_str("]")
             }
@@ -457,7 +500,7 @@ impl TypedProgram {
         &self,
         w: &mut W,
         struc: &StructType,
-        expand: bool,
+        mode: TypeDisplayMode,
         visited: &mut Vec<TypeId>,
     ) -> std::fmt::Result {
         if struc.fields.is_empty() {
@@ -475,7 +518,7 @@ impl TypedProgram {
             }
             self.write_ident(w, field.name)?;
             w.write_str(": ")?;
-            self.display_type_id_ext(w, field.type_id, expand, visited)?;
+            self.display_type_id_ext(w, field.type_id, mode, visited)?;
         }
         w.write_str(" }")
     }
@@ -609,7 +652,7 @@ impl TypedProgram {
         let mut s = String::new();
         self.display_expr_id(expr, &mut s, 0).unwrap();
         s.push_str(": ");
-        self.display_type_id(&mut s, self.exprs.get_type(expr), false).unwrap();
+        self.display_type_id(&mut s, self.exprs.get_type(expr), TypeDisplayMode::Name).unwrap();
         s
     }
 
@@ -771,7 +814,7 @@ impl TypedProgram {
             TypedExpr::Cast(cast) => {
                 self.display_expr_id(cast.base_expr, w, indentation)?;
                 write!(w, ".as({}) ", cast.cast_type)?;
-                self.display_type_id(w, expr_type, false)
+                self.display_type_id(w, expr_type, TypeDisplayMode::Name)
             }
             TypedExpr::SumGetTag(get_tag) => {
                 self.display_expr_id(get_tag.sum_expr, w, indentation)?;
@@ -816,12 +859,12 @@ impl TypedProgram {
                 let lambda_type = self.lambda_types.get(lambda_type_id);
                 let fn_type = self.types.get(lambda_type.function_type).as_function().unwrap();
                 w.write_str("env=[")?;
-                self.display_type_id(w, lambda_type.env_type, false).unwrap();
+                self.display_type_id(w, lambda_type.env_type, TypeDisplayMode::Name).unwrap();
                 w.write_str("]")?;
                 for arg in self.mem.getn(fn_type.logical_params()) {
                     self.write_ident(w, arg.name)?;
                     w.write_str(": ")?;
-                    self.display_type_id(w, arg.type_id, false)?;
+                    self.display_type_id(w, arg.type_id, TypeDisplayMode::Name)?;
                 }
                 w.write_str(" -> ")?;
                 let lambda_body =
@@ -869,7 +912,7 @@ impl TypedProgram {
                     w.write_str("empty")
                 } else {
                     w.write_str("empty[")?;
-                    self.display_type_id(w, *type_id, false)?;
+                    self.display_type_id(w, *type_id, TypeDisplayMode::Name)?;
                     w.write_str("]")?;
                     Ok(())
                 }
@@ -901,7 +944,7 @@ impl TypedProgram {
                     self.write_ident(w, value_name.name)?;
                     Ok(())
                 } else {
-                    self.display_type_id(w, *enum_type_id, false)?;
+                    self.display_type_id(w, *enum_type_id, TypeDisplayMode::Name)?;
                     write!(w, "({})", int_value)
                 }
             }
@@ -924,7 +967,7 @@ impl TypedProgram {
                     w.write_str("zeroed")
                 } else {
                     write!(w, "zeroed[")?;
-                    self.display_type_id(w, *type_id, false)?;
+                    self.display_type_id(w, *type_id, TypeDisplayMode::Name)?;
                     write!(w, "]")?;
                     Ok(())
                 }
@@ -1151,7 +1194,7 @@ impl TypedProgram {
             }
             TypedPattern::Type(type_pattern) => {
                 w.write_str("type[")?;
-                self.display_type_id(w, type_pattern.type_id, false)?;
+                self.display_type_id(w, type_pattern.type_id, TypeDisplayMode::Name)?;
                 w.write_str("](")?;
                 self.display_pattern(type_pattern.inner_pattern, w)?;
                 Ok(())
@@ -1233,7 +1276,7 @@ impl TypedProgram {
         write!(w, "{kind_str:10} ")?;
         self.display_ability_signature(w, i.ability_id, i.impl_arguments)?;
         write!(w, " for ")?;
-        self.display_type_id(w, i.self_type_id, false)?;
+        self.display_type_id(w, i.self_type_id, TypeDisplayMode::Name)?;
         if display_functions {
             w.write_str(" {\n")?;
             for ability_impl_fn in self.mem.getn(i.functions) {
@@ -1273,7 +1316,7 @@ impl TypedProgram {
             if !first {
                 s.push_str(sep)
             }
-            write!(s, "{}", self.type_id_to_string_ext(*type_id, true)).unwrap();
+            write!(s, "{}", self.type_id_to_string_ext(*type_id, TypeDisplayMode::Expand)).unwrap();
             first = false;
         }
         s
@@ -1297,8 +1340,8 @@ impl TypedProgram {
             write!(
                 s,
                 "{} -> {}",
-                self.type_id_to_string_ext(pair.from, false),
-                self.type_id_to_string_ext(pair.to, false)
+                self.type_id_to_string_ext(pair.from, TypeDisplayMode::Name),
+                self.type_id_to_string_ext(pair.to, TypeDisplayMode::Name)
             )
             .unwrap();
             first = false;
@@ -1372,11 +1415,11 @@ impl TypedProgram {
             }
             self.write_ident(w, param.name)?;
             w.write_str(": ")?;
-            self.display_type_id(w, param.type_id, false)?;
+            self.display_type_id(w, param.type_id, TypeDisplayMode::Name)?;
         }
         w.write_str(")")?;
         w.write_str(": ")?;
-        self.display_type_id(w, function_type.return_type, false)?;
+        self.display_type_id(w, function_type.return_type, TypeDisplayMode::Name)?;
         Ok(())
     }
 
@@ -1402,7 +1445,7 @@ impl TypedProgram {
         )?;
         writeln!(w)?;
         let mut visited = self.buffers.visited_types.borrow_mut();
-        self.display_type_id_ext(w, id, true, &mut visited)?;
+        self.display_type_id_ext(w, id, TypeDisplayMode::Expand, &mut visited)?;
         visited.clear();
         Ok(())
     }
@@ -1419,7 +1462,11 @@ impl TypedProgram {
 
     pub fn dump_ability_impls(&self, w: &mut impl Write) -> std::fmt::Result {
         for (self_type_id, impls) in self.ability_impl_table.iter() {
-            writeln!(w, "impls for {}", self.type_id_to_string_ext(*self_type_id, true))?;
+            writeln!(
+                w,
+                "impls for {}",
+                self.type_id_to_string_ext(*self_type_id, TypeDisplayMode::Expand)
+            )?;
             for impl_handle in impls.as_slice(&self.mem) {
                 w.write_str("\t")?;
                 self.display_ability_impl(w, impl_handle.full_impl_id, true)?;
@@ -1550,7 +1597,8 @@ impl DepDisplay<TypedProgram, K1DisplayArgs> for QIdent {
 impl DepDisplay<TypedProgram, K1DisplayArgs> for TypeId {
     fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, args: &K1DisplayArgs) -> std::fmt::Result {
         let mut visited = k1.buffers.visited_types.borrow_mut();
-        let result = k1.display_type_id_ext(f, *self, args.verbose, &mut visited);
+        let mode = if args.verbose { TypeDisplayMode::Expand } else { TypeDisplayMode::Name };
+        let result = k1.display_type_id_ext(f, *self, mode, &mut visited);
         visited.clear();
         result
     }

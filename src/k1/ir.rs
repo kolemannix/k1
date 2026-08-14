@@ -1815,17 +1815,25 @@ impl<'k1> Builder<'k1> {
     fn get_physical_type(&mut self, type_id: TypeId) -> PhysicalType {
         match self.get_physical_type_result(type_id) {
             PhysicalTypeResult::Never => {
-                b_ice!(self, "ir never type: {}", self.k1.type_id_to_string_ext(type_id, true))
+                b_ice!(
+                    self,
+                    "ir never type: {}",
+                    self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
+                )
             }
             PhysicalTypeResult::No => {
                 b_ice!(
                     self,
                     "ir non-physical type: {}",
-                    self.k1.type_id_to_string_ext(type_id, true)
+                    self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
                 )
             }
             PhysicalTypeResult::Infinite => {
-                b_ice!(self, "ir infinite type: {}", self.k1.type_id_to_string_ext(type_id, true))
+                b_ice!(
+                    self,
+                    "ir infinite type: {}",
+                    self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
+                )
             }
             PhysicalTypeResult::Yes(pt) => pt,
         }
@@ -4548,7 +4556,7 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
         }
         Inst::BakeStaticValue { type_id, value } => {
             write!(w, "bake ")?;
-            k1.display_type_id(w, type_id, false)?;
+            k1.display_type_id(w, type_id, dump::TypeDisplayMode::Name)?;
             write!(w, " {}", value)?;
         }
     };

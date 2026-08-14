@@ -1,0 +1,8 @@
+ns(reload) handlers {
+  fn get(): int { 42 }
+}
+
+fn main(): i32 {
+  handlers/get().as[i32]
+}
+//abortmsg: reloadable ns handlers not loaded; call handlers/load() (called: get)

@@ -325,8 +325,11 @@ impl TypedProgram {
                     .map(|(passed_type, pair)| {
                         format!(
                             "{}: {}",
-                            self.type_id_to_string_ext(*passed_type, false),
-                            self.type_id_to_string_ext(pair.param_type, false),
+                            self.type_id_to_string_ext(*passed_type, dump::TypeDisplayMode::Name),
+                            self.type_id_to_string_ext(
+                                pair.param_type,
+                                dump::TypeDisplayMode::Name
+                            ),
                         )
                     })
                     .collect::<Vec<_>>()

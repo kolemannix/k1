@@ -1,0 +1,36 @@
+ns watch_test
+
+use std/watch
+use std/thread
+use std/process
+
+type writer-input = { path: string }
+
+fn writer-thread(input: *mut writer-input): ptr {
+  thread/sleep-ms(100)
+  files/write-entire-file(input.path, "changed")
+  heap.free-t(input)
+  ptr/null
+}
+
+fn test() {
+  let dir = "/tmp/k1-watch-test"
+  let file = "${dir}/f.txt"
+  process/sh("rm -rf ${dir} && mkdir -p ${dir}").!
+  files/write-entire-file(file, "orig")
+
+  let w = watch/create().!
+  w.add(dir).!
+  w.add(file).!
+
+  thread/start-detached(writer-thread, heap.new(.{ path = file }: writer-input))
+
+  // Blocks until the writer thread touches the file; both the file watch and
+  // the directory watch may fire, possibly across separate wakeups
+  let events = w.wait().!
+  assert(events.non-empty())
+  for e in events.as-span() {
+    assert(e.path == file or e.path == dir)
+  }
+  w.close()
+}

@@ -15,11 +15,11 @@ fn sdk-args(): list[string] {
 }
 
 fn setup(ctx: k1/setup-ctx) {
-  let _ = process/run-command("mkdir", ["-p", "libs"], :inherit).!
+  process/run-command("mkdir", ["-p", "libs"], :inherit).!
 
-  let _ = process/run-command("cmake", ["-S", "vendor", "-B", ".k1-out/libuv-build", "-DBUILD_TESTING=OFF", "-DCMAKE_BUILD_TYPE=Release"], :inherit).!
-  let _ = process/run-command("cmake", ["--build", ".k1-out/libuv-build", "-j", "8"], :inherit).!
-  let _ = process/run-command("cp", [".k1-out/libuv-build/libuv.a", "libs/libuv.a"], :inherit).!
+  process/run-command("cmake", ["-S", "vendor", "-B", ".k1-out/libuv-build", "-DBUILD_TESTING=OFF", "-DCMAKE_BUILD_TYPE=Release"], :inherit).!
+  process/run-command("cmake", ["--build", ".k1-out/libuv-build", "-j", "8"], :inherit).!
+  process/run-command("cp", [".k1-out/libuv-build/libuv.a", "libs/libuv.a"], :inherit).!
 
   let net-args: list[string] = [
     "-in-path", "net.c",
@@ -41,7 +41,7 @@ fn setup(ctx: k1/setup-ctx) {
     "+opaque", "FILE",
   ]
   for sdk-args() { net-args.push(it) }
-  let _ = process/run-command("k1bindgen", net-args.as-span(), :inherit).!
+  process/run-command("k1bindgen", net-args.as-span(), :inherit).!
 
   let uv-args: list[string] = [
     "-in-path", "vendor/include/uv.h",

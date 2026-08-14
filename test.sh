@@ -28,6 +28,7 @@ rm -rf dogfood/httpapp/.k1-out/cache
 K1_HOME=$(pwd) target/debug/k1 build dogfood/httpapp
 K1_HOME=$(pwd) target/debug/k1 build dogfood/httpapp
 K1_HOME=$(pwd) target/debug/k1 run dogfood/brotli
+K1_HOME=$(pwd) K1_EXE=$(pwd)/target/debug/k1 target/debug/k1 run dogfood/reload_test
 
 if rg --type-add 'k1:*.k1' -c 'nocommit' -t rust -t c -t k1 .
 then

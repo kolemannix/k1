@@ -14,9 +14,10 @@ next up
 
 ## [x] vector types
 
-## [ ] live reload featureset
-- [ ] `ns reloadable foo { <functions and globals in here go in a dylib> }`
-- [ ] `fn main() { foo/load(:watch); (foo/my-fn)(1,2,3) }
+## [x] live reload featureset (design/reload.md)
+- [x] `ns(reload) foo { <functions in here go in a dylib> }`
+- [x] `fn main() { foo/load().! /* or foo/watch().! */; foo/my-fn(1,2,3) }`
+- [ ] Linux verification; `k1 b --watch`; multi-ns-per-dylib
 
 pointer-free predicate - pod/serializable?
 
