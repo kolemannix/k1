@@ -27,6 +27,8 @@ fn low() {
   union_basic/test()
   enum_basic/test()
   sum_basic/test()
+  abi-odd-size-struct/test()
+  static-arg-global/test()
   function_pointer/test()
   ns_collision/test()
   enum_construction/test()

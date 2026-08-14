@@ -1594,25 +1594,27 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_store(ptr, abi_value).unwrap();
                 ptr.as_basic_value_enum()
             }
-            AbiParamMapping::StructByEightbytePair { .. } => {
-                let dst_ptr = self.build_k1_alloca(cg_ty, "struct_by_ebpair_storage");
-                debug_assert!(abi_value.get_type().is_struct_type());
-                // Yes its a struct store but its guaranteed to be only 2 members, so lets try it out.
-                // clang for x86 actually has 2 scalar BasicValues at this point (2 params vs 1 struct),
-                // but this should work too
+            AbiParamMapping::StructByEightbytePair { .. }
+            | AbiParamMapping::StructByIntPairArray => {
+                // The ABI value's fields can extend past the struct's own size (a
+                // 12-byte struct arrives as [2 x i64], an 11-byte one as {i64, i32}),
+                // so spill into a slot sized for the ABI type, not the struct; the
+                // struct occupies its leading bytes
+                let abi_ty = abi_value.get_type();
+                let dst_ptr = self.build_alloca(abi_ty, "abi_pair_storage");
+                let abi_align =
+                    self.llvm_machine.get_target_data().get_abi_alignment(&abi_ty);
+                let align = abi_align.max(cg_ty.rich_repr_layout().align);
+                dst_ptr.as_instruction().unwrap().set_alignment(align).unwrap();
+                if self.k1.config.filc && self.pt_has_pointer_in_union(cg_ty.pt()) {
+                    self.build_zhas_union_marker(dst_ptr);
+                }
                 self.builder.build_store(dst_ptr, abi_value).unwrap();
                 dst_ptr.as_basic_value_enum()
             }
             AbiParamMapping::StructByHfa { .. } => {
                 let dst_ptr = self.build_k1_alloca(cg_ty, "struct_by_hfa_storage");
                 debug_assert!(abi_value.get_type().is_struct_type());
-                self.builder.build_store(dst_ptr, abi_value).unwrap();
-                dst_ptr.as_basic_value_enum()
-            }
-            AbiParamMapping::StructByIntPairArray => {
-                let dst_ptr = self.build_k1_alloca(cg_ty, "struct_by_intpairarray_storage");
-                debug_assert!(abi_value.get_type().is_array_type());
-                // Clang performs this exact array store ([2 x i64])
                 self.builder.build_store(dst_ptr, abi_value).unwrap();
                 dst_ptr.as_basic_value_enum()
             }
@@ -1690,54 +1692,49 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 .builder
                 .build_load(self.builtin_types.ptr, k1_value.into_pointer_value(), "")
                 .unwrap(),
-            AbiParamMapping::StructByEightbytePair { .. } => {
-                //define dso_local void @call_eb_pair_mixed() #0 {
-                //  %1 = alloca %struct.Classes, align 4
-                //  call void @llvm.memset.p0.i64(ptr align 4 %1, i8 0, i64 16, i1 false)
-                //  ..
-                //  %2 = getelementptr inbounds { i64, i64 }, ptr %1, i32 0, i32 0
-                //  %3 = load i64, ptr %2, align 4
-                //  %4 = getelementptr inbounds { i64, i64 }, ptr %1, i32 0, i32 1
-                //  %5 = load i64, ptr %4, align 4
-                //  call void @eb_pair_mixed(i64 %3, i64 %5)
-                //  ret void
-                //}
-                // This is different than what clang does above, for x86, but I really don't
-                // want to map 1 param to 2 params, and have good reason to believe this struct
-                // load is going to work, since the array load works for ARM, and the struct load
-                // works for returns
-                //
-                // Here's clang returning a mixed class eightbyte pair using an aggregate load
-                // %3 = load { i64, float }, ptr %2, align 8
-                // ret { i64, float } %3
+            AbiParamMapping::StructByEightbytePair { .. }
+            | AbiParamMapping::StructByIntPairArray => {
+                // The ABI type's fields can extend past the struct's own size (a
+                // 12-byte struct becomes [2 x i64], an 11-byte one {i64, i32});
+                // loading it straight off the struct would read out of bounds, so
+                // undersized or under-aligned structs stage through a zeroed
+                // ABI-sized slot (clang's pattern, as in StructInInteger above)
                 let abi_type = self.mapped_abi_type_param(pt, mapping);
-
-                // This load should also accomplish the necessary copy to make this semantically
-                // by-value op
-                let loaded_aggregate =
-                    self.builder.build_load(abi_type, k1_value.into_pointer_value(), "").unwrap();
-                loaded_aggregate
+                let src_layout = self.k1.get_pt_layout(pt);
+                let td = self.llvm_machine.get_target_data();
+                let abi_store_size = td.get_store_size(&abi_type);
+                let abi_align = td.get_abi_alignment(&abi_type);
+                let src_ptr = k1_value.into_pointer_value();
+                if abi_store_size <= src_layout.size as u64 && src_layout.align >= abi_align {
+                    self.builder.build_load(abi_type, src_ptr, "").unwrap()
+                } else {
+                    let tmp = self.build_alloca(abi_type, "abi_pair_tmp");
+                    let abi_alloc_size = td.get_abi_size(&abi_type);
+                    self.builder
+                        .build_memset(
+                            tmp,
+                            abi_align,
+                            self.ctx.i8_type().const_zero(),
+                            self.builtin_types.ptr_sized_int.const_int(abi_alloc_size, false),
+                        )
+                        .unwrap();
+                    self.builder
+                        .build_memcpy(
+                            tmp,
+                            abi_align,
+                            src_ptr,
+                            src_layout.align,
+                            self.builtin_types
+                                .ptr_sized_int
+                                .const_int(src_layout.size as u64, false),
+                        )
+                        .unwrap();
+                    self.builder.build_load(abi_type, tmp, "").unwrap()
+                }
             }
             AbiParamMapping::StructByHfa { .. } => {
                 let abi_type = self.mapped_abi_type_param(pt, mapping);
                 self.builder.build_load(abi_type, k1_value.into_pointer_value(), "").unwrap()
-            }
-            AbiParamMapping::StructByIntPairArray => {
-                // define void @call_eb_pair_mixed() #0 {
-                //   %1 = alloca %struct.Classes, align 4
-                //   call void @llvm.memset.p0.i64(ptr align 4 %1, i8 0, i64 16, i1 false)
-                //   ..
-                //   %2 = load [2 x i64], ptr %1, align 4
-                //   call void @eb_pair_mixed([2 x i64] %2)
-                //   ret void
-                // }
-                let abi_type = self.mapped_abi_type_param(pt, mapping);
-
-                // This load should also accomplish the necessary copy to make this semantically
-                // by-value op
-                let loaded_aggregate =
-                    self.builder.build_load(abi_type, k1_value.into_pointer_value(), "").unwrap();
-                loaded_aggregate
             }
             AbiParamMapping::BigStructByPtrToCopy { byval_attr } => {
                 // Our canonical representation of all aggregates is an llvm ptr
@@ -4309,18 +4306,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         elements: &[StaticValueId],
         depth: usize,
     ) -> K1Result<StructValue<'ctx>> {
-        let mut packed_values = self.tmp.new_list(elements.len() as u32);
-
-        // let element_backend_type = self.codegen_type(element_type)?;
         let element_layout = self.k1.get_layout(element_type).unwrap();
+        // Stride padding is a container concern, not part of Layout.size, so each
+        // element may be followed by an explicit padding entry
+        let end_padding = element_layout.stride() - element_layout.size;
+        let values_per_element: u32 = if end_padding > 0 { 2 } else { 1 };
+        let mut packed_values = self.tmp.new_list(elements.len() as u32 * values_per_element);
 
         for elem in elements.iter() {
             let elem_basic_value = self.codegen_static_value_as_const(*elem, depth + 1)?;
             packed_values.push(elem_basic_value);
 
-            // IF STRIDE != SIZE, MAKE SURE TO ADD IT! Because in K1 that's a container concern
-            // and not part of the Layout.size
-            let end_padding = element_layout.stride() - element_layout.size;
             if end_padding > 0 {
                 let padding_value =
                     self.padding_type(end_padding).get_undef().as_basic_value_enum();

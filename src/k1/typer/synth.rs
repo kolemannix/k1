@@ -445,6 +445,7 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {
+        let span = self.remap_to_source_span(span);
         let the_span = self.ast.spans.get(span);
         let source = self.ast.sources.get(the_span.file_id);
         let line_number =

@@ -103,3 +103,9 @@ ns for fixlist {
   }
 
 }
+
+impl[t, n: static size] iterable[item = t, i = buffer-iterator[t]] for *fixlist[t, n] {
+  fn iterator(self): i {
+    self.as-span().iterator()
+  }
+}

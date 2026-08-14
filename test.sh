@@ -16,6 +16,9 @@ K1_HOME=$(pwd) target/debug/k1_test $1
 # unset MallocScribble
 
 export RUST_LOG=info
+# suite1 again under --optimize
+K1_HOME=$(pwd) target/debug/k1 --optimize --cache false run test_src/suite1
+
 # Correctness gates compile cold, never from cached state
 target/debug/k1 --emit-llvm --cache false build dogfood/refchess
 target/debug/k1 --emit-llvm --cache false build dogfood/profiling

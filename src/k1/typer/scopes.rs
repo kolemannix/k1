@@ -10,7 +10,7 @@ use crate::{
     SV4, kbail, kerr,
     kmem::Dlist,
     nz_u32_id,
-    parse::{ParsedAbilityId, ParsedExprId, QIdent},
+    parse::{ParsedAbilityId, ParsedExprId, ParsedGlobalId, QIdent},
     static_assert_niched, static_assert_size,
     typer::{
         AbilityId, FunctionId, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId, StringId,
@@ -184,6 +184,7 @@ pub struct Scopes {
     abilities: ScopeMap<AbilityId>,
     pending_type_defns: ScopeMap<TypePendingDefinition>,
     pending_ability_defns: ScopeMap<ParsedAbilityId>,
+    pending_globals: ScopeMap<ParsedGlobalId>,
     pub lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
     pub loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
     pub block_defers: FxHashMap<ScopeId, ScopeDefers>,
@@ -212,6 +213,7 @@ impl Scopes {
             abilities,
             pending_type_defns,
             pending_ability_defns,
+            pending_globals,
             lambda_info,
             loop_info,
             block_defers,
@@ -243,6 +245,7 @@ impl Scopes {
         write_map_snap(w, abilities);
         write_map_snap(w, pending_type_defns);
         write_map_snap(w, pending_ability_defns);
+        write_map_snap(w, pending_globals);
         write_map_snap(w, lambda_info);
         write_map_snap(w, loop_info);
         snap_map_with(w, block_defers, |w, defers| w.write_slice(&defers.deferred_exprs));
@@ -286,6 +289,7 @@ impl Scopes {
             abilities: restore_map_snap(r),
             pending_type_defns: restore_map_snap(r),
             pending_ability_defns: restore_map_snap(r),
+            pending_globals: restore_map_snap(r),
             lambda_info: restore_map_snap(r),
             loop_info: restore_map_snap(r),
             block_defers: restore_map_with(r, |r| ScopeDefers {
@@ -317,6 +321,7 @@ impl Scopes {
             abilities: ScopeMap::new(),
             pending_type_defns: ScopeMap::new(),
             pending_ability_defns: ScopeMap::new(),
+            pending_globals: ScopeMap::new(),
             lambda_info: FxHashMap::new(),
             loop_info: FxHashMap::new(),
             block_defers: FxHashMap::new(),
@@ -680,6 +685,37 @@ impl Scopes {
         name: StringId,
     ) -> Option<TypePendingDefinition> {
         self.pending_type_defns.get(&skey_name(scope_id, name)).copied()
+    }
+
+    pub fn add_pending_global(
+        &mut self,
+        scope_id: ScopeId,
+        name: StringId,
+        parsed_id: ParsedGlobalId,
+    ) {
+        self.pending_globals.entry(skey_name(scope_id, name)).or_insert(parsed_id);
+    }
+
+    pub fn find_pending_global(
+        &self,
+        scope_id: ScopeId,
+        name: StringId,
+    ) -> Option<(ParsedGlobalId, ScopeId)> {
+        let mut scope_id = scope_id;
+        loop {
+            if let Some(id) = self.pending_globals.get(&skey_name(scope_id, name)) {
+                return Some((*id, scope_id));
+            }
+            scope_id = self.get_scope(scope_id).parent?;
+        }
+    }
+
+    pub fn find_pending_global_local(
+        &self,
+        scope_id: ScopeId,
+        name: StringId,
+    ) -> Option<ParsedGlobalId> {
+        self.pending_globals.get(&skey_name(scope_id, name)).copied()
     }
 
     #[must_use]
@@ -1142,6 +1178,22 @@ impl TypedProgram {
                 .scopes
                 .find_pending_type_local(scope_to_search, type_name.name)
                 .map(|defn| (defn, scope_to_search)))
+        }
+    }
+
+    pub fn find_pending_global_namespaced(
+        &self,
+        scope_id: ScopeId,
+        name: &QIdent,
+    ) -> K1Result<Option<(ParsedGlobalId, ScopeId)>> {
+        if name.path.is_empty() {
+            Ok(self.scopes.find_pending_global(scope_id, name.name))
+        } else {
+            let scope_to_search = self.resolve_qident(scope_id, name)?;
+            Ok(self
+                .scopes
+                .find_pending_global_local(scope_to_search, name.name)
+                .map(|id| (id, scope_to_search)))
         }
     }
 

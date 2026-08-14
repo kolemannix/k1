@@ -18,6 +18,7 @@ a:
 # fastest path to checking compiler correctness; suite1 covers most features.
 ts1:
   just run-frag --cache false run test_src/suite1
+  just run-frag --optimize --cache false run test_src/suite1
 
 # Dev loop for a reloadable app: rebuild on source change
 watch dir:

@@ -5016,12 +5016,15 @@ impl TypedProgram {
                     if ty_app.args.is_empty() {
                         match self.find_function_namespaced(scope_id, &ty_app.name)? {
                             Some(function_id) => Ok(self.get_function(function_id).type_id),
-                            None => Err(kerr!(
-                                self,
-                                ty_app.name.name_span,
-                                "Type '{}' not found",
-                                &ty_app.name,
-                            )),
+                            None => match self.resolve_qident_to_constant_type(scope_id, &ty_app.name)? {
+                                Some(static_type_id) => Ok(static_type_id),
+                                None => Err(kerr!(
+                                    self,
+                                    ty_app.name.name_span,
+                                    "Type '{}' not found",
+                                    &ty_app.name,
+                                )),
+                            },
                         }
                     } else {
                         if let Some(opaque_type_id) = self.handle_opaque_tyapp(&ty_app)? {
@@ -5331,6 +5334,39 @@ impl TypedProgram {
         }
 
         Ok((type_arguments.to_slice(), subst_pairs))
+    }
+
+    fn resolve_qident_to_constant_type(
+        &mut self,
+        scope_id: ScopeId,
+        name: &QIdent,
+    ) -> K1Result<Option<TypeId>> {
+        let global_id = match self.find_variable_namespaced(scope_id, name)? {
+            Some((variable_id, _scope)) => match self.variables.get(variable_id).global_id() {
+                Some(global_id) => global_id,
+                None => return Ok(None),
+            },
+            None => match self.find_pending_global_namespaced(scope_id, name)? {
+                Some((parsed_id, defn_scope)) => {
+                    self.declare_global(parsed_id, defn_scope)?;
+                    *self.global_ast_mappings.get(&parsed_id).unwrap()
+                }
+                None => return Ok(None),
+            },
+        };
+        if self.globals.get(global_id).initial_value.is_pending() {
+            let ast_id = self.globals.get(global_id).ast_id;
+            self.eval_global_body(ast_id)?;
+        }
+        let g = self.globals.get(global_id);
+        if !g.is_constant {
+            return Ok(None);
+        }
+        let Some(static_value_id) = g.initial_value.as_value() else {
+            return Ok(None);
+        };
+        let inner_type_id = self.get_static_value_type(static_value_id);
+        Ok(Some(self.add_value_type(inner_type_id, Some(static_value_id))))
     }
 
     fn handle_opaque_tyapp(&mut self, ty_app: &parse::TypeApplication) -> K1Result<Option<TypeId>> {
@@ -7315,6 +7351,9 @@ impl TypedProgram {
         parsed_global_id: ParsedGlobalId,
         scope_id: ScopeId,
     ) -> K1Result<VariableId> {
+        if let Some(global_id) = self.global_ast_mappings.get(&parsed_global_id) {
+            return Ok(self.globals.get(*global_id).variable_id);
+        }
         let parsed = *self.ast.get_global(parsed_global_id);
         let type_id = self.eval_type_expr(parsed.type_expr, scope_id)?;
 
@@ -20481,6 +20520,34 @@ impl TypedProgram {
         Ok(found_symbols)
     }
 
+    fn discover_globals_in_parsed_namespace(
+        &mut self,
+        parsed_namespace_id: ParsedNamespaceId,
+        skip_defns: &[ParsedId],
+    ) {
+        let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
+        let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
+        let parsed_definitions =
+            self.ast.namespaces.get(parsed_namespace_id).definitions.as_slice(&self.ast.mem);
+        let mut children: SmallVec<[ParsedNamespaceId; 8]> = SmallVec::new();
+        for &parsed_definition_id in parsed_definitions {
+            if skip_defns.contains(&parsed_definition_id) {
+                continue;
+            }
+            match parsed_definition_id {
+                ParsedId::Global(global_id) => {
+                    let name = self.ast.get_global(global_id).name;
+                    self.scopes.add_pending_global(namespace_scope_id, name, global_id);
+                }
+                ParsedId::Namespace(child_id) => children.push(child_id),
+                _ => {}
+            }
+        }
+        for child_id in children {
+            self.discover_globals_in_parsed_namespace(child_id, skip_defns);
+        }
+    }
+
     fn discover_types_in_parsed_namespace(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
@@ -21212,6 +21279,7 @@ impl TypedProgram {
         if !is_core {
             self.resolve_pending_uses();
         }
+        self.discover_globals_in_parsed_namespace(module_root_parsed_namespace, skip_defns);
         // check_for_errors!("type declaration");
         while let Some(tpd) = self.types_pending_definition.front() {
             debug!(
