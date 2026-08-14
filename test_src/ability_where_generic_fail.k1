@@ -1,0 +1,24 @@
+ability marky {
+  fn marky-tag(self): i64
+}
+
+ability gated[impl t] {
+  fn the-item(self): t
+  fn item-tag(self): i64 where t: marky {
+    self.the-item().marky-tag()
+  }
+}
+
+type holder[t] = { v: t }
+impl[t] gated[t = t] for holder[t] {
+  fn the-item(self): t { self.v }
+}
+
+fn tag-of[x, c: gated[t = x]](it: c): i64 {
+  it.item-tag()
+}
+
+fn main(): i32 {
+  0
+}
+//errmsg: item-tag is not available for 'c

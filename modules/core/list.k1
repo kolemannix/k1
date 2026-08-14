@@ -65,10 +65,6 @@ ns for list {
     self.buffer.slice(0, self.len)
   }
 
-  fn as-span[t](self: list[t]): span[t] {
-    span/wrap-buffer(self.as-buffer[t]())
-  }
-
   fn to-buffer[t](self: list[t]): buffer[t] {
     self.as-buffer().cloned()
   }
@@ -177,10 +173,6 @@ ns for list {
   fn last[t](self: list[t]): ?t {
     if self.non-empty() :some self.get(self.len - 1)
     else :none
-  }
-
-  fn contains[t: equals](self: list[t], item: t): bool {
-    iter/contains(self, item)
   }
 
   fn clear[t](self: *mut list[t]) {
@@ -381,6 +373,18 @@ impl[t: print] print for list[t] {
       }
     }
     w.write-char(']')
+  }
+}
+
+impl[t] as-span[t = t] for list[t] {
+  fn as-span(self): span[t] {
+    span/wrap-buffer(self.as-buffer())
+  }
+}
+
+impl[t] as-span[t = t] for *list[t] {
+  fn as-span(self): span[t] {
+    self.*.as-span()
   }
 }
 

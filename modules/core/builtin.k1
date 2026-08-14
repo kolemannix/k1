@@ -415,6 +415,50 @@ ability iterator[impl item] {
 
 ability iterable[impl item, impl i: iterator[item = item]] {
   fn iterator(self): i
+
+  fn find(self, pred: some fn item -> bool): ?item {
+    for self {
+      if pred(it) return :some it
+    }
+    :none
+  }
+
+  fn position(self, needle: item): ?size where item: equals {
+    for self {
+      if it == needle return :some it-index
+    }
+    :none
+  }
+
+  fn contains(self, needle: item): bool where item: equals {
+    self.position(needle).is-some()
+  }
+
+  fn forall(self, pred: some fn item -> bool): bool {
+    for self { if not pred(it) return false }
+    true
+  }
+
+  fn exists(self, pred: some fn item -> bool): bool {
+    for self {
+      if pred(it) return true
+    }
+    false
+  }
+
+  fn sum(self): item where item: add and zero {
+    let acc = zero@(item)/zero()
+    for self {
+      acc = acc + it
+    }
+    acc
+  }
+
+  fn to-list(self): list[item] {
+    let out = list/empty[item]()
+    for self { out.push(it) }
+    out
+  }
 }
 
 impl[item, t: iterator[item = item]] iterable[item = item, i = t] for t {
@@ -432,9 +476,9 @@ ability from-string[impl e] {
 ability zero { fn zero(): self }
 ability one { fn one(): self }
 
-// ability as-span[impl t] {
-//   fn as-span(self): span[t]
-// }
+ability as-span[impl t] {
+  fn as-span(self): span[t]
+}
 
 /////////////////////////////////
 // Code that we want to have available very early
@@ -812,11 +856,12 @@ ns array {
     .{ len = array.len(), data = array.get-base() }
   }
 
-  fn as-span[t, n](array: *array[t, n]): span[t] where n: static size {
-    let temp = array.as-buffer()
-    span/wrap-buffer(temp)
-  }
+}
 
+impl[t, n: static size] as-span[t = t] for *array[t, n] {
+  fn as-span(self): span[t] {
+    span/wrap-buffer(self.as-buffer())
+  }
 }
 
 #if k1/os-posix ns posix {

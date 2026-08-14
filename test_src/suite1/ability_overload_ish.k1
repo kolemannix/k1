@@ -19,10 +19,35 @@ impl frob for i32 {
   fn foo(self: i32, y: i32): i32 { self + y }
 }
 
+// Same name, same arity, both implemented for i32: the ability bound
+// nearest to the call site wins; only then declaration order
+ability far-mag {
+  fn magnitude(self): i32
+}
+impl far-mag for i32 {
+  fn magnitude(self: i32): i32 { self }
+}
+
+ns nearer {
+  ability near-mag {
+    fn magnitude(self): i32
+  }
+  impl near-mag for i32 {
+    fn magnitude(self: i32): i32 { self * 100 }
+  }
+  fn check(): i32 {
+    let x: i32 = 7
+    x.magnitude()
+  }
+}
+
 fn test() {
   let x: i32 = 10
   assert-equals(x.foo(), 10)
   assert-equals(x.foo(10), 20)
+
+  assert-equals(x.magnitude(), 10)
+  assert-equals(nearer/check(), 700)
 
   .{}
 }

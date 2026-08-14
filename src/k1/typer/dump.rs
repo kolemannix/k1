@@ -1289,6 +1289,9 @@ impl TypedProgram {
                         w.write_str("abstract ")?;
                         self.display_function_signature(w, sig, None)?;
                     }
+                    AbilityImplFunction::Unavailable => {
+                        w.write_str("unavailable")?;
+                    }
                 };
                 writeln!(w)?;
             }

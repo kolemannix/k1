@@ -23,13 +23,6 @@ ns for spill-list {
     }
   }
 
-  fn as-span[t, n](self: *spill-list[t, n]): span[t] {
-    self is {
-      :spilled list* -> list.as-span(),
-      :inline fixlist* -> fixlist.as-span()
-    }
-  }
-
   fn _spill[t, n](fixlist: *mut fixlist[t, n]): list[t] {
     let list = list/with-capacity-in[t, _](mem/current-arena(), fixlist.cap() * 2)
 
@@ -76,6 +69,15 @@ ns for spill-list {
     self.push-n[u8, n](s.span-bytes())
   }
 
+}
+
+impl[t, n: static size] as-span[t = t] for *spill-list[t, n] {
+  fn as-span(self): span[t] {
+    self is {
+      :spilled list* -> list.as-span(),
+      :inline fixlist* -> fixlist.as-span()
+    }
+  }
 }
 
 impl[t, n: static size] print for spill-list[t, n] {

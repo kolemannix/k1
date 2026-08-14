@@ -4904,14 +4904,28 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let mut additional_type_constraints = self.ast.mem.new_list(0);
         if self.maybe_consume(K::KeywordWhere).is_some() {
-            self.eat_delimited_arena(
-                "Type variable constraints",
-                &mut additional_type_constraints,
-                K::Comma,
-                K::OpenBrace,
-                Parser::expect_named_type_constraint,
-            )?;
-            self.tokens.retreat(); // Un-eat the close sentinel
+            loop {
+                let (name_token, name) = self.expect_ident()?;
+                self.expect_kind(K::Colon)?;
+                loop {
+                    let constraint_expr = self.expect_type_constraint_expr()?;
+                    let span = self.extend_to_here(name_token.span);
+                    additional_type_constraints.push_grow(
+                        &mut self.ast.mem,
+                        ParsedTypeConstraint { name, constraint_expr, span },
+                    );
+                    if self.peek().kind == K::KeywordAnd {
+                        self.advance()
+                    } else {
+                        break;
+                    }
+                }
+                if self.peek().kind == K::Comma {
+                    self.advance()
+                } else {
+                    break;
+                }
+            }
         };
 
         let signature_span = self.extend_to_here(func_name.span);
@@ -5046,14 +5060,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let id = self.ast.mem.push_h(ability_expr);
             Ok(ParsedTypeConstraintExpr::Ability(id))
         }
-    }
-
-    fn expect_named_type_constraint(&mut self) -> ParseResult<ParsedTypeConstraint> {
-        let (name_token, name) = self.expect_ident()?;
-        self.expect_kind(K::Colon)?;
-        let constraint_expr = self.expect_type_constraint_expr()?;
-        let span = self.extend_to_here(name_token.span);
-        Ok(ParsedTypeConstraint { name, constraint_expr, span })
     }
 
     fn expect_ident_ext(&mut self, upper: bool, lower: bool) -> ParseResult<(Token, StringId)> {

@@ -161,6 +161,10 @@ ns for span {
 
 }
 
+impl[t] as-span[t = t] for span[t] {
+  fn as-span(self): span[t] { self }
+}
+
 impl[t] iterable[item = t, i = buffer-iterator[t]] for span[t] {
   fn iterator(self): i {
     buffer-iterator/from-buffer(self.inner-buffer())

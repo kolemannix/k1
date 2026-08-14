@@ -361,6 +361,10 @@ impl[t] iterator[item = t] for buffer-iterator[t] {
   }
 }
 
+impl[t] as-span[t = t] for buffer[t] {
+  fn as-span(self): span[t] { span/wrap-buffer(self) }
+}
+
 impl[t] iterable[item = t, i = buffer-iterator[t]] for buffer[t] {
   fn iterator(self): i {
     buffer-iterator/from-buffer(self)

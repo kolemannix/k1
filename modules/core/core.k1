@@ -13,54 +13,6 @@ fn assert-not-equals[t: print and equals](context locn: k1/source-location)(a: t
   }
 }
 
-ns iter {
-
-  fn find[t, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i, pred: some fn t -> bool): ?t {
-    for iterable {
-      if pred(it) return :some it
-    }
-    :none
-  }
-
-  fn position[t: equals, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i, needle: t): ?size {
-    for iterable {
-      if it == needle return :some it-index
-    }
-    :none
-  }
-
-  fn contains[t: equals, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i, needle: t): bool {
-    position(iterable, needle).is-some()
-  }
-
-  fn forall[t, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i, pred: some fn t -> bool): bool {
-    for iterable { if not pred(it) return false }
-    true
-  }
-
-  fn exists[t, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i, pred: some fn t -> bool): bool {
-    for iterable {
-      if pred(it) return true
-    }
-    false
-  }
-
-  fn sum[t: add and zero, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i): t {
-    let t = zero@(t)/zero()
-    for iterable {
-      t = t + it
-    }
-    t
-  }
-
-  fn to-list[t, iter: iterator[item = t], i: iterable[item = t, i = iter]](iterable: i): list[t] {
-    let out = list/empty[t]()
-    for iterable { out.push(it) }
-    out
-  }
-
-}
-
 fn inc(i: *mut size) { i.* = i.* + 1 }
 // TODO: Would be cool to have this
 // fn incNew[t: Add and KnowledgeOfOne](i: *mut t): t { i.* = i.* + KnowledgeOfOne@(t)/one() }

@@ -7,16 +7,10 @@ use fxhash::FxHashMap;
 use std::{cell::RefCell, collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
 use crate::{
-    SV4, kbail, kerr,
-    kmem::Dlist,
-    nz_u32_id,
-    parse::{ParsedAbilityId, ParsedExprId, ParsedGlobalId, QIdent},
-    static_assert_niched, static_assert_size,
-    typer::{
+    kbail, kerr, kmem::{Dlist, List}, nz_u32_id, parse::{ParsedAbilityId, ParsedExprId, ParsedGlobalId, QIdent}, static_assert_niched, static_assert_size, typer::{
         AbilityId, FunctionId, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId, StringId,
         TypeId, TypePendingDefinition, TypedProgram, VariableId,
-    },
-    vpool::VPool,
+    }, vpool::VPool, SV4
 };
 
 nz_u32_id!(ScopeId);
@@ -432,20 +426,27 @@ impl Scopes {
         self.abilities.get(&skey_name(scope_id, name)).copied()
     }
 
-    pub fn ability_ids_bound_to_name(&self, scope_id: ScopeId, name: StringId) -> SV4<AbilityId> {
-        let mut ids: SV4<AbilityId> = SV4::new();
+    pub fn collect_ability_ids_bound_to_names(
+        &self,
+        scope_id: ScopeId,
+        names: &[StringId],
+        ability_ids: &mut List<AbilityId, MemTmp>,
+    ) {
         let mut scope_id = scope_id;
         loop {
             let scope = self.get_scope(scope_id);
-            if scope.kinds & kinds::ABILITIES != 0
-                && let Some(found) = self.abilities.get(&skey_name(scope_id, name))
-                && !ids.contains(found)
-            {
-                ids.push(*found);
+            if scope.kinds & kinds::ABILITIES != 0 {
+                for name in names {
+                    if let Some(found) = self.abilities.get(&skey_name(scope_id, *name))
+                        && !ability_ids.contains(found)
+                    {
+                        ability_ids.push(*found);
+                    }
+                }
             }
             match scope.parent {
                 Some(parent) => scope_id = parent,
-                None => return ids,
+                None => return,
             }
         }
     }

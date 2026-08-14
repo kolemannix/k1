@@ -88,7 +88,7 @@ fn game-poke(deps: *mut deps, id: u64): http-response {
 
 // One SSE event per number, rendered into the ambient request arena
 fn counter-events(): http-response {
-  let counts = core/iter/to-list(1.until(11))
+  let counts = 1.until(11).to-list()
   sse-response(source/from-items(counts.as-span()), event-name = "counter")
 }
 
@@ -196,7 +196,7 @@ fn template(template: string, values: span[{ key: string, value: string }]): ?st
       let close = rest.index-of('}')
       if close == -1 return :none
       let key = rest.take(close)
-      core/iter/find(values, fn[key] p. p.key == key) is {
+      values.find(fn[key] p. p.key == key) is {
         :none -> return :none,
         :some pair -> out.write-string(pair.value)
       }

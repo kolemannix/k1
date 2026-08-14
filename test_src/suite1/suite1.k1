@@ -19,6 +19,7 @@ fn low() {
   ability_blanket_ref/test()
   ability_dotcall/test()
   ability_impl_shadow/test()
+  ability_where/test()
   ability_ns_extension/test()
   bits_test/test()
   ordering_test/test()

@@ -114,6 +114,13 @@ pub struct TypedAbilityFunctionRef {
 }
 impl_copy_if_small!(16, TypedAbilityFunctionRef);
 
+#[derive(Clone, Copy)]
+pub struct AbilityFnWhereConstraint {
+    pub target: TypeId,
+    pub signature: TypedAbilitySignature,
+    pub span: SpanId,
+}
+
 pub const GLOBAL_ID_COMPILER_CAPTURE_PRINTS: TypedGlobalId =
     TypedGlobalId::from_nzu32(NonZeroU32::new(1).unwrap());
 pub const GLOBAL_ID_K1_IS_STATIC: TypedGlobalId =
@@ -1024,6 +1031,8 @@ pub struct TypedFunction {
     pub params: PermSlice<TypedFunctionParam>,
     pub type_params: TypeIdSlice,
     pub fnlike_type_params: PermSlice<FnlikeTypeParam>,
+    /// Constraints on self and ability params have to go here, since they aren't among the function's type params
+    pub ability_where_constraints: PermSlice<AbilityFnWhereConstraint>,
     pub body_block: Option<TypedExprId>,
     pub builtin_type: Option<Builtin>,
     pub linkage: Linkage,
@@ -1180,6 +1189,9 @@ impl Callee {
         match *ability_impl_fn {
             AbilityImplFunction::FunctionId(function_id) => Callee::StaticFunction(function_id),
             AbilityImplFunction::Abstract(function_sig) => Callee::Abstract { function_sig },
+            AbilityImplFunction::Unavailable => {
+                unreachable!("callers check availability before building a Callee")
+            }
         }
     }
 
@@ -2327,6 +2339,9 @@ impl AbilityImplKind {
 pub enum AbilityImplFunction {
     FunctionId(FunctionId),
     Abstract(FunctionSignature),
+    /// The function is not available in this particular impl for this ability for this type.
+    /// Currently only used when a default fn has constraints that aren't satisfied
+    Unavailable,
 }
 
 #[derive(Clone, Copy)]
@@ -8842,13 +8857,16 @@ impl TypedProgram {
         let _ =
             self.scopes.add_type_substitution(new_impl_scope, concrete_ability_self, self_type_id);
 
+        let substituted_impl_arguments_handle = substituted_impl_arguments.to_slice();
         let mut specialized_functions = self.mem.new_list(blanket_impl.functions.len());
         let kind = AbilityImplKind::DerivedFromBlanket { blanket_impl_id };
         debug!(
             "blanket impl instance scope before function specialization: {}",
             self.scope_id_to_string(new_impl_scope)
         );
-        for blanket_impl_function in self.mem.getn(blanket_impl.functions) {
+        for (index, blanket_impl_function) in
+            self.mem.getn(blanket_impl.functions).iter().enumerate()
+        {
             // If the functions are abstract, just the type ids
             // If concrete do the declaration thing
             //
@@ -8856,23 +8874,45 @@ impl TypedProgram {
                 AbilityImplFunction::FunctionId(blanket_impl_function_id) => {
                     let blanket_fn = self.get_function(blanket_impl_function_id);
                     let parsed_fn = blanket_fn.parsed_id.as_function_id().unwrap();
-                    let specialized_function_id = self
-                        .declare_function(
-                            parsed_fn,
-                            new_impl_scope,
-                            Some(FunctionAbilityContextInfo::ability_impl(
+                    let decl_fn = *self
+                        .mem
+                        .get_nth(self.abilities.get(concrete_ability_id).functions, index);
+                    let is_default =
+                        self.get_function(decl_fn.function_id).parsed_id.as_function_id()
+                            == Some(parsed_fn);
+                    if is_default
+                        && self
+                            .check_ability_fn_where_constraints(
                                 concrete_ability_id,
+                                substituted_impl_arguments_handle,
                                 self_type_id,
-                                kind,
-                                Some(blanket_impl_function_id),
-                                false,
-                            )),
-                            ROOT_NAMESPACE_ID,
-                        )?
-                        .unwrap();
-                    self.functions_pending_body_specialization.push(specialized_function_id);
-                    AbilityImplFunction::FunctionId(specialized_function_id)
+                                index as u32,
+                                new_impl_scope,
+                                blanket_impl.span,
+                            )
+                            .is_err()
+                    {
+                        AbilityImplFunction::Unavailable
+                    } else {
+                        let specialized_function_id = self
+                            .declare_function(
+                                parsed_fn,
+                                new_impl_scope,
+                                Some(FunctionAbilityContextInfo::ability_impl(
+                                    concrete_ability_id,
+                                    self_type_id,
+                                    kind,
+                                    Some(blanket_impl_function_id),
+                                    false,
+                                )),
+                                ROOT_NAMESPACE_ID,
+                            )?
+                            .unwrap();
+                        self.functions_pending_body_specialization.push(specialized_function_id);
+                        AbilityImplFunction::FunctionId(specialized_function_id)
+                    }
                 }
+                AbilityImplFunction::Unavailable => AbilityImplFunction::Unavailable,
                 AbilityImplFunction::Abstract(_) => {
                     ice_span!(
                         self,
@@ -8884,7 +8924,6 @@ impl TypedProgram {
             specialized_functions.push(specialized_function);
         }
 
-        let substituted_impl_arguments_handle = substituted_impl_arguments.to_slice();
         let id = self.add_ability_impl(TypedAbilityImpl {
             kind,
             blanket_type_params: MSlice::empty(),
@@ -11438,6 +11477,7 @@ impl TypedProgram {
                 params: param_variables.to_slice(),
                 type_params: MSlice::empty(),
                 fnlike_type_params: MSlice::empty(),
+                ability_where_constraints: MSlice::empty(),
                 body_block: Some(body_expr_id),
                 builtin_type: None,
                 linkage: Linkage::Standard,
@@ -11514,6 +11554,7 @@ impl TypedProgram {
             params: param_variables.to_slice(),
             type_params: MSlice::empty(),
             fnlike_type_params: MSlice::empty(),
+            ability_where_constraints: MSlice::empty(),
             body_block: Some(body_expr_id),
             builtin_type: None,
             linkage: Linkage::Standard,
@@ -14492,33 +14533,31 @@ impl TypedProgram {
             "ability names with function name: {}",
             ability_names.iter().map(|n| self.ident_str(*n)).join(", ")
         );
-        for ability_name in ability_names.iter() {
-            // Innermost bindings first; an in-scope ability sharing the name but
-            // lacking the function is skipped, not an error
-            for ability_id in self.scopes.ability_ids_bound_to_name(ctx.scope_id, *ability_name) {
-                let Some(ability_function_ref) =
-                    self.abilities.get(ability_id).find_function_by_name(&self.mem, fn_name)
-                else {
-                    continue;
-                };
-                match self.solve_ability_call(
-                    ability_function_ref,
-                    call,
-                    Some(base_expr),
-                    known_args,
-                    ctx,
-                    stashed_args,
-                ) {
-                    Ok(ability_impl_fn) => {
-                        return Ok(CallResolution::MethodCall {
-                            callee: Callee::from_ability_impl_fn(&ability_impl_fn),
-                            receiver: base_expr,
-                        });
-                    }
-                    Err(e) => {
-                        stashed_args.clear();
-                        errors.push(e);
-                    }
+        let mut ability_ids = self.tmp.new_list(0);
+        self.scopes.collect_ability_ids_bound_to_names(ctx.scope_id, ability_names, &mut ability_ids);
+        for ability_id in ability_ids.as_slice() {
+            let Some(ability_function_ref) =
+                self.abilities.get(*ability_id).find_function_by_name(&self.mem, fn_name)
+            else {
+                continue;
+            };
+            match self.solve_ability_call(
+                ability_function_ref,
+                call,
+                Some(base_expr),
+                known_args,
+                ctx,
+                stashed_args,
+            ) {
+                Ok(ability_impl_fn) => {
+                    return Ok(CallResolution::MethodCall {
+                        callee: Callee::from_ability_impl_fn(&ability_impl_fn),
+                        receiver: base_expr,
+                    });
+                }
+                Err(e) => {
+                    stashed_args.clear();
+                    errors.push(e);
                 }
             }
         }
@@ -14971,11 +15010,45 @@ impl TypedProgram {
                 )
             })?;
 
-        let impl_function = self
-            .ability_impls
-            .get(impl_handle.full_impl_id)
-            .function_at_index(&self.mem, ability_function_ref.index);
-        Ok(*impl_function)
+        let full_impl = *self.ability_impls.get(impl_handle.full_impl_id);
+        let impl_function = *full_impl.function_at_index(&self.mem, ability_function_ref.index);
+        // FunctionId: availability was decided when the impl was built.
+        // Abstract (a type-param constraint pseudo-impl): the fn's where
+        // constraints are checked here, at the call, because not all of the
+        // param's constraints exist yet when the pseudo-impl is built.
+        // Unavailable: decided at impl build; Unavailable carries no payload,
+        // so we re-run the check to name the failing constraint
+        if let AbilityImplFunction::Unavailable | AbilityImplFunction::Abstract(_) = impl_function {
+            if let Err(failure) = self.check_ability_fn_where_constraints(
+                full_impl.ability_id,
+                full_impl.impl_arguments,
+                full_impl.self_type_id,
+                ability_function_ref.index,
+                ctx.scope_id,
+                call_span,
+            ) {
+                return Err(kerr!(
+                    self,
+                    call_span,
+                    "{}/{} is not available for {}: {}",
+                    &self.ability_impl_signature_to_string(base_ability_id, MSlice::empty()),
+                    fn_call.name.name,
+                    solved_self,
+                    failure.message,
+                ));
+            }
+        }
+        if let AbilityImplFunction::Unavailable = impl_function {
+            return Err(kerr!(
+                self,
+                call_span,
+                "{}/{} is not available for {}: a where constraint on the function is not satisfied",
+                &self.ability_impl_signature_to_string(base_ability_id, MSlice::empty()),
+                fn_call.name.name,
+                solved_self,
+            ));
+        }
+        Ok(impl_function)
     }
 
     fn handle_enum_get_value(
@@ -16593,6 +16666,7 @@ impl TypedProgram {
             type_params: MSlice::empty(),
             // Must be empty for correctness; a specialized function has no function type parameters!
             fnlike_type_params: MSlice::empty(),
+            ability_where_constraints: generic_function.ability_where_constraints,
             body_block: None,
             builtin_type: generic_function.builtin_type,
             linkage: generic_function.linkage,
@@ -16668,7 +16742,6 @@ impl TypedProgram {
         };
 
         // Approach: Just compile the AST again, with bound types
-        debug_assert!(parent_function.body_block.is_some());
         debug_assert!(specialized_function.body_block.is_none());
 
         let parsed_body = match parent_function.parsed_id {
@@ -17744,6 +17817,55 @@ impl TypedProgram {
         Ok(sum_constructor)
     }
 
+    fn check_ability_fn_where_constraints(
+        &mut self,
+        specialized_ability_id: AbilityId,
+        impl_arguments: TypeIdSlice,
+        impl_self_type: TypeId,
+        fn_index: u32,
+        scope_id: ScopeId,
+        span: SpanId,
+    ) -> K1Result<()> {
+        let decl_fn = *self
+            .mem
+            .get_nth(self.abilities.get(specialized_ability_id).functions, fn_index as usize);
+        let constraints = self.get_function(decl_fn.function_id).ability_where_constraints;
+        if constraints.is_empty() {
+            return Ok(());
+        }
+
+        let ability = *self.abilities.get(specialized_ability_id);
+        let mut pairs: SV8<TypeSubstitutionPair> =
+            smallvec![spair! {ability.self_type_id => impl_self_type}];
+        let ability_args = ability.kind.arguments(&self.mem);
+        let base_params = self.abilities.get(ability.base_ability_id).parameters;
+        for (base_param, ability_arg) in self
+            .mem
+            .getn(base_params)
+            .iter()
+            .filter(|p| p.is_ability_side_param())
+            .zip(ability_args.iter())
+        {
+            pairs.push(spair! {base_param.type_variable_id => *ability_arg});
+        }
+        for (base_param, impl_arg) in self
+            .mem
+            .getn(base_params)
+            .iter()
+            .filter(|p| p.is_impl_param)
+            .zip(self.mem.getn(impl_arguments).iter())
+        {
+            pairs.push(spair! {base_param.type_variable_id => *impl_arg});
+        }
+
+        for c in self.mem.getn(constraints) {
+            let target = self.substitute_in_type(c.target, &pairs);
+            let signature = self.substitute_in_ability_signature(&pairs, c.signature, scope_id, span);
+            self.check_ability_constraint(target, signature, decl_fn.function_name, scope_id, c.span)?;
+        }
+        Ok(())
+    }
+
     fn check_ability_constraint(
         &mut self,
         target_type: TypeId,
@@ -18581,6 +18703,16 @@ impl TypedProgram {
                     literal_fields
                         .push(StructLiteralField { name: field.name, expr: Some(fn_ptr_expr) });
                 }
+                AbilityImplFunction::Unavailable => {
+                    kbail!(
+                        self,
+                        span,
+                        "Cannot erase {} to dyn[{}]: function '{}' is unavailable for this type",
+                        implementor_type,
+                        self.abilities.get(ao.specialized_ability_id).name,
+                        field.name,
+                    );
+                }
                 AbilityImplFunction::Abstract(_) => {
                     // Inside an abstract (where-bound generic) body; never lowered.
                     let placeholder = self.synth_cast(
@@ -18677,6 +18809,34 @@ impl TypedProgram {
             if ability_info.is_none() { companion_type_id } else { None },
             if ability_info.is_none() { Some(namespace_id) } else { None },
         )?;
+
+        let mut ability_where_constraints: SV4<AbilityFnWhereConstraint> = smallvec![];
+        for c in self_.ast.mem.getn(ast_fn.additional_where_constraints) {
+            let names_own_param =
+                self_.ast.mem.getn(ast_fn.type_params).iter().any(|tp| tp.name == c.name);
+            if names_own_param || is_ability_impl {
+                continue;
+            }
+            if !is_ability_decl {
+                kbail!(&**self_, c.span, "where clause names unknown type parameter: {}", c.name);
+            }
+            let Some((target, _)) = self_.scopes.find_type(fn_scope_id, c.name) else {
+                kbail!(&**self_, c.span, "where clause names unknown type: {}", c.name);
+            };
+            let ParsedTypeConstraintExpr::Ability(ability_expr) = c.constraint_expr else {
+                kbail!(
+                    &**self_,
+                    c.span,
+                    "Only ability constraints are supported in ability function where clauses"
+                );
+            };
+            let signature = self_.eval_ability_expr(ability_expr, false, fn_scope_id)?;
+            ability_where_constraints.push(AbilityFnWhereConstraint {
+                target,
+                signature,
+                span: c.span,
+            });
+        }
 
         let mut fnlike_type_params: List<FnlikeTypeParam, TypedProgram> = self_.mem.new_list(0);
 
@@ -18931,6 +19091,7 @@ impl TypedProgram {
             self_.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(function_id);
         }
         let param_variables_handle = params.to_slice();
+        let where_constraints_handle = self_.mem.pushn(&ability_where_constraints);
         let actual_function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
@@ -18938,6 +19099,7 @@ impl TypedProgram {
             params: param_variables_handle,
             type_params,
             fnlike_type_params: function_type_params_handle,
+            ability_where_constraints: where_constraints_handle,
             body_block: None,
             builtin_type: intrinsic_type,
             linkage,
@@ -19218,6 +19380,7 @@ impl TypedProgram {
             params: param_variables_handle,
             type_params,
             fnlike_type_params: MSlice::empty(),
+            ability_where_constraints: MSlice::empty(),
             body_block: None,
             builtin_type: None,
             linkage: Linkage::Standard,
@@ -20133,6 +20296,7 @@ impl TypedProgram {
             impl_arguments.push(arg_type)
         }
 
+        let impl_arguments_handle = impl_arguments.to_slice();
         let base_ability_id = ability.base_ability_id;
         let kind = if parsed_ability_impl.generic_impl_params.is_empty() {
             AbilityImplKind::Concrete
@@ -20184,6 +20348,23 @@ impl TypedProgram {
                     }
                 }
             };
+
+            if is_default
+                && matches!(kind, AbilityImplKind::Concrete)
+                && self
+                    .check_ability_fn_where_constraints(
+                        ability_id,
+                        impl_arguments_handle,
+                        impl_self_type,
+                        ability_function_ref.index,
+                        impl_scope_id,
+                        span,
+                    )
+                    .is_err()
+            {
+                typed_functions.push(AbilityImplFunction::Unavailable);
+                continue;
+            }
 
             let impl_function_id = self
                 .declare_function(
@@ -20256,7 +20437,6 @@ impl TypedProgram {
         }
 
         let blanket_type_params_handle = blanket_type_params.to_slice();
-        let impl_arguments_handle = impl_arguments.to_slice();
         let typed_impl_id = self.add_ability_impl(TypedAbilityImpl {
             kind,
             blanket_type_params: blanket_type_params_handle,
@@ -20293,12 +20473,34 @@ impl TypedProgram {
             // mask real bugs
             return Ok(());
         };
-        let ability_impl = self.ability_impls.get(ability_impl_id);
+        let ability_impl = *self.ability_impls.get(ability_impl_id);
 
-        for impl_fn in self.mem.getn(ability_impl.functions).iter() {
-            let AbilityImplFunction::FunctionId(impl_fn) = *impl_fn else {
-                self.ice("Expected impl function id, not abstract, in eval_ability_impl", None);
+        for (index, impl_fn) in self.mem.getn(ability_impl.functions).iter().enumerate() {
+            let impl_fn = match *impl_fn {
+                AbilityImplFunction::FunctionId(impl_fn) => impl_fn,
+                AbilityImplFunction::Unavailable => continue,
+                AbilityImplFunction::Abstract(_) => {
+                    self.ice("Expected impl function id, not abstract, in eval_ability_impl", None);
+                }
             };
+            let decl_fn =
+                *self.mem.get_nth(self.abilities.get(ability_impl.ability_id).functions, index);
+            let is_default = self.get_function(impl_fn).parsed_id
+                == self.get_function(decl_fn.function_id).parsed_id;
+            if is_default
+                && self
+                    .check_ability_fn_where_constraints(
+                        ability_impl.ability_id,
+                        ability_impl.impl_arguments,
+                        ability_impl.self_type_id,
+                        index as u32,
+                        ability_impl.scope_id,
+                        ability_impl.span,
+                    )
+                    .is_err()
+            {
+                continue;
+            }
             if let Err(e) = self.eval_function_body(impl_fn) {
                 self.functions.get_mut(impl_fn).body_failure = Some(e);
                 self.ability_impls
@@ -20806,6 +21008,7 @@ impl TypedProgram {
             params: MSlice::empty(),
             type_params: MSlice::empty(),
             fnlike_type_params: MSlice::empty(),
+            ability_where_constraints: MSlice::empty(),
             body_block: Some(body_block),
             builtin_type: None,
             linkage: Linkage::Standard,
@@ -21979,7 +22182,7 @@ impl TypedProgram {
             core!("from-string"),
             core!("iterator"),
             core!("iterable"),
-            core!("iter"),
+            core!("as-span"),
             core!("println"),
             core!("print"),
             core!("eprint"),

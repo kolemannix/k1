@@ -64,10 +64,6 @@ ns for fixlist {
     self.data.as-buffer().slice(0, self.len())
   }
 
-  fn as-span[t, n](self: *fixlist[t, n]): span[t] {
-    self.data.as-span().slice(0, self.len())
-  }
-
   fn get[t, n](self: *fixlist[t, n], index: size): t {
     self.get-ref(index).*
   }
@@ -102,6 +98,12 @@ ns for fixlist {
     self.as-buffer().reverse()
   }
 
+}
+
+impl[t, n: static size] as-span[t = t] for *fixlist[t, n] {
+  fn as-span(self): span[t] {
+    self.data.as-span().slice(0, self.len())
+  }
 }
 
 impl[t, n: static size] iterable[item = t, i = buffer-iterator[t]] for *fixlist[t, n] {

@@ -208,17 +208,14 @@ impl TypedProgram {
                             (expr_type, expr_span)
                         }
                         Err(e) => {
-                            // Some expression types, like lambdas, fail really easily if we don't
-                            // know the types of the inputs yet. When a lambda fails here, we
-                            // choose to continue and report a different, likely more informative,
-                            // error
-                            //
-                            // This is swallowing really important info when the lambda is just
-                            // mis-written, so need to rethink this, toggling to false for now
-                            // Eventually I think we need a signal score heuristic on errors to
-                            // determine whether the lambda failure would stop inference here or not
+                            // A lambda evaluated against an expected type that still has
+                            // holes fails easily (its param types aren't known yet); the
+                            // post-inference argument pass re-evaluates it concretely and
+                            // reports the real error if it is genuinely mis-written. But a
+                            // failure against a concrete expected type is still a real error right
+                            // now
                             let should_skip = match self.ast.exprs.get(*parsed_expr) {
-                                ParsedExpr::Lambda(_) => false,
+                                ParsedExpr::Lambda(_) => !expected_is_concrete,
                                 _ => false,
                             };
                             if should_skip {
