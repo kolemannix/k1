@@ -26,7 +26,7 @@ add-tracked(context history)(1, 2)
 or bind them locally for implicit passing:
 
 ```rust
-let context history: *mut list[string] = core/mem/new([])
+let(context) history: *mut list[string] = core/mem/new([])
 add-tracked(1, 2)
 ```
 
@@ -41,7 +41,7 @@ fn greet[w: writer](context out: w)(name: string) {
 }
 
 let sb = string-builder/new()
-let context(impl writer) out: *string-builder = sb.&
+let(context(impl writer)) out: *string-builder = sb.&
 greet("Joe") // writes into sb
 ```
 
@@ -63,23 +63,41 @@ and `test_src/suite1/context_ability.k1`.
 
 ## Module Manifests And FFI
 
-Executable modules can declare `MODULE_INFO` with dependencies, threading mode,
-libraries, and linker args. FFI declarations use `extern("lib", "symbol")`.
+A module declares its manifest with `fn module(): k1/module` in its root file.
+A directory module's root file is `module.k1` or `<module-name>.k1` (required —
+a directory module without one is an error); a single-file module is its own
+root file. A top-level `fn module` in any other file is an error. The compiler
+evaluates the fn before compiling the module and consumes it — it is never part
+of the program. No `fn module` means defaults: library, or executable for the
+primary module. Building a library primary (`m.library()`) produces both
+`.k1-out/lib<name>.{dylib|so}` and a fat `.k1-out/lib<name>.a` (a partial link
+of the K1 object with every static lib in the program, k1rt included); both
+artifacts expose only the exported symbols — everything else, k1rt's C helpers
+included, is hidden/localized. `k1 run`/`k1 test` reject library modules. The
+exported C ABI is declared per-fn with the `export`
+modifier — `fn(export)` exports under the fn's own name, `fn(export("sym"))`
+under an explicit symbol — plus `let(export)` globals. Exported fns must be
+concrete, non-ability fns with bodies; duplicate export symbols are an error.
+See `dogfood/klib`. FFI declarations use the `extern` fn modifier; its optional
+argument is the link symbol (defaults to the fn name). The providing library is
+declared once on the containing namespace with `ns(lib("foo"))` — whole-ns, any
+opening may declare it, disagreeing openings are an error — or per-fn with the
+`lib` modifier (`fn(extern("sym"), lib("foo"))`), which overrides the ns lib.
 
 ```rust
-let MODULE_INFO: k1/module-manifest = .{
-  kind = :executable,
-  deps = [],
-  multithreading = false,
-  libs = [.{ name = "foo", link-type = :static }],
-  link-args = [],
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.lib("foo", :static)
+  m.link-args(["-L/some/path"])
+  m
 }
 
-extern("foo", "very_small")
-fn very-small(x: very-small, y: very-small): very-small
+ns(lib("foo")) foo {
+  fn(extern("very_small")) very-small(x: very-small, y: very-small): very-small
+}
 ```
 
-See `test_src/ffi_abi_test/main.k1` and `test_src/threads.k1`.
+See `test_src/ffi_abi_test/ffi_abi_test.k1` and `test_src/threads.k1`.
 
 ## Function Pointers
 
@@ -101,13 +119,15 @@ See `test_src/suite1/function_pointer.k1`.
 
 ## Globals And Mutable Globals
 
-Top-level `let` declarations create globals. Add `mutable` for globals that can
-be assigned with `=` like any other place; immutable globals reject assignment.
+Top-level `let` declarations create globals. Add the `mutable` modifier for
+globals that can be assigned with `=` like any other place; immutable globals
+reject assignment. Modifiers go in a parenthesized list after `let`:
+`mutable`, `tls`, `export`, `extern`.
 
 ```rust
 let answer: int = 42
-let mutable counter: int = 0
-let mutable tls my-thread-local: i32 = 0
+let(mutable) counter: int = 0
+let(mutable, tls) my-thread-local: i32 = 0
 
 counter = counter + 1
 ```
@@ -218,8 +238,8 @@ default for emission. Nested blocks capture the builder at each level
 (`cb.block(h, fn[cb]. { ... cb.block-close(h2, c2, fn[cb]. ...) ... })`).
 One sharp edge: to inspect an expansion put `#debug` on the macro
 *definition* — definition-level `#debug $call(...)` does not parse. Write emitted conditions as raw template
-text with explicit parens — `not` is low-precedence, so `not a and b` parses
-as `not (a and b)`; emit `(not a) and b`. `meta/str-lit(s)` escapes any string
+text with explicit parens — a binary operator directly after a `not` operand
+is a parse error; emit `(not a) and b`. `meta/str-lit(s)` escapes any string
 into a valid K1 literal, interpolation sigil included, so emitted literals
 need no character restrictions.
 
@@ -405,7 +425,7 @@ cannot form a dyn type. Dyn objects contain function pointers, so
 they cannot cross the `#static` boundary into runtime constants; comptime
 creation and dispatch inside `#static` works.
 
-See `test_src/suite1/ability_object.k1` and `k1lib/std/stream.k1`.
+See `test_src/suite1/ability_object.k1` and `modules/std/stream.k1`.
 
 ## Opaque, Union, Uninit, Zeroed, And Bitcast
 
@@ -463,6 +483,11 @@ The basics guide does not yet enumerate operators. Tests cover:
 - Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`.
 - Boolean: `not`, `and`, `or`, with short-circuiting.
 - Bitwise: `&`, `|`, `^`, `<<`, `>>`.
+
+Binary operator precedence is C's, so ported C expressions parse identically
+(tightest first): `||` (pipe), then `* / %`, `+ -`, `<< >>`, `< <= > >=`,
+`== !=`, `&`, `^`, `|`, `and`, `or`, `?`. Note C's quirk is inherited:
+`a & b == c` is `a & (b == c)` — parenthesize mask tests.
 - Hex, binary, and underscore numeric literals.
 - Integer suffixes such as `255u8`, `-128i8`, and `3u64`.
 
@@ -531,11 +556,11 @@ See `test_src/suite1/char_test.k1`,
 
 ## RVO And Returned Locals
 
-`let returned name = ...` appears in RVO tests and looks like a dedicated return
-value optimization or return-slot feature.
+`let(returned) name = ...` appears in RVO tests and looks like a dedicated
+return value optimization or return-slot feature.
 
 ```rust
-let returned v = zeroed()
+let(returned) v = zeroed()
 ```
 
 See `test_src/suite1/rvo_test.k1`.
@@ -544,8 +569,7 @@ See `test_src/suite1/rvo_test.k1`.
 
 Thread tests combine several runtime features:
 
-- `MODULE_INFO` with `multithreading: true`.
-- Thread-local mutable globals via `let mutable tls`.
+- Thread-local mutable globals via `let(mutable, tls)`.
 - `std/thread/start` and `std/thread/join`.
 - Arena-backed allocation for cross-thread values.
 
@@ -553,7 +577,7 @@ See `test_src/threads.k1`.
 
 ## Atomics
 
-Atomics are operations, not types: `ns atomic` in `k1lib/core/atomic.k1`
+Atomics are operations, not types: `ns atomic` in `modules/core/atomic.k1`
 exposes intrinsics over ordinary memory through references.
 
 ```

@@ -1,0 +1,5 @@
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.dep("cyca")
+  m
+}

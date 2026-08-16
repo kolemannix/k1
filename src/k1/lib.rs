@@ -10,18 +10,22 @@ pub mod compiler;
 mod fixmap;
 pub mod ir;
 mod kmem;
+pub mod kpath;
 pub mod lex;
 #[cfg(feature = "lsp")]
 pub mod lsp_support;
 pub mod parse;
 mod rawref;
 pub mod server;
+pub mod snap;
 pub mod typer;
 mod vecpool;
 pub mod vm;
 mod vpool;
 //pub mod codegen_llvm_old;
 //pub mod vmtw;
+
+pub const BUILD_ID: &str = env!("K1_BUILD_ID");
 
 pub const KILOBYTE: usize = 1024;
 pub const MEGABYTE: usize = KILOBYTE * 1024;

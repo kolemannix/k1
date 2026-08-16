@@ -15,6 +15,7 @@ fn test() {
   assert-equals(13,inspect(.{ x = 3, y = 10 }))
 
   assert-equals(2,inspect(#static "hello"))
+  assert-equals(2,inspect(#static "he".concat("llo")))
   assert-equals(4,inspect("hell"))
   assert-equals(5,inspect("hello": string))
 

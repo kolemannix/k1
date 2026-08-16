@@ -12,25 +12,33 @@ fn test() {
   assert-equals(bitwise/bit-not(-24555: i32), 24554)
 
   // AND
-  assert(100 & 100 == 100)
-  assert(100 & 0 == 0)
-  assert(42 & 15 == 10)
-  assert(-1i8 & 127i8 == 127i8)
-  assert(29 & 15 == 13)
+  assert((100 & 100) == 100)
+  assert((100 & 0) == 0)
+  assert((42 & 15) == 10)
+  assert((-1i8 & 127i8) == 127i8)
+  assert((29 & 15) == 13)
 
   // OR
-  assert(100 | 0 == 100)
-  assert(42 | 15 == 47)
+  assert((100 | 0) == 100)
+  assert((42 | 15) == 47)
   assert-equals(-1i64 | 0i64, -1)
   assert-equals(-1i16 | 0i16, -1i16)
-  assert(29 | 15 == 31)
+  assert((29 | 15) == 31)
 
   // XOR
-  assert(100 ^ 0 == 100)
-  assert(42 ^ 15 == 37)
-  assert(-1i32 ^ -1i32 == 0i32)
+  assert((100 ^ 0) == 100)
+  assert((42 ^ 15) == 37)
+  assert((-1i32 ^ -1i32) == 0i32)
+  assert((29 ^ 15) == 18)
+  assert((255u8 ^ 170u8) == 85u8)
+
+  // Precedence: bitwise binds above comparisons (Rust/Zig ladder, not C's),
+  // so a & b == c is (a & b) == c
+  assert(42 & 15 == 10)
   assert(29 ^ 15 == 18)
-  assert(255u8 ^ 170u8 == 85u8)
+  assert(100 | 0 == 100)
+  assert(2 & 1 < 1)
+  assert(1 << 1 & 2 == 2)
 
   // Shift Left
   assert(1 << 1 == 2)

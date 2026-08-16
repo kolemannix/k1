@@ -109,12 +109,12 @@ impl equals for { rank: int, payload: string } {
 
 fn test-sort-int(input: list[int], expected: list[int]) {
   let sorted = input.sorted()
-  assert(sorted == expected)
+  assert(sorted == expected.as-span())
 }
 
 fn test-sort-other(input: list[{ rank: int, payload: string }], expected: list[{ rank: int, payload: string }]) {
   let sorted = input.sorted()
-  assert(sorted == expected)
+  assert(sorted == expected.as-span())
 }
 
 fn test-sort() {
@@ -159,12 +159,12 @@ fn iterator(): int {
 }
 
 fn test() {
-  let _ = list_test/list-of-structs()
+  list_test/list-of-structs()
   list_test/list-slice()
-  let _ = list_test/list-fill()
-  let _ = list_test/list-equality()
+  list_test/list-fill()
+  list_test/list-equality()
   list_test/test-sort()
   list_test/test-swap()
-  let _ = list_test/iterator()
+  list_test/iterator()
   assert([1,2,3].show() == "[1,2,3]")
 }

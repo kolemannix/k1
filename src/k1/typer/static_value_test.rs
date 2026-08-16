@@ -7,12 +7,12 @@ const BUILTIN_VALUE_COUNT: usize = 4;
 
 #[test]
 fn test_basic() {
-    let mut system = StaticValuePool::make_with_hint(512);
+    let mut system = StaticValuePool::make();
 
     let s1 = system.add_struct(TypeId::from_u32(10).unwrap(), MSlice::empty());
     let s2 = system.add_struct(TypeId::from_u32(10).unwrap(), MSlice::empty());
     assert_eq!(s1, s2);
-    assert_eq!(system.pool.len(), BUILTIN_VALUE_COUNT);
+    assert_eq!(system.pool.len(), BUILTIN_VALUE_COUNT + 1);
 
     let true1 = system.add(StaticValue::Bool(true));
     let true2 = system.add(StaticValue::Bool(true));
@@ -47,7 +47,7 @@ fn test_basic() {
 
 #[test]
 fn test_float() {
-    let mut system = StaticValuePool::make_with_hint(512);
+    let mut system = StaticValuePool::make();
 
     let f1 = system.add(StaticValue::Float(TypedFloatValue::F32(std::f32::consts::PI)));
     let f2 = system.add(StaticValue::Float(TypedFloatValue::F32(std::f32::consts::PI)));
@@ -66,7 +66,7 @@ const TYPE3: TypeId = TypeId::from_u32(3).unwrap();
 
 #[test]
 fn test_struct() {
-    let mut system = StaticValuePool::make_with_hint(512);
+    let mut system = StaticValuePool::make();
 
     // Create some field values
     let field1 = system.add(StaticValue::Int(TypedIntValue::I32(10)));
@@ -86,7 +86,7 @@ fn test_struct() {
 
 #[test]
 fn test_enum() {
-    let mut system = StaticValuePool::make_with_hint(512);
+    let mut system = StaticValuePool::make();
 
     let payload1 = system.add(StaticValue::Int(TypedIntValue::I32(42)));
     let payload2 = system.add(StaticValue::Int(TypedIntValue::I32(42)));
@@ -116,7 +116,7 @@ fn test_enum() {
 
 #[test]
 fn test_span() {
-    let mut system = StaticValuePool::make_with_hint(512);
+    let mut system = StaticValuePool::make();
 
     let elem1 = system.add(StaticValue::Int(TypedIntValue::I32(1)));
     let elem2 = system.add(StaticValue::Int(TypedIntValue::I32(2)));
@@ -137,8 +137,32 @@ fn test_span() {
 }
 
 #[test]
+fn add_survives_hash_collision() {
+    // Two different values with equal hashes: Sum hashes payload *content*
+    // recursively but compares payload *ids*, so two Sums whose payloads are
+    // distinct ids with identical content collide
+    let mut system = StaticValuePool::make();
+
+    let payload_a = system.add(StaticValue::Int(TypedIntValue::I32(7)));
+    // A second id with identical content, bypassing dedup (as reserved ids do)
+    let payload_b = system.pool.add(StaticValue::Int(TypedIntValue::I32(7)));
+    assert_ne!(payload_a, payload_b);
+
+    let sum_a = StaticSum { sum_type_id: TYPE1, variant_index: 0, payload: Some(payload_a) };
+    let sum_b = StaticSum { sum_type_id: TYPE1, variant_index: 0, payload: Some(payload_b) };
+    assert_eq!(system.hash(&StaticValue::Sum(sum_a)), system.hash(&StaticValue::Sum(sum_b)));
+
+    let id_a = system.add(StaticValue::Sum(sum_a));
+    let id_b = system.add(StaticValue::Sum(sum_b));
+    assert_ne!(id_a, id_b, "dep_eq-different values must get different ids");
+
+    assert_eq!(system.add(StaticValue::Sum(sum_a)), id_a, "re-add of the first value");
+    assert_eq!(system.add(StaticValue::Sum(sum_b)), id_b, "re-add of the second value");
+}
+
+#[test]
 fn test_recurse() {
-    let mut system = StaticValuePool::make_with_hint(512);
+    let mut system = StaticValuePool::make();
 
     // Tests recursive deduplication through multiple nesting levels
     let int_val = system.add(StaticValue::Int(TypedIntValue::I32(99)));

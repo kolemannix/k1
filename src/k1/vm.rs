@@ -115,7 +115,10 @@ pub mod k1_types {
         pub basePtr: *const u8,
         pub curAddr: u64,
         pub endAddr: u64,
-        pub allocKind: u64,
+        pub firstBase: *const u8,
+        pub firstEnd: u64,
+        pub extraChunks: *const u8,
+        pub fixed: bool,
         pub name: K1BufferLike,
     }
 
@@ -246,9 +249,6 @@ pub struct Vm {
 
 impl Vm {
     pub fn reset(&mut self, arena_global_id: Option<TypedGlobalId>) {
-        // Note that we don't de-allocate any resources
-        // we just zero the memory and reset the stack pointer
-
         // The arena-tmp global is an 8-byte cell holding a *arena; read the
         // pointer out before we wipe the static stack the cell lives in
         let arena_ptr_to_preserve: Option<*mut k1_types::Arena> = arena_global_id
@@ -266,16 +266,15 @@ impl Vm {
 
         if let Some(arena_ptr) = arena_ptr_to_preserve {
             debug!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
-            // Empty and zero the live arena (same as k1 arena/reset(clear=true)) and
-            // re-create the pointer cell so init-tmp-arena doesn't re-mmap.
-            // Zeroing upholds alloc-mode.alloc's zeroed-memory contract, which fresh
-            // mmap pages provide and reuse across static executions would break.
+            // Zero, don't release, the vm's main tmp arena, which is never chained
             unsafe {
+                debug_assert!((*arena_ptr).fixed);
+                debug_assert!((*arena_ptr).extraChunks.is_null());
                 let base = (*arena_ptr).basePtr;
                 let used = (*arena_ptr).curAddr - base.addr() as u64;
                 core::ptr::write_bytes(base.cast_mut(), 0, used as usize);
                 (*arena_ptr).curAddr = base.addr() as u64;
-            };
+            }
             let cell = self.static_stack.push_t(arena_ptr);
             self.globals.insert(arena_global_id.unwrap(), Value::ptr(cell));
         }
@@ -539,9 +538,6 @@ pub(crate) fn resolve_global(
     let is_constant = global.is_constant;
     let initial_value_id = match global.initial_value {
         GlobalInitialValue::Pending => {
-            // Globals referenced by compiled code are evaluated by the pre-execution
-            // drain (compile_all_pending_ir); re-entering the compiler mid-run to
-            // evaluate one is no longer allowed
             kbail!(
                 k1,
                 vm.eval_span,
@@ -611,7 +607,7 @@ pub fn static_value_to_vm_value(
     };
 
     let v = match k1.static_values.get(static_value_id) {
-        StaticValue::Empty => Value(0),
+        StaticValue::Empty(_) => Value(0),
         StaticValue::Bool(bool_value) => Value::bool(*bool_value),
         StaticValue::Char(char_byte) => Value(*char_byte as u64),
         StaticValue::Int(iv) => Value(iv.to_u64_bits()),
@@ -691,7 +687,7 @@ pub fn static_value_to_vm_value(
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: StaticValueId) {
     match k1.static_values.get(static_value_id) {
-        StaticValue::Empty => {}
+        StaticValue::Empty(_) => {}
         StaticValue::Bool(bool_value) => store_byte(dst, *bool_value as u8),
         StaticValue::Char(char_byte) => store_byte(dst, *char_byte),
         StaticValue::Int(int_value) => store_typed_int(dst, *int_value),
@@ -812,15 +808,6 @@ pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
     let string_stack_addr =
         k1.vm_shared_static_stack.mem.push(k1_string) as *mut k1_types::K1BufferLike;
     Value::ptr(string_stack_addr.cast())
-}
-
-pub(crate) fn allocate(layout: std::alloc::Layout, zero: bool) -> *mut u8 {
-    let ptr = if zero {
-        unsafe { std::alloc::alloc_zeroed(layout) }
-    } else {
-        unsafe { std::alloc::alloc(layout) }
-    };
-    ptr
 }
 
 pub fn store_byte(dst: *mut u8, u8: u8) {
@@ -978,7 +965,9 @@ pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
     }
     unsafe {
         match t {
-            ScalarType::I8 | ScalarType::U8 => dst.write(value.bits() as u8),
+            ScalarType::I8 | ScalarType::U8 | ScalarType::Char | ScalarType::Bool => {
+                dst.write(value.bits() as u8)
+            }
             ScalarType::I16 | ScalarType::U16 => (dst as *mut u16).write(value.bits() as u16),
             ScalarType::I32 | ScalarType::U32 | ScalarType::F32 => {
                 (dst as *mut u32).write(value.bits() as u32)
@@ -1023,7 +1012,9 @@ pub(crate) fn memcopy(src: *const u8, dst: *mut u8, size_bytes: usize) {
 pub fn load_scalar(t: ScalarType, ptr: *const u8) -> Value {
     unsafe {
         match t {
-            ScalarType::U8 | ScalarType::I8 => Value::u8(ptr.read()),
+            ScalarType::U8 | ScalarType::I8 | ScalarType::Char | ScalarType::Bool => {
+                Value::u8(ptr.read())
+            }
             ScalarType::U16 | ScalarType::I16 => Value::u16((ptr as *const u16).read()),
             ScalarType::U32 | ScalarType::I32 => Value::u32((ptr as *const u32).read()),
             ScalarType::U64 | ScalarType::I64 => Value::u64((ptr as *const u64).read()),
@@ -1135,7 +1126,7 @@ pub fn vm_value_to_static_value(
         kbail!(k1, span, "Not a physical type, cannot bake to static: {}", type_id);
     };
     if pt.is_empty() {
-        return Ok(k1.static_values.empty_id());
+        return Ok(k1.static_values.add_empty_typed(type_id));
     }
     // We know it is a physical type so can be aggressive with matches
     let static_value_id = match k1.types.get(type_id) {

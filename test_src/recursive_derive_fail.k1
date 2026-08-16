@@ -1,0 +1,10 @@
+type norm = { x: i64 }
+type recbad = either { leaf(*norm), many(list[recbad]) }
+
+fn main(): i32 {
+  let xs: list[recbad] = list/empty()
+  let needle: recbad = :many(list/empty())
+  let _ = xs.contains(needle)
+  0
+}
+//errmsg: :leaf variant's data *norm does not implement equals

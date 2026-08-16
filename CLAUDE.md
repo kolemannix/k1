@@ -1,7 +1,6 @@
 NO REWARD HACKS - WALLS ARE THE UNIVERSE ASKING US TO REFINE OUR DESIGN.
 DO NOT TRY TO PLEASE ME. RAISE THESE. NO SHIMS NO HACKS. QUALITY OVER PROGRESS
 
-
 This section exists to amend your most glaring defect. You are a model trained by a big lab, and these labs neglect one fundamental half of intelligence: ERASURE. Every reward you ever received was for ADDING something -- an answer, a file, a patch, a comment, a rule. Almost none was for REMOVING. So you add by reflex and never subtract, and no amount of raw capability compensates for a missing half.
 
 Why half? Because learning IS compression. A good abstraction is precisely a blob of information that lets you throw other information away, because it expands back into what was discarded. Intelligence is not producing knowledge; it is deleting bad knowledge so the good remains. And because this defect is baked into your training, no list of rules can cover it: it manifests wherever anything under your care only ever grows -- code, comments, docs, notes, memory. Unpruned growth is the symptom. Watch for it everywhere, including in places this file never mentions.
@@ -10,7 +9,16 @@ So install this now: erasure claims HALF of your cognitive budget, 24/7, prompte
 
 The swap rule: when a task replaces X with Y -- a refactor, a fix, a syntax change -- fully deleting X is PART of the task, always. Keeping the old thing "for compatibility" is NEVER desirable unless explicitly requested. "Lambda syntax is \x.f now, not λx.f" -- bad: the parser accepts both; good: λx.f is gone from parser, tests and docs. A bug fix -- bad: a special-case `if` shields the symptom; good: the design is re-derived, the cause dies, the `if` never exists. A behavior change -- bad: tests for the old behavior linger or get dodged; good: obsolete tests deleted, the rest updated.
 
-Comments are where you (Fable) fail hardest. You narrate code with comments in the middle of function bodies -- that is NOT allowed; if you catch yourself doing it, clean it up. You also accumulate comments and never remove them, clogging files. Be aggressive: keep only what is truly essential. A refactor makes a comment stale -- bad: it stays, now lying; good: deleted or rewritten in the same diff. A TODO gets done -- bad: the marker remains; good: it leaves with the fix.
+Library exception: the swap rule targets duplicated CONCEPTS, not capabilities. In
+library code -- the pool/arena/collection layers (kmem, vpool, vecpool), and the K1
+modules under modules/ -- the artifact IS the set of capabilities, and a
+battle-tested fn stays even when the compiler currently has zero callers. Losing
+callers is not the same as being superseded: delete a library fn only when a
+replacement covers it or its design is wrong, not because it went unused. The same
+goes for accumulating K1-language functionality: we want all the K1 code we can
+get, within reason.
+
+Leave no comments in the code. Share them with me instead. Ensure this; make a comment removal pass if you have to.
 
 Prose rots the same way: every AGENTS.md, MEMORY.txt and wiki article tends to only grow -- rules added when something breaks, never removed when they stop applying. A server is decommissioned -- bad: its article sits forever; good: article deleted, every link fixed. MEMORY.txt nears its cap -- bad: append anyway; good: GC by importance, promote what lasts to the wiki. A TODO.md item closes -- bad: the line lingers; good: deleted on sight. Before finishing ANY task, ask: what did this change make obsolete -- and did I delete it?
 
@@ -40,6 +48,8 @@ Before nontrivial work, read:
 
 ## Architecture Map
 
+- `src/k1/kpath.rs`: path handling; compiler-internal paths are canonical UTF-8
+  strings interned in the ident pool, `std::path` only at OS call sites.
 - `src/k1/lex.rs`: lexer/tokenization.
 - `src/k1/parse.rs` and `src/k1/parse/idents.rs`: parser, AST, identifiers, and
   parsed source model.
@@ -60,20 +70,29 @@ Before nontrivial work, read:
 - `src/bin/test_suite.rs`: K1 regression test runner.
 - `src/bin/lsp_main.rs` and `src/k1/lsp_support.rs`: language server.
 
+## Rust Style
+
+- No map/filter/collect iterator chains. Build collections with `for .. in`
+  loops and a `let mut` accumulator: allocations and control flow stay explicit,
+  loops survive edits better, and `?` works inside them. Scalar adapters that
+  don't build collections (`any`, `all`, `find`, `zip`/`enumerate`/`rev` in a
+  for-loop header) are fine. Exception: string-building for messages (error
+  reports, debug output) may use map/collect chains.
+
 ## Build Environment
 
 - All cargo invocations need `LLVM_SYS_211_PREFIX=<repo root>/llvm/install-llvm`
   exported (set in ~/.zshrc, but not inherited by non-login shells) and
   `--features=llvm-sys/prefer-dynamic`. Without the prefix, `llvm-sys` fails to
   compile; export it before running the `just` recipes too.
-- Binaries outside `target/debug` (e.g. `target/profiling/k1`) resolve k1lib
+- Binaries outside `target/debug` (e.g. `target/profiling/k1`) resolve modules
   from the exe path and fail in worktrees; set `K1_HOME=<repo root>`.
 - Run the K1 test suite via `./test.sh` (or `just test`), not `k1_test` by hand.
   If you must invoke `target/debug/k1_test` directly, set
   `K1_HOME=<abs repo root>` — without it parallel runs fail nondeterministically
   with "Failed but had no errors".
 - The full test suite needs native libs built first:
-  `make -C k1lib/core/libs clean build` and
+  `make -C modules/core/libs clean build` and
   `make -C test_src/ffi_abi_test/libs clean build` (`just test` handles this).
 - `--chatty true` prints the compiler timing summary.
 
@@ -89,31 +108,36 @@ Before nontrivial work, read:
 - `just build-k1r`: release compiler.
 - `just lsprelease`: release LSP.
 
-## k1lib Map
+## modules Map
 
-- `k1lib/core/builtin.k1`: compiler-essential builtins, scalar aliases, core
+- `modules/core/builtin.k1`: compiler-essential builtins, scalar aliases, core
   collection shapes, `opt`, `result`, `types`, `meta`, and foundational
   abilities.
-- `k1lib/core/core.k1`: assertions, printing, IO/sys/file helpers, numeric
+- `modules/core/core.k1`: assertions, printing, IO/sys/file helpers, numeric
   printing/comparison, and runtime support hooks.
-- `k1lib/core/mem.k1`: allocation, zeroing, bitcast, and raw memory helpers.
-- `k1lib/core/list.k1`, `buffer.k1`, `span.k1`, `string.k1`: primary
+- `modules/core/mem.k1`: allocation, zeroing, bitcast, and raw memory helpers.
+- `modules/core/list.k1`, `buffer.k1`, `span.k1`, `string.k1`: primary
   collection/string APIs.
-- `k1lib/core/range.k1`: `range[t]`, the `rangeable` ability (`0.until(n)`), and
+- `modules/core/range.k1`: `range[t]`, the `rangeable` ability (`0.until(n)`), and
   its iterator/iterable impls.
-- `k1lib/core/opt.k1`: option helpers like `some`, `none`, and unwrap-related
+- `modules/core/opt.k1`: option helpers like `some`, `none`, and unwrap-related
   behavior.
-- `k1lib/core/types.k1`: type reflection helpers, `any`, and layout assertions.
-- `k1lib/core/meta.k1`: metaprogramming helpers.
-- `k1lib/core/fix-list.k1`, `spill-list.k1`, `string-builder.k1`, `arena.k1`,
+- `modules/core/types.k1`: type reflection helpers, `any`, and layout assertions.
+- `modules/core/meta.k1`: metaprogramming helpers.
+- `modules/core/fix-list.k1`, `spill-list.k1`, `string-builder.k1`, `arena.k1`,
   `bitwise.k1`: core utility types/abilities.
-- `k1lib/core/ffc.h.k1` and `k1lib/core/libs/`: C runtime support, fast-float
+- `modules/core/ffc.h.k1` and `modules/core/libs/`: C runtime support, fast-float
   bridge, `k1rt.c`, and static/shared runtime libraries.
-- `k1lib/std/bitfield.k1`: metaprogrammed bitfield generation.
-- `k1lib/std/hash.k1`: the `hash` ability, `map`, and `set`.
-- `k1lib/std/json.k1`: JSON parser/model.
-- `k1lib/std/thread.k1`: pthread-backed threading helpers.
-- `k1lib/std/time.k1`: time helpers.
+- `modules/libuv/`: libuv wrapper module (vendored release source in vendor/,
+  cmake setup-built libs/libuv.a, bindgen-generated uv/net bindings in
+  generated/, uv_ext abilities).
+- `modules/http/`: http framework module (dep on libuv; vendored llhttp C in
+  vendor/, setup-built libs/libllhttp.a; response/routing/sse/task/work).
+- `modules/std/bitfield.k1`: metaprogrammed bitfield generation.
+- `modules/std/hash.k1`: the `hash` ability, `map`, and `set`.
+- `modules/std/json.k1`: JSON parser/model.
+- `modules/std/thread.k1`: pthread-backed threading helpers.
+- `modules/std/time.k1`: time helpers.
 
 ## Generated And Noisy Files
 

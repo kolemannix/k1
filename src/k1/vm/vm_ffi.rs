@@ -172,7 +172,7 @@ fn prep_ffi_cif(
 fn scalar_to_ffi_type(st: ScalarType) -> libffi::low::ffi_type {
     unsafe {
         match st {
-            ScalarType::U8 => types::uint8,
+            ScalarType::U8 | ScalarType::Char | ScalarType::Bool => types::uint8,
             ScalarType::U16 => types::uint16,
             ScalarType::U32 => types::uint32,
             ScalarType::U64 => types::uint64,

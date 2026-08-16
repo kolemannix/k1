@@ -1,5 +1,4 @@
 fn test(): i32 {
-  let context alloc-mode: alloc-mode = :tmp
   let core-args: span[string] = [
     "k1bindgen",
     "-lib-name",     "testlib",

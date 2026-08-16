@@ -1,0 +1,248 @@
+// The runtime side of the ns(reload) feature
+ns reload {
+
+  use core/posix
+
+  type load-error = either {
+    no-descriptor({ ns-path: heap-string }),
+    dlopen-failed({ path: heap-string, message: heap-string }),
+    symbol-missing({ symbol: heap-string, path: heap-string }),
+    api-changed({ ns-path: heap-string }),
+  }
+
+  impl print for load-error {
+    fn print-to[w: writer](self, w) {
+      self is {
+        :no-descriptor d -> w.write("no reload descriptor for ${d.ns-path.raw()}"),
+        :dlopen-failed d -> w.write("dlopen of ${d.path.raw()} failed: ${d.message.raw()}"),
+        :symbol-missing s -> w.write("${s.path.raw()} does not export ${s.symbol.raw()}"),
+        :api-changed a -> w.write("restart required: api of ${a.ns-path.raw()} changed"),
+      }
+    }
+  }
+
+  type descriptor = {
+    dylib-file-name: ptr,
+    api-hash: u64,
+    version: *mut u64,
+    entry-count: u64,
+    entries: ptr,
+  }
+  type entry = { symbol: ptr, fn-addr: *mut ptr }
+
+  // A sloppy helper since we lack this in std
+  fn dir-of(path: string): string {
+    let i = path.len()
+    while i > 0 {
+      if path.get(i - 1) == '/' return path.slice(0, i - 1)
+      i = i - 1
+    }
+    "."
+  }
+
+  let(mutable) load-count: u64 = 0
+
+  // Serializes swaps: a watch() thread and a manual load() may race, and
+  // interleaved fn-addr stores would mix two versions' fns
+  let(mutable) load-lock: thread/sleep-poll-mutex = thread/sleep-poll-mutex/new()
+
+  // The host's descriptor for a reloadable ns, or :none if the program has no
+  // such ns; the pointee is host-static and lives forever
+  fn find-descriptor(ns-path: string): ?*descriptor {
+    let self-handle = posix/dlopen(ptr/null, posix/RTLD_NOW)
+    let raw = posix/dlsym(self-handle, "__k1_reload_ns_${ns-path}".to-c-tmp().ptr)
+    if raw.is-null() :none else :some(raw.r[descriptor])
+  }
+
+  fn artifact-path(descriptor: *descriptor): string {
+    "${dir-of(sys/exe-path())}/${string/wrap-c(descriptor.dylib-file-name)}"
+  }
+
+  fn load-ns(ns-path: string): result[empty, load-error] {
+    load-lock.lock()
+    defer load-lock.unlock()
+    let descriptor = find-descriptor(ns-path) is {
+      :some d -> d,
+      :none -> return :err :no-descriptor .{ ns-path = heap-string/cloned(ns-path) },
+    }
+
+    let dylib-path = artifact-path(descriptor)
+    if not files/exists(dylib-path) {
+      return :err :dlopen-failed .{
+        path = heap-string/cloned(dylib-path),
+        message = heap-string/cloned("artifact missing"),
+      }
+    }
+
+    // Loaders cache images by path, so we load through a unique temp copy
+    let n = atomic/fetch-add(load-count.&, 1, :seq-cst)
+    let temp-path = "${dylib-path}.load-${n}"
+    files/write-entire-file(temp-path, files/read-to-string(dylib-path))
+    let handle = posix/dlopen(temp-path.to-c-tmp().ptr, posix/RTLD_NOW | posix/RTLD_LOCAL)
+    posix/unlink(temp-path.to-c-tmp().ptr)
+    if handle.is-null() {
+      let e = posix/dlerror()
+      let message = if e.is-null() "unknown dlopen failure" else string/wrap-c(e)
+      return :err :dlopen-failed .{
+        path = heap-string/cloned(dylib-path),
+        message = heap-string/cloned(message),
+      }
+    }
+
+    let dylib_hash_symbol = "__k1_reload_hash_${ns-path}"
+    let hash-raw = posix/dlsym(handle, dylib_hash_symbol.to-c-tmp().ptr)
+    if hash-raw.is-null() {
+      return :err :symbol-missing .{
+        symbol = heap-string/cloned(dylib_hash_symbol),
+        path = heap-string/cloned(dylib-path),
+      }
+    }
+    if hash-raw.r[u64].* != descriptor.api-hash {
+      return :err :api-changed .{ ns-path = heap-string/cloned(ns-path) }
+    }
+
+    // Resolve every fn before patching anything: a load either fully swaps
+    // or changes nothing. Old images are never dlclosed; in-flight call
+    // trees drain in their own version.
+    let entries = span/wrap-raw[entry](descriptor.entries, descriptor.entry-count.as[size])
+    let addrs = list/with-capacity[ptr](entries.len())
+    for e in entries {
+      let addr = posix/dlsym(handle, e.symbol)
+      if addr.is-null() {
+        return :err :symbol-missing .{
+          symbol = heap-string/cloned(string/wrap-c(e.symbol)),
+          path = heap-string/cloned(dylib-path),
+        }
+      }
+      addrs.push(addr)
+    }
+    for e in entries {
+      atomic/store(e.fn-addr, addrs.get(it-index), :release)
+    }
+    let version = atomic/fetch-add(descriptor.version, 1, :seq-cst) + 1
+    eprintln("reload: ${ns-path} swapped to v${version} (${descriptor.entry-count} fns)")
+    :ok
+  }
+
+  // 0 until the first successful load
+  fn ns-version(ns-path: string): u64 {
+    find-descriptor(ns-path) is {
+      :some d -> atomic/load(d.version, :acquire),
+      :none -> 0,
+    }
+  }
+
+  type pending-load = {
+    state: u8,
+    error: load-error,
+  }
+
+  ns for pending-load {
+    fn poll(self: *pending-load): ?result[empty, load-error] {
+      let state = atomic/load(self.state.&, :acquire)
+      if state == 0 return :none
+      if state == 1 return :some(:ok)
+      :some(:err self.error)
+    }
+  }
+
+  type async-load = { ns-path: string, cell: *mut pending-load }
+
+  fn load-ns-worker(input: *mut async-load): ptr {
+    let cell = input.cell
+    load-ns(input.ns-path) is {
+      :ok -> {
+        heap.free-t(input)
+        atomic/store(cell.state.&, 1: u8, :release)
+      },
+      :err e -> {
+        eprintln("reload of ${input.ns-path} failed: ${e}")
+        cell.error = e
+        heap.free-t(input)
+        atomic/store(cell.state.&, 2: u8, :release)
+      }
+    }
+    ptr/null
+  }
+
+  fn load-ns-async(ns-path: string): *pending-load {
+    // zeroed memory is a valid pending-load: state 0, :no-descriptor with an
+    // empty ns-path
+    let cell = heap.alloc-t[pending-load]()
+    thread/start-detached(load-ns-worker, heap.new(.{ ns-path = ns-path, cell = cell }: async-load))
+    cell
+  }
+
+  // 0 doubles as the "missing" sentinel
+  fn artifact-hash(path: string): u64 {
+    if not files/exists(path) return 0
+    let h = files/read-to-string(path).hash()
+    if h == 0 1 else h
+  }
+
+  type watch-input = { ns-path: string }
+
+  fn watch-ns-worker(input: *mut watch-input): ptr {
+    let ns-path = input.ns-path
+    heap.free-t(input)
+    let descriptor = find-descriptor(ns-path) is {
+      :some d -> d,
+      :none -> {
+        eprintln("reload watch: no descriptor for ${ns-path}")
+        return ptr/null
+      },
+    }
+    let artifact = artifact-path(descriptor)
+
+    // Watch the directory, not the artifact: replacing the file swaps its
+    // inode out from under a file watch
+    let w = watch/create() is {
+      :ok w -> w,
+      :err e -> {
+        eprintln("reload watch of ${ns-path}: $e")
+        return ptr/null
+      },
+    }
+    w.add(dir-of(artifact)) is {
+      :ok -> .{},
+      :err e -> {
+        eprintln("reload watch of ${ns-path}: $e")
+        return ptr/null
+      },
+    }
+
+    let last = artifact-hash(artifact)
+    loop {
+      w.wait() is {
+        :ok _ -> .{},
+        :err e -> {
+          eprintln("reload watch of ${ns-path}: $e")
+          return ptr/null
+        },
+      }
+      // Directory events fire for every entry (.o files, the linker's partial
+      // writes); coalesce the burst, then only load actually-new bytes
+      thread/sleep-ms(50)
+      let h = artifact-hash(artifact)
+      if h != 0 and h != last {
+        // A failed load keeps the current version; don't retry the same bytes
+        last = h
+        load-ns(ns-path) is {
+          :ok -> .{},
+          :err e -> eprintln("reload of ${ns-path} failed: ${e}"),
+        }
+      }
+    }
+  }
+
+  // The dev mode: load now if never loaded, then keep the ns current with its
+  // artifact; every change runs the same gated load, failures log and keep
+  // the running version. Rebuilding the artifact is someone else's job.
+  fn watch-ns(ns-path: string): result[empty, load-error] {
+    if ns-version(ns-path) == 0 {
+      load-ns(ns-path).try
+    }
+    thread/start-detached(watch-ns-worker, heap.new(.{ ns-path = ns-path }: watch-input))
+    :ok
+  }
+}

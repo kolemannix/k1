@@ -1,0 +1,62 @@
+ns sys
+
+#if k1/os-macos fn(extern("arc4random_uniform")) arc4random_uniform(upper-bound: u32): u32
+#if k1/os-macos fn(extern("_NSGetExecutablePath")) _NSGetExecutablePath(buf: ptr, bufsize: ptr): c-int
+
+fn exe-path(): string {
+  k1/os #is {
+    :macos -> {
+      let buf = buffer/allocate[u8](4096)
+      let cap-buf = buffer/allocate[u32](1)
+      cap-buf.get-ref-unchecked(0).* = 4096
+      if _NSGetExecutablePath(buf.data.as[ptr], cap-buf.data.as[ptr]) != 0 {
+        crash("exe-path: buffer too small")
+      }
+      string/wrap-c(buf.data.as[ptr])
+    },
+    :linux -> {
+      let buf = buffer/allocate[u8](4096)
+      let n = posix/readlink("/proc/self/exe".to-c-tmp().ptr, buf.data.as[ptr], 4096)
+      if n < 0 crash("exe-path: readlink /proc/self/exe failed")
+      buf.len = n.as[size]
+      string/wrap-byte-buffer(buf)
+    },
+    :wasm -> #static crash("wasm exe-path unimpl")
+  }
+}
+
+fn random(upper-bound: u32): u32 {
+  k1/os #is {
+    :macos -> arc4random_uniform(upper-bound),
+    :linux -> crash("linux 'random' unimpl"),
+    :wasm -> #static crash("wasm 'random' unimpl")
+  }
+}
+
+fn parse-main-args(arg-count: c-int, args: ptr): span[string] {
+  let buf = buffer/wrap-raw[ptr](
+    count = arg-count.as[size],
+    ptr = args
+  )
+  let strings = list/from-mapping(buf, fn cstr. string/wrap-c(cstr))
+  strings.as-span()
+}
+
+fn read-line(max-length-bytes: size): result[string, string] {
+  let buffer = buffer/allocate[byte](max-length-bytes)
+  let bytes-read: i64 = posix/read(0, buffer.data.as[ptr], buffer.len.as[c-sizet])
+
+  if bytes-read < 0 {
+    return :err "Failed to read line"
+  }
+  if bytes-read == 0 {
+    return :err "EOF"
+  }
+
+  // The last line before EOF may not be newline-terminated
+  let length: size = if buffer.get(bytes-read - 1) == '\n'.as[u8] bytes-read - 1 else bytes-read
+  buffer.len = length
+
+  let result = string/wrap-byte-buffer(buffer)
+  :ok result
+}

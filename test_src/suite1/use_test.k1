@@ -7,7 +7,7 @@ use core/libc/files/SEEK_END as SEEKEND
 
 
 ns foo {
-  type alias intalias = int
+  type(alias) intalias = int
   fn get-one(): int { 1 }
 }
 // Use a type alias, then reference it in a type definition

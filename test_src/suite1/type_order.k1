@@ -1,8 +1,8 @@
 ns type_order
 
 // Concession: for now, aliases depend on declaration order again
-type alias point = { x: int, y: int }
-type alias point-list = list[point]
+type(alias) point = { x: int, y: int }
+type(alias) point-list = list[point]
 
 ability to-point {
   fn to-point(self): point

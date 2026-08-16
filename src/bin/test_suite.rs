@@ -71,9 +71,18 @@ impl TestExpectation {
 }
 
 fn get_test_expectation(test_file: &Path) -> TestExpectation {
-    let path = test_file.canonicalize().unwrap();
+    let mut path = test_file.canonicalize().unwrap();
     if path.is_dir() {
-        return TestExpectation::ExitCode { code: 0, message: None };
+        let dir_name = path.file_name().unwrap().to_str().unwrap();
+        let module_root = path.join("module.k1");
+        let named_root = path.join(format!("{dir_name}.k1"));
+        if module_root.is_file() {
+            path = module_root;
+        } else if named_root.is_file() {
+            path = named_root;
+        } else {
+            return TestExpectation::ExitCode { code: 0, message: None };
+        }
     }
     let src = std::fs::read_to_string(path).expect("could not read source file for test {}");
 
@@ -84,20 +93,20 @@ fn get_test_expectation(test_file: &Path) -> TestExpectation {
     let exit_code_prefix = "//exitcode: ";
     let abort_msg_prefix = "//abortmsg: ";
     if last_line.starts_with(error_message_prefix) {
-        let expected_error: String = last_line.chars().skip(error_message_prefix.len()).collect();
+        let expected_error: String = last_line[error_message_prefix.len()..].to_string();
         TestExpectation::CompileErrorMessage { message: expected_error }
     } else if last_line.starts_with(exit_code_prefix) {
-        let s: String = last_line.chars().skip(exit_code_prefix.len()).collect();
-        let exit_code_str: String = s.chars().take_while(|c| !c.is_whitespace()).collect();
+        let s = &last_line[exit_code_prefix.len()..];
+        let end = s.find(char::is_whitespace).unwrap_or(s.len());
+        let exit_code_str = &s[..end];
         let as_i32: i32 = exit_code_str.parse().unwrap();
-        let message: String =
-            s.chars().skip(exit_code_str.len()).skip_while(|c| c.is_whitespace()).collect();
+        let message: String = s[end..].trim_start().to_string();
         TestExpectation::ExitCode {
             code: as_i32,
             message: if message.is_empty() { None } else { Some(message) },
         }
     } else if last_line.starts_with(abort_msg_prefix) {
-        let expected_error: String = last_line.chars().skip(abort_msg_prefix.len()).collect();
+        let expected_error: String = last_line[abort_msg_prefix.len()..].to_string();
         TestExpectation::AbortErrorMessage { message: expected_error }
     } else {
         TestExpectation::ExitCode { code: 0, message: None }
@@ -119,6 +128,9 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         target: None,
         chatty: false,
         optimize_ir: true,
+        cache: false,
+        is_setup_program: false,
+        k1_home_override: None,
         command: Command::Build { file: path.as_ref().to_owned() },
     };
     let compile_result = compiler::compile_program(&args);
@@ -126,24 +138,28 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
     match compile_result {
         Err(CompileProgramError::TyperFailure(module)) => {
             let messages = module.messages.borrow();
-            let Some(err) = messages.iter().find(|e| e.level == MessageLevel::Error) else {
-                if let Some(parse_error) = module.ast.errors.first() {
-                    module
-                        .write_error(
-                            &mut std::io::stderr(),
-                            &K1Message {
-                                message: module.ast.idents.intern(parse_error.message()),
-                                span: parse_error.span(),
-                                error_kind: ErrorKind::ParseError,
-                                level: MessageLevel::Error,
-                            },
-                            false,
-                        )
-                        .unwrap();
-                    bail!("{filename}: Failed parsing: {}", parse_error)
-                } else {
-                    bail!("{filename}: Failed but had no errors")
+            if let Some(parse_error) = module.ast.errors.first() {
+                if let TestExpectation::CompileErrorMessage { message } = &expectation {
+                    if parse_error.message().contains(message.as_str()) {
+                        return Ok(());
+                    }
                 }
+                module
+                    .write_error(
+                        &mut std::io::stderr(),
+                        &K1Message {
+                            message: module.ast.idents.intern(parse_error.message()),
+                            span: parse_error.span(),
+                            error_kind: ErrorKind::ParseError,
+                            level: MessageLevel::Error,
+                        },
+                        false,
+                    )
+                    .unwrap();
+                bail!("{filename}: Failed parsing: {}", parse_error)
+            }
+            let Some(err) = messages.iter().find(|e| e.level == MessageLevel::Error) else {
+                bail!("{filename}: Failed but had no errors")
             };
             match expectation {
                 TestExpectation::CompileErrorMessage { message } => {
@@ -199,10 +215,10 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                         }
                     }
                 } else {
-                    let mut run_cmd = std::process::Command::new(format!(
-                        "{}/{}",
-                        codegen.k1.config.out_dir.display(),
-                        name
+                    let mut run_cmd = std::process::Command::new(k1::kpath::join_buf(
+                        &codegen.k1.ast.idents,
+                        codegen.k1.config.out_dir,
+                        name.as_str(),
                     ));
                     let run_result = run_cmd.output();
                     match run_result {

@@ -1,0 +1,36 @@
+ns abi-odd-size-struct
+
+type inner = either { first(u8), second(u8), third }
+type act = either { wrap(inner), bare, other }
+type odd = { x: i32, y: i32, act: act }
+
+fn make(x: i32, a: act): odd {
+  .{ x, y = x * 2, act = a }
+}
+
+fn act-tag(o: odd): u64 {
+  o.act.tag
+}
+
+fn test() {
+  let items: list[odd] = list/with-capacity(8)
+  items.push(make(1, :wrap(:first(0))))
+  items.push(make(2, :wrap(:third)))
+  items.push(make(3, :bare))
+  items.push(make(4, :other))
+
+  assert-equals(items.get(0).act.tag, 0)
+  assert-equals(items.get(1).act.tag, 0)
+  assert-equals(items.get(2).act.tag, 1)
+  assert-equals(items.get(3).act.tag, 2)
+
+  let n: u64 = 0
+  for o in items {
+    n = n * 10 + act-tag(o)
+  }
+  assert-equals(n, 12)
+
+  assert(items.get(1).act is :wrap(:third))
+  require items.get(0).act is :wrap(i) else crash("expected wrap")
+  assert(i is :first(0))
+}

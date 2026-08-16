@@ -1,0 +1,3 @@
+let cfg: { backlog: u32 } = k1/module-params(.{ backlog = 128 })
+
+fn backlog(): u32 { cfg.backlog }

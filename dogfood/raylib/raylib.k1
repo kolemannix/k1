@@ -1,0 +1,135 @@
+// Live-reload demo. The host owns the window, the clock, and the orbs; every
+// pixel drawn per frame comes from ns(reload) scene. While the app runs:
+//   1. edit scene below (colors, satellite count, motion, anything)
+//   2. k1 build dogfood/raylib/raylib.k1    -- rewrites .k1-out/raylib.scene.dylib
+//   3. press R in the window
+// The orbs and clock survive the swap. Click to spawn an orb.
+
+fn module(): k1/module {
+
+  let m = k1/module/new()
+  m.lib("raylib", :static)
+  for ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"] {
+    m.link-args(["-framework", it])
+  }
+  m
+}
+
+ns(lib("raylib")) raylib {
+  type color = { r: u8, g: u8, b: u8, a: u8 }
+
+  fn(extern("InitWindow")) init(width: i32, height: i32, name: ptr)
+  fn(extern("CloseWindow")) close-window()
+  fn(extern("WindowShouldClose")) window-should-close(): bool
+
+  fn(extern("BeginDrawing")) begin-drawing()
+  fn(extern("EndDrawing")) end-drawing()
+  fn(extern("ClearBackground")) clear-background(color: color)
+
+  fn(extern("DrawText")) draw-text(text: ptr, pos-x: i32, pos-y: i32, font-size: i32, color: color)
+  fn(extern("DrawCircle")) draw-circle(center-x: i32, center-y: i32, radius: f32, color: color)
+  fn(extern("DrawLine")) draw-line(start-x: i32, start-y: i32, end-x: i32, end-y: i32, color: color)
+
+  fn(extern("SetTargetFPS")) set-target-fps(fps: i32)
+  fn(extern("GetFPS")) get-fps(): i32
+  fn(extern("GetTime")) get-time(): f64
+
+  fn(extern("IsKeyPressed")) is-key-pressed(key: i32): bool
+  fn(extern("IsMouseButtonPressed")) is-mouse-button-pressed(button: i32): bool
+  fn(extern("GetMouseX")) get-mouse-x(): i32
+  fn(extern("GetMouseY")) get-mouse-y(): i32
+}
+
+ns libm {
+  fn(extern("sinf")) sin(x: f32): f32
+  fn(extern("cosf")) cos(x: f32): f32
+}
+
+let KEY-R: i32 = 82
+let MOUSE-LEFT: i32 = 0
+
+type orb = { x: i32, y: i32, born: f64 }
+
+use raylib/draw-text
+use raylib/draw-circle
+use raylib/draw-line
+use raylib/clear-background
+
+let YELLOW: raylib/color = .{ r = 180, g = 150, b = 0, a = 255 }
+let PINK: raylib/color   = .{ r = 255, g = 109, b = 194, a = 255 }
+let PURPLE: raylib/color = .{ r = 200, g = 122, b = 255, a = 255 }
+let CYAN: raylib/color   = .{ r = 109, g = 220, b = 255, a = 255 }
+let INK: raylib/color    = .{ r = 18,  g = 18,  b = 26,  a = 255 }
+let FAINT: raylib/color  = .{ r = 60,  g = 60,  b = 80,  a = 255 }
+
+ns(reload) scene {
+
+  fn palette(i: u64): raylib/color {
+    if i % 3 == 0 YELLOW
+    else if i % 3 == 1 PURPLE
+    else CYAN
+  }
+
+  fn draw(t: f64, orbs: *list[orb], reloads: u64) {
+    clear-background(INK)
+
+    for o in orbs {
+      let color = palette(it-index.as[u64])
+      let age = (t - o.born).as[f32]
+
+      let sats = 9
+      for k in 0.until(sats) {
+        let phase = age * 1.5 + k.as[f32] * (6.2832 / sats.as[f32])
+        let dist: f32 = 44.0 + 10.0 * libm/sin(age * 2.0 + k.as[f32])
+        let sx = o.x + (dist * libm/cos(phase)).as[i32]
+        let sy = o.y + (dist * libm/sin(phase)).as[i32]
+        draw-line(o.x, o.y, sx, sy, FAINT)
+        draw-circle(sx, sy, 5.0, color)
+      }
+
+      let pulse: f32 = 16.0 + 5.0 * libm/sin(age * 3.0)
+      draw-circle(o.x, o.y, pulse, color)
+    }
+
+    let fps = raylib/get-fps()
+    draw-text("orbs: ${orbs.len()}   reloads: $reloads   fps: $fps".to-c().ptr, 16, 16, 20, PURPLE)
+    draw-text("click: spawn orb    R: hot-swap scene (edit, rebuild, press R)".to-c().ptr, 16, 522, 20, FAINT)
+  }
+}
+
+fn main(): i32 {
+  let perm = core/arena/init-default()
+  let orbs: list[orb] = list/with-capacity-in(perm, 256)
+  orbs.push-in(perm, .{ x = 450, y = 280, born = 0.0 })
+
+  raylib/init(900, 560, "k1 ns(reload)".to-c-tmp().ptr)
+  raylib/set-target-fps(60)
+
+
+  scene/watch()
+  // if scene/load() is :err e {
+  //   crash("load scene lib failed $e")
+  // }
+  let reloads: u64 = 0
+
+  let frame = core/arena/init-default()
+  mem/push-arena(frame)
+  while not raylib/window-should-close() {
+    let t = raylib/get-time()
+    if raylib/is-mouse-button-pressed(MOUSE-LEFT) {
+      orbs.push-in(perm, .{ x = raylib/get-mouse-x(), y = raylib/get-mouse-y(), born = t })
+    }
+    if raylib/is-key-pressed(KEY-R) {
+      scene/load-async()
+      reloads = reloads + 1
+    }
+
+    raylib/begin-drawing()
+    scene/draw(t, orbs.&, reloads)
+    raylib/end-drawing()
+    frame.reset(false)
+  }
+
+  raylib/close-window()
+  0
+}

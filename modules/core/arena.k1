@@ -1,0 +1,219 @@
+// Copyright (c) 2025 kni
+// All rights reserved.
+
+// The bump window (base-ptr/cur-addr/end-addr) points into the current
+// chunk. The first chunk holds this header and is where reset restores the
+// window; chunks acquired by growth are chained through extra-chunks.
+// Field order is mirrored in the compiler (vm.rs k1_types::Arena).
+type arena = {
+  base-ptr: ptr,
+  cur-addr: ptr,
+  end-addr: ptr,
+  first-base: ptr,
+  first-end: ptr,
+  extra-chunks: ptr,
+  // Hard limit, no chaining
+  fixed: bool,
+  name: string,
+}
+
+// At the start of each chunk acquired after the first
+type arena-chunk = { region: platform/memory/region, next: ptr }
+
+ns for arena {
+  let kb: size = 1024
+  let mb: size = 1048576
+  let gb: size = 1073741824
+
+  fn used-bytes(self: *arena): size {
+    self.cur-addr.diff(self.base-ptr)
+  }
+
+  fn set-name(self: *arena, name: string) { self.name = name }
+
+  fn first-region(self: *arena): platform/memory/region {
+    let base = self.first-base.sub-bytes(types/stride[arena])
+    .{ base, len = self.first-end.diff(base) }
+  }
+
+  fn store-header(region: platform/memory/region): *arena {
+    assert(region.len >= types/stride[arena] * 2)
+    let memory-start = region.base.add-bytes(types/stride[arena])
+    let region-end = region.base.add-bytes(region.len)
+    let arena: *arena = region.base.rw[arena]
+    arena.* = .{
+      base-ptr = memory-start,
+      cur-addr = memory-start,
+      end-addr = region-end,
+      first-base = memory-start,
+      first-end = region-end,
+      extra-chunks = ptr/null,
+      fixed = false,
+      name = "",
+    }
+    arena
+  }
+
+  fn init(region-size: size): *arena {
+    store-header(platform/memory/acquire(region-size))
+  }
+
+  fn init-fixed(region-size: size): *arena {
+    let a = init(region-size)
+    a.fixed = true
+    a
+  }
+
+  fn init-default(): *arena {
+    init(1 * gb)
+  }
+
+  fn _release-extra-chunks(self: *arena) {
+    let chunk = self.extra-chunks
+    while not chunk.is-null() {
+      let record = chunk.rw[arena-chunk]
+      let next = record.next
+      platform/memory/release(record.region)
+      chunk = next
+    }
+    self.extra-chunks = ptr/null
+  }
+
+  fn release(self: *arena) {
+    self._release-extra-chunks()
+    platform/memory/release(self.first-region())
+  }
+
+  fn poison(self: *arena, count: size) {
+    let available = self.end-addr.diff(self.cur-addr)
+    let n = if count > available available else count
+    mem/set(dst = self.cur-addr, value = 0xCD, count = n)
+  }
+
+  fn reset(self: *arena, clear: bool) {
+    let chained = not self.extra-chunks.is-null()
+    self._release-extra-chunks()
+    // If growth left the first chunk, its exact high-water mark is gone;
+    // clear the whole first window in that case
+    let used-bytes = if chained self.first-end.diff(self.first-base) else self.used-bytes()
+    self.base-ptr = self.first-base
+    self.cur-addr = self.first-base
+    self.end-addr = self.first-end
+
+    if clear {
+      mem/set(dst = self.base-ptr, value = 0, count = used-bytes)
+    }
+  }
+
+  let MIN_ALIGN: size = types/size[ptr]
+  fn alloc-layout(self: *arena, size: size, align: size): ptr {
+    let cursor = self.cur-addr
+
+    // cursor is already MIN_ALIGN-aligned, so only stricter
+    // alignments need extra padding before the returned allocation.
+    let prefix-padding =
+      if align > MIN_ALIGN ptr/get-align-offset(cursor.as[size], align) else 0
+
+    let raw-bump = size + prefix-padding
+
+    let available = self.end-addr.diff(cursor)
+    if available >= raw-bump {
+      // Keep the arena cursor MIN_ALIGN-aligned for the next allocation.
+      let offset-to-min-align = ptr/get-align-offset(raw-bump, MIN_ALIGN)
+      let total-bump = raw-bump + offset-to-min-align
+      let alloc-ptr = cursor.add-bytes(prefix-padding)
+      self.cur-addr = cursor.add-bytes(total-bump)
+      alloc-ptr
+    } else {
+      self._grow(size, align)
+      // The fresh chunk is sized to fit this allocation
+      self.alloc-layout(size, align)
+    }
+  }
+
+  fn _grow(self: *arena, size: size, align: size) {
+    // Static message: interpolation would allocate, possibly from this same
+    // exhausted arena when it is the ambient allocator
+    if self.fixed crash("fixed arena exhausted")
+    let overhead = types/stride[arena-chunk] + MIN_ALIGN + align
+    let needed = size + overhead
+    let first-len = self.first-end.diff(self.first-base)
+    let chunk-len = if needed > first-len needed else first-len
+    let region = platform/memory/acquire(chunk-len)
+    let record: *mut arena-chunk = region.base.rw[arena-chunk]
+    record.* = .{ region, next = self.extra-chunks }
+    self.extra-chunks = region.base
+    let data-start = region.base.add-bytes(types/stride[arena-chunk]).aligned(MIN_ALIGN)
+    self.base-ptr = data-start
+    self.cur-addr = data-start
+    self.end-addr = region.base.add-bytes(region.len)
+  }
+
+  fn push[t](self: *arena, t: t): *t {
+    let data-start = self.alloc-layout(types/size[t], types/align[t])
+
+    let ref: *t = data-start.rw()
+    ref.* = t
+    ref
+  }
+
+  fn push-span[t](self: *arena, ts: span[t]): buffer[t] {
+    let size = ts.buffer.size-bytes()
+    let align = types/align[t]
+    let base = self.alloc-layout(size, align)
+    let buffer: buffer[t] = buffer/wrap-raw[t](base, ts.len())
+    buffer/copy(src = ts.buffer, dst = buffer)
+    buffer
+  }
+
+  fn alloc-buffer[t](self: *arena, size): buffer[t] {
+    buffer/allocate-in[t, _](self, size)
+  }
+
+  fn push-string(self: *arena, s: string): string {
+    let data: buffer[char] = self.push-span(s.span())
+    string/wrap-buffer(data)
+  }
+
+  fn alloc-list[t](self: *arena, cap: size): list[t] {
+    list/with-capacity-in(self, cap)
+  }
+
+  fn try-realloc(self: *arena, old-ptr: ptr, old-size: size, new-size: size, align: size): ptr {
+    assert(new-size >= old-size)
+    let old-end-aligned = old-ptr.add-bytes(old-size).aligned(MIN_ALIGN)
+    let new-end-aligned = old-ptr.add-bytes(new-size).aligned(MIN_ALIGN)
+    if old-end-aligned == self.cur-addr and new-end-aligned <= self.end-addr {
+      // Grow in place
+      self.cur-addr = new-end-aligned
+      old-ptr
+    } else {
+      let new-allocation = self.alloc-layout(new-size, align)
+      mem/copy(dst = new-allocation, src = old-ptr, count = old-size)
+      new-allocation
+    }
+  }
+
+  fn mark(self: *arena): arena-mark {
+    .{ start = self.cur-addr }
+  }
+
+  fn pop-to-mark(self: *arena, arena-mark) {
+    assert(arena-mark.start >= self.base-ptr)
+    assert(arena-mark.start < self.end-addr)
+    assert(arena-mark.start <= self.cur-addr)
+    self.cur-addr = arena-mark.start
+  }
+
+}
+type arena-mark = { start: ptr }
+
+impl allocator for *arena {
+  fn alloc(self: *arena, size: size, align: size): ptr {
+    self.alloc-layout(size, align)
+  }
+  fn realloc(self: *arena, old-ptr: ptr, old-size: size, align: size, new-size: size): ptr {
+    self.try-realloc(old-ptr, old-size, new-size, align)
+  }
+  fn free(_self: *arena, _ptr: ptr, _size: size, _align: size) {}
+}

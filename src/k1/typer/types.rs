@@ -9,7 +9,7 @@ use crate::typer::scopes::*;
 
 use crate::parse::{ParsedId, StringId};
 
-use crate::{SV4, impl_copy_if_small, nz_u32_id, typer::*};
+use crate::{impl_copy_if_small, nz_u32_id, typer::*};
 
 nz_u32_id!(TypeId);
 
@@ -103,10 +103,10 @@ pub struct StructTypeField {
 }
 impl_copy_if_small!(12, StructTypeField);
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct GenericInstanceInfo {
     pub generic_parent: TypeId,
-    pub type_args: TypeIdSlice,
+    pub type_args: TypeArgs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -208,7 +208,7 @@ pub struct TypeParameter {
 }
 impl_copy_if_small!(24, TypeParameter);
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct FunctionTypeParameter {
     pub name: StringId,
     pub scope_id: ScopeId,
@@ -216,7 +216,7 @@ pub struct FunctionTypeParameter {
     pub function_type: TypeId,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct InferenceHoleType {
     pub index: u32,
     pub static_type: Option<TypeId>,
@@ -271,9 +271,9 @@ pub struct ScalarEnumType {
 
 impl SumType {}
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct GenericType {
-    pub params: MSlice<NameAndType, TypedProgram>,
+    pub params: TypeIdSlice,
     pub inner: TypeId,
 }
 
@@ -426,7 +426,7 @@ impl FunctionType {
 
 nz_u32_id!(LambdaTypeId);
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct LambdaType {
     pub function_type: TypeId,
     pub env_type: TypeId,
@@ -440,7 +440,7 @@ pub struct LambdaType {
     pub environment_struct: TypedExprId,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct LambdaObjectType {
     pub function_type: TypeId,
     pub parsed_id: ParsedId,
@@ -456,7 +456,7 @@ pub struct LambdaObjectType {
 #[derive(Clone, Copy)]
 pub struct AbilityObjectType {
     pub specialized_ability_id: AbilityId,
-    pub impl_arguments: MSlice<NameAndType, TypedProgram>,
+    pub impl_arguments: TypeIdSlice,
     pub struct_representation: TypeId,
 }
 
@@ -484,7 +484,7 @@ impl OpaqueType {
 }
 
 static_assert_size!(Type, 28);
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum Type {
     Char,
     Bool,
@@ -654,7 +654,7 @@ impl TypedProgram {
                         .getn(ao1.impl_arguments)
                         .iter()
                         .zip(self.mem.getn(ao2.impl_arguments))
-                        .all(|(a1, a2)| a1.name == a2.name && a1.type_id == a2.type_id)
+                        .all(|(a1, a2)| a1 == a2)
             }
             (Type::StaticValue(vt1), Type::StaticValue(vt2)) => vt1.value_id == vt2.value_id,
             (t1, t2) => {
@@ -753,8 +753,7 @@ impl TypedProgram {
             Type::AbilityObject(ao) => {
                 ao.specialized_ability_id.hash(state);
                 for arg in self.mem.getn(ao.impl_arguments) {
-                    arg.name.hash(state);
-                    arg.type_id.hash(state);
+                    arg.hash(state);
                 }
             }
             Type::StaticValue(svt) => {
@@ -980,36 +979,56 @@ impl Type {
 }
 
 #[derive(Default, Clone, Copy)]
-pub struct TypeVariableInfo {
-    pub inference_variable_count: u32,
+pub struct TypeInfo {
+    pub inference_hole_count: u32,
     pub type_parameter_count: u32,
     pub unresolved_static_count: u32,
+    pub is_zero_safe: bool,
 }
 
-impl TypeVariableInfo {
-    const EMPTY: TypeVariableInfo = TypeVariableInfo {
-        inference_variable_count: 0,
+impl TypeInfo {
+    const EMPTY: TypeInfo = TypeInfo {
+        inference_hole_count: 0,
         type_parameter_count: 0,
         unresolved_static_count: 0,
+        is_zero_safe: true,
     };
 
+    pub fn type_param() -> TypeInfo {
+        TypeInfo {
+            inference_hole_count: 0,
+            type_parameter_count: 1,
+            unresolved_static_count: 0,
+            is_zero_safe: true,
+        }
+    }
+
+    pub fn inference_hole() -> TypeInfo {
+        TypeInfo {
+            inference_hole_count: 1,
+            type_parameter_count: 0,
+            unresolved_static_count: 0,
+            is_zero_safe: true,
+        }
+    }
+
     pub fn is_abstract(&self) -> bool {
-        self.inference_variable_count > 0
+        self.inference_hole_count > 0
             || self.type_parameter_count > 0
             || self.unresolved_static_count > 0
     }
 
     fn add(self, other: &Self) -> Self {
         Self {
-            inference_variable_count: self.inference_variable_count
-                + other.inference_variable_count,
+            inference_hole_count: self.inference_hole_count + other.inference_hole_count,
             type_parameter_count: self.type_parameter_count + other.type_parameter_count,
             unresolved_static_count: self.unresolved_static_count + other.unresolved_static_count,
+            is_zero_safe: self.is_zero_safe && other.is_zero_safe,
         }
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct BuiltinTypes {
     pub empty: TypeId,
     pub bool: Option<TypeId>,
@@ -1024,6 +1043,8 @@ pub struct BuiltinTypes {
     pub code_builder: Option<TypeId>,
     pub dyn_lambda_obj: Option<TypeId>,
     pub source_location: Option<TypeId>,
+    pub k1_module: Option<TypeId>,
+    pub k1_setup_ctx: Option<TypeId>,
     pub ordering: Option<TypeId>,
     pub types_layout: Option<TypeId>,
     pub types_type_schema: Option<TypeId>,
@@ -1047,6 +1068,7 @@ impl BuiltinTypes {
         debug_assert!(self.code_chunk.is_some());
         debug_assert!(self.code_builder.is_some());
         debug_assert!(self.dyn_lambda_obj.is_some());
+        debug_assert!(self.k1_module.is_some());
         debug_assert!(self.types_layout.is_some());
         debug_assert!(self.types_type_schema.is_some());
         debug_assert!(self.types_int_kind.is_some());
@@ -1100,6 +1122,10 @@ pub enum ScalarType {
     F32 = 9,
     F64 = 10,
     Pointer = 11,
+    // u8-layout unsigned ints in every backend sense; separate tags so debug
+    // info can carry the right name and DWARF encoding
+    Char = 12,
+    Bool = 13,
 }
 
 impl ScalarType {
@@ -1120,6 +1146,8 @@ impl ScalarType {
             9 => Self::F32,
             10 => Self::F64,
             11 => Self::Pointer,
+            12 => Self::Char,
+            13 => Self::Bool,
             _ => panic!("Not a scalartype tag"),
         }
     }
@@ -1135,12 +1163,16 @@ impl ScalarType {
                 | ScalarType::U16
                 | ScalarType::U32
                 | ScalarType::U64
+                | ScalarType::Char
+                | ScalarType::Bool
         )
     }
 
     pub fn get_layout(&self) -> Layout {
         match self {
-            ScalarType::U8 | ScalarType::I8 => Layout::from_scalar_bits(8),
+            ScalarType::U8 | ScalarType::I8 | ScalarType::Char | ScalarType::Bool => {
+                Layout::from_scalar_bits(8)
+            }
             ScalarType::U16 | ScalarType::I16 => Layout::from_scalar_bits(16),
             ScalarType::U32 | ScalarType::I32 => Layout::from_scalar_bits(32),
             ScalarType::U64 | ScalarType::I64 => Layout::from_scalar_bits(64),
@@ -1152,7 +1184,9 @@ impl ScalarType {
 
     pub fn width(&self) -> NumericWidth {
         match self {
-            ScalarType::U8 | ScalarType::I8 => NumericWidth::B8,
+            ScalarType::U8 | ScalarType::I8 | ScalarType::Char | ScalarType::Bool => {
+                NumericWidth::B8
+            }
             ScalarType::U16 | ScalarType::I16 => NumericWidth::B16,
             ScalarType::U32 | ScalarType::I32 => NumericWidth::B32,
             ScalarType::U64 | ScalarType::I64 => NumericWidth::B64,
@@ -1198,7 +1232,6 @@ impl std::fmt::Debug for PhysicalType {
 
 impl PhysicalType {
     pub const EMPTY: PhysicalType = PhysicalType(0);
-    pub const U8: PhysicalType = PhysicalType(ScalarType::U8 as u32);
     pub const PTR: PhysicalType = PhysicalType(ScalarType::Pointer as u32);
 
     pub(crate) const MIN_AGG_ID: u32 = 16;
@@ -1215,7 +1248,7 @@ impl PhysicalType {
 
     pub const fn as_scalar(self) -> Option<ScalarType> {
         match self.0 {
-            1..=11 => Some(ScalarType::from_tag(self.0)),
+            1..=13 => Some(ScalarType::from_tag(self.0)),
             _ => None,
         }
     }
@@ -1233,8 +1266,8 @@ impl PhysicalType {
         self.0 as u8 == ScalarType::Pointer as u8
     }
 
-    pub const fn is_u8(self) -> bool {
-        self.0 as u8 == ScalarType::U8 as u8
+    pub const fn is_bool(self) -> bool {
+        self.0 as u8 == ScalarType::Bool as u8
     }
 
     pub const fn is_agg(self) -> bool {
@@ -1242,11 +1275,13 @@ impl PhysicalType {
     }
 
     pub const fn is_scalar(self) -> bool {
-        self.0 >= ScalarType::U8 as u32 && self.0 <= ScalarType::Pointer as u32
+        self.0 >= ScalarType::U8 as u32 && self.0 <= ScalarType::Bool as u32
     }
 
     pub const fn is_int(self) -> bool {
-        self.0 >= ScalarType::U8 as u32 && self.0 <= ScalarType::I64 as u32
+        (self.0 >= ScalarType::U8 as u32 && self.0 <= ScalarType::I64 as u32)
+            || self.0 == ScalarType::Char as u32
+            || self.0 == ScalarType::Bool as u32
     }
 
     pub fn is_empty(self) -> bool {
@@ -1263,7 +1298,7 @@ impl PhysicalType {
     pub fn as_enum(self) -> PhysicalTypeEnum {
         match self.0 {
             0 => PhysicalTypeEnum::Empty,
-            t @ 1..=11 => PhysicalTypeEnum::Scalar(ScalarType::from_tag(t)),
+            t @ 1..=13 => PhysicalTypeEnum::Scalar(ScalarType::from_tag(t)),
             agg_id => PhysicalTypeEnum::Agg(AggregateTypeId::from_u32(agg_id).unwrap()),
         }
     }
@@ -1407,12 +1442,14 @@ impl AggType {
 }
 
 nz_u32_id!(AggregateTypeId);
+#[derive(Clone, Copy)]
 pub struct AggregateTypeRecord {
     pub agg_type: AggType,
     pub origin_type_id: TypeId,
     pub layout: Layout,
 }
 
+#[derive(Clone, Copy)]
 pub struct TypeIdents {
     pub(crate) tag: StringId,
     pub(crate) payload: StringId,
@@ -1442,7 +1479,7 @@ impl TypedProgram {
         // pub type_variable_counts
         // pub instance_info
 
-        let variable_counts = self.count_type_variables(type_id);
+        let variable_counts = self.compute_type_info(type_id);
         self.type_variable_counts.add_expected_id(variable_counts, type_id);
 
         self.type_instance_info.add_expected_id(instance_info, type_id);
@@ -1468,7 +1505,7 @@ impl TypedProgram {
         *self.types.get_mut(id) = type_value;
         self.type_hashes.insert(hash, id);
 
-        let variable_counts = self.count_type_variables(id);
+        let variable_counts = self.compute_type_info(id);
         *self.type_variable_counts.get_mut(id) = variable_counts;
 
         if let Some(defn_info) = defn_info {
@@ -1501,7 +1538,7 @@ impl TypedProgram {
     pub fn reserve_type_id(&mut self) -> TypeId {
         let id = self.types.reserve_id();
         let id2 = self.type_instance_info.add_expected_id(None, id);
-        let id3 = self.type_variable_counts.add_expected_id(TypeVariableInfo::EMPTY, id);
+        let id3 = self.type_variable_counts.add_expected_id(TypeInfo::EMPTY, id);
         debug_assert_eq!(id, id2);
         debug_assert_eq!(id, id3);
         id
@@ -1510,14 +1547,10 @@ impl TypedProgram {
     /// Reserve the result id for an in-flight or deferred generic instantiation and register
     /// it in the specialization cache, so that a recursive mention of the same (generic, args)
     /// resolves to this id instead of recursing forever
-    pub fn reserve_instance_id(
-        &mut self,
-        generic_parent: TypeId,
-        type_args: TypeIdSlice,
-    ) -> TypeId {
+    pub fn reserve_instance_id(&mut self, generic_parent: TypeId, type_args: TypeArgs) -> TypeId {
         let id = self.reserve_type_id();
-        let mut counts = TypeVariableInfo::EMPTY;
-        for arg in self.mem.getn(type_args) {
+        let mut counts = TypeInfo::EMPTY;
+        for arg in type_args.as_slice(&self.mem) {
             counts = counts.add(self.type_variable_counts.get(*arg));
         }
         *self.type_variable_counts.get_mut(id) = counts;
@@ -1774,34 +1807,24 @@ impl TypedProgram {
         self.ast_ability_mapping.get(&parsed_ability_id).copied()
     }
 
-    pub fn get_type_variable_counts(&self, type_id: TypeId) -> TypeVariableInfo {
+    pub fn get_type_variable_counts(&self, type_id: TypeId) -> TypeInfo {
         *self.type_variable_counts.get(type_id)
     }
 
-    pub fn count_type_variables(&self, type_id: TypeId) -> TypeVariableInfo {
-        const EMPTY: TypeVariableInfo = TypeVariableInfo::EMPTY;
+    /// Computes 'supplementary' type info like type hole counts, zero-safeness, other flags
+    /// Prefer to add stuff here rather than creating a new traversal
+    pub fn compute_type_info(&self, type_id: TypeId) -> TypeInfo {
+        const EMPTY: TypeInfo = TypeInfo::EMPTY;
         debug!("count_type_variables of {} {}", type_id, self.types.get(type_id).kind_name());
 
         match self.types.get(type_id) {
-            Type::TypeParameter(_tp) => TypeVariableInfo {
-                type_parameter_count: 1,
-                inference_variable_count: 0,
-                unresolved_static_count: 0,
-            },
+            Type::TypeParameter(_tp) => TypeInfo::type_param(),
             Type::FunctionTypeParameter(ftp) => {
-                let base_info = TypeVariableInfo {
-                    type_parameter_count: 1,
-                    inference_variable_count: 0,
-                    unresolved_static_count: 0,
-                };
+                let base_info = TypeInfo::type_param();
                 let fn_info = self.type_variable_counts.get(ftp.function_type);
                 base_info.add(fn_info)
             }
-            Type::InferenceHole(_hole) => TypeVariableInfo {
-                type_parameter_count: 0,
-                inference_variable_count: 1,
-                unresolved_static_count: 0,
-            },
+            Type::InferenceHole(_hole) => TypeInfo::inference_hole(),
             Type::Char => EMPTY,
             Type::Integer(_) => EMPTY,
             Type::Float(_) => EMPTY,
@@ -1814,18 +1837,49 @@ impl TypedProgram {
                 }
                 result
             }
-            Type::Reference(refer) => *self.type_variable_counts.get(refer.inner_type),
+            Type::Reference(refer) => {
+                let mut counts = *self.type_variable_counts.get(refer.inner_type);
+                // References are nullable
+                counts.is_zero_safe = true;
+                counts
+            }
             Type::Sum(e) => {
                 let mut result = EMPTY;
+                let mut has_zero_variant = false;
                 for v in self.mem.getn(e.variants) {
+                    let valid_zero_variant = if v.tag_value.is_zero() {
+                        if let Some(payload) = v.payload {
+                            let payload_info = self.type_variable_counts.get(payload);
+                            payload_info.is_zero_safe
+                        } else {
+                            true
+                        }
+                    } else {
+                        false
+                    };
+                    if valid_zero_variant {
+                        has_zero_variant = true;
+                    }
+
                     if let Some(payload) = v.payload {
                         result = result.add(self.type_variable_counts.get(payload));
                     }
                 }
+                result.is_zero_safe = has_zero_variant;
                 result
             }
             Type::Opaque(_) => EMPTY,
-            Type::Enum(_) => EMPTY,
+            Type::Enum(enum_type) => {
+                let mut result = EMPTY;
+                let mut has_zero_member = false;
+                for member in self.mem.getn(enum_type.member_values) {
+                    if member.int_value.is_zero() {
+                        has_zero_member = true
+                    }
+                }
+                result.is_zero_safe = has_zero_member;
+                result
+            }
             Type::Never => EMPTY,
             // The real answer here would be, all the type variables on the RHS that aren't one of
             // the params. In other words, all FREE type variables
@@ -1836,9 +1890,14 @@ impl TypedProgram {
                     result = result.add(self.type_variable_counts.get(param.type_id))
                 }
                 result = result.add(self.type_variable_counts.get(fun.return_type));
+                result.is_zero_safe = true;
                 result
             }
-            Type::FunctionPointer(fp) => *self.type_variable_counts.get(fp.function_type_id),
+            Type::FunctionPointer(fp) => {
+                let mut result = *self.type_variable_counts.get(fp.function_type_id);
+                result.is_zero_safe = true;
+                result
+            }
             Type::Lambda(lambda_id) => {
                 let lambda = self.lambda_types.get(*lambda_id);
                 self.type_variable_counts
@@ -1846,24 +1905,27 @@ impl TypedProgram {
                     .add(self.type_variable_counts.get(lambda.env_type))
             }
             // But a lambda object is generic if its function is generic
-            Type::LambdaObject(co) => *self.type_variable_counts.get(co.function_type),
+            Type::LambdaObject(co) => {
+                let mut result = *self.type_variable_counts.get(co.function_type);
+                result.is_zero_safe = false;
+                result
+            }
             // An ability object is generic if any of its impl arguments are:
-            // dyn[source[t = t]] inside a generic fn must substitute at instantiation.
-            // Ability-side args are baked into the specialized ability id and are
-            // required to be concrete at dyn-type formation, so they contribute none.
             Type::AbilityObject(ao) => {
                 let mut result = EMPTY;
                 for arg in self.mem.getn(ao.impl_arguments) {
-                    result = result.add(self.type_variable_counts.get(arg.type_id));
+                    result = result.add(self.type_variable_counts.get(*arg));
                 }
+                result.is_zero_safe = false;
                 result
             }
             Type::StaticValue(svt) => {
                 let this = if svt.value_id.is_none() {
-                    TypeVariableInfo {
-                        inference_variable_count: 0,
+                    TypeInfo {
+                        inference_hole_count: 0,
                         type_parameter_count: 0,
                         unresolved_static_count: 1,
+                        is_zero_safe: true,
                     }
                 } else {
                     EMPTY
@@ -1874,9 +1936,12 @@ impl TypedProgram {
             Type::Array(arr) => {
                 // Arrays contain 2 types, the element type and the size type,
                 // which is usually a `static uword`, but can be a type parameter
-                self.type_variable_counts
+                let mut result = self
+                    .type_variable_counts
                     .get(arr.element_type)
-                    .add(self.type_variable_counts.get(arr.size_type))
+                    .add(self.type_variable_counts.get(arr.size_type));
+                result.is_zero_safe = true;
+                result
             }
             Type::Vector(vec) => self
                 .type_variable_counts
@@ -1913,7 +1978,8 @@ impl TypedProgram {
 
     pub fn compute_physical_type(&mut self, type_id: TypeId) -> PhysicalTypeResult {
         match self.types.get(type_id) {
-            Type::Char | Type::Bool => PhysicalTypeResult::Yes(PhysicalType::U8),
+            Type::Char => PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::Char)),
+            Type::Bool => PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::Bool)),
 
             Type::Integer(i) => {
                 let st = i.get_scalar_type();
@@ -2260,7 +2326,7 @@ impl TypedProgram {
     pub fn get_as_list_instance(&self, type_id: TypeId) -> Option<ListType> {
         self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == self.builtin_types.list() {
-                Some(ListType { element_type: *self.mem.get_nth(spec_info.type_args, 0) })
+                Some(ListType { element_type: spec_info.type_args.as_slice(&self.mem)[0] })
             } else {
                 None
             }
@@ -2270,7 +2336,7 @@ impl TypedProgram {
     pub fn get_as_buffer_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == self.builtin_types.buffer() {
-                Some(*self.mem.get_nth(spec_info.type_args, 0))
+                Some(spec_info.type_args.as_slice(&self.mem)[0])
             } else {
                 None
             }
@@ -2280,7 +2346,7 @@ impl TypedProgram {
     pub fn get_as_span_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == self.builtin_types.span() {
-                Some(*self.mem.get_nth(spec_info.type_args, 0))
+                Some(spec_info.type_args.as_slice(&self.mem)[0])
             } else {
                 None
             }
@@ -2290,11 +2356,11 @@ impl TypedProgram {
     pub fn get_as_container_instance(&self, type_id: TypeId) -> Option<(TypeId, ContainerKind)> {
         if let Some(info) = self.get_instance_info(type_id) {
             if info.generic_parent == self.builtin_types.list() {
-                Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::List))
+                Some((info.type_args.as_slice(&self.mem)[0], ContainerKind::List))
             } else if info.generic_parent == self.builtin_types.buffer() {
-                Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::Buffer))
+                Some((info.type_args.as_slice(&self.mem)[0], ContainerKind::Buffer))
             } else if info.generic_parent == self.builtin_types.span() {
-                Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::Span))
+                Some((info.type_args.as_slice(&self.mem)[0], ContainerKind::Span))
             } else {
                 None
             }
@@ -2318,26 +2384,35 @@ impl TypedProgram {
     pub fn get_as_opt_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == self.builtin_types.opt() {
-                Some(*self.mem.get_nth(spec_info.type_args, 0))
+                Some(spec_info.type_args.as_slice(&self.mem)[0])
             } else {
                 None
             }
         })
     }
 
-    pub fn get_specialization(&mut self, base: TypeId, args: TypeIdSlice) -> Option<TypeId> {
-        self.get_specialization_slice(base, self.mem.getn(args))
+    fn specialization_hash(base: TypeId, args: &[TypeId]) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = fxhash::FxHasher::default();
+        base.hash(&mut h);
+        args.hash(&mut h);
+        h.finish()
     }
 
-    pub fn get_specialization_slice(&mut self, base: TypeId, args: &[TypeId]) -> Option<TypeId> {
-        let key = (base, SV4::from_slice(args));
-        let result = *self.type_specializations.get(&key)?;
-        Some(result)
+    pub fn get_specialization(&mut self, base: TypeId, args: &[TypeId]) -> Option<TypeId> {
+        let hash = Self::specialization_hash(base, args);
+        self.type_specializations
+            .find(hash, |e| e.base == base && e.args.as_slice(&self.mem) == args)
+            .map(|e| e.specialized)
     }
 
-    pub fn insert_specialization(&mut self, base: TypeId, args: TypeIdSlice, specialized: TypeId) {
-        let key = (base, SV4::from_slice(self.mem.getn(args)));
-        self.type_specializations.insert(key, specialized);
+    pub fn insert_specialization(&mut self, base: TypeId, args: TypeArgs, specialized: TypeId) {
+        let hash = Self::specialization_hash(base, args.as_slice(&self.mem));
+        self.type_specializations.insert_unique(
+            hash,
+            TypeSpecialization { base, args, specialized },
+            |e| Self::specialization_hash(e.base, e.args.as_slice(&self.mem)),
+        );
     }
 
     pub fn pt_to_string(&self, t: PhysicalType) -> String {

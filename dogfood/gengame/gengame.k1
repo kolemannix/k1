@@ -430,7 +430,6 @@ fn close-scope(ctx: *mut expand-ctx, e: *mut expansion, d0: size, ndepth: size) 
 
 fn expand-toks(ctx: *mut expand-ctx, toks: span[token], self: span[token], self-d: u8, e: *mut expansion, depth: size, ndepth: size, floor: size, row: u8, base: size) {
   if depth > MAX-DEPTH { return }
-  if depth > 25 { println("deep depth=$depth ndepth=$ndepth row=$row toks=${toks.len()}") }
   let i: size = 0
   while i < toks.len() {
     if e.syms.len() >= MAX-EXPAND { return }
@@ -1721,9 +1720,6 @@ fn draw-plant-world(context g: *mut game)() {
   let tw = turtle-walk(target.&, lv.angle, frontier, gv.unfurl)
   let pw = turtle-walk(player.&, lv.angle, frontier, gv.unfurl)
   let ww = turtle-walk(work.&, lv.angle, frontier, gv.unfurl)
-  if sys/env("GENGAME_DBG").is-some() {
-    println("grow-t=${g.grow-t} pv=${g.preview-growth} cur=${gv.cur} kf=${gv.kf} unfurl=${gv.unfurl} psyms=${player.syms.len()} pbuds=${player.buds.len()} psegs=${pw.segs.len()} wsyms=${work.syms.len()} wsegs=${ww.segs.len()}")
-  }
   let b: bounds = .{ minx = 0.0, miny = 0.0, maxx = 0.0, maxy = 0.0 }
   if show-target { grow-bounds(b.&, tw.segs.&) }
   grow-bounds(b.&, pw.segs.&)
@@ -1888,7 +1884,6 @@ fn assert-solved(context g: *mut game)(want-score: size) {
   let full = lv.growth.as[size]
   let te = expand-target(lv, full)
   let pe = expand-player(full)
-  println("assert-solved ${lv.name} score=${score-of()} want=$want-score plen=${pe.syms.len()} tlen=${te.syms.len()}")
   assert(score-of() == want-score)
   assert(te.syms.&.as-span() == pe.syms.&.as-span())
   if level-recursive(lv) { assert(pe.capped) }
@@ -1896,13 +1891,10 @@ fn assert-solved(context g: *mut game)(want-score: size) {
 
 fn self-test(context g: *mut game)() {
   for li in 0.until(LEVELS.len()) {
-    println("self-test level $li")
     load-level(li)
     let lv = cur-level()
-    println("  loaded ${lv.name}")
     let alpha = world-alphabet(lv.world)
     let texp = expand-target(lv, lv.growth.as[size])
-    println("  texp len=${texp.syms.len()} buds=${texp.buds.len()}")
     let target = texp.syms
     assert(target.len() > 0)
     assert(target.len() < MAX-EXPAND)
@@ -1926,7 +1918,8 @@ fn self-test(context g: *mut game)() {
       }
     }
     if lv.world is :plant {
-      assert(turtle-walk(texp.&, lv.angle, 0, 1.0).segs.len() > 0)
+      let walk = turtle-walk(texp.&, lv.angle, 0, 1.0)
+      assert(walk.segs.len() > 0)
     }
   }
   load-level(0)
@@ -1982,7 +1975,8 @@ fn self-test(context g: *mut game)() {
   assert(g.out.get(0) is :mir)
   solve-rainbow()
   assert-solved(4)
-  assert(expand-player(4).shifts.len() == 4)
+  let rainbow-exp = expand-player(4)
+  assert(rainbow-exp.shifts.len() == 4)
   solve-wrapper()
   assert-solved(12)
   assert(g.out.get(0) is :callo(_))
@@ -1998,7 +1992,8 @@ fn self-test(context g: *mut game)() {
   solve-canon()
   assert-solved(20)
   assert(g.def-a.len() == 3)
-  assert(expand-player(4).syms.len() == 24)
+  let canon-exp = expand-player(4)
+  assert(canon-exp.syms.len() == 24)
   solve-stripes()
   assert-solved(4)
   solve-sunset()
@@ -2023,7 +2018,8 @@ fn self-test(context g: *mut game)() {
   assert-solved(6)
   solve-nesting()
   assert-solved(5)
-  assert(expand-target(cur-level(), 4).buds.len() == 1)
+  let nesting-exp = expand-target(cur-level(), 4)
+  assert(nesting-exp.buds.len() == 1)
   solve-steps()
   assert-solved(8)
   solve-staircase()
@@ -2049,10 +2045,12 @@ fn self-test(context g: *mut game)() {
   assert(branch-dim0(ow.&) == 1)
   solve-fork()
   assert-solved(9)
-  assert(expand-target(cur-level(), 1).buds.len() == 2)
+  let fork-exp = expand-target(cur-level(), 1)
+  assert(fork-exp.buds.len() == 2)
   solve-thicket()
   assert-solved(7)
-  assert(expand-target(cur-level(), 1).buds.len() == 2)
+  let thicket-exp = expand-target(cur-level(), 1)
+  assert(thicket-exp.buds.len() == 2)
   solve-reed()
   assert-solved(3)
   solve-coastline()
@@ -2060,7 +2058,8 @@ fn self-test(context g: *mut game)() {
   solve-blossom()
   assert-solved(10)
   let blossom-e = expand-player(4)
-  assert(turtle-walk(blossom-e.&, 30.0, 0, 1.0).blooms.len() > 0)
+  let blossom-walk = turtle-walk(blossom-e.&, 30.0, 0, 1.0)
+  assert(blossom-walk.blooms.len() > 0)
   solve-bonsai()
   assert-solved(10)
   let bonsai-e = expand-player(5)
@@ -2091,8 +2090,10 @@ fn self-test(context g: *mut game)() {
   assert-solved(25)
   load-level(level-index("fern"))
   let fern = expand-target(cur-level(), 5)
-  assert(turtle-walk(fern.&, 25.0, 0, 1.0).segs.len() > 1000)
-  assert(expand-target(cur-level(), 1).buds.len() == 7)
+  let fern-walk = turtle-walk(fern.&, 25.0, 0, 1.0)
+  assert(fern-walk.segs.len() > 1000)
+  let fern-exp = expand-target(cur-level(), 1)
+  assert(fern-exp.buds.len() == 7)
   solve-fern()
   assert-solved(24)
   load-level(0)

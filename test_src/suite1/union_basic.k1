@@ -21,7 +21,7 @@ fn test() {
     and fields.get(2).offset == 0
     else crash("")
 
-  let _ = identity-u(u)
+  identity-u(u)
 
   .{}
 }

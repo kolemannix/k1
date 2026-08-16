@@ -1,7 +1,7 @@
 ns test_macro;
 
-let mutable twice-counter: int = 0
-let mutable repeat-counter: int = 0
+let(mutable) twice-counter: int = 0
+let(mutable) repeat-counter: int = 0
 
 fn incr(): int {
   twice-counter = twice-counter + 1

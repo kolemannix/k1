@@ -1,0 +1,208 @@
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.lib("foo", :static)
+  m
+}
+
+ns(lib("foo")) foo {
+
+  type very-small = { x: u8 }
+  impl print for very-small { fn print-to[w: writer](self: very-small, w) { w.write("${ {self.x} }") } }
+  impl equals for very-small { fn equals(self: very-small, other: very-small): bool { self.x == other.x } }
+  fn(extern("very_small")) very_small(x: very-small, y: very-small): very-small
+
+  type int-wrap = { inner: i32 }
+  fn(extern("intWrap")) int-wrap(a: int-wrap, b: int-wrap): int-wrap
+
+  // Odd-sized structs: 3 bytes (i24) and 6 bytes (i48) coercions
+  type rgb3 = { r: u8, g: u8, b: u8 }
+  fn(extern("rgb3")) rgb3(a: rgb3, b: rgb3): rgb3
+
+  type three-shorts = { a: i16, b: i16, c: i16 }
+  fn(extern("three_shorts")) three-shorts(a: three-shorts, b: three-shorts): three-shorts
+
+  fn(extern("takesRgb3Fn")) takes-rgb3-fn(f: *fn(x: rgb3) -> rgb3): rgb3
+
+  type small = { r: u8, g: u8, b: u8, a: u8 }
+  fn(extern("small")) small(x: small, y: small): small
+
+  type medium = { a: u64, b: u64 }
+  fn(extern("medium")) medium(a: medium, b: medium): medium
+
+  type mixed-class-medium = { f1: f32, f2: f32, i3: array[i16, 4] }
+
+  type large = { med1: medium, med2: medium }
+  fn(extern("large")) large(a: large, b: large): large
+
+  type HFA2 = { x: f32, y: f32 }
+  fn(extern("hfa2_add")) hfa2-add(a: HFA2, b: HFA2): HFA2
+
+  type HFA1 = { x: f32 }
+  type hfa-nested3 = { a: HFA1, b: f32, c: f32 }
+  fn(extern("hfa_nested3_add")) hfa-nested3-add(a: hfa-nested3, b: hfa-nested3): hfa-nested3
+
+  type HFA4 = { a: f64, b: f64, c: f64, d: f64 }
+  fn(extern("hfa4_add")) hfa4-add(a: HFA4, b: HFA4): HFA4
+
+  type cx-cursor-kind = either(u32) { unexposed-decl = 1, struct-decl = 2 }
+  type cx-cursor = {
+    kind: cx-cursor-kind,
+    xdata: i32,
+    data: array[ptr, 3]
+  }
+
+  fn(extern("rtCursor")) rt-cursor(c: cx-cursor): cx-cursor
+
+  type cx-string = {
+    data: ptr,
+    private_flags: u32,
+  }
+  fn(extern("getFileName")) get-file-name(s-file: ptr): cx-string 
+
+  type cx-source-location = {
+    ptr_data: array[ptr, 2],
+    int_data: u32,
+  }
+  fn(extern("getCursorLocation")) get-cursor-location(c: cx-cursor): cx-source-location 
+
+  fn(extern("takesFn")) takes-fn(f: *fn(a: u64, b: u64, c: u64, d: u64) -> i32): i32
+
+  fn(extern("takesFnStruct")) takes-fn-struct(f: *fn(s: { a: u64, b: u64, c: u64, d: u64 }) -> i32): i32
+
+  type tag-union = either(u32) { a(i32) = 0, b(i64) = 1, c(ptr) = 2 }
+  // fn-level lib overrides the ns-level lib (same lib here; exercises the explicit form)
+  fn(extern("TagUnion_iszero"), lib("foo")) tag-union-iszero(x: tag-union): i32
+
+}
+
+fn test-all() {
+  assert-equals(
+    foo/very_small(.{ x = 10 }, .{ x = 20 }),
+    .{ x = 30 }
+  )
+
+  let small-result = foo/small(.{r = 1, g = 10, b = 20, a = 30 }, .{ r = 1, g = 1, b = 1, a = 1 })
+  assert-equals(small-result.r, 2)
+  assert-equals(small-result.g, 11)
+  assert-equals(small-result.b, 21)
+  assert-equals(small-result.a, 31)
+
+  let int-wrap-result = foo/int-wrap(.{ inner = -5 }, .{ inner = 10 })
+  assert-equals(int-wrap-result.inner, 5)
+
+  let rgb3 = foo/rgb3(.{ r = 1, g = 2, b = 3 }, .{ r = 10, g = 20, b = 30 })
+  assert-equals(rgb3.r, 11)
+  assert-equals(rgb3.g, 22)
+  assert-equals(rgb3.b, 33)
+
+  let ts = foo/three-shorts(.{ a = 1, b = 2, c = 3 }, .{ a = -10, b = 20, c = -30 })
+  assert-equals(ts.a, -9)
+  assert-equals(ts.b, 22)
+  assert-equals(ts.c, -27)
+
+  let medium-result = foo/medium(.{ a = 10, b = 100 }, .{ a = 1, b = 20 })
+  assert-equals(medium-result.a, 11)
+  assert-equals(medium-result.b, 120)
+
+  let large-result = foo/large(
+    .{ med1 = .{ a = 1, b = 2 }, med2 = .{ a = 3, b = 4 } },
+    .{ med1 = .{ a = 10, b = 20 }, med2 = .{ a = 30, b = 40 } }
+  )
+  assert-equals(large-result.med1.a, 11)
+  assert-equals(large-result.med1.b, 22)
+  assert-equals(large-result.med2.a, 33)
+  assert-equals(large-result.med2.b, 44)
+
+  let hfa2 = foo/hfa2-add(.{ x = 1.0, y = 2.0 }, .{ x = 10.0, y = 20.0 })
+  assert-equals(hfa2.x, 11.0)
+  assert-equals(hfa2.y, 22.0)
+
+  let hfa-nested3 = foo/hfa-nested3-add(
+    .{ a = .{ x = 1.0 }, b = 2.0, c = 3.0 },
+    .{ a = .{ x = 10.0 }, b = 20.0, c = 30.0 }
+  )
+  assert-equals(hfa-nested3.a.x, 11.0)
+  assert-equals(hfa-nested3.b, 22.0)
+  assert-equals(hfa-nested3.c, 33.0)
+
+  let hfa4 = foo/hfa4-add(
+    .{ a = 1.0, b = 2.0, c = 3.0, d = 4.0 },
+    .{ a = 10.0, b = 20.0, c = 30.0, d = 40.0 }
+  )
+  assert-equals(hfa4.a, 11.0)
+  assert-equals(hfa4.b, 22.0)
+  assert-equals(hfa4.c, 33.0)
+  assert-equals(hfa4.d, 44.0)
+
+  let cursor: foo/cx-cursor = .{
+    kind = :unexposed-decl,
+    xdata = -42,
+    data = [1.as[ptr], 2.as[ptr], 3.as[ptr]]
+  }
+  let rt = foo/rt-cursor(cursor)
+  assert-equals(cursor.kind.enum-value(), rt.kind.enum-value())
+  assert-equals(cursor.xdata, rt.xdata)
+  assert-equals(cursor.data.get(0), rt.data.get(0))
+  assert-equals(cursor.data.get(1), rt.data.get(1))
+  assert-equals(cursor.data.get(2), rt.data.get(2))
+
+  let n = foo/get-file-name(ptr/null)
+  assert-equals(n.data.as[size], 3)
+  assert-equals(n.private_flags, 21)
+
+  let locn = foo/get-cursor-location(rt)
+  assert-equals(locn.ptr_data.get(0), 1.as[ptr])
+  assert-equals(locn.ptr_data.get(1), 2.as[ptr])
+  assert-equals(locn.int_data, 42)
+
+  assert(not foo/tag-union-iszero(:a 10).as-bool())
+  assert(    foo/tag-union-iszero(:a 0).as-bool())
+
+  assert(not foo/tag-union-iszero(:b 10).as-bool())
+  assert(    foo/tag-union-iszero(:b 0).as-bool())
+
+  assert(foo/tag-union-iszero(:c ptr/null).as-bool())
+  let x = 10
+  assert(not foo/tag-union-iszero(:c((&x).as())).as-bool())
+
+}
+
+fn test-fn-ptr() {
+  // We don't run this one at compile-time because there is no actual function to pass.
+  // FIXME: You can't pass a k1 function to a compiled library at comptime
+  //        since the function pointer doesn't exist; we'd have to JIT the function.
+  //        We should prevent this, somehow
+
+  let sum = foo/takes-fn(sum-fn)
+  assert-equals(sum, 1+2+3+4)
+
+  let sum2 = foo/takes-fn-struct(sum-fn-struct)
+  assert-equals(sum2, 1+2+3+4)
+
+  // c passes a by-value 3-byte struct to k1 and gets one back: the k1 side
+  // must marshal its param and return through the i24 coercion correctly
+  let rt3 = foo/takes-rgb3-fn(bump-rgb3)
+  assert-equals(rt3.r, 2)
+  assert-equals(rt3.g, 3)
+  assert-equals(rt3.b, 4)
+}
+
+fn bump-rgb3(x: foo/rgb3): foo/rgb3 {
+  .{ r = x.r + 1, g = x.g + 1, b = x.b + 1 }
+}
+
+fn sum-fn(a: u64, b: u64, c: u64, d: u64): i32 {
+  (a + b + c + d).as[i32]
+}
+fn sum-fn-struct(s: { a: u64, b: u64, c: u64, d: u64 }): i32 {
+  (s.a + s.b + s.c + s.d).as[i32]
+}
+
+// TODO: abi/ffi test some 'sum' types
+
+fn main(): i32 {
+  #static test-all()
+  test-all()
+  test-fn-ptr()
+  0
+}

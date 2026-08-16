@@ -1,0 +1,29 @@
+// The reloadable app half of the reload_test
+fn main(): i32 {
+  loop {
+    let line = sys/read-line(256) is {
+      :ok l -> l,
+      :err _ -> break,
+    }
+    if line == "load" {
+      scene/load() is {
+        :ok -> println("load ok"),
+        :err e -> println("load err: ${e}"),
+      }
+    } else if line == "watch" {
+      scene/watch() is {
+        :ok -> println("watch ok"),
+        :err e -> println("watch err: ${e}"),
+      }
+    } else if line == "greet" {
+      println("greet: ${scene/greeting()}")
+    } else if line == "version" {
+      println("version: ${scene/loaded-version()}")
+    } else if line == "quit" {
+      break
+    } else {
+      println("unknown: $line")
+    }
+  }
+  0
+}

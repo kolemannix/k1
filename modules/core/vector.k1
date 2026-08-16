@@ -1,0 +1,92 @@
+// Copyright (c) 2026 knix
+// All rights reserved.
+
+// SIMD vectors: `vector[t, n]` holds n lanes of scalar t, where t is an
+// int, char, or float type and n is a power of two with a total size of at
+// most 64 bytes (512 bits)
+ns vector {
+
+  fn(intern) splat[t, n: static size](value: t): vector[t, n]
+
+  fn(intern) load-unchecked[t, n: static size](src: ptr): vector[t, n]
+  fn(intern) store-unchecked[t, n: static size](v: vector[t, n], dst: ptr)
+
+  fn(intern) get-lane[t, n: static size](v: vector[t, n], index: size): t
+  fn(intern) with-lane[t, n: static size](v: vector[t, n], index: size, value: t): vector[t, n]
+
+  // Lane-wise compare: each lane is all-ones on equal, all-zeros otherwise.
+  fn(intern) eq-lanes[t, n: static size](a: vector[t, n], b: vector[t, n]): vector[t, n]
+
+  // collapses lane MSBs into one bit per lane (movemask)
+  fn(intern) to-mask[t, n: static size](v: vector[t, n]): u64
+
+  fn zeroed[t, n: static size](): vector[t, n] {
+    mem/zeroed[vector[t, n]]
+  }
+
+  fn lane-count[t, n: static size](_v: vector[t, n]): size {
+    core/meta/static-type-to-value[_, n]()
+  }
+
+  fn size-bytes[t, n: static size](_v: vector[t, n]): size {
+    types/size[vector[t, n]]
+  }
+
+  fn from-span[t, n: static size](s: span[t], start: size): vector[t, n] {
+    let lanes: size = core/meta/static-type-to-value[_, n]()
+    if start + lanes > s.len() {
+      crash("vector/from-span out of bounds")
+    }
+    load-unchecked[t, n](s.data-ptr().ref-at-index[t](start).as[ptr])
+  }
+
+  fn eq-mask[t, n: static size](a: vector[t, n], b: vector[t, n]): u64 {
+    a.eq-lanes(b).to-mask()
+  }
+
+  fn any[t, n: static size](v: vector[t, n]): bool {
+    v.to-mask() != 0
+  }
+
+  fn all[t, n: static size](v: vector[t, n]): bool {
+    v.to-mask() == u64/bitmask-low(v.lane-count())
+  }
+
+  // Lane index of the first true (all-ones) lane of a lane-mask, or -1
+  fn first-true-lane[t, n: static size](v: vector[t, n]): i64 {
+    let mask = v.to-mask()
+    if mask == 0 { -1 } else { mask.trailing-zeros().as[i64] }
+  }
+}
+
+impl[t: add, n: static size] add for vector[t, n] { fn(intern) add(self, rhs: self): self }
+impl[t: sub, n: static size] sub for vector[t, n] { fn(intern) sub(self, rhs: self): self }
+impl[t: mul, n: static size] mul for vector[t, n] { fn(intern) mul(self, rhs: self): self }
+
+impl[t: bitwise, n: static size] bitwise for vector[t, n] {
+  fn(intern) bit-not(self): self
+  fn(intern) bit-and(self, other: self): self
+  fn(intern) bit-or(self, other: self): self
+  fn(intern) xor(self, other: self): self
+  fn(intern) shift-left(self, count: u32): self
+  fn(intern) shift-right(self, count: u32): self
+}
+
+impl[t, n: static size] equals for vector[t, n] {
+  fn equals(self, other: self): bool {
+    vector/eq-mask(self, other) == u64/bitmask-low(self.lane-count())
+  }
+}
+
+impl[t: print, n: static size] print for vector[t, n] {
+  fn print-to[w: writer](self, w) {
+    w.write("v[")
+    let i = 0: size
+    while i < self.lane-count() {
+      if i > 0 { w.write(", ") }
+      self.get-lane(i).print-to(w)
+      i = i + 1
+    }
+    w.write("]")
+  }
+}

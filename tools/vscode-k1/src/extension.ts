@@ -8,7 +8,7 @@ import {
   ServerOptions
 } from "vscode-languageclient/node";
 
-const ROOT_MARKERS = ["main.k1", "proj.k1", ".git"];
+const ROOT_MARKERS = ["main.k1", "module.k1", "setup.k1"];
 
 const clients = new Map<string, LanguageClient>();
 let missingServerReported = false;

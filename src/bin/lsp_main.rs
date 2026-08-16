@@ -2,13 +2,13 @@
 // All rights reserved.
 
 use k1::debug;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use k1::compiler::{CompileProgramError, LspCompileOptions};
-use k1::lex::{self, Span, SpanId, Spans};
+use k1::lex::{self, Span, SpanId};
 use k1::lsp_support::CompletionCandidateKind;
 use k1::parse;
 use k1::parse::{ParsedProgram, SourceFile};
@@ -96,8 +96,9 @@ enum TokenModifiers {
     DefaultLibrary = 1 << 9,
 }
 
-fn span_to_range_with_source(source: &SourceFile, span: Span) -> Option<Range> {
-    let (start_line, end_line) = source.get_lines_for_span(span)?;
+fn span_to_range_in_ast(ast: &ParsedProgram, span: Span) -> Option<Range> {
+    let source = ast.sources.source_by_span(span);
+    let (start_line, end_line) = source.get_lines_for_span(&ast.mem, span)?;
     Some(Range {
         start: Position {
             line: start_line.line_index,
@@ -113,17 +114,7 @@ fn span_id_to_range(k1: &TypedProgram, span_id: SpanId) -> Option<Range> {
 }
 
 fn span_to_range(k1: &TypedProgram, span: Span) -> Option<Range> {
-    let source = k1.ast.sources.get(span.file_id);
-    span_to_range_with_source(source, span)
-}
-
-fn span_id_to_range_with_source(
-    source: &SourceFile,
-    spans: &Spans,
-    span_id: SpanId,
-) -> Option<Range> {
-    let span = spans.get(span_id);
-    span_to_range_with_source(source, span)
+    span_to_range_in_ast(&k1.ast, span)
 }
 
 fn error_to_diagnostic(
@@ -132,6 +123,9 @@ fn error_to_diagnostic(
     level: MessageLevel,
     span_id: SpanId,
 ) -> Option<(Url, Diagnostic)> {
+    if span_id == SpanId::NONE {
+        return None;
+    }
     let url = uri_from_span(k1, span_id);
     let severity = match level {
         MessageLevel::Error => DiagnosticSeverity::ERROR,
@@ -139,10 +133,6 @@ fn error_to_diagnostic(
         MessageLevel::Info => DiagnosticSeverity::INFORMATION,
         MessageLevel::Hint => DiagnosticSeverity::HINT,
     };
-    // let mut escaped_message = String::with_capacity(message.len() * 2);
-    // escaped_message.push_str("```txt\n");
-    // escaped_message.push_str(&message);
-    // escaped_message.push_str("\n```");
     match span_id_to_range(k1, span_id) {
         None => {
             error!("Failed span lookup for diagnostic: {}", &message);
@@ -173,16 +163,19 @@ fn source_to_uri(directory: impl AsRef<Path>, file: impl AsRef<str>) -> Url {
 fn uri_from_span(k1: &TypedProgram, span_id: SpanId) -> Url {
     let span = k1.ast.spans.get(span_id);
     let source = k1.ast.sources.get(span.file_id);
-    source_to_uri(source.directory.as_str(), &source.filename)
+    source_to_uri(
+        k1.ast.idents.get_string(source.directory),
+        k1.ast.idents.get_string(source.filename),
+    )
 }
 
 fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast SourceFile> {
     let path = url.path();
     debug!("uri_to_source: {}", path);
     let source = ast.sources.iter().find(|s| {
-        let source_path = format!("{}/{}", s.1.directory, s.1.filename);
-        debug!("    source_path: {}", source_path);
-        path == source_path
+        let source_path = k1::kpath::join_buf(&ast.idents, s.1.directory, s.1.filename);
+        debug!("    source_path: {}", source_path.display());
+        Path::new(path) == source_path
     });
     source.map(|s| s.1)
 }
@@ -199,6 +192,7 @@ fn uri_to_edited_source(backend: &Backend, url: &Url) -> Option<(SourceFile, boo
 fn candidate_to_item(candidate: k1::lsp_support::CompletionCandidate) -> CompletionItem {
     let kind = match candidate.kind {
         CompletionCandidateKind::Field => CompletionItemKind::FIELD,
+        CompletionCandidateKind::Variant => CompletionItemKind::ENUM_MEMBER,
         CompletionCandidateKind::Method => CompletionItemKind::METHOD,
         CompletionCandidateKind::Variable => CompletionItemKind::VARIABLE,
         CompletionCandidateKind::Function => CompletionItemKind::FUNCTION,
@@ -220,8 +214,13 @@ struct Backend {
     client: Client,
     module: k1::server::SharedProgram,
     edited_sources: Mutex<HashMap<Url, ParsedProgram>>,
-    workspace_uri: RwLock<Option<Url>>,
+    /// Canonical src_path of the program we compile (a module dir or single
+    /// file), derived from the files the client opens and saves
+    src_path: RwLock<Option<String>>,
+    published_diagnostic_urls: Mutex<HashSet<Url>>,
     compile_iteration: AtomicU32,
+    retarget_generation: AtomicU32,
+    retarget_lock: tokio::sync::Mutex<()>,
     completion_generation: AtomicU32,
     completion_compile_lock: tokio::sync::Mutex<()>,
 }
@@ -235,11 +234,93 @@ impl Backend {
             client,
             module,
             edited_sources: Mutex::new(HashMap::new()),
-            workspace_uri: RwLock::new(None),
+            src_path: RwLock::new(None),
+            published_diagnostic_urls: Mutex::new(HashSet::new()),
             compile_iteration: AtomicU32::new(0),
+            retarget_generation: AtomicU32::new(0),
+            retarget_lock: tokio::sync::Mutex::new(()),
             completion_generation: AtomicU32::new(0),
             completion_compile_lock: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// Insert the completion marker at the cursor, replacing whatever token is there, and run a check compile;
+    async fn compile_with_marker(
+        &self,
+        file_url: &Url,
+        line: u32,
+        col: u32,
+    ) -> Result<Option<TypedProgram>> {
+        let content_at_line = |ast: &ParsedProgram, source: &SourceFile| {
+            source
+                .get_line(&ast.mem, line as usize)
+                .map(|line_info| (source.content(&ast.mem).to_string(), line_info))
+        };
+        let spliced = {
+            let content_and_line = {
+                let edited_sources = self.edited_sources.lock().unwrap();
+                edited_sources
+                    .get(file_url)
+                    .and_then(|ast| content_at_line(ast, ast.sources.get_main()))
+            };
+            let content_and_line = match content_and_line {
+                Some(found) => Some(found),
+                None => self
+                    .with_k1(|k1| {
+                        uri_to_source(&k1.ast, file_url)
+                            .and_then(|source| content_at_line(&k1.ast, source))
+                    })
+                    .flatten(),
+            };
+            let Some((content, line_info)) = content_and_line else {
+                info!("compile_with_marker: no source or line for {}", file_url.path());
+                return Ok(None);
+            };
+            let offset = (line_info.start_char + col.min(line_info.len)) as usize;
+            k1::lsp_support::splice_completion_marker(&content, offset)
+        };
+
+        let Ok(canonical_path) = k1::kpath::canonicalize(file_url.path()) else { return Ok(None) };
+        let Some(root_path) = self.target_file_for_url(file_url) else { return Ok(None) };
+        let root_path = std::path::PathBuf::from(root_path);
+
+        let mut source_overrides = fxhash::FxHashMap::default();
+        source_overrides.insert(canonical_path, spliced);
+        let lsp_options = LspCompileOptions { source_overrides, completion: true };
+        let args = k1::compiler::Args {
+            no_std: false,
+            emit_llvm: false,
+            optimize: false,
+            dump_module: false,
+            debug: true,
+            sanitize: false,
+            profile: false,
+            chatty: false,
+            optimize_ir: true,
+            target: None,
+            cache: true,
+            filc: false,
+            is_setup_program: false,
+            k1_home_override: None,
+            command: k1::compiler::Command::Check { file: root_path },
+            dump_idents: false,
+        };
+
+        let my_generation = self.completion_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let _compile_guard = self.completion_compile_lock.lock().await;
+        if self.completion_generation.load(Ordering::SeqCst) != my_generation {
+            return Err(Error::request_cancelled());
+        }
+        let program =
+            tokio::task::spawn_blocking(move || {
+                match k1::compiler::compile_program_ext(&args, lsp_options) {
+                    Ok(program) => program,
+                    Err(CompileProgramError::TyperFailure(program)) => *program,
+                }
+            })
+            .await
+            .map_err(|_| Error::internal_error())?;
+        Ok(Some(program))
     }
 
     fn with_k1<T>(&self, f: impl Fn(&TypedProgram) -> T) -> Option<T> {
@@ -255,7 +336,12 @@ impl Backend {
             k1.ast
                 .sources
                 .iter()
-                .map(|s| source_to_uri(s.1.directory.as_str(), &s.1.filename))
+                .map(|s| {
+                    source_to_uri(
+                        k1.ast.idents.get_string(s.1.directory),
+                        k1.ast.idents.get_string(s.1.filename),
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -304,10 +390,61 @@ impl Backend {
         map
     }
 
+    fn target_file_for_url(&self, file_url: &Url) -> Option<String> {
+        let file_path = file_url.to_file_path().ok()?;
+        let in_program =
+            self.with_k1(|k1| uri_to_source(&k1.ast, file_url).is_some()).unwrap_or(false);
+        if in_program {
+            if let Some(stored) = self.src_path.read().unwrap().clone() {
+                return Some(stored);
+            }
+        }
+        match k1::compiler::find_check_target_for_file(&file_path) {
+            Ok(target) => Some(target),
+            Err(e) => {
+                info!("target_for {}: {e}", file_url.path());
+                None
+            }
+        }
+    }
+
+    /// Point the program at `file_url`'s module if it isn't already covered,
+    /// then compile when the target changed, no program exists yet, or
+    /// `force_compile` (saves). Publishes diagnostics after compiling.
+    /// Returns whether a compile ran.
+    async fn ensure_target_and_compile(&self, file_url: &Url, force_compile: bool) -> bool {
+        let my_generation = self.retarget_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let _guard = self.retarget_lock.lock().await;
+        if self.retarget_generation.load(Ordering::SeqCst) != my_generation {
+            // A newer open/save superseded this one while we waited
+            return false;
+        }
+        let Some(target) = self.target_file_for_url(file_url) else {
+            return false;
+        };
+        let changed = {
+            let mut src_path = self.src_path.write().unwrap();
+            let changed = src_path.as_deref() != Some(target.as_str());
+            *src_path = Some(target);
+            changed
+        };
+        let no_program = self.with_k1(|_| ()).is_none();
+        if !(changed || no_program || force_compile) {
+            return false;
+        }
+        self.compile();
+        self.send_diagnostics().await;
+        true
+    }
+
     fn compile(&self) -> u32 {
         let iteration_number = self.compile_iteration.load(Ordering::Relaxed);
-        info!("compiling version {}", iteration_number);
-        let root_uri = self.workspace_uri.read().unwrap();
+        let src_path = self.src_path.read().unwrap().clone();
+        let Some(src_path) = src_path else {
+            info!("compile {}: no target yet", iteration_number);
+            return iteration_number;
+        };
+        info!("compiling version {} target {}", iteration_number, src_path);
         let args = k1::compiler::Args {
             no_std: false,
             emit_llvm: false,
@@ -319,10 +456,11 @@ impl Backend {
             chatty: false,
             optimize_ir: true,
             target: None,
+            cache: true,
             filc: false,
-            command: k1::compiler::Command::Check {
-                file: root_uri.as_ref().unwrap().path().into(),
-            },
+            is_setup_program: false,
+            k1_home_override: None,
+            command: k1::compiler::Command::Check { file: src_path.into() },
             dump_idents: false,
         };
         let compile_result = k1::compiler::compile_program(&args);
@@ -346,11 +484,43 @@ impl Backend {
     async fn send_diagnostics(&self) {
         let version = self.compile_iteration.load(Ordering::Relaxed);
         let errors_by_file = self.build_all_files_and_errors_map();
+        // Clear diagnostics for files that left the program (target switch)
+        let stale = {
+            let mut published = self.published_diagnostic_urls.lock().unwrap();
+            let mut stale = vec![];
+            for url in published.iter() {
+                if !errors_by_file.contains_key(url) {
+                    stale.push(url.clone());
+                }
+            }
+            published.clear();
+            published.extend(errors_by_file.keys().cloned());
+            stale
+        };
+        for url in stale {
+            self.client.publish_diagnostics(url, vec![], Some(version as i32)).await;
+        }
         for (file_url, errors) in errors_by_file.into_iter() {
             if !errors.is_empty() {
                 info!("Sending {} diagnostics for {file_url} with version {version}", errors.len());
             }
             self.client.publish_diagnostics(file_url, errors, Some(version as i32)).await;
+        }
+        // Errors with no source position (module resolution failures) can't
+        // be diagnostics; show them so a dead compile is never silent
+        let spanless = self
+            .with_k1(|k1| {
+                let mut messages = vec![];
+                for m in k1.messages.borrow().iter() {
+                    if m.level == MessageLevel::Error && m.span == SpanId::NONE {
+                        messages.push(k1.ident_str(m.message).to_string());
+                    }
+                }
+                messages
+            })
+            .unwrap_or_default();
+        for message in spanless {
+            self.client.show_message(MessageType::ERROR, message).await;
         }
     }
 
@@ -400,7 +570,7 @@ impl LanguageServer for Backend {
         let mut res = InitializeResult::default();
         res.capabilities.text_document_sync =
             Some(TextDocumentSyncCapability::Options(TextDocumentSyncOptions {
-                open_close: Some(false),
+                open_close: Some(true),
                 change: Some(TextDocumentSyncKind::FULL),
                 will_save: Some(false),
                 will_save_wait_until: Some(false),
@@ -431,22 +601,21 @@ impl LanguageServer for Backend {
         // res.capabilities.semantic_tokens_provider = None;
         res.capabilities.completion_provider = Some(CompletionOptions {
             resolve_provider: Some(false),
-            trigger_characters: Some(vec![".".to_string()]),
+            trigger_characters: Some(vec![".".to_string(), ":".to_string(), "/".to_string()]),
             all_commit_characters: Some(vec!["\n".to_string()]),
             work_done_progress_options: WorkDoneProgressOptions::default(),
             completion_item: Some(CompletionOptionsCompletionItem {
                 label_details_support: Some(false),
             }),
         });
+        res.capabilities.signature_help_provider = Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+            retrigger_characters: Some(vec![",".to_string()]),
+            work_done_progress_options: WorkDoneProgressOptions::default(),
+        });
         res.server_info =
             Some(ServerInfo { name: "k1lsp".to_string(), version: Some("ALPHA".to_string()) });
         info!("Got initialize params: {params:#?}");
-        let root_uri = params.root_uri.ok_or(Error::invalid_params("Need root_uri"))?;
-        assert!(root_uri.scheme() == "file");
-        self.workspace_uri.write().unwrap().replace(root_uri.clone());
-        info!("Set root uri: {}", root_uri.path());
-
-        self.compile();
         Ok(res)
     }
 
@@ -477,7 +646,6 @@ impl LanguageServer for Backend {
         let new_content = change.text;
         info!("textDocument/did_change: parsing file {}", &file_url);
         let ast = parse::parse_standalone(file_url.path().to_string(), new_content);
-        let new_source = ast.sources.get_main();
         let mut parse_diagnostics = vec![];
         info!(
             "textDocument/did_change: parsed file {} with {} errors",
@@ -485,8 +653,7 @@ impl LanguageServer for Backend {
             ast.errors.len()
         );
         for error in &ast.errors {
-            if let Some(range) = span_id_to_range_with_source(new_source, &ast.spans, error.span())
-            {
+            if let Some(range) = span_to_range_in_ast(&ast, ast.spans.get(error.span())) {
                 let diagnostic = Diagnostic {
                     range,
                     severity: Some(DiagnosticSeverity::ERROR),
@@ -626,7 +793,7 @@ impl LanguageServer for Backend {
                     spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
                 }
             }
-            for entry in source.trivia.iter() {
+            for entry in ast_for_file.mem.getn_lt(source.trivia) {
                 match entry.trivia.kind {
                     lex::TokenTriviaKind::LineComment => {
                         let span = ast_for_file.spans.get(entry.trivia.span);
@@ -639,7 +806,7 @@ impl LanguageServer for Backend {
             for (span, token_type, bitflags) in spans_and_kinds {
                 // info!("spans_and_kinds sorted {} {}", span.start, span.len);
                 let length = span.len;
-                let Some(line) = source.get_line_for_span_start(span) else {
+                let Some(line) = source.get_line_for_span_start(&ast_for_file.mem, span) else {
                     continue;
                 };
                 let line_number = line.line_number();
@@ -686,17 +853,29 @@ impl LanguageServer for Backend {
         )))
     }
 
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let file_url = params.text_document.uri;
+        info!("handling did_open for document: {}", file_url.path());
+        self.ensure_target_and_compile(&file_url, false).await;
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let mut es = self.edited_sources.lock().unwrap();
+        es.remove(&params.text_document.uri);
+    }
+
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         info!("handling did_save for document: {}", params.text_document.uri.path());
         {
             let mut es = self.edited_sources.lock().unwrap();
             es.remove(&params.text_document.uri);
         }
-        //info!("did_save file {:?}", params.text);
         let start = std::time::Instant::now();
-        self.compile();
+        let compiled = self.ensure_target_and_compile(&params.text_document.uri, true).await;
+        if !compiled {
+            return;
+        }
         let elapsed_ms = start.elapsed().as_millis();
-        self.send_diagnostics().await;
         self.client.semantic_tokens_refresh().await.unwrap();
         self.client
             .show_message(
@@ -714,68 +893,9 @@ impl LanguageServer for Backend {
         let col = position.position.character;
         info!("completion: {}:{}:{}", file_url.path(), line, col);
 
-        // Latest buffer content: unsaved edits first, else the compiled source.
-        // SourceFile is not Send; keep it scoped so only the spliced String
-        // crosses the awaits below
-        let spliced = {
-            let source = {
-                let edited_sources = self.edited_sources.lock().unwrap();
-                edited_sources.get(&file_url).map(|ast| ast.sources.get_main().clone())
-            };
-            let source = match source {
-                Some(source) => Some(source),
-                None => self.with_k1(|k1| uri_to_source(&k1.ast, &file_url).cloned()).flatten(),
-            };
-            let Some(source) = source else {
-                info!("completion: no source for {}", file_url.path());
-                return Ok(None);
-            };
-            let Some(line_info) = source.get_line(line as usize) else { return Ok(None) };
-            let offset = (line_info.start_char + col.min(line_info.len)) as usize;
-            k1::lsp_support::splice_completion_marker(&source.content, offset)
+        let Some(program) = self.compile_with_marker(&file_url, line, col).await? else {
+            return Ok(None);
         };
-
-        let Ok(canonical_path) = std::fs::canonicalize(file_url.path()) else { return Ok(None) };
-        let root_path: std::path::PathBuf = {
-            let root_uri = self.workspace_uri.read().unwrap();
-            let Some(root) = root_uri.as_ref() else { return Ok(None) };
-            root.path().into()
-        };
-
-        let mut source_overrides = fxhash::FxHashMap::default();
-        source_overrides.insert(canonical_path, spliced);
-        let lsp_options = LspCompileOptions { source_overrides, completion: true };
-        let args = k1::compiler::Args {
-            no_std: false,
-            emit_llvm: false,
-            optimize: false,
-            dump_module: false,
-            debug: true,
-            sanitize: false,
-            profile: false,
-            chatty: false,
-            optimize_ir: true,
-            target: None,
-            filc: false,
-            command: k1::compiler::Command::Check { file: root_path },
-            dump_idents: false,
-        };
-
-        // Newer requests win; a queued stale compile bails as soon as it gets the lock
-        let my_generation = self.completion_generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let _compile_guard = self.completion_compile_lock.lock().await;
-        if self.completion_generation.load(Ordering::SeqCst) != my_generation {
-            return Err(Error::request_cancelled());
-        }
-        let program =
-            tokio::task::spawn_blocking(move || {
-                match k1::compiler::compile_program_ext(&args, lsp_options) {
-                    Ok(program) => program,
-                    Err(CompileProgramError::TyperFailure(program)) => *program,
-                }
-            })
-            .await
-            .map_err(|_| Error::internal_error())?;
 
         let site = program.completion.as_ref().and_then(|cs| cs.site);
         let (candidates, is_incomplete) = match site {
@@ -800,6 +920,42 @@ impl LanguageServer for Backend {
         let items: Vec<CompletionItem> = candidates.into_iter().map(candidate_to_item).collect();
         info!("completion: {} items in {}ms", items.len(), start.elapsed().as_millis());
         Ok(Some(CompletionResponse::List(CompletionList { is_incomplete, items })))
+    }
+
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let position = params.text_document_position_params;
+        let file_url = position.text_document.uri;
+        let line = position.position.line;
+        let col = position.position.character;
+        info!("signature_help: {}:{}:{}", file_url.path(), line, col);
+
+        let Some(program) = self.compile_with_marker(&file_url, line, col).await? else {
+            return Ok(None);
+        };
+        let Some(site) = program.completion.as_ref().and_then(|cs| cs.site) else {
+            return Ok(None);
+        };
+        let Some(info) = k1::lsp_support::signature_help_info(&program, site) else {
+            return Ok(None);
+        };
+        let parameters = info
+            .params
+            .iter()
+            .map(|p| ParameterInformation {
+                label: ParameterLabel::Simple(p.clone()),
+                documentation: None,
+            })
+            .collect();
+        Ok(Some(SignatureHelp {
+            signatures: vec![SignatureInformation {
+                label: info.label,
+                documentation: None,
+                parameters: Some(parameters),
+                active_parameter: Some(info.active_param),
+            }],
+            active_signature: Some(0),
+            active_parameter: Some(info.active_param),
+        }))
     }
 
     async fn goto_definition(
@@ -839,8 +995,10 @@ impl LanguageServer for Backend {
             error!("Failed to convert span to range for goto_definition");
             return Ok(None);
         };
-        let definition_uri =
-            source_to_uri(definition_source.directory.as_str(), &definition_source.filename);
+        let definition_uri = source_to_uri(
+            k1.ast.idents.get_string(definition_source.directory),
+            k1.ast.idents.get_string(definition_source.filename),
+        );
         info!("goto_definition response: {}, {:?}", definition_uri, range);
         Ok(Some(GotoDefinitionResponse::Scalar(Location { uri: definition_uri, range })))
     }
@@ -870,30 +1028,47 @@ fn find_references(
         return Ok(None);
     };
 
+    // References are served by scanning ls_entities across all files: every
+    // usage the typer sees emits an entity at its span
     match ls_entity.kind {
         LsEntityKind::Function { function_id, .. } => {
-            let generic_function = k1::lsp_support::get_function_generic_id(k1, function_id);
-            let function = k1.functions.get(generic_function);
-            let defn_span = k1.get_function_span(generic_function);
-            let mut locations = Vec::with_capacity(function.usages.len());
-            for span_id in &function.usages {
-                // Skip the usage that is the function's declaration
-                if defn_span == *span_id && !include_declaration {
-                    continue;
-                }
-
-                if let Some(location) = location_from_span(k1, *span_id) {
-                    locations.push(location);
+            let target = k1::lsp_support::get_function_generic_id(k1, function_id);
+            let mut locations = Vec::new();
+            for entities in k1.ls_entities.borrow().values() {
+                for entity in entities {
+                    let LsEntityKind::Function { function_id: fid, is_defn } = entity.kind else {
+                        continue;
+                    };
+                    if is_defn && !include_declaration {
+                        continue;
+                    }
+                    if k1::lsp_support::get_function_generic_id(k1, fid) != target {
+                        continue;
+                    }
+                    if let Some(location) = location_from_resolved_span(k1, entity.span) {
+                        locations.push(location);
+                    }
                 }
             }
             Ok(Some(locations))
         }
         LsEntityKind::Variable { variable_id } => {
-            let v = k1.variables.get(variable_id);
-            let mut locations = Vec::with_capacity(v.usages.len());
-            for span_id in &v.usages {
-                if let Some(location) = location_from_span(k1, *span_id) {
-                    locations.push(location);
+            let defn_span = k1.ast.spans.get(k1.variables.get(variable_id).defn_span);
+            let mut locations = Vec::new();
+            for entities in k1.ls_entities.borrow().values() {
+                for entity in entities {
+                    let LsEntityKind::Variable { variable_id: vid } = entity.kind else {
+                        continue;
+                    };
+                    if vid != variable_id {
+                        continue;
+                    }
+                    if entity.span == defn_span && !include_declaration {
+                        continue;
+                    }
+                    if let Some(location) = location_from_resolved_span(k1, entity.span) {
+                        locations.push(location);
+                    }
                 }
             }
             Ok(Some(locations))
@@ -911,13 +1086,14 @@ fn find_references(
     }
 }
 
-fn location_from_span(k1: &TypedProgram, span_id: SpanId) -> Option<Location> {
-    if let Some(range) = span_id_to_range(k1, span_id) {
-        let usage_uri = uri_from_span(k1, span_id);
-        Some(Location { uri: usage_uri, range })
-    } else {
-        None
-    }
+fn location_from_resolved_span(k1: &TypedProgram, span: Span) -> Option<Location> {
+    let range = span_to_range(k1, span)?;
+    let source = k1.ast.sources.get(span.file_id);
+    let uri = source_to_uri(
+        k1.ast.idents.get_string(source.directory),
+        k1.ast.idents.get_string(source.filename),
+    );
+    Some(Location { uri, range })
 }
 
 fn find_entity_and_source<'k1>(

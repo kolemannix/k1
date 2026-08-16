@@ -1,0 +1,78 @@
+ns ability_where
+
+ability marky {
+  fn marky-tag(self): i64
+}
+
+ability wsource[impl t] {
+  fn the-item(self): t
+  fn item-equals(self, x: t): bool where t: equals {
+    self.the-item() == x
+  }
+  fn item-string(self): string where t: equals and print {
+    "${self.the-item()}"
+  }
+  fn item-matches(self, f: some fn t -> bool): bool {
+    f(self.the-item())
+  }
+  fn item-tag(self): i64 where t: marky {
+    self.the-item().marky-tag()
+  }
+}
+
+type marked = { m: i64 }
+impl marky for marked {
+  fn marky-tag(self): i64 { self.m }
+}
+
+// t = i64 does not implement marky: the impl is still allowed, item-tag is just absent for this type
+type plain-box = { v: i64 }
+impl wsource[t = i64] for plain-box {
+  fn the-item(self): i64 { self.v }
+}
+
+type marked-box = { v: marked }
+impl wsource[t = marked] for marked-box {
+  fn the-item(self): marked { self.v }
+}
+
+// Blanket impl: item-tag is unprovable from the bare t, decided per
+// instantiation
+type holder[t] = { v: t }
+impl[t] wsource[t = t] for holder[t] {
+  fn the-item(self): t { self.v }
+}
+
+fn tag-through[x: marky, c: wsource[t = x]](it: c): i64 {
+  it.item-tag()
+}
+
+// Blanket derive of one impl-param ability from another
+ability wview[impl t] {
+  fn view-span(self): span[t]
+}
+impl[t, c: wsource[t = t]] wview[t = t] for c {
+  fn view-span(self): span[t] { span/single(self.the-item()) }
+}
+
+fn test() {
+  let p: plain-box = .{ v = 5 }
+  assert(p.the-item() == 5)
+  assert(p.item-equals(5))
+  assert-equals(p.item-string(), "5")
+  assert(p.item-matches(fn (x: i64) { x > 3 }))
+  assert(p.item-matches(fn x. x > 3))
+
+  let m: marked-box = .{ v = .{ m = 42 } }
+  assert(m.item-tag() == 42)
+  assert(tag-through(m) == 42)
+
+  let hi: holder[i64] = .{ v = 9 }
+  assert(hi.the-item() == 9)
+  assert(hi.item-equals(9))
+
+  let hm: holder[marked] = .{ v = .{ m = 7 } }
+  assert(hm.item-tag() == 7)
+
+  assert(p.view-span().len() == 1)
+}

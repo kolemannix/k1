@@ -1,0 +1,99 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
+ability allocator {
+  // alloc must return zeroed memory
+  fn alloc(self, size: size, align: size): ptr
+
+  fn realloc(self, old-ptr: ptr, old-size: size, align: size, new-size: size): ptr
+
+  // free may no-op
+  fn free(self, ptr: ptr, size: size, align: size)
+
+  fn alloc-t[t](self): *mut t { allocator/alloc(self, types/size[t], types/align[t]).as() }
+  fn free-t[t](self, t: *mut t) { allocator/free(self, t.as(), types/size[t], types/align[t]) }
+  fn new[t](self, t: t): *mut t {
+    let ref = self.alloc-t[t]()
+    ref.* = t
+    ref
+  }
+}
+
+type heap = {}
+impl allocator for heap {
+  fn alloc(_self: heap, size: size, _align: size): ptr { libc/calloc(1, size) }
+  fn realloc(_self: heap, old-ptr: ptr, _old-size: size, _align: size, new-size: size): ptr {
+    libc/realloc(old-ptr, new-size)
+  }
+  fn free(_self: heap, ptr: ptr, _size: size, _align: size) { libc/free(ptr) }
+}
+
+ns mem {
+
+  fn new[t](t: t): *t { current-arena().new(t) }
+
+  macro new-in-place[t](expr) {
+    let type-id = types/type-id[t]
+    `
+    let addr = mem/alloc-t[type-from-id($type-id)];
+    addr.* = $expr
+    addr
+    `
+  }
+
+  macro with-arena(arena, expr) {
+    `
+    let start-len = mem/arena-stack-len()
+    mem/push-arena($arena)
+    defer {
+      mem/pop-arena()
+      assert-equals[size](mem/arena-stack-len(), start-len)
+    }
+    ($expr)
+    `
+  }
+
+  fn alloc-layout(size: size, align: size): ptr { current-arena().alloc(size, align) }
+  fn alloc-t[t](): *t { current-arena().alloc-t() }
+
+  // 0.as[ptr] inlined rather than ptr/null: this global is demanded during
+  // other globals' initializers, and referencing the null global from here
+  // closes an initializer cycle.
+  let(mutable, tls) arena-tmp: *arena = 0.as[ptr].rw[arena]
+
+  type(alias) ALLOC_STACK_MAX = 64
+  // Empty stack means "the tmp arena"; tmp is lazily initialized, so it
+  // cannot be pushed here eagerly at thread start. Elements are raw ptrs:
+  // reference-typed slots in global initializers do not serialize yet.
+  let(mutable, tls) arena-stack: fixlist[ptr, ALLOC_STACK_MAX] =
+    zeroed[fixlist[ptr, ALLOC_STACK_MAX]]
+
+  fn push-arena(a: *arena) {
+    arena-stack.push(a.as[ptr])
+  }
+  fn pop-arena(): *arena {
+    arena-stack.pop().!.rw[arena]
+  }
+  fn arena-stack-len(): size { arena-stack.len() }
+  fn current-arena(): *arena {
+    arena-stack.last() is {
+      :some a -> a.rw[arena],
+      :none -> tmp()
+    }
+  }
+
+  fn init-tmp-arena() {
+    if not arena-tmp.as[ptr].is-null() crash("arena-tmp already initialized")
+    arena-tmp = arena/init-fixed(1 * arena/gb)
+  }
+
+  fn tmp(): *arena {
+    if arena-tmp.as[ptr].is-null() { init-tmp-arena() }
+    arena-tmp
+  }
+
+}
+
+// Positioned after the tls arena globals: global initializers run in decl
+// order through the VM, which needs the tmp arena machinery evaluated first.
+let heap: heap = .{}

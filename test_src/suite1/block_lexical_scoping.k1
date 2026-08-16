@@ -9,4 +9,12 @@ fn test() {
     result is :some msg
     and msg.starts-with("No value '_foo' is in scope")
   )
+
+  let u = {}
+  assert(u == .{})
+  let v: {} = {}
+  assert(v == u)
+  while false {}
+  let w = if true {} else {}
+  assert(w == u)
 }

@@ -25,11 +25,29 @@ ns recurse_basic {
     }
   }
 
+  type expr = either { leaf(i64), many(list[expr]) }
+
+  fn derived-eq() {
+    let a: expr = :many([:leaf(1), :many([:leaf(2)])])
+    let b: expr = :many([:leaf(1), :many([:leaf(2)])])
+    let c: expr = :many([:leaf(1), :many([:leaf(3)])])
+    assert(a == b)
+    assert(a != c)
+
+    let xs: list[expr] = [:leaf(7)]
+    for x in xs { assert(x == a or x != a) }
+    let seven: expr = :leaf(7)
+    let eight: expr = :leaf(8)
+    assert(xs.contains(seven))
+    assert(not xs.contains(eight))
+  }
+
   fn test() {
     let node = make(4)
     assert-equals(count(node), 4)
     let enode = emake(10)
     assert-equals(ecount(enode), 10)
+    derived-eq()
   }
 
 }

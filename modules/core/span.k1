@@ -1,0 +1,153 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
+// Represents a contiguously allocated segment of memory that
+// stores values of type t.
+
+// spans are read-only.
+
+// You should never modify the contents
+// of the data pointed to by a span unless you know you have
+// exclusive access to the data (e.g., just created it) 
+// and never break the contract that no observable
+// span contents should ever change
+ns for span {
+  
+  ////////////////////////
+  // Constructor functions
+
+  // Only safe if you have exclusive access to buffer
+  fn wrap-buffer[t](buffer: buffer[t]): span[t] {
+    .{ buffer }
+  }
+
+  fn wrap-raw[t](ptr: ptr, len: size): span[t] {
+    .{ buffer = buffer/wrap-raw(ptr, len) }
+  }
+
+  fn inner-buffer[t](self: span[t]): buffer[t] {
+    self.buffer
+  }
+
+  fn data-ptr[t](self: span[t]): ptr {
+    self.buffer.data-ptr()
+  }
+
+  fn empty[t](): span[t] {
+    .{ buffer = buffer/empty[t]() }
+  }
+
+  fn from-array[t, n: static size](array: *array[t, n]): span[t] {
+    let buffer = buffer/from-array[t, n](array)
+    .{ buffer }
+  }
+
+  fn single[t](t): span[t] {
+    let buf = buffer/allocate[t](1)
+    buf.set(0, t)
+    wrap-buffer(buf)
+  }
+
+  fn wrap-single[t](t: *t): span[t] {
+    wrap-raw(t.as[ptr], 1)
+  }
+
+  fn cloned[t](self: span[t]): span[t] {
+    .{ buffer = self.buffer.cloned() }
+  }
+
+  fn cloned-in[t, a: allocator](self: span[t], alloc: a): span[t] {
+    .{ buffer = self.buffer.cloned-in(alloc) }
+  }
+
+  fn get-ref[t](self: span[t], index: size): *t {
+    self.buffer.get-ref[t](index)
+  }
+
+  fn first-ref[t](self: span[t]): ?*t {
+    if not self.is-empty() {
+      :some self.get-ref(0)
+    } else {
+      :none
+    }
+  }
+
+  fn last-ref[t](self: span[t]): ?*t {
+    if not self.is-empty() {
+      :some self.get-ref(self.len() - 1)
+    } else {
+      :none
+    }
+  }
+
+  fn position[t: equals](self: span[t], needle: t): ?size {
+    self.buffer.position(needle)
+  }
+
+  fn contains[t: equals](self: span[t], needle: t): bool {
+    self.buffer.position(needle).is-some()
+  }
+
+  fn concat[t](self: span[t], other: span[t]): span[t] {
+    let concated-buffer = self.inner-buffer().concat(other.inner-buffer())
+    wrap-buffer(concated-buffer)
+  }
+
+  fn join[t, c: as-span[t = span[t]]](items: c, separator: span[t]): span[t] {
+    let spans = items.as-span()
+    if spans.is-empty() return empty()
+    let total = separator.len() * (spans.len() - 1)
+    for s in spans { total = total + s.len() }
+    let buf = buffer/allocate[t](total)
+    let pos: size = 0
+    for s in spans {
+      if it-index > 0 {
+        buffer/copy(src = separator.inner-buffer(), dst = buf.slice(pos, pos + separator.len()))
+        pos = pos + separator.len()
+      }
+      buffer/copy(src = s.inner-buffer(), dst = buf.slice(pos, pos + s.len()))
+      pos = pos + s.len()
+    }
+    wrap-buffer(buf)
+  }
+
+  fn as-char-span(self: span[byte]): span[char] {
+    .{ buffer = self.buffer.as-char-buffer() }
+  }
+
+  fn as-byte-span(self: span[char]): span[byte] {
+    .{ buffer = self.buffer.as-byte-buffer() }
+  }
+
+}
+
+impl[t] as-span[t = t] for span[t] {
+  fn as-span(self): span[t] { self }
+}
+
+impl[t] iterable[item = t, i = buffer-iterator[t]] for span[t] {
+  fn iterator(self): i {
+    buffer-iterator/from-buffer(self.inner-buffer())
+  }
+}
+
+impl[t: print] print for span[t] {
+  fn print-to[w: writer](self, w): empty {
+    w.write-char('[')
+    for self {
+      it.print-to(w)
+      let last = it-index == self.len() - 1
+      if not last {
+        w.write-char(',')
+      }
+    }
+    w.write-char(']')
+  }
+}
+
+impl[t: equals] equals for span[t] {
+  fn equals(self: span[t], other: span[t]): bool {
+    self.buffer == other.buffer
+  }
+}
+

@@ -1,0 +1,116 @@
+// The HTTP/1.1 response model and the event-loop driver that delivers one.
+// A strict body is just a one-group stream with a known Content-Length; a
+// streamed body goes out chunked-transfer-encoded.
+
+use std/source
+use std/pull
+use std/waker
+
+type http-response = {
+  status: u16,
+  content-type: string,
+  extra-headers: span[string],
+  body: either { complete(span[span[u8]]), stream(dyn[source[t = u8]]) },
+}
+
+ns response {
+  fn complete(status: u16, content-type: string, body: string): http-response {
+    .{ status, content-type, extra-headers = [], body = :complete span/single(body.span-bytes()) }
+  }
+  fn html(body: string): http-response { complete(200, "text/html", body) }
+  fn text(body: string): http-response { complete(200, "text/plain", body) }
+  fn not-found(): http-response { complete(404, "text/plain", "Not Found\n") }
+  fn status(status: u16, msg: string): http-response { complete(status, "text/plain", msg) }
+  fn method-not-allowed(allowed: span[string]): http-response {
+    let allow = string-builder/new()
+    allow.write("Allow: ")
+    for m in allowed { if it-index > 0 { allow.write(", ") }; allow.write(m) }
+    .{
+      status = 405,
+      content-type = "text/plain",
+      extra-headers = span/single(allow.build()),
+      body = :complete span/single("Method Not Allowed\n".span-bytes()),
+    }
+  }
+  fn stream(content-type: string, source: dyn[source[t = u8]]): http-response {
+    .{ status = 200, content-type, extra-headers = [], body = :stream source }
+  }
+
+  fn status-text(status: u16): string {
+    if status == 200 "OK"
+    else if status == 400 "Bad Request"
+    else if status == 404 "Not Found"
+    else if status == 405 "Method Not Allowed"
+    else if status == 500 "Internal Server Error"
+    else "Status"
+  }
+}
+
+// A strict body as a source: its segments as one group, once
+type group-source = { group: span[span[u8]], done: bool }
+
+impl source[t = u8] for group-source {
+  fn next(self: *mut group-source): pull[u8] {
+    if self.done { return :done }
+    self.done = true
+    :chunk self.group
+  }
+}
+
+// Chunked transfer framing as a pipe: wraps each upstream group in a
+// hex-size prefix and CRLF trailer without touching the payload segments,
+// then emits the terminal "0\r\n\r\n". The prefix and segment list are
+// reusable buffers overwritten on each next(), so long-lived streams don't
+// grow the request arena.
+type chunked-encoder = {
+  upstream: dyn[source[t = u8]],
+  prefix: list[u8],
+  parts: list[span[u8]],
+  finished: bool,
+}
+
+fn chunked(upstream: dyn[source[t = u8]]): dyn[source[t = u8]] {
+  let state: *mut chunked-encoder = mem/new(.{
+    upstream,
+    prefix = list/empty[u8](),
+    parts = list/empty[span[u8]](),
+    finished = false,
+  })
+  state.to-dyn()
+}
+
+impl source[t = u8] for chunked-encoder {
+  fn start(self: *mut chunked-encoder, waker: waker) { self.upstream.start(waker) }
+  fn stop(self: *mut chunked-encoder) { self.upstream.stop() }
+  fn next(self: *mut chunked-encoder): pull[u8] {
+    if self.finished { return :done }
+    self.upstream.next() is {
+      :chunk group -> {
+        let total: size = 0
+        for seg in group { total = total + seg.len() }
+        self.prefix.clear()
+        push-hex(self.prefix.&, total)
+        self.prefix.append-span("\r\n".span-bytes())
+        self.parts.clear()
+        self.parts.push(self.prefix.as-span())
+        for seg in group { self.parts.push(seg) }
+        self.parts.push("\r\n".span-bytes())
+        :chunk self.parts.as-span()
+      },
+      :pending -> :pending,
+      :done -> {
+        self.finished = true
+        self.parts.clear()
+        self.parts.push("0\r\n\r\n".span-bytes())
+        :chunk self.parts.as-span()
+      },
+      :fail message -> :fail message,
+    }
+  }
+}
+
+let hex-digits: string = "0123456789abcdef"
+fn push-hex(out: *mut list[u8], value: size) {
+  if value >= 16 { push-hex(out, value / 16) }
+  out.push(hex-digits.span-bytes().get(value % 16))
+}

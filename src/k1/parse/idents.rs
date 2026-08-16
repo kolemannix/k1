@@ -59,6 +59,7 @@ impl QIdent {
 }
 
 #[allow(non_snake_case)]
+#[derive(Clone, Copy)]
 pub(crate) struct BuiltinIdents {
     pub null: StringId,
     pub main: StringId,
@@ -85,6 +86,15 @@ pub(crate) struct BuiltinIdents {
     pub bang: StringId,
     pub amp: StringId,
     pub payload: StringId,
+    pub load: StringId,
+    pub load_async: StringId,
+    pub loaded_version: StringId,
+    pub watch: StringId,
+    pub reload: StringId,
+    pub load_ns: StringId,
+    pub load_ns_async: StringId,
+    pub ns_version: StringId,
+    pub watch_ns: StringId,
     pub try_: StringId,
     pub try_value: StringId,
     pub defer_value: StringId,
@@ -97,7 +107,12 @@ pub(crate) struct BuiltinIdents {
     pub equals: StringId,
     pub tag: StringId,
     pub value: StringId,
-    pub MODULE_INFO: StringId,
+    pub module: StringId,
+    pub module_params: StringId,
+    pub dep: StringId,
+    pub add_dep: StringId,
+    pub setup: StringId,
+    pub setup_ctx: StringId,
     pub root_module_name: StringId,
     pub core: StringId,
     pub std: StringId,
@@ -163,7 +178,6 @@ pub(crate) struct BuiltinIdents {
     pub write: StringId,
     pub writeln: StringId,
     pub fmt: StringId,
-    pub v: StringId,
     pub subject: StringId,
     pub fmtargs: StringId,
     pub e: StringId,
@@ -193,6 +207,7 @@ pub(crate) struct BuiltinIdents {
 }
 
 #[allow(non_snake_case)]
+#[derive(Clone, Copy)]
 pub(crate) struct BuiltinFunctions {
     pub List_with_capacity: QIdent,
     pub List_push: QIdent,
@@ -297,6 +312,24 @@ impl Interner {
         let hash = content_hash(s.as_bytes());
         self.dedup.find(hash, |&id| self.get(id) == s).copied()
     }
+
+    fn snap(&self, w: &mut crate::snap::SnapWriter) {
+        self.bytes.snap(w);
+        self.entries.snap(w);
+    }
+
+    fn restore(&mut self, r: &mut crate::snap::SnapReader) {
+        self.bytes.restore(r);
+        self.entries.restore(r);
+        self.dedup.clear();
+        let Interner { bytes, entries, dedup } = self;
+        for (id, slice) in entries.iter_with_ids() {
+            let hash = content_hash(bytes.getn(*slice));
+            dedup.insert_unique(hash, id, |&id| {
+                content_hash(Self::get_str(bytes, entries, id).as_bytes())
+            });
+        }
+    }
 }
 
 pub struct IdentPool {
@@ -315,6 +348,20 @@ impl IdentPool {
     }
     pub fn get_string(&self, id: StringId) -> &'static str {
         self.pool.borrow().get(id)
+    }
+
+    pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
+        w.write_section("idents");
+        self.pool.borrow().snap(w);
+        w.write_t(&self.b);
+        w.write_t(&self.f);
+    }
+
+    pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
+        r.section("idents");
+        self.pool.get_mut().restore(r);
+        self.b = r.read_t();
+        self.f = r.read_t();
     }
 
     pub fn len(&self) -> usize {
@@ -380,6 +427,15 @@ impl IdentPool {
             bang: intern!("!"),
             amp: intern!("&"),
             payload: intern!("payload"),
+            load: intern!("load"),
+            load_async: intern!("load-async"),
+            loaded_version: intern!("loaded-version"),
+            watch: intern!("watch"),
+            reload: intern!("reload"),
+            load_ns: intern!("load-ns"),
+            load_ns_async: intern!("load-ns-async"),
+            ns_version: intern!("ns-version"),
+            watch_ns: intern!("watch-ns"),
             try_: intern!("try"),
             try_value: intern!("try_value"),
             defer_value: intern!("defer_value"),
@@ -392,7 +448,12 @@ impl IdentPool {
             equals: intern!("equals"),
             tag: intern!("tag"),
             value: intern!("value"),
-            MODULE_INFO: intern!("MODULE_INFO"),
+            module: intern!("module"),
+            module_params: intern!("module-params"),
+            dep: intern!("dep"),
+            add_dep: intern!("add-dep-impl"),
+            setup: intern!("setup"),
+            setup_ctx: intern!("setup-ctx"),
             root_module_name: intern!("_root"),
             core: intern!("core"),
             std: intern!("std"),
@@ -457,7 +518,6 @@ impl IdentPool {
             write: intern!("write"),
             writeln: intern!("writeln"),
             fmt: intern!("fmt"),
-            v: intern!("v"),
             subject: intern!("subject"),
             fmtargs: intern!("fmtargs"),
             e: intern!("e"),
@@ -618,7 +678,7 @@ mod test {
 
     #[test]
     fn intern_dedup_and_roundtrip() {
-        let mut p = make_pool();
+        let p = make_pool();
         let a = p.intern("hello");
         let b = p.intern("hello");
         let c = p.intern("world");
@@ -633,7 +693,7 @@ mod test {
 
     #[test]
     fn builtins_resolve() {
-        let mut p = make_pool();
+        let p = make_pool();
         assert_eq!(p.lookup("null"), Some(p.b.null));
         assert_eq!(p.intern("for-each"), p.b.for_each);
         assert_eq!(p.get_string(p.b.self_), "self");
@@ -641,7 +701,7 @@ mod test {
 
     #[test]
     fn big_strings_use_sampled_hash_and_still_dedup() {
-        let mut p = make_pool();
+        let p = make_pool();
         let big_a: String = "a".repeat(100_000);
         let mut big_b = big_a.clone();
         // Differs only outside the sampled windows (head/mid/tail 64 bytes)
@@ -659,7 +719,7 @@ mod test {
 
     #[test]
     fn pointers_stable_across_growth() {
-        let mut p = make_pool();
+        let p = make_pool();
         let id = p.intern("stable");
         let ptr_before = p.get_string(id).as_ptr();
         for i in 0..100_000 {

@@ -40,7 +40,8 @@ fn run() -> anyhow::Result<ExitCode> {
     let Ok(mut program) = compiler::compile_program(&args) else {
         return Ok(ExitCode::FAILURE);
     };
-    if args.command.is_check() {
+    if args.command.is_check() || matches!(args.command, Command::Setup { .. }) {
+        // Setup runs as a module-load gate, so a successful compile means setup ran.
         // In release builds, just exit fast
         if cfg!(debug_assertions) {
             return Ok(ExitCode::SUCCESS);
@@ -53,23 +54,42 @@ fn run() -> anyhow::Result<ExitCode> {
         k1::server::serve(Arc::new(Mutex::new(Some(Box::new(program)))));
         return Ok(ExitCode::SUCCESS);
     }
+    if matches!(args.command, Command::Run { .. } | Command::Test { .. })
+        && !program.program_settings.executable
+    {
+        eprintln!(
+            "{} is a library module; run/test require an executable module",
+            program.program_name()
+        );
+        return Ok(ExitCode::FAILURE);
+    }
     let llvm_ctx = inkwell::context::Context::create();
     return match compiler::codegen_module(&args, &llvm_ctx, &mut program) {
         Ok(cg) => match args.command {
             Command::Check { .. } => unreachable!(),
             Command::Build { .. } => Ok(ExitCode::SUCCESS),
-            Command::Run { .. } => {
+            Command::Run { ref program_args, .. } => {
                 info!("run executable: {}", cg.name());
-                let home_dir = &cg.k1.config.home_dir;
-                let out_dir = &cg.k1.config.out_dir;
-                compiler::run_compiled_program(out_dir, home_dir, cg.name(), false);
-                Ok(ExitCode::SUCCESS)
+                let exit_code = compiler::run_compiled_program(
+                    &cg.k1.ast.idents,
+                    cg.k1.config.out_dir,
+                    cg.k1.config.home_dir,
+                    cg.name(),
+                    false,
+                    program_args,
+                );
+                if exit_code != Some(0) { Ok(ExitCode::FAILURE) } else { Ok(ExitCode::SUCCESS) }
             }
             Command::Test { .. } => {
                 info!("test executable: {}", cg.name());
-                let home_dir = &cg.k1.config.home_dir;
-                let out_dir = &cg.k1.config.out_dir;
-                let exit_code = compiler::run_compiled_program(out_dir, home_dir, cg.name(), true);
+                let exit_code = compiler::run_compiled_program(
+                    &cg.k1.ast.idents,
+                    cg.k1.config.out_dir,
+                    cg.k1.config.home_dir,
+                    cg.name(),
+                    true,
+                    &[],
+                );
                 if exit_code != Some(0) { Ok(ExitCode::FAILURE) } else { Ok(ExitCode::SUCCESS) }
             }
             Command::Repl { .. } => {
@@ -85,6 +105,7 @@ fn run() -> anyhow::Result<ExitCode> {
                 }
             }
             Command::Server { .. } => unreachable!("server runs before codegen"),
+            Command::Setup { .. } => unreachable!("setup exits after compile"),
         },
         Err(err) => {
             eprintln!("Codegen error: {err}");

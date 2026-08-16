@@ -1,0 +1,8 @@
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.executable()
+  m.dep("http")
+  m
+}
+
+let params: { tlog: bool } = k1/module-params(.{ tlog = false })

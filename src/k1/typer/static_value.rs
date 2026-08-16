@@ -1,8 +1,6 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
-use std::collections::hash_map::Entry;
-
 use crate::nz_u32_id;
 use crate::typer::*;
 
@@ -50,9 +48,9 @@ impl StaticContainer {
 nz_u32_id!(StaticValueId);
 
 static_assert_size!(StaticValue, 24);
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum StaticValue {
-    Empty,
+    Empty(TypeId),
     Bool(bool),
     Char(u8),
     Int(TypedIntValue),
@@ -71,7 +69,7 @@ pub enum StaticValue {
 impl StaticValue {
     pub fn kind_name(&self) -> &'static str {
         match self {
-            StaticValue::Empty => "empty",
+            StaticValue::Empty(_) => "empty",
             StaticValue::Bool(_) => "bool",
             StaticValue::Char(_) => "char",
             StaticValue::Int(i) => i.kind_name(),
@@ -147,7 +145,7 @@ impl DepHash<StaticValuePool> for StaticValue {
         use std::hash::Hash;
         std::mem::discriminant(self).hash(state);
         match self {
-            StaticValue::Empty => {}
+            StaticValue::Empty(type_id) => type_id.hash(state),
             StaticValue::Bool(b) => b.hash(state),
             StaticValue::Char(c) => c.hash(state),
             StaticValue::Int(i) => i.hash(state),
@@ -192,7 +190,7 @@ impl DepHash<StaticValuePool> for StaticValue {
 impl DepEq<StaticValuePool> for StaticValue {
     fn dep_eq(&self, other: &Self, pool: &StaticValuePool) -> bool {
         match (self, other) {
-            (StaticValue::Empty, StaticValue::Empty) => true,
+            (StaticValue::Empty(t1), StaticValue::Empty(t2)) => *t1 == *t2,
             (StaticValue::Bool(a), StaticValue::Bool(b)) => *a == *b,
             (StaticValue::Char(a), StaticValue::Char(b)) => *a == *b,
             (StaticValue::Int(a), StaticValue::Int(b)) => *a == *b,
@@ -227,7 +225,7 @@ impl DepEq<StaticValuePool> for StaticValue {
 pub struct StaticValuePool {
     pub mem: kmem::Mem<StaticValuePool>,
     pub pool: VPool<StaticValue, StaticValueId>,
-    pub hashes: FxHashMap<u64, StaticValueId>,
+    hashes: hashbrown::HashTable<(u64, StaticValueId)>,
 
     empty_id: StaticValueId,
     false_id: StaticValueId,
@@ -236,20 +234,46 @@ pub struct StaticValuePool {
 }
 
 impl StaticValuePool {
-    pub fn make_with_hint(size_hint: usize) -> StaticValuePool {
-        let mut pool = VPool::make_with_hint("static_values", size_hint);
+    pub fn make() -> StaticValuePool {
+        let mut pool = VPool::make("static_values");
         let false_id = pool.add(StaticValue::Bool(false));
         let true_id = pool.add(StaticValue::Bool(true));
-        let empty_id = pool.add(StaticValue::Empty);
+        let empty_id = pool.add(StaticValue::Empty(EMPTY_TYPE_ID));
         let nullptr_id = pool.add(StaticValue::Zero(POINTER_TYPE_ID));
         StaticValuePool {
             mem: kmem::Mem::make(),
             pool,
-            hashes: FxHashMap::with_capacity(size_hint),
+            hashes: hashbrown::HashTable::new(),
             empty_id,
             false_id,
             true_id,
             nullptr_id,
+        }
+    }
+
+    pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
+        w.write_section("static_values");
+        self.mem.snap(w);
+        self.pool.snap(w);
+        w.write_t(&self.empty_id);
+        w.write_t(&self.false_id);
+        w.write_t(&self.true_id);
+        w.write_t(&self.nullptr_id);
+    }
+
+    pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
+        r.section("static_values");
+        self.mem.restore(r);
+        self.pool.restore(r);
+        self.empty_id = r.read_t();
+        self.false_id = r.read_t();
+        self.true_id = r.read_t();
+        self.nullptr_id = r.read_t();
+        self.hashes.clear();
+        for i in 0..self.pool.len() {
+            let id = StaticValueId::from_u32(i as u32 + 1).unwrap();
+            let hash = self.hash(self.pool.get(id));
+            self.hashes.insert_unique(hash, (hash, id), |(h, _)| *h);
         }
     }
 
@@ -303,6 +327,15 @@ impl StaticValuePool {
         self.add(StaticValue::Struct(StaticStruct { type_id, fields }))
     }
 
+    pub fn add_empty_typed(&mut self, type_id: TypeId) -> StaticValueId {
+        // the canonical anonymous empty vs a specific zero-sized type id
+        if type_id == EMPTY_TYPE_ID {
+            self.empty_id()
+        } else {
+            self.add(StaticValue::Empty(type_id))
+        }
+    }
+
     pub fn add_struct_from_slice(
         &mut self,
         type_id: TypeId,
@@ -333,28 +366,25 @@ impl StaticValuePool {
 
     pub fn add(&mut self, value: StaticValue) -> StaticValueId {
         match value {
-            StaticValue::Struct(s) if s.fields.is_empty() => return self.empty_id,
             StaticValue::Bool(false) => return self.false_id(),
             StaticValue::Bool(true) => return self.true_id(),
             _ => {}
         };
         let hash = self.hash(&value);
-        if let Entry::Occupied(entry) = self.hashes.entry(hash) {
-            let existing_id = *entry.get();
-            let existing = self.pool.get(existing_id);
-            if value.dep_eq(existing, self) {
-                return existing_id;
-            }
+        if let Some(&(_, existing_id)) =
+            self.hashes.find(hash, |&(_, id)| value.dep_eq(self.pool.get(id), self))
+        {
+            return existing_id;
         }
         let new_id = self.pool.add(value);
-        self.hashes.insert(hash, new_id);
+        self.hashes.insert_unique(hash, (hash, new_id), |&(h, _)| h);
         new_id
     }
 
     pub fn set(&mut self, reserved_id: StaticValueId, value: StaticValue) {
         let hash = self.hash(&value);
         *self.pool.get_mut(reserved_id) = value;
-        self.hashes.insert(hash, reserved_id);
+        self.hashes.insert_unique(hash, (hash, reserved_id), |&(h, _)| h);
     }
 
     pub fn get(&self, id: StaticValueId) -> &StaticValue {

@@ -1,0 +1,205 @@
+// File watching over kqueue (macos) and inotify (linux)
+//
+//   let w = watch/create().!
+//   w.add("path/to/dir-or-file").!
+//   loop { for e in w.wait().! { ... e.path, e.kind ... } }
+
+#if k1/os-macos ns kq {
+
+  use core/c-int
+
+  // struct kevent, macos 64-bit
+  type kevent-t = { ident: u64, filter: i16, flags: u16, fflags: u32, data: i64, udata: ptr }
+
+  let O_EVTONLY: c-int = 0x8000
+
+  let EV_ADD: u16 = 0x0001
+  let EV_CLEAR: u16 = 0x0020
+  let EV_ERROR: u16 = 0x4000
+
+  let EVFILT_VNODE: i16 = -4
+
+  let NOTE_DELETE: u32 = 0x1
+  let NOTE_WRITE: u32 = 0x2
+  let NOTE_EXTEND: u32 = 0x4
+  let NOTE_ATTRIB: u32 = 0x8
+  let NOTE_RENAME: u32 = 0x20
+
+  fn(extern("kqueue")) kqueue(): c-int
+  fn(extern("kevent")) kevent(
+    kq: c-int,
+    changelist: ptr,
+    nchanges: c-int,
+    eventlist: ptr,
+    nevents: c-int,
+    timeout: ptr
+  ): c-int
+}
+
+#if k1/os-linux ns inotify {
+
+  use core/c-int
+
+  // struct inotify_event header; a name[len] tail follows each record
+  type event-t = { wd: i32, mask: u32, cookie: u32, len: u32 }
+
+  let IN_MODIFY: u32 = 0x2
+  let IN_ATTRIB: u32 = 0x4
+  let IN_CLOSE_WRITE: u32 = 0x8
+  let IN_MOVED_FROM: u32 = 0x40
+  let IN_MOVED_TO: u32 = 0x80
+  let IN_CREATE: u32 = 0x100
+  let IN_DELETE: u32 = 0x200
+  let IN_DELETE_SELF: u32 = 0x400
+  let IN_MOVE_SELF: u32 = 0x800
+
+  fn(extern("inotify_init1")) inotify_init1(flags: c-int): c-int
+  fn(extern("inotify_add_watch")) inotify_add_watch(fd: c-int, path: ptr, mask: u32): c-int
+}
+
+ns watch {
+
+  use core/c-int
+  use core/posix
+  use core/libc
+
+  type event-kind = either { modified, created, deleted, renamed }
+
+  impl print for event-kind {
+    fn print-to[w: writer](self, w) {
+      self is {
+        :modified -> w.write("modified"),
+        :created -> w.write("created"),
+        :deleted -> w.write("deleted"),
+        :renamed -> w.write("renamed"),
+      }
+    }
+  }
+
+  // path is the watched path that fired, not the changed child
+  type event = { path: string, kind: event-kind }
+
+  // id is the kqueue vnode fd on macos, the inotify watch descriptor on linux
+  type entry = { path: string, id: i64 }
+
+  type watcher = { fd: i32, entries: list[entry] }
+
+  fn create(): result[watcher, string] {
+    let fd: i32 = k1/os #is {
+      :macos -> kq/kqueue(),
+      :linux -> inotify/inotify_init1(0),
+      :wasm -> #static crash("watch is not available on wasm"),
+    }
+    if fd < 0 return :err "watch/create failed: ${libc/errno-k1-string()}"
+    :ok .{ fd = fd, entries = list/empty[entry]() }
+  }
+
+  ns for watcher {
+
+    fn add(self: *mut watcher, path: string): result[empty, string] {
+      let id: i64 = k1/os #is {
+        :macos -> {
+          let file-fd = posix/open(path.to-c-tmp().ptr, kq/O_EVTONLY)
+          if file-fd < 0 {
+            return :err "watch/add open of $path failed: ${libc/errno-k1-string()}"
+          }
+          let change: kq/kevent-t = .{
+            ident = file-fd.as[i64].as[u64],
+            filter = kq/EVFILT_VNODE,
+            flags = kq/EV_ADD | kq/EV_CLEAR,
+            fflags = kq/NOTE_WRITE | kq/NOTE_EXTEND | kq/NOTE_ATTRIB | kq/NOTE_DELETE | kq/NOTE_RENAME,
+            data = 0,
+            udata = ptr/null,
+          }
+          if kq/kevent(self.fd, change.&.as[ptr], 1, ptr/null, 0, ptr/null) < 0 {
+            posix/close(file-fd)
+            return :err "watch/add kevent for $path failed: ${libc/errno-k1-string()}"
+          }
+          file-fd.as[i64]
+        },
+        :linux -> {
+          let mask = inotify/IN_MODIFY | inotify/IN_ATTRIB | inotify/IN_CLOSE_WRITE
+            | inotify/IN_MOVED_FROM | inotify/IN_MOVED_TO | inotify/IN_CREATE
+            | inotify/IN_DELETE | inotify/IN_DELETE_SELF | inotify/IN_MOVE_SELF
+          let wd = inotify/inotify_add_watch(self.fd, path.to-c-tmp().ptr, mask)
+          if wd < 0 {
+            return :err "watch/add of $path failed: ${libc/errno-k1-string()}"
+          }
+          wd.as[i64]
+        },
+        :wasm -> #static crash("watch is not available on wasm"),
+      }
+      self.entries.push(.{ path = path, id = id })
+      :ok
+    }
+
+    // Blocks until at least one watched path changes. Spurious extra events
+    // are normal; callers that care should compare content, not counts.
+    fn wait(self: *mut watcher): result[list[event], string] {
+      let events = list/empty[event]()
+      k1/os #is {
+        :macos -> {
+          let out = buffer/allocate[kq/kevent-t](8)
+          let n = kq/kevent(self.fd, ptr/null, 0, out.data.as[ptr], 8, ptr/null)
+          while n < 0 and libc/errno() == libc/EINTR {
+            n = kq/kevent(self.fd, ptr/null, 0, out.data.as[ptr], 8, ptr/null)
+          }
+          if n < 0 return :err "watch/wait kevent failed: ${libc/errno-k1-string()}"
+          for i in 0.until(n.as[size]) {
+            let ev = out.get(i)
+            if ev.flags.bit-and(kq/EV_ERROR) != 0 continue
+            let kind: event-kind = if ev.fflags.bit-and(kq/NOTE_DELETE) != 0 :deleted
+              else if ev.fflags.bit-and(kq/NOTE_RENAME) != 0 :renamed
+              else :modified
+            for entry in self.entries.as-span() {
+              if entry.id == ev.ident.as[i64] {
+                events.push(.{ path = entry.path, kind = kind })
+              }
+            }
+          }
+        },
+        :linux -> {
+          let buf = buffer/allocate[u8](4096)
+          let n = posix/read(self.fd, buf.data.as[ptr], buf.len.as[u64])
+          while n < 0 and libc/errno() == libc/EINTR {
+            n = posix/read(self.fd, buf.data.as[ptr], buf.len.as[u64])
+          }
+          if n <= 0 return :err "watch/wait read failed: ${libc/errno-k1-string()}"
+          let offset: size = 0
+          while offset < n {
+            let ev = buf.data.add-bytes(offset).r[inotify/event-t].*
+            let kind: event-kind =
+              if ev.mask.bit-and(inotify/IN_DELETE | inotify/IN_DELETE_SELF | inotify/IN_MOVED_FROM) != 0 :deleted
+              else if ev.mask.bit-and(inotify/IN_MOVE_SELF | inotify/IN_MOVED_TO) != 0 :renamed
+              else if ev.mask.bit-and(inotify/IN_CREATE) != 0 :created
+              else :modified
+            for entry in self.entries.as-span() {
+              if entry.id == ev.wd.as[i64] {
+                events.push(.{ path = entry.path, kind = kind })
+              }
+            }
+            // Records are variable-length: a fixed header then name[len]
+            offset = offset + types/stride[inotify/event-t]() + ev.len.as[size]
+          }
+        },
+        :wasm -> #static crash("watch is not available on wasm"),
+      }
+      :ok events
+    }
+
+    fn close(self: *mut watcher) {
+      k1/os #is {
+        // vnode fds are per-entry on kqueue
+        :macos -> for entry in self.entries.as-span() {
+          posix/close(entry.id.as[i32])
+        },
+        :linux -> .{},
+        :wasm -> #static crash("watch is not available on wasm"),
+      }
+      posix/close(self.fd)
+      self.entries.clear()
+    }
+
+  }
+
+}

@@ -341,13 +341,26 @@ impl<AnyTag> From<&'static str> for MStr<AnyTag> {
 /// at the same time; see `Mem::format_all`
 pub struct MemWriter<Tag> {
     mem: *mut Mem<Tag>,
+    #[cfg(debug_assertions)]
+    expected_cursor: *mut u8,
+}
+impl<Tag> MemWriter<Tag> {
+    fn new(mem: &mut Mem<Tag>) -> Self {
+        MemWriter {
+            #[cfg(debug_assertions)]
+            expected_cursor: mem.cursor,
+            mem,
+        }
+    }
 }
 impl<Tag> std::fmt::Write for MemWriter<Tag> {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
         let mem = unsafe { &mut *self.mem };
 
         #[cfg(debug_assertions)]
-        let start = mem.cursor;
+        if mem.cursor != self.expected_cursor {
+            panic!("kmem::Mem allocated from while a MemWriter was formatting into it")
+        }
 
         #[cfg_attr(not(debug_assertions), allow(unused_variables))]
         let bytes = mem.pushn_raw(s.as_bytes());
@@ -355,11 +368,12 @@ impl<Tag> std::fmt::Write for MemWriter<Tag> {
         #[cfg(debug_assertions)]
         {
             let bytes_start = bytes.as_mut_ptr();
-            if start != bytes_start {
+            if bytes_start != self.expected_cursor {
                 // If we pushed any padding, fail. We
                 // shouldn't be pushing any padding for a u8 slice
                 panic!("Inserted padding in kmem::Mem fmt::Write::write_str")
             }
+            self.expected_cursor = mem.cursor;
         };
         Ok(())
     }
@@ -603,6 +617,14 @@ impl<Tag> Mem<Tag> {
         }
     }
 
+    pub fn pushn_uninit<T>(&mut self, len: u32) -> MSlice<T, Tag> {
+        if len == 0 {
+            return MSlice::empty();
+        }
+        let ptr = self.push_slice_uninit::<T>(len as usize);
+        MSlice::make(self.ptr_to_offset(ptr), len)
+    }
+
     pub fn pushn<T: Copy>(&mut self, ts: &[T]) -> MSlice<T, Tag> {
         let slice = self.pushn_raw(ts);
         let ptr = slice.as_ptr();
@@ -664,7 +686,7 @@ impl<Tag> Mem<Tag> {
         use std::fmt::Write;
 
         let base: *const u8 = self.cursor;
-        let mut writer = MemWriter { mem: self };
+        let mut writer = MemWriter::new(self);
         writer.write_fmt(args).unwrap();
         let len = unsafe { self.cursor.offset_from(base) };
         if len < 0 {
@@ -680,7 +702,7 @@ impl<Tag> Mem<Tag> {
         stuff: &[&dyn DepDisplay<D, A>],
     ) -> MStr<Tag> {
         let base: *const u8 = self.cursor;
-        let mut writer = MemWriter { mem: self };
+        let mut writer = MemWriter::new(self);
         for s in stuff.iter() {
             DepDisplay::fmt(*s, &mut writer, dep, args).unwrap();
         }
@@ -696,7 +718,7 @@ impl<Tag> Mem<Tag> {
         F: FnOnce(&mut MemWriter<Tag>, &D, &A) -> fmt::Result,
     {
         let base: *const u8 = self.cursor;
-        let mut writer = MemWriter { mem: self };
+        let mut writer = MemWriter::new(self);
 
         f(&mut writer, dep, args).unwrap();
 
@@ -796,10 +818,6 @@ impl<Tag> Mem<Tag> {
         SmallVec::from_slice(slice)
     }
 
-    pub fn getn_sv4<T: Copy>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; 4]> {
-        self.getn_sv(handle)
-    }
-
     pub fn getn_sv8<T: Copy>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; 8]> {
         self.getn_sv(handle)
     }
@@ -849,6 +867,23 @@ impl<Tag> Mem<Tag> {
 
     pub fn bytes_used(&self) -> usize {
         self.cursor.addr() - self.base_ptr().addr()
+    }
+
+    pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
+        let used = self.bytes_used() - 8;
+        let bytes = unsafe { slice::from_raw_parts(self.base_ptr().add(8), used) };
+        w.write_len(used);
+        w.write_raw(bytes);
+    }
+
+    pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
+        self.reset(false);
+        let used = r.read_len();
+        let bytes = r.take(used);
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), self.cursor, used);
+            self.cursor = self.cursor.add(used);
+        }
     }
 }
 //////////////// Doubly Linked List Impl
@@ -1384,6 +1419,16 @@ impl<T, Tag> List<T, Tag> {
         }
     }
 
+    pub fn to_mlist(&self) -> MList<T, Tag> {
+        MList {
+            offset: self.offset,
+            cap: self.cap,
+            len: self.len,
+            _data: PhantomData,
+            _tag: PhantomData,
+        }
+    }
+
     pub fn base_ptr(&self) -> *mut T {
         self.ptr
     }
@@ -1401,6 +1446,7 @@ impl<T, Tag> List<T, Tag> {
         self.len += 1;
     }
 
+    #[track_caller]
     pub fn push(&mut self, val: T) {
         if self.len == self.cap {
             panic!("MList is full {}", self.cap);
@@ -1417,6 +1463,7 @@ impl<T, Tag> List<T, Tag> {
         }
     }
 
+    #[track_caller]
     fn grow_to(&mut self, mem: &mut Mem<Tag>, min_cap: usize) -> Self
     where
         T: Copy + Sized,
@@ -1606,6 +1653,92 @@ impl<T, Tag> List<T, Tag> {
             self.len -= 1;
             t
         }
+    }
+}
+
+/// `List` minus the cached pointer: the pod handle for growable arena lists
+#[derive(Debug)]
+pub struct MList<T, Tag = ()> {
+    /// Byte offset from the owning arena's base; 0 when empty
+    offset: u32,
+    cap: u32,
+    len: u32,
+    _data: PhantomData<T>,
+    _tag: PhantomData<Tag>,
+}
+
+impl<T, Tag> Copy for MList<T, Tag> {}
+impl<T, Tag> Clone for MList<T, Tag> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T: 'static, Tag: 'static> Default for MList<T, Tag> {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl<T: 'static, Tag: 'static> MList<T, Tag> {
+    pub const fn empty() -> Self {
+        MList { offset: 0, cap: 0, len: 0, _data: PhantomData, _tag: PhantomData }
+    }
+
+    fn to_list(&self, mem: &Mem<Tag>) -> List<T, Tag> {
+        match NonZeroU32::new(self.offset) {
+            None => List::empty(),
+            Some(offset) => {
+                let ptr = unsafe { mem.base_ptr().add(offset.get() as usize) as *mut T };
+                List { ptr, offset: offset.get(), cap: self.cap, len: self.len, _tag: PhantomData }
+            }
+        }
+    }
+
+    pub fn push_grow(&mut self, mem: &mut Mem<Tag>, val: T)
+    where
+        T: Copy,
+    {
+        let mut list = self.to_list(mem);
+        list.push_grow(mem, val);
+        *self = list.to_mlist();
+    }
+
+    pub fn extend_grow(&mut self, mem: &mut Mem<Tag>, vals: &[T])
+    where
+        T: Copy,
+    {
+        let mut list = self.to_list(mem);
+        list.extend_grow(mem, vals);
+        *self = list.to_mlist();
+    }
+
+    pub fn swap_remove_elem(&mut self, mem: &Mem<Tag>, elem: &T) -> Option<T>
+    where
+        T: Copy + PartialEq,
+    {
+        let mut list = self.to_list(mem);
+        let removed = list.swap_remove_elem(elem);
+        *self = list.to_mlist();
+        removed
+    }
+
+    pub fn to_mslice(&self) -> MSlice<T, Tag> {
+        match NonZeroU32::new(self.offset) {
+            None => MSlice::empty(),
+            Some(offset) => MSlice::make(offset, self.len),
+        }
+    }
+
+    pub fn as_slice(&self, mem: &Mem<Tag>) -> &'static [T] {
+        mem.getn(self.to_mslice())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn len(&self) -> u32 {
+        self.len
     }
 }
 
@@ -1877,17 +2010,21 @@ impl<T: Copy, Tag, const N: usize> Default for MSpillSlice<T, N, Tag> {
 }
 
 impl<T: Copy, Tag, const N: usize> MSpillSlice<T, N, Tag> {
+    fn zeroed_inline() -> [MaybeUninit<T>; N] {
+        // SAFETY: MaybeUninit<T> does not require initialization.
+        unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::zeroed().assume_init() }
+    }
+
     pub fn empty() -> Self {
         assert!(N > 0);
-
-        // SAFETY: MaybeUninit<T> array does not require initialization.
-        let inline = unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init() };
-        Self { len_flags: 0, storage: MSpillSliceStorage { inline } }
+        Self { len_flags: 0, storage: MSpillSliceStorage { inline: Self::zeroed_inline() } }
     }
 
     fn spilled(len: u32, data: MSlice<T, Tag>) -> Self {
         debug_assert!(len <= LEN_MASK);
-        Self { len_flags: len | SPILLED_BIT, storage: MSpillSliceStorage { spill: data } }
+        let mut storage = MSpillSliceStorage { inline: Self::zeroed_inline() };
+        storage.spill = data;
+        Self { len_flags: len | SPILLED_BIT, storage }
     }
 
     fn inline(len: u32, data: [MaybeUninit<T>; N]) -> Self {
@@ -1924,7 +2061,7 @@ impl<T: Copy, Tag, const N: usize> MSpillSlice<T, N, Tag> {
 
     pub fn from_slice(ts: &[T]) -> MSpillSlice<T, N, Tag> {
         assert!(N >= ts.len());
-        let mut inline = [MaybeUninit::<T>::uninit(); N];
+        let mut inline = Self::zeroed_inline();
         for (i, t) in ts.iter().enumerate() {
             inline[i].write(*t);
         }
@@ -1933,11 +2070,25 @@ impl<T: Copy, Tag, const N: usize> MSpillSlice<T, N, Tag> {
 
     pub fn from_array<const M: usize>(ts: [T; M]) -> MSpillSlice<T, N, Tag> {
         debug_assert!(N >= M);
-        let mut inline = [MaybeUninit::<T>::uninit(); N];
+        let mut inline = Self::zeroed_inline();
         for (i, t) in ts.iter().enumerate() {
             inline[i].write(*t);
         }
         Self::inline(ts.len() as u32, inline)
+    }
+
+    pub fn from_slice_in(ts: &[T], mem: &mut Mem<Tag>) -> MSpillSlice<T, N, Tag> {
+        if ts.len() <= N {
+            Self::from_slice(ts)
+        } else {
+            Self::spilled(ts.len() as u32, mem.pushn(ts))
+        }
+    }
+}
+
+impl<T: Copy, Tag, const N: usize> std::fmt::Debug for MSpillSlice<T, N, Tag> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MSpillSlice(len={}, spilled={})", self.len(), self.is_spilled())
     }
 }
 

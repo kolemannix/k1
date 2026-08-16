@@ -19,7 +19,7 @@ ability say-hello {
 
 fn test() {
   let foo: foo = .{ name = "Joe" }
-  let _ = foo.hello()
+  foo.hello()
   assert(takes-helloer(foo).s == "Joe")
 }
 
@@ -41,7 +41,7 @@ ns bar {
 
 ns secret {
   // before defined (below where imported and called)
-  fn before() { .{} }
+  fn before() {}
 }
 
 ns foo {

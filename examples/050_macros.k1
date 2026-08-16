@@ -40,7 +40,7 @@ fn main(): i32 {
   #meta repeat(5, \println("hello ${addgen(x, x)}"))
 
   // Here is how we would invoke the 'repeat' function as a macro
-  // nocommit can mask locals when compiling metaprogram output for opt-in hygiene
+  // TODO we can mask locals when compiling metaprogram output for opt-in hygiene
   repeatm(5, println("hello ${addmacro(x, x)}"))
 
   0

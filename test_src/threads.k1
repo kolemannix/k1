@@ -1,11 +1,11 @@
 use core/arena
 
-let MODULE_INFO: k1/module-manifest = zeroed().with(.{
-  multithreading = true,
-  kind = :executable,
-})
+fn module(): k1/module {
+  let m = k1/module/new()
+  m
+}
 
-let mutable tls myvar: i32 = 0
+let(mutable, tls) myvar: i32 = 0
 
 fn run(input: *mut int): ptr {
   assert-equals(input.*, 42)
@@ -24,10 +24,11 @@ fn main(): i32 {
   //       and ptr-munging internally
   let arena = arena/init-default()
   let input = arena.push(42)
-  let output = arena.alloc[*int]()
+  let output = arena.alloc-t[*int]()
 
-  let thread = std/thread/start(arena, run, input)
-  std/thread/join(thread.*, output)
+  let handle: std/thread/thread = ptr/null.rw[empty]()
+  std/thread/start(handle.&, run, input)
+  std/thread/join(handle, output)
 
   // output returned has been incremented 
   assert-equals(input.as[ptr], output.*.as[ptr])

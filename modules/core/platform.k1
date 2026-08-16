@@ -1,0 +1,36 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
+// The entire memory porting surface: everything above this (arena, tmp, heap)
+// is portable k1. posix: mmap/munmap. wasm: memory.grow plus a region
+// freelist, with release allowed to no-op.
+ns platform {
+  ns memory {
+
+    type region = { base: ptr, len: size }
+
+    fn acquire(min-size: size): region {
+      let rw = posix/PROT_READ | posix/PROT_WRITE
+      let private-anon = posix/MAP_PRIVATE | posix/MAP_ANON
+      let addr = posix/mmap(
+        addr = ptr/null,
+        len = min-size,
+        prot = rw,
+        flags = private-anon,
+        fd = -1i32,
+        offset = 0
+      )
+      if addr == posix/MAP_FAILED.as[ptr] {
+        libc/perror(ptr/null)
+        crash("mmap failed")
+      }
+      .{ base = addr, len = min-size }
+    }
+
+    fn release(r: region) {
+      let result = posix/munmap(r.base, r.len)
+      if result == -1 crash("munmap of region at ${r.base} x ${r.len} failed")
+    }
+
+  }
+}

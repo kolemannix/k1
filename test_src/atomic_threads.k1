@@ -1,10 +1,10 @@
 use core/arena
 use atomic/cell
 
-let MODULE_INFO: k1/module-manifest = zeroed().with(.{
-  multithreading = true,
-  kind = :executable,
-})
+fn module(): k1/module {
+  let m = k1/module/new()
+  m
+}
 
 let N_THREADS: u64 = 4
 let N_ITERS: u64 = 10000
@@ -12,7 +12,7 @@ let N_ITERS: u64 = 10000
 fn counter-worker(counter: *mut cell[u64]): ptr {
   let i: u64 = 0
   while i < N_ITERS {
-    let _ = counter.add(1, :relaxed)
+    counter.add(1, :relaxed)
     i = i + 1
   }
   ptr/null
@@ -31,22 +31,27 @@ fn main(): i32 {
 
   // n threads hammering one counter
   let counter = mem/new(cell/new(0u64))
-  let t1 = std/thread/start(arena, counter-worker, counter)
-  let t2 = std/thread/start(arena, counter-worker, counter)
-  let t3 = std/thread/start(arena, counter-worker, counter)
-  let t4 = std/thread/start(arena, counter-worker, counter)
-  let out = arena.alloc[ptr]()
-  std/thread/join(t1.*, out)
-  std/thread/join(t2.*, out)
-  std/thread/join(t3.*, out)
-  std/thread/join(t4.*, out)
+  let t1: std/thread/thread = ptr/null.rw[empty]()
+  let t2: std/thread/thread = ptr/null.rw[empty]()
+  let t3: std/thread/thread = ptr/null.rw[empty]()
+  let t4: std/thread/thread = ptr/null.rw[empty]()
+  std/thread/start(t1.&, counter-worker, counter)
+  std/thread/start(t2.&, counter-worker, counter)
+  std/thread/start(t3.&, counter-worker, counter)
+  std/thread/start(t4.&, counter-worker, counter)
+  let out = arena.alloc-t[ptr]()
+  std/thread/join(t1, out)
+  std/thread/join(t2, out)
+  std/thread/join(t3, out)
+  std/thread/join(t4, out)
   assert-equals(counter.load(:seq-cst), N_THREADS * N_ITERS)
 
   let h = mem/new(.{ data = 0, flag = cell/new(0u64) }: handoff)
-  let t = std/thread/start(arena, producer, h)
-  while h.flag.&.load(:acquire) == 0 { .{} }
+  let t: std/thread/thread = ptr/null.rw[empty]()
+  std/thread/start(t.&, producer, h)
+  while h.flag.&.load(:acquire) == 0 {}
   assert-equals(h.data, 123)
-  std/thread/join(t.*, out)
+  std/thread/join(t, out)
 
   println("atomic_threads ok")
   0

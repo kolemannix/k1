@@ -354,10 +354,6 @@ pub fn builtin_from_tag(t: u8) -> crate::ir::BackendBuiltin {
     match t {
         x if x == B::TypeSchema as u8 => B::TypeSchema,
         x if x == B::TypeName as u8 => B::TypeName,
-        x if x == B::Allocate as u8 => B::Allocate,
-        x if x == B::AllocateZeroed as u8 => B::AllocateZeroed,
-        x if x == B::Reallocate as u8 => B::Reallocate,
-        x if x == B::Free as u8 => B::Free,
         x if x == B::MemCopy as u8 => B::MemCopy,
         x if x == B::MemMove as u8 => B::MemMove,
         x if x == B::MemSet as u8 => B::MemSet,

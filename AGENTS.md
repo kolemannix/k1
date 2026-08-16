@@ -40,6 +40,8 @@ Before nontrivial work, read:
 
 ## Architecture Map
 
+- `src/k1/kpath.rs`: path handling; compiler-internal paths are canonical UTF-8
+  strings interned in the ident pool, `std::path` only at OS call sites.
 - `src/k1/lex.rs`: lexer/tokenization.
 - `src/k1/parse.rs` and `src/k1/parse/idents.rs`: parser, AST, identifiers, and
   parsed source model.
@@ -66,14 +68,14 @@ Before nontrivial work, read:
   exported (set in ~/.zshrc, but not inherited by non-login shells) and
   `--features=llvm-sys/prefer-dynamic`. Without the prefix, `llvm-sys` fails to
   compile; export it before running the `just` recipes too.
-- Binaries outside `target/debug` (e.g. `target/profiling/k1`) resolve k1lib
+- Binaries outside `target/debug` (e.g. `target/profiling/k1`) resolve modules
   from the exe path and fail in worktrees; set `K1_HOME=<repo root>`.
 - Run the K1 test suite via `./test.sh` (or `just test`), not `k1_test` by hand.
   If you must invoke `target/debug/k1_test` directly, set
   `K1_HOME=<abs repo root>` — without it parallel runs fail nondeterministically
   with "Failed but had no errors".
 - The full test suite needs native libs built first:
-  `make -C k1lib/core/libs clean build` and
+  `make -C modules/core/libs clean build` and
   `make -C test_src/ffi_abi_test/libs clean build` (`just test` handles this).
 - `--chatty true` prints the compiler timing summary.
 
@@ -89,30 +91,30 @@ Before nontrivial work, read:
 - `just build-k1r`: release compiler.
 - `just lsprelease`: release LSP.
 
-## k1lib Map
+## modules Map
 
-- `k1lib/core/builtin.k1`: compiler-essential builtins, scalar aliases, core
+- `modules/core/builtin.k1`: compiler-essential builtins, scalar aliases, core
   collection shapes, `opt`, `result`, `types`, `meta`, and foundational
   abilities.
-- `k1lib/core/core.k1`: assertions, printing, IO/sys/file helpers, numeric
+- `modules/core/core.k1`: assertions, printing, IO/sys/file helpers, numeric
   printing/comparison, and runtime support hooks.
-- `k1lib/core/mem.k1`: allocation, zeroing, bitcast, and raw memory helpers.
-- `k1lib/core/list.k1`, `buffer.k1`, `span.k1`, `string.k1`: primary
+- `modules/core/mem.k1`: allocation, zeroing, bitcast, and raw memory helpers.
+- `modules/core/list.k1`, `buffer.k1`, `span.k1`, `string.k1`: primary
   collection/string APIs.
-- `k1lib/core/range.k1`: `IntRange`, iterators, and iterable impls.
-- `k1lib/core/opt.k1`: option helpers like `some`, `none`, and unwrap-related
+- `modules/core/range.k1`: `IntRange`, iterators, and iterable impls.
+- `modules/core/opt.k1`: option helpers like `some`, `none`, and unwrap-related
   behavior.
-- `k1lib/core/types.k1`: type reflection helpers, `any`, and layout assertions.
-- `k1lib/core/meta.k1`: metaprogramming helpers.
-- `k1lib/core/FixList.k1`, `SpillList.k1`, `StringBuilder.k1`, `arena.k1`,
+- `modules/core/types.k1`: type reflection helpers, `any`, and layout assertions.
+- `modules/core/meta.k1`: metaprogramming helpers.
+- `modules/core/FixList.k1`, `SpillList.k1`, `StringBuilder.k1`, `arena.k1`,
   `bitwise.k1`: core utility types/abilities.
-- `k1lib/core/ffc.h.k1` and `k1lib/core/libs/`: C runtime support, fast-float
+- `modules/core/ffc.h.k1` and `modules/core/libs/`: C runtime support, fast-float
   bridge, `k1rt.c`, and static/shared runtime libraries.
-- `k1lib/std/bitfield.k1`: metaprogrammed bitfield generation.
-- `k1lib/std/hash.k1`: the `hash` ability, `map`, and `set`.
-- `k1lib/std/json.k1`: JSON parser/model.
-- `k1lib/std/thread.k1`: pthread-backed threading helpers.
-- `k1lib/std/time.k1`: time helpers.
+- `modules/std/bitfield.k1`: metaprogrammed bitfield generation.
+- `modules/std/hash.k1`: the `hash` ability, `map`, and `set`.
+- `modules/std/json.k1`: JSON parser/model.
+- `modules/std/thread.k1`: pthread-backed threading helpers.
+- `modules/std/time.k1`: time helpers.
 
 ## Generated And Noisy Files
 

@@ -145,8 +145,11 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                     // FIXME: inlining This only prevents direct recursion, corecursive
                     // units still cause us to fail. We need to detect these cycles and
                     // avoid inlining them
+
+                    // A reloadable fn's body must never inline into a caller
                     if unit_id != IrUnitId::Function(function_id)
                         && !k1.functions.get(function_id).is_recursive
+                        && !k1.functions.get(function_id).is_reloadable
                     {
                         let callee_unit =
                             get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
@@ -475,30 +478,40 @@ impl RewriteMappings {
 
     #[allow(unused)]
     fn eprint(&self) {
-        eprintln!(
-            "inst map: {}",
-            self.values.iter().map(|(old, new)| format!("{} -> {}", old, new)).join(", ")
-        );
-        if let Some(fn_params) = self.fn_params {
-            eprintln!(
-                "fn params: {}",
-                fn_params.iter().enumerate().map(|(i, v)| format!("p{} -> {}", i, v)).join(", ")
-            );
+        let mut line = String::new();
+        for (idx, (old, new)) in self.values.iter().enumerate() {
+            if idx > 0 {
+                line.push_str(", ");
+            }
+            write!(line, "{} -> {}", old, new).unwrap();
         }
-        eprintln!(
-            "block enter: {}",
-            self.block_enters
-                .iter()
-                .map(|(old, new)| format!("b{} -> b{}", old.raw_index(), new.raw_index()))
-                .join(", ")
-        );
-        eprintln!(
-            "block exit: {}",
-            self.block_exits
-                .iter()
-                .map(|(old, new)| format!("b{} -> b{}", old.raw_index(), new.raw_index()))
-                .join(", ")
-        );
+        eprintln!("inst map: {}", line);
+        if let Some(fn_params) = self.fn_params {
+            line.clear();
+            for (i, v) in fn_params.iter().enumerate() {
+                if i > 0 {
+                    line.push_str(", ");
+                }
+                write!(line, "p{} -> {}", i, v).unwrap();
+            }
+            eprintln!("fn params: {}", line);
+        }
+        line.clear();
+        for (idx, (old, new)) in self.block_enters.iter().enumerate() {
+            if idx > 0 {
+                line.push_str(", ");
+            }
+            write!(line, "b{} -> b{}", old.raw_index(), new.raw_index()).unwrap();
+        }
+        eprintln!("block enter: {}", line);
+        line.clear();
+        for (idx, (old, new)) in self.block_exits.iter().enumerate() {
+            if idx > 0 {
+                line.push_str(", ");
+            }
+            write!(line, "b{} -> b{}", old.raw_index(), new.raw_index()).unwrap();
+        }
+        eprintln!("block exit: {}", line);
     }
 }
 

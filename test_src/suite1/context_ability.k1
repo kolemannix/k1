@@ -24,14 +24,14 @@ fn log-concrete(context out: *string-builder)(m: string) {
 
 fn test-writer() {
   let sb = string-builder/new()
-  let context(impl writer) out: *string-builder = sb.&
+  let(context(impl writer)) out: *string-builder = sb.&
   greet("Joe")
   assert(sb.build() == "Hello, Joe")
 }
 
 fn test-transitive() {
   let sb = string-builder/new()
-  let context(impl writer) out: *string-builder = sb.&
+  let(context(impl writer)) out: *string-builder = sb.&
   excited-greet("Ana")
   assert(sb.build() == "Hello, Ana!")
 }
@@ -39,7 +39,7 @@ fn test-transitive() {
 fn test-dual-key() {
   // An ability-keyed variable also satisfies a concrete-typed context param
   let sb = string-builder/new()
-  let context(impl writer) out: *string-builder = sb.&
+  let(context(impl writer)) out: *string-builder = sb.&
   log-concrete("plain")
   assert(sb.build() == "plain")
 }
@@ -50,12 +50,12 @@ fn tag-context[t: tagged](context c: t)(): int {
 
 fn test-solve-from-context() {
   // t is solved from the context variable alone
-  let context(impl tagged) flag = true
+  let(context(impl tagged)) flag = true
   assert(tag-context() == 100)
 }
 
 fn test-explicit-still-works() {
-  let context(impl tagged) _flag = true
+  let(context(impl tagged)) _flag = true
   assert(tag-context(context 41)() == 42)
 }
 
@@ -67,17 +67,17 @@ fn test-conflict-is-error() {
   // An ability-keyed variable is authoritative for its constraint: when it
   // disagrees with the other arguments the call is an error, and explicit
   // passing is the escape hatch
-  let context(impl tagged) _flag = true
+  let(context(impl tagged)) _flag = true
   let conflict = test-compile(tag-both(5))
   assert(conflict is :some(_))
   assert(tag-both(context 10)(5) == 17)
 }
 
 fn test-shadowing() {
-  let context(impl tagged) outer = 1
+  let(context(impl tagged)) outer = 1
   assert(tag-context() == 2)
   let inner-result = {
-    let context(impl tagged) inner = true
+    let(context(impl tagged)) inner = true
     tag-context()
   }
   assert(inner-result == 100)
@@ -89,7 +89,7 @@ fn tag-eq[t: tagged and equals](context c: t)(expected: t): int {
 }
 
 fn test-multi-constraint() {
-  let context(impl tagged) v = 7
+  let(context(impl tagged)) v = 7
   assert(tag-eq(7) == 8)
 }
 
@@ -100,9 +100,9 @@ fn tag-show[t: tagged and equals and show](context c: t)(): string {
 fn test-maximal-hitter() {
   // 'all' is hit by the equals and show keys, 'partial' only by tagged;
   // the variable satisfying more constraint keys wins
-  let context(impl tagged, equals, show) all = 5
+  let(context(impl tagged, equals, show)) all = 5
   let all-result = {
-    let context(impl tagged) _partial = true
+    let(context(impl tagged)) _partial = true
     tag-show()
   }
   assert(all-result == "5")
@@ -110,8 +110,8 @@ fn test-maximal-hitter() {
 
 fn test-duplicate-let-context-fails() {
   let result = test-compile({
-    let context a: int = 1
-    let context b: int = 2
+    let(context) a: int = 1
+    let(context) b: int = 2
     a + b
   })
   assert(result is :some(_))
@@ -120,7 +120,7 @@ fn test-duplicate-let-context-fails() {
 fn test-non-impl-fails() {
   // string-builder by value does not implement writer; only *string-builder does
   let result = test-compile({
-    let context(impl writer) sb = string-builder/new()
+    let(context(impl writer)) sb = string-builder/new()
     .{}
   })
   assert(result is :some(_))

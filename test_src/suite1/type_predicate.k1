@@ -2,7 +2,7 @@ ns type-predicate-test
 
 fn no-password[t](): bool {
   require types/schema[t] is :struct s else { return true }
-  not core/iter/exists(s.fields, fn f. f.name == "password")
+  not s.fields.exists(fn f. f.name == "password")
 }
 
 fn is-scalar[t](): bool {

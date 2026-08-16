@@ -4,8 +4,8 @@
 ns day1-alt
 
 ns cmath {
-  extern("cos") fn cos(x: f64): f64
-  extern("acos") fn acos(x: f64): f64
+  fn(extern("cos")) cos(x: f64): f64
+  fn(extern("acos")) acos(x: f64): f64
 }
 
 let pi: f64 = cmath/acos(-1.0)
@@ -34,7 +34,7 @@ fn solve(p: (either { part-1, part-2 }), input: string): int {
   acc
 }
 
-let input: string = core/files/read-to-string(context :tmp)("day1_input.txt")
+let input: string = core/files/read-to-string("day1_input.txt")
 
 fn run(): i32 {
   println("Day 1 part 1: ${solve(:part-1, input)}")

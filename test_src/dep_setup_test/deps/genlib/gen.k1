@@ -1,0 +1,1 @@
+fn gen-value(): int { 42 }

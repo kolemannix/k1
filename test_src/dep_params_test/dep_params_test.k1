@@ -1,0 +1,16 @@
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.dep("cfglib", .{ backlog = 500 })
+  m.dep("consumer")
+  m
+}
+
+let opts: { verbose: bool } = k1/module-params(.{ verbose = false })
+
+fn main(): i32 {
+  assert(cfglib/backlog() == 500)
+  assert(not cfglib/tls())
+  assert(consumer/effective() == 500)
+  assert(not opts.verbose)
+  0
+}

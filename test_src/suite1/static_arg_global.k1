@@ -1,0 +1,26 @@
+ns static-arg-global
+
+use core/fixlist
+
+let CAP: size = 12
+let SMALL: size = 3
+
+type holder = { items: fixlist[u8, CAP], pair: fixlist[i32, SMALL] }
+
+fn test() {
+  let h: holder = .{ items = fixlist/uninit(), pair = fixlist/uninit() }
+  assert(h.items.cap() == CAP)
+  assert(h.pair.cap() == SMALL)
+  for i in 0.until(CAP) {
+    h.items.push(i.as[u8])
+  }
+  assert(h.items.len() == CAP)
+  let direct: fixlist[u8, CAP] = fixlist/uninit()
+  direct.push(7)
+  assert(direct.cap() == 12)
+  let total: size = 0
+  for x in h.items {
+    total = total + x.as[size]
+  }
+  assert(total == 66)
+}

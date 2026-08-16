@@ -1,0 +1,8 @@
+fn(lib("liba")) not-extern(): i32 {
+  0
+}
+
+fn main(): i32 {
+  0
+}
+//errmsg: lib(..) requires the extern modifier

@@ -45,6 +45,19 @@ impl TypedIntValue {
         }
     }
 
+    pub fn is_zero(&self) -> bool {
+        match self {
+            TypedIntValue::U8(x) => *x == 0,
+            TypedIntValue::U16(x) => *x == 0,
+            TypedIntValue::U32(x) => *x == 0,
+            TypedIntValue::U64(x) => *x == 0,
+            TypedIntValue::I8(x) => *x == 0,
+            TypedIntValue::I16(x) => *x == 0,
+            TypedIntValue::I32(x) => *x == 0,
+            TypedIntValue::I64(x) => *x == 0,
+        }
+    }
+
     pub fn incr(&self) -> Self {
         match *self {
             TypedIntValue::U8(x) => TypedIntValue::U8(x.saturating_add(1)),

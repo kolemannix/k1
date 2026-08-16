@@ -14,7 +14,7 @@ impl TypedProgram {
         expr_id
     }
 
-    pub(super) fn synth_empty_struct(&mut self, span: SpanId) -> TypedExprId {
+    pub(super) fn synth_empty_value(&mut self, span: SpanId) -> TypedExprId {
         let value_id = self.static_values.empty_id();
         self.add_static_constant_expr(value_id, span)
     }
@@ -29,9 +29,9 @@ impl TypedProgram {
         let rhs_type = self.exprs.get_type(rhs);
         debug_assert_eq!(ty, rhs_type);
         let Some(impl_id) = self
-            .ability_impl_table
-            .get(&ty)
-            .and_then(|impls| impls.iter().find(|i| i.base_ability_id == ABILITY_ID_EQUALS))
+            .ability_impl_table_by_ability
+            .get(&TypeAbilityPair { self_type_id: ty, base_ability_id: ABILITY_ID_EQUALS })
+            .and_then(|impls| impls.as_slice(&self.mem).first())
         else {
             self.ice_span(span, "expected equals impl")
         };
@@ -43,7 +43,7 @@ impl TypedProgram {
         let call_id = self.calls.add(Call {
             callee: Callee::StaticFunction(*equals_function_id),
             args: self.mem.pushn(&[lhs, rhs]),
-            type_args: MSlice::empty(),
+            type_args: TypeArgs::empty(),
             return_type: BOOL_TYPE_ID,
             span,
         });
@@ -107,8 +107,7 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_optional_type(&mut self, inner_type: TypeId) -> TypeId {
-        let args = self.mem.pushn(&[inner_type]);
-        self.instantiate_generic_type(self.builtin_types.opt(), args)
+        self.instantiate_generic_type(self.builtin_types.opt(), &[inner_type])
     }
 
     pub(super) fn synth_optional_some(&mut self, expr_id: TypedExprId) -> (TypedExprId, TypeId) {
@@ -282,7 +281,6 @@ impl TypedProgram {
             kind: VariableKind::StackSynthetic(defn_stmt),
             flags,
             usage_count: 0,
-            usages: vec![],
             defn_span: span,
         };
         let variable_id = self.variables.add(variable);
@@ -415,6 +413,19 @@ impl TypedProgram {
         self.add_static_constant_expr(string_value, span)
     }
 
+    /// synth a block that just returns `expr`
+    pub(super) fn synth_return_only_block(
+        &mut self,
+        scope_id: ScopeId,
+        expr: TypedExprId,
+        span: SpanId,
+    ) -> TypedExprId {
+        let return_expr = self.exprs.add_return(expr, None, span);
+        let mut block_builder = BlockBuilder { statements: self.mem.new_list(1), scope_id, span };
+        self.push_block_stmt(&mut block_builder, TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
+        self.exprs.add_block(block_builder, NEVER_TYPE_ID)
+    }
+
     pub(super) fn synth_string_literal_from_str(
         &mut self,
         s: impl AsRef<str>,
@@ -434,18 +445,12 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {
+        let span = self.remap_to_source_span(span);
         let the_span = self.ast.spans.get(span);
         let source = self.ast.sources.get(the_span.file_id);
-        let line_number = source.get_line_for_span_start(the_span).unwrap().line_number();
-
-        let filename_string_id = match self.filename_string_ids.get(&the_span.file_id) {
-            Some(id) => *id,
-            None => {
-                let id = self.ast.idents.intern(&source.filename);
-                self.filename_string_ids.insert(the_span.file_id, id);
-                id
-            }
-        };
+        let line_number =
+            source.get_line_for_span_start(&self.ast.mem, the_span).unwrap().line_number();
+        let filename_string_id = source.filename;
         let filename_expr = self.synth_string_literal(filename_string_id, span);
 
         let line_number_expr = self.synth_int(TypedIntValue::U64(line_number as u64), span);
@@ -494,11 +499,11 @@ impl TypedProgram {
     /// body; this expression should never be executed; it should either be a call to
     /// crash, but transmuted to the expected type, or a special Unreachable node
     pub(super) fn synth_phony(&mut self, type_id: TypeId, span: SpanId) -> TypedExprId {
-        let type_args = self.mem.pushn(&[NameAndType { name: self.ast.idents.b.t, type_id }]);
+        let type_args = TypeArgs::one(type_id);
         let phony_fn_id =
             self.scopes.find_function(self.scopes.core_scope_id, self.ast.idents.b.phony).unwrap();
         let specialized_phony_fn_id =
-            self.specialize_function_declaration(type_args, MSlice::empty(), phony_fn_id);
+            self.specialize_function_declaration(type_args, TypeArgs::empty(), phony_fn_id);
         let call = Call {
             callee: Callee::StaticFunction(specialized_phony_fn_id),
             args: MSlice::empty(),
@@ -776,7 +781,7 @@ impl TypedProgram {
             i += 1
         }
         if block.statements.is_empty() {
-            Ok(self.synth_empty_struct(span))
+            Ok(self.synth_empty_value(span))
         } else {
             Ok(self.exprs.add_block(block, EMPTY_TYPE_ID))
         }
@@ -831,7 +836,7 @@ impl TypedProgram {
         let string_builder_expr =
             self.synth_address_of(string_builder_var.variable_expr, SpanId::NONE, true).unwrap();
         self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
-        let args_expr = args_expr.unwrap_or(self.synth_empty_struct(span));
+        let args_expr = args_expr.unwrap_or(self.synth_empty_value(span));
         let format_block = self.synth_format_calls(
             string_builder_expr,
             interpolated_string.parts,
@@ -911,7 +916,7 @@ impl TypedProgram {
         let code_builder_expr =
             self.synth_address_of(code_builder_var.variable_expr, SpanId::NONE, true).unwrap();
         self.push_block_stmt_id(&mut block, code_builder_var.defn_stmt);
-        let args_expr = args_expr.unwrap_or(self.synth_empty_struct(span));
+        let args_expr = args_expr.unwrap_or(self.synth_empty_value(span));
         let format_block =
             self.synth_format_calls(code_builder_expr, parts, args_expr, span, ctx)?;
         self.push_block_expr_id(&mut block, format_block);

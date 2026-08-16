@@ -1,0 +1,44 @@
+ns ability_deref_self
+
+// `box` deliberately has no `*box` impls: a reference receiver must reach the
+// by-value impl through the deref lane in ability impl resolution
+type box = { xs: list[i64] }
+
+impl as-span[t = i64] for box {
+  fn as-span(self): span[i64] { self.xs.as-span() }
+}
+
+impl iterable[item = i64, i = core/buffer-iterator[i64]] for box {
+  fn iterator(self): i { self.xs.as-span().iterator() }
+}
+
+// Inline storage: the by-value impl below would hand out a span into a copy,
+// so `*inline` carries its own impl and the exact match must win over deref
+type inline = { data: array[i64, 3] }
+
+impl as-span[t = i64] for *inline {
+  fn as-span(self): span[i64] { self.data.&.as-span() }
+}
+
+// Deliberately wrong, and observably so: selecting this over the *inline impl
+// would give length 1 and a negated element
+impl as-span[t = i64] for inline {
+  fn as-span(self): span[i64] { span/single(0 - self.data.get(0)) }
+}
+
+fn test() {
+  let b: box = .{ xs = [1, 2, 3] }
+  let p = b.&
+
+  assert-equals(p.as-span().len(), 3)
+  assert-equals(p.get(1), 2)
+  assert(p.starts-with([1, 2].as-span()))
+
+  let sum = 0
+  for p { sum = sum + it }
+  assert-equals(sum, 6)
+
+  let i: inline = .{ data = [7, 8, 9] }
+  assert-equals(i.&.as-span().len(), 3)
+  assert-equals(i.&.get(0), 7)
+}

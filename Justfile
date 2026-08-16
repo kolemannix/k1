@@ -8,13 +8,21 @@ bundle-name := if os == "linux" {
 }
 export LLVM_SYS_211_PREFIX := env_var_or_default("LLVM_SYS_211_PREFIX", "./llvm/install-llvm")
 
+run-frag +args:
+  RUST_BACKTRACE=full RUST_LOG=info cargo run --features=llvm-sys/prefer-dynamic --bin k1 -- {{args}}
+
 # Run the current scratch file; use for writing reproducers or not-yet-working code, then move it to test_src/ when done or fixed
 a:
-  ./run.sh sandbox
+  just run-frag run sandbox
 
-# fastest path to checking compiler correctness; suite1 covers most features
+# fastest path to checking compiler correctness; suite1 covers most features.
 ts1:
-  ./run.sh test_src/suite1
+  just run-frag --cache false run test_src/suite1
+  just run-frag --optimize --cache false run test_src/suite1
+
+# Dev loop for a reloadable app: rebuild on source change
+watch dir:
+  watchexec -w {{dir}} -e k1 -- target/debug/k1 build {{dir}}
 
 # exhaustive path; notably runs larger projects in dogfood
 test:
@@ -26,7 +34,7 @@ lsp:
   rm ~/.k1/bin/k1lsp
   cp target/debug/lsp ~/.k1/bin/k1lsp
 
-  just install-k1lib
+  just install-modules
 
 lsprelease:
   cargo build --profile release --features lsp --features=llvm-sys/force-static --bin lsp
@@ -38,7 +46,11 @@ build-profile:
   cargo build --profile profiling --bin k1 --features=llvm-sys/force-static
 
 profile-suite1: build-profile
-  hyperfine --warmup 100 'K1_HOME=. target/profiling/k1 c test_src/suite1'
+  hyperfine --warmup 100 'K1_HOME=. target/profiling/k1 --cache false c test_src/suite1'
+
+profile-stress: build-profile
+  python3 perf/gen_stress.py 3600
+  hyperfine --warmup 2 'K1_HOME=. target/profiling/k1 --cache false c perf/stress100'
 
 valgrind-linux:
   git pull
@@ -55,9 +67,8 @@ install: bundle
   tar -xzf builds/{{bundle-name}}.tar.gz -C builds
   cd builds/{{bundle-name}} && ./install.sh
 
-install-k1lib:
-  # rm -r ~/.k1/k1lib
-  cp -r k1lib/. ~/.k1/k1lib
+install-modules:
+  rsync -a --exclude .k1-out modules/ ~/.k1/modules/
 
 repl +args:
   RUST_BACKTRACE=1 RUST_LOG=info \

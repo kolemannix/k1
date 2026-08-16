@@ -1,0 +1,4 @@
+fn main(): i32 {
+  let xs: list[i64] = [1, 2, 3, 4]
+  (xs.get(3) + xs.as-span().len()).as[i32]
+}

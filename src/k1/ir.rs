@@ -22,7 +22,6 @@ use crate::{
 };
 use ahash::{HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
-use itertools::Itertools;
 use std::fmt::Write;
 
 macro_rules! b_ice {
@@ -83,6 +82,69 @@ pub struct ProgramIr {
     opt_buf_cfg_simpl_rewrites: iropt::RewriteMappings,
 }
 
+static_assert_size!(IrComment, 1);
+
+impl ProgramIr {
+    pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
+        use crate::snap::write_map_snap;
+        let ProgramIr {
+            mem,
+            instrs,
+            sources,
+            comments,
+            debug_info,
+            functions,
+            exprs,
+            module_config: IrModuleConfig {},
+            calls,
+            cmpxchgs,
+            vec_ops,
+            phys_fn_type_cache: _,
+            b_variables: _,
+            b_loops: _,
+            units_pending_compile,
+            globals_pending_eval,
+            opt_buf_stack: _,
+            opt_buf_order: _,
+            opt_buf_visited: _,
+            opt_buf_callees: _,
+            opt_buf_cfg_compute_work_stack: _,
+            opt_buf_cfg_compute_visited: _,
+            opt_buf_inline_self_rewrites: _,
+            opt_buf_inline_inlined_rewrites: _,
+            opt_buf_cfg_simpl_rewrites: _,
+        } = self;
+        w.write_section("ir");
+        mem.snap(w);
+        instrs.snap(w);
+        sources.snap(w);
+        comments.snap(w);
+        debug_info.snap(w);
+        functions.snap(w);
+        write_map_snap(w, exprs);
+        calls.snap(w);
+        cmpxchgs.snap(w);
+        vec_ops.snap(w);
+        assert!(units_pending_compile.is_empty());
+        assert!(globals_pending_eval.is_empty());
+    }
+
+    pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
+        r.section("ir");
+        self.mem.restore(r);
+        self.instrs.restore(r);
+        self.sources.restore(r);
+        self.comments.restore(r);
+        self.debug_info.restore(r);
+        self.functions.restore(r);
+        self.exprs = crate::snap::restore_map_snap(r);
+        self.calls.restore(r);
+        self.cmpxchgs.restore(r);
+        self.vec_ops.restore(r);
+        self.phys_fn_type_cache.clear();
+    }
+}
+
 /// Provenance notes attached to every instruction for IR dumps.
 #[derive(Clone, Copy)]
 pub enum IrComment {
@@ -95,6 +157,7 @@ pub enum IrComment {
     BoolToInt,
     BreakLoopNoValue,
     BreakLoopWithValue,
+    ContinueLoop,
     CmpxchgResult,
     DaCapoMaestro,
     DeliverFnPointer,
@@ -183,6 +246,7 @@ impl IrComment {
             IrComment::BoolToInt => "bool_to_int",
             IrComment::BreakLoopNoValue => "break loop (no value)",
             IrComment::BreakLoopWithValue => "break loop (with value)",
+            IrComment::ContinueLoop => "continue loop",
             IrComment::CmpxchgResult => "cmpxchg result",
             IrComment::DaCapoMaestro => "da capo maestro",
             IrComment::DeliverFnPointer => "deliver fn pointer",
@@ -424,10 +488,6 @@ pub enum BackendBuiltin {
     TypeName,
 
     // Platform-provided
-    Allocate,
-    AllocateZeroed,
-    Reallocate,
-    Free,
     MemCopy,
     MemMove,
     MemSet,
@@ -445,10 +505,6 @@ impl BackendBuiltin {
         match self {
             BackendBuiltin::TypeSchema => "type_schema",
             BackendBuiltin::TypeName => "type_name",
-            BackendBuiltin::Allocate => "allocate",
-            BackendBuiltin::AllocateZeroed => "allocate_zeroed",
-            BackendBuiltin::Reallocate => "reallocate",
-            BackendBuiltin::Free => "free",
             BackendBuiltin::MemCopy => "mem_copy",
             BackendBuiltin::MemMove => "mem_move",
             BackendBuiltin::MemSet => "mem_set",
@@ -550,8 +606,6 @@ impl AtomicRmwOpIr {
 
 nz_u32_id!(AtomicCmpxchgId);
 
-/// Too big to inline in `Inst` (32-byte cap), so it lives in `ProgramIr::cmpxchgs`,
-/// like `IrCall` in `ProgramIr::calls`.
 /// Writes `{ prev: t, ok: bool }` through `result`; `ok_vm_offset` is the byte
 /// offset of `ok` within that aggregate.
 #[derive(Clone, Copy)]
@@ -715,8 +769,6 @@ pub enum Value {
 }
 
 impl Value {
-    const PTR_ZERO: Value = Value::Data32 { t: ScalarType::Pointer, data: 0 };
-
     const fn byte(u8: u8) -> Value {
         Value::Data32 { t: ScalarType::U8, data: u8 as u32 }
     }
@@ -1266,7 +1318,7 @@ pub enum InstKind {
 
 impl InstKind {
     pub const EMPTY: InstKind = Self::Value(PhysicalType::EMPTY);
-    pub const BOOL: InstKind = Self::scalar(ScalarType::U8);
+    pub const BOOL: InstKind = Self::scalar(ScalarType::Bool);
     pub const PTR: InstKind = Self::scalar(ScalarType::Pointer);
     pub const U64: InstKind = Self::scalar(ScalarType::U64);
 
@@ -1280,8 +1332,8 @@ impl InstKind {
     fn is_int(&self) -> bool {
         matches!(self, InstKind::Value(pt) if pt.is_int())
     }
-    fn is_u8(&self) -> bool {
-        matches!(self, InstKind::Value(pt) if pt.is_u8())
+    fn is_bool(&self) -> bool {
+        matches!(self, InstKind::Value(pt) if pt.is_bool())
     }
     fn is_aggregate(&self) -> bool {
         matches!(self, InstKind::Value(pt) if pt.is_agg())
@@ -1391,7 +1443,9 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
         compile_block_stmts(&mut b, None, body_block)?;
     } else {
         match f.linkage {
-            Linkage::Standard => panic!("ir: function should have a body I think"),
+            Linkage::Standard | Linkage::Exported { .. } => {
+                panic!("ir: function should have a body I think")
+            }
             Linkage::External { .. } => {}
             Linkage::Intrinsic | Linkage::LlvmIntrinsic(_) => {}
         }
@@ -1520,6 +1574,7 @@ struct BuilderVariable {
 struct LoopInfo {
     break_value: Option<InstId>,
     end_block: BlockId,
+    continue_block: BlockId,
 }
 
 pub type BlockId = NodeHandle<Block, ProgramIr>;
@@ -1667,7 +1722,7 @@ impl<'k1> Builder<'k1> {
         alt: BlockId,
         comment: IrComment,
     ) -> InstId {
-        if let Value::Data32 { t: ScalarType::U8, data: b32 } = cond
+        if let Value::Data32 { t: ScalarType::Bool, data: b32 } = cond
             && self.optimize_enabled()
         {
             if b32 == 1 {
@@ -1762,17 +1817,25 @@ impl<'k1> Builder<'k1> {
     fn get_physical_type(&mut self, type_id: TypeId) -> PhysicalType {
         match self.get_physical_type_result(type_id) {
             PhysicalTypeResult::Never => {
-                b_ice!(self, "ir never type: {}", self.k1.type_id_to_string_ext(type_id, true))
+                b_ice!(
+                    self,
+                    "ir never type: {}",
+                    self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
+                )
             }
             PhysicalTypeResult::No => {
                 b_ice!(
                     self,
                     "ir non-physical type: {}",
-                    self.k1.type_id_to_string_ext(type_id, true)
+                    self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
                 )
             }
             PhysicalTypeResult::Infinite => {
-                b_ice!(self, "ir infinite type: {}", self.k1.type_id_to_string_ext(type_id, true))
+                b_ice!(
+                    self,
+                    "ir infinite type: {}",
+                    self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
+                )
             }
             PhysicalTypeResult::Yes(pt) => pt,
         }
@@ -2475,7 +2538,10 @@ fn compile_expr(
             let end_block = b.push_block(BlockSourceKind::WhileLoopEnd);
             let TypedExpr::Block(body_block) = b.k1.exprs.get(w.body) else { unreachable!() };
             let loop_scope_id = body_block.scope_id;
-            b.k1.ir.b_loops.insert(loop_scope_id, LoopInfo { break_value: None, end_block });
+            b.k1.ir.b_loops.insert(
+                loop_scope_id,
+                LoopInfo { break_value: None, end_block, continue_block: cond_block },
+            );
 
             b.push_jump(cond_block, IrComment::EnterWhileCond);
 
@@ -2506,9 +2572,14 @@ fn compile_expr(
                 unreachable!()
             };
             let body_scope_id = body_block.scope_id;
-            b.k1.ir
-                .b_loops
-                .insert(body_scope_id, LoopInfo { break_value, end_block: loop_end_block });
+            b.k1.ir.b_loops.insert(
+                body_scope_id,
+                LoopInfo {
+                    break_value,
+                    end_block: loop_end_block,
+                    continue_block: loop_body_block,
+                },
+            );
 
             // Go to the body
             b.push_jump(loop_body_block, IrComment::EnterLoop);
@@ -2545,6 +2616,11 @@ fn compile_expr(
                 let jmp = b.push_jump(end_block, IrComment::BreakLoopNoValue);
                 Ok(jmp.as_value())
             }
+        }
+        TypedExpr::Continue { loop_scope } => {
+            let continue_block = b.k1.ir.b_loops.get(&loop_scope).unwrap().continue_block;
+            let jmp = b.push_jump(continue_block, IrComment::ContinueLoop);
+            Ok(jmp.as_value())
         }
         TypedExpr::SumConstructor(sum_c) => {
             let sum_pt = b.get_physical_type(expr_type);
@@ -2746,15 +2822,9 @@ fn compile_static_value(b: &mut Builder, value_id: StaticValueId, pt: PhysicalTy
     // We lower the simple static values
     // but leave the aggregates as globals
     match b.k1.static_values.get(value_id) {
-        StaticValue::Empty => Value::Empty,
-        StaticValue::Bool(bv) => {
-            let imm = Value::byte(*bv as u8);
-            imm
-        }
-        StaticValue::Char(byte) => {
-            let imm = Value::byte(*byte);
-            imm
-        }
+        StaticValue::Empty(_) => Value::Empty,
+        StaticValue::Bool(bv) => Value::imm32(ScalarType::Bool, *bv as u32),
+        StaticValue::Char(byte) => Value::imm32(ScalarType::Char, *byte as u32),
         StaticValue::Int(int) => {
             let int = *int;
             let int_value = b.make_int_value(&int, IrComment::StaticInt);
@@ -2857,14 +2927,14 @@ fn compile_variable_to_address(
         }
         None => {
             let Some(var) = b.get_variable(variable_id) else {
-                eprintln!(
-                    "Variables are: {}",
-                    b.k1.ir
-                        .b_variables
-                        .values()
-                        .map(|bv| format!("{} {}", bv.id, bv.value))
-                        .join("\n")
-                );
+                let mut variables = String::new();
+                for (idx, bv) in b.k1.ir.b_variables.values().enumerate() {
+                    if idx > 0 {
+                        variables.push('\n');
+                    }
+                    write!(variables, "{} {}", bv.id, bv.value).unwrap();
+                }
+                eprintln!("Variables are: {}", variables);
                 b.k1.ice_span(b.cur_span, "Missing variable")
             };
             let var_value = var.value;
@@ -2906,8 +2976,8 @@ fn compile_ir_builtin(
 ) -> K1Result<Value> {
     match builtin {
         BuiltinIr::BakeStaticValue => {
-            // intern fn bakeStaticValue[T](value: T): u64
-            let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+            // fn(intern) bakeStaticValue[T](value: T): u64
+            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let _physical_type = b.get_physical_type(type_id);
 
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
@@ -2925,7 +2995,7 @@ fn compile_ir_builtin(
             Ok(stored)
         }
         BuiltinIr::Zeroed => {
-            let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let pt = b.get_physical_type(type_id);
             match pt.as_enum() {
                 PhysicalTypeEnum::Empty => Ok(Value::Empty),
@@ -2936,7 +3006,7 @@ fn compile_ir_builtin(
                         Some(dst) => dst,
                     };
                     let zero_u8 = Value::byte(0);
-                    // intern fn set(dst: ptr, value: u8, count: size): unit
+                    // fn(intern) set(dst: ptr, value: u8, count: size): unit
                     let count = b.make_int_value(
                         &TypedIntValue::I64(pt_layout.size as i64),
                         IrComment::MemsetSize,
@@ -2982,8 +3052,8 @@ fn compile_ir_builtin(
             Ok(stored)
         }
         BuiltinIr::Bitcast => {
-            let from_type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
-            let to_type_id = b.k1.mem.get_nth(call.type_args, 1).type_id;
+            let from_type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let to_type_id = call.type_args.as_slice(&b.k1.mem)[1];
 
             let from_pt = b.get_physical_type(from_type_id);
             let to_pt = b.get_physical_type(to_type_id);
@@ -3066,8 +3136,8 @@ fn compile_ir_builtin(
             Ok(stored)
         }
         BuiltinIr::PointerIndex => {
-            // intern fn refAtIndex[T](self: Pointer, index: uword): T*
-            let elem_type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+            // fn(intern) refAtIndex[T](self: Pointer, index: uword): T*
+            let elem_type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let elem_pt = b.get_physical_type(elem_type_id);
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
             let base = compile_expr(b, None, arg0)?;
@@ -3081,7 +3151,7 @@ fn compile_ir_builtin(
             Ok(stored)
         }
         BuiltinIr::AtomicLoad => {
-            // intern fn load[t](src: *t, ord: ordering): t
+            // fn(intern) load[t](src: *t, ord: ordering): t
             let t = atomic_element_type(b, &call, true)?;
             let ord = b.k1.atomic_ordering_arg(&call, 1)?;
             let src = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3089,7 +3159,7 @@ fn compile_ir_builtin(
             Ok(store_scalar_if_dst(b, dst, inst.as_value()))
         }
         BuiltinIr::AtomicStore => {
-            // intern fn store[t](dst: *mut t, value: t, ord: ordering)
+            // fn(intern) store[t](dst: *mut t, value: t, ord: ordering)
             let t = atomic_element_type(b, &call, true)?;
             let ord = b.k1.atomic_ordering_arg(&call, 2)?;
             let store_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3098,7 +3168,7 @@ fn compile_ir_builtin(
             Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
         }
         BuiltinIr::AtomicRmw(op) => {
-            // intern fn <op>[t](dst: *mut t, value: t, ord: ordering): t
+            // fn(intern) <op>[t](dst: *mut t, value: t, ord: ordering): t
             use crate::typer::AtomicRmwOp as Op;
             let allow_pointer = op == Op::Xchg;
             let t = atomic_element_type(b, &call, allow_pointer)?;
@@ -3123,7 +3193,7 @@ fn compile_ir_builtin(
             Ok(store_scalar_if_dst(b, dst, inst.as_value()))
         }
         BuiltinIr::AtomicCmpxchg { weak } => {
-            // intern fn cmpxchg[t](dst: *mut t, expected: t, desired: t,
+            // fn(intern) cmpxchg[t](dst: *mut t, expected: t, desired: t,
             //                      success: ordering, failure: ordering): cmpxchg-result[t]
             let t = atomic_element_type(b, &call, true)?;
             let success = b.k1.atomic_ordering_arg(&call, 3)?;
@@ -3157,7 +3227,7 @@ fn compile_ir_builtin(
             Ok(result)
         }
         BuiltinIr::AtomicFence => {
-            // intern fn fence(ord: ordering)
+            // fn(intern) fence(ord: ordering)
             let ord = b.k1.atomic_ordering_arg(&call, 0)?;
             b.push_inst_anon(Inst::Fence { ord });
             Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
@@ -3176,7 +3246,7 @@ fn compile_vector_op(
     use crate::typer::VecOpKind;
     match op {
         VecOpKind::Splat => {
-            // intern fn splat[t, n: static size](value: t): vector[t, n]
+            // fn(intern) splat[t, n: static size](value: t): vector[t, n]
             let (elem, lanes) = vector_pt_parts(b, callee_fn_type.return_type)?;
             let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let locn = match dst {
@@ -3277,7 +3347,7 @@ fn compile_vector_op(
             Ok(store_scalar_if_dst(b, dst, inst.as_value()))
         }
         VecOpKind::Load => {
-            // intern fn load-unchecked[t, n: static size](src: ptr): vector[t, n]
+            // fn(intern) load-unchecked[t, n: static size](src: ptr): vector[t, n]
             let ret_pt = callee_fn_type.return_type;
             let _ = vector_pt_parts(b, ret_pt)?;
             let src = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3289,7 +3359,7 @@ fn compile_vector_op(
             Ok(locn)
         }
         VecOpKind::Store => {
-            // intern fn store-unchecked[t, n](self: vector[t, n], dst: ptr)
+            // fn(intern) store-unchecked[t, n](self: vector[t, n], dst: ptr)
             let vec_pt = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt;
             let _ = vector_pt_parts(b, vec_pt)?;
             let vec_value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3298,7 +3368,7 @@ fn compile_vector_op(
             Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
         }
         VecOpKind::GetLane => {
-            // intern fn get-lane[t, n](self: vector[t, n], index: size): t
+            // fn(intern) get-lane[t, n](self: vector[t, n], index: size): t
             let vec_pt = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt;
             let (elem, _) = vector_pt_parts(b, vec_pt)?;
             let base = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3311,7 +3381,7 @@ fn compile_vector_op(
             Ok(store_scalar_if_dst(b, dst, loaded.as_value()))
         }
         VecOpKind::WithLane => {
-            // intern fn with-lane[t, n](self: vector[t, n], index: size, value: t): vector[t, n]
+            // fn(intern) with-lane[t, n](self: vector[t, n], index: size, value: t): vector[t, n]
             let ret_pt = callee_fn_type.return_type;
             let (elem, _) = vector_pt_parts(b, ret_pt)?;
             let src_vec = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3361,7 +3431,7 @@ fn vector_pt_parts(b: &mut Builder, pt: PhysicalType) -> K1Result<(ScalarType, u
 /// The element type of an atomic intrinsic: type_args[0], which must be an
 /// integer-class scalar (pointers allowed for the non-arithmetic ops).
 fn atomic_element_type(b: &mut Builder, call: &Call, allow_pointer: bool) -> K1Result<ScalarType> {
-    let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+    let type_id = call.type_args.as_slice(&b.k1.mem)[0];
     let pt = b.get_physical_type(type_id);
     let scalar = match pt.as_enum() {
         PhysicalTypeEnum::Scalar(st) => Some(st),
@@ -3698,23 +3768,8 @@ fn compile_matching_condition(
 }
 
 pub fn zero(t: ScalarType) -> Value {
-    match t {
-        ScalarType::U8 => Value::Data32 { t: ScalarType::U8, data: 0 },
-        ScalarType::U16 => Value::Data32 { t: ScalarType::U16, data: 0 },
-        ScalarType::U32 => Value::Data32 { t: ScalarType::U32, data: 0 },
-        ScalarType::U64 => Value::Data32 { t: ScalarType::U64, data: 0 },
-        ScalarType::I8 => Value::Data32 { t: ScalarType::I8, data: 0 },
-        ScalarType::I16 => Value::Data32 { t: ScalarType::I16, data: 0 },
-        ScalarType::I32 => Value::Data32 { t: ScalarType::I32, data: 0 },
-        ScalarType::I64 => Value::Data32 { t: ScalarType::I64, data: 0 },
-        ScalarType::F32 => Value::Data32 { t: ScalarType::F32, data: (0.0f32).to_bits() },
-        ScalarType::F64 => {
-            // Bit pattern is all zeroes anyway, but we still construct it via Rust's float
-            // machinery
-            Value::Data32 { t: ScalarType::F64, data: (0.0f64).to_bits() as u32 }
-        }
-        ScalarType::Pointer => Value::PTR_ZERO,
-    }
+    // The all-zeroes bit pattern is zero for every scalar, floats included
+    Value::Data32 { t, data: 0 }
 }
 
 pub fn get_compiled_unit(ir: &ProgramIr, unit: IrUnitId) -> Option<IrUnit> {
@@ -3891,7 +3946,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 }
                 Inst::BoolNegate { v } => {
                     let inst_type = get_value_kind(ir, v);
-                    if !inst_type.is_u8() {
+                    if !inst_type.is_bool() {
                         errors.push(format!("i{inst_id}: bool_negate src is not a bool"))
                     }
                 }
@@ -3995,7 +4050,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
         }
     }
     if !errors.is_empty() {
-        let error_string = errors.into_iter().join("\n");
+        let error_string = errors.join("\n");
         Err(K1Message {
             span,
             message: k1.ast.idents.intern(format!(
@@ -4093,7 +4148,8 @@ pub fn display_unit(
             let (source, line) = k1.get_span_location(expr_span);
             w.write_str("expr ")?;
             display_phys_fn_type(w, k1, &unit.fn_type)?;
-            write!(w, " from {}:{}", &source.filename, line.line_number())?;
+            write!(w, "(type id: {})", k1.type_id_to_string(unit.result_type_id))?;
+            write!(w, " from {}:{}", k1.ident_str(source.filename), line.line_number())?;
         }
     };
     writeln!(w, " (inst count={}, cfg_valid={})", unit.inst_count, unit.cfg_valid)?;
@@ -4162,11 +4218,21 @@ pub fn display_block(
     let block = ir.mem.get(block_id).data;
     write!(w, "b{} {}", block_id.raw_index(), block.kind.str())?;
     if cfg_valid {
-        let preds_string =
-            ir.mem.dlist_iter(block.preds).map(|pred| format!("b{}", pred.raw_index())).join(", ");
-        let succs_string =
-            ir.mem.dlist_iter(block.succs).map(|pred| format!("b{}", pred.raw_index())).join(", ");
-        write!(w, "  preds: [{}], succs: [{}]", preds_string, succs_string)?;
+        write!(w, "  preds: [")?;
+        for (idx, pred) in ir.mem.dlist_iter(block.preds).enumerate() {
+            if idx > 0 {
+                write!(w, ", ")?;
+            }
+            write!(w, "b{}", pred.raw_index())?;
+        }
+        write!(w, "], succs: [")?;
+        for (idx, succ) in ir.mem.dlist_iter(block.succs).enumerate() {
+            if idx > 0 {
+                write!(w, ", ")?;
+            }
+            write!(w, "b{}", succ.raw_index())?;
+        }
+        write!(w, "]")?;
     }
     writeln!(w)?;
     for inst_id in ir.mem.dlist_iter(block.instrs) {
@@ -4492,7 +4558,7 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
         }
         Inst::BakeStaticValue { type_id, value } => {
             write!(w, "bake ")?;
-            k1.display_type_id(w, type_id, false)?;
+            k1.display_type_id(w, type_id, dump::TypeDisplayMode::Name)?;
             write!(w, " {}", value)?;
         }
     };
@@ -4525,6 +4591,8 @@ impl From<ScalarType> for &'static str {
             ScalarType::F32 => "f32",
             ScalarType::F64 => "f64",
             ScalarType::Pointer => "ptr",
+            ScalarType::Char => "char",
+            ScalarType::Bool => "bool",
         }
     }
 }

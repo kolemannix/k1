@@ -107,12 +107,12 @@ fn test-to-json() {
 
 
 fn test() {
-  let _ = simple-increment()
+  simple-increment()
   test-to-json()
 
   let _x: my-meta-point = .{ x = 0, y = 42 }
   let _y: my-macro-point = .{ x = 1, y = 2 }
-  let _ = pre/pi
+  pre/pi
   
   .{}
 }

@@ -1,0 +1,70 @@
+// Bit-level output and the unaligned loads the match finder needs.
+use std/math/log2
+
+fn load64-le(p: ptr): u64 {
+  mem/bitcast[vector[u8, 8], u64](vector/load-unchecked[u8, 8](p))
+}
+
+fn load32-le(p: ptr): u32 {
+  mem/bitcast[vector[u8, 4], u32](vector/load-unchecked[u8, 4](p))
+}
+
+fn store64-le(p: ptr, v: u64) {
+  vector/store-unchecked[u8, 8](mem/bitcast[u64, vector[u8, 8]](v), p)
+}
+
+fn log2-floor-nonzero(n: u64): size {
+  (63u64 - n.leading-zeros()).as[size]
+}
+
+// log2 with the property log2(0) == 0, table-backed for small values like the C.
+fn fast-log2(v: size): f64 {
+  if v < 256 k-log2-table.get(v)
+  else v.as[f64].log2()
+}
+
+// Writes bits into bytes, LSB first, up to 56 bits per call. Storage past the
+// current byte must be zero (each write re-zeroes the bytes it spills into via
+// the full 8-byte store).
+type bit-writer = {
+  storage: ptr,
+  pos: size, // in bits
+}
+
+ns for bit-writer {
+  fn write-bits(self: *mut bit-writer, n-bits: size, bits: u64) {
+    let p = self.storage.add-bytes(self.pos >> 3)
+    let v = p.r[u8].*.as[u64] | (bits << ((self.pos & 7).as[u32]))
+    store64-le(p, v)
+    self.pos = self.pos + n-bits
+  }
+
+  // Patches n-bits at absolute bit position pos with already-emitted bytes after it.
+  fn update-bits(self: *mut bit-writer, n-bits: size, bits: u32, pos: size) {
+    let n = n-bits
+    let b = bits
+    let at = pos
+    while n > 0 {
+      let byte-pos = at >> 3
+      let n-unchanged = at & 7
+      let n-changed = if n < 8 - n-unchanged n else 8 - n-unchanged
+      let total = n-unchanged + n-changed
+      let mask = (0xFFFFFFFFu32 << total.as[u32]) | ((1u32 << n-unchanged.as[u32]) - 1)
+      let byte-ref = self.storage.add-bytes(byte-pos).rw[u8]
+      let unchanged-bits = byte-ref.*.as[u32] & mask
+      let changed-bits = b & ((1u32 << n-changed.as[u32]) - 1)
+      byte-ref.* = ((changed-bits << n-unchanged.as[u32]) | unchanged-bits).as[u8]
+      n = n - n-changed
+      b = b >> n-changed.as[u32]
+      at = at + n-changed
+    }
+  }
+
+  fn rewind(self: *mut bit-writer, new-pos: size) {
+    let bitpos = new-pos & 7
+    let mask = (1u32 << bitpos.as[u32]) - 1
+    let byte-ref = self.storage.add-bytes(new-pos >> 3).rw[u8]
+    byte-ref.* = (byte-ref.*.as[u32] & mask).as[u8]
+    self.pos = new-pos
+  }
+}

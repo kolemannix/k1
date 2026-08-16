@@ -3,44 +3,76 @@
 next up
 - more dogfooding, do the 2 static sites
 
-macro with-tmp(expr) {
-  `
-  mem/push-mode(:tmp)
-  $expr
-  mem/pop-mode()
-  `
-}
-tmp {
+# Bugs
+- [x] [major] Support (co)recursive Generics
+- [ ] [major] Allow pattern matching *into* recursive types (currently we just terminate)
+- [x] accidentally captured context parameter results in 'Missing variable' in ir
+- [x] Out of order type definitions don't work with aliases
+- [x] same-level recursion is not caught behind option
+- [x] Require that a blanket impl's params appear in the Self type
+- [ ] Test handling of NaN and Infinity literals, other float edge cases
 
-}
+## [x] vector types
 
-Minor and ideas
+## [x] live reload featureset (design/reload.md)
+- [x] `ns(reload) foo { <functions in here go in a dylib> }`
+- [x] `fn main() { foo/load().! /* or foo/watch().! */; foo/my-fn(1,2,3) }`
+- [ ] Linux verification; `k1 b --watch`; multi-ns-per-dylib
+
+pointer-free predicate - pod/serializable?
+
+## [ ] inline asm
+
+## [ ] Constant-folding, SCCP
+
+## [ ] token stream based macros
+
+## [x] expr-level macros
+- [x] source-location preservation via 'code' type
+
+## [x] meta-based macros
+
+## [ ] very readable compiler trace, incl specialization args, for debugging
+
+## [x] Ability objects; dyn[<ability expr>]
+
+## [ ] Escape analysis
+- [ ] Use to report escaped stack pointers
+
+## grab bag list mid2026
+- [ ] Add 'self -> *self' thunk adapters for ability objects, `dyn[allocator]` is impossible
+- [ ] Warn on zeroed() for non zeroable type
 - [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
-- [ ] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
+- [ ] unaligned load/store for scalars
+- [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
       way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
 
 - [ ] top-level parser recovery (sync to next fn/ns/type/macro)
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [ ] `#[must_use]` equivalent
+- [ ] labeled loops: `break :label` / `continue :label`. The brotli port's C `goto emit_remainder`
+      two-level exits became `done = true; break` + `if done break` flag chains (5 sites)
+- [ ] design min/max for scalars (comparable ability makes the generic trivial; brotli hand-rolled min-size)
+- [ ] integer inference gaps (repro: sandbox/sandbox.k1): (a) `2 * d` vs `d * 2` differ — literal-lhs
+      defaults i64 and widens the u32 rhs up, literal-rhs adopts u32 and wraps; (b) binary ops widen
+      rhs into lhs type but have no least-upper-bound, so `u32 + i64` errors while `i64 + u32` works;
+      (c) expected-type propagation into generic calls pins the type param before argument-driven
+      inference, so `write-bits(depth.get-unchecked(i), ...)` fails where the two-line form widens fine
 - [ ] enum-from-sum type operator
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
-- [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
-- [ ] type-from-id({types/type-id[t]()}). add a types/spelling[t]() sugar
 - [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
-- [ ] c"" string literals that are of type ptr (no interpolation)
 - [ ] [design/flags_in_tags.k1.wip]
-- [ ] Inspired by fast_float, char to digit lookup table
-Simple but missing
 - [ ] auto-print implementation on-demand for sums
 - [ ] Exported functions
 - [ ] Tail calls
-- [ ] Implement at least one format specifier (precision, pretty)
+- [ ] Implement at least one format specifier (precision, pretty). Do precision ('places') first:
+      the brotli bench needed `k1-mbps.format(sb.&, 1)` string-builder calls x3 where `${k1-mbps:.1}` should do
 - [ ] decide if overflow traps or not (in debug and release, if those are even different)
 - [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
       currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
-- [x] A #static infinite loop hangs the compiler with zero output. Ten minutes of nothing. A VM step budget that errors out ("static execution exceeded N instructions, last function: ...") would have turned a hang-bisect into an instant diagnosis.
+- [x] A #static infinite loop hangs the compiler
 - [x] allow opaques to be named / nominal; bindgen them that way. The name is really more useful than the size/align
 - [x] decide on 'assert' behavior in debug vs non debug mode and improve bactraces (need line numbers)
 - [x] 'newtype' solution; 'distinct' types? `type handle = distinct[size]` (wrapper struct is working great)
@@ -76,46 +108,15 @@ Simple but missing
 - [x] Iterator ability: why is peek the primitive? With peek(self: *self) immutable, a filtering iterator like mine can't cache what it found — next() = scan (peek) + scan again (advance-by). Also every nth impl in the codebase is the identical advance-by(n); self.next() — could that be a default? Was peek chosen for for-loop desugaring reasons, or would nextced-as-primitive with peek-via-buffering be on the table?
 
 bindgen dogfood list
-- [ ] dogfood(k1): implement 'continue'
+- [x] dogfood(k1): implement 'continue'
 - [x] dogfood(lsp): failed call still ls entity
 - [x] dogfood(lsp): sum/enum ctors ls entities
 - [x] dogfood(lsp): failed match arm still check others
 - [x] dogfood(lsp): sum patterns ls entities
-
-http dogfood list
-- [ ] design program 'params' / 'args' so we can toggle things like tlog
+- [x] design program 'params' / 'args' so we can toggle things like tlog
       A program can take arguments; this replaces macro features in C.
       Make it plain k1 data; pass it where you depend on the module.
 - [x] solution for lazily evaluated log arguments
-
-# Bugs
-- [x] [major] Support (co)recursive Generics
-- [ ] [major] Allow pattern matching *into* recursive types (currently we just terminate)
-- [x] accidentally captured context parameter results in 'Missing variable' in ir
-- [x] Out of order type definitions don't work with aliases
-- [x] same-level recursion is not caught behind option
-- [ ] Require that a blanket impl's params appear in the Self type
-- [ ] Test handling of NaN and Infinity literals, other float edge cases
-
-## [x] vector types
-
-## [ ] inline asm
-
-## [ ] Constant-folding, SCCP
-
-## [ ] token stream based macros
-
-## [x] expr-level macros
-- [x] source-location preservation via 'code' type
-
-## [x] meta-based macros
-
-## [ ] very readable compiler trace, incl specialization args, for debugging
-
-## [ ] Ability objects; dyn[<ability expr>]
-
-## [ ] Escape analysis
-- [ ] Use to report escaped stack pointers
 
 ## [x] Distribute builds that work
 - [x] Test on linux
@@ -137,7 +138,7 @@ http dogfood list
 
 ## Project: di. Debug Info tidyups
 - [x] Fix random jumping to function header
-- [ ] Annotate U8s with boolean somehow where they are actually booleans
+- [ ] Add separate scalar types for char and boolean for debug info
 
 ## Project: Recursive types take 2
 - [x] Remove RecursiveReference; make visitors detect cycles
@@ -148,8 +149,9 @@ http dogfood list
 ## Vendor'd Libraries
 - [ ] postgres client
 - [x] linker args / "use system lib"
-- [ ] http server: perhaps https://github.com/jeremycw/httpserver.h, or just libmicrohttpd
-- [ ] datastar
+- [x] libuv module
+- [x] http module
+- [ ] datastar-based web framework
 
 ## K1 Profiler
 Add `core` and/or compiler support to allow block profiling of k1 programs

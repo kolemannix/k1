@@ -233,7 +233,7 @@ fn render_cell(k1: &TypedProgram, cell: &MegareplCell) -> maud::Markup {
     let closed = cell_ui_signal(cell.id, "closed");
     let show_out = cell_ui_signal(cell.id, "out");
     let show_ir = cell_ui_signal(cell.id, "ir");
-    let summary = source.content.lines().next().unwrap_or("");
+    let summary = source.content(&k1.ast.mem).lines().next().unwrap_or("");
     html! {
         div #(cell_dom_id(cell.id)) .cell data-class:closed={ "$" (closed) } {
         (render_cell_ticker(cell))
@@ -278,7 +278,7 @@ fn render_cell(k1: &TypedProgram, cell: &MegareplCell) -> maud::Markup {
                 data-on:keydown={
                     "evt.key === 'Enter' && (evt.metaKey || evt.ctrlKey) && " (post)
                 }
-                { (source.content) }
+                { (source.content(&k1.ast.mem)) }
             div .cell-disclosures {
                 button .disclosure data-class:on={ "$" (show_out) }
                     data-on:click={ "$" (show_out) " = !$" (show_out) } { "output" }

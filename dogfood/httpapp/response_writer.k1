@@ -1,0 +1,129 @@
+// The event-loop sink: drives a response's body into the connection's socket
+// — status line and headers first, then the body, one vectored write per
+// pull. A :pending pull parks the driver until the source wakes it. One
+// write is in flight at a time, so the driver reuses a single uv/write
+// request and buf list for the response's lifetime.
+ns response-writer {
+
+  type driver = {
+    connection: *mut connection,
+    stream: dyn[source[t = u8]],
+    write-req: *mut uv/write,
+    bufs: list[uv/buf],
+    parked: bool,
+  }
+
+  fn begin(connection: *mut connection, resp: http-response) {
+    mem/push-arena(connection.request-arena)
+    defer { mem/pop-arena() }
+    let out = string-builder/new()
+    out.write("HTTP/1.1 ${resp.status} ${response/status-text(resp.status)}\r\nContent-Type: ${resp.content-type}\r\n")
+    for h in resp.extra-headers { out.write("$h\r\n") }
+    let body = resp.body is {
+      :complete segments -> {
+        let total: size = 0
+        for seg in segments { total = total + seg.len() }
+        out.write("Content-Length: $total\r\n\r\n")
+        let group: *mut group-source = mem/new(.{ group = segments, done = false })
+        group.to-dyn[source[t = u8]]()
+      },
+      :stream source -> {
+        out.write("Transfer-Encoding: chunked\r\n\r\n")
+        source || chunked
+      },
+    }
+    let headers = out.build()
+
+    let driver: *mut driver = connection.request-arena.push(.{
+      connection,
+      stream = body,
+      write-req = connection.request-arena.alloc-t[uv/write](),
+      bufs = list/empty[uv/buf](),
+      parked = false,
+    })
+    driver.write-req.set-data(driver)
+    connection.active-stream = :some body
+    body.start(.{ state = driver.as[ptr], wake-fn = on-wake })
+
+    // The first write carries the headers, coalescing the first body group
+    // when it's already available — a strict response is one vectored write
+    let first = list/empty[span[u8]]()
+    first.push(headers.span-bytes())
+    body.next() is {
+      :chunk group -> for seg in group { first.push(seg) },
+      // the headers write is about to be in flight; its completion pumps
+      :pending -> .{},
+      :done -> .{},
+      :fail message -> {
+        tprintln("stream failed before headers: $message")
+        close-connection(connection)
+        return
+      },
+    }
+    write-group(driver, first.as-span())
+    .{}
+  }
+
+  fn write-group(driver: *mut driver, group: span[span[u8]]) {
+    let connection = driver.connection
+    driver.bufs.clear()
+    for seg in group { driver.bufs.push(uv/buf/wrap-span(seg)) }
+    let rc = uv/write(
+      driver.write-req,
+      connection.client().as-stream(),
+      driver.bufs.as-buffer().data-ptr().as(),
+      driver.bufs.len().as[u32],
+      on-write-complete)
+    if rc != 0 {
+      tprintln("response uv_write failed: $rc")
+      close-connection(connection)
+    }
+  }
+
+  fn on-write-complete(req: *mut uv/write, status: i32) {
+    let driver: *mut driver = req.get-data()
+    let connection = driver.connection
+    // Main thread; direct close-state access is fine
+    if connection.close-state.is-closing { return }
+    if connection.close-state.should-close { close-connection(connection); return }
+    if status != 0 {
+      let errno = uv/errno/from-i32(status)
+      tprintln("response write failed: ${errno.enum-name()}")
+      close-connection(connection)
+      return
+    }
+    pump(driver)
+  }
+
+  // The waker target: a parked source has data again (loop thread only)
+  fn on-wake(state: ptr) {
+    let driver: *mut driver = state.rw[driver]()
+    if driver.connection.close-state.is-closing { return }
+    // A write is in flight; its completion will pump
+    if not driver.parked { return }
+    driver.parked = false
+    pump(driver)
+  }
+
+  fn pump(driver: *mut driver) {
+    let connection = driver.connection
+    mem/push-arena(connection.request-arena)
+    defer { mem/pop-arena() }
+    driver.stream.next() is {
+      :chunk group -> write-group(driver, group),
+      :pending -> { driver.parked = true },
+      :done -> {
+        if connection.active-stream is :some s {
+          connection.active-stream = :none
+          s.stop()
+        }
+        connection.finish-request()
+      },
+      :fail message -> {
+        tprintln("stream failed: $message")
+        close-connection(connection)
+      },
+    }
+    .{}
+  }
+}

@@ -1,0 +1,18 @@
+fn test-all() {
+  stream_test/test()
+  pubsub_test/test()
+  hash_test/test()
+  test-fixlist()
+  test-bitfield()
+  test-format()
+  json_test/test()
+  simd_test/test()
+  process_test/test()
+}
+fn main(): i32 {
+  #static test-all()
+  test-all()
+  // threads: runtime only, the VM cannot pass K1 fns to pthread_create
+  watch_test/test()
+  0
+}

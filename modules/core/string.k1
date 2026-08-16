@@ -1,0 +1,198 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
+ns for string {
+
+  fn c-lit(s: string): code { `"$s\\0".data-ptr()` }
+  
+  fn span(self: string): span[char] { self.span }
+
+  fn span-bytes(self: string): span[byte] {
+    self.span().as-byte-span()
+  }
+
+  fn cloned(self: string): string {
+    wrap-span(self.span.cloned())
+  }
+
+  fn cloned-in[a: allocator](self: string, alloc: a): string {
+    wrap-span(self.span.cloned-in(alloc))
+  }
+
+  fn wrap-span(span: span[char]): string {
+    .{ span }
+  }
+
+  fn wrap-raw(ptr: ptr, len: size): string {
+    wrap-span(span/wrap-raw(ptr, len))
+  }
+
+  fn wrap-bytes(span: span[byte]): string {
+    .{ span = span.as-char-span() }
+  }
+
+  fn wrap-list(list: list[char]): string {
+    .{ span = list.as-span() }
+  }
+
+  fn wrap-buffer(buffer: buffer[char]): string {
+    .{ span = span/wrap-buffer(buffer) }
+  }
+
+  fn wrap-byte-buffer(buffer: buffer[byte]): string {
+    .{ span = span/wrap-buffer(buffer.as-char-buffer()) }
+  }
+
+  fn from-bytes(buffer: buffer[byte]): string {
+    let copied: buffer[byte] = buffer.cloned()
+    wrap-byte-buffer(copied)
+  }
+
+  fn from-buffer(buffer: buffer[char]): string {
+    let copied = buffer.cloned()
+    wrap-buffer(copied)
+  }
+
+  fn position(self: string, c: char): ?size {
+    self.span.inner-buffer().position(c)
+  }
+
+  fn contains(self: string, c: char): bool {
+    self.span.inner-buffer().position(c).is-some()
+  }
+
+  fn join[c: as-span[t = string]](items: c, separator: string): string {
+    let b = string-builder/new()
+    for s in items.as-span() {
+      if it-index > 0 { b.write(separator) }
+      b.write(s)
+    }
+    b.build()
+  }
+
+  fn concat(self: string, other: string): string {
+    wrap-span(self.span.concat(other.span))
+  }
+
+  fn concat-char-in[a: allocator](self: string, alloc: a, c: char): string {
+    let new-length = self.len() + 1
+    let new-buffer = self.span.inner-buffer()._enlarged-clone-in(alloc, new-length)
+    new-buffer.set(self.len(), c)
+    wrap-buffer(new-buffer)
+  }
+
+  fn concat-char(self: string, c: char): string {
+    self.concat-char-in(mem/current-arena(), c)
+  }
+
+  // Splits at every delimiter, keeping interior empty pieces but dropping a
+  // trailing empty piece
+  fn split-by-char(self: string, delim: char): list[string] {
+    let pieces = list/empty[string]()
+    let start = 0: size
+    while start < self.len() {
+      require self.drop(start).position(delim) is :some idx else {
+        pieces.push(self.slice(start, self.len()))
+        return pieces
+      }
+      pieces.push(self.slice(start, start + idx))
+      start = start + idx + 1
+    }
+    pieces
+  }
+
+  fn index-of-string(self: string, target: string): ?size {
+    self.span.inner-buffer().index-of-buffer(target.span.inner-buffer())
+  }
+
+  fn contains-string(self: string, target: string): bool {
+    self.index-of-string(target).is-some()
+  }
+
+  fn slice(self: string, start: size, end: size): string {
+    .{ span = self.span.slice(start, end) }
+  }
+
+  fn take(self: string, count: size): string { .{ span = self.span.take(count) } }
+  fn drop(self: string, count: size): string { .{ span = self.span.drop(count) } }
+  fn take-right(self: string, count: size): string { .{ span = self.span.take-right(count) } }
+  fn drop-right(self: string, count: size): string { .{ span = self.span.drop-right(count) } }
+  
+  fn starts-with(self: string, other: string): bool {
+    self.span.starts-with(other.span)
+  }
+  
+  fn ends-with(self: string, other: string): bool {
+    self.span.ends-with(other.span)
+  }
+
+  fn chunks(self: string, size: size): span[string] {
+    let char-spans: span[span[char]] = self.span.chunks(size)
+    mem/bitcast[span[span[char]], span[string]](char-spans)
+  }
+
+  fn data-ptr(self: string): ptr { self.span.data-ptr() }
+
+  // Converts self to a c-style (NUL byte terminated) string
+  fn to-c(self: string): { ptr: ptr, len: size } {
+    if self.is-empty()                  .{ ptr = "\0".data-ptr(), len = 0 }
+    else if self.last() is :some('\0') .{ ptr = self.data-ptr(), len = self.len() - 1 }
+    else                               .{ ptr = self.concat-char('\0').data-ptr(), len = self.len() }
+  }
+
+  fn to-c-tmp(self: string): { ptr: ptr, len: size } {
+    mem/with-arena(mem/tmp(), self.to-c())
+  }
+
+  fn wrap-c(c-string: ptr): string {
+    let len = libc/strlen(c-string)
+    wrap-raw(ptr = c-string, len = len)
+  }
+
+  fn from-c(c-string: ptr): string {
+    let wrapped = wrap-c(c-string)
+    let copy = wrapped.cloned()
+    copy
+  }
+
+  fn capitalize-ascii(self: string): string {
+    if self.first() is :some c and c.is-ascii-lower() {
+      let clone-chars: buffer[char] = self.span.buffer.cloned()
+      clone-chars.set(0, c.to-ascii-upper())
+      wrap-buffer(clone-chars)
+    } else self
+  }
+
+  fn to-ascii-upper(self: string): string {
+    let clone-chars: buffer[char] = self.span.buffer.cloned()
+    for c in self {
+      if c.is-ascii-lower() { clone-chars.set(it-index, c.to-ascii-upper()) }
+    }
+    wrap-buffer(clone-chars)
+  }
+
+}
+
+impl as-span[t = char] for string {
+  fn as-span(self): span[char] { self.span }
+}
+
+impl as-span[t = char] for *string {
+  fn as-span(self): span[char] { self.*.span }
+}
+
+impl from-string[e = never] for string {
+  fn from-string(s: string): result[string, never] { :ok s }
+}
+
+impl show for string {
+  fn show(self: string): string { self }
+}
+
+impl iterable[item = char, i = buffer-iterator[char]] for string {
+  fn iterator(self: string): i { self.span().iterator() }
+}
+
+impl iterable[item = char, i = buffer-iterator[char]] for *string {
+  fn iterator(self: *string): i { self.*.iterator() }
+}

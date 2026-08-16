@@ -146,7 +146,7 @@ impl TypedProgram {
     /// Swaps in new source and recompiles, iff the code actually changed
     fn megarepl_update_code(&mut self, cell_id: CellId, code: String) {
         let existing = self.megarepl_get_cell(cell_id);
-        if self.ast.sources.get(existing.source_id).content == code {
+        if self.ast.sources.get(existing.source_id).content(&self.ast.mem) == code {
             return;
         }
         let iteration = existing.iteration + 1;
@@ -179,20 +179,20 @@ impl TypedProgram {
     /// Re-reads every live global's current value out of the VM for display
     fn megarepl_refresh_globals(&mut self) {
         let mr = self.megarepl.as_ref().unwrap();
-        let live: Vec<(usize, TypedGlobalId, TypeId)> = mr
-            .globals
-            .iter()
-            .enumerate()
-            .filter(|(_, g)| self.megarepl_global_is_live(g))
-            .map(|(index, g)| (index, g.global_id, self.globals.get(g.global_id).type_id))
-            .collect();
+        let mut live: Vec<(usize, TypedGlobalId, TypeId)> = vec![];
+        for (index, g) in mr.globals.iter().enumerate() {
+            if !self.megarepl_global_is_live(g) {
+                continue;
+            }
+            live.push((index, g.global_id, self.globals.get(g.global_id).type_id));
+        }
 
         let values: Vec<Option<StaticValueId>> = self.megarepl_with_vm(|k1, vm| {
-            live.iter()
-                .map(|(_, global_id, type_id)| {
-                    vm::peek_global_as_static(k1, vm, *global_id, *type_id)
-                })
-                .collect()
+            let mut values: Vec<Option<StaticValueId>> = vec![];
+            for (_, global_id, type_id) in &live {
+                values.push(vm::peek_global_as_static(k1, vm, *global_id, *type_id));
+            }
+            values
         });
         let mr = self.megarepl.as_mut().unwrap();
         for ((index, _, _), value) in live.iter().zip(values) {
@@ -223,14 +223,15 @@ impl TypedProgram {
     }
 
     fn megarepl_create_source(&mut self, cell_id: CellId, iteration: u32, code: String) -> FileId {
-        let filename = format!("{}_repl_cell_{}.{}.k1", self.program_name(), cell_id, iteration);
-        let source_id = self.ast.sources.add_file(crate::parse::SourceFile::make(
-            0,
-            Rc::new(self.config.out_dir.to_str().unwrap().to_owned()),
-            filename,
-            code,
+        let filename = self.ast.idents.intern(format!(
+            "{}_repl_cell_{}.{}.k1",
+            self.program_name(),
+            cell_id,
+            iteration
         ));
-        source_id
+        let directory = self.config.out_dir;
+        let source = crate::parse::SourceFile::make(&mut self.ast.mem, directory, filename, &code);
+        self.ast.sources.add_file(source)
     }
 
     fn megarepl_new(&mut self, code: String) -> CellId {
@@ -314,7 +315,10 @@ impl TypedProgram {
 
     // Watchers and widgets
     fn megarepl_run_observers(&mut self, skip_cells: &[CellId]) {
-        let cells = self.megarepl.as_ref().unwrap().cells.iter().map(|c| c.id).collect_vec();
+        let mut cells: Vec<CellId> = vec![];
+        for c in &self.megarepl.as_ref().unwrap().cells {
+            cells.push(c.id);
+        }
         for watcher_id in cells {
             if !skip_cells.contains(&watcher_id) && self.megarepl_get_cell(watcher_id).is_watcher {
                 self.megarepl_execute_cell_solo(watcher_id);
@@ -494,7 +498,6 @@ impl TypedProgram {
             owner_scope: repl_ns_scope,
             flags: VariableFlags::Reassigned,
             usage_count: 0,
-            usages: vec![],
             kind: VariableKind::Global(global_id),
             defn_span: span,
         });
@@ -669,14 +672,14 @@ impl TypedProgram {
                     self.push_block_expr_id(&mut cell_block, return_expr);
                     type_id
                 } else {
-                    let empty = self.synth_empty_struct(span);
+                    let empty = self.synth_empty_value(span);
                     let return_expr = self.exprs.add_return(empty, None, span);
                     self.push_block_expr_id(&mut cell_block, return_expr);
                     self.builtin_types.empty
                 }
             }
             None => {
-                let empty = self.synth_empty_struct(span);
+                let empty = self.synth_empty_value(span);
                 let return_expr = self.exprs.add_return(empty, None, span);
                 self.push_block_expr_id(&mut cell_block, return_expr);
                 self.builtin_types.empty
@@ -726,6 +729,8 @@ impl TypedProgram {
                         parent_id: Some(module_ns_id),
                         owner_module: Some(module_id),
                         parsed_id: ParsedId::Namespace(parsed_namespace_id),
+                        lib_name: None,
+                        reload: false,
                     });
                     self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(ns_id));
                     let added = self.scopes.add_namespace(module_ns_scope, name, ns_id);

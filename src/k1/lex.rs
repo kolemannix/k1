@@ -577,6 +577,10 @@ pub struct TokenTriviaTable {
 }
 
 impl TokenTriviaTable {
+    pub fn entries(&self) -> &[TriviaEntry] {
+        &self.entries
+    }
+
     pub fn push(&mut self, entry: TriviaEntry) {
         debug_assert!(self.entries.last().is_none_or(|last| last.token_idx <= entry.token_idx));
         self.entries.push(entry)
@@ -1270,7 +1274,10 @@ mod test {
         let mut spans = Spans::new();
         let mut token_vec = vec![];
         Lexer::make(input, &mut spans, 0).run(&mut token_vec)?;
-        let mut kinds: Vec<K> = token_vec.iter().map(|t| t.kind).collect();
+        let mut kinds: Vec<K> = Vec::with_capacity(token_vec.len());
+        for t in &token_vec {
+            kinds.push(t.kind);
+        }
         assert_eq!(kinds.pop(), Some(K::Eof));
         assert_eq!(kinds, expected);
         Ok(())
@@ -1313,7 +1320,10 @@ mod test {
     fn signed_int() -> anyhow::Result<()> {
         let input = "-43";
         let (spans, tokens) = set_up(input)?;
-        let kinds: Vec<K> = tokens.iter().map(|t| t.kind).collect();
+        let mut kinds: Vec<K> = Vec::with_capacity(tokens.len());
+        for t in &tokens {
+            kinds.push(t.kind);
+        }
         assert_eq!(kinds, vec![K::Minus, K::Numeric, K::Eof]);
         let span0 = spans.get(tokens[0].span);
         assert_eq!(span0.start, 0);
@@ -1331,7 +1341,10 @@ mod test {
     fn minus_int() -> anyhow::Result<()> {
         let input = "- 43";
         let (spans, tokens) = set_up(input)?;
-        let kinds: Vec<K> = tokens.iter().map(|t| t.kind).collect();
+        let mut kinds: Vec<K> = Vec::with_capacity(tokens.len());
+        for t in &tokens {
+            kinds.push(t.kind);
+        }
         assert_eq!(kinds, vec![K::Minus, K::Numeric, K::Eof]);
         let span0 = spans.get(tokens[0].span);
         assert_eq!(span0.start, 0);
@@ -1375,7 +1388,10 @@ mod test {
         lexer.run(&mut tokens)?;
         let trivia = lexer.trivia;
 
-        let kinds: Vec<K> = tokens.iter().map(|t| t.kind).collect();
+        let mut kinds: Vec<K> = Vec::with_capacity(tokens.len());
+        for t in &tokens {
+            kinds.push(t.kind);
+        }
         assert_eq!(
             vec![
                 K::KeywordLet,

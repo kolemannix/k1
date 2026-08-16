@@ -1,0 +1,7 @@
+fn main(): i32 {
+  for li in 0.until(3) {
+    assert(li < 2)
+  }
+  0
+}
+//abortmsg: ASSERT FAILED at assert_in_for_loc.k1:3

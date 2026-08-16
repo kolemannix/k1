@@ -1,0 +1,74 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
+impl bitwise for u8 {
+  fn(intern) bit-not(self: u8): u8
+  fn(intern) bit-and(self: u8, other: u8): u8
+  fn(intern) bit-or(self: u8, other: u8): u8
+  fn(intern) xor(self: u8, other: u8): u8
+  fn(intern) shift-left(self: u8, count: u32): u8
+  fn(intern) shift-right(self: u8, other: u32): u8
+}
+
+impl bitwise for u16 {
+  fn(intern) bit-not(self: u16): u16
+  fn(intern) bit-and(self: u16, other: u16): u16
+  fn(intern) bit-or(self: u16, other: u16): u16
+  fn(intern) xor(self: u16, other: u16): u16
+  fn(intern) shift-left(self: u16, count: u32): u16
+  fn(intern) shift-right(self: u16, count: u32): u16
+}
+
+impl bitwise for u32 {
+  fn(intern) bit-not(self: u32): u32
+  fn(intern) bit-and(self: u32, other: u32): u32
+  fn(intern) bit-or(self: u32, other: u32): u32
+  fn(intern) xor(self: u32, other: u32): u32
+  fn(intern) shift-left(self: u32, count: u32): u32
+  fn(intern) shift-right(self: u32, count: u32): u32
+}
+
+impl bitwise for u64 {
+  fn(intern) bit-not(self: u64): u64
+  fn(intern) bit-and(self: u64, other: u64): u64
+  fn(intern) bit-or(self: u64, other: u64): u64
+  fn(intern) xor(self: u64, other: u64): u64
+  fn(intern) shift-left(self: u64, count: u32): u64
+  fn(intern) shift-right(self: u64, count: u32): u64
+}
+
+impl bitwise for i8 {
+  fn(intern) bit-not(self: i8): i8
+  fn(intern) bit-and(self: i8, other: i8): i8
+  fn(intern) bit-or(self: i8, other: i8): i8
+  fn(intern) xor(self: i8, other: i8): i8
+  fn(intern) shift-left(self: i8, count: u32): i8
+  fn(intern) shift-right(self: i8, count: u32): i8
+}
+
+impl bitwise for i16 {
+  fn(intern) bit-not(self: i16): i16
+  fn(intern) bit-and(self: i16, other: i16): i16
+  fn(intern) bit-or(self: i16, other: i16): i16
+  fn(intern) xor(self: i16, other: i16): i16
+  fn(intern) shift-left(self: i16, count: u32): i16
+  fn(intern) shift-right(self: i16, count: u32): i16
+}
+
+impl bitwise for i32 {
+  fn(intern) bit-not(self: i32): i32
+  fn(intern) bit-and(self: i32, other: i32): i32
+  fn(intern) bit-or(self: i32, other: i32): i32
+  fn(intern) xor(self: i32, other: i32): i32
+  fn(intern) shift-left(self: i32, count: u32): i32
+  fn(intern) shift-right(self: i32, count: u32): i32
+}
+
+impl bitwise for i64 {
+  fn(intern) bit-not(self: i64): i64
+  fn(intern) bit-and(self: i64, other: i64): i64
+  fn(intern) bit-or(self: i64, other: i64): i64
+  fn(intern) xor(self: i64, other: i64): i64
+  fn(intern) shift-left(self: i64, count: u32): i64
+  fn(intern) shift-right(self: i64, count: u32): i64
+}

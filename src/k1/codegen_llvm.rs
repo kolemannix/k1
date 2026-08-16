@@ -48,8 +48,8 @@ use crate::typer::types::{
     ScalarType, Type, TypeDefnInfo, TypeId,
 };
 use crate::typer::{
-    FunctionId, K1Result, Linkage as TyperLinkage, StaticContainerKind, StaticValue, StaticValueId,
-    TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
+    FunctionId, K1Result, Linkage as TyperLinkage, NamespaceId, StaticContainerKind, StaticValue,
+    StaticValueId, TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
 };
 use crate::{SV8, ir, kbail, kerr, kmem};
 
@@ -293,12 +293,12 @@ struct BuiltinTypes<'ctx> {
     char: IntType<'ctx>,
     ptr: PointerType<'ctx>,
     ptr_sized_int: IntType<'ctx>,
-    empty: StructType<'ctx>,
+    empty_struct: StructType<'ctx>,
 }
 
 impl<'ctx> BuiltinTypes<'ctx> {
-    fn empty_value(&self) -> BasicValueEnum<'ctx> {
-        self.empty.get_undef().as_basic_value_enum()
+    fn empty_struct_value(&self) -> BasicValueEnum<'ctx> {
+        self.empty_struct.get_undef().as_basic_value_enum()
     }
 }
 
@@ -319,9 +319,19 @@ pub struct CgFunction<'ctx> {
 pub struct CgPerm;
 pub struct CodegenTmp;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CgUnit {
+    // the executable or output library
+    Host,
+    // one reloadable ns's dylib, where
+    ReloadDylib(NamespaceId),
+}
+
 pub struct Cg<'ctx, 'k1> {
     ctx: &'ctx Context,
     pub k1: &'k1 mut TypedProgram,
+    unit: CgUnit,
+    has_reloadable_fns: bool,
     llvm_module: LlvmModule<'ctx>,
     llvm_machine: TargetMachine,
     builder: Builder<'ctx>,
@@ -457,8 +467,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let (debug_builder, compile_unit) = llvm_module.create_debug_info_builder(
             false,
             DWARFSourceLanguage::C,
-            &source.filename,
-            &source.directory,
+            module.ast.idents.get_string(source.filename),
+            module.ast.idents.get_string(source.directory),
             "k1_compiler",
             optimize,
             "",
@@ -509,14 +519,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
 
-        let di_files: FxHashMap<FileId, DIFile> = module
-            .ast
-            .sources
-            .iter()
-            .map(|(file_id, source)| {
-                (file_id, debug_builder.create_file(&source.filename, &source.directory))
-            })
-            .collect();
+        let mut di_files: FxHashMap<FileId, DIFile> = FxHashMap::default();
+        for (file_id, source) in module.ast.sources.iter() {
+            let filename = module.ast.idents.get_string(source.filename);
+            let directory = module.ast.idents.get_string(source.directory);
+            di_files.insert(file_id, debug_builder.create_file(filename, directory));
+        }
         let mut debug = DebugContext {
             files: di_files,
             debug_builder,
@@ -533,16 +541,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         module: &'module mut TypedProgram,
         debug: bool,
         optimize: bool,
+        unit: CgUnit,
     ) -> Self {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
         let mut llvm_module = ctx.create_module(&module.ast.name);
-        llvm_module.set_source_file_name(&module.ast.sources.get_main().filename);
-        // Example of linking an LLVM module
-        // let stdlib_module = ctx
-        //     .create_module_from_ir(MemoryBuffer::create_from_file(Path::new("k1lib/llvm")).unwrap())
-        //     .unwrap();
-        // llvm_module.link_in_module(stdlib_module).unwrap();
+        llvm_module.set_source_file_name(
+            module.ast.idents.get_string(module.ast.sources.get_main().filename),
+        );
 
         let debug_context = Cg::init_debug(ctx, &llvm_module, module, optimize, debug);
 
@@ -563,12 +569,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             char: char_type,
             ptr,
             ptr_sized_int: ctx.ptr_sized_int_type(&target_data, None),
-            empty: ctx.struct_type(&[], false),
+            empty_struct: ctx.struct_type(&[], false),
         };
+
+        let has_reloadable_fns = module.namespaces.iter().any(|ns| ns.reload);
 
         Cg {
             ctx,
             k1: module,
+            unit,
+            has_reloadable_fns,
             llvm_module,
             llvm_machine: machine,
             builder,
@@ -599,35 +609,58 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     pub fn codegen_program(&mut self) -> K1Result<()> {
         let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
 
-        // Guarantee generation of exported globals
+        let mut any_exported_global = false;
         for global_id in &global_ids {
             let g = self.k1.globals.get(*global_id);
             if g.is_exported {
+                any_exported_global = true;
+            }
+            if g.is_exported || self.has_reloadable_fns {
                 self.codegen_global(*global_id)?;
             }
         }
 
-        // Guarantee generation of exported functions
-        // FIXME: Codegen the exported functions as well as the called ones
-        // for (id, function) in self.module.function_iter() {
-        //     if function.linkage.is_exported() {
-        //         self.codegen_function_signature(id)?;
-        //     }
-        // }
+        let mut export_roots: Vec<FunctionId> = vec![];
+        for (function_id, function) in self.k1.function_iter() {
+            if function.linkage.is_exported() {
+                export_roots.push(function_id);
+            }
+        }
+        for function_id in &export_roots {
+            self.declare_llvm_function(*function_id)?;
+        }
 
-        let Some(main_function_id) = self.k1.get_main_function_id() else {
-            kbail!(
-                self.k1,
-                SpanId::NONE,
-                "Program {} has no main function",
-                self.k1.program_name()
-            );
+        let main_function = if self.k1.program_settings.executable {
+            let Some(main_function_id) = self.k1.get_main_function_id() else {
+                kbail!(
+                    self.k1,
+                    SpanId::NONE,
+                    "Program {} has no main function",
+                    self.k1.program_name()
+                );
+            };
+            let function_value = self.declare_llvm_function(main_function_id)?;
+            Some((main_function_id, function_value))
+        } else {
+            if export_roots.is_empty() && !any_exported_global {
+                kbail!(
+                    self.k1,
+                    SpanId::NONE,
+                    "Library {} exports no functions or globals",
+                    self.k1.program_name()
+                );
+            }
+            None
         };
 
-        let function_value = self.declare_llvm_function(main_function_id)?;
-        self.k1.compile_all_pending_ir(SpanId::NONE).unwrap();
+        self.k1.compile_all_pending_ir(SpanId::NONE)?;
         if self.k1.config.optimize {
-            ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
+            if let Some((main_function_id, _)) = main_function {
+                ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
+            }
+            for function_id in &export_roots {
+                ir::optimize_unit(self.k1, IrUnitId::Function(*function_id));
+            }
         }
 
         let mut inst_mappings = FxHashMap::with_capacity(512);
@@ -635,25 +668,290 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.codegen_function_body(&mut inst_mappings, fn_id)?;
         }
 
-        self.builder.unset_current_debug_location();
-        let entrypoint_fn_type =
-            self.ctx.i32_type().fn_type(&function_value.get_type().get_param_types(), false);
-        let entrypoint = self.llvm_module.add_function("main", entrypoint_fn_type, None);
-        let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
-        self.builder.position_at_end(entry_block);
-        let params: Vec<BasicMetadataValueEnum<'ctx>> =
-            entrypoint.get_params().iter().map(|p| (*p).into()).collect();
-        let res = self
-            .builder
-            .build_call(function_value, &params, "")
-            .unwrap()
-            .try_as_basic_value()
-            .basic();
-        match res {
-            None => self.builder.build_return(Some(&self.ctx.i32_type().const_zero())).unwrap(),
-            Some(v) => self.builder.build_return(Some(&v)).unwrap(),
+        if let Some((_, function_value)) = main_function {
+            self.builder.unset_current_debug_location();
+            let entrypoint_fn_type =
+                self.ctx.i32_type().fn_type(&function_value.get_type().get_param_types(), false);
+            let entrypoint = self.llvm_module.add_function("main", entrypoint_fn_type, None);
+            let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
+            self.builder.position_at_end(entry_block);
+            let entrypoint_params = entrypoint.get_params();
+            let mut params: Vec<BasicMetadataValueEnum<'ctx>> =
+                Vec::with_capacity(entrypoint_params.len());
+            for p in &entrypoint_params {
+                params.push((*p).into());
+            }
+            let res = self
+                .builder
+                .build_call(function_value, &params, "")
+                .unwrap()
+                .try_as_basic_value()
+                .basic();
+            match res {
+                None => self.builder.build_return(Some(&self.ctx.i32_type().const_zero())).unwrap(),
+                Some(v) => self.builder.build_return(Some(&v)).unwrap(),
+            };
+        }
+
+        if self.has_reloadable_fns {
+            self.emit_reload_descriptors();
+        }
+
+        Ok(())
+    }
+
+    /// One exported `__k1_reload_ns_<module/ns>` per reloadable ns, read by
+    /// std/reload's load-ns:
+    /// can evolve freely; only the dylib symbols cross rebuild boundaries.
+    fn emit_reload_descriptors(&mut self) {
+        let mut ns_fns: Vec<(NamespaceId, Vec<(String, FunctionId)>)> = vec![];
+        for (function_id, function) in self.k1.function_iter() {
+            if !function.is_reloadable {
+                continue;
+            }
+            let symbol = self.reloadable_function_symbol(function_id);
+            match ns_fns.iter_mut().find(|(ns, _)| *ns == function.namespace_id) {
+                Some((_, fns)) => fns.push((symbol, function_id)),
+                None => ns_fns.push((function.namespace_id, vec![(symbol, function_id)])),
+            }
+        }
+
+        let program_name = self.k1.ast.name.clone();
+        let dylib_ext = self.k1.config.target.target_os().dylib_ext();
+        let ptr_type = self.builtin_types.ptr;
+        let entry_type = self.ctx.struct_type(&[ptr_type.into(), ptr_type.into()], false);
+        for (ns_id, mut fns) in ns_fns {
+            fns.sort_by(|a, b| a.0.cmp(&b.0));
+            let api_hash = self.k1.reload_hash_for_ns(ns_id);
+            let ns = self.k1.namespaces.get(ns_id);
+            let ns_name = self.k1.ident_str(ns.name).to_string();
+            let mut ns_path = String::with_capacity(64);
+            self.k1.write_scope_path(&mut ns_path, ns.scope_id, "/", true);
+
+            let file_name_ptr =
+                self.cstring_constant(&format!("{program_name}.{ns_name}.{dylib_ext}"));
+            let mut entry_values = Vec::with_capacity(fns.len());
+            for (symbol, function_id) in &fns {
+                let symbol_ptr = self.cstring_constant(symbol);
+                let fn_addr = self.reload_fn_addr_global(*function_id);
+
+                // an array of { fn symbol: cstr, fn-addr global: ptr }.
+                entry_values.push(
+                    entry_type.const_named_struct(&[
+                        symbol_ptr.into(),
+                        fn_addr.as_pointer_value().into(),
+                    ]),
+                );
+            }
+            let entries_array = entry_type.const_array(&entry_values);
+            let entries_global =
+                self.llvm_module.add_global(entries_array.get_type(), None, "reload_entries");
+            entries_global.set_initializer(&entries_array);
+            entries_global.set_constant(true);
+            entries_global.set_linkage(LlvmLinkage::Private);
+
+            // The loader bumps this after each successful swap; loaded-version reads it
+            let version_global =
+                self.llvm_module.add_global(self.ctx.i64_type(), None, "reload_version");
+            version_global.set_initializer(&self.ctx.i64_type().const_zero());
+            version_global.set_alignment(8);
+            version_global.set_linkage(LlvmLinkage::Private);
+
+            // { dylib file name: cstr, api hash: u64, version: *mut u64, entry count: u64, entries: ptr }
+            let descriptor = self.ctx.const_struct(
+                &[
+                    file_name_ptr.into(),
+                    self.ctx.i64_type().const_int(api_hash, false).into(),
+                    version_global.as_pointer_value().into(),
+                    self.ctx.i64_type().const_int(fns.len() as u64, false).into(),
+                    entries_global.as_pointer_value().into(),
+                ],
+                false,
+            );
+            let descriptor_global = self.llvm_module.add_global(
+                descriptor.get_type(),
+                None,
+                &format!("__k1_reload_ns_{ns_path}"),
+            );
+            descriptor_global.set_initializer(&descriptor);
+            descriptor_global.set_constant(true);
+            descriptor_global.set_linkage(LlvmLinkage::External);
+        }
+    }
+
+    /// Emit one reloadable ns's dylib module: the ns's fns are exported roots
+    /// and everything they reach comes along as internal copies via the
+    /// pending-body queue.
+    pub fn codegen_reload_dylib(&mut self) -> K1Result<()> {
+        let CgUnit::ReloadDylib(ns_id) = self.unit else {
+            panic!("codegen_reload_dylib on a host Cg")
         };
 
+        // The load gate: the loader compares this stamp against the running
+        // host's descriptor hash and refuses a drifted api
+        let api_hash = self.k1.reload_hash_for_ns(ns_id);
+        let mut ns_path = String::with_capacity(64);
+        self.k1.write_scope_path(&mut ns_path, self.k1.namespaces.get(ns_id).scope_id, "/", true);
+        let hash_global = self.llvm_module.add_global(
+            self.ctx.i64_type(),
+            None,
+            &format!("__k1_reload_hash_{ns_path}"),
+        );
+        hash_global.set_initializer(&self.ctx.i64_type().const_int(api_hash, false));
+        hash_global.set_constant(true);
+        hash_global.set_alignment(8);
+        hash_global.set_linkage(LlvmLinkage::External);
+
+        let mut roots: Vec<(String, FunctionId)> = vec![];
+        for (function_id, function) in self.k1.function_iter() {
+            if function.is_reloadable && function.namespace_id == ns_id {
+                roots.push((self.reloadable_function_symbol(function_id), function_id));
+            }
+        }
+
+        // Sorted by symbol so dylib contents are deterministic across rebuilds
+        roots.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, function_id) in &roots {
+            self.declare_llvm_function(*function_id)?;
+        }
+        self.k1.compile_all_pending_ir(SpanId::NONE)?;
+        if self.k1.config.optimize {
+            for (_, function_id) in &roots {
+                ir::optimize_unit(self.k1, IrUnitId::Function(*function_id));
+            }
+        }
+        let mut inst_mappings = FxHashMap::with_capacity(512);
+        while let Some(fn_id) = self.functions_pending_body_compilation.pop() {
+            self.codegen_function_body(&mut inst_mappings, fn_id)?;
+        }
+        Ok(())
+    }
+
+    /// No function-id suffix, unlike regular mangled names: the suffix
+    /// disambiguates generic specializations and ability impls sharing a
+    /// scope, which ns(reload) rejects, so plain names are unique here — and
+    /// dlsym needs them stable across independent rebuilds.
+    fn reloadable_function_symbol(&self, function_id: FunctionId) -> String {
+        let function = self.k1.get_function(function_id);
+        Cg::mangle(self.k1.make_qualified_name(function.scope, function.name, None, "/", true))
+    }
+
+    fn is_reloadable_function(&self, function_id: FunctionId) -> bool {
+        let function = self.k1.get_function(function_id);
+        if !function.is_reloadable {
+            return false;
+        }
+        match self.unit {
+            CgUnit::Host => true,
+            CgUnit::ReloadDylib(ns_id) => function.namespace_id != ns_id,
+        }
+    }
+
+    /// A reloadable fn's current address: the `ptr` global the loader patches.
+    /// The host defines it (null until the ns is loaded); dylibs declare it
+    /// and bind to the host's copy at dlopen.
+    fn reload_fn_addr_global(&mut self, function_id: FunctionId) -> GlobalValue<'ctx> {
+        let name = format!("__k1_reload_fn_addr_{}", self.reloadable_function_symbol(function_id));
+        if let Some(existing) = self.llvm_module.get_global(&name) {
+            return existing;
+        }
+        let global = self.llvm_module.add_global(self.builtin_types.ptr, None, &name);
+        global.set_alignment(8);
+        global.set_linkage(LlvmLinkage::External);
+        if self.unit == CgUnit::Host {
+            global.set_initializer(&self.builtin_types.ptr.const_null());
+        }
+        global
+    }
+
+    fn cstring_constant(&mut self, text: &str) -> PointerValue<'ctx> {
+        let value = self.ctx.const_string(text.as_bytes(), true);
+        let global = self.llvm_module.add_global(value.get_type(), None, "cstr");
+        global.set_initializer(&value);
+        global.set_constant(true);
+        global.set_unnamed_addr(true);
+        global.set_linkage(LlvmLinkage::Private);
+        global.as_pointer_value()
+    }
+
+    /// Acquire-load the fn's current address and tail-call it; on null call
+    /// k1/crash-unloaded-ns, which crashes with the ns/fn names
+    fn codegen_reload_stub(&mut self, function_id: FunctionId) -> K1Result<()> {
+        let cg_fn = self.llvm_functions.get(&function_id).unwrap();
+        let function_value = cg_fn.function_value;
+        let llvm_fn_type = cg_fn.function_type.llvm_function_type;
+        let is_sret = cg_fn.function_type.is_sret;
+        let return_cg_type = cg_fn.function_type.return_logical_cg_type;
+        let param_abi_mappings = cg_fn.function_type.param_abi_mappings;
+        let param_k1_types = cg_fn.function_type.param_k1_types;
+
+        let typed_fn = self.k1.get_function(function_id);
+        let fn_name = self.k1.ident_str(typed_fn.name).to_string();
+        let ns_name =
+            self.k1.ident_str(self.k1.namespaces.get(typed_fn.namespace_id).name).to_string();
+        let not_loaded_ident = self.k1.ast.idents.intern("crash-unloaded-ns");
+        let Some(not_loaded_fn_id) =
+            self.k1.scopes.find_function_local(self.k1.scopes.k1_scope_id, not_loaded_ident)
+        else {
+            return Err(self
+                .k1
+                .make_error("core is missing fn k1/crash-unloaded-ns", SpanId::NONE));
+        };
+
+        let fn_addr_global = self.reload_fn_addr_global(function_id);
+        self.builder.unset_current_debug_location();
+        let entry_block = self.ctx.append_basic_block(function_value, "entry");
+        self.builder.position_at_end(entry_block);
+        let loaded = self.builder.build_load(
+            self.builtin_types.ptr,
+            fn_addr_global.as_pointer_value(),
+            "impl_ptr",
+        );
+        let loaded = loaded.unwrap();
+        let load_instr = loaded.as_instruction_value().unwrap();
+        load_instr.set_atomic_ordering(AtomicOrdering::Acquire).unwrap();
+        load_instr.set_alignment(8).unwrap();
+        let impl_ptr = loaded.into_pointer_value();
+
+        let unloaded_block = self.ctx.append_basic_block(function_value, "unloaded");
+        let call_block = self.ctx.append_basic_block(function_value, "call_impl");
+        let is_null = self.builder.build_is_null(impl_ptr, "").unwrap();
+        self.builder.build_conditional_branch(is_null, unloaded_block, call_block).unwrap();
+
+        self.builder.position_at_end(unloaded_block);
+        let not_loaded_fv = self.declare_llvm_function(not_loaded_fn_id)?;
+        let ns_cstr = self.cstring_constant(&ns_name);
+        let fn_cstr = self.cstring_constant(&fn_name);
+        self.builder.build_call(not_loaded_fv, &[ns_cstr.into(), fn_cstr.into()], "").unwrap();
+        self.builder.build_unreachable().unwrap();
+
+        self.builder.position_at_end(call_block);
+        let mut args: Vec<BasicMetadataValueEnum<'ctx>> =
+            Vec::with_capacity(function_value.count_params() as usize);
+        for param in function_value.get_param_iter() {
+            args.push(param.into());
+        }
+        let call = self.builder.build_indirect_call(llvm_fn_type, impl_ptr, &args, "").unwrap();
+        call.set_tail_call(true);
+        if is_sret {
+            let sret_attribute =
+                self.make_sret_attribute(return_cg_type.rich_type().as_any_type_enum());
+            call.add_attribute(AttributeLoc::Param(0), sret_attribute);
+        }
+        let param_offset = if is_sret { 1 } else { 0 };
+        for i in 0..param_abi_mappings.len() as usize {
+            let abi_mapping = *self.mem.get_nth_lt(param_abi_mappings, i);
+            if matches!(abi_mapping, AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }) {
+                let k1_type = *self.mem.get_nth_lt(param_k1_types, i);
+                let byval_attribute =
+                    self.make_byval_attribute(k1_type.rich_type().as_any_type_enum());
+                call.add_attribute(AttributeLoc::Param((i + param_offset) as u32), byval_attribute);
+            }
+        }
+        match call.try_as_basic_value() {
+            ValueKind::Basic(v) => self.builder.build_return(Some(&v)).unwrap(),
+            ValueKind::Instruction(_) => self.builder.build_return(None).unwrap(),
+        };
         Ok(())
     }
 
@@ -672,18 +970,29 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.k1.make_qualified_name(variable.owner_scope, variable.name, None, "__", false)
         };
 
-        let llvm_global = if global.is_external {
+        let is_dylib = matches!(self.unit, CgUnit::ReloadDylib(_));
+
+        // If we're a reloadable dylib, all globals get treated like externals usually do
+        // we link to them and expect to find them in the host
+        let llvm_global = if global.is_external || is_dylib {
             let PhysicalTypeResult::Yes(global_pt) = self.k1.get_physical_type(global.type_id)
             else {
-                kbail!(self.k1, global.span, "ICE: Not physical; todo reject this in typer");
+                kbail!(self.k1, global.span, "ICE: Not physical; reject this in typer");
             };
             let basic_type = self.codegen_type(global_pt);
-            self.make_external_global(basic_type.rich_type(), &name, global.is_constant)
+            let g = self.make_external_global(basic_type.rich_type(), &name, global.is_constant);
+            if is_dylib && global.is_tls {
+                g.set_thread_local(true);
+                g.set_thread_local_mode(Some(ThreadLocalMode::GeneralDynamicTLSModel));
+            }
+            g
         } else {
             let initial_static_value_id = global.initial_value.as_value().unwrap();
             let initializer_basic_value =
                 self.codegen_static_value_as_const(initial_static_value_id, 0)?;
-            let llvm_linkage = match global.is_exported {
+
+            // With reloadable nses in play, every global is visible to dlopened dylibs
+            let llvm_linkage = match global.is_exported || self.has_reloadable_fns {
                 false => LlvmLinkage::Private,
                 true => LlvmLinkage::External,
             };
@@ -714,7 +1023,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn get_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
         let span = self.k1.ast.spans.get(span);
-        let line = self.k1.ast.sources.get_line_for_span_start(span).expect("No line for span");
+        let line = self
+            .k1
+            .ast
+            .sources
+            .get_line_for_span_start(&self.k1.ast.mem, span)
+            .expect("No line for span");
         let column = span.start + 1 - line.start_char;
         let locn = self.debug.debug_builder.create_debug_location(
             self.ctx,
@@ -743,7 +1057,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn get_line_number(&self, span: SpanId) -> u32 {
         let span = self.k1.ast.spans.get(span);
-        let line = self.k1.ast.sources.get_line_for_span_start(span).expect("No line for span");
+        let line = self
+            .k1
+            .ast
+            .sources
+            .get_line_for_span_start(&self.k1.ast.mem, span)
+            .expect("No line for span");
         line.line_index + 1
     }
 
@@ -780,13 +1099,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     const DW_ATE_ADDRESS: u32 = 0x01;
-    const _DW_ATE_BOOLEAN: u32 = 0x02;
+    const DW_ATE_BOOLEAN: u32 = 0x02;
     const _DW_ATE_COMPLEX_FLOAT: u32 = 0x03;
     const DW_ATE_FLOAT: u32 = 0x04;
     const DW_ATE_SIGNED: u32 = 0x05;
     const _DW_ATE_CHAR: u32 = 0x06;
     const DW_ATE_UNSIGNED: u32 = 0x07;
-    const _DW_ATE_UNSIGNED_CHAR: u32 = 0x08;
+    const DW_ATE_UNSIGNED_CHAR: u32 = 0x08;
 
     fn codegen_type(&mut self, pt: PhysicalType) -> CgType<'ctx> {
         //eprintln!("codegen_type {}", self.k1.pt_to_string(pt));
@@ -805,6 +1124,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     ScalarType::F32 => ("f32", Self::DW_ATE_FLOAT),
                     ScalarType::F64 => ("f64", Self::DW_ATE_FLOAT),
                     ScalarType::Pointer => ("ptr", Self::DW_ATE_ADDRESS),
+                    ScalarType::Char => ("char", Self::DW_ATE_UNSIGNED_CHAR),
+                    ScalarType::Bool => ("bool", Self::DW_ATE_BOOLEAN),
                 };
                 let basic_type = self.scalar_basic_type(st);
                 let di_type = self
@@ -1080,7 +1401,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn scalar_basic_type(&self, st: ScalarType) -> BasicTypeEnum<'ctx> {
         match st {
-            ScalarType::U8 => self.ctx.i8_type().into(),
+            ScalarType::U8 | ScalarType::Char | ScalarType::Bool => self.ctx.i8_type().into(),
             ScalarType::U16 => self.ctx.i16_type().into(),
             ScalarType::U32 => self.ctx.i32_type().into(),
             ScalarType::U64 => self.ctx.i64_type().into(),
@@ -1096,7 +1417,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn pt_canon_type(&self, pt: PhysicalType) -> BasicTypeEnum<'ctx> {
         match pt.as_enum() {
-            PhysicalTypeEnum::Empty => self.builtin_types.empty.as_basic_type_enum(),
+            PhysicalTypeEnum::Empty => self.builtin_types.empty_struct.as_basic_type_enum(),
             PhysicalTypeEnum::Scalar(st) => self.scalar_basic_type(st),
             PhysicalTypeEnum::Agg(_) => self.builtin_types.ptr.as_basic_type_enum(),
         }
@@ -1299,25 +1620,27 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_store(ptr, abi_value).unwrap();
                 ptr.as_basic_value_enum()
             }
-            AbiParamMapping::StructByEightbytePair { .. } => {
-                let dst_ptr = self.build_k1_alloca(cg_ty, "struct_by_ebpair_storage");
-                debug_assert!(abi_value.get_type().is_struct_type());
-                // Yes its a struct store but its guaranteed to be only 2 members, so lets try it out.
-                // clang for x86 actually has 2 scalar BasicValues at this point (2 params vs 1 struct),
-                // but this should work too
+            AbiParamMapping::StructByEightbytePair { .. }
+            | AbiParamMapping::StructByIntPairArray => {
+                // The ABI value's fields can extend past the struct's own size (a
+                // 12-byte struct arrives as [2 x i64], an 11-byte one as {i64, i32}),
+                // so spill into a slot sized for the ABI type, not the struct; the
+                // struct occupies its leading bytes
+                let abi_ty = abi_value.get_type();
+                let dst_ptr = self.build_alloca(abi_ty, "abi_pair_storage");
+                let abi_align =
+                    self.llvm_machine.get_target_data().get_abi_alignment(&abi_ty);
+                let align = abi_align.max(cg_ty.rich_repr_layout().align);
+                dst_ptr.as_instruction().unwrap().set_alignment(align).unwrap();
+                if self.k1.config.filc && self.pt_has_pointer_in_union(cg_ty.pt()) {
+                    self.build_zhas_union_marker(dst_ptr);
+                }
                 self.builder.build_store(dst_ptr, abi_value).unwrap();
                 dst_ptr.as_basic_value_enum()
             }
             AbiParamMapping::StructByHfa { .. } => {
                 let dst_ptr = self.build_k1_alloca(cg_ty, "struct_by_hfa_storage");
                 debug_assert!(abi_value.get_type().is_struct_type());
-                self.builder.build_store(dst_ptr, abi_value).unwrap();
-                dst_ptr.as_basic_value_enum()
-            }
-            AbiParamMapping::StructByIntPairArray => {
-                let dst_ptr = self.build_k1_alloca(cg_ty, "struct_by_intpairarray_storage");
-                debug_assert!(abi_value.get_type().is_array_type());
-                // Clang performs this exact array store ([2 x i64])
                 self.builder.build_store(dst_ptr, abi_value).unwrap();
                 dst_ptr.as_basic_value_enum()
             }
@@ -1395,54 +1718,49 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 .builder
                 .build_load(self.builtin_types.ptr, k1_value.into_pointer_value(), "")
                 .unwrap(),
-            AbiParamMapping::StructByEightbytePair { .. } => {
-                //define dso_local void @call_eb_pair_mixed() #0 {
-                //  %1 = alloca %struct.Classes, align 4
-                //  call void @llvm.memset.p0.i64(ptr align 4 %1, i8 0, i64 16, i1 false)
-                //  ..
-                //  %2 = getelementptr inbounds { i64, i64 }, ptr %1, i32 0, i32 0
-                //  %3 = load i64, ptr %2, align 4
-                //  %4 = getelementptr inbounds { i64, i64 }, ptr %1, i32 0, i32 1
-                //  %5 = load i64, ptr %4, align 4
-                //  call void @eb_pair_mixed(i64 %3, i64 %5)
-                //  ret void
-                //}
-                // This is different than what clang does above, for x86, but I really don't
-                // want to map 1 param to 2 params, and have good reason to believe this struct
-                // load is going to work, since the array load works for ARM, and the struct load
-                // works for returns
-                //
-                // Here's clang returning a mixed class eightbyte pair using an aggregate load
-                // %3 = load { i64, float }, ptr %2, align 8
-                // ret { i64, float } %3
+            AbiParamMapping::StructByEightbytePair { .. }
+            | AbiParamMapping::StructByIntPairArray => {
+                // The ABI type's fields can extend past the struct's own size (a
+                // 12-byte struct becomes [2 x i64], an 11-byte one {i64, i32});
+                // loading it straight off the struct would read out of bounds, so
+                // undersized or under-aligned structs stage through a zeroed
+                // ABI-sized slot (clang's pattern, as in StructInInteger above)
                 let abi_type = self.mapped_abi_type_param(pt, mapping);
-
-                // This load should also accomplish the necessary copy to make this semantically
-                // by-value op
-                let loaded_aggregate =
-                    self.builder.build_load(abi_type, k1_value.into_pointer_value(), "").unwrap();
-                loaded_aggregate
+                let src_layout = self.k1.get_pt_layout(pt);
+                let td = self.llvm_machine.get_target_data();
+                let abi_store_size = td.get_store_size(&abi_type);
+                let abi_align = td.get_abi_alignment(&abi_type);
+                let src_ptr = k1_value.into_pointer_value();
+                if abi_store_size <= src_layout.size as u64 && src_layout.align >= abi_align {
+                    self.builder.build_load(abi_type, src_ptr, "").unwrap()
+                } else {
+                    let tmp = self.build_alloca(abi_type, "abi_pair_tmp");
+                    let abi_alloc_size = td.get_abi_size(&abi_type);
+                    self.builder
+                        .build_memset(
+                            tmp,
+                            abi_align,
+                            self.ctx.i8_type().const_zero(),
+                            self.builtin_types.ptr_sized_int.const_int(abi_alloc_size, false),
+                        )
+                        .unwrap();
+                    self.builder
+                        .build_memcpy(
+                            tmp,
+                            abi_align,
+                            src_ptr,
+                            src_layout.align,
+                            self.builtin_types
+                                .ptr_sized_int
+                                .const_int(src_layout.size as u64, false),
+                        )
+                        .unwrap();
+                    self.builder.build_load(abi_type, tmp, "").unwrap()
+                }
             }
             AbiParamMapping::StructByHfa { .. } => {
                 let abi_type = self.mapped_abi_type_param(pt, mapping);
                 self.builder.build_load(abi_type, k1_value.into_pointer_value(), "").unwrap()
-            }
-            AbiParamMapping::StructByIntPairArray => {
-                // define void @call_eb_pair_mixed() #0 {
-                //   %1 = alloca %struct.Classes, align 4
-                //   call void @llvm.memset.p0.i64(ptr align 4 %1, i8 0, i64 16, i1 false)
-                //   ..
-                //   %2 = load [2 x i64], ptr %1, align 4
-                //   call void @eb_pair_mixed([2 x i64] %2)
-                //   ret void
-                // }
-                let abi_type = self.mapped_abi_type_param(pt, mapping);
-
-                // This load should also accomplish the necessary copy to make this semantically
-                // by-value op
-                let loaded_aggregate =
-                    self.builder.build_load(abi_type, k1_value.into_pointer_value(), "").unwrap();
-                loaded_aggregate
             }
             AbiParamMapping::BigStructByPtrToCopy { byval_attr } => {
                 // Our canonical representation of all aggregates is an llvm ptr
@@ -1982,62 +2300,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.set_debug_location_from_span(function_span);
 
         let instr = match builtin_type {
-            BackendBuiltin::Allocate => {
-                // intern fn alloc(size: uword, align: uword): Pointer
-                let size_arg = self.load_function_argument(function_id, 0);
-
-                let malloc_ident = self.k1.ast.idents.intern("malloc");
-                let Some(malloc_fn_id) = self.find_libc_function_id(malloc_ident) else {
-                    kbail!(
-                        self.k1,
-                        function_span,
-                        "Failed to find libc malloc function for Allocate builtin"
-                    );
-                };
-                let malloc_fv = self.declare_llvm_function(malloc_fn_id)?;
-                let call = self.builder.build_call(malloc_fv, &[size_arg], "").unwrap();
-                let result = call.try_as_basic_value().basic().unwrap();
-                self.builder.build_return(Some(&result)).unwrap()
-            }
-            BackendBuiltin::AllocateZeroed => {
-                // intern fn allocZeroed(size: uword, align: uword): Pointer
-                let size_arg = self.load_function_argument(function_id, 0);
-                let count_one =
-                    self.builtin_types.ptr_sized_int.const_int(1, false).as_basic_value_enum();
-
-                let calloc_ident = self.k1.ast.idents.intern("calloc");
-                let calloc_fn_id = self.find_libc_function_id(calloc_ident).unwrap();
-                let calloc_fv = self.declare_llvm_function(calloc_fn_id)?;
-                // libc/calloc(count = 1, size = size);
-                let call =
-                    self.builder.build_call(calloc_fv, &[count_one.into(), size_arg], "").unwrap();
-                let result = call.try_as_basic_value().expect_basic("calloc return");
-                self.builder.build_return(Some(&result)).unwrap()
-            }
-            BackendBuiltin::Reallocate => {
-                // intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
-                let old_ptr_arg = self.load_function_argument(function_id, 0);
-                let new_size_arg = self.load_function_argument(function_id, 3);
-
-                let realloc_ident = self.k1.ast.idents.intern("realloc");
-                let realloc_fn_id = self.find_libc_function_id(realloc_ident).unwrap();
-                let realloc_fv = self.declare_llvm_function(realloc_fn_id)?;
-                let call =
-                    self.builder.build_call(realloc_fv, &[old_ptr_arg, new_size_arg], "").unwrap();
-                let result = call.try_as_basic_value().expect_basic("realloc return");
-                self.builder.build_return(Some(&result)).unwrap()
-            }
-            BackendBuiltin::Free => {
-                let old_ptr_arg = self.load_function_argument(function_id, 0);
-
-                let free_ident = self.k1.ast.idents.intern("free");
-                let free_fn_id = self.find_libc_function_id(free_ident).unwrap();
-                let free_fv = self.declare_llvm_function(free_fn_id)?;
-                let _call = self.builder.build_call(free_fv, &[old_ptr_arg], "").unwrap();
-                self.builder.build_return(None).unwrap()
-            }
             BackendBuiltin::MemCopy | BackendBuiltin::MemMove => {
-                // intern fn copy(
+                // fn(intern) copy(
                 //   dst: Pointer,
                 //   src: Pointer,
                 //   count: uword
@@ -2072,7 +2336,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(None).unwrap()
             }
             BackendBuiltin::MemSet => {
-                // intern fn set(dst: ptr, value: u8, count: int): unit
+                // fn(intern) set(dst: ptr, value: u8, count: int): unit
                 let dst_arg = self.load_function_argument(function_id, 0);
                 let value_arg = self.load_function_argument(function_id, 1);
                 let count_arg = self.load_function_argument(function_id, 2);
@@ -2088,7 +2352,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(None).unwrap()
             }
             BackendBuiltin::MemEquals => {
-                // intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
+                // fn(intern) equals(p1: Pointer, p2: Pointer, size: uword): bool
                 let p1_arg = self.load_function_argument(function_id, 0);
                 let p2_arg = self.load_function_argument(function_id, 1);
                 let size_arg = self.load_function_argument(function_id, 2);
@@ -2108,7 +2372,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(Some(&bool_equal)).unwrap()
             }
             BackendBuiltin::Exit => {
-                // intern fn exit(code: i32): never
+                // fn(intern) exit(code: i32): never
                 let code_arg = self.load_function_argument(function_id, 0);
 
                 let exit_ident = self.k1.ast.idents.intern("exit");
@@ -2120,7 +2384,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
 
             BackendBuiltin::TypeName => {
-                // intern fn type-name(id: u64): string
+                // fn(intern) type-name(id: u64): string
                 let type_id_arg = self.load_function_argument(function_id, 0).into_int_value();
                 let cg_fn = self.llvm_functions.get(&function_id).unwrap();
                 let return_llvm_type = cg_fn.function_type.return_logical_cg_type;
@@ -2187,7 +2451,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(Some(&marshalled)).unwrap()
             }
             BackendBuiltin::TypeSchema => {
-                // intern fn type-schema(id: u64): TypeSchema
+                // fn(intern) type-schema(id: u64): TypeSchema
                 let cg_fn = self.llvm_functions.get(&function_id).unwrap();
                 debug_assert!(cg_fn.function_type.is_sret);
                 let out_storage =
@@ -2292,7 +2556,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             ir::Value::Data32 { t, data } => {
                 let v: BasicValueEnum<'ctx> = match t {
-                    ScalarType::U8 => self.ctx.i8_type().const_int(data as u64, false).into(),
+                    ScalarType::U8 | ScalarType::Char | ScalarType::Bool => {
+                        self.ctx.i8_type().const_int(data as u64, false).into()
+                    }
                     ScalarType::U16 => self.ctx.i16_type().const_int(data as u64, false).into(),
                     ScalarType::U32 => self.ctx.i32_type().const_int(data as u64, false).into(),
                     ScalarType::U64 => self.ctx.i64_type().const_int(data as u64, false).into(),
@@ -2324,7 +2590,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 };
                 Ok(v)
             }
-            ir::Value::Empty => Ok(self.builtin_types.empty_value()),
+            ir::Value::Empty => Ok(self.builtin_types.empty_struct_value()),
         }
     }
 
@@ -2749,7 +3015,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 if let Some(return_value) = self.codegen_function_call(inst_mappings, id, span)? {
                     inst_mappings.insert(inst_id, return_value);
                 } else {
-                    inst_mappings.insert(inst_id, self.builtin_types.empty_value());
+                    inst_mappings.insert(inst_id, self.builtin_types.empty_struct_value());
                 }
                 Ok(())
             }
@@ -3167,23 +3433,45 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let typed_function_params = typed_function.params;
         let function_span = self.k1.ast.get_span_for_id(typed_function.parsed_id);
 
-        let llvm_linkage = match typed_function.linkage {
-            TyperLinkage::Standard => LlvmLinkage::Internal,
-            TyperLinkage::External { .. } => LlvmLinkage::External,
-            TyperLinkage::Intrinsic | TyperLinkage::LlvmIntrinsic(_) => LlvmLinkage::Internal,
-        };
-        let is_definition = llvm_linkage != LlvmLinkage::External;
-        let llvm_name = match typed_function.linkage {
-            TyperLinkage::External { fn_name: Some(link_name), .. } => {
-                self.k1.ident_str(link_name).to_string()
+        let is_dylib_root = match self.unit {
+            CgUnit::Host => false,
+            CgUnit::ReloadDylib(ns_id) => {
+                typed_function.is_reloadable && typed_function.namespace_id == ns_id
             }
-            _ => Cg::mangle(self.k1.make_qualified_name(
-                typed_function.scope,
-                typed_function.name,
-                Some(function_id.as_u32() as usize),
-                ".",
-                true,
-            )),
+        };
+        let llvm_linkage = if is_dylib_root {
+            LlvmLinkage::External
+        } else {
+            match typed_function.linkage {
+                TyperLinkage::Standard => LlvmLinkage::Internal,
+                TyperLinkage::External { .. } | TyperLinkage::Exported { .. } => {
+                    LlvmLinkage::External
+                }
+                TyperLinkage::Intrinsic | TyperLinkage::LlvmIntrinsic(_) => LlvmLinkage::Internal,
+            }
+        };
+        let is_definition = is_dylib_root
+            || typed_function_linkage.is_exported()
+            || llvm_linkage != LlvmLinkage::External;
+        let llvm_name = if is_dylib_root {
+            self.reloadable_function_symbol(function_id)
+        } else {
+            match typed_function.linkage {
+                TyperLinkage::External { fn_name: Some(link_name), .. }
+                | TyperLinkage::Exported { fn_name: Some(link_name) } => {
+                    self.k1.ident_str(link_name).to_string()
+                }
+                TyperLinkage::Exported { fn_name: None } => {
+                    self.k1.ident_str(typed_function.name).to_string()
+                }
+                _ => Cg::mangle(self.k1.make_qualified_name(
+                    typed_function.scope,
+                    typed_function.name,
+                    Some(function_id.as_u32() as usize),
+                    ".",
+                    true,
+                )),
+            }
         };
 
         if self.llvm_module.get_function(&llvm_name).is_some() {
@@ -3216,12 +3504,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             llvm_function_type.is_sret, llvm_function_type.llvm_function_type
         );
 
-        let di_types: SV8<_> = self
-            .mem
-            .getn_lt(llvm_function_type.param_k1_types)
-            .iter()
-            .map(|t| t.debug_type())
-            .collect();
+        let mut di_types: SV8<_> = smallvec::smallvec![];
+        for t in self.mem.getn_lt(llvm_function_type.param_k1_types).iter() {
+            di_types.push(t.debug_type());
+        }
         let (di_subprogram, di_file) = self.make_function_debug_info(
             &llvm_name,
             function_span,
@@ -3506,16 +3792,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         fn scalar_register_class(st: ScalarType) -> RegisterClass {
             match st {
-                ScalarType::U8 => RegisterClass::Int,
-                ScalarType::U16 => RegisterClass::Int,
-                ScalarType::U32 => RegisterClass::Int,
-                ScalarType::U64 => RegisterClass::Int,
-                ScalarType::I8 => RegisterClass::Int,
-                ScalarType::I16 => RegisterClass::Int,
-                ScalarType::I32 => RegisterClass::Int,
-                ScalarType::I64 => RegisterClass::Int,
-                ScalarType::F32 => RegisterClass::Float,
-                ScalarType::F64 => RegisterClass::Float,
+                ScalarType::U8
+                | ScalarType::U16
+                | ScalarType::U32
+                | ScalarType::U64
+                | ScalarType::I8
+                | ScalarType::I16
+                | ScalarType::I32
+                | ScalarType::I64
+                | ScalarType::Char
+                | ScalarType::Bool => RegisterClass::Int,
+                ScalarType::F32 | ScalarType::F64 => RegisterClass::Float,
                 ScalarType::Pointer => RegisterClass::Ptr,
             }
         }
@@ -3629,6 +3916,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         function_id: FunctionId,
     ) -> K1Result<()> {
         self.current_insert_function = function_id;
+        if self.is_reloadable_function(function_id) {
+            return self.codegen_reload_stub(function_id);
+        }
         let typed_function = self.k1.get_function(function_id);
         let is_debug = typed_function.compiler_debug;
         if is_debug {
@@ -3866,7 +4156,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         debug!("codegen_static_value_as_const {}", self.k1.static_value_to_string(static_value_id));
 
         let result = match self.k1.static_values.get(static_value_id) {
-            StaticValue::Empty => self.builtin_types.empty_value(),
+            StaticValue::Empty(_type_id) => {
+                // NOTE: We may need a few different representations of empty here
+                // to keep the type system happy: empty array, empty struct, at least
+                self.builtin_types.empty_struct_value()
+            }
             StaticValue::Bool(b) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
                 false => self.builtin_types.false_value.as_basic_value_enum(),
@@ -4046,18 +4340,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         elements: &[StaticValueId],
         depth: usize,
     ) -> K1Result<StructValue<'ctx>> {
-        let mut packed_values = self.tmp.new_list(elements.len() as u32);
-
-        // let element_backend_type = self.codegen_type(element_type)?;
         let element_layout = self.k1.get_layout(element_type).unwrap();
+        // Stride padding is a container concern, not part of Layout.size, so each
+        // element may be followed by an explicit padding entry
+        let end_padding = element_layout.stride() - element_layout.size;
+        let values_per_element: u32 = if end_padding > 0 { 2 } else { 1 };
+        let mut packed_values = self.tmp.new_list(elements.len() as u32 * values_per_element);
 
         for elem in elements.iter() {
             let elem_basic_value = self.codegen_static_value_as_const(*elem, depth + 1)?;
             packed_values.push(elem_basic_value);
 
-            // IF STRIDE != SIZE, MAKE SURE TO ADD IT! Because in K1 that's a container concern
-            // and not part of the Layout.size
-            let end_padding = element_layout.stride() - element_layout.size;
             if end_padding > 0 {
                 let padding_value =
                     self.padding_type(end_padding).get_undef().as_basic_value_enum();
@@ -4117,18 +4410,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         global.set_initializer(&value);
         global.set_constant(constant);
         global.set_linkage(linkage);
-        if self.k1.program_settings.multithreaded {
-            if is_tls {
-                global.set_thread_local(true);
-                let mode = if self.k1.program_settings.executable {
-                    ThreadLocalMode::LocalExecTLSModel
-                } else {
-                    // We don't yet support dynamic library as a target
-                    // So even libraries can use InitialExec
-                    ThreadLocalMode::InitialExecTLSModel
-                };
-                global.set_thread_local_mode(Some(mode));
-            }
+        if is_tls {
+            global.set_thread_local(true);
+            let mode = if self.k1.program_settings.executable {
+                ThreadLocalMode::LocalExecTLSModel
+            } else {
+                ThreadLocalMode::GeneralDynamicTLSModel
+            };
+            global.set_thread_local_mode(Some(mode));
         }
         global
     }
@@ -4143,7 +4432,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         );
         let v = self.k1.static_values.get(static_value_id);
         let result = match v {
-            StaticValue::Empty
+            StaticValue::Empty(_)
             | StaticValue::Bool(_)
             | StaticValue::Char(_)
             | StaticValue::Int(_)
@@ -4211,7 +4500,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         global_str_data.set_constant(true);
 
         // Ensure the string layout is what we expect
-        // deftype string = { private span: span[char] }
+        // type string = { private span: span[char] }
         let string_type_id = self.k1.string_type_id();
         let string_pt = self.k1.get_physical_type(string_type_id).unwrap();
         let string_type = self.codegen_type(string_pt).expect_struct();
@@ -4249,6 +4538,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         global_str_struct.set_initializer(&string_wrapper_struct);
         global_str_struct.set_constant(true);
         global_str_struct.set_unnamed_addr(true);
+        global_str_struct.set_linkage(LlvmLinkage::Private);
 
         Ok(global_str_struct)
     }
@@ -4471,13 +4761,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     pub fn interpret_module(&self) -> anyhow::Result<u64> {
         let engine = self.llvm_module.create_jit_execution_engine(OptimizationLevel::None).unwrap();
-        // let base_lib_module = self
-        //     .ctx
-        //     .create_module_from_ir(
-        //         MemoryBuffer::create_from_file(Path::new("k1lib/k1lib.ll")).unwrap(),
-        //     )
-        //     .unwrap();
-        // self.llvm_module.link_in_module(base_lib_module).unwrap();
         let Some(main_fn_id) = self.k1.get_main_function_id() else { bail!("No main function") };
         let llvm_function = self.llvm_functions.get(&main_fn_id).unwrap();
         eprintln!("Interpreting {}", self.k1.program_name());

@@ -7,16 +7,10 @@ use fxhash::FxHashMap;
 use std::{cell::RefCell, collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
 use crate::{
-    SV4, kbail, kerr,
-    kmem::Dlist,
-    nz_u32_id,
-    parse::{ParsedAbilityId, ParsedExprId, QIdent},
-    static_assert_niched, static_assert_size,
-    typer::{
+    kbail, kerr, kmem::{Dlist, List, Mem}, nz_u32_id, parse::{ParsedAbilityId, ParsedExprId, ParsedGlobalId, QIdent}, static_assert_niched, static_assert_size, typer::{
         AbilityId, FunctionId, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId, StringId,
         TypeId, TypePendingDefinition, TypedProgram, VariableId,
-    },
-    vpool::VPool,
+    }, vpool::VPool, SV4
 };
 
 nz_u32_id!(ScopeId);
@@ -93,6 +87,7 @@ pub struct ScopeEnclosingFunctions {
     pub function: Option<FunctionId>,
 }
 
+#[derive(Clone, Copy)]
 pub struct ScopeLambdaInfo {
     pub expected_return_type: Option<TypeId>,
     // We have to store this here, instead of on the function, since no function
@@ -100,6 +95,7 @@ pub struct ScopeLambdaInfo {
     pub returned_variable: Option<VariableId>,
 }
 
+#[derive(Clone, Copy)]
 pub struct ScopeLoopInfo {
     pub break_type: Option<TypeId>,
 }
@@ -119,6 +115,8 @@ pub enum ContextAbilityEntry {
 
 /// A packed (scope, symbol) key for the global per-kind symbol maps
 type ScopeKey = u64;
+
+type ScopeMap<V> = ahash::HashMap<ScopeKey, V>;
 
 #[inline]
 fn skey(scope: ScopeId, sym: u32) -> ScopeKey {
@@ -147,7 +145,7 @@ fn skey_parts(key: ScopeKey) -> (StringId, u32) {
 
 /// One scope's entries in a per-kind symbol map
 fn entries_in_scope<T: Copy>(
-    map: &FxHashMap<ScopeKey, T>,
+    map: &ScopeMap<T>,
     scope_id: ScopeId,
 ) -> impl Iterator<Item = (StringId, T)> + '_ {
     map.iter().filter_map(move |(key, v)| {
@@ -171,15 +169,16 @@ pub struct Scopes {
     pub scopes: VPool<Scope, ScopeId>,
     /// maps scopes to their parent lambda scope, if any. used for capture detection.
     lambda_cache: RefCell<FxHashMap<ScopeId, Option<ScopeId>>>,
-    context_variables_by_type: FxHashMap<ScopeKey, VariableId>,
-    context_variables_by_ability: FxHashMap<ScopeKey, ContextAbilityEntry>,
-    functions: FxHashMap<ScopeKey, FunctionId>,
-    namespaces: FxHashMap<ScopeKey, NamespaceId>,
-    types: FxHashMap<ScopeKey, TypeId>,
-    type_param_substs: FxHashMap<ScopeKey, TypeId>,
-    abilities: FxHashMap<ScopeKey, AbilityId>,
-    pending_type_defns: FxHashMap<ScopeKey, TypePendingDefinition>,
-    pending_ability_defns: FxHashMap<ScopeKey, ParsedAbilityId>,
+    context_variables_by_type: ScopeMap<VariableId>,
+    context_variables_by_ability: ScopeMap<ContextAbilityEntry>,
+    functions: ScopeMap<FunctionId>,
+    namespaces: ScopeMap<NamespaceId>,
+    types: ScopeMap<TypeId>,
+    type_param_substs: ScopeMap<TypeId>,
+    abilities: ScopeMap<AbilityId>,
+    pending_type_defns: ScopeMap<TypePendingDefinition>,
+    pending_ability_defns: ScopeMap<ParsedAbilityId>,
+    pending_globals: ScopeMap<ParsedGlobalId>,
     pub lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
     pub loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
     pub block_defers: FxHashMap<ScopeId, ScopeDefers>,
@@ -194,21 +193,129 @@ pub struct Scopes {
 }
 
 impl Scopes {
+    pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
+        use crate::snap::{snap_map_with, write_map_snap};
+        let Scopes {
+            scopes,
+            lambda_cache: _,
+            context_variables_by_type,
+            context_variables_by_ability,
+            functions,
+            namespaces,
+            types,
+            type_param_substs,
+            abilities,
+            pending_type_defns,
+            pending_ability_defns,
+            pending_globals,
+            lambda_info,
+            loop_info,
+            block_defers,
+            core_scope_id,
+            k1_scope_id,
+            mem_scope_id,
+            sys_scope_id,
+            libc_scope_id,
+            types_scope_id,
+            array_scope_id,
+            vector_scope_id,
+        } = self;
+        w.write_section("scopes");
+        w.write_len(scopes.len());
+        for (_, scope) in scopes.iter_with_ids() {
+            let Scope { parent, scope_type, kinds, owner_id, variables } = scope;
+            w.write_t(parent);
+            w.write_t(scope_type);
+            w.write_t(kinds);
+            w.write_t(owner_id);
+            write_map_snap(w, variables);
+        }
+        write_map_snap(w, context_variables_by_type);
+        write_map_snap(w, context_variables_by_ability);
+        write_map_snap(w, functions);
+        write_map_snap(w, namespaces);
+        write_map_snap(w, types);
+        write_map_snap(w, type_param_substs);
+        write_map_snap(w, abilities);
+        write_map_snap(w, pending_type_defns);
+        write_map_snap(w, pending_ability_defns);
+        write_map_snap(w, pending_globals);
+        write_map_snap(w, lambda_info);
+        write_map_snap(w, loop_info);
+        snap_map_with(w, block_defers, |w, defers| w.write_slice(&defers.deferred_exprs));
+        for id in [
+            core_scope_id,
+            k1_scope_id,
+            mem_scope_id,
+            sys_scope_id,
+            libc_scope_id,
+            types_scope_id,
+            array_scope_id,
+            vector_scope_id,
+        ] {
+            w.write_t(id);
+        }
+    }
+
+    pub fn restore(r: &mut crate::snap::SnapReader) -> Scopes {
+        use crate::snap::{restore_map_snap, restore_map_with};
+        r.section("scopes");
+        let mut scopes = VPool::make("scopes");
+        let n = r.read_len();
+        for _ in 0..n {
+            let parent = r.read_t();
+            let scope_type = r.read_t();
+            let kinds = r.read_t();
+            let owner_id = r.read_t();
+            let variables = restore_map_snap(r);
+            scopes.add(Scope { parent, scope_type, kinds, owner_id, variables });
+        }
+        Scopes {
+            scopes,
+            // `lambda_cache` is rebuildable
+            lambda_cache: RefCell::new(FxHashMap::new()),
+            context_variables_by_type: restore_map_snap(r),
+            context_variables_by_ability: restore_map_snap(r),
+            functions: restore_map_snap(r),
+            namespaces: restore_map_snap(r),
+            types: restore_map_snap(r),
+            type_param_substs: restore_map_snap(r),
+            abilities: restore_map_snap(r),
+            pending_type_defns: restore_map_snap(r),
+            pending_ability_defns: restore_map_snap(r),
+            pending_globals: restore_map_snap(r),
+            lambda_info: restore_map_snap(r),
+            loop_info: restore_map_snap(r),
+            block_defers: restore_map_with(r, |r| ScopeDefers {
+                deferred_exprs: SV4::from_slice(&r.read_vec::<ParsedExprId>()),
+            }),
+            core_scope_id: r.read_t(),
+            k1_scope_id: r.read_t(),
+            mem_scope_id: r.read_t(),
+            sys_scope_id: r.read_t(),
+            libc_scope_id: r.read_t(),
+            types_scope_id: r.read_t(),
+            array_scope_id: r.read_t(),
+            vector_scope_id: r.read_t(),
+        }
+    }
+
     pub const ROOT_SCOPE_ID: ScopeId = ScopeId(NonZeroU32::new(1).unwrap());
     pub fn make() -> Self {
         let root_scope = Scope::make(ScopeType::Namespace, ScopeOwnerId::None);
         let mut scopes = Scopes {
             scopes: VPool::make("scopes"),
             lambda_cache: RefCell::new(FxHashMap::new()),
-            context_variables_by_type: FxHashMap::new(),
-            context_variables_by_ability: FxHashMap::new(),
-            functions: FxHashMap::new(),
-            namespaces: FxHashMap::new(),
-            types: FxHashMap::new(),
-            type_param_substs: FxHashMap::new(),
-            abilities: FxHashMap::new(),
-            pending_type_defns: FxHashMap::new(),
-            pending_ability_defns: FxHashMap::new(),
+            context_variables_by_type: ScopeMap::new(),
+            context_variables_by_ability: ScopeMap::new(),
+            functions: ScopeMap::new(),
+            namespaces: ScopeMap::new(),
+            types: ScopeMap::new(),
+            type_param_substs: ScopeMap::new(),
+            abilities: ScopeMap::new(),
+            pending_type_defns: ScopeMap::new(),
+            pending_ability_defns: ScopeMap::new(),
+            pending_globals: ScopeMap::new(),
             lambda_info: FxHashMap::new(),
             loop_info: FxHashMap::new(),
             block_defers: FxHashMap::new(),
@@ -319,21 +426,30 @@ impl Scopes {
         self.abilities.get(&skey_name(scope_id, name)).copied()
     }
 
-    /// Note: name-based, so an ability brought into scope only under a `use`
-    /// alias won't be found by its canonical name
-    pub fn is_ability_id_in_scope(
+    pub fn collect_ability_ids_bound_to_names(
         &self,
         scope_id: ScopeId,
-        name: StringId,
-        target_ability_id: AbilityId,
-    ) -> bool {
-        self.walk_chain(scope_id, kinds::ABILITIES, |sid| {
-            match self.abilities.get(&skey_name(sid, name)) {
-                Some(found) if *found == target_ability_id => Some(()),
-                _ => None,
+        names: &[StringId],
+        ability_ids: &mut List<AbilityId, MemTmp>,
+        mem: &mut Mem<MemTmp>,
+    ) {
+        let mut scope_id = scope_id;
+        loop {
+            let scope = self.get_scope(scope_id);
+            if scope.kinds & kinds::ABILITIES != 0 {
+                for name in names {
+                    if let Some(found) = self.abilities.get(&skey_name(scope_id, *name))
+                        && !ability_ids.contains(found)
+                    {
+                        ability_ids.push_grow(mem, *found);
+                    }
+                }
             }
-        })
-        .is_some()
+            match scope.parent {
+                Some(parent) => scope_id = parent,
+                None => return,
+            }
+        }
     }
 
     pub fn find_context_variable_by_type(
@@ -350,7 +466,7 @@ impl Scopes {
             {
                 return Some(*v);
             }
-            // Context variables are only ever function params or `let context`s
+            // Context variables are only ever function params or `let(context)`s
             // in function bodies -- never globals -- so once the walk climbs
             // out of function-land into a namespace, there's nothing left to
             // find. (Note some paths still evaluate a function body in its own
@@ -573,6 +689,37 @@ impl Scopes {
         self.pending_type_defns.get(&skey_name(scope_id, name)).copied()
     }
 
+    pub fn add_pending_global(
+        &mut self,
+        scope_id: ScopeId,
+        name: StringId,
+        parsed_id: ParsedGlobalId,
+    ) {
+        self.pending_globals.entry(skey_name(scope_id, name)).or_insert(parsed_id);
+    }
+
+    pub fn find_pending_global(
+        &self,
+        scope_id: ScopeId,
+        name: StringId,
+    ) -> Option<(ParsedGlobalId, ScopeId)> {
+        let mut scope_id = scope_id;
+        loop {
+            if let Some(id) = self.pending_globals.get(&skey_name(scope_id, name)) {
+                return Some((*id, scope_id));
+            }
+            scope_id = self.get_scope(scope_id).parent?;
+        }
+    }
+
+    pub fn find_pending_global_local(
+        &self,
+        scope_id: ScopeId,
+        name: StringId,
+    ) -> Option<ParsedGlobalId> {
+        self.pending_globals.get(&skey_name(scope_id, name)).copied()
+    }
+
     #[must_use]
     pub fn add_pending_ability_defn(
         &mut self,
@@ -612,7 +759,7 @@ impl Scopes {
     /// Iterate the symbols of one kind defined directly in `scope_id`.
     /// A filtered scan of the whole map: for debugging/dumps and cold paths only.
     fn iter_scope_map<V: Copy>(
-        map: &FxHashMap<ScopeKey, V>,
+        map: &ScopeMap<V>,
         scope_id: ScopeId,
     ) -> impl Iterator<Item = (StringId, V)> + '_ {
         map.iter().filter_map(move |(k, v)| {
@@ -772,7 +919,7 @@ impl Scopes {
     }
 
     /// Register a context variable under an ability key. Returns false if the key is
-    /// already claimed in this scope. Explicit `let context(impl ..)` declarations
+    /// already claimed in this scope. Explicit `let(context(impl ..))` declarations
     /// should treat false as an error; derived registrations (function context params
     /// typed by constrained type params) should instead call
     /// [`Self::poison_context_ability_key`] so the collision only fails at lookup time.
@@ -1033,6 +1180,22 @@ impl TypedProgram {
                 .scopes
                 .find_pending_type_local(scope_to_search, type_name.name)
                 .map(|defn| (defn, scope_to_search)))
+        }
+    }
+
+    pub fn find_pending_global_namespaced(
+        &self,
+        scope_id: ScopeId,
+        name: &QIdent,
+    ) -> K1Result<Option<(ParsedGlobalId, ScopeId)>> {
+        if name.path.is_empty() {
+            Ok(self.scopes.find_pending_global(scope_id, name.name))
+        } else {
+            let scope_to_search = self.resolve_qident(scope_id, name)?;
+            Ok(self
+                .scopes
+                .find_pending_global_local(scope_to_search, name.name)
+                .map(|id| (id, scope_to_search)))
         }
     }
 

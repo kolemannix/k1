@@ -51,7 +51,7 @@ format-test/test()
 core/types/type-id[int]
 ```
 
-See `test_src/suite1/main.k1`, `test_src/suite1/format.k1`, and
+See `test_src/suite1/suite1.k1`, `test_src/suite1/format.k1`, and
 `test_src/suite1/lambdas.k1`.
 
 ## Naming
@@ -165,6 +165,8 @@ assert(result == .{})
 ```
 
 K1 code commonly ends test helpers with `.{}` when the intent is "return unit".
+An empty block `{}` is legal and yields `.{}` — fine as a no-op fn body
+(`fn stop(self: *mut self) {}`) or an empty loop body (`while spinning() {}`).
 
 ## Variables And Mutation
 
@@ -260,13 +262,13 @@ literal from a block — a bare `{` in expression position is always a block, so
 `{ cap }` is a block yielding `cap` and `.{ cap }` is the shorthand struct.
 Fields use the same `name = value` shape as named call arguments.
 
-`type alias name = ...` creates a plain alias for the type on the right-hand
+`type(alias) name = ...` creates a plain alias for the type on the right-hand
 side. This is how to name an existing scalar or structural type without creating
 a new nominal identity:
 
 ```rust
-type alias byte-count = u32
-type alias point-like = { x: int, y: int }
+type(alias) byte-count = u32
+type(alias) point-like = { x: int, y: int }
 ```
 
 Anonymous struct types are common:
@@ -499,6 +501,12 @@ See `test_src/suite1/optionals.k1` and `test_src/suite1/try_test.k1`.
 let n = if flag 1 else 2
 ```
 
+Boolean negation is the `not` prefix. It binds tightly, to one postfix chain:
+`not user.is-admin()` negates the call result. A binary operator directly
+after the operand is a parse error, not a precedence choice — write
+`(not a) == b` or `not (a == b)`. At the end of a method chain, use `bool`'s
+`negated()` instead: `list.contains(x).negated()`.
+
 Use `is` for pattern checks and bindings:
 
 ```rust
@@ -546,7 +554,9 @@ while i < 10 {
 }
 ```
 
-`loop` can yield a value through `break value`; a bare `break` exits with unit:
+`loop` can yield a value through `break value`; a bare `break` exits with unit.
+`continue` skips to the next iteration (the condition check of a `while`, the
+next `iter.next()` of a `for`):
 
 ```rust
 let found: int = loop {
@@ -604,11 +614,32 @@ Collection API naming follows a doctrine:
 - `wrap-*` constructors are zero-copy views over existing memory (the dangerous
   ones, so they are explicitly named). `from-*` constructors make an owned copy.
 - `as-*` accessors return views; `to-*` methods return owned copies.
-- A bare operation allocates in the ambient `:current` alloc-mode; the `-in`
-  variant takes an explicit `context alloc-mode` (e.g. `cloned`/`cloned-in`,
-  `push`/`push-in`, `reserve`/`reserve-in`).
+- A bare operation allocates in the ambient current arena
+  (`mem/current-arena()`, a TLS stack defaulting to the tmp arena; scope one
+  with `mem/with-arena(a, expr)`). The `-in` variant takes an explicit
+  allocator as its first argument after self — any `allocator` impl: a
+  `*arena` or `heap` (e.g. `cloned`/`cloned-in`, `push`/`push-in`,
+  `reserve`/`reserve-in`). Long-lived data takes an explicit allocator;
+  transient data uses the ambient arena.
 - Mutators take `*mut self` and reuse the verb (`sort`, `reverse`); functional
   variants get `-ed` (`sorted`, `reversed`).
+- Shared collection ops are ability defaults: reads and views on `as-span`
+  (`len`, `get`, `get-opt`, `first`, `last`, `slice`, `take`, `drop`,
+  `starts-with`, `ends-with`, `chunks`, `sorted`, `index-of-span`,
+  `contains-span`, `first-diff`), mutations and references on `as-buffer`
+  (`set`, `swap`, `sort`, `reverse`, `fill`, `get-ref`, `first-ref`,
+  `last-ref`, `ref-iter`). Implementing `as-buffer` derives
+  `as-span` via a blanket impl. View defaults return `span[t]`; view types
+  shadow them with shape-preserving inherents (string ops return string,
+  buffer ops return buffer). Each method name belongs to exactly one ability;
+  inherent shadowing is the only sanctioned overlap.
+- Search by element is `position`/`contains` (an `iterable` default, so it
+  works on any iterable); search by subsequence is `index-of-span`/
+  `contains-span`. Both are implemented once in `buffer`, which dispatches on
+  the element type: a byte-sized `t` takes a SIMD lane, everything else a
+  scalar loop. `list`, `span`, and `string` shadow `position`/`contains` with
+  inherents so they reach that lane instead of iterable's element-by-element
+  default.
 
 See `test_src/suite1/array_test.k1`, `test_src/suite1/list_test.k1`,
 `test_src/suite1/range_test.k1`, and `test_src/suite1/buffer_test.k1`.
@@ -862,7 +893,7 @@ fn test() {
 }
 ```
 
-Then add it to `test_src/suite1/main.k1` if it belongs in suite1.
+Then add it to `test_src/suite1/suite1.k1` if it belongs in suite1.
 
 Use `test-compile(...)` when a snippet should fail to compile:
 
