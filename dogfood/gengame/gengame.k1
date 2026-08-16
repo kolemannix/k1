@@ -356,6 +356,13 @@ fn is-opener(t: token): bool {
   t is :rep(_) or t is :mir or t is :mark or t is :callo(_)
 }
 
+fn has-hole(toks: span[token]): bool {
+  for t in toks {
+    if t is :hole { return true }
+  }
+  false
+}
+
 fn find-close(toks: span[token], from: size): size {
   let depth: size = 0
   let i = from
@@ -371,7 +378,7 @@ fn find-close(toks: span[token], from: size): size {
   toks.len()
 }
 
-type bud = { at: size, d: u8 }
+type bud = { at: size, d: u8, socket: bool }
 type expansion = {
   syms: fixlist[u8, MAX-EXPAND],
   gens: fixlist[u8, MAX-EXPAND],
@@ -379,6 +386,7 @@ type expansion = {
   buds: fixlist[bud, MAX-BUDS],
   shifts: fixlist[size, MAX-BUDS],
   tail: size,
+  capped: bool,
 }
 
 let SRC-NONE: u16 = 65535
@@ -453,8 +461,10 @@ fn expand-toks(ctx: *mut expand-ctx, toks: span[token], self: span[token], self-
         i = i + 1
       },
       :name(d) -> {
-        if ndepth < ctx.growth {
-          let body = if d == 0 ctx.def-a else ctx.def-b
+        let body = if d == 0 ctx.def-a else ctx.def-b
+        if has-hole(body) {
+          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = e.syms.len(), d, socket = true }) }
+        } else if ndepth < ctx.growth {
           let d0 = ctx.bdepth
           let s0 = ctx.shift
           ctx.args.push(toks.slice(i, i))
@@ -464,16 +474,19 @@ fn expand-toks(ctx: *mut expand-ctx, toks: span[token], self: span[token], self-
           ctx.shift = s0
           let _ = ctx.args.pop()
           let _ = ctx.arg-srcs.pop()
-        } else if e.buds.len() < MAX-BUDS {
-          e.buds.push(.{ at = e.syms.len(), d })
+        } else {
+          e.capped = true
+          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = e.syms.len(), d, socket = false }) }
         }
         i = i + 1
       },
       :callo(d) -> {
         let close = find-close(toks, i + 1)
         let arg = toks.slice(i + 1, close)
-        if ndepth < ctx.growth {
-          let body = if d == 0 ctx.def-a else ctx.def-b
+        let body = if d == 0 ctx.def-a else ctx.def-b
+        if has-hole(body) and arg.len() == 0 {
+          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = e.syms.len(), d, socket = true }) }
+        } else if ndepth < ctx.growth {
           let d0 = ctx.bdepth
           let s0 = ctx.shift
           ctx.args.push(arg)
@@ -484,12 +497,16 @@ fn expand-toks(ctx: *mut expand-ctx, toks: span[token], self: span[token], self-
           let _ = ctx.args.pop()
           let _ = ctx.arg-srcs.pop()
         } else {
+          e.capped = true
           expand-toks(ctx, arg, self, self-d, e, depth + 1, ndepth, floor, row, base + i + 1)
         }
         i = if close < toks.len() close + 1 else close
       },
       :hole -> {
-        if ctx.args.pop() is :some(arg) {
+        let filled = ctx.args.len() > 0 and ctx.args.get(ctx.args.len() - 1).len() > 0
+        if not filled {
+          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = e.syms.len(), d = self-d, socket = true }) }
+        } else if ctx.args.pop() is :some(arg) {
           let asrc = if ctx.arg-srcs.pop() is :some(v) { v } else { SRC-NONE }
           expand-toks(ctx, arg, self, self-d, e, depth + 1, ndepth, floor, src-row(asrc).as[u8], src-idx(asrc))
           ctx.args.push(arg)
@@ -505,14 +522,16 @@ fn expand-toks(ctx: *mut expand-ctx, toks: span[token], self: span[token], self-
           close-scope(ctx, e, d0, ndepth)
           ctx.shift = s0
         } else if ctx.args.len() > 0 and ctx.args.get(ctx.args.len() - 1).len() > 0 {
+          e.capped = true
           if ctx.args.pop() is :some(arg) {
             let asrc = if ctx.arg-srcs.pop() is :some(v) { v } else { SRC-NONE }
             expand-toks(ctx, arg, self, self-d, e, depth + 1, ndepth, floor, src-row(asrc).as[u8], src-idx(asrc))
             ctx.args.push(arg)
             ctx.arg-srcs.push(asrc)
           }
-        } else if e.buds.len() < MAX-BUDS {
-          e.buds.push(.{ at = e.syms.len(), d = self-d })
+        } else {
+          e.capped = true
+          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = e.syms.len(), d = self-d, socket = false }) }
         }
         i = i + 1
       },
@@ -527,35 +546,23 @@ fn expand-toks(ctx: *mut expand-ctx, toks: span[token], self: span[token], self-
       :mir -> {
         let close = find-close(toks, i + 1)
         let inner = toks.slice(i + 1, close)
-        let tmp: expansion = .{ syms = fixlist/uninit(), gens = fixlist/uninit(), srcs = fixlist/uninit(), buds = fixlist/uninit(), shifts = fixlist/uninit(), tail = 0 }
-        expand-toks(ctx, inner, self, self-d, tmp.&, depth + 1, ndepth, floor, row, base + i + 1)
         let at0 = e.syms.len()
-        let n = tmp.syms.len()
+        let bud0 = e.buds.len()
+        expand-toks(ctx, inner, self, self-d, e, depth + 1, ndepth, floor, row, base + i + 1)
+        let n = e.syms.len() - at0
         for j in 0.until(n) {
           if e.syms.len() < MAX-EXPAND {
-            e.syms.push(tmp.syms.get(j))
-            e.gens.push(tmp.gens.get(j))
-            e.srcs.push(tmp.srcs.get(j))
+            e.syms.push(e.syms.get(at0 + n - 1 - j))
+            e.gens.push(e.gens.get(at0 + n - 1 - j))
+            e.srcs.push(e.srcs.get(at0 + n - 1 - j))
           }
         }
-        for j in 0.until(n) {
-          if e.syms.len() < MAX-EXPAND {
-            e.syms.push(tmp.syms.get(n - 1 - j))
-            e.gens.push(tmp.gens.get(n - 1 - j))
-            e.srcs.push(tmp.srcs.get(n - 1 - j))
-          }
-        }
-        for b in tmp.buds.& {
-          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = at0 + b.at, d = b.d }) }
-        }
-        let j = tmp.buds.len()
-        while j > 0 {
+        let bud1 = e.buds.len()
+        let j = bud1
+        while j > bud0 {
           j = j - 1
-          let b = tmp.buds.get(j)
-          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = at0 + n + (n - b.at), d = b.d }) }
-        }
-        for at in tmp.shifts.& {
-          if e.shifts.len() < MAX-BUDS { e.shifts.push(at0 + at) }
+          let b = e.buds.get(j)
+          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = at0 + n + (n - (b.at - at0)), d = b.d, socket = b.socket }) }
         }
         i = if close < toks.len() close + 1 else close
       },
@@ -584,7 +591,7 @@ fn expand[ca: as-span[t = token], cb: as-span[t = token], cs: as-span[t = token]
     args = fixlist/uninit(),
     arg-srcs = fixlist/uninit(),
   }
-  let e: expansion = .{ syms = fixlist/uninit(), gens = fixlist/uninit(), srcs = fixlist/uninit(), buds = fixlist/uninit(), shifts = fixlist/uninit(), tail = 0 }
+  let e: expansion = .{ syms = fixlist/uninit(), gens = fixlist/uninit(), srcs = fixlist/uninit(), buds = fixlist/uninit(), shifts = fixlist/uninit(), tail = 0, capped = false }
   expand-toks(ctx.&, seed-span, seed-span, seed-d, e.&, 0, 0, 0, seed-d, 0)
   let pre = e.syms.len()
   close-scope(ctx.&, e.&, 0, 0)
@@ -668,14 +675,18 @@ type turtle-pos = { x: f32, y: f32, ang: f32, w: f32, stride: f32 }
 type turtle-mark = { pos: turtle-pos, seg0: size }
 type seg = { ax: f32, ay: f32, bx: f32, by: f32, w: f32, gen: u8 }
 type bounds = { minx: f32, miny: f32, maxx: f32, maxy: f32 }
-type bud-pt = { x: f32, y: f32, d: u8 }
+type bud-pt = { x: f32, y: f32, d: u8, socket: bool }
 type bloom-pt = { x: f32, y: f32, r: f32 }
 type turtle-out = { segs: fixlist[seg, MAX-EXPAND], buds: fixlist[bud-pt, MAX-BUDS], blooms: fixlist[bloom-pt, MAX-BUDS], end: turtle-pos, marks: fixlist[turtle-mark, MAX-STACK] }
 
 let RAD-PER-DEG: f32 = 0.017453292
 
-fn bud-tip(x: f32, y: f32, ang: f32, d: u8): bud-pt {
-  .{ x = x + libm/cos(ang) * 0.4, y = y + libm/sin(ang) * 0.4, d }
+fn bud-tip(x: f32, y: f32, ang: f32, b: bud): bud-pt {
+  .{ x = x + libm/cos(ang) * 0.4, y = y + libm/sin(ang) * 0.4, d = b.d, socket = b.socket }
+}
+
+fn bud-color(d: u8): rl/color {
+  if d == 0 C_ACCENT else if d == 1 C_ACCENT-B else C_WARN
 }
 
 fn turtle-walk(e: *expansion, angle-deg: f32, frontier: u8, unfurl: f32): turtle-out {
@@ -693,19 +704,24 @@ fn turtle-walk(e: *expansion, angle-deg: f32, frontier: u8, unfurl: f32): turtle
   let wid: f32 = 1.0
   let stride: f32 = 1.0
   let step = angle-deg * RAD-PER-DEG
+  let anchored = false
+  for i in 0.until(n) {
+    if seq.get(i) == 0 and e.gens.get(i) < frontier { anchored = true; break }
+  }
   for s in seq {
     if it-index >= n { break }
     while bi < buds.len() and buds.get(bi).at == it-index {
-      bud-pts.push(bud-tip(x, y, ang, buds.get(bi).d))
+      bud-pts.push(bud-tip(x, y, ang, buds.get(bi)))
       bi = bi + 1
     }
     assert(s <= 7)
     let gen = e.gens.get(it-index)
     let w = if gen >= frontier { unfurl } else { 1.0 }
     if s == 0 {
-      if w > 0.0 {
-        let nx = x + libm/cos(ang) * w * stride
-        let ny = y + libm/sin(ang) * w * stride
+      let lw = if anchored { w } else { 1.0 }
+      if lw > 0.0 {
+        let nx = x + libm/cos(ang) * lw * stride
+        let ny = y + libm/sin(ang) * lw * stride
         segs.push(.{ ax = x, ay = y, bx = nx, by = ny, w = wid, gen })
         x = nx
         y = ny
@@ -737,7 +753,7 @@ fn turtle-walk(e: *expansion, angle-deg: f32, frontier: u8, unfurl: f32): turtle
     }
   }
   while bi < buds.len() {
-    bud-pts.push(bud-tip(x, y, ang, buds.get(bi).d))
+    bud-pts.push(bud-tip(x, y, ang, buds.get(bi)))
     bi = bi + 1
   }
   .{ segs, buds = bud-pts, blooms, end = .{ x, y, ang, w = wid, stride }, marks = stack }
@@ -862,7 +878,8 @@ fn try-add(context g: *mut game)(t: token) {
     let _ = wrap-sel(row, :mir)
     return
   }
-  if t is :name(d) and (cur-level().syms.contains('_') or level-recursive(cur-level())) {
+  let callo-ok = cur-level().syms.contains('_') or level-recursive(cur-level())
+  if t is :name(d) and callo-ok {
     if sel-closed(row).is-some() {
       let _ = wrap-sel(row, :callo(d))
       return
@@ -1416,9 +1433,14 @@ fn draw-strip(context g: *mut game)(e: *expansion, top: i32, cell: i32, x0: i32,
         rl/draw-rectangle(x.as[i32], top - 4, (cf * w).as[i32], cell + 8, C_PANEL-ACTIVE)
       }
     }
-    while show-buds and bi < buds.len() and buds.get(bi).at == it-index {
+    while bi < buds.len() and buds.get(bi).at == it-index {
       let b = buds.get(bi)
-      rl/draw-circle(x.as[i32], top + cell / 2, 5.0, if b.d == 0 C_ACCENT else C_ACCENT-B)
+      if b.socket {
+        rl/draw-circle-lines(x.as[i32], top + cell / 2, 6.0, bud-color(b.d))
+        rl/draw-circle-lines(x.as[i32], top + cell / 2, 5.0, bud-color(b.d))
+      } else if show-buds {
+        rl/draw-circle(x.as[i32], top + cell / 2, 5.0, bud-color(b.d))
+      }
       bi = bi + 1
     }
     while show-shifts and si < shifts.len() and shifts.get(si) == it-index {
@@ -1430,9 +1452,14 @@ fn draw-strip(context g: *mut game)(e: *expansion, top: i32, cell: i32, x0: i32,
     }
     x = x + cf * w
   }
-  while show-buds and bi < buds.len() {
+  while bi < buds.len() {
     let b = buds.get(bi)
-    rl/draw-circle(x.as[i32], top + cell / 2, 5.0, if b.d == 0 C_ACCENT else C_ACCENT-B)
+    if b.socket {
+      rl/draw-circle-lines(x.as[i32], top + cell / 2, 6.0, bud-color(b.d))
+      rl/draw-circle-lines(x.as[i32], top + cell / 2, 5.0, bud-color(b.d))
+    } else if show-buds {
+      rl/draw-circle(x.as[i32], top + cell / 2, 5.0, bud-color(b.d))
+    }
     bi = bi + 1
   }
   while show-shifts and si < shifts.len() {
@@ -1628,11 +1655,18 @@ fn draw-growth(x: i32, y: i32, cur: u8, max: u8) {
   }
 }
 
-fn draw-buds(pts: *fixlist[bud-pt, MAX-BUDS], scale: f32, ox: f32, oy: f32, r: f32, alpha: u8) {
+fn draw-buds(pts: *fixlist[bud-pt, MAX-BUDS], scale: f32, ox: f32, oy: f32, r: f32, alpha: u8, show-buds: bool) {
   for p in pts {
-    let col = if p.d == 0 C_ACCENT else C_ACCENT-B
-    col.a = alpha
-    rl/draw-circle((p.x * scale + ox).as[i32], (p.y * scale + oy).as[i32], r, col)
+    let cx = (p.x * scale + ox).as[i32]
+    let cy = (p.y * scale + oy).as[i32]
+    if p.socket {
+      rl/draw-circle-lines(cx, cy, r + 1.0, bud-color(p.d))
+      rl/draw-circle-lines(cx, cy, r, bud-color(p.d))
+    } else if show-buds {
+      let col = bud-color(p.d)
+      col.a = alpha
+      rl/draw-circle(cx, cy, r, col)
+    }
   }
 }
 
@@ -1713,7 +1747,7 @@ fn draw-plant-world(context g: *mut game)() {
     let lit = count-fs(target.syms.&, matched-prefix(target.syms.&, player.syms.&))
     draw-segs-ghost(tw.segs.&, scale, tox, toy, lit)
     draw-blooms(tw.blooms.&, scale, tox, toy, C_GHOST)
-    if show-buds { draw-buds(tw.buds.&, scale, tox, toy, 5.0, bud-a) }
+    draw-buds(tw.buds.&, scale, tox, toy, 5.0, bud-a, show-buds)
   }
   if g.active != 2 {
     draw-segs-vine(pw.segs.&, scale, pox, poy, full, 80, 0)
@@ -1723,7 +1757,7 @@ fn draw-plant-world(context g: *mut game)() {
   }
   draw-segs-vine(ww.segs.&, scale, pox, poy, full, 255, branch-dim0(ww.&))
   draw-blooms(ww.blooms.&, scale, pox, poy, C_BLOOM)
-  if show-buds { draw-buds(ww.buds.&, scale, pox, poy, 3.0, bud-a) }
+  draw-buds(ww.buds.&, scale, pox, poy, 3.0, bud-a, show-buds)
   draw-cursor(ww.end, scale, pox, poy)
   draw-bookmarks(ww.marks.&, scale, pox, poy)
 }
@@ -1741,11 +1775,15 @@ fn draw-grid(e: *expansion, w: size, x0: i32, y0: i32, cell: i32, maxn: size, sh
       text-center(">", x0 + (at % w).as[i32] * cell, y0 + (at / w).as[i32] * cell + cell / 2 - 8, 16, C_WARN)
     }
   }
-  if show-buds {
-    for b in e.buds.& {
-      if b.at > maxn { continue }
-      let col = if b.d == 0 C_ACCENT else C_ACCENT-B
-      rl/draw-circle(x0 + (b.at % w).as[i32] * cell, y0 + (b.at / w).as[i32] * cell + cell / 2, 5.0, col)
+  for b in e.buds.& {
+    if b.at > maxn { continue }
+    let cx = x0 + (b.at % w).as[i32] * cell
+    let cy = y0 + (b.at / w).as[i32] * cell + cell / 2
+    if b.socket {
+      rl/draw-circle-lines(cx, cy, 6.0, bud-color(b.d))
+      rl/draw-circle-lines(cx, cy, 5.0, bud-color(b.d))
+    } else if show-buds {
+      rl/draw-circle(cx, cy, 5.0, bud-color(b.d))
     }
   }
 }
@@ -1802,7 +1840,8 @@ fn draw-frame(context g: *mut game)() {
   let lv = cur-level()
   let full = lv.growth.as[size]
   let target = expand-target(lv, full).syms
-  let player = expand-player(full).syms
+  let pe = expand-player(full)
+  let player = pe.syms
   let sc = score-of()
   let residual = target.len() - matched-prefix(target.&, player.&)
   let total = sc + residual
@@ -1817,7 +1856,9 @@ fn draw-frame(context g: *mut game)() {
 
   let matched = player.len() > 0 and target.&.as-span() == player.&.as-span()
   if matched {
-    if sc <= lv.par {
+    if level-recursive(lv) and not pe.capped {
+      text-center("matched, but nothing regrows · a living rule needs a bud", W / 2, 44, 20, C_WARN)
+    } else if sc <= lv.par {
       text-center("PERFECT · press N for the next level", W / 2, 44, 20, C_GOOD)
     } else {
       text-center("grown! now compress to ${lv.par} genes (or N to move on)", W / 2, 44, 20, C_WARN)
@@ -1843,9 +1884,9 @@ fn assert-solved(context g: *mut game)(want-score: size) {
   let full = lv.growth.as[size]
   let te = expand-target(lv, full)
   let pe = expand-player(full)
-  println("assert-solved ${lv.name} score=${score-of()} want=$want-score plen=${pe.syms.len()} tlen=${te.syms.len()}")
   assert(score-of() == want-score)
   assert(te.syms.&.as-span() == pe.syms.&.as-span())
+  if level-recursive(lv) { assert(pe.capped) }
 }
 
 fn self-test(context g: *mut game)() {
@@ -1877,7 +1918,8 @@ fn self-test(context g: *mut game)() {
       }
     }
     if lv.world is :plant {
-      assert(turtle-walk(texp.&, lv.angle, 0, 1.0).segs.len() > 0)
+      let walk = turtle-walk(texp.&, lv.angle, 0, 1.0)
+      assert(walk.segs.len() > 0)
     }
   }
   load-level(0)
@@ -1933,7 +1975,8 @@ fn self-test(context g: *mut game)() {
   assert(g.out.get(0) is :mir)
   solve-rainbow()
   assert-solved(4)
-  assert(expand-player(4).shifts.len() == 4)
+  let rainbow-exp = expand-player(4)
+  assert(rainbow-exp.shifts.len() == 4)
   solve-wrapper()
   assert-solved(12)
   assert(g.out.get(0) is :callo(_))
@@ -1949,7 +1992,8 @@ fn self-test(context g: *mut game)() {
   solve-canon()
   assert-solved(20)
   assert(g.def-a.len() == 3)
-  assert(expand-player(4).syms.len() == 24)
+  let canon-exp = expand-player(4)
+  assert(canon-exp.syms.len() == 24)
   solve-stripes()
   assert-solved(4)
   solve-sunset()
@@ -1974,7 +2018,8 @@ fn self-test(context g: *mut game)() {
   assert-solved(6)
   solve-nesting()
   assert-solved(5)
-  assert(expand-target(cur-level(), 4).buds.len() == 1)
+  let nesting-exp = expand-target(cur-level(), 4)
+  assert(nesting-exp.buds.len() == 1)
   solve-steps()
   assert-solved(8)
   solve-staircase()
@@ -2000,10 +2045,12 @@ fn self-test(context g: *mut game)() {
   assert(branch-dim0(ow.&) == 1)
   solve-fork()
   assert-solved(9)
-  assert(expand-target(cur-level(), 1).buds.len() == 2)
+  let fork-exp = expand-target(cur-level(), 1)
+  assert(fork-exp.buds.len() == 2)
   solve-thicket()
   assert-solved(7)
-  assert(expand-target(cur-level(), 1).buds.len() == 2)
+  let thicket-exp = expand-target(cur-level(), 1)
+  assert(thicket-exp.buds.len() == 2)
   solve-reed()
   assert-solved(3)
   solve-coastline()
@@ -2011,7 +2058,8 @@ fn self-test(context g: *mut game)() {
   solve-blossom()
   assert-solved(10)
   let blossom-e = expand-player(4)
-  assert(turtle-walk(blossom-e.&, 30.0, 0, 1.0).blooms.len() > 0)
+  let blossom-walk = turtle-walk(blossom-e.&, 30.0, 0, 1.0)
+  assert(blossom-walk.blooms.len() > 0)
   solve-bonsai()
   assert-solved(10)
   let bonsai-e = expand-player(5)
@@ -2042,8 +2090,10 @@ fn self-test(context g: *mut game)() {
   assert-solved(25)
   load-level(level-index("fern"))
   let fern = expand-target(cur-level(), 5)
-  assert(turtle-walk(fern.&, 25.0, 0, 1.0).segs.len() > 1000)
-  assert(expand-target(cur-level(), 1).buds.len() == 7)
+  let fern-walk = turtle-walk(fern.&, 25.0, 0, 1.0)
+  assert(fern-walk.segs.len() > 1000)
+  let fern-exp = expand-target(cur-level(), 1)
+  assert(fern-exp.buds.len() == 7)
   solve-fern()
   assert-solved(24)
   load-level(0)

@@ -16143,12 +16143,10 @@ impl TypedProgram {
             }
         }
 
-        let call_return_type = self
-            .types
-            .get(self.get_callee_function_type(&callee))
-            .as_function()
-            .unwrap()
-            .return_type;
+        let callee_function_type = self.get_callee_function_type(&callee);
+        self.warn_large_arg_copies(typechecked_arguments, callee_function_type);
+        let call_return_type =
+            self.types.get(callee_function_type).as_function().unwrap().return_type;
 
         let call = Call {
             callee,
@@ -16171,6 +16169,60 @@ impl TypedProgram {
 
         let call_id = self.calls.add(call);
         Ok(self.exprs.add(TypedExpr::Call { call_id }, call_return_type, span))
+    }
+
+    const LARGE_ARG_COPY_BYTES: u32 = 1024;
+
+    fn warn_large_arg_copies(&mut self, args: PermSlice<TypedExprId>, function_type_id: TypeId) {
+        let Type::Function(function_type) = self.types.get(function_type_id) else { return };
+        let params = function_type.logical_params();
+        if args.len() != params.len() {
+            return;
+        }
+        for i in 0..args.len() as usize {
+            let param = *self.mem.get_nth(params, i);
+            if param.is_macro_code {
+                continue;
+            }
+            let arg = *self.mem.get_nth(args, i);
+            if !self.expr_is_place_read(arg) {
+                continue;
+            }
+            let Some(layout) = self.get_layout(param.type_id) else { continue };
+            if layout.size < Self::LARGE_ARG_COPY_BYTES {
+                continue;
+            }
+            let span = self.exprs.get_span(arg);
+            self.report(kwarn!(
+                self,
+                span,
+                "Implicit copy of {} bytes: parameter '{}' takes {} by value; consider a reference parameter",
+                layout.size,
+                param.name,
+                param.type_id
+            ));
+        }
+    }
+
+    fn expr_is_place_read(&self, expr: TypedExprId) -> bool {
+        match self.exprs.get(expr) {
+            TypedExpr::Variable(_)
+            | TypedExpr::Deref(_)
+            | TypedExpr::StructFieldAccess(_)
+            | TypedExpr::ArrayGetElement(_)
+            | TypedExpr::SumGetPayload(_) => true,
+            TypedExpr::Block(block) => {
+                let last_stmt = self.mem.getn(block.statements).last().copied();
+                if let Some(TypedStmt::Expr(trailing_expr, _)) =
+                    last_stmt.map(|s| self.stmts.get(s))
+                {
+                    self.expr_is_place_read(*trailing_expr)
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
     }
 
     ////////////////////////////////

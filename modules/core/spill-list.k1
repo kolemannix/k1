@@ -16,10 +16,10 @@ ns for spill-list {
     }
   }
 
-  fn len[t, n](self: spill-list[t, n]): size {
+  fn len[t, n](self: *spill-list[t, n]): size {
     self is {
-      :inline fixlist -> fixlist.len(),
-      :spilled list -> list.len,
+      :inline fixlist* -> fixlist.len(),
+      :spilled list* -> list.len,
     }
   }
 
@@ -94,12 +94,13 @@ impl[t, n: static size] print for spill-list[t, n] {
      self is {
        :inline fix -> {
          w.write("inline ")
+         fix.used.as[size].print-to(w)
        },
        :spilled list -> {
          w.write("spilled ")
+         list.len.print-to(w)
        }
      }
-     self.len().print-to(w)
   }
 }
 
