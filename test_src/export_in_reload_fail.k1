@@ -1,0 +1,6 @@
+ns(reload) handlers {
+  fn(export) handle(i: int): int { i + 1 }
+}
+
+fn main(): i32 { 0 }
+//errmsg: Not allowed in ns(reload) handlers: extern, export, and intrinsic fns cannot be included

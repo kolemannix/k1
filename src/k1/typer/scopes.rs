@@ -7,7 +7,7 @@ use fxhash::FxHashMap;
 use std::{cell::RefCell, collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
 use crate::{
-    kbail, kerr, kmem::{Dlist, List}, nz_u32_id, parse::{ParsedAbilityId, ParsedExprId, ParsedGlobalId, QIdent}, static_assert_niched, static_assert_size, typer::{
+    kbail, kerr, kmem::{Dlist, List, Mem}, nz_u32_id, parse::{ParsedAbilityId, ParsedExprId, ParsedGlobalId, QIdent}, static_assert_niched, static_assert_size, typer::{
         AbilityId, FunctionId, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId, StringId,
         TypeId, TypePendingDefinition, TypedProgram, VariableId,
     }, vpool::VPool, SV4
@@ -431,6 +431,7 @@ impl Scopes {
         scope_id: ScopeId,
         names: &[StringId],
         ability_ids: &mut List<AbilityId, MemTmp>,
+        mem: &mut Mem<MemTmp>,
     ) {
         let mut scope_id = scope_id;
         loop {
@@ -440,7 +441,7 @@ impl Scopes {
                     if let Some(found) = self.abilities.get(&skey_name(scope_id, *name))
                         && !ability_ids.contains(found)
                     {
-                        ability_ids.push(*found);
+                        ability_ids.push_grow(mem, *found);
                     }
                 }
             }

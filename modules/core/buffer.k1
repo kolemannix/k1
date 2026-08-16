@@ -51,25 +51,27 @@ ns for buffer {
     clone
   }
 
-  fn filled-in[t, a: allocator](alloc: a, size: size, value: t): buffer[t] {
-    let buf: buffer[t] = allocate-in[t, _](alloc, size)
-
+  fn fill[t](self: buffer[t], value: t): empty {
     value is {
       type[u8](byte) -> {
-        buf.memset(byte)
+        self.memset(byte)
       },
       type[i8](byte) -> {
-        buf.memset(byte.as[u8])
+        self.memset(byte.as[u8])
       },
       _ -> {
         let i = 0
-        while i < size {
-          buf.get-ref-unchecked(i).* = value
+        while i < self.len {
+          self.get-ref-unchecked(i).* = value
           i = i + 1
         }
       }
     }
+  }
 
+  fn filled-in[t, a: allocator](alloc: a, size: size, value: t): buffer[t] {
+    let buf: buffer[t] = allocate-in[t, _](alloc, size)
+    buf.fill(value)
     buf
   }
 
@@ -227,6 +229,106 @@ ns for buffer {
     self.take-right(other.len()) == other
   }
 
+  fn position-byte(base: ptr, len: size, needle: u8): ?size {
+    let w: size = k1/simd-bytes
+    let i = 0: size
+    if len >= w {
+      let lanes = vector/splat[u8, type-of(k1/simd-bytes)](needle)
+      while i + w <= len {
+        let chunk = vector/load-unchecked[u8, type-of(k1/simd-bytes)](base.ref-at-index[u8](i).as[ptr])
+        let lane = chunk.eq-lanes(lanes).first-true-lane()
+        if lane >= 0 return :some (i + lane)
+        i = i + w
+      }
+    }
+    while i < len {
+      if base.ref-at-index[u8](i).* == needle return :some i
+      i = i + 1
+    }
+    :none
+  }
+
+  // SIMD candidate filter: positions matching the needle's first and last
+  // byte at the right distance, verified with a full compare
+  fn index-of-bytes(base: ptr, len: size, needle-base: ptr, needle-len: size): ?size {
+    let n = len
+    let k = needle-len
+    if k == 0 return :some 0
+    if k > n return :none
+    if k == 1 return position-byte(base, n, needle-base.ref-at-index[u8](0).*)
+
+    let w: size = k1/simd-bytes
+    let first = vector/splat[u8, type-of(k1/simd-bytes)](needle-base.ref-at-index[u8](0).*)
+    let last = vector/splat[u8, type-of(k1/simd-bytes)](needle-base.ref-at-index[u8](k - 1).*)
+    let i = 0: size
+    // Both loads must stay in bounds: lanes [i, i+w) paired with [i+k-1, i+k-1+w)
+    while i + w + k - 1 <= n {
+      let block-first = vector/load-unchecked[u8, type-of(k1/simd-bytes)](base.ref-at-index[u8](i).as[ptr])
+      let block-last = vector/load-unchecked[u8, type-of(k1/simd-bytes)](base.ref-at-index[u8](i + k - 1).as[ptr])
+      let m = block-first.eq-lanes(first).bit-and(block-last.eq-lanes(last)).to-mask()
+      while m != 0 {
+        let j = m.trailing-zeros().as[size]
+        if mem/equals(base.ref-at-index[u8](i + j).as[ptr], needle-base, k) return :some (i + j)
+        m = m.bit-and(m - 1)
+      }
+      i = i + w
+    }
+    while i + k <= n {
+      if mem/equals(base.ref-at-index[u8](i).as[ptr], needle-base, k) return :some i
+      i = i + 1
+    }
+    :none
+  }
+
+  fn position[t: equals](self: buffer[t], needle: t): ?size {
+    needle is {
+      type[u8](byte) -> position-byte(self.data-ptr(), self.len, byte),
+      type[char](c) -> position-byte(self.data-ptr(), self.len, c.as[u8]),
+      _ -> {
+        let i = 0: size
+        while i < self.len {
+          if self.get(i) == needle return :some i
+          i = i + 1
+        }
+        :none
+      }
+    }
+  }
+
+  fn index-of-buffer[t: equals](self: buffer[t], needle: buffer[t]): ?size {
+    mem/zeroed[t]() is {
+      type[u8](_byte) -> index-of-bytes(self.data-ptr(), self.len, needle.data-ptr(), needle.len),
+      type[char](_c) -> index-of-bytes(self.data-ptr(), self.len, needle.data-ptr(), needle.len),
+      _ -> {
+        let k = needle.len
+        if k == 0 return :some 0
+        if k > self.len return :none
+        let i = 0: size
+        while i + k <= self.len {
+          let j = 0: size
+          let matched = true
+          while j < k and matched {
+            if self.get(i + j) != needle.get(j) { matched = false }
+            j = j + 1
+          }
+          if matched return :some i
+          i = i + 1
+        }
+        :none
+      }
+    }
+  }
+
+  fn first-diff[t: equals](self: buffer[t], other: buffer[t]): ?size {
+    let n = if self.len < other.len self.len else other.len
+    let i = 0: size
+    while i < n {
+      if self.get(i) != other.get(i) return :some i
+      i = i + 1
+    }
+    if self.len == other.len :none else :some n
+  }
+
   fn chunks[t](self: buffer[t], size: size): span[buffer[t]] {
     if size == 0 return span/empty()
     let rem = self.len() % size != 0
@@ -241,7 +343,7 @@ ns for buffer {
       i = i + size
       j = j + 1
     }
-    results.as-span()
+    span/wrap-buffer(results.as-buffer())
   }
 
   fn is-empty[t](self: buffer[t]): bool {
@@ -361,8 +463,8 @@ impl[t] iterator[item = t] for buffer-iterator[t] {
   }
 }
 
-impl[t] as-span[t = t] for buffer[t] {
-  fn as-span(self): span[t] { span/wrap-buffer(self) }
+impl[t] as-buffer[t = t] for buffer[t] {
+  fn as-buffer(self): buffer[t] { self }
 }
 
 impl[t] iterable[item = t, i = buffer-iterator[t]] for buffer[t] {

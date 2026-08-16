@@ -53,8 +53,8 @@ fn parse-c-array(src: string, name: string): { tokens: list[string], declared: s
     from = at + name.len()
     let i = from
     if src.get(i) == '[' {
-      let close = src.index-of-from(']', i)
-      require close > 0 else crash("unterminated [ for $name")
+      require src.drop(i).position(']') is :some rel else crash("unterminated [ for $name")
+      let close = i + rel
       let decl = trim(src.slice(i + 1, close))
       let j = close + 1
       while is-space(src.get(j)) { j = j + 1 }

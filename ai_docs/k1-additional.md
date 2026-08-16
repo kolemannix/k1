@@ -69,7 +69,16 @@ a directory module without one is an error); a single-file module is its own
 root file. A top-level `fn module` in any other file is an error. The compiler
 evaluates the fn before compiling the module and consumes it — it is never part
 of the program. No `fn module` means defaults: library, or executable for the
-primary module. FFI declarations use the `extern` fn modifier; its optional
+primary module. Building a library primary (`m.library()`) produces both
+`.k1-out/lib<name>.{dylib|so}` and a fat `.k1-out/lib<name>.a` (a partial link
+of the K1 object with every static lib in the program, k1rt included); both
+artifacts expose only the exported symbols — everything else, k1rt's C helpers
+included, is hidden/localized. `k1 run`/`k1 test` reject library modules. The
+exported C ABI is declared per-fn with the `export`
+modifier — `fn(export)` exports under the fn's own name, `fn(export("sym"))`
+under an explicit symbol — plus `let(export)` globals. Exported fns must be
+concrete, non-ability fns with bodies; duplicate export symbols are an error.
+See `dogfood/klib`. FFI declarations use the `extern` fn modifier; its optional
 argument is the link symbol (defaults to the fn name). The providing library is
 declared once on the containing namespace with `ns(lib("foo"))` — whole-ns, any
 opening may declare it, disagreeing openings are an error — or per-fn with the
@@ -229,8 +238,8 @@ default for emission. Nested blocks capture the builder at each level
 (`cb.block(h, fn[cb]. { ... cb.block-close(h2, c2, fn[cb]. ...) ... })`).
 One sharp edge: to inspect an expansion put `#debug` on the macro
 *definition* — definition-level `#debug $call(...)` does not parse. Write emitted conditions as raw template
-text with explicit parens — `not` is low-precedence, so `not a and b` parses
-as `not (a and b)`; emit `(not a) and b`. `meta/str-lit(s)` escapes any string
+text with explicit parens — a binary operator directly after a `not` operand
+is a parse error; emit `(not a) and b`. `meta/str-lit(s)` escapes any string
 into a valid K1 literal, interpolation sigil included, so emitted literals
 need no character restrictions.
 

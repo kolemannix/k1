@@ -36,13 +36,13 @@ fn(extern("dlsym")) dlsym(handle: ptr, symbol: ptr): ptr
 fn(extern("dladdr")) dladdr(addr: ptr, info: *dl-info): c-int
 
 fn dirname(path: string): string {
-  let last = -1: i64
-  let i = path.index-of('/')
-  while i >= 0 {
-    last = i
-    i = path.index-of-from('/', i.as[size] + 1)
+  let last: ?size = :none
+  let from: size = 0
+  while path.drop(from).position('/') is :some rel {
+    last = :some (from + rel)
+    from = from + rel + 1
   }
-  if last <= 0 "/" else path.take(last.as[size])
+  if last is :some i and i > 0 path.take(i) else "/"
 }
 
 // "clang version 21.1.7 (...)" -> "21"
@@ -181,7 +181,7 @@ fn start(args: span[string]): result[string, string] {
             write-k1-type(typedef.type, indent = 0)
             out.write("\n")
             let is-opaque = typedef.type is :opaque _
-            if not is-opaque and it.error is :none { write-layout-assertions(name, typedef.type, it.layout) }
+            if (not is-opaque) and it.error is :none { write-layout-assertions(name, typedef.type, it.layout) }
           }
         },
         :global global -> {

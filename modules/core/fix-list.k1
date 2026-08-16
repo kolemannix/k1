@@ -60,30 +60,6 @@ ns for fixlist {
     if result is :err { crash("fixlist out of space") }
   }
 
-  fn as-buffer[t, n](self: *mut fixlist[t, n]): buffer[t] {
-    self.data.as-buffer().slice(0, self.len())
-  }
-
-  fn get[t, n](self: *fixlist[t, n], index: size): t {
-    self.get-ref(index).*
-  }
-
-  fn get-ref[t, n](self: *mut fixlist[t, n], index: size): *mut t {
-    if index < self.len() {
-      self.data.get(index).&
-    } else {
-      crash("fixlist index out of bounds: $index > ${self.len()}")
-    }
-  }
-
-  fn set[t, n](self: *mut fixlist[t, n], index: size, value: t): empty {
-    self.get-ref(index).* = value
-  }
-
-  fn last[t, n](self: *fixlist[t, n]): ?t {
-    self.as-span().last()
-  }
-
   fn pop[t, n](self: *mut fixlist[t, n]): ?t {
     self.last() is {
        :some t -> {
@@ -94,10 +70,12 @@ ns for fixlist {
     }
   }
 
-  fn reverse[t, n](self: *mut fixlist[t, n]) {
-    self.as-buffer().reverse()
-  }
+}
 
+impl[t, n: static size] as-buffer[t = t] for *mut fixlist[t, n] {
+  fn as-buffer(self): buffer[t] {
+    self.data.as-buffer().slice(0, self.len())
+  }
 }
 
 impl[t, n: static size] as-span[t = t] for *fixlist[t, n] {

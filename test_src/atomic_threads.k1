@@ -49,7 +49,7 @@ fn main(): i32 {
   let h = mem/new(.{ data = 0, flag = cell/new(0u64) }: handoff)
   let t: std/thread/thread = ptr/null.rw[empty]()
   std/thread/start(t.&, producer, h)
-  while h.flag.&.load(:acquire) == 0 { .{} }
+  while h.flag.&.load(:acquire) == 0 {}
   assert-equals(h.data, 123)
   std/thread/join(t, out)
 

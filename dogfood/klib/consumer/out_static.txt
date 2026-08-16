@@ -1,0 +1,5 @@
+add=5
+scale=42
+swap=2,1
+sum=55
+answer=42

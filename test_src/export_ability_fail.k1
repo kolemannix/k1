@@ -1,0 +1,8 @@
+type point = { x: int, y: int }
+
+impl equals for point {
+  fn(export) equals(self: point, other: point): bool { self.x == other.x and self.y == other.y }
+}
+
+fn main(): i32 { 0 }
+//errmsg: ability functions cannot be exported

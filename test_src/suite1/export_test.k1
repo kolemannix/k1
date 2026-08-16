@@ -1,0 +1,10 @@
+ns export_test {
+  fn(export("k1_export_smoke")) smoke(x: i32): i32 { x * 2 }
+
+  fn(export) k1_export_named(x: i32): i32 { x + 1 }
+
+  fn test() {
+    assert(smoke(21) == 42)
+    assert(k1_export_named(41) == 42)
+  }
+}

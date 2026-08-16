@@ -10,7 +10,7 @@ use std::path::Path;
 use crate::kmem::{self, MStr, Mem};
 use crate::lex::SpanId;
 use crate::parse::{IdentPool, StringId, write_source_location};
-use crate::typer::{LibRefLinkType, MemTmp, MessageLevel, NamespaceId, TypedProgram};
+use crate::typer::{LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId, TypedProgram};
 use crate::{kpath, typer};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
@@ -1279,10 +1279,54 @@ pub fn compile_program_ext(
     Ok(k1)
 }
 
-pub fn write_executable(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkOutputKind {
+    Executable,
+    Dylib,
+}
+
+struct ModuleLibs {
+    libs_dir: String,
+    link_args: Vec<String>,
+    libs: Vec<(LibRefLinkType, String)>,
+}
+
+fn collect_all_module_libs(k1: &TypedProgram) -> Vec<ModuleLibs> {
+    let idents = &k1.ast.idents;
+    let filc = k1.config.filc;
+    let mut out: Vec<ModuleLibs> = vec![];
+    for module in k1.modules.iter() {
+        let module_libs_dir =
+            kpath::join_tmp(k1.get_tmp_unsafe(), idents, module.home_dir, LIBS_DIR_NAME);
+        let mut link_args: Vec<String> = vec![];
+        for link_arg_string_id in k1.mem.getn(module.manifest.link_args) {
+            link_args.push(k1.get_string(*link_arg_string_id).to_string());
+        }
+        let mut libs: Vec<(LibRefLinkType, String)> = vec![];
+        for lib in k1.mem.getn(module.manifest.libs) {
+            let logical_name_str = k1.get_string(lib.name);
+            let logical_name =
+                if filc { format!("{logical_name_str}-filc") } else { logical_name_str.into() };
+            let filename = logical_name_to_lib_filename(
+                idents,
+                k1.get_tmp_unsafe(),
+                module_libs_dir.as_str(),
+                k1.config.target.target_os(),
+                lib.link_type,
+                &logical_name,
+            );
+            libs.push((lib.link_type, filename.as_str().to_string()));
+        }
+        out.push(ModuleLibs { libs_dir: module_libs_dir.as_str().to_string(), link_args, libs });
+    }
+    out
+}
+
+pub fn write_linked_output(
     k1: &TypedProgram,
     module_name: &str,
     extra_options: &[String],
+    kind: LinkOutputKind,
 ) -> Result<()> {
     let target = k1.config.target;
     let debug = k1.config.debug;
@@ -1307,7 +1351,40 @@ pub fn write_executable(
     } else {
         kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("{module_name}.o"))
     };
-    let out_name = kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, module_name);
+    let out_name = match kind {
+        LinkOutputKind::Executable => {
+            kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, module_name)
+        }
+        LinkOutputKind::Dylib => kpath::join_tmp(
+            k1.get_tmp_unsafe(),
+            idents,
+            out_dir,
+            format_args!("lib{module_name}.{}", target.target_os().dylib_ext()),
+        ),
+    };
+    if kind == LinkOutputKind::Dylib {
+        match target.target_os() {
+            TargetOs::MacOs => {
+                build_cmd.arg("-dynamiclib");
+                build_cmd.arg(format!(
+                    "-Wl,-install_name,@rpath/lib{module_name}.{}",
+                    target.target_os().dylib_ext()
+                ));
+                build_cmd.arg(format!(
+                    "-Wl,-exported_symbols_list,{}",
+                    build_export_list_file_path(k1, module_name)
+                ));
+            }
+            TargetOs::Linux => {
+                build_cmd.arg("-shared");
+                build_cmd.arg(format!(
+                    "-Wl,--version-script={}",
+                    build_version_script_file_path(k1, module_name)
+                ));
+            }
+            TargetOs::Wasm => bail!("dylib output is not supported on wasm"),
+        }
+    }
 
     let _macos_version_flag = if target.target_os() == TargetOs::MacOs {
         Some(format!("-mmacosx-version-min={}", MAC_SDK_VERSION))
@@ -1352,32 +1429,19 @@ pub fn write_executable(
 
     // Linking with libraries.
     // For each module, for each of its libraries, link with it as specified by the link_type
-    for module in k1.modules.iter() {
-        let module_libs_dir =
-            kpath::join_tmp(k1.get_tmp_unsafe(), idents, module.home_dir, LIBS_DIR_NAME);
-        if !module.manifest.libs.is_empty() {
-            build_cmd.arg(format!("-L{module_libs_dir}"));
+    for module_libs in collect_all_module_libs(k1) {
+        if !module_libs.libs.is_empty() {
+            build_cmd.arg(format!("-L{}", module_libs.libs_dir));
         }
-        for link_arg_string_id in k1.mem.getn(module.manifest.link_args) {
-            build_cmd.arg(k1.get_string(*link_arg_string_id));
+        for link_arg in &module_libs.link_args {
+            build_cmd.arg(link_arg);
         }
-        for lib in k1.mem.getn(module.manifest.libs) {
-            let logical_name_str = k1.get_string(lib.name);
-            let logical_name =
-                if filc { format!("{logical_name_str}-filc") } else { logical_name_str.into() };
-            let filename = logical_name_to_lib_filename(
-                idents,
-                k1.get_tmp_unsafe(),
-                module_libs_dir.as_str(),
-                target.target_os(),
-                lib.link_type,
-                &logical_name,
-            );
-            match lib.link_type {
+        for (link_type, filename) in &module_libs.libs {
+            match link_type {
                 // Link via linker arg, since the name has no extension
                 LibRefLinkType::Default => build_cmd.arg(format!("-l{filename}")),
                 // 'Link' via direct clang arg, since its an exact filepath
-                _ => build_cmd.arg(filename.as_str()),
+                _ => build_cmd.arg(filename),
             };
         }
     }
@@ -1392,12 +1456,145 @@ pub fn write_executable(
 
     if !build_status.success() {
         eprintln!("Build failed!");
-        bail!("build_executable with clang failed");
+        bail!("linking {out_name} with clang failed");
     }
 
     let elapsed = clang_time.elapsed();
     if k1.config.chatty {
-        eprintln!("link executable took {}ms", elapsed.as_millis());
+        eprintln!("link {out_name} took {}ms", elapsed.as_millis());
+    }
+    Ok(())
+}
+
+fn build_export_list_file_path(k1: &TypedProgram, module_name: &str) -> String {
+    let path = kpath::join_tmp(
+        k1.get_tmp_unsafe(),
+        &k1.ast.idents,
+        k1.config.out_dir,
+        format_args!("{module_name}.exports"),
+    );
+    path.as_str().to_string()
+}
+
+fn build_version_script_file_path(k1: &TypedProgram, module_name: &str) -> String {
+    let path = kpath::join_tmp(
+        k1.get_tmp_unsafe(),
+        &k1.ast.idents,
+        k1.config.out_dir,
+        format_args!("{module_name}.version"),
+    );
+    path.as_str().to_string()
+}
+
+pub fn write_library_export_files(k1: &TypedProgram, module_name: &str) -> Result<()> {
+    let mut symbols: Vec<String> = vec![];
+    for (_, function) in k1.function_iter() {
+        if let Linkage::Exported { fn_name } = function.linkage {
+            symbols.push(k1.ident_str(fn_name.unwrap_or(function.name)).to_string());
+        }
+    }
+    for global_id in k1.globals.iter_ids() {
+        let global = k1.globals.get(global_id);
+        if global.is_exported {
+            symbols.push(k1.ident_str(k1.variables.get(global.variable_id).name).to_string());
+        }
+    }
+    symbols.sort();
+
+    match k1.config.target.target_os() {
+        TargetOs::MacOs => {
+            let mut list = String::with_capacity(symbols.len() * 24);
+            for s in &symbols {
+                list.push('_');
+                list.push_str(s);
+                list.push('\n');
+            }
+            std::fs::write(build_export_list_file_path(k1, module_name), list)?;
+        }
+        TargetOs::Linux => {
+            let mut list = String::with_capacity(symbols.len() * 24);
+            let mut script = String::with_capacity(symbols.len() * 24 + 32);
+            script.push_str("{ global:\n");
+            for s in &symbols {
+                list.push_str(s);
+                list.push('\n');
+                script.push_str(s);
+                script.push_str(";\n");
+            }
+            script.push_str("local: *; };\n");
+            std::fs::write(build_export_list_file_path(k1, module_name), list)?;
+            std::fs::write(build_version_script_file_path(k1, module_name), script)?;
+        }
+        TargetOs::Wasm => bail!("library output is not supported on wasm"),
+    }
+    Ok(())
+}
+
+pub fn write_library_archive(k1: &TypedProgram, module_name: &str) -> Result<()> {
+    let target = k1.config.target;
+    let idents = &k1.ast.idents;
+    let out_dir = k1.config.out_dir;
+    let ar_time = std::time::Instant::now();
+
+    let object_name =
+        kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("{module_name}.o"));
+    let combined_name =
+        kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("lib{module_name}.o"));
+    let archive_name =
+        kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("lib{module_name}.a"));
+
+    let mut static_libs: Vec<String> = vec![];
+    for module_libs in collect_all_module_libs(k1) {
+        for (link_type, path) in module_libs.libs {
+            if link_type == LibRefLinkType::Static && !static_libs.contains(&path) {
+                static_libs.push(path);
+            }
+        }
+    }
+
+    let mut ld_cmd = std::process::Command::new("ld");
+    ld_cmd.arg("-r");
+    ld_cmd.arg(object_name.as_str());
+    for lib in &static_libs {
+        ld_cmd.arg(lib);
+    }
+    match target.target_os() {
+        TargetOs::MacOs => {
+            ld_cmd.arg("-exported_symbols_list");
+            ld_cmd.arg(build_export_list_file_path(k1, module_name));
+        }
+        TargetOs::Linux => {}
+        TargetOs::Wasm => bail!("static library output is not supported on wasm"),
+    }
+    ld_cmd.arg("-o");
+    ld_cmd.arg(combined_name.as_str());
+    log::debug!("Partial link Command: {:?}", ld_cmd);
+    if !ld_cmd.status()?.success() {
+        bail!("partial link of {combined_name} failed");
+    }
+
+    if target.target_os() == TargetOs::Linux {
+        let mut objcopy_cmd = std::process::Command::new("objcopy");
+        objcopy_cmd.arg(format!("--keep-global-symbols={}", build_export_list_file_path(k1, module_name)));
+        objcopy_cmd.arg(combined_name.as_str());
+        log::debug!("Localize Command: {:?}", objcopy_cmd);
+        if !objcopy_cmd.status()?.success() {
+            bail!("objcopy localize of {combined_name} failed");
+        }
+    }
+
+    let _ = std::fs::remove_file(archive_name.as_str());
+    let mut ar_cmd = std::process::Command::new("ar");
+    ar_cmd.arg("rcs");
+    ar_cmd.arg(archive_name.as_str());
+    ar_cmd.arg(combined_name.as_str());
+    log::debug!("Archive Command: {:?}", ar_cmd);
+    if !ar_cmd.status()?.success() {
+        bail!("archiving {archive_name} failed");
+    }
+
+    if k1.config.chatty {
+        eprintln!("archive {archive_name} took {}ms", ar_time.elapsed().as_millis());
     }
     Ok(())
 }
@@ -1417,6 +1614,14 @@ pub fn codegen_module<'ctx, 'module>(
     }
     if !reload_nss.is_empty() && args.filc {
         bail!("ns(reload) is not supported under --filc");
+    }
+    if !k1.program_settings.executable {
+        if !reload_nss.is_empty() {
+            bail!("ns(reload) requires an executable host module");
+        }
+        if args.filc {
+            bail!("library output is not supported under --filc");
+        }
     }
     for ns_id in &reload_nss {
         write_reload_dylib(args, ctx, k1, *ns_id)?;
@@ -1491,17 +1696,23 @@ pub fn codegen_module<'ctx, 'module>(
         }
     }
 
-    let mut link_options: Vec<String> = vec![];
-    if !reload_nss.is_empty() {
-        // Ensure host globals are visible to dlopen'd reload dylibs
-        let export_flag = match codegen.k1.config.target.target_os() {
-            TargetOs::MacOs => "-Wl,-export_dynamic",
-            TargetOs::Linux => "-rdynamic",
-            TargetOs::Wasm => bail!("ns(reload) is not supported on wasm"),
-        };
-        link_options.push(export_flag.to_string());
+    if codegen.k1.program_settings.executable {
+        let mut link_options: Vec<String> = vec![];
+        if !reload_nss.is_empty() {
+            // Ensure host globals are visible to dlopen'd reload dylibs
+            let export_flag = match codegen.k1.config.target.target_os() {
+                TargetOs::MacOs => "-Wl,-export_dynamic",
+                TargetOs::Linux => "-rdynamic",
+                TargetOs::Wasm => bail!("ns(reload) is not supported on wasm"),
+            };
+            link_options.push(export_flag.to_string());
+        }
+        write_linked_output(codegen.k1, &module_name, &link_options, LinkOutputKind::Executable)?;
+    } else {
+        write_library_export_files(codegen.k1, &module_name)?;
+        write_linked_output(codegen.k1, &module_name, &[], LinkOutputKind::Dylib)?;
+        write_library_archive(codegen.k1, &module_name)?;
     }
-    write_executable(codegen.k1, &module_name, &link_options)?;
 
     Ok(codegen)
 }

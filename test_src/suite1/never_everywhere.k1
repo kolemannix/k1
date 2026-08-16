@@ -22,7 +22,7 @@ fn assgn-rhs(): never { let _x = 123; _x = crash("assgn rhs") }
 // fn binopLhs(): never { crash("") + 4 }
 fn binop-rhs(): int { 4 + crash("") }
 fn unop(): never { not crash("") }
-fn while-cond(): never { while crash("asdf") { .{} } }
+fn while-cond(): never { while crash("asdf") {} }
 fn enum-constr-payload(): never { opt:some crash("asdf") }
 fn get-enum-payload(): i64 { 
   let x: ?int = opt:some crash("")

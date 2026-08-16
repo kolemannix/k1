@@ -476,8 +476,110 @@ ability from-string[impl e] {
 ability zero { fn zero(): self }
 ability one { fn one(): self }
 
+ability as-buffer[impl t] {
+  fn as-buffer(self): buffer[t]
+
+  fn set(self, index: size, value: t) {
+    self.as-buffer().set(index, value)
+  }
+  fn swap(self, index-a: size, index-b: size) {
+    self.as-buffer().swap(index-a, index-b)
+  }
+  fn reverse(self) {
+    self.as-buffer().reverse()
+  }
+  fn fill(self, value: t) {
+    self.as-buffer().fill(value)
+  }
+  fn sort(self) where t: comparable {
+    self.as-buffer().sort()
+  }
+  fn get-ref(self, index: size): *t {
+    self.as-buffer().get-ref(index)
+  }
+  fn first-ref(self): ?*t {
+    self.as-buffer().first-ref()
+  }
+  fn last-ref(self): ?*t {
+    self.as-buffer().last-ref()
+  }
+  fn ref-iter(self): buffer-ref-iterator[t] {
+    self.as-buffer().ref-iter()
+  }
+}
+
 ability as-span[impl t] {
   fn as-span(self): span[t]
+
+  fn len(self): size {
+    self.as-span().inner-buffer().len
+  }
+  fn is-empty(self): bool {
+    self.as-span().inner-buffer().len == 0
+  }
+  fn non-empty(self): bool {
+    self.as-span().inner-buffer().len != 0
+  }
+  fn get(self, index: size): t {
+    self.as-span().inner-buffer().get(index)
+  }
+  fn get-opt(self, index: size): ?t {
+    let b = self.as-span().inner-buffer()
+    if index >= b.len :none
+    else :some b.get(index)
+  }
+  fn first(self): ?t {
+    let b = self.as-span().inner-buffer()
+    if b.len == 0 :none
+    else :some b.get(0)
+  }
+  fn last(self): ?t {
+    let b = self.as-span().inner-buffer()
+    if b.len == 0 :none
+    else :some b.get(b.len - 1)
+  }
+  fn slice(self, start: size, end: size): span[t] {
+    span/wrap-buffer(self.as-span().inner-buffer().slice(start, end))
+  }
+  fn take(self, count: size): span[t] {
+    span/wrap-buffer(self.as-span().inner-buffer().take(count))
+  }
+  fn drop(self, count: size): span[t] {
+    span/wrap-buffer(self.as-span().inner-buffer().drop(count))
+  }
+  fn take-right(self, count: size): span[t] {
+    span/wrap-buffer(self.as-span().inner-buffer().take-right(count))
+  }
+  fn drop-right(self, count: size): span[t] {
+    span/wrap-buffer(self.as-span().inner-buffer().drop-right(count))
+  }
+  fn chunks(self, size: size): span[span[t]] {
+    mem/bitcast(self.as-span().inner-buffer().chunks(size))
+  }
+  fn starts-with(self, other: span[t]): bool where t: equals {
+    self.as-span().inner-buffer().starts-with(other.inner-buffer())
+  }
+  fn ends-with(self, other: span[t]): bool where t: equals {
+    self.as-span().inner-buffer().ends-with(other.inner-buffer())
+  }
+  fn index-of-span(self, needle: span[t]): ?size where t: equals {
+    self.as-span().inner-buffer().index-of-buffer(needle.inner-buffer())
+  }
+  fn contains-span(self, needle: span[t]): bool where t: equals {
+    self.as-span().inner-buffer().index-of-buffer(needle.inner-buffer()).is-some()
+  }
+  fn first-diff(self, other: span[t]): ?size where t: equals {
+    self.as-span().inner-buffer().first-diff(other.inner-buffer())
+  }
+  fn sorted(self): span[t] where t: comparable {
+    let b = self.as-span().inner-buffer().cloned()
+    b.sort()
+    span/wrap-buffer(b)
+  }
+}
+
+impl[t, c: as-buffer[t = t]] as-span[t = t] for c {
+  fn as-span(self): span[t] { span/wrap-buffer(self.as-buffer()) }
 }
 
 /////////////////////////////////
@@ -809,7 +911,7 @@ impl equals for i64 { fn(intern) equals(self: i64, other: i64): bool }
 
 impl equals for char { fn(intern) equals(self: char, other: char): bool }
 
-fn discard[t](_t: t): empty { .{} }
+fn discard[t](_t: t): empty {}
 fn phony[t](): t { crash("phony") }
 
 ns array {
@@ -852,15 +954,17 @@ ns array {
     array-uninit
   }
 
-  fn as-buffer[t, n](array: *mut array[t, n]): buffer[t] where n: static size {
-    .{ len = array.len(), data = array.get-base() }
-  }
+}
 
+impl[t, n: static size] as-buffer[t = t] for *mut array[t, n] {
+  fn as-buffer(self): buffer[t] {
+    .{ len = self.len(), data = self.get-base() }
+  }
 }
 
 impl[t, n: static size] as-span[t = t] for *array[t, n] {
   fn as-span(self): span[t] {
-    span/wrap-buffer(self.as-buffer())
+    span/wrap-raw(self.get-base-read().as[ptr], self.len())
   }
 }
 

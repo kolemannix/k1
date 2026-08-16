@@ -94,6 +94,9 @@ pub enum Linkage {
         lib_name: Option<StringId>,
         fn_name: Option<StringId>,
     },
+    Exported {
+        fn_name: Option<StringId>,
+    },
     Intrinsic,
     /// `intern("llvm.cttz.i64")`
     LlvmIntrinsic(StringId),
@@ -102,6 +105,10 @@ pub enum Linkage {
 impl Linkage {
     pub fn is_external(&self) -> bool {
         matches!(self, Linkage::External { .. })
+    }
+
+    pub fn is_exported(&self) -> bool {
+        matches!(self, Linkage::Exported { .. })
     }
 }
 
@@ -2475,11 +2482,19 @@ impl UseStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AbilityImplHandle {
     pub base_ability_id: AbilityId,
     pub specialized_ability_id: AbilityId,
     pub full_impl_id: AbilityImplId,
+}
+
+/// How the receiver must be adjusted to reach the impl that was found for it
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfAdjust {
+    None,
+    AddrOf,
+    Deref,
 }
 
 /// Allocations that we re-use
@@ -2505,7 +2520,7 @@ pub enum ModuleKind {
     Executable,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LibRefLinkType {
     /// Will result in a normal linker flag passed to search by just logical name
     Default,
@@ -3347,6 +3362,10 @@ impl TypedProgram {
             return Err(self.module_error(span, msg));
         }
 
+        if primary_module {
+            self.validate_exports()?;
+        }
+
         #[cfg(feature = "profile")]
         {
             let mut exprs_by_kind = FxHashMap::new();
@@ -3504,7 +3523,6 @@ impl TypedProgram {
             }
         }
 
-        // TODO: support building libraries as primary modules!
         if primary_module {
             self.program_settings.executable = manifest.kind == ModuleKind::Executable;
         }
@@ -3864,6 +3882,41 @@ impl TypedProgram {
         if let Err(e) = result {
             self.report(e);
             bail!("fn setup failed");
+        }
+        Ok(())
+    }
+
+    pub fn validate_exports(&mut self) -> anyhow::Result<()> {
+        let mut symbols: FxHashMap<StringId, SpanId> = FxHashMap::default();
+        let mut duplicate: Option<(StringId, SpanId)> = None;
+        for (function_id, function) in self.function_iter() {
+            let Linkage::Exported { fn_name } = function.linkage else {
+                continue;
+            };
+            let symbol = fn_name.unwrap_or(function.name);
+            let span = self.get_function_span(function_id);
+            if symbols.insert(symbol, span).is_some() {
+                duplicate = Some((symbol, span));
+                break;
+            }
+        }
+        if duplicate.is_none() {
+            for global_id in self.globals.iter_ids() {
+                let global = self.globals.get(global_id);
+                if !global.is_exported {
+                    continue;
+                }
+                let symbol = self.variables.get(global.variable_id).name;
+                if symbols.insert(symbol, global.span).is_some() {
+                    duplicate = Some((symbol, global.span));
+                    break;
+                }
+            }
+        }
+        if let Some((symbol, span)) = duplicate {
+            let msg = kerr!(self, span, "Duplicate exported symbol '{}'", self.ident_str(symbol));
+            self.report(msg);
+            bail!("Duplicate exported symbol");
         }
         Ok(())
     }
@@ -5031,7 +5084,9 @@ impl TypedProgram {
                     if ty_app.args.is_empty() {
                         match self.find_function_namespaced(scope_id, &ty_app.name)? {
                             Some(function_id) => Ok(self.get_function(function_id).type_id),
-                            None => match self.resolve_qident_to_constant_type(scope_id, &ty_app.name)? {
+                            None => match self
+                                .resolve_qident_to_constant_type(scope_id, &ty_app.name)?
+                            {
                                 Some(static_type_id) => Ok(static_type_id),
                                 None => Err(kerr!(
                                     self,
@@ -7822,66 +7877,26 @@ impl TypedProgram {
         id
     }
 
-    fn implement_ability_for_type(
+    fn register_builtin_ability_impl_shell(
         &mut self,
-        implementor_self_type_id: TypeId,
-        impl_signature: TypedAbilitySignature,
-        impl_scope_id: ScopeId,
-        impl_kind: AbilityImplKind,
+        self_type_id: TypeId,
+        base_ability_id: AbilityId,
+        impl_arguments: TypeIdSlice,
         span: SpanId,
-    ) -> AbilityImplId {
-        match impl_kind {
-            AbilityImplKind::TypeParamConstraint => self.implement_ability_for_type_constraint(
-                implementor_self_type_id,
-                impl_signature,
-                impl_scope_id,
-                span,
-            ),
-            AbilityImplKind::BuiltinDerived => {
-                match self.implement_ability_for_type_builtin(
-                    implementor_self_type_id,
-                    impl_signature,
-                    impl_scope_id,
-                    span,
-                ) {
-                    Ok(imp) => imp,
-                    Err(e) => {
-                        ice_span!(
-                            self,
-                            span,
-                            "Failed while generating builtin ability impl: {}",
-                            self.ident_str(e.message)
-                        )
-                    }
-                }
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn implement_ability_for_type_builtin(
-        &mut self,
-        implementor_self_type_id: TypeId,
-        impl_signature: TypedAbilitySignature,
-        scope_id: ScopeId,
-        span: SpanId,
-    ) -> K1Result<AbilityImplId> {
-        let ability = self.abilities.get(impl_signature.specialized_ability_id);
-        let functions = ability.functions;
-        let base_ability_id = ability.base_ability_id;
+    ) -> AbilityImplHandle {
+        let ability = self.abilities.get(base_ability_id);
+        let base_scope_id = ability.scope_id;
         let ability_self_type = ability.self_type_id;
-        let all_params = self.abilities.get(base_ability_id).parameters;
+        let all_params = ability.parameters;
+        let ability_args = ability.kind.arguments(&self.mem);
+        let scope_id =
+            self.scopes.add_child_scope(base_scope_id, ScopeType::AbilityImpl, ScopeOwnerId::None);
 
         // Add self
-        let _ = self.scopes.add_type(scope_id, self.ast.idents.b.self_, implementor_self_type_id);
-        let _ = self.scopes.add_type_substitution(
-            scope_id,
-            ability_self_type,
-            implementor_self_type_id,
-        );
+        let _ = self.scopes.add_type(scope_id, self.ast.idents.b.self_, self_type_id);
+        let _ = self.scopes.add_type_substitution(scope_id, ability_self_type, self_type_id);
 
         // Add ability-side params
-        let ability_args = ability.kind.arguments(&self.mem);
         for (parent_ability_param, ability_arg) in self
             .mem
             .getn(all_params)
@@ -7902,7 +7917,7 @@ impl TypedProgram {
             .getn(all_params)
             .iter()
             .filter(|p| p.is_impl_param)
-            .zip(self.mem.getn(impl_signature.impl_arguments).iter())
+            .zip(self.mem.getn(impl_arguments).iter())
         {
             let _ = self.scopes.add_type(scope_id, parent_impl_param.name, *impl_arg);
             let _ = self.scopes.add_type_substitution(
@@ -7911,6 +7926,32 @@ impl TypedProgram {
                 *impl_arg,
             );
         }
+
+        let impl_id = self.add_ability_impl(TypedAbilityImpl {
+            kind: AbilityImplKind::BuiltinDerived,
+            blanket_type_params: MSlice::empty(),
+            self_type_id,
+            base_ability_id,
+            ability_id: base_ability_id,
+            impl_arguments,
+            functions: MSlice::empty(),
+            scope_id,
+            span,
+            compile_errors: MList::empty(),
+        });
+        AbilityImplHandle {
+            base_ability_id,
+            specialized_ability_id: base_ability_id,
+            full_impl_id: impl_id,
+        }
+    }
+
+    fn declare_builtin_ability_impl_functions(&mut self, impl_id: AbilityImplId) -> K1Result<()> {
+        let imp = self.ability_impls.get(impl_id);
+        let base_ability_id = imp.base_ability_id;
+        let self_type_id = imp.self_type_id;
+        let scope_id = imp.scope_id;
+        let functions = self.abilities.get(base_ability_id).functions;
 
         let mut impl_functions = self.mem.new_list(functions.len());
         for ability_fn_ref in self.mem.getn(functions) {
@@ -7921,7 +7962,7 @@ impl TypedProgram {
                     scope_id,
                     Some(FunctionAbilityContextInfo::ability_impl(
                         base_ability_id,
-                        implementor_self_type_id,
+                        self_type_id,
                         AbilityImplKind::BuiltinDerived,
                         None,
                         false,
@@ -7934,19 +7975,8 @@ impl TypedProgram {
             let impl_fn = AbilityImplFunction::FunctionId(spec_fn_id);
             impl_functions.push(impl_fn)
         }
-        let impl_id = self.add_ability_impl(TypedAbilityImpl {
-            kind: AbilityImplKind::BuiltinDerived,
-            blanket_type_params: MSlice::empty(),
-            self_type_id: implementor_self_type_id,
-            base_ability_id,
-            ability_id: impl_signature.specialized_ability_id,
-            impl_arguments: impl_signature.impl_arguments,
-            functions: impl_functions.to_slice(),
-            scope_id,
-            span,
-            compile_errors: MList::empty(),
-        });
-        Ok(impl_id)
+        self.ability_impls.get_mut(impl_id).functions = impl_functions.to_slice();
+        Ok(())
     }
 
     fn implement_ability_for_type_constraint(
@@ -8062,11 +8092,10 @@ impl TypedProgram {
                 ScopeOwnerId::None,
             );
             let _ = self.scopes.add_type(constrained_impl_scope, type_parameter.name, type_id);
-            self.implement_ability_for_type(
+            self.implement_ability_for_type_constraint(
                 type_id,
                 ability_sig,
                 constrained_impl_scope,
-                AbilityImplKind::TypeParamConstraint,
                 type_parameter.span,
             );
         }
@@ -8109,11 +8138,11 @@ impl TypedProgram {
         // or None for if we didn't solve for it, meaning anything is fine
         parameter_constraints: &[Option<TypeId>],
 
-        allow_ref_self: bool,
+        allow_self_adjust: bool,
 
         scope_id: ScopeId,
         span: SpanId,
-    ) -> Result<(AbilityImplHandle, bool), MStr<MemTmp>> {
+    ) -> Result<(AbilityImplHandle, SelfAdjust), MStr<MemTmp>> {
         // let mut attempts: SV4<String> = smallvec![];
         if let Some(impl_handle) = self.find_unique_valid_ability_impl(
             self_type_id,
@@ -8121,7 +8150,7 @@ impl TypedProgram {
             parameter_constraints,
             scope_id,
         )? {
-            return Ok((impl_handle, false));
+            return Ok((impl_handle, SelfAdjust::None));
         }
 
         // Blanket
@@ -8151,7 +8180,7 @@ impl TypedProgram {
                     span,
                 ) {
                     None => debug!("Blanket impl didn't work"),
-                    Some(impl_handle) => return Ok((impl_handle, false)),
+                    Some(impl_handle) => return Ok((impl_handle, SelfAdjust::None)),
                 }
             }
         };
@@ -8169,7 +8198,7 @@ impl TypedProgram {
                     impl_arguments,
                     span,
                 );
-                return Ok((impl_handle, false));
+                return Ok((impl_handle, SelfAdjust::None));
             }
         }
         if target_base_ability_id == ABILITY_ID_SUM {
@@ -8185,7 +8214,7 @@ impl TypedProgram {
                 );
                 // eprintln!("\n----------------- IMPLEMENTED SUM\n");
                 // eprintln!("{}", self.ability_impl_to_string(impl_id, true));
-                return Ok((impl_handle, false));
+                return Ok((impl_handle, SelfAdjust::None));
             }
         }
         if target_base_ability_id == ABILITY_ID_EQUALS {
@@ -8197,68 +8226,17 @@ impl TypedProgram {
                         MSlice::empty(),
                         span,
                     );
-                    return Ok((impl_handle, false));
+                    return Ok((impl_handle, SelfAdjust::None));
                 }
-                Type::Sum(sum) => {
-                    // Check if all payloads implement equals
-                    let mut fail = false;
-                    for variant in self.mem.getn(sum.variants) {
-                        if let Some(payload) = variant.payload {
-                            if let Err(_err) = self.expect_ability_impl(
-                                payload,
-                                ABILITY_ID_EQUALS,
-                                false,
-                                scope_id,
-                                span,
-                            ) {
-                                fail = true;
-                                err_msg = Some(k1_format_user!(
-                                    self,
-                                    ":{} variant's data {} does not implement equals",
-                                    variant.name,
-                                    payload,
-                                ))
-                            };
-                        }
-                    }
-                    if !fail {
-                        let impl_handle = self.generate_builtin_ability_impl(
-                            self_type_id,
-                            target_base_ability_id,
-                            MSlice::empty(),
-                            span,
-                        );
-                        return Ok((impl_handle, false));
-                    }
-                }
-                Type::Struct(struct_type) => {
-                    // Check if all fields implement equals
-                    let mut fail = false;
-                    for field in self.mem.getn(struct_type.fields) {
-                        if let Err(_err) = self.expect_ability_impl(
-                            field.type_id,
-                            ABILITY_ID_EQUALS,
-                            false,
-                            scope_id,
-                            span,
-                        ) {
-                            fail = true;
-                            err_msg = Some(k1_format_user!(
-                                self,
-                                "field {} type {} does not implement equals",
-                                field.name,
-                                field.type_id,
-                            ))
-                        };
-                    }
-                    if !fail {
-                        let impl_handle = self.generate_builtin_ability_impl(
-                            self_type_id,
-                            target_base_ability_id,
-                            MSlice::empty(),
-                            span,
-                        );
-                        return Ok((impl_handle, false));
+                Type::Sum(_) | Type::Struct(_) => {
+                    match self.generate_builtin_member_wise_impl(
+                        self_type_id,
+                        target_base_ability_id,
+                        scope_id,
+                        span,
+                    ) {
+                        Ok(impl_handle) => return Ok((impl_handle, SelfAdjust::None)),
+                        Err(msg) => err_msg = Some(msg),
                     }
                 }
                 _ => {}
@@ -8274,94 +8252,52 @@ impl TypedProgram {
                     self,
                     "`code` does not implement print; use .text for the text alone, or write to a code-builder to keep source spans",
                 ));
-            }
-            match self.types.get(self_type_id) {
-                Type::Struct(struct_type) if !is_code => {
-                    // Check if all fields implement print
-                    let mut fail = false;
-                    for field in self.mem.getn(struct_type.fields) {
-                        if let Err(_err) = self.expect_ability_impl(
-                            field.type_id,
-                            ABILITY_ID_PRINT,
-                            false,
-                            scope_id,
-                            span,
-                        ) {
-                            fail = true;
-                            err_msg = Some(k1_format_user!(
-                                self,
-                                "field {} type {} does not implement print",
-                                field.name,
-                                field.type_id,
-                            ))
-                        };
-                    }
-                    if !fail {
-                        let impl_handle = self.generate_builtin_ability_impl(
-                            self_type_id,
-                            target_base_ability_id,
-                            MSlice::empty(),
-                            span,
-                        );
-                        return Ok((impl_handle, false));
-                    }
+            } else if matches!(self.types.get(self_type_id), Type::Sum(_) | Type::Struct(_)) {
+                match self.generate_builtin_member_wise_impl(
+                    self_type_id,
+                    target_base_ability_id,
+                    scope_id,
+                    span,
+                ) {
+                    Ok(impl_handle) => return Ok((impl_handle, SelfAdjust::None)),
+                    Err(msg) => err_msg = Some(msg),
                 }
-                Type::Sum(sum_type) => {
-                    // Check if all payloads implement print
-                    let mut fail = false;
-                    for variant in self.mem.getn(sum_type.variants) {
-                        if let Some(payload) = variant.payload {
-                            if let Err(_err) = self.expect_ability_impl(
-                                payload,
-                                ABILITY_ID_PRINT,
-                                false,
-                                scope_id,
-                                span,
-                            ) {
-                                fail = true;
-                                err_msg = Some(k1_format_user!(
-                                    self,
-                                    ":{} variant's data {} does not implement print",
-                                    variant.name,
-                                    payload,
-                                ))
-                            };
-                        }
-                    }
-                    if !fail {
-                        let impl_handle = self.generate_builtin_ability_impl(
-                            self_type_id,
-                            target_base_ability_id,
-                            MSlice::empty(),
-                            span,
-                        );
-                        return Ok((impl_handle, false));
-                    }
-                }
-                _ => {}
             }
         }
 
-        if allow_ref_self {
-            let ref_self = self.add_reference_type(self_type_id);
+        // The two lanes are exclusive by shape: a reference self can only be
+        // dereferenced, a value self can only have its address taken. Both are
+        // opt-in, because both are only sound where the caller has a receiver
+        // expression to adjust. Satisfying a bare type-param constraint this way
+        // is not: `*u64` would answer for `u64`'s equals/add/zero, and then
+        // `sum` specializes to `list[*u64]` and cannot produce a `*u64`
+        let adjusted_self = if !allow_self_adjust {
+            None
+        } else {
+            match self.types.get(self_type_id).as_reference() {
+                Some(reference) => Some((reference.inner_type, SelfAdjust::Deref)),
+                None => Some((self.add_reference_type(self_type_id), SelfAdjust::AddrOf)),
+            }
+        };
+        if let Some((adjusted_self_type_id, adjust)) = adjusted_self {
             if let Some(impl_handle) = self.find_unique_valid_ability_impl(
-                ref_self,
+                adjusted_self_type_id,
                 target_base_ability_id,
                 parameter_constraints,
                 scope_id,
             )? {
-                return Ok((impl_handle, true));
+                return Ok((impl_handle, adjust));
             }
             if let Some(blanket_impls_for_base) = self.blanket_impls.get(&target_base_ability_id) {
                 for blanket_impl_id in blanket_impls_for_base.as_slice(&self.mem).iter().copied() {
                     if let Some(impl_handle) = self.try_apply_blanket_implementation(
                         blanket_impl_id,
-                        ref_self,
+                        adjusted_self_type_id,
                         target_base_ability_id,
                         parameter_constraints,
                         span,
                     ) {
-                        return Ok((impl_handle, true));
+                        return Ok((impl_handle, adjust));
                     }
                 }
             }
@@ -8477,29 +8413,147 @@ impl TypedProgram {
         impl_arguments: TypeIdSlice,
         span: SpanId,
     ) -> AbilityImplHandle {
-        let base_ability = self.abilities.get(base_ability_id);
-        let base_scope_id = base_ability.scope_id;
-        let impl_scope_id =
-            self.scopes.add_child_scope(base_scope_id, ScopeType::AbilityImpl, ScopeOwnerId::None);
-
-        let impl_id = self.implement_ability_for_type(
+        let handle = self.register_builtin_ability_impl_shell(
             self_type_id,
-            TypedAbilitySignature { specialized_ability_id: base_ability_id, impl_arguments },
-            impl_scope_id,
-            AbilityImplKind::BuiltinDerived,
+            base_ability_id,
+            impl_arguments,
             span,
         );
-        let handle = AbilityImplHandle {
-            base_ability_id,
-            specialized_ability_id: base_ability_id,
-            full_impl_id: impl_id,
-        };
+        if let Err(e) = self.declare_builtin_ability_impl_functions(handle.full_impl_id) {
+            ice_span!(
+                self,
+                span,
+                "Failed while generating builtin ability impl: {}",
+                self.ident_str(e.message)
+            )
+        }
         debug!(
             "\n----------------- IMPLEMENTED BUILTIN {}\n",
             self.ident_str(self.abilities.get(base_ability_id).name)
         );
-        debug!("{}", self.ability_impl_to_string(impl_id, true));
+        debug!("{}", self.ability_impl_to_string(handle.full_impl_id, true));
         handle
+    }
+
+    fn generate_builtin_member_wise_impl(
+        &mut self,
+        self_type_id: TypeId,
+        target_base_ability_id: AbilityId,
+        scope_id: ScopeId,
+        span: SpanId,
+    ) -> Result<AbilityImplHandle, MStr<MemTmp>> {
+        let first_impl_id = self.ability_impls.next_id();
+        let impl_handle = self.register_builtin_ability_impl_shell(
+            self_type_id,
+            target_base_ability_id,
+            MSlice::empty(),
+            span,
+        );
+        let ability_name = self.abilities.get(target_base_ability_id).name;
+        let mut err_msg: Option<MStr<MemTmp>> = None;
+        match self.types.get(self_type_id) {
+            Type::Struct(struct_type) => {
+                for field in self.mem.getn(struct_type.fields) {
+                    if self
+                        .expect_ability_impl(
+                            field.type_id,
+                            target_base_ability_id,
+                            false,
+                            scope_id,
+                            span,
+                        )
+                        .is_err()
+                    {
+                        err_msg = Some(k1_format_user!(
+                            self,
+                            "field {} type {} does not implement {}",
+                            field.name,
+                            field.type_id,
+                            ability_name,
+                        ))
+                    }
+                }
+            }
+            Type::Sum(sum_type) => {
+                for variant in self.mem.getn(sum_type.variants) {
+                    if let Some(payload) = variant.payload {
+                        if self
+                            .expect_ability_impl(
+                                payload,
+                                target_base_ability_id,
+                                false,
+                                scope_id,
+                                span,
+                            )
+                            .is_err()
+                        {
+                            err_msg = Some(k1_format_user!(
+                                self,
+                                ":{} variant's data {} does not implement {}",
+                                variant.name,
+                                payload,
+                                ability_name,
+                            ))
+                        }
+                    }
+                }
+            }
+            _ => unreachable!("member-wise derive is only for structs and sums"),
+        }
+        match err_msg {
+            None => {
+                if let Err(e) =
+                    self.declare_builtin_ability_impl_functions(impl_handle.full_impl_id)
+                {
+                    ice_span!(
+                        self,
+                        span,
+                        "Failed while generating builtin ability impl: {}",
+                        self.ident_str(e.message)
+                    )
+                }
+                Ok(impl_handle)
+            }
+            Some(msg) => {
+                self.unregister_ability_impls_from(first_impl_id);
+                Err(msg)
+            }
+        }
+    }
+
+    fn unregister_ability_impls_from(&mut self, first_impl_id: AbilityImplId) {
+        let end = self.ability_impls.next_id();
+        let mut swept_fns: SV8<FunctionId> = smallvec![];
+        let mut impl_id = first_impl_id;
+        while impl_id != end {
+            let imp = self.ability_impls.get(impl_id);
+            let self_type_id = imp.self_type_id;
+            let base_ability_id = imp.base_ability_id;
+            let functions = imp.functions;
+            let handle = AbilityImplHandle {
+                base_ability_id,
+                specialized_ability_id: imp.ability_id,
+                full_impl_id: impl_id,
+            };
+            if let Some(impls) = self.ability_impl_table.get_mut(&self_type_id) {
+                impls.swap_remove_elem(&self.mem, &handle);
+            }
+            if let Some(impls) = self
+                .ability_impl_table_by_ability
+                .get_mut(&TypeAbilityPair { self_type_id, base_ability_id })
+            {
+                impls.swap_remove_elem(&self.mem, &handle);
+            }
+            for f in self.mem.getn(functions) {
+                if let AbilityImplFunction::FunctionId(fid) = f {
+                    swept_fns.push(*fid);
+                }
+            }
+            impl_id = impl_id.add_u32(1);
+        }
+        if !swept_fns.is_empty() {
+            self.functions_pending_body_specialization.retain(|f| !swept_fns.contains(f));
+        }
     }
 
     fn check_ability_impl(
@@ -8557,10 +8611,10 @@ impl TypedProgram {
         &mut self,
         self_type_id: TypeId,
         target_specialized_ability_id: AbilityId,
-        allow_ref_self: bool,
+        allow_self_adjust: bool,
         scope_id: ScopeId,
         span: SpanId,
-    ) -> Result<(AbilityImplHandle, bool), MStr<MemTmp>> {
+    ) -> Result<(AbilityImplHandle, SelfAdjust), MStr<MemTmp>> {
         let specialized_ability = self.abilities.get(target_specialized_ability_id);
         let base_ability = specialized_ability.base_ability_id;
         let args = specialized_ability.kind.arguments(&self.mem);
@@ -8573,7 +8627,7 @@ impl TypedProgram {
             self_type_id,
             base_ability,
             &parameter_constraints,
-            allow_ref_self,
+            allow_self_adjust,
             scope_id,
             span,
         )
@@ -8874,9 +8928,8 @@ impl TypedProgram {
                 AbilityImplFunction::FunctionId(blanket_impl_function_id) => {
                     let blanket_fn = self.get_function(blanket_impl_function_id);
                     let parsed_fn = blanket_fn.parsed_id.as_function_id().unwrap();
-                    let decl_fn = *self
-                        .mem
-                        .get_nth(self.abilities.get(concrete_ability_id).functions, index);
+                    let decl_fn =
+                        *self.mem.get_nth(self.abilities.get(concrete_ability_id).functions, index);
                     let is_default =
                         self.get_function(decl_fn.function_id).parsed_id.as_function_id()
                             == Some(parsed_fn);
@@ -12652,7 +12705,7 @@ impl TypedProgram {
         let body_span = for_expr.body_block.span;
 
         // Project: Kill all this with the macro system
-        let (target_is_iterator, needs_addr_of) = match self.expect_ability_impl(
+        let (target_is_iterator, self_adjust) = match self.expect_ability_impl(
             iterable_type,
             ABILITY_ID_ITERABLE,
             true,
@@ -12675,10 +12728,10 @@ impl TypedProgram {
                             iterable_type
                         );
                     }
-                    Ok((_iterator_impl, used_refself)) => (true, used_refself),
+                    Ok((_iterator_impl, adjust)) => (true, adjust),
                 }
             }
-            Ok((_iterable_impl, used_refself)) => (false, used_refself),
+            Ok((_iterable_impl, adjust)) => (false, adjust),
         };
 
         // We de-sugar the 'for ... do' expr into a typed while loop, synthesizing
@@ -12696,8 +12749,10 @@ impl TypedProgram {
             Some(iterable_span),
         );
         let mut iterable_defn_stmt: Option<TypedStmtId> = None;
-        let coerced_iterable_expr = if needs_addr_of {
-            match self.synth_address_of(iterable_expr, SpanId::NONE, true) {
+        let coerced_iterable_expr = match self_adjust {
+            SelfAdjust::None => iterable_expr,
+            SelfAdjust::Deref => self.synth_dereference(iterable_expr),
+            SelfAdjust::AddrOf => match self.synth_address_of(iterable_expr, SpanId::NONE, true) {
                 Ok(addr) => addr,
                 Err(_) => {
                     // The iterable is an rvalue (e.g. a call result); bind it to a
@@ -12713,9 +12768,7 @@ impl TypedProgram {
                     iterable_defn_stmt = Some(iterable_variable.defn_stmt);
                     self.synth_address_of(iterable_variable.variable_expr, SpanId::NONE, true)?
                 }
-            }
-        } else {
-            iterable_expr
+            },
         };
         let iterator_initializer = if target_is_iterator {
             coerced_iterable_expr
@@ -12900,15 +12953,15 @@ impl TypedProgram {
         &mut self,
         type_id: TypeId,
         base_ability_id: AbilityId,
-        allow_ref_self: bool,
+        allow_self_adjust: bool,
         scope_id: ScopeId,
         span_for_error: SpanId,
-    ) -> K1Result<(AbilityImplHandle, bool)> {
+    ) -> K1Result<(AbilityImplHandle, SelfAdjust)> {
         self.find_or_generate_ability_impl_for_type(
             type_id,
             base_ability_id,
             &[],
-            allow_ref_self,
+            allow_self_adjust,
             scope_id,
             span_for_error,
         )
@@ -14466,17 +14519,19 @@ impl TypedProgram {
             } else {
                 None
             };
-            if let Some((_writer_impl, needs_addr_of)) = writer_impl {
+            if let Some((_writer_impl, self_adjust)) = writer_impl {
                 let ctx_no_hint = ctx.with_no_expected_type();
-                let writer = if needs_addr_of {
-                    self.synth_address_of(base_expr, call_span, true).map_err(|e| {
-                        kerr!(self,
-                            call_span,
-                            "The receiver is not immediately a writer, but a reference to it is. So we tried to take its address, which is not allowed because it is not a place: {}",
-                            e.message)
-                    })?
-                } else {
-                    base_expr
+                let writer = match self_adjust {
+                    SelfAdjust::None => base_expr,
+                    SelfAdjust::Deref => self.synth_dereference(base_expr),
+                    SelfAdjust::AddrOf => {
+                        self.synth_address_of(base_expr, call_span, true).map_err(|e| {
+                            kerr!(self,
+                                call_span,
+                                "The receiver is not immediately a writer, but a reference to it is. So we tried to take its address, which is not allowed because it is not a place: {}",
+                                e.message)
+                        })?
+                    }
                 };
                 let template_span = self.ast.exprs.get_span(template_arg);
                 let newline_part = InterpolatedStringPart::String {
@@ -14534,7 +14589,12 @@ impl TypedProgram {
             ability_names.iter().map(|n| self.ident_str(*n)).join(", ")
         );
         let mut ability_ids = self.tmp.new_list(0);
-        self.scopes.collect_ability_ids_bound_to_names(ctx.scope_id, ability_names, &mut ability_ids);
+        self.scopes.collect_ability_ids_bound_to_names(
+            ctx.scope_id,
+            ability_names,
+            &mut ability_ids,
+            &mut self.tmp,
+        );
         for ability_id in ability_ids.as_slice() {
             let Some(ability_function_ref) =
                 self.abilities.get(*ability_id).find_function_by_name(&self.mem, fn_name)
@@ -17236,9 +17296,20 @@ impl TypedProgram {
         needs_terminator: bool,
     ) -> K1Result<TypedExprId> {
         let block_scope = ctx.scope_id;
-        if block.stmts.is_empty() {
-            kbail!(self, block.span, "Blocks must contain at least one statement or expression");
-        }
+        let unit_body;
+        let block = if block.stmts.is_empty() {
+            let unit_expr = self.ast.exprs.add(
+                ParsedExpr::Struct(parse::ParsedStruct { fields: MSlice::empty(), span: block.span }),
+                false,
+                None,
+            );
+            let stmt_id = self.ast.stmts.add(ParsedStmt::LoneExpression(unit_expr));
+            let stmts = self.ast.mem.pushn(&[stmt_id]);
+            unit_body = ParsedBlock { stmts, kind: block.kind, span: block.span };
+            &unit_body
+        } else {
+            block
+        };
         let mut stmts = self.mem.new_list(block.stmts.len() + 1);
         let mut last_expr_type: TypeId = self.builtin_types.empty;
         let mut last_stmt_is_divergent = false;
@@ -17860,8 +17931,15 @@ impl TypedProgram {
 
         for c in self.mem.getn(constraints) {
             let target = self.substitute_in_type(c.target, &pairs);
-            let signature = self.substitute_in_ability_signature(&pairs, c.signature, scope_id, span);
-            self.check_ability_constraint(target, signature, decl_fn.function_name, scope_id, c.span)?;
+            let signature =
+                self.substitute_in_ability_signature(&pairs, c.signature, scope_id, span);
+            self.check_ability_constraint(
+                target,
+                signature,
+                decl_fn.function_name,
+                scope_id,
+                c.span,
+            )?;
         }
         Ok(())
     }
@@ -18988,6 +19066,29 @@ impl TypedProgram {
                 other => other,
             },
         };
+        if let Linkage::Exported { .. } = linkage {
+            if !type_params.is_empty() || !fnlike_type_params.is_empty() {
+                kbail!(
+                    &**self_,
+                    ast_fn.signature_span,
+                    "exported functions cannot be generic"
+                );
+            }
+            if ability_info.is_some() {
+                kbail!(
+                    &**self_,
+                    ast_fn.signature_span,
+                    "ability functions cannot be exported"
+                );
+            }
+            if ast_fn.body.is_none() {
+                kbail!(
+                    &**self_,
+                    ast_fn.signature_span,
+                    "exported functions must have a body"
+                );
+            }
+        }
         let intrinsic_type = match linkage {
             Linkage::Intrinsic => {
                 let namespace_chain = self_.name_chain(namespace_id);
@@ -19075,7 +19176,7 @@ impl TypedProgram {
         let param_types_handle = param_types.to_slice();
         let call_conv = match linkage {
             Linkage::Standard => AbiMode::Internal,
-            Linkage::External { .. } => AbiMode::Native,
+            Linkage::External { .. } | Linkage::Exported { .. } => AbiMode::Native,
             Linkage::Intrinsic | Linkage::LlvmIntrinsic(_) => AbiMode::Internal,
         };
         let function_type_id = self_.add_anon_type(Type::Function(FunctionType {
@@ -20157,11 +20258,10 @@ impl TypedProgram {
                             let constrained_ability_sig =
                                 self.eval_ability_expr(*ability_expr, false, impl_scope_id)?;
                             let constraint_span = self.ast.mem.get(*ability_expr).span;
-                            self.implement_ability_for_type(
+                            self.implement_ability_for_type_constraint(
                                 type_variable_id,
                                 constrained_ability_sig,
                                 param_constraints_scope_id,
-                                AbilityImplKind::TypeParamConstraint,
                                 constraint_span,
                             );
                         }
@@ -20867,7 +20967,7 @@ impl TypedProgram {
                         match function.linkage {
                             Linkage::Standard => None,
                             _ => Some((
-                                "extern and intrinsic fns cannot be included",
+                                "extern, export, and intrinsic fns cannot be included",
                                 function.signature_span,
                             )),
                         }
@@ -22182,6 +22282,7 @@ impl TypedProgram {
             core!("from-string"),
             core!("iterator"),
             core!("iterable"),
+            core!("as-buffer"),
             core!("as-span"),
             core!("println"),
             core!("print"),
@@ -22203,6 +22304,7 @@ impl TypedProgram {
             core!("range"),
             core!("rangeable"),
             core!("add"),
+            core!("zero"),
             core!("sub"),
             core!("mul"),
             core!("div"),
@@ -22791,10 +22893,19 @@ impl TypedProgram {
         skip_root: bool,
     ) {
         let starting_namespace = self.scopes.nearest_parent_namespace(scope);
-        let namespace_chain = self.name_chain(starting_namespace);
-        for identifier in self.tmp.dlist_iter_nodes(namespace_chain) {
-            let ident_str = self.ident_str(identifier.data);
-            let is_last = identifier.is_last();
+        let mut chain: SmallVec<[StringId; 8]> = smallvec![];
+        let mut ns_id = starting_namespace;
+        loop {
+            let namespace = self.namespaces.get(ns_id);
+            chain.push(namespace.name);
+            match namespace.parent_id {
+                Some(parent_id) => ns_id = parent_id,
+                None => break,
+            }
+        }
+        for (i, name) in chain.iter().rev().enumerate() {
+            let ident_str = self.ident_str(*name);
+            let is_last = i == chain.len() - 1;
 
             let is_root = ident_str == "_root";
             if !(is_root && skip_root) {

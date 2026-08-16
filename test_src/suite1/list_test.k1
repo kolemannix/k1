@@ -109,12 +109,12 @@ impl equals for { rank: int, payload: string } {
 
 fn test-sort-int(input: list[int], expected: list[int]) {
   let sorted = input.sorted()
-  assert(sorted == expected)
+  assert(sorted == expected.as-span())
 }
 
 fn test-sort-other(input: list[{ rank: int, payload: string }], expected: list[{ rank: int, payload: string }]) {
   let sorted = input.sorted()
-  assert(sorted == expected)
+  assert(sorted == expected.as-span())
 }
 
 fn test-sort() {

@@ -54,6 +54,15 @@ fn run() -> anyhow::Result<ExitCode> {
         k1::server::serve(Arc::new(Mutex::new(Some(Box::new(program)))));
         return Ok(ExitCode::SUCCESS);
     }
+    if matches!(args.command, Command::Run { .. } | Command::Test { .. })
+        && !program.program_settings.executable
+    {
+        eprintln!(
+            "{} is a library module; run/test require an executable module",
+            program.program_name()
+        );
+        return Ok(ExitCode::FAILURE);
+    }
     let llvm_ctx = inkwell::context::Context::create();
     return match compiler::codegen_module(&args, &llvm_ctx, &mut program) {
         Ok(cg) => match args.command {

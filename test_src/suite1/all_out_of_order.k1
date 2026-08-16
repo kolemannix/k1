@@ -41,7 +41,7 @@ ns bar {
 
 ns secret {
   // before defined (below where imported and called)
-  fn before() { .{} }
+  fn before() {}
 }
 
 ns foo {

@@ -13,7 +13,7 @@ fn unbox-it[t](b: box[box[box[t]]]): t {
   b.value.value.value
 }
 
-fn takes-poly-au-pair[c, d](_x: au-pair[c, d]) { .{} }
+fn takes-poly-au-pair[c, d](_x: au-pair[c, d]) {}
 
 type constrained-box[a, b: try[t = a, e = empty]] = { inner: b }
 fn test-constraints() {

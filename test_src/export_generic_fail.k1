@@ -1,0 +1,4 @@
+fn(export) genexp[t](x: t): t { x }
+
+fn main(): i32 { 0 }
+//errmsg: exported functions cannot be generic

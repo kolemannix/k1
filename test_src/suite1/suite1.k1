@@ -42,6 +42,7 @@ fn low() {
   opaque_test/test()
   test_comptime/test()
   test_globals/test()
+  export_test/test()
 }
 
 fn moderate() {
@@ -98,6 +99,8 @@ fn core-lib() {
   allocator_test/test()
   iterator_tests/test()
   buffer_test/test()
+  as_buffer/test()
+  ability_deref_self/test()
   string_test/test()
   list_test/test()
   range_test/test()

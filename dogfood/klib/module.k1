@@ -1,0 +1,23 @@
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.library()
+  m
+}
+
+type pair = { a: i32, b: i32 }
+
+fn(export) klib_add(a: i32, b: i32): i32 { a + b }
+
+fn(export("klib_scale")) scale-by-two(x: i32): i32 { x * 2 }
+
+fn(export) klib_pair_swap(p: pair): pair { .{ a = p.b, b = p.a } }
+
+fn(export) klib_sum_to(n: i64): i64 {
+  let items = list/empty[i64]()
+  for i in 1.until(n + 1) { items.push(i) }
+  let sum: i64 = 0
+  for x in items { sum = sum + x }
+  sum
+}
+
+let(export) klib_answer: i32 = 42

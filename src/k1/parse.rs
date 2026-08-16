@@ -340,16 +340,6 @@ impl Display for ParsedUnaryOpKind {
     }
 }
 
-impl ParsedUnaryOpKind {
-    pub fn from_tokenkind(kind: TokenKind) -> Option<ParsedUnaryOpKind> {
-        match kind {
-            TokenKind::KeywordNot => Some(ParsedUnaryOpKind::BooleanNegation),
-            TokenKind::Amp => Some(ParsedUnaryOpKind::AddressOf),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct UnaryOp {
     pub op_kind: ParsedUnaryOpKind,
@@ -3856,13 +3846,25 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }))))
             }
             K::KeywordNot => {
-                let Some(op_kind) = ParsedUnaryOpKind::from_tokenkind(first.kind) else {
-                    return Err(error("unexpected prefix operator", first));
-                };
                 self.advance();
-                let expr = self.expect_expression()?;
+                let expr = self.expect_expression_with_postfix_ops()?;
+                let next = self.peek();
+                if let Some(op) = BinaryOpKind::from_tokenkind(next.kind) {
+                    if !Self::newline_terminates(next) {
+                        return Err(error(
+                            format!(
+                                "`not` followed by `{op}` is ambiguous; use parens to disambiguate"
+                            ),
+                            next,
+                        ));
+                    }
+                }
                 let span = self.extend_span(first.span, self.get_expression_span(expr));
-                Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp { expr, op_kind, span }))))
+                Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp {
+                    expr,
+                    op_kind: ParsedUnaryOpKind::BooleanNegation,
+                    span,
+                }))))
             }
             K::Colon => {
                 self.advance();
@@ -4824,7 +4826,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             loop {
                 let modifier = self.peek();
                 if linkage.is_some() && modifier.kind != K::Ident {
-                    return Err(error_expected("a single intern or extern modifier", modifier));
+                    return Err(error_expected(
+                        "a single intern, extern, or export modifier",
+                        modifier,
+                    ));
                 }
                 if modifier.kind == K::KeywordIntern {
                     self.advance();
@@ -4838,7 +4843,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     });
                 } else if modifier.kind == K::Ident && self.token_chars(modifier) == "extern" {
                     if linkage.is_some() {
-                        return Err(error_expected("a single intern or extern modifier", modifier));
+                        return Err(error_expected(
+                            "a single intern, extern, or export modifier",
+                            modifier,
+                        ));
                     }
                     self.advance();
                     let fn_name = if self.peek().kind == K::OpenParen {
@@ -4854,6 +4862,23 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         lib_name: None,
                         fn_name,
                     });
+                } else if modifier.kind == K::Ident && self.token_chars(modifier) == "export" {
+                    if linkage.is_some() {
+                        return Err(error_expected(
+                            "a single intern, extern, or export modifier",
+                            modifier,
+                        ));
+                    }
+                    self.advance();
+                    let fn_name = if self.peek().kind == K::OpenParen {
+                        self.advance();
+                        let symbol = self.expect_dq_ident()?;
+                        self.expect_kind(K::CloseParen)?;
+                        Some(symbol)
+                    } else {
+                        None
+                    };
+                    linkage = Some(Linkage::Exported { fn_name });
                 } else if modifier.kind == K::Ident && self.token_chars(modifier) == "lib" {
                     self.advance();
                     self.expect_kind(K::OpenParen)?;
@@ -4861,7 +4886,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.expect_kind(K::CloseParen)?;
                     lib_token = Some(modifier);
                 } else {
-                    return Err(error_expected("fn modifier: intern, extern, or lib", modifier));
+                    return Err(error_expected(
+                        "fn modifier: intern, extern, export, or lib",
+                        modifier,
+                    ));
                 }
                 if self.maybe_consume(K::Comma).is_none() {
                     break;

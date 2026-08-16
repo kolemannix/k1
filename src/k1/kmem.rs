@@ -341,13 +341,26 @@ impl<AnyTag> From<&'static str> for MStr<AnyTag> {
 /// at the same time; see `Mem::format_all`
 pub struct MemWriter<Tag> {
     mem: *mut Mem<Tag>,
+    #[cfg(debug_assertions)]
+    expected_cursor: *mut u8,
+}
+impl<Tag> MemWriter<Tag> {
+    fn new(mem: &mut Mem<Tag>) -> Self {
+        MemWriter {
+            #[cfg(debug_assertions)]
+            expected_cursor: mem.cursor,
+            mem,
+        }
+    }
 }
 impl<Tag> std::fmt::Write for MemWriter<Tag> {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
         let mem = unsafe { &mut *self.mem };
 
         #[cfg(debug_assertions)]
-        let start = mem.cursor;
+        if mem.cursor != self.expected_cursor {
+            panic!("kmem::Mem allocated from while a MemWriter was formatting into it")
+        }
 
         #[cfg_attr(not(debug_assertions), allow(unused_variables))]
         let bytes = mem.pushn_raw(s.as_bytes());
@@ -355,11 +368,12 @@ impl<Tag> std::fmt::Write for MemWriter<Tag> {
         #[cfg(debug_assertions)]
         {
             let bytes_start = bytes.as_mut_ptr();
-            if start != bytes_start {
+            if bytes_start != self.expected_cursor {
                 // If we pushed any padding, fail. We
                 // shouldn't be pushing any padding for a u8 slice
                 panic!("Inserted padding in kmem::Mem fmt::Write::write_str")
             }
+            self.expected_cursor = mem.cursor;
         };
         Ok(())
     }
@@ -672,7 +686,7 @@ impl<Tag> Mem<Tag> {
         use std::fmt::Write;
 
         let base: *const u8 = self.cursor;
-        let mut writer = MemWriter { mem: self };
+        let mut writer = MemWriter::new(self);
         writer.write_fmt(args).unwrap();
         let len = unsafe { self.cursor.offset_from(base) };
         if len < 0 {
@@ -688,7 +702,7 @@ impl<Tag> Mem<Tag> {
         stuff: &[&dyn DepDisplay<D, A>],
     ) -> MStr<Tag> {
         let base: *const u8 = self.cursor;
-        let mut writer = MemWriter { mem: self };
+        let mut writer = MemWriter::new(self);
         for s in stuff.iter() {
             DepDisplay::fmt(*s, &mut writer, dep, args).unwrap();
         }
@@ -704,7 +718,7 @@ impl<Tag> Mem<Tag> {
         F: FnOnce(&mut MemWriter<Tag>, &D, &A) -> fmt::Result,
     {
         let base: *const u8 = self.cursor;
-        let mut writer = MemWriter { mem: self };
+        let mut writer = MemWriter::new(self);
 
         f(&mut writer, dep, args).unwrap();
 
@@ -1432,6 +1446,7 @@ impl<T, Tag> List<T, Tag> {
         self.len += 1;
     }
 
+    #[track_caller]
     pub fn push(&mut self, val: T) {
         if self.len == self.cap {
             panic!("MList is full {}", self.cap);
@@ -1448,6 +1463,7 @@ impl<T, Tag> List<T, Tag> {
         }
     }
 
+    #[track_caller]
     fn grow_to(&mut self, mem: &mut Mem<Tag>, min_cap: usize) -> Self
     where
         T: Copy + Sized,
@@ -1694,6 +1710,16 @@ impl<T: 'static, Tag: 'static> MList<T, Tag> {
         let mut list = self.to_list(mem);
         list.extend_grow(mem, vals);
         *self = list.to_mlist();
+    }
+
+    pub fn swap_remove_elem(&mut self, mem: &Mem<Tag>, elem: &T) -> Option<T>
+    where
+        T: Copy + PartialEq,
+    {
+        let mut list = self.to_list(mem);
+        let removed = list.swap_remove_elem(elem);
+        *self = list.to_mlist();
+        removed
     }
 
     pub fn to_mslice(&self) -> MSlice<T, Tag> {

@@ -208,14 +208,16 @@ impl TypedProgram {
                             (expr_type, expr_span)
                         }
                         Err(e) => {
-                            // A lambda evaluated against an expected type that still has
-                            // holes fails easily (its param types aren't known yet); the
-                            // post-inference argument pass re-evaluates it concretely and
-                            // reports the real error if it is genuinely mis-written. But a
-                            // failure against a concrete expected type is still a real error right
-                            // now
+                            // A lambda or variant literal evaluated against an expected
+                            // type that still has holes fails easily (its param/enum types
+                            // aren't known yet); the post-inference argument pass
+                            // re-evaluates it concretely and reports the real error if it
+                            // is genuinely mis-written. But a failure against a concrete
+                            // expected type is still a real error right now
                             let should_skip = match self.ast.exprs.get(*parsed_expr) {
-                                ParsedExpr::Lambda(_) => !expected_is_concrete,
+                                ParsedExpr::Lambda(_) | ParsedExpr::Variant(_) => {
+                                    !expected_is_concrete
+                                }
                                 _ => false,
                             };
                             if should_skip {

@@ -91,7 +91,7 @@ fn validate(entries: span[entry]) {
         :text t -> {
           if t.is-empty() crash("routing: route `${en.name}` has an empty literal segment")
           for c in t {
-            if not c.is-ascii() or c == '/' or c == '%' {
+            if (not c.is-ascii()) or c == '/' or c == '%' {
               crash("routing: route `${en.name}` literal `$t` contains a forbidden character")
             }
           }
@@ -150,20 +150,6 @@ fn params(e: entry): list[param] {
   ps
 }
 
-fn has-string(l: list[string], s: string): bool {
-  for x in l { if x == s return true }
-  false
-}
-
-fn join(items: list[string], separator: string): string {
-  let b = string-builder/new()
-  for x in items {
-    if it-index > 0 { b.write(separator) }
-    b.write(x)
-  }
-  b.build()
-}
-
 fn emit-leaf-body(cb: *mut code-builder, en: entry, d: size) {
   let pat = render-pattern(en.path)
   let payload = list/empty[string]()
@@ -183,7 +169,7 @@ fn emit-leaf-body(cb: *mut code-builder, en: entry, d: size) {
   if payload.len() == 0 {
     cb.line("return :ok :${en.name}")
   } else {
-    cb.line("return :ok :${en.name} .{ ${join(payload, ", ")} }")
+    cb.line("return :ok :${en.name} .{ ${string/join(payload, ", ")} }")
   }
 }
 
@@ -206,7 +192,7 @@ fn emit-leafs(cb: *mut code-builder, entries: span[entry], idxs: list[size], d: 
   let first = entries.get(idxs.get(0))
   let allowed = list/empty[string]()
   for gi in idxs { allowed.push(str-lit(entries.get(gi).method.enum-name().to-ascii-upper())) }
-  cb.line(`return :err :bad-method .{ pattern = ${str-lit(render-pattern(first.path))}, allowed = [${join(allowed, ", ")}] }`)
+  cb.line(`return :err :bad-method .{ pattern = ${str-lit(render-pattern(first.path))}, allowed = [${string/join(allowed, ", ")}] }`)
 }
 
 // The has-a-segment-at-`d` branch: decode it, then literal edges (committing
@@ -236,7 +222,7 @@ fn emit-node(cb: *mut code-builder, entries: span[entry], group: list[size], d: 
     if en.path.len() == d { exact.push(gi) }
     else en.path.get(d) is {
       :rest _ -> rests.push(gi),
-      :text t -> if not has-string(lit-texts, t) { lit-texts.push(t) },
+      :text t -> if not lit-texts.contains(t) { lit-texts.push(t) },
       _ -> caps.push(gi),
     }
   }
@@ -282,8 +268,7 @@ fn emit-parse-fn(cb: *mut code-builder, base: string, entries: span[entry]) {
   cb.block("fn parse(header: http/header): result[$base, routing/route-error]", fn[cb, entries]. {
     cb.line(`let url = header.url`)
     cb.line(`if url.is-empty() or url.get(0) != '/' { return :err :not-found }`)
-    cb.line(`let qi = url.index-of('?')`)
-    cb.line(`let path = if qi == -1 url else url.take(qi)`)
+    cb.line(`let path = if url.position('?') is :some qi url.take(qi) else url`)
     cb.line(`let segs = array/zeroed[string, 16]()`)
     cb.line(`let sp = routing/split-path(path, segs.&)`)
     let all = list/empty[size]()
@@ -368,10 +353,10 @@ fn define-impl(base: string, entries: span[entry]): code {
     } else {
       let fields = list/empty[string]()
       for c in caps { fields.push("${c.name}: ${c.ty}") }
-      variants.push("${en.name}({ ${join(fields, ", ")} })")
+      variants.push("${en.name}({ ${string/join(fields, ", ")} })")
     }
   }
-  cb.line("type $base = either { ${join(variants, ", ")} }")
+  cb.line("type $base = either { ${string/join(variants, ", ")} }")
 
   cb.block("ns for $base", fn[cb, base, entries]. {
     emit-parse-fn(cb, base, entries)
@@ -428,7 +413,7 @@ fn hex-val(c: char): ?u8 {
 // Percent-decodes one segment; allocation-free when no '%' is present.
 // :none on a malformed escape
 fn decode-seg(s: string): ?string {
-  if s.index-of('%') == -1 return :some s
+  if not s.contains('%') return :some s
   let b = string-builder/new()
   let i: size = 0
   while i < s.len() {

@@ -60,54 +60,8 @@ ns for span {
     .{ buffer = self.buffer.cloned-in(alloc) }
   }
 
-  fn len[t](self: span[t]): size { self.buffer.len }
-
   fn get-ref[t](self: span[t], index: size): *t {
     self.buffer.get-ref[t](index)
-  }
-
-  fn get[t](self: span[t], index: size): t {
-    let t-ref = self.get-ref(index)
-    t-ref.*
-  }
-
-  fn get-opt[t](self: span[t], index: size): ?t {
-    if index >= self.len() :none
-    else :some self.get(index)
-  }
-
-  fn slice[t](self: span[t], start: size, end: size): span[t] {
-    .{ buffer = self.buffer.slice(start, end) }
-  }
-
-  fn take[t](self: span[t], count: size): span[t] { self.slice(0,     count) }
-  fn drop[t](self: span[t], count: size): span[t] { self.slice(count, self.len()) }
-  fn take-right[t](self: span[t], count: size): span[t] {
-    self.slice(self.len() - count, self.len())
-  }
-  fn drop-right[t](self: span[t], count: size): span[t] {
-    self.slice(0, self.len() - count)
-  }
-
-  fn starts-with[t: equals](self: span[t], other: span[t]): bool {
-    self.buffer.starts-with(other.buffer)
-  }
-  
-  fn ends-with[t: equals](self: span[t], other: span[t]): bool {
-    self.buffer.ends-with(other.buffer)
-  }
-
-  fn chunks[t](self: span[t], size: size): span[span[t]] {
-    let buffer-chunks = self.buffer.chunks(size)
-    mem/bitcast(buffer-chunks)
-  }
-
-  fn is-empty[t](self: span[t]): bool {
-    self.len() == 0
-  }
-
-  fn non-empty[t](self: span[t]): bool {
-    self.len() > 0
   }
 
   fn first-ref[t](self: span[t]): ?*t {
@@ -115,13 +69,6 @@ ns for span {
       :some self.get-ref(0)
     } else {
       :none
-    }
-  }
-
-  fn first[t](self: span[t]): ?t {
-    self.first-ref() is {
-      :none -> :none,
-      :some first-ref -> :some first-ref.*
     }
   }
 
@@ -133,11 +80,12 @@ ns for span {
     }
   }
 
-  fn last[t](self: span[t]): ?t {
-    self.last-ref() is {
-      :none -> :none,
-      :some last-ref -> :some last-ref.*
-    }
+  fn position[t: equals](self: span[t], needle: t): ?size {
+    self.buffer.position(needle)
+  }
+
+  fn contains[t: equals](self: span[t], needle: t): bool {
+    self.buffer.position(needle).is-some()
   }
 
   fn concat[t](self: span[t], other: span[t]): span[t] {
@@ -145,10 +93,22 @@ ns for span {
     wrap-buffer(concated-buffer)
   }
 
-  fn sorted[t](self: span[t]): span[t] where t: comparable {
-    let new-buffer = self.buffer.cloned()
-    new-buffer.sort()
-    wrap-buffer(new-buffer)
+  fn join[t, c: as-span[t = span[t]]](items: c, separator: span[t]): span[t] {
+    let spans = items.as-span()
+    if spans.is-empty() return empty()
+    let total = separator.len() * (spans.len() - 1)
+    for s in spans { total = total + s.len() }
+    let buf = buffer/allocate[t](total)
+    let pos: size = 0
+    for s in spans {
+      if it-index > 0 {
+        buffer/copy(src = separator.inner-buffer(), dst = buf.slice(pos, pos + separator.len()))
+        pos = pos + separator.len()
+      }
+      buffer/copy(src = s.inner-buffer(), dst = buf.slice(pos, pos + s.len()))
+      pos = pos + s.len()
+    }
+    wrap-buffer(buf)
   }
 
   fn as-char-span(self: span[byte]): span[char] {

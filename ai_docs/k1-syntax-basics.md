@@ -165,6 +165,8 @@ assert(result == .{})
 ```
 
 K1 code commonly ends test helpers with `.{}` when the intent is "return unit".
+An empty block `{}` is legal and yields `.{}` — fine as a no-op fn body
+(`fn stop(self: *mut self) {}`) or an empty loop body (`while spinning() {}`).
 
 ## Variables And Mutation
 
@@ -499,6 +501,12 @@ See `test_src/suite1/optionals.k1` and `test_src/suite1/try_test.k1`.
 let n = if flag 1 else 2
 ```
 
+Boolean negation is the `not` prefix. It binds tightly, to one postfix chain:
+`not user.is-admin()` negates the call result. A binary operator directly
+after the operand is a parse error, not a precedence choice — write
+`(not a) == b` or `not (a == b)`. At the end of a method chain, use `bool`'s
+`negated()` instead: `list.contains(x).negated()`.
+
 Use `is` for pattern checks and bindings:
 
 ```rust
@@ -615,6 +623,23 @@ Collection API naming follows a doctrine:
   transient data uses the ambient arena.
 - Mutators take `*mut self` and reuse the verb (`sort`, `reverse`); functional
   variants get `-ed` (`sorted`, `reversed`).
+- Shared collection ops are ability defaults: reads and views on `as-span`
+  (`len`, `get`, `get-opt`, `first`, `last`, `slice`, `take`, `drop`,
+  `starts-with`, `ends-with`, `chunks`, `sorted`, `index-of-span`,
+  `contains-span`, `first-diff`), mutations and references on `as-buffer`
+  (`set`, `swap`, `sort`, `reverse`, `fill`, `get-ref`, `first-ref`,
+  `last-ref`, `ref-iter`). Implementing `as-buffer` derives
+  `as-span` via a blanket impl. View defaults return `span[t]`; view types
+  shadow them with shape-preserving inherents (string ops return string,
+  buffer ops return buffer). Each method name belongs to exactly one ability;
+  inherent shadowing is the only sanctioned overlap.
+- Search by element is `position`/`contains` (an `iterable` default, so it
+  works on any iterable); search by subsequence is `index-of-span`/
+  `contains-span`. Both are implemented once in `buffer`, which dispatches on
+  the element type: a byte-sized `t` takes a SIMD lane, everything else a
+  scalar loop. `list`, `span`, and `string` shadow `position`/`contains` with
+  inherents so they reach that lane instead of iterable's element-by-element
+  default.
 
 See `test_src/suite1/array_test.k1`, `test_src/suite1/list_test.k1`,
 `test_src/suite1/range_test.k1`, and `test_src/suite1/buffer_test.k1`.

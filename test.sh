@@ -23,14 +23,12 @@ K1_HOME=$(pwd) target/debug/k1 --optimize --cache false run test_src/suite1
 target/debug/k1 --emit-llvm --cache false build dogfood/refchess
 target/debug/k1 --emit-llvm --cache false build dogfood/profiling
 target/debug/k1 --cache false test  dogfood/k1bindgen
-# Exercises the module system end-to-end: deps (http -> libuv), setup steps
-# (cmake/cc/k1bindgen on first compile of a machine), cross-module linking.
-# First build starts from an empty cache (cold compile, writes snapshots);
-# second build restores them and re-links, covering the disk cache end-to-end
 rm -rf dogfood/httpapp/.k1-out/cache
 K1_HOME=$(pwd) target/debug/k1 build dogfood/httpapp
 K1_HOME=$(pwd) target/debug/k1 build dogfood/httpapp
 K1_HOME=$(pwd) target/debug/k1 run dogfood/brotli
+K1_HOME=$(pwd) target/debug/k1 --cache false build dogfood/klib
+make -C dogfood/klib/consumer clean run
 K1_HOME=$(pwd) K1_EXE=$(pwd)/target/debug/k1 target/debug/k1 run dogfood/reload_test
 
 if rg --type-add 'k1:*.k1' -c 'nocommit' -t rust -t c -t k1 .

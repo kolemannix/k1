@@ -1443,7 +1443,9 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
         compile_block_stmts(&mut b, None, body_block)?;
     } else {
         match f.linkage {
-            Linkage::Standard => panic!("ir: function should have a body I think"),
+            Linkage::Standard | Linkage::Exported { .. } => {
+                panic!("ir: function should have a body I think")
+            }
             Linkage::External { .. } => {}
             Linkage::Intrinsic | Linkage::LlvmIntrinsic(_) => {}
         }

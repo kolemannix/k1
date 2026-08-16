@@ -215,5 +215,5 @@ impl allocator for *arena {
   fn realloc(self: *arena, old-ptr: ptr, old-size: size, align: size, new-size: size): ptr {
     self.try-realloc(old-ptr, old-size, new-size, align)
   }
-  fn free(_self: *arena, _ptr: ptr, _size: size, _align: size) { .{} }
+  fn free(_self: *arena, _ptr: ptr, _size: size, _align: size) {}
 }

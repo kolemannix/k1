@@ -609,34 +609,58 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     pub fn codegen_program(&mut self) -> K1Result<()> {
         let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
 
+        let mut any_exported_global = false;
         for global_id in &global_ids {
             let g = self.k1.globals.get(*global_id);
+            if g.is_exported {
+                any_exported_global = true;
+            }
             if g.is_exported || self.has_reloadable_fns {
                 self.codegen_global(*global_id)?;
             }
         }
 
-        // Guarantee generation of exported functions
-        // FIXME: Codegen the exported functions as well as the called ones
-        // for (id, function) in self.module.function_iter() {
-        //     if function.linkage.is_exported() {
-        //         self.codegen_function_signature(id)?;
-        //     }
-        // }
+        let mut export_roots: Vec<FunctionId> = vec![];
+        for (function_id, function) in self.k1.function_iter() {
+            if function.linkage.is_exported() {
+                export_roots.push(function_id);
+            }
+        }
+        for function_id in &export_roots {
+            self.declare_llvm_function(*function_id)?;
+        }
 
-        let Some(main_function_id) = self.k1.get_main_function_id() else {
-            kbail!(
-                self.k1,
-                SpanId::NONE,
-                "Program {} has no main function",
-                self.k1.program_name()
-            );
+        let main_function = if self.k1.program_settings.executable {
+            let Some(main_function_id) = self.k1.get_main_function_id() else {
+                kbail!(
+                    self.k1,
+                    SpanId::NONE,
+                    "Program {} has no main function",
+                    self.k1.program_name()
+                );
+            };
+            let function_value = self.declare_llvm_function(main_function_id)?;
+            Some((main_function_id, function_value))
+        } else {
+            if export_roots.is_empty() && !any_exported_global {
+                kbail!(
+                    self.k1,
+                    SpanId::NONE,
+                    "Library {} exports no functions or globals",
+                    self.k1.program_name()
+                );
+            }
+            None
         };
 
-        let function_value = self.declare_llvm_function(main_function_id)?;
         self.k1.compile_all_pending_ir(SpanId::NONE)?;
         if self.k1.config.optimize {
-            ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
+            if let Some((main_function_id, _)) = main_function {
+                ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
+            }
+            for function_id in &export_roots {
+                ir::optimize_unit(self.k1, IrUnitId::Function(*function_id));
+            }
         }
 
         let mut inst_mappings = FxHashMap::with_capacity(512);
@@ -644,28 +668,30 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.codegen_function_body(&mut inst_mappings, fn_id)?;
         }
 
-        self.builder.unset_current_debug_location();
-        let entrypoint_fn_type =
-            self.ctx.i32_type().fn_type(&function_value.get_type().get_param_types(), false);
-        let entrypoint = self.llvm_module.add_function("main", entrypoint_fn_type, None);
-        let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
-        self.builder.position_at_end(entry_block);
-        let entrypoint_params = entrypoint.get_params();
-        let mut params: Vec<BasicMetadataValueEnum<'ctx>> =
-            Vec::with_capacity(entrypoint_params.len());
-        for p in &entrypoint_params {
-            params.push((*p).into());
+        if let Some((_, function_value)) = main_function {
+            self.builder.unset_current_debug_location();
+            let entrypoint_fn_type =
+                self.ctx.i32_type().fn_type(&function_value.get_type().get_param_types(), false);
+            let entrypoint = self.llvm_module.add_function("main", entrypoint_fn_type, None);
+            let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
+            self.builder.position_at_end(entry_block);
+            let entrypoint_params = entrypoint.get_params();
+            let mut params: Vec<BasicMetadataValueEnum<'ctx>> =
+                Vec::with_capacity(entrypoint_params.len());
+            for p in &entrypoint_params {
+                params.push((*p).into());
+            }
+            let res = self
+                .builder
+                .build_call(function_value, &params, "")
+                .unwrap()
+                .try_as_basic_value()
+                .basic();
+            match res {
+                None => self.builder.build_return(Some(&self.ctx.i32_type().const_zero())).unwrap(),
+                Some(v) => self.builder.build_return(Some(&v)).unwrap(),
+            };
         }
-        let res = self
-            .builder
-            .build_call(function_value, &params, "")
-            .unwrap()
-            .try_as_basic_value()
-            .basic();
-        match res {
-            None => self.builder.build_return(Some(&self.ctx.i32_type().const_zero())).unwrap(),
-            Some(v) => self.builder.build_return(Some(&v)).unwrap(),
-        };
 
         if self.has_reloadable_fns {
             self.emit_reload_descriptors();
@@ -3418,17 +3444,25 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         } else {
             match typed_function.linkage {
                 TyperLinkage::Standard => LlvmLinkage::Internal,
-                TyperLinkage::External { .. } => LlvmLinkage::External,
+                TyperLinkage::External { .. } | TyperLinkage::Exported { .. } => {
+                    LlvmLinkage::External
+                }
                 TyperLinkage::Intrinsic | TyperLinkage::LlvmIntrinsic(_) => LlvmLinkage::Internal,
             }
         };
-        let is_definition = is_dylib_root || llvm_linkage != LlvmLinkage::External;
+        let is_definition = is_dylib_root
+            || typed_function_linkage.is_exported()
+            || llvm_linkage != LlvmLinkage::External;
         let llvm_name = if is_dylib_root {
             self.reloadable_function_symbol(function_id)
         } else {
             match typed_function.linkage {
-                TyperLinkage::External { fn_name: Some(link_name), .. } => {
+                TyperLinkage::External { fn_name: Some(link_name), .. }
+                | TyperLinkage::Exported { fn_name: Some(link_name) } => {
                     self.k1.ident_str(link_name).to_string()
+                }
+                TyperLinkage::Exported { fn_name: None } => {
+                    self.k1.ident_str(typed_function.name).to_string()
                 }
                 _ => Cg::mangle(self.k1.make_qualified_name(
                     typed_function.scope,
@@ -4381,9 +4415,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let mode = if self.k1.program_settings.executable {
                 ThreadLocalMode::LocalExecTLSModel
             } else {
-                // We don't yet support dynamic library as a target
-                // So even libraries can use InitialExec
-                ThreadLocalMode::InitialExecTLSModel
+                ThreadLocalMode::GeneralDynamicTLSModel
             };
             global.set_thread_local_mode(Some(mode));
         }

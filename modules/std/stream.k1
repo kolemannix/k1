@@ -16,9 +16,9 @@ type pull[t] = either { chunk(span[span[t]]), pending, done, fail(string) }
 // `stop` (which must release everything the source owns).
 // Erase to a storable handle with `.to-dyn()`.
 ability source[impl t] {
-  fn start(self: *mut self, _waker: waker) { .{} }
+  fn start(self: *mut self, _waker: waker) {}
   fn next(self: *mut self): pull[t]
-  fn stop(self: *mut self) { .{} }
+  fn stop(self: *mut self) {}
 }
 
 // Consumes a stream chunk by chunk, then yields a single result value.

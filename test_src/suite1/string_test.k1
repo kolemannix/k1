@@ -18,19 +18,19 @@ fn simd-boundaries() {
   //         0123456789012345678901234567890123456789
   let s37 = "abcdefghijklmnopqrstuvwxyz0123456789!"
   assert-equals(s37.len(), 37)
-  assert-equals(s37.index-of('a'), 0)
-  assert-equals(s37.index-of('p'), 15)
-  assert-equals(s37.index-of('q'), 16)
-  assert-equals(s37.index-of('r'), 17)
-  assert-equals(s37.index-of('5'), 31)
-  assert-equals(s37.index-of('6'), 32) // in the 5-byte scalar tail
-  assert-equals(s37.index-of('!'), 36) // last byte
-  assert-equals(s37.index-of('#'), -1)
-  assert-equals(s37.drop(1).index-of('q'), 15) // misaligned base pointer
+  assert(s37.position('a') is :some 0)
+  assert(s37.position('p') is :some 15)
+  assert(s37.position('q') is :some 16)
+  assert(s37.position('r') is :some 17)
+  assert(s37.position('5') is :some 31)
+  assert(s37.position('6') is :some 32) // in the 5-byte scalar tail
+  assert(s37.position('!') is :some 36) // last byte
+  assert(s37.position('#') is :none)
+  assert(s37.drop(1).position('q') is :some 15) // misaligned base pointer
 
   let s16 = s37.take(16)
-  assert-equals(s16.index-of('p'), 15)
-  assert-equals(s16.index-of('q'), -1)
+  assert(s16.position('p') is :some 15)
+  assert(s16.position('q') is :none)
 
   assert("hello, this string exceeds sixteen".index-of-string("exceeds") is :some 19)
   assert(s37.index-of-string("pqr") is :some 15)  // straddles the chunk boundary
@@ -73,8 +73,10 @@ fn test() {
   assert("hello".index-of-string("x") is :none)
   assert("hello".index-of-string("hello") is :some 0)
 
-  assert("hello".index-of('e') == 1)
-  assert("hello".index-of('x') == -1)
+  assert("hello".position('e') is :some 1)
+  assert("hello".position('x') is :none)
+  assert("hello".contains('h'))
+  assert(not "hello".contains('z'))
 
   simd-boundaries()
 

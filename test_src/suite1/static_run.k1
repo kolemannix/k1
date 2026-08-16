@@ -42,8 +42,8 @@ fn test() {
 
   // Scalars
   assert(#static true)
-  assert(not (#static false))
-  assert(not (#static true == false))
+  assert(not #static false)
+  assert(not #static true == false)
   assert(#static .{} == .{})
   assert(#static 'a' == 'a')
   assert(not #static 'A' == 'a')
