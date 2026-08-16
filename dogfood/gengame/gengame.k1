@@ -1,0 +1,2609 @@
+// idea: sound — tiles as notes, reps = rhythm, shift = transposition (drift is a canon,
+// interference a phase pattern); space plays target melody then yours, hear the diff
+// before you see it; synth PCM into a raylib audio stream, render-layer only
+
+// idea: stochastic plants — a rule may carry variants and each expansion site picks
+// one by a visible per-level seed die ("weather"); fixed seed keeps expansion
+// deterministic so exact-match scoring still works, and rerolling the die shows the
+// same program growing a different individual — variation lives in the world, not
+// the program, which is the actual L-system lesson
+
+// Adding parameter-taking 'functions' to the seq world could be a great mechanic
+// - will teach parameterization and abstraction in a neat way
+
+// polished-game idea: always-on minimap of the max-growth target next to the growth scrub
+
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.lib("raylib", :static)
+  for ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"] {
+    m.link-args(["-framework", it])
+  }
+  m
+}
+
+ns(lib("raylib")) rl {
+  type color = { r: u8, g: u8, b: u8, a: u8 }
+  type vec2 = { x: f32, y: f32 }
+
+  fn(extern("InitWindow")) init(width: i32, height: i32, name: ptr)
+  fn(extern("CloseWindow")) close-window()
+  fn(extern("WindowShouldClose")) window-should-close(): bool
+
+  fn(extern("BeginDrawing")) begin-drawing()
+  fn(extern("EndDrawing")) end-drawing()
+  fn(extern("ClearBackground")) clear-background(color: color)
+
+  fn(extern("DrawText")) draw-text(text: ptr, pos-x: i32, pos-y: i32, font-size: i32, color: color)
+  fn(extern("MeasureText")) measure-text(text: ptr, font-size: i32): i32
+  fn(extern("DrawCircle")) draw-circle(center-x: i32, center-y: i32, radius: f32, color: color)
+  fn(extern("DrawCircleLines")) draw-circle-lines(center-x: i32, center-y: i32, radius: f32, color: color)
+  fn(extern("DrawRectangle")) draw-rectangle(x: i32, y: i32, w: i32, h: i32, color: color)
+  fn(extern("DrawRectangleLines")) draw-rectangle-lines(x: i32, y: i32, w: i32, h: i32, color: color)
+  fn(extern("DrawPoly")) draw-poly(center: vec2, sides: i32, radius: f32, rotation: f32, color: color)
+  fn(extern("DrawLineEx")) draw-line-ex(start: vec2, end: vec2, thick: f32, color: color)
+
+  fn(extern("TakeScreenshot")) take-screenshot(name: ptr)
+  fn(extern("SetTargetFPS")) set-target-fps(fps: i32)
+  fn(extern("GetFrameTime")) get-frame-time(): f32
+  fn(extern("IsKeyPressed")) is-key-pressed(key: i32): bool
+  fn(extern("IsMouseButtonPressed")) is-mouse-button-pressed(button: i32): bool
+  fn(extern("GetMouseX")) get-mouse-x(): i32
+  fn(extern("GetMouseY")) get-mouse-y(): i32
+}
+
+ns libm {
+  fn(extern("sinf")) sin(x: f32): f32
+  fn(extern("cosf")) cos(x: f32): f32
+}
+
+use core/fixlist
+
+let KEY-SPACE: i32 = 32
+let KEY-G: i32 = 71
+let KEY-N: i32 = 78
+let KEY-P: i32 = 80
+let KEY-R: i32 = 82
+let KEY-TAB: i32 = 258
+let KEY-BACKSPACE: i32 = 259
+let KEY-RIGHT: i32 = 262
+let KEY-LEFT: i32 = 263
+let MOUSE-LEFT: i32 = 0
+
+let W: i32 = 1100
+let H: i32 = 900
+
+let MAX-ROW-TOKENS: size = 26
+let MAX-EXPAND: size = 8192
+let MAX-DEPTH: size = 40
+let MAX-STACK: size = 64
+let MAX-BUDS: size = 256
+
+let ROW-Y0: i32 = 630
+let ROW-STEP: i32 = 54
+let ROW-H: i32 = 48
+let PALETTE-Y: i32 = 800
+let CHIP-W: i32 = 42
+let CHIP-H: i32 = 52
+
+let CANVAS-X: i32 = 280
+let CANVAS-Y: i32 = 64
+let CANVAS-W: i32 = 540
+let CANVAS-H: i32 = 540
+
+let PLANT-X: i32 = 24
+let PLANT-Y: i32 = 96
+let PLANT-W: i32 = 1052
+let PLANT-H: i32 = 512
+let PANE-GAP: i32 = 14
+let PLANT-SCALE-MAX: f32 = 72.0
+let GROW-RATE: f32 = 2.2
+let PLAY-RATE: f32 = 1.0
+let PLAY-IDLE: f32 = 0.0 - 1.0
+let SEL-NONE: size = 0 - 1
+let ANIM-RATE: f32 = 1.15
+let ANIM-LIT: f32 = 0.55
+let ANIM-SPAN: f32 = 0.45
+
+let VIEW-OVERLAY: u8 = 0
+let VIEW-SPLIT: u8 = 1
+let VIEW-SOLO: u8 = 2
+
+fn hsva(h: f32, s: f32, v: f32, a: u8): rl/color {
+  let hh = h / 60.0
+  let sector = hh.as[i32] % 6
+  let f = hh - hh.as[i32].as[f32]
+  let p = v * (1.0 - s)
+  let q = v * (1.0 - s * f)
+  let t = v * (1.0 - s * (1.0 - f))
+  let r: f32 = 0.0
+  let gg: f32 = 0.0
+  let b: f32 = 0.0
+  if sector == 0 { r = v; gg = t; b = p }
+  else if sector == 1 { r = q; gg = v; b = p }
+  else if sector == 2 { r = p; gg = v; b = t }
+  else if sector == 3 { r = p; gg = q; b = v }
+  else if sector == 4 { r = t; gg = p; b = v }
+  else { r = v; gg = p; b = q }
+  .{
+    r = (r * 255.0 + 0.5).as[i32].as[u8],
+    g = (gg * 255.0 + 0.5).as[i32].as[u8],
+    b = (b * 255.0 + 0.5).as[i32].as[u8],
+    a,
+  }
+}
+
+let C_INK: rl/color = hsva(232.5, 0.333, 0.094, 255)
+let C_PANEL: rl/color = hsva(231.4, 0.318, 0.173, 255)
+let C_PANEL-ACTIVE: rl/color = hsva(229.1, 0.333, 0.259, 255)
+let C_CHIP-BG: rl/color = hsva(229.1, 0.297, 0.290, 255)
+let C_BORDER: rl/color = hsva(228.0, 0.263, 0.373, 255)
+let C_ACCENT: rl/color = hsva(275.2, 0.522, 1.0, 255)
+let C_TEXT-MAIN: rl/color = hsva(228.0, 0.043, 0.902, 255)
+let C_TEXT-DIM: rl/color = hsva(225.0, 0.133, 0.588, 255)
+let C_GOOD: rl/color = hsva(140.0, 0.522, 0.902, 255)
+let C_WARN: rl/color = hsva(46.7, 0.75, 0.941, 255)
+let C_BAD: rl/color = hsva(0.0, 0.625, 0.941, 255)
+let C_GHOST: rl/color = hsva(225.0, 0.125, 0.627, 55)
+let C_GHOST-LIT: rl/color = hsva(225.0, 0.125, 0.627, 150)
+let C_ACCENT-B: rl/color = hsva(108.6, 0.447, 0.922, 255)
+let C_ACCENT-DIM: rl/color = hsva(275.2, 0.522, 1.0, 140)
+let C_VINE: rl/color = hsva(147.7, 0.684, 0.745, 255)
+let C_VINE-TIP: rl/color = hsva(92.7, 0.44, 0.980, 255)
+let C_BLOOM: rl/color = hsva(330.0, 0.45, 1.0, 255)
+
+type shape-kind = either(u8) { circle, square, tri, diamond }
+type tile-style = { kind: shape-kind, color: rl/color }
+
+let TILES: array[tile-style, 4] = [
+  .{ kind = :circle, color = hsva(356.1, 0.660, 0.922, 255) },
+  .{ kind = :square, color = hsva(218.7, 0.646, 0.941, 255) },
+  .{ kind = :tri, color = hsva(140.0, 0.571, 0.824, 255) },
+  .{ kind = :diamond, color = hsva(45.5, 0.674, 0.961, 255) },
+]
+
+type token = either { sym(u8), rep(u8), close, name(u8), callo(u8), again, shift, mir, mark, hole }
+
+type world-kind = either(u8) { seq, plant, grid }
+
+type level = {
+  name: string,
+  world: world-kind,
+  target: string,
+  target-a: string,
+  target-b: string,
+  given: string,
+  given-a: string,
+  given-b: string,
+  start: string,
+  syms: string,
+  ndefs: u8,
+  par: size,
+  limit: size,
+  growth: u8,
+  width: u8,
+  angle: f32,
+}
+
+
+let LEVELS: array[level, 40] = [
+  .{ name = "stalk", world = :seq, target = "7(R)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "R", ndefs = 0, par = 2, limit = 4, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "couplet", world = :seq, target = "5(RB)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RB", ndefs = 0, par = 3, limit = 5, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "remainder", world = :seq, target = "4(GY)G", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "GY", ndefs = 0, par = 4, limit = 6, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "pack", world = :seq, target = "6(RB)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "RBRBRBRBRBRB", syms = "RB", ndefs = 0, par = 3, limit = 12, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "two levels", world = :seq, target = "2(3(RGGB)Y)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RBGY", ndefs = 1, par = 7, limit = 9, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "the exception", world = :seq, target = "4(RG)B4(RG)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RBG", ndefs = 1, par = 7, limit = 9, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "abstraction", world = :seq, target = "2(RGGBYRGGBG)RGGB", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RBGY", ndefs = 2, par = 11, limit = 13, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "prune", world = :seq, target = "aYaYa", target-a = "RRGGBB", target-b = "", given = "", given-a = "", given-b = "", start = "RRGGBBYRRGGBBYRRGGBB", syms = "RBGY", ndefs = 1, par = 11, limit = 20, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "wrapper", world = :seq, target = "a(G)a(Y)a(B)", target-a = "RR_BB", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RBGY_", ndefs = 1, par = 12, limit = 14, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "onion", world = :seq, target = "a(a(a(G)))", target-a = "RG_BY", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RBGY_", ndefs = 1, par = 10, limit = 12, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "drift", world = :seq, target = "4(R>)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "R>", ndefs = 0, par = 3, limit = 3, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "interference", world = :seq, target = "4(RB>)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RB>", ndefs = 0, par = 4, limit = 6, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "canon", world = :seq, target = "a(RGB)a(YYR)a(GRY)a(BBG)", target-a = "_>_", target-b = "", given = "a(RGB)a(YYR)a(GRY)a(BBG)", given-a = "", given-b = "", start = "", syms = "RBGY_>", ndefs = 1, par = 20, limit = 22, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "reflection", world = :seq, target = "M(RGGB)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RBGM", ndefs = 0, par = 5, limit = 7, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "rainbow", world = :seq, target = "M(4(R>))", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "R>M", ndefs = 0, par = 4, limit = 6, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "nesting", world = :seq, target = "a", target-a = "RaB", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RB", ndefs = 1, par = 5, limit = 7, growth = 9, width = 0, angle = 0.0 },
+  .{ name = "steps", world = :seq, target = "a", target-a = "bBa", target-b = "Rb", given = "a", given-a = "", given-b = "Rb", start = "", syms = "RB", ndefs = 2, par = 8, limit = 9, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "staircase", world = :seq, target = "a", target-a = "b>a", target-b = "Rb", given = "", given-a = "", given-b = "", start = "", syms = "R>", ndefs = 2, par = 8, limit = 9, growth = 5, width = 0, angle = 0.0 },
+  .{ name = "stripes", world = :grid, target = "2(4(RG))", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RG", ndefs = 0, par = 4, limit = 6, growth = 4, width = 4, angle = 0.0 },
+  .{ name = "checker", world = :grid, target = "2(6(RG))R", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RG", ndefs = 0, par = 5, limit = 7, growth = 4, width = 5, angle = 0.0 },
+  .{ name = "twill", world = :grid, target = "5(RGGG)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RG", ndefs = 0, par = 5, limit = 7, growth = 4, width = 5, angle = 0.0 },
+  .{ name = "sunset", world = :grid, target = "4(4(R)>)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "R>", ndefs = 0, par = 4, limit = 6, growth = 4, width = 4, angle = 0.0 },
+  .{ name = "sprout", world = :plant, target = "6(F)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "F", ndefs = 0, par = 2, limit = 4, growth = 4, width = 0, angle = 30.0 },
+  .{ name = "zigzag", world = :plant, target = "4(F+F-)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "F+-", ndefs = 0, par = 5, limit = 7, growth = 4, width = 0, angle = 45.0 },
+  .{ name = "reed", world = :plant, target = "6(F!)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "F!", ndefs = 0, par = 3, limit = 5, growth = 4, width = 0, angle = 30.0 },
+  .{ name = "backtrack", world = :plant, target = "F[+F]F", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "F+-[]", ndefs = 0, par = 5, limit = 5, growth = 4, width = 0, angle = 45.0 },
+  .{ name = "tree", world = :plant, target = "3(F[+F][-F])", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "F+-[]", ndefs = 1, par = 8, limit = 10, growth = 4, width = 0, angle = 25.0 },
+  .{ name = "topiary", world = :plant, target = "4(F[+FF])", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "F[+FF]F[+FF]F[+FF]F[+FF]", syms = "F+-[]", ndefs = 0, par = 6, limit = 20, growth = 4, width = 0, angle = 25.0 },
+  .{ name = "coastline", world = :plant, target = "3(a(F)--)", target-a = "~+~--~+~", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "F+-", ndefs = 1, par = 14, limit = 16, growth = 4, width = 0, angle = 60.0 },
+  .{ name = "arch", world = :plant, target = "a(F)", target-a = "+~--~+", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "F+-", ndefs = 1, par = 9, limit = 11, growth = 8, width = 0, angle = 45.0 },
+  .{ name = "island", world = :plant, target = "4(a(F)-)", target-a = "~-~+~+~~-~-~+~", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "F+-", ndefs = 1, par = 19, limit = 21, growth = 3, width = 0, angle = 90.0 },
+  .{ name = "fork", world = :plant, target = "a", target-a = "F[+a][-a]", target-b = "", given = "a", given-a = "", given-b = "", start = "", syms = "F+-[]", ndefs = 1, par = 9, limit = 11, growth = 4, width = 0, angle = 25.0 },
+  .{ name = "thicket", world = :plant, target = "a", target-a = "F[+a]a", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "F+-[]", ndefs = 1, par = 7, limit = 9, growth = 4, width = 0, angle = 25.0 },
+  .{ name = "blossom", world = :plant, target = "a", target-a = "F[+a][-a]*", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "F+-[]*", ndefs = 1, par = 10, limit = 12, growth = 4, width = 0, angle = 30.0 },
+  .{ name = "bonsai", world = :plant, target = "a", target-a = "F![+a][-a]", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "F+-[]!", ndefs = 1, par = 10, limit = 12, growth = 5, width = 0, angle = 22.0 },
+  .{ name = "tendril", world = :plant, target = "a", target-a = "Fs+a", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "F+-s", ndefs = 1, par = 6, limit = 8, growth = 16, width = 0, angle = 40.0 },
+  .{ name = "dragon", world = :plant, target = "Fa", target-a = "a+bF+", target-b = "-Fa-b", given = "", given-a = "", given-b = "", start = "", syms = "F+-", ndefs = 2, par = 14, limit = 16, growth = 8, width = 0, angle = 90.0 },
+  .{ name = "maze", world = :plant, target = "a", target-a = "-bF+aFa+Fb-", target-b = "+aF-bFb-Fa+", given = "", given-a = "", given-b = "", start = "", syms = "F+-", ndefs = 2, par = 25, limit = 27, growth = 5, width = 0, angle = 90.0 },
+  .{ name = "bracken", world = :plant, target = "a", target-a = "F[+a]F[-a]F", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "F+-[]", ndefs = 1, par = 11, limit = 13, growth = 5, width = 0, angle = 25.7 },
+  .{ name = "fern", world = :plant, target = "a", target-a = "Fb+[[a]-a]-Fb[-Fba]+a", target-b = "Fbb", given = "", given-a = "", given-b = "", start = "", syms = "F+-[]", ndefs = 2, par = 24, limit = 26, growth = 5, width = 0, angle = 25.0 },
+]
+
+type game = {
+  perm: *core/arena,
+  level: size,
+  active: u8,
+  view: u8,
+  preview-growth: u8,
+  grow-t: f32,
+  play: f32,
+  play-src: u16,
+  sel-a: size,
+  sel-b: size,
+  sel-anchor: size,
+  sel-live: bool,
+  anim-t: f32,
+  anim-row: u8,
+  anim-len: size,
+  anim-repl: ?token,
+  anim-before: fixlist[token, MAX-ROW-TOKENS],
+  anim-hits: fixlist[size, MAX-ROW-TOKENS],
+  def-a: list[token],
+  def-b: list[token],
+  out: list[token],
+}
+
+fn cur-level(context g: *mut game)(): level {
+  LEVELS.get(g.level)
+}
+
+fn level-index(name: string): size {
+  for i in 0.until(LEVELS.len()) {
+    if LEVELS.get(i).name == name { return i }
+  }
+  crash("no level named $name")
+}
+
+fn row-of(context g: *mut game)(i: u8): *mut list[token] {
+  assert(i <= 2)
+  if i == 0 g.def-a.& else if i == 1 g.def-b.& else g.out.&
+}
+
+fn row-enabled(context g: *mut game)(i: size): bool {
+  i == 2 or i < cur-level().ndefs.as[size]
+}
+
+fn row-editable(context g: *mut game)(i: size): bool {
+  let lv = cur-level()
+  if i == 0 { return row-enabled(i) and lv.given-a.len() == 0 }
+  if i == 1 { return row-enabled(i) and lv.given-b.len() == 0 }
+  lv.given.len() == 0
+}
+
+fn load-level(context g: *mut game)(i: size) {
+  g.level = i
+  let lv = LEVELS.get(i)
+  g.preview-growth = if not level-recursive(lv) { lv.growth } else if lv.world is :plant { 2 } else { 1 }
+  g.grow-t = 0.0
+  drop-sel()
+  g.anim-t = 1.0
+  g.def-a.clear()
+  g.def-b.clear()
+  g.out.clear()
+  for t in parse-text(lv.world, if lv.given.len() > 0 lv.given else lv.start) { g.out.push-in(g.perm, t) }
+  for t in parse-text(lv.world, lv.given-a) { g.def-a.push-in(g.perm, t) }
+  for t in parse-text(lv.world, lv.given-b) { g.def-b.push-in(g.perm, t) }
+  g.active = 2
+  if not row-editable(2) {
+    g.active = if row-editable(0) { 0 } else { 1 }
+  }
+}
+
+fn world-alphabet(w: world-kind): string {
+  if w is :plant { "F+-[]!*s" } else { "RBGY" }
+}
+
+fn level-recursive(lv: level): bool {
+  lv.target-a.contains('a') or lv.target-a.contains('b') or lv.target-a.contains('~')
+    or lv.target-b.contains('a') or lv.target-b.contains('b') or lv.target-b.contains('~')
+}
+
+fn sym-index(alpha: string, c: char): ?u8 {
+  for i in 0.until(alpha.len()) {
+    if alpha.get(i) == c { return :some(i.as[u8]) }
+  }
+  :none
+}
+
+fn parse-text(world: world-kind, text: string): list[token] {
+  let alpha = world-alphabet(world)
+  let toks: list[token] = list/with-capacity(text.len())
+  let i: size = 0
+  while i < text.len() {
+    let c = text.get(i)
+    if c.is-ascii-digit() {
+      assert(i + 1 < text.len() and text.get(i + 1) == '(')
+      toks.push(:rep(c.to-ascii-digit().!))
+      i = i + 2
+    } else {
+      if c == ')' { toks.push(:close) }
+      else if c == '>' { toks.push(:shift) }
+      else if c == '~' { toks.push(:again) }
+      else if c == 'M' {
+        assert(i + 1 < text.len() and text.get(i + 1) == '(')
+        toks.push(:mir)
+        i = i + 1
+      }
+      else if sym-index(alpha, c) is :some(s) { toks.push(:sym(s)) }
+      else if c == 'a' or c == 'b' {
+        let d: u8 = if c == 'a' 0 else 1
+        if i + 1 < text.len() and text.get(i + 1) == '(' {
+          toks.push(:callo(d))
+          i = i + 1
+        } else {
+          toks.push(:name(d))
+        }
+      }
+      else if c == '_' { toks.push(:hole) }
+      else { crash("bad target char") }
+      i = i + 1
+    }
+  }
+  toks
+}
+
+fn is-opener(t: token): bool {
+  t is :rep(_) or t is :mir or t is :mark or t is :callo(_)
+}
+
+fn has-hole(toks: span[token]): bool {
+  for t in toks {
+    if t is :hole { return true }
+  }
+  false
+}
+
+fn find-close(toks: span[token], from: size): size {
+  let depth: size = 0
+  let i = from
+  while i < toks.len() {
+    let t = toks.get(i)
+    if is-opener(t) { depth = depth + 1 }
+    else if t is :close {
+      if depth == 0 { return i }
+      depth = depth - 1
+    }
+    i = i + 1
+  }
+  toks.len()
+}
+
+type bud = { at: size, d: u8, socket: bool }
+type expansion = {
+  syms: fixlist[u8, MAX-EXPAND],
+  gens: fixlist[u8, MAX-EXPAND],
+  srcs: fixlist[u16, MAX-EXPAND],
+  buds: fixlist[bud, MAX-BUDS],
+  shifts: fixlist[size, MAX-BUDS],
+  tail: size,
+  capped: bool,
+}
+
+let SRC-NONE: u16 = 65535
+
+fn src-pack(row: u8, idx: size): u16 {
+  if idx >= 4096 { return SRC-NONE }
+  row.as[u16] * 4096 + idx.as[u16]
+}
+
+fn src-row(s: u16): size {
+  (s / 4096).as[size]
+}
+
+fn src-idx(s: u16): size {
+  (s % 4096).as[size]
+}
+
+type expand-ctx = {
+  def-a: span[token],
+  def-b: span[token],
+  nsyms: size,
+  growth: size,
+  shift: size,
+  push-sym: size,
+  pop-sym: size,
+  bdepth: size,
+  args: fixlist[span[token], MAX-STACK],
+  arg-srcs: fixlist[u16, MAX-STACK],
+}
+
+fn close-scope(ctx: *mut expand-ctx, e: *mut expansion, d0: size, ndepth: size) {
+  while ctx.bdepth > d0 {
+    ctx.bdepth = ctx.bdepth - 1
+    if e.syms.len() < MAX-EXPAND {
+      e.syms.push(ctx.pop-sym.as[u8])
+      e.gens.push(if ndepth > 255 255u8 else ndepth.as[u8])
+      e.srcs.push(SRC-NONE)
+    }
+  }
+}
+
+fn expand-toks(ctx: *mut expand-ctx, toks: span[token], self: span[token], self-d: u8, e: *mut expansion, depth: size, ndepth: size, floor: size, row: u8, base: size) {
+  if depth > MAX-DEPTH { return }
+  if depth > 25 { println("deep depth=$depth ndepth=$ndepth row=$row toks=${toks.len()}") }
+  let i: size = 0
+  while i < toks.len() {
+    if e.syms.len() >= MAX-EXPAND { return }
+    let t = toks.get(i)
+    t is {
+      :sym(s) -> {
+        assert(s.as[size] < ctx.nsyms)
+        let v = ((s.as[size] + ctx.shift) % ctx.nsyms).as[u8]
+        let gv = if ndepth > 255 255u8 else ndepth.as[u8]
+        let sv = src-pack(row, base + i)
+        if v.as[size] == ctx.pop-sym {
+          if ctx.bdepth > floor {
+            ctx.bdepth = ctx.bdepth - 1
+            e.syms.push(v)
+            e.gens.push(gv)
+            e.srcs.push(sv)
+          }
+        } else {
+          if v.as[size] == ctx.push-sym { ctx.bdepth = ctx.bdepth + 1 }
+          e.syms.push(v)
+          e.gens.push(gv)
+          e.srcs.push(sv)
+        }
+        i = i + 1
+      },
+      :shift -> {
+        ctx.shift = ctx.shift + 1
+        if e.shifts.len() < MAX-BUDS { e.shifts.push(e.syms.len()) }
+        i = i + 1
+      },
+      :name(d) -> {
+        let body = if d == 0 ctx.def-a else ctx.def-b
+        if has-hole(body) {
+          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = e.syms.len(), d, socket = true }) }
+        } else if ndepth < ctx.growth {
+          let d0 = ctx.bdepth
+          let s0 = ctx.shift
+          ctx.args.push(toks.slice(i, i))
+          ctx.arg-srcs.push(SRC-NONE)
+          expand-toks(ctx, body, body, d, e, depth + 1, ndepth + 1, d0, d, 0)
+          close-scope(ctx, e, d0, ndepth)
+          ctx.shift = s0
+          let _ = ctx.args.pop()
+          let _ = ctx.arg-srcs.pop()
+        } else {
+          e.capped = true
+          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = e.syms.len(), d, socket = false }) }
+        }
+        i = i + 1
+      },
+      :callo(d) -> {
+        let close = find-close(toks, i + 1)
+        let arg = toks.slice(i + 1, close)
+        let body = if d == 0 ctx.def-a else ctx.def-b
+        if has-hole(body) and arg.len() == 0 {
+          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = e.syms.len(), d, socket = true }) }
+        } else if ndepth < ctx.growth {
+          let d0 = ctx.bdepth
+          let s0 = ctx.shift
+          ctx.args.push(arg)
+          ctx.arg-srcs.push(src-pack(row, base + i + 1))
+          expand-toks(ctx, body, body, d, e, depth + 1, ndepth + 1, d0, d, 0)
+          close-scope(ctx, e, d0, ndepth)
+          ctx.shift = s0
+          let _ = ctx.args.pop()
+          let _ = ctx.arg-srcs.pop()
+        } else {
+          e.capped = true
+          expand-toks(ctx, arg, self, self-d, e, depth + 1, ndepth, floor, row, base + i + 1)
+        }
+        i = if close < toks.len() close + 1 else close
+      },
+      :hole -> {
+        let filled = ctx.args.len() > 0 and ctx.args.get(ctx.args.len() - 1).len() > 0
+        if not filled {
+          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = e.syms.len(), d = self-d, socket = true }) }
+        } else if ctx.args.pop() is :some(arg) {
+          let asrc = if ctx.arg-srcs.pop() is :some(v) { v } else { SRC-NONE }
+          expand-toks(ctx, arg, self, self-d, e, depth + 1, ndepth, floor, src-row(asrc).as[u8], src-idx(asrc))
+          ctx.args.push(arg)
+          ctx.arg-srcs.push(asrc)
+        }
+        i = i + 1
+      },
+      :again -> {
+        if ndepth < ctx.growth {
+          let d0 = ctx.bdepth
+          let s0 = ctx.shift
+          expand-toks(ctx, self, self, self-d, e, depth + 1, ndepth + 1, d0, self-d, 0)
+          close-scope(ctx, e, d0, ndepth)
+          ctx.shift = s0
+        } else if ctx.args.len() > 0 and ctx.args.get(ctx.args.len() - 1).len() > 0 {
+          e.capped = true
+          if ctx.args.pop() is :some(arg) {
+            let asrc = if ctx.arg-srcs.pop() is :some(v) { v } else { SRC-NONE }
+            expand-toks(ctx, arg, self, self-d, e, depth + 1, ndepth, floor, src-row(asrc).as[u8], src-idx(asrc))
+            ctx.args.push(arg)
+            ctx.arg-srcs.push(asrc)
+          }
+        } else {
+          e.capped = true
+          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = e.syms.len(), d = self-d, socket = false }) }
+        }
+        i = i + 1
+      },
+      :rep(n) -> {
+        let close = find-close(toks, i + 1)
+        let inner = toks.slice(i + 1, close)
+        for 0.until(n) {
+          expand-toks(ctx, inner, self, self-d, e, depth + 1, ndepth, floor, row, base + i + 1)
+        }
+        i = if close < toks.len() close + 1 else close
+      },
+      :mir -> {
+        let close = find-close(toks, i + 1)
+        let inner = toks.slice(i + 1, close)
+        let at0 = e.syms.len()
+        let bud0 = e.buds.len()
+        expand-toks(ctx, inner, self, self-d, e, depth + 1, ndepth, floor, row, base + i + 1)
+        let n = e.syms.len() - at0
+        for j in 0.until(n) {
+          if e.syms.len() < MAX-EXPAND {
+            e.syms.push(e.syms.get(at0 + n - 1 - j))
+            e.gens.push(e.gens.get(at0 + n - 1 - j))
+            e.srcs.push(e.srcs.get(at0 + n - 1 - j))
+          }
+        }
+        let bud1 = e.buds.len()
+        let j = bud1
+        while j > bud0 {
+          j = j - 1
+          let b = e.buds.get(j)
+          if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = at0 + n + (n - (b.at - at0)), d = b.d, socket = b.socket }) }
+        }
+        i = if close < toks.len() close + 1 else close
+      },
+      :close -> {
+        i = i + 1
+      },
+      :mark -> {
+        i = i + 1
+      }
+    }
+  }
+}
+
+fn expand[ca: as-span[t = token], cb: as-span[t = token], cs: as-span[t = token]](world: world-kind, def-a: ca, def-b: cb, seed: cs, seed-d: u8, growth: size): expansion {
+  let seed-span = seed.as-span()
+  let plant = world is :plant
+  let ctx: expand-ctx = .{
+    def-a = def-a.as-span(),
+    def-b = def-b.as-span(),
+    nsyms = world-alphabet(world).len(),
+    growth,
+    shift = 0,
+    push-sym = if plant { 3 } else { 255 },
+    pop-sym = if plant { 4 } else { 255 },
+    bdepth = 0,
+    args = fixlist/uninit(),
+    arg-srcs = fixlist/uninit(),
+  }
+  let e: expansion = .{ syms = fixlist/uninit(), gens = fixlist/uninit(), srcs = fixlist/uninit(), buds = fixlist/uninit(), shifts = fixlist/uninit(), tail = 0, capped = false }
+  expand-toks(ctx.&, seed-span, seed-span, seed-d, e.&, 0, 0, 0, seed-d, 0)
+  let pre = e.syms.len()
+  close-scope(ctx.&, e.&, 0, 0)
+  e.tail = e.syms.len() - pre
+  e
+}
+
+fn expand-player(context g: *mut game)(growth: size): expansion {
+  expand-row(2, growth)
+}
+
+fn expand-row(context g: *mut game)(row: u8, growth: size): expansion {
+  expand(cur-level().world, g.def-a, g.def-b, row-of(row), row, growth)
+}
+
+fn expand-target(lv: level, growth: size): expansion {
+  let ta = parse-text(lv.world, lv.target-a)
+  let tb = parse-text(lv.world, lv.target-b)
+  let seed = parse-text(lv.world, lv.target)
+  expand(lv.world, ta, tb, seed, 2, growth)
+}
+
+type gview = { cur: size, kf: size, unfurl: f32 }
+
+fn growth-view(context g: *mut game)(): gview {
+  let full = cur-level().growth.as[size]
+  let cur = g.grow-t.as[i32].as[size]
+  if cur >= full { return .{ cur = full, kf = full, unfurl = 1.0 } }
+  let u = g.grow-t - cur.as[f32]
+  if u < 0.001 { return .{ cur, kf = cur, unfurl = 1.0 } }
+  .{ cur, kf = cur + 1, unfurl = u }
+}
+
+fn same-at-gen(a: *expansion, b: *expansion, k: u8): bool {
+  let ia: size = 0
+  let ib: size = 0
+  let na = a.syms.len()
+  let nb = b.syms.len()
+  while ia < na or ib < nb {
+    while ia < na and a.gens.get(ia) > k { ia = ia + 1 }
+    while ib < nb and b.gens.get(ib) > k { ib = ib + 1 }
+    if ia >= na or ib >= nb { break }
+    if a.syms.get(ia) != b.syms.get(ib) { return false }
+    ia = ia + 1
+    ib = ib + 1
+  }
+  ia >= na and ib >= nb
+}
+
+fn row-balance(row: *mut list[token]): size {
+  let bal: size = 0
+  for t in row {
+    if is-opener(t) { bal = bal + 1 }
+    else if t is :close and bal > 0 { bal = bal - 1 }
+  }
+  bal
+}
+
+fn genes-of(context g: *mut game)(row: *mut list[token]): size {
+  let plant = cur-level().world is :plant
+  let n: size = 0
+  for t in row {
+    if t is :close { continue }
+    if t is :mark { continue }
+    if plant and t is :sym(s) {
+      if s == 4 { continue }
+    }
+    n = n + 1
+  }
+  n
+}
+
+fn score-of(context g: *mut game)(): size {
+  let s = genes-of(g.out.&)
+  if g.def-a.len() > 0 { s = s + 1 + genes-of(g.def-a.&) }
+  if g.def-b.len() > 0 { s = s + 1 + genes-of(g.def-b.&) }
+  s
+}
+
+type turtle-pos = { x: f32, y: f32, ang: f32, w: f32, stride: f32 }
+type turtle-mark = { pos: turtle-pos, seg0: size }
+type seg = { ax: f32, ay: f32, bx: f32, by: f32, w: f32, gen: u8 }
+type bounds = { minx: f32, miny: f32, maxx: f32, maxy: f32 }
+type bud-pt = { x: f32, y: f32, d: u8, socket: bool }
+type bloom-pt = { x: f32, y: f32, r: f32 }
+type turtle-out = { segs: fixlist[seg, MAX-EXPAND], buds: fixlist[bud-pt, MAX-BUDS], blooms: fixlist[bloom-pt, MAX-BUDS], end: turtle-pos, marks: fixlist[turtle-mark, MAX-STACK] }
+
+let RAD-PER-DEG: f32 = 0.017453292
+
+fn bud-tip(x: f32, y: f32, ang: f32, b: bud): bud-pt {
+  .{ x = x + libm/cos(ang) * 0.4, y = y + libm/sin(ang) * 0.4, d = b.d, socket = b.socket }
+}
+
+fn bud-color(d: u8): rl/color {
+  if d == 0 C_ACCENT else if d == 1 C_ACCENT-B else C_WARN
+}
+
+fn turtle-walk(e: *expansion, angle-deg: f32, frontier: u8, unfurl: f32): turtle-out {
+  let seq = e.syms.&
+  let buds = e.buds.&
+  let n = seq.len() - e.tail
+  let segs: fixlist[seg, MAX-EXPAND] = fixlist/uninit()
+  let bud-pts: fixlist[bud-pt, MAX-BUDS] = fixlist/uninit()
+  let blooms: fixlist[bloom-pt, MAX-BUDS] = fixlist/uninit()
+  let bi: size = 0
+  let stack: fixlist[turtle-mark, MAX-STACK] = fixlist/uninit()
+  let x: f32 = 0.0
+  let y: f32 = 0.0
+  let ang: f32 = -1.5707964
+  let wid: f32 = 1.0
+  let stride: f32 = 1.0
+  let step = angle-deg * RAD-PER-DEG
+  let anchored = false
+  for i in 0.until(n) {
+    if seq.get(i) == 0 and e.gens.get(i) < frontier { anchored = true; break }
+  }
+  for s in seq {
+    if it-index >= n { break }
+    while bi < buds.len() and buds.get(bi).at == it-index {
+      bud-pts.push(bud-tip(x, y, ang, buds.get(bi)))
+      bi = bi + 1
+    }
+    assert(s <= 7)
+    let gen = e.gens.get(it-index)
+    let w = if gen >= frontier { unfurl } else { 1.0 }
+    if s == 0 {
+      let lw = if anchored { w } else { 1.0 }
+      if lw > 0.0 {
+        let nx = x + libm/cos(ang) * lw * stride
+        let ny = y + libm/sin(ang) * lw * stride
+        segs.push(.{ ax = x, ay = y, bx = nx, by = ny, w = wid, gen })
+        x = nx
+        y = ny
+      }
+    } else if s == 1 {
+      ang = ang - step * w
+    } else if s == 2 {
+      ang = ang + step * w
+    } else if s == 3 {
+      if stack.len() < MAX-STACK {
+        stack.push(.{ pos = .{ x, y, ang, w = wid, stride }, seg0 = segs.len() })
+      }
+    } else if s == 4 {
+      if stack.pop() is :some(m) {
+        x = m.pos.x
+        y = m.pos.y
+        ang = m.pos.ang
+        wid = m.pos.w
+        stride = m.pos.stride
+      }
+    } else if s == 5 {
+      wid = wid * (1.0 - 0.3 * w)
+    } else if s == 6 {
+      if w > 0.02 and blooms.len() < MAX-BUDS {
+        blooms.push(.{ x, y, r = 0.13 * w * stride })
+      }
+    } else {
+      stride = stride * (1.0 - 0.15 * w)
+    }
+  }
+  while bi < buds.len() {
+    bud-pts.push(bud-tip(x, y, ang, buds.get(bi)))
+    bi = bi + 1
+  }
+  .{ segs, buds = bud-pts, blooms, end = .{ x, y, ang, w = wid, stride }, marks = stack }
+}
+
+fn grow-bounds(b: *mut bounds, segs: *fixlist[seg, MAX-EXPAND]) {
+  for s in segs {
+    if s.ax < b.minx { b.minx = s.ax }
+    if s.ax > b.maxx { b.maxx = s.ax }
+    if s.ay < b.miny { b.miny = s.ay }
+    if s.ay > b.maxy { b.maxy = s.ay }
+    if s.bx < b.minx { b.minx = s.bx }
+    if s.bx > b.maxx { b.maxx = s.bx }
+    if s.by < b.miny { b.miny = s.by }
+    if s.by > b.maxy { b.maxy = s.by }
+  }
+}
+
+type chip-act = either { tok(token), scale(u8), fold, extract, del, clr }
+type chip = { x: i32, y: i32, act: chip-act }
+
+fn build-palette(context g: *mut game)(): list[chip] {
+  let lv = cur-level()
+  let alpha = world-alphabet(lv.world)
+  let chips: list[chip] = list/with-capacity(24)
+  let x: i32 = 24
+  let y = PALETTE-Y
+  for i in 0.until(lv.syms.len()) {
+    let c = lv.syms.get(i)
+    if c == '>' {
+      chips.push(.{ x, y, act = :tok(:shift) })
+    } else if c == 'M' {
+      chips.push(.{ x, y, act = :tok(:mir) })
+    } else if c == '_' {
+      chips.push(.{ x, y, act = :tok(:hole) })
+    } else {
+      let s = sym-index(alpha, c)
+      assert(s.is-some())
+      chips.push(.{ x, y, act = :tok(:sym(s.!)) })
+    }
+    x = x + CHIP-W + 5
+  }
+  x = x + 14
+  chips.push(.{ x, y, act = :tok(:mark) })
+  x = x + CHIP-W + 5
+  for d in 2.until(8) {
+    chips.push(.{ x, y, act = :scale(d.as[u8]) })
+    x = x + CHIP-W + 5
+  }
+  chips.push(.{ x, y, act = :fold })
+  x = x + CHIP-W + 5
+  if empty-def-row() != 255 {
+    chips.push(.{ x, y, act = :extract })
+    x = x + CHIP-W + 5
+  }
+  x = x + 14
+  for d in 0.until(lv.ndefs) {
+    if d.as[u8] == g.active { continue }
+    chips.push(.{ x, y, act = :tok(:name(d.as[u8])) })
+    x = x + CHIP-W + 5
+  }
+  if g.active != 2 {
+    chips.push(.{ x, y, act = :tok(:again) })
+    x = x + CHIP-W + 5
+  }
+  x = x + 14
+  chips.push(.{ x, y, act = :del })
+  x = x + CHIP-W + 5
+  chips.push(.{ x, y, act = :clr })
+  assert(x + CHIP-W <= W)
+  chips
+}
+
+fn seal-call(context g: *mut game)(row: *mut list[token], d: u8): bool {
+  let depth: size = 0
+  let i = row.len()
+  while i > 0 {
+    i = i - 1
+    let t = row.get(i)
+    if t is :close { depth = depth + 1 }
+    else if is-opener(t) {
+      if depth == 0 {
+        if t is :mark {
+          row.set(i, :callo(d))
+          if row.len() < MAX-ROW-TOKENS { row.push-in(g.perm, :close) }
+          return true
+        }
+        return false
+      }
+      depth = depth - 1
+    }
+  }
+  false
+}
+
+fn wrap-sel(context g: *mut game)(row: *mut list[token], opener: token): bool {
+  require sel-closed(row) is :some(s) else return false
+  if row.len() + 2 > MAX-ROW-TOKENS { return false }
+  let keep: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
+  for t in row { keep.push(t) }
+  let n = keep.len()
+  row.clear()
+  for i in 0.until(s.a) { row.push-in(g.perm, keep.get(i)) }
+  row.push-in(g.perm, opener)
+  for i in s.a.until(s.b) { row.push-in(g.perm, keep.get(i)) }
+  row.push-in(g.perm, :close)
+  for i in s.b.until(n) { row.push-in(g.perm, keep.get(i)) }
+  if score-of() > cur-level().limit {
+    row.clear()
+    for t in keep.& { row.push-in(g.perm, t) }
+    return false
+  }
+  drop-sel()
+  true
+}
+
+fn try-add(context g: *mut game)(t: token) {
+  if t is :again and g.active == 2 { return }
+  let row = row-of(g.active)
+  if row.len() >= MAX-ROW-TOKENS { return }
+  if t is :mir and sel-closed(row).is-some() {
+    let _ = wrap-sel(row, :mir)
+    return
+  }
+  let callo-ok = cur-level().syms.contains('_') or level-recursive(cur-level())
+  if t is :name(d) and callo-ok {
+    if sel-closed(row).is-some() {
+      let _ = wrap-sel(row, :callo(d))
+      return
+    }
+    if seal-call(row, d) { return }
+  }
+  row.push-in(g.perm, t)
+  if score-of() > cur-level().limit { row.remove(row.len() - 1) }
+  drop-sel()
+  g.play = PLAY-IDLE
+}
+
+fn scale-row(context g: *mut game)(n: u8) {
+  let row = row-of(g.active)
+  if row.len() == 0 { return }
+  let before: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
+  for t in row { before.push(t) }
+  scale-row-apply(row, n)
+  drop-sel()
+  if score-of() > cur-level().limit {
+    row.clear()
+    for t in before.& { row.push-in(g.perm, t) }
+  }
+}
+
+fn scale-row-apply(context g: *mut game)(row: *mut list[token], n: u8) {
+  if sel-closed(row).is-some() {
+    let _ = wrap-sel(row, :rep(n))
+    return
+  }
+  let depth: size = 0
+  let i = row.len()
+  while i > 0 {
+    i = i - 1
+    let t = row.get(i)
+    if t is :close { depth = depth + 1 }
+    else if is-opener(t) {
+      if depth == 0 {
+        if t is :mark {
+          row.set(i, :rep(n))
+          if row.len() < MAX-ROW-TOKENS { row.push-in(g.perm, :close) }
+        } else if t is :rep(_) {
+          row.set(i, :rep(n))
+        }
+        return
+      }
+      depth = depth - 1
+    }
+  }
+  if row.get(row.len() - 1) is :close {
+    let d2: size = 1
+    let j = row.len() - 1
+    while j > 0 {
+      j = j - 1
+      let t = row.get(j)
+      if t is :close { d2 = d2 + 1 }
+      else if is-opener(t) {
+        d2 = d2 - 1
+        if d2 == 0 {
+          if t is :rep(_) { row.set(j, :rep(n)) }
+          return
+        }
+      }
+    }
+    return
+  }
+  if row.len() + 2 > MAX-ROW-TOKENS { return }
+  row.push-in(g.perm, :close)
+  let k = row.len() - 1
+  while k > 0 {
+    row.set(k, row.get(k - 1))
+    k = k - 1
+  }
+  row.set(0, :rep(n))
+  row.push-in(g.perm, :close)
+}
+
+fn strip-marks(row: *mut list[token], keep: *mut fixlist[token, MAX-ROW-TOKENS]) {
+  for t in row {
+    if t is :mark { continue }
+    keep.push(t)
+  }
+}
+
+fn clear-mark(context g: *mut game)(row: *mut list[token]) {
+  let keep: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
+  strip-marks(row, keep.&)
+  row.clear()
+  for t in keep.& { row.push-in(g.perm, t) }
+}
+
+fn mark-at(row: *mut list[token]): ?size {
+  let found: ?size = :none
+  for t in row {
+    if t is :mark { found = :some(it-index) }
+  }
+  found
+}
+
+type sel = { a: size, b: size }
+
+fn sel-of(context g: *mut game)(row: *mut list[token]): ?sel {
+  if g.sel-a >= 0 and g.sel-b > g.sel-a and g.sel-b <= row.len() {
+    return :some(.{ a = g.sel-a, b = g.sel-b })
+  }
+  if mark-at(row) is :some(m) {
+    if m + 1 < row.len() { return :some(.{ a = m + 1, b = row.len() }) }
+  }
+  :none
+}
+
+fn sel-closed(context g: *mut game)(row: *mut list[token]): ?sel {
+  if g.sel-a >= 0 and g.sel-b > g.sel-a and g.sel-b <= row.len() {
+    return :some(.{ a = g.sel-a, b = g.sel-b })
+  }
+  :none
+}
+
+fn drop-sel(context g: *mut game)() {
+  g.sel-a = SEL-NONE
+  g.sel-b = SEL-NONE
+  g.sel-live = false
+}
+
+fn tap-chip(context g: *mut game)(row: *mut list[token], j: size) {
+  if g.sel-a == j and g.sel-b == j + 1 {
+    drop-sel()
+    return
+  }
+  if g.sel-live and g.sel-a >= 0 {
+    g.sel-a = if j < g.sel-anchor { j } else { g.sel-anchor }
+    g.sel-b = (if j > g.sel-anchor { j } else { g.sel-anchor }) + 1
+    g.sel-live = false
+    return
+  }
+  clear-mark(row)
+  g.sel-anchor = j
+  g.sel-a = j
+  g.sel-b = j + 1
+  g.sel-live = true
+}
+
+fn chunk-eq(row: *mut list[token], a: size, b: size, len: size): bool {
+  for i in 0.until(len) {
+    if row.get(a + i) != row.get(b + i) { return false }
+  }
+  true
+}
+
+fn fix-chunk-eq(row: *fixlist[token, MAX-ROW-TOKENS], a: size, b: size, len: size): bool {
+  for i in 0.until(len) {
+    if row.get(a + i) != row.get(b + i) { return false }
+  }
+  true
+}
+
+fn start-collapse(context g: *mut game)(shot: *fixlist[token, MAX-ROW-TOKENS], hits: *fixlist[size, MAX-ROW-TOKENS], len: size, repl: ?token) {
+  g.anim-before.clear()
+  for t in shot { g.anim-before.push(t) }
+  g.anim-hits.clear()
+  for h in hits { g.anim-hits.push(h) }
+  g.anim-len = len
+  g.anim-repl = repl
+  g.anim-row = g.active
+  g.anim-t = 0.0
+}
+
+fn fold-row(context g: *mut game)() {
+  let row = row-of(g.active)
+  let n = row.len()
+  require sel-closed(row) is :some(s) else return
+  let p = s.b - s.a
+  let k: size = 1
+  while s.a + (k + 1) * p <= n and chunk-eq(row, s.a, s.a + k * p, p) { k = k + 1 }
+  if k < 2 { return }
+  let before: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
+  for t in row { before.push(t) }
+  let full = cur-level().growth.as[size]
+  let e0 = expand-row(g.active, full)
+  let tail = s.a + k * p
+  let shot: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
+  let hits: fixlist[size, MAX-ROW-TOKENS] = fixlist/uninit()
+  for i in 0.until(s.a) { shot.push(before.get(i)) }
+  shot.push(:rep(k.as[u8]))
+  for i in s.a.until(s.b) { shot.push(before.get(i)) }
+  if tail < n { shot.push(:close) }
+  for c in 1.until(k) {
+    hits.push(shot.len())
+    for j in 0.until(p) { shot.push(before.get(s.a + c * p + j)) }
+  }
+  for i in tail.until(n) { shot.push(before.get(i)) }
+  row.clear()
+  for i in 0.until(s.a) { row.push-in(g.perm, before.get(i)) }
+  row.push-in(g.perm, :rep(k.as[u8]))
+  for i in s.a.until(s.b) { row.push-in(g.perm, before.get(i)) }
+  if tail < n { row.push-in(g.perm, :close) }
+  for i in tail.until(n) { row.push-in(g.perm, before.get(i)) }
+  let e1 = expand-row(g.active, full)
+  if e0.syms.&.as-span() != e1.syms.&.as-span() {
+    row.clear()
+    for t in before.& { row.push-in(g.perm, t) }
+    return
+  }
+  start-collapse(shot.&, hits.&, p, :none)
+  drop-sel()
+  g.play = PLAY-IDLE
+}
+
+fn empty-def-row(context g: *mut game)(): u8 {
+  for i in 0.until(cur-level().ndefs) {
+    if i.as[u8] != g.active and row-editable(i) and row-of(i.as[u8]).len() == 0 {
+      return i.as[u8]
+    }
+  }
+  255
+}
+
+fn extract-def(context g: *mut game)() {
+  let row = row-of(g.active)
+  require sel-closed(row) is :some(s) else return
+  let d = empty-def-row()
+  if d == 255 { return }
+  let p = s.b - s.a
+  let base: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
+  for t in row { base.push(t) }
+  let at = s.a
+  let n = base.len()
+  let full = cur-level().growth.as[size]
+  let e0 = expand-row(g.active, full)
+  let hits: fixlist[size, MAX-ROW-TOKENS] = fixlist/uninit()
+  let i: size = 0
+  while i + p <= n {
+    if fix-chunk-eq(base.&, at, i, p) {
+      hits.push(i)
+      i = i + p
+    } else {
+      i = i + 1
+    }
+  }
+  if hits.len() == 0 { return }
+  let def = row-of(d)
+  for j in 0.until(p) { def.push-in(g.perm, base.get(at + j)) }
+  let hi: size = 0
+  row.clear()
+  i = 0
+  while i < n {
+    if hi < hits.len() and hits.get(hi) == i {
+      row.push-in(g.perm, :name(d))
+      hi = hi + 1
+      i = i + p
+    } else {
+      row.push-in(g.perm, base.get(i))
+      i = i + 1
+    }
+  }
+  let e1 = expand-row(g.active, full)
+  if e0.syms.&.as-span() != e1.syms.&.as-span() {
+    def.clear()
+    row.clear()
+    for t in base.& { row.push-in(g.perm, t) }
+    return
+  }
+  start-collapse(base.&, hits.&, p, :some(:name(d)))
+  drop-sel()
+  g.play = PLAY-IDLE
+}
+
+fn delete-tokens(context g: *mut game)() {
+  let row = row-of(g.active)
+  if sel-closed(row) is :some(s) {
+    let keep: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
+    for t in row { keep.push(t) }
+    let n = keep.len()
+    row.clear()
+    for i in 0.until(s.a) { row.push-in(g.perm, keep.get(i)) }
+    for i in s.b.until(n) { row.push-in(g.perm, keep.get(i)) }
+  } else if row.len() > 0 {
+    row.remove(row.len() - 1)
+  }
+  drop-sel()
+  g.play = PLAY-IDLE
+}
+
+fn row-y(i: size): i32 {
+  ROW-Y0 + i.as[i32] * ROW-STEP
+}
+
+fn in-rect(mx: i32, my: i32, x: i32, y: i32, w: i32, h: i32): bool {
+  mx >= x and mx < x + w and my >= y and my < y + h
+}
+
+fn handle-input(context g: *mut game)() {
+  let lv = cur-level()
+  if rl/is-key-pressed(KEY-N) {
+    let next = g.level + 1
+    load-level(if next >= LEVELS.len() 0 else next)
+    return
+  }
+  if rl/is-key-pressed(KEY-P) {
+    load-level(if g.level == 0 LEVELS.len() - 1 else g.level - 1)
+    return
+  }
+  if rl/is-key-pressed(KEY-R) {
+    load-level(g.level)
+    return
+  }
+  if rl/is-key-pressed(KEY-SPACE) {
+    g.play = if g.play >= 0.0 { PLAY-IDLE } else { 0.0 }
+  }
+  if rl/is-key-pressed(KEY-G) {
+    g.view = if g.view >= VIEW-SOLO { VIEW-OVERLAY } else { g.view + 1 }
+  }
+  if rl/is-key-pressed(KEY-BACKSPACE) { delete-tokens() }
+  if rl/is-key-pressed(KEY-RIGHT) and level-recursive(lv) and g.preview-growth < lv.growth {
+    g.preview-growth = g.preview-growth + 1
+  }
+  if rl/is-key-pressed(KEY-LEFT) and level-recursive(lv) and g.preview-growth > 0 {
+    g.preview-growth = g.preview-growth - 1
+  }
+  if rl/is-key-pressed(KEY-TAB) {
+    let i = g.active.as[size]
+    let tries: size = 0
+    while tries < 3 {
+      i = if i >= 2 0 else i + 1
+      if row-editable(i) {
+        g.active = i.as[u8]
+        break
+      }
+      tries = tries + 1
+    }
+  }
+  if rl/is-mouse-button-pressed(MOUSE-LEFT) {
+    tap(rl/get-mouse-x(), rl/get-mouse-y())
+  }
+}
+
+fn tick(context g: *mut game)() {
+  let dt = rl/get-frame-time()
+  if dt > 0.05 { dt = 0.05 }
+  let goal = g.preview-growth.as[f32]
+  let step = dt * GROW-RATE
+  let d = goal - g.grow-t
+  if d > step { g.grow-t = g.grow-t + step }
+  else if d + step < 0.0 { g.grow-t = g.grow-t - step }
+  else { g.grow-t = goal }
+  if g.play >= 0.0 { g.play = g.play + dt * PLAY-RATE }
+  if g.anim-t < 1.0 { g.anim-t = g.anim-t + dt * ANIM-RATE }
+}
+
+fn tap(context g: *mut game)(mx: i32, my: i32) {
+  if growth-pos() is :some(p) {
+    for i in 0.until(cur-level().growth) {
+      if in-rect(mx, my, growth-pip-x(p.x, i) - 7, p.y - 9, 15, 18) {
+        g.preview-growth = (i + 1).as[u8]
+      }
+    }
+  }
+  for i in 0.until(3) {
+    if row-editable(i) and in-rect(mx, my, 20, row-y(i), W - 40, ROW-H) {
+      g.active = i.as[u8]
+      let row = row-of(i.as[u8])
+      let y = row-y(i)
+      for j in 0.until(row.len()) {
+        if in-rect(mx, my, 100 + j.as[i32] * 37, y + 4, 34, ROW-H - 8) {
+          tap-chip(row, j)
+          break
+        }
+      }
+    }
+  }
+  for c in build-palette() {
+    if in-rect(mx, my, c.x, c.y, CHIP-W, CHIP-H) {
+      c.act is {
+        :tok(t) -> try-add(t),
+        :scale(n) -> scale-row(n),
+        :fold -> fold-row(),
+        :extract -> extract-def(),
+        :del -> delete-tokens(),
+        :clr -> { row-of(g.active).clear(); drop-sel() }
+      }
+    }
+  }
+}
+
+fn text(s: string, x: i32, y: i32, sz: i32, col: rl/color) {
+  rl/draw-text(s.to-c().ptr, x, y, sz, col)
+}
+
+fn text-center(s: string, cx: i32, y: i32, sz: i32, col: rl/color) {
+  let c = s.to-c().ptr
+  let w = rl/measure-text(c, sz)
+  rl/draw-text(c, cx - w / 2, y, sz, col)
+}
+
+fn draw-shape(t: tile-style, cx: i32, cy: i32, r: f32) {
+  let center: rl/vec2 = .{ x = cx.as[f32], y = cy.as[f32] }
+  t.kind is {
+    :circle -> rl/draw-circle(cx, cy, r, t.color),
+    :square -> {
+      let ri = r.as[i32]
+      rl/draw-rectangle(cx - ri, cy - ri, ri * 2, ri * 2, t.color)
+    },
+    :tri -> rl/draw-poly(center, 3, r * 1.2, -90.0, t.color),
+    :diamond -> rl/draw-poly(center, 4, r * 1.2, 0.0, t.color)
+  }
+}
+
+fn draw-token-glyph(world: world-kind, t: token, cx: i32, cy: i32, r: f32, sz: i32) {
+  t is {
+    :sym(s) -> {
+      if world is :plant {
+        let alpha = world-alphabet(world)
+        text-center(alpha.get(s.as[size]).to-string(), cx, cy - sz / 2, sz, C_TEXT-MAIN)
+      } else {
+        draw-shape(TILES.get(s.as[size]), cx, cy, r)
+      }
+    },
+    :rep(n) -> text-center("${n}(", cx, cy - sz / 2, sz, C_TEXT-MAIN),
+    :close -> text-center(")", cx, cy - sz / 2, sz, C_TEXT-DIM),
+    :name(d) -> text-center(if d == 0 "A" else "B", cx, cy - sz / 2, sz, if d == 0 C_ACCENT else C_ACCENT-B),
+    :callo(d) -> text-center(if d == 0 "A(" else "B(", cx, cy - sz / 2, sz, if d == 0 C_ACCENT else C_ACCENT-B),
+    :hole -> {
+      rl/draw-circle(cx, cy, r, C_INK)
+      rl/draw-circle-lines(cx, cy, r, C_WARN)
+      rl/draw-circle-lines(cx, cy, r - 1.0, C_WARN)
+    },
+    :again -> text-center("...", cx, cy - sz / 2, sz, C_TEXT-MAIN),
+    :shift -> text-center(">", cx, cy - sz / 2, sz, C_WARN),
+    :mir -> text-center("M(", cx, cy - sz / 2, sz, C_WARN),
+    :mark -> text-center("|", cx, cy - sz / 2, sz, C_TEXT-MAIN)
+  }
+}
+
+fn draw-chip(world: world-kind, t: token, x: f32, y: i32, w: f32, bg: rl/color, rim: ?rl/color) {
+  let cw = (w * 34.0).as[i32]
+  let xi = x.as[i32]
+  rl/draw-rectangle(xi, y + 4, cw, ROW-H - 8, bg)
+  if rim is :some(c) { rl/draw-rectangle-lines(xi, y + 4, cw, ROW-H - 8, c) }
+  draw-token-glyph(world, t, xi + cw / 2, y + ROW-H / 2, w * 11.0, (w * 22.0).as[i32])
+}
+
+fn draw-row-collapse(context g: *mut game)(y: i32) {
+  let world = cur-level().world
+  let phase: f32 = if g.anim-t < ANIM-LIT { 0.0 } else { (g.anim-t - ANIM-LIT) / ANIM-SPAN }
+  let lit = g.anim-t < ANIM-LIT
+  let x: f32 = 100.0
+  let hi: size = 0
+  let i: size = 0
+  let n = g.anim-before.len()
+  while i < n {
+    if hi < g.anim-hits.len() and g.anim-hits.get(hi) == i {
+      if g.anim-repl is :some(rt) {
+        if phase > 0.02 { draw-chip(world, rt, x, y, phase, C_CHIP-BG, :some(C_ACCENT)) }
+        x = x + phase * 37.0
+      }
+      let w: f32 = 1.0 - phase
+      for j in 0.until(g.anim-len) {
+        if w > 0.02 {
+          draw-chip(world, g.anim-before.get(i + j), x, y, w, if lit C_PANEL-ACTIVE else C_CHIP-BG, if lit :some(C_WARN) else :none)
+        }
+        x = x + w * 37.0
+      }
+      i = i + g.anim-len
+      hi = hi + 1
+    } else {
+      draw-chip(world, g.anim-before.get(i), x, y, 1.0, C_CHIP-BG, :none)
+      x = x + 37.0
+      i = i + 1
+    }
+  }
+}
+
+fn draw-rows(context g: *mut game)() {
+  let lv = cur-level()
+  let sel = sel-of(row-of(g.active))
+  for i in 0.until(3) {
+    if not row-enabled(i) { continue }
+    let y = row-y(i)
+    let active = g.active.as[size] == i
+    rl/draw-rectangle(20, y, W - 40, ROW-H, if active C_PANEL-ACTIVE else C_PANEL)
+    rl/draw-rectangle-lines(20, y, W - 40, ROW-H, if active C_ACCENT else C_BORDER)
+    let label = if i == 0 "A =" else if i == 1 "B =" else "out"
+    text(label, 36, y + 14, 20, if i == 0 C_ACCENT else if i == 1 C_ACCENT-B else if row-editable(i) C_TEXT-MAIN else C_TEXT-DIM)
+    if g.anim-t < 1.0 and g.anim-row.as[size] == i {
+      draw-row-collapse(y)
+      continue
+    }
+    let row = row-of(i.as[u8])
+    let playing = g.play-src != SRC-NONE and src-row(g.play-src) == i
+    for t in row {
+      let x: i32 = 100 + it-index.as[i32] * 37
+      let plays = playing and src-idx(g.play-src) == it-index
+      let picked = active and sel is :some(s) and it-index >= s.a and it-index < s.b
+      let bg = if picked C_PANEL-ACTIVE else if plays C_PANEL-ACTIVE else C_CHIP-BG
+      let rim: ?rl/color = if picked :some(C_ACCENT) else if plays :some(C_TEXT-MAIN) else :none
+      draw-chip(lv.world, t, x.as[f32], y, 1.0, bg, rim)
+    }
+    let caret-x: i32 = 100 + row.len().as[i32] * 37
+    if active { rl/draw-rectangle(caret-x + 2, y + 8, 3, ROW-H - 16, C_ACCENT) }
+    for b in 0.until(row-balance(row)) {
+      let x: i32 = caret-x + 8 + b.as[i32] * 24
+      text(")", x, y + 12, 22, .{ r = 130, g = 135, b = 150, a = 90 })
+    }
+  }
+}
+
+fn draw-palette(context g: *mut game)() {
+  let lv = cur-level()
+  let armed = sel-closed(row-of(g.active)).is-some()
+  for c in build-palette() {
+    rl/draw-rectangle(c.x, c.y, CHIP-W, CHIP-H, C_CHIP-BG)
+    rl/draw-rectangle-lines(c.x, c.y, CHIP-W, CHIP-H, C_BORDER)
+    let cx = c.x + CHIP-W / 2
+    let cy = c.y + CHIP-H / 2
+    c.act is {
+      :tok(t) -> draw-token-glyph(lv.world, t, cx, cy, 13.0, 26),
+      :scale(n) -> text-center("x${n}", cx, cy - 11, 22, C_TEXT-MAIN),
+      :fold -> text-center("fold", cx, cy - 8, 16, if armed C_WARN else C_TEXT-DIM),
+      :extract -> text-center(if empty-def-row() == 0 "A=" else "B=", cx, cy - 11, 22, if armed C_ACCENT else C_TEXT-DIM),
+      :del -> text-center("del", cx, cy - 8, 16, if armed C_BAD else C_TEXT-DIM),
+      :clr -> text-center("clr", cx, cy - 8, 16, C_TEXT-DIM)
+    }
+  }
+}
+
+fn cell-weight(gen: u8, gv: gview): f32 {
+  if gen >= gv.kf.as[u8] { gv.unfurl } else { 1.0 }
+}
+
+fn strip-cells(e: *expansion, gv: gview, upto: size): f32 {
+  let n = if upto > e.syms.len() { e.syms.len() } else { upto }
+  let t: f32 = 0.0
+  for i in 0.until(n) { t = t + cell-weight(e.gens.get(i), gv) }
+  t
+}
+
+fn draw-strip(context g: *mut game)(e: *expansion, top: i32, cell: i32, x0: i32, maxn: size, gv: gview, show-buds: bool, show-shifts: bool, show-sel: bool) {
+  let cf = cell.as[f32]
+  let x = x0.as[f32]
+  let bi: size = 0
+  let si: size = 0
+  let buds = e.buds.&
+  let shifts = e.shifts.&
+  let sel = if show-sel { sel-of(row-of(g.active)) } else { :none }
+  for s in e.syms.& {
+    if it-index >= maxn { break }
+    let w = cell-weight(e.gens.get(it-index), gv)
+    if sel is :some(sr) {
+      let sv = e.srcs.get(it-index)
+      if sv != SRC-NONE and src-row(sv) == g.active.as[size] and src-idx(sv) >= sr.a and src-idx(sv) < sr.b {
+        rl/draw-rectangle(x.as[i32], top - 4, (cf * w).as[i32], cell + 8, C_PANEL-ACTIVE)
+      }
+    }
+    while bi < buds.len() and buds.get(bi).at == it-index {
+      let b = buds.get(bi)
+      if b.socket {
+        rl/draw-circle-lines(x.as[i32], top + cell / 2, 6.0, bud-color(b.d))
+        rl/draw-circle-lines(x.as[i32], top + cell / 2, 5.0, bud-color(b.d))
+      } else if show-buds {
+        rl/draw-circle(x.as[i32], top + cell / 2, 5.0, bud-color(b.d))
+      }
+      bi = bi + 1
+    }
+    while show-shifts and si < shifts.len() and shifts.get(si) == it-index {
+      text-center(">", x.as[i32], top + cell / 2 - 8, 16, C_WARN)
+      si = si + 1
+    }
+    if w > 0.02 {
+      draw-shape(TILES.get(s.as[size]), (x + cf * w * 0.5).as[i32], top + cell / 2, cf * w * 0.38)
+    }
+    x = x + cf * w
+  }
+  while bi < buds.len() {
+    let b = buds.get(bi)
+    if b.socket {
+      rl/draw-circle-lines(x.as[i32], top + cell / 2, 6.0, bud-color(b.d))
+      rl/draw-circle-lines(x.as[i32], top + cell / 2, 5.0, bud-color(b.d))
+    } else if show-buds {
+      rl/draw-circle(x.as[i32], top + cell / 2, 5.0, bud-color(b.d))
+    }
+    bi = bi + 1
+  }
+  while show-shifts and si < shifts.len() {
+    if shifts.get(si) <= maxn { text-center(">", x.as[i32], top + cell / 2 - 8, 16, C_WARN) }
+    si = si + 1
+  }
+}
+
+fn draw-playhead(context g: *mut game)(e: *expansion, top: i32, cell: i32, x0: i32, gv: gview) {
+  if g.play < 0.0 { return }
+  let total = strip-cells(e, gv, e.syms.len())
+  if total < 0.01 { return }
+  if g.play >= total {
+    g.play = PLAY-IDLE
+    return
+  }
+  let at: f32 = 0.0
+  for i in 0.until(e.syms.len()) {
+    let w = cell-weight(e.gens.get(i), gv)
+    if g.play >= at and g.play < at + w {
+      g.play-src = e.srcs.get(i)
+      let cx = x0.as[f32] + at * cell.as[f32]
+      rl/draw-rectangle-lines(cx.as[i32], top, (cell.as[f32] * w).as[i32], cell, C_TEXT-MAIN)
+    }
+    at = at + w
+  }
+  let px = x0.as[f32] + g.play * cell.as[f32]
+  rl/draw-rectangle(px.as[i32], top - 6, 2, cell + 12, C_TEXT-MAIN)
+}
+
+fn draw-seq-world(context g: *mut game)() {
+  let lv = cur-level()
+  let gv = growth-view()
+  let target = expand-target(lv, gv.kf)
+  let player = expand-player(gv.kf)
+  if level-recursive(lv) {
+    text("dot is a bud · the rule grows there again", 40, 196, 16, C_TEXT-DIM)
+  }
+  if growth-pos() is :some(p) { draw-growth(p.x, p.y, g.preview-growth, lv.growth) }
+  let tn = strip-cells(target.&, gv, target.syms.len())
+  let pn = strip-cells(player.&, gv, player.syms.len())
+  let nf = if tn > pn { tn } else { pn }
+  if nf < 1.0 { nf = 1.0 }
+  let fit: i32 = (W - 120) / nf.as[i32]
+  let cell: i32 = if fit > 44 44 else if fit < 4 4 else fit
+  let x0: i32 = ((W.as[f32] - cell.as[f32] * nf) * 0.5).as[i32]
+  let maxn = ((W - 60 - x0) / cell).as[size]
+  let show-buds = g.preview-growth < lv.growth
+  text("target", 40, 226, 18, C_TEXT-DIM)
+  draw-strip(target.&, 250, cell, x0, maxn, gv, show-buds, false, false)
+  let prefix = matched-prefix(target.syms.&, player.syms.&)
+  if prefix > 0 and player.syms.len() > 0 {
+    let pw = strip-cells(target.&, gv, prefix) * cell.as[f32]
+    rl/draw-rectangle(x0, 250 + cell + 4, pw.as[i32], 4, .{ r = 110, g = 230, b = 150, a = 140 })
+  }
+  text("yours", 40, 336, 18, C_TEXT-DIM)
+  if player.syms.len() == 0 {
+    text("tap chips below to grow the sequence", x0, 360 + cell / 2 - 10, 18, C_TEXT-DIM)
+  } else {
+    draw-strip(player.&, 360, cell, x0, maxn, gv, show-buds, true, g.active == 2)
+    if g.active == 2 { draw-playhead(player.&, 360, cell, x0, gv) }
+  }
+  if target.syms.&.first-diff(player.syms.&.as-span()) is :some(i) and player.syms.len() > 0 {
+    let mx = x0.as[f32] + (strip-cells(target.&, gv, i) + 0.5) * cell.as[f32]
+    let my: i32 = 360 + cell + 10
+    rl/draw-poly(.{ x = mx, y = my.as[f32] }, 3, 8.0, -90.0, C_BAD)
+  }
+  if g.active != 2 {
+    let wb = expand-row(g.active, gv.kf)
+    let label = if g.active == 0 "A" else "B"
+    text(label, 40, 456, 18, if g.active == 0 C_ACCENT else C_ACCENT-B)
+    draw-strip(wb.&, 480, cell, x0, maxn, gv, show-buds, true, true)
+    draw-playhead(wb.&, 480, cell, x0, gv)
+    let wn = strip-cells(wb.&, gv, if wb.syms.len() > maxn { maxn } else { wb.syms.len() }) * cell.as[f32]
+    rl/draw-rectangle(x0 + wn.as[i32] + 3, 480 + 6, 3, cell - 12, C_ACCENT)
+  }
+}
+
+fn vine-color(gen: u8, full: f32, alpha: u8): rl/color {
+  let t = gen.as[f32] / (if full < 1.0 1.0 else full)
+  if t > 1.0 { t = 1.0 }
+  .{
+    r = (C_VINE.r.as[f32] + (C_VINE-TIP.r.as[f32] - C_VINE.r.as[f32]) * t).as[i32].as[u8],
+    g = (C_VINE.g.as[f32] + (C_VINE-TIP.g.as[f32] - C_VINE.g.as[f32]) * t).as[i32].as[u8],
+    b = (C_VINE.b.as[f32] + (C_VINE-TIP.b.as[f32] - C_VINE.b.as[f32]) * t).as[i32].as[u8],
+    a = alpha,
+  }
+}
+
+fn stem-thick(scale: f32): f32 {
+  let t = scale * 0.06
+  if t < 2.5 { t = 2.5 }
+  if t > 4.5 { t = 4.5 }
+  t
+}
+
+fn draw-segs-ghost(segs: *fixlist[seg, MAX-EXPAND], scale: f32, ox: f32, oy: f32, lit: size) {
+  for s in segs {
+    let col = if it-index < lit C_GHOST-LIT else C_GHOST
+    rl/draw-line-ex(
+      .{ x = s.ax * scale + ox, y = s.ay * scale + oy },
+      .{ x = s.bx * scale + ox, y = s.by * scale + oy },
+      stem-thick(scale) * 1.6 * s.w, col)
+  }
+}
+
+fn draw-segs-vine(segs: *fixlist[seg, MAX-EXPAND], scale: f32, ox: f32, oy: f32, full: f32, alpha: u8, dim0: size) {
+  for s in segs {
+    let a = if it-index < dim0 { alpha / 4 } else { alpha }
+    rl/draw-line-ex(
+      .{ x = s.ax * scale + ox, y = s.ay * scale + oy },
+      .{ x = s.bx * scale + ox, y = s.by * scale + oy },
+      stem-thick(scale) * s.w, vine-color(s.gen, full, a))
+  }
+}
+
+fn draw-blooms(pts: *fixlist[bloom-pt, MAX-BUDS], scale: f32, ox: f32, oy: f32, col: rl/color) {
+  for p in pts {
+    let r = p.r * scale
+    if r < 2.0 { r = 2.0 }
+    rl/draw-circle((p.x * scale + ox).as[i32], (p.y * scale + oy).as[i32], r, col)
+  }
+}
+
+fn branch-dim0(t: *turtle-out): size {
+  if t.marks.len() > 0 { t.marks.get(t.marks.len() - 1).seg0 } else { 0 }
+}
+
+fn draw-bookmarks(marks: *fixlist[turtle-mark, MAX-STACK], scale: f32, ox: f32, oy: f32) {
+  for m in marks {
+    let bx = m.pos.x * scale + ox
+    let by = m.pos.y * scale + oy
+    let tipscale: f32 = if scale < 20.0 { 20.0 } else { scale }
+    rl/draw-line-ex(
+      .{ x = bx, y = by },
+      .{ x = bx + libm/cos(m.pos.ang) * tipscale * 0.4, y = by + libm/sin(m.pos.ang) * tipscale * 0.4 },
+      2.0, C_ACCENT-DIM)
+    rl/draw-circle-lines(bx.as[i32], by.as[i32], 5.0, C_ACCENT-DIM)
+  }
+}
+
+fn draw-cursor(p: turtle-pos, scale: f32, ox: f32, oy: f32) {
+  let bx = p.x * scale + ox
+  let by = p.y * scale + oy
+  let tipscale: f32 = if scale < 20.0 { 20.0 } else { scale }
+  rl/draw-line-ex(
+    .{ x = bx, y = by },
+    .{ x = bx + libm/cos(p.ang) * tipscale * 0.6, y = by + libm/sin(p.ang) * tipscale * 0.6 },
+    3.0, C_ACCENT)
+  rl/draw-circle(bx.as[i32], by.as[i32], 4.0, C_ACCENT)
+}
+
+fn count-fs(syms: *fixlist[u8, MAX-EXPAND], upto: size): size {
+  let n: size = 0
+  for i in 0.until(upto) {
+    if syms.get(i) == 0 { n = n + 1 }
+  }
+  n
+}
+
+fn matched-prefix[ct: as-span[t = u8], cp: as-span[t = u8]](target: ct, player: cp): size {
+  if target.first-diff(player.as-span()) is :some(i) i else target.as-span().len()
+}
+
+type xy = { x: i32, y: i32 }
+
+fn growth-pos(context g: *mut game)(): ?xy {
+  let lv = cur-level()
+  if not level-recursive(lv) { return :none }
+  if lv.world is :seq {
+    :some(.{ x = W - 220, y = 204 })
+  } else if lv.world is :plant {
+    let p = plant-pane(1, g.view == VIEW-SPLIT)
+    :some(.{ x = p.x + p.w - 160, y = p.y + p.h - 16 })
+  } else {
+    :some(.{ x = CANVAS-X + CANVAS-W - 160, y = CANVAS-Y + CANVAS-H - 20 })
+  }
+}
+
+fn growth-pip-x(x: i32, i: i64): i32 {
+  x + 64 + i.as[i32] * 15
+}
+
+fn draw-growth(x: i32, y: i32, cur: u8, max: u8) {
+  text("growth", x, y - 7, 16, C_TEXT-DIM)
+  for i in 0.until(max) {
+    let cx = growth-pip-x(x, i)
+    if i < cur.as[i64] {
+      rl/draw-circle(cx, y, 4.5, C_WARN)
+    } else {
+      rl/draw-circle-lines(cx, y, 4.5, C_TEXT-DIM)
+    }
+  }
+}
+
+fn draw-buds(pts: *fixlist[bud-pt, MAX-BUDS], scale: f32, ox: f32, oy: f32, r: f32, alpha: u8, show-buds: bool) {
+  for p in pts {
+    let cx = (p.x * scale + ox).as[i32]
+    let cy = (p.y * scale + oy).as[i32]
+    if p.socket {
+      rl/draw-circle-lines(cx, cy, r + 1.0, bud-color(p.d))
+      rl/draw-circle-lines(cx, cy, r, bud-color(p.d))
+    } else if show-buds {
+      let col = bud-color(p.d)
+      col.a = alpha
+      rl/draw-circle(cx, cy, r, col)
+    }
+  }
+}
+
+fn draw-canvas-growth(context g: *mut game)(state: ?bool, at: size, tx: i32, ty: i32) {
+  if growth-pos() is :some(p) {
+    draw-growth(p.x, p.y, g.preview-growth, cur-level().growth)
+    if state is :some(m) {
+      let word = if m { "matches" } else { "differs" }
+      text("$word at growth $at", tx, ty, 16, if m C_GOOD else C_WARN)
+    }
+  }
+}
+
+type rect = { x: i32, y: i32, w: i32, h: i32 }
+
+fn plant-pane(i: size, split: bool): rect {
+  if not split {
+    return .{ x = PLANT-X + (PLANT-W - PLANT-H) / 2, y = PLANT-Y, w = PLANT-H, h = PLANT-H }
+  }
+  let w = (PLANT-W - PANE-GAP) / 2
+  .{ x = PLANT-X + i.as[i32] * (w + PANE-GAP), y = PLANT-Y, w, h = PLANT-H }
+}
+
+fn draw-plant-world(context g: *mut game)() {
+  let lv = cur-level()
+  let gv = growth-view()
+  let full = lv.growth.as[f32]
+  let frontier = gv.kf.as[u8]
+  let target = expand-target(lv, gv.kf)
+  let player = expand-player(gv.kf)
+  let work = expand-row(g.active, gv.kf)
+  let split = g.view == VIEW-SPLIT
+  let show-target = g.view != VIEW-SOLO
+  let tp = plant-pane(0, split)
+  let pp = plant-pane(1, split)
+  if show-target { rl/draw-rectangle-lines(tp.x, tp.y, tp.w, tp.h, C_BORDER) }
+  rl/draw-rectangle-lines(pp.x, pp.y, pp.w, pp.h, C_BORDER)
+  if split {
+    text("target", tp.x + 12, tp.y + 8, 16, C_TEXT-DIM)
+    text("yours", pp.x + 12, pp.y + 8, 16, C_TEXT-DIM)
+  } else if not show-target {
+    text("target hidden · G to bring it back", pp.x + 12, pp.y + 8, 16, C_TEXT-DIM)
+  } else if level-recursive(lv) {
+    text("each dot is a bud · the rule grows there again", pp.x + 12, pp.y + 8, 16, C_TEXT-DIM)
+  } else {
+    text("ghost is the target · grow yours over it", pp.x + 12, pp.y + 8, 16, C_TEXT-DIM)
+  }
+  let state: ?bool = if player.syms.len() == 0 { :none } else { :some(same-at-gen(target.&, player.&, gv.cur.as[u8])) }
+  draw-canvas-growth(state, gv.cur, pp.x + 12, pp.y + pp.h - 26)
+
+  let tw = turtle-walk(target.&, lv.angle, frontier, gv.unfurl)
+  let pw = turtle-walk(player.&, lv.angle, frontier, gv.unfurl)
+  let ww = turtle-walk(work.&, lv.angle, frontier, gv.unfurl)
+  if sys/env("GENGAME_DBG").is-some() {
+    println("grow-t=${g.grow-t} pv=${g.preview-growth} cur=${gv.cur} kf=${gv.kf} unfurl=${gv.unfurl} psyms=${player.syms.len()} pbuds=${player.buds.len()} psegs=${pw.segs.len()} wsyms=${work.syms.len()} wsegs=${ww.segs.len()}")
+  }
+  let b: bounds = .{ minx = 0.0, miny = 0.0, maxx = 0.0, maxy = 0.0 }
+  if show-target { grow-bounds(b.&, tw.segs.&) }
+  grow-bounds(b.&, pw.segs.&)
+  grow-bounds(b.&, ww.segs.&)
+  let bw = b.maxx - b.minx
+  let bh = b.maxy - b.miny
+  if bw < 0.001 { bw = 0.001 }
+  if bh < 0.001 { bh = 0.001 }
+  let sx = (pp.w - 60).as[f32] / bw
+  let sy = (pp.h - 60).as[f32] / bh
+  let scale = if sx < sy sx else sy
+  if scale > PLANT-SCALE-MAX { scale = PLANT-SCALE-MAX }
+  let cx = (b.minx + b.maxx) * 0.5
+  let cy = (b.miny + b.maxy) * 0.5
+  let tox = (tp.x + tp.w / 2).as[f32] - cx * scale
+  let toy = (tp.y + tp.h / 2).as[f32] - cy * scale
+  let pox = (pp.x + pp.w / 2).as[f32] - cx * scale
+  let poy = (pp.y + pp.h / 2).as[f32] - cy * scale
+
+  let show-buds = g.preview-growth < lv.growth
+  let fade: f32 = 1.0 - gv.unfurl
+  if gv.kf == gv.cur { fade = 1.0 }
+  let bud-a = (fade * 255.0).as[i32].as[u8]
+  if show-target {
+    let lit = count-fs(target.syms.&, matched-prefix(target.syms.&, player.syms.&))
+    draw-segs-ghost(tw.segs.&, scale, tox, toy, lit)
+    draw-blooms(tw.blooms.&, scale, tox, toy, C_GHOST)
+    draw-buds(tw.buds.&, scale, tox, toy, 5.0, bud-a, show-buds)
+  }
+  if g.active != 2 {
+    draw-segs-vine(pw.segs.&, scale, pox, poy, full, 80, 0)
+    let dim = C_BLOOM
+    dim.a = 80
+    draw-blooms(pw.blooms.&, scale, pox, poy, dim)
+  }
+  draw-segs-vine(ww.segs.&, scale, pox, poy, full, 255, branch-dim0(ww.&))
+  draw-blooms(ww.blooms.&, scale, pox, poy, C_BLOOM)
+  draw-buds(ww.buds.&, scale, pox, poy, 3.0, bud-a, show-buds)
+  draw-cursor(ww.end, scale, pox, poy)
+  draw-bookmarks(ww.marks.&, scale, pox, poy)
+}
+
+fn draw-grid(e: *expansion, w: size, x0: i32, y0: i32, cell: i32, maxn: size, show-buds: bool, show-shifts: bool) {
+  for s in e.syms.& {
+    if it-index >= maxn { break }
+    let cx = x0 + (it-index % w).as[i32] * cell
+    let cy = y0 + (it-index / w).as[i32] * cell
+    rl/draw-rectangle(cx + 1, cy + 1, cell - 2, cell - 2, TILES.get(s.as[size]).color)
+  }
+  if show-shifts {
+    for at in e.shifts.& {
+      if at > maxn { continue }
+      text-center(">", x0 + (at % w).as[i32] * cell, y0 + (at / w).as[i32] * cell + cell / 2 - 8, 16, C_WARN)
+    }
+  }
+  for b in e.buds.& {
+    if b.at > maxn { continue }
+    let cx = x0 + (b.at % w).as[i32] * cell
+    let cy = y0 + (b.at / w).as[i32] * cell + cell / 2
+    if b.socket {
+      rl/draw-circle-lines(cx, cy, 6.0, bud-color(b.d))
+      rl/draw-circle-lines(cx, cy, 5.0, bud-color(b.d))
+    } else if show-buds {
+      rl/draw-circle(cx, cy, 5.0, bud-color(b.d))
+    }
+  }
+}
+
+fn draw-grid-world(context g: *mut game)() {
+  let lv = cur-level()
+  let growth = g.preview-growth.as[size]
+  let target = expand-target(lv, growth)
+  let player = expand-player(growth)
+  let w = lv.width.as[size]
+  let rows = (target.syms.len() + w - 1) / w
+  if rows == 0 { rows = 1 }
+  rl/draw-rectangle-lines(CANVAS-X, CANVAS-Y, CANVAS-W, CANVAS-H, C_BORDER)
+  if level-recursive(lv) {
+    text("each dot is a bud · the rule grows there again", CANVAS-X + 12, CANVAS-Y + 8, 16, C_TEXT-DIM)
+  }
+  let state: ?bool = if player.syms.len() == 0 { :none } else { :some(target.syms.&.as-span() == player.syms.&.as-span()) }
+  draw-canvas-growth(state, growth, CANVAS-X + 12, CANVAS-Y + CANVAS-H - 26)
+  let views: size = if g.active == 2 2 else 3
+  let cw = (CANVAS-W - 80) / w.as[i32]
+  let ch = ((CANVAS-H - 80) / views.as[i32] - 30) / rows.as[i32]
+  let cell = if cw < ch cw else ch
+  if cell > 34 { cell = 34 }
+  if cell < 4 { cell = 4 }
+  let gw = cell * w.as[i32]
+  let gh = cell * rows.as[i32]
+  let x0 = CANVAS-X + (CANVAS-W - gw) / 2
+  let maxn = w * rows
+  let show-buds = g.preview-growth < lv.growth
+  let y = CANVAS-Y + 34
+  text("target", x0, y - 20, 16, C_TEXT-DIM)
+  draw-grid(target.&, w, x0, y, cell, maxn, show-buds, false)
+  rl/draw-rectangle-lines(x0, y, gw, gh, C_BORDER)
+  let y2 = y + gh + 34
+  text("yours", x0, y2 - 20, 16, C_TEXT-DIM)
+  draw-grid(player.&, w, x0, y2, cell, maxn, show-buds, true)
+  rl/draw-rectangle-lines(x0, y2, gw, gh, C_BORDER)
+  if target.syms.&.first-diff(player.syms.&.as-span()) is :some(i) and player.syms.len() > 0 and i < maxn {
+    rl/draw-rectangle-lines(x0 + (i % w).as[i32] * cell, y2 + (i / w).as[i32] * cell, cell, cell, C_BAD)
+  }
+  if g.active != 2 {
+    let wb = expand-row(g.active, growth)
+    let y3 = y2 + gh + 34
+    let label = if g.active == 0 "A" else "B"
+    text(label, x0, y3 - 20, 16, if g.active == 0 C_ACCENT else C_ACCENT-B)
+    draw-grid(wb.&, w, x0, y3, cell, maxn, show-buds, true)
+    rl/draw-rectangle-lines(x0, y3, gw, gh, C_BORDER)
+  }
+}
+
+fn draw-frame(context g: *mut game)() {
+  rl/clear-background(C_INK)
+  g.play-src = SRC-NONE
+  let lv = cur-level()
+  let full = lv.growth.as[size]
+  let target = expand-target(lv, full).syms
+  let pe = expand-player(full)
+  let player = pe.syms
+  let sc = score-of()
+  let residual = target.len() - matched-prefix(target.&, player.&)
+  let total = sc + residual
+
+  text("GENGAME", 24, 12, 24, C_ACCENT)
+  let world-name = if lv.world is :seq { "shapes" } else if lv.world is :plant { "plants" } else { "cloth" }
+  text("level ${g.level + 1}/${LEVELS.len()} · ${lv.name} · $world-name", 24, 44, 18, C_TEXT-DIM)
+  let total-col = if residual > 0 C_TEXT-MAIN else if sc <= lv.par C_GOOD else C_WARN
+  text("total $total", 830, 12, 24, total-col)
+  text("genes $sc/${lv.limit} · par ${lv.par}", 830, 42, 18, if sc == 0 C_TEXT-DIM else if sc <= lv.par C_GOOD else if sc >= lv.limit C_WARN else C_TEXT-MAIN)
+  text("unexplained $residual of ${target.len()}", 830, 66, 16, C_TEXT-DIM)
+
+  let matched = player.len() > 0 and target.&.as-span() == player.&.as-span()
+  if matched {
+    if level-recursive(lv) and not pe.capped {
+      text-center("matched, but nothing regrows · a living rule needs a bud", W / 2, 44, 20, C_WARN)
+    } else if sc <= lv.par {
+      text-center("PERFECT · press N for the next level", W / 2, 44, 20, C_GOOD)
+    } else {
+      text-center("grown! now compress to ${lv.par} genes (or N to move on)", W / 2, 44, 20, C_WARN)
+    }
+  }
+
+  if lv.world is :seq {
+    draw-seq-world()
+  } else if lv.world is :plant {
+    draw-plant-world()
+  } else {
+    draw-grid-world()
+  }
+
+  draw-rows()
+  draw-palette()
+  let hint = if lv.world is :plant { "bksp: delete · tab: row · tap a chip to mark · G: goal view · left/right: grow · R: reset · N/P: level" } else { "bksp: delete · tab: row · tap a chip to mark · space: play · left/right: grow · R: reset · N/P: level" }
+  text(hint, 24, 872, 16, C_TEXT-DIM)
+}
+
+fn assert-solved(context g: *mut game)(want-score: size) {
+  let lv = cur-level()
+  let full = lv.growth.as[size]
+  let te = expand-target(lv, full)
+  let pe = expand-player(full)
+  println("assert-solved ${lv.name} score=${score-of()} want=$want-score plen=${pe.syms.len()} tlen=${te.syms.len()}")
+  assert(score-of() == want-score)
+  assert(te.syms.&.as-span() == pe.syms.&.as-span())
+  if level-recursive(lv) { assert(pe.capped) }
+}
+
+fn self-test(context g: *mut game)() {
+  for li in 0.until(LEVELS.len()) {
+    println("self-test level $li")
+    load-level(li)
+    let lv = cur-level()
+    println("  loaded ${lv.name}")
+    let alpha = world-alphabet(lv.world)
+    let texp = expand-target(lv, lv.growth.as[size])
+    println("  texp len=${texp.syms.len()} buds=${texp.buds.len()}")
+    let target = texp.syms
+    assert(target.len() > 0)
+    assert(target.len() < MAX-EXPAND)
+    assert(lv.par <= target.len())
+    assert(lv.limit >= lv.par)
+    assert(lv.limit <= target.len())
+    if lv.world is :grid {
+      assert(lv.width > 0)
+      assert(target.len() % lv.width.as[size] == 0)
+    }
+    if lv.start.len() > 0 {
+      let pe = expand-player(lv.growth.as[size])
+      assert(texp.syms.&.as-span() == pe.syms.&.as-span())
+      assert(score-of() > lv.par)
+    }
+    let uses-shift = lv.target.contains('>') or lv.target-a.contains('>') or lv.target-b.contains('>')
+    for s in target {
+      let c = alpha.get(s.as[size])
+      if not uses-shift {
+        assert(sym-index(lv.syms, c).is-some())
+      }
+    }
+    if lv.world is :plant {
+      assert(turtle-walk(texp.&, lv.angle, 0, 1.0).segs.len() > 0)
+    }
+  }
+  load-level(0)
+  for c in build-palette() {
+    c.act is {
+      :tok(t) -> try-add(t),
+      :scale(n) -> scale-row(n),
+      :fold -> fold-row(),
+      :extract -> extract-def(),
+      :del -> .{},
+      :clr -> .{}
+    }
+  }
+  let _ = expand-player(4)
+  let _ = score-of()
+  load-level(0)
+  try-add(:sym(0))
+  scale-row(5)
+  scale-row(7)
+  assert-solved(2)
+  load-level(0)
+  for 0.until(8) { try-add(:sym(0)) }
+  assert(g.out.len() == 4)
+  assert(score-of() == 4)
+  load-level(level-index("the exception"))
+  try-add(:sym(0))
+  try-add(:sym(2))
+  scale-row(4)
+  try-add(:sym(1))
+  try-add(:mark)
+  try-add(:sym(0))
+  try-add(:sym(2))
+  scale-row(2)
+  scale-row(4)
+  assert-solved(7)
+  load-level(level-index("interference"))
+  try-add(:sym(0))
+  try-add(:mark)
+  try-add(:sym(1))
+  try-add(:sym(1))
+  try-add(:shift)
+  scale-row(3)
+  assert(g.out.len() == 6)
+  assert(g.out.get(1) is :rep(_))
+  let spelled = expand-player(4)
+  assert(spelled.syms.len() == 7)
+  assert(spelled.shifts.len() == 3)
+  assert(spelled.shifts.get(0) == 3)
+  solve-reflection()
+  assert-solved(5)
+  solve-reflection-sel()
+  assert-solved(5)
+  assert(g.out.get(0) is :mir)
+  solve-rainbow()
+  assert-solved(4)
+  assert(expand-player(4).shifts.len() == 4)
+  solve-wrapper()
+  assert-solved(12)
+  assert(g.out.get(0) is :callo(_))
+  solve-wrapper-sel()
+  assert-solved(12)
+  assert(g.out.get(0) is :callo(_))
+  tap-chip(g.out.&, 0)
+  tap-chip(g.out.&, 2)
+  delete-tokens()
+  assert(g.out.len() == 6)
+  solve-onion()
+  assert-solved(10)
+  solve-canon()
+  assert-solved(20)
+  assert(g.def-a.len() == 3)
+  assert(expand-player(4).syms.len() == 24)
+  solve-stripes()
+  assert-solved(4)
+  solve-sunset()
+  assert-solved(4)
+  solve-pack()
+  assert-solved(3)
+  solve-pack-fold()
+  assert-solved(3)
+  solve-pack-marked-fold()
+  assert-solved(5)
+  solve-prune-extract()
+  assert-solved(12)
+  tap-chip(g.out.&, 0)
+  tap-chip(g.out.&, 1)
+  fold-row()
+  assert-solved(11)
+  solve-prune()
+  assert-solved(11)
+  solve-topiary()
+  assert-solved(6)
+  solve-topiary-fold()
+  assert-solved(6)
+  solve-nesting()
+  assert-solved(5)
+  assert(expand-target(cur-level(), 4).buds.len() == 1)
+  solve-steps()
+  assert-solved(8)
+  solve-staircase()
+  assert-solved(8)
+  let sh-def = parse-text(:seq, "R>")
+  let sh-none = parse-text(:seq, "")
+  let sh-seed = parse-text(:seq, "aR")
+  let sh-e = expand(:seq, sh-def, sh-none, sh-seed, 2, 2)
+  assert(sh-e.syms.len() == 2)
+  assert(sh-e.syms.get(0) == 0)
+  assert(sh-e.syms.get(1) == 0)
+
+  load-level(level-index("fork"))
+  g.active = 0
+  try-add(:sym(0))
+  try-add(:sym(3))
+  try-add(:sym(1))
+  try-add(:again)
+  let open-e = expand-row(0, 2)
+  assert(open-e.tail == 1)
+  let ow = turtle-walk(open-e.&, 25.0, 0, 1.0)
+  assert(ow.marks.len() == 1)
+  assert(branch-dim0(ow.&) == 1)
+  solve-fork()
+  assert-solved(9)
+  assert(expand-target(cur-level(), 1).buds.len() == 2)
+  solve-thicket()
+  assert-solved(7)
+  assert(expand-target(cur-level(), 1).buds.len() == 2)
+  solve-reed()
+  assert-solved(3)
+  solve-coastline()
+  assert-solved(14)
+  solve-blossom()
+  assert-solved(10)
+  let blossom-e = expand-player(4)
+  assert(turtle-walk(blossom-e.&, 30.0, 0, 1.0).blooms.len() > 0)
+  solve-bonsai()
+  assert-solved(10)
+  let bonsai-e = expand-player(5)
+  let bonsai-w = turtle-walk(bonsai-e.&, 22.0, 0, 1.0)
+  assert(bonsai-w.segs.get(0).w > 0.99)
+  assert(bonsai-w.segs.get(bonsai-w.segs.len() - 1).w < 0.5)
+  solve-dragon()
+  assert-solved(14)
+  solve-bracken()
+  assert-solved(11)
+  solve-tendril()
+  assert-solved(6)
+  let tendril-e = expand-player(16)
+  let tendril-w = turtle-walk(tendril-e.&, 40.0, 0, 1.0)
+  let t0 = tendril-w.segs.get(0)
+  let tn = tendril-w.segs.get(tendril-w.segs.len() - 1)
+  assert((t0.bx - t0.ax) * (t0.bx - t0.ax) + (t0.by - t0.ay) * (t0.by - t0.ay) > 0.9)
+  assert((tn.bx - tn.ax) * (tn.bx - tn.ax) + (tn.by - tn.ay) * (tn.by - tn.ay) < 0.01)
+  solve-arch()
+  assert-solved(9)
+  let arch-t1 = expand-target(cur-level(), 1)
+  assert(arch-t1.syms.len() == 6)
+  let arch-t0 = expand-target(cur-level(), 0)
+  assert(arch-t0.syms.len() == 1)
+  solve-island()
+  assert-solved(19)
+  solve-maze()
+  assert-solved(25)
+  load-level(level-index("fern"))
+  let fern = expand-target(cur-level(), 5)
+  assert(turtle-walk(fern.&, 25.0, 0, 1.0).segs.len() > 1000)
+  assert(expand-target(cur-level(), 1).buds.len() == 7)
+  solve-fern()
+  assert-solved(24)
+  load-level(0)
+}
+
+fn solve-wrapper(context g: *mut game)() {
+  load-level(level-index("wrapper"))
+  g.active = 0
+  for s in [0u8, 0] { try-add(:sym(s)) }
+  try-add(:hole)
+  for s in [1u8, 1] { try-add(:sym(s)) }
+  g.active = 2
+  for s in [2u8, 3, 1] {
+    try-add(:mark)
+    try-add(:sym(s))
+    try-add(:name(0))
+  }
+}
+
+fn solve-wrapper-sel(context g: *mut game)() {
+  load-level(level-index("wrapper"))
+  g.active = 0
+  for s in [0u8, 0] { try-add(:sym(s)) }
+  try-add(:hole)
+  for s in [1u8, 1] { try-add(:sym(s)) }
+  g.active = 2
+  for s in [2u8, 3, 1] {
+    try-add(:sym(s))
+    let row = row-of(2)
+    tap-chip(row, row.len() - 1)
+    assert(sel-closed(row).is-some())
+    try-add(:name(0))
+  }
+}
+
+fn solve-onion(context g: *mut game)() {
+  load-level(level-index("onion"))
+  g.active = 0
+  for s in [0u8, 2] { try-add(:sym(s)) }
+  try-add(:hole)
+  for s in [1u8, 3] { try-add(:sym(s)) }
+  g.active = 2
+  try-add(:mark)
+  try-add(:mark)
+  try-add(:mark)
+  try-add(:sym(2))
+  try-add(:name(0))
+  try-add(:name(0))
+  try-add(:name(0))
+}
+
+fn solve-pack(context g: *mut game)() {
+  load-level(level-index("pack"))
+  g.out.clear()
+  try-add(:sym(0))
+  try-add(:sym(1))
+  scale-row(6)
+}
+
+fn solve-pack-fold(context g: *mut game)() {
+  load-level(level-index("pack"))
+  tap-chip(g.out.&, 0)
+  tap-chip(g.out.&, 1)
+  fold-row()
+}
+
+fn solve-topiary-fold(context g: *mut game)() {
+  load-level(level-index("topiary"))
+  tap-chip(g.out.&, 0)
+  tap-chip(g.out.&, 5)
+  fold-row()
+}
+
+fn solve-pack-marked-fold(context g: *mut game)() {
+  load-level(level-index("pack"))
+  tap-chip(g.out.&, 2)
+  assert(g.out.len() == 12)
+  tap-chip(g.out.&, 3)
+  assert(g.sel-a == 2 and g.sel-b == 4)
+  fold-row()
+}
+
+fn solve-prune-extract(context g: *mut game)() {
+  load-level(level-index("prune"))
+  tap-chip(g.out.&, 0)
+  tap-chip(g.out.&, 5)
+  extract-def()
+  assert(g.def-a.len() == 6)
+  assert(g.out.len() == 5)
+}
+
+fn solve-prune(context g: *mut game)() {
+  load-level(level-index("prune"))
+  g.out.clear()
+  g.active = 0
+  for s in [0u8, 0, 2, 2, 1, 1] { try-add(:sym(s)) }
+  g.active = 2
+  try-add(:mark)
+  try-add(:name(0))
+  try-add(:sym(3))
+  scale-row(2)
+  try-add(:name(0))
+}
+
+fn solve-topiary(context g: *mut game)() {
+  load-level(level-index("topiary"))
+  g.out.clear()
+  for s in [0u8, 3, 1, 0, 0, 4] { try-add(:sym(s)) }
+  scale-row(4)
+}
+
+fn solve-stripes(context g: *mut game)() {
+  load-level(level-index("stripes"))
+  try-add(:mark)
+  try-add(:mark)
+  try-add(:sym(0))
+  try-add(:sym(2))
+  scale-row(4)
+  scale-row(2)
+}
+
+fn solve-sunset(context g: *mut game)() {
+  load-level(level-index("sunset"))
+  try-add(:mark)
+  try-add(:mark)
+  try-add(:sym(0))
+  scale-row(4)
+  try-add(:shift)
+  scale-row(4)
+}
+
+fn solve-reflection(context g: *mut game)() {
+  load-level(level-index("reflection"))
+  g.active = 2
+  try-add(:mir)
+  for s in [0u8, 2, 2, 1] { try-add(:sym(s)) }
+}
+
+fn solve-canon(context g: *mut game)() {
+  load-level(level-index("canon"))
+  assert(g.active == 0)
+  try-add(:hole)
+  try-add(:shift)
+  try-add(:hole)
+}
+
+fn solve-reflection-sel(context g: *mut game)() {
+  load-level(level-index("reflection"))
+  g.active = 2
+  for s in [0u8, 2, 2, 1] { try-add(:sym(s)) }
+  tap-chip(g.out.&, 0)
+  tap-chip(g.out.&, 3)
+  try-add(:mir)
+}
+
+fn solve-rainbow(context g: *mut game)() {
+  load-level(level-index("rainbow"))
+  g.active = 2
+  try-add(:mir)
+  try-add(:rep(4))
+  try-add(:sym(0))
+  try-add(:shift)
+}
+
+fn solve-steps(context g: *mut game)() {
+  load-level(level-index("steps"))
+  try-add(:name(1))
+  try-add(:sym(1))
+  try-add(:again)
+}
+
+fn solve-staircase(context g: *mut game)() {
+  load-level(level-index("staircase"))
+  g.active = 0
+  try-add(:name(1))
+  try-add(:shift)
+  try-add(:again)
+  g.active = 1
+  try-add(:sym(0))
+  try-add(:again)
+  g.active = 2
+  try-add(:name(0))
+}
+
+fn solve-nesting(context g: *mut game)() {
+  load-level(level-index("nesting"))
+  g.active = 0
+  try-add(:sym(0))
+  try-add(:again)
+  try-add(:sym(1))
+  g.active = 2
+  try-add(:name(0))
+}
+
+fn solve-fork(context g: *mut game)() {
+  load-level(level-index("fork"))
+  g.active = 0
+  for s in [0u8, 3, 1] { try-add(:sym(s)) }
+  try-add(:again)
+  for s in [4u8, 3, 2] { try-add(:sym(s)) }
+  try-add(:again)
+  try-add(:sym(4))
+}
+
+fn solve-thicket(context g: *mut game)() {
+  load-level(level-index("thicket"))
+  g.active = 0
+  for s in [0u8, 3, 1] { try-add(:sym(s)) }
+  try-add(:again)
+  try-add(:sym(4))
+  try-add(:again)
+  g.active = 2
+  try-add(:name(0))
+}
+
+fn solve-reed(context g: *mut game)() {
+  load-level(level-index("reed"))
+  try-add(:sym(0))
+  try-add(:sym(5))
+  scale-row(6)
+}
+
+fn solve-coastline(context g: *mut game)() {
+  load-level(level-index("coastline"))
+  g.active = 0
+  try-add(:again)
+  try-add(:sym(1))
+  try-add(:again)
+  for s in [2u8, 2] { try-add(:sym(s)) }
+  try-add(:again)
+  try-add(:sym(1))
+  try-add(:again)
+  g.active = 2
+  try-add(:mark)
+  try-add(:sym(0))
+  try-add(:name(0))
+  for s in [2u8, 2] { try-add(:sym(s)) }
+  scale-row(3)
+}
+
+fn solve-blossom(context g: *mut game)() {
+  load-level(level-index("blossom"))
+  g.active = 0
+  for s in [0u8, 3, 1] { try-add(:sym(s)) }
+  try-add(:again)
+  for s in [4u8, 3, 2] { try-add(:sym(s)) }
+  try-add(:again)
+  for s in [4u8, 6] { try-add(:sym(s)) }
+  g.active = 2
+  try-add(:name(0))
+}
+
+fn solve-bonsai(context g: *mut game)() {
+  load-level(level-index("bonsai"))
+  g.active = 0
+  for s in [0u8, 5, 3, 1] { try-add(:sym(s)) }
+  try-add(:again)
+  for s in [4u8, 3, 2] { try-add(:sym(s)) }
+  try-add(:again)
+  try-add(:sym(4))
+  g.active = 2
+  try-add(:name(0))
+}
+
+fn solve-dragon(context g: *mut game)() {
+  load-level(level-index("dragon"))
+  g.active = 0
+  try-add(:again)
+  try-add(:sym(1))
+  try-add(:name(1))
+  for s in [0u8, 1] { try-add(:sym(s)) }
+  g.active = 1
+  for s in [2u8, 0] { try-add(:sym(s)) }
+  try-add(:name(0))
+  try-add(:sym(2))
+  try-add(:again)
+  g.active = 2
+  try-add(:sym(0))
+  try-add(:name(0))
+}
+
+fn solve-bracken(context g: *mut game)() {
+  load-level(level-index("bracken"))
+  g.active = 0
+  for s in [0u8, 3, 1] { try-add(:sym(s)) }
+  try-add(:again)
+  for s in [4u8, 0, 3, 2] { try-add(:sym(s)) }
+  try-add(:again)
+  for s in [4u8, 0] { try-add(:sym(s)) }
+  g.active = 2
+  try-add(:name(0))
+}
+
+fn solve-tendril(context g: *mut game)() {
+  load-level(level-index("tendril"))
+  g.active = 0
+  for s in [0u8, 7, 1] { try-add(:sym(s)) }
+  try-add(:again)
+  g.active = 2
+  try-add(:name(0))
+}
+
+fn solve-arch(context g: *mut game)() {
+  load-level(level-index("arch"))
+  g.active = 0
+  try-add(:sym(1))
+  try-add(:again)
+  for s in [2u8, 2] { try-add(:sym(s)) }
+  try-add(:again)
+  try-add(:sym(1))
+  g.active = 2
+  try-add(:mark)
+  try-add(:sym(0))
+  try-add(:name(0))
+}
+
+fn solve-island(context g: *mut game)() {
+  load-level(level-index("island"))
+  g.active = 0
+  try-add(:again)
+  try-add(:sym(2))
+  try-add(:again)
+  try-add(:sym(1))
+  try-add(:again)
+  try-add(:sym(1))
+  try-add(:again)
+  try-add(:again)
+  try-add(:sym(2))
+  try-add(:again)
+  try-add(:sym(2))
+  try-add(:again)
+  try-add(:sym(1))
+  try-add(:again)
+  g.active = 2
+  try-add(:mark)
+  try-add(:sym(0))
+  try-add(:name(0))
+  try-add(:sym(2))
+  scale-row(4)
+}
+
+fn solve-maze(context g: *mut game)() {
+  load-level(level-index("maze"))
+  g.active = 0
+  try-add(:sym(2))
+  try-add(:name(1))
+  for s in [0u8, 1] { try-add(:sym(s)) }
+  try-add(:again)
+  try-add(:sym(0))
+  try-add(:again)
+  for s in [1u8, 0] { try-add(:sym(s)) }
+  try-add(:name(1))
+  try-add(:sym(2))
+  g.active = 1
+  try-add(:sym(1))
+  try-add(:name(0))
+  for s in [0u8, 2] { try-add(:sym(s)) }
+  try-add(:again)
+  try-add(:sym(0))
+  try-add(:again)
+  for s in [2u8, 0] { try-add(:sym(s)) }
+  try-add(:name(0))
+  try-add(:sym(1))
+  g.active = 2
+  try-add(:name(0))
+}
+
+fn solve-fern(context g: *mut game)() {
+  load-level(level-index("fern"))
+  g.active = 0
+  try-add(:sym(0))
+  try-add(:name(1))
+  for s in [1u8, 3, 3] { try-add(:sym(s)) }
+  try-add(:again)
+  for s in [4u8, 2] { try-add(:sym(s)) }
+  try-add(:again)
+  for s in [4u8, 2, 0] { try-add(:sym(s)) }
+  try-add(:name(1))
+  for s in [3u8, 2, 0] { try-add(:sym(s)) }
+  try-add(:name(1))
+  try-add(:again)
+  for s in [4u8, 1] { try-add(:sym(s)) }
+  try-add(:again)
+  g.active = 1
+  try-add(:sym(0))
+  try-add(:again)
+  try-add(:again)
+  g.active = 2
+  try-add(:name(0))
+}
+
+fn solve-by-name(context g: *mut game)(name: string): bool {
+  if name == "pack" { solve-pack() }
+  else if name == "prune" { solve-prune() }
+  else if name == "wrapper" { solve-wrapper() }
+  else if name == "onion" { solve-onion() }
+  else if name == "canon" { solve-canon() }
+  else if name == "reflection" { solve-reflection() }
+  else if name == "rainbow" { solve-rainbow() }
+  else if name == "nesting" { solve-nesting() }
+  else if name == "steps" { solve-steps() }
+  else if name == "staircase" { solve-staircase() }
+  else if name == "stripes" { solve-stripes() }
+  else if name == "sunset" { solve-sunset() }
+  else if name == "topiary" { solve-topiary() }
+  else if name == "fork" { solve-fork() }
+  else if name == "thicket" { solve-thicket() }
+  else if name == "reed" { solve-reed() }
+  else if name == "coastline" { solve-coastline() }
+  else if name == "arch" { solve-arch() }
+  else if name == "island" { solve-island() }
+  else if name == "tendril" { solve-tendril() }
+  else if name == "maze" { solve-maze() }
+  else if name == "blossom" { solve-blossom() }
+  else if name == "bonsai" { solve-bonsai() }
+  else if name == "dragon" { solve-dragon() }
+  else if name == "bracken" { solve-bracken() }
+  else if name == "fern" { solve-fern() }
+  else { return false }
+  true
+}
+
+fn main(): i32 {
+  let perm = core/arena/init-default()
+  let st: game = .{
+    perm,
+    level = 0,
+    active = 2,
+    view = VIEW-OVERLAY,
+    preview-growth = 4,
+    grow-t = 0.0,
+    play = PLAY-IDLE,
+    play-src = SRC-NONE,
+    sel-a = SEL-NONE,
+    sel-b = SEL-NONE,
+    sel-anchor = 0,
+    sel-live = false,
+    anim-t = 1.0,
+    anim-row = 2,
+    anim-len = 0,
+    anim-repl = :none,
+    anim-before = fixlist/uninit(),
+    anim-hits = fixlist/uninit(),
+    def-a = list/with-capacity-in(perm, MAX-ROW-TOKENS),
+    def-b = list/with-capacity-in(perm, MAX-ROW-TOKENS),
+    out = list/with-capacity-in(perm, MAX-ROW-TOKENS),
+  }
+  let(context) g = st.&
+  self-test()
+
+  if sys/env("GENGAME_LEVEL") is :some(ls) and u64/from-string(ls) is :ok(n) and n.as[size] < LEVELS.len() {
+    load-level(n.as[size])
+  }
+  if sys/env("GENGAME_DUMP").is-some() {
+    for li in 0.until(LEVELS.len()) {
+      let lv = LEVELS.get(li)
+      let e = expand-target(lv, lv.growth.as[size])
+      let sum: size = 0
+      let head = ""
+      for s in e.syms.& {
+        sum = sum + (s.as[size] + 1) * (it-index + 1)
+        if it-index < 40 { head = "$head${s.as[size]}" }
+      }
+      println("${lv.name} len=${e.syms.len()} sum=$sum $head")
+    }
+    return 0
+  }
+  if sys/env("GENGAME_SOLVE") is :some(nm) and solve-by-name(nm) {
+    g.preview-growth = cur-level().growth
+    g.active = 2
+  }
+  if sys/env("GENGAME_VIEW") is :some(vs) and u64/from-string(vs) is :ok(v) and v <= 2 { g.view = v.as[u8] }
+  let shot = sys/env("GENGAME_SHOT")
+
+  rl/init(W, H, "gengame".to-c-tmp().ptr)
+  rl/set-target-fps(60)
+
+  let frame = core/arena/init-default()
+  mem/push-arena(frame)
+  let tap-env = sys/env("GENGAME_TAP")
+  let frames: u64 = 0
+  let shot-frame: u64 = if sys/env("GENGAME_FRAME") is :some(fs) and u64/from-string(fs) is :ok(n) { n } else { 30 }
+  while not rl/window-should-close() {
+    handle-input()
+    tick()
+    if frames >= 10 and tap-env is :some(taps) {
+      let ti = (frames - 10).as[size]
+      let rest = taps
+      let skipped: size = 0
+      while skipped < ti and rest.position(';') is :some semi {
+        rest = rest.drop(semi + 1)
+        skipped = skipped + 1
+      }
+      if skipped == ti and rest.len() > 0 {
+        let one = if rest.position(';') is :some semi rest.take(semi) else rest
+        require one.position(',') is :some comma else crash("tap needs x,y")
+        let tx = u64/from-string(one.take(comma)).!
+        let ty = u64/from-string(one.drop(comma + 1)).!
+        tap(tx.as[i32], ty.as[i32])
+      }
+    }
+    rl/begin-drawing()
+    draw-frame()
+    rl/end-drawing()
+    frames = frames + 1
+    if frames == shot-frame and shot is :some(name) {
+      rl/take-screenshot(name.to-c().ptr)
+      break
+    }
+    frame.reset(false)
+  }
+  rl/close-window()
+  0
+}
