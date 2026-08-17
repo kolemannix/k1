@@ -19,7 +19,7 @@ use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine};
 use inkwell::types::{
-    AnyType, AnyTypeEnum, ArrayType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
+    AnyType, ArrayType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
     FunctionType as LlvmFunctionType, IntType, PointerType, StructType,
     VectorType as LlvmVectorType,
 };
@@ -311,7 +311,6 @@ pub struct CgFunction<'ctx> {
     pub param_values: Vec<BasicValueEnum<'ctx>>,
     pub last_alloca_instr: Option<InstructionValue<'ctx>>,
     pub returned_sret_variable: Option<InstId>,
-    pub instruction_count: usize,
     pub debug_info: DISubprogram<'ctx>,
     pub debug_file: DIFile<'ctx>,
 }
@@ -933,19 +932,20 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
         let call = self.builder.build_indirect_call(llvm_fn_type, impl_ptr, &args, "").unwrap();
         call.set_tail_call(true);
+        call.add_attribute(AttributeLoc::Function, self.make_enum_attribute("nounwind", 0));
         if is_sret {
-            let sret_attribute =
-                self.make_sret_attribute(return_cg_type.rich_type().as_any_type_enum());
-            call.add_attribute(AttributeLoc::Param(0), sret_attribute);
+            for attr in self.make_sret_attributes(&return_cg_type) {
+                call.add_attribute(AttributeLoc::Param(0), attr);
+            }
         }
         let param_offset = if is_sret { 1 } else { 0 };
         for i in 0..param_abi_mappings.len() as usize {
             let abi_mapping = *self.mem.get_nth_lt(param_abi_mappings, i);
             if matches!(abi_mapping, AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }) {
                 let k1_type = *self.mem.get_nth_lt(param_k1_types, i);
-                let byval_attribute =
-                    self.make_byval_attribute(k1_type.rich_type().as_any_type_enum());
-                call.add_attribute(AttributeLoc::Param((i + param_offset) as u32), byval_attribute);
+                for attr in self.make_byval_attributes(&k1_type) {
+                    call.add_attribute(AttributeLoc::Param((i + param_offset) as u32), attr);
+                }
             }
         }
         match call.try_as_basic_value() {
@@ -1688,9 +1688,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 // 3-byte struct, i40/i48/i56 for 5-7); bit_width/8 is then
                 // not a legal alignment. Use the type's ABI alignment, which
                 // is also exactly what the alloca below gets.
-                let dst_int_align =
-                    self.llvm_machine.get_target_data().get_abi_alignment(&dst_int_type);
+                let td = self.llvm_machine.get_target_data();
+                let dst_int_align = td.get_abi_alignment(&dst_int_type);
+                let dst_int_size = td.get_abi_size(&dst_int_type);
                 let integer_ptr = self.build_alloca(dst_int_type, "abi_struct_int");
+                self.emit_lifetime_marker(true, integer_ptr, dst_int_size);
                 self.builder.build_store(integer_ptr, dst_int_type.const_zero()).unwrap();
 
                 // %1 = alloca %struct.Small2, align 1
@@ -1712,6 +1714,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     )
                     .unwrap();
                 let integer_value = self.builder.build_load(abi_type, integer_ptr, "").unwrap();
+                self.emit_lifetime_marker(false, integer_ptr, dst_int_size);
                 integer_value
             }
             AbiParamMapping::StructAsPointer => self
@@ -1736,6 +1739,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 } else {
                     let tmp = self.build_alloca(abi_type, "abi_pair_tmp");
                     let abi_alloc_size = td.get_abi_size(&abi_type);
+                    self.emit_lifetime_marker(true, tmp, abi_alloc_size);
                     self.builder
                         .build_memset(
                             tmp,
@@ -1755,7 +1759,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 .const_int(src_layout.size as u64, false),
                         )
                         .unwrap();
-                    self.builder.build_load(abi_type, tmp, "").unwrap()
+                    let abi_value = self.builder.build_load(abi_type, tmp, "").unwrap();
+                    self.emit_lifetime_marker(false, tmp, abi_alloc_size);
+                    abi_value
                 }
             }
             AbiParamMapping::StructByHfa { .. } => {
@@ -1777,12 +1783,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         // We don't need to do an extra copy because byval lowering will do it
                         k1_value
                     } else {
-                        // Just a pointer parameter; we take responsibility for making the copy
-                        let callers_copy = self.alloca_copy_entire_value(
-                            k1_value.into_pointer_value(),
-                            cg_ty,
-                            "abi_caller_copy",
+                        // Just a pointer parameter; we take responsibility for making the copy.
+                        // The callee may only read it during the call, so the caller
+                        // (codegen_function_call) ends its lifetime after the callsite
+                        let callers_copy = self.build_k1_alloca(cg_ty, "abi_caller_copy");
+                        self.emit_lifetime_marker(
+                            true,
+                            callers_copy,
+                            cg_ty.rich_repr_layout().size as u64,
                         );
+                        self.memcpy_k1_value(callers_copy, k1_value.into_pointer_value(), cg_ty);
                         callers_copy.as_basic_value_enum()
                     }
                 }
@@ -1806,15 +1816,20 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    fn alloca_copy_entire_value(
-        &mut self,
-        src: PointerValue<'ctx>,
-        ty: &CgType<'ctx>,
-        name: &str,
-    ) -> PointerValue<'ctx> {
-        let dst = self.build_k1_alloca(ty, name);
-        self.memcpy_k1_value(dst, src, ty);
-        dst
+    fn emit_lifetime_marker(&self, start: bool, ptr: PointerValue<'ctx>, size_bytes: u64) {
+        let name = if start { "llvm.lifetime.start.p0" } else { "llvm.lifetime.end.p0" };
+        let function = match self.llvm_module.get_function(name) {
+            Some(f) => f,
+            None => {
+                let fn_type = self.ctx.void_type().fn_type(
+                    &[self.ctx.i64_type().into(), self.builtin_types.ptr.into()],
+                    false,
+                );
+                self.llvm_module.add_function(name, fn_type, None)
+            }
+        };
+        let size = self.ctx.i64_type().const_int(size_bytes, false);
+        self.builder.build_call(function, &[size.into(), ptr.into()], "").unwrap();
     }
 
     fn memcpy_layout(
@@ -2078,6 +2093,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         let mut byval_args = self.tmp.new_list(0);
+        let mut caller_copies = self.tmp.new_list(0);
         for (index, arg_ir_value) in self.k1.ir.mem.getn(call_args).iter().enumerate() {
             let arg_value = self.resolve_value(inst_mappings, *arg_ir_value)?;
 
@@ -2086,8 +2102,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let value_marshalled =
                 self.marshal_abi_param_value(abi_mapping, &param_k1_ty, arg_value, false);
             trace!("codegen function call arg type: {}", value_marshalled);
-            if let AbiParamMapping::BigStructByPtrToCopy { byval_attr: true } = abi_mapping {
-                byval_args.push_grow(&mut self.tmp, (args.len(), param_k1_ty.rich_type()));
+            match abi_mapping {
+                AbiParamMapping::BigStructByPtrToCopy { byval_attr: true } => {
+                    byval_args.push_grow(&mut self.tmp, (args.len(), param_k1_ty));
+                }
+                // marshal made a fresh caller-owned copy; the callee may only
+                // read it during the call, so it dies at the callsite
+                AbiParamMapping::BigStructByPtrToCopy { byval_attr: false } => {
+                    caller_copies.push_grow(
+                        &mut self.tmp,
+                        (
+                            value_marshalled.into_pointer_value(),
+                            param_k1_ty.rich_repr_layout().size as u64,
+                        ),
+                    );
+                }
+                _ => {}
             };
             args.push(value_marshalled.into())
         }
@@ -2107,22 +2137,24 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .build_indirect_call(cg_fn_type.llvm_function_type, fn_ptr, &args, "")
                     .unwrap();
                 call_site_value
+                    .add_attribute(AttributeLoc::Function, self.make_enum_attribute("nounwind", 0));
+                call_site_value
             }
         };
-        for (byval_param_index, rich_type) in byval_args.as_slice() {
-            debug!("ADDING BYVAL ATTR TO {} {}", *byval_param_index, rich_type);
-            callsite_value.add_attribute(
-                AttributeLoc::Param(*byval_param_index as u32),
-                self.make_byval_attribute(rich_type.as_any_type_enum()),
-            );
+        for (byval_param_index, param_k1_ty) in byval_args.as_slice() {
+            for attr in self.make_byval_attributes(param_k1_ty) {
+                callsite_value.add_attribute(AttributeLoc::Param(*byval_param_index as u32), attr);
+            }
         }
 
         if cg_fn_type.is_sret {
-            let sret_attribute = self.make_sret_attribute(
-                cg_fn_type.return_logical_cg_type.rich_type().as_any_type_enum(),
-            );
-            callsite_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
+            for attr in self.make_sret_attributes(&cg_fn_type.return_logical_cg_type) {
+                callsite_value.add_attribute(AttributeLoc::Param(0), attr);
+            }
         };
+        for (copy_ptr, size) in caller_copies.as_slice() {
+            self.emit_lifetime_marker(false, *copy_ptr, *size);
+        }
         match callsite_value.try_as_basic_value() {
             ValueKind::Basic(returned_value) => {
                 let canonical_value = self.canonicalize_abi_param_value(
@@ -2962,7 +2994,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let ok_offset = self.ctx.i32_type().const_int(cas.ok_vm_offset as u64, false);
                 let ok_ptr = unsafe {
                     self.builder
-                        .build_gep(self.ctx.i8_type(), result_ptr, &[ok_offset], "")
+                        .build_in_bounds_gep(self.ctx.i8_type(), result_ptr, &[ok_offset], "")
                         .unwrap()
                 };
                 self.builder.build_store(ok_ptr, ok_bool).unwrap();
@@ -3005,7 +3037,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let index_int = self.resolve_value(inst_mappings, element_index)?.into_int_value();
                 let gep = unsafe {
                     self.builder
-                        .build_gep(cg_elem_ty.rich_type(), base_ptr, &[index_int], "")
+                        .build_in_bounds_gep(cg_elem_ty.rich_type(), base_ptr, &[index_int], "")
                         .unwrap()
                 };
                 inst_mappings.insert(inst_id, gep.into());
@@ -3517,25 +3549,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         )?;
         let is_sret = llvm_function_type.is_sret;
 
-        let sret_attribute = if is_sret {
-            let struct_type = llvm_function_type.return_logical_cg_type.rich_type();
-            let sret_attribute = self.make_sret_attribute(struct_type.as_any_type_enum());
-            let align_attribute = self.make_align_attribute(
-                llvm_function_type.return_logical_cg_type.rich_repr_layout().align as u64,
-            );
-            Some((sret_attribute, align_attribute))
-        } else {
-            None
-        };
-
         let function_value = self.llvm_module.add_function(
             &llvm_name,
             llvm_function_type.llvm_function_type,
             Some(llvm_linkage),
         );
-        if let Some((sret_attribute, align_attribute)) = sret_attribute {
-            function_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
-            function_value.add_attribute(AttributeLoc::Param(0), align_attribute);
+        // K1 has no unwinding: no invoke, no landingpad, anywhere. Extern C
+        // decls get it too; LLVM cannot infer it across declaration boundaries
+        function_value.add_attribute(AttributeLoc::Function, self.make_enum_attribute("nounwind", 0));
+        if ir_fn.fn_type.diverges {
+            function_value
+                .add_attribute(AttributeLoc::Function, self.make_enum_attribute("noreturn", 0));
+        }
+        if is_sret {
+            for attr in self.make_sret_attributes(&llvm_function_type.return_logical_cg_type) {
+                function_value.add_attribute(AttributeLoc::Param(0), attr);
+            }
         }
 
         // We have to make another pass, now that we've actually made an llvm function value,
@@ -3555,10 +3584,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 if matches!(abi_mapping, AbiParamMapping::BigStructByPtrToCopy { byval_attr: true })
                 {
                     let k1_type =
-                        self.mem.get_nth_lt(llvm_function_type.param_k1_types, i - offset);
-                    let byval_attribute =
-                        self.make_byval_attribute(k1_type.rich_type().as_any_type_enum());
-                    function_value.add_attribute(AttributeLoc::Param(i as u32), byval_attribute);
+                        *self.mem.get_nth_lt(llvm_function_type.param_k1_types, i - offset);
+                    for attr in self.make_byval_attributes(&k1_type) {
+                        function_value.add_attribute(AttributeLoc::Param(i as u32), attr);
+                    }
                 }
             }
         }
@@ -3579,7 +3608,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 blocks: FxHashMap::new(),
                 last_alloca_instr: None,
                 returned_sret_variable: None,
-                instruction_count: 0,
                 debug_info: di_subprogram,
                 debug_file: di_file,
             },
@@ -4109,22 +4137,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         dfs(&self.k1.ir, entry, seen, result);
 
         result.reverse(); // reverse → RPO
-    }
-
-    fn _count_function_instructions(function_value: FunctionValue<'ctx>) -> usize {
-        let mut count = 0;
-        // eprintln!("counting function {:?}", function_value.get_name().to_str());
-        let mut cur_blk: Option<BasicBlock<'ctx>> = function_value.get_first_basic_block();
-        loop {
-            let Some(blk) = cur_blk else { break };
-            let mut cur_inst = blk.get_first_instruction();
-            while let Some(inst) = cur_inst {
-                count += 1;
-                cur_inst = inst.get_next_instruction();
-            }
-            cur_blk = blk.get_next_basic_block();
-        }
-        count
     }
 
     fn codegen_int_value(&mut self, integer: TypedIntValue) -> BasicValueEnum<'ctx> {
@@ -4695,28 +4707,28 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.verify_module()?;
 
         if optimize {
+            // PassBuilderOptions leaves SLP vectorization off by default;
+            // clang turns it on at O2+
+            let options = PassBuilderOptions::create();
+            options.set_loop_slp_vectorization(true);
+            self.llvm_module.run_passes("default<O3>", &self.llvm_machine, options).unwrap();
+        } else if self.debug.strip_debug {
+            // Default builds: every local is an alloca, so promote them. Debug
+            // builds skip even this to keep variables inspectable
             self.llvm_module
-                .run_passes("default<O2>", &self.llvm_machine, PassBuilderOptions::create())
+                .run_passes(
+                    "function(mem2reg,instcombine<no-verify-fixpoint>,simplifycfg)",
+                    &self.llvm_machine,
+                    PassBuilderOptions::create(),
+                )
                 .unwrap();
-        } else {
-            // No opt path; we could run some QoL passes?
-            // self.llvm_module
-            //     .run_passes("function(mem2reg)", &self.llvm_machine, PassBuilderOptions::create())
-            //     .unwrap();
         }
 
         self.llvm_module.verify().unwrap();
 
-        // self.llvm_machine.add_analysis_passes(&module_pass_manager);
-        // module_pass_manager.run_on(&self.llvm_module);
-
         if self.k1.config.chatty {
             eprintln!("codegen 'optimize' took {}ms", start.elapsed().as_millis());
         }
-        //for (_, function) in self.llvm_functions.iter_mut() {
-        //    let new_count = Codegen::count_function_instructions(function.function_value);
-        //    function.instruction_count = new_count;
-        //}
 
         Ok(())
     }
@@ -4769,14 +4781,30 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(res)
     }
 
-    fn make_sret_attribute(&self, typ: AnyTypeEnum<'ctx>) -> Attribute {
-        self.ctx.create_type_attribute(Attribute::get_named_enum_kind_id("sret"), typ)
-    }
-    fn make_align_attribute(&self, align: u64) -> Attribute {
-        self.ctx.create_enum_attribute(Attribute::get_named_enum_kind_id("align"), align)
+    fn make_enum_attribute(&self, name: &str, value: u64) -> Attribute {
+        self.ctx.create_enum_attribute(Attribute::get_named_enum_kind_id(name), value)
     }
 
-    fn make_byval_attribute(&self, typ: AnyTypeEnum<'ctx>) -> Attribute {
-        self.ctx.create_type_attribute(Attribute::get_named_enum_kind_id("byval"), typ)
+    fn make_sret_attributes(&self, return_type: &CgType<'ctx>) -> [Attribute; 4] {
+        let layout = return_type.rich_repr_layout();
+        [
+            self.ctx.create_type_attribute(
+                Attribute::get_named_enum_kind_id("sret"),
+                return_type.rich_type().as_any_type_enum(),
+            ),
+            self.make_enum_attribute("align", layout.align as u64),
+            self.make_enum_attribute("noalias", 0),
+            self.make_enum_attribute("dereferenceable", layout.size as u64),
+        ]
+    }
+
+    fn make_byval_attributes(&self, param_type: &CgType<'ctx>) -> [Attribute; 2] {
+        [
+            self.ctx.create_type_attribute(
+                Attribute::get_named_enum_kind_id("byval"),
+                param_type.rich_type().as_any_type_enum(),
+            ),
+            self.make_enum_attribute("align", param_type.rich_repr_layout().align as u64),
+        ]
     }
 }

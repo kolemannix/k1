@@ -181,17 +181,17 @@ pub enum Command {
     #[clap(alias = "c")]
     Check {
         /// File
-        file: PathBuf,
+        file: Option<PathBuf>,
     },
     #[clap(alias = "b")]
     Build {
         /// File
-        file: PathBuf,
+        file: Option<PathBuf>,
     },
     #[clap(alias = "r")]
     Run {
         /// File
-        file: PathBuf,
+        file: Option<PathBuf>,
         /// Arguments passed through to the program
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         program_args: Vec<String>,
@@ -199,39 +199,36 @@ pub enum Command {
     #[clap(alias = "t")]
     Test {
         /// File
-        file: PathBuf,
-    },
-    #[clap()]
-    Repl {
-        /// File
-        file: PathBuf,
+        file: Option<PathBuf>,
     },
     #[clap()]
     Server {
         /// File
-        file: PathBuf,
+        file: Option<PathBuf>,
     },
     /// Run a module's setup step (setup.k1) if stale
     #[clap()]
     Setup {
         /// Module directory
-        file: PathBuf,
+        file: Option<PathBuf>,
         /// Re-run the module's setup even if fresh
         #[arg(long, default_value_t = false)]
         force: bool,
     },
+    #[clap()]
+    Clean { file: Option<PathBuf> },
 }
 
 impl Command {
-    pub fn file(&self) -> &PathBuf {
+    pub fn file(&self) -> Option<&PathBuf> {
         match self {
-            Command::Check { file } => file,
-            Command::Build { file } => file,
-            Command::Run { file, .. } => file,
-            Command::Test { file } => file,
-            Command::Repl { file } => file,
-            Command::Server { file } => file,
-            Command::Setup { file, .. } => file,
+            Command::Check { file }
+            | Command::Build { file }
+            | Command::Run { file, .. }
+            | Command::Test { file }
+            | Command::Server { file }
+            | Command::Setup { file, .. }
+            | Command::Clean { file } => file.as_ref(),
         }
     }
 
@@ -323,7 +320,7 @@ pub struct Args {
 }
 
 impl Args {
-    pub fn file(&self) -> &PathBuf {
+    pub fn file(&self) -> Option<&PathBuf> {
         self.command.file()
     }
 }
@@ -801,7 +798,7 @@ fn run_setup_program(req: &SetupRequest, setup_k1_path: &str) -> Result<()> {
         target: Some(req.target),
         is_setup_program: true,
         k1_home_override: Some(req.idents.get_string(req.k1_home).to_string()),
-        command: Command::Check { file: PathBuf::from(setup_k1_path) },
+        command: Command::Check { file: Some(PathBuf::from(setup_k1_path)) },
     };
     let _cwd = CwdGuard::enter(module_dir);
     let mut program = match compile_program(&args) {
@@ -1076,8 +1073,11 @@ pub fn compile_program_ext(
     };
     let start_time = std::time::Instant::now();
 
-    let src_path = kpath::canonicalize(args.file())
-        .unwrap_or_else(|e| panic!("Failed to load source path: {e}"));
+    let src_path = (match args.file() {
+        None => kpath::canonicalize("."),
+        Some(path_buf) => kpath::canonicalize(path_buf),
+    })
+    .unwrap_or_else(|e| panic!("Failed to load source path: {e}"));
 
     let (is_dir, home_dir) = module_home_from_src_path(&src_path);
     let module_name =
@@ -1575,7 +1575,8 @@ pub fn write_library_archive(k1: &TypedProgram, module_name: &str) -> Result<()>
 
     if target.target_os() == TargetOs::Linux {
         let mut objcopy_cmd = std::process::Command::new("objcopy");
-        objcopy_cmd.arg(format!("--keep-global-symbols={}", build_export_list_file_path(k1, module_name)));
+        objcopy_cmd
+            .arg(format!("--keep-global-symbols={}", build_export_list_file_path(k1, module_name)));
         objcopy_cmd.arg(combined_name.as_str());
         log::debug!("Localize Command: {:?}", objcopy_cmd);
         if !objcopy_cmd.status()?.success() {
@@ -1863,7 +1864,9 @@ mod compiler_test {
             target: None,
             is_setup_program: false,
             k1_home_override: None,
-            command: Command::Check { file: PathBuf::from(root).join("test_src/dep_diamond_test") },
+            command: Command::Check {
+                file: Some(PathBuf::from(root).join("test_src/dep_diamond_test")),
+            },
         };
         let mut source_overrides = fxhash::FxHashMap::default();
         source_overrides.insert(dep_file, "fn renamed-base(): int { 21 }\n".to_string());
@@ -1902,7 +1905,7 @@ mod compiler_test {
             target: None,
             is_setup_program: false,
             k1_home_override: None,
-            command: Command::Check { file: app.clone() },
+            command: Command::Check { file: Some(app.clone()) },
         };
 
         let cold = compile_program(&args).ok().expect("cold compile must succeed");
@@ -1963,7 +1966,7 @@ mod compiler_test {
             target: None,
             is_setup_program: false,
             k1_home_override: Some(root.to_string()),
-            command: Command::Check { file: dir.join("app.k1") },
+            command: Command::Check { file: Some(dir.join("app.k1")) },
         };
 
         assert!(compile_program(&args).is_ok(), "first compile (setup runs) must succeed");

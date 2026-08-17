@@ -41,7 +41,8 @@ pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         }
     }
 
-    let skip_inline = std::env::var("K1_IROPT_NO_INLINE").is_ok();
+    let skip_inline = true;
+    // let skip_inline = std::env::var("K1_IROPT_NO_INLINE").is_ok();
 
     let inline_start = k1.timing.raw();
     for unit_id in order.iter() {

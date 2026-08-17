@@ -1,10 +1,11 @@
+use std::path::Path;
 // Copyright (c) 2026 knix
 // All rights reserved.
 use std::process::ExitCode;
 
 use clap::Parser;
-use k1::compiler;
 use k1::compiler::{Args, Command};
+use k1::{compiler, kpath};
 use log::info;
 use mimalloc::MiMalloc;
 
@@ -92,20 +93,16 @@ fn run() -> anyhow::Result<ExitCode> {
                 );
                 if exit_code != Some(0) { Ok(ExitCode::FAILURE) } else { Ok(ExitCode::SUCCESS) }
             }
-            Command::Repl { .. } => {
-                let mut line = String::new();
-                loop {
-                    let _len = std::io::stdin().read_line(&mut line).unwrap();
-                    if &line == "exit\n" {
-                        return Ok(ExitCode::SUCCESS);
-                    }
-
-                    println!("you said: {}", line);
-                    line.clear();
-                }
-            }
             Command::Server { .. } => unreachable!("server runs before codegen"),
             Command::Setup { .. } => unreachable!("setup exits after compile"),
+            Command::Clean { .. } => {
+                // Clear the out dir
+                let out_dir_path = Path::from(cg.k1.ast.idents.get_string(cg.k1.config.out_dir));
+                if std::fs::exists(out_dir_path).unwrap() {
+                    std::fs::remove_dir_all(out_dir_path)?;
+                }
+                Ok(ExitCode::SUCCESS)
+            }
         },
         Err(err) => {
             eprintln!("Codegen error: {err}");

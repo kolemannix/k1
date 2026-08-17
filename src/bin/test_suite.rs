@@ -131,7 +131,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         cache: false,
         is_setup_program: false,
         k1_home_override: None,
-        command: Command::Build { file: path.as_ref().to_owned() },
+        command: Command::Build { file: Some(path.as_ref().to_owned()) },
     };
     let compile_result = compiler::compile_program(&args);
     let expectation = get_test_expectation(path.as_ref());
