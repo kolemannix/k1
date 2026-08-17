@@ -514,6 +514,7 @@ impl TypedProgram {
                 is_external: false,
                 ast_id: ParsedGlobalId::PENDING,
                 parent_scope: repl_ns_scope,
+                reload_ns: None,
             },
             global_id,
         );

@@ -17,6 +17,11 @@ fn main(): i32 {
       }
     } else if line == "greet" {
       println("greet: ${scene/greeting()}")
+    } else if line == "speed" {
+      println("speed: ${scene/speed}")
+    } else if line == "bump" {
+      scene/speed = scene/speed + 1
+      println("bump ok")
     } else if line == "version" {
       println("version: ${scene/loaded-version()}")
     } else if line == "quit" {

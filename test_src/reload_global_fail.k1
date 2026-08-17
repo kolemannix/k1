@@ -1,7 +1,7 @@
 ns(reload) handlers {
-  let COUNT: int = 0
+  let(mutable, tls) COUNT: int = 0
   fn get(): int { 0 }
 }
 
 fn main(): i32 { 0 }
-//errmsg: Not allowed in ns(reload) handlers: globals cannot be included
+//errmsg: tls globals are not allowed in reloadable namespaces

@@ -2886,6 +2886,7 @@ fn compile_variable_to_address(
 
             if let Some(initial_value) = global.initial_value.as_value()
                 && global.is_constant
+                && global.reload_ns.is_none()
                 && value_pt.is_scalar()
                 && !require_address
                 && b.optimize_enabled()

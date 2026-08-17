@@ -76,8 +76,7 @@ name = "repl"
 path = "src/bin/repl_main.rs"
 
 [profile.dev]
-# debug = 0
-# strip = "debuginfo"
+debug = "line-tables-only"
 
 [profile.release]
 panic = "abort"

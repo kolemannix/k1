@@ -4,4 +4,4 @@ ns(reload) handlers {
 }
 
 fn main(): i32 { 0 }
-//errmsg: Not allowed in ns(reload) handlers: generic code cannot be included
+//errmsg: generic fns are not allowed in reloadable namespaces

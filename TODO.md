@@ -17,6 +17,7 @@ next up
 ## [x] live reload featureset (design/reload.md)
 - [x] `ns(reload) foo { <functions in here go in a dylib> }`
 - [x] `fn main() { foo/load().! /* or foo/watch().! */; foo/my-fn(1,2,3) }`
+- [x] reloadable globals
 - [ ] Linux verification; `k1 b --watch`; multi-ns-per-dylib
 
 pointer-free predicate - pod/serializable?
@@ -47,6 +48,12 @@ pointer-free predicate - pod/serializable?
 - [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
       way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
 
+- [ ] [design/flags_in_tags.k1.wip]
+kind: either(u64, { rounded = false, even = false, faces: u8 }) {
+  Circle({ radius: i32 }) = [rounded, even, faces = 1],
+  Square({ len: i32 }) = [even, faces = 4],
+  ...
+}
 - [ ] top-level parser recovery (sync to next fn/ns/type/macro)
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
@@ -62,9 +69,9 @@ pointer-free predicate - pod/serializable?
 - [ ] enum-from-sum type operator
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
 - [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
-- [ ] [design/flags_in_tags.k1.wip]
+- [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
 - [ ] auto-print implementation on-demand for sums
-- [ ] Exported functions
+- [x] Exported functions
 - [ ] Tail calls
 - [ ] Implement at least one format specifier (precision, pretty). Do precision ('places') first:
       the brotli bench needed `k1-mbps.format(sb.&, 1)` string-builder calls x3 where `${k1-mbps:.1}` should do

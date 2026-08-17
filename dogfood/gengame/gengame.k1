@@ -152,14 +152,11 @@ let C_VINE: rl/color = hsva(147.7, 0.684, 0.745, 255)
 let C_VINE-TIP: rl/color = hsva(92.7, 0.44, 0.980, 255)
 let C_BLOOM: rl/color = hsva(330.0, 0.45, 1.0, 255)
 
-type shape-kind = either(u8) { circle, square, tri, diamond }
-type tile-style = { kind: shape-kind, color: rl/color }
-
-let TILES: array[tile-style, 4] = [
-  .{ kind = :circle, color = hsva(356.1, 0.660, 0.922, 255) },
-  .{ kind = :square, color = hsva(218.7, 0.646, 0.941, 255) },
-  .{ kind = :tri, color = hsva(140.0, 0.571, 0.824, 255) },
-  .{ kind = :diamond, color = hsva(45.5, 0.674, 0.961, 255) },
+let SYM-COLORS: array[rl/color, 4] = [
+  hsva(350.0, 0.52, 0.97, 255),
+  hsva(40.0, 0.48, 0.99, 255),
+  hsva(130.0, 0.40, 0.90, 255),
+  hsva(215.0, 0.52, 0.98, 255),
 ]
 
 type token = either { sym(u8), rep(u8), close, name(u8), callo(u8), again, shift, mir, mark, hole }
@@ -189,18 +186,18 @@ type level = {
 let LEVELS: array[level, 40] = [
   .{ name = "stalk", world = :seq, target = "7(R)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "R", ndefs = 0, par = 2, limit = 4, growth = 4, width = 0, angle = 0.0 },
   .{ name = "couplet", world = :seq, target = "5(RB)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RB", ndefs = 0, par = 3, limit = 5, growth = 4, width = 0, angle = 0.0 },
-  .{ name = "remainder", world = :seq, target = "4(GY)G", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "GY", ndefs = 0, par = 4, limit = 6, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "remainder", world = :seq, target = "4(GY)G", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "YG", ndefs = 0, par = 4, limit = 6, growth = 4, width = 0, angle = 0.0 },
   .{ name = "pack", world = :seq, target = "6(RB)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "RBRBRBRBRBRB", syms = "RB", ndefs = 0, par = 3, limit = 12, growth = 4, width = 0, angle = 0.0 },
-  .{ name = "two levels", world = :seq, target = "2(3(RGGB)Y)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RBGY", ndefs = 1, par = 7, limit = 9, growth = 4, width = 0, angle = 0.0 },
-  .{ name = "the exception", world = :seq, target = "4(RG)B4(RG)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RBG", ndefs = 1, par = 7, limit = 9, growth = 4, width = 0, angle = 0.0 },
-  .{ name = "abstraction", world = :seq, target = "2(RGGBYRGGBG)RGGB", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RBGY", ndefs = 2, par = 11, limit = 13, growth = 4, width = 0, angle = 0.0 },
-  .{ name = "prune", world = :seq, target = "aYaYa", target-a = "RRGGBB", target-b = "", given = "", given-a = "", given-b = "", start = "RRGGBBYRRGGBBYRRGGBB", syms = "RBGY", ndefs = 1, par = 11, limit = 20, growth = 4, width = 0, angle = 0.0 },
-  .{ name = "wrapper", world = :seq, target = "a(G)a(Y)a(B)", target-a = "RR_BB", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RBGY_", ndefs = 1, par = 12, limit = 14, growth = 4, width = 0, angle = 0.0 },
-  .{ name = "onion", world = :seq, target = "a(a(a(G)))", target-a = "RG_BY", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RBGY_", ndefs = 1, par = 10, limit = 12, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "two levels", world = :seq, target = "2(3(RGGB)Y)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RYGB", ndefs = 1, par = 7, limit = 9, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "the exception", world = :seq, target = "4(RG)B4(RG)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RGB", ndefs = 1, par = 7, limit = 9, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "abstraction", world = :seq, target = "2(RGGBYRGGBG)RGGB", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RYGB", ndefs = 2, par = 11, limit = 13, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "prune", world = :seq, target = "aYaYa", target-a = "RRGGBB", target-b = "", given = "", given-a = "", given-b = "", start = "RRGGBBYRRGGBBYRRGGBB", syms = "RYGB", ndefs = 1, par = 11, limit = 20, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "wrapper", world = :seq, target = "a(G)a(Y)a(B)", target-a = "RR_BB", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RYGB_", ndefs = 1, par = 12, limit = 14, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "onion", world = :seq, target = "a(a(a(G)))", target-a = "RG_BY", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RYGB_", ndefs = 1, par = 10, limit = 12, growth = 4, width = 0, angle = 0.0 },
   .{ name = "drift", world = :seq, target = "4(R>)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "R>", ndefs = 0, par = 3, limit = 3, growth = 4, width = 0, angle = 0.0 },
   .{ name = "interference", world = :seq, target = "4(RB>)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RB>", ndefs = 0, par = 4, limit = 6, growth = 4, width = 0, angle = 0.0 },
-  .{ name = "canon", world = :seq, target = "a(RGB)a(YYR)a(GRY)a(BBG)", target-a = "_>_", target-b = "", given = "a(RGB)a(YYR)a(GRY)a(BBG)", given-a = "", given-b = "", start = "", syms = "RBGY_>", ndefs = 1, par = 20, limit = 22, growth = 4, width = 0, angle = 0.0 },
-  .{ name = "reflection", world = :seq, target = "M(RGGB)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RBGM", ndefs = 0, par = 5, limit = 7, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "canon", world = :seq, target = "a(RGB)a(YYR)a(GRY)a(BBG)", target-a = "_>_", target-b = "", given = "a(RGB)a(YYR)a(GRY)a(BBG)", given-a = "", given-b = "", start = "", syms = "RYGB_>", ndefs = 1, par = 20, limit = 22, growth = 4, width = 0, angle = 0.0 },
+  .{ name = "reflection", world = :seq, target = "M(RGGB)", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RGBM", ndefs = 0, par = 5, limit = 7, growth = 4, width = 0, angle = 0.0 },
   .{ name = "rainbow", world = :seq, target = "M(4(R>))", target-a = "", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "R>M", ndefs = 0, par = 4, limit = 6, growth = 4, width = 0, angle = 0.0 },
   .{ name = "nesting", world = :seq, target = "a", target-a = "RaB", target-b = "", given = "", given-a = "", given-b = "", start = "", syms = "RB", ndefs = 1, par = 5, limit = 7, growth = 9, width = 0, angle = 0.0 },
   .{ name = "steps", world = :seq, target = "a", target-a = "bBa", target-b = "Rb", given = "a", given-a = "", given-b = "Rb", start = "", syms = "RB", ndefs = 2, par = 8, limit = 9, growth = 4, width = 0, angle = 0.0 },
@@ -300,7 +297,7 @@ fn load-level(context g: *mut game)(i: size) {
 }
 
 fn world-alphabet(w: world-kind): string {
-  if w is :plant { "F+-[]!*s" } else { "RBGY" }
+  if w is :plant { "F+-[]!*s" } else { "RYGB" }
 }
 
 fn level-recursive(lv: level): bool {
@@ -1283,16 +1280,12 @@ ns(reload) view {
     rl/draw-text(c, cx - w / 2, y, sz, col)
   }
 
-  fn draw-shape(t: tile-style, cx: i32, cy: i32, r: f32) {
-    let center: rl/vec2 = .{ x = cx.as[f32], y = cy.as[f32] }
-    t.kind is {
-      :circle -> rl/draw-circle(cx, cy, r, t.color),
-      :square -> {
-        let ri = r.as[i32]
-        rl/draw-rectangle(cx - ri, cy - ri, ri * 2, ri * 2, t.color)
-      },
-      :tri -> rl/draw-poly(center, 3, r * 1.2, -90.0, t.color),
-      :diamond -> rl/draw-poly(center, 4, r * 1.2, 0.0, t.color)
+  fn draw-bead(col: rl/color, x: f32, cy: i32, w: f32, h: f32) {
+    let r = if w < h { w * 0.5 } else { h * 0.5 }
+    rl/draw-circle((x + r).as[i32], cy, r, col)
+    if w > h {
+      rl/draw-circle((x + w - r).as[i32], cy, r, col)
+      rl/draw-rectangle((x + r).as[i32], cy - r.as[i32], (w - h).as[i32] + 1, h.as[i32], col)
     }
   }
 
@@ -1303,7 +1296,7 @@ ns(reload) view {
           let alpha = world-alphabet(world)
           text-center(alpha.get(s.as[size]).to-string(), cx, cy - sz / 2, sz, C_TEXT-MAIN)
         } else {
-          draw-shape(TILES.get(s.as[size]), cx, cy, r)
+          rl/draw-circle(cx, cy, r, SYM-COLORS.get(s.as[size]))
         }
       },
       :rep(n) -> text-center("${n}(", cx, cy - sz / 2, sz, C_TEXT-MAIN),
@@ -1457,7 +1450,7 @@ ns(reload) view {
         si = si + 1
       }
       if w > 0.02 {
-        draw-shape(TILES.get(s.as[size]), (x + cf * w * 0.5).as[i32], top + cell / 2, cf * w * 0.38)
+        draw-bead(SYM-COLORS.get(s.as[size]), x, top + cell / 2, cf * w, cf * 0.72)
       }
       x = x + cf * w
     }
@@ -1768,7 +1761,7 @@ ns(reload) view {
       if it-index >= maxn { break }
       let cx = x0 + (it-index % w).as[i32] * cell
       let cy = y0 + (it-index / w).as[i32] * cell
-      rl/draw-rectangle(cx + 1, cy + 1, cell - 2, cell - 2, TILES.get(s.as[size]).color)
+      rl/draw-rectangle(cx + 1, cy + 1, cell - 2, cell - 2, SYM-COLORS.get(s.as[size]))
     }
     if show-shifts {
       for at in e.shifts.& {
@@ -1848,7 +1841,7 @@ ns(reload) view {
     let total = sc + residual
 
     text("GENGAME", 24, 12, 24, C_ACCENT)
-    let world-name = if lv.world is :seq { "shapes" } else if lv.world is :plant { "plants" } else { "cloth" }
+    let world-name = if lv.world is :seq { "beads" } else if lv.world is :plant { "plants" } else { "cloth" }
     text("level ${g.level + 1}/${LEVELS.len()} · ${lv.name} · $world-name", 24, 44, 18, C_TEXT-DIM)
     let total-col = if residual > 0 C_TEXT-MAIN else if sc <= lv.par C_GOOD else C_WARN
     text("total $total", 830, 12, 24, total-col)
@@ -1950,7 +1943,7 @@ fn self-test(context g: *mut game)() {
   try-add(:sym(0))
   try-add(:sym(2))
   scale-row(4)
-  try-add(:sym(1))
+  try-add(:sym(3))
   try-add(:mark)
   try-add(:sym(0))
   try-add(:sym(2))
@@ -1960,8 +1953,8 @@ fn self-test(context g: *mut game)() {
   load-level(level-index("interference"))
   try-add(:sym(0))
   try-add(:mark)
-  try-add(:sym(1))
-  try-add(:sym(1))
+  try-add(:sym(3))
+  try-add(:sym(3))
   try-add(:shift)
   scale-row(3)
   assert(g.out.len() == 6)
@@ -2106,9 +2099,9 @@ fn solve-wrapper(context g: *mut game)() {
   g.active = 0
   for s in [0u8, 0] { try-add(:sym(s)) }
   try-add(:hole)
-  for s in [1u8, 1] { try-add(:sym(s)) }
+  for s in [3u8, 3] { try-add(:sym(s)) }
   g.active = 2
-  for s in [2u8, 3, 1] {
+  for s in [2u8, 1, 3] {
     try-add(:mark)
     try-add(:sym(s))
     try-add(:name(0))
@@ -2120,9 +2113,9 @@ fn solve-wrapper-sel(context g: *mut game)() {
   g.active = 0
   for s in [0u8, 0] { try-add(:sym(s)) }
   try-add(:hole)
-  for s in [1u8, 1] { try-add(:sym(s)) }
+  for s in [3u8, 3] { try-add(:sym(s)) }
   g.active = 2
-  for s in [2u8, 3, 1] {
+  for s in [2u8, 1, 3] {
     try-add(:sym(s))
     let row = row-of(2)
     tap-chip(row, row.len() - 1)
@@ -2136,7 +2129,7 @@ fn solve-onion(context g: *mut game)() {
   g.active = 0
   for s in [0u8, 2] { try-add(:sym(s)) }
   try-add(:hole)
-  for s in [1u8, 3] { try-add(:sym(s)) }
+  for s in [3u8, 1] { try-add(:sym(s)) }
   g.active = 2
   try-add(:mark)
   try-add(:mark)
@@ -2151,7 +2144,7 @@ fn solve-pack(context g: *mut game)() {
   load-level(level-index("pack"))
   g.out.clear()
   try-add(:sym(0))
-  try-add(:sym(1))
+  try-add(:sym(3))
   scale-row(6)
 }
 
@@ -2191,11 +2184,11 @@ fn solve-prune(context g: *mut game)() {
   load-level(level-index("prune"))
   g.out.clear()
   g.active = 0
-  for s in [0u8, 0, 2, 2, 1, 1] { try-add(:sym(s)) }
+  for s in [0u8, 0, 2, 2, 3, 3] { try-add(:sym(s)) }
   g.active = 2
   try-add(:mark)
   try-add(:name(0))
-  try-add(:sym(3))
+  try-add(:sym(1))
   scale-row(2)
   try-add(:name(0))
 }
@@ -2231,7 +2224,7 @@ fn solve-reflection(context g: *mut game)() {
   load-level(level-index("reflection"))
   g.active = 2
   try-add(:mir)
-  for s in [0u8, 2, 2, 1] { try-add(:sym(s)) }
+  for s in [0u8, 2, 2, 3] { try-add(:sym(s)) }
 }
 
 fn solve-canon(context g: *mut game)() {
@@ -2245,7 +2238,7 @@ fn solve-canon(context g: *mut game)() {
 fn solve-reflection-sel(context g: *mut game)() {
   load-level(level-index("reflection"))
   g.active = 2
-  for s in [0u8, 2, 2, 1] { try-add(:sym(s)) }
+  for s in [0u8, 2, 2, 3] { try-add(:sym(s)) }
   tap-chip(g.out.&, 0)
   tap-chip(g.out.&, 3)
   try-add(:mir)
@@ -2263,7 +2256,7 @@ fn solve-rainbow(context g: *mut game)() {
 fn solve-steps(context g: *mut game)() {
   load-level(level-index("steps"))
   try-add(:name(1))
-  try-add(:sym(1))
+  try-add(:sym(3))
   try-add(:again)
 }
 
@@ -2285,7 +2278,7 @@ fn solve-nesting(context g: *mut game)() {
   g.active = 0
   try-add(:sym(0))
   try-add(:again)
-  try-add(:sym(1))
+  try-add(:sym(3))
   g.active = 2
   try-add(:name(0))
 }

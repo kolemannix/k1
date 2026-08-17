@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{PathBuf};
 // Copyright (c) 2026 knix
 // All rights reserved.
 use std::process::ExitCode;
@@ -97,9 +97,9 @@ fn run() -> anyhow::Result<ExitCode> {
             Command::Setup { .. } => unreachable!("setup exits after compile"),
             Command::Clean { .. } => {
                 // Clear the out dir
-                let out_dir_path = Path::from(cg.k1.ast.idents.get_string(cg.k1.config.out_dir));
-                if std::fs::exists(out_dir_path).unwrap() {
-                    std::fs::remove_dir_all(out_dir_path)?;
+                let out_dir_path = PathBuf::from(cg.k1.ast.idents.get_string(cg.k1.config.out_dir));
+                if std::fs::exists(&out_dir_path).unwrap() {
+                    std::fs::remove_dir_all(&out_dir_path)?;
                 }
                 Ok(ExitCode::SUCCESS)
             }

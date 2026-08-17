@@ -1827,6 +1827,8 @@ pub struct TypedGlobal {
     pub is_external: bool,
     pub ast_id: ParsedGlobalId,
     pub parent_scope: ScopeId,
+    /// Set when the global is declared in an ns(reload)
+    pub reload_ns: Option<NamespaceId>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -1849,7 +1851,7 @@ pub struct Namespace {
     /// default library for extern fns in this namespace.
     /// re-opened ns: any opening may declare it; disagreeing openings are an error.
     pub lib_name: Option<StringId>,
-    /// fns compile into a dylib and are swappable at runtime.
+    /// Set when the function is declared in an ns(reload)
     /// re-opened ns: any opening may declare it; all openings share it.
     pub reload: bool,
 }
@@ -7425,8 +7427,19 @@ impl TypedProgram {
             return Ok(self.globals.get(*global_id).variable_id);
         }
         let parsed = *self.ast.get_global(parsed_global_id);
+        let owner_ns = match self.scopes.get_scope(scope_id).owner_id {
+            ScopeOwnerId::Namespace(ns) => ns,
+            _ => kbail!(self, SpanId::NONE, "declare_global's scope_id should be an namespace"),
+        };
+        if parsed.is_thread_local {
+            self.fail_if_reload_ns(owner_ns, parsed.span, "tls globals")?;
+        }
+        if parsed.is_external || parsed.is_export {
+            self.fail_if_reload_ns(owner_ns, parsed.span, "extern and exported globals")?;
+        }
         let type_id = self.eval_type_expr(parsed.type_expr, scope_id)?;
 
+        let reload_ns = if self.namespaces.get(owner_ns).reload { Some(owner_ns) } else { None };
         let global_id = self.globals.next_id();
         let variable_id = self.variables.add(Variable {
             name: parsed.name,
@@ -7450,6 +7463,7 @@ impl TypedProgram {
                 is_external: parsed.is_external,
                 ast_id: parsed_global_id,
                 parent_scope: scope_id,
+                reload_ns,
             },
             global_id,
         );
@@ -17351,7 +17365,10 @@ impl TypedProgram {
         let unit_body;
         let block = if block.stmts.is_empty() {
             let unit_expr = self.ast.exprs.add(
-                ParsedExpr::Struct(parse::ParsedStruct { fields: MSlice::empty(), span: block.span }),
+                ParsedExpr::Struct(parse::ParsedStruct {
+                    fields: MSlice::empty(),
+                    span: block.span,
+                }),
                 false,
                 None,
             );
@@ -18880,6 +18897,13 @@ impl TypedProgram {
         if !should_compile {
             return Ok(None);
         }
+        if is_reloadable && !matches!(ast_fn.linkage, Linkage::Standard) {
+            self.fail_if_reload_ns(
+                namespace_id,
+                ast_fn.signature_span,
+                "extern, export, and intrinsic fns",
+            )?;
+        }
         if is_debug {
             self.push_debug_level();
         }
@@ -19095,15 +19119,8 @@ impl TypedProgram {
             }
         }
 
-        if self_.namespaces.get(namespace_id).reload
-            && (!type_params.is_empty() || !fnlike_type_params.is_empty())
-        {
-            kbail!(
-                &**self_,
-                ast_fn.signature_span,
-                "Not allowed in ns(reload) {}: generic code cannot be included",
-                self_.namespaces.get(namespace_id).name,
-            );
+        if !type_params.is_empty() || !fnlike_type_params.is_empty() {
+            self_.fail_if_reload_ns(namespace_id, ast_fn.signature_span, "generic fns")?;
         }
 
         let linkage = match impl_info {
@@ -19120,25 +19137,13 @@ impl TypedProgram {
         };
         if let Linkage::Exported { .. } = linkage {
             if !type_params.is_empty() || !fnlike_type_params.is_empty() {
-                kbail!(
-                    &**self_,
-                    ast_fn.signature_span,
-                    "exported functions cannot be generic"
-                );
+                kbail!(&**self_, ast_fn.signature_span, "exported functions cannot be generic");
             }
             if ability_info.is_some() {
-                kbail!(
-                    &**self_,
-                    ast_fn.signature_span,
-                    "ability functions cannot be exported"
-                );
+                kbail!(&**self_, ast_fn.signature_span, "ability functions cannot be exported");
             }
             if ast_fn.body.is_none() {
-                kbail!(
-                    &**self_,
-                    ast_fn.signature_span,
-                    "exported functions must have a body"
-                );
+                kbail!(&**self_, ast_fn.signature_span, "exported functions must have a body");
             }
         }
         let intrinsic_type = match linkage {
@@ -19445,6 +19450,9 @@ impl TypedProgram {
         parent_scope_id: ScopeId,
     ) -> K1Result<Option<FunctionId>> {
         let ast_macro = self.ast.get_macro(parsed_macro_id);
+        if let Some(owner_ns) = self.scopes.get_scope_owner(parent_scope_id).as_namespace() {
+            self.fail_if_reload_ns(owner_ns, ast_macro.span, "macros")?;
+        }
         let name = ast_macro.name;
         let name_span = ast_macro.name_span;
         let signature_span = ast_macro.signature_span;
@@ -20011,6 +20019,7 @@ impl TypedProgram {
         }
         let parsed_ability = self.ast.get_ability(parsed_ability_id).clone();
         let parent_namespace_id = self.scopes.get_scope_owner(scope_id).as_namespace().unwrap();
+        self.fail_if_reload_ns(parent_namespace_id, parsed_ability.span, "ability definitions")?;
 
         // If an ability namespace and a regular namespace exist as siblings with the same name,
         // they share a scope, and we put the ability stuff "Self" type, other type params,
@@ -20252,6 +20261,9 @@ impl TypedProgram {
     ) -> K1Result<AbilityImplId> {
         let parsed_ability_impl = self.ast.get_ability_impl(parsed_id).clone();
         let span = parsed_ability_impl.span;
+        if let Some(owner_ns) = self.scopes.get_scope_owner(scope_id).as_namespace() {
+            self.fail_if_reload_ns(owner_ns, span, "ability impls")?;
+        }
         let ability_expr = self.ast.mem.get(parsed_ability_impl.ability_expr).clone();
         let parsed_impl_functions = parsed_ability_impl.functions;
 
@@ -20969,6 +20981,13 @@ impl TypedProgram {
         }
     }
 
+    fn fail_if_reload_ns(&self, ns_id: NamespaceId, span: SpanId, what: &str) -> K1Result<()> {
+        if self.namespaces.get(ns_id).reload {
+            kbail!(self, span, "{} are not allowed in reloadable namespaces", what);
+        }
+        Ok(())
+    }
+
     fn declare_namespace_definitions(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
@@ -20978,7 +20997,6 @@ impl TypedProgram {
         let namespace = self.namespaces.get(namespace_id);
         let namespace_scope_id = namespace.scope_id;
         let ns_reload = namespace.reload;
-        let ns_name = namespace.name;
         // Before the ns's own defns: a user fn named load/load-async then
         // collides with the synthesized one and fails like any duplicate name
         if ns_reload {
@@ -20990,52 +21008,6 @@ impl TypedProgram {
         for defn in parsed_namespace.definitions.as_slice(&self.ast.mem) {
             if skip_defns.contains(defn) {
                 continue;
-            }
-            if ns_reload {
-                let rejection: Option<(&str, SpanId)> = match *defn {
-                    ParsedId::Global(id) => {
-                        Some(("globals cannot be included", self.ast.get_global(id).span))
-                    }
-                    ParsedId::Macro(id) => {
-                        Some(("macros cannot be included", self.ast.get_macro(id).span))
-                    }
-                    ParsedId::AbilityImpl(id) => Some((
-                        "ability impls cannot be included",
-                        self.ast.get_ability_impl(id).span,
-                    )),
-                    ParsedId::Namespace(id) => {
-                        Some(("nested ns are not supported", self.ast.namespaces.get(id).span))
-                    }
-                    ParsedId::StaticDefn(id) => Some((
-                        "#static and #meta definitions cannot be included",
-                        self.ast.exprs.get_span(id),
-                    )),
-                    ParsedId::Ability(id) => Some((
-                        "ability definitions cannot be included",
-                        self.ast.get_ability(id).span,
-                    )),
-                    ParsedId::Function(id) => {
-                        let function = self.ast.get_function(id);
-                        match function.linkage {
-                            Linkage::Standard => None,
-                            _ => Some((
-                                "extern, export, and intrinsic fns cannot be included",
-                                function.signature_span,
-                            )),
-                        }
-                    }
-                    _ => None,
-                };
-                if let Some((why, span)) = rejection {
-                    self.report(kerr!(
-                        self,
-                        span,
-                        "Not allowed in ns(reload) {}: {}",
-                        ns_name,
-                        why
-                    ));
-                    continue;
-                }
             }
             // Declarations write into permanent pools/mem; tmp is per-declaration scratch
             let tmp_mark = self.tmp.mark();
@@ -21186,30 +21158,50 @@ impl TypedProgram {
     }
 
     pub fn reload_hash_for_ns(&self, ns_id: NamespaceId) -> u64 {
-        let mut fns: Vec<(&str, TypeId)> = vec![];
-        for (_, function) in self.function_iter() {
-            if function.is_reloadable && function.namespace_id == ns_id {
-                fns.push((self.ident_str(function.name), function.type_id));
-            }
-        }
-        fns.sort_by(|a, b| a.0.cmp(b.0));
-        let mut hash = crate::snap::InputsHash(0).add(&[crate::BUILD_ID.as_bytes()]);
+        let mut sum = 0u128;
         let mut signature = String::with_capacity(256);
         let mut listing = String::new();
-        for (name, type_id) in &fns {
-            signature.clear();
-            self.display_type_id(&mut signature, *type_id, dump::TypeDisplayMode::Structural)
+        for (_, function) in self.function_iter() {
+            if function.is_reloadable && function.namespace_id == ns_id {
+                let name = self.ident_str(function.name);
+                signature.clear();
+                self.display_type_id(
+                    &mut signature,
+                    function.type_id,
+                    dump::TypeDisplayMode::Structural,
+                )
                 .unwrap();
-            hash = hash.add(&[name.as_bytes(), signature.as_bytes()]);
-            if self.config.chatty {
-                writeln!(listing, "  {name}: {signature}").unwrap();
+                sum = sum.wrapping_add(
+                    crate::snap::InputsHash(0).add(&[name.as_bytes(), signature.as_bytes()]).0,
+                );
+                if self.config.chatty {
+                    writeln!(listing, "  {name}: {signature}").unwrap();
+                }
             }
         }
+        for global_id in self.globals.iter_ids() {
+            let global = self.globals.get(global_id);
+            if global.reload_ns == Some(ns_id) {
+                let name = self.ident_str(self.variables.get(global.variable_id).name);
+                signature.clear();
+                self.display_type_id(&mut signature, global.type_id, dump::TypeDisplayMode::Structural)
+                    .unwrap();
+                sum = sum.wrapping_add(
+                    crate::snap::InputsHash(0)
+                        .add(&[b"let", name.as_bytes(), signature.as_bytes()])
+                        .0,
+                );
+                if self.config.chatty {
+                    writeln!(listing, "  let {name}: {signature}").unwrap();
+                }
+            }
+        }
+        let hash = crate::snap::InputsHash(sum).add(&[crate::BUILD_ID.as_bytes()]).0 as u64;
         if self.config.chatty {
             let ns_name = self.ident_str(self.namespaces.get(ns_id).name);
-            eprint!("reload api of {ns_name} ({:016x}):\n{listing}", hash.0 as u64);
+            eprint!("reload api of {ns_name} ({hash:016x}):\n{listing}");
         }
-        hash.0 as u64
+        hash
     }
 
     fn compile_ns_body(&mut self, ast_namespace_id: ParsedNamespaceId, skip_defns: &[ParsedId]) {
@@ -21317,6 +21309,9 @@ impl TypedProgram {
     ) -> K1Result<NamespaceId> {
         let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
         let name_span = ast_namespace.name_span;
+        if let Some(parent_ns) = self.scopes.get_scope_owner(parent_scope).as_namespace() {
+            self.fail_if_reload_ns(parent_ns, ast_namespace.span, "nested namespaces")?;
+        }
 
         let namespace_id = if let Some(existing) =
             self.scopes.find_namespace_local(parent_scope, ast_namespace.name)
@@ -21325,7 +21320,15 @@ impl TypedProgram {
             // Map this separate namespace AST node to the same semantic namespace
             self.namespace_ast_mappings.insert(parsed_namespace_id, existing);
             debug!("Inserting re-definition node for ns {}", self.ident_str(ast_namespace.name));
-            if ast_namespace.reload {
+            if ast_namespace.reload && !self.namespaces.get(existing).reload {
+                let existing_scope = self.namespaces.get(existing).scope_id;
+                if self.scopes.iter_scope_namespaces(existing_scope).next().is_some() {
+                    kbail!(
+                        self,
+                        name_span,
+                        "nested namespaces are not allowed in reloadable namespaces",
+                    );
+                }
                 self.namespaces.get_mut(existing).reload = true;
             }
             if let Some(lib_name) = ast_namespace.lib_name {

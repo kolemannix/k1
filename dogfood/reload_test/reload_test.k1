@@ -6,9 +6,13 @@ use std/thread
 
 let app-dir: string = "/tmp/k1-reload-driver/app"
 
-fn scene-source(greeting: string, two-arg-helper: bool): string {
+fn scene-source(greeting: string, two-arg-helper: bool, speed: i64, extra-global: bool): string {
   let sb = string-builder/new()
   sb.writeln("ns(reload) scene {")
+  sb.writeln("  let(mutable) speed: i64 = ${speed}")
+  if extra-global {
+    sb.writeln("  let extra: i64 = 5")
+  }
   sb.writeln("  fn greeting(): string { \"${greeting}\" }")
   if two-arg-helper {
     sb.writeln("  fn helper(x: i64, y: i64): i64 { x + y }")
@@ -19,8 +23,11 @@ fn scene-source(greeting: string, two-arg-helper: bool): string {
   sb.build()
 }
 
-fn build-app(k1-exe: string, greeting: string, two-arg-helper: bool) {
-  files/write-entire-file("${app-dir}/scene.k1", scene-source(greeting, two-arg-helper))
+fn build-app(k1-exe: string, greeting: string, two-arg-helper: bool, speed: i64, extra-global: bool) {
+  files/write-entire-file(
+    "${app-dir}/scene.k1",
+    scene-source(greeting, two-arg-helper, speed, extra-global)
+  )
   process/run(k1-exe, ["build", app-dir]) is {
     :ok _ -> .{},
     :err e -> crash("app build failed: ${e}"),
@@ -53,7 +60,7 @@ fn main(argc: c-int, argv: ptr): i32 {
     files/read-to-string("${template-dir}/app.k1")
   )
 
-  build-app(k1-exe, "one", false)
+  build-app(k1-exe, "one", false, 10, false)
   let app = process/spawn("${app-dir}/.k1-out/app", []).!
 
   send(app.&, "version")
@@ -64,19 +71,29 @@ fn main(argc: c-int, argv: ptr): i32 {
   expect(app.&, "version: 1")
   send(app.&, "greet")
   expect(app.&, "greet: one")
+  send(app.&, "speed")
+  expect(app.&, "speed: 10")
+  send(app.&, "bump")
+  expect(app.&, "bump ok")
+  send(app.&, "speed")
+  expect(app.&, "speed: 11")
 
-  // Body-only rebuild: same api, the running app swaps to the new behavior
-  build-app(k1-exe, "two", false)
+  // Body-only rebuild: same api, the running app swaps to the new behavior.
+  // A global's value edit rides the same lane, and the swap maps fresh
+  // storage: the bump above is gone
+  build-app(k1-exe, "two", false, 20, false)
   send(app.&, "load")
   expect(app.&, "load ok")
   send(app.&, "greet")
   expect(app.&, "greet: two")
+  send(app.&, "speed")
+  expect(app.&, "speed: 20")
   send(app.&, "version")
   expect(app.&, "version: 2")
 
   // Signature change on a fn main never calls: hash drifts, load refuses,
   // nothing is patched
-  build-app(k1-exe, "three", true)
+  build-app(k1-exe, "three", true, 20, false)
   send(app.&, "load")
   expect(app.&, "load err: restart required: api of app/scene changed")
   send(app.&, "greet")
@@ -84,11 +101,18 @@ fn main(argc: c-int, argv: ptr): i32 {
   send(app.&, "version")
   expect(app.&, "version: 2")
 
+  // Adding a global drifts the hash the same way
+  build-app(k1-exe, "three", false, 20, true)
+  send(app.&, "load")
+  expect(app.&, "load err: restart required: api of app/scene changed")
+  send(app.&, "speed")
+  expect(app.&, "speed: 20")
+
   // watch(): the app now keeps itself current; a rebuild with the original
   // api swaps in with no further poking
   send(app.&, "watch")
   expect(app.&, "watch ok")
-  build-app(k1-exe, "four", false)
+  build-app(k1-exe, "four", false, 40, false)
   let tries = 0
   loop {
     thread/sleep-ms(200)
@@ -104,6 +128,8 @@ fn main(argc: c-int, argv: ptr): i32 {
   }
   send(app.&, "version")
   expect(app.&, "version: 3")
+  send(app.&, "speed")
+  expect(app.&, "speed: 40")
 
   send(app.&, "quit")
   let status = app.wait().!

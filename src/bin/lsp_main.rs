@@ -302,7 +302,7 @@ impl Backend {
             filc: false,
             is_setup_program: false,
             k1_home_override: None,
-            command: k1::compiler::Command::Check { file: root_path },
+            command: k1::compiler::Command::Check { file: Some(root_path) },
             dump_idents: false,
         };
 
@@ -460,7 +460,7 @@ impl Backend {
             filc: false,
             is_setup_program: false,
             k1_home_override: None,
-            command: k1::compiler::Command::Check { file: src_path.into() },
+            command: k1::compiler::Command::Check { file: Some(src_path.into()) },
             dump_idents: false,
         };
         let compile_result = k1::compiler::compile_program(&args);

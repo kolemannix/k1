@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Command;
 
 fn git(args: &[&str]) -> Option<String> {
@@ -18,12 +19,22 @@ fn fnv1a64(mut h: u64, bytes: &[u8]) -> u64 {
     h
 }
 
+const BINARY_INPUTS: &[&str] = &["src", "build.rs", "Cargo.toml", "Cargo.lock"];
+
+fn with_binary_inputs<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut v = args.to_vec();
+    v.push("--");
+    v.extend_from_slice(BINARY_INPUTS);
+    v
+}
+
 fn main() {
     let rev = git(&["rev-parse", "--short=12", "HEAD"]);
-    let tracked_dirty = match git(&["status", "--porcelain", "--untracked-files=no"]) {
-        Some(s) => !s.is_empty(),
-        None => true,
-    };
+    let tracked_dirty =
+        match git(&with_binary_inputs(&["status", "--porcelain", "--untracked-files=no"])) {
+            Some(s) => !s.is_empty(),
+            None => true,
+        };
     let untracked_src = git(&["ls-files", "--others", "--exclude-standard", "src"])
         .map(|s| s.lines().map(str::to_string).collect::<Vec<_>>())
         .unwrap_or_default();
@@ -33,7 +44,7 @@ fn main() {
         (Some(rev), false) => rev.clone(),
         (Some(rev), true) => {
             // For dirty builds, incorporate the untracked sources
-            let diff = git(&["diff", "HEAD"]).unwrap_or_default();
+            let diff = git(&with_binary_inputs(&["diff", "HEAD"])).unwrap_or_default();
             let mut h = fnv1a64(FNV_OFFSET, diff.as_bytes());
             for f in &untracked_src {
                 h = fnv1a64(h, f.as_bytes());
@@ -46,8 +57,15 @@ fn main() {
     println!("cargo:rustc-env=K1_BUILD_ID={build_id}");
 
     println!("cargo:rerun-if-changed=.git/HEAD");
-    println!("cargo:rerun-if-changed=.git/index");
-    if let Some(files) = git(&["ls-files"]) {
+    if let Some(head_ref) = git(&["symbolic-ref", "-q", "HEAD"]) {
+        let loose = format!(".git/{head_ref}");
+        if Path::new(&loose).exists() {
+            println!("cargo:rerun-if-changed={loose}");
+        } else if Path::new(".git/packed-refs").exists() {
+            println!("cargo:rerun-if-changed=.git/packed-refs");
+        }
+    }
+    if let Some(files) = git(&with_binary_inputs(&["ls-files"])) {
         for f in files.lines() {
             println!("cargo:rerun-if-changed={f}");
         }

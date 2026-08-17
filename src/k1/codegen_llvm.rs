@@ -614,6 +614,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             if g.is_exported {
                 any_exported_global = true;
             }
+            if g.reload_ns.is_some() {
+                // We don't own this; the dylib does
+                continue;
+            }
             if g.is_exported || self.has_reloadable_fns {
                 self.codegen_global(*global_id)?;
             }
@@ -699,19 +703,18 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(())
     }
 
-    /// One exported `__k1_reload_ns_<module/ns>` per reloadable ns, read by
-    /// std/reload's load-ns:
-    /// can evolve freely; only the dylib symbols cross rebuild boundaries.
+    /// Emits a constant per reloadable namespace which holds information about what symbols it
+    /// contains; the reloader k1 code iterates this descriptor. Also holds signature hash for
+    /// mismatch detection
     fn emit_reload_descriptors(&mut self) {
-        let mut ns_fns: Vec<(NamespaceId, Vec<(String, FunctionId)>)> = vec![];
-        for (function_id, function) in self.k1.function_iter() {
-            if !function.is_reloadable {
-                continue;
-            }
-            let symbol = self.reloadable_function_symbol(function_id);
-            match ns_fns.iter_mut().find(|(ns, _)| *ns == function.namespace_id) {
-                Some((_, fns)) => fns.push((symbol, function_id)),
-                None => ns_fns.push((function.namespace_id, vec![(symbol, function_id)])),
+        enum Slot {
+            Fn(FunctionId),
+            Global(TypedGlobalId),
+        }
+        let mut reload_nss: Vec<NamespaceId> = vec![];
+        for ns_id in self.k1.namespaces.namespaces.iter_ids() {
+            if self.k1.namespaces.get(ns_id).reload {
+                reload_nss.push(ns_id);
             }
         }
 
@@ -719,8 +722,25 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let dylib_ext = self.k1.config.target.target_os().dylib_ext();
         let ptr_type = self.builtin_types.ptr;
         let entry_type = self.ctx.struct_type(&[ptr_type.into(), ptr_type.into()], false);
-        for (ns_id, mut fns) in ns_fns {
-            fns.sort_by(|a, b| a.0.cmp(&b.0));
+        for ns_id in reload_nss {
+            let mut entries: Vec<(String, Slot)> = vec![];
+            for (function_id, function) in self.k1.function_iter() {
+                if function.is_reloadable && function.namespace_id == ns_id {
+                    entries.push((
+                        self.make_reloadable_function_symbol(function_id),
+                        Slot::Fn(function_id),
+                    ));
+                }
+            }
+            for global_id in self.k1.globals.iter_ids() {
+                if self.k1.globals.get(global_id).reload_ns == Some(ns_id) {
+                    entries.push((
+                        self.make_reloadable_global_symbol(global_id),
+                        Slot::Global(global_id),
+                    ));
+                }
+            }
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
             let api_hash = self.k1.reload_hash_for_ns(ns_id);
             let ns = self.k1.namespaces.get(ns_id);
             let ns_name = self.k1.ident_str(ns.name).to_string();
@@ -729,16 +749,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
             let file_name_ptr =
                 self.cstring_constant(&format!("{program_name}.{ns_name}.{dylib_ext}"));
-            let mut entry_values = Vec::with_capacity(fns.len());
-            for (symbol, function_id) in &fns {
+            let mut entry_values = Vec::with_capacity(entries.len());
+            for (symbol, slot) in &entries {
                 let symbol_ptr = self.cstring_constant(symbol);
-                let fn_addr = self.reload_fn_addr_global(*function_id);
+                let slot_global = match slot {
+                    Slot::Fn(id) => self.reload_fn_addr_global(*id),
+                    Slot::Global(id) => self.codegen_reload_global_addr_slot(*id),
+                };
 
-                // an array of { fn symbol: cstr, fn-addr global: ptr }.
+                // an array of { symbol: cstr, addr slot the loader patches: ptr }.
                 entry_values.push(
                     entry_type.const_named_struct(&[
                         symbol_ptr.into(),
-                        fn_addr.as_pointer_value().into(),
+                        slot_global.as_pointer_value().into(),
                     ]),
                 );
             }
@@ -762,7 +785,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     file_name_ptr.into(),
                     self.ctx.i64_type().const_int(api_hash, false).into(),
                     version_global.as_pointer_value().into(),
-                    self.ctx.i64_type().const_int(fns.len() as u64, false).into(),
+                    self.ctx.i64_type().const_int(entries.len() as u64, false).into(),
                     entries_global.as_pointer_value().into(),
                 ],
                 false,
@@ -804,7 +827,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let mut roots: Vec<(String, FunctionId)> = vec![];
         for (function_id, function) in self.k1.function_iter() {
             if function.is_reloadable && function.namespace_id == ns_id {
-                roots.push((self.reloadable_function_symbol(function_id), function_id));
+                roots.push((self.make_reloadable_function_symbol(function_id), function_id));
             }
         }
 
@@ -812,6 +835,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         roots.sort_by(|a, b| a.0.cmp(&b.0));
         for (_, function_id) in &roots {
             self.declare_llvm_function(*function_id)?;
+        }
+
+        // The ns's globals are roots too: every one must be defined and
+        // exported here, referenced or not, or the loader's all-or-nothing
+        // dlsym pass refuses the artifact
+        let mut ns_globals: Vec<TypedGlobalId> = vec![];
+        for global_id in self.k1.globals.iter_ids() {
+            if self.k1.globals.get(global_id).reload_ns == Some(ns_id) {
+                ns_globals.push(global_id);
+            }
+        }
+        for global_id in ns_globals {
+            self.codegen_global(global_id)?;
         }
         self.k1.compile_all_pending_ir(SpanId::NONE)?;
         if self.k1.config.optimize {
@@ -826,11 +862,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(())
     }
 
-    /// No function-id suffix, unlike regular mangled names: the suffix
-    /// disambiguates generic specializations and ability impls sharing a
-    /// scope, which ns(reload) rejects, so plain names are unique here — and
-    /// dlsym needs them stable across independent rebuilds.
-    fn reloadable_function_symbol(&self, function_id: FunctionId) -> String {
+    fn make_reloadable_function_symbol(&self, function_id: FunctionId) -> String {
         let function = self.k1.get_function(function_id);
         Cg::mangle(self.k1.make_qualified_name(function.scope, function.name, None, "/", true))
     }
@@ -850,7 +882,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     /// The host defines it (null until the ns is loaded); dylibs declare it
     /// and bind to the host's copy at dlopen.
     fn reload_fn_addr_global(&mut self, function_id: FunctionId) -> GlobalValue<'ctx> {
-        let name = format!("__k1_reload_fn_addr_{}", self.reloadable_function_symbol(function_id));
+        let name = format!("__k1_reload_fn_addr_{}", self.make_reloadable_function_symbol(function_id));
         if let Some(existing) = self.llvm_module.get_global(&name) {
             return existing;
         }
@@ -861,6 +893,127 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             global.set_initializer(&self.builtin_types.ptr.const_null());
         }
         global
+    }
+
+    /// Same naming rules as reloadable_function_symbol: fns and globals share
+    /// a scope's namespace, so plain qualified names cannot collide
+    fn make_reloadable_global_symbol(&self, global_id: TypedGlobalId) -> String {
+        let variable = self.k1.variables.get(self.k1.globals.get(global_id).variable_id);
+        Cg::mangle(self.k1.make_qualified_name(variable.owner_scope, variable.name, None, "/", true))
+    }
+
+    /// A reloadable global's current storage: the `ptr` slot the loader
+    /// patches to the newest dylib's copy. Host defines it (null until
+    /// loaded); dylibs bind to the host's copy at dlopen.
+    fn codegen_reload_global_addr_slot(&mut self, global_id: TypedGlobalId) -> GlobalValue<'ctx> {
+        let name =
+            format!("__k1_reload_global_addr_{}", self.make_reloadable_global_symbol(global_id));
+        if let Some(existing) = self.llvm_module.get_global(&name) {
+            return existing;
+        }
+        let global = self.llvm_module.add_global(self.builtin_types.ptr, None, &name);
+        global.set_alignment(8);
+        global.set_linkage(LlvmLinkage::External);
+        if self.unit == CgUnit::Host {
+            global.set_initializer(&self.builtin_types.ptr.const_null());
+        }
+        global
+    }
+
+    fn crash_unloaded_fn_value(&mut self) -> K1Result<FunctionValue<'ctx>> {
+        let not_loaded_ident = self.k1.ast.idents.intern("crash-unloaded-ns");
+        let Some(not_loaded_fn_id) =
+            self.k1.scopes.find_function_local(self.k1.scopes.k1_scope_id, not_loaded_ident)
+        else {
+            return Err(self
+                .k1
+                .make_error("core is missing fn k1/crash-unloaded-ns", SpanId::NONE));
+        };
+        self.declare_llvm_function(not_loaded_fn_id)
+    }
+
+    /// `ptr __k1_reload_global_load(slot, ns-name, global-name)`: acquire-load
+    /// the slot, crash-unloaded-ns on null, else return the storage address.
+    /// One private copy per module; every cross-unit global access calls it,
+    /// so each access observes the newest swap.
+    fn reload_global_load_helper(&mut self) -> K1Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.llvm_module.get_function("__k1_reload_global_load") {
+            return Ok(f);
+        }
+        let crash_fn = self.crash_unloaded_fn_value()?;
+        let ptr_type = self.builtin_types.ptr;
+        let fn_type =
+            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), ptr_type.into()], false);
+        let f = self.llvm_module.add_function(
+            "__k1_reload_global_load",
+            fn_type,
+            Some(LlvmLinkage::Private),
+        );
+        let saved_block = self.builder.get_insert_block();
+        let saved_loc = self.builder.get_current_debug_location();
+        self.builder.unset_current_debug_location();
+
+        let entry_block = self.ctx.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry_block);
+        let slot = f.get_nth_param(0).unwrap().into_pointer_value();
+        let loaded = self.builder.build_load(ptr_type, slot, "addr").unwrap();
+        let load_instr = loaded.as_instruction_value().unwrap();
+        load_instr.set_atomic_ordering(AtomicOrdering::Acquire).unwrap();
+        load_instr.set_alignment(8).unwrap();
+        let addr = loaded.into_pointer_value();
+
+        let unloaded_block = self.ctx.append_basic_block(f, "unloaded");
+        let ok_block = self.ctx.append_basic_block(f, "ok");
+        let is_null = self.builder.build_is_null(addr, "").unwrap();
+        self.builder.build_conditional_branch(is_null, unloaded_block, ok_block).unwrap();
+
+        self.builder.position_at_end(unloaded_block);
+        let ns_name_param = f.get_nth_param(1).unwrap();
+        let global_name_param = f.get_nth_param(2).unwrap();
+        self.builder
+            .build_call(crash_fn, &[ns_name_param.into(), global_name_param.into()], "")
+            .unwrap();
+        self.builder.build_unreachable().unwrap();
+
+        self.builder.position_at_end(ok_block);
+        self.builder.build_return(Some(&addr)).unwrap();
+
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        if let Some(loc) = saved_loc {
+            self.builder.set_current_debug_location(loc);
+        }
+        Ok(f)
+    }
+
+    fn codegen_reload_global_addr(
+        &mut self,
+        global_id: TypedGlobalId,
+    ) -> K1Result<BasicValueEnum<'ctx>> {
+        let slot = self.codegen_reload_global_addr_slot(global_id);
+        let helper = self.reload_global_load_helper()?;
+        let global = self.k1.globals.get(global_id);
+        let global_name =
+            self.k1.ident_str(self.k1.variables.get(global.variable_id).name).to_string();
+        let ns_name = self
+            .k1
+            .ident_str(self.k1.namespaces.get(global.reload_ns.unwrap()).name)
+            .to_string();
+        let ns_cstr = self.cstring_constant(&ns_name);
+        let name_cstr = self.cstring_constant(&global_name);
+        let call = self
+            .builder
+            .build_call(
+                helper,
+                &[slot.as_pointer_value().into(), ns_cstr.into(), name_cstr.into()],
+                "reload_global",
+            )
+            .unwrap();
+        match call.try_as_basic_value() {
+            ValueKind::Basic(v) => Ok(v),
+            ValueKind::Instruction(_) => unreachable!("__k1_reload_global_load returns ptr"),
+        }
     }
 
     fn cstring_constant(&mut self, text: &str) -> PointerValue<'ctx> {
@@ -888,14 +1041,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let fn_name = self.k1.ident_str(typed_fn.name).to_string();
         let ns_name =
             self.k1.ident_str(self.k1.namespaces.get(typed_fn.namespace_id).name).to_string();
-        let not_loaded_ident = self.k1.ast.idents.intern("crash-unloaded-ns");
-        let Some(not_loaded_fn_id) =
-            self.k1.scopes.find_function_local(self.k1.scopes.k1_scope_id, not_loaded_ident)
-        else {
-            return Err(self
-                .k1
-                .make_error("core is missing fn k1/crash-unloaded-ns", SpanId::NONE));
-        };
 
         let fn_addr_global = self.reload_fn_addr_global(function_id);
         self.builder.unset_current_debug_location();
@@ -918,7 +1063,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.builder.build_conditional_branch(is_null, unloaded_block, call_block).unwrap();
 
         self.builder.position_at_end(unloaded_block);
-        let not_loaded_fv = self.declare_llvm_function(not_loaded_fn_id)?;
+        let not_loaded_fv = self.crash_unloaded_fn_value()?;
         let ns_cstr = self.cstring_constant(&ns_name);
         let fn_cstr = self.cstring_constant(&fn_name);
         self.builder.build_call(not_loaded_fv, &[ns_cstr.into(), fn_cstr.into()], "").unwrap();
@@ -969,6 +1114,32 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         } else {
             self.k1.make_qualified_name(variable.owner_scope, variable.name, None, "__", false)
         };
+
+        if let Some(reload_ns) = global.reload_ns {
+            if self.unit != CgUnit::ReloadDylib(reload_ns) {
+                kbail!(
+                    self.k1,
+                    global.span,
+                    "ICE: reload-ns global reached codegen_global outside its dylib; \
+                     accesses must go through the addr slot"
+                );
+            }
+            let initial_static_value_id = global.initial_value.as_value().unwrap();
+            let initializer_basic_value =
+                self.codegen_static_value_as_const(initial_static_value_id, 0)?;
+            let layout = self.k1.get_layout(global.type_id).unwrap();
+            let symbol = self.make_reloadable_global_symbol(global_id);
+            let llvm_global = self.make_global_from_value(
+                initializer_basic_value,
+                layout.align,
+                &symbol,
+                global.is_constant,
+                LlvmLinkage::External,
+                false,
+            );
+            self.globals.insert(global_id, llvm_global);
+            return Ok(llvm_global);
+        }
 
         let is_dylib = matches!(self.unit, CgUnit::ReloadDylib(_));
 
@@ -2573,6 +2744,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 )),
             },
             ir::Value::GlobalAddr { id, .. } => {
+                let reload_ns = self.k1.globals.get(id).reload_ns;
+                if let Some(reload_ns) = reload_ns
+                    && self.unit != CgUnit::ReloadDylib(reload_ns)
+                {
+                    // Not our storage: the current version's copy, via the patched slot
+                    return self.codegen_reload_global_addr(id);
+                }
                 let global_value = self.codegen_global(id)?;
                 Ok(global_value.as_pointer_value().as_basic_value_enum())
             }
@@ -3074,15 +3252,23 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::Phi { t, incomings } => {
                 let phi_ty = self.pt_canon_type(t);
                 let phi = self.builder.build_phi(phi_ty, "").unwrap();
+                let phi_block = self.builder.get_insert_block().unwrap();
 
                 for incoming in self.k1.ir.mem.getn(incomings) {
-                    let value = self.resolve_value(inst_mappings, incoming.value)?;
                     let block = self.get_llvm_block(incoming.from)?;
+                    // Resolve in the edge's source block: anything it emits (e.g. a
+                    // reload-global addr call) must dominate the edge, and the phi
+                    // must stay at block top
+                    match block.get_terminator() {
+                        Some(terminator) => self.builder.position_before(&terminator),
+                        None => self.builder.position_at_end(block),
+                    }
+                    let value = self.resolve_value(inst_mappings, incoming.value)?;
+                    self.builder.position_at_end(phi_block);
                     phi.add_incoming(&[(&value, block)])
                 }
 
                 inst_mappings.insert(inst_id, phi.as_basic_value());
-                // }
                 Ok(())
             }
             Inst::Ret { v, .. } => {
@@ -3486,7 +3672,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             || typed_function_linkage.is_exported()
             || llvm_linkage != LlvmLinkage::External;
         let llvm_name = if is_dylib_root {
-            self.reloadable_function_symbol(function_id)
+            self.make_reloadable_function_symbol(function_id)
         } else {
             match typed_function.linkage {
                 TyperLinkage::External { fn_name: Some(link_name), .. }

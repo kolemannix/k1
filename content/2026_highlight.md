@@ -1,3 +1,16 @@
+Carousel / tour pages
+- type-level programming: struct combine and struct remove, rewritten as types/struct-remove[s1](["field-names"])
+- native hot-reload
+- simd-accelerated standard colllections and string
+- frictionless algebraic data modeling (anonymous sums and products, no ceremony collections `list[ast]`)
+- compile-time type parameterization (see fixlist, array)
+- zero-sized types for zero-cost type-safety; result[x, empty], 
+- a 'never' type you can use result[x, never]
+- sane, safe, array/buffer/span/list
+- .try, impl try for error-code int wrapper; error type is the error enum MINUS ok variant
+- one-line reflection bootstrap: `let fields = types/schema[my-struct].as-struct().!.fields`
+- in-body specialization via type-patterns: `x is { type[u8] -> memcpy, other-type -> iterate }`
+- arena allocation by default
 # K1 in 2026 — Highlights
 
 Source list for tweets, demo videos, and website content. ★ = strongest

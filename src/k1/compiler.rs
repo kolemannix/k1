@@ -1607,10 +1607,11 @@ pub fn codegen_module<'ctx, 'module>(
 ) -> Result<Cg<'ctx, 'module>> {
     let codegen_start = std::time::Instant::now();
 
+    // Ns-driven, not fn-driven: a reload ns holding only globals still gets a dylib
     let mut reload_nss: Vec<NamespaceId> = vec![];
-    for (_, function) in k1.function_iter() {
-        if function.is_reloadable && !reload_nss.contains(&function.namespace_id) {
-            reload_nss.push(function.namespace_id);
+    for ns_id in k1.namespaces.namespaces.iter_ids() {
+        if k1.namespaces.get(ns_id).reload {
+            reload_nss.push(ns_id);
         }
     }
     if !reload_nss.is_empty() && args.filc {

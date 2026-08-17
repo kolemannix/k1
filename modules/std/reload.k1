@@ -28,7 +28,7 @@ ns reload {
     entry-count: u64,
     entries: ptr,
   }
-  type entry = { symbol: ptr, fn-addr: *mut ptr }
+  type entry = { symbol: ptr, slot: *mut ptr }
 
   // A sloppy helper since we lack this in std
   fn dir-of(path: string): string {
@@ -101,9 +101,7 @@ ns reload {
       return :err :api-changed .{ ns-path = heap-string/cloned(ns-path) }
     }
 
-    // Resolve every fn before patching anything: a load either fully swaps
-    // or changes nothing. Old images are never dlclosed; in-flight call
-    // trees drain in their own version.
+    // Resolve every fn before patching anything, so a load fully succeeds or does not occur
     let entries = span/wrap-raw[entry](descriptor.entries, descriptor.entry-count.as[size])
     let addrs = list/with-capacity[ptr](entries.len())
     for e in entries {
@@ -117,14 +115,13 @@ ns reload {
       addrs.push(addr)
     }
     for e in entries {
-      atomic/store(e.fn-addr, addrs.get(it-index), :release)
+      atomic/store(e.slot, addrs.get(it-index), :release)
     }
     let version = atomic/fetch-add(descriptor.version, 1, :seq-cst) + 1
-    eprintln("reload: ${ns-path} swapped to v${version} (${descriptor.entry-count} fns)")
+    eprintln("reload: ${ns-path} swapped to v${version} (${descriptor.entry-count} syms)")
     :ok
   }
 
-  // 0 until the first successful load
   fn ns-version(ns-path: string): u64 {
     find-descriptor(ns-path) is {
       :some d -> atomic/load(d.version, :acquire),
@@ -235,9 +232,6 @@ ns reload {
     }
   }
 
-  // The dev mode: load now if never loaded, then keep the ns current with its
-  // artifact; every change runs the same gated load, failures log and keep
-  // the running version. Rebuilding the artifact is someone else's job.
   fn watch-ns(ns-path: string): result[empty, load-error] {
     if ns-version(ns-path) == 0 {
       load-ns(ns-path).try
