@@ -48,7 +48,7 @@ Call across namespaces with `/`:
 
 ```rust
 format-test/test()
-core/types/type-id[int]
+core/types/id[int]
 ```
 
 See `test_src/suite1/suite1.k1`, `test_src/suite1/format.k1`, and
@@ -755,7 +755,7 @@ See `test_src/suite1/ability.k1`,
 Use `use` to bring functions, constants, types, or namespaces into scope:
 
 ```rust
-use core/types/type-id
+use core/types/id
 use core/libc/files/SEEK_END as seek-end
 
 fn test() {

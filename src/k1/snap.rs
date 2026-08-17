@@ -336,6 +336,7 @@ fn evict(cache_dir: &std::path::Path) {
     let mut snaps: Vec<(std::time::SystemTime, std::path::PathBuf)> = vec![];
     for entry in entries {
         let Ok(e) = entry else { continue };
+        #[allow(clippy::nonminimal_bool)]
         if !e.path().extension().is_some_and(|x| x == "snap") {
             continue;
         }

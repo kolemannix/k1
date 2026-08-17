@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use k1::compiler::{Args, Command};
-use k1::{compiler, kpath};
+use k1::compiler;
 use log::info;
 use mimalloc::MiMalloc;
 

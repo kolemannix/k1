@@ -13,6 +13,13 @@
 
 // polished-game idea: always-on minimap of the max-growth target next to the growth scrub
 
+// Other game ideas:
+// Geometry; try to make a triangle where pythagorean doesnt hold; interactive visual
+//           bars / meters for each thing
+// Numbers:  Peano numbers first, build yourself up to integers written with digits
+// Algebra: each level proves or discovers an identity or rule, you can only use it
+//          once discovered
+
 fn module(): k1/module {
   let m = k1/module/new()
   m.lib("raylib", :static)

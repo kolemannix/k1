@@ -9,8 +9,8 @@ use meta/code-writer
 fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
   #meta(fmt-string) {
     let code = string-builder/new()
-    let args-type-id = types/type-id[args]
-    let schema = types/type-id-schema(args-type-id)
+    let args-type-id = types/id[args]
+    let schema = args-type-id.schema()
     // This naive splitting doesn't work; we need to walk the format string
     // emitting "string parts" or "arg specifiers"
     // Then iterate that structure to produce the runtime

@@ -19,7 +19,7 @@ type constrained-box[a, b: try[t = a, e = empty]] = { inner: b }
 fn test-constraints() {
   // Should typecheck just fine since the constraint is satisfied
   let x: constrained-box[int, ?int] = .{ inner = some(4) }
-  assert-equals(types/type-id[type-of(x).a], types/type-id[int])
+  assert-equals(types/id[type-of(x).a], types/id[int])
   assert-equals[?string](
     test-compile(.{ inner = some(4) }: constrained-box[int, ?bool]),
     :some "Provided type b = opt[bool] does implement required ability try, but the implementation parameter t is wrong: Expected type was i64 but the actual implementation uses bool"

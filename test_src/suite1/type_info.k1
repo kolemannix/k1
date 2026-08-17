@@ -3,7 +3,6 @@ ns type_info
 use core/types/size
 use core/types/stride
 use core/types/align
-use core/types/type-id
 
 fn do-it(_foo: bool, _bar: u32): u32 {
   32
@@ -18,9 +17,9 @@ fn test-size-of() {
 }
 
 fn test-fn-type-info() {
-  assert-equals(type-id[do-it.return](), type-id[u32]())
-  assert-equals(type-id[do-it._foo](), type-id[bool]())
-  assert-equals(type-id[do-it._bar](), type-id[do-it.return]())
+  assert-equals(types/id[do-it.return](), types/id[u32]())
+  assert-equals(types/id[do-it._foo](),   types/id[bool]())
+  assert-equals(types/id[do-it._bar](),   types/id[do-it.return]())
 }
 
 fn test() {

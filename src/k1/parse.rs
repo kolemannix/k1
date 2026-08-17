@@ -218,6 +218,12 @@ pub enum ParsedLiteral {
     String(StringId, SpanId),
 }
 
+#[derive(Clone, Copy)]
+pub struct ExecStaticTypeExpr {
+    pub body_expr: ParsedExprId,
+    pub span: SpanId,
+}
+
 impl ParsedLiteral {
     pub fn get_span(&self) -> SpanId {
         match self {
@@ -672,6 +678,7 @@ pub struct ParsedStaticExpr {
     pub kind: ParsedStaticBlockKind,
     pub condition_if_definition: Option<ParsedExprId>,
     pub parameter_names: AstSlice<IdentSpanned>,
+    pub start_span: SpanId,
     pub span: SpanId,
 }
 
@@ -1156,12 +1163,6 @@ pub struct ParsedTypeOf {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ParsedTypeFromId {
-    pub id_expr: ParsedExprId,
-    pub span: SpanId,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct SomeQuantifier {
     pub inner_type_expr: ParsedTypeExprId,
     pub span: SpanId,
@@ -1187,9 +1188,11 @@ pub enum ParsedTypeExpr {
     TypeOf(ParsedTypeOf),
     SomeQuant(SomeQuantifier),
     Static(ParsedStaticFamilyTypeExpr),
-    /// Used only by compiler-generated code, currently
-    TypeFromId(ParsedTypeFromId),
     StaticLiteral(ParsedLiteral),
+    /// `#type <expr>`. the user is saying 'run this expression at compile-time and
+    /// the output will be a type'. This is how you turn a type id value into a type expr,
+    /// and also how you invoke tlp (type-level programming functionality like make-struct
+    ExecStatic(ExecStaticTypeExpr),
 }
 
 impl ParsedTypeExpr {
@@ -1208,8 +1211,8 @@ impl ParsedTypeExpr {
             ParsedTypeExpr::TypeOf(tof) => tof.span,
             ParsedTypeExpr::SomeQuant(q) => q.span,
             ParsedTypeExpr::Static(s) => s.span,
-            ParsedTypeExpr::TypeFromId(tfi) => tfi.span,
             ParsedTypeExpr::StaticLiteral(l) => l.get_span(),
+            ParsedTypeExpr::ExecStatic(es) => es.span,
         }
     }
 }
@@ -2402,6 +2405,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 kind: ParsedStaticBlockKind::MacroCall,
                 condition_if_definition: condition,
                 parameter_names: MSlice::empty(),
+                start_span: maybe_directive.span,
                 span,
             }));
             Ok(Some(expr_id))
@@ -2462,12 +2466,14 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         }
         let parameter_names_handle = parameter_names.to_slice();
         let base_expr = self.expect_expression()?;
+        let span = self.extend_to_here(start_token.span);
         Ok(self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
             base_expr,
             kind,
             condition_if_definition,
             parameter_names: parameter_names_handle,
-            span: start_token.span,
+            start_span: start_token.span,
+            span,
         })))
     }
 
@@ -3198,6 +3204,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let builtin_id = self.ast.type_exprs.add(ParsedTypeExpr::Builtin(first.span));
             self.emit_semantic_token(first, SemanticTokenKind::Keyword);
             Ok(Some(builtin_id))
+        } else if first.kind == K::Hash {
+            self.advance();
+            self.emit_semantic_token(first, SemanticTokenKind::Operator);
+            let (start, _) = self.expect_ident_chars("type")?;
+            self.emit_semantic_token(start, SemanticTokenKind::Keyword);
+            let static_expr_body = self.expect_expression()?;
+            let span = self.extend_to_here(first.span);
+            let type_expr_id =
+                self.ast.type_exprs.add(ParsedTypeExpr::ExecStatic(ExecStaticTypeExpr {
+                    body_expr: static_expr_body,
+                    span,
+                }));
+            Ok(Some(type_expr_id))
         } else if let Some(literal_expr_id) = self.parse_literal_atom()? {
             if let ParsedExpr::Literal(l) = self.ast.exprs.get(literal_expr_id) {
                 let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::StaticLiteral(*l));
@@ -3221,16 +3240,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let type_of = ParsedTypeExpr::TypeOf(ParsedTypeOf { target_expr, span });
                 self.emit_semantic_token(first, SemanticTokenKind::Function);
                 Ok(Some(self.ast.type_exprs.add(type_of)))
-            } else if first_chars == "type-from-id" {
-                self.advance();
-                self.expect_kind(K::OpenParen)?;
-                let target_expr = self.expect_expression()?;
-                let end = self.expect_kind(K::CloseParen)?;
-                let span = self.extend_token_span(first, end);
-                let type_from_id =
-                    ParsedTypeExpr::TypeFromId(ParsedTypeFromId { id_expr: target_expr, span });
-                self.emit_semantic_token(first, SemanticTokenKind::Function);
-                Ok(Some(self.ast.type_exprs.add(type_from_id)))
             } else if first_chars == "static" {
                 self.advance();
                 let inner_type_expr = self.expect_type_expression()?;
@@ -3948,22 +3957,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             let if_expr =
                                 Parser::expect("If Expression", first, self.parse_if_expr(true))?;
                             Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
-                        }
-                        K::Ident if !maybe_directive.is_whitespace_preceded() => {
-                            let chars = self.token_chars(maybe_directive);
-                            match chars {
-                                "code" => {
-                                    self.advance();
-                                    let parsed_stmt = self.expect_statement()?;
-                                    let stmt_span = self.ast.get_stmt_span(parsed_stmt);
-                                    let span = self.extend_span(first.span, stmt_span);
-                                    Ok(Some(self.add_expression(ParsedExpr::Code(ParsedCode {
-                                        parsed_stmt,
-                                        span,
-                                    }))))
-                                }
-                                _ => Err(self.error_here("Unknown directive following #")),
-                            }
                         }
                         _ => Err(self.error_here("Unknown directive following #")),
                     }
@@ -5891,14 +5884,8 @@ impl ParsedProgram {
                 self.display_type_expr_id(s.family_type_expr, w)?;
                 Ok(())
             }
-            ParsedTypeExpr::TypeFromId(tfi) => {
-                w.write_str("type-from-id(")?;
-                self.display_expr_id(w, tfi.id_expr)?;
-                w.write_str(")")?;
-                Ok(())
-            }
             ParsedTypeExpr::Array(array_type) => {
-                w.write_str("Array[")?;
+                w.write_str("array[")?;
                 self.display_type_expr_id(array_type.element_type, w)?;
                 w.write_str(", ")?;
                 self.display_type_expr_id(array_type.size_expr, w)?;
@@ -5906,6 +5893,11 @@ impl ParsedProgram {
             }
             ParsedTypeExpr::StaticLiteral(parsed_literal) => {
                 self.display_literal(w, parsed_literal)?;
+                Ok(())
+            }
+            ParsedTypeExpr::ExecStatic(es) => {
+                w.write_str("#type ")?;
+                self.display_expr_id(w, es.body_expr)?;
                 Ok(())
             }
         }

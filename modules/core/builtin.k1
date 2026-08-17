@@ -60,6 +60,16 @@ type(alias) byte = u8
 
 ns types {
 
+  type type-id = { inner: u64 }
+  ns for type-id {
+    fn(intern) schema(self: type-id): type-schema
+    fn(intern) name(self: type-id): string
+    fn make(inner: u64): type-id { .{ inner } }
+    fn spell(self: type-id): string {
+      `(#type type-id/make(${self.inner}))`
+    }
+  }
+
   // Magically implemented for all enums
   // enum must have ability id 1
   ability enum[impl v] {
@@ -87,15 +97,15 @@ ns types {
   // The alignment, in bytes, of type t. Always a power of two
   fn(intern) align[t](): int
 
-  fn(intern) type-id[t](): u64
-  fn(intern) type-id-schema(id: u64): type-schema
-  fn(intern) type-id-name(id: u64): string
+  fn(intern) id[t](): type-id
 
-  fn type-id-of-val[t](_t: t): u64 { type-id[t] }
-  fn name[t](): string { type-id-name(type-id[t]) }
+  fn(intern) struct-create(fields: span[{ name: string, type: type-id }]): type-id
+
+  fn type-id-of-val[t](_t: t): type-id { id[t] }
+  fn name[t](): string { id[t].name() }
 
   fn type-name-of-val[t](_t: t): string { name[t] }
-  fn schema[t](): type-schema { type-id-schema(type-id[t]) }
+  fn schema[t](): type-schema { id[t].schema() }
 
   // FIXME: We should encode both width and signedness into the bits instead, 'flags in tags' project
   type int-kind = either(u8) { u8 = 0, u16 = 1, u32 = 2, u64 = 3, i8 = 4, i16 = 5, i32 = 6, i64 = 7 }
@@ -139,26 +149,26 @@ ns types {
         value: int-value,
       }]
     }),
-    reference({ inner-type-id: u64 }),
+    reference({ inner-type-id: type-id }),
     array({
-      element-type-id: u64,
+      element-type-id: type-id,
       size: ?int
     }),
     vector({
-      element-type-id: u64,
+      element-type-id: type-id,
       size: ?int
     }),
     struct({
       fields: span[{
         name: string,
-        type-id: u64,
+        type-id: type-id,
         offset: size
       }],
     }),
     union({
       fields: span[{
         name: string,
-        type-id: u64,
+        type-id: type-id,
         offset: size
       }],
     }),
@@ -168,20 +178,20 @@ ns types {
       variants: span[{
         name: string,
         tag: int-value,
-        payload: ?{ type-id: u64 }
+        payload: ?{ type-id: type-id }
       }],
     }),
     string,
     never,
     function({
-      params: span[{ name: string, type-id: u64 }],
-      return-type-id: u64,
+      params: span[{ name: string, type-id: type-id }],
+      return-type-id: type-id,
     }),
-    function-pointer({ function-type-id: u64 }),
+    function-pointer({ function-type-id: type-id }),
     // static-scalar(),
     // TODO: lambda schema, lambda object schema
-    // lambda({ type-id: u64, function-type-id: u64 }),
-    // lambda-object({ function-type-id: u64 }),
+    // lambda({ type-id: type-id, function-type-id: type-id }),
+    // lambda-object({ function-type-id: type-id }),
     other(string)
   }
 

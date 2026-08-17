@@ -25,7 +25,7 @@ fn test() {
   require schema is :vector .{ element-type-id, size } else {
     crash("Expected vector schema for vector[u8, 16]")
   }
-  assert-equals(types/type-id-name(element-type-id), "u8")
+  assert-equals(element-type-id.name(), "u8")
   assert-equals(size, :some 16)
 
   // Splat + lane reads

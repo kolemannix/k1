@@ -1095,8 +1095,7 @@ fn exec_builtin(
 ) -> K1Result<BuiltinOutcome> {
     match builtin {
         BackendBuiltin::TypeSchema => {
-            let type_id_arg = args[0].bits();
-            let type_id = TypeId::from_nzu32(NonZeroU32::new(type_id_arg as u32).unwrap());
+            let type_id = vm::unpack_type_id(args[0]);
             let Some(schema_static_value_id) = k1.type_schemas.get(&type_id) else {
                 kbail!(k1, vm.eval_span, "Missing type schema: {}", type_id);
             };
@@ -1105,8 +1104,7 @@ fn exec_builtin(
             Ok(BuiltinOutcome::Value(schema_vm_value))
         }
         BackendBuiltin::TypeName => {
-            let type_id_arg = args[0].bits();
-            let type_id = TypeId::from_nzu32(NonZeroU32::new(type_id_arg as u32).unwrap());
+            let type_id = vm::unpack_type_id(args[0]);
             let name_value_id = *k1.type_names.get(&type_id).unwrap();
             let name_string_value = vm::static_value_to_vm_value(k1, name_value_id, vm.eval_span);
             Ok(BuiltinOutcome::Value(name_string_value))

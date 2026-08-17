@@ -6,17 +6,15 @@ ns type_schema {
   type recursive-type = { node: *recursive-type }
 
   use types/schema
-  use types/type-id
-  use types/type-id-schema
 
   fn print-struct-shape[t](): string {
-    let id = type-id[t]
+    let type-id = types/id[t]
     require schema[t] is :struct .{ fields } else { return "" }
     let sb = string-builder/new()
-    let name = types/type-id-name(id)
+    let name = type-id.name()
     sb.write("Struct $name {\n")
     for field in fields {
-      sb.writeln("  ${field.name}: ${types/type-id-name(field.type-id)}", )
+      sb.writeln("  ${field.name}: ${field.type-id.name()}", )
     }
     sb.write("}")
     sb.build()
@@ -41,10 +39,10 @@ ns type_schema {
     assert-equals(fields.len(), 3)
     require schema[*i32]
       is :reference .{ inner-type-id }
-      and inner-type-id == type-id[i32] else crash("")
+      and inner-type-id == types/id[i32] else crash("")
     assert-equals(
       schema[**bool].as-reference().!.inner-type-id,
-      type-id[*bool]
+      types/id[*bool]
     )
 
     assert(schema[either { yes }] is :enum _)
@@ -57,7 +55,7 @@ ns type_schema {
       and variants.get(1).name == "no"
       and variants.get(2).name == "maybe-so"
       and variants.get(2).payload is :some .{ type-id }
-      and type-id == type-id[string]
+      and type-id == types/id[string]
       else crash("")
 
     require schema[either { yes(int) }:yes ]
@@ -67,7 +65,7 @@ ns type_schema {
     assert(schema[array[i32, 10]] is :array _)
     require schema[array[string, 5]]
       is :array .{ element-type-id, size }
-      and element-type-id == type-id[string]
+      and element-type-id == types/id[string]
       and size == :some 5
       else crash("")
 
@@ -77,12 +75,12 @@ ns type_schema {
     require schema[type-of(is-zero-ptr)]
       is :function-pointer .{ function-type-id } else crash("")
 
-    require type-id-schema(function-type-id)
+    require function-type-id.schema()
       is :function .{ params, return-type-id } else crash("")
 
-    assert(type-id-schema(return-type-id) is :bool)
+    assert(return-type-id.schema() is :bool)
     assert-equals(params.get(0).name, "x")
-    assert(type-id-schema(params.get(0).type-id) is :int _)
+    assert(params.get(0).type-id.schema() is :int _)
 
     require schema[union { a: int, b: f64, c: f32 }]
       is :union .{ fields }

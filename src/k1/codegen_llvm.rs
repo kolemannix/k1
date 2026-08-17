@@ -2587,8 +2587,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
 
             BackendBuiltin::TypeName => {
-                // fn(intern) type-name(id: u64): string
-                let type_id_arg = self.load_function_argument(function_id, 0).into_int_value();
+                // fn(intern) name(self: type-id): string
+                let type_id_ptr = self.load_function_argument(function_id, 0).into_pointer_value();
+                let type_id_arg = self
+                    .builder
+                    .build_load(self.ctx.i64_type(), type_id_ptr, "")
+                    .unwrap()
+                    .into_int_value();
                 let cg_fn = self.llvm_functions.get(&function_id).unwrap();
                 let return_llvm_type = cg_fn.function_type.return_logical_cg_type;
                 let entry_block = self.builder.get_insert_block().unwrap();
@@ -2654,12 +2659,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(Some(&marshalled)).unwrap()
             }
             BackendBuiltin::TypeSchema => {
-                // fn(intern) type-schema(id: u64): TypeSchema
+                // fn(intern) schema(self: type-id): TypeSchema
                 let cg_fn = self.llvm_functions.get(&function_id).unwrap();
                 debug_assert!(cg_fn.function_type.is_sret);
                 let out_storage =
                     cg_fn.function_value.get_param_iter().nth(0).unwrap().into_pointer_value();
-                let type_id_arg = self.load_function_argument(function_id, 0).into_int_value();
+                let type_id_ptr = self.load_function_argument(function_id, 0).into_pointer_value();
+                let type_id_arg = self
+                    .builder
+                    .build_load(self.ctx.i64_type(), type_id_ptr, "")
+                    .unwrap()
+                    .into_int_value();
                 let cg_fn = self.llvm_functions.get(&function_id).unwrap();
                 let type_schema_cg_type = cg_fn.function_type.return_logical_cg_type;
                 let entry_block = self.builder.get_insert_block().unwrap();

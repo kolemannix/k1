@@ -330,10 +330,10 @@ See `test_src/suite1/condcomp.k1` and `test_src/suite1/static_run.k1`.
 The `types` APIs expose type ids, names, layout, and schema information:
 
 ```rust
-types/type-id[int]
-types/type-id-name(types/type-id[int])
+types/id[int]
+types/id[int].name()
 types/schema[array[i32, 10]]
-types/type-id-schema(type-id)
+type-id.schema()
 types/size[string]
 types/stride[string]
 types/align[string]
@@ -343,8 +343,8 @@ Function parameter and return member types can be addressed through type member
 paths:
 
 ```rust
-types/type-id[do-it.return]()
-types/type-id[do-it.arg-name]()
+types/id[do-it.return]()
+types/id[do-it.arg-name]()
 ```
 
 Schemas are pattern matched as sums such as `:struct`, `:reference`, `:either`,

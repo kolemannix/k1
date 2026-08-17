@@ -103,3 +103,6 @@ len_without_is_empty = "allow"
 # are more easily evolved to select more cases than if lets
 single_match = "allow"
 while_let_loop = "allow"
+wrong_self_convention = "allow"
+should_implement_trait = "allow"
+not_unsafe_ptr_arg_deref = "allow"

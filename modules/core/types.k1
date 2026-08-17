@@ -17,24 +17,24 @@ impl print for int-value {
 }
 
 type any = {
-  type-id: u64,
+  type-id: type-id,
   value: ptr
 }
 
 fn make-any[t](t: *t): any {
-  .{ type-id = type-id[t], value = t.as[ptr] }
+  .{ type-id = id[t], value = t.as[ptr] }
 }
 
 fn assert-wrapper-type[wrapper, inner]() {
   let schema-a = types/schema[wrapper]
-  let b-type-id = types/type-id[inner]
+  let b-type-id = types/id[inner]
   require schema-a is :struct .{ fields } else { crash("is-wrapper-type: Wrapper must be a struct") }
   require fields.first() is :some field and fields.len() == 1 else crash("Wrapper must have one field, got ${fields.len()}")
   let equal = field.type-id == b-type-id
-  if not equal crash("Expected ${types/name[inner]} but got ${types/type-id-name(field.type-id)}")
+  if not equal crash("Expected ${types/name[inner]} but got ${field.type-id.name()}")
 }
 
-fn type-eq[a, b](): bool { types/type-id[a] == types/type-id[b] }
+fn type-eq[a, b](): bool { types/id[a] == types/id[b] }
 
 fn assert-layout[t](size: size, align: size, struct-fields: span[size]) {
   let actual-size = types/stride[t]

@@ -28,8 +28,7 @@ ns meta {
     }
   }
 
-  // Escapes into a valid K1 double-quoted string literal, including the
-  // interpolation sigil — emitted literals need no character restrictions
+  // Escapes into a valid K1 double-quoted string literal
   fn str-lit(s: string): string {
     let b = string-builder/new()
     b.write-char('"')
@@ -53,23 +52,23 @@ ns meta {
 
   fn baked-variable[t](name: string, value: t): string {
     let baked-value-expr: string = baked-value-expr[t](value)
-    let type-id = types/type-id[t]()
-    `let $name: type-from-id($type-id) = $baked-value-expr;\n`
+    let type-id = types/id[t]
+    `let $name: ${type-id.spell()} = $baked-value-expr;\n`
   }
 
   // Note: If we had an ability for "growable collection", we could implement it.
   //       len, get, empty, (push)
   fn define-soa[t](name: string): code {
-    let struct-type-id = types/type-id[t]
-    let tt = "type-from-id($struct-type-id)"
-    require types/type-id-schema(struct-type-id) is :struct .{ fields } else
+    let struct-type-id = types/id[t]
+    let tt = struct-type-id.spell()
+    require struct-type-id.schema() is :struct .{ fields } else
       crash("Its called a STRUCT of arrays for a reason")
     if fields.is-empty() crash("Input struct must have at least one field")
 
     let code = string-builder/new()
     code.writeln("type $name = {")
     for f in fields {
-      code.writeln("  ARR_${f.name}: list[type-from-id(${f.type-id})],")
+      code.writeln("  ARR_${f.name}: list[${f.type-id.spell()}],")
     }
     code.writeln("}")
 

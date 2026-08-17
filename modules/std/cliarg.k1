@@ -8,11 +8,11 @@ fn parse-next(i: *mut size, args: span[string]): ?string {
   i.* = i.* + 2
   r
 }
-fn get-arg-kind(type-id: u64): either { string, list-string, opt-string } {
-  if      type-id == types/type-id[string]       :string
-  else if type-id == types/type-id[list[string]] :list-string
-  else if type-id == types/type-id[opt[string]]  :opt-string
-  else crash("Unsupported arg type: ${types/type-id-name(type-id)}. Must be string, ?string, or list[string] for now")
+fn get-arg-kind(type-id: type-id): either { string, list-string, opt-string } {
+  if      type-id == types/id[string]       :string
+  else if type-id == types/id[list[string]] :list-string
+  else if type-id == types/id[opt[string]]  :opt-string
+  else crash("Unsupported arg type: ${type-id.name()}. Must be string, ?string, or list[string] for now")
 }
 
 fn gen-help-text[t](summary: string): string {
@@ -31,12 +31,12 @@ fn gen-help-text[t](summary: string): string {
 }
 
 // For each field in the target type, a local variable to house its parsed data
-fn emit-arg-locals(cb: *mut code-builder, s: types/type-schema:struct, args-type-id: u64) {
+fn emit-arg-locals(cb: *mut code-builder, s: types/type-schema:struct, args-type-id: type-id) {
   for s.fields {
     get-arg-kind(it.type-id) is {
-      :string      -> cb.line("let ${it.name}-val: ?type-from-id($args-type-id).${it.name} = :none"),
-      :opt-string  -> cb.line("let ${it.name}-val: type-from-id($args-type-id).${it.name} = :none"),
-      :list-string -> cb.line("let ${it.name}-val: type-from-id($args-type-id).${it.name} = list/empty()"),
+      :string      -> cb.line("let ${it.name}-val: ?${args-type-id.spell()}.${it.name} = :none"),
+      :opt-string  -> cb.line("let ${it.name}-val: ${args-type-id.spell()}.${it.name} = :none"),
+      :list-string -> cb.line("let ${it.name}-val: ${args-type-id.spell()}.${it.name} = list/empty()"),
     }
   }
 }
@@ -89,7 +89,7 @@ fn emit-arg-construct(cb: *mut code-builder, s: types/type-schema:struct) {
 fn parse-args[t](args: span[string], customizations: span[{ name: string, settings: {} }]): result[t, string] {
   // Note: it would be better to move these two lines inside the meta call
   // But this exercises the compiler better
-  let _t-id = #static types/type-id[t]
+  let _t-id = #static types/id[t]
   let _s = #static types/schema[t] is { :struct s -> s, _ -> crash("need a struct") }
 
   let result: result[t, string] = #meta(_s, _t-id) {

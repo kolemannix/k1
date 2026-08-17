@@ -33,9 +33,9 @@ ns mem {
   fn new[t](t: t): *t { current-arena().new(t) }
 
   macro new-in-place[t](expr) {
-    let type-id = types/type-id[t]
+    let type-id = types/id[t]
     `
-    let addr = mem/alloc-t[type-from-id($type-id)];
+    let addr = mem/alloc-t[${type-id.spell()}];
     addr.* = $expr
     addr
     `

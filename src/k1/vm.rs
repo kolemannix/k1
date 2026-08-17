@@ -2,6 +2,7 @@
 // All rights reserved.
 
 use std::ffi::c_void;
+use std::num::NonZeroU32;
 
 use crate::debug;
 use ahash::HashMapExt;
@@ -102,12 +103,25 @@ macro_rules! casted_float_op {
     };
 }
 
+pub fn unpack_type_id(struct_ptr: Value) -> TypeId {
+    let type_id_struct = struct_ptr.as_ptr() as *mut k1_types::TypeId;
+    let type_id_arg = unsafe { (*type_id_struct).inner };
+    let type_id = TypeId::from_nzu32(NonZeroU32::new(type_id_arg as u32).unwrap());
+    type_id
+}
+
 // Shared with the bc VM (bc/exec.rs) so arithmetic semantics cannot drift
 pub(crate) use {casted_float_op, casted_iop, casted_uop};
 
 /// Bit-for-bit mappings of K1 types
 #[allow(non_snake_case)]
 pub mod k1_types {
+
+    #[derive(Clone, Copy)]
+    #[repr(C)]
+    pub struct TypeId {
+        pub inner: u64,
+    }
 
     #[derive(Clone, Copy)]
     #[repr(C)]

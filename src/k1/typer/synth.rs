@@ -440,6 +440,11 @@ impl TypedProgram {
         self.add_static_constant_expr(int_value_id, span)
     }
 
+    pub(super) fn synth_type_id_literal(&mut self, type_id: TypeId, span: SpanId) -> TypedExprId {
+        let type_id_struct_value_id = self.add_type_id_value(type_id);
+        self.add_static_constant_expr(type_id_struct_value_id, span)
+    }
+
     pub(super) fn synth_i64(&mut self, value: i64, span: SpanId) -> TypedExprId {
         self.synth_int(TypedIntValue::I64(value), span)
     }

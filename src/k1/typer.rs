@@ -383,6 +383,13 @@ impl EvalExprContext {
     }
 
     #[inline(always)]
+    pub fn with_is_static(&self, is_static: bool) -> EvalExprContext {
+        let mut flags = self.flags;
+        flags.set(EvalExprFlags::Static, is_static);
+        EvalExprContext { flags, ..*self }
+    }
+
+    #[inline(always)]
     pub fn with_expected_type(&self, expected_type_id: Option<TypeId>) -> EvalExprContext {
         EvalExprContext { expected_type_id, ..*self }
     }
@@ -3202,7 +3209,7 @@ impl TypedProgram {
             pending_cache_writes: vec![],
         };
 
-        let empty_struct_id = k1.add_anon_type(Type::Struct(StructType::struc(MSlice::empty())));
+        let empty_struct_id = k1.add_type_anon(Type::Struct(StructType::struc(MSlice::empty())));
         k1.builtin_types.empty = empty_struct_id;
         assert_eq!(empty_struct_id, EMPTY_TYPE_ID);
 
@@ -4260,6 +4267,8 @@ impl TypedProgram {
                 self.builtin_types.types_float_kind = Some(type_id)
             } else if name == self.ast.idents.b.float_value {
                 self.builtin_types.types_float_value = Some(type_id)
+            } else if name == self.ast.idents.b.type_id {
+                self.builtin_types.types_type_id = Some(type_id)
             } else if name == self.ast.idents.b.layout {
                 self.builtin_types.types_layout = Some(type_id)
             }
@@ -4348,7 +4357,7 @@ impl TypedProgram {
 
                 let struct_defn =
                     Type::Struct(StructType { fields: fields.to_slice(), record_kind: kind });
-                let type_id = self.add_anon_type(struct_defn);
+                let type_id = self.add_type_anon(struct_defn);
 
                 Ok(type_id)
             }
@@ -4389,41 +4398,23 @@ impl TypedProgram {
                 let element_type =
                     self.eval_type_expr_ext(arr.element_type, scope_id, context.descended())?;
 
-                let size_type_id = match *self.ast.type_exprs.get(arr.size_expr) {
-                    ParsedTypeExpr::StaticLiteral(parsed_literal) => {
-                        // For array sizes, we want numeric literals to be interpreted as size (i64)
-                        let (static_value_id, inner_type_id) = self
-                            .literal_to_static_value_and_type(
-                                &parsed_literal,
-                                scope_id,
-                                Some(I64_TYPE_ID),
-                            )?;
-                        let value_type = StaticValueType {
-                            family_type_id: inner_type_id,
-                            value_id: Some(static_value_id),
-                        };
-                        self.add_anon_type(Type::StaticValue(value_type))
-                    }
-                    _ => {
-                        // For other expressions, evaluate normally
-                        self.eval_type_expr_ext(arr.size_expr, scope_id, context.descended())?
-                    }
-                };
+                let size_type_id =
+                    self.eval_type_expr_ext(arr.size_expr, scope_id, context.descended())?;
 
                 let Some(static_type) = self.get_static_type_of_type(size_type_id) else {
-                    kbail!(self, arr.span, "Array size must be a static type");
+                    kbail!(self, arr.span, "array size must be a static type");
                 };
                 if static_type.family_type_id != I64_TYPE_ID {
                     kbail!(
                         self,
                         arr.span,
-                        "Array size must be an int; got {}",
+                        "array size must be an int; got {}",
                         static_type.family_type_id
                     );
                 }
 
                 let array_type = Type::Array(ArrayType { element_type, size_type: size_type_id });
-                let type_id = self.add_anon_type(array_type);
+                let type_id = self.add_type_anon(array_type);
                 Ok(type_id)
             }
             ParsedTypeExpr::Sum(sum) => {
@@ -4520,7 +4511,7 @@ impl TypedProgram {
                             .join("\n")
                     );
                     let sum_type = Type::Sum(SumType { variants: variants.to_slice(), tag_type });
-                    let sum_type_id = self.add_anon_type(sum_type);
+                    let sum_type_id = self.add_type_anon(sum_type);
                     Ok(sum_type_id)
                 } else {
                     let mut member_values: List<ScalarEnumValue, _> =
@@ -4567,7 +4558,7 @@ impl TypedProgram {
                         member_values: member_values.to_slice(),
                         int_type: tag_type,
                     });
-                    let sum_type_id = self.add_anon_type(enum_type);
+                    let sum_type_id = self.add_type_anon(enum_type);
                     Ok(sum_type_id)
                 }
             }
@@ -4727,7 +4718,7 @@ impl TypedProgram {
                 }
                 let return_type = self.eval_type_expr(fun_type.return_type, scope_id)?;
                 let params_handle = params.to_slice();
-                let function_type_id = self.add_anon_type(Type::Function(FunctionType {
+                let function_type_id = self.add_type_anon(Type::Function(FunctionType {
                     physical_params: params_handle,
                     is_lambda: false,
                     return_type,
@@ -4739,29 +4730,6 @@ impl TypedProgram {
                 let expr = self.eval_expr(tof.target_expr, EvalExprContext::make(scope_id))?;
                 let ty = self.exprs.get_type(expr);
                 Ok(ty)
-            }
-            ParsedTypeExpr::TypeFromId(type_from_id) => {
-                let type_from_id = *type_from_id;
-                let id_expr_id = self.eval_expr(
-                    type_from_id.id_expr,
-                    EvalExprContext::make(scope_id).with_expected_type(Some(U64_TYPE_ID)),
-                )?;
-                let TypedExpr::StaticValue(static_const) = self.exprs.get(id_expr_id) else {
-                    kbail!(
-                        self,
-                        type_from_id.span,
-                        "Expected an integer expression for TypeFromId",
-                    );
-                };
-                let StaticValue::Int(TypedIntValue::U64(u64_value)) =
-                    self.static_values.get(static_const.value_id)
-                else {
-                    kbail!(self, type_from_id.span, "Expected a u64 value for TypeFromId");
-                };
-                let Some(type_id) = TypeId::from_u32(*u64_value as u32) else {
-                    kbail!(self, type_from_id.span, "Type ID {} is out of bounds", u64_value);
-                };
-                Ok(type_id)
             }
             ParsedTypeExpr::SomeQuant(quant) => {
                 if !context.is_direct_function_parameter {
@@ -4815,7 +4783,7 @@ impl TypedProgram {
                     );
                 };
                 let value_type = StaticValueType { family_type_id: inner_type_id, value_id: None };
-                let static_type_id = self.add_anon_type(Type::StaticValue(value_type));
+                let static_type_id = self.add_type_anon(Type::StaticValue(value_type));
                 Ok(static_type_id)
             }
             ParsedTypeExpr::StaticLiteral(parsed_literal) => {
@@ -4824,6 +4792,48 @@ impl TypedProgram {
                     self.literal_to_static_value_and_type(&parsed_literal, scope_id, None)?;
                 let static_type_id = self.add_value_type(inner_type_id, Some(static_value_id));
                 Ok(static_type_id)
+            }
+            ParsedTypeExpr::ExecStatic(es) => {
+                let es = *es;
+                let expr_ctx = EvalExprContext::make(scope_id).with_is_static(true);
+                let resulting_value_id = self.execute_static_expr(es.body_expr, expr_ctx, &[])?;
+                let resulting_type_id = self.get_static_value_type(resulting_value_id);
+                match self.types.get(resulting_type_id) {
+                    Type::Struct(_) if resulting_type_id == self.builtin_types.type_id() => {
+                        // The user's code returned a type-id struct. The value inside is a type id
+                        // and that's our result
+                        let struct_value =
+                            self.static_values.get(resulting_value_id).as_struct().unwrap();
+                        let first_field_id = self.static_values.get_slice(struct_value.fields)[0];
+                        let StaticValue::Int(TypedIntValue::U64(type_id_u64)) =
+                            self.static_values.get(first_field_id)
+                        else {
+                            kbail!(self, es.span, "[ice] type-id should contain a u64")
+                        };
+                        if *type_id_u64 == 0 {
+                            kbail!(self, es.span, "[ice] type-id should not be zero")
+                        }
+                        let type_id = TypeId::from_u32(*type_id_u64 as u32).unwrap();
+                        match self.types.get_opt(type_id) {
+                            None => kbail!(self, es.span, "Unknown type id: "),
+                            Some(_) => Ok(type_id),
+                        }
+                    }
+                    Type::StaticValue(_svt) => {
+                        // They returned an actual statically-typed value already
+                        Ok(resulting_type_id)
+                    }
+                    _ => {
+                        // For any other type, we take the type of their interned/baked/static
+                        // value. For example, the type of 42u8 itself
+                        let static_type_id =
+                            self.add_type_anon(Type::StaticValue(StaticValueType {
+                                family_type_id: resulting_type_id,
+                                value_id: Some(resulting_value_id),
+                            }));
+                        Ok(static_type_id)
+                    }
+                }
             }
         }?;
         Ok(base)
@@ -4968,7 +4978,7 @@ impl TypedProgram {
 
                 let new_struct =
                     Type::Struct(StructType { fields: combined_fields.to_slice(), record_kind });
-                let type_id = self.add_anon_type(new_struct);
+                let type_id = self.add_type_anon(new_struct);
 
                 Ok(Some(type_id))
             }
@@ -5016,7 +5026,7 @@ impl TypedProgram {
                 let new_fields = self.mem.pushn_iter(new_fields);
 
                 let new_struct = Type::Struct(StructType { fields: new_fields, record_kind });
-                let type_id = self.add_anon_type(new_struct);
+                let type_id = self.add_type_anon(new_struct);
                 Ok(Some(type_id))
             }
             _ => Ok(None),
@@ -5534,21 +5544,7 @@ impl TypedProgram {
         };
         let element_type = self.eval_type_expr_ext(element_expr, scope_id, context.descended())?;
 
-        let size_type_id = match *self.ast.type_exprs.get(size_expr) {
-            ParsedTypeExpr::StaticLiteral(parsed_literal) => {
-                let (static_value_id, inner_type_id) = self.literal_to_static_value_and_type(
-                    &parsed_literal,
-                    scope_id,
-                    Some(I64_TYPE_ID),
-                )?;
-                let value_type = StaticValueType {
-                    family_type_id: inner_type_id,
-                    value_id: Some(static_value_id),
-                };
-                self.add_anon_type(Type::StaticValue(value_type))
-            }
-            _ => self.eval_type_expr_ext(size_expr, scope_id, context.descended())?,
-        };
+        let size_type_id = self.eval_type_expr_ext(size_expr, scope_id, context.descended())?;
 
         let Some(static_type) = self.get_static_type_of_type(size_type_id) else {
             kbail!(self, ty_app.span, "Vector lane count must be a static type");
@@ -5565,7 +5561,7 @@ impl TypedProgram {
         self.validate_vector_parts(element_type, size_type_id, ty_app.span)?;
 
         let vector_type = Type::Vector(VectorType { element_type, size_type: size_type_id });
-        Ok(Some(self.add_anon_type(vector_type)))
+        Ok(Some(self.add_type_anon(vector_type)))
     }
 
     /// Checks whatever is concrete; abstract element/lane-count parts are checked
@@ -5595,6 +5591,7 @@ impl TypedProgram {
         let Some(count) = self.get_type_as_i64(size_type_id) else {
             return Ok(());
         };
+        #[allow(clippy::manual_range_contains)]
         if count < 2 || count > 64 || !(count as u64).is_power_of_two() {
             kbail!(
                 self,
@@ -5859,7 +5856,7 @@ impl TypedProgram {
                 );
                 if new_fn_type != function_type_id {
                     let type_param = self.types.get(type_id).as_function_type_parameter().unwrap();
-                    self.add_anon_type(Type::FunctionTypeParameter(FunctionTypeParameter {
+                    self.add_type_anon(Type::FunctionTypeParameter(FunctionTypeParameter {
                         name: type_param.name,
                         scope_id: type_param.scope_id,
                         span: type_param.span,
@@ -5917,7 +5914,7 @@ impl TypedProgram {
                         is_lambda,
                         abi_mode: old_call_conv,
                     };
-                    let new_function_type_id = self.add_anon_type(Type::Function(new_fun_type));
+                    let new_function_type_id = self.add_type_anon(Type::Function(new_fun_type));
                     new_function_type_id
                 } else {
                     type_id
@@ -6007,7 +6004,7 @@ impl TypedProgram {
                     if new_inner_type == family_type {
                         type_id
                     } else {
-                        self.add_anon_type(Type::StaticValue(StaticValueType {
+                        self.add_type_anon(Type::StaticValue(StaticValueType {
                             family_type_id: new_inner_type,
                             value_id: None,
                         }))
@@ -6039,7 +6036,7 @@ impl TypedProgram {
                         element_type: new_element_type,
                         size_type: new_size_type,
                     });
-                    self.add_anon_type(new_array_type)
+                    self.add_type_anon(new_array_type)
                 }
             }
             Type::Vector(vec) => {
@@ -6061,7 +6058,7 @@ impl TypedProgram {
                 if new_element_type == vec.element_type && new_size_type == vec.size_type {
                     type_id
                 } else {
-                    self.add_anon_type(Type::Vector(VectorType {
+                    self.add_type_anon(Type::Vector(VectorType {
                         element_type: new_element_type,
                         size_type: new_size_type,
                     }))
@@ -7074,7 +7071,7 @@ impl TypedProgram {
                             } else {
                                 Err(k1_format_user!(
                                     self,
-                                    "Different static values of same type: {} vs {}",
+                                    "Different static values of same type family: {} vs {}",
                                     exp_value_id,
                                     act_value_id
                                 ))
@@ -8098,7 +8095,7 @@ impl TypedProgram {
         type_parameter: TypeParameter,
         ability_impl_signatures: SV4<TypedAbilitySignature>,
     ) -> TypeId {
-        let type_id = self.add_anon_type(Type::TypeParameter(type_parameter));
+        let type_id = self.add_type_anon(Type::TypeParameter(type_parameter));
         for ability_sig in ability_impl_signatures.into_iter() {
             let constrained_impl_scope = self.scopes.add_child_scope(
                 type_parameter.scope_id,
@@ -8117,7 +8114,7 @@ impl TypedProgram {
     }
 
     fn add_function_type_parameter(&mut self, value: FunctionTypeParameter) -> TypeId {
-        let type_id = self.add_anon_type(Type::FunctionTypeParameter(value));
+        let type_id = self.add_type_anon(Type::FunctionTypeParameter(value));
         type_id
     }
 
@@ -10953,7 +10950,7 @@ impl TypedProgram {
         }
 
         let struct_type = StructType::struc(field_defns.to_slice());
-        let struct_type_id = self.add_anon_type(Type::Struct(struct_type));
+        let struct_type_id = self.add_type_anon(Type::Struct(struct_type));
         let typed_struct = StructLiteral { fields: field_values.to_slice() };
         Ok(self.exprs.add(TypedExpr::Struct(typed_struct), struct_type_id, parsed_struct.span))
     }
@@ -11382,7 +11379,7 @@ impl TypedProgram {
         // resolve as ordinary variables.
         let closure_setup: Option<ClosureSetup> = if is_closure {
             let environment_struct_type =
-                self.add_anon_type(Type::Struct(StructType::struc(env_fields_handle)));
+                self.add_type_anon(Type::Struct(StructType::struc(env_fields_handle)));
             let environment_struct = self.exprs.add(
                 TypedExpr::Struct(StructLiteral { fields: env_field_exprs_handle }),
                 environment_struct_type,
@@ -11520,7 +11517,7 @@ impl TypedProgram {
 
         // No captures: this is just a regular function
         if !is_closure {
-            let function_type = self.add_anon_type(Type::Function(FunctionType {
+            let function_type = self.add_type_anon(Type::Function(FunctionType {
                 physical_params: typed_params.to_slice(),
                 return_type,
                 is_lambda: false,
@@ -11607,7 +11604,7 @@ impl TypedProgram {
             self.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(body_function_id)
         }
 
-        let function_type = self.add_anon_type(Type::Function(FunctionType {
+        let function_type = self.add_type_anon(Type::Function(FunctionType {
             physical_params: typed_params.to_slice(),
             return_type,
             is_lambda: true,
@@ -12036,6 +12033,7 @@ impl TypedProgram {
             subject_type,
             &mut trial_constructors,
             &mut field_ctors_buf,
+            0,
             &mut visited_ancestors,
             subject_span,
         );
@@ -12045,12 +12043,7 @@ impl TypedProgram {
         kill_counts.fill_to_cap(0);
         'trial: for trial_entry in trial_constructors.iter_mut() {
             '_pattern: for (pattern_index, pattern) in all_unguarded_patterns.iter().enumerate() {
-                if TypedProgram::pattern_eliminates_ctor(
-                    &self.pattern_ctors,
-                    &self.patterns,
-                    *pattern,
-                    trial_entry.ctor,
-                ) {
+                if self.pattern_eliminates_ctor(*pattern, trial_entry.ctor) {
                     kill_counts[pattern_index] += 1;
                     // *kill_count += 1;
                     trial_entry.alive = false;
@@ -16338,7 +16331,6 @@ impl TypedProgram {
             }
             BuiltinTyperInline::TypeId => {
                 let type_id = call.type_args.as_slice(&self.mem)[0];
-                let type_id_u64 = type_id.as_u32() as u64;
 
                 // We generate a schema for every type for which a typeId is requested
                 // This guarantees that we have it available at runtime when typeSchema is
@@ -16346,8 +16338,8 @@ impl TypedProgram {
                 // Same for typeName
                 self.register_type_metainfo(type_id);
 
-                let int_expr = self.synth_int(TypedIntValue::U64(type_id_u64), span);
-                Ok(int_expr)
+                let type_id_expr = self.synth_type_id_literal(type_id, span);
+                Ok(type_id_expr)
             }
             BuiltinTyperInline::TypeSize
             | BuiltinTyperInline::TypeStride
@@ -17590,6 +17582,8 @@ impl TypedProgram {
         let fn_name_str = self.ast.idents.get_string(fn_name);
         let second =
             self.tmp.dlist_nth_data_opt(namespace_chain, 2).map(|node| self.ident_str(*node));
+        let third =
+            self.tmp.dlist_nth_data_opt(namespace_chain, 3).map(|node| self.ident_str(*node));
         let result = if let Some(ability_id) = ability_id {
             let base_ability_id = self.abilities.get(ability_id).base_ability_id;
             use ArithOpKind as OpKind;
@@ -17799,13 +17793,15 @@ impl TypedProgram {
                     "bitcast" => Some(Builtin::Ir(BuiltinIr::Bitcast)),
                     _ => None,
                 },
-                Some("types") => match fn_name_str {
-                    "type-id" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeId)),
-                    "type-id-name" => Some(Builtin::Backend(BackendBuiltin::TypeName)),
-                    "type-id-schema" => Some(Builtin::Backend(BackendBuiltin::TypeSchema)),
-                    "size" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeSize)),
-                    "stride" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeStride)),
-                    "align" => Some(Builtin::TyperInline(BuiltinTyperInline::TypeAlign)),
+                Some("types") => match (third, fn_name_str) {
+                    (None, "id") => Some(Builtin::TyperInline(BuiltinTyperInline::TypeId)),
+                    (None, "size") => Some(Builtin::TyperInline(BuiltinTyperInline::TypeSize)),
+                    (None, "stride") => Some(Builtin::TyperInline(BuiltinTyperInline::TypeStride)),
+                    (None, "align") => Some(Builtin::TyperInline(BuiltinTyperInline::TypeAlign)),
+                    (Some("type-id"), "name") => Some(Builtin::Backend(BackendBuiltin::TypeName)),
+                    (Some("type-id"), "schema") => {
+                        Some(Builtin::Backend(BackendBuiltin::TypeSchema))
+                    }
                     _ => None,
                 },
                 Some("bool") => match fn_name_str {
@@ -18701,7 +18697,7 @@ impl TypedProgram {
         if self.substitute_in_type(substituted_return, &self_probe) != substituted_return {
             return Err("its return type mentions self".to_string());
         }
-        let slot_fn_type = self.add_anon_type(Type::Function(FunctionType {
+        let slot_fn_type = self.add_type_anon(Type::Function(FunctionType {
             physical_params: slot_params.to_slice(),
             return_type: substituted_return,
             is_lambda: has_receiver,
@@ -18756,8 +18752,8 @@ impl TypedProgram {
         }
         let fields_handle = fields.to_slice();
         let struct_representation =
-            self.add_anon_type(Type::Struct(StructType::struc(fields_handle)));
-        Ok(self.add_anon_type(Type::AbilityObject(AbilityObjectType {
+            self.add_type_anon(Type::Struct(StructType::struc(fields_handle)));
+        Ok(self.add_type_anon(Type::AbilityObject(AbilityObjectType {
             specialized_ability_id: signature.specialized_ability_id,
             impl_arguments: signature.impl_arguments,
             struct_representation,
@@ -19236,7 +19232,7 @@ impl TypedProgram {
             Linkage::External { .. } | Linkage::Exported { .. } => AbiMode::Native,
             Linkage::Intrinsic | Linkage::LlvmIntrinsic(_) => AbiMode::Internal,
         };
-        let function_type_id = self_.add_anon_type(Type::Function(FunctionType {
+        let function_type_id = self_.add_type_anon(Type::Function(FunctionType {
             physical_params: param_types_handle,
             return_type,
             is_lambda: false,
@@ -19522,7 +19518,7 @@ impl TypedProgram {
         }
 
         let param_types_handle = param_types.to_slice();
-        let function_type_id = self.add_anon_type(Type::Function(FunctionType {
+        let function_type_id = self.add_type_anon(Type::Function(FunctionType {
             physical_params: param_types_handle,
             return_type: code_type,
             is_lambda: false,
@@ -19890,12 +19886,12 @@ impl TypedProgram {
                 );
                 let ctx = EvalExprContext::make(block.scope_id);
 
-                let obrace_expr = self.synth_string_literal_from_str("{ ", fn_span);
+                let obrace_expr = self.synth_string_literal_from_str(".{ ", fn_span);
                 let write_obrace = self.synth_printto_call(obrace_expr, writer_expr, ctx)?;
                 self.push_block_expr_id(&mut block, write_obrace);
 
                 let comma_expr = self.synth_string_literal_from_str(", ", fn_span);
-                let colon_expr = self.synth_string_literal_from_str(": ", fn_span);
+                let colon_expr = self.synth_string_literal_from_str(" = ", fn_span);
                 // FIXME: This won't support indentation until we pluck 'print' out into 'Display' and 'Inspect'
                 for (index, field) in self.mem.getn(struct_type.fields).iter().enumerate() {
                     let field_expr = self.synth_field_access(struct_expr, index, fn_span);
@@ -21119,7 +21115,7 @@ impl TypedProgram {
             .map_err(|e| kerr!(self, span, "ns(reload) requires std/reload: {}", e.message))?;
         let return_type = self.exprs.get_type(body);
         let body_block = self.synth_return_only_block(fn_scope, body, span);
-        let function_type = self.add_anon_type(Type::Function(FunctionType {
+        let function_type = self.add_type_anon(Type::Function(FunctionType {
             physical_params: MSlice::empty(),
             return_type,
             is_lambda: false,
@@ -21184,8 +21180,12 @@ impl TypedProgram {
             if global.reload_ns == Some(ns_id) {
                 let name = self.ident_str(self.variables.get(global.variable_id).name);
                 signature.clear();
-                self.display_type_id(&mut signature, global.type_id, dump::TypeDisplayMode::Structural)
-                    .unwrap();
+                self.display_type_id(
+                    &mut signature,
+                    global.type_id,
+                    dump::TypeDisplayMode::Structural,
+                )
+                .unwrap();
                 sum = sum.wrapping_add(
                     crate::snap::InputsHash(0)
                         .add(&[b"let", name.as_bytes(), signature.as_bytes()])
@@ -21691,7 +21691,7 @@ impl TypedProgram {
                     span: SpanId::NONE,
                 },
             ]);
-            let t = self.add_anon_type(Type::Struct(StructType::struc(fields)));
+            let t = self.add_type_anon(Type::Struct(StructType::struc(fields)));
             self.builtin_types.dyn_lambda_obj = Some(t);
             self.assert_builtin_types_correct();
         }
@@ -21900,6 +21900,7 @@ impl TypedProgram {
         type_id: TypeId,
         dst: &mut Vec<PatternCtorTrialEntry>,
         field_ctors_buf: &mut Vec<Vec<(StringId, PatternCtorId)>>,
+        ctors_base: usize,
         ancestors: &mut Vec<TypeId>,
         span_id: SpanId,
     ) {
@@ -21911,6 +21912,7 @@ impl TypedProgram {
             k1: &mut TypedProgram,
             dst: &mut Vec<PatternCtorTrialEntry>,
             field_ctors_buf: &mut Vec<Vec<(StringId, PatternCtorId)>>,
+            ctors_base: usize,
             span_id: SpanId,
             ancestors: &mut Vec<TypeId>,
             v: &TypedSumVariant,
@@ -21925,6 +21927,7 @@ impl TypedProgram {
                         *payload,
                         dst,
                         field_ctors_buf,
+                        ctors_base,
                         ancestors,
                         span_id,
                     );
@@ -21976,6 +21979,7 @@ impl TypedProgram {
                     refer.inner_type,
                     dst,
                     field_ctors_buf,
+                    ctors_base,
                     ancestors,
                     span_id,
                 );
@@ -21987,7 +21991,15 @@ impl TypedProgram {
             Type::Array(_array_type) => dst.push(alive(self.pattern_ctors.add(PatternCtor::Array))),
             Type::Sum(sum_type) => {
                 for v in self.mem.getn(sum_type.variants) {
-                    handle_sum_variant(self, dst, field_ctors_buf, span_id, ancestors, v)
+                    handle_sum_variant(
+                        self,
+                        dst,
+                        field_ctors_buf,
+                        ctors_base,
+                        span_id,
+                        ancestors,
+                        v,
+                    )
                 }
             }
             Type::Enum(enum_type) => {
@@ -22023,30 +22035,33 @@ impl TypedProgram {
                                     field.type_id,
                                     dst,
                                     field_ctors_buf,
+                                    ctors_base + field_count as usize,
                                     ancestors,
                                     span_id,
                                 );
-                                match field_ctors_buf.get_mut(index) {
-                                    None => field_ctors_buf.push(Vec::new()),
-                                    Some(buf) => buf.clear(),
-                                };
+                                let slot = ctors_base + index;
+                                while field_ctors_buf.len() <= slot {
+                                    field_ctors_buf.push(Vec::new());
+                                }
+                                field_ctors_buf[slot].clear();
                                 if dst.len() == prev_len {
                                     // No constructors
                                     has_unreachable_field = true
                                 }
                                 for field_ctor in dst[prev_len..].iter() {
-                                    field_ctors_buf[index].push((field.name, field_ctor.ctor));
+                                    field_ctors_buf[slot].push((field.name, field_ctor.ctor));
                                 }
                                 debug!(
                                     "Pushed {} constructors for field {}; resetting dst to {prev_len}",
-                                    field_ctors_buf[index].len(),
+                                    field_ctors_buf[slot].len(),
                                     self.ident_str(field.name)
                                 );
                                 dst.truncate(prev_len);
                             }
 
                             if !has_unreachable_field {
-                                let final_count = field_ctors_buf[0..field_count as usize]
+                                let final_count = field_ctors_buf
+                                    [ctors_base..ctors_base + field_count as usize]
                                     .iter()
                                     .map(|v| v.len())
                                     .reduce(|t, v| t * v)
@@ -22087,8 +22102,10 @@ impl TypedProgram {
                                 // b has 2 patterns, and is in the second (meaningful) position, so we do 12 / 2 * 2 to get 3 as its 'repeat count', and repeat each pattern 3 times (fff, ttt)
                                 // c has 3 patterns, and is in the third (meaningful) position, so we do 12 / 3 * 4 to get 1 as its 'repeat count', and repeat each pattern 1 time (abc, abc, abc)
                                 let mut field_index_w_multi_ctor = 0;
-                                for (field_index, ctors) in
-                                    field_ctors_buf[0..field_count as usize].iter().enumerate()
+                                for (field_index, ctors) in field_ctors_buf
+                                    [ctors_base..ctors_base + field_count as usize]
+                                    .iter()
+                                    .enumerate()
                                 {
                                     if ctors.len() == 1 {
                                         for result_struct in result_struct_ids.iter_mut() {
@@ -22151,13 +22168,8 @@ impl TypedProgram {
         debug_assert_eq!(popped, Some(type_id));
     }
 
-    fn pattern_eliminates_ctor(
-        ctors: &VPool<PatternCtor, PatternCtorId>,
-        patterns: &TypedPatternPool,
-        pattern: TypedPatternId,
-        ctor: PatternCtorId,
-    ) -> bool {
-        match (patterns.get(pattern), ctors.get(ctor)) {
+    fn pattern_eliminates_ctor(&self, pattern: TypedPatternId, ctor: PatternCtorId) -> bool {
+        match (self.patterns.get(pattern), self.pattern_ctors.get(ctor)) {
             (TypedPattern::Wildcard(_), _) => true,
             (TypedPattern::Variable(_), _) => true,
             #[allow(clippy::bool_comparison)]
@@ -22177,7 +22189,7 @@ impl TypedProgram {
                 if *variant_name == sum_pat.variant_name {
                     match (sum_pat.payload, inner) {
                         (Some(payload), Some(inner)) => {
-                            TypedProgram::pattern_eliminates_ctor(ctors, patterns, payload, *inner)
+                            self.pattern_eliminates_ctor(payload, *inner)
                         }
                         (None, None) => true,
                         _ => false,
@@ -22191,20 +22203,25 @@ impl TypedProgram {
                 // an empty pattern already matches. So we iterate over the fields this pattern does
                 // care about, and if any do not match, we'll consider the whole pattern not to match
                 let mut matches = true;
-                for field_pattern in patterns.get_slice(struc.fields).iter() {
-                    let matching_field_pattern = patterns
+                for field_pattern in self.patterns.get_slice(struc.fields).iter() {
+                    let matching_field_pattern = self
+                        .patterns
                         .mem
                         .getn_lt(*fields)
                         .iter()
                         .find(|(name, _ctor_pattern)| *name == field_pattern.name)
                         .map(|(_, ctor_pattern)| ctor_pattern)
-                        .expect("Field not in struct; pattern should have failed typecheck by now");
-                    if !TypedProgram::pattern_eliminates_ctor(
-                        ctors,
-                        patterns,
-                        field_pattern.pattern,
-                        *matching_field_pattern,
-                    ) {
+                        .unwrap_or_else(|| {
+                            ice_span!(
+                                self,
+                                struc.span,
+                                "Field {} not in struct ctor {}; pattern should have failed typecheck by now",
+                                self.ident_str(field_pattern.name),
+                                self.patterns.mem.getn(*fields).iter().map(|f| self.ident_str(f.0)).join(", ")
+                            )
+                        });
+                    if !self.pattern_eliminates_ctor(field_pattern.pattern, *matching_field_pattern)
+                    {
                         matches = false;
                         break;
                     }
@@ -22212,12 +22229,7 @@ impl TypedProgram {
                 matches
             }
             (TypedPattern::Reference(ref_pattern), PatternCtor::Reference(ref_ctor)) => {
-                TypedProgram::pattern_eliminates_ctor(
-                    ctors,
-                    patterns,
-                    ref_pattern.inner_pattern,
-                    *ref_ctor,
-                )
+                self.pattern_eliminates_ctor(ref_pattern.inner_pattern, *ref_ctor)
             }
             (TypedPattern::Enum(enum_pattern), PatternCtor::Enum { variant_name }) => {
                 enum_pattern.member_name == *variant_name
@@ -22374,6 +22386,7 @@ impl TypedProgram {
             QIdent { path: core_mem, name: get_ident!(self, "zeroed"), name_span: span },
             QIdent { path: core_types, name: self.ast.idents.b.enum_, name_span: span },
             QIdent { path: core_types, name: get_ident!(self, "sum"), name_span: span },
+            QIdent { path: core_types, name: get_ident!(self, "type-id"), name_span: span },
         ];
         for qid in idents_to_use.into_iter() {
             let use_id = self.ast.uses.add_use(parse::ParsedUse {
@@ -22533,7 +22546,7 @@ impl TypedProgram {
                     // are available at runtime, by calling these functions at least once.
                     self.register_type_metainfo(f.type_id);
 
-                    let type_id_value_id = self.static_values.add_type_id_int_value(f.type_id);
+                    let type_id_value_id = self.add_type_id_value(f.type_id);
                     let offset_u32 = match &struct_layout {
                         None => 0,
                         Some(struct_layout) => struct_layout[index].offset,
@@ -22570,9 +22583,8 @@ impl TypedProgram {
                 let reference_type = *reference_type;
                 let reference_schema_payload_type_id =
                     get_schema_variant(self, self.ast.idents.b.reference).payload.unwrap();
-                // { innerTypeId: u64, mutable: bool }
-                let inner_type_id_value_id =
-                    self.static_values.add_type_id_int_value(reference_type.inner_type);
+                // { innerTypeId: type-id, mutable: bool }
+                let inner_type_id_value_id = self.add_type_id_value(reference_type.inner_type);
 
                 // We need to ensure that any and all typeIds that we share with the user
                 // are available at runtime, by calling these functions at least once.
@@ -22590,8 +22602,7 @@ impl TypedProgram {
                 let array_schema_payload_type_id =
                     get_schema_variant(self, self.ast.idents.b.array).payload.unwrap();
                 // { elementTypeId: u64, size: size }
-                let element_type_id_value_id =
-                    self.static_values.add_type_id_int_value(array_type.element_type);
+                let element_type_id_value_id = self.add_type_id_value(array_type.element_type);
                 self.register_type_metainfo(array_type.element_type);
 
                 let maybe_concrete_size_value_id = match concrete_count {
@@ -22616,8 +22627,7 @@ impl TypedProgram {
                 let concrete_count = self.get_concrete_count_of_array(vector_type.size_type);
                 let vector_schema_payload_type_id =
                     get_schema_variant(self, self.ast.idents.b.vector).payload.unwrap();
-                let element_type_id_value_id =
-                    self.static_values.add_type_id_int_value(vector_type.element_type);
+                let element_type_id_value_id = self.add_type_id_value(vector_type.element_type);
                 self.register_type_metainfo(vector_type.element_type);
 
                 let maybe_concrete_size_value_id = match concrete_count {
@@ -22680,8 +22690,7 @@ impl TypedProgram {
                             None,
                         ),
                         Some(payload_type_id) => {
-                            let type_id_value_id =
-                                self.static_values.add_type_id_int_value(payload_type_id);
+                            let type_id_value_id = self.add_type_id_value(payload_type_id);
                             // We need to ensure that any and all typeIds that we share with the user
                             // are available at runtime, by calling these functions at least once.
                             self.register_type_metainfo(payload_type_id);
@@ -22733,8 +22742,8 @@ impl TypedProgram {
                 let function_schema_payload_type_id =
                     get_schema_variant(self, self.ast.idents.b.function).payload.unwrap();
                 //Function({
-                //  params: span[{ name: string, typeId: u64 }],
-                //  returnTypeId: u64,
+                //  params: span[{ name: string, typeId: type-id }],
+                //  returnTypeId: type-id,
                 //}),
                 let function_schema_payload_struct =
                     self.types.get(function_schema_payload_type_id).expect_struct();
@@ -22754,14 +22763,13 @@ impl TypedProgram {
                     self.register_type_metainfo(param.type_id);
 
                     let param_name_value_id = self.static_values.add_string(param.name);
-                    let param_type_id_value_id =
-                        self.static_values.add_type_id_int_value(param.type_id);
+                    let param_type_id_value_id = self.add_type_id_value(param.type_id);
                     let param_struct_value_id = self.static_values.add_struct_from_slice(
                         function_param_struct_type_id,
                         &[
                             // name: string
                             param_name_value_id,
-                            // typeId: u64
+                            // type-id: type-id
                             param_type_id_value_id,
                         ],
                     );
@@ -22774,8 +22782,7 @@ impl TypedProgram {
                     .add_span(function_params_span_type_id, params_value_ids_slice);
 
                 self.register_type_metainfo(fn_type.return_type);
-                let return_type_id_value_id =
-                    self.static_values.add_type_id_int_value(fn_type.return_type);
+                let return_type_id_value_id = self.add_type_id_value(fn_type.return_type);
 
                 let payload = self.static_values.add_struct_from_slice(
                     function_schema_payload_type_id,
@@ -22789,11 +22796,11 @@ impl TypedProgram {
                 make_variant(self, self.ast.idents.b.function, Some(payload))
             }
             Type::FunctionPointer(fp) => {
+                let fp = *fp;
                 let function_pointer_schema_payload_type_id =
                     get_schema_variant(self, self.ast.idents.b.function_pointer).payload.unwrap();
 
-                let function_type_id_value_id =
-                    self.static_values.add_type_id_int_value(fp.function_type_id);
+                let function_type_id_value_id = self.add_type_id_value(fp.function_type_id);
                 self.register_type_metainfo(fp.function_type_id);
 
                 let payload = self.static_values.add_struct_from_slice(
@@ -22840,6 +22847,11 @@ impl TypedProgram {
     fn register_type_metainfo(&mut self, type_id: TypeId) {
         let _ = self.get_type_schema(type_id);
         let _ = self.get_type_name(type_id);
+    }
+
+    fn add_type_id_value(&mut self, type_id: TypeId) -> StaticValueId {
+        let type_id_type_id = self.builtin_types.type_id();
+        self.static_values.add_type_id_value(type_id_type_id, type_id)
     }
 
     fn make_int_kind(int_kind_type_id: TypeId, integer_type: IntegerType) -> StaticValue {

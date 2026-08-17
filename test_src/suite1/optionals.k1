@@ -16,8 +16,8 @@ fn test-basics(): int {
   let c: ?int = :none
   assert(not c.is-some())
 
-  use types/type-id
-  assert(type-id[point-maybe-y.y:some] == type-id[int])
+  use types/id
+  assert(id[point-maybe-y.y:some] == id[int])
 
   0
 }

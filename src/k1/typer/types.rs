@@ -1052,6 +1052,7 @@ pub struct BuiltinTypes {
     pub types_int_value: Option<TypeId>,
     pub types_float_kind: Option<TypeId>,
     pub types_float_value: Option<TypeId>,
+    pub types_type_id: Option<TypeId>,
 }
 
 impl BuiltinTypes {
@@ -1075,6 +1076,7 @@ impl BuiltinTypes {
         debug_assert!(self.types_int_value.is_some());
         debug_assert!(self.types_float_kind.is_some());
         debug_assert!(self.types_float_value.is_some());
+        debug_assert!(self.types_type_id.is_some());
     }
     pub fn bool(&self) -> TypeId {
         self.bool.expect("bool builtin missing")
@@ -1105,6 +1107,9 @@ impl BuiltinTypes {
     }
     pub fn code_builder(&self) -> TypeId {
         self.code_builder.expect("code-builder builtin missing")
+    }
+    pub fn type_id(&self) -> TypeId {
+        self.types_type_id.expect("type-id builtin missing")
     }
 }
 
@@ -1561,11 +1566,11 @@ impl TypedProgram {
     }
 
     pub fn add_reference_type(&mut self, inner_type: TypeId) -> TypeId {
-        self.add_anon_type(Type::Reference(ReferenceType { inner_type }))
+        self.add_type_anon(Type::Reference(ReferenceType { inner_type }))
     }
 
     pub fn add_function_pointer_type(&mut self, function_type_id: TypeId) -> TypeId {
-        self.add_anon_type(Type::FunctionPointer(FunctionPointerType { function_type_id }))
+        self.add_type_anon(Type::FunctionPointer(FunctionPointerType { function_type_id }))
     }
 
     fn make_union_type(
@@ -1602,10 +1607,10 @@ impl TypedProgram {
         family_type_id: TypeId,
         value_id: Option<StaticValueId>,
     ) -> TypeId {
-        self.add_anon_type(Type::StaticValue(StaticValueType { family_type_id, value_id }))
+        self.add_type_anon(Type::StaticValue(StaticValueType { family_type_id, value_id }))
     }
 
-    pub fn add_anon_type(&mut self, typ: Type) -> TypeId {
+    pub fn add_type_anon(&mut self, typ: Type) -> TypeId {
         self.add_type(typ, None, None)
     }
 
@@ -1618,7 +1623,7 @@ impl TypedProgram {
             }
         }
         let type_id =
-            self.add_anon_type(Type::InferenceHole(InferenceHoleType { index, static_type }));
+            self.add_type_anon(Type::InferenceHole(InferenceHoleType { index, static_type }));
         if static_type.is_none() {
             let index = index as usize;
             if self.hole_type_cache.len() <= index {
@@ -1739,7 +1744,7 @@ impl TypedProgram {
             function_id: body_function_id,
             environment_struct,
         });
-        let lambda_type_id = self.add_anon_type(Type::Lambda(lambda_type_id));
+        let lambda_type_id = self.add_type_anon(Type::Lambda(lambda_type_id));
         lambda_type_id
     }
 
@@ -1766,8 +1771,8 @@ impl TypedProgram {
                 span: SpanId::NONE,
             },
         ]);
-        let struct_representation = self.add_anon_type(Type::Struct(StructType::struc(fields)));
-        self.add_anon_type(Type::LambdaObject(LambdaObjectType {
+        let struct_representation = self.add_type_anon(Type::Struct(StructType::struc(fields)));
+        self.add_type_anon(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
             parsed_id,
             struct_representation,

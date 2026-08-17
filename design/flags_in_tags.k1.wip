@@ -14,10 +14,10 @@ type Shape = {
   id: string, zIndex: int, 
   // Variants
   kind: either(u64, { rounded: bool, even: bool, faces: u8 }) {
-    Circle({ radius: i32 }, [rounded, even]) = 0,
-    Oval({ radiusx: i32, radiusy: i32}, [rounded]),
-    Square({ len: i32 }, ),
-    Rect({ lenx: i32, leny: i32 }, [even])
+    Circle({ radius: i32 }, {true, true, 1}),
+    Oval({ radiusx: i32, radiusy: i32}, {true, false, 1}),
+    Square({ len: i32 }, { false, true, 4 }),
+    Rect({ lenx: i32, leny: i32 }, {false, true, 4})
   }
 }
 // We then assign a bit to each flag, and generate unique tag values that satisfy the flags of each variant

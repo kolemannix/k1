@@ -11,9 +11,9 @@ fn int-width-for-bits(bits: size): size {
   else crash("Too many bits: $bits")
 }
 fn bn(name: string, bits: size): { name: string, bits: size } { .{ name, bits } }
-fn define-impl(base-type-id: u64, type-name: string, members: span[{ name: string, bits: size }]): string {
-  let base-schema = types/type-id-schema(base-type-id)
-  let base-name = types/type-id-name(base-type-id)
+fn define-impl(base-type-id: type-id, type-name: string, members: span[{ name: string, bits: size }]): string {
+  let base-schema = base-type-id.schema()
+  let base-name = base-type-id.name()
   require base-schema is :int int-kind else { crash("Base should be an int; got $base-name") }
   let total-bits = int-kind.bit-width()
 
@@ -121,7 +121,7 @@ fn define-impl(base-type-id: u64, type-name: string, members: span[{ name: strin
 }
 
 macro define[int-type](type-name, members: span[{ name: string, bits: size}]) {
-  code/from-string(define-impl(types/type-id[int-type](), type-name.text(), members))
+  code/from-string(define-impl(types/id[int-type](), type-name.text(), members))
 }
 macro b1(name) { `.{ name = "$name", bits = 1 }` }
 macro b8(name) { `bn("$name", 8)` }
