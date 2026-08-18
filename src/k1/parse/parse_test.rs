@@ -426,8 +426,25 @@ impl print for bool {
   "#;
     let mut ast = make_test_ast();
     let mut parser = set_up(input, &mut ast);
-    let ability_result = parser.parse_definition(K::Eof);
-    assert!(ability_result.is_err());
+    let ability_result = parser.expect_definition();
+    assert!(ability_result.is_ok());
+    assert!(!ast.errors.is_empty());
+    Ok(())
+}
+
+#[test]
+fn definition_recovery() -> ParseResult<()> {
+    let input = r#"
+fn good1(): int { 1 }
+banana banana
+fn 123
+fn good2(): int { 3 }
+"#;
+    let mut ast = make_test_ast();
+    let mut parser = set_up(input, &mut ast);
+    let defs = parser.parse_definitions(K::Eof);
+    assert_eq!(defs.len(), 2);
+    assert_eq!(ast.errors.len(), 2);
     Ok(())
 }
 

@@ -4,6 +4,38 @@ ns condcomp
 let MY_VALUE: bool = true
 let MY_VALUE_NEG: bool = not MY_VALUE
 
+#if MY_VALUE_NEG let picked: int = 2
+#if MY_VALUE let picked: int = 1
+
+#if MY_VALUE type(alias) chosen = int
+#if MY_VALUE_NEG type(alias) chosen = string
+
+#if MY_VALUE_NEG ns gated {
+  fn get(): int { 2 }
+}
+#if MY_VALUE ns gated {
+  fn get(): int { 1 }
+}
+
+type wrapper = { value: int }
+
+#if MY_VALUE_NEG ability phantom {
+  fn phantom(self): unit
+}
+#if MY_VALUE ability yep {
+  fn yes(self): int
+}
+
+#if MY_VALUE impl yep for wrapper {
+  fn yes(self): int { self.value }
+}
+#if MY_VALUE_NEG impl yep for wrapper {
+  fn yes(self): int { 999 }
+}
+
+#if MY_VALUE_NEG fn gone(): int { crash("does not compile") }
+#if MY_VALUE fn here(): int { 42 }
+
 fn test() {
   use core/k1
   assert-equals(k1/test, false)
@@ -18,6 +50,18 @@ fn test() {
 
   let comptime-check = #if false "foo" else "bar"
   assert(comptime-check == "bar")
+
+  assert-equals(picked, 1)
+
+  let c: chosen = 5
+  assert-equals(c + 1, 6)
+
+  assert-equals(gated/get(), 1)
+
+  let w: wrapper = .{ value = 7 }
+  assert-equals(w.yes(), 7)
+
+  assert-equals(here(), 42)
 
   .{}
 }

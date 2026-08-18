@@ -99,7 +99,11 @@ impl TypedProgram {
         self.with_parser(file_id, move |p| {
             let msg_base = "Failed to parse the code you returned: ";
             let error_count_start = p.ast.errors.len();
-            let p_result = p.parse_function(None);
+            let p_result = if p.peek().kind == TokenKind::KeywordFn {
+                p.expect_function(None, false).map(Some)
+            } else {
+                Ok(None)
+            };
             let new_errors = p.ast.errors.len() - error_count_start;
             match p_result {
                 Err(e) => Err(make_message(

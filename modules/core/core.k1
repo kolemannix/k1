@@ -50,7 +50,6 @@ fn eprintln(s: string) {
   eprint("\n")
 }
 
-#if k1/OS_POSIX
 ns io {
   // TODO: Add buffering to stdout and stderr!
   type out-stream = { file-no: i32 }

@@ -2,6 +2,8 @@
 
 next up
 - more dogfooding, do the 2 static sites
+- parse_statement: same peek-dispatch conversion parse_definition got (expect_ variants, no conditional parse_* chain)
+- if use-kind disambiguation returns, spell it keyword-call style: `use(type) foo`
 
 # Bugs
 - [x] [major] Support (co)recursive Generics

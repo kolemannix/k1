@@ -5440,7 +5440,9 @@ impl TypedProgram {
             },
             None => match self.find_pending_global_namespaced(scope_id, name)? {
                 Some((parsed_id, defn_scope)) => {
-                    self.declare_global(parsed_id, defn_scope)?;
+                    if self.declare_global(parsed_id, defn_scope)?.is_none() {
+                        return Ok(None);
+                    }
                     *self.global_ast_mappings.get(&parsed_id).unwrap()
                 }
                 None => return Ok(None),
@@ -7437,11 +7439,14 @@ impl TypedProgram {
         &mut self,
         parsed_global_id: ParsedGlobalId,
         scope_id: ScopeId,
-    ) -> K1Result<VariableId> {
+    ) -> K1Result<Option<VariableId>> {
         if let Some(global_id) = self.global_ast_mappings.get(&parsed_global_id) {
-            return Ok(self.globals.get(*global_id).variable_id);
+            return Ok(Some(self.globals.get(*global_id).variable_id));
         }
         let parsed = *self.ast.get_global(parsed_global_id);
+        if !self.execute_static_condition(parsed.compile_condition, scope_id) {
+            return Ok(None);
+        }
         let owner_ns = match self.scopes.get_scope(scope_id).owner_id {
             ScopeOwnerId::Namespace(ns) => ns,
             _ => kbail!(self, SpanId::NONE, "declare_global's scope_id should be an namespace"),
@@ -7491,7 +7496,7 @@ impl TypedProgram {
 
         self.emit_ls_entity(parsed.name_span, LsEntityKind::Variable { variable_id });
 
-        Ok(variable_id)
+        Ok(Some(variable_id))
     }
 
     pub fn eval_global_body(&mut self, parsed_global_id: ParsedGlobalId) -> K1Result<()> {
@@ -9202,16 +9207,17 @@ impl TypedProgram {
     ) -> K1Result<(Option<VariableId>, TypedExprId)> {
         let scope_id = ctx.scope_id;
         let ParsedExpr::Variable(variable) = self.ast.exprs.get(variable_expr_id) else { panic!() };
-        let variable_name_span = variable.name.name_span;
+        let name = variable.name;
+        let variable_name_span = name.name_span;
 
         if let Some(cs) = &self.completion
-            && variable.name.name == cs.marker
+            && name.name == cs.marker
         {
             if cs.site.is_none() && !ctx.is_marker_owned_by_call() {
-                let site = if variable.name.path.is_empty() {
+                let site = if name.path.is_empty() {
                     CompletionSite::Scope { scope_id }
                 } else {
-                    match self.resolve_qident(scope_id, &variable.name) {
+                    match self.resolve_qident(scope_id, &name) {
                         Ok(path_scope_id) => CompletionSite::Path { path_scope_id },
                         Err(_) => CompletionSite::Scope { scope_id },
                     }
@@ -9224,22 +9230,34 @@ impl TypedProgram {
             return Ok((None, self.synth_phony(phony_type, variable_name_span)));
         }
 
-        let variable_id = self.find_variable_namespaced(scope_id, &variable.name)?;
+        let mut variable_id = self.find_variable_namespaced(scope_id, &name)?;
+        if variable_id.is_none() {
+            // A global not yet declared: force it, as early references
+            // (e.g. #if conditions during declaration phases) precede the
+            // declaration pass
+            if let Some((parsed_id, defn_scope)) =
+                self.find_pending_global_namespaced(scope_id, &name)?
+            {
+                if self.declare_global(parsed_id, defn_scope)?.is_some() {
+                    variable_id = self.find_variable_namespaced(scope_id, &name)?;
+                }
+            }
+        }
         match variable_id {
-            None => match self.find_function_namespaced(scope_id, &variable.name)? {
+            None => match self.find_function_namespaced(scope_id, &name)? {
                 None => Err(kerr!(
                     self,
-                    variable.name.name_span,
+                    name.name_span,
                     "No value '{}' is in scope",
-                    self.ast.idents.get_string(variable.name.name),
+                    self.ast.idents.get_string(name.name),
                 )),
                 Some(fn_id) => {
                     if self.get_function(fn_id).is_macro {
                         kbail!(
                             self,
-                            variable.name.name_span,
+                            name.name_span,
                             "Macro '{}' cannot be used as a value",
-                            self.ast.idents.get_string(variable.name.name),
+                            self.ast.idents.get_string(name.name),
                         );
                     }
                     Ok((None, self.function_to_reference(fn_id, variable_name_span)))
@@ -9250,7 +9268,7 @@ impl TypedProgram {
                     scope_id,
                     variable_id,
                     variable_scope_id,
-                    variable.name.name,
+                    name.name,
                     variable_name_span,
                 )?;
                 let v = self.variables.get(variable_id);
@@ -9261,7 +9279,7 @@ impl TypedProgram {
                 );
 
                 if !is_assignment_lhs {
-                    self.register_variable_usage(variable_id, variable.name.name_span);
+                    self.register_variable_usage(variable_id, name.name_span);
                 }
                 Ok((Some(variable_id), expr))
             }
@@ -10935,27 +10953,20 @@ impl TypedProgram {
                         }
                     }
                 },
-                ParseAdHocKind::Definitions => match p.parse_definitions(TokenKind::Eof) {
-                    Err(e) => Err(make_message(
-                        &p.ast.idents,
-                        format!("{msg_base}{e}"),
-                        e.span(),
-                        MessageLevel::Error,
-                    )),
-                    Ok(defns) => {
-                        if p.ast.errors.len() > error_count_start {
-                            let e = p.ast.errors.last().unwrap().clone();
-                            Err(make_message(
-                                &p.ast.idents,
-                                format!("{msg_base}{e}"),
-                                e.span(),
-                                MessageLevel::Error,
-                            ))
-                        } else {
-                            Ok(ParseMetaprogramResult::Definitions(defns.to_mslice()))
-                        }
+                ParseAdHocKind::Definitions => {
+                    let defns = p.parse_definitions(TokenKind::Eof);
+                    if p.ast.errors.len() > error_count_start {
+                        let e = p.ast.errors.last().unwrap().clone();
+                        Err(make_message(
+                            &p.ast.idents,
+                            format!("{msg_base}{e}"),
+                            e.span(),
+                            MessageLevel::Error,
+                        ))
+                    } else {
+                        Ok(ParseMetaprogramResult::Definitions(defns.to_mslice()))
                     }
-                },
+                }
             }
         })
     }
@@ -18943,7 +18954,8 @@ impl TypedProgram {
         let ast_fn = *self.ast.get_function(parsed_function_id);
         let name_span = ast_fn.name_span;
         let is_debug = ast_fn.compiler_debug;
-        let should_compile = self.execute_static_condition(ast_fn.condition, parent_scope_id);
+        let should_compile =
+            self.execute_static_condition(ast_fn.compile_condition, parent_scope_id);
         if !should_compile {
             return Ok(None);
         }
@@ -19509,7 +19521,7 @@ impl TypedProgram {
         let params_slice = ast_macro.params;
         let type_params_slice = ast_macro.type_params;
         let compiler_debug = ast_macro.compiler_debug;
-        let condition = ast_macro.condition;
+        let condition = ast_macro.compile_condition;
         if !self.execute_static_condition(condition, parent_scope_id) {
             return Ok(None);
         }
@@ -20066,11 +20078,14 @@ impl TypedProgram {
         &mut self,
         parsed_ability_id: ParsedAbilityId,
         scope_id: ScopeId,
-    ) -> K1Result<AbilityId> {
+    ) -> K1Result<Option<AbilityId>> {
         if let Some(ability_id) = self.find_ability_mapping(parsed_ability_id) {
-            return Ok(ability_id);
+            return Ok(Some(ability_id));
         }
         let parsed_ability = self.ast.get_ability(parsed_ability_id).clone();
+        if !self.execute_static_condition(parsed_ability.compile_condition, scope_id) {
+            return Ok(None);
+        }
         let parent_namespace_id = self.scopes.get_scope_owner(scope_id).as_namespace().unwrap();
         self.fail_if_reload_ns(parent_namespace_id, parsed_ability.span, "ability definitions")?;
 
@@ -20269,7 +20284,7 @@ impl TypedProgram {
             });
         }
         self.abilities.get_mut(ability_id).functions = typed_functions.to_slice();
-        Ok(ability_id)
+        Ok(Some(ability_id))
     }
 
     fn name_resolves_to_ability(&self, scope_id: ScopeId, name: &QIdent) -> K1Result<bool> {
@@ -20299,9 +20314,15 @@ impl TypedProgram {
                         self.ident_str(ability_name.name),
                         self.ast.get_span_content(ability_name.name_span)
                     );
-                    let ability_id =
-                        self.compile_ability_definition(pending_ability, ability_scope)?;
-                    Ok(ability_id)
+                    match self.compile_ability_definition(pending_ability, ability_scope)? {
+                        Some(ability_id) => Ok(ability_id),
+                        None => Err(kerr!(
+                            self,
+                            ability_name.name_span,
+                            "No ability '{}' is in scope",
+                            ability_name.name
+                        )),
+                    }
                 }
             }
         })
@@ -20311,9 +20332,12 @@ impl TypedProgram {
         &mut self,
         parsed_id: ParsedAbilityImplId,
         scope_id: ScopeId,
-    ) -> K1Result<AbilityImplId> {
+    ) -> K1Result<Option<AbilityImplId>> {
         let parsed_ability_impl = self.ast.get_ability_impl(parsed_id).clone();
         let span = parsed_ability_impl.span;
+        if !self.execute_static_condition(parsed_ability_impl.compile_condition, scope_id) {
+            return Ok(None);
+        }
         if let Some(owner_ns) = self.scopes.get_scope_owner(scope_id).as_namespace() {
             self.fail_if_reload_ns(owner_ns, span, "ability impls")?;
         }
@@ -20675,7 +20699,7 @@ impl TypedProgram {
         }
 
         self.ability_impl_ast_mappings.insert(parsed_id, typed_impl_id);
-        Ok(typed_impl_id)
+        Ok(Some(typed_impl_id))
     }
 
     fn compile_ability_impl_bodies(
@@ -20791,7 +20815,7 @@ impl TypedProgram {
                 // so that they have access to as much code as possible
                 if !is_metaprogram {
                     let should_compile =
-                        self.execute_static_condition(s.condition_if_definition, scope_id);
+                        self.execute_static_condition(s.compile_condition, scope_id);
 
                     if should_compile {
                         let static_ctx = StaticExecContext { expected_return_type: None };
@@ -20939,98 +20963,68 @@ impl TypedProgram {
         Ok(found_symbols)
     }
 
-    fn discover_globals_in_parsed_namespace(
-        &mut self,
-        parsed_namespace_id: ParsedNamespaceId,
-        skip_defns: &[ParsedId],
-    ) {
-        let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
+    /// Registers a global, type, or ability as pending in its namespace's
+    /// scope; other kinds are untouched. Runs during the in-order namespace
+    /// declaration walk, so a defn's #if can force anything registered above
+    /// it. A false condition means no registration: the name never exists,
+    /// and an alternate defn of the same name doesn't collide.
+    fn register_pending_defn(&mut self, defn: ParsedId, namespace_id: NamespaceId) {
         let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
-        let parsed_definitions =
-            self.ast.namespaces.get(parsed_namespace_id).definitions.as_slice(&self.ast.mem);
-        let mut children: SmallVec<[ParsedNamespaceId; 8]> = SmallVec::new();
-        for &parsed_definition_id in parsed_definitions {
-            if skip_defns.contains(&parsed_definition_id) {
-                continue;
-            }
-            match parsed_definition_id {
-                ParsedId::Global(global_id) => {
-                    let name = self.ast.get_global(global_id).name;
-                    self.scopes.add_pending_global(namespace_scope_id, name, global_id);
+        match defn {
+            ParsedId::Global(global_id) => {
+                let parsed = self.ast.get_global(global_id);
+                let name = parsed.name;
+                let condition = parsed.compile_condition;
+                if !self.execute_static_condition(condition, namespace_scope_id) {
+                    return;
                 }
-                ParsedId::Namespace(child_id) => children.push(child_id),
-                _ => {}
+                self.scopes.add_pending_global(namespace_scope_id, name, global_id);
             }
-        }
-        for child_id in children {
-            self.discover_globals_in_parsed_namespace(child_id, skip_defns);
-        }
-    }
-
-    fn discover_types_in_parsed_namespace(
-        &mut self,
-        parsed_namespace_id: ParsedNamespaceId,
-        skip_defns: &[ParsedId],
-    ) {
-        let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
-        let ns = self.namespaces.get(namespace_id);
-        let parsed_definitions =
-            self.ast.namespaces.get(parsed_namespace_id).definitions.as_slice(&self.ast.mem);
-        debug!("discover_types_in_namespace {}", self.ident_str(ns.name));
-        let namespace_scope_id = ns.scope_id;
-        for &parsed_definition_id in parsed_definitions {
-            if skip_defns.contains(&parsed_definition_id) {
-                continue;
+            ParsedId::TypeDefn(type_defn_id) => {
+                let parsed_type_defn = self.ast.get_type_defn(type_defn_id).clone();
+                if !self
+                    .execute_static_condition(parsed_type_defn.compile_condition, namespace_scope_id)
+                {
+                    return;
+                }
+                let pending_defn = TypePendingDefinition {
+                    namespace_id,
+                    scope_id: namespace_scope_id,
+                    parsed_id: type_defn_id,
+                };
+                let added = self.scopes.add_pending_type(
+                    namespace_scope_id,
+                    parsed_type_defn.name,
+                    pending_defn,
+                );
+                if !added {
+                    self.report(kerr!(
+                        self,
+                        parsed_type_defn.span,
+                        "Type {} exists",
+                        parsed_type_defn.name
+                    ));
+                }
+                self.types_pending_definition.push_back(pending_defn);
             }
-            match parsed_definition_id {
-                ParsedId::TypeDefn(type_defn_id) => {
-                    let parsed_type_defn = self.ast.get_type_defn(type_defn_id).clone();
-                    let pending_defn = TypePendingDefinition {
-                        namespace_id,
-                        scope_id: namespace_scope_id,
-                        parsed_id: type_defn_id,
-                    };
-                    let added = self.scopes.add_pending_type(
-                        namespace_scope_id,
-                        parsed_type_defn.name,
-                        pending_defn,
-                    );
-                    if !added {
-                        self.report(kerr!(
-                            self,
-                            parsed_type_defn.span,
-                            "Type {} exists",
-                            parsed_type_defn.name
-                        ));
-                    }
-                    self.types_pending_definition.push_back(pending_defn);
+            ParsedId::Ability(parsed_ability_id) => {
+                let parsed_ability_defn = self.ast.get_ability(parsed_ability_id);
+                let name = parsed_ability_defn.name;
+                let span = parsed_ability_defn.span;
+                let condition = parsed_ability_defn.compile_condition;
+                if !self.execute_static_condition(condition, namespace_scope_id) {
+                    return;
                 }
-                ParsedId::Namespace(parsed_namespace_id) => {
-                    self.discover_types_in_parsed_namespace(parsed_namespace_id, skip_defns);
+                let added = self.scopes.add_pending_ability_defn(
+                    namespace_scope_id,
+                    name,
+                    parsed_ability_id,
+                );
+                if !added {
+                    self.report(kerr!(self, span, "Ability {} exists", name));
                 }
-                ParsedId::Ability(parsed_ability_id) => {
-                    let parsed_ability_defn = self.ast.get_ability(parsed_ability_id);
-                    let name = parsed_ability_defn.name;
-                    let span = parsed_ability_defn.span;
-                    let added = self.scopes.add_pending_ability_defn(
-                        namespace_scope_id,
-                        name,
-                        parsed_ability_id,
-                    );
-                    if !added {
-                        self.report(kerr!(self, span, "Ability {} exists", name));
-                    }
-                }
-                ParsedId::Use(_)
-                | ParsedId::Function(_)
-                | ParsedId::Macro(_)
-                | ParsedId::AbilityImpl(_)
-                | ParsedId::Global(_)
-                | ParsedId::Expression(_)
-                | ParsedId::TypeExpression(_)
-                | ParsedId::Pattern(_)
-                | ParsedId::StaticDefn(_) => (),
             }
+            _ => {}
         }
     }
 
@@ -21046,7 +21040,9 @@ impl TypedProgram {
         parsed_namespace_id: ParsedNamespaceId,
         skip_defns: &[ParsedId],
     ) {
-        let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
+        let Some(&namespace_id) = self.namespace_ast_mappings.get(&parsed_namespace_id) else {
+            return;
+        };
         let namespace = self.namespaces.get(namespace_id);
         let namespace_scope_id = namespace.scope_id;
         let ns_reload = namespace.reload;
@@ -21264,7 +21260,9 @@ impl TypedProgram {
     fn compile_ns_body(&mut self, ast_namespace_id: ParsedNamespaceId, skip_defns: &[ParsedId]) {
         let ast_namespace = self.ast.namespaces.get(ast_namespace_id);
         let ast_definitions = &ast_namespace.definitions;
-        let namespace_id = *self.namespace_ast_mappings.get(&ast_namespace.id).unwrap();
+        let Some(&namespace_id) = self.namespace_ast_mappings.get(&ast_namespace.id) else {
+            return;
+        };
         let ns_scope_id = self.namespaces.get(namespace_id).scope_id;
         for defn in ast_definitions.as_slice(&self.ast.mem) {
             if skip_defns.contains(defn) {
@@ -21480,6 +21478,9 @@ impl TypedProgram {
             }
             match *defn {
                 ParsedId::Use(_) => {}
+                ParsedId::Global(_) | ParsedId::TypeDefn(_) | ParsedId::Ability(_) => {
+                    self.register_pending_defn(*defn, namespace_id);
+                }
                 ParsedId::Namespace(namespace_id) => {
                     if let Err(e) = self.declare_namespace_recursive(
                         namespace_id,
@@ -21498,8 +21499,8 @@ impl TypedProgram {
                     if !is_metaprogram {
                         continue;
                     }
-                    let should_compile = self
-                        .execute_static_condition(s.condition_if_definition, namespace_scope_id);
+                    let should_compile =
+                        self.execute_static_condition(s.compile_condition, namespace_scope_id);
 
                     if !should_compile {
                         continue;
@@ -21531,12 +21532,22 @@ impl TypedProgram {
                     // We'll add them to the AST definitions later so that further
                     // passes can find them
                     for &d in self.ast.mem.getn(newly_parsed_defns) {
-                        if let ParsedId::Namespace(ns) = d {
-                            if let Err(e) =
-                                self.declare_namespace_recursive(ns, namespace_scope_id, skip_defns)
-                            {
-                                self.report(e)
-                            };
+                        match d {
+                            ParsedId::Namespace(ns) => {
+                                if let Err(e) = self.declare_namespace_recursive(
+                                    ns,
+                                    namespace_scope_id,
+                                    skip_defns,
+                                ) {
+                                    self.report(e)
+                                };
+                            }
+                            ParsedId::Global(_)
+                            | ParsedId::TypeDefn(_)
+                            | ParsedId::Ability(_) => {
+                                self.register_pending_defn(d, namespace_id);
+                            }
+                            _ => {}
                         }
                     }
                     // We want to insert a given #meta's definitions right after that meta
@@ -21556,10 +21567,14 @@ impl TypedProgram {
         parsed_namespace_id: ParsedNamespaceId,
         parent_scope: ScopeId,
         skip_defns: &[ParsedId],
-    ) -> K1Result<NamespaceId> {
+    ) -> K1Result<Option<NamespaceId>> {
+        let condition = self.ast.namespaces.get(parsed_namespace_id).compile_condition;
+        if !self.execute_static_condition(condition, parent_scope) {
+            return Ok(None);
+        }
         let ns_id = self.declare_namespace(parsed_namespace_id, parent_scope)?;
         self.declare_namespaces_in_namespace(parsed_namespace_id, skip_defns);
-        Ok(ns_id)
+        Ok(Some(ns_id))
     }
 
     pub fn typecheck_module(
@@ -21688,13 +21703,10 @@ impl TypedProgram {
         debug!(">> Pass 2 declare types");
         self.discover_uses_in_namespace(module_root_parsed_namespace, skip_defns, true, true);
 
-        self.discover_types_in_parsed_namespace(module_root_parsed_namespace, skip_defns);
-
         // If we resolve uses this early in core, we evaluate the builtin types out of the expected order
         if !is_core {
             self.resolve_pending_uses();
         }
-        self.discover_globals_in_parsed_namespace(module_root_parsed_namespace, skip_defns);
         // check_for_errors!("type declaration");
         while let Some(tpd) = self.types_pending_definition.front() {
             debug!(

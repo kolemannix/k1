@@ -55,9 +55,8 @@ fn main() -> anyhow::Result<ExitCode> {
             file_id,
         );
         match parser.parse_statement() {
-            Ok(None) => match parser.parse_definition(TokenKind::Eof) {
-                Ok(Some(_defn)) => eprintln!("thanks for your definition"),
-                Ok(None) => eprintln!("neither a statement nor a definition but not an error hmm"),
+            Ok(None) => match parser.expect_definition() {
+                Ok(_defn) => eprintln!("thanks for your definition"),
                 Err(e) => {
                     k1::parse::print_error(&ast, &e);
                 }
