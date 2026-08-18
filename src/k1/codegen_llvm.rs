@@ -1315,7 +1315,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let agg_layout = agg.layout;
                 let type_name = self.codegen_type_name(agg.origin_type_id);
                 let cg_type = match agg.agg_type {
-                    AggType::Struct { fields } => {
+                    AggType::Struct { fields, packed } => {
                         let mut cg_field_types = self.mem.new_list(fields.len());
                         let mut field_rich_types = self.tmp.new_list(fields.len());
                         let mut field_di_types = self.tmp.new_list(fields.len());
@@ -1344,7 +1344,28 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 .as_type();
                             field_di_types.push(debug_member)
                         }
-                        let struct_type = self.ctx.struct_type(&field_rich_types, false);
+                        let struct_type = self.ctx.struct_type(&field_rich_types, packed);
+                        if cfg!(debug_assertions) {
+                            let td = self.llvm_machine.get_target_data();
+                            for (i, phys_field) in self.k1.mem.getn(fields).iter().enumerate() {
+                                let llvm_offset =
+                                    td.offset_of_element(&struct_type, i as u32).unwrap();
+                                assert_eq!(
+                                    llvm_offset,
+                                    phys_field.offset as u64,
+                                    "K1/LLVM field offset mismatch in {}, field {}",
+                                    type_name,
+                                    i
+                                );
+                            }
+                            let llvm_layout = self.layout_per_llvm(&struct_type);
+                            assert_eq!(
+                                llvm_layout.size,
+                                agg_layout.stride(),
+                                "K1/LLVM struct size mismatch in {}",
+                                type_name
+                            );
+                        }
                         let di_type = self
                             .debug
                             .debug_builder
@@ -1783,12 +1804,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     )
                     .unwrap();
                 let ptr = self.build_k1_alloca(cg_ty, "struct_in_integer_storage");
-                self.builder.build_store(ptr, truncated).unwrap();
+                let store = self.builder.build_store(ptr, truncated).unwrap();
+                store.set_alignment(cg_ty.rich_repr_layout().align).unwrap();
                 ptr.as_basic_value_enum()
             }
             AbiParamMapping::StructAsPointer => {
                 let ptr = self.build_k1_alloca(cg_ty, "struct_as_ptr_storage");
-                self.builder.build_store(ptr, abi_value).unwrap();
+                let store = self.builder.build_store(ptr, abi_value).unwrap();
+                store.set_alignment(cg_ty.rich_repr_layout().align).unwrap();
                 ptr.as_basic_value_enum()
             }
             AbiParamMapping::StructByEightbytePair { .. }
@@ -1812,7 +1835,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::StructByHfa { .. } => {
                 let dst_ptr = self.build_k1_alloca(cg_ty, "struct_by_hfa_storage");
                 debug_assert!(abi_value.get_type().is_struct_type());
-                self.builder.build_store(dst_ptr, abi_value).unwrap();
+                let store = self.builder.build_store(dst_ptr, abi_value).unwrap();
+                store.set_alignment(cg_ty.rich_repr_layout().align).unwrap();
                 dst_ptr.as_basic_value_enum()
             }
             AbiParamMapping::BigStructByPtrToCopy { .. } => {
@@ -1888,10 +1912,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.emit_lifetime_marker(false, integer_ptr, dst_int_size);
                 integer_value
             }
-            AbiParamMapping::StructAsPointer => self
-                .builder
-                .build_load(self.builtin_types.ptr, k1_value.into_pointer_value(), "")
-                .unwrap(),
+            AbiParamMapping::StructAsPointer => {
+                let load = self
+                    .builder
+                    .build_load(self.builtin_types.ptr, k1_value.into_pointer_value(), "")
+                    .unwrap();
+                load.as_instruction_value()
+                    .unwrap()
+                    .set_alignment(cg_ty.rich_repr_layout().align)
+                    .unwrap();
+                load
+            }
             AbiParamMapping::StructByEightbytePair { .. }
             | AbiParamMapping::StructByIntPairArray => {
                 // The ABI type's fields can extend past the struct's own size (a
@@ -1937,7 +1968,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             AbiParamMapping::StructByHfa { .. } => {
                 let abi_type = self.mapped_abi_type_param(pt, mapping);
-                self.builder.build_load(abi_type, k1_value.into_pointer_value(), "").unwrap()
+                // nocommit: DRY up the alignment setting on load/store. probably a load_k1_type taking a cg
+                // type that always sets alignment from it. If you can't couple it with the
+                // instruction emission for whatever reason, at least a helper to set the align of
+                // the instr from a Cgtype?
+                let load =
+                    self.builder.build_load(abi_type, k1_value.into_pointer_value(), "").unwrap();
+                load.as_instruction_value()
+                    .unwrap()
+                    .set_alignment(cg_ty.rich_repr_layout().align)
+                    .unwrap();
+                load
             }
             AbiParamMapping::BigStructByPtrToCopy { byval_attr } => {
                 // Our canonical representation of all aggregates is an llvm ptr
@@ -2065,6 +2106,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         idx: u32,
         name: &str,
     ) -> PointerValue<'ctx> {
+        // keep this around for the memories
         // if struct_type.manual_field_geps {
         //     let struct_agg_id =
         //         self.k1.get_physical_type(struct_type.type_id).unwrap().expect_agg();
@@ -2081,7 +2123,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         //     }
         // } else {
         self.builder.build_struct_gep(struct_type, ptr, idx, name).unwrap()
-        //}
     }
 
     fn append_basic_block(&mut self, name: &str) -> BasicBlock<'ctx> {
@@ -2137,7 +2178,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 PhysicalTypeEnum::Empty => false,
                 PhysicalTypeEnum::Scalar(st) => matches!(st, ScalarType::Pointer),
                 PhysicalTypeEnum::Agg(agg_id) => match c.k1.agg_types.get(agg_id).agg_type {
-                    AggType::Struct { fields } => {
+                    AggType::Struct { fields, .. } => {
                         c.k1.mem.getn(fields).iter().any(|f| pt_contains_pointer(c, f.field_t))
                     }
                     AggType::Array { element_pt, .. } => pt_contains_pointer(c, element_pt),
@@ -2154,7 +2195,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             match pt.as_enum() {
                 PhysicalTypeEnum::Empty | PhysicalTypeEnum::Scalar(_) => false,
                 PhysicalTypeEnum::Agg(agg_id) => match c.k1.agg_types.get(agg_id).agg_type {
-                    AggType::Struct { fields } => {
+                    AggType::Struct { fields, .. } => {
                         c.k1.mem.getn(fields).iter().any(|f| walk(c, f.field_t))
                     }
                     AggType::Array { element_pt, .. } => walk(c, element_pt),
@@ -2714,9 +2755,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.position_at_end(finish_block);
                 self.builder.build_return(None).unwrap()
             }
+            BackendBuiltin::StructCreate => self.builder.build_unreachable().unwrap(),
             BackendBuiltin::CompilerMessage => self.builder.build_return(None).unwrap(),
-            // Repl commands only mean something to a live megarepl session;
-            // in a compiled binary the call is a no-op
             BackendBuiltin::ReplCheckbox => self.builder.build_return(None).unwrap(),
         };
         Ok(instr)
@@ -3080,13 +3120,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::Store { dst, value, .. } => {
                 let dst_pointer = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
                 let value = self.resolve_value(inst_mappings, value)?;
-                let _store = self.builder.build_store(dst_pointer, value).unwrap();
+                let store = self.builder.build_store(dst_pointer, value).unwrap();
+                if ir::is_addr_unaligned(&self.k1.ir, dst) {
+                    store.set_alignment(1).unwrap();
+                }
                 Ok(())
             }
             Inst::Load { t, src } => {
                 let cg_ty = self.codegen_type(PhysicalType::scalar(t));
                 let src_ptr = self.resolve_value(inst_mappings, src)?.into_pointer_value();
                 let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
+                if ir::is_addr_unaligned(&self.k1.ir, src) {
+                    load.as_instruction_value().unwrap().set_alignment(1).unwrap();
+                }
                 inst_mappings.insert(inst_id, load);
                 Ok(())
             }
@@ -3203,11 +3249,20 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let dst_value = self.resolve_value(inst_mappings, dst)?;
                 let src_value = self.resolve_value(inst_mappings, src)?;
                 let layout = self.k1.get_pt_layout(t);
-                let _memcpy = self.memcpy_layout(
-                    dst_value.into_pointer_value(),
-                    src_value.into_pointer_value(),
-                    layout,
-                );
+                let dst_align =
+                    if ir::is_addr_unaligned(&self.k1.ir, dst) { 1 } else { layout.align };
+                let src_align =
+                    if ir::is_addr_unaligned(&self.k1.ir, src) { 1 } else { layout.align };
+                let bytes = self.builtin_types.ptr_sized_int.const_int(layout.size as u64, false);
+                self.builder
+                    .build_memcpy(
+                        dst_value.into_pointer_value(),
+                        dst_align,
+                        src_value.into_pointer_value(),
+                        src_align,
+                        bytes,
+                    )
+                    .unwrap();
                 Ok(())
             }
             Inst::StructOffset { struct_t, base, field_index, .. } => {
@@ -3895,7 +3950,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 }
                             }
                             CallConv::AMD64 => {
-                                if size_bytes <= 8 {
+                                // SysV AMD64 3.2.3: unaligned fields force class MEMORY
+                                if agg_record.has_misaligned_fields {
+                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }
+                                } else if size_bytes <= 8 {
                                     // If the size of the structure is less than 8 bytes, pass the structure as an integer of its size in bits
                                     let width_bits = size_bytes * 8;
                                     AbiParamMapping::StructInInteger {
@@ -3960,7 +4018,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 PhysicalTypeEnum::Agg(agg_id) => {
                     let agg_record = c.k1.agg_types.get(agg_id);
                     match agg_record.agg_type {
-                        AggType::Struct { fields } => {
+                        AggType::Struct { fields, .. } => {
                             c.k1.mem
                                 .getn(fields)
                                 .iter()
@@ -4053,7 +4111,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 PhysicalTypeEnum::Agg(agg_id) => {
                     let agg_record = c.k1.agg_types.get(agg_id);
                     match agg_record.agg_type {
-                        AggType::Struct { fields } => {
+                        AggType::Struct { fields, .. } => {
                             for f in c.k1.mem.getn(fields) {
                                 handle_type_rec(
                                     c,

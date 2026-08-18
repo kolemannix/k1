@@ -208,7 +208,17 @@ fn pt_to_ffi_type(
                 let t = make_struct_ffi_type(k1, element_storage.as_slice_mut(), 0, 0);
                 Ok(t)
             }
-            AggType::Struct { fields } => {
+            AggType::Struct { fields, packed } => {
+                if packed {
+                    // a packed struct is its exact bytes
+                    let size = k1.agg_types.get(agg_id).layout.size;
+                    let mut element_storage = k1.mem.new_list(size);
+                    for _ in 0..size {
+                        element_storage.push(unsafe { types::uint8 });
+                    }
+                    let t = make_struct_ffi_type(k1, element_storage.as_slice_mut(), 0, 0);
+                    return Ok(t);
+                }
                 let mut element_storage = k1.mem.new_list(fields.len());
                 for field in k1.mem.getn(fields).iter() {
                     let field_ffi_type = pt_to_ffi_type(k1, field.field_t)?;

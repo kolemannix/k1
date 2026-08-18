@@ -1251,13 +1251,15 @@ pub struct StructLiteral {
 pub struct ArrayGetElement {
     pub base_array: TypedExprId,
     pub index: TypedExprId,
+    pub packed: bool,
 }
-impl_copy_if_small!(8, ArrayGetElement);
+impl_copy_if_small!(12, ArrayGetElement);
 
 #[derive(Clone, Copy)]
 pub struct FieldAccess {
     pub base_struct: TypedExprId,
     pub field_index: u32,
+    pub packed: bool,
 }
 
 #[derive(Clone)]
@@ -1271,6 +1273,7 @@ impl_copy_if_small!(16, TypedSumConstructor);
 pub struct GetSumPayload {
     pub sum_expr: TypedExprId,
     pub variant_index: u32,
+    pub packed: bool,
 }
 impl_copy_if_small!(12, GetSumPayload);
 
@@ -4330,6 +4333,7 @@ impl TypedProgram {
                 let kind = match struct_defn.record_kind {
                     parse::ParsedRecordKind::Struct => RecordKind::Struct,
                     parse::ParsedRecordKind::Union => RecordKind::Union,
+                    parse::ParsedRecordKind::Packed => RecordKind::Packed,
                 };
                 let mut fields: List<StructTypeField, TypedProgram> =
                     self.mem.new_list(struct_defn.fields.len());
@@ -6959,6 +6963,14 @@ impl TypedProgram {
                 }
 
                 // Proceed to structural typecheck
+                if s1.record_kind != s2.record_kind {
+                    return Err(k1_format_user!(
+                        self,
+                        "Expected a {} but got a {}",
+                        s1.record_kind.kind_name(),
+                        s2.record_kind.kind_name()
+                    ));
+                }
                 if s1.fields.len() != s2.fields.len() {
                     return Err(k1_format_user!(
                         self,
@@ -9451,10 +9463,12 @@ impl TypedProgram {
                     },
                 );
                 let result_type = target_field.type_id;
+                let packed = self.is_field_access_packed(base_agg_expr, struct_type.record_kind);
                 Ok(self.exprs.add(
                     TypedExpr::StructFieldAccess(FieldAccess {
                         base_struct: base_agg_expr,
                         field_index: field_index as u32,
+                        packed,
                     }),
                     result_type,
                     span,
@@ -9481,7 +9495,31 @@ impl TypedProgram {
             Some(t) => Some(self.get_type_id_dereferenced(t)),
         };
         let input = self.eval_expr(base_expr, ctx.with_expected_type(expected_type))?;
+        self.warn_packed_field_address_of(input, span);
         self.synth_address_of(input, span, false)
+    }
+
+    fn is_place_in_packed(&self, expr: TypedExprId) -> bool {
+        match self.exprs.get(expr) {
+            TypedExpr::StructFieldAccess(fa) => fa.packed,
+            TypedExpr::ArrayGetElement(array_get) => array_get.packed,
+            TypedExpr::SumGetPayload(get_payload) => get_payload.packed,
+            _ => false,
+        }
+    }
+
+    fn is_field_access_packed(&self, base_expr: TypedExprId, record_kind: RecordKind) -> bool {
+        record_kind == RecordKind::Packed || self.is_place_in_packed(base_expr)
+    }
+
+    fn warn_packed_field_address_of(&mut self, expr: TypedExprId, span: SpanId) {
+        if self.is_place_in_packed(expr) {
+            self.report(kwarn!(
+                self,
+                span,
+                "Address of a packed field: accesses through the resulting reference assume an alignment packed storage does not guarantee"
+            ));
+        }
     }
 
     fn synth_address_of(
@@ -11121,8 +11159,10 @@ impl TypedProgram {
                 }
             }
         };
-        let output_struct =
-            StructType { fields: field_types.to_slice(), record_kind: RecordKind::Struct };
+        let output_struct = StructType {
+            fields: field_types.to_slice(),
+            record_kind: original_expected_struct.record_kind,
+        };
         let output_struct_type_id = self.add_type(
             Type::Struct(output_struct),
             expected_struct_defn_info,
@@ -11437,6 +11477,7 @@ impl TypedProgram {
                     TypedExpr::StructFieldAccess(FieldAccess {
                         base_struct: env_deref,
                         field_index: field_index as u32,
+                        packed: false,
                     }),
                     field_type,
                     capture.span,
@@ -12180,6 +12221,7 @@ impl TypedProgram {
                         TypedExpr::SumGetPayload(GetSumPayload {
                             sum_expr: sum_base,
                             variant_index,
+                            packed: self.is_place_in_packed(sum_base),
                         }),
                         payload_type_id,
                         sum_pattern.span,
@@ -14167,6 +14209,7 @@ impl TypedProgram {
                     TypedExpr::ArrayGetElement(ArrayGetElement {
                         base_array: array_expr,
                         index: index_expr,
+                        packed: self.is_place_in_packed(array_expr),
                     }),
                     array_type.element_type,
                     span,
@@ -15199,7 +15242,11 @@ impl TypedProgram {
             if is_reference { self.synth_dereference(base_expr) } else { base_expr };
         let condition = self.synth_sum_is_variant(sum_base_expr, variant_index, Some(span))?;
         let payload_expr = self.exprs.add(
-            TypedExpr::SumGetPayload(GetSumPayload { sum_expr: sum_base_expr, variant_index }),
+            TypedExpr::SumGetPayload(GetSumPayload {
+                sum_expr: sum_base_expr,
+                variant_index,
+                packed: self.is_place_in_packed(sum_base_expr),
+            }),
             payload_type_id,
             span,
         );
@@ -17802,6 +17849,9 @@ impl TypedProgram {
                     (Some("type-id"), "schema") => {
                         Some(Builtin::Backend(BackendBuiltin::TypeSchema))
                     }
+                    (None, "struct-create") => {
+                        Some(Builtin::Backend(BackendBuiltin::StructCreate))
+                    }
                     _ => None,
                 },
                 Some("bool") => match fn_name_str {
@@ -19774,6 +19824,7 @@ impl TypedProgram {
                                 TypedExpr::SumGetPayload(GetSumPayload {
                                     sum_expr: arg_a,
                                     variant_index: variant.index,
+                                    packed: false,
                                 }),
                                 payload_type_id,
                                 fn_span,
@@ -19782,6 +19833,7 @@ impl TypedProgram {
                                 TypedExpr::SumGetPayload(GetSumPayload {
                                     sum_expr: arg_b,
                                     variant_index: variant.index,
+                                    packed: false,
                                 }),
                                 payload_type_id,
                                 fn_span,
@@ -19954,6 +20006,7 @@ impl TypedProgram {
                             TypedExpr::SumGetPayload(GetSumPayload {
                                 sum_expr,
                                 variant_index: variant.index,
+                                packed: false,
                             }),
                             payload_type_id,
                             fn_span,
@@ -22533,7 +22586,9 @@ impl TypedProgram {
 
                 // for offsets
                 let struct_layout = match record_kind {
-                    RecordKind::Struct => Some(self.get_struct_layout(type_id)),
+                    RecordKind::Struct | RecordKind::Packed => {
+                        Some(self.get_struct_layout(type_id))
+                    }
                     RecordKind::Union => None,
                 };
                 // { name: string), typeId: u64, offset: size }
@@ -22576,6 +22631,7 @@ impl TypedProgram {
                 let variant_name = match record_kind {
                     RecordKind::Struct => self.ast.idents.b.struct_,
                     RecordKind::Union => self.ast.idents.b.union,
+                    RecordKind::Packed => self.ast.idents.b.packed,
                 };
                 make_variant(self, variant_name, Some(payload))
             }
@@ -22844,12 +22900,12 @@ impl TypedProgram {
         value_id
     }
 
-    fn register_type_metainfo(&mut self, type_id: TypeId) {
+    pub(crate) fn register_type_metainfo(&mut self, type_id: TypeId) {
         let _ = self.get_type_schema(type_id);
         let _ = self.get_type_name(type_id);
     }
 
-    fn add_type_id_value(&mut self, type_id: TypeId) -> StaticValueId {
+    pub(crate) fn add_type_id_value(&mut self, type_id: TypeId) -> StaticValueId {
         let type_id_type_id = self.builtin_types.type_id();
         self.static_values.add_type_id_value(type_id_type_id, type_id)
     }

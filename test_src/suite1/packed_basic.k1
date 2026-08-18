@@ -1,0 +1,80 @@
+ns packed-basic
+
+type wire = packed { a: u8, b: u64, c: u16 }
+
+type inner = { x: u32, y: u8 }
+type mixed = packed { tag: u8, inner: inner, tail: u8 }
+type holder = { lead: u8, p: packed { x: u32, y: u8 }, trail: u16 }
+
+let WIRE_STATIC: wire = .{ a = 7, b = 0xAABBCCDDEEFF1122, c = 999 }
+
+fn check-wire(w: wire) {
+  assert-equals(w.a, 7u8)
+  assert-equals(w.b, 0xAABBCCDDEEFF1122u64)
+  assert-equals(w.c, 999u16)
+}
+
+fn test() {
+  #static types/assert-layout[wire](11, 1, [0, 1, 9])
+  // inner: size 5, stride 8; packed fields advance by stride
+  #static types/assert-layout[mixed](10, 1, [0, 1, 9])
+  #static types/assert-layout[holder](8, 2, [0, 1, 6])
+
+  require types/schema[wire] is :packed .{ fields }
+    and fields.len() == 3
+    and fields.get(0).name == "a" and fields.get(0).offset == 0
+    and fields.get(1).name == "b" and fields.get(1).offset == 1
+    and fields.get(2).name == "c" and fields.get(2).offset == 9
+    else crash("wire schema")
+
+  // literal construction + unaligned field reads, runtime lane
+  let w: wire = .{ a = 7, b = 0xAABBCCDDEEFF1122, c = 999 }
+  check-wire(w)
+
+  // by-value pass and equality derive
+  assert(w == WIRE_STATIC)
+
+  // unaligned stores through places
+  let m: mixed = .{ tag = 1, inner = .{ x = 42, y = 2 }, tail = 3 }
+  m.inner.x = 100
+  m.tail = 200
+  assert-equals(m.inner.x, 100u32)
+  assert-equals(m.inner.y, 2u8)
+  assert-equals(m.tail, 200u8)
+
+  // packed nested in a plain struct
+  let h: holder = .{ lead = 9, p = .{ x = 12345, y = 6 }, trail = 777 }
+  h.p.x = 54321
+  assert-equals(h.lead, 9u8)
+  assert-equals(h.p.x, 54321u32)
+  assert-equals(h.p.y, 6u8)
+  assert-equals(h.trail, 777u16)
+
+  // arrays of packed elements stride by exact size
+  assert-equals(types/stride[array[wire, 3]], 33)
+  let arr: array[wire, 2] = [w, w]
+  assert-equals(arr.get(1).b, 0xAABBCCDDEEFF1122u64)
+  arr.get(0).c = 4
+  assert-equals(arr.get(0).c, 4u16)
+  assert-equals(arr.get(1).c, 999u16)
+
+  // comptime lane: same shapes evaluated in the VM
+  let vm-sum: u64 = #static {
+    let w: wire = .{ a = 1, b = 500, c = 30 }
+    let m: mixed = .{ tag = 1, inner = .{ x = 42, y = 2 }, tail = 3 }
+    m.inner.x = 100
+    w.b + w.a.as[u64] + w.c.as[u64] + m.inner.x.as[u64]
+  }
+  assert-equals(vm-sum, 631u64)
+
+  // baked static crosses the VM -> runtime border with packed offsets
+  check-wire(WIRE_STATIC)
+
+  // packed vs plain with identical fields are distinct types
+  assert(test-compile({
+    let plain: { a: u8, b: u64, c: u16 } = uninit
+    let p: packed { a: u8, b: u64, c: u16 } = plain
+  }).is-some())
+
+  .{}
+}

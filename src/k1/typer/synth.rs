@@ -527,14 +527,16 @@ impl TypedProgram {
         span: SpanId,
     ) -> TypedExprId {
         let struct_type_id = self.exprs.get_type(struct_expr);
-        let Type::Struct(_s) = self.types.get(struct_type_id) else {
+        let Type::Struct(s) = self.types.get(struct_type_id) else {
             self.ice_span(span, "bad struct field access: base is not a struct");
         };
+        let packed = self.is_field_access_packed(struct_expr, s.record_kind);
         let field = self.get_struct_field(struct_type_id, field_index);
         let expr_id = self.exprs.add(
             TypedExpr::StructFieldAccess(FieldAccess {
                 base_struct: struct_expr,
                 field_index: field_index as u32,
+                packed,
             }),
             field.type_id,
             span,

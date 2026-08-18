@@ -200,3 +200,35 @@ int TagUnion_iszero(TagUnion x) {
     case TC: return x.data.c == (void*)0;
   }
 }
+
+// Packed structs: unaligned fields. 5 bytes (registers), 11 bytes (pair), 19 bytes (memory).
+// On SysV AMD64 unaligned fields force class MEMORY; on AAPCS64 composites are byte images either way.
+typedef struct __attribute__((packed)) { uint8_t a; uint32_t b; } Packed5;
+uint64_t packed5_sum(Packed5 p) { return (uint64_t)p.a + (uint64_t)p.b; }
+Packed5 packed5_make(uint8_t a, uint32_t b) {
+  Packed5 p;
+  p.a = a;
+  p.b = b;
+  return p;
+}
+
+typedef struct __attribute__((packed)) { uint8_t a; uint64_t b; uint16_t c; } Packed11;
+uint64_t packed11_sum(Packed11 p) { return (uint64_t)p.a + p.b + (uint64_t)p.c; }
+Packed11 packed11_bump(Packed11 p) {
+  Packed11 r;
+  r.a = p.a + 1;
+  r.b = p.b + 1;
+  r.c = p.c + 1;
+  return r;
+}
+
+typedef struct __attribute__((packed)) { uint8_t tag; uint64_t x; uint64_t y; uint16_t z; } Packed19;
+uint64_t packed19_sum(Packed19 p) { return (uint64_t)p.tag + p.x + p.y + (uint64_t)p.z; }
+Packed19 packed19_swap(Packed19 p) {
+  Packed19 r;
+  r.tag = p.tag;
+  r.x = p.y;
+  r.y = p.x;
+  r.z = p.z;
+  return r;
+}

@@ -507,8 +507,10 @@ impl TypedProgram {
             return w.write_str("empty");
         }
 
-        if struc.record_kind == RecordKind::Union {
-            w.write_str("union ")?;
+        match struc.record_kind {
+            RecordKind::Struct => {}
+            RecordKind::Union => w.write_str("union ")?,
+            RecordKind::Packed => w.write_str("packed ")?,
         }
 
         w.write_str("{ ")?;

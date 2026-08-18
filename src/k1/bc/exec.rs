@@ -18,8 +18,9 @@
 use std::num::NonZeroU32;
 
 use crate::ir::{self, BackendBuiltin, IrUnitId};
+use crate::kmem::List;
 use crate::lex::SpanId;
-use crate::typer::types::{PhysicalType, TypeId};
+use crate::typer::types::{PhysicalType, StructType, StructTypeField, Type, TypeId};
 use crate::typer::{FunctionId, K1Result, StaticValueId, TypedExprId, TypedGlobalId, TypedProgram};
 use crate::vm::{
     self, Value, Vm, casted_float_op, casted_iop, casted_uop, load_value, store_value,
@@ -236,16 +237,15 @@ enum BuiltinOutcome {
     Exit(i32),
 }
 
-// Scalar memory ops carry their width in bits (8/16/32/64) in `header_a`
 #[inline]
 fn store_bits(width_bits: u8, dst: *mut u8, v: Value) {
     debug_assert!(!dst.is_null(), "store_bits to null (width {})", width_bits);
     unsafe {
         match width_bits {
             8 => dst.write(v.bits() as u8),
-            16 => (dst as *mut u16).write(v.bits() as u16),
-            32 => (dst as *mut u32).write(v.bits() as u32),
-            _ => (dst as *mut u64).write(v.bits()),
+            16 => (dst as *mut u16).write_unaligned(v.bits() as u16),
+            32 => (dst as *mut u32).write_unaligned(v.bits() as u32),
+            _ => (dst as *mut u64).write_unaligned(v.bits()),
         }
     }
 }
@@ -256,9 +256,9 @@ fn load_bits(width_bits: u8, src: *const u8) -> Value {
     unsafe {
         match width_bits {
             8 => Value::u8(src.read()),
-            16 => Value::u16((src as *const u16).read()),
-            32 => Value::u32((src as *const u32).read()),
-            _ => Value::u64((src as *const u64).read()),
+            16 => Value::u16((src as *const u16).read_unaligned()),
+            32 => Value::u32((src as *const u32).read_unaligned()),
+            _ => Value::u64((src as *const u64).read_unaligned()),
         }
     }
 }
@@ -1108,6 +1108,46 @@ fn exec_builtin(
             let name_value_id = *k1.type_names.get(&type_id).unwrap();
             let name_string_value = vm::static_value_to_vm_value(k1, name_value_id, vm.eval_span);
             Ok(BuiltinOutcome::Value(name_string_value))
+        }
+        BackendBuiltin::StructCreate => {
+            let field_descs: &[vm::k1_types::K1StructCreateField] =
+                unsafe { vm::value_as_span(args[0]).to_slice() };
+            let mut fields: List<StructTypeField, _> = k1.mem.new_list(field_descs.len() as u32);
+            for desc in field_descs {
+                let name_str = match unsafe { desc.name.to_str() } {
+                    Ok(s) => s,
+                    Err(msg) => kbail!(k1, vm.eval_span, "struct-create field name: {}", msg),
+                };
+                let name = k1.ast.idents.intern(name_str);
+                for prev in fields.as_slice() {
+                    if prev.name == name {
+                        kbail!(
+                            k1,
+                            vm.eval_span,
+                            "struct-create: duplicate field name '{}'",
+                            name_str
+                        );
+                    }
+                }
+                let type_id_ok = u32::try_from(desc.type_id.inner)
+                    .ok()
+                    .and_then(TypeId::from_u32)
+                    .filter(|id| k1.types.get_opt(*id).is_some());
+                let Some(type_id) = type_id_ok else {
+                    kbail!(
+                        k1,
+                        vm.eval_span,
+                        "struct-create: unknown type id {}",
+                        desc.type_id.inner
+                    );
+                };
+                fields.push(StructTypeField { name, type_id, span: SpanId::NONE });
+            }
+            let new_type_id = k1.add_type_anon(Type::Struct(StructType::struc(fields.to_slice())));
+            k1.register_type_metainfo(new_type_id);
+            let type_id_value_id = k1.add_type_id_value(new_type_id);
+            let type_id_value = vm::static_value_to_vm_value(k1, type_id_value_id, vm.eval_span);
+            Ok(BuiltinOutcome::Value(type_id_value))
         }
         BackendBuiltin::MemCopy | BackendBuiltin::MemMove => {
             let dst = args[0];

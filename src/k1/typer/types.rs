@@ -47,7 +47,6 @@ impl Layout {
         self.stride() as usize * index
     }
 
-    // Returns: the start, or offset, of the new field
     pub fn append_to_aggregate(&mut self, layout: Layout) -> u32 {
         debug_assert_ne!(layout.align, 0);
         let offset = self.size;
@@ -58,11 +57,17 @@ impl Layout {
                 debug!("Aggregate padding: {padding}");
             }
         };
-        let new_end_unaligned = new_field_start + layout.size;
+        let new_end = new_field_start + layout.stride();
         let new_align = std::cmp::max(self.align, layout.align);
-        self.size = new_end_unaligned;
+        self.size = new_end;
         self.align = new_align;
         new_field_start
+    }
+
+    pub fn append_to_aggregate_packed(&mut self, layout: Layout) -> u32 {
+        let offset = self.size;
+        self.size = offset + layout.stride();
+        offset
     }
 
     pub fn size_bits(&self) -> u32 {
@@ -141,6 +146,7 @@ impl std::hash::Hash for TypeDefnInfo {
 pub enum RecordKind {
     Struct,
     Union,
+    Packed,
 }
 
 impl RecordKind {
@@ -148,6 +154,7 @@ impl RecordKind {
         match self {
             RecordKind::Struct => "struct",
             RecordKind::Union => "union",
+            RecordKind::Packed => "packed",
         }
     }
 }
@@ -556,6 +563,9 @@ impl TypedProgram {
             (Type::Pointer, Type::Pointer) => true,
             (Type::Struct(s1), Type::Struct(s2)) => {
                 if defn1 != defn2 {
+                    return false;
+                }
+                if s1.record_kind != s2.record_kind {
                     return false;
                 }
                 if s1.fields.len() != s2.fields.len() {
@@ -1404,7 +1414,7 @@ pub struct UnionMember {
 
 #[derive(Clone, Copy)]
 pub enum AggType {
-    Struct { fields: MSlice<StructField, TypedProgram> },
+    Struct { fields: MSlice<StructField, TypedProgram>, packed: bool },
     Array { element_pt: PhysicalType, len: u32 },
     Vector { element_pt: ScalarType, len: u32 },
     Union { members: MSlice<UnionMember, TypedProgram> },
@@ -1440,9 +1450,13 @@ impl AggType {
     #[track_caller]
     pub fn expect_struct(&self) -> MSlice<StructField, TypedProgram> {
         match self {
-            AggType::Struct { fields } => *fields,
+            AggType::Struct { fields, .. } => *fields,
             _ => panic!("Expected struct agg type"),
         }
+    }
+
+    pub fn is_packed_struct(&self) -> bool {
+        matches!(self, AggType::Struct { packed: true, .. })
     }
 }
 
@@ -1452,6 +1466,9 @@ pub struct AggregateTypeRecord {
     pub agg_type: AggType,
     pub origin_type_id: TypeId,
     pub layout: Layout,
+    /// The alignment the content wants regardless of packing
+    pub natural_align: u32,
+    pub has_misaligned_fields: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1573,6 +1590,21 @@ impl TypedProgram {
         self.add_type_anon(Type::FunctionPointer(FunctionPointerType { function_type_id }))
     }
 
+    pub fn get_pt_natural_align(&self, pt: PhysicalType) -> u32 {
+        match pt.as_enum() {
+            PhysicalTypeEnum::Empty => 1,
+            PhysicalTypeEnum::Scalar(s) => s.get_layout().align,
+            PhysicalTypeEnum::Agg(agg_id) => self.agg_types.get(agg_id).natural_align,
+        }
+    }
+
+    pub fn pt_has_misaligned_fields(&self, pt: PhysicalType) -> bool {
+        match pt.as_enum() {
+            PhysicalTypeEnum::Agg(agg_id) => self.agg_types.get(agg_id).has_misaligned_fields,
+            _ => false,
+        }
+    }
+
     fn make_union_type(
         &mut self,
         origin_type_id: TypeId,
@@ -1580,6 +1612,8 @@ impl TypedProgram {
     ) -> PhysicalType {
         let mut size = 0;
         let mut align = 1;
+        let mut natural_align = 1;
+        let mut misaligned_fields = false;
         for m in self.mem.getn(members) {
             let layout = self.get_pt_layout(m.ty);
             if layout.size > size {
@@ -1588,6 +1622,8 @@ impl TypedProgram {
             if layout.align > align {
                 align = layout.align
             }
+            natural_align = natural_align.max(self.get_pt_natural_align(m.ty));
+            misaligned_fields |= self.pt_has_misaligned_fields(m.ty);
         }
         let union_layout = Layout { size, align };
         if size == 0 {
@@ -1597,6 +1633,8 @@ impl TypedProgram {
                 agg_type: AggType::Union { members },
                 origin_type_id,
                 layout: union_layout,
+                natural_align,
+                has_misaligned_fields: misaligned_fields,
             });
             PhysicalType::agg(agg_id)
         }
@@ -2014,10 +2052,15 @@ impl TypedProgram {
                         PhysicalTypeResult::Infinite => PhysicalTypeResult::No,
                         PhysicalTypeResult::Yes(element_pt) => {
                             let elem_layout = self.get_pt_layout(element_pt);
+                            let natural_align = self.get_pt_natural_align(element_pt);
+                            let misaligned_fields = self.pt_has_misaligned_fields(element_pt)
+                                || (len > 1 && !elem_layout.stride().is_multiple_of(natural_align));
                             let record = AggregateTypeRecord {
                                 agg_type: AggType::Array { element_pt, len: len as u32 },
                                 origin_type_id: type_id,
                                 layout: elem_layout.array_me(len as usize),
+                                natural_align,
+                                has_misaligned_fields: misaligned_fields,
                             };
                             let id = self.agg_types.add(record);
                             PhysicalTypeResult::Yes(PhysicalType::agg(id))
@@ -2032,13 +2075,16 @@ impl TypedProgram {
                     Some(len) => match self.get_physical_type(vec.element_type) {
                         PhysicalTypeResult::Yes(element_pt) if element_pt.as_scalar().is_some() => {
                             let element_scalar = element_pt.expect_scalar();
+                            let layout = element_scalar.get_layout().vector_me(len as usize);
                             let record = AggregateTypeRecord {
                                 agg_type: AggType::Vector {
                                     element_pt: element_scalar,
                                     len: len as u32,
                                 },
                                 origin_type_id: type_id,
-                                layout: element_scalar.get_layout().vector_me(len as usize),
+                                layout,
+                                natural_align: layout.align,
+                                has_misaligned_fields: false,
                             };
                             let id = self.agg_types.add(record);
                             PhysicalTypeResult::Yes(PhysicalType::agg(id))
@@ -2048,10 +2094,13 @@ impl TypedProgram {
                 }
             }
             Type::Struct(s) => match s.record_kind {
-                RecordKind::Struct => {
+                RecordKind::Struct | RecordKind::Packed => {
+                    let packed = s.record_kind == RecordKind::Packed;
                     let s_fields = s.fields;
                     let mut fields = self.mem.new_list(s.fields.len());
                     let mut layout = Layout::ZERO_SIZED;
+                    let mut natural_align = 1;
+                    let mut misaligned_fields = false;
                     for field in self.mem.getn(s_fields) {
                         match self.get_physical_type(field.type_id) {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
@@ -2059,7 +2108,15 @@ impl TypedProgram {
                             PhysicalTypeResult::Infinite => return PhysicalTypeResult::Infinite,
                             PhysicalTypeResult::Yes(field_pt) => {
                                 let field_layout = self.get_pt_layout(field_pt);
-                                let offset = layout.append_to_aggregate(field_layout);
+                                let offset = if packed {
+                                    layout.append_to_aggregate_packed(field_layout)
+                                } else {
+                                    layout.append_to_aggregate(field_layout)
+                                };
+                                let field_natural = self.get_pt_natural_align(field_pt);
+                                natural_align = natural_align.max(field_natural);
+                                misaligned_fields |= self.pt_has_misaligned_fields(field_pt)
+                                    || offset % field_natural != 0;
                                 fields.push(StructField {
                                     field_t: field_pt,
                                     offset,
@@ -2073,9 +2130,11 @@ impl TypedProgram {
                     } else {
                         let fields_handle = fields.to_slice();
                         let agg_id = self.agg_types.add(AggregateTypeRecord {
-                            agg_type: AggType::Struct { fields: fields_handle },
+                            agg_type: AggType::Struct { fields: fields_handle, packed },
                             origin_type_id: type_id,
                             layout,
+                            natural_align,
+                            has_misaligned_fields: misaligned_fields,
                         });
                         PhysicalTypeResult::Yes(PhysicalType::agg(agg_id))
                     }
@@ -2154,10 +2213,16 @@ impl TypedProgram {
                     name: self.type_idents.payload,
                 };
                 let fields = self.mem.pushn(&[tag_field, payload_field]);
+                let union_natural = self.get_pt_natural_align(union_id);
+                let natural_align = tag_layout.align.max(union_natural);
+                let misaligned_fields =
+                    self.pt_has_misaligned_fields(union_id) || union_offset % union_natural != 0;
                 let struct_repr = self.agg_types.add(AggregateTypeRecord {
-                    agg_type: AggType::Struct { fields },
+                    agg_type: AggType::Struct { fields, packed: false },
                     origin_type_id: type_id,
                     layout: struct_layout,
+                    natural_align,
+                    has_misaligned_fields: misaligned_fields,
                 });
                 let agg_sum = AggType::Sum(SumPt {
                     tag_type: tag_scalar,
@@ -2169,6 +2234,8 @@ impl TypedProgram {
                     agg_type: agg_sum,
                     origin_type_id: type_id,
                     layout: struct_layout,
+                    natural_align,
+                    has_misaligned_fields: misaligned_fields,
                 });
                 PhysicalTypeResult::Yes(PhysicalType::agg(sum_agg_id))
             }
@@ -2177,6 +2244,8 @@ impl TypedProgram {
                     agg_type: AggType::Opaque { size: opaque.size, align: opaque.align },
                     origin_type_id: type_id,
                     layout: opaque.layout(),
+                    natural_align: opaque.align,
+                    has_misaligned_fields: false,
                 });
                 PhysicalTypeResult::Yes(PhysicalType::agg(opaque_agg_id))
             }
@@ -2214,11 +2283,7 @@ impl TypedProgram {
                 PhysicalTypeEnum::Scalar(_) => orig,
                 PhysicalTypeEnum::Agg(agg_id) => {
                     let r = self.agg_types.get(agg_id);
-                    let r_new = AggregateTypeRecord {
-                        agg_type: r.agg_type,
-                        origin_type_id,
-                        layout: r.layout,
-                    };
+                    let r_new = AggregateTypeRecord { origin_type_id, ..*r };
                     let new_id = self.agg_types.add(r_new);
                     PhysicalTypeResult::Yes(PhysicalType::agg(new_id))
                 }
@@ -2234,7 +2299,7 @@ impl TypedProgram {
     ) -> Option<u32> {
         match self.agg_types.get(agg_id).agg_type {
             AggType::Sum(e) => self.get_struct_field_offset(e.struct_repr, field_index),
-            AggType::Struct { fields } => {
+            AggType::Struct { fields, .. } => {
                 if field_index < fields.len() {
                     let field_type = self.mem.get_nth(fields, field_index as usize);
                     Some(field_type.offset)
@@ -2255,7 +2320,7 @@ impl TypedProgram {
     ) -> MSlice<StructField, TypedProgram> {
         match self.agg_types.get(struct_agg_id).agg_type {
             AggType::Sum(e) => self.get_agg_struct_layout(e.struct_repr),
-            AggType::Struct { fields } => fields,
+            AggType::Struct { fields, .. } => fields,
             AggType::Array { .. } => panic!("Array is not a struct"),
             AggType::Vector { .. } => panic!("vector is not a struct"),
             AggType::Union { .. } => panic!("union has no struct-like layout"),
@@ -2440,7 +2505,10 @@ impl TypedProgram {
                     self.display_pt(w, PhysicalType::agg(e.struct_repr))?;
                     Ok(())
                 }
-                AggType::Struct { fields } => {
+                AggType::Struct { fields, packed } => {
+                    if packed {
+                        w.write_str("packed ")?;
+                    }
                     w.write_str("{ ")?;
                     for (index, field) in self.mem.getn(fields).iter().enumerate() {
                         self.display_pt(w, field.field_t)?;

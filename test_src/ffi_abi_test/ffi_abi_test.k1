@@ -73,6 +73,19 @@ ns(lib("foo")) foo {
   // fn-level lib overrides the ns-level lib (same lib here; exercises the explicit form)
   fn(extern("TagUnion_iszero"), lib("foo")) tag-union-iszero(x: tag-union): i32
 
+  // Packed by-value: register (5), pair (11), and memory (19) lanes
+  type packed5 = packed { a: u8, b: u32 }
+  fn(extern("packed5_sum")) packed5-sum(p: packed5): u64
+  fn(extern("packed5_make")) packed5-make(a: u8, b: u32): packed5
+
+  type packed11 = packed { a: u8, b: u64, c: u16 }
+  fn(extern("packed11_sum")) packed11-sum(p: packed11): u64
+  fn(extern("packed11_bump")) packed11-bump(p: packed11): packed11
+
+  type packed19 = packed { tag: u8, x: u64, y: u64, z: u16 }
+  fn(extern("packed19_sum")) packed19-sum(p: packed19): u64
+  fn(extern("packed19_swap")) packed19-swap(p: packed19): packed19
+
 }
 
 fn test-all() {
@@ -164,6 +177,28 @@ fn test-all() {
   assert(foo/tag-union-iszero(:c ptr/null).as-bool())
   let x = 10
   assert(not foo/tag-union-iszero(:c((&x).as())).as-bool())
+
+  #static types/assert-layout[foo/packed5](5, 1, [0, 1])
+  #static types/assert-layout[foo/packed11](11, 1, [0, 1, 9])
+  #static types/assert-layout[foo/packed19](19, 1, [0, 1, 9, 17])
+
+  assert-equals(foo/packed5-sum(.{ a = 3, b = 70000 }), 70003)
+  let p5 = foo/packed5-make(9, 123456)
+  assert-equals(p5.a, 9u8)
+  assert-equals(p5.b, 123456u32)
+
+  assert-equals(foo/packed11-sum(.{ a = 1, b = 4294967296, c = 700 }), 4294967997)
+  let p11 = foo/packed11-bump(.{ a = 1, b = 2, c = 3 })
+  assert-equals(p11.a, 2u8)
+  assert-equals(p11.b, 3u64)
+  assert-equals(p11.c, 4u16)
+
+  assert-equals(foo/packed19-sum(.{ tag = 5, x = 100, y = 200, z = 55 }), 360)
+  let p19 = foo/packed19-swap(.{ tag = 7, x = 111, y = 222, z = 333 })
+  assert-equals(p19.tag, 7u8)
+  assert-equals(p19.x, 222u64)
+  assert-equals(p19.y, 111u64)
+  assert-equals(p19.z, 333u16)
 
 }
 

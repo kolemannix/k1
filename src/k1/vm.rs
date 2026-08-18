@@ -136,6 +136,14 @@ pub mod k1_types {
         pub name: K1BufferLike,
     }
 
+    /// types/struct-create field descriptor: `{ name: string, type: type-id }`
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct K1StructCreateField {
+        pub name: K1BufferLike,
+        pub type_id: TypeId,
+    }
+
     #[repr(C)]
     #[derive(Clone, Copy)]
     pub struct K1SourceLocation {
@@ -977,19 +985,22 @@ pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
     if dst.is_null() {
         panic!("attempted to store {t} {value} to null");
     }
+    // write_unaligned: packed-struct field addresses are legal inputs here
     unsafe {
         match t {
             ScalarType::I8 | ScalarType::U8 | ScalarType::Char | ScalarType::Bool => {
                 dst.write(value.bits() as u8)
             }
-            ScalarType::I16 | ScalarType::U16 => (dst as *mut u16).write(value.bits() as u16),
+            ScalarType::I16 | ScalarType::U16 => {
+                (dst as *mut u16).write_unaligned(value.bits() as u16)
+            }
             ScalarType::I32 | ScalarType::U32 | ScalarType::F32 => {
-                (dst as *mut u32).write(value.bits() as u32)
+                (dst as *mut u32).write_unaligned(value.bits() as u32)
             }
             ScalarType::I64 | ScalarType::U64 | ScalarType::F64 => {
-                (dst as *mut u64).write(value.bits())
+                (dst as *mut u64).write_unaligned(value.bits())
             }
-            ScalarType::Pointer => (dst as *mut usize).write(value.bits() as usize),
+            ScalarType::Pointer => (dst as *mut usize).write_unaligned(value.bits() as usize),
         }
     }
 }
@@ -1029,13 +1040,13 @@ pub fn load_scalar(t: ScalarType, ptr: *const u8) -> Value {
             ScalarType::U8 | ScalarType::I8 | ScalarType::Char | ScalarType::Bool => {
                 Value::u8(ptr.read())
             }
-            ScalarType::U16 | ScalarType::I16 => Value::u16((ptr as *const u16).read()),
-            ScalarType::U32 | ScalarType::I32 => Value::u32((ptr as *const u32).read()),
-            ScalarType::U64 | ScalarType::I64 => Value::u64((ptr as *const u64).read()),
-            ScalarType::F32 => Value::u32((ptr as *const u32).read()),
-            ScalarType::F64 => Value::u64((ptr as *const u64).read()),
+            ScalarType::U16 | ScalarType::I16 => Value::u16((ptr as *const u16).read_unaligned()),
+            ScalarType::U32 | ScalarType::I32 => Value::u32((ptr as *const u32).read_unaligned()),
+            ScalarType::U64 | ScalarType::I64 => Value::u64((ptr as *const u64).read_unaligned()),
+            ScalarType::F32 => Value::u32((ptr as *const u32).read_unaligned()),
+            ScalarType::F64 => Value::u64((ptr as *const u64).read_unaligned()),
             ScalarType::Pointer => {
-                let read_address = (ptr as *const usize).read();
+                let read_address = (ptr as *const usize).read_unaligned();
                 let ptr = read_address as *const u8;
                 Value::ptr(ptr)
             }
@@ -1109,11 +1120,6 @@ pub fn value_to_rust_str<'a>(value: Value) -> Result<&'a str, &'static str> {
 }
 
 pub fn value_to_string_id(m: &mut TypedProgram, value: Value) -> Result<StringId, &'static str> {
-    let rust_str = value_to_rust_str(value)?;
-    Ok(m.ast.idents.intern(rust_str))
-}
-
-pub fn value_to_ident(m: &mut TypedProgram, value: Value) -> Result<StringId, &'static str> {
     let rust_str = value_to_rust_str(value)?;
     Ok(m.ast.idents.intern(rust_str))
 }

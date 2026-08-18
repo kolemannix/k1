@@ -486,6 +486,8 @@ pub enum BackendBuiltin {
     // rather than generate ir for it due to that difference
     TypeSchema,
     TypeName,
+    /// types/struct-create: comptime-only; builds a struct type on the VM
+    StructCreate,
 
     // Platform-provided
     MemCopy,
@@ -505,6 +507,7 @@ impl BackendBuiltin {
         match self {
             BackendBuiltin::TypeSchema => "type_schema",
             BackendBuiltin::TypeName => "type_name",
+            BackendBuiltin::StructCreate => "struct_create",
             BackendBuiltin::MemCopy => "mem_copy",
             BackendBuiltin::MemMove => "mem_move",
             BackendBuiltin::MemSet => "mem_set",
@@ -854,6 +857,7 @@ pub enum Inst {
         base: Value,
         field_index: u32,
         vm_offset: u32,
+        unaligned: bool,
     },
     ArrayOffset {
         element_t: PhysicalType,
@@ -1237,6 +1241,17 @@ pub fn get_value_kind(ir: &ProgramIr, value: Value) -> InstKind {
             InstKind::Value(PhysicalType::scalar(scalar_type))
         }
         Value::Empty => InstKind::Value(PhysicalType::EMPTY),
+    }
+}
+
+pub fn is_addr_unaligned(ir: &ProgramIr, mut v: Value) -> bool {
+    loop {
+        let Value::Inst(inst_id) = v else { return false };
+        match *ir.instrs.get(inst_id) {
+            Inst::StructOffset { unaligned, .. } => return unaligned,
+            Inst::ArrayOffset { base, .. } => v = base,
+            _ => return false,
+        }
     }
 }
 
@@ -1698,14 +1713,25 @@ impl<'k1> Builder<'k1> {
         field_index: u32,
         comment: IrComment,
     ) -> Value {
-        if field_index == 0 {
+        let base_unaligned = is_addr_unaligned(&self.k1.ir, base);
+        let unaligned =
+            base_unaligned || self.k1.agg_types.get(struct_agg_id).agg_type.is_packed_struct();
+        // Folding field 0 to bare base is fine only if it doesn't drop a fresh
+        // unaligned flag: the inst is the flag's carrier
+        if field_index == 0 && unaligned == base_unaligned {
             return base;
         }
         let Some(offset) = self.k1.get_struct_field_offset(struct_agg_id, field_index) else {
             b_ice!(self, "Failed getting offset for field")
         };
         self.push_inst(
-            Inst::StructOffset { struct_t: struct_agg_id, base, field_index, vm_offset: offset },
+            Inst::StructOffset {
+                struct_t: struct_agg_id,
+                base,
+                field_index,
+                vm_offset: offset,
+                unaligned,
+            },
             comment,
         )
         .as_value()
@@ -4331,10 +4357,13 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
         Inst::Copy { dst, src, t: _, vm_size } => {
             write!(w, "copy {} {}, src {}", vm_size, dst, src)?;
         }
-        Inst::StructOffset { struct_t, base, field_index, vm_offset } => {
+        Inst::StructOffset { struct_t, base, field_index, vm_offset, unaligned } => {
             write!(w, "struct_offset ")?;
             k1.display_pt(w, PhysicalType::agg(struct_t))?;
             write!(w, ".{}, {} ({})", field_index, base, vm_offset)?;
+            if unaligned {
+                write!(w, " unaligned")?;
+            }
         }
         Inst::ArrayOffset { element_t, base, element_index } => {
             write!(w, "array_offset ")?;

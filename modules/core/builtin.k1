@@ -172,6 +172,15 @@ ns types {
         offset: size
       }],
     }),
+    // nocommit I think it should reflect like a struct. union is separate because they just really aren't ever used like structs.
+    // the packedness is even already kinda covered in offset; so lets yagni on even adding a packed boolean for now
+    packed({
+      fields: span[{
+        name: string,
+        type-id: type-id,
+        offset: size
+      }],
+    }),
     either({
       tag-type: int-kind,
       payload-offset: size,

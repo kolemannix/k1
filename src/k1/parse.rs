@@ -1013,17 +1013,15 @@ pub struct StructTypeField {
 pub enum ParsedRecordKind {
     Struct,
     Union,
+    Packed,
 }
 
 impl ParsedRecordKind {
-    pub fn is_union(&self) -> bool {
-        matches!(self, ParsedRecordKind::Union)
-    }
-
     pub fn kind_name(&self) -> &'static str {
         match self {
             ParsedRecordKind::Struct => "struct",
             ParsedRecordKind::Union => "union",
+            ParsedRecordKind::Packed => "packed",
         }
     }
 }
@@ -3169,13 +3167,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 span,
                 kind: reference_kind,
             }))))
-        } else if first.kind == K::OpenBrace || self.token_chars(first) == "union" {
-            let is_union = first.kind != K::OpenBrace;
-            if is_union {
-                self.advance();
+        } else if first.kind == K::OpenBrace
+            || self.token_chars(first) == "union"
+            || self.token_chars(first) == "packed"
+        {
+            let kind = match first.kind {
+                K::OpenBrace => ParsedRecordKind::Struct,
+                _ if self.token_chars(first) == "union" => ParsedRecordKind::Union,
+                _ => ParsedRecordKind::Packed,
+            };
+            self.advance();
+            if kind != ParsedRecordKind::Struct {
                 self.expect_kind(K::OpenBrace)?;
-            } else {
-                self.advance();
             }
             let mut fields = self.ast.mem.new_list(0);
             self.eat_delimited_arena(
@@ -3186,7 +3189,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Parser::expect_struct_type_field,
             )?;
             let span = self.extend_to_here(first.span);
-            let kind = if is_union { ParsedRecordKind::Union } else { ParsedRecordKind::Struct };
             let struc = StructType { fields: fields.to_slice(), span, record_kind: kind };
             Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::Struct(struc))))
         } else if first.kind == K::QuestionMark {
@@ -5797,8 +5799,10 @@ impl ParsedProgram {
     ) -> std::fmt::Result {
         match self.type_exprs.get(ty_expr_id) {
             ParsedTypeExpr::Struct(struct_type) => {
-                if struct_type.record_kind.is_union() {
-                    w.write_str("union ")?;
+                match struct_type.record_kind {
+                    ParsedRecordKind::Struct => {}
+                    ParsedRecordKind::Union => w.write_str("union ")?,
+                    ParsedRecordKind::Packed => w.write_str("packed ")?,
                 }
                 w.write_str("{ ")?;
                 for field in self.mem.getn(struct_type.fields).iter() {
