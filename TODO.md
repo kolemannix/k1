@@ -41,19 +41,21 @@ pointer-free predicate - pod/serializable?
 - [ ] Use to report escaped stack pointers
 
 ## grab bag list mid2026
-- [ ] Add 'self -> *self' thunk adapters for ability objects, `dyn[allocator]` is impossible
+- [ ] Add `self -> *self` thunk adapters for ability objects, `dyn[allocator]` is impossible
 - [ ] Warn on zeroed() for non zeroable type
 - [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
 - [ ] unaligned load/store for scalars
 - [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
       way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
-
 - [ ] [design/flags_in_tags.k1.wip]
 kind: either(u64, { rounded = false, even = false, faces: u8 }) {
   Circle({ radius: i32 }) = [rounded, even, faces = 1],
   Square({ len: i32 }) = [even, faces = 4],
   ...
 }
+- [x] packed structs
+- [ ] function abi: internal everywhere, unless address is ever taken, then always native. enables fastcc in llvm
+                    also of course allow spelling 'native', but do not allow forcing 'k1'
 - [ ] top-level parser recovery (sync to next fn/ns/type/macro)
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
@@ -73,8 +75,7 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
 - [ ] auto-print implementation on-demand for sums
 - [x] Exported functions
 - [ ] Tail calls
-- [ ] Implement at least one format specifier (precision, pretty). Do precision ('places') first:
-      the brotli bench needed `k1-mbps.format(sb.&, 1)` string-builder calls x3 where `${k1-mbps:.1}` should do
+- [ ] Implement at least one format specifier (precision, pretty). Do precision ('places') first
 - [ ] decide if overflow traps or not (in debug and release, if those are even different)
 - [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff

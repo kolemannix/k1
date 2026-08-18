@@ -42,11 +42,7 @@ fn assert-layout[t](size: size, align: size, struct-fields: span[size]) {
   assert-equals(size, actual-size)
   assert-equals(align, actual-align)
   if struct-fields.non-empty() {
-    let schema-fields = types/schema[t] is {
-      :struct s -> s.fields,
-      :packed p -> p.fields,
-      _ -> crash("assert-layout with field offsets: ${types/name[t]} is not a struct")
-    }
+    let schema-fields = types/schema[t].as-struct().!.fields
     for offset in struct-fields {
       let actual-field = schema-fields.get(it-index)
       assert-msg("offset of ${actual-field.name} ${actual-field.offset} != $offset", actual-field.offset == offset)

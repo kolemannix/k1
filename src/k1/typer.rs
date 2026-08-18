@@ -3859,12 +3859,18 @@ impl TypedProgram {
         self.scopes.get_scope(scope_id)
     }
 
-    pub fn run_setup_entry(&mut self, module_dir: &str) -> anyhow::Result<()> {
-        let primary = self
-            .modules
+    pub fn primary_module(&self) -> &Module {
+        if let Some(id) = self.module_in_progress {
+            return self.modules.get(id);
+        }
+        self.modules
             .iter()
             .find(|m| m.manifest.kind == ModuleKind::Executable)
-            .unwrap_or_else(|| self.modules.iter().last().unwrap());
+            .unwrap_or_else(|| self.modules.iter().last().unwrap())
+    }
+
+    pub fn run_setup_entry(&mut self, module_dir: &str) -> anyhow::Result<()> {
+        let primary = self.primary_module();
         let ns_scope = primary.namespace_scope_id;
         let Some(setup_fn_id) = self.scopes.find_function_local(ns_scope, self.ast.idents.b.setup)
         else {
@@ -17849,9 +17855,7 @@ impl TypedProgram {
                     (Some("type-id"), "schema") => {
                         Some(Builtin::Backend(BackendBuiltin::TypeSchema))
                     }
-                    (None, "struct-create") => {
-                        Some(Builtin::Backend(BackendBuiltin::StructCreate))
-                    }
+                    (None, "struct-create") => Some(Builtin::Backend(BackendBuiltin::StructCreate)),
                     _ => None,
                 },
                 Some("bool") => match fn_name_str {
@@ -22442,14 +22446,9 @@ impl TypedProgram {
             QIdent { path: core_types, name: get_ident!(self, "type-id"), name_span: span },
         ];
         for qid in idents_to_use.into_iter() {
-            let use_id = self.ast.uses.add_use(parse::ParsedUse {
-                target: qid,
-                alias: None,
-                span,
-                explicit_kind: None,
-            });
+            let use_id = self.ast.uses.add_use(parse::ParsedUse { target: qid, alias: None, span });
             if !self.eval_use_definition(scope, use_id, true) {
-                //FIXME: We can't quite fail here since we use 'std' from 'core', and it gets
+                //We can't quite fail here since we use 'std' from 'core', and it gets
                 //resolved later
                 //kbail!(self,
                 //    qid.span,
@@ -22629,9 +22628,8 @@ impl TypedProgram {
                     .static_values
                     .add_struct_from_slice(struct_schema_payload_type_id, &[span_value_id]);
                 let variant_name = match record_kind {
-                    RecordKind::Struct => self.ast.idents.b.struct_,
+                    RecordKind::Struct | RecordKind::Packed => self.ast.idents.b.struct_,
                     RecordKind::Union => self.ast.idents.b.union,
-                    RecordKind::Packed => self.ast.idents.b.packed,
                 };
                 make_variant(self, variant_name, Some(payload))
             }

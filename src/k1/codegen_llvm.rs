@@ -1804,14 +1804,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     )
                     .unwrap();
                 let ptr = self.build_k1_alloca(cg_ty, "struct_in_integer_storage");
-                let store = self.builder.build_store(ptr, truncated).unwrap();
-                store.set_alignment(cg_ty.rich_repr_layout().align).unwrap();
+                self.store_at_k1_align(ptr, truncated, cg_ty);
                 ptr.as_basic_value_enum()
             }
             AbiParamMapping::StructAsPointer => {
                 let ptr = self.build_k1_alloca(cg_ty, "struct_as_ptr_storage");
-                let store = self.builder.build_store(ptr, abi_value).unwrap();
-                store.set_alignment(cg_ty.rich_repr_layout().align).unwrap();
+                self.store_at_k1_align(ptr, abi_value, cg_ty);
                 ptr.as_basic_value_enum()
             }
             AbiParamMapping::StructByEightbytePair { .. }
@@ -1835,8 +1833,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::StructByHfa { .. } => {
                 let dst_ptr = self.build_k1_alloca(cg_ty, "struct_by_hfa_storage");
                 debug_assert!(abi_value.get_type().is_struct_type());
-                let store = self.builder.build_store(dst_ptr, abi_value).unwrap();
-                store.set_alignment(cg_ty.rich_repr_layout().align).unwrap();
+                self.store_at_k1_align(dst_ptr, abi_value, cg_ty);
                 dst_ptr.as_basic_value_enum()
             }
             AbiParamMapping::BigStructByPtrToCopy { .. } => {
@@ -1912,17 +1909,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.emit_lifetime_marker(false, integer_ptr, dst_int_size);
                 integer_value
             }
-            AbiParamMapping::StructAsPointer => {
-                let load = self
-                    .builder
-                    .build_load(self.builtin_types.ptr, k1_value.into_pointer_value(), "")
-                    .unwrap();
-                load.as_instruction_value()
-                    .unwrap()
-                    .set_alignment(cg_ty.rich_repr_layout().align)
-                    .unwrap();
-                load
-            }
+            AbiParamMapping::StructAsPointer => self.load_at_k1_align(
+                self.builtin_types.ptr,
+                k1_value.into_pointer_value(),
+                cg_ty,
+            ),
             AbiParamMapping::StructByEightbytePair { .. }
             | AbiParamMapping::StructByIntPairArray => {
                 // The ABI type's fields can extend past the struct's own size (a
@@ -1968,17 +1959,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             AbiParamMapping::StructByHfa { .. } => {
                 let abi_type = self.mapped_abi_type_param(pt, mapping);
-                // nocommit: DRY up the alignment setting on load/store. probably a load_k1_type taking a cg
-                // type that always sets alignment from it. If you can't couple it with the
-                // instruction emission for whatever reason, at least a helper to set the align of
-                // the instr from a Cgtype?
-                let load =
-                    self.builder.build_load(abi_type, k1_value.into_pointer_value(), "").unwrap();
-                load.as_instruction_value()
-                    .unwrap()
-                    .set_alignment(cg_ty.rich_repr_layout().align)
-                    .unwrap();
-                load
+                self.load_at_k1_align(abi_type, k1_value.into_pointer_value(), cg_ty)
             }
             AbiParamMapping::BigStructByPtrToCopy { byval_attr } => {
                 // Our canonical representation of all aggregates is an llvm ptr
@@ -2012,6 +1993,33 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
+    /// Loads `llvm_type` from `ptr` at the k1 type's alignment, which can be
+    /// lower than `llvm_type`'s natural alignment (ABI marshalling, packed structs)
+    fn load_at_k1_align(
+        &self,
+        llvm_type: impl BasicType<'ctx>,
+        ptr: PointerValue<'ctx>,
+        cg_ty: &CgType<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let load = self.builder.build_load(llvm_type, ptr, "").unwrap();
+        load.as_instruction_value()
+            .unwrap()
+            .set_alignment(cg_ty.rich_repr_layout().align)
+            .unwrap();
+        load
+    }
+
+    fn store_at_k1_align(
+        &self,
+        ptr: PointerValue<'ctx>,
+        value: impl BasicValue<'ctx>,
+        cg_ty: &CgType<'ctx>,
+    ) -> InstructionValue<'ctx> {
+        let store = self.builder.build_store(ptr, value).unwrap();
+        store.set_alignment(cg_ty.rich_repr_layout().align).unwrap();
+        store
+    }
+
     /// Handles the storage of aggregates by doing a (hopefully) correct memcpy
     fn store_k1_value(
         &self,
@@ -2022,9 +2030,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if cg_type.is_aggregate() {
             self.memcpy_k1_value(dst, value.into_pointer_value(), cg_type)
         } else {
-            let store = self.builder.build_store(dst, value).unwrap();
-            store.set_alignment(cg_type.rich_repr_layout().align).unwrap();
-            store
+            self.store_at_k1_align(dst, value, cg_type)
         }
     }
 

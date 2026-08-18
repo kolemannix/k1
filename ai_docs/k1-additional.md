@@ -348,7 +348,8 @@ types/id[do-it.arg-name]()
 ```
 
 Schemas are pattern matched as sums such as `:struct`, `:reference`, `:either`,
-`:array`, `:function`, and `:union`.
+`:array`, `:function`, and `:union`. Packed structs reflect as `:struct`; the
+packing shows up in the field offsets.
 
 See `test_src/suite1/test_type_schema.k1`,
 `test_src/suite1/type_info.k1`, and `test_src/suite1/array_type_test.k1`.
@@ -441,11 +442,22 @@ Unions use overlapping fields:
 type bits = union { as-u32: u32, as-f32: f32 }
 ```
 
+Packed structs have no inter-field padding and alignment 1 (C
+`__attribute__((packed))`); fields sit at cumulative offsets and accesses
+handle the resulting unalignment. Taking a packed field's address with `.&`
+warns, since the reference loses the alignment guarantee:
+
+```rust
+type wire = packed { tag: u8, value: u64, crc: u16 }
+#static types/assert-layout[wire](11, 1, [0, 1, 9])
+```
+
 `uninit` creates an uninitialized value. `zeroed()` creates a zeroed value.
 `mem/bitcast` reinterprets bits between same-sized representations.
 
 See `test_src/suite1/opaque_type.k1`, `test_src/suite1/union_basic.k1`,
-`test_src/suite1/test_uninit.k1`, and `test_src/suite1/zero_test.k1`.
+`test_src/suite1/packed_basic.k1`, `test_src/suite1/test_uninit.k1`, and
+`test_src/suite1/zero_test.k1`.
 
 ## Type-Level Struct Transforms
 

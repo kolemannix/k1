@@ -19,17 +19,44 @@ pub enum Response {
     Unavailable,
 }
 
+fn bind_open_port() -> Option<(TcpListener, u16)> {
+    for port in 8080..8180 {
+        if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
+            return Some((listener, port));
+        }
+    }
+    None
+}
+
+fn open_tab_when_program_ready(k1: &SharedProgram, url: &str) {
+    loop {
+        let ready = k1.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_some();
+        if ready {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    match std::process::Command::new(opener).arg(url).status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("{opener} {url} exited with {status}"),
+        Err(e) => eprintln!("could not launch {opener} {url}: {e}"),
+    }
+}
+
 /// One thread per connection; the compiler is locked per request, so the
 /// long-lived /events connections never block it.
 pub fn serve(k1: SharedProgram) {
-    let listener = match TcpListener::bind("127.0.0.1:8080") {
-        Ok(listener) => listener,
-        Err(e) => {
-            eprintln!("megarepl server could not bind 127.0.0.1:8080: {e}");
-            return;
-        }
+    let Some((listener, port)) = bind_open_port() else {
+        eprintln!("megarepl server: no open port on 127.0.0.1 in 8080..8180");
+        return;
     };
-    eprintln!("k1 server running on http://127.0.0.1:8080");
+    let url = format!("http://127.0.0.1:{port}");
+    eprintln!("k1 server running on {url}");
+    {
+        let k1 = k1.clone();
+        std::thread::spawn(move || open_tab_when_program_ready(&k1, &url));
+    }
     let bus = Arc::new(bus::EventBus::new());
     {
         let bus = bus.clone();

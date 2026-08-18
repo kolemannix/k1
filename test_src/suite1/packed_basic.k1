@@ -20,7 +20,7 @@ fn test() {
   #static types/assert-layout[mixed](10, 1, [0, 1, 9])
   #static types/assert-layout[holder](8, 2, [0, 1, 6])
 
-  require types/schema[wire] is :packed .{ fields }
+  require types/schema[wire] is :struct .{ fields }
     and fields.len() == 3
     and fields.get(0).name == "a" and fields.get(0).offset == 0
     and fields.get(1).name == "b" and fields.get(1).offset == 1

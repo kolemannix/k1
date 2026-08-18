@@ -704,7 +704,8 @@ impl TypedProgram {
         // (`megarepl` itself is fair game for user code); if it somehow
         // exists anyway, extend it
         let name = self.ast.idents.intern("_repl_session");
-        let module_id = self.module_in_progress.unwrap();
+        let module_id = self.primary_module().id;
+        self.module_in_progress = Some(module_id);
         let module = self.modules.get(module_id);
         let module_ns_scope = module.namespace_scope_id;
         let (ns_id, ns_scope_id, parsed_ns) =
