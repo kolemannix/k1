@@ -109,7 +109,9 @@ Before nontrivial work, read:
 - `modules/core/FixList.k1`, `SpillList.k1`, `StringBuilder.k1`, `arena.k1`,
   `bitwise.k1`: core utility types/abilities.
 - `modules/core/ffc.h.k1` and `modules/core/libs/`: C runtime support, fast-float
-  bridge, `k1rt.c`, and static/shared runtime libraries.
+  bridge, `k1rt.c` (freestanding-safe) + `k1rt_hosted.c` (errno, backtrace:
+  atos on macos, vendored libbacktrace on linux), and static/shared/freestanding
+  runtime libraries.
 - `modules/std/bitfield.k1`: metaprogrammed bitfield generation.
 - `modules/std/hash.k1`: the `hash` ability, `map`, and `set`.
 - `modules/std/json.k1`: JSON parser/model.

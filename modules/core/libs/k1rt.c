@@ -5,10 +5,8 @@
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "stb_sprintf.h"
-#include <errno.h>
+#include <stddef.h>
 #include <stdint.h>
-
-int _k1_errno(void) { return errno; }
 
 int _k1_snprintf_f64(char *buf, size_t size, double arg, int32_t places) {
   if (places == -1)
@@ -22,26 +20,6 @@ int _k1_snprintf_f32(char *buf, size_t size, float arg, int32_t places) {
   else
     return stbsp_snprintf(buf, size, "%.*f", places, arg);
 }
-
-#ifdef __FILC__
-#include <stdfil.h>
-void _k1_print_backtrace(int max_count) {
-  (void)max_count;
-  zdump_stack();
-}
-#else
-#include <execinfo.h> // for backtrace
-#include <stdio.h> // for printf
-void _k1_print_backtrace(int max_count) {
-  void *frames[max_count];
-  int count = backtrace(frames, max_count);
-  char **symbols = backtrace_symbols(frames, count);
-  for (int i = 0; i < count; i++) {
-    printf("%s\n", symbols[i]);
-  }
-  return;
-}
-#endif
 
 #define FFC_IMPL
 #include "ffc.h"

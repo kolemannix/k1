@@ -556,7 +556,6 @@ ns(lib("k1rt")) k1rt {
   // fn(extern("_k1_show_backtrace"), lib("k1rt.c")) _k1_show_backtrace()
   // Allowing you to mix and match .c and .k1 files
 
-  // TODO: Doesn't even need to be written in c
   fn(extern("_k1_print_backtrace")) _k1_print_backtrace(frame_count: c-int)
 
   fn(extern("_k1_snprintf_f32")) snprintf_f32(buf: ptr, size: c-sizet, float: f32, places: i32): i32

@@ -70,6 +70,11 @@ impl TestExpectation {
     }
 }
 
+// linux symbolizes in-process via libk1rt's vendored libbacktrace; macos shells out to atos
+fn backtrace_symbolizer_available() -> bool {
+    !cfg!(target_os = "macos") || Path::new("/usr/bin/atos").exists()
+}
+
 fn get_test_expectation(test_file: &Path) -> TestExpectation {
     let mut path = test_file.canonicalize().unwrap();
     if path.is_dir() {
@@ -249,6 +254,16 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                                             bail!(
                                                 "{name} abort message '{abort_msg}' did not match expected message: {expected_abort_message}"
                                             )
+                                        }
+                                        if backtrace_symbolizer_available() {
+                                            let stdout_str =
+                                                String::from_utf8_lossy(&output.stdout);
+                                            let frame_ref = format!("{name}.k1:");
+                                            if !stdout_str.contains(frame_ref.as_str()) {
+                                                bail!(
+                                                    "{name} abort backtrace has no symbolized frame '{frame_ref}'; stdout:\n{stdout_str}"
+                                                )
+                                            }
                                         }
                                         return Ok(());
                                     }

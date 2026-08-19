@@ -363,7 +363,7 @@ struct DebugContext<'ctx> {
     compile_unit: DICompileUnit<'ctx>,
     // TODO: there does not need to be a debug info stack anymore, it can just be the one entry
     debug_stack: Vec<DebugStackEntry<'ctx>>,
-    strip_debug: bool,
+    line_tables_only: bool,
 }
 
 impl<'ctx> DebugContext<'ctx> {
@@ -472,7 +472,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             "",
             0,
             "",
-            DWARFEmissionKind::Full,
+            if debug { DWARFEmissionKind::Full } else { DWARFEmissionKind::LineTablesOnly },
             0,
             false,
             false,
@@ -528,7 +528,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             debug_builder,
             compile_unit,
             debug_stack: Vec::new(),
-            strip_debug: !debug,
+            line_tables_only: !debug,
         };
         debug.push_scope(SpanId::NONE, compile_unit.as_debug_info_scope(), compile_unit.get_file());
         debug
@@ -1056,14 +1056,18 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let return_cg_type = cg_fn.function_type.return_logical_cg_type;
         let param_abi_mappings = cg_fn.function_type.param_abi_mappings;
         let param_k1_types = cg_fn.function_type.param_k1_types;
+        let di_subprogram = cg_fn.debug_info;
+        let di_file = cg_fn.debug_file;
 
         let typed_fn = self.k1.get_function(function_id);
         let fn_name = self.k1.ident_str(typed_fn.name).to_string();
         let ns_name =
             self.k1.ident_str(self.k1.namespaces.get(typed_fn.namespace_id).name).to_string();
+        let function_span = self.k1.ast.get_span_for_id(typed_fn.parsed_id);
 
         let fn_addr_global = self.reload_fn_addr_global(function_id);
-        self.builder.unset_current_debug_location();
+        self.debug.push_scope(function_span, di_subprogram.as_debug_info_scope(), di_file);
+        self.set_debug_location_from_span(function_span);
         let entry_block = self.ctx.append_basic_block(function_value, "entry");
         self.builder.position_at_end(entry_block);
         let loaded = self.builder.build_load(
@@ -1117,6 +1121,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             ValueKind::Basic(v) => self.builder.build_return(Some(&v)).unwrap(),
             ValueKind::Instruction(_) => self.builder.build_return(None).unwrap(),
         };
+        self.debug.pop_scope();
         Ok(())
     }
 
@@ -3127,6 +3132,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let ir_debug_info = self.k1.ir.debug_info.get(inst_id);
                 if let Some(var_info) = ir_debug_info.variable_info
                     && !var_info.user_hidden
+                    && !self.debug.line_tables_only
                 {
                     let name_str = self.k1.ident_str(var_info.name);
                     let debug_locn = self.get_debug_location_from_span(var_info.source_span);
@@ -3893,6 +3899,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         // K1 has no unwinding: no invoke, no landingpad, anywhere. Extern C
         // decls get it too; LLVM cannot infer it across declaration boundaries
         function_value.add_attribute(AttributeLoc::Function, self.make_enum_attribute("nounwind", 0));
+        // Keep frame pointers so backtrace() can walk K1 frames
+        function_value.add_attribute(
+            AttributeLoc::Function,
+            self.ctx.create_string_attribute("frame-pointer", "non-leaf"),
+        );
         if ir_fn.fn_type.diverges {
             function_value
                 .add_attribute(AttributeLoc::Function, self.make_enum_attribute("noreturn", 0));
@@ -4334,27 +4345,28 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.canonicalize_abi_param_value(param_abi_mapping, &param_k1_type, param);
 
             self.set_debug_location_from_span(function_span);
-            let di_local_variable = self.debug.debug_builder.create_parameter_variable(
-                self.debug.current_scope(),
-                name,
-                logical_param_index as u32,
-                self.debug.current_file(),
-                function_line_number,
-                param_k1_type.debug_type(),
-                true,
-                0,
-            );
-
             let ps = &mut self.llvm_functions.get_mut(&function_id).unwrap().param_values;
             //eprintln!("pushing param value {}: {}", ps.len(), mapped_value);
             ps.push(mapped_value);
-            self.debug.insert_dbg_value_at_end(
-                mapped_value,
-                di_local_variable,
-                None,
-                self.get_debug_location(),
-                prelude_block,
-            );
+            if !self.debug.line_tables_only {
+                let di_local_variable = self.debug.debug_builder.create_parameter_variable(
+                    self.debug.current_scope(),
+                    name,
+                    logical_param_index as u32,
+                    self.debug.current_file(),
+                    function_line_number,
+                    param_k1_type.debug_type(),
+                    true,
+                    0,
+                );
+                self.debug.insert_dbg_value_at_end(
+                    mapped_value,
+                    di_local_variable,
+                    None,
+                    self.get_debug_location(),
+                    prelude_block,
+                );
+            }
         }
 
         self.set_debug_location_from_span(function_span);
@@ -5035,11 +5047,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     pub fn optimize_verify(&mut self, optimize: bool) -> anyhow::Result<()> {
         let start = std::time::Instant::now();
 
-        if !self.debug.strip_debug {
-            self.debug.debug_builder.finalize();
-        } else {
-            self.llvm_module.strip_debug_info();
-        }
+        self.debug.debug_builder.finalize();
 
         self.verify_module()?;
 
@@ -5049,7 +5057,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let options = PassBuilderOptions::create();
             options.set_loop_slp_vectorization(true);
             self.llvm_module.run_passes("default<O3>", &self.llvm_machine, options).unwrap();
-        } else if self.debug.strip_debug {
+        } else if self.debug.line_tables_only {
             // Default builds: every local is an alloca, so promote them. Debug
             // builds skip even this to keep variables inspectable
             self.llvm_module

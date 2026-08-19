@@ -38,6 +38,7 @@ cmake -G "${GENERATOR}" "${SRC_DIR}"/llvm \
   -DLLVM_ENABLE_RTTI=OFF \
   -DLLVM_ENABLE_EH=OFF \
   -DLLVM_ENABLE_ZLIB=OFF \
+  -DLLVM_ENABLE_ZSTD=OFF \
   -DLLVM_ENABLE_LIBXML2=OFF \
   -DLLVM_ENABLE_FFI=OFF \
   -DLLVM_ENABLE_PROJECTS="${LLVM_ENABLE_PROJECTS}" \
@@ -48,8 +49,8 @@ cmake -G "${GENERATOR}" "${SRC_DIR}"/llvm \
   -DLLVM_ENABLE_RUNTIMES=compiler-rt
 
 # === Build and Install ===
-# cmake --build . -- -j$(getconf _NPROCESSORS_ONLN)
-cmake --build . -- -j2
+cmake --build . -- -j$(getconf _NPROCESSORS_ONLN)
+# cmake --build . -- -j2
 cmake --install .
 
 echo "LLVM built and installed under: ${INSTALL_DIR}"

@@ -127,7 +127,9 @@ Before nontrivial work, read:
 - `modules/core/fix-list.k1`, `spill-list.k1`, `string-builder.k1`, `arena.k1`,
   `bitwise.k1`: core utility types/abilities.
 - `modules/core/ffc.h.k1` and `modules/core/libs/`: C runtime support, fast-float
-  bridge, `k1rt.c`, and static/shared runtime libraries.
+  bridge, `k1rt.c` (freestanding-safe) + `k1rt_hosted.c` (errno, backtrace:
+  atos on macos, vendored libbacktrace on linux), and static/shared/freestanding
+  runtime libraries.
 - `modules/libuv/`: libuv wrapper module (vendored release source in vendor/,
   cmake setup-built libs/libuv.a, bindgen-generated uv/net bindings in
   generated/, uv_ext abilities).
