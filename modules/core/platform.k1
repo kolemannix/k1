@@ -25,6 +25,7 @@ ns platform {
     fn(extern("write")) write(file-no: c-int, data: ptr, count: c-sizet): i64
     fn(extern("close")) close(fd: c-int): c-int
     fn(extern("lseek")) lseek(fd: c-int, offset: i64, whence: c-int): i64
+    let F_OK: c-int = 0
     fn(extern("access")) access(path: ptr, mode: c-int): c-int
     fn(extern("isatty")) isatty(fd: c-int): c-int
 
@@ -331,8 +332,8 @@ ns platform {
     }
     fn exists(path: ptr): bool {
       k1/os #is {
-        :macos or :linux -> posix/access(path, 0) == 0,
-        :wasm -> if k1/is-static posix/access(path, 0) == 0 else crash("file io is not supported on wasm")
+        :macos or :linux -> posix/access(path, posix/F_OK) == 0,
+        :wasm -> if k1/is-static posix/access(path, posix/F_OK) == 0 else crash("file io is not supported on wasm")
       }
     }
   }

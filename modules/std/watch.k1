@@ -173,7 +173,7 @@ ns watch {
           if n <= 0 return :err "watch/wait read failed: ${libc/errno-k1-string()}"
           let offset: size = 0
           while offset < n {
-            let ev = buf.data.add-bytes(offset).r[inotify/event-t].*
+            let ev = buf.data.as[ptr].add-bytes(offset).r[inotify/event-t].*
             let kind: event-kind =
               if ev.mask.bit-and(inotify/IN_DELETE | inotify/IN_DELETE_SELF | inotify/IN_MOVED_FROM) != 0 :deleted
               else if ev.mask.bit-and(inotify/IN_MOVE_SELF | inotify/IN_MOVED_TO) != 0 :renamed

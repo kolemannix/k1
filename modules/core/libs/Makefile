@@ -11,7 +11,11 @@ ifneq ($(OS),Darwin)
 BT_OBJS := $(BT_SRCS:%.c=bt-%.o)
 endif
 
-LLVM_BIN := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))../../../llvm/install-llvm/bin)
+# The LLVM we are building against, not whichever one sits in this checkout:
+# a checkout may hold an LLVM built for another host (or none at all)
+REPO_LLVM := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))../../../llvm/install-llvm)
+LLVM_PREFIX := $(if $(LLVM_SYS_211_PREFIX),$(LLVM_SYS_211_PREFIX),$(REPO_LLVM))
+LLVM_BIN := $(LLVM_PREFIX)/bin
 
 .PHONY: all build clean filc wasm nocrt
 
@@ -46,7 +50,7 @@ wasm: libk1rt-wasm.a
 
 k1rt-wasm.o: k1rt.c $(HEADERS)
 	$(LLVM_BIN)/clang --target=wasm64 -O2 -ffreestanding -nostdinc \
-	  -isystem $(LLVM_BIN)/../lib/clang/21/include -isystem freestanding-include \
+	  -isystem $(LLVM_PREFIX)/lib/clang/21/include -isystem freestanding-include \
 	  -fno-stack-protector -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
 	  -mbulk-memory -msign-ext -mnontrapping-fptoint -c k1rt.c -o k1rt-wasm.o
 
@@ -58,7 +62,7 @@ libk1rt-wasm.a: k1rt-wasm.o
 nocrt: libk1rt-nocrt.a
 
 NOCRT_CFLAGS := --target=x86_64-unknown-linux-gnu -O2 -ffreestanding -nostdinc \
-  -isystem $(LLVM_BIN)/../lib/clang/21/include -isystem freestanding-include \
+  -isystem $(LLVM_PREFIX)/lib/clang/21/include -isystem freestanding-include \
   -fno-stack-protector -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -DK1_NOCRT \
   -fno-asynchronous-unwind-tables
 

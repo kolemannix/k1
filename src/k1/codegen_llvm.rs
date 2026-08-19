@@ -19,7 +19,7 @@ use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine};
 use inkwell::types::{
-    AnyType, ArrayType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
+    AnyType, ArrayType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType,
     FunctionType as LlvmFunctionType, IntType, PointerType, StructType,
     VectorType as LlvmVectorType,
 };
@@ -82,6 +82,12 @@ enum AbiParamMapping {
     },
     /// Same registers as an i64 but keeps pointer provenance
     StructAsPointer,
+    /// A single SYS-V SSE eightbyte, which travels packed in one XMM register.
+    /// clang types it `float`, `<2 x float>`, or `double`.
+    StructInSse {
+        element: ScalarType,
+        count: u32,
+    },
     /// How clang does X86 9-16 byte structs
     StructByEightbytePair {
         class1: RegisterClass,
@@ -504,18 +510,23 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             ctx.metadata_string("PIC Level").into(),
             ctx.i32_type().const_int(2, false).into(),
         ]);
-        let md4 = ctx.metadata_node(&[
-            ctx.i32_type().const_int(1, false).into(),
-            ctx.metadata_string("PIE Level").into(),
-            ctx.i32_type().const_int(2, false).into(),
-        ]);
         // revisit this metadata (I did it when scrambling to get debug info to show up)
         // I know that at least the dwarf version is required by lldb
         llvm_module.add_global_metadata("llvm.module.flags", &md0).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md1).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md2).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
-        llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
+
+        // Only an executable is position-independent *and* known not to be
+        // loaded elsewhere
+        if module.program_settings.executable {
+            let md4 = ctx.metadata_node(&[
+                ctx.i32_type().const_int(1, false).into(),
+                ctx.metadata_string("PIE Level").into(),
+                ctx.i32_type().const_int(2, false).into(),
+            ]);
+            llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
+        }
 
         let mut di_files: FxHashMap<FileId, DIFile> = FxHashMap::default();
         for (file_id, source) in module.ast.sources.iter() {
@@ -1664,6 +1675,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::ScalarInRegister => false,
             AbiParamMapping::StructInInteger { .. } => false,
             AbiParamMapping::StructAsPointer => false,
+            AbiParamMapping::StructInSse { .. } => false,
             AbiParamMapping::StructByEightbytePair { .. } => false,
             AbiParamMapping::StructByHfa { .. } => false,
             AbiParamMapping::StructByIntPairArray => false,
@@ -1725,6 +1737,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         })
     }
 
+    fn get_float_type(&self, scalar_type: ScalarType) -> FloatType<'ctx> {
+        match scalar_type {
+            ScalarType::F32 => self.ctx.f32_type(),
+            ScalarType::F64 => self.ctx.f64_type(),
+            other => panic!("Expected a float scalar type, got {other:?}"),
+        }
+    }
+
     fn mapped_abi_type_return(
         &mut self,
         pt: PhysicalType,
@@ -1751,6 +1771,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 int_type
             }
             AbiParamMapping::StructAsPointer => self.builtin_types.ptr.as_basic_type_enum(),
+            AbiParamMapping::StructInSse { element, count } => {
+                let element_type = self.get_float_type(element);
+                if count == 1 {
+                    element_type.as_basic_type_enum()
+                } else {
+                    element_type.vec_type(count).as_basic_type_enum()
+                }
+            }
             AbiParamMapping::StructByEightbytePair { class1, class2, active_bits2 } => {
                 // We know field 1 is a full 8 bits
                 let f1 = match class1 {
@@ -1785,11 +1813,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 struct_type
             }
             AbiParamMapping::StructByHfa { element, count } => {
-                let element_type = match element {
-                    ScalarType::F32 => self.ctx.f32_type().as_basic_type_enum(),
-                    ScalarType::F64 => self.ctx.f64_type().as_basic_type_enum(),
-                    _ => panic!("HFA element must be f32 or f64"),
-                };
+                let element_type = self.get_float_type(element).as_basic_type_enum();
                 let mut fields = self.tmp.new_list(count);
                 for _ in 0..count {
                     fields.push(element_type);
@@ -1840,6 +1864,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             AbiParamMapping::StructAsPointer => {
                 let ptr = self.build_k1_alloca(cg_ty, "struct_as_ptr_storage");
+                self.store_at_k1_align(ptr, abi_value, cg_ty);
+                ptr.as_basic_value_enum()
+            }
+            AbiParamMapping::StructInSse { .. } => {
+                let ptr = self.build_k1_alloca(cg_ty, "struct_in_sse_storage");
                 self.store_at_k1_align(ptr, abi_value, cg_ty);
                 ptr.as_basic_value_enum()
             }
@@ -1941,6 +1970,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             AbiParamMapping::StructAsPointer => {
                 self.load_at_k1_align(self.builtin_types.ptr, k1_value.into_pointer_value(), cg_ty)
+            }
+            AbiParamMapping::StructInSse { .. } => {
+                let abi_type = self.mapped_abi_type_param(pt, mapping);
+                self.load_at_k1_align(abi_type, k1_value.into_pointer_value(), cg_ty)
             }
             AbiParamMapping::StructByEightbytePair { .. }
             | AbiParamMapping::StructByIntPairArray => {
@@ -4038,7 +4071,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 }
                             }
                             CallConv::ARM64 => {
-                                if let Some((element, count)) = self.detect_arm64_hfa(pt) {
+                                if let Some((element, count)) = self.detect_float_aggregate(pt) {
                                     AbiParamMapping::StructByHfa { element, count }
                                 } else if size_bytes <= 8 {
                                     // Returns use an ABI type of the exact size of the struct
@@ -4064,11 +4097,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 if agg_record.has_misaligned_fields {
                                     AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }
                                 } else if size_bytes <= 8 {
-                                    // If the size of the structure is less than 8 bytes, pass the structure as an integer of its size in bits
-                                    let width_bits = size_bytes * 8;
-                                    AbiParamMapping::StructInInteger {
-                                        abi_width: width_bits,
-                                        active_width: width_bits,
+                                    let ([class1, _], _) = self.collect_aggregate_eightbytes(pt);
+                                    if class1 == RegisterClass::Float {
+                                        // One SSE eightbyte: it rides in an XMM register, so it
+                                        // must be typed as floats, not as an integer
+                                        let (element, count) = self
+                                            .detect_float_aggregate(pt)
+                                            .unwrap_or((ScalarType::F64, 1));
+                                        AbiParamMapping::StructInSse { element, count }
+                                    } else {
+                                        // Otherwise it rides in a GPR as an integer of its size
+                                        let width_bits = size_bytes * 8;
+                                        AbiParamMapping::StructInInteger {
+                                            abi_width: width_bits,
+                                            active_width: width_bits,
+                                        }
                                     }
                                 } else if size_bytes <= 16 {
                                     // "If the size is between 8 and 16 bytes, the logic is a little more difficult."
@@ -4100,7 +4143,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    fn detect_arm64_hfa(&self, pt: PhysicalType) -> Option<(ScalarType, u32)> {
+    fn detect_float_aggregate(&self, pt: PhysicalType) -> Option<(ScalarType, u32)> {
         fn add_member(element: &mut Option<ScalarType>, count: &mut u32, st: ScalarType) -> bool {
             if !matches!(st, ScalarType::F32 | ScalarType::F64) {
                 return false;

@@ -16,7 +16,31 @@
     argv
   }
 
+  fn is-executable(path: string): bool {
+    posix/access(path.to-c-tmp().ptr, posix/X_OK) == 0
+  }
+
+  // execvp's search rule, done here instead of by posix_spawnp: a failed exec
+  // is reported to the parent on darwin but not on glibc, where the child just
+  // exits 127, indistinguishable from a command that ran and exited 127.
+  // Resolving up front is the only portable way to tell those apart.
+  fn resolve-program(program: string): result[string, process/run-error] {
+    if program.contains('/') {
+      return if is-executable(program) :ok program
+             else :err :spawn .{ program = program, message = "not executable: ${libc/errno-k1-string()}" }
+    }
+    require core/sys/env("PATH") is :some path else {
+      return :err :spawn .{ program = program, message = "PATH is unset" }
+    }
+    for dir in path.split-by-char(':') {
+      let candidate = if dir.is-empty() "./$program" else "$dir/$program"
+      if is-executable(candidate) return :ok candidate
+    }
+    :err :spawn .{ program = program, message = "command not found" }
+  }
+
   fn run(program: string, args: span[string], mode: process/output-mode): result[process/run-output, process/run-error] {
+    let program-path = resolve-program(program).try
     let argv = make-argv(program, args)
 
     // posix_spawn_file_actions_t is opaque: 8 bytes on darwin, 80 on glibc
@@ -53,9 +77,9 @@
     }
 
     let pid: i32 = 0
-    let spawn-rc = posix/posix_spawnp(
+    let spawn-rc = posix/posix_spawn(
       &pid,
-      program.to-c-tmp().ptr,
+      program-path.to-c-tmp().ptr,
       fa,
       ptr/null,
       argv.base-ptr(),
@@ -108,6 +132,7 @@
   // stdin and stdout piped, stderr inherited so the child's own noise and
   // crashes stay visible
   fn spawn(program: string, args: span[string]): result[process/child, process/run-error] {
+    let program-path = resolve-program(program).try
     let argv = make-argv(program, args)
 
     let fa-buf = array/zeroed[u8, 128]()
@@ -135,9 +160,9 @@
     posix/posix_spawn_file_actions_addclose(fa, out-fds.get(1))
 
     let pid: i32 = 0
-    let spawn-rc = posix/posix_spawnp(
+    let spawn-rc = posix/posix_spawn(
       &pid,
-      program.to-c-tmp().ptr,
+      program-path.to-c-tmp().ptr,
       fa,
       ptr/null,
       argv.base-ptr(),

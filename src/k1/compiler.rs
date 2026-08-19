@@ -1489,6 +1489,13 @@ pub fn write_linked_output(
     // For each module, for each of its libraries, link with it as specified by the link_type
     let mut lib_args: Vec<String> = vec![];
     push_module_lib_args(k1, &mut lib_args);
+
+    // libm is part of libSystem on darwin but a separate library on linux, and
+    // it has to come after the objects and archives that reference it
+    if target.target_os() == TargetOs::Linux {
+        lib_args.push("-lm".into());
+    }
+
     build_cmd.args(lib_args);
 
     build_cmd.args(extra_options);
@@ -1838,13 +1845,18 @@ fn write_reload_dylib(
         }
         TargetOs::Wasm => unreachable!(),
     }
+    // A running app watches this path; link to the side and rename into place so
+    let staged_path = format!("{dylib_path}.staged");
     link_cmd.arg(obj_path.as_str());
     link_cmd.arg("-o");
-    link_cmd.arg(dylib_path.as_str());
+    link_cmd.arg(&staged_path);
     log::debug!("Reload dylib link command: {:?}", link_cmd);
     if !link_cmd.status()?.success() {
+        let _ = std::fs::remove_file(&staged_path);
         bail!("linking reload dylib {dylib_path} failed");
     }
+    std::fs::rename(&staged_path, dylib_path.as_str())
+        .map_err(|e| anyhow::anyhow!("Failed to publish reload dylib {dylib_path}: {e}"))?;
     if args.chatty {
         eprintln!("reload dylib {unit_name} took {}ms", dylib_start.elapsed().as_millis());
     }

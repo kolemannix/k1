@@ -64,7 +64,7 @@ ns posix {
   fn(extern("pipe")) pipe(fds: ptr): c-int
   fn(extern("close")) close(fd: c-int): c-int
 
-  fn(extern("posix_spawnp")) posix_spawnp(pid: *mut i32, file: ptr, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
+  fn(extern("posix_spawn")) posix_spawn(pid: *mut i32, path: ptr, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
   fn(extern("posix_spawn_file_actions_init")) posix_spawn_file_actions_init(file-actions: ptr): c-int
   fn(extern("posix_spawn_file_actions_destroy")) posix_spawn_file_actions_destroy(file-actions: ptr): c-int
   fn(extern("posix_spawn_file_actions_adddup2")) posix_spawn_file_actions_adddup2(file-actions: ptr, fd: c-int, new-fd: c-int): c-int
@@ -78,6 +78,8 @@ ns posix {
 
   fn(extern("readlink")) readlink(path: ptr, buf: ptr, bufsize: c-sizet): i64
   fn(extern("unlink")) unlink(path: ptr): c-int
+  let F_OK: c-int = 0
+  let X_OK: c-int = 1
   fn(extern("access")) access(path: ptr, mode: c-int): c-int
 
   fn(extern("_NSGetEnviron")) _NSGetEnviron(): ptr

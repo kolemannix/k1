@@ -129,6 +129,11 @@ fn setup(ctx: k1/setup-ctx) {
     "+exclude", "uv_write_s$",
     "+exclude", "UV_OVERLAPPED_PIPE",
   ]
+  // uv_barrier_t wraps struct _uv_barrier on darwin, but on linux it is pthread_barrier_t
+  if not k1/os-macos {
+    uv-args.push("+opaque")
+    uv-args.push("uv_barrier_t")
+  }
   for sdk-args() { uv-args.push(it) }
   let _ = process/run-command("k1bindgen", uv-args.as-span(), :inherit).!
 }

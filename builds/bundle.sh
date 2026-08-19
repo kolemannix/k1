@@ -12,6 +12,7 @@ EXCLUDES=(
   --include 'libs/libk1rt-freestanding.a'
   --include 'libs/libk1rt-wasm.a'
   --include 'libs/libk1rt-nocrt.a'
+  --include 'libs/libfoo.*'
   --exclude 'libs/*.a'
   --exclude 'libs/*.so'
   --exclude 'libs/*.dylib'

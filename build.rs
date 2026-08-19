@@ -28,6 +28,21 @@ fn with_binary_inputs<'a>(args: &[&'a str]) -> Vec<&'a str> {
     v
 }
 
+/// keep k1 free of C++ runtime dependency.
+fn link_static_cpp_runtime() {
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let out = Command::new(&cc)
+        .arg("-print-file-name=libstdc++.a")
+        .output()
+        .unwrap_or_else(|e| panic!("Failed to ask {cc} where libstdc++.a lives: {e}"));
+    let path = std::path::PathBuf::from(String::from_utf8(out.stdout).unwrap().trim());
+    let Some(dir) = path.parent().filter(|_| path.is_file()) else {
+        panic!("{cc} could not find libstdc++.a; install the GCC C++ runtime's static library")
+    };
+    println!("cargo:rustc-link-search=native={}", dir.display());
+    println!("cargo:rustc-link-lib=static=stdc++");
+}
+
 fn main() {
     let rev = git(&["rev-parse", "--short=12", "HEAD"]);
     let tracked_dirty =
@@ -77,14 +92,23 @@ fn main() {
     let llvm_prefix = std::env::var("LLVM_SYS_211_PREFIX")
         .expect("LLVM_SYS_211_PREFIX must be set");
     println!("cargo:rerun-if-env-changed=LLVM_SYS_211_PREFIX");
-    cc::Build::new()
+    let mut lld_shim = cc::Build::new();
+    lld_shim
         .cpp(true)
         .std("c++17")
         .file("src/lld_shim.cpp")
         .include(format!("{llvm_prefix}/include"))
         .flag_if_supported("-fno-rtti")
-        .flag_if_supported("-fno-exceptions")
-        .compile("k1_lld_shim");
+        .flag_if_supported("-fno-exceptions");
+    let is_linux = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux");
+    if is_linux {
+        // cc would emit a dynamic -lstdc++ of its own; we supply a static one
+        lld_shim.cpp_link_stdlib(None);
+    }
+    lld_shim.compile("k1_lld_shim");
+    if is_linux {
+        link_static_cpp_runtime();
+    }
     println!("cargo:rustc-link-search=native={llvm_prefix}/lib");
     println!("cargo:rustc-link-lib=static=lldWasm");
     println!("cargo:rustc-link-lib=static=lldCommon");
