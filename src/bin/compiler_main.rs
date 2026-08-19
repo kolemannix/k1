@@ -73,6 +73,7 @@ fn run() -> anyhow::Result<ExitCode> {
                 info!("run executable: {}", cg.name());
                 let exit_code = compiler::run_compiled_program(
                     &cg.k1.ast.idents,
+                    cg.k1.config.target,
                     cg.k1.config.out_dir,
                     cg.k1.config.home_dir,
                     cg.name(),
@@ -85,6 +86,7 @@ fn run() -> anyhow::Result<ExitCode> {
                 info!("test executable: {}", cg.name());
                 let exit_code = compiler::run_compiled_program(
                     &cg.k1.ast.idents,
+                    cg.k1.config.target,
                     cg.k1.config.out_dir,
                     cg.k1.config.home_dir,
                     cg.name(),

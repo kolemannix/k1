@@ -727,8 +727,11 @@ ns k1 {
 
   type os = either { linux, macos, wasm }
   let os: os = builtin
+  // The os the compiler runs on; static execution happens there, not on `os`
+  let host-os: os = builtin
   let os-macos: bool = os #is { :macos -> true, :linux -> false, :wasm -> false }
   let os-linux: bool = os #is { :macos -> false, :linux -> true, :wasm -> false }
+  let os-wasm: bool = os #is { :macos -> false, :linux -> false, :wasm -> true }
   let os-posix: bool = os #is { :macos -> true, :linux -> true, :wasm -> false }
 
   // The widest SIMD register the target supports;

@@ -19,7 +19,12 @@ export RUST_LOG=info
 # suite1 again under --optimize
 K1_HOME=$(pwd) target/debug/k1 --optimize --cache false run test_src/suite1
 
-# Correctness gates compile cold, never from cached state
+if command -v wasmtime > /dev/null; then
+    make -C modules/core/libs wasm
+    K1_HOME=$(pwd) target/debug/k1 --cache false --target wasm64 run test_src/suite1
+    K1_HOME=$(pwd) target/debug/k1 --optimize --cache false --target wasm64 run test_src/suite1
+fi
+
 target/debug/k1 --emit-llvm --cache false build dogfood/refchess
 target/debug/k1 --emit-llvm --cache false build dogfood/profiling
 target/debug/k1 --cache false test  dogfood/k1bindgen

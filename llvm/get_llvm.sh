@@ -11,7 +11,7 @@ SRC_DIR="$(pwd)/llvm-project"
 
 LLVM_ENABLE_PROJECTS="clang;lld"
 
-LLVM_TARGETS="X86;AArch64"
+LLVM_TARGETS="X86;AArch64;WebAssembly"
 
 # CMake generator
 GENERATOR="Unix Makefiles"

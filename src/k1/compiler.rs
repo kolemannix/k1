@@ -170,8 +170,14 @@ fn logical_name_to_lib_filename(
         }
         (TargetOs::MacOs, LibRefLinkType::Default) => mem.push_str(logical_name),
         // In Windows we'd skip the 'lib' prefix and add extension dll or lib
+        (TargetOs::Wasm, LibRefLinkType::Static) => kpath::join_tmp(
+            mem,
+            idents,
+            module_libs_dir,
+            format_args!("lib{logical_name}-wasm.a"),
+        ),
         (TargetOs::Wasm, _) => {
-            panic!("Dynamic libraries are not supported on the wasm target")
+            panic!("Only static libraries are supported on the wasm target")
         }
     }
 }
@@ -1322,6 +1328,25 @@ fn collect_all_module_libs(k1: &TypedProgram) -> Vec<ModuleLibs> {
     out
 }
 
+// A PATH wasm-ld can predate table64 (brew lld 18) and silently emit invalid
+// wasm64 modules; prefer our own LLVM's linker
+// This is all just garbage / workaround stuff (except for the actual path resolution) until we
+// start shipping lld
+fn wasm_ld_path(k1: &TypedProgram) -> PathBuf {
+    if let Ok(llvm_prefix) = std::env::var("LLVM_SYS_211_PREFIX") {
+        let candidate = PathBuf::from(llvm_prefix).join("bin/wasm-ld");
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    let home_candidate = Path::new(k1.ast.idents.get_string(k1.config.k1_home))
+        .join("llvm/install-llvm/bin/wasm-ld");
+    if home_candidate.exists() {
+        return home_candidate;
+    }
+    PathBuf::from("wasm-ld")
+}
+
 pub fn write_linked_output(
     k1: &TypedProgram,
     module_name: &str,
@@ -1337,20 +1362,13 @@ pub fn write_linked_output(
     let filc = k1.config.filc;
     let clang_time = std::time::Instant::now();
 
-    let mut build_cmd = if filc {
-        let filc_home = std::env::var("K1_FILC").map(PathBuf::from).map_err(|_| {
-            anyhow::anyhow!("--filc requires K1_FILC to point at a Fil-C installation")
-        })?;
-        std::process::Command::new(filc_home.join("build/bin/clang"))
-    } else {
-        std::process::Command::new("cc")
-    };
     // Fil-C consumes llvm IR rather than the object file
     let object_name = if filc {
         kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("{module_name}.ll"))
     } else {
         kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("{module_name}.o"))
     };
+
     let out_name = match kind {
         LinkOutputKind::Executable => {
             kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, module_name)
@@ -1361,6 +1379,53 @@ pub fn write_linked_output(
             out_dir,
             format_args!("lib{module_name}.{}", target.target_os().dylib_ext()),
         ),
+    };
+
+    if target.target_os() == TargetOs::Wasm {
+        let mut ld_cmd = std::process::Command::new(wasm_ld_path(k1));
+        ld_cmd.arg("-mwasm64");
+        ld_cmd.arg(object_name.as_str());
+        for module_libs in collect_all_module_libs(k1) {
+            if !module_libs.libs.is_empty() {
+                ld_cmd.arg(format!("-L{}", module_libs.libs_dir));
+            }
+            for link_arg in &module_libs.link_args {
+                ld_cmd.arg(link_arg);
+            }
+            for (link_type, filename) in &module_libs.libs {
+                match link_type {
+                    LibRefLinkType::Default => ld_cmd.arg(format!("-l{filename}")),
+                    _ => ld_cmd.arg(filename),
+                };
+            }
+        }
+        // stack-first makes null (0) deref trap
+        ld_cmd.arg("--stack-first");
+        ld_cmd.args(["-z", "stack-size=8388608"]);
+        ld_cmd.args(extra_options);
+        ld_cmd.arg("-o");
+        ld_cmd.arg(out_name.as_str());
+
+        log::debug!("Build Command: {:?}", ld_cmd);
+        let build_status = ld_cmd.status()?;
+        if !build_status.success() {
+            eprintln!("Build failed!");
+            bail!("linking {out_name} with wasm-ld failed");
+        }
+        let elapsed = clang_time.elapsed();
+        if k1.config.chatty {
+            eprintln!("link {out_name} took {}ms", elapsed.as_millis());
+        }
+        return Ok(());
+    }
+
+    let mut build_cmd = if filc {
+        let filc_home = std::env::var("K1_FILC").map(PathBuf::from).map_err(|_| {
+            anyhow::anyhow!("--filc requires K1_FILC to point at a Fil-C installation")
+        })?;
+        std::process::Command::new(filc_home.join("build/bin/clang"))
+    } else {
+        std::process::Command::new("cc")
     };
     if kind == LinkOutputKind::Dylib {
         match target.target_os() {
@@ -1386,11 +1451,9 @@ pub fn write_linked_output(
         }
     }
 
-    let _macos_version_flag = if target.target_os() == TargetOs::MacOs {
-        Some(format!("-mmacosx-version-min={}", MAC_SDK_VERSION))
-    } else {
-        None
-    };
+    if target.target_os() == TargetOs::MacOs {
+        build_cmd.arg(format!("-mmacosx-version-min={}", MAC_SDK_VERSION));
+    }
 
     if filc {
         build_cmd.arg("-O2");
@@ -1412,16 +1475,6 @@ pub fn write_linked_output(
     };
     if sanitize {
         build_cmd.arg("-fsanitize=address,undefined");
-    }
-
-    match target.target_os() {
-        TargetOs::MacOs => {
-            //build_cmd.arg(macos_version_flag.as_ref().unwrap());
-            //build_cmd.arg("--sysroot");
-            //build_cmd.arg(MAC_SDK_SYSROOT);
-        }
-        TargetOs::Linux => {}
-        TargetOs::Wasm => {}
     }
 
     // Our actual compiled k1 code!
@@ -1779,6 +1832,7 @@ fn write_reload_dylib(
     let mut link_cmd = std::process::Command::new("cc");
     match target_os {
         TargetOs::MacOs => {
+            link_cmd.arg(format!("-mmacosx-version-min={}", MAC_SDK_VERSION));
             link_cmd.arg("-dynamiclib");
             link_cmd.arg("-undefined").arg("dynamic_lookup");
         }
@@ -1803,6 +1857,7 @@ fn write_reload_dylib(
 // Eventually, we want to return output and exit code to the application
 pub fn run_compiled_program(
     idents: &IdentPool,
+    target: Target,
     out_dir: StringId,
     program_home_dir: StringId,
     module_name: &str,
@@ -1814,7 +1869,14 @@ pub fn run_compiled_program(
         out_dir,
         format_args!("{}{}", module_name, if is_test { "_test" } else { "" }),
     );
-    let mut run_cmd = std::process::Command::new(exe_path);
+    let mut run_cmd = if target.target_os() == TargetOs::Wasm {
+        let mut cmd = std::process::Command::new("wasmtime");
+        cmd.args(["run", "-W", "memory64"]);
+        cmd.arg(exe_path);
+        cmd
+    } else {
+        std::process::Command::new(exe_path)
+    };
     run_cmd.args(program_args);
     run_cmd.current_dir(idents.get_string(program_home_dir));
     log::debug!("Run Command: {:?}", run_cmd);

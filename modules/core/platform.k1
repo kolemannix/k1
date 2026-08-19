@@ -7,7 +7,13 @@ ns platform {
     let PROT_READ: c-int = 0x1
     let PROT_WRITE: c-int = 0x2
     let MAP_PRIVATE: c-int = 0x0002
-    let MAP_ANON: c-int = k1/os #is { :macos -> 0x1000, :linux or :wasm -> 0x20 }
+    // mmap runs on `os` for posix targets, but on `host-os` for wasm targets
+    // (static execution is the only path that reaches it there)
+    let MAP_ANON: c-int = k1/os #is {
+      :macos -> 0x1000,
+      :linux -> 0x20,
+      :wasm -> k1/host-os #is { :macos -> 0x1000, :linux or :wasm -> 0x20 }
+    }
     let MAP_FAILED: i64 = -1
     fn(extern("mmap")) mmap(addr: ptr, len: size, prot: i32, flags: c-int, fd: c-int, offset: size): ptr
     fn(extern("munmap")) munmap(addr: ptr, len: size): i32
@@ -36,16 +42,141 @@ ns platform {
     fn(extern("perror")) perror(msg: ptr)
   }
 
-  fn errno(): c-int { posix/errno() }
-  let EINTR: c-int = 4
+  // WASI preview1
+  ns wasi {
+    fn(extern("proc_exit"), lib("wasi_snapshot_preview1")) proc-exit(code: i32): never
+    fn(extern("fd_write"), lib("wasi_snapshot_preview1")) fd-write(fd: i32, iovs: u32, iovs-len: u32, nwritten: u32): i32
+    fn(extern("fd_read"), lib("wasi_snapshot_preview1")) fd-read(fd: i32, iovs: u32, iovs-len: u32, nread: u32): i32
+    fn(extern("fd_fdstat_get"), lib("wasi_snapshot_preview1")) fd-fdstat-get(fd: i32, stat: u32): i32
+    fn(extern("environ_sizes_get"), lib("wasi_snapshot_preview1")) environ-sizes-get(count: u32, buf-size: u32): i32
+    fn(extern("environ_get"), lib("wasi_snapshot_preview1")) environ-get(environ: u32, buf: u32): i32
 
-  fn strlen(c-str: ptr): size { posix/strlen(c-str) }
+    let EINTR: i32 = 27
+    let FILETYPE_CHARACTER_DEVICE: u8 = 2
+
+    type iovec = { buf: u32, len: u32 }
+
+    let(mutable) errno-value: c-int = 0
+
+    fn a32(p: ptr): u32 {
+      p.as[size].as[u32]
+    }
+
+    fn write(file-no: c-int, data: ptr, count: c-sizet): i64 {
+      let iov: iovec = .{ buf = a32(data), len = count.as[u32] }
+      let nwritten: u32 = 0
+      let err = fd-write(file-no, a32(iov.&.as[ptr]), 1, a32(nwritten.&.as[ptr]))
+      if err != 0 {
+        errno-value = err
+        -1
+      } else nwritten.as[i64]
+    }
+
+    fn read(file-no: c-int, buffer: ptr, count: c-sizet): i64 {
+      let iov: iovec = .{ buf = a32(buffer), len = count.as[u32] }
+      let nread: u32 = 0
+      let err = fd-read(file-no, a32(iov.&.as[ptr]), 1, a32(nread.&.as[ptr]))
+      if err != 0 {
+        errno-value = err
+        -1
+      } else nread.as[i64]
+    }
+
+    fn is-tty(file-no: c-int): bool {
+      let stat = array/zeroed[u8, 24]()
+      if fd-fdstat-get(file-no, a32(stat.&.as[ptr])) != 0 return false
+      stat.&.as[ptr].r[u8].* == FILETYPE_CHARACTER_DEVICE
+    }
+
+    fn env-get(name: string): ?string {
+      let count: u32 = 0
+      let buf-size: u32 = 0
+      if environ-sizes-get(a32(count.&.as[ptr]), a32(buf-size.&.as[ptr])) != 0 return :none
+      if count == 0 return :none
+      let entry-ptrs = mem/alloc-layout(count.as[size] * 4, 4)
+      let entry-bytes = mem/alloc-layout(buf-size.as[size], 1)
+      if environ-get(a32(entry-ptrs), a32(entry-bytes)) != 0 return :none
+      for i in 0.until(count.as[size]) {
+        let entry-addr = entry-ptrs.add-bytes(i * 4).r[u32].*
+        let entry = string/wrap-c(entry-addr.as[size].as[ptr])
+        if entry.starts-with(name) and entry.drop(name.len()).starts-with("=") {
+          return :some(entry.drop(name.len() + 1))
+        }
+      }
+      :none
+    }
+  }
+
+  fn errno(): c-int {
+    k1/os #is {
+      :macos or :linux -> posix/errno(),
+      :wasm -> if k1/is-static posix/errno() else wasi/errno-value
+    }
+  }
+  let EINTR: c-int = k1/os #is { :macos or :linux -> 4, :wasm -> wasi/EINTR }
+
+  fn strlen(c-str: ptr): size {
+    k1/os #is {
+      :macos or :linux -> posix/strlen(c-str),
+      :wasm -> if k1/is-static posix/strlen(c-str) else {
+        let n = 0: size
+        while c-str.add-bytes(n).r[u8].* != 0u8 {
+          n = n + 1
+        }
+        n
+      }
+    }
+  }
 
   ns memory {
 
     type region = { base: ptr, len: size }
 
-    fn acquire(min-size: size): region {
+    let PAGE-SIZE: size = 65536
+
+    fn(intern("llvm.wasm.memory.grow.i64")) wasm-memory-grow(mem: i32, delta-pages: i64): i64
+
+    // memory.grow can never shrink, so released regions form an intrusive
+    // free list in their own first bytes: next at offset 0, len at offset 8
+    let(mutable) wasm-freelist: ptr = 0.as[ptr]
+
+    fn wasm-grow-fresh(min-size: size): region {
+      let pages = (min-size + PAGE-SIZE - 1) / PAGE-SIZE
+      let prev-pages = wasm-memory-grow(0, pages)
+      if prev-pages == -1 crash("wasm memory.grow failed")
+      .{ base = (prev-pages * PAGE-SIZE).as[ptr], len = pages * PAGE-SIZE }
+    }
+
+    // Like mmap, the page-granular rounding is invisible: callers see
+    // exactly the min-size they asked for
+    fn wasm-acquire(min-size: size): region {
+      let prev = ptr/null
+      let cur = wasm-freelist
+      while not cur.is-null() {
+        let next = cur.r[ptr].*
+        let len = cur.add-bytes(8).r[size].*
+        if len >= min-size {
+          if prev.is-null() {
+            wasm-freelist = next
+          } else {
+            prev.rw[ptr].* = next
+          }
+          mem/set(dst = cur, value = 0, count = len)
+          return .{ base = cur, len = min-size }
+        }
+        prev = cur
+        cur = next
+      }
+      .{ base = wasm-grow-fresh(min-size).base, len = min-size }
+    }
+
+    fn wasm-release(r: region) {
+      r.base.rw[ptr].* = wasm-freelist
+      r.base.add-bytes(8).rw[size].* = r.len
+      wasm-freelist = r.base
+    }
+
+    fn posix-acquire(min-size: size): region {
       let rw = posix/PROT_READ | posix/PROT_WRITE
       let private-anon = posix/MAP_PRIVATE | posix/MAP_ANON
       let addr = posix/mmap(
@@ -63,61 +194,166 @@ ns platform {
       .{ base = addr, len = min-size }
     }
 
+    fn acquire(min-size: size): region {
+      k1/os #is {
+        :macos or :linux -> posix-acquire(min-size),
+        :wasm -> if k1/is-static posix-acquire(min-size) else wasm-acquire(min-size)
+      }
+    }
+
     fn release(r: region) {
-      let result = posix/munmap(r.base, r.len)
-      if result == -1 crash("munmap of region at ${r.base} x ${r.len} failed")
+      k1/os #is {
+        :macos or :linux -> {
+          let result = posix/munmap(r.base, r.len)
+          if result == -1 crash("munmap of region at ${r.base} x ${r.len} failed")
+        },
+        :wasm -> if k1/is-static {
+          let result = posix/munmap(r.base, r.len)
+          if result == -1 crash("munmap of region at ${r.base} x ${r.len} failed")
+        } else wasm-release(r)
+      }
     }
 
   }
 
+  // The wasm heap is a grow-only bump with a size header per allocation;
+  // free is a no-op and carved chunks are never reused, which also keeps
+  // every allocation zeroed (fresh wasm pages are zero)
+  ns wasm-heap {
+    let CHUNK: size = 1048576
+    let HEADER: size = 16
+    let(mutable) cur: size = 0
+    let(mutable) end: size = 0
+
+    fn alloc(size-arg: size): ptr {
+      let needed = HEADER + ((size-arg + 15) & (0 - 16))
+      if cur + needed > end {
+        let grow-size = if needed > CHUNK needed else CHUNK
+        let r = memory/wasm-grow-fresh(grow-size)
+        cur = r.base.as[size]
+        end = cur + r.len
+      }
+      let base = cur
+      base.as[ptr].rw[size].* = size-arg
+      cur = base + needed
+      (base + HEADER).as[ptr]
+    }
+
+    fn realloc(old-ptr: ptr, new-size: size): ptr {
+      let old-size = old-ptr.sub-bytes(HEADER).r[size].*
+      if new-size <= old-size return old-ptr
+      let new-ptr = alloc(new-size)
+      mem/copy(dst = new-ptr, src = old-ptr, count = old-size)
+      new-ptr
+    }
+  }
+
   ns heap {
-    fn alloc(size: size): ptr { posix/calloc(1, size) }
-    fn realloc(old-ptr: ptr, new-size: size): ptr { posix/realloc(old-ptr, new-size) }
-    fn free(p: ptr) { posix/free(p) }
+    fn alloc(size: size): ptr {
+      k1/os #is {
+        :macos or :linux -> posix/calloc(1, size),
+        :wasm -> if k1/is-static posix/calloc(1, size) else wasm-heap/alloc(size)
+      }
+    }
+    fn realloc(old-ptr: ptr, new-size: size): ptr {
+      k1/os #is {
+        :macos or :linux -> posix/realloc(old-ptr, new-size),
+        :wasm -> if k1/is-static posix/realloc(old-ptr, new-size) else wasm-heap/realloc(old-ptr, new-size)
+      }
+    }
+    fn free(p: ptr) {
+      k1/os #is {
+        :macos or :linux -> posix/free(p),
+        :wasm -> if k1/is-static posix/free(p) else {}
+      }
+    }
   }
 
   ns io {
     fn write(file-no: c-int, data: ptr, count: c-sizet): i64 {
-      posix/write(file-no, data, count)
+      k1/os #is {
+        :macos or :linux -> posix/write(file-no, data, count),
+        :wasm -> if k1/is-static posix/write(file-no, data, count) else wasi/write(file-no, data, count)
+      }
     }
     fn read(file-no: c-int, buffer: ptr, count: c-sizet): i64 {
-      posix/read(file-no, buffer, count)
+      k1/os #is {
+        :macos or :linux -> posix/read(file-no, buffer, count),
+        :wasm -> if k1/is-static posix/read(file-no, buffer, count) else wasi/read(file-no, buffer, count)
+      }
     }
     fn is-tty(file-no: c-int): bool {
-      posix/isatty(file-no) == 1
+      k1/os #is {
+        :macos or :linux -> posix/isatty(file-no) == 1,
+        :wasm -> if k1/is-static posix/isatty(file-no) == 1 else wasi/is-tty(file-no)
+      }
     }
     fn open-to-read(path: ptr): c-int {
-      posix/open(path, posix/O_RDONLY)
+      k1/os #is {
+        :macos or :linux -> posix/open(path, posix/O_RDONLY),
+        :wasm -> if k1/is-static posix/open(path, posix/O_RDONLY) else crash("file io is not supported on wasm")
+      }
     }
     let create-mode-rw-all: c-int = 0x1B6
     fn open-to-write(path: ptr): c-int {
-      posix/creat(path, create-mode-rw-all)
+      k1/os #is {
+        :macos or :linux -> posix/creat(path, create-mode-rw-all),
+        :wasm -> if k1/is-static posix/creat(path, create-mode-rw-all) else crash("file io is not supported on wasm")
+      }
     }
     fn close(fd: c-int) {
-      let _ = posix/close(fd)
+      k1/os #is {
+        :macos or :linux -> { let _ = posix/close(fd) },
+        :wasm -> if k1/is-static { let _ = posix/close(fd) } else crash("file io is not supported on wasm")
+      }
     }
     fn file-size(fd: c-int): i64 {
-      let end = posix/lseek(fd, 0, posix/SEEK_END)
-      let _ = posix/lseek(fd, 0, posix/SEEK_SET)
-      end
+      k1/os #is {
+        :macos or :linux -> {
+          let end = posix/lseek(fd, 0, posix/SEEK_END)
+          let _ = posix/lseek(fd, 0, posix/SEEK_SET)
+          end
+        },
+        :wasm -> if k1/is-static {
+          let end = posix/lseek(fd, 0, posix/SEEK_END)
+          let _ = posix/lseek(fd, 0, posix/SEEK_SET)
+          end
+        } else crash("file io is not supported on wasm")
+      }
     }
     fn exists(path: ptr): bool {
-      posix/access(path, 0) == 0
+      k1/os #is {
+        :macos or :linux -> posix/access(path, 0) == 0,
+        :wasm -> if k1/is-static posix/access(path, 0) == 0 else crash("file io is not supported on wasm")
+      }
     }
   }
 
   ns process {
     fn exit(code: i32): never {
       if k1/is-static k1/exit(code)
-      else posix/exit(code)
+      else k1/os #is {
+        :macos or :linux -> posix/exit(code),
+        :wasm -> wasi/proc-exit(code)
+      }
     }
     fn abort(): never {
-      posix/abort()
+      k1/os #is {
+        :macos or :linux -> posix/abort(),
+        // proc_exit rejects codes outside [0..126)
+        :wasm -> if k1/is-static posix/abort() else wasi/proc-exit(101)
+      }
     }
   }
 
   ns env {
     fn get(name: string): ?string {
+      k1/os #is {
+        :macos or :linux -> posix-get(name),
+        :wasm -> if k1/is-static posix-get(name) else wasi/env-get(name)
+      }
+    }
+    fn posix-get(name: string): ?string {
       let v = posix/getenv(name.to-c-tmp().ptr)
       if v.is-null() :none else :some(string/wrap-c(v))
     }

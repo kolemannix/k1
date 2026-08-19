@@ -689,9 +689,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         if let Some((_, function_value)) = main_function {
             self.builder.unset_current_debug_location();
-            let entrypoint_fn_type =
-                self.ctx.i32_type().fn_type(&function_value.get_type().get_param_types(), false);
-            let entrypoint = self.llvm_module.add_function("main", entrypoint_fn_type, None);
+            let is_wasm = self.k1.config.target.target_os() == compiler::TargetOs::Wasm;
+            let (entrypoint_name, entrypoint_fn_type) = if is_wasm {
+                if !function_value.get_type().get_param_types().is_empty() {
+                    kbail!(self.k1, SpanId::NONE, "main with parameters is not supported on wasm");
+                }
+                ("_start", self.ctx.void_type().fn_type(&[], false))
+            } else {
+                (
+                    "main",
+                    self.ctx
+                        .i32_type()
+                        .fn_type(&function_value.get_type().get_param_types(), false),
+                )
+            };
+            let entrypoint =
+                self.llvm_module.add_function(entrypoint_name, entrypoint_fn_type, None);
             let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
             self.builder.position_at_end(entry_block);
             let entrypoint_params = entrypoint.get_params();
@@ -710,9 +723,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 None => self.ctx.i32_type().const_zero().as_basic_value_enum(),
                 Some(v) => v,
             };
-            self.builder
-                .build_call(program_exit_value.unwrap(), &[exit_code.into()], "")
-                .unwrap();
+            self.builder.build_call(program_exit_value.unwrap(), &[exit_code.into()], "").unwrap();
             self.builder.build_unreachable().unwrap();
         }
 
@@ -778,12 +789,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 };
 
                 // an array of { symbol: cstr, addr slot the loader patches: ptr }.
-                entry_values.push(
-                    entry_type.const_named_struct(&[
-                        symbol_ptr.into(),
-                        slot_global.as_pointer_value().into(),
-                    ]),
-                );
+                entry_values.push(entry_type.const_named_struct(&[
+                    symbol_ptr.into(),
+                    slot_global.as_pointer_value().into(),
+                ]));
             }
             let entries_array = entry_type.const_array(&entry_values);
             let entries_global =
@@ -902,7 +911,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     /// The host defines it (null until the ns is loaded); dylibs declare it
     /// and bind to the host's copy at dlopen.
     fn reload_fn_addr_global(&mut self, function_id: FunctionId) -> GlobalValue<'ctx> {
-        let name = format!("__k1_reload_fn_addr_{}", self.make_reloadable_function_symbol(function_id));
+        let name =
+            format!("__k1_reload_fn_addr_{}", self.make_reloadable_function_symbol(function_id));
         if let Some(existing) = self.llvm_module.get_global(&name) {
             return existing;
         }
@@ -919,7 +929,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     /// a scope's namespace, so plain qualified names cannot collide
     fn make_reloadable_global_symbol(&self, global_id: TypedGlobalId) -> String {
         let variable = self.k1.variables.get(self.k1.globals.get(global_id).variable_id);
-        Cg::mangle(self.k1.make_qualified_name(variable.owner_scope, variable.name, None, "/", true))
+        Cg::mangle(self.k1.make_qualified_name(
+            variable.owner_scope,
+            variable.name,
+            None,
+            "/",
+            true,
+        ))
     }
 
     /// A reloadable global's current storage: the `ptr` slot the loader
@@ -962,8 +978,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
         let crash_fn = self.crash_unloaded_fn_value()?;
         let ptr_type = self.builtin_types.ptr;
-        let fn_type =
-            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), ptr_type.into()], false);
+        let fn_type = ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), ptr_type.into()], false);
         let f = self.llvm_module.add_function(
             "__k1_reload_global_load",
             fn_type,
@@ -1016,10 +1031,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let global = self.k1.globals.get(global_id);
         let global_name =
             self.k1.ident_str(self.k1.variables.get(global.variable_id).name).to_string();
-        let ns_name = self
-            .k1
-            .ident_str(self.k1.namespaces.get(global.reload_ns.unwrap()).name)
-            .to_string();
+        let ns_name =
+            self.k1.ident_str(self.k1.namespaces.get(global.reload_ns.unwrap()).name).to_string();
         let ns_cstr = self.cstring_constant(&ns_name);
         let name_cstr = self.cstring_constant(&global_name);
         let call = self
@@ -1376,11 +1389,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 let llvm_offset =
                                     td.offset_of_element(&struct_type, i as u32).unwrap();
                                 assert_eq!(
-                                    llvm_offset,
-                                    phys_field.offset as u64,
+                                    llvm_offset, phys_field.offset as u64,
                                     "K1/LLVM field offset mismatch in {}, field {}",
-                                    type_name,
-                                    i
+                                    type_name, i
                                 );
                             }
                             let llvm_layout = self.layout_per_llvm(&struct_type);
@@ -1845,8 +1856,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 // struct occupies its leading bytes
                 let abi_ty = abi_value.get_type();
                 let dst_ptr = self.build_alloca(abi_ty, "abi_pair_storage");
-                let abi_align =
-                    self.llvm_machine.get_target_data().get_abi_alignment(&abi_ty);
+                let abi_align = self.llvm_machine.get_target_data().get_abi_alignment(&abi_ty);
                 let align = abi_align.max(cg_ty.rich_repr_layout().align);
                 dst_ptr.as_instruction().unwrap().set_alignment(align).unwrap();
                 if self.k1.config.filc && self.pt_has_pointer_in_union(cg_ty.pt()) {
@@ -1934,11 +1944,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.emit_lifetime_marker(false, integer_ptr, dst_int_size);
                 integer_value
             }
-            AbiParamMapping::StructAsPointer => self.load_at_k1_align(
-                self.builtin_types.ptr,
-                k1_value.into_pointer_value(),
-                cg_ty,
-            ),
+            AbiParamMapping::StructAsPointer => {
+                self.load_at_k1_align(self.builtin_types.ptr, k1_value.into_pointer_value(), cg_ty)
+            }
             AbiParamMapping::StructByEightbytePair { .. }
             | AbiParamMapping::StructByIntPairArray => {
                 // The ABI type's fields can extend past the struct's own size (a
@@ -2027,10 +2035,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         cg_ty: &CgType<'ctx>,
     ) -> BasicValueEnum<'ctx> {
         let load = self.builder.build_load(llvm_type, ptr, "").unwrap();
-        load.as_instruction_value()
-            .unwrap()
-            .set_alignment(cg_ty.rich_repr_layout().align)
-            .unwrap();
+        load.as_instruction_value().unwrap().set_alignment(cg_ty.rich_repr_layout().align).unwrap();
         load
     }
 
@@ -2064,10 +2069,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let function = match self.llvm_module.get_function(name) {
             Some(f) => f,
             None => {
-                let fn_type = self.ctx.void_type().fn_type(
-                    &[self.ctx.i64_type().into(), self.builtin_types.ptr.into()],
-                    false,
-                );
+                let fn_type = self
+                    .ctx
+                    .void_type()
+                    .fn_type(&[self.ctx.i64_type().into(), self.builtin_types.ptr.into()], false);
                 self.llvm_module.add_function(name, fn_type, None)
             }
         };
@@ -3898,7 +3903,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         );
         // K1 has no unwinding: no invoke, no landingpad, anywhere. Extern C
         // decls get it too; LLVM cannot infer it across declaration boundaries
-        function_value.add_attribute(AttributeLoc::Function, self.make_enum_attribute("nounwind", 0));
+        function_value
+            .add_attribute(AttributeLoc::Function, self.make_enum_attribute("nounwind", 0));
         // Keep frame pointers so backtrace() can walk K1 frames
         function_value.add_attribute(
             AttributeLoc::Function,
@@ -3907,6 +3913,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if ir_fn.fn_type.diverges {
             function_value
                 .add_attribute(AttributeLoc::Function, self.make_enum_attribute("noreturn", 0));
+        }
+
+        if self.k1.config.target.target_os() == compiler::TargetOs::Wasm {
+            if let TyperLinkage::External { lib_name: Some(lib_name), .. } = typed_function_linkage
+            {
+                function_value.add_attribute(
+                    AttributeLoc::Function,
+                    self.ctx
+                        .create_string_attribute("wasm-import-module", self.k1.ident_str(lib_name)),
+                );
+                function_value.add_attribute(
+                    AttributeLoc::Function,
+                    self.ctx.create_string_attribute("wasm-import-name", &llvm_name),
+                );
+            }
         }
         if is_sret {
             for attr in self.make_sret_attributes(&llvm_function_type.return_logical_cg_type) {
@@ -4771,7 +4792,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         global.set_initializer(&value);
         global.set_constant(constant);
         global.set_linkage(linkage);
-        if is_tls {
+
+        // Single-threaded wasm: tls globals are plain globals
+        let is_tls_and_supported =
+            is_tls && self.k1.config.target.target_os() != compiler::TargetOs::Wasm;
+        if is_tls_and_supported {
             global.set_thread_local(true);
             let mode = if self.k1.program_settings.executable {
                 ThreadLocalMode::LocalExecTLSModel
@@ -4973,14 +4998,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         filc: bool,
         k1_target: compiler::Target,
     ) -> TargetMachine {
-        // Target::initialize_aarch64(&InitializationConfig::default());
         Target::initialize_native(&InitializationConfig::default()).unwrap();
-        // let triple_str = &format!("arm64-apple-macosx{}", MAC_SDK_VERSION);
-        // let triple = TargetTriple::create(triple_str);
+        Target::initialize_webassembly(&InitializationConfig::default());
         let triple = if filc {
             // Fil-C's clang targets the unknown vendor; hosts often default to
             // pc and clang warns on the mismatch
             inkwell::targets::TargetTriple::create("x86_64-unknown-linux-gnu")
+        } else if k1_target == compiler::Target::Wasm64 {
+            inkwell::targets::TargetTriple::create("wasm64-unknown-wasi")
+        } else if k1_target == compiler::Target::MacOsArm64 {
+            // Versioned triple so objects carry the supported minimum, not the
+            // build host's OS version
+            inkwell::targets::TargetTriple::create(&format!(
+                "arm64-apple-macosx{}",
+                compiler::MAC_SDK_VERSION
+            ))
         } else {
             TargetMachine::get_default_triple()
         };
@@ -4999,18 +5031,30 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 // SSE2 is the x86-64 baseline
                 compiler::Target::LinuxIntel64 => ("x86-64".to_string(), "".to_string()),
                 compiler::Target::MacOsArm64 => ("generic".to_string(), "+neon".to_string()),
-                compiler::Target::Wasm64 => ("generic".to_string(), "+simd128".to_string()),
+                compiler::Target::Wasm64 => (
+                    "generic".to_string(),
+                    // bulk-memory lets llvm.memcpy/memmove/memset lower to
+                    // memory.copy/memory.fill instead of libc calls
+                    "+simd128,+bulk-memory,+sign-ext,+mutable-globals,+nontrapping-fptoint"
+                        .to_string(),
+                ),
             }
         };
         let opt_level =
             if !optimize { OptimizationLevel::None } else { OptimizationLevel::Aggressive };
+        // PIC wasm is for -shared modules; executables must be non-PIC
+        let reloc_mode = if k1_target == compiler::Target::Wasm64 {
+            inkwell::targets::RelocMode::Static
+        } else {
+            inkwell::targets::RelocMode::PIC
+        };
         let machine = target
             .create_target_machine(
                 &triple,
                 &cpu,
                 &features,
                 opt_level,
-                inkwell::targets::RelocMode::PIC,
+                reloc_mode,
                 inkwell::targets::CodeModel::Default,
             )
             .unwrap();

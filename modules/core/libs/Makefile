@@ -9,12 +9,14 @@ ifneq ($(OS),Darwin)
 BT_OBJS := $(BT_SRCS:%.c=bt-%.o)
 endif
 
-.PHONY: all build clean filc
+LLVM_BIN := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))../../../llvm/install-llvm/bin)
+
+.PHONY: all build clean filc wasm
 
 build: libk1rt.a libk1rt.$(DYLIB_EXT) libk1rt-freestanding.a
 
 clean:
-	rm -f *.o libk1rt.a libk1rt.so libk1rt.dylib libk1rt-freestanding.a libk1rt-filc.a
+	rm -f *.o libk1rt.a libk1rt.so libk1rt.dylib libk1rt-freestanding.a libk1rt-filc.a libk1rt-wasm.a
 
 k1rt.o: k1rt.c $(HEADERS)
 	$(CC) -fPIC -c k1rt.c -o k1rt.o
@@ -36,6 +38,18 @@ k1rt-freestanding.o: k1rt.c $(HEADERS)
 
 libk1rt-freestanding.a: k1rt-freestanding.o
 	ar rcs libk1rt-freestanding.a k1rt-freestanding.o
+
+# wasm64 variant for `k1 --target wasm64` builds; needs the repo LLVM's clang
+wasm: libk1rt-wasm.a
+
+k1rt-wasm.o: k1rt.c $(HEADERS)
+	$(LLVM_BIN)/clang --target=wasm64 -O2 -ffreestanding -nostdinc \
+	  -isystem $(LLVM_BIN)/../lib/clang/21/include -isystem wasm-include \
+	  -fno-stack-protector -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
+	  -mbulk-memory -msign-ext -mnontrapping-fptoint -c k1rt.c -o k1rt-wasm.o
+
+libk1rt-wasm.a: k1rt-wasm.o
+	$(LLVM_BIN)/llvm-ar rcs libk1rt-wasm.a k1rt-wasm.o
 
 # Fil-C variant for `k1 --filc` builds; requires K1_FILC pointing at a Fil-C
 # installation (Linux/x86_64 only)

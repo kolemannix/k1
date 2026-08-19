@@ -7693,6 +7693,14 @@ impl TypedProgram {
                     StaticValue::Enum(expected_type_id, TypedIntValue::U8(os_tag_value));
                 return Ok(self.static_values.add(static_enum));
             }
+            "host-os" => {
+                let host_os = crate::compiler::detect_host_target()
+                    .map(|t| t.target_os())
+                    .unwrap_or(self.config.target.target_os());
+                let static_enum =
+                    StaticValue::Enum(expected_type_id, TypedIntValue::U8(host_os as u8));
+                return Ok(self.static_values.add(static_enum));
+            }
             "simd-bytes" => {
                 let width = self.config.simd_bytes as i64;
                 return Ok(self.static_values.add(StaticValue::Int(TypedIntValue::I64(width))));
@@ -23000,13 +23008,9 @@ impl TypedProgram {
         }
 
         let lib_name_str = self.ast.idents.get_string(lib_name_ident);
-        let ext = match self.config.target.target_os() {
-            crate::compiler::TargetOs::Linux => "so",
-            crate::compiler::TargetOs::MacOs => "dylib",
-            crate::compiler::TargetOs::Wasm => {
-                kbail!(self, span, "Dynamic libraries are not supported on the wasm target");
-            }
-        };
+        // nocommit: DRY up with other host_os detection spot; put it in config somewhere and re-use
+        // rather than if cfg!'ing it here
+        let ext = if cfg!(target_os = "macos") { "dylib" } else { "so" };
         debug!("cwd is: {}", std::env::current_dir().unwrap().display());
         debug!("src_path is: {}", self.ast.idents.get_string(self.config.src_path));
 

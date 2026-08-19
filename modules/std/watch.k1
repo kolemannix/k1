@@ -83,18 +83,23 @@ ns watch {
   type watcher = { fd: i32, entries: list[entry] }
 
   fn create(): result[watcher, string] {
-    let fd: i32 = k1/os #is {
-      :macos -> kq/kqueue(),
-      :linux -> inotify/inotify_init1(0),
-      :wasm -> #static crash("watch is not available on wasm"),
-    }
-    if fd < 0 return :err "watch/create failed: ${libc/errno-k1-string()}"
-    :ok .{ fd = fd, entries = list/empty[entry]() }
+    // nocommit: rather than gating every function in this file, do something else. Can you gate the entire ns? And the wasm one just as 'unavailable' stubs?
+    #if k1/os-posix {
+      let fd: i32 = k1/os #is {
+        :macos -> kq/kqueue(),
+        :linux -> inotify/inotify_init1(0),
+        :wasm -> crash("watch is not available on wasm"),
+      }
+      if fd < 0 return :err "watch/create failed: ${libc/errno-k1-string()}"
+      :ok .{ fd = fd, entries = list/empty[entry]() }
+    } else crash("watch is not available on wasm")
   }
 
   ns for watcher {
 
     fn add(self: *mut watcher, path: string): result[empty, string] {
+      #if not k1/os-posix crash("watch is not available on wasm")
+      else {
       let id: i64 = k1/os #is {
         :macos -> {
           let file-fd = posix/open(path.to-c-tmp().ptr, kq/O_EVTONLY)
@@ -125,15 +130,18 @@ ns watch {
           }
           wd.as[i64]
         },
-        :wasm -> #static crash("watch is not available on wasm"),
+        :wasm -> crash("watch is not available on wasm"),
       }
       self.entries.push(.{ path = path, id = id })
       :ok
+      }
     }
 
     // Blocks until at least one watched path changes. Spurious extra events
     // are normal; callers that care should compare content, not counts.
     fn wait(self: *mut watcher): result[list[event], string] {
+      #if not k1/os-posix crash("watch is not available on wasm")
+      else {
       let events = list/empty[event]()
       k1/os #is {
         :macos -> {
@@ -180,22 +188,26 @@ ns watch {
             offset = offset + types/stride[inotify/event-t]() + ev.len.as[size]
           }
         },
-        :wasm -> #static crash("watch is not available on wasm"),
+        :wasm -> crash("watch is not available on wasm"),
       }
       :ok events
+      }
     }
 
     fn close(self: *mut watcher) {
+      #if not k1/os-posix crash("watch is not available on wasm")
+      else {
       k1/os #is {
         // vnode fds are per-entry on kqueue
         :macos -> for entry in self.entries.as-span() {
           posix/close(entry.id.as[i32])
         },
         :linux -> .{},
-        :wasm -> #static crash("watch is not available on wasm"),
+        :wasm -> crash("watch is not available on wasm"),
       }
       posix/close(self.fd)
       self.entries.clear()
+      }
     }
 
   }
