@@ -812,6 +812,7 @@ dependencies = [
  "ahash",
  "anyhow",
  "bitflags 2.10.0",
+ "cc",
  "clap",
  "colored",
  "env_logger",

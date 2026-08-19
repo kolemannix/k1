@@ -1328,23 +1328,47 @@ fn collect_all_module_libs(k1: &TypedProgram) -> Vec<ModuleLibs> {
     out
 }
 
-// A PATH wasm-ld can predate table64 (brew lld 18) and silently emit invalid
-// wasm64 modules; prefer our own LLVM's linker
-// This is all just garbage / workaround stuff (except for the actual path resolution) until we
-// start shipping lld
-fn wasm_ld_path(k1: &TypedProgram) -> PathBuf {
-    if let Ok(llvm_prefix) = std::env::var("LLVM_SYS_211_PREFIX") {
-        let candidate = PathBuf::from(llvm_prefix).join("bin/wasm-ld");
-        if candidate.exists() {
-            return candidate;
+fn push_module_lib_args(k1: &TypedProgram, args: &mut Vec<String>) {
+    for module_libs in collect_all_module_libs(k1) {
+        if !module_libs.libs.is_empty() {
+            args.push(format!("-L{}", module_libs.libs_dir));
+        }
+        for link_arg in &module_libs.link_args {
+            args.push(link_arg.clone());
+        }
+        for (link_type, filename) in &module_libs.libs {
+            match link_type {
+                // Link via linker arg, since the name has no extension
+                LibRefLinkType::Default => args.push(format!("-l{filename}")),
+                // 'Link' via direct arg, since its an exact filepath
+                _ => args.push(filename.clone()),
+            };
         }
     }
-    let home_candidate = Path::new(k1.ast.idents.get_string(k1.config.k1_home))
-        .join("llvm/install-llvm/bin/wasm-ld");
-    if home_candidate.exists() {
-        return home_candidate;
+}
+
+unsafe extern "C" {
+    fn k1_lld_link(args: *const *const std::ffi::c_char, num_args: usize) -> i32;
+}
+
+// Call our linked-in lld, built with wasm support.
+// `flavor` is lld's argv[0] ("wasm-ld", "ld.lld").
+fn lld_link(flavor: &str, args: &[String]) -> Result<()> {
+    let mut cstrings: Vec<std::ffi::CString> = Vec::with_capacity(args.len() + 1);
+    cstrings.push(std::ffi::CString::new(flavor).unwrap());
+    for arg in args {
+        cstrings.push(std::ffi::CString::new(arg.as_str())?);
     }
-    PathBuf::from("wasm-ld")
+    let mut ptrs: Vec<*const std::ffi::c_char> = Vec::with_capacity(cstrings.len());
+    for c in &cstrings {
+        ptrs.push(c.as_ptr());
+    }
+    log::debug!("{flavor} {}", args.join(" "));
+    let code = unsafe { k1_lld_link(ptrs.as_ptr(), ptrs.len()) };
+    if code != 0 {
+        bail!("{flavor} failed with code {code}");
+    }
+    Ok(())
 }
 
 pub fn write_linked_output(
@@ -1382,36 +1406,17 @@ pub fn write_linked_output(
     };
 
     if target.target_os() == TargetOs::Wasm {
-        let mut ld_cmd = std::process::Command::new(wasm_ld_path(k1));
-        ld_cmd.arg("-mwasm64");
-        ld_cmd.arg(object_name.as_str());
-        for module_libs in collect_all_module_libs(k1) {
-            if !module_libs.libs.is_empty() {
-                ld_cmd.arg(format!("-L{}", module_libs.libs_dir));
-            }
-            for link_arg in &module_libs.link_args {
-                ld_cmd.arg(link_arg);
-            }
-            for (link_type, filename) in &module_libs.libs {
-                match link_type {
-                    LibRefLinkType::Default => ld_cmd.arg(format!("-l{filename}")),
-                    _ => ld_cmd.arg(filename),
-                };
-            }
-        }
+        let mut ld_args: Vec<String> = vec!["-mwasm64".into(), object_name.as_str().into()];
+        push_module_lib_args(k1, &mut ld_args);
         // stack-first makes null (0) deref trap
-        ld_cmd.arg("--stack-first");
-        ld_cmd.args(["-z", "stack-size=8388608"]);
-        ld_cmd.args(extra_options);
-        ld_cmd.arg("-o");
-        ld_cmd.arg(out_name.as_str());
+        ld_args.push("--stack-first".into());
+        ld_args.push("-z".into());
+        ld_args.push("stack-size=8388608".into());
+        ld_args.extend_from_slice(extra_options);
+        ld_args.push("-o".into());
+        ld_args.push(out_name.as_str().into());
 
-        log::debug!("Build Command: {:?}", ld_cmd);
-        let build_status = ld_cmd.status()?;
-        if !build_status.success() {
-            eprintln!("Build failed!");
-            bail!("linking {out_name} with wasm-ld failed");
-        }
+        lld_link("wasm-ld", &ld_args).map_err(|e| anyhow::anyhow!("linking {out_name}: {e}"))?;
         let elapsed = clang_time.elapsed();
         if k1.config.chatty {
             eprintln!("link {out_name} took {}ms", elapsed.as_millis());
@@ -1482,22 +1487,9 @@ pub fn write_linked_output(
 
     // Linking with libraries.
     // For each module, for each of its libraries, link with it as specified by the link_type
-    for module_libs in collect_all_module_libs(k1) {
-        if !module_libs.libs.is_empty() {
-            build_cmd.arg(format!("-L{}", module_libs.libs_dir));
-        }
-        for link_arg in &module_libs.link_args {
-            build_cmd.arg(link_arg);
-        }
-        for (link_type, filename) in &module_libs.libs {
-            match link_type {
-                // Link via linker arg, since the name has no extension
-                LibRefLinkType::Default => build_cmd.arg(format!("-l{filename}")),
-                // 'Link' via direct clang arg, since its an exact filepath
-                _ => build_cmd.arg(filename),
-            };
-        }
-    }
+    let mut lib_args: Vec<String> = vec![];
+    push_module_lib_args(k1, &mut lib_args);
+    build_cmd.args(lib_args);
 
     build_cmd.args(extra_options);
 
@@ -1764,9 +1756,14 @@ pub fn codegen_module<'ctx, 'module>(
         }
         write_linked_output(codegen.k1, &module_name, &link_options, LinkOutputKind::Executable)?;
     } else {
-        write_library_export_files(codegen.k1, &module_name)?;
-        write_linked_output(codegen.k1, &module_name, &[], LinkOutputKind::Dylib)?;
-        write_library_archive(codegen.k1, &module_name)?;
+        // A cross-built library can't be linked with host tools; the emitted
+        // object itself is the artifact (non-exported symbols are already
+        // internal, so it needs no localization pass)
+        if detect_host_target() == Some(codegen.k1.config.target) {
+            write_library_export_files(codegen.k1, &module_name)?;
+            write_linked_output(codegen.k1, &module_name, &[], LinkOutputKind::Dylib)?;
+            write_library_archive(codegen.k1, &module_name)?;
+        }
     }
 
     Ok(codegen)

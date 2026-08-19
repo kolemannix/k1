@@ -15,7 +15,16 @@ ns libc {
   fn(extern("strlen")) strlen(c-str: ptr): size
   fn(extern("getenv")) getenv(name: ptr): ptr
 
-  fn(extern("_k1_errno")) errno(): c-int
+  // errno is a libc thread-local reached through its address fn; there is
+  // no plain symbol to bind
+  fn(extern("__error")) errno-location-macos(): ptr
+  fn(extern("__errno_location")) errno-location-linux(): ptr
+  fn errno(): c-int {
+    let loc =
+      if k1/is-static { k1/host-os #is { :macos -> errno-location-macos(), :linux or :wasm -> errno-location-linux() } }
+      else { k1/os #is { :macos -> errno-location-macos(), :linux or :wasm -> errno-location-linux() } }
+    loc.r[c-int].*
+  }
   let EINTR: c-int = 4
   fn(extern("strerror")) strerror(errno: c-int): *char
   fn(extern("perror")) perror(msg: ptr)

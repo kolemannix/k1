@@ -73,4 +73,19 @@ fn main() {
     for f in &untracked_src {
         println!("cargo:rerun-if-changed={f}");
     }
+
+    let llvm_prefix = std::env::var("LLVM_SYS_211_PREFIX")
+        .expect("LLVM_SYS_211_PREFIX must be set");
+    println!("cargo:rerun-if-env-changed=LLVM_SYS_211_PREFIX");
+    cc::Build::new()
+        .cpp(true)
+        .std("c++17")
+        .file("src/lld_shim.cpp")
+        .include(format!("{llvm_prefix}/include"))
+        .flag_if_supported("-fno-rtti")
+        .flag_if_supported("-fno-exceptions")
+        .compile("k1_lld_shim");
+    println!("cargo:rustc-link-search=native={llvm_prefix}/lib");
+    println!("cargo:rustc-link-lib=static=lldWasm");
+    println!("cargo:rustc-link-lib=static=lldCommon");
 }

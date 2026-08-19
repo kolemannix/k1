@@ -3,10 +3,6 @@
  * All rights reserved.
  */
 
-#include <errno.h>
-
-int _k1_errno(void) { return errno; }
-
 #ifdef __FILC__
 #include <stdfil.h>
 void _k1_print_backtrace(int max_count) {

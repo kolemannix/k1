@@ -10,8 +10,5 @@ rm -rf ~/.k1/modules ~/.k1/test_src
 cp -r modules/. ~/.k1/modules
 cp -r test_src/. ~/.k1/test_src
 
-echo "Compiling k1 runtime"
-make -C ~/.k1/modules/core/libs
-
 echo "K1 installed at ~/.k1"
 echo "You should add ~/.k1/bin to your \$PATH"

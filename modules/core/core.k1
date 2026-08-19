@@ -72,7 +72,7 @@ ns io {
         count = (count - written).as[c-sizet]
       )
       if n <= 0 {
-        if n < 0 and platform/errno() == platform/EINTR continue
+        if platform/is-eintr(n) continue
         return
       }
       written = written + n
@@ -144,7 +144,7 @@ ns files {
     while total < buf.len() {
       let n = platform/io/read(fd, buf.data-ptr().add-bytes(total), (buf.len() - total).as[c-sizet])
       if n < 0 {
-        if platform/errno() == platform/EINTR continue
+        if platform/is-eintr(n) continue
         crash("read failed: `$path`")
       }
       if n == 0 break
@@ -169,7 +169,7 @@ ns files {
         count = (contents.len() - written).as[c-sizet]
       )
       if n < 0 {
-        if platform/errno() == platform/EINTR continue
+        if platform/is-eintr(n) continue
         crash("write of $out-path failed")
       }
       if n == 0 crash("write of $out-path failed")

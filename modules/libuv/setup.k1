@@ -17,7 +17,9 @@ fn sdk-args(): list[string] {
 fn setup(ctx: k1/setup-ctx) {
   process/run-command("mkdir", ["-p", "libs"], :inherit).!
 
-  process/run-command("cmake", ["-S", "vendor", "-B", ".k1-out/libuv-build", "-DBUILD_TESTING=OFF", "-DCMAKE_BUILD_TYPE=Release"], :inherit).!
+  let cmake-args: list[string] = ["-S", "vendor", "-B", ".k1-out/libuv-build", "-DBUILD_TESTING=OFF", "-DCMAKE_BUILD_TYPE=Release"]
+  if k1/os-macos { cmake-args.push("-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0.0") }
+  process/run-command("cmake", cmake-args.as-span(), :inherit).!
   process/run-command("cmake", ["--build", ".k1-out/libuv-build", "-j", "8"], :inherit).!
   process/run-command("cp", [".k1-out/libuv-build/libuv.a", "libs/libuv.a"], :inherit).!
 

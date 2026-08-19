@@ -7,13 +7,7 @@ ns platform {
     let PROT_READ: c-int = 0x1
     let PROT_WRITE: c-int = 0x2
     let MAP_PRIVATE: c-int = 0x0002
-    // mmap runs on `os` for posix targets, but on `host-os` for wasm targets
-    // (static execution is the only path that reaches it there)
-    let MAP_ANON: c-int = k1/os #is {
-      :macos -> 0x1000,
-      :linux -> 0x20,
-      :wasm -> k1/host-os #is { :macos -> 0x1000, :linux or :wasm -> 0x20 }
-    }
+    let MAP_ANON: c-int = k1/os #is { :macos -> 0x1000, :linux or :wasm -> 0x20 }
     let MAP_FAILED: i64 = -1
     fn(extern("mmap")) mmap(addr: ptr, len: size, prot: i32, flags: c-int, fd: c-int, offset: size): ptr
     fn(extern("munmap")) munmap(addr: ptr, len: size): i32
@@ -38,8 +32,17 @@ ns platform {
     fn(extern("abort")) abort(): never
     fn(extern("getenv")) getenv(name: ptr): ptr
     fn(extern("strlen")) strlen(c-str: ptr): size
-    fn(extern("_k1_errno")) errno(): c-int
-    fn(extern("perror")) perror(msg: ptr)
+
+    // errno is a libc thread-local reached through its address fn; there is
+    // no plain symbol to bind
+    fn(extern("__error")) errno-location-macos(): ptr
+    fn(extern("__errno_location")) errno-location-linux(): ptr
+    fn errno-now(): c-int {
+      let loc =
+        if k1/is-static { k1/host-os #is { :macos -> errno-location-macos(), :linux or :wasm -> errno-location-linux() } }
+        else { k1/os #is { :macos -> errno-location-macos(), :linux or :wasm -> errno-location-linux() } }
+      loc.r[c-int].*
+    }
   }
 
   // WASI preview1
@@ -56,8 +59,6 @@ ns platform {
 
     type iovec = { buf: u32, len: u32 }
 
-    let(mutable) errno-value: c-int = 0
-
     fn a32(p: ptr): u32 {
       p.as[size].as[u32]
     }
@@ -66,20 +67,14 @@ ns platform {
       let iov: iovec = .{ buf = a32(data), len = count.as[u32] }
       let nwritten: u32 = 0
       let err = fd-write(file-no, a32(iov.&.as[ptr]), 1, a32(nwritten.&.as[ptr]))
-      if err != 0 {
-        errno-value = err
-        -1
-      } else nwritten.as[i64]
+      if err != 0 { 0 - err.as[i64] } else nwritten.as[i64]
     }
 
     fn read(file-no: c-int, buffer: ptr, count: c-sizet): i64 {
       let iov: iovec = .{ buf = a32(buffer), len = count.as[u32] }
       let nread: u32 = 0
       let err = fd-read(file-no, a32(iov.&.as[ptr]), 1, a32(nread.&.as[ptr]))
-      if err != 0 {
-        errno-value = err
-        -1
-      } else nread.as[i64]
+      if err != 0 { 0 - err.as[i64] } else nread.as[i64]
     }
 
     fn is-tty(file-no: c-int): bool {
@@ -107,13 +102,14 @@ ns platform {
     }
   }
 
-  fn errno(): c-int {
-    k1/os #is {
-      :macos or :linux -> posix/errno(),
-      :wasm -> if k1/is-static posix/errno() else wasi/errno-value
-    }
-  }
   let EINTR: c-int = k1/os #is { :macos or :linux -> 4, :wasm -> wasi/EINTR }
+
+  // io results are -errno on failure; static execution always runs on a
+  // posix host where EINTR is 4, whatever the target says
+  fn is-eintr(io-result: i64): bool {
+    let eintr: c-int = if k1/is-static 4 else EINTR
+    io-result == 0 - eintr.as[i64]
+  }
 
   fn strlen(c-str: ptr): size {
     k1/os #is {
@@ -178,7 +174,10 @@ ns platform {
 
     fn posix-acquire(min-size: size): region {
       let rw = posix/PROT_READ | posix/PROT_WRITE
-      let private-anon = posix/MAP_PRIVATE | posix/MAP_ANON
+      // static execution mmaps on the host, so the anon flag is host-keyed there
+      let anon: c-int =
+        if k1/is-static { k1/host-os #is { :macos -> 0x1000, :linux or :wasm -> 0x20 } } else posix/MAP_ANON
+      let private-anon = posix/MAP_PRIVATE | anon
       let addr = posix/mmap(
         addr = ptr/null,
         len = min-size,
@@ -188,7 +187,6 @@ ns platform {
         offset = 0
       )
       if addr == posix/MAP_FAILED.as[ptr] {
-        posix/perror(ptr/null)
         crash("mmap failed")
       }
       .{ base = addr, len = min-size }
@@ -270,16 +268,26 @@ ns platform {
   }
 
   ns io {
+    // posix write/read report failure out-of-band; fold errno into the
+    // return so every arm speaks -errno
+    fn posix-write(file-no: c-int, data: ptr, count: c-sizet): i64 {
+      let n = posix/write(file-no, data, count)
+      if n < 0 { 0 - posix/errno-now().as[i64] } else n
+    }
+    fn posix-read(file-no: c-int, buffer: ptr, count: c-sizet): i64 {
+      let n = posix/read(file-no, buffer, count)
+      if n < 0 { 0 - posix/errno-now().as[i64] } else n
+    }
     fn write(file-no: c-int, data: ptr, count: c-sizet): i64 {
       k1/os #is {
-        :macos or :linux -> posix/write(file-no, data, count),
-        :wasm -> if k1/is-static posix/write(file-no, data, count) else wasi/write(file-no, data, count)
+        :macos or :linux -> posix-write(file-no, data, count),
+        :wasm -> if k1/is-static posix-write(file-no, data, count) else wasi/write(file-no, data, count)
       }
     }
     fn read(file-no: c-int, buffer: ptr, count: c-sizet): i64 {
       k1/os #is {
-        :macos or :linux -> posix/read(file-no, buffer, count),
-        :wasm -> if k1/is-static posix/read(file-no, buffer, count) else wasi/read(file-no, buffer, count)
+        :macos or :linux -> posix-read(file-no, buffer, count),
+        :wasm -> if k1/is-static posix-read(file-no, buffer, count) else wasi/read(file-no, buffer, count)
       }
     }
     fn is-tty(file-no: c-int): bool {

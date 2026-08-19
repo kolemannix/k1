@@ -7,6 +7,11 @@ DST=$2
 
 EXCLUDES=(
   --exclude '.k1-out'
+  # Includes must precede the excludes for rsync to honor them
+  --include 'libs/libk1rt.*'
+  --include 'libs/libk1rt-freestanding.a'
+  --include 'libs/libk1rt-wasm.a'
+  --include 'libs/libk1rt-nocrt.a'
   --exclude 'libs/*.a'
   --exclude 'libs/*.so'
   --exclude 'libs/*.dylib'
@@ -15,6 +20,7 @@ EXCLUDES=(
   --exclude 'k1_lsp.log*'
 )
 
+rm -rf $DST
 mkdir -p $DST
 cp $TT/k1 $DST/k1
 cp $TT/lsp $DST/k1lsp

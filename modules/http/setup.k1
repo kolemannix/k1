@@ -8,7 +8,9 @@ fn setup(ctx: k1/setup-ctx) {
   process/run-command("mkdir", ["-p", "libs", ".k1-out/llhttp"], :inherit).!
 
   for ["llhttp", "api", "http"] {
-    process/run-command("cc", ["-O2", "-Ivendor", "-c", "vendor/${it}.c", "-o", ".k1-out/llhttp/${it}.o"], :inherit).!
+    let cc-args: list[string] = ["-O2", "-Ivendor", "-c", "vendor/${it}.c", "-o", ".k1-out/llhttp/${it}.o"]
+    if k1/os-macos { cc-args.push("-mmacosx-version-min=15.0.0") }
+    process/run-command("cc", cc-args.as-span(), :inherit).!
   }
   process/run-command("/bin/sh", ["-c", "ar rcs libs/libllhttp.a .k1-out/llhttp/*.o"], :inherit).!
 

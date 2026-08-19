@@ -24,8 +24,9 @@ int _k1_snprintf_f32(char *buf, size_t size, float arg, int32_t places) {
 #define FFC_IMPL
 #include "ffc.h"
 
-/* wasm links no libc; ffreestanding keeps clang from converting these loops back into themselves! */
-#if defined(__wasm__)
+/* wasm and no-crt link no libc; ffreestanding keeps clang from converting
+ * these loops back into themselves! */
+#if defined(__wasm__) || defined(K1_NOCRT)
 void *memcpy(void *dst, const void *src, size_t n) {
   unsigned char *d = dst;
   const unsigned char *s = src;
@@ -59,6 +60,8 @@ int memcmp(const void *p1, const void *p2, size_t n) {
   }
   return 0;
 }
+/* llvm lowers equality-only memcmp calls to bcmp on linux */
+int bcmp(const void *p1, const void *p2, size_t n) { return memcmp(p1, p2, n); }
 
 /* compiler-rt libcall for i128 multiply (ffc's u128 products); built from
  * 64x64->64 multiplies only so it cannot lower back into itself */

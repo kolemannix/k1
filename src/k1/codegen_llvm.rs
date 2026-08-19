@@ -550,12 +550,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let debug_context = Cg::init_debug(ctx, &llvm_module, module, optimize, debug);
 
-        let machine = Cg::set_up_machine(
-            &mut llvm_module,
-            optimize,
-            module.config.filc,
-            module.config.target,
-        );
+        let machine = Cg::set_up_machine(&mut llvm_module, optimize, module.config.target);
         let target_data = machine.get_target_data();
 
         let ptr = ctx.ptr_type(AddressSpace::default());
@@ -4995,31 +4990,25 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn set_up_machine(
         module: &mut LlvmModule,
         optimize: bool,
-        filc: bool,
         k1_target: compiler::Target,
     ) -> TargetMachine {
-        Target::initialize_native(&InitializationConfig::default()).unwrap();
+        Target::initialize_x86(&InitializationConfig::default());
+        Target::initialize_aarch64(&InitializationConfig::default());
         Target::initialize_webassembly(&InitializationConfig::default());
-        let triple = if filc {
-            // Fil-C's clang targets the unknown vendor; hosts often default to
-            // pc and clang warns on the mismatch
-            inkwell::targets::TargetTriple::create("x86_64-unknown-linux-gnu")
-        } else if k1_target == compiler::Target::Wasm64 {
-            inkwell::targets::TargetTriple::create("wasm64-unknown-wasi")
-        } else if k1_target == compiler::Target::MacOsArm64 {
-            // Versioned triple so objects carry the supported minimum, not the
-            // build host's OS version
-            inkwell::targets::TargetTriple::create(&format!(
+        let triple = match k1_target {
+            compiler::Target::Wasm64 => {
+                inkwell::targets::TargetTriple::create("wasm64-unknown-wasi")
+            }
+            compiler::Target::LinuxIntel64 => {
+                inkwell::targets::TargetTriple::create("x86_64-unknown-linux-gnu")
+            }
+            compiler::Target::MacOsArm64 => inkwell::targets::TargetTriple::create(&format!(
                 "arm64-apple-macosx{}",
                 compiler::MAC_SDK_VERSION
-            ))
-        } else {
-            TargetMachine::get_default_triple()
+            )),
         };
 
         let target = Target::from_triple(&triple).unwrap();
-        // Same native-vs-baseline rule as compiler::detect_simd_bytes, so the
-        // machine's features always cover the width `k1/simd-bytes` promised
         let is_native = compiler::detect_host_target() == Some(k1_target);
         let (cpu, features) = if is_native {
             (
@@ -5102,11 +5091,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             options.set_loop_slp_vectorization(true);
             self.llvm_module.run_passes("default<O3>", &self.llvm_machine, options).unwrap();
         } else if self.debug.line_tables_only {
-            // Default builds: every local is an alloca, so promote them. Debug
-            // builds skip even this to keep variables inspectable
+            // Default builds, not optimized but not debug
             self.llvm_module
                 .run_passes(
-                    "function(mem2reg,instcombine<no-verify-fixpoint>,simplifycfg)",
+                    "function(mem2reg,instcombine<no-verify-fixpoint>,simplifycfg),globaldce",
                     &self.llvm_machine,
                     PassBuilderOptions::create(),
                 )

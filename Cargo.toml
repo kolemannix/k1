@@ -17,6 +17,9 @@ dbg = []
 # A/B: lower `for` via the native typed desugar instead of the for-each macro
 native-for = []
 
+[build-dependencies]
+cc = "1"
+
 [dependencies]
 # Core dependencies
 anyhow = "1.0.69"
