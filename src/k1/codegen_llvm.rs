@@ -3070,6 +3070,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
+    fn ir_memory_alignment(&self, t: PhysicalType, address: ir::Value) -> u32 {
+        if ir::is_addr_unaligned(&self.k1.ir, address) { 1 } else { self.k1.get_pt_layout(t).align }
+    }
+
     fn codegen_inst(
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
@@ -3147,23 +3151,46 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 Ok(())
             }
-            Inst::Store { dst, value, .. } => {
-                let dst_pointer = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
-                let value = self.resolve_value(inst_mappings, value)?;
-                let store = self.builder.build_store(dst_pointer, value).unwrap();
-                if ir::is_addr_unaligned(&self.k1.ir, dst) {
-                    store.set_alignment(1).unwrap();
+            Inst::Store { t, dst, value, volatile } => {
+                let dst_ptr = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
+                let value = match t.as_enum() {
+                    PhysicalTypeEnum::Scalar(_) => self.resolve_value(inst_mappings, value)?,
+                    PhysicalTypeEnum::Agg(_) => {
+                        let cg_ty = self.codegen_type(t);
+                        let src_ptr =
+                            self.resolve_value(inst_mappings, value)?.into_pointer_value();
+                        let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
+                        let src_align = self.ir_memory_alignment(t, value);
+                        load.as_instruction_value().unwrap().set_alignment(src_align).unwrap();
+                        load
+                    }
+                    PhysicalTypeEnum::Empty => unreachable!(),
+                };
+                let store = self.builder.build_store(dst_ptr, value).unwrap();
+                let dst_align = self.ir_memory_alignment(t, dst);
+                store.set_alignment(dst_align).unwrap();
+                if volatile {
+                    unsafe { llvm_sys::core::LLVMSetVolatile(store.as_value_ref(), 1) };
                 }
                 Ok(())
             }
-            Inst::Load { t, src } => {
-                let cg_ty = self.codegen_type(PhysicalType::scalar(t));
+            Inst::Load { t, src, dst, volatile } => {
+                let cg_ty = self.codegen_type(t);
                 let src_ptr = self.resolve_value(inst_mappings, src)?.into_pointer_value();
                 let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
-                if ir::is_addr_unaligned(&self.k1.ir, src) {
-                    load.as_instruction_value().unwrap().set_alignment(1).unwrap();
+                let load_inst = load.as_instruction_value().unwrap();
+                let src_align = self.ir_memory_alignment(t, src);
+                load_inst.set_alignment(src_align).unwrap();
+                if volatile {
+                    unsafe { llvm_sys::core::LLVMSetVolatile(load_inst.as_value_ref(), 1) };
                 }
-                inst_mappings.insert(inst_id, load);
+                if dst == ir::Value::Empty {
+                    inst_mappings.insert(inst_id, load);
+                } else {
+                    let dst_align = self.ir_memory_alignment(t, dst);
+                    let dst = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
+                    self.builder.build_store(dst, load).unwrap().set_alignment(dst_align).unwrap();
+                }
                 Ok(())
             }
             Inst::AtomicLoad { t, src, ord } => {
@@ -3279,10 +3306,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let dst_value = self.resolve_value(inst_mappings, dst)?;
                 let src_value = self.resolve_value(inst_mappings, src)?;
                 let layout = self.k1.get_pt_layout(t);
-                let dst_align =
-                    if ir::is_addr_unaligned(&self.k1.ir, dst) { 1 } else { layout.align };
-                let src_align =
-                    if ir::is_addr_unaligned(&self.k1.ir, src) { 1 } else { layout.align };
+                let dst_align = self.ir_memory_alignment(t, dst);
+                let src_align = self.ir_memory_alignment(t, src);
                 let bytes = self.builtin_types.ptr_sized_int.const_int(layout.size as u64, false);
                 self.builder
                     .build_memcpy(

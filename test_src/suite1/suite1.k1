@@ -4,6 +4,7 @@ fn low() {
   char_test/test()
   assign/test()
   pointer/test()
+  volatile-test/test()
   fib/test()
   float_test/test()
   pipe/test()

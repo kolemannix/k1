@@ -813,11 +813,15 @@ pub enum Inst {
     Store {
         dst: Value,
         value: Value,
-        t: ScalarType,
+        t: PhysicalType,
+        volatile: bool,
     },
     Load {
-        t: ScalarType,
+        t: PhysicalType,
         src: Value,
+        /// Aggregate destination; `Value::Empty` when the load yields a scalar value.
+        dst: Value,
+        volatile: bool,
     },
     AtomicLoad {
         t: ScalarType,
@@ -1087,7 +1091,13 @@ pub fn visit_inst_values(ir: &ProgramIr, inst: &Inst, f: &mut impl FnMut(Value))
             f(dst);
             f(value);
         }
-        Inst::Load { src, .. } | Inst::AtomicLoad { src, .. } => f(src),
+        Inst::Load { src, dst, .. } => {
+            f(src);
+            if dst != Value::Empty {
+                f(dst);
+            }
+        }
+        Inst::AtomicLoad { src, .. } => f(src),
         Inst::AtomicRmw { dst, operand, .. } => {
             f(dst);
             f(operand);
@@ -1176,7 +1186,7 @@ pub fn visit_inst_values(ir: &ProgramIr, inst: &Inst, f: &mut impl FnMut(Value))
     }
 }
 
-static_assert_size!(Inst, 32);
+static_assert_size!(Inst, 40);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum IntCmpPred {
@@ -1265,7 +1275,13 @@ pub fn get_inst_kind(ir: &ProgramIr, inst_id: InstId) -> InstKind {
         },
         Inst::Alloca { .. } => InstKind::PTR,
         Inst::Store { .. } => InstKind::Void,
-        Inst::Load { t, .. } => InstKind::scalar(t),
+        Inst::Load { t, dst, .. } => {
+            if dst != Value::Empty {
+                InstKind::Void
+            } else {
+                InstKind::Value(t)
+            }
+        }
         Inst::AtomicLoad { t, .. } => InstKind::scalar(t),
         Inst::AtomicStore { .. } => InstKind::Void,
         Inst::AtomicRmw { t, .. } => InstKind::scalar(t),
@@ -1783,12 +1799,18 @@ impl<'k1> Builder<'k1> {
     }
 
     fn push_load(&mut self, st: ScalarType, src: Value, comment: IrComment) -> InstId {
-        self.push_inst(Inst::Load { t: st, src }, comment)
+        self.push_inst(
+            Inst::Load { t: PhysicalType::scalar(st), src, dst: Value::Empty, volatile: false },
+            comment,
+        )
     }
 
     fn push_store(&mut self, dst: Value, value: Value, comment: IrComment) -> InstId {
         let t = self.get_value_kind(value).expect_value().unwrap().expect_scalar();
-        self.push_inst(Inst::Store { dst, value, t }, comment)
+        self.push_inst(
+            Inst::Store { dst, value, t: PhysicalType::scalar(t), volatile: false },
+            comment,
+        )
     }
 
     fn make_int_value(&mut self, int_value: &TypedIntValue, comment: IrComment) -> Value {
@@ -3177,6 +3199,36 @@ fn compile_ir_builtin(
             let stored = store_scalar_if_dst(b, dst, offset.as_value());
             Ok(stored)
         }
+        BuiltinIr::VolatileLoad => {
+            let t = b.get_physical_type(call.type_args.as_slice(&b.k1.mem)[0]);
+            if t.is_empty() {
+                return Ok(Value::Empty);
+            }
+            let src = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            match t.as_enum() {
+                PhysicalTypeEnum::Scalar(_) => {
+                    let loaded =
+                        b.push_inst_anon(Inst::Load { t, src, dst: Value::Empty, volatile: true });
+                    Ok(store_scalar_if_dst(b, dst, loaded.as_value()))
+                }
+                PhysicalTypeEnum::Agg(_) => {
+                    let result =
+                        dst.unwrap_or_else(|| b.push_alloca(t, IrComment::None).as_value());
+                    b.push_inst_anon(Inst::Load { t, src, dst: result, volatile: true });
+                    Ok(result)
+                }
+                PhysicalTypeEnum::Empty => unreachable!(),
+            }
+        }
+        BuiltinIr::VolatileStore => {
+            let t = b.get_physical_type(call.type_args.as_slice(&b.k1.mem)[0]);
+            if !t.is_empty() {
+                let store_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+                let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+                b.push_inst_anon(Inst::Store { t, dst: store_dst, value, volatile: true });
+            }
+            Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
+        }
         BuiltinIr::AtomicLoad => {
             // fn(intern) load[t](src: *t, ord: ordering): t
             let t = atomic_element_type(b, &call, true)?;
@@ -3861,10 +3913,12 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         errors.push(format!("store dst v{} is not a ptr", inst_id))
                     }
                 }
-                Inst::Load { src, .. } => {
-                    let src_kind = get_value_kind(ir, src);
-                    if !src_kind.is_storage() {
+                Inst::Load { src, dst, .. } => {
+                    if !get_value_kind(ir, src).is_storage() {
                         errors.push(format!("i{inst_id}: load src is not storage"))
+                    }
+                    if dst != Value::Empty && !get_value_kind(ir, dst).is_storage() {
+                        errors.push(format!("i{inst_id}: load dst is not storage"))
                     }
                 }
                 Inst::AtomicLoad { src, .. } => {
@@ -4304,15 +4358,24 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
             k1.display_pt(w, t)?;
             write!(w, ", align {}", vm_layout.align)?;
         }
-        Inst::Store { dst, value, t } => {
-            write!(w, "store to {}, ", dst,)?;
-            display_scalar_type(w, t)?;
+        Inst::Store { dst, value, t, volatile } => {
+            if volatile {
+                w.write_str("volatile ")?;
+            }
+            write!(w, "store to {}, ", dst)?;
+            k1.display_pt(w, t)?;
             write!(w, " {}", value)?;
         }
-        Inst::Load { t, src } => {
+        Inst::Load { t, src, dst, volatile } => {
+            if volatile {
+                w.write_str("volatile ")?;
+            }
             write!(w, "load ")?;
-            display_scalar_type(w, t)?;
+            k1.display_pt(w, t)?;
             write!(w, " from {}", src)?;
+            if dst != Value::Empty {
+                write!(w, " into {}", dst)?;
+            }
         }
         Inst::AtomicLoad { t, src, ord } => {
             write!(w, "atomic load {} ", ord.name())?;

@@ -23,7 +23,7 @@ use fxhash::FxHashMap;
 use crate::ir::{self, BlockId, DataInst, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId};
 use crate::kbail;
 use crate::lex::SpanId;
-use crate::typer::types::{Layout, PhysicalType, ScalarType};
+use crate::typer::types::{Layout, PhysicalType, PhysicalTypeEnum, ScalarType};
 use crate::typer::{FunctionId, K1Result, TypedExprId, TypedFloatValue, TypedProgram};
 use crate::vm;
 
@@ -486,8 +486,12 @@ fn lower_unit_with_ctx(
                 let inst_node = *k1.ir.mem.get(inst_h);
                 let inst = *k1.ir.instrs.get(inst_node.data);
                 match inst {
-                    Inst::Load { .. } => {}
-                    Inst::Store { value, .. } => unfold_use(ctx, value),
+                    Inst::Load { t, .. } if matches!(t.as_enum(), PhysicalTypeEnum::Scalar(_)) => {}
+                    Inst::Store { t, value, .. }
+                        if matches!(t.as_enum(), PhysicalTypeEnum::Scalar(_)) =>
+                    {
+                        unfold_use(ctx, value)
+                    }
                     _ => ir::visit_inst_values(&k1.ir, &inst, &mut |v| unfold_use(ctx, v)),
                 }
                 inst_h = inst_node.next;
@@ -677,20 +681,43 @@ fn emit_inst(
         | Inst::WordToPtr { .. } => {}
         Inst::Phi { .. } => {}
         Inst::Alloca { .. } => {}
-        Inst::Store { dst, value, t } => {
-            let (addr, off) = resolve_addr(k1, ctx, dst);
-            let val = resolve_src(k1, ctx, value);
-            ctx.emit(Opcode::Store, wbits(t), off);
-            ctx.push(addr);
-            ctx.push(val);
-        }
-        Inst::Load { t, src } => {
-            let (addr, off) = resolve_addr(k1, ctx, src);
-            let dst = ctx.slot_of(inst_id);
-            ctx.emit(Opcode::Load, wbits(t), off);
-            ctx.push(dst);
-            ctx.push(addr);
-        }
+        Inst::Store { dst, value, t, volatile: _ } => match t.as_enum() {
+            PhysicalTypeEnum::Scalar(t) => {
+                let (addr, off) = resolve_addr(k1, ctx, dst);
+                let value = resolve_src(k1, ctx, value);
+                ctx.emit(Opcode::Store, wbits(t), off);
+                ctx.push(addr);
+                ctx.push(value);
+            }
+            PhysicalTypeEnum::Agg(_) => {
+                let dst = resolve_src(k1, ctx, dst);
+                let value = resolve_src(k1, ctx, value);
+                ctx.emit(Opcode::Copy, 0, 0);
+                ctx.push(dst);
+                ctx.push(value);
+                ctx.push(k1.get_pt_layout(t).size);
+            }
+            PhysicalTypeEnum::Empty => unreachable!(),
+        },
+        Inst::Load { t, src, dst, volatile: _ } => match t.as_enum() {
+            PhysicalTypeEnum::Scalar(t) => {
+                debug_assert!(dst == ir::Value::Empty);
+                let (addr, off) = resolve_addr(k1, ctx, src);
+                let result = ctx.slot_of(inst_id);
+                ctx.emit(Opcode::Load, wbits(t), off);
+                ctx.push(result);
+                ctx.push(addr);
+            }
+            PhysicalTypeEnum::Agg(_) => {
+                let result = resolve_src(k1, ctx, dst);
+                let src = resolve_src(k1, ctx, src);
+                ctx.emit(Opcode::Copy, 0, 0);
+                ctx.push(result);
+                ctx.push(src);
+                ctx.push(k1.get_pt_layout(t).size);
+            }
+            PhysicalTypeEnum::Empty => unreachable!(),
+        },
         Inst::AtomicLoad { t, src, ord } => {
             let addr = resolve_src(k1, ctx, src);
             let dst = ctx.slot_of(inst_id);

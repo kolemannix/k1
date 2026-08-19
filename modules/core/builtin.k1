@@ -704,6 +704,9 @@ ns mem {
 
   fn(intern) bitcast[t, u](t: t): u
 
+  fn(intern) load-volatile[t](src: *t): t
+  fn(intern) store-volatile[t](dst: *t, value: t)
+
 }
 
 /////////////////////////////////

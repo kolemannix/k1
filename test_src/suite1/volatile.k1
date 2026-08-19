@@ -1,0 +1,33 @@
+ns volatile-test
+
+type volatile[t] = { inner: *t }
+
+ns for volatile {
+
+  fn new[t](inner: *t): volatile[t] { .{ inner } }
+
+  fn load[t](self: volatile[t]): t {
+    mem/load-volatile(self.inner)
+  }
+
+  fn store[t](self: volatile[t], value: t) {
+    mem/store-volatile(self.inner, value)
+  }
+}
+
+type pair = { first: u32, second: u32 }
+
+fn test() {
+  let scalar = 41u32
+  let scalar-volatile = volatile/new(scalar.&)
+  assert-equals(scalar-volatile.load(), 41)
+  scalar-volatile.store(42)
+  assert-equals(scalar, 42)
+
+  let aggregate: pair = .{ first = 1, second = 2 }
+  let aggregate-volatile = volatile/new(aggregate.&)
+  assert-equals(aggregate-volatile.load().second, 2)
+  aggregate-volatile.store(.{ first = 3, second = 4 })
+  assert-equals(aggregate.first, 3)
+  assert-equals(aggregate.second, 4)
+}
