@@ -523,8 +523,11 @@ fn rewrite_instr(ir: &mut ProgramIr, mappings: &mut RewriteMappings, inst: &mut 
             rewrite_value(mappings, dst);
             rewrite_value(mappings, value);
         }
-        Inst::Load { src, .. } => {
+        Inst::Load { src, dst, .. } => {
             rewrite_value(mappings, src);
+            if *dst != Value::Empty {
+                rewrite_value(mappings, dst);
+            }
         }
         Inst::AtomicLoad { src, .. } => {
             rewrite_value(mappings, src);
