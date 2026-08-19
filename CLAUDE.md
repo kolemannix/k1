@@ -133,6 +133,8 @@ Before nontrivial work, read:
   generated/, uv_ext abilities).
 - `modules/http/`: http framework module (dep on libuv; vendored llhttp C in
   vendor/, setup-built libs/libllhttp.a; response/routing/sse/task/work).
+- `modules/std/posix.k1` and `modules/std/libc.k1`: raw POSIX/libc bindings
+  (core is self-contained; its own OS externs live in `core/platform.k1`).
 - `modules/std/bitfield.k1`: metaprogrammed bitfield generation.
 - `modules/std/hash.k1`: the `hash` ability, `map`, and `set`.
 - `modules/std/json.k1`: JSON parser/model.

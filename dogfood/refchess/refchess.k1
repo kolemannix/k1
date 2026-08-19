@@ -249,7 +249,7 @@ fn run(_args: span[string]): result[i32, string] {
   let(context) eng: engine = .{ game = game-state/start-pos() }
   loop {
     // TODO(dogfood): easy mapError before try
-    let cmd = sys/read-line(2048).try
+    let cmd = std/sys/read-line(2048).try
     uci/parse-command(cmd) is {
       :err msg -> eprintln("[debug] $msg"),
       :ok cmd -> {
@@ -262,6 +262,6 @@ fn run(_args: span[string]): result[i32, string] {
 }
 
 fn main(arg-count: i32, args: ptr): i32 {
-  let args = sys/parse-main-args(arg-count, args)
+  let args = std/sys/parse-main-args(arg-count, args)
   run(args).!
 }

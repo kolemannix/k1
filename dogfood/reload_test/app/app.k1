@@ -1,7 +1,7 @@
 // The reloadable app half of the reload_test
 fn main(): i32 {
   loop {
-    let line = sys/read-line(256) is {
+    let line = std/sys/read-line(256) is {
       :ok l -> l,
       :err _ -> break,
     }

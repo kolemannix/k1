@@ -145,7 +145,7 @@ ns for string {
   }
 
   fn wrap-c(c-string: ptr): string {
-    let len = libc/strlen(c-string)
+    let len = platform/strlen(c-string)
     wrap-raw(ptr = c-string, len = len)
   }
 

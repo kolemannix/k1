@@ -1887,9 +1887,17 @@ impl Namespaces {
         self.namespaces.iter()
     }
 
-    pub fn find_child_by_name(&self, parent_id: NamespaceId, name: StringId) -> Option<&Namespace> {
-        self.iter()
-            .find(|ns| ns.parent_id.is_some_and(|parent| parent == parent_id) && ns.name == name)
+    pub fn find_child_by_name(
+        &self,
+        parent_id: NamespaceId,
+        name: StringId,
+    ) -> Option<NamespaceId> {
+        for (id, ns) in self.namespaces.iter_with_ids() {
+            if ns.parent_id == Some(parent_id) && ns.name == name {
+                return Some(id);
+            }
+        }
+        None
     }
 
     pub fn get_scope(&self, namespace_id: NamespaceId) -> ScopeId {
@@ -20114,13 +20122,12 @@ impl TypedProgram {
         //
         // In this case, the mechanism is just to 'adopt' the existing scope/ns and start putting our stuff inside it
         let (namespace_id, ns_scope_id) = match self
-            .scopes
-            .find_namespace_local(scope_id, parsed_ability.name)
+            .namespaces
+            .find_child_by_name(parent_namespace_id, parsed_ability.name)
         {
             Some(existing_ns_id) => {
                 let existing = self.namespaces.get(existing_ns_id);
-                let adoptable = existing.namespace_type == NamespaceKind::User
-                    && existing.owner_module == Some(self.module_in_progress.unwrap());
+                let adoptable = existing.namespace_type == NamespaceKind::User;
                 if !adoptable {
                     kbail!(
                         self,
@@ -20149,12 +20156,17 @@ impl TypedProgram {
                 };
                 let namespace_id = self.namespaces.add(ability_namespace);
                 if !self.scopes.add_namespace(scope_id, parsed_ability.name, namespace_id) {
-                    kbail!(
-                        self,
-                        parsed_ability.span,
-                        "Namespace with name {} already exists",
-                        parsed_ability.name
-                    );
+                    let occupant =
+                        self.scopes.find_namespace_local(scope_id, parsed_ability.name).unwrap();
+                    if self.namespaces.get(occupant).parent_id == Some(parent_namespace_id) {
+                        kbail!(
+                            self,
+                            parsed_ability.span,
+                            "Namespace with name {} already exists",
+                            parsed_ability.name
+                        );
+                    }
+                    self.scopes.replace_namespace(scope_id, parsed_ability.name, namespace_id);
                 }
                 self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
                 (namespace_id, ns_scope_id)
@@ -21355,12 +21367,16 @@ impl TypedProgram {
         self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
 
         if !self.scopes.add_namespace(parent_scope_id, name, namespace_id) {
-            kbail!(
-                self,
-                ast_namespace.span,
-                "Namespace name {} is taken",
-                self.ident_str(name).blue()
-            );
+            let occupant = self.scopes.find_namespace_local(parent_scope_id, name).unwrap();
+            if self.namespaces.get(occupant).parent_id == Some(parent_ns_id) {
+                kbail!(
+                    self,
+                    ast_namespace.span,
+                    "Namespace name {} is taken",
+                    self.ident_str(name).blue()
+                );
+            }
+            self.scopes.replace_namespace(parent_scope_id, name, namespace_id);
         }
 
         self.namespace_ast_mappings.insert(parsed_namespace_id, namespace_id);
@@ -21374,14 +21390,19 @@ impl TypedProgram {
     ) -> K1Result<NamespaceId> {
         let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
         let name_span = ast_namespace.name_span;
-        if let Some(parent_ns) = self.scopes.get_scope_owner(parent_scope).as_namespace() {
-            self.fail_if_reload_ns(parent_ns, ast_namespace.span, "nested namespaces")?;
-        }
+        let parent_ns = self
+            .scopes
+            .get_scope_owner(parent_scope)
+            .as_namespace()
+            .expect("namespace must be defined directly inside another namespace");
+        self.fail_if_reload_ns(parent_ns, ast_namespace.span, "nested namespaces")?;
 
+        // Extension is a namespace-tree question, not a name-resolution one: the
+        // scope map also holds use-aliases (e.g. the core prelude), which a local
+        // declaration shadows via create_namespace instead
         let namespace_id = if let Some(existing) =
-            self.scopes.find_namespace_local(parent_scope, ast_namespace.name)
+            self.namespaces.find_child_by_name(parent_ns, ast_namespace.name)
         {
-            // Namespace extension
             // Map this separate namespace AST node to the same semantic namespace
             self.namespace_ast_mappings.insert(parsed_namespace_id, existing);
             debug!("Inserting re-definition node for ns {}", self.ident_str(ast_namespace.name));

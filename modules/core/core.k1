@@ -48,8 +48,8 @@ fn eprintln(s: string) {
 
 ns io {
   type out-stream = { file-no: i32 }
-  let stdout: out-stream = .{ file-no = posix/stdout }
-  let stderr: out-stream = .{ file-no = posix/stderr }
+  let stdout: out-stream = .{ file-no = 1 }
+  let stderr: out-stream = .{ file-no = 2 }
 
   type stdout-buffering = either(u8) { unknown, line, block }
   type(alias) STDOUT_BUF_CAP = 8192
@@ -72,7 +72,7 @@ ns io {
         count = (count - written).as[c-sizet]
       )
       if n <= 0 {
-        if n < 0 and libc/errno() == libc/EINTR continue
+        if n < 0 and platform/errno() == platform/EINTR continue
         return
       }
       written = written + n
@@ -131,38 +131,54 @@ ns files {
   }
 
   fn read-to-string-in[a: allocator](alloc: a, path: string): string {
-    let filename-c-string = path.to-c-tmp()
-
-    let file = libc/files/fopen(filename-c-string.ptr, "r\0".data-ptr())
-    if file.is-null() {
-      crash("fopen failed: `$path`")
+    let fd = platform/io/open-to-read(path.to-c-tmp().ptr)
+    if fd < 0 {
+      crash("open failed: `$path`")
     }
-    defer libc/files/fclose(file)
+    defer platform/io/close(fd)
 
-    libc/files/fseek(file, 0, libc/files/SEEK_END)
-    let file-size-bytes = libc/files/ftell(file)
+    let file-size-bytes = platform/io/file-size(fd)
     let buf = buffer/allocate-in[char, _](alloc, file-size-bytes)
 
-    libc/files/fseek(file, 0, libc/files/SEEK_SET)
-    libc/files/fread(buf.data-ptr(), buf.len(), 1, file)
-    let string = string/wrap-buffer(buf)
-
-    string
+    let total: size = 0
+    while total < buf.len() {
+      let n = platform/io/read(fd, buf.data-ptr().add-bytes(total), (buf.len() - total).as[c-sizet])
+      if n < 0 {
+        if platform/errno() == platform/EINTR continue
+        crash("read failed: `$path`")
+      }
+      if n == 0 break
+      total = total + n
+    }
+    buf.len = total
+    string/wrap-buffer(buf)
   }
 
   fn write-entire-file(out-path: string, contents: string) {
-    let out-path-c = out-path.to-c-tmp()
-    let FILE = libc/files/fopen(out-path-c.ptr, #meta string/c-lit("w"))
-    defer libc/files/fclose(FILE)
+    let fd = platform/io/open-to-write(out-path.to-c-tmp().ptr)
+    if fd < 0 {
+      crash("open for write failed: `$out-path`")
+    }
+    defer platform/io/close(fd)
 
-    let write-res = libc/files/fwrite(contents.data-ptr(), 1, contents.len(), FILE)
-    if write-res.as[size] != contents.len() {
-      crash("fwrite of $out-path failed")
+    let written: size = 0
+    while written < contents.len() {
+      let n = platform/io/write(
+        file-no = fd,
+        data = contents.data-ptr().add-bytes(written),
+        count = (contents.len() - written).as[c-sizet]
+      )
+      if n < 0 {
+        if platform/errno() == platform/EINTR continue
+        crash("write of $out-path failed")
+      }
+      if n == 0 crash("write of $out-path failed")
+      written = written + n
     }
   }
 
   fn exists(path: string): bool {
-    posix/access(path.to-c-tmp().ptr, 0) == 0
+    platform/io/exists(path.to-c-tmp().ptr)
   }
 
 }

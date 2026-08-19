@@ -26,7 +26,7 @@ fn main(argc: c-int, argv: ptr): i32 {
   #if k1/test
     test()
   else {
-    let output = start(core/sys/parse-main-args(argc, argv))
+    let output = start(std/sys/parse-main-args(argc, argv))
     if output is :err msg { eprintln("ERROR: $msg"); return 1 }
     0
   }

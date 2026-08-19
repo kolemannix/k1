@@ -1,0 +1,10 @@
+ns sys {
+  fn local-thing(): int { 7 }
+}
+
+fn main(): i32 {
+  assert(sys/local-thing() == 7)
+  assert(core/sys/k1-home().non-empty())
+  if false { let _ = std/sys/read-line(1) }
+  0
+}

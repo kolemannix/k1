@@ -1,8 +1,5 @@
 ns fd {
 
-  use core/posix
-  use core/libc
-
   // Loops until every byte is written
   fn write-all(fd: i32, bytes: span[u8]): result[empty, string] {
     let written: size = 0

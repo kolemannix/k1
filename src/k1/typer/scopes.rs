@@ -621,6 +621,16 @@ impl Scopes {
         added
     }
 
+    pub fn replace_namespace(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        namespace_id: NamespaceId,
+    ) {
+        self.namespaces.insert(skey_name(scope_id, ident), namespace_id);
+        self.get_scope_mut(scope_id).kinds |= kinds::NAMESPACES;
+    }
+
     #[must_use]
     pub fn add_ability(
         &mut self,

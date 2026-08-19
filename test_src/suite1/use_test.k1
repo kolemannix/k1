@@ -3,7 +3,7 @@ ns use_test
 // Use a function from top-level
 use core/types/id
 // Use a constant from top-level
-use core/libc/files/SEEK_END as SEEKEND
+use std/libc/files/SEEK_END as SEEKEND
 
 
 ns foo {
@@ -20,9 +20,9 @@ fn test() {
   assert(id-alias[never] == id[never])
 
   // Use a constant from stmt w/ alias
-  use core/libc/files/SEEK_END as s
-  assert(s == core/libc/files/SEEK_END)
-  assert(SEEKEND == core/libc/files/SEEK_END)
+  use std/libc/files/SEEK_END as s
+  assert(s == std/libc/files/SEEK_END)
+  assert(SEEKEND == std/libc/files/SEEK_END)
 
   // Use a basic type
   use core/string as str

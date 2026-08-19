@@ -1,5 +1,8 @@
 ns sys
 
+use core/c-int
+use core/c-sizet
+
 #if k1/os-macos fn(extern("arc4random_uniform")) arc4random_uniform(upper-bound: u32): u32
 #if k1/os-macos fn(extern("_NSGetExecutablePath")) _NSGetExecutablePath(buf: ptr, bufsize: ptr): c-int
 

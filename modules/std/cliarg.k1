@@ -109,7 +109,7 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
 
 // type args = { max: ?string, min: ?string, name: string, items: list[string] }
 // fn main(argc: i32, argv: ptr): i32 {
-//   let args-span: span[string] = core/sys/parse-main-args(argc, argv);
+//   let args-span: span[string] = std/sys/parse-main-args(argc, argv);
 //   let args: args = parse-args[args](args-span, customizations = [.{ name = "name", settings = .{} }]) is {
 //     :err msg -> { println(msg); println(gen-help-text[args]("welcome to the derived args parser test program.")); return 1 },
 //     :ok args -> args,

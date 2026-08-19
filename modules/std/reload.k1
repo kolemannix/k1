@@ -1,7 +1,6 @@
 // The runtime side of the ns(reload) feature
 ns reload {
 
-  use core/posix
 
   type load-error = either {
     no-descriptor({ ns-path: heap-string }),

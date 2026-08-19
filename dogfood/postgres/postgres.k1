@@ -152,7 +152,7 @@ fn usage(program-name: string) {
 
 fn main(argc: core/c-int, argv: ptr): i32 {
 
-  let args = core/sys/parse-main-args(argc, argv)
+  let args = std/sys/parse-main-args(argc, argv)
   if args.len() < 2 {
     usage(args.get(0))
     return 1

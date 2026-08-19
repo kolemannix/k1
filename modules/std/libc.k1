@@ -1,0 +1,50 @@
+ns libc {
+
+  use core/c-int
+  use core/c-long
+
+  fn(extern("exit")) exit(code: i32): never
+  fn(extern("abort")) abort(): never
+
+  fn(extern("memcmp")) memcmp(s1: ptr, s2: ptr, size: size): i32
+  fn(extern("malloc")) malloc(size: size): ptr
+  fn(extern("calloc")) calloc(count: int, size: size): ptr
+  fn(extern("free")) free(ptr: ptr)
+  fn(extern("realloc")) realloc(ptr: ptr, size: size): ptr
+
+  fn(extern("strlen")) strlen(c-str: ptr): size
+  fn(extern("getenv")) getenv(name: ptr): ptr
+
+  fn(extern("_k1_errno")) errno(): c-int
+  let EINTR: c-int = 4
+  fn(extern("strerror")) strerror(errno: c-int): *char
+  fn(extern("perror")) perror(msg: ptr)
+  fn strerror-string(code: c-int): string {
+    string/wrap-c(strerror(code).as[ptr])
+  }
+  fn errno-k1-string(): string {
+    strerror-string(errno())
+  }
+
+  ns files {
+    let SEEK_END: i32 = 2
+    let SEEK_SET: i32 = 0
+    fn(extern("fopen")) fopen(path-c-string: ptr, mode-c-string: ptr): ptr
+    fn(extern("fseek")) fseek(file-desc: ptr, offset: i64, whence: i32): i32
+    fn(extern("fread")) fread(buffer: ptr, size: size, num: size, stream: ptr): usize
+    fn(extern("fclose")) fclose(file-desc: ptr): c-int
+    fn(extern("ftell")) ftell(file-desc: ptr): c-long
+    fn(extern("fwrite")) fwrite(data-ptr: ptr, item-size: size, item-count: size, file-desc: ptr): usize
+  }
+
+  fn(extern("strtod")) strtod(nptr: ptr, endptr: *mut ptr): f64
+  fn(extern("strtof")) strtof(nptr: ptr, endptr: *mut ptr): f32
+
+  ns math {
+    fn(extern("expf")) exp_f32(f32): f32
+    fn(extern("exp")) exp_f64(f64): f64
+    fn(extern("log2f")) log2_f32(f32): f32
+    fn(extern("log2")) log2_f64(f64): f64
+  }
+
+}

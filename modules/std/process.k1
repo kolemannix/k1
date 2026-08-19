@@ -3,9 +3,6 @@
 
 #if k1/os-posix ns posix-process {
 
-  use core/posix
-  use core/libc
-
   // argv for exec-family calls: program, args, null terminator, all in tmp
   fn make-argv(program: string, args: span[string]): list[ptr] {
     mem/push-arena(mem/tmp())

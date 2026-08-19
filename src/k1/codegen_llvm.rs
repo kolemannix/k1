@@ -335,7 +335,6 @@ pub struct Cg<'ctx, 'k1> {
     llvm_machine: TargetMachine,
     builder: Builder<'ctx>,
     pub llvm_functions: FxHashMap<FunctionId, CgFunction<'ctx>>,
-    pub llvm_function_to_k1: FxHashMap<FunctionValue<'ctx>, FunctionId>,
     functions_pending_body_compilation: Vec<FunctionId>,
     llvm_types: FxHashMap<AggregateTypeId, CgType<'ctx>>,
     globals: FxHashMap<TypedGlobalId, GlobalValue<'ctx>>,
@@ -584,7 +583,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             globals: FxHashMap::new(),
             //lambda_functions: FxHashMap::new(),
             llvm_functions: FxHashMap::new(),
-            llvm_function_to_k1: FxHashMap::new(),
             functions_pending_body_compilation: Vec::new(),
             llvm_types: FxHashMap::new(),
             builtin_types,
@@ -3789,18 +3787,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         };
 
-        if self.llvm_module.get_function(&llvm_name).is_some() {
-            if let LlvmLinkage::External = llvm_linkage {
-                eprintln!("Allowing duplicate external name declaration: {}", llvm_name)
-            } else {
-                kbail!(
-                    self.k1,
-                    self.k1.ast.get_span_for_id(typed_function.parsed_id),
-                    "Dupe function name: {}",
-                    llvm_name
-                );
+        let existing_declaration = match self.llvm_module.get_function(&llvm_name) {
+            None => None,
+            Some(existing) => {
+                if llvm_linkage == LlvmLinkage::External && !is_definition {
+                    Some(existing)
+                } else {
+                    kbail!(
+                        self.k1,
+                        self.k1.ast.get_span_for_id(typed_function.parsed_id),
+                        "Dupe function name: {}",
+                        llvm_name
+                    );
+                }
             }
-        }
+        };
 
         ir::compile_function(self.k1, function_id)?;
         let Some(ir_fn) = self.k1.ir.functions.get(function_id) else {
@@ -3831,6 +3832,33 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             is_definition,
         )?;
         let is_sret = llvm_function_type.is_sret;
+
+        if let Some(existing) = existing_declaration {
+            if existing.get_type() != llvm_function_type.llvm_function_type {
+                kbail!(
+                    self.k1,
+                    function_span,
+                    "Duplicate extern declarations of '{}' disagree on signature",
+                    llvm_name
+                );
+            }
+            self.llvm_functions.insert(
+                function_id,
+                CgFunction {
+                    param_values: Vec::with_capacity(
+                        llvm_function_type.param_k1_types.len() as usize
+                    ),
+                    function_type: llvm_function_type,
+                    function_value: existing,
+                    blocks: FxHashMap::new(),
+                    last_alloca_instr: None,
+                    returned_sret_variable: None,
+                    debug_info: di_subprogram,
+                    debug_file: di_file,
+                },
+            );
+            return Ok(existing);
+        }
 
         let function_value = self.llvm_module.add_function(
             &llvm_name,
@@ -3895,8 +3923,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 debug_file: di_file,
             },
         );
-        self.llvm_function_to_k1.insert(function_value, function_id);
-
         Ok(function_value)
     }
 

@@ -20,8 +20,8 @@ ns time {
     k1/os #is {
       :macos -> macos-time/mach_absolute_time(),
       :linux -> {
-        let ts: core/posix/timespec = uninit
-        core/posix/clock_gettime(core/posix/CLOCK_MONOTONIC, &ts)
+        let ts: posix/timespec = uninit
+        posix/clock_gettime(posix/CLOCK_MONOTONIC, &ts)
         (ts.tv_sec * 1_000_000_000) + ts.tv_nsec
       },
       :wasm -> #static crash("Unimplemented: read-cpu-counter for wasm")

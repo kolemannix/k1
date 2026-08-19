@@ -26,8 +26,8 @@ fn start-detached[t](function: *fn(*mut t) -> ptr, input: *t) {
 }
 
 fn sleep-ms(ms: u64) {
-  let req: core/posix/timespec = .{ tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
-  let _ = core/posix/nanosleep(req.&, ptr/null.rw[core/posix/timespec]())
+  let req: posix/timespec = .{ tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
+  let _ = posix/nanosleep(req.&, ptr/null.rw[posix/timespec]())
 }
 
 type sleep-poll-mutex = { state: u64 }

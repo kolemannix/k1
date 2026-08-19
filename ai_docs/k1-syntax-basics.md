@@ -756,7 +756,7 @@ Use `use` to bring functions, constants, types, or namespaces into scope:
 
 ```rust
 use core/types/id
-use core/libc/files/SEEK_END as seek-end
+use std/libc/files/SEEK_END as seek-end
 
 fn test() {
   use core/string as str

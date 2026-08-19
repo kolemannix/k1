@@ -223,8 +223,8 @@ fn render(out: *string-builder, pixels: *array[u8, 65536]) {
 }
 
 fn update(pixels: *array[u8, 65536]): { x: u32, y: u32 } {
-  let x = sys/random(gridsize)
-  let y = sys/random(gridsize)
+  let x = std/sys/random(gridsize)
+  let y = std/sys/random(gridsize)
   let pix = pixels.get(y*gridsize + x).&
   pix.* = 1
   .{ x, y }

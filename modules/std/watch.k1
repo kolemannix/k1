@@ -60,8 +60,6 @@
 ns watch {
 
   use core/c-int
-  use core/posix
-  use core/libc
 
   type event-kind = either { modified, created, deleted, renamed }
 

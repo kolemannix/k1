@@ -2,6 +2,45 @@
 // All rights reserved.
 
 ns platform {
+
+  ns posix {
+    let PROT_READ: c-int = 0x1
+    let PROT_WRITE: c-int = 0x2
+    let MAP_PRIVATE: c-int = 0x0002
+    let MAP_ANON: c-int = k1/os #is { :macos -> 0x1000, :linux or :wasm -> 0x20 }
+    let MAP_FAILED: i64 = -1
+    fn(extern("mmap")) mmap(addr: ptr, len: size, prot: i32, flags: c-int, fd: c-int, offset: size): ptr
+    fn(extern("munmap")) munmap(addr: ptr, len: size): i32
+
+    fn(extern("calloc")) calloc(count: int, size: size): ptr
+    fn(extern("realloc")) realloc(ptr: ptr, size: size): ptr
+    fn(extern("free")) free(ptr: ptr)
+
+    let O_RDONLY: c-int = 0x0000
+    let SEEK_SET: c-int = 0
+    let SEEK_END: c-int = 2
+    fn(extern("open")) open(path: ptr, oflag: c-int): c-int
+    fn(extern("creat")) creat(path: ptr, mode: c-int): c-int
+    fn(extern("read")) read(file-no: c-int, buffer: ptr, count: c-sizet): i64
+    fn(extern("write")) write(file-no: c-int, data: ptr, count: c-sizet): i64
+    fn(extern("close")) close(fd: c-int): c-int
+    fn(extern("lseek")) lseek(fd: c-int, offset: i64, whence: c-int): i64
+    fn(extern("access")) access(path: ptr, mode: c-int): c-int
+    fn(extern("isatty")) isatty(fd: c-int): c-int
+
+    fn(extern("exit")) exit(code: i32): never
+    fn(extern("abort")) abort(): never
+    fn(extern("getenv")) getenv(name: ptr): ptr
+    fn(extern("strlen")) strlen(c-str: ptr): size
+    fn(extern("_k1_errno")) errno(): c-int
+    fn(extern("perror")) perror(msg: ptr)
+  }
+
+  fn errno(): c-int { posix/errno() }
+  let EINTR: c-int = 4
+
+  fn strlen(c-str: ptr): size { posix/strlen(c-str) }
+
   ns memory {
 
     type region = { base: ptr, len: size }
@@ -18,7 +57,7 @@ ns platform {
         offset = 0
       )
       if addr == posix/MAP_FAILED.as[ptr] {
-        libc/perror(ptr/null)
+        posix/perror(ptr/null)
         crash("mmap failed")
       }
       .{ base = addr, len = min-size }
@@ -31,30 +70,55 @@ ns platform {
 
   }
 
+  ns heap {
+    fn alloc(size: size): ptr { posix/calloc(1, size) }
+    fn realloc(old-ptr: ptr, new-size: size): ptr { posix/realloc(old-ptr, new-size) }
+    fn free(p: ptr) { posix/free(p) }
+  }
+
   ns io {
     fn write(file-no: c-int, data: ptr, count: c-sizet): i64 {
       posix/write(file-no, data, count)
     }
+    fn read(file-no: c-int, buffer: ptr, count: c-sizet): i64 {
+      posix/read(file-no, buffer, count)
+    }
     fn is-tty(file-no: c-int): bool {
       posix/isatty(file-no) == 1
+    }
+    fn open-to-read(path: ptr): c-int {
+      posix/open(path, posix/O_RDONLY)
+    }
+    let create-mode-rw-all: c-int = 0x1B6
+    fn open-to-write(path: ptr): c-int {
+      posix/creat(path, create-mode-rw-all)
+    }
+    fn close(fd: c-int) {
+      let _ = posix/close(fd)
+    }
+    fn file-size(fd: c-int): i64 {
+      let end = posix/lseek(fd, 0, posix/SEEK_END)
+      let _ = posix/lseek(fd, 0, posix/SEEK_SET)
+      end
+    }
+    fn exists(path: ptr): bool {
+      posix/access(path, 0) == 0
     }
   }
 
   ns process {
-    fn(extern("exit")) c-exit(code: i32): never
-
     fn exit(code: i32): never {
       if k1/is-static k1/exit(code)
-      else c-exit(code)
+      else posix/exit(code)
     }
     fn abort(): never {
-      libc/abort()
+      posix/abort()
     }
   }
 
   ns env {
     fn get(name: string): ?string {
-      let v = libc/getenv(name.to-c-tmp().ptr)
+      let v = posix/getenv(name.to-c-tmp().ptr)
       if v.is-null() :none else :some(string/wrap-c(v))
     }
   }

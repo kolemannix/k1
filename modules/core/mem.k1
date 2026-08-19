@@ -21,11 +21,11 @@ ability allocator {
 
 type heap = {}
 impl allocator for heap {
-  fn alloc(_self: heap, size: size, _align: size): ptr { libc/calloc(1, size) }
+  fn alloc(_self: heap, size: size, _align: size): ptr { platform/heap/alloc(size) }
   fn realloc(_self: heap, old-ptr: ptr, _old-size: size, _align: size, new-size: size): ptr {
-    libc/realloc(old-ptr, new-size)
+    platform/heap/realloc(old-ptr, new-size)
   }
-  fn free(_self: heap, ptr: ptr, _size: size, _align: size) { libc/free(ptr) }
+  fn free(_self: heap, ptr: ptr, _size: size, _align: size) { platform/heap/free(ptr) }
 }
 
 ns mem {

@@ -5,12 +5,12 @@ ability exp {
 }
 impl exp for f64 {
   fn exp(self: f64): f64 {
-    core/libc/math/exp_f64(self)
+    libc/math/exp_f64(self)
   }
 }
 impl exp for f32 {
   fn exp(self: f32): f32 {
-    core/libc/math/exp_f32(self)
+    libc/math/exp_f32(self)
   }
 }
 
@@ -19,11 +19,11 @@ ability log2 {
 }
 impl log2 for f64 {
   fn log2(self: f64): f64 {
-    core/libc/math/log2_f64(self)
+    libc/math/log2_f64(self)
   }
 }
 impl log2 for f32 {
   fn log2(self: f32): f32 {
-    core/libc/math/log2_f32(self)
+    libc/math/log2_f32(self)
   }
 }
