@@ -606,9 +606,6 @@ impl TypedProgram {
             self.synth_variable_defn_simple(self.ast.idents.b.fmtargs, args_expr, block_scope);
         self.push_block_stmt_id(&mut block, args_variable.defn_stmt);
         let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
-        if self.config.no_std {
-            kbail!(self, span, "Interpolated strings are not supported in no_std mode");
-        }
         let mut hole_index = 0;
         fn get_named_arg(
             k1: &mut TypedProgram,
@@ -822,9 +819,6 @@ impl TypedProgram {
         let mut block = self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 3);
         let block_scope = block.scope_id;
         let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
-        if self.config.no_std {
-            kbail!(self, span, "Interpolated strings are not supported in no_std mode");
-        }
         let ctx_for_calls = block_ctx.with_hidden_calls(true);
         let new_string_builder = self.synth_typed_call_typed_args(
             self.ast.idents.f.StringBuilder_new.with_span(span),
@@ -889,9 +883,6 @@ impl TypedProgram {
         ctx: EvalExprContext,
         args_expr: Option<TypedExprId>,
     ) -> K1Result<TypedExprId> {
-        if self.config.no_std {
-            kbail!(self, span, "Interpolated strings are not supported in no_std mode");
-        }
         if parts.len() == 1 {
             if let parse::InterpolatedStringPart::String { string_id, span: part_span } =
                 self.ast.mem.get_nth(parts, 0)

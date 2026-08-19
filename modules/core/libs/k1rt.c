@@ -5,7 +5,10 @@
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "stb_sprintf.h"
+#include <errno.h>
 #include <stdint.h>
+
+int _k1_errno(void) { return errno; }
 
 int _k1_snprintf_f64(char *buf, size_t size, double arg, int32_t places) {
   if (places == -1)

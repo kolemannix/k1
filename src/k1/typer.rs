@@ -7174,6 +7174,20 @@ impl TypedProgram {
                     TypedExpr::Return(return_expr) => {
                         match self.exprs.get(return_expr.value) {
                             TypedExpr::StaticValue(s) => Some(s.value_id),
+                            TypedExpr::Variable(v) => {
+                                let global_id =
+                                    self.variables.get(v.variable_id).global_id()?;
+                                if !self.globals.get(global_id).is_constant {
+                                    return None;
+                                }
+                                if self.globals.get(global_id).initial_value.is_pending() {
+                                    let ast_id = self.globals.get(global_id).ast_id;
+                                    if self.eval_global_body(ast_id).is_err() {
+                                        return None;
+                                    }
+                                }
+                                self.globals.get(global_id).initial_value.as_value()
+                            }
                             TypedExpr::Call { call_id, .. } => {
                                 // A call to zeroed() becomes StaticValue::Zero directly; no need to
                                 // run silly code
@@ -7458,6 +7472,13 @@ impl TypedProgram {
             self.fail_if_reload_ns(owner_ns, parsed.span, "extern and exported globals")?;
         }
         let type_id = self.eval_type_expr(parsed.type_expr, scope_id)?;
+        if let Type::StaticValue(_) = self.types.get(type_id) {
+            kbail!(
+                self,
+                parsed.span,
+                "Globals cannot be typed as 'static t'; you can use them in type position directly"
+            )
+        }
 
         let reload_ns = if self.namespaces.get(owner_ns).reload { Some(owner_ns) } else { None };
         let global_id = self.globals.next_id();
@@ -17844,10 +17865,6 @@ impl TypedProgram {
                 None => match fn_name_str {
                     _ => None,
                 },
-                Some("sys") => match fn_name_str {
-                    "exit" => Some(Builtin::Backend(BackendBuiltin::Exit)),
-                    _ => None,
-                },
                 Some("mem") => match fn_name_str {
                     "copy" => Some(Builtin::Backend(BackendBuiltin::MemCopy)),
                     "move" => Some(Builtin::Backend(BackendBuiltin::MemMove)),
@@ -17917,6 +17934,7 @@ impl TypedProgram {
                     _ => None,
                 },
                 Some("k1") => match fn_name_str {
+                    "exit" => Some(Builtin::Backend(BackendBuiltin::Exit)),
                     "emit-compiler-message" => {
                         Some(Builtin::Backend(BackendBuiltin::CompilerMessage))
                     }
@@ -20982,9 +21000,10 @@ impl TypedProgram {
             }
             ParsedId::TypeDefn(type_defn_id) => {
                 let parsed_type_defn = self.ast.get_type_defn(type_defn_id).clone();
-                if !self
-                    .execute_static_condition(parsed_type_defn.compile_condition, namespace_scope_id)
-                {
+                if !self.execute_static_condition(
+                    parsed_type_defn.compile_condition,
+                    namespace_scope_id,
+                ) {
                     return;
                 }
                 let pending_defn = TypePendingDefinition {
@@ -21300,15 +21319,6 @@ impl TypedProgram {
         if is_mem {
             self.scopes.mem_scope_id = ns_scope_id
         }
-        let is_sys = parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.sys;
-        if is_sys {
-            self.scopes.sys_scope_id = ns_scope_id
-        }
-        let is_libc =
-            parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.libc;
-        if is_libc {
-            self.scopes.libc_scope_id = ns_scope_id
-        }
         let is_types =
             parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.types;
         if is_types {
@@ -21542,9 +21552,7 @@ impl TypedProgram {
                                     self.report(e)
                                 };
                             }
-                            ParsedId::Global(_)
-                            | ParsedId::TypeDefn(_)
-                            | ParsedId::Ability(_) => {
+                            ParsedId::Global(_) | ParsedId::TypeDefn(_) | ParsedId::Ability(_) => {
                                 self.register_pending_defn(d, namespace_id);
                             }
                             _ => {}

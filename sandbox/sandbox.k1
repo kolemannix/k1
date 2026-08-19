@@ -2,12 +2,21 @@
 
 type(alias) first-five = #type [1,2,3,4,5]
 
+
 // type user = { id: string, password: string }
-// type safe = #type types/struct-remove[user](["password"])
+
+ns foo {
+  fn abc() }
+  fn xyz() {
+    let 10
+  }
+}
+
+ns bar {
+  let 10
+}
+
 
 fn main(): i32 {
-  let y: #type [1,2,3,4,5] = #static [1,2,3,4,15]
-  let xs: list[i64] = [1, 2, 3, 4]
-  (xs.get(3) + xs.as-span().len()).as[i32]
   0
 }

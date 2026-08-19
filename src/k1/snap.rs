@@ -4,7 +4,7 @@
 
 use std::mem::size_of;
 
-pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP02";
+pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP01";
 
 pub struct SnapWriter {
     pub buf: Vec<u8>,

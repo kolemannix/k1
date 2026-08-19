@@ -29,6 +29,7 @@ fn main(): i32 {
     } else {
       println("unknown: $line")
     }
+    core/io/flush-stdout()
   }
   0
 }

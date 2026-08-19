@@ -29,8 +29,6 @@ fn print[t: print](t) {
   }
 }
 fn println[t: print](t) {
-  // Whatever our implementation of print should be able to buffer
-  // such that its better to call twice than allocate a garbage string
   print[t](t)
   print[string]("\n")
 }
@@ -44,30 +42,83 @@ fn eprint[t: print](t) {
   }
 }
 fn eprintln(s: string) {
-  // Whatever our implementation of print should be able to buffer
-  // such that its better to call twice than allocate a garbage string
   eprint(s)
   eprint("\n")
 }
 
 ns io {
-  // TODO: Add buffering to stdout and stderr!
   type out-stream = { file-no: i32 }
   let stdout: out-stream = .{ file-no = posix/stdout }
   let stderr: out-stream = .{ file-no = posix/stderr }
 
+  type stdout-buffering = either(u8) { unknown, line, block }
+  type(alias) STDOUT_BUF_CAP = 8192
+  let(mutable, tls) stdout-buf: fixlist[u8, STDOUT_BUF_CAP] = mem/zeroed[fixlist[u8, STDOUT_BUF_CAP]]()
+  let(mutable, tls) stdout-mode: stdout-buffering = :unknown
+
+  fn stdout-buffering-mode(): stdout-buffering {
+    if stdout-mode is :unknown {
+      stdout-mode = if platform/io/is-tty(1) :line else :block
+    }
+    stdout-mode
+  }
+
+  fn write-all(file-no: i32, data: ptr, count: size) {
+    let written: size = 0
+    while written < count {
+      let n = platform/io/write(
+        file-no = file-no,
+        data = data.add-bytes(written),
+        count = (count - written).as[c-sizet]
+      )
+      if n <= 0 {
+        if n < 0 and libc/errno() == libc/EINTR continue
+        return
+      }
+      written = written + n
+    }
+  }
+
+  fn flush-stdout() {
+    if stdout-buf.len() > 0 {
+      write-all(1, stdout-buf.as-span().data-ptr(), stdout-buf.len())
+      stdout-buf.clear()
+    }
+  }
+
+  fn stdout-buffer-bytes(bytes: span[byte]) {
+    if bytes.len() >= stdout-buf.cap() {
+      flush-stdout()
+      write-all(1, bytes.data-ptr(), bytes.len())
+      return
+    }
+    if stdout-buf.len() + bytes.len() > stdout-buf.cap() {
+      flush-stdout()
+    }
+    stdout-buf.push-n(bytes)
+    if stdout-buffering-mode() is :line and bytes.contains(10) {
+      flush-stdout()
+    }
+  }
+
   impl writer for out-stream {
     fn write-byte(self, value: u8) {
-      let value_spot = value
-      posix/write(file-no = self.file-no, data = (&value_spot).as[ptr], count = 1)
+      if self.file-no == 1 {
+        if stdout-buf.len() == stdout-buf.cap() flush-stdout()
+        stdout-buf.push(value)
+        if value == 10 and (stdout-buffering-mode() is :line) flush-stdout()
+      } else {
+        let value_spot = value
+        write-all(self.file-no, (&value_spot).as[ptr], 1)
+      }
       .{}
     }
     fn write-bytes(self, bytes: span[byte]) {
-      posix/write(
-        file-no = self.file-no,
-        data = bytes.data-ptr(),
-        count = bytes.len().as[c-sizet]
-      )
+      if self.file-no == 1 {
+        stdout-buffer-bytes(bytes)
+      } else {
+        write-all(self.file-no, bytes.data-ptr(), bytes.len())
+      }
       .{}
     }
   }
@@ -118,8 +169,7 @@ ns files {
 
 ns sys {
   fn env(name: string): ?string {
-    let v = libc/getenv(name.to-c-tmp().ptr)
-    if v.is-null() :none else :some(string/wrap-c(v))
+    platform/env/get(name)
   }
 
   // The k1 installation root: the K1_HOME env var when set (dev workflows point

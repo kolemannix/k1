@@ -233,9 +233,9 @@ ns for buffer {
     let w: size = k1/simd-bytes
     let i = 0: size
     if len >= w {
-      let lanes = vector/splat[u8, type-of(k1/simd-bytes)](needle)
+      let lanes = vector/splat[u8, k1/simd-bytes](needle)
       while i + w <= len {
-        let chunk = vector/load-unchecked[u8, type-of(k1/simd-bytes)](base.ref-at-index[u8](i).as[ptr])
+        let chunk = vector/load-unchecked[u8, k1/simd-bytes](base.ref-at-index[u8](i).as[ptr])
         let lane = chunk.eq-lanes(lanes).first-true-lane()
         if lane >= 0 return :some (i + lane)
         i = i + w
@@ -258,13 +258,13 @@ ns for buffer {
     if k == 1 return position-byte(base, n, needle-base.ref-at-index[u8](0).*)
 
     let w: size = k1/simd-bytes
-    let first = vector/splat[u8, type-of(k1/simd-bytes)](needle-base.ref-at-index[u8](0).*)
-    let last = vector/splat[u8, type-of(k1/simd-bytes)](needle-base.ref-at-index[u8](k - 1).*)
+    let first = vector/splat[u8, k1/simd-bytes](needle-base.ref-at-index[u8](0).*)
+    let last = vector/splat[u8, k1/simd-bytes](needle-base.ref-at-index[u8](k - 1).*)
     let i = 0: size
     // Both loads must stay in bounds: lanes [i, i+w) paired with [i+k-1, i+k-1+w)
     while i + w + k - 1 <= n {
-      let block-first = vector/load-unchecked[u8, type-of(k1/simd-bytes)](base.ref-at-index[u8](i).as[ptr])
-      let block-last = vector/load-unchecked[u8, type-of(k1/simd-bytes)](base.ref-at-index[u8](i + k - 1).as[ptr])
+      let block-first = vector/load-unchecked[u8, k1/simd-bytes](base.ref-at-index[u8](i).as[ptr])
+      let block-last = vector/load-unchecked[u8, k1/simd-bytes](base.ref-at-index[u8](i + k - 1).as[ptr])
       let m = block-first.eq-lanes(first).bit-and(block-last.eq-lanes(last)).to-mask()
       while m != 0 {
         let j = m.trailing-zeros().as[size]

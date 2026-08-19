@@ -656,6 +656,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             None
         };
 
+        let program_exit_function = if main_function.is_some() {
+            let program_exit_ident = self.k1.ast.idents.intern("program-exit");
+            let Some(program_exit_id) =
+                self.k1.scopes.find_function(self.k1.scopes.k1_scope_id, program_exit_ident)
+            else {
+                kbail!(self.k1, SpanId::NONE, "Missing k1/program-exit");
+            };
+            self.k1.ir.units_pending_compile.insert(program_exit_id, ());
+            Some(program_exit_id)
+        } else {
+            None
+        };
+
         self.k1.compile_all_pending_ir(SpanId::NONE)?;
         if self.k1.config.optimize {
             if let Some((main_function_id, _)) = main_function {
@@ -665,6 +678,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 ir::optimize_unit(self.k1, IrUnitId::Function(*function_id));
             }
         }
+
+        let program_exit_value = match program_exit_function {
+            None => None,
+            Some(id) => Some(self.declare_llvm_function(id)?),
+        };
 
         let mut inst_mappings = FxHashMap::with_capacity(512);
         while let Some(fn_id) = self.functions_pending_body_compilation.pop() {
@@ -690,10 +708,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 .unwrap()
                 .try_as_basic_value()
                 .basic();
-            match res {
-                None => self.builder.build_return(Some(&self.ctx.i32_type().const_zero())).unwrap(),
-                Some(v) => self.builder.build_return(Some(&v)).unwrap(),
+            let exit_code: BasicValueEnum<'ctx> = match res {
+                None => self.ctx.i32_type().const_zero().as_basic_value_enum(),
+                Some(v) => v,
             };
+            self.builder
+                .build_call(program_exit_value.unwrap(), &[exit_code.into()], "")
+                .unwrap();
+            self.builder.build_unreachable().unwrap();
         }
 
         if self.has_reloadable_fns {
@@ -2535,10 +2557,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         basic_value.into()
     }
 
-    fn find_libc_function_id(&self, ident: StringId) -> Option<FunctionId> {
-        self.k1.scopes.find_function(self.k1.scopes.libc_scope_id, ident)
-    }
-
     fn codegen_builtin_function_body(
         &mut self,
         builtin_type: BackendBuiltin,
@@ -2607,9 +2625,24 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let p2_arg = self.load_function_argument(function_id, 1);
                 let size_arg = self.load_function_argument(function_id, 2);
 
-                let memcmp_ident = self.k1.ast.idents.intern("memcmp");
-                let memcmp_fn_id = self.find_libc_function_id(memcmp_ident).unwrap();
-                let memcmp_fv = self.declare_llvm_function(memcmp_fn_id)?;
+                let memcmp_fv = match self.llvm_module.get_function("memcmp") {
+                    Some(f) => f,
+                    None => {
+                        let fn_type = self.ctx.i32_type().fn_type(
+                            &[
+                                self.builtin_types.ptr.into(),
+                                self.builtin_types.ptr.into(),
+                                self.builtin_types.ptr_sized_int.into(),
+                            ],
+                            false,
+                        );
+                        self.llvm_module.add_function(
+                            "memcmp",
+                            fn_type,
+                            Some(LlvmLinkage::External),
+                        )
+                    }
+                };
                 let call =
                     self.builder.build_call(memcmp_fv, &[p1_arg, p2_arg, size_arg], "").unwrap();
                 let result =
@@ -2623,13 +2656,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             BackendBuiltin::Exit => {
                 // fn(intern) exit(code: i32): never
-                let code_arg = self.load_function_argument(function_id, 0);
-
-                let exit_ident = self.k1.ast.idents.intern("exit");
-                let exit_fn_id = self.find_libc_function_id(exit_ident).unwrap();
-                let exit_fv = self.declare_llvm_function(exit_fn_id)?;
-                let call = self.builder.build_call(exit_fv, &[code_arg], "").unwrap();
-                let _result = call.try_as_basic_value();
                 self.builder.build_unreachable().unwrap()
             }
 

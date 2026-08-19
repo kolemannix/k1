@@ -1,9 +1,6 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-// The entire memory porting surface: everything above this (arena, tmp, heap)
-// is portable k1. posix: mmap/munmap. wasm: memory.grow plus a region
-// freelist, with release allowed to no-op.
 ns platform {
   ns memory {
 
@@ -32,5 +29,33 @@ ns platform {
       if result == -1 crash("munmap of region at ${r.base} x ${r.len} failed")
     }
 
+  }
+
+  ns io {
+    fn write(file-no: c-int, data: ptr, count: c-sizet): i64 {
+      posix/write(file-no, data, count)
+    }
+    fn is-tty(file-no: c-int): bool {
+      posix/isatty(file-no) == 1
+    }
+  }
+
+  ns process {
+    fn(extern("exit")) c-exit(code: i32): never
+
+    fn exit(code: i32): never {
+      if k1/is-static k1/exit(code)
+      else c-exit(code)
+    }
+    fn abort(): never {
+      libc/abort()
+    }
+  }
+
+  ns env {
+    fn get(name: string): ?string {
+      let v = libc/getenv(name.to-c-tmp().ptr)
+      if v.is-null() :none else :some(string/wrap-c(v))
+    }
   }
 }

@@ -1,18 +1,20 @@
 ns static_run
 let INT_SPAN: span[int] = [1,2,3,4,5]
 
-let i2: 12 = { 3 * 4 }
+let i2: int = { 3 * 5 }
 // The extra blocks circumvent a warning
-let i3: 12 = { let _ = 1; #static { let _ = 1; #static 3 * 4 } }
+let i3: int = { let _ = 1; #static { let _ = 1; #static 3 * 4 } }
+
+#static {
+  assert-equals(types/id[i2], types/id[15])
+  assert-equals(types/id[i3], types/id[12])
+}
 
 let s1: string = {
   let a = "asd"
   a.concat("f")
 }
-let s2: "asdf" = {
-  let a = "asd"
-  a.concat("f")
-}
+#static assert-equals(types/id[s1], types/id["asdf"])
 
 fn statics-and-coercion(): i32 {
    let _i: "a" = #static "a"

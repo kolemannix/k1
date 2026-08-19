@@ -160,8 +160,8 @@ fn test-compare() {
   assert-equals(BAKED.get-lane(31), 4)
   assert-equals(BAKED.lane-count(), 32)
 
-  // k1/simd-bytes: target SIMD width as a static, usable as a lane count
-  let native = vector/splat[u8, type-of(k1/simd-bytes)](5)
+  // k1/simd-bytes: target SIMD width, usable directly as a lane count
+  let native = vector/splat[u8, k1/simd-bytes](5)
   let width: size = k1/simd-bytes
   assert(width == 16 or width == 32 or width == 64)
   assert-equals(native.lane-count(), width)

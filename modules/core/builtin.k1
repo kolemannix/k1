@@ -724,15 +724,20 @@ ns k1 {
 
   type os = either { linux, macos, wasm }
   let os: os = builtin
-  let os-macos: bool = os is :macos
-  let os-linux: bool = os is :linux
-  let os-posix: bool = os is :macos or os is :linux
+  let os-macos: bool = os #is { :macos -> true, :linux -> false, :wasm -> false }
+  let os-linux: bool = os #is { :macos -> false, :linux -> true, :wasm -> false }
+  let os-posix: bool = os #is { :macos -> true, :linux -> true, :wasm -> false }
 
   // The widest SIMD register the target supports;
-  // `vector[u8, type-of(k1/simd-bytes)]`
-  let simd-bytes: static size = builtin
+  let simd-bytes: size = builtin
 
   fn(intern) location(): source-location
+
+  fn(intern) exit(code: i32): never
+
+  fn program-exit(code: i32): never {
+    sys/exit(code)
+  }
 
   fn(intern) emit-compiler-message(
     locn: k1/source-location,
@@ -854,7 +859,10 @@ ns k1 {
 // Core sizing intrinsics
 
 ns sys {
-  fn(intern) exit(code: i32): never
+  fn exit(code: i32): never {
+    io/flush-stdout()
+    platform/process/exit(code)
+  }
 }
 
 ns for ptr {
@@ -988,18 +996,19 @@ ns posix {
   let O_RDONLY: c-int = 0x0000
   let O_WRONLY: c-int = 0x0001
   let O_RDWR  : c-int = 0x0002
-  let O_SEARCH: c-int = (if k1/os-macos 0x40100000 else 0x200000)
-  let O_EXEC  : c-int = (if k1/os-macos 0x40000000 else 0x200000)
+  let O_SEARCH: c-int = k1/os #is { :macos -> 0x40100000, :linux or :wasm -> 0x200000 }
+  let O_EXEC  : c-int = k1/os #is { :macos -> 0x40000000, :linux or :wasm -> 0x200000 }
   fn(extern("open")) open(path: ptr, oflag: c-int): c-int
   fn(extern("read")) read(file-no: c-int, buffer: ptr, count: c-sizet): i64
   fn(extern("write")) write(file-no: c-int, data: ptr, count: c-sizet): i64
+  fn(extern("isatty")) isatty(fd: c-int): c-int
 
   let MAP_FILE   : c-int = 0x0000
   let MAP_SHARED : c-int = 0x0001
   let MAP_PRIVATE: c-int = 0x0002
   let MAP_FIXED  : c-int = 0x0010
   // MAP_ANONYMOUS = 0x20 on Linux, but MAP_ANON = 0x1000 on macOS.
-  let MAP_ANON   : c-int = (if k1/os-macos 0x1000 else 0x20)
+  let MAP_ANON   : c-int = k1/os #is { :macos -> 0x1000, :linux or :wasm -> 0x20 }
 
   // Pages may not be accessed.
   let PROT_NONE: c-int = 0x0
@@ -1042,7 +1051,7 @@ ns posix {
   fn(extern("posix_spawn_file_actions_addclose")) posix_spawn_file_actions_addclose(file-actions: ptr, fd: c-int): c-int
 
   let RTLD_NOW: c-int = 0x2
-  let RTLD_LOCAL: c-int = (if k1/os-macos 0x4 else 0)
+  let RTLD_LOCAL: c-int = k1/os #is { :macos -> 0x4, :linux or :wasm -> 0 }
   fn(extern("dlopen")) dlopen(path: ptr, mode: c-int): ptr
   fn(extern("dlsym")) dlsym(handle: ptr, symbol: ptr): ptr
   fn(extern("dlerror")) dlerror(): ptr
@@ -1054,8 +1063,10 @@ ns posix {
   fn(extern("_NSGetEnviron")) _NSGetEnviron(): ptr
   let(extern) environ: ptr
   fn environ-ptr(): ptr {
-    #if k1/os-macos _NSGetEnviron().r[ptr].*
-    else environ
+    k1/os #is {
+      :macos -> _NSGetEnviron().r[ptr].*,
+      :linux or :wasm -> environ
+    }
   }
 
 }
@@ -1066,7 +1077,6 @@ ns libc {
   fn(extern("exit")) exit(code: i32): never
   fn(extern("abort")) abort(): never
 
-  // Used by the llvm backend, currently
   fn(extern("memcmp")) memcmp(s1: ptr, s2: ptr, size: size): i32
   fn(extern("malloc")) malloc(size: size): ptr
   fn(extern("calloc")) calloc(count: int, size: size): ptr
@@ -1076,12 +1086,7 @@ ns libc {
   fn(extern("strlen")) strlen(c-str: ptr): size
   fn(extern("getenv")) getenv(name: ptr): ptr
 
-  fn(extern("__error")) __error(): ptr
-  fn(extern("__errno_location")) __errno_location(): ptr
-  fn errno(): c-int {
-    let loc = #if k1/os-macos __error() else __errno_location()
-    loc.r[c-int].*
-  }
+  fn(extern("_k1_errno")) errno(): c-int
   let EINTR: c-int = 4
   fn(extern("strerror")) strerror(errno: c-int): *char
   fn(extern("perror")) perror(msg: ptr)
@@ -1125,17 +1130,16 @@ fn assertdbg(context locn: k1/source-location)(value: bool) {
 }
 
 fn print-backtrace() {
-  #if k1/os-posix {
-    k1rt/_k1_print_backtrace(frame_count = 128)
-  } else {
-    println("non-posix backtrace TODO")
+  k1/os #is {
+    :macos or :linux -> k1rt/_k1_print_backtrace(frame_count = 128),
+    :wasm -> println("non-posix backtrace TODO")
   }
 }
 
 fn crash(context locn: k1/source-location)(msg: string): never {
   if k1/no-std {
     let s = "exiting (nostd)\n\0"
-    posix/write(
+    platform/io/write(
       file-no = 1,
       data = s.data-ptr(),
       count = (s.len() - 1).as[c-sizet],
@@ -1145,6 +1149,7 @@ fn crash(context locn: k1/source-location)(msg: string): never {
     k1/emit-compiler-message(locn, :error, msg)
     sys/exit(111)
   } else {
+    io/flush-stdout()
     print-backtrace()
 
     // We print this way to avoid calling our format code
@@ -1155,7 +1160,7 @@ fn crash(context locn: k1/source-location)(msg: string): never {
     core/format-uint(context core/io/stderr)(locn.line, 10)
     eprint("\n")
 
-    libc/abort()
+    platform/process/abort()
   }
 }
 
