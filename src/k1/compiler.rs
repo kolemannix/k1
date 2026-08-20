@@ -469,6 +469,7 @@ pub struct ModuleRootHandle {
     pub root_path: String,
     is_dir: bool,
     reader: std::thread::JoinHandle<Result<SourceFile, String>>,
+    remaining: ModuleRemainingSourcesHandle,
 }
 
 impl ModuleRootHandle {
@@ -509,7 +510,9 @@ impl ModuleRootHandle {
         let override_content = source_overrides.get(&root_path).cloned();
         let read_path = root_path.clone();
         let reader = std::thread::spawn(move || read_source_file(read_path, override_content));
-        Ok(ModuleRootHandle { src_path, module_dir, root_path, is_dir, reader })
+        let remaining =
+            spawn_sources_read(module_dir.clone(), root_path.clone(), is_dir, source_overrides);
+        Ok(ModuleRootHandle { src_path, module_dir, root_path, is_dir, reader, remaining })
     }
 
     pub fn join_root(self) -> anyhow::Result<(SourceFile, ModuleRemainingSources)> {
@@ -522,6 +525,7 @@ impl ModuleRootHandle {
             module_dir: self.module_dir,
             root_path: self.root_path,
             is_dir: self.is_dir,
+            speculative: self.remaining,
         };
         Ok((root, remaining))
     }
@@ -558,36 +562,47 @@ pub struct ModuleRemainingSources {
     module_dir: String,
     root_path: String,
     is_dir: bool,
+    speculative: ModuleRemainingSourcesHandle,
 }
 
 impl ModuleRemainingSources {
-    pub fn new(module_dir: String, root_path: String, is_dir: bool) -> ModuleRemainingSources {
-        ModuleRemainingSources { module_dir, root_path, is_dir }
-    }
-
     pub fn is_dir(&self) -> bool {
         self.is_dir
     }
 
-    pub fn spawn_read(
+    pub fn into_handle(
         self,
+        setup_ran: bool,
         source_overrides: &fxhash::FxHashMap<String, String>,
     ) -> ModuleRemainingSourcesHandle {
-        let overrides = source_overrides.clone();
-        let reader = std::thread::spawn(move || {
-            if !self.is_dir {
-                return Ok(vec![]);
-            }
-            let paths = collect_module_source_paths(&self.module_dir, &self.root_path)?;
-            let mut sources = Vec::with_capacity(paths.len());
-            for path in paths {
-                let override_content = overrides.get(&path).cloned();
-                sources.push(read_source_file(path, override_content)?);
-            }
-            Ok(sources)
-        });
-        ModuleRemainingSourcesHandle { reader }
+        if setup_ran {
+            spawn_sources_read(self.module_dir, self.root_path, self.is_dir, source_overrides)
+        } else {
+            self.speculative
+        }
     }
+}
+
+pub fn spawn_sources_read(
+    module_dir: String,
+    root_path: String,
+    is_dir: bool,
+    source_overrides: &fxhash::FxHashMap<String, String>,
+) -> ModuleRemainingSourcesHandle {
+    let overrides = source_overrides.clone();
+    let reader = std::thread::spawn(move || {
+        if !is_dir {
+            return Ok(vec![]);
+        }
+        let paths = collect_module_source_paths(&module_dir, &root_path)?;
+        let mut sources = Vec::with_capacity(paths.len());
+        for path in paths {
+            let override_content = overrides.get(&path).cloned();
+            sources.push(read_source_file(path, override_content)?);
+        }
+        Ok(sources)
+    });
+    ModuleRemainingSourcesHandle { reader }
 }
 
 pub struct ModuleRemainingSourcesHandle {
@@ -623,7 +638,7 @@ pub struct SetupRequest<'a> {
     pub chatty: bool,
 }
 
-pub fn run_setup_function(req: &SetupRequest) -> Result<()> {
+pub fn run_setup_function(req: &SetupRequest) -> Result<bool> {
     let mut scratch: Mem<()> = Mem::make();
     let module_name = req.idents.get_string(req.module_name);
     let setup_k1_path = kpath::join_tmp(&mut scratch, req.idents, req.module_dir, "setup.k1");
@@ -639,7 +654,7 @@ pub fn run_setup_function(req: &SetupRequest) -> Result<()> {
     let stamp_path = kpath::join_tmp(&mut scratch, req.idents, setup_out_dir.as_str(), "stamp");
 
     if !req.force && setup_is_fresh(req, &mut scratch, stamp_path.as_str(), &fingerprint) {
-        return Ok(());
+        return Ok(false);
     }
 
     fs::create_dir_all(Path::new(setup_out_dir.as_str()))?;
@@ -647,7 +662,7 @@ pub fn run_setup_function(req: &SetupRequest) -> Result<()> {
     let _lock = SetupLock::acquire(lock_path.as_str())?;
     // Another process may have completed this setup while we waited on the lock
     if !req.force && setup_is_fresh(req, &mut scratch, stamp_path.as_str(), &fingerprint) {
-        return Ok(());
+        return Ok(true);
     }
 
     eprintln!("Setting up module '{module_name}' (running {setup_k1_path})...");
@@ -668,7 +683,7 @@ pub fn run_setup_function(req: &SetupRequest) -> Result<()> {
     let outputs = output_manifest(req, &mut scratch)
         .map_err(|e| anyhow::anyhow!("setup.k1 for module '{module_name}' completed but {e}"))?;
     fs::write(Path::new(stamp_path.as_str()), format!("{fingerprint}{outputs}"))?;
-    Ok(())
+    Ok(true)
 }
 
 fn setup_is_fresh(

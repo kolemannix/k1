@@ -3252,25 +3252,10 @@ impl TypedProgram {
             return Ok(added_module_id);
         }
 
-        let mut modules_to_typecheck: Vec<(
-            ModuleId,
-            Option<Vec<crate::compiler::SourceFile>>,
-            crate::snap::InputsHash,
-        )> = modules_to_typecheck
-            .into_iter()
-            .map(|(module_id, remaining)| {
-                Ok((
-                    module_id,
-                    remaining.map(|r| r.join()).transpose()?,
-                    crate::snap::InputsHash(0),
-                ))
-            })
-            .collect::<anyhow::Result<_>>()?;
-
         // Every root is parsed before any typing, so all headers are hashed
         // in discovery order first
         let mut hash = self.inputs_hash;
-        for (module_id, _, _) in &modules_to_typecheck {
+        for (module_id, _) in &modules_to_typecheck {
             let module = self.modules.get(*module_id);
             let root = module.source_file_hashes.as_slice(&self.mem)[0];
             let source = self.ast.sources.get(root.file_id);
@@ -3281,10 +3266,14 @@ impl TypedProgram {
                 root.hash,
             );
         }
-        for (module_id, files, module_hash) in modules_to_typecheck.iter_mut() {
-            let module = self.modules.get(*module_id);
-            let name = self.ident_str(module.name);
-            hash = match files {
+        for (module_id, remaining) in modules_to_typecheck.into_iter() {
+            let files = remaining.map(|r| r.join()).transpose()?;
+            let module = self.modules.get(module_id);
+            let (module_name, home_dir, parsed_namespace_id, manifest_fn_defn) =
+                (module.name, module.home_dir, module.parsed_namespace_id, module.manifest_fn_defn);
+            let root_file_id = module.root_file_id(&self.mem);
+            let name = self.ident_str(module_name);
+            hash = match &files {
                 Some(files) => hash.add_module_sources(
                     name,
                     files.iter().map(|f| (f.path.as_str(), f.content_hash)),
@@ -3306,14 +3295,7 @@ impl TypedProgram {
                     )
                 }
             };
-            *module_hash = hash;
-        }
-
-        for (module_id, files, module_hash) in modules_to_typecheck.into_iter() {
-            let module = self.modules.get(module_id);
-            let (module_name, home_dir, parsed_namespace_id, manifest_fn_defn) =
-                (module.name, module.home_dir, module.parsed_namespace_id, module.manifest_fn_defn);
-            let root_file_id = module.root_file_id(&self.mem);
+            let module_hash = hash;
             if let Some(files) = files {
                 for file in files {
                     self.parse_module_source_file(
@@ -3446,14 +3428,14 @@ impl TypedProgram {
                     return;
                 }
                 let deps = k1.modules.get(module_id).manifest.deps;
-                for i in 0..deps.len() {
-                    let dep_name = k1.mem.getn(deps)[i as usize].name;
-                    let dep = k1
+                for module_dep in k1.mem.getn(deps) {
+                    let dep_name = module_dep.name;
+                    let dependent_module = k1
                         .modules
                         .iter()
                         .find(|m| m.name == dep_name)
                         .expect("restored state is missing a discovered module's dep");
-                    let dep_id = dep.id;
+                    let dep_id = dependent_module.id;
                     // core and std are discovered by their own add_module calls
                     if dep_id == MODULE_ID_CORE
                         || (!k1.config.no_std && dep_name == k1.ast.idents.b.std)
@@ -3561,6 +3543,7 @@ impl TypedProgram {
             manifest_fn_defn.map(|d| self.ast.get_span_for_id(d)).unwrap_or(SpanId::NONE);
 
         let setup_decl = self.modules.get(module_id).manifest.setup;
+        let mut setup_ran = false;
         if let Some(setup) = setup_decl
             && self.config.setup_mode != crate::compiler::SetupMode::SetupProgram
         {
@@ -3582,16 +3565,19 @@ impl TypedProgram {
                     && primary_module,
                 chatty: self.config.chatty,
             };
-            if let Err(e) = crate::compiler::run_setup_function(&request) {
-                let msg = format!(
-                    "Setup failed for module '{}': {e:#} ",
-                    self.ast.idents.get_string(module_name),
-                );
-                return Err(self.module_error(manifest_span, msg));
+            match crate::compiler::run_setup_function(&request) {
+                Ok(ran) => setup_ran = ran,
+                Err(e) => {
+                    let msg = format!(
+                        "Setup failed for module '{}': {e:#} ",
+                        self.ast.idents.get_string(module_name),
+                    );
+                    return Err(self.module_error(manifest_span, msg));
+                }
             }
         }
 
-        let remaining = self.spawn_remaining_sources(module_id);
+        let remaining = remaining_sources.into_handle(setup_ran, &self.lsp.source_overrides);
         let mut dep_handles: Vec<crate::compiler::ModuleRootHandle> = vec![];
         for i in 0..deps.len() {
             let dep_name_id = self.mem.getn(deps)[i as usize].name;
@@ -3680,12 +3666,12 @@ impl TypedProgram {
             home_dir,
             root_filename,
         ));
-        crate::compiler::ModuleRemainingSources::new(
+        crate::compiler::spawn_sources_read(
             self.ident_str(home_dir).to_string(),
             root_path,
             is_dir,
+            &self.lsp.source_overrides,
         )
-        .spawn_read(&self.lsp.source_overrides)
     }
 
     fn module_error(&mut self, span: SpanId, msg: String) -> anyhow::Error {
@@ -7176,6 +7162,82 @@ impl TypedProgram {
         }
     }
 
+    /// One-sided, incomplete shape compatibility: pattern-side type parameters are
+    /// wildcards. `false` means check_types can never accept any substitution
+    /// instance of `pattern` for `candidate`; `true` decides nothing.
+    pub fn precheck_types(&self, pattern: TypeId, candidate: TypeId, depth: u32) -> bool {
+        if pattern == candidate || depth == 0 {
+            return true;
+        }
+        if let (Some(pat_info), Some(cand_info)) =
+            (self.get_instance_info(pattern), self.get_instance_info(candidate))
+        {
+            if pat_info.generic_parent != cand_info.generic_parent {
+                return false;
+            }
+            for (pat_arg, cand_arg) in pat_info
+                .type_args
+                .as_slice(&self.mem)
+                .iter()
+                .zip(cand_info.type_args.as_slice(&self.mem))
+            {
+                if !self.precheck_types(*pat_arg, *cand_arg, depth - 1) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        match (self.types.get(pattern), self.types.get(candidate)) {
+            (
+                Type::TypeParameter(_)
+                | Type::InferenceHole(_)
+                | Type::FunctionTypeParameter(_)
+                | Type::StaticValue(_),
+                _,
+            ) => true,
+            (
+                _,
+                Type::TypeParameter(_) | Type::InferenceHole(_) | Type::StaticValue(_) | Type::Never,
+            ) => true,
+            (
+                Type::Lambda(_)
+                | Type::LambdaObject(_)
+                | Type::AbilityObject(_)
+                | Type::Opaque(_)
+                | Type::Generic(_),
+                _,
+            )
+            | (
+                _,
+                Type::Lambda(_)
+                | Type::LambdaObject(_)
+                | Type::AbilityObject(_)
+                | Type::Opaque(_)
+                | Type::Generic(_),
+            ) => true,
+            (Type::Reference(pat), Type::Reference(cand)) => {
+                self.precheck_types(pat.inner_type, cand.inner_type, depth - 1)
+            }
+            (Type::Array(pat), Type::Array(cand)) => {
+                self.precheck_types(pat.element_type, cand.element_type, depth - 1)
+                    && self.precheck_types(pat.size_type, cand.size_type, depth - 1)
+            }
+            (Type::Vector(pat), Type::Vector(cand)) => {
+                self.precheck_types(pat.element_type, cand.element_type, depth - 1)
+                    && self.precheck_types(pat.size_type, cand.size_type, depth - 1)
+            }
+            (Type::FunctionPointer(pat), Type::FunctionPointer(cand)) => {
+                self.precheck_types(pat.function_type_id, cand.function_type_id, depth - 1)
+            }
+            (Type::Function(pat), Type::Function(cand)) => {
+                pat.logical_params().len() == cand.logical_params().len()
+            }
+            (Type::Struct(pat), Type::Struct(cand)) => pat.fields.len() == cand.fields.len(),
+            (Type::Sum(_), Type::Sum(_)) => true,
+            _ => false,
+        }
+    }
+
     fn intercept_trivial_static_expr(&mut self, expr_id: TypedExprId) -> Option<StaticValueId> {
         let TypedExpr::Block(b) = self.exprs.get(expr_id) else { return None };
 
@@ -7187,8 +7249,7 @@ impl TypedProgram {
                         match self.exprs.get(return_expr.value) {
                             TypedExpr::StaticValue(s) => Some(s.value_id),
                             TypedExpr::Variable(v) => {
-                                let global_id =
-                                    self.variables.get(v.variable_id).global_id()?;
+                                let global_id = self.variables.get(v.variable_id).global_id()?;
                                 if !self.globals.get(global_id).is_constant {
                                     return None;
                                 }
@@ -8736,6 +8797,11 @@ impl TypedProgram {
             return None;
         }
 
+        if !self.precheck_types(blanket_impl_self_type_id, self_type_id, 4) {
+            debug!("Blanket impl self pattern shape cannot match");
+            return None;
+        }
+
         let blanket_arguments = blanket_ability.kind.arguments(&self.mem);
 
         debug!(
@@ -8793,8 +8859,8 @@ impl TypedProgram {
             )
         });
         let (solutions, _all_solutions) = match solutions_result {
-            Err(e) => {
-                debug!("Could not solve all blanket impl params: {}", self.ident_str(e.message));
+            Err(_) => {
+                debug!("Could not solve all blanket impl params");
                 return None;
             }
             Ok(solutions) => solutions,
@@ -11196,16 +11262,18 @@ impl TypedProgram {
                         });
                     }
                     let generic_params_slice = self.mem.getn(generic_params);
-                    let (solutions, _all_solutions) = self.with_clean_inference(|k1| {
-                        k1.infer_types(
-                            generic_params_slice,
-                            generic_params,
-                            &subst_pairs,
-                            struct_span,
-                            ctx.scope_id,
-                            None,
-                        )
-                    })?;
+                    let (solutions, _all_solutions) = self
+                        .with_clean_inference(|k1| {
+                            k1.infer_types(
+                                generic_params_slice,
+                                generic_params,
+                                &subst_pairs,
+                                struct_span,
+                                ctx.scope_id,
+                                None,
+                            )
+                        })
+                        .map_err(|f| self.render_inference_failure(f))?;
                     debug!(
                         "I reverse-engineered these: {}",
                         self.pretty_print_types(solutions.as_slice(&self.mem), ", ")
@@ -15123,19 +15191,21 @@ impl TypedProgram {
         for ftp in self.mem.getn(ability_fn_sig.fnlike_type_params) {
             excluded_args.push(ftp.value_param_index);
         }
-        let (self_solution, other_solved) = self.infer_types(
-            &all_type_params,
-            self_only_type_params_handle,
-            &args_and_params,
-            fn_call.span,
-            ctx.scope_id,
-            Some(infer::InferArgStash {
-                ctx,
-                first_value_pair_index,
-                excluded_args: &excluded_args,
-                stashed: stashed_args,
-            }),
-        )?;
+        let (self_solution, other_solved) = self
+            .infer_types(
+                &all_type_params,
+                self_only_type_params_handle,
+                &args_and_params,
+                fn_call.span,
+                ctx.scope_id,
+                Some(infer::InferArgStash {
+                    ctx,
+                    first_value_pair_index,
+                    excluded_args: &excluded_args,
+                    stashed: stashed_args,
+                }),
+            )
+            .map_err(|f| self.render_inference_failure(f))?;
 
         let mut parameter_constraints: List<Option<TypeId>, MemTmp> =
             self.tmp.new_list(ability_params.len());
@@ -15491,14 +15561,16 @@ impl TypedProgram {
                                 allow_mismatch: false,
                             });
                             let g_params_slice = self.mem.getn(g_params);
-                            let (solutions, _all_solutions) = self.infer_types(
-                                g_params_slice,
-                                g_params,
-                                &args_and_params,
-                                span,
-                                ctx.scope_id,
-                                None,
-                            )?;
+                            let (solutions, _all_solutions) = self
+                                .infer_types(
+                                    g_params_slice,
+                                    g_params,
+                                    &args_and_params,
+                                    span,
+                                    ctx.scope_id,
+                                    None,
+                                )
+                                .map_err(|f| self.render_inference_failure(f))?;
                             solutions
                         }
                     }
@@ -17524,15 +17596,15 @@ impl TypedProgram {
                     };
                     if let Some(expr_type) = expr_type {
                         let implements_try = self
-                            .find_or_generate_ability_impl_for_type(
-                                expr_type,
-                                ABILITY_ID_TRY,
-                                &[],
-                                true,
-                                block_scope,
-                                stmt_span,
-                            )
-                            .is_ok();
+                                .find_or_generate_ability_impl_for_type(
+                                    expr_type,
+                                    ABILITY_ID_TRY,
+                                    &[],
+                                    true,
+                                    block_scope,
+                                    stmt_span,
+                                )
+                                .is_ok();
                         if implements_try {
                             self.report(kwarn!(
                                 self,
