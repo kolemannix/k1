@@ -6683,9 +6683,9 @@ impl TypedProgram {
                             Ok(lambda_object) => {
                                 CheckExprTypeResult::Coerce(lambda_object, "lam->lamobj")
                             }
-                            Err(e) => {
-                                CheckExprTypeResult::Err(self.ast.idents.get_string(e.message).into())
-                            }
+                            Err(e) => CheckExprTypeResult::Err(
+                                self.ast.idents.get_string(e.message).into(),
+                            ),
                         };
                     }
                     Err(msg) => {
@@ -12940,7 +12940,7 @@ impl TypedProgram {
         // a few local variables in order to achieve this.
 
         let outer_for_expr_scope =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::ForExpr, ScopeOwnerId::None);
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
 
         let zero_expr = self.synth_i64(0, for_expr.body_block.span);
         let index_variable = self.synth_variable_defn(
@@ -12992,7 +12992,7 @@ impl TypedProgram {
         let iterator_expr =
             self.synth_address_of(iterator_variable.variable_expr, SpanId::NONE, true)?;
         let mut loop_block =
-            self.new_block_builder(outer_for_expr_scope, ScopeType::LexicalBlock, body_span, 3);
+            self.new_block_builder(outer_for_expr_scope, ScopeType::WhileLoopBody, body_span, 3);
         let loop_scope_id = loop_block.scope_id;
 
         let mut consequent_block =
@@ -20272,7 +20272,7 @@ impl TypedProgram {
         span: SpanId,
     ) {
         let v = self.variables.get(variable_id);
-        if v.usage_count == 0 {
+        if v.usage_count == 0 && !v.is_user_hidden() {
             let var_name_str = self.ident_str(v.name);
             if !var_name_str.starts_with("_") {
                 self.report(kwarn!(self, span, "{} is never used: {}", kind_name, var_name_str));

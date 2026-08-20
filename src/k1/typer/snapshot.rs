@@ -312,15 +312,15 @@ impl TypedProgram {
         }
         let snap_start = std::time::Instant::now();
         let first = self.snap();
-        eprintln!(
-            "snapshot is {}mb ({:?})",
-            first.len() as f64 / (1024.0 * 1024.0),
-            snap_start.elapsed()
-        );
         let mut restored = match TypedProgram::restore(&first, self.config, self.lsp.clone()) {
             Ok(restored) => restored,
             Err(e) => panic!("snapshot restore failed: {e}"),
         };
+        eprintln!(
+            "roundtripping {}mb snapshot took ({:?})",
+            first.len() as f64 / (1024.0 * 1024.0),
+            snap_start.elapsed()
+        );
         let second = restored.snap();
         crate::snap::assert_identical(&first, &second, "TypedProgram snapshot roundtrip");
         restored.inputs_hash = self.inputs_hash;
