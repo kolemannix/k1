@@ -1218,21 +1218,21 @@ impl<Tag: 'static> Mem<Tag> {
         list: Dlist<T, Tag>,
         node: NodeHandle<T, Tag>,
     ) {
-        #[cfg(debug_assertions)]
-        {
-            if node.is_nil() {
-                panic!("nil node is not mine");
-            }
-
-            let iter = DlistIter { mem: RawRef::from_ref(self), next: list.first };
-            for n in iter {
-                let h = self.pack_handle(n.as_ptr());
-                if h == node {
-                    return;
-                }
-            }
-            panic!("Node handle does not belong to this list");
+        if !cfg!(debug_assertions) {
+            return;
         }
+        if node.is_nil() {
+            panic!("nil node is not mine");
+        }
+
+        let iter = DlistIter { mem: RawRef::from_ref(self), next: list.first };
+        for n in iter {
+            let h = self.pack_handle(n.as_ptr());
+            if h == node {
+                return;
+            }
+        }
+        panic!("Node handle does not belong to this list");
     }
 
     pub fn dlist_assert_valid<T: 'static>(&self, list: Dlist<T, Tag>) {
@@ -1381,6 +1381,28 @@ impl<Tag> Mem<Tag> {
     }
 }
 
+pub static STRANDED_FINALIZE_BYTES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub static STRANDED_RELOC_BYTES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[inline]
+fn stranded_count(counter: &std::sync::atomic::AtomicU64, bytes: usize) {
+    if cfg!(feature = "profile") {
+        counter.fetch_add(bytes as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+pub fn print_stranded_counters() {
+    let fin = STRANDED_FINALIZE_BYTES.load(std::sync::atomic::Ordering::Relaxed);
+    let reloc = STRANDED_RELOC_BYTES.load(std::sync::atomic::Ordering::Relaxed);
+    eprintln!(
+        "\tlist strand: {}kb non-tail finalize, {}kb relocation",
+        fin / crate::KILOBYTE as u64,
+        reloc / crate::KILOBYTE as u64
+    );
+}
+
 #[cfg(feature = "profile")]
 impl<Tag> Drop for Mem<Tag> {
     fn drop(&mut self) {
@@ -1424,6 +1446,22 @@ impl<T, Tag> List<T, Tag> {
             None => MSlice::empty(),
             Some(offset) => MSlice::make(offset, self.len),
         }
+    }
+
+    /// `to_slice`, returning unused capacity to the arena when this list is
+    /// still its newest allocation; consumes the list so nothing can push
+    /// into the reclaimed space
+    pub fn to_slice_trim(self, mem: &mut Mem<Tag>) -> MSlice<T, Tag> {
+        if self.cap > self.len && self.offset != 0 {
+            if self.end_ptr() == mem.cursor() {
+                let len_end =
+                    unsafe { (self.ptr as *mut u8).add(self.len as usize * size_of::<T>()) };
+                mem.set_cursor(len_end);
+            } else {
+                stranded_count(&STRANDED_FINALIZE_BYTES, (self.cap - self.len) as usize * size_of::<T>());
+            }
+        }
+        self.to_slice()
     }
 
     pub fn to_mlist(&self) -> MList<T, Tag> {
@@ -1505,6 +1543,7 @@ impl<T, Tag> List<T, Tag> {
             debug_assert_eq!(new_me.end_ptr().addr(), mem.cursor().addr());
             new_me
         } else {
+            stranded_count(&STRANDED_RELOC_BYTES, self.cap() * size_of::<T>());
             let mut new_me = mem.new_list(new_cap);
             new_me.extend(self.as_slice());
             new_me

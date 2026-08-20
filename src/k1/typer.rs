@@ -2939,10 +2939,9 @@ pub struct TypedProgram {
     // of static execution has the same relationship with its outer caller
     pub vm_alts: Vec<vm::Vm>,
 
-    /// Every metaprogram-emitted source, in emission order; carries the byte
-    /// range provenance for diagnostics and the queue for the end-of-typecheck
-    /// file flush. Its index is the serial in emitted filenames.
+    /// Every metaprogram-emitted source, in emission order
     pub emitted_sources: Vec<EmittedSource>,
+    pub emitted_parse_cache: FxHashMap<u64, ParsedExprId>,
 
     // For every static value, once evaluated, we store its runtime representation
     // here; the data lives in vm_static_stack
@@ -3189,6 +3188,7 @@ impl TypedProgram {
                 vm::Vm::make(),
             ],
             emitted_sources: Vec::new(),
+            emitted_parse_cache: FxHashMap::default(),
             vm_shared_static_stack: vm_static_stack,
             vm_global_constant_lookups,
             vm_static_value_lookups: FxHashMap::default(),
@@ -7380,8 +7380,7 @@ impl TypedProgram {
 
         let static_eval_ctx = ctx.with_scope(static_block_scope);
         let expr = self.eval_block(&parsed_expr_as_block, static_eval_ctx, true)?;
-        let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
-        let is_debug = expr_metadata.is_debug;
+        let is_debug = self.ast.exprs.is_debug(parsed_expr);
         if is_debug {
             eprintln!("COMPILED TO BLOCK\n\n{}", self.expr_to_string_with_type(expr));
         }
@@ -9911,10 +9910,9 @@ impl TypedProgram {
     fn eval_expr(
         &mut self,
         expr_id: ParsedExprId,
-        mut ctx: EvalExprContext,
+        ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        let expr_metadata = self.ast.exprs.get_metadata(expr_id);
-        let is_debug = expr_metadata.is_debug;
+        let is_debug = self.ast.exprs.is_debug(expr_id);
         if is_debug {
             self.push_debug_level();
         }
@@ -9924,33 +9922,7 @@ impl TypedProgram {
             }
         });
 
-        let mut explicit_hint = false;
-        ctx.expected_type_id = match expr_metadata.type_hint {
-            Some(t) => {
-                let type_id = self_.eval_type_expr(t, ctx.scope_id)?;
-                explicit_hint = true;
-                Some(type_id)
-            }
-            None => ctx.expected_type_id,
-        };
         let result_expr = self_.eval_expr_inner(expr_id, ctx)?;
-        let result_expr = if explicit_hint {
-            let expected_type_id = ctx.expected_type_id.unwrap();
-            let allow_addr_of = ctx.is_method_receiver();
-            let coerced_expr = self_
-                .check_and_coerce_expr(expected_type_id, result_expr, ctx.scope_id, allow_addr_of)
-                .map_err(|e| {
-                    kerr!(
-                        &**self_,
-                        self_.ast.exprs.get_span(expr_id),
-                        "Expression did not conform to hint: {}",
-                        e.message
-                    )
-                })?;
-            coerced_expr
-        } else {
-            result_expr
-        };
 
         if log::log_enabled!(log::Level::Debug) {
             let expr_span = self_.ast.exprs.get_span(expr_id);
@@ -10119,10 +10091,7 @@ impl TypedProgram {
                 // This is just the case of the detached 'is' where we want to return a boolean
                 // indicating whether or not the pattern matched only
                 let true_expression = self.ast.exprs.add(
-                    parse::ParsedExpr::Literal(parse::ParsedLiteral::Bool(true, is_expr.span)),
-                    false,
-                    None,
-                );
+                    parse::ParsedExpr::Literal(parse::ParsedLiteral::Bool(true, is_expr.span)));
                 let true_case = parse::ParsedMatchCase {
                     patterns: MSpillSlice::one(is_expr.pattern),
                     guard_condition_expr: None,
@@ -10135,7 +10104,7 @@ impl TypedProgram {
                     is_static: false,
                 };
                 let match_expr_id =
-                    self.ast.exprs.add(parse::ParsedExpr::Match(as_match_expr), false, None);
+                    self.ast.exprs.add(parse::ParsedExpr::Match(as_match_expr));
                 let check_exhaustive = false;
                 // For standalone 'is', we don't allow binding to patterns since they won't work
                 let allow_bindings = false;
@@ -10231,6 +10200,17 @@ impl TypedProgram {
                     None,
                     ctx,
                     Some(Callee::from_ability_impl_fn(impl_function)),
+                )
+            }
+            ParsedExpr::TypeHint(th) => {
+                let th = *th;
+                let type_id = self.eval_type_expr(th.ty, ctx.scope_id)?;
+                let inner = self.eval_expr(th.inner, ctx.with_expected_type(Some(type_id)))?;
+                let allow_addr_of = ctx.is_method_receiver();
+                self.check_and_coerce_expr(type_id, inner, ctx.scope_id, allow_addr_of).map_err(
+                    |e| {
+                        kerr!(self, th.span, "Expression did not conform to hint: {}", e.message)
+                    },
                 )
             }
         }
@@ -10558,10 +10538,7 @@ impl TypedProgram {
                 ParsedExpr::Variable(ParsedVariable {
                     name: QIdent::naked(param.name, param.span),
                     span: param.span,
-                }),
-                false,
-                None,
-            );
+                }));
             let (variable_id, variable_expr) = self.eval_variable(variable_expr, ctx, false)?;
             let Some(variable_id) = variable_id else {
                 kbail!(self, param.span, "Must be a plain variable");
@@ -10746,6 +10723,19 @@ impl TypedProgram {
                 Ok(StaticExecutionResult::TypedExpr(self.synth_empty_value(span)))
             };
         };
+        let content_hash = if is_definition {
+            None
+        } else {
+            use std::hash::{Hash, Hasher};
+            let mut h = ahash::AHasher::default();
+            content.hash(&mut h);
+            let hash = h.finish();
+            if let Some(&cached_root) = self.emitted_parse_cache.get(&hash) {
+                let typed_metaprogram = self.eval_expr(cached_root, ctx)?;
+                return Ok(StaticExecutionResult::TypedExpr(typed_metaprogram));
+            }
+            Some(hash)
+        };
         // Parse the code as its own file (cohesive spans, a source containing
         // the full text), then compile it in place of the invocation
         //
@@ -10783,6 +10773,9 @@ impl TypedProgram {
         let parsed_metaprogram = self.parse_metaprogram_source(source_for_emission, parse_kind)?;
         match parsed_metaprogram {
             ParseMetaprogramResult::Expr(parsed_expr_id) => {
+                if let Some(hash) = content_hash {
+                    self.emitted_parse_cache.insert(hash, parsed_expr_id);
+                }
                 let typed_metaprogram = self.eval_expr(parsed_expr_id, ctx)?;
                 debug!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
                 Ok(StaticExecutionResult::TypedExpr(typed_metaprogram))
@@ -10823,9 +10816,7 @@ impl TypedProgram {
             let mut trivia_bytes = 0usize;
             let mut token_bytes = 0usize;
             for (file_id, source) in self.ast.sources.iter() {
-                let is_emitted =
-                    self.emitted_sources.binary_search_by_key(&file_id, |e| e.file_id).is_ok();
-                if is_emitted {
+                if self.emitted_source_for_file(file_id).is_some() {
                     emitted_bytes += source.content_len();
                 } else {
                     real_files += 1;
@@ -10835,12 +10826,25 @@ impl TypedProgram {
                 trivia_bytes += source.trivia.len() as usize * size_of::<crate::lex::TriviaEntry>();
                 token_bytes += source.tokens.len() as usize * size_of::<crate::lex::Token>();
             }
+            let mut unique_emissions: ahash::HashSet<u64> = ahash::HashSet::default();
+            let mut unique_bytes = 0usize;
+            for emitted in &self.emitted_sources {
+                use std::hash::{Hash, Hasher};
+                let content = self.ast.sources.get(emitted.file_id).content(&self.ast.mem);
+                let mut h = ahash::AHasher::default();
+                content.hash(&mut h);
+                if unique_emissions.insert(h.finish()) {
+                    unique_bytes += content.len();
+                }
+            }
             eprintln!(
-                "\tsources: {} files {}kb + {} emitted {}kb; line tables {}kb, trivia {}kb, tokens {}kb",
+                "\tsources: {} files {}kb + {} emitted {}kb ({} unique, {}kb); line tables {}kb, trivia {}kb, tokens {}kb",
                 real_files,
                 real_bytes / crate::KILOBYTE,
                 self.emitted_sources.len(),
                 emitted_bytes / crate::KILOBYTE,
+                unique_emissions.len(),
+                unique_bytes / crate::KILOBYTE,
                 newline_bytes / crate::KILOBYTE,
                 trivia_bytes / crate::KILOBYTE,
                 token_bytes / crate::KILOBYTE,
@@ -11469,10 +11473,7 @@ impl TypedProgram {
                 ParsedExpr::Variable(parse::ParsedVariable {
                     name: QIdent::naked(capture.name, capture.span),
                     span: capture.span,
-                }),
-                false,
-                None,
-            );
+                }));
             let (variable_id, variable_expr) = self.eval_variable(parsed_var, ctx, false)?;
             let Some(variable_id) = variable_id else {
                 kbail!(
@@ -12859,7 +12860,7 @@ impl TypedProgram {
         };
         if FOR_VIA_MACRO {
             let body_block_expr =
-                self.ast.exprs.add(ParsedExpr::Block(for_expr.body_block), false, None);
+                self.ast.exprs.add(ParsedExpr::Block(for_expr.body_block));
 
             let binding = match for_expr.binding {
                 None => {
@@ -13797,7 +13798,7 @@ impl TypedProgram {
                 );
             }
         };
-        let new_fn_call_id = self.ast.exprs.add(ParsedExpr::Call(new_fn_call), false, None);
+        let new_fn_call_id = self.ast.exprs.add(ParsedExpr::Call(new_fn_call));
         let new_fn_call_clone = *self.ast.exprs.get(new_fn_call_id).expect_call();
         self.eval_function_call(&new_fn_call_clone, None, ctx, None)
     }
@@ -14105,7 +14106,8 @@ impl TypedProgram {
         // recognized here before evaluation so its parts are still available.
         // Non-literal receivers fall through to ordinary method resolution.
         if fn_call.is_method && n == self.ast.idents.b.fmt && fn_call.args.len() == 2 {
-            let receiver = self.ast.mem.get_nth(fn_call.args, 0).value;
+            let receiver =
+                self.ast.exprs.skip_type_hint(self.ast.mem.get_nth(fn_call.args, 0).value);
             if matches!(
                 self.ast.exprs.get(receiver),
                 ParsedExpr::Literal(ParsedLiteral::String(..))
@@ -17628,10 +17630,7 @@ impl TypedProgram {
                 ParsedExpr::Struct(parse::ParsedStruct {
                     fields: MSlice::empty(),
                     span: block.span,
-                }),
-                false,
-                None,
-            );
+                }));
             let stmt_id = self.ast.stmts.add(ParsedStmt::LoneExpression(unit_expr));
             let stmts = self.ast.mem.pushn(&[stmt_id]);
             unit_body = ParsedBlock { stmts, kind: block.kind, span: block.span };
@@ -23530,6 +23529,8 @@ impl TypedProgram {
         self.tmp.print_usage("\ttmp");
         self.mem.print_usage("\tperm");
         self.ir.mem.print_usage("\tmem ir");
+        #[cfg(feature = "profile")]
+        crate::kmem::print_stranded_counters();
         writeln!(
             out,
             "\t{} infers: {:.2}ms. avg: {:.2}ms. {} static execs during inference: {:.2}ms",

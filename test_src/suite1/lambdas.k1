@@ -120,6 +120,9 @@ fn test() {
   simple-dyn(fn[x]. { let _ = "Thunk!"; x.* = 12 })
   assert-equals(x.*, 12)
 
+  let hinted-thunk = (fn() 5): dyn[fn() -> int]
+  assert-equals(hinted-thunk(), 5)
+
   thunks-test()
 
   captures()

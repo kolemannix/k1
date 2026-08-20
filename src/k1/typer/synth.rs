@@ -298,11 +298,7 @@ impl TypedProgram {
             defn_stmt,
         );
         let parsed_expr = self.ast.exprs.add(
-            ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span), span }),
-            false,
-            None,
-        );
-        // nocommit: if this doesn't work, continue making all the names __unreachable
+            ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span), span }));
         if user_visible {
             self.scopes.add_variable(owner_scope, name, variable_id);
         }
@@ -329,10 +325,7 @@ impl TypedProgram {
                 span,
                 is_method,
                 id: ParsedExprId::PENDING,
-            }),
-            false,
-            None,
-        )
+            }))
     }
 
     pub(super) fn synth_typed_call_typed_args(
@@ -552,10 +545,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> ParsedExprId {
         self.ast.exprs.add(
-            ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span), span }),
-            false,
-            None,
-        )
+            ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span), span }))
     }
 
     pub(super) fn synth_parsed_type_app(

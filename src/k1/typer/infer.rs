@@ -223,7 +223,11 @@ impl TypedProgram {
                             // re-evaluates it concretely and reports the real error if it
                             // is genuinely mis-written. But a failure against a concrete
                             // expected type is still a real error right now
-                            let should_skip = match self.ast.exprs.get(*parsed_expr) {
+                            let should_skip = match self
+                                .ast
+                                .exprs
+                                .get(self.ast.exprs.skip_type_hint(*parsed_expr))
+                            {
                                 ParsedExpr::Lambda(_) | ParsedExpr::Variant(_) => {
                                     !expected_is_concrete
                                 }
@@ -732,7 +736,7 @@ impl TypedProgram {
                 MaybeTypedExpr::Typed(_) => {
                     unreachable!("Synthesizing calls with function type params is unsupported")
                 }
-                MaybeTypedExpr::Parsed(p) => match self.ast.exprs.get(p) {
+                MaybeTypedExpr::Parsed(p) => match self.ast.exprs.get(self.ast.exprs.skip_type_hint(p)) {
                     ParsedExpr::Lambda(_lam) => {
                         debug!(
                             "substituting type for an ftp lambda so that it can infer (is_inf={})",

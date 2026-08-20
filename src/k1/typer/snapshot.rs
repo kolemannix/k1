@@ -69,6 +69,7 @@ impl TypedProgram {
             modules_completed,
             config: _,
             program_settings,
+            emitted_parse_cache: _,
             ast,
             functions,
             function_specializations: _,
@@ -294,6 +295,7 @@ impl TypedProgram {
         k1.patterns.mem.restore(r);
         k1.pattern_ctors.restore(r);
         k1.emitted_sources = r.read_vec();
+        k1.emitted_parse_cache.clear();
         k1.ir.restore(r);
         k1.global_id_k1_arena = r.read_t();
         r.section("end");
