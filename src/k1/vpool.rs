@@ -496,6 +496,91 @@ impl<T: PartialEq, Index: PoolIndex> VPool<T, Index> {
     }
 }
 
+/// VPool minus the id layer: an mmap-reserved growable array with plain
+/// `usize` indexing, so growth commits pages instead of realloc-copying
+pub struct VVec<T: Copy> {
+    mmap: memmap2::MmapMut,
+    len: usize,
+    max_len: usize,
+    name: &'static str,
+    _elem: std::marker::PhantomData<T>,
+}
+
+impl<T: Copy> VVec<T> {
+    pub fn make(name: &'static str) -> Self {
+        Self::make_bytes(name, crate::GIGABYTE)
+    }
+
+    pub fn make_bytes(name: &'static str, bytes: usize) -> Self {
+        let mmap = memmap2::MmapMut::map_anon(bytes).unwrap();
+        mmap.advise(memmap2::Advice::Sequential).unwrap();
+        let max_len = bytes / std::mem::size_of::<T>();
+        VVec { mmap, len: 0, max_len, name, _elem: std::marker::PhantomData }
+    }
+
+    pub fn push(&mut self, t: T) {
+        assert!(self.len < self.max_len, "VVec {} out of space", self.name);
+        unsafe { (self.mmap.as_mut_ptr() as *mut T).add(self.len).write(t) };
+        self.len += 1;
+    }
+
+    pub fn extend_from_slice(&mut self, ts: &[T]) {
+        let new_len = self.len + ts.len();
+        assert!(new_len <= self.max_len, "VVec {} out of space", self.name);
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                ts.as_ptr(),
+                (self.mmap.as_mut_ptr() as *mut T).add(self.len),
+                ts.len(),
+            );
+        }
+        self.len = new_len;
+    }
+
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+}
+
+impl<T: Copy> VVec<T> {
+    pub fn print_size_info(&self) {
+        let percent_used = (self.len as u128) * 100 / self.max_len as u128;
+        let mb_used = self.len * std::mem::size_of::<T>() / crate::MEGABYTE;
+        let size_in_mb = self.mmap.len() / crate::MEGABYTE;
+        eprintln!(
+            "VVec  {:16}: {:04} / {:04}mb ({:02}%) used by {} / {} elements ({} size {})",
+            self.name,
+            mb_used,
+            size_in_mb,
+            percent_used,
+            self.len,
+            self.max_len,
+            std::any::type_name::<T>(),
+            std::mem::size_of::<T>()
+        );
+    }
+}
+
+#[cfg(feature = "profile")]
+impl<T: Copy> Drop for VVec<T> {
+    fn drop(&mut self) {
+        self.print_size_info()
+    }
+}
+
+impl<T: Copy> std::ops::Deref for VVec<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        unsafe { core::slice::from_raw_parts(self.mmap.as_ptr() as *const T, self.len) }
+    }
+}
+
+impl<T: Copy> std::ops::DerefMut for VVec<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        unsafe { core::slice::from_raw_parts_mut(self.mmap.as_mut_ptr() as *mut T, self.len) }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::VPool;

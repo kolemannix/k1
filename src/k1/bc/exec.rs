@@ -3,17 +3,13 @@
 
 //! The bc VM: executes the flat bytecode stream.
 //!
-//! Runtime state is `pc` (index into `k1.bc.code`), `fp` (current frame base
-//! pointer into the VM stack), and `ret_reg` (the scalar return value
-//! register). calls bump `fp` by callee frame size and write a 2-word
-//! link (caller_fp, return_pc) into the new frame's header; returns read it
-//! back. `code[0]` is `Halt`, so popping the top frame (return_pc 0) lands
-//! there and ends execution.
-//!
-//! Reentrancy: `LoadGlobal` (lazy global evaluation -> nested typechecking ->
-//! nested static execution) and the `CallIndirect` cold path can lower more
-//! units, growing `k1.bc.code`/`consts`. We therefore never cache a borrow
-//! or pointer into either; every fetch re-indexes through `k1.bc`.
+//! Runtime state is `pc` (pointer into `k1.bc.code`; frames and fault records
+//! store it as a u32 index), `fp` (current frame base pointer into the VM
+//! stack), and `ret_reg` (the scalar return value register). calls bump `fp`
+//! by callee frame size and write a 2-word link (caller_fp, return_pc) into
+//! the new frame's header; returns read it back. `code[0]` is `Halt`, so
+//! popping the top frame (return_pc 0) lands there and ends execution.
+
 
 use std::num::NonZeroU32;
 
@@ -270,10 +266,15 @@ fn exec_loop(
     top_fp: *mut u8,
     top_ret_pt: PhysicalType,
 ) -> K1Result<i32> {
-    let mut pc: usize = start_pc as usize;
+    // VVec's base never moves (growth commits reserved pages), so these stay
+    // valid while mid-execution lowering appends to code/consts
+    let code_base: *const u32 = k1.bc.code.as_ptr();
+    let consts_base: *const u64 = k1.bc.consts.as_ptr();
+    let mut pc: *const u32 = unsafe { code_base.add(start_pc as usize) };
     let mut fp: *mut u8 = top_fp;
     let mut ret_reg: Value = Value::u64(0);
     let mut instrs_run = 0;
+    let count_ops = k1.config.chatty;
     let mut op_counts = [0u64; OPCODE_COUNT as usize];
 
     // Callers wrap uses in `unsafe`; pointer arithmetic + deref together
@@ -282,17 +283,15 @@ fn exec_loop(
             (fp as *mut u64).add($w as usize)
         };
     }
-    // Indices are in-bounds by construction of the lowering; skip the bounds
-    // checks in release builds (this is the hottest path in the VM).
-    macro_rules! code_at {
-        ($i:expr) => {{
-            let i: usize = $i;
-            if cfg!(debug_assertions) {
-                k1.bc.code[i]
-            } else {
-                unsafe { *k1.bc.code.get_unchecked(i) }
-            }
-        }};
+    macro_rules! pc_u32 {
+        () => {
+            unsafe { pc.offset_from(code_base) } as u32
+        };
+    }
+    macro_rules! set_pc {
+        ($i:expr) => {
+            pc = unsafe { code_base.add($i as usize) }
+        };
     }
     // Tagged src operand: frame word, constant pool entry, or fp-relative address
     macro_rules! read_src {
@@ -302,11 +301,8 @@ fn exec_loop(
                 Value::u64(unsafe { *word_ptr!(w) })
             } else if w & SRC_CONST_BIT != 0 {
                 let idx = (w & !SRC_CONST_BIT) as usize;
-                if cfg!(debug_assertions) {
-                    Value::u64(k1.bc.consts[idx])
-                } else {
-                    Value::u64(unsafe { *k1.bc.consts.get_unchecked(idx) })
-                }
+                debug_assert!(idx < k1.bc.consts.len(), "const operand out of bounds");
+                Value::u64(unsafe { *consts_base.add(idx) })
             } else {
                 Value::ptr(unsafe { fp.add((w & !SRC_FP_BIT) as usize) })
             }
@@ -323,20 +319,24 @@ fn exec_loop(
         }};
     }
     macro_rules! operand {
-        ($i:expr) => {
-            code_at!(pc + 1 + $i)
-        };
+        ($i:expr) => {{
+            debug_assert!(
+                (pc_u32!() as usize) + 1 + $i < k1.bc.code.len(),
+                "operand read out of bounds"
+            );
+            unsafe { *pc.add(1 + $i) }
+        }};
     }
     macro_rules! advance {
         ($op:path) => {
-            pc += const { 1 + $op.operand_count() }
+            pc = unsafe { pc.add(const { 1 + $op.operand_count() }) }
         };
     }
     // Error return, recording the fault location for stack traces
     macro_rules! vmerr {
         ($($args:expr),*) => {{
-            vm.bc_fault = Some((fp as u64, pc as u32));
-            kbail!(k1, k1.bc.span_for_pc(pc as u32), $($args),*);
+            vm.bc_fault = Some((fp as u64, pc_u32!()));
+            kbail!(k1, k1.bc.span_for_pc(pc_u32!()), $($args),*);
         }};
     }
     // `?` with fault recording
@@ -345,7 +345,7 @@ fn exec_loop(
             match $e {
                 Ok(v) => v,
                 Err(err) => {
-                    vm.bc_fault = Some((fp as u64, pc as u32));
+                    vm.bc_fault = Some((fp as u64, pc_u32!()));
                     return Err(err);
                 }
             }
@@ -356,13 +356,13 @@ fn exec_loop(
             let words = fp as *const u64;
             let (caller_fp, ret_pc) = unsafe { (*words, *words.add(1)) };
             fp = caller_fp as *mut u8;
-            pc = ret_pc as usize;
+            set_pc!(ret_pc);
         }};
     }
 
     loop {
-        debug_assert!(pc < k1.bc.code.len(), "bc pc out of bounds");
-        let h = code_at!(pc);
+        debug_assert!((pc_u32!() as usize) < k1.bc.code.len(), "bc pc out of bounds");
+        let h = unsafe { *pc };
         instrs_run += 1;
         if instrs_run > STATIC_EXEC_INSTR_LIMIT {
             vmerr!(
@@ -371,7 +371,9 @@ fn exec_loop(
             );
         }
         let op = Opcode::from_u8(header_op(h));
-        op_counts[op as usize] += 1;
+        if count_ops {
+            op_counts[op as usize] += 1;
+        }
 
         match op {
             Opcode::Halt => {
@@ -381,8 +383,10 @@ fn exec_loop(
                     store_value(k1, top_ret_pt, vm.overall_return_addr, ret_reg);
                 }
                 k1.timing.total_vm_instrs += instrs_run;
-                for (i, n) in op_counts.iter().enumerate() {
-                    k1.timing.opcode_counts[i] += *n as i64;
+                if count_ops {
+                    for (i, n) in op_counts.iter().enumerate() {
+                        k1.timing.opcode_counts[i] += *n as i64;
+                    }
                 }
                 return Ok(0);
             }
@@ -395,12 +399,12 @@ fn exec_loop(
                 advance!(Opcode::Enter);
             }
             Opcode::Jump => {
-                pc = operand!(0) as usize;
+                set_pc!(operand!(0));
             }
             Opcode::JumpIf => {
                 let cond = read_src!(operand!(0));
                 let target = if cond.as_bool() { operand!(1) } else { operand!(2) };
-                pc = target as usize;
+                set_pc!(target);
             }
             Opcode::Unreachable => {
                 vmerr!("Reached unreachable instruction");
@@ -430,13 +434,14 @@ fn exec_loop(
                     unsafe { words.add(3 + k).write(v.bits()) };
                 }
                 let sret = read_src!(operand!(2));
+                let ret_pc = pc_u32!() as usize + 4 + nargs;
                 unsafe {
                     words.write(fp as u64);
-                    words.add(1).write((pc + 4 + nargs) as u64);
+                    words.add(1).write(ret_pc as u64);
                     words.add(2).write(sret.bits());
                 }
                 fp = new_fp;
-                pc = target as usize;
+                set_pc!(target);
             }
             Opcode::CallIndirect => {
                 let fn_value = read_src!(operand!(0));
@@ -452,7 +457,7 @@ fn exec_loop(
                             "[bc] UNEXPECTED: lazily lowering indirect-call target at runtime: {}",
                             k1.function_id_to_string(function_id, false)
                         );
-                        vm.eval_span = k1.bc.span_for_pc(pc as u32);
+                        vm.eval_span = k1.bc.span_for_pc(pc_u32!());
                         let bcgen_start = k1.timing.clock.raw();
                         let info =
                             vmtry!(lower::get_or_lower_function(k1, function_id, vm.eval_span));
@@ -477,13 +482,14 @@ fn exec_loop(
                     unsafe { words.add(3 + k).write(v.bits()) };
                 }
                 let sret = read_src!(operand!(2));
+                let ret_pc = pc_u32!() as usize + 4 + nargs;
                 unsafe {
                     words.write(fp as u64);
-                    words.add(1).write((pc + 4 + nargs) as u64);
+                    words.add(1).write(ret_pc as u64);
                     words.add(2).write(sret.bits());
                 }
                 fp = new_fp;
-                pc = info.code_start as usize;
+                set_pc!(info.code_start);
             }
             Opcode::CallExtern => {
                 let function_id = FunctionId::from_u32(operand!(0)).unwrap();
@@ -493,7 +499,7 @@ fn exec_loop(
                 let ret_pt = PhysicalType::from_u32(operand!(3));
                 let fp_delta = operand!(4) as usize;
                 let nargs = operand!(5) as usize;
-                vm.eval_span = k1.bc.span_for_pc(pc as u32);
+                vm.eval_span = k1.bc.span_for_pc(pc_u32!());
 
                 let new_fp = unsafe { fp.add(fp_delta) };
                 let args: &[Value] = unsafe {
@@ -535,7 +541,7 @@ fn exec_loop(
                 let _ret_pt = PhysicalType::from_u32(operand!(1));
                 let fp_delta = operand!(2) as usize;
                 let nargs = operand!(3) as usize;
-                vm.eval_span = k1.bc.span_for_pc(pc as u32);
+                vm.eval_span = k1.bc.span_for_pc(pc_u32!());
 
                 let new_fp = unsafe { fp.add(fp_delta) };
                 let args: &[Value] = unsafe {
@@ -564,7 +570,7 @@ fn exec_loop(
                 let ret_pt = PhysicalType::from_u32(operand!(0));
                 let fp_delta = operand!(1) as usize;
                 let nargs = operand!(2) as usize;
-                vm.eval_span = k1.bc.span_for_pc(pc as u32);
+                vm.eval_span = k1.bc.span_for_pc(pc_u32!());
 
                 let new_fp = unsafe { fp.add(fp_delta) };
                 let args: &[Value] = unsafe {
@@ -614,7 +620,7 @@ fn exec_loop(
                             // typechecking and nested static execution (on alt VMs),
                             // possibly more lowering.
                             let storage_pt = PhysicalType::from_u32(operand!(2));
-                            vm.eval_span = k1.bc.span_for_pc(pc as u32);
+                            vm.eval_span = k1.bc.span_for_pc(pc_u32!());
                             vmtry!(vm::resolve_global(k1, vm, global_id, storage_pt))
                         }
                     },
@@ -944,7 +950,7 @@ fn exec_loop(
                 let dst = operand!(0);
                 let type_id = TypeId::from_nzu32(NonZeroU32::new(operand!(1)).unwrap());
                 let input = read_src!(operand!(2));
-                vm.eval_span = k1.bc.span_for_pc(pc as u32);
+                vm.eval_span = k1.bc.span_for_pc(pc_u32!());
                 let value_id =
                     vmtry!(vm::vm_value_to_static_value(k1, type_id, input, vm.eval_span));
                 write_slot!(dst, Value::u64(value_id.as_u32() as u64));

@@ -252,7 +252,7 @@ impl TypedProgram {
         &mut self,
         name: StringId,
         initializer_id: TypedExprId,
-        no_mangle: bool,
+        user_visible: bool,
         owner_scope: ScopeId,
         span: Option<SpanId>,
     ) -> SynthedVariable {
@@ -262,20 +262,19 @@ impl TypedProgram {
             Some(span) => span,
         };
         let type_id = initializer_type;
-        let new_ident = if no_mangle {
-            name
-        } else {
-            self.build_ident_with(|k1, s| {
-                write!(s, "__{}_{}", k1.ast.idents.get_string(name), k1.variables.len()).unwrap();
-            })
-        };
         let mut flags = VariableFlags::empty();
-        flags.set(VariableFlags::UserHidden, !no_mangle);
+        flags.set(VariableFlags::UserHidden, !user_visible);
         // let reassignable = true;
         // flags.set(VariableFlags::Reassigned, reassignable);
         let defn_stmt = self.stmts.next_id();
+
+        // We used to generate a unique name, in case say a nested list literal's synthed var
+        // shadowed another's. But we don't resolve these by name; rather we synth the expr by
+        // variable id anyway. So there is no need for a unique name, even for hidden, since we
+        // no longer put a hidden variable into the scope either. This might hurt debugging, a bit,
+        // but, scopes are for visibility. So I think it is good.
         let variable = Variable {
-            name: new_ident,
+            name,
             owner_scope,
             type_id,
             kind: VariableKind::StackSynthetic(defn_stmt),
@@ -303,7 +302,10 @@ impl TypedProgram {
             false,
             None,
         );
-        self.scopes.add_variable(owner_scope, new_ident, variable_id);
+        // nocommit: if this doesn't work, continue making all the names __unreachable
+        if user_visible {
+            self.scopes.add_variable(owner_scope, name, variable_id);
+        }
         SynthedVariable { variable_id, defn_stmt, variable_expr, parsed_expr }
     }
 

@@ -373,6 +373,15 @@ pub struct CompilerConfig {
     pub setup_mode: SetupMode,
 }
 
+impl CompilerConfig {
+    pub fn host_os(&self) -> TargetOs {
+        match detect_host_target() {
+            Some(host) => host.target_os(),
+            None => self.target.target_os(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct LspCompileOptions {
     /// canonicalized path -> content to compile instead of the file on disk

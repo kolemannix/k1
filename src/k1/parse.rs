@@ -38,8 +38,7 @@ nz_u32_id!(ParsedMacroId);
 nz_u32_id!(ParsedGlobalId);
 
 nz_u32_id!(ParsedAbilityId);
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct ParsedAbilityImplId(u32);
+nz_u32_id!(ParsedAbilityImplId);
 
 nz_u32_id!(ParsedNamespaceId);
 nz_u32_id!(ParsedExprId);
@@ -1642,7 +1641,7 @@ pub struct ParsedProgram {
     pub type_defns: VPool<ParsedTypeDefn, ParsedTypeDefnId>,
     pub namespaces: VPool<ParsedNamespace, ParsedNamespaceId>,
     pub abilities: VPool<ParsedAbility, ParsedAbilityId>,
-    pub ability_impls: Vec<ParsedAbilityImplementation>,
+    pub ability_impls: VPool<ParsedAbilityImplementation, ParsedAbilityImplId>,
     pub sources: SourceFiles,
     pub idents: IdentPool,
     pub exprs: ParsedExpressionPool,
@@ -1680,7 +1679,7 @@ impl ParsedProgram {
             type_defns: VPool::make("parsed_type_defn"),
             namespaces: VPool::make("parsed_namespaces"),
             abilities: VPool::make("parsed_abilities"),
-            ability_impls: Vec::new(),
+            ability_impls: VPool::make("parsed_ability_impls"),
             sources: SourceFiles::default(),
             idents,
             exprs: ParsedExpressionPool::make(),
@@ -1730,7 +1729,7 @@ impl ParsedProgram {
         type_defns.snap(w);
         namespaces.snap(w);
         abilities.snap(w);
-        w.write_slice(ability_impls);
+        ability_impls.snap(w);
         w.write_slice(&sources.sources);
         idents.snap(w);
         exprs.expressions.snap(w);
@@ -1757,7 +1756,7 @@ impl ParsedProgram {
         ast.type_defns.restore(r);
         ast.namespaces.restore(r);
         ast.abilities.restore(r);
-        ast.ability_impls = r.read_vec();
+        ast.ability_impls.restore(r);
         ast.sources.sources = r.read_vec();
         ast.idents.restore(r);
         ast.exprs.expressions.restore(r);
@@ -1855,16 +1854,16 @@ impl ParsedProgram {
     }
 
     pub fn get_ability_impl(&self, id: ParsedAbilityImplId) -> &ParsedAbilityImplementation {
-        &self.ability_impls[id.0 as usize]
+        self.ability_impls.get(id)
     }
 
     pub fn add_ability_impl(
         &mut self,
         mut ability_impl: ParsedAbilityImplementation,
     ) -> ParsedAbilityImplId {
-        let id = ParsedAbilityImplId(self.ability_impls.len() as u32);
+        let id = self.ability_impls.next_id();
         ability_impl.id = id;
-        self.ability_impls.push(ability_impl);
+        self.ability_impls.add(ability_impl);
         id
     }
 
@@ -2150,6 +2149,14 @@ impl SourceFile {
 
     pub fn content<'m>(&self, mem: &'m Mem) -> &'m str {
         unsafe { std::str::from_utf8_unchecked(mem.getn_lt(self.content)) }
+    }
+
+    pub fn content_len(&self) -> usize {
+        self.content.len() as usize
+    }
+
+    pub fn newline_count(&self) -> usize {
+        self.newline_positions.len() as usize
     }
 
     pub fn get_content<'m>(&self, mem: &'m Mem, start: u32, len: u32) -> &'m str {
@@ -5191,7 +5198,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             generic_impl_params: generic_impl_params.to_slice(),
             self_type: target_type,
             functions,
-            id: ParsedAbilityImplId(u32::MAX),
+            id: ParsedAbilityImplId::PENDING,
             span,
             compile_condition,
         });

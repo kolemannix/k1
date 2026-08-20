@@ -181,9 +181,10 @@ impl TypedProgram {
         visited: &mut Vec<TypeId>,
     ) -> std::fmt::Result {
         w.write_str("[")?;
-        for (index, t) in spec_info.type_args.as_slice(&self.mem).iter().enumerate() {
+        let type_args = self.get_type_slice(spec_info.type_args);
+        for (index, t) in type_args.iter().enumerate() {
             self.display_type_id_ext(w, *t, mode, visited)?;
-            let last = index == spec_info.type_args.len() as usize - 1;
+            let last = index == type_args.len() - 1;
             if !last {
                 w.write_str(", ")?;
             }
@@ -1214,7 +1215,7 @@ impl TypedProgram {
     ) -> std::fmt::Result {
         let ability = self.abilities.get(ability_id);
         self.write_ident(w, ability.name)?;
-        if ability.parameters.is_empty() && ability.kind.arguments(&self.mem).is_empty() {
+        if ability.parameters.is_empty() && ability.kind.arguments(self).is_empty() {
             return Ok(());
         }
         // Argument slices zip with the base ability's params: ability-side then impl-side
@@ -1222,7 +1223,7 @@ impl TypedProgram {
         let base_params = self.mem.getn(base.parameters);
         write!(w, "[")?;
         let mut ability_params = base_params.iter().filter(|p| p.is_ability_side_param());
-        for arg in ability.kind.arguments(&self.mem) {
+        for arg in ability.kind.arguments(self) {
             if let Some(param) = ability_params.next() {
                 self.write_ident(w, param.name)?;
                 w.write_str(" := ")?;
@@ -1400,7 +1401,7 @@ impl TypedProgram {
         } else if let Some(spec_info) = specialization_info {
             let parent_type_params = self.get_function(spec_info.parent_function).type_params;
             w.write_char('[')?;
-            for (index, arg) in spec_info.type_arguments.as_slice(&self.mem).iter().enumerate() {
+            for (index, arg) in self.get_type_slice(spec_info.type_arguments).iter().enumerate() {
                 if index > 0 {
                     w.write_str(", ")?;
                 }

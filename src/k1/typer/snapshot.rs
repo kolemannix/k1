@@ -5,7 +5,7 @@ use crate::snap::{SnapReader, SnapWriter, restore_map_snap, write_map_snap};
 use super::*;
 
 static_assert_size!(K1Message, 12);
-static_assert_size!(AbilitySpec9nInfo, 20);
+static_assert_size!(AbilitySpec9nInfo, 12);
 static_assert_size!(SourceFileHash, 16);
 static_assert_size!(NameInNamespace, 8);
 
@@ -71,9 +71,12 @@ impl TypedProgram {
             program_settings,
             ast,
             functions,
+            function_specializations: _,
             variables,
             types,
             type_hashes,
+            type_slices,
+            type_slice_dedup: _,
             type_variable_counts,
             type_instance_info,
             type_defn_info,
@@ -157,10 +160,11 @@ impl TypedProgram {
         variables.snap(w);
         types.snap(w);
         write_map_snap(w, type_hashes);
+        type_slices.snap(w);
         type_variable_counts.snap(w);
         type_instance_info.snap(w);
         write_map_snap(w, type_defn_info);
-        w.sorted_entries(type_specializations.iter(), |w, e| w.write_t(e));
+        write_map_snap(w, type_specializations);
         write_map_snap(w, phys_types);
         write_map_snap(w, ast_ability_mapping);
         w.write_t(builtin_types);
@@ -235,16 +239,22 @@ impl TypedProgram {
         k1.modules_completed = r.read_vec();
         k1.program_settings = r.read_t();
         k1.functions.restore(r);
+        for (id, function) in k1.functions.iter_with_ids() {
+            if let Some(info) = function.specialization_info {
+                k1.function_specializations
+                    .entry((info.parent_function, info.type_arguments, info.fnlike_type_arguments))
+                    .or_insert(id);
+            }
+        }
         k1.variables.restore(r);
         k1.types.restore(r);
         k1.type_hashes = restore_map_snap(r);
+        k1.type_slices.restore(r);
+        k1.rebuild_type_slice_dedup();
         k1.type_variable_counts.restore(r);
         k1.type_instance_info.restore(r);
         k1.type_defn_info = restore_map_snap(r);
-        for _ in 0..r.read_len() {
-            let TypeSpecialization { base, args, specialized } = r.read_t();
-            k1.insert_specialization(base, args, specialized);
-        }
+        k1.type_specializations = restore_map_snap(r);
         k1.phys_types = restore_map_snap(r);
         k1.ast_ability_mapping = restore_map_snap(r);
         k1.builtin_types = r.read_t();

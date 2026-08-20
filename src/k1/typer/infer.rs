@@ -467,9 +467,9 @@ impl TypedProgram {
                         .abilities
                         .get(sig.specialized_ability_id)
                         .kind
-                        .arguments(&self.mem)
+                        .arguments(self)
                         .iter()
-                        .zip(self.abilities.get(the_impl.ability_id).kind.arguments(&self.mem));
+                        .zip(self.abilities.get(the_impl.ability_id).kind.arguments(self));
                     let impl_arg_iterator = self
                         .mem
                         .getn(sig.impl_arguments)
@@ -976,11 +976,9 @@ impl TypedProgram {
                     self.type_id_to_string(arg_info.generic_parent)
                 );
                 // We can directly 'solve' every appearance of a type param here
-                let passed_args = passed_info.type_args;
-                let arg_args = arg_info.type_args;
-                for (passed_type, arg_slot) in
-                    passed_args.as_slice(&self.mem).iter().zip(arg_args.as_slice(&self.mem))
-                {
+                let passed_args = self.get_type_slice(passed_info.type_args);
+                let arg_args = self.get_type_slice(arg_info.type_args);
+                for (passed_type, arg_slot) in passed_args.iter().zip(arg_args) {
                     self.unify_and_find_substitutions_rec(*passed_type, *arg_slot);
                 }
             } else {

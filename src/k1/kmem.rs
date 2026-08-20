@@ -1381,6 +1381,13 @@ impl<Tag> Mem<Tag> {
     }
 }
 
+#[cfg(feature = "profile")]
+impl<Tag> Drop for Mem<Tag> {
+    fn drop(&mut self) {
+        self.print_usage(std::any::type_name::<Tag>());
+    }
+}
+
 /// A fixed-size Vec-like collection pointing into a Mem's data
 /// Can behave like an auto-growing list if the `_grow` variants are used
 /// Carries its own arena byte offset, so `to_slice` needs no `Mem`.
