@@ -3341,12 +3341,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_fence(Self::llvm_atomic_ordering(ord), false, "").unwrap();
                 Ok(())
             }
-            Inst::Copy { dst, src, t, .. } => {
+            Inst::Copy { dst, src, t, unaligned, .. } => {
                 let dst_value = self.resolve_value(inst_mappings, dst)?;
                 let src_value = self.resolve_value(inst_mappings, src)?;
                 let layout = self.k1.get_pt_layout(t);
-                let dst_align = self.ir_memory_alignment(t, dst);
-                let src_align = self.ir_memory_alignment(t, src);
+                let dst_align = if unaligned { 1 } else { self.ir_memory_alignment(t, dst) };
+                let src_align = if unaligned { 1 } else { self.ir_memory_alignment(t, src) };
                 let bytes = self.builtin_types.ptr_sized_int.const_int(layout.size as u64, false);
                 self.builder
                     .build_memcpy(

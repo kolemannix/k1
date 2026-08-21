@@ -855,6 +855,7 @@ pub enum Inst {
         src: Value,
         t: PhysicalType,
         vm_size: u32,
+        unaligned: bool,
     },
     StructOffset {
         struct_t: AggregateTypeId,
@@ -1792,8 +1793,10 @@ impl<'k1> Builder<'k1> {
         if pt.is_empty() {
             None
         } else {
-            let copy_inst =
-                self.push_inst(Inst::Copy { dst, src, t: pt, vm_size: layout.size }, comment);
+            let copy_inst = self.push_inst(
+                Inst::Copy { dst, src, t: pt, vm_size: layout.size, unaligned: false },
+                comment,
+            );
             Some(copy_inst)
         }
     }
@@ -3434,7 +3437,11 @@ fn compile_vector_op(
                 None => b.push_alloca(ret_pt, IrComment::VectorLoadResult).as_value(),
                 Some(dst) => dst,
             };
-            b.push_copy(locn, src, ret_pt, IrComment::VectorLoad);
+            let vm_size = b.k1.get_pt_layout(ret_pt).size;
+            b.push_inst(
+                Inst::Copy { dst: locn, src, t: ret_pt, vm_size, unaligned: true },
+                IrComment::VectorLoad,
+            );
             Ok(locn)
         }
         VecOpKind::Store => {
@@ -3443,7 +3450,11 @@ fn compile_vector_op(
             let _ = vector_pt_parts(b, vec_pt)?;
             let vec_value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let dst_ptr = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
-            b.push_copy(dst_ptr, vec_value, vec_pt, IrComment::VectorStore);
+            let vm_size = b.k1.get_pt_layout(vec_pt).size;
+            b.push_inst(
+                Inst::Copy { dst: dst_ptr, src: vec_value, t: vec_pt, vm_size, unaligned: true },
+                IrComment::VectorStore,
+            );
             Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
         }
         VecOpKind::GetLane => {
@@ -4417,8 +4428,11 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
         Inst::Fence { ord } => {
             write!(w, "fence {}", ord.name())?;
         }
-        Inst::Copy { dst, src, t: _, vm_size } => {
+        Inst::Copy { dst, src, t: _, vm_size, unaligned } => {
             write!(w, "copy {} {}, src {}", vm_size, dst, src)?;
+            if unaligned {
+                write!(w, ", unaligned")?;
+            }
         }
         Inst::StructOffset { struct_t, base, field_index, vm_offset, unaligned } => {
             write!(w, "struct_offset ")?;

@@ -1392,6 +1392,16 @@ fn lld_link(flavor: &str, args: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn command_status(cmd: &mut std::process::Command) -> Result<std::process::ExitStatus> {
+    let program = cmd.get_program().to_string_lossy().into_owned();
+    cmd.status().map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => {
+            anyhow::anyhow!("`{program}` is not installed or not on PATH")
+        }
+        _ => anyhow::anyhow!("failed to run `{program}`: {e}"),
+    })
+}
+
 pub fn write_linked_output(
     k1: &TypedProgram,
     module_name: &str,
@@ -1525,7 +1535,7 @@ pub fn write_linked_output(
     build_cmd.arg(out_name.as_str());
 
     log::debug!("Build Command: {:?}", build_cmd);
-    let build_status = build_cmd.status()?;
+    let build_status = command_status(&mut build_cmd)?;
 
     if !build_status.success() {
         eprintln!("Build failed!");
@@ -1582,7 +1592,9 @@ pub fn write_library_export_files(k1: &TypedProgram, module_name: &str) -> Resul
                 list.push_str(s);
                 list.push('\n');
             }
-            std::fs::write(build_export_list_file_path(k1, module_name), list)?;
+            let list_path = build_export_list_file_path(k1, module_name);
+            std::fs::write(&list_path, list)
+                .map_err(|e| anyhow::anyhow!("Failed to write {list_path}: {e}"))?;
         }
         TargetOs::Linux => {
             let mut list = String::with_capacity(symbols.len() * 24);
@@ -1595,8 +1607,12 @@ pub fn write_library_export_files(k1: &TypedProgram, module_name: &str) -> Resul
                 script.push_str(";\n");
             }
             script.push_str("local: *; };\n");
-            std::fs::write(build_export_list_file_path(k1, module_name), list)?;
-            std::fs::write(build_version_script_file_path(k1, module_name), script)?;
+            let list_path = build_export_list_file_path(k1, module_name);
+            std::fs::write(&list_path, list)
+                .map_err(|e| anyhow::anyhow!("Failed to write {list_path}: {e}"))?;
+            let script_path = build_version_script_file_path(k1, module_name);
+            std::fs::write(&script_path, script)
+                .map_err(|e| anyhow::anyhow!("Failed to write {script_path}: {e}"))?;
         }
         TargetOs::Wasm => bail!("library output is not supported on wasm"),
     }
@@ -1642,7 +1658,7 @@ pub fn write_library_archive(k1: &TypedProgram, module_name: &str) -> Result<()>
     ld_cmd.arg("-o");
     ld_cmd.arg(combined_name.as_str());
     log::debug!("Partial link Command: {:?}", ld_cmd);
-    if !ld_cmd.status()?.success() {
+    if !command_status(&mut ld_cmd)?.success() {
         bail!("partial link of {combined_name} failed");
     }
 
@@ -1652,7 +1668,7 @@ pub fn write_library_archive(k1: &TypedProgram, module_name: &str) -> Result<()>
             .arg(format!("--keep-global-symbols={}", build_export_list_file_path(k1, module_name)));
         objcopy_cmd.arg(combined_name.as_str());
         log::debug!("Localize Command: {:?}", objcopy_cmd);
-        if !objcopy_cmd.status()?.success() {
+        if !command_status(&mut objcopy_cmd)?.success() {
             bail!("objcopy localize of {combined_name} failed");
         }
     }
@@ -1663,7 +1679,7 @@ pub fn write_library_archive(k1: &TypedProgram, module_name: &str) -> Result<()>
     ar_cmd.arg(archive_name.as_str());
     ar_cmd.arg(combined_name.as_str());
     log::debug!("Archive Command: {:?}", ar_cmd);
-    if !ar_cmd.status()?.success() {
+    if !command_status(&mut ar_cmd)?.success() {
         bail!("archiving {archive_name} failed");
     }
 
@@ -1733,7 +1749,6 @@ pub fn codegen_module<'ctx, 'module>(
     // Under --filc, Fil-C's clang runs the whole optimization pipeline
     let optimize_ir = args.optimize && !codegen.k1.config.filc;
     if let Err(e) = codegen.optimize_verify(optimize_ir) {
-        eprintln!("Codegen error: {}", e);
         anyhow::bail!(e)
     };
 
@@ -1872,7 +1887,7 @@ fn write_reload_dylib(
     link_cmd.arg("-o");
     link_cmd.arg(&staged_path);
     log::debug!("Reload dylib link command: {:?}", link_cmd);
-    if !link_cmd.status()?.success() {
+    if !command_status(&mut link_cmd)?.success() {
         let _ = std::fs::remove_file(&staged_path);
         bail!("linking reload dylib {dylib_path} failed");
     }
@@ -1910,7 +1925,13 @@ pub fn run_compiled_program(
     run_cmd.args(program_args);
     run_cmd.current_dir(idents.get_string(program_home_dir));
     log::debug!("Run Command: {:?}", run_cmd);
-    let run_status = run_cmd.status().unwrap();
+    let run_status = match run_cmd.status() {
+        Ok(status) => status,
+        Err(e) => {
+            error!("failed to run `{}`: {e}", run_cmd.get_program().to_string_lossy());
+            return None;
+        }
+    };
 
     match run_status.code() {
         Some(code) => {
