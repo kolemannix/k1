@@ -86,6 +86,35 @@ ns type_synthesis {
     let w: either { tag-enum(i64), x }:tag-enum = 33
     assert-equals(w, 33)
 
+    let made-ref: types/type-id = #static types/make-reference(types/id[point])
+    assert-equals(made-ref, types/id[*point])
+    require made-ref.schema() is :reference .{ inner-type-id }
+      and inner-type-id == types/id[point]
+      else crash("reference schema mismatch")
+
+    let made-arr: types/type-id = #static types/make-array(types/id[i64], 10)
+    assert-equals(made-arr, types/id[array[i64, 10]])
+    require made-arr.schema() is :array .{ element-type-id, size }
+      and element-type-id == types/id[i64]
+      and size is :some(10)
+      else crash("array schema mismatch")
+
+    let made-fn: types/type-id = #static types/make-fn([types/id[i64], types/id[string]], types/id[bool])
+    assert-equals(made-fn, types/id[fn(i64, string) -> bool])
+    require made-fn.schema() is :function .{ params, return-type-id }
+      and params.len() == 2
+      and params.get(0).type-id == types/id[i64]
+      and params.get(1).type-id == types/id[string]
+      and return-type-id == types/id[bool]
+      else crash("fn schema mismatch")
+
+    let made-fn-ptr: types/type-id = #static types/make-reference(
+      types/make-fn([types/id[i64], types/id[string]], types/id[bool]))
+    assert-equals(made-fn-ptr, types/id[*fn(i64, string) -> bool])
+    require made-fn-ptr.schema() is :function-pointer .{ function-type-id }
+      and function-type-id == made-fn
+      else crash("fn pointer schema mismatch")
+
     .{}
   }
 }

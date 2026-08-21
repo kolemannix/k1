@@ -490,6 +490,12 @@ pub enum BackendBuiltin {
     MakeStruct,
     /// types/make-either: comptime-only; builds a sum or scalar enum type on the VM
     MakeEither,
+    /// types/make-reference: comptime-only; * of a type (fn pointer for function types)
+    MakeReference,
+    /// types/make-array: comptime-only; array[t, N]
+    MakeArray,
+    /// types/make-fn: comptime-only; fn(...) -> t
+    MakeFn,
 
     // Platform-provided
     MemCopy,
@@ -511,6 +517,9 @@ impl BackendBuiltin {
             BackendBuiltin::TypeName => "type_name",
             BackendBuiltin::MakeStruct => "make_struct",
             BackendBuiltin::MakeEither => "make_either",
+            BackendBuiltin::MakeReference => "make_reference",
+            BackendBuiltin::MakeArray => "make_array",
+            BackendBuiltin::MakeFn => "make_fn",
             BackendBuiltin::MemCopy => "mem_copy",
             BackendBuiltin::MemMove => "mem_move",
             BackendBuiltin::MemSet => "mem_set",

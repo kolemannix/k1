@@ -144,6 +144,11 @@ ns types {
   fn variant-data[t](name: string): make-either.variants.t { .{ name, payload = :some types/id[t], tag = :none } }
   fn variant-empty(name: string):   make-either.variants.t { .{ name, payload = :none,             tag = :none } }
 
+  // Mirrors source *: a function inner type makes a function pointer
+  fn(intern) make-reference(inner: type-id): type-id
+  fn(intern) make-array(element: type-id, size: int): type-id
+  fn(intern) make-fn(params: span[type-id], return-type: type-id): type-id
+
   type layout = { size: u32, align: u32 }
 
   type type-schema = either {

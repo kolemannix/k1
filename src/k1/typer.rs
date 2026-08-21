@@ -4737,18 +4737,7 @@ impl TypedProgram {
                 for (index, param) in self.ast.mem.getn(fun_type.params).iter().enumerate() {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
 
-                    let name = match index {
-                        0 => self.ast.idents.b.param_0,
-                        1 => self.ast.idents.b.param_1,
-                        2 => self.ast.idents.b.param_2,
-                        3 => self.ast.idents.b.param_3,
-                        4 => self.ast.idents.b.param_4,
-                        5 => self.ast.idents.b.param_5,
-                        6 => self.ast.idents.b.param_6,
-                        7 => self.ast.idents.b.param_7,
-                        8 => self.ast.idents.b.param_8,
-                        i => format_ident!(self, "param_{}", i),
-                    };
+                    let name = self.positional_param_name(index);
                     params.push(FnParamType {
                         type_id,
                         name,
@@ -18119,6 +18108,11 @@ impl TypedProgram {
                     }
                     (None, "make-struct") => Some(Builtin::Backend(BackendBuiltin::MakeStruct)),
                     (None, "make-either") => Some(Builtin::Backend(BackendBuiltin::MakeEither)),
+                    (None, "make-reference") => {
+                        Some(Builtin::Backend(BackendBuiltin::MakeReference))
+                    }
+                    (None, "make-array") => Some(Builtin::Backend(BackendBuiltin::MakeArray)),
+                    (None, "make-fn") => Some(Builtin::Backend(BackendBuiltin::MakeFn)),
                     _ => None,
                 },
                 Some("bool") => match fn_name_str {
@@ -22754,6 +22748,21 @@ impl TypedProgram {
         }
     }
 
+    fn positional_param_name(&mut self, index: usize) -> StringId {
+        match index {
+            0 => self.ast.idents.b.param_0,
+            1 => self.ast.idents.b.param_1,
+            2 => self.ast.idents.b.param_2,
+            3 => self.ast.idents.b.param_3,
+            4 => self.ast.idents.b.param_4,
+            5 => self.ast.idents.b.param_5,
+            6 => self.ast.idents.b.param_6,
+            7 => self.ast.idents.b.param_7,
+            8 => self.ast.idents.b.param_8,
+            i => format_ident!(self, "param_{}", i),
+        }
+    }
+
     pub fn type_id_from_raw(
         &mut self,
         raw: vm::k1_types::TypeId,
@@ -22899,6 +22908,63 @@ impl TypedProgram {
                 int_type: tag_type,
             }))
         };
+        self.register_type_metainfo(new_type_id);
+        Ok(new_type_id)
+    }
+
+    pub fn make_reference_raw(&mut self, inner: TypeId) -> TypeId {
+        let new_type_id = if let Type::Function(_) = self.types.get(inner) {
+            self.add_function_pointer_type(inner)
+        } else {
+            self.add_reference_type(inner)
+        };
+        self.register_type_metainfo(new_type_id);
+        new_type_id
+    }
+
+    pub fn make_array_raw(
+        &mut self,
+        element_type: TypeId,
+        size: i64,
+        span: SpanId,
+    ) -> K1Result<TypeId> {
+        if size < 0 {
+            kbail!(self, span, "make-array: negative size {}", size);
+        }
+        let size_value_id = self.static_values.add_size(size);
+        let size_type = self.add_type_anon(Type::StaticValue(StaticValueType {
+            family_type_id: I64_TYPE_ID,
+            value_id: Some(size_value_id),
+        }));
+        let new_type_id = self.add_type_anon(Type::Array(ArrayType { element_type, size_type }));
+        self.register_type_metainfo(new_type_id);
+        Ok(new_type_id)
+    }
+
+    pub fn make_fn_raw(
+        &mut self,
+        raw_param_types: &[vm::k1_types::TypeId],
+        return_type: TypeId,
+        span: SpanId,
+    ) -> K1Result<TypeId> {
+        let mut params: List<FnParamType, _> = self.mem.new_list(raw_param_types.len() as u32);
+        for (index, raw) in raw_param_types.iter().enumerate() {
+            let type_id = self.type_id_from_raw(*raw, span)?;
+            let name = self.positional_param_name(index);
+            params.push(FnParamType {
+                type_id,
+                name,
+                is_context: false,
+                is_lambda_env: false,
+                is_macro_code: false,
+            });
+        }
+        let new_type_id = self.add_type_anon(Type::Function(FunctionType {
+            physical_params: params.to_slice(),
+            is_lambda: false,
+            return_type,
+            abi_mode: AbiMode::Internal,
+        }));
         self.register_type_metainfo(new_type_id);
         Ok(new_type_id)
     }

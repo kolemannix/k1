@@ -2823,9 +2823,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.position_at_end(finish_block);
                 self.builder.build_return(None).unwrap()
             }
-            BackendBuiltin::MakeStruct | BackendBuiltin::MakeEither => {
-                self.builder.build_unreachable().unwrap()
-            }
+            BackendBuiltin::MakeStruct
+            | BackendBuiltin::MakeEither
+            | BackendBuiltin::MakeReference
+            | BackendBuiltin::MakeArray
+            | BackendBuiltin::MakeFn => self.builder.build_unreachable().unwrap(),
             BackendBuiltin::CompilerMessage => self.builder.build_return(None).unwrap(),
             BackendBuiltin::ReplCheckbox => self.builder.build_return(None).unwrap(),
         };

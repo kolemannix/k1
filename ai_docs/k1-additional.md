@@ -381,6 +381,17 @@ let flags = #static types/make-either(some(types/id[u32]), [
 ])
 ```
 
+`types/make-reference`, `types/make-array`, and `types/make-fn` mirror `*t`,
+`array[t, N]`, and `fn(...) -> t`. Like source `*`, `make-reference` of a
+function type yields a function pointer.
+
+```rust
+types/make-reference(types/id[point])                        // *point
+types/make-array(types/id[i64], 10)                          // array[i64, 10]
+types/make-fn([types/id[i64]], types/id[bool])               // fn(i64) -> bool
+types/make-reference(types/make-fn([], types/id[bool]))      // *fn() -> bool
+```
+
 `.tag-enum` on a sum type derives the scalar enum of just its tags (this is
 how `types/int-kind` is defined from `types/int-value`). A variant the
 programmer named `tag-enum` shadows the accessor.
