@@ -2643,6 +2643,11 @@ impl Module {
     pub fn root_file_id(&self, mem: &kmem::Mem<TypedProgram>) -> FileId {
         self.source_file_hashes.as_slice(mem)[0].file_id
     }
+
+    /// Just inferring from whether or not we have a real scope id yet, for now. Bit sloppy
+    pub fn is_pending(&self) -> bool {
+        self.namespace_scope_id == ScopeId::PENDING
+    }
 }
 
 #[derive(Clone, Copy)]

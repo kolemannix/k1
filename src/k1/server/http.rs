@@ -30,7 +30,11 @@ fn bind_open_port() -> Option<(TcpListener, u16)> {
 
 fn open_tab_when_program_ready(k1: &SharedProgram, url: &str) {
     loop {
-        let ready = k1.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_some();
+        let ready = k1
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_deref()
+            .is_some_and(|k1| !k1.primary_module().is_pending());
         if ready {
             break;
         }
@@ -136,8 +140,10 @@ fn handle_client(k1: &SharedProgram, bus: &bus::EventBus, mut stream: TcpStream)
             // the repl session to one bad cell is worse than any inconsistency
             let mut guard = k1.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             match guard.as_deref_mut() {
-                Some(k1) => super::handle_request(k1, bus, &method, &path, body),
-                None => Response::Unavailable,
+                Some(k1) if !k1.primary_module().is_pending() => {
+                    super::handle_request(k1, bus, &method, &path, body)
+                }
+                _ => Response::Unavailable,
             }
         };
         write_response(&mut stream, &response);
