@@ -57,16 +57,14 @@ static void _k1_bt_error(void *data, const char *msg, int errnum) {
   (void)errnum;
 }
 
+/* Names the symbol table holds for a pc; the string is owned by the
+   backtrace state and outlives this callback */
 static void _k1_bt_syminfo(void *data, uintptr_t pc, const char *symname, uintptr_t symval,
                            uintptr_t symsize) {
-  (void)data;
+  (void)pc;
   (void)symval;
   (void)symsize;
-  if (symname != NULL) {
-    printf("%s\n", symname);
-  } else {
-    printf("0x%lx\n", (unsigned long)pc);
-  }
+  *(const char **)data = symname;
 }
 
 static int _k1_bt_frame(void *data, uintptr_t pc, const char *filename, int lineno,
@@ -76,12 +74,20 @@ static int _k1_bt_frame(void *data, uintptr_t pc, const char *filename, int line
   if (ctx->remaining <= 0) return 1;
   ctx->remaining -= 1;
   ctx->printed += 1;
-  if (function != NULL && filename != NULL) {
-    printf("%s at %s:%d\n", function, filename, lineno);
-  } else if (function != NULL) {
-    printf("%s\n", function);
+  /* k1 emits a line table but no subprogram DIEs, so frames in k1 code arrive
+     with a file and line and no function name; the symbol table has the name */
+  const char *name = function;
+  if (name == NULL) {
+    backtrace_syminfo(_k1_bt_state, pc, _k1_bt_syminfo, _k1_bt_error, &name);
+  }
+  if (name != NULL && filename != NULL) {
+    printf("%s at %s:%d\n", name, filename, lineno);
+  } else if (name != NULL) {
+    printf("%s\n", name);
+  } else if (filename != NULL) {
+    printf("%s:%d\n", filename, lineno);
   } else {
-    backtrace_syminfo(_k1_bt_state, pc, _k1_bt_syminfo, _k1_bt_error, NULL);
+    printf("0x%lx\n", (unsigned long)pc);
   }
   return 0;
 }
@@ -96,12 +102,13 @@ static void _k1_print_raw(void **frames, int count) {
   free(symbols);
 }
 
+/* Callers abort() right after us, which does not drain stdio, so a piped
+   stdout would otherwise discard the whole backtrace */
 void _k1_print_backtrace(int max_count) {
 #ifdef __APPLE__
   void *frames[max_count];
   int count = backtrace(frames, max_count);
-  if (_k1_symbolize_atos(frames, count) == 0) return;
-  _k1_print_raw(frames, count);
+  if (_k1_symbolize_atos(frames, count) != 0) _k1_print_raw(frames, count);
 #else
   if (_k1_bt_state == NULL) {
     _k1_bt_state = backtrace_create_state(NULL, 1, _k1_bt_error, NULL);
@@ -109,11 +116,15 @@ void _k1_print_backtrace(int max_count) {
   if (_k1_bt_state != NULL) {
     struct _k1_bt_ctx ctx = {max_count, 0};
     backtrace_full(_k1_bt_state, 0, _k1_bt_frame, _k1_bt_error, &ctx);
-    if (ctx.printed > 0) return;
+    if (ctx.printed > 0) {
+      fflush(stdout);
+      return;
+    }
   }
   void *frames[max_count];
   int count = backtrace(frames, max_count);
   _k1_print_raw(frames, count);
 #endif
+  fflush(stdout);
 }
 #endif

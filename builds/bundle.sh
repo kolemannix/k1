@@ -21,6 +21,9 @@ EXCLUDES=(
   --exclude 'k1_lsp.log*'
 )
 
+make -C modules/core/libs clean build wasm nocrt
+make -C test_src/ffi_abi_test/libs clean build
+
 rm -rf $DST
 mkdir -p $DST
 cp $TT/k1 $DST/k1

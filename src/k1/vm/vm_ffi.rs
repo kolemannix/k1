@@ -187,10 +187,47 @@ fn scalar_to_ffi_type(st: ScalarType) -> libffi::low::ffi_type {
     }
 }
 
+/// SysV AMD64 3.2.3 puts any aggregate with a misaligned field in class MEMORY,
+/// which is what codegen does for the same types. libffi's model has no offsets
+/// and so classifies such a struct by its size, handing it to the callee in a
+/// register while the callee reads it off the stack.
+///
+/// The one classification rule libffi does share is that an aggregate holding a
+/// member larger than two eightbytes is MEMORY, so we describe these structs as
+/// holding a single oversized member. Their real size and alignment are set
+/// here rather than left for `ffi_prep_cif` to derive, so the value copied and
+/// the stack consumed still match the type.
+fn memory_class_ffi_type(
+    k1: &mut TypedProgram,
+    layout: Layout,
+) -> libffi::low::ffi_type {
+    const MAX_REGISTER_AGG_BYTES: u32 = 16;
+    let filler_len = MAX_REGISTER_AGG_BYTES + 1;
+    let mut element_storage = k1.mem.new_list(filler_len);
+    for _ in 0..filler_len {
+        element_storage.push(unsafe { types::uint8 });
+    }
+    let filler = make_struct_ffi_type(k1, element_storage.as_slice_mut(), filler_len as usize, 1);
+    let filler_ptr: *mut ffi_type = k1.mem.push(filler);
+    let mut filler_ptrs = k1.mem.new_list::<*mut ffi_type>(2);
+    filler_ptrs.push(filler_ptr);
+    filler_ptrs.push(core::ptr::null_mut());
+    ffi_type {
+        size: layout.size as usize,
+        alignment: layout.align as u16,
+        type_: type_tag::STRUCT,
+        elements: filler_ptrs.as_mut_ptr(),
+    }
+}
+
 fn pt_to_ffi_type(
     k1: &mut TypedProgram,
     pt: PhysicalType,
 ) -> std::result::Result<libffi::low::ffi_type, &'static str> {
+    if cfg!(target_arch = "x86_64") && k1.pt_has_misaligned_fields(pt) {
+        let layout = k1.get_pt_layout(pt);
+        return Ok(memory_class_ffi_type(k1, layout));
+    }
     match pt.as_enum() {
         PhysicalTypeEnum::Empty => Ok(unsafe { types::void }),
         PhysicalTypeEnum::Scalar(st) => Ok(scalar_to_ffi_type(st)),
