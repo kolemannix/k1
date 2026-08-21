@@ -34,9 +34,22 @@ pub(crate) struct InferArgStash<'a> {
 }
 
 pub(crate) enum InferenceFailure {
-    ArgEval { error: K1Message, expected_type: TypeId },
-    Mismatch { expected: TypeId, actual: TypeId, reason: &'static str, span: SpanId },
-    Unsolved { params: SV8<TypeId>, arguments: SV8<(TypeId, TypeId)>, solutions: SV8<TypeSubstitutionPair>, span: SpanId },
+    ArgEval {
+        error: K1Message,
+        expected_type: TypeId,
+    },
+    Mismatch {
+        expected: TypeId,
+        actual: TypeId,
+        reason: &'static str,
+        span: SpanId,
+    },
+    Unsolved {
+        params: SV8<TypeId>,
+        arguments: SV8<(TypeId, TypeId)>,
+        solutions: SV8<TypeSubstitutionPair>,
+        span: SpanId,
+    },
     Constraint(K1Message),
 }
 
@@ -736,7 +749,11 @@ impl TypedProgram {
                 MaybeTypedExpr::Typed(_) => {
                     unreachable!("Synthesizing calls with function type params is unsupported")
                 }
-                MaybeTypedExpr::Parsed(p) => match self.ast.exprs.get(self.ast.exprs.skip_type_hint(p)) {
+                MaybeTypedExpr::Parsed(p) => match self
+                    .ast
+                    .exprs
+                    .get(self.ast.exprs.skip_type_hint(p))
+                {
                     ParsedExpr::Lambda(_lam) => {
                         debug!(
                             "substituting type for an ftp lambda so that it can infer (is_inf={})",

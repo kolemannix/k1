@@ -1569,7 +1569,11 @@ impl TypedProgram {
     /// Reserve the result id for an in-flight or deferred generic instantiation and register
     /// it in the specialization cache, so that a recursive mention of the same (generic, args)
     /// resolves to this id instead of recursing forever
-    pub fn reserve_instance_id(&mut self, generic_parent: TypeId, type_args: TypeSliceId) -> TypeId {
+    pub fn reserve_instance_id(
+        &mut self,
+        generic_parent: TypeId,
+        type_args: TypeSliceId,
+    ) -> TypeId {
         let id = self.reserve_type_id();
         let mut counts = TypeInfo::EMPTY;
         for arg in self.get_type_slice(type_args) {

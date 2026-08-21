@@ -1929,7 +1929,11 @@ pub type ParseResult<A> = anyhow::Result<A, ParseError>;
 #[derive(Debug, Clone)]
 pub enum ParseError {
     /// `token` always has materialized SpanId
-    Parse { message: String, token: Token, cause: Option<Box<ParseError>> },
+    Parse {
+        message: String,
+        token: Token,
+        cause: Option<Box<ParseError>>,
+    },
     Lex(LexError),
 }
 
@@ -1966,7 +1970,6 @@ impl Display for ParseError {
     }
 }
 impl std::error::Error for ParseError {}
-
 
 pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
     let mut stderr = std::io::stderr();
@@ -2315,7 +2318,9 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             let supports_debug = first.kind == K::KeywordFn
                 || (first.kind == K::Ident && self.token_chars(first) == "macro");
             if !supports_debug {
-                return Err(self.error("#debug is only supported on fn and macro definitions", first));
+                return Err(
+                    self.error("#debug is only supported on fn and macro definitions", first)
+                );
             }
         }
         match first.kind {
@@ -2324,10 +2329,8 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 let directive = self.peek();
                 match self.parse_static_expr(first, directive, condition)? {
                     Some(static_expr_id) => Ok(ParsedId::StaticDefn(static_expr_id)),
-                    None => Err(self.error_expected(
-                        "a static definition (e.g. #static or #meta)",
-                        directive,
-                    )),
+                    None => Err(self
+                        .error_expected("a static definition (e.g. #static or #meta)", directive)),
                 }
             }
             K::Dollar => {
@@ -2335,10 +2338,9 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 self.advance();
                 let call_first = self.peek();
                 if call_first.is_whitespace_preceded() {
-                    return Err(self.error_expected(
-                        "a macro name immediately following '$'",
-                        call_first,
-                    ));
+                    return Err(
+                        self.error_expected("a macro name immediately following '$'", call_first)
+                    );
                 }
                 self.emit_semantic_token(dollar, SemanticTokenKind::Operator);
                 let call_expr = self.expect_expression()?;
@@ -2371,9 +2373,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             K::KeywordAbility => Ok(ParsedId::Ability(self.expect_ability_defn(condition)?)),
             K::KeywordImpl => Ok(ParsedId::AbilityImpl(self.expect_ability_impl(condition)?)),
             K::Ident => match self.token_chars(first) {
-                "macro" => {
-                    Ok(ParsedId::Macro(self.expect_macro_defn(condition, compiler_debug)?))
-                }
+                "macro" => Ok(ParsedId::Macro(self.expect_macro_defn(condition, compiler_debug)?)),
                 "type" => Ok(ParsedId::TypeDefn(self.expect_type_defn(condition)?)),
                 _ => Err(self.error_expected_definition(condition.is_some())),
             },
@@ -2495,7 +2495,6 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         self.ast.spans.add(s)
     }
 
-
     fn extend_to_here(&mut self, span: SpanId) -> SpanId {
         let here = self.peek_back();
         if here.kind == K::Eof {
@@ -2561,7 +2560,8 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             }
             let end = self.expect_kind(K::CloseBrace)?;
             let span = self.extend_token_span(dot_token, end);
-            let pattern = ParsedStructPattern { fields: fields.to_slice_trim(&mut self.ast.mem), span };
+            let pattern =
+                ParsedStructPattern { fields: fields.to_slice_trim(&mut self.ast.mem), span };
             let pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Struct(pattern));
             Ok(pattern_id)
         } else if first.kind == K::Colon || (first.kind == K::Ident && second.kind == K::Colon) {
@@ -2798,7 +2798,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     debug_assert_eq!(bytes.len(), 3);
                     let byte = bytes[1];
                     let sp = self.tok_id(first);
-                    Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Char(byte, sp)))))
+                    Ok(Some(
+                        self.add_expression(ParsedExpr::Literal(ParsedLiteral::Char(byte, sp))),
+                    ))
                 }
             }
             (k, _) if k.is_string() => Ok(Some(self.expect_string()?)),
@@ -2821,7 +2823,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 if text == "true" {
                     self.advance();
                     let sp = self.tok_id(first);
-                    Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Bool(true, sp)))))
+                    Ok(Some(
+                        self.add_expression(ParsedExpr::Literal(ParsedLiteral::Bool(true, sp))),
+                    ))
                 } else if text == "false" {
                     self.advance();
                     let sp = self.tok_id(first);
@@ -2911,7 +2915,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     }
                 }
                 _k => {
-                    return Err(self.error("Unexpected token kind in string sequence", current_token));
+                    return Err(
+                        self.error("Unexpected token kind in string sequence", current_token)
+                    );
                 }
             }
         }
@@ -3090,7 +3096,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(self.add_expression(ParsedExpr::Literal(literal)))
         } else {
             let span = self.extend_tok_to_here(first);
-            let string_interp = ParsedInterpolatedString { parts: parts.to_slice_trim(&mut self.ast.mem), span };
+            let string_interp =
+                ParsedInterpolatedString { parts: parts.to_slice_trim(&mut self.ast.mem), span };
             Ok(self.add_expression(ParsedExpr::InterpolatedString(string_interp)))
         };
         self.string_buffer = buf;
@@ -3187,7 +3194,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Parser::expect_struct_type_field,
             )?;
             let span = self.extend_tok_to_here(first);
-            let struc = StructType { fields: fields.to_slice_trim(&mut self.ast.mem), span, record_kind: kind };
+            let struc = StructType {
+                fields: fields.to_slice_trim(&mut self.ast.mem),
+                span,
+                record_kind: kind,
+            };
             Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::Struct(struc))))
         } else if first.kind == K::QuestionMark {
             self.advance();
@@ -3339,7 +3350,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let return_type = self.expect_type_expression()?;
         let span = self.extend_tok_span(start, self.get_type_expression_span(return_type));
-        let function_type = ParsedFunctionType { params: params.to_slice_trim(&mut self.ast.mem), return_type, span };
+        let function_type = ParsedFunctionType {
+            params: params.to_slice_trim(&mut self.ast.mem),
+            return_type,
+            span,
+        };
         Ok(self.ast.type_exprs.add(ParsedTypeExpr::Function(function_type)))
     }
 
@@ -3362,7 +3377,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Parser::expect_sum_variant,
         )?;
         let span = self.extend_tok_to_here(keyword);
-        Ok(ParsedSumType { variants: variants.to_slice_trim(&mut self.ast.mem), tag_type: explicit_tag_type_expr, span })
+        Ok(ParsedSumType {
+            variants: variants.to_slice_trim(&mut self.ast.mem),
+            tag_type: explicit_tag_type_expr,
+            span,
+        })
     }
 
     fn expect_sum_variant(&mut self) -> ParseResult<ParsedSumTypeVariant> {
@@ -3376,14 +3395,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let explicit_value = if self.maybe_consume(K::Equals).is_some() {
             let Some(num_result) = self.parse_literal_atom()? else {
-                return Err(self.error("Expected number after equals for member value", self.peek()));
+                return Err(
+                    self.error("Expected number after equals for member value", self.peek())
+                );
             };
             let ParsedExpr::Literal(ParsedLiteral::Numeric(num)) = self.ast.exprs.get(num_result)
             else {
-                return Err(self.error(
-                    "Expected numeric literal after equals for member value",
-                    self.peek(),
-                ));
+                return Err(self
+                    .error("Expected numeric literal after equals for member value", self.peek()));
             };
             Some(*num)
         } else {
@@ -3472,7 +3491,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.advance();
                 self.advance();
                 if self.peek().kind != K::OpenBrace {
-                    return Err(self.error_expected("'{' after #is; #is takes match arms", self.peek()));
+                    return Err(
+                        self.error_expected("'{' after #is; #is takes match arms", self.peek())
+                    );
                 }
                 Some(self.expect_match_arms(result, true)?)
             } else if next.is_kind_nonspaced(K::OpenParen) {
@@ -3480,7 +3501,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let (call_args, _span) = self.expect_fn_call_args()?;
                 let self_arg = result;
                 let span = self.extend_to_here(self.get_expression_span(self_arg));
-                let call = ParsedExprCall { called_expr: result, args: call_args.to_slice_trim(&mut self.ast.mem), span };
+                let call = ParsedExprCall {
+                    called_expr: result,
+                    args: call_args.to_slice_trim(&mut self.ast.mem),
+                    span,
+                };
                 let call_expr_id = self.add_expression(ParsedExpr::CallOnExpr(call));
                 Some(call_expr_id)
             } else if next.kind == K::Dot
@@ -3498,10 +3523,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     K::Bang => self.tokens.next(),
                     K::Amp => self.tokens.next(),
                     _k => {
-                        return Err(self.error_expected(
-                            "Field name, or postfix *, !, or &",
-                            self.peek(),
-                        ));
+                        return Err(
+                            self.error_expected("Field name, or postfix *, !, or &", self.peek())
+                        );
                     }
                 };
                 let (type_args, _) = self.parse_bracketed_type_args()?;
@@ -3553,19 +3577,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 break result;
             }
         };
-        let result = if self.peek().kind == K::Colon && self.tokens.peek_n(1).is_whitespace_preceded()
-        {
-            self.advance();
-            let ty = self.expect_type_expression()?;
-            let span = self.extend_to_here(self.get_expression_span(with_postfix));
-            self.add_expression(ParsedExpr::TypeHint(ParsedTypeHint {
-                inner: with_postfix,
-                ty,
-                span,
-            }))
-        } else {
-            with_postfix
-        };
+        let result =
+            if self.peek().kind == K::Colon && self.tokens.peek_n(1).is_whitespace_preceded() {
+                self.advance();
+                let ty = self.expect_type_expression()?;
+                let span = self.extend_to_here(self.get_expression_span(with_postfix));
+                self.add_expression(ParsedExpr::TypeHint(ParsedTypeHint {
+                    inner: with_postfix,
+                    ty,
+                    span,
+                }))
+            } else {
+                with_postfix
+            };
         Ok(Some(result))
     }
 
@@ -4820,10 +4844,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             loop {
                 let modifier = self.peek();
                 if linkage.is_some() && modifier.kind != K::Ident {
-                    return Err(self.error_expected(
-                        "a single intern, extern, or export modifier",
-                        modifier,
-                    ));
+                    return Err(self
+                        .error_expected("a single intern, extern, or export modifier", modifier));
                 }
                 if modifier.kind == K::KeywordIntern {
                     self.advance();
@@ -4880,10 +4902,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.expect_kind(K::CloseParen)?;
                     lib_token = Some(modifier);
                 } else {
-                    return Err(self.error_expected(
-                        "fn modifier: intern, extern, export, or lib",
-                        modifier,
-                    ));
+                    return Err(self
+                        .error_expected("fn modifier: intern, extern, export, or lib", modifier));
                 }
                 if self.maybe_consume(K::Comma).is_none() {
                     break;
@@ -5012,10 +5032,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         }
         if self.peek().kind == K::Colon {
-            return Err(self.error(
-                "A macro's return type is implicit; it always returns code",
-                self.peek(),
-            ));
+            return Err(self
+                .error("A macro's return type is implicit; it always returns code", self.peek()));
         }
         let signature_span = self.extend_tok_to_here(func_name);
         let block = self.parse_block(ParsedBlockKind::FunctionBody)?;
@@ -5055,10 +5073,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let Some(string_text_trimmed) =
             string_text.strip_prefix("\"").and_then(|s| s.strip_suffix("\""))
         else {
-            return Err(self.error(
-                "Internal Error: expected string prefix/suffix",
-                external_name_token,
-            ));
+            return Err(
+                self.error("Internal Error: expected string prefix/suffix", external_name_token)
+            );
         };
         let ident = self.ast.idents.intern(string_text_trimmed);
         Ok(ident)

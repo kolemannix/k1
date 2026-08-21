@@ -10,7 +10,6 @@
 //! the new frame's header; returns read it back. `code[0]` is `Halt`, so
 //! popping the top frame (return_pc 0) lands there and ends execution.
 
-
 use std::num::NonZeroU32;
 
 use crate::ir::{self, BackendBuiltin, IrUnitId};

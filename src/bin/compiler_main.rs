@@ -1,11 +1,11 @@
-use std::path::{PathBuf};
+use std::path::PathBuf;
 // Copyright (c) 2026 knix
 // All rights reserved.
 use std::process::ExitCode;
 
 use clap::Parser;
-use k1::compiler::{Args, Command};
 use k1::compiler;
+use k1::compiler::{Args, Command};
 use log::info;
 use mimalloc::MiMalloc;
 

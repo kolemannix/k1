@@ -317,8 +317,7 @@ impl StaticValuePool {
 
     pub fn add_type_id_value(&mut self, type_id_type_id: TypeId, type_id: TypeId) -> StaticValueId {
         let int_value_id = self.add_int(TypedIntValue::U64(type_id.as_u32() as u64));
-        let type_id_struct_value_id =
-            self.add_struct_from_slice(type_id_type_id, &[int_value_id]);
+        let type_id_struct_value_id = self.add_struct_from_slice(type_id_type_id, &[int_value_id]);
         type_id_struct_value_id
     }
 

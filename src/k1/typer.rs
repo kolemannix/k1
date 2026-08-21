@@ -9907,11 +9907,7 @@ impl TypedProgram {
         self.scopes.scope_has_ancestor(scope_id, ns_scope_id)
     }
 
-    fn eval_expr(
-        &mut self,
-        expr_id: ParsedExprId,
-        ctx: EvalExprContext,
-    ) -> K1Result<TypedExprId> {
+    fn eval_expr(&mut self, expr_id: ParsedExprId, ctx: EvalExprContext) -> K1Result<TypedExprId> {
         let is_debug = self.ast.exprs.is_debug(expr_id);
         if is_debug {
             self.push_debug_level();
@@ -10090,8 +10086,9 @@ impl TypedProgram {
                 // If the 'is' is attached to an if/else, that is handled by if/else
                 // This is just the case of the detached 'is' where we want to return a boolean
                 // indicating whether or not the pattern matched only
-                let true_expression = self.ast.exprs.add(
-                    parse::ParsedExpr::Literal(parse::ParsedLiteral::Bool(true, is_expr.span)));
+                let true_expression = self.ast.exprs.add(parse::ParsedExpr::Literal(
+                    parse::ParsedLiteral::Bool(true, is_expr.span),
+                ));
                 let true_case = parse::ParsedMatchCase {
                     patterns: MSpillSlice::one(is_expr.pattern),
                     guard_condition_expr: None,
@@ -10103,8 +10100,7 @@ impl TypedProgram {
                     span: is_expr.span,
                     is_static: false,
                 };
-                let match_expr_id =
-                    self.ast.exprs.add(parse::ParsedExpr::Match(as_match_expr));
+                let match_expr_id = self.ast.exprs.add(parse::ParsedExpr::Match(as_match_expr));
                 let check_exhaustive = false;
                 // For standalone 'is', we don't allow binding to patterns since they won't work
                 let allow_bindings = false;
@@ -10208,9 +10204,7 @@ impl TypedProgram {
                 let inner = self.eval_expr(th.inner, ctx.with_expected_type(Some(type_id)))?;
                 let allow_addr_of = ctx.is_method_receiver();
                 self.check_and_coerce_expr(type_id, inner, ctx.scope_id, allow_addr_of).map_err(
-                    |e| {
-                        kerr!(self, th.span, "Expression did not conform to hint: {}", e.message)
-                    },
+                    |e| kerr!(self, th.span, "Expression did not conform to hint: {}", e.message),
                 )
             }
         }
@@ -10534,11 +10528,10 @@ impl TypedProgram {
         };
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
         for param in self.ast.mem.getn(stat.parameter_names) {
-            let variable_expr = self.ast.exprs.add(
-                ParsedExpr::Variable(ParsedVariable {
-                    name: QIdent::naked(param.name, param.span),
-                    span: param.span,
-                }));
+            let variable_expr = self.ast.exprs.add(ParsedExpr::Variable(ParsedVariable {
+                name: QIdent::naked(param.name, param.span),
+                span: param.span,
+            }));
             let (variable_id, variable_expr) = self.eval_variable(variable_expr, ctx, false)?;
             let Some(variable_id) = variable_id else {
                 kbail!(self, param.span, "Must be a plain variable");
@@ -11469,11 +11462,10 @@ impl TypedProgram {
                     capture.name
                 );
             }
-            let parsed_var = self.ast.exprs.add(
-                ParsedExpr::Variable(parse::ParsedVariable {
-                    name: QIdent::naked(capture.name, capture.span),
-                    span: capture.span,
-                }));
+            let parsed_var = self.ast.exprs.add(ParsedExpr::Variable(parse::ParsedVariable {
+                name: QIdent::naked(capture.name, capture.span),
+                span: capture.span,
+            }));
             let (variable_id, variable_expr) = self.eval_variable(parsed_var, ctx, false)?;
             let Some(variable_id) = variable_id else {
                 kbail!(
@@ -12859,8 +12851,7 @@ impl TypedProgram {
             return self.eval_static_for_expr(for_expr, ctx);
         };
         if FOR_VIA_MACRO {
-            let body_block_expr =
-                self.ast.exprs.add(ParsedExpr::Block(for_expr.body_block));
+            let body_block_expr = self.ast.exprs.add(ParsedExpr::Block(for_expr.body_block));
 
             let binding = match for_expr.binding {
                 None => {
@@ -17626,11 +17617,10 @@ impl TypedProgram {
         let block_scope = ctx.scope_id;
         let unit_body;
         let block = if block.stmts.is_empty() {
-            let unit_expr = self.ast.exprs.add(
-                ParsedExpr::Struct(parse::ParsedStruct {
-                    fields: MSlice::empty(),
-                    span: block.span,
-                }));
+            let unit_expr = self.ast.exprs.add(ParsedExpr::Struct(parse::ParsedStruct {
+                fields: MSlice::empty(),
+                span: block.span,
+            }));
             let stmt_id = self.ast.stmts.add(ParsedStmt::LoneExpression(unit_expr));
             let stmts = self.ast.mem.pushn(&[stmt_id]);
             unit_body = ParsedBlock { stmts, kind: block.kind, span: block.span };

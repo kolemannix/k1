@@ -7,10 +7,16 @@ use fxhash::FxHashMap;
 use std::{collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
 use crate::{
-    kbail, kerr, kmem::{Dlist, List, Mem}, nz_u32_id, parse::{ParsedAbilityId, ParsedExprId, ParsedGlobalId, QIdent}, static_assert_niched, static_assert_size, typer::{
+    SV4, kbail, kerr,
+    kmem::{Dlist, List, Mem},
+    nz_u32_id,
+    parse::{ParsedAbilityId, ParsedExprId, ParsedGlobalId, QIdent},
+    static_assert_niched, static_assert_size,
+    typer::{
         AbilityId, FunctionId, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId, StringId,
         TypeId, TypePendingDefinition, TypedProgram, VariableId,
-    }, vpool::VPool, SV4
+    },
+    vpool::VPool,
 };
 
 nz_u32_id!(ScopeId);

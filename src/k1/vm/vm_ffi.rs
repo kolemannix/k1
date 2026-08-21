@@ -197,10 +197,7 @@ fn scalar_to_ffi_type(st: ScalarType) -> libffi::low::ffi_type {
 /// holding a single oversized member. Their real size and alignment are set
 /// here rather than left for `ffi_prep_cif` to derive, so the value copied and
 /// the stack consumed still match the type.
-fn memory_class_ffi_type(
-    k1: &mut TypedProgram,
-    layout: Layout,
-) -> libffi::low::ffi_type {
+fn memory_class_ffi_type(k1: &mut TypedProgram, layout: Layout) -> libffi::low::ffi_type {
     const MAX_REGISTER_AGG_BYTES: u32 = 16;
     let filler_len = MAX_REGISTER_AGG_BYTES + 1;
     let mut element_storage = k1.mem.new_list(filler_len);

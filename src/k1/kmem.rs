@@ -1458,7 +1458,10 @@ impl<T, Tag> List<T, Tag> {
                     unsafe { (self.ptr as *mut u8).add(self.len as usize * size_of::<T>()) };
                 mem.set_cursor(len_end);
             } else {
-                stranded_count(&STRANDED_FINALIZE_BYTES, (self.cap - self.len) as usize * size_of::<T>());
+                stranded_count(
+                    &STRANDED_FINALIZE_BYTES,
+                    (self.cap - self.len) as usize * size_of::<T>(),
+                );
             }
         }
         self.to_slice()

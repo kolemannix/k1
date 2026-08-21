@@ -170,12 +170,9 @@ fn logical_name_to_lib_filename(
         }
         (TargetOs::MacOs, LibRefLinkType::Default) => mem.push_str(logical_name),
         // In Windows we'd skip the 'lib' prefix and add extension dll or lib
-        (TargetOs::Wasm, LibRefLinkType::Static) => kpath::join_tmp(
-            mem,
-            idents,
-            module_libs_dir,
-            format_args!("lib{logical_name}-wasm.a"),
-        ),
+        (TargetOs::Wasm, LibRefLinkType::Static) => {
+            kpath::join_tmp(mem, idents, module_libs_dir, format_args!("lib{logical_name}-wasm.a"))
+        }
         (TargetOs::Wasm, _) => {
             panic!("Only static libraries are supported on the wasm target")
         }
