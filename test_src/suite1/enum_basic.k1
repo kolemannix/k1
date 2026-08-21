@@ -48,8 +48,14 @@ fn custom-tags-test() {
   assert-equals(custom-enum-tags:c.value, 12)
 }
 
+fn derived-print-test() {
+  assert-equals[string](custom-enum-tags:a.show(), "a")
+  assert-equals[string]("${custom-enum-tags:b} ${custom-enum-tags:c}", "b c")
+}
+
 fn test() {
   custom-tags-test()
+  derived-print-test()
   enum-no-payload()
   enum-test()
 }

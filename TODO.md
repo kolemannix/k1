@@ -1,9 +1,7 @@
 "C with generics, live interactive programming, typeclasses, next-gen macros, full compile-time execution, and ADTs"
 
 next up
-- more dogfooding, do the 2 static sites
 - parse_statement: same peek-dispatch conversion parse_definition got (expect_ variants, no conditional parse_* chain)
-- if use-kind disambiguation returns, spell it keyword-call style: `use(type) foo`
 
 # Bugs
 - [x] [major] Support (co)recursive Generics
@@ -44,7 +42,7 @@ pointer-free predicate - pod/serializable?
 
 ## grab bag list mid2026
 - [ ] Add `self -> *self` thunk adapters for ability objects, `dyn[allocator]` is impossible
-- [ ] Warn on zeroed() for non zeroable type
+- [x] Warn on zeroed() for non zeroable type
 - [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
 - [ ] unaligned load/store for scalars
 - [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a

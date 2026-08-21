@@ -64,9 +64,3 @@ impl[a] try[t = a, e = empty] for opt[a] {
   }
   fn get-value(self: opt[t]): t { self.get() }
 }
-
-impl[t: print] print for opt[t] {
-  fn print-to[w: writer](self: opt[t], w) {
-    if self is :some(v) w.write("Some($v)") else w.write("None")
-  }
-}

@@ -1,22 +1,12 @@
-
-
-type(alias) first-five = #type [1,2,3,4,5]
-
-
 // type user = { id: string, password: string }
-
-ns foo {
-  fn abc() }
-  fn xyz() {
-    let 10
-  }
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.library()
+  println(m)
+  m
 }
-
-ns bar {
-  let 10
-}
-
 
 fn main(): i32 {
+  let x: either { a = 1 } = zeroed()
   0
 }

@@ -2066,6 +2066,7 @@ pub enum BuiltinTyperFunction {
     StructEquals,
     StructPrintTo,
     SumPrintTo,
+    EnumPrintTo,
 }
 
 impl BuiltinTyperFunction {
@@ -2079,6 +2080,7 @@ impl BuiltinTyperFunction {
             BuiltinTyperFunction::StructEquals => "struct_equals",
             BuiltinTyperFunction::StructPrintTo => "struct_print_to",
             BuiltinTyperFunction::SumPrintTo => "sum_print_to",
+            BuiltinTyperFunction::EnumPrintTo => "enum_print_to",
         }
     }
 }
@@ -7271,6 +7273,8 @@ impl TypedProgram {
                                 if let Some(Builtin::Ir(BuiltinIr::Zeroed)) = function.builtin_type
                                 {
                                     let return_type_id = self.exprs.get_type(return_expr.value);
+                                    let expr_span = self.exprs.get_span(return_expr.value);
+                                    self.warn_if_not_zerosafe(return_type_id, expr_span);
                                     Some(self.static_values.add(StaticValue::Zero(return_type_id)))
                                 } else {
                                     None
@@ -7283,6 +7287,12 @@ impl TypedProgram {
                 }
             }
             _ => None,
+        }
+    }
+
+    pub fn warn_if_not_zerosafe(&mut self, type_id: TypeId, span: SpanId) {
+        if !self.get_type_variable_counts(type_id).is_zero_safe {
+            self.report_warn(span, k1_format_user!(self, "Type {} is not zero-safe", type_id))
         }
     }
 
@@ -8386,15 +8396,29 @@ impl TypedProgram {
                     self,
                     "`code` does not implement print; use .text for the text alone, or write to a code-builder to keep source spans",
                 ));
-            } else if matches!(self.types.get(self_type_id), Type::Sum(_) | Type::Struct(_)) {
-                match self.generate_builtin_member_wise_impl(
-                    self_type_id,
-                    target_base_ability_id,
-                    scope_id,
-                    span,
-                ) {
-                    Ok(impl_handle) => return Ok((impl_handle, SelfAdjust::None)),
-                    Err(msg) => err_msg = Some(msg),
+            } else {
+                match self.types.get(self_type_id) {
+                    Type::Enum(_) => {
+                        let impl_handle = self.generate_builtin_ability_impl(
+                            self_type_id,
+                            target_base_ability_id,
+                            MSlice::empty(),
+                            span,
+                        );
+                        return Ok((impl_handle, SelfAdjust::None));
+                    }
+                    Type::Sum(_) | Type::Struct(_) => {
+                        match self.generate_builtin_member_wise_impl(
+                            self_type_id,
+                            target_base_ability_id,
+                            scope_id,
+                            span,
+                        ) {
+                            Ok(impl_handle) => return Ok((impl_handle, SelfAdjust::None)),
+                            Err(msg) => err_msg = Some(msg),
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -16679,6 +16703,11 @@ impl TypedProgram {
                 }
                 Ok(())
             }
+            Builtin::Ir(BuiltinIr::Zeroed) => {
+                let type_id = call.type_args.as_slice(&self.mem)[0];
+                self.warn_if_not_zerosafe(type_id, call.span);
+                Ok(())
+            }
             Builtin::Ir(
                 b @ (BuiltinIr::AtomicLoad
                 | BuiltinIr::AtomicStore
@@ -17112,7 +17141,9 @@ impl TypedProgram {
 
         // Approach: Synthesize the implementation for this builtin
         if let Some(Builtin::TyperPhysicalFunction(
-            kind @ (BuiltinTyperFunction::StructPrintTo | BuiltinTyperFunction::SumPrintTo),
+            kind @ (BuiltinTyperFunction::StructPrintTo
+            | BuiltinTyperFunction::SumPrintTo
+            | BuiltinTyperFunction::EnumPrintTo),
         )) = parent_function.builtin_type
         {
             let body_expr_id = self.generate_intrinsic_function_body(
@@ -17905,6 +17936,9 @@ impl TypedProgram {
                     }
                     Some(Type::Sum(_)) => {
                         Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumPrintTo))
+                    }
+                    Some(Type::Enum(_)) => {
+                        Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::EnumPrintTo))
                     }
                     _ => None,
                 },
@@ -19958,6 +19992,34 @@ impl TypedProgram {
         Ok(())
     }
 
+    fn synth_enum_tag_name_match(
+        &mut self,
+        enum_param_expr: TypedExprId,
+        fn_span: SpanId,
+    ) -> TypedExprId {
+        let enum_type_id = self.exprs.get_type(enum_param_expr);
+        let enum_arg_int_expr = self.synth_enum_get_value(enum_param_expr, fn_span);
+        let Type::Enum(enum_type) = self.types.get(enum_type_id) else {
+            self.ice_span(fn_span, "not an enum");
+        };
+        let mut arms: List<TypedMatchArm, _> = self.mem.new_list(enum_type.member_values.len());
+        for member in self.mem.getn(enum_type.member_values) {
+            let int_value_expr = self.synth_int(member.int_value, fn_span);
+            let member_name_expr = self.synth_string_literal(member.name, fn_span);
+            let cond = self.synth_equals_call_simple(enum_arg_int_expr, int_value_expr, fn_span);
+            let instrs = self.mem.pushn(&[MatchingConditionInstr::cond(cond)]);
+            arms.push(TypedMatchArm {
+                condition: MatchingCondition { instrs },
+                consequent_expr: member_name_expr,
+            });
+        }
+        let match_expr = TypedExpr::Match(TypedMatchExpr {
+            initial_let_statements: MSlice::empty(),
+            arms: arms.to_slice(),
+        });
+        self.exprs.add(match_expr, self.builtin_types.string(), fn_span)
+    }
+
     fn generate_intrinsic_function_body(
         &mut self,
         function_id: FunctionId,
@@ -19976,33 +20038,9 @@ impl TypedProgram {
                 Ok(value_expr)
             }
             BuiltinTyperFunction::EnumAbilityGetTagName => {
-                // FIXME: a 'switch' would be much better, if we had them
-                // But we'll synthesize a big if/else inline for now.
                 let enum_param = *self.mem.get_nth(params, 0);
                 let enum_param_expr = self.synth_variable_expr(enum_param.variable_id, fn_span);
-                let enum_type_id = self.exprs.get_type(enum_param_expr);
-                let enum_arg_int_expr = self.synth_enum_get_value(enum_param_expr, fn_span);
-                let Type::Enum(enum_type) = self.types.get(enum_type_id) else {
-                    self.ice_span(fn_span, "not an enum");
-                };
-                let mut arms: List<TypedMatchArm, _> =
-                    self.mem.new_list(enum_type.member_values.len());
-                for member in self.mem.getn(enum_type.member_values) {
-                    let int_value_expr = self.synth_int(member.int_value, fn_span);
-                    let member_name_expr = self.synth_string_literal(member.name, fn_span);
-                    let cond =
-                        self.synth_equals_call_simple(enum_arg_int_expr, int_value_expr, fn_span);
-                    let instrs = self.mem.pushn(&[MatchingConditionInstr::cond(cond)]);
-                    arms.push(TypedMatchArm {
-                        condition: MatchingCondition { instrs },
-                        consequent_expr: member_name_expr,
-                    });
-                }
-                let match_expr = TypedExpr::Match(TypedMatchExpr {
-                    initial_let_statements: MSlice::empty(),
-                    arms: arms.to_slice(),
-                });
-                Ok(self.exprs.add(match_expr, self.builtin_types.string(), fn_span))
+                Ok(self.synth_enum_tag_name_match(enum_param_expr, fn_span))
             }
             BuiltinTyperFunction::SumAbilityGetTag => {
                 let sum_param = *self.mem.get_nth(params, 0);
@@ -20241,6 +20279,15 @@ impl TypedProgram {
                     arms: arms.to_slice(),
                 });
                 Ok(self.exprs.add(match_expr, EMPTY_TYPE_ID, fn_span))
+            }
+            BuiltinTyperFunction::EnumPrintTo => {
+                let enum_param = *self.mem.get_nth(params, 0);
+                let writer_param = *self.mem.get_nth(params, 1);
+                let enum_param_expr = self.synth_variable_expr(enum_param.variable_id, fn_span);
+                let writer_expr = self.synth_variable_expr(writer_param.variable_id, fn_span);
+                let name_expr = self.synth_enum_tag_name_match(enum_param_expr, fn_span);
+                let ctx = EvalExprContext::make(fn_scope_id);
+                self.synth_printto_call(name_expr, writer_expr, ctx)
             }
         }?;
 

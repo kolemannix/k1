@@ -398,7 +398,8 @@ fn exec_loop(
                 advance!(Opcode::Enter);
             }
             Opcode::Jump => {
-                set_pc!(operand!(0));
+                let tgt = operand!(0);
+                set_pc!(tgt);
             }
             Opcode::JumpIf => {
                 let cond = read_src!(operand!(0));
