@@ -4,7 +4,7 @@
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
 
-use std::{cell::RefCell, collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
+use std::{collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
 use crate::{
     kbail, kerr, kmem::{Dlist, List, Mem}, nz_u32_id, parse::{ParsedAbilityId, ParsedExprId, ParsedGlobalId, QIdent}, static_assert_niched, static_assert_size, typer::{
@@ -167,8 +167,6 @@ pub mod kinds {
 
 pub struct Scopes {
     pub scopes: VPool<Scope, ScopeId>,
-    /// maps scopes to their parent lambda scope, if any. used for capture detection.
-    lambda_cache: RefCell<FxHashMap<ScopeId, Option<ScopeId>>>,
     context_variables_by_type: ScopeMap<VariableId>,
     context_variables_by_ability: ScopeMap<ContextAbilityEntry>,
     functions: ScopeMap<FunctionId>,
@@ -195,7 +193,6 @@ impl Scopes {
         use crate::snap::{snap_map_with, write_map_snap};
         let Scopes {
             scopes,
-            lambda_cache: _,
             context_variables_by_type,
             context_variables_by_ability,
             functions,
@@ -219,10 +216,11 @@ impl Scopes {
         w.write_section("scopes");
         w.write_len(scopes.len());
         for (_, scope) in scopes.iter_with_ids() {
-            let Scope { parent, scope_type, kinds, owner_id, variables } = scope;
+            let Scope { parent, scope_type, kinds, nearest_lambda, owner_id, variables } = scope;
             w.write_t(parent);
             w.write_t(scope_type);
             w.write_t(kinds);
+            w.write_t(nearest_lambda);
             w.write_t(owner_id);
             write_map_snap(w, variables);
         }
@@ -260,14 +258,13 @@ impl Scopes {
             let parent = r.read_t();
             let scope_type = r.read_t();
             let kinds = r.read_t();
+            let nearest_lambda = r.read_t();
             let owner_id = r.read_t();
             let variables = restore_map_snap(r);
-            scopes.add(Scope { parent, scope_type, kinds, owner_id, variables });
+            scopes.add(Scope { parent, scope_type, kinds, nearest_lambda, owner_id, variables });
         }
         Scopes {
             scopes,
-            // `lambda_cache` is rebuildable
-            lambda_cache: RefCell::new(FxHashMap::new()),
             context_variables_by_type: restore_map_snap(r),
             context_variables_by_ability: restore_map_snap(r),
             functions: restore_map_snap(r),
@@ -297,7 +294,6 @@ impl Scopes {
         let root_scope = Scope::make(ScopeType::Namespace, ScopeOwnerId::None);
         let mut scopes = Scopes {
             scopes: VPool::make("scopes"),
-            lambda_cache: RefCell::new(FxHashMap::new()),
             context_variables_by_type: ScopeMap::new(),
             context_variables_by_ability: ScopeMap::new(),
             functions: ScopeMap::new(),
@@ -350,7 +346,22 @@ impl Scopes {
     ) -> ScopeId {
         let mut scope = Scope::make(scope_type, scope_owner_id);
         scope.parent = Some(parent_scope_id);
-        self.scopes.add(scope)
+        scope.nearest_lambda = match scope_type {
+            ScopeType::LambdaScope => None, // set to its own id below
+            // A lambda never appears above an ability, namespace, or type defn scope,
+            // nor outside a function (no locally defined named functions)
+            ScopeType::AbilityDefn
+            | ScopeType::AbilityImpl
+            | ScopeType::TypeDefn
+            | ScopeType::Namespace
+            | ScopeType::FunctionScope => None,
+            _ => self.get_scope(parent_scope_id).nearest_lambda,
+        };
+        let id = self.scopes.add(scope);
+        if scope_type == ScopeType::LambdaScope {
+            self.scopes.get_mut(id).nearest_lambda = Some(id);
+        }
+        id
     }
 
     pub fn get_scope(&self, id: ScopeId) -> &Scope {
@@ -840,37 +851,8 @@ impl Scopes {
         }
     }
 
-    /// Queried for every variable mention (capture detection), so results are
-    /// memoized. The memo is safe because a scope's position relative to its
-    /// enclosing lambda never changes while that lambda's body is being
-    /// evaluated; the only scope_type mutation (no-capture lambda ->
-    /// function conversion) happens after its body is fully evaluated, and
-    /// re-evaluations build fresh scopes.
     pub fn nearest_parent_lambda(&self, scope_id: ScopeId) -> Option<ScopeId> {
-        if let Some(cached) = self.lambda_cache.borrow().get(&scope_id) {
-            return *cached;
-        }
-        let mut sid = scope_id;
-        let result = loop {
-            let scope = self.get_scope(sid);
-            match scope.scope_type {
-                // We can stop searching once we find an ability or namespace scope; a lambda won't ever appear above them
-                ScopeType::AbilityDefn
-                | ScopeType::AbilityImpl
-                | ScopeType::TypeDefn
-                | ScopeType::Namespace => break None,
-                ScopeType::LambdaScope => break Some(sid),
-                // We can stop searching once we find a function scope; a lambda won't ever appear
-                // outside of a function! (And we don't do locally defined named functions)
-                ScopeType::FunctionScope => break None,
-                _ => match scope.parent {
-                    Some(parent) => sid = parent,
-                    None => break None,
-                },
-            }
-        };
-        self.lambda_cache.borrow_mut().insert(scope_id, result);
-        result
+        self.get_scope(scope_id).nearest_lambda
     }
 
     /// Both enclosing-function facts at once, for consumers that give lambdas
@@ -1294,13 +1276,31 @@ pub struct Scope {
     pub scope_type: ScopeType,
     /// Bitset of `kinds::*`
     kinds: u8,
+    /// The enclosing lambda scope (or self, for a lambda scope), fixed at creation.
+    /// Queried for every variable mention (capture detection). Fixing it at creation
+    /// is safe because a scope's position relative to its enclosing lambda never
+    /// changes while that lambda's body is being evaluated; the only scope_type
+    /// mutation (no-capture lambda -> function conversion) happens after its body is
+    /// fully evaluated, and re-evaluations build fresh scopes.
+    nearest_lambda: Option<ScopeId>,
     pub owner_id: ScopeOwnerId,
     pub variables: FxHashMap<StringId, VariableInScope>,
 }
-static_assert_size!(Scope, 56);
+static_assert_size!(Scope, 64);
 
 impl Scope {
     pub fn make(scope_type: ScopeType, owner_id: ScopeOwnerId) -> Scope {
-        Scope { parent: None, scope_type, kinds: 0, owner_id, variables: FxHashMap::new() }
+        Scope {
+            parent: None,
+            scope_type,
+            kinds: 0,
+            nearest_lambda: None,
+            owner_id,
+            variables: FxHashMap::new(),
+        }
+    }
+
+    pub fn clear_nearest_lambda(&mut self) {
+        self.nearest_lambda = None;
     }
 }

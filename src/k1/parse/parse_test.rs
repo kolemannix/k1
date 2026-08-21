@@ -358,28 +358,28 @@ fn namespaced_val() -> ParseResult<()> {
 #[test]
 fn type_hint() -> ParseResult<()> {
     let input = "None: ?u64";
-    let (ast, _expr, expr_id) = test_single_expr_with_id(input)?;
-    let type_hint = ast.get_expression_type_hint(expr_id).unwrap();
-    assert_eq!(ast.type_expr_to_string(type_hint), "?u64");
+    let (ast, expr, _expr_id) = test_single_expr_with_id(input)?;
+    let ParsedExpr::TypeHint(th) = expr else { panic!("expected type hint") };
+    assert_eq!(ast.type_expr_to_string(th.ty), "?u64");
     Ok(())
 }
 
 #[test]
 fn type_hint_binop() -> ParseResult<()> {
     let input = "(3.!: int + 4: List[bool]): int";
-    let (ast, _expr, expr_id) = test_single_expr_with_id(input)?;
-    let type_hint = ast.get_expression_type_hint(expr_id).unwrap();
-    assert_eq!(ast.type_expr_to_string(type_hint), "int");
+    let (ast, expr, _expr_id) = test_single_expr_with_id(input)?;
+    let ParsedExpr::TypeHint(th) = expr else { panic!("expected type hint") };
+    assert_eq!(ast.type_expr_to_string(th.ty), "int");
     Ok(())
 }
 
 #[test]
 fn variants_no_payload() -> ParseResult<()> {
     let input = ":foo: t";
-    let (ast, _expr, expr_id) = test_single_expr_with_id(input)?;
-    let type_hint = ast.get_expression_type_hint(expr_id).unwrap();
-    assert_eq!(&ast.expr_id_to_string(expr_id), ":foo");
-    assert_eq!(ast.type_expr_to_string(type_hint), "t");
+    let (ast, expr, _expr_id) = test_single_expr_with_id(input)?;
+    let ParsedExpr::TypeHint(th) = expr else { panic!("expected type hint") };
+    assert_eq!(&ast.expr_id_to_string(th.inner), ":foo");
+    assert_eq!(ast.type_expr_to_string(th.ty), "t");
     Ok(())
 }
 
@@ -569,7 +569,7 @@ fn lex_error_does_not_poison_reused_token_buffer() {
     lex_file_into_program(&mut ast, good, &mut tokens).1.unwrap();
     for t in &tokens {
         if t.kind != TokenKind::Eof {
-            assert_eq!(ast.spans.get(t.span).file_id, 1);
+            assert_eq!(t.span(1, &ast.spans).file_id, 1);
         }
     }
 }

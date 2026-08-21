@@ -393,12 +393,12 @@ fn lower_unit_with_ctx(
     let param_count = unit.fn_type.params.len();
     let ret_pt = unit.fn_type.return_type;
     ctx.reset(ret_pt);
-    ctx.buf.reserve(unit.inst_count as usize * 4);
 
     // ------------------------- Pass A: analyze -------------------------
     // The unit is immutable at this point (ir-gen and iropt have run), so we
     // walk the dlists by cursor, copying each node out — no borrows held.
     let mut next_word: u32 = FRAME_HEADER_WORDS + param_count;
+    let mut call_arg_words: usize = 0;
 
     let mut block_h = unit.blocks.first;
     while !block_h.is_nil() {
@@ -428,6 +428,7 @@ fn lower_unit_with_ctx(
                 }
                 Inst::Call { call_id } => {
                     let call = *k1.ir.calls.get(call_id);
+                    call_arg_words += call.args.len() as usize * 4;
                     match call.dst {
                         Some(dst) => {
                             debug_assert!(
@@ -536,6 +537,7 @@ fn lower_unit_with_ctx(
     assert!(ctx.frame_bytes < SRC_FP_BIT, "bc: frame too large for fp-relative operand encoding");
 
     // -------------------------- Pass B: emit ---------------------------
+    ctx.buf.reserve(unit.inst_count as usize * 4 + call_arg_words);
     let mut first = true;
     let mut block_h = unit.blocks.first;
     while !block_h.is_nil() {

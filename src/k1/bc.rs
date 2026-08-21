@@ -50,6 +50,7 @@ use crate::ir::IrUnitId;
 use crate::lex::SpanId;
 use crate::typer::types::PhysicalType;
 use crate::typer::{FunctionId, TypedExprId};
+use crate::vpool::VVec;
 
 /// Bit 31 of a src operand: set = constant pool index.
 pub const SRC_CONST_BIT: u32 = 0x8000_0000;
@@ -409,9 +410,9 @@ pub struct UnitInfo {
 pub struct BcProgram {
     /// The shared instruction stream for every lowered unit. `code[0]` is a
     /// lone `Halt`: popping the top frame sets `pc = 0` and lands on it.
-    pub code: Vec<u32>,
+    pub code: VVec<u32>,
     /// Program-wide constant pool; src operands with `SRC_CONST_BIT` index it.
-    pub consts: Vec<u64>,
+    pub consts: VVec<u64>,
     const_dedup: FxHashMap<u64, u32>,
 
     pub functions: FxHashMap<FunctionId, UnitInfo>,
@@ -423,10 +424,10 @@ pub struct BcProgram {
     pub(crate) in_progress: FxHashSet<FunctionId>,
 
     /// Sorted by start pc: (start, end, unit). For stack traces / diagnostics.
-    pub unit_ranges: Vec<(u32, u32, IrUnitId)>,
+    pub unit_ranges: VVec<(u32, u32, IrUnitId)>,
     /// Sorted by pc: the span for all code from this pc until the next entry.
     /// Only consulted on slow paths and errors.
-    pub spans: Vec<(u32, SpanId)>,
+    pub spans: VVec<(u32, SpanId)>,
 
     /// Reusable lowering state; a stack because callee lowering recurses.
     /// Popped/pushed by `lower::lower_unit`, `reset()` between uses — so the
@@ -437,16 +438,18 @@ pub struct BcProgram {
 
 impl BcProgram {
     pub fn make() -> BcProgram {
+        let mut code = VVec::make("bc_code");
+        code.push(header(Opcode::Halt, 0, 0));
         BcProgram {
-            code: vec![header(Opcode::Halt, 0, 0)],
-            consts: Vec::with_capacity(1024),
+            code,
+            consts: VVec::make("bc_consts"),
             const_dedup: FxHashMap::default(),
             functions: FxHashMap::default(),
             exprs: FxHashMap::default(),
             pending_call_fixups: FxHashMap::default(),
             in_progress: FxHashSet::default(),
-            unit_ranges: Vec::with_capacity(256),
-            spans: Vec::with_capacity(1024),
+            unit_ranges: VVec::make("bc_unit_ranges"),
+            spans: VVec::make("bc_spans"),
             lower_ctx_pool: Vec::new(),
         }
     }

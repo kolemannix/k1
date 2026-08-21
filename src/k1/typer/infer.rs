@@ -33,6 +33,13 @@ pub(crate) struct InferArgStash<'a> {
     pub stashed: &'a mut SV8<(ParsedExprId, TypedExprId)>,
 }
 
+pub(crate) enum InferenceFailure {
+    ArgEval { error: K1Message, expected_type: TypeId },
+    Mismatch { expected: TypeId, actual: TypeId, reason: &'static str, span: SpanId },
+    Unsolved { params: SV8<TypeId>, arguments: SV8<(TypeId, TypeId)>, solutions: SV8<TypeSubstitutionPair>, span: SpanId },
+    Constraint(K1Message),
+}
+
 impl TypedProgram {
     /// Performs type inference given an input of, essentially, (expected type, actual type) and
     /// a series of parameters to solve for, and performs unification/matching on those pairs.
@@ -57,13 +64,13 @@ impl TypedProgram {
         span: SpanId,
         scope_id: ScopeId,
         stash: Option<InferArgStash>,
-    ) -> K1Result<(TypeArgs, TypeArgs)> {
+    ) -> Result<(TypeArgs, TypeArgs), InferenceFailure> {
         if self.inference_context_stack.is_empty() {
             self.ictx_push();
         }
 
         self.ictx_mut().origin_stack.push(span);
-        if self.ictx().origin_stack.len() == 1 {
+        if self.ictx().origin_stack.len() == 1 && self.config.chatty {
             let raw = self.timing.clock.raw();
             self.ictx_mut().start_raw = raw;
         }
@@ -80,9 +87,11 @@ impl TypedProgram {
         let popped = self.ictx_mut().origin_stack.pop().unwrap();
         debug_assert_eq!(popped, span);
         if self.ictx().origin_stack.is_empty() {
-            let elapsed = self.timing.clock.elapsed_nanos(self.ictx().start_raw);
+            if self.config.chatty {
+                let elapsed = self.timing.clock.elapsed_nanos(self.ictx().start_raw);
+                self.timing.total_infer_nanos += elapsed as i64;
+            }
             self.timing.total_infers += 1;
-            self.timing.total_infer_nanos += elapsed as i64;
             debug!("Resetting inference context");
             self.ictx_pop();
         }
@@ -97,7 +106,7 @@ impl TypedProgram {
         span: SpanId,
         scope_id: ScopeId,
         mut stash: Option<InferArgStash>,
-    ) -> K1Result<(TypeArgs, TypeArgs)> {
+    ) -> Result<(TypeArgs, TypeArgs), InferenceFailure> {
         let infer_depth = self.ictx().origin_stack.len();
         let frame_start = self.ictx().slots.len() as u32;
         for (idx, param) in all_type_params.iter().enumerate() {
@@ -214,7 +223,11 @@ impl TypedProgram {
                             // re-evaluates it concretely and reports the real error if it
                             // is genuinely mis-written. But a failure against a concrete
                             // expected type is still a real error right now
-                            let should_skip = match self.ast.exprs.get(*parsed_expr) {
+                            let should_skip = match self
+                                .ast
+                                .exprs
+                                .get(self.ast.exprs.skip_type_hint(*parsed_expr))
+                            {
                                 ParsedExpr::Lambda(_) | ParsedExpr::Variant(_) => {
                                     !expected_is_concrete
                                 }
@@ -223,13 +236,10 @@ impl TypedProgram {
                             if should_skip {
                                 continue;
                             } else {
-                                kbail!(
-                                    self,
-                                    e.span,
-                                    "{}\nOccurred while trying to determine type of argument for inference using expected type: {}",
-                                    e.message,
-                                    expected_type_so_far
-                                );
+                                return Err(InferenceFailure::ArgEval {
+                                    error: e,
+                                    expected_type: expected_type_so_far,
+                                });
                             }
                         }
                     }
@@ -249,13 +259,12 @@ impl TypedProgram {
                 // before we're able to learn more about the rest of the inference. We get a better
                 // error message if we wait to report the mismatch until the end
                 if !allow_mismatch {
-                    kbail!(
-                        self,
-                        argument_span,
-                        "(unify fail) Passed value does not match expected type: expected {} but got {}\nReason: {msg}",
-                        expected_type_so_far,
-                        argument_type
-                    );
+                    return Err(InferenceFailure::Mismatch {
+                        expected: expected_type_so_far,
+                        actual: argument_type,
+                        reason: msg,
+                        span: argument_span,
+                    });
                 }
             };
 
@@ -275,7 +284,8 @@ impl TypedProgram {
                     solution,
                     scope_id,
                     argument_span,
-                )?;
+                )
+                .map_err(InferenceFailure::Constraint)?;
             }
         }
 
@@ -303,44 +313,72 @@ impl TypedProgram {
             }
         }
         if !unsolved_params.is_empty() {
-            let solved_pairs: SV8<TypeSubstitutionPair> = self
-                .ictx()
-                .slots
-                .iter()
-                .filter_map(|s| s.solution.map(|sol| spair! { s.param_type => sol }))
-                .collect();
-            kbail!(
-                self,
+            let mut solved_pairs: SV8<TypeSubstitutionPair> = smallvec![];
+            for s in &self.ictx().slots {
+                if let Some(sol) = s.solution {
+                    solved_pairs.push(spair! { s.param_type => sol });
+                }
+            }
+            let mut arguments: SV8<(TypeId, TypeId)> = smallvec![];
+            for (passed_type, pair) in argument_types.iter().zip(inference_pairs.iter()) {
+                arguments.push((*passed_type, pair.param_type));
+            }
+            self.tmp.reset_to(tmp_mark);
+            return Err(InferenceFailure::Unsolved {
+                params: unsolved_params,
+                arguments,
+                solutions: solved_pairs,
                 span,
-                "Could not solve for {} given arguments:\n{}\nSolutions:{}",
-                unsolved_params
-                    .iter()
-                    .map(|p| self.ident_str(self.types.get(*p).as_tvar().unwrap().name))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                argument_types
-                    .iter()
-                    .zip(inference_pairs.iter())
-                    .map(|(passed_type, pair)| {
-                        format!(
-                            "{}: {}",
-                            self.type_id_to_string_ext(*passed_type, dump::TypeDisplayMode::Name),
-                            self.type_id_to_string_ext(
-                                pair.param_type,
-                                dump::TypeDisplayMode::Name
-                            ),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                self.pretty_print_type_substitutions(&solved_pairs, ", ")
-            );
+            });
         }
         debug!("INFER DONE {}", self.pretty_print_types(solutions.as_slice(), ", "));
         let solutions = TypeArgs::from_slice_in(solutions.as_slice(), &mut self.mem);
         let all_solutions = TypeArgs::from_slice_in(all_solutions.as_slice(), &mut self.mem);
         self.tmp.reset_to(tmp_mark);
         Ok((solutions, all_solutions))
+    }
+
+    pub(crate) fn render_inference_failure(&self, failure: InferenceFailure) -> K1Message {
+        match failure {
+            InferenceFailure::ArgEval { error, expected_type } => kerr!(
+                self,
+                error.span,
+                "{}\nOccurred while trying to determine type of argument for inference using expected type: {}",
+                error.message,
+                expected_type
+            ),
+            InferenceFailure::Mismatch { expected, actual, reason, span } => kerr!(
+                self,
+                span,
+                "(unify fail) Passed value does not match expected type: expected {} but got {}\nReason: {}",
+                expected,
+                actual,
+                reason
+            ),
+            InferenceFailure::Unsolved { params, arguments, solutions, span } => kerr!(
+                self,
+                span,
+                "Could not solve for {} given arguments:\n{}\nSolutions:{}",
+                params
+                    .iter()
+                    .map(|p| self.ident_str(self.types.get(*p).as_tvar().unwrap().name))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                arguments
+                    .iter()
+                    .map(|(passed_type, param_type)| {
+                        format!(
+                            "{}: {}",
+                            self.type_id_to_string_ext(*passed_type, dump::TypeDisplayMode::Name),
+                            self.type_id_to_string_ext(*param_type, dump::TypeDisplayMode::Name),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                self.pretty_print_type_substitutions(&solutions, ", ")
+            ),
+            InferenceFailure::Constraint(error) => error,
+        }
     }
 
     /// Called from infer_types
@@ -433,9 +471,9 @@ impl TypedProgram {
                         .abilities
                         .get(sig.specialized_ability_id)
                         .kind
-                        .arguments(&self.mem)
+                        .arguments(self)
                         .iter()
-                        .zip(self.abilities.get(the_impl.ability_id).kind.arguments(&self.mem));
+                        .zip(self.abilities.get(the_impl.ability_id).kind.arguments(self));
                     let impl_arg_iterator = self
                         .mem
                         .getn(sig.impl_arguments)
@@ -602,7 +640,8 @@ impl TypedProgram {
                     ctx.scope_id,
                     stash,
                 )
-                .map_err(|e| {
+                .map_err(|f| {
+                    let e = self.render_inference_failure(f);
                     kerr!(
                         self,
                         e.span,
@@ -697,7 +736,7 @@ impl TypedProgram {
                 MaybeTypedExpr::Typed(_) => {
                     unreachable!("Synthesizing calls with function type params is unsupported")
                 }
-                MaybeTypedExpr::Parsed(p) => match self.ast.exprs.get(p) {
+                MaybeTypedExpr::Parsed(p) => match self.ast.exprs.get(self.ast.exprs.skip_type_hint(p)) {
                     ParsedExpr::Lambda(_lam) => {
                         debug!(
                             "substituting type for an ftp lambda so that it can infer (is_inf={})",
@@ -941,11 +980,9 @@ impl TypedProgram {
                     self.type_id_to_string(arg_info.generic_parent)
                 );
                 // We can directly 'solve' every appearance of a type param here
-                let passed_args = passed_info.type_args;
-                let arg_args = arg_info.type_args;
-                for (passed_type, arg_slot) in
-                    passed_args.as_slice(&self.mem).iter().zip(arg_args.as_slice(&self.mem))
-                {
+                let passed_args = self.get_type_slice(passed_info.type_args);
+                let arg_args = self.get_type_slice(arg_info.type_args);
+                for (passed_type, arg_slot) in passed_args.iter().zip(arg_args) {
                     self.unify_and_find_substitutions_rec(*passed_type, *arg_slot);
                 }
             } else {

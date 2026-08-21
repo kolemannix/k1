@@ -15,35 +15,41 @@
 
 }
 
+#if k1/os-linux ns linux-time {
+  fn now-nanos(): u64 {
+    let ts: posix/timespec = uninit
+    posix/clock_gettime(posix/CLOCK_MONOTONIC, &ts)
+    (ts.tv_sec * 1_000_000_000) + ts.tv_nsec
+  }
+}
+
 #if k1/os-wasm ns wasi-time {
   let CLOCK-MONOTONIC: u32 = 1
   fn(extern("clock_time_get"), lib("wasi_snapshot_preview1")) clock-time-get(id: u32, precision: u64, time: u32): i32
 
   fn now-nanos(): u64 {
-    let t: u64 = 0
-    if clock-time-get(CLOCK-MONOTONIC, 1, t.&.as[ptr].as[size].as[u32]) != 0 {
-      crash("wasi clock_time_get failed")
+    if k1/is-static {
+      // static execution runs on the posix host, so the clock id is host-keyed
+      let ts: posix/timespec = uninit
+      let host-monotonic: posix/clockid_t = k1/host-os #is { :macos -> 6, :linux or :wasm -> 1 }
+      posix/clock_gettime(host-monotonic, &ts)
+      (ts.tv_sec * 1_000_000_000) + ts.tv_nsec
+    } else {
+      let t: u64 = 0
+      if clock-time-get(CLOCK-MONOTONIC, 1, t.&.as[ptr].as[size].as[u32]) != 0 {
+        crash("wasi clock_time_get failed")
+      }
+      t
     }
-    t
   }
 }
 
 ns time {
   fn read-cpu-counter(): u64 {
     k1/os #is {
-      // nocommit: this is poorly factored. This function should probably just look like the switch and 3 one-liner calls to the correct impl
       :macos -> macos-time/mach_absolute_time(),
-      :linux -> {
-        let ts: posix/timespec = uninit
-        posix/clock_gettime(posix/CLOCK_MONOTONIC, &ts)
-        (ts.tv_sec * 1_000_000_000) + ts.tv_nsec
-      },
-      :wasm -> if k1/is-static {
-        let ts: posix/timespec = uninit
-        let host-monotonic: posix/clockid_t = k1/host-os #is { :macos -> 6, :linux or :wasm -> 1 }
-        posix/clock_gettime(host-monotonic, &ts)
-        (ts.tv_sec * 1_000_000_000) + ts.tv_nsec
-      } else wasi-time/now-nanos()
+      :linux -> linux-time/now-nanos(),
+      :wasm -> wasi-time/now-nanos(),
     }
   }
   fn counter-to-nanos(counter: u64): u64 {
@@ -53,5 +59,3 @@ ns time {
     }
   }
 }
-
-
