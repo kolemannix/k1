@@ -90,6 +90,19 @@ impl TypedIntValue {
         }
     }
 
+    pub fn from_u64_bits(integer_type: IntegerType, bits: u64) -> Self {
+        match integer_type {
+            IntegerType::U8 => TypedIntValue::U8(bits as u8),
+            IntegerType::U16 => TypedIntValue::U16(bits as u16),
+            IntegerType::U32 => TypedIntValue::U32(bits as u32),
+            IntegerType::U64 => TypedIntValue::U64(bits),
+            IntegerType::I8 => TypedIntValue::I8(bits as i8),
+            IntegerType::I16 => TypedIntValue::I16(bits as i16),
+            IntegerType::I32 => TypedIntValue::I32(bits as i32),
+            IntegerType::I64 => TypedIntValue::I64(bits as i64),
+        }
+    }
+
     pub fn to_u64_bits(&self) -> u64 {
         match self {
             TypedIntValue::U8(v) => *v as u64,

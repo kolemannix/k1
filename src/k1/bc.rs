@@ -355,7 +355,8 @@ pub fn builtin_from_tag(t: u8) -> crate::ir::BackendBuiltin {
     match t {
         x if x == B::TypeSchema as u8 => B::TypeSchema,
         x if x == B::TypeName as u8 => B::TypeName,
-        x if x == B::StructCreate as u8 => B::StructCreate,
+        x if x == B::MakeStruct as u8 => B::MakeStruct,
+        x if x == B::MakeEither as u8 => B::MakeEither,
         x if x == B::MemCopy as u8 => B::MemCopy,
         x if x == B::MemMove as u8 => B::MemMove,
         x if x == B::MemSet as u8 => B::MemSet,

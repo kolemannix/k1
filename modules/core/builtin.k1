@@ -99,8 +99,6 @@ ns types {
 
   fn(intern) id[t](): type-id
 
-  fn(intern) struct-create(fields: span[{ name: string, type: type-id }]): type-id
-
   fn type-id-of-val[t](_t: t): type-id { id[t] }
   fn name[t](): string { id[t].name() }
 
@@ -108,7 +106,12 @@ ns types {
   fn schema[t](): type-schema { id[t].schema() }
 
   // FIXME: We should encode both width and signedness into the bits instead, 'flags in tags' project
-  type int-kind = either(u8) { u8 = 0, u16 = 1, u32 = 2, u64 = 3, i8 = 4, i16 = 5, i32 = 6, i64 = 7 }
+  type int-value = either {
+    u8(u8) = 0, u16(u16) = 1, u32(u32) = 2, u64(u64) = 3,
+    i8(i8) = 4, i16(i16) = 5, i32(i32) = 6, i64(i64) = 7
+  }
+
+  type int-kind = int-value.tag-enum
   ns for int-kind {
     fn bit-width(self: int-kind): size {
       self is {
@@ -124,15 +127,22 @@ ns types {
     }
   }
 
-  // FIXME: We should encode both width and signedness into the bits instead, 'flags in tags' project
-  // FIXME: Derive an enum from a sum, that is just its tags!!
-  type int-value = either {
-    u8(u8) = 0, u16(u16) = 1, u32(u32) = 2, u64(u64) = 3,
-    i8(i8) = 4, i16(i16) = 5, i32(i32) = 6, i64(i64) = 7
-  }
-
-  type float-kind = either { f32 = 0, f64 = 1 }
   type float-value = either { f32(f32) = 0, f64(f64) = 1 }
+  type float-kind = float-value.tag-enum
+
+  type record-kind = either { struct = 0, union = 1, packed = 2 }
+
+  fn(intern) make-struct(kind: record-kind, fields: span[{ name: string, type: type-id }]): type-id
+  fn field[t](name: string): make-struct.fields.t { .{ name, type = types/id[t] } }
+
+  fn(intern) make-either(
+    tag-type: ?type-id,
+    variants: span[{ name: string, payload: ?type-id, tag: ?int-value }]
+  ): type-id
+  fn make-either-default(variants: make-either.variants): type-id { make-either(:none, variants) }
+
+  fn variant-data[t](name: string): make-either.variants.t { .{ name, payload = :some types/id[t], tag = :none } }
+  fn variant-empty(name: string):   make-either.variants.t { .{ name, payload = :none,             tag = :none } }
 
   type layout = { size: u32, align: u32 }
 

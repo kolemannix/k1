@@ -354,6 +354,44 @@ packing shows up in the field offsets.
 See `test_src/suite1/test_type_schema.k1`,
 `test_src/suite1/type_info.k1`, and `test_src/suite1/array_type_test.k1`.
 
+## Type Synthesis
+
+`types/make-struct` and `types/make-either` build new types at comptime,
+mirroring the source type expressions. `make-struct` takes a
+`types/record-kind` (`:struct`, `:union`, or `:packed`); `make-either` picks
+scalar enum vs sum exactly like source `either` (no payloads anywhere means
+enum), infers the smallest viable tag type when `tag-type` is `:none`, and
+requires explicit tags to match the tag type. The helper constructors
+`types/field[t]`, `types/variant-data[t]`, `types/variant-empty`, and
+`types/make-either-default` cover the common shapes.
+
+```rust
+type(alias) point = #type types/make-struct(:struct, [
+  types/field[i64]("x"),
+  types/field[string]("y"),
+])
+
+type(alias) shape = #type types/make-either-default([
+  types/variant-data[i64]("circle"),
+  types/variant-empty("square"),
+])
+
+let flags = #static types/make-either(some(types/id[u32]), [
+  .{ name = "read", payload = :none, tag = :some(types/int-value:u32(1)) },
+])
+```
+
+`.tag-enum` on a sum type derives the scalar enum of just its tags (this is
+how `types/int-kind` is defined from `types/int-value`). A variant the
+programmer named `tag-enum` shadows the accessor.
+
+```rust
+type shape = either { circle(i64), square }
+let k: shape.tag-enum = :square
+```
+
+See `test_src/suite1/type_synthesis.k1`.
+
 ## Predicate Bounds And Richer Constraints
 
 Generic bounds can use abilities, `where` clauses, predicates, and compound

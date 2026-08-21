@@ -167,9 +167,7 @@ impl TypedProgram {
         // But I think its ok to allocate the string; idk its probably way too big of an allocation
         // for most types and we'd be better off using one of our arenas
         let mut s = String::with_capacity(1028);
-        let mut visited = self.buffers.visited_types.borrow_mut();
-        self.display_type_id_ext(&mut s, type_id, mode, &mut visited).unwrap();
-        visited.clear();
+        self.display_type_id(&mut s, type_id, mode).unwrap();
         s
     }
 
@@ -462,7 +460,12 @@ impl TypedProgram {
                 self.display_type_id_ext(w, svt.family_type_id, mode, visiting)?;
                 if let Some(value_id) = svt.value_id {
                     w.write_str(", ")?;
-                    self.display_static_value(w, value_id, mode != TypeDisplayMode::Expand)?;
+                    self.display_static_value_ext(
+                        w,
+                        value_id,
+                        mode != TypeDisplayMode::Expand,
+                        visiting,
+                    )?;
                 }
                 w.write_str("]")?;
                 Ok(())
@@ -909,13 +912,26 @@ impl TypedProgram {
         id: StaticValueId,
         pretty: bool,
     ) -> std::fmt::Result {
+        let mut visited = self.buffers.visited_types.borrow_mut();
+        let res = self.display_static_value_ext(w, id, pretty, &mut visited);
+        visited.clear();
+        res
+    }
+
+    fn display_static_value_ext<W: Write + ?Sized>(
+        &self,
+        w: &mut W,
+        id: StaticValueId,
+        pretty: bool,
+        visiting: &mut Vec<TypeId>,
+    ) -> std::fmt::Result {
         match self.static_values.get(id) {
             StaticValue::Empty(type_id) => {
                 if pretty {
                     w.write_str("empty")
                 } else {
                     w.write_str("empty[")?;
-                    self.display_type_id(w, *type_id, TypeDisplayMode::Name)?;
+                    self.display_type_id_ext(w, *type_id, TypeDisplayMode::Name, visiting)?;
                     w.write_str("]")?;
                     Ok(())
                 }
@@ -947,7 +963,7 @@ impl TypedProgram {
                     self.write_ident(w, value_name.name)?;
                     Ok(())
                 } else {
-                    self.display_type_id(w, *enum_type_id, TypeDisplayMode::Name)?;
+                    self.display_type_id_ext(w, *enum_type_id, TypeDisplayMode::Name, visiting)?;
                     write!(w, "({})", int_value)
                 }
             }
@@ -970,7 +986,7 @@ impl TypedProgram {
                     w.write_str("zeroed")
                 } else {
                     write!(w, "zeroed[")?;
-                    self.display_type_id(w, *type_id, TypeDisplayMode::Name)?;
+                    self.display_type_id_ext(w, *type_id, TypeDisplayMode::Name, visiting)?;
                     write!(w, "]")?;
                     Ok(())
                 }
@@ -990,7 +1006,7 @@ impl TypedProgram {
                     }
                     self.write_ident(w, field_type.name)?;
                     w.write_str(": ")?;
-                    self.display_static_value(w, *field_value_id, pretty)?;
+                    self.display_static_value_ext(w, *field_value_id, pretty, visiting)?;
                 }
                 w.write_str(" }")
             }
@@ -1011,7 +1027,7 @@ impl TypedProgram {
                     None => {}
                     Some(payload_id) => {
                         write!(w, "(")?;
-                        self.display_static_value(w, payload_id, pretty)?;
+                        self.display_static_value_ext(w, payload_id, pretty, visiting)?;
                         write!(w, ")")?;
                     }
                 };
@@ -1027,7 +1043,12 @@ impl TypedProgram {
                         StaticContainerKind::List => write!(w, "list")?,
                     }
                 }
-                self.display_static_items(w, self.static_values.get_slice(cont.elements), pretty)?;
+                self.display_static_items(
+                    w,
+                    self.static_values.get_slice(cont.elements),
+                    pretty,
+                    visiting,
+                )?;
                 Ok(())
             }
         }
@@ -1038,10 +1059,11 @@ impl TypedProgram {
         w: &mut W,
         elements: &[StaticValueId],
         pretty: bool,
+        visiting: &mut Vec<TypeId>,
     ) -> std::fmt::Result {
         write!(w, "[")?;
         for (index, elem) in elements.iter().enumerate() {
-            self.display_static_value(w, *elem, pretty)?;
+            self.display_static_value_ext(w, *elem, pretty, visiting)?;
             let last = index == elements.len() - 1;
             if !last {
                 write!(w, ", ")?;
@@ -1450,9 +1472,7 @@ impl TypedProgram {
             tvar_info.type_parameter_count, tvar_info.inference_hole_count
         )?;
         writeln!(w)?;
-        let mut visited = self.buffers.visited_types.borrow_mut();
-        self.display_type_id_ext(w, id, TypeDisplayMode::Expand, &mut visited)?;
-        visited.clear();
+        self.display_type_id(w, id, TypeDisplayMode::Expand)?;
         Ok(())
     }
 
@@ -1602,11 +1622,8 @@ impl DepDisplay<TypedProgram, K1DisplayArgs> for QIdent {
 
 impl DepDisplay<TypedProgram, K1DisplayArgs> for TypeId {
     fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, args: &K1DisplayArgs) -> std::fmt::Result {
-        let mut visited = k1.buffers.visited_types.borrow_mut();
         let mode = if args.verbose { TypeDisplayMode::Expand } else { TypeDisplayMode::Name };
-        let result = k1.display_type_id_ext(f, *self, mode, &mut visited);
-        visited.clear();
-        result
+        k1.display_type_id(f, *self, mode)
     }
 }
 

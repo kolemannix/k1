@@ -150,6 +150,15 @@ pub enum RecordKind {
 }
 
 impl RecordKind {
+    pub fn from_tag(tag: u8) -> Option<RecordKind> {
+        match tag {
+            0 => Some(RecordKind::Struct),
+            1 => Some(RecordKind::Union),
+            2 => Some(RecordKind::Packed),
+            _ => None,
+        }
+    }
+
     pub fn kind_name(&self) -> &'static str {
         match self {
             RecordKind::Struct => "struct",
@@ -315,6 +324,20 @@ impl Display for IntegerType {
 }
 
 impl IntegerType {
+    pub fn from_int_kind_tag(tag: u8) -> Option<IntegerType> {
+        match tag {
+            x if x == Self::U8 as u8 => Some(Self::U8),
+            x if x == Self::U16 as u8 => Some(Self::U16),
+            x if x == Self::U32 as u8 => Some(Self::U32),
+            x if x == Self::U64 as u8 => Some(Self::U64),
+            x if x == Self::I8 as u8 => Some(Self::I8),
+            x if x == Self::I16 as u8 => Some(Self::I16),
+            x if x == Self::I32 as u8 => Some(Self::I32),
+            x if x == Self::I64 as u8 => Some(Self::I64),
+            _ => None,
+        }
+    }
+
     pub fn type_id(&self) -> TypeId {
         match self {
             Self::U8 => U8_TYPE_ID,

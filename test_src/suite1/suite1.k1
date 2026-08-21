@@ -88,7 +88,7 @@ fn moderate() {
   zero_test/test-zero()
   zero_test/test-bitcast()
   type_schema/test()
-  struct_create/test()
+  type_synthesis/test()
   array_type_test/test()
   ability_complex/test()
   any_test/test()

@@ -486,8 +486,10 @@ pub enum BackendBuiltin {
     // rather than generate ir for it due to that difference
     TypeSchema,
     TypeName,
-    /// types/struct-create: comptime-only; builds a struct type on the VM
-    StructCreate,
+    /// types/make-struct: comptime-only; builds a struct/union/packed type on the VM
+    MakeStruct,
+    /// types/make-either: comptime-only; builds a sum or scalar enum type on the VM
+    MakeEither,
 
     // Platform-provided
     MemCopy,
@@ -507,7 +509,8 @@ impl BackendBuiltin {
         match self {
             BackendBuiltin::TypeSchema => "type_schema",
             BackendBuiltin::TypeName => "type_name",
-            BackendBuiltin::StructCreate => "struct_create",
+            BackendBuiltin::MakeStruct => "make_struct",
+            BackendBuiltin::MakeEither => "make_either",
             BackendBuiltin::MemCopy => "mem_copy",
             BackendBuiltin::MemMove => "mem_move",
             BackendBuiltin::MemSet => "mem_set",

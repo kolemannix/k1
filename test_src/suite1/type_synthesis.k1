@@ -1,0 +1,91 @@
+ns type_synthesis {
+
+  type(alias) point = #type types/make-struct(:struct, [
+    types/field[i64]("x"),
+    types/field[string]("y"),
+  ])
+
+  type(alias) shape = #type types/make-either-default([
+    types/variant-data[i64]("circle"),
+    types/variant-empty("square"),
+  ])
+
+  fn test() {
+    let p: point = .{ x = 42, y = "hello" }
+    assert-equals(p.x, 42)
+    assert-equals(p.y, "hello")
+    assert-equals(types/size[point], 24)
+    assert-equals(types/align[point], 8)
+
+    let created: types/type-id = #static types/make-struct(:struct, [
+      .{ name = "x", type = types/id[i64] },
+      .{ name = "y", type = types/id[string] },
+    ])
+    assert-equals(created, types/id[point])
+    assert-equals(created, types/id[{ x: i64, y: string }])
+
+    require types/id[point].schema() is :struct .{ fields }
+      and fields.len() == 2
+      and fields.get(0).name == "x"
+      and fields.get(0).type-id == types/id[i64]
+      and fields.get(1).name == "y"
+      and fields.get(1).type-id == types/id[string]
+      else crash("point schema mismatch")
+
+    let made-union: types/type-id = #static types/make-struct(:union, [
+      .{ name = "a", type = types/id[u32] },
+      .{ name = "b", type = types/id[f32] },
+    ])
+    assert-equals(made-union, types/id[union { a: u32, b: f32 }])
+
+    let made-packed: types/type-id = #static types/make-struct(:packed, [
+      .{ name = "a", type = types/id[u8] },
+      .{ name = "b", type = types/id[u64] },
+    ])
+    assert-equals(made-packed, types/id[packed { a: u8, b: u64 }])
+    assert-equals(types/size[packed { a: u8, b: u64 }], 9)
+
+    let s: shape = :circle(5)
+    require s is :circle(r) and r == 5 else crash("circle payload")
+    assert-equals(types/id[shape], types/id[either { circle(i64), square }])
+
+    require types/id[shape].schema() is :either .{ tag-type, variants }
+      and tag-type is :u8
+      and variants.len() == 2
+      and variants.get(0).name == "circle"
+      and variants.get(0).payload is :some .{ type-id }
+      and type-id == types/id[i64]
+      and variants.get(1).name == "square"
+      and variants.get(1).payload is :none
+      else crash("shape schema mismatch")
+
+    let made-enum: types/type-id = #static types/make-either(:none, [
+      .{ name = "off", payload = :none, tag = :none },
+      .{ name = "on", payload = :none, tag = :none },
+    ])
+    assert-equals(made-enum, types/id[either { off, on }])
+    require made-enum.schema() is :enum _ else crash("expected a scalar enum")
+
+    let flags: types/type-id = #static types/make-either(some(types/id[u32]), [
+      .{ name = "read",  payload = :none, tag = :some(types/int-value:u32(1)) },
+      .{ name = "write", payload = :none, tag = :some(types/int-value:u32(2)) },
+      .{ name = "exec",  payload = :none, tag = :none },
+    ])
+    assert-equals(flags, types/id[either(u32) { read = 1, write = 2, exec }])
+    require flags.schema() is :enum .{ int-kind, values }
+      and int-kind is :u32
+      and values.get(0).value is :u32(1)
+      and values.get(1).value is :u32(2)
+      and values.get(2).value is :u32(3)
+      else crash("flags schema mismatch")
+
+    assert-equals(types/id[shape.tag-enum], types/id[either { circle, square }])
+    let k: shape.tag-enum = :square
+    require k is :square else crash("tag-enum value")
+
+    let w: either { tag-enum(i64), x }:tag-enum = 33
+    assert-equals(w, 33)
+
+    .{}
+  }
+}

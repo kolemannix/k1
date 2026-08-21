@@ -2,7 +2,6 @@
 // All rights reserved.
 
 use std::ffi::c_void;
-use std::num::NonZeroU32;
 
 use crate::debug;
 use ahash::HashMapExt;
@@ -103,11 +102,9 @@ macro_rules! casted_float_op {
     };
 }
 
-pub fn unpack_type_id(struct_ptr: Value) -> TypeId {
-    let type_id_struct = struct_ptr.as_ptr() as *mut k1_types::TypeId;
-    let type_id_arg = unsafe { (*type_id_struct).inner };
-    let type_id = TypeId::from_nzu32(NonZeroU32::new(type_id_arg as u32).unwrap());
-    type_id
+pub fn value_to_type_id(k1: &mut TypedProgram, value: Value, span: SpanId) -> K1Result<TypeId> {
+    let raw = unsafe { (value.as_ptr() as *const k1_types::TypeId).read() };
+    k1.type_id_from_raw(raw, span)
 }
 
 // Shared with the bc VM (bc/exec.rs) so arithmetic semantics cannot drift
@@ -136,12 +133,46 @@ pub mod k1_types {
         pub name: K1BufferLike,
     }
 
-    /// types/struct-create field descriptor: `{ name: string, type: type-id }`
+    /// types/make-struct field descriptor: `{ name: string, type: type-id }`
     #[repr(C)]
     #[derive(Clone, Copy)]
-    pub struct K1StructCreateField {
+    pub struct K1MakeStructField {
         pub name: K1BufferLike,
         pub type_id: TypeId,
+    }
+
+    /// `?type-id`: opt tag byte, then the payload at its 8-byte alignment
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct K1OptTypeId {
+        pub tag: u8,
+        pub payload: TypeId,
+    }
+
+    /// types/int-value: int-kind tag byte, integer payload union read as raw bits
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct K1IntValue {
+        pub kind: u8,
+        pub value_bits: u64,
+    }
+
+    /// `?int-value`
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct K1OptIntValue {
+        pub tag: u8,
+        pub payload: K1IntValue,
+    }
+
+    /// types/make-either variant descriptor:
+    /// `{ name: string, payload: ?type-id, tag: ?int-value }`
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct K1MakeEitherVariant {
+        pub name: K1BufferLike,
+        pub payload: K1OptTypeId,
+        pub tag: K1OptIntValue,
     }
 
     #[repr(C)]
@@ -458,17 +489,7 @@ impl Value {
     }
 
     pub fn as_typed_int(&self, int_type: IntegerType) -> TypedIntValue {
-        let u64 = self.bits();
-        match int_type {
-            IntegerType::U8 => TypedIntValue::U8(u64 as u8),
-            IntegerType::U16 => TypedIntValue::U16(u64 as u16),
-            IntegerType::U32 => TypedIntValue::U32(u64 as u32),
-            IntegerType::U64 => TypedIntValue::U64(u64),
-            IntegerType::I8 => TypedIntValue::I8(u64 as i8),
-            IntegerType::I16 => TypedIntValue::I16(u64 as i16),
-            IntegerType::I32 => TypedIntValue::I32(u64 as i32),
-            IntegerType::I64 => TypedIntValue::I64(u64 as i64),
-        }
+        TypedIntValue::from_u64_bits(int_type, self.bits())
     }
 
     #[track_caller]

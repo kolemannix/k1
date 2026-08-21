@@ -13,9 +13,8 @@
 use std::num::NonZeroU32;
 
 use crate::ir::{self, BackendBuiltin, IrUnitId};
-use crate::kmem::List;
 use crate::lex::SpanId;
-use crate::typer::types::{PhysicalType, StructType, StructTypeField, Type, TypeId};
+use crate::typer::types::{PhysicalType, RecordKind, TypeId};
 use crate::typer::{FunctionId, K1Result, StaticValueId, TypedExprId, TypedGlobalId, TypedProgram};
 use crate::vm::{
     self, Value, Vm, casted_float_op, casted_iop, casted_uop, load_value, store_value,
@@ -1101,7 +1100,7 @@ fn exec_builtin(
 ) -> K1Result<BuiltinOutcome> {
     match builtin {
         BackendBuiltin::TypeSchema => {
-            let type_id = vm::unpack_type_id(args[0]);
+            let type_id = vm::value_to_type_id(k1, args[0], vm.eval_span)?;
             let Some(schema_static_value_id) = k1.type_schemas.get(&type_id) else {
                 kbail!(k1, vm.eval_span, "Missing type schema: {}", type_id);
             };
@@ -1110,47 +1109,35 @@ fn exec_builtin(
             Ok(BuiltinOutcome::Value(schema_vm_value))
         }
         BackendBuiltin::TypeName => {
-            let type_id = vm::unpack_type_id(args[0]);
+            let type_id = vm::value_to_type_id(k1, args[0], vm.eval_span)?;
             let name_value_id = *k1.type_names.get(&type_id).unwrap();
             let name_string_value = vm::static_value_to_vm_value(k1, name_value_id, vm.eval_span);
             Ok(BuiltinOutcome::Value(name_string_value))
         }
-        BackendBuiltin::StructCreate => {
-            let field_descs: &[vm::k1_types::K1StructCreateField] =
-                unsafe { vm::value_as_span(args[0]).to_slice() };
-            let mut fields: List<StructTypeField, _> = k1.mem.new_list(field_descs.len() as u32);
-            for desc in field_descs {
-                let name_str = match unsafe { desc.name.to_str() } {
-                    Ok(s) => s,
-                    Err(msg) => kbail!(k1, vm.eval_span, "struct-create field name: {}", msg),
-                };
-                let name = k1.ast.idents.intern(name_str);
-                for prev in fields.as_slice() {
-                    if prev.name == name {
-                        kbail!(
-                            k1,
-                            vm.eval_span,
-                            "struct-create: duplicate field name '{}'",
-                            name_str
-                        );
-                    }
-                }
-                let type_id_ok = u32::try_from(desc.type_id.inner)
-                    .ok()
-                    .and_then(TypeId::from_u32)
-                    .filter(|id| k1.types.get_opt(*id).is_some());
-                let Some(type_id) = type_id_ok else {
-                    kbail!(
-                        k1,
-                        vm.eval_span,
-                        "struct-create: unknown type id {}",
-                        desc.type_id.inner
-                    );
-                };
-                fields.push(StructTypeField { name, type_id, span: SpanId::NONE });
-            }
-            let new_type_id = k1.add_type_anon(Type::Struct(StructType::struc(fields.to_slice())));
-            k1.register_type_metainfo(new_type_id);
+        BackendBuiltin::MakeStruct => {
+            let Some(record_kind) = RecordKind::from_tag(args[0].as_u8()) else {
+                kbail!(
+                    k1,
+                    vm.eval_span,
+                    "make-struct: bad record-kind tag {}",
+                    args[0].as_u8() as u32
+                );
+            };
+            let field_descs: &[vm::k1_types::K1MakeStructField] =
+                unsafe { vm::value_as_span(args[1]).to_slice() };
+            let new_type_id = k1.make_struct_raw(record_kind, field_descs, vm.eval_span)?;
+            let type_id_value_id = k1.add_type_id_value(new_type_id);
+            let type_id_value = vm::static_value_to_vm_value(k1, type_id_value_id, vm.eval_span);
+            Ok(BuiltinOutcome::Value(type_id_value))
+        }
+        BackendBuiltin::MakeEither => {
+            let tag_type_opt =
+                unsafe { (args[0].as_ptr() as *const vm::k1_types::K1OptTypeId).read() };
+            let explicit_tag_type =
+                if tag_type_opt.tag == 0 { None } else { Some(tag_type_opt.payload) };
+            let variant_descs: &[vm::k1_types::K1MakeEitherVariant] =
+                unsafe { vm::value_as_span(args[1]).to_slice() };
+            let new_type_id = k1.make_either_raw(explicit_tag_type, variant_descs, vm.eval_span)?;
             let type_id_value_id = k1.add_type_id_value(new_type_id);
             let type_id_value = vm::static_value_to_vm_value(k1, type_id_value_id, vm.eval_span);
             Ok(BuiltinOutcome::Value(type_id_value))

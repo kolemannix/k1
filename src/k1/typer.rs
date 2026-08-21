@@ -4600,35 +4600,56 @@ impl TypedProgram {
                     }
                 }
                 match self.types.get(base_type) {
-                    // You can do dot access on sums to get their variant payloads
+                    // You can do dot access on sums to get their variant payloads,
+                    // and .tag-enum for the scalar enum of just the tags
                     Type::Sum(sum) => {
-                        let Some(matching_variant) =
-                            self.sum_variant_by_name(sum.variants, acc.member_name)
-                        else {
-                            kbail!(
-                                self,
-                                acc.span,
-                                "Variant '{}' does not exist on either '{}'",
-                                acc.member_name,
-                                base_type
-                            );
-                        };
-                        let Some(payload) = matching_variant.payload else {
-                            kbail!(
-                                self,
-                                acc.span,
-                                "Variant '{}' has no payload type",
-                                acc.member_name
-                            );
-                        };
-                        if is_dot {
-                            kbail!(
-                                self,
-                                acc.span,
-                                "Use :, not ., to access this variant's data type"
-                            );
+                        let sum = *sum;
+                        match self.sum_variant_by_name(sum.variants, acc.member_name) {
+                            Some(matching_variant) => {
+                                let Some(payload) = matching_variant.payload else {
+                                    kbail!(
+                                        self,
+                                        acc.span,
+                                        "Variant '{}' has no payload type",
+                                        acc.member_name
+                                    );
+                                };
+                                if is_dot {
+                                    kbail!(
+                                        self,
+                                        acc.span,
+                                        "Use :, not ., to access this variant's data type"
+                                    );
+                                }
+                                Ok(payload)
+                            }
+                            None => {
+                                if is_dot && acc.member_name == self.ast.idents.b.tag_enum {
+                                    let mut members = self.mem.new_list(sum.variants.len());
+                                    for variant in self.mem.getn(sum.variants) {
+                                        members.push(ScalarEnumValue {
+                                            name: variant.name,
+                                            int_value: variant.tag_value,
+                                            name_span: variant.name_span,
+                                        })
+                                    }
+                                    let enum_type_id =
+                                        self.add_type_anon(Type::Enum(ScalarEnumType {
+                                            member_values: members.to_slice(),
+                                            int_type: sum.tag_type,
+                                        }));
+                                    Ok(enum_type_id)
+                                } else {
+                                    kbail!(
+                                        self,
+                                        acc.span,
+                                        "Variant '{}' does not exist on either '{}'",
+                                        acc.member_name,
+                                        base_type
+                                    );
+                                }
+                            }
                         }
-                        Ok(payload)
                     }
                     // You can do dot access on structs to get their members!
                     Type::Struct(s) => {
@@ -18096,7 +18117,8 @@ impl TypedProgram {
                     (Some("type-id"), "schema") => {
                         Some(Builtin::Backend(BackendBuiltin::TypeSchema))
                     }
-                    (None, "struct-create") => Some(Builtin::Backend(BackendBuiltin::StructCreate)),
+                    (None, "make-struct") => Some(Builtin::Backend(BackendBuiltin::MakeStruct)),
+                    (None, "make-either") => Some(Builtin::Backend(BackendBuiltin::MakeEither)),
                     _ => None,
                 },
                 Some("bool") => match fn_name_str {
@@ -22730,6 +22752,155 @@ impl TypedProgram {
             let entities = entities_entry.or_insert_with(|| Vec::with_capacity(128));
             entities.push(LsEntity { kind, span });
         }
+    }
+
+    pub fn type_id_from_raw(
+        &mut self,
+        raw: vm::k1_types::TypeId,
+        span: SpanId,
+    ) -> K1Result<TypeId> {
+        let type_id_ok = u32::try_from(raw.inner)
+            .ok()
+            .and_then(TypeId::from_u32)
+            .filter(|id| self.types.get_opt(*id).is_some());
+        let Some(type_id) = type_id_ok else {
+            kbail!(self, span, "unknown type id {}", raw.inner);
+        };
+        Ok(type_id)
+    }
+
+    pub fn make_struct_raw(
+        &mut self,
+        record_kind: RecordKind,
+        raw_field_descs: &[vm::k1_types::K1MakeStructField],
+        span: SpanId,
+    ) -> K1Result<TypeId> {
+        let mut fields: List<StructTypeField, _> = self.mem.new_list(raw_field_descs.len() as u32);
+        for desc in raw_field_descs {
+            let name_str = match unsafe { desc.name.to_str() } {
+                Ok(s) => s,
+                Err(msg) => kbail!(self, span, "make-struct field name: {}", msg),
+            };
+            let name = self.ast.idents.intern(name_str);
+            for prev in fields.as_slice() {
+                if prev.name == name {
+                    kbail!(self, span, "make-struct: duplicate field name '{}'", name_str);
+                }
+            }
+            let type_id = self.type_id_from_raw(desc.type_id, span)?;
+            fields.push(StructTypeField { name, type_id, span: SpanId::NONE });
+        }
+        let new_type_id =
+            self.add_type_anon(Type::Struct(StructType { fields: fields.to_slice(), record_kind }));
+        self.register_type_metainfo(new_type_id);
+        Ok(new_type_id)
+    }
+
+    pub fn make_either_raw(
+        &mut self,
+        explicit_tag_type: Option<vm::k1_types::TypeId>,
+        raw_variant_descs: &[vm::k1_types::K1MakeEitherVariant],
+        span: SpanId,
+    ) -> K1Result<TypeId> {
+        let variant_count = raw_variant_descs.len() as u32;
+        let tag_type = match explicit_tag_type {
+            Some(raw) => {
+                let tag_type_id = self.type_id_from_raw(raw, span)?;
+                match self.types.get(tag_type_id) {
+                    Type::Integer(int_type) => *int_type,
+                    _ => {
+                        kbail!(
+                            self,
+                            span,
+                            "make-either: tag-type must be an integer type, got {}",
+                            tag_type_id
+                        );
+                    }
+                }
+            }
+            None => {
+                const U8_MAX_VARIANTS: u32 = u8::MAX as u32 + 1;
+                const MAX_VARIANTS: u32 = u16::MAX as u32 + 1;
+                match variant_count {
+                    c if c <= U8_MAX_VARIANTS => IntegerType::U8,
+                    c if c <= MAX_VARIANTS => IntegerType::U16,
+                    _ => {
+                        kbail!(self, span, "sum cannot have more than {MAX_VARIANTS} variants");
+                    }
+                }
+            }
+        };
+
+        let mut has_payloads = false;
+        let mut variants: List<TypedSumVariant, _> = self.mem.new_list(variant_count);
+        let mut next_tag = tag_type.zero();
+        for (index, desc) in raw_variant_descs.iter().enumerate() {
+            let name_str = match unsafe { desc.name.to_str() } {
+                Ok(s) => s,
+                Err(msg) => kbail!(self, span, "make-either variant name: {}", msg),
+            };
+            let name = self.ast.idents.intern(name_str);
+            for prev in variants.as_slice() {
+                if prev.name == name {
+                    kbail!(self, span, "make-either: duplicate variant name '{}'", name_str);
+                }
+            }
+            let payload = if desc.payload.tag == 0 {
+                None
+            } else {
+                Some(self.type_id_from_raw(desc.payload.payload, span)?)
+            };
+            let tag_value = if desc.tag.tag == 0 {
+                next_tag
+            } else {
+                let int_value = desc.tag.payload;
+                let Some(kind) = IntegerType::from_int_kind_tag(int_value.kind) else {
+                    kbail!(self, span, "make-either: bad int-value kind {}", int_value.kind as u32);
+                };
+                if kind != tag_type {
+                    kbail!(
+                        self,
+                        span,
+                        "make-either: tag for '{}' is {}, but the tag type is {}",
+                        name_str,
+                        kind,
+                        tag_type
+                    );
+                }
+                TypedIntValue::from_u64_bits(kind, int_value.value_bits)
+            };
+            if let Some(existing) = variants.iter().find(|v| v.tag_value == tag_value) {
+                kbail!(self, span, "Duplicate tag value: {}", existing.tag_value);
+            }
+            has_payloads |= payload.is_some();
+            next_tag = tag_value.incr();
+            variants.push(TypedSumVariant {
+                name,
+                index: index as u32,
+                payload,
+                tag_value,
+                name_span: SpanId::NONE,
+            });
+        }
+
+        let new_type_id = if has_payloads {
+            self.add_type_anon(Type::Sum(SumType { variants: variants.to_slice(), tag_type }))
+        } else {
+            let mut members: List<ScalarEnumValue, _> = self.mem.new_list(variant_count);
+            for v in variants.iter() {
+                members.push(ScalarEnumValue {
+                    name: v.name,
+                    int_value: v.tag_value,
+                    name_span: v.name_span,
+                });
+            }
+            self.add_type_anon(Type::Enum(ScalarEnumType {
+                member_values: members.to_slice(),
+                int_type: tag_type,
+            }))
+        };
+        self.register_type_metainfo(new_type_id);
+        Ok(new_type_id)
     }
 
     fn get_type_schema(&mut self, type_id: TypeId) -> StaticValueId {
