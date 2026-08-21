@@ -3,6 +3,10 @@ ns function_pointer
 fn static-add-one(x: int): int { x + 1 }
 fn static-add-two(x: int): int { x + 2 }
 
+fn pick-first[t](a: t, b: t): t { let _ = b; a }
+
+fn ref-pick[t](): *fn(a: t, b: t) -> t { pick-first[t].& }
+
 type has-fn = { myfn: *fn(not-x: int) -> int }
 
 fn test() {
@@ -26,6 +30,27 @@ fn test() {
   assert-equals((has-fn.myfn)(4), 5)
   assert(test-compile( (has-fn.myfn)() ) is :some _)
   assert(test-compile( (has-fn.myfn)(4)() ) is :some _)
+
+  let sa = static-add-one.&
+  assert-equals(sa(1), 2)
+  assert-equals(sa.as[ptr], static-add-one.as[ptr])
+
+  let pf-int = pick-first[int].&
+  assert-equals(pf-int(3, 4), 3)
+  let pf-int2: *fn(int, int) -> int = pick-first[int].&
+  assert-equals(pf-int2(5, 6), 5)
+  assert-equals(pf-int.as[ptr], pick-first[int].&.as[ptr])
+  assert(pick-first[int].&.as[ptr] != pick-first[bool].&.as[ptr])
+  assert-equals((pick-first[u8].&)(9, 10), 9: u8)
+
+  let pf-via-generic = ref-pick[int]()
+  assert-equals(pf-via-generic(7, 8), 7)
+  assert-equals(pf-via-generic.as[ptr], pf-int.as[ptr])
+
+  assert(test-compile( pick-first ) is :some _)
+  assert(test-compile( pick-first.& ) is :some _)
+  assert(test-compile( pick-first[int, bool].& ) is :some _)
+  assert(test-compile( static-add-one[int].& ) is :some _)
 
   .{}
 }

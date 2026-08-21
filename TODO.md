@@ -56,7 +56,7 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
 - [x] packed structs
 - [ ] function abi: internal everywhere, unless address is ever taken, then always native. enables fastcc in llvm
                     also of course allow spelling 'native', but do not allow forcing 'k1'
-- [ ] also ability to spell specialized functions: foo[int].&. Currently this is a parser collision with a call that elides its parens!
+- [x] also ability to spell specialized functions: foo[int].&
 - [x] top-level parser recovery (sync to next fn/ns/type/macro)
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack

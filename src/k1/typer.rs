@@ -9399,6 +9399,15 @@ impl TypedProgram {
                             self.ast.idents.get_string(name.name),
                         );
                     }
+                    if !self.get_function(fn_id).type_params.is_empty() {
+                        kbail!(
+                            self,
+                            name.name_span,
+                            "'{}' is generic; provide its type parameters to reference a specialization: {}[type-a, type-b].&",
+                            self.ast.idents.get_string(name.name),
+                            self.ast.idents.get_string(name.name),
+                        );
+                    }
                     Ok((None, self.function_to_reference(fn_id, variable_name_span)))
                 }
             },
@@ -9653,11 +9662,26 @@ impl TypedProgram {
         ctx: EvalExprContext,
         span: SpanId,
     ) -> K1Result<TypedExprId> {
+        if let ParsedExpr::Call(call) = self.ast.exprs.get(base_expr)
+            && !call.type_args.is_empty()
+            && call.args.is_empty()
+            && !call.is_method
+        {
+            let call = *call;
+            if self.find_variable_namespaced(ctx.scope_id, &call.name)?.is_none()
+                && let Some(fn_id) = self.find_function_namespaced(ctx.scope_id, &call.name)?
+            {
+                return self.compile_specialized_function_reference(fn_id, &call, ctx);
+            }
+        }
         let expected_type = match ctx.expected_type_id {
             None => None,
             Some(t) => Some(self.get_type_id_dereferenced(t)),
         };
         let input = self.eval_expr(base_expr, ctx.with_expected_type(expected_type))?;
+        if let TypedExpr::FunctionPointer(_) = self.exprs.get(input) {
+            return Ok(input);
+        }
         self.warn_packed_field_address_of(input, span);
         self.synth_address_of(input, span, false)
     }
@@ -14866,6 +14890,88 @@ impl TypedProgram {
         } else {
             Err(errors.into_iter().next().unwrap())
         }
+    }
+
+    fn compile_specialized_function_reference(
+        &mut self,
+        generic_function_id: FunctionId,
+        call: &ParsedCall,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
+        let span = call.span;
+        let function = self.get_function(generic_function_id);
+        let function_name = function.name;
+        let is_macro = function.is_macro;
+        let type_params = function.type_params;
+        let fnlike_type_params = function.fnlike_type_params;
+        let signature = function.signature();
+        if is_macro {
+            kbail!(
+                self,
+                span,
+                "Macro '{}' cannot be used as a value",
+                self.ident_str(function_name)
+            );
+        }
+        if type_params.is_empty() {
+            kbail!(self, span, "'{}' takes no type arguments", self.ident_str(function_name));
+        }
+        if !fnlike_type_params.is_empty() {
+            kbail!(
+                self,
+                span,
+                "Cannot reference '{}': fn-like type parameters are only inferable from call arguments",
+                self.ident_str(function_name)
+            );
+        }
+        if type_params.len() != call.type_args.len() {
+            kbail!(
+                self,
+                span,
+                "Takes {} type arguments; got {}",
+                type_params.len(),
+                call.type_args.len()
+            );
+        }
+        let (typed_type_args, _subst_pairs) = self.check_type_args_against_params(
+            type_params,
+            self.ast.mem.getn(call.type_args),
+            ctx.scope_id,
+            EvalTypeExprContext::EMPTY,
+        )?;
+        let type_args = TypeArgs::from_slice_in(self.mem.getn(typed_type_args), &mut self.mem);
+
+        let cached_specialization =
+            self.find_function_specialization(generic_function_id, type_args, TypeArgs::empty());
+        let specialized_function_type = match cached_specialization {
+            Some(function_id) => self.get_function(function_id).type_id,
+            None => self.substitute_in_function_signature(type_args, TypeArgs::empty(), signature),
+        };
+        if self.get_type_variable_counts(specialized_function_type).is_abstract()
+            || ctx.is_inference()
+        {
+            let function_pointer_type = self.add_function_pointer_type(specialized_function_type);
+            self.emit_ls_entity(
+                call.name.name_span,
+                LsEntityKind::Function { function_id: generic_function_id, is_defn: false },
+            );
+            return Ok(self.exprs.add(
+                TypedExpr::FunctionPointer(FunctionPointerExpr {
+                    function_id: generic_function_id,
+                }),
+                function_pointer_type,
+                span,
+            ));
+        }
+        let specialized_function_id = match cached_specialization {
+            Some(function_id) => function_id,
+            None => self.specialize_function_declaration(
+                type_args,
+                TypeArgs::empty(),
+                generic_function_id,
+            ),
+        };
+        Ok(self.function_to_reference(specialized_function_id, span))
     }
 
     pub fn function_to_reference(

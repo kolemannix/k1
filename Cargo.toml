@@ -9,6 +9,8 @@ name = "k1"
 path = "src/k1/lib.rs"
 
 [features]
+default = ["native-for"]
+
 lsp = ["tokio", "tower-lsp", "tokio-util", "tracing", "tracing-appender", "tracing-subscriber"]
 # gui = ["raylib"]
 profile = ["pprof"]
