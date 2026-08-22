@@ -13,3 +13,9 @@ fn(export) k1_sum(data: ptr, count: size): i64 {
   }
   sum
 }
+
+fn(export) k1_describe_sum(data: ptr, count: size): i64 {
+  let total = k1_sum(data, count)
+  println("k1 sum: ${total}")
+  total
+}

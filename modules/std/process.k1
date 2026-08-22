@@ -1,210 +1,6 @@
 // Running short-lived commands, from runtime or comptime code; catered to the
 // needs of build() and scripting as first consumers
 
-#if k1/os-posix ns posix-process {
-
-  // argv for exec-family calls: program, args, null terminator, all in tmp
-  fn make-argv(program: string, args: span[string]): list[ptr] {
-    mem/push-arena(mem/tmp())
-    let argv = list/with-capacity[ptr](args.len() + 2)
-    argv.push(program.to-c().ptr)
-    for arg in args {
-      argv.push(arg.to-c().ptr)
-    }
-    argv.push(ptr/null)
-    mem/pop-arena()
-    argv
-  }
-
-  fn is-executable(path: string): bool {
-    posix/access(path.to-c-tmp().ptr, posix/X_OK) == 0
-  }
-
-  // execvp's search rule, done here instead of by posix_spawnp: a failed exec
-  // is reported to the parent on darwin but not on glibc, where the child just
-  // exits 127, indistinguishable from a command that ran and exited 127.
-  // Resolving up front is the only portable way to tell those apart.
-  fn resolve-program(program: string): result[string, process/run-error] {
-    if program.contains('/') {
-      return if is-executable(program) :ok program
-             else :err :spawn .{ program = program, message = "not executable: ${libc/errno-k1-string()}" }
-    }
-    require core/sys/env("PATH") is :some path else {
-      return :err :spawn .{ program = program, message = "PATH is unset" }
-    }
-    for dir in path.split-by-char(':') {
-      let candidate = if dir.is-empty() "./$program" else "$dir/$program"
-      if is-executable(candidate) return :ok candidate
-    }
-    :err :spawn .{ program = program, message = "command not found" }
-  }
-
-  fn run(program: string, args: span[string], mode: process/output-mode): result[process/run-output, process/run-error] {
-    let program-path = resolve-program(program).try
-    let argv = make-argv(program, args)
-
-    // posix_spawn_file_actions_t is opaque: 8 bytes on darwin, 80 on glibc
-    let fa-buf = array/zeroed[u8, 128]()
-    let fa = fa-buf.&.as[ptr]
-    posix/posix_spawn_file_actions_init(fa)
-    defer { posix/posix_spawn_file_actions_destroy(fa) }
-
-    let pipe-fds = array/zeroed[i32, 2]()
-    let child-out: i32 = mode is {
-      :inherit -> -1,
-      :capture -> {
-        if posix/pipe(pipe-fds.&.as[ptr]) != 0 {
-          return :err :spawn .{ program = program, message = "pipe failed: ${libc/errno-k1-string()}" }
-        }
-        pipe-fds.get(1)
-      },
-      :drop -> {
-        let dev-null = posix/open("/dev/null".to-c-tmp().ptr, posix/O_WRONLY)
-        if dev-null < 0 {
-          return :err :spawn .{ program = program, message = "open /dev/null failed: ${libc/errno-k1-string()}" }
-        }
-        dev-null
-      }
-    }
-
-    if child-out >= 0 {
-      posix/posix_spawn_file_actions_adddup2(fa, child-out, 1)
-      posix/posix_spawn_file_actions_adddup2(fa, child-out, 2)
-      posix/posix_spawn_file_actions_addclose(fa, child-out)
-    }
-    if mode is :capture {
-      posix/posix_spawn_file_actions_addclose(fa, pipe-fds.get(0))
-    }
-
-    let pid: i32 = 0
-    let spawn-rc = posix/posix_spawn(
-      &pid,
-      program-path.to-c-tmp().ptr,
-      fa,
-      ptr/null,
-      argv.base-ptr(),
-      posix/environ-ptr()
-    )
-    if child-out >= 0 { posix/close(child-out) }
-    if spawn-rc != 0 {
-      if mode is :capture { posix/close(pipe-fds.get(0)) }
-      return :err :spawn .{ program = program, message = "spawn failed: ${libc/strerror-string(spawn-rc)}" }
-    }
-
-    let output = if mode is :capture {
-      let read-fd = pipe-fds.get(0)
-      mem/push-arena(mem/tmp())
-      let read-result = fd/read-all(read-fd)
-      mem/pop-arena()
-      posix/close(read-fd)
-      read-result is {
-        :ok s -> s,
-        :err message -> {
-          // Reap before reporting so we never leave a zombie behind
-          let status: i32 = 0
-          posix/waitpid(pid, &status, 0)
-          return :err :spawn .{ program = program, message = "pipe read failed: $message" }
-        },
-      }
-    } else ""
-
-    let r = reap(pid, program).try
-    :ok .{ exit-code = r.exit-code, signal = r.signal, output = output }
-  }
-
-  fn reap(pid: i32, program: string): result[process/run-output, process/run-error] {
-    let status: i32 = 0
-    let wait-rc = posix/waitpid(pid, &status, 0)
-    while wait-rc < 0 and libc/errno() == libc/EINTR {
-      wait-rc = posix/waitpid(pid, &status, 0)
-    }
-    if wait-rc < 0 {
-      return :err :spawn .{ program = program, message = "waitpid failed: ${libc/errno-k1-string()}" }
-    }
-
-    if status.bit-and(0x7f) == 0 {
-      :ok .{ exit-code = status.shift-right(8).bit-and(0xff), signal = 0, output = "" }
-    } else {
-      :ok .{ exit-code = -1, signal = status.bit-and(0x7f), output = "" }
-    }
-  }
-
-  // stdin and stdout piped, stderr inherited so the child's own noise and
-  // crashes stay visible
-  fn spawn(program: string, args: span[string]): result[process/child, process/run-error] {
-    let program-path = resolve-program(program).try
-    let argv = make-argv(program, args)
-
-    let fa-buf = array/zeroed[u8, 128]()
-    let fa = fa-buf.&.as[ptr]
-    posix/posix_spawn_file_actions_init(fa)
-    defer { posix/posix_spawn_file_actions_destroy(fa) }
-
-    // in: parent writes [1], child reads [0]; out: child writes [1], parent reads [0]
-    let in-fds = array/zeroed[i32, 2]()
-    let out-fds = array/zeroed[i32, 2]()
-    if posix/pipe(in-fds.&.as[ptr]) != 0 {
-      return :err :spawn .{ program = program, message = "pipe failed: ${libc/errno-k1-string()}" }
-    }
-    if posix/pipe(out-fds.&.as[ptr]) != 0 {
-      posix/close(in-fds.get(0))
-      posix/close(in-fds.get(1))
-      return :err :spawn .{ program = program, message = "pipe failed: ${libc/errno-k1-string()}" }
-    }
-
-    posix/posix_spawn_file_actions_adddup2(fa, in-fds.get(0), 0)
-    posix/posix_spawn_file_actions_adddup2(fa, out-fds.get(1), 1)
-    posix/posix_spawn_file_actions_addclose(fa, in-fds.get(0))
-    posix/posix_spawn_file_actions_addclose(fa, in-fds.get(1))
-    posix/posix_spawn_file_actions_addclose(fa, out-fds.get(0))
-    posix/posix_spawn_file_actions_addclose(fa, out-fds.get(1))
-
-    let pid: i32 = 0
-    let spawn-rc = posix/posix_spawn(
-      &pid,
-      program-path.to-c-tmp().ptr,
-      fa,
-      ptr/null,
-      argv.base-ptr(),
-      posix/environ-ptr()
-    )
-    posix/close(in-fds.get(0))
-    posix/close(out-fds.get(1))
-    if spawn-rc != 0 {
-      posix/close(in-fds.get(1))
-      posix/close(out-fds.get(0))
-      return :err :spawn .{ program = program, message = "spawn failed: ${libc/strerror-string(spawn-rc)}" }
-    }
-    :ok .{
-      program = program,
-      pid = pid,
-      stdin-fd = in-fds.get(1),
-      stdout = fd/reader/new(out-fds.get(0)),
-    }
-  }
-
-  fn child-wait(child: *mut process/child): result[process/run-output, process/run-error] {
-    child-close-pipes(child)
-    reap(child.pid, child.program)
-  }
-
-  fn child-kill(child: *mut process/child) {
-    let _ = posix/kill(child.pid, posix/SIGKILL)
-  }
-
-  fn child-close-pipes(child: *mut process/child) {
-    if child.stdin-fd >= 0 {
-      posix/close(child.stdin-fd)
-      child.stdin-fd = -1
-    }
-    if child.stdout.fd >= 0 {
-      posix/close(child.stdout.fd)
-      child.stdout.fd = -1
-    }
-  }
-
-}
-
 ns process {
 
   // :inherit streams the child's stdout/stderr to ours (output is empty)
@@ -238,11 +34,103 @@ ns process {
     }
   }
 
+  // execvp's search rule, done up front instead of by the spawn capability: a
+  // failed exec is reported to the parent on darwin but not on glibc, where the
+  // child just exits 127, indistinguishable from a command that ran and exited
+  // 127. Resolving here is the only portable way to tell those apart.
+  fn resolve-program(program: string): result[string, run-error] {
+    if program.contains('/') {
+      return if core/platform/io/is-executable(program) :ok program
+             else :err :spawn .{ program = program, message = "not executable" }
+    }
+    require core/sys/env("PATH") is :some path else {
+      return :err :spawn .{ program = program, message = "PATH is unset" }
+    }
+    for dir in path.split-by-char(':') {
+      let candidate = if dir.is-empty() "./$program" else "$dir/$program"
+      if core/platform/io/is-executable(candidate) return :ok candidate
+    }
+    :err :spawn .{ program = program, message = "command not found" }
+  }
+
+  fn full-argv(program: string, args: span[string]): span[string] {
+    let argv = list/with-capacity[string](args.len() + 1)
+    argv.push(program)
+    for arg in args { argv.push(arg) }
+    argv.as-span()
+  }
+
+  fn reap(pid: i32, program: string): result[run-output, run-error] {
+    core/platform/process/wait(pid) is {
+      :ok(s) -> :ok .{ exit-code = s.exit-code, signal = s.signal, output = "" },
+      :err(code) -> :err :spawn .{
+        program = program,
+        message = "waitpid failed: ${core/platform/error-string(code)}"
+      }
+    }
+  }
+
   // Exit status is data: a nonzero exit or signal death is still :ok, reported
   // in run-output; the err is always :spawn
   fn run-status(program: string, args: span[string], mode: output-mode): result[run-output, run-error] {
-    #if k1/os-posix posix-process/run(program, args, mode)
-    else crash("process/run-status: unimplemented platform")
+    let program-path = resolve-program(program).try
+
+    let pipe-read: i32 = -1
+    let child-out: i32 = mode is {
+      :inherit -> -1,
+      :capture -> {
+        let p = core/platform/io/pipe() is {
+          :some(p) -> p,
+          :none -> return :err :spawn .{ program = program, message = "pipe failed" }
+        }
+        pipe-read = p.read.raw
+        p.write.raw
+      },
+      :drop -> {
+        core/platform/io/open-to-write("/dev/null") is {
+          :some(h) -> h.raw,
+          :none -> return :err :spawn .{ program = program, message = "open /dev/null failed" }
+        }
+      }
+    }
+
+    let spawned = core/platform/process/spawn(
+      path = program-path,
+      argv = full-argv(program, args),
+      fd0 = -1,
+      fd1 = child-out,
+      fd2 = child-out,
+      extra-close = [pipe-read]
+    )
+    if child-out >= 0 { core/platform/io/close(.{ raw = child-out }) }
+    let pid = spawned is {
+      :ok(pid) -> pid,
+      :err(code) -> {
+        if pipe-read >= 0 { core/platform/io/close(.{ raw = pipe-read }) }
+        return :err :spawn .{
+          program = program,
+          message = "spawn failed: ${core/platform/error-string(code)}"
+        }
+      }
+    }
+
+    let output = if mode is :capture {
+      mem/push-arena(mem/tmp())
+      let read-result = fd/read-all(pipe-read)
+      mem/pop-arena()
+      core/platform/io/close(.{ raw = pipe-read })
+      read-result is {
+        :ok s -> s,
+        :err message -> {
+          // Reap before reporting so we never leave a zombie behind
+          let _ = core/platform/process/wait(pid)
+          return :err :spawn .{ program = program, message = "pipe read failed: $message" }
+        },
+      }
+    } else ""
+
+    let r = reap(pid, program).try
+    :ok .{ exit-code = r.exit-code, signal = r.signal, output = output }
   }
 
   // Any failure -- spawn, nonzero exit, death by signal -- is the err; ok is
@@ -273,22 +161,75 @@ ns process {
     stdout: fd/reader,
   }
 
+  // stdin and stdout piped, stderr inherited so the child's own noise and
+  // crashes stay visible
   fn spawn(program: string, args: span[string]): result[child, run-error] {
-    #if k1/os-posix posix-process/spawn(program, args)
-    else crash("process/spawn: unimplemented platform")
+    let program-path = resolve-program(program).try
+
+    // in: parent writes, child reads; out: child writes, parent reads
+    let in-pipe = core/platform/io/pipe() is {
+      :some(p) -> p,
+      :none -> return :err :spawn .{ program = program, message = "pipe failed" }
+    }
+    let out-pipe = core/platform/io/pipe() is {
+      :some(p) -> p,
+      :none -> {
+        core/platform/io/close(in-pipe.read)
+        core/platform/io/close(in-pipe.write)
+        return :err :spawn .{ program = program, message = "pipe failed" }
+      }
+    }
+
+    let spawned = core/platform/process/spawn(
+      path = program-path,
+      argv = full-argv(program, args),
+      fd0 = in-pipe.read.raw,
+      fd1 = out-pipe.write.raw,
+      fd2 = -1,
+      extra-close = [in-pipe.write.raw, out-pipe.read.raw]
+    )
+    core/platform/io/close(in-pipe.read)
+    core/platform/io/close(out-pipe.write)
+    let pid = spawned is {
+      :ok(pid) -> pid,
+      :err(code) -> {
+        core/platform/io/close(in-pipe.write)
+        core/platform/io/close(out-pipe.read)
+        return :err :spawn .{
+          program = program,
+          message = "spawn failed: ${core/platform/error-string(code)}"
+        }
+      }
+    }
+    :ok .{
+      program = program,
+      pid = pid,
+      stdin-fd = in-pipe.write.raw,
+      stdout = fd/reader/new(out-pipe.read.raw),
+    }
+  }
+
+  fn child-close-pipes(child: *mut child) {
+    if child.stdin-fd >= 0 {
+      core/platform/io/close(.{ raw = child.stdin-fd })
+      child.stdin-fd = -1
+    }
+    if child.stdout.fd >= 0 {
+      core/platform/io/close(.{ raw = child.stdout.fd })
+      child.stdout.fd = -1
+    }
   }
 
   ns for child {
 
     // Closes both pipes (EOF on the child's stdin) and reaps
     fn wait(self: *mut child): result[run-output, run-error] {
-      #if k1/os-posix posix-process/child-wait(self)
-      else crash("child/wait: unimplemented platform")
+      child-close-pipes(self)
+      reap(self.pid, self.program)
     }
 
     fn kill(self: *mut child) {
-      #if k1/os-posix posix-process/child-kill(self)
-      else crash("child/kill: unimplemented platform")
+      core/platform/process/kill(self.pid)
     }
 
   }

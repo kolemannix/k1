@@ -21,7 +21,7 @@ fn test(): i32 {
     "+clangarg", "-isystem",
     "+clangarg", "$llvm-prefix/lib/clang/21/include",
   ])
-  let args = #if k1/os-macos {
+  let args = #if k1/platform-macos {
     args.concat([
       "+clangarg", "-isysroot",
       "+clangarg", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk"

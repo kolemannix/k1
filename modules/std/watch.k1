@@ -4,7 +4,7 @@
 //   w.add("path/to/dir-or-file").!
 //   loop { for e in w.wait().! { ... e.path, e.kind ... } }
 
-#if k1/os-macos ns kq {
+#if k1/platform-macos ns kq {
 
   use core/c-int
 
@@ -95,7 +95,7 @@
   }
 }
 
-#if k1/os-linux ns inotify {
+#if k1/platform-linux ns inotify {
 
   use core/c-int
 
@@ -190,38 +190,38 @@ ns watch {
   type watcher = { fd: i32, entries: list[entry] }
 
   fn create(): result[watcher, string] {
-    k1/os #is {
-      :macos -> kq/create(),
-      :linux -> inotify/create(),
-      :wasm -> crash("watch is not available on wasm"),
+    k1/platform #is {
+      :posix-macos -> kq/create(),
+      :posix-linux -> inotify/create(),
+      :wasi or :bare -> crash("watch is not available on this platform"),
     }
   }
 
   ns for watcher {
 
     fn add(self: *mut watcher, path: string): result[empty, string] {
-      k1/os #is {
-        :macos -> kq/add(self, path),
-        :linux -> inotify/add(self, path),
-        :wasm -> crash("watch is not available on wasm"),
+      k1/platform #is {
+        :posix-macos -> kq/add(self, path),
+        :posix-linux -> inotify/add(self, path),
+        :wasi or :bare -> crash("watch is not available on this platform"),
       }
     }
 
     // Blocks until at least one watched path changes. Spurious extra events
     // are normal; callers that care should compare content, not counts.
     fn wait(self: *mut watcher): result[list[event], string] {
-      k1/os #is {
-        :macos -> kq/wait(self),
-        :linux -> inotify/wait(self),
-        :wasm -> crash("watch is not available on wasm"),
+      k1/platform #is {
+        :posix-macos -> kq/wait(self),
+        :posix-linux -> inotify/wait(self),
+        :wasi or :bare -> crash("watch is not available on this platform"),
       }
     }
 
     fn close(self: *mut watcher) {
-      k1/os #is {
-        :macos -> kq/close(self),
-        :linux -> inotify/close(self),
-        :wasm -> crash("watch is not available on wasm"),
+      k1/platform #is {
+        :posix-macos -> kq/close(self),
+        :posix-linux -> inotify/close(self),
+        :wasi or :bare -> crash("watch is not available on this platform"),
       }
     }
 

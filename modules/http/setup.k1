@@ -9,7 +9,7 @@ fn setup(ctx: k1/setup-ctx) {
 
   for ["llhttp", "api", "http"] {
     let cc-args: list[string] = ["-O2", "-Ivendor", "-c", "vendor/${it}.c", "-o", ".k1-out/llhttp/${it}.o"]
-    if k1/os-macos { cc-args.push("-mmacosx-version-min=15.0.0") }
+    if k1/platform-macos { cc-args.push("-mmacosx-version-min=15.0.0") }
     process/run-command("cc", cc-args.as-span(), :inherit).!
   }
   process/run-command("/bin/sh", ["-c", "ar rcs libs/libllhttp.a .k1-out/llhttp/*.o"], :inherit).!
@@ -23,7 +23,7 @@ fn setup(ctx: k1/setup-ctx) {
     "+strip-suffix", "_t",
   ]
   // The host SDK, for system headers
-  if k1/os-macos {
+  if k1/platform-macos {
     let sdk = process/run("/bin/sh", ["-c", "printf %s $(xcrun --sdk macosx --show-sdk-path)"]).!
     args.push("+clangarg")
     args.push("-isysroot")

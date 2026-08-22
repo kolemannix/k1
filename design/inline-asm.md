@@ -100,7 +100,7 @@ other side effects, never deleted".
 
 ## Target gating
 
-Add alongside `k1/os`:
+Add alongside `k1/platform`:
 
 ```k1
 type arch = either { x86-64, aarch64, wasm }
@@ -108,7 +108,7 @@ let arch: arch = builtin
 ```
 
 Portability is plain `#if k1/arch is :aarch64 { ... }` — dead-arch asm is
-skipped exactly like `#if os` code today, and the arch-scoped register
+skipped exactly like `#if platform` code today, and the arch-scoped register
 namespaces catch anything unguarded. No new cfg machinery. Asm on a target
 with no asm story (wasm) is a typecheck error at the expression.
 

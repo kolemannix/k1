@@ -25,11 +25,7 @@ ns ability_generic {
     for generic-point[t] {
       fn gadd(self: generic-point[t], other: generic-point[t]): generic-point[t] {
         let new-x: t = self.x.gadd(other.x)
-        //let a = self.x; let b = other.x;
-        //println("generic-point.add x {a} + {b} = {new-x}");
         let new-y: t = self.y.gadd(other.y)
-        //let a = self.y; let b = other.y;
-        //println("generic-point.add y {a} + {b} = {new-y}");
         .{ x = new-x, y = new-y }
       }
   }

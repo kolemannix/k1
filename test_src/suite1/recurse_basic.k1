@@ -3,22 +3,18 @@ ns recurse_basic {
   type tree = either { leaf, node(*tree) }
 
   fn make(n: size): *node {
-    //println("make {n}");
     if n <= 0 ptr/null.r[node] else mem/new(.{ node = make(n - 1) })
    }
 
   fn count(n: *node): size {
-    //println("count");
     if n.as[ptr].is-null() 0 else 1 + count(n.node)
   }
 
   fn emake(n: size): tree {
-    //println("emake {n}");
     if n == 0 :leaf else :node mem/new(emake(n - 1))
   }
 
   fn ecount(en: tree): size {
-    //println("ecount");
     en is {
       :leaf -> 0,
       :node child -> 1 + ecount(child.*)

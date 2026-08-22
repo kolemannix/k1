@@ -1,9 +1,6 @@
 ns test_globals
 
-let foo: int = 42
-let bar: int = 31
-
-let global-int: int = 0
+let global-int: int = 42
 let(mutable) global-int-mut: int = 10
 let static-int: int = 2
 
@@ -13,10 +10,7 @@ let global-string: string = "imglobal"
 
 fn test() {
 
-   assert-equals(foo, 42)
-   assert-equals(bar, 31)
-
-   assert-equals(global-int, 0)
+   assert-equals(global-int, 42)
    assert-equals(static-int, 2)
 
    while global-int-mut > static-int {

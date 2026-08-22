@@ -88,7 +88,6 @@ fn test() {
   let let-ref = #static {
     let i = 10
 
-    //assert(i.* == 10);
     i = core/identity(i)
     i = core/identity(i)
     i

@@ -7771,16 +7771,16 @@ impl TypedProgram {
             "debug" => self.config.debug,
             // The VM overrides this global's value during static execution
             "is-static" => false,
-            "os" => {
-                let os_tag_value = self.config.target.target_os() as u8;
+            "platform" => {
+                let platform_tag = self.config.target.platform() as u8;
                 let static_enum =
-                    StaticValue::Enum(expected_type_id, TypedIntValue::U8(os_tag_value));
+                    StaticValue::Enum(expected_type_id, TypedIntValue::U8(platform_tag));
                 return Ok(self.static_values.add(static_enum));
             }
-            "host-os" => {
-                let host_os = self.config.host_os();
+            "host-platform" => {
+                let host_platform = self.config.host_platform();
                 let static_enum =
-                    StaticValue::Enum(expected_type_id, TypedIntValue::U8(host_os as u8));
+                    StaticValue::Enum(expected_type_id, TypedIntValue::U8(host_platform as u8));
                 return Ok(self.static_values.add(static_enum));
             }
             "simd-bytes" => {
@@ -10389,6 +10389,22 @@ impl TypedProgram {
         let span = list_expr.span;
         let element_count = list_expr.elements.len();
 
+        if let ContainerKind::Array(array_type_id) = list_kind {
+            let size_type = self.types.get(array_type_id).as_array().unwrap().size_type;
+            if let Some(array_count) = self.get_concrete_count_of_array(size_type)
+                && array_count != element_count as i64
+            {
+                kbail!(
+                    self,
+                    span,
+                    "Expected {} elements for {} but got {}",
+                    array_count,
+                    self.type_id_to_string(array_type_id).blue(),
+                    element_count
+                );
+            }
+        }
+
         let mut list_lit_block =
             self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 2 + element_count);
         let list_lit_scope = list_lit_block.scope_id;
@@ -11260,12 +11276,16 @@ impl TypedProgram {
                 .iter()
                 .find(|f| f.name == expected_field.name)
             else {
-                kbail!(
-                    self,
-                    struct_span,
-                    "Struct is missing expected field '{}'",
-                    expected_field.name
-                );
+                if parsed_struct.fields.is_empty() {
+                    kbail!(self, struct_span, "Expected '{}' but got empty", expected_struct_id);
+                } else {
+                    kbail!(
+                        self,
+                        struct_span,
+                        "Struct is missing expected field '{}'",
+                        expected_field.name
+                    );
+                }
             };
             let parsed_expr = match passed_field.value {
                 StructValueFieldKind::VarShorthand => {
@@ -12083,6 +12103,18 @@ impl TypedProgram {
                             guard_condition_expr_id,
                             pattern_eval_ctx.with_expected_type(Some(BOOL_TYPE_ID)),
                         )?;
+                        let guard_condition_type = self.exprs.get_type(guard_condition_expr);
+                        if let Err(msg) = self.check_types(
+                            BOOL_TYPE_ID,
+                            guard_condition_type,
+                            pattern_eval_ctx.scope_id,
+                        ) {
+                            kbail!(
+                                self,
+                                self.ast.get_expr_span(guard_condition_expr_id),
+                                "Expected boolean condition: {msg}"
+                            );
+                        };
                         instrs.push(MatchingConditionInstr::cond(guard_condition_expr));
                     };
 
@@ -13086,16 +13118,24 @@ impl TypedProgram {
             iterator_next_call,
             loop_scope_id,
         );
-        let next_getvalue_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.try__get_value.with_span(iterable_span),
-            &[],
-            &[next_variable.variable_expr],
-            ctx.with_scope(consequent_block.scope_id).with_no_expected_type(),
-            false,
-        )?;
+        // The is-some check below guards this arm, so project the payload
+        // directly; try/get-value's crash arm would survive as reachable code
+        let next_type = self.exprs.get_type(next_variable.variable_expr);
+        let next_sum_type = self.types.get(next_type).expect_sum();
+        let some_variant = self.sum_variant_by_index(next_sum_type.variants, 1);
+        let some_payload_type = some_variant.payload.unwrap();
+        let next_get_payload = self.exprs.add(
+            TypedExpr::SumGetPayload(GetSumPayload {
+                sum_expr: next_variable.variable_expr,
+                variant_index: 1,
+                packed: false,
+            }),
+            some_payload_type,
+            iterable_span,
+        );
         let binding_variable = self.synth_variable_defn_visible(
             binding_ident,
-            next_getvalue_call,
+            next_get_payload,
             consequent_block.scope_id,
             binding_span,
         );
@@ -23606,7 +23646,7 @@ impl TypedProgram {
         }
 
         let lib_name_str = self.ast.idents.get_string(lib_name_ident);
-        let ext = self.config.host_os().dylib_ext();
+        let ext = self.config.host_platform().dylib_ext();
         debug!("cwd is: {}", std::env::current_dir().unwrap().display());
         debug!("src_path is: {}", self.ast.idents.get_string(self.config.src_path));
 

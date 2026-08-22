@@ -27,7 +27,3 @@ fn static-zst() {
   let point = #static .{ x = 1, y = (#static 2): int }
   assert-equals(point.x.from-static(), 1)
 }
-
-//fn staticGetX[P: static { x: int, y: int }](p: P): int {
-//  p.x.from-static()
-//}

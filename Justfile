@@ -22,18 +22,31 @@ ts1:
 
 ts1-wasm:
   make -C modules/core/libs wasm
-  just run-frag --cache false --target wasm64 run test_src/suite1
-  just run-frag --optimize --cache false --target wasm64 run test_src/suite1
+  just run-frag --cache false --target wasm64-wasi run test_src/suite1
+  just run-frag --optimize --cache false --target wasm64-wasi run test_src/suite1
+
+# The fractal demo: same program natively, under wasmtime, and on a canvas
+fractal:
+  just run-frag run dogfood/fractal
+
+fractal-wasi:
+  make -C modules/core/libs wasm
+  just run-frag --optimize --target wasm64-wasi run dogfood/fractal
+
+fractal-web:
+  make -C modules/core/libs wasm
+  just run-frag --optimize --target wasm64-wasi build dogfood/fractal
+  python3 -m http.server -d dogfood/fractal 8088
 
 # Cross-built freestanding k1 library consumed by a C bootstrap, run in docker.
 # The clang/ld.lld/llvm-nm binaries here play the CONSUMER's toolchain, not k1's
 ts-freestanding:
   make -C modules/core/libs nocrt
-  just run-frag --no-std --target linux-intel64 --cache false build dogfood/freestanding_lib
-  llvm/install-llvm/bin/llvm-nm --undefined-only dogfood/freestanding_lib/.k1-out/freestanding_lib.o | awk 'END { exit NR != 0 }'
+  just run-frag --no-std --target intel64-bare --cache false build dogfood/freestanding_lib
+  llvm/install-llvm/bin/llvm-nm --undefined-only dogfood/freestanding_lib/.k1-out/freestanding_lib.o | awk '$2 !~ /^k1_platform_/ && $2 !~ /^(memcpy|memmove|memset|memcmp|bcmp)$/' | awk 'END { exit NR != 0 }'
   llvm/install-llvm/bin/clang --target=x86_64-unknown-linux-gnu -ffreestanding -nostdinc -O2 -fno-stack-protector -c dogfood/freestanding_lib/consumer/consumer.c -o dogfood/freestanding_lib/.k1-out/consumer.o
-  llvm/install-llvm/bin/ld.lld -z separate-loadable-segments dogfood/freestanding_lib/.k1-out/consumer.o dogfood/freestanding_lib/.k1-out/freestanding_lib.o -o dogfood/freestanding_lib/.k1-out/consumer_bin
-  docker run --rm --platform linux/amd64 -v {{justfile_directory()}}/dogfood/freestanding_lib/.k1-out:/w alpine:latest /w/consumer_bin | grep -x 103
+  llvm/install-llvm/bin/ld.lld -z separate-loadable-segments dogfood/freestanding_lib/.k1-out/consumer.o dogfood/freestanding_lib/.k1-out/freestanding_lib.o modules/core/libs/libk1rt-nocrt.a -o dogfood/freestanding_lib/.k1-out/consumer_bin
+  docker run --rm --platform linux/amd64 -v {{justfile_directory()}}/dogfood/freestanding_lib/.k1-out:/w alpine:latest /w/consumer_bin | grep -cxE 'k1 sum: 100|103' | grep -x 2
 
 # Dev loop for a reloadable app: rebuild on source change
 watch dir:

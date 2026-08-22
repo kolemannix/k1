@@ -1,61 +1,8 @@
-#if k1/os-macos ns macos-time {
-  type mach_timebase_info_data_t = { numer: u32, denom: u32 }
-
-  fn(extern("mach_absolute_time")) mach_absolute_time(): u64
-  fn(extern("mach_timebase_info")) mach_timebase_info(timebase: *mut mach_timebase_info_data_t): u64
-
-  let(mutable) timebase: mach_timebase_info_data_t = .{ numer = 0, denom = 0 }
-
-  fn counter-to-nanos(counter: u64): u64 {
-    if (timebase.denom == 0) {
-      mach_timebase_info(&timebase)
-    }
-    (counter * (timebase.numer.as[u64])) / (timebase.denom.as[u64])
-  }
-
-}
-
-#if k1/os-linux ns linux-time {
-  fn now-nanos(): u64 {
-    let ts: posix/timespec = uninit
-    posix/clock_gettime(posix/CLOCK_MONOTONIC, &ts)
-    (ts.tv_sec * 1_000_000_000) + ts.tv_nsec
-  }
-}
-
-#if k1/os-wasm ns wasi-time {
-  let CLOCK-MONOTONIC: u32 = 1
-  fn(extern("clock_time_get"), lib("wasi_snapshot_preview1")) clock-time-get(id: u32, precision: u64, time: u32): i32
-
-  fn now-nanos(): u64 {
-    if k1/is-static {
-      // static execution runs on the posix host, so the clock id is host-keyed
-      let ts: posix/timespec = uninit
-      let host-monotonic: posix/clockid_t = k1/host-os #is { :macos -> 6, :linux or :wasm -> 1 }
-      posix/clock_gettime(host-monotonic, &ts)
-      (ts.tv_sec * 1_000_000_000) + ts.tv_nsec
-    } else {
-      let t: u64 = 0
-      if clock-time-get(CLOCK-MONOTONIC, 1, t.&.as[ptr].as[size].as[u32]) != 0 {
-        crash("wasi clock_time_get failed")
-      }
-      t
-    }
-  }
-}
-
 ns time {
   fn read-cpu-counter(): u64 {
-    k1/os #is {
-      :macos -> macos-time/mach_absolute_time(),
-      :linux -> linux-time/now-nanos(),
-      :wasm -> wasi-time/now-nanos(),
-    }
+    core/platform/clock/counter()
   }
   fn counter-to-nanos(counter: u64): u64 {
-    k1/os #is {
-      :macos -> macos-time/counter-to-nanos(counter),
-      :linux or :wasm -> counter,
-    }
+    core/platform/clock/counter-to-nanos(counter)
   }
 }

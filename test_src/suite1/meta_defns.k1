@@ -46,9 +46,3 @@ fn test() {
   assert-equals(p.z, 15)
 
 }
-
-// Only "static, true" and "meta, true" should appear
-// #if true #static { println("static, true"); .{} } 
-// #if false #static { println("static, false"); .{} } 
-// #if true #meta { println("meta, true"); "let u1: empty = .{};" }
-// #if false #meta { println("meta, false"); "let u2: empty = .{};" }

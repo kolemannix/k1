@@ -61,6 +61,10 @@ fn test() {
 
   let array: array[f32, 10] = mem/zeroed()
   assert(test-compile(array.get(11)) is :some _)
+  assert(test-compile(takes-three([1, 2])) is :some _)
+  assert(test-compile(takes-three([1, 2, 3, 4])) is :some _)
+  assert(test-compile(takes-three([])) is :some _)
+  takes-three([1, 2, 3])
   array.set(0, 3.14)
   let buf = array.&.as-buffer()
   assert(buf.get(0) == array.get(0))
@@ -69,6 +73,10 @@ fn test() {
   test-print()
 
   .{}
+}
+
+fn takes-three(a: array[int, 3]) {
+  assert-equals(a.get(0) + a.get(1) + a.get(2), 6)
 }
 
 fn test-print() {

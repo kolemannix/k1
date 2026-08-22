@@ -2,16 +2,12 @@ ns thread
 
 type(alias) thread = *empty
 
-ns pthread {
-  fn(extern("pthread_create")) pthread_create(thread: *thread, attrs: ptr, start_routine: ptr, input: ptr): i32
-  fn(extern("pthread_join")) pthread_join(thread: thread, retval: ptr): i32
-  fn(extern("pthread_detach")) pthread_detach(thread: thread): i32
-}
-
 fn start[t](handle: *mut thread, function: *fn(*mut t) -> ptr, input: *t) {
-  if pthread/pthread_create(handle, ptr/null, function.as[ptr], input.as[ptr]) != 0 {
-    crash("pthread_create failed")
+  let h = core/platform/thread/spawn(function.as[ptr], input.as[ptr]) is {
+    :some h -> h,
+    :none -> crash("thread spawn failed")
   }
+  handle.* = h.raw.rw[empty]()
 }
 
 // Fire-and-forget: no join handle, the thread's resources release on exit.
@@ -20,14 +16,11 @@ fn start[t](handle: *mut thread, function: *fn(*mut t) -> ptr, input: *t) {
 fn start-detached[t](function: *fn(*mut t) -> ptr, input: *t) {
   let handle: thread = ptr/null.rw[empty]()
   start(handle.&, function, input)
-  if pthread/pthread_detach(handle) != 0 {
-    crash("pthread_detach failed")
-  }
+  core/platform/thread/detach(.{ raw = handle.as[ptr] })
 }
 
 fn sleep-ms(ms: u64) {
-  let req: posix/timespec = .{ tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
-  let _ = posix/nanosleep(req.&, ptr/null.rw[posix/timespec]())
+  core/platform/thread/sleep-ms(ms)
 }
 
 type sleep-poll-mutex = { state: u64 }
@@ -49,7 +42,5 @@ ns for sleep-poll-mutex {
 }
 
 fn join[t](thread: thread, retval: *mut t) {
-  if pthread/pthread_join(thread, retval.as[ptr]) != 0 {
-    crash("pthread_join failed")
-  }
+  retval.as[ptr].rw[ptr].* = core/platform/thread/join(.{ raw = thread.as[ptr] })
 }

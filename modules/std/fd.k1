@@ -4,10 +4,13 @@ ns fd {
   fn write-all(fd: i32, bytes: span[u8]): result[empty, string] {
     let written: size = 0
     while written < bytes.len() {
-      let n = posix/write(fd, bytes.data-ptr().add-bytes(written), (bytes.len() - written).as[u64])
-      if n < 0 {
-        if libc/errno() == libc/EINTR continue
-        return :err libc/errno-k1-string()
+      let n = core/platform/io/write(
+        file = .{ raw = fd },
+        data = bytes.data-ptr().add-bytes(written),
+        count = bytes.len() - written
+      ).result() is {
+        :ok(n) -> n,
+        :err(e) -> return :err core/platform/error-string(e)
       }
       written = written + n
     }
@@ -18,14 +21,12 @@ ns fd {
     let sb = string-builder/new()
     let chunk = buffer/allocate[u8](4096)
     loop {
-      let n = posix/read(fd, chunk.data.as[ptr], chunk.len.as[u64])
-      if n > 0 {
-        sb.write-bytes(span/wrap-buffer(chunk.slice(0, n)))
-      } else if n == 0 {
-        return :ok sb.build()
-      } else if libc/errno() != libc/EINTR {
-        return :err libc/errno-k1-string()
+      let n = core/platform/io/read(.{ raw = fd }, chunk.data.as[ptr], chunk.len).result() is {
+        :ok(n) -> n,
+        :err(e) -> return :err core/platform/error-string(e)
       }
+      if n == 0 return :ok sb.build()
+      sb.write-bytes(span/wrap-buffer(chunk.slice(0, n)))
     }
   }
 
@@ -56,18 +57,19 @@ ns fd {
           i = i + 1
         }
         let chunk = buffer/allocate-in[u8, _](mem/tmp(), 4096)
-        let n = posix/read(self.fd, chunk.data.as[ptr], chunk.len.as[u64])
+        let n = core/platform/io/read(.{ raw = self.fd }, chunk.data.as[ptr], chunk.len).result() is {
+          :ok(n) -> n,
+          :err(_) -> return :none
+        }
         if n > 0 {
           self.pending.append-span(span/wrap-buffer(chunk.slice(0, n)))
-        } else if n == 0 {
+        } else {
           if self.consumed < self.pending.len() {
             let line = self.take-line(self.pending.len())
             self.pending.clear()
             self.consumed = 0
             return :some(line)
           }
-          return :none
-        } else if libc/errno() != libc/EINTR {
           return :none
         }
       }

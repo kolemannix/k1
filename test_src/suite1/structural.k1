@@ -31,5 +31,5 @@ fn test() {
   get-nominal(h1)
 
   // Not ok; different nominal types!
-  assert(test-compile(get(h2)).is-some())
+  assert(test-compile(get-nominal(h2)).is-some())
 }

@@ -461,16 +461,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         // We may need to create a DIBuilder per-file.
         // For now let's use main file
         let source = module.ast.sources.get_main();
-        let sysroot = match module.config.target.target_os() {
-            compiler::TargetOs::Linux => "",
-            compiler::TargetOs::MacOs => compiler::MAC_SDK_SYSROOT,
-            compiler::TargetOs::Wasm => "",
-        };
-        let sdk = match module.config.target.target_os() {
-            compiler::TargetOs::Linux => "",
-            compiler::TargetOs::MacOs => "MacOSX.sdk",
-            compiler::TargetOs::Wasm => "",
-        };
+        let is_macos = module.config.target.platform() == compiler::Platform::PosixMacos;
+        let sysroot = if is_macos { compiler::MAC_SDK_SYSROOT } else { "" };
+        let sdk = if is_macos { "MacOSX.sdk" } else { "" };
         let (debug_builder, compile_unit) = llvm_module.create_debug_info_builder(
             false,
             DWARFSourceLanguage::C,
@@ -698,8 +691,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         if let Some((_, function_value)) = main_function {
             self.builder.unset_current_debug_location();
-            let is_wasm = self.k1.config.target.target_os() == compiler::TargetOs::Wasm;
-            let (entrypoint_name, entrypoint_fn_type) = if is_wasm {
+            let is_wasi = self.k1.config.target.platform() == compiler::Platform::Wasi;
+            let (entrypoint_name, entrypoint_fn_type) = if is_wasi {
+                // WASI rejects any entry signature other than void _start()
                 if !function_value.get_type().get_param_types().is_empty() {
                     kbail!(self.k1, SpanId::NONE, "main with parameters is not supported on wasm");
                 }
@@ -758,7 +752,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         let program_name = self.k1.ast.name.clone();
-        let dylib_ext = self.k1.config.target.target_os().dylib_ext();
+        let dylib_ext = self.k1.config.target.platform().dylib_ext();
         let ptr_type = self.builtin_types.ptr;
         let entry_type = self.ctx.struct_type(&[ptr_type.into(), ptr_type.into()], false);
         for ns_id in reload_nss {
@@ -3961,7 +3955,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 .add_attribute(AttributeLoc::Function, self.make_enum_attribute("noreturn", 0));
         }
 
-        if self.k1.config.target.target_os() == compiler::TargetOs::Wasm {
+        if self.k1.config.target.arch() == compiler::Arch::Wasm {
             if let TyperLinkage::External { lib_name: Some(lib_name), .. } = typed_function_linkage
             {
                 function_value.add_attribute(
@@ -4040,10 +4034,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AMD64,
             ARM64,
         }
-        let callconv = match self.k1.config.target {
-            compiler::Target::LinuxIntel64 => CallConv::AMD64,
-            compiler::Target::MacOsArm64 => CallConv::ARM64,
-            compiler::Target::Wasm64 => CallConv::ARM64,
+        let callconv = match self.k1.config.target.arch() {
+            compiler::Arch::Intel => CallConv::AMD64,
+            compiler::Arch::Arm => CallConv::ARM64,
+            compiler::Arch::Wasm => CallConv::ARM64,
         };
 
         // https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/
@@ -4852,9 +4846,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         global.set_constant(constant);
         global.set_linkage(linkage);
 
-        // Single-threaded wasm: tls globals are plain globals
-        let is_tls_and_supported =
-            is_tls && self.k1.config.target.target_os() != compiler::TargetOs::Wasm;
+        // Single-threaded wasm and bare (no threads contract): tls globals are
+        // plain globals
+        let is_tls_and_supported = is_tls
+            && self.k1.config.target.arch() != compiler::Arch::Wasm
+            && self.k1.config.target.platform() != compiler::Platform::Bare;
         if is_tls_and_supported {
             global.set_thread_local(true);
             let mode = if self.k1.program_settings.executable {
@@ -5059,14 +5055,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Target::initialize_x86(&InitializationConfig::default());
         Target::initialize_aarch64(&InitializationConfig::default());
         Target::initialize_webassembly(&InitializationConfig::default());
+        // Bare targets ride the ELF triples: their object is consumed by a
+        // kernel or embedder toolchain, never by mac userland
         let triple = match k1_target {
-            compiler::Target::Wasm64 => {
+            compiler::Target::Wasm64Wasi => {
                 inkwell::targets::TargetTriple::create("wasm64-unknown-wasi")
             }
-            compiler::Target::LinuxIntel64 => {
+            compiler::Target::Wasm64Bare => {
+                inkwell::targets::TargetTriple::create("wasm64-unknown-unknown")
+            }
+            compiler::Target::Intel64Linux | compiler::Target::Intel64Bare => {
                 inkwell::targets::TargetTriple::create("x86_64-unknown-linux-gnu")
             }
-            compiler::Target::MacOsArm64 => inkwell::targets::TargetTriple::create(&format!(
+            compiler::Target::Arm64Bare => {
+                inkwell::targets::TargetTriple::create("aarch64-unknown-linux-gnu")
+            }
+            compiler::Target::Arm64Macos => inkwell::targets::TargetTriple::create(&format!(
                 "arm64-apple-macosx{}",
                 compiler::MAC_SDK_VERSION
             )),
@@ -5080,11 +5084,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 TargetMachine::get_host_cpu_features().to_string(),
             )
         } else {
-            match k1_target {
+            match k1_target.arch() {
                 // SSE2 is the x86-64 baseline
-                compiler::Target::LinuxIntel64 => ("x86-64".to_string(), "".to_string()),
-                compiler::Target::MacOsArm64 => ("generic".to_string(), "+neon".to_string()),
-                compiler::Target::Wasm64 => (
+                compiler::Arch::Intel => ("x86-64".to_string(), "".to_string()),
+                compiler::Arch::Arm => ("generic".to_string(), "+neon".to_string()),
+                compiler::Arch::Wasm => (
                     "generic".to_string(),
                     // bulk-memory lets llvm.memcpy/memmove/memset lower to
                     // memory.copy/memory.fill instead of libc calls
@@ -5096,7 +5100,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let opt_level =
             if !optimize { OptimizationLevel::None } else { OptimizationLevel::Aggressive };
         // PIC wasm is for -shared modules; executables must be non-PIC
-        let reloc_mode = if k1_target == compiler::Target::Wasm64 {
+        let reloc_mode = if k1_target.arch() == compiler::Arch::Wasm {
             inkwell::targets::RelocMode::Static
         } else {
             inkwell::targets::RelocMode::PIC

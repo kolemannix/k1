@@ -18,17 +18,8 @@ fn test-empty-range() {
   // start > end is empty, not an error
   let backwards = (5: int).until(2).iterator()
   assert(backwards.next().is-none())
-}
 
-fn test-negative-range() {
-  let iter = (-3: int).until(2).iterator()
-
-  assert(iter.next().! == -3)
-  assert(iter.next().! == -2)
-  assert(iter.next().! == -1)
-  assert(iter.next().! == 0)
-  assert(iter.next().! == 1)
-  assert(iter.next().is-none())
+  assert((-3: int).until(2).to-list() == [-3, -2, -1, 0, 1])
 }
 
 fn test-for-loop() {
@@ -89,7 +80,6 @@ fn test-advance-by() {
 fn test() {
   test-basic-iteration()
   test-empty-range()
-  test-negative-range()
   test-for-loop()
   test-typed-ranges()
   test-nth()

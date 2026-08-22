@@ -48,9 +48,11 @@ ns reload {
   // The host's descriptor for a reloadable ns, or :none if the program has no
   // such ns; the pointee is host-static and lives forever
   fn find-descriptor(ns-path: string): ?*descriptor {
-    let self-handle = posix/dlopen(ptr/null, posix/RTLD_NOW)
-    let raw = posix/dlsym(self-handle, "__k1_reload_ns_${ns-path}".to-c-tmp().ptr)
-    if raw.is-null() :none else :some(raw.r[descriptor])
+    let self-lib = core/platform/dylib/open-self()
+    core/platform/dylib/sym(self-lib, "__k1_reload_ns_${ns-path}") is {
+      :some(raw) -> :some(raw.r[descriptor]),
+      :none -> :none
+    }
   }
 
   fn artifact-path(descriptor: *descriptor): string {
@@ -77,21 +79,26 @@ ns reload {
     let n = atomic/fetch-add(load-count.&, 1, :seq-cst)
     let temp-path = "${dylib-path}.load-${n}"
     files/write-entire-file(temp-path, files/read-to-string(dylib-path))
-    let handle = posix/dlopen(temp-path.to-c-tmp().ptr, posix/RTLD_NOW | posix/RTLD_LOCAL)
+    let maybe-handle = core/platform/dylib/open(temp-path)
     posix/unlink(temp-path.to-c-tmp().ptr)
-    if handle.is-null() {
-      let e = posix/dlerror()
-      let message = if e.is-null() "unknown dlopen failure" else string/wrap-c(e)
-      return :err :dlopen-failed .{
-        path = heap-string/cloned(dylib-path),
-        message = heap-string/cloned(message),
+    let handle = maybe-handle is {
+      :some(h) -> h,
+      :none -> {
+        let message = core/platform/dylib/error-message() is {
+          :some(m) -> m,
+          :none -> "unknown dlopen failure"
+        }
+        return :err :dlopen-failed .{
+          path = heap-string/cloned(dylib-path),
+          message = heap-string/cloned(message),
+        }
       }
     }
 
     let dylib_hash_symbol = "__k1_reload_hash_${ns-path}"
-    let hash-raw = posix/dlsym(handle, dylib_hash_symbol.to-c-tmp().ptr)
-    if hash-raw.is-null() {
-      return :err :symbol-missing .{
+    let hash-raw = core/platform/dylib/sym(handle, dylib_hash_symbol) is {
+      :some(raw) -> raw,
+      :none -> return :err :symbol-missing .{
         symbol = heap-string/cloned(dylib_hash_symbol),
         path = heap-string/cloned(dylib-path),
       }
@@ -104,9 +111,9 @@ ns reload {
     let entries = span/wrap-raw[entry](descriptor.entries, descriptor.entry-count.as[size])
     let addrs = list/with-capacity[ptr](entries.len())
     for e in entries {
-      let addr = posix/dlsym(handle, e.symbol)
-      if addr.is-null() {
-        return :err :symbol-missing .{
+      let addr = core/platform/dylib/sym(handle, string/wrap-c(e.symbol)) is {
+        :some(a) -> a,
+        :none -> return :err :symbol-missing .{
           symbol = heap-string/cloned(string/wrap-c(e.symbol)),
           path = heap-string/cloned(dylib-path),
         }

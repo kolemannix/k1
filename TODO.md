@@ -6,11 +6,14 @@ next up
 # Bugs
 - [x] [major] Support (co)recursive Generics
 - [ ] [major] Allow pattern matching *into* recursive types (currently we just terminate)
+- [ ] Represent scalar containers (i|u8-64 + list/buffer/span/array) natively, not as individual static values. This at
+      least covers us for byte arrays and such; a large array of basic structs will still crush us. Can worry about that later
+- [ ] Test handling of NaN and Infinity literals, other float edge cases
+- [ ] fn module() doesnt work like a fn: let(returned) breaks; early return crashes compiler
 - [x] accidentally captured context parameter results in 'Missing variable' in ir
 - [x] Out of order type definitions don't work with aliases
 - [x] same-level recursion is not caught behind option
 - [x] Require that a blanket impl's params appear in the Self type
-- [ ] Test handling of NaN and Infinity literals, other float edge cases
 
 ## [x] vector types
 
@@ -182,8 +185,6 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: Optimize StaticValue representation for aggregates to be the same as the VM representation
 - [-] Real layouts, in a mem pool, to save roundtripping and increase locality
         -> Kinda done, we now re-use the values in a global 'static stack'
-- [ ] BYTE ARRAYS ARE REPRESENTED BY A SEQ OF IDS
-- [ ] We'll want to skip the id-based repr entirely for heavy heavy static data I think
 
 ## Project: Arena-based core, builtins, stdlib 
 - [x] Thread-local globals

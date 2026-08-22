@@ -58,7 +58,7 @@ ns io {
 
   fn stdout-buffering-mode(): stdout-buffering {
     if stdout-mode is :unknown {
-      stdout-mode = if platform/io/is-tty(1) :line else :block
+      stdout-mode = if platform/io/is-tty(platform/io/STDOUT) :line else :block
     }
     stdout-mode
   }
@@ -67,14 +67,14 @@ ns io {
     let written: size = 0
     while written < count {
       let n = platform/io/write(
-        file-no = file-no,
+        file = .{ raw = file-no },
         data = data.add-bytes(written),
-        count = (count - written).as[c-sizet]
-      )
-      if n <= 0 {
-        if platform/is-eintr(n) continue
-        return
+        count = count - written
+      ).result() is {
+        :ok(n) -> n,
+        :err(_) -> return
       }
+      if n == 0 return
       written = written + n
     }
   }
@@ -131,21 +131,23 @@ ns files {
   }
 
   fn read-to-string-in[a: allocator](alloc: a, path: string): string {
-    let fd = platform/io/open-to-read(path.to-c-tmp().ptr)
-    if fd < 0 {
-      crash("open failed: `$path`")
+    let fd = platform/io/open-to-read(path) is {
+      :some(fd) -> fd,
+      :none -> crash("open failed: `$path`")
     }
     defer platform/io/close(fd)
 
-    let file-size-bytes = platform/io/file-size(fd)
+    let file-size-bytes = platform/io/file-size(fd) is {
+      :some(n) -> n,
+      :none -> crash("cannot size `$path`")
+    }
     let buf = buffer/allocate-in[char, _](alloc, file-size-bytes)
 
     let total: size = 0
     while total < buf.len() {
-      let n = platform/io/read(fd, buf.data-ptr().add-bytes(total), (buf.len() - total).as[c-sizet])
-      if n < 0 {
-        if platform/is-eintr(n) continue
-        crash("read failed: `$path`")
+      let n = platform/io/read(fd, buf.data-ptr().add-bytes(total), buf.len() - total).result() is {
+        :ok(n) -> n,
+        :err(_) -> crash("read failed: `$path`")
       }
       if n == 0 break
       total = total + n
@@ -155,22 +157,21 @@ ns files {
   }
 
   fn write-entire-file(out-path: string, contents: string) {
-    let fd = platform/io/open-to-write(out-path.to-c-tmp().ptr)
-    if fd < 0 {
-      crash("open for write failed: `$out-path`")
+    let fd = platform/io/open-to-write(out-path) is {
+      :some(fd) -> fd,
+      :none -> crash("open for write failed: `$out-path`")
     }
     defer platform/io/close(fd)
 
     let written: size = 0
     while written < contents.len() {
       let n = platform/io/write(
-        file-no = fd,
+        file = fd,
         data = contents.data-ptr().add-bytes(written),
-        count = (contents.len() - written).as[c-sizet]
-      )
-      if n < 0 {
-        if platform/is-eintr(n) continue
-        crash("write of $out-path failed")
+        count = contents.len() - written
+      ).result() is {
+        :ok(n) -> n,
+        :err(_) -> crash("write of $out-path failed")
       }
       if n == 0 crash("write of $out-path failed")
       written = written + n
@@ -178,7 +179,10 @@ ns files {
   }
 
   fn exists(path: string): bool {
-    platform/io/exists(path.to-c-tmp().ptr)
+    platform/io/open-to-read(path) is {
+      :some(fd) -> { platform/io/close(fd); true },
+      :none -> false
+    }
   }
 
 }

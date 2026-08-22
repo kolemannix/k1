@@ -61,7 +61,7 @@ fn clang-major-version(version-string: string): ?string {
 // here, so nothing resolves. Locate the loaded libclang ourselves and pass
 // -resource-dir explicitly.
 fn clang-resource-dir(): ?string {
-  let rtld-default: i64 = if k1/os-macos { -2 } else { 0 }
+  let rtld-default: i64 = if k1/platform-macos { -2 } else { 0 }
   let sym = dlsym(rtld-default.as[ptr], "clang_createIndex".to-c-tmp().ptr)
   if sym.is-null() return :none
   let info: dl-info = uninit

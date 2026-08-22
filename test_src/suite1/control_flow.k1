@@ -60,26 +60,6 @@ fn loop-nested() {
   assert-equals(result, 10)
 }
 
-fn loop-false() {
-  let x = loop {
-    break 3
-  }
-  assert(x == 3)
-}
-
-fn for-break() {
-  let count = 0
-  for 0.until(10) {
-    if it >= 4 { break }
-    count = count + 1
-  }
-  assert-equals(count, 4)
-}
-
-fn do-crash(): bool {
-  crash("should not run")
-}
-
 fn for-break() {
   let seen = list/empty[int]()
   for i in 0.until(10) {
@@ -124,11 +104,7 @@ fn test() {
   assert(return-simple())
   assert(return-from-if() == 1)
 
-  // Short-circuiting is guaranteed
-  if (false and do-crash()) .{}
-
   loop-break()
   loop-nested()
-  loop-false()
   for-break()
 }

@@ -4,7 +4,7 @@
 use std/process
 
 fn setup(_ctx: k1/setup-ctx) {
-  let minver = if k1/os-macos "-mmacosx-version-min=15.0.0" else ""
+  let minver = if k1/platform-macos "-mmacosx-version-min=15.0.0" else ""
   let script = `
     set -e
     mkdir -p libs .k1-out/cbrotli

@@ -144,9 +144,37 @@ ns for string {
     mem/with-arena(mem/tmp(), self.to-c())
   }
 
+  // The scan is unbounded, so past the scalar head every load is w-aligned:
+  // an aligned load cannot cross a page, so it cannot fault before the NUL.
+  // The VM checks loads against allocation bounds, not pages, so static
+  // execution stays scalar
+  fn c-string-len(c-string: ptr): size {
+    if k1/is-static {
+      let n = 0: size
+      while c-string.add-bytes(n).r[u8].* != 0u8 {
+        n = n + 1
+      }
+      n
+    } else {
+      let w: size = k1/simd-bytes
+      let p = c-string
+      while p.as[size] & (w - 1) != 0 {
+        if p.r[u8].* == 0u8 return p.diff(c-string)
+        p = p.add-bytes(1)
+      }
+      let zeros = vector/splat[u8, k1/simd-bytes](0u8)
+      let lane = -1: i64
+      while lane < 0 {
+        let chunk = vector/load-unchecked[u8, k1/simd-bytes](p)
+        lane = chunk.eq-lanes(zeros).first-true-lane()
+        if lane < 0 { p = p.add-bytes(w) }
+      }
+      p.diff(c-string) + lane
+    }
+  }
+
   fn wrap-c(c-string: ptr): string {
-    let len = platform/strlen(c-string)
-    wrap-raw(ptr = c-string, len = len)
+    wrap-raw(ptr = c-string, len = c-string-len(c-string))
   }
 
   fn from-c(c-string: ptr): string {

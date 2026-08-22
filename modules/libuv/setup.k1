@@ -5,7 +5,7 @@ use std/process
 
 // The host SDK, for system headers
 fn sdk-args(): list[string] {
-  if not k1/os-macos { return list/empty() }
+  if not k1/platform-macos { return list/empty() }
   let sdk = process/run("/bin/sh", ["-c", "printf %s $(xcrun --sdk macosx --show-sdk-path)"]).!
   let args: list[string] = [
     "+clangarg", "-isysroot",
@@ -18,7 +18,7 @@ fn setup(ctx: k1/setup-ctx) {
   process/run-command("mkdir", ["-p", "libs"], :inherit).!
 
   let cmake-args: list[string] = ["-S", "vendor", "-B", ".k1-out/libuv-build", "-DBUILD_TESTING=OFF", "-DCMAKE_BUILD_TYPE=Release"]
-  if k1/os-macos { cmake-args.push("-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0.0") }
+  if k1/platform-macos { cmake-args.push("-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0.0") }
   process/run-command("cmake", cmake-args.as-span(), :inherit).!
   process/run-command("cmake", ["--build", ".k1-out/libuv-build", "-j", "8"], :inherit).!
   process/run-command("cp", [".k1-out/libuv-build/libuv.a", "libs/libuv.a"], :inherit).!
@@ -130,7 +130,7 @@ fn setup(ctx: k1/setup-ctx) {
     "+exclude", "UV_OVERLAPPED_PIPE",
   ]
   // uv_barrier_t wraps struct _uv_barrier on darwin, but on linux it is pthread_barrier_t
-  if not k1/os-macos {
+  if not k1/platform-macos {
     uv-args.push("+opaque")
     uv-args.push("uv_barrier_t")
   }

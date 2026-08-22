@@ -8,14 +8,6 @@ fn assign-var() {
   assert(count == 2)
 }
 
-fn assign-var-ref() {
-  let count = 0
-  count = 1
-  assert(count == 1)
-  count = 2
-  assert(count == 2)
-}
-
 fn complex-references() {
   let struct-ref = .{ x = 42 }
   let struct-ref = &struct-ref
@@ -64,6 +56,5 @@ fn complex-references() {
 
 fn test() {
   assign-var()
-  assign-var-ref()
   complex-references()
 }

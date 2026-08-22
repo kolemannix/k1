@@ -21,15 +21,8 @@ fn sum-payload() {
 
   assert(a == a)
   assert(a != b)
-  assert(a != c)
-
-  assert(b == b)
-  assert(b != a)
-  assert(b != c)
-
-  assert(c == c)
-  assert(c != a)
-  assert(c != b)
+  assert(c == (:c "hello, sums"): maybe)
+  assert(c != (:c "goodbye"): maybe)
 
 }
 

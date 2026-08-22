@@ -21,8 +21,8 @@ ns libc {
   fn(extern("__errno_location")) errno-location-linux(): ptr
   fn errno(): c-int {
     let loc =
-      if k1/is-static { k1/host-os #is { :macos -> errno-location-macos(), :linux or :wasm -> errno-location-linux() } }
-      else { k1/os #is { :macos -> errno-location-macos(), :linux or :wasm -> errno-location-linux() } }
+      if k1/is-static { k1/host-platform #is { :posix-macos -> errno-location-macos(), :posix-linux or :wasi or :bare -> errno-location-linux() } }
+      else { k1/platform #is { :posix-macos -> errno-location-macos(), :posix-linux or :wasi or :bare -> errno-location-linux() } }
     loc.r[c-int].*
   }
   let EINTR: c-int = 4

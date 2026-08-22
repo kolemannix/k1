@@ -21,8 +21,13 @@ K1_HOME=$(pwd) target/debug/k1 --optimize --cache false run test_src/suite1
 
 if command -v wasmtime > /dev/null; then
     make -C modules/core/libs wasm
-    K1_HOME=$(pwd) target/debug/k1 --cache false --target wasm64 run test_src/suite1
-    K1_HOME=$(pwd) target/debug/k1 --optimize --cache false --target wasm64 run test_src/suite1
+    K1_HOME=$(pwd) target/debug/k1 --cache false --target wasm64-wasi run test_src/suite1
+    K1_HOME=$(pwd) target/debug/k1 --optimize --cache false --target wasm64-wasi run test_src/suite1
+    K1_HOME=$(pwd) target/debug/k1 --optimize --cache false --target wasm64-wasi run dogfood/fractal > /dev/null
+fi
+
+if docker info > /dev/null 2>&1; then
+    just ts-freestanding
 fi
 
 target/debug/k1 --emit-llvm --cache false build dogfood/refchess
@@ -35,6 +40,7 @@ K1_HOME=$(pwd) target/debug/k1 run dogfood/logreport
 K1_HOME=$(pwd) target/debug/k1 run dogfood/comptime_parity
 K1_HOME=$(pwd) target/debug/k1 run dogfood/brotli
 K1_HOME=$(pwd) target/debug/k1 build dogfood/gengame
+K1_HOME=$(pwd) target/debug/k1 run dogfood/fractal > /dev/null
 K1_HOME=$(pwd) target/debug/k1 --cache false build dogfood/klib
 make -C dogfood/klib/consumer clean run
 K1_HOME=$(pwd) K1_EXE=$(pwd)/target/debug/k1 target/debug/k1 run dogfood/reload_test

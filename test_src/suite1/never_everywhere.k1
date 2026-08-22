@@ -18,8 +18,6 @@ fn call-arguments(): never {
 }
 fn let-rhs(): empty { let _x = crash("let-rhs") }
 fn assgn-rhs(): never { let _x = 123; _x = crash("assgn rhs") }
-// should fail to compile anyway
-// fn binopLhs(): never { crash("") + 4 }
 fn binop-rhs(): int { 4 + crash("") }
 fn unop(): never { not crash("") }
 fn while-cond(): never { while crash("asdf") {} }

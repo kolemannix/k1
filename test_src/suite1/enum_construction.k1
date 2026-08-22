@@ -29,9 +29,7 @@ fn test() {
 
   let _: opt[bool] = opt:none
   let _: opt[bool] = :none
-  let _: opt[bool] = opt:none
 
-  let _: opt[i32] = opt:none[i32]
   let _: opt[i32] = opt:none[i32]
   let _: opt[i32] = opt:none
 

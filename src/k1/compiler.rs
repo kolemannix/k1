@@ -25,28 +25,33 @@ use clap::{Parser, Subcommand};
 pub const MAC_SDK_VERSION: &str = "15.0.0";
 pub const MAC_SDK_SYSROOT: &str = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk";
 
+/// Who provides `ns platform`: a posix flavor, WASI, or `bare` -- the consumer
+/// of the emitted object provides the k1_platform_* symbols. Discriminants
+/// match core's `type platform` either tags
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum TargetOs {
-    Linux = 0,
-    MacOs = 1,
-    Wasm = 2,
+pub enum Platform {
+    PosixLinux = 0,
+    PosixMacos = 1,
+    Wasi = 2,
+    Bare = 3,
 }
 
-impl TargetOs {
+impl Platform {
     pub fn to_str(&self) -> &'static str {
         match self {
-            TargetOs::Linux => "linux",
-            TargetOs::MacOs => "macos",
-            TargetOs::Wasm => "wasm",
+            Platform::PosixLinux => "posix-linux",
+            Platform::PosixMacos => "posix-macos",
+            Platform::Wasi => "wasi",
+            Platform::Bare => "bare",
         }
     }
 
     pub fn dylib_ext(&self) -> &'static str {
         match self {
-            TargetOs::Linux => "so",
-            TargetOs::MacOs => "dylib",
-            TargetOs::Wasm => unreachable!("no dylibs on wasm"),
+            Platform::PosixLinux => "so",
+            Platform::PosixMacos => "dylib",
+            Platform::Wasi | Platform::Bare => unreachable!("no dylibs on wasi or bare"),
         }
     }
 }
@@ -59,12 +64,12 @@ pub fn detect_host_target() -> Option<Target> {
         "aarch64" => Arch::Arm,
         _ => return None,
     };
-    let os = match std::env::consts::OS {
-        "linux" => Some(TargetOs::Linux),
-        "macos" => Some(TargetOs::MacOs),
+    let platform = match std::env::consts::OS {
+        "linux" => Some(Platform::PosixLinux),
+        "macos" => Some(Platform::PosixMacos),
         _ => None,
     };
-    Target::from(arch, os)
+    Target::from(arch, platform)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,43 +80,54 @@ pub enum Arch {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-/// For now, I just do a simple exhaustive enum of the triples I actually support
-/// rather than a 'target triple' type of struct where very few values of that type
-/// are actually valid
+/// A target is an (arch, platform) pair; I just do a simple exhaustive enum of
+/// the pairs that are real rather than a 'target triple' type of struct where
+/// very few values of that type are actually valid. Bare targets emit objects
+/// only: k1 never links them, and their ELF/wasm object format follows the arch
 pub enum Target {
-    LinuxIntel64,
-    MacOsArm64,
-    Wasm64,
+    Intel64Linux,
+    Arm64Macos,
+    Wasm64Wasi,
+    Intel64Bare,
+    Arm64Bare,
+    Wasm64Bare,
 }
 
 impl Target {
-    pub fn from(arch: Arch, os: Option<TargetOs>) -> Option<Self> {
-        match (arch, os) {
-            (Arch::Intel, Some(TargetOs::Linux)) => Some(Target::LinuxIntel64),
-            (Arch::Arm, Some(TargetOs::MacOs)) => Some(Target::MacOsArm64),
-            (Arch::Wasm, Some(TargetOs::Wasm)) => Some(Target::Wasm64),
+    pub fn from(arch: Arch, platform: Option<Platform>) -> Option<Self> {
+        match (arch, platform) {
+            (Arch::Intel, Some(Platform::PosixLinux)) => Some(Target::Intel64Linux),
+            (Arch::Arm, Some(Platform::PosixMacos)) => Some(Target::Arm64Macos),
+            (Arch::Wasm, Some(Platform::Wasi)) => Some(Target::Wasm64Wasi),
+            (Arch::Intel, Some(Platform::Bare)) => Some(Target::Intel64Bare),
+            (Arch::Arm, Some(Platform::Bare)) => Some(Target::Arm64Bare),
+            (Arch::Wasm, Some(Platform::Bare)) => Some(Target::Wasm64Bare),
             _ => None,
         }
     }
-    pub fn target_os(&self) -> TargetOs {
+    pub fn platform(&self) -> Platform {
         match self {
-            Target::LinuxIntel64 => TargetOs::Linux,
-            Target::MacOsArm64 => TargetOs::MacOs,
-            Target::Wasm64 => TargetOs::Wasm,
+            Target::Intel64Linux => Platform::PosixLinux,
+            Target::Arm64Macos => Platform::PosixMacos,
+            Target::Wasm64Wasi => Platform::Wasi,
+            Target::Intel64Bare | Target::Arm64Bare | Target::Wasm64Bare => Platform::Bare,
         }
     }
     pub fn to_str(&self) -> &'static str {
         match self {
-            Target::LinuxIntel64 => "linux-intel64",
-            Target::MacOsArm64 => "macos-arm64",
-            Target::Wasm64 => "wasm64",
+            Target::Intel64Linux => "intel64-linux",
+            Target::Arm64Macos => "arm64-macos",
+            Target::Wasm64Wasi => "wasm64-wasi",
+            Target::Intel64Bare => "intel64-bare",
+            Target::Arm64Bare => "arm64-bare",
+            Target::Wasm64Bare => "wasm64-bare",
         }
     }
     pub fn arch(&self) -> Arch {
         match self {
-            Target::LinuxIntel64 => Arch::Intel,
-            Target::MacOsArm64 => Arch::Arm,
-            Target::Wasm64 => Arch::Wasm,
+            Target::Intel64Linux | Target::Intel64Bare => Arch::Intel,
+            Target::Arm64Macos | Target::Arm64Bare => Arch::Arm,
+            Target::Wasm64Wasi | Target::Wasm64Bare => Arch::Wasm,
         }
     }
 }
@@ -150,31 +166,38 @@ fn logical_name_to_lib_filename(
     idents: &IdentPool,
     mem: &mut Mem<MemTmp>,
     module_libs_dir: &str,
-    target_os: TargetOs,
+    target: Target,
     link_type: LibRefLinkType,
     logical_name: &str,
 ) -> MStr<MemTmp> {
-    match (target_os, link_type) {
-        (TargetOs::Linux, LibRefLinkType::Static) => {
+    // Static archives are arch artifacts: wasm objects get their own -wasm builds
+    if target.arch() == Arch::Wasm {
+        if link_type != LibRefLinkType::Static {
+            panic!("Only static libraries are supported on wasm targets");
+        }
+        return kpath::join_tmp(
+            mem,
+            idents,
+            module_libs_dir,
+            format_args!("lib{logical_name}-wasm.a"),
+        );
+    }
+    match (target.platform(), link_type) {
+        (_, LibRefLinkType::Static) => {
             kpath::join_tmp(mem, idents, module_libs_dir, format_args!("lib{logical_name}.a"))
         }
-        (TargetOs::Linux, LibRefLinkType::Dynamic) => {
+        (Platform::PosixLinux, LibRefLinkType::Dynamic) => {
             kpath::join_tmp(mem, idents, module_libs_dir, format_args!("lib{logical_name}.so"))
         }
-        (TargetOs::Linux, LibRefLinkType::Default) => mem.push_str(logical_name),
-        (TargetOs::MacOs, LibRefLinkType::Static) => {
-            kpath::join_tmp(mem, idents, module_libs_dir, format_args!("lib{logical_name}.a"))
-        }
-        (TargetOs::MacOs, LibRefLinkType::Dynamic) => {
+        // In Windows we'd skip the 'lib' prefix and add extension dll or lib
+        (Platform::PosixMacos, LibRefLinkType::Dynamic) => {
             kpath::join_tmp(mem, idents, module_libs_dir, format_args!("lib{logical_name}.dylib"))
         }
-        (TargetOs::MacOs, LibRefLinkType::Default) => mem.push_str(logical_name),
-        // In Windows we'd skip the 'lib' prefix and add extension dll or lib
-        (TargetOs::Wasm, LibRefLinkType::Static) => {
-            kpath::join_tmp(mem, idents, module_libs_dir, format_args!("lib{logical_name}-wasm.a"))
+        (Platform::PosixLinux | Platform::PosixMacos, LibRefLinkType::Default) => {
+            mem.push_str(logical_name)
         }
-        (TargetOs::Wasm, _) => {
-            panic!("Only static libraries are supported on the wasm target")
+        (Platform::Wasi | Platform::Bare, _) => {
+            panic!("Only static libraries are supported on {} targets", target.to_str())
         }
     }
 }
@@ -284,7 +307,7 @@ pub struct Args {
     pub sanitize: bool,
 
     /// Compile and link through a Fil-C toolchain (memory-safe C runtime).
-    /// Requires target linux-intel64 and the K1_FILC env var pointing at a
+    /// Requires target intel64-linux and the K1_FILC env var pointing at a
     /// Fil-C installation
     #[arg(long, default_value_t = false)]
     pub filc: bool,
@@ -371,10 +394,10 @@ pub struct CompilerConfig {
 }
 
 impl CompilerConfig {
-    pub fn host_os(&self) -> TargetOs {
+    pub fn host_platform(&self) -> Platform {
         match detect_host_target() {
-            Some(host) => host.target_os(),
-            None => self.target.target_os(),
+            Some(host) => host.platform(),
+            None => self.target.platform(),
         }
     }
 }
@@ -1127,8 +1150,8 @@ pub fn compile_program_ext(
 
     if args.filc {
         assert!(
-            target == Target::LinuxIntel64,
-            "--filc requires target linux-intel64; Fil-C only supports Linux/x86_64"
+            target == Target::Intel64Linux,
+            "--filc requires target intel64-linux; Fil-C only supports Linux/x86_64"
         );
         assert!(!args.sanitize, "--filc and --sanitize are mutually exclusive");
     }
@@ -1338,7 +1361,7 @@ fn collect_all_module_libs(k1: &TypedProgram) -> Vec<ModuleLibs> {
                 idents,
                 k1.get_tmp_unsafe(),
                 module_libs_dir.as_str(),
-                k1.config.target.target_os(),
+                k1.config.target,
                 lib.link_type,
                 &logical_name,
             );
@@ -1432,11 +1455,11 @@ pub fn write_linked_output(
             k1.get_tmp_unsafe(),
             idents,
             out_dir,
-            format_args!("lib{module_name}.{}", target.target_os().dylib_ext()),
+            format_args!("lib{module_name}.{}", target.platform().dylib_ext()),
         ),
     };
 
-    if target.target_os() == TargetOs::Wasm {
+    if target.arch() == Arch::Wasm {
         let mut ld_args: Vec<String> = vec!["-mwasm64".into(), object_name.as_str().into()];
         push_module_lib_args(k1, &mut ld_args);
         // stack-first makes null (0) deref trap
@@ -1464,30 +1487,32 @@ pub fn write_linked_output(
         std::process::Command::new("cc")
     };
     if kind == LinkOutputKind::Dylib {
-        match target.target_os() {
-            TargetOs::MacOs => {
+        match target.platform() {
+            Platform::PosixMacos => {
                 build_cmd.arg("-dynamiclib");
                 build_cmd.arg(format!(
                     "-Wl,-install_name,@rpath/lib{module_name}.{}",
-                    target.target_os().dylib_ext()
+                    target.platform().dylib_ext()
                 ));
                 build_cmd.arg(format!(
                     "-Wl,-exported_symbols_list,{}",
                     build_export_list_file_path(k1, module_name)
                 ));
             }
-            TargetOs::Linux => {
+            Platform::PosixLinux => {
                 build_cmd.arg("-shared");
                 build_cmd.arg(format!(
                     "-Wl,--version-script={}",
                     build_version_script_file_path(k1, module_name)
                 ));
             }
-            TargetOs::Wasm => bail!("dylib output is not supported on wasm"),
+            Platform::Wasi | Platform::Bare => {
+                bail!("dylib output is not supported on {}", target.to_str())
+            }
         }
     }
 
-    if target.target_os() == TargetOs::MacOs {
+    if target.platform() == Platform::PosixMacos {
         build_cmd.arg(format!("-mmacosx-version-min={}", MAC_SDK_VERSION));
     }
 
@@ -1502,7 +1527,7 @@ pub fn write_linked_output(
         build_cmd.arg("-g");
     } else {
         // For stack traces
-        if target.target_os() == TargetOs::Linux {
+        if target.platform() == Platform::PosixLinux {
             build_cmd.arg("-g");
         } else {
             build_cmd.arg("-gline-tables-only");
@@ -1523,7 +1548,7 @@ pub fn write_linked_output(
 
     // libm is part of libSystem on darwin but a separate library on linux, and
     // it has to come after the objects and archives that reference it
-    if target.target_os() == TargetOs::Linux {
+    if target.platform() == Platform::PosixLinux {
         lib_args.push("-lm".into());
     }
 
@@ -1584,8 +1609,8 @@ pub fn write_library_export_files(k1: &TypedProgram, module_name: &str) -> Resul
     }
     symbols.sort();
 
-    match k1.config.target.target_os() {
-        TargetOs::MacOs => {
+    match k1.config.target.platform() {
+        Platform::PosixMacos => {
             let mut list = String::with_capacity(symbols.len() * 24);
             for s in &symbols {
                 list.push('_');
@@ -1596,7 +1621,7 @@ pub fn write_library_export_files(k1: &TypedProgram, module_name: &str) -> Resul
             std::fs::write(&list_path, list)
                 .map_err(|e| anyhow::anyhow!("Failed to write {list_path}: {e}"))?;
         }
-        TargetOs::Linux => {
+        Platform::PosixLinux => {
             let mut list = String::with_capacity(symbols.len() * 24);
             let mut script = String::with_capacity(symbols.len() * 24 + 32);
             script.push_str("{ global:\n");
@@ -1614,7 +1639,9 @@ pub fn write_library_export_files(k1: &TypedProgram, module_name: &str) -> Resul
             std::fs::write(&script_path, script)
                 .map_err(|e| anyhow::anyhow!("Failed to write {script_path}: {e}"))?;
         }
-        TargetOs::Wasm => bail!("library output is not supported on wasm"),
+        Platform::Wasi | Platform::Bare => {
+            bail!("library output is not supported on {}", k1.config.target.to_str())
+        }
     }
     Ok(())
 }
@@ -1647,13 +1674,15 @@ pub fn write_library_archive(k1: &TypedProgram, module_name: &str) -> Result<()>
     for lib in &static_libs {
         ld_cmd.arg(lib);
     }
-    match target.target_os() {
-        TargetOs::MacOs => {
+    match target.platform() {
+        Platform::PosixMacos => {
             ld_cmd.arg("-exported_symbols_list");
             ld_cmd.arg(build_export_list_file_path(k1, module_name));
         }
-        TargetOs::Linux => {}
-        TargetOs::Wasm => bail!("static library output is not supported on wasm"),
+        Platform::PosixLinux => {}
+        Platform::Wasi | Platform::Bare => {
+            bail!("static library output is not supported on {}", target.to_str())
+        }
     }
     ld_cmd.arg("-o");
     ld_cmd.arg(combined_name.as_str());
@@ -1662,7 +1691,7 @@ pub fn write_library_archive(k1: &TypedProgram, module_name: &str) -> Result<()>
         bail!("partial link of {combined_name} failed");
     }
 
-    if target.target_os() == TargetOs::Linux {
+    if target.platform() == Platform::PosixLinux {
         let mut objcopy_cmd = std::process::Command::new("objcopy");
         objcopy_cmd
             .arg(format!("--keep-global-symbols={}", build_export_list_file_path(k1, module_name)));
@@ -1787,13 +1816,18 @@ pub fn codegen_module<'ctx, 'module>(
     }
 
     if codegen.k1.program_settings.executable {
+        if codegen.k1.config.target.platform() == Platform::Bare {
+            bail!("bare targets emit objects only; there is no executable lane");
+        }
         let mut link_options: Vec<String> = vec![];
         if !reload_nss.is_empty() {
             // Ensure host globals are visible to dlopen'd reload dylibs
-            let export_flag = match codegen.k1.config.target.target_os() {
-                TargetOs::MacOs => "-Wl,-export_dynamic",
-                TargetOs::Linux => "-rdynamic",
-                TargetOs::Wasm => bail!("ns(reload) is not supported on wasm"),
+            let export_flag = match codegen.k1.config.target.platform() {
+                Platform::PosixMacos => "-Wl,-export_dynamic",
+                Platform::PosixLinux => "-rdynamic",
+                Platform::Wasi | Platform::Bare => {
+                    bail!("ns(reload) is not supported on {}", codegen.k1.config.target.to_str())
+                }
             };
             link_options.push(export_flag.to_string());
         }
@@ -1823,7 +1857,7 @@ fn write_reload_dylib(
     let dylib_start = std::time::Instant::now();
     let ns_name = k1.ident_str(k1.namespaces.get(ns_id).name).to_string();
     let module_name = k1.ast.name.clone();
-    let target_os = k1.config.target.target_os();
+    let platform = k1.config.target.platform();
     let out_dir = k1.config.out_dir;
 
     let mut cg = Cg::create(ctx, k1, args.debug, args.optimize, CgUnit::ReloadDylib(ns_id));
@@ -1862,7 +1896,7 @@ fn write_reload_dylib(
         bail!("Error writing dylib object file to path: {obj_path}");
     }
 
-    let dylib_ext = target_os.dylib_ext();
+    let dylib_ext = platform.dylib_ext();
     let dylib_path = kpath::join_tmp(
         cg.k1.get_tmp_unsafe(),
         idents,
@@ -1870,16 +1904,16 @@ fn write_reload_dylib(
         format_args!("{unit_name}.{dylib_ext}"),
     );
     let mut link_cmd = std::process::Command::new("cc");
-    match target_os {
-        TargetOs::MacOs => {
+    match platform {
+        Platform::PosixMacos => {
             link_cmd.arg(format!("-mmacosx-version-min={}", MAC_SDK_VERSION));
             link_cmd.arg("-dynamiclib");
             link_cmd.arg("-undefined").arg("dynamic_lookup");
         }
-        TargetOs::Linux => {
+        Platform::PosixLinux => {
             link_cmd.arg("-shared");
         }
-        TargetOs::Wasm => unreachable!(),
+        Platform::Wasi | Platform::Bare => unreachable!(),
     }
     // A running app watches this path; link to the side and rename into place so
     let staged_path = format!("{dylib_path}.staged");
@@ -1914,7 +1948,7 @@ pub fn run_compiled_program(
         out_dir,
         format_args!("{}{}", module_name, if is_test { "_test" } else { "" }),
     );
-    let mut run_cmd = if target.target_os() == TargetOs::Wasm {
+    let mut run_cmd = if target.platform() == Platform::Wasi {
         let mut cmd = std::process::Command::new("wasmtime");
         cmd.args(["run", "-W", "memory64"]);
         cmd.arg(exe_path);

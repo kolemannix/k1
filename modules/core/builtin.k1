@@ -418,6 +418,10 @@ ability try[impl t, impl e] {
   fn is-ok(self): bool
   fn get-error(self): e
   fn get-value(self): t
+
+  fn result(self): result[t, e] {
+    if self.is-ok() :ok(self.get-value()) else :err(self.get-error())
+  }
 }
 
 ability iterator[impl item] {
@@ -610,7 +614,6 @@ impl[t, c: as-buffer[t = t]] as-span[t = t] for c {
 /////////////////////////////////
 // Code that we want to have available very early
 // to enable basic comptime execution inside of builtin/core
-// For example `if os == "macos"` requires string equality!
 
 ns for buffer {
   fn equals-bits[t](self: buffer[t], other: buffer[t]): bool {
@@ -740,14 +743,17 @@ ns k1 {
   let no-std: bool = builtin
   let debug: bool = builtin
 
-  type os = either { linux, macos, wasm }
-  let os: os = builtin
-  // The os the compiler runs on; static execution happens there, not on `os`
-  let host-os: os = builtin
-  let os-macos: bool = os #is { :macos -> true, :linux -> false, :wasm -> false }
-  let os-linux: bool = os #is { :macos -> false, :linux -> true, :wasm -> false }
-  let os-wasm: bool = os #is { :macos -> false, :linux -> false, :wasm -> true }
-  let os-posix: bool = os #is { :macos -> true, :linux -> true, :wasm -> false }
+  // Who provides `ns platform`: a posix flavor, WASI, or `bare` -- the
+  // consumer of the emitted object provides the k1_platform_* symbols
+  type platform = either { posix-linux, posix-macos, wasi, bare }
+  let platform: platform = builtin
+  // The platform the compiler runs on; static execution happens there, not on `platform`
+  let host-platform: platform = builtin
+  let platform-macos: bool = platform #is { :posix-macos -> true, :posix-linux or :wasi or :bare -> false }
+  let platform-linux: bool = platform #is { :posix-linux -> true, :posix-macos or :wasi or :bare -> false }
+  let platform-wasi: bool = platform #is { :wasi -> true, :posix-linux or :posix-macos or :bare -> false }
+  let platform-bare: bool = platform #is { :bare -> true, :posix-linux or :posix-macos or :wasi -> false }
+  let platform-posix: bool = platform #is { :posix-linux or :posix-macos -> true, :wasi or :bare -> false }
 
   // The widest SIMD register the target supports;
   let simd-bytes: size = builtin
@@ -1032,19 +1038,19 @@ fn assertdbg(context locn: k1/source-location)(value: bool) {
 }
 
 fn print-backtrace() {
-  k1/os #is {
-    :macos or :linux -> k1rt/_k1_print_backtrace(frame_count = 128),
-    :wasm -> println("non-posix backtrace TODO")
+  k1/platform #is {
+    :posix-macos or :posix-linux -> k1rt/_k1_print_backtrace(frame_count = 128),
+    :wasi or :bare -> println("non-posix backtrace TODO")
   }
 }
 
 fn crash(context locn: k1/source-location)(msg: string): never {
   if k1/no-std {
     let s = "exiting (nostd)\n\0"
-    platform/io/write(
-      file-no = 1,
+    let _ = platform/io/write(
+      file = platform/io/STDOUT,
       data = s.data-ptr(),
-      count = (s.len() - 1).as[c-sizet],
+      count = s.len() - 1,
     )
     sys/exit(1)
   } else if k1/is-static {

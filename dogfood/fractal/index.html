@@ -56,7 +56,7 @@
   #stdout {
     margin: 0; padding: 0 12px 12px; overflow-x: auto;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 11px; line-height: 1.18; letter-spacing: -0.35px; white-space: pre;
+    font-size: 11px; line-height: 1.0; letter-spacing: -0.35px; white-space: pre;
   }
   footer { margin-top: 22px; color: var(--dim); font-size: 13px; }
 </style>
@@ -148,8 +148,6 @@ const wasi = {
   environ_get: () => 0,
 }
 
-// The terminal half-block art arrives as truecolor SGR sequences; paint it as
-// spans so the page shows exactly what a terminal would.
 function ansiToHtml(text) {
   const escaped = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
   let html = ''

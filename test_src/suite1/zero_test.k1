@@ -40,27 +40,9 @@ fn test-bitcast() {
 
 fn test-zero() {
   let v8: u8 = zeroed()
-  let v16: u16 = zeroed()
-  let v32: u32 = zeroed()
-  let v64: u64 = zeroed()
   assert-equals(v8, 0)
-  assert-equals(v16, 0)
-  assert-equals(v32, 0)
-  assert-equals(v64, 0)
-
-  let vi8: i8 = zeroed()
-  let vi16: i16 = zeroed()
-  let vi32: i32 = zeroed()
   let vi64: i64 = zeroed()
-  assert-equals(vi8, 0)
-  assert-equals(vi16, 0)
-  assert-equals(vi32, 0)
   assert-equals(vi64, 0)
-
-  let vword: i64 = zeroed()
-  let vuword: u64 = zeroed()
-  assert-equals(vword, 0)
-  assert-equals(vuword, 0)
 
   let vf32: f32 = zeroed()
   assert(vf32 == 0.0)

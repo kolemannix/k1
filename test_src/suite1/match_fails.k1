@@ -22,7 +22,17 @@ fn unhandled() {
   assert(result is :some(_))
 }
 
+fn guard-not-bool() {
+  let x: int = 3
+  let result = test-compile(x is {
+    y if y -> y,
+    _ -> 0
+  })
+  assert(result is :some(_))
+}
+
 fn test() {
   useless()
   unhandled()
+  guard-not-bool()
 }

@@ -3,337 +3,195 @@
 
 ns platform {
 
-  ns posix {
-    let PROT_READ: c-int = 0x1
-    let PROT_WRITE: c-int = 0x2
-    let MAP_PRIVATE: c-int = 0x0002
-    let MAP_ANON: c-int = k1/os #is { :macos -> 0x1000, :linux or :wasm -> 0x20 }
-    let MAP_FAILED: i64 = -1
-    fn(extern("mmap")) mmap(addr: ptr, len: size, prot: i32, flags: c-int, fd: c-int, offset: size): ptr
-    fn(extern("munmap")) munmap(addr: ptr, len: size): i32
-
-    fn(extern("calloc")) calloc(count: int, size: size): ptr
-    fn(extern("realloc")) realloc(ptr: ptr, size: size): ptr
-    fn(extern("free")) free(ptr: ptr)
-
-    let O_RDONLY: c-int = 0x0000
-    let SEEK_SET: c-int = 0
-    let SEEK_END: c-int = 2
-    fn(extern("open")) open(path: ptr, oflag: c-int): c-int
-    fn(extern("creat")) creat(path: ptr, mode: c-int): c-int
-    fn(extern("read")) read(file-no: c-int, buffer: ptr, count: c-sizet): i64
-    fn(extern("write")) write(file-no: c-int, data: ptr, count: c-sizet): i64
-    fn(extern("close")) close(fd: c-int): c-int
-    fn(extern("lseek")) lseek(fd: c-int, offset: i64, whence: c-int): i64
-    let F_OK: c-int = 0
-    fn(extern("access")) access(path: ptr, mode: c-int): c-int
-    fn(extern("isatty")) isatty(fd: c-int): c-int
-
-    fn(extern("exit")) exit(code: i32): never
-    fn(extern("abort")) abort(): never
-    fn(extern("getenv")) getenv(name: ptr): ptr
-    fn(extern("strlen")) strlen(c-str: ptr): size
-
-    // errno is a libc thread-local reached through its address fn; there is
-    // no plain symbol to bind
-    fn(extern("__error")) errno-location-macos(): ptr
-    fn(extern("__errno_location")) errno-location-linux(): ptr
-    fn errno-now(): c-int {
-      let loc =
-        if k1/is-static { k1/host-os #is { :macos -> errno-location-macos(), :linux or :wasm -> errno-location-linux() } }
-        else { k1/os #is { :macos -> errno-location-macos(), :linux or :wasm -> errno-location-linux() } }
-      loc.r[c-int].*
-    }
-  }
-
-  // WASI preview1
-  ns wasi {
-    fn(extern("proc_exit"), lib("wasi_snapshot_preview1")) proc-exit(code: i32): never
-    fn(extern("fd_write"), lib("wasi_snapshot_preview1")) fd-write(fd: i32, iovs: u32, iovs-len: u32, nwritten: u32): i32
-    fn(extern("fd_read"), lib("wasi_snapshot_preview1")) fd-read(fd: i32, iovs: u32, iovs-len: u32, nread: u32): i32
-    fn(extern("fd_fdstat_get"), lib("wasi_snapshot_preview1")) fd-fdstat-get(fd: i32, stat: u32): i32
-    fn(extern("environ_sizes_get"), lib("wasi_snapshot_preview1")) environ-sizes-get(count: u32, buf-size: u32): i32
-    fn(extern("environ_get"), lib("wasi_snapshot_preview1")) environ-get(environ: u32, buf: u32): i32
-
-    let EINTR: i32 = 27
-    let FILETYPE_CHARACTER_DEVICE: u8 = 2
-
-    type iovec = { buf: u32, len: u32 }
-
-    fn a32(p: ptr): u32 {
-      p.as[size].as[u32]
-    }
-
-    fn write(file-no: c-int, data: ptr, count: c-sizet): i64 {
-      let iov: iovec = .{ buf = a32(data), len = count.as[u32] }
-      let nwritten: u32 = 0
-      let err = fd-write(file-no, a32(iov.&.as[ptr]), 1, a32(nwritten.&.as[ptr]))
-      if err != 0 { 0 - err.as[i64] } else nwritten.as[i64]
-    }
-
-    fn read(file-no: c-int, buffer: ptr, count: c-sizet): i64 {
-      let iov: iovec = .{ buf = a32(buffer), len = count.as[u32] }
-      let nread: u32 = 0
-      let err = fd-read(file-no, a32(iov.&.as[ptr]), 1, a32(nread.&.as[ptr]))
-      if err != 0 { 0 - err.as[i64] } else nread.as[i64]
-    }
-
-    fn is-tty(file-no: c-int): bool {
-      let stat = array/zeroed[u8, 24]()
-      if fd-fdstat-get(file-no, a32(stat.&.as[ptr])) != 0 return false
-      stat.&.as[ptr].r[u8].* == FILETYPE_CHARACTER_DEVICE
-    }
-
-    fn env-get(name: string): ?string {
-      let count: u32 = 0
-      let buf-size: u32 = 0
-      if environ-sizes-get(a32(count.&.as[ptr]), a32(buf-size.&.as[ptr])) != 0 return :none
-      if count == 0 return :none
-      let entry-ptrs = mem/alloc-layout(count.as[size] * 4, 4)
-      let entry-bytes = mem/alloc-layout(buf-size.as[size], 1)
-      if environ-get(a32(entry-ptrs), a32(entry-bytes)) != 0 return :none
-      for i in 0.until(count.as[size]) {
-        let entry-addr = entry-ptrs.add-bytes(i * 4).r[u32].*
-        let entry = string/wrap-c(entry-addr.as[size].as[ptr])
-        if entry.starts-with(name) and entry.drop(name.len()).starts-with("=") {
-          return :some(entry.drop(name.len() + 1))
-        }
-      }
-      :none
-    }
-  }
-
-  let EINTR: c-int = k1/os #is { :macos or :linux -> 4, :wasm -> wasi/EINTR }
-
-  // io results are -errno on failure; static execution always runs on a
-  // posix host where EINTR is 4, whatever the target says
-  fn is-eintr(io-result: i64): bool {
-    let eintr: c-int = if k1/is-static 4 else EINTR
-    io-result == 0 - eintr.as[i64]
-  }
-
-  fn strlen(c-str: ptr): size {
-    k1/os #is {
-      :macos or :linux -> posix/strlen(c-str),
-      :wasm -> if k1/is-static posix/strlen(c-str) else {
-        let n = 0: size
-        while c-str.add-bytes(n).r[u8].* != 0u8 {
-          n = n + 1
-        }
-        n
-      }
-    }
-  }
+  //////////////////////////////////
+  // The surface: every fn dispatches the same way -- static execution runs on
+  // the posix host, otherwise the target platform's port serves the call
 
   ns memory {
 
     type region = { base: ptr, len: size }
 
-    let PAGE-SIZE: size = 65536
-
-    fn(intern("llvm.wasm.memory.grow.i64")) wasm-memory-grow(mem: i32, delta-pages: i64): i64
-
-    // memory.grow can never shrink, so released regions form an intrusive
-    // free list in their own first bytes: next at offset 0, len at offset 8
-    let(mutable) wasm-freelist: ptr = 0.as[ptr]
-
-    fn wasm-grow-fresh(min-size: size): region {
-      let pages = (min-size + PAGE-SIZE - 1) / PAGE-SIZE
-      let prev-pages = wasm-memory-grow(0, pages)
-      if prev-pages == -1 crash("wasm memory.grow failed")
-      .{ base = (prev-pages * PAGE-SIZE).as[ptr], len = pages * PAGE-SIZE }
-    }
-
-    // Like mmap, the page-granular rounding is invisible: callers see
-    // exactly the min-size they asked for
-    fn wasm-acquire(min-size: size): region {
-      let prev = ptr/null
-      let cur = wasm-freelist
-      while not cur.is-null() {
-        let next = cur.r[ptr].*
-        let len = cur.add-bytes(8).r[size].*
-        if len >= min-size {
-          if prev.is-null() {
-            wasm-freelist = next
-          } else {
-            prev.rw[ptr].* = next
-          }
-          mem/set(dst = cur, value = 0, count = len)
-          return .{ base = cur, len = min-size }
-        }
-        prev = cur
-        cur = next
+    // reserve guarantees address space, not pages: the platform may commit
+    // eagerly where its own paging keeps commit lazy (wasm). commit makes
+    // [base, base+len) usable; first-committed pages arrive zeroed, and
+    // re-committing preserves contents
+    fn reserve(min-size: size): region {
+      if k1/is-static port/posix/reserve(min-size)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/reserve(min-size),
+        :wasi -> port/wasi/reserve(min-size),
+        :bare -> port/bare/reserve(min-size)
       }
-      .{ base = wasm-grow-fresh(min-size).base, len = min-size }
     }
 
-    fn wasm-release(r: region) {
-      r.base.rw[ptr].* = wasm-freelist
-      r.base.add-bytes(8).rw[size].* = r.len
-      wasm-freelist = r.base
-    }
-
-    fn posix-acquire(min-size: size): region {
-      let rw = posix/PROT_READ | posix/PROT_WRITE
-      // static execution mmaps on the host, so the anon flag is host-keyed there
-      let anon: c-int =
-        if k1/is-static { k1/host-os #is { :macos -> 0x1000, :linux or :wasm -> 0x20 } } else posix/MAP_ANON
-      let private-anon = posix/MAP_PRIVATE | anon
-      let addr = posix/mmap(
-        addr = ptr/null,
-        len = min-size,
-        prot = rw,
-        flags = private-anon,
-        fd = -1i32,
-        offset = 0
-      )
-      if addr == posix/MAP_FAILED.as[ptr] {
-        crash("mmap failed")
-      }
-      .{ base = addr, len = min-size }
-    }
-
-    fn acquire(min-size: size): region {
-      k1/os #is {
-        :macos or :linux -> posix-acquire(min-size),
-        :wasm -> if k1/is-static posix-acquire(min-size) else wasm-acquire(min-size)
+    fn commit(base: ptr, len: size) {
+      if k1/is-static port/posix/commit(base, len)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/commit(base, len),
+        :wasi -> port/wasi/commit(base, len),
+        :bare -> port/bare/commit(base, len)
       }
     }
 
     fn release(r: region) {
-      k1/os #is {
-        :macos or :linux -> {
-          let result = posix/munmap(r.base, r.len)
-          if result == -1 crash("munmap of region at ${r.base} x ${r.len} failed")
-        },
-        :wasm -> if k1/is-static {
-          let result = posix/munmap(r.base, r.len)
-          if result == -1 crash("munmap of region at ${r.base} x ${r.len} failed")
-        } else wasm-release(r)
+      if k1/is-static port/posix/release(r)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/release(r),
+        :wasi -> port/wasi/release(r),
+        :bare -> port/bare/release(r)
       }
+    }
+
+    fn acquire(min-size: size): region {
+      let r = reserve(min-size)
+      commit(r.base, r.len)
+      r
     }
 
   }
 
-  // The wasm heap is a grow-only bump with a size header per allocation;
-  // free is a no-op and carved chunks are never reused, which also keeps
-  // every allocation zeroed (fresh wasm pages are zero)
-  ns wasm-heap {
-    let CHUNK: size = 1048576
-    let HEADER: size = 16
-    let(mutable) cur: size = 0
-    let(mutable) end: size = 0
-
-    fn alloc(size-arg: size): ptr {
-      let needed = HEADER + ((size-arg + 15) & (0 - 16))
-      if cur + needed > end {
-        let grow-size = if needed > CHUNK needed else CHUNK
-        let r = memory/wasm-grow-fresh(grow-size)
-        cur = r.base.as[size]
-        end = cur + r.len
-      }
-      let base = cur
-      base.as[ptr].rw[size].* = size-arg
-      cur = base + needed
-      (base + HEADER).as[ptr]
-    }
-
-    fn realloc(old-ptr: ptr, new-size: size): ptr {
-      let old-size = old-ptr.sub-bytes(HEADER).r[size].*
-      if new-size <= old-size return old-ptr
-      let new-ptr = alloc(new-size)
-      mem/copy(dst = new-ptr, src = old-ptr, count = old-size)
-      new-ptr
-    }
-  }
-
+  // heap delegates to whoever owns an allocator: libc on posix, the linking
+  // consumer on bare; wasi has no one to ask, so it gets the bump heap
   ns heap {
     fn alloc(size: size): ptr {
-      k1/os #is {
-        :macos or :linux -> posix/calloc(1, size),
-        :wasm -> if k1/is-static posix/calloc(1, size) else wasm-heap/alloc(size)
+      if k1/is-static port/posix/alloc(size)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/alloc(size),
+        :wasi -> port/bump/alloc(size),
+        :bare -> port/bare/alloc(size)
       }
     }
     fn realloc(old-ptr: ptr, new-size: size): ptr {
-      k1/os #is {
-        :macos or :linux -> posix/realloc(old-ptr, new-size),
-        :wasm -> if k1/is-static posix/realloc(old-ptr, new-size) else wasm-heap/realloc(old-ptr, new-size)
+      if k1/is-static port/posix/realloc(old-ptr, new-size)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/realloc(old-ptr, new-size),
+        :wasi -> port/bump/realloc(old-ptr, new-size),
+        :bare -> port/bare/realloc(old-ptr, new-size)
       }
     }
     fn free(p: ptr) {
-      k1/os #is {
-        :macos or :linux -> posix/free(p),
-        :wasm -> if k1/is-static posix/free(p) else {}
+      if k1/is-static port/posix/free(p)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/free(p),
+        :wasi -> port/bump/free(p),
+        :bare -> port/bare/free(p)
       }
     }
   }
 
+  // Ports speak the scalar convention -- bytes moved or -errno, negative fd
+  // on failed open, retryable interruptions absorbed. io-result packs that
+  // convention unchanged; its try impl decodes it, and .result() builds the
+  // sum for consumers who want to match
   ns io {
-    // posix write/read report failure out-of-band; fold errno into the
-    // return so every arm speaks -errno
-    fn posix-write(file-no: c-int, data: ptr, count: c-sizet): i64 {
-      let n = posix/write(file-no, data, count)
-      if n < 0 { 0 - posix/errno-now().as[i64] } else n
+
+    // Opaque handle: i32 covers every current platform's fd; widening the
+    // raw field is a private change
+    type file-handle = { raw: i32 }
+
+    let STDIN: file-handle = .{ raw = 0 }
+    let STDOUT: file-handle = .{ raw = 1 }
+    let STDERR: file-handle = .{ raw = 2 }
+
+    // raw >= 0 is bytes moved, raw < 0 is -errno
+    type io-result = { raw: i64 }
+
+    impl try[t = size, e = i32] for io-result {
+      fn error(e: i32): io-result { .{ raw = 0 - e.as[i64] } }
+      fn value(t: size): io-result { .{ raw = t } }
+      fn is-ok(self): bool { self.raw >= 0 }
+      fn get-error(self): i32 { (0 - self.raw).as[i32] }
+      fn get-value(self): size { self.raw }
     }
-    fn posix-read(file-no: c-int, buffer: ptr, count: c-sizet): i64 {
-      let n = posix/read(file-no, buffer, count)
-      if n < 0 { 0 - posix/errno-now().as[i64] } else n
+
+    fn write(file: file-handle, data: ptr, count: size): io-result {
+      let n =
+        if k1/is-static port/posix/write(file.raw, data, count)
+        else k1/platform #is {
+          :posix-macos or :posix-linux -> port/posix/write(file.raw, data, count),
+          :wasi -> port/wasi/write(file.raw, data, count),
+          :bare -> port/bare/write(file.raw, data, count)
+        }
+      .{ raw = n }
     }
-    fn write(file-no: c-int, data: ptr, count: c-sizet): i64 {
-      k1/os #is {
-        :macos or :linux -> posix-write(file-no, data, count),
-        :wasm -> if k1/is-static posix-write(file-no, data, count) else wasi/write(file-no, data, count)
+    // ok(0) with a nonzero count is end-of-file
+    fn read(file: file-handle, buffer: ptr, count: size): io-result {
+      let n =
+        if k1/is-static port/posix/read(file.raw, buffer, count)
+        else k1/platform #is {
+          :posix-macos or :posix-linux -> port/posix/read(file.raw, buffer, count),
+          :wasi -> port/wasi/read(file.raw, buffer, count),
+          :bare -> port/bare/read(file.raw, buffer, count)
+        }
+      .{ raw = n }
+    }
+    fn is-tty(file: file-handle): bool {
+      if k1/is-static port/posix/is-tty(file.raw)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/is-tty(file.raw),
+        :wasi -> port/wasi/is-tty(file.raw),
+        :bare -> port/bare/is-tty(file.raw)
       }
     }
-    fn read(file-no: c-int, buffer: ptr, count: c-sizet): i64 {
-      k1/os #is {
-        :macos or :linux -> posix-read(file-no, buffer, count),
-        :wasm -> if k1/is-static posix-read(file-no, buffer, count) else wasi/read(file-no, buffer, count)
+    fn open-to-read(path: string): ?file-handle {
+      let fd =
+        if k1/is-static port/posix/open-to-read(path)
+        else k1/platform #is {
+          :posix-macos or :posix-linux -> port/posix/open-to-read(path),
+          :wasi -> port/wasi/open-to-read(path),
+          :bare -> port/bare/open-to-read(path)
+        }
+      if fd < 0 :none else :some(.{ raw = fd })
+    }
+    fn open-to-write(path: string): ?file-handle {
+      let fd =
+        if k1/is-static port/posix/open-to-write(path)
+        else k1/platform #is {
+          :posix-macos or :posix-linux -> port/posix/open-to-write(path),
+          :wasi -> port/wasi/open-to-write(path),
+          :bare -> port/bare/open-to-write(path)
+        }
+      if fd < 0 :none else :some(.{ raw = fd })
+    }
+    fn close(file: file-handle) {
+      if k1/is-static port/posix/close(file.raw)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/close(file.raw),
+        :wasi -> port/wasi/close(file.raw),
+        :bare -> port/bare/close(file.raw)
       }
     }
-    fn is-tty(file-no: c-int): bool {
-      k1/os #is {
-        :macos or :linux -> posix/isatty(file-no) == 1,
-        :wasm -> if k1/is-static posix/isatty(file-no) == 1 else wasi/is-tty(file-no)
-      }
+    // none when the size is unknowable (a pipe, an unseekable stream)
+    fn file-size(file: file-handle): ?size {
+      let n =
+        if k1/is-static port/posix/file-size(file.raw)
+        else k1/platform #is {
+          :posix-macos or :posix-linux -> port/posix/file-size(file.raw),
+          :wasi -> port/wasi/file-size(file.raw),
+          :bare -> port/bare/file-size(file.raw)
+        }
+      if n < 0 :none else :some(n)
     }
-    fn open-to-read(path: ptr): c-int {
-      k1/os #is {
-        :macos or :linux -> posix/open(path, posix/O_RDONLY),
-        :wasm -> if k1/is-static posix/open(path, posix/O_RDONLY) else crash("file io is not supported on wasm")
-      }
+
+    type pipe-ends = { read: file-handle, write: file-handle }
+
+    fn pipe(): ?pipe-ends {
+      let fds =
+        if k1/is-static port/posix/pipe()
+        else k1/platform #is {
+          :posix-macos or :posix-linux -> port/posix/pipe(),
+          :wasi or :bare -> crash("pipes are not supported on this platform")
+        }
+      if fds.read < 0 :none
+      else :some(.{ read = .{ raw = fds.read }, write = .{ raw = fds.write } })
     }
-    let create-mode-rw-all: c-int = 0x1B6
-    fn open-to-write(path: ptr): c-int {
-      k1/os #is {
-        :macos or :linux -> posix/creat(path, create-mode-rw-all),
-        :wasm -> if k1/is-static posix/creat(path, create-mode-rw-all) else crash("file io is not supported on wasm")
-      }
-    }
-    fn close(fd: c-int) {
-      k1/os #is {
-        :macos or :linux -> { let _ = posix/close(fd) },
-        :wasm -> if k1/is-static { let _ = posix/close(fd) } else crash("file io is not supported on wasm")
-      }
-    }
-    fn file-size(fd: c-int): i64 {
-      k1/os #is {
-        :macos or :linux -> {
-          let end = posix/lseek(fd, 0, posix/SEEK_END)
-          let _ = posix/lseek(fd, 0, posix/SEEK_SET)
-          end
-        },
-        :wasm -> if k1/is-static {
-          let end = posix/lseek(fd, 0, posix/SEEK_END)
-          let _ = posix/lseek(fd, 0, posix/SEEK_SET)
-          end
-        } else crash("file io is not supported on wasm")
-      }
-    }
-    fn exists(path: ptr): bool {
-      k1/os #is {
-        :macos or :linux -> posix/access(path, posix/F_OK) == 0,
-        :wasm -> if k1/is-static posix/access(path, posix/F_OK) == 0 else crash("file io is not supported on wasm")
+
+    fn is-executable(path: string): bool {
+      if k1/is-static port/posix/is-executable(path)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/is-executable(path),
+        :wasi -> crash("file io is not supported on wasi"),
+        :bare -> port/bare/is-executable(path)
       }
     }
   }
@@ -341,30 +199,756 @@ ns platform {
   ns process {
     fn exit(code: i32): never {
       if k1/is-static k1/exit(code)
-      else k1/os #is {
-        :macos or :linux -> posix/exit(code),
-        :wasm -> wasi/proc-exit(code)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/exit(code),
+        :wasi -> port/wasi/exit(code),
+        :bare -> port/bare/exit(code)
       }
     }
     fn abort(): never {
-      k1/os #is {
-        :macos or :linux -> posix/abort(),
-        // proc_exit rejects codes outside [0..126)
-        :wasm -> if k1/is-static posix/abort() else wasi/proc-exit(101)
+      if k1/is-static port/posix/abort()
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/abort(),
+        :wasi -> port/wasi/abort(),
+        :bare -> port/bare/abort()
+      }
+    }
+
+    // signal == 0 means normal exit; killed by a signal means exit-code -1
+    type wait-status = { exit-code: i32, signal: i32 }
+
+    // fd0/fd1/fd2 become the child's stdin/stdout/stderr (-1 inherits); the
+    // child closes every fd passed here and in extra-close. ok = pid, err = errno
+    fn spawn(path: string, argv: span[string], fd0: i32, fd1: i32, fd2: i32, extra-close: span[i32]): result[i32, i32] {
+      if k1/is-static port/posix/spawn(path, argv, fd0, fd1, fd2, extra-close)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/spawn(path, argv, fd0, fd1, fd2, extra-close),
+        :wasi or :bare -> crash("processes are not supported on this platform")
+      }
+    }
+    fn wait(pid: i32): result[wait-status, i32] {
+      if k1/is-static port/posix/wait(pid)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/wait(pid),
+        :wasi or :bare -> crash("processes are not supported on this platform")
+      }
+    }
+    fn kill(pid: i32) {
+      if k1/is-static port/posix/kill(pid)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/kill(pid),
+        :wasi or :bare -> crash("processes are not supported on this platform")
       }
     }
   }
 
   ns env {
     fn get(name: string): ?string {
-      k1/os #is {
-        :macos or :linux -> posix-get(name),
-        :wasm -> if k1/is-static posix-get(name) else wasi/env-get(name)
+      if k1/is-static port/posix/env-get(name)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/env-get(name),
+        :wasi -> port/wasi/env-get(name),
+        :bare -> port/bare/env-get(name)
       }
     }
-    fn posix-get(name: string): ?string {
-      let v = posix/getenv(name.to-c-tmp().ptr)
-      if v.is-null() :none else :some(string/wrap-c(v))
+  }
+
+  // Renders the errno-style codes carried by io-result and process errors
+  fn error-string(code: i32): string {
+    if k1/is-static port/posix/error-string(code)
+    else k1/platform #is {
+      :posix-macos or :posix-linux -> port/posix/error-string(code),
+      :wasi or :bare -> "error ${code}"
+    }
+  }
+
+  ns dylib {
+
+    type handle = { raw: ptr }
+
+    // Loads private and isolated (posix: RTLD_NOW | RTLD_LOCAL); no flag
+    // vocabulary crosses the boundary
+    fn open(path: string): ?handle {
+      let lib =
+        if k1/is-static port/posix/dylib-open(path)
+        else k1/platform #is {
+          :posix-macos or :posix-linux -> port/posix/dylib-open(path),
+          :wasi -> crash("dylibs are not supported on wasi"),
+          :bare -> port/bare/dylib-open(path)
+        }
+      if lib.is-null() :none else :some(.{ raw = lib })
+    }
+
+    // The running program's own symbols
+    fn open-self(): handle {
+      let lib =
+        if k1/is-static port/posix/dylib-open-self()
+        else k1/platform #is {
+          :posix-macos or :posix-linux -> port/posix/dylib-open-self(),
+          :wasi -> crash("dylibs are not supported on wasi"),
+          :bare -> port/bare/dylib-open-self()
+        }
+      .{ raw = lib }
+    }
+
+    fn sym(lib: handle, name: string): ?ptr {
+      let addr =
+        if k1/is-static port/posix/dylib-sym(lib.raw, name)
+        else k1/platform #is {
+          :posix-macos or :posix-linux -> port/posix/dylib-sym(lib.raw, name),
+          :wasi -> crash("dylibs are not supported on wasi"),
+          :bare -> port/bare/dylib-sym(lib.raw, name)
+        }
+      if addr.is-null() :none else :some(addr)
+    }
+
+    fn close(lib: handle) {
+      if k1/is-static port/posix/dylib-close(lib.raw)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/dylib-close(lib.raw),
+        :wasi -> crash("dylibs are not supported on wasi"),
+        :bare -> port/bare/dylib-close(lib.raw)
+      }
+    }
+
+    // The message for the most recent failed open or sym, if the platform kept one
+    fn error-message(): ?string {
+      let e =
+        if k1/is-static port/posix/dylib-error()
+        else k1/platform #is {
+          :posix-macos or :posix-linux -> port/posix/dylib-error(),
+          :wasi -> crash("dylibs are not supported on wasi"),
+          :bare -> port/bare/dylib-error()
+        }
+      if e.is-null() :none else :some(string/wrap-c(e))
+    }
+  }
+
+  ns random {
+    // Cryptographically secure host entropy
+    fn fill(dest: ptr, count: size) {
+      if k1/is-static port/posix/random-fill(dest, count)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/random-fill(dest, count),
+        :wasi -> port/wasi/random-fill(dest, count),
+        :bare -> port/bare/random-fill(dest, count)
+      }
+    }
+  }
+
+  // The raw counter is the cheapest monotonic read the platform has; only
+  // counter-to-nanos gives it meaning
+  ns clock {
+    fn counter(): u64 {
+      if k1/is-static port/posix/counter()
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/counter(),
+        :wasi -> port/wasi/counter(),
+        :bare -> port/bare/clock-nanos()
+      }
+    }
+    fn counter-to-nanos(counter: u64): u64 {
+      if k1/is-static port/posix/counter-to-nanos(counter)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/counter-to-nanos(counter),
+        :wasi or :bare -> counter
+      }
+    }
+  }
+
+  // No spawn/join arms for wasi or bare: TLS lowers to plain globals there,
+  // so running a second thread is unsound by construction. sleep is
+  // single-thread-safe and gets real arms everywhere
+  ns thread {
+
+    type handle = { raw: ptr }
+
+    fn spawn(function: ptr, input: ptr): ?handle {
+      let t =
+        if k1/is-static port/posix/thread-spawn(function, input)
+        else k1/platform #is {
+          :posix-macos or :posix-linux -> port/posix/thread-spawn(function, input),
+          :wasi or :bare -> crash("threads are not supported on this platform")
+        }
+      if t.is-null() :none else :some(.{ raw = t })
+    }
+
+    fn join(t: handle): ptr {
+      if k1/is-static port/posix/thread-join(t.raw)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/thread-join(t.raw),
+        :wasi or :bare -> crash("threads are not supported on this platform")
+      }
+    }
+
+    fn detach(t: handle) {
+      if k1/is-static port/posix/thread-detach(t.raw)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/thread-detach(t.raw),
+        :wasi or :bare -> crash("threads are not supported on this platform")
+      }
+    }
+
+    fn sleep-ms(ms: u64) {
+      if k1/is-static port/posix/sleep-ms(ms)
+      else k1/platform #is {
+        :posix-macos or :posix-linux -> port/posix/sleep-ms(ms),
+        :wasi -> port/wasi/sleep-ms(ms),
+        :bare -> port/bare/sleep-ms(ms)
+      }
+    }
+  }
+
+  //////////////////////////////////
+  // The ports: one per platform, each implementing the surface above; only
+  // the dispatchers may call them
+
+  ns port {
+
+    // Heap for platforms without a host allocator: a grow-only bump over
+    // memory/acquire with a size header per allocation; free is a no-op and
+    // carved chunks are never reused, so acquire's zeroed hand-off makes
+    // every allocation zeroed
+    ns bump {
+      let CHUNK: size = 1048576
+      let HEADER: size = 16
+      let(mutable) cur: size = 0
+      let(mutable) end: size = 0
+
+      fn alloc(size-arg: size): ptr {
+        let needed = HEADER + ((size-arg + 15) & (0 - 16))
+        if cur + needed > end {
+          let grow-size = if needed > CHUNK needed else CHUNK
+          let r = memory/acquire(grow-size)
+          cur = r.base.as[size]
+          end = cur + r.len
+        }
+        let base = cur
+        base.as[ptr].rw[size].* = size-arg
+        cur = base + needed
+        (base + HEADER).as[ptr]
+      }
+
+      fn realloc(old-ptr: ptr, new-size: size): ptr {
+        let old-size = old-ptr.sub-bytes(HEADER).r[size].*
+        if new-size <= old-size return old-ptr
+        let new-ptr = alloc(new-size)
+        mem/copy(dst = new-ptr, src = old-ptr, count = old-size)
+        new-ptr
+      }
+
+      fn free(p: ptr) { let _ = p }
+    }
+
+    ns posix {
+
+      ns c {
+        let PROT_NONE: c-int = 0x0
+        let PROT_READ: c-int = 0x1
+        let PROT_WRITE: c-int = 0x2
+        let MAP_PRIVATE: c-int = 0x0002
+        let MAP_ANON: c-int = k1/platform #is { :posix-macos -> 0x1000, :posix-linux or :wasi or :bare -> 0x20 }
+        let MAP_FAILED: i64 = -1
+        fn(extern("mmap")) mmap(addr: ptr, len: size, prot: i32, flags: c-int, fd: c-int, offset: size): ptr
+        fn(extern("munmap")) munmap(addr: ptr, len: size): i32
+        fn(extern("mprotect")) mprotect(addr: ptr, len: size, prot: c-int): i32
+        fn(extern("getpagesize")) getpagesize(): c-int
+
+        fn(extern("calloc")) calloc(count: int, size: size): ptr
+        fn(extern("realloc")) realloc(ptr: ptr, size: size): ptr
+        fn(extern("free")) free(ptr: ptr)
+
+        let O_RDONLY: c-int = 0x0000
+        let SEEK_SET: c-int = 0
+        let SEEK_END: c-int = 2
+        let CREATE_MODE_RW_ALL: c-int = 0x1B6
+        fn(extern("open")) open(path: ptr, oflag: c-int): c-int
+        fn(extern("creat")) creat(path: ptr, mode: c-int): c-int
+        fn(extern("read")) read(file-no: c-int, buffer: ptr, count: c-sizet): i64
+        fn(extern("write")) write(file-no: c-int, data: ptr, count: c-sizet): i64
+        fn(extern("close")) close(fd: c-int): c-int
+        fn(extern("lseek")) lseek(fd: c-int, offset: i64, whence: c-int): i64
+        fn(extern("isatty")) isatty(fd: c-int): c-int
+
+        let EINTR: c-int = 4
+
+        fn(extern("exit")) exit(code: i32): never
+        fn(extern("abort")) abort(): never
+        fn(extern("getenv")) getenv(name: ptr): ptr
+        fn(extern("strerror")) strerror(code: c-int): ptr
+
+        let RTLD_NOW: c-int = 0x2
+        let RTLD_LOCAL: c-int = k1/platform #is { :posix-macos -> 0x4, :posix-linux or :wasi or :bare -> 0 }
+        fn(extern("dlopen")) dlopen(path: ptr, mode: c-int): ptr
+        fn(extern("dlsym")) dlsym(handle: ptr, symbol: ptr): ptr
+        fn(extern("dlclose")) dlclose(handle: ptr): c-int
+        fn(extern("dlerror")) dlerror(): ptr
+
+        fn(extern("getentropy")) getentropy(buf: ptr, count: c-sizet): c-int
+
+        type timespec = { tv_sec: u64, tv_nsec: u64 }
+        fn(extern("clock_gettime")) clock_gettime(clockid: u32, tp: *mut timespec): c-int
+        fn(extern("nanosleep")) nanosleep(req: *timespec, rem: *mut timespec): c-int
+        type mach-timebase = { numer: u32, denom: u32 }
+        fn(extern("mach_absolute_time")) mach_absolute_time(): u64
+        fn(extern("mach_timebase_info")) mach_timebase_info(timebase: *mut mach-timebase): u64
+
+        fn(extern("pthread_create")) pthread_create(thread: ptr, attrs: ptr, start_routine: ptr, input: ptr): i32
+        fn(extern("pthread_join")) pthread_join(thread: ptr, retval: ptr): i32
+        fn(extern("pthread_detach")) pthread_detach(thread: ptr): i32
+
+        let X_OK: c-int = 1
+        fn(extern("access")) access(path: ptr, mode: c-int): c-int
+        fn(extern("pipe")) pipe(fds: ptr): c-int
+        let SIGKILL: c-int = 9
+        fn(extern("kill")) kill(pid: i32, sig: c-int): c-int
+        fn(extern("waitpid")) waitpid(pid: i32, status: *mut i32, options: i32): i32
+        fn(extern("posix_spawn")) posix_spawn(pid: *mut i32, path: ptr, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
+        fn(extern("posix_spawn_file_actions_init")) spawn-fa-init(file-actions: ptr): c-int
+        fn(extern("posix_spawn_file_actions_destroy")) spawn-fa-destroy(file-actions: ptr): c-int
+        fn(extern("posix_spawn_file_actions_adddup2")) spawn-fa-adddup2(file-actions: ptr, fd: c-int, new-fd: c-int): c-int
+        fn(extern("posix_spawn_file_actions_addclose")) spawn-fa-addclose(file-actions: ptr, fd: c-int): c-int
+        fn(extern("_NSGetEnviron")) ns-get-environ(): ptr
+        let(extern) environ: ptr
+
+        // errno is a libc thread-local reached through its address fn; there is
+        // no plain symbol to bind
+        fn(extern("__error")) errno-location-macos(): ptr
+        fn(extern("__errno_location")) errno-location-linux(): ptr
+      }
+
+      fn errno-now(): c-int {
+        let loc =
+          if k1/is-static { k1/host-platform #is { :posix-macos -> c/errno-location-macos(), :posix-linux or :wasi or :bare -> c/errno-location-linux() } }
+          else { k1/platform #is { :posix-macos -> c/errno-location-macos(), :posix-linux or :wasi or :bare -> c/errno-location-linux() } }
+        loc.r[c-int].*
+      }
+
+      fn reserve(min-size: size): memory/region {
+        // static execution mmaps on the host, so the anon flag is host-keyed there
+        let anon: c-int =
+          if k1/is-static { k1/host-platform #is { :posix-macos -> 0x1000, :posix-linux or :wasi or :bare -> 0x20 } } else c/MAP_ANON
+        let private-anon = c/MAP_PRIVATE | anon
+        let addr = c/mmap(
+          addr = ptr/null,
+          len = min-size,
+          prot = c/PROT_NONE,
+          flags = private-anon,
+          fd = -1i32,
+          offset = 0
+        )
+        if addr == c/MAP_FAILED.as[ptr] {
+          crash("mmap failed")
+        }
+        .{ base = addr, len = min-size }
+      }
+
+      fn commit(base: ptr, len: size) {
+        let page = c/getpagesize().as[size]
+        let start = base.as[size] / page * page
+        let end = (base.as[size] + len + page - 1) / page * page
+        if c/mprotect(start.as[ptr], end - start, c/PROT_READ | c/PROT_WRITE) != 0 {
+          crash("mprotect failed")
+        }
+      }
+
+      fn release(r: memory/region) {
+        let result = c/munmap(r.base, r.len)
+        if result == -1 crash("munmap of region at ${r.base} x ${r.len} failed")
+      }
+
+      fn alloc(size: size): ptr { c/calloc(1, size) }
+      fn realloc(old-ptr: ptr, new-size: size): ptr { c/realloc(old-ptr, new-size) }
+      fn free(p: ptr) { c/free(p) }
+
+      fn write(file-no: i32, data: ptr, count: size): i64 {
+        let n = c/write(file-no, data, count.as[c-sizet])
+        while n < 0 and errno-now() == c/EINTR {
+          n = c/write(file-no, data, count.as[c-sizet])
+        }
+        if n < 0 { 0 - errno-now().as[i64] } else n
+      }
+      fn read(file-no: i32, buffer: ptr, count: size): i64 {
+        let n = c/read(file-no, buffer, count.as[c-sizet])
+        while n < 0 and errno-now() == c/EINTR {
+          n = c/read(file-no, buffer, count.as[c-sizet])
+        }
+        if n < 0 { 0 - errno-now().as[i64] } else n
+      }
+      fn is-tty(file-no: i32): bool { c/isatty(file-no) == 1 }
+      fn open-to-read(path: string): i32 { c/open(path.to-c-tmp().ptr, c/O_RDONLY) }
+      // open(2) is variadic, which a fixed 3-arg extern miscompiles on
+      // arm64-darwin; creat(2) is a real 2-arg fn equal to
+      // O_WRONLY|O_CREAT|O_TRUNC
+      fn open-to-write(path: string): i32 { c/creat(path.to-c-tmp().ptr, c/CREATE_MODE_RW_ALL) }
+      fn close(fd: i32) { let _ = c/close(fd) }
+      fn file-size(fd: i32): i64 {
+        let end = c/lseek(fd, 0, c/SEEK_END)
+        let _ = c/lseek(fd, 0, c/SEEK_SET)
+        end
+      }
+      fn exit(code: i32): never { c/exit(code) }
+      fn abort(): never { c/abort() }
+
+      fn env-get(name: string): ?string {
+        let v = c/getenv(name.to-c-tmp().ptr)
+        if v.is-null() :none else :some(string/wrap-c(v))
+      }
+
+      fn error-string(code: i32): string { string/wrap-c(c/strerror(code)) }
+
+      fn dylib-open(path: string): ptr { c/dlopen(path.to-c-tmp().ptr, c/RTLD_NOW | c/RTLD_LOCAL) }
+      fn dylib-open-self(): ptr { c/dlopen(ptr/null, c/RTLD_NOW) }
+      fn dylib-sym(lib: ptr, name: string): ptr { c/dlsym(lib, name.to-c-tmp().ptr) }
+      fn dylib-close(lib: ptr) { let _ = c/dlclose(lib) }
+      fn dylib-error(): ptr { c/dlerror() }
+
+      // getentropy caps each call at 256 bytes
+      fn random-fill(dest: ptr, count: size) {
+        let done: size = 0
+        while done < count {
+          let n = if count - done > 256 256 else count - done
+          if c/getentropy(dest.add-bytes(done), n.as[c-sizet]) != 0 crash("getentropy failed")
+          done = done + n
+        }
+      }
+
+      // static execution runs on the host, so host-keyed there, target-keyed otherwise
+      fn on-macos(): bool {
+        if k1/is-static { k1/host-platform #is { :posix-macos -> true, :posix-linux or :wasi or :bare -> false } }
+        else { k1/platform #is { :posix-macos -> true, :posix-linux or :wasi or :bare -> false } }
+      }
+
+      let(mutable) timebase: c/mach-timebase = .{ numer = 0, denom = 0 }
+
+      fn counter(): u64 {
+        if on-macos() c/mach_absolute_time()
+        else {
+          let monotonic: u32 = 1
+          let ts: c/timespec = .{ tv_sec = 0, tv_nsec = 0 }
+          let _ = c/clock_gettime(monotonic, ts.&)
+          ts.tv_sec * 1_000_000_000 + ts.tv_nsec
+        }
+      }
+
+      fn counter-to-nanos(counter: u64): u64 {
+        if on-macos() {
+          if timebase.denom == 0 { let _ = c/mach_timebase_info(timebase.&) }
+          counter * timebase.numer.as[u64] / timebase.denom.as[u64]
+        } else counter
+      }
+
+      fn thread-spawn(function: ptr, input: ptr): ptr {
+        let handle: ptr = ptr/null
+        if c/pthread_create(handle.&.as[ptr], ptr/null, function, input) != 0 return ptr/null
+        handle
+      }
+      fn thread-join(t: ptr): ptr {
+        let out: ptr = ptr/null
+        if c/pthread_join(t, out.&.as[ptr]) != 0 crash("pthread_join failed")
+        out
+      }
+      fn thread-detach(t: ptr) {
+        if c/pthread_detach(t) != 0 crash("pthread_detach failed")
+      }
+      fn sleep-ms(ms: u64) {
+        let req: c/timespec = .{ tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
+        let _ = c/nanosleep(req.&, ptr/null.rw[c/timespec]())
+      }
+
+      fn pipe(): { read: i32, write: i32 } {
+        let fds = array/zeroed[i32, 2]()
+        if c/pipe(fds.&.as[ptr]) != 0 return .{ read = -1, write = -1 }
+        .{ read = fds.get(0), write = fds.get(1) }
+      }
+
+      fn is-executable(path: string): bool {
+        c/access(path.to-c-tmp().ptr, c/X_OK) == 0
+      }
+
+      fn environ-ptr(): ptr {
+        if k1/is-static {
+          k1/host-platform #is {
+            :posix-macos -> c/ns-get-environ().r[ptr].*,
+            :posix-linux or :wasi or :bare -> c/environ
+          }
+        } else {
+          k1/platform #is {
+            :posix-macos -> c/ns-get-environ().r[ptr].*,
+            :posix-linux or :wasi or :bare -> c/environ
+          }
+        }
+      }
+
+      fn spawn(path: string, argv: span[string], fd0: i32, fd1: i32, fd2: i32, extra-close: span[i32]): result[i32, i32] {
+        // argv for exec-family calls: strings, then a null terminator, all in tmp
+        mem/push-arena(mem/tmp())
+        let cargv = list/with-capacity[ptr](argv.len() + 1)
+        for a in argv { cargv.push(a.to-c().ptr) }
+        cargv.push(ptr/null)
+        mem/pop-arena()
+
+        // posix_spawn_file_actions_t is opaque: 8 bytes on darwin, 80 on glibc
+        let fa-buf = array/zeroed[u8, 128]()
+        let fa = fa-buf.&.as[ptr]
+        let _ = c/spawn-fa-init(fa)
+        defer { let _ = c/spawn-fa-destroy(fa) }
+
+        if fd0 >= 0 { let _ = c/spawn-fa-adddup2(fa, fd0, 0) }
+        if fd1 >= 0 { let _ = c/spawn-fa-adddup2(fa, fd1, 1) }
+        if fd2 >= 0 { let _ = c/spawn-fa-adddup2(fa, fd2, 2) }
+        let closed = list/with-capacity[i32](extra-close.len() + 3)
+        for fd in [fd0, fd1, fd2] {
+          if fd >= 0 and not closed.as-span().contains(fd) {
+            let _ = c/spawn-fa-addclose(fa, fd)
+            closed.push(fd)
+          }
+        }
+        for fd in extra-close {
+          if fd >= 0 and not closed.as-span().contains(fd) {
+            let _ = c/spawn-fa-addclose(fa, fd)
+            closed.push(fd)
+          }
+        }
+
+        let pid: i32 = 0
+        let rc = c/posix_spawn(&pid, path.to-c-tmp().ptr, fa, ptr/null, cargv.base-ptr(), environ-ptr())
+        if rc != 0 :err rc else :ok pid
+      }
+
+      fn wait(pid: i32): result[process/wait-status, i32] {
+        let status: i32 = 0
+        let rc = c/waitpid(pid, &status, 0)
+        while rc < 0 and errno-now() == c/EINTR {
+          rc = c/waitpid(pid, &status, 0)
+        }
+        if rc < 0 return :err errno-now()
+        if status.bit-and(0x7f) == 0 {
+          :ok .{ exit-code = status.shift-right(8).bit-and(0xff), signal = 0 }
+        } else {
+          :ok .{ exit-code = -1, signal = status.bit-and(0x7f) }
+        }
+      }
+
+      fn kill(pid: i32) { let _ = c/kill(pid, c/SIGKILL) }
+    }
+
+    // WASI preview1; a wasm32 ABI even under memory64, so pointers cross as u32
+    ns wasi {
+      fn(extern("proc_exit"), lib("wasi_snapshot_preview1")) proc-exit(code: i32): never
+      fn(extern("fd_write"), lib("wasi_snapshot_preview1")) fd-write(fd: i32, iovs: u32, iovs-len: u32, nwritten: u32): i32
+      fn(extern("fd_read"), lib("wasi_snapshot_preview1")) fd-read(fd: i32, iovs: u32, iovs-len: u32, nread: u32): i32
+      fn(extern("fd_fdstat_get"), lib("wasi_snapshot_preview1")) fd-fdstat-get(fd: i32, stat: u32): i32
+      fn(extern("environ_sizes_get"), lib("wasi_snapshot_preview1")) environ-sizes-get(count: u32, buf-size: u32): i32
+      fn(extern("environ_get"), lib("wasi_snapshot_preview1")) environ-get(environ: u32, buf: u32): i32
+      fn(extern("clock_time_get"), lib("wasi_snapshot_preview1")) clock-time-get(id: u32, precision: u64, time: u32): i32
+      fn(extern("random_get"), lib("wasi_snapshot_preview1")) random-get(buf: u32, buf-len: u32): i32
+      fn(extern("poll_oneoff"), lib("wasi_snapshot_preview1")) poll-oneoff(subs: u32, events: u32, nsubscriptions: u32, nevents: u32): i32
+
+      let FILETYPE_CHARACTER_DEVICE: u8 = 2
+      let EINTR: i32 = 27
+
+      type iovec = { buf: u32, len: u32 }
+
+      fn a32(p: ptr): u32 {
+        p.as[size].as[u32]
+      }
+
+      let PAGE-SIZE: size = 65536
+
+      fn(intern("llvm.wasm.memory.grow.i64")) memory-grow(mem: i32, delta-pages: i64): i64
+
+      // memory.grow can never shrink, so released regions form an intrusive
+      // free list in their own first bytes: next at offset 0, len at offset 8
+      let(mutable) freelist: ptr = 0.as[ptr]
+
+      fn grow-fresh(min-size: size): memory/region {
+        let pages = (min-size + PAGE-SIZE - 1) / PAGE-SIZE
+        let prev-pages = memory-grow(0, pages)
+        if prev-pages == -1 crash("wasm memory.grow failed")
+        .{ base = (prev-pages * PAGE-SIZE).as[ptr], len = pages * PAGE-SIZE }
+      }
+
+      // Like mmap, the page-granular rounding is invisible: callers see
+      // exactly the min-size they asked for. Reserve commits eagerly (grow is
+      // wasm's only way to get address space) and pre-zeroes freelist reuse,
+      // so the no-op commit still hands over zeroed pages
+      fn reserve(min-size: size): memory/region {
+        let prev = ptr/null
+        let cur = freelist
+        while not cur.is-null() {
+          let next = cur.r[ptr].*
+          let len = cur.add-bytes(8).r[size].*
+          if len >= min-size {
+            if prev.is-null() {
+              freelist = next
+            } else {
+              prev.rw[ptr].* = next
+            }
+            mem/set(dst = cur, value = 0, count = len)
+            return .{ base = cur, len = min-size }
+          }
+          prev = cur
+          cur = next
+        }
+        .{ base = grow-fresh(min-size).base, len = min-size }
+      }
+
+      fn commit(base: ptr, len: size) {
+        let _ = base
+        let _ = len
+      }
+
+      fn release(r: memory/region) {
+        r.base.rw[ptr].* = freelist
+        r.base.add-bytes(8).rw[size].* = r.len
+        freelist = r.base
+      }
+
+      fn write(file-no: i32, data: ptr, count: size): i64 {
+        let iov: iovec = .{ buf = a32(data), len = count.as[u32] }
+        let nwritten: u32 = 0
+        let err = fd-write(file-no, a32(iov.&.as[ptr]), 1, a32(nwritten.&.as[ptr]))
+        while err == EINTR {
+          err = fd-write(file-no, a32(iov.&.as[ptr]), 1, a32(nwritten.&.as[ptr]))
+        }
+        if err != 0 { 0 - err.as[i64] } else nwritten.as[i64]
+      }
+
+      fn read(file-no: i32, buffer: ptr, count: size): i64 {
+        let iov: iovec = .{ buf = a32(buffer), len = count.as[u32] }
+        let nread: u32 = 0
+        let err = fd-read(file-no, a32(iov.&.as[ptr]), 1, a32(nread.&.as[ptr]))
+        while err == EINTR {
+          err = fd-read(file-no, a32(iov.&.as[ptr]), 1, a32(nread.&.as[ptr]))
+        }
+        if err != 0 { 0 - err.as[i64] } else nread.as[i64]
+      }
+
+      fn is-tty(file-no: i32): bool {
+        let stat = array/zeroed[u8, 24]()
+        if fd-fdstat-get(file-no, a32(stat.&.as[ptr])) != 0 return false
+        stat.&.as[ptr].r[u8].* == FILETYPE_CHARACTER_DEVICE
+      }
+
+      fn open-to-read(path: string): i32 { let _ = path; crash("file io is not supported on wasi") }
+      fn open-to-write(path: string): i32 { let _ = path; crash("file io is not supported on wasi") }
+      fn close(fd: i32) { let _ = fd; crash("file io is not supported on wasi") }
+      fn file-size(fd: i32): i64 { let _ = fd; crash("file io is not supported on wasi") }
+
+      fn exit(code: i32): never { proc-exit(code) }
+      // proc_exit rejects codes outside [0..126)
+      fn abort(): never { proc-exit(101) }
+
+      fn counter(): u64 {
+        let monotonic: u32 = 1
+        let t: u64 = 0
+        if clock-time-get(monotonic, 1, a32(t.&.as[ptr])) != 0 crash("wasi clock_time_get failed")
+        t
+      }
+
+      fn random-fill(dest: ptr, count: size) {
+        if random-get(a32(dest), count.as[u32]) != 0 crash("wasi random_get failed")
+      }
+
+      // The subscription tag is one byte at offset 8 padded to 16; carried as
+      // a u64 so natural layout lands every clock field at its ABI offset
+      type clock-subscription = {
+        userdata: u64,
+        tag: u64,
+        id: u32,
+        timeout: u64,
+        precision: u64,
+        flags: u16,
+      }
+      type poll-event = { userdata: u64, error: u16, tag: u8, nbytes: u64, flags: u16 }
+
+      // wasi has no sleep call: poll_oneoff on one relative (flags = 0)
+      // monotonic-clock subscription
+      fn sleep-ms(ms: u64) {
+        let sub: clock-subscription = .{
+          userdata = 0,
+          tag = 0,
+          id = 1,
+          timeout = ms * 1000000,
+          precision = 0,
+          flags = 0,
+        }
+        let event = mem/zeroed[poll-event]()
+        let nevents: u32 = 0
+        let _ = poll-oneoff(a32(sub.&.as[ptr]), a32(event.&.as[ptr]), 1, a32(nevents.&.as[ptr]))
+      }
+
+      fn env-get(name: string): ?string {
+        let count: u32 = 0
+        let buf-size: u32 = 0
+        if environ-sizes-get(a32(count.&.as[ptr]), a32(buf-size.&.as[ptr])) != 0 return :none
+        if count == 0 return :none
+        let entry-ptrs = mem/alloc-layout(count.as[size] * 4, 4)
+        let entry-bytes = mem/alloc-layout(buf-size.as[size], 1)
+        if environ-get(a32(entry-ptrs), a32(entry-bytes)) != 0 return :none
+        for i in 0.until(count.as[size]) {
+          let entry-addr = entry-ptrs.add-bytes(i * 4).r[u32].*
+          let entry = string/wrap-c(entry-addr.as[size].as[ptr])
+          if entry.starts-with(name) and entry.drop(name.len()).starts-with("=") {
+            return :some(entry.drop(name.len() + 1))
+          }
+        }
+        :none
+      }
+    }
+
+    // The bare platform is an extern contract: whoever links the emitted
+    // object provides the k1_platform_* symbols their program actually
+    // references, and unreferenced externs never emit. Committed memory and
+    // alloc results are zeroed; a provider whose reserve is already lazy
+    // (overcommit) makes commit a no-op; write/read return bytes moved or a
+    // negative error code, and the provider absorbs its own retryable
+    // interruptions; abort demands no symbol at all
+    ns bare {
+      fn(extern("k1_platform_mem_reserve")) reserve-bytes(min-size: size): ptr
+      fn(extern("k1_platform_mem_commit")) commit(base: ptr, len: size)
+      fn(extern("k1_platform_mem_release")) release-bytes(base: ptr, len: size)
+      fn(extern("k1_platform_heap_alloc")) alloc(size: size): ptr
+      fn(extern("k1_platform_heap_realloc")) realloc(old-ptr: ptr, new-size: size): ptr
+      fn(extern("k1_platform_heap_free")) free(p: ptr)
+      fn(extern("k1_platform_io_write")) write(file-no: i32, data: ptr, count: size): i64
+      fn(extern("k1_platform_io_read")) read(file-no: i32, buffer: ptr, count: size): i64
+      fn(extern("k1_platform_io_is_tty")) is-tty-flag(file-no: i32): i32
+      fn(extern("k1_platform_file_open_read")) open-read-c(path: ptr): i32
+      fn(extern("k1_platform_file_open_write")) open-write-c(path: ptr): i32
+      fn(extern("k1_platform_file_close")) close-fd(fd: i32)
+      fn(extern("k1_platform_file_size")) file-size(fd: i32): i64
+      fn(extern("k1_platform_process_exit")) exit(code: i32): never
+      fn(extern("k1_platform_env_get")) getenv(name: ptr): ptr
+      fn(extern("k1_platform_dylib_open")) dylib-open-c(path: ptr): ptr
+      fn(extern("k1_platform_dylib_open_self")) dylib-open-self(): ptr
+      fn(extern("k1_platform_dylib_sym")) dylib-sym-c(lib: ptr, name: ptr): ptr
+      fn(extern("k1_platform_dylib_close")) dylib-close(lib: ptr)
+      fn(extern("k1_platform_dylib_error")) dylib-error(): ptr
+      fn(extern("k1_platform_random_fill")) random-fill(dest: ptr, count: size)
+      fn(extern("k1_platform_clock_nanos")) clock-nanos(): u64
+      fn(extern("k1_platform_thread_sleep_ms")) sleep-ms(ms: u64)
+      fn(extern("k1_platform_file_is_executable")) is-executable-flag(path: ptr): i32
+
+      fn(intern("llvm.trap")) trap()
+
+      fn reserve(min-size: size): memory/region {
+        .{ base = reserve-bytes(min-size), len = min-size }
+      }
+      fn release(r: memory/region) { release-bytes(r.base, r.len) }
+      fn is-tty(file-no: i32): bool { is-tty-flag(file-no) == 1 }
+      fn open-to-read(path: string): i32 { open-read-c(path.to-c-tmp().ptr) }
+      fn open-to-write(path: string): i32 { open-write-c(path.to-c-tmp().ptr) }
+      fn close(fd: i32) { close-fd(fd) }
+      fn is-executable(path: string): bool { is-executable-flag(path.to-c-tmp().ptr) == 1 }
+      fn dylib-open(path: string): ptr { dylib-open-c(path.to-c-tmp().ptr) }
+      fn dylib-sym(lib: ptr, name: string): ptr { dylib-sym-c(lib, name.to-c-tmp().ptr) }
+      fn abort(): never { trap(); k1/exit(134) }
+      fn env-get(name: string): ?string {
+        let v = getenv(name.to-c-tmp().ptr)
+        if v.is-null() :none else :some(string/wrap-c(v))
+      }
     }
   }
 }

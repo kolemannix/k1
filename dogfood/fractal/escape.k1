@@ -28,9 +28,9 @@ type mandelbrot = {}
 let mandelbrot-set: mandelbrot = .{}
 
 impl escape-set for mandelbrot {
-  fn label(self: mandelbrot): string { "mandelbrot" }
-  fn seed(self: mandelbrot, point: complex): orbit { .{ z = ORIGIN, c = point } }
-  fn advance(self: mandelbrot, from: orbit): orbit {
+  fn label(_self: mandelbrot): string { "mandelbrot" }
+  fn seed(_self: mandelbrot, point: complex): orbit { .{ z = ORIGIN, c = point } }
+  fn advance(_self: mandelbrot, from: orbit): orbit {
     .{ z = from.z.squared().plus(from.c), c = from.c }
   }
 }
@@ -38,9 +38,9 @@ impl escape-set for mandelbrot {
 type julia = { c: complex }
 
 impl escape-set for julia {
-  fn label(self: julia): string { "julia" }
+  fn label(_self: julia): string { "julia" }
   fn seed(self: julia, point: complex): orbit { .{ z = point, c = self.c } }
-  fn advance(self: julia, from: orbit): orbit {
+  fn advance(_self: julia, from: orbit): orbit {
     .{ z = from.z.squared().plus(from.c), c = from.c }
   }
 }
@@ -49,9 +49,9 @@ type burning-ship = {}
 let burning-ship-set: burning-ship = .{}
 
 impl escape-set for burning-ship {
-  fn label(self: burning-ship): string { "burning ship" }
-  fn seed(self: burning-ship, point: complex): orbit { .{ z = ORIGIN, c = point } }
-  fn advance(self: burning-ship, from: orbit): orbit {
+  fn label(_self: burning-ship): string { "burning ship" }
+  fn seed(_self: burning-ship, point: complex): orbit { .{ z = ORIGIN, c = point } }
+  fn advance(_self: burning-ship, from: orbit): orbit {
     .{ z = from.z.folded().squared().plus(from.c), c = from.c }
   }
 }
@@ -87,7 +87,7 @@ fn log2(x: f64): f64 {
 }
 
 let PALETTE_LEN: int = 256
-let PALETTE: array[u32, 256] = #static build-palette()
+let PALETTE: array[u32, 256] = build-palette()
 
 type anchor = { at: f64, red: f64, green: f64, blue: f64 }
 
@@ -139,7 +139,7 @@ fn render[s: escape-set](set: s, pixels: buffer[u8], v: view) {
     for x in 0.until(v.width) {
       let point: complex = .{ re = left + x.as[f64] * step, im }
       let rgb = shade(escape-time(set, point, v.max-iter))
-      let at = ((y * v.width + x) * 4).as[size]
+      let at = (y * v.width + x) * 4
       pixels.set(at, rgb.shift-right(16).bit-and(0xFF).as[u8])
       pixels.set(at + 1, rgb.shift-right(8).bit-and(0xFF).as[u8])
       pixels.set(at + 2, rgb.bit-and(0xFF).as[u8])
