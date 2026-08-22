@@ -71,6 +71,43 @@ fn do-crash(): bool {
   crash("should not run")
 }
 
+fn for-break() {
+  let seen = list/empty[int]()
+  for i in 0.until(10) {
+    if i == 3 break
+    seen.push(i)
+  }
+  assert-equals(seen.join(","), "0,1,2")
+
+  let pairs = list/empty[string]()
+  for i in 0.until(3) {
+    for j in 0.until(3) {
+      if j == 1 break
+      pairs.push("${i}${j}")
+    }
+    pairs.push("o$i")
+  }
+  assert-equals(pairs.join(","), "00,o0,10,o1,20,o2")
+
+  let log = list/empty[string]()
+  for i in 0.until(5) {
+    defer log.push("d$i")
+    if i == 2 break
+    log.push("b$i")
+  }
+  assert-equals(log.join(","), "b0,d0,b1,d1,d2")
+
+  let n = 0
+  let total: int = loop {
+    for i in 0.until(10) {
+      if i == 4 break
+      n = n + 1
+    }
+    break n
+  }
+  assert-equals(total, 4)
+}
+
 fn test() {
 
   if-basic()
@@ -84,4 +121,5 @@ fn test() {
   loop-break()
   loop-nested()
   loop-false()
+  for-break()
 }

@@ -1742,9 +1742,12 @@ impl<'k1> Builder<'k1> {
         field_index: u32,
         comment: IrComment,
     ) -> Value {
+        let agg_type = self.k1.agg_types.get(struct_agg_id).agg_type;
+        if matches!(agg_type, AggType::Union { .. }) {
+            return base;
+        }
         let base_unaligned = is_addr_unaligned(&self.k1.ir, base);
-        let unaligned =
-            base_unaligned || self.k1.agg_types.get(struct_agg_id).agg_type.is_packed_struct();
+        let unaligned = base_unaligned || agg_type.is_packed_struct();
         // Folding field 0 to bare base is fine only if it doesn't drop a fresh
         // unaligned flag: the inst is the flag's carrier
         if field_index == 0 && unaligned == base_unaligned {
@@ -3596,7 +3599,9 @@ fn compile_cast(
                         b.k1.get_expr_type(c.base_expr).as_integer().unwrap().is_signed()
                     };
                     if signed {
-                        Inst::IntExtS { from: ScalarType::U8, v: base, to }
+                        let from_type_id = b.k1.exprs.get_type(c.base_expr);
+                        let from = b.get_physical_type(from_type_id).expect_scalar();
+                        Inst::IntExtS { from, v: base, to }
                     } else {
                         Inst::IntExtU { v: base, to }
                     }

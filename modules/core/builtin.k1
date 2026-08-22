@@ -1008,6 +1008,20 @@ impl[t, n: static size] as-span[t = t] for *array[t, n] {
   }
 }
 
+impl[t: print, n: static size] print for array[t, n] {
+  fn print-to[w: writer](self: array[t, n], w): empty {
+    let count: size = core/meta/static-type-to-value[_, n]()
+    w.write-char('[')
+    let i: size = 0
+    while i < count {
+      if i > 0 { w.write-char(',') }
+      self.get(i).print-to(w)
+      i = i + 1
+    }
+    w.write-char(']')
+  }
+}
+
 fn assert(context locn: k1/source-location)(value: bool) {
   if not value crash("ASSERT FAILED")
 }

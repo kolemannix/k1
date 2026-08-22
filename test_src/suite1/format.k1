@@ -24,4 +24,34 @@ fn test() {
   let s = "hello ${get-world()} ${yyyy}-${mm}-$dd".fmt(.{yyyy =2021,mm =10,dd =3})
   // TODO left pad, get it from npm!
   assert-equals(s, "hello Budapest 2021-10-3")
+
+  bases()
+  wide-floats()
+}
+
+fn to-base(value: u64, base: u64): string {
+  let w = string-builder/new()
+  core/format-uint(context w.&)(value, base)
+  w.build()
+}
+
+fn bases() {
+  assert-equals(to-base(0, 2), "0")
+  assert-equals(to-base(5, 2), "101")
+  assert-equals(to-base(1048576, 2), "100000000000000000000")
+  assert-equals(to-base(u64/max-value, 2).len(), 64)
+  assert-equals(to-base(0xDEADBEEF, 16), "deadbeef")
+  assert-equals(to-base(u64/max-value, 16), "ffffffffffffffff")
+  assert-equals(to-base(u64/max-value, 10), "18446744073709551615")
+}
+
+fn wide-floats() {
+  let big: f64 = 1.0e300
+  let text = "$big"
+  assert-equals(text.len(), 308)
+  assert(text.starts-with("1"))
+  assert(text.ends-with(".000000"))
+
+  let wide: f32 = 3.0e38
+  assert-equals("$wide".len(), 46)
 }

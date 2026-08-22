@@ -156,42 +156,7 @@ ns for list {
   }
 
   fn sort[t](input: *mut list[t]) where t: comparable {
-  
-    if input.len <= 1 return
-  
-    let half-index = input.len / 2
-    let pivot = input.get(half-index)
-  
-    let left = list/with-capacity[t](half-index)
-    let right = list/with-capacity[t](half-index)
-    let equal = list/with-capacity[t](4)
-  
-    for item in input.* {
-      item.compare(pivot) is {
-        :less    -> left.push(item),
-        :equal   -> equal.push(item),
-        :greater -> right.push(item)
-      }
-    }
-  
-    left.sort()
-    right.sort()
-  
-    let i = 0
-    for item in left {
-      input.set(i, item)
-      i = i + 1
-    }
-  
-    for item in equal {
-      input.set(i, item)
-      i = i + 1
-    }
-  
-    for item in right {
-      input.set(i, item)
-      i = i + 1
-    }
+    input.as-buffer().sort()
   }
 
   fn join[t: print](self: list[t], sep: string): string {
@@ -243,7 +208,15 @@ ns for list {
   }
 
   fn filter-in-place[t](self: *mut list[t], f: some fn t -> bool) {
-    crash("filter-in-place todo") 
+    let kept: size = 0
+    for i in 0.until(self.len) {
+      let elem = self.get(i)
+      if f(elem) {
+        self.set(kept, elem)
+        kept = kept + 1
+      }
+    }
+    self.len = kept
   }
 
 }

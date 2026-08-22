@@ -23,5 +23,35 @@ fn test() {
 
   identity-u(u)
 
+  read-write()
+
   .{}
+}
+
+type holder = { tag: u8, payload: u, trailer: u16 }
+
+fn read-write() {
+  let bits: u = uninit
+  bits.a = 0x3F800000
+  assert-equals(bits.b, 1.0: f32)
+  assert-equals(bits.c, 1065353216)
+
+  bits.b = -2.5
+  assert-equals(bits.a, 3223322624)
+
+  bits.c = -1
+  assert-equals(bits.a, 4294967295)
+
+  let h: holder = zeroed()
+  h.tag = 7
+  h.payload.a = 0x40000000
+  h.trailer = 999
+  assert-equals(h.payload.b, 2.0: f32)
+  assert-equals(h.tag, 7)
+  assert-equals(h.trailer, 999)
+
+  let arr: array[u, 3] = zeroed()
+  arr.get(1).b = 1.5
+  assert-equals(arr.get(1).a, 1069547520)
+  assert-equals(arr.get(0).a, 0)
 }

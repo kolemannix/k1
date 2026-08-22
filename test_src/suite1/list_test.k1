@@ -133,6 +133,65 @@ fn test-sort() {
   ])
 }
 
+type sort-rec = { key: int, ord: int }
+impl comparable for sort-rec {
+  fn compare(self: sort-rec, other: sort-rec): ordering { self.key.compare(other.key) }
+}
+
+fn assert-ascending(values: list[int]) {
+  for i in 1.until(values.len()) {
+    assert(values.get(i - 1) <= values.get(i))
+  }
+}
+
+fn test-sort-shapes() {
+  let n = 2000
+  let ascending = list/empty[int]()
+  let descending = list/empty[int]()
+  let organ-pipe = list/empty[int]()
+  let scattered = list/empty[int]()
+  for i in 0.until(n) {
+    ascending.push(i)
+    descending.push(n - i)
+    organ-pipe.push(if i < (n / 2) i else n - i)
+    scattered.push((i * 2654435761) % 1000)
+  }
+  for shape in [ascending, descending, organ-pipe, scattered] {
+    let values = shape
+    values.sort()
+    assert-equals(values.len(), n)
+    assert-ascending(values)
+  }
+}
+
+fn test-sort-stable() {
+  let records = list/empty[sort-rec]()
+  for i in 0.until(500) { records.push(.{ key = i % 7, ord = i }) }
+  records.sort()
+  for i in 1.until(records.len()) {
+    let a = records.get(i - 1)
+    let b = records.get(i)
+    assert(a.key <= b.key)
+    if a.key == b.key { assert(a.ord < b.ord) }
+  }
+}
+
+fn test-filter-in-place() {
+  let values: list[int] = [1, 2, 3, 4, 5, 6]
+  values.filter-in-place(fn v. v % 2 == 0)
+  assert-equals(values.show(), "[2,4,6]")
+
+  values.filter-in-place(fn v. v > 100)
+  assert(values.is-empty())
+
+  let kept: list[int] = [1, 2, 3]
+  kept.filter-in-place(fn v. v > 0)
+  assert-equals(kept.show(), "[1,2,3]")
+
+  values.push(9)
+  assert-equals(values.show(), "[9]")
+}
+
 fn test-swap() {
   let a = [1,2]
   a.swap(0,1)
@@ -164,6 +223,9 @@ fn test() {
   list_test/list-fill()
   list_test/list-equality()
   list_test/test-sort()
+  list_test/test-sort-shapes()
+  list_test/test-sort-stable()
+  list_test/test-filter-in-place()
   list_test/test-swap()
   list_test/iterator()
   assert([1,2,3].show() == "[1,2,3]")

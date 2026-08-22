@@ -80,8 +80,12 @@ fn _parse-string(context p: *mut parser)(): result[json, string] {
       c2 is {
         '\\' -> { sb.write-char('\\') },
         '"' ->  { sb.write-char('"') },
+        '/' ->  { sb.write-char('/') },
         'n' ->  { sb.write-char('\n') },
         't' ->  { sb.write-char('\t') },
+        'r' ->  { sb.write-char('\r') },
+        'b' ->  { sb.write-char(8u8.as[char]) },
+        'f' ->  { sb.write-char(12u8.as[char]) },
         _ -> return :err "Unsupported escape sequence: $c2"
       }
     } else if c1 == '"' {
@@ -163,6 +167,12 @@ fn _expect-object(context p: *mut parser)(): result[json, string] {
   }
 }
 
+fn _expect-literal(context p: *mut parser)(text: string, value: json): result[json, string] {
+  if not p.remaining-input().starts-with(text) { return :err "Expected $text" }
+  p.advance-n(text.len())
+  :ok value
+}
+
 fn _parse-number(context p: *mut parser)(): result[json, string] {
   let result = f64/parse-string(s = p.remaining-input(), require-total = false).try
   p.advance-n(result.len)
@@ -174,12 +184,9 @@ fn _parse-next-value(context p: *mut parser)(): result[json, string] {
   p.eat-whitespace()
   if p.peek() is :some c {
     c is {
-      'n' -> {
-        p.advance-n(4)
-        :ok :null
-      },
-      'f' -> { p.advance-n(5); :ok :bool false },
-      't' -> { p.advance-n(4); :ok :bool true },
+      'n' -> _expect-literal("null", :null),
+      'f' -> _expect-literal("false", :bool false),
+      't' -> _expect-literal("true", :bool true),
       '"' -> _parse-string(),
       '{' -> _expect-object(),
       '[' -> _expect-array(),
@@ -196,6 +203,13 @@ fn parse-from-string(input: string): result[json, string] {
   let p: parser = .{ input, cursor = 0 }
   _parse-next-value(context &p)() is {
     :err msg -> :err "Failed at pos ${p.cursor}: $msg",
-    :ok json -> :ok json
+    :ok json -> {
+      p.eat-whitespace()
+      if p.peek() is :some c {
+        :err "Failed at pos ${p.cursor}: Trailing content after json value: $c"
+      } else {
+        :ok json
+      }
+    }
   }
 }
