@@ -700,7 +700,6 @@ pub struct PhysicalFunctionType {
     pub return_type: PhysicalType,
     pub diverges: bool,
     pub params: MSlice<PhysicalFunctionParam, ProgramIr>,
-    pub abi_mode: AbiMode,
 }
 
 impl PhysicalFunctionType {
@@ -709,7 +708,6 @@ impl PhysicalFunctionType {
             return_type: PhysicalType::EMPTY,
             diverges: false,
             params: MSlice::empty(),
-            abi_mode: AbiMode::Internal,
         }
     }
 }
@@ -1540,8 +1538,7 @@ pub fn compile_top_level_expr(
     let return_type_id = b.k1.exprs.get_type(expr);
     let (return_type, diverges) = b.get_function_return_type(return_type_id);
     let params = MSlice::empty();
-    let phys_fn_type =
-        PhysicalFunctionType { return_type, diverges, params, abi_mode: AbiMode::Internal };
+    let phys_fn_type = PhysicalFunctionType { return_type, diverges, params };
     b.fn_type = phys_fn_type;
 
     debug!("Compiling expr {}", b.k1.expr_to_string(expr));
@@ -1931,12 +1928,7 @@ impl<'k1> Builder<'k1> {
             }
             phys_params.push(PhysicalFunctionParam { original_index: Some(index as u16), pt })
         }
-        let fn_ty = PhysicalFunctionType {
-            params: phys_params.to_slice(),
-            diverges,
-            return_type,
-            abi_mode: function_type.abi_mode,
-        };
+        let fn_ty = PhysicalFunctionType { params: phys_params.to_slice(), diverges, return_type };
 
         self.k1.ir.phys_fn_type_cache.insert(type_id, fn_ty);
         fn_ty

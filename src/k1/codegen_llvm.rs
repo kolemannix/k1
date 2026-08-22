@@ -58,6 +58,9 @@ fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
     Layout { size: td.get_abi_size(typ) as u32, align: td.get_abi_alignment(typ) }
 }
 
+/// llvm::CallingConv::Fast
+const LLVM_CALL_CONV_FAST: u32 = 8;
+
 #[derive(Clone)]
 pub struct CgFunctionType<'ctx> {
     llvm_function_type: LlvmFunctionType<'ctx>,
@@ -719,17 +722,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             for p in &entrypoint_params {
                 params.push((*p).into());
             }
-            let res = self
-                .builder
-                .build_call(function_value, &params, "")
-                .unwrap()
-                .try_as_basic_value()
-                .basic();
+            let main_call = self.builder.build_call(function_value, &params, "").unwrap();
+            main_call.set_call_convention(function_value.get_call_conventions());
+            let res = main_call.try_as_basic_value().basic();
             let exit_code: BasicValueEnum<'ctx> = match res {
                 None => self.ctx.i32_type().const_zero().as_basic_value_enum(),
                 Some(v) => v,
             };
-            self.builder.build_call(program_exit_value.unwrap(), &[exit_code.into()], "").unwrap();
+            let exit_fv = program_exit_value.unwrap();
+            let exit_call = self.builder.build_call(exit_fv, &[exit_code.into()], "").unwrap();
+            exit_call.set_call_convention(exit_fv.get_call_conventions());
             self.builder.build_unreachable().unwrap();
         }
 
@@ -1013,7 +1015,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let global_name_param = f.get_nth_param(2).unwrap();
         self.builder
             .build_call(crash_fn, &[ns_name_param.into(), global_name_param.into()], "")
-            .unwrap();
+            .unwrap()
+            .set_call_convention(crash_fn.get_call_conventions());
         self.builder.build_unreachable().unwrap();
 
         self.builder.position_at_end(ok_block);
@@ -1109,7 +1112,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let not_loaded_fv = self.crash_unloaded_fn_value()?;
         let ns_cstr = self.cstring_constant(&ns_name);
         let fn_cstr = self.cstring_constant(&fn_name);
-        self.builder.build_call(not_loaded_fv, &[ns_cstr.into(), fn_cstr.into()], "").unwrap();
+        self.builder
+            .build_call(not_loaded_fv, &[ns_cstr.into(), fn_cstr.into()], "")
+            .unwrap()
+            .set_call_convention(not_loaded_fv.get_call_conventions());
         self.builder.build_unreachable().unwrap();
 
         self.builder.position_at_end(call_block);
@@ -1661,12 +1667,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         phys_fn_type: &PhysicalFunctionType,
     ) -> K1Result<CgFunctionType<'ctx>> {
-        let abi_mode = phys_fn_type.abi_mode;
         let param_types = phys_fn_type.params;
         let return_type = phys_fn_type.return_type;
         let _diverges = phys_fn_type.diverges;
         let return_logical_cg_type = self.codegen_type(phys_fn_type.return_type);
-        let return_type_abi_mapping = self.get_abi_mapping_for_type(abi_mode, return_type, true);
+        let return_type_abi_mapping = self.get_abi_mapping_for_type(return_type, true);
 
         // If a function returns a big (typically > 2 words) struct, its actually
         // 'returned' in the first parameter, which is a pointer
@@ -1708,7 +1713,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         for param in self.k1.ir.mem.getn(param_types) {
             let param_cg_type = self.codegen_type(param.pt);
-            let abi_mapping = self.get_abi_mapping_for_type(abi_mode, param.pt, false);
+            let abi_mapping = self.get_abi_mapping_for_type(param.pt, false);
             param_abi_mappings.push(abi_mapping);
             param_llvm_types.push(param_cg_type);
             let mapped_type = self.mapped_abi_type_param(param.pt, abi_mapping);
@@ -2404,6 +2409,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.set_debug_location_from_span(span);
 
                 let call = self.builder.build_call(function_value, &args, "").unwrap();
+                call.set_call_convention(function_value.get_call_conventions());
                 call
             }
             CallKind::Indirect(fn_ptr) => {
@@ -2756,8 +2762,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let _switch = self.builder.build_switch(type_id_arg, else_block, &cases).unwrap();
 
                 self.builder.position_at_end(finish_block);
-                let mapping =
-                    self.get_abi_mapping_for_type(AbiMode::Internal, return_llvm_type.pt(), true);
+                let mapping = self.get_abi_mapping_for_type(return_llvm_type.pt(), true);
                 let marshalled = self
                     .marshal_abi_return_value(
                         mapping,
@@ -2878,6 +2883,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             ir::Value::StaticValue { id, .. } => self.codegen_static_value_canonical(id),
             ir::Value::FunctionAddr(function_id) => {
+                debug_assert!(
+                    self.k1.function_abi(function_id) == AbiMode::Native,
+                    "address materialized for internal-abi fn {}",
+                    self.k1.function_id_to_string(function_id, false)
+                );
                 let function_value = self.declare_llvm_function(function_id)?;
                 Ok(function_value.as_global_value().as_pointer_value().into())
             }
@@ -3882,6 +3892,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
         let ir_fn = *ir_fn;
 
+        let abi_mode = self.k1.function_abi(function_id);
         let llvm_function_type = self.make_cg_function_type(&ir_fn.fn_type)?;
         debug!(
             "-> res (is_sret={}) {}",
@@ -3933,6 +3944,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             llvm_function_type.llvm_function_type,
             Some(llvm_linkage),
         );
+        if abi_mode == AbiMode::Internal {
+            function_value.set_call_conventions(LLVM_CALL_CONV_FAST);
+        }
         // K1 has no unwinding: no invoke, no landingpad, anywhere. Extern C
         // decls get it too; LLVM cannot infer it across declaration boundaries
         function_value
@@ -4015,24 +4029,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(function_value)
     }
 
-    fn get_abi_mapping_for_type(
-        &self,
-        abi_mode: AbiMode,
-        pt: PhysicalType,
-        is_return: bool,
-    ) -> AbiParamMapping {
+    fn get_abi_mapping_for_type(&self, pt: PhysicalType, is_return: bool) -> AbiParamMapping {
         enum CallConv {
-            #[allow(unused)]
-            InternalK1,
             AMD64,
             ARM64,
         }
-        let callconv = match abi_mode {
-            AbiMode::Native | AbiMode::Internal => match self.k1.config.target {
-                compiler::Target::LinuxIntel64 => CallConv::AMD64,
-                compiler::Target::MacOsArm64 => CallConv::ARM64,
-                compiler::Target::Wasm64 => CallConv::ARM64,
-            },
+        let callconv = match self.k1.config.target {
+            compiler::Target::LinuxIntel64 => CallConv::AMD64,
+            compiler::Target::MacOsArm64 => CallConv::ARM64,
+            compiler::Target::Wasm64 => CallConv::ARM64,
         };
 
         // https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/
@@ -4062,18 +4067,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             }
                         }
                         match callconv {
-                            CallConv::InternalK1 => {
-                                if size_bytes <= 8 {
-                                    AbiParamMapping::StructInInteger {
-                                        abi_width: size_bytes * 8,
-                                        active_width: size_bytes * 8,
-                                    }
-                                } else if size_bytes <= 16 {
-                                    AbiParamMapping::StructByIntPairArray
-                                } else {
-                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: false }
-                                }
-                            }
                             CallConv::ARM64 => {
                                 if let Some((element, count)) = self.detect_float_aggregate(pt) {
                                     AbiParamMapping::StructByHfa { element, count }

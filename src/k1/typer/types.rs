@@ -444,7 +444,6 @@ pub struct FunctionType {
     pub physical_params: MSlice<FnParamType, TypedProgram>,
     pub return_type: TypeId,
     pub is_lambda: bool,
-    pub abi_mode: AbiMode,
 }
 impl_copy_if_small!(16, FunctionType);
 

@@ -54,8 +54,9 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
   ...
 }
 - [x] packed structs
-- [ ] function abi: internal everywhere, unless address is ever taken, then always native. enables fastcc in llvm
+- [x] function abi: internal everywhere, unless address is ever taken, then always native. enables fastcc in llvm
                     also of course allow spelling 'native', but do not allow forcing 'k1'
+                    open: internal param passing (big aggregates by pointer, no caller copy) — needs the f(x, x.&) snapshot decision
 - [x] also ability to spell specialized functions: foo[int].&
 - [x] top-level parser recovery (sync to next fn/ns/type/macro)
 - [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
@@ -69,17 +70,17 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
       rhs into lhs type but have no least-upper-bound, so `u32 + i64` errors while `i64 + u32` works;
       (c) expected-type propagation into generic calls pins the type param before argument-driven
       inference, so `write-bits(depth.get-unchecked(i), ...)` fails where the two-line form widens fine
-- [ ] enum-from-sum type operator
+- [x] enum-from-sum type operator
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
 - [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
 - [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
-- [ ] auto-print implementation on-demand for sums
+- [x] auto-print implementation on-demand for sums
 - [x] Exported functions
 - [ ] Tail calls
 - [ ] Implement at least one format specifier (precision, pretty). Do precision ('places') first
 - [ ] decide if overflow traps or not (in debug and release, if those are even different)
-- [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
-- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
+- [x] good backtraces
+- [-] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
       currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
 - [x] A #static infinite loop hangs the compiler
 - [x] allow opaques to be named / nominal; bindgen them that way. The name is really more useful than the size/align

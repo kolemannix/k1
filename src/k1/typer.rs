@@ -1062,6 +1062,8 @@ pub struct TypedFunction {
     pub is_recursive: bool,
     pub is_macro: bool,
     pub is_reloadable: bool,
+    pub abi_native: bool,
+    pub address_taken: bool,
     /// If we've generated a 'dyn' copy of this function, we store its id
     pub dyn_fn_id: Option<FunctionId>,
     /// 'let(returned)', RVO
@@ -4752,7 +4754,6 @@ impl TypedProgram {
                     physical_params: params_handle,
                     is_lambda: false,
                     return_type,
-                    abi_mode: AbiMode::Internal,
                 }));
                 Ok(function_type_id)
             }
@@ -5904,7 +5905,6 @@ impl TypedProgram {
                 let is_lambda = fun_type.is_lambda;
                 let old_return_type = fun_type.return_type;
                 let old_params = fun_type.physical_params;
-                let old_call_conv = fun_type.abi_mode;
                 let new_return_type = self.substitute_in_type_ext_inner(
                     old_return_type,
                     substitution_pairs,
@@ -5942,7 +5942,6 @@ impl TypedProgram {
                         physical_params: new_params_handle,
                         return_type: new_return_type,
                         is_lambda,
-                        abi_mode: old_call_conv,
                     };
                     let new_function_type_id = self.add_type_anon(Type::Function(new_fun_type));
                     new_function_type_id
@@ -9408,6 +9407,17 @@ impl TypedProgram {
                             self.ast.idents.get_string(name.name),
                         );
                     }
+                    if matches!(
+                        self.get_function(fn_id).linkage,
+                        Linkage::Intrinsic | Linkage::LlvmIntrinsic(_)
+                    ) {
+                        kbail!(
+                            self,
+                            name.name_span,
+                            "Intrinsic '{}' has no address",
+                            self.ast.idents.get_string(name.name),
+                        );
+                    }
                     Ok((None, self.function_to_reference(fn_id, variable_name_span)))
                 }
             },
@@ -11771,7 +11781,6 @@ impl TypedProgram {
                 physical_params: typed_params.to_slice(),
                 return_type,
                 is_lambda: false,
-                abi_mode: AbiMode::Internal,
             }));
 
             let body_function_id = self.functions.next_id();
@@ -11806,6 +11815,8 @@ impl TypedProgram {
                 is_recursive: false,
                 is_macro: false,
                 is_reloadable: false,
+                abi_native: false,
+                address_taken: true,
                 dyn_fn_id: None,
                 returned_variable: None,
                 body_failure: None,
@@ -11859,7 +11870,6 @@ impl TypedProgram {
             physical_params: typed_params.to_slice(),
             return_type,
             is_lambda: true,
-            abi_mode: AbiMode::Internal,
         }));
 
         let actual_body_function_id = self.add_function(TypedFunction {
@@ -11883,6 +11893,8 @@ impl TypedProgram {
             is_recursive: false,
             is_macro: false,
             is_reloadable: false,
+            abi_native: false,
+            address_taken: false,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -13049,6 +13061,8 @@ impl TypedProgram {
         let mut loop_block =
             self.new_block_builder(outer_for_expr_scope, ScopeType::WhileLoopBody, body_span, 3);
         let loop_scope_id = loop_block.scope_id;
+        self.scopes
+            .add_loop_info(loop_scope_id, ScopeLoopInfo { break_type: Some(self.builtin_types.empty) });
 
         let mut consequent_block =
             self.new_block_builder(loop_scope_id, ScopeType::LexicalBlock, iterable_span, 3);
@@ -14913,6 +14927,12 @@ impl TypedProgram {
                 self.ident_str(function_name)
             );
         }
+        if matches!(
+            self.get_function(generic_function_id).linkage,
+            Linkage::Intrinsic | Linkage::LlvmIntrinsic(_)
+        ) {
+            kbail!(self, span, "Intrinsic '{}' has no address", self.ident_str(function_name));
+        }
         if type_params.is_empty() {
             kbail!(self, span, "'{}' takes no type arguments", self.ident_str(function_name));
         }
@@ -14981,12 +15001,34 @@ impl TypedProgram {
     ) -> TypedExprId {
         let function = self.get_function(function_id);
         let function_pointer_type = self.add_function_pointer_type(function.type_id);
+        self.get_function_mut(function_id).address_taken = true;
         self.emit_ls_entity(call_span, LsEntityKind::Function { function_id, is_defn: false });
         self.exprs.add(
             TypedExpr::FunctionPointer(FunctionPointerExpr { function_id }),
             function_pointer_type,
             call_span,
         )
+    }
+
+    pub fn function_abi(&self, function_id: FunctionId) -> AbiMode {
+        let function = self.get_function(function_id);
+        match function.linkage {
+            Linkage::Standard => {
+                if function.address_taken
+                    || function.abi_native
+                    || function.is_reloadable
+                    || self.get_main_function_id() == Some(function_id)
+                {
+                    AbiMode::Native
+                } else {
+                    AbiMode::Internal
+                }
+            }
+            Linkage::External { .. }
+            | Linkage::Exported { .. }
+            | Linkage::Intrinsic
+            | Linkage::LlvmIntrinsic(_) => AbiMode::Native,
+        }
     }
 
     pub fn function_to_lambda_object(
@@ -15091,7 +15133,6 @@ impl TypedProgram {
 
     fn add_lambda_env_to_function_type(&mut self, function_type_id: TypeId) -> TypeId {
         let function_type = self.types.get(function_type_id).as_function().unwrap();
-        let call_conv = function_type.abi_mode;
         let return_type = function_type.return_type;
         let physical_params = function_type.physical_params;
         let empty_env_struct_type = EMPTY_TYPE_ID;
@@ -15107,12 +15148,8 @@ impl TypedProgram {
         });
         new_params.extend(self.mem.getn(physical_params));
 
-        let new_function_type = FunctionType {
-            physical_params: new_params.to_slice(),
-            return_type,
-            is_lambda: true,
-            abi_mode: call_conv,
-        };
+        let new_function_type =
+            FunctionType { physical_params: new_params.to_slice(), return_type, is_lambda: true };
 
         let defn_info = self.get_defn_info(function_type_id);
         self.add_type(Type::Function(new_function_type), defn_info, None)
@@ -17210,6 +17247,8 @@ impl TypedProgram {
             is_macro: generic_function.is_macro,
             // we reject generics in reloadable places
             is_reloadable: false,
+            abi_native: generic_function.abi_native,
+            address_taken: false,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -19114,7 +19153,6 @@ impl TypedProgram {
             physical_params: slot_params.to_slice(),
             return_type: substituted_return,
             is_lambda: has_receiver,
-            abi_mode: AbiMode::Internal,
         }));
         Ok(slot_fn_type)
     }
@@ -19251,6 +19289,7 @@ impl TypedProgram {
                 AbilityImplFunction::FunctionId(impl_fn_id) => {
                     // Typing the fn-pointer expr with the slot's type is the erasure:
                     // physically identical; a self receiver arrives as the state pointer
+                    self.get_function_mut(impl_fn_id).address_taken = true;
                     let fn_ptr_expr = self.exprs.add(
                         TypedExpr::FunctionPointer(FunctionPointerExpr { function_id: impl_fn_id }),
                         field.type_id,
@@ -19555,6 +19594,13 @@ impl TypedProgram {
                 other => other,
             },
         };
+        if ast_fn.is_native && !matches!(linkage, Linkage::Standard) {
+            kbail!(
+                &**self_,
+                ast_fn.signature_span,
+                "'native' only on plain functions; intern, extern, and export govern their own ABI"
+            );
+        }
         if let Linkage::Exported { .. } = linkage {
             if !type_params.is_empty() || !fnlike_type_params.is_empty() {
                 kbail!(&**self_, ast_fn.signature_span, "exported functions cannot be generic");
@@ -19651,16 +19697,10 @@ impl TypedProgram {
         };
 
         let param_types_handle = param_types.to_slice();
-        let call_conv = match linkage {
-            Linkage::Standard => AbiMode::Internal,
-            Linkage::External { .. } | Linkage::Exported { .. } => AbiMode::Native,
-            Linkage::Intrinsic | Linkage::LlvmIntrinsic(_) => AbiMode::Internal,
-        };
         let function_type_id = self_.add_type_anon(Type::Function(FunctionType {
             physical_params: param_types_handle,
             return_type,
             is_lambda: false,
-            abi_mode: call_conv,
         }));
 
         let function_type_params_handle = fnlike_type_params.to_slice();
@@ -19690,6 +19730,8 @@ impl TypedProgram {
             is_recursive: false,
             is_macro: false,
             is_reloadable,
+            abi_native: ast_fn.is_native,
+            address_taken: false,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -19945,7 +19987,6 @@ impl TypedProgram {
             physical_params: param_types_handle,
             return_type: code_type,
             is_lambda: false,
-            abi_mode: AbiMode::Internal,
         }));
 
         let function_id = self.functions.next_id();
@@ -19973,6 +20014,8 @@ impl TypedProgram {
             is_recursive: false,
             is_macro: true,
             is_reloadable: false,
+            abi_native: false,
+            address_taken: false,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -21546,7 +21589,6 @@ impl TypedProgram {
             physical_params: MSlice::empty(),
             return_type,
             is_lambda: false,
-            abi_mode: AbiMode::Internal,
         }));
         let actual_function_id = self.add_function(TypedFunction {
             name,
@@ -21569,6 +21611,8 @@ impl TypedProgram {
             is_macro: false,
             // these load functions are host code: they patch the reloadable lib and do not live in it
             is_reloadable: false,
+            abi_native: false,
+            address_taken: false,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -23069,7 +23113,6 @@ impl TypedProgram {
             physical_params: params.to_slice(),
             is_lambda: false,
             return_type,
-            abi_mode: AbiMode::Internal,
         }));
         self.register_type_metainfo(new_type_id);
         Ok(new_type_id)

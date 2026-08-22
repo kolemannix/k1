@@ -7,6 +7,8 @@ fn pick-first[t](a: t, b: t): t { let _ = b; a }
 
 fn ref-pick[t](): *fn(a: t, b: t) -> t { pick-first[t].& }
 
+fn(native) native-add-three(x: int): int { x + 3 }
+
 type has-fn = { myfn: *fn(not-x: int) -> int }
 
 fn test() {
@@ -47,10 +49,15 @@ fn test() {
   assert-equals(pf-via-generic(7, 8), 7)
   assert-equals(pf-via-generic.as[ptr], pf-int.as[ptr])
 
+  assert-equals(native-add-three(4), 7)
+  let na = native-add-three.&
+  assert-equals(na(4), 7)
+
   assert(test-compile( pick-first ) is :some _)
   assert(test-compile( pick-first.& ) is :some _)
   assert(test-compile( pick-first[int, bool].& ) is :some _)
   assert(test-compile( static-add-one[int].& ) is :some _)
+  assert(test-compile( types/size[int].& ) is :some _)
 
   .{}
 }

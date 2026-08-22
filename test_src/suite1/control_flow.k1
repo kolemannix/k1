@@ -67,6 +67,15 @@ fn loop-false() {
   assert(x == 3)
 }
 
+fn for-break() {
+  let count = 0
+  for 0.until(10) {
+    if it >= 4 { break }
+    count = count + 1
+  }
+  assert-equals(count, 4)
+}
+
 fn do-crash(): bool {
   crash("should not run")
 }
@@ -84,4 +93,5 @@ fn test() {
   loop-break()
   loop-nested()
   loop-false()
+  for-break()
 }

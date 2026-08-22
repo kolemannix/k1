@@ -1,0 +1,6 @@
+fn(extern, native) not-plain(): i32
+
+fn main(): i32 {
+  0
+}
+//errmsg: 'native' only on plain functions
