@@ -1,0 +1,89 @@
+let(mutable) frame: buffer[u8] = buffer/empty[u8]()
+let(mutable) frame-width: i32 = 0
+let(mutable) frame-height: i32 = 0
+
+fn ensure-frame(width: i32, height: i32) {
+  let needed = (width * height * 4).as[size]
+  if frame.len < needed { frame = buffer/allocate-in(heap, needed) }
+  frame-width = width
+  frame-height = height
+}
+
+fn(export("k1_frame")) frame-address(width: i32, height: i32): u32 {
+  ensure-frame(width, height)
+  frame.data-ptr().as[size].as[u32]
+}
+
+fn(export("k1_render")) render-into-frame(
+  kind: i32,
+  center-re: f64,
+  center-im: f64,
+  span: f64,
+  max-iter: i32,
+  julia-re: f64,
+  julia-im: f64
+) {
+  let v: view = .{
+    width = frame-width,
+    height = frame-height,
+    center = .{ re = center-re, im = center-im },
+    span,
+    max-iter
+  }
+  if kind == 1 {
+    let set: julia = .{ c = .{ re = julia-re, im = julia-im } }
+    render(set, frame, v)
+  } else if kind == 2 {
+    render(burning-ship-set, frame, v)
+  } else {
+    render(mandelbrot-set, frame, v)
+  }
+}
+
+let TERM_WIDTH: i32 = 88
+let TERM_HEIGHT: i32 = 44
+
+fn main(): i32 {
+  println("k1 escape-time fractals, one binary for terminal and canvas")
+  show(mandelbrot-set, .{ re = -0.65, im = 0.0 }, 2.4, 300)
+  show(.{ c = .{ re = -0.8, im = 0.156 } }: julia, ORIGIN, 3.0, 300)
+  show(burning-ship-set, .{ re = -1.755, im = -0.03 }, 0.22, 300)
+  0
+}
+
+fn show[s: escape-set](set: s, center: complex, span: f64, max-iter: i32) {
+  ensure-frame(TERM_WIDTH, TERM_HEIGHT)
+  render(set, frame, .{
+    width = TERM_WIDTH,
+    height = TERM_HEIGHT,
+    center,
+    span,
+    max-iter
+  })
+  println("")
+  println("  ${set.label()} at ${center.re}, ${center.im} span $span")
+  print-frame()
+}
+
+fn print-frame() {
+  let esc = 27u8.as[char]
+  let out = string-builder/new()
+  let y: i32 = 0
+  while y < frame-height - 1 {
+    let x: i32 = 0
+    while x < frame-width {
+      let upper = pixel-at(x, y)
+      let lower = pixel-at(x, y + 1)
+      out.write("${esc}[38;2;${upper.red};${upper.green};${upper.blue};48;2;${lower.red};${lower.green};${lower.blue}m▀")
+      x = x + 1
+    }
+    out.writeln("${esc}[0m")
+    y = y + 2
+  }
+  print(out.build())
+}
+
+fn pixel-at(x: i32, y: i32): { red: u8, green: u8, blue: u8 } {
+  let at = ((y * frame-width + x) * 4).as[size]
+  .{ red = frame.get(at), green = frame.get(at + 1), blue = frame.get(at + 2) }
+}

@@ -1,0 +1,149 @@
+type complex = { re: f64, im: f64 }
+
+let ORIGIN: complex = .{ re = 0.0, im = 0.0 }
+
+ns for complex {
+  fn plus(self: complex, other: complex): complex {
+    .{ re = self.re + other.re, im = self.im + other.im }
+  }
+
+  fn squared(self: complex): complex {
+    .{ re = self.re * self.re - self.im * self.im, im = 2.0 * self.re * self.im }
+  }
+
+  fn norm2(self: complex): f64 { self.re * self.re + self.im * self.im }
+
+  fn folded(self: complex): complex { .{ re = self.re.abs(), im = self.im.abs() } }
+}
+
+type orbit = { z: complex, c: complex }
+
+ability escape-set {
+  fn label(self): string
+  fn seed(self, point: complex): orbit
+  fn advance(self, from: orbit): orbit
+}
+
+type mandelbrot = {}
+let mandelbrot-set: mandelbrot = .{}
+
+impl escape-set for mandelbrot {
+  fn label(self: mandelbrot): string { "mandelbrot" }
+  fn seed(self: mandelbrot, point: complex): orbit { .{ z = ORIGIN, c = point } }
+  fn advance(self: mandelbrot, from: orbit): orbit {
+    .{ z = from.z.squared().plus(from.c), c = from.c }
+  }
+}
+
+type julia = { c: complex }
+
+impl escape-set for julia {
+  fn label(self: julia): string { "julia" }
+  fn seed(self: julia, point: complex): orbit { .{ z = point, c = self.c } }
+  fn advance(self: julia, from: orbit): orbit {
+    .{ z = from.z.squared().plus(from.c), c = from.c }
+  }
+}
+
+type burning-ship = {}
+let burning-ship-set: burning-ship = .{}
+
+impl escape-set for burning-ship {
+  fn label(self: burning-ship): string { "burning ship" }
+  fn seed(self: burning-ship, point: complex): orbit { .{ z = ORIGIN, c = point } }
+  fn advance(self: burning-ship, from: orbit): orbit {
+    .{ z = from.z.folded().squared().plus(from.c), c = from.c }
+  }
+}
+
+let BAILOUT: f64 = 256.0
+let INSIDE: f64 = -1.0
+
+fn escape-time[s: escape-set](set: s, point: complex, max-iter: i32): f64 {
+  let current = set.seed(point)
+  let i = 0
+  while i < max-iter {
+    let m2 = current.z.norm2()
+    if m2 > BAILOUT {
+      return i.as[f64] + 1.0 - log2(0.5 * log2(m2))
+    }
+    current = set.advance(current)
+    i = i + 1
+  }
+  INSIDE
+}
+
+let LOG2_E_TIMES_2: f64 = 2.8853900817779268
+
+fn log2(x: f64): f64 {
+  let bits = mem/bitcast[f64, u64](x)
+  let exponent = bits.shift-right(52).bit-and(0x7FF).as[i64] - 1023
+  let mantissa = mem/bitcast[u64, f64](
+    bits.bit-and(0x000FFFFFFFFFFFFF).bit-or(0x3FF0000000000000)
+  )
+  let s = (mantissa - 1.0) / (mantissa + 1.0)
+  let s2 = s * s
+  exponent.as[f64] + LOG2_E_TIMES_2 * s * (1.0 + s2 * (0.33333333333333333 + s2 * 0.2))
+}
+
+let PALETTE_LEN: int = 256
+let PALETTE: array[u32, 256] = #static build-palette()
+
+type anchor = { at: f64, red: f64, green: f64, blue: f64 }
+
+fn build-palette(): array[u32, 256] {
+  let anchors: array[anchor, 6] = [
+    .{ at = 0.0,    red = 0.0,   green = 7.0,   blue = 100.0 },
+    .{ at = 0.16,   red = 32.0,  green = 107.0, blue = 203.0 },
+    .{ at = 0.42,   red = 237.0, green = 255.0, blue = 255.0 },
+    .{ at = 0.6425, red = 255.0, green = 170.0, blue = 0.0 },
+    .{ at = 0.8575, red = 0.0,   green = 2.0,   blue = 0.0 },
+    .{ at = 1.0,    red = 0.0,   green = 7.0,   blue = 100.0 }
+  ]
+  let out = array/zeroed[u32, 256]()
+  for i in 0.until(PALETTE_LEN) {
+    let at = i.as[f64] / PALETTE_LEN.as[f64]
+    let seg = 0
+    while seg < 4 and anchors.get(seg + 1).at < at { seg = seg + 1 }
+    let low = anchors.get(seg)
+    let high = anchors.get(seg + 1)
+    let t = (at - low.at) / (high.at - low.at)
+    out.get(i) = pack(
+      low.red + (high.red - low.red) * t,
+      low.green + (high.green - low.green) * t,
+      low.blue + (high.blue - low.blue) * t
+    )
+  }
+  out
+}
+
+fn pack(red: f64, green: f64, blue: f64): u32 {
+  red.as[u32].shift-left(16).bit-or(green.as[u32].shift-left(8)).bit-or(blue.as[u32])
+}
+
+let CYCLE: f64 = 6.0
+
+fn shade(escape: f64): u32 {
+  if escape < 0.0 return 0
+  PALETTE.get((escape * CYCLE).as[int] % PALETTE_LEN)
+}
+
+type view = { width: i32, height: i32, center: complex, span: f64, max-iter: i32 }
+
+fn render[s: escape-set](set: s, pixels: buffer[u8], v: view) {
+  let step = v.span / v.height.as[f64]
+  let left = v.center.re - v.width.as[f64] * 0.5 * step
+  let top = v.center.im - v.height.as[f64] * 0.5 * step
+  for y in 0.until(v.height) {
+    let im = top + y.as[f64] * step
+    for x in 0.until(v.width) {
+      let point: complex = .{ re = left + x.as[f64] * step, im }
+      let rgb = shade(escape-time(set, point, v.max-iter))
+      let at = ((y * v.width + x) * 4).as[size]
+      pixels.set(at, rgb.shift-right(16).bit-and(0xFF).as[u8])
+      pixels.set(at + 1, rgb.shift-right(8).bit-and(0xFF).as[u8])
+      pixels.set(at + 2, rgb.bit-and(0xFF).as[u8])
+      pixels.set(at + 3, 255u8)
+    }
+  }
+}

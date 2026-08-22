@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>k1 on wasm — escape-time fractals</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #141821;
+    --line: #262c3a;
+    --ink: #dfe4ee;
+    --dim: #8b93a6;
+    --accent: #ffaa00;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 28px 20px 48px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 940px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; font-weight: 600; }
+  h1 span { color: var(--accent); }
+  p.lead { margin: 0 0 20px; color: var(--dim); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+  #stage { position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #000; }
+  canvas { display: block; width: 100%; height: auto; cursor: grab; touch-action: none; }
+  canvas.dragging { cursor: grabbing; }
+  #hud {
+    position: absolute; left: 10px; bottom: 10px;
+    padding: 4px 9px; border-radius: 6px;
+    background: rgba(11, 13, 18, 0.72);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; color: var(--dim);
+  }
+  #controls {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    margin: 14px 0 0; padding: 12px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--panel);
+  }
+  button {
+    font: inherit; font-size: 14px; color: var(--ink);
+    background: #1d2331; border: 1px solid var(--line);
+    padding: 6px 12px; border-radius: 7px; cursor: pointer;
+  }
+  button:hover { border-color: #3b455c; }
+  button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #21160a; }
+  label { color: var(--dim); display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  input[type=range] { accent-color: var(--accent); width: 130px; }
+  .spacer { flex: 1 1 auto; }
+  details { margin-top: 22px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  summary { padding: 12px; cursor: pointer; color: var(--dim); }
+  #stdout {
+    margin: 0; padding: 0 12px 12px; overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 7px; line-height: 1.0; letter-spacing: 0; white-space: pre;
+  }
+  footer { margin-top: 22px; color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>escape-time fractals, compiled from <span>k1</span> to wasm64</h1>
+  <p class="lead">
+    Every pixel below is computed by K1 code running in your browser. The page only
+    moves bytes: it hands the module a viewport, then blits the RGBA buffer K1 wrote
+    into wasm linear memory straight onto the canvas.
+  </p>
+
+  <div id="stage">
+    <canvas id="canvas"></canvas>
+    <div id="hud">booting…</div>
+  </div>
+
+  <div id="controls">
+    <button data-kind="0" aria-pressed="true">mandelbrot</button>
+    <button data-kind="1" aria-pressed="false">julia</button>
+    <button data-kind="2" aria-pressed="false">burning ship</button>
+    <label>iterations <input id="iters" type="range" min="64" max="1200" step="32" value="300"><span id="iters-out">300</span></label>
+    <div class="spacer"></div>
+    <button id="reset">reset view</button>
+  </div>
+
+  <details>
+    <summary>the same .wasm, run as a WASI command (this is its stdout)</summary>
+    <pre id="stdout"></pre>
+  </details>
+
+  <footer>
+    drag to pan &middot; scroll to zoom &middot; julia animates its constant
+  </footer>
+</main>
+
+<script type="module">
+const canvas = document.getElementById('canvas')
+const ctx = canvas.getContext('2d')
+const hud = document.getElementById('hud')
+const itersInput = document.getElementById('iters')
+
+const HOME = [
+  { center: [-0.65, 0], span: 2.4 },
+  { center: [0, 0], span: 3.0 },
+  { center: [-1.755, -0.03], span: 0.22 },
+]
+
+const state = {
+  kind: 0,
+  center: [...HOME[0].center],
+  span: HOME[0].span,
+  iters: 300,
+  julia: [-0.8, 0.156],
+  width: 0,
+  height: 0,
+  base: 0,
+  dirty: true,
+}
+
+let wasm = null
+let stdout = ''
+
+const decoder = new TextDecoder()
+
+const wasi = {
+  proc_exit(code) { throw { k1exit: code } },
+  fd_write(fd, iovs, iovsLen, writtenPtr) {
+    const view = new DataView(wasm.memory.buffer)
+    let written = 0
+    for (let i = 0; i < iovsLen; i++) {
+      const buf = view.getUint32(iovs + i * 8, true)
+      const len = view.getUint32(iovs + i * 8 + 4, true)
+      stdout += decoder.decode(new Uint8Array(wasm.memory.buffer, buf, len))
+      written += len
+    }
+    view.setUint32(writtenPtr, written, true)
+    return 0
+  },
+  fd_read: () => 0,
+  fd_fdstat_get(fd, statPtr) { new Uint8Array(wasm.memory.buffer)[statPtr] = 0; return 0 },
+  environ_sizes_get(countPtr, sizePtr) {
+    const view = new DataView(wasm.memory.buffer)
+    view.setUint32(countPtr, 0, true)
+    view.setUint32(sizePtr, 0, true)
+    return 0
+  },
+  environ_get: () => 0,
+}
+
+// The terminal half-block art arrives as truecolor SGR sequences; paint it as
+// spans so the page shows exactly what a terminal would.
+function ansiToHtml(text) {
+  const escaped = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+  let html = ''
+  let open = false
+  let last = 0
+  const re = /\x1b\[([0-9;]*)m/g
+  let m
+  while ((m = re.exec(text)) !== null) {
+    html += escaped(text.slice(last, m.index))
+    last = re.lastIndex
+    const p = m[1].split(';').map(Number)
+    let fg = null, bg = null
+    for (let i = 0; i < p.length; i++) {
+      if (p[i] === 38 && p[i + 1] === 2) { fg = `rgb(${p[i + 2]},${p[i + 3]},${p[i + 4]})`; i += 4 }
+      else if (p[i] === 48 && p[i + 1] === 2) { bg = `rgb(${p[i + 2]},${p[i + 3]},${p[i + 4]})`; i += 4 }
+    }
+    if (open) { html += '</span>'; open = false }
+    if (fg || bg) {
+      html += `<span style="color:${fg || 'inherit'};background:${bg || 'transparent'}">`
+      open = true
+    }
+  }
+  html += escaped(text.slice(last))
+  if (open) html += '</span>'
+  return html
+}
+
+function resize() {
+  const width = Math.max(320, Math.min(900, canvas.parentElement.clientWidth))
+  const height = Math.round(width * 0.62)
+  if (width === state.width && height === state.height) return
+  canvas.width = width
+  canvas.height = height
+  state.width = width
+  state.height = height
+  state.base = wasm.exports.k1_frame(width, height)
+  state.dirty = true
+}
+
+function draw() {
+  const t0 = performance.now()
+  wasm.exports.k1_render(
+    state.kind,
+    state.center[0], state.center[1],
+    state.span,
+    state.iters,
+    state.julia[0], state.julia[1],
+  )
+  const ms = performance.now() - t0
+  const pixels = new Uint8ClampedArray(wasm.memory.buffer, state.base, state.width * state.height * 4)
+  ctx.putImageData(new ImageData(pixels, state.width, state.height), 0, 0)
+  const zoom = HOME[state.kind].span / state.span
+  hud.textContent =
+    `${state.center[0].toFixed(6)}, ${state.center[1].toFixed(6)}` +
+    ` · zoom ${zoom < 1000 ? zoom.toFixed(1) : zoom.toExponential(1)}x` +
+    ` · ${state.iters} iter · ${ms.toFixed(1)} ms`
+}
+
+function frame(now) {
+  if (state.kind === 1) {
+    const theta = now / 6000
+    state.julia = [0.7885 * Math.cos(theta), 0.7885 * Math.sin(theta)]
+    state.dirty = true
+  }
+  if (state.dirty) {
+    state.dirty = false
+    draw()
+  }
+  requestAnimationFrame(frame)
+}
+
+function pixelToPoint(px, py) {
+  const step = state.span / state.height
+  return [
+    state.center[0] + (px - state.width / 2) * step,
+    state.center[1] + (py - state.height / 2) * step,
+  ]
+}
+
+function bindInput() {
+  let dragging = null
+  canvas.addEventListener('pointerdown', (e) => {
+    dragging = { x: e.offsetX, y: e.offsetY }
+    canvas.classList.add('dragging')
+    canvas.setPointerCapture(e.pointerId)
+  })
+  canvas.addEventListener('pointermove', (e) => {
+    if (!dragging) return
+    const scale = canvas.width / canvas.clientWidth
+    const step = state.span / state.height
+    state.center[0] -= (e.offsetX - dragging.x) * scale * step
+    state.center[1] -= (e.offsetY - dragging.y) * scale * step
+    dragging = { x: e.offsetX, y: e.offsetY }
+    state.dirty = true
+  })
+  const endDrag = (e) => { dragging = null; canvas.classList.remove('dragging') }
+  canvas.addEventListener('pointerup', endDrag)
+  canvas.addEventListener('pointercancel', endDrag)
+
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault()
+    const scale = canvas.width / canvas.clientWidth
+    const [ax, ay] = pixelToPoint(e.offsetX * scale, e.offsetY * scale)
+    const factor = Math.exp(e.deltaY * 0.0015)
+    state.span = Math.min(4.0, Math.max(1e-13, state.span * factor))
+    const [bx, by] = pixelToPoint(e.offsetX * scale, e.offsetY * scale)
+    state.center[0] += ax - bx
+    state.center[1] += ay - by
+    state.dirty = true
+  }, { passive: false })
+
+  for (const button of document.querySelectorAll('button[data-kind]')) {
+    button.addEventListener('click', () => {
+      state.kind = Number(button.dataset.kind)
+      for (const other of document.querySelectorAll('button[data-kind]')) {
+        other.setAttribute('aria-pressed', String(other === button))
+      }
+      resetView()
+    })
+  }
+
+  document.getElementById('reset').addEventListener('click', resetView)
+
+  itersInput.addEventListener('input', () => {
+    state.iters = Number(itersInput.value)
+    document.getElementById('iters-out').textContent = itersInput.value
+    state.dirty = true
+  })
+
+  window.addEventListener('resize', () => { resize(); state.dirty = true })
+}
+
+function resetView() {
+  state.center = [...HOME[state.kind].center]
+  state.span = HOME[state.kind].span
+  state.dirty = true
+}
+
+async function boot() {
+  const bytes = await (await fetch('.k1-out/fractal')).arrayBuffer()
+  const { instance } = await WebAssembly.instantiate(bytes, { wasi_snapshot_preview1: wasi })
+  wasm = { exports: instance.exports, memory: instance.exports.memory }
+
+  try { instance.exports._start() } catch (e) { if (!e || e.k1exit === undefined) throw e }
+  document.getElementById('stdout').innerHTML = ansiToHtml(stdout)
+
+  resize()
+  bindInput()
+  requestAnimationFrame(frame)
+}
+
+boot().catch((err) => {
+  hud.textContent = 'failed: ' + err
+  console.error(err)
+})
+</script>
+</body>
+</html>

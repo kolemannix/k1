@@ -565,6 +565,10 @@ ns(lib("k1rt")) k1rt {
 }
 
 ns for f64 {
+  fn abs(self: f64): f64 {
+    mem/bitcast[u64, f64](mem/bitcast[f64, u64](self).bit-and(0x7FFFFFFFFFFFFFFF))
+  }
+
   fn format[w: writer](f: f64, w, places: i32) {
     let stack-buf = array/zeroed[u8, 32]()
     let written-len: i32 = k1rt/snprintf_f64(stack-buf.get-base().as[ptr], 32, f, places)

@@ -3974,6 +3974,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     self.ctx.create_string_attribute("wasm-import-name", &llvm_name),
                 );
             }
+            if typed_function_linkage.is_exported() {
+                function_value.add_attribute(
+                    AttributeLoc::Function,
+                    self.ctx.create_string_attribute("wasm-export-name", &llvm_name),
+                );
+            }
         }
         if is_sret {
             for attr in self.make_sret_attributes(&llvm_function_type.return_logical_cg_type) {
@@ -4723,18 +4729,36 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         data_global.set_constant(true);
                         data_global.set_unnamed_addr(true);
                         data_global.set_initializer(&array_value);
-                        let span_struct = self.make_span_struct(
-                            cont.type_id,
-                            cont.len() as u64,
-                            data_global.as_pointer_value(),
-                        );
                         let final_struct = match cont.kind {
                             StaticContainerKind::Array | StaticContainerKind::Vector => {
                                 unreachable!()
                             }
-                            StaticContainerKind::Span | StaticContainerKind::Buffer => span_struct,
+                            StaticContainerKind::Buffer => {
+                                let buffer_pt =
+                                    self.k1.get_physical_type(cont.type_id).unwrap();
+                                let buffer_cg_type = self.codegen_type(buffer_pt).expect_struct();
+                                self.make_buffer_struct(
+                                    buffer_cg_type.struct_type,
+                                    cont.len() as u64,
+                                    data_global.as_pointer_value(),
+                                )
+                            }
+                            StaticContainerKind::Span => self.make_span_struct(
+                                cont.type_id,
+                                cont.len() as u64,
+                                data_global.as_pointer_value(),
+                            ),
                             StaticContainerKind::List => {
-                                self.make_list_struct(cont.type_id, span_struct, cont.len() as u64)
+                                let buffer_struct = self.make_span_struct(
+                                    cont.type_id,
+                                    cont.len() as u64,
+                                    data_global.as_pointer_value(),
+                                );
+                                self.make_list_struct(
+                                    cont.type_id,
+                                    buffer_struct,
+                                    cont.len() as u64,
+                                )
                             }
                         };
                         final_struct.as_basic_value_enum()
