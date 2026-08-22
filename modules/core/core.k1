@@ -265,12 +265,6 @@ ns for char {
 
 }
 
-impl comparable for char {
-  fn compare(self: char, other: char): ordering {
-    (self.as[u8]).compare(other.as[u8])
-  }
-}
-
 impl scalar-cmp for char {
   fn lt(self, other: self): bool { (self.as[u8]).lt(other.as[u8]) }
   fn le(self, other: self): bool { (self.as[u8]).le(other.as[u8]) }
@@ -313,7 +307,7 @@ fn format-uint[w: writer](context w)(value: u64, base: u64) {
     w.write-char(second-digit)
   } else {
     let remaining = value
-    let digits = fixlist/uninit[char, 20]
+    let digits = fixlist/uninit[char, 64]
     while remaining > 0 {
       let d = remaining % base
       let c = u8/to-ascii-digit(d.as[u8])
@@ -429,16 +423,8 @@ fn compare-scalars[t: scalar-cmp](a: t, b: t): ordering {
   mem/bitcast[i8, ordering](gt - lt)
 }
 
-impl comparable for i64 {
-  fn compare(self: i64, other: i64): ordering { compare-scalars(self, other) }
-}
-
-impl comparable for u64 {
-  fn compare(self: u64, other: u64): ordering { compare-scalars(self, other) }
-}
-
-impl comparable for u8 {
-  fn compare(self: u8, other: u8): ordering { compare-scalars(self, other) }
+impl[t: scalar-cmp] comparable for t {
+  fn compare(self: t, other: t): ordering { compare-scalars(self, other) }
 }
 
 ns for u8 {
@@ -570,10 +556,12 @@ ns for f64 {
   }
 
   fn format[w: writer](f: f64, w, places: i32) {
-    let stack-buf = array/zeroed[u8, 32]()
-    let written-len: i32 = k1rt/snprintf_f64(stack-buf.get-base().as[ptr], 32, f, places)
-    if written-len <= 0 crash("snprintf_f32 returned $written-len")
-    w.write-bytes(stack-buf.as-span().slice(0, written-len.as[size]))
+    let stack-buf = array/zeroed[u8, 512]()
+    let cap = stack-buf.as-span().len()
+    let written-len: size = k1rt/snprintf_f64(stack-buf.get-base().as[ptr], cap.as[c-sizet], f, places).as[size]
+    if written-len <= 0 crash("snprintf_f64 returned $written-len")
+    if written-len >= cap crash("f64/format: $places places needs $written-len bytes, cap is $cap")
+    w.write-bytes(stack-buf.as-span().slice(0, written-len))
   }
 
   fn from-string(s: string): result[f64, string] {

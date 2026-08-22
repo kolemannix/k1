@@ -105,4 +105,20 @@ fn test() {
   assert(from-string@(string)/from-string("hello").! == "hello")
 
   escape()
+  ordering-test()
+}
+
+fn ordering-test() {
+  assert("abc".compare("abd") is :less)
+  assert("abd".compare("abc") is :greater)
+  assert("abc".compare("abc") is :equal)
+  assert("ab".compare("abc") is :less)
+  assert("abc".compare("ab") is :greater)
+  assert("".compare("") is :equal)
+  assert("".compare("a") is :less)
+  assert("Z".compare("a") is :less)
+
+  let words: list[string] = ["pear", "apple", "fig", "apple", ""]
+  words.sort()
+  assert-equals(words.join("|"), "|apple|apple|fig|pear")
 }

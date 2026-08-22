@@ -1,0 +1,210 @@
+use std/map
+
+let(mutable) failures: int = 0
+
+fn same(name: string, at-comptime: string, at-runtime: string) {
+  if at-comptime != at-runtime {
+    failures = failures + 1
+    println("MISMATCH $name")
+    println("  comptime: $at-comptime")
+    println("  runtime:  $at-runtime")
+  }
+}
+
+ns work {
+  let INTS: list[int] = [-9223372036854775807 - 1, -1000000007, -7, -1, 0, 1, 7, 1000000007, 9223372036854775807]
+  let DIVISORS: list[int] = [-1000000007, -7, -1, 1, 7, 1000000007]
+
+  fn int-ops(): string {
+    let w = string-builder/new()
+    for a in INTS {
+      for b in DIVISORS {
+        w.write("${a + b},${a - b},${a * b},${a / b},${a % b},")
+        w.write("${a & b},${a | b},${a ^ b},${a < b},${a <= b},${a == b},")
+      }
+      w.write("${a >> 3},${a >> 63},${a.abs()};")
+    }
+    w.build()
+  }
+
+  fn shift-ops(): string {
+    let w = string-builder/new()
+    for a in [0: u64, 1, 255, 65535, 0xDEADBEEF, 0xFFFFFFFFFFFFFFFF] {
+      for s in [0: u32, 1, 7, 31, 32, 63] {
+        w.write("${a << s},${a >> s},")
+      }
+      w.write("${a.next-pow2()},${a.trailing-zeros()};")
+    }
+    w.build()
+  }
+
+  fn narrow-ops(): string {
+    let w = string-builder/new()
+    let i8s: list[i8] = [-128, -1, 0, 1, 127]
+    for a in i8s {
+      w.write("${a.as[i16]},${a.as[i32]},${a.as[i64]},${a.as[u8]};")
+    }
+    let i16s: list[i16] = [-32768, -1, 0, 1, 32767]
+    for a in i16s {
+      w.write("${a.as[i32]},${a.as[i64]},${a.as[u16]},${a.as[i8]};")
+    }
+    let i32s: list[i32] = [-2147483648, -70000, -1, 0, 1, 70000, 2147483647]
+    for a in i32s {
+      w.write("${a.as[i64]},${a.as[u32]},${a.as[i16]},${a.as[i8]},${a.as[f64]};")
+    }
+    let i64s: list[i64] = [-5000000000, -1, 0, 1, 5000000000]
+    for a in i64s {
+      w.write("${a.as[i32]},${a.as[i32].as[i64]},${a.as[i16]},${a.as[u32]};")
+    }
+    w.build()
+  }
+
+  fn float-ops(): string {
+    let w = string-builder/new()
+    for a in [-1.5: f64, -0.0, 0.0, 0.5, 1.0, 3.14159, 1000000.0, 1.0e300] {
+      for b in [-2.0: f64, 0.5, 3.0] {
+        w.write("${a + b},${a - b},${a * b},${a / b},${a < b},${a == b},")
+      }
+      w.write("${a.as[i64]},${a.as[f32]},${a.compare(0.0)};")
+    }
+    w.build()
+  }
+
+  fn string-ops(): string {
+    let w = string-builder/new()
+    for s in ["", "a", "abc", "hello world", "aaaa"] {
+      w.write("${s.len()},${s.to-ascii-upper()},${s.capitalize-ascii()},")
+      w.write("${s.take(2)},${s.drop(2)},${s.take-right(2)},${s.drop-right(2)},")
+      w.write("${s.take(99)},${s.drop(99)},${s.take-right(99)},${s.drop-right(99)},")
+      w.write("${s.index-of-string("a")},${s.contains-string("l")},")
+      w.write("${s.split-by-char('l').len()},${s.compare("abc")};")
+    }
+    for base in [2: u64, 8, 10, 16, 36] {
+      for value in [0: u64, 1, 41, 1048576, 0xFFFFFFFFFFFFFFFF] {
+        core/format-uint(context w.&)(value, base)
+        w.write(",")
+      }
+      w.write(";")
+    }
+    w.build()
+  }
+
+  fn collection-ops(): string {
+    let w = string-builder/new()
+    let values = list/empty[int]()
+    for i in 0.until(200) { values.push((i * 2654435761) % 97) }
+    w.write("$values;")
+    values.sort()
+    w.write("$values;")
+    w.write("${values.filter(fn v. v % 3 == 0)};")
+    w.write("${values.map(fn v. v * 3 - 1)};")
+    w.write("${values.position(42)},${values.contains(7)},${values.reversed()};")
+
+    let words: list[string] = ["pear", "apple", "fig", "apple", ""]
+    words.sort()
+    w.write("${words.join("|")};")
+
+    let grid: array[int, 4] = [4, 3, 2, 1]
+    w.write("$grid;")
+    w.build()
+  }
+
+  fn map-ops(): string {
+    let w = string-builder/new()
+    let m = map/new[string, int]()
+    for i in 0.until(200) { m.insert("k$i", i * i) }
+    for i in 0.until(200) { if i % 3 == 0 { let _ = m.remove("k$i") } }
+    let total = 0
+    for kv in m { total = total + kv.value }
+    w.write("${m.len()},$total,${m.get("k7")},${m.get("k9")};")
+    w.build()
+  }
+
+  type bits32 = union { as-u32: u32, as-f32: f32, as-i32: i32 }
+  type wire = packed { tag: u8, value: u64, crc: u16 }
+  type node = either { leaf(int), pair({ l: *node, r: *node }) }
+
+  fn layout-ops(): string {
+    let w = string-builder/new()
+    let b: bits32 = uninit
+    b.as-u32 = 0x3F800000
+    w.write("${b.as-f32},${b.as-i32};")
+    b.as-f32 = -2.5
+    w.write("${b.as-u32};")
+
+    let p: wire = zeroed()
+    p.tag = 1
+    p.value = 0xDEADBEEFCAFE
+    p.crc = 500
+    w.write("${p.tag},${p.value},${p.crc},${types/size[wire]},${types/align[wire]};")
+    w.build()
+  }
+
+  fn tree-sum(n: *node): int {
+    n.* is { :leaf(v) -> v, :pair(pair) -> tree-sum(pair.l) + tree-sum(pair.r) }
+  }
+
+  fn fib(n: int): int { if n < 2 n else fib(n - 1) + fib(n - 2) }
+
+  fn recursion-ops(): string {
+    let w = string-builder/new()
+    let left = mem/new[node](:pair .{ l = mem/new[node](:leaf 3), r = mem/new[node](:leaf 4) })
+    let root = mem/new[node](:pair .{ l = left, r = mem/new[node](:leaf 5) })
+    w.write("${tree-sum(root)},${fib(24)};")
+    w.build()
+  }
+
+  fn adder(n: int): dyn[fn(int) -> int] { fn[n](x: int) x * n + 1 }
+
+  fn control-ops(): string {
+    let w = string-builder/new()
+    let fs: list[dyn[fn(int) -> int]] = []
+    for i in 0.until(5) { fs.push(adder(i)) }
+    for f in fs { w.write("${f(10)},") }
+
+    let counter = 0
+    let bump = fn[counter.&](x: int) { counter.* = counter.* + x }
+    bump(1); bump(2)
+    w.write("$counter;")
+
+    let log = list/empty[string]()
+    for i in 0.until(5) {
+      defer log.push("d$i")
+      if i == 1 continue
+      if i == 3 break
+      log.push("b$i")
+    }
+    w.write("${log.join(",")};")
+    w.build()
+  }
+}
+
+fn main(): i32 {
+  let a1: string = #static work/int-ops()
+  same("int-ops", a1, work/int-ops())
+  let a2: string = #static work/shift-ops()
+  same("shift-ops", a2, work/shift-ops())
+  let a3: string = #static work/narrow-ops()
+  same("narrow-ops", a3, work/narrow-ops())
+  let a4: string = #static work/float-ops()
+  same("float-ops", a4, work/float-ops())
+  let a5: string = #static work/string-ops()
+  same("string-ops", a5, work/string-ops())
+  let a6: string = #static work/collection-ops()
+  same("collection-ops", a6, work/collection-ops())
+  let a7: string = #static work/map-ops()
+  same("map-ops", a7, work/map-ops())
+  let a8: string = #static work/layout-ops()
+  same("layout-ops", a8, work/layout-ops())
+  let a9: string = #static work/recursion-ops()
+  same("recursion-ops", a9, work/recursion-ops())
+  let a10: string = #static work/control-ops()
+  same("control-ops", a10, work/control-ops())
+
+  if failures > 0 {
+    println("$failures comptime/runtime mismatches")
+    return 1
+  }
+  println("comptime and runtime agree on all 10 groups")
+  0
+}

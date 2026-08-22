@@ -40,9 +40,42 @@ fn test-parsing() {
   //test-parse(`[]`, fn j. j is :array(_));
 }
 
+fn test-rejects() {
+  reject(`nul`)
+  reject(`nulll`)
+  reject(`tru`)
+  reject(`fals`)
+  reject(`n`)
+  reject(`1 2`)
+  reject(`{} {}`)
+  reject(`[1] junk`)
+  reject(`"a" "b"`)
+  accept(` null `)
+  accept(`[1,2]   `)
+}
+
+fn test-escapes() {
+  test-parse(`"a\/b"`, fn j. j is :str "a/b")
+  test-parse(`"a\\rb"`, fn j. j is :str "a\rb")
+  test-parse(`"a\\bb"`, fn j. j is :str s and s.len() == 3 and s.get(1).as[u8] == 8)
+  test-parse(`"a\\fb"`, fn j. j is :str s and s.len() == 3 and s.get(1).as[u8] == 12)
+  test-parse(`"\\\\"`, fn j. j is :str s and s.len() == 1 and s.get(0) == '\\')
+  test-parse(`"a\\nb\\tc"`, fn j. j is :str "a\nb\tc")
+}
+
+fn reject(s: string) {
+  if json/parse-from-string(s) is :ok(_) { crash("expected a parse failure for '$s'") }
+}
+
+fn accept(s: string) {
+  if json/parse-from-string(s) is :err msg { crash("expected '$s' to parse: $msg") }
+}
+
 fn test() {
   test-basic-enum()
   test-parsing()
+  test-rejects()
+  test-escapes()
   test-parse(example-json, fn o. {
     o is :object members
     and members.len() == 5

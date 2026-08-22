@@ -189,6 +189,20 @@ impl show for string {
   fn show(self: string): string { self }
 }
 
+impl comparable for string {
+  fn compare(self: string, other: string): ordering {
+    let shared = if self.len() < other.len() self.len() else other.len()
+    let i: size = 0
+    while i < shared {
+      let mine = self.get(i)
+      let theirs = other.get(i)
+      if mine != theirs { return mine.compare(theirs) }
+      i = i + 1
+    }
+    self.len().compare(other.len())
+  }
+}
+
 impl iterable[item = char, i = buffer-iterator[char]] for string {
   fn iterator(self: string): i { self.span().iterator() }
 }

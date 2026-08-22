@@ -7378,12 +7378,13 @@ impl TypedProgram {
         let mut cur_scope = ctx.scope_id;
         let mut locals_to_mask = self.tmp.new_list(0);
 
-        // Mask everything up to the nearest function scope that is not in input_parameters
+        // Mask every local up to and including the enclosing function scope, minus
+        // the input_parameters. Namespace scopes hold globals, which the VM can read.
         // A better system would be just to run those expressions statically like we do for value macro args
         loop {
             let s = self.scopes.get_scope(cur_scope);
             let parent = s.parent;
-            if s.scope_type == ScopeType::FunctionScope || s.scope_type == ScopeType::Namespace {
+            if s.scope_type == ScopeType::Namespace {
                 break;
             }
 
@@ -7396,6 +7397,9 @@ impl TypedProgram {
                 }
             }
 
+            if s.scope_type == ScopeType::FunctionScope {
+                break;
+            }
             if let Some(parent) = parent { cur_scope = parent } else { break }
         }
         for name in locals_to_mask.as_slice() {
@@ -13061,8 +13065,10 @@ impl TypedProgram {
         let mut loop_block =
             self.new_block_builder(outer_for_expr_scope, ScopeType::WhileLoopBody, body_span, 3);
         let loop_scope_id = loop_block.scope_id;
-        self.scopes
-            .add_loop_info(loop_scope_id, ScopeLoopInfo { break_type: Some(self.builtin_types.empty) });
+        self.scopes.add_loop_info(
+            loop_scope_id,
+            ScopeLoopInfo { break_type: Some(self.builtin_types.empty) },
+        );
 
         let mut consequent_block =
             self.new_block_builder(loop_scope_id, ScopeType::LexicalBlock, iterable_span, 3);

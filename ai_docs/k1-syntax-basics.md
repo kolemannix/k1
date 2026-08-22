@@ -855,13 +855,17 @@ abilities for the actual output. The templates must be literals so their parts
 are known at compile time; an inherent `write` method on a type, or a `write`
 from another ability on a non-writer type, resolves normally.
 
-Raw strings use backticks:
+Backtick strings may span lines and hold unescaped `"`:
 
 ```rust
 let raw = `Hello,
 
   "world"`
 ```
+
+They are not raw: `$name`/`${expr}` interpolate and `\n`, `\t`, `\r`, `\\`, `\$`
+are escapes, exactly as in a double-quoted literal. Only `\"` is left alone,
+since a `"` needs no escaping here.
 
 A backtick literal whose content starts on the line after the opening backtick
 is a block: the leading newline is dropped, indentation common to every line is

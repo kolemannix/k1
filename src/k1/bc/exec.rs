@@ -765,8 +765,7 @@ fn exec_loop(
                 if rhs == 0 {
                     vmerr!("Division by zero");
                 }
-                use std::ops::Div;
-                let r = casted_iop!(width, div, lhs, rhs);
+                let r = casted_iop!(width, wrapping_div, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r as u64));
                 advance!(Opcode::IntDivS);
             }
@@ -789,8 +788,7 @@ fn exec_loop(
                 if rhs == 0 {
                     vmerr!("Division by zero");
                 }
-                use std::ops::Rem;
-                let r = casted_iop!(width, rem, lhs, rhs);
+                let r = casted_iop!(width, wrapping_rem, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r as u64));
                 advance!(Opcode::IntRemS);
             }

@@ -210,13 +210,15 @@ ns for buffer {
     .{ len = new-len, data = new-base }
   }
 
-  fn take[t](self: buffer[t], count: size): buffer[t] { self.slice(0,     count) }
-  fn drop[t](self: buffer[t], count: size): buffer[t] { self.slice(count, self.len) }
+  fn take[t](self: buffer[t], count: size): buffer[t] { self.slice(0, count) }
+  fn drop[t](self: buffer[t], count: size): buffer[t] {
+    self.slice(if count > self.len self.len else count, self.len)
+  }
   fn take-right[t](self: buffer[t], count: size): buffer[t] {
-    self.slice(self.len() - count, self.len())
+    self.slice(if count > self.len 0 else self.len - count, self.len)
   }
   fn drop-right[t](self: buffer[t], count: size): buffer[t] {
-    self.slice(0, self.len() - count)
+    self.slice(0, if count > self.len 0 else self.len - count)
   }
 
   fn starts-with[t: equals](self: buffer[t], other: buffer[t]): bool {
@@ -402,9 +404,75 @@ ns for buffer {
     a-ref.* = b-value
   }
 
+  let SORT_RUN: size = 24
+
   fn sort[t](self: buffer[t]) where t: comparable {
-    let list = list/wrap-buffer(self)
-    list.sort()
+    if self.len <= 1 return
+    if self.len <= SORT_RUN {
+      self._insertion-sort-range(0, self.len - 1)
+      return
+    }
+
+    let run-start: size = 0
+    while run-start < self.len {
+      self._insertion-sort-range(run-start, _at-most(run-start + SORT_RUN, self.len) - 1)
+      run-start = run-start + SORT_RUN
+    }
+
+    let src = self
+    let dst = buffer/allocate[t](self.len)
+    let width = SORT_RUN
+    while width < self.len {
+      let lo: size = 0
+      while lo < src.len {
+        let mid = _at-most(lo + width, src.len)
+        let hi = _at-most(lo + (width * 2), src.len)
+        _merge-runs(src, dst, lo, mid, hi)
+        lo = lo + (width * 2)
+      }
+      let done = src
+      src = dst
+      dst = done
+      width = width * 2
+    }
+    if src.data-ptr() != self.data-ptr() { buffer/copy(src = src, dst = self) }
+  }
+
+  fn _at-most(value: size, limit: size): size { if value > limit limit else value }
+
+  fn _merge-runs[t](src: buffer[t], dst: buffer[t], lo: size, mid: size, hi: size)
+  where t: comparable {
+    let left = lo
+    let right = mid
+    let out = lo
+    while out < hi {
+      let take-left = if left >= mid false
+        else if right >= hi true
+        else not (src.get(right).compare(src.get(left)) is :less)
+      if take-left {
+        dst.set(out, src.get(left))
+        left = left + 1
+      } else {
+        dst.set(out, src.get(right))
+        right = right + 1
+      }
+      out = out + 1
+    }
+  }
+
+  fn _insertion-sort-range[t](self: buffer[t], from: size, to: size) where t: comparable {
+    if to <= from return
+    let i = from + 1
+    while i <= to {
+      let value = self.get(i)
+      let j = i
+      while j > from and self.get(j - 1).compare(value) is :greater {
+        self.set(j, self.get(j - 1))
+        j = j - 1
+      }
+      self.set(j, value)
+      i = i + 1
+    }
   }
 
   fn reverse[t](self: buffer[t]) {

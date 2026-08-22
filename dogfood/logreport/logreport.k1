@@ -1,0 +1,233 @@
+use std/map
+use std/json
+
+let SAMPLE: string = `
+  0012 INFO  api      request ok bytes=1200
+  0031 WARN  api      slow upstream bytes=340
+  0044 ERROR db       connection reset bytes=0
+  0044 DEBUG cache    hit bytes=64
+  0100 INFO  api      request ok bytes=980
+  0101 INFO  db       query ok bytes=51200
+  0130 ERROR api      upstream 502 bytes=17
+  0131 INFO  cache    hit bytes=64
+  0140 WARN  db       lock wait bytes=8
+  0150 INFO  api      request ok bytes=2048
+  bogus line without enough fields
+  0160 TRACE api      unknown level bytes=1
+  0170 ERROR cache    evict storm bytes=4096
+  `
+
+ns log {
+  type level = either(u8) { debug, info, warn, error }
+
+  type entry = { ms: int, level: level, service: string, bytes: int, msg: string }
+
+  fn parse-level(text: string): ?level {
+    if text == "DEBUG" :some :debug
+    else if text == "INFO" :some :info
+    else if text == "WARN" :some :warn
+    else if text == "ERROR" :some :error
+    else :none
+  }
+
+  fn fields(line: string): list[string] {
+    let out = list/empty[string]()
+    for piece in line.split-by-char(' ') {
+      if piece.len() > 0 { out.push(piece) }
+    }
+    out
+  }
+
+  fn parse-line(line: string): result[entry, string] {
+    let parts = fields(line)
+    if parts.len() < 4 { return :err "want at least 4 fields, got ${parts.len()}" }
+    let ms = i64/from-string(parts.get(0)).try
+    require parse-level(parts.get(1)) is :some level else {
+      return :err "unknown level ${parts.get(1)}"
+    }
+    let service = parts.get(2)
+
+    let last = parts.get(parts.len() - 1)
+    if not last.starts-with("bytes=") { return :err "last field is not bytes=" }
+    let bytes = i64/from-string(last.drop("bytes=".len())).try
+
+    let words = list/empty[string]()
+    for i in 3.until(parts.len() - 1) { words.push(parts.get(i)) }
+    :ok .{ ms, level, service, bytes, msg = words.join(" ") }
+  }
+
+  type parsed = { entries: list[entry], rejects: list[string] }
+
+  fn parse-all(text: string): parsed {
+    let entries = list/empty[entry]()
+    let rejects = list/empty[string]()
+    for line in text.split-by-char('\n') {
+      if line.len() == 0 { continue }
+      parse-line(line) is {
+        :ok e -> entries.push(e),
+        :err why -> rejects.push("${line.take(24)}: $why")
+      }
+    }
+    .{ entries, rejects }
+  }
+}
+
+ns report {
+  type row = { service: string, count: int, errors: int, bytes: int, slowest-ms: int }
+
+  impl comparable for row {
+    fn compare(self: row, other: row): ordering {
+      let by-bytes = other.bytes.compare(self.bytes)
+      if by-bytes is :equal { self.service.compare(other.service) } else { by-bytes }
+    }
+  }
+
+  impl print for row {
+    fn print-to[w: writer](self: row, w): empty {
+      w.write("${self.service} count=${self.count} errors=${self.errors} bytes=${self.bytes}")
+    }
+  }
+
+  fn tally(entries: list[log/entry]): list[row] {
+    let by-service = map/new[string, row]()
+    for e in entries {
+      let slot = by-service.get-or-insert(
+        e.service,
+        fn[e]. .{ service = e.service, count = 0, errors = 0, bytes = 0, slowest-ms = 0 }
+      )
+      slot.count = slot.count + 1
+      slot.bytes = slot.bytes + e.bytes
+      if e.level is :error { slot.errors = slot.errors + 1 }
+      if e.ms > slot.slowest-ms { slot.slowest-ms = e.ms }
+    }
+    let rows = list/empty[row]()
+    for kv in by-service { rows.push(kv.value) }
+    rows.sort()
+    rows
+  }
+
+  fn pad-right(text: string, width: size): string {
+    let sb = string-builder/new()
+    sb.write(text)
+    for i in text.len().until(width) { sb.write-char(' ') }
+    sb.build()
+  }
+
+  fn table(rows: list[row], bar-width: int): string {
+    if rows.is-empty() { return "" }
+    let busiest = rows.get(0).bytes
+    let sb = string-builder/new()
+    for r in rows {
+      let bars = if busiest == 0 0 else (r.bytes * bar-width) / busiest
+      sb.write(pad-right(r.service, 8))
+      sb.write(pad-right("${r.bytes}b", 9))
+      for i in 0.until(bars) { sb.write-char('#') }
+      sb.writeln(" ${r.count} entries, ${r.errors} errors")
+    }
+    sb.build()
+  }
+
+  fn to-json(rows: list[row]): string {
+    let sb = string-builder/new()
+    sb.write("[")
+    for r in rows {
+      if it-index > 0 { sb.write(",") }
+      sb.write(`{"service":"${r.service}","count":${r.count},"errors":${r.errors},"bytes":${r.bytes}}`)
+    }
+    sb.write("]")
+    sb.build()
+  }
+
+  fn timeline(entries: list[log/entry]): array[int, 4] {
+    let buckets: array[int, 4] = zeroed()
+    for e in entries {
+      let slot = e.ms / 64
+      if slot >= buckets.len() { continue }
+      buckets.set(slot, buckets.get(slot) + 1)
+    }
+    buckets
+  }
+}
+
+fn first-error(entries: list[log/entry]): ?log/entry {
+  for e in entries {
+    if e.level is :error { return :some e }
+  }
+  :none
+}
+
+fn busiest-bucket(buckets: array[int, 4], threshold: int): ?size {
+  let hit: ?size = :none
+  for i in 0.until(buckets.len()) {
+    if buckets.get(i) >= threshold {
+      hit = :some i
+      break
+    }
+  }
+  hit
+}
+
+fn main(): i32 {
+  let parsed = log/parse-all(SAMPLE)
+  assert-equals(parsed.entries.len(), 11)
+  assert-equals(parsed.rejects.len(), 2)
+
+  println("rejected ${parsed.rejects.len()} lines:")
+  for r in parsed.rejects { println("  $r") }
+
+  require first-error(parsed.entries) is :some worst else { crash("no error entry") }
+  assert-equals(worst.service, "db")
+  assert-equals(worst.msg, "connection reset")
+
+  let rows = report/tally(parsed.entries)
+  assert-equals(rows.len(), 3)
+  assert-equals(rows.get(0).service, "db")
+  assert-equals(rows.get(0).bytes, 51208)
+  assert-equals(rows.get(0).errors, 1)
+  assert-equals(rows.get(1).service, "api")
+  assert-equals(rows.get(2).service, "cache")
+  println("")
+  print(report/table(rows, 40))
+
+  let buckets = report/timeline(parsed.entries)
+  println("\ntimeline (64ms buckets): $buckets")
+  assert-equals(buckets.get(0), 4)
+  assert-equals(busiest-bucket(buckets, 5), :some(2: size))
+  assert-equals(busiest-bucket(buckets, 99), :none)
+
+  let tails = list/empty[string]()
+  for e in parsed.entries { tails.push(e.msg.take-right(12)) }
+  assert-equals(tails.get(0), "request ok")
+  assert-equals(tails.get(5), "query ok")
+
+  let text = report/to-json(rows)
+  require json/parse-from-string(text) is :ok(doc) else { crash("emitted invalid json: $text") }
+  require doc is :array(items) else { crash("expected a json array") }
+  assert-equals(items.len(), 3)
+  require items.get(0) is :object(first) else { crash("expected a json object") }
+  assert(first.get(0).value is :str "db")
+  assert(json/parse-from-string("${text} trailing") is :err(_))
+  println("\njson: $text")
+
+  let names = list/empty[string]()
+  for r in rows { names.push(r.service) }
+  names.sort()
+  assert-equals(names.join(","), "api,cache,db")
+
+  let sb = string-builder/new()
+  for r in rows {
+    sb.write("${r.service}=0b")
+    core/format-uint(context sb.&)(r.bytes.as[u64], 2)
+    sb.write(" ")
+  }
+  println("\n${sb.build()}")
+
+  let quiet = list/empty[report/row]()
+  for r in rows { quiet.push(r) }
+  quiet.filter-in-place(fn r. r.errors == 0)
+  assert(quiet.is-empty())
+
+  let avg = (rows.get(0).bytes.as[f64]) / (rows.get(0).count.as[f64])
+  println("db average payload: $avg bytes")
+  0
+}

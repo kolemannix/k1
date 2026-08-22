@@ -66,5 +66,15 @@ fn test() {
   assert(buf.get(0) == array.get(0))
   assert-equals(buf.get(0), array.get(0))
 
+  test-print()
+
   .{}
+}
+
+fn test-print() {
+  let values: array[int, 3] = [1, 2, 3]
+  assert-equals("$values", "[1,2,3]")
+
+  let holder = .{ items = values, name = "grid" }
+  assert-equals("$holder", ".{ items = [1,2,3], name = grid }")
 }
