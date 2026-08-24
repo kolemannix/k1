@@ -2769,7 +2769,6 @@ impl TypedExprPool {
 
 #[derive(Clone, Copy)]
 pub struct TypePendingDefinition {
-    pub namespace_id: NamespaceId,
     pub scope_id: ScopeId,
     pub parsed_id: ParsedTypeDefnId,
 }
@@ -5181,15 +5180,15 @@ impl TypedProgram {
                         }
                     }
                 }
-                Some((pending_defn, _scope_id)) => {
+                Some((pending_parsed_id, pending_scope_id)) => {
                     let stack_entry = self
                         .type_defn_context
                         .stack
                         .iter()
-                        .find(|e| e.parsed_id == pending_defn.parsed_id)
+                        .find(|e| e.parsed_id == pending_parsed_id)
                         .map(|e| e.reserved_type_id);
                     if let Some(reserved_entry) = stack_entry {
-                        let params = self.ast.get_type_defn(pending_defn.parsed_id).type_params;
+                        let params = self.ast.get_type_defn(pending_parsed_id).type_params;
                         if ty_app.args.len() != params.len() {
                             kbail!(
                                 self,
@@ -5208,7 +5207,7 @@ impl TypedProgram {
                             if self
                                 .type_defn_context
                                 .expanding_aliases
-                                .contains(&pending_defn.parsed_id)
+                                .contains(&pending_parsed_id)
                             {
                                 kbail!(
                                     self,
@@ -5218,11 +5217,11 @@ impl TypedProgram {
                                 );
                             }
                             let alias_rhs =
-                                self.ast.get_type_defn(pending_defn.parsed_id).value_expr;
-                            self.type_defn_context.expanding_aliases.push(pending_defn.parsed_id);
+                                self.ast.get_type_defn(pending_parsed_id).value_expr;
+                            self.type_defn_context.expanding_aliases.push(pending_parsed_id);
                             let rhs_result = self.eval_type_expr_ext(
                                 alias_rhs,
-                                pending_defn.scope_id,
+                                pending_scope_id,
                                 EvalTypeExprContext::EMPTY,
                             );
                             self.type_defn_context.expanding_aliases.pop();
@@ -5287,12 +5286,12 @@ impl TypedProgram {
                     } else {
                         debug!(
                             "Evaluating {} inside {} on demand",
-                            self.ident_str(self.ast.get_type_defn(pending_defn.parsed_id).name),
+                            self.ident_str(self.ast.get_type_defn(pending_parsed_id).name),
                             self.scope_id_to_string(scope_id)
                         );
 
                         let _result =
-                            self.eval_type_defn(pending_defn.parsed_id, pending_defn.scope_id)?;
+                            self.eval_type_defn(pending_parsed_id, pending_scope_id)?;
 
                         // Just re-call this function from the top now that the type exists. (hack? idk)
                         self.eval_type_application(ty_app_id, scope_id, context)
@@ -7449,12 +7448,12 @@ impl TypedProgram {
                 break;
             }
 
-            for (name, vis) in &s.variables {
+            for (name, vis) in self.scopes.iter_scope_variables(cur_scope) {
                 let Some(variable_id) = vis.variable_id() else {
                     continue;
                 };
                 if !input_parameters.iter().any(|(input_var_id, _)| *input_var_id == variable_id) {
-                    locals_to_mask.push_grow(&mut self.tmp, *name);
+                    locals_to_mask.push_grow(&mut self.tmp, name);
                 }
             }
 
@@ -21463,13 +21462,10 @@ impl TypedProgram {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Type { type_id, companion_namespace },
             })
-        } else
-        // This 'else' is load-bearing since we don't actually remove the pending definitions
-        // from the scopes
-        if let Some(pending_type) =
+        } else if let Some(pending_parsed_id) =
             self.scopes.find_pending_type_local(scope_id_to_search, name.name)
         {
-            let type_id = self.eval_type_defn(pending_type.parsed_id, pending_type.scope_id)?;
+            let type_id = self.eval_type_defn(pending_parsed_id, scope_id_to_search)?;
             let companion_namespace = self.get_companion_namespace(type_id);
             found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
@@ -21528,14 +21524,13 @@ impl TypedProgram {
                     return;
                 }
                 let pending_defn = TypePendingDefinition {
-                    namespace_id,
                     scope_id: namespace_scope_id,
                     parsed_id: type_defn_id,
                 };
                 let added = self.scopes.add_pending_type(
                     namespace_scope_id,
                     parsed_type_defn.name,
-                    pending_defn,
+                    type_defn_id,
                 );
                 if !added {
                     self.report(kerr!(

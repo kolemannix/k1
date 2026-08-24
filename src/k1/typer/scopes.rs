@@ -1,26 +1,27 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
-use ahash::HashMapExt;
 use fxhash::FxHashMap;
 
-use std::{collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
+use std::{fmt::Display, num::NonZeroU32};
 
 use crate::{
     SV4, kbail, kerr,
     kmem::{Dlist, List, Mem},
     nz_u32_id,
-    parse::{ParsedAbilityId, ParsedExprId, ParsedGlobalId, QIdent},
+    parse::{ParsedAbilityId, ParsedExprId, ParsedGlobalId, ParsedTypeDefnId, QIdent},
     static_assert_niched, static_assert_size,
     typer::{
         AbilityId, FunctionId, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId, StringId,
-        TypeId, TypePendingDefinition, TypedProgram, VariableId,
+        TypeId, TypedProgram, VariableId,
     },
     vpool::VPool,
 };
 
 nz_u32_id!(ScopeId);
 static_assert_niched!(ScopeId);
+nz_u32_id!(ScopeEntryId);
+nz_u32_id!(NsMapId);
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ScopeType {
@@ -119,70 +120,89 @@ pub enum ContextAbilityEntry {
     Ambiguous,
 }
 
-/// A packed (scope, symbol) key for the global per-kind symbol maps
-type ScopeKey = u64;
-
-type ScopeMap<V> = ahash::HashMap<ScopeKey, V>;
-
-#[inline]
-fn skey(scope: ScopeId, sym: u32) -> ScopeKey {
-    ((scope.as_u32() as u64) << 32) | sym as u64
-}
-
-#[inline]
-fn skey_name(scope: ScopeId, name: StringId) -> ScopeKey {
-    skey(scope, name.as_u32())
-}
-
-#[inline]
-fn skey_scope_part(key: ScopeKey) -> u32 {
-    (key >> 32) as u32
-}
-
-#[inline]
-fn skey_name_part(key: ScopeKey) -> StringId {
-    StringId::from_u32((key & 0xFFFF_FFFF) as u32).unwrap()
-}
-
-#[inline]
-fn skey_parts(key: ScopeKey) -> (StringId, u32) {
-    (skey_name_part(key), skey_scope_part(key))
-}
-
-/// One scope's entries in a per-kind symbol map
-fn entries_in_scope<T: Copy>(
-    map: &ScopeMap<T>,
-    scope_id: ScopeId,
-) -> impl Iterator<Item = (StringId, T)> + '_ {
-    map.iter().filter_map(move |(key, v)| {
-        let (name, key_scope_id) = skey_parts(*key);
-        (key_scope_id == scope_id.as_u32()).then_some((name, *v))
-    })
-}
-
 pub mod kinds {
-    pub const CONTEXT_VARIABLES: u8 = 1 << 0;
-    pub const FUNCTIONS: u8 = 1 << 1;
-    pub const NAMESPACES: u8 = 1 << 2;
-    pub const TYPES: u8 = 1 << 3;
-    pub const ABILITIES: u8 = 1 << 4;
-    pub const PENDING_TYPES: u8 = 1 << 5;
-    pub const PENDING_ABILITIES: u8 = 1 << 6;
-    pub const TYPE_PARAM_SUBSTS: u8 = 1 << 7;
+    pub const CONTEXT_VARIABLES: u16 = 1 << 0;
+    pub const FUNCTIONS: u16 = 1 << 1;
+    pub const NAMESPACES: u16 = 1 << 2;
+    pub const TYPES: u16 = 1 << 3;
+    pub const ABILITIES: u16 = 1 << 4;
+    pub const PENDING_TYPES: u16 = 1 << 5;
+    pub const PENDING_ABILITIES: u16 = 1 << 6;
+    pub const TYPE_PARAM_SUBSTS: u16 = 1 << 7;
+    pub const PENDING_GLOBALS: u16 = 1 << 8;
+    pub const VARIABLES: u16 = 1 << 9;
+}
+
+/// The origin of a symbol in a scope
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provenance {
+    Defined,
+    Use,
+}
+
+#[derive(Clone, Copy)]
+pub struct ScopeEntry {
+    /// the name for name-keyed kinds and the type/ability id for id-keyed kinds
+    key: u32,
+    prev_entry: Option<ScopeEntryId>,
+    pub provenance: Provenance,
+    payload: EntryPayload,
+}
+static_assert_size!(ScopeEntry, 20);
+
+#[derive(Clone, Copy)]
+enum EntryPayload {
+    Variable(VariableInScope),
+    Function(FunctionId),
+    Type(TypeId),
+    Namespace(NamespaceId),
+    Ability(AbilityId),
+    PendingType(ParsedTypeDefnId),
+    PendingAbility(ParsedAbilityId),
+    PendingGlobal(ParsedGlobalId),
+    ContextByType(VariableId),
+    ContextByAbility(ContextAbilityEntry),
+    TypeSubst(TypeId),
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct NsEntry {
+    function: Option<(FunctionId, Provenance)>,
+    namespace: Option<(NamespaceId, Provenance)>,
+    ty: NsEntryTypeValue,
+    ability: NsEntryAbilityVAlue,
+    global: NsEntryGlobalValue,
+}
+static_assert_size!(NsEntry, 40);
+
+#[derive(Clone, Copy, Default)]
+enum NsEntryTypeValue {
+    #[default]
+    None,
+    Pending(ParsedTypeDefnId),
+    Defined(TypeId, Provenance),
+}
+
+#[derive(Clone, Copy, Default)]
+enum NsEntryAbilityVAlue {
+    #[default]
+    None,
+    Pending(ParsedAbilityId),
+    Defined(AbilityId, Provenance),
+}
+
+#[derive(Clone, Copy, Default)]
+enum NsEntryGlobalValue {
+    #[default]
+    None,
+    Pending(ParsedGlobalId),
+    Bound(VariableInScope, Provenance),
 }
 
 pub struct Scopes {
     pub scopes: VPool<Scope, ScopeId>,
-    context_variables_by_type: ScopeMap<VariableId>,
-    context_variables_by_ability: ScopeMap<ContextAbilityEntry>,
-    functions: ScopeMap<FunctionId>,
-    namespaces: ScopeMap<NamespaceId>,
-    types: ScopeMap<TypeId>,
-    type_param_substs: ScopeMap<TypeId>,
-    abilities: ScopeMap<AbilityId>,
-    pending_type_defns: ScopeMap<TypePendingDefinition>,
-    pending_ability_defns: ScopeMap<ParsedAbilityId>,
-    pending_globals: ScopeMap<ParsedGlobalId>,
+    entries: VPool<ScopeEntry, ScopeEntryId>,
+    ns_maps: VPool<FxHashMap<StringId, NsEntry>, NsMapId>,
     pub lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
     pub loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
     pub block_defers: FxHashMap<ScopeId, ScopeDefers>,
@@ -199,16 +219,8 @@ impl Scopes {
         use crate::snap::{snap_map_with, write_map_snap};
         let Scopes {
             scopes,
-            context_variables_by_type,
-            context_variables_by_ability,
-            functions,
-            namespaces,
-            types,
-            type_param_substs,
-            abilities,
-            pending_type_defns,
-            pending_ability_defns,
-            pending_globals,
+            entries,
+            ns_maps,
             lambda_info,
             loop_info,
             block_defers,
@@ -222,24 +234,37 @@ impl Scopes {
         w.write_section("scopes");
         w.write_len(scopes.len());
         for (_, scope) in scopes.iter_with_ids() {
-            let Scope { parent, scope_type, kinds, nearest_lambda, owner_id, variables } = scope;
+            let Scope {
+                parent,
+                scope_type,
+                kinds,
+                nearest_lambda,
+                owner_id,
+                entries: entry_head,
+                ns_map,
+            } = scope;
+            // nocommit claude why can't scope now be written as pod?
             w.write_t(parent);
             w.write_t(scope_type);
             w.write_t(kinds);
             w.write_t(nearest_lambda);
             w.write_t(owner_id);
-            write_map_snap(w, variables);
+            w.write_t(entry_head);
+            w.write_t(ns_map);
         }
-        write_map_snap(w, context_variables_by_type);
-        write_map_snap(w, context_variables_by_ability);
-        write_map_snap(w, functions);
-        write_map_snap(w, namespaces);
-        write_map_snap(w, types);
-        write_map_snap(w, type_param_substs);
-        write_map_snap(w, abilities);
-        write_map_snap(w, pending_type_defns);
-        write_map_snap(w, pending_ability_defns);
-        write_map_snap(w, pending_globals);
+        w.write_len(entries.len());
+        // nocommit claude why can't scopeentry be written as pod?
+        for entry in entries.iter() {
+            let ScopeEntry { key, prev_entry: prev, provenance, payload } = entry;
+            w.write_t(key);
+            w.write_t(prev);
+            w.write_t(provenance);
+            w.write_t(payload);
+        }
+        w.write_len(ns_maps.len());
+        for map in ns_maps.iter() {
+            write_map_snap(w, map);
+        }
         write_map_snap(w, lambda_info);
         write_map_snap(w, loop_info);
         snap_map_with(w, block_defers, |w, defers| w.write_slice(&defers.deferred_exprs));
@@ -259,28 +284,40 @@ impl Scopes {
         use crate::snap::{restore_map_snap, restore_map_with};
         r.section("scopes");
         let mut scopes = VPool::make("scopes");
-        let n = r.read_len();
-        for _ in 0..n {
+        for _ in 0..r.read_len() {
             let parent = r.read_t();
             let scope_type = r.read_t();
             let kinds = r.read_t();
             let nearest_lambda = r.read_t();
             let owner_id = r.read_t();
-            let variables = restore_map_snap(r);
-            scopes.add(Scope { parent, scope_type, kinds, nearest_lambda, owner_id, variables });
+            let entries = r.read_t();
+            let ns_map = r.read_t();
+            scopes.add(Scope {
+                parent,
+                scope_type,
+                kinds,
+                nearest_lambda,
+                owner_id,
+                entries,
+                ns_map,
+            });
+        }
+        let mut entries = VPool::make("scope_entries");
+        for _ in 0..r.read_len() {
+            let key = r.read_t();
+            let prev = r.read_t();
+            let provenance = r.read_t();
+            let payload = r.read_t();
+            entries.add(ScopeEntry { key, prev_entry: prev, provenance, payload });
+        }
+        let mut ns_maps = VPool::make("scope_ns_maps");
+        for _ in 0..r.read_len() {
+            ns_maps.add(restore_map_snap(r));
         }
         Scopes {
             scopes,
-            context_variables_by_type: restore_map_snap(r),
-            context_variables_by_ability: restore_map_snap(r),
-            functions: restore_map_snap(r),
-            namespaces: restore_map_snap(r),
-            types: restore_map_snap(r),
-            type_param_substs: restore_map_snap(r),
-            abilities: restore_map_snap(r),
-            pending_type_defns: restore_map_snap(r),
-            pending_ability_defns: restore_map_snap(r),
-            pending_globals: restore_map_snap(r),
+            entries,
+            ns_maps,
             lambda_info: restore_map_snap(r),
             loop_info: restore_map_snap(r),
             block_defers: restore_map_with(r, |r| ScopeDefers {
@@ -297,22 +334,13 @@ impl Scopes {
 
     pub const ROOT_SCOPE_ID: ScopeId = ScopeId(NonZeroU32::new(1).unwrap());
     pub fn make() -> Self {
-        let root_scope = Scope::make(ScopeType::Namespace, ScopeOwnerId::None);
         let mut scopes = Scopes {
             scopes: VPool::make("scopes"),
-            context_variables_by_type: ScopeMap::new(),
-            context_variables_by_ability: ScopeMap::new(),
-            functions: ScopeMap::new(),
-            namespaces: ScopeMap::new(),
-            types: ScopeMap::new(),
-            type_param_substs: ScopeMap::new(),
-            abilities: ScopeMap::new(),
-            pending_type_defns: ScopeMap::new(),
-            pending_ability_defns: ScopeMap::new(),
-            pending_globals: ScopeMap::new(),
-            lambda_info: FxHashMap::new(),
-            loop_info: FxHashMap::new(),
-            block_defers: FxHashMap::new(),
+            entries: VPool::make("scope_entries"),
+            ns_maps: VPool::make("scope_ns_maps"),
+            lambda_info: FxHashMap::default(),
+            loop_info: FxHashMap::default(),
+            block_defers: FxHashMap::default(),
             core_scope_id: ScopeId::PENDING,
             k1_scope_id: ScopeId::PENDING,
             mem_scope_id: ScopeId::PENDING,
@@ -320,7 +348,7 @@ impl Scopes {
             array_scope_id: ScopeId::PENDING,
             vector_scope_id: ScopeId::PENDING,
         };
-        let id = scopes.scopes.add(root_scope);
+        let id = scopes.add_scope(None, ScopeType::Namespace, ScopeOwnerId::None);
         debug_assert_eq!(id, Self::ROOT_SCOPE_ID);
         scopes
     }
@@ -332,6 +360,43 @@ impl Scopes {
     #[inline]
     pub fn root_scope_id(&self) -> ScopeId {
         Self::ROOT_SCOPE_ID
+    }
+
+    fn add_scope(
+        &mut self,
+        parent: Option<ScopeId>,
+        scope_type: ScopeType,
+        owner_id: ScopeOwnerId,
+    ) -> ScopeId {
+        let nearest_lambda = match scope_type {
+            ScopeType::LambdaScope => None, // set to its own id below
+            // A lambda never appears above an ability, namespace, or type defn scope,
+            // nor outside a function (no locally defined named functions)
+            ScopeType::AbilityDefn
+            | ScopeType::AbilityImpl
+            | ScopeType::TypeDefn
+            | ScopeType::Namespace
+            | ScopeType::FunctionScope => None,
+            _ => parent.and_then(|p| self.get_scope(p).nearest_lambda),
+        };
+        let ns_map = if scope_type == ScopeType::Namespace {
+            Some(self.ns_maps.add(FxHashMap::default()))
+        } else {
+            None
+        };
+        let id = self.scopes.add(Scope {
+            parent,
+            scope_type,
+            kinds: 0,
+            nearest_lambda,
+            owner_id,
+            entries: None,
+            ns_map,
+        });
+        if scope_type == ScopeType::LambdaScope {
+            self.scopes.get_mut(id).nearest_lambda = Some(id);
+        }
+        id
     }
 
     pub fn add_sibling_scope(
@@ -350,24 +415,7 @@ impl Scopes {
         scope_type: ScopeType,
         scope_owner_id: ScopeOwnerId,
     ) -> ScopeId {
-        let mut scope = Scope::make(scope_type, scope_owner_id);
-        scope.parent = Some(parent_scope_id);
-        scope.nearest_lambda = match scope_type {
-            ScopeType::LambdaScope => None, // set to its own id below
-            // A lambda never appears above an ability, namespace, or type defn scope,
-            // nor outside a function (no locally defined named functions)
-            ScopeType::AbilityDefn
-            | ScopeType::AbilityImpl
-            | ScopeType::TypeDefn
-            | ScopeType::Namespace
-            | ScopeType::FunctionScope => None,
-            _ => self.get_scope(parent_scope_id).nearest_lambda,
-        };
-        let id = self.scopes.add(scope);
-        if scope_type == ScopeType::LambdaScope {
-            self.scopes.get_mut(id).nearest_lambda = Some(id);
-        }
-        id
+        self.add_scope(Some(parent_scope_id), scope_type, scope_owner_id)
     }
 
     pub fn get_scope(&self, id: ScopeId) -> &Scope {
@@ -390,47 +438,487 @@ impl Scopes {
         self.get_scope(scope_id).owner_id
     }
 
+    fn entry_find<V>(
+        &self,
+        head: Option<ScopeEntryId>,
+        key: u32,
+        sel: impl Fn(EntryPayload) -> Option<V>,
+    ) -> Option<V> {
+        let mut cur = head;
+        while let Some(id) = cur {
+            let entry = self.entries.get(id);
+            if entry.key == key
+                && let Some(v) = sel(entry.payload)
+            {
+                return Some(v);
+            }
+            cur = entry.prev_entry;
+        }
+        None
+    }
+
+    fn entry_push(
+        &mut self,
+        scope_id: ScopeId,
+        key: u32,
+        payload: EntryPayload,
+        provenance: Provenance,
+        kind: u16,
+    ) {
+        let head = self.get_scope(scope_id).entries;
+        let id = self.entries.add(ScopeEntry { key, prev_entry: head, provenance, payload });
+        let scope = self.get_scope_mut(scope_id);
+        scope.entries = Some(id);
+        scope.kinds |= kind;
+    }
+
+    fn scope_entries(&self, head: Option<ScopeEntryId>) -> impl Iterator<Item = ScopeEntry> + '_ {
+        std::iter::successors(head, move |id| self.entries.get(*id).prev_entry)
+            .map(move |id| *self.entries.get(id))
+    }
+
+    fn ns_entry(&self, map_id: NsMapId, name: StringId) -> Option<&NsEntry> {
+        self.ns_maps.get(map_id).get(&name)
+    }
+
+    fn ns_entry_mut(&mut self, map_id: NsMapId, name: StringId) -> &mut NsEntry {
+        self.ns_maps.get_mut(map_id).entry(name).or_default()
+    }
+
+    /// Walk the scope chain from `scope_id` to the root, probing scopes whose
+    /// `kinds` contains `kind` with `f`. Returns the first hit and its scope.
+    #[inline]
+    fn walk_chain<V>(
+        &self,
+        scope_id: ScopeId,
+        kind: u16,
+        f: impl Fn(ScopeId) -> Option<V>,
+    ) -> Option<(V, ScopeId)> {
+        let mut scope_id = scope_id;
+        loop {
+            let scope = self.get_scope(scope_id);
+            if scope.kinds & kind != 0
+                && let Some(v) = f(scope_id)
+            {
+                return Some((v, scope_id));
+            }
+            scope_id = scope.parent?;
+        }
+    }
+
     pub fn find_namespace(&self, scope: ScopeId, ident: StringId) -> Option<NamespaceId> {
-        self.walk_chain(scope, kinds::NAMESPACES, |sid| {
-            self.namespaces.get(&skey_name(sid, ident)).copied()
+        self.walk_chain(scope, kinds::NAMESPACES, |sid| self.find_namespace_local(sid, ident))
+            .map(|(v, _)| v)
+    }
+
+    pub fn find_namespace_local(&self, scope_id: ScopeId, ident: StringId) -> Option<NamespaceId> {
+        let scope = self.get_scope(scope_id);
+        match scope.ns_map {
+            Some(m) => self.ns_entry(m, ident)?.namespace.map(|(ns, _)| ns),
+            None => self.entry_find(scope.entries, ident.as_u32(), |p| match p {
+                EntryPayload::Namespace(ns) => Some(ns),
+                _ => None,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub fn add_namespace(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        namespace_id: NamespaceId,
+    ) -> bool {
+        self.bind_namespace(scope_id, ident, namespace_id, Provenance::Defined)
+    }
+
+    fn bind_namespace(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        namespace_id: NamespaceId,
+        provenance: Provenance,
+    ) -> bool {
+        let added = match self.get_scope(scope_id).ns_map {
+            Some(m) => {
+                let entry = self.ns_entry_mut(m, ident);
+                if entry.namespace.is_some() {
+                    false
+                } else {
+                    entry.namespace = Some((namespace_id, provenance));
+                    true
+                }
+            }
+            None => {
+                if self.find_namespace_local(scope_id, ident).is_some() {
+                    false
+                } else {
+                    self.entry_push(
+                        scope_id,
+                        ident.as_u32(),
+                        EntryPayload::Namespace(namespace_id),
+                        provenance,
+                        kinds::NAMESPACES,
+                    );
+                    true
+                }
+            }
+        };
+        if added {
+            self.get_scope_mut(scope_id).kinds |= kinds::NAMESPACES;
+        }
+        added
+    }
+
+    pub fn replace_namespace(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        namespace_id: NamespaceId,
+    ) {
+        match self.get_scope(scope_id).ns_map {
+            Some(m) => {
+                self.ns_entry_mut(m, ident).namespace = Some((namespace_id, Provenance::Defined));
+            }
+            None => self.entry_push(
+                scope_id,
+                ident.as_u32(),
+                EntryPayload::Namespace(namespace_id),
+                Provenance::Defined,
+                kinds::NAMESPACES,
+            ),
+        }
+        self.get_scope_mut(scope_id).kinds |= kinds::NAMESPACES;
+    }
+
+    pub fn find_function(&self, scope: ScopeId, ident: StringId) -> Option<FunctionId> {
+        self.walk_chain(scope, kinds::FUNCTIONS, |sid| self.find_function_local(sid, ident))
+            .map(|(v, _)| v)
+    }
+
+    pub fn find_function_local(&self, scope_id: ScopeId, ident: StringId) -> Option<FunctionId> {
+        let scope = self.get_scope(scope_id);
+        match scope.ns_map {
+            Some(m) => self.ns_entry(m, ident)?.function.map(|(f, _)| f),
+            None => self.entry_find(scope.entries, ident.as_u32(), |p| match p {
+                EntryPayload::Function(f) => Some(f),
+                _ => None,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub fn add_function(
+        &mut self,
+        scope_id: ScopeId,
+        identifier: StringId,
+        function_id: FunctionId,
+    ) -> bool {
+        self.bind_function(scope_id, identifier, function_id, Provenance::Defined)
+    }
+
+    fn bind_function(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        function_id: FunctionId,
+        provenance: Provenance,
+    ) -> bool {
+        let added = match self.get_scope(scope_id).ns_map {
+            Some(m) => {
+                let entry = self.ns_entry_mut(m, ident);
+                if entry.function.is_some() {
+                    false
+                } else {
+                    entry.function = Some((function_id, provenance));
+                    true
+                }
+            }
+            None => {
+                if self.find_function_local(scope_id, ident).is_some() {
+                    false
+                } else {
+                    self.entry_push(
+                        scope_id,
+                        ident.as_u32(),
+                        EntryPayload::Function(function_id),
+                        provenance,
+                        kinds::FUNCTIONS,
+                    );
+                    true
+                }
+            }
+        };
+        if added {
+            self.get_scope_mut(scope_id).kinds |= kinds::FUNCTIONS;
+        }
+        added
+    }
+
+    pub fn find_type(&self, scope_id: ScopeId, ident: StringId) -> Option<(TypeId, ScopeId)> {
+        self.walk_chain(scope_id, kinds::TYPES, |sid| self.find_type_local(sid, ident))
+    }
+
+    pub fn find_type_local(&self, scope_id: ScopeId, ident: StringId) -> Option<TypeId> {
+        let scope = self.get_scope(scope_id);
+        match scope.ns_map {
+            Some(m) => match self.ns_entry(m, ident)?.ty {
+                NsEntryTypeValue::Defined(t, _) => Some(t),
+                NsEntryTypeValue::None | NsEntryTypeValue::Pending(_) => None,
+            },
+            None => self.entry_find(scope.entries, ident.as_u32(), |p| match p {
+                EntryPayload::Type(t) => Some(t),
+                _ => None,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub fn add_type(&mut self, scope_id: ScopeId, ident: StringId, ty: TypeId) -> bool {
+        self.bind_type(scope_id, ident, ty, Provenance::Defined)
+    }
+
+    fn bind_type(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        ty: TypeId,
+        provenance: Provenance,
+    ) -> bool {
+        let added = match self.get_scope(scope_id).ns_map {
+            Some(m) => {
+                let entry = self.ns_entry_mut(m, ident);
+                match entry.ty {
+                    NsEntryTypeValue::Defined(..) => false,
+                    NsEntryTypeValue::None | NsEntryTypeValue::Pending(_) => {
+                        entry.ty = NsEntryTypeValue::Defined(ty, provenance);
+                        true
+                    }
+                }
+            }
+            None => {
+                if self.find_type_local(scope_id, ident).is_some() {
+                    false
+                } else {
+                    self.entry_push(
+                        scope_id,
+                        ident.as_u32(),
+                        EntryPayload::Type(ty),
+                        provenance,
+                        kinds::TYPES,
+                    );
+                    true
+                }
+            }
+        };
+        if added {
+            self.get_scope_mut(scope_id).kinds |= kinds::TYPES;
+        }
+        added
+    }
+
+    #[must_use]
+    pub fn add_pending_type(
+        &mut self,
+        scope_id: ScopeId,
+        name: StringId,
+        parsed_id: ParsedTypeDefnId,
+    ) -> bool {
+        let added = match self.get_scope(scope_id).ns_map {
+            Some(m) => {
+                let entry = self.ns_entry_mut(m, name);
+                match entry.ty {
+                    NsEntryTypeValue::None => {
+                        entry.ty = NsEntryTypeValue::Pending(parsed_id);
+                        true
+                    }
+                    NsEntryTypeValue::Pending(_) => false,
+                    NsEntryTypeValue::Defined(..) => true,
+                }
+            }
+            None => {
+                if self.find_pending_type_local(scope_id, name).is_some() {
+                    false
+                } else {
+                    self.entry_push(
+                        scope_id,
+                        name.as_u32(),
+                        EntryPayload::PendingType(parsed_id),
+                        Provenance::Defined,
+                        kinds::PENDING_TYPES,
+                    );
+                    true
+                }
+            }
+        };
+        if added {
+            self.get_scope_mut(scope_id).kinds |= kinds::PENDING_TYPES;
+        }
+        added
+    }
+
+    pub fn find_pending_type(
+        &self,
+        scope_id: ScopeId,
+        name: StringId,
+    ) -> Option<(ParsedTypeDefnId, ScopeId)> {
+        self.walk_chain(scope_id, kinds::PENDING_TYPES, |sid| {
+            self.find_pending_type_local(sid, name)
         })
-        .map(|(v, _)| v)
     }
 
-    pub fn find_namespace_local(&self, scope: ScopeId, ident: StringId) -> Option<NamespaceId> {
-        self.namespaces.get(&skey_name(scope, ident)).copied()
-    }
-
-    pub fn functions_in_scope(
+    pub fn find_pending_type_local(
         &self,
         scope_id: ScopeId,
-    ) -> impl Iterator<Item = (StringId, FunctionId)> + '_ {
-        entries_in_scope(&self.functions, scope_id)
-    }
-
-    pub fn types_in_scope(
-        &self,
-        scope_id: ScopeId,
-    ) -> impl Iterator<Item = (StringId, TypeId)> + '_ {
-        entries_in_scope(&self.types, scope_id)
-    }
-
-    pub fn abilities_in_scope(
-        &self,
-        scope_id: ScopeId,
-    ) -> impl Iterator<Item = (StringId, AbilityId)> + '_ {
-        entries_in_scope(&self.abilities, scope_id)
+        name: StringId,
+    ) -> Option<ParsedTypeDefnId> {
+        let scope = self.get_scope(scope_id);
+        match scope.ns_map {
+            Some(m) => match self.ns_entry(m, name)?.ty {
+                NsEntryTypeValue::Pending(parsed_id) => Some(parsed_id),
+                NsEntryTypeValue::None | NsEntryTypeValue::Defined(..) => None,
+            },
+            None => self.entry_find(scope.entries, name.as_u32(), |p| match p {
+                EntryPayload::PendingType(parsed_id) => Some(parsed_id),
+                _ => None,
+            }),
+        }
     }
 
     pub fn find_ability(&self, scope_id: ScopeId, name: StringId) -> Option<AbilityId> {
-        self.walk_chain(scope_id, kinds::ABILITIES, |sid| {
-            self.abilities.get(&skey_name(sid, name)).copied()
-        })
-        .map(|(v, _)| v)
+        self.walk_chain(scope_id, kinds::ABILITIES, |sid| self.find_ability_local(sid, name))
+            .map(|(v, _)| v)
     }
 
     pub fn find_ability_local(&self, scope_id: ScopeId, name: StringId) -> Option<AbilityId> {
-        self.abilities.get(&skey_name(scope_id, name)).copied()
+        let scope = self.get_scope(scope_id);
+        match scope.ns_map {
+            Some(m) => match self.ns_entry(m, name)?.ability {
+                NsEntryAbilityVAlue::Defined(a, _) => Some(a),
+                NsEntryAbilityVAlue::None | NsEntryAbilityVAlue::Pending(_) => None,
+            },
+            None => self.entry_find(scope.entries, name.as_u32(), |p| match p {
+                EntryPayload::Ability(a) => Some(a),
+                _ => None,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub fn add_ability(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        ability_id: AbilityId,
+    ) -> bool {
+        self.bind_ability(scope_id, ident, ability_id, Provenance::Defined)
+    }
+
+    fn bind_ability(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        ability_id: AbilityId,
+        provenance: Provenance,
+    ) -> bool {
+        let added = match self.get_scope(scope_id).ns_map {
+            Some(m) => {
+                let entry = self.ns_entry_mut(m, ident);
+                match entry.ability {
+                    NsEntryAbilityVAlue::Defined(..) => false,
+                    NsEntryAbilityVAlue::None | NsEntryAbilityVAlue::Pending(_) => {
+                        entry.ability = NsEntryAbilityVAlue::Defined(ability_id, provenance);
+                        true
+                    }
+                }
+            }
+            None => {
+                if self.find_ability_local(scope_id, ident).is_some() {
+                    false
+                } else {
+                    self.entry_push(
+                        scope_id,
+                        ident.as_u32(),
+                        EntryPayload::Ability(ability_id),
+                        provenance,
+                        kinds::ABILITIES,
+                    );
+                    true
+                }
+            }
+        };
+        if added {
+            self.get_scope_mut(scope_id).kinds |= kinds::ABILITIES;
+        }
+        added
+    }
+
+    #[must_use]
+    pub fn add_pending_ability_defn(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        parsed_defn_id: ParsedAbilityId,
+    ) -> bool {
+        let added = match self.get_scope(scope_id).ns_map {
+            Some(m) => {
+                let entry = self.ns_entry_mut(m, ident);
+                match entry.ability {
+                    NsEntryAbilityVAlue::None => {
+                        entry.ability = NsEntryAbilityVAlue::Pending(parsed_defn_id);
+                        true
+                    }
+                    NsEntryAbilityVAlue::Pending(_) => false,
+                    NsEntryAbilityVAlue::Defined(..) => true,
+                }
+            }
+            None => {
+                let existing = self.entry_find(
+                    self.get_scope(scope_id).entries,
+                    ident.as_u32(),
+                    |p| match p {
+                        EntryPayload::PendingAbility(id) => Some(id),
+                        _ => None,
+                    },
+                );
+                if existing.is_some() {
+                    false
+                } else {
+                    self.entry_push(
+                        scope_id,
+                        ident.as_u32(),
+                        EntryPayload::PendingAbility(parsed_defn_id),
+                        Provenance::Defined,
+                        kinds::PENDING_ABILITIES,
+                    );
+                    true
+                }
+            }
+        };
+        if added {
+            self.get_scope_mut(scope_id).kinds |= kinds::PENDING_ABILITIES;
+        }
+        added
+    }
+
+    pub fn find_pending_ability(
+        &self,
+        scope_id: ScopeId,
+        ident: StringId,
+    ) -> Option<(ParsedAbilityId, ScopeId)> {
+        self.walk_chain(scope_id, kinds::PENDING_ABILITIES, |sid| {
+            let scope = self.get_scope(sid);
+            match scope.ns_map {
+                Some(m) => match self.ns_entry(m, ident)?.ability {
+                    NsEntryAbilityVAlue::Pending(parsed_id) => Some(parsed_id),
+                    NsEntryAbilityVAlue::None | NsEntryAbilityVAlue::Defined(..) => None,
+                },
+                None => self.entry_find(scope.entries, ident.as_u32(), |p| match p {
+                    EntryPayload::PendingAbility(id) => Some(id),
+                    _ => None,
+                }),
+            }
+        })
     }
 
     pub fn collect_ability_ids_bound_to_names(
@@ -445,10 +933,10 @@ impl Scopes {
             let scope = self.get_scope(scope_id);
             if scope.kinds & kinds::ABILITIES != 0 {
                 for name in names {
-                    if let Some(found) = self.abilities.get(&skey_name(scope_id, *name))
-                        && !ability_ids.contains(found)
+                    if let Some(found) = self.find_ability_local(scope_id, *name)
+                        && !ability_ids.contains(&found)
                     {
-                        ability_ids.push_grow(mem, *found);
+                        ability_ids.push_grow(mem, found);
                     }
                 }
             }
@@ -457,6 +945,170 @@ impl Scopes {
                 None => return,
             }
         }
+    }
+
+    pub fn add_pending_global(
+        &mut self,
+        scope_id: ScopeId,
+        name: StringId,
+        parsed_id: ParsedGlobalId,
+    ) {
+        match self.get_scope(scope_id).ns_map {
+            Some(m) => {
+                let entry = self.ns_entry_mut(m, name);
+                if matches!(entry.global, NsEntryGlobalValue::None) {
+                    entry.global = NsEntryGlobalValue::Pending(parsed_id);
+                }
+            }
+            None => {
+                if self.find_pending_global_local(scope_id, name).is_none() {
+                    self.entry_push(
+                        scope_id,
+                        name.as_u32(),
+                        EntryPayload::PendingGlobal(parsed_id),
+                        Provenance::Defined,
+                        kinds::PENDING_GLOBALS,
+                    );
+                }
+            }
+        }
+        self.get_scope_mut(scope_id).kinds |= kinds::PENDING_GLOBALS;
+    }
+
+    pub fn find_pending_global(
+        &self,
+        scope_id: ScopeId,
+        name: StringId,
+    ) -> Option<(ParsedGlobalId, ScopeId)> {
+        self.walk_chain(scope_id, kinds::PENDING_GLOBALS, |sid| {
+            self.find_pending_global_local(sid, name)
+        })
+    }
+
+    pub fn find_pending_global_local(
+        &self,
+        scope_id: ScopeId,
+        name: StringId,
+    ) -> Option<ParsedGlobalId> {
+        let scope = self.get_scope(scope_id);
+        match scope.ns_map {
+            Some(m) => match self.ns_entry(m, name)?.global {
+                NsEntryGlobalValue::Pending(parsed_id) => Some(parsed_id),
+                NsEntryGlobalValue::None | NsEntryGlobalValue::Bound(..) => None,
+            },
+            None => self.entry_find(scope.entries, name.as_u32(), |p| match p {
+                EntryPayload::PendingGlobal(id) => Some(id),
+                _ => None,
+            }),
+        }
+    }
+
+    pub fn find_variable(
+        &self,
+        scope_id: ScopeId,
+        ident: StringId,
+    ) -> Option<(VariableId, ScopeId)> {
+        let (in_scope, found_scope) = self
+            .walk_chain(scope_id, kinds::VARIABLES, |sid| self.find_variable_local(sid, ident))?;
+        match in_scope {
+            VariableInScope::Defined(id) => Some((id, found_scope)),
+            VariableInScope::Masked => None,
+        }
+    }
+
+    pub fn find_variable_local(
+        &self,
+        scope_id: ScopeId,
+        ident: StringId,
+    ) -> Option<VariableInScope> {
+        let scope = self.get_scope(scope_id);
+        match scope.ns_map {
+            Some(m) => match self.ns_entry(m, ident)?.global {
+                NsEntryGlobalValue::Bound(vis, _) => Some(vis),
+                NsEntryGlobalValue::None | NsEntryGlobalValue::Pending(_) => None,
+            },
+            None => self.entry_find(scope.entries, ident.as_u32(), |p| match p {
+                EntryPayload::Variable(vis) => Some(vis),
+                _ => None,
+            }),
+        }
+    }
+
+    pub fn add_variable(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        variable_id: VariableId,
+    ) -> bool {
+        self.bind_variable(
+            scope_id,
+            ident,
+            VariableInScope::Defined(variable_id),
+            Provenance::Defined,
+        )
+    }
+
+    pub fn mask_variable(&mut self, scope_id: ScopeId, ident: StringId) {
+        let _ = self.bind_variable(scope_id, ident, VariableInScope::Masked, Provenance::Defined);
+    }
+
+    /// Always binds (shadowing is a new entry over the old); returns whether
+    /// the name was previously unbound in this scope
+    fn bind_variable(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        vis: VariableInScope,
+        provenance: Provenance,
+    ) -> bool {
+        let was_unbound = match self.get_scope(scope_id).ns_map {
+            Some(m) => {
+                let entry = self.ns_entry_mut(m, ident);
+                let unbound = !matches!(entry.global, NsEntryGlobalValue::Bound(..));
+                entry.global = NsEntryGlobalValue::Bound(vis, provenance);
+                unbound
+            }
+            None => {
+                let unbound = self.find_variable_local(scope_id, ident).is_none();
+                self.entry_push(
+                    scope_id,
+                    ident.as_u32(),
+                    EntryPayload::Variable(vis),
+                    provenance,
+                    kinds::VARIABLES,
+                );
+                unbound
+            }
+        };
+        self.get_scope_mut(scope_id).kinds |= kinds::VARIABLES;
+        was_unbound
+    }
+
+    pub fn add_context_variable(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        variable_id: VariableId,
+        type_id: TypeId,
+    ) -> bool {
+        let occupied = self
+            .entry_find(self.get_scope(scope_id).entries, type_id.as_u32(), |p| match p {
+                EntryPayload::ContextByType(v) => Some(v),
+                _ => None,
+            })
+            .is_some();
+        if occupied {
+            return false;
+        }
+        self.entry_push(
+            scope_id,
+            type_id.as_u32(),
+            EntryPayload::ContextByType(variable_id),
+            Provenance::Defined,
+            kinds::CONTEXT_VARIABLES,
+        );
+        self.add_variable(scope_id, ident, variable_id);
+        true
     }
 
     pub fn find_context_variable_by_type(
@@ -468,10 +1120,12 @@ impl Scopes {
         loop {
             let scope = self.get_scope(scope_id);
             if scope.kinds & kinds::CONTEXT_VARIABLES != 0
-                && let Some(v) =
-                    self.context_variables_by_type.get(&skey(scope_id, type_id.as_u32()))
+                && let Some(v) = self.entry_find(scope.entries, type_id.as_u32(), |p| match p {
+                    EntryPayload::ContextByType(v) => Some(v),
+                    _ => None,
+                })
             {
-                return Some(*v);
+                return Some(v);
             }
             // Context variables are only ever function params or `let(context)`s
             // in function bodies -- never globals -- so once the walk climbs
@@ -487,110 +1141,84 @@ impl Scopes {
         }
     }
 
-    pub fn find_variable(
-        &self,
-        scope_id: ScopeId,
-        ident: StringId,
-    ) -> Option<(VariableId, ScopeId)> {
-        let mut scope_id = scope_id;
-        loop {
-            let scope = self.get_scope(scope_id);
-            match scope.variables.get(&ident) {
-                Some(VariableInScope::Defined(id)) => return Some((*id, scope_id)),
-                Some(VariableInScope::Masked) => return None,
-                None => {}
-            }
-            scope_id = scope.parent?;
-        }
-    }
-
-    pub fn find_variable_local(
-        &self,
-        scope_id: ScopeId,
-        ident: StringId,
-    ) -> Option<VariableInScope> {
-        self.get_scope(scope_id).variables.get(&ident).copied()
-    }
-
-    pub fn find_function(&self, scope: ScopeId, ident: StringId) -> Option<FunctionId> {
-        self.walk_chain(scope, kinds::FUNCTIONS, |sid| {
-            self.functions.get(&skey_name(sid, ident)).copied()
-        })
-        .map(|(v, _)| v)
-    }
-
-    pub fn find_function_local(&self, scope: ScopeId, ident: StringId) -> Option<FunctionId> {
-        self.functions.get(&skey_name(scope, ident)).copied()
-    }
-
-    /// Walk the scope chain from `scope_id` to the root, probing scopes whose
-    /// `kinds` contains `kind` with `f`. Returns the first hit and its scope.
-    #[inline]
-    fn walk_chain<V>(
-        &self,
-        scope_id: ScopeId,
-        kind: u8,
-        f: impl Fn(ScopeId) -> Option<V>,
-    ) -> Option<(V, ScopeId)> {
-        let mut scope_id = scope_id;
-        loop {
-            let scope = self.get_scope(scope_id);
-            if scope.kinds & kind != 0
-                && let Some(v) = f(scope_id)
-            {
-                return Some((v, scope_id));
-            }
-            scope_id = scope.parent?;
-        }
-    }
-
-    #[must_use]
-    pub fn add_function(
+    pub fn add_context_variable_by_ability(
         &mut self,
         scope_id: ScopeId,
-        identifier: StringId,
-        function_id: FunctionId,
+        ability_id: AbilityId,
+        variable_id: VariableId,
     ) -> bool {
-        let added = match self.functions.entry(skey_name(scope_id, identifier)) {
-            Entry::Occupied(_) => false,
-            Entry::Vacant(e) => {
-                e.insert(function_id);
-                true
-            }
-        };
-        if added {
-            self.get_scope_mut(scope_id).kinds |= kinds::FUNCTIONS;
+        let occupied = self
+            .entry_find(self.get_scope(scope_id).entries, ability_id.as_u32(), |p| match p {
+                EntryPayload::ContextByAbility(e) => Some(e),
+                _ => None,
+            })
+            .is_some();
+        if occupied {
+            return false;
         }
-        added
+        self.entry_push(
+            scope_id,
+            ability_id.as_u32(),
+            EntryPayload::ContextByAbility(ContextAbilityEntry::Unique(variable_id)),
+            Provenance::Defined,
+            kinds::CONTEXT_VARIABLES,
+        );
+        true
     }
 
-    #[must_use]
-    pub fn add_type(&mut self, scope_id: ScopeId, ident: StringId, ty: TypeId) -> bool {
-        let added = match self.types.entry(skey_name(scope_id, ident)) {
-            Entry::Occupied(_) => false,
-            Entry::Vacant(e) => {
-                e.insert(ty);
-                true
+    pub fn poison_context_ability_key(&mut self, scope_id: ScopeId, ability_id: AbilityId) {
+        self.entry_push(
+            scope_id,
+            ability_id.as_u32(),
+            EntryPayload::ContextByAbility(ContextAbilityEntry::Ambiguous),
+            Provenance::Defined,
+            kinds::CONTEXT_VARIABLES,
+        );
+    }
+
+    pub fn find_context_variable_by_ability(
+        &self,
+        scope: ScopeId,
+        ability_id: AbilityId,
+    ) -> Option<ContextAbilityEntry> {
+        let mut scope_id = scope;
+        loop {
+            let scope = self.get_scope(scope_id);
+            if scope.kinds & kinds::CONTEXT_VARIABLES != 0
+                && let Some(entry) =
+                    self.entry_find(scope.entries, ability_id.as_u32(), |p| match p {
+                        EntryPayload::ContextByAbility(e) => Some(e),
+                        _ => None,
+                    })
+            {
+                return Some(entry);
             }
-        };
-        if added {
-            self.get_scope_mut(scope_id).kinds |= kinds::TYPES;
+            // Same walk and namespace stop as find_context_variable_by_type
+            if scope.scope_type == ScopeType::Namespace {
+                return None;
+            }
+            scope_id = scope.parent?;
         }
-        added
     }
 
     pub fn add_type_substitution(&mut self, scope_id: ScopeId, from: TypeId, to: TypeId) -> bool {
-        let added = match self.type_param_substs.entry(skey(scope_id, from.as_u32())) {
-            Entry::Occupied(_) => false,
-            Entry::Vacant(e) => {
-                e.insert(to);
-                true
-            }
-        };
-        if added {
-            self.get_scope_mut(scope_id).kinds |= kinds::TYPE_PARAM_SUBSTS;
+        let occupied = self
+            .entry_find(self.get_scope(scope_id).entries, from.as_u32(), |p| match p {
+                EntryPayload::TypeSubst(t) => Some(t),
+                _ => None,
+            })
+            .is_some();
+        if occupied {
+            return false;
         }
-        added
+        self.entry_push(
+            scope_id,
+            from.as_u32(),
+            EntryPayload::TypeSubst(to),
+            Provenance::Defined,
+            kinds::TYPE_PARAM_SUBSTS,
+        );
+        true
     }
 
     pub fn find_type_substitution(
@@ -599,221 +1227,137 @@ impl Scopes {
         from: TypeId,
     ) -> Option<(TypeId, ScopeId)> {
         self.walk_chain(scope_id, kinds::TYPE_PARAM_SUBSTS, |sid| {
-            self.type_param_substs.get(&skey(sid, from.as_u32())).copied()
+            self.entry_find(self.get_scope(sid).entries, from.as_u32(), |p| match p {
+                EntryPayload::TypeSubst(t) => Some(t),
+                _ => None,
+            })
         })
     }
 
-    pub fn overwrite_type(&mut self, scope_id: ScopeId, ident: StringId, ty: TypeId) -> bool {
-        self.get_scope_mut(scope_id).kinds |= kinds::TYPES;
-        self.types.insert(skey_name(scope_id, ident), ty).is_some()
-    }
-
-    pub fn find_type(&self, scope_id: ScopeId, ident: StringId) -> Option<(TypeId, ScopeId)> {
-        self.walk_chain(scope_id, kinds::TYPES, |sid| {
-            self.types.get(&skey_name(sid, ident)).copied()
-        })
-    }
-
-    pub fn find_type_local(&self, scope_id: ScopeId, ident: StringId) -> Option<TypeId> {
-        self.types.get(&skey_name(scope_id, ident)).copied()
-    }
-
-    #[must_use]
-    pub fn add_namespace(
+    pub fn add_use_binding(
         &mut self,
         scope_id: ScopeId,
-        ident: StringId,
-        namespace_id: NamespaceId,
-    ) -> bool {
-        let added = match self.namespaces.entry(skey_name(scope_id, ident)) {
-            Entry::Occupied(_) => false,
-            Entry::Vacant(e) => {
-                e.insert(namespace_id);
-                true
-            }
-        };
-        if added {
-            self.get_scope_mut(scope_id).kinds |= kinds::NAMESPACES;
-        }
-        added
-    }
-
-    pub fn replace_namespace(
-        &mut self,
-        scope_id: ScopeId,
-        ident: StringId,
-        namespace_id: NamespaceId,
+        useable_symbol: &UseableSymbol,
+        name_to_use: StringId,
     ) {
-        self.namespaces.insert(skey_name(scope_id, ident), namespace_id);
-        self.get_scope_mut(scope_id).kinds |= kinds::NAMESPACES;
-    }
-
-    #[must_use]
-    pub fn add_ability(
-        &mut self,
-        scope_id: ScopeId,
-        ident: StringId,
-        ability_id: AbilityId,
-    ) -> bool {
-        let added = match self.abilities.entry(skey_name(scope_id, ident)) {
-            Entry::Occupied(_) => false,
-            Entry::Vacant(e) => {
-                e.insert(ability_id);
-                true
+        match useable_symbol.id {
+            UseableSymbolId::Function(function_id) => {
+                let _ = self.bind_function(scope_id, name_to_use, function_id, Provenance::Use);
             }
-        };
-        if added {
-            self.get_scope_mut(scope_id).kinds |= kinds::ABILITIES;
+            UseableSymbolId::Global(variable_id) => {
+                let _ = self.bind_variable(
+                    scope_id,
+                    name_to_use,
+                    VariableInScope::Defined(variable_id),
+                    Provenance::Use,
+                );
+            }
+            UseableSymbolId::Type { type_id, companion_namespace } => {
+                let _ = self.bind_type(scope_id, name_to_use, type_id, Provenance::Use);
+                if let Some(companion_namespace) = companion_namespace {
+                    let _ = self.bind_namespace(
+                        scope_id,
+                        name_to_use,
+                        companion_namespace,
+                        Provenance::Use,
+                    );
+                }
+            }
+            UseableSymbolId::Namespace(ns_id) => {
+                let _ = self.bind_namespace(scope_id, name_to_use, ns_id, Provenance::Use);
+            }
+            UseableSymbolId::Ability(ability_id, namespace_id) => {
+                let _ = self.bind_ability(scope_id, name_to_use, ability_id, Provenance::Use);
+                let _ = self.bind_namespace(scope_id, name_to_use, namespace_id, Provenance::Use);
+            }
         }
-        added
-    }
-
-    #[must_use]
-    pub fn add_pending_type(
-        &mut self,
-        scope_id: ScopeId,
-        name: StringId,
-        pending_type: TypePendingDefinition,
-    ) -> bool {
-        let added = match self.pending_type_defns.entry(skey_name(scope_id, name)) {
-            Entry::Occupied(_) => false,
-            Entry::Vacant(e) => {
-                e.insert(pending_type);
-                true
-            }
-        };
-        if added {
-            self.get_scope_mut(scope_id).kinds |= kinds::PENDING_TYPES;
-        }
-        added
-    }
-
-    pub fn find_pending_type(
-        &self,
-        scope_id: ScopeId,
-        name: StringId,
-    ) -> Option<(TypePendingDefinition, ScopeId)> {
-        self.walk_chain(scope_id, kinds::PENDING_TYPES, |sid| {
-            self.pending_type_defns.get(&skey_name(sid, name)).copied()
-        })
-    }
-
-    pub fn find_pending_type_local(
-        &self,
-        scope_id: ScopeId,
-        name: StringId,
-    ) -> Option<TypePendingDefinition> {
-        self.pending_type_defns.get(&skey_name(scope_id, name)).copied()
-    }
-
-    pub fn add_pending_global(
-        &mut self,
-        scope_id: ScopeId,
-        name: StringId,
-        parsed_id: ParsedGlobalId,
-    ) {
-        self.pending_globals.entry(skey_name(scope_id, name)).or_insert(parsed_id);
-    }
-
-    pub fn find_pending_global(
-        &self,
-        scope_id: ScopeId,
-        name: StringId,
-    ) -> Option<(ParsedGlobalId, ScopeId)> {
-        let mut scope_id = scope_id;
-        loop {
-            if let Some(id) = self.pending_globals.get(&skey_name(scope_id, name)) {
-                return Some((*id, scope_id));
-            }
-            scope_id = self.get_scope(scope_id).parent?;
-        }
-    }
-
-    pub fn find_pending_global_local(
-        &self,
-        scope_id: ScopeId,
-        name: StringId,
-    ) -> Option<ParsedGlobalId> {
-        self.pending_globals.get(&skey_name(scope_id, name)).copied()
-    }
-
-    #[must_use]
-    pub fn add_pending_ability_defn(
-        &mut self,
-        scope_id: ScopeId,
-        ident: StringId,
-        parsed_defn_id: ParsedAbilityId,
-    ) -> bool {
-        let added = match self.pending_ability_defns.entry(skey_name(scope_id, ident)) {
-            Entry::Occupied(_) => false,
-            Entry::Vacant(e) => {
-                e.insert(parsed_defn_id);
-                true
-            }
-        };
-        if added {
-            self.get_scope_mut(scope_id).kinds |= kinds::PENDING_ABILITIES;
-        }
-        added
-    }
-
-    pub fn remove_pending_ability_defn(&mut self, scope_id: ScopeId, ident: StringId) -> bool {
-        // Note: we leave the PENDING_ABILITIES kind bit set; it's a hint that
-        // the map *may* hit, not a guarantee
-        self.pending_ability_defns.remove(&skey_name(scope_id, ident)).is_some()
-    }
-
-    pub fn find_pending_ability(
-        &self,
-        scope_id: ScopeId,
-        ident: StringId,
-    ) -> Option<(ParsedAbilityId, ScopeId)> {
-        self.walk_chain(scope_id, kinds::PENDING_ABILITIES, |sid| {
-            self.pending_ability_defns.get(&skey_name(sid, ident)).copied()
-        })
-    }
-
-    /// Iterate the symbols of one kind defined directly in `scope_id`.
-    /// A filtered scan of the whole map: for debugging/dumps and cold paths only.
-    fn iter_scope_map<V: Copy>(
-        map: &ScopeMap<V>,
-        scope_id: ScopeId,
-    ) -> impl Iterator<Item = (StringId, V)> + '_ {
-        map.iter().filter_map(move |(k, v)| {
-            if skey_scope_part(*k) == scope_id.as_u32() {
-                Some((skey_name_part(*k), *v))
-            } else {
-                None
-            }
-        })
     }
 
     pub fn iter_scope_variables(
         &self,
         scope_id: ScopeId,
     ) -> impl Iterator<Item = (StringId, VariableInScope)> + '_ {
-        self.get_scope(scope_id).variables.iter().map(|(k, v)| (*k, *v))
+        let scope = self.get_scope(scope_id);
+        let map = scope.ns_map.map(|m| {
+            self.ns_maps.get(m).iter().filter_map(|(name, e)| match e.global {
+                NsEntryGlobalValue::Bound(vis, _) => Some((*name, vis)),
+                NsEntryGlobalValue::None | NsEntryGlobalValue::Pending(_) => None,
+            })
+        });
+        let list = self.scope_entries(scope.entries).filter_map(|e| match e.payload {
+            EntryPayload::Variable(vis) => Some((StringId::from_u32(e.key).unwrap(), vis)),
+            _ => None,
+        });
+        map.into_iter().flatten().chain(list)
     }
 
     pub fn iter_scope_functions(
         &self,
         scope_id: ScopeId,
     ) -> impl Iterator<Item = (StringId, FunctionId)> + '_ {
-        Self::iter_scope_map(&self.functions, scope_id)
+        let scope = self.get_scope(scope_id);
+        let map = scope.ns_map.map(|m| {
+            self.ns_maps.get(m).iter().filter_map(|(name, e)| e.function.map(|(f, _)| (*name, f)))
+        });
+        let list = self.scope_entries(scope.entries).filter_map(|e| match e.payload {
+            EntryPayload::Function(f) => Some((StringId::from_u32(e.key).unwrap(), f)),
+            _ => None,
+        });
+        map.into_iter().flatten().chain(list)
     }
 
     pub fn iter_scope_types(
         &self,
         scope_id: ScopeId,
     ) -> impl Iterator<Item = (StringId, TypeId)> + '_ {
-        Self::iter_scope_map(&self.types, scope_id)
+        let scope = self.get_scope(scope_id);
+        let map = scope.ns_map.map(|m| {
+            self.ns_maps.get(m).iter().filter_map(|(name, e)| match e.ty {
+                NsEntryTypeValue::Defined(t, _) => Some((*name, t)),
+                NsEntryTypeValue::None | NsEntryTypeValue::Pending(_) => None,
+            })
+        });
+        let list = self.scope_entries(scope.entries).filter_map(|e| match e.payload {
+            EntryPayload::Type(t) => Some((StringId::from_u32(e.key).unwrap(), t)),
+            _ => None,
+        });
+        map.into_iter().flatten().chain(list)
     }
 
     pub fn iter_scope_namespaces(
         &self,
         scope_id: ScopeId,
     ) -> impl Iterator<Item = (StringId, NamespaceId)> + '_ {
-        Self::iter_scope_map(&self.namespaces, scope_id)
+        let scope = self.get_scope(scope_id);
+        let map = scope.ns_map.map(|m| {
+            self.ns_maps
+                .get(m)
+                .iter()
+                .filter_map(|(name, e)| e.namespace.map(|(ns, _)| (*name, ns)))
+        });
+        let list = self.scope_entries(scope.entries).filter_map(|e| match e.payload {
+            EntryPayload::Namespace(ns) => Some((StringId::from_u32(e.key).unwrap(), ns)),
+            _ => None,
+        });
+        map.into_iter().flatten().chain(list)
+    }
+
+    pub fn iter_scope_abilities(
+        &self,
+        scope_id: ScopeId,
+    ) -> impl Iterator<Item = (StringId, AbilityId)> + '_ {
+        let scope = self.get_scope(scope_id);
+        let map = scope.ns_map.map(|m| {
+            self.ns_maps.get(m).iter().filter_map(|(name, e)| match e.ability {
+                NsEntryAbilityVAlue::Defined(a, _) => Some((*name, a)),
+                NsEntryAbilityVAlue::None | NsEntryAbilityVAlue::Pending(_) => None,
+            })
+        });
+        let list = self.scope_entries(scope.entries).filter_map(|e| match e.payload {
+            EntryPayload::Ability(a) => Some((StringId::from_u32(e.key).unwrap(), a)),
+            _ => None,
+        });
+        map.into_iter().flatten().chain(list)
     }
 
     pub fn scope_has_ancestor(&self, scope_id: ScopeId, ancestor: ScopeId) -> bool {
@@ -867,121 +1411,6 @@ impl Scopes {
         ScopeEnclosingFunctions {
             lambda_scope: self.nearest_parent_lambda(scope_id),
             function: self.nearest_parent_function(scope_id),
-        }
-    }
-
-    pub fn add_variable(
-        &mut self,
-        scope_id: ScopeId,
-        ident: StringId,
-        variable_id: VariableId,
-    ) -> bool {
-        // This accomplishes shadowing by overwriting the name in the scope.
-        // I think this is ok because the variable itself (by variable id)
-        // is not lost, in case we wanted to do some analysis.
-        // Still, might need to mark it shadowed explicitly?
-        self.get_scope_mut(scope_id)
-            .variables
-            .insert(ident, VariableInScope::Defined(variable_id))
-            .is_none()
-    }
-
-    pub fn mask_variable(&mut self, scope_id: ScopeId, ident: StringId) {
-        self.get_scope_mut(scope_id).variables.insert(ident, VariableInScope::Masked);
-    }
-
-    pub fn add_context_variable(
-        &mut self,
-        scope_id: ScopeId,
-        ident: StringId,
-        variable_id: VariableId,
-        type_id: TypeId,
-    ) -> bool {
-        match self.context_variables_by_type.entry(skey(scope_id, type_id.as_u32())) {
-            Entry::Occupied(_) => return false,
-            Entry::Vacant(e) => e.insert(variable_id),
-        };
-        self.get_scope_mut(scope_id).kinds |= kinds::CONTEXT_VARIABLES;
-        self.add_variable(scope_id, ident, variable_id);
-        true
-    }
-
-    /// Register a context variable under an ability key. Returns false if the key is
-    /// already claimed in this scope. Explicit `let(context(impl ..))` declarations
-    /// should treat false as an error; derived registrations (function context params
-    /// typed by constrained type params) should instead call
-    /// [`Self::poison_context_ability_key`] so the collision only fails at lookup time.
-    pub fn add_context_variable_by_ability(
-        &mut self,
-        scope_id: ScopeId,
-        ability_id: AbilityId,
-        variable_id: VariableId,
-    ) -> bool {
-        match self.context_variables_by_ability.entry(skey(scope_id, ability_id.as_u32())) {
-            Entry::Occupied(_) => return false,
-            Entry::Vacant(e) => e.insert(ContextAbilityEntry::Unique(variable_id)),
-        };
-        self.get_scope_mut(scope_id).kinds |= kinds::CONTEXT_VARIABLES;
-        true
-    }
-
-    pub fn poison_context_ability_key(&mut self, scope_id: ScopeId, ability_id: AbilityId) {
-        self.context_variables_by_ability
-            .insert(skey(scope_id, ability_id.as_u32()), ContextAbilityEntry::Ambiguous);
-    }
-
-    pub fn find_context_variable_by_ability(
-        &self,
-        scope: ScopeId,
-        ability_id: AbilityId,
-    ) -> Option<ContextAbilityEntry> {
-        let mut scope_id = scope;
-        loop {
-            let scope = self.get_scope(scope_id);
-            if scope.kinds & kinds::CONTEXT_VARIABLES != 0
-                && let Some(entry) =
-                    self.context_variables_by_ability.get(&skey(scope_id, ability_id.as_u32()))
-            {
-                return Some(*entry);
-            }
-            // Same walk and namespace stop as find_context_variable_by_type
-            if scope.scope_type == ScopeType::Namespace {
-                return None;
-            }
-            scope_id = scope.parent?;
-        }
-    }
-
-    pub fn add_use_binding(
-        &mut self,
-        scope_id: ScopeId,
-        useable_symbol: &UseableSymbol,
-        name_to_use: StringId,
-    ) {
-        match useable_symbol.id {
-            UseableSymbolId::Function(function_id) => {
-                // Discard because 'use's should shadow
-                let _ = self.add_function(scope_id, name_to_use, function_id);
-            }
-            UseableSymbolId::Global(variable_id) => {
-                self.add_variable(scope_id, name_to_use, variable_id);
-            }
-            UseableSymbolId::Type { type_id, companion_namespace } => {
-                // Discard because 'use's should shadow
-                let _ = self.add_type(scope_id, name_to_use, type_id);
-                if let Some(companion_namespace) = companion_namespace {
-                    let _ = self.add_namespace(scope_id, name_to_use, companion_namespace);
-                }
-            }
-            UseableSymbolId::Namespace(ns_id) => {
-                // Discard because 'use's should shadow
-                let _ = self.add_namespace(scope_id, name_to_use, ns_id);
-            }
-            UseableSymbolId::Ability(ability_id, namespace_id) => {
-                // Discard because 'use's should shadow
-                let _ = self.add_ability(scope_id, name_to_use, ability_id);
-                let _ = self.add_namespace(scope_id, name_to_use, namespace_id);
-            }
         }
     }
 
@@ -1157,7 +1586,7 @@ impl TypedProgram {
         &self,
         scope_id: ScopeId,
         type_name: &QIdent,
-    ) -> K1Result<Option<(TypePendingDefinition, ScopeId)>> {
+    ) -> K1Result<Option<(ParsedTypeDefnId, ScopeId)>> {
         // Unqualified mentions are implicitly recursive searches
         // But qualified mentions imply that the targeted symbol lives directly at the given path!
         if type_name.path.is_empty() {
@@ -1167,7 +1596,7 @@ impl TypedProgram {
             Ok(self
                 .scopes
                 .find_pending_type_local(scope_to_search, type_name.name)
-                .map(|defn| (defn, scope_to_search)))
+                .map(|parsed_id| (parsed_id, scope_to_search)))
         }
     }
 
@@ -1270,42 +1699,21 @@ impl VariableInScope {
     }
 }
 
-/// Except for variables, a scope's symbols live in `Scopes`' global maps,
-/// keyed by (scope, name); `kinds` records which of those maps can hit for
-/// this scope. Variables stay inline because identifier resolution probes
-/// them constantly and the freshly-written per-scope maps stay cache-hot.
-///
-/// Scopes don't have names; for pretty-printing, derive one from `owner_id`
-/// via `TypedProgram::scope_owner_name`.
 pub struct Scope {
     pub parent: Option<ScopeId>,
     pub scope_type: ScopeType,
     /// Bitset of `kinds::*`
-    // nocommit claude can grow this; we need variables but also I think we added something recently
-    // and skipped a kind tag due to no bits. A pending_ something, I think.
-    kinds: u8,
+    kinds: u16,
     /// The enclosing lambda scope (or self, for a lambda scope), fixed at creation.
     /// Queried for every variable mention for capture detection
     nearest_lambda: Option<ScopeId>,
     pub owner_id: ScopeOwnerId,
-    // nocommit claude we gotta get variables out of here
-    pub variables: FxHashMap<StringId, VariableInScope>,
+    entries: Option<ScopeEntryId>,
+    ns_map: Option<NsMapId>,
 }
-// he doesn't grow because we get `variables` out.
-static_assert_size!(Scope, 64);
+static_assert_size!(Scope, 36);
 
 impl Scope {
-    pub fn make(scope_type: ScopeType, owner_id: ScopeOwnerId) -> Scope {
-        Scope {
-            parent: None,
-            scope_type,
-            kinds: 0,
-            nearest_lambda: None,
-            owner_id,
-            variables: FxHashMap::new(),
-        }
-    }
-
     pub fn clear_nearest_lambda(&mut self) {
         self.nearest_lambda = None;
     }

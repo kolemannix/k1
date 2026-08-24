@@ -146,21 +146,19 @@ fn render_ns_main(k1: &TypedProgram, tree: &NsTree, ns_id: NamespaceId, path: &[
     let ns = k1.namespaces.get(ns_id);
     let scope_id = ns.scope_id;
 
-    let mut functions: Vec<_> = k1.scopes.functions_in_scope(scope_id).collect();
+    let mut functions: Vec<_> = k1.scopes.iter_scope_functions(scope_id).collect();
     functions.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
 
-    let mut types: Vec<_> = k1.scopes.types_in_scope(scope_id).collect();
+    let mut types: Vec<_> = k1.scopes.iter_scope_types(scope_id).collect();
     types.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
 
-    let mut abilities: Vec<_> = k1.scopes.abilities_in_scope(scope_id).collect();
+    let mut abilities: Vec<_> = k1.scopes.iter_scope_abilities(scope_id).collect();
     abilities.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
 
     let mut globals: Vec<_> = k1
         .scopes
-        .get_scope(scope_id)
-        .variables
-        .iter()
-        .filter_map(|(name, vis)| vis.variable_id().map(|vid| (*name, vid)))
+        .iter_scope_variables(scope_id)
+        .filter_map(|(name, vis)| vis.variable_id().map(|vid| (name, vid)))
         .collect();
     globals.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
 

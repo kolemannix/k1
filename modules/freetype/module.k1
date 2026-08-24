@@ -3,7 +3,7 @@ use std/process
 fn module(): k1/module {
   let m = k1/module/new()
   m.lib("freetype", :dynamic)
-  m.setup(["libs/libfreetype.dylib", "freetype.k1"], ["ft.h"])
+  m.setup(outputs = ["libs/libfreetype.dylib", "freetype.k1"], inputs = ["ft.h"])
   m
 }
 

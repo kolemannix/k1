@@ -451,7 +451,7 @@ fn collect_one_scope(
             });
         }
     }
-    for (name, _ability_id) in k1.scopes.abilities_in_scope(scope_id) {
+    for (name, _ability_id) in k1.scopes.iter_scope_abilities(scope_id) {
         if seen.abilities.insert(name) {
             items.push(CompletionCandidate {
                 label: k1.ident_str(name).to_string(),
