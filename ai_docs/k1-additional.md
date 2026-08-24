@@ -84,6 +84,15 @@ declared once on the containing namespace with `ns(lib("foo"))` — whole-ns, an
 opening may declare it, disagreeing openings are an error — or per-fn with the
 `lib` modifier (`fn(extern("sym"), lib("foo"))`), which overrides the ns lib.
 
+A manifest may declare a setup step — `m.setup(outputs, inputs)` — paired with
+a top-level `fn setup(ctx: k1/setup-ctx)` in the same root file. When the
+declared outputs are stale (hashed together with the inputs, the root file, and
+the target), the compiler compiles the root file alone as a standalone
+core/std-only program — deps don't load and nested setups never run — and
+executes `fn setup` in the VM with cwd = the module dir, before the module's
+remaining sources are read, so setup may generate them. See `modules/libuv`,
+`modules/http`, `modules/sdl3`.
+
 ```rust
 fn module(): k1/module {
   let m = k1/module/new()

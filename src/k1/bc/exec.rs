@@ -933,6 +933,16 @@ fn exec_loop(
                 write_slot!(operand!(0), Value::u64(!v.bits()));
                 advance!(Opcode::BitNot);
             }
+            Opcode::FloatNeg => {
+                let v = read_src!(operand!(1)).bits();
+                let r = match header_a(h) {
+                    32 => (-f32::from_bits(v as u32)).to_bits() as u64,
+                    64 => (-f64::from_bits(v)).to_bits(),
+                    _ => unreachable!(),
+                };
+                write_slot!(operand!(0), Value::u64(r));
+                advance!(Opcode::FloatNeg);
+            }
             Opcode::Cast => {
                 let kind = CastKind::from_u8(header_a(h));
                 let b = header_b(h);

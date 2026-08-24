@@ -80,6 +80,25 @@ fn test() {
   // Not directly allowed
   assert(test-compile(-1i16.as[u32]).is-some())
 
+  // 2's complement negation
+  assert-equals(5.negated(), -5)
+  assert-equals((-5).negated(), 5)
+  assert-equals(0.negated(), 0)
+  assert-equals(neg/negated(42), -42)
+  assert-equals(127i8.negated(), -127i8)
+  assert-equals(-128i8.negated(), -128i8)
+  assert-equals(-9223372036854775808i64.negated(), -9223372036854775808i64)
+  assert-equals(1u8.negated(), 255u8)
+  assert-equals(255u8.negated(), 1u8)
+  assert-equals(0u64.negated(), 0u64)
+  assert-equals(1u64.negated(), 0xFFFF_FFFF_FFFF_FFFFu64)
+  assert-equals(negate-generic(3), -3)
+  assert-equals(negate-generic(2.5), -2.5)
+
   .{}
 
+}
+
+fn negate-generic[t](x: t): t where t: neg {
+  x.negated()
 }

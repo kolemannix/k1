@@ -452,7 +452,7 @@ fn compress-fragment-impl(
           }
           next-hash = hash-bytes(next-ip, shift)
           let found = false
-          candidate = ip.add-bytes(0 - last-distance)
+          candidate = ip.sub-bytes(last-distance)
           if is-match(ip, candidate) and candidate.as[size] < ip.as[size] {
             table.get-ref-unchecked(h).* = ip.diff(base-ip).as[i32]
             found = true

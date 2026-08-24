@@ -146,11 +146,12 @@ pub const ABILITY_ID_SUB: AbilityId = AbilityId(NonZeroU32::new(9).unwrap());
 pub const ABILITY_ID_MUL: AbilityId = AbilityId(NonZeroU32::new(10).unwrap());
 pub const ABILITY_ID_DIV: AbilityId = AbilityId(NonZeroU32::new(11).unwrap());
 pub const ABILITY_ID_REM: AbilityId = AbilityId(NonZeroU32::new(12).unwrap());
-pub const ABILITY_ID_SCALAR_CMP: AbilityId = AbilityId(NonZeroU32::new(13).unwrap());
-pub const ABILITY_ID_COMPARABLE: AbilityId = AbilityId(NonZeroU32::new(14).unwrap());
-pub const ABILITY_ID_TRY: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
-pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
-pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(17).unwrap());
+pub const ABILITY_ID_NEG: AbilityId = AbilityId(NonZeroU32::new(13).unwrap());
+pub const ABILITY_ID_SCALAR_CMP: AbilityId = AbilityId(NonZeroU32::new(14).unwrap());
+pub const ABILITY_ID_COMPARABLE: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
+pub const ABILITY_ID_TRY: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
+pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(17).unwrap());
+pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(18).unwrap());
 //rustfmt: on
 
 pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
@@ -290,7 +291,9 @@ pub enum CompletionSite {
 #[derive(Clone, Copy)]
 pub struct TypeDefnStackEntry {
     pub parsed_id: ParsedTypeDefnId,
-    pub reserved_type_id: TypeId,
+    /// None for `type(alias)` defns: an alias is transparent, so it has no id of its own
+    /// until its rhs is evaluated; re-entrant references resolve by expanding the rhs
+    pub reserved_type_id: Option<TypeId>,
 }
 
 #[derive(Clone, Copy)]
@@ -2091,7 +2094,7 @@ impl BuiltinTyperFunction {
 pub enum BuiltinIr {
     BakeStaticValue,
     Zeroed,
-    BoolNegate,
+    Negate,
     BitNot,
     Bitcast,
     ArithBinop(ArithOpKind),
@@ -2169,7 +2172,7 @@ impl BuiltinIr {
         match self {
             BuiltinIr::BakeStaticValue => "bake_static_value",
             BuiltinIr::Zeroed => "zeroed",
-            BuiltinIr::BoolNegate => "bool_negate",
+            BuiltinIr::Negate => "negate",
             BuiltinIr::BitNot => "bit_not",
             BuiltinIr::Bitcast => "bitcast",
             BuiltinIr::ArithBinop(op_kind) => op_kind.kind_name(),
@@ -2802,6 +2805,10 @@ pub struct TypeDefnContext {
 
     /// Defns completed in this cluster; finiteness-checked once pending instances are resolved
     pub completed: Vec<(TypeId, SpanId)>,
+
+    /// Aliases whose rhs is being expanded to resolve a re-entrant reference; hitting one
+    /// again means the alias cycle contains no nominal type, which cannot terminate
+    pub expanding_aliases: Vec<ParsedTypeDefnId>,
 }
 impl TypeDefnContext {
     fn reset(&mut self) {
@@ -2809,6 +2816,7 @@ impl TypeDefnContext {
         self.recursive_mentions.clear();
         self.pending_instances.clear();
         self.completed.clear();
+        self.expanding_aliases.clear();
     }
 }
 
@@ -3562,15 +3570,15 @@ impl TypedProgram {
         if let Some(setup) = setup_decl
             && self.config.setup_mode != crate::compiler::SetupMode::SetupProgram
         {
-            if !remaining_sources.is_dir() {
-                let msg = "single-file modules cannot declare setup; make it a \
-                           directory module (setup.k1 lives in the module directory)";
-                return Err(self.module_error(manifest_span, msg.to_string()));
-            }
+            let root_filename = {
+                let m = self.modules.get(module_id);
+                self.ast.sources.get(m.root_file_id(&self.mem)).filename
+            };
             let request = crate::compiler::SetupRequest {
                 idents: &self.ast.idents,
                 module_dir: home_dir,
                 module_name,
+                root_filename,
                 outputs: self.mem.getn(setup.outputs),
                 inputs: self.mem.getn(setup.inputs),
                 target: self.config.target,
@@ -3593,6 +3601,14 @@ impl TypedProgram {
         }
 
         let remaining = remaining_sources.into_handle(setup_ran, &self.lsp.source_overrides);
+        // A setup program is the module root compiled standalone against core
+        // and std only: its deps may not be set up yet (their own setups run
+        // after this one), so they never load here
+        let deps = if self.config.setup_mode == crate::compiler::SetupMode::SetupProgram {
+            MSlice::empty()
+        } else {
+            deps
+        };
         let mut dep_handles: Vec<crate::compiler::ModuleRootHandle> = vec![];
         for i in 0..deps.len() {
             let dep_name_id = self.mem.getn(deps)[i as usize].name;
@@ -3635,7 +3651,7 @@ impl TypedProgram {
                 k1_home_modules_path
             } else {
                 let msg = format!(
-                    "Module '{}' depends on '{}', which was not found. Probed: {module_deps_path}, {k1_home_modules_path}",
+                    "Module '{}' depends on '{}', which was not found. Searched {module_deps_path}, {k1_home_modules_path}",
                     self.ident_str(module_name),
                     dep_str,
                 );
@@ -3887,7 +3903,10 @@ impl TypedProgram {
         let ns_scope = primary.namespace_scope_id;
         let Some(setup_fn_id) = self.scopes.find_function_local(ns_scope, self.ast.idents.b.setup)
         else {
-            bail!("setup.k1 must define a top-level `fn setup(ctx: k1/setup-ctx)`");
+            bail!(
+                "a module that declares setup must define a top-level \
+                 `fn setup(ctx: k1/setup-ctx)` in its root file"
+            );
         };
         let setup_ctx_type = self.builtin_types.k1_setup_ctx.unwrap();
         let function = self.get_function(setup_fn_id);
@@ -4015,15 +4034,18 @@ impl TypedProgram {
             kbail!(self, parsed_type_defn.span, "'some' is not a valid type name");
         }
 
-        let reserved_type_id = if !is_alias {
-            let reserved_type_id = self.reserve_type_id();
-            self.type_defn_context
-                .stack
-                .push(TypeDefnStackEntry { parsed_id: parsed_type_defn_id, reserved_type_id });
-            Some(reserved_type_id)
-        } else {
-            None
-        };
+        if is_alias && is_generic_defn {
+            kbail!(
+                self,
+                parsed_type_defn.span,
+                "Alias types cannot have type parameters (yet)"
+            );
+        }
+
+        let reserved_type_id = if !is_alias { Some(self.reserve_type_id()) } else { None };
+        self.type_defn_context
+            .stack
+            .push(TypeDefnStackEntry { parsed_id: parsed_type_defn_id, reserved_type_id });
 
         let type_eval_context = EvalTypeExprContext {
             is_inside_type_definition_rhs: !parsed_type_defn.flags.is_alias(),
@@ -4133,8 +4155,11 @@ impl TypedProgram {
                     defn_scope_id,
                     type_eval_context,
                 )?;
-                let rhs_is_reserved =
-                    self.type_defn_context.stack.iter().any(|e| e.reserved_type_id == rhs_type_id);
+                let rhs_is_reserved = self
+                    .type_defn_context
+                    .stack
+                    .iter()
+                    .any(|e| e.reserved_type_id == Some(rhs_type_id));
                 let rhs_is_pending = self
                     .type_defn_context
                     .pending_instances
@@ -4303,16 +4328,16 @@ impl TypedProgram {
             }
         }
 
+        let Some(defn_stack_entry) = self.type_defn_context.stack.pop() else {
+            self.ice_span(parsed_type_defn.span, "No defn stack entry");
+        };
+        debug_assert_eq!(defn_stack_entry.parsed_id, parsed_type_defn_id);
+        debug_assert_eq!(defn_stack_entry.reserved_type_id, reserved_type_id);
         if !is_alias {
-            let Some(defn_stack_entry) = self.type_defn_context.stack.pop() else {
-                self.ice_span(parsed_type_defn.span, "No defn stack entry");
-            };
-            debug_assert_eq!(defn_stack_entry.reserved_type_id, type_id);
             self.type_defn_context.completed.push((type_id, parsed_type_defn.span));
-
-            if self.type_defn_context.stack.is_empty() {
-                self.finish_type_defn_cluster()
-            }
+        }
+        if self.type_defn_context.stack.is_empty() {
+            self.finish_type_defn_cluster()
         }
         if let Some(idx) = self
             .types_pending_definition
@@ -5163,7 +5188,7 @@ impl TypedProgram {
                         .iter()
                         .find(|e| e.parsed_id == pending_defn.parsed_id)
                         .map(|e| e.reserved_type_id);
-                    if let Some(reserved_type_id) = stack_entry {
+                    if let Some(reserved_entry) = stack_entry {
                         let params = self.ast.get_type_defn(pending_defn.parsed_id).type_params;
                         if ty_app.args.len() != params.len() {
                             kbail!(
@@ -5175,6 +5200,39 @@ impl TypedProgram {
                                 ty_app.args.len()
                             );
                         }
+                        let Some(reserved_type_id) = reserved_entry else {
+                            // An in-progress alias is transparent, so this reference is just
+                            // its rhs; nominal members of the cycle short-circuit to their
+                            // reserved ids above, so expansion terminates unless the alias
+                            // cycle contains no nominal type at all
+                            if self
+                                .type_defn_context
+                                .expanding_aliases
+                                .contains(&pending_defn.parsed_id)
+                            {
+                                kbail!(
+                                    self,
+                                    ty_app.span,
+                                    "Type alias cycle: '{}' refers back to itself without passing through a struct or either",
+                                    &ty_app.name
+                                );
+                            }
+                            let alias_rhs =
+                                self.ast.get_type_defn(pending_defn.parsed_id).value_expr;
+                            self.type_defn_context.expanding_aliases.push(pending_defn.parsed_id);
+                            let rhs_result = self.eval_type_expr_ext(
+                                alias_rhs,
+                                pending_defn.scope_id,
+                                EvalTypeExprContext::EMPTY,
+                            );
+                            self.type_defn_context.expanding_aliases.pop();
+                            let type_id = rhs_result?;
+                            self.emit_ls_entity(
+                                ty_app.name.name_span,
+                                LsEntityKind::Type { type_id, applied_type_id: None },
+                            );
+                            return Ok(type_id);
+                        };
                         if ty_app.args.is_empty() {
                             self.type_defn_context.recursive_mentions.push(reserved_type_id);
                             self.emit_ls_entity(
@@ -5731,8 +5789,11 @@ impl TypedProgram {
                 }
                 new_type_args.push(new_type);
             }
-            let parent_pending =
-                self.type_defn_context.stack.iter().any(|e| e.reserved_type_id == generic_parent);
+            let parent_pending = self
+                .type_defn_context
+                .stack
+                .iter()
+                .any(|e| e.reserved_type_id == Some(generic_parent));
             // On no change, or a cache hit, we avoid committing the args to the arena
             return if parent_pending {
                 // The parent generic is still being defined (mutual recursion), so its
@@ -10044,8 +10105,22 @@ impl TypedProgram {
                 let op = *op;
                 match op.op_kind {
                     ParsedUnaryOpKind::BooleanNegation => {
-                        let negated_expr = self.synth_parsed_bool_not(op.expr, op.span);
-                        self.eval_expr(negated_expr, ctx)
+                        let base = self.eval_expr_with_coercion(
+                            op.expr,
+                            ctx.with_expected_type(Some(BOOL_TYPE_ID)),
+                            true,
+                        )?;
+                        if self.exprs.get_type(base) == NEVER_TYPE_ID {
+                            Ok(base)
+                        } else {
+                            self.synth_typed_call_typed_args(
+                                self.ast.idents.f.neg__negated.with_span(op.span),
+                                &[],
+                                &[base],
+                                ctx.with_no_expected_type(),
+                                false,
+                            )
+                        }
                     }
                     ParsedUnaryOpKind::AddressOf => self.compile_address_of(op.expr, ctx, op.span),
                 }
@@ -13860,7 +13935,7 @@ impl TypedProgram {
         let final_result = match binary_op.op_kind {
             BinaryOpKind::Equals => equality_result,
             BinaryOpKind::NotEquals => self.synth_typed_call_typed_args(
-                self.ast.idents.f.bool__negated.with_span(binary_op.span),
+                self.ast.idents.f.neg__negated.with_span(binary_op.span),
                 &[],
                 &[equality_result],
                 ctx.with_no_expected_type(),
@@ -18236,6 +18311,12 @@ impl TypedProgram {
                     }
                     _ => None,
                 },
+                (ABILITY_ID_NEG, "negated") => match t {
+                    Some(Type::Bool) | Some(Type::Integer(_)) | Some(Type::Float(_)) => {
+                        Some(Builtin::Ir(BuiltinIr::Negate))
+                    }
+                    _ => None,
+                },
                 (ABILITY_ID_REM, "rem") => match t {
                     Some(Type::Integer(i)) => {
                         if i.is_signed() {
@@ -18304,10 +18385,6 @@ impl TypedProgram {
                     }
                     (None, "make-array") => Some(Builtin::Backend(BackendBuiltin::MakeArray)),
                     (None, "make-fn") => Some(Builtin::Backend(BackendBuiltin::MakeFn)),
-                    _ => None,
-                },
-                Some("bool") => match fn_name_str {
-                    "negated" => Some(Builtin::Ir(BuiltinIr::BoolNegate)),
                     _ => None,
                 },
                 Some("string") => None,
@@ -22906,6 +22983,7 @@ impl TypedProgram {
             core!("mul"),
             core!("div"),
             core!("rem"),
+            core!("neg"),
             core!("sys"),
             core!("files"),
             core!("scalar-cmp"),

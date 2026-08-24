@@ -738,6 +738,9 @@ fn rewrite_instr(ir: &mut ProgramIr, mappings: &mut RewriteMappings, inst: &mut 
             rewrite_value(mappings, lhs);
             rewrite_value(mappings, rhs);
         }
+        Inst::FloatNeg { v, .. } => {
+            rewrite_value(mappings, v);
+        }
         Inst::FloatMul { lhs, rhs, .. } => {
             rewrite_value(mappings, lhs);
             rewrite_value(mappings, rhs);

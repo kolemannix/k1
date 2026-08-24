@@ -143,6 +143,7 @@ pub(crate) struct BuiltinIdents {
     pub mul: StringId,
     pub div: StringId,
     pub rem: StringId,
+    pub neg: StringId,
     pub scalar_cmp: StringId,
     pub invoke: StringId,
     pub lt: StringId,
@@ -216,7 +217,7 @@ pub(crate) struct BuiltinFunctions {
     pub try__is_ok: QIdent,
     pub try__get_value: QIdent,
     pub try__get_error: QIdent,
-    pub bool__negated: QIdent,
+    pub neg__negated: QIdent,
     pub core_crash: QIdent,
     pub core_crash_bounds: QIdent,
     pub core_discard: QIdent,
@@ -484,6 +485,7 @@ impl IdentPool {
             mul: intern!("mul"),
             div: intern!("div"),
             rem: intern!("rem"),
+            neg: intern!("neg"),
             scalar_cmp: intern!("scalar-cmp"),
             invoke: intern!("invoke"),
             lt: intern!("lt"),
@@ -561,9 +563,6 @@ impl IdentPool {
         let path_core_iterable = intern_path!(b.core, b.iterable);
         let Iterable_iterator = make_fn!(path_core_iterable, intern!("iterator"));
 
-        let path_core_bool = intern_path!(b.core, intern!("bool"));
-        let bool_negated = make_fn!(path_core_bool, intern!("negated"));
-
         let path_core = intern_path!(b.core);
         let core_crash = make_fn!(path_core, intern!("crash"));
         let core_crashBounds = make_fn!(path_core, intern!("crash-bounds"));
@@ -595,6 +594,7 @@ impl IdentPool {
         let equals__equals: QIdent = make_fn!(path_core_equals, b.equals);
 
         let add__add: QIdent = make_fn!(intern_path!(b.add), b.add);
+        let neg__negated: QIdent = make_fn!(intern_path!(b.neg), intern!("negated"));
         let sub__sub: QIdent = make_fn!(intern_path!(b.sub), b.sub);
         let mul__mul: QIdent = make_fn!(intern_path!(b.mul), b.mul);
         let div__div: QIdent = make_fn!(intern_path!(b.div), b.div);
@@ -630,7 +630,7 @@ impl IdentPool {
             try__is_ok,
             try__get_value,
             try__get_error,
-            bool__negated: bool_negated,
+            neg__negated,
             core_crash,
             core_crash_bounds: core_crashBounds,
             core_discard,

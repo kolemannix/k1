@@ -97,10 +97,10 @@ ns platform {
     type io-result = { raw: i64 }
 
     impl try[t = size, e = i32] for io-result {
-      fn error(e: i32): io-result { .{ raw = 0 - e.as[i64] } }
+      fn error(e: i32): io-result { .{ raw = e.as[i64].negated() } }
       fn value(t: size): io-result { .{ raw = t } }
       fn is-ok(self): bool { self.raw >= 0 }
-      fn get-error(self): i32 { (0 - self.raw).as[i32] }
+      fn get-error(self): i32 { self.raw.negated().as[i32] }
       fn get-value(self): size { self.raw }
     }
 
@@ -416,7 +416,7 @@ ns platform {
       let(mutable) end: size = 0
 
       fn alloc(size-arg: size): ptr {
-        let needed = HEADER + ((size-arg + 15) & (0 - 16))
+        let needed = HEADER + ((size-arg + 15) & 15.bit-not())
         if cur + needed > end {
           let grow-size = if needed > CHUNK needed else CHUNK
           let r = memory/acquire(grow-size)

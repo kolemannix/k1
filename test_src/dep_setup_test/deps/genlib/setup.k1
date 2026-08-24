@@ -1,3 +1,0 @@
-fn setup(ctx: k1/setup-ctx) {
-  core/files/write-entire-file("${ctx.module-dir}/gen.k1", "fn gen-value(): int { 42 }\n")
-}

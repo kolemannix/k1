@@ -354,19 +354,6 @@ impl TypedProgram {
         self.eval_function_call(&call, None, ctx, None)
     }
 
-    pub(super) fn synth_parsed_bool_not(
-        &mut self,
-        base: ParsedExprId,
-        span: SpanId,
-    ) -> ParsedExprId {
-        self.synth_parsed_function_call(
-            self.ast.idents.f.bool__negated.with_span(span),
-            &[],
-            &[base],
-            false,
-        )
-    }
-
     pub(super) fn synth_printto_call(
         &mut self,
         to_print: TypedExprId,

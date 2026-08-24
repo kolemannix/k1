@@ -1,7 +1,7 @@
-// Static tables for the q0/q1 encoders, extracted by setup.k1 from this
-// module's vendored google/brotli enc/ sources (vendor/). The reps tables
-// are truncated to 257 entries: the fast literal-tree store only sees runs
-// within a 256-symbol alphabet.
+// Static tables for the q0/q1 encoders, extracted by fn setup (module.k1)
+// from this module's vendored google/brotli enc/ sources (vendor/). The reps
+// tables are truncated to 257 entries: the fast literal-tree store only sees
+// runs within a 256-symbol alphabet.
 
 let k-code-length-depth: array[u8, 18] = [
   4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 0, 4, 4,

@@ -48,6 +48,20 @@ ns recursive_generics {
   type bus = { ingress: *mut q[int], subscribers: list[*mut subscription] }
   type subscription = { bus: *mut bus }
 
+  // common pattern in c definitions
+  type(alias) lnode = *mut lnode-rec
+  type(alias) lnode-get = *fn(lnode) -> int
+  type lnode-rec = { next: lnode, getter: lnode-get, value: int }
+
+  fn lnode-value(n: lnode): int { n.value }
+
+  // wide mutual cycle through two pointer aliases: one alias expands while the
+  // other alias's defn is still on the stack
+  type(alias) face = *mut face-rec
+  type(alias) slot = *mut slot-rec
+  type face-rec = { glyph: slot, num: int }
+  type slot-rec = { owner: face, idx: int }
+
   fn test() {
     let l = make(4)
     assert-equals(sum(l), 10)
@@ -88,6 +102,15 @@ ns recursive_generics {
     bus0.subscribers.push(sub0)
     assert-equals(sub0.bus.ingress.head.value, 9)
     assert-equals(bus0.subscribers.len(), 1)
+
+    let l2: lnode = mem/new(.{ next = ptr/null.rw[lnode-rec], getter = lnode-value.&, value = 2 })
+    let l1: lnode = mem/new(.{ next = l2, getter = lnode-value.&, value = 1 })
+    assert-equals((l1.getter)(l1) + (l1.next.getter)(l1.next), 3)
+
+    let f: face = mem/new(.{ glyph = ptr/null.rw[slot-rec], num = 7 })
+    let s: slot = mem/new(.{ owner = f, idx = 3 })
+    f.glyph = s
+    assert-equals(f.glyph.owner.num + s.owner.glyph.idx, 10)
   }
 
 }

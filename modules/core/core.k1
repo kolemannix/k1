@@ -376,7 +376,7 @@ impl print for int {
       w.write-char('-')
     }
 
-    let pos = if neg { (self * -1) } else self
+    let pos = if neg self.negated() else self
     format-uint(context w)(pos.as[uint], 10)
   }
 }
@@ -471,7 +471,7 @@ ns for i64 {
     if neg {
       if magnitude > 0x8000000000000000 return :err "i64 overflow"
       if magnitude == 0x8000000000000000 return :ok i64/min-value
-      :ok (magnitude.as[i64] * -1)
+      :ok magnitude.as[i64].negated()
     } else {
       if magnitude > i64/max-value.as[u64] return :err "i64 overflow"
       :ok magnitude.as[i64]
@@ -629,6 +629,9 @@ impl div for f64 { fn(intern) div(self, other: self): self }
 
 impl rem for f32 { fn(intern) rem(self, other: self): self }
 impl rem for f64 { fn(intern) rem(self, other: self): self }
+
+impl neg for f32 { fn(intern) negated(self): self }
+impl neg for f64 { fn(intern) negated(self): self }
 
 impl scalar-cmp for f32 {
   fn(intern) lt(self, other: self): bool

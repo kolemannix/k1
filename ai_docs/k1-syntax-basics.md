@@ -504,8 +504,14 @@ let n = if flag 1 else 2
 Boolean negation is the `not` prefix. It binds tightly, to one postfix chain:
 `not user.is-admin()` negates the call result. A binary operator directly
 after the operand is a parse error, not a precedence choice — write
-`(not a) == b` or `not (a == b)`. At the end of a method chain, use `bool`'s
+`(not a) == b` or `not (a == b)`. At the end of a method chain, use
 `negated()` instead: `list.contains(x).negated()`.
+
+There is no unary minus. `-5` is a negative literal (the sign fuses with the
+number when nothing separates them), and value negation is the `neg` ability's
+`negated()`: `x.negated()` is 2's complement wrapping on ints (signed and
+unsigned), a true sign-bit flip on floats, and `not` on bool. `not` itself
+stays bool-only.
 
 Use `is` for pattern checks and bindings:
 

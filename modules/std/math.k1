@@ -14,6 +14,20 @@ impl exp for f32 {
   }
 }
 
+ability pow {
+  fn pow(self, exponent: self): self
+}
+impl pow for f64 {
+  fn pow(self: f64, exponent: f64): f64 {
+    libc/math/pow_f64(self, exponent)
+  }
+}
+impl pow for f32 {
+  fn pow(self: f32, exponent: f32): f32 {
+    libc/math/pow_f32(self, exponent)
+  }
+}
+
 ability log2 {
   fn log2(self): self
 }

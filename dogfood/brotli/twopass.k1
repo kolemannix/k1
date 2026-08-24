@@ -221,7 +221,7 @@ fn create-commands(
         }
         next-hash = hash-2p(next-ip, shift, min-match)
         let found = false
-        candidate = ip.add-bytes(0 - last-distance)
+        candidate = ip.sub-bytes(last-distance)
         if is-match-2p(ip, candidate, min-match) and candidate.as[size] < ip.as[size] {
           table.get-ref-unchecked(h).* = ip.diff(base-ip).as[i32]
           found = true

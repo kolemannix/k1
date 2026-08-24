@@ -232,7 +232,7 @@ pub enum Command {
         /// File
         file: Option<PathBuf>,
     },
-    /// Run a module's setup step (setup.k1) if stale
+    /// Run a module's setup step if stale
     #[clap()]
     Setup {
         /// Module directory
@@ -331,8 +331,7 @@ pub struct Args {
     #[arg(long)]
     pub target: Option<Target>,
 
-    /// Internal: this compile is a module's setup.k1 program; see
-    /// SetupMode::SetupProgram
+    /// Internal: this compile is a module's setup program
     #[arg(skip)]
     pub is_setup_program: bool,
 
@@ -355,8 +354,7 @@ impl Args {
 pub enum SetupMode {
     /// Run stale setup steps at module load (default)
     Normal,
-    /// This compile IS a module's setup.k1 program: setup steps never run
-    /// inside one, so setup trees can't recurse
+    /// This compile IS a module's setup program
     SetupProgram,
     /// `k1 setup`: run setup function during load, then stop before the primary
     /// tree typechecks; force runs even if fresh
@@ -460,9 +458,6 @@ pub fn module_home_from_src_path(src_path: &str) -> (bool, String) {
 /// directory is a module dir else the file itself
 pub fn find_check_target_for_file(file: &Path) -> anyhow::Result<String> {
     let file = kpath::canonicalize(file)?;
-    if kpath::file_name(&file) == "setup.k1" {
-        return Ok(file);
-    }
     let dir = kpath::parent(&file);
     let dir_name = kpath::file_name(dir);
     let has_root = Path::new(dir).join("module.k1").is_file()
@@ -577,8 +572,8 @@ pub fn collect_module_source_paths(
                 format!("Source file name is not valid UTF-8: {}", s.to_string_lossy())
             })?;
 
-            // The root is parsed separately; setup.k1 is a standalone program
-            if path_string != root_path && kpath::file_name(&path_string) != "setup.k1" {
+            // The root is parsed separately
+            if path_string != root_path {
                 files.push(path_string);
             }
         }
@@ -659,6 +654,7 @@ pub struct SetupRequest<'a> {
     pub idents: &'a IdentPool,
     pub module_dir: StringId,
     pub module_name: StringId,
+    pub root_filename: StringId,
     pub outputs: &'a [StringId],
     pub inputs: &'a [StringId],
     pub target: Target,
@@ -670,14 +666,14 @@ pub struct SetupRequest<'a> {
 pub fn run_setup_function(req: &SetupRequest) -> Result<bool> {
     let mut scratch: Mem<()> = Mem::make();
     let module_name = req.idents.get_string(req.module_name);
-    let setup_k1_path = kpath::join_tmp(&mut scratch, req.idents, req.module_dir, "setup.k1");
-    let setup_src = fs::read_to_string(Path::new(setup_k1_path.as_str())).map_err(|e| {
+    let root_path = kpath::join_tmp(&mut scratch, req.idents, req.module_dir, req.root_filename);
+    let root_src = fs::read_to_string(Path::new(root_path.as_str())).map_err(|e| {
         anyhow::anyhow!(
-            "module '{module_name}' declares setup but {setup_k1_path} could not be read: {e}"
+            "module '{module_name}' declares setup but {root_path} could not be read: {e}"
         )
     })?;
 
-    let fingerprint = setup_fingerprint(req, &mut scratch, &setup_src)?;
+    let fingerprint = setup_fingerprint(req, &mut scratch, &root_src)?;
     let setup_out_dir =
         kpath::join_tmp(&mut scratch, req.idents, req.module_dir, (".k1-out", "setup"));
     let stamp_path = kpath::join_tmp(&mut scratch, req.idents, setup_out_dir.as_str(), "stamp");
@@ -694,7 +690,7 @@ pub fn run_setup_function(req: &SetupRequest) -> Result<bool> {
         return Ok(true);
     }
 
-    eprintln!("Setting up module '{module_name}' (running {setup_k1_path})...");
+    eprintln!("Setting up module '{module_name}' (running fn setup in {root_path})...");
     // Clean slate: outputs must be produced by this run, not inherited from a
     // previous one, and a failed or partial run must read as stale
     let _ = fs::remove_file(Path::new(stamp_path.as_str()));
@@ -707,10 +703,10 @@ pub fn run_setup_function(req: &SetupRequest) -> Result<bool> {
             fs::remove_file(p)?;
         }
     }
-    run_setup_program(req, setup_k1_path.as_str())?;
+    run_setup_program(req, root_path.as_str())?;
 
     let outputs = output_manifest(req, &mut scratch)
-        .map_err(|e| anyhow::anyhow!("setup.k1 for module '{module_name}' completed but {e}"))?;
+        .map_err(|e| anyhow::anyhow!("fn setup for module '{module_name}' completed but {e}"))?;
     fs::write(Path::new(stamp_path.as_str()), format!("{fingerprint}{outputs}"))?;
     Ok(true)
 }
@@ -753,7 +749,7 @@ fn output_manifest(req: &SetupRequest, scratch: &mut Mem<()>) -> Result<String> 
     Ok(s)
 }
 
-fn setup_fingerprint(req: &SetupRequest, scratch: &mut Mem<()>, setup_src: &str) -> Result<String> {
+fn setup_fingerprint(req: &SetupRequest, scratch: &mut Mem<()>, root_src: &str) -> Result<String> {
     use std::fmt::Write;
     let module_dir = req.idents.get_string(req.module_dir);
     let get_strings = |ids: &[StringId]| {
@@ -764,9 +760,15 @@ fn setup_fingerprint(req: &SetupRequest, scratch: &mut Mem<()>, setup_src: &str)
         strings
     };
     let mut s = String::new();
-    writeln!(s, "k1-setup-stamp v2").unwrap();
+    writeln!(s, "k1-setup-stamp v3").unwrap();
     writeln!(s, "target: {}", req.target.to_str()).unwrap();
-    writeln!(s, "setup.k1: {:016x}", content_hash64(setup_src.as_bytes())).unwrap();
+    writeln!(
+        s,
+        "root: {} {:016x}",
+        req.idents.get_string(req.root_filename),
+        content_hash64(root_src.as_bytes())
+    )
+    .unwrap();
     writeln!(s, "outputs: {}", get_strings(req.outputs).join("|")).unwrap();
     writeln!(s, "inputs: {}", get_strings(req.inputs).join("|")).unwrap();
     let mut output_paths: Vec<MStr<()>> = Vec::with_capacity(req.outputs.len());
@@ -830,7 +832,7 @@ impl SetupLock {
     }
 }
 
-fn run_setup_program(req: &SetupRequest, setup_k1_path: &str) -> Result<()> {
+fn run_setup_program(req: &SetupRequest, root_path: &str) -> Result<()> {
     let module_dir = req.idents.get_string(req.module_dir);
     let args = Args {
         no_std: false,
@@ -848,13 +850,13 @@ fn run_setup_program(req: &SetupRequest, setup_k1_path: &str) -> Result<()> {
         target: Some(req.target),
         is_setup_program: true,
         k1_home_override: Some(req.idents.get_string(req.k1_home).to_string()),
-        command: Command::Check { file: Some(PathBuf::from(setup_k1_path)) },
+        command: Command::Check { file: Some(PathBuf::from(root_path)) },
     };
     let _cwd = CwdGuard::enter(module_dir);
     let mut program = match compile_program(&args) {
         Ok(p) => p,
         Err(CompileProgramError::TyperFailure(_)) => {
-            bail!("setup.k1 failed to compile (errors above)")
+            bail!("the module root failed to compile as a setup program (errors above)")
         }
     };
     program.run_setup_entry(module_dir)
@@ -1020,8 +1022,9 @@ fn listed_setup_is_fresh(
     inputs: &[String],
 ) -> bool {
     let module_dir = idents.intern(&m.home_dir);
-    let setup_k1_path = kpath::join_tmp(scratch, idents, module_dir, "setup.k1");
-    let Ok(setup_src) = fs::read_to_string(Path::new(setup_k1_path.as_str())) else {
+    let root_filename = idents.intern(&m.root_filename);
+    let root_path = kpath::join_tmp(scratch, idents, module_dir, root_filename);
+    let Ok(root_src) = fs::read_to_string(Path::new(root_path.as_str())) else {
         return false;
     };
     let outputs: Vec<StringId> = {
@@ -1042,6 +1045,7 @@ fn listed_setup_is_fresh(
         idents,
         module_dir,
         module_name: idents.intern(&m.name),
+        root_filename,
         outputs: &outputs,
         inputs: &inputs,
         target: config.target,
@@ -1049,7 +1053,7 @@ fn listed_setup_is_fresh(
         force: false,
         chatty: false,
     };
-    let Ok(fingerprint) = setup_fingerprint(&req, scratch, &setup_src) else {
+    let Ok(fingerprint) = setup_fingerprint(&req, scratch, &root_src) else {
         return false;
     };
     let setup_out_dir = kpath::join_tmp(scratch, idents, module_dir, (".k1-out", "setup"));
@@ -2132,17 +2136,18 @@ mod compiler_test {
              fn main(): i32 {\n  assert(genlib/gen-value() == 42)\n  0\n}\n",
         )
         .unwrap();
-        fs::write(
-            genlib.join("genlib.k1"),
-            "fn module(): k1/module {\n  let m = k1/module/new()\n  m.setup([\"gen.k1\"], [])\n  m\n}\n",
-        )
-        .unwrap();
-        let setup_src = r#"fn setup(ctx: k1/setup-ctx) {
+        let genlib_src = r#"fn module(): k1/module {
+  let m = k1/module/new()
+  m.setup(["gen.k1"], [])
+  m
+}
+
+fn setup(ctx: k1/setup-ctx) {
   core/files/write-entire-file("${ctx.module-dir}/gen.k1", "fn gen-value(): int { 42 }\n")
   core/files/write-entire-file("${ctx.module-dir}/witness.txt", "ran\n")
 }
 "#;
-        fs::write(genlib.join("setup.k1"), setup_src).unwrap();
+        fs::write(genlib.join("genlib.k1"), genlib_src).unwrap();
 
         let args = Args {
             no_std: false,
@@ -2190,15 +2195,37 @@ mod compiler_test {
         assert!(compile_program(&args).is_ok(), "fourth compile (missing output) must succeed");
         assert_eq!(fs::read_to_string(&gen_path).unwrap(), generated);
 
-        // Changing setup.k1 content busts the input fingerprint
+        // Changing the root file busts the input fingerprint
         fs::write(&witness_path, "sentinel\n").unwrap();
-        fs::write(genlib.join("setup.k1"), format!("{setup_src}// changed\n")).unwrap();
+        fs::write(genlib.join("genlib.k1"), format!("{genlib_src}// changed\n")).unwrap();
         assert!(compile_program(&args).is_ok(), "fifth compile (stale inputs) must succeed");
         assert_eq!(
             fs::read_to_string(&witness_path).unwrap(),
             "ran\n",
-            "a changed setup.k1 must rerun setup"
+            "a changed module root must rerun setup"
         );
+
+        // A single-file module is its own root and may declare setup
+        let solo = dir.join("solo.k1");
+        fs::write(
+            &solo,
+            r#"fn module(): k1/module {
+  let m = k1/module/new()
+  m.setup(["solo-gen.txt"], [])
+  m
+}
+
+fn setup(ctx: k1/setup-ctx) {
+  core/files/write-entire-file("${ctx.module-dir}/solo-gen.txt", "ran\n")
+}
+
+fn main(): i32 { 0 }
+"#,
+        )
+        .unwrap();
+        let solo_args = Args { command: Command::Check { file: Some(solo) }, ..args.clone() };
+        assert!(compile_program(&solo_args).is_ok(), "single-file module with setup must compile");
+        assert_eq!(fs::read_to_string(dir.join("solo-gen.txt")).unwrap(), "ran\n");
 
         let _ = fs::remove_dir_all(&dir);
     }

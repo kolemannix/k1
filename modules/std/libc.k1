@@ -54,6 +54,8 @@ ns libc {
     fn(extern("exp")) exp_f64(f64): f64
     fn(extern("log2f")) log2_f32(f32): f32
     fn(extern("log2")) log2_f64(f64): f64
+    fn(extern("powf")) pow_f32(base: f32, exponent: f32): f32
+    fn(extern("pow")) pow_f64(base: f64, exponent: f64): f64
   }
 
 }

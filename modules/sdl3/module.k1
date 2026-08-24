@@ -1,0 +1,52 @@
+use std/process
+
+fn module(): k1/module {
+  let m = k1/module/new()
+  m.lib("sdl3", :static)
+  if k1/platform-macos {
+    // SDL's own link list for this build config: Libs.private in the
+    // setup-generated .k1-out/sdl3-build/sdl3.pc; re-check on vendor bumps
+    for [
+      "CoreMedia", "CoreVideo", "Cocoa", "UniformTypeIdentifiers", "IOKit",
+      "ForceFeedback", "Carbon", "CoreAudio", "AudioToolbox", "AVFoundation",
+      "Foundation", "GameController", "Metal", "QuartzCore", "CoreHaptics",
+    ] {
+      m.link-args(["-framework", it])
+    }
+  }
+  m.setup(["libs/libsdl3.a", "sdl3.k1"], ["vendor"])
+  m
+}
+
+// Builds the vendored SDL release (3.4.14, from github.com/libsdl-org/SDL;
+// vendor bumps replace vendor/ wholesale) and regenerates the sdl3 bindings.
+// Needs cmake and k1bindgen on PATH.
+fn setup(_ctx: k1/setup-ctx) {
+  process/run-command("mkdir", ["-p", "libs"], :inherit).!
+
+  let cmake-args: list[string] = [
+    "-S", "vendor", "-B", ".k1-out/sdl3-build",
+    "-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TESTS=OFF", "-DSDL_EXAMPLES=OFF",
+    "-DCMAKE_BUILD_TYPE=Release",
+  ]
+  if k1/platform-macos { cmake-args.push("-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0.0") }
+  process/run-command("cmake", cmake-args.as-span(), :inherit).!
+  process/run-command("cmake", ["--build", ".k1-out/sdl3-build", "-j", "10"], :inherit).!
+  process/run-command("cp", [".k1-out/sdl3-build/libSDL3.a", "libs/libsdl3.a"], :inherit).!
+
+  let bindgen-args: list[string] = [
+    "-in-path", "vendor/include/SDL3/SDL.h",
+    "-out-path", "sdl3.k1",
+    "-lib-name", "sdl3",
+    "+clangarg", "-Ivendor/include",
+    "+strip-prefix", "SDL_",
+  ]
+  if k1/platform-macos {
+    let sdk = process/run("/bin/sh", ["-c", "printf %s $(xcrun --sdk macosx --show-sdk-path)"]).!
+    bindgen-args.push("+clangarg")
+    bindgen-args.push("-isysroot")
+    bindgen-args.push("+clangarg")
+    bindgen-args.push(sdk)
+  }
+  let _ = process/run-command("k1bindgen", bindgen-args.as-span(), :inherit).!
+}

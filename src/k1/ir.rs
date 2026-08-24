@@ -1024,6 +1024,10 @@ pub enum Inst {
         rhs: Value,
         width: u8,
     },
+    FloatNeg {
+        v: Value,
+        width: u8,
+    },
     FloatMul {
         lhs: Value,
         rhs: Value,
@@ -1157,6 +1161,7 @@ pub fn visit_inst_values(ir: &ProgramIr, inst: &Inst, f: &mut impl FnMut(Value))
         Inst::BakeStaticValue { value, .. } => f(value),
         Inst::BoolNegate { v }
         | Inst::BitNot { v }
+        | Inst::FloatNeg { v, .. }
         | Inst::BitCast { v, .. }
         | Inst::IntTrunc { v, .. }
         | Inst::IntExtU { v, .. }
@@ -1337,6 +1342,7 @@ pub fn get_inst_kind(ir: &ProgramIr, inst_id: InstId) -> InstKind {
         Inst::IntCmp { .. } => InstKind::BOOL,
         Inst::FloatAdd { lhs, .. } => get_value_kind(ir, lhs),
         Inst::FloatSub { lhs, .. } => get_value_kind(ir, lhs),
+        Inst::FloatNeg { v, .. } => get_value_kind(ir, v),
         Inst::FloatMul { lhs, .. } => get_value_kind(ir, lhs),
         Inst::FloatDiv { lhs, .. } => get_value_kind(ir, lhs),
         Inst::FloatRem { lhs, .. } => get_value_kind(ir, lhs),
@@ -1376,6 +1382,9 @@ impl InstKind {
     }
     fn is_bool(&self) -> bool {
         matches!(self, InstKind::Value(pt) if pt.is_bool())
+    }
+    fn is_float(&self) -> bool {
+        matches!(self, InstKind::Value(pt) if pt.is_float())
     }
     fn is_aggregate(&self) -> bool {
         matches!(self, InstKind::Value(pt) if pt.is_agg())
@@ -3096,10 +3105,19 @@ fn compile_ir_builtin(
                 }
             }
         }
-        BuiltinIr::BoolNegate => {
+        BuiltinIr::Negate => {
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
             let base = compile_expr(b, None, arg0)?;
-            let neg = b.push_inst_anon(Inst::BoolNegate { v: base });
+            let pt = b.get_physical_type(b.k1.exprs.get_type(arg0));
+            let st = pt.expect_scalar();
+            let width = b.k1.get_pt_layout(pt).size_bits() as u8;
+            let neg = match st {
+                ScalarType::Bool => b.push_inst_anon(Inst::BoolNegate { v: base }),
+                ScalarType::F32 | ScalarType::F64 => {
+                    b.push_inst_anon(Inst::FloatNeg { v: base, width })
+                }
+                _ => b.push_inst_anon(Inst::IntSub { lhs: zero(st), rhs: base, width }),
+            };
             let stored = store_scalar_if_dst(b, dst, neg.as_value());
             Ok(stored)
         }
@@ -4136,6 +4154,12 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 Inst::IntCmp { .. } => (),
                 Inst::FloatAdd { .. } => (),
                 Inst::FloatSub { .. } => (),
+                Inst::FloatNeg { v, .. } => {
+                    let inst_type = get_value_kind(ir, v);
+                    if !inst_type.is_float() {
+                        errors.push(format!("i{inst_id}: fneg src is not a float"))
+                    }
+                }
                 Inst::FloatMul { .. } => (),
                 Inst::FloatDiv { .. } => (),
                 Inst::FloatRem { .. } => (),
@@ -4641,6 +4665,9 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
         }
         Inst::FloatSub { lhs, rhs, width } => {
             write!(w, "fsub f{width} {} {}", lhs, rhs)?;
+        }
+        Inst::FloatNeg { v, width } => {
+            write!(w, "fneg f{width} {}", v)?;
         }
         Inst::FloatMul { lhs, rhs, width } => {
             write!(w, "fmul f{width} {} {}", lhs, rhs)?;

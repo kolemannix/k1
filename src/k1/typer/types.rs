@@ -1321,6 +1321,10 @@ impl PhysicalType {
             || self.0 == ScalarType::Bool as u32
     }
 
+    pub const fn is_float(self) -> bool {
+        self.0 == ScalarType::F32 as u32 || self.0 == ScalarType::F64 as u32
+    }
+
     pub fn is_empty(self) -> bool {
         self == Self::EMPTY
     }

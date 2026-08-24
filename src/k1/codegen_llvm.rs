@@ -3489,6 +3489,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, not_input.as_basic_value_enum());
                 Ok(())
             }
+            Inst::FloatNeg { v, .. } => {
+                let input = self.resolve_value(inst_mappings, v)?.into_float_value();
+                let neg_input = self.builder.build_float_neg(input, "").unwrap();
+                inst_mappings.insert(inst_id, neg_input.as_basic_value_enum());
+                Ok(())
+            }
             Inst::BitCast { v, to } => {
                 let input = self.resolve_value(inst_mappings, v)?;
 

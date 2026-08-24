@@ -17,10 +17,10 @@ type(alias) c-unsigned = u32
 
 type(alias) CXUnsavedFile = { filename: *char, contents: *char, length: u64 }
 
-type CXTranslationUnit_Flags = either(c-unsigned) {
-  None = 0x0, 
-  DetailedPreprocessingRecord = 0x01,
-  SkipFunctionBodies = 0x40
+type(alias) CXTranslationUnit_Flags = c-unsigned
+ns tu-flag {
+  let DetailedPreprocessingRecord: CXTranslationUnit_Flags = 0x01
+  let SkipFunctionBodies: CXTranslationUnit_Flags = 0x40
 }
 
 type(alias) CXClientData = ptr
@@ -167,6 +167,10 @@ fn(extern("clang_getTypedefDeclUnderlyingType")) getTypedefDeclUnderlyingType(C:
 
 fn(extern("clang_isCursorDefinition")) isCursorDefinition(C: CXCursor): u32
 
+fn(extern("clang_getCursorDefinition")) getCursorDefinition(C: CXCursor): CXCursor
+
+fn(extern("clang_Cursor_isNull")) Cursor_isNull(C: CXCursor): i32
+
 type CXSourceLocation = {
   ptr_data: array[ptr, 2],
   int_data: u32,
@@ -215,7 +219,46 @@ fn(extern("clang_Type_getAlignOf")) Type_getAlignOf(T: CXType): i64
 fn(extern("clang_Type_getSizeOf")) Type_getSizeOf(T: CXType): i64
 fn(extern("clang_Cursor_getOffsetOfField")) Cursor_getOffsetOfField(C: CXCursor): i64
 
-fn(extern("clang_getFileName")) getFileName(SFile: CXFile): CXString 
+fn(extern("clang_getFileName")) getFileName(SFile: CXFile): CXString
+
+type CXSourceRange = {
+  ptr_data: array[ptr, 2],
+  begin_int_data: c-unsigned,
+  end_int_data: c-unsigned,
+}
+#static assert-equals(types/size[CXSourceRange], 24)
+
+fn(extern("clang_getCursorExtent")) getCursorExtent(C: CXCursor): CXSourceRange
+
+fn(extern("clang_Cursor_isMacroFunctionLike")) Cursor_isMacroFunctionLike(C: CXCursor): c-unsigned
+fn(extern("clang_Cursor_isMacroBuiltin")) Cursor_isMacroBuiltin(C: CXCursor): c-unsigned
+
+type CXTokenKind = either(c-unsigned) {
+  Punctuation = 0,
+  Keyword = 1,
+  Identifier = 2,
+  Literal = 3,
+  Comment = 4
+}
+
+type CXToken = {
+  int_data: array[c-unsigned, 4],
+  ptr_data: ptr,
+}
+#static assert-equals(types/size[CXToken], 24)
+
+fn(extern("clang_tokenize")) tokenize(
+  TU: CXTranslationUnit,
+  Range: CXSourceRange,
+  out_Tokens: *mut *mut CXToken,
+  out_NumTokens: *mut c-unsigned
+)
+
+fn(extern("clang_getTokenKind")) getTokenKind(Token: CXToken): CXTokenKind
+
+fn(extern("clang_getTokenSpelling")) getTokenSpelling(TU: CXTranslationUnit, Token: CXToken): CXString
+
+fn(extern("clang_disposeTokens")) disposeTokens(TU: CXTranslationUnit, Tokens: *mut CXToken, NumTokens: c-unsigned)
 
 type CXCursorKind = either(c-unsigned) {
   // Declarations

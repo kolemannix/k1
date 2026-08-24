@@ -21,6 +21,11 @@ fn test() {
   let r2 = if false and crash-bool() false else true
   assert(r2)
 
+  assert-equals(t.negated(), false)
+  assert-equals(f.negated(), true)
+  // `not` stays boolean-only even though negated covers numbers
+  assert(test-compile(not 3).is-some())
+
   assert-equals(t.as[u8], 1)
   assert-equals(f.as[u8], 0)
   assert-equals(t.as[i32], 1)

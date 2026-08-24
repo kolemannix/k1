@@ -1003,6 +1003,7 @@ fn emit_inst(
 
         Inst::BoolNegate { v } => unop!(Opcode::BoolNegate, 0, 0, v),
         Inst::BitNot { v } => unop!(Opcode::BitNot, 0, 0, v),
+        Inst::FloatNeg { v, width } => unop!(Opcode::FloatNeg, width, 0, v),
 
         Inst::IntTrunc { v, to } => cast!(CastKind::IntTrunc, 0, wbits(to), v),
         Inst::IntExtS { v, from, to } => cast!(CastKind::IntExtS, wbits(from), wbits(to), v),

@@ -290,6 +290,7 @@ ability sub { fn sub(self, rhs: self): self }
 ability mul { fn mul(self, rhs: self): self }
 ability div { fn div(self, rhs: self): self }
 ability rem { fn rem(self, rhs: self): self }
+ability neg { fn negated(self): self }
 
 // This is a more simple notion of add
 // than Rust's std::ops::Add, generic over rhs and output.
@@ -342,6 +343,15 @@ impl rem for i8    { fn(intern) rem(self, rhs: self): self }
 impl rem for i16   { fn(intern) rem(self, rhs: self): self }
 impl rem for i32   { fn(intern) rem(self, rhs: self): self }
 impl rem for i64   { fn(intern) rem(self, rhs: self): self }
+
+impl neg for u8    { fn(intern) negated(self): self }
+impl neg for u16   { fn(intern) negated(self): self }
+impl neg for u32   { fn(intern) negated(self): self }
+impl neg for u64   { fn(intern) negated(self): self }
+impl neg for i8    { fn(intern) negated(self): self }
+impl neg for i16   { fn(intern) negated(self): self }
+impl neg for i32   { fn(intern) negated(self): self }
+impl neg for i64   { fn(intern) negated(self): self }
 
 ability scalar-cmp {
   fn lt(self, other: self): bool
@@ -913,8 +923,8 @@ ns for ptr {
   }
 
   fn sub-bytes(self: ptr, offset: size): ptr {
-    // 0 - offset wraps; getelementptr interprets the index as signed
-    self.ref-at-index[u8](0 - offset).as[ptr]
+    // getelementptr interprets the index as signed
+    self.ref-at-index[u8](offset.negated()).as[ptr]
   }
 
   fn diff(self: ptr, other: ptr): size {
@@ -938,11 +948,11 @@ impl equals for ptr {
 }
 
 ns for bool {
-  fn(intern) negated(self: bool): bool
   fn as-u8(self: bool): u8 { self.as[u8] }
   fn from-u8(value: u8): bool { value != 0u8 }
 }
 
+impl neg for bool { fn(intern) negated(self: bool): bool }
 impl equals for bool { fn(intern) equals(self: bool, other: bool): bool }
 
 impl equals for u8 { fn(intern) equals(self: u8, other: u8): bool }

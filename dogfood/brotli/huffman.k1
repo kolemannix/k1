@@ -165,7 +165,7 @@ fn reverse-bits(num-bits: size, bits: u16): u16 {
     retval = retval | lut.get((b & 0x0F).as[size])
     i = i + 4
   }
-  (retval >> ((0 - num-bits) & 0x03).as[u32]).as[u16]
+  (retval >> (num-bits.negated() & 0x03).as[u32]).as[u16]
 }
 
 // Canonical code assignment: depths -> bit-reversed codes.

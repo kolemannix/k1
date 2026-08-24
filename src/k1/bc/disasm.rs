@@ -290,7 +290,7 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write!(w, ", ").unwrap();
             write_src(w, k1, ops[2]);
         }
-        Opcode::BoolNegate | Opcode::BitNot => {
+        Opcode::BoolNegate | Opcode::BitNot | Opcode::FloatNeg => {
             write!(w, "{} ", op.name()).unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- ").unwrap();

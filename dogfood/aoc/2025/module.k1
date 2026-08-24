@@ -27,7 +27,7 @@ fn day1(input: string) {
     let _last-pos = pos
     require u64/from-string(magnitude-str) is :ok magnitude else { return }
 
-    let change = if negative { magnitude.as[int] * -1 } else magnitude.as[int]
+    let change = if negative magnitude.as[int].negated() else magnitude.as[int]
 
     pos = pos + change
     

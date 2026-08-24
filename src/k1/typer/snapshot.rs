@@ -207,12 +207,18 @@ impl TypedProgram {
         assert!(uses_pending_resolution.is_empty());
         assert!(types_pending_definition.is_empty());
         assert!(module_in_progress.is_none());
-        let TypeDefnContext { stack, recursive_mentions, pending_instances, completed } =
-            type_defn_context;
+        let TypeDefnContext {
+            stack,
+            recursive_mentions,
+            pending_instances,
+            completed,
+            expanding_aliases,
+        } = type_defn_context;
         assert!(stack.is_empty());
         assert!(recursive_mentions.is_empty());
         assert!(pending_instances.is_empty());
         assert!(completed.is_empty());
+        assert!(expanding_aliases.is_empty());
 
         patterns.mem.snap(w);
         pattern_ctors.snap(w);

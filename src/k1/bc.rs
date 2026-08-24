@@ -121,9 +121,10 @@ pub enum Opcode {
     Shl,
     ShrU,
     ShrS,
-    // Unary
+    // Unary (A = width in bits for FloatNeg)
     BoolNegate,
     BitNot,
+    FloatNeg,
     Cast, // A = CastKind, B = (from_bits << 8) | to_bits
     // Metaprogramming
     BakeStaticValue,
@@ -197,7 +198,7 @@ impl Opcode {
             | Opcode::Shl
             | Opcode::ShrU
             | Opcode::ShrS => 3, // [dst][lhs][rhs]
-            Opcode::BoolNegate | Opcode::BitNot => 2, // [dst][src]
+            Opcode::BoolNegate | Opcode::BitNot | Opcode::FloatNeg => 2, // [dst][src]
             Opcode::Cast => 2,       // A = CastKind, B = from_bits << 8 | to_bits; [dst][src]
             Opcode::BakeStaticValue => 3, // [dst][type_id][src]
             Opcode::AtomicLoad => 2, // A = width in bits, B = ordering; [dst][addr src]
@@ -255,6 +256,7 @@ impl Opcode {
             Opcode::ShrS => "shr_s",
             Opcode::BoolNegate => "bool_neg",
             Opcode::BitNot => "bit_not",
+            Opcode::FloatNeg => "fneg",
             Opcode::Cast => "cast",
             Opcode::BakeStaticValue => "bake_static",
             Opcode::AtomicLoad => "atomic_load",

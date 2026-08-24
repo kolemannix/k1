@@ -76,3 +76,28 @@ struct opaq {
 int cinput_main(void) {
   return 0;
 }
+
+#define CINPUT_ANSWER 42
+#define CINPUT_HEX 0xFF
+#define CINPUT_SHIFTED (1u << 4)
+#define CINPUT_COMBO (CINPUT_ANSWER + CINPUT_SHIFTED * 2)
+#define CINPUT_NEG (-7)
+#define CINPUT_OCTAL 017
+#define CINPUT_BIGMASK 0xFFFFFFFFFFFFFFFFULL
+#define CINPUT_ALIAS CINPUT_ANSWER
+#define CINPUT_CHAR 'A'
+#define CINPUT_FLOAT 2.5
+#define CINPUT_FLOATF 1.5f
+#define CINPUT_STR "hello\tworld"
+#define CINPUT_STR2 "ab" "cd"
+#define CINPUT_INVERTED (~CINPUT_HEX)
+#define CINPUT_NEGREF (-CINPUT_ANSWER)
+#define CINPUT_STRALIAS CINPUT_STR
+#define CINPUT_FLOATALIAS CINPUT_FLOAT
+// the rest should all be skipped
+#define CINPUT_GUARD
+#define CINPUT_FNLIKE(x) ((x) + 1)
+#define CINPUT_ATTR __attribute__((deprecated))
+#define CINPUT_CAST ((unsigned long)5)
+#define CINPUT_DANGLING (CINPUT_NOT_EMITTED + 1)
+#define CINPUT_STRMATH (CINPUT_STR + 1)

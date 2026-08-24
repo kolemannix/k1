@@ -3,12 +3,29 @@
 // helpers. The K1-native encoder port lives in dogfood/brotli; this module is
 // the reference implementation for benchmarks and round-trip verification.
 use core/c-int
+use std/process
 
 fn module(): k1/module {
   let m = k1/module/new()
   m.lib("brotli", :static)
   m.setup(["libs/libbrotli.a"], ["vendor"])
   m
+}
+
+// Compiles the vendored C sources into libs/libbrotli.a. Runs in the
+// compile-time VM with cwd = the module dir; needs cc on PATH.
+fn setup(_ctx: k1/setup-ctx) {
+  let minver = if k1/platform-macos "-mmacosx-version-min=15.0.0" else ""
+  let script = `
+    set -e
+    mkdir -p libs .k1-out/cbrotli
+    for f in vendor/common/*.c vendor/dec/*.c vendor/enc/*.c; do
+      o=".k1-out/cbrotli/$(echo "\$f" | sed 's|vendor/||; s|/|_|g; s|\\.c\$|.o|')"
+      cc -O2 ${minver} -Ivendor/include -c "\$f" -o "\$o"
+    done
+    ar rcs libs/libbrotli.a .k1-out/cbrotli/*.o
+    `
+  let _ = process/run-command("/bin/sh", ["-c", script], :inherit).!
 }
 
 type mode = either(u32) { generic = 0, text = 1, font = 2 }

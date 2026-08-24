@@ -9,6 +9,52 @@ use net/sockaddr_in6
 // not really net but we'll get there later
 use net/FILE
 // end contents of uv_bindgen_prelude.k1.txt
+let UV__EOF: i64 = (-4095)
+let UV__UNKNOWN: i64 = (-4094)
+let UV__EAI_ADDRFAMILY: i64 = (-3000)
+let UV__EAI_AGAIN: i64 = (-3001)
+let UV__EAI_BADFLAGS: i64 = (-3002)
+let UV__EAI_CANCELED: i64 = (-3003)
+let UV__EAI_FAIL: i64 = (-3004)
+let UV__EAI_FAMILY: i64 = (-3005)
+let UV__EAI_MEMORY: i64 = (-3006)
+let UV__EAI_NODATA: i64 = (-3007)
+let UV__EAI_NONAME: i64 = (-3008)
+let UV__EAI_OVERFLOW: i64 = (-3009)
+let UV__EAI_SERVICE: i64 = (-3010)
+let UV__EAI_SOCKTYPE: i64 = (-3011)
+let UV__EAI_BADHINTS: i64 = (-3013)
+let UV__EAI_PROTOCOL: i64 = (-3014)
+let UV__ECHARSET: i64 = (-4080)
+let UV__ENONET: i64 = (-4056)
+let UV__EREMOTEIO: i64 = (-4030)
+let UV__EUNATCH: i64 = (-4023)
+let UV_VERSION_MAJOR: i64 = 1
+let UV_VERSION_MINOR: i64 = 52
+let UV_VERSION_PATCH: i64 = 1
+let UV_VERSION_IS_RELEASE: i64 = 1
+let UV_VERSION_SUFFIX: string = ""
+let UV_VERSION_HEX: i64 = ((UV_VERSION_MAJOR << 16) | (UV_VERSION_MINOR << 8) | (UV_VERSION_PATCH))
+let UV_HAVE_KQUEUE: i64 = 1
+let UV_FS_O_DIRECT: i64 = 0
+let UV_FS_O_NOATIME: i64 = 0
+let UV_FS_O_FILEMAP: i64 = 0
+let UV_FS_O_RANDOM: i64 = 0
+let UV_FS_O_SHORT_LIVED: i64 = 0
+let UV_FS_O_SEQUENTIAL: i64 = 0
+let UV_FS_O_TEMPORARY: i64 = 0
+let UV_PRIORITY_LOW: i64 = 19
+let UV_PRIORITY_BELOW_NORMAL: i64 = 10
+let UV_PRIORITY_NORMAL: i64 = 0
+let UV_PRIORITY_ABOVE_NORMAL: i64 = -7
+let UV_PRIORITY_HIGH: i64 = -14
+let UV_PRIORITY_HIGHEST: i64 = -20
+let UV_FS_COPYFILE_EXCL: i64 = 0x0001
+let UV_FS_COPYFILE_FICLONE: i64 = 0x0002
+let UV_FS_COPYFILE_FICLONE_FORCE: i64 = 0x0004
+let UV_FS_SYMLINK_DIR: i64 = 0x0001
+let UV_FS_SYMLINK_JUNCTION: i64 = 0x0002
+let UV_IF_NAMESIZE: i64 = (16 + 1)
 type buf = {
   base: *mut u8,
   len: usize,

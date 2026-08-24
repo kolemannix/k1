@@ -1281,17 +1281,17 @@ pub struct Scope {
     pub parent: Option<ScopeId>,
     pub scope_type: ScopeType,
     /// Bitset of `kinds::*`
+    // nocommit claude can grow this; we need variables but also I think we added something recently
+    // and skipped a kind tag due to no bits. A pending_ something, I think.
     kinds: u8,
     /// The enclosing lambda scope (or self, for a lambda scope), fixed at creation.
-    /// Queried for every variable mention (capture detection). Fixing it at creation
-    /// is safe because a scope's position relative to its enclosing lambda never
-    /// changes while that lambda's body is being evaluated; the only scope_type
-    /// mutation (no-capture lambda -> function conversion) happens after its body is
-    /// fully evaluated, and re-evaluations build fresh scopes.
+    /// Queried for every variable mention for capture detection
     nearest_lambda: Option<ScopeId>,
     pub owner_id: ScopeOwnerId,
+    // nocommit claude we gotta get variables out of here
     pub variables: FxHashMap<StringId, VariableInScope>,
 }
+// he doesn't grow because we get `variables` out.
 static_assert_size!(Scope, 64);
 
 impl Scope {
