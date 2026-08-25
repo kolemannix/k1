@@ -34,7 +34,7 @@ fn open_tab_when_program_ready(k1: &SharedProgram, url: &str) {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .as_deref()
-            .is_some_and(|k1| !k1.primary_module().is_pending());
+            .is_some_and(|k1| k1.primary_module_completed());
         if ready {
             break;
         }
@@ -140,7 +140,7 @@ fn handle_client(k1: &SharedProgram, bus: &bus::EventBus, mut stream: TcpStream)
             // the repl session to one bad cell is worse than any inconsistency
             let mut guard = k1.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             match guard.as_deref_mut() {
-                Some(k1) if !k1.primary_module().is_pending() => {
+                Some(k1) if k1.primary_module_completed() => {
                     super::handle_request(k1, bus, &method, &path, body)
                 }
                 _ => Response::Unavailable,

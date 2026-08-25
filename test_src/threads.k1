@@ -1,8 +1,10 @@
 use core/arena
 
-fn module(): k1/module {
-  let m = k1/module/new()
-  m
+ns build {
+  fn module(): k1/module {
+    let m = k1/module/new()
+    m
+  }
 }
 
 let(mutable, tls) myvar: i32 = 0

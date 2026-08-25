@@ -1,7 +1,9 @@
-fn module(): k1/module {
-  let m = k1/module/new()
-  m.dep("cfglib", .{ backlog = 9 })
-  m
+ns build {
+  fn module(): k1/module {
+    let m = k1/module/new()
+    m.dep("cfglib", .{ backlog = 9 })
+    m
+  }
 }
 
 fn b(): u32 { cfglib/backlog() }

@@ -20,13 +20,15 @@
 // Algebra: each level proves or discovers an identity or rule, you can only use it
 //          once discovered
 
-fn module(): k1/module {
-  let m = k1/module/new()
-  m.lib("raylib", :static)
-  for ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"] {
-    m.link-args(["-framework", it])
+ns build {
+  fn module(): k1/module {
+    let m = k1/module/new()
+    m.lib("raylib", :static)
+    for ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"] {
+      m.link-args(["-framework", it])
+    }
+    m
   }
-  m
 }
 
 ns(lib("raylib")) rl {

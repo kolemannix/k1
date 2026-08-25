@@ -134,7 +134,6 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         chatty: false,
         optimize_ir: true,
         cache: false,
-        is_setup_program: false,
         k1_home_override: None,
         command: Command::Build { file: Some(path.as_ref().to_owned()) },
     };

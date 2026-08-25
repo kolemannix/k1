@@ -1,9 +1,11 @@
 use core/arena
 use atomic/cell
 
-fn module(): k1/module {
-  let m = k1/module/new()
-  m
+ns build {
+  fn module(): k1/module {
+    let m = k1/module/new()
+    m
+  }
 }
 
 let N_THREADS: u64 = 4

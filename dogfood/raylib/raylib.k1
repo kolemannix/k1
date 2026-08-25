@@ -5,14 +5,16 @@
 //   3. press R in the window
 // The orbs and clock survive the swap. Click to spawn an orb.
 
-fn module(): k1/module {
+ns build {
+  fn module(): k1/module {
 
-  let m = k1/module/new()
-  m.lib("raylib", :static)
-  for ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"] {
-    m.link-args(["-framework", it])
+    let m = k1/module/new()
+    m.lib("raylib", :static)
+    for ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"] {
+      m.link-args(["-framework", it])
+    }
+    m
   }
-  m
 }
 
 ns(lib("raylib")) raylib {

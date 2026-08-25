@@ -414,8 +414,10 @@ impl EvalExprContext {
     }
 
     #[inline(always)]
-    fn with_manifest_eval(&self) -> EvalExprContext {
-        EvalExprContext { flags: self.flags | EvalExprFlags::ManifestEval, ..*self }
+    fn with_manifest_eval(&self, manifest_eval: bool) -> EvalExprContext {
+        let mut flags = self.flags;
+        flags.set(EvalExprFlags::ManifestEval, manifest_eval);
+        EvalExprContext { flags, ..*self }
     }
 
     #[inline(always)]
@@ -1059,11 +1061,13 @@ pub struct TypedFunction {
     pub specialization_info: Option<SpecializationInfo>,
     pub parsed_id: ParsedId,
     pub type_id: TypeId,
+    // nocommit claude finally time for bitflags on typedfunction I think
     pub compiler_debug: bool,
     pub kind: TypedFunctionKind,
     pub is_concrete: bool,
     pub is_recursive: bool,
     pub is_macro: bool,
+    pub is_module_manifest_fn: bool,
     pub is_reloadable: bool,
     pub abi_native: bool,
     pub address_taken: bool,
@@ -2614,10 +2618,23 @@ pub struct Module {
     pub source_file_hashes: PermList<SourceFileHash>,
     /// The module's parsed root namespace
     pub parsed_namespace_id: ParsedNamespaceId,
-    /// The fn module definition, evaluated at load; typing skips it
-    pub manifest_fn_defn: Option<ParsedId>,
+    /// `ns build`, compiled and run at load; the module's own passes skip it
+    pub build_ns_defn: Option<ParsedId>,
     /// Directory module vs single file
     pub is_dir: bool,
+}
+
+/// The module's compiled `ns build`, live only while the module loads
+#[derive(Clone, Copy)]
+struct BuildNs {
+    parsed_namespace_id: ParsedNamespaceId,
+    scope_id: ScopeId,
+}
+
+impl BuildNs {
+    fn parsed_id(&self) -> ParsedId {
+        ParsedId::Namespace(self.parsed_namespace_id)
+    }
 }
 
 impl Module {
@@ -2633,7 +2650,7 @@ impl Module {
             params: None,
             source_file_hashes: MList::empty(),
             parsed_namespace_id: ParsedNamespaceId::PENDING,
-            manifest_fn_defn: None,
+            build_ns_defn: None,
             is_dir: false,
         }
     }
@@ -2641,11 +2658,6 @@ impl Module {
     /// The root file (module.k1 / <name>.k1 / the single file) is always parsed first
     pub fn root_file_id(&self, mem: &kmem::Mem<TypedProgram>) -> FileId {
         self.source_file_hashes.as_slice(mem)[0].file_id
-    }
-
-    /// Just inferring from whether or not we have a real scope id yet, for now. Bit sloppy
-    pub fn is_pending(&self) -> bool {
-        self.namespace_scope_id == ScopeId::PENDING
     }
 }
 
@@ -3283,8 +3295,8 @@ impl TypedProgram {
         for (module_id, remaining) in modules_to_typecheck.into_iter() {
             let files = remaining.map(|r| r.join()).transpose()?;
             let module = self.modules.get(module_id);
-            let (module_name, home_dir, parsed_namespace_id, manifest_fn_defn) =
-                (module.name, module.home_dir, module.parsed_namespace_id, module.manifest_fn_defn);
+            let (module_name, home_dir, parsed_namespace_id, build_ns_defn) =
+                (module.name, module.home_dir, module.parsed_namespace_id, module.build_ns_defn);
             let root_file_id = module.root_file_id(&self.mem);
             let name = self.ident_str(module_name);
             hash = match &files {
@@ -3327,12 +3339,7 @@ impl TypedProgram {
                         self.ast.errors.len()
                     );
                 }
-                if let Err(e) = self.check_manifest_fn_placement(parsed_namespace_id, root_file_id)
-                {
-                    self.report(e);
-                    bail!("Module {} has a misplaced fn module", self.ident_str(module_name));
-                }
-                self.typecheck_module(module_id, parsed_namespace_id, manifest_fn_defn)?;
+                self.typecheck_module(module_id, parsed_namespace_id, build_ns_defn)?;
                 self.modules_completed.push(module_id);
                 // Drain pending IR so a snapshot here contains only whole
                 // modules (pending queues empty)
@@ -3494,7 +3501,10 @@ impl TypedProgram {
             );
         }
 
-        let (manifest, manifest_fn_defn) = if is_core {
+        self.module_in_progress = Some(module_id);
+        self.declare_module_root_namespace(module_id, parsed_namespace_id)?;
+
+        let (manifest, build_ns) = if is_core {
             let manifest = ModuleManifest {
                 kind: ModuleKind::Library,
                 deps: MSlice::empty(),
@@ -3507,25 +3517,31 @@ impl TypedProgram {
             };
             (manifest, None)
         } else {
-            self.module_in_progress = Some(module_id);
-            let manifest_result =
-                self.evaluate_module_manifest(parsed_namespace_id, primary_module);
-            self.module_in_progress = None;
+            let build_ns = match self.compile_build_namespace(module_id, parsed_namespace_id) {
+                Err(e) => {
+                    self.report(e);
+                    bail!("Failed to compile ns build of module {}", self.ident_str(module_name))
+                }
+                Ok(build_ns) => build_ns,
+            };
+            let manifest_result = match build_ns {
+                None => Ok(None),
+                Some(build_ns) => self.evaluate_module_manifest(build_ns.scope_id, primary_module),
+            };
             match manifest_result {
                 Err(e) => {
                     self.report(e);
                     bail!(
-                        "Failed to evaluate module manifest. Note: fn module is evaluated \
-                         before the module compiles, so module-local definitions are not \
-                         visible in it"
+                        "Failed to evaluate the manifest of module {}",
+                        self.ident_str(module_name)
                     )
                 }
                 Ok(None) => {
                     let kind =
                         if primary_module { ModuleKind::Executable } else { ModuleKind::Library };
-                    (ModuleManifest::defaulted(kind), None)
+                    (ModuleManifest::defaulted(kind), build_ns)
                 }
-                Ok(Some((manifest, fn_defn))) => (manifest, Some(fn_defn)),
+                Ok(Some(manifest)) => (manifest, build_ns),
             }
         };
 
@@ -3547,59 +3563,56 @@ impl TypedProgram {
             self.program_settings.executable = manifest.kind == ModuleKind::Executable;
         }
 
+        self.module_in_progress = None;
+
         let deps = manifest.deps;
+        let build_ns_span =
+            build_ns.map(|b| self.ast.get_span_for_id(b.parsed_id())).unwrap_or(SpanId::NONE);
         let m = self.modules.get_mut(module_id);
         m.manifest = manifest;
-        m.manifest_fn_defn = manifest_fn_defn;
+        m.build_ns_defn = build_ns.map(|b| b.parsed_id());
         m.is_dir = remaining_sources.is_dir();
-
-        let manifest_span =
-            manifest_fn_defn.map(|d| self.ast.get_span_for_id(d)).unwrap_or(SpanId::NONE);
 
         let setup_decl = self.modules.get(module_id).manifest.setup;
         let mut setup_ran = false;
-        if let Some(setup) = setup_decl
-            && self.config.setup_mode != crate::compiler::SetupMode::SetupProgram
-        {
-            let root_filename = {
-                let m = self.modules.get(module_id);
-                self.ast.sources.get(m.root_file_id(&self.mem)).filename
+        if let Some(setup) = setup_decl {
+            let force = self.config.setup_mode
+                == (crate::compiler::SetupMode::SetupOnly { force: true })
+                && primary_module;
+            let started = {
+                let request = self.setup_request(module_id, setup, force);
+                crate::compiler::start_setup(&request)
             };
-            let request = crate::compiler::SetupRequest {
-                idents: &self.ast.idents,
-                module_dir: home_dir,
-                module_name,
-                root_filename,
-                outputs: self.mem.getn(setup.outputs),
-                inputs: self.mem.getn(setup.inputs),
-                target: self.config.target,
-                k1_home: self.config.k1_home,
-                force: self.config.setup_mode
-                    == (crate::compiler::SetupMode::SetupOnly { force: true })
-                    && primary_module,
-                chatty: self.config.chatty,
-            };
-            match crate::compiler::run_setup_function(&request) {
-                Ok(ran) => setup_ran = ran,
+            let started = match started {
+                Ok(started) => started,
                 Err(e) => {
-                    let msg = format!(
-                        "Setup failed for module '{}': {e:#} ",
-                        self.ast.idents.get_string(module_name),
-                    );
-                    return Err(self.module_error(manifest_span, msg));
+                    let msg =
+                        format!("Setup failed for module '{}': {e:#}", self.ident_str(module_name));
+                    return Err(self.module_error(build_ns_span, msg));
                 }
+            };
+            if let Some(started) = started {
+                let Some(build_ns) = build_ns else {
+                    self.ice_span(build_ns_span, "setup was declared with no ns build")
+                };
+                if let Err(e) = self.execute_setup_fn(build_ns.scope_id, home_dir, build_ns_span) {
+                    self.report(e);
+                    bail!("fn setup failed for module {}", self.ident_str(module_name))
+                }
+                let finished = {
+                    let request = self.setup_request(module_id, setup, force);
+                    crate::compiler::finish_setup(&request, started)
+                };
+                if let Err(e) = finished {
+                    let msg =
+                        format!("Setup failed for module '{}': {e:#}", self.ident_str(module_name));
+                    return Err(self.module_error(build_ns_span, msg));
+                }
+                setup_ran = true;
             }
         }
 
         let remaining = remaining_sources.into_handle(setup_ran, &self.lsp.source_overrides);
-        // A setup program is the module root compiled standalone against core
-        // and std only: its deps may not be set up yet (their own setups run
-        // after this one), so they never load here
-        let deps = if self.config.setup_mode == crate::compiler::SetupMode::SetupProgram {
-            MSlice::empty()
-        } else {
-            deps
-        };
         let mut dep_handles: Vec<crate::compiler::ModuleRootHandle> = vec![];
         for i in 0..deps.len() {
             let dep_name_id = self.mem.getn(deps)[i as usize].name;
@@ -3609,7 +3622,7 @@ impl TypedProgram {
                     self.ident_str(module_name),
                     self.ast.idents.get_string(dep_name_id)
                 );
-                return Err(self.module_error(manifest_span, msg));
+                return Err(self.module_error(build_ns_span, msg));
             }
             if load_stack.contains(&dep_name_id) {
                 let mut cycle: Vec<&str> = vec![];
@@ -3618,7 +3631,7 @@ impl TypedProgram {
                 }
                 cycle.push(self.ast.idents.get_string(dep_name_id));
                 let msg = format!("Module dependency cycle: {}", cycle.join(" -> "));
-                return Err(self.module_error(manifest_span, msg));
+                return Err(self.module_error(build_ns_span, msg));
             }
             if self.modules.iter().any(|m| m.name == dep_name_id) {
                 continue;
@@ -3646,7 +3659,7 @@ impl TypedProgram {
                     self.ident_str(module_name),
                     dep_str,
                 );
-                return Err(self.module_error(manifest_span, msg));
+                return Err(self.module_error(build_ns_span, msg));
             };
             match crate::compiler::ModuleRootHandle::spawn(
                 &self.ast.idents,
@@ -3662,7 +3675,7 @@ impl TypedProgram {
                         dep_str,
                         e
                     );
-                    return Err(self.module_error(manifest_span, msg));
+                    return Err(self.module_error(build_ns_span, msg));
                 }
             }
         }
@@ -3694,6 +3707,117 @@ impl TypedProgram {
             is_dir,
             &self.lsp.source_overrides,
         )
+    }
+
+    fn declare_module_root_namespace(
+        &mut self,
+        module_id: ModuleId,
+        module_root_parsed_namespace: ParsedNamespaceId,
+    ) -> anyhow::Result<()> {
+        let declared = self.declare_namespace(module_root_parsed_namespace, Scopes::ROOT_SCOPE_ID);
+        let typed_namespace_id = match declared {
+            Err(e) => {
+                self.report(e);
+                bail!("{} failed namespace declaration phase", self.program_name())
+            }
+            Ok(id) => id,
+        };
+        let scope_id = self.namespaces.get(typed_namespace_id).scope_id;
+        let module = self.modules.get_mut(module_id);
+        module.namespace_id = typed_namespace_id;
+        module.namespace_scope_id = scope_id;
+
+        if module_id != MODULE_ID_CORE {
+            // takes 14us last I checked
+            self.add_core_uses_to_scope(scope_id, SpanId::NONE)
+                .map_err(|e| self.message_to_anyhow(e))?;
+        }
+        Ok(())
+    }
+
+    /// `ns build` is the module's pre-module world: compiled against core and std
+    /// only, before its deps load and before its remaining sources exist, since
+    /// `fn setup` is what generates them. It declares its own uses; the module's
+    /// file-level uses are not resolved yet
+    fn compile_build_namespace(
+        &mut self,
+        module_id: ModuleId,
+        module_root_parsed_namespace: ParsedNamespaceId,
+    ) -> K1Result<Option<BuildNs>> {
+        let build_ident = self.ast.idents.b.build;
+        let parsed_ns = self.ast.namespaces.get(module_root_parsed_namespace);
+        let mut build_ns_parsed_id = None;
+        for defn in parsed_ns.definitions.as_slice(&self.ast.mem) {
+            let Some(ns_id) = defn.as_namespace_id() else { continue };
+            if self.ast.namespaces.get(ns_id).name == build_ident {
+                build_ns_parsed_id = Some(ns_id);
+                break;
+            }
+        }
+        let Some(build_ns_parsed_id) = build_ns_parsed_id else { return Ok(None) };
+        let span = self.ast.namespaces.get(build_ns_parsed_id).span;
+
+        let module_scope = self.modules.get(module_id).namespace_scope_id;
+        let build_ns_id = self.declare_namespace(build_ns_parsed_id, module_scope)?;
+        if self.run_all_phases_on_ns(build_ns_parsed_id, module_id, &[]).is_err() {
+            // The phases report their own messages
+            return self.make_fail("ns build failed to compile", span);
+        }
+        let scope_id = self.namespaces.get(build_ns_id).scope_id;
+        Ok(Some(BuildNs { parsed_namespace_id: build_ns_parsed_id, scope_id }))
+    }
+
+    fn setup_request(
+        &self,
+        module_id: ModuleId,
+        setup: SetupDecl,
+        force: bool,
+    ) -> crate::compiler::SetupRequest<'_> {
+        let m = self.modules.get(module_id);
+        let root_filename = self.ast.sources.get(m.root_file_id(&self.mem)).filename;
+        crate::compiler::SetupRequest {
+            idents: &self.ast.idents,
+            module_dir: m.home_dir,
+            module_name: m.name,
+            root_filename,
+            outputs: self.mem.getn(setup.outputs),
+            inputs: self.mem.getn(setup.inputs),
+            target: self.config.target,
+            force,
+        }
+    }
+
+    fn execute_setup_fn(
+        &mut self,
+        build_ns_scope: ScopeId,
+        module_dir: StringId,
+        decl_span: SpanId,
+    ) -> K1Result<()> {
+        let Some(setup_fn_id) =
+            self.scopes.find_function_local(build_ns_scope, self.ast.idents.b.setup)
+        else {
+            return self.make_fail(
+                "a module that declares setup needs a `fn setup(ctx: k1/setup-ctx)` in its ns build",
+                decl_span,
+            );
+        };
+        let setup_ctx_type = self.builtin_types.k1_setup_ctx.unwrap();
+        let function = self.get_function(setup_fn_id);
+        let span = self.ast.get_span_for_id(function.parsed_id);
+        let has_type_params = !function.type_params.is_empty();
+        let params = self.mem.getn(self.get_function_type(setup_fn_id).logical_params());
+        if has_type_params || params.len() != 1 || params[0].type_id != setup_ctx_type {
+            return self
+                .make_fail("fn setup must take exactly one parameter of type k1/setup-ctx", span);
+        }
+
+        let dir_value = self.static_values.add_string(module_dir);
+        let ctx_fields = self.static_values.mem.pushn(&[dir_value]);
+        let ctx_value = self
+            .static_values
+            .add(StaticValue::Struct(StaticStruct { type_id: setup_ctx_type, fields: ctx_fields }));
+        self.execute_static_function(setup_fn_id, &[ctx_value], span)?;
+        Ok(())
     }
 
     fn module_error(&mut self, span: SpanId, msg: String) -> anyhow::Error {
@@ -3741,28 +3865,6 @@ impl TypedProgram {
         parser.parse_file_into_module();
         self.buffers.lexer_tokens = token_buffer;
         file_id
-    }
-
-    fn check_manifest_fn_placement(
-        &self,
-        parsed_namespace_id: ParsedNamespaceId,
-        root_file_id: FileId,
-    ) -> K1Result<()> {
-        let module_ident = self.ast.idents.b.module;
-        let namespace = self.ast.namespaces.get(parsed_namespace_id);
-        for defn in namespace.definitions.as_slice(&self.ast.mem) {
-            let Some(fn_id) = defn.as_function_id() else { continue };
-            let f = self.ast.get_function(fn_id);
-            if f.name == module_ident && self.ast.spans.get(f.span).file_id != root_file_id {
-                kbail!(
-                    self,
-                    f.span,
-                    "fn module is the module's manifest and must live in its root file \
-                     (module.k1 or <module-name>.k1)"
-                );
-            }
-        }
-        Ok(())
     }
 
     /// Retrieve the current inference context
@@ -3889,42 +3991,9 @@ impl TypedProgram {
             .unwrap_or_else(|| self.modules.iter().last().unwrap())
     }
 
-    pub fn run_setup_entry(&mut self, module_dir: &str) -> anyhow::Result<()> {
-        let primary = self.primary_module();
-        let ns_scope = primary.namespace_scope_id;
-        let Some(setup_fn_id) = self.scopes.find_function_local(ns_scope, self.ast.idents.b.setup)
-        else {
-            bail!(
-                "a module that declares setup must define a top-level \
-                 `fn setup(ctx: k1/setup-ctx)` in its root file"
-            );
-        };
-        let setup_ctx_type = self.builtin_types.k1_setup_ctx.unwrap();
-        let function = self.get_function(setup_fn_id);
-        let span = self.ast.get_span_for_id(function.parsed_id);
-        let params = self.mem.getn(self.get_function_type(setup_fn_id).logical_params());
-        if !function.type_params.is_empty()
-            || params.len() != 1
-            || params[0].type_id != setup_ctx_type
-        {
-            let e = self
-                .make_error("fn setup must take exactly one parameter of type k1/setup-ctx", span);
-            self.report(e);
-            bail!("fn setup has the wrong signature");
-        }
-
-        let dir_string_id = self.ast.idents.intern(module_dir);
-        let dir_value = self.static_values.add_string(dir_string_id);
-        let ctx_fields = self.static_values.mem.pushn(&[dir_value]);
-        let ctx_value = self
-            .static_values
-            .add(StaticValue::Struct(StaticStruct { type_id: setup_ctx_type, fields: ctx_fields }));
-        let result = self.execute_static_function(setup_fn_id, &[ctx_value], span);
-        if let Err(e) = result {
-            self.report(e);
-            bail!("fn setup failed");
-        }
-        Ok(())
+    pub fn primary_module_completed(&self) -> bool {
+        let id = self.primary_module().id;
+        self.modules_completed.contains(&id)
     }
 
     pub fn validate_exports(&mut self) -> anyhow::Result<()> {
@@ -6148,52 +6217,26 @@ impl TypedProgram {
 
     fn evaluate_module_manifest(
         &mut self,
-        parsed_namespace_id: ParsedNamespaceId,
+        build_ns_scope: ScopeId,
         primary_module: bool,
-    ) -> K1Result<Option<(ModuleManifest, ParsedId)>> {
-        let module_ident = self.ast.idents.b.module;
-        let namespace = self.ast.namespaces.get(parsed_namespace_id);
-        let mut manifest_fn_id = None;
-        for defn in namespace.definitions.as_slice(&self.ast.mem) {
-            let Some(fn_id) = defn.as_function_id() else { continue };
-            if self.ast.get_function(fn_id).name == module_ident {
-                manifest_fn_id = Some(fn_id);
-                break;
-            }
-        }
-        let Some(manifest_fn_id) = manifest_fn_id else {
+    ) -> K1Result<Option<ModuleManifest>> {
+        let Some(manifest_fn_id) =
+            self.scopes.find_function_local(build_ns_scope, self.ast.idents.b.module)
+        else {
             return Ok(None);
         };
-        let f = self.ast.get_function(manifest_fn_id);
-        let (fn_span, fn_body, fn_ret_type) = (f.span, f.body, f.ret_type);
-        if !f.type_params.is_empty() || !f.params.is_empty() {
+        let function = self.get_function(manifest_fn_id);
+        let fn_span = self.ast.get_span_for_id(function.parsed_id);
+        let module_type_id = self.builtin_types.k1_module.unwrap();
+        let params = self.get_function_type(manifest_fn_id).logical_params();
+        if !function.type_params.is_empty() || !params.is_empty() {
             kbail!(self, fn_span, "fn module takes no parameters");
         }
-        let Some(body) = fn_body else {
-            kbail!(self, fn_span, "fn module must have a body");
-        };
-        let module_type_id = self.builtin_types.k1_module.unwrap();
-        if let Some(ret_type_expr) = fn_ret_type {
-            let ret_type = self.eval_type_expr(ret_type_expr, Scopes::ROOT_SCOPE_ID)?;
-            if ret_type != module_type_id {
-                kbail!(self, fn_span, "fn module must return k1/module");
-            }
+        if self.get_function_type(manifest_fn_id).return_type != module_type_id {
+            kbail!(self, fn_span, "fn module must return k1/module");
         }
-        let manifest_result = self.execute_static_expr(
-            body,
-            EvalExprContext::make(Scopes::ROOT_SCOPE_ID)
-                .with_expected_type(Some(module_type_id))
-                .with_static_ctx(Some(StaticExecContext {
-                    expected_return_type: Some(module_type_id),
-                }))
-                .with_manifest_eval(),
-            &[],
-        )?;
+        let manifest_result = self.execute_static_function(manifest_fn_id, &[], fn_span)?;
         let result_type_id = self.get_static_value_type(manifest_result);
-
-        if let Err(msg) = self.check_types(module_type_id, result_type_id, Scopes::ROOT_SCOPE_ID) {
-            kbail!(self, fn_span, "fn module returned wrong type: {}", msg);
-        }
 
         let StaticValue::Struct(value) = self.static_values.get(manifest_result) else {
             self.ice_span(fn_span, "module manifest value was not a struct");
@@ -6291,10 +6334,7 @@ impl TypedProgram {
             }
         };
 
-        Ok(Some((
-            ModuleManifest { kind, deps, libs, link_args, setup },
-            ParsedId::Function(manifest_fn_id),
-        )))
+        Ok(Some(ModuleManifest { kind, deps, libs, link_args, setup }))
     }
 
     fn compile_pattern_to_type(
@@ -11897,6 +11937,7 @@ impl TypedProgram {
                 is_concrete: false,
                 is_recursive: false,
                 is_macro: false,
+                is_module_manifest_fn: false,
                 is_reloadable: false,
                 abi_native: false,
                 address_taken: true,
@@ -11975,6 +12016,7 @@ impl TypedProgram {
             is_concrete: false,
             is_recursive: false,
             is_macro: false,
+            is_module_manifest_fn: false,
             is_reloadable: false,
             abi_native: false,
             address_taken: false,
@@ -17341,6 +17383,7 @@ impl TypedProgram {
             is_concrete: false,
             is_recursive: generic_function.is_recursive,
             is_macro: generic_function.is_macro,
+            is_module_manifest_fn: generic_function.is_module_manifest_fn,
             // we reject generics in reloadable places
             is_reloadable: false,
             abi_native: generic_function.abi_native,
@@ -19811,6 +19854,8 @@ impl TypedProgram {
         }
         let param_variables_handle = params.to_slice();
         let where_constraints_handle = self_.mem.pushn(&ability_where_constraints);
+        let is_manifest = name == self_.ast.idents.b.module
+            && self_.namespaces.get(namespace_id).name == self_.ast.idents.b.build;
         let actual_function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
@@ -19830,6 +19875,7 @@ impl TypedProgram {
             is_concrete: false,
             is_recursive: false,
             is_macro: false,
+            is_module_manifest_fn: is_manifest,
             is_reloadable,
             abi_native: ast_fn.is_native,
             address_taken: false,
@@ -20114,6 +20160,7 @@ impl TypedProgram {
             is_concrete: false,
             is_recursive: false,
             is_macro: true,
+            is_module_manifest_fn: false,
             is_reloadable: false,
             abi_native: false,
             address_taken: false,
@@ -20210,6 +20257,7 @@ impl TypedProgram {
 
                 let eval_ctx = EvalExprContext::make(fn_scope_id)
                     .with_expected_type(Some(return_type))
+                    .with_manifest_eval(self.get_function(declaration_id).is_module_manifest_fn)
                     // Why do we care to indicate if the function is generic?
                     // Currently, its because we want to avoid running #static and #meta blocks
                     // until the types and static values are provided
@@ -21696,6 +21744,7 @@ impl TypedProgram {
             is_concrete: false,
             is_recursive: false,
             is_macro: false,
+            is_module_manifest_fn: false,
             // these load functions are host code: they patch the reloadable lib and do not live in it
             is_reloadable: false,
             abi_native: false,
@@ -22083,36 +22132,12 @@ impl TypedProgram {
         &mut self,
         module_id: ModuleId,
         module_root_parsed_namespace: ParsedNamespaceId,
-        manifest_fn_defn: Option<ParsedId>,
+        build_ns_defn: Option<ParsedId>,
     ) -> anyhow::Result<()> {
         self.module_in_progress = Some(module_id);
         let is_core = module_id == MODULE_ID_CORE;
-
-        // Namespace phase
-        debug!(">> Phase 0 declare module root namespace");
-        let module_root_namespace_declare_result =
-            self.declare_namespace(module_root_parsed_namespace, Scopes::ROOT_SCOPE_ID);
-
-        if let Err(e) = module_root_namespace_declare_result {
-            self.report(e);
-            bail!(
-                "{} failed namespace declaration phase with {} errors",
-                self.program_name(),
-                self.messages.borrow().len()
-            )
-        }
-        let typed_namespace_id = module_root_namespace_declare_result.unwrap();
-        let module_root_namespace_scope_id = self.namespaces.get(typed_namespace_id).scope_id;
-
-        let module = self.modules.get_mut(module_id);
-        module.namespace_id = typed_namespace_id;
-        module.namespace_scope_id = module_root_namespace_scope_id;
-
-        if !is_core {
-            // takes 14us last I checked
-            self.add_core_uses_to_scope(module_root_namespace_scope_id, SpanId::NONE)
-                .map_err(|e| self.message_to_anyhow(e))?;
-        }
+        // The namespace itself was declared at load, so that `ns build` had a parent
+        let module_root_namespace_scope_id = self.modules.get(module_id).namespace_scope_id;
 
         // Meta phase: Find pre namespace, if exists, and fully compile it
         let mut pre_ns_id: Option<ParsedId> = None;
@@ -22135,7 +22160,7 @@ impl TypedProgram {
             }
         }
 
-        let skip_defns = match (pre_ns_id, manifest_fn_defn) {
+        let skip_defns = match (pre_ns_id, build_ns_defn) {
             (None, None) => &[][..],
             (None, Some(id)) => &[id],
             (Some(id), None) => &[id],

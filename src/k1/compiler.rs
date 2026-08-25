@@ -331,10 +331,6 @@ pub struct Args {
     #[arg(long)]
     pub target: Option<Target>,
 
-    /// Internal: this compile is a module's setup program
-    #[arg(skip)]
-    pub is_setup_program: bool,
-
     /// Internal: nested compiles inherit the outer compile's k1 home instead of
     /// re-deriving it from the environment
     #[arg(skip)]
@@ -354,10 +350,6 @@ impl Args {
 pub enum SetupMode {
     /// Run stale setup steps at module load (default)
     Normal,
-    /// This compile IS a module's setup program
-    SetupProgram,
-    /// `k1 setup`: run setup function during load, then stop before the primary
-    /// tree typechecks; force runs even if fresh
     SetupOnly { force: bool },
 }
 
@@ -658,14 +650,23 @@ pub struct SetupRequest<'a> {
     pub outputs: &'a [StringId],
     pub inputs: &'a [StringId],
     pub target: Target,
-    pub k1_home: StringId,
     pub force: bool,
-    pub chatty: bool,
 }
 
-pub fn run_setup_function(req: &SetupRequest) -> Result<bool> {
+/// Live for the duration of one setup run: holds the cross-process lock and the
+/// module dir as cwd, which `fn setup` runs in
+pub struct StartedSetup {
+    fingerprint: String,
+    _lock: SetupLock,
+    _cwd: CwdGuard,
+}
+
+/// `None` when the declared outputs are already fresh. Otherwise the stamp is
+/// cleared and the declared outputs removed, so a failed run reads as stale
+pub fn start_setup(req: &SetupRequest) -> Result<Option<StartedSetup>> {
     let mut scratch: Mem<()> = Mem::make();
     let module_name = req.idents.get_string(req.module_name);
+    let module_dir = req.idents.get_string(req.module_dir);
     let root_path = kpath::join_tmp(&mut scratch, req.idents, req.module_dir, req.root_filename);
     let root_src = fs::read_to_string(Path::new(root_path.as_str())).map_err(|e| {
         anyhow::anyhow!(
@@ -679,20 +680,18 @@ pub fn run_setup_function(req: &SetupRequest) -> Result<bool> {
     let stamp_path = kpath::join_tmp(&mut scratch, req.idents, setup_out_dir.as_str(), "stamp");
 
     if !req.force && setup_is_fresh(req, &mut scratch, stamp_path.as_str(), &fingerprint) {
-        return Ok(false);
+        return Ok(None);
     }
 
     fs::create_dir_all(Path::new(setup_out_dir.as_str()))?;
     let lock_path = kpath::join_tmp(&mut scratch, req.idents, setup_out_dir.as_str(), "lock");
-    let _lock = SetupLock::acquire(lock_path.as_str())?;
+    let lock = SetupLock::acquire(lock_path.as_str())?;
     // Another process may have completed this setup while we waited on the lock
     if !req.force && setup_is_fresh(req, &mut scratch, stamp_path.as_str(), &fingerprint) {
-        return Ok(true);
+        return Ok(None);
     }
 
     eprintln!("Setting up module '{module_name}' (running fn setup in {root_path})...");
-    // Clean slate: outputs must be produced by this run, not inherited from a
-    // previous one, and a failed or partial run must read as stale
     let _ = fs::remove_file(Path::new(stamp_path.as_str()));
     for output in req.outputs {
         let output_path = kpath::join_tmp(&mut scratch, req.idents, req.module_dir, *output);
@@ -703,12 +702,19 @@ pub fn run_setup_function(req: &SetupRequest) -> Result<bool> {
             fs::remove_file(p)?;
         }
     }
-    run_setup_program(req, root_path.as_str())?;
+    Ok(Some(StartedSetup { fingerprint, _lock: lock, _cwd: CwdGuard::enter(module_dir) }))
+}
 
+pub fn finish_setup(req: &SetupRequest, started: StartedSetup) -> Result<()> {
+    let mut scratch: Mem<()> = Mem::make();
+    let module_name = req.idents.get_string(req.module_name);
     let outputs = output_manifest(req, &mut scratch)
         .map_err(|e| anyhow::anyhow!("fn setup for module '{module_name}' completed but {e}"))?;
-    fs::write(Path::new(stamp_path.as_str()), format!("{fingerprint}{outputs}"))?;
-    Ok(true)
+    let setup_out_dir =
+        kpath::join_tmp(&mut scratch, req.idents, req.module_dir, (".k1-out", "setup"));
+    let stamp_path = kpath::join_tmp(&mut scratch, req.idents, setup_out_dir.as_str(), "stamp");
+    fs::write(Path::new(stamp_path.as_str()), format!("{}{outputs}", started.fingerprint))?;
+    Ok(())
 }
 
 fn setup_is_fresh(
@@ -832,43 +838,6 @@ impl SetupLock {
     }
 }
 
-fn run_setup_program(req: &SetupRequest, root_path: &str) -> Result<()> {
-    let module_dir = req.idents.get_string(req.module_dir);
-    let args = Args {
-        no_std: false,
-        emit_llvm: false,
-        optimize: false,
-        dump_module: false,
-        dump_idents: false,
-        debug: false,
-        sanitize: false,
-        filc: false,
-        profile: false,
-        chatty: req.chatty,
-        optimize_ir: true,
-        cache: true,
-        target: Some(req.target),
-        is_setup_program: true,
-        k1_home_override: Some(req.idents.get_string(req.k1_home).to_string()),
-        command: Command::Check { file: Some(PathBuf::from(root_path)) },
-    };
-    let _cwd = CwdGuard::enter(module_dir);
-    let mut program = match compile_program(&args) {
-        Ok(p) => p,
-        Err(CompileProgramError::TyperFailure(_)) => {
-            bail!("the module root failed to compile as a setup program (errors above)")
-        }
-    };
-    program.run_setup_entry(module_dir)
-}
-
-fn module_list_filename(config: &CompilerConfig) -> &'static str {
-    match config.setup_mode {
-        SetupMode::SetupProgram => "modules-setup",
-        _ => "modules",
-    }
-}
-
 struct ListedModule {
     name: String,
     home_dir: String,
@@ -877,8 +846,8 @@ struct ListedModule {
     setup: Option<(Vec<String>, Vec<String>)>,
 }
 
-fn read_module_list(cache_dir: &Path, config: &CompilerConfig) -> Option<Vec<ListedModule>> {
-    let text = crate::snap::cache_load_text(cache_dir, module_list_filename(config))?;
+fn read_module_list(cache_dir: &Path) -> Option<Vec<ListedModule>> {
+    let text = crate::snap::cache_load_text(cache_dir, "modules")?;
     let mut lines = text.lines();
     if lines.next()? != format!("k1-modules v{}", crate::BUILD_ID) {
         return None;
@@ -938,7 +907,7 @@ fn write_module_list(k1: &TypedProgram) {
             writeln!(s).unwrap();
         }
     }
-    crate::snap::cache_store_text(k1.cache_dir(), module_list_filename(&k1.config), &s);
+    crate::snap::cache_store_text(k1.cache_dir(), "modules", &s);
 }
 
 fn inputs_hashes_from_module_list(
@@ -981,11 +950,9 @@ fn inputs_hashes_from_module_list(
             hash = hash.add_module_header(&m.name, &m.home_dir, &m.root_filename, root_hash);
         }
         for m in group {
-            if config.setup_mode != SetupMode::SetupProgram
-                && m.setup.as_ref().is_some_and(|(outputs, inputs)| {
-                    !listed_setup_is_fresh(&mut scratch, idents, config, m, outputs, inputs)
-                })
-            {
+            if m.setup.as_ref().is_some_and(|(outputs, inputs)| {
+                !listed_setup_is_fresh(&mut scratch, idents, config, m, outputs, inputs)
+            }) {
                 // If we're running setup, give up on getting a cache hit for this module this time
                 // around
                 return hashes;
@@ -1049,9 +1016,7 @@ fn listed_setup_is_fresh(
         outputs: &outputs,
         inputs: &inputs,
         target: config.target,
-        k1_home: config.k1_home,
         force: false,
-        chatty: false,
     };
     let Ok(fingerprint) = setup_fingerprint(&req, scratch, &root_src) else {
         return false;
@@ -1213,9 +1178,7 @@ pub fn compile_program_ext(
         chatty: args.chatty,
         optimize_ir: args.optimize_ir,
         cache: args.cache,
-        setup_mode: if args.is_setup_program {
-            SetupMode::SetupProgram
-        } else if let Command::Setup { force, .. } = args.command {
+        setup_mode: if let Command::Setup { force, .. } = args.command {
             SetupMode::SetupOnly { force }
         } else {
             SetupMode::Normal
@@ -1227,7 +1190,7 @@ pub fn compile_program_ext(
     let mut k1 = 'program: {
         let cache_dir = Path::new(ast.idents.get_string(cache_dir));
         if args.cache
-            && let Some(modules) = read_module_list(cache_dir, &config)
+            && let Some(modules) = read_module_list(cache_dir)
         {
             let input_hashes_by_module = inputs_hashes_from_module_list(
                 &ast.idents,
@@ -2014,7 +1977,6 @@ mod compiler_test {
             optimize_ir: true,
             cache: false,
             target: None,
-            is_setup_program: false,
             k1_home_override: None,
             command: Command::Check {
                 file: Some(PathBuf::from(root).join("test_src/dep_diamond_test")),
@@ -2055,7 +2017,6 @@ mod compiler_test {
             optimize_ir: true,
             cache: true,
             target: None,
-            is_setup_program: false,
             k1_home_override: None,
             command: Command::Check { file: Some(app.clone()) },
         };
@@ -2099,7 +2060,6 @@ mod compiler_test {
             optimize_ir: true,
             cache: false,
             target: None,
-            is_setup_program: false,
             k1_home_override: None,
             command: Command::Check { file: Some(app.clone()) },
         };
@@ -2132,19 +2092,22 @@ mod compiler_test {
         fs::create_dir_all(&genlib).unwrap();
         fs::write(
             dir.join("app.k1"),
-            "fn module(): k1/module {\n  let m = k1/module/new()\n  m.dep(\"genlib\")\n  m\n}\n\
+            "ns build {\n  fn module(): k1/module {\n    let m = k1/module/new()\n    \
+             m.dep(\"genlib\")\n    m\n  }\n}\n\
              fn main(): i32 {\n  assert(genlib/gen-value() == 42)\n  0\n}\n",
         )
         .unwrap();
-        let genlib_src = r#"fn module(): k1/module {
-  let m = k1/module/new()
-  m.setup(["gen.k1"], [])
-  m
-}
+        let genlib_src = r#"ns build {
+  fn module(): k1/module {
+    let m = k1/module/new()
+    m.setup(["gen.k1"], [])
+    m
+  }
 
-fn setup(ctx: k1/setup-ctx) {
-  core/files/write-entire-file("${ctx.module-dir}/gen.k1", "fn gen-value(): int { 42 }\n")
-  core/files/write-entire-file("${ctx.module-dir}/witness.txt", "ran\n")
+  fn setup(ctx: k1/setup-ctx) {
+    core/files/write-entire-file("${ctx.module-dir}/gen.k1", "fn gen-value(): int { 42 }\n")
+    core/files/write-entire-file("${ctx.module-dir}/witness.txt", "ran\n")
+  }
 }
 "#;
         fs::write(genlib.join("genlib.k1"), genlib_src).unwrap();
@@ -2163,7 +2126,6 @@ fn setup(ctx: k1/setup-ctx) {
             optimize_ir: true,
             cache: false,
             target: None,
-            is_setup_program: false,
             k1_home_override: Some(root.to_string()),
             command: Command::Check { file: Some(dir.join("app.k1")) },
         };
@@ -2209,14 +2171,16 @@ fn setup(ctx: k1/setup-ctx) {
         let solo = dir.join("solo.k1");
         fs::write(
             &solo,
-            r#"fn module(): k1/module {
-  let m = k1/module/new()
-  m.setup(["solo-gen.txt"], [])
-  m
-}
+            r#"ns build {
+  fn module(): k1/module {
+    let m = k1/module/new()
+    m.setup(["solo-gen.txt"], [])
+    m
+  }
 
-fn setup(ctx: k1/setup-ctx) {
-  core/files/write-entire-file("${ctx.module-dir}/solo-gen.txt", "ran\n")
+  fn setup(ctx: k1/setup-ctx) {
+    core/files/write-entire-file("${ctx.module-dir}/solo-gen.txt", "ran\n")
+  }
 }
 
 fn main(): i32 { 0 }
@@ -2226,6 +2190,216 @@ fn main(): i32 { 0 }
         let solo_args = Args { command: Command::Check { file: Some(solo) }, ..args.clone() };
         assert!(compile_program(&solo_args).is_ok(), "single-file module with setup must compile");
         assert_eq!(fs::read_to_string(dir.join("solo-gen.txt")).unwrap(), "ran\n");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A snapshot taken after module N holds every later module as *discovered*:
+    /// namespace declared, `ns build` compiled, manifest evaluated. Restoring it
+    /// must reuse that, not re-declare it
+    #[test]
+    fn restoring_a_discovered_module_does_not_redeclare_its_build_ns() {
+        static SET_HOME: std::sync::Once = std::sync::Once::new();
+        SET_HOME.call_once(|| unsafe {
+            std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
+        });
+        let root = env!("CARGO_MANIFEST_DIR");
+        let dir = std::env::temp_dir().join(format!("k1_discovered_restore_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let app = dir.join("app");
+        let genlib = app.join("deps/genlib");
+        fs::create_dir_all(&genlib).unwrap();
+        fs::write(
+            app.join("module.k1"),
+            "ns build {\n  fn module(): k1/module {\n    let m = k1/module/new()\n    \
+             m.dep(\"genlib\")\n    m\n  }\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            genlib.join("genlib.k1"),
+            "ns build {\n  fn module(): k1/module {\n    let m = k1/module/new()\n    \
+             m.setup([\"gen.k1\"], [])\n    m\n  }\n\n  fn setup(ctx: k1/setup-ctx) {\n    \
+             core/files/write-entire-file(\"${ctx.module-dir}/gen.k1\", \
+             \"fn gen-value(): int { 42 }\\n\")\n  }\n}\n",
+        )
+        .unwrap();
+        let main_src = "fn helper(): int { 1 }\nfn main(): i32 {\n  \
+                        assert(genlib/gen-value() == 42)\n  assert(helper() == 1)\n  0\n}\n";
+        fs::write(app.join("main.k1"), main_src).unwrap();
+
+        let args = Args {
+            no_std: false,
+            emit_llvm: false,
+            optimize: false,
+            dump_module: false,
+            dump_idents: false,
+            debug: false,
+            sanitize: false,
+            filc: false,
+            profile: false,
+            chatty: false,
+            optimize_ir: true,
+            cache: true,
+            target: None,
+            k1_home_override: Some(root.to_string()),
+            command: Command::Check { file: Some(app.clone()) },
+        };
+        assert!(compile_program(&args).is_ok(), "cold compile must succeed");
+
+        // Editing a non-root file of app leaves every module header intact, so the
+        // deepest valid snapshot is the one written after genlib -- which already
+        // holds app's namespace and its compiled ns build
+        fs::write(app.join("main.k1"), format!("{main_src}// touched\n")).unwrap();
+        let restored = compile_program(&args).ok().expect("restoring app must succeed");
+        assert_eq!(restored.restored_module_count, 3, "core, std, and genlib restore");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `ns build` compiles in the module's own program, so what it reports is
+    /// reported against our own sources
+    #[test]
+    fn build_ns_messages_reach_the_program() {
+        static SET_HOME: std::sync::Once = std::sync::Once::new();
+        SET_HOME.call_once(|| unsafe {
+            std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
+        });
+        let root = env!("CARGO_MANIFEST_DIR");
+        let dir = std::env::temp_dir().join(format!("k1_build_ns_msg_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let genlib = dir.join("deps/genlib");
+        fs::create_dir_all(&genlib).unwrap();
+        fs::write(
+            dir.join("app.k1"),
+            "ns build {\n  fn module(): k1/module {\n    let m = k1/module/new()\n    \
+             m.dep(\"genlib\")\n    m\n  }\n}\n\
+             fn main(): i32 { 0 }\n",
+        )
+        .unwrap();
+        let args = Args {
+            no_std: false,
+            emit_llvm: false,
+            optimize: false,
+            dump_module: false,
+            dump_idents: false,
+            debug: false,
+            sanitize: false,
+            filc: false,
+            profile: false,
+            chatty: false,
+            optimize_ir: true,
+            cache: false,
+            target: None,
+            k1_home_override: Some(root.to_string()),
+            command: Command::Check { file: Some(dir.join("app.k1")) },
+        };
+        let manifest = "  fn module(): k1/module {\n    let m = k1/module/new()\n    \
+                        m.setup([\"gen.k1\"], [])\n    m\n  }\n";
+
+        let expect_message = |args: &Args, needle: &str, content: &str| {
+            let Err(CompileProgramError::TyperFailure(program)) = compile_program(args) else {
+                panic!("a broken ns build must fail the compile: {needle}")
+            };
+            let messages = program.messages.borrow();
+            let mut candidates = vec![];
+            for m in messages.iter() {
+                if m.level != MessageLevel::Error || !program.ident_str(m.message).contains(needle)
+                {
+                    continue;
+                }
+                let span = program.ast.spans.get(m.span);
+                let source = program.ast.sources.get(span.file_id);
+                candidates.push((
+                    program.ident_str(source.filename),
+                    source.get_span_content(&program.ast.mem, span),
+                ));
+            }
+            assert!(
+                candidates.contains(&("genlib.k1", content)),
+                "no error {needle:?} at {content:?} in genlib.k1; got {candidates:?}"
+            );
+        };
+
+        // A type error in fn setup
+        fs::write(
+            genlib.join("genlib.k1"),
+            format!(
+                "ns build {{\n{manifest}\n  fn setup(ctx: k1/setup-ctx) {{\n    \
+                     let bad: int = \"nope\"\n  }}\n}}\n"
+            ),
+        )
+        .unwrap();
+        expect_message(&args, "but got string", "\"nope\"");
+
+        // A type error in a helper fn setup calls
+        fs::write(
+            genlib.join("genlib.k1"),
+            format!(
+                "ns build {{\n{manifest}\n  fn helper(): int {{ \"nope\" }}\n\n  \
+                     fn setup(ctx: k1/setup-ctx) {{\n    let _ = helper()\n  }}\n}}\n"
+            ),
+        )
+        .unwrap();
+        expect_message(&args, "Return type mismatch", "int");
+
+        // fn setup with the wrong signature: reported while running, not compiling
+        fs::write(
+            genlib.join("genlib.k1"),
+            format!("ns build {{\n{manifest}\n  fn setup(ctx: int) {{\n  }}\n}}\n"),
+        )
+        .unwrap();
+        expect_message(&args, "fn setup must take exactly one", "setup");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// fn module is an ordinary function: it was a bare block expression once,
+    /// where an early return was an ICE and `let(returned)` was broken
+    #[test]
+    fn manifest_fn_is_a_real_function() {
+        static SET_HOME: std::sync::Once = std::sync::Once::new();
+        SET_HOME.call_once(|| unsafe {
+            std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
+        });
+        let dir = std::env::temp_dir().join(format!("k1_manifest_fn_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("app.k1");
+        fs::write(
+            &app,
+            r#"ns build {
+  fn module(): k1/module {
+    let(returned) m = k1/module/new()
+    if true { return m }
+    m
+  }
+}
+
+fn main(): i32 { 0 }
+"#,
+        )
+        .unwrap();
+        let args = Args {
+            no_std: false,
+            emit_llvm: false,
+            optimize: false,
+            dump_module: false,
+            dump_idents: false,
+            debug: false,
+            sanitize: false,
+            filc: false,
+            profile: false,
+            chatty: false,
+            optimize_ir: true,
+            cache: false,
+            target: None,
+            k1_home_override: None,
+            command: Command::Check { file: Some(app) },
+        };
+        assert!(
+            compile_program(&args).is_ok(),
+            "early return and let(returned) belong to any fn, fn module included"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

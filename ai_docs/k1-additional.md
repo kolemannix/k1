@@ -63,14 +63,21 @@ and `test_src/suite1/context_ability.k1`.
 
 ## Module Manifests And FFI
 
-A module declares its manifest with `fn module(): k1/module` in its root file.
-A directory module's root file is `module.k1` or `<module-name>.k1` (required —
-a directory module without one is an error); a single-file module is its own
-root file. A top-level `fn module` in any other file is an error. The compiler
-evaluates the fn before compiling the module and consumes it — it is never part
-of the program. No `fn module` means defaults: library, or executable for the
-primary module. Building a library primary (`m.library()`) produces both
-`.k1-out/lib<name>.{dylib|so}` and a fat `.k1-out/lib<name>.a` (a partial link
+A module describes itself in `ns build` in its root file: `fn module(): k1/module`
+is its manifest, `fn setup(ctx: k1/setup-ctx)` its build step, and both may call
+helpers declared alongside them. A directory module's root file is `module.k1` or
+`<module-name>.k1` (required — a directory module without one is an error); a
+single-file module is its own root file. `ns build` anywhere else, or a top-level
+`fn module`, is an error.
+
+`ns build` is compiled and run before the module: before its deps load and before
+its remaining sources are read, since `fn setup` is what generates them. Only core
+and std are in scope, and it declares its own `use`s — the root file's file-level
+uses are not resolved yet. The module's own passes skip it, so nothing in it is
+compiled twice. Neither fn is required: no `fn module` means defaults — library, or
+executable for the primary module.
+
+Building a library primary (`m.library()`) produces both `.k1-out/lib<name>.{dylib|so}` and a fat `.k1-out/lib<name>.a` (a partial link
 of the K1 object with every static lib in the program, k1rt included); both
 artifacts expose only the exported symbols — everything else, k1rt's C helpers
 included, is hidden/localized. `k1 run`/`k1 test` reject library modules. The
@@ -85,20 +92,20 @@ opening may declare it, disagreeing openings are an error — or per-fn with the
 `lib` modifier (`fn(extern("sym"), lib("foo"))`), which overrides the ns lib.
 
 A manifest may declare a setup step — `m.setup(outputs, inputs)` — paired with
-a top-level `fn setup(ctx: k1/setup-ctx)` in the same root file. When the
-declared outputs are stale (hashed together with the inputs, the root file, and
-the target), the compiler compiles the root file alone as a standalone
-core/std-only program — deps don't load and nested setups never run — and
-executes `fn setup` in the VM with cwd = the module dir, before the module's
-remaining sources are read, so setup may generate them. See `modules/libuv`,
-`modules/http`, `modules/sdl3`.
+`fn setup(ctx: k1/setup-ctx)` in the same `ns build`. When the declared outputs
+are stale (hashed together with the inputs, the root file, and the target), the
+compiler runs `fn setup` in the compile-time VM with cwd = the module dir, then
+stamps the outputs; a run that fails leaves no stamp, so it is retried on the
+next compile. See `modules/libuv`, `modules/http`, `modules/sdl3`.
 
 ```rust
-fn module(): k1/module {
-  let m = k1/module/new()
-  m.lib("foo", :static)
-  m.link-args(["-L/some/path"])
-  m
+ns build {
+  fn module(): k1/module {
+    let m = k1/module/new()
+    m.lib("foo", :static)
+    m.link-args(["-L/some/path"])
+    m
+  }
 }
 
 ns(lib("foo")) foo {

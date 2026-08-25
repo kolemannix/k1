@@ -1,7 +1,9 @@
-fn module(): k1/module {
-  let m = k1/module/new()
-  m.library()
-  m
+ns build {
+  fn module(): k1/module {
+    let m = k1/module/new()
+    m.library()
+    m
+  }
 }
 
 fn(export) k1_add(a: i64, b: i64): i64 { a + b }

@@ -1,8 +1,10 @@
-fn module(): k1/module {
-  let m = k1/module/new()
-  m.dep("cfglib", .{ backlog = 500 })
-  m.dep("consumer")
-  m
+ns build {
+  fn module(): k1/module {
+    let m = k1/module/new()
+    m.dep("cfglib", .{ backlog = 500 })
+    m.dep("consumer")
+    m
+  }
 }
 
 let opts: { verbose: bool } = k1/module-params(.{ verbose = false })

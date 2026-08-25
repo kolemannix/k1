@@ -1,38 +1,41 @@
-use std/process
+ns build {
+  use std/process
 
-fn module(): k1/module {
-  let m = k1/module/new()
-  m.lib("harfbuzz", :dynamic)
-  m.setup(["libs/libharfbuzz.dylib", "harfbuzz.k1"], ["hb-all.h"])
-  m
-}
-
-// Links the homebrew harfbuzz dylib and regenerates bindings from hb.h.
-// Shaping only (no hb-ft): glyph metrics come from the font tables, so this
-// module stays independent of the freetype module. Endgame is a vendored
-// single-file harfbuzz.cc static build.
-fn setup(_ctx: k1/setup-ctx) {
-  let script = `
-    set -e
-    mkdir -p libs
-    ln -sf "$(brew --prefix harfbuzz)/lib/libharfbuzz.dylib" libs/libharfbuzz.dylib
-    `
-  process/run-command("/bin/sh", ["-c", script], :inherit).!
-
-  let inc = process/run("/bin/sh", ["-c", "printf %s $(brew --prefix harfbuzz)/include/harfbuzz"]).!
-  let bindgen-args: list[string] = [
-    "-in-path", "hb-all.h",
-    "-out-path", "harfbuzz.k1",
-    "-lib-name", "harfbuzz",
-    "+strip-prefix", "hb_",
-    "+clangarg", "-I$inc",
-  ]
-  if k1/platform-macos {
-    let sdk = process/run("/bin/sh", ["-c", "printf %s $(xcrun --sdk macosx --show-sdk-path)"]).!
-    bindgen-args.push("+clangarg")
-    bindgen-args.push("-isysroot")
-    bindgen-args.push("+clangarg")
-    bindgen-args.push(sdk)
+  fn module(): k1/module {
+    let m = k1/module/new()
+    m.lib("harfbuzz", :dynamic)
+    m.setup(["libs/libharfbuzz.dylib", "c.k1"], ["hb-all.h"])
+    m
   }
-  let _ = process/run-command("k1bindgen", bindgen-args.as-span(), :inherit).!
+
+  // Links the homebrew harfbuzz dylib and regenerates bindings from hb.h.
+  // Shaping only (no hb-ft): glyph metrics come from the font tables, so this
+  // module stays independent of the freetype module. Endgame is a vendored
+  // single-file harfbuzz.cc static build.
+  fn setup(_ctx: k1/setup-ctx) {
+    let script = `
+      set -e
+      mkdir -p libs
+      ln -sf "$(brew --prefix harfbuzz)/lib/libharfbuzz.dylib" libs/libharfbuzz.dylib
+      `
+    process/run-command("/bin/sh", ["-c", script], :inherit).!
+
+    let inc = process/run("/bin/sh", ["-c", "printf %s $(brew --prefix harfbuzz)/include/harfbuzz"]).!
+    let bindgen-args: list[string] = [
+      "-in-path", "hb-all.h",
+      "-out-path", "c.k1",
+      "-lib-name", "harfbuzz",
+      "-ns-name", "c",
+      "+strip-prefix", "hb_",
+      "+clangarg", "-I$inc",
+    ]
+    if k1/platform-macos {
+      let sdk = process/run("/bin/sh", ["-c", "printf %s $(xcrun --sdk macosx --show-sdk-path)"]).!
+      bindgen-args.push("+clangarg")
+      bindgen-args.push("-isysroot")
+      bindgen-args.push("+clangarg")
+      bindgen-args.push(sdk)
+    }
+    let _ = process/run-command("k1bindgen", bindgen-args.as-span(), :inherit).!
+  }
 }

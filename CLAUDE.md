@@ -131,8 +131,8 @@ Before nontrivial work, read:
   atos on macos, vendored libbacktrace on linux), and static/shared/freestanding
   runtime libraries.
 - `modules/libuv/`: libuv wrapper module (vendored release source in vendor/,
-  cmake setup-built libs/libuv.a, bindgen-generated uv/net bindings in
-  generated/, uv_ext abilities).
+  cmake setup-built libs/libuv.a, bindgen-generated uv.k1/net.k1 bindings,
+  uv_ext abilities).
 - `modules/http/`: http framework module (dep on libuv; vendored llhttp C in
   vendor/, setup-built libs/libllhttp.a; response/routing/sse/task/work).
 - `modules/std/posix.k1` and `modules/std/libc.k1`: raw POSIX/libc bindings
@@ -142,6 +142,11 @@ Before nontrivial work, read:
 - `modules/std/json.k1`: JSON parser/model.
 - `modules/std/thread.k1`: pthread-backed threading helpers.
 - `modules/std/time.k1`: time helpers.
+- Bindgen output goes in a namespace named after the C library it binds, never
+  after its own module: when those would collide it is `c` (`sdl3/c`, `stb/c`),
+  leaving the module root for the K1 layer. k1bindgen's `-ns-name` sets it and
+  defaults to `-lib-name`, which is what `libuv/uv`, `libuv/net`, and
+  `http/llhttp` ride on.
 
 ## Generated And Noisy Files
 

@@ -560,7 +560,6 @@ mod completion_tests {
             target: None,
             cache: false,
             filc: false,
-            is_setup_program: false,
             k1_home_override: None,
             command: Command::Check { file: Some(path) },
             dump_idents: false,

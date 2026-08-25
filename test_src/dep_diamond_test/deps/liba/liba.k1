@@ -1,7 +1,9 @@
-fn module(): k1/module {
-  let m = k1/module/new()
-  m.dep("shared")
-  m
+ns build {
+  fn module(): k1/module {
+    let m = k1/module/new()
+    m.dep("shared")
+    m
+  }
 }
 
 fn value(): int { shared/base() - 1 }

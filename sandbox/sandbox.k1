@@ -1,9 +1,11 @@
-// type user = { id: string, password: string }
-fn module(): k1/module {
-  let m = k1/module/new()
-  m.library()
-  println(m)
-  m
+ns build {
+  // type user = { id: string, password: string }
+  fn module(): k1/module {
+    let m = k1/module/new()
+    m.library()
+    println(m)
+    m
+  }
 }
 
 fn main(): i32 {

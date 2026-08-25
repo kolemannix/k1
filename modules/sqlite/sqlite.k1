@@ -1,5 +1,7 @@
-fn module(): k1/module {
-  let m = k1/module/new()
-  m.lib("sqlite", :static)
-  m
+ns build {
+  fn module(): k1/module {
+    let m = k1/module/new()
+    m.lib("sqlite", :static)
+    m
+  }
 }

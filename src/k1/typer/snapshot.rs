@@ -46,7 +46,6 @@ pub(crate) fn inputs_hash_from_settings(
     .map(|b| b as u8);
     let setup_mode = match setup_mode {
         crate::compiler::SetupMode::Normal => 0u8,
-        crate::compiler::SetupMode::SetupProgram => 1,
         crate::compiler::SetupMode::SetupOnly { .. } => 2,
     };
     crate::snap::InputsHash(0).add(&[
