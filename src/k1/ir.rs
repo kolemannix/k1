@@ -825,6 +825,7 @@ pub enum Inst {
         value: Value,
         t: PhysicalType,
         volatile: bool,
+        unaligned: bool,
     },
     Load {
         t: PhysicalType,
@@ -832,6 +833,7 @@ pub enum Inst {
         /// Aggregate destination; `Value::Empty` when the load yields a scalar value.
         dst: Value,
         volatile: bool,
+        unaligned: bool,
     },
     AtomicLoad {
         t: ScalarType,
@@ -1202,9 +1204,32 @@ pub fn visit_inst_values(ir: &ProgramIr, inst: &Inst, f: &mut impl FnMut(Value))
     }
 }
 
+/// How many times each inst in `unit` is used as an operand by another inst in
+/// `unit`. Insts with no uses are absent, not zero.
+pub fn count_uses(ir: &ProgramIr, unit: &IrUnit, out: &mut FxHashMap<InstId, u32>) {
+    out.clear();
+    let mut block_h = unit.blocks.first;
+    while !block_h.is_nil() {
+        let block_node = *ir.mem.get(block_h);
+        let mut inst_h = block_node.data.instrs.first;
+        while !inst_h.is_nil() {
+            let inst_node = *ir.mem.get(inst_h);
+            let inst = *ir.instrs.get(inst_node.data);
+            visit_inst_values(ir, &inst, &mut |v| {
+                if let Value::Inst(id) = v {
+                    *out.entry(id).or_insert(0) += 1;
+                }
+            });
+            inst_h = inst_node.next;
+        }
+        block_h = block_node.next;
+    }
+}
+
 static_assert_size!(Inst, 40);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum IntCmpPred {
     Eq,
     Slt,
@@ -1215,6 +1240,13 @@ pub enum IntCmpPred {
     Ule,
     Ugt,
     Uge,
+}
+
+impl IntCmpPred {
+    pub fn from_u8(v: u8) -> IntCmpPred {
+        debug_assert!(v <= IntCmpPred::Uge as u8, "bad int pred tag {v}");
+        unsafe { core::mem::transmute::<u8, IntCmpPred>(v) }
+    }
 }
 
 impl std::fmt::Display for IntCmpPred {
@@ -1235,12 +1267,20 @@ impl std::fmt::Display for IntCmpPred {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum FloatCmpPred {
     Eq,
     Lt,
     Le,
     Gt,
     Ge,
+}
+
+impl FloatCmpPred {
+    pub fn from_u8(v: u8) -> FloatCmpPred {
+        debug_assert!(v <= FloatCmpPred::Ge as u8, "bad float pred tag {v}");
+        unsafe { core::mem::transmute::<u8, FloatCmpPred>(v) }
+    }
 }
 
 impl std::fmt::Display for FloatCmpPred {
@@ -1810,12 +1850,26 @@ impl<'k1> Builder<'k1> {
         pt: PhysicalType,
         comment: IrComment,
     ) -> Option<InstId> {
+        self.push_copy_ext(dst, src, pt, false, comment)
+    }
+
+    fn push_copy_ext(
+        &mut self,
+        dst: Value,
+        src: Value,
+        pt: PhysicalType,
+        forced_unaligned: bool,
+        comment: IrComment,
+    ) -> Option<InstId> {
         let layout = self.k1.get_pt_layout(pt);
         if pt.is_empty() {
             None
         } else {
+            let unaligned = forced_unaligned
+                || is_addr_unaligned(&self.k1.ir, dst)
+                || is_addr_unaligned(&self.k1.ir, src);
             let copy_inst = self.push_inst(
-                Inst::Copy { dst, src, t: pt, vm_size: layout.size, unaligned: false },
+                Inst::Copy { dst, src, t: pt, vm_size: layout.size, unaligned },
                 comment,
             );
             Some(copy_inst)
@@ -1823,16 +1877,44 @@ impl<'k1> Builder<'k1> {
     }
 
     fn push_load(&mut self, st: ScalarType, src: Value, comment: IrComment) -> InstId {
+        self.push_load_ext(st, src, false, comment)
+    }
+
+    fn push_load_ext(
+        &mut self,
+        st: ScalarType,
+        src: Value,
+        forced_unaligned: bool,
+        comment: IrComment,
+    ) -> InstId {
+        let unaligned = forced_unaligned || is_addr_unaligned(&self.k1.ir, src);
         self.push_inst(
-            Inst::Load { t: PhysicalType::scalar(st), src, dst: Value::Empty, volatile: false },
+            Inst::Load {
+                t: PhysicalType::scalar(st),
+                src,
+                dst: Value::Empty,
+                volatile: false,
+                unaligned,
+            },
             comment,
         )
     }
 
     fn push_store(&mut self, dst: Value, value: Value, comment: IrComment) -> InstId {
+        self.push_store_ext(dst, value, false, comment)
+    }
+
+    fn push_store_ext(
+        &mut self,
+        dst: Value,
+        value: Value,
+        forced_unaligned: bool,
+        comment: IrComment,
+    ) -> InstId {
         let t = self.get_value_kind(value).expect_value().unwrap().expect_scalar();
+        let unaligned = forced_unaligned || is_addr_unaligned(&self.k1.ir, dst);
         self.push_inst(
-            Inst::Store { dst, value, t: PhysicalType::scalar(t), volatile: false },
+            Inst::Store { dst, value, t: PhysicalType::scalar(t), volatile: false, unaligned },
             comment,
         )
     }
@@ -3141,51 +3223,105 @@ fn compile_ir_builtin(
                 (PhysicalTypeEnum::Empty, _) | (_, PhysicalTypeEnum::Empty) => {
                     Err(kerr!(b.k1, b.cur_span, "Cannot bitcast to or from empty type"))
                 }
-                (PhysicalTypeEnum::Scalar(_), PhysicalTypeEnum::Scalar(_)) => {
-                    // Note that this also covers Pointer to Pointer
-                    let bitcast = b.push_inst_anon(Inst::BitCast { v: from_value, to: to_pt });
+                (PhysicalTypeEnum::Scalar(from_st), PhysicalTypeEnum::Scalar(to_st)) => {
+                    let word_st = b.k1.ir.word_sized_int();
+                    let is_ptr = |st: ScalarType| st == ScalarType::Pointer;
+                    let value = match (is_ptr(from_st), is_ptr(to_st)) {
+                        (true, false) => {
+                            let word = b.push_inst_anon(Inst::PtrToWord { v: from_value });
+                            if to_st == word_st {
+                                word.as_value()
+                            } else {
+                                b.push_inst_anon(Inst::BitCast { v: word.as_value(), to: to_pt })
+                                    .as_value()
+                            }
+                        }
+                        (false, true) => {
+                            let word = if from_st == word_st {
+                                from_value
+                            } else {
+                                let word_pt = PhysicalType::scalar(word_st);
+                                b.push_inst_anon(Inst::BitCast { v: from_value, to: word_pt })
+                                    .as_value()
+                            };
+                            b.push_inst_anon(Inst::WordToPtr { v: word }).as_value()
+                        }
+                        _ => {
+                            b.push_inst_anon(Inst::BitCast { v: from_value, to: to_pt }).as_value()
+                        }
+                    };
                     let stored = store_rich_if_dst(
                         b,
                         dst,
                         to_pt,
-                        bitcast.as_value(),
+                        value,
                         IrComment::FulfillBitcastDestination,
                     );
                     Ok(stored)
                 }
                 (PhysicalTypeEnum::Scalar(_), PhysicalTypeEnum::Agg(_)) => {
-                    // We need a place, so its alloca time
+                    // We need a place, so its alloca time. The place has the
+                    // agg's alignment, which the scalar-typed store may exceed
+                    let unaligned =
+                        b.k1.get_pt_layout(to_pt).align < b.k1.get_pt_layout(from_pt).align;
                     let locn = match dst {
                         Some(dst) => dst,
                         None => b.push_alloca(to_pt, IrComment::BitcastScalarToAggPlace).as_value(),
                     };
 
                     // We know a scalar store will work
-                    let _stored =
-                        b.push_store(locn, from_value, IrComment::BitcastScalarToAggStore);
+                    let _stored = b.push_store_ext(
+                        locn,
+                        from_value,
+                        unaligned,
+                        IrComment::BitcastScalarToAggStore,
+                    );
                     Ok(locn)
                 }
-                (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Scalar(_)) => {
+                (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Scalar(to_st)) => {
                     // Perform a 'load' of the scalar type _from_ the
-                    // aggregate's memory
-                    let loaded = load_or_copy(
-                        b,
-                        to_pt,
-                        dst,
-                        from_value,
-                        false,
-                        IrComment::BitcastAggToScalar,
-                    );
-                    Ok(loaded)
+                    // aggregate's memory, which may be less aligned than the
+                    // scalar's natural alignment
+                    let unaligned =
+                        b.k1.get_pt_layout(from_pt).align < b.k1.get_pt_layout(to_pt).align;
+                    match dst {
+                        Some(dst) => {
+                            b.push_copy_ext(
+                                dst,
+                                from_value,
+                                to_pt,
+                                unaligned,
+                                IrComment::BitcastAggToScalar,
+                            );
+                            Ok(dst)
+                        }
+                        None => {
+                            let loaded = b.push_load_ext(
+                                to_st,
+                                from_value,
+                                unaligned,
+                                IrComment::BitcastAggToScalar,
+                            );
+                            Ok(loaded.as_value())
+                        }
+                    }
                 }
                 (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Agg(_)) => {
-                    // Make a copy to a definitely-aligned destination.
+                    // The copy is typed by from_pt; the destination place only
+                    // guarantees to_pt's alignment
+                    let unaligned =
+                        b.k1.get_pt_layout(to_pt).align < b.k1.get_pt_layout(from_pt).align;
                     let locn = match dst {
                         Some(dst) => dst,
                         None => b.push_alloca(to_pt, IrComment::BitcastAggToAggPlace).as_value(),
                     };
-                    let _copied =
-                        b.push_copy(locn, from_value, from_pt, IrComment::BitcastAggToAggCopy);
+                    let _copied = b.push_copy_ext(
+                        locn,
+                        from_value,
+                        from_pt,
+                        unaligned,
+                        IrComment::BitcastAggToAggCopy,
+                    );
                     Ok(locn)
                 }
             }
@@ -3233,16 +3369,23 @@ fn compile_ir_builtin(
                 return Ok(Value::Empty);
             }
             let src = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let unaligned = is_addr_unaligned(&b.k1.ir, src);
             match t.as_enum() {
                 PhysicalTypeEnum::Scalar(_) => {
-                    let loaded =
-                        b.push_inst_anon(Inst::Load { t, src, dst: Value::Empty, volatile: true });
+                    let loaded = b.push_inst_anon(Inst::Load {
+                        t,
+                        src,
+                        dst: Value::Empty,
+                        volatile: true,
+                        unaligned,
+                    });
                     Ok(store_scalar_if_dst(b, dst, loaded.as_value()))
                 }
                 PhysicalTypeEnum::Agg(_) => {
                     let result =
                         dst.unwrap_or_else(|| b.push_alloca(t, IrComment::None).as_value());
-                    b.push_inst_anon(Inst::Load { t, src, dst: result, volatile: true });
+                    let unaligned = unaligned || is_addr_unaligned(&b.k1.ir, result);
+                    b.push_inst_anon(Inst::Load { t, src, dst: result, volatile: true, unaligned });
                     Ok(result)
                 }
                 PhysicalTypeEnum::Empty => unreachable!(),
@@ -3253,7 +3396,15 @@ fn compile_ir_builtin(
             if !t.is_empty() {
                 let store_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
                 let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
-                b.push_inst_anon(Inst::Store { t, dst: store_dst, value, volatile: true });
+                let unaligned = is_addr_unaligned(&b.k1.ir, store_dst)
+                    || (t.is_agg() && is_addr_unaligned(&b.k1.ir, value));
+                b.push_inst_anon(Inst::Store {
+                    t,
+                    dst: store_dst,
+                    value,
+                    volatile: true,
+                    unaligned,
+                });
             }
             Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
         }
@@ -3462,11 +3613,7 @@ fn compile_vector_op(
                 None => b.push_alloca(ret_pt, IrComment::VectorLoadResult).as_value(),
                 Some(dst) => dst,
             };
-            let vm_size = b.k1.get_pt_layout(ret_pt).size;
-            b.push_inst(
-                Inst::Copy { dst: locn, src, t: ret_pt, vm_size, unaligned: true },
-                IrComment::VectorLoad,
-            );
+            b.push_copy_ext(locn, src, ret_pt, true, IrComment::VectorLoad);
             Ok(locn)
         }
         VecOpKind::Store => {
@@ -3475,11 +3622,7 @@ fn compile_vector_op(
             let _ = vector_pt_parts(b, vec_pt)?;
             let vec_value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let dst_ptr = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
-            let vm_size = b.k1.get_pt_layout(vec_pt).size;
-            b.push_inst(
-                Inst::Copy { dst: dst_ptr, src: vec_value, t: vec_pt, vm_size, unaligned: true },
-                IrComment::VectorStore,
-            );
+            b.push_copy_ext(dst_ptr, vec_value, vec_pt, true, IrComment::VectorStore);
             Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
         }
         VecOpKind::GetLane => {
@@ -4402,15 +4545,18 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
             k1.display_pt(w, t)?;
             write!(w, ", align {}", vm_layout.align)?;
         }
-        Inst::Store { dst, value, t, volatile } => {
+        Inst::Store { dst, value, t, volatile, unaligned } => {
             if volatile {
                 w.write_str("volatile ")?;
             }
             write!(w, "store to {}, ", dst)?;
             k1.display_pt(w, t)?;
             write!(w, " {}", value)?;
+            if unaligned {
+                write!(w, ", unaligned")?;
+            }
         }
-        Inst::Load { t, src, dst, volatile } => {
+        Inst::Load { t, src, dst, volatile, unaligned } => {
             if volatile {
                 w.write_str("volatile ")?;
             }
@@ -4419,6 +4565,9 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
             write!(w, " from {}", src)?;
             if dst != Value::Empty {
                 write!(w, " into {}", dst)?;
+            }
+            if unaligned {
+                write!(w, ", unaligned")?;
             }
         }
         Inst::AtomicLoad { t, src, ord } => {

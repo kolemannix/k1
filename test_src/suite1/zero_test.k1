@@ -33,6 +33,27 @@ fn test-bitcast() {
   assert-equals(p.y, 1)
   assert-equals(p.x, 2)
 
+  // agg <-> agg with differing alignments
+  let pair: { b: u32, c: u32 } = .{ b = 2, c = 3 }
+  let wide: { w: u64 } = mem/bitcast(pair)
+  let pair2: { b: u32, c: u32 } = mem/bitcast(wide)
+  assert-equals(pair2.b, 2)
+  assert-equals(pair2.c, 3)
+
+  // pointer <-> int/float scalars
+  let val: u64 = 42
+  let r: *u64 = val.&
+  let ru: u64 = mem/bitcast(r)
+  let ri: i64 = mem/bitcast(r)
+  let rf: f64 = mem/bitcast(r)
+  let from-u: *u64 = mem/bitcast(ru)
+  let from-i: *u64 = mem/bitcast(ri)
+  let from-f: *u64 = mem/bitcast(rf)
+  assert(r == from-u)
+  assert(r == from-i)
+  assert(r == from-f)
+  assert-equals(from-u.*, 42)
+
   assert(test-compile(
     mem/bitcast[u8, u16](4)
   ).is-some())

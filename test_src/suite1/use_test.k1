@@ -10,6 +10,22 @@ ns foo {
   type(alias) intalias = int
   fn get-one(): int { 1 }
 }
+
+ns exposing {
+  use(expose) foo/intalias as int-exposed
+  use(expose) foo/get-one as get-one-exposed
+  use foo/get-one as get-one-hidden
+}
+
+// A use chain in fully reversed order: each target resolves only after the
+// use below it, so this exercises the resolve-to-quiescence sweep
+ns chain {
+  use(expose) use_test/chain/d as e
+  use(expose) use_test/chain/c as d
+  use(expose) use_test/chain/b as c
+  use(expose) use_test/chain/a as b
+  use(expose) use_test/foo as a
+}
 // Use a type alias, then reference it in a type definition
 use foo/intalias
 type use-test = { i: intalias, v: foo/intalias }
@@ -36,6 +52,19 @@ fn test() {
   // Use a namespace
   use use_test/foo as foo-alias
   assert(foo-alias/get-one() == 1)
+
+  // use(expose) works like a definition: reachable via qualified paths and use-able
+  assert(exposing/get-one-exposed() == 1)
+  use use_test/exposing/int-exposed as via-expose
+  let n: via-expose = 5
+  assert(n == 5)
+
+  // A plain use is a private import: invisible to qualified paths
+  let hidden-result = test-compile(exposing/get-one-hidden())
+  assert-equals(hidden-result, :some("Function not found: 'get-one-hidden'"))
+
+  // The reversed chain resolved to quiescence
+  assert(chain/e/get-one() == 1)
 
   .{}
 }

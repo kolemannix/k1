@@ -23,8 +23,8 @@ use crate::{kbail, kerr};
 
 use super::lower;
 use super::{
-    CastKind, OPCODE_COUNT, Opcode, SRC_CONST_BIT, SRC_FP_BIT, UnitKind, builtin_from_tag,
-    float_pred_from_tag, header_a, header_b, header_op, int_pred_from_tag,
+    CastKind, OPCODE_COUNT, Opcode, UnitKind, VALUE_MASK_CONST_ID, VALUE_MASK_FRAME_OFFSET,
+    builtin_from_tag, header_a, header_b, header_op,
 };
 
 const STATIC_EXEC_INSTR_LIMIT: i64 = 2_000_000_000;
@@ -295,14 +295,14 @@ fn exec_loop(
     macro_rules! read_src {
         ($w:expr) => {{
             let w: u32 = $w;
-            if w & (SRC_CONST_BIT | SRC_FP_BIT) == 0 {
+            if w & (VALUE_MASK_CONST_ID | VALUE_MASK_FRAME_OFFSET) == 0 {
                 Value::u64(unsafe { *word_ptr!(w) })
-            } else if w & SRC_CONST_BIT != 0 {
-                let idx = (w & !SRC_CONST_BIT) as usize;
+            } else if w & VALUE_MASK_CONST_ID != 0 {
+                let idx = (w & !VALUE_MASK_CONST_ID) as usize;
                 debug_assert!(idx < k1.bc.consts.len(), "const operand out of bounds");
                 Value::u64(unsafe { *consts_base.add(idx) })
             } else {
-                Value::ptr(unsafe { fp.add((w & !SRC_FP_BIT) as usize) })
+                Value::ptr(unsafe { fp.add((w & !VALUE_MASK_FRAME_OFFSET) as usize) })
             }
         }};
     }
@@ -312,7 +312,10 @@ fn exec_loop(
             // their own unsafe, e.g. unchecked code reads)
             let w: u32 = $w;
             let v: Value = $v;
-            debug_assert!(w & (SRC_CONST_BIT | SRC_FP_BIT) == 0, "tagged dst operand");
+            debug_assert!(
+                w & (VALUE_MASK_CONST_ID | VALUE_MASK_FRAME_OFFSET) == 0,
+                "tagged dst operand"
+            );
             unsafe { *word_ptr!(w) = v.bits() }
         }};
     }
@@ -403,6 +406,14 @@ fn exec_loop(
             Opcode::JumpIf => {
                 let cond = read_src!(operand!(0));
                 let target = if cond.as_bool() { operand!(1) } else { operand!(2) };
+                set_pc!(target);
+            }
+            Opcode::JumpIfIntCmp => {
+                let width = header_a(h);
+                let pred = ir::IntCmpPred::from_u8(header_b(h) as u8);
+                let lhs = read_src!(operand!(0)).bits();
+                let rhs = read_src!(operand!(1)).bits();
+                let target = if int_cmp(width, pred, lhs, rhs) { operand!(2) } else { operand!(3) };
                 set_pc!(target);
             }
             Opcode::Unreachable => {
@@ -794,7 +805,7 @@ fn exec_loop(
             }
             Opcode::IntCmp => {
                 let width = header_a(h);
-                let pred = int_pred_from_tag(header_b(h));
+                let pred = ir::IntCmpPred::from_u8(header_b(h) as u8);
                 let lhs = read_src!(operand!(1)).bits();
                 let rhs = read_src!(operand!(2)).bits();
                 let b = int_cmp(width, pred, lhs, rhs);
@@ -848,7 +859,7 @@ fn exec_loop(
             }
             Opcode::FloatCmp => {
                 let width = header_a(h);
-                let pred = float_pred_from_tag(header_b(h));
+                let pred = ir::FloatCmpPred::from_u8(header_b(h) as u8);
                 let lhs = read_src!(operand!(1));
                 let rhs = read_src!(operand!(2));
                 // NOTE: Eq is bitwise, matching the old VM (NaN == NaN,
@@ -1055,45 +1066,20 @@ fn exec_cast(kind: CastKind, from: u32, to: u32, input: Value) -> Value {
 
 fn int_cmp(width: u8, pred: ir::IntCmpPred, lhs: u64, rhs: u64) -> bool {
     use ir::IntCmpPred as P;
-    match (width, pred) {
-        (8, P::Eq) => (lhs as u8) == (rhs as u8),
-        (16, P::Eq) => (lhs as u16) == (rhs as u16),
-        (32, P::Eq) => (lhs as u32) == (rhs as u32),
-        (64, P::Eq) => lhs == rhs,
-
-        (8, P::Slt) => (lhs as i8) < (rhs as i8),
-        (8, P::Sle) => (lhs as i8) <= (rhs as i8),
-        (8, P::Sgt) => (lhs as i8) > (rhs as i8),
-        (8, P::Sge) => (lhs as i8) >= (rhs as i8),
-        (8, P::Ult) => (lhs as u8) < (rhs as u8),
-        (8, P::Ule) => (lhs as u8) <= (rhs as u8),
-        (8, P::Ugt) => (lhs as u8) > (rhs as u8),
-        (8, P::Uge) => (lhs as u8) >= (rhs as u8),
-        (16, P::Slt) => (lhs as i16) < (rhs as i16),
-        (16, P::Sle) => (lhs as i16) <= (rhs as i16),
-        (16, P::Sgt) => (lhs as i16) > (rhs as i16),
-        (16, P::Sge) => (lhs as i16) >= (rhs as i16),
-        (16, P::Ult) => (lhs as u16) < (rhs as u16),
-        (16, P::Ule) => (lhs as u16) <= (rhs as u16),
-        (16, P::Ugt) => (lhs as u16) > (rhs as u16),
-        (16, P::Uge) => (lhs as u16) >= (rhs as u16),
-        (32, P::Slt) => (lhs as i32) < (rhs as i32),
-        (32, P::Sle) => (lhs as i32) <= (rhs as i32),
-        (32, P::Sgt) => (lhs as i32) > (rhs as i32),
-        (32, P::Sge) => (lhs as i32) >= (rhs as i32),
-        (32, P::Ult) => (lhs as u32) < (rhs as u32),
-        (32, P::Ule) => (lhs as u32) <= (rhs as u32),
-        (32, P::Ugt) => (lhs as u32) > (rhs as u32),
-        (32, P::Uge) => (lhs as u32) >= (rhs as u32),
-        (64, P::Slt) => (lhs as i64) < (rhs as i64),
-        (64, P::Sle) => (lhs as i64) <= (rhs as i64),
-        (64, P::Sgt) => (lhs as i64) > (rhs as i64),
-        (64, P::Sge) => (lhs as i64) >= (rhs as i64),
-        (64, P::Ult) => lhs < rhs,
-        (64, P::Ule) => lhs <= rhs,
-        (64, P::Ugt) => lhs > rhs,
-        (64, P::Uge) => lhs >= rhs,
-        _ => unreachable!(),
+    debug_assert!(width > 0 && width <= 64, "bad int cmp width {width}");
+    let shift = 64 - width as u32;
+    let l = lhs << shift;
+    let r = rhs << shift;
+    match pred {
+        P::Eq => l == r,
+        P::Slt => (l as i64) < (r as i64),
+        P::Sle => (l as i64) <= (r as i64),
+        P::Sgt => (l as i64) > (r as i64),
+        P::Sge => (l as i64) >= (r as i64),
+        P::Ult => l < r,
+        P::Ule => l <= r,
+        P::Ugt => l > r,
+        P::Uge => l >= r,
     }
 }
 

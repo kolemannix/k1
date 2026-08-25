@@ -17,6 +17,39 @@ fn test() {
   assert(10.1.as[i32] == 10)
   assert-equals(-10.1.as[i32], -10)
   assert((58686845.22: f64).as[i64] == 58686845)
+
+  assert-equals((200.0: f32).as[u8], 200)
+  assert-equals((-100.0: f32).as[i8], -100)
+  assert-equals((40000.0: f32).as[u16], 40000)
+  assert-equals((-20000.0: f64).as[i16], -20000)
+
+  assert-equals((300.0: f32).as[u8], 255)
+  assert-equals((-5.0: f32).as[u8], 0)
+  assert-equals((300.0: f32).as[i8], 127)
+  assert-equals((-300.0: f32).as[i8], -128)
+  assert-equals((70000.5: f64).as[u16], 65535)
+  assert-equals((10000000000.0: f32).as[u32], 4294967295)
+  assert-equals((-5.0: f32).as[u32], 0)
+  assert-equals((10000000000.0: f32).as[i32], 2147483647)
+
+  let f32-zero: f32 = 0.0
+  assert-equals((f32-zero / f32-zero).as[u8], 0)
+  assert-equals((f32-zero / f32-zero).as[i32], 0)
+  assert-equals(((1.0: f32) / f32-zero).as[u8], 255)
+  assert-equals(((1.0: f32) / f32-zero).negated().as[i8], -128)
+
+  let ct-over-u8: u8 = #static { (300.0: f32).as[u8] }
+  let ct-under-u8: u8 = #static { (-5.0: f32).as[u8] }
+  let ct-under-i8: i8 = #static { (-300.0: f32).as[i8] }
+  let ct-over-u16: u16 = #static { (70000.5: f64).as[u16] }
+  let ct-over-u32: u32 = #static { (10000000000.0: f32).as[u32] }
+  let ct-over-i32: i32 = #static { (10000000000.0: f32).as[i32] }
+  assert-equals(ct-over-u8, 255)
+  assert-equals(ct-under-u8, 0)
+  assert-equals(ct-under-i8, -128)
+  assert-equals(ct-over-u16, 65535)
+  assert-equals(ct-over-u32, 4294967295)
+  assert-equals(ct-over-i32, 2147483647)
   assert(-448.0 < -447.0)
   assert(-448.0 <= -447.0)
 

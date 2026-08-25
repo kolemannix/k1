@@ -45,9 +45,9 @@ pub(crate) enum InferenceFailure {
         span: SpanId,
     },
     Unsolved {
-        params: SV8<TypeId>,
-        arguments: SV8<(TypeId, TypeId)>,
-        solutions: SV8<TypeSubstitutionPair>,
+        params: MSlice<TypeId, MemTmp>,
+        arguments: MSlice<(TypeId, TypeId), MemTmp>,
+        solutions: MSlice<TypeSubstitutionPair, MemTmp>,
         span: SpanId,
     },
     Constraint(K1Message),
@@ -304,7 +304,7 @@ impl TypedProgram {
 
         let tmp_mark = self.tmp.mark();
         let mut solutions: List<TypeId, MemTmp> = self.tmp.new_list(must_solve_params.len());
-        let mut unsolved_params: SV8<TypeId> = smallvec![];
+        let mut unsolved_params: List<TypeId, MemTmp> = self.tmp.new_list(must_solve_params.len());
         // Parallel to all_type_params; TypeId::PENDING marks an unsolved param
         let mut all_solutions: List<TypeId, MemTmp> =
             self.tmp.new_list(all_type_params.len() as u32);
@@ -326,21 +326,22 @@ impl TypedProgram {
             }
         }
         if !unsolved_params.is_empty() {
-            let mut solved_pairs: SV8<TypeSubstitutionPair> = smallvec![];
+            let mut solved_pairs: List<TypeSubstitutionPair, MemTmp> =
+                self.tmp.new_list(self.ictx().slots.len() as u32);
             for s in &self.ictx().slots {
                 if let Some(sol) = s.solution {
                     solved_pairs.push(spair! { s.param_type => sol });
                 }
             }
-            let mut arguments: SV8<(TypeId, TypeId)> = smallvec![];
+            let mut arguments: List<(TypeId, TypeId), MemTmp> =
+                self.tmp.new_list(argument_types.len() as u32);
             for (passed_type, pair) in argument_types.iter().zip(inference_pairs.iter()) {
                 arguments.push((*passed_type, pair.param_type));
             }
-            self.tmp.reset_to(tmp_mark);
             return Err(InferenceFailure::Unsolved {
-                params: unsolved_params,
-                arguments,
-                solutions: solved_pairs,
+                params: unsolved_params.to_slice(),
+                arguments: arguments.to_slice(),
+                solutions: solved_pairs.to_slice(),
                 span,
             });
         }
@@ -372,12 +373,14 @@ impl TypedProgram {
                 self,
                 span,
                 "Could not solve for {} given arguments:\n{}\nSolutions:{}",
-                params
+                self.tmp
+                    .getn(params)
                     .iter()
                     .map(|p| self.ident_str(self.types.get(*p).as_tvar().unwrap().name))
                     .collect::<Vec<_>>()
                     .join(", "),
-                arguments
+                self.tmp
+                    .getn(arguments)
                     .iter()
                     .map(|(passed_type, param_type)| {
                         format!(
@@ -388,7 +391,7 @@ impl TypedProgram {
                     })
                     .collect::<Vec<_>>()
                     .join("\n"),
-                self.pretty_print_type_substitutions(&solutions, ", ")
+                self.pretty_print_type_substitutions(self.tmp.getn(solutions), ", ")
             ),
             InferenceFailure::Constraint(error) => error,
         }

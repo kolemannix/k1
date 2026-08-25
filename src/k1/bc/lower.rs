@@ -5,7 +5,7 @@
 //!
 //! Per unit, three passes:
 //! - Pass A (analyze): assign a dense frame-word slot to every value-producing
-//!   instruction, build the value-forwarding map for no-op insts, collect
+//!   instruction, map each no-op inst to the value it is the same as, collect
 //!   phis per block, and lay out the frame (allocas + agg-return temps at
 //!   fixed byte offsets).
 //! - Pass B (emit): walk blocks in order, emitting into a unit-local buffer
@@ -18,7 +18,7 @@
 //!   that were waiting on this unit's `code_start`.
 
 use crate::debug;
-use fxhash::FxHashMap;
+use fxhash::{FxHashMap, FxHashSet};
 
 use crate::ir::{self, BlockId, DataInst, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId};
 use crate::kbail;
@@ -28,8 +28,8 @@ use crate::typer::{FunctionId, K1Result, TypedExprId, TypedFloatValue, TypedProg
 use crate::vm;
 
 use super::{
-    CastKind, FRAME_ALIGN, FRAME_HEADER_WORDS, Opcode, PENDING_PC, SRC_FP_BIT, UnitInfo, UnitKind,
-    builtin_tag, float_pred_tag, header, int_pred_tag,
+    CastKind, FRAME_ALIGN, FRAME_HEADER_WORDS, Opcode, PENDING_PC, UnitInfo, UnitKind,
+    VALUE_MASK_FRAME_OFFSET, builtin_tag, header,
 };
 
 pub fn get_or_lower_unit(
@@ -103,8 +103,8 @@ pub fn get_or_lower_expr(
 }
 
 struct PendingTramp {
-    /// buf index of the JumpIf operand to patch with this trampoline's pc
-    fixup_at: u32,
+    /// the JumpIf operand to patch with this trampoline's pc
+    operand: u32,
     from: BlockId,
     target: BlockId,
 }
@@ -117,33 +117,39 @@ pub(crate) struct LowerCtx {
     scratch1: u32,
     scratch_flip: bool,
 
-    /// Operand encoding per value inst: a frame word index, or `SRC_FP_BIT |
-    /// byte offset` for allocas and agg call temps (their frame address is
-    /// baked into consumers; nothing materializes it)
-    slots: FxHashMap<InstId, u32>,
-    fwd: FxHashMap<InstId, ir::Value>,
-    /// StructOffsets that emit nothing: every use is a Load address or Store
-    /// destination, so the (base, byte offset) bakes into those instructions'
-    /// B field instead
-    so_folded: FxHashMap<InstId, (ir::Value, u16)>,
-    /// Per-call operand staging, pooled across emit_call invocations
-    arg_srcs: Vec<u32>,
+    /// What each inst lowered to, one rung below `ir::Value`: a frame word
+    /// index, or `VALUE_MASK_FRAME_OFFSET | byte offset` for allocas and agg call temps
+    /// (their frame address is baked into consumers; nothing materializes it)
+    inst_to_frame_value: FxHashMap<InstId, u32>,
+    /// Insts that own no bc value
+    inst_to_parent_value: FxHashMap<InstId, ir::Value>,
+    /// StructOffsets that emit nothing: every use is a scalar Load address or
+    /// Store destination, so the byte offset is baked into those instead
+    folded_struct_offsets: FxHashMap<InstId, (ir::Value, u16)>,
+    /// Uses of each inst within the unit, from `ir::count_uses`
+    use_counts: FxHashMap<InstId, u32>,
+    /// Of those uses, the ones in a scalar Load address or Store destination
+    /// position; a StructOffset folds when the two counts agree
+    addr_use_counts: FxHashMap<InstId, u32>,
+    /// IntCmps that emit nothing: the sole use is the `JumpIf` terminating
+    /// their own block, so the compare rides that branch as `JumpIfIntCmp`
+    fused_cmps: FxHashSet<InstId>,
+    call_arg_values: Vec<u32>,
     /// Flat (block, phi) pairs in block-then-phi order; blocks with phis are
     /// rare, so edge-copy emission just scans this
-    block_phis: Vec<(BlockId, InstId)>,
+    phis: Vec<(BlockId, InstId)>,
     /// Pass A worklists for frame layout
     allocas: Vec<(InstId, Layout)>,
     agg_call_temps: Vec<(InstId, Layout)>,
 
-    buf: Vec<u32>,
-    block_pcs: FxHashMap<BlockId, u32>,
-    /// buf indices whose value is a local pc that must be shifted by the
-    /// final append base
-    relocs: Vec<u32>,
-    /// buf indices to patch with a block's local pc
-    block_fixups: Vec<(u32, BlockId)>,
-    /// buf indices to patch with a (recursive) callee's absolute code_start
-    call_fixups: Vec<(u32, FunctionId)>,
+    bc_out: Vec<u32>,
+    block_to_entry_pc: FxHashMap<BlockId, u32>,
+    /// Operands holding a local pc that must be shifted by the final append base
+    pc_operands_to_rebase: Vec<u32>,
+    /// Operands to patch with a block's entry pc
+    operand_to_block: Vec<(u32, BlockId)>,
+    /// Operands to patch with a (recursive) callee's absolute code_start
+    operand_to_callee: Vec<(u32, FunctionId)>,
     trampolines: Vec<PendingTramp>,
     spans: Vec<(u32, SpanId)>,
     cur_span: SpanId,
@@ -157,18 +163,21 @@ impl LowerCtx {
             scratch0: 0,
             scratch1: 0,
             scratch_flip: false,
-            slots: FxHashMap::default(),
-            fwd: FxHashMap::default(),
-            so_folded: FxHashMap::default(),
-            arg_srcs: Vec::new(),
-            block_phis: Vec::new(),
+            inst_to_frame_value: FxHashMap::default(),
+            inst_to_parent_value: FxHashMap::default(),
+            folded_struct_offsets: FxHashMap::default(),
+            use_counts: FxHashMap::default(),
+            addr_use_counts: FxHashMap::default(),
+            fused_cmps: FxHashSet::default(),
+            call_arg_values: Vec::new(),
+            phis: Vec::new(),
             allocas: Vec::new(),
             agg_call_temps: Vec::new(),
-            buf: Vec::with_capacity(1024),
-            block_pcs: FxHashMap::default(),
-            relocs: Vec::new(),
-            block_fixups: Vec::new(),
-            call_fixups: Vec::new(),
+            bc_out: Vec::with_capacity(1024),
+            block_to_entry_pc: FxHashMap::default(),
+            pc_operands_to_rebase: Vec::new(),
+            operand_to_block: Vec::new(),
+            operand_to_callee: Vec::new(),
             trampolines: Vec::new(),
             spans: Vec::new(),
             cur_span: SpanId::NONE,
@@ -181,40 +190,43 @@ impl LowerCtx {
         self.scratch0 = 0;
         self.scratch1 = 0;
         self.scratch_flip = false;
-        self.slots.clear();
-        self.fwd.clear();
-        self.so_folded.clear();
-        self.arg_srcs.clear();
-        self.block_phis.clear();
+        self.inst_to_frame_value.clear();
+        self.inst_to_parent_value.clear();
+        self.folded_struct_offsets.clear();
+        self.use_counts.clear();
+        self.addr_use_counts.clear();
+        self.fused_cmps.clear();
+        self.call_arg_values.clear();
+        self.phis.clear();
         self.allocas.clear();
         self.agg_call_temps.clear();
-        self.buf.clear();
-        self.block_pcs.clear();
-        self.relocs.clear();
-        self.block_fixups.clear();
-        self.call_fixups.clear();
+        self.bc_out.clear();
+        self.block_to_entry_pc.clear();
+        self.pc_operands_to_rebase.clear();
+        self.operand_to_block.clear();
+        self.operand_to_callee.clear();
         self.trampolines.clear();
         self.spans.clear();
         self.cur_span = SpanId::NONE;
     }
 
     fn pc(&self) -> u32 {
-        self.buf.len() as u32
+        self.bc_out.len() as u32
     }
 
     fn emit(&mut self, op: Opcode, a: u8, b: u16) {
-        self.buf.push(header(op, a, b));
+        self.bc_out.push(header(op, a, b));
     }
 
     fn push(&mut self, w: u32) {
-        self.buf.push(w);
+        self.bc_out.push(w);
     }
 
     fn push_block_target(&mut self, b: BlockId) {
-        let at = self.buf.len() as u32;
-        self.buf.push(0);
-        self.block_fixups.push((at, b));
-        self.relocs.push(at);
+        let at = self.bc_out.len() as u32;
+        self.bc_out.push(0);
+        self.operand_to_block.push((at, b));
+        self.pc_operands_to_rebase.push(at);
     }
 
     /// Reset scratch alternation; call before resolving a new instruction's operands
@@ -228,15 +240,26 @@ impl LowerCtx {
         s
     }
 
-    fn slot_of(&self, inst_id: InstId) -> u32 {
+    /// Walk parent links to the value that owns storage
+    fn walk_to_frame_value(&self, mut value: ir::Value) -> ir::Value {
+        while let ir::Value::Inst(id) = value {
+            match self.inst_to_parent_value.get(&id) {
+                Some(f) => value = *f,
+                None => break,
+            }
+        }
+        value
+    }
+
+    fn bc_value_of(&self, inst_id: InstId) -> u32 {
         *self
-            .slots
+            .inst_to_frame_value
             .get(&inst_id)
-            .unwrap_or_else(|| panic!("bc lowering: no slot for value inst i{}", inst_id.as_u32()))
+            .unwrap_or_else(|| panic!("bc lowering: no bc value for inst i{}", inst_id.as_u32()))
     }
 
     fn block_has_phis(&self, b: BlockId) -> bool {
-        self.block_phis.iter().any(|(pb, _)| *pb == b)
+        self.phis.iter().any(|(pb, _)| *pb == b)
     }
 
     /// Word index of the k-th out-arg (the callee's future param slot k)
@@ -290,30 +313,20 @@ fn const_of_data(imm: DataInst) -> u64 {
     }
 }
 
-/// Chase forwarding chains: no-op conversions (BitCast/IntExtU/PtrToWord/
-/// WordToPtr) and dst-carrying calls, whose value is their destination
-fn chase_fwd(fwd: &FxHashMap<InstId, ir::Value>, mut value: ir::Value) -> ir::Value {
-    while let ir::Value::Inst(id) = value {
-        match fwd.get(&id) {
-            Some(f) => value = *f,
-            None => break,
-        }
-    }
-    value
+fn fused_cmp_of(ctx: &LowerCtx, cond: ir::Value) -> Option<InstId> {
+    let ir::Value::Inst(id) = cond else { return None };
+    if ctx.fused_cmps.contains(&id) { Some(id) } else { None }
 }
 
-/// Resolve an ir operand to a tagged src word. May emit a `LoadGlobal` into a
-/// scratch slot (globals are lazy and per-VM-mutable, so they cannot be baked).
-/// Everything else becomes a frame word index or a baked constant.
-fn resolve_src(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::Value) -> u32 {
-    match chase_fwd(&ctx.fwd, value) {
+fn resolve_lowered_value(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::Value) -> u32 {
+    match ctx.walk_to_frame_value(value) {
         ir::Value::Inst(inst_id) => {
-            if let Some(slot) = ctx.slots.get(&inst_id) {
-                return *slot;
+            if let Some(bc_value) = ctx.inst_to_frame_value.get(&inst_id) {
+                return *bc_value;
             }
             match *k1.ir.instrs.get(inst_id) {
                 Inst::Data(imm) => k1.bc.intern_const(const_of_data(imm)),
-                // Value-kind insts without slots are empty-typed; reads are 0
+                // Value-kind insts without a bc value are empty-typed; reads are 0
                 // (parity with the old VM's default-0 for never-written insts)
                 _ => k1.bc.intern_const(0),
             }
@@ -355,12 +368,12 @@ fn resolve_src(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::Value) -> u
 /// Resolve a memory operand for Load/Store, baking a folded StructOffset's
 /// byte offset into the returned B value instead of an address computation.
 fn resolve_addr(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::Value) -> (u32, u16) {
-    if let ir::Value::Inst(id) = chase_fwd(&ctx.fwd, value) {
-        if let Some((base, off)) = ctx.so_folded.get(&id).copied() {
-            return (resolve_src(k1, ctx, base), off);
+    if let ir::Value::Inst(id) = value {
+        if let Some((base, off)) = ctx.folded_struct_offsets.get(&id).copied() {
+            return (resolve_lowered_value(k1, ctx, base), off);
         }
     }
-    (resolve_src(k1, ctx, value), 0)
+    (resolve_lowered_value(k1, ctx, value), 0)
 }
 
 fn lower_unit(k1: &mut TypedProgram, unit: IrUnit) -> K1Result<UnitInfo> {
@@ -397,13 +410,16 @@ fn lower_unit_with_ctx(
     // ------------------------- Pass A: analyze -------------------------
     // The unit is immutable at this point (ir-gen and iropt have run), so we
     // walk the dlists by cursor, copying each node out — no borrows held.
+    ir::count_uses(&k1.ir, &unit, &mut ctx.use_counts);
     let mut next_word: u32 = FRAME_HEADER_WORDS + param_count;
     let mut call_arg_words: usize = 0;
+    let mut block_cmps: Vec<InstId> = Vec::new();
 
     let mut block_h = unit.blocks.first;
     while !block_h.is_nil() {
         let block_node = *k1.ir.mem.get(block_h);
         let mut inst_h = block_node.data.instrs.first;
+        block_cmps.clear();
         while !inst_h.is_nil() {
             let inst_node = *k1.ir.mem.get(inst_h);
             let inst_id = inst_node.data;
@@ -414,15 +430,15 @@ fn lower_unit_with_ctx(
                 | Inst::IntExtU { v, .. }
                 | Inst::PtrToWord { v }
                 | Inst::WordToPtr { v } => {
-                    ctx.fwd.insert(inst_id, v);
+                    ctx.inst_to_parent_value.insert(inst_id, v);
                 }
                 Inst::Alloca { vm_layout, .. } => {
                     ctx.allocas.push((inst_id, vm_layout));
                 }
                 Inst::Phi { t, .. } => {
-                    ctx.block_phis.push((block_h, inst_id));
+                    ctx.phis.push((block_h, inst_id));
                     if !t.is_empty() {
-                        ctx.slots.insert(inst_id, next_word);
+                        ctx.inst_to_frame_value.insert(inst_id, next_word);
                         next_word += 1;
                     }
                 }
@@ -436,7 +452,7 @@ fn lower_unit_with_ctx(
                                 "call with dst but empty return type"
                             );
                             // The call's value IS its destination
-                            ctx.fwd.insert(inst_id, dst);
+                            ctx.inst_to_parent_value.insert(inst_id, dst);
                         }
                         None if call.ret_type.is_agg() => {
                             // Value = the temp's frame address; encoded fp-relative
@@ -444,62 +460,61 @@ fn lower_unit_with_ctx(
                             ctx.agg_call_temps.push((inst_id, layout));
                         }
                         None if !call.ret_type.is_empty() => {
-                            ctx.slots.insert(inst_id, next_word);
+                            ctx.inst_to_frame_value.insert(inst_id, next_word);
                             next_word += 1;
                         }
                         None => {}
                     }
                 }
                 Inst::StructOffset { base, vm_offset, .. } => {
-                    ctx.slots.insert(inst_id, next_word);
+                    ctx.inst_to_frame_value.insert(inst_id, next_word);
                     next_word += 1;
                     if vm_offset <= u16::MAX as u32 {
-                        ctx.so_folded.insert(inst_id, (base, vm_offset as u16));
+                        ctx.folded_struct_offsets.insert(inst_id, (base, vm_offset as u16));
+                    }
+                }
+                Inst::IntCmp { .. } => {
+                    ctx.inst_to_frame_value.insert(inst_id, next_word);
+                    next_word += 1;
+                    block_cmps.push(inst_id);
+                }
+                Inst::JumpIf { cond, .. } => {
+                    if let ir::Value::Inst(id) = cond {
+                        if ctx.use_counts.get(&id) == Some(&1) && block_cmps.contains(&id) {
+                            ctx.fused_cmps.insert(id);
+                        }
                     }
                 }
                 _ => {
                     if let InstKind::Value(pt) = ir::get_inst_kind(&k1.ir, inst_id) {
                         if !pt.is_empty() {
-                            ctx.slots.insert(inst_id, next_word);
+                            ctx.inst_to_frame_value.insert(inst_id, next_word);
                             next_word += 1;
                         }
                     }
                 }
+            }
+            let addr_use = match inst {
+                Inst::Load { t, src, .. } if matches!(t.as_enum(), PhysicalTypeEnum::Scalar(_)) => {
+                    Some(src)
+                }
+                Inst::Store { t, dst, .. } if matches!(t.as_enum(), PhysicalTypeEnum::Scalar(_)) => {
+                    Some(dst)
+                }
+                _ => None,
+            };
+            if let Some(ir::Value::Inst(id)) = addr_use {
+                *ctx.addr_use_counts.entry(id).or_insert(0) += 1;
             }
             inst_h = inst_node.next;
         }
         block_h = block_node.next;
     }
 
-    // A StructOffset use anywhere but a Load address or Store destination
-    // forces it to materialize as PtrAddImm; drop those from the fold set
-    if !ctx.so_folded.is_empty() {
-        fn unfold_use(ctx: &mut LowerCtx, v: ir::Value) {
-            if let ir::Value::Inst(id) = chase_fwd(&ctx.fwd, v) {
-                ctx.so_folded.remove(&id);
-            }
-        }
-        let mut block_h = unit.blocks.first;
-        while !block_h.is_nil() {
-            let block_node = *k1.ir.mem.get(block_h);
-            let mut inst_h = block_node.data.instrs.first;
-            while !inst_h.is_nil() {
-                let inst_node = *k1.ir.mem.get(inst_h);
-                let inst = *k1.ir.instrs.get(inst_node.data);
-                match inst {
-                    Inst::Load { t, .. } if matches!(t.as_enum(), PhysicalTypeEnum::Scalar(_)) => {}
-                    Inst::Store { t, value, .. }
-                        if matches!(t.as_enum(), PhysicalTypeEnum::Scalar(_)) =>
-                    {
-                        unfold_use(ctx, value)
-                    }
-                    _ => ir::visit_inst_values(&k1.ir, &inst, &mut |v| unfold_use(ctx, v)),
-                }
-                inst_h = inst_node.next;
-            }
-            block_h = block_node.next;
-        }
-    }
+    // Any use outside an address position forces the StructOffset to
+    // materialize as PtrAddImm
+    let LowerCtx { folded_struct_offsets, addr_use_counts, use_counts, .. } = &mut *ctx;
+    folded_struct_offsets.retain(|id, _| addr_use_counts.get(id) == use_counts.get(id));
 
     ctx.scratch0 = next_word;
     ctx.scratch1 = next_word + 1;
@@ -518,7 +533,7 @@ fn lower_unit_with_ctx(
             align
         );
         area_bytes = align_up(area_bytes, align);
-        ctx.slots.insert(inst_id, SRC_FP_BIT | area_bytes);
+        ctx.inst_to_frame_value.insert(inst_id, VALUE_MASK_FRAME_OFFSET | area_bytes);
         area_bytes += layout.size;
     }
     for i in 0..ctx.agg_call_temps.len() {
@@ -530,19 +545,22 @@ fn lower_unit_with_ctx(
             align
         );
         area_bytes = align_up(area_bytes, align);
-        ctx.slots.insert(inst_id, SRC_FP_BIT | area_bytes);
+        ctx.inst_to_frame_value.insert(inst_id, VALUE_MASK_FRAME_OFFSET | area_bytes);
         area_bytes += layout.size;
     }
     ctx.frame_bytes = align_up(area_bytes.max(FRAME_ALIGN), FRAME_ALIGN);
-    assert!(ctx.frame_bytes < SRC_FP_BIT, "bc: frame too large for fp-relative operand encoding");
+    assert!(
+        ctx.frame_bytes < VALUE_MASK_FRAME_OFFSET,
+        "bc: frame too large for fp-relative operand encoding"
+    );
 
     // -------------------------- Pass B: emit ---------------------------
-    ctx.buf.reserve(unit.inst_count as usize * 4 + call_arg_words);
+    ctx.bc_out.reserve(unit.inst_count as usize * 4 + call_arg_words);
     let mut first = true;
     let mut block_h = unit.blocks.first;
     while !block_h.is_nil() {
         let block_node = *k1.ir.mem.get(block_h);
-        ctx.block_pcs.insert(block_h, ctx.pc());
+        ctx.block_to_entry_pc.insert(block_h, ctx.pc());
         if first {
             ctx.emit(Opcode::Enter, 0, 0);
             let fb = ctx.frame_bytes;
@@ -561,29 +579,29 @@ fn lower_unit_with_ctx(
     // Trampolines: phi edge copies for conditional jumps
     let mut tramp_i = 0;
     while tramp_i < ctx.trampolines.len() {
-        let PendingTramp { fixup_at, from, target } = ctx.trampolines[tramp_i];
+        let PendingTramp { operand, from, target } = ctx.trampolines[tramp_i];
         tramp_i += 1;
         let pc = ctx.pc();
-        ctx.buf[fixup_at as usize] = pc;
+        ctx.bc_out[operand as usize] = pc;
         emit_phi_copies(k1, ctx, from, target);
         ctx.emit(Opcode::Jump, 0, 0);
         ctx.push_block_target(target);
     }
 
     // -------------------------- Finalize -------------------------------
-    for i in 0..ctx.block_fixups.len() {
-        let (at, block_id) = ctx.block_fixups[i];
-        let Some(target_pc) = ctx.block_pcs.get(&block_id) else {
+    for i in 0..ctx.operand_to_block.len() {
+        let (at, block_id) = ctx.operand_to_block[i];
+        let Some(target_pc) = ctx.block_to_entry_pc.get(&block_id) else {
             panic!("bc lowering: jump to unemitted block b{}", block_id.raw_index());
         };
-        ctx.buf[at as usize] = *target_pc;
+        ctx.bc_out[at as usize] = *target_pc;
     }
 
     let base = k1.bc.code.len() as u32;
-    for at in &ctx.relocs {
-        ctx.buf[*at as usize] += base;
+    for at in &ctx.pc_operands_to_rebase {
+        ctx.bc_out[*at as usize] += base;
     }
-    k1.bc.code.extend_from_slice(&ctx.buf);
+    k1.bc.code.extend_from_slice(&ctx.bc_out);
     let end = k1.bc.code.len() as u32;
 
     for (local_pc, span) in &ctx.spans {
@@ -591,8 +609,8 @@ fn lower_unit_with_ctx(
     }
     k1.bc.unit_ranges.push((base, end, unit_id));
 
-    for i in 0..ctx.call_fixups.len() {
-        let (at, callee) = ctx.call_fixups[i];
+    for i in 0..ctx.operand_to_callee.len() {
+        let (at, callee) = ctx.operand_to_callee[i];
         k1.bc.pending_call_fixups.entry(callee).or_default().push(at + base);
     }
 
@@ -645,9 +663,9 @@ fn emit_inst(
 
     macro_rules! binop {
         ($op:expr, $a:expr, $b:expr, $lhs:expr, $rhs:expr) => {{
-            let lhs = resolve_src(k1, ctx, $lhs);
-            let rhs = resolve_src(k1, ctx, $rhs);
-            let dst = ctx.slot_of(inst_id);
+            let lhs = resolve_lowered_value(k1, ctx, $lhs);
+            let rhs = resolve_lowered_value(k1, ctx, $rhs);
+            let dst = ctx.bc_value_of(inst_id);
             ctx.emit($op, $a, $b);
             ctx.push(dst);
             ctx.push(lhs);
@@ -657,8 +675,8 @@ fn emit_inst(
 
     macro_rules! unop {
         ($op:expr, $a:expr, $b:expr, $v:expr) => {{
-            let src = resolve_src(k1, ctx, $v);
-            let dst = ctx.slot_of(inst_id);
+            let src = resolve_lowered_value(k1, ctx, $v);
+            let dst = ctx.bc_value_of(inst_id);
             ctx.emit($op, $a, $b);
             ctx.push(dst);
             ctx.push(src);
@@ -683,17 +701,17 @@ fn emit_inst(
         | Inst::WordToPtr { .. } => {}
         Inst::Phi { .. } => {}
         Inst::Alloca { .. } => {}
-        Inst::Store { dst, value, t, volatile: _ } => match t.as_enum() {
+        Inst::Store { dst, value, t, volatile: _, unaligned: _ } => match t.as_enum() {
             PhysicalTypeEnum::Scalar(t) => {
                 let (addr, off) = resolve_addr(k1, ctx, dst);
-                let value = resolve_src(k1, ctx, value);
+                let value = resolve_lowered_value(k1, ctx, value);
                 ctx.emit(Opcode::Store, wbits(t), off);
                 ctx.push(addr);
                 ctx.push(value);
             }
             PhysicalTypeEnum::Agg(_) => {
-                let dst = resolve_src(k1, ctx, dst);
-                let value = resolve_src(k1, ctx, value);
+                let dst = resolve_lowered_value(k1, ctx, dst);
+                let value = resolve_lowered_value(k1, ctx, value);
                 ctx.emit(Opcode::Copy, 0, 0);
                 ctx.push(dst);
                 ctx.push(value);
@@ -701,18 +719,18 @@ fn emit_inst(
             }
             PhysicalTypeEnum::Empty => unreachable!(),
         },
-        Inst::Load { t, src, dst, volatile: _ } => match t.as_enum() {
+        Inst::Load { t, src, dst, volatile: _, unaligned: _ } => match t.as_enum() {
             PhysicalTypeEnum::Scalar(t) => {
                 debug_assert!(dst == ir::Value::Empty);
                 let (addr, off) = resolve_addr(k1, ctx, src);
-                let result = ctx.slot_of(inst_id);
+                let result = ctx.bc_value_of(inst_id);
                 ctx.emit(Opcode::Load, wbits(t), off);
                 ctx.push(result);
                 ctx.push(addr);
             }
             PhysicalTypeEnum::Agg(_) => {
-                let result = resolve_src(k1, ctx, dst);
-                let src = resolve_src(k1, ctx, src);
+                let result = resolve_lowered_value(k1, ctx, dst);
+                let src = resolve_lowered_value(k1, ctx, src);
                 ctx.emit(Opcode::Copy, 0, 0);
                 ctx.push(result);
                 ctx.push(src);
@@ -721,35 +739,35 @@ fn emit_inst(
             PhysicalTypeEnum::Empty => unreachable!(),
         },
         Inst::AtomicLoad { t, src, ord } => {
-            let addr = resolve_src(k1, ctx, src);
-            let dst = ctx.slot_of(inst_id);
+            let addr = resolve_lowered_value(k1, ctx, src);
+            let dst = ctx.bc_value_of(inst_id);
             ctx.emit(Opcode::AtomicLoad, wbits(t), ord.to_tag() as u16);
             ctx.push(dst);
             ctx.push(addr);
         }
         Inst::AtomicStore { dst, value, t, ord } => {
-            let addr = resolve_src(k1, ctx, dst);
-            let val = resolve_src(k1, ctx, value);
+            let addr = resolve_lowered_value(k1, ctx, dst);
+            let val = resolve_lowered_value(k1, ctx, value);
             ctx.emit(Opcode::AtomicStore, wbits(t), ord.to_tag() as u16);
             ctx.push(addr);
             ctx.push(val);
         }
         Inst::AtomicRmw { op, t, dst, operand, ord } => {
-            let addr = resolve_src(k1, ctx, dst);
-            let operand = resolve_src(k1, ctx, operand);
-            let slot = ctx.slot_of(inst_id);
+            let addr = resolve_lowered_value(k1, ctx, dst);
+            let operand = resolve_lowered_value(k1, ctx, operand);
+            let bc_value = ctx.bc_value_of(inst_id);
             let b = ((op.to_tag() as u16) << 8) | ord.to_tag() as u16;
             ctx.emit(Opcode::AtomicRmw, wbits(t), b);
-            ctx.push(slot);
+            ctx.push(bc_value);
             ctx.push(addr);
             ctx.push(operand);
         }
         Inst::AtomicCmpxchg { id } => {
             let cas = *k1.ir.cmpxchgs.get(id);
-            let result = resolve_src(k1, ctx, cas.result);
-            let addr = resolve_src(k1, ctx, cas.dst);
-            let expected = resolve_src(k1, ctx, cas.expected);
-            let desired = resolve_src(k1, ctx, cas.desired);
+            let result = resolve_lowered_value(k1, ctx, cas.result);
+            let addr = resolve_lowered_value(k1, ctx, cas.dst);
+            let expected = resolve_lowered_value(k1, ctx, cas.expected);
+            let desired = resolve_lowered_value(k1, ctx, cas.desired);
             let b = cas.success.to_tag() as u16
                 | (cas.failure.to_tag() as u16) << 4
                 | (cas.weak as u16) << 8;
@@ -774,7 +792,7 @@ fn emit_inst(
             match vop.op {
                 VecOpIr::Splat => {
                     let (addr, base_off) = resolve_addr(k1, ctx, vop.dst);
-                    let val = resolve_src(k1, ctx, vop.lhs);
+                    let val = resolve_lowered_value(k1, ctx, vop.lhs);
                     for lane in 0..vop.lanes as u16 {
                         ctx.emit(Opcode::Store, elem_bits, base_off + lane * stride);
                         ctx.push(addr);
@@ -808,14 +826,10 @@ fn emit_inst(
                                     ctx.emit(
                                         Opcode::FloatCmp,
                                         elem_bits,
-                                        float_pred_tag(ir::FloatCmpPred::Eq),
+                                        ir::FloatCmpPred::Eq as u16,
                                     );
                                 } else {
-                                    ctx.emit(
-                                        Opcode::IntCmp,
-                                        elem_bits,
-                                        int_pred_tag(ir::IntCmpPred::Eq),
-                                    );
+                                    ctx.emit(Opcode::IntCmp, elem_bits, ir::IntCmpPred::Eq as u16);
                                 }
                                 ctx.push(s0);
                                 ctx.push(s0);
@@ -870,7 +884,7 @@ fn emit_inst(
                 VecOpIr::Shl | VecOpIr::Shr => {
                     let (lhs_addr, lhs_off) = resolve_addr(k1, ctx, vop.lhs);
                     let (dst_addr, dst_off) = resolve_addr(k1, ctx, vop.dst);
-                    let count = resolve_src(k1, ctx, vop.rhs);
+                    let count = resolve_lowered_value(k1, ctx, vop.rhs);
                     let s0 = ctx.next_scratch();
                     let opcode = match vop.op {
                         VecOpIr::Shl => Opcode::Shl,
@@ -894,7 +908,7 @@ fn emit_inst(
                 VecOpIr::ToMask => {
                     // acc |= lane_msb << lane, for each lane
                     let (lhs_addr, lhs_off) = resolve_addr(k1, ctx, vop.lhs);
-                    let acc = ctx.slot_of(inst_id);
+                    let acc = ctx.bc_value_of(inst_id);
                     let s0 = ctx.next_scratch();
                     let zero = k1.bc.intern_const(0);
                     let msb_shift = k1.bc.intern_const((elem_bits - 1) as u64);
@@ -926,32 +940,32 @@ fn emit_inst(
             ctx.emit(Opcode::Fence, 0, ord.to_tag() as u16);
         }
         Inst::Copy { dst, src, vm_size, .. } => {
-            let dst_addr = resolve_src(k1, ctx, dst);
-            let src_addr = resolve_src(k1, ctx, src);
+            let dst_addr = resolve_lowered_value(k1, ctx, dst);
+            let src_addr = resolve_lowered_value(k1, ctx, src);
             ctx.emit(Opcode::Copy, 0, 0);
             ctx.push(dst_addr);
             ctx.push(src_addr);
             ctx.push(vm_size);
         }
         Inst::StructOffset { base, vm_offset, .. } => {
-            if !ctx.so_folded.contains_key(&inst_id) {
-                let base_src = resolve_src(k1, ctx, base);
-                let dst = ctx.slot_of(inst_id);
+            if !ctx.folded_struct_offsets.contains_key(&inst_id) {
+                let base_lowered = resolve_lowered_value(k1, ctx, base);
+                let dst = ctx.bc_value_of(inst_id);
                 ctx.emit(Opcode::PtrAddImm, 0, 0);
                 ctx.push(dst);
-                ctx.push(base_src);
+                ctx.push(base_lowered);
                 ctx.push(vm_offset);
             }
         }
         Inst::ArrayOffset { element_t, base, element_index } => {
-            let base_src = resolve_src(k1, ctx, base);
-            let idx_src = resolve_src(k1, ctx, element_index);
+            let base_lowered = resolve_lowered_value(k1, ctx, base);
+            let index_lowered = resolve_lowered_value(k1, ctx, element_index);
             let stride = k1.get_pt_layout(element_t).stride();
-            let dst = ctx.slot_of(inst_id);
+            let dst = ctx.bc_value_of(inst_id);
             ctx.emit(Opcode::PtrIndex, 0, 0);
             ctx.push(dst);
-            ctx.push(base_src);
-            ctx.push(idx_src);
+            ctx.push(base_lowered);
+            ctx.push(index_lowered);
             ctx.push(stride);
         }
         Inst::Call { call_id } => {
@@ -967,15 +981,29 @@ fn emit_inst(
             }
         }
         Inst::JumpIf { cond, cons, alt } => {
-            let cond_src = resolve_src(k1, ctx, cond);
-            ctx.emit(Opcode::JumpIf, 0, 0);
-            ctx.push(cond_src);
+            match fused_cmp_of(ctx, cond) {
+                Some(cmp_id) => {
+                    let Inst::IntCmp { lhs, rhs, pred, width } = *k1.ir.instrs.get(cmp_id) else {
+                        unreachable!("fused cmp is not an IntCmp")
+                    };
+                    let lhs_lowered = resolve_lowered_value(k1, ctx, lhs);
+                    let rhs_lowered = resolve_lowered_value(k1, ctx, rhs);
+                    ctx.emit(Opcode::JumpIfIntCmp, width, pred as u16);
+                    ctx.push(lhs_lowered);
+                    ctx.push(rhs_lowered);
+                }
+                None => {
+                    let cond_lowered = resolve_lowered_value(k1, ctx, cond);
+                    ctx.emit(Opcode::JumpIf, 0, 0);
+                    ctx.push(cond_lowered);
+                }
+            }
             for target in [cons, alt] {
                 if ctx.block_has_phis(target) {
-                    let at = ctx.buf.len() as u32;
+                    let at = ctx.bc_out.len() as u32;
                     ctx.push(0);
-                    ctx.relocs.push(at);
-                    ctx.trampolines.push(PendingTramp { fixup_at: at, from: block_id, target });
+                    ctx.pc_operands_to_rebase.push(at);
+                    ctx.trampolines.push(PendingTramp { operand: at, from: block_id, target });
                 } else {
                     ctx.push_block_target(target);
                 }
@@ -988,14 +1016,14 @@ fn emit_inst(
             let ret_pt = ctx.ret_pt;
             if ret_pt.is_agg() {
                 let size = k1.get_pt_layout(ret_pt).size;
-                let src = resolve_src(k1, ctx, v);
+                let src = resolve_lowered_value(k1, ctx, v);
                 ctx.emit(Opcode::RetAgg, 0, 0);
                 ctx.push(src);
                 ctx.push(size);
             } else {
                 // Empty returns arrive as `Ret { v: Empty }` and resolve to
                 // const 0; nobody reads ret_reg for them
-                let src = resolve_src(k1, ctx, v);
+                let src = resolve_lowered_value(k1, ctx, v);
                 ctx.emit(Opcode::Ret, 0, 0);
                 ctx.push(src);
             }
@@ -1032,7 +1060,9 @@ fn emit_inst(
         Inst::IntRemUnsigned { lhs, rhs, width } => binop!(Opcode::IntRemU, width, 0, lhs, rhs),
         Inst::IntRemSigned { lhs, rhs, width } => binop!(Opcode::IntRemS, width, 0, lhs, rhs),
         Inst::IntCmp { lhs, rhs, pred, width } => {
-            binop!(Opcode::IntCmp, width, int_pred_tag(pred), lhs, rhs)
+            if !ctx.fused_cmps.contains(&inst_id) {
+                binop!(Opcode::IntCmp, width, pred as u16, lhs, rhs)
+            }
         }
         Inst::FloatAdd { lhs, rhs, width } => binop!(Opcode::FloatAdd, width, 0, lhs, rhs),
         Inst::FloatSub { lhs, rhs, width } => binop!(Opcode::FloatSub, width, 0, lhs, rhs),
@@ -1040,7 +1070,7 @@ fn emit_inst(
         Inst::FloatDiv { lhs, rhs, width } => binop!(Opcode::FloatDiv, width, 0, lhs, rhs),
         Inst::FloatRem { lhs, rhs, width } => binop!(Opcode::FloatRem, width, 0, lhs, rhs),
         Inst::FloatCmp { lhs, rhs, pred, width } => {
-            binop!(Opcode::FloatCmp, width, float_pred_tag(pred), lhs, rhs)
+            binop!(Opcode::FloatCmp, width, pred as u16, lhs, rhs)
         }
         Inst::BitAnd { lhs, rhs, width } => binop!(Opcode::BitAnd, width, 0, lhs, rhs),
         Inst::BitOr { lhs, rhs, width } => binop!(Opcode::BitOr, width, 0, lhs, rhs),
@@ -1052,12 +1082,12 @@ fn emit_inst(
         Inst::BitSignedShiftRight { lhs, rhs, width } => binop!(Opcode::ShrS, width, 0, lhs, rhs),
 
         Inst::BakeStaticValue { type_id, value } => {
-            let src = resolve_src(k1, ctx, value);
-            let dst = ctx.slot_of(inst_id);
+            let value_lowered = resolve_lowered_value(k1, ctx, value);
+            let dst = ctx.bc_value_of(inst_id);
             ctx.emit(Opcode::BakeStaticValue, 0, 0);
             ctx.push(dst);
             ctx.push(type_id.as_u32());
-            ctx.push(src);
+            ctx.push(value_lowered);
         }
     }
     Ok(())
@@ -1077,7 +1107,7 @@ fn emit_call(
     assert!(nargs <= u16::MAX as u32, "call with more than u16::MAX args");
     let frame_bytes = ctx.frame_bytes;
 
-    // The sret src: the destination address for agg returns, else const 0
+    // The lowered sret: the destination address for agg returns, else const 0
     // (the callee only reads sret when it returns an aggregate)
     let resolve_sret = |k1: &mut TypedProgram, ctx: &mut LowerCtx| -> u32 {
         if !is_agg {
@@ -1085,8 +1115,8 @@ fn emit_call(
         }
         ctx.begin_inst();
         match call.dst {
-            Some(dst) => resolve_src(k1, ctx, dst),
-            None => ctx.slot_of(inst_id), // fp-relative reserved temp
+            Some(dst) => resolve_lowered_value(k1, ctx, dst),
+            None => ctx.bc_value_of(inst_id), // fp-relative reserved temp
         }
     };
 
@@ -1097,26 +1127,26 @@ fn emit_call(
             // Resolve operands up front; they are all live at the Call, so a
             // value in a LoadGlobal scratch slot is parked in the callee slot
             // it is destined for anyway (the Call arm rewrites it in place)
-            ctx.arg_srcs.clear();
+            ctx.call_arg_values.clear();
             for (k, arg) in args.iter().enumerate() {
                 ctx.begin_inst();
-                let mut src = resolve_src(k1, ctx, *arg);
-                if src == ctx.scratch0 || src == ctx.scratch1 {
+                let mut arg_lowered = resolve_lowered_value(k1, ctx, *arg);
+                if arg_lowered == ctx.scratch0 || arg_lowered == ctx.scratch1 {
                     let park = ctx.out_arg_word(k as u32);
                     ctx.emit(Opcode::Mov, 0, 0);
                     ctx.push(park);
-                    ctx.push(src);
-                    src = park;
+                    ctx.push(arg_lowered);
+                    arg_lowered = park;
                 }
-                ctx.arg_srcs.push(src);
+                ctx.call_arg_values.push(arg_lowered);
             }
-            let mut sret_src = resolve_sret(k1, ctx);
-            if sret_src == ctx.scratch0 || sret_src == ctx.scratch1 {
+            let mut sret_lowered = resolve_sret(k1, ctx);
+            if sret_lowered == ctx.scratch0 || sret_lowered == ctx.scratch1 {
                 let park = ctx.out_sret_word();
                 ctx.emit(Opcode::Mov, 0, 0);
                 ctx.push(park);
-                ctx.push(sret_src);
-                sret_src = park;
+                ctx.push(sret_lowered);
+                sret_lowered = park;
             }
 
             match call.callee {
@@ -1124,9 +1154,9 @@ fn emit_call(
                     if k1.bc.in_progress.contains(&function_id) {
                         // Recursion cycle: patch when the callee's code_start lands
                         ctx.emit(Opcode::Call, 0, nargs as u16);
-                        let at = ctx.buf.len() as u32;
+                        let at = ctx.bc_out.len() as u32;
                         ctx.push(PENDING_PC);
-                        ctx.call_fixups.push((at, function_id));
+                        ctx.operand_to_callee.push((at, function_id));
                         ctx.push(frame_bytes);
                     } else {
                         let info = get_or_lower_function(k1, function_id, ctx.cur_span)?;
@@ -1147,16 +1177,16 @@ fn emit_call(
                 IrCallee::Indirect(_, fn_value) => {
                     // Resolved last: nothing after it can clobber its scratch
                     ctx.begin_inst();
-                    let fn_src = resolve_src(k1, ctx, fn_value);
+                    let fn_lowered = resolve_lowered_value(k1, ctx, fn_value);
                     ctx.emit(Opcode::CallIndirect, 0, nargs as u16);
-                    ctx.push(fn_src);
+                    ctx.push(fn_lowered);
                     ctx.push(frame_bytes);
                 }
                 _ => unreachable!(),
             }
-            ctx.push(sret_src);
-            for i in 0..ctx.arg_srcs.len() {
-                let s = ctx.arg_srcs[i];
+            ctx.push(sret_lowered);
+            for i in 0..ctx.call_arg_values.len() {
+                let s = ctx.call_arg_values[i];
                 ctx.push(s);
             }
         }
@@ -1165,11 +1195,11 @@ fn emit_call(
         IrCallee::Extern { library_name, function_name, function_id } => {
             emit_arg_movs(k1, ctx, args);
             if is_agg {
-                let sret_src = resolve_sret(k1, ctx);
+                let sret_lowered = resolve_sret(k1, ctx);
                 let sret = ctx.out_sret_word();
                 ctx.emit(Opcode::Mov, 0, 0);
                 ctx.push(sret);
-                ctx.push(sret_src);
+                ctx.push(sret_lowered);
             }
             ctx.emit(Opcode::CallExtern, 0, 0);
             ctx.push(function_id.as_u32());
@@ -1183,11 +1213,11 @@ fn emit_call(
         IrCallee::BackendBuiltin(_, builtin) => {
             emit_arg_movs(k1, ctx, args);
             if is_agg {
-                let sret_src = resolve_sret(k1, ctx);
+                let sret_lowered = resolve_sret(k1, ctx);
                 let sret = ctx.out_sret_word();
                 ctx.emit(Opcode::Mov, 0, 0);
                 ctx.push(sret);
-                ctx.push(sret_src);
+                ctx.push(sret_lowered);
             }
             ctx.emit(Opcode::CallBuiltin, builtin_tag(builtin), 0);
             ctx.push(ret_pt.to_u32());
@@ -1197,11 +1227,11 @@ fn emit_call(
         IrCallee::LlvmIntrinsic { name, .. } => {
             emit_arg_movs(k1, ctx, args);
             if is_agg {
-                let sret_src = resolve_sret(k1, ctx);
+                let sret_lowered = resolve_sret(k1, ctx);
                 let sret = ctx.out_sret_word();
                 ctx.emit(Opcode::Mov, 0, 0);
                 ctx.push(sret);
-                ctx.push(sret_src);
+                ctx.push(sret_lowered);
             }
             ctx.emit(Opcode::CallLlvm, 0, 0);
             ctx.push(name.as_u32());
@@ -1217,14 +1247,14 @@ fn emit_call(
         match call.dst {
             Some(dst) => {
                 ctx.begin_inst();
-                let d = resolve_src(k1, ctx, dst);
+                let d = resolve_lowered_value(k1, ctx, dst);
                 let t = ret_pt.expect_scalar();
                 ctx.emit(Opcode::RetStore, wbits(t), 0);
                 ctx.push(d);
             }
             None => {
                 ctx.emit(Opcode::RetGet, 0, 0);
-                ctx.push(ctx.slot_of(inst_id));
+                ctx.push(ctx.bc_value_of(inst_id));
             }
         }
     }
@@ -1235,7 +1265,7 @@ fn emit_call(
 fn emit_arg_movs(k1: &mut TypedProgram, ctx: &mut LowerCtx, args: &[ir::Value]) {
     for (k, arg) in args.iter().enumerate() {
         ctx.begin_inst();
-        let src = resolve_src(k1, ctx, *arg);
+        let src = resolve_lowered_value(k1, ctx, *arg);
         let dst = ctx.out_arg_word(k as u32);
         ctx.emit(Opcode::Mov, 0, 0);
         ctx.push(dst);
@@ -1243,12 +1273,10 @@ fn emit_arg_movs(k1: &mut TypedProgram, ctx: &mut LowerCtx, args: &[ir::Value]) 
     }
 }
 
-/// Sequential phi copies for the CFG edge `from -> target`, in phi order —
-/// matching the old VM, which executes phis sequentially (vm.rs Inst::Phi).
 fn emit_phi_copies(k1: &mut TypedProgram, ctx: &mut LowerCtx, from: BlockId, target: BlockId) {
     let mut i = 0;
-    while i < ctx.block_phis.len() {
-        let (phi_block, phi_id) = ctx.block_phis[i];
+    while i < ctx.phis.len() {
+        let (phi_block, phi_id) = ctx.phis[i];
         i += 1;
         if phi_block != target {
             continue;
@@ -1256,13 +1284,13 @@ fn emit_phi_copies(k1: &mut TypedProgram, ctx: &mut LowerCtx, from: BlockId, tar
         let Inst::Phi { incomings, .. } = *k1.ir.instrs.get(phi_id) else {
             unreachable!("non-phi in block_phis")
         };
-        let Some(dst) = ctx.slots.get(&phi_id).copied() else {
+        let Some(dst) = ctx.inst_to_frame_value.get(&phi_id).copied() else {
             continue; // empty-typed phi
         };
         let case = k1.ir.mem.getn(incomings).iter().find(|c| c.from == from).copied();
         ctx.begin_inst();
         let src = match case {
-            Some(case) => resolve_src(k1, ctx, case.value),
+            Some(case) => resolve_lowered_value(k1, ctx, case.value),
             None => {
                 // The old VM is UB (assume_init) here; we pick 0 and warn.
                 if cfg!(debug_assertions) {

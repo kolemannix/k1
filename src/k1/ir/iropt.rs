@@ -519,15 +519,19 @@ impl RewriteMappings {
 fn rewrite_instr(ir: &mut ProgramIr, mappings: &mut RewriteMappings, inst: &mut Inst) {
     match inst {
         Inst::Alloca { .. } => {}
-        Inst::Store { value, dst, .. } => {
+        Inst::Store { value, dst, t, unaligned, .. } => {
             rewrite_value(mappings, dst);
             rewrite_value(mappings, value);
+            *unaligned |=
+                is_addr_unaligned(ir, *dst) || (t.is_agg() && is_addr_unaligned(ir, *value));
         }
-        Inst::Load { src, dst, .. } => {
+        Inst::Load { src, dst, unaligned, .. } => {
             rewrite_value(mappings, src);
             if *dst != Value::Empty {
                 rewrite_value(mappings, dst);
+                *unaligned |= is_addr_unaligned(ir, *dst);
             }
+            *unaligned |= is_addr_unaligned(ir, *src);
         }
         Inst::AtomicLoad { src, .. } => {
             rewrite_value(mappings, src);
@@ -565,12 +569,14 @@ fn rewrite_instr(ir: &mut ProgramIr, mappings: &mut RewriteMappings, inst: &mut 
             }
         }
         Inst::Fence { .. } => {}
-        Inst::Copy { dst, src, .. } => {
+        Inst::Copy { dst, src, unaligned, .. } => {
             rewrite_value(mappings, dst);
             rewrite_value(mappings, src);
+            *unaligned |= is_addr_unaligned(ir, *dst) || is_addr_unaligned(ir, *src);
         }
-        Inst::StructOffset { base, .. } => {
+        Inst::StructOffset { base, unaligned, .. } => {
             rewrite_value(mappings, base);
+            *unaligned |= is_addr_unaligned(ir, *base);
         }
         Inst::ArrayOffset { base, element_index, .. } => {
             rewrite_value(mappings, base);

@@ -24,8 +24,8 @@ use inkwell::types::{
     VectorType as LlvmVectorType,
 };
 use inkwell::values::{
-    ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
-    GlobalValue, InstructionValue, IntValue, PointerValue, StructValue, ValueKind,
+    ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FloatValue,
+    FunctionValue, GlobalValue, InstructionValue, IntValue, PointerValue, StructValue, ValueKind,
 };
 use inkwell::{
     AddressSpace, AtomicOrdering, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode,
@@ -2091,6 +2091,32 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
+    fn build_float_to_int_saturating(
+        &self,
+        input: FloatValue<'ctx>,
+        from: ScalarType,
+        to: ScalarType,
+        signed: bool,
+    ) -> IntValue<'ctx> {
+        let to_int_type = self.scalar_basic_type(to).into_int_type();
+        let op = if signed { "fptosi" } else { "fptoui" };
+        let name = format!("llvm.{}.sat.i{}.f{}", op, to.width().bits(), from.width().bits());
+        let function = match self.llvm_module.get_function(&name) {
+            Some(f) => f,
+            None => {
+                let fn_type = to_int_type.fn_type(&[self.scalar_basic_type(from).into()], false);
+                self.llvm_module.add_function(&name, fn_type, None)
+            }
+        };
+        self.builder
+            .build_call(function, &[input.into()], "")
+            .unwrap()
+            .try_as_basic_value()
+            .basic()
+            .unwrap()
+            .into_int_value()
+    }
+
     fn emit_lifetime_marker(&self, start: bool, ptr: PointerValue<'ctx>, size_bytes: u64) {
         let name = if start { "llvm.lifetime.start.p0" } else { "llvm.lifetime.end.p0" };
         let function = match self.llvm_module.get_function(name) {
@@ -3116,8 +3142,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    fn ir_memory_alignment(&self, t: PhysicalType, address: ir::Value) -> u32 {
-        if ir::is_addr_unaligned(&self.k1.ir, address) { 1 } else { self.k1.get_pt_layout(t).align }
+    fn claimed_align(&self, t: PhysicalType, unaligned: bool) -> u32 {
+        if unaligned { 1 } else { self.k1.get_pt_layout(t).align }
     }
 
     fn codegen_inst(
@@ -3198,7 +3224,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 Ok(())
             }
-            Inst::Store { t, dst, value, volatile } => {
+            Inst::Store { t, dst, value, volatile, unaligned } => {
+                let align = self.claimed_align(t, unaligned);
                 let dst_ptr = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
                 let value = match t.as_enum() {
                     PhysicalTypeEnum::Scalar(_) => self.resolve_value(inst_mappings, value)?,
@@ -3207,34 +3234,31 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         let src_ptr =
                             self.resolve_value(inst_mappings, value)?.into_pointer_value();
                         let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
-                        let src_align = self.ir_memory_alignment(t, value);
-                        load.as_instruction_value().unwrap().set_alignment(src_align).unwrap();
+                        load.as_instruction_value().unwrap().set_alignment(align).unwrap();
                         load
                     }
                     PhysicalTypeEnum::Empty => unreachable!(),
                 };
                 let store = self.builder.build_store(dst_ptr, value).unwrap();
-                let dst_align = self.ir_memory_alignment(t, dst);
-                store.set_alignment(dst_align).unwrap();
+                store.set_alignment(align).unwrap();
                 if volatile {
                     unsafe { llvm_sys::core::LLVMSetVolatile(store.as_value_ref(), 1) };
                 }
                 Ok(())
             }
-            Inst::Load { t, src, dst, volatile } => {
+            Inst::Load { t, src, dst, volatile, unaligned } => {
                 let cg_ty = self.codegen_type(t);
                 let src_ptr = self.resolve_value(inst_mappings, src)?.into_pointer_value();
                 let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
                 let load_inst = load.as_instruction_value().unwrap();
-                let src_align = self.ir_memory_alignment(t, src);
-                load_inst.set_alignment(src_align).unwrap();
+                load_inst.set_alignment(self.claimed_align(t, unaligned)).unwrap();
                 if volatile {
                     unsafe { llvm_sys::core::LLVMSetVolatile(load_inst.as_value_ref(), 1) };
                 }
                 if dst == ir::Value::Empty {
                     inst_mappings.insert(inst_id, load);
                 } else {
-                    let dst_align = self.ir_memory_alignment(t, dst);
+                    let dst_align = self.claimed_align(t, unaligned);
                     let dst = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
                     self.builder.build_store(dst, load).unwrap().set_alignment(dst_align).unwrap();
                 }
@@ -3353,15 +3377,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let dst_value = self.resolve_value(inst_mappings, dst)?;
                 let src_value = self.resolve_value(inst_mappings, src)?;
                 let layout = self.k1.get_pt_layout(t);
-                let dst_align = if unaligned { 1 } else { self.ir_memory_alignment(t, dst) };
-                let src_align = if unaligned { 1 } else { self.ir_memory_alignment(t, src) };
+                let align = self.claimed_align(t, unaligned);
                 let bytes = self.builtin_types.ptr_sized_int.const_int(layout.size as u64, false);
                 self.builder
                     .build_memcpy(
                         dst_value.into_pointer_value(),
-                        dst_align,
+                        align,
                         src_value.into_pointer_value(),
-                        src_align,
+                        align,
                         bytes,
                     )
                     .unwrap();
@@ -3547,16 +3570,24 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Float32ToIntUnsigned { v, to } | Inst::Float64ToIntUnsigned { v, to } => {
+                let from = if matches!(inst, Inst::Float32ToIntUnsigned { .. }) {
+                    ScalarType::F32
+                } else {
+                    ScalarType::F64
+                };
                 let input = self.resolve_value(inst_mappings, v)?.into_float_value();
-                let to_int_type = self.scalar_basic_type(to).into_int_type();
-                let int = self.builder.build_float_to_unsigned_int(input, to_int_type, "").unwrap();
+                let int = self.build_float_to_int_saturating(input, from, to, false);
                 inst_mappings.insert(inst_id, int.as_basic_value_enum());
                 Ok(())
             }
             Inst::Float32ToIntSigned { v, to } | Inst::Float64ToIntSigned { v, to } => {
+                let from = if matches!(inst, Inst::Float32ToIntSigned { .. }) {
+                    ScalarType::F32
+                } else {
+                    ScalarType::F64
+                };
                 let input = self.resolve_value(inst_mappings, v)?.into_float_value();
-                let to_int_type = self.scalar_basic_type(to).into_int_type();
-                let int = self.builder.build_float_to_signed_int(input, to_int_type, "").unwrap();
+                let int = self.build_float_to_int_saturating(input, from, to, true);
                 inst_mappings.insert(inst_id, int.as_basic_value_enum());
                 Ok(())
             }
@@ -4734,8 +4765,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 unreachable!()
                             }
                             StaticContainerKind::Buffer => {
-                                let buffer_pt =
-                                    self.k1.get_physical_type(cont.type_id).unwrap();
+                                let buffer_pt = self.k1.get_physical_type(cont.type_id).unwrap();
                                 let buffer_cg_type = self.codegen_type(buffer_pt).expect_struct();
                                 self.make_buffer_struct(
                                     buffer_cg_type.struct_type,

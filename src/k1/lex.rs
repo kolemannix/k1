@@ -1329,7 +1329,7 @@ pub fn lex_standalone(content: &str) -> (Spans, Vec<Token>, Option<LexError>) {
 
 #[cfg(test)]
 mod test {
-    use crate::lex::{Lexer, Span, SpanId, Spans, Token, TokenKind as K, TokenTriviaKind};
+    use crate::lex::{Lexer, Span, Spans, Token, TokenKind as K, TokenTriviaKind};
 
     #[test]
     fn byte_class_matches_char_methods() {

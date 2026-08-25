@@ -6,7 +6,11 @@ use maud::{Markup, html};
 
 use crate::lex::SpanId;
 use crate::parse::StringId;
-use crate::typer::{GlobalInitialValue, NamespaceId, NamespaceKind, TypedProgram};
+use crate::typer::scopes::Provenance;
+use crate::typer::types::TypeId;
+use crate::typer::{
+    AbilityId, FunctionId, GlobalInitialValue, NamespaceId, NamespaceKind, TypedProgram, VariableId,
+};
 
 struct NsTree {
     root: NamespaceId,
@@ -57,6 +61,17 @@ fn ns_href(path: &[&str]) -> String {
         href.push_str(segment);
     }
     href
+}
+
+fn ns_canonical_href(k1: &TypedProgram, ns_id: NamespaceId) -> String {
+    let mut names: Vec<&str> = Vec::new();
+    let mut current = ns_id;
+    while let Some(parent) = k1.namespaces.get(current).parent_id {
+        names.push(k1.ident_str(k1.namespaces.get(current).name));
+        current = parent;
+    }
+    names.reverse();
+    ns_href(&names)
 }
 
 /// "file.k1:line" for definitions; None for synthesized spans
@@ -146,21 +161,47 @@ fn render_ns_main(k1: &TypedProgram, tree: &NsTree, ns_id: NamespaceId, path: &[
     let ns = k1.namespaces.get(ns_id);
     let scope_id = ns.scope_id;
 
-    let mut functions: Vec<_> = k1.scopes.iter_scope_functions(scope_id).collect();
+    let mut functions: Vec<(StringId, FunctionId)> = Vec::new();
+    for (name, function_id, prov) in k1.scopes.iter_scope_functions(scope_id) {
+        if prov.is_exposed() {
+            functions.push((name, function_id));
+        }
+    }
     functions.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
 
-    let mut types: Vec<_> = k1.scopes.iter_scope_types(scope_id).collect();
+    let mut types: Vec<(StringId, TypeId)> = Vec::new();
+    for (name, type_id, prov) in k1.scopes.iter_scope_types(scope_id) {
+        if prov.is_exposed() {
+            types.push((name, type_id));
+        }
+    }
     types.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
 
-    let mut abilities: Vec<_> = k1.scopes.iter_scope_abilities(scope_id).collect();
+    let mut abilities: Vec<(StringId, AbilityId)> = Vec::new();
+    for (name, ability_id, prov) in k1.scopes.iter_scope_abilities(scope_id) {
+        if prov.is_exposed() {
+            abilities.push((name, ability_id));
+        }
+    }
     abilities.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
 
-    let mut globals: Vec<_> = k1
-        .scopes
-        .iter_scope_variables(scope_id)
-        .filter_map(|(name, vis)| vis.variable_id().map(|vid| (name, vid)))
-        .collect();
+    let mut globals: Vec<(StringId, VariableId)> = Vec::new();
+    for (name, vis, prov) in k1.scopes.iter_scope_variables(scope_id) {
+        if let Some(vid) = vis.variable_id()
+            && prov.is_exposed()
+        {
+            globals.push((name, vid));
+        }
+    }
     globals.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
+
+    let mut used_namespaces: Vec<(StringId, NamespaceId)> = Vec::new();
+    for (name, used_ns_id, prov) in k1.scopes.iter_scope_namespaces(scope_id) {
+        if prov == Provenance::UseExposed {
+            used_namespaces.push((name, used_ns_id));
+        }
+    }
+    used_namespaces.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
 
     let child_namespaces = tree.children.get(&ns_id);
 
@@ -178,10 +219,13 @@ fn render_ns_main(k1: &TypedProgram, tree: &NsTree, ns_id: NamespaceId, path: &[
                 }
                 span .ns-kind-chip { (ns_kind_label(k1, ns_id)) }
             }
-            @if let Some(kids) = child_namespaces {
+            @if child_namespaces.is_some_and(|kids| !kids.is_empty()) || !used_namespaces.is_empty() {
                 article .card {
-                    div .card-label { span { "namespaces" } span { (kids.len()) } }
-                    @for kid in kids {
+                    div .card-label {
+                        span { "namespaces" }
+                        span { (child_namespaces.map_or(0, Vec::len) + used_namespaces.len()) }
+                    }
+                    @for kid in child_namespaces.into_iter().flatten() {
                         ({
                             let kid_name = k1.ident_str(k1.namespaces.get(*kid).name);
                             let mut kid_path: Vec<&str> = path.to_vec();
@@ -193,6 +237,12 @@ fn render_ns_main(k1: &TypedProgram, tree: &NsTree, ns_id: NamespaceId, path: &[
                                 }
                             }
                         })
+                    }
+                    @for (name, used_ns_id) in &used_namespaces {
+                        a .member-row href=(ns_canonical_href(k1, *used_ns_id)) {
+                            span .member-kw { "use ns" }
+                            span .member-name { (k1.ident_str(*name)) }
+                        }
                     }
                 }
             }

@@ -53,6 +53,7 @@ nz_u32_id!(ParsedUseId);
 pub struct ParsedUse {
     pub target: QIdent,
     pub alias: Option<StringId>,
+    pub exposed: bool,
     pub span: SpanId,
 }
 
@@ -5500,6 +5501,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_use(&mut self) -> ParseResult<ParsedUseId> {
         let use_token = self.expect_kind(K::KeywordUse)?;
+        let mut exposed = false;
+        if self.maybe_consume(K::OpenParen).is_some() {
+            let p = self.peek();
+            if p.kind == K::Ident && self.token_chars(p) == "expose" {
+                self.advance();
+                exposed = true;
+            } else {
+                return Err(self.error_expected("use modifier: expose", p));
+            }
+            self.expect_kind(K::CloseParen)?;
+        }
         let namespaced_ident = self.expect_namespaced_ident()?;
         let next = self.peek();
         let next_chars = self.token_chars(next);
@@ -5512,7 +5524,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let span = self.extend_tok_to_here(use_token);
         let parsed_use_id =
-            self.ast.uses.add_use(ParsedUse { target: namespaced_ident, alias, span });
+            self.ast.uses.add_use(ParsedUse { target: namespaced_ident, alias, exposed, span });
         Ok(parsed_use_id)
     }
 

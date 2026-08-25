@@ -10,19 +10,19 @@ use crate::ir;
 use crate::typer::TypedProgram;
 
 use super::{
-    CastKind, Opcode, SRC_CONST_BIT, SRC_FP_BIT, builtin_from_tag, float_pred_from_tag, header_a,
-    header_b, header_op, int_pred_from_tag,
+    CastKind, Opcode, VALUE_MASK_CONST_ID, VALUE_MASK_FRAME_OFFSET, builtin_from_tag, header_a,
+    header_b, header_op,
 };
 
 fn write_src(w: &mut String, k1: &TypedProgram, src: u32) {
-    if src & SRC_CONST_BIT != 0 {
-        let idx = (src & !SRC_CONST_BIT) as usize;
+    if src & VALUE_MASK_CONST_ID != 0 {
+        let idx = (src & !VALUE_MASK_CONST_ID) as usize;
         match k1.bc.consts.get(idx) {
             Some(v) => write!(w, "c[{}]={:#x}", idx, v).unwrap(),
             None => write!(w, "c[{}]=<oob>", idx).unwrap(),
         }
-    } else if src & SRC_FP_BIT != 0 {
-        write!(w, "fp+{}", src & !SRC_FP_BIT).unwrap();
+    } else if src & VALUE_MASK_FRAME_OFFSET != 0 {
+        write!(w, "fp+{}", src & !VALUE_MASK_FRAME_OFFSET).unwrap();
     } else {
         write!(w, "f[{}]", src).unwrap();
     }
@@ -81,6 +81,13 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
         }
         Opcode::Jump => {
             write!(w, "jump @{}", ops[0]).unwrap();
+        }
+        Opcode::JumpIfIntCmp => {
+            write!(w, "jump_if_icmp.{}.{} ", crate::ir::IntCmpPred::from_u8(b as u8), a).unwrap();
+            write_src(w, k1, ops[0]);
+            write!(w, ", ").unwrap();
+            write_src(w, k1, ops[1]);
+            write!(w, " @{} @{}", ops[2], ops[3]).unwrap();
         }
         Opcode::JumpIf => {
             write!(w, "jump_if ").unwrap();
@@ -250,7 +257,7 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write!(w, "*{}", ops[3]).unwrap();
         }
         Opcode::IntCmp => {
-            write!(w, "icmp.{}.{} ", int_pred_from_tag(b), a).unwrap();
+            write!(w, "icmp.{}.{} ", crate::ir::IntCmpPred::from_u8(b as u8), a).unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- ").unwrap();
             write_src(w, k1, ops[1]);
@@ -258,7 +265,7 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write_src(w, k1, ops[2]);
         }
         Opcode::FloatCmp => {
-            write!(w, "fcmp.{}.{} ", float_pred_from_tag(b), a).unwrap();
+            write!(w, "fcmp.{}.{} ", crate::ir::FloatCmpPred::from_u8(b as u8), a).unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- ").unwrap();
             write_src(w, k1, ops[1]);

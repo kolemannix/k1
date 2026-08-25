@@ -1,45 +1,6 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
-//! `bc`: a low-level bytecode lowered from `ir`, plus its VM (`bc::exec`).
-//!
-//! Design goals (vs the tree-walking IR interpreter in `vm.rs`):
-//! - One shared, flat `Vec<u32>` code stream for all units; control flow and
-//!   direct calls are absolute pcs baked at lowering time.
-//! - A stack frame is pure offset arithmetic: a 3-word header, param words,
-//!   dense register slots (one per value-producing inst), then a fixed
-//!   alloca area. All offsets are lowering-time constants. There is no
-//!   alloca instruction, no per-frame hashmap, no frames Vec, and no
-//!   heap allocation on the call path.
-//! - Runtime state is just `pc`, `fp`, and a scalar `ret_reg`.
-//!
-//! Frame layout (fp is 16-aligned; word = 8 bytes):
-//! ```text
-//!   [w0] caller_fp     (0 for the top frame)
-//!   [w1] return_pc     (0 = Halt for the top frame; code[0] is Halt)
-//!   [w2] sret_addr     (written by the caller only for aggregate returns)
-//!   [w3 .. w3+P)       params
-//!   [w3+P .. )         register slots (+ 2 scratch slots for global loads)
-//!   [aligned]          alloca area, then agg-return temp area
-//! ```
-//! Out-args for a call are written by the caller directly into the callee's
-//! future param slots at `fp + frame_bytes + 8*(3+k)` with ordinary `Mov`s.
-//!
-//! Instruction encoding: header word `[opcode:u8 | A:u8 | B:u16]` followed by
-//! a fixed (per-opcode) number of u32 operand words.
-//! - `src` operands are tagged: bit 31 set = index into the program-wide
-//!   constant pool (`consts: Vec<u64>`); else bit 30 set = the address
-//!   `fp + byte offset` itself (frame storage of allocas and agg call temps);
-//!   both clear = frame word index.
-//! - `dst` operands are untagged frame word indices (they may point past the
-//!   caller's own frame, into the callee's future param slots).
-//!
-//! Reentrancy invariant: executing code can trigger *more lowering* (an
-//! indirect call to a not-yet-lowered function, or a global's lazy first
-//! evaluation running nested static code), which appends to `code` and
-//! `consts`. The exec loop therefore never holds a borrow or pointer into
-//! either; `pc` is always an index and every fetch goes through `k1.bc`.
-
 pub mod disasm;
 pub mod exec;
 pub mod lower;
@@ -52,14 +13,11 @@ use crate::typer::types::PhysicalType;
 use crate::typer::{FunctionId, TypedExprId};
 use crate::vpool::VVec;
 
-/// Bit 31 of a src operand: set = constant pool index.
-pub const SRC_CONST_BIT: u32 = 0x8000_0000;
+/// Marks a bc value as an index into the constant pool
+pub const VALUE_MASK_CONST_ID: u32 = 0x8000_0000;
 
-/// Bit 30 of a src operand (when bit 31 is clear): the operand's value is the
-/// address `fp + payload` — alloca and agg-call-temp storage, baked at
-/// lowering time so no instruction materializes it. Both bits clear = frame
-/// word index.
-pub const SRC_FP_BIT: u32 = 0x4000_0000;
+/// Marks a bc value as a frame offset
+pub const VALUE_MASK_FRAME_OFFSET: u32 = 0x4000_0000;
 
 /// Frame header size in words: [caller_fp][return_pc][sret_addr]
 pub const FRAME_HEADER_WORDS: u32 = 3;
@@ -68,8 +26,6 @@ pub const FRAME_HEADER_WORDS: u32 = 3;
 /// widest vector's natural alignment (512-bit)
 pub const FRAME_ALIGN: u32 = 64;
 
-/// Placeholder for a direct-call target whose callee is still being lowered
-/// (recursion cycle); patched via `pending_call_fixups` when the callee lands.
 pub const PENDING_PC: u32 = u32::MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +36,8 @@ pub enum Opcode {
     Enter,
     Jump,
     JumpIf,
+    /// Fused compare-and-branch: A = width in bits, B = IntCmpPred tag
+    JumpIfIntCmp,
     Unreachable,
     Ret,
     RetAgg,
@@ -156,9 +114,10 @@ impl Opcode {
         // TODO(perf): I think we could bake the operand count into the opcode bits.
         match self {
             Opcode::Halt => 0,
-            Opcode::Enter => 1,  // [frame_bytes]
-            Opcode::Jump => 1,   // [pc]
-            Opcode::JumpIf => 3, // [cond src][cons pc][alt pc]
+            Opcode::Enter => 1,        // [frame_bytes]
+            Opcode::Jump => 1,         // [pc]
+            Opcode::JumpIf => 3,       // [cond src][cons pc][alt pc]
+            Opcode::JumpIfIntCmp => 4, // [lhs src][rhs src][cons pc][alt pc]
             Opcode::Unreachable => 0,
             Opcode::Ret => 1,    // [src]
             Opcode::RetAgg => 2, // [src][size]
@@ -217,6 +176,7 @@ impl Opcode {
             Opcode::Enter => "enter",
             Opcode::Jump => "jump",
             Opcode::JumpIf => "jump_if",
+            Opcode::JumpIfIntCmp => "jump_if_icmp",
             Opcode::Unreachable => "unreachable",
             Opcode::Ret => "ret",
             Opcode::RetAgg => "ret_agg",
@@ -294,60 +254,6 @@ impl CastKind {
     }
 }
 
-pub fn int_pred_tag(p: crate::ir::IntCmpPred) -> u16 {
-    use crate::ir::IntCmpPred as P;
-    match p {
-        P::Eq => 0,
-        P::Slt => 1,
-        P::Sle => 2,
-        P::Sgt => 3,
-        P::Sge => 4,
-        P::Ult => 5,
-        P::Ule => 6,
-        P::Ugt => 7,
-        P::Uge => 8,
-    }
-}
-
-pub fn int_pred_from_tag(t: u16) -> crate::ir::IntCmpPred {
-    use crate::ir::IntCmpPred as P;
-    match t {
-        0 => P::Eq,
-        1 => P::Slt,
-        2 => P::Sle,
-        3 => P::Sgt,
-        4 => P::Sge,
-        5 => P::Ult,
-        6 => P::Ule,
-        7 => P::Ugt,
-        8 => P::Uge,
-        _ => unreachable!("bad int pred tag"),
-    }
-}
-
-pub fn float_pred_tag(p: crate::ir::FloatCmpPred) -> u16 {
-    use crate::ir::FloatCmpPred as P;
-    match p {
-        P::Eq => 0,
-        P::Lt => 1,
-        P::Le => 2,
-        P::Gt => 3,
-        P::Ge => 4,
-    }
-}
-
-pub fn float_pred_from_tag(t: u16) -> crate::ir::FloatCmpPred {
-    use crate::ir::FloatCmpPred as P;
-    match t {
-        0 => P::Eq,
-        1 => P::Lt,
-        2 => P::Le,
-        3 => P::Gt,
-        4 => P::Ge,
-        _ => unreachable!("bad float pred tag"),
-    }
-}
-
 pub fn builtin_tag(b: crate::ir::BackendBuiltin) -> u8 {
     b as u8
 }
@@ -417,7 +323,7 @@ pub struct BcProgram {
     /// The shared instruction stream for every lowered unit. `code[0]` is a
     /// lone `Halt`: popping the top frame sets `pc = 0` and lands on it.
     pub code: VVec<u32>,
-    /// Program-wide constant pool; src operands with `SRC_CONST_BIT` index it.
+    /// Program-wide constant pool; src operands with `VALUE_MASK_CONST_ID` index it.
     pub consts: VVec<u64>,
     const_dedup: FxHashMap<u64, u32>,
 
@@ -462,13 +368,13 @@ impl BcProgram {
 
     pub fn intern_const(&mut self, value: u64) -> u32 {
         if let Some(idx) = self.const_dedup.get(&value) {
-            return *idx | SRC_CONST_BIT;
+            return *idx | VALUE_MASK_CONST_ID;
         }
         let idx = self.consts.len() as u32;
-        debug_assert!(idx & SRC_CONST_BIT == 0, "constant pool overflow");
+        debug_assert!(idx & VALUE_MASK_CONST_ID == 0, "constant pool overflow");
         self.consts.push(value);
         self.const_dedup.insert(value, idx);
-        idx | SRC_CONST_BIT
+        idx | VALUE_MASK_CONST_ID
     }
 
     pub fn get_unit_info(&self, unit_id: IrUnitId) -> Option<UnitInfo> {
@@ -539,7 +445,7 @@ mod bc_test {
             IntCmpPred::Ugt,
             IntCmpPred::Uge,
         ] {
-            assert!(int_pred_from_tag(int_pred_tag(p)) == p);
+            assert!(IntCmpPred::from_u8(p as u8) == p);
         }
         for p in [
             FloatCmpPred::Eq,
@@ -548,7 +454,7 @@ mod bc_test {
             FloatCmpPred::Gt,
             FloatCmpPred::Ge,
         ] {
-            assert!(float_pred_from_tag(float_pred_tag(p)) as u8 == p as u8);
+            assert!(FloatCmpPred::from_u8(p as u8) == p);
         }
     }
 
@@ -560,8 +466,8 @@ mod bc_test {
         let c = bc.intern_const(43);
         assert_eq!(a, b);
         assert_ne!(a, c);
-        assert!(a & SRC_CONST_BIT != 0);
-        assert_eq!(bc.consts[(a & !SRC_CONST_BIT) as usize], 42);
+        assert!(a & VALUE_MASK_CONST_ID != 0);
+        assert_eq!(bc.consts[(a & !VALUE_MASK_CONST_ID) as usize], 42);
         assert_eq!(bc.consts.len(), 2);
     }
 

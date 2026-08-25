@@ -2022,14 +2022,6 @@ impl ArithOpKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BitCastKind {
-    ScalarToScalar,
-    AggToAgg,
-    AggToScalar,
-    ScalarToAgg,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuiltinAbility {
     Enum,
 }
@@ -4034,11 +4026,7 @@ impl TypedProgram {
         }
 
         if is_alias && is_generic_defn {
-            kbail!(
-                self,
-                parsed_type_defn.span,
-                "Alias types cannot have type parameters (yet)"
-            );
+            kbail!(self, parsed_type_defn.span, "Alias types cannot have type parameters (yet)");
         }
 
         let reserved_type_id = if !is_alias { Some(self.reserve_type_id()) } else { None };
@@ -5204,10 +5192,7 @@ impl TypedProgram {
                             // its rhs; nominal members of the cycle short-circuit to their
                             // reserved ids above, so expansion terminates unless the alias
                             // cycle contains no nominal type at all
-                            if self
-                                .type_defn_context
-                                .expanding_aliases
-                                .contains(&pending_parsed_id)
+                            if self.type_defn_context.expanding_aliases.contains(&pending_parsed_id)
                             {
                                 kbail!(
                                     self,
@@ -5216,8 +5201,7 @@ impl TypedProgram {
                                     &ty_app.name
                                 );
                             }
-                            let alias_rhs =
-                                self.ast.get_type_defn(pending_parsed_id).value_expr;
+                            let alias_rhs = self.ast.get_type_defn(pending_parsed_id).value_expr;
                             self.type_defn_context.expanding_aliases.push(pending_parsed_id);
                             let rhs_result = self.eval_type_expr_ext(
                                 alias_rhs,
@@ -5290,8 +5274,7 @@ impl TypedProgram {
                             self.scope_id_to_string(scope_id)
                         );
 
-                        let _result =
-                            self.eval_type_defn(pending_parsed_id, pending_scope_id)?;
+                        let _result = self.eval_type_defn(pending_parsed_id, pending_scope_id)?;
 
                         // Just re-call this function from the top now that the type exists. (hack? idk)
                         self.eval_type_application(ty_app_id, scope_id, context)
@@ -6206,6 +6189,11 @@ impl TypedProgram {
                 .with_manifest_eval(),
             &[],
         )?;
+        let result_type_id = self.get_static_value_type(manifest_result);
+
+        if let Err(msg) = self.check_types(module_type_id, result_type_id, Scopes::ROOT_SCOPE_ID) {
+            kbail!(self, fn_span, "fn module returned wrong type: {}", msg);
+        }
 
         let StaticValue::Struct(value) = self.static_values.get(manifest_result) else {
             self.ice_span(fn_span, "module manifest value was not a struct");
@@ -7448,7 +7436,7 @@ impl TypedProgram {
                 break;
             }
 
-            for (name, vis) in self.scopes.iter_scope_variables(cur_scope) {
+            for (name, vis, _) in self.scopes.iter_scope_variables(cur_scope) {
                 let Some(variable_id) = vis.variable_id() else {
                     continue;
                 };
@@ -9486,7 +9474,7 @@ impl TypedProgram {
                 }
             },
             Some((variable_id, variable_scope_id)) => {
-                self.check_lambda_capture_boundary(
+                self.check_lambda_capture_valid(
                     scope_id,
                     variable_id,
                     variable_scope_id,
@@ -9508,10 +9496,7 @@ impl TypedProgram {
         }
     }
 
-    /// Captures are declared in a lambda's capture list and bind ordinary body-scope
-    /// variables, so a use inside a lambda that reaches a local declared outside it
-    /// is always an undeclared capture.
-    fn check_lambda_capture_boundary(
+    fn check_lambda_capture_valid(
         &self,
         use_scope: ScopeId,
         variable_id: VariableId,
@@ -12826,20 +12811,14 @@ impl TypedProgram {
                         from_integer_type
                     )),
                 },
-                Type::Float(_to_float_type) => {
-                    // We're just going to allow these casts and make it UB if it doesn't fit, the LLVM
-                    // default. If I find a saturating version in LLVM I'll use that instead
-                    match from_integer_type {
-                        IntegerType::U8
-                        | IntegerType::U16
-                        | IntegerType::U32
-                        | IntegerType::U64 => Ok(Outcome::Cast(CastType::IntegerUnsignedToFloat)),
-                        IntegerType::I8
-                        | IntegerType::I16
-                        | IntegerType::I32
-                        | IntegerType::I64 => Ok(Outcome::Cast(CastType::IntegerSignedToFloat)),
+                Type::Float(_to_float_type) => match from_integer_type {
+                    IntegerType::U8 | IntegerType::U16 | IntegerType::U32 | IntegerType::U64 => {
+                        Ok(Outcome::Cast(CastType::IntegerUnsignedToFloat))
                     }
-                }
+                    IntegerType::I8 | IntegerType::I16 | IntegerType::I32 | IntegerType::I64 => {
+                        Ok(Outcome::Cast(CastType::IntegerSignedToFloat))
+                    }
+                },
                 _ => Err(kerr!(
                     self,
                     span,
@@ -12853,21 +12832,18 @@ impl TypedProgram {
                     match from_float_type.size().cmp(&to_float_type.size()) {
                         Ordering::Less => Ok(Outcome::Cast(CastType::FloatExtend)),
                         Ordering::Greater => Ok(Outcome::Cast(CastType::FloatTruncate)),
-                        Ordering::Equal => Err(kerr!(self, span, "Useless float cast")),
+                        Ordering::Equal => {
+                            unreachable!("equal-width floats are the same type")
+                        }
                     }
                 }
-                Type::Integer(to_int_type) => match to_int_type {
-                    IntegerType::U32 => Ok(Outcome::Cast(CastType::FloatToUnsignedInteger)),
-                    IntegerType::U64 => Ok(Outcome::Cast(CastType::FloatToUnsignedInteger)),
-                    IntegerType::I32 => Ok(Outcome::Cast(CastType::FloatToSignedInteger)),
-                    IntegerType::I64 => Ok(Outcome::Cast(CastType::FloatToSignedInteger)),
-                    _ => Err(kerr!(
-                        self,
-                        span,
-                        "Cannot cast float to integer '{}'",
-                        self.type_id_to_string(target_type).blue()
-                    )),
-                },
+                Type::Integer(to_int_type) => {
+                    if to_int_type.is_signed() {
+                        Ok(Outcome::Cast(CastType::FloatToSignedInteger))
+                    } else {
+                        Ok(Outcome::Cast(CastType::FloatToUnsignedInteger))
+                    }
+                }
                 _ => Err(kerr!(
                     self,
                     span,
@@ -14871,7 +14847,7 @@ impl TypedProgram {
                 self.type_id_to_string(base_for_method),
                 self.scopes
                     .iter_scope_functions(companion_scope_id)
-                    .map(|(_, f)| self.ident_str(self.functions.get(f).name).to_string())
+                    .map(|(_, f, _)| self.ident_str(self.functions.get(f).name).to_string())
                     .join(", ")
             );
             if let Some(method_id) = self.scopes.find_function_local(companion_scope_id, fn_name) {
@@ -16086,7 +16062,7 @@ impl TypedProgram {
         };
         if let Some(matching_context_variable) = matching_context_variable {
             let found = self.variables.get(matching_context_variable);
-            self.check_lambda_capture_boundary(
+            self.check_lambda_capture_valid(
                 calling_scope,
                 matching_context_variable,
                 found.owner_scope,
@@ -16955,7 +16931,7 @@ impl TypedProgram {
                     kbail!(self, call.span, "Cannot bitcast from unsized type: {}", type_from)
                 };
                 let Some(layout_to) = self.get_layout(type_to) else {
-                    kbail!(self, call.span, "Cannot bitcast to unsized type: {}", type_from)
+                    kbail!(self, call.span, "Cannot bitcast to unsized type: {}", type_to)
                 };
                 if layout_from.size == 0 {
                     kbail!(self, call.span, "Cannot bitcast from zero-sized type: {}", type_from)
@@ -17542,11 +17518,14 @@ impl TypedProgram {
                         parsed_use.target.name
                     );
                 };
+                let provenance =
+                    if parsed_use.exposed { Provenance::UseExposed } else { Provenance::Use };
                 for useable_symbol in &useable_symbols {
                     self.scopes.add_use_binding(
                         ctx.scope_id,
                         useable_symbol,
                         parsed_use.alias.unwrap_or(parsed_use.target.name),
+                        provenance,
                     );
                 }
                 Ok(None)
@@ -21381,14 +21360,6 @@ impl TypedProgram {
         fail_on_traverse_fail: bool,
     ) -> bool {
         let parsed_use = *self.ast.uses.get_use(parsed_use_id);
-        // let status_entry = self.use_statuses.get(&parsed_use_id);
-        // let is_fulfilled = match status_entry {
-        //     Some(use_status) if use_status.is_resolved() => true,
-        //     _ => false,
-        // };
-        // if is_fulfilled {
-        //     return true;
-        // }
         let useable_symbols =
             match self.find_useable_symbols(scope_id, &parsed_use.target, fail_on_traverse_fail) {
                 Err(e) => {
@@ -21402,22 +21373,21 @@ impl TypedProgram {
             self.qident_to_string(&parsed_use.target),
             &useable_symbols
         );
-        let resolution = if useable_symbols.is_empty() {
+        if useable_symbols.is_empty() {
             debug!("Inserting unresolved use of {}", self.qident_to_string(&parsed_use.target));
-            false
-        } else {
-            for symbol in &useable_symbols {
-                self.scopes.add_use_binding(
-                    scope_id,
-                    symbol,
-                    parsed_use.alias.unwrap_or(parsed_use.target.name),
-                );
-                debug!("Inserting resolved use of {:?}", symbol);
-            }
-            true
-        };
-        // self.use_statuses.insert(parsed_use_id, resolution);
-        resolution
+            return false;
+        }
+        let provenance = if parsed_use.exposed { Provenance::UseExposed } else { Provenance::Use };
+        for symbol in &useable_symbols {
+            self.scopes.add_use_binding(
+                scope_id,
+                symbol,
+                parsed_use.alias.unwrap_or(parsed_use.target.name),
+                provenance,
+            );
+            debug!("Inserting resolved use of {:?}", symbol);
+        }
+        true
     }
 
     fn find_useable_symbols(
@@ -21450,13 +21420,14 @@ impl TypedProgram {
         // we resolve namespaced identifiers :O
 
         let mut found_symbols: SV4<_> = smallvec![];
-        if let Some(function_id) = self.scopes.find_function_local(scope_id_to_search, name.name) {
+        if let Some(function_id) = self.scopes.find_function_exposed(scope_id_to_search, name.name)
+        {
             found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Function(function_id),
             });
         }
-        if let Some(type_id) = self.scopes.find_type_local(scope_id_to_search, name.name) {
+        if let Some(type_id) = self.scopes.find_type_exposed(scope_id_to_search, name.name) {
             let companion_namespace = self.get_companion_namespace(type_id);
             found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
@@ -21474,7 +21445,7 @@ impl TypedProgram {
         }
         if let Some(variable_id) = self
             .scopes
-            .find_variable_local(scope_id_to_search, name.name)
+            .find_variable_exposed(scope_id_to_search, name.name)
             .and_then(|vis| vis.variable_id())
         {
             found_symbols.push(UseableSymbol {
@@ -21482,14 +21453,14 @@ impl TypedProgram {
                 id: UseableSymbolId::Global(variable_id),
             })
         }
-        if let Some(ability_id) = self.scopes.find_ability_local(scope_id_to_search, name.name) {
+        if let Some(ability_id) = self.scopes.find_ability_exposed(scope_id_to_search, name.name) {
             let namespace_id = self.abilities.get(ability_id).namespace_id;
             found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Ability(ability_id, namespace_id),
             })
         }
-        if let Some(ns_id) = self.scopes.find_namespace_local(scope_id_to_search, name.name) {
+        if let Some(ns_id) = self.scopes.find_namespace_exposed(scope_id_to_search, name.name) {
             found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Namespace(ns_id),
@@ -21523,10 +21494,8 @@ impl TypedProgram {
                 ) {
                     return;
                 }
-                let pending_defn = TypePendingDefinition {
-                    scope_id: namespace_scope_id,
-                    parsed_id: type_defn_id,
-                };
+                let pending_defn =
+                    TypePendingDefinition { scope_id: namespace_scope_id, parsed_id: type_defn_id };
                 let added = self.scopes.add_pending_type(
                     namespace_scope_id,
                     parsed_type_defn.name,
@@ -21675,8 +21644,8 @@ impl TypedProgram {
     ) -> K1Result<()> {
         let ns = self.namespaces.get(namespace_id);
         let ns_scope = ns.scope_id;
-        let ns_parsed_id = ns.parsed_id;
-        let span = self.ast.get_span_for_id(ns_parsed_id);
+        let ns_parsed_id = ns.parsed_id.as_namespace_id().unwrap();
+        let span = self.ast.namespaces.get(ns_parsed_id).name_span;
 
         let fn_scope =
             self.scopes.add_child_scope(ns_scope, ScopeType::FunctionScope, ScopeOwnerId::None);
@@ -21720,7 +21689,7 @@ impl TypedProgram {
             builtin_type: None,
             linkage: Linkage::Standard,
             specialization_info: None,
-            parsed_id: ns_parsed_id,
+            parsed_id: ParsedId::Namespace(ns_parsed_id),
             type_id: function_type,
             compiler_debug: false,
             kind: TypedFunctionKind::Standard,
@@ -22187,23 +22156,24 @@ impl TypedProgram {
         Ok(())
     }
 
+    /// Sweeps the pending queue to quiescence, so a use whose target is another
+    /// use resolves regardless of declaration order; textual order only decides
+    /// the winner when two uses claim the same name.
     fn resolve_pending_uses(&mut self) {
-        let mut i = 0;
-        // eprintln!("resolve_pending_uses called with {}", self.uses_pending_resolution.len());
-        while let Some(use_pending) = self.uses_pending_resolution.get(i) {
-            // Attempting uses here will really only resolve things from pre/
-            // or from other modules; stuff from this module will need to be
-            // resolved by later passes
-            //
-            // But this lets us use things like std/meta for metaprograms, which is
-            // important
-            if self.eval_use_definition(use_pending.scope_id, use_pending.use_id, false) {
-                self.uses_pending_resolution.remove(i);
-            } else {
-                i += 1;
+        loop {
+            let before = self.uses_pending_resolution.len();
+            let mut i = 0;
+            while let Some(use_pending) = self.uses_pending_resolution.get(i) {
+                if self.eval_use_definition(use_pending.scope_id, use_pending.use_id, false) {
+                    self.uses_pending_resolution.remove(i);
+                } else {
+                    i += 1;
+                }
+            }
+            if self.uses_pending_resolution.len() == before {
+                return;
             }
         }
-        // eprintln!("resolve_pending_uses finished with {}", self.uses_pending_resolution.len());
     }
 
     fn run_all_phases_on_ns(
@@ -22992,7 +22962,12 @@ impl TypedProgram {
             QIdent { path: core_types, name: get_ident!(self, "type-id"), name_span: span },
         ];
         for qid in idents_to_use.into_iter() {
-            let use_id = self.ast.uses.add_use(parse::ParsedUse { target: qid, alias: None, span });
+            let use_id = self.ast.uses.add_use(parse::ParsedUse {
+                target: qid,
+                alias: None,
+                exposed: false,
+                span,
+            });
             if !self.eval_use_definition(scope, use_id, true) {
                 //We can't quite fail here since we use 'std' from 'core', and it gets
                 //resolved later

@@ -71,7 +71,7 @@ impl TypedProgram {
         writeln!(w, "kind: {}", scope.scope_type.short_name())?;
 
         let mut first = true;
-        for (id, variable_in_scope) in self.scopes.iter_scope_variables(scope_id) {
+        for (id, variable_in_scope, _) in self.scopes.iter_scope_variables(scope_id) {
             if first {
                 w.write_str("\tVARS\n")?;
                 first = false;
@@ -87,7 +87,7 @@ impl TypedProgram {
             w.write_str("\n")?;
         }
         let mut first = true;
-        for (_name, function_id) in self.scopes.iter_scope_functions(scope_id) {
+        for (_name, function_id, _) in self.scopes.iter_scope_functions(scope_id) {
             if first {
                 w.write_str("\tFUNCTIONS\n")?;
                 first = false;
@@ -98,7 +98,7 @@ impl TypedProgram {
             w.write_str("\n")?;
         }
         let mut first = true;
-        for (ident, type_id) in self.scopes.iter_scope_types(scope_id) {
+        for (ident, type_id, _) in self.scopes.iter_scope_types(scope_id) {
             if first {
                 w.write_str("\tTYPES\n")?;
                 first = false;
@@ -110,7 +110,7 @@ impl TypedProgram {
             w.write_str("\n")?;
         }
         let mut first = true;
-        for (name, namespace_id) in self.scopes.iter_scope_namespaces(scope_id) {
+        for (name, namespace_id, _) in self.scopes.iter_scope_namespaces(scope_id) {
             if first {
                 w.write_str("\tNAMESPACES\n")?;
                 first = false;

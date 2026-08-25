@@ -249,7 +249,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
             let mut seen_methods = FxHashSet::default();
             if let Some(companion_ns) = k1.get_companion_namespace(base_type_id) {
                 let companion_scope = k1.namespaces.get(companion_ns).scope_id;
-                for (name, function_id) in k1.scopes.iter_scope_functions(companion_scope) {
+                for (name, function_id, _) in k1.scopes.iter_scope_functions(companion_scope) {
                     if is_method_shaped(k1, function_id, base_type_id) {
                         seen_methods.insert(name);
                         items.push(CompletionCandidate {
@@ -302,7 +302,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
             }
         }
         CompletionSite::Path { path_scope_id } => {
-            collect_one_scope(k1, path_scope_id, &mut Seen::default(), &mut items);
+            collect_one_scope(k1, path_scope_id, &mut Seen::default(), &mut items, true);
         }
         CompletionSite::Variant { type_id } => {
             let type_id = match k1.types.get(type_id) {
@@ -397,7 +397,7 @@ fn collect_scope_chain(k1: &TypedProgram, scope_id: ScopeId, items: &mut Vec<Com
     let mut seen = Seen::default();
     let mut current = Some(scope_id);
     while let Some(scope_id) = current {
-        collect_one_scope(k1, scope_id, &mut seen, items);
+        collect_one_scope(k1, scope_id, &mut seen, items, false);
         current = k1.scopes.get_scope(scope_id).parent;
     }
 }
@@ -407,8 +407,12 @@ fn collect_one_scope(
     scope_id: ScopeId,
     seen: &mut Seen,
     items: &mut Vec<CompletionCandidate>,
+    exposed_only: bool,
 ) {
-    for (name, in_scope) in k1.scopes.iter_scope_variables(scope_id) {
+    for (name, in_scope, prov) in k1.scopes.iter_scope_variables(scope_id) {
+        if exposed_only && !prov.is_exposed() {
+            continue;
+        }
         // A masked name still hides outer definitions, so it claims the seen-slot
         if !seen.variables.insert(name) {
             continue;
@@ -421,7 +425,10 @@ fn collect_one_scope(
             sort_group: 2,
         });
     }
-    for (name, function_id) in k1.scopes.iter_scope_functions(scope_id) {
+    for (name, function_id, prov) in k1.scopes.iter_scope_functions(scope_id) {
+        if exposed_only && !prov.is_exposed() {
+            continue;
+        }
         if seen.functions.insert(name) {
             items.push(CompletionCandidate {
                 label: k1.ident_str(name).to_string(),
@@ -431,7 +438,10 @@ fn collect_one_scope(
             });
         }
     }
-    for (name, type_id) in k1.scopes.iter_scope_types(scope_id) {
+    for (name, type_id, prov) in k1.scopes.iter_scope_types(scope_id) {
+        if exposed_only && !prov.is_exposed() {
+            continue;
+        }
         if seen.types.insert(name) {
             items.push(CompletionCandidate {
                 label: k1.ident_str(name).to_string(),
@@ -441,7 +451,10 @@ fn collect_one_scope(
             });
         }
     }
-    for (name, _ns_id) in k1.scopes.iter_scope_namespaces(scope_id) {
+    for (name, _ns_id, prov) in k1.scopes.iter_scope_namespaces(scope_id) {
+        if exposed_only && !prov.is_exposed() {
+            continue;
+        }
         if seen.namespaces.insert(name) {
             items.push(CompletionCandidate {
                 label: k1.ident_str(name).to_string(),
@@ -451,7 +464,10 @@ fn collect_one_scope(
             });
         }
     }
-    for (name, _ability_id) in k1.scopes.iter_scope_abilities(scope_id) {
+    for (name, _ability_id, prov) in k1.scopes.iter_scope_abilities(scope_id) {
+        if exposed_only && !prov.is_exposed() {
+            continue;
+        }
         if seen.abilities.insert(name) {
             items.push(CompletionCandidate {
                 label: k1.ident_str(name).to_string(),
