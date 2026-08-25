@@ -78,6 +78,11 @@ type Size = either(u32) {
   Size_Large = 2,
 }
 #static assert-layout[Size](4, 4, [])
+type Packed = either(u8) {
+  Packed_First = 0,
+  Packed_Last = 255,
+}
+#static assert-layout[Packed](1, 1, [])
 type loop_c = {}
 #static assert-layout[loop_c](0, 1, [])
 type my-custom-name = {}

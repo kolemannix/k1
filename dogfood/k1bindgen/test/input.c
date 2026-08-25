@@ -59,6 +59,11 @@ enum Size {
   Size_Large
 };
 
+enum __attribute__((__packed__)) Packed {
+  Packed_First,
+  Packed_Last = 255
+};
+
 // should get excluded due to dunder
 struct my__internal {};
 
