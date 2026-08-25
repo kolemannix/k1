@@ -88,6 +88,13 @@ ns(lib("foo")) foo {
   fn(extern("packed19_sum")) packed19-sum(p: packed19): u64
   fn(extern("packed19_swap")) packed19-swap(p: packed19): packed19
 
+  let(extern("abi_readonly")) readonly: i32
+  let(extern("abi_counter"), mutable) counter: i32
+  let(extern("abi_tls_counter"), mutable, tls) tls-counter: i32
+  let(extern("abi_link_name_source")) renamed: i32
+
+  fn(extern("abi_counter_get")) counter-get(): i32
+  fn(extern("abi_tls_counter_get")) tls-counter-get(): i32
 }
 
 fn test-all() {
@@ -237,9 +244,31 @@ fn sum-fn-struct(s: { a: u64, b: u64, c: u64, d: u64 }): i32 {
 
 // TODO: abi/ffi test some 'sum' types
 
+fn test-globals-readonly() {
+  assert-equals(foo/readonly, 7)
+  assert-equals(foo/renamed, 33)
+}
+
+fn test-globals() {
+  assert-equals(foo/counter, 100)
+  assert-equals(foo/counter-get(), 100)
+  foo/counter = foo/counter + 11
+  assert-equals(foo/counter, 111)
+  assert-equals(foo/counter-get(), 111)
+
+  assert-equals(foo/tls-counter, 5)
+  assert-equals(foo/tls-counter-get(), 5)
+  foo/tls-counter = foo/tls-counter + 3
+  assert-equals(foo/tls-counter, 8)
+  assert-equals(foo/tls-counter-get(), 8)
+}
+
 fn main(): i32 {
   #static test-all()
   test-all()
   test-fn-ptr()
+  #static test-globals-readonly()
+  test-globals-readonly()
+  test-globals()
   0
 }

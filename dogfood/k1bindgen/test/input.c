@@ -82,6 +82,12 @@ int cinput_main(void) {
   return 0;
 }
 
+extern const int cinput_readonly;
+extern int cinput_counter;
+extern _Thread_local int cinput_tls_counter;
+// should be omitted: internal linkage
+static int cinput_header_local;
+
 #define CINPUT_ANSWER 42
 #define CINPUT_HEX 0xFF
 #define CINPUT_SHIFTED (1u << 4)

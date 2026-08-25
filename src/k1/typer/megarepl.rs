@@ -516,6 +516,7 @@ impl TypedProgram {
                 is_tls: false,
                 is_exported: false,
                 is_external: false,
+                link_name: None,
                 ast_id: ParsedGlobalId::PENDING,
                 parent_scope: repl_ns_scope,
                 reload_ns: None,

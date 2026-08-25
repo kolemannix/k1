@@ -1346,6 +1346,7 @@ pub struct ParsedGlobal {
     pub is_export: bool,
     pub is_mutable: bool,
     pub is_external: bool,
+    pub link_name: Option<StringId>,
     pub compile_condition: Option<ParsedExprId>,
 }
 
@@ -4493,13 +4494,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let mut is_export = false;
         let mut is_external = false;
         let mut is_mutable = false;
+        let mut link_name = None;
         if self.maybe_consume(K::OpenParen).is_some() {
             loop {
                 let ident = self.expect_kind(K::Ident)?;
+                let mut takes_link_name = false;
                 match self.token_chars(ident) {
                     "tls" => is_thread_local = true,
                     "export" => is_export = true,
-                    "extern" => is_external = true,
+                    "extern" => {
+                        is_external = true;
+                        takes_link_name = true;
+                    }
                     "mutable" => is_mutable = true,
                     _ => {
                         return Err(self.error_expected(
@@ -4507,6 +4513,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             ident,
                         ));
                     }
+                }
+                if takes_link_name && self.maybe_consume(K::OpenParen).is_some() {
+                    link_name = Some(self.expect_dq_ident()?);
+                    self.expect_kind(K::CloseParen)?;
                 }
                 if self.maybe_consume(K::Comma).is_none() {
                     break;
@@ -4537,6 +4547,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             is_export,
             is_mutable,
             is_external,
+            link_name,
             compile_condition,
         });
         Ok(global_id)

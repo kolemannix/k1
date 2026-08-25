@@ -18,7 +18,6 @@ use std/map
 use std/set
 
 // TODO:
-// - [ ] implement value of globals (woops)
 // - [x] Extract fn param names by traversing the children, not just cheating by only looking at its 'cx-type' like we are now
 // - [ ] Detect varargs and emit error
 // - [ ] support bitfields (track bitfield start/end; if possible emit a std/bitfield call
@@ -190,13 +189,23 @@ fn start(args: span[string]): result[string, string] {
             if (not is-opaque) and it.error is :none { write-layout-assertions(name, typedef.type, it.layout) }
           }
         },
-        :global global -> {
+        :constant constant -> {
           out.write("let ")
           out.write(name)
           out.write(": ")
-          write-k1-type(global.type, indent = 0)
+          write-k1-type(constant.type, indent = 0)
           out.write(" = ")
-          out.write(global.value ? "todo")
+          out.write(constant.value)
+          out.writeln("")
+        },
+        :global global -> {
+          out.write(`let(extern("$raw-name")`)
+          if global.mutable out.write(", mutable")
+          if global.tls out.write(", tls")
+          out.write(") ")
+          out.write(name)
+          out.write(": ")
+          write-k1-type(global.type, indent = 0)
           out.writeln("")
         },
         :function function -> {
@@ -252,7 +261,8 @@ type k1-defn = {
   name: string,
   kind: either { 
     typedef({ type: k1-type, alias: bool }),
-    global({ type: k1-type, value: ?string }),
+    constant({ type: k1-type, value: string }),
+    global({ type: k1-type, mutable: bool, tls: bool }),
     function({ fn-type: fn-type })
   },
   error: ?string,
@@ -662,7 +672,7 @@ fn visit-root(
           bg.emitted-macros.insert(name, value.type)
           bg.defns.push(.{
             name,
-            kind = :global .{ type = :k1 (value.type), value = :some (value.text) },
+            kind = :constant .{ type = :k1 (value.type), value = value.text },
             error = :none,
             layout = :none,
           })
@@ -673,11 +683,20 @@ fn visit-root(
     },
     :VarDecl -> {
       let name = clang/getCursorSpelling(current).to-string()
-      debug("Name of VarDecl: $name")
+      if not (clang/getCursorLinkage(current) is :External) {
+        debug("skipping VarDecl $name: not externally linked")
+        return :Continue
+      }
       let cx-type = clang/getCursorType(current)
+      let mutable = clang/isConstQualifiedType(cx-type) == 0
+      let tls = not (clang/getCursorTLSKind(current) is :None)
       let type = map-type(cx-type)
-      let defn: k1-defn = .{ name, kind = :global .{ type, value = :none }, error = :none, layout = :none }
-      bg.defns.push(defn)
+      bg.defns.push(.{
+        name,
+        kind = :global .{ type, mutable, tls },
+        error = :none,
+        layout = :none,
+      })
       :Continue
     },
     :FunctionDecl -> {

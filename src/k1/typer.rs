@@ -1780,6 +1780,7 @@ pub struct TypedGlobal {
     pub is_tls: bool,
     pub is_exported: bool,
     pub is_external: bool,
+    pub link_name: Option<StringId>,
     pub ast_id: ParsedGlobalId,
     pub parent_scope: ScopeId,
     /// Set when the global is declared in an ns(reload)
@@ -7601,6 +7602,7 @@ impl TypedProgram {
                 is_tls: parsed.is_thread_local,
                 is_exported: parsed.is_export,
                 is_external: parsed.is_external,
+                link_name: parsed.link_name,
                 ast_id: parsed_global_id,
                 parent_scope: scope_id,
                 reload_ns,
@@ -23314,6 +23316,17 @@ impl TypedProgram {
             skip_root,
         );
         buf
+    }
+
+    pub fn global_link_symbol(&self, global: &TypedGlobal) -> String {
+        let variable = self.variables.get(global.variable_id);
+        if let Some(link_name) = global.link_name {
+            return self.ident_str(link_name).to_string();
+        }
+        if global.is_exported || global.is_external {
+            return self.ident_str(variable.name).to_string();
+        }
+        self.make_qualified_name(variable.owner_scope, variable.name, None, "__", false)
     }
 
     // Errors and logging

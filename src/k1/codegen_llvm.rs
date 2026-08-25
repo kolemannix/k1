@@ -1150,14 +1150,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
         let global = self.k1.globals.get(global_id).clone();
 
-        let variable = self.k1.variables.get(global.variable_id);
-        let name = if global.is_exported || global.is_external {
-            // For now let's just use the name for externally linked symbols
-            // Eventually we'll need to ask the user for a link name
-            self.k1.ident_str(variable.name).to_string()
-        } else {
-            self.k1.make_qualified_name(variable.owner_scope, variable.name, None, "__", false)
-        };
+        let name = self.k1.global_link_symbol(&global);
 
         if let Some(reload_ns) = global.reload_ns {
             if self.unit != CgUnit::ReloadDylib(reload_ns) {
@@ -1196,7 +1189,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             };
             let basic_type = self.codegen_type(global_pt);
             let g = self.make_external_global(basic_type.rich_type(), &name, global.is_constant);
-            if is_dylib && global.is_tls {
+            if global.is_tls && self.target_supports_tls() {
                 g.set_thread_local(true);
                 g.set_thread_local_mode(Some(ThreadLocalMode::GeneralDynamicTLSModel));
             }
@@ -4860,6 +4853,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(global)
     }
 
+    fn target_supports_tls(&self) -> bool {
+        self.k1.config.target.arch() != compiler::Arch::Wasm
+            && self.k1.config.target.platform() != compiler::Platform::Bare
+    }
+
     fn make_external_global(
         &mut self,
         typ: BasicTypeEnum<'ctx>,
@@ -4888,12 +4886,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         global.set_constant(constant);
         global.set_linkage(linkage);
 
-        // Single-threaded wasm and bare (no threads contract): tls globals are
-        // plain globals
-        let is_tls_and_supported = is_tls
-            && self.k1.config.target.arch() != compiler::Arch::Wasm
-            && self.k1.config.target.platform() != compiler::Platform::Bare;
-        if is_tls_and_supported {
+        if is_tls && self.target_supports_tls() {
             global.set_thread_local(true);
             let mode = if self.k1.program_settings.executable {
                 ThreadLocalMode::LocalExecTLSModel

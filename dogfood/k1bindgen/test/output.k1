@@ -89,3 +89,6 @@ type my-custom-name = {}
 #static assert-layout[my-custom-name](0, 1, [])
 type opaq = opaque[104, 4]
 fn(extern("cinput_main")) main(): i32
+let(extern("cinput_readonly")) readonly: i32
+let(extern("cinput_counter"), mutable) counter: i32
+let(extern("cinput_tls_counter"), mutable, tls) tls_counter: i32

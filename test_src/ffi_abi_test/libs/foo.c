@@ -232,3 +232,11 @@ Packed19 packed19_swap(Packed19 p) {
   r.z = p.z;
   return r;
 }
+
+const int abi_readonly = 7;
+int abi_counter = 100;
+_Thread_local int abi_tls_counter = 5;
+int abi_link_name_source = 33;
+
+int abi_counter_get(void) { return abi_counter; }
+int abi_tls_counter_get(void) { return abi_tls_counter; }

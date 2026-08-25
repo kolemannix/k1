@@ -233,6 +233,24 @@ fn(extern("clang_getCursorExtent")) getCursorExtent(C: CXCursor): CXSourceRange
 fn(extern("clang_Cursor_isMacroFunctionLike")) Cursor_isMacroFunctionLike(C: CXCursor): c-unsigned
 fn(extern("clang_Cursor_isMacroBuiltin")) Cursor_isMacroBuiltin(C: CXCursor): c-unsigned
 
+type CXLinkageKind = either(c-unsigned) {
+  Invalid = 0,
+  NoLinkage = 1,
+  Internal = 2,
+  UniqueExternal = 3,
+  External = 4
+}
+fn(extern("clang_getCursorLinkage")) getCursorLinkage(C: CXCursor): CXLinkageKind
+
+type CXTLSKind = either(c-unsigned) {
+  None = 0,
+  Dynamic = 1,
+  Static = 2
+}
+fn(extern("clang_getCursorTLSKind")) getCursorTLSKind(C: CXCursor): CXTLSKind
+
+fn(extern("clang_isConstQualifiedType")) isConstQualifiedType(T: CXType): c-unsigned
+
 type CXTokenKind = either(c-unsigned) {
   Punctuation = 0,
   Keyword = 1,

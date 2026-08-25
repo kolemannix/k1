@@ -148,6 +148,15 @@ let(mutable, tls) my-thread-local: i32 = 0
 counter = counter + 1
 ```
 
+An `extern` global has no initializer; its storage comes from the linker. Like
+the `extern` fn modifier, its optional argument is the link symbol, defaulting
+to the declared name:
+
+```rust
+let(extern("abi_counter"), mutable) counter: i32
+let(extern) environ: ptr
+```
+
 See `test_src/suite1/globals.k1`, `test_src/suite1/ability_default_fns.k1`, and
 `test_src/threads.k1`.
 

@@ -590,15 +590,15 @@ pub(crate) fn resolve_global(
         }
         GlobalInitialValue::Uninit => {
             if global.is_external {
-                let name = k1.variables.get(global.variable_id).name;
-                let name_cstr = std::ffi::CString::new(k1.ident_str(name)).unwrap();
+                let symbol = k1.global_link_symbol(global);
+                let name_cstr = std::ffi::CString::new(symbol.as_str()).unwrap();
                 let sym = unsafe { libc::dlsym(k1.vm_process_dlopen_handle, name_cstr.as_ptr()) };
                 if sym.is_null() {
                     kbail!(
                         k1,
                         vm.eval_span,
                         "Could not resolve external global symbol '{}' at compile time; the platform does not export it dynamically",
-                        k1.ident_str(name)
+                        symbol
                     );
                 }
                 let addr = Value::ptr(sym as *const u8);
