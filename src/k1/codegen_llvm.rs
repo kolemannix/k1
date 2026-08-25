@@ -758,7 +758,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         for ns_id in reload_nss {
             let mut entries: Vec<(String, Slot)> = vec![];
             for (function_id, function) in self.k1.function_iter() {
-                if function.is_reloadable && function.namespace_id == ns_id {
+                if function.is_reloadable() && function.namespace_id == ns_id {
                     entries.push((
                         self.make_reloadable_function_symbol(function_id),
                         Slot::Fn(function_id),
@@ -857,7 +857,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let mut roots: Vec<(String, FunctionId)> = vec![];
         for (function_id, function) in self.k1.function_iter() {
-            if function.is_reloadable && function.namespace_id == ns_id {
+            if function.is_reloadable() && function.namespace_id == ns_id {
                 roots.push((self.make_reloadable_function_symbol(function_id), function_id));
             }
         }
@@ -900,7 +900,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn is_reloadable_function(&self, function_id: FunctionId) -> bool {
         let function = self.k1.get_function(function_id);
-        if !function.is_reloadable {
+        if !function.is_reloadable() {
             return false;
         }
         match self.unit {
@@ -3858,7 +3858,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let is_dylib_root = match self.unit {
             CgUnit::Host => false,
             CgUnit::ReloadDylib(ns_id) => {
-                typed_function.is_reloadable && typed_function.namespace_id == ns_id
+                typed_function.is_reloadable() && typed_function.namespace_id == ns_id
             }
         };
         let llvm_linkage = if is_dylib_root {
@@ -4388,7 +4388,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             return self.codegen_reload_stub(function_id);
         }
         let typed_function = self.k1.get_function(function_id);
-        let is_debug = typed_function.compiler_debug;
+        let is_debug = typed_function.compiler_debug();
         if is_debug {
             self.k1.push_debug_level();
         }

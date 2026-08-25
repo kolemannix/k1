@@ -5,6 +5,7 @@ pub(crate) mod derive;
 pub(crate) mod dump;
 pub(crate) mod infer;
 pub(crate) mod megarepl;
+mod pattern_match;
 pub(crate) mod scopes;
 pub(crate) mod snapshot;
 pub(crate) mod static_value;
@@ -514,104 +515,6 @@ enum TypeOrParsedExpr {
     Parsed(ParsedExprId),
 }
 
-nz_u32_id!(PatternCtorId);
-
-impl PatternCtorId {
-    pub const B_FALSE: PatternCtorId = PatternCtorId::from_u32(1).unwrap();
-    pub const B_TRUE: PatternCtorId = PatternCtorId::from_u32(2).unwrap();
-    pub const CHAR: PatternCtorId = PatternCtorId::from_u32(3).unwrap();
-    pub const STRING: PatternCtorId = PatternCtorId::from_u32(4).unwrap();
-    pub const INT: PatternCtorId = PatternCtorId::from_u32(5).unwrap();
-    pub const FLOAT: PatternCtorId = PatternCtorId::from_u32(6).unwrap();
-    pub const POINTER: PatternCtorId = PatternCtorId::from_u32(7).unwrap();
-
-    pub const TYPE_VARIABLE: PatternCtorId = PatternCtorId::from_u32(8).unwrap();
-    pub const FUNCTION_POINTER: PatternCtorId = PatternCtorId::from_u32(9).unwrap();
-    pub const LAMBDA_OBJECT: PatternCtorId = PatternCtorId::from_u32(10).unwrap();
-    pub const BUFFER: PatternCtorId = PatternCtorId::from_u32(11).unwrap();
-    pub const SPAN: PatternCtorId = PatternCtorId::from_u32(12).unwrap();
-    pub const OPAQUE: PatternCtorId = PatternCtorId::from_u32(13).unwrap();
-}
-
-/// Used for analyzing pattern matching
-#[derive(Debug, Clone, Copy)]
-pub enum PatternCtor {
-    BoolFalse,
-    BoolTrue,
-    /// Char, String, Int, Float will become more interesting if we implement exhaustive range-based matching like Rust's
-    /// For now they exist as placeholders to indicate to the algorithm that something needs to be matched. We treat
-    /// exact literals as NOT matching because they do not completely eliminate the pattern, and ignore those exact
-    /// literal patterns when we report on 'Useless' patterns
-    Char,
-    String,
-    Int,
-    Float,
-    Pointer,
-    /// This one is also kinda a nothing burger, and can only be matched by Wildcards and Bindings; it's here for
-    /// the sake of being explicit; we could collapse all these into a 'Anything' constructor but the fact I can't
-    /// think of a good name means we shouldn't, probably
-    TypeVariable,
-    FunctionPointer,
-    LambdaObject,
-    ValueType,
-    Buffer,
-    Span,
-    Opaque,
-    /// In the future, we should do real array patterns since length is statically known
-    Array,
-    Reference(PatternCtorId),
-    Struct {
-        /// Exact-size slice in `patterns.mem`, filled by field index
-        fields: MSlice<(StringId, PatternCtorId), TypedPatternPool>,
-    },
-    Enum {
-        variant_name: StringId,
-    },
-    Sum {
-        variant_name: StringId,
-        inner: Option<PatternCtorId>,
-    },
-}
-
-impl PatternCtor {
-    pub fn kind_name(&self) -> &'static str {
-        match self {
-            PatternCtor::BoolFalse => "false",
-            PatternCtor::BoolTrue => "true",
-            PatternCtor::Char => "char",
-            PatternCtor::String => "string",
-            PatternCtor::Int => "int",
-            PatternCtor::Float => "float",
-            PatternCtor::Pointer => "pointer",
-            PatternCtor::TypeVariable => "type variable",
-            PatternCtor::FunctionPointer => "function pointer",
-            PatternCtor::LambdaObject => "lambda object",
-            PatternCtor::ValueType => "value type",
-            PatternCtor::Buffer => "buffer",
-            PatternCtor::Span => "span",
-            PatternCtor::Opaque => "opaque",
-            PatternCtor::Array => "array",
-            PatternCtor::Reference(_) => "reference",
-            PatternCtor::Struct { .. } => "struct",
-            PatternCtor::Sum { .. } => "sum variant",
-            PatternCtor::Enum { .. } => "enum value",
-        }
-    }
-
-    pub fn struct_fields(&self) -> MSlice<(StringId, PatternCtorId), TypedPatternPool> {
-        match self {
-            PatternCtor::Struct { fields } => *fields,
-            _ => panic!("struct_fields on {}", self.kind_name()),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct PatternCtorTrialEntry {
-    ctor: PatternCtorId,
-    alive: bool,
-}
-
 #[derive(Clone)]
 pub struct AbilitySpec9nInfo {
     generic_parent: AbilityId,
@@ -1044,6 +947,21 @@ pub struct TypedFunctionParam {
     pub span: SpanId,
 }
 
+bitflags! {
+    #[repr(transparent)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    struct TypedFunctionFlags: u8 {
+        const CompilerDebug = 1;
+        const Concrete = 1 << 1;
+        const Recursive = 1 << 2;
+        const Macro = 1 << 3;
+        const ModuleManifest = 1 << 4;
+        const Reloadable = 1 << 5;
+        const AbiNative = 1 << 6;
+        const AddressTaken = 1 << 7;
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct TypedFunction {
     pub name: StringId,
@@ -1061,16 +979,8 @@ pub struct TypedFunction {
     pub specialization_info: Option<SpecializationInfo>,
     pub parsed_id: ParsedId,
     pub type_id: TypeId,
-    // nocommit claude finally time for bitflags on typedfunction I think
-    pub compiler_debug: bool,
     pub kind: TypedFunctionKind,
-    pub is_concrete: bool,
-    pub is_recursive: bool,
-    pub is_macro: bool,
-    pub is_module_manifest_fn: bool,
-    pub is_reloadable: bool,
-    pub abi_native: bool,
-    pub address_taken: bool,
+    flags: TypedFunctionFlags,
     /// If we've generated a 'dyn' copy of this function, we store its id
     pub dyn_fn_id: Option<FunctionId>,
     /// 'let(returned)', RVO
@@ -1090,6 +1000,38 @@ impl TypedFunction {
 
     pub fn is_generic(&self) -> bool {
         matches!(self.kind, TypedFunctionKind::AbilityDefn(_)) || self.signature().has_type_params()
+    }
+
+    pub fn compiler_debug(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::CompilerDebug)
+    }
+
+    pub fn is_concrete(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::Concrete)
+    }
+
+    pub fn is_recursive(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::Recursive)
+    }
+
+    pub fn is_macro(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::Macro)
+    }
+
+    pub fn is_module_manifest_fn(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::ModuleManifest)
+    }
+
+    pub fn is_reloadable(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::Reloadable)
+    }
+
+    pub fn abi_native(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::AbiNative)
+    }
+
+    pub fn address_taken(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::AddressTaken)
     }
 }
 
@@ -2522,10 +2464,6 @@ pub enum SelfAdjust {
 pub struct TypedModuleBuffers {
     name_builder: String,
     lexer_tokens: Vec<lex::Token>,
-    /// For Pattern matching trials
-    trial_ctors: Vec<PatternCtorTrialEntry>,
-    field_ctors: Vec<Vec<(StringId, PatternCtorId)>>,
-    pattern_ctor_ancestor_stack: Vec<TypeId>,
     int_parse: String,
     visited_types: RefCell<Vec<TypeId>>,
 }
@@ -2945,7 +2883,6 @@ pub struct TypedProgram {
     buffers: TypedModuleBuffers,
 
     pub patterns: TypedPatternPool,
-    pub pattern_ctors: VPool<PatternCtor, PatternCtorId>,
 
     // `vm`: Can execute code statically; primary VM; gets 'rented out'
     // from the TypedProgram to avoid borrow bullshit
@@ -3095,22 +3032,6 @@ impl TypedProgram {
         if !scopes.add_namespace(Scopes::ROOT_SCOPE_ID, root_ident, root_namespace_id) {
             panic!("Root namespace was taken, hmmmm");
         }
-        let mut pattern_ctors = VPool::make_with_hint("pattern_ctors", 8192);
-        pattern_ctors.add_expected_id(PatternCtor::BoolFalse, PatternCtorId::B_FALSE);
-        pattern_ctors.add_expected_id(PatternCtor::BoolTrue, PatternCtorId::B_TRUE);
-        pattern_ctors.add_expected_id(PatternCtor::Char, PatternCtorId::CHAR);
-        pattern_ctors.add_expected_id(PatternCtor::String, PatternCtorId::STRING);
-        pattern_ctors.add_expected_id(PatternCtor::Int, PatternCtorId::INT);
-        pattern_ctors.add_expected_id(PatternCtor::Float, PatternCtorId::FLOAT);
-        pattern_ctors.add_expected_id(PatternCtor::Pointer, PatternCtorId::POINTER);
-        pattern_ctors.add_expected_id(PatternCtor::TypeVariable, PatternCtorId::TYPE_VARIABLE);
-        pattern_ctors
-            .add_expected_id(PatternCtor::FunctionPointer, PatternCtorId::FUNCTION_POINTER);
-        pattern_ctors.add_expected_id(PatternCtor::LambdaObject, PatternCtorId::LAMBDA_OBJECT);
-        pattern_ctors.add_expected_id(PatternCtor::Buffer, PatternCtorId::BUFFER);
-        pattern_ctors.add_expected_id(PatternCtor::Span, PatternCtorId::SPAN);
-        pattern_ctors.add_expected_id(PatternCtor::Opaque, PatternCtorId::OPAQUE);
-
         let clock = clock::Clock::new();
 
         let mut vm_static_stack = vm::Stack::make();
@@ -3191,14 +3112,10 @@ impl TypedProgram {
             buffers: TypedModuleBuffers {
                 name_builder: String::new(),
                 lexer_tokens: Vec::new(),
-                trial_ctors: Vec::new(),
-                field_ctors: (0..128).map(|_| Vec::new()).collect::<Vec<_>>(),
-                pattern_ctor_ancestor_stack: Vec::with_capacity(64),
                 int_parse: String::with_capacity(128),
                 visited_types: RefCell::new(Vec::new()),
             },
             patterns: TypedPatternPool::make(),
-            pattern_ctors,
             vm: Box::new(Some(vm::Vm::make())),
             vm_alts: vec![
                 vm::Vm::make(),
@@ -8093,13 +8010,13 @@ impl TypedProgram {
                 .or_insert(id);
         }
         let is_concrete = self.is_function_concrete(&function);
-        if function.compiler_debug {
+        if function.compiler_debug() {
             eprintln!(
                 "is_function_concrete={is_concrete} for {}",
                 self.function_to_string(&function, false)
             );
         }
-        function.is_concrete = is_concrete;
+        function.flags.set(TypedFunctionFlags::Concrete, is_concrete);
         self.functions.add(function);
         id
     }
@@ -9498,7 +9415,7 @@ impl TypedProgram {
                     self.ast.idents.get_string(name.name),
                 )),
                 Some(fn_id) => {
-                    if self.get_function(fn_id).is_macro {
+                    if self.get_function(fn_id).is_macro() {
                         kbail!(
                             self,
                             name.name_span,
@@ -10687,7 +10604,7 @@ impl TypedProgram {
                     &call.name
                 );
             };
-            if !self.get_function(function_id).is_macro {
+            if !self.get_function(function_id).is_macro() {
                 kbail!(
                     self,
                     span,
@@ -11063,7 +10980,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> K1Result<StaticExecutionResult> {
         let function = self.get_function(function_id);
-        let is_generic = !function.is_concrete;
+        let is_generic = !function.is_concrete();
         let function_name = function.name;
         let function_type_params = function.type_params;
         let Some(parsed_macro_id) = function.parsed_id.as_macro_id() else {
@@ -11948,15 +11865,8 @@ impl TypedProgram {
                 specialization_info: None,
                 parsed_id: expr_id.into(),
                 type_id: function_type,
-                compiler_debug: false,
                 kind: TypedFunctionKind::Lambda,
-                is_concrete: false,
-                is_recursive: false,
-                is_macro: false,
-                is_module_manifest_fn: false,
-                is_reloadable: false,
-                abi_native: false,
-                address_taken: true,
+                flags: TypedFunctionFlags::AddressTaken,
                 dyn_fn_id: None,
                 returned_variable: None,
                 body_failure: None,
@@ -12026,16 +11936,8 @@ impl TypedProgram {
             specialization_info: None,
             parsed_id: expr_id.into(),
             type_id: function_type,
-            compiler_debug: false,
             kind: TypedFunctionKind::Lambda,
-            // Set by add_function
-            is_concrete: false,
-            is_recursive: false,
-            is_macro: false,
-            is_module_manifest_fn: false,
-            is_reloadable: false,
-            abi_native: false,
-            address_taken: false,
+            flags: TypedFunctionFlags::empty(),
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -12436,82 +12338,6 @@ impl TypedProgram {
             TypedPattern::Reference(refer) => self.pattern_matches_uninhabited(refer.inner_pattern),
             _ => false,
         }
-    }
-
-    fn check_pattern_exhaustiveness(
-        &mut self,
-        subject_type: TypeId,
-        all_unguarded_patterns: &mut [TypedPatternId],
-        subject_span: SpanId,
-        skip_build_message: bool,
-    ) -> K1Result<()> {
-        let mut trial_constructors = std::mem::take(&mut self.buffers.trial_ctors);
-        let mut field_ctors_buf = std::mem::take(&mut self.buffers.field_ctors);
-        let mut visited_ancestors = std::mem::take(&mut self.buffers.pattern_ctor_ancestor_stack);
-        trial_constructors.clear();
-        self.generate_constructors_for_type(
-            subject_type,
-            &mut trial_constructors,
-            &mut field_ctors_buf,
-            0,
-            &mut visited_ancestors,
-            subject_span,
-        );
-        debug_assert!(visited_ancestors.is_empty());
-
-        let mut kill_counts = self.tmp.new_list::<usize>(all_unguarded_patterns.len() as u32);
-        kill_counts.fill_to_cap(0);
-        'trial: for trial_entry in trial_constructors.iter_mut() {
-            '_pattern: for (pattern_index, pattern) in all_unguarded_patterns.iter().enumerate() {
-                if self.pattern_eliminates_ctor(*pattern, trial_entry.ctor) {
-                    kill_counts[pattern_index] += 1;
-                    // *kill_count += 1;
-                    trial_entry.alive = false;
-                    continue 'trial;
-                }
-            }
-        }
-
-        let alive_count = trial_constructors.iter().filter(|entry| entry.alive).count();
-        self.buffers.trial_ctors = trial_constructors;
-        self.buffers.field_ctors = field_ctors_buf;
-        self.buffers.pattern_ctor_ancestor_stack = visited_ancestors;
-        if alive_count != 0 {
-            let msg = if skip_build_message {
-                "Unhandled patterns".to_string()
-            } else {
-                let mut patterns = String::new();
-                for entry in self.buffers.trial_ctors.iter() {
-                    if !entry.alive {
-                        continue;
-                    }
-                    if !patterns.is_empty() {
-                        patterns.push_str("\n- ");
-                    }
-                    patterns.push_str(&self.pattern_ctor_to_string(entry.ctor));
-                }
-                format!("{} Unhandled patterns:\n- {}", alive_count, patterns)
-            };
-            return self.make_fail(&msg, subject_span);
-        }
-
-        if let Some((useless_pattern_id, _)) = all_unguarded_patterns
-            .iter()
-            .zip(kill_counts.as_slice())
-            .find(|(_, kill_count)| **kill_count == 0)
-        {
-            if !self.patterns.pattern_never_useless(*useless_pattern_id)
-                && !self.pattern_matches_uninhabited(*useless_pattern_id)
-            {
-                kbail!(
-                    self,
-                    self.patterns.get(*useless_pattern_id).span_id(),
-                    "This pattern handled no cases: {}",
-                    self.pattern_to_string(*useless_pattern_id)
-                );
-            }
-        }
-        Ok(())
     }
 
     fn _eval_static_match_expr(&mut self, _match_expr_id: ParsedExprId, _ctx: EvalExprContext) {
@@ -14677,7 +14503,7 @@ impl TypedProgram {
                     let function_id = self.find_function_namespaced(ctx.scope_id, function_name)?;
                     if let Some(function_id) = function_id {
                         let function = self.get_function(function_id);
-                        if !function.is_concrete {
+                        if !function.is_concrete() {
                             kbail!(
                                 self,
                                 call_span,
@@ -15074,7 +14900,7 @@ impl TypedProgram {
         let span = call.span;
         let function = self.get_function(generic_function_id);
         let function_name = function.name;
-        let is_macro = function.is_macro;
+        let is_macro = function.is_macro();
         let type_params = function.type_params;
         let fnlike_type_params = function.fnlike_type_params;
         let signature = function.signature();
@@ -15160,7 +14986,7 @@ impl TypedProgram {
     ) -> TypedExprId {
         let function = self.get_function(function_id);
         let function_pointer_type = self.add_function_pointer_type(function.type_id);
-        self.get_function_mut(function_id).address_taken = true;
+        self.get_function_mut(function_id).flags.insert(TypedFunctionFlags::AddressTaken);
         self.emit_ls_entity(call_span, LsEntityKind::Function { function_id, is_defn: false });
         self.exprs.add(
             TypedExpr::FunctionPointer(FunctionPointerExpr { function_id }),
@@ -15173,9 +14999,9 @@ impl TypedProgram {
         let function = self.get_function(function_id);
         match function.linkage {
             Linkage::Standard => {
-                if function.address_taken
-                    || function.abi_native
-                    || function.is_reloadable
+                if function.address_taken()
+                    || function.abi_native()
+                    || function.is_reloadable()
                     || self.get_main_function_id() == Some(function_id)
                 {
                     AbiMode::Native
@@ -16421,11 +16247,11 @@ impl TypedProgram {
                         "Marking {} as directly recursive (stopgap that does not properly detect cycles but helps for now)",
                         self.function_id_to_string(enclosing_id, false)
                     );
-                    self.functions.get_mut(function_id).is_recursive = true;
+                    self.functions.get_mut(function_id).flags.insert(TypedFunctionFlags::Recursive);
                 }
             }
 
-            if self.get_function(function_id).is_macro
+            if self.get_function(function_id).is_macro()
                 && known_callee.is_none()
                 && known_args.is_none()
             {
@@ -17383,6 +17209,12 @@ impl TypedProgram {
             ParsedId::Macro(_) => true,
             _ => panic!("Expected function or macro"),
         };
+        let flags = generic_function.flags
+            & (TypedFunctionFlags::CompilerDebug
+                | TypedFunctionFlags::Recursive
+                | TypedFunctionFlags::Macro
+                | TypedFunctionFlags::ModuleManifest
+                | TypedFunctionFlags::AbiNative);
         let specialized_function = TypedFunction {
             name: generic_function.name,
             scope: spec_fn_scope,
@@ -17399,23 +17231,15 @@ impl TypedProgram {
             specialization_info: Some(specialization_info),
             parsed_id: generic_function.parsed_id,
             type_id: specialized_function_type_id,
-            compiler_debug: generic_function.compiler_debug,
             kind: generic_function.kind,
-            is_concrete: false,
-            is_recursive: generic_function.is_recursive,
-            is_macro: generic_function.is_macro,
-            is_module_manifest_fn: generic_function.is_module_manifest_fn,
-            // we reject generics in reloadable places
-            is_reloadable: false,
-            abi_native: generic_function.abi_native,
-            address_taken: false,
+            flags,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
         };
         let actual_specialized_function_id = self.add_function(specialized_function);
         debug_assert_eq!(specialized_function_id, actual_specialized_function_id);
-        let is_concrete = self.get_function(specialized_function_id).is_concrete;
+        let is_concrete = self.get_function(specialized_function_id).is_concrete();
 
         self.scopes
             .set_scope_owner_id(spec_fn_scope, ScopeOwnerId::Function(specialized_function_id));
@@ -19454,7 +19278,9 @@ impl TypedProgram {
                 AbilityImplFunction::FunctionId(impl_fn_id) => {
                     // Typing the fn-pointer expr with the slot's type is the erasure:
                     // physically identical; a self receiver arrives as the state pointer
-                    self.get_function_mut(impl_fn_id).address_taken = true;
+                    self.get_function_mut(impl_fn_id)
+                        .flags
+                        .insert(TypedFunctionFlags::AddressTaken);
                     let fn_ptr_expr = self.exprs.add(
                         TypedExpr::FunctionPointer(FunctionPointerExpr { function_id: impl_fn_id }),
                         field.type_id,
@@ -19877,6 +19703,11 @@ impl TypedProgram {
         let where_constraints_handle = self_.mem.pushn(&ability_where_constraints);
         let is_manifest = name == self_.ast.idents.b.module
             && self_.namespaces.get(namespace_id).name == self_.ast.idents.b.build;
+        let mut flags = TypedFunctionFlags::empty();
+        flags.set(TypedFunctionFlags::CompilerDebug, is_debug);
+        flags.set(TypedFunctionFlags::ModuleManifest, is_manifest);
+        flags.set(TypedFunctionFlags::Reloadable, is_reloadable);
+        flags.set(TypedFunctionFlags::AbiNative, ast_fn.is_native);
         let actual_function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
@@ -19891,15 +19722,8 @@ impl TypedProgram {
             specialization_info: None,
             parsed_id: parsed_function_id.into(),
             kind,
-            compiler_debug: is_debug,
             type_id: function_type_id,
-            is_concrete: false,
-            is_recursive: false,
-            is_macro: false,
-            is_module_manifest_fn: is_manifest,
-            is_reloadable,
-            abi_native: ast_fn.is_native,
-            address_taken: false,
+            flags,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -20162,6 +19986,8 @@ impl TypedProgram {
             self.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(function_id);
         }
         let param_variables_handle = params.to_slice();
+        let mut flags = TypedFunctionFlags::Macro;
+        flags.set(TypedFunctionFlags::CompilerDebug, compiler_debug);
         let actual_function_id = self.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
@@ -20176,15 +20002,8 @@ impl TypedProgram {
             specialization_info: None,
             parsed_id: ParsedId::Macro(parsed_macro_id),
             kind: TypedFunctionKind::Standard,
-            compiler_debug,
             type_id: function_type_id,
-            is_concrete: false,
-            is_recursive: false,
-            is_macro: true,
-            is_module_manifest_fn: false,
-            is_reloadable: false,
-            abi_native: false,
-            address_taken: false,
+            flags,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -20213,7 +20032,7 @@ impl TypedProgram {
         if function.body_failure.is_some() || function.body_block.is_some() {
             return Ok(());
         }
-        let is_debug = function.compiler_debug;
+        let is_debug = function.compiler_debug();
         if is_debug {
             self.push_debug_level();
         }
@@ -20221,7 +20040,7 @@ impl TypedProgram {
         let fn_scope_id = function.scope;
         let return_type = self.get_function_type(declaration_id).return_type;
         let is_extern = matches!(function.linkage, Linkage::External { .. });
-        let is_concrete = function.is_concrete;
+        let is_concrete = function.is_concrete();
         // Here. Which type of builtin is it? Some, we should synthesize here.
         let (builtin_type_phys_fn, other_intrinsic) = match function.builtin_type {
             Some(Builtin::TyperPhysicalFunction(f)) => (Some(f), false),
@@ -20278,7 +20097,7 @@ impl TypedProgram {
 
                 let eval_ctx = EvalExprContext::make(fn_scope_id)
                     .with_expected_type(Some(return_type))
-                    .with_manifest_eval(self.get_function(declaration_id).is_module_manifest_fn)
+                    .with_manifest_eval(self.get_function(declaration_id).is_module_manifest_fn())
                     // Why do we care to indicate if the function is generic?
                     // Currently, its because we want to avoid running #static and #meta blocks
                     // until the types and static values are provided
@@ -20307,7 +20126,7 @@ impl TypedProgram {
             let f = self.functions.get(declaration_id);
 
             // Macros may conditionally ignore params, e.g. a disabled debug macro
-            if !is_generic && !f.is_macro {
+            if !is_generic && !f.is_macro() {
                 for param_variable in self.mem.getn(f.params).iter() {
                     self.warn_variable_usage_counts(
                         "Parameter",
@@ -21760,16 +21579,8 @@ impl TypedProgram {
             specialization_info: None,
             parsed_id: ParsedId::Namespace(ns_parsed_id),
             type_id: function_type,
-            compiler_debug: false,
             kind: TypedFunctionKind::Standard,
-            is_concrete: false,
-            is_recursive: false,
-            is_macro: false,
-            is_module_manifest_fn: false,
-            // these load functions are host code: they patch the reloadable lib and do not live in it
-            is_reloadable: false,
-            abi_native: false,
-            address_taken: false,
+            flags: TypedFunctionFlags::empty(),
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -21785,7 +21596,7 @@ impl TypedProgram {
         let mut signature = String::with_capacity(256);
         let mut listing = String::new();
         for (_, function) in self.function_iter() {
-            if function.is_reloadable && function.namespace_id == ns_id {
+            if function.is_reloadable() && function.namespace_id == ns_id {
                 let name = self.ident_str(function.name);
                 signature.clear();
                 self.display_type_id(
@@ -22511,357 +22322,6 @@ impl TypedProgram {
 
         stack.pop();
         result
-    }
-
-    fn generate_constructors_for_type(
-        &mut self,
-        type_id: TypeId,
-        dst: &mut Vec<PatternCtorTrialEntry>,
-        field_ctors_buf: &mut Vec<Vec<(StringId, PatternCtorId)>>,
-        ctors_base: usize,
-        ancestors: &mut Vec<TypeId>,
-        span_id: SpanId,
-    ) {
-        #[inline]
-        fn alive(ctor: PatternCtorId) -> PatternCtorTrialEntry {
-            PatternCtorTrialEntry { ctor, alive: true }
-        }
-        fn handle_sum_variant(
-            k1: &mut TypedProgram,
-            dst: &mut Vec<PatternCtorTrialEntry>,
-            field_ctors_buf: &mut Vec<Vec<(StringId, PatternCtorId)>>,
-            ctors_base: usize,
-            span_id: SpanId,
-            ancestors: &mut Vec<TypeId>,
-            v: &TypedSumVariant,
-        ) {
-            match v.payload.as_ref() {
-                None => dst.push(alive(
-                    k1.pattern_ctors.add(PatternCtor::Sum { variant_name: v.name, inner: None }),
-                )),
-                Some(payload) => {
-                    let prev_len = dst.len();
-                    k1.generate_constructors_for_type(
-                        *payload,
-                        dst,
-                        field_ctors_buf,
-                        ctors_base,
-                        ancestors,
-                        span_id,
-                    );
-                    for payload_pattern_id in dst[prev_len..].iter_mut() {
-                        payload_pattern_id.ctor = k1.pattern_ctors.add(PatternCtor::Sum {
-                            variant_name: v.name,
-                            inner: Some(payload_pattern_id.ctor),
-                        })
-                    }
-                }
-            }
-        }
-
-        if ancestors.contains(&type_id) {
-            // pattern matching: Here is where we would actually place a sentinel
-            //        ctor that we could expand as needed by the pattern
-            debug!("Stopping pattern ctor recursion at {}", self.type_id_to_string(type_id));
-
-            // Let's just say its a type variable, idk, tired of adding
-            // constructors that dont do anything
-            dst.push(alive(PatternCtorId::TYPE_VARIABLE));
-            return;
-        }
-
-        if type_id == self.builtin_types.string() {
-            dst.push(alive(PatternCtorId::STRING));
-            return;
-        }
-        ancestors.push(type_id);
-        match self.types.get(type_id) {
-            Type::Char => dst.push(alive(PatternCtorId::CHAR)),
-            Type::TypeParameter(_) => dst.push(alive(PatternCtorId::TYPE_VARIABLE)),
-            Type::Integer(_) => dst.push(alive(PatternCtorId::INT)),
-            Type::Float(_) => dst.push(alive(PatternCtorId::FLOAT)),
-            Type::Bool => {
-                dst.extend(&[alive(PatternCtorId::B_FALSE), alive(PatternCtorId::B_TRUE)])
-            }
-            Type::Pointer => dst.push(alive(PatternCtorId::POINTER)), // Just an opaque atom
-            Type::FunctionPointer(_) => {
-                dst.push(alive(PatternCtorId::FUNCTION_POINTER)) // FunctionPointer is an opaque atom pattern
-            }
-            Type::Opaque(_) => {
-                dst.push(alive(PatternCtorId::OPAQUE)) // Opaque is an opaque atom pattern
-            }
-            Type::Reference(refer) => {
-                // Follow the pointer
-                let prev_len = dst.len();
-                self.generate_constructors_for_type(
-                    refer.inner_type,
-                    dst,
-                    field_ctors_buf,
-                    ctors_base,
-                    ancestors,
-                    span_id,
-                );
-                for pointee_pattern_id in dst[prev_len..].iter_mut() {
-                    pointee_pattern_id.ctor =
-                        self.pattern_ctors.add(PatternCtor::Reference(pointee_pattern_id.ctor));
-                }
-            }
-            Type::Array(_array_type) => dst.push(alive(self.pattern_ctors.add(PatternCtor::Array))),
-            Type::Sum(sum_type) => {
-                for v in self.mem.getn(sum_type.variants) {
-                    handle_sum_variant(
-                        self,
-                        dst,
-                        field_ctors_buf,
-                        ctors_base,
-                        span_id,
-                        ancestors,
-                        v,
-                    )
-                }
-            }
-            Type::Enum(enum_type) => {
-                for v in self.mem.getn(enum_type.member_values) {
-                    dst.push(alive(
-                        self.pattern_ctors.add(PatternCtor::Enum { variant_name: v.name }),
-                    ))
-                }
-            }
-            Type::Struct(struc) => {
-                debug_assert!(type_id != self.builtin_types.string());
-
-                // This hides a bug with recursive types, but oh well
-                match self.get_as_container_instance(type_id) {
-                    Some((_, ContainerKind::Buffer)) => {
-                        dst.push(alive(PatternCtorId::BUFFER));
-                    }
-                    Some((_, ContainerKind::Span)) => {
-                        dst.push(alive(PatternCtorId::SPAN));
-                    }
-                    _ => {
-                        let field_count = struc.fields.len();
-                        if field_count == 0 {
-                            dst.push(alive(
-                                self.pattern_ctors
-                                    .add(PatternCtor::Struct { fields: MSlice::empty() }),
-                            ));
-                        } else {
-                            let mut has_unreachable_field = false;
-                            for (index, field) in self.mem.getn(struc.fields).iter().enumerate() {
-                                let prev_len = dst.len();
-                                self.generate_constructors_for_type(
-                                    field.type_id,
-                                    dst,
-                                    field_ctors_buf,
-                                    ctors_base + field_count as usize,
-                                    ancestors,
-                                    span_id,
-                                );
-                                let slot = ctors_base + index;
-                                while field_ctors_buf.len() <= slot {
-                                    field_ctors_buf.push(Vec::new());
-                                }
-                                field_ctors_buf[slot].clear();
-                                if dst.len() == prev_len {
-                                    // No constructors
-                                    has_unreachable_field = true
-                                }
-                                for field_ctor in dst[prev_len..].iter() {
-                                    field_ctors_buf[slot].push((field.name, field_ctor.ctor));
-                                }
-                                debug!(
-                                    "Pushed {} constructors for field {}; resetting dst to {prev_len}",
-                                    field_ctors_buf[slot].len(),
-                                    self.ident_str(field.name)
-                                );
-                                dst.truncate(prev_len);
-                            }
-
-                            if !has_unreachable_field {
-                                let final_count = field_ctors_buf
-                                    [ctors_base..ctors_base + field_count as usize]
-                                    .iter()
-                                    .map(|v| v.len())
-                                    .reduce(|t, v| t * v)
-                                    .unwrap_or(0);
-
-                                debug!(
-                                    "Processing {} ctors; expecting {final_count} final struct combinations for type: {}",
-                                    field_ctors_buf.len(),
-                                    self.type_id_to_string(type_id)
-                                );
-                                let dst_start = dst.len();
-                                for _ in 0..final_count {
-                                    let fields = self.patterns.mem.pushn_uninit(field_count);
-                                    let primed_struct_ctor_id =
-                                        self.pattern_ctors.add(PatternCtor::Struct { fields });
-                                    dst.push(alive(primed_struct_ctor_id));
-                                }
-                                let result_struct_ids = &mut dst[dst_start..];
-
-                                // This entire loop is just about taking the cross-product of all the fields'
-                                // respective constructors in an efficient way; by populating slots in
-                                // a pre-allocated table, and doing a bit of math to decide how many times
-                                // a pattern should repeat or cycle. Example
-                                // {  a: bool, b: bool, c: either A, B, C }
-                                // 0  f        f        A
-                                // 1  f        f        B
-                                // 2  f        f        C
-                                // 3  f        t        A
-                                // 4  f        t        B
-                                // 5  f        t        C
-                                // 6  t        f        A
-                                // 7  t        f        B
-                                // 8  t        f        C
-                                // 9  t        t        A
-                                // 10 t        t        B
-                                // 11 t        t        C
-                                // a has 2 patterns, and is in the first (meaningful) position, so we do 12 / 2 * 1 to get 6 as its 'repeat count', and repeat each pattern 6 times
-                                // b has 2 patterns, and is in the second (meaningful) position, so we do 12 / 2 * 2 to get 3 as its 'repeat count', and repeat each pattern 3 times (fff, ttt)
-                                // c has 3 patterns, and is in the third (meaningful) position, so we do 12 / 3 * 4 to get 1 as its 'repeat count', and repeat each pattern 1 time (abc, abc, abc)
-                                let mut field_index_w_multi_ctor = 0;
-                                for (field_index, ctors) in field_ctors_buf
-                                    [ctors_base..ctors_base + field_count as usize]
-                                    .iter()
-                                    .enumerate()
-                                {
-                                    if ctors.len() == 1 {
-                                        for result_struct in result_struct_ids.iter_mut() {
-                                            let fields = self
-                                                .pattern_ctors
-                                                .get(result_struct.ctor)
-                                                .struct_fields();
-                                            self.patterns.mem.getn_mut(fields)[field_index] =
-                                                ctors[0];
-                                        }
-                                    } else {
-                                        // multiplier = 2 ^ field_index but only for fields that have more than
-                                        // 1 pattern
-                                        let multiplier = if field_index_w_multi_ctor == 0 {
-                                            1
-                                        } else {
-                                            field_index_w_multi_ctor * 2
-                                        };
-                                        let repeat_count = final_count / (ctors.len() * multiplier);
-                                        for (row, result_struct) in
-                                            result_struct_ids.iter_mut().enumerate()
-                                        {
-                                            let pattern_index = (row / repeat_count) % ctors.len();
-                                            let pattern = ctors[pattern_index];
-                                            let fields = self
-                                                .pattern_ctors
-                                                .get(result_struct.ctor)
-                                                .struct_fields();
-                                            self.patterns.mem.getn_mut(fields)[field_index] =
-                                                pattern;
-                                        }
-                                        field_index_w_multi_ctor += 1;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Type::Function(_f) => {
-                debug!("function is probably unmatchable");
-            }
-            Type::LambdaObject(_) => {
-                dst.push(alive(self.pattern_ctors.add(PatternCtor::LambdaObject)))
-            }
-            Type::AbilityObject(_) => {
-                dst.push(alive(PatternCtorId::OPAQUE)) // An opaque atom: only bindings match
-            }
-            Type::StaticValue(_) => dst.push(alive(self.pattern_ctors.add(PatternCtor::ValueType))),
-            Type::Never => {}
-            _ => self.report_hint(
-                span_id,
-                format!(
-                    "INTERNAL COMPILER ERROR: unhandled type in generate_constructors_for_type {}",
-                    self.type_id_to_string(type_id)
-                ),
-            ),
-        };
-        let popped = ancestors.pop();
-        debug_assert_eq!(popped, Some(type_id));
-    }
-
-    fn pattern_eliminates_ctor(&self, pattern: TypedPatternId, ctor: PatternCtorId) -> bool {
-        match (self.patterns.get(pattern), self.pattern_ctors.get(ctor)) {
-            (TypedPattern::Wildcard(_), _) => true,
-            (TypedPattern::Variable(_), _) => true,
-            #[allow(clippy::bool_comparison)]
-            (TypedPattern::LiteralBool(b, _), PatternCtor::BoolTrue) => *b == true,
-            #[allow(clippy::bool_comparison)]
-            (TypedPattern::LiteralBool(b, _), PatternCtor::BoolFalse) => *b == false,
-
-            // 'Innumerable' types and their patterns
-            (TypedPattern::LiteralChar(_char_pattern, _), PatternCtor::Char) => false,
-            (TypedPattern::LiteralInteger(_int_pattern, _), PatternCtor::Int) => false,
-            (TypedPattern::LiteralFloat(_float_pattern, _), PatternCtor::Float) => false,
-            (TypedPattern::LiteralString(_string_pattern, _), PatternCtor::String) => false,
-            (TypedPattern::RefNull(_type_id, _), PatternCtor::Reference(_)) => false,
-            (TypedPattern::PointerNull(_), PatternCtor::Pointer) => false,
-
-            (TypedPattern::Sum(sum_pat), PatternCtor::Sum { variant_name, inner }) => {
-                if *variant_name == sum_pat.variant_name {
-                    match (sum_pat.payload, inner) {
-                        (Some(payload), Some(inner)) => {
-                            self.pattern_eliminates_ctor(payload, *inner)
-                        }
-                        (None, None) => true,
-                        _ => false,
-                    }
-                } else {
-                    false
-                }
-            }
-            (TypedPattern::Struct(struc), PatternCtor::Struct { fields }) => {
-                // Because we treat all struct patterns as caring only about the fields they mention,
-                // an empty pattern already matches. So we iterate over the fields this pattern does
-                // care about, and if any do not match, we'll consider the whole pattern not to match
-                let mut matches = true;
-                for field_pattern in self.patterns.get_slice(struc.fields).iter() {
-                    let matching_field_pattern = self
-                        .patterns
-                        .mem
-                        .getn_lt(*fields)
-                        .iter()
-                        .find(|(name, _ctor_pattern)| *name == field_pattern.name)
-                        .map(|(_, ctor_pattern)| ctor_pattern)
-                        .unwrap_or_else(|| {
-                            ice_span!(
-                                self,
-                                struc.span,
-                                "Field {} not in struct ctor {}; pattern should have failed typecheck by now",
-                                self.ident_str(field_pattern.name),
-                                self.patterns.mem.getn(*fields).iter().map(|f| self.ident_str(f.0)).join(", ")
-                            )
-                        });
-                    if !self.pattern_eliminates_ctor(field_pattern.pattern, *matching_field_pattern)
-                    {
-                        matches = false;
-                        break;
-                    }
-                }
-                matches
-            }
-            (TypedPattern::Reference(ref_pattern), PatternCtor::Reference(ref_ctor)) => {
-                self.pattern_eliminates_ctor(ref_pattern.inner_pattern, *ref_ctor)
-            }
-            (TypedPattern::Enum(enum_pattern), PatternCtor::Enum { variant_name }) => {
-                enum_pattern.member_name == *variant_name
-            }
-            (TypedPattern::Type(_type_pattern), _ctor) => false,
-            (a, b) => {
-                eprintln!(
-                    "Unhandled pattern_matches case: pattern {} and ctor {:?}",
-                    a.kind_name(),
-                    b.kind_name()
-                );
-                false
-            }
-        }
     }
 
     /////////////////////////// Type access apis

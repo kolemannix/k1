@@ -8,6 +8,51 @@ fn match-bool(b: bool): string {
 }
 
 type tri-state = either { yes, no, failure({ reason: string }) }
+
+type recursive-tree = either { leaf, node(*recursive-tree) }
+
+type recursive-generic[t] = either { end, next({ value: t, rest: *recursive-generic[t] }) }
+
+type mutual-a = either { end, next(*mutual-b) }
+type mutual-b = either { stop, next(*mutual-a) }
+
+type wide-state = {
+  a: bool, b: bool, c: bool, d: bool,
+  e: bool, f: bool, g: bool, h: bool,
+  i: bool, j: bool, k: bool, l: bool,
+  m: bool, n: bool, o: bool, p: bool
+}
+
+fn recursive-shape(t: recursive-tree): int {
+  t is {
+    :leaf -> 0,
+    :node(:leaf*) -> 1,
+    :node(:node(_)*) -> 2
+  }
+}
+
+fn recursive-generic-shape[t](value: recursive-generic[t]): int {
+  value is {
+    :end -> 0,
+    :next(.{ rest = :end* }) -> 1,
+    :next(.{ rest = :next(_)* }) -> 2
+  }
+}
+
+fn mutual-shape(value: mutual-a): int {
+  value is {
+    :end -> 0,
+    :next(:stop*) -> 1,
+    :next(:next(_)*) -> 2
+  }
+}
+
+fn match-wide-state(s: wide-state): bool {
+  s is {
+    .{} -> true
+  }
+}
+
 fn match-tristate-opt(t: ?tri-state): string {
   t is {
     :some :yes -> "yes",
@@ -62,6 +107,34 @@ fn main(): i32 {
 
   assert(failed-with-baz(:failure .{ reason = "baz" }))
   assert(not failed-with-baz(:no))
+
+  let leaf: recursive-tree = :leaf
+  let one: recursive-tree = :node(mem/new(leaf))
+  let two: recursive-tree = :node(mem/new(one))
+  assert-equals(recursive-shape(leaf), 0)
+  assert-equals(recursive-shape(one), 1)
+  assert-equals(recursive-shape(two), 2)
+
+  let generic-end: recursive-generic[int] = :end
+  let generic-one: recursive-generic[int] = :next(.{ value = 1, rest = mem/new(generic-end) })
+  let generic-two: recursive-generic[int] = :next(.{ value = 2, rest = mem/new(generic-one) })
+  assert-equals(recursive-generic-shape(generic-end), 0)
+  assert-equals(recursive-generic-shape(generic-one), 1)
+  assert-equals(recursive-generic-shape(generic-two), 2)
+
+  let mutual-end: mutual-a = :end
+  let mutual-one: mutual-a = :next(mem/new(mutual-b:stop))
+  let mutual-two: mutual-a = :next(mem/new(mutual-b:next(mem/new(mutual-end))))
+  assert-equals(mutual-shape(mutual-end), 0)
+  assert-equals(mutual-shape(mutual-one), 1)
+  assert-equals(mutual-shape(mutual-two), 2)
+
+  assert(match-wide-state(.{
+    a = false, b = false, c = false, d = false,
+    e = false, f = false, g = false, h = false,
+    i = false, j = false, k = false, l = false,
+    m = false, n = false, o = false, p = false
+  }))
 
   some(42) is {
     :some x if x == 42 -> .{},

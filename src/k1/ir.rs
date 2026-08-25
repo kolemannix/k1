@@ -1491,7 +1491,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
         });
     }
     let intrinsic_type = f.builtin_type;
-    let is_debug = f.compiler_debug;
+    let is_debug = f.compiler_debug();
     let fn_span = b.k1.ast.get_span_for_id(f.parsed_id);
     b.cur_span = fn_span;
     b.entry_span = fn_span;

@@ -124,7 +124,6 @@ impl TypedProgram {
             type_defn_context,
             buffers: _,
             patterns,
-            pattern_ctors,
             vm: _,
             vm_alts: _,
             emitted_sources,
@@ -220,7 +219,6 @@ impl TypedProgram {
         assert!(expanding_aliases.is_empty());
 
         patterns.mem.snap(w);
-        pattern_ctors.snap(w);
         w.write_slice(emitted_sources);
         ir.snap(w);
         w.write_t(global_id_k1_arena);
@@ -298,7 +296,6 @@ impl TypedProgram {
         k1.global_ast_mappings = restore_map_snap(r);
         k1.ability_impl_ast_mappings = restore_map_snap(r);
         k1.patterns.mem.restore(r);
-        k1.pattern_ctors.restore(r);
         k1.emitted_sources = r.read_vec();
         k1.emitted_parse_cache.clear();
         k1.ir.restore(r);

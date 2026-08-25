@@ -1,0 +1,11 @@
+type recursive-tree = either { leaf, node(*recursive-tree) }
+
+fn main(): i32 {
+  let tree: recursive-tree = :leaf
+  tree is {
+    :leaf -> 0,
+    :node(:leaf*) -> 1
+  }
+}
+
+//errmsg: :node(:node(_)*)

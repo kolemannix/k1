@@ -5,7 +5,7 @@ next up
 
 # Bugs
 - [x] [major] Support (co)recursive Generics
-- [ ] [major] Allow pattern matching *into* recursive types (currently we just terminate)
+- [x] [major] Allow pattern matching *into* recursive types (currently we just terminate)
 - [ ] Represent scalar containers (i|u8-64 + list/buffer/span/array) natively, not as individual static values. This at
       least covers us for byte arrays and such; a large array of basic structs will still crush us. Can worry about that later
 - [x] Test handling of NaN and Infinity literals, other float edge cases

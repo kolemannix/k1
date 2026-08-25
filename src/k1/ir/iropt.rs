@@ -149,8 +149,8 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
 
                     // A reloadable fn's body must never inline into a caller
                     if unit_id != IrUnitId::Function(function_id)
-                        && !k1.functions.get(function_id).is_recursive
-                        && !k1.functions.get(function_id).is_reloadable
+                        && !k1.functions.get(function_id).is_recursive()
+                        && !k1.functions.get(function_id).is_reloadable()
                     {
                         let callee_unit =
                             get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();

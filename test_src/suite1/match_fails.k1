@@ -13,11 +13,42 @@ fn useless() {
 }
 
 type blub = { x: int, y: ?bool }
+
+type recursive-tree = either { leaf, node(*recursive-tree) }
+
 fn unhandled() {
   let blub: blub = .{ x = 1, y = :none }
   let result = test-compile(blub is {
     .{ x, y = :some(true) } -> x,
     .{ x, y = :none } -> x + 2
+  })
+  assert(result is :some(_))
+}
+
+fn recursive-unhandled() {
+  let tree: recursive-tree = :leaf
+  let result = test-compile(tree is {
+    :leaf -> 0,
+    :node(:leaf*) -> 1
+  })
+  assert(result is :some(_))
+}
+
+fn recursive-useless() {
+  let tree: recursive-tree = :leaf
+  let result = test-compile(tree is {
+    :leaf -> 0,
+    :node(_) -> 1,
+    :node(:leaf*) -> 2
+  })
+  assert(result is :some(_))
+}
+
+fn correlated-fields-are-not-independent() {
+  let pair = .{ a = false, b = false }
+  let result = test-compile(pair is {
+    .{ a = false, b = false } -> 0,
+    .{ a = true, b = true } -> 1
   })
   assert(result is :some(_))
 }
@@ -34,5 +65,8 @@ fn guard-not-bool() {
 fn test() {
   useless()
   unhandled()
+  recursive-unhandled()
+  recursive-useless()
+  correlated-fields-are-not-independent()
   guard-not-bool()
 }
