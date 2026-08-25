@@ -8,7 +8,7 @@ next up
 - [ ] [major] Allow pattern matching *into* recursive types (currently we just terminate)
 - [ ] Represent scalar containers (i|u8-64 + list/buffer/span/array) natively, not as individual static values. This at
       least covers us for byte arrays and such; a large array of basic structs will still crush us. Can worry about that later
-- [ ] Test handling of NaN and Infinity literals, other float edge cases
+- [x] Test handling of NaN and Infinity literals, other float edge cases
 - [x] accidentally captured context parameter results in 'Missing variable' in ir
 - [x] Out of order type definitions don't work with aliases
 - [x] same-level recursion is not caught behind option

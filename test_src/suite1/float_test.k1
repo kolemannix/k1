@@ -64,6 +64,34 @@ fn test() {
   assert(1.0 / 0.0.negated() < 0.0)
   assert(1.0 / 0.0 > 0.0)
 
+  assert(not (f64/NAN == f64/NAN))
+  assert(not (f32/NAN == f32/NAN))
+  assert((not (f64/NAN < 0.0)) and (not (f64/NAN > 0.0)))
+  assert(f64/NEG_INFINITY < -1.7976931348623157e308)
+  assert(f64/INFINITY > 1.7976931348623157e308)
+  assert(f32/NEG_INFINITY < -3.4028235e38)
+  assert(f32/INFINITY > 3.4028235e38)
+  assert-equals(mem/bitcast[f64, u64](f64/NAN), 0x7FF8000000000000)
+  assert-equals(mem/bitcast[f32, u32](f32/NAN), 0x7FC00000)
+
+  let static-nan: f64 = #static f64/NAN
+  let static-infinity: f32 = #static f32/INFINITY
+  assert(not (static-nan == static-nan))
+  assert(static-infinity > 3.4028235e38)
+
+  assert-equals(mem/bitcast[f64, u64](-0.0), 0x8000000000000000)
+  assert-equals(mem/bitcast[f32, u32](-0.0: f32), 0x80000000)
+  assert(-0.0 == 0.0)
+  assert((-0.0: f32) == 0.0)
+  assert-equals(mem/bitcast[f64, u64](5.0e-324), 1)
+  assert-equals(mem/bitcast[f32, u32](1.0e-45), 1)
+  assert(1.0e-400 == 0.0)
+  assert((1.0e-50: f32) == 0.0)
+  assert(1.0e400 == f64/INFINITY)
+  assert((1.0e40: f32) == f32/INFINITY)
+  assert((16777217.0: f32) == 16777216.0)
+  assert(9007199254740993.0 == 9007199254740992.0)
+
   assert(1337.1 is 1337.1)
   assert(not 1337.1 is 1337.2)
 

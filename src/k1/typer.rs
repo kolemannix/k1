@@ -7839,8 +7839,7 @@ impl TypedProgram {
         Ok(())
     }
 
-    /// Produces the value of a global whose initializer is the `builtin` keyword,
-    /// e.g. `let test: bool = builtin`. These are all compiler-known constants
+    /// Produces the value of a compiler-known constant whose initializer is `builtin`.
     fn eval_builtin_global(
         &mut self,
         defn_name: StringId,
@@ -7848,10 +7847,30 @@ impl TypedProgram {
         expected_type_id: TypeId,
         span: SpanId,
     ) -> K1Result<StaticValueId> {
-        if scope_id != self.get_k1_scope_id() {
-            kbail!(self, span, "All the known builtins constants live in the k1 scope");
+        let name = self.ident_str(defn_name);
+        let float = match (name, expected_type_id) {
+            ("NAN", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::NAN)),
+            ("INFINITY", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::INFINITY)),
+            ("NEG_INFINITY", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::NEG_INFINITY)),
+            ("NAN", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::NAN)),
+            ("INFINITY", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::INFINITY)),
+            ("NEG_INFINITY", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::NEG_INFINITY)),
+            _ => None,
+        };
+        if let Some(float) = float {
+            let owner = self.scopes.get_scope_owner(scope_id).as_namespace();
+            let in_float_companion = owner.is_some_and(|namespace_id| {
+                self.namespaces.get(namespace_id).companion_type_id == Some(expected_type_id)
+            });
+            if !in_float_companion {
+                kbail!(self, span, "Float builtin constants live in the matching type companion");
+            }
+            return Ok(self.static_values.add(StaticValue::Float(float)));
         }
-        let bool_value = match self.ident_str(defn_name) {
+        if scope_id != self.get_k1_scope_id() {
+            kbail!(self, span, "Unknown builtin name: {name}");
+        }
+        let bool_value = match name {
             "test" => self.config.is_test_build,
             "no-std" => self.config.no_std,
             "debug" => self.config.debug,

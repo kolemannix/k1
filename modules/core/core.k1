@@ -555,6 +555,10 @@ ns(lib("k1rt")) k1rt {
 }
 
 ns for f64 {
+  let NAN: f64 = builtin
+  let INFINITY: f64 = builtin
+  let NEG_INFINITY: f64 = builtin
+
   fn abs(self: f64): f64 {
     mem/bitcast[u64, f64](mem/bitcast[f64, u64](self).bit-and(0x7FFFFFFFFFFFFFFF))
   }
@@ -595,6 +599,10 @@ ns for f64 {
 }
 
 ns for f32 {
+  let NAN: f32 = builtin
+  let INFINITY: f32 = builtin
+  let NEG_INFINITY: f32 = builtin
+
   // See f64/total-order-key
   fn total-order-key(self: f32): i32 {
     let bits = mem/bitcast[f32, i32](self)

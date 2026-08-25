@@ -862,14 +862,13 @@ fn exec_loop(
                 let pred = ir::FloatCmpPred::from_u8(header_b(h) as u8);
                 let lhs = read_src!(operand!(1));
                 let rhs = read_src!(operand!(2));
-                // NOTE: Eq is bitwise, matching the old VM (NaN == NaN,
-                // -0.0 != 0.0). Do not "fix".
                 let b = match (width, pred) {
-                    (_, ir::FloatCmpPred::Eq) => lhs.bits() == rhs.bits(),
+                    (32, ir::FloatCmpPred::Eq) => lhs.as_f32() == rhs.as_f32(),
                     (32, ir::FloatCmpPred::Lt) => lhs.as_f32() < rhs.as_f32(),
                     (32, ir::FloatCmpPred::Le) => lhs.as_f32() <= rhs.as_f32(),
                     (32, ir::FloatCmpPred::Gt) => lhs.as_f32() > rhs.as_f32(),
                     (32, ir::FloatCmpPred::Ge) => lhs.as_f32() >= rhs.as_f32(),
+                    (64, ir::FloatCmpPred::Eq) => lhs.as_f64() == rhs.as_f64(),
                     (64, ir::FloatCmpPred::Lt) => lhs.as_f64() < rhs.as_f64(),
                     (64, ir::FloatCmpPred::Le) => lhs.as_f64() <= rhs.as_f64(),
                     (64, ir::FloatCmpPred::Gt) => lhs.as_f64() > rhs.as_f64(),
