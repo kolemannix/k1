@@ -34,7 +34,7 @@ pub(crate) fn handle_ffi_call_resolved(
     let mut ffi_args_value_storage = vm.stack.mem.new_list(nargs as u32);
     let mut ffi_args_value_ptrs = vm.stack.mem.new_list(nargs as u32);
 
-    let fn_type = k1.ir.functions.get(function_id).unwrap().fn_type;
+    let fn_type = k1.ir.functions.get(&function_id).unwrap().fn_type;
     let function_params = fn_type.params;
 
     for (vm_value, param) in args.iter().zip(k1.ir.mem.getn(function_params)) {

@@ -55,7 +55,7 @@ pub fn get_or_lower_function(
         !k1.bc.in_progress.contains(&function_id),
         "get_or_lower_function called on in-progress function; caller must check"
     );
-    let Some(unit) = *k1.ir.functions.get(function_id) else {
+    let Some(unit) = k1.ir.functions.get(&function_id).copied() else {
         kbail!(
             k1,
             span,

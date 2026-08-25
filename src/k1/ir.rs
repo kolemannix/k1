@@ -56,7 +56,7 @@ pub struct ProgramIr {
     pub comments: VPool<IrComment, InstId>,
     pub debug_info: VPool<IrDebugInfo, InstId>,
     /// Compiled ir for actual functions
-    pub functions: VPool<Option<IrUnit>, FunctionId>,
+    pub functions: FxHashMap<FunctionId, IrUnit>,
     /// Compiled ir for #static exprs and global initializers
     pub exprs: FxHashMap<TypedExprId, IrUnit>,
     pub module_config: IrModuleConfig,
@@ -120,7 +120,7 @@ impl ProgramIr {
         sources.snap(w);
         comments.snap(w);
         debug_info.snap(w);
-        functions.snap(w);
+        write_map_snap(w, functions);
         write_map_snap(w, exprs);
         calls.snap(w);
         cmpxchgs.snap(w);
@@ -136,7 +136,7 @@ impl ProgramIr {
         self.sources.restore(r);
         self.comments.restore(r);
         self.debug_info.restore(r);
-        self.functions.restore(r);
+        self.functions = crate::snap::restore_map_snap(r);
         self.exprs = crate::snap::restore_map_snap(r);
         self.calls.restore(r);
         self.cmpxchgs.restore(r);
@@ -343,7 +343,7 @@ impl ProgramIr {
             sources: VPool::make("ir_soa_sources"),
             comments: VPool::make("ir_soa_comments"),
             debug_info: VPool::make("ir_soa_debug_info"),
-            functions: VPool::make("ir_functions"),
+            functions: FxHashMap::new(),
             calls: VPool::make("ir_calls"),
             cmpxchgs: VPool::make("ir_cmpxchgs"),
             vec_ops: VPool::make("ir_vec_ops"),
@@ -1469,7 +1469,7 @@ impl InstKind {
 
 pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Result<()> {
     let start = k1.timing.clock.raw();
-    if k1.ir.functions.get(function_id).is_some() {
+    if k1.ir.functions.contains_key(&function_id) {
         return Ok(());
     }
 
@@ -1636,7 +1636,7 @@ fn finalize_unit(
     };
     match unit_id {
         IrUnitId::Function(function_id) => {
-            *b.k1.ir.functions.get_mut(function_id) = Some(unit);
+            b.k1.ir.functions.insert(function_id, unit);
         }
         IrUnitId::Expr(expr) => {
             b.k1.ir.exprs.insert(expr, unit);
@@ -2512,7 +2512,7 @@ fn compile_expr(
 
             // Add function to compile queue
             if let Some(function_id) = callee.known_function_id() {
-                match b.k1.ir.functions.get(function_id) {
+                match b.k1.ir.functions.get(&function_id) {
                     None => {
                         b.k1.ir.units_pending_compile.entry(function_id).or_insert(());
                     }
@@ -4034,17 +4034,14 @@ pub fn zero(t: ScalarType) -> Value {
 
 pub fn get_compiled_unit(ir: &ProgramIr, unit: IrUnitId) -> Option<IrUnit> {
     match unit {
-        IrUnitId::Function(function_id) => ir.functions.get(function_id).as_ref().copied(),
+        IrUnitId::Function(function_id) => ir.functions.get(&function_id).copied(),
         IrUnitId::Expr(typed_expr_id) => ir.exprs.get(&typed_expr_id).copied(),
     }
 }
 
 pub fn get_compiled_unit_mut(ir: &mut ProgramIr, unit: IrUnitId) -> Option<&mut IrUnit> {
     match unit {
-        IrUnitId::Function(function_id) => match ir.functions.get_mut(function_id) {
-            Some(func) => Some(func),
-            _ => None,
-        },
+        IrUnitId::Function(function_id) => ir.functions.get_mut(&function_id),
         IrUnitId::Expr(typed_expr_id) => ir.exprs.get_mut(&typed_expr_id),
     }
 }
@@ -4368,7 +4365,7 @@ pub fn display_unit_name(
         IrUnitId::Expr(typed_expr_id) => {
             let expr_span = k1.exprs.get_span(typed_expr_id);
             let (source, line) = k1.get_span_location(expr_span);
-            write!(w, "expr {}:{}", &source.filename, line.line_number())?;
+            write!(w, "expr {}:{}", source.filename, line.line_number())?;
         }
     };
     Ok(())
@@ -4467,7 +4464,7 @@ pub fn display_function(
     function: FunctionId,
     show_source: bool,
 ) -> std::fmt::Result {
-    let Some(unit) = ir.functions.get(function) else { return Ok(()) };
+    let Some(unit) = ir.functions.get(&function) else { return Ok(()) };
     display_unit(w, k1, unit, show_source)
 }
 

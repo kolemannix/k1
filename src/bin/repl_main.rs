@@ -3,7 +3,6 @@
 
 use std::process::ExitCode;
 
-use k1::lex::TokenKind;
 use k1::parse::{ParsedProgram, SourceFile};
 use k1::typer::ModuleId;
 use mimalloc::MiMalloc;

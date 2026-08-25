@@ -3297,7 +3297,6 @@ impl TypedProgram {
             let module = self.modules.get(module_id);
             let (module_name, home_dir, parsed_namespace_id, build_ns_defn) =
                 (module.name, module.home_dir, module.parsed_namespace_id, module.build_ns_defn);
-            let root_file_id = module.root_file_id(&self.mem);
             let name = self.ident_str(module_name);
             hash = match &files {
                 Some(files) => hash.add_module_sources(
@@ -4150,7 +4149,7 @@ impl TypedProgram {
                     ParsedTypeConstraintExpr::Static(_) => {}
                 };
             }
-            let predicate_functions_handle = predicate_functions.to_slice();
+            let predicate_functions_handle = predicate_functions.to_slice_trim(&mut self.mem);
             let type_variable_id = self.add_type_parameter(
                 TypeParameter {
                     name: type_param.name,
@@ -6236,7 +6235,6 @@ impl TypedProgram {
             kbail!(self, fn_span, "fn module must return k1/module");
         }
         let manifest_result = self.execute_static_function(manifest_fn_id, &[], fn_span)?;
-        let result_type_id = self.get_static_value_type(manifest_result);
 
         let StaticValue::Struct(value) = self.static_values.get(manifest_result) else {
             self.ice_span(fn_span, "module manifest value was not a struct");
@@ -8084,7 +8082,6 @@ impl TypedProgram {
         }
         function.is_concrete = is_concrete;
         self.functions.add(function);
-        self.ir.functions.add(None);
         id
     }
 
@@ -12190,7 +12187,7 @@ impl TypedProgram {
                         );
                         ctx.with_scope(arm_scope_id).with_no_expected_type()
                     };
-                    let mut instrs = self.mem.new_list(8);
+                    let mut instrs = self.mem.new_list(4);
                     self.compile_pattern_into_values(
                         pattern,
                         match_subject_variable.variable_expr,
@@ -12216,7 +12213,10 @@ impl TypedProgram {
                                 "Expected boolean condition: {msg}"
                             );
                         };
-                        instrs.push(MatchingConditionInstr::cond(guard_condition_expr));
+                        instrs.push_grow(
+                            &mut self.mem,
+                            MatchingConditionInstr::cond(guard_condition_expr),
+                        );
                     };
 
                     // Once we've evaluated the conditions, we can eval the consequent expression inside of it,
@@ -12246,7 +12246,9 @@ impl TypedProgram {
                     }
 
                     let match_arm = TypedMatchArm {
-                        condition: MatchingCondition { instrs: instrs.to_slice() },
+                        condition: MatchingCondition {
+                            instrs: instrs.to_slice_trim(&mut self.mem),
+                        },
                         consequent_expr,
                     };
                     // An arm over an uninhabited variant can never match: it is
@@ -13283,7 +13285,7 @@ impl TypedProgram {
             for_expr.span,
         );
 
-        let mut for_expr_initial_statements = self.mem.new_list(5);
+        let mut for_expr_initial_statements = self.mem.new_list(4);
         if let Some(iterable_defn_stmt) = iterable_defn_stmt {
             for_expr_initial_statements.push(iterable_defn_stmt);
         }
@@ -13540,7 +13542,7 @@ impl TypedProgram {
         debug!("matching condition: {}", self.ast.expr_id_to_string(condition));
         let mut all_patterns: SV4<(TypedPatternId, TypedExprId)> = smallvec![];
         let mut allow_bindings: bool = true;
-        let mut instrs: List<MatchingConditionInstr, _> = self.mem.new_list(16);
+        let mut instrs: List<MatchingConditionInstr, _> = self.mem.new_list(2);
         let condition_span = self.ast.get_expr_span(condition);
         // If there are no boolean conditions, we can check for infallibility
         let mut is_single_pattern_only = true;
@@ -13616,7 +13618,7 @@ impl TypedProgram {
             Ok(MatchingConditionResult::NeverBlock(never_block))
         } else {
             Ok(MatchingConditionResult::MatchingCondition(MatchingCondition {
-                instrs: instrs.to_slice(),
+                instrs: instrs.to_slice_trim(&mut self.mem),
             }))
         }
     }
@@ -17961,7 +17963,7 @@ impl TypedProgram {
         } else {
             block
         };
-        let mut stmts = self.mem.new_list(block.stmts.len() + 1);
+        let mut stmts = self.mem.new_list(block.stmts.len());
         let mut last_expr_type: TypeId = self.builtin_types.empty;
         let mut last_stmt_is_divergent = false;
         for (index, stmt) in self.ast.mem.getn(block.stmts).iter().enumerate() {
@@ -19847,7 +19849,7 @@ impl TypedProgram {
             is_lambda: false,
         }));
 
-        let function_type_params_handle = fnlike_type_params.to_slice();
+        let function_type_params_handle = fnlike_type_params.to_slice_trim(&mut self_.mem);
         let function_id = self_.functions.next_id();
         for v in params.iter() {
             self_.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(function_id);
@@ -20007,7 +20009,7 @@ impl TypedProgram {
                     }
                 };
             }
-            let predicate_functions_handle = predicate_functions.to_slice();
+            let predicate_functions_handle = predicate_functions.to_slice_trim(&mut self.mem);
             let unconstrained = ability_constraint_signatures.is_empty()
                 && predicate_functions_handle.is_empty()
                 && static_constraint.is_none();
@@ -20753,7 +20755,7 @@ impl TypedProgram {
                     Err(msg) => kbail!(self, ability_param.span, "{}", msg),
                 };
 
-            let predicate_functions_handle = predicate_functions.to_slice();
+            let predicate_functions_handle = predicate_functions.to_slice_trim(&mut self.mem);
             let param_type_id = self.add_type_parameter(
                 TypeParameter {
                     name: ability_param.name,

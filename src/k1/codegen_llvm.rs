@@ -3913,7 +3913,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         ir::compile_function(self.k1, function_id)?;
-        let Some(ir_fn) = self.k1.ir.functions.get(function_id) else {
+        let Some(ir_fn) = self.k1.ir.functions.get(&function_id).copied() else {
             kbail!(
                 self.k1,
                 function_span,
@@ -3921,7 +3921,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.k1.function_id_to_string(function_id, false)
             );
         };
-        let ir_fn = *ir_fn;
 
         let abi_mode = self.k1.function_abi(function_id);
         let llvm_function_type = self.make_cg_function_type(&ir_fn.fn_type)?;
@@ -4483,7 +4482,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         function_id: FunctionId,
     ) -> K1Result<()> {
-        let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
+        let Some(ir_unit) = self.k1.ir.functions.get(&function_id).copied() else {
+            kbail!(
+                self.k1,
+                self.k1.get_function_span(function_id),
+                "Internal Compiler Error: missing ir for function {}",
+                self.k1.function_id_to_string(function_id, false)
+            );
+        };
         debug!(
             "codegen_unit_body ir\n{}",
             ir::unit_to_string(self.k1, IrUnitId::Function(function_id), false)
@@ -4503,7 +4509,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             ir::unit_to_string(self.k1, IrUnitId::Function(function_id), false)
         );
 
-        let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
+        let ir_unit = self.k1.ir.functions.get(&function_id).copied().unwrap();
         let blocks = ir_unit.blocks;
 
         let mut block_mapping = FxHashMap::new();

@@ -219,7 +219,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         let self_unit = get_compiled_unit(&k1.ir, self_unit_id).unwrap();
         let IrCallee::Direct(callee_fn_id) = call.callee else { panic!() };
         let call_span = *k1.ir.sources.get(call_inst_id);
-        let callee_unit = k1.ir.functions.get(callee_fn_id).unwrap();
+        let callee_unit = *k1.ir.functions.get(&callee_fn_id).unwrap();
         debug!("callee\n{}", unit_to_string(k1, IrUnitId::Function(callee_fn_id), false));
         debug!("self\n{}", unit_to_string(k1, self_unit_id, false));
 

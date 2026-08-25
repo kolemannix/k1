@@ -43,6 +43,7 @@ pointer-free predicate - pod/serializable?
 - [ ] Use to report escaped stack pointers
 
 ## grab bag list mid2026
+- [ ] new lib type: :runtime
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
 - [ ] Add `self -> *self` thunk adapters for ability objects, `dyn[allocator]` is impossible
 - [x] Warn on zeroed() for non zeroable type

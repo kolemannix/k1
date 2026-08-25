@@ -112,7 +112,7 @@ pub fn snap_map_with<K: Copy, V, S>(
 
 pub fn restore_map_with<K, V, S>(
     r: &mut SnapReader,
-    mut dec: impl FnMut(&mut SnapReader) -> V,
+    mut decode: impl FnMut(&mut SnapReader) -> V,
 ) -> std::collections::HashMap<K, V, S>
 where
     K: Copy + Eq + std::hash::Hash,
@@ -122,7 +122,7 @@ where
     let mut map = std::collections::HashMap::with_capacity_and_hasher(n, S::default());
     for _ in 0..n {
         let k: K = r.read_t();
-        let v = dec(r);
+        let v = decode(r);
         map.insert(k, v);
     }
     map

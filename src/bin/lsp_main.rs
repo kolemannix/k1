@@ -203,7 +203,7 @@ fn candidate_to_item(candidate: k1::lsp_support::CompletionCandidate) -> Complet
     };
     CompletionItem {
         kind: Some(kind),
-        sort_text: Some(format!("{:02}_{}", candidate.sort_group, &candidate.label)),
+        sort_text: Some(format!("{:02}_{}", candidate.sort_group, candidate.label)),
         detail: if candidate.detail.is_empty() { None } else { Some(candidate.detail) },
         label: candidate.label,
         ..CompletionItem::default()
@@ -800,7 +800,7 @@ impl LanguageServer for Backend {
                     _ => {}
                 }
             }
-            spans_and_kinds.sort_by(|f1, f2| f1.0.start.cmp(&f2.0.start));
+            spans_and_kinds.sort_by_key(|(span, _, _)| span.start);
             for (span, token_type, bitflags) in spans_and_kinds {
                 // info!("spans_and_kinds sorted {} {}", span.start, span.len);
                 let length = span.len;
