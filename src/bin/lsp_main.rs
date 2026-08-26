@@ -251,6 +251,7 @@ impl Backend {
         line: u32,
         col: u32,
     ) -> Result<Option<TypedProgram>> {
+        info!("compile_with_marker {}", file_url.path());
         let content_at_line = |ast: &ParsedProgram, source: &SourceFile| {
             source
                 .get_line(&ast.mem, line as usize)
@@ -444,6 +445,7 @@ impl Backend {
             return iteration_number;
         };
         info!("compiling version {} target {}", iteration_number, src_path);
+        let compile_start = std::time::Instant::now();
         let args = k1::compiler::Args {
             no_std: false,
             emit_llvm: false,
@@ -464,7 +466,11 @@ impl Backend {
         let compile_result = k1::compiler::compile_program(&args);
         let compiled_module = match compile_result {
             Ok(module) => {
-                info!("compile {} succeeded", iteration_number);
+                info!(
+                    "compile {} succeeded in {}ms",
+                    iteration_number,
+                    compile_start.elapsed().as_millis()
+                );
                 Some(Box::new(module))
             }
             Err(CompileProgramError::TyperFailure(module)) => {
@@ -827,7 +833,7 @@ impl LanguageServer for Backend {
             }
             info!(
                 "semantic_tokens: iterated {} tokens, returning {}",
-                source.tokens.len(),
+                ast_for_file.semantic_tokens.len(),
                 tokens.len()
             );
             Ok(Some(SemanticTokensResult::Tokens(SemanticTokens { result_id: None, data: tokens })))

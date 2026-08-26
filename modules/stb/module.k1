@@ -4,19 +4,17 @@ ns build {
   fn module(): k1/module {
     let m = k1/module/new()
     m.lib("stb", :static)
-    m.setup(["libs/libstb.a", "c.k1"], ["stb.c", "vendor"])
+    m.setup(outputs = ["libs/libstb.a", "c.k1"], inputs = ["stb.c", "vendor"])
     m
   }
 
   fn setup(_ctx: k1/setup-ctx) {
     let minver = if k1/platform-macos "-mmacosx-version-min=15.0.0" else ""
-    let script = `
-      set -e
+    process/sh-verbose(`
       mkdir -p libs .k1-out/stb
       cc -O2 ${minver} -c stb.c -o .k1-out/stb/stb.o
       ar rcs libs/libstb.a .k1-out/stb/stb.o
-      `
-    process/run-command("/bin/sh", ["-c", script], :inherit).!
+      `).!
 
     let bindgen-args: list[string] = [
       "-in-path", "vendor/stb_truetype.h",
@@ -26,12 +24,12 @@ ns build {
       "+strip-prefix", "stbtt_",
     ]
     if k1/platform-macos {
-      let sdk = process/run("/bin/sh", ["-c", "printf %s $(xcrun --sdk macosx --show-sdk-path)"]).!
+      let sdk = process/sh("printf %s $(xcrun --sdk macosx --show-sdk-path)").!
       bindgen-args.push("+clangarg")
       bindgen-args.push("-isysroot")
       bindgen-args.push("+clangarg")
       bindgen-args.push(sdk)
     }
-    let _ = process/run-command("k1bindgen", bindgen-args.as-span(), :inherit).!
+    let _ = process/run-verbose("k1bindgen", bindgen-args.as-span()).!
   }
 }

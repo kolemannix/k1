@@ -422,8 +422,8 @@ ns for bindgen-state {
     result
   }
   fn should-include-name(self: bindgen-state, name: string): bool {
-    if self.include-names.non-empty() {
-      self.include-names.contains(name)
+    if self.include-names.contains(name) {
+      true
     } else {
       for exclude in self.exclude-substrings {
         if exclude.ends-with("$") {

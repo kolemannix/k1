@@ -15,7 +15,7 @@ ns build {
         m.link-args(["-framework", it])
       }
     }
-    m.setup(["libs/libsdl3.a", "c.k1"], ["vendor"])
+    m.setup(outputs = ["libs/libsdl3.a", "c.k1"], inputs = ["vendor"])
     m
   }
 
@@ -23,17 +23,15 @@ ns build {
   // vendor bumps replace vendor/ wholesale) and regenerates the sdl3 bindings.
   // Needs cmake and k1bindgen on PATH.
   fn setup(_ctx: k1/setup-ctx) {
-    process/run-command("mkdir", ["-p", "libs"], :inherit).!
-
-    let cmake-args: list[string] = [
-      "-S", "vendor", "-B", ".k1-out/sdl3-build",
-      "-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TESTS=OFF", "-DSDL_EXAMPLES=OFF",
-      "-DCMAKE_BUILD_TYPE=Release",
-    ]
-    if k1/platform-macos { cmake-args.push("-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0.0") }
-    process/run-command("cmake", cmake-args.as-span(), :inherit).!
-    process/run-command("cmake", ["--build", ".k1-out/sdl3-build", "-j", "10"], :inherit).!
-    process/run-command("cp", [".k1-out/sdl3-build/libSDL3.a", "libs/libsdl3.a"], :inherit).!
+    let deploy-target = if k1/platform-macos "-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0.0" else ""
+    process/sh-verbose(`
+      mkdir -p libs
+      cmake -S vendor -B .k1-out/sdl3-build ${deploy-target} \
+        -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
+        -DCMAKE_BUILD_TYPE=Release
+      cmake --build .k1-out/sdl3-build -j 10
+      cp .k1-out/sdl3-build/libSDL3.a libs/libsdl3.a
+      `).!
 
     let bindgen-args: list[string] = [
       "-in-path", "vendor/include/SDL3/SDL.h",
@@ -44,12 +42,12 @@ ns build {
       "+strip-prefix", "SDL_",
     ]
     if k1/platform-macos {
-      let sdk = process/run("/bin/sh", ["-c", "printf %s $(xcrun --sdk macosx --show-sdk-path)"]).!
+      let sdk = process/sh("printf %s $(xcrun --sdk macosx --show-sdk-path)").!
       bindgen-args.push("+clangarg")
       bindgen-args.push("-isysroot")
       bindgen-args.push("+clangarg")
       bindgen-args.push(sdk)
     }
-    let _ = process/run-command("k1bindgen", bindgen-args.as-span(), :inherit).!
+    let _ = process/run-verbose("k1bindgen", bindgen-args.as-span()).!
   }
 }

@@ -5,4 +5,10 @@ ns time {
   fn counter-to-nanos(counter: u64): u64 {
     core/platform/clock/counter-to-nanos(counter)
   }
+  fn elapsed-nanos(counter: u64): u64 {
+    counter-to-nanos(core/platform/clock/counter() - counter)
+  }
+  fn elapsed-ms(counter: u64): u64 {
+    elapsed-nanos(counter) / 1_000_000
+  }
 }

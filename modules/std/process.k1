@@ -150,6 +150,20 @@ ns process {
     run("/bin/sh", ["-c", command])
   }
 
+  fn run-verbose(program: string, args: span[string]): sh.return {
+    let start = time/read-cpu-counter()
+    let arg-text = string/join(args, " ")
+    core/io/stderr.write("+ $program $arg-text\n")
+    defer core/io/stderr.write("+ [${time/elapsed-ms(start)}ms]\n")
+    run-command(program, args, :inherit)
+  }
+
+  fn sh-verbose(script: string): sh.return {
+    let start = time/read-cpu-counter()
+    defer core/io/stderr.write("+ [${time/elapsed-ms(start)}ms]\n")
+    run-command("/bin/sh", ["-c", "set -ex\n$script"], :inherit)
+  }
+
   // A long-lived interactive child: stdin and stdout piped, stderr inherited.
   // Talk to it through the raw fds: fd/write-all(child.stdin-fd, ..) and
   // child.stdout.read-line(); protocol shaping (lines, framing) is the
