@@ -151,7 +151,7 @@ ns for string {
   fn c-string-len(c-string: ptr): size {
     if k1/is-static {
       let n = 0: size
-      while c-string.add-bytes(n).r[u8].* != 0u8 {
+      while c-string.add-bytes(n).ref[u8].* != 0u8 {
         n = n + 1
       }
       n
@@ -159,7 +159,7 @@ ns for string {
       let w: size = k1/simd-bytes
       let p = c-string
       while p.as[size] & (w - 1) != 0 {
-        if p.r[u8].* == 0u8 return p.diff(c-string)
+        if p.ref[u8].* == 0u8 return p.diff(c-string)
         p = p.add-bytes(1)
       }
       let zeros = vector/splat[u8, k1/simd-bytes](0u8)

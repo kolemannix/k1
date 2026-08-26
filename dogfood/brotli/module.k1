@@ -31,7 +31,7 @@ ns build {
       if decl == "" initializer-count
       else if decl == "BROTLI_NUM_COMMAND_SYMBOLS" 704
       else if decl == "BROTLI_LOG2_TABLE_SIZE" 256
-      else u64/from-string(decl).!.as[size]
+      else u64/from-string(decl).!.signed()
     }
 
     fn parse-u64-c(token: string): u64 {
@@ -40,9 +40,9 @@ ns build {
         let i: size = 2
         while i < token.len() {
           let c = token.get(i)
-          let d: u64 = if c >= '0' and c <= '9' (c.as[u8] - '0'.as[u8]).as[u64]
-            else if c >= 'a' and c <= 'f' (c.as[u8] - 'a'.as[u8]).as[u64] + 10
-            else if c >= 'A' and c <= 'F' (c.as[u8] - 'A'.as[u8]).as[u64] + 10
+          let d: u64 = if c >= '0' and c <= '9' (c.as[u8] - '0'.as[u8]).widen[u64]
+            else if c >= 'a' and c <= 'f' (c.as[u8] - 'a'.as[u8]).widen[u64] + 10
+            else if c >= 'A' and c <= 'F' (c.as[u8] - 'A'.as[u8]).widen[u64] + 10
             else crash("bad hex digit in '$token'")
           v = (v << 4) | d
           i = i + 1
@@ -126,7 +126,7 @@ ns build {
       let values: list[f64] = list/empty()
       for t in parsed.tokens {
         let lit = if t.ends-with("f") t.drop-right(1) else t
-        values.push(f64/from-string(lit).!.as[f32].as[f64])
+        values.push(f64/from-string(lit).!.trunc[f32].widen[f64])
       }
       assert-equals(values.len(), parsed.declared)
 

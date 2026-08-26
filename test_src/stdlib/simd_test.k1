@@ -19,7 +19,7 @@ fn test-map() {
   for len in lengths {
     let input = list/with-capacity[u8](len)
     for 0.until(len) {
-      input.push((it % 251).as[u8])
+      input.push((it % 251).trunc[u8])
     }
     assert-map-matches(input)
   }
@@ -29,8 +29,8 @@ fn test-reduce() {
   let input = list/with-capacity[u8](33)
   let expected = 0: u8
   for 0.until(33) {
-    input.push(it.as[u8])
-    expected = expected + it.as[u8]
+    input.push(it.trunc[u8])
+    expected = expected + it.trunc[u8]
   }
   assert-equals(sum-wrapping(input.as-span()), expected)
   assert-equals(sum-wrapping(input.slice(0, 16)), 120)

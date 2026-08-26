@@ -48,7 +48,7 @@ fn define-impl(base-type-id: type-id, type-name: string, members: span[{ name: s
     if bit-index.* + bits > total-bits crash("Too big: ${bit-index.* + bits}")
     let raw-value = u64/bitmask-low(bits)
     let type-width = int-width-for-bits(bits)
-    let mask = raw-value << bit-index.*.as()
+    let mask = raw-value << bit-index.*.trunc()
     let offset = bit-index.*
     let size-mask = u64/bitmask-low(type-width)
     let inv-mask = mask.bit-not() & size-mask
@@ -85,8 +85,10 @@ fn define-impl(base-type-id: type-id, type-name: string, members: span[{ name: s
     code.writeln("    let cleared: $base-name = shifted & ${info.raw-value};")
     if is-bool {
       code.writeln("    cleared == 1")
+    } else if field-type == base-name {
+      code.writeln("    cleared")
     } else {
-      code.writeln("    cleared.as[$field-type]")
+      code.writeln("    cleared.trunc[$field-type]")
     }
 
     code.writeln("  }") // End Getter

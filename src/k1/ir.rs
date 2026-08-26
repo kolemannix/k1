@@ -3725,7 +3725,6 @@ fn compile_cast(
         CastType::ReferenceToReference
         | CastType::ReferenceToMut
         | CastType::ReferenceUnMut
-        | CastType::IntegerCast(IntegerCastDirection::NoOp)
         | CastType::IntegerCast(IntegerCastDirection::SignChange)
         | CastType::Integer8ToChar
         | CastType::PointerToReference

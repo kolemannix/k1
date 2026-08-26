@@ -909,22 +909,25 @@ ns for ptr {
     self == null
   }
 
-  fn r[t](self: ptr): *t { self.as[*t] }
-  fn rw[t](self: ptr): *mut t { self.as[*mut t] }
+  fn ref[t](self: ptr): *t { self.as[*t] }
+
+  fn ref-opt[t](self: ptr): optref[t] {
+    .{ inner = self.ref[t] }
+  }
 
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
   // But we _could_ do it in userland using size-of and arithmetic which is neat!
-  fn(intern) ref-at-index[t](self: ptr, index: size): *mut t
+  fn(intern) ref-at[t](self: ptr, index: size): *mut t
 
-  // ret-at-index compiles to gep, which preserves provenance
+  // ref-at compiles to gep, which preserves provenance
   fn add-bytes(self: ptr, offset: size): ptr {
-    self.ref-at-index[u8](offset).as[ptr]
+    self.ref-at[u8](offset).as[ptr]
   }
 
   fn sub-bytes(self: ptr, offset: size): ptr {
     // getelementptr interprets the index as signed
-    self.ref-at-index[u8](offset.negated()).as[ptr]
+    self.ref-at[u8](offset.negated()).as[ptr]
   }
 
   fn diff(self: ptr, other: ptr): size {

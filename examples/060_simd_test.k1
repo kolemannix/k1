@@ -11,7 +11,7 @@ fn find-byte-simd(haystack: string, c: char): i64 {
   let base = haystack.data-ptr()
   let i = 0: size
   while i + 16 <= len {
-    let chunk = vector/load-unchecked[u8, 16](base.ref-at-index[u8](i).as[ptr])
+    let chunk = vector/load-unchecked[u8, 16](base.ref-at[u8](i).as[ptr])
     let lane = chunk.eq-lanes(needle).first-true-lane()
     if lane >= 0 {
       return i.as[i64] + lane

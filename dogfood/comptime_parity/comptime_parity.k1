@@ -42,19 +42,19 @@ ns work {
     let w = string-builder/new()
     let i8s: list[i8] = [-128, -1, 0, 1, 127]
     for a in i8s {
-      w.write("${a.as[i16]},${a.as[i32]},${a.as[i64]},${a.as[u8]};")
+      w.write("${a.widen[i16]},${a.widen[i32]},${a.widen[i64]},${a.unsigned()};")
     }
     let i16s: list[i16] = [-32768, -1, 0, 1, 32767]
     for a in i16s {
-      w.write("${a.as[i32]},${a.as[i64]},${a.as[u16]},${a.as[i8]};")
+      w.write("${a.widen[i32]},${a.widen[i64]},${a.unsigned()},${a.trunc[i8]};")
     }
     let i32s: list[i32] = [-2147483648, -70000, -1, 0, 1, 70000, 2147483647]
     for a in i32s {
-      w.write("${a.as[i64]},${a.as[u32]},${a.as[i16]},${a.as[i8]},${a.as[f64]};")
+      w.write("${a.widen[i64]},${a.unsigned()},${a.trunc[i16]},${a.trunc[i8]},${a.as[f64]};")
     }
     let i64s: list[i64] = [-5000000000, -1, 0, 1, 5000000000]
     for a in i64s {
-      w.write("${a.as[i32]},${a.as[i32].as[i64]},${a.as[i16]},${a.as[u32]};")
+      w.write("${a.trunc[i32]},${a.trunc[i32].widen[i64]},${a.trunc[i16]},${a.trunc[u32]};")
     }
     w.build()
   }
@@ -65,7 +65,7 @@ ns work {
       for b in [-2.0: f64, 0.5, 3.0] {
         w.write("${a + b},${a - b},${a * b},${a / b},${a < b},${a == b},")
       }
-      w.write("${a.as[i64]},${a.as[f32]},${a.compare(0.0)};")
+      w.write("${a.as[i64]},${a.trunc[f32]},${a.compare(0.0)};")
     }
     w.build()
   }

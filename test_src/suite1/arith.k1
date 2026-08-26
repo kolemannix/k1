@@ -71,12 +71,12 @@ fn test() {
   assert-equals(0xdead_beefu32, 3735928559u32)
 
   // Coercions
-  assert-equals(3u8.as[u64], 3)
-  assert-equals(3i8.as[i64], 3)
-  assert-equals(-3i8.as[i64], -3)
+  assert-equals(3u8.widen[u64], 3)
+  assert-equals(3i8.widen[i64], 3)
+  assert-equals(-3i8.widen[i64], -3)
 
   // Signed widen to unsigned
-  assert-equals(-1i16.as[i32].as[u32], 0xFFFF_FFFF)
+  assert-equals(-1i16.widen[i32].unsigned(), 0xFFFF_FFFF)
   // Not directly allowed
   assert(test-compile(-1i16.as[u32]).is-some())
 

@@ -77,7 +77,7 @@ let LOG2_E_TIMES_2: f64 = 2.8853900817779268
 
 fn log2(x: f64): f64 {
   let bits = mem/bitcast[f64, u64](x)
-  let exponent = bits.shift-right(52).bit-and(0x7FF).as[i64] - 1023
+  let exponent = bits.shift-right(52).bit-and(0x7FF).signed() - 1023
   let mantissa = mem/bitcast[u64, f64](
     bits.bit-and(0x000FFFFFFFFFFFFF).bit-or(0x3FF0000000000000)
   )
@@ -140,9 +140,9 @@ fn render[s: escape-set](set: s, pixels: buffer[u8], v: view) {
       let point: complex = .{ re = left + x.as[f64] * step, im }
       let rgb = shade(escape-time(set, point, v.max-iter))
       let at = (y * v.width + x) * 4
-      pixels.set(at, rgb.shift-right(16).bit-and(0xFF).as[u8])
-      pixels.set(at + 1, rgb.shift-right(8).bit-and(0xFF).as[u8])
-      pixels.set(at + 2, rgb.bit-and(0xFF).as[u8])
+      pixels.set(at, rgb.shift-right(16).bit-and(0xFF).trunc[u8])
+      pixels.set(at + 1, rgb.shift-right(8).bit-and(0xFF).trunc[u8])
+      pixels.set(at + 2, rgb.bit-and(0xFF).trunc[u8])
       pixels.set(at + 3, 255u8)
     }
   }

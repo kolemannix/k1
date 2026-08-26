@@ -17,7 +17,7 @@ ns for source {
   fn erase[t, s](inst: *mut s): source[t] where s: a-source[t = t] {
     .{
       state = inst.as[ptr],
-      next-fn = fn(p: ptr) p.rw[s]().next(),
+      next-fn = fn(p: ptr) p.ref[s]().next(),
     }
   }
 }

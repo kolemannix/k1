@@ -110,7 +110,7 @@ fn start(args: span[string]): result[string, string] {
     index,
     source_filename = args.in-path.to-c().ptr,
     command_line_args = clang-args-c-strs.base-ptr(),
-    command_line_args_len = clang-args-c-strs.len().as[i32],
+    command_line_args_len = clang-args-c-strs.len().trunc[i32],
     ptr/null.as(), 0,
     clang/tu-flag/DetailedPreprocessingRecord.bit-or(clang/tu-flag/SkipFunctionBodies), &unit
   )
@@ -120,7 +120,7 @@ fn start(args: span[string]): result[string, string] {
 
   let num-diagnostics = clang/getNumDiagnostics(unit)
   for 0.until(num-diagnostics) {
-    let d = clang/getDiagnostic(unit, it.as[u32])
+    let d = clang/getDiagnostic(unit, it.trunc[u32])
     let severity = clang/getDiagnosticSeverity(d)
     eprintln("diag: ${severity.enum-name()}")
   }
@@ -812,7 +812,7 @@ fn map-fn-type(cx-type: clang/CXType): fn-type {
   let arg-count = clang/getNumArgTypes(cx-type)
   let args = list/empty[fn-type.params.t]()
   for 0.until(arg-count) {
-    let arg-cx-type = clang/getArgType(cx-type, it.as[u32])
+    let arg-cx-type = clang/getArgType(cx-type, it.trunc[u32])
     let arg-type = map-type-ext(arg-cx-type, :fn-param)
     let name: ?string = :none
     args.push(.{ name, type = arg-type })

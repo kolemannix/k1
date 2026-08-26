@@ -23,7 +23,7 @@ ns libc {
     let loc =
       if k1/is-static { k1/host-platform #is { :posix-macos -> errno-location-macos(), :posix-linux or :wasi or :bare -> errno-location-linux() } }
       else { k1/platform #is { :posix-macos -> errno-location-macos(), :posix-linux or :wasi or :bare -> errno-location-linux() } }
-    loc.r[c-int].*
+    loc.ref[c-int].*
   }
   let EINTR: c-int = 4
   fn(extern("strerror")) strerror(errno: c-int): *char

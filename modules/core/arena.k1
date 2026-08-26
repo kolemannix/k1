@@ -40,7 +40,7 @@ ns for arena {
     assert(region.len >= types/stride[arena] * 2)
     let memory-start = region.base.add-bytes(types/stride[arena])
     let region-end = region.base.add-bytes(region.len)
-    let arena: *arena = region.base.rw[arena]
+    let arena: *arena = region.base.ref[arena]
     arena.* = .{
       base-ptr = memory-start,
       cur-addr = memory-start,
@@ -71,7 +71,7 @@ ns for arena {
   fn _release-extra-chunks(self: *arena) {
     let chunk = self.extra-chunks
     while not chunk.is-null() {
-      let record = chunk.rw[arena-chunk]
+      let record = chunk.ref[arena-chunk]
       let next = record.next
       platform/memory/release(record.region)
       chunk = next
@@ -140,7 +140,7 @@ ns for arena {
     let first-len = self.first-end.diff(self.first-base)
     let chunk-len = if needed > first-len needed else first-len
     let region = platform/memory/acquire(chunk-len)
-    let record: *mut arena-chunk = region.base.rw[arena-chunk]
+    let record: *mut arena-chunk = region.base.ref[arena-chunk]
     record.* = .{ region, next = self.extra-chunks }
     self.extra-chunks = region.base
     let data-start = region.base.add-bytes(types/stride[arena-chunk]).aligned(MIN_ALIGN)
@@ -152,7 +152,7 @@ ns for arena {
   fn push[t](self: *arena, t: t): *t {
     let data-start = self.alloc-layout(types/size[t], types/align[t])
 
-    let ref: *t = data-start.rw()
+    let ref: *t = data-start.ref()
     ref.* = t
     ref
   }

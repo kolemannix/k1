@@ -3,7 +3,7 @@ ns recurse_basic {
   type tree = either { leaf, node(*tree) }
 
   fn make(n: size): *node {
-    if n <= 0 ptr/null.r[node] else mem/new(.{ node = make(n - 1) })
+    if n <= 0 ptr/null.ref[node] else mem/new(.{ node = make(n - 1) })
    }
 
   fn count(n: *node): size {

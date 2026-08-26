@@ -200,7 +200,7 @@ ns for list {
   }
 
   fn remove[t](self: *mut list[t], index: size) {
-    if index.as[u64] >= self.len.as[u64] {
+    if index.unsigned() >= self.len.unsigned() {
       crash("list index out of bounds. index $index, len ${self.len}")
     }
     self.buffer.remove(index)

@@ -9,7 +9,7 @@
 type fixlist[t, n: static size] = { data: array[t, n], used: u32 }
 ns for fixlist {
   fn cap[t, n](_self: *fixlist[t, n]): size { core/meta/static-type-to-value[_, n]() }
-  fn len[t, n](self: *fixlist[t, n]): size { self.used.as[size] }
+  fn len[t, n](self: *fixlist[t, n]): size { self.used.widen[size] }
 
   fn zeroed[t, n](): fixlist[t, n] { mem/zeroed() }
 
@@ -25,7 +25,7 @@ ns for fixlist {
     let used: size = self.len()
     if used < self.cap() {
       self.data.set(used, value)
-      self.used = used.as[u32] + 1
+      self.used = used.trunc[u32] + 1
     } else {
       let typename = types/name[type-of(self).value]
       crash("$typename cannot fulfill push. ${used + 1} > ${self.cap()}")
@@ -36,7 +36,7 @@ ns for fixlist {
     let used: size = self.len()
     if used < self.cap() {
       self.data.set(used, value)
-      self.used = used.as[u32] + 1
+      self.used = used.trunc[u32] + 1
       :ok
     } else {
       :err
@@ -48,7 +48,7 @@ ns for fixlist {
     if needed <= self.cap() {
       let dst-slice = self.data.as-buffer().slice(start = self.len(), end = needed)
       buffer/copy(src = values.inner-buffer(), dst = dst-slice)
-      self.used = needed.as[u32]
+      self.used = needed.trunc[u32]
       :ok
     } else {
       :err

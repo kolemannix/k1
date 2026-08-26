@@ -360,6 +360,19 @@ impl IntegerType {
         }
     }
 
+    pub fn sign_flipped(&self) -> IntegerType {
+        match self {
+            Self::U8 => Self::I8,
+            Self::U16 => Self::I16,
+            Self::U32 => Self::I32,
+            Self::U64 => Self::I64,
+            Self::I8 => Self::U8,
+            Self::I16 => Self::U16,
+            Self::I32 => Self::U32,
+            Self::I64 => Self::U64,
+        }
+    }
+
     pub fn is_signed(&self) -> bool {
         match self {
             Self::U8 | Self::U16 | Self::U32 | Self::U64 => false,

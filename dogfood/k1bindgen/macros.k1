@@ -8,8 +8,8 @@ fn macro-body-tokens(unit: clang/CXTranslationUnit, cursor: clang/CXCursor): lis
   let toks-ptr: *mut clang/CXToken = ptr/null.as()
   let count: u32 = 0
   clang/tokenize(unit, extent, &toks-ptr, &count)
-  let body: list[c-token] = list/with-capacity(count.as[size])
-  let toks = buffer/wrap-raw[clang/CXToken](toks-ptr.as[ptr], count.as[size])
+  let body: list[c-token] = list/with-capacity(count.widen[size])
+  let toks = buffer/wrap-raw[clang/CXToken](toks-ptr.as[ptr], count.widen[size])
   // Token 0 is the macro's own name
   let i: size = 1
   while i < toks.len() {
@@ -144,7 +144,7 @@ fn transpile-literal(t: *mut macro-transpile, text: string): result[string, stri
     // k1 has no octal literals
     let value: i64 = 0
     for c in digits {
-      let d = c.to-ascii-digit() is { :some d -> d.as[i64], :none -> return :err "unsupported literal $text" }
+      let d = c.to-ascii-digit() is { :some d -> d.widen[i64], :none -> return :err "unsupported literal $text" }
       if d >= 8 return :err "unsupported literal $text"
       value = value * 8 + d
     }
@@ -222,7 +222,7 @@ fn is-hex-digit(c: char): bool {
 
 fn parse-char-literal(text: string): result[i64, string] {
   if text.len() == 3 and text.get(0) == '\'' and text.get(2) == '\'' {
-    return :ok text.get(1).as_u8().as[i64]
+    return :ok text.get(1).as_u8().widen[i64]
   }
   if text.len() == 4 and text.get(0) == '\'' and text.get(1) == '\\' and text.get(3) == '\'' {
     let v: i64 = text.get(2) is {

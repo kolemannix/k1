@@ -143,7 +143,7 @@ let result = [1, 2, 3]
 
 let n = "hello"
   .len()
-  .as[int]
+  .unsigned()
 ```
 
 Tokens that can begin a statement end the previous one instead, even where a
@@ -236,12 +236,27 @@ let byte = 10: u8
 let signed = -3i8
 ```
 
-Type assertions and casts use `:` and `.as[...]`:
+Type assertions use `:`; casts between kinds (ptr/word, int/float, char, bool)
+use `.as[...]`:
 
 ```rust
 let three = 3: i32
 let raw = ptr-value.as[size]
 ```
+
+Integer-to-integer (and float-to-float) conversions name their operation
+instead of using `as`; lossless widening is also implicit at coercion sites
+(arguments, declarations, returns):
+
+```rust
+let wide = narrow.widen[i64]      // lossless extend (same-sign, or unsigned -> signed)
+let low = big.trunc[u8]           // modular truncation; target sign is free
+let s = (x: u32).signed()         // same-width sign reinterpretation -> i32
+let u = (y: i64).unsigned()       // -> u64; size/usize flip the same way
+```
+
+Cross-sign widening composes the two steps, making zext vs sext explicit:
+`x.unsigned().widen[u64]` zero-extends, `x.widen[i64].unsigned()` sign-extends.
 
 ## Structs
 

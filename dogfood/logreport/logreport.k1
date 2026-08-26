@@ -217,7 +217,7 @@ fn main(): i32 {
   let sb = string-builder/new()
   for r in rows {
     sb.write("${r.service}=0b")
-    core/format-uint(context sb.&)(r.bytes.as[u64], 2)
+    core/format-uint(context sb.&)(r.bytes.unsigned(), 2)
     sb.write(" ")
   }
   println("\n${sb.build()}")

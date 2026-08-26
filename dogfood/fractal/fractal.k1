@@ -3,7 +3,7 @@ let(mutable) frame-width: i32 = 0
 let(mutable) frame-height: i32 = 0
 
 fn ensure-frame(width: i32, height: i32) {
-  let needed = (width * height * 4).as[size]
+  let needed = (width * height * 4).widen[size]
   if frame.len < needed { frame = buffer/allocate-in(heap, needed) }
   frame-width = width
   frame-height = height
@@ -11,7 +11,7 @@ fn ensure-frame(width: i32, height: i32) {
 
 fn(export("k1_frame")) frame-address(width: i32, height: i32): u32 {
   ensure-frame(width, height)
-  frame.data-ptr().as[size].as[u32]
+  frame.data-ptr().as[size].trunc[u32]
 }
 
 fn(export("k1_render")) render-into-frame(
@@ -84,6 +84,6 @@ fn print-frame() {
 }
 
 fn pixel-at(x: i32, y: i32): { red: u8, green: u8, blue: u8 } {
-  let at = ((y * frame-width + x) * 4).as[size]
+  let at = ((y * frame-width + x) * 4).widen[size]
   .{ red = frame.get(at), green = frame.get(at + 1), blue = frame.get(at + 2) }
 }

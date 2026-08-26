@@ -12,8 +12,8 @@ fn day2(part: int, input: string) {
   let total-mem = 0
   for ranges {
     let parts = it.split-by-char('-')
-    let start: i64 = u64/from-string(parts.first().!).!.as()
-    let end: i64 = u64/from-string(parts.last().!).!.as()
+    let start: i64 = u64/from-string(parts.first().!).!.signed()
+    let end: i64 = u64/from-string(parts.last().!).!.signed()
 
     let value = start
     while value <= end {

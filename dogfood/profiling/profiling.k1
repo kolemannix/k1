@@ -28,7 +28,7 @@ fn begin_profile_block(label: string, anchor_index: u32): profile-block {
     let parent_index = global_profiler_parent
     //eprintln("begin {label} with index {anchor_index}");
     //eprintln("  parent: {parent_index}");
-    let anchor = global_profiler_anchors.get(anchor_index.as[size]).&
+    let anchor = global_profiler_anchors.get(anchor_index.widen[size]).&
     
     // Initialize anchor on first use
     if anchor.label == "" {
@@ -58,8 +58,8 @@ fn end_profile_block(block: profile-block) {
     let elapsed = read-cpu-counter() - block.start_tsc
     global_profiler_parent = block.parent_index
     
-    let parent = global_profiler_anchors.get(block.parent_index.as[size]).&
-    let anchor = global_profiler_anchors.get(block.anchor_index.as[size]).&
+    let parent = global_profiler_anchors.get(block.parent_index.widen[size]).&
+    let anchor = global_profiler_anchors.get(block.anchor_index.widen[size]).&
     
     parent.tsc_elapsed_exclusive = parent.tsc_elapsed_exclusive - elapsed
     anchor.* = .{

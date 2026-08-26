@@ -436,7 +436,7 @@ fn is-unreserved(c: char): bool {
   c.is-ascii-letter() or c.is-ascii-digit() or c == '-' or c == '.' or c == '_' or c == '~'
 }
 
-fn hex-digit(v: u8): char { "0123456789ABCDEF".get(v.as[size]) }
+fn hex-digit(v: u8): char { "0123456789ABCDEF".get(v.widen[size]) }
 
 fn encode-into[w: writer](s: string, w, keep-slash: bool) {
   for c in s {

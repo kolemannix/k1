@@ -1,0 +1,18 @@
+fn bad(v: f32): u8 {
+  v.as[u32].as[u8]
+}
+
+fn wrapper(v: f32): u8 {
+  bad(v)
+}
+
+let x: u8 = #static wrapper(1.5)
+let y: u8 = #static wrapper(2.5)
+
+fn main(): i32 {
+  println(x)
+  println(y)
+  0
+}
+
+//errmsg: Integer conversions name their operation

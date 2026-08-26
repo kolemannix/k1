@@ -12,7 +12,7 @@ fn test() {
   assert(h.items.cap() == CAP)
   assert(h.pair.cap() == SMALL)
   for i in 0.until(CAP) {
-    h.items.push(i.as[u8])
+    h.items.push(i.trunc[u8])
   }
   assert(h.items.len() == CAP)
   let direct: fixlist[u8, CAP] = fixlist/uninit()
@@ -20,7 +20,7 @@ fn test() {
   assert(direct.cap() == 12)
   let total: size = 0
   for x in h.items {
-    total = total + x.as[size]
+    total = total + x.widen[size]
   }
   assert(total == 66)
 }

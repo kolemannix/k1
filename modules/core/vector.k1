@@ -37,7 +37,7 @@ ns vector {
     if start + lanes > s.len() {
       crash("vector/from-span out of bounds")
     }
-    load-unchecked[t, n](s.data-ptr().ref-at-index[t](start).as[ptr])
+    load-unchecked[t, n](s.data-ptr().ref-at[t](start).as[ptr])
   }
 
   fn eq-mask[t, n: static size](a: vector[t, n], b: vector[t, n]): u64 {
@@ -55,7 +55,7 @@ ns vector {
   // Lane index of the first true (all-ones) lane of a lane-mask, or -1
   fn first-true-lane[t, n: static size](v: vector[t, n]): i64 {
     let mask = v.to-mask()
-    if mask == 0 { -1 } else { mask.trailing-zeros().as[i64] }
+    if mask == 0 { -1 } else { mask.trailing-zeros().signed() }
   }
 }
 

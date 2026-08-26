@@ -7,14 +7,14 @@ fn start[t](handle: *mut thread, function: *fn(*mut t) -> ptr, input: *t) {
     :some h -> h,
     :none -> crash("thread spawn failed")
   }
-  handle.* = h.raw.rw[empty]()
+  handle.* = h.raw.ref[empty]()
 }
 
 // Fire-and-forget: no join handle, the thread's resources release on exit.
 // `input` must outlive the thread; the caller can't know when it finishes,
 // so heap-allocate it and free it from the thread fn.
 fn start-detached[t](function: *fn(*mut t) -> ptr, input: *t) {
-  let handle: thread = ptr/null.rw[empty]()
+  let handle: thread = ptr/null.ref[empty]()
   start(handle.&, function, input)
   core/platform/thread/detach(.{ raw = handle.as[ptr] })
 }
@@ -42,5 +42,5 @@ ns for sleep-poll-mutex {
 }
 
 fn join[t](thread: thread, retval: *mut t) {
-  retval.as[ptr].rw[ptr].* = core/platform/thread/join(.{ raw = thread.as[ptr] })
+  retval.as[ptr].ref[ptr].* = core/platform/thread/join(.{ raw = thread.as[ptr] })
 }

@@ -94,7 +94,7 @@ impl[t, n: static size] print for spill-list[t, n] {
      self is {
        :inline fix -> {
          w.write("inline ")
-         fix.used.as[size].print-to(w)
+         fix.used.widen[size].print-to(w)
        },
        :spilled list -> {
          w.write("spilled ")

@@ -17,14 +17,14 @@ fn pipe-chain(): int {
   let doubled = xs
     || map(fn x. x * 2)
     || filter(fn x. x > 2)
-  doubled.len().as[i32]
+  doubled.len().trunc[i32]
 }
 
 fn leading-dot(): u64 {
   let s = "hello world"
   let n = s
     .len()
-    .as[u64]
+    .unsigned()
   n
 }
 

@@ -57,7 +57,7 @@ ns for buffer {
         self.memset(byte)
       },
       type[i8](byte) -> {
-        self.memset(byte.as[u8])
+        self.memset(byte.unsigned())
       },
       _ -> {
         let i = 0
@@ -86,7 +86,7 @@ ns for buffer {
       let size-bytes = buffer-size-bytes[t](count)
       alloc.alloc(size-bytes, core/types/align[t]())
     }
-    let data = ptr.rw[t]
+    let data = ptr.ref[t]
     .{ len = count, data }
   }
 
@@ -106,7 +106,7 @@ ns for buffer {
       align = core/types/align[t](),
       new-size = new-size,
     )
-    self.* = .{ len = new-count, data = new-ptr.rw[t] }
+    self.* = .{ len = new-count, data = new-ptr.ref[t] }
   }
 
   fn _enlarged-clone-in[t, a: allocator](self: buffer[t], alloc: a, new-count: size): buffer[t] {
@@ -158,7 +158,7 @@ ns for buffer {
   // Accessor functions
 
   fn get-ref-unchecked[t](self: buffer[t], index: size): *mut t {
-    self.data-ptr().ref-at-index[t](index)
+    self.data-ptr().ref-at[t](index)
   }
 
   fn get-unchecked[t](self: buffer[t], index: size): t {
@@ -166,7 +166,7 @@ ns for buffer {
   }
 
   fn check-bounds[t](self: buffer[t], index: size) {
-    if index.as[u64] >= self.len.as[u64] {
+    if index.unsigned() >= self.len.unsigned() {
       crash("index out of bounds: $index / ${self.len}")
     }
   }
@@ -237,14 +237,14 @@ ns for buffer {
     if len >= w {
       let lanes = vector/splat[u8, k1/simd-bytes](needle)
       while i + w <= len {
-        let chunk = vector/load-unchecked[u8, k1/simd-bytes](base.ref-at-index[u8](i).as[ptr])
+        let chunk = vector/load-unchecked[u8, k1/simd-bytes](base.ref-at[u8](i).as[ptr])
         let lane = chunk.eq-lanes(lanes).first-true-lane()
         if lane >= 0 return :some (i + lane)
         i = i + w
       }
     }
     while i < len {
-      if base.ref-at-index[u8](i).* == needle return :some i
+      if base.ref-at[u8](i).* == needle return :some i
       i = i + 1
     }
     :none
@@ -257,26 +257,26 @@ ns for buffer {
     let k = needle-len
     if k == 0 return :some 0
     if k > n return :none
-    if k == 1 return position-byte(base, n, needle-base.ref-at-index[u8](0).*)
+    if k == 1 return position-byte(base, n, needle-base.ref-at[u8](0).*)
 
     let w: size = k1/simd-bytes
-    let first = vector/splat[u8, k1/simd-bytes](needle-base.ref-at-index[u8](0).*)
-    let last = vector/splat[u8, k1/simd-bytes](needle-base.ref-at-index[u8](k - 1).*)
+    let first = vector/splat[u8, k1/simd-bytes](needle-base.ref-at[u8](0).*)
+    let last = vector/splat[u8, k1/simd-bytes](needle-base.ref-at[u8](k - 1).*)
     let i = 0: size
     // Both loads must stay in bounds: lanes [i, i+w) paired with [i+k-1, i+k-1+w)
     while i + w + k - 1 <= n {
-      let block-first = vector/load-unchecked[u8, k1/simd-bytes](base.ref-at-index[u8](i).as[ptr])
-      let block-last = vector/load-unchecked[u8, k1/simd-bytes](base.ref-at-index[u8](i + k - 1).as[ptr])
+      let block-first = vector/load-unchecked[u8, k1/simd-bytes](base.ref-at[u8](i).as[ptr])
+      let block-last = vector/load-unchecked[u8, k1/simd-bytes](base.ref-at[u8](i + k - 1).as[ptr])
       let m = block-first.eq-lanes(first).bit-and(block-last.eq-lanes(last)).to-mask()
       while m != 0 {
-        let j = m.trailing-zeros().as[size]
-        if mem/equals(base.ref-at-index[u8](i + j).as[ptr], needle-base, k) return :some (i + j)
+        let j = m.trailing-zeros().signed()
+        if mem/equals(base.ref-at[u8](i + j).as[ptr], needle-base, k) return :some (i + j)
         m = m.bit-and(m - 1)
       }
       i = i + w
     }
     while i + k <= n {
-      if mem/equals(base.ref-at-index[u8](i).as[ptr], needle-base, k) return :some i
+      if mem/equals(base.ref-at[u8](i).as[ptr], needle-base, k) return :some i
       i = i + 1
     }
     :none

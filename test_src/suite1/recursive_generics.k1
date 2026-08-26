@@ -90,7 +90,7 @@ ns recursive_generics {
     assert-equals(ci2.link.!.v + ci2.v, 12)
     assert(cb.v)
 
-    let f2: *mut fwd-node[int] = mem/new(.{ value = 2, next = ptr/null.rw[fwd-node[int]] })
+    let f2: *mut fwd-node[int] = mem/new(.{ value = 2, next = ptr/null.ref[fwd-node[int]] })
     let f1: *mut fwd-node[int] = mem/new(.{ value = 1, next = f2 })
     let w: fwd-wrapper[int] = .{ head = f1 }
     assert-equals(w.head.value + w.head.next.value, 3)
@@ -103,11 +103,11 @@ ns recursive_generics {
     assert-equals(sub0.bus.ingress.head.value, 9)
     assert-equals(bus0.subscribers.len(), 1)
 
-    let l2: lnode = mem/new(.{ next = ptr/null.rw[lnode-rec], getter = lnode-value.&, value = 2 })
+    let l2: lnode = mem/new(.{ next = ptr/null.ref[lnode-rec], getter = lnode-value.&, value = 2 })
     let l1: lnode = mem/new(.{ next = l2, getter = lnode-value.&, value = 1 })
     assert-equals((l1.getter)(l1) + (l1.next.getter)(l1.next), 3)
 
-    let f: face = mem/new(.{ glyph = ptr/null.rw[slot-rec], num = 7 })
+    let f: face = mem/new(.{ glyph = ptr/null.ref[slot-rec], num = 7 })
     let s: slot = mem/new(.{ owner = f, idx = 3 })
     f.glyph = s
     assert-equals(f.glyph.owner.num + s.owner.glyph.idx, 10)

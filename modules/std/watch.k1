@@ -47,7 +47,7 @@
       return :err "watch/add open of $path failed: ${libc/errno-k1-string()}"
     }
     let change: kevent-t = .{
-      ident = file-fd.as[i64].as[u64],
+      ident = file-fd.widen[i64].unsigned(),
       filter = EVFILT_VNODE,
       flags = EV_ADD | EV_CLEAR,
       fflags = NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB | NOTE_DELETE | NOTE_RENAME,
@@ -58,7 +58,7 @@
       posix/close(file-fd)
       return :err "watch/add kevent for $path failed: ${libc/errno-k1-string()}"
     }
-    w.entries.push(.{ path = path, id = file-fd.as[i64] })
+    w.entries.push(.{ path = path, id = file-fd.widen[i64] })
     :ok
   }
 
@@ -70,14 +70,14 @@
       n = kevent(w.fd, ptr/null, 0, out.data.as[ptr], 8, ptr/null)
     }
     if n < 0 return :err "watch/wait kevent failed: ${libc/errno-k1-string()}"
-    for i in 0.until(n.as[size]) {
+    for i in 0.until(n.widen[size]) {
       let ev = out.get(i)
       if ev.flags.bit-and(EV_ERROR) != 0 continue
       let kind: watch/event-kind = if ev.fflags.bit-and(NOTE_DELETE) != 0 :deleted
         else if ev.fflags.bit-and(NOTE_RENAME) != 0 :renamed
         else :modified
       for entry in w.entries.as-span() {
-        if entry.id == ev.ident.as[i64] {
+        if entry.id == ev.ident.signed() {
           events.push(.{ path = entry.path, kind = kind })
         }
       }
@@ -88,7 +88,7 @@
   fn close(w: *mut watch/watcher) {
     // vnode fds are per-entry on kqueue
     for entry in w.entries.as-span() {
-      posix/close(entry.id.as[i32])
+      posix/close(entry.id.trunc[i32])
     }
     posix/close(w.fd)
     w.entries.clear()
@@ -129,33 +129,33 @@
     if wd < 0 {
       return :err "watch/add of $path failed: ${libc/errno-k1-string()}"
     }
-    w.entries.push(.{ path = path, id = wd.as[i64] })
+    w.entries.push(.{ path = path, id = wd.widen[i64] })
     :ok
   }
 
   fn wait(w: *mut watch/watcher): result[list[watch/event], string] {
     let events = list/empty[watch/event]()
     let buf = buffer/allocate[u8](4096)
-    let n = posix/read(w.fd, buf.data.as[ptr], buf.len.as[u64])
+    let n = posix/read(w.fd, buf.data.as[ptr], buf.len.unsigned())
     while n < 0 and libc/errno() == libc/EINTR {
-      n = posix/read(w.fd, buf.data.as[ptr], buf.len.as[u64])
+      n = posix/read(w.fd, buf.data.as[ptr], buf.len.unsigned())
     }
     if n <= 0 return :err "watch/wait read failed: ${libc/errno-k1-string()}"
     let offset: size = 0
     while offset < n {
-      let ev = buf.data.as[ptr].add-bytes(offset).r[event-t].*
+      let ev = buf.data.as[ptr].add-bytes(offset).ref[event-t].*
       let kind: watch/event-kind =
         if ev.mask.bit-and(IN_DELETE | IN_DELETE_SELF | IN_MOVED_FROM) != 0 :deleted
         else if ev.mask.bit-and(IN_MOVE_SELF | IN_MOVED_TO) != 0 :renamed
         else if ev.mask.bit-and(IN_CREATE) != 0 :created
         else :modified
       for entry in w.entries.as-span() {
-        if entry.id == ev.wd.as[i64] {
+        if entry.id == ev.wd.widen[i64] {
           events.push(.{ path = entry.path, kind = kind })
         }
       }
       // Records are variable-length: a fixed header then name[len]
-      offset = offset + types/stride[event-t]() + ev.len.as[size]
+      offset = offset + types/stride[event-t]() + ev.len.widen[size]
     }
     :ok events
   }

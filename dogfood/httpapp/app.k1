@@ -170,7 +170,7 @@ fn start-mock-publisher(bus: *mut pubsub/bus[span[u8]]) {
   let tid: *mut uv/thread = heap.alloc-t()
   let rc = uv/thread_create(tid, fn arg. {
     uv/thread_setname("publisher\0".data-ptr().as())
-    let bus = arg.rw[pubsub/bus[span[u8]]]()
+    let bus = arg.ref[pubsub/bus[span[u8]]]()
     loop {
       uv/sleep(1000)
       // this thread's tmp arena holds the interpolated event data

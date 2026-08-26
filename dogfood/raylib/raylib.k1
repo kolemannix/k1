@@ -76,8 +76,8 @@ ns(reload) scene {
     clear-background(INK)
 
     for o in orbs {
-      let color = palette(it-index.as[u64])
-      let age = (t - o.born).as[f32]
+      let color = palette(it-index.unsigned())
+      let age = (t - o.born).trunc[f32]
 
       let sats = 9
       for k in 0.until(sats) {

@@ -12,12 +12,12 @@ type mpsc[t] = { head: *mut mpsc-node[t], on-send: notify }
 
 ns for mpsc {
   fn make[t](on-send: notify): *mut mpsc[t] {
-    heap.new(.{ head = ptr/null.rw[mpsc-node[t]](), on-send })
+    heap.new(.{ head = ptr/null.ref[mpsc-node[t]](), on-send })
   }
 
   // Any thread
   fn send[t](self: *mut mpsc[t], value: t) {
-    let node: *mut mpsc-node[t] = heap.new(.{ value, next = ptr/null.rw[mpsc-node[t]]() })
+    let node: *mut mpsc-node[t] = heap.new(.{ value, next = ptr/null.ref[mpsc-node[t]]() })
     loop {
       let old = atomic/load(self.head.&, :relaxed)
       node.next = old
@@ -29,9 +29,9 @@ ns for mpsc {
   // Consumer thread only. Appends every queued value to `out` (assumed
   // empty) in send order; out's pushes go to the system heap.
   fn take[t](self: *mut mpsc[t], out: *mut list[t]) {
-    let node = atomic/xchg(self.head.&, ptr/null.rw[mpsc-node[t]](), :acquire)
+    let node = atomic/xchg(self.head.&, ptr/null.ref[mpsc-node[t]](), :acquire)
     let n = node
-    while not n.as[ptr].is-null() {
+    while not (n is null) {
       out.push-in(heap, n.value)
       let next = n.next
       heap.free-t(n)

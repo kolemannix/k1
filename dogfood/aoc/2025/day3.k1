@@ -29,7 +29,7 @@ fn part1(input: string) {
         if c > lo { lo = c }
       }
     }
-    let joltage = (hi.to-ascii-digit().!.as[int] * 10 + lo.to-ascii-digit().!.as[int])
+    let joltage = (hi.to-ascii-digit().!.widen[int] * 10 + lo.to-ascii-digit().!.widen[int])
     sum = sum + joltage
     println("Result $it-index for bank `$bank`: $joltage $sum")
   }

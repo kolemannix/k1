@@ -72,7 +72,7 @@ ns response-writer {
       driver.write-req,
       connection.client().as-stream(),
       driver.bufs.as-buffer().data-ptr().as(),
-      driver.bufs.len().as[u32],
+      driver.bufs.len().trunc[u32],
       on-write-complete)
     if rc != 0 {
       tprintln("response uv_write failed: $rc")
@@ -97,7 +97,7 @@ ns response-writer {
 
   // The waker target: a parked source has data again (loop thread only)
   fn on-wake(state: ptr) {
-    let driver: *mut driver = state.rw[driver]()
+    let driver: *mut driver = state.ref[driver]()
     if driver.connection.close-state.is-closing { return }
     // A write is in flight; its completion will pump
     if not driver.parked { return }

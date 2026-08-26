@@ -46,8 +46,8 @@ fn map-impl(
     code.writeln("    let ${it.name} = vector/splat[$elem-name, $lanes](${it.value})")
   }
   code.writeln("    while i + $lanes <= len {")
-  code.writeln("      let $binding = vector/load-unchecked[$elem-name, $lanes](sbase.ref-at-index[$elem-name](i).as[ptr])")
-  code.writeln("      ($body).store-unchecked(dbase.ref-at-index[$elem-name](i).as[ptr])")
+  code.writeln("      let $binding = vector/load-unchecked[$elem-name, $lanes](sbase.ref-at[$elem-name](i).as[ptr])")
+  code.writeln("      ($body).store-unchecked(dbase.ref-at[$elem-name](i).as[ptr])")
   code.writeln("      i = i + $lanes")
   code.writeln("    }")
   code.writeln("  }")
@@ -93,7 +93,7 @@ fn reduce-impl(
   code.writeln("  let vacc = vector/splat[$elem-name, $lanes]($identity)")
   code.writeln("  while i + $lanes <= len {")
   code.writeln("    let $acc-binding = vacc")
-  code.writeln("    let $item-binding = vector/load-unchecked[$elem-name, $lanes](sbase.ref-at-index[$elem-name](i).as[ptr])")
+  code.writeln("    let $item-binding = vector/load-unchecked[$elem-name, $lanes](sbase.ref-at[$elem-name](i).as[ptr])")
   code.writeln("    vacc = $body")
   code.writeln("    i = i + $lanes")
   code.writeln("  }")
@@ -143,7 +143,7 @@ fn first-of-impl(name: string, needles: span[char]): string {
     code.writeln("    let needle$it-index = vector/splat[u8, $lanes](${it.as[u8]})")
   }
   code.writeln("    while i + $lanes <= len {")
-  code.writeln("      let chunk = vector/load-unchecked[u8, $lanes](base.ref-at-index[u8](i).as[ptr])")
+  code.writeln("      let chunk = vector/load-unchecked[u8, $lanes](base.ref-at[u8](i).as[ptr])")
   for needles {
     code.writeln("      let m$it-index = chunk.eq-mask(needle$it-index)")
   }
@@ -156,8 +156,8 @@ fn first-of-impl(name: string, needles: span[char]): string {
   code.writeln("      if all != 0 {")
   code.writeln("        let lane = all.trailing-zeros()")
   for needles {
-    code.writeln("        if m$it-index.shift-right(lane.as[u32]).bit-and(1) == 1 {")
-    code.writeln("          return .{ index = i + lane.as[i64], which = $it-index }")
+    code.writeln("        if m$it-index.shift-right(lane.trunc[u32]).bit-and(1) == 1 {")
+    code.writeln("          return .{ index = i + lane.signed(), which = $it-index }")
     code.writeln("        }")
   }
   code.writeln("        crash(\"unreachable: mask bit vanished\")")

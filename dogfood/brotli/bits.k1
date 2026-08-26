@@ -14,7 +14,7 @@ fn store64-le(p: ptr, v: u64) {
 }
 
 fn log2-floor-nonzero(n: u64): size {
-  (63u64 - n.leading-zeros()).as[size]
+  (63u64 - n.leading-zeros()).signed()
 }
 
 // log2 with the property log2(0) == 0, table-backed for small values like the C.
@@ -34,7 +34,7 @@ type bit-writer = {
 ns for bit-writer {
   fn write-bits(self: *mut bit-writer, n-bits: size, bits: u64) {
     let p = self.storage.add-bytes(self.pos >> 3)
-    let v = p.r[u8].*.as[u64] | (bits << ((self.pos & 7).as[u32]))
+    let v = p.ref[u8].*.widen[u64] | (bits << ((self.pos & 7).trunc[u32]))
     store64-le(p, v)
     self.pos = self.pos + n-bits
   }
@@ -49,22 +49,22 @@ ns for bit-writer {
       let n-unchanged = at & 7
       let n-changed = if n < 8 - n-unchanged n else 8 - n-unchanged
       let total = n-unchanged + n-changed
-      let mask = (0xFFFFFFFFu32 << total.as[u32]) | ((1u32 << n-unchanged.as[u32]) - 1)
-      let byte-ref = self.storage.add-bytes(byte-pos).rw[u8]
-      let unchanged-bits = byte-ref.*.as[u32] & mask
-      let changed-bits = b & ((1u32 << n-changed.as[u32]) - 1)
-      byte-ref.* = ((changed-bits << n-unchanged.as[u32]) | unchanged-bits).as[u8]
+      let mask = (0xFFFFFFFFu32 << total.trunc[u32]) | ((1u32 << n-unchanged.trunc[u32]) - 1)
+      let byte-ref = self.storage.add-bytes(byte-pos).ref[u8]
+      let unchanged-bits = byte-ref.*.widen[u32] & mask
+      let changed-bits = b & ((1u32 << n-changed.trunc[u32]) - 1)
+      byte-ref.* = ((changed-bits << n-unchanged.trunc[u32]) | unchanged-bits).trunc[u8]
       n = n - n-changed
-      b = b >> n-changed.as[u32]
+      b = b >> n-changed.trunc[u32]
       at = at + n-changed
     }
   }
 
   fn rewind(self: *mut bit-writer, new-pos: size) {
     let bitpos = new-pos & 7
-    let mask = (1u32 << bitpos.as[u32]) - 1
-    let byte-ref = self.storage.add-bytes(new-pos >> 3).rw[u8]
-    byte-ref.* = (byte-ref.*.as[u32] & mask).as[u8]
+    let mask = (1u32 << bitpos.trunc[u32]) - 1
+    let byte-ref = self.storage.add-bytes(new-pos >> 3).ref[u8]
+    byte-ref.* = (byte-ref.*.widen[u32] & mask).trunc[u8]
     self.pos = new-pos
   }
 }

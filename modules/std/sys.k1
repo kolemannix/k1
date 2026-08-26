@@ -20,7 +20,7 @@ fn exe-path(): string {
       let buf = buffer/allocate[u8](4096)
       let n = posix/readlink("/proc/self/exe".to-c-tmp().ptr, buf.data.as[ptr], 4096)
       if n < 0 crash("exe-path: readlink /proc/self/exe failed")
-      buf.len = n.as[size]
+      buf.len = n
       string/wrap-byte-buffer(buf)
     },
     :wasi or :bare -> crash("exe-path is not available on this platform")
@@ -40,7 +40,7 @@ fn random(upper-bound: u32): u32 {
 
 fn parse-main-args(arg-count: c-int, args: ptr): span[string] {
   let buf = buffer/wrap-raw[ptr](
-    count = arg-count.as[size],
+    count = arg-count.widen[size],
     ptr = args
   )
   let strings = list/from-mapping(buf, fn cstr. string/wrap-c(cstr))
@@ -49,7 +49,7 @@ fn parse-main-args(arg-count: c-int, args: ptr): span[string] {
 
 fn read-line(max-length-bytes: size): result[string, string] {
   let buffer = buffer/allocate[byte](max-length-bytes)
-  let bytes-read: i64 = posix/read(0, buffer.data.as[ptr], buffer.len.as[c-sizet])
+  let bytes-read: i64 = posix/read(0, buffer.data.as[ptr], buffer.len.unsigned())
 
   if bytes-read < 0 {
     return :err "Failed to read line"

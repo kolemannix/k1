@@ -44,7 +44,7 @@ type game-state = {
 }
 
 fn value-at-square(b: bitboard, index: u64): u64 {
-  let shifted = b >> index.as()
+  let shifted = b >> index.trunc()
   let masked = shifted & 1u64
   masked
 }
@@ -55,13 +55,13 @@ fn is-set(b: bitboard, index: u64): bool {
 
 fn value-at-rank(b: bitboard, rank: u64): u64 {
   let rank-start = rank * 8
-  let shifted = b >> rank-start.as[u32]()
+  let shifted = b >> rank-start.trunc[u32]()
   let masked = shifted & RANK_1
   masked
 }
 
 fn index-to-bit(index: u64): bitboard {
-  1u64 << index.as[u32]()
+  1u64 << index.trunc[u32]()
 }
 
 fn print-bitboard(b: bitboard) {
@@ -79,8 +79,8 @@ fn write-bitboard[w: writer](writer: w, b: bitboard) {
     //format-uint(context writer)(value-at-rank(b, rank.as[u64]), base = 2);
 
     for square in rank-start.until(rank-start + 8) {
-      let bit = value-at-square(b, square.as[u64])
-      writer.write-char(u8/to-ascii-digit(bit.as[u8]))
+      let bit = value-at-square(b, square.unsigned())
+      writer.write-char(u8/to-ascii-digit(bit.trunc[u8]))
     }
     writer.write-char('\n')
     rank = rank - 1
@@ -112,7 +112,7 @@ ns for game-state {
     while rank >= 0 {
       let rank-start = rank * 8
       for i in rank-start.until(rank-start + 8) {
-        let i = i.as[u64]
+        let i = i.unsigned()
         if is-set(self.w-pawns, i) { writer.write-char('P') }
         else if is-set(self.w-knights, i) { writer.write-char('N') }
         else if is-set(self.w-bishops, i) { writer.write-char('B') }
@@ -172,7 +172,7 @@ ns for game-state {
      println("White double push")
      print-bitboard(double-push)
      if self.en-passant-file != -1 {
-        let en-passant-target-square-index: u64 = self.en-passant-file.as[u8].as[u64] + 5*8
+        let en-passant-target-square-index: u64 = self.en-passant-file.unsigned().widen[u64] + 5*8
         let en-passant-target-square-bit = index-to-bit(en-passant-target-square-index)
         let en-passant-target-square-occupied = en-passant-target-square-bit & self.b-occupied()
         let _en-passant-attackers = 

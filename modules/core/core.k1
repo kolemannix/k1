@@ -300,13 +300,13 @@ impl show for char { fn show(self: char): string { self.to-string() } }
 fn format-uint[w: writer](context w)(value: u64, base: u64) {
   if value == 0 { w.write-char('0'); return }
   else if value < base {
-    let digit = u8/to-ascii-digit(value.as[u8])
+    let digit = u8/to-ascii-digit(value.trunc[u8])
     w.write-char(digit)
   } else if value < (base * 2) {
     let first = (value / base)
-    let first-digit = u8/to-ascii-digit(first.as[u8])
+    let first-digit = u8/to-ascii-digit(first.trunc[u8])
     let second = value % base
-    let second-digit = u8/to-ascii-digit(second.as[u8])
+    let second-digit = u8/to-ascii-digit(second.trunc[u8])
     w.write-char(first-digit)
     w.write-char(second-digit)
   } else {
@@ -314,7 +314,7 @@ fn format-uint[w: writer](context w)(value: u64, base: u64) {
     let digits = fixlist/uninit[char, 64]
     while remaining > 0 {
       let d = remaining % base
-      let c = u8/to-ascii-digit(d.as[u8])
+      let c = u8/to-ascii-digit(d.trunc[u8])
       digits.push(c)
       remaining = remaining / base
     }
@@ -329,19 +329,19 @@ fn format-uint[w: writer](context w)(value: u64, base: u64) {
 
 impl print for u8 {
   fn print-to[w: writer](self: u8, w) {
-    (self.as[u64]).print-to(w)
+    (self.widen[u64]).print-to(w)
   }
 }
 
 impl print for u16 {
   fn print-to[w: writer](self: u16, w) {
-    (self.as[u64]).print-to(w)
+    (self.widen[u64]).print-to(w)
   }
 }
 
 impl print for u32 {
   fn print-to[w: writer](self: u32, w) {
-    (self.as[u64]).print-to(w)
+    (self.widen[u64]).print-to(w)
   }
 }
 
@@ -353,19 +353,19 @@ impl print for u64 {
 
 impl print for i8 {
   fn print-to[w: writer](self: i8, w) {
-    (self.as[int]).print-to(w)
+    (self.widen[int]).print-to(w)
   }
 }
 
 impl print for i16 {
   fn print-to[w: writer](self: i16, w) {
-    (self.as[int]).print-to(w)
+    (self.widen[int]).print-to(w)
   }
 }
 
 impl print for i32 {
   fn print-to[w: writer](self: i32, w) {
-    (self.as[int]).print-to(w)
+    (self.widen[int]).print-to(w)
   }
 }
 
@@ -377,7 +377,7 @@ impl print for int {
     }
 
     let pos = if neg self.negated() else self
-    format-uint(context w)(pos.as[uint], 10)
+    format-uint(context w)(pos.unsigned(), 10)
   }
 }
 
@@ -422,8 +422,8 @@ impl[s, f] try[t = s, e = f] for result[s, f] {
 // Branchless three-way compare: (a > b) - (a < b) is exactly ordering's -1/0/1 tag.
 // LLVM recognizes this shape and lowers it to its scmp/ucmp intrinsics.
 fn compare-scalars[t: scalar-cmp](a: t, b: t): ordering {
-  let gt = a.gt(b).as-u8().as[i8]
-  let lt = a.lt(b).as-u8().as[i8]
+  let gt = a.gt(b).as-u8().signed()
+  let lt = a.lt(b).as-u8().signed()
   mem/bitcast[i8, ordering](gt - lt)
 }
 
@@ -444,6 +444,20 @@ ns for u8 {
       crash("u8/to-ascii-digit: value $v is out of range (max 61)")
     }
   }
+
+  fn signed(self: u8): i8 { mem/bitcast(self) }
+}
+
+ns for i8 {
+  fn unsigned(self: i8): u8 { mem/bitcast(self) }
+}
+
+ns for u16 {
+  fn signed(self: u16): i16 { mem/bitcast(self) }
+}
+
+ns for i16 {
+  fn unsigned(self: i16): u16 { mem/bitcast(self) }
 }
 
 ns for u32 {
@@ -451,6 +465,7 @@ ns for u32 {
   let max-value: u32 = 0xFFFFFFFF
 
   fn as-bool(self: u32): bool { self != 0 }
+  fn signed(self: u32): i32 { mem/bitcast(self) }
 }
 
 ns for i32 {
@@ -458,11 +473,14 @@ ns for i32 {
   let min-value: i32 = -0x80000000
 
   fn as-bool(self: i32): bool { self != 0 }
+  fn unsigned(self: i32): u32 { mem/bitcast(self) }
 }
 
 ns for i64 {
   let max-value: i64 = 0x7FFFFFFFFFFFFFFF
   let min-value: i64 = -0x8000000000000000
+
+  fn unsigned(self: i64): u64 { mem/bitcast(self) }
 
   fn from-string(s: string): result[i64, string] {
     if s.is-empty() return :err "empty string"
@@ -471,10 +489,10 @@ ns for i64 {
     if neg {
       if magnitude > 0x8000000000000000 return :err "i64 overflow"
       if magnitude == 0x8000000000000000 return :ok i64/min-value
-      :ok magnitude.as[i64].negated()
+      :ok magnitude.signed().negated()
     } else {
-      if magnitude > i64/max-value.as[u64] return :err "i64 overflow"
-      :ok magnitude.as[i64]
+      if magnitude > i64/max-value.unsigned() return :err "i64 overflow"
+      :ok magnitude.signed()
     }
   }
   fn next-pow2(self: i64): i64 {
@@ -482,11 +500,11 @@ ns for i64 {
     if self < 0 crash("i64/next-pow2: value must be positive") else
     if self == 0 return 1
 
-    let next = (self.as[u64]).next-pow2()
-    if next > i64/max-value.as[u64] {
+    let next = (self.unsigned()).next-pow2()
+    if next > i64/max-value.unsigned() {
       crash("i64/next-pow2: value too large to fit in i64")
     }
-    next.as[i64]
+    next.signed()
   }
 
   fn abs(self: i64): i64 {
@@ -499,12 +517,14 @@ ns for u64 {
   let min-value: u64 = 0
   let max-value: u64 = 0xFFFFFFFFFFFFFFFF
 
+  fn signed(self: u64): i64 { mem/bitcast(self) }
+
   fn from-string(s: string): result[u64, string] {
     if s.is-empty() return :err "empty string"
     let o: u64 = 0
     for c in s {
       require c.to-ascii-digit() is :some d else { return :err "not a digit" }
-      let d = d.as[u64]
+      let d = d.widen[u64]
       if o > (u64/max-value - d) / 10 return :err "u64 overflow"
       o = o * 10 + d
     }
@@ -524,7 +544,7 @@ ns for u64 {
 
   fn bitmask-low(n: size): u64 {
     assert(n <= 64)
-    if n == 64 18446744073709551615: u64 else (1usize << n.as[u32]) - 1
+    if n == 64 18446744073709551615: u64 else (1usize << n.trunc[u32]) - 1
   }
 
   fn(intern("llvm.cttz.i64")) _cttz(x: u64, zero-poison: bool): u64
@@ -566,7 +586,7 @@ ns for f64 {
   fn format[w: writer](f: f64, w, places: i32) {
     let stack-buf = array/zeroed[u8, 512]()
     let cap = stack-buf.as-span().len()
-    let written-len: size = k1rt/snprintf_f64(stack-buf.get-base().as[ptr], cap.as[c-sizet], f, places).as[size]
+    let written-len: size = k1rt/snprintf_f64(stack-buf.get-base().as[ptr], cap.unsigned(), f, places).widen[size]
     if written-len <= 0 crash("snprintf_f64 returned $written-len")
     if written-len >= cap crash("f64/format: $places places needs $written-len bytes, cap is $cap")
     w.write-bytes(stack-buf.as-span().slice(0, written-len))
@@ -594,7 +614,7 @@ ns for f64 {
   // -NaN < -inf < ... < -0.0 < +0.0 < ... < +inf < +NaN
   fn total-order-key(self: f64): i64 {
     let bits = mem/bitcast[f64, i64](self)
-    bits.xor(((bits >> 63).as[u64] >> 1).as[i64])
+    bits.xor(((bits >> 63).unsigned() >> 1).signed())
   }
 }
 
@@ -606,7 +626,7 @@ ns for f32 {
   // See f64/total-order-key
   fn total-order-key(self: f32): i32 {
     let bits = mem/bitcast[f32, i32](self)
-    bits.xor(((bits >> 31).as[u32] >> 1).as[i32])
+    bits.xor(((bits >> 31).unsigned() >> 1).signed())
   }
 }
 
@@ -693,7 +713,7 @@ impl one for i64 { fn one(): i64 { 1   } }
 
 impl print for f32 {
   fn print-to[w: writer](self: f32, w) {
-    f64/format(self.as[f64], w, places = -1)
+    f64/format(self.widen[f64], w, places = -1)
   }
 }
 
@@ -717,14 +737,14 @@ impl print for ptr {
 type optref[t] = { inner: *t }
 ns for optref {
   fn make[t](inner: *t): optref[t] { .{ inner } }
-  fn null[t]()         : optref[t] { .{ inner = ptr/null.rw[t] } }
+  fn null[t]()         : optref[t] { ptr/null.ref-opt[t]() }
   fn deref[t](self: optref[t]): ?t {
-    if self.inner.as[ptr].is-null() :none else :some(self.inner.*)
+    if (self.inner is null) :none else :some(self.inner.*)
   }
   fn as-opt[t](self: optref[t]): ?*t {
-    if self.inner.as[ptr].is-null() :none else :some(self.inner)
+    if (self.inner is null) :none else :some(self.inner)
   }
   fn is-null[t](self: optref[t]): bool {
-    self.inner.as[ptr].is-null()
+    self.inner is null
   }
 }

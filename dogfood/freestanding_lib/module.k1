@@ -11,7 +11,7 @@ fn(export) k1_add(a: i64, b: i64): i64 { a + b }
 fn(export) k1_sum(data: ptr, count: size): i64 {
   let sum: i64 = 0
   for i in 0.until(count) {
-    sum = sum + data.add-bytes(i * 8).r[i64].*
+    sum = sum + data.add-bytes(i * 8).ref[i64].*
   }
   sum
 }

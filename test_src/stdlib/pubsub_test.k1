@@ -23,7 +23,7 @@ fn test() {
 
   let src = bus.subscribe("news") || rc-byte-stream
   let wakes = 0
-  src.start(.{ state = (&wakes).as[ptr], wake-fn = fn(p: ptr) { p.rw[int]().* = p.rw[int]().* + 1 } })
+  src.start(.{ state = (&wakes).as[ptr], wake-fn = fn(p: ptr) { p.ref[int]().* = p.ref[int]().* + 1 } })
 
   bus.publish("news", heap-bytes/cloned("hi".span-bytes()).to-rc())
   bus.publish("sports", heap-bytes/cloned("ignored".span-bytes()).to-rc())

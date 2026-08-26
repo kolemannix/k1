@@ -63,7 +63,7 @@ fn test() {
     let w: wire = .{ a = 1, b = 500, c = 30 }
     let m: mixed = .{ tag = 1, inner = .{ x = 42, y = 2 }, tail = 3 }
     m.inner.x = 100
-    w.b + w.a.as[u64] + w.c.as[u64] + m.inner.x.as[u64]
+    w.b + w.a.widen[u64] + w.c.widen[u64] + m.inner.x.widen[u64]
   }
   assert-equals(vm-sum, 631u64)
 

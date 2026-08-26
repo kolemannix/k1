@@ -60,7 +60,7 @@ ns for parse-state {
     let arena = self.arena
     let on-header-complete = self.on-header-complete
     let on-body-complete = self.on-body-complete
-    self.* = empty[empty](arena, user-data.rw[empty], on-header-complete, on-body-complete)
+    self.* = empty[empty](arena, user-data.ref[empty], on-header-complete, on-body-complete)
   }
 
 
@@ -72,7 +72,7 @@ type parser = { parser: llhttp/t, phantom: array[parse-state, 0] }
 #static { assert-equals(types/size[parser], types/size[llhttp/t]); assert-equals(types/align[parser], types/align[llhttp/t]) }
 
 ns for parser {
-  fn data(self: *mut parser): *mut parse-state { self.parser.data.rw[parse-state] }
+  fn data(self: *mut parser): *mut parse-state { self.parser.data.ref[parse-state] }
   fn set-data(self: *mut parser, data: *mut parse-state) { self.parser.data = data.as[ptr] }
 
   fn reset(self: *mut parser) {
@@ -92,12 +92,12 @@ type request = {
 
 fn on-url-part(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let state = parser.data()
-  let bytes: span[char] = span/wrap-raw(data.as[ptr], count.as())
+  let bytes: span[char] = span/wrap-raw(data.as[ptr], count.signed())
   let a = state.arena
   if state.url.is-empty() { state.url.reserve-in(a, 1024) }
   state.url.append-span-in(a, bytes)
   if state.url.len() > 16384 {
-    return llhttp/errno:HPE_USER.value.as[i32]
+    return llhttp/errno:HPE_USER.value.signed()
   }
   0
 }
@@ -108,7 +108,7 @@ fn on-url-complete(_parser: *mut parser): i32 {
 fn on-header-field(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let state = parser.data()
   let a = state.arena
-  let bytes: span[char] = span/wrap-raw(data.as[ptr], count.as())
+  let bytes: span[char] = span/wrap-raw(data.as[ptr], count.signed())
 
   if state.current-header-field.is-empty() { state.current-header-field.reserve-in(a, 256) }
   state.current-header-field.append-span-in(a, bytes)
@@ -121,7 +121,7 @@ fn on-header-field-complete(parser: *mut parser): i32 {
 fn on-header-value(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let state = parser.data()
   let a = state.arena
-  let bytes: span[char] = span/wrap-raw(data.as[ptr], count.as())
+  let bytes: span[char] = span/wrap-raw(data.as[ptr], count.signed())
 
   if state.current-header-value.is-empty() { state.current-header-value.reserve-in(a, 256) }
   state.current-header-value.append-span-in(a, bytes)
@@ -153,7 +153,7 @@ fn on-headers-complete(parser: *mut parser): i32 {
   let header: header = .{
     url,
     headers = state.headers,
-    method = mem/bitcast(llhttp/get_method(parser.as()).as[u32]),
+    method = mem/bitcast(llhttp/get_method(parser.as()).widen[u32]),
 
     keep-alive,
     content-length = state.content-length,
@@ -161,14 +161,14 @@ fn on-headers-complete(parser: *mut parser): i32 {
 
   (state.on-header-complete)(state.user-data, header) is {
     :proceed -> 0,
-    :reject -> llhttp/errno:HPE_PAUSED.value.as[i32],
+    :reject -> llhttp/errno:HPE_PAUSED.value.signed(),
   }
 }
 
 fn impl-on-body(parser: *mut parser, data: *mut u8, count: usize): i32 {
   let state = parser.data()
   let a = state.arena
-  let bytes: span[byte] = span/wrap-raw(data.as[ptr], count.as())
+  let bytes: span[byte] = span/wrap-raw(data.as[ptr], count.signed())
   // FIXME: streamed request bodies — hand chunks to the handler as they
   // arrive instead of buffering the whole body
   state.body-chunks.push-in(a, bytes)
@@ -179,7 +179,7 @@ fn impl-on-body-complete(parser: *mut parser): i32 {
   (state.on-body-complete)(state.user-data, state.body-chunks.as-span())
   // Pause at every message boundary: one request in flight per connection.
   // finish-request resets the parser and restarts reads
-  llhttp/errno:HPE_PAUSED.value.as[i32]
+  llhttp/errno:HPE_PAUSED.value.signed()
 }
 
 fn parser-init[user-data](
@@ -225,7 +225,7 @@ fn tick(
   let result = llhttp/execute(
     parser = parser.parser.&,
     data   = bytes.buffer.data,
-    len    = bytes.len().as[usize]
+    len    = bytes.len().unsigned()
   )
   result is {
     :HPE_OK -> :ok,

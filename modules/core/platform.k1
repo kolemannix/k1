@@ -97,10 +97,10 @@ ns platform {
     type io-result = { raw: i64 }
 
     impl try[t = size, e = i32] for io-result {
-      fn error(e: i32): io-result { .{ raw = e.as[i64].negated() } }
+      fn error(e: i32): io-result { .{ raw = e.widen[i64].negated() } }
       fn value(t: size): io-result { .{ raw = t } }
       fn is-ok(self): bool { self.raw >= 0 }
-      fn get-error(self): i32 { self.raw.negated().as[i32] }
+      fn get-error(self): i32 { self.raw.negated().trunc[i32] }
       fn get-value(self): size { self.raw }
     }
 
@@ -424,13 +424,13 @@ ns platform {
           end = cur + r.len
         }
         let base = cur
-        base.as[ptr].rw[size].* = size-arg
+        base.as[ptr].ref[size].* = size-arg
         cur = base + needed
         (base + HEADER).as[ptr]
       }
 
       fn realloc(old-ptr: ptr, new-size: size): ptr {
-        let old-size = old-ptr.sub-bytes(HEADER).r[size].*
+        let old-size = old-ptr.sub-bytes(HEADER).ref[size].*
         if new-size <= old-size return old-ptr
         let new-ptr = alloc(new-size)
         mem/copy(dst = new-ptr, src = old-ptr, count = old-size)
@@ -521,7 +521,7 @@ ns platform {
         let loc =
           if k1/is-static { k1/host-platform #is { :posix-macos -> c/errno-location-macos(), :posix-linux or :wasi or :bare -> c/errno-location-linux() } }
           else { k1/platform #is { :posix-macos -> c/errno-location-macos(), :posix-linux or :wasi or :bare -> c/errno-location-linux() } }
-        loc.r[c-int].*
+        loc.ref[c-int].*
       }
 
       fn reserve(min-size: size): memory/region {
@@ -544,7 +544,7 @@ ns platform {
       }
 
       fn commit(base: ptr, len: size) {
-        let page = c/getpagesize().as[size]
+        let page = c/getpagesize().widen[size]
         let start = base.as[size] / page * page
         let end = (base.as[size] + len + page - 1) / page * page
         if c/mprotect(start.as[ptr], end - start, c/PROT_READ | c/PROT_WRITE) != 0 {
@@ -562,18 +562,18 @@ ns platform {
       fn free(p: ptr) { c/free(p) }
 
       fn write(file-no: i32, data: ptr, count: size): i64 {
-        let n = c/write(file-no, data, count.as[c-sizet])
+        let n = c/write(file-no, data, count.unsigned())
         while n < 0 and errno-now() == c/EINTR {
-          n = c/write(file-no, data, count.as[c-sizet])
+          n = c/write(file-no, data, count.unsigned())
         }
-        if n < 0 { 0 - errno-now().as[i64] } else n
+        if n < 0 { 0 - errno-now().widen[i64] } else n
       }
       fn read(file-no: i32, buffer: ptr, count: size): i64 {
-        let n = c/read(file-no, buffer, count.as[c-sizet])
+        let n = c/read(file-no, buffer, count.unsigned())
         while n < 0 and errno-now() == c/EINTR {
-          n = c/read(file-no, buffer, count.as[c-sizet])
+          n = c/read(file-no, buffer, count.unsigned())
         }
-        if n < 0 { 0 - errno-now().as[i64] } else n
+        if n < 0 { 0 - errno-now().widen[i64] } else n
       }
       fn is-tty(file-no: i32): bool { c/isatty(file-no) == 1 }
       fn open-to-read(path: string): i32 { c/open(path.to-c-tmp().ptr, c/O_RDONLY) }
@@ -608,7 +608,7 @@ ns platform {
         let done: size = 0
         while done < count {
           let n = if count - done > 256 256 else count - done
-          if c/getentropy(dest.add-bytes(done), n.as[c-sizet]) != 0 crash("getentropy failed")
+          if c/getentropy(dest.add-bytes(done), n.unsigned()) != 0 crash("getentropy failed")
           done = done + n
         }
       }
@@ -634,7 +634,7 @@ ns platform {
       fn counter-to-nanos(counter: u64): u64 {
         if on-macos() {
           if timebase.denom == 0 { let _ = c/mach_timebase_info(timebase.&) }
-          counter * timebase.numer.as[u64] / timebase.denom.as[u64]
+          counter * timebase.numer.widen[u64] / timebase.denom.widen[u64]
         } else counter
       }
 
@@ -653,7 +653,7 @@ ns platform {
       }
       fn sleep-ms(ms: u64) {
         let req: c/timespec = .{ tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
-        let _ = c/nanosleep(req.&, ptr/null.rw[c/timespec]())
+        let _ = c/nanosleep(req.&, ptr/null.ref[c/timespec]())
       }
 
       fn pipe(): { read: i32, write: i32 } {
@@ -669,12 +669,12 @@ ns platform {
       fn environ-ptr(): ptr {
         if k1/is-static {
           k1/host-platform #is {
-            :posix-macos -> c/ns-get-environ().r[ptr].*,
+            :posix-macos -> c/ns-get-environ().ref[ptr].*,
             :posix-linux or :wasi or :bare -> c/environ
           }
         } else {
           k1/platform #is {
-            :posix-macos -> c/ns-get-environ().r[ptr].*,
+            :posix-macos -> c/ns-get-environ().ref[ptr].*,
             :posix-linux or :wasi or :bare -> c/environ
           }
         }
@@ -751,7 +751,7 @@ ns platform {
       type iovec = { buf: u32, len: u32 }
 
       fn a32(p: ptr): u32 {
-        p.as[size].as[u32]
+        p.as[size].trunc[u32]
       }
 
       let PAGE-SIZE: size = 65536
@@ -777,13 +777,13 @@ ns platform {
         let prev = ptr/null
         let cur = freelist
         while not cur.is-null() {
-          let next = cur.r[ptr].*
-          let len = cur.add-bytes(8).r[size].*
+          let next = cur.ref[ptr].*
+          let len = cur.add-bytes(8).ref[size].*
           if len >= min-size {
             if prev.is-null() {
               freelist = next
             } else {
-              prev.rw[ptr].* = next
+              prev.ref[ptr].* = next
             }
             mem/set(dst = cur, value = 0, count = len)
             return .{ base = cur, len = min-size }
@@ -800,35 +800,35 @@ ns platform {
       }
 
       fn release(r: memory/region) {
-        r.base.rw[ptr].* = freelist
-        r.base.add-bytes(8).rw[size].* = r.len
+        r.base.ref[ptr].* = freelist
+        r.base.add-bytes(8).ref[size].* = r.len
         freelist = r.base
       }
 
       fn write(file-no: i32, data: ptr, count: size): i64 {
-        let iov: iovec = .{ buf = a32(data), len = count.as[u32] }
+        let iov: iovec = .{ buf = a32(data), len = count.trunc[u32] }
         let nwritten: u32 = 0
         let err = fd-write(file-no, a32(iov.&.as[ptr]), 1, a32(nwritten.&.as[ptr]))
         while err == EINTR {
           err = fd-write(file-no, a32(iov.&.as[ptr]), 1, a32(nwritten.&.as[ptr]))
         }
-        if err != 0 { 0 - err.as[i64] } else nwritten.as[i64]
+        if err != 0 { 0 - err.widen[i64] } else nwritten.widen[i64]
       }
 
       fn read(file-no: i32, buffer: ptr, count: size): i64 {
-        let iov: iovec = .{ buf = a32(buffer), len = count.as[u32] }
+        let iov: iovec = .{ buf = a32(buffer), len = count.trunc[u32] }
         let nread: u32 = 0
         let err = fd-read(file-no, a32(iov.&.as[ptr]), 1, a32(nread.&.as[ptr]))
         while err == EINTR {
           err = fd-read(file-no, a32(iov.&.as[ptr]), 1, a32(nread.&.as[ptr]))
         }
-        if err != 0 { 0 - err.as[i64] } else nread.as[i64]
+        if err != 0 { 0 - err.widen[i64] } else nread.widen[i64]
       }
 
       fn is-tty(file-no: i32): bool {
         let stat = array/zeroed[u8, 24]()
         if fd-fdstat-get(file-no, a32(stat.&.as[ptr])) != 0 return false
-        stat.&.as[ptr].r[u8].* == FILETYPE_CHARACTER_DEVICE
+        stat.&.as[ptr].ref[u8].* == FILETYPE_CHARACTER_DEVICE
       }
 
       fn open-to-read(path: string): i32 { let _ = path; crash("file io is not supported on wasi") }
@@ -848,7 +848,7 @@ ns platform {
       }
 
       fn random-fill(dest: ptr, count: size) {
-        if random-get(a32(dest), count.as[u32]) != 0 crash("wasi random_get failed")
+        if random-get(a32(dest), count.trunc[u32]) != 0 crash("wasi random_get failed")
       }
 
       // The subscription tag is one byte at offset 8 padded to 16; carried as
@@ -884,12 +884,12 @@ ns platform {
         let buf-size: u32 = 0
         if environ-sizes-get(a32(count.&.as[ptr]), a32(buf-size.&.as[ptr])) != 0 return :none
         if count == 0 return :none
-        let entry-ptrs = mem/alloc-layout(count.as[size] * 4, 4)
-        let entry-bytes = mem/alloc-layout(buf-size.as[size], 1)
+        let entry-ptrs = mem/alloc-layout(count.widen[size] * 4, 4)
+        let entry-bytes = mem/alloc-layout(buf-size.widen[size], 1)
         if environ-get(a32(entry-ptrs), a32(entry-bytes)) != 0 return :none
-        for i in 0.until(count.as[size]) {
-          let entry-addr = entry-ptrs.add-bytes(i * 4).r[u32].*
-          let entry = string/wrap-c(entry-addr.as[size].as[ptr])
+        for i in 0.until(count.widen[size]) {
+          let entry-addr = entry-ptrs.add-bytes(i * 4).ref[u32].*
+          let entry = string/wrap-c(entry-addr.widen[size].as[ptr])
           if entry.starts-with(name) and entry.drop(name.len()).starts-with("=") {
             return :some(entry.drop(name.len() + 1))
           }

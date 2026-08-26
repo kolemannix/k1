@@ -236,10 +236,10 @@ fn bump-rgb3(x: foo/rgb3): foo/rgb3 {
 }
 
 fn sum-fn(a: u64, b: u64, c: u64, d: u64): i32 {
-  (a + b + c + d).as[i32]
+  (a + b + c + d).trunc[i32]
 }
 fn sum-fn-struct(s: { a: u64, b: u64, c: u64, d: u64 }): i32 {
-  (s.a + s.b + s.c + s.d).as[i32]
+  (s.a + s.b + s.c + s.d).trunc[i32]
 }
 
 // TODO: abi/ffi test some 'sum' types

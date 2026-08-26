@@ -39,7 +39,7 @@ fn check-round-trip(name: string, input: span[u8], encoded: span[u8]) {
 }
 
 fn check-input(name: string, input: span[u8], quality: size) {
-  let c-out = c-compress(input, quality.as[u64].as[u32])
+  let c-out = c-compress(input, quality.unsigned().trunc[u32])
 
   let e = encoder/new-with-quality-in(mem/current-arena(), quality)
   let k1-out: list[u8] = list/empty()
@@ -85,7 +85,7 @@ fn make-corpora(): list[{ name: string, data: span[u8] }] {
   let repeated = list/empty[u8]()
   let i: size = 0
   while i < 100000 {
-    repeated.push((i % 251).as[u8])
+    repeated.push((i % 251).trunc[u8])
     i = i + 1
   }
   corpora.push(.{ name = "cycle-251", data = repeated.as-span() })
@@ -101,7 +101,7 @@ fn make-corpora(): list[{ name: string, data: span[u8] }] {
     state = state ^ (state << 13)
     state = state ^ (state >> 7)
     state = state ^ (state << 17)
-    rand.push((state & 0xFF).as[u8])
+    rand.push((state & 0xFF).trunc[u8])
     i = i + 1
   }
   corpora.push(.{ name = "random-300k", data = rand.as-span() })
@@ -134,7 +134,7 @@ fn bench-one(name: string, input: span[u8], quality: size, reps: size) {
   let k1-nanos = time/counter-to-nanos(time/read-cpu-counter() - k1-start)
 
   // Same shape for the C encoder (stream instance, lgwin 18).
-  let cq = quality.as[u64].as[u32]
+  let cq = quality.unsigned().trunc[u32]
   c-compress(input, cq) // warmup
   let c-start = time/read-cpu-counter()
   r = 0

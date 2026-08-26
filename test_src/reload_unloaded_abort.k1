@@ -3,6 +3,6 @@ ns(reload) handlers {
 }
 
 fn main(): i32 {
-  handlers/get().as[i32]
+  handlers/get().trunc[i32]
 }
 //abortmsg: reloadable ns handlers not loaded; call handlers/load() (called: get)

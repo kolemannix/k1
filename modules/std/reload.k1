@@ -50,7 +50,7 @@ ns reload {
   fn find-descriptor(ns-path: string): ?*descriptor {
     let self-lib = core/platform/dylib/open-self()
     core/platform/dylib/sym(self-lib, "__k1_reload_ns_${ns-path}") is {
-      :some(raw) -> :some(raw.r[descriptor]),
+      :some(raw) -> :some(raw.ref[descriptor]),
       :none -> :none
     }
   }
@@ -103,12 +103,12 @@ ns reload {
         path = heap-string/cloned(dylib-path),
       }
     }
-    if hash-raw.r[u64].* != descriptor.api-hash {
+    if hash-raw.ref[u64].* != descriptor.api-hash {
       return :err :api-changed .{ ns-path = heap-string/cloned(ns-path) }
     }
 
     // Resolve every fn before patching anything, so a load fully succeeds or does not occur
-    let entries = span/wrap-raw[entry](descriptor.entries, descriptor.entry-count.as[size])
+    let entries = span/wrap-raw[entry](descriptor.entries, descriptor.entry-count.signed())
     let addrs = list/with-capacity[ptr](entries.len())
     for e in entries {
       let addr = core/platform/dylib/sym(handle, string/wrap-c(e.symbol)) is {

@@ -30,21 +30,21 @@ impl hash for string {
     let FNV_PRIME: u64 = 0x100000001b3
     let h = FNV_OFFSET
     for b in self.span-bytes() {
-      h = (h ^ b.as[u64]) * FNV_PRIME
+      h = (h ^ b.widen[u64]) * FNV_PRIME
     }
     fmix64(h)
   }
 }
 
-impl hash for u8  { fn hash(self): u64 { fmix64(self.as[u64]) } }
-impl hash for u16 { fn hash(self): u64 { fmix64(self.as[u64]) } }
-impl hash for u32 { fn hash(self): u64 { fmix64(self.as[u64]) } }
+impl hash for u8  { fn hash(self): u64 { fmix64(self.widen[u64]) } }
+impl hash for u16 { fn hash(self): u64 { fmix64(self.widen[u64]) } }
+impl hash for u32 { fn hash(self): u64 { fmix64(self.widen[u64]) } }
 impl hash for u64 { fn hash(self): u64 { fmix64(self) } }
-impl hash for i8  { fn hash(self): u64 { fmix64(self.as[i64].as[u64]) } }
-impl hash for i16 { fn hash(self): u64 { fmix64(self.as[i64].as[u64]) } }
-impl hash for i32 { fn hash(self): u64 { fmix64(self.as[i64].as[u64]) } }
-impl hash for i64 { fn hash(self): u64 { fmix64(self.as[u64]) } }
-impl hash for char { fn hash(self): u64 { fmix64(self.as[u8].as[u64]) } }
+impl hash for i8  { fn hash(self): u64 { fmix64(self.widen[i64].unsigned()) } }
+impl hash for i16 { fn hash(self): u64 { fmix64(self.widen[i64].unsigned()) } }
+impl hash for i32 { fn hash(self): u64 { fmix64(self.widen[i64].unsigned()) } }
+impl hash for i64 { fn hash(self): u64 { fmix64(self.unsigned()) } }
+impl hash for char { fn hash(self): u64 { fmix64(self.as[u8].widen[u64]) } }
 impl hash for bool {
   fn hash(self): u64 {
     let v: u64 = if self 1 else 0
@@ -110,7 +110,7 @@ ns for map {
     let mask = new-cap - 1
     for s in old {
       if s.hash >= 2 {
-        let idx = s.hash.as[size] & mask
+        let idx = s.hash.signed() & mask
         while new-slots.get-unchecked(idx).hash != EMPTY {
           idx = (idx + 1) & mask
         }
@@ -141,7 +141,7 @@ ns for map {
   fn _find-index[k, v](self: map[k, v], key: k, h: u64): ?size where k: equals {
     if self.count == 0 return :none
     let mask = self.slots.len - 1
-    let idx = h.as[size] & mask
+    let idx = h.signed() & mask
     loop {
       let s = self.slots.get-ref-unchecked(idx)
       if s.hash == h and s.key == key break :some idx
@@ -155,7 +155,7 @@ ns for map {
   fn _probe-insert[k, v](self: map[k, v], key: k, h: u64): { idx: size, found: bool, from-tombstone: bool }
     where k: equals {
     let mask = self.slots.len - 1
-    let idx = h.as[size] & mask
+    let idx = h.signed() & mask
     let tombstone: ?size = :none
     loop {
       let s = self.slots.get-ref-unchecked(idx)

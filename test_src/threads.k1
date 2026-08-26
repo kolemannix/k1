@@ -28,7 +28,7 @@ fn main(): i32 {
   let input = arena.push(42)
   let output = arena.alloc-t[*int]()
 
-  let handle: std/thread/thread = ptr/null.rw[empty]()
+  let handle: std/thread/thread = ptr/null.ref[empty]()
   std/thread/start(handle.&, run, input)
   std/thread/join(handle, output)
 

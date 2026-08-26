@@ -17,11 +17,11 @@ fn simple-struct() {
   assert-equals(p.y, some(2))
 }
 
-fn widen-i8(x: i8): i64 { x.as[i64] }
-fn widen-i16(x: i16): i64 { x.as[i32].as[i64] }
-fn widen-i32(x: i32): i64 { x.as[i64] }
-fn widen-u32(x: u32): u64 { x.as[u64] }
-fn narrow-i64(x: i64): i32 { x.as[i32] }
+fn widen-i8(x: i8): i64 { x.widen[i64] }
+fn widen-i16(x: i16): i64 { x.widen[i32].widen[i64] }
+fn widen-i32(x: i32): i64 { x.widen[i64] }
+fn widen-u32(x: u32): u64 { x.widen[u64] }
+fn narrow-i64(x: i64): i32 { x.trunc[i32] }
 
 fn signed-widening() {
   assert-equals[i64](#static widen-i8(-100), widen-i8(-100))

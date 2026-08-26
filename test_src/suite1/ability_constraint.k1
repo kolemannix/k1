@@ -11,7 +11,7 @@ ns ability_constraint {
   }
   
   impl num for int {
-    fn num(self): i32 { self.as() }
+    fn num(self): i32 { self.trunc() }
   }
   
   fn test() {

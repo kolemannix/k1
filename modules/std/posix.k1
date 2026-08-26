@@ -86,7 +86,7 @@ ns posix {
   let(extern) environ: ptr
   fn environ-ptr(): ptr {
     k1/platform #is {
-      :posix-macos -> _NSGetEnviron().r[ptr].*,
+      :posix-macos -> _NSGetEnviron().ref[ptr].*,
       :posix-linux or :wasi or :bare -> environ
     }
   }

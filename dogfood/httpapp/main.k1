@@ -147,7 +147,7 @@ macro tprintln(arg) {
 fn tprintln-log[t: print](t) {
   let thread-self = uv/thread_self()
   let thread-name-buf = array/zeroed[u8, 256]()
-  let _rc = uv/thread_getname(&thread-self, thread-name-buf.get-base(), thread-name-buf.len().as())
+  let _rc = uv/thread_getname(&thread-self, thread-name-buf.get-base(), thread-name-buf.len().unsigned())
   let thread-name = string/wrap-c(thread-name-buf.base-ptr())
 
   println("[$thread-name] $t")
@@ -187,7 +187,7 @@ fn close-connection(conn: *mut connection) {
 fn alloc-read-buffer(handle: *mut uv/handle, suggested-size: usize, buf: *mut uv/buf) {
   let connection = handle.get-data[connection]()
   tprintln("[c${connection.serial-no}] alloc-read-buffer, size $suggested-size")
-  let byte-buffer = connection.request-arena.alloc-buffer[u8](suggested-size.as[size])
+  let byte-buffer = connection.request-arena.alloc-buffer[u8](suggested-size.signed())
   buf.* = uv/buf/wrap-buffer(byte-buffer)
 }
 
@@ -220,7 +220,7 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
   let connection = client.get-data[connection]()
   tprintln("on_client_read $nread conn ${connection.serial-no}")
   if nread < 0 {
-    let raw-errno = nread.as[i32]
+    let raw-errno = nread.trunc[i32]
     let uv-errno = uv/errno/from-i32(raw-errno)
     uv-errno is {
       :UV_EOF or :UV_ECONNRESET -> {
@@ -468,7 +468,7 @@ fn framework-init(uv-loop: *mut uv-loop): *mut framework-deps {
 }
 
 fn notify-pubsub-async(state: ptr) {
-  let rc = uv/async_send(state.rw[uv/async]())
+  let rc = uv/async_send(state.ref[uv/async]())
   if rc < 0 crash("uv_async_send for pubsub failed: $rc")
 }
 
@@ -501,7 +501,7 @@ fn start-app[deps](context arena: *mut arena)(framework: *mut framework-deps, ma
   }
 
   let addr: uv/sockaddr_in = uninit
-  let a = "0.0.0.0\0".data-ptr().rw[u8]
+  let a = "0.0.0.0\0".data-ptr().ref[u8]
   let port: i32 = 3000
   if uv/ip4_addr(a, port, &addr) != 0 {
     return :err "uv_ip4_addr failed"

@@ -612,7 +612,11 @@ The guide covers field references, but tests also use:
 - `&x` / `&array` to take addresses.
 - `ptr/null`.
 - `.as[ptr]` and `.as[*t]` casts.
-- `.r[t]` to read a value from a raw pointer.
+- `.ref[t]` to assert a raw pointer as `*t` (`.ref-opt[t]` wraps it as
+  `optref[t]`, `.ref-at[t](i)` refs element `i`, compiled as gep).
+- `x is null` pattern-matches null on both `ptr` and `*t` — no fn call.
+  Parenthesize when the consequent is an enum literal:
+  `if (x is null) :none else ...`.
 - Multi-level references such as `***` in patterns.
 
 See `test_src/suite1/pointer.k1`,
