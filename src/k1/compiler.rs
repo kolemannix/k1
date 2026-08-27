@@ -11,7 +11,7 @@ use crate::kmem::{self, MStr, Mem};
 use crate::lex::SpanId;
 use crate::parse::{IdentPool, StringId, write_source_location};
 use crate::typer::{LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId, TypedProgram};
-use crate::{kpath, typer};
+use crate::{SV8, kpath, typer};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
 use log::{error, info};
@@ -694,38 +694,39 @@ pub struct StartedSetup {
 
 /// `None` when the declared outputs are already fresh. Otherwise the stamp is
 /// cleared and the declared outputs removed, so a failed run reads as stale
-pub fn start_setup(req: &SetupRequest) -> Result<Option<StartedSetup>> {
-    let mut scratch: Mem<()> = Mem::make();
+pub fn start_setup<Tag>(
+    req: &SetupRequest,
+    scratch: &mut Mem<Tag>,
+) -> Result<Option<StartedSetup>> {
     let module_name = req.idents.get_string(req.module_name);
     let module_dir = req.idents.get_string(req.module_dir);
-    let root_path = kpath::join_tmp(&mut scratch, req.idents, req.module_dir, req.root_filename);
+    let root_path = kpath::join_tmp(scratch, req.idents, req.module_dir, req.root_filename);
     let root_src = fs::read_to_string(Path::new(root_path.as_str())).map_err(|e| {
         anyhow::anyhow!(
             "module '{module_name}' declares setup but {root_path} could not be read: {e}"
         )
     })?;
 
-    let fingerprint = setup_fingerprint(req, &mut scratch, &root_src)?;
-    let setup_out_dir =
-        kpath::join_tmp(&mut scratch, req.idents, req.module_dir, (".k1-out", "setup"));
-    let stamp_path = kpath::join_tmp(&mut scratch, req.idents, setup_out_dir.as_str(), "stamp");
+    let fingerprint = setup_fingerprint(req, scratch, &root_src)?;
+    let setup_out_dir = kpath::join_tmp(scratch, req.idents, req.module_dir, (".k1-out", "setup"));
+    let stamp_path = kpath::join_tmp(scratch, req.idents, setup_out_dir.as_str(), "stamp");
 
-    if !req.force && setup_is_fresh(req, &mut scratch, stamp_path.as_str(), &fingerprint) {
+    if !req.force && setup_is_fresh(req, scratch, stamp_path.as_str(), &fingerprint) {
         return Ok(None);
     }
 
     fs::create_dir_all(Path::new(setup_out_dir.as_str()))?;
-    let lock_path = kpath::join_tmp(&mut scratch, req.idents, setup_out_dir.as_str(), "lock");
+    let lock_path = kpath::join_tmp(scratch, req.idents, setup_out_dir.as_str(), "lock");
     let lock = SetupLock::acquire(lock_path.as_str())?;
     // Another process may have completed this setup while we waited on the lock
-    if !req.force && setup_is_fresh(req, &mut scratch, stamp_path.as_str(), &fingerprint) {
+    if !req.force && setup_is_fresh(req, scratch, stamp_path.as_str(), &fingerprint) {
         return Ok(None);
     }
 
     eprintln!("Setting up module '{module_name}' (running fn setup in {root_path})...");
     let _ = fs::remove_file(Path::new(stamp_path.as_str()));
     for output in req.outputs {
-        let output_path = kpath::join_tmp(&mut scratch, req.idents, req.module_dir, *output);
+        let output_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *output);
         let p = Path::new(output_path.as_str());
         if p.is_dir() {
             fs::remove_dir_all(p)?;
@@ -736,21 +737,23 @@ pub fn start_setup(req: &SetupRequest) -> Result<Option<StartedSetup>> {
     Ok(Some(StartedSetup { fingerprint, _lock: lock, _cwd: CwdGuard::enter(module_dir) }))
 }
 
-pub fn finish_setup(req: &SetupRequest, started: StartedSetup) -> Result<()> {
-    let mut scratch: Mem<()> = Mem::make();
+pub fn finish_setup<Tag>(
+    req: &SetupRequest,
+    started: StartedSetup,
+    scratch: &mut Mem<Tag>,
+) -> Result<()> {
     let module_name = req.idents.get_string(req.module_name);
-    let outputs = setup_output_manifest(req, &mut scratch)
+    let outputs = setup_output_manifest(req, scratch)
         .map_err(|e| anyhow::anyhow!("fn setup for module '{module_name}' completed but {e}"))?;
-    let setup_out_dir =
-        kpath::join_tmp(&mut scratch, req.idents, req.module_dir, (".k1-out", "setup"));
-    let stamp_path = kpath::join_tmp(&mut scratch, req.idents, setup_out_dir.as_str(), "stamp");
+    let stamp_path =
+        kpath::join_tmp(scratch, req.idents, req.module_dir, (".k1-out", ("setup", "stamp")));
     fs::write(Path::new(stamp_path.as_str()), format!("{}{outputs}", started.fingerprint))?;
     Ok(())
 }
 
-fn setup_is_fresh(
+fn setup_is_fresh<Tag>(
     req: &SetupRequest,
-    scratch: &mut Mem<()>,
+    scratch: &mut Mem<Tag>,
     stamp_path: &str,
     fingerprint: &str,
 ) -> bool {
@@ -760,42 +763,46 @@ fn setup_is_fresh(
     let Ok(outputs) = setup_output_manifest(req, scratch) else {
         return false;
     };
-    existing == format!("{fingerprint}{outputs}")
+    existing.strip_prefix(fingerprint) == Some(outputs.as_str())
+}
+
+/// One stamp line: the file's module-relative path and content hash
+fn writeln_file_hash(s: &mut String, label: &str, module_dir: &str, file: &str) -> Result<()> {
+    use std::fmt::Write;
+    let content = fs::read(Path::new(file))
+        .map_err(|e| anyhow::anyhow!("failed to read setup {label} {file}: {e}"))?;
+    let rel = file.strip_prefix(module_dir).unwrap_or(file).trim_start_matches('/');
+    writeln!(s, "{label}-file: {} {:016x}", rel, content_hash64(&content)).unwrap();
+    Ok(())
 }
 
 /// The output half of the stamp: every file under every declared output, hashed
-fn setup_output_manifest(req: &SetupRequest, scratch: &mut Mem<()>) -> Result<String> {
-    use std::fmt::Write;
+fn setup_output_manifest<Tag>(req: &SetupRequest, scratch: &mut Mem<Tag>) -> Result<String> {
     let module_dir = req.idents.get_string(req.module_dir);
     let mut s = String::new();
+    let mut matched: Vec<String> = vec![];
     for output in req.outputs {
         let output_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *output);
         if !Path::new(output_path.as_str()).exists() {
             bail!("did not produce declared output '{}'", req.idents.get_string(*output));
         }
-        let mut matched: Vec<String> = vec![];
+        matched.clear();
         collect_input_output_files(output_path.as_str(), &mut matched)?;
         matched.sort();
         for file in &matched {
-            let content = fs::read(Path::new(file))
-                .map_err(|e| anyhow::anyhow!("failed to read setup output {file}: {e}"))?;
-            let rel = file.strip_prefix(module_dir).unwrap_or(file).trim_start_matches('/');
-            writeln!(s, "output-file: {} {:016x}", rel, content_hash64(&content)).unwrap();
+            writeln_file_hash(&mut s, "output", module_dir, file)?;
         }
     }
     Ok(s)
 }
 
-fn setup_fingerprint(req: &SetupRequest, scratch: &mut Mem<()>, root_src: &str) -> Result<String> {
+fn setup_fingerprint<Tag>(
+    req: &SetupRequest,
+    scratch: &mut Mem<Tag>,
+    root_src: &str,
+) -> Result<String> {
     use std::fmt::Write;
     let module_dir = req.idents.get_string(req.module_dir);
-    let get_strings = |ids: &[StringId]| {
-        let mut strings = Vec::with_capacity(ids.len());
-        for id in ids {
-            strings.push(req.idents.get_string(*id));
-        }
-        strings
-    };
     let mut s = String::new();
     writeln!(s, "k1-setup-stamp v3").unwrap();
     writeln!(s, "target: {}", req.target.to_str()).unwrap();
@@ -806,25 +813,32 @@ fn setup_fingerprint(req: &SetupRequest, scratch: &mut Mem<()>, root_src: &str) 
         content_hash64(root_src.as_bytes())
     )
     .unwrap();
-    writeln!(s, "outputs: {}", get_strings(req.outputs).join("|")).unwrap();
-    writeln!(s, "inputs: {}", get_strings(req.inputs).join("|")).unwrap();
-    let mut output_paths: Vec<MStr<()>> = Vec::with_capacity(req.outputs.len());
-    for o in req.outputs {
-        output_paths.push(kpath::join_tmp(scratch, req.idents, req.module_dir, *o));
+    for (label, ids) in [("outputs", req.outputs), ("inputs", req.inputs)] {
+        write!(s, "{label}: ").unwrap();
+        for (i, id) in ids.iter().enumerate() {
+            if i > 0 {
+                s.push('|');
+            }
+            s.push_str(req.idents.get_string(*id));
+        }
+        s.push('\n');
     }
+    let mut output_paths: kmem::List<MStr<Tag>, Tag> = scratch.new_list(req.outputs.len() as u32);
+    for o in req.outputs {
+        let path = kpath::join_tmp(scratch, req.idents, req.module_dir, *o);
+        output_paths.push(path);
+    }
+    let mut matched: Vec<String> = vec![];
     for input in req.inputs {
         let input_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *input);
-        let mut matched: Vec<String> = vec![];
+        matched.clear();
         collect_input_output_files(input_path.as_str(), &mut matched)?;
         matched.sort();
         for file in &matched {
             if output_paths.iter().any(|o| o.as_str() == file) {
                 continue;
             }
-            let content = fs::read(Path::new(file))
-                .map_err(|e| anyhow::anyhow!("failed to read setup input {file}: {e}"))?;
-            let rel = file.strip_prefix(module_dir).unwrap_or(file).trim_start_matches('/');
-            writeln!(s, "input-file: {} {:016x}", rel, content_hash64(&content)).unwrap();
+            writeln_file_hash(&mut s, "input", module_dir, file)?;
         }
     }
     Ok(s)
@@ -870,13 +884,13 @@ impl SetupLock {
 }
 
 struct ListedModule {
-    name: String,
-    root_source_path: String,
+    name: StringId,
+    root_source_path: StringId,
     is_dir: bool,
-    setup: Option<(Vec<String>, Vec<String>)>,
+    setup: Option<(SV8<StringId>, SV8<StringId>)>,
 }
 
-fn read_module_list(cache_dir: &Path) -> Option<Vec<ListedModule>> {
+fn read_module_list(idents: &IdentPool, cache_dir: &Path) -> Option<Vec<ListedModule>> {
     let text = crate::snap::cache_load_text(cache_dir, "modules")?;
     let mut lines = text.lines();
     if lines.next()? != format!("k1-modules v{}", crate::BUILD_ID) {
@@ -886,21 +900,22 @@ fn read_module_list(cache_dir: &Path) -> Option<Vec<ListedModule>> {
     for line in lines {
         if let Some(rest) = line.strip_prefix("module\t") {
             let mut parts = rest.split('\t');
-            let name = parts.next()?.to_string();
+            let name = idents.intern(parts.next()?);
             let is_dir = parts.next()? == "1";
-            let root_source_path = parts.next()?.to_string();
+            let root_source_path = idents.intern(parts.next()?);
             modules.push(ListedModule { name, root_source_path, is_dir, setup: None });
         } else if let Some(rest) = line.strip_prefix("setup\t") {
             let mut parts = rest.split('\t');
             let n_out: usize = parts.next()?.parse().ok()?;
-            let mut outs: Vec<String> = vec![];
-            for part in parts {
-                outs.push(part.to_string());
+            let mut outs: SV8<StringId> = SV8::new();
+            let mut ins: SV8<StringId> = SV8::new();
+            for (i, part) in parts.enumerate() {
+                let id = idents.intern(part);
+                if i < n_out { outs.push(id) } else { ins.push(id) }
             }
             if outs.len() < n_out {
                 return None;
             }
-            let ins = outs.split_off(n_out);
             modules.last_mut()?.setup = Some((outs, ins));
         } else if !line.is_empty() {
             return None;
@@ -937,11 +952,12 @@ fn write_module_list(k1: &TypedProgram) {
     crate::snap::cache_store_text(k1.cache_dir(), "modules", &s);
 }
 
-fn inputs_hashes_from_module_list(
+fn inputs_hashes_from_module_list<Tag>(
     idents: &IdentPool,
     config: &CompilerConfig,
     overrides: &fxhash::FxHashMap<String, String>,
     modules: &[ListedModule],
+    scratch: &mut Mem<Tag>,
 ) -> Vec<crate::snap::InputsHash> {
     let hash_file = |path: &str| -> Option<u64> {
         match overrides.get(path) {
@@ -949,90 +965,80 @@ fn inputs_hashes_from_module_list(
             None => fs::read(Path::new(path)).ok().map(|b| content_hash64(&b)),
         }
     };
-    let mut scratch: Mem<()> = Mem::make();
     let n = modules.len();
-    let mut group_ends = vec![1.min(n)];
+    let mut group_ends: SV8<usize> = SV8::new();
+    group_ends.push(1.min(n));
     if !config.no_std {
         group_ends.push(2.min(n));
     }
     group_ends.push(n);
 
     let mut hash = typer::snapshot::inputs_hash_from_settings(idents, config);
-    let mut hashes = vec![];
+    let mut hashes = Vec::with_capacity(n);
     let mut start = 0;
     for end in group_ends {
         let group = &modules[start..end];
         start = end;
         for m in group {
-            let root_path = m.root_source_path.as_str();
+            let root_path = idents.get_string(m.root_source_path);
             let Some(root_hash) = hash_file(root_path) else {
                 // An unreadable root invalidates the whole group and everything after
                 return hashes;
             };
-            hash = hash.add_module_header(&m.name, root_path, root_hash);
+            hash = hash.add_module_header(idents.get_string(m.name), root_path, root_hash);
         }
         for m in group {
             if m.setup.as_ref().is_some_and(|(outputs, inputs)| {
-                !listed_setup_is_fresh(&mut scratch, idents, config, m, outputs, inputs)
+                !listed_setup_is_fresh(scratch, idents, config, m, outputs, inputs)
             }) {
                 // If we're running setup, give up on getting a cache hit for this module this time
                 // around
                 return hashes;
             }
-            let mut sources: kmem::List<(String, u64), _> = scratch.new_list(128);
+            let mut sources: kmem::List<(String, u64), Tag> = kmem::List::empty();
             if m.is_dir {
-                let root_path = m.root_source_path.as_ref();
+                let root_path = idents.get_string(m.root_source_path);
                 let home_dir = kpath::parent(root_path);
                 let Ok(files) = collect_directory_module_source_paths(home_dir, root_path) else {
                     return hashes;
                 };
+                sources = scratch.new_list(files.len() as u32);
                 for path in files {
                     let Some(h) = hash_file(&path) else { return hashes };
                     sources.push((path, h));
                 }
             }
-            hash = hash.add_module_sources(&m.name, sources.iter().map(|(p, h)| (p.as_str(), *h)));
+            hash = hash.add_module_sources(
+                idents.get_string(m.name),
+                sources.iter().map(|(p, h)| (p.as_str(), *h)),
+            );
             hashes.push(hash);
         }
     }
     hashes
 }
 
-fn listed_setup_is_fresh(
-    scratch: &mut Mem<()>,
+fn listed_setup_is_fresh<Tag>(
+    scratch: &mut Mem<Tag>,
     idents: &IdentPool,
     config: &CompilerConfig,
     m: &ListedModule,
-    outputs: &[String],
-    inputs: &[String],
+    outputs: &[StringId],
+    inputs: &[StringId],
 ) -> bool {
-    let Ok(root_src) = fs::read_to_string(Path::new(&m.root_source_path)) else {
+    let root_source_path = idents.get_string(m.root_source_path);
+    let Ok(root_src) = fs::read_to_string(Path::new(root_source_path)) else {
         return false;
     };
-    let outputs: Vec<StringId> = {
-        let mut ids = Vec::with_capacity(outputs.len());
-        for s in outputs {
-            ids.push(idents.intern(s));
-        }
-        ids
-    };
-    let inputs: Vec<StringId> = {
-        let mut ids = Vec::with_capacity(inputs.len());
-        for s in inputs {
-            ids.push(idents.intern(s));
-        }
-        ids
-    };
-    let module_dir_str = kpath::parent(&m.root_source_path);
+    let module_dir_str = kpath::parent(root_source_path);
     let module_dir = idents.intern(module_dir_str);
-    let module_name = idents.intern(kpath::file_name(module_dir_str));
     let req = SetupRequest {
         idents,
         module_dir,
-        module_name,
-        root_filename: idents.intern(kpath::file_name(&m.root_source_path)),
-        outputs: &outputs,
-        inputs: &inputs,
+        module_name: idents.intern(kpath::file_name(module_dir_str)),
+        root_filename: idents.intern(kpath::file_name(root_source_path)),
+        outputs,
+        inputs,
         target: config.target,
         force: false,
     };
@@ -1207,14 +1213,17 @@ pub fn compile_program_ext(
     let mut k1 = 'program: {
         let cache_dir = Path::new(ast.idents.get_string(cache_dir));
         if args.cache
-            && let Some(modules) = read_module_list(cache_dir)
+            && let Some(modules) = read_module_list(&ast.idents, cache_dir)
         {
+            let tmp_mark = ast.tmp.mark();
             let input_hashes_by_module = inputs_hashes_from_module_list(
                 &ast.idents,
                 &config,
                 &lsp.source_overrides,
                 &modules,
+                &mut ast.tmp,
             );
+            ast.tmp.reset_to(tmp_mark);
             if args.chatty {
                 eprintln!(
                     "cache: {} of {} listed modules have valid inputs",

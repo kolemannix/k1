@@ -3186,11 +3186,11 @@ impl TypedProgram {
         load_handle: crate::compiler::ModuleLoadHandle,
         primary_module: bool,
     ) -> anyhow::Result<ModuleId> {
-        let mut load_stack: Vec<StringId> = vec![];
-        let mut modules_to_typecheck: Vec<(
+        let mut load_stack: SV8<StringId> = smallvec![];
+        let mut modules_to_typecheck: SV8<(
             ModuleId,
             Option<crate::compiler::ModuleRemainingSourcesHandle>,
-        )> = vec![];
+        )> = smallvec![];
         let added_module_id = self.discover_module_and_deps(
             load_handle,
             primary_module,
@@ -3272,11 +3272,11 @@ impl TypedProgram {
                 && !self.lsp.completion
                 && self.megarepl.is_none()
             {
-                if !crate::snap::cache_exists(self.cache_dir(), module_hash) {
+                if !crate::snap::cache_exists_entry(self.cache_dir(), module_hash) {
                     let cache_dir = self.cache_dir().to_path_buf();
                     let bytes = self.snap();
                     self.pending_cache_writes.push(std::thread::spawn(move || {
-                        crate::snap::cache_store(&cache_dir, module_hash, &bytes)
+                        crate::snap::cache_store_entry(&cache_dir, module_hash, &bytes)
                     }));
                 }
             }
@@ -3344,8 +3344,8 @@ impl TypedProgram {
         &mut self,
         root_load_handle: crate::compiler::ModuleLoadHandle,
         primary_module: bool,
-        load_stack: &mut Vec<StringId>,
-        modules_to_typecheck: &mut Vec<(
+        load_stack: &mut SV8<StringId>,
+        modules_to_typecheck: &mut SV8<(
             ModuleId,
             Option<crate::compiler::ModuleRemainingSourcesHandle>,
         )>,
@@ -3359,7 +3359,7 @@ impl TypedProgram {
             fn queue(
                 k1: &mut TypedProgram,
                 module_id: ModuleId,
-                modules_to_typecheck: &mut Vec<(
+                modules_to_typecheck: &mut SV8<(
                     ModuleId,
                     Option<crate::compiler::ModuleRemainingSourcesHandle>,
                 )>,
@@ -3500,7 +3500,11 @@ impl TypedProgram {
                 && primary_module;
             let started = {
                 let request = self.setup_request(module_id, setup, force);
-                crate::compiler::start_setup(&request)
+                let tmp = self.get_tmp_unsafe();
+                let mark = tmp.mark();
+                let result = crate::compiler::start_setup(&request, tmp);
+                tmp.reset_to(mark);
+                result
             };
             let started = match started {
                 Ok(started) => started,
@@ -3520,7 +3524,11 @@ impl TypedProgram {
                 }
                 let finished = {
                     let request = self.setup_request(module_id, setup, force);
-                    crate::compiler::finish_setup(&request, started)
+                    let tmp = self.get_tmp_unsafe();
+                    let mark = tmp.mark();
+                    let result = crate::compiler::finish_setup(&request, started, tmp);
+                    tmp.reset_to(mark);
+                    result
                 };
                 if let Err(e) = finished {
                     let msg =
@@ -3536,7 +3544,7 @@ impl TypedProgram {
             setup_ran,
             &self.lsp.source_overrides,
         );
-        let mut dep_handles: Vec<crate::compiler::ModuleLoadHandle> = vec![];
+        let mut dep_handles: SV8<crate::compiler::ModuleLoadHandle> = smallvec![];
         for dep in self.mem.getn(deps) {
             let dep_name = dep.name;
             if self.ast.idents.get_string(dep_name) == self.program_name() {

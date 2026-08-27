@@ -7,20 +7,44 @@ use std::mem::size_of;
 pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP10";
 
 pub struct SnapWriter {
-    pub buf: Vec<u8>,
+    mmap: memmap2::MmapMut,
+    len: usize,
+}
+
+pub struct SnapBytes {
+    mmap: memmap2::MmapMut,
+    len: usize,
+}
+
+impl std::ops::Deref for SnapBytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.mmap[..self.len]
+    }
 }
 
 impl SnapWriter {
     pub fn new() -> SnapWriter {
-        let mut w = SnapWriter { buf: Vec::with_capacity(1 << 25) };
-        w.buf.extend_from_slice(&SNAP_MAGIC);
+        let mut w = SnapWriter::reserve(16 << 30);
+        w.write_raw(&SNAP_MAGIC);
         w.write_str(crate::BUILD_ID);
         w
     }
 
+    fn reserve(bytes: usize) -> SnapWriter {
+        let mmap =
+            memmap2::MmapMut::map_anon(bytes).expect("failed to reserve snapshot buffer");
+        SnapWriter { mmap, len: 0 }
+    }
+
+    pub fn finish(self) -> SnapBytes {
+        SnapBytes { mmap: self.mmap, len: self.len }
+    }
+
     #[inline]
     pub fn write_raw(&mut self, bytes: &[u8]) {
-        self.buf.extend_from_slice(bytes);
+        self.mmap[self.len..self.len + bytes.len()].copy_from_slice(bytes);
+        self.len += bytes.len();
     }
 
     #[inline]
@@ -65,17 +89,18 @@ impl SnapWriter {
         I: Iterator<Item = T>,
         F: FnMut(&mut SnapWriter, T),
     {
-        let mut scratch = SnapWriter { buf: Vec::new() };
+        let mut scratch = SnapWriter::reserve(1 << 30);
         let mut ranges: Vec<(usize, usize)> = Vec::new();
         for e in entries {
-            let start = scratch.buf.len();
+            let start = scratch.len;
             enc(&mut scratch, e);
-            ranges.push((start, scratch.buf.len()));
+            ranges.push((start, scratch.len));
         }
-        ranges.sort_unstable_by(|a, b| scratch.buf[a.0..a.1].cmp(&scratch.buf[b.0..b.1]));
+        let bytes = &scratch.mmap[..scratch.len];
+        ranges.sort_unstable_by(|a, b| bytes[a.0..a.1].cmp(&bytes[b.0..b.1]));
         self.write_len(ranges.len());
         for (start, end) in ranges {
-            self.write_raw(&scratch.buf[start..end]);
+            self.write_raw(&scratch.mmap[start..end]);
         }
     }
 }
@@ -267,13 +292,15 @@ impl InputsHash {
 }
 
 pub const CACHE_DIR_NAME: &str = "cache";
-const CACHE_MAX_ENTRIES: usize = 64;
+const CACHE_MAX_BYTES: u64 = 8 << 30;
+const TMP_ORPHAN_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 pub fn cache_load(cache_dir: &std::path::Path, hash: InputsHash) -> Option<memmap2::Mmap> {
     let path = cache_dir.join(hash.filename());
     let file = std::fs::File::open(&path).ok()?;
     let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
     let _ = mmap.advise(memmap2::Advice::Sequential);
+    let _ = mmap.advise(memmap2::Advice::WillNeed);
     touch(&path);
     Some(mmap)
 }
@@ -303,11 +330,11 @@ pub fn cache_store_text(cache_dir: &std::path::Path, filename: &str, text: &str)
     let _ = std::fs::rename(&tmp, cache_dir.join(filename));
 }
 
-pub fn cache_exists(cache_dir: &std::path::Path, hash: InputsHash) -> bool {
+pub fn cache_exists_entry(cache_dir: &std::path::Path, hash: InputsHash) -> bool {
     cache_dir.join(hash.filename()).exists()
 }
 
-pub fn cache_store(cache_dir: &std::path::Path, hash: InputsHash, bytes: &[u8]) {
+pub fn cache_store_entry(cache_dir: &std::path::Path, hash: InputsHash, bytes: &[u8]) {
     if std::fs::create_dir_all(cache_dir).is_err() {
         return;
     }
@@ -317,28 +344,82 @@ pub fn cache_store(cache_dir: &std::path::Path, hash: InputsHash, bytes: &[u8]) 
         return;
     }
     let _ = std::fs::rename(&tmp, cache_dir.join(hash.filename()));
-    evict(cache_dir);
+    cache_run_eviction(cache_dir, CACHE_MAX_BYTES);
 }
 
-fn evict(cache_dir: &std::path::Path) {
+/// Newest-first by mtime within a byte budget (the newest entry always
+/// survives); also sweeps `.tmp.<pid>` files orphaned by a crashed writer
+fn cache_run_eviction(cache_dir: &std::path::Path, max_bytes: u64) {
     let Ok(entries) = std::fs::read_dir(cache_dir) else { return };
-    let mut snaps: Vec<(std::time::SystemTime, std::path::PathBuf)> = vec![];
+    let now = std::time::SystemTime::now();
+    let mut snaps: Vec<(std::time::SystemTime, u64, std::path::PathBuf)> = vec![];
+    let mut total: u64 = 0;
     for entry in entries {
         let Ok(e) = entry else { continue };
-        #[allow(clippy::nonminimal_bool)]
-        if !e.path().extension().is_some_and(|x| x == "snap") {
-            continue;
-        }
+        let path = e.path();
         let Ok(metadata) = e.metadata() else { continue };
         let Ok(mtime) = metadata.modified() else { continue };
-        snaps.push((mtime, e.path()));
+        let name = e.file_name();
+        let is_orphaned_tmp = name.to_string_lossy().contains(".tmp.")
+            && now.duration_since(mtime).is_ok_and(|age| age > TMP_ORPHAN_MAX_AGE);
+        if is_orphaned_tmp {
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
+        if path.extension().is_some_and(|x| x == "snap") {
+            total += metadata.len();
+            snaps.push((mtime, metadata.len(), path));
+        }
     }
-    if snaps.len() <= CACHE_MAX_ENTRIES {
+    if total <= max_bytes {
         return;
     }
-    snaps.sort_by_key(|(mtime, _)| *mtime);
-    for (_, path) in &snaps[..snaps.len() - CACHE_MAX_ENTRIES] {
-        let _ = std::fs::remove_file(path);
+    snaps.sort_by_key(|(mtime, _, _)| std::cmp::Reverse(*mtime));
+    let mut kept: u64 = 0;
+    for (i, (_, size, path)) in snaps.iter().enumerate() {
+        kept += size;
+        if i > 0 && kept > max_bytes {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn eviction_byte_budget_and_tmp_orphans() {
+        let dir = std::env::temp_dir().join(format!("k1_evict_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, size: usize, age_secs: u64| {
+            let path = dir.join(name);
+            std::fs::write(&path, vec![0u8; size]).unwrap();
+            let f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs))
+                .unwrap();
+        };
+        write("newest.snap", 60, 0);
+        write("mid.snap", 30, 10);
+        write("oldest.snap", 30, 20);
+        write("fresh.tmp.123", 10, 0);
+        write("orphan.tmp.456", 10, 2 * 60 * 60);
+        std::fs::write(dir.join("modules"), "x").unwrap();
+
+        cache_run_eviction(&dir, 100);
+        assert!(dir.join("newest.snap").exists());
+        assert!(dir.join("mid.snap").exists());
+        assert!(!dir.join("oldest.snap").exists());
+        assert!(dir.join("fresh.tmp.123").exists());
+        assert!(!dir.join("orphan.tmp.456").exists());
+        assert!(dir.join("modules").exists());
+
+        cache_run_eviction(&dir, 10);
+        assert!(dir.join("newest.snap").exists());
+        assert!(!dir.join("mid.snap").exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 

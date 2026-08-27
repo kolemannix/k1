@@ -62,7 +62,7 @@ pub(crate) fn inputs_hash_from_settings(
 }
 
 impl TypedProgram {
-    pub fn snap(&self) -> Vec<u8> {
+    pub fn snap(&self) -> crate::snap::SnapBytes {
         let TypedProgram {
             modules,
             modules_completed,
@@ -147,9 +147,9 @@ impl TypedProgram {
         assert!(megarepl.is_none(), "cannot snapshot a megarepl session");
         assert!(inference_context_stack.is_empty(), "cannot snapshot mid-inference");
 
-        let mut w = SnapWriter::new();
-        ast.snap(&mut w);
-        let w = &mut w;
+        let mut w0 = SnapWriter::new();
+        ast.snap(&mut w0);
+        let w = &mut w0;
         w.write_section("typed");
         mem.snap(w);
         modules.snap(w);
@@ -223,7 +223,7 @@ impl TypedProgram {
         ir.snap(w);
         w.write_t(global_id_k1_arena);
         w.write_section("end");
-        std::mem::take(&mut w.buf)
+        w0.finish()
     }
 
     pub fn restore(
