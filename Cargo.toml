@@ -76,10 +76,6 @@ name = "lsp"
 path = "src/bin/lsp_main.rs"
 required-features = ["lsp"]
 
-[[bin]]
-name = "repl"
-path = "src/bin/repl_main.rs"
-
 [profile.dev]
 debug = "line-tables-only"
 

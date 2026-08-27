@@ -3,7 +3,7 @@
 
 use k1::debug;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -155,27 +155,24 @@ fn error_to_diagnostic(
     }
 }
 
-fn source_to_uri(directory: impl AsRef<Path>, file: impl AsRef<str>) -> Url {
-    debug!("source_to_uri on {:?} {:?}", directory.as_ref(), file.as_ref());
-    Url::from_directory_path(directory.as_ref()).unwrap().join(file.as_ref()).unwrap()
+fn source_to_uri(path: impl AsRef<Path>) -> Url {
+    debug!("source_to_uri on {:?}", path.as_ref());
+    Url::from_file_path(path.as_ref()).unwrap()
 }
 
 fn uri_from_span(k1: &TypedProgram, span_id: SpanId) -> Url {
     let span = k1.ast.spans.get(span_id);
     let source = k1.ast.sources.get(span.file_id);
-    source_to_uri(
-        k1.ast.idents.get_string(source.directory),
-        k1.ast.idents.get_string(source.filename),
-    )
+    source_to_uri(k1.ast.idents.get_string(source.file_path))
 }
 
 fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast SourceFile> {
-    let path = url.path();
-    debug!("uri_to_source: {}", path);
+    let path = Path::new(url.path());
+    debug!("uri_to_source: {}", path.display());
     let source = ast.sources.iter().find(|s| {
-        let source_path = k1::kpath::join_buf(&ast.idents, s.1.directory, s.1.filename);
-        debug!("    source_path: {}", source_path.display());
-        Path::new(path) == source_path
+        let source_path = ast.idents.get_string(s.1.file_path);
+        debug!("    source_path: {}", source_path);
+        path == Path::new(source_path)
     });
     source.map(|s| s.1)
 }
@@ -216,7 +213,7 @@ struct Backend {
     edited_sources: Mutex<HashMap<Url, ParsedProgram>>,
     /// Canonical src_path of the program we compile (a module dir or single
     /// file), derived from the files the client opens and saves
-    src_path: RwLock<Option<String>>,
+    src_path: RwLock<Option<PathBuf>>,
     published_diagnostic_urls: Mutex<HashSet<Url>>,
     compile_iteration: AtomicU32,
     retarget_generation: AtomicU32,
@@ -281,9 +278,10 @@ impl Backend {
             k1::lsp_support::splice_completion_marker(&content, offset)
         };
 
-        let Ok(canonical_path) = k1::kpath::canonicalize(file_url.path()) else { return Ok(None) };
+        let Ok(canonical_path) = k1::kpath::canonicalize_owned(file_url.path()) else {
+            return Ok(None);
+        };
         let Some(root_path) = self.target_file_for_url(file_url) else { return Ok(None) };
-        let root_path = std::path::PathBuf::from(root_path);
 
         let mut source_overrides = fxhash::FxHashMap::default();
         source_overrides.insert(canonical_path, spliced);
@@ -336,12 +334,7 @@ impl Backend {
             k1.ast
                 .sources
                 .iter()
-                .map(|s| {
-                    source_to_uri(
-                        k1.ast.idents.get_string(s.1.directory),
-                        k1.ast.idents.get_string(s.1.filename),
-                    )
-                })
+                .map(|s| source_to_uri(k1.ast.idents.get_string(s.1.file_path)))
                 .collect()
         })
         .unwrap_or_default()
@@ -390,7 +383,7 @@ impl Backend {
         map
     }
 
-    fn target_file_for_url(&self, file_url: &Url) -> Option<String> {
+    fn target_file_for_url(&self, file_url: &Url) -> Option<PathBuf> {
         let file_path = file_url.to_file_path().ok()?;
         let in_program =
             self.with_k1(|k1| uri_to_source(&k1.ast, file_url).is_some()).unwrap_or(false);
@@ -399,13 +392,7 @@ impl Backend {
                 return Some(stored);
             }
         }
-        match k1::compiler::find_check_target_for_file(&file_path) {
-            Ok(target) => Some(target),
-            Err(e) => {
-                info!("target_for {}: {e}", file_url.path());
-                None
-            }
-        }
+        Some(k1::compiler::find_check_target_for_file(&file_path))
     }
 
     /// Point the program at `file_url`'s module if it isn't already covered,
@@ -424,7 +411,7 @@ impl Backend {
         };
         let changed = {
             let mut src_path = self.src_path.write().unwrap();
-            let changed = src_path.as_deref() != Some(target.as_str());
+            let changed = src_path.as_deref() != Some(target.as_path());
             *src_path = Some(target);
             changed
         };
@@ -444,7 +431,7 @@ impl Backend {
             info!("compile {}: no target yet", iteration_number);
             return iteration_number;
         };
-        info!("compiling version {} target {}", iteration_number, src_path);
+        info!("compiling version {} target {}", iteration_number, src_path.display());
         let compile_start = std::time::Instant::now();
         let args = k1::compiler::Args {
             no_std: false,
@@ -649,7 +636,7 @@ impl LanguageServer for Backend {
         }
         let new_content = change.text;
         info!("textDocument/did_change: parsing file {}", &file_url);
-        let ast = parse::parse_standalone(file_url.path().to_string(), new_content);
+        let ast = parse::parse_standalone(file_url.path().to_string(), &new_content);
         let mut parse_diagnostics = vec![];
         info!(
             "textDocument/did_change: parsed file {} with {} errors",
@@ -663,7 +650,7 @@ impl LanguageServer for Backend {
                     severity: Some(DiagnosticSeverity::ERROR),
                     code: None,
                     code_description: None,
-                    source: Some(ast.name.clone()),
+                    source: Some(ast.name_str().to_string()),
                     message: error.message().to_string(),
                     related_information: None,
                     tags: None,
@@ -999,10 +986,7 @@ impl LanguageServer for Backend {
             error!("Failed to convert span to range for goto_definition");
             return Ok(None);
         };
-        let definition_uri = source_to_uri(
-            k1.ast.idents.get_string(definition_source.directory),
-            k1.ast.idents.get_string(definition_source.filename),
-        );
+        let definition_uri = source_to_uri(k1.ast.idents.get_string(definition_source.file_path));
         info!("goto_definition response: {}, {:?}", definition_uri, range);
         Ok(Some(GotoDefinitionResponse::Scalar(Location { uri: definition_uri, range })))
     }
@@ -1093,10 +1077,7 @@ fn find_references(
 fn location_from_resolved_span(k1: &TypedProgram, span: Span) -> Option<Location> {
     let range = span_to_range(k1, span)?;
     let source = k1.ast.sources.get(span.file_id);
-    let uri = source_to_uri(
-        k1.ast.idents.get_string(source.directory),
-        k1.ast.idents.get_string(source.filename),
-    );
+    let uri = source_to_uri(k1.ast.idents.get_string(source.file_path));
     Some(Location { uri, range })
 }
 

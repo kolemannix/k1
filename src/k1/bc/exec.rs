@@ -210,7 +210,8 @@ pub fn make_stack_trace(k1: &TypedProgram, fault_fp: *const u8, fault_pc: u32) -
         let span = k1.bc.span_for_pc(pc);
         if span != SpanId::NONE {
             let (source, line) = k1.get_span_location(span);
-            write!(&mut s, " {}:{}", source.filename, line.line_number()).unwrap();
+            write!(&mut s, " {}:{}", source.filename_str(&k1.ast.idents), line.line_number())
+                .unwrap();
         }
         writeln!(&mut s).unwrap();
         let (caller_fp, ret_pc) =

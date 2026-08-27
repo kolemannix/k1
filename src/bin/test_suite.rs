@@ -78,15 +78,9 @@ fn backtrace_symbolizer_available() -> bool {
 fn get_test_expectation(test_file: &Path) -> TestExpectation {
     let mut path = test_file.canonicalize().unwrap();
     if path.is_dir() {
-        let dir_name = path.file_name().unwrap().to_str().unwrap();
-        let module_root = path.join("module.k1");
-        let named_root = path.join(format!("{dir_name}.k1"));
-        if module_root.is_file() {
-            path = module_root;
-        } else if named_root.is_file() {
-            path = named_root;
-        } else {
-            return TestExpectation::ExitCode { code: 0, message: None };
+        match k1::compiler::detect_module_root_file(&path.to_string_lossy()) {
+            Some(root) => path = root,
+            None => return TestExpectation::ExitCode { code: 0, message: None },
         }
     }
     let src = std::fs::read_to_string(path).expect("could not read source file for test {}");
@@ -216,7 +210,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                         }
                     }
                 } else {
-                    let mut run_cmd = std::process::Command::new(k1::kpath::join_buf(
+                    let mut run_cmd = std::process::Command::new(k1::kpath::join_pathbuf(
                         &codegen.k1.ast.idents,
                         codegen.k1.config.out_dir,
                         name.as_str(),

@@ -2,9 +2,10 @@
 // All rights reserved.
 
 //! Compiler-internal paths are canonical, absolute, UTF-8 strings using the
-//! host's separator; [canonicalize] is the only intake and the only place
-//! non-UTF-8 is rejected. Joins are named by destination: [join_buf] for OS
-//! sinks, [join_tmp] for scratch-arena strings, [join_id] for interned paths.
+//! host's separator; the canonicalize fns are the only intake and the only
+//! place non-UTF-8 is rejected. Joins are named by destination: [join_pathbuf]
+//! for OS sinks, [join_tmp] for scratch-arena strings, [join_id] for interned
+//! paths.
 
 use std::fmt;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf, is_separator};
@@ -12,15 +13,32 @@ use std::path::{MAIN_SEPARATOR, Path, PathBuf, is_separator};
 use crate::kmem::{MStr, Mem};
 use crate::parse::{IdentPool, StringId};
 
-pub fn canonicalize(path: impl AsRef<Path>) -> anyhow::Result<String> {
+fn canonicalize_path(path: impl AsRef<Path>) -> anyhow::Result<PathBuf> {
     let path = path.as_ref();
     let canonical = path
         .canonicalize()
         .map_err(|e| anyhow::anyhow!("Failed to resolve path '{}': {e}", path.display()))?;
+    Ok(canonical)
+}
+
+pub fn canonicalize_owned(path: impl AsRef<Path>) -> anyhow::Result<String> {
+    let canonical = canonicalize_path(path.as_ref())?;
     canonical
         .into_os_string()
         .into_string()
         .map_err(|s| anyhow::anyhow!("Path is not valid UTF-8: {}", s.to_string_lossy()))
+}
+
+pub fn canonicalize_string_id(
+    idents: &IdentPool,
+    path: impl AsRef<Path>,
+) -> anyhow::Result<StringId> {
+    let canonical = canonicalize_path(path.as_ref())?;
+    let str = canonical.to_str().ok_or_else(|| {
+        anyhow::anyhow!("Path is not valid UTF-8: {}", path.as_ref().to_string_lossy())
+    })?;
+    let string_id = idents.intern(str);
+    Ok(string_id)
 }
 
 /// A join base: something that already is a whole path
@@ -37,9 +55,13 @@ impl Base for StringId {
         idents.get_string(*self)
     }
 }
+impl Base for &Path {
+    fn as_str<'a>(&'a self, _: &'a IdentPool) -> &'a str {
+        self.to_str().unwrap()
+    }
+}
 
-/// A path segment; never begins or ends with a separator. The joiner inserts
-/// MAIN_SEPARATOR between base and segment and between tuple elements.
+/// A path segment; never begins or ends with a separator
 pub trait Seg {
     fn write(&self, idents: &IdentPool, out: &mut dyn fmt::Write) -> fmt::Result;
     fn len_hint(&self, idents: &IdentPool) -> usize;
@@ -92,16 +114,13 @@ fn write_join(
     seg.write(idents, out)
 }
 
-/// Owned join for OS sinks (Command args, paths handed across thread or
-/// process boundaries); the only join visible outside the crate
-pub fn join_buf(idents: &IdentPool, base: impl Base, seg: impl Seg) -> PathBuf {
+pub fn join_pathbuf(idents: &IdentPool, base: impl Base, seg: impl Seg) -> PathBuf {
     let base = base.as_str(idents);
     let mut s = String::with_capacity(base.len() + 1 + seg.len_hint(idents));
     write_join(idents, base, &seg, &mut s).unwrap();
     PathBuf::from(s)
 }
 
-/// Scratch join; lives until the arena's next reset
 pub(crate) fn join_tmp<Tag>(
     mem: &mut Mem<Tag>,
     idents: &IdentPool,
@@ -111,7 +130,6 @@ pub(crate) fn join_tmp<Tag>(
     mem.format_with(&(), &(), |w, _, _| write_join(idents, base.as_str(idents), &seg, w))
 }
 
-/// Interned join; the scratch bytes are reclaimed before returning
 pub(crate) fn join_id<Tag>(
     idents: &IdentPool,
     tmp: &mut Mem<Tag>,
@@ -125,8 +143,7 @@ pub(crate) fn join_id<Tag>(
     id
 }
 
-/// Path separators are ASCII on every supported host, so byte offsets around
-/// them are char boundaries
+/// A slice-returning (non-allocating) alternative to Path::file_name()
 pub fn file_name(path: &str) -> &str {
     match path.rfind(is_separator) {
         Some(i) => &path[i + 1..],
@@ -178,14 +195,14 @@ mod test {
         let seg_id = idents.intern("c.k1");
         let joined = format!("{sep}a{sep}b{sep}c.k1");
 
-        assert_eq!(join_buf(&idents, base.as_str(), "c.k1"), Path::new(&joined));
-        assert_eq!(join_buf(&idents, base_id, seg_id), Path::new(&joined));
+        assert_eq!(join_pathbuf(&idents, base.as_str(), "c.k1"), Path::new(&joined));
+        assert_eq!(join_pathbuf(&idents, base_id, seg_id), Path::new(&joined));
         // A base ending in a separator gets no second one
         let root = format!("{sep}");
-        assert_eq!(join_buf(&idents, root.as_str(), "x"), Path::new(&format!("{sep}x")));
+        assert_eq!(join_pathbuf(&idents, root.as_str(), "x"), Path::new(&format!("{sep}x")));
         // format_args and tuple segments
         assert_eq!(
-            join_buf(&idents, base_id, ("sub", format_args!("mod{}", 7))),
+            join_pathbuf(&idents, base_id, ("sub", format_args!("mod{}", 7))),
             Path::new(&format!("{sep}a{sep}b{sep}sub{sep}mod7"))
         );
 

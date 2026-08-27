@@ -5,14 +5,15 @@ use crate::parse::*;
 use std::fs;
 
 fn make_test_ast() -> ParsedProgram {
-    ParsedProgram::make("unit_test".to_string())
+    let mut ast = ParsedProgram::make();
+    ast.set_name("unit_test");
+    ast
 }
 
 fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'ast> {
-    let directory = ast.idents.intern("unit_test");
-    let filename = ast.idents.intern("unit_test.k1");
-    let source = SourceFile::make(&mut ast.mem, directory, filename, input);
-    let module_id = ModuleId::from_u32(1).unwrap();
+    let file_path = ast.idents.intern("unit_test/unit_test.k1");
+    let source = SourceFile::make(&mut ast.mem, file_path, input);
+    let module_id = ModuleId::ONE;
     let module_name = ast.idents.intern("unit_test");
     let mut token_vec = vec![];
     let (file_id, lex_result) = lex_file_into_program(ast, source, &mut token_vec);
@@ -63,7 +64,7 @@ fn basic_fn() -> Result<(), ParseError> {
       y = add(42, 42);
       add(x, y)
     }"#;
-    let module = test_parse_input("basic_fn".to_string(), src.to_string())?;
+    let module = test_parse_input("basic_fn".to_string(), src)?;
     let fndef = module.functions.get_opt(ParsedFunctionId::from_u32(1).unwrap()).unwrap();
     assert_eq!(fndef.name, module.idents.intern("basic"));
     Ok(())
@@ -236,7 +237,7 @@ fn macro_defn_compiler_debug() -> Result<(), ParseError> {
     #debug macro m1(a) { `{ $a }` }
     macro m2(a) { `{ $a }` }
     "#;
-    let ast = test_parse_input("macro_debug".to_string(), src.to_string())?;
+    let ast = test_parse_input("macro_debug".to_string(), src)?;
     let m1_name = ast.idents.intern("m1");
     let m1 = ast.get_macro(ParsedMacroId::from_u32(1).unwrap());
     let m2 = ast.get_macro(ParsedMacroId::from_u32(2).unwrap());
@@ -555,12 +556,11 @@ fn consecutive_strings() -> ParseResult<()> {
 #[test]
 fn lex_error_does_not_poison_reused_token_buffer() {
     let mut ast = make_test_ast();
-    let dir = ast.idents.intern("unit_test");
-    let bad_name = ast.idents.intern("bad.k1");
+    let bad_file_path = ast.idents.intern("unit_test/bad.k1");
     let bad =
-        SourceFile::make(&mut ast.mem, dir, bad_name, "let x = \"unterminated\nfn f(): i32 { 0 }");
-    let good_name = ast.idents.intern("good.k1");
-    let good = SourceFile::make(&mut ast.mem, dir, good_name, "fn g(): i32 { 42 }");
+        SourceFile::make(&mut ast.mem, bad_file_path, "let x = \"unterminated\nfn f(): i32 { 0 }");
+    let good_file_path = ast.idents.intern("unit_test/good.k1");
+    let good = SourceFile::make(&mut ast.mem, good_file_path, "fn g(): i32 { 42 }");
 
     let mut tokens = vec![];
     assert!(lex_file_into_program(&mut ast, bad, &mut tokens).1.is_err());

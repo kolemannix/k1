@@ -82,7 +82,7 @@ fn span_location(k1: &TypedProgram, span_id: SpanId) -> Option<String> {
     let span = k1.ast.spans.get(span_id);
     let source = k1.ast.sources.get(span.file_id);
     let (line, _) = k1.ast.get_lines_for_span_id(span_id)?;
-    Some(format!("{}:{}", source.filename, line.line_number()))
+    Some(format!("{}:{}", source.filename_str(&k1.ast.idents), line.line_number()))
 }
 
 pub fn render_page(k1: &TypedProgram, path: &[&str]) -> Option<Markup> {

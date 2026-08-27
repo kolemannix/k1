@@ -350,7 +350,9 @@ impl Args {
 pub enum SetupMode {
     /// Run stale setup steps at module load (default)
     Normal,
-    SetupOnly { force: bool },
+    SetupOnly {
+        force: bool,
+    },
 }
 
 impl SetupMode {
@@ -441,24 +443,48 @@ impl Drop for CwdGuard {
 }
 
 /// Requires a canonicalized src_path
-pub fn module_home_from_src_path(src_path: &str) -> (bool, String) {
-    let is_dir = Path::new(src_path).is_dir();
-    if is_dir { (true, src_path.to_string()) } else { (false, kpath::parent(src_path).to_string()) }
+pub fn module_home_from_src_path(
+    idents: &IdentPool,
+    src_path: StringId,
+) -> (bool, StringId, StringId) {
+    let src_path_str = idents.get_string(src_path);
+    if Path::new(src_path_str).is_dir() {
+        let module_name = idents.intern(kpath::file_name(src_path_str));
+        (true, src_path, module_name)
+    } else {
+        let module_name = idents.intern(kpath::file_stem(src_path_str));
+        (false, idents.intern(kpath::parent(src_path_str)), module_name)
+    }
+}
+
+// Deliberately dependency-free so the LSP can share the logic for bootstrap
+pub fn detect_module_root_file(home_dir: &str) -> Option<PathBuf> {
+    let mut path_buf = PathBuf::from(home_dir);
+    path_buf.push("module.k1");
+    if path_buf.is_file() {
+        Some(path_buf)
+    } else {
+        path_buf.pop();
+        let dir_name = kpath::file_name(home_dir);
+        path_buf.push(dir_name);
+        let module_is_file_stem_path = path_buf.with_extension("k1");
+        if module_is_file_stem_path.is_file() { Some(module_is_file_stem_path) } else { None }
+    }
 }
 
 /// Given a .k1 source file, the src_path to compile: its directory when that
 /// directory is a module dir else the file itself
-pub fn find_check_target_for_file(file: &Path) -> anyhow::Result<String> {
-    let file = kpath::canonicalize(file)?;
-    let dir = kpath::parent(&file);
-    let dir_name = kpath::file_name(dir);
-    let has_root = Path::new(dir).join("module.k1").is_file()
-        || Path::new(dir).join(format!("{dir_name}.k1")).is_file();
-    if has_root { Ok(dir.to_string()) } else { Ok(file) }
+/// Used by lsp bootstrap where we always start out pointed at a file
+pub fn find_check_target_for_file(file: &Path) -> PathBuf {
+    let dir = file.parent().unwrap();
+    match detect_module_root_file(&dir.to_string_lossy()) {
+        None => file.to_owned(),
+        Some(_root_file) => dir.to_owned(),
+    }
 }
 
 pub struct SourceFile {
-    /// canonical absolute
+    /// canonical absolute, owned String because these are handed across the reader threads
     pub path: String,
     pub content: String,
     pub content_hash: u64,
@@ -474,64 +500,59 @@ fn read_source_file(path: String, override_content: Option<String>) -> Result<So
     Ok(SourceFile { path, content, content_hash })
 }
 
-pub(crate) fn pathbuf_into_string(p: PathBuf) -> String {
-    p.into_os_string().into_string().unwrap()
-}
-
-pub struct ModuleRootHandle {
+pub struct ModuleLoadHandle {
     /// canonicalized module path (dir or single file)
-    pub src_path: String,
-    pub module_dir: String,
-    pub root_path: String,
+    pub module_name: StringId,
+    pub src_path: StringId,
+    pub module_dir: StringId,
+    pub root_source_file_path: StringId,
     is_dir: bool,
     reader: std::thread::JoinHandle<Result<SourceFile, String>>,
     remaining: ModuleRemainingSourcesHandle,
 }
 
-impl ModuleRootHandle {
-    /// core_module=true must be passed for (exactly) the corelib module, whose root
-    /// file is builtin.k1
-    pub fn spawn(
-        idents: &IdentPool,
-        src_path: &Path,
-        core_module: bool,
-        source_overrides: &fxhash::FxHashMap<String, String>,
-    ) -> anyhow::Result<ModuleRootHandle> {
-        let src_path = kpath::canonicalize(src_path)
-            .map_err(|e| anyhow::anyhow!("Error loading module '{}': {e}", src_path.display()))?;
-        let (is_dir, module_dir) = module_home_from_src_path(&src_path);
-        let root_path = if !is_dir {
-            src_path.clone()
-        } else if core_module {
-            let builtin = kpath::join_buf(idents, module_dir.as_str(), "builtin.k1");
-            if !builtin.is_file() {
-                bail!("corelib module must contain builtin.k1");
-            }
-            pathbuf_into_string(builtin)
-        } else {
-            let module_name = kpath::file_name(&src_path);
-            let module_root = kpath::join_buf(idents, module_dir.as_str(), "module.k1");
-            let named_root =
-                kpath::join_buf(idents, module_dir.as_str(), format_args!("{module_name}.k1"));
-            if module_root.is_file() {
-                pathbuf_into_string(module_root)
-            } else if named_root.is_file() {
-                pathbuf_into_string(named_root)
-            } else {
-                bail!(
-                    "Directory module '{module_name}' has no root file: create module.k1 or {module_name}.k1"
-                );
-            }
-        };
-        let override_content = source_overrides.get(&root_path).cloned();
-        let read_path = root_path.clone();
-        let reader = std::thread::spawn(move || read_source_file(read_path, override_content));
-        let remaining =
-            spawn_sources_read(module_dir.clone(), root_path.clone(), is_dir, source_overrides);
-        Ok(ModuleRootHandle { src_path, module_dir, root_path, is_dir, reader, remaining })
-    }
+pub fn spawn_module_load<MemTag>(
+    idents: &IdentPool,
+    tmp: &mut Mem<MemTag>,
+    // canonical, absolute source path for the module
+    src_path: StringId,
+    is_core: bool,
+    source_overrides: &fxhash::FxHashMap<String, String>,
+) -> anyhow::Result<ModuleLoadHandle> {
+    let (is_dir, home_dir, module_name) = module_home_from_src_path(idents, src_path);
+    let root_source_file_path = if !is_dir {
+        src_path
+    } else if is_core {
+        kpath::join_id(idents, tmp, home_dir, "builtin.k1")
+    } else {
+        match detect_module_root_file(idents.get_string(home_dir)) {
+            None => bail!(
+                "module '{}' has no root file. This can be module.k1 or {}.k1",
+                idents.get_string(module_name),
+                idents.get_string(module_name)
+            ),
+            Some(root_file_path) => idents.intern(root_file_path.to_string_lossy()),
+        }
+    };
+    let override_content = source_overrides.get(idents.get_string(root_source_file_path)).cloned();
+    let read_path_for_thread = idents.get_string(root_source_file_path).to_owned();
+    let reader =
+        std::thread::spawn(move || read_source_file(read_path_for_thread, override_content));
+    let remaining =
+        spawn_sources_read(idents, home_dir, root_source_file_path, is_dir, source_overrides);
+    Ok(ModuleLoadHandle {
+        module_name,
+        src_path,
+        module_dir: home_dir,
+        root_source_file_path,
+        is_dir,
+        reader,
+        remaining,
+    })
+}
 
-    pub fn join_root(self) -> anyhow::Result<(SourceFile, ModuleRemainingSources)> {
+impl ModuleLoadHandle {
+    pub fn await_read_remaining(self) -> anyhow::Result<(SourceFile, ModuleRemainingSources)> {
         let root = self
             .reader
             .join()
@@ -539,15 +560,15 @@ impl ModuleRootHandle {
             .map_err(|e| anyhow::anyhow!(e))?;
         let remaining = ModuleRemainingSources {
             module_dir: self.module_dir,
-            root_path: self.root_path,
+            root_source_file_path: self.root_source_file_path,
             is_dir: self.is_dir,
-            speculative: self.remaining,
+            speculative_read_handle: self.remaining,
         };
         Ok((root, remaining))
     }
 }
 
-pub fn collect_module_source_paths(
+pub fn collect_directory_module_source_paths(
     module_dir: &str,
     root_path: &str,
 ) -> Result<Vec<String>, String> {
@@ -575,10 +596,10 @@ pub fn collect_module_source_paths(
 }
 
 pub struct ModuleRemainingSources {
-    module_dir: String,
-    root_path: String,
+    module_dir: StringId,
+    root_source_file_path: StringId,
     is_dir: bool,
-    speculative: ModuleRemainingSourcesHandle,
+    speculative_read_handle: ModuleRemainingSourcesHandle,
 }
 
 impl ModuleRemainingSources {
@@ -586,31 +607,41 @@ impl ModuleRemainingSources {
         self.is_dir
     }
 
-    pub fn into_handle(
+    pub fn into_read_sources_handle(
         self,
+        idents: &IdentPool,
         setup_ran: bool,
         source_overrides: &fxhash::FxHashMap<String, String>,
     ) -> ModuleRemainingSourcesHandle {
         if setup_ran {
-            spawn_sources_read(self.module_dir, self.root_path, self.is_dir, source_overrides)
+            spawn_sources_read(
+                idents,
+                self.module_dir,
+                self.root_source_file_path,
+                self.is_dir,
+                source_overrides,
+            )
         } else {
-            self.speculative
+            self.speculative_read_handle
         }
     }
 }
 
 pub fn spawn_sources_read(
-    module_dir: String,
-    root_path: String,
+    idents: &IdentPool,
+    module_dir: StringId,
+    root_path: StringId,
     is_dir: bool,
     source_overrides: &fxhash::FxHashMap<String, String>,
 ) -> ModuleRemainingSourcesHandle {
     let overrides = source_overrides.clone();
+    let module_dir_str = idents.get_string(module_dir);
+    let root_path_str = idents.get_string(root_path);
     let reader = std::thread::spawn(move || {
         if !is_dir {
             return Ok(vec![]);
         }
-        let paths = collect_module_source_paths(&module_dir, &root_path)?;
+        let paths = collect_directory_module_source_paths(module_dir_str, root_path_str)?;
         let mut sources = Vec::with_capacity(paths.len());
         for path in paths {
             let override_content = overrides.get(&path).cloned();
@@ -708,7 +739,7 @@ pub fn start_setup(req: &SetupRequest) -> Result<Option<StartedSetup>> {
 pub fn finish_setup(req: &SetupRequest, started: StartedSetup) -> Result<()> {
     let mut scratch: Mem<()> = Mem::make();
     let module_name = req.idents.get_string(req.module_name);
-    let outputs = output_manifest(req, &mut scratch)
+    let outputs = setup_output_manifest(req, &mut scratch)
         .map_err(|e| anyhow::anyhow!("fn setup for module '{module_name}' completed but {e}"))?;
     let setup_out_dir =
         kpath::join_tmp(&mut scratch, req.idents, req.module_dir, (".k1-out", "setup"));
@@ -726,14 +757,14 @@ fn setup_is_fresh(
     let Ok(existing) = fs::read_to_string(Path::new(stamp_path)) else {
         return false;
     };
-    let Ok(outputs) = output_manifest(req, scratch) else {
+    let Ok(outputs) = setup_output_manifest(req, scratch) else {
         return false;
     };
     existing == format!("{fingerprint}{outputs}")
 }
 
 /// The output half of the stamp: every file under every declared output, hashed
-fn output_manifest(req: &SetupRequest, scratch: &mut Mem<()>) -> Result<String> {
+fn setup_output_manifest(req: &SetupRequest, scratch: &mut Mem<()>) -> Result<String> {
     use std::fmt::Write;
     let module_dir = req.idents.get_string(req.module_dir);
     let mut s = String::new();
@@ -840,8 +871,7 @@ impl SetupLock {
 
 struct ListedModule {
     name: String,
-    home_dir: String,
-    root_filename: String,
+    root_source_path: String,
     is_dir: bool,
     setup: Option<(Vec<String>, Vec<String>)>,
 }
@@ -858,9 +888,8 @@ fn read_module_list(cache_dir: &Path) -> Option<Vec<ListedModule>> {
             let mut parts = rest.split('\t');
             let name = parts.next()?.to_string();
             let is_dir = parts.next()? == "1";
-            let home_dir = parts.next()?.to_string();
-            let root_filename = parts.next()?.to_string();
-            modules.push(ListedModule { name, home_dir, root_filename, is_dir, setup: None });
+            let root_source_path = parts.next()?.to_string();
+            modules.push(ListedModule { name, root_source_path, is_dir, setup: None });
         } else if let Some(rest) = line.strip_prefix("setup\t") {
             let mut parts = rest.split('\t');
             let n_out: usize = parts.next()?.parse().ok()?;
@@ -887,14 +916,12 @@ fn write_module_list(k1: &TypedProgram) {
     let mut s = format!("k1-modules v{}\n", crate::BUILD_ID);
     for &module_id in &k1.modules_completed {
         let m = k1.modules.get(module_id);
-        let root_source = k1.ast.sources.get(m.root_file_id(&k1.mem));
         writeln!(
             s,
-            "module\t{}\t{}\t{}\t{}",
+            "module\t{}\t{}\t{}",
             k1.get_string(m.name),
             m.is_dir as u8,
-            k1.get_string(m.home_dir),
-            k1.get_string(root_source.filename),
+            k1.get_string(m.root_file_path),
         )
         .unwrap();
         if let Some(setup) = m.manifest.setup {
@@ -937,17 +964,12 @@ fn inputs_hashes_from_module_list(
         let group = &modules[start..end];
         start = end;
         for m in group {
-            let root_path = kpath::join_tmp(
-                &mut scratch,
-                idents,
-                m.home_dir.as_str(),
-                m.root_filename.as_str(),
-            );
-            let Some(root_hash) = hash_file(root_path.as_str()) else {
+            let root_path = m.root_source_path.as_str();
+            let Some(root_hash) = hash_file(root_path) else {
                 // An unreadable root invalidates the whole group and everything after
                 return hashes;
             };
-            hash = hash.add_module_header(&m.name, &m.home_dir, &m.root_filename, root_hash);
+            hash = hash.add_module_header(&m.name, root_path, root_hash);
         }
         for m in group {
             if m.setup.as_ref().is_some_and(|(outputs, inputs)| {
@@ -959,13 +981,9 @@ fn inputs_hashes_from_module_list(
             }
             let mut sources: kmem::List<(String, u64), _> = scratch.new_list(128);
             if m.is_dir {
-                let root_path = kpath::join_tmp(
-                    &mut scratch,
-                    idents,
-                    m.home_dir.as_str(),
-                    m.root_filename.as_str(),
-                );
-                let Ok(files) = collect_module_source_paths(&m.home_dir, root_path.as_str()) else {
+                let root_path = m.root_source_path.as_ref();
+                let home_dir = kpath::parent(root_path);
+                let Ok(files) = collect_directory_module_source_paths(home_dir, root_path) else {
                     return hashes;
                 };
                 for path in files {
@@ -988,10 +1006,7 @@ fn listed_setup_is_fresh(
     outputs: &[String],
     inputs: &[String],
 ) -> bool {
-    let module_dir = idents.intern(&m.home_dir);
-    let root_filename = idents.intern(&m.root_filename);
-    let root_path = kpath::join_tmp(scratch, idents, module_dir, root_filename);
-    let Ok(root_src) = fs::read_to_string(Path::new(root_path.as_str())) else {
+    let Ok(root_src) = fs::read_to_string(Path::new(&m.root_source_path)) else {
         return false;
     };
     let outputs: Vec<StringId> = {
@@ -1008,11 +1023,14 @@ fn listed_setup_is_fresh(
         }
         ids
     };
+    let module_dir_str = kpath::parent(&m.root_source_path);
+    let module_dir = idents.intern(module_dir_str);
+    let module_name = idents.intern(kpath::file_name(module_dir_str));
     let req = SetupRequest {
         idents,
         module_dir,
-        module_name: idents.intern(&m.name),
-        root_filename,
+        module_name,
+        root_filename: idents.intern(kpath::file_name(&m.root_source_path)),
         outputs: &outputs,
         inputs: &inputs,
         target: config.target,
@@ -1021,8 +1039,7 @@ fn listed_setup_is_fresh(
     let Ok(fingerprint) = setup_fingerprint(&req, scratch, &root_src) else {
         return false;
     };
-    let setup_out_dir = kpath::join_tmp(scratch, idents, module_dir, (".k1-out", "setup"));
-    let stamp_path = kpath::join_tmp(scratch, idents, setup_out_dir.as_str(), "stamp");
+    let stamp_path = kpath::join_tmp(scratch, idents, module_dir, (".k1-out", ("setup", "stamp")));
     setup_is_fresh(&req, scratch, stamp_path.as_str(), &fingerprint)
 }
 
@@ -1092,20 +1109,18 @@ pub fn compile_program_ext(
     };
     let start_time = std::time::Instant::now();
 
+    let mut ast = crate::parse::ParsedProgram::make();
+    let idents = &ast.idents;
     let src_path = (match args.file() {
-        None => kpath::canonicalize("."),
-        Some(path_buf) => kpath::canonicalize(path_buf),
+        None => kpath::canonicalize_string_id(idents, "."),
+        Some(path_buf) => kpath::canonicalize_string_id(idents, path_buf),
     })
     .unwrap_or_else(|e| panic!("Failed to load source path: {e}"));
 
-    let (is_dir, home_dir) = module_home_from_src_path(&src_path);
-    let module_name =
-        if is_dir { kpath::file_name(&src_path) } else { kpath::file_stem(&src_path) };
-    let mut ast = crate::parse::ParsedProgram::make(module_name.to_string());
+    let (_is_dir, home_dir, module_name) = module_home_from_src_path(idents, src_path);
+    ast.name_id = module_name;
 
-    let src_path_id = ast.idents.intern(&src_path);
-    let home_dir_id = ast.idents.intern(&home_dir);
-    let out_dir = kpath::join_id(&ast.idents, &mut ast.mem, home_dir.as_str(), ".k1-out");
+    let out_dir = kpath::join_id(&ast.idents, &mut ast.mem, home_dir, ".k1-out");
     let out_dir_generated = kpath::join_id(&ast.idents, &mut ast.mem, out_dir, "generated");
     let cache_dir = kpath::join_id(&ast.idents, &mut ast.mem, out_dir, crate::snap::CACHE_DIR_NAME);
     std::fs::create_dir_all(Path::new(ast.idents.get_string(out_dir_generated))).unwrap();
@@ -1143,26 +1158,28 @@ pub fn compile_program_ext(
                 exe_parent.parent().unwrap().to_path_buf()
             }
         });
-    let k1_home = kpath::canonicalize(&k1_home_raw)
+    let k1_home = kpath::canonicalize_owned(&k1_home_raw)
         .unwrap_or_else(|e| panic!("K1 home {} is not usable: {e}", k1_home_raw.display()));
     if args.chatty {
         eprintln!("using k1 home: {k1_home}");
     }
     let k1_home_id = ast.idents.intern(&k1_home);
-    let corelib_dir = kpath::join_buf(&ast.idents, k1_home.as_str(), ("modules", "core"));
-    let stdlib_dir = kpath::join_buf(&ast.idents, k1_home.as_str(), ("modules", "std"));
+    let corelib_dir =
+        kpath::join_id(&ast.idents, &mut ast.tmp, k1_home.as_str(), ("modules", "core"));
+    let stdlib_dir =
+        kpath::join_id(&ast.idents, &mut ast.tmp, k1_home.as_str(), ("modules", "std"));
 
-    // All planned paths are absolute, so spawning before the CwdGuard chdir is safe;
-    // reads overlap the rest of TypedProgram::new (scope/VM init) and core's typecheck.
-    let core_plan = ModuleRootHandle::spawn(&ast.idents, &corelib_dir, true, &lsp.source_overrides);
-    let std_plan = use_std
-        .then(|| ModuleRootHandle::spawn(&ast.idents, &stdlib_dir, false, &lsp.source_overrides));
+    let core_plan =
+        spawn_module_load(&ast.idents, &mut ast.tmp, corelib_dir, true, &lsp.source_overrides);
+    let std_plan = use_std.then(|| {
+        spawn_module_load(&ast.idents, &mut ast.tmp, stdlib_dir, false, &lsp.source_overrides)
+    });
     let main_plan =
-        ModuleRootHandle::spawn(&ast.idents, Path::new(&src_path), false, &lsp.source_overrides);
+        spawn_module_load(&ast.idents, &mut ast.tmp, src_path, false, &lsp.source_overrides);
 
     let config = CompilerConfig {
-        src_path: src_path_id,
-        home_dir: home_dir_id,
+        src_path,
+        home_dir,
         k1_home: k1_home_id,
         is_test_build: args.command.is_test(),
         no_std: args.no_std,
@@ -1185,7 +1202,7 @@ pub fn compile_program_ext(
         },
     };
 
-    let _cwd = CwdGuard::enter(&home_dir);
+    let _cwd = CwdGuard::enter(idents.get_string(home_dir));
 
     let mut k1 = 'program: {
         let cache_dir = Path::new(ast.idents.get_string(cache_dir));
@@ -1198,6 +1215,13 @@ pub fn compile_program_ext(
                 &lsp.source_overrides,
                 &modules,
             );
+            if args.chatty {
+                eprintln!(
+                    "cache: {} of {} listed modules have valid inputs",
+                    input_hashes_by_module.len(),
+                    modules.len()
+                );
+            }
 
             // The snapshot with the most modules in it is at the end
             for (i, hash) in input_hashes_by_module.iter().enumerate().rev() {
@@ -1258,7 +1282,7 @@ pub fn compile_program_ext(
         eprintln!("Completed with {} warnings", warning_count);
     }
     if args.chatty {
-        k1.print_timing_info(&src_path, total_elapsed_ns as u64, &mut std::io::stderr()).unwrap();
+        k1.print_timing_info(total_elapsed_ns as u64, &mut std::io::stderr()).unwrap();
     }
 
     #[cfg(feature = "profile")]
@@ -1823,7 +1847,7 @@ fn write_reload_dylib(
 ) -> Result<()> {
     let dylib_start = std::time::Instant::now();
     let ns_name = k1.ident_str(k1.namespaces.get(ns_id).name).to_string();
-    let module_name = k1.ast.name.clone();
+    let module_name = k1.program_name().to_string();
     let platform = k1.config.target.platform();
     let out_dir = k1.config.out_dir;
 
@@ -1910,7 +1934,7 @@ pub fn run_compiled_program(
     is_test: bool,
     program_args: &[String],
 ) -> Option<i32> {
-    let exe_path = kpath::join_buf(
+    let exe_path = kpath::join_pathbuf(
         idents,
         out_dir,
         format_args!("{}{}", module_name, if is_test { "_test" } else { "" }),
@@ -1959,7 +1983,7 @@ mod compiler_test {
             std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
         });
         let root = env!("CARGO_MANIFEST_DIR");
-        let dep_file = kpath::canonicalize(
+        let dep_file = kpath::canonicalize_owned(
             Path::new(root).join("test_src/dep_diamond_test/deps/shared/shared.k1"),
         )
         .unwrap();
@@ -2204,7 +2228,8 @@ fn main(): i32 { 0 }
             std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
         });
         let root = env!("CARGO_MANIFEST_DIR");
-        let dir = std::env::temp_dir().join(format!("k1_discovered_restore_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("k1_discovered_restore_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let app = dir.join("app");
         let genlib = app.join("deps/genlib");
@@ -2310,7 +2335,7 @@ fn main(): i32 { 0 }
                 let span = program.ast.spans.get(m.span);
                 let source = program.ast.sources.get(span.file_id);
                 candidates.push((
-                    program.ident_str(source.filename),
+                    source.filename_str(&program.ast.idents),
                     source.get_span_content(&program.ast.mem, span),
                 ));
             }

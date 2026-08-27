@@ -4364,7 +4364,7 @@ pub fn display_unit_name(
         IrUnitId::Expr(typed_expr_id) => {
             let expr_span = k1.exprs.get_span(typed_expr_id);
             let (source, line) = k1.get_span_location(expr_span);
-            write!(w, "expr {}:{}", source.filename, line.line_number())?;
+            write!(w, "expr {}:{}", source.filename_str(&k1.ast.idents), line.line_number())?;
         }
     };
     Ok(())
@@ -4413,7 +4413,7 @@ pub fn display_unit(
             w.write_str("expr ")?;
             display_phys_fn_type(w, k1, &unit.fn_type)?;
             write!(w, "(type id: {})", k1.type_id_to_string(unit.result_type_id))?;
-            write!(w, " from {}:{}", k1.ident_str(source.filename), line.line_number())?;
+            write!(w, " from {}:{}", source.filename_str(&k1.ast.idents), line.line_number())?;
         }
     };
     writeln!(w, " (inst count={}, cfg_valid={})", unit.inst_count, unit.cfg_valid)?;

@@ -498,7 +498,9 @@ fn lower_unit_with_ctx(
                 Inst::Load { t, src, .. } if matches!(t.as_enum(), PhysicalTypeEnum::Scalar(_)) => {
                     Some(src)
                 }
-                Inst::Store { t, dst, .. } if matches!(t.as_enum(), PhysicalTypeEnum::Scalar(_)) => {
+                Inst::Store { t, dst, .. }
+                    if matches!(t.as_enum(), PhysicalTypeEnum::Scalar(_)) =>
+                {
                     Some(dst)
                 }
                 _ => None,

@@ -546,7 +546,7 @@ mod completion_tests {
         let path = dir.join(format!("{test_name}.k1"));
         std::fs::write(&path, &content).unwrap();
         let mut source_overrides = fxhash::FxHashMap::default();
-        source_overrides.insert(crate::kpath::canonicalize(&path).unwrap(), spliced);
+        source_overrides.insert(crate::kpath::canonicalize_owned(&path).unwrap(), spliced);
         let args = Args {
             no_std: false,
             emit_llvm: false,

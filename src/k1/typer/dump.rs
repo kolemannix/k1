@@ -19,7 +19,7 @@ impl Display for TypedProgram {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let skip_variables = true;
         f.write_str("Module ")?;
-        f.write_str(&self.ast.name)?;
+        f.write_str(self.ast.name_str())?;
         f.write_str("\n")?;
         self.dump_types(f)?;
         f.write_str("--- Namespaces ---\n")?;

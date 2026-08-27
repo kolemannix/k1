@@ -467,8 +467,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let (debug_builder, compile_unit) = llvm_module.create_debug_info_builder(
             false,
             DWARFSourceLanguage::C,
-            module.ast.idents.get_string(source.filename),
-            module.ast.idents.get_string(source.directory),
+            source.filename_str(&module.ast.idents),
+            source.directory_str(&module.ast.idents),
             "k1_compiler",
             optimize,
             "",
@@ -526,8 +526,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let mut di_files: FxHashMap<FileId, DIFile> = FxHashMap::default();
         for (file_id, source) in module.ast.sources.iter() {
-            let filename = module.ast.idents.get_string(source.filename);
-            let directory = module.ast.idents.get_string(source.directory);
+            let filename = source.filename_str(&module.ast.idents);
+            let directory = source.directory_str(&module.ast.idents);
             di_files.insert(file_id, debug_builder.create_file(filename, directory));
         }
         let mut debug = DebugContext {
@@ -543,21 +543,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     pub fn create(
         ctx: &'ctx Context,
-        module: &'module mut TypedProgram,
+        k1: &'module mut TypedProgram,
         debug: bool,
         optimize: bool,
         unit: CgUnit,
     ) -> Self {
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
-        let mut llvm_module = ctx.create_module(&module.ast.name);
-        llvm_module.set_source_file_name(
-            module.ast.idents.get_string(module.ast.sources.get_main().filename),
-        );
+        let mut llvm_module = ctx.create_module(k1.program_name());
+        llvm_module.set_source_file_name(k1.ast.sources.get_main().filename_str(&k1.ast.idents));
 
-        let debug_context = Cg::init_debug(ctx, &llvm_module, module, optimize, debug);
+        let debug_context = Cg::init_debug(ctx, &llvm_module, k1, optimize, debug);
 
-        let machine = Cg::set_up_machine(&mut llvm_module, optimize, module.config.target);
+        let machine = Cg::set_up_machine(&mut llvm_module, optimize, k1.config.target);
         let target_data = machine.get_target_data();
 
         let ptr = ctx.ptr_type(AddressSpace::default());
@@ -572,11 +570,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             empty_struct: ctx.struct_type(&[], false),
         };
 
-        let has_reloadable_fns = module.namespaces.iter().any(|ns| ns.reload);
+        let has_reloadable_fns = k1.namespaces.iter().any(|ns| ns.reload);
 
         Cg {
             ctx,
-            k1: module,
+            k1,
             unit,
             has_reloadable_fns,
             llvm_module,
@@ -751,7 +749,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         }
 
-        let program_name = self.k1.ast.name.clone();
+        let program_name = self.k1.program_name().to_string();
         let dylib_ext = self.k1.config.target.platform().dylib_ext();
         let ptr_type = self.builtin_types.ptr;
         let entry_type = self.ctx.struct_type(&[ptr_type.into(), ptr_type.into()], false);

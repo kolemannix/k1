@@ -8,7 +8,7 @@ use crate::kmem::{self, Handle, List, MSL2, MSS2, MSlice, MSpillList};
 use crate::rawref::RawRef;
 use crate::typer::{Linkage, MessageLevel, ModuleId};
 use crate::vpool::VPool;
-use crate::{SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
+use crate::{SV8, impl_copy_if_small, kpath, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
 pub use idents::{IdentPool, IdentSlice, IdentSpanned, QIdent, StringId};
 use smallvec::smallvec;
@@ -1639,8 +1639,8 @@ pub struct SemanticToken {
     pub kind: SemanticTokenKind,
 }
 
+pub struct ParsedTmp;
 pub struct ParsedProgram {
-    pub name: String,
     pub name_id: StringId,
     pub spans: Spans,
     pub functions: VPool<ParsedFunction, ParsedFunctionId>,
@@ -1662,6 +1662,7 @@ pub struct ParsedProgram {
     pub semantic_tokens: VPool<SemanticToken, SemanticTokenId>,
 
     pub mem: kmem::Mem<ParsedProgram>,
+    pub tmp: kmem::Mem<ParsedTmp>,
 }
 
 #[cfg(feature = "lsp")]
@@ -1670,16 +1671,13 @@ unsafe impl Sync for ParsedProgram {}
 unsafe impl Send for ParsedProgram {}
 
 impl ParsedProgram {
-    pub fn make(name: String) -> ParsedProgram {
+    pub fn make() -> ParsedProgram {
         let mut mem = kmem::Mem::make();
         let idents = IdentPool::make(&mut mem);
-        let name_id = idents.intern(&name);
-
         let semantic_tokens = VPool::make("semantic_tokens");
 
         ParsedProgram {
-            name,
-            name_id,
+            name_id: StringId::PENDING,
             spans: Spans::new(),
             functions: VPool::make("functions"),
             macros: VPool::make("macros"),
@@ -1700,12 +1698,21 @@ impl ParsedProgram {
             semantic_tokens,
 
             mem,
+            tmp: kmem::Mem::make(),
         }
+    }
+
+    pub fn set_name(&mut self, name: &str) {
+        let name_id = self.idents.intern(name);
+        self.name_id = name_id;
+    }
+
+    pub fn name_str(&self) -> &str {
+        self.idents.get_string(self.name_id)
     }
 
     pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
         let ParsedProgram {
-            name,
             name_id,
             spans,
             functions,
@@ -1725,11 +1732,11 @@ impl ParsedProgram {
             errors,
             semantic_tokens,
             mem,
+            tmp,
         } = self;
         w.write_section("ast");
-        w.write_str(name);
-        w.write_t(name_id);
         mem.snap(w);
+        w.write_t(name_id);
         spans.span_pool.snap(w);
         functions.snap(w);
         macros.snap(w);
@@ -1749,14 +1756,14 @@ impl ParsedProgram {
         // Snapshots are only taken of successfully-compiled module boundaries
         assert!(errors.is_empty(), "cannot snapshot a ParsedProgram with parse errors");
         semantic_tokens.snap(w);
+        let _ = tmp;
     }
 
     pub fn restore(r: &mut crate::snap::SnapReader) -> ParsedProgram {
         r.section("ast");
-        let name = r.string();
-        let mut ast = ParsedProgram::make(name);
-        ast.name_id = r.read_t();
+        let mut ast = ParsedProgram::make();
         ast.mem.restore(r);
+        ast.name_id = r.read_t();
         ast.spans.span_pool.restore(r);
         ast.functions.restore(r);
         ast.macros.restore(r);
@@ -2064,10 +2071,8 @@ pub fn write_source_location(
     writeln!(w, "┌────────────────────────────────────────╴")?;
     writeln!(
         w,
-        "{}{}{}:{}:{}: {}",
-        colored!(ast.idents.get_string(source.directory)),
-        std::path::MAIN_SEPARATOR,
-        colored!(ast.idents.get_string(source.filename)),
+        "{}:{}:{}: {}",
+        colored!(ast.idents.get_string(source.file_path)),
         line.line_index + 1,
         column,
         level_name
@@ -2119,8 +2124,7 @@ type Mem = kmem::Mem<ParsedProgram>;
 #[derive(Debug, Clone, Copy)]
 pub struct SourceFile {
     pub file_id: FileId,
-    pub directory: StringId,
-    pub filename: StringId,
+    pub file_path: StringId,
     content: kmem::MSlice<u8, ParsedProgram>,
     newline_positions: kmem::MSlice<u32, ParsedProgram>,
     /// Retained only for LSP sessions; empty otherwise
@@ -2131,21 +2135,31 @@ pub struct SourceFile {
 impl SourceFile {
     pub fn make(
         mem: &mut kmem::Mem<ParsedProgram>,
-        directory: StringId,
-        filename: StringId,
+        file_path: StringId,
         content: &str,
     ) -> SourceFile {
         let newline_positions =
             mem.pushn_iter(memchr::memchr_iter(b'\n', content.as_bytes()).map(|pos| pos as u32));
         SourceFile {
             file_id: 0,
-            directory,
-            filename,
+            file_path,
             content: mem.pushn(content.as_bytes()),
             newline_positions,
             tokens: kmem::MSlice::empty(),
             trivia: kmem::MSlice::empty(),
         }
+    }
+
+    pub fn filename(&self, idents: &IdentPool) -> StringId {
+        idents.intern(self.filename_str(idents))
+    }
+
+    pub fn filename_str(&self, idents: &IdentPool) -> &str {
+        kpath::file_name(idents.get_string(self.file_path))
+    }
+
+    pub fn directory_str(&self, idents: &IdentPool) -> &str {
+        kpath::parent(idents.get_string(self.file_path))
     }
 
     pub fn content<'m>(&self, mem: &'m Mem) -> &'m str {
@@ -6061,8 +6075,6 @@ impl ParsedProgram {
     }
 }
 
-/// The file joins the program's sources unconditionally — the FileId is
-/// returned even when lexing fails
 pub fn lex_file_into_program(
     module: &mut ParsedProgram,
     source: SourceFile,
@@ -6083,12 +6095,18 @@ pub fn lex_file_into_program(
 
 /// To be used by the lsp or other tools that are
 /// only interested in parsing a single file independently
-pub fn parse_standalone(program_name: String, content: String) -> ParsedProgram {
-    let mut ast = ParsedProgram::make(program_name.clone());
+pub fn parse_standalone(program_name: String, content: &str) -> ParsedProgram {
+    let mut ast = ParsedProgram::make();
+    ast.set_name(&program_name);
 
-    let directory = ast.idents.intern(".");
-    let filename = ast.idents.intern(&program_name);
-    let source = SourceFile::make(&mut ast.mem, directory, filename, &content);
+    let program_name_id = ast.idents.intern(&program_name);
+    let source_file_path = if std::path::Path::new(&program_name).is_absolute() {
+        program_name_id
+    } else {
+        let directory = std::env::current_dir().unwrap();
+        kpath::join_id(&ast.idents, &mut ast.tmp, directory.as_path(), program_name_id)
+    };
+    let source = SourceFile::make(&mut ast.mem, source_file_path, content);
     let mut token_vec = vec![];
     let (file_id, lex_result) = lex_file_into_program(&mut ast, source, &mut token_vec);
     if let Err(e) = lex_result {
@@ -6097,7 +6115,7 @@ pub fn parse_standalone(program_name: String, content: String) -> ParsedProgram 
     }
 
     let module_id = ModuleId::from_u32(1).unwrap();
-    let module_name = ast.idents.intern("test_module");
+    let module_name = program_name_id;
     let module_ns_id = init_module(module_name, &mut ast);
 
     let mut parser =
@@ -6115,8 +6133,8 @@ pub fn parse_standalone(program_name: String, content: String) -> ParsedProgram 
 }
 
 #[cfg(test)]
-pub fn test_parse_input(name: String, source: String) -> ParseResult<ParsedProgram> {
-    let ast = parse_standalone(name, source);
+pub fn test_parse_input(name: String, source: impl AsRef<str>) -> ParseResult<ParsedProgram> {
+    let ast = parse_standalone(name, source.as_ref());
     if let Some(e) = ast.errors.first() {
         print_error(&ast, e);
         Err(e.clone())

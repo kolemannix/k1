@@ -16,7 +16,7 @@ pub(crate) mod visit;
 
 use crate::ir::{AtomicOrderingIr, BackendBuiltin, IrUnitId};
 use crate::typer::megarepl::MegareplState;
-use crate::{bc, clock, compiler, debug, ir, k1_format_user, kbail, kerr, kwarn, vm};
+use crate::{bc, clock, compiler, debug, ir, k1_format, k1_format_user, kbail, kerr, kwarn, vm};
 use bitflags::bitflags;
 use itertools::Itertools;
 pub use static_value::{
@@ -1317,7 +1317,6 @@ impl TypedFloatExpr {
 pub enum IntegerCastDirection {
     Extend,
     Truncate,
-    NoOp,
     SignChange,
 }
 
@@ -2548,6 +2547,7 @@ pub struct Module {
     pub id: ModuleId,
     pub name: StringId,
     pub home_dir: StringId,
+    pub root_file_path: StringId,
     pub manifest: ModuleManifest,
     pub namespace_id: NamespaceId,
     pub namespace_scope_id: ScopeId,
@@ -2578,11 +2578,17 @@ impl BuildNs {
 
 impl Module {
     // Used to 'reserve' a spot for module so that parser can know its module id
-    pub fn pending(id: ModuleId, name: StringId, home_dir: StringId) -> Self {
+    pub fn pending(
+        id: ModuleId,
+        name: StringId,
+        home_dir: StringId,
+        root_file_path: StringId,
+    ) -> Self {
         Module {
             id,
             name,
             home_dir,
+            root_file_path,
             manifest: ModuleManifest::defaulted(ModuleKind::Library),
             namespace_id: NamespaceId::PENDING,
             namespace_scope_id: ScopeId::PENDING,
@@ -3177,7 +3183,7 @@ impl TypedProgram {
 
     pub fn add_module(
         &mut self,
-        root_handle: crate::compiler::ModuleRootHandle,
+        load_handle: crate::compiler::ModuleLoadHandle,
         primary_module: bool,
     ) -> anyhow::Result<ModuleId> {
         let mut load_stack: Vec<StringId> = vec![];
@@ -3186,7 +3192,7 @@ impl TypedProgram {
             Option<crate::compiler::ModuleRemainingSourcesHandle>,
         )> = vec![];
         let added_module_id = self.discover_module_and_deps(
-            root_handle,
+            load_handle,
             primary_module,
             &mut load_stack,
             &mut modules_to_typecheck,
@@ -3205,16 +3211,15 @@ impl TypedProgram {
             let source = self.ast.sources.get(root.file_id);
             hash = hash.add_module_header(
                 self.ident_str(module.name),
-                self.ident_str(source.directory),
-                self.ident_str(source.filename),
+                self.ast.idents.get_string(source.file_path),
                 root.hash,
             );
         }
         for (module_id, remaining) in modules_to_typecheck.into_iter() {
             let files = remaining.map(|r| r.join()).transpose()?;
             let module = self.modules.get(module_id);
-            let (module_name, home_dir, parsed_namespace_id, build_ns_defn) =
-                (module.name, module.home_dir, module.parsed_namespace_id, module.build_ns_defn);
+            let (module_name, parsed_namespace_id, build_ns_defn) =
+                (module.name, module.parsed_namespace_id, module.build_ns_defn);
             let name = self.ident_str(module_name);
             hash = match &files {
                 Some(files) => hash.add_module_sources(
@@ -3227,13 +3232,8 @@ impl TypedProgram {
                         name,
                         file_hashes[1..].iter().map(|sfh| {
                             let s = self.ast.sources.get(sfh.file_id);
-                            let path = kpath::join_tmp(
-                                self.get_tmp_unsafe(),
-                                &self.ast.idents,
-                                s.directory,
-                                s.filename,
-                            );
-                            (path, sfh.hash)
+                            let path_str = self.ast.idents.get_string(s.file_path);
+                            (path_str, sfh.hash)
                         }),
                     )
                 }
@@ -3245,7 +3245,6 @@ impl TypedProgram {
                         module_id,
                         module_name,
                         parsed_namespace_id,
-                        home_dir,
                         file,
                     );
                 }
@@ -3343,7 +3342,7 @@ impl TypedProgram {
 
     fn discover_module_and_deps(
         &mut self,
-        root_handle: crate::compiler::ModuleRootHandle,
+        root_load_handle: crate::compiler::ModuleLoadHandle,
         primary_module: bool,
         load_stack: &mut Vec<StringId>,
         modules_to_typecheck: &mut Vec<(
@@ -3351,9 +3350,12 @@ impl TypedProgram {
             Option<crate::compiler::ModuleRemainingSourcesHandle>,
         )>,
     ) -> anyhow::Result<ModuleId> {
-        debug!("Loading module {}...", root_handle.src_path);
-        let module_name = self.ast.idents.intern(kpath::file_stem(&root_handle.src_path));
+        debug!("Loading module {}...", root_load_handle.src_path);
+        let module_name = root_load_handle.module_name;
         if let Some(m) = self.modules.iter().find(|m| m.name == module_name) {
+            // Already discovered this run, or restored from a snapshot; either way its
+            // parsed sources, namespaces, and manifest exist. Only the run-scoped work
+            // list is rebuilt: queue it (deps first) with readers for incomplete modules.
             fn queue(
                 k1: &mut TypedProgram,
                 module_id: ModuleId,
@@ -3391,25 +3393,25 @@ impl TypedProgram {
             return Ok(module_id);
         }
 
-        let home_dir = self.ast.idents.intern(&root_handle.module_dir);
+        let home_dir = root_load_handle.module_dir;
         let module_id = self.modules.next_id();
-        let module_id = self
-            .modules
-            .add_expected_id(Module::pending(module_id, module_name, home_dir), module_id);
+        let module_id = self.modules.add_expected_id(
+            Module::pending(
+                module_id,
+                module_name,
+                home_dir,
+                root_load_handle.root_source_file_path,
+            ),
+            module_id,
+        );
         let is_core = module_id == MODULE_ID_CORE;
         load_stack.push(module_name);
 
-        let (root_file, remaining_sources) = root_handle.join_root()?;
+        let (root_file, remaining_sources) = root_load_handle.await_read_remaining()?;
 
         let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
         self.modules.get_mut(module_id).parsed_namespace_id = parsed_namespace_id;
-        self.parse_module_source_file(
-            module_id,
-            module_name,
-            parsed_namespace_id,
-            home_dir,
-            root_file,
-        );
+        self.parse_module_source_file(module_id, module_name, parsed_namespace_id, root_file);
         if !self.ast.errors.is_empty() && !self.lsp.completion {
             bail!(
                 "Parsing module {} failed with {} errors",
@@ -3529,58 +3531,67 @@ impl TypedProgram {
             }
         }
 
-        let remaining = remaining_sources.into_handle(setup_ran, &self.lsp.source_overrides);
-        let mut dep_handles: Vec<crate::compiler::ModuleRootHandle> = vec![];
-        for i in 0..deps.len() {
-            let dep_name_id = self.mem.getn(deps)[i as usize].name;
-            if self.ast.idents.get_string(dep_name_id) == self.program_name() {
-                let msg = format!(
-                    "Module '{}' depends on '{}': module name collision with the program itself",
-                    self.ident_str(module_name),
-                    self.ast.idents.get_string(dep_name_id)
-                );
+        let remaining = remaining_sources.into_read_sources_handle(
+            &self.ast.idents,
+            setup_ran,
+            &self.lsp.source_overrides,
+        );
+        let mut dep_handles: Vec<crate::compiler::ModuleLoadHandle> = vec![];
+        for dep in self.mem.getn(deps) {
+            let dep_name = dep.name;
+            if self.ast.idents.get_string(dep_name) == self.program_name() {
+                let msg = if dep_name == module_name {
+                    format!("Module '{}' cannot depend on itself", self.ident_str(module_name))
+                } else {
+                    format!(
+                        "Module '{}' depends on '{}': module name collision with the program itself",
+                        self.ident_str(module_name),
+                        self.ast.idents.get_string(dep_name)
+                    )
+                };
                 return Err(self.module_error(build_ns_span, msg));
             }
-            if load_stack.contains(&dep_name_id) {
+            if load_stack.contains(&dep_name) {
                 let mut cycle: Vec<&str> = vec![];
-                for n in load_stack.iter().skip_while(|n| **n != dep_name_id) {
+                for n in load_stack.iter().skip_while(|n| **n != dep_name) {
                     cycle.push(self.ast.idents.get_string(*n));
                 }
-                cycle.push(self.ast.idents.get_string(dep_name_id));
+                cycle.push(self.ast.idents.get_string(dep_name));
                 let msg = format!("Module dependency cycle: {}", cycle.join(" -> "));
                 return Err(self.module_error(build_ns_span, msg));
             }
-            if self.modules.iter().any(|m| m.name == dep_name_id) {
+            if self.modules.iter().any(|m| m.name == dep_name) {
                 continue;
             }
-            let dep_str = self.ast.idents.get_string(dep_name_id);
-            let module_deps_path = kpath::join_tmp(
-                self.get_tmp_unsafe(),
+            let local_module_deps_path = kpath::join_tmp(
+                &mut self.tmp,
                 &self.ast.idents,
                 self.config.home_dir,
-                ("deps", dep_str),
+                ("deps", dep_name),
             );
             let k1_home_modules_path = kpath::join_tmp(
                 self.get_tmp_unsafe(),
                 &self.ast.idents,
                 self.config.k1_home,
-                ("modules", dep_str),
+                ("modules", dep_name),
             );
-            let dep_path = if Path::new(module_deps_path.as_str()).exists() {
-                module_deps_path
+            let dep_path = if Path::new(local_module_deps_path.as_str()).exists() {
+                local_module_deps_path
             } else if Path::new(k1_home_modules_path.as_str()).exists() {
                 k1_home_modules_path
             } else {
                 let msg = format!(
-                    "Module '{}' depends on '{}', which was not found. Searched {module_deps_path}, {k1_home_modules_path}",
+                    "Module '{}' depends on '{}', which was not found. Searched locally at {local_module_deps_path} and searched installed modules at {k1_home_modules_path}",
                     self.ident_str(module_name),
-                    dep_str,
+                    self.ident_str(dep_name),
                 );
                 return Err(self.module_error(build_ns_span, msg));
             };
-            match crate::compiler::ModuleRootHandle::spawn(
+            let dep_path_id = self.ast.idents.intern(dep_path);
+            match crate::compiler::spawn_module_load(
                 &self.ast.idents,
-                Path::new(dep_path.as_str()),
+                &mut self.ast.tmp,
+                dep_path_id,
                 false,
                 &self.lsp.source_overrides,
             ) {
@@ -3589,7 +3600,7 @@ impl TypedProgram {
                     let msg = format!(
                         "Module '{}' depends on '{}', which failed to load: {}",
                         self.ident_str(module_name),
-                        dep_str,
+                        self.ident_str(dep_name),
                         e
                     );
                     return Err(self.module_error(build_ns_span, msg));
@@ -3597,6 +3608,7 @@ impl TypedProgram {
             }
         }
 
+        // All dep reads are in flight before we recurse into any of them
         for handle in dep_handles {
             self.discover_module_and_deps(handle, false, load_stack, modules_to_typecheck)?;
         }
@@ -3611,16 +3623,12 @@ impl TypedProgram {
         module_id: ModuleId,
     ) -> crate::compiler::ModuleRemainingSourcesHandle {
         let module = self.modules.get(module_id);
-        let (home_dir, is_dir) = (module.home_dir, module.is_dir);
-        let root_filename = self.ast.sources.get(module.root_file_id(&self.mem)).filename;
-        let root_path = crate::compiler::pathbuf_into_string(kpath::join_buf(
+        let (home_dir, is_dir, root_source_file_path) =
+            (module.home_dir, module.is_dir, module.root_file_path);
+        crate::compiler::spawn_sources_read(
             &self.ast.idents,
             home_dir,
-            root_filename,
-        ));
-        crate::compiler::spawn_sources_read(
-            self.ident_str(home_dir).to_string(),
-            root_path,
+            root_source_file_path,
             is_dir,
             &self.lsp.source_overrides,
         )
@@ -3691,7 +3699,8 @@ impl TypedProgram {
         force: bool,
     ) -> crate::compiler::SetupRequest<'_> {
         let m = self.modules.get(module_id);
-        let root_filename = self.ast.sources.get(m.root_file_id(&self.mem)).filename;
+        let root_filename =
+            self.ast.sources.get(m.root_file_id(&self.mem)).filename(&self.ast.idents);
         crate::compiler::SetupRequest {
             idents: &self.ast.idents,
             module_dir: m.home_dir,
@@ -3748,11 +3757,10 @@ impl TypedProgram {
         module_id: ModuleId,
         module_name: StringId,
         parsed_namespace_id: ParsedNamespaceId,
-        directory: StringId,
         file: crate::compiler::SourceFile,
     ) -> FileId {
-        let filename = self.ast.idents.intern(kpath::file_name(&file.path));
-        let source = parse::SourceFile::make(&mut self.ast.mem, directory, filename, &file.content);
+        let path = self.ast.idents.intern(&file.path);
+        let source = parse::SourceFile::make(&mut self.ast.mem, path, &file.content);
         let mut token_buffer = std::mem::take(&mut self.buffers.lexer_tokens);
         let (file_id, lex_result) =
             parse::lex_file_into_program(&mut self.ast, source, &mut token_buffer);
@@ -3856,7 +3864,7 @@ impl TypedProgram {
     }
 
     pub fn program_name(&self) -> &str {
-        &self.ast.name
+        self.ast.name_str()
     }
 
     pub fn get_string(&self, string_id: StringId) -> &str {
@@ -7311,17 +7319,18 @@ impl TypedProgram {
 
     pub fn compile_all_pending_ir(&mut self, on_behalf_of_span: SpanId) -> K1Result<()> {
         loop {
-            // eprintln!(
-            //     "compile_all_pending_ir {}",
-            //     self.ir.b_units_pending_compile.len()
-            // );
-            // for p in &self.ir.b_units_pending_compile {
-            //     eprintln!("PENDING: {} {}", p.as_u32(), self.function_id_to_string(*p, false));
-            // }
             if let Some(function_id) = self.ir.units_pending_compile.keys().next().copied() {
                 self.ir.units_pending_compile.remove(&function_id);
-                self.eval_function_body(function_id)?;
+                if let Err(e) = self.eval_function_body(function_id) {
+                    // re-insert so all future attempts to drain also fail.
+                    // we could instead set a failure flag and not even try, but this is ok for now
+                    self.ir.units_pending_compile.insert(function_id, ());
+                    return Err(e);
+                }
                 if let Err(e) = ir::compile_function(self, function_id) {
+                    // re-insert so all future attempts to drain also fail.
+                    // we could instead set a failure flag and not even try, but this is ok for now
+                    self.ir.units_pending_compile.insert(function_id, ());
                     kbail!(
                         self,
                         on_behalf_of_span,
@@ -10779,18 +10788,15 @@ impl TypedProgram {
             return Ok(None);
         }
         let (source, line) = self.get_span_location(span);
-        let directory = self.ast.idents.get_string(source.directory);
-        let filename = self.ast.idents.get_string(source.filename);
+        let filepath = self.ast.idents.get_string(source.file_path);
         // The source keeps `content` forever, so size it exactly and move it
         // in; 48 covers the header boilerplate and block wrapper
-        let mut content = String::with_capacity(chunks_len + directory.len() + filename.len() + 48);
+        let mut content = String::with_capacity(chunks_len + filepath.len() + 48);
         writeln!(
             &mut content,
-            "// generated by #meta block at {}{}{}:{}",
-            directory,
-            std::path::MAIN_SEPARATOR,
-            filename,
-            line.line_number(),
+            "// generated by #meta block at {}:{}",
+            filepath,
+            line.line_number()
         )
         .unwrap();
         if !is_definition {
@@ -10864,18 +10870,19 @@ impl TypedProgram {
         //       'what are we compiling' stack would provide it
         let (source, line) = self.get_span_location(span);
         let line_number = line.line_number();
-        let stem = self.ast.idents.get_string(source.filename).strip_suffix(".k1").unwrap();
+        let stem = source.filename_str(&self.ast.idents).strip_suffix(".k1").unwrap();
         let serial = self.emitted_sources.len() + 1;
-        let generated_filename =
-            self.ast.idents.intern(format!("meta_{stem}_{line_number}_{serial}.k1"));
+        let generated_filename = k1_format!(self, &(), "meta_{stem}_{line_number}_{serial}.k1");
         let generated_dir = self.config.out_dir_generated;
-        debug!("Emitted source:\n---\n{content}\n---");
-        let emitted_file = crate::parse::SourceFile::make(
-            &mut self.ast.mem,
+        let generated_path = kpath::join_id(
+            &self.ast.idents,
+            &mut self.tmp,
             generated_dir,
-            generated_filename,
-            &content,
+            generated_filename.as_str(),
         );
+        debug!("Emitted source:\n---\n{content}\n---");
+        let emitted_file =
+            crate::parse::SourceFile::make(&mut self.ast.mem, generated_path, &content);
         let source_for_emission = self.ast.sources.add_file(emitted_file);
         debug_assert!(
             self.emitted_sources.last().is_none_or(|e| e.file_id < source_for_emission),
@@ -10913,15 +10920,8 @@ impl TypedProgram {
         for emitted in &self.emitted_sources {
             if emitted.has_diagnostic {
                 let source = self.ast.sources.get(emitted.file_id);
-                let path = kpath::join_tmp(
-                    self.get_tmp_unsafe(),
-                    &self.ast.idents,
-                    source.directory,
-                    source.filename,
-                );
-                if let Err(e) =
-                    std::fs::write(Path::new(path.as_str()), source.content(&self.ast.mem))
-                {
+                let path = self.ast.idents.get_string(source.file_path);
+                if let Err(e) = std::fs::write(Path::new(path), source.content(&self.ast.mem)) {
                     eprintln!("Failed to write out generated metaprogram at {path}. {e}");
                 }
             }
@@ -12659,25 +12659,38 @@ impl TypedProgram {
         let cast_type = match self.types.get(base_expr_type) {
             Type::Integer(from_integer_type) => match self.types.get(target_type) {
                 Type::Integer(to_integer_type) => {
-                    let cast_type = match from_integer_type.width().cmp(&to_integer_type.width()) {
+                    let spelling = match from_integer_type.width().cmp(&to_integer_type.width()) {
                         Ordering::Less => {
-                            // Extend
                             if from_integer_type.is_signed() && !to_integer_type.is_signed() {
-                                kbail!(
-                                    self,
-                                    span,
-                                    "Cannot widen from {} to {}; its unclear whether sign or zero extension should occur",
-                                    from_integer_type,
-                                    to_integer_type
-                                );
+                                format!(
+                                    "zero-extension: .unsigned().widen[{}], sign-extension: .widen[{}].unsigned()",
+                                    to_integer_type,
+                                    to_integer_type.sign_flipped()
+                                )
+                            } else {
+                                format!("lossless widening: .widen[{}]", to_integer_type)
                             }
-                            CastType::IntegerCast(IntegerCastDirection::Extend)
                         }
-                        Ordering::Greater => CastType::IntegerCast(IntegerCastDirection::Truncate),
-                        // Likely a sign change
-                        Ordering::Equal => CastType::IntegerCast(IntegerCastDirection::NoOp),
+                        Ordering::Greater => {
+                            format!("modular truncation: .trunc[{}]", to_integer_type)
+                        }
+                        Ordering::Equal => {
+                            let flip = if to_integer_type.is_signed() {
+                                ".signed()"
+                            } else {
+                                ".unsigned()"
+                            };
+                            format!("sign reinterpretation: {}", flip)
+                        }
                     };
-                    Ok(Outcome::Cast(cast_type))
+                    Err(kerr!(
+                        self,
+                        span,
+                        "Integer conversions name their operation; {} to {}: {}",
+                        from_integer_type,
+                        to_integer_type,
+                        spelling
+                    ))
                 }
                 Type::Char => {
                     if from_integer_type.width() == NumericWidth::B8 {
@@ -12720,13 +12733,14 @@ impl TypedProgram {
             },
             Type::Float(from_float_type) => match self.types.get(target_type) {
                 Type::Float(to_float_type) => {
-                    match from_float_type.size().cmp(&to_float_type.size()) {
-                        Ordering::Less => Ok(Outcome::Cast(CastType::FloatExtend)),
-                        Ordering::Greater => Ok(Outcome::Cast(CastType::FloatTruncate)),
+                    let spelling = match from_float_type.size().cmp(&to_float_type.size()) {
+                        Ordering::Less => "lossless widening: .widen[f64]",
+                        Ordering::Greater => "truncation: .trunc[f32]",
                         Ordering::Equal => {
                             unreachable!("equal-width floats are the same type")
                         }
-                    }
+                    };
+                    Err(kerr!(self, span, "Float conversions name their operation; {}", spelling))
                 }
                 Type::Integer(to_int_type) => {
                     if to_int_type.is_signed() {
@@ -12895,6 +12909,138 @@ impl TypedProgram {
             }
             Outcome::Expr(typed_expr_id) => Ok(typed_expr_id),
         }
+    }
+
+    fn eval_widen_trunc(
+        &mut self,
+        base_expr: ParsedExprId,
+        target_type: TypeId,
+        widen: bool,
+        span: SpanId,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
+        let base_expr = self.eval_expr(base_expr, ctx.with_no_expected_type())?;
+        let base_type = self.exprs.get_type(base_expr);
+        let op = if widen { "widen" } else { "trunc" };
+        if base_type == target_type {
+            kbail!(
+                self,
+                span,
+                "{} to the same type ({}) does nothing",
+                op,
+                self.type_id_to_string(target_type)
+            );
+        }
+        enum Operand {
+            Int(IntegerType),
+            Float(NumericWidth),
+            Other,
+        }
+        fn classify(t: &Type) -> Operand {
+            match t {
+                Type::Integer(i) => Operand::Int(*i),
+                Type::Float(f) => Operand::Float(f.size()),
+                _ => Operand::Other,
+            }
+        }
+        let from = classify(self.types.get(base_type));
+        let to = classify(self.types.get(target_type));
+        let cast_type = match (from, to) {
+            (Operand::Int(from), Operand::Int(to)) => match to.width().cmp(&from.width()) {
+                Ordering::Greater => {
+                    if !widen {
+                        kbail!(
+                            self,
+                            span,
+                            "trunc goes to a narrower integer; lossless widening to {}: .widen[{}]",
+                            to,
+                            to
+                        );
+                    }
+                    if from.is_signed() && !to.is_signed() {
+                        kbail!(
+                            self,
+                            span,
+                            "widen from {} to {} loses the sign; zero-extension: .unsigned().widen[{}], sign-extension: .widen[{}].unsigned()",
+                            from,
+                            to,
+                            to,
+                            to.sign_flipped()
+                        );
+                    }
+                    if !from.is_signed() && to.is_signed() {
+                        let widened = self.synth_cast(
+                            base_expr,
+                            target_type,
+                            CastType::IntegerCast(IntegerCastDirection::Extend),
+                            Some(span),
+                        );
+                        return Ok(self.synth_cast(
+                            widened,
+                            target_type,
+                            CastType::IntegerCast(IntegerCastDirection::SignChange),
+                            Some(span),
+                        ));
+                    }
+                    CastType::IntegerCast(IntegerCastDirection::Extend)
+                }
+                Ordering::Less => {
+                    if widen {
+                        kbail!(
+                            self,
+                            span,
+                            "widen goes to a wider integer; modular truncation to {}: .trunc[{}]",
+                            to,
+                            to
+                        );
+                    }
+                    CastType::IntegerCast(IntegerCastDirection::Truncate)
+                }
+                Ordering::Equal => {
+                    let flip = if to.is_signed() { ".signed()" } else { ".unsigned()" };
+                    kbail!(
+                        self,
+                        span,
+                        "{} changes width, and {} to {} keeps it; sign reinterpretation: {}",
+                        op,
+                        from,
+                        to,
+                        flip
+                    );
+                }
+            },
+            (Operand::Float(from_size), Operand::Float(to_size)) => match to_size.cmp(&from_size) {
+                Ordering::Greater => {
+                    if !widen {
+                        kbail!(
+                            self,
+                            span,
+                            "trunc goes to a narrower float; lossless widening: .widen[f64]"
+                        );
+                    }
+                    CastType::FloatExtend
+                }
+                Ordering::Less => {
+                    if widen {
+                        kbail!(self, span, "widen goes to a wider float; truncation: .trunc[f32]");
+                    }
+                    CastType::FloatTruncate
+                }
+                Ordering::Equal => unreachable!("equal-width floats are the same type"),
+            },
+            _ => {
+                kbail!(
+                    self,
+                    span,
+                    "{} converts within integer types or within float types; cannot {} {} to {}",
+                    op,
+                    op,
+                    self.type_id_to_string(base_type),
+                    self.type_id_to_string(target_type)
+                );
+            }
+        };
+        Ok(self.synth_cast(base_expr, target_type, cast_type, Some(span)))
     }
 
     fn eval_for_expr(&mut self, for_expr: &ForExpr, ctx: EvalExprContext) -> K1Result<TypedExprId> {
@@ -13439,7 +13585,7 @@ impl TypedProgram {
                 let nonexhaustive_message = self
                     .check_pattern_exhaustiveness(
                         subject_type,
-                        &mut [pattern_id],
+                        &[pattern_id],
                         subject_span,
                         skip_message,
                     )
@@ -14588,22 +14734,32 @@ impl TypedProgram {
                     )?;
                     return Ok(CallResolution::OtherExpr(result));
                 }
-            } else if fn_name == self.ast.idents.b.as_ {
+            } else if fn_name == self.ast.idents.b.as_
+                || fn_name == self.ast.idents.b.widen
+                || fn_name == self.ast.idents.b.trunc
+            {
                 let dest_type = match self.ast.mem.get_nth_opt(call.type_args, 0) {
-                    None => match ctx.expected_type_id {
+                    Some(NamedTypeArg { type_expr: Some(type_expr), .. }) => {
+                        self.eval_type_expr(*type_expr, ctx.scope_id)?
+                    }
+                    _ => match ctx.expected_type_id {
                         None => {
-                            kbail!(self, call_span, "Cannot use as() with no expected type");
+                            kbail!(
+                                self,
+                                call_span,
+                                "Cannot use {}() with no expected type",
+                                self.ast.idents.get_string(fn_name)
+                            );
                         }
                         Some(et) => et,
                     },
-                    Some(type_arg) => match type_arg.type_expr {
-                        None => {
-                            kbail!(self, call_span, "Cannot use as() with no expected type");
-                        }
-                        Some(type_expr) => self.eval_type_expr(type_expr, ctx.scope_id)?,
-                    },
                 };
-                let result = self.eval_cast(base_arg.value, dest_type, call_span, ctx)?;
+                let result = if fn_name == self.ast.idents.b.as_ {
+                    self.eval_cast(base_arg.value, dest_type, call_span, ctx)?
+                } else {
+                    let widen = fn_name == self.ast.idents.b.widen;
+                    self.eval_widen_trunc(base_arg.value, dest_type, widen, call_span, ctx)?
+                };
                 return Ok(CallResolution::OtherExpr(result));
             } else if fn_name == self.ast.idents.b.to_static {
                 if call.args.len() != 1 {
@@ -18259,7 +18415,7 @@ impl TypedProgram {
                 Some("list") => None,
                 Some("char") => None,
                 Some("ptr") => match fn_name_str {
-                    "ref-at-index" => Some(Builtin::Ir(BuiltinIr::PointerIndex)),
+                    "ref-at" => Some(Builtin::Ir(BuiltinIr::PointerIndex)),
                     _ => None,
                 },
                 Some("vector") => match fn_name_str {
@@ -23524,7 +23680,6 @@ impl TypedProgram {
     //
     pub fn print_timing_info(
         &self,
-        module_name: &str,
         full_elapsed_ns: u64,
         out: &mut impl std::io::Write,
     ) -> std::io::Result<()> {
@@ -23534,8 +23689,8 @@ impl TypedProgram {
         // mm lines per ns, aka lines per second
         let lines_per_s = if lines > 0 { lines as f64 * 1e9 / full_elapsed_ns as f64 } else { 0.0 };
         eprintln!(
-            "module {} took {}ms ({:.2} line/s, {} lines)",
-            module_name,
+            "program {} took {}ms ({:.2} line/s, {} lines)",
+            self.ast.name_str(),
             full_elapsed_ns / 1_000_000,
             lines_per_s,
             lines

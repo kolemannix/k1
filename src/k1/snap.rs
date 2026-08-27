@@ -4,7 +4,7 @@
 
 use std::mem::size_of;
 
-pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP09";
+pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP10";
 
 pub struct SnapWriter {
     pub buf: Vec<u8>,
@@ -245,19 +245,8 @@ impl InputsHash {
         InputsHash((halves[0] as u128) << 64 | halves[1] as u128)
     }
 
-    pub fn add_module_header(
-        self,
-        name: &str,
-        root_dir: &str,
-        root_filename: &str,
-        root_hash: u64,
-    ) -> InputsHash {
-        self.add(&[
-            name.as_bytes(),
-            root_dir.as_bytes(),
-            root_filename.as_bytes(),
-            &root_hash.to_le_bytes(),
-        ])
+    pub fn add_module_header(self, name: &str, root_path: &str, root_hash: u64) -> InputsHash {
+        self.add(&[name.as_bytes(), root_path.as_bytes(), &root_hash.to_le_bytes()])
     }
 
     pub fn add_module_sources<S: AsRef<str>>(
