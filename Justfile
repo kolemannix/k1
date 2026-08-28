@@ -17,8 +17,9 @@ a:
 
 # fastest path to checking compiler correctness; suite1 covers most features.
 ts1:
-  just run-frag --cache false run test_src/suite1
-  just run-frag --optimize --cache false run test_src/suite1
+  cargo build --features=llvm-sys/prefer-dynamic --bin k1
+  target/debug/k1            --cache false run test_src/suite1
+  target/debug/k1 --optimize --cache false run test_src/suite1
 
 ts1-wasm:
   make -C modules/core/libs wasm
