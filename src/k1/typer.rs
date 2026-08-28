@@ -2921,9 +2921,7 @@ pub struct TypedProgram {
     pub vm_dylib_handles: FxHashMap<(ModuleId, StringId), *mut std::ffi::c_void>,
     pub vm_ffi_functions: FxHashMap<FunctionId, vm::VmFfiHandle>,
 
-    /// Perm arena space
     pub mem: kmem::Mem<TypedProgram>,
-    /// tmp arena space
     pub tmp: kmem::Mem<MemTmp>,
 
     pub ir: ir::ProgramIr,
@@ -2934,12 +2932,12 @@ pub struct TypedProgram {
     pub global_id_k1_arena: Option<TypedGlobalId>,
     pub megarepl: Option<MegareplState>,
 
-    /// Hash of every compile input consumed so far: build, config, source files
+    /// Running hash of every compile input consumed so far: build, config, source files
     pub inputs_hash: crate::snap::InputsHash,
-    /// Modules restored from the disk cache this session, for --chatty and tests
+
+    /// diagnostic only, for --chatty and tests
     pub restored_module_count: u32,
-    /// In-flight snapshot disk writes
-    pub pending_cache_writes: Vec<std::thread::JoinHandle<()>>,
+    pub pending_snapshot_writes: Vec<std::thread::JoinHandle<()>>,
 }
 
 // SAFETY: TypedProgram's raw pointers point into its own heap allocations
@@ -3175,7 +3173,7 @@ impl TypedProgram {
             megarepl: None,
             inputs_hash,
             restored_module_count: 0,
-            pending_cache_writes: vec![],
+            pending_snapshot_writes: vec![],
         };
 
         let empty_struct_id = k1.add_type_anon(Type::Struct(StructType::struc(MSlice::empty())));
@@ -3279,7 +3277,7 @@ impl TypedProgram {
                 if !crate::snap::cache_exists_entry(self.cache_dir(), module_hash) {
                     let cache_dir = self.cache_dir().to_path_buf();
                     let bytes = self.snap();
-                    self.pending_cache_writes.push(std::thread::spawn(move || {
+                    self.pending_snapshot_writes.push(std::thread::spawn(move || {
                         crate::snap::cache_store_entry(&cache_dir, module_hash, &bytes)
                     }));
                 }
@@ -3341,7 +3339,7 @@ impl TypedProgram {
     }
 
     pub fn join_cache_writes(&mut self) {
-        for handle in self.pending_cache_writes.drain(..) {
+        for handle in self.pending_snapshot_writes.drain(..) {
             let _ = handle.join();
         }
     }

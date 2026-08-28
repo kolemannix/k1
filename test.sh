@@ -34,13 +34,13 @@ target/debug/k1 --emit-llvm --cache false build dogfood/refchess
 target/debug/k1 --emit-llvm --cache false build dogfood/profiling
 target/debug/k1 --cache false test  dogfood/k1bindgen
 rm -rf dogfood/httpapp/.k1-out/cache
-K1_HOME=$(pwd) target/debug/k1 build dogfood/httpapp
-K1_HOME=$(pwd) target/debug/k1 build dogfood/httpapp
-K1_HOME=$(pwd) target/debug/k1 run dogfood/logreport
-K1_HOME=$(pwd) target/debug/k1 run dogfood/comptime_parity
-K1_HOME=$(pwd) target/debug/k1 run dogfood/brotli
-K1_HOME=$(pwd) target/debug/k1 build dogfood/gengame
-K1_HOME=$(pwd) target/debug/k1 run dogfood/fractal > /dev/null
+K1_HOME=$(pwd) target/debug/k1 --cache false build dogfood/httpapp
+K1_HOME=$(pwd) target/debug/k1 --cache true  build dogfood/httpapp
+K1_HOME=$(pwd) target/debug/k1 --cache false run dogfood/logreport
+K1_HOME=$(pwd) target/debug/k1 --cache false run dogfood/comptime_parity
+K1_HOME=$(pwd) target/debug/k1 --cache false run dogfood/brotli
+K1_HOME=$(pwd) target/debug/k1 --cache false build dogfood/gengame
+K1_HOME=$(pwd) target/debug/k1 --cache false run dogfood/fractal > /dev/null
 K1_HOME=$(pwd) target/debug/k1 --cache false build dogfood/klib
 make -C dogfood/klib/consumer clean run
 K1_HOME=$(pwd) K1_EXE=$(pwd)/target/debug/k1 target/debug/k1 run dogfood/reload_test
