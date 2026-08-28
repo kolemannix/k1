@@ -3329,7 +3329,9 @@ impl TypedProgram {
         }
 
         #[cfg(debug_assertions)]
-        self.debug_snapshot_roundtrip();
+        if primary_module {
+            self.debug_snapshot_roundtrip();
+        }
 
         Ok(added_module_id)
     }

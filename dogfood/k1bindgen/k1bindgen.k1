@@ -416,24 +416,27 @@ type bindgen-state = {
 }
 
 ns for bindgen-state {
-  fn is-opaque-name(self: bindgen-state, name: string): bool {
+  fn is-opaque-name(self: *bindgen-state, name: string): bool {
     let result = self.opaque-names.contains(name)
     debug("is-opaque-name $name? $result")
     result
   }
-  fn should-include-name(self: bindgen-state, name: string): bool {
-    if self.include-names.contains(name) {
-      true
-    } else {
-      for exclude in self.exclude-substrings {
-        if exclude.ends-with("$") {
-          if name.ends-with(exclude.drop-right(1)) return false
-        } else {
-          if name.contains-string(exclude) return false
-        }
-      }
-      true
+  fn is-whitelist-mode(self: *bindgen-state): bool {
+    self.exclude-substrings.is-empty()
+  }
+  fn should-include-name(self: *bindgen-state, name: string): bool {
+    if self.is-whitelist-mode() {
+      return self.include-names.contains(name)
     }
+    
+    for exclude in self.exclude-substrings {
+      if exclude.ends-with("$") {
+        if name.ends-with(exclude.drop-right(1)) return false
+      } else {
+        if name.contains-string(exclude) return false
+      }
+    }
+    true
   }
 }
 
