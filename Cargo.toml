@@ -36,10 +36,12 @@ smallvec = "1.15.1"
 hashbrown = { version = "0.15", default-features = false, features = ["inline-more"] }
 ahash = "0.8.11"
 fxhash = "0.2.1"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 scopeguard = "1.2.0"
 mimalloc = "0.1.43"
 pprof = { version = "0.15.0", features = ["flamegraph"], optional = true }
 memmap2 = "0.9.7"
+lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
 libc = "0.2.177"
 
 # LLVM / compiler toolchain stuff

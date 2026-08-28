@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::fs::File;
-use std::io::{IsTerminal, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
@@ -667,11 +667,23 @@ impl ModuleRemainingSourcesHandle {
 }
 
 fn content_hash64(bytes: &[u8]) -> u64 {
-    use std::hash::Hasher;
-    let mut h = fxhash::FxHasher64::default();
-    h.write(bytes);
-    h.finish()
+    xxhash_rust::xxh3::xxh3_64(bytes)
 }
+
+fn hash_file_content64(path: &str, buf: &mut [u8]) -> std::io::Result<u64> {
+    let mut file = fs::File::open(Path::new(path))?;
+    let mut h = xxhash_rust::xxh3::Xxh3::new();
+    loop {
+        let n = file.read(buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.digest())
+}
+
+const FILE_HASH_BUF_LEN: usize = 64 * 1024;
 
 pub struct SetupRequest<'a> {
     pub idents: &'a IdentPool,
@@ -767,12 +779,18 @@ fn setup_is_fresh<Tag>(
 }
 
 /// One stamp line: the file's module-relative path and content hash
-fn writeln_file_hash(s: &mut String, label: &str, module_dir: &str, file: &str) -> Result<()> {
+fn writeln_file_hash(
+    s: &mut String,
+    label: &str,
+    module_dir: &str,
+    file: &str,
+    buf: &mut [u8],
+) -> Result<()> {
     use std::fmt::Write;
-    let content = fs::read(Path::new(file))
+    let hash = hash_file_content64(file, buf)
         .map_err(|e| anyhow::anyhow!("failed to read setup {label} {file}: {e}"))?;
     let rel = file.strip_prefix(module_dir).unwrap_or(file).trim_start_matches('/');
-    writeln!(s, "{label}-file: {} {:016x}", rel, content_hash64(&content)).unwrap();
+    writeln!(s, "{label}-file: {} {:016x}", rel, hash).unwrap();
     Ok(())
 }
 
@@ -780,17 +798,18 @@ fn writeln_file_hash(s: &mut String, label: &str, module_dir: &str, file: &str) 
 fn setup_output_manifest<Tag>(req: &SetupRequest, scratch: &mut Mem<Tag>) -> Result<String> {
     let module_dir = req.idents.get_string(req.module_dir);
     let mut s = String::new();
-    let mut matched: Vec<String> = vec![];
+    let buf = scratch.push_slice_uninit::<u8>(FILE_HASH_BUF_LEN);
+    let mut collected_filenames: Vec<String> = vec![];
     for output in req.outputs {
         let output_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *output);
         if !Path::new(output_path.as_str()).exists() {
             bail!("did not produce declared output '{}'", req.idents.get_string(*output));
         }
-        matched.clear();
-        collect_input_output_files(output_path.as_str(), &mut matched)?;
-        matched.sort();
-        for file in &matched {
-            writeln_file_hash(&mut s, "output", module_dir, file)?;
+        collected_filenames.clear();
+        collect_files_within_dir(output_path.as_str(), &mut collected_filenames)?;
+        collected_filenames.sort();
+        for file in &collected_filenames {
+            writeln_file_hash(&mut s, "output", module_dir, file, buf)?;
         }
     }
     Ok(s)
@@ -804,7 +823,7 @@ fn setup_fingerprint<Tag>(
     use std::fmt::Write;
     let module_dir = req.idents.get_string(req.module_dir);
     let mut s = String::new();
-    writeln!(s, "k1-setup-stamp v3").unwrap();
+    writeln!(s, "k1-setup-stamp v4").unwrap();
     writeln!(s, "target: {}", req.target.to_str()).unwrap();
     writeln!(
         s,
@@ -828,23 +847,24 @@ fn setup_fingerprint<Tag>(
         let path = kpath::join_tmp(scratch, req.idents, req.module_dir, *o);
         output_paths.push(path);
     }
-    let mut matched: Vec<String> = vec![];
+    let mut buf = vec![0u8; FILE_HASH_BUF_LEN];
+    let mut files_named_by_path: Vec<String> = vec![];
     for input in req.inputs {
         let input_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *input);
-        matched.clear();
-        collect_input_output_files(input_path.as_str(), &mut matched)?;
-        matched.sort();
-        for file in &matched {
+        files_named_by_path.clear();
+        collect_files_within_dir(input_path.as_str(), &mut files_named_by_path)?;
+        files_named_by_path.sort();
+        for file in &files_named_by_path {
             if output_paths.iter().any(|o| o.as_str() == file) {
                 continue;
             }
-            writeln_file_hash(&mut s, "input", module_dir, file)?;
+            writeln_file_hash(&mut s, "input", module_dir, file, &mut buf)?;
         }
     }
     Ok(s)
 }
 
-fn collect_input_output_files(path: &str, out: &mut Vec<String>) -> Result<()> {
+fn collect_files_within_dir(path: &str, out: &mut Vec<String>) -> Result<()> {
     let p = Path::new(path);
     if p.is_file() {
         out.push(path.to_string());
@@ -853,7 +873,7 @@ fn collect_input_output_files(path: &str, out: &mut Vec<String>) -> Result<()> {
             let child = entry?.path().into_os_string().into_string().map_err(|s| {
                 anyhow::anyhow!("setup path is not valid UTF-8: {}", s.to_string_lossy())
             })?;
-            collect_input_output_files(&child, out)?;
+            collect_files_within_dir(&child, out)?;
         }
     } else {
         bail!("setup input '{path}' does not exist");
@@ -959,10 +979,11 @@ fn inputs_hashes_from_module_list<Tag>(
     modules: &[ListedModule],
     scratch: &mut Mem<Tag>,
 ) -> Vec<crate::snap::InputsHash> {
-    let hash_file = |path: &str| -> Option<u64> {
+    let mut buffer = vec![0u8; FILE_HASH_BUF_LEN];
+    let hash_file = |path: &str, buf: &mut [u8]| -> Option<u64> {
         match overrides.get(path) {
             Some(content) => Some(content_hash64(content.as_bytes())),
-            None => fs::read(Path::new(path)).ok().map(|b| content_hash64(&b)),
+            None => hash_file_content64(path, buf).ok(),
         }
     };
     let n = modules.len();
@@ -981,7 +1002,7 @@ fn inputs_hashes_from_module_list<Tag>(
         start = end;
         for m in group {
             let root_path = idents.get_string(m.root_source_path);
-            let Some(root_hash) = hash_file(root_path) else {
+            let Some(root_hash) = hash_file(root_path, &mut buffer) else {
                 // An unreadable root invalidates the whole group and everything after
                 return hashes;
             };
@@ -1004,7 +1025,7 @@ fn inputs_hashes_from_module_list<Tag>(
                 };
                 sources = scratch.new_list(files.len() as u32);
                 for path in files {
-                    let Some(h) = hash_file(&path) else { return hashes };
+                    let Some(h) = hash_file(&path, &mut buffer) else { return hashes };
                     sources.push((path, h));
                 }
             }

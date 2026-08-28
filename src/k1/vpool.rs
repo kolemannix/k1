@@ -403,18 +403,17 @@ impl<T: Copy, Index: PoolIndex> VPool<T, Index> {
         let bytes = unsafe {
             core::slice::from_raw_parts(self.mmap.as_ptr(), self.len * std::mem::size_of::<T>())
         };
-        w.write_len(self.len);
-        w.write_raw(bytes);
+        w.write_blob(bytes);
     }
 
     pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
         self.len = 0;
-        let count = r.read_len();
-        let bytes = r.take(count * std::mem::size_of::<T>());
+        let header = r.read_blob_header();
+        let count = header.raw_len / std::mem::size_of::<T>();
         self.set_len_checked(count);
-        unsafe {
-            core::ptr::copy_nonoverlapping(bytes.as_ptr(), self.mmap.as_mut_ptr(), bytes.len());
-        }
+        let dst =
+            unsafe { core::slice::from_raw_parts_mut(self.mmap.as_mut_ptr(), header.raw_len) };
+        r.read_blob_body(header, dst);
     }
 }
 

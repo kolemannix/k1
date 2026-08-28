@@ -561,7 +561,7 @@ impl<Tag> Mem<Tag> {
         }
     }
 
-    pub fn push_slice_uninit<T>(&mut self, len: usize) -> *mut T {
+    pub fn push_slice_uninit_raw<T>(&mut self, len: usize) -> *mut T {
         unsafe {
             let dst = self.cursor();
             let dst = dst.byte_add(dst.align_offset(align_of::<T>()));
@@ -571,6 +571,14 @@ impl<Tag> Mem<Tag> {
             self.set_cursor_checked(new_cursor);
 
             dst as *mut T
+        }
+    }
+
+    pub fn push_slice_uninit<T>(&mut self, len: usize) -> &'static mut [T] {
+        unsafe {
+            let dst = self.push_slice_uninit_raw::<T>(len);
+            let dst: &mut [T] = slice::from_raw_parts_mut(dst, len);
+            dst
         }
     }
 
@@ -592,7 +600,7 @@ impl<Tag> Mem<Tag> {
 
     fn pushn_raw<T: Copy>(&mut self, ts: &[T]) -> &mut [T] {
         unsafe {
-            let dst = self.push_slice_uninit::<T>(ts.len());
+            let dst = self.push_slice_uninit_raw::<T>(ts.len());
 
             let dst: &mut [T] = slice::from_raw_parts_mut(dst, ts.len());
             dst.copy_from_slice(ts);
@@ -621,7 +629,7 @@ impl<Tag> Mem<Tag> {
         if len == 0 {
             return MSlice::empty();
         }
-        let ptr = self.push_slice_uninit::<T>(len as usize);
+        let ptr = self.push_slice_uninit_raw::<T>(len as usize);
         MSlice::make(self.ptr_to_offset(ptr), len)
     }
 
@@ -652,7 +660,7 @@ impl<Tag> Mem<Tag> {
 
     /// We know we can't address more than 4GB (to keep handles small), so we accept a u32 len, not a usize
     pub fn new_list<T>(&mut self, cap: u32) -> List<T, Tag> {
-        let dst = self.push_slice_uninit(cap as usize);
+        let dst = self.push_slice_uninit_raw(cap as usize);
         let offset = self.ptr_to_offset(dst).get();
         List { ptr: dst, offset, cap, len: 0, _tag: PhantomData }
     }
@@ -872,16 +880,16 @@ impl<Tag> Mem<Tag> {
     pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
         let used = self.bytes_used() - 8;
         let bytes = unsafe { slice::from_raw_parts(self.base_ptr().add(8), used) };
-        w.write_len(used);
-        w.write_raw(bytes);
+        w.write_blob(bytes);
     }
 
     pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
         self.reset(false);
-        let used = r.read_len();
-        let bytes = r.take(used);
+        let header = r.read_blob_header();
+        let used = header.raw_len;
+        let dst = unsafe { slice::from_raw_parts_mut(self.cursor, used) };
+        r.read_blob_body(header, dst);
         unsafe {
-            core::ptr::copy_nonoverlapping(bytes.as_ptr(), self.cursor, used);
             self.cursor = self.cursor.add(used);
         }
     }

@@ -4,7 +4,20 @@
 
 use std::mem::size_of;
 
-pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP10";
+pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP11";
+
+const BLOB_COMPRESS_MIN: usize = 1 << 16;
+const BLOB_CHUNK: usize = 1 << 20;
+
+pub struct BlobHeader {
+    pub raw_len: usize,
+    compressed_len: usize,
+}
+
+fn blob_worker_count(chunks: usize) -> usize {
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+    chunks.clamp(1, cpus)
+}
 
 pub struct SnapWriter {
     mmap: memmap2::MmapMut,
@@ -32,8 +45,7 @@ impl SnapWriter {
     }
 
     fn reserve(bytes: usize) -> SnapWriter {
-        let mmap =
-            memmap2::MmapMut::map_anon(bytes).expect("failed to reserve snapshot buffer");
+        let mmap = memmap2::MmapMut::map_anon(bytes).expect("failed to reserve snapshot buffer");
         SnapWriter { mmap, len: 0 }
     }
 
@@ -77,6 +89,76 @@ impl SnapWriter {
 
     pub fn write_str(&mut self, s: &str) {
         self.write_slice(s.as_bytes());
+    }
+
+    /// Blob = (raw_len, compressed_len, payload). compressed_len 0 = raw
+    /// payload (small blobs). Otherwise the payload is 1MB chunks, each
+    /// lz4-compressed independently and prefixed by its own compressed_len
+    /// (0 = that chunk stored raw), so both sides parallelize across cores
+    pub fn write_blob(&mut self, bytes: &[u8]) {
+        let header_pos = self.len;
+        self.write_len(bytes.len());
+        self.write_len(0);
+        if bytes.len() < BLOB_COMPRESS_MIN {
+            self.write_raw(bytes);
+            return;
+        }
+        let nchunks = bytes.len().div_ceil(BLOB_CHUNK);
+        let max_out = lz4_flex::block::get_maximum_output_size(BLOB_CHUNK);
+        let body = self.len;
+        // Compressed sizes aren't known until compression runs, so workers
+        // compress at a fixed stride directly in the output, and a serial pass
+        // packs the chunks down in place. A packed chunk takes at most
+        // 8 + BLOB_CHUNK bytes against a stride of max_out (> BLOB_CHUNK + 8),
+        // so packing never overwrites a slot that hasn't been read yet; the +8
+        // keeps chunk 0's header off its own slot
+        let stride_base = body + 8;
+        let mut compressed_lens = vec![0usize; nchunks];
+        let workers = blob_worker_count(nchunks);
+        let per_worker = nchunks.div_ceil(workers);
+        std::thread::scope(|s| {
+            let mut out_rest: &mut [u8] =
+                &mut self.mmap[stride_base..stride_base + nchunks * max_out];
+            let mut lens_rest: &mut [usize] = &mut compressed_lens;
+            for w in 0..workers {
+                let start = w * per_worker;
+                if start >= nchunks {
+                    break;
+                }
+                let count = per_worker.min(nchunks - start);
+                let (out_part, rest) = std::mem::take(&mut out_rest).split_at_mut(count * max_out);
+                out_rest = rest;
+                let (lens_part, rest) = std::mem::take(&mut lens_rest).split_at_mut(count);
+                lens_rest = rest;
+                s.spawn(move || {
+                    for i in 0..count {
+                        let chunk_start = (start + i) * BLOB_CHUNK;
+                        let chunk_end = (chunk_start + BLOB_CHUNK).min(bytes.len());
+                        let out = &mut out_part[i * max_out..(i + 1) * max_out];
+                        lens_part[i] =
+                            lz4_flex::block::compress_into(&bytes[chunk_start..chunk_end], out)
+                                .expect("lz4 compress failed");
+                    }
+                });
+            }
+        });
+        for chunk_index in 0..nchunks {
+            let chunk_start = chunk_index * BLOB_CHUNK;
+            let chunk_end = (chunk_start + BLOB_CHUNK).min(bytes.len());
+            let compressed_len = compressed_lens[chunk_index];
+            if compressed_len < chunk_end - chunk_start {
+                self.write_len(compressed_len);
+                let src = stride_base + chunk_index * max_out;
+                self.mmap.copy_within(src..src + compressed_len, self.len);
+                self.len += compressed_len;
+            } else {
+                self.write_len(0);
+                self.write_raw(&bytes[chunk_start..chunk_end]);
+            }
+        }
+        let payload_len = self.len - body;
+        self.mmap[header_pos + 8..header_pos + 16]
+            .copy_from_slice(&(payload_len as u64).to_le_bytes());
     }
 
     pub fn write_section(&mut self, name: &str) {
@@ -236,6 +318,74 @@ impl<'a> SnapReader<'a> {
         self.str().to_string()
     }
 
+    pub fn read_blob_header(&mut self) -> BlobHeader {
+        BlobHeader { raw_len: self.read_len(), compressed_len: self.read_len() }
+    }
+
+    #[track_caller]
+    pub fn read_blob_body(&mut self, header: BlobHeader, dst: &mut [u8]) {
+        assert_eq!(dst.len(), header.raw_len, "snapshot blob destination size mismatch");
+        if header.compressed_len == 0 {
+            dst.copy_from_slice(self.take(header.raw_len));
+            return;
+        }
+        let payload = self.take(header.compressed_len);
+        let nchunks = header.raw_len.div_ceil(BLOB_CHUNK);
+        let mut chunks: Vec<(&[u8], bool)> = Vec::with_capacity(nchunks);
+        let mut pos = 0usize;
+        for chunk_index in 0..nchunks {
+            let raw_chunk_len = BLOB_CHUNK.min(header.raw_len - chunk_index * BLOB_CHUNK);
+            let compressed_len =
+                u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap()) as usize;
+            pos += 8;
+            if compressed_len == 0 {
+                chunks.push((&payload[pos..pos + raw_chunk_len], false));
+                pos += raw_chunk_len;
+            } else {
+                chunks.push((&payload[pos..pos + compressed_len], true));
+                pos += compressed_len;
+            }
+        }
+        assert_eq!(pos, payload.len(), "snapshot blob payload out of sync");
+        let workers = blob_worker_count(nchunks);
+        let per_worker = nchunks.div_ceil(workers);
+        std::thread::scope(|s| {
+            let mut dst_rest: &mut [u8] = dst;
+            let mut chunks_rest: &[(&[u8], bool)] = &chunks;
+            for w in 0..workers {
+                let start = w * per_worker;
+                if start >= nchunks {
+                    break;
+                }
+                let count = per_worker.min(nchunks - start);
+                let (chunk_part, rest) = chunks_rest.split_at(count);
+                chunks_rest = rest;
+                let dst_take = (count * BLOB_CHUNK).min(dst_rest.len());
+                let (dst_part, rest) = std::mem::take(&mut dst_rest).split_at_mut(dst_take);
+                dst_rest = rest;
+                s.spawn(move || {
+                    let mut d = dst_part;
+                    for (src, compressed) in chunk_part {
+                        let chunk_take = BLOB_CHUNK.min(d.len());
+                        let (chunk_dst, rest) = std::mem::take(&mut d).split_at_mut(chunk_take);
+                        d = rest;
+                        if *compressed {
+                            let n = lz4_flex::block::decompress_into(src, chunk_dst)
+                                .expect("snapshot blob failed to decompress");
+                            assert_eq!(
+                                n,
+                                chunk_dst.len(),
+                                "snapshot blob decompressed to wrong size"
+                            );
+                        } else {
+                            chunk_dst.copy_from_slice(src);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
     #[track_caller]
     pub fn section(&mut self, name: &str) {
         let tag = self.read_u32();
@@ -387,6 +537,43 @@ fn cache_run_eviction(cache_dir: &std::path::Path, max_bytes: u64) {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn blob_roundtrip() {
+        let mut compressible: Vec<u8> = Vec::with_capacity(5 << 20);
+        for i in 0..((5 << 20) / 4) as u32 {
+            compressible.extend_from_slice(&[(i % 7) as u8, 0, 0, 0]);
+        }
+        let mut incompressible: Vec<u8> = Vec::with_capacity(2 << 20);
+        let mut x: u64 = 0x243f6a8885a308d3;
+        for _ in 0..(2 << 20) {
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            incompressible.push((x >> 56) as u8);
+        }
+        let mut mixed = incompressible.clone();
+        mixed.extend_from_slice(&compressible[..2 << 20]);
+        let sub_chunk = compressible[..100_000].to_vec();
+        let small = b"below the compression threshold".to_vec();
+        let empty: Vec<u8> = vec![];
+
+        let blobs = [&compressible, &incompressible, &mixed, &sub_chunk, &small, &empty];
+        let mut w = SnapWriter::new();
+        for blob in blobs {
+            w.write_blob(blob);
+        }
+        let bytes = w.finish();
+        let raw_total: usize = blobs.iter().map(|b| b.len()).sum();
+        assert!(bytes.len() < raw_total);
+
+        let mut r = SnapReader::new(&bytes).unwrap();
+        for blob in blobs {
+            let header = r.read_blob_header();
+            let mut dst = vec![0u8; header.raw_len];
+            r.read_blob_body(header, &mut dst);
+            assert_eq!(&dst, blob);
+        }
+        assert!(r.is_done());
+    }
 
     #[test]
     fn eviction_byte_budget_and_tmp_orphans() {
