@@ -8,6 +8,7 @@ pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP11";
 
 const BLOB_COMPRESS_MIN: usize = 1 << 16;
 const BLOB_CHUNK: usize = 1 << 20;
+const SNAP_RESERVE_BYTES: usize = 16 << 30;
 
 pub struct BlobHeader {
     pub raw_len: usize,
@@ -22,6 +23,7 @@ fn blob_worker_count(chunks: usize) -> usize {
 pub struct SnapWriter {
     mmap: memmap2::MmapMut,
     len: usize,
+    file: Option<std::fs::File>,
 }
 
 pub struct SnapBytes {
@@ -38,7 +40,7 @@ impl std::ops::Deref for SnapBytes {
 
 impl SnapWriter {
     pub fn new() -> SnapWriter {
-        let mut w = SnapWriter::reserve(16 << 30);
+        let mut w = SnapWriter::reserve(SNAP_RESERVE_BYTES);
         w.write_raw(&SNAP_MAGIC);
         w.write_str(crate::BUILD_ID);
         w
@@ -46,7 +48,41 @@ impl SnapWriter {
 
     fn reserve(bytes: usize) -> SnapWriter {
         let mmap = memmap2::MmapMut::map_anon(bytes).expect("failed to reserve snapshot buffer");
-        SnapWriter { mmap, len: 0 }
+        SnapWriter { mmap, len: 0, file: None }
+    }
+
+    /// Serializes straight into the destination mmapped file
+    fn new_file(path: &std::path::Path) -> std::io::Result<SnapWriter> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        let mapped = (|| {
+            file.set_len(SNAP_RESERVE_BYTES as u64)?;
+            unsafe { memmap2::MmapMut::map_mut(&file) }
+        })();
+        let mmap = match mapped {
+            Ok(mmap) => mmap,
+            Err(e) => {
+                let _ = std::fs::remove_file(path);
+                return Err(e);
+            }
+        };
+        let mut w = SnapWriter { mmap, len: 0, file: Some(file) };
+        // The magic bytes stay zeroed until `finish_file` to protect from torn writes
+        w.write_raw(&[0u8; SNAP_MAGIC.len()]);
+        w.write_str(crate::BUILD_ID);
+        Ok(w)
+    }
+
+    fn finish_file(self) -> std::io::Result<()> {
+        let SnapWriter { mmap, len, file } = self;
+        let file = file.expect("finish_file on an anonymous SnapWriter");
+        drop(mmap);
+        file.set_len(len as u64)?;
+        std::os::unix::fs::FileExt::write_at(&file, &SNAP_MAGIC, 0)?;
+        Ok(())
     }
 
     pub fn finish(self) -> SnapBytes {
@@ -91,10 +127,11 @@ impl SnapWriter {
         self.write_slice(s.as_bytes());
     }
 
-    /// Blob = (raw_len, compressed_len, payload). compressed_len 0 = raw
-    /// payload (small blobs). Otherwise the payload is 1MB chunks, each
-    /// lz4-compressed independently and prefixed by its own compressed_len
-    /// (0 = that chunk stored raw), so both sides parallelize across cores
+    /// Blob = (raw_len, compressed_len, payload).
+    /// compressed_len 0 = raw payload (small blobs)
+    /// Otherwise the payload is 1MB chunks
+    /// each lz4-compressed independently and prefixed by its own compressed_len
+    /// (0 = that chunk stored raw)
     pub fn write_blob(&mut self, bytes: &[u8]) {
         let header_pos = self.len;
         self.write_len(bytes.len());
@@ -449,6 +486,9 @@ pub fn cache_load(cache_dir: &std::path::Path, hash: InputsHash) -> Option<memma
     let path = cache_dir.join(hash.filename());
     let file = std::fs::File::open(&path).ok()?;
     let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
+    if mmap.len() >= SNAP_RESERVE_BYTES {
+        return None;
+    }
     let _ = mmap.advise(memmap2::Advice::Sequential);
     let _ = mmap.advise(memmap2::Advice::WillNeed);
     touch(&path);
@@ -484,21 +524,38 @@ pub fn cache_exists_entry(cache_dir: &std::path::Path, hash: InputsHash) -> bool
     cache_dir.join(hash.filename()).exists()
 }
 
-pub fn cache_store_entry(cache_dir: &std::path::Path, hash: InputsHash, bytes: &[u8]) {
-    if std::fs::create_dir_all(cache_dir).is_err() {
-        return;
+pub fn cache_store_begin(
+    cache_dir: &std::path::Path,
+    hash: InputsHash,
+) -> std::io::Result<SnapWriter> {
+    std::fs::create_dir_all(cache_dir)?;
+    SnapWriter::new_file(&cache_dir.join(hash.filename()))
+}
+
+pub fn cache_store_finish(
+    cache_dir: &std::path::Path,
+    hash: InputsHash,
+    w: SnapWriter,
+) -> std::io::Result<()> {
+    let result = w.finish_file();
+    if result.is_err() {
+        let _ = std::fs::remove_file(cache_dir.join(hash.filename()));
     }
-    let tmp = cache_dir.join(format!("{:032x}.tmp.{}", hash.0, std::process::id()));
-    if std::fs::write(&tmp, bytes).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-        return;
-    }
-    let _ = std::fs::rename(&tmp, cache_dir.join(hash.filename()));
     cache_run_eviction(cache_dir, CACHE_MAX_BYTES);
+    result
+}
+
+fn snap_file_has_magic(path: &std::path::Path) -> bool {
+    let Ok(mut f) = std::fs::File::open(path) else { return false };
+    let mut magic = [0u8; SNAP_MAGIC.len()];
+    std::io::Read::read_exact(&mut f, &mut magic).is_ok() && magic == SNAP_MAGIC
 }
 
 /// Newest-first by mtime within a byte budget (the newest entry always
-/// survives); also sweeps `.tmp.<pid>` files orphaned by a crashed writer
+/// survives); also sweeps `.tmp.<pid>` files and magic-less partial `.snap`
+/// entries orphaned by a crashed writer. Sizes count allocated blocks capped
+/// at the apparent length, so an in-progress or torn sparse entry weighs only
+/// its written bytes
 fn cache_run_eviction(cache_dir: &std::path::Path, max_bytes: u64) {
     let Ok(entries) = std::fs::read_dir(cache_dir) else { return };
     let now = std::time::SystemTime::now();
@@ -509,16 +566,21 @@ fn cache_run_eviction(cache_dir: &std::path::Path, max_bytes: u64) {
         let path = e.path();
         let Ok(metadata) = e.metadata() else { continue };
         let Ok(mtime) = metadata.modified() else { continue };
+        let is_old = now.duration_since(mtime).is_ok_and(|age| age > TMP_ORPHAN_MAX_AGE);
         let name = e.file_name();
-        let is_orphaned_tmp = name.to_string_lossy().contains(".tmp.")
-            && now.duration_since(mtime).is_ok_and(|age| age > TMP_ORPHAN_MAX_AGE);
-        if is_orphaned_tmp {
+        if name.to_string_lossy().contains(".tmp.") && is_old {
             let _ = std::fs::remove_file(&path);
             continue;
         }
         if path.extension().is_some_and(|x| x == "snap") {
-            total += metadata.len();
-            snaps.push((mtime, metadata.len(), path));
+            if is_old && !snap_file_has_magic(&path) {
+                let _ = std::fs::remove_file(&path);
+                continue;
+            }
+            let size =
+                metadata.len().min(std::os::unix::fs::MetadataExt::blocks(&metadata) * 512);
+            total += size;
+            snaps.push((mtime, size, path));
         }
     }
     if total <= max_bytes {
