@@ -32,6 +32,7 @@ fn low() {
   abi-odd-size-struct/test()
   static-arg-global/test()
   function_pointer/test()
+  interpret_cast/test()
   ns_collision/test()
   enum_construction/test()
   scopes/test()

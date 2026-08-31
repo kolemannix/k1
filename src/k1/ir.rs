@@ -3226,6 +3226,10 @@ fn compile_ir_builtin(
                 (PhysicalTypeEnum::Scalar(from_st), PhysicalTypeEnum::Scalar(to_st)) => {
                     let word_st = b.k1.ir.word_sized_int();
                     let is_ptr = |st: ScalarType| st == ScalarType::Pointer;
+
+                    // bitcast is the implementation behind int to ptr and ptr to int conversions as well, so we have
+                    // to check for these cases to preserve provenance correctly
+
                     let value = match (is_ptr(from_st), is_ptr(to_st)) {
                         (true, false) => {
                             let word = b.push_inst_anon(Inst::PtrToWord { v: from_value });
@@ -3246,7 +3250,8 @@ fn compile_ir_builtin(
                             };
                             b.push_inst_anon(Inst::WordToPtr { v: word }).as_value()
                         }
-                        _ => {
+                        (true, true) => from_value,
+                        (false, false) => {
                             b.push_inst_anon(Inst::BitCast { v: from_value, to: to_pt }).as_value()
                         }
                     };
@@ -3723,12 +3728,8 @@ fn compile_cast(
     let target_type_id = b.k1.exprs.get_type(expr_id);
     match c.cast_type {
         CastType::ReferenceToReference
-        | CastType::ReferenceToMut
-        | CastType::ReferenceUnMut
         | CastType::IntegerCast(IntegerCastDirection::SignChange)
-        | CastType::Integer8ToChar
         | CastType::PointerToReference
-        | CastType::PointerToFunctionPointer
         | CastType::ReferenceToPointer => {
             let base_noop = compile_expr(b, None, c.base_expr)?;
             let to_pt = b.get_physical_type(target_type_id);
@@ -3737,19 +3738,13 @@ fn compile_cast(
             Ok(stored)
         }
         CastType::IntegerCast(IntegerCastDirection::Extend)
-        | CastType::IntegerCast(IntegerCastDirection::Truncate)
-        | CastType::IntegerExtendFromChar => {
+        | CastType::IntegerCast(IntegerCastDirection::Truncate) => {
             let base = compile_expr(b, None, c.base_expr)?;
             let to_pt = b.get_physical_type(target_type_id);
             let to = to_pt.expect_scalar();
             let inst = match c.cast_type {
-                CastType::IntegerCast(IntegerCastDirection::Extend)
-                | CastType::IntegerExtendFromChar => {
-                    let signed = if matches!(c.cast_type, CastType::IntegerExtendFromChar) {
-                        false
-                    } else {
-                        b.k1.get_expr_type(c.base_expr).as_integer().unwrap().is_signed()
-                    };
+                CastType::IntegerCast(IntegerCastDirection::Extend) => {
+                    let signed = b.k1.get_expr_type(c.base_expr).as_integer().unwrap().is_signed();
                     if signed {
                         let from_type_id = b.k1.exprs.get_type(c.base_expr);
                         let from = b.get_physical_type(from_type_id).expect_scalar();
@@ -3761,30 +3756,6 @@ fn compile_cast(
                 CastType::IntegerCast(IntegerCastDirection::Truncate) => {
                     Inst::IntTrunc { v: base, to }
                 }
-                _ => unreachable!(),
-            };
-            let inst = b.push_inst_anon(inst);
-            let stored = store_scalar_if_dst(b, dst, inst.as_value());
-            Ok(stored)
-        }
-        CastType::BoolToInt => {
-            let base = compile_expr(b, None, c.base_expr)?;
-            let to_pt = b.get_physical_type(target_type_id);
-            let to = to_pt.expect_scalar();
-            let bitcast = b.push_inst_anon(Inst::BitCast {
-                v: base,
-                to: PhysicalType::scalar(ScalarType::U8),
-            });
-            let extend =
-                b.push_inst(Inst::IntExtU { v: bitcast.as_value(), to }, IrComment::BoolToInt);
-            let stored = store_scalar_if_dst(b, dst, extend.as_value());
-            Ok(stored)
-        }
-        CastType::PointerToWord | CastType::WordToPointer => {
-            let base = compile_expr(b, None, c.base_expr)?;
-            let inst = match c.cast_type {
-                CastType::PointerToWord => Inst::PtrToWord { v: base },
-                CastType::WordToPointer => Inst::WordToPtr { v: base },
                 _ => unreachable!(),
             };
             let inst = b.push_inst_anon(inst);
@@ -3821,9 +3792,6 @@ fn compile_cast(
             let stored = store_scalar_if_dst(b, dst, inst.as_value());
             Ok(stored)
         }
-        // Only occurs in abstract (where-bound generic) bodies, which are never
-        // lowered; specialization re-evaluates and produces the struct literal
-        CastType::AbilityImplToDynObject => b_ice!(b, "ir on abstract dyn-ability erasure"),
     }
 }
 

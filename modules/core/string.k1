@@ -158,7 +158,7 @@ ns for string {
     } else {
       let w: size = k1/simd-bytes
       let p = c-string
-      while p.as[size] & (w - 1) != 0 {
+      while p.to-size() & (w - 1) != 0 {
         if p.ref[u8].* == 0u8 return p.diff(c-string)
         p = p.add-bytes(1)
       }

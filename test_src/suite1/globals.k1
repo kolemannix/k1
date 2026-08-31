@@ -19,7 +19,7 @@ fn test() {
    assert(global-int-mut == 2)
 
    global-mut-ptr = (&global-int-mut).as[ptr]
-   assert-equals(global-mut-ptr.as[*int].*, 2)
+   assert-equals(global-mut-ptr.ref[int].*, 2)
    assert((&global-int-mut).as[ptr] == global-mut-ptr)
 
    assert-equals(global-string.len(), 8)

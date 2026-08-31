@@ -239,7 +239,7 @@ ability writer {
   fn write-byte(self, value: u8)
   fn write-bytes(self, bytes: span[byte])
 
-  fn write-char(self, value: char) { self.write-byte(value.as[u8]) }
+  fn write-char(self, value: char) { self.write-byte(value.as-u8()) }
   fn write-string(self, value: string) { self.write-bytes(value.span-bytes()) }
 
   fn write(self, value: string) { self.write-string(value) }
@@ -410,10 +410,10 @@ impl scalar-cmp for i64 {
 }
 
 impl scalar-cmp for ptr {
-  fn lt(self, other: self): bool { self.as[usize].lt(other.as[usize]) }
-  fn le(self, other: self): bool { self.as[usize].le(other.as[usize]) }
-  fn gt(self, other: self): bool { self.as[usize].gt(other.as[usize]) }
-  fn ge(self, other: self): bool { self.as[usize].ge(other.as[usize]) }
+  fn lt(self, other: self): bool { self.to-uint().lt(other.to-uint()) }
+  fn le(self, other: self): bool { self.to-uint().le(other.to-uint()) }
+  fn gt(self, other: self): bool { self.to-uint().gt(other.to-uint()) }
+  fn ge(self, other: self): bool { self.to-uint().ge(other.to-uint()) }
 }
 
 ability comparable {
@@ -903,17 +903,19 @@ ns sys {
 }
 
 ns for ptr {
-  let null: ptr = 0.as[ptr]
+  let null: ptr = mem/bitcast[u64, ptr](0)
 
-  fn is-null(self: ptr): bool {
-    self == null
-  }
+  fn is-null(self: ptr): bool { self is null }
 
-  fn ref[t](self: ptr): *t { self.as[*t] }
+  fn ref[t](self: ptr): *t { mem/bitcast[ptr, *t](self) }
 
   fn ref-opt[t](self: ptr): optref[t] {
     .{ inner = self.ref[t] }
   }
+
+  fn to-int(self: ptr): i64 { mem/bitcast[ptr, i64](self) }
+  fn to-uint(self: ptr): u64 { mem/bitcast[ptr, u64](self) }
+  fn to-size(self: ptr): size { mem/bitcast[ptr, size](self) }
 
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
@@ -931,7 +933,7 @@ ns for ptr {
   }
 
   fn diff(self: ptr, other: ptr): size {
-    self.as[size] - other.as[size]
+    self.to-size() - other.to-size()
   }
 
   fn get-align-offset(size: size, alignment: size): size {
@@ -939,19 +941,21 @@ ns for ptr {
   }
 
   fn aligned(self: ptr, alignment: size): ptr {
-    self.add-bytes(get-align-offset(self.as[size], alignment))
+    self.add-bytes(get-align-offset(self.to-size(), alignment))
   }
 
 }
 
 impl equals for ptr {
   fn equals(self: ptr, other: ptr): bool {
-    self.as[size] == other.as[size]
+    self.to-size() == other.to-size()
   }
 }
 
 ns for bool {
-  fn as-u8(self: bool): u8 { self.as[u8] }
+  fn as-u8(self: bool): u8 { mem/bitcast[bool, u8](self) }
+  fn as-i8(self: bool): i8 { mem/bitcast[bool, i8](self) }
+
   fn from-u8(value: u8): bool { value != 0u8 }
 }
 

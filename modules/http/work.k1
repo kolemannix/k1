@@ -29,7 +29,7 @@ ns work {
     if work-queue.is-null() {
       crash("uv work queue not initialized")
     }
-    let queue = work-queue.as[*mut uv-work-queue]
+    let queue = work-queue.narrow[*mut uv-work-queue]
   
     uv/mutex_lock(queue.mutex)
     queue.submissions.push-in(heap, .{ req, work-cb, after-cb })

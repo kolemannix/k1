@@ -10,7 +10,7 @@ ability allocator {
   // free may no-op
   fn free(self, ptr: ptr, size: size, align: size)
 
-  fn alloc-t[t](self): *mut t { allocator/alloc(self, types/size[t], types/align[t]).as() }
+  fn alloc-t[t](self): *mut t { allocator/alloc(self, types/size[t], types/align[t]).ref[t] }
   fn free-t[t](self, t: *mut t) { allocator/free(self, t.as(), types/size[t], types/align[t]) }
   fn new[t](self, t: t): *mut t {
     let ref = self.alloc-t[t]()
@@ -59,7 +59,7 @@ ns mem {
   // 0.as[ptr] inlined rather than ptr/null: this global is demanded during
   // other globals' initializers, and referencing the null global from here
   // closes an initializer cycle.
-  let(mutable, tls) arena-tmp: *arena = 0.as[ptr].ref[arena]
+  let(mutable, tls) arena-tmp: *arena = ptr/null.ref[arena]
 
   type(alias) ALLOC_STACK_MAX = 64
   // Empty stack means "the tmp arena"; tmp is lazily initialized, so it

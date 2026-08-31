@@ -1,0 +1,201 @@
+ns interpret_cast
+
+type small = { a: u64, b: u32 }
+type big = { a: u64, b: u32, c: u64 }
+type holds-big-ref = { r: *big, tail: u32 }
+type holds-small-ref = { r: *small, tail: u32 }
+type inner-pair = { x: u32, y: u32 }
+type inner-solo = { x: u32 }
+type prefix-last = { lead: u64, inner: inner-pair }
+type prefix-last-view = { lead: u64, inner: inner-solo }
+type prefix-mid = { inner: inner-pair, tail: u64 }
+type prefix-mid-view = { inner: inner-solo, tail: u64 }
+type abc = either(u32) { a, b, c }
+type base-part = { tag: u32, len: u32 }
+type u64-box = { x: u64 }
+type ptr-box = { p: *u8 }
+type wrapper = { base: base-part, extra: u64 }
+type op-big = opaque[16, 8]
+type op-small = opaque[8, 8]
+type op-strict = opaque[8, 16]
+
+type(alias) fnp-takes-base = *fn(*base-part) -> u32
+type(alias) fnp-takes-wrapper = *fn(*wrapper) -> u32
+
+type(alias) fnp-takes-ptr = *fn(ptr) -> u64
+type(alias) fnp-takes-u8ref = *fn(*u8) -> u64
+type(alias) fnp-takes-u64 = *fn(u64) -> u64
+type(alias) fnp-takes-f64 = *fn(f64) -> u64
+type(alias) fnp-takes-u64ref = *fn(*u64) -> u64
+type(alias) fnp-takes-f64ref = *fn(*f64) -> u64
+type(alias) fnp-gives-u8ref = *fn() -> *u8
+type(alias) fnp-gives-ptr = *fn() -> ptr
+
+fn takes-ptr(p: ptr): u64 { p.to-uint() }
+fn takes-u8ref(r: *u8): u64 { (r.*).widen[u64] }
+fn takes-u64(x: u64): u64 { x }
+fn takes-u64ref(x: *u64): u64 { x.* }
+fn takes-wrapper(w: *wrapper): u32 { (w.*).base.tag }
+fn gives-u8ref(): *u8 { mem/new(7: u8) }
+
+fn scalar-views() {
+  let u: u32 = 0x3F800000
+  let uf: *f32 = u.&.as()
+  assert-equals[f32](uf.*, 1.0)
+  let ui: *i32 = u.&.as()
+  assert-equals(ui.*, 0x3F800000: i32)
+
+  let one: u8 = 1
+  let oc: *char = one.&.as()
+  assert-equals((oc.*).u8(), 1)
+  let c = 'x'
+  let cu: *u8 = c.&.as()
+  assert-equals(cu.*, 120)
+
+  assert(test-compile(one.&.as[*bool]) is :some _)
+  let ob: *bool = one.&.narrow()
+  assert(ob.*)
+
+  assert(test-compile(true.as[u8]) is :some _)
+  assert(test-compile(c.as[u8]) is :some _)
+  assert(test-compile((1: u8).narrow[bool]) is :some _)
+  assert(test-compile(u.&.as[*f64]) is :some _)
+  assert(test-compile(one.&.as[*u32]) is :some _)
+}
+
+fn enum-views() {
+  let e: abc = :b
+  let ei: *u32 = e.&.as()
+  assert-equals(ei.*, 1)
+
+  let n: u32 = 2
+  assert(test-compile(n.&.as[*abc]) is :some _)
+  let ea: *abc = n.&.narrow()
+  assert(ea.* is :c)
+}
+
+fn struct-views() {
+  let bigv: big = .{ a = 11, b = 22, c = 33 }
+  let view: *small = bigv.&.as()
+  assert-equals((view.*).a, 11)
+  assert-equals((view.*).b, 22)
+
+  let first: *u64 = bigv.&.as()
+  assert-equals(first.*, 11)
+
+  let smallv: small = .{ a = 1, b = 2 }
+  assert(test-compile(smallv.&.as[*big]) is :some _)
+  assert(test-compile(bigv.as[small]) is :some _)
+
+  let pl: prefix-last = .{ lead = 5, inner = .{ x = 6, y = 7 } }
+  let plv: *prefix-last-view = pl.&.as()
+  assert-equals((plv.*).lead, 5)
+  assert-equals((plv.*).inner.x, 6)
+
+  let pm: prefix-mid = .{ inner = .{ x = 8, y = 9 }, tail = 10 }
+  assert(test-compile(pm.&.as[*prefix-mid-view]) is :some _)
+
+  let hb: holds-big-ref = .{ r = mem/new(.{ a = 1, b = 2, c = 3 }), tail = 4 }
+  let hs: holds-small-ref = hb.as()
+  assert-equals((hs.r.*).a, 1)
+  assert-equals(hs.tail, 4)
+}
+
+fn embedded-struct-views() {
+  let w: wrapper = .{ base = .{ tag = 7, len = 8 }, extra = 9 }
+  let b: *base-part = w.&.as()
+  assert-equals((b.*).tag, 7)
+  assert-equals((b.*).len, 8)
+
+  assert(test-compile(b.as[*wrapper]) is :some _)
+  let back: *wrapper = b.narrow()
+  assert-equals((back.*).extra, 9)
+
+  let f: fnp-takes-wrapper = takes-wrapper.&
+  assert(test-compile(f.as[fnp-takes-base]) is :some _)
+  let g: fnp-takes-base = f.narrow()
+  assert-equals(g(w.&.as()), 7)
+}
+
+fn wrap-views() {
+  let n: u64 = 77
+  let wb: *u64-box = n.&.as()
+  assert-equals((wb.*).x, 77)
+
+  let pair: inner-pair = .{ x = 5, y = 6 }
+  let px: *u32 = pair.&.as()
+  assert(test-compile(px.as[*inner-pair]) is :some _)
+  let back: *inner-pair = px.narrow()
+  assert-equals((back.*).y, 6)
+
+  let b: u8 = 9
+  let raw: ptr = b.&.as()
+  assert(test-compile(raw.&.as[*ptr-box]) is :some _)
+  let boxed: *ptr-box = raw.&.narrow()
+  assert-equals((boxed.*).p.*, 9)
+
+  assert(test-compile(raw.narrow[ptr-box]) is :some _)
+}
+
+fn opaque-views() {
+  let arr: array[u64, 2] = [1, 2]
+  let ob: *op-big = arr.&.as[ptr].narrow()
+  assert(test-compile(ob.as[*op-small]) is :some _)
+  let os: *op-small = ob.narrow()
+  let _ = os
+  assert(test-compile(os.narrow[*op-big]) is :some _)
+  assert(test-compile(os.narrow[*op-strict]) is :some _)
+}
+
+fn pointer-views() {
+  let smallv: small = .{ a = 41, b = 42 }
+  let sp: ptr = smallv.&.as()
+  assert(test-compile(sp.as[*small]) is :some _)
+  let sr: *small = sp.narrow()
+  assert-equals((sr.*).a, 41)
+}
+
+fn function-pointer-views() {
+  let f: fnp-takes-ptr = takes-ptr.&
+  let g: fnp-takes-u8ref = f.as()
+  let v: u8 = 9
+  assert-equals(g(v.&), v.&.as[ptr].to-uint())
+
+  let h0: fnp-takes-u8ref = takes-u8ref.&
+  assert(test-compile(h0.as[fnp-takes-ptr]) is :some _)
+  let h: fnp-takes-ptr = h0.narrow()
+  assert-equals(h(v.&.as[ptr]), 9)
+
+  let u: fnp-takes-u64 = takes-u64.&
+  assert(test-compile(u.as[fnp-takes-f64]) is :some _)
+  assert(test-compile(u.narrow[fnp-takes-f64]) is :some _)
+  assert(test-compile(u.as[fnp-takes-u8ref]) is :some _)
+
+  let ur: fnp-takes-u64ref = takes-u64ref.&
+  let fr: fnp-takes-f64ref = ur.as()
+  let pi: f64 = 3.14159265358979
+  assert-equals(fr(pi.&), pi.&.as[*u64].*)
+
+  let r0: fnp-gives-u8ref = gives-u8ref.&
+  let r: fnp-gives-ptr = r0.as()
+  assert(not r().is-null())
+  assert(test-compile(r.as[fnp-gives-u8ref]) is :some _)
+  let rr: fnp-gives-u8ref = r.narrow()
+  assert-equals(rr().*, 7)
+
+  let p: ptr = f.as()
+  assert(test-compile(p.as[fnp-takes-ptr]) is :some _)
+  let back: fnp-takes-ptr = p.narrow()
+  assert-equals(back(v.&.as[ptr]), v.&.as[ptr].to-uint())
+}
+
+fn test() {
+  scalar-views()
+  enum-views()
+  struct-views()
+  embedded-struct-views()
+  wrap-views()
+  opaque-views()
+  pointer-views()
+  function-pointer-views()
+}

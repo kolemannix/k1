@@ -215,14 +215,14 @@ fn create-commands(
         skip = skip + 1
         ip = next-ip
         next-ip = ip.add-bytes(bytes-between)
-        if next-ip.as[size] > ip-limit.as[size] {
+        if next-ip > ip-limit {
           done = true
           break
         }
         next-hash = hash-2p(next-ip, shift, min-match)
         let found = false
         candidate = ip.sub-bytes(last-distance)
-        if is-match-2p(ip, candidate, min-match) and candidate.as[size] < ip.as[size] {
+        if is-match-2p(ip, candidate, min-match) and candidate < ip {
           table.get-ref-unchecked(h).* = ip.diff(base-ip).trunc[i32]
           found = true
         } else {
@@ -255,7 +255,7 @@ fn create-commands(
         emit-copy-len-last-distance-2p(matched, sink)
 
         next-emit = ip
-        if ip.as[size] >= ip-limit.as[size] {
+        if ip >= ip-limit {
           break
         }
         candidate = update-table-after-copy(ip, base-ip, table, shift, min-match, third-offset = 0)
@@ -271,7 +271,7 @@ fn create-commands(
         emit-distance-2p(last-distance, sink)
 
         next-emit = ip
-        if ip.as[size] >= ip-limit.as[size] {
+        if ip >= ip-limit {
           done = true
           break
         }
@@ -285,7 +285,7 @@ fn create-commands(
   }
 
   // Emit the remaining bytes as literals.
-  if next-emit.as[size] < ip-end.as[size] {
+  if next-emit < ip-end {
     let insert = ip-end.diff(next-emit)
     emit-insert-len-2p(insert, sink)
     sink.push-literals(next-emit, insert)
@@ -449,7 +449,7 @@ fn compress-fragment-two-pass(
   table: buffer[i32], table-size: size, bw: *mut bit-writer,
 ) {
   let initial-pos = bw.pos
-  let table-bits = log2-floor-nonzero(table-size.unsigned()).as[size]
+  let table-bits = log2-floor-nonzero(table-size.unsigned())
   let min-match: size = if table-bits <= 15 4 else 6
   let base-ip = input-start
 

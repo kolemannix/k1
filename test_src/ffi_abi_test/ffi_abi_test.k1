@@ -159,7 +159,7 @@ fn test-all() {
   let cursor: foo/cx-cursor = .{
     kind = :unexposed-decl,
     xdata = -42,
-    data = [1.as[ptr], 2.as[ptr], 3.as[ptr]]
+    data = [1.to-ptr(), 2.to-ptr(), 3.to-ptr()]
   }
   let rt = foo/rt-cursor(cursor)
   assert-equals(cursor.kind.enum-value(), rt.kind.enum-value())
@@ -169,12 +169,12 @@ fn test-all() {
   assert-equals(cursor.data.get(2), rt.data.get(2))
 
   let n = foo/get-file-name(ptr/null)
-  assert-equals(n.data.as[size], 3)
+  assert-equals(n.data.to-size(), 3)
   assert-equals(n.private_flags, 21)
 
   let locn = foo/get-cursor-location(rt)
-  assert-equals(locn.ptr_data.get(0), 1.as[ptr])
-  assert-equals(locn.ptr_data.get(1), 2.as[ptr])
+  assert-equals(locn.ptr_data.get(0), 1.to-ptr())
+  assert-equals(locn.ptr_data.get(1), 2.to-ptr())
   assert-equals(locn.int_data, 42)
 
   assert(not foo/tag-union-iszero(:a 10).as-bool())

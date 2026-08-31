@@ -11,7 +11,7 @@ fn ensure-frame(width: i32, height: i32) {
 
 fn(export("k1_frame")) frame-address(width: i32, height: i32): u32 {
   ensure-frame(width, height)
-  frame.data-ptr().as[size].trunc[u32]
+  frame.data-ptr().to-size().trunc[u32]
 }
 
 fn(export("k1_render")) render-into-frame(
@@ -66,7 +66,7 @@ fn show[s: escape-set](set: s, center: complex, span: f64, max-iter: i32) {
 }
 
 fn print-frame() {
-  let esc = 27u8.as[char]
+  let esc = 27u8.as-char()
   let out = string-builder/new()
   let y: i32 = 0
   while y < frame-height - 1 {

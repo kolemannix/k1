@@ -15,4 +15,4 @@ fn main(): i32 {
   0
 }
 
-//errmsg: Integer conversions name their operation
+//errmsg: Cannot use .as to convert between integer types

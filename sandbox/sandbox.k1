@@ -1,14 +1,9 @@
-ns build {
-  // type user = { id: string, password: string }
-  fn module(): k1/module {
-    let m = k1/module/new()
-    m.library()
-    println(m)
-    m
-  }
+fn foo(f: *f32): *i32 {
+  f.as()
 }
-
+fn bar(ptr): *int {
+  ptr.ref[int]
+}
 fn main(): i32 {
-  let x: either { a = 1 } = zeroed()
   0
 }

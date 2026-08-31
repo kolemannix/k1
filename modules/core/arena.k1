@@ -112,7 +112,7 @@ ns for arena {
     // cursor is already MIN_ALIGN-aligned, so only stricter
     // alignments need extra padding before the returned allocation.
     let prefix-padding =
-      if align > MIN_ALIGN ptr/get-align-offset(cursor.as[size], align) else 0
+      if align > MIN_ALIGN ptr/get-align-offset(cursor.to-size(), align) else 0
 
     let raw-bump = size + prefix-padding
 

@@ -1293,7 +1293,6 @@ pub fn compile_program_ext(
     if args.cache {
         write_module_list(&k1);
     }
-    k1.join_cache_writes();
     if let Err(e) = add_result {
         if args.dump_module {
             write_program_dump(&k1);

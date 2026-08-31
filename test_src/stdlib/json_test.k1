@@ -57,8 +57,8 @@ fn test-rejects() {
 fn test-escapes() {
   test-parse(`"a\/b"`, fn j. j is :str "a/b")
   test-parse(`"a\\rb"`, fn j. j is :str "a\rb")
-  test-parse(`"a\\bb"`, fn j. j is :str s and s.len() == 3 and s.get(1).as[u8] == 8)
-  test-parse(`"a\\fb"`, fn j. j is :str s and s.len() == 3 and s.get(1).as[u8] == 12)
+  test-parse(`"a\\bb"`, fn j. j is :str s and s.len() == 3 and s.get(1).u8() == 8)
+  test-parse(`"a\\fb"`, fn j. j is :str s and s.len() == 3 and s.get(1).u8() == 12)
   test-parse(`"\\\\"`, fn j. j is :str s and s.len() == 1 and s.get(0) == '\\')
   test-parse(`"a\\nb\\tc"`, fn j. j is :str "a\nb\tc")
 }

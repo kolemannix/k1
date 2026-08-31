@@ -420,13 +420,13 @@ ns platform {
         if cur + needed > end {
           let grow-size = if needed > CHUNK needed else CHUNK
           let r = memory/acquire(grow-size)
-          cur = r.base.as[size]
+          cur = r.base.to-size()
           end = cur + r.len
         }
         let base = cur
-        base.as[ptr].ref[size].* = size-arg
+        base.to-ptr().ref[size].* = size-arg
         cur = base + needed
-        (base + HEADER).as[ptr]
+        (base + HEADER).to-ptr()
       }
 
       fn realloc(old-ptr: ptr, new-size: size): ptr {
@@ -537,7 +537,7 @@ ns platform {
           fd = -1i32,
           offset = 0
         )
-        if addr == c/MAP_FAILED.as[ptr] {
+        if addr.to-int() == c/MAP_FAILED {
           crash("mmap failed")
         }
         .{ base = addr, len = min-size }
@@ -545,9 +545,9 @@ ns platform {
 
       fn commit(base: ptr, len: size) {
         let page = c/getpagesize().widen[size]
-        let start = base.as[size] / page * page
-        let end = (base.as[size] + len + page - 1) / page * page
-        if c/mprotect(start.as[ptr], end - start, c/PROT_READ | c/PROT_WRITE) != 0 {
+        let start = base.to-size() / page * page
+        let end = (base.to-size() + len + page - 1) / page * page
+        if c/mprotect(start.to-ptr(), end - start, c/PROT_READ | c/PROT_WRITE) != 0 {
           crash("mprotect failed")
         }
       }
@@ -750,8 +750,8 @@ ns platform {
 
       type iovec = { buf: u32, len: u32 }
 
-      fn a32(p: ptr): u32 {
-        p.as[size].trunc[u32]
+      fn a32(ptr): u32 {
+        ptr.to-size().trunc[u32]
       }
 
       let PAGE-SIZE: size = 65536
@@ -760,13 +760,13 @@ ns platform {
 
       // memory.grow can never shrink, so released regions form an intrusive
       // free list in their own first bytes: next at offset 0, len at offset 8
-      let(mutable) freelist: ptr = 0.as[ptr]
+      let(mutable) freelist: ptr = ptr/null
 
       fn grow-fresh(min-size: size): memory/region {
         let pages = (min-size + PAGE-SIZE - 1) / PAGE-SIZE
         let prev-pages = memory-grow(0, pages)
         if prev-pages == -1 crash("wasm memory.grow failed")
-        .{ base = (prev-pages * PAGE-SIZE).as[ptr], len = pages * PAGE-SIZE }
+        .{ base = (prev-pages * PAGE-SIZE).to-ptr(), len = pages * PAGE-SIZE }
       }
 
       // Like mmap, the page-granular rounding is invisible: callers see
@@ -889,7 +889,7 @@ ns platform {
         if environ-get(a32(entry-ptrs), a32(entry-bytes)) != 0 return :none
         for i in 0.until(count.widen[size]) {
           let entry-addr = entry-ptrs.add-bytes(i * 4).ref[u32].*
-          let entry = string/wrap-c(entry-addr.widen[size].as[ptr])
+          let entry = string/wrap-c(entry-addr.widen[size].to-ptr())
           if entry.starts-with(name) and entry.drop(name.len()).starts-with("=") {
             return :some(entry.drop(name.len() + 1))
           }

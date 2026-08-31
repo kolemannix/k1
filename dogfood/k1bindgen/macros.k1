@@ -5,7 +5,7 @@ type c-token = { kind: clang/CXTokenKind, text: string }
 
 fn macro-body-tokens(unit: clang/CXTranslationUnit, cursor: clang/CXCursor): list[c-token] {
   let extent = clang/getCursorExtent(cursor)
-  let toks-ptr: *mut clang/CXToken = ptr/null.as()
+  let toks-ptr: *mut clang/CXToken = ptr/null.narrow()
   let count: u32 = 0
   clang/tokenize(unit, extent, &toks-ptr, &count)
   let body: list[c-token] = list/with-capacity(count.widen[size])
@@ -137,7 +137,7 @@ fn transpile-literal(t: *mut macro-transpile, text: string): result[string, stri
     let hex = digits.drop(2)
     if hex.is-empty() or hex.len() > 16 return :err "unsupported hex literal $text"
     for c in hex { if not is-hex-digit(c) { return :err "unsupported hex literal $text" } }
-    if hex.len() == 16 and hex.get(0).as_u8() > '7'.as_u8() { t.ty = "u64" }
+    if hex.len() == 16 and hex.get(0).u8() > '7'.u8() { t.ty = "u64" }
     return :ok "0x$hex"
   }
   if digits.get(0) == '0' and digits.len() > 1 {
@@ -216,13 +216,13 @@ fn strip-int-suffix(text: string): string {
 }
 
 fn is-hex-digit(c: char): bool {
-  let b = c.to-ascii-lower().as_u8()
-  c.is-ascii-digit() or (b >= 'a'.as_u8() and b <= 'f'.as_u8())
+  let b = c.to-ascii-lower().u8()
+  c.is-ascii-digit() or (b >= 'a'.u8() and b <= 'f'.u8())
 }
 
 fn parse-char-literal(text: string): result[i64, string] {
   if text.len() == 3 and text.get(0) == '\'' and text.get(2) == '\'' {
-    return :ok text.get(1).as_u8().widen[i64]
+    return :ok text.get(1).u8().widen[i64]
   }
   if text.len() == 4 and text.get(0) == '\'' and text.get(1) == '\\' and text.get(3) == '\'' {
     let v: i64 = text.get(2) is {

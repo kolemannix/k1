@@ -658,13 +658,7 @@ impl TypedProgram {
                 )
                 .map_err(|f| {
                     let e = self.render_inference_failure(f);
-                    kerr!(
-                        self,
-                        e.span,
-                        "Invalid call to {}\n    {}",
-                        self.ident_str_opt(generic_function_sig.name),
-                        e.message,
-                    )
+                    e
                 })?;
             solutions
         };

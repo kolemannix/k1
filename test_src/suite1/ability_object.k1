@@ -26,7 +26,7 @@ impl counter[t = int] for by-tens {
 
 fn basic() {
   let ones: *mut by-ones = mem/new(.{ current = 0 })
-  let d1 = ones.to-dyn[counter[t = int]]()
+  let d1 = ones.to-dyn[counter[t = int]]
   assert-equals(d1.bump(), 1)
   assert-equals(d1.bump(), 2)
   // default method through dyn
@@ -41,12 +41,12 @@ fn basic() {
   // overridden default dispatches to the override
   assert-equals(d2.label(), "tens")
   assert-equals(d2.kind(), "tens-kind")
-  let d3 = tens.as[dyn[counter[t = int]]]()
+  let d3 = tens.to-dyn[counter[t = int]]
   assert-equals(d3.bump(), 20)
 
   // value form ambient-allocates before erasing
   let start: by-ones = .{ current = 100 }
-  let d4 = start.to-dyn[counter[t = int]]()
+  let d4 = start.to-dyn[counter[t = int]]
   assert-equals(d4.bump(), 101)
 }
 

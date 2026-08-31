@@ -430,6 +430,10 @@ impl FloatType {
             FloatType::F64 => NumericWidth::B64,
         }
     }
+
+    pub fn width(&self) -> NumericWidth {
+        self.size()
+    }
 }
 
 // pub struct Spanned<T> {
@@ -1078,6 +1082,7 @@ pub struct BuiltinTypes {
     pub empty: TypeId,
     pub bool: Option<TypeId>,
     pub char: Option<TypeId>,
+    pub ptr: Option<TypeId>,
     pub buffer: Option<TypeId>,
     pub span: Option<TypeId>,
     pub list: Option<TypeId>,
@@ -1105,6 +1110,7 @@ impl BuiltinTypes {
         assert!(self.empty != TypeId::PENDING);
         debug_assert!(self.bool.is_some());
         debug_assert!(self.char.is_some());
+        debug_assert!(self.ptr.is_some());
         debug_assert!(self.buffer.is_some());
         debug_assert!(self.span.is_some());
         debug_assert!(self.list.is_some());
@@ -1128,6 +1134,9 @@ impl BuiltinTypes {
     }
     pub fn char(&self) -> TypeId {
         self.char.expect("char builtin missing")
+    }
+    pub fn ptr(&self) -> TypeId {
+        self.ptr.expect("ptr builtin missing")
     }
     pub fn string(&self) -> TypeId {
         self.string.expect("string builtin missing")

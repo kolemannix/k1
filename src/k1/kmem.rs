@@ -1348,7 +1348,7 @@ macro_rules! k1_format_user {
 #[macro_export]
 macro_rules! kerr {
     ($k1:expr, $span:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
-        let msg: String = $crate::k1_format_user!($k1, $fmt, $($arg),*).to_string();
+        let msg = $crate::k1_format_user!($k1, $fmt, $($arg),*);
         $k1.make_error(&msg, $span)
     }}
 }
@@ -1356,7 +1356,7 @@ macro_rules! kerr {
 #[macro_export]
 macro_rules! kwarn {
     ($k1:expr, $span:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
-        let msg: String = $crate::k1_format_user!($k1, $fmt, $($arg),*).to_string();
+        let msg = $crate::k1_format_user!($k1, $fmt, $($arg),*);
         $k1.make_warning(&msg, $span)
     }}
 }

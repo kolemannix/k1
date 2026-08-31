@@ -213,7 +213,10 @@ ns for char {
     string/wrap-list([self])
   }
 
-  fn as_u8(self: char): u8 { self.as[u8] }
+  fn as-u8(self: char): u8 { mem/bitcast[char, u8](self) }
+  fn u8(self: char): u8    { mem/bitcast[char, u8](self) }
+  fn as-i8(self: char): i8 { mem/bitcast[char, i8](self) }
+  fn as-byte(self: char): u8 { mem/bitcast[char, u8](self) }
 
   // mask to convert ASCII letters to uppercase
   let ASCII_CASE_MASK: u8 = 0b0010_0000
@@ -221,59 +224,59 @@ ns for char {
   //fn asDigit(self: char, radix: u32): ?u32 {
   //  assert(radix >= 2 and radix <= 36);
   //  let value = if self > '9' and radix > 10 {
-  //    self.as[u8]
+  //    self.as-u8()
   //  }
 
   //}
 
   fn is-ascii(self: char): bool {
-    self.as[u8] <= 0x7F
+    self.as-u8() <= 0x7F
   }
 
   fn is-ascii-letter(self: char): bool {
-    let s = self.as[u8]
-    (s >= 'a'.as[u8] and s <= 'z'.as[u8]) or (s >= 'A'.as[u8] and s <= 'Z'.as[u8])
+    let s = self.as-u8()
+    (s >= 'a'.as-u8() and s <= 'z'.as-u8()) or (s >= 'A'.as-u8() and s <= 'Z'.as-u8())
   }
 
   fn is-ascii-digit(self: char): bool {
-    let s = self.as[u8]
-    s >= '0'.as[u8] and s <= '9'.as[u8]
+    let s = self.as-u8()
+    s >= '0'.as-u8() and s <= '9'.as-u8()
   }
 
   fn to-ascii-digit(self: char): ?u8 {
-    if self.is-ascii-digit() { :some(self.as[u8] - '0'.as[u8]) } 
+    if self.is-ascii-digit() { :some(self.as-u8() - '0'.as-u8()) } 
     else :none
   }
 
   fn is-ascii-lower(self: char): bool {
-    let s = self.as[u8]
-    s >= 'a'.as[u8] and s <= 'z'.as[u8]
+    let s = self.as-u8()
+    s >= 'a'.as-u8() and s <= 'z'.as-u8()
   }
 
   fn is-ascii-upper(self: char): bool {
-    let s = self.as[u8]
-    s >= 'A'.as[u8] and s <= 'Z'.as[u8]
+    let s = self.as-u8()
+    s >= 'A'.as-u8() and s <= 'Z'.as-u8()
   }
 
   fn to-ascii-upper(self: char): char {
     // Toggle (clear) the 6th bit if we are ascii lower
-    let u8 = (self.as[u8]).xor(ASCII_CASE_MASK * self.is-ascii-lower().as-u8())
-    u8.as[char]
+    let u8 = (self.as-u8()).xor(ASCII_CASE_MASK * self.is-ascii-lower().as-u8())
+    u8.as-char()
   }
 
   fn to-ascii-lower(self: char): char {
     // Set the 6th bit if we are ascii upper
-    let u8 = (self.as[u8]) | (ASCII_CASE_MASK * self.is-ascii-upper().as-u8())
-    u8.as[char]
+    let u8 = (self.as-u8()) | (ASCII_CASE_MASK * self.is-ascii-upper().as-u8())
+    u8.as-char()
   }
 
 }
 
 impl scalar-cmp for char {
-  fn lt(self, other: self): bool { (self.as[u8]).lt(other.as[u8]) }
-  fn le(self, other: self): bool { (self.as[u8]).le(other.as[u8]) }
-  fn gt(self, other: self): bool { (self.as[u8]).gt(other.as[u8]) }
-  fn ge(self, other: self): bool { (self.as[u8]).ge(other.as[u8]) }
+  fn lt(self, other: self): bool { (self.as-u8()).lt(other.as-u8()) }
+  fn le(self, other: self): bool { (self.as-u8()).le(other.as-u8()) }
+  fn gt(self, other: self): bool { (self.as-u8()).gt(other.as-u8()) }
+  fn ge(self, other: self): bool { (self.as-u8()).ge(other.as-u8()) }
 }
 
 impl[t: print] show for t {
@@ -432,32 +435,32 @@ impl[t: scalar-cmp] comparable for t {
 }
 
 ns for u8 {
-  // TODO: replace with char -> digit lut
   fn to-ascii-digit(v: u8): char {
     if v < 10 {
-      (v + 48).as[char] // '0' + v
+      (v + 48).as-char() // '0' + v
     } else if v < 36 {
-      (v + 87).as[char] // 'a' + (v - 10)
+      (v + 87).as-char() // 'a' + (v - 10)
     } else if v < 62 {
-      (v + 29).as[char] // 'a' + (v - 36)
+      (v + 29).as-char() // 'a' + (v - 36)
     } else {
       crash("u8/to-ascii-digit: value $v is out of range (max 61)")
     }
   }
 
-  fn signed(self: u8): i8 { mem/bitcast(self) }
+  fn as-char(self: u8): char { mem/bitcast[u8, char](self) }
+  fn signed(self: u8): i8 { mem/bitcast[u8, i8](self) }
 }
 
 ns for i8 {
-  fn unsigned(self: i8): u8 { mem/bitcast(self) }
+  fn unsigned(self: i8): u8 { mem/bitcast[i8, u8](self) }
 }
 
 ns for u16 {
-  fn signed(self: u16): i16 { mem/bitcast(self) }
+  fn signed(self: u16): i16 { mem/bitcast[u16, i16](self) }
 }
 
 ns for i16 {
-  fn unsigned(self: i16): u16 { mem/bitcast(self) }
+  fn unsigned(self: i16): u16 { mem/bitcast[i16, u16](self) }
 }
 
 ns for u32 {
@@ -480,7 +483,8 @@ ns for i64 {
   let max-value: i64 = 0x7FFFFFFFFFFFFFFF
   let min-value: i64 = -0x8000000000000000
 
-  fn unsigned(self: i64): u64 { mem/bitcast(self) }
+  fn unsigned(self: i64): u64 { mem/bitcast[i64, u64](self) }
+  fn to-ptr(self: i64): ptr { mem/bitcast[i64, ptr](self) }
 
   fn from-string(s: string): result[i64, string] {
     if s.is-empty() return :err "empty string"
@@ -518,6 +522,7 @@ ns for u64 {
   let max-value: u64 = 0xFFFFFFFFFFFFFFFF
 
   fn signed(self: u64): i64 { mem/bitcast(self) }
+  fn to-ptr(self: u64): ptr { mem/bitcast[u64, ptr](self) }
 
   fn from-string(s: string): result[u64, string] {
     if s.is-empty() return :err "empty string"
@@ -688,7 +693,7 @@ impl comparable for f64 {
   }
 }
 
-impl zero for char { fn zero(): char { 0u8.as[char] } }
+impl zero for char { fn zero(): char { mem/zeroed() } }
 impl zero for f32 { fn zero(): f32 { 0.0 } }
 impl zero for f64 { fn zero(): f64 { 0.0 } }
 impl zero for u8  { fn zero(): u8  { 0   } }
@@ -726,7 +731,7 @@ impl print for f64 {
 impl print for ptr {
   fn print-to[w: writer](self: ptr, w) {
     w.write("0x")
-    format-uint(context w)(self.as[usize], base = 16)
+    format-uint(context w)(self.to-uint(), base = 16)
   }
 }
 

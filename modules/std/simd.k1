@@ -140,7 +140,7 @@ fn first-of-impl(name: string, needles: span[char]): string {
   code.writeln("    let base = s.data-ptr()")
   code.writeln("    let i = from")
   for needles {
-    code.writeln("    let needle$it-index = vector/splat[u8, $lanes](${it.as[u8]})")
+    code.writeln("    let needle$it-index = vector/splat[u8, $lanes](${it.as-u8()})")
   }
   code.writeln("    while i + $lanes <= len {")
   code.writeln("      let chunk = vector/load-unchecked[u8, $lanes](base.ref-at[u8](i).as[ptr])")
@@ -167,7 +167,7 @@ fn first-of-impl(name: string, needles: span[char]): string {
   code.writeln("    while i < len {")
   code.writeln("      let ch = s.get(i)")
   for needles {
-    code.writeln("      if ch.as[u8] == ${it.as[u8]} return .{ index = i, which = $it-index }")
+    code.writeln("      if ch.as-u8() == ${it.as-u8()} return .{ index = i, which = $it-index }")
   }
   code.writeln("      i = i + 1")
   code.writeln("    }")

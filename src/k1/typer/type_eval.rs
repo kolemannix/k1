@@ -260,27 +260,30 @@ impl TypedProgram {
 
         // Capture type_ids of compiler-known types
         if namespace_scope_id == self.scopes.core_scope_id {
-            if name == self.ast.idents.b.string {
+            let b = &self.ast.idents.b;
+            if name == b.string {
                 self.builtin_types.string = Some(type_id);
-            } else if name == self.ast.idents.b.bool {
+            } else if name == b.bool {
                 self.builtin_types.bool = Some(type_id);
-            } else if name == self.ast.idents.b.char {
+            } else if name == b.char {
                 self.builtin_types.char = Some(type_id);
-            } else if name == self.ast.idents.b.buffer {
+            } else if name == b.ptr {
+                self.builtin_types.ptr = Some(type_id);
+            } else if name == b.buffer {
                 self.builtin_types.buffer = Some(type_id);
-            } else if name == self.ast.idents.b.span {
+            } else if name == b.span {
                 self.builtin_types.span = Some(type_id);
-            } else if name == self.ast.idents.b.list {
+            } else if name == b.list {
                 self.builtin_types.list = Some(type_id);
-            } else if name == self.ast.idents.b.opt {
+            } else if name == b.opt {
                 self.builtin_types.opt = Some(type_id);
-            } else if name == self.ast.idents.b.ordering {
+            } else if name == b.ordering {
                 self.builtin_types.ordering = Some(type_id);
-            } else if name == self.ast.idents.b.code {
+            } else if name == b.code {
                 self.builtin_types.code = Some(type_id);
-            } else if name == self.ast.idents.b.code_chunk {
+            } else if name == b.code_chunk {
                 self.builtin_types.code_chunk = Some(type_id);
-            } else if name == self.ast.idents.b.code_builder {
+            } else if name == b.code_builder {
                 self.builtin_types.code_builder = Some(type_id);
             }
         } else if namespace_scope_id == self.scopes.types_scope_id {

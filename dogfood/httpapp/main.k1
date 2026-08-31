@@ -488,8 +488,8 @@ fn start-app[deps](context arena: *mut arena)(framework: *mut framework-deps, ma
   let server: *mut uv/tcp = arena.alloc-t[uv/tcp]()
   let tcp-init-rc = uv/tcp_init(l, server)
 
-  let erased-handle = handle.as[*fn(http/request, ptr) -> http-response]
-  let erased-make-deps = make-deps.as[*fn(*mut framework-deps) -> ptr]
+  let erased-handle = handle.narrow[*fn(http/request, ptr) -> http-response]
+  let erased-make-deps = make-deps.narrow[*fn(*mut framework-deps) -> ptr]
   let server-data: *mut server-data = arena.push(.{
     handle = erased-handle,
     framework,
@@ -507,8 +507,8 @@ fn start-app[deps](context arena: *mut arena)(framework: *mut framework-deps, ma
     return :err "uv_ip4_addr failed"
   }
 
-  uv/thread_setname("mainthread\0".data-ptr().as())
-  let bind-rc = uv/tcp_bind(server, (&addr).as(), 0)
+  uv/thread_setname("mainthread\0".data-ptr().narrow())
+  let bind-rc = uv/tcp_bind(server, (&addr).as[ptr].narrow(), 0)
   if bind-rc != 0 {
     eprintln("bind failed: ${string/wrap-c(uv/strerror(bind-rc).as[ptr])}")
   }

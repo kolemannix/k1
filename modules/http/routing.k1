@@ -403,10 +403,10 @@ fn split-path(path: string, out: *mut array[string, 16]): { count: size, more: b
 }
 
 fn hex-val(c: char): ?u8 {
-  let b = c.as[u8]
-  if c.is-ascii-digit() :some (b - '0'.as[u8])
-  else if b >= 'a'.as[u8] and b <= 'f'.as[u8] :some (b - 'a'.as[u8] + 10)
-  else if b >= 'A'.as[u8] and b <= 'F'.as[u8] :some (b - 'A'.as[u8] + 10)
+  let b = c.u8()
+  if c.is-ascii-digit() :some (b - '0'.u8())
+  else if b >= 'a'.u8() and b <= 'f'.u8() :some (b - 'a'.u8() + 10)
+  else if b >= 'A'.u8() and b <= 'F'.u8() :some (b - 'A'.u8() + 10)
   else :none
 }
 
@@ -422,7 +422,7 @@ fn decode-seg(s: string): ?string {
       if i + 2 >= s.len() return :none
       require hex-val(s.get(i + 1)) is :some hi else { return :none }
       require hex-val(s.get(i + 2)) is :some lo else { return :none }
-      b.write-char((hi * 16 + lo).as[char])
+      b.write-char((hi * 16 + lo).as-char())
       i = i + 3
     } else {
       b.write-char(c)
@@ -443,7 +443,7 @@ fn encode-into[w: writer](s: string, w, keep-slash: bool) {
     if is-unreserved(c) or (keep-slash and c == '/') {
       w.write-char(c)
     } else {
-      let b = c.as[u8]
+      let b = c.u8()
       w.write-char('%')
       w.write-char(hex-digit(b / 16))
       w.write-char(hex-digit(b % 16))

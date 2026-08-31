@@ -447,7 +447,7 @@ impl Backend {
             cache: true,
             filc: false,
             k1_home_override: None,
-            command: k1::compiler::Command::Check { file: Some(src_path.into()) },
+            command: k1::compiler::Command::Check { file: Some(src_path) },
             dump_idents: false,
         };
         let compile_result = k1::compiler::compile_program(&args);

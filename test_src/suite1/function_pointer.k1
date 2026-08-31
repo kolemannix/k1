@@ -21,7 +21,7 @@ fn test() {
   let y = some-add-fn(20)
   assert-equals(y, 22)
 
-  let null-callback: *fn(int) -> int = ptr/null.as()
+  let null-callback: *fn(int) -> int = ptr/null.narrow()
   let null-callback-ptr: ptr = null-callback.as[ptr]
   assert-equals(null-callback-ptr, ptr/null)
 

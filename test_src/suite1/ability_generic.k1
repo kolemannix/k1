@@ -48,7 +48,7 @@ ns ability_generic {
     fn to(self): string { show/show[i64](self) }
   }
   impl to[to = char] for byte {
-    fn to(self: byte): char { self.as() }
+    fn to(self: byte): char { self.as-char() }
   }
 
   // Blanket param deliberately reuses the ability's impl-param name 'w'

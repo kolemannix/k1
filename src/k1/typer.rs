@@ -501,6 +501,28 @@ impl EvalExprContext {
     }
 }
 
+/// How the target's bytes relate to the source's: the view covers exactly the source's bytes,
+/// reads a leading part of them, or claims bytes past the end of them
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViewExtent {
+    Exact,
+    ReadsPrefix,
+    ReadsBeyond,
+}
+
+/// `total`: every bit pattern of the source is valid in the target; a non-total view makes
+/// a claim and must be spelled `.narrow`
+#[derive(Debug, Clone, Copy)]
+struct CastView {
+    total: bool,
+    extent: ViewExtent,
+}
+
+impl CastView {
+    const TOTAL: CastView = CastView { total: true, extent: ViewExtent::Exact };
+    const CLAIMS: CastView = CastView { total: false, extent: ViewExtent::Exact };
+}
+
 #[derive(Debug, Clone, Copy)]
 enum MaybeTypedExpr {
     Parsed(ParsedExprId),
@@ -1248,18 +1270,6 @@ pub struct TypedMatchArm {
     pub consequent_expr: TypedExprId,
 }
 
-#[derive(Debug, Clone)]
-pub struct TypedIntegerExpr {
-    pub value: TypedIntValue,
-    pub span: SpanId,
-}
-
-impl TypedIntegerExpr {
-    pub fn get_type(&self) -> TypeId {
-        self.value.get_type()
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TypedFloatValue {
     F32(f32),
@@ -1305,18 +1315,6 @@ impl Display for TypedFloatValue {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TypedFloatExpr {
-    pub value: TypedFloatValue,
-    pub span: SpanId,
-}
-
-impl TypedFloatExpr {
-    pub fn get_type(&self) -> TypeId {
-        self.value.get_type()
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum IntegerCastDirection {
     Extend,
@@ -1327,52 +1325,31 @@ pub enum IntegerCastDirection {
 #[derive(Debug, Clone, Copy)]
 pub enum CastType {
     IntegerCast(IntegerCastDirection),
-    Integer8ToChar,
-    IntegerExtendFromChar,
-    BoolToInt,
-    ReferenceToMut,
-    ReferenceUnMut,
-    ReferenceToReference,
-    PointerToReference,
-    ReferenceToPointer,
-    /// Destination type can only be u64 and i64
-    PointerToWord,
-    PointerToFunctionPointer,
-    WordToPointer,
     FloatExtend,
     FloatTruncate,
     FloatToUnsignedInteger,
     FloatToSignedInteger,
     IntegerUnsignedToFloat,
     IntegerSignedToFloat,
-    /// Placeholder for erasing an ability impl to a dyn object inside an
-    /// abstract (where-bound generic) body; these are not lowered
-    /// since specialization re-evaluates the body and lowers to an allocation of a struct literal
-    AbilityImplToDynObject,
+    // NoOps
+    ReferenceToReference,
+    PointerToReference,
+    ReferenceToPointer,
 }
 
 impl Display for CastType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             CastType::IntegerCast(_dir) => write!(f, "intcast"),
-            CastType::Integer8ToChar => write!(f, "i8tochar"),
-            CastType::IntegerExtendFromChar => write!(f, "iextfromchar"),
-            CastType::BoolToInt => write!(f, "bool2int"),
-            CastType::ReferenceToMut => write!(f, "reference2mut"),
-            CastType::ReferenceUnMut => write!(f, "reference-unmut"),
             CastType::ReferenceToReference => write!(f, "reftoref"),
             CastType::PointerToReference => write!(f, "ptrtoref"),
             CastType::ReferenceToPointer => write!(f, "reftoptr"),
-            CastType::PointerToWord => write!(f, "ptrtoword"),
-            CastType::WordToPointer => write!(f, "wordtoptr"),
-            CastType::PointerToFunctionPointer => write!(f, "ptr-to-fnptr"),
             CastType::FloatExtend => write!(f, "fext"),
             CastType::FloatTruncate => write!(f, "ftrunc"),
             CastType::FloatToUnsignedInteger => write!(f, "ftouint"),
             CastType::FloatToSignedInteger => write!(f, "ftosint"),
             CastType::IntegerUnsignedToFloat => write!(f, "uinttof"),
             CastType::IntegerSignedToFloat => write!(f, "sinttof"),
-            CastType::AbilityImplToDynObject => write!(f, "impl2dyn"),
         }
     }
 }
@@ -2937,7 +2914,6 @@ pub struct TypedProgram {
 
     /// diagnostic only, for --chatty and tests
     pub restored_module_count: u32,
-    pub pending_snapshot_writes: Vec<std::thread::JoinHandle<()>>,
 }
 
 // SAFETY: TypedProgram's raw pointers point into its own heap allocations
@@ -3173,7 +3149,6 @@ impl TypedProgram {
             megarepl: None,
             inputs_hash,
             restored_module_count: 0,
-            pending_snapshot_writes: vec![],
         };
 
         let empty_struct_id = k1.add_type_anon(Type::Struct(StructType::struc(MSlice::empty())));
@@ -3276,10 +3251,21 @@ impl TypedProgram {
             {
                 if !crate::snap::cache_exists_entry(self.cache_dir(), module_hash) {
                     let cache_dir = self.cache_dir().to_path_buf();
-                    let bytes = self.snap();
-                    self.pending_snapshot_writes.push(std::thread::spawn(move || {
-                        crate::snap::cache_store_entry(&cache_dir, module_hash, &bytes)
-                    }));
+                    let stored = match crate::snap::cache_store_begin(&cache_dir, module_hash) {
+                        Ok(mut w) => {
+                            self.snap_into(&mut w);
+                            crate::snap::cache_store_finish(&cache_dir, module_hash, w)
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                        Err(e) => Err(e),
+                    };
+                    if let Err(e) = stored {
+                        let warning = self.make_warning(
+                            format!("failed to store snapshot cache entry: {e}"),
+                            SpanId::NONE,
+                        );
+                        self.report(warning);
+                    }
                 }
             }
         }
@@ -3336,12 +3322,6 @@ impl TypedProgram {
 
     pub(crate) fn cache_dir(&self) -> &Path {
         Path::new(self.get_string(self.config.cache_dir))
-    }
-
-    pub fn join_cache_writes(&mut self) {
-        for handle in self.pending_snapshot_writes.drain(..) {
-            let _ = handle.join();
-        }
     }
 
     fn discover_module_and_deps(
@@ -8067,78 +8047,25 @@ impl TypedProgram {
         let base_expr = self.eval_expr(base_expr, ctx.with_no_expected_type())?;
         let base_expr_type = self.exprs.get_type(base_expr);
         if base_expr_type == target_type {
-            self.report(kwarn!(self, span, "Useless cast"));
+            self.report(kwarn!(self, span, "type is already {}", target_type));
             return Ok(base_expr);
         }
-        enum Outcome {
-            Cast(CastType),
-            Expr(TypedExprId),
-        }
+
+        // FIXME
+        // float to int / int to float are the remaining non-noop casts handled by this syntax
         let cast_type = match self.types.get(base_expr_type) {
             Type::Integer(from_integer_type) => match self.types.get(target_type) {
-                Type::Integer(to_integer_type) => {
-                    let spelling = match from_integer_type.width().cmp(&to_integer_type.width()) {
-                        Ordering::Less => {
-                            if from_integer_type.is_signed() && !to_integer_type.is_signed() {
-                                format!(
-                                    "zero-extension: .unsigned().widen[{}], sign-extension: .widen[{}].unsigned()",
-                                    to_integer_type,
-                                    to_integer_type.sign_flipped()
-                                )
-                            } else {
-                                format!("lossless widening: .widen[{}]", to_integer_type)
-                            }
-                        }
-                        Ordering::Greater => {
-                            format!("modular truncation: .trunc[{}]", to_integer_type)
-                        }
-                        Ordering::Equal => {
-                            let flip = if to_integer_type.is_signed() {
-                                ".signed()"
-                            } else {
-                                ".unsigned()"
-                            };
-                            format!("sign reinterpretation: {}", flip)
-                        }
-                    };
-                    Err(kerr!(
-                        self,
-                        span,
-                        "Integer conversions name their operation; {} to {}: {}",
-                        from_integer_type,
-                        to_integer_type,
-                        spelling
-                    ))
-                }
-                Type::Char => {
-                    if from_integer_type.width() == NumericWidth::B8 {
-                        Ok(Outcome::Cast(CastType::Integer8ToChar))
-                    } else {
-                        Err(kerr!(
-                            self,
-                            span,
-                            "Cannot cast integer '{}' to char, must be 8 bits",
-                            from_integer_type
-                        ))
-                    }
-                }
-                Type::Pointer => match from_integer_type {
-                    IntegerType::U64 | IntegerType::I64 => {
-                        Ok(Outcome::Cast(CastType::WordToPointer))
-                    }
-                    _ => Err(kerr!(
-                        self,
-                        span,
-                        "Cannot cast integer '{}' to Pointer (must be word-sized (64-bit))",
-                        from_integer_type
-                    )),
-                },
+                Type::Integer(_) => Err(kerr!(
+                    self,
+                    span,
+                    "Cannot use .as to convert between integer types; use widen(), trunc(), signed(), or unsigned()",
+                )),
                 Type::Float(_to_float_type) => match from_integer_type {
                     IntegerType::U8 | IntegerType::U16 | IntegerType::U32 | IntegerType::U64 => {
-                        Ok(Outcome::Cast(CastType::IntegerUnsignedToFloat))
+                        Ok(CastType::IntegerUnsignedToFloat)
                     }
                     IntegerType::I8 | IntegerType::I16 | IntegerType::I32 | IntegerType::I64 => {
-                        Ok(Outcome::Cast(CastType::IntegerSignedToFloat))
+                        Ok(CastType::IntegerSignedToFloat)
                     }
                 },
                 _ => Err(kerr!(
@@ -8149,22 +8076,12 @@ impl TypedProgram {
                     self.type_id_to_string(target_type).blue()
                 )),
             },
-            Type::Float(from_float_type) => match self.types.get(target_type) {
-                Type::Float(to_float_type) => {
-                    let spelling = match from_float_type.size().cmp(&to_float_type.size()) {
-                        Ordering::Less => "lossless widening: .widen[f64]",
-                        Ordering::Greater => "truncation: .trunc[f32]",
-                        Ordering::Equal => {
-                            unreachable!("equal-width floats are the same type")
-                        }
-                    };
-                    Err(kerr!(self, span, "Float conversions name their operation; {}", spelling))
-                }
+            Type::Float(_from_float_type) => match self.types.get(target_type) {
                 Type::Integer(to_int_type) => {
                     if to_int_type.is_signed() {
-                        Ok(Outcome::Cast(CastType::FloatToSignedInteger))
+                        Ok(CastType::FloatToSignedInteger)
                     } else {
-                        Ok(Outcome::Cast(CastType::FloatToUnsignedInteger))
+                        Ok(CastType::FloatToUnsignedInteger)
                     }
                 }
                 _ => Err(kerr!(
@@ -8174,159 +8091,22 @@ impl TypedProgram {
                     self.type_id_to_string(target_type).blue()
                 )),
             },
-            Type::Char => match self.types.get(target_type) {
-                Type::Integer(_to_integer_type) => {
-                    Ok(Outcome::Cast(CastType::IntegerExtendFromChar))
-                }
-                _ => Err(kerr!(
-                    self,
-                    span,
-                    "Cannot cast char to '{}'",
-                    self.type_id_to_string(target_type).blue()
-                )),
-            },
-            Type::Bool => match self.types.get(target_type) {
-                Type::Integer(_to_integer_type) => {
-                    // Since the bit pattern of a boolean only
-                    // concerns the first bit, it can validly
-                    // and safely be represented as all of our
-                    // integer types
-                    Ok(Outcome::Cast(CastType::BoolToInt))
-                }
-                _ => Err(kerr!(
-                    self,
-                    span,
-                    "Cannot cast bool to '{}'",
-                    self.type_id_to_string(target_type).blue()
-                )),
-            },
-            Type::Reference(_refer) => match self.types.get(target_type) {
-                Type::Pointer => Ok(Outcome::Cast(CastType::ReferenceToPointer)),
-                Type::AbilityObject(_) => Ok(Outcome::Expr(self.ability_impl_to_dyn_object(
-                    base_expr,
-                    target_type,
-                    ctx.scope_id,
-                    span,
-                )?)),
-                Type::Reference(_) => {
-                    self.report_warn(
+            _ => {
+                let view = self.check_interpret_cast(base_expr_type, target_type, span, 0)?;
+                if view.total {
+                    Ok(CastType::ReferenceToReference)
+                } else {
+                    Err(kerr!(
+                        self,
                         span,
-                        format!(
-                            "{} to {} (todo: detect safer vs less safe reference casts)",
-                            self.type_id_to_string(base_expr_type),
-                            self.type_id_to_string(target_type)
-                        ),
-                    );
-                    Ok(Outcome::Cast(CastType::ReferenceToReference))
+                        "Viewing {} as {} makes a claim. Use `.narrow` instead",
+                        base_expr_type,
+                        target_type
+                    ))
                 }
-                _ => Err(kerr!(
-                    self,
-                    span,
-                    "Cannot cast reference to '{}'",
-                    self.type_id_to_string(target_type).blue()
-                )),
-            },
-            Type::FunctionPointer(from_fp) => match self.types.get(target_type) {
-                Type::FunctionPointer(to_fp) => {
-                    // For good c interop, its really nice to be able to cast function pointers to
-                    // slightly different types, for example if we have a typesafe version of a type
-                    // with a raw void* baton, our type has a *mut t and the baton has ptr. We want
-                    // to allow this
-                    let from_type =
-                        *self.types.get(from_fp.function_type_id).as_function().unwrap();
-                    let to_type = *self.types.get(to_fp.function_type_id).as_function().unwrap();
-                    if from_type.physical_params.len() != to_type.physical_params.len() {
-                        kbail!(
-                            self,
-                            span,
-                            "Cannot cast between function types: parameter count mismatch: {} vs {}",
-                            from_type.physical_params.len(),
-                            to_type.physical_params.len()
-                        );
-                    }
-                    if let Err(msg) =
-                        self.check_types(from_type.return_type, to_type.return_type, ctx.scope_id)
-                    {
-                        self.report_warn(
-                            span,
-                            format!("Cannot guarantee the return types are compatible; {}", msg),
-                        )
-                    }
-                    for (from_param, to_param) in
-                        self.mem.getn_zip(from_type.physical_params, to_type.physical_params)
-                    {
-                        // We can't allow any ABI-affecting casts, so have to be careful. Basically,
-                        // nothing that changes the physical type.
-                        if let Err(msg) =
-                            self.check_types(from_param.type_id, to_param.type_id, ctx.scope_id)
-                        {
-                            // Pointers and references are abi-identical. It'd be nice to also do
-                            // structs with 1 pointer member
-                            match (
-                                self.types.get(from_param.type_id),
-                                self.types.get(to_param.type_id),
-                            ) {
-                                (Type::Pointer, Type::Reference(_)) => {}
-                                (Type::Reference(_), Type::Pointer) => {}
-                                _ => self.report_warn(
-                                    span,
-                                    format!(
-                                        "Cannot guarantee these params are compatible; {}",
-                                        msg
-                                    ),
-                                ),
-                            }
-                        }
-                    }
-                    Ok(Outcome::Cast(CastType::ReferenceToPointer))
-                }
-                Type::Pointer => Ok(Outcome::Cast(CastType::ReferenceToPointer)),
-                _ => Err(kerr!(
-                    self,
-                    span,
-                    "Cannot cast Function Pointer to '{}'",
-                    self.type_id_to_string(target_type).blue()
-                )),
-            },
-            Type::Pointer => match self.types.get(target_type) {
-                Type::Reference(_refer) => Ok(Outcome::Cast(CastType::PointerToReference)),
-                Type::Integer(IntegerType::U64) => Ok(Outcome::Cast(CastType::PointerToWord)),
-                Type::Integer(IntegerType::I64) => Ok(Outcome::Cast(CastType::PointerToWord)),
-                Type::FunctionPointer(_) => Ok(Outcome::Cast(CastType::PointerToFunctionPointer)),
-                _ => Err(kerr!(
-                    self,
-                    span,
-                    "Cannot cast ptr to '{}'",
-                    self.type_id_to_string(target_type).blue()
-                )),
-            },
-            Type::Enum(enum_type) => match self.types.get(target_type) {
-                Type::Integer(int_type) if *int_type == enum_type.int_type => {
-                    let e = self.synth_enum_get_value(base_expr, span);
-                    Ok(Outcome::Expr(e))
-                }
-                _ => Err(kerr!(
-                    self,
-                    span,
-                    "Cannot cast enum '{}' to '{}'",
-                    self.type_id_to_string(base_expr_type).blue(),
-                    self.type_id_to_string(target_type).blue()
-                )),
-            },
-            _ => Err(kerr!(
-                self,
-                span,
-                "Cannot cast '{}' to '{}'",
-                self.type_id_to_string(base_expr_type).blue(),
-                self.type_id_to_string(target_type).blue()
-            )),
-        }?;
-        match cast_type {
-            Outcome::Cast(cast_type) => {
-                Ok(self.synth_cast(base_expr, target_type, cast_type, Some(span)))
             }
-            Outcome::Expr(typed_expr_id) => Ok(typed_expr_id),
-        }
+        }?;
+        Ok(self.synth_cast(base_expr, target_type, cast_type, Some(span)))
     }
 
     fn eval_widen_trunc(
@@ -8367,19 +8147,13 @@ impl TypedProgram {
             (Operand::Int(from), Operand::Int(to)) => match to.width().cmp(&from.width()) {
                 Ordering::Greater => {
                     if !widen {
-                        kbail!(
-                            self,
-                            span,
-                            "trunc goes to a narrower integer; lossless widening to {}: .widen[{}]",
-                            to,
-                            to
-                        );
+                        kbail!(self, span, "not a truncation",);
                     }
                     if from.is_signed() && !to.is_signed() {
                         kbail!(
                             self,
                             span,
-                            "widen from {} to {} loses the sign; zero-extension: .unsigned().widen[{}], sign-extension: .widen[{}].unsigned()",
+                            "widen from {} to {} would lose the sign; Use .unsigned().widen[{}] or .widen[{}].unsigned()",
                             from,
                             to,
                             to,
@@ -8404,13 +8178,7 @@ impl TypedProgram {
                 }
                 Ordering::Less => {
                     if widen {
-                        kbail!(
-                            self,
-                            span,
-                            "widen goes to a wider integer; modular truncation to {}: .trunc[{}]",
-                            to,
-                            to
-                        );
+                        kbail!(self, span, "not a widen",);
                     }
                     CastType::IntegerCast(IntegerCastDirection::Truncate)
                 }
@@ -8419,8 +8187,7 @@ impl TypedProgram {
                     kbail!(
                         self,
                         span,
-                        "{} changes width, and {} to {} keeps it; sign reinterpretation: {}",
-                        op,
+                        "{} and {} are the same width; sign reinterpretation: {}",
                         from,
                         to,
                         flip
@@ -8430,17 +8197,13 @@ impl TypedProgram {
             (Operand::Float(from_size), Operand::Float(to_size)) => match to_size.cmp(&from_size) {
                 Ordering::Greater => {
                     if !widen {
-                        kbail!(
-                            self,
-                            span,
-                            "trunc goes to a narrower float; lossless widening: .widen[f64]"
-                        );
+                        kbail!(self, span, "not a truncation");
                     }
                     CastType::FloatExtend
                 }
                 Ordering::Less => {
                     if widen {
-                        kbail!(self, span, "widen goes to a wider float; truncation: .trunc[f32]");
+                        kbail!(self, span, "not a widen");
                     }
                     CastType::FloatTruncate
                 }
@@ -8459,6 +8222,391 @@ impl TypedProgram {
             }
         };
         Ok(self.synth_cast(base_expr, target_type, cast_type, Some(span)))
+    }
+
+    /// Checks if from_type can validly be viewed as to_type with zero operations applied.
+    /// `total` means every bit pattern of the source is valid in the target; otherwise the view
+    /// makes a claim about the source bits (only 0 and 1 for int to bool) and is spelled `.narrow`.
+    /// A non-Exact extent changes the size, so it is only meaningful behind a reference; depth
+    /// counts the references walked through and is used to reject non-exact extents at depth 0
+    fn check_interpret_cast(
+        &mut self,
+        from_type: TypeId,
+        to_type: TypeId,
+        span: SpanId,
+        depth: u32,
+    ) -> K1Result<CastView> {
+        #[inline(always)]
+        fn succeed_if_indirect(
+            k1: &TypedProgram,
+            view: CastView,
+            from_type: TypeId,
+            to_type: TypeId,
+            span: SpanId,
+            depth: u32,
+        ) -> K1Result<CastView> {
+            if depth > 0 {
+                Ok(view)
+            } else {
+                Err(kerr!(
+                    k1,
+                    span,
+                    "{} as {} is only meaningful behind a reference",
+                    from_type,
+                    to_type
+                ))
+            }
+        }
+        if from_type == to_type {
+            return Ok(CastView::TOTAL);
+        }
+        let view = match (self.types.get(from_type), self.types.get(to_type)) {
+            (Type::Integer(i1), Type::Integer(i2)) if i1.width() == i2.width() => {
+                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
+            }
+            (Type::Integer(i), Type::Float(f)) if i.width() == f.size() => {
+                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
+            }
+            (Type::Float(f), Type::Integer(i)) if f.width() == i.width() => {
+                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
+            }
+
+            (Type::Integer(i), Type::Enum(e)) if *i == e.int_type => {
+                succeed_if_indirect(self, CastView::CLAIMS, from_type, to_type, span, depth)
+            }
+            (Type::Enum(e), Type::Integer(i)) if *i == e.int_type => {
+                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
+            }
+
+            (Type::Bool, Type::Integer(i)) if i.width() == NumericWidth::B8 => {
+                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
+            }
+            (Type::Integer(i), Type::Bool) if i.width() == NumericWidth::B8 => {
+                succeed_if_indirect(self, CastView::CLAIMS, from_type, to_type, span, depth)
+            }
+            (Type::Integer(i), Type::Char) if i.width() == NumericWidth::B8 => {
+                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
+            }
+            (Type::Char, Type::Integer(i)) if i.width() == NumericWidth::B8 => {
+                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
+            }
+            (Type::Reference(_), Type::Pointer) => Ok(CastView::TOTAL),
+            (Type::Pointer, Type::Reference(_)) => Ok(CastView::CLAIMS),
+            (Type::Pointer, Type::FunctionPointer(_)) => Ok(CastView::CLAIMS),
+            (Type::Reference(from_r), Type::Reference(to_r)) => {
+                let inner =
+                    self.check_interpret_cast(from_r.inner_type, to_r.inner_type, span, depth + 1)?;
+                Ok(CastView { total: inner.total, extent: ViewExtent::Exact })
+            }
+            (Type::Struct(_), _) | (_, Type::Struct(_)) => {
+                self.check_struct_view(from_type, to_type, span, depth)
+            }
+            (Type::Opaque(from_o), Type::Opaque(to_o)) => {
+                if to_o.size > from_o.size {
+                    kbail!(
+                        self,
+                        span,
+                        "cannot view {} as {}: the target is larger ({} vs {} bytes)",
+                        from_type,
+                        to_type,
+                        to_o.size,
+                        from_o.size
+                    )
+                }
+                if to_o.align > from_o.align {
+                    kbail!(
+                        self,
+                        span,
+                        "cannot view {} as {}: the target has stricter alignment ({} vs {})",
+                        from_type,
+                        to_type,
+                        to_o.align,
+                        from_o.align
+                    )
+                }
+                let extent = if to_o.size < from_o.size {
+                    ViewExtent::ReadsPrefix
+                } else {
+                    ViewExtent::Exact
+                };
+                Ok(CastView { total: false, extent })
+            }
+            (Type::FunctionPointer(_), Type::Pointer) => Ok(CastView::TOTAL),
+            (Type::FunctionPointer(fp_from), Type::FunctionPointer(fp_to)) => {
+                let fn_type_from = *self.types.get(fp_from.function_type_id).as_function().unwrap();
+                let fn_type_to = *self.types.get(fp_to.function_type_id).as_function().unwrap();
+                if fn_type_from.physical_params.len() != fn_type_to.physical_params.len() {
+                    kbail!(
+                        self,
+                        span,
+                        "Incompatible function types; wrong param count. {} vs {}",
+                        fn_type_from.physical_params.len(),
+                        fn_type_to.physical_params.len()
+                    )
+                };
+                // Consider VARIANCE on params / ret type. functions CONSUME params, so
+                // contravariance, produce return types, so covariance
+
+                let mut total = true;
+                for (param_from, param_to) in
+                    self.mem.getn_zip(fn_type_from.physical_params, fn_type_to.physical_params)
+                {
+                    // depth is 0 since these values are essentially being directly abi-converted
+                    // consuming these values: to, from
+                    let param_view = self
+                        .check_interpret_cast(param_to.type_id, param_from.type_id, span, 0)
+                        .map_err(|err| {
+                            kerr!(
+                                self,
+                                span,
+                                "incompatible parameter type for cast: {}",
+                                err.message
+                            )
+                        })?;
+                    total = total && param_view.total;
+                }
+
+                // producing these values: from, to
+                match self.check_interpret_cast(
+                    fn_type_from.return_type,
+                    fn_type_to.return_type,
+                    span,
+                    0,
+                ) {
+                    Err(err) => {
+                        kbail!(
+                            self,
+                            span,
+                            "incompatible return types for function cast: {}",
+                            err.message
+                        )
+                    }
+                    Ok(ret_view) => {
+                        total = total && ret_view.total;
+                    }
+                }
+                Ok(CastView { total, extent: ViewExtent::Exact })
+            }
+            _ => Err(kerr!(self, span, "cannot reinterpret from {} to {}", from_type, to_type)),
+        }?;
+        if depth == 0 && view.extent != ViewExtent::Exact {
+            let how = match view.extent {
+                ViewExtent::ReadsPrefix => "reads a prefix of",
+                ViewExtent::ReadsBeyond => "extends past",
+                ViewExtent::Exact => unreachable!(),
+            };
+            kbail!(
+                self,
+                span,
+                "cannot view {} as {}: the view {} the source, so it is only meaningful behind a reference",
+                from_type,
+                to_type,
+                how
+            )
+        }
+        Ok(view)
+    }
+
+    /// The struct case of check_interpret_cast: pairwise fields when both sides are structs,
+    /// else one lazy step along the first-field chain (the types living at offset 0).
+    /// Descending into from's first field reads a prefix of from; wrapping from as to's first
+    /// field reads beyond it
+    fn check_struct_view(
+        &mut self,
+        from_type: TypeId,
+        to_type: TypeId,
+        span: SpanId,
+        depth: u32,
+    ) -> K1Result<CastView> {
+        fn struct_fields(
+            k1: &TypedProgram,
+            t: TypeId,
+        ) -> Option<MSlice<StructTypeField, TypedProgram>> {
+            match k1.types.get(t) {
+                Type::Struct(s) => Some(s.fields),
+                _ => None,
+            }
+        }
+        let from_fields = struct_fields(self, from_type);
+        let to_fields = struct_fields(self, to_type);
+
+        let pairing_err = match (from_fields, to_fields) {
+            (Some(ff), Some(tf)) => {
+                match self.check_struct_field_pairing(from_type, to_type, ff, tf, span, depth) {
+                    Ok(view) => return Ok(view),
+                    Err(e) => Some(e),
+                }
+            }
+            _ => None,
+        };
+
+        let mut chain_err = None;
+        if let Some(ff) = from_fields {
+            let fields = self.mem.getn(ff);
+            if let Some(first) = fields.first() {
+                let single = fields.len() == 1;
+                match self.check_interpret_cast(first.type_id, to_type, span, depth) {
+                    Ok(inner) => match inner.extent {
+                        ViewExtent::Exact | ViewExtent::ReadsPrefix => {
+                            return Ok(CastView {
+                                total: inner.total,
+                                extent: ViewExtent::ReadsPrefix,
+                            });
+                        }
+                        ViewExtent::ReadsBeyond if single => {
+                            return Ok(CastView {
+                                total: inner.total,
+                                extent: ViewExtent::ReadsBeyond,
+                            });
+                        }
+                        ViewExtent::ReadsBeyond => {}
+                    },
+                    Err(e) => chain_err = Some(e),
+                }
+            }
+        }
+
+        if let Some(tf) = to_fields {
+            let fields = self.mem.getn(tf);
+            if let Some(first) = fields.first() {
+                let single = fields.len() == 1;
+                match self.check_interpret_cast(from_type, first.type_id, span, depth) {
+                    Ok(inner) => match inner.extent {
+                        ViewExtent::Exact | ViewExtent::ReadsBeyond => {
+                            return Ok(CastView {
+                                total: inner.total && single,
+                                extent: ViewExtent::ReadsBeyond,
+                            });
+                        }
+                        ViewExtent::ReadsPrefix => {}
+                    },
+                    Err(e) => {
+                        if chain_err.is_none() {
+                            chain_err = Some(e)
+                        }
+                    }
+                }
+            }
+        }
+
+        match (pairing_err, chain_err) {
+            (Some(e), _) => Err(e),
+            (None, Some(e)) => {
+                Err(kerr!(self, span, "cannot view {} as {}: {}", from_type, to_type, e.message))
+            }
+            (None, None) => Err(kerr!(self, span, "cannot view {} as {}", from_type, to_type)),
+        }
+    }
+
+    fn check_struct_field_pairing(
+        &mut self,
+        from_type: TypeId,
+        to_type: TypeId,
+        from_fields: MSlice<StructTypeField, TypedProgram>,
+        to_fields: MSlice<StructTypeField, TypedProgram>,
+        span: SpanId,
+        depth: u32,
+    ) -> K1Result<CastView> {
+        let from_fields = self.mem.getn(from_fields);
+        let to_fields = self.mem.getn(to_fields);
+        if to_fields.len() > from_fields.len() {
+            kbail!(
+                self,
+                span,
+                "cannot view {} as {}: the target has more fields ({} vs {})",
+                from_type,
+                to_type,
+                to_fields.len(),
+                from_fields.len()
+            )
+        }
+        let mut total = true;
+        let mut last_extent = ViewExtent::Exact;
+        for (index, to_field) in to_fields.iter().enumerate() {
+            let from_field = &from_fields[index];
+            let inner = match self.check_interpret_cast(
+                from_field.type_id,
+                to_field.type_id,
+                span,
+                depth,
+            ) {
+                Err(e) => kbail!(
+                    self,
+                    span,
+                    "cannot view {} as {}: field {} is incompatible: {}",
+                    from_type,
+                    to_type,
+                    from_field.name,
+                    e.message
+                ),
+                Ok(view) => view,
+            };
+            match inner.extent {
+                ViewExtent::Exact => {}
+                ViewExtent::ReadsPrefix => {
+                    if index != to_fields.len() - 1 {
+                        kbail!(
+                            self,
+                            span,
+                            "cannot view {} as {}: field {} is a prefix view, which shifts the offsets of the fields after it; only the final field can be a prefix",
+                            from_type,
+                            to_type,
+                            from_field.name
+                        )
+                    }
+                    last_extent = ViewExtent::ReadsPrefix;
+                }
+                ViewExtent::ReadsBeyond => kbail!(
+                    self,
+                    span,
+                    "cannot view {} as {}: field {} would extend past the source field",
+                    from_type,
+                    to_type,
+                    from_field.name
+                ),
+            }
+            total = total && inner.total;
+        }
+        let extent =
+            if to_fields.len() < from_fields.len() || last_extent == ViewExtent::ReadsPrefix {
+                ViewExtent::ReadsPrefix
+            } else {
+                ViewExtent::Exact
+            };
+        Ok(CastView { total, extent })
+    }
+
+    fn eval_cast_narrow(
+        &mut self,
+        base_expr: ParsedExprId,
+        target_type: TypeId,
+        span: SpanId,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
+        let base_expr = self.eval_expr(base_expr, ctx.with_no_expected_type())?;
+        let base_expr_type = self.exprs.get_type(base_expr);
+
+        match self.check_interpret_cast(base_expr_type, target_type, span, 0) {
+            Err(e) => Err(kerr!(
+                self,
+                span,
+                "cannot narrow {} to {}: {}",
+                base_expr_type,
+                target_type,
+                e.message,
+            )),
+            Ok(view) => {
+                if view.total {
+                    self.report(kwarn!(self, span, "This cast is total; use .as instead"));
+                }
+                Ok(self.synth_cast(
+                    base_expr,
+                    target_type,
+                    CastType::ReferenceToReference,
+                    Some(span),
+                ))
+            }
+        }
     }
 
     fn eval_for_expr(&mut self, for_expr: &ForExpr, ctx: EvalExprContext) -> K1Result<TypedExprId> {
@@ -9750,7 +9898,6 @@ impl TypedProgram {
             }
         }
 
-        // Method syntax only
         if !fn_call.is_method {
             if n == self.ast.idents.b.return_ {
                 if ctx.flags.contains(EvalExprFlags::Defer) {
@@ -10155,6 +10302,7 @@ impl TypedProgram {
             } else if fn_name == self.ast.idents.b.as_
                 || fn_name == self.ast.idents.b.widen
                 || fn_name == self.ast.idents.b.trunc
+                || fn_name == self.ast.idents.b.narrow
             {
                 let dest_type = match self.ast.mem.get_nth_opt(call.type_args, 0) {
                     Some(NamedTypeArg { type_expr: Some(type_expr), .. }) => {
@@ -10174,6 +10322,8 @@ impl TypedProgram {
                 };
                 let result = if fn_name == self.ast.idents.b.as_ {
                     self.eval_cast(base_arg.value, dest_type, call_span, ctx)?
+                } else if fn_name == self.ast.idents.b.narrow {
+                    self.eval_cast_narrow(base_arg.value, dest_type, call_span, ctx)?
                 } else {
                     let widen = fn_name == self.ast.idents.b.widen;
                     self.eval_widen_trunc(base_arg.value, dest_type, widen, call_span, ctx)?
@@ -14852,8 +15002,6 @@ impl TypedProgram {
                 .function_at_index(&self.mem, fn_index);
             match impl_function {
                 AbilityImplFunction::FunctionId(impl_fn_id) => {
-                    // Typing the fn-pointer expr with the slot's type is the erasure:
-                    // physically identical; a self receiver arrives as the state pointer
                     self.get_function_mut(impl_fn_id)
                         .flags
                         .insert(TypedFunctionFlags::AddressTaken);
@@ -14876,13 +15024,8 @@ impl TypedProgram {
                     );
                 }
                 AbilityImplFunction::Abstract(_) => {
-                    // Inside an abstract (where-bound generic) body; never lowered.
-                    let placeholder = self.synth_cast(
-                        base_expr,
-                        target_dyn_type,
-                        CastType::AbilityImplToDynObject,
-                        Some(span),
-                    );
+                    // Inside an abstract (where-bound generic) body
+                    let placeholder = self.synth_phony(target_dyn_type, span);
                     return Ok(placeholder);
                 }
             }

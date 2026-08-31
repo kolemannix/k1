@@ -193,21 +193,21 @@ fn parser-init[user-data](
   llhttp/settings_init(&settings)
   let settings = connection-arena.push(settings.with(.{
     on_method            = fn(_p, _, _) 0,
-    on_url               = on-url-part.as(),
-    on_url_complete      = on-url-complete.as(),
-    on_header_field      = on-header-field.as(),
-    on_header_field_complete = on-header-field-complete.as(),
-    on_header_value      = on-header-value.as(),
-    on_header_value_complete = on-header-value-complete.as(),
-    on_headers_complete  = on-headers-complete.as(),
-    on_body              = impl-on-body.as(),
-    on_message_complete  = impl-on-body-complete.as(),
+    on_url               = on-url-part.narrow(),
+    on_url_complete      = on-url-complete.narrow(),
+    on_header_field      = on-header-field.narrow(),
+    on_header_field_complete = on-header-field-complete.narrow(),
+    on_header_value      = on-header-value.narrow(),
+    on_header_value_complete = on-header-value-complete.narrow(),
+    on_headers_complete  = on-headers-complete.narrow(),
+    on_body              = impl-on-body.narrow(),
+    on_message_complete  = impl-on-body-complete.narrow(),
   }))
 
   let parser: parser = uninit
   llhttp/init((&parser).as(), :BOTH, settings)
   let parse-state: *mut parse-state = connection-arena.push(
-    parse-state/empty(request-arena, user-data, on-header-complete.as(), on-body-complete.as())
+    parse-state/empty(request-arena, user-data, on-header-complete.narrow(), on-body-complete.narrow())
   )
   parser.set-data(parse-state)
   parser

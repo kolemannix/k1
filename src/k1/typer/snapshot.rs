@@ -63,6 +63,12 @@ pub(crate) fn inputs_hash_from_settings(
 
 impl TypedProgram {
     pub fn snap(&self) -> crate::snap::SnapBytes {
+        let mut w = SnapWriter::new();
+        self.snap_into(&mut w);
+        w.finish()
+    }
+
+    pub fn snap_into(&self, w: &mut SnapWriter) {
         let TypedProgram {
             modules,
             modules_completed,
@@ -142,14 +148,11 @@ impl TypedProgram {
             megarepl,
             inputs_hash: _,
             restored_module_count: _,
-            pending_cache_writes: _,
         } = self;
         assert!(megarepl.is_none(), "cannot snapshot a megarepl session");
         assert!(inference_context_stack.is_empty(), "cannot snapshot mid-inference");
 
-        let mut w0 = SnapWriter::new();
-        ast.snap(&mut w0);
-        let w = &mut w0;
+        ast.snap(w);
         w.write_section("typed");
         mem.snap(w);
         modules.snap(w);
@@ -223,7 +226,6 @@ impl TypedProgram {
         ir.snap(w);
         w.write_t(global_id_k1_arena);
         w.write_section("end");
-        w0.finish()
     }
 
     pub fn restore(
@@ -329,7 +331,6 @@ impl TypedProgram {
         crate::snap::assert_identical(&first, &second, "TypedProgram snapshot roundtrip");
         restored.inputs_hash = self.inputs_hash;
         restored.restored_module_count = self.restored_module_count;
-        restored.pending_cache_writes = std::mem::take(&mut self.pending_cache_writes);
         std::mem::swap(&mut restored.timing, &mut self.timing);
         std::mem::swap(self, &mut restored);
     }

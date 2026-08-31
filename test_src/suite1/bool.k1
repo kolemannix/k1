@@ -26,10 +26,8 @@ fn test() {
   // `not` stays boolean-only even though negated covers numbers
   assert(test-compile(not 3).is-some())
 
-  assert-equals(t.as[u8], 1)
-  assert-equals(f.as[u8], 0)
-  assert-equals(t.as[i32], 1)
-  assert-equals(f.as[i32], 0)
+  assert-equals(t.as-u8(), 1)
+  assert-equals(f.as-u8(), 0)
 
   .{}
 }

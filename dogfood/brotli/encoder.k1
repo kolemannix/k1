@@ -446,14 +446,14 @@ fn compress-fragment-impl(
           skip = skip + 1
           ip = next-ip
           next-ip = ip.add-bytes(bytes-between)
-          if next-ip.as[size] > ip-limit.as[size] {
+          if next-ip > ip-limit {
             done = true
             break
           }
           next-hash = hash-bytes(next-ip, shift)
           let found = false
           candidate = ip.sub-bytes(last-distance)
-          if is-match(ip, candidate) and candidate.as[size] < ip.as[size] {
+          if is-match(ip, candidate) and candidate < ip {
             table.get-ref-unchecked(h).* = ip.diff(base-ip).trunc[i32]
             found = true
           } else {
@@ -498,7 +498,7 @@ fn compress-fragment-impl(
           emit-copy-len-last-distance(matched, cmd-depth, cmd-bits, cmd-histo, bw)
 
           next-emit = ip
-          if ip.as[size] >= ip-limit.as[size] {
+          if ip >= ip-limit {
             break
           }
           // Hash positions inside the copy before moving on.
@@ -523,7 +523,7 @@ fn compress-fragment-impl(
           emit-distance(last-distance, cmd-depth, cmd-bits, cmd-histo, bw)
 
           next-emit = ip
-          if ip.as[size] >= ip-limit.as[size] {
+          if ip >= ip-limit {
             done = true
             break
           }
@@ -562,7 +562,7 @@ fn compress-fragment-impl(
         continue
       }
 
-      if next-emit.as[size] < ip-end.as[size] {
+      if next-emit < ip-end {
         let insert = ip-end.diff(next-emit)
         if insert < 6210 {
           emit-insert-len(insert, cmd-depth, cmd-bits, cmd-histo, bw)
@@ -604,7 +604,7 @@ fn compress-fragment-fast(
   table: buffer[i32], table-size: size, bw: *mut bit-writer,
 ) {
   let initial-pos = bw.pos
-  let table-bits = log2-floor-nonzero(table-size.unsigned()).as[size]
+  let table-bits = log2-floor-nonzero(table-size.unsigned())
 
   if input-size == 0 {
     assert(is-last)

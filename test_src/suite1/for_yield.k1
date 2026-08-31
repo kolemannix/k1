@@ -2,7 +2,7 @@ ns for_yield_test
 
 fn for-string(): int {
   let s = "asdf"
-  let char-codes = list/from-mapping(s, fn c. c.as[int])
+  let char-codes = list/from-mapping(s, fn c. c.u8().widen[u32].signed())
   assert(char-codes == [97, 115, 100, 102])
   0
 }

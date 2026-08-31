@@ -63,7 +63,7 @@ fn clang-major-version(version-string: string): ?string {
 // -resource-dir explicitly.
 fn clang-resource-dir(): ?string {
   let rtld-default: i64 = if k1/platform-macos { -2 } else { 0 }
-  let sym = dlsym(rtld-default.as[ptr], "clang_createIndex".to-c-tmp().ptr)
+  let sym = dlsym(rtld-default.to-ptr(), "clang_createIndex".to-c-tmp().ptr)
   if sym.is-null() return :none
   let info: dl-info = uninit
   if dladdr(sym, &info) == 0 return :none
@@ -111,7 +111,7 @@ fn start(args: span[string]): result[string, string] {
     source_filename = args.in-path.to-c().ptr,
     command_line_args = clang-args-c-strs.base-ptr(),
     command_line_args_len = clang-args-c-strs.len().trunc[i32],
-    ptr/null.as(), 0,
+    ptr/null.narrow(), 0,
     clang/tu-flag/DetailedPreprocessingRecord.bit-or(clang/tu-flag/SkipFunctionBodies), &unit
   )
   if err != 0 {
@@ -456,7 +456,7 @@ fn visit-struct-member(
   _parent: CXCursor,
   data: clang/CXClientData,
 ): clang/CXChildVisitResult {
-  let result = data.as[*mut visit-struct.return]
+  let result = data.narrow[*mut visit-struct.return]
   let cursor-display-name = clang/getCursorDisplayName(current).to-string()
   let cursor-spelling = clang/getCursorSpelling(current).to-string()
   debug("visit-struct-member $cursor-display-name")
@@ -532,7 +532,7 @@ fn visit-enum(enum-root: CXCursor): { enum: k1-type:enum, error: ?string } {
     _parent: CXCursor,
     data: clang/CXClientData -> clang/CXChildVisitResult
   ) {
-    let result = data.as[*mut visit-enum.return]
+    let result = data.narrow[*mut visit-enum.return]
     let cursor-display-name = clang/getCursorDisplayName(current).to-string()
     let cursor-spelling = clang/getCursorSpelling(current).to-string()
     let cursor-kind = clang/getCursorKind(current)
@@ -571,7 +571,7 @@ fn get-location(cursor: CXCursor): { location: clang/CXSourceLocation, filename:
   }
   let file: clang/CXFile = uninit
   let line: u32 = uninit
-  clang/getFileLocation(location, &file, &line, ptr/null.as(), ptr/null.as())
+  clang/getFileLocation(location, &file, &line, ptr/null.narrow(), ptr/null.narrow())
   // Compiler-predefined macros have no file
   let filename = if file.is-null() "" else clang/getFileName(file).to-string()
   .{ location, filename, line }
@@ -582,7 +582,7 @@ fn visit-root(
   _parent: CXCursor,
   client-data: clang/CXClientData,
 ): clang/CXChildVisitResult {
-  let bg = client-data.as[*mut bindgen-state]
+  let bg = client-data.narrow[*mut bindgen-state]
   let cursor-kind = clang/getCursorKind(current)
 
   let display-name = clang/getCursorDisplayName(current).to-string()
@@ -792,7 +792,7 @@ fn visit-fn-param(
   _parent: CXCursor,
   data: clang/CXClientData,
 ): clang/CXChildVisitResult {
-  let result = data.as[*mut map-fn-decl.return]
+  let result = data.narrow[*mut map-fn-decl.return]
   let cursor-kind = clang/getCursorKind(current)
   cursor-kind is {
     :ParmDecl -> {

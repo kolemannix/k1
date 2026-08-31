@@ -40,9 +40,9 @@ ns build {
         let i: size = 2
         while i < token.len() {
           let c = token.get(i)
-          let d: u64 = if c >= '0' and c <= '9' (c.as[u8] - '0'.as[u8]).widen[u64]
-            else if c >= 'a' and c <= 'f' (c.as[u8] - 'a'.as[u8]).widen[u64] + 10
-            else if c >= 'A' and c <= 'F' (c.as[u8] - 'A'.as[u8]).widen[u64] + 10
+          let d: u64 = if c >= '0' and c <= '9' (c.u8() - '0'.u8()).widen[u64]
+            else if c >= 'a' and c <= 'f' (c.u8() - 'a'.u8()).widen[u64] + 10
+            else if c >= 'A' and c <= 'F' (c.u8() - 'A'.u8()).widen[u64] + 10
             else crash("bad hex digit in '$token'")
           v = (v << 4) | d
           i = i + 1
