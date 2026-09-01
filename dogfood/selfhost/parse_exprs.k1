@@ -85,12 +85,15 @@ ns for parser {
         let call-args = self.expect-fn-call-args().try
         let span = self.extend-to-here(self.expr-span(result-id))
         result-id = self.add-expr(:call-on-expr(.{ callee = result-id, args = call-args.args, span }))
+      } else if next.kind is :dot and ((not next.is-ws-preceded()) or next.is-newline-preceded()) and self.peek-at(1).kind.eq(:open-bracket) {
+        self.advance()
+        result-id = self.expect-index-postfix(result-id).try
       } else if next.kind is :dot and ((not next.is-ws-preceded()) or (next.is-newline-preceded() and not self.peek-at(1).kind.eq(:open-brace))) {
         self.advance()
         let tk = self.peek().kind
         let target-ok = tk is :ident or tk is :asterisk or tk is :bang or tk is :amp
         if not target-ok {
-          return :err(error-expected("Field name, or postfix *, !, or &", self.peek()))
+          return :err(error-expected("Field name, or postfix *, !, &, or [", self.peek()))
         }
         let target = self.next-tok()
         let bracketed = self.parse-bracketed-type-args().try
@@ -134,6 +137,14 @@ ns for parser {
       result-id = self.add-expr(:type-hint(.{ inner = result-id, ty, span }))
     }
     :ok(:some(result-id))
+  }
+
+  fn expect-index-postfix(self: *mut parser, base: ast/expr-id): result[ast/expr-id, perror] {
+    let _ = self.expect-kind(:open-bracket).try
+    let key = self.expect-expression().try
+    let _ = self.expect-kind(:close-bracket).try
+    let span = self.extend-to-here(self.expr-span(base))
+    :ok(self.add-expr(:index(.{ base, key, span })))
   }
 
   fn expect-match-arms(self: *mut parser, subject: ast/expr-id, is-static: bool): result[ast/expr-id, perror] {

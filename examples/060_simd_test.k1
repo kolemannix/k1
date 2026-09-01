@@ -37,7 +37,7 @@ fn find-byte-naive(haystack: string, c: char): i64 {
 fn main(argc: u32, argv: ptr): i32 {
   let n = 1048576: size
   let chars = list/filled(n, 'a')
-  chars.set(n - 1, 'z')
+  chars.[n - 1] = 'z'
   let s = string/wrap-span(chars.as-span())
   let expected = n.as[i64] - 1
   let iters = 100: size

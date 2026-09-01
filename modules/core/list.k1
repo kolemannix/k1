@@ -102,7 +102,7 @@ ns for list {
       self._grow(alloc)
     }
     self.len = start-length + 1
-    self.set(start-length, elem)
+    self.[start-length] = elem
   }
 
   fn push[t](self: *mut list[t], elem: t) {
@@ -216,7 +216,7 @@ ns for list {
     for i in 0.until(self.len) {
       let elem = self.get(i)
       if f(elem) {
-        self.set(kept, elem)
+        self.[kept] = elem
         kept = kept + 1
       }
     }
@@ -281,6 +281,10 @@ impl[t] as-span[t = t] for *list[t] {
   fn as-span(self): span[t] {
     self.*.as-span()
   }
+}
+
+impl[t] index[key = size, t = t] for list[t] {
+  fn index-ref(self, key: size): *t { self.as-buffer().index-ref(key) }
 }
 
 impl[t] iterable[item = t, i = buffer-iterator[t]] for list[t] {

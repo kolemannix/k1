@@ -80,6 +80,10 @@ impl[t, n: static size] as-buffer[t = t] for *mut spill-list[t, n] {
   }
 }
 
+impl[t, n: static size] index[key = size, t = t] for *mut spill-list[t, n] {
+  fn index-ref(self, key: size): *t { self.as-buffer().index-ref(key) }
+}
+
 impl[t, n: static size] as-span[t = t] for *spill-list[t, n] {
   fn as-span(self): span[t] {
     self is {

@@ -10,7 +10,7 @@ fn exe-path(): string {
     :posix-macos -> {
       let buf = buffer/allocate[u8](4096)
       let cap-buf = buffer/allocate[u32](1)
-      cap-buf.get-ref-unchecked(0).* = 4096
+      cap-buf.index-unchecked(0).* = 4096
       if _NSGetExecutablePath(buf.data.as[ptr], cap-buf.data.as[ptr]) != 0 {
         crash("exe-path: buffer too small")
       }

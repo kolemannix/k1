@@ -844,7 +844,7 @@ fn seal-call(context g: *mut game)(row: *mut list[token], d: u8): bool {
     else if is-opener(t) {
       if depth == 0 {
         if t is :mark {
-          row.set(i, :callo(d))
+          row.[i] = :callo(d)
           if row.len() < MAX-ROW-TOKENS { row.push-in(g.perm, :close) }
           return true
         }
@@ -926,10 +926,10 @@ fn scale-row-apply(context g: *mut game)(row: *mut list[token], n: u8) {
     else if is-opener(t) {
       if depth == 0 {
         if t is :mark {
-          row.set(i, :rep(n))
+          row.[i] = :rep(n)
           if row.len() < MAX-ROW-TOKENS { row.push-in(g.perm, :close) }
         } else if t is :rep(_) {
-          row.set(i, :rep(n))
+          row.[i] = :rep(n)
         }
         return
       }
@@ -946,7 +946,7 @@ fn scale-row-apply(context g: *mut game)(row: *mut list[token], n: u8) {
       else if is-opener(t) {
         d2 = d2 - 1
         if d2 == 0 {
-          if t is :rep(_) { row.set(j, :rep(n)) }
+          if t is :rep(_) { row.[j] = :rep(n) }
           return
         }
       }
@@ -957,10 +957,10 @@ fn scale-row-apply(context g: *mut game)(row: *mut list[token], n: u8) {
   row.push-in(g.perm, :close)
   let k = row.len() - 1
   while k > 0 {
-    row.set(k, row.get(k - 1))
+    row.[k] = row.get(k - 1)
     k = k - 1
   }
-  row.set(0, :rep(n))
+  row.[0] = :rep(n)
   row.push-in(g.perm, :close)
 }
 

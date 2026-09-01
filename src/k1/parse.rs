@@ -783,12 +783,23 @@ pub enum ParsedExpr {
     /// <inner: expr>: <ty: type-expr>
     /// ```
     TypeHint(ParsedTypeHint),
+    /// ```md
+    /// <base: expr>.[<key: expr>]
+    /// ```
+    Index(ParsedIndex),
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedTypeHint {
     pub inner: ParsedExprId,
     pub ty: ParsedTypeExprId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ParsedIndex {
+    pub base: ParsedExprId,
+    pub key: ParsedExprId,
     pub span: SpanId,
 }
 
@@ -829,6 +840,7 @@ impl ParsedExpr {
             Self::Code(c) => c.span,
             Self::QualifiedAbilityCall(c) => c.span,
             Self::TypeHint(th) => th.span,
+            Self::Index(i) => i.span,
         }
     }
 
@@ -858,6 +870,7 @@ impl ParsedExpr {
             Self::Code(c) => c.span = span,
             Self::QualifiedAbilityCall(c) => c.span = span,
             Self::TypeHint(th) => th.span = span,
+            Self::Index(i) => i.span = span,
         }
     }
 
@@ -3528,6 +3541,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let call_expr_id = self.add_expression(ParsedExpr::CallOnExpr(call));
                 Some(call_expr_id)
             } else if next.kind == K::Dot
+                && (!next.is_whitespace_preceded() || next.is_newline_preceded())
+                && self.tokens.peek_n(1).kind == K::OpenBracket
+            {
+                self.advance();
+                Some(self.expect_index_postfix(result)?)
+            } else if next.kind == K::Dot
                 && (!next.is_whitespace_preceded()
                     || (next.is_newline_preceded() && self.tokens.peek_n(1).kind != K::OpenBrace))
             {
@@ -3542,9 +3561,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     K::Bang => self.tokens.next(),
                     K::Amp => self.tokens.next(),
                     _k => {
-                        return Err(
-                            self.error_expected("Field name, or postfix *, !, or &", self.peek())
-                        );
+                        return Err(self
+                            .error_expected("Field name, or postfix *, !, &, or [", self.peek()));
                     }
                 };
                 let (type_args, _) = self.parse_bracketed_type_args()?;
@@ -3610,6 +3628,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 with_postfix
             };
         Ok(Some(result))
+    }
+
+    fn expect_index_postfix(&mut self, base: ParsedExprId) -> ParseResult<ParsedExprId> {
+        self.expect_kind(K::OpenBracket)?;
+        let key = self.expect_expression()?;
+        self.expect_kind(K::CloseBracket)?;
+        let span = self.extend_to_here(self.get_expression_span(base));
+        Ok(self.add_expression(ParsedExpr::Index(ParsedIndex { base, key, span })))
     }
 
     pub fn expect_block(&mut self, kind: ParsedBlockKind) -> ParseResult<ParsedBlock> {
@@ -5816,6 +5842,12 @@ impl ParsedProgram {
                 w.write_str(": ")?;
                 self.display_type_expr_id(th.ty, w)?;
                 Ok(())
+            }
+            ParsedExpr::Index(index) => {
+                self.display_expr_id(w, index.base)?;
+                w.write_str(".[")?;
+                self.display_expr_id(w, index.key)?;
+                w.write_char(']')
             }
         }
     }

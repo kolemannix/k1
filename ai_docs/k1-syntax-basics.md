@@ -199,6 +199,22 @@ assert-equals(counter.*, 1)
 Use `.*` to read through a reference, and the postfix `.&` operator to take the
 address of a place when you need a reference to it.
 
+Indexing is `.[key]`. `xs.[i]` is the element's place, so it reads, assigns,
+and takes addresses like any other place:
+
+```rust
+let xs = [10, 20, 30]
+xs.[1] = xs.[0] + xs.[2]
+let p = xs.[1].&
+```
+
+`a.[k]` means `a.index-ref(k).*`, a call to the one function of the `index`
+ability. Lists, buffers, spans, strings, arrays, fixlists, spill-lists, and maps
+implement it. A map lookup through `.[k]` crashes on a missing key; `map.get`
+is the optional lookup. Implement `index` for `*mut t` when the elements live
+inline in `t`, so the returned reference points into real storage rather than
+into a copy.
+
 A statement that discards a non-unit expression result gets a warning; bind to
 `_` to discard explicitly:
 
@@ -648,7 +664,7 @@ Collection API naming follows a doctrine:
   (`len`, `get`, `get-opt`, `first`, `last`, `slice`, `take`, `drop`,
   `starts-with`, `ends-with`, `chunks`, `sorted`, `index-of-span`,
   `contains-span`, `first-diff`), mutations and references on `as-buffer`
-  (`set`, `swap`, `sort`, `reverse`, `fill`, `get-ref`, `first-ref`,
+  (`swap`, `sort`, `reverse`, `fill`, `first-ref`,
   `last-ref`, `ref-iter`). Implementing `as-buffer` derives
   `as-span` via a blanket impl. View defaults return `span[t]`; view types
   shadow them with shape-preserving inherents (string ops return string,

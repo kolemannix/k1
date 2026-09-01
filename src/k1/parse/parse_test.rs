@@ -385,6 +385,18 @@ fn variants_no_payload() -> ParseResult<()> {
 }
 
 #[test]
+fn index_postfix() -> ParseResult<()> {
+    let input = "xs.[i].&";
+    let (ast, expr, expr_id) = test_single_expr_with_id(input)?;
+    let ParsedExpr::FieldAccess(addr_of) = expr else { panic!("expected address-of") };
+    let ParsedExpr::Index(index) = ast.exprs.get(addr_of.base) else { panic!("expected index") };
+    assert_eq!(&ast.expr_id_to_string(index.base), "xs");
+    assert_eq!(&ast.expr_id_to_string(index.key), "i");
+    assert_eq!(&ast.expr_id_to_string(expr_id), input);
+    Ok(())
+}
+
+#[test]
 fn variants_quiet_payload() -> ParseResult<()> {
     let (_ast, expr, _) = test_single_expr_with_id(":foo 42")?;
     let ParsedExpr::Variant(v) = expr else { panic!() };

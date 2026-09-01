@@ -78,6 +78,8 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
       inference, so `write-bits(depth.get-unchecked(i), ...)` fails where the two-line form widens fine
 - [x] enum-from-sum type operator
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
+        I think doing 'defaults' is relatively easy. You just hit consult the default on the unprovided path. For partially-applieds,
+        you need essentially some notion of an 'ability signature function', just like type aliases would need
 - [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
 - [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
 - [x] auto-print implementation on-demand for sums

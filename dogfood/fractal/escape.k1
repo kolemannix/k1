@@ -140,10 +140,10 @@ fn render[s: escape-set](set: s, pixels: buffer[u8], v: view) {
       let point: complex = .{ re = left + x.as[f64] * step, im }
       let rgb = shade(escape-time(set, point, v.max-iter))
       let at = (y * v.width + x) * 4
-      pixels.set(at, rgb.shift-right(16).bit-and(0xFF).trunc[u8])
-      pixels.set(at + 1, rgb.shift-right(8).bit-and(0xFF).trunc[u8])
-      pixels.set(at + 2, rgb.bit-and(0xFF).trunc[u8])
-      pixels.set(at + 3, 255u8)
+      pixels.[at] = rgb.shift-right(16).bit-and(0xFF).trunc[u8]
+      pixels.[at + 1] = rgb.shift-right(8).bit-and(0xFF).trunc[u8]
+      pixels.[at + 2] = rgb.bit-and(0xFF).trunc[u8]
+      pixels.[at + 3] = 255u8
     }
   }
 }

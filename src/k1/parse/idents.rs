@@ -85,6 +85,7 @@ pub(crate) struct BuiltinIdents {
     pub env_ptr: StringId,
     pub state: StringId,
     pub asterisk: StringId,
+    pub index_ref: StringId,
     pub bang: StringId,
     pub amp: StringId,
     pub payload: StringId,
@@ -228,9 +229,8 @@ pub(crate) struct BuiltinFunctions {
     pub core_discard: QIdent,
     pub core_print_print_to: QIdent,
     pub buffer_allocate: QIdent,
-    pub buffer_set: QIdent,
+    pub buffer_index_unchecked: QIdent,
     pub buffer_from_span: QIdent,
-    pub Array_set: QIdent,
     pub mem_zeroed: QIdent,
     pub mem_new: QIdent,
     pub span_wrapBuffer: QIdent,
@@ -434,6 +434,7 @@ impl IdentPool {
             env_ptr: intern!("env_ptr"),
             state: intern!("state"),
             asterisk: intern!("*"),
+            index_ref: intern!("index-ref"),
             bang: intern!("!"),
             amp: intern!("&"),
             payload: intern!("payload"),
@@ -590,11 +591,8 @@ impl IdentPool {
 
         let path_core_buffer = intern_path!(b.core, b.buffer);
         let buffer_allocate: QIdent = make_fn!(path_core_buffer, intern!("allocate"));
-        let buffer_set: QIdent = make_fn!(path_core_buffer, intern!("set"));
+        let buffer_index_unchecked: QIdent = make_fn!(path_core_buffer, intern!("index-unchecked"));
         let buffer_from_span: QIdent = make_fn!(path_core_buffer, intern!("from-span"));
-
-        let path_array = intern_path!(b.core, b.array);
-        let array__set: QIdent = make_fn!(path_array, intern!("set"));
 
         let path_mem = intern_path!(b.mem);
         let mem_zeroed: QIdent = make_fn!(path_mem, intern!("zeroed"));
@@ -651,9 +649,8 @@ impl IdentPool {
             core_discard,
             core_print_print_to,
             buffer_allocate,
-            buffer_set,
+            buffer_index_unchecked,
             buffer_from_span,
-            Array_set: array__set,
             mem_zeroed,
             mem_new,
             span_wrapBuffer,

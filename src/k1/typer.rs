@@ -7074,6 +7074,42 @@ impl TypedProgram {
                     |e| kerr!(self, th.span, "Expression did not conform to hint: {}", e.message),
                 )
             }
+            ParsedExpr::Index(index) => {
+                let index = *index;
+                let args = self.ast.mem.pushn(&[
+                    ParsedCallArg::unnamed(index.base),
+                    ParsedCallArg::unnamed(index.key),
+                ]);
+                let call_id = self.ast.exprs.add(ParsedExpr::Call(ParsedCall {
+                    name: QIdent::naked(self.ast.idents.b.index_ref, index.span),
+                    type_args: MSlice::empty(),
+                    args,
+                    span: index.span,
+                    is_method: true,
+                    id: ParsedExprId::PENDING,
+                }));
+                let call = *self.ast.exprs.get(call_id).expect_call();
+                let element_ref_expected = match ctx.expected_type_id {
+                    Some(expected) => Some(self.add_reference_type(expected)),
+                    None => None,
+                };
+                let element_ref = self.eval_function_call(
+                    &call,
+                    None,
+                    ctx.with_expected_type(element_ref_expected),
+                    None,
+                )?;
+                let element_ref_type = self.exprs.get_type(element_ref);
+                if self.types.get(element_ref_type).as_reference().is_none() {
+                    kbail!(
+                        self,
+                        index.span,
+                        "index-ref must return a reference to the element; got {}",
+                        element_ref_type
+                    );
+                }
+                Ok(self.synth_dereference(element_ref))
+            }
         }
     }
 
@@ -7258,11 +7294,7 @@ impl TypedProgram {
                 false,
             )?,
         };
-        let needs_address_of = match list_kind {
-            ContainerKind::Array(_) => true,
-            ContainerKind::Buffer | ContainerKind::Span => false,
-            ContainerKind::List => true,
-        };
+        let needs_address_of = matches!(list_kind, ContainerKind::List);
         let dest_coll_variable = self.synth_variable_defn(
             self.ast.idents.b.list_lit,
             make_dest_coll,
@@ -7279,37 +7311,47 @@ impl TypedProgram {
         list_lit_block.statements.push(dest_coll_variable.defn_stmt);
         for (index, element_value_expr) in elements.iter().enumerate() {
             let index_expr = self.synth_i64(index as i64, span);
-            let push_call = match list_kind {
-                ContainerKind::List => self.synth_typed_call_typed_args(
-                    self.ast.idents.f.list_push.with_span(span),
-                    &[element_type],
-                    &[dest_coll_expr, *element_value_expr],
-                    list_lit_ctx,
-                    false,
-                )?,
-                ContainerKind::Buffer | ContainerKind::Span => self.synth_typed_call_typed_args(
-                    self.ast.idents.f.buffer_set.with_span(span),
-                    &[element_type],
-                    &[dest_coll_expr, index_expr, *element_value_expr],
-                    list_lit_ctx,
-                    false,
-                )?,
-                ContainerKind::Array(array_type_id) => {
-                    // fn set[T, N: static size](array: Array[T, N]*, index: size, value: T): unit
-                    let array_size_type =
-                        self.types.get(array_type_id).as_array().unwrap().size_type;
-                    self.synth_typed_call_typed_args(
-                        self.ast.idents.f.Array_set.with_span(span),
-                        &[element_type, array_size_type],
-                        &[dest_coll_expr, index_expr, *element_value_expr],
+            let element_ref = match list_kind {
+                ContainerKind::List => {
+                    let push_call = self.synth_typed_call_typed_args(
+                        self.ast.idents.f.list_push.with_span(span),
+                        &[element_type],
+                        &[dest_coll_expr, *element_value_expr],
                         list_lit_ctx,
                         false,
-                    )?
+                    )?;
+                    let type_id = self.exprs.get_type(push_call);
+                    let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
+                    self.push_block_stmt_id(&mut list_lit_block, push_stmt);
+                    continue;
+                }
+                ContainerKind::Buffer | ContainerKind::Span => self.synth_typed_call_typed_args(
+                    self.ast.idents.f.buffer_index_unchecked.with_span(span),
+                    &[element_type],
+                    &[dest_coll_expr, index_expr],
+                    list_lit_ctx,
+                    false,
+                )?,
+                ContainerKind::Array(_) => {
+                    let element = self.exprs.add(
+                        TypedExpr::ArrayGetElement(ArrayGetElement {
+                            base_array: dest_coll_expr,
+                            index: index_expr,
+                            packed: false,
+                        }),
+                        element_type,
+                        span,
+                    );
+                    self.synth_address_of(element, span, true)?
                 }
             };
-            let type_id = self.exprs.get_type(push_call);
-            let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
-            self.push_block_stmt_id(&mut list_lit_block, push_stmt);
+            let store_stmt = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
+                destination: element_ref,
+                value: *element_value_expr,
+                span,
+                kind: AssignmentKind::Store,
+            }));
+            self.push_block_stmt_id(&mut list_lit_block, store_stmt);
         }
         let final_expr = match list_kind {
             ContainerKind::List => dest_coll_variable.variable_expr,
@@ -18133,6 +18175,7 @@ impl TypedProgram {
             core!("iterable"),
             core!("as-buffer"),
             core!("as-span"),
+            core!("index"),
             core!("println"),
             core!("print"),
             core!("eprint"),

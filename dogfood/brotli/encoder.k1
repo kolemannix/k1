@@ -68,108 +68,108 @@ fn find-match-length(s1: ptr, s2: ptr, limit: size): size {
 fn emit-insert-len(insertlen: size, depth: buffer[u8], bits: buffer[u16], histo: buffer[u32], bw: *mut bit-writer) {
   if insertlen < 6 {
     let code = insertlen + 40
-    bw.write-bits(depth.get-unchecked(code).widen[size], bits.get-unchecked(code).widen[u64])
-    histo.get-ref-unchecked(code).* = histo.get-unchecked(code) + 1
+    bw.write-bits(depth.index-unchecked(code).*.widen[size], bits.index-unchecked(code).*.widen[u64])
+    histo.index-unchecked(code).* = histo.index-unchecked(code).* + 1
   } else if insertlen < 130 {
     let tail = insertlen - 2
     let nbits = log2-floor-nonzero(tail.unsigned()) - 1
     let prefix = tail >> nbits.trunc[u32]
     let inscode = (nbits << 1) + prefix + 42
-    bw.write-bits(depth.get-unchecked(inscode).widen[size], bits.get-unchecked(inscode).widen[u64])
+    bw.write-bits(depth.index-unchecked(inscode).*.widen[size], bits.index-unchecked(inscode).*.widen[u64])
     bw.write-bits(nbits, (tail - (prefix << nbits.trunc[u32])).unsigned())
-    histo.get-ref-unchecked(inscode).* = histo.get-unchecked(inscode) + 1
+    histo.index-unchecked(inscode).* = histo.index-unchecked(inscode).* + 1
   } else if insertlen < 2114 {
     let tail = insertlen - 66
     let nbits = log2-floor-nonzero(tail.unsigned())
     let code = nbits + 50
-    bw.write-bits(depth.get-unchecked(code).widen[size], bits.get-unchecked(code).widen[u64])
+    bw.write-bits(depth.index-unchecked(code).*.widen[size], bits.index-unchecked(code).*.widen[u64])
     let pow2: size = 1 << nbits.trunc[u32]
     bw.write-bits(nbits, (tail - pow2).unsigned())
-    histo.get-ref-unchecked(code).* = histo.get-unchecked(code) + 1
+    histo.index-unchecked(code).* = histo.index-unchecked(code).* + 1
   } else {
-    bw.write-bits(depth.get-unchecked(61).widen[size], bits.get-unchecked(61).widen[u64])
+    bw.write-bits(depth.index-unchecked(61).*.widen[size], bits.index-unchecked(61).*.widen[u64])
     bw.write-bits(12, (insertlen - 2114).unsigned())
-    histo.get-ref-unchecked(61).* = histo.get-unchecked(61) + 1
+    histo.index-unchecked(61).* = histo.index-unchecked(61).* + 1
   }
 }
 
 fn emit-long-insert-len(insertlen: size, depth: buffer[u8], bits: buffer[u16], histo: buffer[u32], bw: *mut bit-writer) {
   if insertlen < 22594 {
-    bw.write-bits(depth.get-unchecked(62).widen[size], bits.get-unchecked(62).widen[u64])
+    bw.write-bits(depth.index-unchecked(62).*.widen[size], bits.index-unchecked(62).*.widen[u64])
     bw.write-bits(14, (insertlen - 6210).unsigned())
-    histo.get-ref-unchecked(62).* = histo.get-unchecked(62) + 1
+    histo.index-unchecked(62).* = histo.index-unchecked(62).* + 1
   } else {
-    bw.write-bits(depth.get-unchecked(63).widen[size], bits.get-unchecked(63).widen[u64])
+    bw.write-bits(depth.index-unchecked(63).*.widen[size], bits.index-unchecked(63).*.widen[u64])
     bw.write-bits(24, (insertlen - 22594).unsigned())
-    histo.get-ref-unchecked(63).* = histo.get-unchecked(63) + 1
+    histo.index-unchecked(63).* = histo.index-unchecked(63).* + 1
   }
 }
 
 fn emit-copy-len(copylen: size, depth: buffer[u8], bits: buffer[u16], histo: buffer[u32], bw: *mut bit-writer) {
   if copylen < 10 {
     let code = copylen + 14
-    bw.write-bits(depth.get-unchecked(code).widen[size], bits.get-unchecked(code).widen[u64])
-    histo.get-ref-unchecked(code).* = histo.get-unchecked(code) + 1
+    bw.write-bits(depth.index-unchecked(code).*.widen[size], bits.index-unchecked(code).*.widen[u64])
+    histo.index-unchecked(code).* = histo.index-unchecked(code).* + 1
   } else if copylen < 134 {
     let tail = copylen - 6
     let nbits = log2-floor-nonzero(tail.unsigned()) - 1
     let prefix = tail >> nbits.trunc[u32]
     let code = (nbits << 1) + prefix + 20
-    bw.write-bits(depth.get-unchecked(code).widen[size], bits.get-unchecked(code).widen[u64])
+    bw.write-bits(depth.index-unchecked(code).*.widen[size], bits.index-unchecked(code).*.widen[u64])
     bw.write-bits(nbits, (tail - (prefix << nbits.trunc[u32])).unsigned())
-    histo.get-ref-unchecked(code).* = histo.get-unchecked(code) + 1
+    histo.index-unchecked(code).* = histo.index-unchecked(code).* + 1
   } else if copylen < 2118 {
     let tail = copylen - 70
     let nbits = log2-floor-nonzero(tail.unsigned())
     let code = nbits + 28
-    bw.write-bits(depth.get-unchecked(code).widen[size], bits.get-unchecked(code).widen[u64])
+    bw.write-bits(depth.index-unchecked(code).*.widen[size], bits.index-unchecked(code).*.widen[u64])
     let pow2: size = 1 << nbits.trunc[u32]
     bw.write-bits(nbits, (tail - pow2).unsigned())
-    histo.get-ref-unchecked(code).* = histo.get-unchecked(code) + 1
+    histo.index-unchecked(code).* = histo.index-unchecked(code).* + 1
   } else {
-    bw.write-bits(depth.get-unchecked(39).widen[size], bits.get-unchecked(39).widen[u64])
+    bw.write-bits(depth.index-unchecked(39).*.widen[size], bits.index-unchecked(39).*.widen[u64])
     bw.write-bits(24, (copylen - 2118).unsigned())
-    histo.get-ref-unchecked(39).* = histo.get-unchecked(39) + 1
+    histo.index-unchecked(39).* = histo.index-unchecked(39).* + 1
   }
 }
 
 fn emit-copy-len-last-distance(copylen: size, depth: buffer[u8], bits: buffer[u16], histo: buffer[u32], bw: *mut bit-writer) {
   if copylen < 12 {
     let code = copylen - 4
-    bw.write-bits(depth.get-unchecked(code).widen[size], bits.get-unchecked(code).widen[u64])
-    histo.get-ref-unchecked(code).* = histo.get-unchecked(code) + 1
+    bw.write-bits(depth.index-unchecked(code).*.widen[size], bits.index-unchecked(code).*.widen[u64])
+    histo.index-unchecked(code).* = histo.index-unchecked(code).* + 1
   } else if copylen < 72 {
     let tail = copylen - 8
     let nbits = log2-floor-nonzero(tail.unsigned()) - 1
     let prefix = tail >> nbits.trunc[u32]
     let code = (nbits << 1) + prefix + 4
-    bw.write-bits(depth.get-unchecked(code).widen[size], bits.get-unchecked(code).widen[u64])
+    bw.write-bits(depth.index-unchecked(code).*.widen[size], bits.index-unchecked(code).*.widen[u64])
     bw.write-bits(nbits, (tail - (prefix << nbits.trunc[u32])).unsigned())
-    histo.get-ref-unchecked(code).* = histo.get-unchecked(code) + 1
+    histo.index-unchecked(code).* = histo.index-unchecked(code).* + 1
   } else if copylen < 136 {
     let tail = copylen - 8
     let code = (tail >> 5) + 30
-    bw.write-bits(depth.get-unchecked(code).widen[size], bits.get-unchecked(code).widen[u64])
+    bw.write-bits(depth.index-unchecked(code).*.widen[size], bits.index-unchecked(code).*.widen[u64])
     bw.write-bits(5, (tail & 31).unsigned())
-    bw.write-bits(depth.get-unchecked(64).widen[size], bits.get-unchecked(64).widen[u64])
-    histo.get-ref-unchecked(code).* = histo.get-unchecked(code) + 1
-    histo.get-ref-unchecked(64).* = histo.get-unchecked(64) + 1
+    bw.write-bits(depth.index-unchecked(64).*.widen[size], bits.index-unchecked(64).*.widen[u64])
+    histo.index-unchecked(code).* = histo.index-unchecked(code).* + 1
+    histo.index-unchecked(64).* = histo.index-unchecked(64).* + 1
   } else if copylen < 2120 {
     let tail = copylen - 72
     let nbits = log2-floor-nonzero(tail.unsigned())
     let code = nbits + 28
-    bw.write-bits(depth.get-unchecked(code).widen[size], bits.get-unchecked(code).widen[u64])
+    bw.write-bits(depth.index-unchecked(code).*.widen[size], bits.index-unchecked(code).*.widen[u64])
     let pow2: size = 1 << nbits.trunc[u32]
     bw.write-bits(nbits, (tail - pow2).unsigned())
-    bw.write-bits(depth.get-unchecked(64).widen[size], bits.get-unchecked(64).widen[u64])
-    histo.get-ref-unchecked(code).* = histo.get-unchecked(code) + 1
-    histo.get-ref-unchecked(64).* = histo.get-unchecked(64) + 1
+    bw.write-bits(depth.index-unchecked(64).*.widen[size], bits.index-unchecked(64).*.widen[u64])
+    histo.index-unchecked(code).* = histo.index-unchecked(code).* + 1
+    histo.index-unchecked(64).* = histo.index-unchecked(64).* + 1
   } else {
-    bw.write-bits(depth.get-unchecked(39).widen[size], bits.get-unchecked(39).widen[u64])
+    bw.write-bits(depth.index-unchecked(39).*.widen[size], bits.index-unchecked(39).*.widen[u64])
     bw.write-bits(24, (copylen - 2120).unsigned())
-    bw.write-bits(depth.get-unchecked(64).widen[size], bits.get-unchecked(64).widen[u64])
-    histo.get-ref-unchecked(39).* = histo.get-unchecked(39) + 1
-    histo.get-ref-unchecked(64).* = histo.get-unchecked(64) + 1
+    bw.write-bits(depth.index-unchecked(64).*.widen[size], bits.index-unchecked(64).*.widen[u64])
+    histo.index-unchecked(39).* = histo.index-unchecked(39).* + 1
+    histo.index-unchecked(64).* = histo.index-unchecked(64).* + 1
   }
 }
 
@@ -179,16 +179,16 @@ fn emit-distance(distance: size, depth: buffer[u8], bits: buffer[u16], histo: bu
   let prefix = (d >> nbits.trunc[u32]) & 1
   let offset = (2 + prefix) << nbits.trunc[u32]
   let distcode = 2 * (nbits - 1) + prefix + 80
-  bw.write-bits(depth.get-unchecked(distcode).widen[size], bits.get-unchecked(distcode).widen[u64])
+  bw.write-bits(depth.index-unchecked(distcode).*.widen[size], bits.index-unchecked(distcode).*.widen[u64])
   bw.write-bits(nbits, (d - offset).unsigned())
-  histo.get-ref-unchecked(distcode).* = histo.get-unchecked(distcode) + 1
+  histo.index-unchecked(distcode).* = histo.index-unchecked(distcode).* + 1
 }
 
 fn emit-literals(input: ptr, len: size, depth: buffer[u8], bits: buffer[u16], bw: *mut bit-writer) {
   let j: size = 0
   while j < len {
     let lit = input.add-bytes(j).ref[u8].*
-    bw.write-bits(depth.get-unchecked(lit).widen[size], bits.get-unchecked(lit).widen[u64])
+    bw.write-bits(depth.index-unchecked(lit).*.widen[size], bits.index-unchecked(lit).*.widen[u64])
     j = j + 1
   }
 }
@@ -239,15 +239,15 @@ fn should-merge-block(s: *mut one-pass-arena, data: ptr, len: size, depths: buff
   let i: size = 0
   while i < len {
     let b = data.add-bytes(i).ref[u8].*
-    histo.get-ref-unchecked(b).* = histo.get-unchecked(b) + 1
+    histo.index-unchecked(b).* = histo.index-unchecked(b).* + 1
     i = i + SAMPLE-RATE
   }
   let total = (len + SAMPLE-RATE - 1) / SAMPLE-RATE
   let r = (fast-log2(total) + 0.5) * total.as[f64] + 200.0
   i = 0
   while i < 256 {
-    let h = histo.get-unchecked(i).widen[size]
-    r = r - h.as[f64] * (depths.get-unchecked(i).widen[i64].as[f64] + fast-log2(h))
+    let h = histo.index-unchecked(i).*.widen[size]
+    r = r - h.as[f64] * (depths.index-unchecked(i).*.widen[i64].as[f64] + fast-log2(h))
     i = i + 1
   }
   r >= 0.0
@@ -267,7 +267,7 @@ fn build-and-store-literal-prefix-code(
     let i: size = 0
     while i < input-size {
       let b = input.add-bytes(i).ref[u8].*
-      histogram.get-ref-unchecked(b).* = histogram.get-unchecked(b) + 1
+      histogram.index-unchecked(b).* = histogram.index-unchecked(b).* + 1
       i = i + 1
     }
     histogram-total = input-size
@@ -275,9 +275,9 @@ fn build-and-store-literal-prefix-code(
     while i < 256 {
       // Weigh the first 11 samples with weight 3 to account for the balancing
       // effect of the LZ77 phase on the histogram.
-      let h = histogram.get-unchecked(i)
+      let h = histogram.index-unchecked(i).*
       let adjust: u32 = 2 * (if h < 11 h else 11)
-      histogram.get-ref-unchecked(i).* = h + adjust
+      histogram.index-unchecked(i).* = h + adjust
       histogram-total = histogram-total + adjust.widen[size]
       i = i + 1
     }
@@ -286,16 +286,16 @@ fn build-and-store-literal-prefix-code(
     let i: size = 0
     while i < input-size {
       let b = input.add-bytes(i).ref[u8].*
-      histogram.get-ref-unchecked(b).* = histogram.get-unchecked(b) + 1
+      histogram.index-unchecked(b).* = histogram.index-unchecked(b).* + 1
       i = i + SAMPLE-RATE
     }
     histogram-total = (input-size + SAMPLE-RATE - 1) / SAMPLE-RATE
     i = 0
     while i < 256 {
       // As above, plus 1 to each count so no sampled-out symbol gets depth 0.
-      let h = histogram.get-unchecked(i)
+      let h = histogram.index-unchecked(i).*
       let adjust: u32 = 1 + 2 * (if h < 11 h else 11)
-      histogram.get-ref-unchecked(i).* = h + adjust
+      histogram.index-unchecked(i).* = h + adjust
       histogram-total = histogram-total + adjust.widen[size]
       i = i + 1
     }
@@ -304,9 +304,9 @@ fn build-and-store-literal-prefix-code(
   let literal-ratio: size = 0
   let i: size = 0
   while i < 256 {
-    let h = histogram.get-unchecked(i)
+    let h = histogram.index-unchecked(i).*
     if h != 0 {
-      literal-ratio = literal-ratio + (h.widen[size] * depths.get-unchecked(i).widen[size])
+      literal-ratio = literal-ratio + (h.widen[size] * depths.index-unchecked(i).*.widen[size])
     }
     i = i + 1
   }
@@ -345,7 +345,7 @@ fn build-and-store-command-prefix-code(s: *mut one-pass-arena, bw: *mut bit-writ
   // Serialized form uses the full 704-symbol command alphabet.
   let i: size = 0
   while i < 64 {
-    tmp-depth.get-ref-unchecked(i).* = 0
+    tmp-depth.index-unchecked(i).* = 0
     i = i + 1
   }
   copy-u8(tmp-depth, 0, depth, 0, 8)
@@ -355,9 +355,9 @@ fn build-and-store-command-prefix-code(s: *mut one-pass-arena, bw: *mut bit-writ
   copy-u8(tmp-depth, 384, depth, 32, 8)
   i = 0
   while i < 8 {
-    tmp-depth.get-ref-unchecked(128 + 8 * i).* = depth.get-unchecked(40 + i)
-    tmp-depth.get-ref-unchecked(256 + 8 * i).* = depth.get-unchecked(48 + i)
-    tmp-depth.get-ref-unchecked(448 + 8 * i).* = depth.get-unchecked(56 + i)
+    tmp-depth.index-unchecked(128 + 8 * i).* = depth.index-unchecked(40 + i).*
+    tmp-depth.index-unchecked(256 + 8 * i).* = depth.index-unchecked(48 + i).*
+    tmp-depth.index-unchecked(448 + 8 * i).* = depth.index-unchecked(56 + i).*
     i = i + 1
   }
   store-huffman-tree(tmp-depth, NUM_COMMAND_SYMBOLS, tree, bw)
@@ -454,11 +454,11 @@ fn compress-fragment-impl(
           let found = false
           candidate = ip.sub-bytes(last-distance)
           if is-match(ip, candidate) and candidate < ip {
-            table.get-ref-unchecked(h).* = ip.diff(base-ip).trunc[i32]
+            table.index-unchecked(h).* = ip.diff(base-ip).trunc[i32]
             found = true
           } else {
-            candidate = base-ip.add-bytes(table.get-unchecked(h).widen[size])
-            table.get-ref-unchecked(h).* = ip.diff(base-ip).trunc[i32]
+            candidate = base-ip.add-bytes(table.index-unchecked(h).*.widen[size])
+            table.index-unchecked(h).* = ip.diff(base-ip).trunc[i32]
             found = is-match(ip, candidate)
           }
           if found and ip.diff(candidate) <= MAX-DISTANCE {
@@ -489,8 +489,8 @@ fn compress-fragment-impl(
           }
           emit-literals(next-emit, insert, lit-depth, lit-bits, bw)
           if distance == last-distance {
-            bw.write-bits(cmd-depth.get-unchecked(64).widen[size], cmd-bits.get-unchecked(64).widen[u64])
-            cmd-histo.get-ref-unchecked(64).* = cmd-histo.get-unchecked(64) + 1
+            bw.write-bits(cmd-depth.index-unchecked(64).*.widen[size], cmd-bits.index-unchecked(64).*.widen[u64])
+            cmd-histo.index-unchecked(64).* = cmd-histo.index-unchecked(64).* + 1
           } else {
             emit-distance(distance, cmd-depth, cmd-bits, cmd-histo, bw)
             last-distance = distance
@@ -504,12 +504,12 @@ fn compress-fragment-impl(
           // Hash positions inside the copy before moving on.
           let input-bytes = load64-le(ip.sub-bytes(3))
           let pos = ip.diff(base-ip)
-          table.get-ref-unchecked(hash-bytes-at-offset(input-bytes, 0, shift)).* = (pos - 3).trunc[i32]
-          table.get-ref-unchecked(hash-bytes-at-offset(input-bytes, 1, shift)).* = (pos - 2).trunc[i32]
-          table.get-ref-unchecked(hash-bytes-at-offset(input-bytes, 2, shift)).* = (pos - 1).trunc[i32]
+          table.index-unchecked(hash-bytes-at-offset(input-bytes, 0, shift)).* = (pos - 3).trunc[i32]
+          table.index-unchecked(hash-bytes-at-offset(input-bytes, 1, shift)).* = (pos - 2).trunc[i32]
+          table.index-unchecked(hash-bytes-at-offset(input-bytes, 2, shift)).* = (pos - 1).trunc[i32]
           let cur-hash = hash-bytes-at-offset(input-bytes, 3, shift)
-          candidate = base-ip.add-bytes(table.get-unchecked(cur-hash).widen[size])
-          table.get-ref-unchecked(cur-hash).* = pos.trunc[i32]
+          candidate = base-ip.add-bytes(table.index-unchecked(cur-hash).*.widen[size])
+          table.index-unchecked(cur-hash).* = pos.trunc[i32]
         }
 
         while is-match(ip, candidate) {
@@ -529,12 +529,12 @@ fn compress-fragment-impl(
           }
           let input-bytes = load64-le(ip.sub-bytes(3))
           let pos = ip.diff(base-ip)
-          table.get-ref-unchecked(hash-bytes-at-offset(input-bytes, 0, shift)).* = (pos - 3).trunc[i32]
-          table.get-ref-unchecked(hash-bytes-at-offset(input-bytes, 1, shift)).* = (pos - 2).trunc[i32]
-          table.get-ref-unchecked(hash-bytes-at-offset(input-bytes, 2, shift)).* = (pos - 1).trunc[i32]
+          table.index-unchecked(hash-bytes-at-offset(input-bytes, 0, shift)).* = (pos - 3).trunc[i32]
+          table.index-unchecked(hash-bytes-at-offset(input-bytes, 1, shift)).* = (pos - 2).trunc[i32]
+          table.index-unchecked(hash-bytes-at-offset(input-bytes, 2, shift)).* = (pos - 1).trunc[i32]
           let cur-hash = hash-bytes-at-offset(input-bytes, 3, shift)
-          candidate = base-ip.add-bytes(table.get-unchecked(cur-hash).widen[size])
-          table.get-ref-unchecked(cur-hash).* = pos.trunc[i32]
+          candidate = base-ip.add-bytes(table.index-unchecked(cur-hash).*.widen[size])
+          table.index-unchecked(cur-hash).* = pos.trunc[i32]
         }
         if done break
 
@@ -714,8 +714,8 @@ ns for encoder {
     let table-size = hash-table-size(len, self.quality)
     mem/set(dst = self.table.data-ptr(), value = 0, count = table-size * 4)
 
-    self.storage.get-ref-unchecked(0).* = (self.last-bytes & 0xFF).trunc[u8]
-    self.storage.get-ref-unchecked(1).* = (self.last-bytes >> 8).trunc[u8]
+    self.storage.index-unchecked(0).* = (self.last-bytes & 0xFF).trunc[u8]
+    self.storage.index-unchecked(1).* = (self.last-bytes >> 8).trunc[u8]
     let bw: bit-writer = .{
       storage = self.storage.data-ptr(),
       pos = self.last-bytes-bits,
@@ -732,7 +732,7 @@ ns for encoder {
 
     let out-bytes = bw.pos >> 3
     out.append-span(span/wrap-buffer(self.storage.slice(0, out-bytes)))
-    self.last-bytes = self.storage.get-unchecked(out-bytes).widen[u16]
+    self.last-bytes = self.storage.index-unchecked(out-bytes).*.widen[u16]
     self.last-bytes-bits = (bw.pos & 7).trunc[u8]
   }
 

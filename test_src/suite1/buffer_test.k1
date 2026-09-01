@@ -65,7 +65,7 @@ fn buffer-clone() {
   assert(cloned == original)
 
   // Modify clone and verify original is unchanged
-  cloned.set(0, 99)
+  cloned.[0] = 99
   assert(original.get(0) == 10)
   assert(cloned.get(0) == 99)
 }

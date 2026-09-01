@@ -515,12 +515,13 @@ ability from-string[impl e] {
 ability zero { fn zero(): self }
 ability one { fn one(): self }
 
+ability index[impl key, impl t] {
+  fn index-ref(self, key: key): *t
+}
+
 ability as-buffer[impl t] {
   fn as-buffer(self): buffer[t]
 
-  fn set(self, index: size, value: t) {
-    self.as-buffer().set(index, value)
-  }
   fn swap(self, index-a: size, index-b: size) {
     self.as-buffer().swap(index-a, index-b)
   }
@@ -532,9 +533,6 @@ ability as-buffer[impl t] {
   }
   fn sort(self) where t: comparable {
     self.as-buffer().sort()
-  }
-  fn get-ref(self, index: size): *t {
-    self.as-buffer().get-ref(index)
   }
   fn first-ref(self): ?*t {
     self.as-buffer().first-ref()
@@ -1003,10 +1001,6 @@ ns array {
     mem/set(dst = array.base-ptr(), value = value, count = array.size-bytes())
   }
 
-  fn set[t, n](array: *mut array[t, n], index: int, value: t) where n: static size {
-    array.get(index) = value
-  }
-
   fn filled-in[t, n: static size, a: allocator](alloc: a, t: t, n: n): *mut array[t, n] {
     let array-uninit = allocate[t, n, _](alloc)
     let i = 0
@@ -1038,6 +1032,10 @@ impl[t, n: static size] as-span[t = t] for *array[t, n] {
   fn as-span(self): span[t] {
     span/wrap-raw(self.get-base-read().as[ptr], self.len())
   }
+}
+
+impl[t, n: static size] index[key = size, t = t] for *mut array[t, n] {
+  fn index-ref(self, key: size): *t { self.get(key).& }
 }
 
 impl[t: print, n: static size] print for array[t, n] {

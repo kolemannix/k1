@@ -31,7 +31,7 @@ fn check-round-trip(name: string, input: span[u8], encoded: span[u8]) {
   assert-equals(decoded.len(), input.len())
   let i: size = 0
   while i < input.len() {
-    if decoded.get-unchecked(i) != input.get(i) {
+    if decoded.index-unchecked(i).* != input.get(i) {
       crash("$name: round-trip mismatch at byte $i")
     }
     i = i + 1

@@ -29,7 +29,7 @@ fn test() {
   let arr: array[i64, 3] = [7, 8, 9]
   assert-equals(sum-via-buffer(arr.&), 24)
   assert-equals(arr.&.as-span().len(), 3)
-  arr.&.as-buffer().set(0, 10)
+  arr.&.as-buffer().[0] = 10
   assert-equals(arr.get(0), 10)
 
   let fl = fixlist/uninit[i64, 8]()
@@ -64,7 +64,7 @@ fn test() {
   assert(ms.starts-with([3, 1].as-span()))
   assert(ms.ends-with([1, 2].as-span()))
   assert(not ms.starts-with([1].as-span()))
-  ms.set(0, 9)
+  ms.[0] = 9
   ms.swap(0, 2)
   assert(ms.as-span() == [2, 1, 9].as-span())
   ms.reverse()
@@ -75,7 +75,7 @@ fn test() {
   assert(ms.as-span() == [7, 7, 7].as-span())
 
   let cs: list[color] = list/filled(2, :red)
-  cs.set(1, :green)
+  cs.[1] = :green
   assert(cs.get(1) == :green)
 
   let mf = fixlist/uninit[i64, 4]()
@@ -98,7 +98,7 @@ fn test() {
   assert-equals(st.take(2), "he")
 
   let rs: list[i64] = [1, 2, 3]
-  rs.get-ref(1).* = 20
+  rs.[1] = 20
   assert-equals(rs.get(1), 20)
   assert-equals(rs.first-ref().!.*, 1)
   assert-equals(rs.last-ref().!.*, 3)
@@ -108,7 +108,7 @@ fn test() {
   let rf = fixlist/uninit[i64, 4]()
   rf.push(5)
   rf.push(6)
-  rf.&.get-ref(0).* = 50
+  rf.[0] = 50
   for r in rf.&.ref-iter() { r.* = r.* + 1 }
   assert(rf.&.as-span() == [51, 7].as-span())
 
@@ -119,7 +119,7 @@ fn test() {
   assert(rl.&.as-span() == [8, 90].as-span())
 
   let ra: array[i64, 2] = [11, 12]
-  ra.&.get-ref(1).* = 120
+  ra.[1] = 120
   assert(ra.&.as-span() == [11, 120].as-span())
 
   let bytes: list[u8] = [1: u8, 2: u8, 3: u8, 4: u8]

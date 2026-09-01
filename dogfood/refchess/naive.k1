@@ -80,24 +80,24 @@ fn dump(board: list[square-state]) {
 
 fn start-pos(): list[square-state] {
   let board = list/filled[square-state](64, :blank)
-  board.set(0, :w-rook)
-  board.set(1, :w-knight)
-  board.set(2, :w-bishop)
-  board.set(3, :w-queen)
-  board.set(4, :w-king)
-  board.set(5, :w-bishop)
-  board.set(6, :w-knight)
-  board.set(7, :w-rook)
-  { let i = 0; while i < 8 { board.set(i + 8, :w-pawn); i = i + 1 } }
+  board.[0] = :w-rook
+  board.[1] = :w-knight
+  board.[2] = :w-bishop
+  board.[3] = :w-queen
+  board.[4] = :w-king
+  board.[5] = :w-bishop
+  board.[6] = :w-knight
+  board.[7] = :w-rook
+  { let i = 0; while i < 8 { board.[i + 8] = :w-pawn; i = i + 1 } }
 
-  { let i = 0; while i < 8 { board.set(i + 48, :b-pawn); i = i + 1 } }
-  board.set(56, :b-rook)
-  board.set(57, :b-knight)
-  board.set(58, :b-bishop)
-  board.set(59, :b-queen)
-  board.set(60, :b-king)
-  board.set(61, :b-bishop)
-  board.set(62, :b-knight)
-  board.set(63, :b-rook)
+  { let i = 0; while i < 8 { board.[i + 48] = :b-pawn; i = i + 1 } }
+  board.[56] = :b-rook
+  board.[57] = :b-knight
+  board.[58] = :b-bishop
+  board.[59] = :b-queen
+  board.[60] = :b-king
+  board.[61] = :b-bishop
+  board.[62] = :b-knight
+  board.[63] = :b-rook
   board
 }

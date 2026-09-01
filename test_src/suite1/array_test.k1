@@ -65,7 +65,7 @@ fn test() {
   assert(test-compile(takes-three([1, 2, 3, 4])) is :some _)
   assert(test-compile(takes-three([])) is :some _)
   takes-three([1, 2, 3])
-  array.set(0, 3.14)
+  array.[0] = 3.14
   let buf = array.&.as-buffer()
   assert(buf.get(0) == array.get(0))
   assert-equals(buf.get(0), array.get(0))

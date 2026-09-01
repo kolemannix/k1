@@ -56,7 +56,7 @@ fn map-impl(
     code.writeln("    let ${it.name}: $elem-name = ${it.value}")
   }
   code.writeln("    let $binding = src.get(i)")
-  code.writeln("    dst.set(i, $body)")
+  code.writeln("    dst.[i] = $body")
   code.writeln("    i = i + 1")
   code.writeln("  }")
   code.writeln("}")

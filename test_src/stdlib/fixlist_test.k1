@@ -15,7 +15,7 @@ fn test-fixlist() {
   assert-equals(fl.len(), 4)
   assert-equals(fl.get(0), -1)
   assert-equals(fl.get(3), -5)
-  fl.set(1, 10)
+  fl.[1] = 10
   assert-equals(fl.get(1), 10)
   assert-equals(fl.len(), 4)
 

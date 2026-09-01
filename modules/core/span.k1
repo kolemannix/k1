@@ -44,7 +44,7 @@ ns for span {
 
   fn single[t](t): span[t] {
     let buf = buffer/allocate[t](1)
-    buf.set(0, t)
+    buf.[0] = t
     wrap-buffer(buf)
   }
 
@@ -64,13 +64,9 @@ ns for span {
     array/from-buffer[t, n](self.buffer)
   }
 
-  fn get-ref[t](self: span[t], index: size): *t {
-    self.buffer.get-ref[t](index)
-  }
-
   fn first-ref[t](self: span[t]): ?*t {
     if not self.is-empty() {
-      :some self.get-ref(0)
+      :some self.[0].&
     } else {
       :none
     }
@@ -78,7 +74,7 @@ ns for span {
 
   fn last-ref[t](self: span[t]): ?*t {
     if not self.is-empty() {
-      :some self.get-ref(self.len() - 1)
+      :some self.[self.len() - 1].&
     } else {
       :none
     }
@@ -127,6 +123,10 @@ ns for span {
 
 impl[t] as-span[t = t] for span[t] {
   fn as-span(self): span[t] { self }
+}
+
+impl[t] index[key = size, t = t] for span[t] {
+  fn index-ref(self, key: size): *t { self.buffer.index-ref(key) }
 }
 
 impl[t] iterable[item = t, i = buffer-iterator[t]] for span[t] {

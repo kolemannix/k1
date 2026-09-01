@@ -211,6 +211,7 @@ type qability-call = {
 }
 
 type type-hint = { inner: expr-id, ty: type-expr-id, span: src-span }
+type index-expr = { base: expr-id, key: expr-id, span: src-span }
 
 type if-expr = { cond: expr-id, cons: expr-id, alt: ?expr-id, span: src-span, is-static: bool }
 type while-expr = { cond: expr-id, body: expr-id, span: src-span }
@@ -252,6 +253,7 @@ type expr = either {
   code-expr(code-expr),
   qability-call(qability-call),
   type-hint(type-hint),
+  index(index-expr),
 }
 
 ns for expr {
@@ -281,6 +283,7 @@ ns for expr {
       :code-expr c -> c.span,
       :qability-call q -> q.span,
       :type-hint t -> t.span,
+      :index i -> i.span,
     }
   }
 }
@@ -625,11 +628,11 @@ ns for program {
   }
 
   fn get-expr(self: *program, id: expr-id): *expr {
-    self.exprs.get-ref(id.widen[size])
+    self.exprs.[id.widen[size]].&
   }
 
   fn get-type-expr(self: *program, id: type-expr-id): *type-expr {
-    self.type-exprs.get-ref(id.widen[size])
+    self.type-exprs.[id.widen[size]].&
   }
 
   fn get-expr-span(self: *program, id: expr-id): src-span {
@@ -678,7 +681,7 @@ ns for program {
   }
 
   fn set-expr-span(self: *mut program, id: expr-id, new-span: src-span) {
-    let e = self.exprs.get-ref(id.widen[size])
+    let e = self.exprs.[id.widen[size]].&
     e is {
       :bin-op(op)* -> { op.span = new-span },
       :un-op(op)* -> { op.span = new-span },
@@ -711,6 +714,7 @@ ns for program {
       :code-expr(c)* -> { c.span = new-span },
       :qability-call(q)* -> { q.span = new-span },
       :type-hint(t)* -> { t.span = new-span },
+      :index(i)* -> { i.span = new-span },
     }
   }
 

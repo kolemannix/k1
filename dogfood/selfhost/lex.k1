@@ -303,7 +303,7 @@ ns for lexer {
   }
 
   fn set-top-mode(self: *mut lexer, m: lex-mode) {
-    self.mode-stack.set(self.mode-stack.len() - 1, m)
+    self.mode-stack.[self.mode-stack.len() - 1] = m
   }
 
   fn eat-token(self: *mut lexer, tokens: *mut list[token]): result[bool, lex-error] {

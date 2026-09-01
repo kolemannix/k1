@@ -24,7 +24,7 @@ ns for fixlist {
   fn push[t, n](self: *mut fixlist[t, n], value: t): empty {
     let used: size = self.len()
     if used < self.cap() {
-      self.data.set(used, value)
+      self.data.[used] = value
       self.used = used.trunc[u32] + 1
     } else {
       let typename = types/name[type-of(self).value]
@@ -35,7 +35,7 @@ ns for fixlist {
   fn try-push[t, n](self: *mut fixlist[t, n], value: t): result[empty, empty] {
     let used: size = self.len()
     if used < self.cap() {
-      self.data.set(used, value)
+      self.data.[used] = value
       self.used = used.trunc[u32] + 1
       :ok
     } else {
@@ -76,6 +76,10 @@ impl[t, n: static size] as-buffer[t = t] for *mut fixlist[t, n] {
   fn as-buffer(self): buffer[t] {
     self.data.as-buffer().slice(0, self.len())
   }
+}
+
+impl[t, n: static size] index[key = size, t = t] for *mut fixlist[t, n] {
+  fn index-ref(self, key: size): *t { self.as-buffer().index-ref(key) }
 }
 
 impl[t, n: static size] as-span[t = t] for *fixlist[t, n] {

@@ -77,7 +77,7 @@ ns for string {
   fn concat-char-in[a: allocator](self: string, alloc: a, c: char): string {
     let new-length = self.len() + 1
     let new-buffer = self.span.inner-buffer()._enlarged-clone-in(alloc, new-length)
-    new-buffer.set(self.len(), c)
+    new-buffer.[self.len()] = c
     wrap-buffer(new-buffer)
   }
 
@@ -186,7 +186,7 @@ ns for string {
   fn capitalize-ascii(self: string): string {
     if self.first() is :some c and c.is-ascii-lower() {
       let clone-chars: buffer[char] = self.span.buffer.cloned()
-      clone-chars.set(0, c.to-ascii-upper())
+      clone-chars.[0] = c.to-ascii-upper()
       wrap-buffer(clone-chars)
     } else self
   }
@@ -194,7 +194,7 @@ ns for string {
   fn to-ascii-upper(self: string): string {
     let clone-chars: buffer[char] = self.span.buffer.cloned()
     for c in self {
-      if c.is-ascii-lower() { clone-chars.set(it-index, c.to-ascii-upper()) }
+      if c.is-ascii-lower() { clone-chars.[it-index] = c.to-ascii-upper() }
     }
     wrap-buffer(clone-chars)
   }
@@ -207,6 +207,10 @@ impl as-span[t = char] for string {
 
 impl as-span[t = char] for *string {
   fn as-span(self): span[char] { self.*.span }
+}
+
+impl index[key = size, t = char] for string {
+  fn index-ref(self, key: size): *char { self.span.buffer.index-ref(key) }
 }
 
 impl from-string[e = never] for string {
