@@ -59,6 +59,10 @@ ns for list {
     .{ len = buffer.len, buffer }
   }
 
+  fn from-span[t](span: span[t]): list[t] {
+    .{ len = span.len(), buffer = span.buffer.cloned() }
+  }
+
   fn to-buffer[t](self: list[t]): buffer[t] {
     self.as-buffer().cloned()
   }

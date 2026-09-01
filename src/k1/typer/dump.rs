@@ -68,7 +68,7 @@ impl TypedProgram {
     pub fn display_scope(&self, scope_id: ScopeId, w: &mut impl Write) -> std::fmt::Result {
         let scope = self.scopes.get_scope(scope_id);
         self.display_scope_name(w, scope_id)?;
-        writeln!(w, "kind: {}", scope.scope_type.short_name())?;
+        writeln!(w, ", scope type: {}", scope.scope_type.short_name())?;
 
         let mut first = true;
         for (id, variable_in_scope, _) in self.scopes.iter_scope_variables(scope_id) {
@@ -122,11 +122,9 @@ impl TypedProgram {
     }
 
     fn display_variable(&self, var: &Variable, w: &mut impl Write) -> std::fmt::Result {
-        w.write_str("(")?;
         self.write_ident(w, var.name)?;
         w.write_str(": ")?;
         self.display_type_id(w, var.type_id, TypeDisplayMode::Name)?;
-        w.write_str(")")?;
         Ok(())
     }
 
@@ -562,7 +560,7 @@ impl TypedProgram {
             if let Some(block) = &function.body_block {
                 self.display_expr_id(*block, w, 0)?;
             } else {
-                w.write_str("{no_block}")?;
+                w.write_str("{no_body}")?;
             }
         }
         Ok(())
@@ -584,7 +582,7 @@ impl TypedProgram {
             w.write_str("{}")?;
             return Ok(());
         }
-        w.write_str("{")?;
+        w.write_str("{\n")?;
         for (idx, stmt) in self.mem.getn(block.statements).iter().enumerate() {
             self.display_stmt(*stmt, w, indentation + 1)?;
             if idx < block.statements.len() as usize - 1 {

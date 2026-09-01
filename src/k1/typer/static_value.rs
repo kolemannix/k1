@@ -19,7 +19,7 @@ pub struct StaticSum {
     pub payload: Option<StaticValueId>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StaticContainerKind {
     Span,
     Buffer,
@@ -179,6 +179,7 @@ impl DepHash<StaticValuePool> for StaticValue {
             StaticValue::LinearContainer(v) => {
                 v.type_id.hash(state);
                 v.elements.len().hash(state);
+                std::mem::discriminant(&v.kind).hash(state);
                 for &element_id in d.mem.getn(v.elements).iter() {
                     element_id.hash(state);
                 }
@@ -215,6 +216,7 @@ impl DepEq<StaticValuePool> for StaticValue {
             (StaticValue::LinearContainer(a), StaticValue::LinearContainer(b)) => {
                 a.type_id == b.type_id
                     && a.elements.len() == b.elements.len()
+                    && a.kind == b.kind
                     && pool.mem.getn(a.elements) == pool.mem.getn(b.elements)
             }
             _ => false,

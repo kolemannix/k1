@@ -46,11 +46,11 @@ pointer-free predicate - pod/serializable?
 - [ ] Use to report escaped stack pointers
 
 ## grab bag list mid2026
-- [ ] new lib type: :runtime
+- [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
 - [ ] Add `self -> *self` thunk adapters for ability objects, `dyn[allocator]` is impossible
 - [x] Warn on zeroed() for non zeroable type
-- [ ] Detect and hoist trivial list literals to globals / static values
+- [x] Detect and hoist trivial list literals to globals / static values
 - [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
 - [ ] unaligned load/store for scalars
 - [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a

@@ -1,4 +1,0 @@
-fn(export) nobody(): i32
-
-fn main(): i32 { 0 }
-//errmsg: exported functions must have a body

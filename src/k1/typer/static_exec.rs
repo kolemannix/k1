@@ -5,7 +5,44 @@ use super::*;
 use crate::ice_span;
 
 impl TypedProgram {
-    pub(super) fn intercept_trivial_static_expr(
+    pub(super) fn convert_trivial_static_expr(
+        &mut self,
+        expr_id: TypedExprId,
+    ) -> Option<StaticValueId> {
+        match self.exprs.get(expr_id) {
+            TypedExpr::StaticValue(s) => Some(s.value_id),
+            TypedExpr::Variable(v) => {
+                let global_id = self.variables.get(v.variable_id).global_id()?;
+                if !self.globals.get(global_id).is_constant {
+                    return None;
+                }
+                if self.globals.get(global_id).initial_value.is_pending() {
+                    let ast_id = self.globals.get(global_id).ast_id;
+                    if self.eval_global_body(ast_id).is_err() {
+                        return None;
+                    }
+                }
+                self.globals.get(global_id).initial_value.as_value()
+            }
+            TypedExpr::Call { call_id, .. } => {
+                // desugar calls to zeroed() to the optimized zero repr for that type
+                let call = self.calls.get(*call_id);
+                let function_id = call.callee.maybe_function_id()?;
+                let function = self.functions.get(function_id);
+                if let Some(Builtin::Ir(BuiltinIr::Zeroed)) = function.builtin_type {
+                    let return_type_id = self.exprs.get_type(expr_id);
+                    let expr_span = self.exprs.get_span(expr_id);
+                    self.warn_if_not_zerosafe(return_type_id, expr_span);
+                    Some(self.static_values.add(StaticValue::Zero(return_type_id)))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn convert_trivial_static_block(
         &mut self,
         expr_id: TypedExprId,
     ) -> Option<StaticValueId> {
@@ -16,39 +53,7 @@ impl TypedProgram {
                 let Some(expr_id) = self.stmts.get(s1).as_expr() else { return None };
                 match self.exprs.get(expr_id) {
                     TypedExpr::Return(return_expr) => {
-                        match self.exprs.get(return_expr.value) {
-                            TypedExpr::StaticValue(s) => Some(s.value_id),
-                            TypedExpr::Variable(v) => {
-                                let global_id = self.variables.get(v.variable_id).global_id()?;
-                                if !self.globals.get(global_id).is_constant {
-                                    return None;
-                                }
-                                if self.globals.get(global_id).initial_value.is_pending() {
-                                    let ast_id = self.globals.get(global_id).ast_id;
-                                    if self.eval_global_body(ast_id).is_err() {
-                                        return None;
-                                    }
-                                }
-                                self.globals.get(global_id).initial_value.as_value()
-                            }
-                            TypedExpr::Call { call_id, .. } => {
-                                // A call to zeroed() becomes StaticValue::Zero directly; no need to
-                                // run silly code
-                                let call = self.calls.get(*call_id);
-                                let function_id = call.callee.maybe_function_id()?;
-                                let function = self.functions.get(function_id);
-                                if let Some(Builtin::Ir(BuiltinIr::Zeroed)) = function.builtin_type
-                                {
-                                    let return_type_id = self.exprs.get_type(return_expr.value);
-                                    let expr_span = self.exprs.get_span(return_expr.value);
-                                    self.warn_if_not_zerosafe(return_type_id, expr_span);
-                                    Some(self.static_values.add(StaticValue::Zero(return_type_id)))
-                                } else {
-                                    None
-                                }
-                            }
-                            _ => None,
-                        }
+                        self.convert_trivial_static_expr(return_expr.value)
                     }
                     _ => None,
                 }
@@ -103,7 +108,9 @@ impl TypedProgram {
         input_parameters: &[(VariableId, StaticValueId)],
     ) -> K1Result<StaticValueId> {
         let expr = self.compile_parsed_expr_for_exec(parsed_expr, ctx, input_parameters)?;
-        if let Some(shortcut_value_id) = self.intercept_trivial_static_expr(expr) {
+
+        // Intercepts very simple expressions to avoid a VM execution
+        if let Some(shortcut_value_id) = self.convert_trivial_static_block(expr) {
             return Ok(shortcut_value_id);
         }
         let execution_result = bc::exec::execute_compiled_expr(self, vm, expr, true);

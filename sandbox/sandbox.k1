@@ -1,9 +1,19 @@
-fn foo(f: *f32): *i32 {
-  f.as()
-}
-fn bar(ptr): *int {
-  ptr.ref[int]
-}
-fn main(): i32 {
+fn foo(): int { 55 }
+#debug fn main(): i32 {
+  // let x: span[int] = #static [1,2,3,4,5,foo()]
+
+
+  // mutable, makes a hidden global and a copy from ro mem
+  // let xs: list[int] = [1,2,3,4,5]
+  // let xs: buffer[int] = [1,2,3,4,5]
+
+  // mutable, but wont ever be shared
+  let xs: array[int, 5] = [1,2,3,4,5]
+
+  // immutable, can point straight at ro mem
+  // let xs: span[int] = [1,2,3,4,5,foo()]
+
+
+  println(xs)
   0
 }

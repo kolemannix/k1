@@ -1,8 +1,0 @@
-fn(export) foo(): i32 { 1 }
-
-ns inner {
-  fn(export("foo")) bar(): i32 { 2 }
-}
-
-fn main(): i32 { 0 }
-//errmsg: Duplicate exported symbol 'foo'

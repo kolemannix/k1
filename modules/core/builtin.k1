@@ -1017,6 +1017,15 @@ ns array {
     array-uninit
   }
 
+  fn from-buffer[t, n: static size](buffer: buffer[t]): array[t, n] {
+    let(returned) array: array[t, n] = uninit
+    if buffer.len() != array.len() crash("array.from-buffer with mismatching length")
+
+    buffer/copy(src = buffer, dst = array.as-buffer())
+
+    array
+  }
+
 }
 
 impl[t, n: static size] as-buffer[t = t] for *mut array[t, n] {

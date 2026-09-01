@@ -214,8 +214,9 @@ pub(crate) struct BuiltinIdents {
 #[allow(non_snake_case)]
 #[derive(Clone, Copy)]
 pub(crate) struct BuiltinFunctions {
-    pub List_with_capacity: QIdent,
-    pub List_push: QIdent,
+    pub list_with_capacity: QIdent,
+    pub list_push: QIdent,
+    pub list_from_span: QIdent,
     pub Iterator_next: QIdent,
     pub Iterable_iterator: QIdent,
     pub try__is_ok: QIdent,
@@ -228,10 +229,12 @@ pub(crate) struct BuiltinFunctions {
     pub core_print_print_to: QIdent,
     pub buffer_allocate: QIdent,
     pub buffer_set: QIdent,
+    pub buffer_from_span: QIdent,
     pub Array_set: QIdent,
     pub mem_zeroed: QIdent,
     pub mem_new: QIdent,
     pub span_wrapBuffer: QIdent,
+    pub span_to_array: QIdent,
     pub equals__equals: QIdent,
     pub add__add: QIdent,
     pub sub__sub: QIdent,
@@ -562,8 +565,9 @@ impl IdentPool {
         }
 
         let path_core_list = intern_path!(b.core, b.list);
-        let List_with_capacity = make_fn!(path_core_list, b.with_capacity);
-        let List_push = make_fn!(path_core_list, intern!("push"));
+        let list_with_capacity = make_fn!(path_core_list, b.with_capacity);
+        let list_push = make_fn!(path_core_list, intern!("push"));
+        let list_from_span = make_fn!(path_core_list, intern!("from-span"));
 
         let path_core_iterator = intern_path!(b.core, b.iterator);
         let Iterator_next = make_fn!(path_core_iterator, b.next);
@@ -587,6 +591,7 @@ impl IdentPool {
         let path_core_buffer = intern_path!(b.core, b.buffer);
         let buffer_allocate: QIdent = make_fn!(path_core_buffer, intern!("allocate"));
         let buffer_set: QIdent = make_fn!(path_core_buffer, intern!("set"));
+        let buffer_from_span: QIdent = make_fn!(path_core_buffer, intern!("from-span"));
 
         let path_array = intern_path!(b.core, b.array);
         let array__set: QIdent = make_fn!(path_array, intern!("set"));
@@ -597,6 +602,7 @@ impl IdentPool {
 
         let path_core_span = intern_path!(b.core, b.span);
         let span_wrapBuffer: QIdent = make_fn!(path_core_span, intern!("wrap-buffer"));
+        let span_to_array: QIdent = make_fn!(path_core_span, intern!("to-array"));
 
         let path_core_equals = intern_path!(b.core, b.equals);
         let equals__equals: QIdent = make_fn!(path_core_equals, b.equals);
@@ -631,8 +637,9 @@ impl IdentPool {
         let bitwise_shr = make_fn!(path_core_bitwise, intern!("shift-right"));
 
         let f = BuiltinFunctions {
-            List_with_capacity,
-            List_push,
+            list_with_capacity,
+            list_push,
+            list_from_span,
             Iterator_next,
             Iterable_iterator,
             try__is_ok,
@@ -645,10 +652,12 @@ impl IdentPool {
             core_print_print_to,
             buffer_allocate,
             buffer_set,
+            buffer_from_span,
             Array_set: array__set,
             mem_zeroed,
             mem_new,
             span_wrapBuffer,
+            span_to_array,
             equals__equals,
             add__add,
             sub__sub,

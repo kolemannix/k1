@@ -60,6 +60,10 @@ ns for span {
     .{ buffer = self.buffer.cloned-in(alloc) }
   }
 
+  fn to-array[t, n: static size](self: span[t]): array[t, n] {
+    array/from-buffer[t, n](self.buffer)
+  }
+
   fn get-ref[t](self: span[t], index: size): *t {
     self.buffer.get-ref[t](index)
   }

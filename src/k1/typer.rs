@@ -7137,39 +7137,30 @@ impl TypedProgram {
             }
         }
 
-        let mut list_lit_block =
-            self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 2 + element_count);
-        let list_lit_scope = list_lit_block.scope_id;
         let mut element_type = None;
-        let elements: List<TypedExprId, MemTmp> = {
-            let mut elements = self.tmp.new_list(element_count);
-            for elem in self.ast.mem.getn(list_expr.elements) {
-                let current_expected_type = element_type.or(expected_element_type);
-                let element_expr =
-                    self.eval_expr(*elem, ctx.with_expected_type(current_expected_type))?;
-                let element_expr_checked = match current_expected_type {
-                    None => element_expr,
-                    Some(current_expected_type) => self
-                        .check_and_coerce_expr(
-                            current_expected_type,
-                            element_expr,
-                            list_lit_scope,
-                            false,
-                        )
-                        .map_err(|e| {
-                            kerr!(self, e.span, "List element had incorrect type: {}", e.message)
-                        })?,
-                };
-                let this_element_type = self.exprs.get_type(element_expr_checked);
-                if element_type.is_none() {
-                    // Erase static type info since a list of all one static value isn't very useful
-                    let chased_type = self.get_static_family_id_if_static(this_element_type);
-                    element_type = Some(chased_type)
-                };
-                elements.push(element_expr_checked);
+        let mut trivial_values = self.tmp.new_list(element_count);
+        let mut elements = self.tmp.new_list(element_count);
+        for elem in self.ast.mem.getn(list_expr.elements) {
+            let current_expected_type = element_type.or(expected_element_type);
+            let element_expr = self.eval_expr_with_coercion(
+                *elem,
+                ctx.with_expected_type(current_expected_type),
+                true,
+            )?;
+
+            if let Some(static_value) = self.convert_trivial_static_expr(element_expr) {
+                trivial_values.push(static_value)
             }
-            elements
-        };
+
+            if element_type.is_none() {
+                // Erase static type info since a list of all one static value isn't very useful
+                let this_element_type = self.exprs.get_type(element_expr);
+                let chased_type = self.get_static_family_id_if_static(this_element_type);
+                element_type = Some(chased_type)
+            };
+            elements.push(element_expr);
+        }
+
         // Note: Typing of empty list literals with no expected type is tricky
         //        We use is_inference here to use UNIT or fail.
         //        If I report UNIT during inference it leads to incorrect failures
@@ -7184,11 +7175,66 @@ impl TypedProgram {
                 }
             }
         };
+
+        // Early out for trivial lists
+        if trivial_values.len() == element_count as usize {
+            let elements = self.static_values.mem.pushn(trivial_values.as_slice());
+            let span_type =
+                self.instantiate_generic_type(self.builtin_types.span(), &[element_type]);
+            let static_span =
+                self.static_values.add(StaticValue::LinearContainer(StaticContainer {
+                    elements,
+                    kind: StaticContainerKind::Span,
+                    type_id: span_type,
+                }));
+            let static_span_expr = self.add_static_constant_expr(static_span, span);
+            let ctx_hidden = ctx.with_hidden_calls(true);
+            return match list_kind {
+                ContainerKind::Array(array_type_id) => {
+                    let array_size_type =
+                        self.types.get(array_type_id).as_array().unwrap().size_type;
+                    let span_to_array = self.synth_typed_call_typed_args(
+                        self.ast.idents.f.span_to_array.with_span(span),
+                        &[element_type, array_size_type],
+                        &[static_span_expr],
+                        ctx_hidden,
+                        false,
+                    )?;
+                    Ok(span_to_array)
+                }
+                ContainerKind::Buffer => {
+                    let buffer_expr = self.synth_typed_call_typed_args(
+                        self.ast.idents.f.buffer_from_span.with_span(span),
+                        &[element_type],
+                        &[static_span_expr],
+                        ctx_hidden,
+                        false,
+                    )?;
+                    Ok(buffer_expr)
+                }
+                ContainerKind::Span => Ok(static_span_expr),
+                ContainerKind::List => {
+                    let list_expr = self.synth_typed_call_typed_args(
+                        self.ast.idents.f.list_from_span.with_span(span),
+                        &[element_type],
+                        &[static_span_expr],
+                        ctx_hidden,
+                        false,
+                    )?;
+                    Ok(list_expr)
+                }
+            };
+        }
+
+        let mut list_lit_block =
+            self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 2 + element_count);
+        let list_lit_scope = list_lit_block.scope_id;
         let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
         let count_expr = self.synth_i64(element_count as i64, span);
+
         let make_dest_coll = match list_kind {
             ContainerKind::List => self.synth_typed_call_typed_args(
-                self.ast.idents.f.List_with_capacity.with_span(span),
+                self.ast.idents.f.list_with_capacity.with_span(span),
                 &[element_type],
                 &[count_expr],
                 list_lit_ctx,
@@ -7201,7 +7247,7 @@ impl TypedProgram {
                 list_lit_ctx,
                 false,
             )?,
-            // Unlike the others, the array literal should go on the stack!
+            // Unlike the others, the array literal allocates on the stack!
             ContainerKind::Array(array_type_id) => self.synth_typed_call_typed_args(
                 self.ast.idents.f.mem_zeroed.with_span(span),
                 &[array_type_id],
@@ -7233,7 +7279,7 @@ impl TypedProgram {
             let index_expr = self.synth_i64(index as i64, span);
             let push_call = match list_kind {
                 ContainerKind::List => self.synth_typed_call_typed_args(
-                    self.ast.idents.f.List_push.with_span(span),
+                    self.ast.idents.f.list_push.with_span(span),
                     &[element_type],
                     &[dest_coll_expr, *element_value_expr],
                     list_lit_ctx,
@@ -7248,10 +7294,11 @@ impl TypedProgram {
                 )?,
                 ContainerKind::Array(array_type_id) => {
                     // fn set[T, N: static size](array: Array[T, N]*, index: size, value: T): unit
-                    let size_type = self.types.get(array_type_id).as_array().unwrap().size_type;
+                    let array_size_type =
+                        self.types.get(array_type_id).as_array().unwrap().size_type;
                     self.synth_typed_call_typed_args(
                         self.ast.idents.f.Array_set.with_span(span),
-                        &[element_type, size_type],
+                        &[element_type, array_size_type],
                         &[dest_coll_expr, index_expr, *element_value_expr],
                         list_lit_ctx,
                         false,

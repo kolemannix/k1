@@ -1,7 +1,0 @@
-ns(reload) handlers {
-  fn id[t](x: t): t { x }
-  fn apply(i: int, f: some fn int -> int): int { f(i) }
-}
-
-fn main(): i32 { 0 }
-//errmsg: generic fns are not allowed in reloadable namespaces

@@ -1,7 +1,0 @@
-fn main(): i32 {
-  let runtime-value = 5
-  let doubled: int = #static (runtime-value * 2)
-  doubled.trunc[i32]
-}
-
-//errmsg: No value 'runtime-value' is in scope

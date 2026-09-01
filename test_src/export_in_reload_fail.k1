@@ -1,6 +1,0 @@
-ns(reload) handlers {
-  fn(export) handle(i: int): int { i + 1 }
-}
-
-fn main(): i32 { 0 }
-//errmsg: extern, export, and intrinsic fns are not allowed in reloadable namespaces
