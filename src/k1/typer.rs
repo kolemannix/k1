@@ -1734,13 +1734,16 @@ pub enum GlobalInitialValue {
     Uninit,
     /// Evaluated to a value
     Value(StaticValueId),
+    Failed(K1Message),
 }
 
 impl GlobalInitialValue {
     pub fn as_value(&self) -> Option<StaticValueId> {
         match self {
             GlobalInitialValue::Value(v) => Some(*v),
-            GlobalInitialValue::Pending | GlobalInitialValue::Uninit => None,
+            GlobalInitialValue::Pending
+            | GlobalInitialValue::Uninit
+            | GlobalInitialValue::Failed(_) => None,
         }
     }
 
@@ -3236,8 +3239,7 @@ impl TypedProgram {
                 self.modules_completed.push(module_id);
                 // Drain pending IR so a snapshot here contains only whole
                 // modules (pending queues empty)
-                if let Err(msg) = self.compile_all_pending_ir(SpanId::NONE) {
-                    self.report(msg);
+                if self.compile_all_pending_ir(SpanId::NONE).is_err() {
                     bail!("Failed to compile ir");
                 };
             }
@@ -10089,13 +10091,7 @@ impl TypedProgram {
                         "Cannot use test-compile when types are being inferred"
                     );
                 }
-                self.compile_all_pending_ir(call_span).map_err(|mut e| {
-                    e.message = self.ast.idents.intern(format!(
-                        "Failed to compile pending units before test-compile: {}",
-                        self.ident_str(e.message)
-                    ));
-                    e
-                })?;
+                self.compile_all_pending_ir(call_span)?;
                 let result = self.eval_expr(arg.value, ctx.with_no_expected_type());
                 let expr = match result {
                     Err(typer_error) => {
@@ -13026,9 +13022,19 @@ impl TypedProgram {
 
     fn specialize_function_body(&mut self, function_id: FunctionId) -> K1Result<()> {
         let specialized_function = self.get_function(function_id);
-        if specialized_function.body_block.is_some() {
+        if specialized_function.body_failure.is_some() || specialized_function.body_block.is_some()
+        {
             return Ok(());
         }
+        let result = self.specialize_function_body_inner(function_id);
+        if let Err(e) = result {
+            self.get_function_mut(function_id).body_failure = Some(e);
+        }
+        result
+    }
+
+    fn specialize_function_body_inner(&mut self, function_id: FunctionId) -> K1Result<()> {
+        let specialized_function = self.get_function(function_id);
         let specialized_return_type = self.get_function_type(function_id).return_type;
         let specialized_function_type = specialized_function.type_id;
         let specialized_function_scope_id = specialized_function.scope;
@@ -13041,8 +13047,13 @@ impl TypedProgram {
                 "specialize_function_body wants a normal specialization or a blanket impl defn",
             );
         let parent_function = self.get_function(parent_function);
-        if let Some(err) = parent_function.body_failure.as_ref() {
-            return Err(*err);
+        if let Some(err) = parent_function.body_failure {
+            kbail!(
+                self,
+                err.span,
+                "Cannot specialize '{}': its definition failed to compile",
+                parent_function.name
+            );
         }
 
         // Intrinsics from generic impls (e.g. `impl add for vector[t, n]`) have no
@@ -14372,10 +14383,7 @@ impl TypedProgram {
         type_id: TypeId,
         span: SpanId,
     ) -> K1Result<bool> {
-        let generic_function = self.functions.get(function_id);
-        if generic_function.body_block.is_none() {
-            self.eval_function_body(function_id)?;
-        }
+        self.require_function_body(function_id, span)?;
         let generic_function = self.functions.get(function_id);
         if generic_function.body_block.is_none() {
             kbail!(self, span, "Predicate function '{}' has no body", generic_function.name);
@@ -15798,6 +15806,15 @@ impl TypedProgram {
         if function.body_failure.is_some() || function.body_block.is_some() {
             return Ok(());
         }
+        let result = self.eval_function_body_inner(declaration_id);
+        if let Err(e) = result {
+            self.get_function_mut(declaration_id).body_failure = Some(e);
+        }
+        result
+    }
+
+    fn eval_function_body_inner(&mut self, declaration_id: FunctionId) -> K1Result<()> {
+        let function = self.get_function(declaration_id);
         let is_debug = function.compiler_debug();
         if is_debug {
             self.push_debug_level();
@@ -16914,7 +16931,6 @@ impl TypedProgram {
                 continue;
             }
             if let Err(e) = self.eval_function_body(impl_fn) {
-                self.functions.get_mut(impl_fn).body_failure = Some(e);
                 self.ability_impls
                     .get_mut(ability_impl_id)
                     .compile_errors
@@ -16950,7 +16966,6 @@ impl TypedProgram {
                     self.function_ast_mappings.get(&parsed_function_id).copied()
                 {
                     if let Err(e) = self.eval_function_body(function_declaration_id) {
-                        self.functions.get_mut(function_declaration_id).body_failure = Some(e);
                         self.report(e);
                     };
                 }
@@ -16960,7 +16975,6 @@ impl TypedProgram {
                     self.macro_ast_mappings.get(&parsed_macro_id).copied()
                 {
                     if let Err(e) = self.eval_function_body(function_declaration_id) {
-                        self.functions.get_mut(function_declaration_id).body_failure = Some(e);
                         self.report(e);
                     };
                 }
@@ -18005,9 +18019,7 @@ impl TypedProgram {
             function_ids.extend(&self.functions_pending_body_specialization);
             self.functions_pending_body_specialization.clear();
             for function_id in &function_ids {
-                let result = self.specialize_function_body(*function_id);
-                if let Err(e) = result {
-                    self.functions.get_mut(*function_id).body_failure = Some(e);
+                if let Err(e) = self.specialize_function_body(*function_id) {
                     self.report(e)
                 }
             }

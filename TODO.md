@@ -4,7 +4,6 @@ next up
 - parse_statement: same peek-dispatch conversion parse_definition got (expect_ variants, no conditional parse_* chain)
 
 # Bugs
-- [ ] take 'bitcast' as a method call? very convenient when dst type is known
 - [x] [major] Support (co)recursive Generics
 - [x] [major] Allow pattern matching *into* recursive types (currently we just terminate)
 - [ ] Represent scalar containers (i|u8-64 + list/buffer/span/array) natively, not as individual static values. This at
@@ -14,8 +13,6 @@ next up
 - [x] Out of order type definitions don't work with aliases
 - [x] same-level recursion is not caught behind option
 - [x] Require that a blanket impl's params appear in the Self type
-- [ ] the way we keep failed fns in the pending queue causes error accumulation
-│  Error in parameter 'a' in call to 'assert-equals'' Failed to compile pending units before test-compile: Failed to compile pending units before te st-compile: Error in parameter 'a' in call to 'assert-equals'' Failed to compile pending units before test-compile: Failed to compile pending units before te st-compile: Failed to compile pending units before test-compile: Failed to compile pending uni ts before test-compile: Failed to compile pending units before test-compile: Failed to compile pending units before test-compile: Invalid call to assert-equals Invalid call to inspect Failed to compile pending units before test-compile: Failed to compile pending units befor e test-compile: Failed to compile pending units before test-compile: Failed to compile pending units before test-compile: Failed to compile pending units before test-compile: Failed to com pile pending units before test-compile: Failed to compile pending units before test-compile: F ailed to compile pending units before test-compile: Failed to compile pending units before tes t-compile: Failed to compile pending units before test-compile: Failed to compile pending unit s before test-compile: Failed to compile pending units before test-compile: Failed to compile pending units before test-compile: Error in parameter 'a' in call to 'assert-equals'' Failed to compile pending units before test-compile: Failed to compile pending units before te
 
 ## [x] vector types
 

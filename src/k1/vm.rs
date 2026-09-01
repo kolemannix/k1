@@ -580,11 +580,11 @@ pub(crate) fn resolve_global(
     let global = k1.globals.get(global_id);
     let is_constant = global.is_constant;
     let initial_value_id = match global.initial_value {
-        GlobalInitialValue::Pending => {
+        GlobalInitialValue::Pending | GlobalInitialValue::Failed(_) => {
             kbail!(
                 k1,
                 vm.eval_span,
-                "VM encountered un-evaluated global '{}'; all globals referenced by compiled code should have been evaluated before execution. This is a compiler bug",
+                "VM encountered un-evaluated or failed global '{}'; all globals referenced by compiled code should have been evaluated before execution. This is a compiler bug",
                 k1.variables.get(global.variable_id).name
             );
         }

@@ -18,7 +18,8 @@ impl TypedProgram {
                 }
                 if self.globals.get(global_id).initial_value.is_pending() {
                     let ast_id = self.globals.get(global_id).ast_id;
-                    if self.eval_global_body(ast_id).is_err() {
+                    if let Err(e) = self.eval_global_body(ast_id) {
+                        self.report(e);
                         return None;
                     }
                 }
@@ -68,31 +69,55 @@ impl TypedProgram {
         }
     }
 
+    pub fn require_function_body(&mut self, function_id: FunctionId, span: SpanId) -> K1Result<()> {
+        if let Err(e) = self.eval_function_body(function_id) {
+            self.report(e)
+        }
+        match self.get_function(function_id).body_failure {
+            None => Ok(()),
+            Some(_) => {
+                kbail!(
+                    self,
+                    span,
+                    "Function '{}' failed to compile",
+                    self.get_function(function_id).name
+                )
+            }
+        }
+    }
+
+    fn compile_function_for_exec(&mut self, function_id: FunctionId, span: SpanId) -> K1Result<()> {
+        self.require_function_body(function_id, span)?;
+        if let Err(e) = ir::compile_function(self, function_id) {
+            self.get_function_mut(function_id).body_failure = Some(e);
+            self.report(e);
+        }
+        self.require_function_body(function_id, span)
+    }
+
     pub fn compile_all_pending_ir(&mut self, on_behalf_of_span: SpanId) -> K1Result<()> {
         loop {
             if let Some(function_id) = self.ir.units_pending_compile.keys().next().copied() {
                 self.ir.units_pending_compile.remove(&function_id);
-                if let Err(e) = self.eval_function_body(function_id) {
-                    // re-insert so all future attempts to drain also fail.
-                    // we could instead set a failure flag and not even try, but this is ok for now
+                if let Err(e) = self.compile_function_for_exec(function_id, on_behalf_of_span) {
                     self.ir.units_pending_compile.insert(function_id, ());
                     return Err(e);
                 }
-                if let Err(e) = ir::compile_function(self, function_id) {
-                    // re-insert so all future attempts to drain also fail.
-                    // we could instead set a failure flag and not even try, but this is ok for now
-                    self.ir.units_pending_compile.insert(function_id, ());
-                    kbail!(
-                        self,
-                        on_behalf_of_span,
-                        "Failed to compile ir for function execution: {}",
-                        e.message
-                    );
-                };
             } else if let Some(global_id) = self.ir.globals_pending_eval.keys().next().copied() {
                 self.ir.globals_pending_eval.remove(&global_id);
                 let ast_id = self.globals.get(global_id).ast_id;
-                self.eval_global_body(ast_id)?;
+                if let Err(e) = self.eval_global_body(ast_id) {
+                    self.report(e)
+                }
+                if let GlobalInitialValue::Failed(_) = self.globals.get(global_id).initial_value {
+                    self.ir.globals_pending_eval.insert(global_id, ());
+                    kbail!(
+                        self,
+                        on_behalf_of_span,
+                        "Global '{}' failed to compile",
+                        self.variables.get(self.globals.get(global_id).variable_id).name
+                    );
+                }
             } else {
                 break;
             }
@@ -259,7 +284,7 @@ impl TypedProgram {
         function_id: FunctionId,
         span: SpanId,
     ) -> K1Result<()> {
-        ir::compile_function(k1, function_id)?;
+        k1.compile_function_for_exec(function_id, span)?;
         k1.compile_all_pending_ir(span)?;
         // Macros execute repeatedly; inline_done guards re-optimizing
         let unit_id = IrUnitId::Function(function_id);
@@ -424,6 +449,9 @@ impl TypedProgram {
             self.with_clean_inference(|k1| k1.eval_global_body_inner(parsed_global_id, global_id));
         let popped = self.globals_in_progress.pop();
         debug_assert_eq!(popped, Some(global_id));
+        if let Err(e) = result {
+            self.globals.get_mut(global_id).initial_value = GlobalInitialValue::Failed(e);
+        }
         result
     }
 
@@ -1271,8 +1299,7 @@ impl TypedProgram {
             );
         }
 
-        // Ensure the function is compiled.
-        self.eval_function_body(function_id)?;
+        self.require_function_body(function_id, span)?;
 
         // Specialize if needed
         let function_to_run = if is_generic {
