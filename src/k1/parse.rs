@@ -2581,7 +2581,11 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 ParsedStructPattern { fields: fields.to_slice_trim(&mut self.ast.mem), span };
             let pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Struct(pattern));
             Ok(pattern_id)
-        } else if first.kind == K::Colon || (first.kind == K::Ident && second.kind == K::Colon) {
+        } else if first.kind == K::Colon
+            || (first.kind == K::Ident
+                && second.kind == K::Colon
+                && self.token_chars(first) != "_")
+        {
             let sum_name = if first.kind == K::Ident {
                 // Eats the Colon
                 self.advance();
@@ -2605,9 +2609,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                     let close_paren = self.expect_kind(K::CloseParen)?;
                     (Some(payload_pattern_id), self.extend_token_span(first, close_paren))
                 } else if !next.is_newline_preceded() && self.peek_starts_quiet_payload() {
-                    // Quiet payload: `:some v`, `:ok 42`. A postfix `*` still wraps
-                    // the whole sum pattern, matching `:some(v)*`; use parens for a
-                    // reference payload: `:some(v*)`.
+                    // Quiet payload: `:some v`, `:ok 42`
                     let payload_pattern_id = self.expect_pattern_base()?;
                     let payload_span = self.ast.get_pattern_span(payload_pattern_id);
                     (Some(payload_pattern_id), self.extend_tok_span(first, payload_span))

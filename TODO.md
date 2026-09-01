@@ -15,23 +15,7 @@ next up
 - [x] same-level recursion is not caught behind option
 - [x] Require that a blanket impl's params appear in the Self type
 - [ ] the way we keep failed fns in the pending queue causes error accumulation
-│  Error in parameter 'a' in call to 'assert-equals''
-Failed to compile pending units before test-compile: Failed to compile pending units before te
-st-compile: Error in parameter 'a' in call to 'assert-equals''
-Failed to compile pending units before test-compile: Failed to compile pending units before te
-st-compile: Failed to compile pending units before test-compile: Failed to compile pending uni
-ts before test-compile: Failed to compile pending units before test-compile: Failed to compile
- pending units before test-compile: Invalid call to assert-equals
-    Invalid call to inspect
-    Failed to compile pending units before test-compile: Failed to compile pending units befor
-e test-compile: Failed to compile pending units before test-compile: Failed to compile pending
- units before test-compile: Failed to compile pending units before test-compile: Failed to com
-pile pending units before test-compile: Failed to compile pending units before test-compile: F
-ailed to compile pending units before test-compile: Failed to compile pending units before tes
-t-compile: Failed to compile pending units before test-compile: Failed to compile pending unit
-s before test-compile: Failed to compile pending units before test-compile: Failed to compile 
-pending units before test-compile: Error in parameter 'a' in call to 'assert-equals''
-Failed to compile pending units before test-compile: Failed to compile pending units before te
+│  Error in parameter 'a' in call to 'assert-equals'' Failed to compile pending units before test-compile: Failed to compile pending units before te st-compile: Error in parameter 'a' in call to 'assert-equals'' Failed to compile pending units before test-compile: Failed to compile pending units before te st-compile: Failed to compile pending units before test-compile: Failed to compile pending uni ts before test-compile: Failed to compile pending units before test-compile: Failed to compile pending units before test-compile: Invalid call to assert-equals Invalid call to inspect Failed to compile pending units before test-compile: Failed to compile pending units befor e test-compile: Failed to compile pending units before test-compile: Failed to compile pending units before test-compile: Failed to compile pending units before test-compile: Failed to com pile pending units before test-compile: Failed to compile pending units before test-compile: F ailed to compile pending units before test-compile: Failed to compile pending units before tes t-compile: Failed to compile pending units before test-compile: Failed to compile pending unit s before test-compile: Failed to compile pending units before test-compile: Failed to compile pending units before test-compile: Error in parameter 'a' in call to 'assert-equals'' Failed to compile pending units before test-compile: Failed to compile pending units before te
 
 ## [x] vector types
 
@@ -71,12 +55,13 @@ pointer-free predicate - pod/serializable?
 - [ ] unaligned load/store for scalars
 - [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
       way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
-- [ ] [design/flags_in_tags.k1.wip]
+- [ ] [design/flags_in_tags.k1.wip] 
 kind: either(u64, { rounded = false, even = false, faces: u8 }) {
   Circle({ radius: i32 }) = [rounded, even, faces = 1],
   Square({ len: i32 }) = [even, faces = 4],
   ...
 }
+  - [ ] implement with a macro, for sure
 - [x] packed structs
 - [x] function abi: internal everywhere, unless address is ever taken, then always native. enables fastcc in llvm
                     also of course allow spelling 'native', but do not allow forcing 'k1'
@@ -89,7 +74,7 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
 - [ ] labeled loops: `break :label` / `continue :label`. The brotli port's C `goto emit_remainder`
       two-level exits became `done = true; break` + `if done break` flag chains (5 sites)
 - [ ] design min/max for scalars (comparable ability makes the generic trivial; brotli hand-rolled min-size)
-- [ ] integer inference gaps (repro: sandbox/sandbox.k1): (a) `2 * d` vs `d * 2` differ — literal-lhs
+- [ ] literal inference issue (a) `2 * d` vs `d * 2` differ — literal-lhs
       defaults i64 and widens the u32 rhs up, literal-rhs adopts u32 and wraps; (b) binary ops widen
       rhs into lhs type but have no least-upper-bound, so `u32 + i64` errors while `i64 + u32` works;
       (c) expected-type propagation into generic calls pins the type param before argument-driven

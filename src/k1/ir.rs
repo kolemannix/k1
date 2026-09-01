@@ -149,6 +149,7 @@ impl ProgramIr {
 #[derive(Clone, Copy)]
 pub enum IrComment {
     ArrayGetOffsetPlace,
+    AssignmentStore,
     BitcastAggToAggCopy,
     BitcastAggToAggPlace,
     BitcastAggToScalar,
@@ -238,6 +239,7 @@ impl IrComment {
     pub fn str(&self) -> &'static str {
         match self {
             IrComment::ArrayGetOffsetPlace => "array get offset place",
+            IrComment::AssignmentStore => "assignment store",
             IrComment::BitcastAggToAggCopy => "bitcast agg to agg copy",
             IrComment::BitcastAggToAggPlace => "bitcast agg to agg place",
             IrComment::BitcastAggToScalar => "bitcast agg to scalar",
@@ -2218,12 +2220,12 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
                         unreachable!()
                     };
                     debug_assert!(!constant);
-                    let _rhs_stored = compile_expr(b, Some(addr), ass.value)?;
+                    store_assignment_value(b, addr, ass.value)?;
                     Ok(Value::Empty)
                 }
                 AssignmentKind::Store => {
                     let lhs = compile_expr(b, None, ass.destination)?;
-                    let _rhs_stored = compile_expr(b, Some(lhs), ass.value)?;
+                    store_assignment_value(b, lhs, ass.value)?;
                     Ok(Value::Empty)
                 }
             }
@@ -2257,6 +2259,16 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
             Ok(Value::Empty)
         }
     }
+}
+
+fn store_assignment_value(b: &mut Builder, addr: Value, value: TypedExprId) -> K1Result<()> {
+    let rhs = compile_expr(b, None, value)?;
+    if b.get_value_kind(rhs).is_terminator() {
+        return Ok(());
+    }
+    let pt = b.get_physical_type(b.k1.exprs.get_type(value));
+    store_value(b, pt, addr, rhs, IrComment::AssignmentStore);
+    Ok(())
 }
 
 fn compile_expr(
