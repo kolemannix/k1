@@ -1,0 +1,117 @@
+fn parse-source(file-name: string, source: string): ast/program {
+  let program = ast/program/make(file-name, source)
+  let tokens = list/empty[lex/token]()
+  let lexer = lex/lexer/make(source)
+  lexer.run(tokens.&) is {
+    :some e -> {
+      program.report-error(.{ message = e.message, span = e.span })
+    },
+    :none -> {
+      let p: parse/parser = .{ program = program.&, tokens, cursor = 0 }
+      p.parse-file()
+    }
+  }
+  program
+}
+
+fn parse-path(path: string): ast/program {
+  parse-source(path, core/files/read-to-string(path))
+}
+
+fn run(args: span[string]): i32 {
+  if args.len() < 2 {
+    eprintln("usage: selfhost <file.k1>...")
+    return 1
+  }
+  let total-errors: size = 0
+  let total-files: size = 0
+  for i in 1.until(args.len()) {
+    let path = args.get(i)
+    let program = parse-path(path)
+    total-files = total-files + 1
+    total-errors = total-errors + program.errors.len()
+    println("$path: ${program.root-defns.len()} root defns, ${program.functions.len()} fns, ${program.exprs.len()} exprs, ${program.stmts.len()} stmts, ${program.errors.len()} errors")
+  }
+  if total-errors > 0 {
+    eprintln("$total-errors parse errors across $total-files files")
+    1
+  } else {
+    println("parsed $total-files files clean")
+    0
+  }
+}
+
+fn test(): i32 {
+  let src = `
+ns selfhost-embedded
+
+type point = { x: int, y: int }
+
+type shape = either(u8) { circle(f64), square }
+
+fn add(a: int, b: int): int {
+  let c = a + b
+  c
+}
+
+fn classify(s: shape): int {
+  s is {
+    :circle r if r > 1.0 -> 2,
+    :circle _ -> 1,
+    :square -> 0,
+  }
+}
+
+fn use-point(): int {
+  let p: point = .{ x = 1, y = 2 }
+  let q = p.with(.{ x = 3 })
+  if p.x == 1 and q.x == 3 { add(p.y, q.y) } else 0
+}
+`
+  let program = parse-source("embedded-test.k1", src)
+  assert-equals(program.errors.len(), 0)
+  assert-equals(program.root-defns.len(), 1)
+  assert-equals(program.namespaces.len(), 1)
+  assert-equals(program.type-defns.len(), 2)
+  assert-equals(program.functions.len(), 3)
+
+  let prec = parse-source("prec.k1", "fn f(): int { 1 + 2 * 3 }")
+  assert-equals(prec.errors.len(), 0)
+  let top = first-fn-body-expr(prec.&)
+  require prec.get-expr(top).* is :bin-op(root) else { crash("expected bin-op root") }
+  assert(root.op is :add)
+  require prec.get-expr(root.rhs).* is :bin-op(rhs) else { crash("expected bin-op rhs") }
+  assert(rhs.op is :multiply)
+
+  let dedent = parse-source("dedent.k1", "fn g(): string { `\n  ab\n  cd\n  ` }")
+  assert-equals(dedent.errors.len(), 0)
+  let ds = first-fn-body-expr(dedent.&)
+  require dedent.get-expr(ds).* is :literal(:string-lit(sl)) else { crash("expected string literal") }
+  assert-equals(dedent.ident(sl.string), "ab\ncd\n")
+
+  let interp = parse-source("interp.k1", "fn h(): string { \"x\${1}y\" }")
+  assert-equals(interp.errors.len(), 0)
+  let ie = first-fn-body-expr(interp.&)
+  require interp.get-expr(ie).* is :interp-string(istr) else { crash("expected interp string") }
+  assert-equals(istr.parts.len(), 3)
+  require istr.parts.get(1) is :expr-part(mid) else { crash("expected expr part") }
+  require interp.get-expr(mid.expr).* is :literal(:numeric(_)) else { crash("expected numeric hole") }
+
+  println("selfhost parser test ok")
+  0
+}
+
+fn first-fn-body-expr(p: *ast/program): ast/expr-id {
+  require p.functions.get(0).body is :some body-id else { crash("fn has no body") }
+  require p.get-expr(body-id).* is :block(b) else { crash("body not a block") }
+  require p.stmts.get(b.stmts.get(0).widen[size]) is :lone-expr(e) else { crash("stmt not lone expr") }
+  e
+}
+
+fn main(argc: i32, argv: ptr): i32 {
+  #if k1/test {
+    test()
+  } else {
+    run(std/sys/parse-main-args(argc, argv))
+  }
+}

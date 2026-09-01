@@ -1,0 +1,549 @@
+ns lex
+
+let EOF_CHAR: char = (27: u8).as-char()
+
+let FLAG_WS_PRECEDED: u8 = 0x01
+let FLAG_NEWLINE_PRECEDED: u8 = 0x04
+
+type token-kind = either(u8) {
+  ident,
+  numeric,
+  string-done-dq,
+  string-done-bt,
+  string-open-dq,
+  string-open-bt,
+  char,
+
+  kw-fn, kw-let, kw-mut, kw-and, kw-or, kw-if, kw-else, kw-while, kw-loop,
+  kw-ns, kw-intern, kw-for, kw-in, kw-ability, kw-impl, kw-is, kw-not,
+  kw-builtin, kw-where, kw-context, kw-use, kw-require, kw-defer,
+
+  slash,
+  line-comment,
+
+  open-paren, close-paren,
+  open-bracket, close-bracket,
+  open-brace, close-brace,
+  l-angle, l-angle-l-angle,
+  r-angle, r-angle-r-angle,
+  colon, semicolon,
+  equals, equals-equals, bang-equals,
+  dot, comma, bang, question-mark,
+  pipe, pipe-pipe, amp, amp-amp,
+  percent, back-slash, hash, at, dollar, caret,
+
+  double-quote, single-quote,
+
+  plus, minus, asterisk,
+  less-equal, greater-equal,
+  r-thin-arrow,
+
+  eof,
+}
+
+ns for token-kind {
+  fn eq(self: token-kind, other: token-kind): bool {
+    self.value == other.value
+  }
+
+  fn is-string(self: token-kind): bool {
+    self is {
+      :string-done-dq or :string-done-bt or :string-open-dq or :string-open-bt -> true,
+      _ -> false,
+    }
+  }
+
+  fn string-is-done(self: token-kind): bool {
+    self is {
+      :string-done-dq or :string-done-bt -> true,
+      _ -> false,
+    }
+  }
+
+  fn string-delim-char(self: token-kind): char {
+    self is {
+      :string-done-bt or :string-open-bt -> '`',
+      _ -> '"',
+    }
+  }
+
+  fn repr(self: token-kind): string {
+    self is {
+      :ident -> "<ident>",
+      :numeric -> "<numeric>",
+      :string-done-dq -> "<\"string\">",
+      :string-done-bt -> "<`string`>",
+      :string-open-dq -> "<\"string...>",
+      :string-open-bt -> "<`string...>",
+      :char -> "<char>",
+      :kw-fn -> "fn", :kw-let -> "let", :kw-mut -> "mut", :kw-and -> "and",
+      :kw-or -> "or", :kw-if -> "if", :kw-else -> "else", :kw-while -> "while",
+      :kw-loop -> "loop", :kw-ns -> "ns", :kw-intern -> "intern", :kw-for -> "for",
+      :kw-in -> "in", :kw-ability -> "ability", :kw-impl -> "impl", :kw-is -> "is",
+      :kw-not -> "not", :kw-builtin -> "builtin", :kw-where -> "where",
+      :kw-context -> "context", :kw-use -> "use", :kw-require -> "require",
+      :kw-defer -> "defer",
+      :slash -> "/",
+      :line-comment -> "//",
+      :open-paren -> "(", :close-paren -> ")",
+      :open-bracket -> "[", :close-bracket -> "]",
+      :open-brace -> "{", :close-brace -> "}",
+      :l-angle -> "<", :l-angle-l-angle -> "<<",
+      :r-angle -> ">", :r-angle-r-angle -> ">>",
+      :colon -> ":", :semicolon -> ";",
+      :equals -> "=", :equals-equals -> "==", :bang-equals -> "!=",
+      :dot -> ".", :comma -> ",", :bang -> "!", :question-mark -> "?",
+      :pipe -> "|", :pipe-pipe -> "||", :amp -> "&", :amp-amp -> "&&",
+      :percent -> "%", :back-slash -> "\\", :hash -> "#", :at -> "@",
+      :dollar -> "$", :caret -> "^",
+      :double-quote -> "\"", :single-quote -> "singleq",
+      :plus -> "+", :minus -> "-", :asterisk -> "*",
+      :less-equal -> "<=", :greater-equal -> ">=",
+      :r-thin-arrow -> "->",
+      :eof -> "<EOF>",
+    }
+  }
+}
+
+fn string-kind(is-dq: bool, done: bool): token-kind {
+  if done {
+    if is-dq :string-done-dq else :string-done-bt
+  } else {
+    if is-dq :string-open-dq else :string-open-bt
+  }
+}
+
+fn keyword-kind(text: string): ?token-kind {
+  if text == "fn" :some(:kw-fn)
+  else if text == "let" :some(:kw-let)
+  else if text == "mut" :some(:kw-mut)
+  else if text == "and" :some(:kw-and)
+  else if text == "or" :some(:kw-or)
+  else if text == "if" :some(:kw-if)
+  else if text == "else" :some(:kw-else)
+  else if text == "while" :some(:kw-while)
+  else if text == "loop" :some(:kw-loop)
+  else if text == "ns" :some(:kw-ns)
+  else if text == "intern" :some(:kw-intern)
+  else if text == "for" :some(:kw-for)
+  else if text == "in" :some(:kw-in)
+  else if text == "ability" :some(:kw-ability)
+  else if text == "impl" :some(:kw-impl)
+  else if text == "not" :some(:kw-not)
+  else if text == "is" :some(:kw-is)
+  else if text == "builtin" :some(:kw-builtin)
+  else if text == "where" :some(:kw-where)
+  else if text == "context" :some(:kw-context)
+  else if text == "use" :some(:kw-use)
+  else if text == "require" :some(:kw-require)
+  else if text == "defer" :some(:kw-defer)
+  else if text == "==" :some(:equals-equals)
+  else if text == "!=" :some(:bang-equals)
+  else if text == "<=" :some(:less-equal)
+  else if text == ">=" :some(:greater-equal)
+  else :none
+}
+
+type token = { kind: token-kind, flags: u8, start: u32, len: u32 }
+
+ns for token {
+  fn span(self: token): ast/src-span {
+    .{ start = self.start, len = self.len }
+  }
+
+  fn end(self: token): u32 { self.start + self.len }
+
+  fn is-ws-preceded(self: token): bool {
+    (self.flags & FLAG_WS_PRECEDED) != 0
+  }
+
+  fn is-newline-preceded(self: token): bool {
+    (self.flags & FLAG_NEWLINE_PRECEDED) != 0
+  }
+
+  fn is-kind-nonspaced(self: token, k: token-kind): bool {
+    self.kind.eq(k) and not self.is-ws-preceded()
+  }
+
+}
+
+fn is-ident-char(c: char): bool {
+  let b = c.as-u8()
+  if b < 0x80 {
+    c.is-ascii-letter() or c.is-ascii-digit() or b == '-'.as-u8() or b == '_'.as-u8()
+  } else {
+    b == 0xaa or b == 0xb5 or b == 0xba
+      or (b >= 0xc0 and b != 0xd7 and b != 0xf7)
+      or b == 0xb2 or b == 0xb3 or b == 0xb9 or (b >= 0xbc and b <= 0xbe)
+  }
+}
+
+fn is-numeric-char(c: char): bool {
+  let b = c.as-u8()
+  if b < 0x80 {
+    c.is-ascii-digit()
+  } else {
+    b == 0xb2 or b == 0xb3 or b == 0xb9 or (b >= 0xbc and b <= 0xbe)
+  }
+}
+
+fn is-ident-start(c: char): bool {
+  is-ident-char(c) and c != '-' and not is-numeric-char(c)
+}
+
+fn is-run-space(c: char): bool {
+  let b = c.as-u8()
+  b == 32 or (b >= 9 and b <= 13)
+}
+
+fn is-flag-space(c: char): bool {
+  let b = c.as-u8()
+  b == 32 or (b >= 9 and b <= 13) or b == 0x85 or b == 0xa0
+}
+
+fn shared-escape(c: char): ?u8 {
+  if c == 'n' :some('\n'.as-u8())
+  else if c == '0' :some('\0'.as-u8())
+  else if c == 't' :some('\t'.as-u8())
+  else if c == 'r' :some('\r'.as-u8())
+  else if c == '\\' :some('\\'.as-u8())
+  else if c == '$' :some('$'.as-u8())
+  else :none
+}
+
+fn make-error(message: string, start: u32, len: u32): lex-error {
+  .{ message, span = .{ start, len } }
+}
+
+fn char-escape(c: char): ?u8 {
+  if c == 'n' :some('\n'.as-u8())
+  else if c == '0' :some('\0'.as-u8())
+  else if c == 't' :some('\t'.as-u8())
+  else if c == 'r' :some('\r'.as-u8())
+  else if c == '\'' :some('\''.as-u8())
+  else if c == '\\' :some('\\'.as-u8())
+  else :none
+}
+
+type lex-error = { message: string, span: ast/src-span }
+
+type lex-mode = either { tokens, interp(u32), dq-string, bt-string }
+
+type lexer = {
+  content: string,
+  pos: size,
+  mode-stack: list[lex-mode],
+  trivia: list[ast/src-span],
+}
+
+ns for lexer {
+  fn make(content: string): lexer {
+    let mode-stack = list/empty[lex-mode]()
+    mode-stack.push(:tokens)
+    .{ content, pos = 0, mode-stack, trivia = list/empty() }
+  }
+
+  fn peek(self: *lexer): char {
+    self.peek-at(0)
+  }
+
+  fn peek-at(self: *lexer, i: size): char {
+    let p = self.pos + i
+    if p >= self.content.len() EOF_CHAR else self.content.get(p)
+  }
+
+  fn next-char(self: *mut lexer): char {
+    let c = self.peek()
+    self.pos = self.pos + 1
+    c
+  }
+
+  fn advance(self: *mut lexer) {
+    self.pos = self.pos + 1
+  }
+
+  fn make-token(self: *lexer, kind: token-kind, start: u32, len: u32): token {
+    let s = start.widen[size]
+    let ws = s > 0 and s <= self.content.len() and is-flag-space(self.content.get(s - 1))
+    let nl = false
+    let i = s
+    loop {
+      if i == 0 { nl = true; break }
+      let c = self.content.get(i - 1)
+      if c == '\n' or c == '\r' { nl = true; break }
+      if not is-flag-space(c) { break }
+      i = i - 1
+    }
+    let flags: u8 = 0
+    if ws { flags = flags | FLAG_WS_PRECEDED }
+    if nl { flags = flags | FLAG_NEWLINE_PRECEDED }
+    .{ kind, flags, start, len }
+  }
+
+  fn emit(self: *mut lexer, tokens: *mut list[token], kind: token-kind, n: u32, len: u32): bool {
+    self.pos = self.pos + len.widen[size]
+    tokens.push(self.make-token(kind, n, len))
+    true
+  }
+
+  fn flush-buffer(self: *lexer, end: u32, tok-len: u32, is-number: bool): token {
+    let start = end - tok-len
+    if is-number {
+      return self.make-token(:numeric, start, tok-len)
+    }
+    let text = self.content.slice(start.widen[size], end.widen[size])
+    keyword-kind(text) is {
+      :some k -> self.make-token(k, start, tok-len),
+      :none -> self.make-token(:ident, start, tok-len),
+    }
+  }
+
+  fn top-mode(self: *lexer): lex-mode {
+    self.mode-stack.get(self.mode-stack.len() - 1)
+  }
+
+  fn set-top-mode(self: *mut lexer, m: lex-mode) {
+    self.mode-stack.set(self.mode-stack.len() - 1, m)
+  }
+
+  fn eat-token(self: *mut lexer, tokens: *mut list[token]): result[bool, lex-error] {
+    let tok-len: u32 = 0
+    let is-number = false
+    loop {
+      let c = self.peek()
+      let n = self.pos.trunc[u32]
+      let mode = self.top-mode()
+      if mode is :dq-string or mode is :bt-string {
+        let is-dq = mode is :dq-string
+        let delim: char = if is-dq '"' else '`'
+        if c == EOF_CHAR {
+          return :err(make-error("Encountered EOF, or null byte, inside string", n - tok-len, tok-len + 1))
+        } else if c == '\\' {
+          let nx = self.peek-at(1)
+          if shared-escape(nx) is :some(_) or nx == delim {
+            tok-len = tok-len + 2
+            self.advance()
+            self.advance()
+          } else {
+            tok-len = tok-len + 1
+            self.advance()
+          }
+        } else if c == '$' and self.peek-at(1) == '{' {
+          self.mode-stack.push(:interp(1))
+          tokens.push(self.make-token(string-kind(is-dq, false), n - tok-len, tok-len))
+          self.advance()
+          self.advance()
+          tokens.push(self.make-token(:open-brace, n, 2))
+          return :ok(true)
+        } else if c == '$' and is-ident-start(self.peek-at(1)) {
+          tokens.push(self.make-token(string-kind(is-dq, false), n - tok-len, tok-len))
+          self.advance()
+          let ident-len: u32 = 0
+          while is-ident-char(self.peek()) {
+            if self.peek() == '-' and not is-ident-char(self.peek-at(1)) { break }
+            ident-len = ident-len + 1
+            self.advance()
+          }
+          tokens.push(self.make-token(:ident, n + 1, ident-len))
+          return :ok(true)
+        } else if c == delim {
+          tok-len = tok-len + 1
+          self.advance()
+          self.mode-stack.remove(self.mode-stack.len() - 1)
+          tokens.push(self.make-token(string-kind(is-dq, true), n + 1 - tok-len, tok-len))
+          return :ok(true)
+        } else if c == '\n' and is-dq {
+          let string-start-quote = n - tok-len - 1
+          return :err(make-error("Encountered newline inside string; Try a backtick string (`) instead", string-start-quote, tok-len + 1))
+        } else {
+          tok-len = tok-len + 1
+          self.advance()
+        }
+        continue
+      }
+      let next = self.peek-at(1)
+      if tok-len == 0 {
+        if c == EOF_CHAR {
+          return :ok(false)
+        } else if c == '"' {
+          self.mode-stack.push(:dq-string)
+          tok-len = 1
+          self.advance()
+        } else if c == '`' {
+          self.mode-stack.push(:bt-string)
+          tok-len = 1
+          self.advance()
+        } else if c == '(' {
+          return :ok(self.emit(tokens, :open-paren, n, 1))
+        } else if c == ')' {
+          return :ok(self.emit(tokens, :close-paren, n, 1))
+        } else if c == '[' {
+          return :ok(self.emit(tokens, :open-bracket, n, 1))
+        } else if c == ']' {
+          return :ok(self.emit(tokens, :close-bracket, n, 1))
+        } else if c == '{' {
+          if self.top-mode() is :interp depth {
+            self.set-top-mode(:interp(depth + 1))
+          }
+          return :ok(self.emit(tokens, :open-brace, n, 1))
+        } else if c == '}' {
+          if self.top-mode() is :interp depth {
+            if depth == 1 {
+              self.mode-stack.remove(self.mode-stack.len() - 1)
+            } else {
+              self.set-top-mode(:interp(depth - 1))
+            }
+          }
+          return :ok(self.emit(tokens, :close-brace, n, 1))
+        } else if c == '<' {
+          if next == '=' { return :ok(self.emit(tokens, :less-equal, n, 2)) }
+          if next == '<' { return :ok(self.emit(tokens, :l-angle-l-angle, n, 2)) }
+          return :ok(self.emit(tokens, :l-angle, n, 1))
+        } else if c == '>' {
+          if next == '=' { return :ok(self.emit(tokens, :greater-equal, n, 2)) }
+          if next == '>' { return :ok(self.emit(tokens, :r-angle-r-angle, n, 2)) }
+          return :ok(self.emit(tokens, :r-angle, n, 1))
+        } else if c == ':' {
+          return :ok(self.emit(tokens, :colon, n, 1))
+        } else if c == ';' {
+          return :ok(self.emit(tokens, :semicolon, n, 1))
+        } else if c == '=' {
+          if next == '=' { return :ok(self.emit(tokens, :equals-equals, n, 2)) }
+          return :ok(self.emit(tokens, :equals, n, 1))
+        } else if c == '.' {
+          return :ok(self.emit(tokens, :dot, n, 1))
+        } else if c == ',' {
+          return :ok(self.emit(tokens, :comma, n, 1))
+        } else if c == '\'' {
+          self.advance()
+          let c2 = self.next-char()
+          if c2 == '\\' {
+            self.advance()
+            let q = self.next-char()
+            if q != '\'' {
+              return :err(make-error("Expected closing ' for char literal", n + 3, 1))
+            }
+            tokens.push(self.make-token(:char, n, 4))
+            return :ok(true)
+          } else {
+            let q = self.next-char()
+            if q != '\'' {
+              return :err(make-error("Expected closing ' for char literal", n + 2, 1))
+            }
+            tokens.push(self.make-token(:char, n, 3))
+            return :ok(true)
+          }
+        } else if c == '+' {
+          return :ok(self.emit(tokens, :plus, n, 1))
+        } else if c == '-' {
+          if next == '>' { return :ok(self.emit(tokens, :r-thin-arrow, n, 2)) }
+          return :ok(self.emit(tokens, :minus, n, 1))
+        } else if c == '*' {
+          return :ok(self.emit(tokens, :asterisk, n, 1))
+        } else if c == '/' {
+          if next == '/' {
+            self.advance()
+            self.advance()
+            let nl: ?size = :none
+            let i = self.pos
+            while i < self.content.len() {
+              if self.content.get(i) == '\n' { nl = :some(i); break }
+              i = i + 1
+            }
+            nl is {
+              :some a -> {
+                if a > self.pos and self.content.get(a - 1) == '\r' {
+                  self.pos = a
+                } else {
+                  self.pos = a + 1
+                }
+              },
+              :none -> { self.pos = self.content.len() + 1 }
+            }
+            self.trivia.push(.{ start = n, len = self.pos.trunc[u32] - n })
+            return :ok(true)
+          }
+          return :ok(self.emit(tokens, :slash, n, 1))
+        } else if c == '!' {
+          if next == '=' { return :ok(self.emit(tokens, :bang-equals, n, 2)) }
+          return :ok(self.emit(tokens, :bang, n, 1))
+        } else if c == '?' {
+          return :ok(self.emit(tokens, :question-mark, n, 1))
+        } else if c == '|' {
+          if next == '|' { return :ok(self.emit(tokens, :pipe-pipe, n, 2)) }
+          return :ok(self.emit(tokens, :pipe, n, 1))
+        } else if c == '&' {
+          if next == '&' { return :ok(self.emit(tokens, :amp-amp, n, 2)) }
+          return :ok(self.emit(tokens, :amp, n, 1))
+        } else if c == '%' {
+          return :ok(self.emit(tokens, :percent, n, 1))
+        } else if c == '\\' {
+          return :ok(self.emit(tokens, :back-slash, n, 1))
+        } else if c == '#' {
+          return :ok(self.emit(tokens, :hash, n, 1))
+        } else if c == '@' {
+          return :ok(self.emit(tokens, :at, n, 1))
+        } else if c == '$' {
+          return :ok(self.emit(tokens, :dollar, n, 1))
+        } else if c == '^' {
+          return :ok(self.emit(tokens, :caret, n, 1))
+        } else if is-run-space(c) {
+          self.advance()
+          while is-run-space(self.peek()) { self.advance() }
+        } else if is-ident-char(c) {
+          if is-numeric-char(c) { is-number = true }
+          tok-len = 1
+          self.advance()
+        } else {
+          return :err(make-error("Unexpected character ${c.to-string()}", n, 1))
+        }
+      } else {
+        if c == EOF_CHAR {
+          tokens.push(self.flush-buffer(n, tok-len, is-number))
+          return :ok(true)
+        } else if c == '.' {
+          if is-number {
+            if is-numeric-char(next) {
+              tok-len = tok-len + 1
+              self.advance()
+            } else {
+              tokens.push(self.flush-buffer(n, tok-len, is-number))
+              return :ok(true)
+            }
+          } else {
+            tokens.push(self.flush-buffer(n, tok-len, is-number))
+            tokens.push(self.make-token(:dot, n, 1))
+            self.advance()
+            return :ok(true)
+          }
+        } else if is-run-space(c) {
+          tokens.push(self.flush-buffer(n, tok-len, is-number))
+          self.advance()
+          return :ok(true)
+        } else if is-ident-char(c) {
+          tok-len = tok-len + 1
+          self.advance()
+          while is-ident-char(self.peek()) {
+            tok-len = tok-len + 1
+            self.advance()
+          }
+        } else {
+          tokens.push(self.flush-buffer(n, tok-len, is-number))
+          return :ok(true)
+        }
+      }
+    }
+  }
+
+  fn run(self: *mut lexer, tokens: *mut list[token]): ?lex-error {
+    let err: ?lex-error = :none
+    loop {
+      self.eat-token(tokens) is {
+        :ok more -> if not more { break },
+        :err e -> { err = :some(e); break }
+      }
+    }
+    tokens.push(.{ kind = :eof, flags = FLAG_WS_PRECEDED | FLAG_NEWLINE_PRECEDED, start = 0, len = 0 })
+    err
+  }
+}

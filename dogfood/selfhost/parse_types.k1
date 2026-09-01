@@ -1,0 +1,567 @@
+ns parse
+
+ns for parser {
+  fn parse-literal-atom(self: *mut parser): result[?ast/expr-id, perror] {
+    let first = self.peek()
+    let second = self.peek-at(1)
+    if first.kind is :char {
+      self.advance()
+      let text = self.tok-chars(first)
+      if text.get(1) == '\\' {
+        let esc = text.get(2)
+        lex/char-escape(esc) is {
+          :some out -> :ok(:some(self.add-expr(:literal(:char-lit(.{ value = out, span = first.span() }))))),
+          :none -> :err(make-error("Invalid escaped char following escape sequence: ${esc.to-string()}", first)),
+        }
+      } else {
+        :ok(:some(self.add-expr(:literal(:char-lit(.{ value = text.get(1).as-u8(), span = first.span() })))))
+      }
+    } else if first.kind.is-string() {
+      :ok(:some(self.expect-string().try))
+    } else if first.kind is :minus and second.kind is :numeric and not second.is-ws-preceded() {
+      self.advance-n(2)
+      let sp = first.span().thru(second.span())
+      :ok(:some(self.add-expr(:literal(:numeric(.{ span = sp, text-span = sp })))))
+    } else if first.kind is :numeric {
+      self.advance()
+      :ok(:some(self.add-expr(:literal(:numeric(.{ span = first.span(), text-span = first.span() })))))
+    } else if first.kind is :ident {
+      let text = self.tok-chars(first)
+      if text == "true" {
+        self.advance()
+        :ok(:some(self.add-expr(:literal(:bool-lit(.{ value = true, span = first.span() })))))
+      } else if text == "false" {
+        self.advance()
+        :ok(:some(self.add-expr(:literal(:bool-lit(.{ value = false, span = first.span() })))))
+      } else {
+        :ok(:none)
+      }
+    } else {
+      :ok(:none)
+    }
+  }
+
+  fn expect-string(self: *mut parser): result[ast/expr-id, perror] {
+    let first = self.peek()
+    let pending = list/empty[pending-part]()
+    let first-segment = true
+    loop {
+      let current = self.next-tok()
+      if current.kind is :open-brace {
+        if self.maybe-consume(:close-brace) is :some close {
+          let sp = current.span().thru(close.span())
+          pending.push(:part(:hole(.{ fmt = .{ precision = 0, pretty = false }, span = sp })))
+        } else {
+          let expr-id = self.expect-expression().try
+          pending.push(:part(:expr-part(.{ expr = expr-id, fmt = .{ precision = 0, pretty = false } })))
+          let _ = self.expect-kind(:close-brace).try
+        }
+      } else if current.kind is :ident {
+        let sid = self.make-ident(current)
+        let var-id = self.add-expr(:variable(.{ name = ast/qident/naked(sid, current.span()), span = current.span() }))
+        pending.push(:part(:expr-part(.{ expr = var-id, fmt = .{ precision = 0, pretty = false } })))
+      } else if current.kind.is-string() {
+        pending.push(:raw(.{ tok = current, starts-fresh = first-segment }))
+        first-segment = false
+        if current.kind.string-is-done() {
+          let next = self.peek()
+          if next.kind.is-string() and not next.is-newline-preceded() {
+            first-segment = true
+          } else {
+            break
+          }
+        }
+      } else {
+        return :err(make-error("Unexpected token kind in string sequence", current))
+      }
+    }
+
+    let first-text = self.tok-chars(first)
+    let is-block = first-text.len() > 1 and first-text.get(1) == '\n'
+    let strip: u32 = 0
+    let drop-trailing-ws-line = false
+    if is-block {
+      let min-indent: ?u32 = :none
+      let at-line-start = false
+      let ws-count: u32 = 0
+      for p in pending {
+        p is {
+          :part _ -> {
+            if at-line-start {
+              min-indent = :some(min-of(min-indent, ws-count))
+              at-line-start = false
+            }
+          },
+          :raw r -> {
+            let done = r.tok.kind.string-is-done()
+            let delim = r.tok.kind.string-delim-char()
+            let text = self.tok-chars(r.tok)
+            let i: size = if r.starts-fresh 1 else 0
+            while i < text.len() {
+              let ch = text.get(i)
+              if ch == '\\' {
+                i = i + 2
+                if at-line-start {
+                  min-indent = :some(min-of(min-indent, ws-count))
+                  at-line-start = false
+                }
+              } else if ch == delim and done and i == text.len() - 1 {
+                i = i + 1
+              } else if ch == '\n' {
+                at-line-start = true
+                ws-count = 0
+                i = i + 1
+              } else if at-line-start and (ch == ' ' or ch == '\t') {
+                ws-count = ws-count + 1
+                i = i + 1
+              } else if at-line-start {
+                min-indent = :some(min-of(min-indent, ws-count))
+                at-line-start = false
+                i = i + 1
+              } else {
+                i = i + 1
+              }
+            }
+          }
+        }
+      }
+      if at-line-start {
+        min-indent = :some(min-of(min-indent, ws-count))
+        drop-trailing-ws-line = true
+      }
+      strip = min-indent ? 0
+    }
+
+    let parts = list/empty[ast/interp-part]()
+    let skip-ws: u32 = 0
+    let drop-first-newline = is-block
+    let idx: size = 0
+    for p in pending {
+      p is {
+        :part part -> {
+          skip-ws = 0
+          parts.push(part)
+        },
+        :raw r -> {
+          let done = r.tok.kind.string-is-done()
+          let delim = r.tok.kind.string-delim-char()
+          let text = self.tok-chars(r.tok)
+          let buf = list/empty[char]()
+          let i: size = if r.starts-fresh 1 else 0
+          while i < text.len() {
+            let ch = text.get(i)
+            if ch == '\\' {
+              skip-ws = 0
+              if i + 1 >= text.len() {
+                return :err(make-error("String ended with '\\'", first))
+              }
+              let nx = text.get(i + 1)
+              lex/shared-escape(nx) is {
+                :some out -> buf.push(out.as-char()),
+                :none -> {
+                  if nx == delim {
+                    buf.push(delim)
+                  } else {
+                    buf.push('\\')
+                    buf.push(nx)
+                  }
+                }
+              }
+              i = i + 2
+            } else if ch == delim and i == text.len() - 1 and done {
+              i = i + 1
+            } else if ch == '\n' {
+              if drop-first-newline { drop-first-newline = false } else { buf.push('\n') }
+              skip-ws = strip
+              i = i + 1
+            } else if skip-ws > 0 and (ch == ' ' or ch == '\t') {
+              skip-ws = skip-ws - 1
+              i = i + 1
+            } else {
+              skip-ws = 0
+              buf.push(ch)
+              i = i + 1
+            }
+          }
+          if drop-trailing-ws-line and idx == pending.len() - 1 {
+            while buf.len() > 0 and (buf.get(buf.len() - 1) == ' ' or buf.get(buf.len() - 1) == '\t') {
+              buf.remove(buf.len() - 1)
+            }
+          }
+          let sid = self.program.intern-string(string/wrap-list(buf))
+          parts.push(:str-part(.{ string = sid, span = r.tok.span() }))
+        }
+      }
+      idx = idx + 1
+    }
+
+    if parts.len() == 1 and parts.get(0) is :str-part sp {
+      :ok(self.add-expr(:literal(:string-lit(.{ string = sp.string, span = first.span() }))))
+    } else {
+      let span = self.extend-tok-to-here(first)
+      :ok(self.add-expr(:interp-string(.{ parts, span })))
+    }
+  }
+
+  fn expect-parse-pattern(self: *mut parser): result[ast/pattern-id, perror] {
+    let pattern-id = self.expect-pattern-base().try
+    loop {
+      if self.maybe-consume(:asterisk) is :some asterisk {
+        let inner-span = self.program.get-pattern-span(pattern-id)
+        let span = inner-span.thru(asterisk.span())
+        pattern-id = self.program.add-pattern(:reference(.{ inner = pattern-id, span }))
+      } else {
+        break
+      }
+    }
+    :ok(pattern-id)
+  }
+
+  fn expect-pattern-base(self: *mut parser): result[ast/pattern-id, perror] {
+    let first = self.peek()
+    let second = self.peek-at(1)
+    if self.parse-literal-atom().try is :some literal-id {
+      return :ok(self.program.add-pattern(:literal(literal-id)))
+    }
+    if first.kind is :dot {
+      let dot-token = self.next-tok()
+      let _ = self.expect-kind(:open-brace).try
+      let fields = list/empty[ast/struct-pattern-field]()
+      while not self.peek().kind.eq(:close-brace) {
+        let ident-token = self.expect-kind(:ident).try
+        let ident = self.make-ident(ident-token)
+        let pattern-id = if self.maybe-consume(:equals) is :some _ {
+          self.expect-parse-pattern().try
+        } else {
+          self.program.add-pattern(:variable(.{ name = ident, span = ident-token.span() }))
+        }
+        fields.push(.{ name = ident, pattern = pattern-id })
+        let next = self.peek()
+        if next.kind is :comma {
+          self.advance()
+        } else if not next.kind.eq(:close-brace) {
+          return :err(error-expected("comma or close brace", next))
+        }
+      }
+      let end = self.expect-kind(:close-brace).try
+      let span = dot-token.span().thru(end.span())
+      return :ok(self.program.add-pattern(:struct-pat(.{ fields, span })))
+    }
+    if first.kind is :colon or (first.kind is :ident and second.kind is :colon) {
+      let sum-name: ?ast/string-id = if first.kind is :ident {
+        self.advance()
+        let sn = self.make-ident(first)
+        let _ = self.expect-kind(:colon).try
+        :some(sn)
+      } else {
+        self.advance()
+        :none
+      }
+      let variant-name-token = self.expect-kind(:ident).try
+      let variant-name = self.make-ident(variant-name-token)
+      let next = self.peek()
+      let payload: ?ast/pattern-id = :none
+      let span = first.span().thru(variant-name-token.span())
+      if (not next.is-newline-preceded()) and next.kind is :open-paren {
+        self.advance()
+        let pid = self.expect-parse-pattern().try
+        let close = self.expect-kind(:close-paren).try
+        payload = :some(pid)
+        span = first.span().thru(close.span())
+      } else if (not next.is-newline-preceded()) and self.peek-starts-quiet-payload() {
+        let pid = self.expect-pattern-base().try
+        payload = :some(pid)
+        span = first.span().thru(self.program.get-pattern-span(pid))
+      }
+      return :ok(self.program.add-pattern(:sum-pat(.{ sum-name, variant-name, payload, span })))
+    }
+    if first.kind is :ident {
+      let it = self.expect-ident-lower().try
+      let ident-str = self.program.ident(it.name)
+      if ident-str == "_" {
+        return :ok(self.program.add-pattern(:wildcard(it.tok.span())))
+      }
+      if ident-str == "type" {
+        let _ = self.expect-kind(:open-bracket).try
+        let type-expr = self.expect-type-expression().try
+        let _ = self.expect-kind(:close-bracket).try
+        let _ = self.expect-kind(:open-paren).try
+        let inner = self.expect-parse-pattern().try
+        let _ = self.expect-kind(:close-paren).try
+        let span = self.extend-tok-to-here(it.tok)
+        return :ok(self.program.add-pattern(:type-pat(.{ inner, type-expr, span })))
+      }
+      return :ok(self.program.add-pattern(:variable(.{ name = it.name, span = it.tok.span() })))
+    }
+    :err(error-expected("pattern (literal, :variant, .{ struct }, binding, or _)", self.peek()))
+  }
+
+  fn peek-starts-quiet-payload(self: *parser): bool {
+    let one = self.peek()
+    let two = self.peek-at(1)
+    if one.kind is :ident or one.kind is :numeric or one.kind is :char or one.kind is :open-bracket {
+      return true
+    }
+    if one.kind is :dot {
+      return two.is-kind-nonspaced(:open-brace) and not self.peek-at(2).kind.eq(:close-brace)
+    }
+    if one.kind is :colon {
+      return two.is-kind-nonspaced(:ident)
+    }
+    if one.kind is :minus {
+      return two.is-kind-nonspaced(:numeric)
+    }
+    one.kind.is-string()
+  }
+
+  fn expect-namespaced-ident(self: *mut parser): result[ast/qident, perror] {
+    let first = self.peek()
+    let second = self.peek-at(1)
+    let path = list/empty[ast/ident-spanned]()
+    if second.is-kind-nonspaced(:slash) {
+      path.push(self.make-ident-spanned(first))
+      self.advance-n(2)
+      loop {
+        let a = self.peek()
+        let b = self.peek-at(1)
+        if a.kind is :ident and b.kind is :slash {
+          self.advance-n(2)
+          path.push(self.make-ident-spanned(a))
+        } else {
+          break
+        }
+      }
+    }
+    let name-token = self.expect-kind(:ident).try
+    :ok(.{ path, name = self.make-ident(name-token), name-span = name-token.span() })
+  }
+
+  fn expect-struct-type-field(self: *mut parser): result[ast/struct-type-field, perror] {
+    let it = self.expect-ident().try
+    let _ = self.expect-kind(:colon).try
+    let type-expr = self.expect-type-expression().try
+    :ok(.{ name = it.name, name-span = it.tok.span(), type-expr })
+  }
+
+  fn expect-type-expression(self: *mut parser): result[ast/type-expr-id, perror] {
+    let tok = self.peek()
+    self.parse-type-expression().try is {
+      :some id -> :ok(id),
+      :none -> :err(make-error("Expected type expression", tok)),
+    }
+  }
+
+  fn parse-type-expression(self: *mut parser): result[?ast/type-expr-id, perror] {
+    let base = self.parse-base-type-expression().try
+    if base is :none { return :ok(:none) }
+    let result-id = base.!
+    loop {
+      let next = self.peek()
+      if next.is-kind-nonspaced(:dot) or next.is-kind-nonspaced(:colon) {
+        self.advance()
+        let it = self.expect-ident().try
+        let result-span = self.program.get-type-expr-span(result-id)
+        let span = result-span.thru(it.tok.span())
+        let kind: ast/member-access-kind = if next.kind is :dot { :dot } else { :colon }
+        result-id = self.program.add-type-expr(:member-access(.{ base = result-id, kind, member-name = it.name, span }))
+      } else {
+        break
+      }
+    }
+    :ok(:some(result-id))
+  }
+
+  fn parse-base-type-expression(self: *mut parser): result[?ast/type-expr-id, perror] {
+    let first = self.peek()
+    if first.kind is :open-paren {
+      self.advance()
+      let expr = self.expect-type-expression().try
+      let _ = self.expect-kind(:close-paren).try
+      return :ok(:some(expr))
+    }
+    if first.kind is :asterisk {
+      self.advance()
+      let kind: ast/reference-kind = if self.maybe-consume(:kw-mut) is :some _ { :mut-ref } else :read
+      let base = self.expect-type-expression().try
+      let span = self.extend-tok-to-here(first)
+      return :ok(:some(self.program.add-type-expr(:reference(.{ base, kind, span }))))
+    }
+    let first-chars = if first.kind is :ident { self.tok-chars(first) } else ""
+    if first.kind is :open-brace or first-chars == "union" or first-chars == "packed" {
+      let kind: ast/record-kind = if first.kind is :open-brace { :struct }
+        else if first-chars == "union" :union
+        else :packed
+      self.advance()
+      if not (kind is :struct) {
+        let _ = self.expect-kind(:open-brace).try
+      }
+      let fields = list/empty[ast/struct-type-field]()
+      self.eat-delimited("Struct fields", fields.&, :comma, :close-brace, fn(p: *mut parser) p.expect-struct-type-field()).try
+      let span = self.extend-tok-to-here(first)
+      return :ok(:some(self.program.add-type-expr(:struct-type(.{ fields, span, record-kind = kind }))))
+    }
+    if first.kind is :question-mark {
+      self.advance()
+      let base = self.expect-type-expression().try
+      let span = self.extend-tok-to-here(first)
+      return :ok(:some(self.program.add-type-expr(:optional-type(.{ base, span }))))
+    }
+    if first.kind is :kw-fn {
+      return :ok(:some(self.expect-function-type().try))
+    }
+    if first.kind is :kw-builtin {
+      self.advance()
+      return :ok(:some(self.program.add-type-expr(:builtin-type(first.span()))))
+    }
+    if first.kind is :hash {
+      self.advance()
+      let _ = self.expect-ident-chars("type").try
+      let body = self.expect-expression().try
+      let span = self.extend-tok-to-here(first)
+      return :ok(:some(self.program.add-type-expr(:exec-static(.{ body-expr = body, span }))))
+    }
+    if self.parse-literal-atom().try is :some literal-id {
+      self.program.get-expr(literal-id).* is {
+        :literal l -> return :ok(:some(self.program.add-type-expr(:static-literal(l)))),
+        _ -> return :err(make-error("This literal can't be used as a type", first)),
+      }
+    }
+    if first.kind is :ident {
+      if first-chars == "either" {
+        let sum = self.expect-sum-type-expression().try
+        return :ok(:some(self.program.add-type-expr(:sum-type(sum))))
+      }
+      if first-chars == "type-of" {
+        self.advance()
+        let _ = self.expect-kind(:open-paren).try
+        let target = self.expect-expression().try
+        let end = self.expect-kind(:close-paren).try
+        let span = first.span().thru(end.span())
+        return :ok(:some(self.program.add-type-expr(:type-of(.{ target-expr = target, span }))))
+      }
+      if first-chars == "static" {
+        self.advance()
+        let inner = self.expect-type-expression().try
+        let span = self.extend-tok-to-here(first)
+        return :ok(:some(self.program.add-type-expr(:static-type(.{ inner, span }))))
+      }
+      if first-chars == "some" {
+        self.advance()
+        let inner = self.expect-type-expression().try
+        let span = self.extend-tok-to-here(first)
+        return :ok(:some(self.program.add-type-expr(:some-quant(.{ inner, span }))))
+      }
+      let base-name = self.expect-namespaced-ident().try
+      if base-name.path.is-empty() and self.program.ident(base-name.name) == "array" {
+        let _ = self.expect-kind(:open-bracket).try
+        let element-type = self.expect-type-expression().try
+        let _ = self.expect-kind(:comma).try
+        let size-expr = self.expect-type-expression().try
+        let end-bracket = self.expect-kind(:close-bracket).try
+        let span = first.span().thru(end-bracket.span())
+        return :ok(:some(self.program.add-type-expr(:array-type(.{ element-type, size-expr, span }))))
+      }
+      let bracketed = self.parse-bracketed-type-args().try
+      let span = first.span().thru(bracketed.span)
+      return :ok(:some(self.program.add-type-expr(:type-application(.{ name = base-name, args = bracketed.args, span }))))
+    }
+    :ok(:none)
+  }
+
+  fn parse-bracketed-type-args(self: *mut parser): result[{ args: list[ast/type-arg], span: ast/src-span }, perror] {
+    require self.maybe-consume(:open-bracket) is :some open-bracket else {
+      let back = self.peek-back()
+      return :ok(.{ args = list/empty(), span = back.span() })
+    }
+    let args = list/empty[ast/type-arg]()
+    self.eat-delimited("Type Arguments", args.&, :comma, :close-bracket, fn(p: *mut parser) p.expect-type-arg()).try
+    let span = self.extend-tok-to-here(open-bracket)
+    :ok(.{ args, span })
+  }
+
+  fn expect-type-arg(self: *mut parser): result[ast/type-arg, perror] {
+    let one = self.peek()
+    let two = self.peek-at(1)
+    let name: ?ast/string-id = if one.kind is :ident and two.kind is :equals {
+      let it = self.expect-ident().try
+      let _ = self.expect-kind(:equals).try
+      :some(it.name)
+    } else :none
+    let peeked = self.peek()
+    let type-expr: ?ast/type-expr-id = if peeked.kind is :ident and self.tok-chars(peeked) == "_" {
+      self.advance()
+      :none
+    } else {
+      :some(self.expect-type-expression().try)
+    }
+    let span = self.extend-tok-to-here(one)
+    :ok(.{ name, type-expr, span })
+  }
+
+  fn expect-function-type(self: *mut parser): result[ast/type-expr-id, perror] {
+    let start = self.expect-kind(:kw-fn).try
+    let params = list/empty[ast/type-expr-id]()
+    let has-open-paren = self.maybe-consume(:open-paren) is :some _
+    let no-params = has-open-paren and self.peek().kind is :close-paren
+    if no-params {
+      self.advance()
+    } else {
+      loop {
+        let one = self.peek()
+        let two = self.peek-at(1)
+        let three = self.peek-at(2)
+        if one.kind is :ident and two.is-kind-nonspaced(:colon) and three.is-ws-preceded() {
+          self.advance-n(2)
+        }
+        let expr = self.expect-type-expression().try
+        params.push(expr)
+        let hit-end = if has-open-paren self.peek().kind is :close-paren else self.peek().kind is :r-thin-arrow
+        if hit-end {
+          self.advance()
+          break
+        }
+        let _ = self.expect-kind(:comma).try
+      }
+    }
+    if has-open-paren {
+      let _ = self.expect-kind(:r-thin-arrow).try
+    }
+    let return-type = self.expect-type-expression().try
+    let span = start.span().thru(self.program.get-type-expr-span(return-type))
+    :ok(self.program.add-type-expr(:function-type(.{ params, return-type, span })))
+  }
+
+  fn expect-sum-type-expression(self: *mut parser): result[ast/sum-type, perror] {
+    let keyword = self.expect-ident-chars("either").try
+    let tag-type: ?ast/type-expr-id = if self.maybe-consume-no-ws(:open-paren) is :some _ {
+      let t = self.expect-type-expression().try
+      let _ = self.expect-kind(:close-paren).try
+      :some(t)
+    } else :none
+    let _ = self.expect-kind(:open-brace).try
+    let variants = list/empty[ast/sum-variant]()
+    self.eat-delimited("either members", variants.&, :comma, :close-brace, fn(p: *mut parser) p.expect-sum-variant()).try
+    let span = self.extend-tok-to-here(keyword.tok)
+    :ok(.{ variants, tag-type, span })
+  }
+
+  fn expect-sum-variant(self: *mut parser): result[ast/sum-variant, perror] {
+    let it = self.expect-ident().try
+    let payload: ?ast/type-expr-id = if self.maybe-consume(:open-paren) is :some _ {
+      let p = self.expect-type-expression().try
+      let _ = self.expect-kind(:close-paren).try
+      :some(p)
+    } else :none
+    let explicit-value: ?ast/numeric-lit = if self.maybe-consume(:equals) is :some _ {
+      let lit = self.parse-literal-atom().try
+      require lit is :some lit-id else {
+        return :err(make-error("Expected number after equals for member value", self.peek()))
+      }
+      self.program.get-expr(lit-id).* is {
+        :literal(:numeric(num)) -> :some(num),
+        _ -> return :err(make-error("Expected numeric literal after equals for member value", self.peek())),
+      }
+    } else :none
+    :ok(.{ tag-name = it.name, payload, explicit-value, name-span = it.tok.span() })
+  }
+}

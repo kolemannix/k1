@@ -1,0 +1,718 @@
+ns parse
+
+ns for parser {
+  fn expect-statement(self: *mut parser): result[ast/stmt-id, perror] {
+    let tok = self.peek()
+    self.parse-statement().try is {
+      :some s -> :ok(s),
+      :none -> :err(make-error("Expected statement", tok)),
+    }
+  }
+
+  fn parse-statement(self: *mut parser): result[?ast/stmt-id, perror] {
+    if self.peek().kind is :kw-use {
+      let use-id = self.expect-use().try
+      return :ok(:some(self.program.add-stmt(:use-stmt(use-id))))
+    }
+    if self.parse-let().try is :some ls {
+      return :ok(:some(self.program.add-stmt(:let-stmt(ls))))
+    }
+    if self.parse-require().try is :some rs {
+      return :ok(:some(self.program.add-stmt(:require-stmt(rs))))
+    }
+    if self.parse-defer().try is :some ds {
+      return :ok(:some(self.program.add-stmt(:defer-stmt(ds))))
+    }
+    let expr-opt = self.parse-expression().try
+    require expr-opt is :some expr else { return :ok(:none) }
+    if self.peek().kind is :equals {
+      let assgn = self.expect-assignment(expr).try
+      return :ok(:some(self.program.add-stmt(:assign(assgn))))
+    }
+    :ok(:some(self.program.add-stmt(:lone-expr(expr))))
+  }
+
+  fn expect-assignment(self: *mut parser, lhs: ast/expr-id): result[ast/assign, perror] {
+    let _ = self.expect-kind(:equals).try
+    let rhs = self.expect-expression().try
+    let span = self.expr-span(lhs).thru(self.expr-span(rhs))
+    :ok(.{ lhs, rhs, span })
+  }
+
+  fn parse-let(self: *mut parser): result[?ast/let-stmt, perror] {
+    require self.maybe-consume(:kw-let) is :some _ else { return :ok(:none) }
+    let flags: u8 = 0
+    let context-abilities = list/empty[ast/ability-expr]()
+    if self.maybe-consume(:open-paren) is :some _ {
+      loop {
+        let p = self.peek()
+        if p.kind is :kw-context {
+          self.advance()
+          flags = flags | ast/LET_FLAG_CONTEXT
+          if self.peek().kind is :open-paren {
+            self.advance()
+            let _ = self.expect-kind(:kw-impl).try
+            self.eat-delimited("Context abilities", context-abilities.&, :comma, :close-paren, fn(p2: *mut parser) p2.expect-ability-expr()).try
+          }
+        } else if p.kind is :ident and self.tok-chars(p) == "returned" {
+          self.advance()
+          flags = flags | ast/LET_FLAG_RETURNED
+        } else {
+          return :err(error-expected("let modifier: context or returned", p))
+        }
+        if self.maybe-consume(:comma) is :none { break }
+      }
+      let _ = self.expect-kind(:close-paren).try
+    }
+    let name-token = self.expect-kind(:ident).try
+    let typ: ?ast/type-expr-id = if self.maybe-consume(:colon) is :some _ {
+      self.parse-type-expression().try
+    } else :none
+    let _ = self.expect-kind(:equals).try
+    let value: ?ast/expr-id = if self.maybe-consume-ident-chars("uninit") is :some _ {
+      :none
+    } else {
+      :some(self.expect-expression().try)
+    }
+    :ok(:some(.{
+      name = self.make-ident(name-token),
+      type-expr = typ,
+      value,
+      context-abilities,
+      flags,
+      span = name-token.span(),
+    }))
+  }
+
+  fn parse-require(self: *mut parser): result[?ast/require-stmt, perror] {
+    require self.maybe-consume(:kw-require) is :some keyword else { return :ok(:none) }
+    let condition = self.expect-expression().try
+    let else-body: ?ast/expr-id = if self.maybe-consume(:kw-else) is :some _ {
+      :some(self.expect-expression().try)
+    } else :none
+    let span = self.extend-tok-to-here(keyword)
+    :ok(:some(.{ condition, else-body, span }))
+  }
+
+  fn parse-defer(self: *mut parser): result[?ast/defer-stmt, perror] {
+    require self.maybe-consume(:kw-defer) is :some keyword else { return :ok(:none) }
+    let expr = self.expect-expression().try
+    let span = self.extend-tok-to-here(keyword)
+    :ok(:some(.{ expr, span }))
+  }
+
+  fn expect-use(self: *mut parser): result[ast/use-id, perror] {
+    let use-token = self.expect-kind(:kw-use).try
+    let exposed = false
+    if self.maybe-consume(:open-paren) is :some _ {
+      let p = self.peek()
+      if p.kind is :ident and self.tok-chars(p) == "expose" {
+        self.advance()
+        exposed = true
+      } else {
+        return :err(error-expected("use modifier: expose", p))
+      }
+      let _ = self.expect-kind(:close-paren).try
+    }
+    let target = self.expect-namespaced-ident().try
+    let next = self.peek()
+    let alias: ?ast/string-id = if next.kind is :ident and self.tok-chars(next) == "as" {
+      self.advance()
+      let it = self.expect-ident().try
+      :some(it.name)
+    } else :none
+    let span = self.extend-tok-to-here(use-token)
+    :ok(self.program.add-use(.{ target, alias, exposed, span }))
+  }
+
+  fn parse-type-constraints(self: *mut parser): result[list[ast/type-constraint-expr], perror] {
+    let constraints = list/empty[ast/type-constraint-expr]()
+    if self.maybe-consume(:colon) is :some _ {
+      loop {
+        constraints.push(self.expect-type-constraint-expr().try)
+        if self.peek().kind is :kw-and { self.advance() } else { break }
+      }
+    }
+    :ok(constraints)
+  }
+
+  fn expect-type-param(self: *mut parser): result[ast/type-param, perror] {
+    let name-token = self.expect-kind(:ident).try
+    let name = self.make-ident(name-token)
+    let constraints = self.parse-type-constraints().try
+    let span = self.extend-tok-to-here(name-token)
+    :ok(.{ name, constraints, span })
+  }
+
+  fn expect-type-constraint-expr(self: *mut parser): result[ast/type-constraint-expr, perror] {
+    let next = self.peek()
+    if next.kind is :ident and self.tok-chars(next) == "static" {
+      let st = self.expect-type-expression().try
+      :ok(:static-constraint(st))
+    } else if next.kind is :ident and self.tok-chars(next) == "pred" {
+      self.advance()
+      let q = self.expect-namespaced-ident().try
+      :ok(:predicate(q))
+    } else {
+      :ok(:ability-constraint(self.expect-ability-expr().try))
+    }
+  }
+
+  fn expect-ability-expr(self: *mut parser): result[ast/ability-expr, perror] {
+    let name = self.expect-namespaced-ident().try
+    let arguments = list/empty[ast/type-arg]()
+    let span-opt: ?ast/src-span = if self.maybe-consume(:open-bracket) is :some open-tok {
+      self.eat-delimited("Ability Arguments", arguments.&, :comma, :close-bracket, fn(p: *mut parser) p.expect-ability-type-argument()).try
+      :some(self.extend-tok-to-here(open-tok))
+    } else :none
+    let span = span-opt is {
+      :some args-span -> name.name-span.thru(args-span),
+      :none -> name.name-span,
+    }
+    :ok(.{ name, arguments, span })
+  }
+
+  fn expect-ability-type-argument(self: *mut parser): result[ast/type-arg, perror] {
+    let nit = self.expect-ident().try
+    let _ = self.expect-kind(:equals).try
+    let peeked = self.peek()
+    let type-expr: ?ast/type-expr-id = if peeked.kind is :ident and self.tok-chars(peeked) == "_" {
+      self.advance()
+      :none
+    } else {
+      :some(self.expect-type-expression().try)
+    }
+    let span = self.extend-tok-to-here(nit.tok)
+    :ok(.{ name = :some(nit.name), type-expr, span })
+  }
+
+  fn expect-fn-param(self: *mut parser, is-context: bool): result[ast/fn-param, perror] {
+    let it = self.expect-ident().try
+    let type-expr: ?ast/type-expr-id = if self.maybe-consume(:colon) is :some _ {
+      :some(self.expect-type-expression().try)
+    } else :none
+    let span = self.extend-tok-to-here(it.tok)
+    :ok(.{ name = it.name, type-expr, span, is-context })
+  }
+
+  fn eat-fn-params(self: *mut parser): result[{ params: list[ast/fn-param], span: ast/src-span }, perror] {
+    let first = self.peek()
+    let second = self.peek-at(1)
+    let is-context = second.kind is :kw-context
+    let params = list/empty[ast/fn-param]()
+    if is-context {
+      let _ = self.expect-kind(:open-paren).try
+      let _ = self.expect-kind(:kw-context).try
+      self.eat-delimited("Function context parameters", params.&, :comma, :close-paren, fn(p: *mut parser) p.expect-fn-param(true)).try
+    }
+    let open-tok = self.expect-kind(:open-paren).try
+    self.eat-delimited("Function parameters", params.&, :comma, :close-paren, fn(p: *mut parser) p.expect-fn-param(false)).try
+    let params-span = self.extend-tok-to-here(open-tok)
+    let span = first.span().thru(params-span)
+    :ok(.{ params, span })
+  }
+
+  fn expect-function(self: *mut parser, condition: ?ast/expr-id, compiler-debug: bool): result[ast/function-id, perror] {
+    let fn-keyword = self.expect-kind(:kw-fn).try
+    let linkage: ast/linkage = :standard
+    let have-linkage = false
+    let lib-name: ?ast/string-id = :none
+    let lib-token: ?token = :none
+    let is-native = false
+    if self.maybe-consume(:open-paren) is :some _ {
+      loop {
+        let modifier = self.peek()
+        if have-linkage and not modifier.kind.eq(:ident) {
+          return :err(error-expected("a single intern, extern, or export modifier", modifier))
+        }
+        if modifier.kind is :kw-intern {
+          self.advance()
+          if self.peek().kind is :open-paren {
+            self.advance()
+            let llvm-name = self.expect-dq-ident().try
+            let _ = self.expect-kind(:close-paren).try
+            linkage = :llvm-intrinsic(llvm-name)
+          } else {
+            linkage = :intrinsic
+          }
+          have-linkage = true
+        } else if modifier.kind is :ident and self.tok-chars(modifier) == "extern" {
+          if have-linkage {
+            return :err(error-expected("a single intern, extern, or export modifier", modifier))
+          }
+          self.advance()
+          let fn-name: ?ast/string-id = if self.peek().kind is :open-paren {
+            self.advance()
+            let symbol = self.expect-dq-ident().try
+            let _ = self.expect-kind(:close-paren).try
+            :some(symbol)
+          } else :none
+          linkage = :external(.{ lib-name = :none, fn-name })
+          have-linkage = true
+        } else if modifier.kind is :ident and self.tok-chars(modifier) == "export" {
+          if have-linkage {
+            return :err(error-expected("a single intern, extern, or export modifier", modifier))
+          }
+          self.advance()
+          let fn-name: ?ast/string-id = if self.peek().kind is :open-paren {
+            self.advance()
+            let symbol = self.expect-dq-ident().try
+            let _ = self.expect-kind(:close-paren).try
+            :some(symbol)
+          } else :none
+          linkage = :exported(.{ fn-name })
+          have-linkage = true
+        } else if modifier.kind is :ident and self.tok-chars(modifier) == "lib" {
+          self.advance()
+          let _ = self.expect-kind(:open-paren).try
+          lib-name = :some(self.expect-dq-ident().try)
+          let _ = self.expect-kind(:close-paren).try
+          lib-token = :some(modifier)
+        } else if modifier.kind is :ident and self.tok-chars(modifier) == "native" {
+          self.advance()
+          is-native = true
+        } else {
+          return :err(error-expected("fn modifier: intern, extern, export, native, or lib", modifier))
+        }
+        if self.maybe-consume(:comma) is :none { break }
+      }
+      let _ = self.expect-kind(:close-paren).try
+      if lib-name is :some _ {
+        linkage is {
+          :external ext -> { linkage = :external(.{ lib-name, fn-name = ext.fn-name }) },
+          _ -> return :err(error-expected("lib(..) requires the extern modifier", lib-token.!)),
+        }
+      }
+    }
+    let fit = self.expect-ident().try
+    let type-params = list/empty[ast/type-param]()
+    if self.maybe-consume(:open-bracket) is :some _ {
+      self.eat-delimited("Function type parameters", type-params.&, :comma, :close-bracket, fn(p: *mut parser) p.expect-type-param()).try
+    }
+    let fn-params = self.eat-fn-params().try
+    let ret-type: ?ast/type-expr-id = if self.maybe-consume(:colon) is :some _ {
+      :some(self.expect-type-expression().try)
+    } else :none
+    let where-constraints = list/empty[ast/type-constraint]()
+    if self.maybe-consume(:kw-where) is :some _ {
+      loop {
+        let nit = self.expect-ident().try
+        let _ = self.expect-kind(:colon).try
+        loop {
+          let constraint = self.expect-type-constraint-expr().try
+          let span = self.extend-tok-to-here(nit.tok)
+          where-constraints.push(.{ name = nit.name, constraint, span })
+          if self.peek().kind is :kw-and { self.advance() } else { break }
+        }
+        if self.peek().kind is :comma { self.advance() } else { break }
+      }
+    }
+    let signature-span = self.extend-tok-to-here(fit.tok)
+    let block = self.parse-block(:fn-body).try
+    let end-span = block is {
+      :some b -> b.span,
+      :none -> fn-params.span,
+    }
+    let body: ?ast/expr-id = block is {
+      :some b -> :some(self.add-expr(:block(b))),
+      :none -> :none,
+    }
+    let span = fn-keyword.span().thru(end-span)
+    :ok(self.program.add-function(.{
+      name = fit.name,
+      type-params,
+      params = fn-params.params,
+      ret-type,
+      body,
+      signature-span,
+      span,
+      name-span = fit.tok.span(),
+      linkage,
+      is-native,
+      compiler-debug,
+      where-constraints,
+      compile-condition = condition,
+    }))
+  }
+
+  fn expect-macro-defn(self: *mut parser, condition: ?ast/expr-id, compiler-debug: bool): result[ast/macro-id, perror] {
+    let first = self.peek()
+    let second = self.peek-at(1)
+    let is-macro = first.kind is :ident and second.kind is :ident and self.tok-chars(first) == "macro"
+    if not is-macro {
+      return :err(error-expected("macro definition", first))
+    }
+    self.advance()
+    let fit = self.expect-ident().try
+    let type-params = list/empty[ast/type-param]()
+    if self.maybe-consume(:open-bracket) is :some _ {
+      self.eat-delimited("macro type parameters", type-params.&, :comma, :close-bracket, fn(p: *mut parser) p.expect-type-param()).try
+    }
+    let fn-params = self.eat-fn-params().try
+    for param in fn-params.params {
+      if param.is-context {
+        return :err(make-error("Macros cannot take context parameters", self.peek()))
+      }
+    }
+    if self.peek().kind is :colon {
+      return :err(make-error("A macro's return type is implicit; it always returns code", self.peek()))
+    }
+    let signature-span = self.extend-tok-to-here(fit.tok)
+    let block = self.parse-block(:fn-body).try
+    require block is :some b else {
+      return :err(make-error("Macros must have a body", self.peek()))
+    }
+    let body = self.add-expr(:block(b))
+    let span = first.span().thru(b.span)
+    :ok(self.program.add-macro(.{
+      name = fit.name,
+      params = fn-params.params,
+      type-params,
+      body,
+      signature-span,
+      span,
+      name-span = fit.tok.span(),
+      compiler-debug,
+      compile-condition = condition,
+    }))
+  }
+
+  fn expect-global(self: *mut parser, condition: ?ast/expr-id): result[ast/global-id, perror] {
+    let keyword = self.expect-kind(:kw-let).try
+    let is-thread-local = false
+    let is-export = false
+    let is-external = false
+    let is-mutable = false
+    let link-name: ?ast/string-id = :none
+    if self.maybe-consume(:open-paren) is :some _ {
+      loop {
+        let modifier = self.expect-kind(:ident).try
+        let chars = self.tok-chars(modifier)
+        let takes-link-name = false
+        if chars == "tls" { is-thread-local = true }
+        else if chars == "export" { is-export = true }
+        else if chars == "extern" {
+          is-external = true
+          takes-link-name = true
+        }
+        else if chars == "mutable" { is-mutable = true }
+        else {
+          return :err(error-expected("global modifier: tls, export, extern, or mutable", modifier))
+        }
+        if takes-link-name and self.maybe-consume(:open-paren) is :some _ {
+          link-name = :some(self.expect-dq-ident().try)
+          let _ = self.expect-kind(:close-paren).try
+        }
+        if self.maybe-consume(:comma) is :none { break }
+      }
+      let _ = self.expect-kind(:close-paren).try
+    }
+    let name-token = self.expect-kind(:ident).try
+    let _ = self.expect-kind(:colon).try
+    let type-expr = self.expect-type-expression().try
+    let value-expr: ?ast/expr-id = if is-external { :none } else {
+      let _ = self.expect-kind(:equals).try
+      :some(self.expect-expression().try)
+    }
+    let span = self.extend-tok-to-here(keyword)
+    :ok(self.program.add-global(.{
+      name = self.make-ident(name-token),
+      type-expr,
+      value-expr,
+      name-span = name-token.span(),
+      span,
+      is-thread-local,
+      is-export,
+      is-mutable,
+      is-external,
+      link-name,
+      compile-condition = condition,
+    }))
+  }
+
+  fn expect-type-defn(self: *mut parser, condition: ?ast/expr-id): result[ast/type-defn-id, perror] {
+    let _ = self.expect-ident-chars("type").try
+    let is-alias = false
+    if self.maybe-consume(:open-paren) is :some _ {
+      loop {
+        let modifier = self.expect-kind(:ident).try
+        if self.tok-chars(modifier) == "alias" {
+          is-alias = true
+        } else {
+          return :err(error-expected("type modifier: alias", modifier))
+        }
+        if self.maybe-consume(:comma) is :none { break }
+      }
+      let _ = self.expect-kind(:close-paren).try
+    }
+    let nit = self.expect-ident().try
+    let type-params = list/empty[ast/type-param]()
+    if self.maybe-consume(:open-bracket) is :some _ {
+      self.eat-delimited("Type arguments", type-params.&, :comma, :close-bracket, fn(p: *mut parser) p.expect-type-param()).try
+    }
+    let equals = self.expect-kind(:equals).try
+    let type-expr-opt = self.parse-type-expression().try
+    require type-expr-opt is :some value-expr else {
+      return :err(make-error("Expected Type expression", equals))
+    }
+    :ok(self.program.add-type-defn(.{
+      name = nit.name,
+      value-expr,
+      type-params,
+      span = nit.tok.span(),
+      is-alias,
+      compile-condition = condition,
+    }))
+  }
+
+  fn expect-ability-param(self: *mut parser): result[ast/ability-param, perror] {
+    let start-tok = self.peek()
+    let is-impl-param = self.maybe-consume(:kw-impl) is :some _
+    let name-token = self.expect-kind(:ident).try
+    let name = self.make-ident(name-token)
+    let constraints = self.parse-type-constraints().try
+    let span = start-tok.span().thru(name-token.span())
+    :ok(.{ name, is-impl-param, constraints, span })
+  }
+
+  fn expect-fn-definitions-block(self: *mut parser, container: string): result[list[ast/function-id], perror] {
+    let _ = self.expect-kind(:open-brace).try
+    let defs = self.parse-definitions(:close-brace)
+    let functions = list/empty[ast/function-id]()
+    for d in defs {
+      d is {
+        :function fn-id -> functions.push(fn-id),
+        _ -> {
+          let span = self.program.get-defn-span(d)
+          self.report-error(.{ message = "Only fn definitions can appear in $container", span })
+        }
+      }
+    }
+    :ok(functions)
+  }
+
+  fn expect-ability-defn(self: *mut parser, condition: ?ast/expr-id): result[ast/ability-id, perror] {
+    let keyword = self.expect-kind(:kw-ability).try
+    let name-token = self.expect-kind(:ident).try
+    let params = list/empty[ast/ability-param]()
+    if self.maybe-consume(:open-bracket) is :some _ {
+      self.eat-delimited("Ability Parameter", params.&, :comma, :close-bracket, fn(p: *mut parser) p.expect-ability-param()).try
+    }
+    let functions = self.expect-fn-definitions-block("an ability definition").try
+    let span = self.extend-tok-to-here(keyword)
+    :ok(self.program.add-ability(.{
+      name = self.make-ident(name-token),
+      functions,
+      params,
+      span,
+      compile-condition = condition,
+    }))
+  }
+
+  fn expect-ability-impl(self: *mut parser, condition: ?ast/expr-id): result[ast/ability-impl-id, perror] {
+    let keyword = self.expect-kind(:kw-impl).try
+    let generic-impl-params = list/empty[ast/type-param]()
+    if self.maybe-consume(:open-bracket) is :some _ {
+      self.eat-delimited("Generic implementation parameters", generic-impl-params.&, :comma, :close-bracket, fn(p: *mut parser) p.expect-type-param()).try
+    }
+    let ab = self.expect-ability-expr().try
+    let _ = self.expect-kind(:kw-for).try
+    let self-type = self.expect-type-expression().try
+    let functions = self.expect-fn-definitions-block("an ability impl").try
+    let span = self.extend-tok-to-here(keyword)
+    :ok(self.program.add-ability-impl(.{
+      ability-expr = ab,
+      generic-impl-params,
+      self-type,
+      functions,
+      span,
+      compile-condition = condition,
+    }))
+  }
+
+  fn expect-namespace(self: *mut parser, condition: ?ast/expr-id): result[ast/namespace-id, perror] {
+    let keyword = self.expect-kind(:kw-ns).try
+    let lib-name: ?ast/string-id = :none
+    let reload = false
+    if self.maybe-consume(:open-paren) is :some _ {
+      loop {
+        let modifier = self.expect-kind(:ident).try
+        let chars = self.tok-chars(modifier)
+        if chars == "lib" {
+          let _ = self.expect-kind(:open-paren).try
+          lib-name = :some(self.expect-dq-ident().try)
+          let _ = self.expect-kind(:close-paren).try
+        } else if chars == "reload" {
+          reload = true
+        } else {
+          return :err(error-expected("ns modifier: lib, reload", modifier))
+        }
+        if self.maybe-consume(:comma) is :none { break }
+      }
+      let _ = self.expect-kind(:close-paren).try
+    }
+    let is-type = false
+    if self.peek().kind is :kw-for {
+      self.advance()
+      is-type = true
+    }
+    let nit = self.expect-ident().try
+    let t = self.peek()
+    let is-braced = if t.kind is :open-brace {
+      self.advance()
+      true
+    } else if t.kind is :semicolon {
+      self.advance()
+      false
+    } else if t.is-newline-preceded() false
+    else {
+      return :err(error-expected("{, ;, or line break", t))
+    }
+    let terminator: token-kind = if is-braced { :close-brace } else { :eof }
+    let definitions = self.parse-definitions(terminator)
+    let span = self.extend-tok-to-here(keyword)
+    :ok(self.program.add-namespace(.{
+      name = nit.name,
+      definitions,
+      name-span = nit.tok.span(),
+      span,
+      is-type-companion = is-type,
+      lib-name,
+      reload,
+      compile-condition = condition,
+    }))
+  }
+
+  fn error-expected-definition(self: *mut parser, after-condition: bool): perror {
+    let p = self.peek()
+    let t = if p.kind is :eof { self.peek-back() } else p
+    if after-condition {
+      error-expected("a definition following #if directive", t)
+    } else {
+      error-expected("a definition", t)
+    }
+  }
+
+  fn expect-definition(self: *mut parser): result[ast/defn-id, perror] {
+    let first0 = self.peek()
+    let second0 = self.peek-at(1)
+    let condition: ?ast/expr-id = :none
+    let compiler-debug = false
+    if first0.kind is :hash {
+      if second0.kind is :kw-if {
+        self.advance-n(2)
+        condition = :some(self.expect-expression().try)
+        compiler-debug = self.parse-compiler-debug()
+      } else {
+        compiler-debug = self.parse-compiler-debug()
+      }
+    }
+    let first = self.peek()
+    if compiler-debug {
+      let supports-debug = first.kind is :kw-fn or (first.kind is :ident and self.tok-chars(first) == "macro")
+      if not supports-debug {
+        return :err(make-error("#debug is only supported on fn and macro definitions", first))
+      }
+    }
+    if first.kind is :hash {
+      self.advance()
+      let directive = self.peek()
+      let static-opt = self.parse-static-expr(first, directive, condition).try
+      require static-opt is :some se else {
+        return :err(error-expected("a static definition (e.g. #static or #meta)", directive))
+      }
+      return :ok(:static-defn(se))
+    }
+    if first.kind is :dollar {
+      self.advance()
+      let call-first = self.peek()
+      if call-first.is-ws-preceded() {
+        return :err(error-expected("a macro name immediately following '$'", call-first))
+      }
+      let call-expr = self.expect-expression().try
+      if not (self.program.get-expr(call-expr).* is :call _) {
+        return :err(error-expected("a macro call following '$'", call-first))
+      }
+      let span = self.extend-tok-to-here(first)
+      let expr-id = self.add-expr(:static-expr(.{
+        base-expr = call-expr,
+        kind = :macro-call,
+        compile-condition = condition,
+        parameter-names = list/empty(),
+        start-span = first.span(),
+        span,
+      }))
+      return :ok(:static-defn(expr-id))
+    }
+    if first.kind is :kw-use {
+      if condition is :some _ {
+        return :err(make-error("#if is not supported on use definitions", first))
+      }
+      return :ok(:use-defn(self.expect-use().try))
+    }
+    if first.kind is :kw-ns { return :ok(:namespace(self.expect-namespace(condition).try)) }
+    if first.kind is :kw-let { return :ok(:global(self.expect-global(condition).try)) }
+    if first.kind is :kw-fn { return :ok(:function(self.expect-function(condition, compiler-debug).try)) }
+    if first.kind is :kw-ability { return :ok(:ability-defn(self.expect-ability-defn(condition).try)) }
+    if first.kind is :kw-impl { return :ok(:ability-impl(self.expect-ability-impl(condition).try)) }
+    if first.kind is :ident {
+      let chars = self.tok-chars(first)
+      if chars == "macro" { return :ok(:macro-defn(self.expect-macro-defn(condition, compiler-debug).try)) }
+      if chars == "type" { return :ok(:type-defn(self.expect-type-defn(condition).try)) }
+    }
+    :err(self.error-expected-definition(condition is :some _))
+  }
+
+  fn parse-definitions(self: *mut parser, terminator: token-kind): list[ast/defn-id] {
+    let defns = list/empty[ast/defn-id]()
+    loop {
+      let t = self.peek()
+      if t.kind.eq(terminator) {
+        self.advance()
+        break
+      }
+      if t.kind is :eof {
+        let back = self.peek-back()
+        self.report-error(make-error("Expected a definition or ${terminator.repr()}", back))
+        break
+      }
+      let cursor-before = self.cursor
+      self.expect-definition() is {
+        :ok d -> defns.push(d),
+        :err e -> {
+          self.report-error(e)
+          if self.cursor == cursor-before { self.advance() }
+          if not self.recover-to-definition(terminator) { break }
+        }
+      }
+    }
+    defns
+  }
+
+  fn recover-to-definition(self: *mut parser, terminator: token-kind): bool {
+    let depth: u32 = 0
+    loop {
+      let t = self.peek()
+      if t.kind is :eof { return false }
+      if t.kind.eq(terminator) and depth == 0 { return true }
+      if t.kind is :open-brace or t.kind is :open-paren or t.kind is :open-bracket {
+        depth = depth + 1
+        self.advance()
+      } else if t.kind is :close-brace or t.kind is :close-paren or t.kind is :close-bracket {
+        if depth > 0 { depth = depth - 1 }
+        self.advance()
+      } else if depth == 0 and (t.kind is :hash or t.kind is :dollar or t.kind is :kw-use or t.kind is :kw-ns or t.kind is :kw-let or t.kind is :kw-fn or t.kind is :kw-ability or t.kind is :kw-impl) {
+        return true
+      } else if depth == 0 and t.kind is :ident and (self.tok-chars(t) == "macro" or self.tok-chars(t) == "type") {
+        return true
+      } else {
+        self.advance()
+      }
+    }
+  }
+
+  fn parse-file(self: *mut parser) {
+    let defs = self.parse-definitions(:eof)
+    self.program.root-defns.append-list(defs)
+  }
+}

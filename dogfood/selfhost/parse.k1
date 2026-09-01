@@ -1,0 +1,246 @@
+ns parse
+
+use lex/token
+use lex/token-kind
+use ast/parse-error as perror
+
+type parser = {
+  program: *mut ast/program,
+  tokens: list[token],
+  cursor: size,
+}
+
+type ident-tok = { tok: token, name: ast/string-id }
+
+type pending-part = either {
+  raw({ tok: token, starts-fresh: bool }),
+  part(ast/interp-part),
+}
+
+fn min-of(a: ?u32, b: u32): u32 {
+  a is {
+    :some m -> if b < m b else m,
+    :none -> b,
+  }
+}
+
+fn newline-terminates(t: token): bool {
+  t.is-newline-preceded() and (t.kind is :minus or t.kind is :amp)
+}
+
+fn make-error(message: string, t: token): perror {
+  .{ message, span = t.span() }
+}
+
+fn error-expected(expected: string, t: token): perror {
+  make-error("Expected $expected", t)
+}
+
+fn binary-op-from-kind(k: token-kind): ?ast/binary-op-kind {
+  k is {
+    :plus -> :some(:add),
+    :minus -> :some(:subtract),
+    :asterisk -> :some(:multiply),
+    :slash -> :some(:divide),
+    :l-angle -> :some(:less),
+    :r-angle -> :some(:greater),
+    :l-angle-l-angle -> :some(:shl),
+    :r-angle-r-angle -> :some(:shr),
+    :less-equal -> :some(:less-equal),
+    :greater-equal -> :some(:greater-equal),
+    :kw-and -> :some(:bool-and),
+    :kw-or -> :some(:bool-or),
+    :equals-equals -> :some(:equal),
+    :bang-equals -> :some(:not-equal),
+    :question-mark -> :some(:optional-else),
+    :percent -> :some(:rem),
+    :pipe-pipe -> :some(:pipe),
+    :amp -> :some(:bit-and),
+    :pipe -> :some(:bit-or),
+    :caret -> :some(:bit-xor),
+    _ -> :none,
+  }
+}
+
+ns for parser {
+  fn peek-at(self: *parser, n: size): token {
+    let pos = self.cursor + n
+    let last = self.tokens.len() - 1
+    let idx = if pos < 0 or pos > last last else pos
+    self.tokens.get(idx)
+  }
+
+  fn peek(self: *parser): token { self.peek-at(0) }
+
+  fn peek-back(self: *parser): token { self.peek-at(-1) }
+
+  fn next-tok(self: *mut parser): token {
+    let t = self.peek()
+    self.cursor = self.cursor + 1
+    t
+  }
+
+  fn advance(self: *mut parser) {
+    self.cursor = self.cursor + 1
+  }
+
+  fn advance-n(self: *mut parser, n: size) {
+    self.cursor = self.cursor + n
+  }
+
+  fn tok-chars(self: *parser, t: token): string {
+    self.program.source.slice(t.start.widen[size], t.end().widen[size])
+  }
+
+  fn make-ident(self: *mut parser, t: token): ast/string-id {
+    self.program.intern-string(self.tok-chars(t))
+  }
+
+  fn make-ident-spanned(self: *mut parser, t: token): ast/ident-spanned {
+    .{ name = self.make-ident(t), span = t.span() }
+  }
+
+  fn add-expr(self: *mut parser, e: ast/expr): ast/expr-id {
+    self.program.add-expr(e)
+  }
+
+  fn expr-span(self: *parser, id: ast/expr-id): ast/src-span {
+    self.program.get-expr-span(id)
+  }
+
+  fn error-here(self: *mut parser, message: string): perror {
+    let p = self.peek()
+    let t = if p.kind is :eof { self.peek-back() } else p
+    make-error(message, t)
+  }
+
+  fn report-error(self: *mut parser, e: perror) {
+    self.program.report-error(e)
+  }
+
+  fn extend-tok-to-here(self: *mut parser, t: token): ast/src-span {
+    let here = self.peek-back()
+    if here.kind is :eof { t.span() } else { t.span().thru(here.span()) }
+  }
+
+  fn extend-to-here(self: *mut parser, sp: ast/src-span): ast/src-span {
+    let here = self.peek-back()
+    if here.kind is :eof { sp } else { sp.thru(here.span()) }
+  }
+
+  fn maybe-consume(self: *mut parser, k: token-kind): ?token {
+    let t = self.peek()
+    if t.kind.eq(k) {
+      self.advance()
+      :some(t)
+    } else :none
+  }
+
+  fn maybe-consume-no-ws(self: *mut parser, k: token-kind): ?token {
+    let t = self.peek()
+    if t.is-kind-nonspaced(k) {
+      self.advance()
+      :some(t)
+    } else :none
+  }
+
+  fn expect-kind(self: *mut parser, k: token-kind): result[token, perror] {
+    let t = self.peek()
+    if t.kind.eq(k) {
+      self.advance()
+      :ok(t)
+    } else {
+      :err(self.error-here("Expected ${k.repr()}"))
+    }
+  }
+
+  fn expect-ident(self: *mut parser): result[ident-tok, perror] {
+    let t = self.expect-kind(:ident).try
+    :ok(.{ tok = t, name = self.make-ident(t) })
+  }
+
+  fn expect-ident-lower(self: *mut parser): result[ident-tok, perror] {
+    let t = self.expect-kind(:ident).try
+    let text = self.tok-chars(t)
+    if text.len() > 0 and text.get(0).is-ascii-upper() {
+      return :err(make-error("This name must not be capitalized", t))
+    }
+    :ok(.{ tok = t, name = self.program.intern-string(text) })
+  }
+
+  fn maybe-consume-ident-chars(self: *mut parser, chars: string): ?ident-tok {
+    let next = self.peek()
+    if next.kind is :ident and self.tok-chars(next) == chars {
+      self.advance()
+      :some(.{ tok = next, name = self.program.intern-string(chars) })
+    } else :none
+  }
+
+  fn expect-ident-chars(self: *mut parser, chars: string): result[ident-tok, perror] {
+    self.maybe-consume-ident-chars(chars) is {
+      :some it -> :ok(it),
+      :none -> :err(make-error("Expected '$chars'", self.peek())),
+    }
+  }
+
+  fn expect-dq-ident(self: *mut parser): result[ast/string-id, perror] {
+    let t = self.expect-kind(:string-done-dq).try
+    let text = self.tok-chars(t)
+    if text.len() < 2 {
+      return :err(make-error("Internal Error: expected string prefix/suffix", t))
+    }
+    :ok(self.program.intern-string(text.slice(1, text.len() - 1)))
+  }
+
+  fn scan-to-two(self: *mut parser, k1: token-kind, k2: token-kind): result[token, perror] {
+    loop {
+      let n = self.next-tok()
+      if n.kind is :eof {
+        return :err(self.error-here("Reached EOF without finding ${k1.repr()}, ${k2.repr()}"))
+      }
+      if n.kind.eq(k1) or n.kind.eq(k2) {
+        return :ok(n)
+      }
+    }
+  }
+
+  fn eat-delimited[t](
+    self: *mut parser,
+    name: string,
+    dest: *mut list[t],
+    delim: token-kind,
+    term: token-kind,
+    parse-one: some fn(*mut parser) -> result[t, perror]
+  ): result[empty, perror] {
+    loop {
+      if self.peek().kind.eq(term) {
+        self.advance()
+        return :ok
+      }
+      parse-one(self) is {
+        :err e -> {
+          self.report-error(e)
+          let t = self.scan-to-two(delim, term).try
+          if t.kind.eq(delim) { continue }
+          if t.kind.eq(term) { return :ok }
+          return :err(self.error-here("Missing terminator ${term.repr()}"))
+        },
+        :ok elem -> dest.push(elem)
+      }
+      if self.peek().kind.eq(term) {
+        self.advance()
+        return :ok
+      }
+      if self.maybe-consume(delim) is :none {
+        if delim is :semicolon and self.peek().is-newline-preceded() { continue }
+        let e2 = self.error-here("Expected '${delim.repr()}' in between each $name")
+        self.report-error(e2)
+        let t = self.scan-to-two(delim, term).try
+        if t.kind.eq(delim) { continue }
+        if t.kind.eq(term) { return :ok }
+        return :err(self.error-here("Expected ${term.repr()} after all $name"))
+      }
+    }
+  }
+
+}

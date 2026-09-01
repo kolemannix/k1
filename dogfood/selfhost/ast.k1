@@ -1,0 +1,762 @@
+ns ast
+
+type src-span = { start: u32, len: u32 }
+
+ns for src-span {
+  fn end(self: src-span): u32 { self.start + self.len }
+
+  fn extend-to(self: src-span, new-end: u32): src-span {
+    .{ start = self.start, len = new-end - self.start }
+  }
+
+  fn thru(self: src-span, other: src-span): src-span {
+    if other.end() < self.start { return self }
+    self.extend-to(other.end())
+  }
+}
+
+type(alias) string-id = u32
+type(alias) expr-id = u32
+type(alias) type-expr-id = u32
+type(alias) stmt-id = u32
+type(alias) pattern-id = u32
+type(alias) function-id = u32
+type(alias) macro-id = u32
+type(alias) global-id = u32
+type(alias) type-defn-id = u32
+type(alias) namespace-id = u32
+type(alias) ability-id = u32
+type(alias) ability-impl-id = u32
+type(alias) use-id = u32
+
+type ident-pool = { strings: list[string], table: std/map[string, u32] }
+
+ns for ident-pool {
+  fn make(): ident-pool {
+    .{ strings = list/empty(), table = std/map/new() }
+  }
+
+  fn intern-string(self: *mut ident-pool, s: string): string-id {
+    if self.table.get(s) is :some id { return id }
+    let id = self.strings.len().trunc[u32]
+    self.strings.push(s)
+    self.table.insert(s, id)
+    id
+  }
+
+  fn get(self: *ident-pool, id: string-id): string {
+    self.strings.get(id.widen[size])
+  }
+}
+
+type ident-spanned = { name: string-id, span: src-span }
+type qident = { path: list[ident-spanned], name: string-id, name-span: src-span }
+
+ns for qident {
+  fn naked(name: string-id, name-span: src-span): qident {
+    .{ path = list/empty(), name, name-span }
+  }
+}
+
+type numeric-lit = { span: src-span, text-span: src-span }
+
+type literal = either {
+  char-lit({ value: u8, span: src-span }),
+  numeric(numeric-lit),
+  bool-lit({ value: bool, span: src-span }),
+  string-lit({ string: string-id, span: src-span }),
+}
+
+ns for literal {
+  fn get-span(self: literal): src-span {
+    self is {
+      :char-lit c -> c.span,
+      :numeric n -> n.span,
+      :bool-lit b -> b.span,
+      :string-lit s -> s.span,
+    }
+  }
+}
+
+type call-arg = { name: ?string-id, value: expr-id, is-explicit-context: bool }
+type type-arg = { name: ?string-id, type-expr: ?type-expr-id, span: src-span }
+
+type binary-op-kind = either(u8) {
+  add, subtract, multiply, divide, rem,
+  less, less-equal, greater, greater-equal,
+  bool-and, bool-or,
+  bit-and, bit-or, bit-xor, shl, shr,
+  equal, not-equal,
+  optional-else, pipe,
+}
+
+ns for binary-op-kind {
+  fn repr(self: binary-op-kind): string {
+    self is {
+      :add -> "+", :subtract -> "-", :multiply -> "*", :divide -> "/", :rem -> "%",
+      :less -> "<", :less-equal -> "<=", :greater -> ">", :greater-equal -> ">=",
+      :bool-and -> "and", :bool-or -> "or",
+      :bit-and -> "&", :bit-or -> "|", :bit-xor -> "^", :shl -> "<<", :shr -> ">>",
+      :equal -> "==", :not-equal -> "!=",
+      :optional-else -> "?", :pipe -> "||",
+    }
+  }
+
+  fn precedence(self: binary-op-kind): u32 {
+    self is {
+      :pipe -> 104,
+      :multiply or :divide or :rem -> 100,
+      :add or :subtract -> 90,
+      :shl or :shr -> 85,
+      :bit-and -> 84,
+      :bit-xor -> 83,
+      :bit-or -> 82,
+      :less or :less-equal or :greater or :greater-equal -> 80,
+      :equal or :not-equal -> 78,
+      :bool-and -> 70,
+      :bool-or -> 66,
+      :optional-else -> 65,
+    }
+  }
+
+  fn is-right-assoc(self: binary-op-kind): bool {
+    self is :bool-and
+  }
+}
+
+type unary-op-kind = either(u8) { bool-negation, address-of }
+
+type binary-op = { op: binary-op-kind, lhs: expr-id, rhs: expr-id, span: src-span }
+type unary-op = { op: unary-op-kind, expr: expr-id, span: src-span }
+
+type fmt-settings = { precision: u8, pretty: bool }
+
+type interp-part = either {
+  str-part({ string: string-id, span: src-span }),
+  expr-part({ expr: expr-id, fmt: fmt-settings }),
+  hole({ fmt: fmt-settings, span: src-span }),
+}
+
+type interp-string = { parts: list[interp-part], span: src-span }
+
+type call = {
+  name: qident,
+  type-args: list[type-arg],
+  args: list[call-arg],
+  span: src-span,
+  is-method: bool,
+}
+
+type call-on-expr = { callee: expr-id, args: list[call-arg], span: src-span }
+
+type variable = { name: qident, span: src-span }
+
+type field-access = {
+  base: expr-id,
+  field-name: string-id,
+  type-args: list[type-arg],
+  span: src-span,
+}
+
+type struct-field-kind = either { expr-value(expr-id), shorthand, uninit-value }
+type struct-field = { name: string-id, span: src-span, value: struct-field-kind }
+type struct-value = { fields: list[struct-field], span: src-span }
+
+type list-literal = { elements: list[expr-id], span: src-span }
+
+type variant-value = {
+  type-name: ?qident,
+  variant-name: string-id,
+  name-span: src-span,
+  type-args: list[type-arg],
+  payload: ?expr-id,
+  span: src-span,
+}
+
+type is-expr = { target: expr-id, pattern: pattern-id, span: src-span }
+
+type match-case = { patterns: list[pattern-id], guard: ?expr-id, expr: expr-id }
+type match-expr = { subject: expr-id, cases: list[match-case], span: src-span, is-static: bool }
+
+type lambda-arg = { binding: string-id, ty: ?type-expr-id, span: src-span }
+type lambda-capture = { name: string-id, by-ref: bool, span: src-span }
+type lambda = {
+  captures: list[lambda-capture],
+  arguments: list[lambda-arg],
+  return-type: ?type-expr-id,
+  body: expr-id,
+  span: src-span,
+}
+
+type static-kind = either(u8) { value, metaprogram, macro-call }
+
+type static-expr = {
+  base-expr: expr-id,
+  kind: static-kind,
+  compile-condition: ?expr-id,
+  parameter-names: list[ident-spanned],
+  start-span: src-span,
+  span: src-span,
+}
+
+type code-expr = { stmt: stmt-id, span: src-span }
+
+type ability-expr = { name: qident, arguments: list[type-arg], span: src-span }
+
+type qability-call = {
+  ability-expr: ability-expr,
+  self-type: type-expr-id,
+  call-expr: expr-id,
+  span: src-span,
+}
+
+type type-hint = { inner: expr-id, ty: type-expr-id, span: src-span }
+
+type if-expr = { cond: expr-id, cons: expr-id, alt: ?expr-id, span: src-span, is-static: bool }
+type while-expr = { cond: expr-id, body: expr-id, span: src-span }
+
+type block-kind = either(u8) { fn-body, lexical, loop-body }
+type block = { stmts: list[stmt-id], kind: block-kind, span: src-span }
+
+type loop-expr = { body: block, span: src-span }
+type for-expr = {
+  iterable: expr-id,
+  binding: ?expr-id,
+  body: block,
+  is-static: bool,
+  span: src-span,
+}
+
+type expr = either {
+  bin-op(binary-op),
+  un-op(unary-op),
+  literal(literal),
+  interp-string(interp-string),
+  call(call),
+  call-on-expr(call-on-expr),
+  variable(variable),
+  field-access(field-access),
+  block(block),
+  if-expr(if-expr),
+  while-expr(while-expr),
+  loop-expr(loop-expr),
+  struct-value(struct-value),
+  list-literal(list-literal),
+  for-expr(for-expr),
+  variant(variant-value),
+  is-expr(is-expr),
+  match-expr(match-expr),
+  lambda(lambda),
+  builtin-expr(src-span),
+  static-expr(static-expr),
+  code-expr(code-expr),
+  qability-call(qability-call),
+  type-hint(type-hint),
+}
+
+ns for expr {
+  fn get-span(self: *expr): src-span {
+    self.* is {
+      :bin-op op -> op.span,
+      :un-op op -> op.span,
+      :literal l -> l.get-span(),
+      :interp-string i -> i.span,
+      :call c -> c.span,
+      :call-on-expr c -> c.span,
+      :variable v -> v.span,
+      :field-access f -> f.span,
+      :block b -> b.span,
+      :if-expr i -> i.span,
+      :while-expr w -> w.span,
+      :loop-expr l -> l.span,
+      :struct-value s -> s.span,
+      :list-literal l -> l.span,
+      :for-expr f -> f.span,
+      :variant v -> v.span,
+      :is-expr i -> i.span,
+      :match-expr m -> m.span,
+      :lambda l -> l.span,
+      :builtin-expr s -> s,
+      :static-expr s -> s.span,
+      :code-expr c -> c.span,
+      :qability-call q -> q.span,
+      :type-hint t -> t.span,
+    }
+  }
+}
+
+type struct-pattern-field = { name: string-id, pattern: pattern-id }
+type struct-pattern = { fields: list[struct-pattern-field], span: src-span }
+type sum-pattern = {
+  sum-name: ?string-id,
+  variant-name: string-id,
+  payload: ?pattern-id,
+  span: src-span,
+}
+
+type pattern = either {
+  literal(expr-id),
+  variable({ name: string-id, span: src-span }),
+  struct-pat(struct-pattern),
+  sum-pat(sum-pattern),
+  wildcard(src-span),
+  reference({ inner: pattern-id, span: src-span }),
+  type-pat({ inner: pattern-id, type-expr: type-expr-id, span: src-span }),
+}
+
+type struct-type-field = { name: string-id, name-span: src-span, type-expr: type-expr-id }
+type record-kind = either(u8) { struct, union, packed }
+type struct-type = { fields: list[struct-type-field], span: src-span, record-kind: record-kind }
+
+type type-application = { name: qident, args: list[type-arg], span: src-span }
+
+type sum-variant = {
+  tag-name: string-id,
+  payload: ?type-expr-id,
+  explicit-value: ?numeric-lit,
+  name-span: src-span,
+}
+type sum-type = { variants: list[sum-variant], tag-type: ?type-expr-id, span: src-span }
+
+type member-access-kind = either(u8) { dot, colon }
+type reference-kind = either(u8) { read, mut-ref }
+
+type type-expr = either {
+  builtin-type(src-span),
+  struct-type(struct-type),
+  type-application(type-application),
+  optional-type({ base: type-expr-id, span: src-span }),
+  reference({ base: type-expr-id, kind: reference-kind, span: src-span }),
+  array-type({ element-type: type-expr-id, size-expr: type-expr-id, span: src-span }),
+  sum-type(sum-type),
+  member-access({ base: type-expr-id, kind: member-access-kind, member-name: string-id, span: src-span }),
+  function-type({ params: list[type-expr-id], return-type: type-expr-id, span: src-span }),
+  type-of({ target-expr: expr-id, span: src-span }),
+  some-quant({ inner: type-expr-id, span: src-span }),
+  static-type({ inner: type-expr-id, span: src-span }),
+  static-literal(literal),
+  exec-static({ body-expr: expr-id, span: src-span }),
+}
+
+ns for type-expr {
+  fn get-span(self: *type-expr): src-span {
+    self.* is {
+      :builtin-type s -> s,
+      :struct-type s -> s.span,
+      :type-application a -> a.span,
+      :optional-type o -> o.span,
+      :reference r -> r.span,
+      :array-type a -> a.span,
+      :sum-type s -> s.span,
+      :member-access m -> m.span,
+      :function-type f -> f.span,
+      :type-of t -> t.span,
+      :some-quant q -> q.span,
+      :static-type s -> s.span,
+      :static-literal l -> l.get-span(),
+      :exec-static e -> e.span,
+    }
+  }
+}
+
+type use-defn = { target: qident, alias: ?string-id, exposed: bool, span: src-span }
+
+let LET_FLAG_CONTEXT: u8 = 1
+let LET_FLAG_RETURNED: u8 = 4
+
+type let-stmt = {
+  name: string-id,
+  type-expr: ?type-expr-id,
+  value: ?expr-id,
+  context-abilities: list[ability-expr],
+  flags: u8,
+  span: src-span,
+}
+
+type assign = { lhs: expr-id, rhs: expr-id, span: src-span }
+type require-stmt = { condition: expr-id, else-body: ?expr-id, span: src-span }
+type defer-stmt = { expr: expr-id, span: src-span }
+
+type stmt = either {
+  use-stmt(use-id),
+  let-stmt(let-stmt),
+  require-stmt(require-stmt),
+  assign(assign),
+  defer-stmt(defer-stmt),
+  lone-expr(expr-id),
+}
+
+type type-constraint-expr = either {
+  ability-constraint(ability-expr),
+  static-constraint(type-expr-id),
+  predicate(qident),
+}
+
+type type-param = { name: string-id, constraints: list[type-constraint-expr], span: src-span }
+type type-constraint = { name: string-id, constraint: type-constraint-expr, span: src-span }
+
+type fn-param = { name: string-id, type-expr: ?type-expr-id, span: src-span, is-context: bool }
+
+type linkage = either {
+  standard,
+  external({ lib-name: ?string-id, fn-name: ?string-id }),
+  intrinsic,
+  llvm-intrinsic(string-id),
+  exported({ fn-name: ?string-id }),
+}
+
+type function = {
+  name: string-id,
+  type-params: list[type-param],
+  params: list[fn-param],
+  ret-type: ?type-expr-id,
+  body: ?expr-id,
+  signature-span: src-span,
+  span: src-span,
+  name-span: src-span,
+  linkage: linkage,
+  is-native: bool,
+  compiler-debug: bool,
+  where-constraints: list[type-constraint],
+  compile-condition: ?expr-id,
+}
+
+type macro-defn = {
+  name: string-id,
+  params: list[fn-param],
+  type-params: list[type-param],
+  body: expr-id,
+  signature-span: src-span,
+  span: src-span,
+  name-span: src-span,
+  compiler-debug: bool,
+  compile-condition: ?expr-id,
+}
+
+type global = {
+  name: string-id,
+  type-expr: type-expr-id,
+  value-expr: ?expr-id,
+  name-span: src-span,
+  span: src-span,
+  is-thread-local: bool,
+  is-export: bool,
+  is-mutable: bool,
+  is-external: bool,
+  link-name: ?string-id,
+  compile-condition: ?expr-id,
+}
+
+type type-defn = {
+  name: string-id,
+  value-expr: type-expr-id,
+  type-params: list[type-param],
+  span: src-span,
+  is-alias: bool,
+  compile-condition: ?expr-id,
+}
+
+type ability-param = {
+  name: string-id,
+  is-impl-param: bool,
+  constraints: list[type-constraint-expr],
+  span: src-span,
+}
+
+type ability-defn = {
+  name: string-id,
+  functions: list[function-id],
+  params: list[ability-param],
+  span: src-span,
+  compile-condition: ?expr-id,
+}
+
+type ability-impl = {
+  ability-expr: ability-expr,
+  generic-impl-params: list[type-param],
+  self-type: type-expr-id,
+  functions: list[function-id],
+  span: src-span,
+  compile-condition: ?expr-id,
+}
+
+type namespace = {
+  name: string-id,
+  definitions: list[defn-id],
+  name-span: src-span,
+  span: src-span,
+  is-type-companion: bool,
+  lib-name: ?string-id,
+  reload: bool,
+  compile-condition: ?expr-id,
+}
+
+type defn-id = either {
+  use-defn(use-id),
+  function(function-id),
+  macro-defn(macro-id),
+  type-defn(type-defn-id),
+  namespace(namespace-id),
+  ability-defn(ability-id),
+  ability-impl(ability-impl-id),
+  global(global-id),
+  static-defn(expr-id),
+}
+
+type parse-error = { message: string, span: src-span }
+
+type line = { start: u32, len: u32, index: u32 }
+
+type program = {
+  file-name: string,
+  source: string,
+  newline-positions: list[u32],
+  idents: ident-pool,
+  exprs: list[expr],
+  type-exprs: list[type-expr],
+  stmts: list[stmt],
+  patterns: list[pattern],
+  functions: list[function],
+  macros: list[macro-defn],
+  globals: list[global],
+  type-defns: list[type-defn],
+  namespaces: list[namespace],
+  abilities: list[ability-defn],
+  ability-impls: list[ability-impl],
+  uses: list[use-defn],
+  root-defns: list[defn-id],
+  errors: list[parse-error],
+}
+
+ns for program {
+  fn make(file-name: string, source: string): program {
+    let newline-positions = list/empty[u32]()
+    for i in 0.until(source.len()) {
+      if source.get(i) == '\n' { newline-positions.push(i.trunc[u32]) }
+    }
+    .{
+      file-name,
+      source,
+      newline-positions,
+      idents = ident-pool/make(),
+      exprs = list/empty(),
+      type-exprs = list/empty(),
+      stmts = list/empty(),
+      patterns = list/empty(),
+      functions = list/empty(),
+      macros = list/empty(),
+      globals = list/empty(),
+      type-defns = list/empty(),
+      namespaces = list/empty(),
+      abilities = list/empty(),
+      ability-impls = list/empty(),
+      uses = list/empty(),
+      root-defns = list/empty(),
+      errors = list/empty(),
+    }
+  }
+
+  fn intern-string(self: *mut program, s: string): string-id {
+    self.idents.intern-string(s)
+  }
+
+  fn ident(self: *program, id: string-id): string {
+    self.idents.get(id)
+  }
+
+  fn add-expr(self: *mut program, e: expr): expr-id {
+    self.exprs.push(e)
+    self.exprs.len().trunc[u32] - 1
+  }
+
+  fn add-type-expr(self: *mut program, e: type-expr): type-expr-id {
+    self.type-exprs.push(e)
+    self.type-exprs.len().trunc[u32] - 1
+  }
+
+  fn add-stmt(self: *mut program, s: stmt): stmt-id {
+    self.stmts.push(s)
+    self.stmts.len().trunc[u32] - 1
+  }
+
+  fn add-pattern(self: *mut program, p: pattern): pattern-id {
+    self.patterns.push(p)
+    self.patterns.len().trunc[u32] - 1
+  }
+
+  fn add-function(self: *mut program, f: function): function-id {
+    self.functions.push(f)
+    self.functions.len().trunc[u32] - 1
+  }
+
+  fn add-macro(self: *mut program, m: macro-defn): macro-id {
+    self.macros.push(m)
+    self.macros.len().trunc[u32] - 1
+  }
+
+  fn add-global(self: *mut program, g: global): global-id {
+    self.globals.push(g)
+    self.globals.len().trunc[u32] - 1
+  }
+
+  fn add-type-defn(self: *mut program, t: type-defn): type-defn-id {
+    self.type-defns.push(t)
+    self.type-defns.len().trunc[u32] - 1
+  }
+
+  fn add-namespace(self: *mut program, n: namespace): namespace-id {
+    self.namespaces.push(n)
+    self.namespaces.len().trunc[u32] - 1
+  }
+
+  fn add-ability(self: *mut program, a: ability-defn): ability-id {
+    self.abilities.push(a)
+    self.abilities.len().trunc[u32] - 1
+  }
+
+  fn add-ability-impl(self: *mut program, a: ability-impl): ability-impl-id {
+    self.ability-impls.push(a)
+    self.ability-impls.len().trunc[u32] - 1
+  }
+
+  fn add-use(self: *mut program, u: use-defn): use-id {
+    self.uses.push(u)
+    self.uses.len().trunc[u32] - 1
+  }
+
+  fn get-expr(self: *program, id: expr-id): *expr {
+    self.exprs.get-ref(id.widen[size])
+  }
+
+  fn get-type-expr(self: *program, id: type-expr-id): *type-expr {
+    self.type-exprs.get-ref(id.widen[size])
+  }
+
+  fn get-expr-span(self: *program, id: expr-id): src-span {
+    self.get-expr(id).get-span()
+  }
+
+  fn get-type-expr-span(self: *program, id: type-expr-id): src-span {
+    self.get-type-expr(id).get-span()
+  }
+
+  fn get-pattern-span(self: *program, id: pattern-id): src-span {
+    self.patterns.get(id.widen[size]) is {
+      :literal e -> self.get-expr-span(e),
+      :variable v -> v.span,
+      :struct-pat s -> s.span,
+      :sum-pat s -> s.span,
+      :wildcard s -> s,
+      :reference r -> r.span,
+      :type-pat t -> t.span,
+    }
+  }
+
+  fn get-stmt-span(self: *program, id: stmt-id): src-span {
+    self.stmts.get(id.widen[size]) is {
+      :use-stmt u -> self.uses.get(u.widen[size]).span,
+      :let-stmt l -> l.span,
+      :require-stmt r -> r.span,
+      :assign a -> a.span,
+      :defer-stmt d -> d.span,
+      :lone-expr e -> self.get-expr-span(e),
+    }
+  }
+
+  fn get-defn-span(self: *program, d: defn-id): src-span {
+    d is {
+      :use-defn id -> self.uses.get(id.widen[size]).span,
+      :function id -> self.functions.get(id.widen[size]).name-span,
+      :macro-defn id -> self.macros.get(id.widen[size]).name-span,
+      :type-defn id -> self.type-defns.get(id.widen[size]).span,
+      :namespace id -> self.namespaces.get(id.widen[size]).span,
+      :ability-defn id -> self.abilities.get(id.widen[size]).span,
+      :ability-impl id -> self.ability-impls.get(id.widen[size]).span,
+      :global id -> self.globals.get(id.widen[size]).span,
+      :static-defn id -> self.get-expr-span(id),
+    }
+  }
+
+  fn set-expr-span(self: *mut program, id: expr-id, new-span: src-span) {
+    let e = self.exprs.get-ref(id.widen[size])
+    e is {
+      :bin-op(op)* -> { op.span = new-span },
+      :un-op(op)* -> { op.span = new-span },
+      :literal(l)* -> {
+        l is {
+          :char-lit(c)* -> { c.span = new-span },
+          :numeric(n)* -> { n.span = new-span },
+          :bool-lit(b)* -> { b.span = new-span },
+          :string-lit(s)* -> { s.span = new-span },
+        }
+      },
+      :interp-string(i)* -> { i.span = new-span },
+      :call(c)* -> { c.span = new-span },
+      :call-on-expr(c)* -> { c.span = new-span },
+      :variable(v)* -> { v.span = new-span },
+      :field-access(f)* -> { f.span = new-span },
+      :block(b)* -> { b.span = new-span },
+      :if-expr(i)* -> { i.span = new-span },
+      :while-expr(w)* -> { w.span = new-span },
+      :loop-expr(l)* -> { l.span = new-span },
+      :struct-value(s)* -> { s.span = new-span },
+      :list-literal(l)* -> { l.span = new-span },
+      :for-expr(f)* -> { f.span = new-span },
+      :variant(v)* -> { v.span = new-span },
+      :is-expr(i)* -> { i.span = new-span },
+      :match-expr(m)* -> { m.span = new-span },
+      :lambda(l)* -> { l.span = new-span },
+      :builtin-expr(s)* -> { s.* = new-span },
+      :static-expr(s)* -> { s.span = new-span },
+      :code-expr(c)* -> { c.span = new-span },
+      :qability-call(q)* -> { q.span = new-span },
+      :type-hint(t)* -> { t.span = new-span },
+    }
+  }
+
+  fn line-for-offset(self: *program, offset: u32): ?line {
+    if offset.widen[size] > self.source.len() { return :none }
+    let lo: size = 0
+    let hi = self.newline-positions.len()
+    while lo < hi {
+      let mid = (lo + hi) / 2
+      if self.newline-positions.get(mid) < offset { lo = mid + 1 } else { hi = mid }
+    }
+    let start: u32 = if lo == 0 0 else self.newline-positions.get(lo - 1) + 1
+    let end: u32 = if lo < self.newline-positions.len() {
+      let nl = self.newline-positions.get(lo)
+      if nl > start and self.source.get((nl - 1).widen[size]) == '\r' { nl - 1 } else nl
+    } else {
+      self.source.len().trunc[u32]
+    }
+    if end < start { return :none }
+    :some(.{ start, len = end - start, index = lo.trunc[u32] })
+  }
+
+  fn print-error(self: *program, e: parse-error) {
+    let where-str = self.line-for-offset(e.span.start) is {
+      :some line -> "${self.file-name}:${line.index + 1}:${e.span.start - line.start + 1}",
+      :none -> "${self.file-name}:?",
+    }
+    eprintln("$where-str: error: ${e.message}")
+    if self.line-for-offset(e.span.start) is :some line {
+      let content = self.source.slice(line.start.widen[size], (line.start + line.len).widen[size])
+      eprintln("  | $content")
+      let sb = string-builder/new()
+      sb.write("  | ")
+      let col = if e.span.start >= line.start e.span.start - line.start else 0
+      for 0.until(col.widen[size]) { sb.write-char(' ') }
+      let avail = if line.len > col line.len - col else 1
+      let caret-len: u32 = if e.span.len == 0 1
+        else if e.span.len > avail avail
+        else e.span.len
+      for 0.until(caret-len.widen[size]) { sb.write-char('^') }
+      eprintln(sb.build())
+    }
+  }
+
+  fn report-error(self: *mut program, e: parse-error) {
+    self.print-error(e)
+    self.errors.push(e)
+  }
+}
