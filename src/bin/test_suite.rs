@@ -22,10 +22,6 @@ use std::os::unix::prelude::ExitStatusExt;
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct TestSuiteClapArgs {
-    /// If true, uses an LLVM Intrerpreter. Otherwise, builds and runs real executables
-    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
-    pub interpret: bool,
-
     /// Run in parallel if true
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub parallel: bool,
@@ -109,7 +105,7 @@ fn get_test_expectation(test_file: &Path) -> TestExpectation {
     }
 }
 
-fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<()> {
+fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
     let filename = path.as_ref().file_name().unwrap().to_str().unwrap();
     let args = k1::compiler::Args {
         optimize: false,
@@ -194,89 +190,72 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                 TestExpectation::ExitCode { .. } | TestExpectation::AbortErrorMessage { .. }
             );
             if expect_exit {
-                let codegen = compiler::codegen_module(&args, ctx, &mut typed_program)?;
-
-                if interpret {
-                    match codegen.interpret_module() {
-                        Err(e) => bail!("{name} interpret failed: {e}"),
-                        Ok(res) => {
-                            let result_code = res as i32;
-                            let expected_code = expectation.exit_code();
-                            if Some(result_code) != expected_code {
-                                bail!(
-                                    "{name} failed wrong exit code: exp {expected_code:?}, actual {result_code}",
-                                );
-                            }
-                        }
+                compiler::codegen_module(&args, ctx, &mut typed_program)?;
+                let mut run_cmd = std::process::Command::new(k1::kpath::join_pathbuf(
+                    &typed_program.ast.idents,
+                    typed_program.config.out_dir,
+                    name.as_str(),
+                ));
+                let run_result = run_cmd.output();
+                match run_result {
+                    Err(e) => {
+                        bail!(".output() failed with {e:?}")
                     }
-                } else {
-                    let mut run_cmd = std::process::Command::new(k1::kpath::join_pathbuf(
-                        &codegen.k1.ast.idents,
-                        codegen.k1.config.out_dir,
-                        name.as_str(),
-                    ));
-                    let run_result = run_cmd.output();
-                    match run_result {
-                        Err(e) => {
-                            bail!(".output() failed with {e:?}")
-                        }
-                        Ok(output) => {
-                            let run_status = output.status;
-                            let stderr_str = String::from_utf8_lossy(&output.stderr);
-                            let stderr_lines = stderr_str.lines();
-                            let last_stderr_line = stderr_lines.last();
-                            if let Some(signal) = run_status.signal() {
-                                if signal != 6 {
-                                    bail!("{name} terminated by signal: {signal}");
-                                }
-                                let TestExpectation::AbortErrorMessage {
-                                    message: expected_abort_message,
-                                } = &expectation
-                                else {
-                                    bail!("{name} terminated by SIGABRT");
-                                };
-                                match last_stderr_line {
-                                    None => bail!(
-                                        "{name} Expected abortmsg {expected_abort_message} but got abort with no output",
-                                    ),
-                                    Some(abort_msg) => {
-                                        if !abort_msg.contains(expected_abort_message) {
-                                            bail!(
-                                                "{name} abort message '{abort_msg}' did not match expected message: {expected_abort_message}"
-                                            )
-                                        }
-                                        if backtrace_symbolizer_available() {
-                                            let stdout_str =
-                                                String::from_utf8_lossy(&output.stdout);
-                                            let frame_ref = format!("{name}.k1:");
-                                            if !stdout_str.contains(frame_ref.as_str()) {
-                                                bail!(
-                                                    "{name} abort backtrace has no symbolized frame '{frame_ref}'; stdout:\n{stdout_str}"
-                                                )
-                                            }
-                                        }
-                                        return Ok(());
+                    Ok(output) => {
+                        let run_status = output.status;
+                        let stderr_str = String::from_utf8_lossy(&output.stderr);
+                        let stderr_lines = stderr_str.lines();
+                        let last_stderr_line = stderr_lines.last();
+                        if let Some(signal) = run_status.signal() {
+                            if signal != 6 {
+                                bail!("{name} terminated by signal: {signal}");
+                            }
+                            let TestExpectation::AbortErrorMessage {
+                                message: expected_abort_message,
+                            } = &expectation
+                            else {
+                                bail!("{name} terminated by SIGABRT");
+                            };
+                            match last_stderr_line {
+                                None => bail!(
+                                    "{name} Expected abortmsg {expected_abort_message} but got abort with no output",
+                                ),
+                                Some(abort_msg) => {
+                                    if !abort_msg.contains(expected_abort_message) {
+                                        bail!(
+                                            "{name} abort message '{abort_msg}' did not match expected message: {expected_abort_message}"
+                                        )
                                     }
-                                }
-                            }
-                            if run_status.code() != expectation.exit_code() {
-                                bail!(
-                                    "{name} failed wrong exit code: exp {:?}, actual status: {:?}",
-                                    expectation.exit_code(),
-                                    run_status,
-                                );
-                            }
-                            if let Some(expected_exit_message) = expectation.expected_message() {
-                                match last_stderr_line {
-                                    None => bail!(
-                                        "{name} Expected exit message {expected_exit_message} but got exit with no output",
-                                    ),
-                                    Some(exit_msg) => {
-                                        if !exit_msg.contains(expected_exit_message) {
+                                    if backtrace_symbolizer_available() {
+                                        let stdout_str = String::from_utf8_lossy(&output.stdout);
+                                        let frame_ref = format!("{name}.k1:");
+                                        if !stdout_str.contains(frame_ref.as_str()) {
                                             bail!(
-                                                "{name} exit message '{exit_msg}' did not match expected message: {expected_exit_message}"
+                                                "{name} abort backtrace has no symbolized frame '{frame_ref}'; stdout:\n{stdout_str}"
                                             )
                                         }
+                                    }
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        if run_status.code() != expectation.exit_code() {
+                            bail!(
+                                "{name} failed wrong exit code: exp {:?}, actual status: {:?}",
+                                expectation.exit_code(),
+                                run_status,
+                            );
+                        }
+                        if let Some(expected_exit_message) = expectation.expected_message() {
+                            match last_stderr_line {
+                                None => bail!(
+                                    "{name} Expected exit message {expected_exit_message} but got exit with no output",
+                                ),
+                                Some(exit_msg) => {
+                                    if !exit_msg.contains(expected_exit_message) {
+                                        bail!(
+                                            "{name} exit message '{exit_msg}' did not match expected message: {expected_exit_message}"
+                                        )
                                     }
                                 }
                             }
@@ -350,7 +329,7 @@ pub fn main() -> Result<()> {
                         let ctx = Context::create();
                         let filename = filename.to_string();
                         eprintln!("{filename:040}...");
-                        let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
+                        let result = test_file(&ctx, test.as_path());
                         match result {
                             Ok(_) => {
                                 eprintln!("{filename:040} {}", "PASS".green());
@@ -378,7 +357,7 @@ pub fn main() -> Result<()> {
             let ctx = Context::create();
             let filename = test.as_path().file_name().unwrap().to_str().unwrap();
             eprintln!("{filename:040}...");
-            let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
+            let result = test_file(&ctx, test.as_path());
             match result {
                 Ok(_) => {
                     eprintln!("{filename:040} {}", "PASS".green());

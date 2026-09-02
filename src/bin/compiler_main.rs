@@ -65,50 +65,55 @@ fn run() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     }
     let llvm_ctx = inkwell::context::Context::create();
-    return match compiler::codegen_module(&args, &llvm_ctx, &mut program) {
-        Ok(cg) => match args.command {
+    let success = match compiler::codegen_module(&args, &llvm_ctx, &mut program) {
+        Ok(()) => match args.command {
             Command::Check { .. } => unreachable!(),
-            Command::Build { .. } => Ok(ExitCode::SUCCESS),
+            Command::Build { .. } => true,
             Command::Run { ref program_args, .. } => {
-                info!("run executable: {}", cg.name());
+                info!("run executable: {}", program.program_name());
                 let exit_code = compiler::run_compiled_program(
-                    &cg.k1.ast.idents,
-                    cg.k1.config.target,
-                    cg.k1.config.out_dir,
-                    cg.k1.config.home_dir,
-                    cg.name(),
+                    &program.ast.idents,
+                    program.config.target,
+                    program.config.out_dir,
+                    program.config.home_dir,
+                    program.program_name(),
                     false,
                     program_args,
                 );
-                if exit_code != Some(0) { Ok(ExitCode::FAILURE) } else { Ok(ExitCode::SUCCESS) }
+                exit_code == Some(0)
             }
             Command::Test { .. } => {
-                info!("test executable: {}", cg.name());
+                info!("test executable: {}", program.program_name());
                 let exit_code = compiler::run_compiled_program(
-                    &cg.k1.ast.idents,
-                    cg.k1.config.target,
-                    cg.k1.config.out_dir,
-                    cg.k1.config.home_dir,
-                    cg.name(),
+                    &program.ast.idents,
+                    program.config.target,
+                    program.config.out_dir,
+                    program.config.home_dir,
+                    program.program_name(),
                     true,
                     &[],
                 );
-                if exit_code != Some(0) { Ok(ExitCode::FAILURE) } else { Ok(ExitCode::SUCCESS) }
+                exit_code == Some(0)
             }
             Command::Server { .. } => unreachable!("server runs before codegen"),
             Command::Setup { .. } => unreachable!("setup exits after compile"),
             Command::Clean { .. } => {
                 // Clear the out dir
-                let out_dir_path = PathBuf::from(cg.k1.ast.idents.get_string(cg.k1.config.out_dir));
+                let out_dir_path =
+                    PathBuf::from(program.ast.idents.get_string(program.config.out_dir));
                 if std::fs::exists(&out_dir_path).unwrap() {
                     std::fs::remove_dir_all(&out_dir_path)?;
                 }
-                Ok(ExitCode::SUCCESS)
+                true
             }
         },
         Err(err) => {
             eprintln!("Codegen error: {err}");
-            Ok(ExitCode::FAILURE)
+            false
         }
     };
+    if !cfg!(debug_assertions) {
+        std::process::exit(if success { 0 } else { 1 })
+    }
+    Ok(if success { ExitCode::SUCCESS } else { ExitCode::FAILURE })
 }

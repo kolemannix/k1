@@ -2437,7 +2437,6 @@ pub struct TypedModuleBuffers {
     name_builder: String,
     lexer_tokens: Vec<lex::Token>,
     int_parse: String,
-    visited_types: RefCell<Vec<TypeId>>,
 }
 
 nz_u32_id!(ModuleId);
@@ -3087,7 +3086,6 @@ impl TypedProgram {
                 name_builder: String::new(),
                 lexer_tokens: Vec::new(),
                 int_parse: String::with_capacity(128),
-                visited_types: RefCell::new(Vec::new()),
             },
             patterns: TypedPatternPool::make(),
             vm: Box::new(Some(vm::Vm::make())),
@@ -18034,7 +18032,12 @@ impl TypedProgram {
 
     /// Works for sum variants too
     pub fn get_struct_layout(&mut self, struct_type_id: TypeId) -> &'static [StructField] {
-        let struct_pt = self.get_physical_type(struct_type_id).unwrap();
+        self.get_physical_type(struct_type_id);
+        self.get_struct_layout_computed(struct_type_id)
+    }
+
+    pub fn get_struct_layout_computed(&self, struct_type_id: TypeId) -> &'static [StructField] {
+        let struct_pt = self.get_physical_type_computed(struct_type_id).unwrap();
         if struct_pt.is_empty() {
             &[]
         } else {
