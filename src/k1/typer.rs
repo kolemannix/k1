@@ -969,12 +969,11 @@ bitflags! {
     struct TypedFunctionFlags: u8 {
         const CompilerDebug = 1;
         const Concrete = 1 << 1;
-        const Recursive = 1 << 2;
-        const Macro = 1 << 3;
-        const ModuleManifest = 1 << 4;
-        const Reloadable = 1 << 5;
-        const AbiNative = 1 << 6;
-        const AddressTaken = 1 << 7;
+        const Macro = 1 << 2;
+        const ModuleManifest = 1 << 3;
+        const Reloadable = 1 << 4;
+        const AbiNative = 1 << 5;
+        const AddressTaken = 1 << 6;
     }
 }
 
@@ -1024,10 +1023,6 @@ impl TypedFunction {
 
     pub fn is_concrete(&self) -> bool {
         self.flags.contains(TypedFunctionFlags::Concrete)
-    }
-
-    pub fn is_recursive(&self) -> bool {
-        self.flags.contains(TypedFunctionFlags::Recursive)
     }
 
     pub fn is_macro(&self) -> bool {
@@ -12016,16 +12011,6 @@ impl TypedProgram {
                 );
             }
 
-            if let Some(enclosing_id) = self.scopes.nearest_parent_function(ctx.scope_id) {
-                if enclosing_id == function_id {
-                    debug!(
-                        "Marking {} as directly recursive (stopgap that does not properly detect cycles but helps for now)",
-                        self.function_id_to_string(enclosing_id, false)
-                    );
-                    self.functions.get_mut(function_id).flags.insert(TypedFunctionFlags::Recursive);
-                }
-            }
-
             if self.get_function(function_id).is_macro()
                 && known_callee.is_none()
                 && known_args.is_none()
@@ -12987,7 +12972,6 @@ impl TypedProgram {
         };
         let flags = generic_function.flags
             & (TypedFunctionFlags::CompilerDebug
-                | TypedFunctionFlags::Recursive
                 | TypedFunctionFlags::Macro
                 | TypedFunctionFlags::ModuleManifest
                 | TypedFunctionFlags::AbiNative);

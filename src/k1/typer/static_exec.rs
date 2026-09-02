@@ -286,11 +286,7 @@ impl TypedProgram {
     ) -> K1Result<()> {
         k1.compile_function_for_exec(function_id, span)?;
         k1.compile_all_pending_ir(span)?;
-        // Macros execute repeatedly; inline_done guards re-optimizing
-        let unit_id = IrUnitId::Function(function_id);
-        if !ir::get_compiled_unit(&k1.ir, unit_id).unwrap().inline_done {
-            ir::optimize_unit(k1, unit_id);
-        }
+        ir::optimize_unit(k1, IrUnitId::Function(function_id));
         Ok(())
     }
 

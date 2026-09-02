@@ -71,9 +71,11 @@ pub struct ProgramIr {
     pub units_pending_compile: FxHashMap<FunctionId, ()>,
     pub globals_pending_eval: FxHashMap<TypedGlobalId, ()>,
 
+    pub scc_count: u32,
     opt_buf_stack: Vec<iropt::OptVisit>,
     opt_buf_order: Vec<IrUnitId>,
-    opt_buf_visited: FxHashSet<IrUnitId>,
+    opt_buf_nodes: FxHashMap<IrUnitId, iropt::SccNode>,
+    opt_buf_scc_stack: Vec<IrUnitId>,
     opt_buf_callees: Vec<FunctionId>,
     opt_buf_cfg_compute_work_stack: Vec<BlockId>,
     opt_buf_cfg_compute_visited: FxHashSet<BlockId>,
@@ -104,9 +106,11 @@ impl ProgramIr {
             b_loops: _,
             units_pending_compile,
             globals_pending_eval,
+            scc_count,
             opt_buf_stack: _,
             opt_buf_order: _,
-            opt_buf_visited: _,
+            opt_buf_nodes: _,
+            opt_buf_scc_stack: _,
             opt_buf_callees: _,
             opt_buf_cfg_compute_work_stack: _,
             opt_buf_cfg_compute_visited: _,
@@ -122,6 +126,7 @@ impl ProgramIr {
         debug_info.snap(w);
         write_map_snap(w, functions);
         write_map_snap(w, exprs);
+        w.write_u32(*scc_count);
         calls.snap(w);
         cmpxchgs.snap(w);
         vec_ops.snap(w);
@@ -138,6 +143,7 @@ impl ProgramIr {
         self.debug_info.restore(r);
         self.functions = crate::snap::restore_map_snap(r);
         self.exprs = crate::snap::restore_map_snap(r);
+        self.scc_count = r.read_u32();
         self.calls.restore(r);
         self.cmpxchgs.restore(r);
         self.vec_ops.restore(r);
@@ -359,9 +365,11 @@ impl ProgramIr {
             units_pending_compile: FxHashMap::new(),
             globals_pending_eval: FxHashMap::new(),
 
+            scc_count: 0,
             opt_buf_stack: vec![],
             opt_buf_order: vec![],
-            opt_buf_visited: FxHashSet::new(),
+            opt_buf_nodes: FxHashMap::new(),
+            opt_buf_scc_stack: vec![],
             opt_buf_callees: vec![],
             opt_buf_cfg_compute_work_stack: vec![],
             opt_buf_cfg_compute_visited: FxHashSet::new(),
@@ -459,7 +467,6 @@ pub struct IrUnit {
     pub result_type_id: TypeId,
     pub unit_id: IrUnitId,
     pub fn_type: PhysicalFunctionType,
-    // The number of instructions in this unit
     pub inst_count: u32,
     pub last_alloca_index: Option<u32>,
 
@@ -467,8 +474,10 @@ pub struct IrUnit {
     pub function_builtin_kind: Option<BackendBuiltin>,
     pub is_debug: bool,
 
-    pub inline_done: bool,
+    pub is_optimized: bool,
     pub cfg_valid: bool,
+    pub scc: u32,
+    pub recursive: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1656,8 +1665,10 @@ fn finalize_unit(
         blocks: b.blocks,
         function_builtin_kind: builtin_kind,
         is_debug,
-        inline_done: false,
+        is_optimized: false,
         cfg_valid: true,
+        scc: u32::MAX,
+        recursive: false,
     };
     match unit_id {
         IrUnitId::Function(function_id) => {

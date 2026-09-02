@@ -199,7 +199,6 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] VM "PermSpace" for caching converted static values in their VM representation
 - [x] Add StaticValue::Zero as an efficient special-case (generalization of the existing NullPointer, actually)
 - [x] 'Type predicate' functions as type bounds
-- [ ] Collapse long runs of zero-only data into a single one in LLVM IR (e.g., mem/allocStack)
 
 ## Introduce Warnings
 - [x] Unused var

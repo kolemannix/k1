@@ -3379,7 +3379,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let phi_block = self.builder.get_insert_block().unwrap();
 
                 for incoming in self.k1.ir.mem.getn(incomings) {
-                    let block = self.get_llvm_block(incoming.from)?;
+                    let Some(block) =
+                        self.get_current_function().blocks.get(&incoming.from).copied()
+                    else {
+                        continue;
+                    };
                     // Resolve in the edge's source block: anything it emits (e.g. a
                     // reload-global addr call) must dominate the edge, and the phi
                     // must stay at block top
@@ -4437,21 +4441,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             None => {}
         };
 
-        ir::cfg_simplify(self.k1, IrUnitId::Function(function_id));
-        debug!(
-            "codegen_unit_body ir simplified\n{}",
-            ir::unit_to_string(self.k1, IrUnitId::Function(function_id), false)
-        );
-
         let ir_unit = self.k1.ir.functions.get(&function_id).copied().unwrap();
         let blocks = ir_unit.blocks;
 
+        let mut seen = std::mem::take(&mut self.buffers.cfg_seen);
+        let mut blocks_rpo = std::mem::take(&mut self.buffers.cfg_blocks_rpo);
+        self.compute_cfg_order(blocks.first, &mut blocks_rpo, &mut seen);
+
         let mut block_mapping = FxHashMap::new();
         let llvm_function = self.get_current_function().function_value;
-
-        for (block, block_node) in self.k1.ir.mem.dlist_iter_handles(blocks) {
-            let b = self.ctx.append_basic_block(llvm_function, block_node.data.kind.str());
-            block_mapping.insert(block, b);
+        for block in &blocks_rpo {
+            let kind = self.k1.ir.mem.get(*block).data.kind;
+            let b = self.ctx.append_basic_block(llvm_function, kind.str());
+            block_mapping.insert(*block, b);
         }
         self.get_current_function_mut().blocks = block_mapping;
 
@@ -4467,9 +4469,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         inst_mappings.clear();
-        let mut seen = std::mem::take(&mut self.buffers.cfg_seen);
-        let mut blocks_rpo = std::mem::take(&mut self.buffers.cfg_blocks_rpo);
-        self.compute_cfg_order(blocks.first, &mut blocks_rpo, &mut seen);
         for block in &blocks_rpo {
             self.codegen_block(inst_mappings, *block)?;
         }

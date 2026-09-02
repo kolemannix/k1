@@ -38,7 +38,26 @@ ns recurse_basic {
     assert(not xs.contains(eight))
   }
 
+  fn reca(n: size): size {
+    if n == 0 0 else 1 + recb(n - 1)
+  }
+  fn recb(n: size): size {
+    ind-reca(n)
+  }
+  fn ind-reca(n: size): size {
+    reca(n)
+  }
+  fn self-rec(n: size): size {
+    if n == 0 0 else 1 + self-rec(n - 1)
+  }
+
   fn test() {
+    assert-equals(reca(5), 5)
+    assert-equals(self-rec(6), 6)
+    let static-reca: size = #static reca(7)
+    let static-self-rec: size = #static self-rec(8)
+    assert-equals(static-reca, 7)
+    assert-equals(static-self-rec, 8)
     let node = make(4)
     assert-equals(count(node), 4)
     let enode = emake(10)
