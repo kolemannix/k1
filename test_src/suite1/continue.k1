@@ -55,6 +55,15 @@ fn continue-defers(): int {
   defer-count
 }
 
+fn continue-index(): int {
+  let index-sum: int = 0
+  for x in [1, 2, 3, 4, 5, 6] {
+    if x % 2 == 1 continue
+    index-sum = index-sum + it-index
+  }
+  index-sum
+}
+
 fn test() {
   assert-equals(continue-while(), 25)
   let static-while: int = #static continue-while()
@@ -65,4 +74,7 @@ fn test() {
   assert-equals(continue-for(), 12)
   assert-equals(continue-nested(), 23)
   assert-equals(continue-defers(), 3)
+  assert-equals(continue-index(), 9)
+  let static-index: int = #static continue-index()
+  assert-equals(static-index, 9)
 }

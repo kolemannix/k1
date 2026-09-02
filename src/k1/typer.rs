@@ -8791,10 +8791,10 @@ impl TypedProgram {
         let outer_for_expr_scope =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
 
-        let zero_expr = self.synth_i64(0, for_expr.body_block.span);
+        let initial_index_expr = self.synth_i64(-1, for_expr.body_block.span);
         let index_variable = self.synth_variable_defn(
             self.ast.idents.b.it_index,
-            zero_expr,
+            initial_index_expr,
             true,
             outer_for_expr_scope,
             Some(iterable_span),
@@ -8891,6 +8891,21 @@ impl TypedProgram {
             false,
         )?;
 
+        let one_expr = self.synth_i64(1, iterable_span);
+        let add_operation = self.synth_add_call(
+            index_variable.variable_expr,
+            one_expr,
+            ctx.with_no_expected_type(),
+            iterable_span,
+        )?;
+        let index_increment_statement = TypedStmt::Assignment(AssignmentStmt {
+            destination: index_variable.variable_expr,
+            value: add_operation,
+            span: iterable_span,
+            kind: AssignmentKind::Set,
+        });
+        self.push_block_stmt(&mut loop_block, index_increment_statement);
+
         self.push_block_stmt_id(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
 
         consequent_block.statements.push(binding_variable.defn_stmt);
@@ -8913,22 +8928,6 @@ impl TypedProgram {
             body_span,
         );
         self.push_block_expr_id(&mut loop_block, if_next_loop_else_break_expr);
-
-        // Append the index increment to the body block
-        let one_expr = self.synth_i64(1, iterable_span);
-        let add_operation = self.synth_add_call(
-            index_variable.variable_expr,
-            one_expr,
-            ctx.with_no_expected_type(),
-            iterable_span,
-        )?;
-        let index_increment_statement = TypedStmt::Assignment(AssignmentStmt {
-            destination: index_variable.variable_expr,
-            value: add_operation,
-            span: iterable_span,
-            kind: AssignmentKind::Set,
-        });
-        self.push_block_stmt(&mut loop_block, index_increment_statement);
 
         let body_block = self.exprs.add_block(loop_block, self.builtin_types.empty);
         let loop_expr = self.exprs.add(

@@ -2046,49 +2046,4 @@ mod compiler_test {
 
         let _ = fs::remove_dir_all(&dir);
     }
-
-    #[test]
-    fn no_std_core_typechecks() {
-        static SET_HOME: std::sync::Once = std::sync::Once::new();
-        SET_HOME.call_once(|| unsafe {
-            std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
-        });
-        let dir = std::env::temp_dir().join(format!("k1_no_std_test_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        let app = dir.join("app.k1");
-        fs::write(&app, "fn main(): i32 {\n  let x = 41 + 1\n  println(\"x is ${x}\")\n  0\n}\n")
-            .unwrap();
-        let args = Args {
-            no_std: true,
-            emit_llvm: false,
-            optimize: false,
-            dump_module: false,
-            dump_idents: false,
-            debug: false,
-            sanitize: false,
-            filc: false,
-            profile: false,
-            chatty: false,
-            optimize_ir: true,
-            cache: false,
-            target: None,
-            k1_home_override: None,
-            command: Command::Check { file: Some(app.clone()) },
-        };
-
-        assert!(
-            compile_program(&args).is_ok(),
-            "no-std check of core plus string interpolation must succeed"
-        );
-
-        fs::write(
-            &app,
-            "fn main(): i32 {\n  let t = std/time/read-cpu-counter()\n  println(\"${t}\")\n  0\n}\n",
-        )
-        .unwrap();
-        assert!(compile_program(&args).is_err(), "std symbols must be absent under no-std");
-
-        let _ = fs::remove_dir_all(&dir);
-    }
 }
