@@ -3006,7 +3006,8 @@ fn compile_static_value(b: &mut Builder, value_id: StaticValueId, pt: PhysicalTy
         | StaticValue::Zero(_)
         | StaticValue::Struct(_)
         | StaticValue::Sum(_)
-        | StaticValue::LinearContainer(_) => {
+        | StaticValue::LinearContainer(_)
+        | StaticValue::RawContainer(_) => {
             let value = Value::StaticValue { t: pt, id: value_id };
             value
         }

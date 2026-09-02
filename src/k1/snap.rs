@@ -4,7 +4,7 @@
 
 use std::mem::size_of;
 
-pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP11";
+pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP12";
 
 const BLOB_COMPRESS_MIN: usize = 1 << 16;
 const BLOB_CHUNK: usize = 1 << 20;
@@ -53,11 +53,8 @@ impl SnapWriter {
 
     /// Serializes straight into the destination mmapped file
     fn new_file(path: &std::path::Path) -> std::io::Result<SnapWriter> {
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(path)?;
+        let file =
+            std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(path)?;
         let mapped = (|| {
             file.set_len(SNAP_RESERVE_BYTES as u64)?;
             unsafe { memmap2::MmapMut::map_mut(&file) }
@@ -577,8 +574,7 @@ fn cache_run_eviction(cache_dir: &std::path::Path, max_bytes: u64) {
                 let _ = std::fs::remove_file(&path);
                 continue;
             }
-            let size =
-                metadata.len().min(std::os::unix::fs::MetadataExt::blocks(&metadata) * 512);
+            let size = metadata.len().min(std::os::unix::fs::MetadataExt::blocks(&metadata) * 512);
             total += size;
             snaps.push((mtime, size, path));
         }

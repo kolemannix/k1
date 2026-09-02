@@ -819,6 +819,112 @@ impl TypedProgram {
         self.exprs.add_static(value_id, type_id, false, span)
     }
 
+    pub(crate) fn get_container_element_type_if_raw(
+        &self,
+        element_type_id: TypeId,
+    ) -> Option<ScalarType> {
+        match self.types.get(element_type_id) {
+            Type::Char => Some(ScalarType::Char),
+            Type::Bool => Some(ScalarType::Bool),
+            Type::Integer(int_type) => Some(int_type.get_scalar_type()),
+            Type::Enum(enum_type) => Some(enum_type.int_type.get_scalar_type()),
+            Type::Float(float_type) => Some(float_type.get_scalar_type()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn add_static_container_from_ids(
+        &mut self,
+        kind: StaticContainerKind,
+        container_type_id: TypeId,
+        elements: &[StaticValueId],
+    ) -> StaticValueId {
+        let element_type = self.get_linear_container_element(container_type_id).unwrap();
+        match self.get_container_element_type_if_raw(element_type) {
+            Some(scalar) => {
+                let size = scalar.get_layout().size;
+                let align = self.get_layout(container_type_id).unwrap().align;
+                let (bytes, dst) =
+                    self.static_values.mem.push_bytes_uninit(size * elements.len() as u32, align);
+                for (index, element) in elements.iter().enumerate() {
+                    let element_dst = unsafe { dst.byte_add(index * size as usize) };
+                    vm::store_static_value(self, element_dst, *element);
+                }
+                self.static_values.add(StaticValue::RawContainer(StaticRawContainer {
+                    bytes,
+                    type_id: container_type_id,
+                    kind,
+                    scalar,
+                }))
+            }
+            None => {
+                let elements = self.static_values.mem.pushn(elements);
+                self.static_values.add(StaticValue::LinearContainer(StaticContainer {
+                    elements,
+                    kind,
+                    type_id: container_type_id,
+                }))
+            }
+        }
+    }
+
+    pub(crate) fn add_static_container_from_bytes(
+        &mut self,
+        kind: StaticContainerKind,
+        container_type_id: TypeId,
+        scalar: ScalarType,
+        src: *const u8,
+        count: usize,
+    ) -> StaticValueId {
+        let byte_len = scalar.get_layout().size as usize * count;
+        let align = self.get_layout(container_type_id).unwrap().align;
+        let bytes = if byte_len == 0 {
+            MSlice::empty()
+        } else {
+            let src_bytes = unsafe { std::slice::from_raw_parts(src, byte_len) };
+            self.static_values.mem.push_bytes_aligned(src_bytes, align)
+        };
+        self.static_values.add(StaticValue::RawContainer(StaticRawContainer {
+            bytes,
+            type_id: container_type_id,
+            kind,
+            scalar,
+        }))
+    }
+
+    pub(crate) fn decode_raw_element(&self, raw: &StaticRawContainer, index: usize) -> StaticValue {
+        let element_type = self.get_linear_container_element(raw.type_id).unwrap();
+        let size = raw.scalar.get_layout().size as usize;
+        let bytes = self.static_values.mem.getn(raw.bytes);
+        let value = vm::load_scalar(raw.scalar, unsafe { bytes.as_ptr().byte_add(index * size) });
+        vm::scalar_vm_value_to_static_value(self, element_type, value).unwrap()
+    }
+
+    pub(crate) fn static_container_len(&self, value_id: StaticValueId) -> Option<usize> {
+        match self.static_values.get(value_id) {
+            StaticValue::LinearContainer(cont) => Some(cont.len()),
+            StaticValue::RawContainer(raw) => Some(raw.len()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn static_container_element(
+        &mut self,
+        value_id: StaticValueId,
+        index: usize,
+    ) -> StaticValueId {
+        match *self.static_values.get(value_id) {
+            StaticValue::LinearContainer(cont) => {
+                *self.static_values.mem.get_nth(cont.elements, index)
+            }
+            StaticValue::RawContainer(raw) => {
+                let element = self.decode_raw_element(&raw, index);
+                self.static_values.add(element)
+            }
+            _ => unreachable!(),
+        }
+    }
+
     /// A constant `code` value: a list of chunks, each text plus its source span
     pub(super) fn make_static_code_value(
         &mut self,
@@ -828,7 +934,7 @@ impl TypedProgram {
         let chunk_type = self.builtin_types.code_chunk();
         let chunks_list_type =
             self.instantiate_generic_type(self.builtin_types.list(), &[chunk_type]);
-        let mut elements = self.static_values.mem.new_list(chunks.len() as u32);
+        let mut elements = self.tmp.new_list(chunks.len() as u32);
         for (text, source) in chunks {
             let text_value = self.static_values.add_string(*text);
             let source_value =
@@ -837,12 +943,11 @@ impl TypedProgram {
                 self.static_values.add_struct_from_slice(chunk_type, &[text_value, source_value]);
             elements.push(chunk_value);
         }
-        let elements = elements.to_slice();
-        let chunks_value = self.static_values.add(StaticValue::LinearContainer(StaticContainer {
-            elements,
-            kind: StaticContainerKind::List,
-            type_id: chunks_list_type,
-        }));
+        let chunks_value = self.add_static_container_from_ids(
+            StaticContainerKind::List,
+            chunks_list_type,
+            elements.as_slice(),
+        );
         self.static_values.add_struct_from_slice(code_type, &[chunks_value])
     }
 

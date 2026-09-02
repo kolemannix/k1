@@ -1,0 +1,90 @@
+ns static_raw
+
+let BYTES: span[u8] = {
+  let l = list/with-capacity[u8](300)
+  for i in 0.until(300) {
+    l.push(i.trunc[u8])
+  }
+  l.as-span()
+}
+
+let ARR: array[i32, 4] = {
+  let a: array[i32, 4] = [10, -20, 30, -40]
+  a
+}
+
+let FLOATS: span[f64] = {
+  let l = list/with-capacity[f64](3)
+  l.push(1.5)
+  l.push(-0.0)
+  l.push(2.25)
+  l.as-span()
+}
+
+let(mutable) MUT_BYTES: span[u8] = {
+  let l = list/with-capacity[u8](2)
+  l.push(200)
+  l.push(201)
+  l.as-span()
+}
+
+let EMPTY: span[u16] = []
+
+let(mutable) BUF1: buffer[u8] = { let l = list/with-capacity[u8](2); l.push(1); l.push(2); l.buffer }
+let(mutable) BUF2: buffer[u8] = { let l = list/with-capacity[u8](2); l.push(1); l.push(2); l.buffer }
+
+type flag = either { off, on }
+let FLAGS: span[flag] = [:on, :off, :on]
+
+fn same-type[t](_a: t, _b: t) {}
+
+fn test() {
+  assert-equals(BYTES.buffer.len, 300)
+  assert-equals(BYTES.[0], 0)
+  assert-equals(BYTES.[255], 255)
+  assert-equals(BYTES.[299], 43)
+
+  assert-equals(ARR.[0], 10)
+  assert-equals(ARR.[1], -20)
+  assert-equals(ARR.[3], -40)
+
+  assert-equals(FLOATS.buffer.len, 3)
+  assert-equals(FLOATS.[0], 1.5)
+  assert-equals(FLOATS.[2], 2.25)
+
+  assert-equals(MUT_BYTES.[1], 201)
+  assert-equals(EMPTY.buffer.len, 0)
+  assert-equals(FLAGS.[1], :off)
+  assert-equals(FLAGS.[2], :on)
+
+  let arr: array[u8, 3] = [1, 2, 3]
+  let lst: list[u8] = [1, 2, 3]
+  let buf: buffer[u8] = [1, 2, 3]
+  let spn: span[u8] = [1, 2, 3]
+  assert-equals(arr.[2], 3)
+  assert-equals(lst.[2], 3)
+  assert-equals(buf.[2], 3)
+  assert-equals(spn.[2], 3)
+  let none: list[u8] = []
+  assert-equals(none.len, 0)
+
+  let total = 0
+  #for BYTES {
+    total = total + it.widen[int]
+  }
+  assert-equals(total, 33586)
+
+  let baked1 = #static { let l = list/with-capacity[u32](2); l.push(5); l.push(6); l.as-span() }
+  let baked2 = #static { let l = list/with-capacity[u32](2); l.push(5); l.push(6); l.as-span() }
+  same-type(baked1, baked2)
+  assert-equals(baked1.from-static().[1], 6)
+
+  #static {
+    BUF1.[0] = 9
+    assert-equals(BUF1.[0], 9)
+    assert-equals(BUF2.[0], 1)
+    assert-equals(BYTES.[299], 43)
+    assert-equals(ARR.[1], -20)
+    assert-equals(FLOATS.[0], 1.5)
+  }
+}

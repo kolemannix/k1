@@ -124,6 +124,7 @@ fn main(): i32 {
   test-ffi()
   static_parameter/test()
   static_run/test()
+  static_raw/test()
 
   test_meta/test()
   test_macro/test()

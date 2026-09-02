@@ -923,7 +923,18 @@ impl TypedProgram {
         pretty: bool,
         visiting: &mut Vec<TypeId>,
     ) -> std::fmt::Result {
-        match self.static_values.get(id) {
+        let value = *self.static_values.get(id);
+        self.display_static_value_inline(w, &value, pretty, visiting)
+    }
+
+    fn display_static_value_inline<W: Write + ?Sized>(
+        &self,
+        w: &mut W,
+        value: &StaticValue,
+        pretty: bool,
+        visiting: &mut Vec<TypeId>,
+    ) -> std::fmt::Result {
+        match value {
             StaticValue::Empty(type_id) => {
                 if pretty {
                     w.write_str("empty")
@@ -1033,13 +1044,7 @@ impl TypedProgram {
             }
             StaticValue::LinearContainer(cont) => {
                 if !pretty {
-                    match cont.kind {
-                        StaticContainerKind::Span => write!(w, "span")?,
-                        StaticContainerKind::Array => write!(w, "array")?,
-                        StaticContainerKind::Vector => write!(w, "vector")?,
-                        StaticContainerKind::Buffer => write!(w, "buffer")?,
-                        StaticContainerKind::List => write!(w, "list")?,
-                    }
+                    w.write_str(cont.kind.name())?;
                 }
                 self.display_static_items(
                     w,
@@ -1048,6 +1053,20 @@ impl TypedProgram {
                     visiting,
                 )?;
                 Ok(())
+            }
+            StaticValue::RawContainer(raw) => {
+                if !pretty {
+                    w.write_str(raw.kind.name())?;
+                }
+                write!(w, "[")?;
+                for index in 0..raw.len() {
+                    if index > 0 {
+                        write!(w, ", ")?;
+                    }
+                    let element = self.decode_raw_element(raw, index);
+                    self.display_static_value_inline(w, &element, pretty, visiting)?;
+                }
+                write!(w, "]")
             }
         }
     }

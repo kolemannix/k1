@@ -266,7 +266,7 @@ impl TypedProgram {
                 let int_type = enum_type.int_type;
                 let int_type_value_id =
                     self.static_values.add(TypedProgram::make_int_kind(int_kind_type_id, int_type));
-                let mut member_values = self.static_values.mem.new_list(target_enum_members.len());
+                let mut member_values = self.tmp.new_list(target_enum_members.len());
                 // values: span[{
                 //   name: string,
                 //   value: int-value,
@@ -295,9 +295,11 @@ impl TypedProgram {
                         ],
                     ))
                 }
-                let variant_values_slice = member_values.to_slice();
-                let variants_span_value_id =
-                    self.static_values.add_span(values_span_type_id, variant_values_slice);
+                let variants_span_value_id = self.add_static_container_from_ids(
+                    StaticContainerKind::Span,
+                    values_span_type_id,
+                    member_values.as_slice(),
+                );
                 let payload_value_id = self.static_values.add_struct_from_slice(
                     enum_schema_payload_type_id,
                     &[int_type_value_id, variants_span_value_id],
@@ -329,8 +331,7 @@ impl TypedProgram {
                     RecordKind::Union => None,
                 };
                 // { name: string), typeId: u64, offset: size }
-                let mut field_values: List<StaticValueId, StaticValuePool> =
-                    self.static_values.mem.new_list(struct_type_fields.len());
+                let mut field_values = self.tmp.new_list(struct_type_fields.len());
                 for (index, f) in self.mem.getn(struct_type_fields).iter().enumerate() {
                     let name_string_value_id = self.static_values.add_string(f.name);
 
@@ -359,9 +360,11 @@ impl TypedProgram {
                         ),
                     );
                 }
-                let values_slice = field_values.to_slice();
-                let span_value_id =
-                    self.static_values.add_span(struct_schema_fields_span_type_id, values_slice);
+                let span_value_id = self.add_static_container_from_ids(
+                    StaticContainerKind::Span,
+                    struct_schema_fields_span_type_id,
+                    field_values.as_slice(),
+                );
                 let payload = self
                     .static_values
                     .add_struct_from_slice(struct_schema_payload_type_id, &[span_value_id]);
@@ -455,7 +458,7 @@ impl TypedProgram {
                 let payload_offset = sum_pt.payload_offset;
                 let payload_offset_value_id =
                     self.static_values.add_size(to_k1_size_usize(payload_offset as usize));
-                let mut variant_values = self.static_values.mem.new_list(target_sum_variants.len());
+                let mut variant_values = self.tmp.new_list(target_sum_variants.len());
                 for variant in self.mem.getn(target_sum_variants) {
                     let name_value_id = self.static_values.add_string(variant.name);
 
@@ -510,9 +513,11 @@ impl TypedProgram {
                         ],
                     ))
                 }
-                let variant_values_slice = variant_values.to_slice();
-                let variants_span_value_id =
-                    self.static_values.add_span(variants_span_type_id, variant_values_slice);
+                let variants_span_value_id = self.add_static_container_from_ids(
+                    StaticContainerKind::Span,
+                    variants_span_type_id,
+                    variant_values.as_slice(),
+                );
                 let payload_value_id = self.static_values.add_struct_from_slice(
                     either_payload_type_id,
                     &[tag_type_value_id, payload_offset_value_id, variants_span_value_id],
@@ -545,8 +550,7 @@ impl TypedProgram {
                 let function_param_struct_type_id =
                     self.get_as_span_instance(function_params_span_type_id).unwrap();
 
-                let mut params_value_ids =
-                    self.static_values.mem.new_list(fn_type.logical_params().len());
+                let mut params_value_ids = self.tmp.new_list(fn_type.logical_params().len());
                 // Skipping lambda environment parameters;
                 // knowing what is a lambda is covered by the type
                 // kind the function appears within
@@ -568,10 +572,11 @@ impl TypedProgram {
                     params_value_ids.push(param_struct_value_id)
                 }
 
-                let params_value_ids_slice = params_value_ids.to_slice();
-                let params_span_value_id = self
-                    .static_values
-                    .add_span(function_params_span_type_id, params_value_ids_slice);
+                let params_span_value_id = self.add_static_container_from_ids(
+                    StaticContainerKind::Span,
+                    function_params_span_type_id,
+                    params_value_ids.as_slice(),
+                );
 
                 self.register_type_metainfo(fn_type.return_type);
                 let return_type_id_value_id = self.add_type_id_value(fn_type.return_type);

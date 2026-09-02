@@ -6,8 +6,7 @@ next up
 # Bugs
 - [x] [major] Support (co)recursive Generics
 - [x] [major] Allow pattern matching *into* recursive types (currently we just terminate)
-- [ ] Represent scalar containers (i|u8-64 + list/buffer/span/array) natively, not as individual static values. This at
-      least covers us for byte arrays and such; a large array of basic structs will still crush us. Can worry about that later
+- [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [x] Test handling of NaN and Infinity literals, other float edge cases
 - [x] accidentally captured context parameter results in 'Missing variable' in ir
 - [x] Out of order type definitions don't work with aliases
@@ -39,10 +38,8 @@ pointer-free predicate - pod/serializable?
 
 ## [x] Ability objects; dyn[<ability expr>]
 
-## [ ] Escape analysis
-- [ ] Use to report escaped stack pointers
-
 ## grab bag list mid2026
+- [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
 - [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
 - [ ] Add `self -> *self` thunk adapters for ability objects, `dyn[allocator]` is impossible
@@ -70,7 +67,6 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
 - [ ] `#[must_use]` equivalent
 - [ ] labeled loops: `break :label` / `continue :label`. The brotli port's C `goto emit_remainder`
       two-level exits became `done = true; break` + `if done break` flag chains (5 sites)
-- [ ] design min/max for scalars (comparable ability makes the generic trivial; brotli hand-rolled min-size)
 - [ ] literal inference issue (a) `2 * d` vs `d * 2` differ — literal-lhs
       defaults i64 and widens the u32 rhs up, literal-rhs adopts u32 and wraps; (b) binary ops widen
       rhs into lhs type but have no least-upper-bound, so `u32 + i64` errors while `i64 + u32` works;
@@ -80,12 +76,12 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
         I think doing 'defaults' is relatively easy. You just hit consult the default on the unprovided path. For partially-applieds,
         you need essentially some notion of an 'ability signature function', just like type aliases would need
-- [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
+- [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch, as well as the few synthesized functions (sum get name, others?) that want it
 - [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
 - [x] auto-print implementation on-demand for sums
 - [x] Exported functions
 - [ ] Tail calls
-- [ ] Implement at least one format specifier (precision, pretty). Do precision ('places') first
+- [ ] Implement precision format specifier
 - [ ] decide if overflow traps or not (in debug and release, if those are even different)
 - [x] good backtraces
 - [-] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
@@ -156,7 +152,7 @@ bindgen dogfood list
 
 ## Project: di. Debug Info tidyups
 - [x] Fix random jumping to function header
-- [ ] Add separate scalar types for char and boolean for debug info
+- [x] Add separate scalar types for char and boolean for debug info
 
 ## Project: Recursive types take 2
 - [x] Remove RecursiveReference; make visitors detect cycles
@@ -165,11 +161,16 @@ bindgen dogfood list
 ## VM Profiler: Instrument the vm itself
 
 ## Vendor'd Libraries
-- [ ] postgres client
+- [-] postgres client
 - [x] linker args / "use system lib"
 - [x] libuv module
 - [x] http module
-- [ ] datastar-based web framework
+- [-] datastar-based web framework
+- [x] freetype
+- [x] harfbuzz
+- [x] sdl3
+- [x] sqlite
+- [x] libuv
 
 ## K1 Profiler
 Add `core` and/or compiler support to allow block profiling of k1 programs
@@ -204,7 +205,6 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 
 ## Introduce Warnings
 - [x] Unused var
-- [ ] Unused type bound
 - [x] Footgun, warn on naked variable patterns in 'is'
     - `if self.slots.get(probe_index) is None {`
 
@@ -216,7 +216,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: system interface, 'Write' ability and intrinsic fix.
 
 ## Project: More LSP features
-- [ ] Workspace symbols
+- [ ] LSP Workspace symbols
 - [ ] Rest of the completion sites (fill in as I hit them)
 - [x] Hover first pass
 - [x] Hover much better
@@ -237,10 +237,9 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] Add entire modules from TypedProgram
 - [x] Module manifests somewhere
 - [x] Library vs Binary
-- [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [x] Dependencies: local module
 - [x] Specify linked libraries in manifest (Eventually this will need to be more customizable)
-- [ ] serialize typedprogram at each module completion (for incremental compilation)
+- [x] serialize typedprogram at each module completion (for incremental compilation)
 - [x] clang passthrough options, when do we 'link', in IR or as object files, ...
   - [x] we 'link' with k1 in the typer's modules system
   - [x] we link with other deps w/ the linker
@@ -443,9 +442,9 @@ It currently runs directly off the typed tree
 - [x] 'call' method syntax (Scala's 'apply' feature)
 
 ## Ideas
-- [ ] 'join' types to form new enums/structs, statically. `switch {strict|dynamic} ...`? If dynamic, I'll build a sum or product based on the branches' types
-  - [ ] This would be a cool type of branch; 'infer a new sum for me based on all the branches'. `switch(merge) <abc> { ... }`
-- [ ] Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
+- 'join' types to form new enums/structs, statically. `switch {strict|dynamic} ...`? If dynamic, I'll build a sum or product based on the branches' types
+  - This would be a cool type of branch; 'infer a new sum for me based on all the branches'. `switch(merge) <abc> { ... }`
+- Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
   - (Monad ability would require closures and generic abilities, which we now have. Just need higher order type params `F[_]`
   - This is a good test of a user macro system
 
@@ -454,7 +453,6 @@ It currently runs directly off the typed tree
 - [x] Convert NamedType to a trait
 - [x] Use smallvec
 - [x] UTF8
-- [ ] Test multi-byte characters (emoji, other)
 - [x] Intern ParsedBlock and ParsedStatement
 
 ## Error story

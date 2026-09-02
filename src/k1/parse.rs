@@ -2595,9 +2595,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             let pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Struct(pattern));
             Ok(pattern_id)
         } else if first.kind == K::Colon
-            || (first.kind == K::Ident
-                && second.kind == K::Colon
-                && self.token_chars(first) != "_")
+            || (first.kind == K::Ident && second.kind == K::Colon && self.token_chars(first) != "_")
         {
             let sum_name = if first.kind == K::Ident {
                 // Eats the Colon

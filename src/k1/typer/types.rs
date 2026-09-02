@@ -417,6 +417,13 @@ pub enum FloatType {
     F64 = 1,
 }
 impl FloatType {
+    pub fn get_scalar_type(&self) -> ScalarType {
+        match self {
+            FloatType::F32 => ScalarType::F32,
+            FloatType::F64 => ScalarType::F64,
+        }
+    }
+
     pub fn zero(&self) -> TypedFloatValue {
         match self {
             FloatType::F32 => TypedFloatValue::F32(0.0),

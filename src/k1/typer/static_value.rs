@@ -28,6 +28,18 @@ pub enum StaticContainerKind {
     List,
 }
 
+impl StaticContainerKind {
+    pub fn name(&self) -> &'static str {
+        match self {
+            StaticContainerKind::Span => "span",
+            StaticContainerKind::Array => "array",
+            StaticContainerKind::Vector => "vector",
+            StaticContainerKind::Buffer => "buffer",
+            StaticContainerKind::List => "list",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct StaticContainer {
     pub elements: StaticValueSlice,
@@ -42,6 +54,24 @@ impl StaticContainer {
 
     pub fn len(&self) -> usize {
         self.elements.len() as usize
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct StaticRawContainer {
+    pub bytes: MSlice<u8, StaticValuePool>,
+    pub type_id: TypeId,
+    pub kind: StaticContainerKind,
+    pub scalar: ScalarType,
+}
+
+impl StaticRawContainer {
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn len(&self) -> usize {
+        self.bytes.len() as usize / self.scalar.get_layout().size as usize
     }
 }
 
@@ -60,10 +90,9 @@ pub enum StaticValue {
     Struct(StaticStruct),
     Sum(StaticSum),
     LinearContainer(StaticContainer),
+    RawContainer(StaticRawContainer),
 
-    // Special, optimized-ish representations
     Zero(TypeId),
-    // Raw(TypeId, *mut u8)
 }
 
 impl StaticValue {
@@ -79,13 +108,8 @@ impl StaticValue {
             StaticValue::Zero(_) => "zero",
             StaticValue::Struct(_) => "struct",
             StaticValue::Sum(_) => "sum",
-            StaticValue::LinearContainer(c) => match c.kind {
-                StaticContainerKind::Span => "span",
-                StaticContainerKind::Array => "array",
-                StaticContainerKind::Vector => "vector",
-                StaticContainerKind::Buffer => "buffer",
-                StaticContainerKind::List => "list",
-            },
+            StaticValue::LinearContainer(c) => c.kind.name(),
+            StaticValue::RawContainer(c) => c.kind.name(),
         }
     }
 
@@ -113,6 +137,13 @@ impl StaticValue {
     pub fn as_container(&self) -> Option<&StaticContainer> {
         match self {
             StaticValue::LinearContainer(cont) => Some(cont),
+            _ => None,
+        }
+    }
+
+    pub fn as_raw_container(&self) -> Option<&StaticRawContainer> {
+        match self {
+            StaticValue::RawContainer(cont) => Some(cont),
             _ => None,
         }
     }
@@ -184,6 +215,12 @@ impl DepHash<StaticValuePool> for StaticValue {
                     element_id.hash(state);
                 }
             }
+            StaticValue::RawContainer(r) => {
+                r.type_id.hash(state);
+                r.kind.hash(state);
+                (r.scalar as u8).hash(state);
+                xxhash_rust::xxh3::xxh3_64(d.mem.getn(r.bytes)).hash(state);
+            }
         }
     }
 }
@@ -218,6 +255,11 @@ impl DepEq<StaticValuePool> for StaticValue {
                     && a.elements.len() == b.elements.len()
                     && a.kind == b.kind
                     && pool.mem.getn(a.elements) == pool.mem.getn(b.elements)
+            }
+            (StaticValue::RawContainer(a), StaticValue::RawContainer(b)) => {
+                a.type_id == b.type_id
+                    && a.kind == b.kind
+                    && pool.mem.getn(a.bytes) == pool.mem.getn(b.bytes)
             }
             _ => false,
         }
@@ -360,6 +402,7 @@ impl StaticValuePool {
         self.add(StaticValue::Int(TypedIntValue::I64(size)))
     }
 
+    #[cfg(test)]
     pub fn add_span(&mut self, span_type_id: TypeId, elements: StaticValueSlice) -> StaticValueId {
         self.add(StaticValue::LinearContainer(StaticContainer {
             type_id: span_type_id,

@@ -19,7 +19,7 @@ use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine};
 use inkwell::types::{
-    AnyType, ArrayType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType,
+    AnyType, ArrayType, AsTypeRef, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType,
     FunctionType as LlvmFunctionType, IntType, PointerType, StructType,
     VectorType as LlvmVectorType,
 };
@@ -48,8 +48,9 @@ use crate::typer::types::{
     ScalarType, Type, TypeDefnInfo, TypeId,
 };
 use crate::typer::{
-    FunctionId, K1Result, Linkage as TyperLinkage, NamespaceId, StaticContainerKind, StaticValue,
-    StaticValueId, TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
+    FunctionId, K1Result, Linkage as TyperLinkage, NamespaceId, StaticContainerKind,
+    StaticRawContainer, StaticValue, StaticValueId, TypedFloatValue, TypedGlobalId, TypedIntValue,
+    TypedProgram,
 };
 use crate::{SV8, ir, kbail, kerr, kmem};
 
@@ -4740,66 +4741,91 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let span_elements = self.k1.static_values.mem.getn(cont.elements);
                 let array_value =
                     self.codegen_static_elements_array(element_type, span_elements, depth)?;
-
-                match cont.kind {
-                    StaticContainerKind::Span
-                    | StaticContainerKind::Buffer
-                    | StaticContainerKind::List => {
-                        let element_type_layout = self.k1.get_layout(element_type).unwrap();
-                        let data_global = self.make_global_from_value(
-                            array_value.as_basic_value_enum(),
-                            element_type_layout.align,
-                            &format!("static_elems_{}\0", static_value_id.as_u32()),
-                            true,
-                            LlvmLinkage::Private,
-                            false,
-                        );
-                        data_global.set_constant(true);
-                        data_global.set_unnamed_addr(true);
-                        data_global.set_initializer(&array_value);
-                        let final_struct = match cont.kind {
-                            StaticContainerKind::Array | StaticContainerKind::Vector => {
-                                unreachable!()
-                            }
-                            StaticContainerKind::Buffer => {
-                                let buffer_pt = self.k1.get_physical_type(cont.type_id).unwrap();
-                                let buffer_cg_type = self.codegen_type(buffer_pt).expect_struct();
-                                self.make_buffer_struct(
-                                    buffer_cg_type.struct_type,
-                                    cont.len() as u64,
-                                    data_global.as_pointer_value(),
-                                )
-                            }
-                            StaticContainerKind::Span => self.make_span_struct(
-                                cont.type_id,
-                                cont.len() as u64,
-                                data_global.as_pointer_value(),
-                            ),
-                            StaticContainerKind::List => {
-                                let buffer_struct = self.make_span_struct(
-                                    cont.type_id,
-                                    cont.len() as u64,
-                                    data_global.as_pointer_value(),
-                                );
-                                self.make_list_struct(
-                                    cont.type_id,
-                                    buffer_struct,
-                                    cont.len() as u64,
-                                )
-                            }
-                        };
-                        final_struct.as_basic_value_enum()
-                    }
-                    StaticContainerKind::Array | StaticContainerKind::Vector => {
-                        array_value.as_basic_value_enum()
-                    }
-                }
+                let element_align = self.k1.get_layout(element_type).unwrap().align;
+                self.codegen_static_container(
+                    static_value_id,
+                    cont.type_id,
+                    cont.kind,
+                    cont.len(),
+                    element_align,
+                    array_value.as_basic_value_enum(),
+                )
+            }
+            StaticValue::RawContainer(raw) => {
+                let raw = *raw;
+                let array_value = self.codegen_raw_bytes_array(raw);
+                self.codegen_static_container(
+                    static_value_id,
+                    raw.type_id,
+                    raw.kind,
+                    raw.len(),
+                    raw.scalar.get_layout().align,
+                    array_value.as_basic_value_enum(),
+                )
             }
         };
         if depth == 0 {
             self.static_values_basics.insert(static_value_id, result);
         }
         Ok(result)
+    }
+
+    fn codegen_raw_bytes_array(&mut self, raw: StaticRawContainer) -> ArrayValue<'ctx> {
+        let element_type = self.codegen_type(PhysicalType::scalar(raw.scalar)).rich_type();
+        let bytes = self.k1.static_values.mem.getn(raw.bytes);
+        if bytes.is_empty() {
+            return element_type.array_type(0).const_zero();
+        }
+        let value = unsafe {
+            llvm_sys::core::LLVMConstDataArray(
+                element_type.as_type_ref(),
+                bytes.as_ptr() as *const std::ffi::c_char,
+                bytes.len(),
+            )
+        };
+        unsafe { ArrayValue::new(value) }
+    }
+
+    fn codegen_static_container(
+        &mut self,
+        static_value_id: StaticValueId,
+        container_type_id: TypeId,
+        kind: StaticContainerKind,
+        len: usize,
+        element_align: u32,
+        array_value: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match kind {
+            StaticContainerKind::Array | StaticContainerKind::Vector => array_value,
+            StaticContainerKind::Span | StaticContainerKind::Buffer | StaticContainerKind::List => {
+                let data_global = self.make_global_from_value(
+                    array_value,
+                    element_align,
+                    &format!("static_elems_{}\0", static_value_id.as_u32()),
+                    true,
+                    LlvmLinkage::Private,
+                    false,
+                );
+                let data = data_global.as_pointer_value();
+                let len = len as u64;
+                let final_struct = match kind {
+                    StaticContainerKind::Buffer => {
+                        let buffer_pt = self.k1.get_physical_type(container_type_id).unwrap();
+                        let buffer_cg_type = self.codegen_type(buffer_pt).expect_struct();
+                        self.make_buffer_struct(buffer_cg_type.struct_type, len, data)
+                    }
+                    StaticContainerKind::Span => {
+                        self.make_span_struct(container_type_id, len, data)
+                    }
+                    StaticContainerKind::List => {
+                        let buffer_struct = self.make_span_struct(container_type_id, len, data);
+                        self.make_list_struct(container_type_id, buffer_struct, len)
+                    }
+                    StaticContainerKind::Array | StaticContainerKind::Vector => unreachable!(),
+                };
+                final_struct.as_basic_value_enum()
+            }
+        }
     }
 
     fn codegen_static_elements_array(
@@ -4943,7 +4969,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let global = self.make_global_for_static_value(static_value_id)?;
                 global.as_pointer_value().as_basic_value_enum()
             }
-            StaticValue::LinearContainer(_) => {
+            StaticValue::LinearContainer(_) | StaticValue::RawContainer(_) => {
                 let global = self.make_global_for_static_value(static_value_id)?;
                 global.as_pointer_value().as_basic_value_enum()
             }

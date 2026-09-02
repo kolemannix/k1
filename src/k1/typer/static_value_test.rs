@@ -200,3 +200,54 @@ fn test_recurse() {
     // 3 values are builtin
     assert_eq!(system.pool.len(), BUILTIN_VALUE_COUNT + 4);
 }
+
+fn raw_u16_span(system: &mut StaticValuePool, type_id: TypeId, values: &[u16]) -> StaticValueId {
+    let mut bytes: Vec<u8> = vec![];
+    for v in values {
+        bytes.extend_from_slice(&v.to_ne_bytes());
+    }
+    let bytes = system.mem.push_bytes_aligned(&bytes, 2);
+    system.add(StaticValue::RawContainer(StaticRawContainer {
+        bytes,
+        type_id,
+        kind: StaticContainerKind::Span,
+        scalar: ScalarType::U16,
+    }))
+}
+
+#[test]
+fn test_raw_container() {
+    let mut system = StaticValuePool::make();
+
+    let a = raw_u16_span(&mut system, TYPE1, &[1, 2, 3]);
+    let b = raw_u16_span(&mut system, TYPE1, &[1, 2, 3]);
+    let c = raw_u16_span(&mut system, TYPE1, &[1, 2, 4]);
+    let d = raw_u16_span(&mut system, TYPE2, &[1, 2, 3]);
+    let empty1 = raw_u16_span(&mut system, TYPE1, &[]);
+    let empty2 = raw_u16_span(&mut system, TYPE1, &[]);
+
+    assert_eq!(a, b, "Same bytes and type should deduplicate");
+    assert_ne!(a, c, "Different bytes should be different");
+    assert_ne!(a, d, "Same bytes under a different container type should be different");
+    assert_eq!(empty1, empty2);
+    assert_ne!(empty1, a);
+    assert_eq!(system.get(a).as_raw_container().unwrap().len(), 3);
+    assert_eq!(system.get(empty1).as_raw_container().unwrap().len(), 0);
+    assert_eq!(system.pool.len(), BUILTIN_VALUE_COUNT + 4);
+}
+
+#[test]
+fn test_raw_container_snapshot() {
+    let mut system = StaticValuePool::make();
+    let a = raw_u16_span(&mut system, TYPE1, &[7, 8, 9]);
+    let mut w = crate::snap::SnapWriter::new();
+    system.snap(&mut w);
+    let bytes = w.finish();
+
+    let mut restored = StaticValuePool::make();
+    let mut r = crate::snap::SnapReader::new(&bytes).unwrap();
+    restored.restore(&mut r);
+    assert_eq!(restored.get(a).as_raw_container().unwrap().len(), 3);
+    let again = raw_u16_span(&mut restored, TYPE1, &[7, 8, 9]);
+    assert_eq!(again, a, "Re-adding the same bytes after restore should hit the restored id");
+}

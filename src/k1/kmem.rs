@@ -639,6 +639,22 @@ impl<Tag> Mem<Tag> {
         MSlice::make(self.ptr_to_offset(ptr), ts.len() as u32)
     }
 
+    pub fn push_bytes_uninit(&mut self, size: u32, align: u32) -> (MSlice<u8, Tag>, *mut u8) {
+        if size == 0 {
+            return (MSlice::empty(), self.cursor());
+        }
+        let dst = self.push_layout_uninit(size, align);
+        (MSlice::make(self.ptr_to_offset(dst), size), dst)
+    }
+
+    pub fn push_bytes_aligned(&mut self, bytes: &[u8], align: u32) -> MSlice<u8, Tag> {
+        let (handle, dst) = self.push_bytes_uninit(bytes.len() as u32, align);
+        if !bytes.is_empty() {
+            unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len()) };
+        }
+        handle
+    }
+
     pub fn dupn<T: Copy>(&mut self, h: MSlice<T, Tag>) -> MSlice<T, Tag> {
         let (ptr, count) = self.get_slice_raw(h);
         let slice = unsafe { slice::from_raw_parts(ptr, count) };

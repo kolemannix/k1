@@ -24,8 +24,8 @@ use crate::{bc, clock, compiler, debug, ir, k1_format, k1_format_user, kbail, ke
 use bitflags::bitflags;
 use itertools::Itertools;
 pub use static_value::{
-    StaticContainer, StaticContainerKind, StaticStruct, StaticSum, StaticValue, StaticValueId,
-    StaticValuePool,
+    StaticContainer, StaticContainerKind, StaticRawContainer, StaticStruct, StaticSum, StaticValue,
+    StaticValueId, StaticValuePool,
 };
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -7220,15 +7220,13 @@ impl TypedProgram {
 
         // Early out for trivial lists
         if trivial_values.len() == element_count as usize {
-            let elements = self.static_values.mem.pushn(trivial_values.as_slice());
             let span_type =
                 self.instantiate_generic_type(self.builtin_types.span(), &[element_type]);
-            let static_span =
-                self.static_values.add(StaticValue::LinearContainer(StaticContainer {
-                    elements,
-                    kind: StaticContainerKind::Span,
-                    type_id: span_type,
-                }));
+            let static_span = self.add_static_container_from_ids(
+                StaticContainerKind::Span,
+                span_type,
+                trivial_values.as_slice(),
+            );
             let static_span_expr = self.add_static_constant_expr(static_span, span);
             let ctx_hidden = ctx.with_hidden_calls(true);
             return match list_kind {
@@ -8969,9 +8967,8 @@ impl TypedProgram {
     ) -> K1Result<TypedExprId> {
         let iteree_value_id =
             self.execute_static_expr(for_expr.iterable_expr, ctx.with_no_expected_type(), &[])?;
-        let iteree_value = self.static_values.get(iteree_value_id);
         let iteree_span = self.ast.get_expr_span(for_expr.iterable_expr);
-        let Some(iteration_list) = iteree_value.as_container() else {
+        let Some(element_count) = self.static_container_len(iteree_value_id) else {
             kbail!(
                 self,
                 iteree_span,
@@ -8979,13 +8976,12 @@ impl TypedProgram {
                 self.static_value_to_string(iteree_value_id)
             );
         };
-        let elements = iteration_list.elements;
 
         let mut block = self.new_block_builder(
             ctx.scope_id,
             ScopeType::LexicalBlock,
             for_expr.span,
-            iteration_list.len() as u32 * 2,
+            element_count as u32 * 2,
         );
         let binding_name = match for_expr.binding {
             None => self.ast.idents.b.it,
@@ -8996,8 +8992,9 @@ impl TypedProgram {
             Some(binding_expr) => self.ast.exprs.get_span(binding_expr),
         };
         let eval_context = ctx.with_scope(block.scope_id).with_no_expected_type();
-        for elem in self.static_values.mem.getn(elements) {
-            let elem_expr = self.add_static_constant_expr(*elem, iteree_span);
+        for index in 0..element_count {
+            let elem = self.static_container_element(iteree_value_id, index);
+            let elem_expr = self.add_static_constant_expr(elem, iteree_span);
             let v = self.synth_variable_defn_visible(
                 binding_name,
                 elem_expr,
@@ -10176,8 +10173,7 @@ impl TypedProgram {
             .map_err(|e| kerr!(self, span, "Array index type error: {}", e.message))?;
 
         let array_reference_type = self.get_expr_type(receiver).as_reference();
-        let array_expr =
-            self.synth_dereference_when(receiver, array_reference_type.is_some());
+        let array_expr = self.synth_dereference_when(receiver, array_reference_type.is_some());
 
         if let Ok(static_index_expr) = self.attempt_static_lift(index_expr) {
             let static_index_type = self.exprs.get_type(static_index_expr);
@@ -10221,8 +10217,7 @@ impl TypedProgram {
             ctx,
             false,
         )?;
-        let crash_message =
-            self.synth_string_literal(self.ast.idents.b.crash_msg_array_oob, span);
+        let crash_message = self.synth_string_literal(self.ast.idents.b.crash_msg_array_oob, span);
         let crash_oob = self.synth_typed_call_typed_args(
             self.ast.idents.f.core_crash_bounds.with_span(span),
             &[],
@@ -10235,13 +10230,8 @@ impl TypedProgram {
         // expr: blocks are place-transparent, which is what makes
         // `arr.[i].&` and `arr.[i] = v` work
         let unit_expr = self.synth_empty_value(span);
-        let bounds_check_expr = self.synth_if_else(
-            self.builtin_types.empty,
-            is_in_bounds,
-            unit_expr,
-            crash_oob,
-            span,
-        );
+        let bounds_check_expr =
+            self.synth_if_else(self.builtin_types.empty, is_in_bounds, unit_expr, crash_oob, span);
         let mut statements = self.mem.new_list(2);
         statements.push(self.add_expr_stmt(bounds_check_expr));
         statements.push(self.add_expr_stmt(get_element_expr));
@@ -18136,6 +18126,7 @@ impl TypedProgram {
             StaticValue::Struct(s) => s.type_id,
             StaticValue::Sum(e) => e.sum_type_id,
             StaticValue::LinearContainer(v) => v.type_id,
+            StaticValue::RawContainer(r) => r.type_id,
         }
     }
 
