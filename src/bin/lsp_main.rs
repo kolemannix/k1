@@ -780,6 +780,7 @@ impl LanguageServer for Backend {
                         parse::SemanticTokenKind::Function => TokenTypes::Function,
                         parse::SemanticTokenKind::Namespace => TokenTypes::Namespace,
                         parse::SemanticTokenKind::Operator => TokenTypes::Operator,
+                        parse::SemanticTokenKind::Parameter => TokenTypes::Parameter,
                     };
                     spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
                 }
