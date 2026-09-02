@@ -1007,7 +1007,7 @@ impl TypedProgram {
             }
             let mut macro_args: SV8<_> = smallvec![];
             for parsed_arg in self.ast.mem.getn(call.args) {
-                macro_args.push(MacroArg::Parsed(*parsed_arg))
+                macro_args.push(*parsed_arg)
             }
             return self.execute_macro_call(
                 self.ast.mem.getn(call.type_args),
@@ -1357,7 +1357,7 @@ impl TypedProgram {
     pub(super) fn execute_macro_call(
         &mut self,
         type_args: &[NamedTypeArg],
-        args: &[MacroArg],
+        args: &[ParsedCallArg],
         span: SpanId,
         function_id: FunctionId,
         is_definition: bool,
@@ -1426,72 +1426,49 @@ impl TypedProgram {
 
         let mut static_args: SV8<StaticValueId> = smallvec![];
         for (param, arg) in self.mem.getn(fn_param_types).iter().zip(args.iter()) {
-            match *arg {
-                MacroArg::Parsed(parsed_arg) => {
-                    if let Some(passed_name) = parsed_arg.name {
-                        if passed_name != param.name {
-                            kbail!(
-                                self,
-                                span,
-                                "Macro argument name mismatch: expected {}, got {}",
-                                param.name,
-                                passed_name,
-                            );
-                        }
-                    }
-                    match param.is_macro_code {
-                        true => {
-                            // when the parameter is of type code,
-                            // it gets auto 'quoted' at the callsite
-                            // So we just yoink the source text from its span
-                            // and actually ignore the previously parsed value.
-                            // This means its kinda hard to synthesize one of these arguments
-                            //
-                            // which is why we're accepting MaybeTypedExpr here
-                            let code_value_id = self.code_from_parsed_expr(parsed_arg.value);
-                            static_args.push(code_value_id);
-                        }
-                        false => {
-                            let value_id = self.execute_static_expr(
-                                parsed_arg.value,
-                                ctx.with_expected_type(Some(param.type_id)),
-                                &[],
-                            )?;
-                            let value_type = self.get_static_value_type(value_id);
-                            if let Err(msg) =
-                                self.check_types(param.type_id, value_type, ctx.scope_id)
-                            {
-                                kbail!(
-                                    self,
-                                    span,
-                                    "Macro argument '{}' type mismatch: {}",
-                                    param.name,
-                                    msg,
-                                );
-                            }
-                            static_args.push(value_id);
-                        }
-                    };
+            let parsed_arg = *arg;
+            if let Some(passed_name) = parsed_arg.name {
+                if passed_name != param.name {
+                    kbail!(
+                        self,
+                        span,
+                        "Macro argument name mismatch: expected {}, got {}",
+                        param.name,
+                        passed_name,
+                    );
                 }
-                MacroArg::Typed(typed_arg) => {
-                    // We require a static value
-                    if !param.is_macro_code {
-                        kbail!(
-                            self,
-                            span, /* call span since we want to point the finger at the bad caller */
-                            "bug: we only allow pre-typed macro arguments for code args",
-                        );
-                    }
-                    let TypedExpr::StaticValue(sce) = self.exprs.get(typed_arg) else {
+            }
+            match param.is_macro_code {
+                true => {
+                    // when the parameter is of type code,
+                    // it gets auto 'quoted' at the callsite
+                    // So we just yoink the source text from its span
+                    // and actually ignore the previously parsed value.
+                    // This means its kinda hard to synthesize one of these arguments
+                    //
+                    // which is why we're accepting MaybeTypedExpr here
+                    let code_value_id = self.code_from_parsed_expr(parsed_arg.value);
+                    static_args.push(code_value_id);
+                }
+                false => {
+                    let value_id = self.execute_static_expr(
+                        parsed_arg.value,
+                        ctx.with_expected_type(Some(param.type_id)),
+                        &[],
+                    )?;
+                    let value_type = self.get_static_value_type(value_id);
+                    if let Err(msg) = self.check_types(param.type_id, value_type, ctx.scope_id) {
                         kbail!(
                             self,
                             span,
-                            "bug: we expect a static value for pre-typed macro arguments",
+                            "Macro argument '{}' type mismatch: {}",
+                            param.name,
+                            msg,
                         );
-                    };
-                    static_args.push(sce.value_id)
+                    }
+                    static_args.push(value_id);
                 }
-            }
+            };
         }
 
         self.run_macro_and_compile_output(function_to_run, &static_args, span, is_definition, ctx)

@@ -9,15 +9,13 @@ name = "k1"
 path = "src/k1/lib.rs"
 
 [features]
-default = ["native-for"]
+default = []
 
 lsp = ["tokio", "tower-lsp", "tokio-util", "tracing", "tracing-appender", "tracing-subscriber"]
 # gui = ["raylib"]
 profile = ["pprof"]
 # Our project-specific debug mode, not the same thing as the compiler's!
 dbg = []
-# A/B: lower `for` via the native typed desugar instead of the for-each macro
-native-for = []
 
 [build-dependencies]
 cc = "1"

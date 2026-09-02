@@ -214,13 +214,17 @@ type type-hint = { inner: expr-id, ty: type-expr-id, span: src-span }
 type index-expr = { base: expr-id, key: expr-id, span: src-span }
 
 type if-expr = { cond: expr-id, cons: expr-id, alt: ?expr-id, span: src-span, is-static: bool }
-type while-expr = { cond: expr-id, body: expr-id, span: src-span }
+type while-expr = { label: ?string-id, cond: expr-id, body: expr-id, span: src-span }
+type return-expr = { value: ?expr-id, span: src-span }
+type break-expr = { label: ?string-id, value: ?expr-id, span: src-span }
+type continue-expr = { label: ?string-id, span: src-span }
 
 type block-kind = either(u8) { fn-body, lexical, loop-body }
 type block = { stmts: list[stmt-id], kind: block-kind, span: src-span }
 
-type loop-expr = { body: block, span: src-span }
+type loop-expr = { label: ?string-id, body: block, span: src-span }
 type for-expr = {
+  label: ?string-id,
   iterable: expr-id,
   binding: ?expr-id,
   body: block,
@@ -241,6 +245,9 @@ type expr = either {
   if-expr(if-expr),
   while-expr(while-expr),
   loop-expr(loop-expr),
+  return-expr(return-expr),
+  break-expr(break-expr),
+  continue-expr(continue-expr),
   struct-value(struct-value),
   list-literal(list-literal),
   for-expr(for-expr),
@@ -271,6 +278,9 @@ ns for expr {
       :if-expr i -> i.span,
       :while-expr w -> w.span,
       :loop-expr l -> l.span,
+      :return-expr r -> r.span,
+      :break-expr b -> b.span,
+      :continue-expr c -> c.span,
       :struct-value s -> s.span,
       :list-literal l -> l.span,
       :for-expr f -> f.span,
@@ -702,6 +712,9 @@ ns for program {
       :if-expr(i)* -> { i.span = new-span },
       :while-expr(w)* -> { w.span = new-span },
       :loop-expr(l)* -> { l.span = new-span },
+      :return-expr(r)* -> { r.span = new-span },
+      :break-expr(b)* -> { b.span = new-span },
+      :continue-expr(c)* -> { c.span = new-span },
       :struct-value(s)* -> { s.span = new-span },
       :list-literal(l)* -> { l.span = new-span },
       :for-expr(f)* -> { f.span = new-span },

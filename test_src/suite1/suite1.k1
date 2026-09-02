@@ -39,6 +39,7 @@ fn low() {
   scopes/test()
   while_test/test()
   continue_test/test()
+  labeled_loops/test()
   newline-stmt/test()
   use_test/test()
   opaque_test/test()

@@ -176,6 +176,7 @@ ns for parser {
 
   fn expect-for-expr(self: *mut parser, is-static: bool): result[ast/expr-id, perror] {
     let first = self.expect-kind(:kw-for).try
+    let label = self.parse-loop-label().try
     let second = self.peek()
     let third = self.peek-at(1)
     let binding: ?ast/expr-id = if third.kind is :kw-in {
@@ -189,7 +190,7 @@ ns for parser {
     let iterable = self.expect-expression().try
     let body = self.expect-block(:loop-body).try
     let span = first.span().thru(body.span)
-    :ok(self.add-expr(:for-expr(.{ iterable, binding, body, is-static, span })))
+    :ok(self.add-expr(:for-expr(.{ label, iterable, binding, body, is-static, span })))
   }
 
   fn expect-block(self: *mut parser, kind: ast/block-kind): result[ast/block, perror] {
@@ -342,18 +343,38 @@ ns for parser {
     }
   }
 
+  fn parse-loop-label(self: *mut parser): result[?ast/string-id, perror] {
+    if self.peek().kind is :at {
+      let name = self.peek-at(1)
+      if name.is-kind-nonspaced(:ident) {
+        self.advance-n(2)
+        :ok(:some(self.make-ident(name)))
+      } else {
+        :err(error-expected("a label name directly after @", name))
+      }
+    } else {
+      :ok(:none)
+    }
+  }
+
   fn parse-control-flow-expr(self: *mut parser, first: token): result[ast/expr-id, perror] {
+    let chars = self.tok-chars(first)
+    let is-return = chars == "return"
+    let is-break = chars == "break"
     self.advance()
-    let name = self.make-ident(first)
+    let label: ?ast/string-id = if is-return { :none } else { self.parse-loop-label().try }
     let payload: ?ast/expr-id = if self.peek().is-newline-preceded() { :none } else {
       self.parse-expression().try
     }
-    let args = list/empty[ast/call-arg]()
-    if payload is :some value {
-      args.push(.{ name = :none, value, is-explicit-context = false })
-    }
     let span = self.extend-tok-to-here(first)
-    :ok(self.add-expr(:call(.{ name = ast/qident/naked(name, first.span()), type-args = list/empty(), args, span, is-method = false })))
+    if is-return {
+      :ok(self.add-expr(:return-expr(.{ value = payload, span })))
+    } else if is-break {
+      :ok(self.add-expr(:break-expr(.{ label, value = payload, span })))
+    } else {
+      if payload is :some _ { return :err(error-expected("no value after continue", first)) }
+      :ok(self.add-expr(:continue-expr(.{ label, span })))
+    }
   }
 
   fn parse-compiler-debug(self: *mut parser): bool {
@@ -381,10 +402,11 @@ ns for parser {
 
   fn expect-while-loop(self: *mut parser): result[ast/while-expr, perror] {
     let while-token = self.expect-kind(:kw-while).try
+    let label = self.parse-loop-label().try
     let cond = self.expect-expression().try
     let body = self.expect-expression().try
     let span = self.extend-tok-to-here(while-token)
-    :ok(.{ cond, body, span })
+    :ok(.{ label, cond, body, span })
   }
 
   fn expect-struct-field(self: *mut parser): result[ast/struct-field, perror] {
@@ -455,9 +477,10 @@ ns for parser {
       :some(self.add-expr(:while-expr(w)))
     } else if first.kind is :kw-loop {
       self.advance()
+      let label = self.parse-loop-label().try
       let body = self.expect-block(:loop-body).try
       let span = first.span().thru(body.span)
-      :some(self.add-expr(:loop-expr(.{ body, span })))
+      :some(self.add-expr(:loop-expr(.{ label, body, span })))
     } else if first.kind is :kw-for {
       :some(self.expect-for-expr(false).try)
     } else if first.kind is :amp {

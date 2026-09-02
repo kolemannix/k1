@@ -1,0 +1,8 @@
+fn main(): i32 {
+  loop @outer {
+    let f = fn() { break @outer }
+    f()
+  }
+  0
+}
+//errmsg: no enclosing loop labeled @outer

@@ -1101,18 +1101,3 @@ ns k1 {
     crash("reloadable ns ${loaded-ns} not loaded; call ${loaded-ns}/load() (called: ${string/wrap-c(fn-name)})")
   }
 }
-
-macro for-each(binding, iterable, body) {
-  `{
-    let iter = ($iterable).iterator()
-    let it-index-next: size = 0
-    loop {
-      if iter.next() is :some($binding) {
-        let it-index = it-index-next
-        it-index-next = it-index + 1
-        // work around 'never' bodies for now
-        $body
-      } else break
-    }
-  }`
-}

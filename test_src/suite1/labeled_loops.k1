@@ -1,0 +1,163 @@
+ns labeled_loops
+
+fn break-outer-from-loop() {
+  let n = 0
+  loop @outer {
+    loop {
+      n = n + 1
+      if n == 3 break @outer
+    }
+  }
+  assert-equals(n, 3)
+}
+
+fn break-outer-from-while() {
+  let i = 0
+  let hits = 0
+  while @rows i < 10 {
+    let j = 0
+    while j < 10 {
+      if i * j == 12 break @rows
+      hits = hits + 1
+      j = j + 1
+    }
+    i = i + 1
+  }
+  assert-equals(i, 2)
+  assert-equals(hits, 26)
+}
+
+fn break-outer-from-for() {
+  let count = 0
+  let found-r = -1
+  let found-c = -1
+  for @rows r in 0.until(5) {
+    for c in 0.until(5) {
+      count = count + 1
+      if r * c == 6 {
+        found-r = r
+        found-c = c
+        break @rows
+      }
+    }
+  }
+  assert-equals(count, 14)
+  assert-equals(found-r, 2)
+  assert-equals(found-c, 3)
+}
+
+fn break-outer-with-value() {
+  let x: int = loop @search {
+    let i = 0
+    loop {
+      i = i + 1
+      if i == 7 break @search i * 10
+    }
+  }
+  assert-equals(x, 70)
+}
+
+fn break-outer-with-variant() {
+  let r: ?int = loop @find {
+    for i in 0.until(10) {
+      if i == 4 break @find :some i
+    }
+    break :none
+  }
+  assert-equals(r.!, 4)
+}
+
+fn continue-outer-from-for() {
+  let sum = 0
+  for @rows r in 0.until(4) {
+    for c in 0.until(4) {
+      if c > r continue @rows
+      sum = sum + 1
+    }
+  }
+  assert-equals(sum, 10)
+}
+
+fn continue-outer-from-while() {
+  let i = 0
+  let visits = 0
+  while @outer i < 5 {
+    i = i + 1
+    let j = 0
+    while j < 5 {
+      j = j + 1
+      if j == 2 continue @outer
+      visits = visits + 1
+    }
+    visits = visits + 100
+  }
+  assert-equals(i, 5)
+  assert-equals(visits, 5)
+}
+
+fn continue-outer-from-loop() {
+  let i = 0
+  let inner-runs = 0
+  loop @outer {
+    i = i + 1
+    if i > 4 break
+    loop {
+      inner-runs = inner-runs + 1
+      continue @outer
+    }
+  }
+  assert-equals(i, 5)
+  assert-equals(inner-runs, 4)
+}
+
+fn break-outer-runs-defers() {
+  let log = list/empty[string]()
+  loop @outer {
+    defer log.push("outer")
+    for i in 0.until(3) {
+      defer log.push("d$i")
+      if i == 1 break @outer
+      log.push("b$i")
+    }
+  }
+  assert-equals(log.join(","), "b0,d0,d1,outer")
+}
+
+fn unlabeled-break-stays-inner() {
+  let outer-iters = 0
+  loop @outer {
+    outer-iters = outer-iters + 1
+    loop {
+      break
+    }
+    if outer-iters == 3 break
+  }
+  assert-equals(outer-iters, 3)
+}
+
+fn inner-label-shadows() {
+  let n = 0
+  loop @l {
+    loop @l {
+      n = n + 1
+      break @l
+    }
+    n = n + 10
+    break
+  }
+  assert-equals(n, 11)
+}
+
+fn test() {
+  break-outer-from-loop()
+  break-outer-from-while()
+  break-outer-from-for()
+  break-outer-with-value()
+  break-outer-with-variant()
+  continue-outer-from-for()
+  continue-outer-from-while()
+  continue-outer-from-loop()
+  break-outer-runs-defers()
+  unlabeled-break-stays-inner()
+  inner-label-shadows()
+}

@@ -787,6 +787,31 @@ pub enum ParsedExpr {
     /// <base: expr>.[<key: expr>]
     /// ```
     Index(ParsedIndex),
+    /// return <value: expr>?
+    Return(ParsedReturn),
+    /// break @label? <value: expr>?
+    Break(ParsedBreak),
+    /// continue @label?
+    Continue(ParsedContinue),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ParsedReturn {
+    pub value: Option<ParsedExprId>,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ParsedBreak {
+    pub label: Option<StringId>,
+    pub value: Option<ParsedExprId>,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ParsedContinue {
+    pub label: Option<StringId>,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -841,6 +866,9 @@ impl ParsedExpr {
             Self::QualifiedAbilityCall(c) => c.span,
             Self::TypeHint(th) => th.span,
             Self::Index(i) => i.span,
+            Self::Return(r) => r.span,
+            Self::Break(b) => b.span,
+            Self::Continue(c) => c.span,
         }
     }
 
@@ -871,6 +899,9 @@ impl ParsedExpr {
             Self::QualifiedAbilityCall(c) => c.span = span,
             Self::TypeHint(th) => th.span = span,
             Self::Index(i) => i.span = span,
+            Self::Return(r) => r.span = span,
+            Self::Break(b) => b.span = span,
+            Self::Continue(c) => c.span = span,
         }
     }
 
@@ -958,6 +989,7 @@ pub struct ParsedIfExpr {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedWhileExpr {
+    pub label: Option<StringId>,
     pub cond: ParsedExprId,
     pub body: ParsedExprId,
     pub span: SpanId,
@@ -965,12 +997,14 @@ pub struct ParsedWhileExpr {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedLoopExpr {
+    pub label: Option<StringId>,
     pub body: ParsedBlock,
     pub span: SpanId,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ForExpr {
+    pub label: Option<StringId>,
     pub iterable_expr: ParsedExprId,
     /// Must be a variable expr
     pub binding: Option<ParsedExprId>,
@@ -3855,34 +3889,40 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     /// `return`, `break`, and `continue` take an optional paren-free payload
-    /// expression: `return x + 1`, `break 42`, bare `return`. Being
-    /// keyword-led, the payload is a full expression (`return 1 == x` returns
-    /// the comparison). They lower to the zero-or-one-arg call shape the
-    /// typer's builtin-lookalike path consumes
+    fn parse_loop_label(&mut self) -> ParseResult<Option<StringId>> {
+        let (at, name) = self.peek_two();
+        if at.kind != K::At {
+            return Ok(None);
+        }
+        if !name.is_kind_nonspaced(K::Ident) {
+            return Err(self.error("Expected a label name directly after @", name));
+        }
+        self.advance_n(2);
+        self.emit_semantic_token(name, SemanticTokenKind::Variable);
+        Ok(Some(self.make_ident(name)))
+    }
+
     fn parse_control_flow_expr(&mut self, first: Token) -> ParseResult<ParsedExprId> {
+        let is_return = self.token_chars(first) == "return";
+        let is_break = self.token_chars(first) == "break";
         self.advance();
-        let name = self.make_ident(first);
+        self.emit_semantic_token(first, SemanticTokenKind::Keyword);
+        let label = if is_return { None } else { self.parse_loop_label()? };
         // The payload never crosses a line break: `return` at end of line is bare
         let payload =
             if self.peek().is_newline_preceded() { None } else { self.parse_expression()? };
-        let args = match payload {
-            None => MSlice::empty(),
-            Some(value) => self.ast.mem.pushn(&[ParsedCallArg {
-                name: None,
-                value,
-                is_explicit_context: false,
-            }]),
-        };
         let span = self.extend_tok_to_here(first);
-        let name_span = self.tok_id(first);
-        Ok(self.add_expression(ParsedExpr::Call(ParsedCall {
-            name: QIdent::naked(name, name_span),
-            type_args: MSlice::empty(),
-            args,
-            span,
-            is_method: false,
-            id: ParsedExprId::PENDING,
-        })))
+        let expr = if is_return {
+            ParsedExpr::Return(ParsedReturn { value: payload, span })
+        } else if is_break {
+            ParsedExpr::Break(ParsedBreak { label, value: payload, span })
+        } else {
+            if payload.is_some() {
+                return Err(self.error("continue takes no value", first));
+            }
+            ParsedExpr::Continue(ParsedContinue { label, span })
+        };
+        Ok(self.add_expression(expr))
     }
 
     /// "Base" in "base expression" simply means ignoring postfix and
@@ -3908,9 +3948,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             K::KeywordLoop => {
                 self.advance();
+                let label = self.parse_loop_label()?;
                 let body = self.expect_block(ParsedBlockKind::LoopBody)?;
                 let span = self.extend_tok_span(first, body.span);
-                Ok(Some(self.add_expression(ParsedExpr::Loop(ParsedLoopExpr { body, span }))))
+                Ok(Some(self.add_expression(ParsedExpr::Loop(ParsedLoopExpr {
+                    label,
+                    body,
+                    span,
+                }))))
             }
             K::KeywordFor => {
                 let for_expr = self.expect_for_expr(false)?;
@@ -4273,6 +4318,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         // 1   2          ^3  2/4
         let first = self.expect_kind(K::KeywordFor)?;
         self.emit_semantic_token(first, SemanticTokenKind::Keyword);
+        let label = self.parse_loop_label()?;
         let (second, third) = self.peek_two();
         let binding = if third.kind == K::KeywordIn {
             if second.kind != K::Ident {
@@ -4293,6 +4339,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let body_expr = self.expect_block(ParsedBlockKind::LoopBody)?;
         let span = self.extend_tok_span(first, body_expr.span);
         let expr_id = self.add_expression(ParsedExpr::For(ForExpr {
+            label,
             iterable_expr,
             binding,
             body_block: body_expr,
@@ -4786,10 +4833,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_while_loop(&mut self) -> ParseResult<ParsedWhileExpr> {
         let while_token = self.expect_kind(K::KeywordWhile)?;
+        let label = self.parse_loop_label()?;
         let cond = self.expect_expression()?;
         let body = self.expect_expression()?;
         let span = self.extend_tok_to_here(while_token);
-        Ok(ParsedWhileExpr { cond, body, span })
+        Ok(ParsedWhileExpr { label, cond, body, span })
     }
 
     pub fn expect_statement(&mut self) -> ParseResult<ParsedStmtId> {
@@ -5602,6 +5650,15 @@ impl ParsedProgram {
         buffer
     }
 
+    fn display_loop_label(&self, w: &mut impl Write, label: Option<StringId>) -> std::fmt::Result {
+        if let Some(label) = label {
+            w.write_str("@")?;
+            self.display_ident(w, label)?;
+            w.write_str(" ")?;
+        }
+        Ok(())
+    }
+
     pub fn display_ident(&self, w: &mut impl Write, ident: StringId) -> std::fmt::Result {
         w.write_str(self.idents.get_string(ident))
     }
@@ -5695,14 +5752,36 @@ impl ParsedProgram {
             ParsedExpr::If(if_expr) => w.write_fmt(format_args!("{:?}", if_expr)),
             ParsedExpr::While(while_expr) => {
                 w.write_str("while ")?;
+                self.display_loop_label(w, while_expr.label)?;
                 self.display_expr_id(w, while_expr.cond)?;
                 self.display_expr_id(w, while_expr.body)?;
                 Ok(())
             }
             ParsedExpr::Loop(loop_expr) => {
                 w.write_str("loop ")?;
+                self.display_loop_label(w, loop_expr.label)?;
                 write!(w, "{:?}", loop_expr.body)?;
                 Ok(())
+            }
+            ParsedExpr::Return(r) => {
+                w.write_str("return")?;
+                if let Some(value) = r.value {
+                    w.write_str(" ")?;
+                    self.display_expr_id(w, value)?;
+                }
+                Ok(())
+            }
+            ParsedExpr::Break(b) => {
+                w.write_str("break ")?;
+                self.display_loop_label(w, b.label)?;
+                if let Some(value) = b.value {
+                    self.display_expr_id(w, value)?;
+                }
+                Ok(())
+            }
+            ParsedExpr::Continue(c) => {
+                w.write_str("continue ")?;
+                self.display_loop_label(w, c.label)
             }
             ParsedExpr::Struct(struc) => {
                 w.write_str(".{ ")?;

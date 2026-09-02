@@ -1,0 +1,11 @@
+fn main(): i32 {
+  let i = 0
+  while @w i < 3 {
+    i = i + 1
+    loop {
+      break @w 1
+    }
+  }
+  0
+}
+//errmsg: break with value is only allowed in `loop` loops

@@ -176,9 +176,6 @@ pub(crate) struct BuiltinIdents {
     pub none: StringId,
     pub some: StringId,
     pub with: StringId,
-    pub return_: StringId,
-    pub break_: StringId,
-    pub continue_: StringId,
     pub test_compile: StringId,
     pub write: StringId,
     pub writeln: StringId,
@@ -208,7 +205,6 @@ pub(crate) struct BuiltinIdents {
     pub crash_msg_no_cases: StringId,
     pub crash_msg_no_cases_exhaustive: StringId,
     pub crash_msg_array_oob: StringId,
-    pub for_each: StringId,
 }
 
 #[allow(non_snake_case)]
@@ -523,9 +519,6 @@ impl IdentPool {
             none: intern!("none"),
             some: intern!("some"),
             with: intern!("with"),
-            return_: intern!("return"),
-            break_: intern!("break"),
-            continue_: intern!("continue"),
             test_compile: intern!("test-compile"),
             write: intern!("write"),
             writeln: intern!("writeln"),
@@ -556,7 +549,6 @@ impl IdentPool {
                 Either the match subject is corrupt, or there is a compiler bug."
             ),
             crash_msg_array_oob: intern!("Array index out of bounds"),
-            for_each: intern!("for-each"),
         };
 
         macro_rules! make_fn {
@@ -707,7 +699,6 @@ mod test {
     fn builtins_resolve() {
         let p = make_pool();
         assert_eq!(p.lookup("null"), Some(p.b.null));
-        assert_eq!(p.intern("for-each"), p.b.for_each);
         assert_eq!(p.get_string(p.b.self_), "self");
     }
 

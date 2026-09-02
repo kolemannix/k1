@@ -40,11 +40,8 @@ pointer-free predicate - pod/serializable?
 ## grab bag list mid2026
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
-- [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
 - [ ] Add `self -> *self` thunk adapters for ability objects, `dyn[allocator]` is impossible
-- [x] Warn on zeroed() for non zeroable type
-- [x] Detect and hoist trivial list literals to globals / static values
 - [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
 - [ ] unaligned load/store for scalars
 - [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
@@ -56,33 +53,34 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
   ...
 }
   - [ ] implement with a macro, for sure
+- [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
+- [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
+- When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
+- [ ] `#[must_use]` equivalent
+- [ ] literal inference issue (a) `2 * d` vs `d * 2` differ — literal-lhs
+      defaults i64 and widens the u32 rhs up, literal-rhs adopts u32 and wraps; (b) binary ops widen
+      rhs into lhs type but have no least-upper-bound, so `u32 + i64` errors while `i64 + u32` works;
+      (c) expected-type propagation into generic calls pins the type param before argument-driven
+      inference, so `write-bits(depth.get-unchecked(i), ...)` fails where the two-line form widens fine
+- [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
+- [ ] Tail calls
+- [ ] Implement precision format specifier
+- [ ] decide if overflow traps or not (in debug and release, if those are even different)
+- [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
+        I think doing 'defaults' is relatively easy. You just hit consult the default on the unprovided path. For partially-applieds,
+        you need essentially some notion of an 'ability signature function', just like type aliases would need
+- [x] enum-from-sum type operator
+- [x] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch, as well as the few synthesized functions (sum get name, others?) that want it
+- [x] auto-print implementation on-demand for sums
+- [x] Exported functions
 - [x] packed structs
 - [x] function abi: internal everywhere, unless address is ever taken, then always native. enables fastcc in llvm
                     also of course allow spelling 'native', but do not allow forcing 'k1'
                     open: internal param passing (big aggregates by pointer, no caller copy) — needs the f(x, x.&) snapshot decision
 - [x] also ability to spell specialized functions: foo[int].&
 - [x] top-level parser recovery (sync to next fn/ns/type/macro)
-- [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
-- When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
-- [ ] `#[must_use]` equivalent
-- [ ] labeled loops: `break :label` / `continue :label`. The brotli port's C `goto emit_remainder`
-      two-level exits became `done = true; break` + `if done break` flag chains (5 sites)
-- [ ] literal inference issue (a) `2 * d` vs `d * 2` differ — literal-lhs
-      defaults i64 and widens the u32 rhs up, literal-rhs adopts u32 and wraps; (b) binary ops widen
-      rhs into lhs type but have no least-upper-bound, so `u32 + i64` errors while `i64 + u32` works;
-      (c) expected-type propagation into generic calls pins the type param before argument-driven
-      inference, so `write-bits(depth.get-unchecked(i), ...)` fails where the two-line form widens fine
-- [x] enum-from-sum type operator
-- [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
-        I think doing 'defaults' is relatively easy. You just hit consult the default on the unprovided path. For partially-applieds,
-        you need essentially some notion of an 'ability signature function', just like type aliases would need
-- [x] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch, as well as the few synthesized functions (sum get name, others?) that want it
-- [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
-- [x] auto-print implementation on-demand for sums
-- [x] Exported functions
-- [ ] Tail calls
-- [ ] Implement precision format specifier
-- [ ] decide if overflow traps or not (in debug and release, if those are even different)
+- [x] Warn on zeroed() for non zeroable type
+- [x] Detect and hoist trivial list literals to globals / static values
 - [x] good backtraces
 - [-] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
       currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`

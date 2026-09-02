@@ -604,6 +604,21 @@ let found: int = loop {
 }
 ```
 
+`@label` right after `loop`, `while`, or `for` names the loop; `break @label`
+and `continue @label` target it from any depth inside the same fn or lambda.
+A label may carry a value like a plain `break` (`break @find :some i`), and
+the label stays distinct from `:variant` payloads. Unlabeled `break` and
+`continue` still target the nearest loop. `#for` unrolls and cannot be labeled:
+
+```rust
+let r: ?int = loop @find {
+  for i in items {
+    if i > 10 break @find :some i
+  }
+  break :none
+}
+```
+
 `for` loops iterate over iterable values. The loop body can use `it` and
 `it-index`, or bind a name with `in`:
 

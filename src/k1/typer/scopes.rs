@@ -105,6 +105,7 @@ pub struct ScopeLambdaInfo {
 #[derive(Clone, Copy)]
 pub struct ScopeLoopInfo {
     pub break_type: Option<TypeId>,
+    pub label: Option<StringId>,
 }
 
 pub struct ScopeDefers {
@@ -1465,14 +1466,27 @@ impl Scopes {
         self.loop_info.get(&loop_scope_id)
     }
 
-    pub fn nearest_parent_loop(&self, scope_id: ScopeId) -> Option<(ScopeId, LoopType)> {
-        let scope = self.get_scope(scope_id);
-        match scope.scope_type.loop_type() {
-            Some(loop_type) => Some((scope_id, loop_type)),
-            None => match scope.parent {
-                Some(parent) => self.nearest_parent_loop(parent),
-                None => None,
-            },
+    pub fn find_loop(
+        &self,
+        from_scope: ScopeId,
+        label: Option<StringId>,
+    ) -> Option<(ScopeId, LoopType)> {
+        let mut scope_id = from_scope;
+        loop {
+            let scope = self.get_scope(scope_id);
+            if let Some(loop_type) = scope.scope_type.loop_type() {
+                let matches = match label {
+                    None => true,
+                    Some(label) => self.loop_info[&scope_id].label == Some(label),
+                };
+                if matches {
+                    return Some((scope_id, loop_type));
+                }
+            }
+            if scope.scope_type.is_top_of_function() {
+                return None;
+            }
+            scope_id = scope.parent?;
         }
     }
 }

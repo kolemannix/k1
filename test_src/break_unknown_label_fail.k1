@@ -1,0 +1,7 @@
+fn main(): i32 {
+  loop @outer {
+    break @inner
+  }
+  0
+}
+//errmsg: no enclosing loop labeled @inner

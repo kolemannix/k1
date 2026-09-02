@@ -432,8 +432,7 @@ fn compress-fragment-impl(
 
       ip = ip.add-bytes(1)
       let next-hash = hash-bytes(ip, shift)
-      let done = false
-      while not done {
+      loop @scan {
         let skip: u32 = 32
         let next-ip = ip
         let candidate = ptr/null
@@ -446,10 +445,7 @@ fn compress-fragment-impl(
           skip = skip + 1
           ip = next-ip
           next-ip = ip.add-bytes(bytes-between)
-          if next-ip > ip-limit {
-            done = true
-            break
-          }
+          if next-ip > ip-limit break @scan
           next-hash = hash-bytes(next-ip, shift)
           let found = false
           candidate = ip.sub-bytes(last-distance)
@@ -465,7 +461,6 @@ fn compress-fragment-impl(
             break
           }
         }
-        if done break
 
         // Emit the literal run then the match; keep matching greedily from
         // the new position until a gap forces another scan.
@@ -523,10 +518,7 @@ fn compress-fragment-impl(
           emit-distance(last-distance, cmd-depth, cmd-bits, cmd-histo, bw)
 
           next-emit = ip
-          if ip >= ip-limit {
-            done = true
-            break
-          }
+          if ip >= ip-limit break @scan
           let input-bytes = load64-le(ip.sub-bytes(3))
           let pos = ip.diff(base-ip)
           table.index-unchecked(hash-bytes-at-offset(input-bytes, 0, shift)).* = (pos - 3).trunc[i32]
@@ -536,7 +528,6 @@ fn compress-fragment-impl(
           candidate = base-ip.add-bytes(table.index-unchecked(cur-hash).*.widen[size])
           table.index-unchecked(cur-hash).* = pos.trunc[i32]
         }
-        if done break
 
         ip = ip.add-bytes(1)
         next-hash = hash-bytes(ip, shift)

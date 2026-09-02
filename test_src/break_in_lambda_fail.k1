@@ -1,0 +1,8 @@
+fn main(): i32 {
+  loop {
+    let f = fn() { break }
+    f()
+  }
+  0
+}
+//errmsg: break outside of loop

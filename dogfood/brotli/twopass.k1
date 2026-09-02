@@ -202,8 +202,7 @@ fn create-commands(
 
     ip = ip.add-bytes(1)
     let next-hash = hash-2p(ip, shift, min-match)
-    let done = false
-    while not done {
+    loop @scan {
       let skip: u32 = 32
       let next-ip = ip
       let candidate = ptr/null
@@ -215,10 +214,7 @@ fn create-commands(
         skip = skip + 1
         ip = next-ip
         next-ip = ip.add-bytes(bytes-between)
-        if next-ip > ip-limit {
-          done = true
-          break
-        }
+        if next-ip > ip-limit break @scan
         next-hash = hash-2p(next-ip, shift, min-match)
         let found = false
         candidate = ip.sub-bytes(last-distance)
@@ -234,7 +230,6 @@ fn create-commands(
           break
         }
       }
-      if done break
 
       // Emit the pending literals and the match, then keep matching greedily.
       {
@@ -271,13 +266,9 @@ fn create-commands(
         emit-distance-2p(last-distance, sink)
 
         next-emit = ip
-        if ip >= ip-limit {
-          done = true
-          break
-        }
+        if ip >= ip-limit break @scan
         candidate = update-table-after-copy(ip, base-ip, table, shift, min-match, third-offset = 2)
       }
-      if done break
 
       ip = ip.add-bytes(1)
       next-hash = hash-2p(ip, shift, min-match)

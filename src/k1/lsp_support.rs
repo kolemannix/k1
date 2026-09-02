@@ -230,6 +230,7 @@ pub enum CompletionCandidateKind {
 const KEYWORDS: &[&str] = &[
     "fn", "let", "mut", "and", "or", "if", "else", "while", "loop", "ns", "intern", "for", "in",
     "ability", "impl", "is", "not", "builtin", "where", "context", "use", "require", "defer",
+    "return", "break", "continue",
 ];
 
 pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<CompletionCandidate> {

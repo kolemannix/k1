@@ -59,14 +59,14 @@ use crate::lex::{self, Span, SpanId, TokenKind};
 use crate::parse::{
     self, AstHandle, AstSlice, BinaryOpKind, FileId, ForExpr, IdentPool, IdentSpanned,
     InterpolatedStringPart, NamedTypeArg, NumericWidth, ParseError, ParsedAbilityExpr,
-    ParsedAbilityId, ParsedAbilityImplId, ParsedBlock, ParsedBlockKind, ParsedCall, ParsedCallArg,
-    ParsedExpr, ParsedExprId, ParsedFnParamType, ParsedFunctionId, ParsedGlobalId, ParsedId,
-    ParsedIfExpr, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId,
-    ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr,
-    ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr, ParsedTypeDefnId,
-    ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUnaryOpKind, ParsedUseId,
-    ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, StringId, StructValueField,
-    StructValueFieldKind,
+    ParsedAbilityId, ParsedAbilityImplId, ParsedBlock, ParsedBlockKind, ParsedBreak, ParsedCall,
+    ParsedCallArg, ParsedContinue, ParsedExpr, ParsedExprId, ParsedFnParamType, ParsedFunctionId,
+    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr,
+    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind,
+    ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr,
+    ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUnaryOpKind,
+    ParsedUseId, ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, StringId,
+    StructValueField, StructValueFieldKind,
 };
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -79,10 +79,6 @@ nz_u32_id!(VariableId);
 
 nz_u32_id!(NamespaceId);
 pub const ROOT_NAMESPACE_ID: NamespaceId = NamespaceId(NonZeroU32::new(1).unwrap());
-
-/// A/B switch for `for` lowering: library `for-each` macro vs the native typed
-/// desugar. Build with `--features native-for` for the native lowering
-pub const FOR_VIA_MACRO: bool = !cfg!(feature = "native-for");
 
 nz_u32_id!(AbilityId);
 nz_u32_id!(AbilityImplId);
@@ -526,12 +522,6 @@ impl CastView {
 #[derive(Debug, Clone, Copy)]
 enum MaybeTypedExpr {
     Parsed(ParsedExprId),
-    Typed(TypedExprId),
-}
-
-#[derive(Debug, Clone, Copy)]
-enum MacroArg {
-    Parsed(ParsedCallArg),
     Typed(TypedExprId),
 }
 
@@ -6818,6 +6808,15 @@ impl TypedProgram {
             ParsedExpr::If(if_expr) => self.eval_if_expr(&if_expr.clone(), ctx),
             ParsedExpr::While(while_expr) => self.eval_while_loop(&while_expr.clone(), ctx),
             ParsedExpr::Loop(loop_expr) => self.eval_loop_expr(&loop_expr.clone(), ctx),
+            ParsedExpr::Return(r) => {
+                let r = *r;
+                if ctx.flags.contains(EvalExprFlags::Defer) {
+                    kbail!(self, r.span, "return cannot be used inside `defer` blocks");
+                }
+                self.eval_return(r.value, ctx, r.span)
+            }
+            ParsedExpr::Break(b) => self.eval_break(*b, ctx),
+            ParsedExpr::Continue(c) => self.eval_continue(*c, ctx),
             ParsedExpr::BinaryOp(_binary_op) => self.eval_binary_op(expr_id, ctx),
             ParsedExpr::UnaryOp(op) => {
                 let op = *op;
@@ -7637,7 +7636,7 @@ impl TypedProgram {
         );
         self.scopes.add_loop_info(
             body_block_scope_id,
-            ScopeLoopInfo { break_type: Some(self.builtin_types.empty) },
+            ScopeLoopInfo { break_type: Some(self.builtin_types.empty), label: while_expr.label },
         );
 
         let body_block =
@@ -7663,7 +7662,10 @@ impl TypedProgram {
     ) -> K1Result<TypedExprId> {
         let body_scope =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LoopExprBody, ScopeOwnerId::None);
-        self.scopes.add_loop_info(body_scope, ScopeLoopInfo { break_type: ctx.expected_type_id });
+        self.scopes.add_loop_info(
+            body_scope,
+            ScopeLoopInfo { break_type: ctx.expected_type_id, label: loop_expr.label },
+        );
 
         // Expected type is handled by loop info above, its needed by 'break's but notably we do not
         // want to require the loop's block to return a type other than Unit, so we pass None.
@@ -8710,41 +8712,6 @@ impl TypedProgram {
         if for_expr.is_static {
             return self.eval_static_for_expr(for_expr, ctx);
         };
-        if FOR_VIA_MACRO {
-            let body_block_expr = self.ast.exprs.add(ParsedExpr::Block(for_expr.body_block));
-
-            let binding = match for_expr.binding {
-                None => {
-                    let code_value_id =
-                        self.make_static_code_value(&[(self.ast.idents.b.it, for_expr.span)]);
-                    let code_expr = self.add_static_constant_expr(code_value_id, for_expr.span);
-                    MacroArg::Typed(code_expr)
-                }
-                Some(binding) => MacroArg::Parsed(ParsedCallArg::unnamed(binding)),
-            };
-
-            let function_id = self
-                .scopes
-                .find_function_local(self.scopes.core_scope_id, self.ast.idents.b.for_each)
-                .unwrap();
-            let StaticExecutionResult::TypedExpr(macro_result) = self.execute_macro_call(
-                &[],
-                &[
-                    binding,
-                    MacroArg::Parsed(ParsedCallArg::unnamed(for_expr.iterable_expr)),
-                    MacroArg::Parsed(ParsedCallArg::unnamed(body_block_expr)),
-                ],
-                for_expr.span,
-                function_id,
-                false,
-                ctx,
-            )?
-            else {
-                unreachable!()
-            };
-            return Ok(macro_result);
-        }
-
         let binding_ident = match for_expr.binding {
             None => self.ast.idents.b.it,
             Some(b) => self.ast.exprs.get(b).expect_variable().name.name,
@@ -8848,7 +8815,7 @@ impl TypedProgram {
         let loop_scope_id = loop_block.scope_id;
         self.scopes.add_loop_info(
             loop_scope_id,
-            ScopeLoopInfo { break_type: Some(self.builtin_types.empty) },
+            ScopeLoopInfo { break_type: Some(self.builtin_types.empty), label: for_expr.label },
         );
 
         let mut consequent_block =
@@ -8967,6 +8934,9 @@ impl TypedProgram {
         for_expr: &ForExpr,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
+        if for_expr.label.is_some() {
+            kbail!(self, for_expr.span, "#for unrolls at compile time; it has no loop to label");
+        }
         let iteree_value_id =
             self.execute_static_expr(for_expr.iterable_expr, ctx.with_no_expected_type(), &[])?;
         let iteree_span = self.ast.get_expr_span(for_expr.iterable_expr);
@@ -9850,6 +9820,91 @@ impl TypedProgram {
         }
     }
 
+    fn find_loop_for_exit(
+        &self,
+        name: &str,
+        label: Option<StringId>,
+        ctx: EvalExprContext,
+        span: SpanId,
+    ) -> K1Result<(ScopeId, LoopType)> {
+        if ctx.flags.contains(EvalExprFlags::Defer) {
+            kbail!(self, span, "{name} cannot be used inside `defer` blocks");
+        }
+        match self.scopes.find_loop(ctx.scope_id, label) {
+            Some(found) => Ok(found),
+            None => match label {
+                None => kbail!(self, span, "{name} outside of loop"),
+                Some(label) => {
+                    kbail!(self, span, "no enclosing loop labeled @{}", self.ident_str(label))
+                }
+            },
+        }
+    }
+
+    fn eval_break(&mut self, brk: ParsedBreak, ctx: EvalExprContext) -> K1Result<TypedExprId> {
+        let span = brk.span;
+        let (loop_scope_id, loop_type) = self.find_loop_for_exit("break", brk.label, ctx, span)?;
+        let loop_info = *self.scopes.get_loop_info(loop_scope_id).unwrap();
+        let break_value = match brk.value {
+            None => self.synth_empty_value(span),
+            Some(value) => match loop_type {
+                LoopType::Loop => {
+                    self.eval_expr(value, ctx.with_expected_type(loop_info.break_type))?
+                }
+                LoopType::While => {
+                    kbail!(
+                        self,
+                        span,
+                        "break with value is only allowed in `loop` loops, because loop body may not ever be executed"
+                    );
+                }
+            },
+        };
+        let actual_break_type = self.exprs.get_type(break_value);
+        if actual_break_type == NEVER_TYPE_ID {
+            kbail!(
+                self,
+                span,
+                "break is dead since returned expression is divergent; consider removing the 'break'"
+            );
+        }
+        match loop_info.break_type {
+            Some(expected_break_type) => {
+                if let Err(msg) =
+                    self.check_types(expected_break_type, actual_break_type, ctx.scope_id)
+                {
+                    kbail!(self, span, "Break with wrong type: {msg}");
+                }
+            }
+            None => self.scopes.add_loop_info(
+                loop_scope_id,
+                ScopeLoopInfo { break_type: Some(actual_break_type), ..loop_info },
+            ),
+        }
+        let defers = self.gather_defers(ctx.scope_id, span, DeferExtent::LoopScope(loop_scope_id));
+        self.synth_defers_then_exit(defers, break_value, ctx, span, |k1, value| {
+            k1.exprs.add(
+                TypedExpr::Break(TypedBreak { value, loop_scope: loop_scope_id }),
+                NEVER_TYPE_ID,
+                span,
+            )
+        })
+    }
+
+    fn eval_continue(
+        &mut self,
+        cont: ParsedContinue,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
+        let span = cont.span;
+        let (loop_scope_id, _) = self.find_loop_for_exit("continue", cont.label, ctx, span)?;
+        let defers = self.gather_defers(ctx.scope_id, span, DeferExtent::LoopScope(loop_scope_id));
+        let empty_value = self.synth_empty_value(span);
+        self.synth_defers_then_exit(defers, empty_value, ctx, span, |k1, _value| {
+            k1.exprs.add(TypedExpr::Continue { loop_scope: loop_scope_id }, NEVER_TYPE_ID, span)
+        })
+    }
+
     fn eval_return(
         &mut self,
         parsed_expr: Option<ParsedExprId>,
@@ -9966,7 +10021,6 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> K1Result<Option<TypedExprId>> {
         let call_span = fn_call.span;
-        let calling_scope = ctx.scope_id;
         if !fn_call.name.path.is_empty() {
             return Ok(None);
         }
@@ -10009,136 +10063,7 @@ impl TypedProgram {
         }
 
         if !fn_call.is_method {
-            if n == self.ast.idents.b.return_ {
-                if ctx.flags.contains(EvalExprFlags::Defer) {
-                    kbail!(self, fn_call.span, "return cannot be used inside `defer` blocks");
-                }
-                let ret_value = match fn_call.args.len() {
-                    0 => Ok(None),
-                    1 => {
-                        let arg = self.ast.mem.get_nth(fn_call.args, 0);
-                        Ok(Some(arg.value))
-                    }
-                    _ => Err(kerr!(self, fn_call.span, "return(...) must have 0 or 1 arguments")),
-                }?;
-                let return_expr_id = self.eval_return(ret_value, ctx, call_span)?;
-                Ok(Some(return_expr_id))
-            } else if n == self.ast.idents.b.break_ {
-                if ctx.flags.contains(EvalExprFlags::Defer) {
-                    kbail!(self, fn_call.span, "break cannot be used inside `defer` blocks");
-                }
-                if fn_call.args.len() > 1 {
-                    kbail!(self, call_span, "break(...) must have 0 or 1 argument");
-                }
-                // Determine based on loop type if break with value is allowed
-                let Some((enclosing_loop_scope_id, loop_type)) =
-                    self.scopes.nearest_parent_loop(calling_scope)
-                else {
-                    kbail!(self, call_span, "break(...) outside of loop");
-                };
-                let expected_break_type: Option<TypeId> =
-                    self.scopes.get_loop_info(enclosing_loop_scope_id).unwrap().break_type;
-
-                let arg = self.ast.mem.get_nth_opt(fn_call.args, 0);
-                let break_value = match arg {
-                    None => self.synth_empty_value(call_span),
-                    Some(fn_call_arg) => {
-                        // ALTERNATIVE: Allow break with value from `while` loops but require the type to implement the `Default` trait
-                        match loop_type {
-                            LoopType::Loop => self.eval_expr(
-                                fn_call_arg.value,
-                                ctx.with_expected_type(expected_break_type),
-                            )?,
-                            LoopType::While => {
-                                kbail!(
-                                    self,
-                                    call_span,
-                                    "break with value is only allowed in `loop` loops, because loop body may not ever be executed"
-                                );
-                            }
-                        }
-                    }
-                };
-                let actual_break_type = self.exprs.get_type(break_value);
-                if actual_break_type == NEVER_TYPE_ID {
-                    kbail!(
-                        self,
-                        call_span,
-                        "break is dead since returned expression is divergent; consider removing the 'break'"
-                    );
-                }
-
-                // If we have an expected type already,
-                // - check it
-                // - else, set it
-                if let Some(expected_break_type) = expected_break_type {
-                    if let Err(msg) =
-                        self.check_types(expected_break_type, actual_break_type, calling_scope)
-                    {
-                        kbail!(self, call_span, "Break with wrong type: {msg}");
-                    }
-                } else {
-                    self.scopes.add_loop_info(
-                        enclosing_loop_scope_id,
-                        ScopeLoopInfo { break_type: Some(actual_break_type) },
-                    )
-                }
-
-                let defers = self.gather_defers(
-                    calling_scope,
-                    call_span,
-                    DeferExtent::LoopScope(enclosing_loop_scope_id),
-                );
-                let break_expr = self.synth_defers_then_exit(
-                    defers,
-                    break_value,
-                    ctx,
-                    call_span,
-                    |k1, value| {
-                        k1.exprs.add(
-                            TypedExpr::Break(TypedBreak {
-                                value,
-                                loop_scope: enclosing_loop_scope_id,
-                            }),
-                            NEVER_TYPE_ID,
-                            call_span,
-                        )
-                    },
-                )?;
-                Ok(Some(break_expr))
-            } else if n == self.ast.idents.b.continue_ {
-                if ctx.flags.contains(EvalExprFlags::Defer) {
-                    kbail!(self, fn_call.span, "continue cannot be used inside `defer` blocks");
-                }
-                if !fn_call.args.is_empty() {
-                    kbail!(self, call_span, "continue takes no arguments");
-                }
-                let Some((enclosing_loop_scope_id, _)) =
-                    self.scopes.nearest_parent_loop(calling_scope)
-                else {
-                    kbail!(self, call_span, "continue outside of loop");
-                };
-                let defers = self.gather_defers(
-                    calling_scope,
-                    call_span,
-                    DeferExtent::LoopScope(enclosing_loop_scope_id),
-                );
-                let empty_value = self.synth_empty_value(call_span);
-                let continue_expr = self.synth_defers_then_exit(
-                    defers,
-                    empty_value,
-                    ctx,
-                    call_span,
-                    |k1, _value| {
-                        k1.exprs.add(
-                            TypedExpr::Continue { loop_scope: enclosing_loop_scope_id },
-                            NEVER_TYPE_ID,
-                            call_span,
-                        )
-                    },
-                )?;
-                Ok(Some(continue_expr))
-            } else if n == self.ast.idents.b.test_compile {
+            if n == self.ast.idents.b.test_compile {
                 if fn_call.args.len() != 1 {
                     kbail!(self, call_span, "test-compile takes one argument");
                 }
@@ -12102,7 +12027,7 @@ impl TypedProgram {
                 let type_args = self.ast.mem.getn(fn_call.type_args);
                 let mut macro_args: SV8<_> = smallvec![];
                 for arg in self.ast.mem.getn(fn_call.args) {
-                    macro_args.push(MacroArg::Parsed(*arg))
+                    macro_args.push(*arg)
                 }
                 return match self.execute_macro_call(
                     type_args,
