@@ -226,8 +226,8 @@ impl comparable for string {
     let shared = if self.len() < other.len() self.len() else other.len()
     let i: size = 0
     while i < shared {
-      let mine = self.get(i)
-      let theirs = other.get(i)
+      let mine = self.[i]
+      let theirs = other.[i]
       if mine != theirs { return mine.compare(theirs) }
       i = i + 1
     }

@@ -47,7 +47,7 @@ fn test-debug-elided() {
 fn test-code-value() {
   let c = \incr()
   assert-equals(c.chunks.len(), 1)
-  let chunk = c.chunks.get(0)
+  let chunk = c.chunks.[0]
   assert-equals(chunk.text, "incr()")
   assert(chunk.source != 0)
 }
@@ -57,16 +57,16 @@ fn test-code-literal() {
   let c: code = "let q = $a"
   assert-equals(c.text(), "let q = 9 * 9")
   assert-equals(c.chunks.len(), 2)
-  assert-equals(c.chunks.get(1).text, "9 * 9")
-  assert(c.chunks.get(1).source != 0)
+  assert-equals(c.chunks.[1].text, "9 * 9")
+  assert(c.chunks.[1].source != 0)
 }
 
 fn test-code-fmt() {
   let c: code = "let w = ${}".fmt(42)
   assert-equals(c.text(), "let w = 42")
   assert-equals(c.chunks.len(), 2)
-  assert-equals(c.chunks.get(0).text, "let w = ")
-  assert-equals(c.chunks.get(1).source, 0)
+  assert-equals(c.chunks.[0].text, "let w = ")
+  assert-equals(c.chunks.[1].source, 0)
 
   // No expectation nearby? Ascribe.
   let d = "let v = ${}".fmt(7): code
@@ -80,7 +80,7 @@ fn test-code-builder() {
   let built = cb.build()
   assert-equals(built.text(), "let z = 1 + 2; z * 2")
   assert-equals(built.chunks.len(), 3)
-  assert-equals(built.chunks.get(1).text, "1 + 2")
+  assert-equals(built.chunks.[1].text, "1 + 2")
 }
 
 fn test-emitter() {

@@ -201,7 +201,7 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
   // The item being iterated over is named `it` if no binding is supplied
   // `it-index` is also given to us
   for members {
-    let info = member-info.get(it-index)
+    let info = member-info.[it-index]
     // Emit globals, or constants, for each field's mask
     writelnf(code, "  let {it.name}-mask: {base-name} = {info.mask}")
   }
@@ -212,7 +212,7 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
   // we'll use bool since that's what the people likely want. Note that we could configure
   // any of this behavior because this is just a regular function
   for members {
-    let info = member-info.get(it-index)
+    let info = member-info.[it-index]
     let is-bool = it.bits == 1
     let field-type = if is-bool "bool" else "u{info.type-width}"
 

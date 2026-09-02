@@ -32,8 +32,8 @@ ns for range {
   fn parse(s: string): result[range, string] {
      let r = s.split-by-char('-')
      assertdbg(r.len() == 2)
-     let start = u64/from-string(r.get(0)).!
-     let end   = u64/from-string(r.get(1)).!
+     let start = u64/from-string(r.[0]).!
+     let end   = u64/from-string(r.[1]).!
      :ok .{ start, end }
   }
 }

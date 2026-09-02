@@ -26,10 +26,10 @@ ns type_synthesis {
 
     require types/id[point].schema() is :struct .{ fields }
       and fields.len() == 2
-      and fields.get(0).name == "x"
-      and fields.get(0).type-id == types/id[i64]
-      and fields.get(1).name == "y"
-      and fields.get(1).type-id == types/id[string]
+      and fields.[0].name == "x"
+      and fields.[0].type-id == types/id[i64]
+      and fields.[1].name == "y"
+      and fields.[1].type-id == types/id[string]
       else crash("point schema mismatch")
 
     let made-union: types/type-id = #static types/make-struct(:union, [
@@ -52,11 +52,11 @@ ns type_synthesis {
     require types/id[shape].schema() is :either .{ tag-type, variants }
       and tag-type is :u8
       and variants.len() == 2
-      and variants.get(0).name == "circle"
-      and variants.get(0).payload is :some .{ type-id }
+      and variants.[0].name == "circle"
+      and variants.[0].payload is :some .{ type-id }
       and type-id == types/id[i64]
-      and variants.get(1).name == "square"
-      and variants.get(1).payload is :none
+      and variants.[1].name == "square"
+      and variants.[1].payload is :none
       else crash("shape schema mismatch")
 
     let made-enum: types/type-id = #static types/make-either(:none, [
@@ -74,9 +74,9 @@ ns type_synthesis {
     assert-equals(flags, types/id[either(u32) { read = 1, write = 2, exec }])
     require flags.schema() is :enum .{ int-kind, values }
       and int-kind is :u32
-      and values.get(0).value is :u32(1)
-      and values.get(1).value is :u32(2)
-      and values.get(2).value is :u32(3)
+      and values.[0].value is :u32(1)
+      and values.[1].value is :u32(2)
+      and values.[2].value is :u32(3)
       else crash("flags schema mismatch")
 
     assert-equals(types/id[shape.tag-enum], types/id[either { circle, square }])
@@ -103,8 +103,8 @@ ns type_synthesis {
     assert-equals(made-fn, types/id[fn(i64, string) -> bool])
     require made-fn.schema() is :function .{ params, return-type-id }
       and params.len() == 2
-      and params.get(0).type-id == types/id[i64]
-      and params.get(1).type-id == types/id[string]
+      and params.[0].type-id == types/id[i64]
+      and params.[1].type-id == types/id[string]
       and return-type-id == types/id[bool]
       else crash("fn schema mismatch")
 

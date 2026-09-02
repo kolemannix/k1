@@ -214,7 +214,7 @@ ns for list {
   fn filter-in-place[t](self: *mut list[t], f: some fn t -> bool) {
     let kept: size = 0
     for i in 0.until(self.len) {
-      let elem = self.get(i)
+      let elem = self.[i]
       if f(elem) {
         self.[kept] = elem
         kept = kept + 1

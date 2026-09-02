@@ -19,7 +19,7 @@ fn find-byte-simd(haystack: string, c: char): i64 {
     i = i + 16
   }
   while i < len {
-    if haystack.get(i) == c {
+    if haystack.[i] == c {
       return i.as[i64]
     }
     i = i + 1

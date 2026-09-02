@@ -13,7 +13,7 @@ fn macro-body-tokens(unit: clang/CXTranslationUnit, cursor: clang/CXCursor): lis
   // Token 0 is the macro's own name
   let i: size = 1
   while i < toks.len() {
-    let tok = toks.get(i)
+    let tok = toks.[i]
     i = i + 1
     let kind = clang/getTokenKind(tok)
     if kind is :Comment { continue }
@@ -30,7 +30,7 @@ fn transpile-macro-body(names: name-config, emitted: map[string, string], body: 
 
   let all-strings = true
   for body {
-    let is-string = it.kind is :Literal and it.text.get(0) == '"'
+    let is-string = it.kind is :Literal and it.text.[0] == '"'
     if not is-string { all-strings = false }
   }
   if all-strings return string-macro-value(body)
@@ -53,7 +53,7 @@ fn transpile-expr(t: *mut macro-transpile): result[string, string] {
   let s = transpile-primary(t).try
   loop {
     if t.pos >= t.toks.len() break
-    let tok = t.toks.get(t.pos)
+    let tok = t.toks.[t.pos]
     if tok.text == ")" break
     let is-op = tok.kind is :Punctuation and is-binary-op(tok.text)
     if not is-op { return :err "unsupported token '${tok.text}'" }
@@ -73,7 +73,7 @@ fn is-binary-op(op: string): bool {
 
 fn transpile-primary(t: *mut macro-transpile): result[string, string] {
   if t.pos >= t.toks.len() return :err "unexpected end of expression"
-  let tok = t.toks.get(t.pos)
+  let tok = t.toks.[t.pos]
   t.pos = t.pos + 1
   tok.kind is {
     :Literal -> transpile-literal(t, tok.text),
@@ -95,15 +95,15 @@ fn transpile-primary(t: *mut macro-transpile): result[string, string] {
       "(" -> {
         let inner = transpile-expr(t).try
         if t.pos >= t.toks.len() return :err "missing closing paren"
-        if t.toks.get(t.pos).text != ")" return :err "expected closing paren"
+        if t.toks.[t.pos].text != ")" return :err "expected closing paren"
         t.pos = t.pos + 1
         :ok "($inner)"
       },
       "-" -> {
         // k1 has no unary minus; fuse into a negative literal when possible
-        let next-is-literal = t.pos < t.toks.len() and t.toks.get(t.pos).kind is :Literal
+        let next-is-literal = t.pos < t.toks.len() and t.toks.[t.pos].kind is :Literal
         if next-is-literal {
-          let text = t.toks.get(t.pos).text
+          let text = t.toks.[t.pos].text
           t.pos = t.pos + 1
           let lit = transpile-literal(t, text).try
           :ok "-$lit"
@@ -124,7 +124,7 @@ fn transpile-primary(t: *mut macro-transpile): result[string, string] {
 }
 
 fn transpile-literal(t: *mut macro-transpile, text: string): result[string, string] {
-  let first = text.get(0)
+  let first = text.[0]
   if first == '"' return :err "string literal in expression"
   if first == '\'' {
     let v = parse-char-literal(text).try
@@ -137,10 +137,10 @@ fn transpile-literal(t: *mut macro-transpile, text: string): result[string, stri
     let hex = digits.drop(2)
     if hex.is-empty() or hex.len() > 16 return :err "unsupported hex literal $text"
     for c in hex { if not is-hex-digit(c) { return :err "unsupported hex literal $text" } }
-    if hex.len() == 16 and hex.get(0).u8() > '7'.u8() { t.ty = "u64" }
+    if hex.len() == 16 and hex.[0].u8() > '7'.u8() { t.ty = "u64" }
     return :ok "0x$hex"
   }
-  if digits.get(0) == '0' and digits.len() > 1 {
+  if digits.[0] == '0' and digits.len() > 1 {
     // k1 has no octal literals
     let value: i64 = 0
     for c in digits {
@@ -156,14 +156,14 @@ fn transpile-literal(t: *mut macro-transpile, text: string): result[string, stri
 
 fn is-float-literal(text: string): bool {
   if text.starts-with("0x") or text.starts-with("0X") return false
-  let last = text.get(text.len() - 1)
+  let last = text.[text.len() - 1]
   if last == 'f' or last == 'F' return true
   text.contains-string(".")
 }
 
 fn transpile-float-literal(t: *mut macro-transpile, text: string): result[string, string] {
   let s = text
-  let last = s.get(s.len() - 1)
+  let last = s.[s.len() - 1]
   t.ty = "f64"
   if last == 'f' or last == 'F' { t.ty = "f32"; s = s.drop-right(1) }
   if last == 'l' or last == 'L' { s = s.drop-right(1) }
@@ -173,8 +173,8 @@ fn transpile-float-literal(t: *mut macro-transpile, text: string): result[string
     if not ok return :err "unsupported float literal $text"
   }
   if not s.contains-string(".") return :err "unsupported float literal $text"
-  let s = if s.get(0) == '.' "0$s" else s
-  let s = if s.get(s.len() - 1) == '.' "${s}0" else s
+  let s = if s.[0] == '.' "0$s" else s
+  let s = if s.[s.len() - 1] == '.' "${s}0" else s
   :ok s
 }
 
@@ -182,17 +182,17 @@ fn string-macro-value(body: span[c-token]): result[macro-value, string] {
   let out = string-builder/new()
   for body {
     let text = it.text
-    if text.len() < 2 or text.get(0) != '"' or text.get(text.len() - 1) != '"' {
+    if text.len() < 2 or text.[0] != '"' or text.[text.len() - 1] != '"' {
       return :err "unsupported string literal $text"
     }
     // C's basic escapes are k1's; validate them and pass the text through
     let inner = text.drop(1).drop-right(1)
     let i: size = 0
     while i < inner.len() {
-      let c = inner.get(i)
+      let c = inner.[i]
       if c == '$' { return :err "unsupported string literal $text" }
       if c == '\\' {
-        let esc = if i + 1 < inner.len() inner.get(i + 1) else ' '
+        let esc = if i + 1 < inner.len() inner.[i + 1] else ' '
         let ok = esc == 'n' or esc == 't' or esc == 'r' or esc == '0' or esc == '\\' or esc == '"'
         if not ok { return :err "unsupported string escape in $text" }
         i = i + 2
@@ -209,7 +209,7 @@ fn string-macro-value(body: span[c-token]): result[macro-value, string] {
 fn strip-int-suffix(text: string): string {
   let end = text.len()
   while end > 0 {
-    let c = text.get(end - 1)
+    let c = text.[end - 1]
     if c == 'u' or c == 'U' or c == 'l' or c == 'L' { end = end - 1 } else break
   }
   text.take(end)
@@ -221,11 +221,11 @@ fn is-hex-digit(c: char): bool {
 }
 
 fn parse-char-literal(text: string): result[i64, string] {
-  if text.len() == 3 and text.get(0) == '\'' and text.get(2) == '\'' {
-    return :ok text.get(1).u8().widen[i64]
+  if text.len() == 3 and text.[0] == '\'' and text.[2] == '\'' {
+    return :ok text.[1].u8().widen[i64]
   }
-  if text.len() == 4 and text.get(0) == '\'' and text.get(1) == '\\' and text.get(3) == '\'' {
-    let v: i64 = text.get(2) is {
+  if text.len() == 4 and text.[0] == '\'' and text.[1] == '\\' and text.[3] == '\'' {
+    let v: i64 = text.[2] is {
       'n' -> 10,
       't' -> 9,
       'r' -> 13,

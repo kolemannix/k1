@@ -45,7 +45,7 @@ ns for ident-pool {
   }
 
   fn get(self: *ident-pool, id: string-id): string {
-    self.strings.get(id.widen[size])
+    self.strings.[id.widen[size]]
   }
 }
 
@@ -535,7 +535,7 @@ ns for program {
   fn make(file-name: string, source: string): program {
     let newline-positions = list/empty[u32]()
     for i in 0.until(source.len()) {
-      if source.get(i) == '\n' { newline-positions.push(i.trunc[u32]) }
+      if source.[i] == '\n' { newline-positions.push(i.trunc[u32]) }
     }
     .{
       file-name,
@@ -644,7 +644,7 @@ ns for program {
   }
 
   fn get-pattern-span(self: *program, id: pattern-id): src-span {
-    self.patterns.get(id.widen[size]) is {
+    self.patterns.[id.widen[size]] is {
       :literal e -> self.get-expr-span(e),
       :variable v -> v.span,
       :struct-pat s -> s.span,
@@ -656,8 +656,8 @@ ns for program {
   }
 
   fn get-stmt-span(self: *program, id: stmt-id): src-span {
-    self.stmts.get(id.widen[size]) is {
-      :use-stmt u -> self.uses.get(u.widen[size]).span,
+    self.stmts.[id.widen[size]] is {
+      :use-stmt u -> self.uses.[u.widen[size]].span,
       :let-stmt l -> l.span,
       :require-stmt r -> r.span,
       :assign a -> a.span,
@@ -668,14 +668,14 @@ ns for program {
 
   fn get-defn-span(self: *program, d: defn-id): src-span {
     d is {
-      :use-defn id -> self.uses.get(id.widen[size]).span,
-      :function id -> self.functions.get(id.widen[size]).name-span,
-      :macro-defn id -> self.macros.get(id.widen[size]).name-span,
-      :type-defn id -> self.type-defns.get(id.widen[size]).span,
-      :namespace id -> self.namespaces.get(id.widen[size]).span,
-      :ability-defn id -> self.abilities.get(id.widen[size]).span,
-      :ability-impl id -> self.ability-impls.get(id.widen[size]).span,
-      :global id -> self.globals.get(id.widen[size]).span,
+      :use-defn id -> self.uses.[id.widen[size]].span,
+      :function id -> self.functions.[id.widen[size]].name-span,
+      :macro-defn id -> self.macros.[id.widen[size]].name-span,
+      :type-defn id -> self.type-defns.[id.widen[size]].span,
+      :namespace id -> self.namespaces.[id.widen[size]].span,
+      :ability-defn id -> self.abilities.[id.widen[size]].span,
+      :ability-impl id -> self.ability-impls.[id.widen[size]].span,
+      :global id -> self.globals.[id.widen[size]].span,
       :static-defn id -> self.get-expr-span(id),
     }
   }
@@ -724,12 +724,12 @@ ns for program {
     let hi = self.newline-positions.len()
     while lo < hi {
       let mid = (lo + hi) / 2
-      if self.newline-positions.get(mid) < offset { lo = mid + 1 } else { hi = mid }
+      if self.newline-positions.[mid] < offset { lo = mid + 1 } else { hi = mid }
     }
-    let start: u32 = if lo == 0 0 else self.newline-positions.get(lo - 1) + 1
+    let start: u32 = if lo == 0 0 else self.newline-positions.[lo - 1] + 1
     let end: u32 = if lo < self.newline-positions.len() {
-      let nl = self.newline-positions.get(lo)
-      if nl > start and self.source.get((nl - 1).widen[size]) == '\r' { nl - 1 } else nl
+      let nl = self.newline-positions.[lo]
+      if nl > start and self.source.[(nl - 1).widen[size]] == '\r' { nl - 1 } else nl
     } else {
       self.source.len().trunc[u32]
     }

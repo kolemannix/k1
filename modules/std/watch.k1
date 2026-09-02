@@ -71,7 +71,7 @@
     }
     if n < 0 return :err "watch/wait kevent failed: ${libc/errno-k1-string()}"
     for i in 0.until(n.widen[size]) {
-      let ev = out.get(i)
+      let ev = out.[i]
       if ev.flags.bit-and(EV_ERROR) != 0 continue
       let kind: watch/event-kind = if ev.fflags.bit-and(NOTE_DELETE) != 0 :deleted
         else if ev.fflags.bit-and(NOTE_RENAME) != 0 :renamed

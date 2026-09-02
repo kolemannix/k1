@@ -25,7 +25,7 @@ fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
           crash("Got 1 format argument (a string) but format string has ${parts.len}")
         }
         //meta/emitLine("its a string baby");
-        code.writeln("parts.get(0).print-to(w);")
+        code.writeln("parts.[0].print-to(w);")
         code.writeln("w.write(args);")
       },
       :struct .{fields} -> {
@@ -38,7 +38,7 @@ fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
         }
 
         for part in parts {
-          code.writeln("parts.get($it-index).print-to(w);")
+          code.writeln("parts.[$it-index].print-to(w);")
           code.writeln("f$it-index.print-to(w);")
         }
 
@@ -57,7 +57,7 @@ fn fmt-string[fmt: static string, args](fmt-string: fmt, args: args): string {
 
 fn test-format() {
   let s1 = fmt-string("My value is: ? ?", .{a = 42, b = true})
-  //let s1 = sprintf(args.get(1), {a: 42, b: true});
+  //let s1 = sprintf(args.[1], {a: 42, b: true});
   assert-equals(s1, "My value is: 42 true")
   let s3 = fmt-string("My values are: ? and ?", .{a = "asdf", b = true})
   assert-equals(s3, "My values are: asdf and true")

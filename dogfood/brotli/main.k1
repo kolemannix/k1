@@ -31,7 +31,7 @@ fn check-round-trip(name: string, input: span[u8], encoded: span[u8]) {
   assert-equals(decoded.len(), input.len())
   let i: size = 0
   while i < input.len() {
-    if decoded.index-unchecked(i).* != input.get(i) {
+    if decoded.index-unchecked(i).* != input.[i] {
       crash("$name: round-trip mismatch at byte $i")
     }
     i = i + 1
@@ -52,8 +52,8 @@ fn check-input(name: string, input: span[u8], quality: size) {
   }
   let i: size = 0
   while i < c-out.len() {
-    if k1-out.get(i) != c-out.get(i) {
-      crash("$name: byte $i differs: k1 ${k1-out.get(i)} c ${c-out.get(i)}")
+    if k1-out.[i] != c-out.[i] {
+      crash("$name: byte $i differs: k1 ${k1-out.[i]} c ${c-out.[i]}")
     }
     i = i + 1
   }
@@ -174,7 +174,7 @@ fn main(argc: c-int, argv: ptr): i32 {
   }
   println("all q0+q1 parity + round-trip checks passed")
 
-  if args.len() > 1 and args.get(1) == "bench" {
+  if args.len() > 1 and args.[1] == "bench" {
     for q in [0: size, 1] {
       println("")
       for c in corpora {

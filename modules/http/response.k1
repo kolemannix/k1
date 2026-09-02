@@ -112,5 +112,5 @@ impl source[t = u8] for chunked-encoder {
 let hex-digits: string = "0123456789abcdef"
 fn push-hex(out: *mut list[u8], value: size) {
   if value >= 16 { push-hex(out, value / 16) }
-  out.push(hex-digits.span-bytes().get(value % 16))
+  out.push(hex-digits.span-bytes().[value % 16])
 }

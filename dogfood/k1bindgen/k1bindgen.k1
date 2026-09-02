@@ -50,8 +50,8 @@ fn dirname(path: string): string {
 // "clang version 21.1.7 (...)" -> "21"
 fn clang-major-version(version-string: string): ?string {
   for tok in version-string.split-by-char(' ') {
-    if (not tok.is-empty()) and tok.get(0).is-ascii-digit() {
-      return :some tok.split-by-char('.').get(0)
+    if (not tok.is-empty()) and tok.[0].is-ascii-digit() {
+      return :some tok.split-by-char('.').[0]
     }
   }
   :none
@@ -130,7 +130,7 @@ fn start(args: span[string]): result[string, string] {
   for s in args.rename {
     let parts = s.split-by-char(':')
     if parts.len() != 2 eprintln("Bad rename: $s")
-    parsed-renames.insert-in(mem/tmp(), parts.get(0), parts.get(1))
+    parsed-renames.insert-in(mem/tmp(), parts.[0], parts.[1])
   }
   let state: bindgen-state = .{
     out-path = args.out-path,

@@ -488,7 +488,7 @@ ns for i64 {
 
   fn from-string(s: string): result[i64, string] {
     if s.is-empty() return :err "empty string"
-    let neg = s.get(0) == '-'
+    let neg = s.[0] == '-'
     let magnitude = u64/from-string(if neg s.drop(1) else s).try
     if neg {
       if magnitude > 0x8000000000000000 return :err "i64 overflow"

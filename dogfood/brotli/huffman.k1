@@ -47,7 +47,7 @@ fn sort-huffman-tree-items(
     let gaps: array[size, 6] = [132, 57, 23, 10, 4, 1]
     let g: size = if n < 57 2 else 0
     while g < 6 {
-      let gap = gaps.get(g)
+      let gap = gaps.[g]
       let i = gap
       while i < n {
         let j = i
@@ -75,17 +75,17 @@ fn set-depth(p0: size, pool: buffer[huffman-tree], depth: buffer[u8], max-depth:
     if node.index-left >= 0 {
       level = level + 1
       if level > max-depth return false
-      stack.get(level) = node.index-right-or-value.widen[size]
+      stack.[level] = node.index-right-or-value.widen[size]
       p = node.index-left.widen[size]
       continue
     }
     depth.index-unchecked(node.index-right-or-value.widen[size]).* = level.trunc[u8]
-    while level >= 0 and stack.get(level) == -1 {
+    while level >= 0 and stack.[level] == -1 {
       level = level - 1
     }
     if level < 0 return true
-    p = stack.get(level)
-    stack.get(level) = -1
+    p = stack.[level]
+    stack.[level] = -1
   }
 }
 
@@ -156,13 +156,13 @@ fn create-huffman-tree(
 
 fn reverse-bits(num-bits: size, bits: u16): u16 {
   let lut: array[size, 16] = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]
-  let retval = lut.get((bits & 0x0F).widen[size])
+  let retval = lut.[(bits & 0x0F).widen[size]]
   let i: size = 4
   let b = bits
   while i < num-bits {
     retval = retval << 4
     b = b >> 4
-    retval = retval | lut.get((b & 0x0F).widen[size])
+    retval = retval | lut.[(b & 0x0F).widen[size]]
     i = i + 4
   }
   (retval >> (num-bits.negated() & 0x03).trunc[u32]).trunc[u16]
@@ -175,15 +175,15 @@ fn convert-bit-depths-to-symbols(depth: buffer[u8], len: size, bits: buffer[u16]
   let i: size = 0
   while i < len {
     let d = depth.index-unchecked(i).*.widen[size]
-    bl-count.get(d) = bl-count.get(d) + 1
+    bl-count.[d] = bl-count.[d] + 1
     i = i + 1
   }
-  bl-count.get(0) = 0
+  bl-count.[0] = 0
   let code: u16 = 0
   i = 1
   while i < 16 {
-    code = (code + bl-count.get(i - 1)) << 1
-    next-code.get(i) = code
+    code = (code + bl-count.[i - 1]) << 1
+    next-code.[i] = code
     i = i + 1
   }
   i = 0
@@ -191,8 +191,8 @@ fn convert-bit-depths-to-symbols(depth: buffer[u8], len: size, bits: buffer[u16]
     let d = depth.index-unchecked(i).*
     if d != 0 {
       let ds = d.widen[size]
-      bits.index-unchecked(i).* = reverse-bits(ds, next-code.get(ds))
-      next-code.get(ds) = next-code.get(ds) + 1
+      bits.index-unchecked(i).* = reverse-bits(ds, next-code.[ds])
+      next-code.[ds] = next-code.[ds] + 1
     }
     i = i + 1
   }
@@ -373,22 +373,22 @@ fn store-huffman-tree-of-huffman-tree(
   let codes-to-store = CODE_LENGTH_CODES
   if num-codes > 1 {
     while codes-to-store > 0 {
-      if code-length-bitdepth.index-unchecked(storage-order.get(codes-to-store - 1)).* != 0 break
+      if code-length-bitdepth.index-unchecked(storage-order.[codes-to-store - 1]).* != 0 break
       codes-to-store = codes-to-store - 1
     }
   }
-  if code-length-bitdepth.index-unchecked(storage-order.get(0)).* == 0 and
-    code-length-bitdepth.index-unchecked(storage-order.get(1)).* == 0 {
+  if code-length-bitdepth.index-unchecked(storage-order.[0]).* == 0 and
+    code-length-bitdepth.index-unchecked(storage-order.[1]).* == 0 {
     skip-some = 2
-    if code-length-bitdepth.index-unchecked(storage-order.get(2)).* == 0 {
+    if code-length-bitdepth.index-unchecked(storage-order.[2]).* == 0 {
       skip-some = 3
     }
   }
   bw.write-bits(2, skip-some.unsigned())
   let i = skip-some
   while i < codes-to-store {
-    let l = code-length-bitdepth.index-unchecked(storage-order.get(i)).*.widen[size]
-    bw.write-bits(code-lengths.get(l), code-symbols.get(l))
+    let l = code-length-bitdepth.index-unchecked(storage-order.[i]).*.widen[size]
+    bw.write-bits(code-lengths.[l], code-symbols.[l])
     i = i + 1
   }
 }
@@ -483,7 +483,7 @@ fn build-and-store-huffman-tree-fast(
     let h = histogram.index-unchecked(length).*
     if h != 0 {
       if count < 4 {
-        symbols.get(count) = length
+        symbols.[count] = length
       }
       count = count + 1
       total = total - h.widen[size]
@@ -493,9 +493,9 @@ fn build-and-store-huffman-tree-fast(
 
   if count <= 1 {
     bw.write-bits(4, 1)
-    bw.write-bits(max-bits, symbols.get(0).unsigned())
-    depth.index-unchecked(symbols.get(0)).* = 0
-    bits.index-unchecked(symbols.get(0)).* = 0
+    bw.write-bits(max-bits, symbols.[0].unsigned())
+    depth.index-unchecked(symbols.[0]).* = 0
+    bits.index-unchecked(symbols.[0]).* = 0
     return
   }
 
@@ -569,28 +569,28 @@ fn build-and-store-huffman-tree-fast(
     while i < count {
       let j = i + 1
       while j < count {
-        if depth.index-unchecked(symbols.get(j)).* < depth.index-unchecked(symbols.get(i)).* {
-          let tmp = symbols.get(j)
-          symbols.get(j) = symbols.get(i)
-          symbols.get(i) = tmp
+        if depth.index-unchecked(symbols.[j]).* < depth.index-unchecked(symbols.[i]).* {
+          let tmp = symbols.[j]
+          symbols.[j] = symbols.[i]
+          symbols.[i] = tmp
         }
         j = j + 1
       }
       i = i + 1
     }
     if count == 2 {
-      bw.write-bits(max-bits, symbols.get(0).unsigned())
-      bw.write-bits(max-bits, symbols.get(1).unsigned())
+      bw.write-bits(max-bits, symbols.[0].unsigned())
+      bw.write-bits(max-bits, symbols.[1].unsigned())
     } else if count == 3 {
-      bw.write-bits(max-bits, symbols.get(0).unsigned())
-      bw.write-bits(max-bits, symbols.get(1).unsigned())
-      bw.write-bits(max-bits, symbols.get(2).unsigned())
+      bw.write-bits(max-bits, symbols.[0].unsigned())
+      bw.write-bits(max-bits, symbols.[1].unsigned())
+      bw.write-bits(max-bits, symbols.[2].unsigned())
     } else {
-      bw.write-bits(max-bits, symbols.get(0).unsigned())
-      bw.write-bits(max-bits, symbols.get(1).unsigned())
-      bw.write-bits(max-bits, symbols.get(2).unsigned())
-      bw.write-bits(max-bits, symbols.get(3).unsigned())
-      bw.write-bits(1, if depth.index-unchecked(symbols.get(0)).* == 1 1 else 0) // tree-select
+      bw.write-bits(max-bits, symbols.[0].unsigned())
+      bw.write-bits(max-bits, symbols.[1].unsigned())
+      bw.write-bits(max-bits, symbols.[2].unsigned())
+      bw.write-bits(max-bits, symbols.[3].unsigned())
+      bw.write-bits(1, if depth.index-unchecked(symbols.[0]).* == 1 1 else 0) // tree-select
     }
   } else {
     // Complex tree: static code-length code, then RLE via precomputed tables.
@@ -607,22 +607,22 @@ fn build-and-store-huffman-tree-fast(
       }
       i = i + reps
       if value == 0 {
-        bw.write-bits(k-zero-reps-depth.get(reps).widen[size], k-zero-reps-bits.get(reps).as[u64])
+        bw.write-bits(k-zero-reps-depth.[reps].widen[size], k-zero-reps-bits.[reps].as[u64])
       } else {
         if previous-value != value {
           let vs = value.widen[size]
-          bw.write-bits(k-code-length-depth.get(vs).widen[size], k-code-length-bits.get(vs).widen[u64])
+          bw.write-bits(k-code-length-depth.[vs].widen[size], k-code-length-bits.[vs].widen[u64])
           reps = reps - 1
         }
         if reps < 3 {
           while reps != 0 {
             reps = reps - 1
             let vs = value.widen[size]
-            bw.write-bits(k-code-length-depth.get(vs).widen[size], k-code-length-bits.get(vs).widen[u64])
+            bw.write-bits(k-code-length-depth.[vs].widen[size], k-code-length-bits.[vs].widen[u64])
           }
         } else {
           reps = reps - 3
-          bw.write-bits(k-non-zero-reps-depth.get(reps).widen[size], k-non-zero-reps-bits.get(reps).as[u64])
+          bw.write-bits(k-non-zero-reps-depth.[reps].widen[size], k-non-zero-reps-bits.[reps].as[u64])
         }
         previous-value = value
       }

@@ -407,15 +407,15 @@ fn compress-fragment-impl(
 
   let ci: size = 0
   while ci + 7 < s.cmd-code-numbits {
-    bw.write-bits(8, s.cmd-code.get(ci >> 3).widen[u64])
+    bw.write-bits(8, s.cmd-code.[ci >> 3].widen[u64])
     ci = ci + 8
   }
-  bw.write-bits(s.cmd-code-numbits & 7, s.cmd-code.get(s.cmd-code-numbits >> 3).widen[u64])
+  bw.write-bits(s.cmd-code-numbits & 7, s.cmd-code.[s.cmd-code-numbits >> 3].widen[u64])
 
   loop { // emit_commands
     let hi: size = 0
     while hi < 128 {
-      s.cmd-histo.get(hi) = k-cmd-histo-seed.get(hi)
+      s.cmd-histo.[hi] = k-cmd-histo-seed.[hi]
       hi = hi + 1
     }
 
@@ -591,7 +591,7 @@ fn compress-fragment-impl(
 
   if not is-last {
     // Store the updated command prefix code for the next fragment.
-    s.cmd-code.get(0) = 0
+    s.cmd-code.[0] = 0
     s.cmd-code-numbits = 0
     let code-bw: bit-writer = .{ storage = s.cmd-code.&.as-span().data-ptr(), pos = 0 }
     build-and-store-command-prefix-code(s, code-bw.&)
@@ -631,13 +631,13 @@ fn compress-fragment-fast(
 fn init-command-prefix-codes(s: *mut one-pass-arena) {
   let i: size = 0
   while i < 128 {
-    s.cmd-depth.get(i) = k-default-command-depths.get(i)
-    s.cmd-bits.get(i) = k-default-command-bits.get(i)
+    s.cmd-depth.[i] = k-default-command-depths.[i]
+    s.cmd-bits.[i] = k-default-command-bits.[i]
     i = i + 1
   }
   i = 0
   while i < 57 {
-    s.cmd-code.get(i) = k-default-command-code.get(i)
+    s.cmd-code.[i] = k-default-command-code.[i]
     i = i + 1
   }
   s.cmd-code-numbits = 448

@@ -7076,6 +7076,11 @@ impl TypedProgram {
             }
             ParsedExpr::Index(index) => {
                 let index = *index;
+                let base = self.eval_expr(index.base, ctx.with_no_expected_type())?;
+                let base_type = self.get_type_id_dereferenced(self.exprs.get_type(base));
+                if self.types.get(base_type).as_array().is_some() {
+                    return self.synth_array_element(base, base_type, index.key, ctx, index.span);
+                }
                 let args = self.ast.mem.pushn(&[
                     ParsedCallArg::unnamed(index.base),
                     ParsedCallArg::unnamed(index.key),
@@ -7093,11 +7098,10 @@ impl TypedProgram {
                     Some(expected) => Some(self.add_reference_type(expected)),
                     None => None,
                 };
-                let element_ref = self.eval_function_call(
+                let element_ref = self.eval_method_call_on_typed_receiver(
                     &call,
-                    None,
+                    (index.base, base),
                     ctx.with_expected_type(element_ref_expected),
-                    None,
                 )?;
                 let element_ref_type = self.exprs.get_type(element_ref);
                 if self.types.get(element_ref_type).as_reference().is_none() {
@@ -9681,7 +9685,12 @@ impl TypedProgram {
             }
             _ => match self.ast.mem.find(fn_call.args, |a| !a.is_explicit_context) {
                 None => None,
-                Some(first) => Some(MaybeTypedExpr::Parsed(first.value)),
+                Some(first) => {
+                    match stashed_args.iter().find(|(parsed, _)| *parsed == first.value) {
+                        Some((_, typed)) => Some(MaybeTypedExpr::Typed(*typed)),
+                        None => Some(MaybeTypedExpr::Parsed(first.value)),
+                    }
+                }
             },
         };
 
@@ -10151,12 +10160,103 @@ impl TypedProgram {
         }
     }
 
+    fn synth_array_element(
+        &mut self,
+        receiver: TypedExprId,
+        array_type_id: TypeId,
+        key: ParsedExprId,
+        ctx: EvalExprContext,
+        span: SpanId,
+    ) -> K1Result<TypedExprId> {
+        let array_type = self.types.get(array_type_id).as_array().unwrap();
+        let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
+        let index_expr = self.eval_expr(key, ctx.with_expected_type(Some(SIZE_TYPE_ID)))?;
+        let index_expr = self
+            .check_and_coerce_expr(SIZE_TYPE_ID, index_expr, ctx.scope_id, false)
+            .map_err(|e| kerr!(self, span, "Array index type error: {}", e.message))?;
+
+        let array_reference_type = self.get_expr_type(receiver).as_reference();
+        let array_expr =
+            self.synth_dereference_when(receiver, array_reference_type.is_some());
+
+        if let Ok(static_index_expr) = self.attempt_static_lift(index_expr) {
+            let static_index_type = self.exprs.get_type(static_index_expr);
+            if let Some(index_size) = self
+                .get_value_from_value_type(static_index_type)
+                .and_then(|sv| self.static_values.get(sv).as_size())
+            {
+                if let Some(concrete_size) = concrete_count {
+                    if index_size >= concrete_size {
+                        kbail!(
+                            self,
+                            span,
+                            "Array index out of bounds: {} >= {}",
+                            index_size,
+                            concrete_size
+                        );
+                    }
+                }
+            }
+        }
+        let get_element_expr = self.exprs.add(
+            TypedExpr::ArrayGetElement(ArrayGetElement {
+                base_array: array_expr,
+                index: index_expr,
+                packed: self.is_place_in_packed(array_expr),
+            }),
+            array_type.element_type,
+            span,
+        );
+        let array_length_expr = self.synth_typed_call_typed_args(
+            QIdent::naked(self.ast.idents.b.len, span),
+            &[],
+            &[receiver],
+            ctx.with_no_expected_type(),
+            true,
+        )?;
+        let is_in_bounds = self.synth_typed_call_typed_args(
+            self.ast.idents.f.ScalarCmp_lt,
+            &[],
+            &[index_expr, array_length_expr],
+            ctx,
+            false,
+        )?;
+        let crash_message =
+            self.synth_string_literal(self.ast.idents.b.crash_msg_array_oob, span);
+        let crash_oob = self.synth_typed_call_typed_args(
+            self.ast.idents.f.core_crash_bounds.with_span(span),
+            &[],
+            &[array_length_expr, index_expr, crash_message],
+            ctx.with_no_expected_type(),
+            false,
+        )?;
+        // We emit `{ if !in_bounds crash; array[index] }` rather than an if/else
+        // over the element so that the element access is the block's trailing
+        // expr: blocks are place-transparent, which is what makes
+        // `arr.[i].&` and `arr.[i] = v` work
+        let unit_expr = self.synth_empty_value(span);
+        let bounds_check_expr = self.synth_if_else(
+            self.builtin_types.empty,
+            is_in_bounds,
+            unit_expr,
+            crash_oob,
+            span,
+        );
+        let mut statements = self.mem.new_list(2);
+        statements.push(self.add_expr_stmt(bounds_check_expr));
+        statements.push(self.add_expr_stmt(get_element_expr));
+        let block_expr = self.exprs.add_block(
+            BlockBuilder { scope_id: ctx.scope_id, statements, span },
+            array_type.element_type,
+        );
+        Ok(block_expr)
+    }
+
     fn handle_array_method_call(
         &mut self,
         receiver: TypedExprId,
         array_type_id: TypeId,
         call: &ParsedCall,
-        ctx: EvalExprContext,
     ) -> K1Result<Option<CallResolution>> {
         let span = call.span;
         let array_type = self.types.get(array_type_id).as_array().unwrap();
@@ -10175,93 +10275,6 @@ impl TypedProgram {
                     Some(size) => self.synth_i64(size, span),
                 };
                 Ok(Some(CallResolution::OtherExpr(array_length)))
-            }
-            n if n == self.ast.idents.b.get => {
-                if call.args.len() != 2 {
-                    kbail!(self, span, "Array get takes 1 argument, the index");
-                }
-                let index_arg = self.ast.mem.get_nth(call.args, 1);
-                let index_expr =
-                    self.eval_expr(index_arg.value, ctx.with_expected_type(Some(SIZE_TYPE_ID)))?;
-                let index_expr = self
-                    .check_and_coerce_expr(SIZE_TYPE_ID, index_expr, ctx.scope_id, false)
-                    .map_err(|e| kerr!(self, span, "Array get index type error: {}", e.message))?;
-
-                let array_reference_type = self.get_expr_type(receiver).as_reference();
-                let array_expr =
-                    self.synth_dereference_when(receiver, array_reference_type.is_some());
-
-                if let Ok(static_index_expr) = self.attempt_static_lift(index_expr) {
-                    let static_index_type = self.exprs.get_type(static_index_expr);
-                    if let Some(index_size) = self
-                        .get_value_from_value_type(static_index_type)
-                        .and_then(|sv| self.static_values.get(sv).as_size())
-                    {
-                        if let Some(concrete_size) = concrete_count {
-                            if index_size >= concrete_size {
-                                kbail!(
-                                    self,
-                                    span,
-                                    "Array index out of bounds: {} >= {}",
-                                    index_size,
-                                    concrete_size
-                                );
-                            }
-                        }
-                    }
-                }
-                let get_element_expr = self.exprs.add(
-                    TypedExpr::ArrayGetElement(ArrayGetElement {
-                        base_array: array_expr,
-                        index: index_expr,
-                        packed: self.is_place_in_packed(array_expr),
-                    }),
-                    array_type.element_type,
-                    span,
-                );
-                let array_length_expr = self.synth_typed_call_typed_args(
-                    QIdent::naked(self.ast.idents.b.len, span),
-                    &[],
-                    &[receiver],
-                    ctx.with_no_expected_type(),
-                    true,
-                )?;
-                let is_in_bounds = self.synth_typed_call_typed_args(
-                    self.ast.idents.f.ScalarCmp_lt,
-                    &[],
-                    &[index_expr, array_length_expr],
-                    ctx,
-                    false,
-                )?;
-                let crash_message =
-                    self.synth_string_literal(self.ast.idents.b.crash_msg_array_oob, span);
-                let crash_oob = self.synth_typed_call_typed_args(
-                    self.ast.idents.f.core_crash_bounds.with_span(span),
-                    &[],
-                    &[array_length_expr, index_expr, crash_message],
-                    ctx.with_no_expected_type(),
-                    false,
-                )?;
-                // We emit `{ if !in_bounds crash; array[index] }` rather than an if/else
-                // over the element so that the element access is the block's trailing
-                // expr: blocks are place-transparent, which is what makes
-                // `arr.get(i).&` and `arr.get(i) = v` work
-                let unit_expr = self.synth_empty_value(span);
-                let bounds_check_expr = self.synth_if_else(
-                    self.builtin_types.empty,
-                    is_in_bounds,
-                    unit_expr,
-                    crash_oob,
-                    span,
-                );
-                let mut statements = self.mem.new_list(2);
-                statements.push(self.add_expr_stmt(bounds_check_expr));
-                statements.push(self.add_expr_stmt(get_element_expr));
-                let block_expr = self.exprs.add_block(
-                    BlockBuilder { scope_id: ctx.scope_id, statements, span },
-                    array_type.element_type,
-                );
-                Ok(Some(CallResolution::OtherExpr(block_expr)))
             }
             _ => {
                 if let Some(method_id) =
@@ -10465,7 +10478,7 @@ impl TypedProgram {
 
         if let Type::Array(_array_type) = self.types.get(base_for_method) {
             if let Some(resolution) =
-                self.handle_array_method_call(base_expr, base_for_method, call, ctx)?
+                self.handle_array_method_call(base_expr, base_for_method, call)?
             {
                 return Ok(resolution);
             }
@@ -11996,7 +12009,19 @@ impl TypedProgram {
         known_callee: Option<Callee>,
     ) -> K1Result<TypedExprId> {
         let tmp_mark = self.tmp.mark();
-        let result = self.eval_function_call_inner(fn_call, known_args, ctx, known_callee);
+        let result = self.eval_function_call_inner(fn_call, known_args, ctx, known_callee, &[]);
+        self.tmp.reset_to(tmp_mark);
+        result
+    }
+
+    fn eval_method_call_on_typed_receiver(
+        &mut self,
+        fn_call: &ParsedCall,
+        receiver: (ParsedExprId, TypedExprId),
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
+        let tmp_mark = self.tmp.mark();
+        let result = self.eval_function_call_inner(fn_call, None, ctx, None, &[receiver]);
         self.tmp.reset_to(tmp_mark);
         result
     }
@@ -12007,6 +12032,7 @@ impl TypedProgram {
         known_args: Option<(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
         known_callee: Option<Callee>,
+        pre_typed_args: &[(ParsedExprId, TypedExprId)],
     ) -> K1Result<TypedExprId> {
         let span = fn_call.span;
         debug!("eval_function_call {}", self.qident_to_string(&fn_call.name));
@@ -12016,6 +12042,7 @@ impl TypedProgram {
         );
         // Arguments already evaluated during resolution/inference; avoids double-compiles where possible
         let mut stashed_args: SV8<(ParsedExprId, TypedExprId)> = smallvec![];
+        stashed_args.extend_from_slice(pre_typed_args);
         let marker_arg_index = self.find_completion_cursor_arg(fn_call);
         let ctx = if marker_arg_index.is_some() { ctx.with_ccursor_owned_by_call() } else { ctx };
         let call_resolution = match known_callee {

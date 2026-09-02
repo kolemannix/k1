@@ -37,7 +37,7 @@ impl source[t = u8] for sse-encoder {
           let line-start: size = 0
           let i: size = 0
           while i < seg.len() {
-            if seg.get(i) == newline {
+            if seg.[i] == newline {
               if i > line-start { self.parts.push(seg.slice(line-start, i)) }
               self.parts.push("\ndata: ".span-bytes())
               line-start = i + 1

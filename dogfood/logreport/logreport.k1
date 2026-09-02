@@ -41,18 +41,18 @@ ns log {
   fn parse-line(line: string): result[entry, string] {
     let parts = fields(line)
     if parts.len() < 4 { return :err "want at least 4 fields, got ${parts.len()}" }
-    let ms = i64/from-string(parts.get(0)).try
-    require parse-level(parts.get(1)) is :some level else {
-      return :err "unknown level ${parts.get(1)}"
+    let ms = i64/from-string(parts.[0]).try
+    require parse-level(parts.[1]) is :some level else {
+      return :err "unknown level ${parts.[1]}"
     }
-    let service = parts.get(2)
+    let service = parts.[2]
 
-    let last = parts.get(parts.len() - 1)
+    let last = parts.[parts.len() - 1]
     if not last.starts-with("bytes=") { return :err "last field is not bytes=" }
     let bytes = i64/from-string(last.drop("bytes=".len())).try
 
     let words = list/empty[string]()
-    for i in 3.until(parts.len() - 1) { words.push(parts.get(i)) }
+    for i in 3.until(parts.len() - 1) { words.push(parts.[i]) }
     :ok .{ ms, level, service, bytes, msg = words.join(" ") }
   }
 
@@ -115,7 +115,7 @@ ns report {
 
   fn table(rows: list[row], bar-width: int): string {
     if rows.is-empty() { return "" }
-    let busiest = rows.get(0).bytes
+    let busiest = rows.[0].bytes
     let sb = string-builder/new()
     for r in rows {
       let bars = if busiest == 0 0 else (r.bytes * bar-width) / busiest
@@ -143,7 +143,7 @@ ns report {
     for e in entries {
       let slot = e.ms / 64
       if slot >= buckets.len() { continue }
-      buckets.[slot] = buckets.get(slot) + 1
+      buckets.[slot] = buckets.[slot] + 1
     }
     buckets
   }
@@ -159,7 +159,7 @@ fn first-error(entries: list[log/entry]): ?log/entry {
 fn busiest-bucket(buckets: array[int, 4], threshold: int): ?size {
   let hit: ?size = :none
   for i in 0.until(buckets.len()) {
-    if buckets.get(i) >= threshold {
+    if buckets.[i] >= threshold {
       hit = :some i
       break
     }
@@ -181,31 +181,31 @@ fn main(): i32 {
 
   let rows = report/tally(parsed.entries)
   assert-equals(rows.len(), 3)
-  assert-equals(rows.get(0).service, "db")
-  assert-equals(rows.get(0).bytes, 51208)
-  assert-equals(rows.get(0).errors, 1)
-  assert-equals(rows.get(1).service, "api")
-  assert-equals(rows.get(2).service, "cache")
+  assert-equals(rows.[0].service, "db")
+  assert-equals(rows.[0].bytes, 51208)
+  assert-equals(rows.[0].errors, 1)
+  assert-equals(rows.[1].service, "api")
+  assert-equals(rows.[2].service, "cache")
   println("")
   print(report/table(rows, 40))
 
   let buckets = report/timeline(parsed.entries)
   println("\ntimeline (64ms buckets): $buckets")
-  assert-equals(buckets.get(0), 4)
+  assert-equals(buckets.[0], 4)
   assert-equals(busiest-bucket(buckets, 5), :some(2: size))
   assert-equals(busiest-bucket(buckets, 99), :none)
 
   let tails = list/empty[string]()
   for e in parsed.entries { tails.push(e.msg.take-right(12)) }
-  assert-equals(tails.get(0), "request ok")
-  assert-equals(tails.get(5), "query ok")
+  assert-equals(tails.[0], "request ok")
+  assert-equals(tails.[5], "query ok")
 
   let text = report/to-json(rows)
   require json/parse-from-string(text) is :ok(doc) else { crash("emitted invalid json: $text") }
   require doc is :array(items) else { crash("expected a json array") }
   assert-equals(items.len(), 3)
-  require items.get(0) is :object(first) else { crash("expected a json object") }
-  assert(first.get(0).value is :str "db")
+  require items.[0] is :object(first) else { crash("expected a json object") }
+  assert(first.[0].value is :str "db")
   assert(json/parse-from-string("${text} trailing") is :err(_))
   println("\njson: $text")
 
@@ -227,7 +227,7 @@ fn main(): i32 {
   quiet.filter-in-place(fn r. r.errors == 0)
   assert(quiet.is-empty())
 
-  let avg = (rows.get(0).bytes.as[f64]) / (rows.get(0).count.as[f64])
+  let avg = (rows.[0].bytes.as[f64]) / (rows.[0].count.as[f64])
   println("db average payload: $avg bytes")
   0
 }

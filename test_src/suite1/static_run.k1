@@ -193,12 +193,12 @@ fn test() {
   // span of spans!
   let vov: span[span[int]] = #static [[1,2,3], [4,5,6]]
   assert-equals(vov.len(), 2)
-  assert-equals(vov.get(0).get(0), 1)
-  assert-equals(vov.get(0).get(1), 2)
-  assert-equals(vov.get(0).get(2), 3)
-  assert-equals(vov.get(1).get(0), 4)
-  assert-equals(vov.get(1).get(1), 5)
-  assert-equals(vov.get(1).get(2), 6)
+  assert-equals(vov.[0].[0], 1)
+  assert-equals(vov.[0].[1], 2)
+  assert-equals(vov.[0].[2], 3)
+  assert-equals(vov.[1].[0], 4)
+  assert-equals(vov.[1].[1], 5)
+  assert-equals(vov.[1].[2], 6)
 
 
   let point = #static .{ x = 1, y = (#static 2): int }

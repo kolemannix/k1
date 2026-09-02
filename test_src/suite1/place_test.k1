@@ -29,7 +29,7 @@ fn receiver-coercion() {
 
 fn negative-cases(p: int, s: inner, arr: array[int, 3]) {
   // Element address rooted at a by-value param is rejected like any param place
-  let param-elem-result = test-compile(arr.get(0).&)
+  let param-elem-result = test-compile(arr.[0].&)
   assert-equals(
     param-elem-result,
     :some "Cannot take address of a function parameter; re-declare it or use a * type"
@@ -82,29 +82,29 @@ fn test() {
   assert-equals(g-ref.*, 77)
 
   let arr: array[int, 3] = zeroed()
-  arr.get(0) = 10
-  arr.get(1) = 20
-  let elem-ref = arr.get(1).&
+  arr.[0] = 10
+  arr.[1] = 20
+  let elem-ref = arr.[1].&
   assert-equals(elem-ref.*, 20)
   elem-ref.* = 21
-  assert-equals(arr.get(1), 21)
+  assert-equals(arr.[1], 21)
 
   // ...and through an array reference
   let arr-ref = &arr
-  let elem-ref2 = arr-ref.get(2).&
+  let elem-ref2 = arr-ref.[2].&
   elem-ref2.* = 30
-  assert-equals(arr.get(2), 30)
+  assert-equals(arr.[2], 30)
 
   // Mixed aggregates: store to a struct member inside an array element
   // (place chain: field -> block -> array element -> variable)
   let points: array[inner, 2] = zeroed()
-  points.get(0).a = 100
-  points.get(1).b = 200
-  assert-equals(points.get(0).a, 100)
-  assert-equals(points.get(0).b, 0)
-  let point-b-ref = points.get(1).b.&
+  points.[0].a = 100
+  points.[1].b = 200
+  assert-equals(points.[0].a, 100)
+  assert-equals(points.[0].b, 0)
+  let point-b-ref = points.[1].b.&
   point-b-ref.* = 201
-  assert-equals(points.get(1).b, 201)
+  assert-equals(points.[1].b, 201)
 
   // Mixed aggregates: store to struct members inside a sum payload, through a
   // reference binding from a match on the variant

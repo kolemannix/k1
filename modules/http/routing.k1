@@ -61,7 +61,7 @@ fn shape-suffix(e: entry, from: size): string {
   let b = string-builder/new()
   let j = from
   while j < e.path.len() {
-    e.path.get(j) is {
+    e.path.[j] is {
       :text t -> b.write("/l:$t"),
       :rest _ -> b.write("/**"),
       _ -> b.write("/*"),
@@ -74,7 +74,7 @@ fn shape-suffix(e: entry, from: size): string {
 
 fn check-ident(s: string, what: string) {
   if s.is-empty() crash("routing: empty $what")
-  if not s.get(0).is-ascii-letter() crash("routing: $what `$s` must start with a letter")
+  if not s.[0].is-ascii-letter() crash("routing: $what `$s` must start with a letter")
   for c in s {
     if not (c.is-ascii-letter() or c.is-ascii-digit() or c == '-') {
       crash("routing: $what `$s` is not a valid identifier")
@@ -112,7 +112,7 @@ fn validate(entries: span[entry]) {
     for p in ps {
       let j = it-index + 1
       while j < ps.len() {
-        if ps.get(j).name == p.name {
+        if ps.[j].name == p.name {
           crash("routing: route `${en.name}` binds param `${p.name}` twice")
         }
         j = j + 1
@@ -161,7 +161,7 @@ fn emit-leaf-body(cb: *mut code-builder, en: entry, d: size) {
       :parsed -> cb.line(`require from-string@(${c.ty})/from-string(sd${c.idx}) is :ok ${c.name} else { return :err :bad-param .{ pattern = ${str-lit(pat)}, name = ${str-lit(c.name)}, ty = ${str-lit(c.ty)}, got = sd${c.idx} } }`),
       :str -> cb.line("let ${c.name} = sd${c.idx}"),
       :rest -> {
-        cb.line(`let rest-raw = if (not sp.more) and sp.count == $d "" else routing/tail-from(path, segs.get($d))`)
+        cb.line(`let rest-raw = if (not sp.more) and sp.count == $d "" else routing/tail-from(path, segs.[$d])`)
         cb.line(`require routing/decode-seg(rest-raw) is :some ${c.name} else { return :err :bad-encoding .{ segment = rest-raw } }`)
       },
     }
@@ -178,32 +178,32 @@ fn emit-leaf-body(cb: *mut code-builder, en: entry, d: size) {
 fn emit-leafs(cb: *mut code-builder, entries: span[entry], idxs: list[size], d: size) {
   let head-present = {
     let found = false
-    for gi in idxs { if entries.get(gi).method is :head { found = true } }
+    for gi in idxs { if entries.[gi].method is :head { found = true } }
     found
   }
   for gi in idxs {
-    let en = entries.get(gi)
+    let en = entries.[gi]
     let cond = "header.method == llhttp/method:${en.method.enum-name().to-ascii-upper()}"
     if en.method is :get and not head-present {
       cond = "$cond or header.method == llhttp/method:HEAD"
     }
-    cb.block("if $cond", fn[cb, entries, gi, d]. emit-leaf-body(cb, entries.get(gi), d))
+    cb.block("if $cond", fn[cb, entries, gi, d]. emit-leaf-body(cb, entries.[gi], d))
   }
-  let first = entries.get(idxs.get(0))
+  let first = entries.[idxs.[0]]
   let allowed = list/empty[string]()
-  for gi in idxs { allowed.push(str-lit(entries.get(gi).method.enum-name().to-ascii-upper())) }
+  for gi in idxs { allowed.push(str-lit(entries.[gi].method.enum-name().to-ascii-upper())) }
   cb.line(`return :err :bad-method .{ pattern = ${str-lit(render-pattern(first.path))}, allowed = [${string/join(allowed, ", ")}] }`)
 }
 
 // The has-a-segment-at-`d` branch: decode it, then literal edges (committing
 // is safe under the cover rule), then the capture edge
 fn emit-seg-edges(cb: *mut code-builder, entries: span[entry], group: list[size], d: size, lit-texts: list[string], caps: list[size]) {
-  cb.line(`require routing/decode-seg(segs.get($d)) is :some sd$d else { return :err :bad-encoding .{ segment = segs.get($d) } }`)
+  cb.line(`require routing/decode-seg(segs.[$d]) is :some sd$d else { return :err :bad-encoding .{ segment = segs.[$d] } }`)
   for t in lit-texts {
     let sub = list/empty[size]()
     for gi in group {
-      let en = entries.get(gi)
-      if en.path.len() > d and en.path.get(d) is :text lt and lt == t { sub.push(gi) }
+      let en = entries.[gi]
+      if en.path.len() > d and en.path.[d] is :text lt and lt == t { sub.push(gi) }
     }
     cb.block("if sd$d == ${str-lit(t)}", fn[cb, entries, sub, d]. emit-node(cb, entries, sub, d + 1))
   }
@@ -218,9 +218,9 @@ fn emit-node(cb: *mut code-builder, entries: span[entry], group: list[size], d: 
   let caps = list/empty[size]()
   let lit-texts = list/empty[string]()
   for gi in group {
-    let en = entries.get(gi)
+    let en = entries.[gi]
     if en.path.len() == d { exact.push(gi) }
-    else en.path.get(d) is {
+    else en.path.[d] is {
       :rest _ -> rests.push(gi),
       :text t -> if not lit-texts.contains(t) { lit-texts.push(t) },
       _ -> caps.push(gi),
@@ -228,23 +228,23 @@ fn emit-node(cb: *mut code-builder, entries: span[entry], group: list[size], d: 
   }
 
   if rests.len() > 0 and (exact.len() > 0 or caps.len() > 0 or lit-texts.len() > 0) {
-    crash("routing: a rest route shares a prefix with other routes: `${render-pattern(entries.get(rests.get(0)).path)}` would shadow or be shadowed by them")
+    crash("routing: a rest route shares a prefix with other routes: `${render-pattern(entries.[rests.[0]].path)}` would shadow or be shadowed by them")
   }
 
   // Reachability: taking a literal edge must never lose a URL that the capture
   // edge could have matched, since the matcher commits to literals first
   for t in lit-texts {
     for ci in caps {
-      let cshape = shape-suffix(entries.get(ci), d + 1)
+      let cshape = shape-suffix(entries.[ci], d + 1)
       let covered = false
       for gi in group {
-        let en = entries.get(gi)
-        if en.path.len() > d and en.path.get(d) is :text lt and lt == t {
+        let en = entries.[gi]
+        if en.path.len() > d and en.path.[d] is :text lt and lt == t {
           if shape-suffix(en, d + 1) == cshape { covered = true }
         }
       }
       if not covered {
-        crash("routing: route `${render-pattern(entries.get(ci).path)}` is unreachable for URLs whose segment $d is `$t`: add the same route shape under `$t`, or remove the overlap")
+        crash("routing: route `${render-pattern(entries.[ci].path)}` is unreachable for URLs whose segment $d is `$t`: add the same route shape under `$t`, or remove the overlap")
       }
     }
   }
@@ -267,7 +267,7 @@ fn emit-parse-fn(cb: *mut code-builder, base: string, entries: span[entry]) {
   // arena): a route value must not outlive its request
   cb.block("fn parse(header: http/header): result[$base, routing/route-error]", fn[cb, entries]. {
     cb.line(`let url = header.url`)
-    cb.line(`if url.is-empty() or url.get(0) != '/' { return :err :not-found }`)
+    cb.line(`if url.is-empty() or url.[0] != '/' { return :err :not-found }`)
     cb.line(`let path = if url.position('?') is :some qi url.take(qi) else url`)
     cb.line(`let segs = array/zeroed[string, 16]()`)
     cb.line(`let sp = routing/split-path(path, segs.&)`)
@@ -387,7 +387,7 @@ fn split-path(path: string, out: *mut array[string, 16]): { count: size, more: b
   let i: size = 1
   let n = path.len()
   while i <= n {
-    if i == n or path.get(i) == '/' {
+    if i == n or path.[i] == '/' {
       if i == n and i == start {
         .{} // trailing slash: drop the final empty segment
       } else {
@@ -417,11 +417,11 @@ fn decode-seg(s: string): ?string {
   let b = string-builder/new()
   let i: size = 0
   while i < s.len() {
-    let c = s.get(i)
+    let c = s.[i]
     if c == '%' {
       if i + 2 >= s.len() return :none
-      require hex-val(s.get(i + 1)) is :some hi else { return :none }
-      require hex-val(s.get(i + 2)) is :some lo else { return :none }
+      require hex-val(s.[i + 1]) is :some hi else { return :none }
+      require hex-val(s.[i + 2]) is :some lo else { return :none }
       b.write-char((hi * 16 + lo).as-char())
       i = i + 3
     } else {
@@ -436,7 +436,7 @@ fn is-unreserved(c: char): bool {
   c.is-ascii-letter() or c.is-ascii-digit() or c == '-' or c == '.' or c == '_' or c == '~'
 }
 
-fn hex-digit(v: u8): char { "0123456789ABCDEF".get(v.widen[size]) }
+fn hex-digit(v: u8): char { "0123456789ABCDEF".[v.widen[size]] }
 
 fn encode-into[w: writer](s: string, w, keep-slash: bool) {
   for c in s {

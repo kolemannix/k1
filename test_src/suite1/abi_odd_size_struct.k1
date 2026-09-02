@@ -19,10 +19,10 @@ fn test() {
   items.push(make(3, :bare))
   items.push(make(4, :other))
 
-  assert-equals(items.get(0).act.tag, 0)
-  assert-equals(items.get(1).act.tag, 0)
-  assert-equals(items.get(2).act.tag, 1)
-  assert-equals(items.get(3).act.tag, 2)
+  assert-equals(items.[0].act.tag, 0)
+  assert-equals(items.[1].act.tag, 0)
+  assert-equals(items.[2].act.tag, 1)
+  assert-equals(items.[3].act.tag, 2)
 
   let n: u64 = 0
   for o in items {
@@ -30,7 +30,7 @@ fn test() {
   }
   assert-equals(n, 12)
 
-  assert(items.get(1).act is :wrap(:third))
-  require items.get(0).act is :wrap(i) else crash("expected wrap")
+  assert(items.[1].act is :wrap(:third))
+  require items.[0].act is :wrap(i) else crash("expected wrap")
   assert(i is :first(0))
 }

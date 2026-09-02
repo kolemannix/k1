@@ -5,7 +5,7 @@ fn basic() {
   assert(c == '!')
   let s = c.to-string()
   assert(s.len() == 1)
-  assert(s.get(0) == '!')
+  assert(s.[0] == '!')
 
   assert(s.concat-char('!') == "!!")
 }

@@ -33,7 +33,7 @@ ns reload {
   fn dir-of(path: string): string {
     let i = path.len()
     while i > 0 {
-      if path.get(i - 1) == '/' return path.slice(0, i - 1)
+      if path.[i - 1] == '/' return path.slice(0, i - 1)
       i = i - 1
     }
     "."
@@ -121,7 +121,7 @@ ns reload {
       addrs.push(addr)
     }
     for e in entries {
-      atomic/store(e.slot, addrs.get(it-index), :release)
+      atomic/store(e.slot, addrs.[it-index], :release)
     }
     let version = atomic/fetch-add(descriptor.version, 1, :seq-cst) + 1
     eprintln("reload: ${ns-path} swapped to v${version} (${descriptor.entry-count} syms)")

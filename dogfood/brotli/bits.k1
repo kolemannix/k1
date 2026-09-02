@@ -19,7 +19,7 @@ fn log2-floor-nonzero(n: u64): size {
 
 // log2 with the property log2(0) == 0, table-backed for small values like the C.
 fn fast-log2(v: size): f64 {
-  if v < 256 k-log2-table.get(v)
+  if v < 256 k-log2-table.[v]
   else v.as[f64].log2()
 }
 

@@ -659,7 +659,7 @@ ns platform {
       fn pipe(): { read: i32, write: i32 } {
         let fds = array/zeroed[i32, 2]()
         if c/pipe(fds.&.as[ptr]) != 0 return .{ read = -1, write = -1 }
-        .{ read = fds.get(0), write = fds.get(1) }
+        .{ read = fds.[0], write = fds.[1] }
       }
 
       fn is-executable(path: string): bool {

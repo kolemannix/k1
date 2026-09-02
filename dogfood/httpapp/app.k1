@@ -189,9 +189,9 @@ fn template(template: string, values: span[{ key: string, value: string }]): ?st
   let out = string-builder/new()
   let i = 0
   while i < template.len() {
-    let c = template.get(i)
+    let c = template.[i]
     // TODO: simd scan
-    if c == '{' and template.get(i + 1) == '{' {
+    if c == '{' and template.[i + 1] == '{' {
       let rest = template.drop(i + 2)
       require rest.position('}') is :some close else return :none
       let key = rest.take(close)
@@ -225,7 +225,7 @@ fn render(out: *string-builder, pixels: *array[u8, 65536]) {
 fn update(pixels: *array[u8, 65536]): { x: u32, y: u32 } {
   let x = std/sys/random(gridsize)
   let y = std/sys/random(gridsize)
-  let pix = pixels.get(y*gridsize + x).&
+  let pix = pixels.[y*gridsize + x].&
   pix.* = 1
   .{ x, y }
 }

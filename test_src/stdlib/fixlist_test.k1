@@ -13,10 +13,10 @@ fn test-fixlist() {
 
   fl.push-n([-1, -2, -3, -5])
   assert-equals(fl.len(), 4)
-  assert-equals(fl.get(0), -1)
-  assert-equals(fl.get(3), -5)
+  assert-equals(fl.[0], -1)
+  assert-equals(fl.[3], -5)
   fl.[1] = 10
-  assert-equals(fl.get(1), 10)
+  assert-equals(fl.[1], 10)
   assert-equals(fl.len(), 4)
 
 }

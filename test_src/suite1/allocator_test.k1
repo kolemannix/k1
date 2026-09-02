@@ -30,7 +30,7 @@ fn chaining-test() {
   // Every allocation survives across chunk boundaries
   assert-equals(first.*, 1)
   for i in 0.until(600) {
-    assert-equals(ptrs.get(i).*, i.unsigned())
+    assert-equals(ptrs.[i].*, i.unsigned())
   }
   // 600 * 8 bytes exceeds one 4096 chunk: growth must have chained
   assert(not a.extra-chunks.is-null())

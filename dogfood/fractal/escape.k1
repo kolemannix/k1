@@ -104,11 +104,11 @@ fn build-palette(): array[u32, 256] {
   for i in 0.until(PALETTE_LEN) {
     let at = i.as[f64] / PALETTE_LEN.as[f64]
     let seg = 0
-    while seg < 4 and anchors.get(seg + 1).at < at { seg = seg + 1 }
-    let low = anchors.get(seg)
-    let high = anchors.get(seg + 1)
+    while seg < 4 and anchors.[seg + 1].at < at { seg = seg + 1 }
+    let low = anchors.[seg]
+    let high = anchors.[seg + 1]
     let t = (at - low.at) / (high.at - low.at)
-    out.get(i) = pack(
+    out.[i] = pack(
       low.red + (high.red - low.red) * t,
       low.green + (high.green - low.green) * t,
       low.blue + (high.blue - low.blue) * t
@@ -125,7 +125,7 @@ let CYCLE: f64 = 6.0
 
 fn shade(escape: f64): u32 {
   if escape < 0.0 return 0
-  PALETTE.get((escape * CYCLE).as[int] % PALETTE_LEN)
+  PALETTE.[(escape * CYCLE).as[int] % PALETTE_LEN]
 }
 
 type view = { width: i32, height: i32, center: complex, span: f64, max-iter: i32 }

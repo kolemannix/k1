@@ -51,10 +51,10 @@ ns type_schema {
       is :either .{ variants, payload-offset }
       and payload-offset == 8
       and variants.len() == 3
-      and variants.get(0).name == "yes"
-      and variants.get(1).name == "no"
-      and variants.get(2).name == "maybe-so"
-      and variants.get(2).payload is :some .{ type-id }
+      and variants.[0].name == "yes"
+      and variants.[1].name == "no"
+      and variants.[2].name == "maybe-so"
+      and variants.[2].payload is :some .{ type-id }
       and type-id == types/id[string]
       else crash("")
 
@@ -79,18 +79,18 @@ ns type_schema {
       is :function .{ params, return-type-id } else crash("")
 
     assert(return-type-id.schema() is :bool)
-    assert-equals(params.get(0).name, "x")
-    assert(params.get(0).type-id.schema() is :int _)
+    assert-equals(params.[0].name, "x")
+    assert(params.[0].type-id.schema() is :int _)
 
     require schema[union { a: int, b: f64, c: f32 }]
       is :union .{ fields }
       and fields.len()         == 3
-      and fields.get(0).name   == "a"
-      and fields.get(0).offset == 0
-      and fields.get(1).name   == "b"
-      and fields.get(1).offset == 0
-      and fields.get(2).name   == "c"
-      and fields.get(2).offset == 0
+      and fields.[0].name   == "a"
+      and fields.[0].offset == 0
+      and fields.[1].name   == "b"
+      and fields.[1].offset == 0
+      and fields.[2].name   == "c"
+      and fields.[2].offset == 0
       else crash("")
 
     require schema[recursive-type] is :struct _ else crash("")

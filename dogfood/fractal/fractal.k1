@@ -85,5 +85,5 @@ fn print-frame() {
 
 fn pixel-at(x: i32, y: i32): { red: u8, green: u8, blue: u8 } {
   let at = ((y * frame-width + x) * 4).widen[size]
-  .{ red = frame.get(at), green = frame.get(at + 1), blue = frame.get(at + 2) }
+  .{ red = frame.[at], green = frame.[at + 1], blue = frame.[at + 2] }
 }

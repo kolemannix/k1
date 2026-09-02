@@ -9,7 +9,7 @@ fn assert-map-matches(input: list[u8]) {
   scale-add(dst.as-buffer(), input.as-span())
   for input {
     // x * 3 + x == 4x, wrapping in u8
-    assert-equals(dst.get(it-index), it * 4)
+    assert-equals(dst.[it-index], it * 4)
   }
 }
 

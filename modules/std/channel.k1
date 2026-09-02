@@ -121,7 +121,7 @@ impl[t] source[t = t] for channel[t] {
   fn next(self: *mut channel[t]): pull[t] {
     if self.failure is :some message { return :fail message }
     if self.queue.is-empty() { return :pending }
-    let item = self.queue.get(0)
+    let item = self.queue.[0]
     self.queue.remove(0)
     self.queued-weight = self.queued-weight - (self.weight-fn)(item)
     self.part = item

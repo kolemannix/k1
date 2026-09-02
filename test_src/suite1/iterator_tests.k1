@@ -22,8 +22,8 @@ fn test() {
 
   let counted = 1.until(4).to-list()
   assert-equals(counted.len, 3)
-  assert-equals(counted.get(0), 1)
-  assert-equals(counted.get(2), 3)
+  assert-equals(counted.[0], 1)
+  assert-equals(counted.[2], 3)
 
   .{}
 }

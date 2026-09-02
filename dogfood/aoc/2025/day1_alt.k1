@@ -19,7 +19,7 @@ fn solve(p: (either { part-1, part-2 }), input: string): int {
   let theta = initial-theta
   let commands: list[string] = input.split-by-char('\n')
   for commands {
-    let dir: char = it.get(0)
+    let dir: char = it.[0]
     let scale: f64 = if (dir == 'L') { -1.0 } else { 1.0 }
     let amount: u64 = u64/from-string(it.drop(1)).!
     let n: i64 = if p is :part-1 { 1 } else amount.signed()

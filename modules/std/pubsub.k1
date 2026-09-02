@@ -125,7 +125,7 @@ ns pubsub {
       let sub-ptr = self.as[ptr]
       let i: size = 0
       while i < bus.subscribers.len() {
-        if bus.subscribers.get(i).as[ptr] == sub-ptr {
+        if bus.subscribers.[i].as[ptr] == sub-ptr {
           bus.subscribers.remove(i)
         } else {
           i = i + 1

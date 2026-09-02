@@ -57,7 +57,7 @@ ns meta {
   }
 
   // Note: If we had an ability for "growable collection", we could implement it.
-  //       len, get, empty, (push)
+  //       len, row, empty, (push)
   fn define-soa[t](name: string): code {
     let struct-type-id = types/id[t]
     let tt = struct-type-id.spell()
@@ -75,14 +75,14 @@ ns meta {
     // begin ns
     code.writeln(`ns for $name {`)
 
-    // begin fn get
-    code.writeln(`  fn get(self: $name, index: size): $tt {`)
+    // begin fn row
+    code.writeln(`  fn row(self: $name, index: size): $tt {`)
     code.writeln(`    let(returned) ret: $tt = mem/zeroed();`)
     for f in fields {
-      code.writeln(`    ret.${f.name} = self.ARR_${f.name}.get(index);`)
+      code.writeln(`    ret.${f.name} = self.ARR_${f.name}.[index];`)
     }
     code.writeln(`    ret`)
-    code.writeln(`  }`) // end fn get
+    code.writeln(`  }`) // end fn row
 
     // begin fn empty
     code.writeln(`  fn empty(): $name { .{`)

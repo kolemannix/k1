@@ -557,23 +557,20 @@ ability as-span[impl t] {
   fn non-empty(self): bool {
     self.as-span().inner-buffer().len != 0
   }
-  fn get(self, index: size): t {
-    self.as-span().inner-buffer().get(index)
-  }
   fn get-opt(self, index: size): ?t {
     let b = self.as-span().inner-buffer()
     if index >= b.len :none
-    else :some b.get(index)
+    else :some b.[index]
   }
   fn first(self): ?t {
     let b = self.as-span().inner-buffer()
     if b.len == 0 :none
-    else :some b.get(0)
+    else :some b.[0]
   }
   fn last(self): ?t {
     let b = self.as-span().inner-buffer()
     if b.len == 0 :none
-    else :some b.get(b.len - 1)
+    else :some b.[b.len - 1]
   }
   fn slice(self, start: size, end: size): span[t] {
     span/wrap-buffer(self.as-span().inner-buffer().slice(start, end))
@@ -836,7 +833,7 @@ ns k1 {
     // captured params expression id; not meant to be called directly
     fn add-dep-impl(self: *mut module, name: string, params-expr-id: u64) {
       if name.is-empty() { crash("empty dep name") }
-      if not name.get(0).is-ascii-lower() {
+      if not name.[0].is-ascii-lower() {
         crash("invalid dep name '$name': dep names start with a lowercase ascii letter")
       }
       for name {
@@ -977,10 +974,10 @@ fn phony[t](): t { crash("phony") }
 
 ns array {
   fn get-base-read[t, n](array: *array[t, n]): *t where n: static size {
-    array.get(0).&
+    array.[0].&
   }
   fn get-base[t, n](array: *mut array[t, n]): *mut t where n: static size {
-    array.get(0).&
+    array.[0].&
   }
   fn base-ptr[t, n](array: *mut array[t, n]): ptr where n: static size {
     array.as[ptr]
@@ -1005,7 +1002,7 @@ ns array {
     let array-uninit = allocate[t, n, _](alloc)
     let i = 0
     while i < n.from-static() {
-      array-uninit.get(i) = t
+      array-uninit.[i] = t
       i = i + 1
     }
     array-uninit
@@ -1034,10 +1031,6 @@ impl[t, n: static size] as-span[t = t] for *array[t, n] {
   }
 }
 
-impl[t, n: static size] index[key = size, t = t] for *mut array[t, n] {
-  fn index-ref(self, key: size): *t { self.get(key).& }
-}
-
 impl[t: print, n: static size] print for array[t, n] {
   fn print-to[w: writer](self: array[t, n], w): empty {
     let count: size = core/meta/static-type-to-value[_, n]()
@@ -1045,7 +1038,7 @@ impl[t: print, n: static size] print for array[t, n] {
     let i: size = 0
     while i < count {
       if i > 0 { w.write-char(',') }
-      self.get(i).print-to(w)
+      self.[i].print-to(w)
       i = i + 1
     }
     w.write-char(']')

@@ -45,7 +45,7 @@ ns fd {
       loop {
         let i = self.consumed
         while i < self.pending.len() {
-          if self.pending.get(i) == '\n'.as-u8() {
+          if self.pending.[i] == '\n'.as-u8() {
             let line = self.take-line(i)
             self.consumed = i + 1
             if self.consumed == self.pending.len() {

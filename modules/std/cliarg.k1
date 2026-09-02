@@ -62,7 +62,7 @@ fn emit-arg-match(cb: *mut code-builder, s: types/type-schema:struct) {
 fn emit-arg-loop(cb: *mut code-builder, s: types/type-schema:struct) {
   cb.line("let i = 1")
   cb.block("while i < args.len()", fn[cb, s]. {
-    cb.line("let cur = args.get(i)")
+    cb.line("let cur = args.[i]")
     emit-arg-match(cb, s)
   })
 }

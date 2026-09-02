@@ -30,7 +30,7 @@ fn test() {
   assert-equals(sum-via-buffer(arr.&), 24)
   assert-equals(arr.&.as-span().len(), 3)
   arr.&.as-buffer().[0] = 10
-  assert-equals(arr.get(0), 10)
+  assert-equals(arr.[0], 10)
 
   let fl = fixlist/uninit[i64, 8]()
   fl.push(1)
@@ -51,7 +51,7 @@ fn test() {
   assert-equals(string/join(list/empty[string](), "-"), "")
 
   let ms: list[i64] = [3, 1, 2]
-  assert-equals(ms.get(1), 1)
+  assert-equals(ms.[1], 1)
   assert-equals(ms.first(), some(3))
   assert-equals(ms.last(), some(2))
   assert-equals(ms.get-opt(9), none())
@@ -76,12 +76,12 @@ fn test() {
 
   let cs: list[color] = list/filled(2, :red)
   cs.[1] = :green
-  assert(cs.get(1) == :green)
+  assert(cs.[1] == :green)
 
   let mf = fixlist/uninit[i64, 4]()
   mf.push(4)
   mf.push(3)
-  assert-equals(mf.&.get(0), 4)
+  assert-equals(mf.&.[0], 4)
   assert-equals(mf.&.last(), some(3))
   mf.&.sort()
   assert(mf.&.as-span() == [3, 4].as-span())
@@ -90,7 +90,7 @@ fn test() {
 
   let st = "hello"
   assert-equals(st.len(), 5)
-  assert-equals(st.get(1), 'e')
+  assert-equals(st.[1], 'e')
   assert-equals(st.first(), some('h'))
   assert-equals(st.last(), some('o'))
   assert(st.non-empty())
@@ -99,7 +99,7 @@ fn test() {
 
   let rs: list[i64] = [1, 2, 3]
   rs.[1] = 20
-  assert-equals(rs.get(1), 20)
+  assert-equals(rs.[1], 20)
   assert-equals(rs.first-ref().!.*, 1)
   assert-equals(rs.last-ref().!.*, 3)
   for r in rs.ref-iter() { r.* = r.* * 2 }
@@ -150,8 +150,8 @@ fn test() {
   let sep: span[i64] = [0].as-span()
   let joined = span/join([s1, s2], sep)
   assert-equals(joined.len(), 4)
-  assert-equals(joined.get(0), 1)
-  assert-equals(joined.get(2), 0)
-  assert-equals(joined.get(3), 3)
+  assert-equals(joined.[0], 1)
+  assert-equals(joined.[2], 0)
+  assert-equals(joined.[3], 3)
   assert-equals(span/join(list/empty[span[i64]](), sep).len(), 0)
 }

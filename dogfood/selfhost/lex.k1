@@ -249,7 +249,7 @@ ns for lexer {
 
   fn peek-at(self: *lexer, i: size): char {
     let p = self.pos + i
-    if p >= self.content.len() EOF_CHAR else self.content.get(p)
+    if p >= self.content.len() EOF_CHAR else self.content.[p]
   }
 
   fn next-char(self: *mut lexer): char {
@@ -264,12 +264,12 @@ ns for lexer {
 
   fn make-token(self: *lexer, kind: token-kind, start: u32, len: u32): token {
     let s = start.widen[size]
-    let ws = s > 0 and s <= self.content.len() and is-flag-space(self.content.get(s - 1))
+    let ws = s > 0 and s <= self.content.len() and is-flag-space(self.content.[s - 1])
     let nl = false
     let i = s
     loop {
       if i == 0 { nl = true; break }
-      let c = self.content.get(i - 1)
+      let c = self.content.[i - 1]
       if c == '\n' or c == '\r' { nl = true; break }
       if not is-flag-space(c) { break }
       i = i - 1
@@ -299,7 +299,7 @@ ns for lexer {
   }
 
   fn top-mode(self: *lexer): lex-mode {
-    self.mode-stack.get(self.mode-stack.len() - 1)
+    self.mode-stack.[self.mode-stack.len() - 1]
   }
 
   fn set-top-mode(self: *mut lexer, m: lex-mode) {
@@ -447,12 +447,12 @@ ns for lexer {
             let nl: ?size = :none
             let i = self.pos
             while i < self.content.len() {
-              if self.content.get(i) == '\n' { nl = :some(i); break }
+              if self.content.[i] == '\n' { nl = :some(i); break }
               i = i + 1
             }
             nl is {
               :some a -> {
-                if a > self.pos and self.content.get(a - 1) == '\r' {
+                if a > self.pos and self.content.[a - 1] == '\r' {
                   self.pos = a
                 } else {
                   self.pos = a + 1

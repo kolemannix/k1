@@ -21,9 +21,9 @@ fn test-filled() {
   assert-equals(array.len(), 64)
   assert-equals(list.len, 64)
   for buffer {
-    assert-equals(buffer.get(it-index), 3)
-    assert-equals(list.get(it-index), 3)
-    assert-equals(array.get(it-index), 3)
+    assert-equals(buffer.[it-index], 3)
+    assert-equals(list.[it-index], 3)
+    assert-equals(array.[it-index], 3)
   }
 }
 
@@ -32,13 +32,13 @@ fn test-array() {
 
   let a: *mut array[u8, 10] = list/to-array(ls, 10)
   for 0.until(a.len()) {
-    if it % 2 == 0 { a.get(it) = 1 }
+    if it % 2 == 0 { a.[it] = 1 }
   }
   for 0.until(a.len()) {
     if it % 2 == 0 {
-      assert-equals(a.get(it), 1)
+      assert-equals(a.[it], 1)
     } else {
-      assert-equals(a.get(it), 3)
+      assert-equals(a.[it], 3)
     }
   }
   for a {
@@ -60,15 +60,15 @@ fn test() {
   test-filled()
 
   let array: array[f32, 10] = mem/zeroed()
-  assert(test-compile(array.get(11)) is :some _)
+  assert(test-compile(array.[11]) is :some _)
   assert(test-compile(takes-three([1, 2])) is :some _)
   assert(test-compile(takes-three([1, 2, 3, 4])) is :some _)
   assert(test-compile(takes-three([])) is :some _)
   takes-three([1, 2, 3])
   array.[0] = 3.14
   let buf = array.&.as-buffer()
-  assert(buf.get(0) == array.get(0))
-  assert-equals(buf.get(0), array.get(0))
+  assert(buf.[0] == array.[0])
+  assert-equals(buf.[0], array.[0])
 
   test-print()
 
@@ -76,7 +76,7 @@ fn test() {
 }
 
 fn takes-three(a: array[int, 3]) {
-  assert-equals(a.get(0) + a.get(1) + a.get(2), 6)
+  assert-equals(a.[0] + a.[1] + a.[2], 6)
 }
 
 fn test-print() {

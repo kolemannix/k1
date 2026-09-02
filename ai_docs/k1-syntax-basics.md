@@ -209,11 +209,14 @@ let p = xs.[1].&
 ```
 
 `a.[k]` means `a.index-ref(k).*`, a call to the one function of the `index`
-ability. Lists, buffers, spans, strings, arrays, fixlists, spill-lists, and maps
-implement it. A map lookup through `.[k]` crashes on a missing key; `map.get`
-is the optional lookup. Implement `index` for `*mut t` when the elements live
-inline in `t`, so the returned reference points into real storage rather than
-into a copy.
+ability. Lists, buffers, spans, strings, fixlists, spill-lists, and maps
+implement it; arrays are intrinsic, so `arr.[i]` is the element itself and
+reads a by-value array as well as storing into one that is a place. A map
+lookup through `.[k]` crashes on a missing key; `map.get` is the optional
+lookup, `get-opt` the optional index. Implement `index` for `*mut t` when the
+elements live inline in `t`, so the returned reference points into real
+storage rather than into a copy. Implementing `as-span` does not imply
+`index`; a viewable type declares its own impl.
 
 A statement that discards a non-unit expression result gets a warning; bind to
 `_` to discard explicitly:
@@ -356,8 +359,8 @@ let x-ref: *mut int = p-ref.x.&
 p-ref.y = 20
 ```
 
-The same applies to array elements: `arr.get(i)` yields the element value,
-`arr.get(i) = value` stores into the element, and `arr.get(i).&` takes its
+The same applies to array elements: `arr.[i]` yields the element value,
+`arr.[i] = value` stores into the element, and `arr.[i].&` takes its
 address. Sum patterns use trailing `*` to bind references to payload data; see
 the next section.
 
@@ -643,7 +646,7 @@ let view: span[bool] = dynamic.as-span()
 Arrays have a compile-time length in their type. Buffers, lists, and spans are
 used heavily in the core library and dogfood programs.
 
-Common helpers include `.len()`, `.get(index)`, `.set(index, value)`,
+Common helpers include `.len()`, `.[index]`, `.[index] = value`,
 `.as-span()`, `buffer/wrap-array(...)`, and `list/filled-in(...)`.
 
 Collection API naming follows a doctrine:
@@ -661,7 +664,7 @@ Collection API naming follows a doctrine:
 - Mutators take `*mut self` and reuse the verb (`sort`, `reverse`); functional
   variants get `-ed` (`sorted`, `reversed`).
 - Shared collection ops are ability defaults: reads and views on `as-span`
-  (`len`, `get`, `get-opt`, `first`, `last`, `slice`, `take`, `drop`,
+  (`len`, `get-opt`, `first`, `last`, `slice`, `take`, `drop`,
   `starts-with`, `ends-with`, `chunks`, `sorted`, `index-of-span`,
   `contains-span`, `first-diff`), mutations and references on `as-buffer`
   (`swap`, `sort`, `reverse`, `fill`, `first-ref`,

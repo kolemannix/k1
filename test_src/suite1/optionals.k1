@@ -33,7 +33,7 @@ fn test-complex(): int {
   }
 
   let my_arr: list[?weird-point] = [:some .{ x = :some 42, y = 3}, :none]
-  if my_arr.get(0) is :some a {
+  if my_arr.[0] is :some a {
     assert(a.y == 3)
   }
 

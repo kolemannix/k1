@@ -126,7 +126,7 @@ impl comparable for sort-rec {
 
 fn assert-ascending(values: list[int]) {
   for i in 1.until(values.len()) {
-    assert(values.get(i - 1) <= values.get(i))
+    assert(values.[i - 1] <= values.[i])
   }
 }
 
@@ -155,8 +155,8 @@ fn test-sort-stable() {
   for i in 0.until(100) { records.push(.{ key = i % 7, ord = i }) }
   records.sort()
   for i in 1.until(records.len()) {
-    let a = records.get(i - 1)
-    let b = records.get(i)
+    let a = records.[i - 1]
+    let b = records.[i]
     assert(a.key <= b.key)
     if a.key == b.key { assert(a.ord < b.ord) }
   }

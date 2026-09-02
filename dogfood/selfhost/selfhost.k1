@@ -26,7 +26,7 @@ fn run(args: span[string]): i32 {
   let total-errors: size = 0
   let total-files: size = 0
   for i in 1.until(args.len()) {
-    let path = args.get(i)
+    let path = args.[i]
     let program = parse-path(path)
     total-files = total-files + 1
     total-errors = total-errors + program.errors.len()
@@ -94,7 +94,7 @@ fn use-point(): int {
   let ie = first-fn-body-expr(interp.&)
   require interp.get-expr(ie).* is :interp-string(istr) else { crash("expected interp string") }
   assert-equals(istr.parts.len(), 3)
-  require istr.parts.get(1) is :expr-part(mid) else { crash("expected expr part") }
+  require istr.parts.[1] is :expr-part(mid) else { crash("expected expr part") }
   require interp.get-expr(mid.expr).* is :literal(:numeric(_)) else { crash("expected numeric hole") }
 
   println("selfhost parser test ok")
@@ -102,9 +102,9 @@ fn use-point(): int {
 }
 
 fn first-fn-body-expr(p: *ast/program): ast/expr-id {
-  require p.functions.get(0).body is :some body-id else { crash("fn has no body") }
+  require p.functions.[0].body is :some body-id else { crash("fn has no body") }
   require p.get-expr(body-id).* is :block(b) else { crash("body not a block") }
-  require p.stmts.get(b.stmts.get(0).widen[size]) is :lone-expr(e) else { crash("stmt not lone expr") }
+  require p.stmts.[b.stmts.[0].widen[size]] is :lone-expr(e) else { crash("stmt not lone expr") }
   e
 }
 

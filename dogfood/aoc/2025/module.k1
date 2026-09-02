@@ -21,7 +21,7 @@ fn day1(input: string) {
   // Part 1 count
   let szs = 0
   for commands {
-    let negative = it.get(0) == 'L'
+    let negative = it.[0] == 'L'
     let magnitude-str = it.drop(1)
     let is-zero = pos == 0
     let _last-pos = pos
@@ -51,7 +51,7 @@ fn brute(input: string) {
   let pos = 50
   let zeroes = 0
   for commands {
-    let negative = it.get(0) == 'L'
+    let negative = it.[0] == 'L'
     let magnitude-str = it.drop(1)
     require u64/from-string(magnitude-str) is :ok magnitude else { return }
     let m = magnitude.as[int]

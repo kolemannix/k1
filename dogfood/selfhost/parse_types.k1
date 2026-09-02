@@ -7,14 +7,14 @@ ns for parser {
     if first.kind is :char {
       self.advance()
       let text = self.tok-chars(first)
-      if text.get(1) == '\\' {
-        let esc = text.get(2)
+      if text.[1] == '\\' {
+        let esc = text.[2]
         lex/char-escape(esc) is {
           :some out -> :ok(:some(self.add-expr(:literal(:char-lit(.{ value = out, span = first.span() }))))),
           :none -> :err(make-error("Invalid escaped char following escape sequence: ${esc.to-string()}", first)),
         }
       } else {
-        :ok(:some(self.add-expr(:literal(:char-lit(.{ value = text.get(1).as-u8(), span = first.span() })))))
+        :ok(:some(self.add-expr(:literal(:char-lit(.{ value = text.[1].as-u8(), span = first.span() })))))
       }
     } else if first.kind.is-string() {
       :ok(:some(self.expect-string().try))
@@ -77,7 +77,7 @@ ns for parser {
     }
 
     let first-text = self.tok-chars(first)
-    let is-block = first-text.len() > 1 and first-text.get(1) == '\n'
+    let is-block = first-text.len() > 1 and first-text.[1] == '\n'
     let strip: u32 = 0
     let drop-trailing-ws-line = false
     if is-block {
@@ -98,7 +98,7 @@ ns for parser {
             let text = self.tok-chars(r.tok)
             let i: size = if r.starts-fresh 1 else 0
             while i < text.len() {
-              let ch = text.get(i)
+              let ch = text.[i]
               if ch == '\\' {
                 i = i + 2
                 if at-line-start {
@@ -149,13 +149,13 @@ ns for parser {
           let buf = list/empty[char]()
           let i: size = if r.starts-fresh 1 else 0
           while i < text.len() {
-            let ch = text.get(i)
+            let ch = text.[i]
             if ch == '\\' {
               skip-ws = 0
               if i + 1 >= text.len() {
                 return :err(make-error("String ended with '\\'", first))
               }
-              let nx = text.get(i + 1)
+              let nx = text.[i + 1]
               lex/shared-escape(nx) is {
                 :some out -> buf.push(out.as-char()),
                 :none -> {
@@ -184,7 +184,7 @@ ns for parser {
             }
           }
           if drop-trailing-ws-line and idx == pending.len() - 1 {
-            while buf.len() > 0 and (buf.get(buf.len() - 1) == ' ' or buf.get(buf.len() - 1) == '\t') {
+            while buf.len() > 0 and (buf.[buf.len() - 1] == ' ' or buf.[buf.len() - 1] == '\t') {
               buf.remove(buf.len() - 1)
             }
           }
@@ -195,7 +195,7 @@ ns for parser {
       idx = idx + 1
     }
 
-    if parts.len() == 1 and parts.get(0) is :str-part sp {
+    if parts.len() == 1 and parts.[0] is :str-part sp {
       :ok(self.add-expr(:literal(:string-lit(.{ string = sp.string, span = first.span() }))))
     } else {
       let span = self.extend-tok-to-here(first)

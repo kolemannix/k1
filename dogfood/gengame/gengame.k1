@@ -260,12 +260,12 @@ type game = {
 }
 
 fn cur-level(context g: *mut game)(): level {
-  LEVELS.get(g.level)
+  LEVELS.[g.level]
 }
 
 fn level-index(name: string): size {
   for i in 0.until(LEVELS.len()) {
-    if LEVELS.get(i).name == name { return i }
+    if LEVELS.[i].name == name { return i }
   }
   crash("no level named $name")
 }
@@ -288,7 +288,7 @@ fn row-editable(context g: *mut game)(i: size): bool {
 
 fn load-level(context g: *mut game)(i: size) {
   g.level = i
-  let lv = LEVELS.get(i)
+  let lv = LEVELS.[i]
   g.preview-growth = if not level-recursive(lv) { lv.growth } else if lv.world is :plant { 2 } else { 1 }
   g.grow-t = 0.0
   drop-sel()
@@ -316,7 +316,7 @@ fn level-recursive(lv: level): bool {
 
 fn sym-index(alpha: string, c: char): ?u8 {
   for i in 0.until(alpha.len()) {
-    if alpha.get(i) == c { return :some(i.trunc[u8]) }
+    if alpha.[i] == c { return :some(i.trunc[u8]) }
   }
   :none
 }
@@ -326,9 +326,9 @@ fn parse-text(world: world-kind, text: string): list[token] {
   let toks: list[token] = list/with-capacity(text.len())
   let i: size = 0
   while i < text.len() {
-    let c = text.get(i)
+    let c = text.[i]
     if c.is-ascii-digit() {
-      assert(i + 1 < text.len() and text.get(i + 1) == '(')
+      assert(i + 1 < text.len() and text.[i + 1] == '(')
       toks.push(:rep(c.to-ascii-digit().!))
       i = i + 2
     } else {
@@ -336,14 +336,14 @@ fn parse-text(world: world-kind, text: string): list[token] {
       else if c == '>' { toks.push(:shift) }
       else if c == '~' { toks.push(:again) }
       else if c == 'M' {
-        assert(i + 1 < text.len() and text.get(i + 1) == '(')
+        assert(i + 1 < text.len() and text.[i + 1] == '(')
         toks.push(:mir)
         i = i + 1
       }
       else if sym-index(alpha, c) is :some(s) { toks.push(:sym(s)) }
       else if c == 'a' or c == 'b' {
         let d: u8 = if c == 'a' 0 else 1
-        if i + 1 < text.len() and text.get(i + 1) == '(' {
+        if i + 1 < text.len() and text.[i + 1] == '(' {
           toks.push(:callo(d))
           i = i + 1
         } else {
@@ -373,7 +373,7 @@ fn find-close(toks: span[token], from: size): size {
   let depth: size = 0
   let i = from
   while i < toks.len() {
-    let t = toks.get(i)
+    let t = toks.[i]
     if is-opener(t) { depth = depth + 1 }
     else if t is :close {
       if depth == 0 { return i }
@@ -439,7 +439,7 @@ fn expand-toks(ctx: *mut expand-ctx, toks: span[token], self: span[token], self-
   let i: size = 0
   while i < toks.len() {
     if e.syms.len() >= MAX-EXPAND { return }
-    let t = toks.get(i)
+    let t = toks.[i]
     t is {
       :sym(s) -> {
         assert(s.widen[size] < ctx.nsyms)
@@ -509,7 +509,7 @@ fn expand-toks(ctx: *mut expand-ctx, toks: span[token], self: span[token], self-
         i = if close < toks.len() close + 1 else close
       },
       :hole -> {
-        let filled = ctx.args.len() > 0 and ctx.args.get(ctx.args.len() - 1).len() > 0
+        let filled = ctx.args.len() > 0 and ctx.args.[ctx.args.len() - 1].len() > 0
         if not filled {
           if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = e.syms.len(), d = self-d, socket = true }) }
         } else if ctx.args.pop() is :some(arg) {
@@ -527,7 +527,7 @@ fn expand-toks(ctx: *mut expand-ctx, toks: span[token], self: span[token], self-
           expand-toks(ctx, self, self, self-d, e, depth + 1, ndepth + 1, d0, self-d, 0)
           close-scope(ctx, e, d0, ndepth)
           ctx.shift = s0
-        } else if ctx.args.len() > 0 and ctx.args.get(ctx.args.len() - 1).len() > 0 {
+        } else if ctx.args.len() > 0 and ctx.args.[ctx.args.len() - 1].len() > 0 {
           e.capped = true
           if ctx.args.pop() is :some(arg) {
             let asrc = if ctx.arg-srcs.pop() is :some(v) { v } else { SRC-NONE }
@@ -558,16 +558,16 @@ fn expand-toks(ctx: *mut expand-ctx, toks: span[token], self: span[token], self-
         let n = e.syms.len() - at0
         for j in 0.until(n) {
           if e.syms.len() < MAX-EXPAND {
-            e.syms.push(e.syms.get(at0 + n - 1 - j))
-            e.gens.push(e.gens.get(at0 + n - 1 - j))
-            e.srcs.push(e.srcs.get(at0 + n - 1 - j))
+            e.syms.push(e.syms.[at0 + n - 1 - j])
+            e.gens.push(e.gens.[at0 + n - 1 - j])
+            e.srcs.push(e.srcs.[at0 + n - 1 - j])
           }
         }
         let bud1 = e.buds.len()
         let j = bud1
         while j > bud0 {
           j = j - 1
-          let b = e.buds.get(j)
+          let b = e.buds.[j]
           if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = at0 + n + (n - (b.at - at0)), d = b.d, socket = b.socket }) }
         }
         i = if close < toks.len() close + 1 else close
@@ -638,10 +638,10 @@ fn same-at-gen(a: *expansion, b: *expansion, k: u8): bool {
   let na = a.syms.len()
   let nb = b.syms.len()
   while ia < na or ib < nb {
-    while ia < na and a.gens.get(ia) > k { ia = ia + 1 }
-    while ib < nb and b.gens.get(ib) > k { ib = ib + 1 }
+    while ia < na and a.gens.[ia] > k { ia = ia + 1 }
+    while ib < nb and b.gens.[ib] > k { ib = ib + 1 }
     if ia >= na or ib >= nb { break }
-    if a.syms.get(ia) != b.syms.get(ib) { return false }
+    if a.syms.[ia] != b.syms.[ib] { return false }
     ia = ia + 1
     ib = ib + 1
   }
@@ -713,16 +713,16 @@ fn turtle-walk(e: *expansion, angle-deg: f32, frontier: u8, unfurl: f32): turtle
   let step = angle-deg * RAD-PER-DEG
   let anchored = false
   for i in 0.until(n) {
-    if seq.get(i) == 0 and e.gens.get(i) < frontier { anchored = true; break }
+    if seq.[i] == 0 and e.gens.[i] < frontier { anchored = true; break }
   }
   for s in seq {
     if it-index >= n { break }
-    while bi < buds.len() and buds.get(bi).at == it-index {
-      bud-pts.push(bud-tip(x, y, ang, buds.get(bi)))
+    while bi < buds.len() and buds.[bi].at == it-index {
+      bud-pts.push(bud-tip(x, y, ang, buds.[bi]))
       bi = bi + 1
     }
     assert(s <= 7)
-    let gen = e.gens.get(it-index)
+    let gen = e.gens.[it-index]
     let w = if gen >= frontier { unfurl } else { 1.0 }
     if s == 0 {
       let lw = if anchored { w } else { 1.0 }
@@ -760,7 +760,7 @@ fn turtle-walk(e: *expansion, angle-deg: f32, frontier: u8, unfurl: f32): turtle
     }
   }
   while bi < buds.len() {
-    bud-pts.push(bud-tip(x, y, ang, buds.get(bi)))
+    bud-pts.push(bud-tip(x, y, ang, buds.[bi]))
     bi = bi + 1
   }
   .{ segs, buds = bud-pts, blooms, end = .{ x, y, ang, w = wid, stride }, marks = stack }
@@ -789,7 +789,7 @@ fn build-palette(context g: *mut game)(): list[chip] {
   let x: i32 = 24
   let y = PALETTE-Y
   for i in 0.until(lv.syms.len()) {
-    let c = lv.syms.get(i)
+    let c = lv.syms.[i]
     if c == '>' {
       chips.push(.{ x, y, act = :tok(:shift) })
     } else if c == 'M' {
@@ -839,7 +839,7 @@ fn seal-call(context g: *mut game)(row: *mut list[token], d: u8): bool {
   let i = row.len()
   while i > 0 {
     i = i - 1
-    let t = row.get(i)
+    let t = row.[i]
     if t is :close { depth = depth + 1 }
     else if is-opener(t) {
       if depth == 0 {
@@ -863,11 +863,11 @@ fn wrap-sel(context g: *mut game)(row: *mut list[token], opener: token): bool {
   for t in row { keep.push(t) }
   let n = keep.len()
   row.clear()
-  for i in 0.until(s.a) { row.push-in(g.perm, keep.get(i)) }
+  for i in 0.until(s.a) { row.push-in(g.perm, keep.[i]) }
   row.push-in(g.perm, opener)
-  for i in s.a.until(s.b) { row.push-in(g.perm, keep.get(i)) }
+  for i in s.a.until(s.b) { row.push-in(g.perm, keep.[i]) }
   row.push-in(g.perm, :close)
-  for i in s.b.until(n) { row.push-in(g.perm, keep.get(i)) }
+  for i in s.b.until(n) { row.push-in(g.perm, keep.[i]) }
   if score-of() > cur-level().limit {
     row.clear()
     for t in keep.& { row.push-in(g.perm, t) }
@@ -921,7 +921,7 @@ fn scale-row-apply(context g: *mut game)(row: *mut list[token], n: u8) {
   let i = row.len()
   while i > 0 {
     i = i - 1
-    let t = row.get(i)
+    let t = row.[i]
     if t is :close { depth = depth + 1 }
     else if is-opener(t) {
       if depth == 0 {
@@ -936,12 +936,12 @@ fn scale-row-apply(context g: *mut game)(row: *mut list[token], n: u8) {
       depth = depth - 1
     }
   }
-  if row.get(row.len() - 1) is :close {
+  if row.[row.len() - 1] is :close {
     let d2: size = 1
     let j = row.len() - 1
     while j > 0 {
       j = j - 1
-      let t = row.get(j)
+      let t = row.[j]
       if t is :close { d2 = d2 + 1 }
       else if is-opener(t) {
         d2 = d2 - 1
@@ -957,7 +957,7 @@ fn scale-row-apply(context g: *mut game)(row: *mut list[token], n: u8) {
   row.push-in(g.perm, :close)
   let k = row.len() - 1
   while k > 0 {
-    row.[k] = row.get(k - 1)
+    row.[k] = row.[k - 1]
     k = k - 1
   }
   row.[0] = :rep(n)
@@ -1031,14 +1031,14 @@ fn tap-chip(context g: *mut game)(row: *mut list[token], j: size) {
 
 fn chunk-eq(row: *mut list[token], a: size, b: size, len: size): bool {
   for i in 0.until(len) {
-    if row.get(a + i) != row.get(b + i) { return false }
+    if row.[a + i] != row.[b + i] { return false }
   }
   true
 }
 
 fn fix-chunk-eq(row: *fixlist[token, MAX-ROW-TOKENS], a: size, b: size, len: size): bool {
   for i in 0.until(len) {
-    if row.get(a + i) != row.get(b + i) { return false }
+    if row.[a + i] != row.[b + i] { return false }
   }
   true
 }
@@ -1069,21 +1069,21 @@ fn fold-row(context g: *mut game)() {
   let tail = s.a + k * p
   let shot: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
   let hits: fixlist[size, MAX-ROW-TOKENS] = fixlist/uninit()
-  for i in 0.until(s.a) { shot.push(before.get(i)) }
+  for i in 0.until(s.a) { shot.push(before.[i]) }
   shot.push(:rep(k.trunc[u8]))
-  for i in s.a.until(s.b) { shot.push(before.get(i)) }
+  for i in s.a.until(s.b) { shot.push(before.[i]) }
   if tail < n { shot.push(:close) }
   for c in 1.until(k) {
     hits.push(shot.len())
-    for j in 0.until(p) { shot.push(before.get(s.a + c * p + j)) }
+    for j in 0.until(p) { shot.push(before.[s.a + c * p + j]) }
   }
-  for i in tail.until(n) { shot.push(before.get(i)) }
+  for i in tail.until(n) { shot.push(before.[i]) }
   row.clear()
-  for i in 0.until(s.a) { row.push-in(g.perm, before.get(i)) }
+  for i in 0.until(s.a) { row.push-in(g.perm, before.[i]) }
   row.push-in(g.perm, :rep(k.trunc[u8]))
-  for i in s.a.until(s.b) { row.push-in(g.perm, before.get(i)) }
+  for i in s.a.until(s.b) { row.push-in(g.perm, before.[i]) }
   if tail < n { row.push-in(g.perm, :close) }
-  for i in tail.until(n) { row.push-in(g.perm, before.get(i)) }
+  for i in tail.until(n) { row.push-in(g.perm, before.[i]) }
   let e1 = expand-row(g.active, full)
   if e0.syms.&.as-span() != e1.syms.&.as-span() {
     row.clear()
@@ -1128,17 +1128,17 @@ fn extract-def(context g: *mut game)() {
   }
   if hits.len() == 0 { return }
   let def = row-of(d)
-  for j in 0.until(p) { def.push-in(g.perm, base.get(at + j)) }
+  for j in 0.until(p) { def.push-in(g.perm, base.[at + j]) }
   let hi: size = 0
   row.clear()
   i = 0
   while i < n {
-    if hi < hits.len() and hits.get(hi) == i {
+    if hi < hits.len() and hits.[hi] == i {
       row.push-in(g.perm, :name(d))
       hi = hi + 1
       i = i + p
     } else {
-      row.push-in(g.perm, base.get(i))
+      row.push-in(g.perm, base.[i])
       i = i + 1
     }
   }
@@ -1161,8 +1161,8 @@ fn delete-tokens(context g: *mut game)() {
     for t in row { keep.push(t) }
     let n = keep.len()
     row.clear()
-    for i in 0.until(s.a) { row.push-in(g.perm, keep.get(i)) }
-    for i in s.b.until(n) { row.push-in(g.perm, keep.get(i)) }
+    for i in 0.until(s.a) { row.push-in(g.perm, keep.[i]) }
+    for i in s.b.until(n) { row.push-in(g.perm, keep.[i]) }
   } else if row.len() > 0 {
     row.remove(row.len() - 1)
   }
@@ -1303,9 +1303,9 @@ ns(reload) view {
       :sym(s) -> {
         if world is :plant {
           let alpha = world-alphabet(world)
-          text-center(alpha.get(s.widen[size]).to-string(), cx, cy - sz / 2, sz, C_TEXT-MAIN)
+          text-center(alpha.[s.widen[size]].to-string(), cx, cy - sz / 2, sz, C_TEXT-MAIN)
         } else {
-          rl/draw-circle(cx, cy, r, SYM-COLORS.get(s.widen[size]))
+          rl/draw-circle(cx, cy, r, SYM-COLORS.[s.widen[size]])
         }
       },
       :rep(n) -> text-center("${n}(", cx, cy - sz / 2, sz, C_TEXT-MAIN),
@@ -1341,7 +1341,7 @@ ns(reload) view {
     let i: size = 0
     let n = g.anim-before.len()
     while i < n {
-      if hi < g.anim-hits.len() and g.anim-hits.get(hi) == i {
+      if hi < g.anim-hits.len() and g.anim-hits.[hi] == i {
         if g.anim-repl is :some(rt) {
           if phase > 0.02 { draw-chip(world, rt, x, y, phase, C_CHIP-BG, :some(C_ACCENT)) }
           x = x + phase * 37.0
@@ -1349,14 +1349,14 @@ ns(reload) view {
         let w: f32 = 1.0 - phase
         for j in 0.until(g.anim-len) {
           if w > 0.02 {
-            draw-chip(world, g.anim-before.get(i + j), x, y, w, if lit C_PANEL-ACTIVE else C_CHIP-BG, if lit :some(C_WARN) else :none)
+            draw-chip(world, g.anim-before.[i + j], x, y, w, if lit C_PANEL-ACTIVE else C_CHIP-BG, if lit :some(C_WARN) else :none)
           }
           x = x + w * 37.0
         }
         i = i + g.anim-len
         hi = hi + 1
       } else {
-        draw-chip(world, g.anim-before.get(i), x, y, 1.0, C_CHIP-BG, :none)
+        draw-chip(world, g.anim-before.[i], x, y, 1.0, C_CHIP-BG, :none)
         x = x + 37.0
         i = i + 1
       }
@@ -1423,7 +1423,7 @@ ns(reload) view {
   fn strip-cells(e: *expansion, gv: gview, upto: size): f32 {
     let n = if upto > e.syms.len() { e.syms.len() } else { upto }
     let t: f32 = 0.0
-    for i in 0.until(n) { t = t + cell-weight(e.gens.get(i), gv) }
+    for i in 0.until(n) { t = t + cell-weight(e.gens.[i], gv) }
     t
   }
 
@@ -1437,15 +1437,15 @@ ns(reload) view {
     let sel = if show-sel { sel-of(row-of(g.active)) } else { :none }
     for s in e.syms.& {
       if it-index >= maxn { break }
-      let w = cell-weight(e.gens.get(it-index), gv)
+      let w = cell-weight(e.gens.[it-index], gv)
       if sel is :some(sr) {
-        let sv = e.srcs.get(it-index)
+        let sv = e.srcs.[it-index]
         if sv != SRC-NONE and src-row(sv) == g.active.widen[size] and src-idx(sv) >= sr.a and src-idx(sv) < sr.b {
           rl/draw-rectangle(x.as[i32], top - 4, (cf * w).as[i32], cell + 8, C_PANEL-ACTIVE)
         }
       }
-      while bi < buds.len() and buds.get(bi).at == it-index {
-        let b = buds.get(bi)
+      while bi < buds.len() and buds.[bi].at == it-index {
+        let b = buds.[bi]
         if b.socket {
           rl/draw-circle-lines(x.as[i32], top + cell / 2, 6.0, bud-color(b.d))
           rl/draw-circle-lines(x.as[i32], top + cell / 2, 5.0, bud-color(b.d))
@@ -1454,17 +1454,17 @@ ns(reload) view {
         }
         bi = bi + 1
       }
-      while show-shifts and si < shifts.len() and shifts.get(si) == it-index {
+      while show-shifts and si < shifts.len() and shifts.[si] == it-index {
         text-center(">", x.as[i32], top + cell / 2 - 8, 16, C_WARN)
         si = si + 1
       }
       if w > 0.02 {
-        draw-bead(SYM-COLORS.get(s.widen[size]), x, top + cell / 2, cf * w, cf * 0.72)
+        draw-bead(SYM-COLORS.[s.widen[size]], x, top + cell / 2, cf * w, cf * 0.72)
       }
       x = x + cf * w
     }
     while bi < buds.len() {
-      let b = buds.get(bi)
+      let b = buds.[bi]
       if b.socket {
         rl/draw-circle-lines(x.as[i32], top + cell / 2, 6.0, bud-color(b.d))
         rl/draw-circle-lines(x.as[i32], top + cell / 2, 5.0, bud-color(b.d))
@@ -1474,7 +1474,7 @@ ns(reload) view {
       bi = bi + 1
     }
     while show-shifts and si < shifts.len() {
-      if shifts.get(si) <= maxn { text-center(">", x.as[i32], top + cell / 2 - 8, 16, C_WARN) }
+      if shifts.[si] <= maxn { text-center(">", x.as[i32], top + cell / 2 - 8, 16, C_WARN) }
       si = si + 1
     }
   }
@@ -1489,9 +1489,9 @@ ns(reload) view {
     }
     let at: f32 = 0.0
     for i in 0.until(e.syms.len()) {
-      let w = cell-weight(e.gens.get(i), gv)
+      let w = cell-weight(e.gens.[i], gv)
       if g.play >= at and g.play < at + w {
-        g.play-src = e.srcs.get(i)
+        g.play-src = e.srcs.[i]
         let cx = x0.as[f32] + at * cell.as[f32]
         rl/draw-rectangle-lines(cx.as[i32], top, (cell.as[f32] * w).as[i32], cell, C_TEXT-MAIN)
       }
@@ -1596,7 +1596,7 @@ ns(reload) view {
   }
 
   fn branch-dim0(t: *turtle-out): size {
-    if t.marks.len() > 0 { t.marks.get(t.marks.len() - 1).seg0 } else { 0 }
+    if t.marks.len() > 0 { t.marks.[t.marks.len() - 1].seg0 } else { 0 }
   }
 
   fn draw-bookmarks(marks: *fixlist[turtle-mark, MAX-STACK], scale: f32, ox: f32, oy: f32) {
@@ -1626,7 +1626,7 @@ ns(reload) view {
   fn count-fs(syms: *fixlist[u8, MAX-EXPAND], upto: size): size {
     let n: size = 0
     for i in 0.until(upto) {
-      if syms.get(i) == 0 { n = n + 1 }
+      if syms.[i] == 0 { n = n + 1 }
     }
     n
   }
@@ -1770,7 +1770,7 @@ ns(reload) view {
       if it-index >= maxn { break }
       let cx = x0 + (it-index % w).trunc[i32] * cell
       let cy = y0 + (it-index / w).trunc[i32] * cell
-      rl/draw-rectangle(cx + 1, cy + 1, cell - 2, cell - 2, SYM-COLORS.get(s.widen[size]))
+      rl/draw-rectangle(cx + 1, cy + 1, cell - 2, cell - 2, SYM-COLORS.[s.widen[size]])
     }
     if show-shifts {
       for at in e.shifts.& {
@@ -1916,7 +1916,7 @@ fn self-test(context g: *mut game)() {
     }
     let uses-shift = lv.target.contains('>') or lv.target-a.contains('>') or lv.target-b.contains('>')
     for s in target {
-      let c = alpha.get(s.widen[size])
+      let c = alpha.[s.widen[size]]
       if not uses-shift {
         assert(sym-index(lv.syms, c).is-some())
       }
@@ -1967,26 +1967,26 @@ fn self-test(context g: *mut game)() {
   try-add(:shift)
   scale-row(3)
   assert(g.out.len() == 6)
-  assert(g.out.get(1) is :rep(_))
+  assert(g.out.[1] is :rep(_))
   let spelled = expand-player(4)
   assert(spelled.syms.len() == 7)
   assert(spelled.shifts.len() == 3)
-  assert(spelled.shifts.get(0) == 3)
+  assert(spelled.shifts.[0] == 3)
   solve-reflection()
   assert-solved(5)
   solve-reflection-sel()
   assert-solved(5)
-  assert(g.out.get(0) is :mir)
+  assert(g.out.[0] is :mir)
   solve-rainbow()
   assert-solved(4)
   let rainbow-exp = expand-player(4)
   assert(rainbow-exp.shifts.len() == 4)
   solve-wrapper()
   assert-solved(12)
-  assert(g.out.get(0) is :callo(_))
+  assert(g.out.[0] is :callo(_))
   solve-wrapper-sel()
   assert-solved(12)
-  assert(g.out.get(0) is :callo(_))
+  assert(g.out.[0] is :callo(_))
   tap-chip(g.out.&, 0)
   tap-chip(g.out.&, 2)
   delete-tokens()
@@ -2033,8 +2033,8 @@ fn self-test(context g: *mut game)() {
   let sh-seed = parse-text(:seq, "aR")
   let sh-e = expand(:seq, sh-def, sh-none, sh-seed, 2, 2)
   assert(sh-e.syms.len() == 2)
-  assert(sh-e.syms.get(0) == 0)
-  assert(sh-e.syms.get(1) == 0)
+  assert(sh-e.syms.[0] == 0)
+  assert(sh-e.syms.[1] == 0)
 
   load-level(level-index("fork"))
   g.active = 0
@@ -2068,8 +2068,8 @@ fn self-test(context g: *mut game)() {
   assert-solved(10)
   let bonsai-e = expand-player(5)
   let bonsai-w = turtle-walk(bonsai-e.&, 22.0, 0, 1.0)
-  assert(bonsai-w.segs.get(0).w > 0.99)
-  assert(bonsai-w.segs.get(bonsai-w.segs.len() - 1).w < 0.5)
+  assert(bonsai-w.segs.[0].w > 0.99)
+  assert(bonsai-w.segs.[bonsai-w.segs.len() - 1].w < 0.5)
   solve-dragon()
   assert-solved(14)
   solve-bracken()
@@ -2078,8 +2078,8 @@ fn self-test(context g: *mut game)() {
   assert-solved(6)
   let tendril-e = expand-player(16)
   let tendril-w = turtle-walk(tendril-e.&, 40.0, 0, 1.0)
-  let t0 = tendril-w.segs.get(0)
-  let tn = tendril-w.segs.get(tendril-w.segs.len() - 1)
+  let t0 = tendril-w.segs.[0]
+  let tn = tendril-w.segs.[tendril-w.segs.len() - 1]
   assert((t0.bx - t0.ax) * (t0.bx - t0.ax) + (t0.by - t0.ay) * (t0.by - t0.ay) > 0.9)
   assert((tn.bx - tn.ax) * (tn.bx - tn.ax) + (tn.by - tn.ay) * (tn.by - tn.ay) < 0.01)
   solve-arch()
@@ -2554,7 +2554,7 @@ fn main(): i32 {
   }
   if sys/env("GENGAME_DUMP").is-some() {
     for li in 0.until(LEVELS.len()) {
-      let lv = LEVELS.get(li)
+      let lv = LEVELS.[li]
       let e = expand-target(lv, lv.growth.widen[size])
       let sum: size = 0
       let head = ""

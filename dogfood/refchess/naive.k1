@@ -43,7 +43,7 @@ ns square {
        'h' or 'H' -> 7,
        _ -> crash("bad tile name: $s")
     }
-    let rank = (s.get(1).to-ascii-digit().! - 1)
+    let rank = (s.[1].to-ascii-digit().! - 1)
     from-rank-file(file, rank)
   }
 }

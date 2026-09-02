@@ -100,7 +100,7 @@ impl[t: print] source[t = u8] for item-source[t] {
   fn next(self: *mut item-source[t]): pull[u8] {
     if self.cursor == self.items.len() { return :done }
     self.buf.clear()
-    self.items.get(self.cursor).print-to(self.buf.&)
+    self.items.[self.cursor].print-to(self.buf.&)
     self.cursor = self.cursor + 1
     self.part = self.buf.as-span()
     :chunk span/wrap-single(self.part.&)

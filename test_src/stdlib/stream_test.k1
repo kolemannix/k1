@@ -25,8 +25,8 @@ fn expect-one(p: pull[int]): int {
   p is {
     :chunk group -> {
       assert-equals(group.len(), 1)
-      assert-equals(group.get(0).len(), 1)
-      group.get(0).get(0)
+      assert-equals(group.[0].len(), 1)
+      group.[0].[0]
     },
     _ -> {
       crash("expected a chunk")
@@ -95,8 +95,8 @@ fn test-rc-byte-stream() {
   let payloads: span[rc-bytes] = [heap-bytes/cloned("ab".span-bytes()).to-rc(), heap-bytes/cloned("cde".span-bytes()).to-rc()]
   let src = source/from-span(payloads, chunk-size = 1) || rc-byte-stream
   src.start(waker/noop())
-  src.next() is { :chunk g -> assert-equals(g.get(0).len(), 2), _ -> crash("expected chunk") }
-  src.next() is { :chunk g -> assert-equals(g.get(0).len(), 3), _ -> crash("expected chunk") }
+  src.next() is { :chunk g -> assert-equals(g.[0].len(), 2), _ -> crash("expected chunk") }
+  src.next() is { :chunk g -> assert-equals(g.[0].len(), 3), _ -> crash("expected chunk") }
   assert(src.next() is :done)
   src.stop()
 }
@@ -113,9 +113,9 @@ fn test-mpsc() {
   let out = list/empty[int]()
   q.take(&out)
   assert-equals(out.len(), 3)
-  assert-equals(out.get(0), 1)
-  assert-equals(out.get(1), 2)
-  assert-equals(out.get(2), 3)
+  assert-equals(out.[0], 1)
+  assert-equals(out.[1], 2)
+  assert-equals(out.[2], 3)
   out.clear()
   q.take(&out)
   assert(out.is-empty())

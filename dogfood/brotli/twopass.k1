@@ -386,9 +386,9 @@ fn store-commands(
     let code = (cmd & 0xFF).widen[size]
     let extra = (cmd >> 8).widen[u64]
     bw.write-bits(cmd-depth.index-unchecked(code).*.widen[size], cmd-bits.index-unchecked(code).*.widen[u64])
-    bw.write-bits(k-num-extra-bits.get(code).widen[size], extra)
+    bw.write-bits(k-num-extra-bits.[code].widen[size], extra)
     if code < 24 {
-      let insert = k-insert-offset.get(code).widen[size] + extra.signed()
+      let insert = k-insert-offset.[code].widen[size] + extra.signed()
       let j: size = 0
       while j < insert {
         let lit = sink.literals.index-unchecked(lit-pos).*.widen[size]

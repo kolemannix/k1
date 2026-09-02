@@ -175,10 +175,6 @@ ns for buffer {
     )
   }
 
-  fn get[t](self: buffer[t], index: size): t {
-    self.[index]
-  }
-
   fn slice[t](self: buffer[t], start: size, end: size): buffer[t] {
     if start < 0 or start > self.len {
       crash("slice start index out of bounds: $start. length is: ${self.len}")
@@ -274,7 +270,7 @@ ns for buffer {
       _ -> {
         let i = 0: size
         while i < self.len {
-          if self.get(i) == needle return :some i
+          if self.[i] == needle return :some i
           i = i + 1
         }
         :none
@@ -295,7 +291,7 @@ ns for buffer {
           let j = 0: size
           let matched = true
           while j < k and matched {
-            if self.get(i + j) != needle.get(j) { matched = false }
+            if self.[i + j] != needle.[j] { matched = false }
             j = j + 1
           }
           if matched return :some i
@@ -310,7 +306,7 @@ ns for buffer {
     let n = if self.len < other.len self.len else other.len
     let i = 0: size
     while i < n {
-      if self.get(i) != other.get(i) return :some i
+      if self.[i] != other.[i] return :some i
       i = i + 1
     }
     if self.len == other.len :none else :some n
@@ -433,12 +429,12 @@ ns for buffer {
     while out < hi {
       let take-left = if left >= mid false
         else if right >= hi true
-        else not (src.get(right).compare(src.get(left)) is :less)
+        else not (src.[right].compare(src.[left]) is :less)
       if take-left {
-        dst.[out] = src.get(left)
+        dst.[out] = src.[left]
         left = left + 1
       } else {
-        dst.[out] = src.get(right)
+        dst.[out] = src.[right]
         right = right + 1
       }
       out = out + 1
@@ -449,10 +445,10 @@ ns for buffer {
     if to <= from return
     let i = from + 1
     while i <= to {
-      let value = self.get(i)
+      let value = self.[i]
       let j = i
-      while j > from and self.get(j - 1).compare(value) is :greater {
-        self.[j] = self.get(j - 1)
+      while j > from and self.[j - 1].compare(value) is :greater {
+        self.[j] = self.[j - 1]
         j = j - 1
       }
       self.[j] = value
@@ -502,7 +498,7 @@ ns for buffer-iterator {
 impl[t] iterator[item = t] for buffer-iterator[t] {
   fn next(self: *mut self): ?item {
     if self.pos < self.buf.len {
-      let item = self.buf.get(self.pos)
+      let item = self.buf.[self.pos]
       self.pos = self.pos + 1
       :some item
     } else :none
@@ -578,7 +574,7 @@ impl[t: equals] equals for buffer[t] {
   fn equals(self: buffer[t], other: buffer[t]): bool {
     if self.len != other.len false else {
       for a in self {
-        let b = other.get(it-index)
+        let b = other.[it-index]
         if a != b return false
       }
       true

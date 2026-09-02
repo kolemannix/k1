@@ -55,7 +55,7 @@ fn map-impl(
   for consts {
     code.writeln("    let ${it.name}: $elem-name = ${it.value}")
   }
-  code.writeln("    let $binding = src.get(i)")
+  code.writeln("    let $binding = src.[i]")
   code.writeln("    dst.[i] = $body")
   code.writeln("    i = i + 1")
   code.writeln("  }")
@@ -107,7 +107,7 @@ fn reduce-impl(
   code.writeln("  }")
   code.writeln("  while i < len {")
   code.writeln("    let $acc-binding = acc")
-  code.writeln("    let $item-binding = src.get(i)")
+  code.writeln("    let $item-binding = src.[i]")
   code.writeln("    acc = $body")
   code.writeln("    i = i + 1")
   code.writeln("  }")
@@ -165,7 +165,7 @@ fn first-of-impl(name: string, needles: span[char]): string {
   code.writeln("      i = i + $lanes")
   code.writeln("    }")
   code.writeln("    while i < len {")
-  code.writeln("      let ch = s.get(i)")
+  code.writeln("      let ch = s.[i]")
   for needles {
     code.writeln("      if ch.as-u8() == ${it.as-u8()} return .{ index = i, which = $it-index }")
   }
