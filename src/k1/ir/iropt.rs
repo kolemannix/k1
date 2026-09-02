@@ -321,6 +321,17 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                     rewrite_phi_incoming(&mut b.k1.ir, cons, call_block_handle, call_post_block);
                     rewrite_phi_incoming(&mut b.k1.ir, alt, call_block_handle, call_post_block);
                 }
+                Inst::Switch { cases, default, .. } => {
+                    for case in b.k1.ir.mem.getn(cases) {
+                        rewrite_phi_incoming(
+                            &mut b.k1.ir,
+                            case.target,
+                            call_block_handle,
+                            call_post_block,
+                        );
+                    }
+                    rewrite_phi_incoming(&mut b.k1.ir, default, call_block_handle, call_post_block);
+                }
                 _ => {}
             }
         }
@@ -632,6 +643,21 @@ fn rewrite_instr(ir: &mut ProgramIr, mappings: &mut RewriteMappings, inst: &mut 
                 *alt = *new;
             }
         }
+        Inst::Switch { value, cases, default, .. } => {
+            rewrite_value(mappings, value);
+            let mut new_cases = ir.mem.new_list(cases.len());
+            for case in ir.mem.getn(*cases) {
+                let mut new_case = *case;
+                if let Some(new) = mappings.block_enters.get(&new_case.target) {
+                    new_case.target = *new;
+                }
+                new_cases.push(new_case);
+            }
+            *cases = new_cases.to_slice();
+            if let Some(new) = mappings.block_enters.get(default) {
+                *default = *new;
+            }
+        }
         Inst::Unreachable => {}
         Inst::Phi { incomings, .. } => {
             let mut new_incomings = ir.mem.new_list(incomings.len());
@@ -865,6 +891,18 @@ pub fn cfg_compute(ir: &mut ProgramIr, blocks: IrList<Block>) {
                 work_stack.push(*cons);
                 work_stack.push(*alt);
             }
+            Inst::Switch { cases, default, .. } => {
+                for case in ir.mem.getn(*cases) {
+                    ir.mem.dlist_push(succs, case.target);
+                    let mut target_block = ir.mem.get_raw_ref(case.target);
+                    ir.mem.dlist_push(&mut target_block.data.preds, block_id);
+                    work_stack.push(case.target);
+                }
+                ir.mem.dlist_push(succs, *default);
+                let mut default_block = ir.mem.get_raw_ref(*default);
+                ir.mem.dlist_push(&mut default_block.data.preds, block_id);
+                work_stack.push(*default);
+            }
             _ => {}
         }
     }
@@ -982,6 +1020,22 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
                                         } else if *alt == block_id {
                                             *alt = succ;
                                         } else {
+                                            panic!("trampoline didnt find jump to block_id")
+                                        }
+                                    }
+                                    Inst::Switch { cases, default, .. } => {
+                                        let mut found = false;
+                                        for case in ir.mem.getn_mut(*cases) {
+                                            if case.target == block_id {
+                                                case.target = succ;
+                                                found = true;
+                                            }
+                                        }
+                                        if *default == block_id {
+                                            *default = succ;
+                                            found = true;
+                                        }
+                                        if !found {
                                             panic!("trampoline didnt find jump to block_id")
                                         }
                                     }

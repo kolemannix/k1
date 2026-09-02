@@ -1266,6 +1266,7 @@ pub struct EnumGetValue {
 
 #[derive(Clone, Copy)]
 pub struct TypedMatchArm {
+    pub case: Option<StaticValueId>,
     pub condition: MatchingCondition,
     pub consequent_expr: TypedExprId,
 }
@@ -1391,6 +1392,7 @@ pub struct MatchingCondition {
 pub enum MatchingConditionInstr {
     Binding { let_stmt: TypedStmtId },
     Cond { value: TypedExprId },
+    IntEquals { subject: TypedExprId, value: StaticValueId },
 }
 
 impl MatchingConditionInstr {
@@ -1402,7 +1404,7 @@ impl MatchingConditionInstr {
     }
 }
 
-impl_copy_if_small!(8, MatchingConditionInstr);
+impl_copy_if_small!(12, MatchingConditionInstr);
 
 #[derive(Clone, Copy)]
 pub struct WhileLoop {
@@ -1419,7 +1421,8 @@ impl_copy_if_small!(4, LoopExpr);
 #[derive(Clone, Copy)]
 /// Invariant: The last arm's condition must always evaluate to 'true'
 pub struct TypedMatchExpr {
-    pub initial_let_statements: PermSlice<TypedStmtId>,
+    pub subject_defn: Option<TypedStmtId>,
+    pub scrutinee: Option<TypedExprId>,
     pub arms: PermSlice<TypedMatchArm>,
 }
 
@@ -9168,14 +9171,16 @@ impl TypedProgram {
             alternate
         };
 
-        let cons_arm = TypedMatchArm { condition, consequent_expr: consequent };
+        let cons_arm = TypedMatchArm { case: None, condition, consequent_expr: consequent };
         let alt_arm = TypedMatchArm {
+            case: None,
             condition: MatchingCondition { instrs: MSlice::empty() },
             consequent_expr: alternate,
         };
         Ok(self.exprs.add(
             TypedExpr::Match(TypedMatchExpr {
-                initial_let_statements: MSlice::empty(),
+                subject_defn: None,
+                scrutinee: None,
                 arms: self.mem.pushn(&[cons_arm, alt_arm]),
             }),
             overall_type,
@@ -9286,6 +9291,11 @@ impl TypedProgram {
                         return Some(index);
                     }
                 }
+                MatchingConditionInstr::IntEquals { subject, .. } => {
+                    if self.exprs.get_type(*subject) == NEVER_TYPE_ID {
+                        return Some(index);
+                    }
+                }
             }
         }
         None
@@ -9348,6 +9358,7 @@ impl TypedProgram {
                     pattern,
                     subject_var.variable_expr,
                     instrs,
+                    false,
                     false,
                     ctx,
                 )?;
@@ -9415,15 +9426,18 @@ impl TypedProgram {
         };
         let span = self.ast.exprs.get_span(expr_id);
         let true_arm = TypedMatchArm {
+            case: None,
             condition: matching_condition,
             consequent_expr: self.synth_bool(true, span),
         };
         let false_arm = TypedMatchArm {
+            case: None,
             condition: MatchingCondition { instrs: MSlice::empty() },
             consequent_expr: self.synth_bool(false, span),
         };
         let match_expr = TypedExpr::Match(TypedMatchExpr {
-            initial_let_statements: MSlice::empty(),
+            subject_defn: None,
+            scrutinee: None,
             arms: self.mem.pushn(&[true_arm, false_arm]),
         });
         Ok(self.exprs.add(match_expr, BOOL_TYPE_ID, span))
@@ -15999,17 +16013,17 @@ impl TypedProgram {
         };
         let mut arms: List<TypedMatchArm, _> = self.mem.new_list(enum_type.member_values.len());
         for member in self.mem.getn(enum_type.member_values) {
-            let int_value_expr = self.synth_int(member.int_value, fn_span);
+            let case = self.static_values.add_int(member.int_value);
             let member_name_expr = self.synth_string_literal(member.name, fn_span);
-            let cond = self.synth_equals_call_simple(enum_arg_int_expr, int_value_expr, fn_span);
-            let instrs = self.mem.pushn(&[MatchingConditionInstr::cond(cond)]);
             arms.push(TypedMatchArm {
-                condition: MatchingCondition { instrs },
+                case: Some(case),
+                condition: MatchingCondition { instrs: MSlice::empty() },
                 consequent_expr: member_name_expr,
             });
         }
         let match_expr = TypedExpr::Match(TypedMatchExpr {
-            initial_let_statements: MSlice::empty(),
+            subject_defn: None,
+            scrutinee: Some(enum_arg_int_expr),
             arms: arms.to_slice(),
         });
         self.exprs.add(match_expr, self.builtin_types.string(), fn_span)
@@ -16058,14 +16072,12 @@ impl TypedProgram {
                 let mut arms: List<TypedMatchArm, _> =
                     self.mem.new_list(sum_type.variants.len() + 1);
                 for variant in self.mem.getn(sum_type.variants) {
-                    let variant_tag_expr = self.synth_int(variant.tag_value, fn_span);
-                    let a_tag_is_this_variant =
-                        self.synth_equals_call_simple(param_a_tag_expr, variant_tag_expr, fn_span);
-                    let b_tag_is_this_variant =
-                        self.synth_equals_call_simple(param_b_tag_expr, variant_tag_expr, fn_span);
-                    let mut conditions = self.mem.new_list(2 + variant.payload.is_some() as u32);
-                    conditions.push(MatchingConditionInstr::cond(a_tag_is_this_variant));
-                    conditions.push(MatchingConditionInstr::cond(b_tag_is_this_variant));
+                    let case = self.static_values.add_int(variant.tag_value);
+                    let mut conditions = self.mem.new_list(1 + variant.payload.is_some() as u32);
+                    conditions.push(MatchingConditionInstr::IntEquals {
+                        subject: param_b_tag_expr,
+                        value: case,
+                    });
                     match variant.payload {
                         None => {}
                         Some(payload_type_id) => {
@@ -16094,20 +16106,22 @@ impl TypedProgram {
                     }
                     let conditions = conditions.to_slice();
                     arms.push(TypedMatchArm {
+                        case: Some(case),
                         condition: MatchingCondition { instrs: conditions },
                         consequent_expr: self.synth_bool(true, fn_span),
                     });
                 }
                 arms.push(TypedMatchArm {
+                    case: None,
                     condition: MatchingCondition { instrs: MSlice::empty() },
                     consequent_expr: self.synth_bool(false, fn_span),
                 });
                 let match_expr = TypedExpr::Match(TypedMatchExpr {
-                    initial_let_statements: MSlice::empty(),
+                    subject_defn: None,
+                    scrutinee: Some(param_a_tag_expr),
                     arms: arms.to_slice(),
                 });
                 let match_expr_id = self.exprs.add(match_expr, BOOL_TYPE_ID, fn_span);
-                // eprintln!("SUM EQUALS MATCH\n{}", self.expr_to_string(match_expr_id));
                 Ok(match_expr_id)
             }
             BuiltinTyperFunction::SumAbilityGetName => {
@@ -16120,18 +16134,17 @@ impl TypedProgram {
                 };
                 let mut arms: List<TypedMatchArm, _> = self.mem.new_list(sum_type.variants.len());
                 for variant in self.mem.getn(sum_type.variants) {
-                    let int_value_expr = self.synth_int(variant.tag_value, fn_span);
+                    let case = self.static_values.add_int(variant.tag_value);
                     let member_name_expr = self.synth_string_literal(variant.name, fn_span);
-                    let cond =
-                        self.synth_equals_call_simple(sum_arg_int_expr, int_value_expr, fn_span);
-                    let instrs = self.mem.pushn(&[MatchingConditionInstr::cond(cond)]);
                     arms.push(TypedMatchArm {
-                        condition: MatchingCondition { instrs },
+                        case: Some(case),
+                        condition: MatchingCondition { instrs: MSlice::empty() },
                         consequent_expr: member_name_expr,
                     });
                 }
                 let match_expr = TypedExpr::Match(TypedMatchExpr {
-                    initial_let_statements: MSlice::empty(),
+                    subject_defn: None,
+                    scrutinee: Some(sum_arg_int_expr),
                     arms: arms.to_slice(),
                 });
                 Ok(self.exprs.add(match_expr, self.builtin_types.string(), fn_span))
@@ -16152,18 +16165,18 @@ impl TypedProgram {
                     conditions.push(MatchingConditionInstr::cond(equals_expr))
                 }
                 let equals_arm = TypedMatchArm {
+                    case: None,
                     condition: MatchingCondition { instrs: conditions.to_slice() },
                     consequent_expr: self.synth_bool(true, fn_span),
                 };
                 let false_arm = TypedMatchArm {
+                    case: None,
                     condition: MatchingCondition { instrs: MSlice::empty() },
                     consequent_expr: self.synth_bool(false, fn_span),
                 };
                 let arms = self.mem.pushn(&[equals_arm, false_arm]);
-                let match_expr = TypedExpr::Match(TypedMatchExpr {
-                    initial_let_statements: MSlice::empty(),
-                    arms,
-                });
+                let match_expr =
+                    TypedExpr::Match(TypedMatchExpr { subject_defn: None, scrutinee: None, arms });
                 let match_expr_id = self.exprs.add(match_expr, BOOL_TYPE_ID, fn_span);
                 // eprintln!("STRUCT EQUALS\n{}", self.expr_to_string(match_expr_id));
                 Ok(match_expr_id)
@@ -16236,9 +16249,7 @@ impl TypedProgram {
 
                 let mut arms: List<TypedMatchArm, _> = self.mem.new_list(variants.len());
                 for variant in self.mem.getn(variants) {
-                    let variant_tag_expr = self.synth_int(variant.tag_value, fn_span);
-                    let cond = self.synth_equals_call_simple(tag_expr, variant_tag_expr, fn_span);
-                    let instrs = self.mem.pushn(&[MatchingConditionInstr::cond(cond)]);
+                    let case = self.static_values.add_int(variant.tag_value);
 
                     let mut block =
                         self.new_block_builder(fn_scope_id, ScopeType::LexicalBlock, fn_span, 3);
@@ -16265,12 +16276,14 @@ impl TypedProgram {
                         self.push_block_expr_id(&mut block, write_payload);
                     }
                     arms.push(TypedMatchArm {
-                        condition: MatchingCondition { instrs },
+                        case: Some(case),
+                        condition: MatchingCondition { instrs: MSlice::empty() },
                         consequent_expr: self.exprs.add_block(block, EMPTY_TYPE_ID),
                     });
                 }
                 let match_expr = TypedExpr::Match(TypedMatchExpr {
-                    initial_let_statements: MSlice::empty(),
+                    subject_defn: None,
+                    scrutinee: Some(tag_expr),
                     arms: arms.to_slice(),
                 });
                 Ok(self.exprs.add(match_expr, EMPTY_TYPE_ID, fn_span))

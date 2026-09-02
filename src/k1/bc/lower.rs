@@ -103,7 +103,7 @@ pub fn get_or_lower_expr(
 }
 
 struct PendingTramp {
-    /// the JumpIf operand to patch with this trampoline's pc
+    /// the jump operand to patch with this trampoline's pc
     operand: u32,
     from: BlockId,
     target: BlockId,
@@ -227,6 +227,17 @@ impl LowerCtx {
         self.bc_out.push(0);
         self.operand_to_block.push((at, b));
         self.pc_operands_to_rebase.push(at);
+    }
+
+    fn push_edge_target(&mut self, from: BlockId, target: BlockId) {
+        if self.block_has_phis(target) {
+            let at = self.bc_out.len() as u32;
+            self.push(0);
+            self.pc_operands_to_rebase.push(at);
+            self.trampolines.push(PendingTramp { operand: at, from, target });
+        } else {
+            self.push_block_target(target);
+        }
     }
 
     /// Reset scratch alternation; call before resolving a new instruction's operands
@@ -1000,15 +1011,21 @@ fn emit_inst(
                     ctx.push(cond_lowered);
                 }
             }
-            for target in [cons, alt] {
-                if ctx.block_has_phis(target) {
-                    let at = ctx.bc_out.len() as u32;
-                    ctx.push(0);
-                    ctx.pc_operands_to_rebase.push(at);
-                    ctx.trampolines.push(PendingTramp { operand: at, from: block_id, target });
-                } else {
-                    ctx.push_block_target(target);
-                }
+            ctx.push_edge_target(block_id, cons);
+            ctx.push_edge_target(block_id, alt);
+        }
+        Inst::Switch { value, width, cases, default } => {
+            let src = resolve_lowered_value(k1, ctx, value);
+            let mut sorted = k1.ir.mem.getn(cases).to_vec();
+            sorted.sort_by_key(|case| case.value);
+            assert!(sorted.len() <= u16::MAX as usize, "switch case count exceeds the bc header");
+            ctx.emit(Opcode::Switch, width, sorted.len() as u16);
+            ctx.push(src);
+            ctx.push_edge_target(block_id, default);
+            for case in &sorted {
+                ctx.push(case.value as u32);
+                ctx.push((case.value >> 32) as u32);
+                ctx.push_edge_target(block_id, case.target);
             }
         }
         Inst::Unreachable => {

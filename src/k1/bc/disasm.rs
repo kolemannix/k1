@@ -94,6 +94,16 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write_src(w, k1, ops[0]);
             write!(w, " @{} @{}", ops[1], ops[2]).unwrap();
         }
+        Opcode::Switch => {
+            write!(w, "switch.{} ", a).unwrap();
+            write_src(w, k1, ops[0]);
+            write!(w, " default @{}", ops[1]).unwrap();
+            for i in 0..b as usize {
+                let base = 2 + i * 3;
+                let value = ops[base] as u64 | ((ops[base + 1] as u64) << 32);
+                write!(w, " {}@{}", value, ops[base + 2]).unwrap();
+            }
+        }
         Opcode::Ret => {
             write!(w, "ret ").unwrap();
             write_src(w, k1, ops[0]);

@@ -29,6 +29,7 @@ fn low() {
   packed-basic/test()
   enum_basic/test()
   sum_basic/test()
+  match_switch/test()
   abi-odd-size-struct/test()
   static-arg-global/test()
   function_pointer/test()

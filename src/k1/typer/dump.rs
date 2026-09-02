@@ -759,13 +759,25 @@ impl TypedProgram {
             }
             TypedExpr::Block(block) => self.display_block(block, w, indentation),
             TypedExpr::Match(typed_match) => {
-                for stmt in self.mem.getn(typed_match.initial_let_statements) {
-                    self.display_stmt(*stmt, w, indentation)?;
+                if let Some(stmt) = typed_match.subject_defn {
+                    self.display_stmt(stmt, w, indentation)?;
                 }
-                w.write_str("is {\n")?;
+                w.write_str("is ")?;
+                if let Some(scrutinee) = typed_match.scrutinee {
+                    w.write_str("switch ")?;
+                    self.display_expr_id(scrutinee, w, indentation)?;
+                    w.write_str(" ")?;
+                }
+                w.write_str("{\n")?;
                 for (idx, case) in self.mem.getn(typed_match.arms).iter().enumerate() {
                     w.write_str(&"  ".repeat(indentation + 1))?;
-                    writeln!(w, "ARM {idx}").unwrap();
+                    match case.case {
+                        None => writeln!(w, "ARM {idx}").unwrap(),
+                        Some(value) => {
+                            writeln!(w, "ARM {idx} case {}", self.static_value_to_string(value))
+                                .unwrap()
+                        }
+                    }
                     self.display_matching_condition(w, &case.condition, indentation + 1)?;
 
                     w.write_str(&"  ".repeat(indentation + 2))?;
@@ -1105,6 +1117,12 @@ impl TypedProgram {
                     w.write_str(&"  ".repeat(indentation))?;
                     w.write_str("cond ")?;
                     self.display_expr_id(*value, w, indentation)?;
+                }
+                MatchingConditionInstr::IntEquals { subject, value } => {
+                    w.write_str(&"  ".repeat(indentation))?;
+                    w.write_str("cond ")?;
+                    self.display_expr_id(*subject, w, indentation)?;
+                    write!(w, " == {}", self.static_value_to_string(*value))?;
                 }
             }
             w.write_str("\n")?;

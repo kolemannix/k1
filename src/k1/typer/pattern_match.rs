@@ -929,6 +929,22 @@ impl TypedProgram {
         allow_bindings: bool,
         fallback_expr: Option<TypedExprId>,
     ) -> K1Result<TypedExprId> {
+        pub(super) fn synth_match_scrutinee(
+            k1: &mut TypedProgram,
+            subject: TypedExprId,
+            span: SpanId,
+        ) -> TypedExprId {
+            match k1.types.get(k1.exprs.get_type(subject)) {
+                Type::Reference(_) => {
+                    let deref = k1.synth_dereference(subject);
+                    synth_match_scrutinee(k1, deref, span)
+                }
+                Type::Sum(_) => k1.synth_sum_get_tag(subject, span),
+                Type::Enum(_) => k1.synth_enum_get_value(subject, span),
+                _ => subject,
+            }
+        }
+
         let parsed_match = *self.ast.exprs.get(match_expr_id).as_match().unwrap();
         if parsed_match.is_static {
             return self.eval_static_match_expr(match_expr_id, ctx);
@@ -1045,11 +1061,12 @@ impl TypedProgram {
                         ctx.with_scope(arm_scope_id).with_no_expected_type()
                     };
                     let mut instrs = self.mem.new_list(4);
-                    self.compile_pattern_into_values(
+                    let case = self.compile_pattern_into_values(
                         pattern,
                         match_subject_variable.variable_expr,
                         &mut instrs,
                         false,
+                        true,
                         pattern_eval_ctx,
                     )?;
 
@@ -1103,6 +1120,7 @@ impl TypedProgram {
                     }
 
                     let match_arm = TypedMatchArm {
+                        case,
                         condition: MatchingCondition {
                             instrs: instrs.to_slice_trim(&mut self.mem),
                         },
@@ -1144,10 +1162,20 @@ impl TypedProgram {
             )?,
         };
         let fallback_arm = TypedMatchArm {
+            case: None,
             condition: MatchingCondition { instrs: MSlice::empty() },
             consequent_expr: fallback_value,
         };
         typed_arms.push(fallback_arm);
+        let scrutinee = if typed_arms.iter().any(|arm| arm.case.is_some()) {
+            Some(synth_match_scrutinee(
+                self,
+                match_subject_variable.variable_expr,
+                subject_expr_span,
+            ))
+        } else {
+            None
+        };
 
         // The result type of the match is the type of the first non-never arm, or never
         // They've already been typechecked against each other.
@@ -1160,7 +1188,8 @@ impl TypedProgram {
             .unwrap_or(NEVER_TYPE_ID);
         Ok(self.exprs.add(
             TypedExpr::Match(TypedMatchExpr {
-                initial_let_statements: self.mem.pushn(&[match_subject_variable.defn_stmt]),
+                subject_defn: Some(match_subject_variable.defn_stmt),
+                scrutinee,
                 arms: typed_arms.to_slice(),
             }),
             match_result_type,
@@ -1294,8 +1323,9 @@ impl TypedProgram {
         target_expr: TypedExprId,
         instrs: &mut List<MatchingConditionInstr, TypedProgram>,
         is_immediately_inside_reference_pattern: bool,
+        hoist_case: bool,
         ctx: EvalExprContext,
-    ) -> K1Result<()> {
+    ) -> K1Result<Option<StaticValueId>> {
         let target_expr_type = self.exprs.get_type(target_expr);
         let pat = self.patterns.get(pattern_id);
         match pat {
@@ -1331,30 +1361,33 @@ impl TypedProgram {
                         struct_field_variable.variable_expr,
                         instrs,
                         is_referencing,
+                        false,
                         ctx,
                     )?;
                 }
-                Ok(())
+                Ok(None)
             }
             TypedPattern::Sum(sum_pattern) => {
                 let sum_pattern = *sum_pattern;
                 let is_referencing = is_immediately_inside_reference_pattern;
                 let sum_base = self.synth_dereference_when(target_expr, is_referencing);
-                let is_variant_condition = self.synth_sum_is_variant(
-                    sum_base,
-                    sum_pattern.variant_index,
-                    Some(sum_pattern.span),
-                )?;
-                instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(is_variant_condition));
+                let sum_type = self.types.get(sum_pattern.sum_type_id).expect_sum();
+                let variant =
+                    self.sum_variant_by_index(sum_type.variants, sum_pattern.variant_index);
+                let variant_name = variant.name;
+                let variant_index = variant.index;
+                let variant_payload = variant.payload;
+                let case = self.static_values.add_int(variant.tag_value);
+                if !hoist_case {
+                    let subject = self.synth_sum_get_tag(sum_base, sum_pattern.span);
+                    instrs.push_grow(
+                        &mut self.mem,
+                        MatchingConditionInstr::IntEquals { subject, value: case },
+                    );
+                }
 
                 if let Some(payload_pattern) = sum_pattern.payload {
-                    let sum_type_id = sum_pattern.sum_type_id;
-                    let sum_type = self.types.get(sum_type_id).expect_sum();
-                    let variant =
-                        self.sum_variant_by_index(sum_type.variants, sum_pattern.variant_index);
-                    let variant_name = variant.name;
-                    let variant_index = variant.index;
-                    let Some(payload_type_id) = variant.payload else {
+                    let Some(payload_type_id) = variant_payload else {
                         kbail!(
                             self,
                             sum_pattern.span,
@@ -1391,10 +1424,11 @@ impl TypedProgram {
                         payload_variable.variable_expr,
                         instrs,
                         is_referencing,
+                        false,
                         ctx,
                     )?;
                 };
-                Ok(())
+                Ok(if hoist_case { Some(case) } else { None })
             }
             TypedPattern::Variable(variable_pattern) => {
                 let variable_ident = variable_pattern.name;
@@ -1408,9 +1442,9 @@ impl TypedProgram {
                     &mut self.mem,
                     MatchingConditionInstr::Binding { let_stmt: binding_variable.defn_stmt },
                 );
-                Ok(())
+                Ok(None)
             }
-            TypedPattern::Wildcard(_span) => Ok(()),
+            TypedPattern::Wildcard(_span) => Ok(None),
             TypedPattern::Reference(reference_pattern) => {
                 let inner_pattern = reference_pattern.inner_pattern;
                 let target_expr = if is_immediately_inside_reference_pattern {
@@ -1418,8 +1452,14 @@ impl TypedProgram {
                 } else {
                     target_expr
                 };
-                self.compile_pattern_into_values(inner_pattern, target_expr, instrs, true, ctx)?;
-                Ok(())
+                self.compile_pattern_into_values(
+                    inner_pattern,
+                    target_expr,
+                    instrs,
+                    true,
+                    hoist_case,
+                    ctx,
+                )
             }
             TypedPattern::RefNull(_inner_type, span) => {
                 let span = *span;
@@ -1434,7 +1474,7 @@ impl TypedProgram {
                 let is_null_expr =
                     self.synth_equals_call_simple(target_expr_as_ptr, ptr_null_expr, span);
                 instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(is_null_expr));
-                Ok(())
+                Ok(None)
             }
             TypedPattern::PointerNull(span) => {
                 let span = *span;
@@ -1442,7 +1482,7 @@ impl TypedProgram {
                     self.add_static_constant_expr(self.static_values.nullptr_id(), span);
                 let is_null_expr = self.synth_equals_call_simple(target_expr, ptr_null_expr, span);
                 instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(is_null_expr));
-                Ok(())
+                Ok(None)
             }
             TypedPattern::Type(pattern) => {
                 // We want to push a cond to instrs representing whether the type matches
@@ -1468,9 +1508,10 @@ impl TypedProgram {
                     inner_target_expr,
                     instrs,
                     false,
+                    false,
                     ctx,
                 )?;
-                Ok(())
+                Ok(None)
             }
             literal_pat => {
                 match literal_pat {
@@ -1491,80 +1532,33 @@ impl TypedProgram {
                 } else {
                     target_expr
                 };
-                match self.patterns.get(pattern_id) {
-                    // Not truly a 'literal' but closer to a literal than to an aggregate
-                    TypedPattern::Enum(e) => {
-                        let span = e.span;
-                        let int_value = e.int_value;
-                        let pattern_int_value = self.static_values.add(StaticValue::Int(int_value));
-                        let pattern_int_value_expr =
-                            self.add_static_constant_expr(pattern_int_value, span);
-                        let target_int_value = self.synth_enum_get_value(target_expr, span);
-                        let equals_call = self.synth_equals_call_simple(
-                            target_int_value,
-                            pattern_int_value_expr,
-                            span,
-                        );
-                        instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(equals_call));
-                        Ok(())
+                let literal_pat = *self.patterns.get(pattern_id);
+                let case = match literal_pat {
+                    TypedPattern::Enum(e) => self.static_values.add_int(e.int_value),
+                    TypedPattern::LiteralChar(byte, _) => {
+                        self.static_values.add(StaticValue::Char(byte))
                     }
-                    TypedPattern::LiteralChar(byte, span) => {
-                        let char_value = self.static_values.add(StaticValue::Char(*byte));
-                        let span = *span;
-                        let char_expr = self.add_static_constant_expr(char_value, span);
-                        let equals_pattern_char =
-                            self.synth_equals_call_simple(target_expr, char_expr, span);
-                        instrs.push_grow(
-                            &mut self.mem,
-                            MatchingConditionInstr::cond(equals_pattern_char),
-                        );
-                        Ok(())
-                    }
-                    TypedPattern::LiteralInteger(int_value, span) => {
-                        let span = *span;
-                        let pattern_integer_literal =
-                            self.add_static_constant_expr(*int_value, span);
-                        let equals_pattern_int = self.synth_equals_call_simple(
-                            target_expr,
-                            pattern_integer_literal,
-                            span,
-                        );
-                        instrs.push_grow(
-                            &mut self.mem,
-                            MatchingConditionInstr::Cond { value: equals_pattern_int },
-                        );
-                        Ok(())
+                    TypedPattern::LiteralInteger(int_value, _) => int_value,
+                    TypedPattern::LiteralBool(bool_value, _) => {
+                        self.static_values.add(StaticValue::Bool(bool_value))
                     }
                     TypedPattern::LiteralFloat(float_value, span) => {
-                        let span = *span;
                         let pattern_float_literal =
-                            self.add_static_constant_expr(*float_value, span);
+                            self.add_static_constant_expr(float_value, span);
                         let equals_pattern_float =
                             self.synth_equals_call_simple(target_expr, pattern_float_literal, span);
                         instrs.push_grow(
                             &mut self.mem,
                             MatchingConditionInstr::cond(equals_pattern_float),
                         );
-                        Ok(())
-                    }
-                    TypedPattern::LiteralBool(bool_value, span) => {
-                        let span = *span;
-                        let bool_expr = self.synth_bool(*bool_value, span);
-                        let equals_pattern_bool =
-                            self.synth_equals_call_simple(target_expr, bool_expr, span);
-                        instrs.push_grow(
-                            &mut self.mem,
-                            MatchingConditionInstr::cond(equals_pattern_bool),
-                        );
-                        Ok(())
+                        return Ok(None);
                     }
                     TypedPattern::LiteralString(string_id, span) => {
-                        let span = *span;
-                        let string_expr = self.synth_string_literal(*string_id, span);
+                        let string_expr = self.synth_string_literal(string_id, span);
                         let condition =
                             self.synth_equals_call_simple(target_expr, string_expr, span);
                         instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(condition));
-                        Ok(())
+                        return Ok(None);
                     }
                     _ => {
                         unreachable!(
@@ -1572,7 +1566,19 @@ impl TypedProgram {
                             self.pattern_to_string(pattern_id)
                         )
                     }
+                };
+                if hoist_case {
+                    return Ok(Some(case));
                 }
+                let subject = match literal_pat {
+                    TypedPattern::Enum(e) => self.synth_enum_get_value(target_expr, e.span),
+                    _ => target_expr,
+                };
+                instrs.push_grow(
+                    &mut self.mem,
+                    MatchingConditionInstr::IntEquals { subject, value: case },
+                );
+                Ok(None)
             }
         }
     }

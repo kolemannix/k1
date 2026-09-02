@@ -1,0 +1,128 @@
+ns match_switch
+
+type color = either { red, orange, yellow, green, blue, indigo, violet, black, white, gray }
+
+fn color-rank(c: color): int {
+  c is {
+    :red -> 0, :orange -> 1, :yellow -> 2, :green -> 3, :blue -> 4,
+    :indigo -> 5, :violet -> 6, :black -> 7, :white -> 8, :gray -> 9
+  }
+}
+
+type shape = either { dot, circle(int), rect({ w: int, h: int }), label(string) }
+
+fn area(s: shape): int {
+  s is {
+    :dot -> 0,
+    :circle r if r > 100 -> -1,
+    :circle r -> r * r * 3,
+    :rect .{ w, h = 0 } -> w * 0,
+    :rect .{ w, h } -> w * h,
+    :label "big" -> 1000,
+    :label _ -> 1,
+  }
+}
+
+fn between(n: int, flag: bool): int {
+  n is {
+    1 if flag -> 11,
+    1 -> 10,
+    x if x > 50 -> 500,
+    2 -> 20,
+    3 -> 30,
+    _ -> 0,
+  }
+}
+
+fn sparse(n: i64): int {
+  n is { 1 -> 1, 100 -> 2, 100000 -> 3, -1 -> 4, -100000000000 -> 5, _ -> 0 }
+}
+
+fn small(n: i8): int {
+  n is { -1 -> 1, -128 -> 2, 127 -> 3, 0 -> 4, _ -> 0 }
+}
+
+fn char-class(c: char): int {
+  c is { 'a' -> 1, 'b' -> 2, 'z' -> 26, ' ' -> 100, _ -> 0 }
+}
+
+fn flip(b: bool): bool {
+  b is { true -> false, false -> true }
+}
+
+type tagged = either(u16) { a = 1000, b = 2000, c(int) = 30000 }
+fn tagged-rank(t: tagged): int {
+  t is { :a -> 1, :b -> 2, :c n -> n }
+}
+
+fn ref-match(s: *shape): int {
+  s is { :dot* -> 0, :circle r* -> r.*, _ -> -1 }
+}
+
+fn test() {
+  assert-equals(color-rank(:red), 0)
+  assert-equals(color-rank(:blue), 4)
+  assert-equals(color-rank(:gray), 9)
+  assert-equals[string](color:indigo.enum-name(), "indigo")
+  assert-equals[string](color:white.show(), "white")
+  assert(color:black == color:black)
+  assert(color:black != color:white)
+
+  assert-equals(area(:dot), 0)
+  assert-equals(area(:circle 200), -1)
+  assert-equals(area(:circle 2), 12)
+  assert-equals(area(:rect .{ w = 7, h = 0 }), 0)
+  assert-equals(area(:rect .{ w = 7, h = 3 }), 21)
+  assert-equals(area(:label "big"), 1000)
+  assert-equals(area(:label "small"), 1)
+  assert-equals[string](shape:dot.sum-name(), "dot")
+  let lx: shape = :label "x"
+  let c3: shape = :circle 3
+  let c4: shape = :circle 4
+  assert-equals[string](lx.sum-name(), "label")
+  assert-equals[string](c3.show(), ":circle 3")
+  assert(c3 == c3)
+  assert(c3 != c4)
+  assert(c3 != shape:dot)
+
+  assert-equals(between(1, true), 11)
+  assert-equals(between(1, false), 10)
+  assert-equals(between(2, false), 20)
+  assert-equals(between(3, true), 30)
+  assert-equals(between(99, false), 500)
+  assert-equals(between(4, false), 0)
+
+  assert-equals(sparse(1), 1)
+  assert-equals(sparse(100), 2)
+  assert-equals(sparse(100000), 3)
+  assert-equals(sparse(-1), 4)
+  assert-equals(sparse(-100000000000), 5)
+  assert-equals(sparse(2), 0)
+  assert-equals(sparse(255), 0)
+
+  assert-equals(small(-1), 1)
+  assert-equals(small(-128), 2)
+  assert-equals(small(127), 3)
+  assert-equals(small(0), 4)
+  assert-equals(small(5), 0)
+
+  assert-equals(char-class('a'), 1)
+  assert-equals(char-class('z'), 26)
+  assert-equals(char-class(' '), 100)
+  assert-equals(char-class('q'), 0)
+
+  assert-equals(flip(true), false)
+  assert-equals(flip(false), true)
+
+  assert-equals(tagged-rank(:a), 1)
+  assert-equals(tagged-rank(:b), 2)
+  assert-equals(tagged-rank(:c 77), 77)
+  assert-equals[string](tagged:b.sum-name(), "b")
+
+  let s: shape = :circle 9
+  assert-equals(ref-match(&s), 9)
+  s = :dot
+  assert-equals(ref-match(&s), 0)
+  s = :label "q"
+  assert-equals(ref-match(&s), -1)
+}

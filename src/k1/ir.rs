@@ -198,6 +198,7 @@ pub enum IrComment {
     LoopBreakValue,
     MatchArmResultStore,
     MatchPhi,
+    MatchSwitch,
     MatchingCondBindingFallthroughToCons,
     MatchingCondCond,
     MemsetSize,
@@ -288,6 +289,7 @@ impl IrComment {
             IrComment::LoopBreakValue => "loop break value",
             IrComment::MatchArmResultStore => "match arm result store",
             IrComment::MatchPhi => "match phi",
+            IrComment::MatchSwitch => "match switch",
             IrComment::MatchingCondBindingFallthroughToCons => {
                 "matching cond binding fallthrough to cons"
             }
@@ -401,6 +403,7 @@ pub enum BlockSourceKind {
     ArmCons,
     MatchFail,
     MatchEnd,
+    MatchSwitch,
     WhileLoopCondition,
     WhileLoopBody,
     WhileLoopEnd,
@@ -420,6 +423,7 @@ impl BlockSourceKind {
             BlockSourceKind::ArmCons => "arm_cons",
             BlockSourceKind::MatchFail => "match_fail",
             BlockSourceKind::MatchEnd => "match_end",
+            BlockSourceKind::MatchSwitch => "match_switch",
             BlockSourceKind::WhileLoopCondition => "while_loop_condition",
             BlockSourceKind::WhileLoopBody => "while_loop_body",
             BlockSourceKind::WhileLoopEnd => "while_loop_end",
@@ -754,6 +758,16 @@ pub struct PhiCase {
     pub value: Value,
 }
 
+#[derive(Clone, Copy)]
+pub struct SwitchCase {
+    pub value: u64,
+    pub target: BlockId,
+}
+
+pub fn low_mask_from_u8(width: u8) -> u64 {
+    if width >= 64 { u64::MAX } else { (1u64 << width) - 1 }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Value {
     Inst(InstId),
@@ -901,6 +915,12 @@ pub enum Inst {
         cond: Value,
         cons: BlockId,
         alt: BlockId,
+    },
+    Switch {
+        value: Value,
+        width: u8,
+        cases: MSlice<SwitchCase, ProgramIr>,
+        default: BlockId,
     },
     Unreachable,
     // goto considered harmful, but came-from is friend (phi node)
@@ -1156,6 +1176,7 @@ pub fn visit_inst_values(ir: &ProgramIr, inst: &Inst, f: &mut impl FnMut(Value))
             }
         }
         Inst::JumpIf { cond, .. } => f(cond),
+        Inst::Switch { value, .. } => f(value),
         Inst::Phi { incomings, .. } => {
             for case in ir.mem.getn(incomings) {
                 f(case.value);
@@ -1355,6 +1376,7 @@ pub fn get_inst_kind(ir: &ProgramIr, inst_id: InstId) -> InstKind {
         Inst::Call { call_id: id } => InstKind::Value(ir.calls.get(id).ret_type),
         Inst::Jump(_) => InstKind::Terminator,
         Inst::JumpIf { .. } => InstKind::Terminator,
+        Inst::Switch { .. } => InstKind::Terminator,
         Inst::Unreachable => InstKind::Terminator,
         Inst::Phi { t, .. } => InstKind::Value(t),
         Inst::Ret { .. } => InstKind::Terminator,
@@ -1843,6 +1865,17 @@ impl<'k1> Builder<'k1> {
         } else {
             self.push_inst(Inst::JumpIf { cond, cons, alt }, comment)
         }
+    }
+
+    fn push_switch(
+        &mut self,
+        value: Value,
+        width: u8,
+        cases: MSlice<SwitchCase, ProgramIr>,
+        default: BlockId,
+        comment: IrComment,
+    ) -> InstId {
+        self.push_inst(Inst::Switch { value, width, cases, default }, comment)
     }
 
     fn push_copy(
@@ -2582,25 +2615,89 @@ fn compile_expr(
         TypedExpr::Match(match_expr) => {
             let match_result_type = expr_type;
             let result_inst_kind = b.type_to_inst_kind(match_result_type);
-            for stmt in b.k1.mem.getn(match_expr.initial_let_statements) {
-                compile_stmt(b, None, *stmt)?;
+            if let Some(stmt) = match_expr.subject_defn {
+                compile_stmt(b, None, stmt)?;
             }
 
-            let mut arm_blocks = b.k1.ir.mem.new_list(match_expr.arms.len());
-            for _arm in b.k1.mem.getn(match_expr.arms).iter() {
+            let arms = b.k1.mem.getn(match_expr.arms);
+            let arm_count = arms.len();
+            let mut arm_blocks = b.k1.ir.mem.new_list(arm_count as u32);
+            for _arm in arms.iter() {
                 let arm_block = b.push_block(BlockSourceKind::ArmCond);
                 let arm_consequent_block = b.push_block(BlockSourceKind::ArmCons);
                 arm_blocks.push((arm_block, arm_consequent_block));
             }
 
-            let first_arm_block = arm_blocks[0].0;
-            b.push_jump(first_arm_block, IrComment::EnterMatch);
-
             let fail_block = b.push_block(BlockSourceKind::MatchFail);
+            let match_end_block = b.push_block(BlockSourceKind::MatchEnd);
+
+            let scrutinee = match match_expr.scrutinee {
+                None => None,
+                Some(scrutinee_expr) => {
+                    let value = compile_expr(b, None, scrutinee_expr)?;
+                    let scrutinee_type = b.k1.exprs.get_type(scrutinee_expr);
+                    let width =
+                        b.get_physical_type(scrutinee_type).as_scalar().unwrap().width().bits();
+                    Some((value, width as u8))
+                }
+            };
+
+            let mut entries = b.k1.ir.mem.new_list(arm_count as u32);
+            for (index, arm) in arms.iter().enumerate() {
+                let starts_run =
+                    arm.case.is_some() && (index == 0 || arms[index - 1].case.is_none());
+                let entry = if starts_run {
+                    b.push_block(BlockSourceKind::MatchSwitch)
+                } else {
+                    arm_blocks[index].0
+                };
+                entries.push(entry);
+            }
+            b.push_jump(entries[0], IrComment::EnterMatch);
+
+            let mut fail_targets = b.k1.ir.mem.new_list(arm_count as u32);
+            let mut index = 0;
+            while index < arm_count {
+                if arms[index].case.is_none() {
+                    let next = if index + 1 < arm_count { entries[index + 1] } else { fail_block };
+                    fail_targets.push(next);
+                    index += 1;
+                    continue;
+                }
+                let mut run_end = index;
+                while run_end < arm_count && arms[run_end].case.is_some() {
+                    run_end += 1;
+                }
+                let default = if run_end < arm_count { entries[run_end] } else { fail_block };
+                let (scrutinee_value, width) = scrutinee.unwrap();
+                let mut cases = b.k1.ir.mem.new_list((run_end - index) as u32);
+                for k in index..run_end {
+                    let case = arms[k].case;
+                    let seen = arms[index..k].iter().any(|a| a.case == case);
+                    if !seen {
+                        let value = get_static_value_int_bits_masked(b.k1, case.unwrap(), width);
+                        cases.push(SwitchCase { value, target: arm_blocks[k].0 });
+                    }
+                    let next_same = arms[k + 1..run_end].iter().position(|a| a.case == case);
+                    let fail_target = match next_same {
+                        Some(offset) => arm_blocks[k + 1 + offset].0,
+                        None => default,
+                    };
+                    fail_targets.push(fail_target);
+                }
+                b.goto_block(entries[index]);
+                b.push_switch(
+                    scrutinee_value,
+                    width,
+                    cases.to_slice(),
+                    default,
+                    IrComment::MatchSwitch,
+                );
+                index = run_end;
+            }
+
             b.goto_block(fail_block);
             b.push_inst_anon(Inst::Unreachable);
-
-            let match_end_block = b.push_block(BlockSourceKind::MatchEnd);
 
             enum MatchDst {
                 Phi(List<PhiCase, ProgramIr>),
@@ -2611,14 +2708,8 @@ fn compile_expr(
                 Some(dst) => MatchDst::CallerDst(dst),
             };
             for ((index, arm), (arm_block, arm_cons_block)) in
-                b.k1.mem.getn(match_expr.arms).iter().enumerate().zip(arm_blocks.iter())
+                arms.iter().enumerate().zip(arm_blocks.iter())
             {
-                let next_arm = arm_blocks.get(index + 1);
-                let next_arm_or_fail: BlockId = match next_arm {
-                    None => fail_block,
-                    Some((next_arm_block, _)) => *next_arm_block,
-                };
-
                 // For each arm, we compile its matching condition which requires 2 inputs:
                 // A jump target if the conditions succeed, and a jump target if the conditions
                 // fail
@@ -2627,7 +2718,7 @@ fn compile_expr(
                     b,
                     &arm.condition,
                     *arm_cons_block,
-                    Some(next_arm_or_fail),
+                    Some(fail_targets[index]),
                 )?;
 
                 b.goto_block(*arm_cons_block);
@@ -3960,6 +4051,36 @@ fn load_or_copy(
     }
 }
 
+fn compile_int_equals(
+    b: &mut Builder,
+    subject: TypedExprId,
+    value: StaticValueId,
+) -> K1Result<Value> {
+    let subject_value = compile_expr(b, None, subject)?;
+    let subject_type = b.k1.exprs.get_type(subject);
+    let pt = b.get_physical_type(subject_type);
+    let width = b.k1.get_pt_layout(pt).size_bits() as u8;
+    let rhs = compile_static_value(b, value, pt);
+    let cmp = b.push_inst(
+        Inst::IntCmp { lhs: subject_value, rhs, pred: IntCmpPred::Eq, width },
+        IrComment::MatchingCondCond,
+    );
+    Ok(cmp.as_value())
+}
+
+fn get_static_value_int_bits_masked(k1: &TypedProgram, value_id: StaticValueId, width: u8) -> u64 {
+    let bits = match k1.static_values.get(value_id) {
+        StaticValue::Int(int) => int.to_u64_bits(),
+        StaticValue::Char(byte) => *byte as u64,
+        StaticValue::Bool(bv) => *bv as u64,
+        _ => panic!(
+            "switch case is not an int, char, or bool: {}",
+            k1.static_value_to_string(value_id)
+        ),
+    };
+    bits & low_mask_from_u8(width)
+}
+
 fn compile_matching_condition(
     b: &mut Builder,
     mc: &MatchingCondition,
@@ -3980,8 +4101,14 @@ fn compile_matching_condition(
                     b.push_jump(cons_block, IrComment::MatchingCondBindingFallthroughToCons);
                 }
             }
-            MatchingConditionInstr::Cond { value } => {
-                let cond_value: Value = compile_expr(b, None, *value)?;
+            MatchingConditionInstr::Cond { .. } | MatchingConditionInstr::IntEquals { .. } => {
+                let cond_value: Value = match inst {
+                    MatchingConditionInstr::Cond { value } => compile_expr(b, None, *value)?,
+                    MatchingConditionInstr::IntEquals { subject, value } => {
+                        compile_int_equals(b, *subject, *value)?
+                    }
+                    MatchingConditionInstr::Binding { .. } => unreachable!(),
+                };
                 let continue_block = if is_last {
                     cons_block
                 } else {
@@ -4160,6 +4287,26 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                     if !my_blocks.contains(&alt) {
                         errors.push(format!("i{inst_id}: jump to non-existent block"))
+                    }
+                }
+                Inst::Switch { value, width, cases, default } => {
+                    if !get_value_kind(ir, value).is_value() {
+                        errors.push(format!("i{inst_id}: switch value is not a value"))
+                    }
+                    if !my_blocks.contains(&default) {
+                        errors.push(format!("i{inst_id}: switch default to non-existent block"))
+                    }
+                    let cases = ir.mem.getn(cases);
+                    for (index, case) in cases.iter().enumerate() {
+                        if !my_blocks.contains(&case.target) {
+                            errors.push(format!("i{inst_id}: switch case to non-existent block"))
+                        }
+                        if case.value & low_mask_from_u8(width) != case.value {
+                            errors.push(format!("i{inst_id}: switch case value exceeds width"))
+                        }
+                        if cases[..index].iter().any(|c| c.value == case.value) {
+                            errors.push(format!("i{inst_id}: duplicate switch case value"))
+                        }
                     }
                 }
                 Inst::Unreachable => (),
@@ -4660,6 +4807,27 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
                 k1.ir.mem.get(cons).data.kind.str(),
                 alt.raw_index(),
                 k1.ir.mem.get(alt).data.kind.str()
+            )?;
+        }
+        Inst::Switch { value, width, cases, default } => {
+            write!(w, "switch.{width} {value} [")?;
+            for (index, case) in k1.ir.mem.getn(cases).iter().enumerate() {
+                if index > 0 {
+                    w.write_str(", ")?;
+                }
+                write!(
+                    w,
+                    "{} -> b{} {}",
+                    case.value,
+                    case.target.raw_index(),
+                    k1.ir.mem.get(case.target).data.kind.str()
+                )?;
+            }
+            write!(
+                w,
+                "] default b{} {}",
+                default.raw_index(),
+                k1.ir.mem.get(default).data.kind.str()
             )?;
         }
         Inst::Unreachable => {

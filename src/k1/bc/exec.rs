@@ -409,6 +409,29 @@ fn exec_loop(
                 let target = if cond.as_bool() { operand!(1) } else { operand!(2) };
                 set_pc!(target);
             }
+            Opcode::Switch => {
+                let width = header_a(h);
+                let count = header_b(h) as usize;
+                let key = read_src!(operand!(0)).bits() & ir::low_mask_from_u8(width);
+                let mut target = operand!(1);
+                let mut lo = 0usize;
+                let mut hi = count;
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    let base = 2 + mid * 3;
+                    let value = operand!(base) as u64 | ((operand!(base + 1) as u64) << 32);
+                    if value == key {
+                        target = operand!(base + 2);
+                        break;
+                    }
+                    if value < key {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                set_pc!(target);
+            }
             Opcode::JumpIfIntCmp => {
                 let width = header_a(h);
                 let pred = ir::IntCmpPred::from_u8(header_b(h) as u8);

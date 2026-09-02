@@ -6,7 +6,6 @@ next up
 # Bugs
 - [x] [major] Support (co)recursive Generics
 - [x] [major] Allow pattern matching *into* recursive types (currently we just terminate)
-- [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [x] Test handling of NaN and Infinity literals, other float edge cases
 - [x] accidentally captured context parameter results in 'Missing variable' in ir
 - [x] Out of order type definitions don't work with aliases
@@ -23,7 +22,7 @@ next up
 
 pointer-free predicate - pod/serializable?
 
-## [ ] inline asm
+## [ ] asm
 
 ## [ ] Constant-folding, SCCP
 
@@ -39,6 +38,7 @@ pointer-free predicate - pod/serializable?
 ## [x] Ability objects; dyn[<ability expr>]
 
 ## grab bag list mid2026
+- [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
 - [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
@@ -76,7 +76,7 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
         I think doing 'defaults' is relatively easy. You just hit consult the default on the unprovided path. For partially-applieds,
         you need essentially some notion of an 'ability signature function', just like type aliases would need
-- [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch, as well as the few synthesized functions (sum get name, others?) that want it
+- [x] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch, as well as the few synthesized functions (sum get name, others?) that want it
 - [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
 - [x] auto-print implementation on-demand for sums
 - [x] Exported functions

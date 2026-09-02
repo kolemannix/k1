@@ -3427,6 +3427,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .unwrap();
                 Ok(())
             }
+            Inst::Switch { value, cases, default, .. } => {
+                let value = self.resolve_value(inst_mappings, value)?.into_int_value();
+                let int_type = value.get_type();
+                let default_block = self.get_llvm_block(default)?;
+                let mut llvm_cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
+                    Vec::with_capacity(cases.len() as usize);
+                for case in self.k1.ir.mem.getn(cases) {
+                    let case_value = int_type.const_int(case.value, false);
+                    llvm_cases.push((case_value, self.get_llvm_block(case.target)?));
+                }
+                self.builder.build_switch(value, default_block, &llvm_cases).unwrap();
+                Ok(())
+            }
             Inst::Unreachable => {
                 self.builder.build_unreachable().unwrap();
                 Ok(())

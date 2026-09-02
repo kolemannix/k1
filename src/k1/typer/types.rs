@@ -647,11 +647,13 @@ impl TypedProgram {
                 if defn1 != defn2 {
                     return false;
                 }
-                if e1.variants.len() != e2.variants.len() {
+                if e1.tag_type != e2.tag_type || e1.variants.len() != e2.variants.len() {
                     return false;
                 }
                 for (v1, v2) in self.mem.getn(e1.variants).iter().zip(self.mem.getn(e2.variants)) {
-                    let mismatch = v1.name != v2.name || v1.payload != v2.payload;
+                    let mismatch = v1.name != v2.name
+                        || v1.payload != v2.payload
+                        || v1.tag_value != v2.tag_value;
                     if mismatch {
                         return false;
                     }
@@ -765,10 +767,12 @@ impl TypedProgram {
             }
             Type::Sum(e) => {
                 defn.hash(state);
+                discriminant(&e.tag_type).hash(state);
                 e.variants.len().hash(state);
                 for v in self.mem.getn(e.variants) {
                     v.name.hash(state);
                     v.payload.hash(state);
+                    v.tag_value.to_u64_bits().hash(state);
                 }
             }
             Type::Opaque(opaque) => {

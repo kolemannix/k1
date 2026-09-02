@@ -38,6 +38,8 @@ pub enum Opcode {
     JumpIf,
     /// Fused compare-and-branch: A = width in bits, B = IntCmpPred tag
     JumpIfIntCmp,
+    /// A = width in bits, B = case count; cases sorted by value
+    Switch,
     Unreachable,
     Ret,
     RetAgg,
@@ -106,6 +108,7 @@ impl Opcode {
     pub const fn operand_count_with(self, b: u16) -> usize {
         match self {
             Opcode::Call | Opcode::CallIndirect => self.operand_count() + b as usize,
+            Opcode::Switch => self.operand_count() + 3 * b as usize,
             _ => self.operand_count(),
         }
     }
@@ -118,6 +121,7 @@ impl Opcode {
             Opcode::Jump => 1,         // [pc]
             Opcode::JumpIf => 3,       // [cond src][cons pc][alt pc]
             Opcode::JumpIfIntCmp => 4, // [lhs src][rhs src][cons pc][alt pc]
+            Opcode::Switch => 2,       // [src][default pc] + B cases of [value lo][value hi][pc]
             Opcode::Unreachable => 0,
             Opcode::Ret => 1,    // [src]
             Opcode::RetAgg => 2, // [src][size]
@@ -177,6 +181,7 @@ impl Opcode {
             Opcode::Jump => "jump",
             Opcode::JumpIf => "jump_if",
             Opcode::JumpIfIntCmp => "jump_if_icmp",
+            Opcode::Switch => "switch",
             Opcode::Unreachable => "unreachable",
             Opcode::Ret => "ret",
             Opcode::RetAgg => "ret_agg",

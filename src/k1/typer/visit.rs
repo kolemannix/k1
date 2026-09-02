@@ -57,6 +57,9 @@ impl TypedProgram {
                 MatchingConditionInstr::Cond { value } => {
                     self.visit_expr_tree(*value, state, action)
                 }
+                MatchingConditionInstr::IntEquals { subject, .. } => {
+                    self.visit_expr_tree(*subject, state, action)
+                }
             };
             if let Some(r) = result {
                 return Some(r);
@@ -135,8 +138,11 @@ impl TypedProgram {
                 }
             }
             TypedExpr::Match(typed_match) => {
-                for stmt in self.mem.getn(typed_match.initial_let_statements) {
-                    recurse_stmt!(*stmt);
+                if let Some(stmt) = typed_match.subject_defn {
+                    recurse_stmt!(stmt);
+                }
+                if let Some(scrutinee) = typed_match.scrutinee {
+                    recurse!(scrutinee);
                 }
                 for arm in self.mem.getn(typed_match.arms) {
                     if let Some(r) = self.visit_matching_condition(&arm.condition, state, action) {

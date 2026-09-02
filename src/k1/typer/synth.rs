@@ -76,18 +76,21 @@ impl TypedProgram {
         span: SpanId,
     ) -> TypedExprId {
         let cons_arm = TypedMatchArm {
+            case: None,
             condition: MatchingCondition {
                 instrs: self.mem.pushn(&[MatchingConditionInstr::cond(condition)]),
             },
             consequent_expr: consequent,
         };
         let alt_arm = TypedMatchArm {
+            case: None,
             condition: MatchingCondition { instrs: MSlice::empty() },
             consequent_expr: alternate,
         };
         self.exprs.add(
             TypedExpr::Match(TypedMatchExpr {
-                initial_let_statements: MSlice::empty(),
+                subject_defn: None,
+                scrutinee: None,
                 arms: self.mem.pushn(&[cons_arm, alt_arm]),
             }),
             result_type,
@@ -219,6 +222,9 @@ impl TypedProgram {
                 MatchingConditionInstr::Binding { let_stmt } => b.statements.push(*let_stmt),
                 MatchingConditionInstr::Cond { value } => {
                     self.push_block_expr_id(&mut b, *value);
+                }
+                MatchingConditionInstr::IntEquals { subject, .. } => {
+                    self.push_block_expr_id(&mut b, *subject);
                 }
             }
         }
