@@ -585,3 +585,22 @@ fn lex_error_does_not_poison_reused_token_buffer() {
         }
     }
 }
+
+#[test]
+fn function_parameters_emit_parameter_semantic_tokens() -> ParseResult<()> {
+    let ast = test_parse_input(
+        "parameter_semantic_tokens".to_string(),
+        "fn display(self: *person, label: string) {}",
+    )?;
+
+    let parameters: Vec<&str> = ast
+        .semantic_tokens
+        .iter()
+        .filter(|token| matches!(token.kind, SemanticTokenKind::Parameter))
+        .map(|token| ast.sources.get_span_content(&ast.mem, token.span))
+        .collect();
+
+    assert_eq!(parameters, vec!["self", "label"]);
+
+    Ok(())
+}

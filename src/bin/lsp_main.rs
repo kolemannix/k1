@@ -768,12 +768,44 @@ impl LanguageServer for Backend {
                 false => &k1.ast,
                 true => edited_sources.get(&file_url).unwrap(),
             };
+
+            let parameter_spans: HashSet<(u32, u32)> = if is_edited {
+                HashSet::new()
+            } else {
+                let entities = k1.ls_entities.borrow();
+
+                entities
+                    .get(&source.file_id)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|entity| match entity.kind {
+                        LsEntityKind::Variable { variable_id }
+                            if matches!(
+                                k1.variables.get(variable_id).kind,
+                                VariableKind::FnParam(_)
+                            ) =>
+                        {
+                            Some((entity.span.start, entity.span.len))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            };
+
             // The goal is to use only 'atoms' to avoid overlaps and backwards movement
             let mut spans_and_kinds = vec![];
             for semantic_token in ast_for_file.semantic_tokens.iter() {
                 if semantic_token.span.file_id == source.file_id {
                     let token_type = match semantic_token.kind {
                         parse::SemanticTokenKind::Type => TokenTypes::Type,
+                        parse::SemanticTokenKind::Variable
+                            if parameter_spans.contains(&(
+                                semantic_token.span.start,
+                                semantic_token.span.len,
+                            )) =>
+                        {
+                            TokenTypes::Parameter
+                        }
                         parse::SemanticTokenKind::Variable => TokenTypes::Variable,
                         parse::SemanticTokenKind::String => TokenTypes::String,
                         parse::SemanticTokenKind::Keyword => TokenTypes::Keyword,
