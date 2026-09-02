@@ -10,6 +10,8 @@ ns type_synthesis {
     types/variant-empty("square"),
   ])
 
+  type(alias) ints = #type types/make-instance(types/id[list], [types/id[i64]])
+
   fn test() {
     let p: point = .{ x = 42, y = "hello" }
     assert-equals(p.x, 42)
@@ -114,6 +116,18 @@ ns type_synthesis {
     require made-fn-ptr.schema() is :function-pointer .{ function-type-id }
       and function-type-id == made-fn
       else crash("fn pointer schema mismatch")
+
+    let made-list: types/type-id = #static types/make-instance(types/id[list], [types/id[i64]])
+    assert-equals(made-list, types/id[list[i64]])
+    let xs: ints = [1, 2, 3]
+    assert-equals(xs.len(), 3)
+    let round-trip: types/type-id = #static {
+      let info = types/instance-info[list[point]].!
+      types/make-instance(info.parent, info.args)
+    }
+    assert-equals(round-trip, types/id[list[point]])
+    assert(test-compile(#static types/make-instance(types/id[list], [])).is-some())
+    assert(test-compile(#static types/make-instance(types/id[i64], [types/id[i64]])).is-some())
 
     .{}
   }

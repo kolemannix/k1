@@ -289,6 +289,8 @@ impl TypedProgram {
         } else if namespace_scope_id == self.scopes.types_scope_id {
             if name == self.ast.idents.b.type_schema {
                 self.builtin_types.types_type_schema = Some(type_id);
+            } else if name == self.ast.idents.b.type_info {
+                self.builtin_types.types_type_info = Some(type_id);
             } else if name == self.ast.idents.b.int_kind {
                 self.builtin_types.types_int_kind = Some(type_id);
             } else if name == self.ast.idents.b.int_value {
@@ -1086,17 +1088,24 @@ impl TypedProgram {
         match self.find_type_namespaced(scope_id, &ty_app.name)? {
             Some((type_id, _)) => match self.types.get(type_id) {
                 Type::Generic(g) => {
-                    if ty_app.args.len() != g.params.len() {
+                    let g_params = g.params;
+                    if ty_app.args.is_empty() {
+                        self.emit_ls_entity(
+                            ty_app.name.name_span,
+                            LsEntityKind::Type { type_id, applied_type_id: None },
+                        );
+                        return Ok(type_id);
+                    }
+                    if ty_app.args.len() != g_params.len() {
                         kbail!(
                             self,
                             ty_app.span,
                             "Type {} expects {} type arguments, got {}",
                             &ty_app.name,
-                            g.params.len(),
+                            g_params.len(),
                             ty_app.args.len()
                         );
                     }
-                    let g_params = g.params;
                     let (type_arguments_slice, _subst_pairs) = self
                         .check_type_args_against_params(
                             g_params,

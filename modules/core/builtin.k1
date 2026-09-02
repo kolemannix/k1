@@ -61,9 +61,16 @@ type(alias) byte = u8
 ns types {
 
   type type-id = { inner: u64 }
+  type instance-info = { parent: type-id, args: span[type-id] }
+  type type-info = { name: string, schema: type-schema, instance: ?instance-info }
   ns for type-id {
-    fn(intern) schema(self: type-id): type-schema
-    fn(intern) name(self: type-id): string
+    fn(intern) info(self: type-id): type-info
+    fn name(self: type-id): string { self.info().name }
+    fn schema(self: type-id): type-schema { self.info().schema }
+    fn instance-info(self: type-id): ?instance-info { self.info().instance }
+    fn is-instance-of(self: type-id, parent: type-id): bool {
+      self.instance-info() is :some info and info.parent == parent
+    }
     fn make(inner: u64): type-id { .{ inner } }
     fn spell(self: type-id): string {
       `(#type type-id/make(${self.inner}))`
@@ -104,6 +111,7 @@ ns types {
 
   fn type-name-of-val[t](_t: t): string { name[t] }
   fn schema[t](): type-schema { id[t].schema() }
+  fn instance-info[t](): ?instance-info { id[t].instance-info() }
 
   // FIXME: We should encode both width and signedness into the bits instead, 'flags in tags' project
   type int-value = either {
@@ -148,6 +156,7 @@ ns types {
   fn(intern) make-reference(inner: type-id): type-id
   fn(intern) make-array(element: type-id, size: int): type-id
   fn(intern) make-fn(params: span[type-id], return-type: type-id): type-id
+  fn(intern) make-instance(parent: type-id, args: span[type-id]): type-id
 
   type layout = { size: u32, align: u32 }
 

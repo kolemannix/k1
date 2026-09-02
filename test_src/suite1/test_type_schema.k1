@@ -95,6 +95,28 @@ ns type_schema {
 
     require schema[recursive-type] is :struct _ else crash("")
 
+    require types/instance-info[list[int]] is :some .{ parent, args }
+      and parent == types/id[list]
+      and args.len() == 1
+      and args.[0] == types/id[int]
+      else crash("list instance info")
+    assert(types/instance-info[int] is :none)
+    assert(types/instance-info[*int] is :none)
+    assert(types/instance-info[array[u8, 4]] is :none)
+    assert(types/instance-info[string] is :none)
+    assert-equals(types/instance-info[?int].!.parent, types/id[opt])
+    assert-equals(types/instance-info[opt[int]].!.parent, types/id[opt])
+    assert-equals(types/instance-info[result[int, string]].!.args.len(), 2)
+    assert-equals(types/instance-info[point3[u8]].!.parent, types/id[point3])
+    assert-equals(types/id[list].name(), "list[t]")
+    assert-equals(types/id[list[int]].info().name, "list[i64]")
+    assert(types/id[list[int]].is-instance-of(types/id[list]))
+    assert(not types/id[list[int]].is-instance-of(types/id[span]))
+    assert(not types/id[int].is-instance-of(types/id[list]))
+    assert(schema[list[int]] is :struct _)
+    assert(test-compile(types/size[list]).is-some())
+    assert(test-compile({ let _x: list = list/empty[int](); .{} }).is-some())
+
     .{}
   }
 

@@ -490,8 +490,7 @@ pub enum BackendBuiltin {
     // In LLVM backend, this becomes a runtime switch
     // In the VM, just a lookup. So we leave it as a builtin
     // rather than generate ir for it due to that difference
-    TypeSchema,
-    TypeName,
+    TypeInfo,
     /// types/make-struct: comptime-only; builds a struct/union/packed type on the VM
     MakeStruct,
     /// types/make-either: comptime-only; builds a sum or scalar enum type on the VM
@@ -502,6 +501,8 @@ pub enum BackendBuiltin {
     MakeArray,
     /// types/make-fn: comptime-only; fn(...) -> t
     MakeFn,
+    /// types/make-instance: comptime-only; applies a generic type to type arguments
+    MakeInstance,
 
     // Platform-provided
     MemCopy,
@@ -519,13 +520,13 @@ pub enum BackendBuiltin {
 impl BackendBuiltin {
     pub fn kind_name(&self) -> &'static str {
         match self {
-            BackendBuiltin::TypeSchema => "type_schema",
-            BackendBuiltin::TypeName => "type_name",
+            BackendBuiltin::TypeInfo => "type_info",
             BackendBuiltin::MakeStruct => "make_struct",
             BackendBuiltin::MakeEither => "make_either",
             BackendBuiltin::MakeReference => "make_reference",
             BackendBuiltin::MakeArray => "make_array",
             BackendBuiltin::MakeFn => "make_fn",
+            BackendBuiltin::MakeInstance => "make_instance",
             BackendBuiltin::MemCopy => "mem_copy",
             BackendBuiltin::MemMove => "mem_move",
             BackendBuiltin::MemSet => "mem_set",

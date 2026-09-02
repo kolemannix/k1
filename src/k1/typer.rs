@@ -2816,8 +2816,7 @@ pub struct TypedProgram {
     pub calls: VPool<Call, CallId>,
     pub stmts: VPool<TypedStmt, TypedStmtId>,
     pub static_values: StaticValuePool,
-    pub type_schemas: FxHashMap<TypeId, StaticValueId>,
-    pub type_names: FxHashMap<TypeId, StaticValueId>,
+    pub type_infos: FxHashMap<TypeId, StaticValueId>,
     pub scopes: Scopes,
     pub messages: RefCell<Vec<K1Message>>,
     pub namespaces: Namespaces,
@@ -3060,8 +3059,7 @@ impl TypedProgram {
             calls: VPool::make("typed_calls"),
             stmts: VPool::make("typed_stmts"),
             static_values: StaticValuePool::make(),
-            type_schemas: FxHashMap::new(),
-            type_names: FxHashMap::new(),
+            type_infos: FxHashMap::new(),
             scopes,
             messages: RefCell::new(vec![]),
             namespaces,
@@ -4669,6 +4667,17 @@ impl TypedProgram {
                 }
             }
             (_expected, Type::Never) => Ok(()),
+            (Type::Generic(_), _) | (_, Type::Generic(_)) => {
+                let generic =
+                    if self.types.get(expected).as_generic().is_some() { expected } else { actual };
+                Err(k1_format_user!(
+                    self,
+                    "Expected {} but got {}: {} is a generic; apply type arguments to name one of its types",
+                    expected,
+                    actual,
+                    generic
+                ))
+            }
             (_exp, _act) => Err(k1_format_user!(self, "Expected {} but got {}", expected, actual,)),
         }
     }
@@ -12532,11 +12541,6 @@ impl TypedProgram {
             }
             BuiltinTyperInline::TypeId => {
                 let type_id = call.type_args.as_slice(&self.mem)[0];
-
-                // We generate a schema for every type for which a typeId is requested
-                // This guarantees that we have it available at runtime when typeSchema is
-                // called
-                // Same for typeName
                 self.register_type_metainfo(type_id);
 
                 let type_id_expr = self.synth_type_id_literal(type_id, span);
@@ -12547,7 +12551,13 @@ impl TypedProgram {
             | BuiltinTyperInline::TypeAlign => {
                 let type_id = call.type_args.as_slice(&self.mem)[0];
                 match self.get_physical_type(type_id) {
-                    PhysicalTypeResult::No => Ok(self.synth_phony(SIZE_TYPE_ID, span)),
+                    PhysicalTypeResult::No => {
+                        if self.get_type_variable_counts(type_id).is_abstract() {
+                            Ok(self.synth_phony(SIZE_TYPE_ID, span))
+                        } else {
+                            kbail!(self, span, "type {} has no size", type_id)
+                        }
+                    }
                     PhysicalTypeResult::Never => Ok(self.synth_phony(SIZE_TYPE_ID, span)),
                     PhysicalTypeResult::Infinite => Ok(self.synth_phony(SIZE_TYPE_ID, span)),
                     PhysicalTypeResult::Yes(_) => {
@@ -14021,10 +14031,7 @@ impl TypedProgram {
                     (None, "size") => Some(Builtin::TyperInline(BuiltinTyperInline::TypeSize)),
                     (None, "stride") => Some(Builtin::TyperInline(BuiltinTyperInline::TypeStride)),
                     (None, "align") => Some(Builtin::TyperInline(BuiltinTyperInline::TypeAlign)),
-                    (Some("type-id"), "name") => Some(Builtin::Backend(BackendBuiltin::TypeName)),
-                    (Some("type-id"), "schema") => {
-                        Some(Builtin::Backend(BackendBuiltin::TypeSchema))
-                    }
+                    (Some("type-id"), "info") => Some(Builtin::Backend(BackendBuiltin::TypeInfo)),
                     (None, "make-struct") => Some(Builtin::Backend(BackendBuiltin::MakeStruct)),
                     (None, "make-either") => Some(Builtin::Backend(BackendBuiltin::MakeEither)),
                     (None, "make-reference") => {
@@ -14032,6 +14039,7 @@ impl TypedProgram {
                     }
                     (None, "make-array") => Some(Builtin::Backend(BackendBuiltin::MakeArray)),
                     (None, "make-fn") => Some(Builtin::Backend(BackendBuiltin::MakeFn)),
+                    (None, "make-instance") => Some(Builtin::Backend(BackendBuiltin::MakeInstance)),
                     _ => None,
                 },
                 Some("string") => None,

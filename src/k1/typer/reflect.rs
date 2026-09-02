@@ -209,15 +209,89 @@ impl TypedProgram {
         Ok(new_type_id)
     }
 
-    pub(super) fn get_type_schema(&mut self, type_id: TypeId) -> StaticValueId {
-        let reserved_id = if let Some(static_value_id) = self.type_schemas.get(&type_id) {
-            return *static_value_id;
-        } else {
-            let reserved_value_id = self.static_values.pool.reserve_id();
-            self.type_schemas.insert(type_id, reserved_value_id);
-            reserved_value_id
+    pub fn make_generic_instance_raw(
+        &mut self,
+        parent: TypeId,
+        raw_args: &[vm::k1_types::TypeId],
+        span: SpanId,
+    ) -> K1Result<TypeId> {
+        let Some(generic) = self.types.get(parent).as_generic() else {
+            kbail!(self, span, "make-instance: {} is not a generic type", parent);
         };
+        let param_count = generic.params.len();
+        if raw_args.len() != param_count as usize {
+            kbail!(
+                self,
+                span,
+                "make-instance: {} expects {} type arguments, got {}",
+                parent,
+                param_count,
+                raw_args.len()
+            );
+        }
+        let mut args: SV4<TypeId> = smallvec![];
+        for raw in raw_args {
+            args.push(self.type_id_from_raw(*raw, span)?);
+        }
+        let new_type_id = self.instantiate_generic_type(parent, &args);
+        self.register_type_metainfo(new_type_id);
+        Ok(new_type_id)
+    }
 
+    pub(super) fn get_type_info(&mut self, type_id: TypeId) -> StaticValueId {
+        if let Some(existing) = self.type_infos.get(&type_id) {
+            return *existing;
+        }
+        let reserved_id = self.static_values.pool.reserve_id();
+        self.type_infos.insert(type_id, reserved_id);
+
+        let name_value_id = self.build_type_name(type_id);
+        let schema_value_id = self.build_type_schema(type_id);
+        let instance_value_id = self.build_instance_info(type_id);
+        let fields =
+            self.static_values.mem.pushn(&[name_value_id, schema_value_id, instance_value_id]);
+        let type_info_type_id = self.builtin_types.type_info();
+        self.static_values.set(
+            reserved_id,
+            StaticValue::Struct(StaticStruct { type_id: type_info_type_id, fields }),
+        );
+        reserved_id
+    }
+
+    fn build_instance_info(&mut self, type_id: TypeId) -> StaticValueId {
+        let type_info_type_id = self.builtin_types.type_info();
+        let instance_opt_type_id = self.get_struct_field(type_info_type_id, 2).type_id;
+        let chased_type_id = self.get_static_family_id_if_static(type_id);
+        let Some(info) = self.get_instance_info(chased_type_id).copied() else {
+            return synth_static_option(&mut self.static_values, instance_opt_type_id, None);
+        };
+        let instance_info_type_id = self.get_as_opt_instance(instance_opt_type_id).unwrap();
+        let args_span_type_id = self.get_struct_field(instance_info_type_id, 1).type_id;
+
+        self.register_type_metainfo(info.generic_parent);
+        let parent_value_id = self.add_type_id_value(info.generic_parent);
+
+        let mut type_args: SV4<TypeId> = smallvec![];
+        for arg in self.get_type_slice(info.type_args) {
+            type_args.push(*arg);
+        }
+        let mut arg_value_ids = self.tmp.new_list(type_args.len() as u32);
+        for arg in type_args {
+            self.register_type_metainfo(arg);
+            arg_value_ids.push(self.add_type_id_value(arg));
+        }
+        let args_span_value_id = self.add_static_container_from_ids(
+            StaticContainerKind::Span,
+            args_span_type_id,
+            arg_value_ids.as_slice(),
+        );
+        let instance_value_id = self
+            .static_values
+            .add_struct_from_slice(instance_info_type_id, &[parent_value_id, args_span_value_id]);
+        synth_static_option(&mut self.static_values, instance_opt_type_id, Some(instance_value_id))
+    }
+
+    fn build_type_schema(&mut self, type_id: TypeId) -> StaticValueId {
         let type_schema_type_id = self.builtin_types.types_type_schema.unwrap();
         let type_schema = *self.types.get(type_schema_type_id).expect_sum();
         let int_kind_type_id = self.builtin_types.types_int_kind.unwrap();
@@ -621,29 +695,20 @@ impl TypedProgram {
             }
         };
 
-        self.static_values.set(reserved_id, StaticValue::Sum(schema_static_sum));
-        reserved_id
+        self.static_values.add(StaticValue::Sum(schema_static_sum))
     }
 
-    pub(super) fn get_type_name(&mut self, type_id: TypeId) -> StaticValueId {
-        if let Some(existing) = self.type_names.get(&type_id) {
-            return *existing;
-        }
-
+    fn build_type_name(&mut self, type_id: TypeId) -> StaticValueId {
         let mut s = std::mem::take(&mut self.buffers.name_builder);
         self.display_type_id(&mut s, type_id, dump::TypeDisplayMode::Name).unwrap();
         let string_id = self.ast.idents.intern(&s);
         s.clear();
         self.buffers.name_builder = s;
-        let value_id = self.static_values.add_string(string_id);
-
-        self.type_names.insert(type_id, value_id);
-        value_id
+        self.static_values.add_string(string_id)
     }
 
     pub(crate) fn register_type_metainfo(&mut self, type_id: TypeId) {
-        let _ = self.get_type_schema(type_id);
-        let _ = self.get_type_name(type_id);
+        let _ = self.get_type_info(type_id);
     }
 
     pub(crate) fn add_type_id_value(&mut self, type_id: TypeId) -> StaticValueId {

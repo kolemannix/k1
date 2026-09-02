@@ -42,10 +42,7 @@ pointer-free predicate - pod/serializable?
 - [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
 - [ ] Add `self -> *self` thunk adapters for ability objects, `dyn[allocator]` is impossible
-- [ ] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
 - [ ] unaligned load/store for scalars
-- [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
-      way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
 - [ ] [design/flags_in_tags.k1.wip] 
 kind: either(u64, { rounded = false, even = false, faces: u8 }) {
   Circle({ radius: i32 }) = [rounded, even, faces = 1],
@@ -69,6 +66,9 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
         I think doing 'defaults' is relatively easy. You just hit consult the default on the unprovided path. For partially-applieds,
         you need essentially some notion of an 'ability signature function', just like type aliases would need
+- [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
+      way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
+- [x] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`
 - [x] enum-from-sum type operator
 - [x] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch, as well as the few synthesized functions (sum get name, others?) that want it
 - [x] auto-print implementation on-demand for sums

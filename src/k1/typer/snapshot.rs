@@ -99,8 +99,7 @@ impl TypedProgram {
             calls,
             stmts,
             static_values,
-            type_schemas,
-            type_names,
+            type_infos,
             scopes,
             messages,
             namespaces,
@@ -181,8 +180,7 @@ impl TypedProgram {
         calls.snap(w);
         stmts.snap(w);
         static_values.snap(w);
-        write_map_snap(w, type_schemas);
-        write_map_snap(w, type_names);
+        write_map_snap(w, type_infos);
         scopes.snap(w);
         w.write_slice(&messages.borrow());
         w.sorted_entries(ls_entities.borrow().iter(), |w, (file_id, entities)| {
@@ -274,8 +272,7 @@ impl TypedProgram {
         k1.calls.restore(r);
         k1.stmts.restore(r);
         k1.static_values.restore(r);
-        k1.type_schemas = restore_map_snap(r);
-        k1.type_names = restore_map_snap(r);
+        k1.type_infos = restore_map_snap(r);
         k1.scopes = Scopes::restore(r);
         k1.messages = RefCell::new(r.read_vec());
         let mut ls_entities = FxHashMap::default();

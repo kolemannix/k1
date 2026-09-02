@@ -46,6 +46,15 @@ use core/writer
 use types/type-schema
 
 fn _write-json-from-schema(code: *mut string-builder, name: string, type-id: types/type-id) {
+  if type-id.is-instance-of(types/id[list]) {
+    let elem = type-id.instance-info().!.args.[0]
+    code.writeln("w.write-char('[');")
+    code.writeln(`for $name { if it-index > 0 { w.write(",") }`)
+    _write-json-from-schema(code, "it", elem)
+    code.writeln("}")
+    code.writeln("w.write-char(']');")
+    return
+  }
   type-id.schema() is {
     :struct s -> {
       code.writeln("w.write-char('{');")
@@ -101,6 +110,8 @@ fn test-to-json() {
   assert-equals(to-json(true), "true")
   let json1 = to-json(.{ x = 1, y = 2, z = .{}, d = false })
   assert-equals(json1, `{"x":1,"y":2,"z":{},"d":false}`)
+  let xs: list[int] = [1, 2, 3]
+  assert-equals(to-json(.{ xs, ps = [.{ a = true }] }), `{"xs":[1,2,3],"ps":[{"a":true}]}`)
 
   .{}
 }

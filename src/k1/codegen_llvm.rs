@@ -2713,79 +2713,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_unreachable().unwrap()
             }
 
-            BackendBuiltin::TypeName => {
-                // fn(intern) name(self: type-id): string
-                let type_id_ptr = self.load_function_argument(function_id, 0).into_pointer_value();
-                let type_id_arg = self
-                    .builder
-                    .build_load(self.ctx.i64_type(), type_id_ptr, "")
-                    .unwrap()
-                    .into_int_value();
-                let cg_fn = self.llvm_functions.get(&function_id).unwrap();
-                let return_llvm_type = cg_fn.function_type.return_logical_cg_type;
-                let entry_block = self.builder.get_insert_block().unwrap();
-                let out_storage = self.build_alloca(return_llvm_type.rich_type(), "");
-
-                let else_block = self.append_basic_block("miss");
-                self.builder.position_at_end(else_block);
-                // TODO: Proper crash
-                self.builder.build_unreachable().unwrap();
-
-                let finish_block = self.append_basic_block("finish");
-
-                let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
-                    Vec::with_capacity(self.k1.type_schemas.len());
-                for (type_id, static_string_id) in self
-                    .k1
-                    .type_names
-                    .iter()
-                    .map(|(x, y)| (*x, *y))
-                    .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
-                {
-                    if self.k1.get_type_variable_counts(type_id).is_abstract() {
-                        // No point re-ifying types that don't exist at runtime
-                        // like type parameters
-                        continue;
-                    }
-                    let my_block =
-                        self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
-                    self.builder.position_at_end(my_block);
-                    let type_id_int_value =
-                        self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
-
-                    let value = {
-                        let StaticValue::String(string_id) =
-                            self.k1.static_values.get(static_string_id)
-                        else {
-                            panic!("typename should be a string")
-                        };
-                        let global_value = self.codegen_string_id_to_global(
-                            *string_id,
-                            Some(&format!("typename_{}\0", type_id.as_u32())),
-                        )?;
-                        global_value.as_pointer_value().as_basic_value_enum()
-                    };
-                    self.store_k1_value(&return_llvm_type, out_storage, value);
-                    self.builder.build_unconditional_branch(finish_block).unwrap();
-                    cases.push((type_id_int_value, my_block));
-                }
-
-                self.builder.position_at_end(entry_block);
-                let _switch = self.builder.build_switch(type_id_arg, else_block, &cases).unwrap();
-
-                self.builder.position_at_end(finish_block);
-                let mapping = self.get_abi_mapping_for_type(return_llvm_type.pt(), true);
-                let marshalled = self
-                    .marshal_abi_return_value(
-                        mapping,
-                        &return_llvm_type,
-                        out_storage.as_basic_value_enum(),
-                    )
-                    .unwrap();
-                self.builder.build_return(Some(&marshalled)).unwrap()
-            }
-            BackendBuiltin::TypeSchema => {
-                // fn(intern) schema(self: type-id): TypeSchema
+            BackendBuiltin::TypeInfo => {
                 let cg_fn = self.llvm_functions.get(&function_id).unwrap();
                 debug_assert!(cg_fn.function_type.is_sret);
                 let out_storage =
@@ -2797,7 +2725,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .unwrap()
                     .into_int_value();
                 let cg_fn = self.llvm_functions.get(&function_id).unwrap();
-                let type_schema_cg_type = cg_fn.function_type.return_logical_cg_type;
+                let type_info_cg_type = cg_fn.function_type.return_logical_cg_type;
                 let entry_block = self.builder.get_insert_block().unwrap();
 
                 let else_block = self.append_basic_block("miss");
@@ -2808,11 +2736,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let finish_block = self.append_basic_block("finish");
 
                 let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
-                    Vec::with_capacity(self.k1.type_schemas.len());
+                    Vec::with_capacity(self.k1.type_infos.len());
 
-                for (type_id, schema_value_id) in self
+                for (type_id, info_value_id) in self
                     .k1
-                    .type_schemas
+                    .type_infos
                     .iter()
                     .map(|(x, y)| (*x, *y))
                     .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
@@ -2828,9 +2756,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     let type_id_int_value =
                         self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
 
-                    let value = self.codegen_static_value_canonical(schema_value_id)?;
+                    let value = self.codegen_static_value_canonical(info_value_id)?;
 
-                    self.store_k1_value(&type_schema_cg_type, out_storage, value);
+                    self.store_k1_value(&type_info_cg_type, out_storage, value);
                     self.builder.build_unconditional_branch(finish_block).unwrap();
                     cases.push((type_id_int_value, my_block));
                 }
@@ -2844,7 +2772,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             | BackendBuiltin::MakeEither
             | BackendBuiltin::MakeReference
             | BackendBuiltin::MakeArray
-            | BackendBuiltin::MakeFn => self.builder.build_unreachable().unwrap(),
+            | BackendBuiltin::MakeFn
+            | BackendBuiltin::MakeInstance => self.builder.build_unreachable().unwrap(),
             BackendBuiltin::CompilerMessage => self.builder.build_return(None).unwrap(),
             BackendBuiltin::ReplCheckbox => self.builder.build_return(None).unwrap(),
         };

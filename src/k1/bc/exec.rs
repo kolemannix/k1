@@ -1120,20 +1120,13 @@ fn exec_builtin(
         BuiltinOutcome::Value(vm::static_value_to_vm_value(k1, type_id_value_id, vm.eval_span))
     }
     match builtin {
-        BackendBuiltin::TypeSchema => {
+        BackendBuiltin::TypeInfo => {
             let type_id = vm::value_to_type_id(k1, args[0], vm.eval_span)?;
-            let Some(schema_static_value_id) = k1.type_schemas.get(&type_id) else {
-                kbail!(k1, vm.eval_span, "Missing type schema: {}", type_id);
+            let Some(info_value_id) = k1.type_infos.get(&type_id) else {
+                kbail!(k1, vm.eval_span, "Missing type info: {}", type_id);
             };
-            let schema_vm_value =
-                vm::static_value_to_vm_value(k1, *schema_static_value_id, vm.eval_span);
-            Ok(BuiltinOutcome::Value(schema_vm_value))
-        }
-        BackendBuiltin::TypeName => {
-            let type_id = vm::value_to_type_id(k1, args[0], vm.eval_span)?;
-            let name_value_id = *k1.type_names.get(&type_id).unwrap();
-            let name_string_value = vm::static_value_to_vm_value(k1, name_value_id, vm.eval_span);
-            Ok(BuiltinOutcome::Value(name_string_value))
+            let info_vm_value = vm::static_value_to_vm_value(k1, *info_value_id, vm.eval_span);
+            Ok(BuiltinOutcome::Value(info_vm_value))
         }
         BackendBuiltin::MakeStruct => {
             let Some(record_kind) = RecordKind::from_tag(args[0].as_u8()) else {
@@ -1175,6 +1168,13 @@ fn exec_builtin(
                 unsafe { vm::value_as_span(args[0]).to_slice() };
             let return_type = vm::value_to_type_id(k1, args[1], vm.eval_span)?;
             let new_type_id = k1.make_fn_raw(raw_param_types, return_type, vm.eval_span)?;
+            Ok(type_id_outcome(k1, vm, new_type_id))
+        }
+        BackendBuiltin::MakeInstance => {
+            let parent = vm::value_to_type_id(k1, args[0], vm.eval_span)?;
+            let raw_args: &[vm::k1_types::TypeId] =
+                unsafe { vm::value_as_span(args[1]).to_slice() };
+            let new_type_id = k1.make_generic_instance_raw(parent, raw_args, vm.eval_span)?;
             Ok(type_id_outcome(k1, vm, new_type_id))
         }
         BackendBuiltin::MemCopy | BackendBuiltin::MemMove => {

@@ -376,6 +376,19 @@ Schemas are pattern matched as sums such as `:struct`, `:reference`, `:either`,
 `:array`, `:function`, and `:union`. Packed structs reflect as `:struct`; the
 packing shows up in the field offsets.
 
+A bare generic name is a type expression denoting the generic itself, the way a
+bare function name denotes its function type: `types/id[list]` is the id of
+`list[t]`, has no values, and is what an instance reports as its parent.
+`type-id.info()` carries `name`, `schema`, and `instance: ?instance-info`;
+`.name()`, `.schema()`, and `.instance-info()` read its fields.
+
+```rust
+types/id[list].name()                                        // "list[t]"
+types/instance-info[list[int]]                               // :some { parent = types/id[list], args = [types/id[int]] }
+types/instance-info[int]                                     // :none
+types/id[list[int]].is-instance-of(types/id[list])           // true
+```
+
 See `test_src/suite1/test_type_schema.k1`,
 `test_src/suite1/type_info.k1`, and `test_src/suite1/array_type_test.k1`.
 
@@ -406,15 +419,16 @@ let flags = #static types/make-either(some(types/id[u32]), [
 ])
 ```
 
-`types/make-reference`, `types/make-array`, and `types/make-fn` mirror `*t`,
-`array[t, N]`, and `fn(...) -> t`. Like source `*`, `make-reference` of a
-function type yields a function pointer.
+`types/make-reference`, `types/make-array`, `types/make-fn`, and
+`types/make-instance` mirror `*t`, `array[t, N]`, `fn(...) -> t`, and `g[..]`.
+Like source `*`, `make-reference` of a function type yields a function pointer.
 
 ```rust
 types/make-reference(types/id[point])                        // *point
 types/make-array(types/id[i64], 10)                          // array[i64, 10]
 types/make-fn([types/id[i64]], types/id[bool])               // fn(i64) -> bool
 types/make-reference(types/make-fn([], types/id[bool]))      // *fn() -> bool
+types/make-instance(types/id[list], [types/id[int]])         // list[int]
 ```
 
 `.tag-enum` on a sum type derives the scalar enum of just its tags (this is

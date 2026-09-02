@@ -953,6 +953,13 @@ impl Type {
         }
     }
 
+    pub fn as_generic(&self) -> Option<&GenericType> {
+        match self {
+            Type::Generic(g) => Some(g),
+            _ => None,
+        }
+    }
+
     pub fn as_integer(&self) -> Option<&IntegerType> {
         match self {
             Type::Integer(int) => Some(int),
@@ -1109,6 +1116,7 @@ pub struct BuiltinTypes {
     pub ordering: Option<TypeId>,
     pub types_layout: Option<TypeId>,
     pub types_type_schema: Option<TypeId>,
+    pub types_type_info: Option<TypeId>,
     pub types_int_kind: Option<TypeId>,
     pub types_int_value: Option<TypeId>,
     pub types_float_kind: Option<TypeId>,
@@ -1134,6 +1142,7 @@ impl BuiltinTypes {
         debug_assert!(self.k1_module.is_some());
         debug_assert!(self.types_layout.is_some());
         debug_assert!(self.types_type_schema.is_some());
+        debug_assert!(self.types_type_info.is_some());
         debug_assert!(self.types_int_kind.is_some());
         debug_assert!(self.types_int_value.is_some());
         debug_assert!(self.types_float_kind.is_some());
@@ -1175,6 +1184,9 @@ impl BuiltinTypes {
     }
     pub fn type_id(&self) -> TypeId {
         self.types_type_id.expect("type-id builtin missing")
+    }
+    pub fn type_info(&self) -> TypeId {
+        self.types_type_info.expect("type-info builtin missing")
     }
 }
 
