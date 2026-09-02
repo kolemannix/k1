@@ -48,7 +48,7 @@ fn expect(app: *mut process/child, expected: string) {
 fn main(argc: c-int, argv: ptr): i32 {
   let args = std/sys/parse-main-args(argc, argv)
   // `k1 run` starts us in the program's home dir, so the app template is ./app
-  let template-dir = args.get-opt(1) is {
+  let template-dir = args.index-opt(1) is {
     :some d -> d,
     :none -> "app",
   }

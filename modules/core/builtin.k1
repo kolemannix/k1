@@ -557,7 +557,7 @@ ability as-span[impl t] {
   fn non-empty(self): bool {
     self.as-span().inner-buffer().len != 0
   }
-  fn get-opt(self, index: size): ?t {
+  fn index-opt(self, index: size): ?t {
     let b = self.as-span().inner-buffer()
     if index >= b.len :none
     else :some b.[index]

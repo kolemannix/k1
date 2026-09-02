@@ -14,7 +14,7 @@ type parser = {
   cursor: size,
 }
 ns for parser {
-  fn peek(self: parser): ?char { self.input.get-opt(self.cursor) }
+  fn peek(self: parser): ?char { self.input.index-opt(self.cursor) }
   fn next(self: *mut parser): ?char {
     self.peek() is {
       :none -> :none,

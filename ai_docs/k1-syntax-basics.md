@@ -213,7 +213,7 @@ ability. Lists, buffers, spans, strings, fixlists, spill-lists, and maps
 implement it; arrays are intrinsic, so `arr.[i]` is the element itself and
 reads a by-value array as well as storing into one that is a place. A map
 lookup through `.[k]` crashes on a missing key; `map.get` is the optional
-lookup, `get-opt` the optional index. Implement `index` for `*mut t` when the
+lookup, `index-opt` the optional index. Implement `index` for `*mut t` when the
 elements live inline in `t`, so the returned reference points into real
 storage rather than into a copy. Implementing `as-span` does not imply
 `index`; a viewable type declares its own impl.
@@ -664,7 +664,7 @@ Collection API naming follows a doctrine:
 - Mutators take `*mut self` and reuse the verb (`sort`, `reverse`); functional
   variants get `-ed` (`sorted`, `reversed`).
 - Shared collection ops are ability defaults: reads and views on `as-span`
-  (`len`, `get-opt`, `first`, `last`, `slice`, `take`, `drop`,
+  (`len`, `index-opt`, `first`, `last`, `slice`, `take`, `drop`,
   `starts-with`, `ends-with`, `chunks`, `sorted`, `index-of-span`,
   `contains-span`, `first-diff`), mutations and references on `as-buffer`
   (`swap`, `sort`, `reverse`, `fill`, `first-ref`,

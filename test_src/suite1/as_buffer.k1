@@ -54,7 +54,7 @@ fn test() {
   assert-equals(ms.[1], 1)
   assert-equals(ms.first(), some(3))
   assert-equals(ms.last(), some(2))
-  assert-equals(ms.get-opt(9), none())
+  assert-equals(ms.index-opt(9), none())
   assert(ms.take(2) == [3, 1].as-span())
   assert(ms.drop(1) == [1, 2].as-span())
   assert(ms.take-right(1) == [2].as-span())
