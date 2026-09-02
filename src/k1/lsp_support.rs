@@ -813,4 +813,22 @@ fn use-it(): int {
         );
         assert!(k1.completion.as_ref().unwrap().site.is_none());
     }
+
+    #[test]
+    fn use_path_completion() {
+        let k1 = compile_with_cursor(
+            "use_path",
+            r#"
+   ns completion-use-path
+
+   use std/@@
+
+   fn main(): i32 { 0 }
+   "#,
+        );
+
+        assert!(matches!(k1.completion.as_ref().unwrap().site, Some(CompletionSite::Path { .. })));
+
+        assert!(labels(&k1).contains(&"time".to_string()));
+    }
 }

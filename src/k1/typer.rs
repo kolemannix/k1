@@ -17045,10 +17045,20 @@ impl TypedProgram {
             self.qident_to_string(&parsed_use.target),
             &useable_symbols
         );
+
+        if self
+            .completion
+            .as_ref()
+            .is_some_and(|completion| parsed_use.target.name == completion.marker)
+        {
+            return true;
+        }
+
         if useable_symbols.is_empty() {
             debug!("Inserting unresolved use of {}", self.qident_to_string(&parsed_use.target));
             return false;
         }
+
         let provenance = if parsed_use.exposed { Provenance::UseExposed } else { Provenance::Use };
         for symbol in &useable_symbols {
             self.scopes.add_use_binding(
@@ -17083,6 +17093,14 @@ impl TypedProgram {
             self.scope_name_to_string(scope_id_to_search),
             self.scopes.iter_scope_functions(scope_id_to_search).collect::<Vec<_>>()
         );
+
+        if self.completion.as_ref().is_some_and(|cs| name.name == cs.marker) {
+            let completion = self.completion.as_mut().unwrap();
+            if completion.site.is_none() {
+                completion.site = Some(CompletionSite::Path { path_scope_id: scope_id_to_search });
+            }
+            return Ok(smallvec![]);
+        }
 
         // TODO(MODULES): Validate modules cannot use something from a module they don't depend on
         // even if its in the program
