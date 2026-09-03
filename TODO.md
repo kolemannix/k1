@@ -38,11 +38,14 @@ pointer-free predicate - pod/serializable?
 ## [x] Ability objects; dyn[<ability expr>]
 
 ## grab bag list mid2026
+- [ ] block stmt type error recovery; get more than 1 typer error per block
+- [x] fix `is {` syntax
+- [x] parallel llvm codegen
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
 - [ ] Add `self -> *self` thunk adapters for ability objects, `dyn[allocator]` is impossible
-- [ ] unaligned load/store for scalars
+- [x] unaligned load/store for scalars
 - [ ] [design/flags_in_tags.k1.wip] 
 kind: either(u64, { rounded = false, even = false, faces: u8 }) {
   Circle({ radius: i32 }) = [rounded, even, faces = 1],

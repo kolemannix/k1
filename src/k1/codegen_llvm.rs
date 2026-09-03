@@ -794,11 +794,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.plan.index == 0
     }
 
-    fn defines_function(&self, function_id: FunctionId) -> bool {
-        self.owned.contains(&function_id)
-    }
-
-    /// `codegen_program` is the module Entrypoint
     pub fn codegen_program(&mut self, roots: &CodegenRoots) -> CgResult<()> {
         let first_unit = self.is_first_unit();
         let plan_functions = self.plan.functions.clone();
@@ -1139,7 +1134,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         plans
     }
 
-    pub fn exported_symbols(&self) -> Vec<String> {
+    pub fn collect_module_exported_symbols(&self) -> Vec<String> {
         let mut names = vec![];
         for g in self.llvm_module.get_globals() {
             if !g.is_declaration()
@@ -1161,7 +1156,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         names
     }
 
-    pub fn referenced_symbols(&self) -> Vec<String> {
+    pub fn collect_all_module_symbols(&self) -> Vec<String> {
         let mut names = vec![];
         for g in self.llvm_module.get_globals() {
             if g.is_declaration() {
@@ -1237,8 +1232,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                     };
                                     UnitArtifact::Bitcode {
                                         bytes,
-                                        exported: cg.exported_symbols(),
-                                        referenced: cg.referenced_symbols(),
+                                        exported: cg.collect_module_exported_symbols(),
+                                        referenced: cg.collect_all_module_symbols(),
                                     }
                                 }
                             };
@@ -4436,7 +4431,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         };
         let has_body = is_dylib_root || !typed_function_linkage.is_external();
-        let is_definition = has_body && self.defines_function(function_id);
+        let is_definition = has_body && self.owned.contains(&function_id);
         let is_private = !is_dylib_root
             && matches!(
                 typed_function_linkage,
