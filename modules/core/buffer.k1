@@ -18,6 +18,7 @@ ns for buffer {
   fn size-bytes[t](self: buffer[t]): size { buffer-size-bytes[t](self.len) }
 
   fn data-ptr[t](self: buffer[t]): ptr { self.data.as[ptr] }
+  fn data-ref[t](self: buffer[t]): *t { self.data }
 
   fn len[t](self: buffer[t]): size { self.len }
 

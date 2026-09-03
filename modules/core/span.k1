@@ -32,6 +32,9 @@ ns for span {
   fn data-ptr[t](self: span[t]): ptr {
     self.buffer.data-ptr()
   }
+  fn data-ref[t](self: span[t]): *t {
+    self.buffer.data-ref()
+  }
 
   fn empty[t](): span[t] {
     .{ buffer = buffer/empty[t]() }

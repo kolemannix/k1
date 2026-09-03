@@ -18,9 +18,8 @@ ns for list {
   // pointer to the underlying buffer
   // Use at your own risk; the region past
   // len is not initialized
-  fn base-ptr[t](self: list[t]): ptr {
-    self.buffer.data.as[ptr]
-  }
+  fn data-ptr[t](self: list[t]): ptr { self.buffer.data-ptr() }
+  fn data-ref[t](self: list[t]): *t { self.buffer.data-ref() }
 
   fn filled[t](size: size, value: t): list[t] {
     let buffer = buffer/filled(size, value)

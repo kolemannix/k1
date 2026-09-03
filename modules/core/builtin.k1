@@ -977,13 +977,10 @@ fn discard[t](_t: t): empty {}
 fn phony[t](): t { crash("phony") }
 
 ns array {
-  fn get-base-read[t, n](array: *array[t, n]): *t where n: static size {
+  fn data-ref[t, n](array: *mut array[t, n]): *mut t where n: static size {
     array.[0].&
   }
-  fn get-base[t, n](array: *mut array[t, n]): *mut t where n: static size {
-    array.[0].&
-  }
-  fn base-ptr[t, n](array: *mut array[t, n]): ptr where n: static size {
+  fn data-ptr[t, n](array: *mut array[t, n]): ptr where n: static size {
     array.as[ptr]
   }
   fn size-bytes[t, n](_array: array[t, n]): int where n: static size {
@@ -999,7 +996,7 @@ ns array {
   }
 
   fn memset[t, n](array: *mut array[t, n], value: u8) where n: static size {
-    mem/set(dst = array.base-ptr(), value = value, count = array.size-bytes())
+    mem/set(dst = array.data-ptr(), value = value, count = array.size-bytes())
   }
 
   fn filled-in[t, n: static size, a: allocator](alloc: a, t: t, n: n): *mut array[t, n] {
@@ -1025,13 +1022,13 @@ ns array {
 
 impl[t, n: static size] as-buffer[t = t] for *mut array[t, n] {
   fn as-buffer(self): buffer[t] {
-    .{ len = self.len(), data = self.get-base() }
+    .{ len = self.len(), data = self.data-ref() }
   }
 }
 
 impl[t, n: static size] as-span[t = t] for *array[t, n] {
   fn as-span(self): span[t] {
-    span/wrap-raw(self.get-base-read().as[ptr], self.len())
+    span/wrap-raw(self.data-ptr(), self.len())
   }
 }
 

@@ -6117,6 +6117,31 @@ impl TypedProgram {
         }
     }
 
+    fn string_is_completion_marker(&self, name: StringId, site_unclaimed: bool) -> bool {
+        self.completion
+            .as_ref()
+            .is_some_and(|cs| cs.marker == name && (!site_unclaimed || cs.site.is_none()))
+    }
+
+    fn set_completion_site(&mut self, site: CompletionSite) {
+        self.completion.as_mut().unwrap().site = Some(site);
+    }
+
+    fn record_qident_completion_site(&mut self, scope_id: ScopeId, name: &QIdent) {
+        if !self.string_is_completion_marker(name.name, true) {
+            return;
+        }
+        let site = if name.path.is_empty() {
+            CompletionSite::Scope { scope_id }
+        } else {
+            match self.resolve_qident(scope_id, name) {
+                Ok(path_scope_id) => CompletionSite::Path { path_scope_id },
+                Err(_) => CompletionSite::Scope { scope_id },
+            }
+        };
+        self.set_completion_site(site);
+    }
+
     fn eval_variable(
         &mut self,
         variable_expr_id: ParsedExprId,
@@ -6129,19 +6154,9 @@ impl TypedProgram {
         let name = variable.name;
         let variable_name_span = name.name_span;
 
-        if let Some(cs) = &self.completion
-            && name.name == cs.marker
-        {
-            if cs.site.is_none() && !ctx.is_marker_owned_by_call() {
-                let site = if name.path.is_empty() {
-                    CompletionSite::Scope { scope_id }
-                } else {
-                    match self.resolve_qident(scope_id, &name) {
-                        Ok(path_scope_id) => CompletionSite::Path { path_scope_id },
-                        Err(_) => CompletionSite::Scope { scope_id },
-                    }
-                };
-                self.completion.as_mut().unwrap().site = Some(site);
+        if self.string_is_completion_marker(name.name, false) {
+            if !ctx.is_marker_owned_by_call() {
+                self.record_qident_completion_site(scope_id, &name);
             }
             // The marker evaluates as a phony of the expected type so the
             // enclosing expression can finish typechecking
@@ -6323,11 +6338,8 @@ impl TypedProgram {
             _other => (raw_base_expr, raw_base_expr_type),
         };
 
-        if let Some(cs) = &mut self.completion
-            && cs.site.is_none()
-            && field_access.field_name == cs.marker
-        {
-            cs.site = Some(CompletionSite::Member {
+        if self.string_is_completion_marker(field_access.field_name, true) {
+            self.set_completion_site(CompletionSite::Member {
                 raw_base_type_id: raw_base_expr_type,
                 base_type_id,
                 scope_id: ctx.scope_id,
@@ -7445,11 +7457,14 @@ impl TypedProgram {
             )
         }
 
-        if let Some(cs) = &mut self.completion
-            && cs.site.is_none()
-            && self.ast.mem.getn(parsed_struct.fields).iter().any(|f| f.name == cs.marker)
+        if self
+            .ast
+            .mem
+            .getn(parsed_struct.fields)
+            .iter()
+            .any(|f| self.string_is_completion_marker(f.name, true))
         {
-            cs.site = Some(CompletionSite::StructField {
+            self.set_completion_site(CompletionSite::StructField {
                 type_id: expected_struct_id,
                 parsed_struct_id: expr_id,
             });
@@ -7604,10 +7619,8 @@ impl TypedProgram {
                 }
             }
         };
-        let output_struct = StructType {
-            fields: field_types.to_slice(),
-            record_kind: expected_struct.record_kind,
-        };
+        let output_struct =
+            StructType { fields: field_types.to_slice(), record_kind: expected_struct.record_kind };
         let output_struct_type_id = self.add_type(
             Type::Struct(output_struct),
             expected_struct_defn_info,
@@ -11396,11 +11409,8 @@ impl TypedProgram {
             },
         };
 
-        if let Some(cs) = &mut self.completion
-            && cs.site.is_none()
-            && parsed_variant.variant_name == cs.marker
-        {
-            cs.site = Some(CompletionSite::Variant { type_id: provided_type });
+        if self.string_is_completion_marker(parsed_variant.variant_name, true) {
+            self.set_completion_site(CompletionSite::Variant { type_id: provided_type });
         }
 
         match self.types.get(provided_type) {
@@ -11940,10 +11950,11 @@ impl TypedProgram {
     /// A completion cursor among a call's direct args is claimed by the call as a CallArg
     /// site, not by eval_variable; see EvalExprFlags::MarkerOwnedByCall
     fn find_completion_cursor_arg(&self, fn_call: &ParsedCall) -> Option<u32> {
-        let cs = self.completion.as_ref()?;
         let position = self.ast.mem.getn(fn_call.args).iter().position(|arg| {
             match self.ast.exprs.get(arg.value) {
-                ParsedExpr::Variable(v) => v.name.path.is_empty() && v.name.name == cs.marker,
+                ParsedExpr::Variable(v) => {
+                    v.name.path.is_empty() && self.string_is_completion_marker(v.name.name, false)
+                }
                 _ => false,
             }
         });
@@ -11957,12 +11968,11 @@ impl TypedProgram {
         scope_id: ScopeId,
     ) {
         let Some(arg_index) = marker_arg_index else { return };
-        let Some(cs) = &mut self.completion else { return };
-        match (function_id, &cs.site) {
-            (Some(function_id), None | Some(CompletionSite::CallArg { .. })) => {
-                cs.site = Some(CompletionSite::CallArg { function_id, arg_index, scope_id });
-            }
-            (None, None) => cs.site = Some(CompletionSite::Scope { scope_id }),
+        let Some(cs) = &self.completion else { return };
+        match (function_id, cs.site) {
+            (Some(function_id), None | Some(CompletionSite::CallArg { .. })) => self
+                .set_completion_site(CompletionSite::CallArg { function_id, arg_index, scope_id }),
+            (None, None) => self.set_completion_site(CompletionSite::Scope { scope_id }),
             _ => {}
         }
     }
@@ -17086,6 +17096,10 @@ impl TypedProgram {
         name: &QIdent,
         fail_on_traverse_fail: bool,
     ) -> K1Result<SV4<UseableSymbol>> {
+        if self.string_is_completion_marker(name.name, false) {
+            self.record_qident_completion_site(scope_id, name);
+            return Ok(smallvec![]);
+        }
         let scope_id_to_search = match self.resolve_qident(scope_id, name) {
             Err(e) => {
                 if fail_on_traverse_fail {
@@ -18196,10 +18210,8 @@ impl TypedProgram {
             core!("code"),
             core!("code-builder"),
             core!("optref"),
-
             QIdent { path: core_scalarcmp, name: get_ident!(self, "min"), name_span: span },
             QIdent { path: core_scalarcmp, name: get_ident!(self, "max"), name_span: span },
-
             QIdent { path: core_mem, name: get_ident!(self, "zeroed"), name_span: span },
             QIdent { path: core_types, name: self.ast.idents.b.enum_, name_span: span },
             QIdent { path: core_types, name: get_ident!(self, "sum"), name_span: span },

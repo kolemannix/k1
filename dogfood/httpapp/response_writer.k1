@@ -71,7 +71,7 @@ ns response-writer {
     let rc = uv/write(
       driver.write-req,
       connection.client().as-stream(),
-      driver.bufs.as-buffer().data-ptr().narrow(),
+      driver.bufs.data-ref(),
       driver.bufs.len().trunc[u32],
       on-write-complete)
     if rc != 0 {

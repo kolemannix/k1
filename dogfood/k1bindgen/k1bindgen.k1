@@ -109,7 +109,7 @@ fn start(args: span[string]): result[string, string] {
   let err = clang/parseTranslationUnit2(
     index,
     source_filename = args.in-path.to-c().ptr,
-    command_line_args = clang-args-c-strs.base-ptr(),
+    command_line_args = clang-args-c-strs.data-ptr(),
     command_line_args_len = clang-args-c-strs.len().trunc[i32],
     ptr/null.narrow(), 0,
     clang/tu-flag/DetailedPreprocessingRecord.bit-or(clang/tu-flag/SkipFunctionBodies), &unit

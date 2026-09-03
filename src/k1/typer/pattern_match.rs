@@ -672,11 +672,8 @@ impl TypedProgram {
                 let sum_pattern = *sum_pattern;
                 let sum_pattern_span = sum_pattern.span;
 
-                if let Some(cs) = &mut self.completion
-                    && cs.site.is_none()
-                    && sum_pattern.variant_name == cs.marker
-                {
-                    cs.site = Some(CompletionSite::Variant { type_id: target_type_id });
+                if self.string_is_completion_marker(sum_pattern.variant_name, true) {
+                    self.set_completion_site(CompletionSite::Variant { type_id: target_type_id });
                 }
 
                 match self.types.get(target_type_id) {

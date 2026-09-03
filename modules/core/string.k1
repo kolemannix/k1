@@ -2,8 +2,6 @@
 // All rights reserved.
 
 ns for string {
-
-  fn c-lit(s: string): code { `"$s\\0".data-ptr()` }
   
   fn span(self: string): span[char] { self.span }
 
@@ -132,6 +130,8 @@ ns for string {
   }
 
   fn data-ptr(self: string): ptr { self.span.data-ptr() }
+  fn data-ref(self: string): *char { self.span.data-ref() }
+  fn data-ref-byte(self: string): *u8 { self.span.data-ref().as[*u8] }
 
   // Converts self to a c-style (NUL byte terminated) string
   fn to-c(self: string): { ptr: ptr, len: size } {

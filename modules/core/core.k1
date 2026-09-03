@@ -581,7 +581,7 @@ ns for f64 {
   fn format[w: writer](f: f64, w, places: i32) {
     let stack-buf = array/zeroed[u8, 512]()
     let cap = stack-buf.as-span().len()
-    let written-len: size = k1rt/snprintf_f64(stack-buf.get-base().as[ptr], cap.unsigned(), f, places).widen[size]
+    let written-len: size = k1rt/snprintf_f64(stack-buf.data-ptr(), cap.unsigned(), f, places).widen[size]
     if written-len <= 0 crash("snprintf_f64 returned $written-len")
     if written-len >= cap crash("f64/format: $places places needs $written-len bytes, cap is $cap")
     w.write-bytes(stack-buf.as-span().slice(0, written-len))

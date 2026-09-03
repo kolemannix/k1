@@ -1085,6 +1085,11 @@ impl TypedProgram {
             panic_at_disco!("Expected TypeApplication")
         };
 
+        if self.string_is_completion_marker(ty_app.name.name, false) {
+            self.record_qident_completion_site(scope_id, &ty_app.name);
+            return Ok(NEVER_TYPE_ID);
+        }
+
         match self.find_type_namespaced(scope_id, &ty_app.name)? {
             Some((type_id, _)) => match self.types.get(type_id) {
                 Type::Generic(g) => {

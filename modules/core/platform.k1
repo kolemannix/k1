@@ -712,7 +712,7 @@ ns platform {
         }
 
         let pid: i32 = 0
-        let rc = c/posix_spawn(&pid, path.to-c-tmp().ptr, fa, ptr/null, cargv.base-ptr(), environ-ptr())
+        let rc = c/posix_spawn(&pid, path.to-c-tmp().ptr, fa, ptr/null, cargv.data-ptr(), environ-ptr())
         if rc != 0 :err rc else :ok pid
       }
 

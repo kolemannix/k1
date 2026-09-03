@@ -309,7 +309,13 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
             }
         }
         CompletionSite::Path { path_scope_id } => {
-            collect_one_scope(k1, path_scope_id, &mut Seen::default(), &mut items, true);
+            collect_completion_candidates_in_scope_immediate(
+                k1,
+                path_scope_id,
+                &mut Seen::default(),
+                &mut items,
+                true,
+            );
         }
         CompletionSite::Variant { type_id } => {
             let type_id = match k1.types.get(type_id) {
@@ -440,12 +446,12 @@ fn collect_scope_chain(k1: &TypedProgram, scope_id: ScopeId, items: &mut Vec<Com
     let mut seen = Seen::default();
     let mut current = Some(scope_id);
     while let Some(scope_id) = current {
-        collect_one_scope(k1, scope_id, &mut seen, items, false);
+        collect_completion_candidates_in_scope_immediate(k1, scope_id, &mut seen, items, false);
         current = k1.scopes.get_scope(scope_id).parent;
     }
 }
 
-fn collect_one_scope(
+fn collect_completion_candidates_in_scope_immediate(
     k1: &TypedProgram,
     scope_id: ScopeId,
     seen: &mut Seen,

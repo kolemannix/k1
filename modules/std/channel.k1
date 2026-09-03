@@ -110,7 +110,7 @@ ns for channel {
     self.closed = true
     for item in self.queue { (self.drop-fn)(item) }
     if self.queue.cap() > 0 {
-      heap.free(self.queue.base-ptr(), self.queue.cap() * types/size[t], types/align[t])
+      heap.free(self.queue.data-ptr(), self.queue.cap() * types/size[t], types/align[t])
     }
     heap.free-t(self)
   }
