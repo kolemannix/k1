@@ -84,7 +84,7 @@ def unit(i: int) -> str:
   type stat = either {{ count(u64), sum(u64), extent(duo[u64, u64]), empty }}
 
   fn area(s: shape): u64 {{
-    s is {{
+    if s is {{
       :dot -> 1,
       :line(len) -> len,
       :rect(d) -> d.x * d.y
@@ -92,7 +92,7 @@ def unit(i: int) -> str:
   }}
 
   fn step(state: vec2, o: op): vec2 {{
-    o is {{
+    if o is {{
       :push(n) -> .{{ x = state.x + n, y = state.y + 1 }},
       :pop -> {{
         if state.y > 0 {{
@@ -121,7 +121,7 @@ def unit(i: int) -> str:
       sum = sum + k * 2 + cur.x
       k = k + 1
     }}
-    let verdict = cur is {{
+    let verdict = if cur is {{
       .{{ x = 0, y }} -> y,
       .{{ x, y }} if x == y -> x + y,
       .{{ x, y }} -> x * 2 + y
@@ -146,7 +146,7 @@ def unit(i: int) -> str:
   }}
 
   fn advance(o: order, now: u64): order {{
-    let next: order-status = o.status is {{
+    let next: order-status = if o.status is {{
       :draft -> :placed(now),
       :placed(at) -> {{
         if now - at > 10 {{
@@ -164,7 +164,7 @@ def unit(i: int) -> str:
     if a.closed {{
       return a
     }}
-    let next = e is {{
+    let next = if e is {{
       :credit(n) -> a.with(.{{ balance = a.balance + n }}),
       :debit(n) -> {{
         if n > a.balance {{
@@ -217,12 +217,12 @@ def unit(i: int) -> str:
     acct = apply-event(acct, :debit(seed % 50))
     acct = apply-event(acct, :release)
     acct = apply-event(acct, :credit(3))
-    let bonus = acct.last-event is {{
+    let bonus = if acct.last-event is {{
       :some(:credit(n)) -> n,
       :some(_) -> 1,
       :none -> 0
     }}
-    let late = o.status is {{ :delivered(at) -> at % 13, _ -> 0 }}
+    let late = if o.status is {{ :delivered(at) -> at % 13, _ -> 0 }}
     acct.balance + bonus + late
   }}
 
@@ -237,7 +237,7 @@ def unit(i: int) -> str:
     if s.points.len == 0 {{
       return :empty
     }}
-    let lo = s.points.[0].value
+    let lo = s.points.get(0).value
     let hi = lo
     let total = 0: u64
     let kept = 0: u64
@@ -272,7 +272,7 @@ def unit(i: int) -> str:
       k = k + 1
     }}
     let s: series = .{{ name = "run", points = pts, window = mk-pair(0: u64, 900 + seed) }}
-    let verdict = summarize(s) is {{
+    let verdict = if summarize(s) is {{
       :empty -> 0: u64,
       :count(n) -> n,
       :sum(n) -> n % 100,

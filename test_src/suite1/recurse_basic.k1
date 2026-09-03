@@ -15,7 +15,7 @@ ns recurse_basic {
   }
 
   fn ecount(en: tree): size {
-    en is {
+    if en is {
       :leaf -> 0,
       :node child -> 1 + ecount(child.*)
     }

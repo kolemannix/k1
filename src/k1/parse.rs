@@ -2525,6 +2525,9 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
     }
 
     fn error_expected(&mut self, expected: impl AsRef<str>, token: Token) -> ParseError {
+        if token.kind == K::KeywordIs && self.tokens.peek_n(1).kind == K::OpenBrace {
+            return self.error("Match arms belong to an if: `if <subject> is { ... }`", token);
+        }
         self.error(format!("Expected {}", expected.as_ref()), token)
     }
 
@@ -3531,11 +3534,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let with_postfix: ParsedExprId = loop {
             let next = self.peek();
             let new_result = if next.kind == K::KeywordIs {
-                self.advance();
-                if self.peek().kind == K::OpenBrace {
-                    // <expr> is { <pat> -> <expr>, ... }
-                    Some(self.expect_match_arms(result, false)?)
+                if self.tokens.peek_n(1).kind == K::OpenBrace {
+                    // `is {` are match arms, which belong to the enclosing `if`
+                    None
                 } else {
+                    self.advance();
                     let pattern = self.expect_parse_pattern()?;
 
                     let original_span = self.get_expression_span(result);
@@ -3547,19 +3550,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     }));
                     Some(is_expression_id)
                 }
-            } else if next.kind == K::Hash
-                && self.tokens.peek_two().1.is_kind_nonspaced(K::KeywordIs)
-            {
-                // <expr> #is { ... }: the conditional-compilation match; only
-                // the chosen arm is typechecked
-                self.advance();
-                self.advance();
-                if self.peek().kind != K::OpenBrace {
-                    return Err(
-                        self.error_expected("'{' after #is; #is takes match arms", self.peek())
-                    );
-                }
-                Some(self.expect_match_arms(result, true)?)
             } else if next.is_kind_nonspaced(K::OpenParen) {
                 // An expression call: <expr>(param1, param2)
                 let (call_args, _span) = self.expect_fn_call_args()?;
@@ -4030,8 +4020,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             K::KeywordIf => {
                 let expect_res = self.parse_if_expr(false);
-                let if_expr = self.expect("If Expression", first, expect_res)?;
-                Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
+                Ok(Some(self.expect("If Expression", first, expect_res)?))
             }
             K::OpenBracket => {
                 // List literal
@@ -4077,8 +4066,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         }
                         K::KeywordIf => {
                             let expect_res = self.parse_if_expr(true);
-                            let if_expr = self.expect("If Expression", first, expect_res)?;
-                            Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
+                            Ok(Some(self.expect("If Expression", first, expect_res)?))
                         }
                         _ => Err(self.error_here("Unknown directive following #")),
                     }
@@ -4261,8 +4249,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.expect("expression", expect_tok, expect_res)
     }
 
-    /// `<subject> is { <pat> [or <pat>]* [if <guard>] -> <expr>, ... }`
-    /// The subject and the `is` (or `#is`) are already consumed.
+    /// `if <subject> is { <pat> [or <pat>]* [if <guard>] -> <expr>, ... }`
+    /// The `if`, the subject and the `is` are already consumed.
     fn expect_match_arms(
         &mut self,
         subject: ParsedExprId,
@@ -4775,7 +4763,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 if delim == K::Semicolon && self.peek().is_newline_preceded() {
                     continue;
                 }
-                let e = self.error_here(format!("Expected '{delim}' in between each {name}"));
+                let e =
+                    self.error_expected(format!("'{delim}' in between each {name}"), self.peek());
                 self.ast.report_error(e);
                 match self.scan_to_kind(&[delim, terminator])? {
                     t if t.kind == delim => continue,
@@ -4808,11 +4797,20 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    fn parse_if_expr(&mut self, is_static: bool) -> ParseResult<Option<ParsedIfExpr>> {
+    /// `if <cond> <cons> [else <alt>]`, or the match `if <subject> is { <arms> }`.
+    /// `#if` is the static form of both: only the chosen branch is typechecked
+    fn parse_if_expr(&mut self, is_static: bool) -> ParseResult<Option<ParsedExprId>> {
         let Some(if_keyword) = self.maybe_consume(TokenKind::KeywordIf) else {
             return Ok(None);
         };
         let condition_expr = self.expect_expression()?;
+        if self.peek().kind == K::KeywordIs && self.tokens.peek_n(1).kind == K::OpenBrace {
+            self.advance();
+            let match_id = self.expect_match_arms(condition_expr, is_static)?;
+            let span = self.extend_tok_to_here(if_keyword);
+            self.ast.exprs.set_span(match_id, span);
+            return Ok(Some(match_id));
+        }
         let consequent_expr = self.expect_expression()?;
 
         let alt = if let Some(_else_peek) = self.maybe_consume(K::KeywordElse) {
@@ -4828,7 +4826,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let span = self.extend_tok_span(if_keyword, end_span);
         let if_expr =
             ParsedIfExpr { cond: condition_expr, cons: consequent_expr, alt, span, is_static };
-        Ok(Some(if_expr))
+        Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
     }
 
     fn expect_while_loop(&mut self) -> ParseResult<ParsedWhileExpr> {
@@ -5835,12 +5833,9 @@ impl ParsedProgram {
                 self.display_pattern_expression_id(is_expr.pattern, w)
             }
             ParsedExpr::Match(match_expr) => {
+                w.write_str(if match_expr.is_static { "#if " } else { "if " })?;
                 self.display_expr_id(w, match_expr.match_subject)?;
-                if match_expr.is_static {
-                    w.write_str(" #is {")?;
-                } else {
-                    w.write_str(" is {")?;
-                }
+                w.write_str(" is {")?;
                 for ParsedMatchCase { patterns, guard_condition_expr, expression } in
                     self.mem.getn(match_expr.cases)
                 {

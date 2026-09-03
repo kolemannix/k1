@@ -19,7 +19,7 @@ ns response-writer {
     let out = string-builder/new()
     out.write("HTTP/1.1 ${resp.status} ${response/status-text(resp.status)}\r\nContent-Type: ${resp.content-type}\r\n")
     for h in resp.extra-headers { out.write("$h\r\n") }
-    let body = resp.body is {
+    let body = if resp.body is {
       :complete segments -> {
         let total: size = 0
         for seg in segments { total = total + seg.len() }
@@ -49,7 +49,7 @@ ns response-writer {
     // when it's already available — a strict response is one vectored write
     let first = list/empty[span[u8]]()
     first.push(headers.span-bytes())
-    body.next() is {
+    if body.next() is {
       :chunk group -> for seg in group { first.push(seg) },
       // the headers write is about to be in flight; its completion pumps
       :pending -> .{},
@@ -109,7 +109,7 @@ ns response-writer {
     let connection = driver.connection
     mem/push-arena(connection.request-arena)
     defer { mem/pop-arena() }
-    driver.stream.next() is {
+    if driver.stream.next() is {
       :chunk group -> write-group(driver, group),
       :pending -> { driver.parked = true },
       :done -> {

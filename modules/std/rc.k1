@@ -109,7 +109,7 @@ impl source[t = u8] for rc-byte-stream {
   fn next(self: *mut rc-byte-stream): pull[u8] {
     for payload in self.inflight { payload.release() }
     self.inflight.clear()
-    self.upstream.next() is {
+    if self.upstream.next() is {
       :chunk group -> {
         self.parts.clear()
         for seg in group {

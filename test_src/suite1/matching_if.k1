@@ -4,7 +4,7 @@ type(alias) ABC = either { a, b, c }
 
 impl print for ABC {
   fn print-to[w: writer](self: ABC, w) {
-    self is {
+    if self is {
       :a -> w.write-char('A'),
       :b -> w.write-char('B'),
       :c -> w.write-char('C')
@@ -14,7 +14,7 @@ impl print for ABC {
 
 impl equals for ABC {
   fn equals(self: ABC, other: ABC): bool {
-    .{ fst = self, snd = other } is {
+    if .{ fst = self, snd = other } is {
       .{ fst = :a, snd = :a } -> true,
       .{ fst = :b, snd = :b } -> true,
       .{ fst = :c, snd = :c } -> true,
@@ -32,7 +32,7 @@ fn binding-if-struct(v: { x: int, y: int }): ABC {
 }
 
 fn match-struct(v: { x: int, y: int }): ABC {
-  v is {
+  if v is {
     .{ x = 11 } -> :a,
     .{ x = xx, y = yy } if xx == 1 or yy == 2 -> :b,
     _ -> :c

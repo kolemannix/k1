@@ -14,7 +14,7 @@ type command = either {
 fn parse-command(cmd: string): result[command, string] {
   println("[debug] received: `$cmd`")
   
-  cmd is {
+  if cmd is {
     // Initial handshake: GUI sends "uci", engine responds with id and options
     "uci" -> :ok :uci,
 

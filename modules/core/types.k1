@@ -3,7 +3,7 @@ ns types
 
 impl print for int-value {
    fn print-to[w: writer](self, w) {
-     self is {
+     if self is {
        :u8 v  -> w.write("${v}u8"),
        :u16 v -> w.write("${v}u16"),
        :u32 v -> w.write("${v}u32"),

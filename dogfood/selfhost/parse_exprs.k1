@@ -3,7 +3,7 @@ ns parse
 ns for parser {
   fn expect-expression(self: *mut parser): result[ast/expr-id, perror] {
     let tok = self.peek()
-    self.parse-expression().try is {
+    if self.parse-expression().try is {
       :some e -> :ok(e),
       :none -> :err(make-error("Expected expression", tok)),
     }
@@ -11,7 +11,7 @@ ns for parser {
 
   fn expect-expression-with-postfix-ops(self: *mut parser): result[ast/expr-id, perror] {
     let tok = self.peek()
-    self.parse-expression-with-postfix-ops().try is {
+    if self.parse-expression-with-postfix-ops().try is {
       :some e -> :ok(e),
       :none -> :err(make-error("Expected expression", tok)),
     }
@@ -66,21 +66,11 @@ ns for parser {
     loop {
       let next = self.peek()
       if next.kind is :kw-is {
+        if self.peek-at(1).kind is :open-brace { break }
         self.advance()
-        if self.peek().kind is :open-brace {
-          result-id = self.expect-match-arms(result-id, false).try
-        } else {
-          let pattern = self.expect-parse-pattern().try
-          let span = self.extend-to-here(self.expr-span(result-id))
-          result-id = self.add-expr(:is-expr(.{ target = result-id, pattern, span }))
-        }
-      } else if next.kind is :hash and self.peek-at(1).is-kind-nonspaced(:kw-is) {
-        self.advance()
-        self.advance()
-        if not (self.peek().kind is :open-brace) {
-          return :err(error-expected("'{' after #is; #is takes match arms", self.peek()))
-        }
-        result-id = self.expect-match-arms(result-id, true).try
+        let pattern = self.expect-parse-pattern().try
+        let span = self.extend-to-here(self.expr-span(result-id))
+        result-id = self.add-expr(:is-expr(.{ target = result-id, pattern, span }))
       } else if next.is-kind-nonspaced(:open-paren) {
         let call-args = self.expect-fn-call-args().try
         let span = self.extend-to-here(self.expr-span(result-id))
@@ -195,7 +185,7 @@ ns for parser {
 
   fn expect-block(self: *mut parser, kind: ast/block-kind): result[ast/block, perror] {
     let tok = self.peek()
-    self.parse-block(kind).try is {
+    if self.parse-block(kind).try is {
       :some b -> :ok(b),
       :none -> :err(make-error("Expected block", tok)),
     }
@@ -385,19 +375,25 @@ ns for parser {
     is-debug
   }
 
-  fn expect-if-expr(self: *mut parser, is-static: bool): result[ast/if-expr, perror] {
+  fn expect-if-expr(self: *mut parser, is-static: bool): result[ast/expr-id, perror] {
     let if-keyword = self.expect-kind(:kw-if).try
     let cond = self.expect-expression().try
+    if self.peek().kind is :kw-is and self.peek-at(1).kind is :open-brace {
+      self.advance()
+      let match-id = self.expect-match-arms(cond, is-static).try
+      self.program.set-expr-span(match-id, self.extend-tok-to-here(if-keyword))
+      return :ok(match-id)
+    }
     let cons = self.expect-expression().try
     let alt: ?ast/expr-id = if self.maybe-consume(:kw-else) is :some _ {
       :some(self.expect-expression().try)
     } else :none
-    let end-span = alt is {
+    let end-span = if alt is {
       :some a -> self.expr-span(a),
       :none -> self.expr-span(cons),
     }
     let span = if-keyword.span().thru(end-span)
-    :ok(.{ cond, cons, alt, span, is-static })
+    :ok(self.add-expr(:if-expr(.{ cond, cons, alt, span, is-static })))
   }
 
   fn expect-while-loop(self: *mut parser): result[ast/while-expr, perror] {
@@ -443,7 +439,7 @@ ns for parser {
     let parameter-names = list/empty[ast/ident-spanned]()
     if self.maybe-consume-no-ws(:open-paren) is :some _ {
       self.eat-delimited("params", parameter-names.&, :comma, :close-paren, fn(p: *mut parser) {
-        p.expect-ident() is {
+        if p.expect-ident() is {
           :ok it -> :ok(.{ name = it.name, span = it.tok.span() }),
           :err e -> :err(e),
         }
@@ -518,8 +514,7 @@ ns for parser {
       let sv = self.expect-struct-value(first).try
       :some(self.add-expr(:struct-value(sv)))
     } else if first.kind is :kw-if {
-      let if-expr = self.expect-if-expr(false).try
-      :some(self.add-expr(:if-expr(if-expr)))
+      :some(self.expect-if-expr(false).try)
     } else if first.kind is :open-bracket {
       self.advance()
       let elements = list/empty[ast/expr-id]()
@@ -540,8 +535,7 @@ ns for parser {
       } else if directive.kind is :kw-for {
         :some(self.expect-for-expr(true).try)
       } else if directive.kind is :kw-if {
-        let if-expr = self.expect-if-expr(true).try
-        :some(self.add-expr(:if-expr(if-expr)))
+        :some(self.expect-if-expr(true).try)
       } else {
         return :err(self.error-here("Unknown directive following #"))
       }

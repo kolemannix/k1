@@ -34,17 +34,17 @@ fn test() {
   if b is true*** { crash("b was true!") }
   assert(b.*.*.* == false)
 
-  b is {
+  if b is {
      true*** -> crash("b was true!"),
      false*** -> .{}
   }
 
-  b is {
+  if b is {
     null -> crash("b was null"),
     _ -> .{}
   }
 
-  b.as[ptr] is {
+  if b.as[ptr] is {
     null -> crash("b was null as ptr"),
     _ -> .{},
   }

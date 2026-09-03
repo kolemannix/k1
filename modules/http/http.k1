@@ -159,7 +159,7 @@ fn on-headers-complete(parser: *mut parser): i32 {
     content-length = state.content-length,
   }
 
-  (state.on-header-complete)(state.user-data, header) is {
+  if (state.on-header-complete)(state.user-data, header) is {
     :proceed -> 0,
     :reject -> llhttp/errno:HPE_PAUSED.value.signed(),
   }
@@ -227,7 +227,7 @@ fn tick(
     data   = bytes.buffer.data,
     len    = bytes.len().unsigned()
   )
-  result is {
+  if result is {
     :HPE_OK -> :ok,
     :HPE_PAUSED -> {
       let end = bytes.data-ptr().add-bytes(bytes.len())

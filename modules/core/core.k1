@@ -66,7 +66,7 @@ ns io {
   fn write-all(file-no: i32, data: ptr, count: size) {
     let written: size = 0
     while written < count {
-      let n = platform/io/write(
+      let n = if platform/io/write(
         file = .{ raw = file-no },
         data = data.add-bytes(written),
         count = count - written
@@ -131,13 +131,13 @@ ns files {
   }
 
   fn read-to-string-in[a: allocator](alloc: a, path: string): string {
-    let fd = platform/io/open-to-read(path) is {
+    let fd = if platform/io/open-to-read(path) is {
       :some(fd) -> fd,
       :none -> crash("open failed: `$path`")
     }
     defer platform/io/close(fd)
 
-    let file-size-bytes = platform/io/file-size(fd) is {
+    let file-size-bytes = if platform/io/file-size(fd) is {
       :some(n) -> n,
       :none -> crash("cannot size `$path`")
     }
@@ -145,7 +145,7 @@ ns files {
 
     let total: size = 0
     while total < buf.len() {
-      let n = platform/io/read(fd, buf.data-ptr().add-bytes(total), buf.len() - total).result() is {
+      let n = if platform/io/read(fd, buf.data-ptr().add-bytes(total), buf.len() - total).result() is {
         :ok(n) -> n,
         :err(_) -> crash("read failed: `$path`")
       }
@@ -157,7 +157,7 @@ ns files {
   }
 
   fn write-entire-file(out-path: string, contents: string) {
-    let fd = platform/io/open-to-write(out-path) is {
+    let fd = if platform/io/open-to-write(out-path) is {
       :some(fd) -> fd,
       :none -> crash("open for write failed: `$out-path`")
     }
@@ -165,7 +165,7 @@ ns files {
 
     let written: size = 0
     while written < contents.len() {
-      let n = platform/io/write(
+      let n = if platform/io/write(
         file = fd,
         data = contents.data-ptr().add-bytes(written),
         count = contents.len() - written
@@ -179,7 +179,7 @@ ns files {
   }
 
   fn exists(path: string): bool {
-    platform/io/open-to-read(path) is {
+    if platform/io/open-to-read(path) is {
       :some(fd) -> { platform/io/close(fd); true },
       :none -> false
     }
@@ -195,7 +195,7 @@ ns sys {
   // The k1 installation root: the K1_HOME env var when set (dev workflows point
   // it at a repo checkout), otherwise the installed location ~/.k1
   fn k1-home(): string {
-    env("K1_HOME") is {
+    if env("K1_HOME") is {
       :some h -> h,
       :none -> "${env("HOME").!}/.k1",
     }
@@ -390,13 +390,13 @@ impl[s, f: print] try[t = s, e = f] for result[s, f] {
 
   fn is-ok(self): bool { self is :ok _ }
   fn get-value(self): t  {
-    self is {
+    if self is {
       :ok s -> s,
       :err e -> crash("get-value() on :err: $e")
     }
   }
   fn get-error(self): e {
-    self is {
+    if self is {
       :ok _ -> crash("get-error() on :ok"),
       :err e -> e
     }
@@ -409,13 +409,13 @@ impl[s, f] try[t = s, e = f] for result[s, f] {
 
   fn is-ok(self): bool { self is :ok _ }
   fn get-value(self): t  {
-    self is {
+    if self is {
       :ok s -> s,
       :err e -> crash("get-value() on :err")
     }
   }
   fn get-error(self): e {
-    self is {
+    if self is {
       :ok _ -> crash("get-error() on :ok"),
       :err e -> e
     }

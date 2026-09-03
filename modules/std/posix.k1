@@ -10,10 +10,10 @@ ns posix {
   let O_RDONLY: c-int = 0x0000
   let O_WRONLY: c-int = 0x0001
   let O_RDWR  : c-int = 0x0002
-  let O_CREAT : c-int = k1/platform #is { :posix-macos -> 0x0200, :posix-linux or :wasi or :bare -> 0x40 }
-  let O_TRUNC : c-int = k1/platform #is { :posix-macos -> 0x0400, :posix-linux or :wasi or :bare -> 0x200 }
-  let O_SEARCH: c-int = k1/platform #is { :posix-macos -> 0x40100000, :posix-linux or :wasi or :bare -> 0x200000 }
-  let O_EXEC  : c-int = k1/platform #is { :posix-macos -> 0x40000000, :posix-linux or :wasi or :bare -> 0x200000 }
+  let O_CREAT : c-int = #if k1/platform is { :posix-macos -> 0x0200, :posix-linux or :wasi or :bare -> 0x40 }
+  let O_TRUNC : c-int = #if k1/platform is { :posix-macos -> 0x0400, :posix-linux or :wasi or :bare -> 0x200 }
+  let O_SEARCH: c-int = #if k1/platform is { :posix-macos -> 0x40100000, :posix-linux or :wasi or :bare -> 0x200000 }
+  let O_EXEC  : c-int = #if k1/platform is { :posix-macos -> 0x40000000, :posix-linux or :wasi or :bare -> 0x200000 }
   fn(extern("open")) open(path: ptr, oflag: c-int): c-int
   fn(extern("read")) read(file-no: c-int, buffer: ptr, count: c-sizet): i64
   fn(extern("write")) write(file-no: c-int, data: ptr, count: c-sizet): i64
@@ -28,7 +28,7 @@ ns posix {
   let MAP_PRIVATE: c-int = 0x0002
   let MAP_FIXED  : c-int = 0x0010
   // MAP_ANONYMOUS = 0x20 on Linux, but MAP_ANON = 0x1000 on macOS.
-  let MAP_ANON   : c-int = k1/platform #is { :posix-macos -> 0x1000, :posix-linux or :wasi or :bare -> 0x20 }
+  let MAP_ANON   : c-int = #if k1/platform is { :posix-macos -> 0x1000, :posix-linux or :wasi or :bare -> 0x20 }
 
   // Pages may not be accessed.
   let PROT_NONE: c-int = 0x0
@@ -71,7 +71,7 @@ ns posix {
   fn(extern("posix_spawn_file_actions_addclose")) posix_spawn_file_actions_addclose(file-actions: ptr, fd: c-int): c-int
 
   let RTLD_NOW: c-int = 0x2
-  let RTLD_LOCAL: c-int = k1/platform #is { :posix-macos -> 0x4, :posix-linux or :wasi or :bare -> 0 }
+  let RTLD_LOCAL: c-int = #if k1/platform is { :posix-macos -> 0x4, :posix-linux or :wasi or :bare -> 0 }
   fn(extern("dlopen")) dlopen(path: ptr, mode: c-int): ptr
   fn(extern("dlsym")) dlsym(handle: ptr, symbol: ptr): ptr
   fn(extern("dlerror")) dlerror(): ptr
@@ -85,7 +85,7 @@ ns posix {
   fn(extern("_NSGetEnviron")) _NSGetEnviron(): ptr
   let(extern) environ: ptr
   fn environ-ptr(): ptr {
-    k1/platform #is {
+    #if k1/platform is {
       :posix-macos -> _NSGetEnviron().ref[ptr].*,
       :posix-linux or :wasi or :bare -> environ
     }

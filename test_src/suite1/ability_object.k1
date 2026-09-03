@@ -114,7 +114,7 @@ fn comptime-dispatch() {
 fn optional-of-dyn() {
   let ones: *mut by-ones = mem/new(.{ current = 0 })
   let maybe: ?dyn[counter[t = int]] = :some ones.to-dyn()
-  let value = maybe is {
+  let value = if maybe is {
     :some c -> c.bump(),
     :none -> -1,
   }

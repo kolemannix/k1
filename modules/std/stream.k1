@@ -57,7 +57,7 @@ ns source {
   fn run-to[t, out, k](src: dyn[source[t = t]], into: *mut k): out where k: sink[t = t, out = out] {
     src.start(waker/noop())
     loop {
-      src.next() is {
+      if src.next() is {
         :chunk group -> for c in group { sink@(k)/receive(into, c) },
         :pending -> crash("run-to: source returned pending; drive async sources from an event loop"),
         :done -> break,

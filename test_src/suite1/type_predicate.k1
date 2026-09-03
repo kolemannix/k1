@@ -6,7 +6,7 @@ fn no-password[t](): bool {
 }
 
 fn is-scalar[t](): bool {
-  types/schema[t] is {
+  if types/schema[t] is {
     :int _ or :char or :bool or :ptr or :float _ or :enum _ -> true,
     _ -> false
   } 

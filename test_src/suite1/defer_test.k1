@@ -35,7 +35,7 @@ type action = either { accept, reject }
 // A block that yields a value runs its defers after the value is computed,
 // and still yields the value
 fn value-block-test(sensor: *mut int): action {
-  let r: action = 0 is {
+  let r: action = if 0 is {
     0 -> {
       defer { assert-equals(sensor.*, 1); inc(sensor) }
       inc(sensor)

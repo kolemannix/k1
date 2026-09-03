@@ -148,7 +148,7 @@ fn test() {
   assert-equals[?int](list-last, some(6))
 
   assert-equals[int](#static loop {
-    42 is {
+    if 42 is {
       _ -> break 100
     }
   }, 100)

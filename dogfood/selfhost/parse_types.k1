@@ -9,7 +9,7 @@ ns for parser {
       let text = self.tok-chars(first)
       if text.[1] == '\\' {
         let esc = text.[2]
-        lex/char-escape(esc) is {
+        if lex/char-escape(esc) is {
           :some out -> :ok(:some(self.add-expr(:literal(:char-lit(.{ value = out, span = first.span() }))))),
           :none -> :err(make-error("Invalid escaped char following escape sequence: ${esc.to-string()}", first)),
         }
@@ -85,7 +85,7 @@ ns for parser {
       let at-line-start = false
       let ws-count: u32 = 0
       for p in pending {
-        p is {
+        if p is {
           :part _ -> {
             if at-line-start {
               min-indent = :some(min-of(min-indent, ws-count))
@@ -137,7 +137,7 @@ ns for parser {
     let drop-first-newline = is-block
     let idx: size = 0
     for p in pending {
-      p is {
+      if p is {
         :part part -> {
           skip-ws = 0
           parts.push(part)
@@ -156,7 +156,7 @@ ns for parser {
                 return :err(make-error("String ended with '\\'", first))
               }
               let nx = text.[i + 1]
-              lex/shared-escape(nx) is {
+              if lex/shared-escape(nx) is {
                 :some out -> buf.push(out.as-char()),
                 :none -> {
                   if nx == delim {
@@ -345,7 +345,7 @@ ns for parser {
 
   fn expect-type-expression(self: *mut parser): result[ast/type-expr-id, perror] {
     let tok = self.peek()
-    self.parse-type-expression().try is {
+    if self.parse-type-expression().try is {
       :some id -> :ok(id),
       :none -> :err(make-error("Expected type expression", tok)),
     }
@@ -421,7 +421,7 @@ ns for parser {
       return :ok(:some(self.program.add-type-expr(:exec-static(.{ body-expr = body, span }))))
     }
     if self.parse-literal-atom().try is :some literal-id {
-      self.program.get-expr(literal-id).* is {
+      if self.program.get-expr(literal-id).* is {
         :literal l -> return :ok(:some(self.program.add-type-expr(:static-literal(l)))),
         _ -> return :err(make-error("This literal can't be used as a type", first)),
       }
@@ -557,7 +557,7 @@ ns for parser {
       require lit is :some lit-id else {
         return :err(make-error("Expected number after equals for member value", self.peek()))
       }
-      self.program.get-expr(lit-id).* is {
+      if self.program.get-expr(lit-id).* is {
         :literal(:numeric(num)) -> :some(num),
         _ -> return :err(make-error("Expected numeric literal after equals for member value", self.peek())),
       }

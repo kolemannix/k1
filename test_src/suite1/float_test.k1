@@ -95,7 +95,7 @@ fn test() {
   assert(1337.1 is 1337.1)
   assert(not 1337.1 is 1337.2)
 
-  42.0 is {
+  if 42.0 is {
     41.0 -> crash("should not equal"),
     42.0 -> .{},
     f -> crash("should not fall through")

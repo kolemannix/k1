@@ -212,7 +212,7 @@ fn cmd-new-game() {
 
 
 fn handle-command(context eng: engine)(command: uci/command): ?string {
-  command is {
+  if command is {
     :uci -> some(cmd-info()),
     :go s -> some(cmd-go(s)),
     :is-ready -> some(cmd-is-ready()),
@@ -250,7 +250,7 @@ fn run(_args: span[string]): result[i32, string] {
   loop {
     // TODO(dogfood): easy mapError before try
     let cmd = std/sys/read-line(2048).try
-    uci/parse-command(cmd) is {
+    if uci/parse-command(cmd) is {
       :err msg -> eprintln("[debug] $msg"),
       :ok cmd -> {
         let response = handle-command(cmd)

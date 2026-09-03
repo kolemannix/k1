@@ -172,7 +172,7 @@ ns watch {
 
   impl print for event-kind {
     fn print-to[w: writer](self, w) {
-      self is {
+      if self is {
         :modified -> w.write("modified"),
         :created -> w.write("created"),
         :deleted -> w.write("deleted"),
@@ -190,7 +190,7 @@ ns watch {
   type watcher = { fd: i32, entries: list[entry] }
 
   fn create(): result[watcher, string] {
-    k1/platform #is {
+    #if k1/platform is {
       :posix-macos -> kq/create(),
       :posix-linux -> inotify/create(),
       :wasi or :bare -> crash("watch is not available on this platform"),
@@ -200,7 +200,7 @@ ns watch {
   ns for watcher {
 
     fn add(self: *mut watcher, path: string): result[empty, string] {
-      k1/platform #is {
+      #if k1/platform is {
         :posix-macos -> kq/add(self, path),
         :posix-linux -> inotify/add(self, path),
         :wasi or :bare -> crash("watch is not available on this platform"),
@@ -210,7 +210,7 @@ ns watch {
     // Blocks until at least one watched path changes. Spurious extra events
     // are normal; callers that care should compare content, not counts.
     fn wait(self: *mut watcher): result[list[event], string] {
-      k1/platform #is {
+      #if k1/platform is {
         :posix-macos -> kq/wait(self),
         :posix-linux -> inotify/wait(self),
         :wasi or :bare -> crash("watch is not available on this platform"),
@@ -218,7 +218,7 @@ ns watch {
     }
 
     fn close(self: *mut watcher) {
-      k1/platform #is {
+      #if k1/platform is {
         :posix-macos -> kq/close(self),
         :posix-linux -> inotify/close(self),
         :wasi or :bare -> crash("watch is not available on this platform"),

@@ -76,7 +76,7 @@ ns mem {
   }
   fn arena-stack-len(): size { arena-stack.len() }
   fn current-arena(): *arena {
-    arena-stack.last() is {
+    if arena-stack.last() is {
       :some a -> a.ref[arena],
       :none -> tmp()
     }

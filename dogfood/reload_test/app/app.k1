@@ -1,17 +1,17 @@
 // The reloadable app half of the reload_test
 fn main(): i32 {
   loop {
-    let line = std/sys/read-line(256) is {
+    let line = if std/sys/read-line(256) is {
       :ok l -> l,
       :err _ -> break,
     }
     if line == "load" {
-      scene/load() is {
+      if scene/load() is {
         :ok -> println("load ok"),
         :err e -> println("load err: ${e}"),
       }
     } else if line == "watch" {
-      scene/watch() is {
+      if scene/watch() is {
         :ok -> println("watch ok"),
         :err e -> println("watch err: ${e}"),
       }

@@ -7,14 +7,14 @@ ns recursive_generics {
   }
 
   fn sum(n0: ?*node[int]): int {
-    n0 is {
+    if n0 is {
       :none -> 0,
       :some n -> n.value + sum(n.next)
     }
   }
 
   fn length[t](n0: ?*node[t]): int {
-    n0 is {
+    if n0 is {
       :none -> 0,
       :some n -> 1 + length[t](n.next)
     }
@@ -23,7 +23,7 @@ ns recursive_generics {
   type tree[t] = either { leaf(t), branch({ l: *tree[t], r: *tree[t] }) }
 
   fn tree-sum(tr: tree[int]): int {
-    tr is {
+    if tr is {
       :leaf v -> v,
       :branch b -> tree-sum(b.l.*) + tree-sum(b.r.*)
     }

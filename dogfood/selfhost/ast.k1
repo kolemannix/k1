@@ -69,7 +69,7 @@ type literal = either {
 
 ns for literal {
   fn get-span(self: literal): src-span {
-    self is {
+    if self is {
       :char-lit c -> c.span,
       :numeric n -> n.span,
       :bool-lit b -> b.span,
@@ -92,7 +92,7 @@ type binary-op-kind = either(u8) {
 
 ns for binary-op-kind {
   fn repr(self: binary-op-kind): string {
-    self is {
+    if self is {
       :add -> "+", :subtract -> "-", :multiply -> "*", :divide -> "/", :rem -> "%",
       :less -> "<", :less-equal -> "<=", :greater -> ">", :greater-equal -> ">=",
       :bool-and -> "and", :bool-or -> "or",
@@ -103,7 +103,7 @@ ns for binary-op-kind {
   }
 
   fn precedence(self: binary-op-kind): u32 {
-    self is {
+    if self is {
       :pipe -> 104,
       :multiply or :divide or :rem -> 100,
       :add or :subtract -> 90,
@@ -265,7 +265,7 @@ type expr = either {
 
 ns for expr {
   fn get-span(self: *expr): src-span {
-    self.* is {
+    if self.* is {
       :bin-op op -> op.span,
       :un-op op -> op.span,
       :literal l -> l.get-span(),
@@ -353,7 +353,7 @@ type type-expr = either {
 
 ns for type-expr {
   fn get-span(self: *type-expr): src-span {
-    self.* is {
+    if self.* is {
       :builtin-type s -> s,
       :struct-type s -> s.span,
       :type-application a -> a.span,
@@ -654,7 +654,7 @@ ns for program {
   }
 
   fn get-pattern-span(self: *program, id: pattern-id): src-span {
-    self.patterns.[id.widen[size]] is {
+    if self.patterns.[id.widen[size]] is {
       :literal e -> self.get-expr-span(e),
       :variable v -> v.span,
       :struct-pat s -> s.span,
@@ -666,7 +666,7 @@ ns for program {
   }
 
   fn get-stmt-span(self: *program, id: stmt-id): src-span {
-    self.stmts.[id.widen[size]] is {
+    if self.stmts.[id.widen[size]] is {
       :use-stmt u -> self.uses.[u.widen[size]].span,
       :let-stmt l -> l.span,
       :require-stmt r -> r.span,
@@ -677,7 +677,7 @@ ns for program {
   }
 
   fn get-defn-span(self: *program, d: defn-id): src-span {
-    d is {
+    if d is {
       :use-defn id -> self.uses.[id.widen[size]].span,
       :function id -> self.functions.[id.widen[size]].name-span,
       :macro-defn id -> self.macros.[id.widen[size]].name-span,
@@ -692,11 +692,11 @@ ns for program {
 
   fn set-expr-span(self: *mut program, id: expr-id, new-span: src-span) {
     let e = self.exprs.[id.widen[size]].&
-    e is {
+    if e is {
       :bin-op(op)* -> { op.span = new-span },
       :un-op(op)* -> { op.span = new-span },
       :literal(l)* -> {
-        l is {
+        if l is {
           :char-lit(c)* -> { c.span = new-span },
           :numeric(n)* -> { n.span = new-span },
           :bool-lit(b)* -> { b.span = new-span },
@@ -751,7 +751,7 @@ ns for program {
   }
 
   fn print-error(self: *program, e: parse-error) {
-    let where-str = self.line-for-offset(e.span.start) is {
+    let where-str = if self.line-for-offset(e.span.start) is {
       :some line -> "${self.file-name}:${line.index + 1}:${e.span.start - line.start + 1}",
       :none -> "${self.file-name}:?",
     }

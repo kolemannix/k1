@@ -26,7 +26,7 @@ impl source[t = u8] for sse-encoder {
   fn start(self: *mut sse-encoder, waker: waker) { self.upstream.start(waker) }
   fn stop(self: *mut sse-encoder) { self.upstream.stop() }
   fn next(self: *mut sse-encoder): pull[u8] {
-    self.upstream.next() is {
+    if self.upstream.next() is {
       :chunk group -> {
         self.parts.clear()
         self.parts.push("event: ".span-bytes())

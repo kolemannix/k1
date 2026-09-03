@@ -122,7 +122,7 @@ ns types {
   type int-kind = int-value.tag-enum
   ns for int-kind {
     fn bit-width(self: int-kind): size {
-      self is {
+      if self is {
         :u8  -> 8,
         :u16 -> 16,
         :u32 -> 32,
@@ -763,11 +763,11 @@ ns k1 {
   let platform: platform = builtin
   // The platform the compiler runs on; static execution happens there, not on `platform`
   let host-platform: platform = builtin
-  let platform-macos: bool = platform #is { :posix-macos -> true, :posix-linux or :wasi or :bare -> false }
-  let platform-linux: bool = platform #is { :posix-linux -> true, :posix-macos or :wasi or :bare -> false }
-  let platform-wasi: bool = platform #is { :wasi -> true, :posix-linux or :posix-macos or :bare -> false }
-  let platform-bare: bool = platform #is { :bare -> true, :posix-linux or :posix-macos or :wasi -> false }
-  let platform-posix: bool = platform #is { :posix-linux or :posix-macos -> true, :wasi or :bare -> false }
+  let platform-macos: bool = #if platform is { :posix-macos -> true, :posix-linux or :wasi or :bare -> false }
+  let platform-linux: bool = #if platform is { :posix-linux -> true, :posix-macos or :wasi or :bare -> false }
+  let platform-wasi: bool = #if platform is { :wasi -> true, :posix-linux or :posix-macos or :bare -> false }
+  let platform-bare: bool = #if platform is { :bare -> true, :posix-linux or :posix-macos or :wasi -> false }
+  let platform-posix: bool = #if platform is { :posix-linux or :posix-macos -> true, :wasi or :bare -> false }
 
   // The widest SIMD register the target supports;
   let simd-bytes: size = builtin
@@ -1064,7 +1064,7 @@ fn assertdbg(context locn: k1/source-location)(value: bool) {
 }
 
 fn print-backtrace() {
-  k1/platform #is {
+  #if k1/platform is {
     :posix-macos or :posix-linux -> k1rt/_k1_print_backtrace(frame_count = 128),
     :wasi or :bare -> println("non-posix backtrace TODO")
   }

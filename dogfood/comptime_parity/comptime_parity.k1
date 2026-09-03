@@ -141,7 +141,7 @@ ns work {
   }
 
   fn tree-sum(n: *node): int {
-    n.* is { :leaf(v) -> v, :pair(pair) -> tree-sum(pair.l) + tree-sum(pair.r) }
+    if n.* is { :leaf(v) -> v, :pair(pair) -> tree-sum(pair.l) + tree-sum(pair.r) }
   }
 
   fn fib(n: int): int { if n < 2 n else fib(n - 1) + fib(n - 2) }

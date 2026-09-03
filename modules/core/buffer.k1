@@ -52,7 +52,7 @@ ns for buffer {
   }
 
   fn fill[t](self: buffer[t], value: t): empty {
-    value is {
+    if value is {
       type[u8](byte) -> {
         self.memset(byte)
       },
@@ -264,7 +264,7 @@ ns for buffer {
   }
 
   fn position[t: equals](self: buffer[t], needle: t): ?size {
-    needle is {
+    if needle is {
       type[u8](byte) -> position-byte(self.data-ptr(), self.len, byte),
       type[char](c) -> position-byte(self.data-ptr(), self.len, c.as-u8()),
       _ -> {
@@ -279,7 +279,7 @@ ns for buffer {
   }
 
   fn index-of-buffer[t: equals](self: buffer[t], needle: buffer[t]): ?size {
-    mem/zeroed[t]() is {
+    if mem/zeroed[t]() is {
       type[u8](_byte) -> index-of-bytes(self.data-ptr(), self.len, needle.data-ptr(), needle.len),
       type[char](_c) -> index-of-bytes(self.data-ptr(), self.len, needle.data-ptr(), needle.len),
       _ -> {
@@ -346,7 +346,7 @@ ns for buffer {
   }
 
   fn first[t](self: buffer[t]): ?t {
-    self.first-ref() is {
+    if self.first-ref() is {
       :none -> :none,
       :some first-ref -> :some first-ref.*
     }
@@ -361,7 +361,7 @@ ns for buffer {
   }
 
   fn last[t](self: buffer[t]): ?t {
-    self.last-ref() is {
+    if self.last-ref() is {
       :none -> :none,
       :some last-ref -> :some last-ref.*
     }

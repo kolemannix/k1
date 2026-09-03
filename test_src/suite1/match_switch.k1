@@ -3,7 +3,7 @@ ns match_switch
 type color = either { red, orange, yellow, green, blue, indigo, violet, black, white, gray }
 
 fn color-rank(c: color): int {
-  c is {
+  if c is {
     :red -> 0, :orange -> 1, :yellow -> 2, :green -> 3, :blue -> 4,
     :indigo -> 5, :violet -> 6, :black -> 7, :white -> 8, :gray -> 9
   }
@@ -12,7 +12,7 @@ fn color-rank(c: color): int {
 type shape = either { dot, circle(int), rect({ w: int, h: int }), label(string) }
 
 fn area(s: shape): int {
-  s is {
+  if s is {
     :dot -> 0,
     :circle r if r > 100 -> -1,
     :circle r -> r * r * 3,
@@ -24,7 +24,7 @@ fn area(s: shape): int {
 }
 
 fn between(n: int, flag: bool): int {
-  n is {
+  if n is {
     1 if flag -> 11,
     1 -> 10,
     x if x > 50 -> 500,
@@ -35,28 +35,28 @@ fn between(n: int, flag: bool): int {
 }
 
 fn sparse(n: i64): int {
-  n is { 1 -> 1, 100 -> 2, 100000 -> 3, -1 -> 4, -100000000000 -> 5, _ -> 0 }
+  if n is { 1 -> 1, 100 -> 2, 100000 -> 3, -1 -> 4, -100000000000 -> 5, _ -> 0 }
 }
 
 fn small(n: i8): int {
-  n is { -1 -> 1, -128 -> 2, 127 -> 3, 0 -> 4, _ -> 0 }
+  if n is { -1 -> 1, -128 -> 2, 127 -> 3, 0 -> 4, _ -> 0 }
 }
 
 fn char-class(c: char): int {
-  c is { 'a' -> 1, 'b' -> 2, 'z' -> 26, ' ' -> 100, _ -> 0 }
+  if c is { 'a' -> 1, 'b' -> 2, 'z' -> 26, ' ' -> 100, _ -> 0 }
 }
 
 fn flip(b: bool): bool {
-  b is { true -> false, false -> true }
+  if b is { true -> false, false -> true }
 }
 
 type tagged = either(u16) { a = 1000, b = 2000, c(int) = 30000 }
 fn tagged-rank(t: tagged): int {
-  t is { :a -> 1, :b -> 2, :c n -> n }
+  if t is { :a -> 1, :b -> 2, :c n -> n }
 }
 
 fn ref-match(s: *shape): int {
-  s is { :dot* -> 0, :circle r* -> r.*, _ -> -1 }
+  if s is { :dot* -> 0, :circle r* -> r.*, _ -> -1 }
 }
 
 fn test() {

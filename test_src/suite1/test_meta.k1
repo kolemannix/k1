@@ -55,7 +55,7 @@ fn _write-json-from-schema(code: *mut string-builder, name: string, type-id: typ
     code.writeln("w.write-char(']');")
     return
   }
-  type-id.schema() is {
+  if type-id.schema() is {
     :struct s -> {
       code.writeln("w.write-char('{');")
       for f in s.fields {

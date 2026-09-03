@@ -1,7 +1,7 @@
 ns match_exhaust
 
 fn match-bool(b: bool): string {
-  b is {
+  if b is {
     false -> identity("false"),
     true -> identity("true")
   }
@@ -24,7 +24,7 @@ type wide-state = {
 }
 
 fn recursive-shape(t: recursive-tree): int {
-  t is {
+  if t is {
     :leaf -> 0,
     :node(:leaf*) -> 1,
     :node(:node(_)*) -> 2
@@ -32,7 +32,7 @@ fn recursive-shape(t: recursive-tree): int {
 }
 
 fn recursive-generic-shape[t](value: recursive-generic[t]): int {
-  value is {
+  if value is {
     :end -> 0,
     :next(.{ rest = :end* }) -> 1,
     :next(.{ rest = :next(_)* }) -> 2
@@ -40,7 +40,7 @@ fn recursive-generic-shape[t](value: recursive-generic[t]): int {
 }
 
 fn mutual-shape(value: mutual-a): int {
-  value is {
+  if value is {
     :end -> 0,
     :next(:stop*) -> 1,
     :next(:next(_)*) -> 2
@@ -48,13 +48,13 @@ fn mutual-shape(value: mutual-a): int {
 }
 
 fn match-wide-state(s: wide-state): bool {
-  s is {
+  if s is {
     .{} -> true
   }
 }
 
 fn match-tristate-opt(t: ?tri-state): string {
-  t is {
+  if t is {
     :some :yes -> "yes",
     :some :no -> "no",
     :some :failure s -> "failure: ${s.reason}",
@@ -63,7 +63,7 @@ fn match-tristate-opt(t: ?tri-state): string {
 }
 
 fn failed-with-baz(t: tri-state): bool {
-  t is {
+  if t is {
     :yes -> false,
     :no -> false,
     :failure s -> s.reason == "baz"
@@ -71,7 +71,7 @@ fn failed-with-baz(t: tri-state): bool {
 }
 
 fn match-opt-bool(b: ?bool): string {
-  b is {
+  if b is {
     :none -> identity("None"),
     :some false -> identity("false"),
     :some true -> identity("true")
@@ -79,7 +79,7 @@ fn match-opt-bool(b: ?bool): string {
 }
 
 fn both-true(bb: { a: bool, b: bool }): bool {
-  bb is {
+  if bb is {
     .{ a = false, b = false } -> false,
     .{ a = false, b = true } -> false,
     .{ a = true, b = false } -> false,
@@ -88,7 +88,7 @@ fn both-true(bb: { a: bool, b: bool }): bool {
 }
 
 fn main(): i32 {
-  'x' is {
+  if 'x' is {
     'x' -> .{},
     a -> .{}
   }
@@ -136,7 +136,7 @@ fn main(): i32 {
     m = false, n = false, o = false, p = false
   }))
 
-  some(42) is {
+  if some(42) is {
     :some x if x == 42 -> .{},
     _ -> assert(false),
   }
@@ -147,7 +147,7 @@ fn main(): i32 {
   require foo is :ok i
 
   assert-equals(i, 42)
-  foo is {
+  if foo is {
     :ok i -> assert-equals(i, 42),
   }
 

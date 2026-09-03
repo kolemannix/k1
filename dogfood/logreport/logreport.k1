@@ -63,7 +63,7 @@ ns log {
     let rejects = list/empty[string]()
     for line in text.split-by-char('\n') {
       if line.len() == 0 { continue }
-      parse-line(line) is {
+      if parse-line(line) is {
         :ok e -> entries.push(e),
         :err why -> rejects.push("${line.take(24)}: $why")
       }

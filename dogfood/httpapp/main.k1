@@ -222,7 +222,7 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
   if nread < 0 {
     let raw-errno = nread.trunc[i32]
     let uv-errno = uv/errno/from-i32(raw-errno)
-    uv-errno is {
+    if uv-errno is {
       :UV_EOF or :UV_ECONNRESET -> {
         tprintln("client reached EOF")
         if connection.current-work is :none {
@@ -242,7 +242,7 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
 
   if nread > 0 {
     let chunk-bytes = span/wrap-raw[byte](buf.base.as[ptr], nread)
-    http/tick(connection.request-parser.&, chunk-bytes) is {
+    if http/tick(connection.request-parser.&, chunk-bytes) is {
       :ok -> .{},
       :paused leftover -> {
         if leftover > 0 {

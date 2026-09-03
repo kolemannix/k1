@@ -440,7 +440,7 @@ fn expand-toks(ctx: *mut expand-ctx, toks: span[token], self: span[token], self-
   while i < toks.len() {
     if e.syms.len() >= MAX-EXPAND { return }
     let t = toks.[i]
-    t is {
+    if t is {
       :sym(s) -> {
         assert(s.widen[size] < ctx.nsyms)
         let v = ((s.widen[size] + ctx.shift) % ctx.nsyms).trunc[u8]
@@ -1259,7 +1259,7 @@ fn tap(context g: *mut game)(mx: i32, my: i32) {
   }
   for c in build-palette() {
     if in-rect(mx, my, c.x, c.y, CHIP-W, CHIP-H) {
-      c.act is {
+      if c.act is {
         :tok(t) -> try-add(t),
         :scale(n) -> scale-row(n),
         :fold -> fold-row(),
@@ -1299,7 +1299,7 @@ ns(reload) view {
   }
 
   fn draw-token-glyph(world: world-kind, t: token, cx: i32, cy: i32, r: f32, sz: i32) {
-    t is {
+    if t is {
       :sym(s) -> {
         if world is :plant {
           let alpha = world-alphabet(world)
@@ -1405,7 +1405,7 @@ ns(reload) view {
       rl/draw-rectangle-lines(c.x, c.y, CHIP-W, CHIP-H, C_BORDER)
       let cx = c.x + CHIP-W / 2
       let cy = c.y + CHIP-H / 2
-      c.act is {
+      if c.act is {
         :tok(t) -> draw-token-glyph(lv.world, t, cx, cy, 13.0, 26),
         :scale(n) -> text-center("x${n}", cx, cy - 11, 22, C_TEXT-MAIN),
         :fold -> text-center("fold", cx, cy - 8, 16, if armed C_WARN else C_TEXT-DIM),
@@ -1928,7 +1928,7 @@ fn self-test(context g: *mut game)() {
   }
   load-level(0)
   for c in build-palette() {
-    c.act is {
+    if c.act is {
       :tok(t) -> try-add(t),
       :scale(n) -> scale-row(n),
       :fold -> fold-row(),
