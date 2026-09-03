@@ -11,14 +11,14 @@ use crate::kmem::{self, MStr, Mem};
 use crate::lex::SpanId;
 use crate::parse::{IdentPool, StringId, write_source_location};
 use crate::typer::{
-    FunctionId, K1Message, LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId, TypedProgram,
+    K1Message, LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId, TypedProgram,
 };
 use crate::{SV8, kpath, typer};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
 use log::{error, info};
 
-use crate::codegen_llvm::{Cg, CgError, CgUnit};
+use crate::codegen_llvm::{self, Cg, CgError, CgKind, CodegenRoots, Pipeline, UnitOutput};
 
 use std::path::PathBuf;
 
@@ -1788,11 +1788,6 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
     if args.command.is_test() {
         module_name.push_str("_test");
     };
-    let out_dir = k1.config.out_dir;
-    let out_dir_str = k1.ast.idents.get_string(out_dir).to_string();
-    // Under --filc, Fil-C's clang runs the whole optimization pipeline
-    let optimize_ir = args.optimize && !k1.config.filc;
-
     let roots = match Cg::prepare_host(k1) {
         Ok(roots) => roots,
         Err(e) => anyhow::bail!(report_codegen_error(k1, e)),
@@ -1804,67 +1799,21 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
             roots.reachable.len()
         );
     }
-
+    let k1: &TypedProgram = k1;
     let is_host_native = detect_host_target() == Some(k1.config.target);
     let object_is_artifact = !k1.program_settings.executable && !is_host_native
         || k1.config.target.platform() == Platform::Bare;
-    let single_object =
-        k1.config.filc || args.emit_llvm || object_is_artifact || !reload_nss.is_empty();
-    let max_units = if single_object {
-        1
-    } else {
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
-    };
-    let mut plans = Cg::plan_units(k1, &roots.reachable, max_units);
-
-    let k1: &TypedProgram = k1;
-    let mut objects: Vec<String> = vec![];
-    if plans.len() == 1 {
-        let mut codegen =
-            Cg::create(ctx, k1, args.debug, args.optimize, CgUnit::Host(plans.pop().unwrap()));
-        if let Err(e) = codegen.codegen_program(&roots) {
-            anyhow::bail!(report_codegen_error(k1, cg_error_to_message(k1, e)));
-        }
-        if args.chatty {
-            eprintln!("codegen took {}ms", codegen_start.elapsed().as_millis());
-        }
-        codegen.finalize_debug_info();
-        if let Err(e) = codegen.verify() {
-            anyhow::bail!(report_codegen_error(k1, cg_error_to_message(k1, e)));
-        }
-        codegen.run_passes(optimize_ir);
-        if k1.config.filc {
-            let llvm_text = codegen.emit_llvm_ir_text_filc();
-            let ll_path = format!("{out_dir_str}/{module_name}.ll");
-            std::fs::write(Path::new(&ll_path), llvm_text)
-                .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
-            objects.push(ll_path);
-        } else {
-            if args.emit_llvm {
-                let ll_path = format!("{out_dir_str}/{module_name}.ll");
-                std::fs::write(Path::new(&ll_path), codegen.emit_llvm_ir_text())
-                    .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
-            }
-            let path = format!("{out_dir_str}/{module_name}.o");
-            if let Err(e) = codegen.emit_object_file(&path) {
-                anyhow::bail!(report_codegen_error(k1, cg_error_to_message(k1, e)));
-            }
-            objects.push(path);
-        }
-    } else {
-        let unit_count = plans.len();
-        match Cg::codegen_units_parallel(k1, &roots, plans, args.debug, optimize_ir, |i| {
-            format!("{out_dir_str}/{module_name}.{i}.o")
-        }) {
-            Ok(paths) => objects = paths,
-            Err(e) => anyhow::bail!(report_codegen_error(k1, cg_error_to_message(k1, e))),
-        }
-        if args.chatty {
-            eprintln!(
-                "codegen + emit of {unit_count} units took {}ms",
-                codegen_start.elapsed().as_millis()
-            );
-        }
+    let objects = write_unit_artifacts(
+        args,
+        ctx,
+        k1,
+        &roots,
+        CgKind::Host,
+        &module_name,
+        object_is_artifact,
+    )?;
+    if args.chatty {
+        eprintln!("codegen took {}ms", codegen_start.elapsed().as_millis());
     }
 
     if k1.program_settings.executable {
@@ -1884,18 +1833,100 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
             link_options.push(export_flag.to_string());
         }
         write_linked_output(k1, &module_name, &objects, &link_options, LinkOutputKind::Executable)?;
-    } else {
-        // A cross-built library can't be linked with host tools; the emitted
-        // object itself is the artifact (non-exported symbols are already
-        // internal, so it needs no localization pass)
-        if is_host_native {
-            write_library_export_files(k1, &module_name)?;
-            write_linked_output(k1, &module_name, &objects, &[], LinkOutputKind::Dylib)?;
-            write_library_archive(k1, &module_name, &objects)?;
-        }
+    } else if is_host_native {
+        write_library_export_files(k1, &module_name)?;
+        write_linked_output(k1, &module_name, &objects, &[], LinkOutputKind::Dylib)?;
+        write_library_archive(k1, &module_name, &objects)?;
     }
 
     Ok(())
+}
+
+fn write_unit_artifacts(
+    args: &Args,
+    ctx: &Context,
+    k1: &TypedProgram,
+    roots: &CodegenRoots,
+    kind: CgKind,
+    module_name: &str,
+    object_is_artifact: bool,
+) -> Result<Vec<String>> {
+    const MAX_UNITS: usize = 32;
+    let out_dir = k1.ast.idents.get_string(k1.config.out_dir).to_string();
+    let plans = Cg::plan_units(k1, &roots.reachable, MAX_UNITS);
+    let unit_count = plans.len();
+    // Under --filc, Fil-C's clang runs the whole optimization pipeline
+    let optimize_ir = args.optimize && !k1.config.filc;
+    let pipeline = if optimize_ir {
+        Pipeline::O3
+    } else if args.debug {
+        Pipeline::None
+    } else {
+        Pipeline::Dev
+    };
+    let single_file = k1.config.filc || args.emit_llvm || object_is_artifact;
+    let object_path = |i: usize| format!("{out_dir}/{module_name}.{i}.o");
+    let report = |e: CgError| report_codegen_error(k1, cg_error_to_message(k1, e));
+
+    if single_file {
+        let artifacts = Cg::codegen_units(
+            k1,
+            roots,
+            plans,
+            kind,
+            args.debug,
+            UnitOutput::Bitcode(Pipeline::None),
+            object_path,
+        )
+        .map_err(report)?;
+        let merged = Cg::merge_units(ctx, module_name, &artifacts).map_err(report)?;
+        let machine = Cg::make_target_machine(args.optimize, k1.config.target);
+        codegen_llvm::run_passes(&merged, &machine, pipeline);
+        if k1.config.filc {
+            let ll_path = format!("{out_dir}/{module_name}.ll");
+            std::fs::write(Path::new(&ll_path), codegen_llvm::llvm_ir_text_filc(&merged))
+                .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
+            return Ok(vec![ll_path]);
+        }
+        if args.emit_llvm {
+            let ll_path = format!("{out_dir}/{module_name}.ll");
+            std::fs::write(Path::new(&ll_path), merged.print_to_string().to_string())
+                .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
+        }
+        let path = format!("{out_dir}/{module_name}.o");
+        codegen_llvm::emit_object(&merged, &machine, &path).map_err(report)?;
+        return Ok(vec![path]);
+    }
+
+    let mut paths: Vec<String> = Vec::with_capacity(unit_count);
+    for i in 0..unit_count {
+        paths.push(object_path(i));
+    }
+    if optimize_ir {
+        let artifacts = Cg::codegen_units(
+            k1,
+            roots,
+            plans,
+            kind,
+            args.debug,
+            UnitOutput::Bitcode(Pipeline::ThinLtoPreLink),
+            object_path,
+        )
+        .map_err(report)?;
+        Cg::thinlto_codegen(k1, &artifacts, &paths).map_err(report)?;
+        return Ok(paths);
+    }
+    Cg::codegen_units(
+        k1,
+        roots,
+        plans,
+        kind,
+        args.debug,
+        UnitOutput::Object(pipeline),
+        object_path,
+    )
+    .map_err(report)?;
+    Ok(paths)
 }
 
 /// Codegens and links one reloadable ns's dylib:
@@ -1910,54 +1941,19 @@ fn write_reload_dylib(
     let ns_name = k1.ident_str(k1.namespaces.get(ns_id).name).to_string();
     let module_name = k1.program_name().to_string();
     let platform = k1.config.target.platform();
-    let out_dir = k1.config.out_dir;
-
-    let mut roots: Vec<FunctionId> = vec![];
-    for (function_id, function) in k1.function_iter() {
-        if function.is_reloadable() && function.namespace_id == ns_id {
-            roots.push(function_id);
-        }
-    }
-    if let Err(e) = Cg::prepare_ir(k1, &roots) {
-        anyhow::bail!(report_codegen_error(k1, e));
-    }
-    let k1: &TypedProgram = k1;
-    let mut cg = Cg::create(ctx, k1, args.debug, args.optimize, CgUnit::ReloadDylib(ns_id));
-    if let Err(e) = cg.codegen_reload_dylib() {
-        anyhow::bail!(report_codegen_error(k1, cg_error_to_message(k1, e)));
-    }
-    let optimize_ir = args.optimize && !k1.config.filc;
-    cg.finalize_debug_info();
-    if let Err(e) = cg.verify() {
-        anyhow::bail!(report_codegen_error(k1, cg_error_to_message(k1, e)));
-    }
-    cg.run_passes(optimize_ir);
-
-    let idents = &cg.k1.ast.idents;
     let unit_name = format!("{module_name}.{ns_name}");
-    if args.emit_llvm {
-        let ll_path = kpath::join_tmp(
-            cg.k1.get_tmp_unsafe(),
-            idents,
-            out_dir,
-            format_args!("{unit_name}.ll"),
-        );
-        std::fs::write(Path::new(ll_path.as_str()), cg.emit_llvm_ir_text())
-            .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
-    }
-    let obj_path =
-        kpath::join_tmp(cg.k1.get_tmp_unsafe(), idents, out_dir, format_args!("{unit_name}.o"));
-    if let Err(e) = cg.emit_object_file(obj_path.as_str()) {
-        anyhow::bail!(report_codegen_error(k1, cg_error_to_message(k1, e)));
-    }
 
+    let roots = match Cg::prepare_dylib(k1, ns_id) {
+        Ok(roots) => roots,
+        Err(e) => anyhow::bail!(report_codegen_error(k1, e)),
+    };
+    let k1: &TypedProgram = k1;
+    let objects =
+        write_unit_artifacts(args, ctx, k1, &roots, CgKind::ReloadDylib(ns_id), &unit_name, false)?;
+
+    let out_dir = k1.ast.idents.get_string(k1.config.out_dir);
     let dylib_ext = platform.dylib_ext();
-    let dylib_path = kpath::join_tmp(
-        cg.k1.get_tmp_unsafe(),
-        idents,
-        out_dir,
-        format_args!("{unit_name}.{dylib_ext}"),
-    );
+    let dylib_path = format!("{out_dir}/{unit_name}.{dylib_ext}");
     let mut link_cmd = std::process::Command::new("cc");
     match platform {
         Platform::PosixMacos => {
@@ -1972,7 +1968,7 @@ fn write_reload_dylib(
     }
     // A running app watches this path; link to the side and rename into place so
     let staged_path = format!("{dylib_path}.staged");
-    link_cmd.arg(obj_path.as_str());
+    link_cmd.args(&objects);
     link_cmd.arg("-o");
     link_cmd.arg(&staged_path);
     log::debug!("Reload dylib link command: {:?}", link_cmd);
@@ -1980,7 +1976,7 @@ fn write_reload_dylib(
         let _ = std::fs::remove_file(&staged_path);
         bail!("linking reload dylib {dylib_path} failed");
     }
-    std::fs::rename(&staged_path, dylib_path.as_str())
+    std::fs::rename(&staged_path, &dylib_path)
         .map_err(|e| anyhow::anyhow!("Failed to publish reload dylib {dylib_path}: {e}"))?;
     if args.chatty {
         eprintln!("reload dylib {unit_name} took {}ms", dylib_start.elapsed().as_millis());

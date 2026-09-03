@@ -344,6 +344,7 @@ fn resolve_lowered_value(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::V
         }
         ir::Value::FnParam { index, .. } => FRAME_HEADER_WORDS + index,
         ir::Value::Data32 { t, data } => k1.bc.intern_const(const_of_data32(t, data)),
+        ir::Value::IsStatic => k1.bc.intern_const(1),
         ir::Value::StaticValue { id, .. } => {
             // Memoized; materializes into the shared k1.vm_static_stack, so
             // the address is stable and valid across every VM.
