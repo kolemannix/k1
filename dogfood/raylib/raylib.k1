@@ -5,6 +5,8 @@
 //   3. press R in the window
 // The orbs and clock survive the swap. Click to spawn an orb.
 
+use std/math/trig
+
 ns build {
   fn module(): k1/module {
 
@@ -42,11 +44,6 @@ ns(lib("raylib")) raylib {
   fn(extern("GetMouseY")) get-mouse-y(): i32
 }
 
-ns libm {
-  fn(extern("sinf")) sin(x: f32): f32
-  fn(extern("cosf")) cos(x: f32): f32
-}
-
 let KEY-R: i32 = 82
 let MOUSE-LEFT: i32 = 0
 
@@ -82,14 +79,14 @@ ns(reload) scene {
       let sats = 9
       for k in 0.until(sats) {
         let phase = age * 1.5 + k.as[f32] * (6.2832 / sats.as[f32])
-        let dist: f32 = 44.0 + 10.0 * libm/sin(age * 2.0 + k.as[f32])
-        let sx = o.x + (dist * libm/cos(phase)).as[i32]
-        let sy = o.y + (dist * libm/sin(phase)).as[i32]
+        let dist: f32 = 44.0 + 10.0 * (age * 2.0 + k.as[f32]).sin()
+        let sx = o.x + (dist * phase.cos()).as[i32]
+        let sy = o.y + (dist * phase.sin()).as[i32]
         draw-line(o.x, o.y, sx, sy, FAINT)
         draw-circle(sx, sy, 5.0, color)
       }
 
-      let pulse: f32 = 16.0 + 5.0 * libm/sin(age * 3.0)
+      let pulse: f32 = 16.0 + 5.0 * (age * 3.0).sin()
       draw-circle(o.x, o.y, pulse, color)
     }
 

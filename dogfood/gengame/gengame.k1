@@ -20,6 +20,8 @@
 // Algebra: each level proves or discovers an identity or rule, you can only use it
 //          once discovered
 
+use std/math/trig
+
 ns build {
   fn module(): k1/module {
     let m = k1/module/new()
@@ -59,11 +61,6 @@ ns(lib("raylib")) rl {
   fn(extern("IsMouseButtonPressed")) is-mouse-button-pressed(button: i32): bool
   fn(extern("GetMouseX")) get-mouse-x(): i32
   fn(extern("GetMouseY")) get-mouse-y(): i32
-}
-
-ns libm {
-  fn(extern("sinf")) sin(x: f32): f32
-  fn(extern("cosf")) cos(x: f32): f32
 }
 
 use core/fixlist
@@ -689,7 +686,7 @@ type turtle-out = { segs: fixlist[seg, MAX-EXPAND], buds: fixlist[bud-pt, MAX-BU
 let RAD-PER-DEG: f32 = 0.017453292
 
 fn bud-tip(x: f32, y: f32, ang: f32, b: bud): bud-pt {
-  .{ x = x + libm/cos(ang) * 0.4, y = y + libm/sin(ang) * 0.4, d = b.d, socket = b.socket }
+  .{ x = x + ang.cos() * 0.4, y = y + ang.sin() * 0.4, d = b.d, socket = b.socket }
 }
 
 fn bud-color(d: u8): rl/color {
@@ -727,8 +724,8 @@ fn turtle-walk(e: *expansion, angle-deg: f32, frontier: u8, unfurl: f32): turtle
     if s == 0 {
       let lw = if anchored { w } else { 1.0 }
       if lw > 0.0 {
-        let nx = x + libm/cos(ang) * lw * stride
-        let ny = y + libm/sin(ang) * lw * stride
+        let nx = x + ang.cos() * lw * stride
+        let ny = y + ang.sin() * lw * stride
         segs.push(.{ ax = x, ay = y, bx = nx, by = ny, w = wid, gen })
         x = nx
         y = ny
@@ -1606,7 +1603,7 @@ ns(reload) view {
       let tipscale: f32 = if scale < 20.0 { 20.0 } else { scale }
       rl/draw-line-ex(
         .{ x = bx, y = by },
-        .{ x = bx + libm/cos(m.pos.ang) * tipscale * 0.4, y = by + libm/sin(m.pos.ang) * tipscale * 0.4 },
+        .{ x = bx + m.pos.ang.cos() * tipscale * 0.4, y = by + m.pos.ang.sin() * tipscale * 0.4 },
         2.0, C_ACCENT-DIM)
       rl/draw-circle-lines(bx.as[i32], by.as[i32], 5.0, C_ACCENT-DIM)
     }
@@ -1618,7 +1615,7 @@ ns(reload) view {
     let tipscale: f32 = if scale < 20.0 { 20.0 } else { scale }
     rl/draw-line-ex(
       .{ x = bx, y = by },
-      .{ x = bx + libm/cos(p.ang) * tipscale * 0.6, y = by + libm/sin(p.ang) * tipscale * 0.6 },
+      .{ x = bx + p.ang.cos() * tipscale * 0.6, y = by + p.ang.sin() * tipscale * 0.6 },
       3.0, C_ACCENT)
     rl/draw-circle(bx.as[i32], by.as[i32], 4.0, C_ACCENT)
   }
@@ -1733,7 +1730,7 @@ ns(reload) view {
     if bh < 0.001 { bh = 0.001 }
     let sx = (pp.w - 60).as[f32] / bw
     let sy = (pp.h - 60).as[f32] / bh
-    let scale = if sx < sy sx else sy
+    let scale = sx.min(sy)
     if scale > PLANT-SCALE-MAX { scale = PLANT-SCALE-MAX }
     let cx = (b.minx + b.maxx) * 0.5
     let cy = (b.miny + b.maxy) * 0.5
@@ -1808,7 +1805,7 @@ ns(reload) view {
     let views: size = if g.active == 2 2 else 3
     let cw = (CANVAS-W - 80) / w.trunc[i32]
     let ch = ((CANVAS-H - 80) / views.trunc[i32] - 30) / rows.trunc[i32]
-    let cell = if cw < ch cw else ch
+    let cell = cw.min(ch)
     if cell > 34 { cell = 34 }
     if cell < 4 { cell = 4 }
     let gw = cell * w.trunc[i32]

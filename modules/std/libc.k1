@@ -56,6 +56,20 @@ ns libc {
     fn(extern("log2")) log2_f64(f64): f64
     fn(extern("powf")) pow_f32(base: f32, exponent: f32): f32
     fn(extern("pow")) pow_f64(base: f64, exponent: f64): f64
+    fn(extern("sinf")) sin_f32(f32): f32
+    fn(extern("sin")) sin_f64(f64): f64
+    fn(extern("cosf")) cos_f32(f32): f32
+    fn(extern("cos")) cos_f64(f64): f64
+    fn(extern("tanf")) tan_f32(f32): f32
+    fn(extern("tan")) tan_f64(f64): f64
+    fn(extern("asinf")) asin_f32(f32): f32
+    fn(extern("asin")) asin_f64(f64): f64
+    fn(extern("acosf")) acos_f32(f32): f32
+    fn(extern("acos")) acos_f64(f64): f64
+    fn(extern("atanf")) atan_f32(f32): f32
+    fn(extern("atan")) atan_f64(f64): f64
+    fn(extern("atan2f")) atan2_f32(y: f32, x: f32): f32
+    fn(extern("atan2")) atan2_f64(y: f64, x: f64): f64
   }
 
 }

@@ -197,7 +197,7 @@ fn create-commands(
   let last-distance: i64 = -1
 
   if block-size >= INPUT-MARGIN {
-    let len-limit = min-size(block-size - min-match, input-size - INPUT-MARGIN)
+    let len-limit = (block-size - min-match).min(input-size - INPUT-MARGIN)
     let ip-limit = input.add-bytes(len-limit)
 
     ip = ip.add-bytes(1)
@@ -447,7 +447,7 @@ fn compress-fragment-two-pass(
   let input = input-start
   let input-size = fragment-size
   while input-size > 0 {
-    let block-size = min-size(input-size, TWO-PASS-BLOCK-SIZE)
+    let block-size = input-size.min(TWO-PASS-BLOCK-SIZE)
     let sink: cmd-sink = .{
       commands = command-buf,
       num-commands = 0,

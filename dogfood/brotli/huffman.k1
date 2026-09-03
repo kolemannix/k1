@@ -104,7 +104,7 @@ fn create-huffman-tree(
       i = i - 1
       let c = data.index-unchecked(i).*
       if c != 0 {
-        let count = if c < count-limit count-limit else c
+        let count = c.max(count-limit)
         tree.index-unchecked(n).* = ht(count, -1, i.trunc[i16])
         n = n + 1
       }
@@ -513,7 +513,7 @@ fn build-and-store-huffman-tree-fast(
       l = l - 1
       let h = histogram.index-unchecked(l).*
       if h != 0 {
-        let c = if h >= count-limit h else count-limit
+        let c = h.max(count-limit)
         tree.index-unchecked(node).* = ht(c, -1, l.trunc[i16])
         node = node + 1
       }

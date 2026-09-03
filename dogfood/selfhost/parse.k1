@@ -19,7 +19,7 @@ type pending-part = either {
 
 fn min-of(a: ?u32, b: u32): u32 {
   if a is {
-    :some m -> if b < m b else m,
+    :some m -> b.min(m),
     :none -> b,
   }
 }

@@ -418,7 +418,7 @@ ns platform {
       fn alloc(size-arg: size): ptr {
         let needed = HEADER + ((size-arg + 15) & 15.bit-not())
         if cur + needed > end {
-          let grow-size = if needed > CHUNK needed else CHUNK
+          let grow-size = needed.max(CHUNK)
           let r = memory/acquire(grow-size)
           cur = r.base.to-size()
           end = cur + r.len

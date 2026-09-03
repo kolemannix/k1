@@ -223,7 +223,7 @@ impl show for string {
 
 impl comparable for string {
   fn compare(self: string, other: string): ordering {
-    let shared = if self.len() < other.len() self.len() else other.len()
+    let shared = self.len().min(other.len())
     let i: size = 0
     while i < shared {
       let mine = self.[i]

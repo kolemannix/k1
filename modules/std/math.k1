@@ -41,3 +41,31 @@ impl log2 for f32 {
     libc/math/log2_f32(self)
   }
 }
+
+ability trig {
+  fn sin(self): self
+  fn cos(self): self
+  fn tan(self): self
+  fn asin(self): self
+  fn acos(self): self
+  fn atan(self): self
+  fn atan2(self, x: self): self
+}
+impl trig for f64 {
+  fn sin(self: f64): f64 { libc/math/sin_f64(self) }
+  fn cos(self: f64): f64 { libc/math/cos_f64(self) }
+  fn tan(self: f64): f64 { libc/math/tan_f64(self) }
+  fn asin(self: f64): f64 { libc/math/asin_f64(self) }
+  fn acos(self: f64): f64 { libc/math/acos_f64(self) }
+  fn atan(self: f64): f64 { libc/math/atan_f64(self) }
+  fn atan2(self: f64, x: f64): f64 { libc/math/atan2_f64(self, x) }
+}
+impl trig for f32 {
+  fn sin(self: f32): f32 { libc/math/sin_f32(self) }
+  fn cos(self: f32): f32 { libc/math/cos_f32(self) }
+  fn tan(self: f32): f32 { libc/math/tan_f32(self) }
+  fn asin(self: f32): f32 { libc/math/asin_f32(self) }
+  fn acos(self: f32): f32 { libc/math/acos_f32(self) }
+  fn atan(self: f32): f32 { libc/math/atan_f32(self) }
+  fn atan2(self: f32, x: f32): f32 { libc/math/atan2_f32(self, x) }
+}

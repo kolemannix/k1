@@ -86,7 +86,7 @@ ns for arena {
 
   fn poison(self: *arena, count: size) {
     let available = self.end-addr.diff(self.cur-addr)
-    let n = if count > available available else count
+    let n = count.min(available)
     mem/set(dst = self.cur-addr, value = 0xCD, count = n)
   }
 
@@ -138,7 +138,7 @@ ns for arena {
     let overhead = types/stride[arena-chunk] + MIN_ALIGN + align
     let needed = size + overhead
     let first-len = self.first-end.diff(self.first-base)
-    let chunk-len = if needed > first-len needed else first-len
+    let chunk-len = needed.max(first-len)
     let region = platform/memory/acquire(chunk-len)
     let record: *mut arena-chunk = region.base.ref[arena-chunk]
     record.* = .{ region, next = self.extra-chunks }

@@ -287,6 +287,9 @@ pub enum CompletionSite {
     /// f(a, <cursor>): the cursor is a direct call argument; arg_index counts
     /// parsed args, so it includes the receiver of a method call
     CallArg { function_id: FunctionId, arg_index: u32, scope_id: ScopeId },
+    /// .{ a = 1, <cursor> } with an expected struct type; the parsed literal
+    /// says which fields are already present
+    StructField { type_id: TypeId, parsed_struct_id: ParsedExprId },
 }
 
 #[derive(Clone, Copy)]
@@ -6382,10 +6385,9 @@ impl TypedProgram {
                     }
                     Some(value_id) => {
                         let field_value_id = match self.static_values.get(value_id) {
-                            StaticValue::Struct(static_struct) => *self
-                                .static_values
-                                .mem
-                                .get_nth(static_struct.fields, field_index),
+                            StaticValue::Struct(static_struct) => {
+                                *self.static_values.mem.get_nth(static_struct.fields, field_index)
+                            }
                             StaticValue::Zero(_) => {
                                 self.static_values.add(StaticValue::Zero(target_field.type_id))
                             }
@@ -7427,32 +7429,38 @@ impl TypedProgram {
         let ParsedExpr::Struct(parsed_struct) = *self.ast.exprs.get(expr_id) else {
             self.ice_span(self.ast.get_expr_span(expr_id), "expected struct")
         };
-        let original_expected_struct_id = ctx.expected_type_id.unwrap();
-        let Type::Struct(original_expected_struct) = self.types.get(original_expected_struct_id)
-        else {
+        let expected_struct_id = ctx.expected_type_id.unwrap();
+        let Type::Struct(expected_struct) = self.types.get(expected_struct_id) else {
             self.ice_span(self.ast.get_expr_span(expr_id), "expected an expected struct type")
         };
-        let original_expected_struct = *original_expected_struct;
-        if original_expected_struct.record_kind == RecordKind::Union {
+        let expected_struct = *expected_struct;
+
+        let is_union = expected_struct.record_kind == RecordKind::Union;
+        if is_union && parsed_struct.fields.len() > 1 {
             kbail!(
                 self,
                 self.ast.get_expr_span(expr_id),
-                "Cannot use struct literal syntax to construct a union. Expected type {} is a union.",
-                original_expected_struct_id
-            );
+                "{} is a union; a union literal sets at most one field",
+                expected_struct_id
+            )
         }
-        let expected_struct_id = original_expected_struct_id;
-        let expected_struct = *self.types.get(expected_struct_id).expect_struct();
+
+        if let Some(cs) = &mut self.completion
+            && cs.site.is_none()
+            && self.ast.mem.getn(parsed_struct.fields).iter().any(|f| f.name == cs.marker)
+        {
+            cs.site = Some(CompletionSite::StructField {
+                type_id: expected_struct_id,
+                parsed_struct_id: expr_id,
+            });
+        }
         let expected_struct_defn_info = self.get_defn_info(expected_struct_id);
         let field_count = expected_struct.fields.len();
 
-        let mut passed_fields_aligned: SV8<(
-            Option<ParsedExprId>,
-            &StructValueField,
-            &StructTypeField,
-        )> = smallvec![];
+        let mut passed_fields_aligned: SV8<(Option<ParsedExprId>, SpanId)> = smallvec![];
 
         let struct_span = parsed_struct.span;
+        let mut missing_fields: SV4<StringId> = smallvec![];
         for (index, expected_field) in self.mem.getn(expected_struct.fields).iter().enumerate() {
             let Some(passed_field) = self
                 .ast
@@ -7461,16 +7469,12 @@ impl TypedProgram {
                 .iter()
                 .find(|f| f.name == expected_field.name)
             else {
-                if parsed_struct.fields.is_empty() {
-                    kbail!(self, struct_span, "Expected '{}' but got empty", expected_struct_id);
+                if is_union {
+                    passed_fields_aligned.push((None, expected_field.span));
                 } else {
-                    kbail!(
-                        self,
-                        struct_span,
-                        "Struct is missing expected field '{}'",
-                        expected_field.name
-                    );
+                    missing_fields.push(expected_field.name);
                 }
+                continue;
             };
             let parsed_expr = match passed_field.value {
                 StructValueFieldKind::VarShorthand => {
@@ -7486,12 +7490,21 @@ impl TypedProgram {
                     field_index: index as u32,
                 },
             );
-            passed_fields_aligned.push((parsed_expr, passed_field, expected_field))
+            passed_fields_aligned.push((parsed_expr, passed_field.span))
+        }
+
+        if !missing_fields.is_empty() {
+            kbail!(
+                self,
+                struct_span,
+                "struct is missing fields {}",
+                missing_fields.iter().map(|fname| self.get_string(*fname)).join(", ")
+            );
         }
 
         if let Some(unknown_field) =
             self.ast.mem.getn(parsed_struct.fields).iter().find(|passed_field| {
-                original_expected_struct.find_field(&self.mem, passed_field.name).is_none()
+                expected_struct.find_field(&self.mem, passed_field.name).is_none()
             })
         {
             kbail!(self, struct_span, "Struct has an unexpected field '{}'", unknown_field.name);
@@ -7499,7 +7512,7 @@ impl TypedProgram {
 
         let mut field_values: List<StructLiteralField, _> = self.mem.new_list(field_count);
         let mut field_types: List<StructTypeField, _> = self.mem.new_list(field_count);
-        for ((passed_expr, passed_field, _), expected_field) in
+        for ((passed_expr, passed_span), expected_field) in
             passed_fields_aligned.iter().zip(self.mem.getn(expected_struct.fields).iter())
         {
             match passed_expr {
@@ -7520,7 +7533,7 @@ impl TypedProgram {
                     )?;
                     let expr_type = self.exprs.get_type(expr);
                     if expr_type == NEVER_TYPE_ID {
-                        kbail!(self, passed_field.span, "never is not allowed in struct literals");
+                        kbail!(self, *passed_span, "never is not allowed in struct literals");
                     }
                     field_types.push(StructTypeField {
                         name: expected_field.name,
@@ -7593,7 +7606,7 @@ impl TypedProgram {
         };
         let output_struct = StructType {
             fields: field_types.to_slice(),
-            record_kind: original_expected_struct.record_kind,
+            record_kind: expected_struct.record_kind,
         };
         let output_struct_type_id = self.add_type(
             Type::Struct(output_struct),
@@ -11011,9 +11024,8 @@ impl TypedProgram {
             })
         }
         if patch_hits < patched_count {
-            let base_has_field = |name: StringId| {
-                self.mem.getn(base_struct_fields).iter().any(|f| f.name == name)
-            };
+            let base_has_field =
+                |name: StringId| self.mem.getn(base_struct_fields).iter().any(|f| f.name == name);
             let mut unmatched: SV4<StringId> = smallvec![];
             match patch_struct {
                 ProvidedPatchStruct::ParsedFields(parsed) => {
@@ -18097,6 +18109,7 @@ impl TypedProgram {
         let core_ns = intern_path!(self.ast.idents.b.core);
         let core_mem = intern_path!(self.ast.idents.b.core, self.ast.idents.b.mem);
         let core_types = intern_path!(self.ast.idents.b.core, self.ast.idents.b.types);
+        let core_scalarcmp = intern_path!(self.ast.idents.b.core, self.ast.idents.b.scalar_cmp);
 
         macro_rules! core {
             ($name: expr) => {
@@ -18183,6 +18196,10 @@ impl TypedProgram {
             core!("code"),
             core!("code-builder"),
             core!("optref"),
+
+            QIdent { path: core_scalarcmp, name: get_ident!(self, "min"), name_span: span },
+            QIdent { path: core_scalarcmp, name: get_ident!(self, "max"), name_span: span },
+
             QIdent { path: core_mem, name: get_ident!(self, "zeroed"), name_span: span },
             QIdent { path: core_types, name: self.ast.idents.b.enum_, name_span: span },
             QIdent { path: core_types, name: get_ident!(self, "sum"), name_span: span },

@@ -27,7 +27,7 @@ fn day1(input: string) {
     let _last-pos = pos
     require u64/from-string(magnitude-str) is :ok magnitude else { return }
 
-    let change = if negative magnitude.as[int].negated() else magnitude.as[int]
+    let change = if negative magnitude.signed().negated() else magnitude.signed()
 
     pos = pos + change
     
@@ -54,7 +54,7 @@ fn brute(input: string) {
     let negative = it.[0] == 'L'
     let magnitude-str = it.drop(1)
     require u64/from-string(magnitude-str) is :ok magnitude else { return }
-    let m = magnitude.as[int]
+    let m = magnitude.signed()
     while m > 0 {
       if negative { pos = pos - 1 } else { pos = pos + 1 }
       if pos < 0 { pos = pos + 100 }

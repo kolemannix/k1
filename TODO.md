@@ -39,8 +39,6 @@ pointer-free predicate - pod/serializable?
 
 ## grab bag list mid2026
 - [ ] block stmt type error recovery; get more than 1 typer error per block
-- [x] fix `is {` syntax
-- [x] parallel llvm codegen
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
@@ -69,6 +67,15 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
         I think doing 'defaults' is relatively easy. You just hit consult the default on the unprovided path. For partially-applieds,
         you need essentially some notion of an 'ability signature function', just like type aliases would need
+
+- [ ] Failed-definition tracking, two markers for one concept: static_exec.rs:418 and typer.rs:16887. Both silently return Ok(()) when an AST mapping is missing, which masks compiler bugs. A set of failed parsed ids, checked in both places, converts "likely" into "certain".
+- [ ] Divergent loops typed as never at typer.rs:7647. ScopeLoopInfo already exists; recording whether any break was seen is the whole change. Only pays off in code that ends in an infinite loop.
+- [ ] Signature help ignores context params at lsp_support.rs:357. Real LSP correctness gap, contained to one function.
+- [ ] toDyn on generic functions at typer.rs:10251. Explicit type args are already parsed at that call site; specializing before the dyn lift is the same path foo[int].& takes.
+- [ ] Unreachable on type-info miss at codegen_llvm.rs:3109. A garbage type-id at runtime hits unreachable, which is UB. Emit a crash call instead.
+
+- [x] fix `is {` syntax
+- [x] parallel llvm codegen
 - [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
       way to get the heap address - could do it by passing an initializer lambda, or a macro, or something first class?
 - [x] allow reflecting on generic parent / instance info: `types/instance-info[list[int]] <- { parent: list, args: [int] }`

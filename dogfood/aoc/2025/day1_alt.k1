@@ -2,13 +2,9 @@
 // The original implementation of Day 1 is in ./main.k1.
 
 ns day1-alt
+use std/math/trig
 
-ns cmath {
-  fn(extern("cos")) cos(x: f64): f64
-  fn(extern("acos")) acos(x: f64): f64
-}
-
-let pi: f64 = cmath/acos(-1.0)
+let pi: f64 = -1.0.acos()
 let tau: f64 = 2.0 * pi
 let num-positions: f64 = 100.0
 let step: f64 = tau / num-positions
@@ -26,7 +22,7 @@ fn solve(p: (either { part-1, part-2 }), input: string): int {
     let delta: f64 = if p is :part-1 { scale * step * amount.as[f64] } else scale * step
     for 0.until(n) {
       theta = theta + delta
-      if (cmath/cos(theta) == 1.0) {
+      if (theta.cos() == 1.0) {
         acc = acc + 1
       }
     }

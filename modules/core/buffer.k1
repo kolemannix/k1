@@ -180,7 +180,7 @@ ns for buffer {
       crash("slice start index out of bounds: $start. length is: ${self.len}")
     }
     
-    let end-clamp = if end > self.len self.len else end
+    let end-clamp = end.min(self.len)
     
     if end-clamp <= start or self.len == 0 {
       return empty[t]()
@@ -193,7 +193,7 @@ ns for buffer {
 
   fn take[t](self: buffer[t], count: size): buffer[t] { self.slice(0, count) }
   fn drop[t](self: buffer[t], count: size): buffer[t] {
-    self.slice(if count > self.len self.len else count, self.len)
+    self.slice(count.min(self.len), self.len)
   }
   fn take-right[t](self: buffer[t], count: size): buffer[t] {
     self.slice(if count > self.len 0 else self.len - count, self.len)
@@ -303,7 +303,7 @@ ns for buffer {
   }
 
   fn first-diff[t: equals](self: buffer[t], other: buffer[t]): ?size {
-    let n = if self.len < other.len self.len else other.len
+    let n = self.len.min(other.len)
     let i = 0: size
     while i < n {
       if self.[i] != other.[i] return :some i
@@ -396,7 +396,7 @@ ns for buffer {
 
     let run-start: size = 0
     while run-start < self.len {
-      self._insertion-sort-range(run-start, _at-most(run-start + SORT_RUN, self.len) - 1)
+      self._insertion-sort-range(run-start, (run-start + SORT_RUN).min(self.len) - 1)
       run-start = run-start + SORT_RUN
     }
 
@@ -406,8 +406,8 @@ ns for buffer {
     while width < self.len {
       let lo: size = 0
       while lo < src.len {
-        let mid = _at-most(lo + width, src.len)
-        let hi = _at-most(lo + (width * 2), src.len)
+        let mid = (lo + width).min(src.len)
+        let hi = (lo + (width * 2)).min(src.len)
         _merge-runs(src, dst, lo, mid, hi)
         lo = lo + (width * 2)
       }
@@ -418,8 +418,6 @@ ns for buffer {
     }
     if src.data-ptr() != self.data-ptr() { buffer/copy(src = src, dst = self) }
   }
-
-  fn _at-most(value: size, limit: size): size { if value > limit limit else value }
 
   fn _merge-runs[t](src: buffer[t], dst: buffer[t], lo: size, mid: size, hi: size)
   where t: comparable {

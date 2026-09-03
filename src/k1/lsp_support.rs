@@ -1,5 +1,5 @@
 use crate::lex::{Span, SpanId, is_ident_char};
-use crate::parse::{FileId, ParsedId, ParsedProgram, StringId};
+use crate::parse::{FileId, ParsedExpr, ParsedId, ParsedProgram, StringId};
 use crate::typer::scopes::{ScopeId, VariableInScope};
 use crate::typer::types::{Type, TypeId};
 use crate::{SV8, typer::*};
@@ -212,6 +212,8 @@ pub struct CompletionCandidate {
     pub kind: CompletionCandidateKind,
     pub detail: String,
     pub sort_group: u8,
+    /// LSP snippet text inserted instead of the label
+    pub snippet: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -244,6 +246,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                         kind: CompletionCandidateKind::Field,
                         detail: k1.type_id_to_string(field.type_id),
                         sort_group: 0,
+                        snippet: None,
                     });
                 }
             }
@@ -258,6 +261,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                             kind: CompletionCandidateKind::Method,
                             detail: k1.function_id_to_string(function_id, false),
                             sort_group: 1,
+                            snippet: None,
                         });
                     }
                 }
@@ -285,6 +289,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                                 kind: CompletionCandidateKind::Method,
                                 detail: k1.function_id_to_string(function_id, false),
                                 sort_group: 1,
+                                snippet: None,
                             });
                         }
                     }
@@ -299,6 +304,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                     kind: CompletionCandidateKind::Keyword,
                     detail: String::new(),
                     sort_group: 9,
+                    snippet: None,
                 });
             }
         }
@@ -321,6 +327,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                                 None => String::new(),
                             },
                             sort_group: 0,
+                            snippet: None,
                         });
                     }
                 }
@@ -331,10 +338,45 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                             kind: CompletionCandidateKind::Variant,
                             detail: format!("= {}", v.int_value),
                             sort_group: 0,
+                            snippet: None,
                         });
                     }
                 }
                 _ => {}
+            }
+        }
+        CompletionSite::StructField { type_id, parsed_struct_id } => {
+            let Type::Struct(st) = k1.types.get(type_id) else { return items };
+            let ParsedExpr::Struct(parsed) = k1.ast.exprs.get(parsed_struct_id) else {
+                return items;
+            };
+            let present = k1.ast.mem.getn(parsed.fields);
+            let mut all_fields = String::new();
+            for field in k1.mem.getn(st.fields) {
+                if present.iter().any(|f| f.name == field.name) {
+                    continue;
+                }
+                let name = k1.ident_str(field.name);
+                if !all_fields.is_empty() {
+                    all_fields.push_str(", ");
+                }
+                all_fields.push_str(&format!("{name} = ${{{}:{name}}}", items.len() + 1));
+                items.push(CompletionCandidate {
+                    label: name.to_string(),
+                    kind: CompletionCandidateKind::Field,
+                    detail: k1.type_id_to_string(field.type_id),
+                    sort_group: 1,
+                    snippet: None,
+                });
+            }
+            if items.len() > 1 {
+                items.push(CompletionCandidate {
+                    label: "all fields".to_string(),
+                    kind: CompletionCandidateKind::Field,
+                    detail: all_fields.clone(),
+                    sort_group: 0,
+                    snippet: Some(all_fields),
+                });
             }
         }
     }
@@ -424,6 +466,7 @@ fn collect_one_scope(
             kind: CompletionCandidateKind::Variable,
             detail: k1.type_id_to_string(k1.variables.get(variable_id).type_id),
             sort_group: 2,
+            snippet: None,
         });
     }
     for (name, function_id, prov) in k1.scopes.iter_scope_functions(scope_id) {
@@ -436,6 +479,7 @@ fn collect_one_scope(
                 kind: CompletionCandidateKind::Function,
                 detail: k1.function_id_to_string(function_id, false),
                 sort_group: 3,
+                snippet: None,
             });
         }
     }
@@ -449,6 +493,7 @@ fn collect_one_scope(
                 kind: CompletionCandidateKind::Type,
                 detail: k1.type_id_to_string(type_id),
                 sort_group: 4,
+                snippet: None,
             });
         }
     }
@@ -462,6 +507,7 @@ fn collect_one_scope(
                 kind: CompletionCandidateKind::Namespace,
                 detail: "ns".to_string(),
                 sort_group: 5,
+                snippet: None,
             });
         }
     }
@@ -475,6 +521,7 @@ fn collect_one_scope(
                 kind: CompletionCandidateKind::Ability,
                 detail: "ability".to_string(),
                 sort_group: 6,
+                snippet: None,
             });
         }
     }
@@ -795,6 +842,30 @@ fn use-it(): int {
         assert_eq!(info.label, "fn push(self: *list[i64], elem: i64): empty");
         assert_eq!(info.params, vec!["self: *list[i64]", "elem: i64"]);
         assert_eq!(info.active_param, 1);
+    }
+
+    #[test]
+    fn struct_field_completion() {
+        let k1 = compile_with_cursor(
+            "struct_field",
+            r#"
+ns completion-struct-field
+
+type point = { x: int, y: int, z: int }
+
+fn use-it(): int {
+  let p: point = .{ y = 2, @@ }
+  p.x
+}
+"#,
+        );
+        let site = k1.completion.as_ref().unwrap().site.expect("expected a site");
+        assert!(matches!(site, CompletionSite::StructField { .. }));
+        assert_eq!(labels(&k1), vec!["all fields".to_string(), "x".to_string(), "z".to_string()]);
+        let items = collect_completions(&k1, site);
+        let all = items.iter().find(|c| c.label == "all fields").unwrap();
+        assert_eq!(all.snippet.as_deref(), Some("x = ${1:x}, z = ${2:z}"));
+        assert!(items.iter().filter(|c| c.snippet.is_some()).count() == 1);
     }
 
     #[test]

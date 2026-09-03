@@ -57,7 +57,7 @@ fn complex-references() {
 fn min-or(a: ?u32, b: u32): u32 {
   if a is {
     :none -> b,
-    :some x -> if x < b x else b
+    :some x -> x.min(b)
   }
 }
 

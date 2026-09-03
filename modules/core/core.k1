@@ -623,6 +623,10 @@ ns for f32 {
     let bits = mem/bitcast[f32, i32](self)
     bits.xor(((bits >> 31).unsigned() >> 1).signed())
   }
+
+  fn abs(self: f32): f32 {
+    mem/bitcast[u32, f32](mem/bitcast[f32, u32](self).bit-and(0x7FFFFFFF))
+  }
 }
 
 impl equals for f32 { fn(intern) equals(self: f32, other: f32): bool }

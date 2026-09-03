@@ -360,6 +360,8 @@ ability scalar-cmp {
   fn le(self, other: self): bool
   fn gt(self, other: self): bool
   fn ge(self, other: self): bool
+  fn min(self, other: self): self { if self.lt(other) self else other }
+  fn max(self, other: self): self { if self.gt(other) self else other }
 }
 
 impl scalar-cmp for u8 {

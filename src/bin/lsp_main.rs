@@ -202,6 +202,8 @@ fn candidate_to_item(candidate: k1::lsp_support::CompletionCandidate) -> Complet
         kind: Some(kind),
         sort_text: Some(format!("{:02}_{}", candidate.sort_group, candidate.label)),
         detail: if candidate.detail.is_empty() { None } else { Some(candidate.detail) },
+        insert_text_format: candidate.snippet.as_ref().map(|_| InsertTextFormat::SNIPPET),
+        insert_text: candidate.snippet,
         label: candidate.label,
         ..CompletionItem::default()
     }
