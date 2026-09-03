@@ -41,8 +41,7 @@ ns for parser {
       if self.peek() is {
         :none -> break,
         :some c -> {
-          // todo: support all valid whitespace per json spec
-          if c == ' ' or c == '\n' or c == '\t' {
+          if c == ' ' or c == '\n' or c == '\t' or c == '\r' {
             self.advance()
           } else {
             break

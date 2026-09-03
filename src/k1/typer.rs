@@ -6357,7 +6357,7 @@ impl TypedProgram {
                         base_type_id
                     )
                 };
-                let (field_index, _target_field) = struct_type
+                let (field_index, target_field) = struct_type
                     .find_field(&self.mem, field_access.field_name)
                     .ok_or_else(|| {
                         kerr!(
@@ -6381,13 +6381,17 @@ impl TypedProgram {
                         kbail!(self, span, "Can't work with abstract static structs yet")
                     }
                     Some(value_id) => {
-                        let StaticValue::Struct(static_struct) = self.static_values.get(value_id)
-                        else {
-                            ice_span!(self, span, "Expected struct value type")
+                        let field_value_id = match self.static_values.get(value_id) {
+                            StaticValue::Struct(static_struct) => *self
+                                .static_values
+                                .mem
+                                .get_nth(static_struct.fields, field_index),
+                            StaticValue::Zero(_) => {
+                                self.static_values.add(StaticValue::Zero(target_field.type_id))
+                            }
+                            _ => ice_span!(self, span, "Expected struct value type"),
                         };
-                        let field_value_id =
-                            self.static_values.mem.get_nth(static_struct.fields, field_index);
-                        let expr_id = self.add_static_value_expr(*field_value_id, span);
+                        let expr_id = self.add_static_value_expr(field_value_id, span);
                         Ok(expr_id)
                     }
                 }
@@ -8151,7 +8155,6 @@ impl TypedProgram {
             return Ok(base_expr);
         }
 
-        // FIXME
         // float to int / int to float are the remaining non-noop casts handled by this syntax
         let cast_type = match self.types.get(base_expr_type) {
             Type::Integer(from_integer_type) => match self.types.get(target_type) {
@@ -11008,11 +11011,32 @@ impl TypedProgram {
             })
         }
         if patch_hits < patched_count {
-            kbail!(
-                self,
-                span,
-                "Some fields in the patch struct did not match any fields in the base struct (todo: name them)",
-            );
+            let base_has_field = |name: StringId| {
+                self.mem.getn(base_struct_fields).iter().any(|f| f.name == name)
+            };
+            let mut unmatched: SV4<StringId> = smallvec![];
+            match patch_struct {
+                ProvidedPatchStruct::ParsedFields(parsed) => {
+                    for f in self.ast.mem.getn(parsed) {
+                        if !base_has_field(f.name) {
+                            unmatched.push(f.name);
+                        }
+                    }
+                }
+                ProvidedPatchStruct::TypedExpr(patch_struct_expr) => {
+                    let patch_struct_type_id = self.exprs.get_type(patch_struct_expr);
+                    let Type::Struct(patch_struct) = self.types.get(patch_struct_type_id) else {
+                        unreachable!()
+                    };
+                    for f in self.mem.getn(patch_struct.fields) {
+                        if !base_has_field(f.name) {
+                            unmatched.push(f.name);
+                        }
+                    }
+                }
+            }
+            let names = unmatched.iter().map(|n| self.ident_str(*n)).collect::<Vec<_>>().join(", ");
+            kbail!(self, span, "Fields not present in the base struct: {}", names);
         }
         let final_fields_handle = final_fields.to_slice();
         let new_struct = self.exprs.add(

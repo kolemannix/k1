@@ -19,9 +19,6 @@ type i64         = builtin
 type(alias) int   = i64
 type(alias) size  = i64
 
-// TODO: Incorporate this instead of a 64-bit align type
-type(alias) align = u16
-
 type char    = builtin
 type bool    = builtin
 
@@ -212,10 +209,6 @@ ns types {
       return-type-id: type-id,
     }),
     function-pointer({ function-type-id: type-id }),
-    // static-scalar(),
-    // TODO: lambda schema, lambda object schema
-    // lambda({ type-id: type-id, function-type-id: type-id }),
-    // lambda-object({ function-type-id: type-id }),
     other(string)
   }
 
@@ -1066,7 +1059,7 @@ fn assertdbg(context locn: k1/source-location)(value: bool) {
 fn print-backtrace() {
   #if k1/platform is {
     :posix-macos or :posix-linux -> k1rt/_k1_print_backtrace(frame_count = 128),
-    :wasi or :bare -> println("non-posix backtrace TODO")
+    :wasi or :bare -> .{}
   }
 }
 

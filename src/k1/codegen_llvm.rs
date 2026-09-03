@@ -425,7 +425,6 @@ struct DebugContext<'ctx> {
     debug_builder: DebugInfoBuilder<'ctx>,
     #[allow(unused)]
     compile_unit: DICompileUnit<'ctx>,
-    // TODO: there does not need to be a debug info stack anymore, it can just be the one entry
     debug_stack: Vec<DebugStackEntry<'ctx>>,
     line_tables_only: bool,
 }
@@ -5500,27 +5499,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             StaticValue::Zero(type_id) => {
                 let pt = self.k1.get_physical_type_computed(*type_id).unwrap();
-                let cg_type = self.codegen_type(pt);
-                let zero_rich = cg_type.rich_type().const_zero();
-                match pt.is_agg() {
-                    true => {
-                        todo!(
-                            "generate a zero region global; could we have a single zero region as big as needed? For arrays, detect 'zero' pattern and append"
-                        )
-                    }
-                    false => zero_rich,
+                if pt.is_agg() {
+                    let global = self.make_global_for_static_value(static_value_id)?;
+                    global.as_pointer_value().as_basic_value_enum()
+                } else {
+                    self.codegen_type(pt).rich_type().const_zero()
                 }
-                //zero.as_basic_value_enum()
             }
-            StaticValue::Struct(_) => {
-                let global = self.make_global_for_static_value(static_value_id)?;
-                global.as_pointer_value().as_basic_value_enum()
-            }
-            StaticValue::Sum(_) => {
-                let global = self.make_global_for_static_value(static_value_id)?;
-                global.as_pointer_value().as_basic_value_enum()
-            }
-            StaticValue::LinearContainer(_) | StaticValue::RawContainer(_) => {
+            StaticValue::Struct(_)
+            | StaticValue::Sum(_)
+            | StaticValue::LinearContainer(_)
+            | StaticValue::RawContainer(_) => {
                 let global = self.make_global_for_static_value(static_value_id)?;
                 global.as_pointer_value().as_basic_value_enum()
             }

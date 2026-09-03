@@ -220,15 +220,6 @@ ns for char {
 
   // mask to convert ASCII letters to uppercase
   let ASCII_CASE_MASK: u8 = 0b0010_0000
-  // Ported from Rust core library; todo wrapping_sub
-  //fn asDigit(self: char, radix: u32): ?u32 {
-  //  assert(radix >= 2 and radix <= 36);
-  //  let value = if self > '9' and radix > 10 {
-  //    self.as-u8()
-  //  }
-
-  //}
-
   fn is-ascii(self: char): bool {
     self.as-u8() <= 0x7F
   }
@@ -500,7 +491,6 @@ ns for i64 {
     }
   }
   fn next-pow2(self: i64): i64 {
-    // TODO: We could call ctlz instead when available
     if self < 0 crash("i64/next-pow2: value must be positive") else
     if self == 0 return 1
 

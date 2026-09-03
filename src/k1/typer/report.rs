@@ -275,13 +275,6 @@ impl TypedProgram {
         panic!("Internal Compiler Error at: {}", msg.as_ref())
     }
 
-    #[track_caller]
-    pub fn todo_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
-        let use_color = std::io::stderr().is_terminal();
-        self.write_location_error(&mut std::io::stderr(), span, use_color);
-        panic!("not yet implemented: {}", msg.as_ref())
-    }
-
     // Timing
     //
     pub fn print_timing_info(

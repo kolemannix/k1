@@ -81,5 +81,13 @@ fn test-zero() {
   let o: ?type-of(point) = zeroed()
   assert-equals(o.tag, 0)
 
+  let static-point = #static zeroed[{ x: u8, y: u8, z: i32 }]()
+  assert-equals(static-point.z.from-static(), 0)
+  let runtime-point: { x: u8, y: u8, z: i32 } = static-point
+  assert-equals(runtime-point.z, 0)
+  assert-equals(ZERO-POINT.y, 0)
+
   .{}
 }
+
+let ZERO-POINT: { x: u8, y: u8, z: i32 } = zeroed()

@@ -71,6 +71,12 @@ fn with-fields() {
   assert-equals(s.b, false)
   assert-equals(s.c, "hello")
   assert-equals(s.d.inside, 1)
+
+  let base: { a: int, b: bool } = .{ a = 1, b = true }
+  assert-equals[?string](
+    test-compile(base.with(.{ a = 2, nope = 3, extra = 4 })),
+    :some "Fields not present in the base struct: nope, extra"
+  )
 }
 
 fn auto-equals() {

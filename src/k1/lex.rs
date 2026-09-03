@@ -842,9 +842,8 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 LexMode::DoubleQuoteString | LexMode::BacktickString => {
                     match c {
                         EOF_CHAR => {
-                            // FIXME: We need to encode EOF_CHAR as something other than \0
                             return Err(self.make_error(
-                                "Encountered EOF, or null byte, inside string".to_string(),
+                                "Encountered EOF inside string".to_string(),
                                 n - tok_len,
                                 tok_len + 1,
                             ));

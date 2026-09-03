@@ -661,7 +661,6 @@ impl LanguageServer for Backend {
         }
 
         {
-            // Scoping hacks for async bullshit
             let mut edited_sources = self.edited_sources.lock().unwrap();
             edited_sources.insert(file_url.clone(), ast);
         }

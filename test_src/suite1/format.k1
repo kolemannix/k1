@@ -22,7 +22,6 @@ fn test() {
 
   // Or take a string with holes and _format_ it with these values
   let s = "hello ${get-world()} ${yyyy}-${mm}-$dd".fmt(.{yyyy =2021,mm =10,dd =3})
-  // TODO left pad, get it from npm!
   assert-equals(s, "hello Budapest 2021-10-3")
 
   bases()

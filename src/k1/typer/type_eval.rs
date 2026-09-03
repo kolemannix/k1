@@ -1281,8 +1281,6 @@ impl TypedProgram {
                         );
 
                         let _result = self.eval_type_defn(pending_parsed_id, pending_scope_id)?;
-
-                        // Just re-call this function from the top now that the type exists. (hack? idk)
                         self.eval_type_application(ty_app_id, scope_id, context)
                     }
                 }

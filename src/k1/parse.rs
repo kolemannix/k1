@@ -5990,10 +5990,50 @@ impl ParsedProgram {
 
     pub fn display_pattern_expression_id(
         &self,
-        _pattern_expr_id: ParsedPatternId,
+        pattern_id: ParsedPatternId,
         f: &mut impl Write,
     ) -> std::fmt::Result {
-        f.write_str("<pattern expr todo>")
+        match self.patterns.get(pattern_id) {
+            ParsedPattern::Literal(expr_id) => self.display_expr_id(f, *expr_id),
+            ParsedPattern::Variable(name, _) => self.display_ident(f, *name),
+            ParsedPattern::Wildcard(_) => f.write_str("_"),
+            ParsedPattern::Struct(s) => {
+                f.write_str(".{ ")?;
+                for (index, (name, field_pattern)) in self.mem.getn(s.fields).iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    self.display_ident(f, *name)?;
+                    f.write_str(" = ")?;
+                    self.display_pattern_expression_id(*field_pattern, f)?;
+                }
+                f.write_str(" }")
+            }
+            ParsedPattern::Sum(s) => {
+                if let Some(sum_name) = s.sum_name {
+                    self.display_ident(f, sum_name)?;
+                }
+                f.write_str(":")?;
+                self.display_ident(f, s.variant_name)?;
+                if let Some(payload) = s.payload_pattern {
+                    f.write_str("(")?;
+                    self.display_pattern_expression_id(payload, f)?;
+                    f.write_str(")")?;
+                }
+                Ok(())
+            }
+            ParsedPattern::Reference(r) => {
+                self.display_pattern_expression_id(r.inner, f)?;
+                f.write_str("*")
+            }
+            ParsedPattern::Type(t) => {
+                f.write_str("type[")?;
+                self.display_type_expr_id(t.type_expr, f)?;
+                f.write_str("](")?;
+                self.display_pattern_expression_id(t.inner, f)?;
+                f.write_str(")")
+            }
+        }
     }
 
     pub fn type_expr_to_string(&self, type_expr_id: ParsedTypeExprId) -> String {
@@ -6130,9 +6170,15 @@ impl ParsedProgram {
 
     pub fn display_stmt_id(&self, w: &mut impl Write, stmt_id: ParsedStmtId) -> std::fmt::Result {
         match self.stmts.get(stmt_id) {
-            ParsedStmt::Use(_use_stmt) => {
-                write!(w, "use ")?;
-                todo!()
+            ParsedStmt::Use(use_stmt) => {
+                let parsed_use = self.uses.get_use(use_stmt.use_id);
+                w.write_str(if parsed_use.exposed { "use(expose) " } else { "use " })?;
+                self.display_qident(w, &parsed_use.target)?;
+                if let Some(alias) = parsed_use.alias {
+                    w.write_str(" as ")?;
+                    self.display_ident(w, alias)?;
+                }
+                Ok(())
             }
             ParsedStmt::Let(let_stmt) => {
                 write!(

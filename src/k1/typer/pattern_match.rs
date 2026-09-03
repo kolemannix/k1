@@ -1305,14 +1305,6 @@ impl TypedProgram {
         }
     }
 
-    pub(super) fn _eval_static_match_expr(
-        &mut self,
-        _match_expr_id: ParsedExprId,
-        _ctx: EvalExprContext,
-    ) {
-        todo!("support static matches")
-    }
-
     /// Accumulates a list of 'MatchingConditionInstr' while 'compiling' a pattern match.
     /// Basically, every part of a pattern match boils down to either
     /// - A boolean condition to be evaluated
