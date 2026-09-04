@@ -112,49 +112,68 @@ impl TypedProgram {
     pub fn report(&mut self, e: K1Message) {
         self.report_ext(e, false)
     }
-    /// Follows the emitted-file tables back to the span the metaprogram received,
-    /// preserving the position within the containing chunk; a span not covered by
-    /// any entry stays put
+
     /// `emitted_sources` is sorted by `file_id` (each emission registers a fresh,
     /// strictly later source file)
     pub(super) fn emitted_source_for_file(&self, file_id: FileId) -> Option<usize> {
         self.emitted_sources.binary_search_by_key(&file_id, |e| e.file_id).ok()
     }
 
-    pub fn remap_to_source_span(&mut self, span_id: SpanId) -> SpanId {
-        let mut current = span_id;
-        for _ in 0..16 {
-            let span = self.ast.spans.get(current);
-            let Some(table_index) = self.emitted_source_for_file(span.file_id) else {
-                return current;
-            };
-            let table = &self.emitted_sources[table_index];
-            let entries = self.mem.getn(table.entries);
-            let candidate = entries.partition_point(|entry| entry.start <= span.start);
-            let Some(&CodeChunkPos { start, end, source }) =
-                candidate.checked_sub(1).map(|i| &entries[i])
-            else {
-                return current;
-            };
-            if span.start >= end {
-                return current;
-            }
-            let source_span = self.ast.spans.get(source);
-            let offset = span.start - start;
-            // Emitted text can differ in length from its source span (escapes,
-            // dedent); fall back to the whole source span past its end
-            current = if offset < source_span.len {
-                let len = span.len.min(end - span.start).min(source_span.len - offset);
-                self.ast.spans.add(Span {
-                    file_id: source_span.file_id,
-                    start: source_span.start + offset,
-                    len,
-                })
-            } else {
-                source
-            };
+    /// One step back through the emitted-file table covering `span`: the same
+    /// position within the chunk's source span, or the whole source span when
+    /// the emitted text outran it (escapes, dedent). None when `span` is not
+    /// chunk text: a real file, or glue
+    fn remap_span_hop(&self, span: Span) -> Option<(Span, &EmittedSource)> {
+        let table = &self.emitted_sources[self.emitted_source_for_file(span.file_id)?];
+        let entries = self.mem.getn(table.entries);
+        let candidate = entries.partition_point(|entry| entry.start <= span.start);
+        let &CodeChunkPos { start, end, source } = &entries[candidate.checked_sub(1)?];
+        if span.start >= end {
+            return None;
         }
-        current
+        let source_span = self.ast.spans.get(source);
+        let offset = span.start - start;
+        let remapped = if offset < source_span.len {
+            let len = span.len.min(end - span.start).min(source_span.len - offset);
+            Span { file_id: source_span.file_id, start: source_span.start + offset, len }
+        } else {
+            source_span
+        };
+        Some((remapped, table))
+    }
+
+    pub fn remap_span(&self, mut span: Span) -> Span {
+        for _ in 0..16 {
+            let Some((remapped, _)) = self.remap_span_hop(span) else { break };
+            span = remapped;
+        }
+        span
+    }
+
+    pub fn remap_to_source_span(&mut self, span_id: SpanId) -> SpanId {
+        let span = self.ast.spans.get(span_id);
+        let remapped = self.remap_span(span);
+        if remapped == span { span_id } else { self.ast.spans.add(remapped) }
+    }
+
+    /// Follows argument text back to the call it was written in; template
+    /// text and glue land outside the call span and yield None
+    pub fn remap_call_arg_span(&self, mut span: Span) -> Option<Span> {
+        for _ in 0..16 {
+            if self.emitted_source_for_file(span.file_id).is_none() {
+                return Some(span);
+            }
+            let (remapped, table) = self.remap_span_hop(span)?;
+            let call = self.ast.spans.get(table.call_span);
+            if remapped.file_id != call.file_id
+                || remapped.start < call.start
+                || remapped.end() > call.end()
+            {
+                return None;
+            }
+            span = remapped;
+        }
+        None
     }
 
     pub fn report_ext(&mut self, e: K1Message, no_print: bool) {

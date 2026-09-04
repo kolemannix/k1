@@ -2878,7 +2878,7 @@ pub struct TypedProgram {
 
     /// Every metaprogram-emitted source, in emission order
     pub emitted_sources: Vec<EmittedSource>,
-    pub emitted_parse_cache: FxHashMap<u64, ParsedExprId>,
+    pub emitted_parse_cache: FxHashMap<(u64, SpanId), ParsedExprId>,
 
     // For every static value, once evaluated, we store its runtime representation
     // here; the data lives in vm_static_stack
@@ -18239,7 +18239,7 @@ impl TypedProgram {
 
     fn emit_ls_entity(&self, span: SpanId, kind: LsEntityKind) {
         if cfg!(feature = "lsp") {
-            let span = self.ast.spans.get(span);
+            let Some(span) = self.remap_call_arg_span(self.ast.spans.get(span)) else { return };
             let mut ls_entities = self.ls_entities.borrow_mut();
             let file_id = span.file_id;
             let entities_entry = ls_entities.entry(file_id);

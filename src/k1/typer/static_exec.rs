@@ -1234,7 +1234,7 @@ impl TypedProgram {
             let mut h = ahash::AHasher::default();
             content.hash(&mut h);
             let hash = h.finish();
-            if let Some(&cached_root) = self.emitted_parse_cache.get(&hash) {
+            if let Some(&cached_root) = self.emitted_parse_cache.get(&(hash, span)) {
                 let typed_metaprogram = self.eval_expr(cached_root, ctx)?;
                 return Ok(StaticExecutionResult::TypedExpr(typed_metaprogram));
             }
@@ -1279,7 +1279,7 @@ impl TypedProgram {
         match parsed_metaprogram {
             ParseMetaprogramResult::Expr(parsed_expr_id) => {
                 if let Some(hash) = content_hash {
-                    self.emitted_parse_cache.insert(hash, parsed_expr_id);
+                    self.emitted_parse_cache.insert((hash, span), parsed_expr_id);
                 }
                 let typed_metaprogram = self.eval_expr(parsed_expr_id, ctx)?;
                 debug!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
