@@ -43,7 +43,12 @@ fn eq-anon() {
 
 
 type block = {
-  position: { x: int, y: int, width: int, height: int },
+  position: {
+    x: int
+    y: int
+    width: int
+    height: int
+  },
   text: int
 }
 
