@@ -33,3 +33,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - run: ./test.sh
+
+      - name: Binding drift from module setups
+        if: failure()
+        run: git --no-pager diff --stat && git --no-pager diff modules/ | head -400
