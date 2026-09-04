@@ -5499,7 +5499,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         condition: Option<ParsedExprId>,
     ) -> ParseResult<ParsedNamespaceId> {
         let keyword = self.expect_kind(K::KeywordNs)?;
-        self.emit_semantic_token(keyword, SemanticTokenKind::Namespace);
+        self.emit_semantic_token(keyword, SemanticTokenKind::Keyword);
         let mut lib_name: Option<StringId> = None;
         let mut reload = false;
         if self.maybe_consume(K::OpenParen).is_some() {
@@ -5520,16 +5520,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             self.expect_kind(K::CloseParen)?;
         }
-        let mut is_type = false;
-        match self.peek().kind {
-            K::KeywordFor => {
-                self.advance();
-                is_type = true;
-            }
-            _ => {}
+        let is_type = if let Some(keyword_for) = self.maybe_consume(K::KeywordFor) {
+            self.emit_semantic_token(keyword_for, SemanticTokenKind::Keyword);
+            true
+        } else {
+            false
         };
 
         let (name_token, name) = self.expect_ident()?;
+
+        if is_type {
+            self.emit_semantic_token(name_token, SemanticTokenKind::Type);
+        }
+
         let is_braced = match self.peek() {
             t if t.kind == K::OpenBrace => {
                 self.advance();
