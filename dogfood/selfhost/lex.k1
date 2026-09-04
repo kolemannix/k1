@@ -47,28 +47,28 @@ ns for token-kind {
   }
 
   fn is-string(self: token-kind): bool {
-    self is {
+    if self is {
       :string-done-dq or :string-done-bt or :string-open-dq or :string-open-bt -> true,
       _ -> false,
     }
   }
 
   fn string-is-done(self: token-kind): bool {
-    self is {
+    if self is {
       :string-done-dq or :string-done-bt -> true,
       _ -> false,
     }
   }
 
   fn string-delim-char(self: token-kind): char {
-    self is {
+    if self is {
       :string-done-bt or :string-open-bt -> '`',
       _ -> '"',
     }
   }
 
   fn repr(self: token-kind): string {
-    self is {
+    if self is {
       :ident -> "<ident>",
       :numeric -> "<numeric>",
       :string-done-dq -> "<\"string\">",
@@ -292,7 +292,7 @@ ns for lexer {
       return self.make-token(:numeric, start, tok-len)
     }
     let text = self.content.slice(start.widen[size], end.widen[size])
-    keyword-kind(text) is {
+    if keyword-kind(text) is {
       :some k -> self.make-token(k, start, tok-len),
       :none -> self.make-token(:ident, start, tok-len),
     }
@@ -450,7 +450,7 @@ ns for lexer {
               if self.content.[i] == '\n' { nl = :some(i); break }
               i = i + 1
             }
-            nl is {
+            if nl is {
               :some a -> {
                 if a > self.pos and self.content.[a - 1] == '\r' {
                   self.pos = a
@@ -538,7 +538,7 @@ ns for lexer {
   fn run(self: *mut lexer, tokens: *mut list[token]): ?lex-error {
     let err: ?lex-error = :none
     loop {
-      self.eat-token(tokens) is {
+      if self.eat-token(tokens) is {
         :ok more -> if not more { break },
         :err e -> { err = :some(e); break }
       }

@@ -15,7 +15,7 @@ fn test() {
   assert-equals(process/sh("echo out; echo err 1>&2").!, "out\nerr\n")
 
   // A nonzero exit is the err, carrying the full status
-  process/sh("exit 3") is {
+  if process/sh("exit 3") is {
     :err :failed f -> {
       assert-equals(f.status.exit-code, 3)
       assert-equals(f.status.signal, 0)

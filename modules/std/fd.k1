@@ -4,7 +4,7 @@ ns fd {
   fn write-all(fd: i32, bytes: span[u8]): result[empty, string] {
     let written: size = 0
     while written < bytes.len() {
-      let n = core/platform/io/write(
+      let n = if core/platform/io/write(
         file = .{ raw = fd },
         data = bytes.data-ptr().add-bytes(written),
         count = bytes.len() - written
@@ -21,7 +21,7 @@ ns fd {
     let sb = string-builder/new()
     let chunk = buffer/allocate[u8](4096)
     loop {
-      let n = core/platform/io/read(.{ raw = fd }, chunk.data.as[ptr], chunk.len).result() is {
+      let n = if core/platform/io/read(.{ raw = fd }, chunk.data.as[ptr], chunk.len).result() is {
         :ok(n) -> n,
         :err(e) -> return :err core/platform/error-string(e)
       }
@@ -57,7 +57,7 @@ ns fd {
           i = i + 1
         }
         let chunk = buffer/allocate-in[u8, _](mem/tmp(), 4096)
-        let n = core/platform/io/read(.{ raw = self.fd }, chunk.data.as[ptr], chunk.len).result() is {
+        let n = if core/platform/io/read(.{ raw = self.fd }, chunk.data.as[ptr], chunk.len).result() is {
           :ok(n) -> n,
           :err(_) -> return :none
         }

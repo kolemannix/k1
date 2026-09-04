@@ -3,7 +3,7 @@ ns parse
 ns for parser {
   fn expect-statement(self: *mut parser): result[ast/stmt-id, perror] {
     let tok = self.peek()
-    self.parse-statement().try is {
+    if self.parse-statement().try is {
       :some s -> :ok(s),
       :none -> :err(make-error("Expected statement", tok)),
     }
@@ -165,7 +165,7 @@ ns for parser {
       self.eat-delimited("Ability Arguments", arguments.&, :comma, :close-bracket, fn(p: *mut parser) p.expect-ability-type-argument()).try
       :some(self.extend-tok-to-here(open-tok))
     } else :none
-    let span = span-opt is {
+    let span = if span-opt is {
       :some args-span -> name.name-span.thru(args-span),
       :none -> name.name-span,
     }
@@ -278,7 +278,7 @@ ns for parser {
       }
       let _ = self.expect-kind(:close-paren).try
       if lib-name is :some _ {
-        linkage is {
+        if linkage is {
           :external ext -> { linkage = :external(.{ lib-name, fn-name = ext.fn-name }) },
           _ -> return :err(error-expected("lib(..) requires the extern modifier", lib-token.!)),
         }
@@ -309,11 +309,11 @@ ns for parser {
     }
     let signature-span = self.extend-tok-to-here(fit.tok)
     let block = self.parse-block(:fn-body).try
-    let end-span = block is {
+    let end-span = if block is {
       :some b -> b.span,
       :none -> fn-params.span,
     }
-    let body: ?ast/expr-id = block is {
+    let body: ?ast/expr-id = if block is {
       :some b -> :some(self.add-expr(:block(b))),
       :none -> :none,
     }
@@ -480,7 +480,7 @@ ns for parser {
     let defs = self.parse-definitions(:close-brace)
     let functions = list/empty[ast/function-id]()
     for d in defs {
-      d is {
+      if d is {
         :function fn-id -> functions.push(fn-id),
         _ -> {
           let span = self.program.get-defn-span(d)
@@ -677,7 +677,7 @@ ns for parser {
         break
       }
       let cursor-before = self.cursor
-      self.expect-definition() is {
+      if self.expect-definition() is {
         :ok d -> defns.push(d),
         :err e -> {
           self.report-error(e)

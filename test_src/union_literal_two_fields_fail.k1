@@ -1,0 +1,7 @@
+type bits = union { as-u32: u32, as-f32: f32 }
+
+fn main(): i32 {
+  let b: bits = .{ as-u32 = 1, as-f32 = 1.0 }
+  b.as-u32.as[i32]()
+}
+//errmsg: is a union; a union literal sets at most one field

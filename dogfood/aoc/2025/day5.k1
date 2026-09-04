@@ -45,14 +45,14 @@ fn part-one(input: string) {
   let ing = list/empty[uint]()
   for lines {
     if it.is-empty() { parse-mode = :ingredients; } else {
-      parse-mode is {
+      if parse-mode is {
         :ranges -> { ranges.push(range/parse(it).!) },
         :ingredients -> { ing.push(u64/from-string(it).!) }
       }
     }
   }
 
-  let fresh = ing.filter(fn i. {
+  let fresh = ing.filter(fn[ranges] i. {
     for range in ranges {
       let fresh = range.start <= i and range.end >= i
       if fresh return true

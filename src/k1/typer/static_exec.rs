@@ -286,11 +286,7 @@ impl TypedProgram {
     ) -> K1Result<()> {
         k1.compile_function_for_exec(function_id, span)?;
         k1.compile_all_pending_ir(span)?;
-        // Macros execute repeatedly; inline_done guards re-optimizing
-        let unit_id = IrUnitId::Function(function_id);
-        if !ir::get_compiled_unit(&k1.ir, unit_id).unwrap().inline_done {
-            ir::optimize_unit(k1, unit_id);
-        }
+        ir::optimize_unit(k1, IrUnitId::Function(function_id));
         Ok(())
     }
 
@@ -1238,7 +1234,7 @@ impl TypedProgram {
             let mut h = ahash::AHasher::default();
             content.hash(&mut h);
             let hash = h.finish();
-            if let Some(&cached_root) = self.emitted_parse_cache.get(&hash) {
+            if let Some(&cached_root) = self.emitted_parse_cache.get(&(hash, span)) {
                 let typed_metaprogram = self.eval_expr(cached_root, ctx)?;
                 return Ok(StaticExecutionResult::TypedExpr(typed_metaprogram));
             }
@@ -1283,7 +1279,7 @@ impl TypedProgram {
         match parsed_metaprogram {
             ParseMetaprogramResult::Expr(parsed_expr_id) => {
                 if let Some(hash) = content_hash {
-                    self.emitted_parse_cache.insert(hash, parsed_expr_id);
+                    self.emitted_parse_cache.insert((hash, span), parsed_expr_id);
                 }
                 let typed_metaprogram = self.eval_expr(parsed_expr_id, ctx)?;
                 debug!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
@@ -1558,9 +1554,10 @@ impl TypedProgram {
                     Ok(parsed_expr) => {
                         if p.ast.errors.len() > error_count_start {
                             let e = p.ast.errors.last().unwrap().clone();
+                            let src = p.source().content(&p.ast.mem);
                             Err(make_message(
                                 &p.ast.idents,
-                                format!("{msg_base}{e}"),
+                                format!("{msg_base}{e}\n{src}"),
                                 e.span(),
                                 MessageLevel::Error,
                             ))
@@ -1573,9 +1570,10 @@ impl TypedProgram {
                     let defns = p.parse_definitions(TokenKind::Eof);
                     if p.ast.errors.len() > error_count_start {
                         let e = p.ast.errors.last().unwrap().clone();
+                        let src = p.source().content(&p.ast.mem);
                         Err(make_message(
                             &p.ast.idents,
-                            format!("{msg_base}{e}"),
+                            format!("{msg_base}{e}\n{src}"),
                             e.span(),
                             MessageLevel::Error,
                         ))

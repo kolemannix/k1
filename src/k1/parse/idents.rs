@@ -348,10 +348,10 @@ impl IdentPool {
         self.pool.borrow_mut().intern(s.as_ref())
     }
     pub fn lookup(&self, s: impl AsRef<str>) -> Option<StringId> {
-        self.pool.borrow().lookup(s.as_ref())
+        unsafe { &*self.pool.as_ptr() }.lookup(s.as_ref())
     }
     pub fn get_string(&self, id: StringId) -> &'static str {
-        self.pool.borrow().get(id)
+        unsafe { &*self.pool.as_ptr() }.get(id)
     }
 
     pub fn snap(&self, w: &mut crate::snap::SnapWriter) {

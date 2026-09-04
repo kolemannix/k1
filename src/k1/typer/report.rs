@@ -80,6 +80,34 @@ impl TypedProgram {
         buf
     }
 
+    /// `impl_<ability>.<fn>_for_t<self>` for ability impl fns, the plain name otherwise
+    pub fn write_function_name(&self, w: &mut impl std::fmt::Write, function_id: FunctionId) {
+        let function = self.get_function(function_id);
+        if let TypedFunctionKind::AbilityImpl(ability_id, self_type_id) = function.kind {
+            write!(
+                w,
+                "impl_{}{}.{}_for_t{}",
+                ability_id.as_u32(),
+                self.ident_str(self.abilities.get(ability_id).name),
+                self.ident_str(function.name),
+                self_type_id.as_u32()
+            )
+            .unwrap();
+        } else {
+            write!(w, "{}", self.ident_str(function.name)).unwrap();
+        }
+    }
+
+    /// Scope path, derived name, and the function id: unique per function
+    pub fn function_symbol_name(&self, function_id: FunctionId) -> String {
+        let mut s = String::with_capacity(64);
+        self.write_scope_path(&mut s, self.get_function(function_id).scope, ".", true);
+        s.push('.');
+        self.write_function_name(&mut s, function_id);
+        write!(s, "_{}", function_id.as_u32()).unwrap();
+        s
+    }
+
     pub fn global_link_symbol(&self, global: &TypedGlobal) -> String {
         let variable = self.variables.get(global.variable_id);
         if let Some(link_name) = global.link_name {
@@ -112,49 +140,68 @@ impl TypedProgram {
     pub fn report(&mut self, e: K1Message) {
         self.report_ext(e, false)
     }
-    /// Follows the emitted-file tables back to the span the metaprogram received,
-    /// preserving the position within the containing chunk; a span not covered by
-    /// any entry stays put
+
     /// `emitted_sources` is sorted by `file_id` (each emission registers a fresh,
     /// strictly later source file)
     pub(super) fn emitted_source_for_file(&self, file_id: FileId) -> Option<usize> {
         self.emitted_sources.binary_search_by_key(&file_id, |e| e.file_id).ok()
     }
 
-    pub fn remap_to_source_span(&mut self, span_id: SpanId) -> SpanId {
-        let mut current = span_id;
-        for _ in 0..16 {
-            let span = self.ast.spans.get(current);
-            let Some(table_index) = self.emitted_source_for_file(span.file_id) else {
-                return current;
-            };
-            let table = &self.emitted_sources[table_index];
-            let entries = self.mem.getn(table.entries);
-            let candidate = entries.partition_point(|entry| entry.start <= span.start);
-            let Some(&CodeChunkPos { start, end, source }) =
-                candidate.checked_sub(1).map(|i| &entries[i])
-            else {
-                return current;
-            };
-            if span.start >= end {
-                return current;
-            }
-            let source_span = self.ast.spans.get(source);
-            let offset = span.start - start;
-            // Emitted text can differ in length from its source span (escapes,
-            // dedent); fall back to the whole source span past its end
-            current = if offset < source_span.len {
-                let len = span.len.min(end - span.start).min(source_span.len - offset);
-                self.ast.spans.add(Span {
-                    file_id: source_span.file_id,
-                    start: source_span.start + offset,
-                    len,
-                })
-            } else {
-                source
-            };
+    /// One step back through the emitted-file table covering `span`: the same
+    /// position within the chunk's source span, or the whole source span when
+    /// the emitted text outran it (escapes, dedent). None when `span` is not
+    /// chunk text: a real file, or glue
+    fn remap_span_hop(&self, span: Span) -> Option<(Span, &EmittedSource)> {
+        let table = &self.emitted_sources[self.emitted_source_for_file(span.file_id)?];
+        let entries = self.mem.getn(table.entries);
+        let candidate = entries.partition_point(|entry| entry.start <= span.start);
+        let &CodeChunkPos { start, end, source } = &entries[candidate.checked_sub(1)?];
+        if span.start >= end {
+            return None;
         }
-        current
+        let source_span = self.ast.spans.get(source);
+        let offset = span.start - start;
+        let remapped = if offset < source_span.len {
+            let len = span.len.min(end - span.start).min(source_span.len - offset);
+            Span { file_id: source_span.file_id, start: source_span.start + offset, len }
+        } else {
+            source_span
+        };
+        Some((remapped, table))
+    }
+
+    pub fn remap_span(&self, mut span: Span) -> Span {
+        for _ in 0..16 {
+            let Some((remapped, _)) = self.remap_span_hop(span) else { break };
+            span = remapped;
+        }
+        span
+    }
+
+    pub fn remap_to_source_span(&mut self, span_id: SpanId) -> SpanId {
+        let span = self.ast.spans.get(span_id);
+        let remapped = self.remap_span(span);
+        if remapped == span { span_id } else { self.ast.spans.add(remapped) }
+    }
+
+    /// Follows argument text back to the call it was written in; template
+    /// text and glue land outside the call span and yield None
+    pub fn remap_call_arg_span(&self, mut span: Span) -> Option<Span> {
+        for _ in 0..16 {
+            if self.emitted_source_for_file(span.file_id).is_none() {
+                return Some(span);
+            }
+            let (remapped, table) = self.remap_span_hop(span)?;
+            let call = self.ast.spans.get(table.call_span);
+            if remapped.file_id != call.file_id
+                || remapped.start < call.start
+                || remapped.end() > call.end()
+            {
+                return None;
+            }
+            span = remapped;
+        }
+        None
     }
 
     pub fn report_ext(&mut self, e: K1Message, no_print: bool) {
@@ -273,13 +320,6 @@ impl TypedProgram {
             self.write_error(&mut std::io::stderr(), error, use_color).unwrap();
         }
         panic!("Internal Compiler Error at: {}", msg.as_ref())
-    }
-
-    #[track_caller]
-    pub fn todo_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
-        let use_color = std::io::stderr().is_terminal();
-        self.write_location_error(&mut std::io::stderr(), span, use_color);
-        panic!("not yet implemented: {}", msg.as_ref())
     }
 
     // Timing

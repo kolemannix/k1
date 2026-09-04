@@ -22,6 +22,8 @@ K1_HOME=$(pwd) target/$target_dir/k1_test $1
 export RUST_LOG=info
 # suite1 again under --optimize
 K1_HOME=$(pwd) target/$target_dir/k1 --optimize --cache false run test_src/suite1
+K1_HOME=$(pwd) target/$target_dir/k1 --debug --cache false build test_src/suite1
+K1_HOME=$(pwd) target/$target_dir/k1 --emit-llvm --cache false run test_src/suite1
 
 target/$target_dir/k1 --cache false build dogfood/refchess
 target/$target_dir/k1 --cache false build dogfood/profiling

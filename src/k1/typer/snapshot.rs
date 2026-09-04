@@ -28,6 +28,7 @@ pub(crate) fn inputs_hash_from_settings(
         out_dir_generated: _,
         cache_dir: _,
         optimize,
+        emit_llvm: _,
         chatty: _,
         optimize_ir,
         cache: _,

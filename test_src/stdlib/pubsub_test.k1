@@ -33,7 +33,7 @@ fn test() {
   assert(src.next() is :pending)
   bus.dispatch()
   assert-equals(wakes, 1)
-  src.next() is {
+  if src.next() is {
     :chunk group -> assert(group.[0] == "hi".span-bytes()),
     _ -> crash("expected the news payload"),
   }
@@ -44,8 +44,8 @@ fn test() {
   bus.publish("news", heap-bytes/cloned("b".span-bytes()).to-rc())
   bus.dispatch()
   assert-equals(wakes, 2)
-  src.next() is { :chunk group -> assert(group.[0] == "a".span-bytes()), _ -> crash("expected a") }
-  src.next() is { :chunk group -> assert(group.[0] == "b".span-bytes()), _ -> crash("expected b") }
+  if src.next() is { :chunk group -> assert(group.[0] == "a".span-bytes()), _ -> crash("expected a") }
+  if src.next() is { :chunk group -> assert(group.[0] == "b".span-bytes()), _ -> crash("expected b") }
 
   // Detach, then publishing to a subscriber-less topic is a no-op
   src.stop()

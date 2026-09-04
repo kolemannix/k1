@@ -32,6 +32,9 @@ ns for span {
   fn data-ptr[t](self: span[t]): ptr {
     self.buffer.data-ptr()
   }
+  fn data-ref[t](self: span[t]): *t {
+    self.buffer.data-ref()
+  }
 
   fn empty[t](): span[t] {
     .{ buffer = buffer/empty[t]() }
@@ -117,6 +120,10 @@ ns for span {
 
   fn as-byte-span(self: span[char]): span[byte] {
     .{ buffer = self.buffer.as-byte-buffer() }
+  }
+
+  fn ref-iter[t](self: span[t]): buffer-ref-iterator[t] {
+    buffer-ref-iterator/from-buffer(self.buffer)
   }
 
 }

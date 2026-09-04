@@ -2,7 +2,7 @@ fn parse-source(file-name: string, source: string): ast/program {
   let program = ast/program/make(file-name, source)
   let tokens = list/empty[lex/token]()
   let lexer = lex/lexer/make(source)
-  lexer.run(tokens.&) is {
+  if lexer.run(tokens.&) is {
     :some e -> {
       program.report-error(.{ message = e.message, span = e.span })
     },
@@ -55,7 +55,7 @@ fn add(a: int, b: int): int {
 }
 
 fn classify(s: shape): int {
-  s is {
+  if s is {
     :circle r if r > 1.0 -> 2,
     :circle _ -> 1,
     :square -> 0,

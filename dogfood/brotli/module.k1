@@ -104,7 +104,7 @@ ns build {
       let i: size = 0
       while i < count {
         w.write("  ")
-        let row-end = min-size(i + per-line, count)
+        let row-end = (i + per-line).min(count)
         while i < row-end {
           w.write("${values.[i]},")
           if i + 1 < row-end w.write(" ")
@@ -134,7 +134,7 @@ ns build {
       let i: size = 0
       while i < values.len() {
         w.write("  ")
-        let row-end = min-size(i + per-line, values.len())
+        let row-end = (i + per-line).min(values.len())
         while i < row-end {
           values.[i].format(w, 17)
           w.write(",")
@@ -146,8 +146,6 @@ ns build {
       w.writeln("]")
       w.writeln("")
     }
-
-    fn min-size(a: size, b: size): size { if a < b a else b }
 
     fn generate() {
       let ees = files/read-to-string("$VENDOR/entropy_encode_static.h")

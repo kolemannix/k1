@@ -6,7 +6,7 @@ use core/c-sizet
 #if k1/platform-macos fn(extern("_NSGetExecutablePath")) _NSGetExecutablePath(buf: ptr, bufsize: ptr): c-int
 
 fn exe-path(): string {
-  k1/platform #is {
+  #if k1/platform is {
     :posix-macos -> {
       let buf = buffer/allocate[u8](4096)
       let cap-buf = buffer/allocate[u32](1)

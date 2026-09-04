@@ -66,7 +66,7 @@ fn check-streaming(name: string, input: span[u8], quality: size, chunk-size: siz
   let out: list[u8] = list/empty()
   let pos: size = 0
   while pos < input.len() {
-    let n = min-size(chunk-size, input.len() - pos)
+    let n = chunk-size.min(input.len() - pos)
     e.process(input.slice(pos, pos + n), out.&)
     e.flush(out.&)
     pos = pos + n

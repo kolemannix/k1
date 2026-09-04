@@ -2447,6 +2447,32 @@ impl TypedProgram {
         }
     }
 
+    pub fn get_physical_type_computed(&self, type_id: TypeId) -> PhysicalTypeResult {
+        match self.phys_types.get(&type_id) {
+            Some(result) => *result,
+            None => panic!("physical type of {} not computed", self.type_id_to_string(type_id)),
+        }
+    }
+
+    pub fn get_layout_computed(&self, type_id: TypeId) -> Option<Layout> {
+        match self.get_physical_type_computed(type_id) {
+            PhysicalTypeResult::No => None,
+            PhysicalTypeResult::Never => None,
+            PhysicalTypeResult::Infinite => None,
+            PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(pt)),
+        }
+    }
+
+    pub fn compute_all_physical_types(&mut self) {
+        let mut type_ids: Vec<TypeId> = Vec::with_capacity(self.types.len());
+        for type_id in self.types.iter_ids() {
+            type_ids.push(type_id);
+        }
+        for type_id in type_ids {
+            self.get_physical_type(type_id);
+        }
+    }
+
     pub fn get_layout_nonmut(&self, type_id: TypeId) -> Option<Layout> {
         match self.phys_types.get(&type_id) {
             Some(maybe_pt) => match maybe_pt {

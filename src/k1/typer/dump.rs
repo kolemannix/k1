@@ -134,10 +134,8 @@ impl TypedProgram {
         ty: TypeId,
         mode: TypeDisplayMode,
     ) -> std::fmt::Result {
-        let mut visited = self.buffers.visited_types.borrow_mut();
-        let res = self.display_type_id_ext(w, ty, mode, &mut visited);
-        visited.clear();
-        res
+        let mut visited = Vec::new();
+        self.display_type_id_ext(w, ty, mode, &mut visited)
     }
 
     // Silly function but so commonly needed its worth the call-site ergonomics
@@ -922,10 +920,8 @@ impl TypedProgram {
         id: StaticValueId,
         pretty: bool,
     ) -> std::fmt::Result {
-        let mut visited = self.buffers.visited_types.borrow_mut();
-        let res = self.display_static_value_ext(w, id, pretty, &mut visited);
-        visited.clear();
-        res
+        let mut visited = Vec::new();
+        self.display_static_value_ext(w, id, pretty, &mut visited)
     }
 
     fn display_static_value_ext<W: Write + ?Sized>(

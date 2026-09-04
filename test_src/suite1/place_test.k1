@@ -109,14 +109,14 @@ fn test() {
   // Mixed aggregates: store to struct members inside a sum payload, through a
   // reference binding from a match on the variant
   let shape: shape = :circle .{ radius = 5, filled = false }
-  (&shape) is {
+  if (&shape) is {
     :circle c* -> {
       c.radius = 10
       c.filled = true
     },
     _ -> crash("expected a circle")
   }
-  shape is {
+  if shape is {
     :circle c -> {
       assert-equals(c.radius, 10)
       assert(c.filled)

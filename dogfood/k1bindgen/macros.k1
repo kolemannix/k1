@@ -65,7 +65,7 @@ fn transpile-expr(t: *mut macro-transpile): result[string, string] {
 }
 
 fn is-binary-op(op: string): bool {
-  op is {
+  if op is {
     "*" or "/" or "%" or "+" or "-" or "<<" or ">>" or "&" or "^" or "|" -> true,
     _ -> false
   }
@@ -75,10 +75,10 @@ fn transpile-primary(t: *mut macro-transpile): result[string, string] {
   if t.pos >= t.toks.len() return :err "unexpected end of expression"
   let tok = t.toks.[t.pos]
   t.pos = t.pos + 1
-  tok.kind is {
+  if tok.kind is {
     :Literal -> transpile-literal(t, tok.text),
     :Identifier -> {
-      let ty = t.emitted.get(tok.text) is {
+      let ty = if t.emitted.get(tok.text) is {
         :some ty -> ty,
         :none -> return :err "references '${tok.text}', which is not an emitted macro"
       }
@@ -91,7 +91,7 @@ fn transpile-primary(t: *mut macro-transpile): result[string, string] {
       }
       :ok (t.names.transformed-name(tok.text))
     },
-    :Punctuation -> tok.text is {
+    :Punctuation -> if tok.text is {
       "(" -> {
         let inner = transpile-expr(t).try
         if t.pos >= t.toks.len() return :err "missing closing paren"
@@ -144,7 +144,7 @@ fn transpile-literal(t: *mut macro-transpile, text: string): result[string, stri
     // k1 has no octal literals
     let value: i64 = 0
     for c in digits {
-      let d = c.to-ascii-digit() is { :some d -> d.widen[i64], :none -> return :err "unsupported literal $text" }
+      let d = if c.to-ascii-digit() is { :some d -> d.widen[i64], :none -> return :err "unsupported literal $text" }
       if d >= 8 return :err "unsupported literal $text"
       value = value * 8 + d
     }
@@ -225,7 +225,7 @@ fn parse-char-literal(text: string): result[i64, string] {
     return :ok text.[1].u8().widen[i64]
   }
   if text.len() == 4 and text.[0] == '\'' and text.[1] == '\\' and text.[3] == '\'' {
-    let v: i64 = text.[2] is {
+    let v: i64 = if text.[2] is {
       'n' -> 10,
       't' -> 9,
       'r' -> 13,

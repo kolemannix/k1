@@ -29,8 +29,6 @@ type one-pass-arena = {
   tmp-bits: array[u16, 64],
 }
 
-fn min-size(a: size, b: size): size { if a < b a else b }
-
 fn hash-bytes(p: ptr, shift: u32): size {
   (((load64-le(p) << 24) * HASH-MUL32) >> shift).signed()
 }
@@ -395,7 +393,7 @@ fn compress-fragment-impl(
   let shift = (64 - table-bits).trunc[u32]
 
   let metablock-start = input
-  let block-size = min-size(input-size, FIRST-BLOCK-SIZE)
+  let block-size = input-size.min(FIRST-BLOCK-SIZE)
   let total-block-size = block-size
   // Bit position of the MLEN field, so the meta-block can be extended.
   let mlen-storage-ix = bw.pos + 3
@@ -427,7 +425,7 @@ fn compress-fragment-impl(
     if block-size >= INPUT-MARGIN {
       // For the last block keep a margin of 16 bytes so distances stay in
       // window; otherwise 5 bytes so a copy never overruns the block.
-      let len-limit = min-size(block-size - MIN-MATCH, input-size - INPUT-MARGIN)
+      let len-limit = (block-size - MIN-MATCH).min(input-size - INPUT-MARGIN)
       let ip-limit = input.add-bytes(len-limit)
 
       ip = ip.add-bytes(1)
@@ -541,7 +539,7 @@ fn compress-fragment-impl(
       // emit_remainder
       input = input.add-bytes(block-size)
       input-size = input-size - block-size
-      block-size = min-size(input-size, MERGE-BLOCK-SIZE)
+      block-size = input-size.min(MERGE-BLOCK-SIZE)
 
       // Extend the current meta-block if the next block's histogram still
       // fits its literal code (both sizes have 5 nibbles once merged).
@@ -571,7 +569,7 @@ fn compress-fragment-impl(
     // next_block
     if input-size == 0 break
     metablock-start = input
-    block-size = min-size(input-size, FIRST-BLOCK-SIZE)
+    block-size = input-size.min(FIRST-BLOCK-SIZE)
     total-block-size = block-size
     mlen-storage-ix = bw.pos + 3
     store-metablock-header(block-size, false, bw)
@@ -731,7 +729,7 @@ ns for encoder {
     if self.finished crash("brotli encoder: process after finish")
     let pos: size = 0
     while pos < input.len() {
-      let block = min-size(FRAGMENT-SIZE, input.len() - pos)
+      let block = FRAGMENT-SIZE.min(input.len() - pos)
       self.compress-block(input.data-ptr().add-bytes(pos), block, false, out)
       pos = pos + block
     }
@@ -769,7 +767,7 @@ ns for encoder {
     let pos: size = 0
     loop {
       let remaining = input.len() - pos
-      let block = min-size(FRAGMENT-SIZE, remaining)
+      let block = FRAGMENT-SIZE.min(remaining)
       let is-last = remaining == block
       self.compress-block(input.data-ptr().add-bytes(pos), block, is-last, out)
       pos = pos + block

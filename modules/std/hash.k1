@@ -163,7 +163,7 @@ ns for map {
         break .{ idx, found = true, from-tombstone = false }
       }
       if s.hash == EMPTY {
-        break tombstone is {
+        break if tombstone is {
           :some t -> .{ idx = t, found = false, from-tombstone = true },
           :none -> .{ idx, found = false, from-tombstone = false }
         }
@@ -221,14 +221,14 @@ ns for map {
   }
 
   fn get[k, v](self: map[k, v], key: k): ?v where k: hash, k: equals {
-    self._find-index(key, _slot-hash(key)) is {
+    if self._find-index(key, _slot-hash(key)) is {
       :some idx -> :some self.slots.index-unchecked(idx).value,
       :none -> :none
     }
   }
 
   fn get-ref[k, v](self: *mut map[k, v], key: k): ?(*mut v) where k: hash, k: equals {
-    self._find-index(key, _slot-hash(key)) is {
+    if self._find-index(key, _slot-hash(key)) is {
       :some idx -> :some self.slots.index-unchecked(idx).value.&,
       :none -> :none
     }
@@ -239,7 +239,7 @@ ns for map {
   }
 
   fn remove[k, v](self: *mut map[k, v], key: k): ?v where k: hash, k: equals {
-    self._find-index(key, _slot-hash(key)) is {
+    if self._find-index(key, _slot-hash(key)) is {
       :none -> :none,
       :some idx -> {
         let s = self.slots.index-unchecked(idx)
@@ -333,7 +333,7 @@ impl[k, v] iterable[item = { key: k, value: v }, i = map-iterator[k, v]] for map
 
 impl[k: hash and equals, v] index[key = k, t = v] for map[k, v] {
   fn index-ref(self, key: k): *v {
-    self._find-index(key, map/_slot-hash(key)) is {
+    if self._find-index(key, map/_slot-hash(key)) is {
       :some idx -> self.slots.index-unchecked(idx).value.&,
       :none -> crash("map index: key not found")
     }
@@ -418,7 +418,7 @@ type set-iterator[t] = { inner: map-iterator[t, empty] }
 
 impl[t] iterator[item = t] for set-iterator[t] {
   fn next(self: *mut self): ?item {
-    self.inner.next() is {
+    if self.inner.next() is {
       :some kv -> :some kv.key,
       :none -> :none
     }

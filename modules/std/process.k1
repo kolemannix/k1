@@ -17,7 +17,7 @@ ns process {
 
   impl print for run-error {
     fn print-to[w: writer](self, w) {
-      self is {
+      if self is {
         :spawn s -> w.write("'${s.program}': ${s.message}"),
         :failed f -> {
           if f.status.signal != 0 {
@@ -61,7 +61,7 @@ ns process {
   }
 
   fn reap(pid: i32, program: string): result[run-output, run-error] {
-    core/platform/process/wait(pid) is {
+    if core/platform/process/wait(pid) is {
       :ok(s) -> :ok .{ exit-code = s.exit-code, signal = s.signal, output = "" },
       :err(code) -> :err :spawn .{
         program = program,
@@ -76,10 +76,10 @@ ns process {
     let program-path = resolve-program(program).try
 
     let pipe-read: i32 = -1
-    let child-out: i32 = mode is {
+    let child-out: i32 = if mode is {
       :inherit -> -1,
       :capture -> {
-        let p = core/platform/io/pipe() is {
+        let p = if core/platform/io/pipe() is {
           :some(p) -> p,
           :none -> return :err :spawn .{ program = program, message = "pipe failed" }
         }
@@ -87,7 +87,7 @@ ns process {
         p.write.raw
       },
       :drop -> {
-        core/platform/io/open-to-write("/dev/null") is {
+        if core/platform/io/open-to-write("/dev/null") is {
           :some(h) -> h.raw,
           :none -> return :err :spawn .{ program = program, message = "open /dev/null failed" }
         }
@@ -103,7 +103,7 @@ ns process {
       extra-close = [pipe-read]
     )
     if child-out >= 0 { core/platform/io/close(.{ raw = child-out }) }
-    let pid = spawned is {
+    let pid = if spawned is {
       :ok(pid) -> pid,
       :err(code) -> {
         if pipe-read >= 0 { core/platform/io/close(.{ raw = pipe-read }) }
@@ -119,7 +119,7 @@ ns process {
       let read-result = fd/read-all(pipe-read)
       mem/pop-arena()
       core/platform/io/close(.{ raw = pipe-read })
-      read-result is {
+      if read-result is {
         :ok s -> s,
         :err message -> {
           // Reap before reporting so we never leave a zombie behind
@@ -181,11 +181,11 @@ ns process {
     let program-path = resolve-program(program).try
 
     // in: parent writes, child reads; out: child writes, parent reads
-    let in-pipe = core/platform/io/pipe() is {
+    let in-pipe = if core/platform/io/pipe() is {
       :some(p) -> p,
       :none -> return :err :spawn .{ program = program, message = "pipe failed" }
     }
-    let out-pipe = core/platform/io/pipe() is {
+    let out-pipe = if core/platform/io/pipe() is {
       :some(p) -> p,
       :none -> {
         core/platform/io/close(in-pipe.read)
@@ -204,7 +204,7 @@ ns process {
     )
     core/platform/io/close(in-pipe.read)
     core/platform/io/close(out-pipe.write)
-    let pid = spawned is {
+    let pid = if spawned is {
       :ok(pid) -> pid,
       :err(code) -> {
         core/platform/io/close(in-pipe.write)

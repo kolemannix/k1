@@ -18,8 +18,8 @@ type pending-part = either {
 }
 
 fn min-of(a: ?u32, b: u32): u32 {
-  a is {
-    :some m -> if b < m b else m,
+  if a is {
+    :some m -> b.min(m),
     :none -> b,
   }
 }
@@ -37,7 +37,7 @@ fn error-expected(expected: string, t: token): perror {
 }
 
 fn binary-op-from-kind(k: token-kind): ?ast/binary-op-kind {
-  k is {
+  if k is {
     :plus -> :some(:add),
     :minus -> :some(:subtract),
     :asterisk -> :some(:multiply),
@@ -177,7 +177,7 @@ ns for parser {
   }
 
   fn expect-ident-chars(self: *mut parser, chars: string): result[ident-tok, perror] {
-    self.maybe-consume-ident-chars(chars) is {
+    if self.maybe-consume-ident-chars(chars) is {
       :some it -> :ok(it),
       :none -> :err(make-error("Expected '$chars'", self.peek())),
     }
@@ -217,7 +217,7 @@ ns for parser {
         self.advance()
         return :ok
       }
-      parse-one(self) is {
+      if parse-one(self) is {
         :err e -> {
           self.report-error(e)
           let t = self.scan-to-two(delim, term).try

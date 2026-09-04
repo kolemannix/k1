@@ -24,6 +24,7 @@ fn test() {
   identity-u(u)
 
   read-write()
+  literals()
 
   .{}
 }
@@ -54,4 +55,30 @@ fn read-write() {
   arr.[1].b = 1.5
   assert-equals(arr.[1].a, 1069547520)
   assert-equals(arr.[0].a, 0)
+}
+
+type wide = union { small: u32, big: u64 }
+
+fn literals() {
+  let f: u = .{ b = 1.0 }
+  assert-equals(f.a, 0x3F800000)
+  assert-equals(identity-u(.{ c = -1 }).a, 4294967295)
+
+  let bits: u = mem/bitcast[u32, u](0x40000000)
+  assert-equals(bits.b, 2.0: f32)
+
+  let w: wide = zeroed()
+  w.big = 0xFFFFFFFFFFFFFFFF
+  w = .{ small = 7 }
+  assert-equals(w.small, 7)
+  assert-equals(w.big & 0xFFFFFFFF, 7)
+  assert-equals(types/size[wide], 8)
+
+  let h: holder = .{ tag = 1, payload = .{ a = 0x3F800000 }, trailer = 2 }
+  assert-equals(h.payload.b, 1.0: f32)
+  assert-equals(h.trailer, 2)
+
+  let empty: u = .{}
+  empty.a = 3
+  assert-equals(empty.c, 3)
 }

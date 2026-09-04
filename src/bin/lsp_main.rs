@@ -202,6 +202,8 @@ fn candidate_to_item(candidate: k1::lsp_support::CompletionCandidate) -> Complet
         kind: Some(kind),
         sort_text: Some(format!("{:02}_{}", candidate.sort_group, candidate.label)),
         detail: if candidate.detail.is_empty() { None } else { Some(candidate.detail) },
+        insert_text_format: candidate.snippet.as_ref().map(|_| InsertTextFormat::SNIPPET),
+        insert_text: candidate.snippet,
         label: candidate.label,
         ..CompletionItem::default()
     }
@@ -661,7 +663,6 @@ impl LanguageServer for Backend {
         }
 
         {
-            // Scoping hacks for async bullshit
             let mut edited_sources = self.edited_sources.lock().unwrap();
             edited_sources.insert(file_url.clone(), ast);
         }
@@ -975,8 +976,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let definition_span_id = k1::lsp_support::get_entity_definition_span(k1, entity.kind);
-        let definition_span = k1.ast.spans.get(definition_span_id);
+        let definition_span = k1::lsp_support::get_entity_definition_span(k1, entity.kind);
         if definition_span == Span::NONE {
             error!("definition span is nil");
             return Ok(None);
@@ -1017,11 +1017,12 @@ fn find_references(
     };
 
     // References are served by scanning ls_entities across all files: every
-    // usage the typer sees emits an entity at its span
+    // usage the typer sees emits an entity at its span; re-evaluated bodies
+    // (generic specializations, macro arguments used twice) repeat spans
+    let mut spans: Vec<Span> = Vec::new();
     match ls_entity.kind {
         LsEntityKind::Function { function_id, .. } => {
             let target = k1::lsp_support::get_function_generic_id(k1, function_id);
-            let mut locations = Vec::new();
             for entities in k1.ls_entities.borrow().values() {
                 for entity in entities {
                     let LsEntityKind::Function { function_id: fid, is_defn } = entity.kind else {
@@ -1033,16 +1034,13 @@ fn find_references(
                     if k1::lsp_support::get_function_generic_id(k1, fid) != target {
                         continue;
                     }
-                    if let Some(location) = location_from_resolved_span(k1, entity.span) {
-                        locations.push(location);
-                    }
+                    spans.push(entity.span);
                 }
             }
-            Ok(Some(locations))
         }
         LsEntityKind::Variable { variable_id } => {
-            let defn_span = k1.ast.spans.get(k1.variables.get(variable_id).defn_span);
-            let mut locations = Vec::new();
+            let defn_span =
+                k1.remap_span(k1.ast.spans.get(k1.variables.get(variable_id).defn_span));
             for entities in k1.ls_entities.borrow().values() {
                 for entity in entities {
                     let LsEntityKind::Variable { variable_id: vid } = entity.kind else {
@@ -1054,24 +1052,29 @@ fn find_references(
                     if entity.span == defn_span && !include_declaration {
                         continue;
                     }
-                    if let Some(location) = location_from_resolved_span(k1, entity.span) {
-                        locations.push(location);
-                    }
+                    spans.push(entity.span);
                 }
             }
-            Ok(Some(locations))
         }
-        LsEntityKind::Namespace(_namespace_id) => Ok(None),
-        LsEntityKind::Type { .. } => Ok(None),
+        LsEntityKind::Namespace(_) | LsEntityKind::Type { .. } => return Ok(None),
         LsEntityKind::Variant { .. } => {
             // This will be really useful; a variant that is never constructed...
-            Ok(None)
+            return Ok(None);
         }
         LsEntityKind::StructField { .. } => {
             // This will be really useful; a field that is never accessed...
-            Ok(None)
+            return Ok(None);
         }
     }
+    spans.sort_by_key(|span| (span.file_id, span.start, span.len));
+    spans.dedup();
+    let mut locations = Vec::new();
+    for span in spans {
+        if let Some(location) = location_from_resolved_span(k1, span) {
+            locations.push(location);
+        }
+    }
+    Ok(Some(locations))
 }
 
 fn location_from_resolved_span(k1: &TypedProgram, span: Span) -> Option<Location> {

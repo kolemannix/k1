@@ -3,7 +3,7 @@ ns thread
 type(alias) thread = *empty
 
 fn start[t](handle: *mut thread, function: *fn(*mut t) -> ptr, input: *t) {
-  let h = core/platform/thread/spawn(function.as[ptr], input.as[ptr]) is {
+  let h = if core/platform/thread/spawn(function.as[ptr], input.as[ptr]) is {
     :some h -> h,
     :none -> crash("thread spawn failed")
   }

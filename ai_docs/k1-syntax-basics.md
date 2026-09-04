@@ -457,19 +457,20 @@ This works in every pattern position — `if`/`while`/`require` conditions and
 match arms:
 
 ```rust
-result-ref is {
+if result-ref is {
   :ok(value-ref)* -> { value-ref.* = value-ref.* + 1 },
   :err(message-ref)* -> { crash(message-ref.*) }
 }
 ```
 
-`is` with a brace block of arms is the match expression: exhaustive, and
-usable anywhere an expression is. `x is <pattern>` (a bool) is just its
-two-arm degenerate case.
+`if x is { arms }` is the match expression: exhaustive, and usable anywhere
+an expression is. `#if x is { arms }` is its static form: only the chosen
+arm is typechecked. `x is <pattern>` (a bool) is the two-arm degenerate case,
+and needs no `if`.
 
 ```rust
 fn show-result(result: parse-result[int]): string {
-  result is {
+  if result is {
     :ok(value) -> { "ok {value}" },
     :err(message) -> { "err {message}" }
   }
@@ -561,7 +562,7 @@ Struct patterns work in `if`, `require`, and match arms. Arms support `or`
 patterns, `if` guards, and a `_` default:
 
 ```rust
-point is {
+if point is {
   .{ x = 0, y } -> y,
   .{ x, y } if x == y -> x,
   _ -> 0

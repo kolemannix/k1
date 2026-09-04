@@ -92,20 +92,22 @@ fn main() {
     let llvm_prefix =
         std::env::var("LLVM_SYS_211_PREFIX").expect("LLVM_SYS_211_PREFIX must be set");
     println!("cargo:rerun-if-env-changed=LLVM_SYS_211_PREFIX");
-    let mut lld_shim = cc::Build::new();
-    lld_shim
+    let mut llvm_shims = cc::Build::new();
+    llvm_shims
         .cpp(true)
         .std("c++17")
         .file("src/lld_shim.cpp")
+        .file("src/thinlto_shim.cpp")
         .include(format!("{llvm_prefix}/include"))
         .flag_if_supported("-fno-rtti")
-        .flag_if_supported("-fno-exceptions");
+        .flag_if_supported("-fno-exceptions")
+        .warnings(false);
     let is_linux = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux");
     if is_linux {
         // cc would emit a dynamic -lstdc++ of its own; we supply a static one
-        lld_shim.cpp_link_stdlib(None);
+        llvm_shims.cpp_link_stdlib(None);
     }
-    lld_shim.compile("k1_lld_shim");
+    llvm_shims.compile("k1_llvm_shims");
     if is_linux {
         link_static_cpp_runtime();
     }

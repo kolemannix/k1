@@ -55,7 +55,7 @@ fn test() {
   assert(e1 is :on)
   let e2 = state:on
   assert(e2 is :on(.{}))
-  assert(e2 is { :on -> true, :off -> false, :zilch -> false })
+  assert(if e2 is { :on -> true, :off -> false, :zilch -> false })
   let e3: result[empty, string] = :ok
   assert(e3 is :ok)
   let e4: ?empty = :some

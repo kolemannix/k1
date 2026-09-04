@@ -84,7 +84,7 @@ impl source[t = u8] for chunked-encoder {
   fn stop(self: *mut chunked-encoder) { self.upstream.stop() }
   fn next(self: *mut chunked-encoder): pull[u8] {
     if self.finished { return :done }
-    self.upstream.next() is {
+    if self.upstream.next() is {
       :chunk group -> {
         let total: size = 0
         for seg in group { total = total + seg.len() }

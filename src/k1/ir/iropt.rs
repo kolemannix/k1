@@ -1,108 +1,149 @@
 use super::*;
 
 pub enum OptVisit {
-    Enter(IrUnitId),
-    Leave(IrUnitId),
+    Enter { unit: IrUnitId, parent: Option<IrUnitId> },
+    Leave { unit: IrUnitId, parent: Option<IrUnitId> },
+}
+
+#[derive(Clone, Copy)]
+pub struct SccNode {
+    index: u32,
+    lowlink: u32,
+    on_stack: bool,
+    self_call: bool,
 }
 
 pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     let start = k1.timing.raw();
     let insts_before = k1.ir.instrs.len();
-    let Some(_unit) = get_compiled_unit(&k1.ir, unit_id) else {
+    let Some(unit) = get_compiled_unit(&k1.ir, unit_id) else {
         return;
     };
-    if _unit.is_debug {
+    if unit.is_optimized {
+        return;
+    }
+    if unit.is_debug {
         eprintln!("optimizing {}", unit_to_string(k1, unit_id, true));
     }
 
-    let mut visit_stack = std::mem::take(&mut k1.ir.opt_buf_stack);
-    visit_stack.push(OptVisit::Enter(unit_id));
-    let mut order: Vec<IrUnitId> = std::mem::take(&mut k1.ir.opt_buf_order);
-    let mut visited = std::mem::take(&mut k1.ir.opt_buf_visited);
-    let mut callees = std::mem::take(&mut k1.ir.opt_buf_callees);
+    let mut order = build_postorder_call_graph(k1, unit_id);
 
-    while let Some(visit) = visit_stack.pop() {
-        match visit {
-            OptVisit::Enter(unit_id) => {
-                if !visited.insert(unit_id) {
-                    continue;
-                }
-                visit_stack.push(OptVisit::Leave(unit_id)); // come back after children
-
-                callees.clear();
-                collect_direct_unoptimized_callees(k1, &mut callees, unit_id);
-                for callee_id in &callees {
-                    visit_stack.push(OptVisit::Enter(IrUnitId::Function(*callee_id)));
-                }
-            }
-            OptVisit::Leave(unit_id) => {
-                order.push(unit_id);
-            }
-        }
-    }
-
-    // let skip_inline = true;
     let skip_inline = std::env::var("K1_IROPT_NO_INLINE").is_ok();
 
-    let inline_start = k1.timing.raw();
     for unit_id in order.iter() {
+        let inline_start = k1.timing.raw();
         if skip_inline {
-            // Still mark done + fix counts/cfg so downstream invariants hold
             finish_unit_no_inline(k1, *unit_id);
         } else {
             inline_calls_in_unit(k1, *unit_id)
         }
-    }
-    k1.timing.iropt_inline_nanos += k1.timing.elapsed_nanos(inline_start) as i64;
+        k1.timing.iropt_inline_nanos += k1.timing.elapsed_nanos(inline_start) as i64;
 
-    {
-        visit_stack.clear();
-        order.clear();
-        visited.clear();
-        callees.clear();
-        k1.ir.opt_buf_stack = visit_stack;
-        k1.ir.opt_buf_order = order;
-        k1.ir.opt_buf_visited = visited;
-        k1.ir.opt_buf_callees = callees;
+        let simplify_start = k1.timing.raw();
+        cfg_simplify(k1, *unit_id);
+        k1.timing.iropt_simplify_nanos += k1.timing.elapsed_nanos(simplify_start) as i64;
+        get_compiled_unit_mut(&mut k1.ir, *unit_id).unwrap().is_optimized = true;
     }
-
-    if !get_compiled_unit(&k1.ir, unit_id).unwrap().cfg_valid {
-        let cfg_start = k1.timing.raw();
-        cfg_compute_unit(&mut k1.ir, unit_id);
-        k1.timing.iropt_cfg_nanos += k1.timing.elapsed_nanos(cfg_start) as i64;
-        k1.timing.iropt_cfg_computes += 1;
-    }
-    let simplify_start = k1.timing.raw();
-    cfg_simplify(k1, unit_id);
-    k1.timing.iropt_simplify_nanos += k1.timing.elapsed_nanos(simplify_start) as i64;
+    order.clear();
+    k1.ir.opt_buf_order = order;
 
     k1.timing.iropt_insts_created += (k1.ir.instrs.len() - insts_before) as i64;
     let elapsed = k1.timing.elapsed_nanos(start);
     k1.timing.total_iropt_nanos += elapsed as i64;
 }
 
-fn collect_direct_unoptimized_callees(
-    k1: &TypedProgram,
-    callees: &mut Vec<FunctionId>,
-    unit_id: IrUnitId,
-) {
+fn build_postorder_call_graph(k1: &mut TypedProgram, root: IrUnitId) -> Vec<IrUnitId> {
+    let mut visit_stack = std::mem::take(&mut k1.ir.opt_buf_stack);
+    let mut nodes = std::mem::take(&mut k1.ir.opt_buf_nodes);
+    let mut scc_stack = std::mem::take(&mut k1.ir.opt_buf_scc_stack);
+    let mut callees = std::mem::take(&mut k1.ir.opt_buf_callees);
+    let mut order = std::mem::take(&mut k1.ir.opt_buf_order);
+
+    visit_stack.push(OptVisit::Enter { unit: root, parent: None });
+
+    while let Some(visit) = visit_stack.pop() {
+        match visit {
+            OptVisit::Enter { unit, parent } => {
+                if let Some(seen) = nodes.get(&unit).copied() {
+                    if let Some(parent_id) = parent {
+                        if seen.on_stack {
+                            let parent = nodes.get_mut(&parent_id).unwrap();
+                            parent.lowlink = parent.lowlink.min(seen.index);
+                            if parent_id == unit {
+                                parent.self_call = true;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                debug_assert!(!get_compiled_unit(&k1.ir, unit).unwrap().is_optimized);
+                let index = nodes.len() as u32;
+                nodes.insert(
+                    unit,
+                    SccNode { index, lowlink: index, on_stack: true, self_call: false },
+                );
+                scc_stack.push(unit);
+
+                visit_stack.push(OptVisit::Leave { unit, parent });
+                callees.clear();
+                collect_direct_callees(k1, &mut callees, unit);
+                for callee_id in &callees {
+                    let callee = IrUnitId::Function(*callee_id);
+                    if get_compiled_unit(&k1.ir, callee).unwrap().is_optimized {
+                        continue;
+                    }
+                    visit_stack.push(OptVisit::Enter { unit: callee, parent: Some(unit) });
+                }
+            }
+            OptVisit::Leave { unit, parent } => {
+                let node = nodes[&unit];
+                if let Some(parent) = parent {
+                    let parent = nodes.get_mut(&parent).unwrap();
+                    parent.lowlink = parent.lowlink.min(node.lowlink);
+                }
+                if node.lowlink != node.index {
+                    continue;
+                }
+
+                let scc = k1.ir.scc_count;
+                k1.ir.scc_count += 1;
+                let start = order.len();
+                loop {
+                    let member = scc_stack.pop().unwrap();
+                    nodes.get_mut(&member).unwrap().on_stack = false;
+                    order.push(member);
+                    if member == unit {
+                        break;
+                    }
+                }
+                let recursive = order.len() - start > 1 || node.self_call;
+                for member in &order[start..] {
+                    let member_unit = get_compiled_unit_mut(&mut k1.ir, *member).unwrap();
+                    member_unit.scc = scc;
+                    member_unit.recursive = recursive;
+                }
+            }
+        }
+    }
+
+    debug_assert!(scc_stack.is_empty());
+    visit_stack.clear();
+    nodes.clear();
+    callees.clear();
+    k1.ir.opt_buf_stack = visit_stack;
+    k1.ir.opt_buf_nodes = nodes;
+    k1.ir.opt_buf_scc_stack = scc_stack;
+    k1.ir.opt_buf_callees = callees;
+    order
+}
+
+fn collect_direct_callees(k1: &TypedProgram, callees: &mut Vec<FunctionId>, unit_id: IrUnitId) {
     let unit = get_compiled_unit(&k1.ir, unit_id).unwrap();
     for block in k1.ir.mem.dlist_iter(unit.blocks) {
         for inst_id in k1.ir.mem.dlist_iter(block.instrs) {
-            let inst = k1.ir.instrs.get(*inst_id);
-            if let Inst::Call { call_id } = inst {
-                // Inline calls
-                let call = k1.ir.calls.get(*call_id);
-                match call.callee {
-                    IrCallee::Direct(function_id) => {
-                        debug!("getting callee {}", k1.function_id_to_string(function_id, true));
-                        let callee_unit =
-                            get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
-                        if !callee_unit.inline_done {
-                            callees.push(function_id)
-                        }
-                    }
-                    _ => {}
+            if let Inst::Call { call_id } = k1.ir.instrs.get(*inst_id) {
+                if let IrCallee::Direct(function_id) = k1.ir.calls.get(*call_id).callee {
+                    callees.push(function_id)
                 }
             }
         }
@@ -110,7 +151,7 @@ fn collect_direct_unoptimized_callees(
 }
 
 /// K1_IROPT_NO_INLINE: the bookkeeping of `inline_calls_in_unit` without any
-/// inlining, so units are still marked done with valid counts and cfg.
+/// inlining, so units still get valid counts and cfg.
 fn finish_unit_no_inline(k1: &mut TypedProgram, unit_id: IrUnitId) {
     let blocks = get_compiled_unit(&k1.ir, unit_id).unwrap().blocks;
     let inst_count = k1
@@ -120,9 +161,7 @@ fn finish_unit_no_inline(k1: &mut TypedProgram, unit_id: IrUnitId) {
         .map(|block| k1.ir.mem.dlist_compute_len(block.instrs) as u32)
         .sum();
     cfg_compute_unit(&mut k1.ir, unit_id);
-    let unit = get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap();
-    unit.inline_done = true;
-    unit.inst_count = inst_count;
+    get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap().inst_count = inst_count;
 }
 
 fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
@@ -143,18 +182,11 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
             if let Inst::Call { call_id } = k1.ir.instrs.get(inst_node.data) {
                 let call = *k1.ir.calls.get(*call_id);
                 if let IrCallee::Direct(function_id) = call.callee {
-                    // FIXME: inlining This only prevents direct recursion, corecursive
-                    // units still cause us to fail. We need to detect these cycles and
-                    // avoid inlining them
-
                     // A reloadable fn's body must never inline into a caller
-                    if unit_id != IrUnitId::Function(function_id)
-                        && !k1.functions.get(function_id).is_recursive()
-                        && !k1.functions.get(function_id).is_reloadable()
-                    {
+                    if !k1.functions.get(function_id).is_reloadable() {
                         let callee_unit =
                             get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
-                        if callee_unit.inst_count < 20 {
+                        if !callee_unit.recursive && callee_unit.inst_count < 20 {
                             cur_block = inline_call(
                                 k1,
                                 unit_id,
@@ -184,9 +216,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     k1.ir.opt_buf_inline_self_rewrites = result_rewrites;
 
     if !did_inline {
-        let unit = get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap();
-        debug_assert!(unit.cfg_valid);
-        unit.inline_done = true;
+        debug_assert!(get_compiled_unit(&k1.ir, unit_id).unwrap().cfg_valid);
         return;
     }
 
@@ -200,9 +230,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     cfg_compute_unit(&mut k1.ir, unit_id);
     k1.timing.iropt_cfg_nanos += k1.timing.elapsed_nanos(cfg_start) as i64;
     k1.timing.iropt_cfg_computes += 1;
-    let unit = get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap();
-    unit.inline_done = true;
-    unit.inst_count = inst_count;
+    get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap().inst_count = inst_count;
 
     fn inline_call(
         k1: &mut TypedProgram,

@@ -19,7 +19,7 @@ fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
     let parts = fmt-string.split-by-char('?')
 
     code.var("parts", parts.as-span())
-    schema is {
+    if schema is {
       :string -> {
         if parts.len != 1 {
           crash("Got 1 format argument (a string) but format string has ${parts.len}")

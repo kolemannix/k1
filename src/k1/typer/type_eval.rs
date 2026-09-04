@@ -1085,6 +1085,11 @@ impl TypedProgram {
             panic_at_disco!("Expected TypeApplication")
         };
 
+        if self.string_is_completion_marker(ty_app.name.name, false) {
+            self.record_qident_completion_site(scope_id, &ty_app.name);
+            return Ok(NEVER_TYPE_ID);
+        }
+
         match self.find_type_namespaced(scope_id, &ty_app.name)? {
             Some((type_id, _)) => match self.types.get(type_id) {
                 Type::Generic(g) => {
@@ -1281,8 +1286,6 @@ impl TypedProgram {
                         );
 
                         let _result = self.eval_type_defn(pending_parsed_id, pending_scope_id)?;
-
-                        // Just re-call this function from the top now that the type exists. (hack? idk)
                         self.eval_type_application(ty_app_id, scope_id, context)
                     }
                 }

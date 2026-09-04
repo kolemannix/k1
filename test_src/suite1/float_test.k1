@@ -92,10 +92,33 @@ fn test() {
   assert((16777217.0: f32) == 16777216.0)
   assert(9007199254740993.0 == 9007199254740992.0)
 
+  assert-equals((-2.5).abs(), 2.5)
+  assert-equals(2.5.abs(), 2.5)
+  assert-equals((-2.5: f32).abs(), 2.5)
+  assert-equals((2.5: f32).abs(), 2.5)
+  assert-equals(mem/bitcast[f64, u64]((-0.0).abs()), 0)
+  assert-equals(mem/bitcast[f32, u32]((-0.0: f32).abs()), 0)
+  assert-equals(f64/NEG_INFINITY.abs(), f64/INFINITY)
+  assert-equals(f32/NEG_INFINITY.abs(), f32/INFINITY)
+  let static-abs: f32 = #static { (-7.25: f32).abs() }
+  assert-equals(static-abs, 7.25)
+
+  assert-equals(min(1.5, 2.5), 1.5)
+  assert-equals(max(1.5, 2.5), 2.5)
+  assert-equals((-1.5: f32).min(-2.5), -2.5)
+  assert-equals((-1.5: f32).max(-2.5), -1.5)
+  assert-equals(f64/NEG_INFINITY.min(0.0), f64/NEG_INFINITY)
+  assert-equals(f32/INFINITY.max(0.0), f32/INFINITY)
+  // min/max are `<`/`>` selects: a NaN on the left loses, a NaN on the right wins
+  assert-equals(f64/NAN.min(1.0), 1.0)
+  assert(1.0.min(f64/NAN) != 1.0.min(f64/NAN))
+  let static-min: f64 = #static { 3.0.min(2.0) }
+  assert-equals(static-min, 2.0)
+
   assert(1337.1 is 1337.1)
   assert(not 1337.1 is 1337.2)
 
-  42.0 is {
+  if 42.0 is {
     41.0 -> crash("should not equal"),
     42.0 -> .{},
     f -> crash("should not fall through")

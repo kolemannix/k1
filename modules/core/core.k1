@@ -66,7 +66,7 @@ ns io {
   fn write-all(file-no: i32, data: ptr, count: size) {
     let written: size = 0
     while written < count {
-      let n = platform/io/write(
+      let n = if platform/io/write(
         file = .{ raw = file-no },
         data = data.add-bytes(written),
         count = count - written
@@ -131,13 +131,13 @@ ns files {
   }
 
   fn read-to-string-in[a: allocator](alloc: a, path: string): string {
-    let fd = platform/io/open-to-read(path) is {
+    let fd = if platform/io/open-to-read(path) is {
       :some(fd) -> fd,
       :none -> crash("open failed: `$path`")
     }
     defer platform/io/close(fd)
 
-    let file-size-bytes = platform/io/file-size(fd) is {
+    let file-size-bytes = if platform/io/file-size(fd) is {
       :some(n) -> n,
       :none -> crash("cannot size `$path`")
     }
@@ -145,7 +145,7 @@ ns files {
 
     let total: size = 0
     while total < buf.len() {
-      let n = platform/io/read(fd, buf.data-ptr().add-bytes(total), buf.len() - total).result() is {
+      let n = if platform/io/read(fd, buf.data-ptr().add-bytes(total), buf.len() - total).result() is {
         :ok(n) -> n,
         :err(_) -> crash("read failed: `$path`")
       }
@@ -157,7 +157,7 @@ ns files {
   }
 
   fn write-entire-file(out-path: string, contents: string) {
-    let fd = platform/io/open-to-write(out-path) is {
+    let fd = if platform/io/open-to-write(out-path) is {
       :some(fd) -> fd,
       :none -> crash("open for write failed: `$out-path`")
     }
@@ -165,7 +165,7 @@ ns files {
 
     let written: size = 0
     while written < contents.len() {
-      let n = platform/io/write(
+      let n = if platform/io/write(
         file = fd,
         data = contents.data-ptr().add-bytes(written),
         count = contents.len() - written
@@ -179,7 +179,7 @@ ns files {
   }
 
   fn exists(path: string): bool {
-    platform/io/open-to-read(path) is {
+    if platform/io/open-to-read(path) is {
       :some(fd) -> { platform/io/close(fd); true },
       :none -> false
     }
@@ -195,7 +195,7 @@ ns sys {
   // The k1 installation root: the K1_HOME env var when set (dev workflows point
   // it at a repo checkout), otherwise the installed location ~/.k1
   fn k1-home(): string {
-    env("K1_HOME") is {
+    if env("K1_HOME") is {
       :some h -> h,
       :none -> "${env("HOME").!}/.k1",
     }
@@ -220,15 +220,6 @@ ns for char {
 
   // mask to convert ASCII letters to uppercase
   let ASCII_CASE_MASK: u8 = 0b0010_0000
-  // Ported from Rust core library; todo wrapping_sub
-  //fn asDigit(self: char, radix: u32): ?u32 {
-  //  assert(radix >= 2 and radix <= 36);
-  //  let value = if self > '9' and radix > 10 {
-  //    self.as-u8()
-  //  }
-
-  //}
-
   fn is-ascii(self: char): bool {
     self.as-u8() <= 0x7F
   }
@@ -390,13 +381,13 @@ impl[s, f: print] try[t = s, e = f] for result[s, f] {
 
   fn is-ok(self): bool { self is :ok _ }
   fn get-value(self): t  {
-    self is {
+    if self is {
       :ok s -> s,
       :err e -> crash("get-value() on :err: $e")
     }
   }
   fn get-error(self): e {
-    self is {
+    if self is {
       :ok _ -> crash("get-error() on :ok"),
       :err e -> e
     }
@@ -409,13 +400,13 @@ impl[s, f] try[t = s, e = f] for result[s, f] {
 
   fn is-ok(self): bool { self is :ok _ }
   fn get-value(self): t  {
-    self is {
+    if self is {
       :ok s -> s,
       :err e -> crash("get-value() on :err")
     }
   }
   fn get-error(self): e {
-    self is {
+    if self is {
       :ok _ -> crash("get-error() on :ok"),
       :err e -> e
     }
@@ -500,7 +491,6 @@ ns for i64 {
     }
   }
   fn next-pow2(self: i64): i64 {
-    // TODO: We could call ctlz instead when available
     if self < 0 crash("i64/next-pow2: value must be positive") else
     if self == 0 return 1
 
@@ -591,7 +581,7 @@ ns for f64 {
   fn format[w: writer](f: f64, w, places: i32) {
     let stack-buf = array/zeroed[u8, 512]()
     let cap = stack-buf.as-span().len()
-    let written-len: size = k1rt/snprintf_f64(stack-buf.get-base().as[ptr], cap.unsigned(), f, places).widen[size]
+    let written-len: size = k1rt/snprintf_f64(stack-buf.data-ptr(), cap.unsigned(), f, places).widen[size]
     if written-len <= 0 crash("snprintf_f64 returned $written-len")
     if written-len >= cap crash("f64/format: $places places needs $written-len bytes, cap is $cap")
     w.write-bytes(stack-buf.as-span().slice(0, written-len))
@@ -632,6 +622,10 @@ ns for f32 {
   fn total-order-key(self: f32): i32 {
     let bits = mem/bitcast[f32, i32](self)
     bits.xor(((bits >> 31).unsigned() >> 1).signed())
+  }
+
+  fn abs(self: f32): f32 {
+    mem/bitcast[u32, f32](mem/bitcast[f32, u32](self).bit-and(0x7FFFFFFF))
   }
 }
 

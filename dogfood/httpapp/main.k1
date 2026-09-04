@@ -147,8 +147,8 @@ macro tprintln(arg) {
 fn tprintln-log[t: print](t) {
   let thread-self = uv/thread_self()
   let thread-name-buf = array/zeroed[u8, 256]()
-  let _rc = uv/thread_getname(&thread-self, thread-name-buf.get-base(), thread-name-buf.len().unsigned())
-  let thread-name = string/wrap-c(thread-name-buf.base-ptr())
+  let _rc = uv/thread_getname(&thread-self, thread-name-buf.data-ref(), thread-name-buf.len().unsigned())
+  let thread-name = string/wrap-c(thread-name-buf.data-ptr())
 
   println("[$thread-name] $t")
 }
@@ -222,7 +222,7 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
   if nread < 0 {
     let raw-errno = nread.trunc[i32]
     let uv-errno = uv/errno/from-i32(raw-errno)
-    uv-errno is {
+    if uv-errno is {
       :UV_EOF or :UV_ECONNRESET -> {
         tprintln("client reached EOF")
         if connection.current-work is :none {
@@ -242,7 +242,7 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
 
   if nread > 0 {
     let chunk-bytes = span/wrap-raw[byte](buf.base.as[ptr], nread)
-    http/tick(connection.request-parser.&, chunk-bytes) is {
+    if http/tick(connection.request-parser.&, chunk-bytes) is {
       :ok -> .{},
       :paused leftover -> {
         if leftover > 0 {
@@ -501,13 +501,13 @@ fn start-app[deps](context arena: *mut arena)(framework: *mut framework-deps, ma
   }
 
   let addr: uv/sockaddr_in = uninit
-  let a = "0.0.0.0\0".data-ptr().ref[u8]
+  let a = "0.0.0.0\0".data-ref-byte()
   let port: i32 = 3000
   if uv/ip4_addr(a, port, &addr) != 0 {
     return :err "uv_ip4_addr failed"
   }
 
-  uv/thread_setname("mainthread\0".data-ptr().narrow())
+  uv/thread_setname("mainthread\0".data-ref-byte())
   let bind-rc = uv/tcp_bind(server, (&addr).as[ptr].narrow(), 0)
   if bind-rc != 0 {
     eprintln("bind failed: ${string/wrap-c(uv/strerror(bind-rc).as[ptr])}")

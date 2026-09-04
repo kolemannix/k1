@@ -1,7 +1,7 @@
 ns type_pattern
 
 fn inspect[t](v: t): int {
-  v is {
+  if v is {
     type[{ x: int, y: int }](.{ x, y }) -> x + y,
     type["hello"](vv) -> 2,
     type[string](vv) -> vv.len(),

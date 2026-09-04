@@ -22,7 +22,7 @@ fn test-run-to-sum() {
 }
 
 fn expect-one(p: pull[int]): int {
-  p is {
+  if p is {
     :chunk group -> {
       assert-equals(group.len(), 1)
       assert-equals(group.[0].len(), 1)
@@ -95,8 +95,8 @@ fn test-rc-byte-stream() {
   let payloads: span[rc-bytes] = [heap-bytes/cloned("ab".span-bytes()).to-rc(), heap-bytes/cloned("cde".span-bytes()).to-rc()]
   let src = source/from-span(payloads, chunk-size = 1) || rc-byte-stream
   src.start(waker/noop())
-  src.next() is { :chunk g -> assert-equals(g.[0].len(), 2), _ -> crash("expected chunk") }
-  src.next() is { :chunk g -> assert-equals(g.[0].len(), 3), _ -> crash("expected chunk") }
+  if src.next() is { :chunk g -> assert-equals(g.[0].len(), 2), _ -> crash("expected chunk") }
+  if src.next() is { :chunk g -> assert-equals(g.[0].len(), 3), _ -> crash("expected chunk") }
   assert(src.next() is :done)
   src.stop()
 }

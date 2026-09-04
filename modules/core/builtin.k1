@@ -19,9 +19,6 @@ type i64         = builtin
 type(alias) int   = i64
 type(alias) size  = i64
 
-// TODO: Incorporate this instead of a 64-bit align type
-type(alias) align = u16
-
 type char    = builtin
 type bool    = builtin
 
@@ -122,7 +119,7 @@ ns types {
   type int-kind = int-value.tag-enum
   ns for int-kind {
     fn bit-width(self: int-kind): size {
-      self is {
+      if self is {
         :u8  -> 8,
         :u16 -> 16,
         :u32 -> 32,
@@ -212,10 +209,6 @@ ns types {
       return-type-id: type-id,
     }),
     function-pointer({ function-type-id: type-id }),
-    // static-scalar(),
-    // TODO: lambda schema, lambda object schema
-    // lambda({ type-id: type-id, function-type-id: type-id }),
-    // lambda-object({ function-type-id: type-id }),
     other(string)
   }
 
@@ -367,6 +360,8 @@ ability scalar-cmp {
   fn le(self, other: self): bool
   fn gt(self, other: self): bool
   fn ge(self, other: self): bool
+  fn min(self, other: self): self { if self.lt(other) self else other }
+  fn max(self, other: self): self { if self.gt(other) self else other }
 }
 
 impl scalar-cmp for u8 {
@@ -763,11 +758,11 @@ ns k1 {
   let platform: platform = builtin
   // The platform the compiler runs on; static execution happens there, not on `platform`
   let host-platform: platform = builtin
-  let platform-macos: bool = platform #is { :posix-macos -> true, :posix-linux or :wasi or :bare -> false }
-  let platform-linux: bool = platform #is { :posix-linux -> true, :posix-macos or :wasi or :bare -> false }
-  let platform-wasi: bool = platform #is { :wasi -> true, :posix-linux or :posix-macos or :bare -> false }
-  let platform-bare: bool = platform #is { :bare -> true, :posix-linux or :posix-macos or :wasi -> false }
-  let platform-posix: bool = platform #is { :posix-linux or :posix-macos -> true, :wasi or :bare -> false }
+  let platform-macos: bool = #if platform is { :posix-macos -> true, :posix-linux or :wasi or :bare -> false }
+  let platform-linux: bool = #if platform is { :posix-linux -> true, :posix-macos or :wasi or :bare -> false }
+  let platform-wasi: bool = #if platform is { :wasi -> true, :posix-linux or :posix-macos or :bare -> false }
+  let platform-bare: bool = #if platform is { :bare -> true, :posix-linux or :posix-macos or :wasi -> false }
+  let platform-posix: bool = #if platform is { :posix-linux or :posix-macos -> true, :wasi or :bare -> false }
 
   // The widest SIMD register the target supports;
   let simd-bytes: size = builtin
@@ -982,13 +977,10 @@ fn discard[t](_t: t): empty {}
 fn phony[t](): t { crash("phony") }
 
 ns array {
-  fn get-base-read[t, n](array: *array[t, n]): *t where n: static size {
+  fn data-ref[t, n](array: *mut array[t, n]): *mut t where n: static size {
     array.[0].&
   }
-  fn get-base[t, n](array: *mut array[t, n]): *mut t where n: static size {
-    array.[0].&
-  }
-  fn base-ptr[t, n](array: *mut array[t, n]): ptr where n: static size {
+  fn data-ptr[t, n](array: *mut array[t, n]): ptr where n: static size {
     array.as[ptr]
   }
   fn size-bytes[t, n](_array: array[t, n]): int where n: static size {
@@ -1004,7 +996,7 @@ ns array {
   }
 
   fn memset[t, n](array: *mut array[t, n], value: u8) where n: static size {
-    mem/set(dst = array.base-ptr(), value = value, count = array.size-bytes())
+    mem/set(dst = array.data-ptr(), value = value, count = array.size-bytes())
   }
 
   fn filled-in[t, n: static size, a: allocator](alloc: a, t: t, n: n): *mut array[t, n] {
@@ -1030,13 +1022,13 @@ ns array {
 
 impl[t, n: static size] as-buffer[t = t] for *mut array[t, n] {
   fn as-buffer(self): buffer[t] {
-    .{ len = self.len(), data = self.get-base() }
+    .{ len = self.len(), data = self.data-ref() }
   }
 }
 
 impl[t, n: static size] as-span[t = t] for *array[t, n] {
   fn as-span(self): span[t] {
-    span/wrap-raw(self.get-base-read().as[ptr], self.len())
+    span/wrap-raw(self.data-ptr(), self.len())
   }
 }
 
@@ -1064,9 +1056,9 @@ fn assertdbg(context locn: k1/source-location)(value: bool) {
 }
 
 fn print-backtrace() {
-  k1/platform #is {
+  #if k1/platform is {
     :posix-macos or :posix-linux -> k1rt/_k1_print_backtrace(frame_count = 128),
-    :wasi or :bare -> println("non-posix backtrace TODO")
+    :wasi or :bare -> .{}
   }
 }
 

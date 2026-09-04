@@ -442,7 +442,7 @@ impl TypedProgram {
                 }
                 TypeUnificationResult::NoHoles => {}
                 TypeUnificationResult::NonMatching(_) => {
-                    eprintln!("did not match; likely we'll fail later")
+                    debug!("did not match; likely we'll fail later")
                 }
             }
             return Ok(());
@@ -510,7 +510,7 @@ impl TypedProgram {
                             }
                             TypeUnificationResult::NoHoles => {}
                             TypeUnificationResult::NonMatching(_) => {
-                                eprintln!("did not match; likely we'll fail later")
+                                debug!("did not match; likely we'll fail later")
                             }
                         }
                     }

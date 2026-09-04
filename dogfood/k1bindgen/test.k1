@@ -30,7 +30,7 @@ fn test(): i32 {
 
   // TODO: Use 'diff' instead sys/cmd("diff", "input.c", "test/output.k1")
   let expected = core/files/read-to-string("test/expected.k1")
-  start(args) is {
+  if start(args) is {
     :err msg -> { eprintln("FAIL: $msg"); 1 },
     :ok output -> { assert-equals(output, expected); 0 }
   }

@@ -61,7 +61,7 @@ ns atomic {
 
     fn load[t](self: *cell[t], ord: ordering): t {
       let p = self.raw.&
-      ord is {
+      if ord is {
         :relaxed -> atomic/load(p, :relaxed),
         :acquire -> atomic/load(p, :acquire),
         :seq-cst -> atomic/load(p, :seq-cst),
@@ -71,7 +71,7 @@ ns atomic {
 
     fn store[t](self: *mut cell[t], value: t, ord: ordering) {
       let p = self.raw.&
-      ord is {
+      if ord is {
         :relaxed -> atomic/store(p, value, :relaxed),
         :release -> atomic/store(p, value, :release),
         :seq-cst -> atomic/store(p, value, :seq-cst),
@@ -81,7 +81,7 @@ ns atomic {
 
     fn swap[t](self: *mut cell[t], value: t, ord: ordering): t {
       let p = self.raw.&
-      ord is {
+      if ord is {
         :relaxed -> atomic/xchg(p, value, :relaxed),
         :acquire -> atomic/xchg(p, value, :acquire),
         :release -> atomic/xchg(p, value, :release),
@@ -92,7 +92,7 @@ ns atomic {
 
     fn add[t](self: *mut cell[t], value: t, ord: ordering): t {
       let p = self.raw.&
-      ord is {
+      if ord is {
         :relaxed -> atomic/fetch-add(p, value, :relaxed),
         :acquire -> atomic/fetch-add(p, value, :acquire),
         :release -> atomic/fetch-add(p, value, :release),
@@ -103,7 +103,7 @@ ns atomic {
 
     fn sub[t](self: *mut cell[t], value: t, ord: ordering): t {
       let p = self.raw.&
-      ord is {
+      if ord is {
         :relaxed -> atomic/fetch-sub(p, value, :relaxed),
         :acquire -> atomic/fetch-sub(p, value, :acquire),
         :release -> atomic/fetch-sub(p, value, :release),

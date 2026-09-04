@@ -464,7 +464,7 @@ fn good2(): int { 3 }
 #[test]
 fn is_match_struct_patterns() -> ParseResult<()> {
     let input = r#"
-        x is {
+        if x is {
            .{ x = 1, y = 2 } -> 1,
            .{ x = 2, y } -> { 2 },
            _ -> { 3 }
@@ -477,7 +477,7 @@ fn is_match_struct_patterns() -> ParseResult<()> {
 
 #[test]
 fn is_match_arms() -> ParseResult<()> {
-    let (ast, expr, _expr_id) = test_single_expr_with_id("x is { :a -> 1, _ -> 2 }")?;
+    let (ast, expr, _expr_id) = test_single_expr_with_id("if x is { :a -> 1, _ -> 2 }")?;
     let ParsedExpr::Match(m) = expr else { panic!("expected match") };
     assert!(!m.is_static);
     assert_eq!(ast.mem.getn(m.cases).len(), 2);
@@ -486,7 +486,7 @@ fn is_match_arms() -> ParseResult<()> {
 
 #[test]
 fn is_static_match_arms() -> ParseResult<()> {
-    let (_ast, expr, _expr_id) = test_single_expr_with_id("x #is { :a -> 1, _ -> 2 }")?;
+    let (_ast, expr, _expr_id) = test_single_expr_with_id("#if x is { :a -> 1, _ -> 2 }")?;
     let ParsedExpr::Match(m) = expr else { panic!("expected match") };
     assert!(m.is_static);
     Ok(())

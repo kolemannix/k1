@@ -43,7 +43,7 @@ fn render-pattern(path: span[seg]): string {
   let b = string-builder/new()
   for s in path {
     b.write("/")
-    s is {
+    if s is {
       :text t -> b.write(t),
       :u64 n -> b.write("{$n: u64}"),
       :int n -> b.write("{$n: int}"),
@@ -61,7 +61,7 @@ fn shape-suffix(e: entry, from: size): string {
   let b = string-builder/new()
   let j = from
   while j < e.path.len() {
-    e.path.[j] is {
+    if e.path.[j] is {
       :text t -> b.write("/l:$t"),
       :rest _ -> b.write("/**"),
       _ -> b.write("/*"),
@@ -87,7 +87,7 @@ fn validate(entries: span[entry]) {
     check-ident(en.name, "route name")
     if en.path.len() > 16 crash("routing: route `${en.name}` is deeper than 16 segments")
     for seg in en.path {
-      seg is {
+      if seg is {
         :text t -> {
           if t.is-empty() crash("routing: route `${en.name}` has an empty literal segment")
           for c in t {
@@ -138,7 +138,7 @@ fn params(e: entry): list[param] {
   let ps = list/empty[param]()
   for seg in e.path {
     let j: size = it-index
-    seg is {
+    if seg is {
       :text _ -> .{},
       :u64 n -> ps.push(.{ name = n, ty = "u64", idx = j, kind = :parsed }),
       :int n -> ps.push(.{ name = n, ty = "int", idx = j, kind = :parsed }),
@@ -155,7 +155,7 @@ fn emit-leaf-body(cb: *mut code-builder, en: entry, d: size) {
   let payload = list/empty[string]()
   for c in params(en) {
     payload.push(c.name)
-    c.kind is {
+    if c.kind is {
       // The qualified form is required: `ty/from-string` only resolves for
       // types whose ns declares it directly, not through an ability impl
       :parsed -> cb.line(`require from-string@(${c.ty})/from-string(sd${c.idx}) is :ok ${c.name} else { return :err :bad-param .{ pattern = ${str-lit(pat)}, name = ${str-lit(c.name)}, ty = ${str-lit(c.ty)}, got = sd${c.idx} } }`),
@@ -220,7 +220,7 @@ fn emit-node(cb: *mut code-builder, entries: span[entry], group: list[size], d: 
   for gi in group {
     let en = entries.[gi]
     if en.path.len() == d { exact.push(gi) }
-    else en.path.[d] is {
+    else if en.path.[d] is {
       :rest _ -> rests.push(gi),
       :text t -> if not lit-texts.contains(t) { lit-texts.push(t) },
       _ -> caps.push(gi),
@@ -285,12 +285,12 @@ fn emit-url-arm(cb: *mut code-builder, en: entry) {
   let lit-run = string-builder/new()
   for s in en.path {
     lit-run.write("/")
-    s is {
+    if s is {
       :text t -> lit-run.write(t),
       _ -> {
         cb.line("w.write(${str-lit(lit-run.build())})")
         lit-run = string-builder/new()
-        s is {
+        if s is {
           :u64 n -> cb.line("p.$n.print-to(w)"),
           :int n -> cb.line("p.$n.print-to(w)"),
           :str n -> cb.line("routing/encode-into(p.$n, w, keep-slash = false)"),
@@ -322,7 +322,7 @@ fn emit-url-arms(cb: *mut code-builder, entries: span[entry]) {
 }
 
 fn emit-url-match(cb: *mut code-builder, entries: span[entry]) {
-  cb.block("self is", fn[cb, entries]. emit-url-arms(cb, entries))
+  cb.block("if self is", fn[cb, entries]. emit-url-arms(cb, entries))
 }
 
 fn emit-url-fn(cb: *mut code-builder, base: string, entries: span[entry]) {

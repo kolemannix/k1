@@ -55,24 +55,24 @@ fn complex-references() {
 }
 
 fn min-or(a: ?u32, b: u32): u32 {
-  a is {
+  if a is {
     :none -> b,
-    :some x -> if x < b x else b
+    :some x -> x.min(b)
   }
 }
 
 fn self-referential-rhs() {
   let v: ?u32 = :none
   v = :some(min-or(v, 2))
-  assert(v is { :some x -> x == 2, :none -> false })
+  assert(if v is { :some x -> x == 2, :none -> false })
 
   let r = &v
   r.* = :some(min-or(r.*, 1))
-  assert(v is { :some x -> x == 1, :none -> false })
+  assert(if v is { :some x -> x == 1, :none -> false })
 
   let cell: { v: ?u32 } = .{ v = :none }
   cell.v = :some(min-or(cell.v, 3))
-  assert(cell.v is { :some x -> x == 3, :none -> false })
+  assert(if cell.v is { :some x -> x == 3, :none -> false })
 }
 
 fn test() {

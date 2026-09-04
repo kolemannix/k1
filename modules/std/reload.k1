@@ -11,7 +11,7 @@ ns reload {
 
   impl print for load-error {
     fn print-to[w: writer](self, w) {
-      self is {
+      if self is {
         :no-descriptor d -> w.write("no reload descriptor for ${d.ns-path.raw()}"),
         :dlopen-failed d -> w.write("dlopen of ${d.path.raw()} failed: ${d.message.raw()}"),
         :symbol-missing s -> w.write("${s.path.raw()} does not export ${s.symbol.raw()}"),
@@ -49,7 +49,7 @@ ns reload {
   // such ns; the pointee is host-static and lives forever
   fn find-descriptor(ns-path: string): ?*descriptor {
     let self-lib = core/platform/dylib/open-self()
-    core/platform/dylib/sym(self-lib, "__k1_reload_ns_${ns-path}") is {
+    if core/platform/dylib/sym(self-lib, "__k1_reload_ns_${ns-path}") is {
       :some(raw) -> :some(raw.ref[descriptor]),
       :none -> :none
     }
@@ -62,7 +62,7 @@ ns reload {
   fn load-ns(ns-path: string): result[empty, load-error] {
     load-lock.lock()
     defer load-lock.unlock()
-    let descriptor = find-descriptor(ns-path) is {
+    let descriptor = if find-descriptor(ns-path) is {
       :some d -> d,
       :none -> return :err :no-descriptor .{ ns-path = heap-string/cloned(ns-path) },
     }
@@ -81,10 +81,10 @@ ns reload {
     files/write-entire-file(temp-path, files/read-to-string(dylib-path))
     let maybe-handle = core/platform/dylib/open(temp-path)
     posix/unlink(temp-path.to-c-tmp().ptr)
-    let handle = maybe-handle is {
+    let handle = if maybe-handle is {
       :some(h) -> h,
       :none -> {
-        let message = core/platform/dylib/error-message() is {
+        let message = if core/platform/dylib/error-message() is {
           :some(m) -> m,
           :none -> "unknown dlopen failure"
         }
@@ -96,7 +96,7 @@ ns reload {
     }
 
     let dylib_hash_symbol = "__k1_reload_hash_${ns-path}"
-    let hash-raw = core/platform/dylib/sym(handle, dylib_hash_symbol) is {
+    let hash-raw = if core/platform/dylib/sym(handle, dylib_hash_symbol) is {
       :some(raw) -> raw,
       :none -> return :err :symbol-missing .{
         symbol = heap-string/cloned(dylib_hash_symbol),
@@ -111,7 +111,7 @@ ns reload {
     let entries = span/wrap-raw[entry](descriptor.entries, descriptor.entry-count.signed())
     let addrs = list/with-capacity[ptr](entries.len())
     for e in entries {
-      let addr = core/platform/dylib/sym(handle, string/wrap-c(e.symbol)) is {
+      let addr = if core/platform/dylib/sym(handle, string/wrap-c(e.symbol)) is {
         :some(a) -> a,
         :none -> return :err :symbol-missing .{
           symbol = heap-string/cloned(string/wrap-c(e.symbol)),
@@ -129,7 +129,7 @@ ns reload {
   }
 
   fn ns-version(ns-path: string): u64 {
-    find-descriptor(ns-path) is {
+    if find-descriptor(ns-path) is {
       :some d -> atomic/load(d.version, :acquire),
       :none -> 0,
     }
@@ -153,7 +153,7 @@ ns reload {
 
   fn load-ns-worker(input: *mut async-load): ptr {
     let cell = input.cell
-    load-ns(input.ns-path) is {
+    if load-ns(input.ns-path) is {
       :ok -> {
         heap.free-t(input)
         atomic/store(cell.state.&, 1: u8, :release)
@@ -188,7 +188,7 @@ ns reload {
   fn watch-ns-worker(input: *mut watch-input): ptr {
     let ns-path = input.ns-path
     heap.free-t(input)
-    let descriptor = find-descriptor(ns-path) is {
+    let descriptor = if find-descriptor(ns-path) is {
       :some d -> d,
       :none -> {
         eprintln("reload watch: no descriptor for ${ns-path}")
@@ -199,14 +199,14 @@ ns reload {
 
     // Watch the directory, not the artifact: replacing the file swaps its
     // inode out from under a file watch
-    let w = watch/create() is {
+    let w = if watch/create() is {
       :ok w -> w,
       :err e -> {
         eprintln("reload watch of ${ns-path}: $e")
         return ptr/null
       },
     }
-    w.add(dir-of(artifact)) is {
+    if w.add(dir-of(artifact)) is {
       :ok -> .{},
       :err e -> {
         eprintln("reload watch of ${ns-path}: $e")
@@ -216,7 +216,7 @@ ns reload {
 
     let last = artifact-hash(artifact)
     loop {
-      w.wait() is {
+      if w.wait() is {
         :ok _ -> .{},
         :err e -> {
           eprintln("reload watch of ${ns-path}: $e")
@@ -230,7 +230,7 @@ ns reload {
       if h != 0 and h != last {
         // A failed load keeps the current version; don't retry the same bytes
         last = h
-        load-ns(ns-path) is {
+        if load-ns(ns-path) is {
           :ok -> .{},
           :err e -> eprintln("reload of ${ns-path} failed: ${e}"),
         }

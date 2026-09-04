@@ -524,10 +524,12 @@ Opaque types carry explicit size and alignment:
 type blob = opaque[16, 4]
 ```
 
-Unions use overlapping fields:
+Unions use overlapping fields. A union literal sets at most one member;
+the rest are uninitialized, and `.{}` is fully uninitialized:
 
 ```rust
 type bits = union { as-u32: u32, as-f32: f32 }
+let b: bits = .{ as-f32 = 1.0 }
 ```
 
 Packed structs have no inter-field padding and alignment 1 (C

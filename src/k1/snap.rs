@@ -4,7 +4,7 @@
 
 use std::mem::size_of;
 
-pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP14";
+pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP16";
 
 const BLOB_COMPRESS_MIN: usize = 1 << 16;
 const BLOB_CHUNK: usize = 1 << 20;

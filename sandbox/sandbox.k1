@@ -1,19 +1,9 @@
-fn foo(): int { 55 }
+macro arith(tokens: tokens) {
+  let i = 0
+  let o1 = tokens.get(i)
+  tokens.*[i]
+}
 #debug fn main(): i32 {
-  // let x: span[int] = #static [1,2,3,4,5,foo()]
-
-
-  // mutable, makes a hidden global and a copy from ro mem
-  // let xs: list[int] = [1,2,3,4,5]
-  // let xs: buffer[int] = [1,2,3,4,5]
-
-  // mutable, but wont ever be shared
-  let xs: array[int, 5] = [1,2,3,4,5]
-
-  // immutable, can point straight at ro mem
-  // let xs: span[int] = [1,2,3,4,5,foo()]
-
-
-  println(xs)
+  arith(<< 3 + 3 >>)
   0
 }

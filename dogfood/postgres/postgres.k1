@@ -132,7 +132,7 @@ fn print-result-table(result: query-result) {
     col = 0
     while col < cols {
       if col > 0 { print("\t") }
-      result.value(row, col) is {
+      if result.value(row, col) is {
         :none -> print("NULL"),
         :some value -> print(value)
       }
@@ -167,7 +167,7 @@ fn main(argc: core/c-int, argv: ptr): i32 {
     "select 'hello from k1/libpq'::text as message"
   }
 
-  let conn = connect(conninfo) is {
+  let conn = if connect(conninfo) is {
     :ok conn -> conn,
     :err msg -> {
       eprintln("connect failed: $msg")
@@ -176,7 +176,7 @@ fn main(argc: core/c-int, argv: ptr): i32 {
   }
   defer conn.close()
 
-  let query-result = conn.exec(query) is {
+  let query-result = if conn.exec(query) is {
     :ok result -> result,
     :err msg -> {
       eprintln("query failed: $msg")

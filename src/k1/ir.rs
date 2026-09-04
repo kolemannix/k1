@@ -71,9 +71,11 @@ pub struct ProgramIr {
     pub units_pending_compile: FxHashMap<FunctionId, ()>,
     pub globals_pending_eval: FxHashMap<TypedGlobalId, ()>,
 
+    pub scc_count: u32,
     opt_buf_stack: Vec<iropt::OptVisit>,
     opt_buf_order: Vec<IrUnitId>,
-    opt_buf_visited: FxHashSet<IrUnitId>,
+    opt_buf_nodes: FxHashMap<IrUnitId, iropt::SccNode>,
+    opt_buf_scc_stack: Vec<IrUnitId>,
     opt_buf_callees: Vec<FunctionId>,
     opt_buf_cfg_compute_work_stack: Vec<BlockId>,
     opt_buf_cfg_compute_visited: FxHashSet<BlockId>,
@@ -104,9 +106,11 @@ impl ProgramIr {
             b_loops: _,
             units_pending_compile,
             globals_pending_eval,
+            scc_count,
             opt_buf_stack: _,
             opt_buf_order: _,
-            opt_buf_visited: _,
+            opt_buf_nodes: _,
+            opt_buf_scc_stack: _,
             opt_buf_callees: _,
             opt_buf_cfg_compute_work_stack: _,
             opt_buf_cfg_compute_visited: _,
@@ -122,6 +126,7 @@ impl ProgramIr {
         debug_info.snap(w);
         write_map_snap(w, functions);
         write_map_snap(w, exprs);
+        w.write_u32(*scc_count);
         calls.snap(w);
         cmpxchgs.snap(w);
         vec_ops.snap(w);
@@ -138,6 +143,7 @@ impl ProgramIr {
         self.debug_info.restore(r);
         self.functions = crate::snap::restore_map_snap(r);
         self.exprs = crate::snap::restore_map_snap(r);
+        self.scc_count = r.read_u32();
         self.calls.restore(r);
         self.cmpxchgs.restore(r);
         self.vec_ops.restore(r);
@@ -359,9 +365,11 @@ impl ProgramIr {
             units_pending_compile: FxHashMap::new(),
             globals_pending_eval: FxHashMap::new(),
 
+            scc_count: 0,
             opt_buf_stack: vec![],
             opt_buf_order: vec![],
-            opt_buf_visited: FxHashSet::new(),
+            opt_buf_nodes: FxHashMap::new(),
+            opt_buf_scc_stack: vec![],
             opt_buf_callees: vec![],
             opt_buf_cfg_compute_work_stack: vec![],
             opt_buf_cfg_compute_visited: FxHashSet::new(),
@@ -459,7 +467,6 @@ pub struct IrUnit {
     pub result_type_id: TypeId,
     pub unit_id: IrUnitId,
     pub fn_type: PhysicalFunctionType,
-    // The number of instructions in this unit
     pub inst_count: u32,
     pub last_alloca_index: Option<u32>,
 
@@ -467,8 +474,10 @@ pub struct IrUnit {
     pub function_builtin_kind: Option<BackendBuiltin>,
     pub is_debug: bool,
 
-    pub inline_done: bool,
+    pub is_optimized: bool,
     pub cfg_valid: bool,
+    pub scc: u32,
+    pub recursive: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -742,13 +751,23 @@ pub enum IrCallee {
     // (No lambda call; been compiled down to just calls and args by now)
 }
 
+fn add_call(k1: &mut TypedProgram, call: IrCall) -> IrCallId {
+    if let Some(function_id) = call.callee.known_function_id()
+        && !k1.ir.functions.contains_key(&function_id)
+    {
+        k1.ir.units_pending_compile.entry(function_id).or_insert(());
+    }
+    k1.ir.calls.add(call)
+}
+
 impl IrCallee {
     fn known_function_id(&self) -> Option<FunctionId> {
         match self {
             IrCallee::Direct(fid) => Some(*fid),
             IrCallee::Extern { function_id, .. } => Some(*function_id),
             IrCallee::LlvmIntrinsic { function_id, .. } => Some(*function_id),
-            _ => None,
+            IrCallee::BackendBuiltin(fid, _) => Some(*fid),
+            IrCallee::Indirect(..) => None,
         }
     }
 }
@@ -795,6 +814,7 @@ pub enum Value {
         t: ScalarType,
         data: u32,
     },
+    IsStatic,
     Empty,
 }
 
@@ -1330,6 +1350,7 @@ pub fn get_value_kind(ir: &ProgramIr, value: Value) -> InstKind {
         Value::Data32 { t: scalar_type, data: _ } => {
             InstKind::Value(PhysicalType::scalar(scalar_type))
         }
+        Value::IsStatic => InstKind::Value(PhysicalType::scalar(ScalarType::Bool)),
         Value::Empty => InstKind::Value(PhysicalType::EMPTY),
     }
 }
@@ -1656,8 +1677,10 @@ fn finalize_unit(
         blocks: b.blocks,
         function_builtin_kind: builtin_kind,
         is_debug,
-        inline_done: false,
+        is_optimized: false,
         cfg_valid: true,
+        scc: u32::MAX,
+        recursive: false,
     };
     match unit_id {
         IrUnitId::Function(function_id) => {
@@ -2556,16 +2579,6 @@ fn compile_expr(
                 }
             }
 
-            // Add function to compile queue
-            if let Some(function_id) = callee.known_function_id() {
-                match b.k1.ir.functions.get(&function_id) {
-                    None => {
-                        b.k1.ir.units_pending_compile.entry(function_id).or_insert(());
-                    }
-                    Some(_unit) => {}
-                }
-            }
-
             let mut args =
                 b.k1.ir.mem.new_list(call.args.len() + environment_arg.iter().count() as u32);
 
@@ -2595,12 +2608,10 @@ fn compile_expr(
             }
             debug_assert_eq!(callee_fn_type.params.len(), args.len() as u32);
             let args_handle = args.to_slice();
-            let call_id = b.k1.ir.calls.add(IrCall {
-                ret_type: callee_fn_type.return_type,
-                callee,
-                args: args_handle,
-                dst,
-            });
+            let call_id = add_call(
+                b.k1,
+                IrCall { ret_type: callee_fn_type.return_type, callee, args: args_handle, dst },
+            );
             let call_inst = Inst::Call { call_id };
             let call_inst_id = b.push_inst_anon(call_inst);
             let value_for_call = {
@@ -3138,13 +3149,16 @@ fn compile_variable_to_address(
             let is_constant = global.is_constant;
             let value_pt = b.get_physical_type(value_type);
 
+            if global_id == GLOBAL_ID_K1_IS_STATIC && !require_address {
+                return CompileVariableResult::FoldedValue { value: Value::IsStatic, pt: value_pt };
+            }
+
             if let Some(initial_value) = global.initial_value.as_value()
                 && global.is_constant
                 && global.reload_ns.is_none()
                 && value_pt.is_scalar()
                 && !require_address
                 && b.optimize_enabled()
-                && global_id != GLOBAL_ID_K1_IS_STATIC
             {
                 let value = compile_static_value(b, initial_value, value_pt);
                 let folded_value = match value {
@@ -3161,6 +3175,7 @@ fn compile_variable_to_address(
                     }
                     Value::FunctionAddr(_) => unreachable!(),
                     Value::FnParam { .. } => unreachable!(),
+                    Value::IsStatic => unreachable!(),
                     Value::Data32 { .. } => Some(value),
                     Value::Empty => Some(value),
                 };
@@ -3281,7 +3296,7 @@ fn compile_ir_builtin(
                         args: memset_args,
                         dst: None,
                     };
-                    let call_id = b.k1.ir.calls.add(memset_call);
+                    let call_id = add_call(b.k1, memset_call);
                     b.push_inst(Inst::Call { call_id }, IrComment::ZeroedMemset);
                     Ok(dst)
                 }
@@ -5066,6 +5081,7 @@ pub fn display_value(w: &mut impl Write, value: &Value) -> std::fmt::Result {
         Value::FunctionAddr(function_id) => write!(w, "f{}", function_id.as_u32()),
         Value::FnParam { index, .. } => write!(w, "p{}", index),
         Value::Data32 { t, data } => write!(w, "data32({}, {})", t, data),
+        Value::IsStatic => write!(w, "is-static"),
         Value::Empty => write!(w, "{{}}"),
     }
 }

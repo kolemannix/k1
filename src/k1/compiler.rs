@@ -3,20 +3,22 @@
 
 use std::fs;
 use std::fs::File;
-use std::io::{IsTerminal, Read, Write};
+use std::io::{IsTerminal, Read};
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
 use crate::kmem::{self, MStr, Mem};
 use crate::lex::SpanId;
 use crate::parse::{IdentPool, StringId, write_source_location};
-use crate::typer::{LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId, TypedProgram};
+use crate::typer::{
+    K1Message, LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId, TypedProgram,
+};
 use crate::{SV8, kpath, typer};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
 use log::{error, info};
 
-use crate::codegen_llvm::{Cg, CgUnit};
+use crate::codegen_llvm::{self, Cg, CgError, CgKind, CodegenRoots, Pipeline, UnitOutput};
 
 use std::path::PathBuf;
 
@@ -379,6 +381,7 @@ pub struct CompilerConfig {
     pub out_dir_generated: StringId,
     pub cache_dir: StringId,
     pub optimize: bool,
+    pub emit_llvm: bool,
     pub chatty: bool,
     pub optimize_ir: bool,
     pub cache: bool,
@@ -1219,6 +1222,7 @@ pub fn compile_program_ext(
         out_dir_generated,
         cache_dir,
         optimize: args.optimize,
+        emit_llvm: args.emit_llvm,
         chatty: args.chatty,
         optimize_ir: args.optimize_ir,
         cache: args.cache,
@@ -1448,6 +1452,7 @@ fn command_status(cmd: &mut std::process::Command) -> Result<std::process::ExitS
 pub fn write_linked_output(
     k1: &TypedProgram,
     module_name: &str,
+    objects: &[String],
     extra_options: &[String],
     kind: LinkOutputKind,
 ) -> Result<()> {
@@ -1459,13 +1464,6 @@ pub fn write_linked_output(
     let sanitize = k1.config.sanitize;
     let filc = k1.config.filc;
     let clang_time = std::time::Instant::now();
-
-    // Fil-C consumes llvm IR rather than the object file
-    let object_name = if filc {
-        kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("{module_name}.ll"))
-    } else {
-        kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("{module_name}.o"))
-    };
 
     let out_name = match kind {
         LinkOutputKind::Executable => {
@@ -1480,7 +1478,8 @@ pub fn write_linked_output(
     };
 
     if target.arch() == Arch::Wasm {
-        let mut ld_args: Vec<String> = vec!["-mwasm64".into(), object_name.as_str().into()];
+        let mut ld_args: Vec<String> = vec!["-mwasm64".into()];
+        ld_args.extend_from_slice(objects);
         push_module_lib_args(k1, &mut ld_args);
         // stack-first makes null (0) deref trap
         ld_args.push("--stack-first".into());
@@ -1559,7 +1558,7 @@ pub fn write_linked_output(
     }
 
     // Our actual compiled k1 code!
-    build_cmd.arg(object_name.as_str());
+    build_cmd.args(objects);
 
     // Linking with libraries.
     // For each module, for each of its libraries, link with it as specified by the link_type
@@ -1666,14 +1665,16 @@ pub fn write_library_export_files(k1: &TypedProgram, module_name: &str) -> Resul
     Ok(())
 }
 
-pub fn write_library_archive(k1: &TypedProgram, module_name: &str) -> Result<()> {
+pub fn write_library_archive(
+    k1: &TypedProgram,
+    module_name: &str,
+    objects: &[String],
+) -> Result<()> {
     let target = k1.config.target;
     let idents = &k1.ast.idents;
     let out_dir = k1.config.out_dir;
     let ar_time = std::time::Instant::now();
 
-    let object_name =
-        kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("{module_name}.o"));
     let combined_name =
         kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("lib{module_name}.o"));
     let archive_name =
@@ -1690,7 +1691,7 @@ pub fn write_library_archive(k1: &TypedProgram, module_name: &str) -> Result<()>
 
     let mut ld_cmd = std::process::Command::new("ld");
     ld_cmd.arg("-r");
-    ld_cmd.arg(object_name.as_str());
+    ld_cmd.args(objects);
     for lib in &static_libs {
         ld_cmd.arg(lib);
     }
@@ -1738,11 +1739,27 @@ pub fn write_library_archive(k1: &TypedProgram, module_name: &str) -> Result<()>
     Ok(())
 }
 
-pub fn codegen_module<'ctx, 'module>(
-    args: &Args,
-    ctx: &'ctx Context,
-    k1: &'module mut TypedProgram,
-) -> Result<Cg<'ctx, 'module>> {
+fn report_codegen_error(k1: &TypedProgram, e: K1Message) -> anyhow::Error {
+    let use_color = std::io::stderr().is_terminal();
+    write_source_location(
+        &mut std::io::stderr(),
+        &k1.ast,
+        e.span,
+        MessageLevel::Error,
+        6,
+        Some(k1.ident_str(e.message)),
+        use_color,
+    )
+    .unwrap();
+    write_program_dump(k1);
+    k1.message_to_anyhow(e)
+}
+
+fn cg_error_to_message(k1: &TypedProgram, e: CgError) -> K1Message {
+    k1.make_error(e.message, e.span)
+}
+
+pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Result<()> {
     let codegen_start = std::time::Instant::now();
 
     // Ns-driven, not fn-driven: a reload ns holding only globals still gets a dylib
@@ -1767,103 +1784,149 @@ pub fn codegen_module<'ctx, 'module>(
         write_reload_dylib(args, ctx, k1, *ns_id)?;
     }
 
-    let mut codegen = Cg::create(ctx, k1, args.debug, args.optimize, CgUnit::Host);
-    let mut module_name = codegen.name().to_string();
+    let mut module_name = k1.program_name().to_string();
     if args.command.is_test() {
         module_name.push_str("_test");
     };
-    let out_dir = codegen.k1.config.out_dir;
-
-    if let Err(e) = codegen.codegen_program() {
-        let use_color = std::io::stderr().is_terminal();
-        write_source_location(
-            &mut std::io::stderr(),
-            &codegen.k1.ast,
-            e.span,
-            MessageLevel::Error,
-            6,
-            Some(codegen.k1.ident_str(e.message)),
-            use_color,
-        )
-        .unwrap();
-        write_program_dump(codegen.k1);
-        anyhow::bail!(codegen.k1.message_to_anyhow(e))
+    let roots = match Cg::prepare_host(k1) {
+        Ok(roots) => roots,
+        Err(e) => anyhow::bail!(report_codegen_error(k1, e)),
+    };
+    if args.chatty {
+        eprintln!(
+            "ir prep took {}ms ({} reachable functions)",
+            codegen_start.elapsed().as_millis(),
+            roots.reachable.len()
+        );
     }
-
+    let k1: &TypedProgram = k1;
+    let is_host_native = detect_host_target() == Some(k1.config.target);
+    let object_is_artifact = !k1.program_settings.executable && !is_host_native
+        || k1.config.target.platform() == Platform::Bare;
+    let objects = write_unit_artifacts(
+        args,
+        ctx,
+        k1,
+        &roots,
+        CgKind::Host,
+        &module_name,
+        object_is_artifact,
+    )?;
     if args.chatty {
         eprintln!("codegen took {}ms", codegen_start.elapsed().as_millis());
-        eprintln!("iropt: {}ms", codegen.k1.timing.total_iropt_nanos / 1_000_000);
     }
 
-    // Under --filc, Fil-C's clang runs the whole optimization pipeline
-    let optimize_ir = args.optimize && !codegen.k1.config.filc;
-    if let Err(e) = codegen.optimize_verify(optimize_ir) {
-        anyhow::bail!(e)
-    };
-
-    if codegen.k1.config.filc {
-        let llvm_text = codegen.emit_llvm_ir_text_filc();
-        let ll_path = kpath::join_tmp(
-            codegen.k1.get_tmp_unsafe(),
-            &codegen.k1.ast.idents,
-            out_dir,
-            format_args!("{module_name}.ll"),
-        );
-        std::fs::write(Path::new(ll_path.as_str()), llvm_text)
-            .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
-    } else {
-        if args.emit_llvm {
-            let llvm_text = codegen.emit_llvm_ir_text();
-            let ll_path = kpath::join_tmp(
-                codegen.k1.get_tmp_unsafe(),
-                &codegen.k1.ast.idents,
-                out_dir,
-                format_args!("{module_name}.ll"),
-            );
-            let mut f = File::create(ll_path.as_str()).expect("Failed to create .ll file");
-            f.write_all(llvm_text.as_bytes()).unwrap();
-        }
-
-        let path = kpath::join_tmp(
-            codegen.k1.get_tmp_unsafe(),
-            &codegen.k1.ast.idents,
-            out_dir,
-            format_args!("{module_name}.o"),
-        );
-        if codegen.emit_object_file(path.as_str()).is_err() {
-            bail!("Error writing object file to path: {path}");
-        }
-    }
-
-    if codegen.k1.program_settings.executable {
-        if codegen.k1.config.target.platform() == Platform::Bare {
+    if k1.program_settings.executable {
+        if k1.config.target.platform() == Platform::Bare {
             bail!("bare targets emit objects only; there is no executable lane");
         }
         let mut link_options: Vec<String> = vec![];
         if !reload_nss.is_empty() {
             // Ensure host globals are visible to dlopen'd reload dylibs
-            let export_flag = match codegen.k1.config.target.platform() {
+            let export_flag = match k1.config.target.platform() {
                 Platform::PosixMacos => "-Wl,-export_dynamic",
                 Platform::PosixLinux => "-rdynamic",
                 Platform::Wasi | Platform::Bare => {
-                    bail!("ns(reload) is not supported on {}", codegen.k1.config.target.to_str())
+                    bail!("ns(reload) is not supported on {}", k1.config.target.to_str())
                 }
             };
             link_options.push(export_flag.to_string());
         }
-        write_linked_output(codegen.k1, &module_name, &link_options, LinkOutputKind::Executable)?;
-    } else {
-        // A cross-built library can't be linked with host tools; the emitted
-        // object itself is the artifact (non-exported symbols are already
-        // internal, so it needs no localization pass)
-        if detect_host_target() == Some(codegen.k1.config.target) {
-            write_library_export_files(codegen.k1, &module_name)?;
-            write_linked_output(codegen.k1, &module_name, &[], LinkOutputKind::Dylib)?;
-            write_library_archive(codegen.k1, &module_name)?;
-        }
+        write_linked_output(k1, &module_name, &objects, &link_options, LinkOutputKind::Executable)?;
+    } else if is_host_native {
+        write_library_export_files(k1, &module_name)?;
+        write_linked_output(k1, &module_name, &objects, &[], LinkOutputKind::Dylib)?;
+        write_library_archive(k1, &module_name, &objects)?;
     }
 
-    Ok(codegen)
+    Ok(())
+}
+
+fn write_unit_artifacts(
+    args: &Args,
+    ctx: &Context,
+    k1: &TypedProgram,
+    roots: &CodegenRoots,
+    kind: CgKind,
+    module_name: &str,
+    object_is_artifact: bool,
+) -> Result<Vec<String>> {
+    const MAX_UNITS: usize = 32;
+    let out_dir = k1.ast.idents.get_string(k1.config.out_dir).to_string();
+    let plans = Cg::plan_units(k1, &roots.reachable, MAX_UNITS);
+    let unit_count = plans.len();
+    // Under --filc, Fil-C's clang runs the whole optimization pipeline
+    let optimize_ir = args.optimize && !k1.config.filc;
+    let pipeline = if optimize_ir {
+        Pipeline::O3
+    } else if args.debug {
+        Pipeline::None
+    } else {
+        Pipeline::Dev
+    };
+    let single_file = k1.config.filc || args.emit_llvm || object_is_artifact;
+    let object_path = |i: usize| format!("{out_dir}/{module_name}.{i}.o");
+    let report = |e: CgError| report_codegen_error(k1, cg_error_to_message(k1, e));
+
+    if single_file {
+        let artifacts = Cg::codegen_units(
+            k1,
+            roots,
+            plans,
+            kind,
+            args.debug,
+            UnitOutput::Bitcode(Pipeline::None),
+            object_path,
+        )
+        .map_err(report)?;
+        let merged = Cg::merge_units(ctx, module_name, &artifacts).map_err(report)?;
+        let machine = Cg::make_target_machine(args.optimize, k1.config.target);
+        codegen_llvm::run_passes(&merged, &machine, pipeline);
+        if k1.config.filc {
+            let ll_path = format!("{out_dir}/{module_name}.ll");
+            std::fs::write(Path::new(&ll_path), codegen_llvm::llvm_ir_text_filc(&merged))
+                .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
+            return Ok(vec![ll_path]);
+        }
+        if args.emit_llvm {
+            let ll_path = format!("{out_dir}/{module_name}.ll");
+            std::fs::write(Path::new(&ll_path), merged.print_to_string().to_string())
+                .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
+        }
+        let path = format!("{out_dir}/{module_name}.o");
+        codegen_llvm::emit_object(&merged, &machine, &path).map_err(report)?;
+        return Ok(vec![path]);
+    }
+
+    let mut paths: Vec<String> = Vec::with_capacity(unit_count);
+    for i in 0..unit_count {
+        paths.push(object_path(i));
+    }
+    if optimize_ir {
+        let artifacts = Cg::codegen_units(
+            k1,
+            roots,
+            plans,
+            kind,
+            args.debug,
+            UnitOutput::Bitcode(Pipeline::ThinLtoPreLink),
+            object_path,
+        )
+        .map_err(report)?;
+        Cg::thinlto_codegen(k1, &artifacts, &paths).map_err(report)?;
+        return Ok(paths);
+    }
+    Cg::codegen_units(
+        k1,
+        roots,
+        plans,
+        kind,
+        args.debug,
+        UnitOutput::Object(pipeline),
+        object_path,
+    )
+    .map_err(report)?;
+    Ok(paths)
 }
 
 /// Codegens and links one reloadable ns's dylib:
@@ -1878,51 +1941,19 @@ fn write_reload_dylib(
     let ns_name = k1.ident_str(k1.namespaces.get(ns_id).name).to_string();
     let module_name = k1.program_name().to_string();
     let platform = k1.config.target.platform();
-    let out_dir = k1.config.out_dir;
-
-    let mut cg = Cg::create(ctx, k1, args.debug, args.optimize, CgUnit::ReloadDylib(ns_id));
-    if let Err(e) = cg.codegen_reload_dylib() {
-        let use_color = std::io::stderr().is_terminal();
-        write_source_location(
-            &mut std::io::stderr(),
-            &cg.k1.ast,
-            e.span,
-            MessageLevel::Error,
-            6,
-            Some(cg.k1.ident_str(e.message)),
-            use_color,
-        )
-        .unwrap();
-        anyhow::bail!(cg.k1.message_to_anyhow(e))
-    }
-    let optimize_ir = args.optimize && !cg.k1.config.filc;
-    cg.optimize_verify(optimize_ir)?;
-
-    let idents = &cg.k1.ast.idents;
     let unit_name = format!("{module_name}.{ns_name}");
-    if args.emit_llvm {
-        let ll_path = kpath::join_tmp(
-            cg.k1.get_tmp_unsafe(),
-            idents,
-            out_dir,
-            format_args!("{unit_name}.ll"),
-        );
-        std::fs::write(Path::new(ll_path.as_str()), cg.emit_llvm_ir_text())
-            .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
-    }
-    let obj_path =
-        kpath::join_tmp(cg.k1.get_tmp_unsafe(), idents, out_dir, format_args!("{unit_name}.o"));
-    if cg.emit_object_file(obj_path.as_str()).is_err() {
-        bail!("Error writing dylib object file to path: {obj_path}");
-    }
 
+    let roots = match Cg::prepare_dylib(k1, ns_id) {
+        Ok(roots) => roots,
+        Err(e) => anyhow::bail!(report_codegen_error(k1, e)),
+    };
+    let k1: &TypedProgram = k1;
+    let objects =
+        write_unit_artifacts(args, ctx, k1, &roots, CgKind::ReloadDylib(ns_id), &unit_name, false)?;
+
+    let out_dir = k1.ast.idents.get_string(k1.config.out_dir);
     let dylib_ext = platform.dylib_ext();
-    let dylib_path = kpath::join_tmp(
-        cg.k1.get_tmp_unsafe(),
-        idents,
-        out_dir,
-        format_args!("{unit_name}.{dylib_ext}"),
-    );
+    let dylib_path = format!("{out_dir}/{unit_name}.{dylib_ext}");
     let mut link_cmd = std::process::Command::new("cc");
     match platform {
         Platform::PosixMacos => {
@@ -1937,7 +1968,7 @@ fn write_reload_dylib(
     }
     // A running app watches this path; link to the side and rename into place so
     let staged_path = format!("{dylib_path}.staged");
-    link_cmd.arg(obj_path.as_str());
+    link_cmd.args(&objects);
     link_cmd.arg("-o");
     link_cmd.arg(&staged_path);
     log::debug!("Reload dylib link command: {:?}", link_cmd);
@@ -1945,7 +1976,7 @@ fn write_reload_dylib(
         let _ = std::fs::remove_file(&staged_path);
         bail!("linking reload dylib {dylib_path} failed");
     }
-    std::fs::rename(&staged_path, dylib_path.as_str())
+    std::fs::rename(&staged_path, &dylib_path)
         .map_err(|e| anyhow::anyhow!("Failed to publish reload dylib {dylib_path}: {e}"))?;
     if args.chatty {
         eprintln!("reload dylib {unit_name} took {}ms", dylib_start.elapsed().as_millis());
@@ -2015,9 +2046,9 @@ mod compiler_test {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let app = dir.join("app.k1");
-        fs::write(&app, "fn main(): i32 {\n  println(\"v1\")\n  0\n}\n").unwrap();
+        fs::write(&app, "fn main(): i32 { 0 }\n").unwrap();
         let args = Args {
-            no_std: false,
+            no_std: true,
             emit_llvm: false,
             optimize: false,
             dump_module: false,
@@ -2038,11 +2069,11 @@ mod compiler_test {
         assert_eq!(cold.restored_module_count, 0, "first compile has nothing to restore");
 
         let warm = compile_program(&args).ok().expect("warm compile must succeed");
-        assert_eq!(warm.restored_module_count, 3, "unchanged input restores core, std, app");
+        assert_eq!(warm.restored_module_count, 2, "unchanged input restores core, app");
 
         fs::write(&app, "fn main(): i32 {\n  println(\"v2\")\n  0\n}\n").unwrap();
         let edited = compile_program(&args).ok().expect("edited compile must succeed");
-        assert_eq!(edited.restored_module_count, 2, "an edited app restores only core and std");
+        assert_eq!(edited.restored_module_count, 1, "an edited app restores only core");
 
         let _ = fs::remove_dir_all(&dir);
     }

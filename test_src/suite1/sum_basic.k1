@@ -37,7 +37,7 @@ fn sum-quiet() {
   assert(b is :b _)
   assert(b is :b 'x' or b is :a)
 
-  let msg = c is {
+  let msg = if c is {
     :a -> "a",
     :b _ -> "b",
     :c s if s.len() > 0 -> s,
@@ -59,7 +59,7 @@ ns for my-result {
     self.as-ok().!
   }
   fn show[t: print, e: print](self: my-result[t, e]): string {
-    self is {
+    if self is {
       :ok(v) -> { "Ok: $v\n" },
       :err(e) -> { "Error: $e\n" }
     }

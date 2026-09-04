@@ -28,7 +28,7 @@ fn build-app(k1-exe: string, greeting: string, two-arg-helper: bool, speed: i64,
     "${app-dir}/scene.k1",
     scene-source(greeting, two-arg-helper, speed, extra-global)
   )
-  process/run(k1-exe, ["build", app-dir]) is {
+  if process/run(k1-exe, ["build", app-dir]) is {
     :ok _ -> .{},
     :err e -> crash("app build failed: ${e}"),
   }
@@ -39,7 +39,7 @@ fn send(app: *mut process/child, line: string) {
 }
 
 fn expect(app: *mut process/child, expected: string) {
-  app.stdout.read-line() is {
+  if app.stdout.read-line() is {
     :some line -> assert-equals(line, expected),
     :none -> crash("app closed stdout; expected: $expected"),
   }
@@ -48,11 +48,11 @@ fn expect(app: *mut process/child, expected: string) {
 fn main(argc: c-int, argv: ptr): i32 {
   let args = std/sys/parse-main-args(argc, argv)
   // `k1 run` starts us in the program's home dir, so the app template is ./app
-  let template-dir = args.index-opt(1) is {
+  let template-dir = if args.index-opt(1) is {
     :some d -> d,
     :none -> "app",
   }
-  let k1-exe = sys/env("K1_EXE") is { :some p -> p, :none -> "k1" }
+  let k1-exe = if sys/env("K1_EXE") is { :some p -> p, :none -> "k1" }
 
   process/sh("rm -rf /tmp/k1-reload-driver && mkdir -p ${app-dir}").!
   files/write-entire-file(
@@ -117,7 +117,7 @@ fn main(argc: c-int, argv: ptr): i32 {
   loop {
     thread/sleep-ms(200)
     send(app.&, "greet")
-    let greet = app.stdout.read-line() is {
+    let greet = if app.stdout.read-line() is {
       :some line -> line,
       :none -> crash("app closed stdout waiting for the watched swap"),
     }

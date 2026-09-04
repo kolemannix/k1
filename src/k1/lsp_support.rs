@@ -1,5 +1,5 @@
 use crate::lex::{Span, SpanId, is_ident_char};
-use crate::parse::{FileId, ParsedId, ParsedProgram, StringId};
+use crate::parse::{FileId, ParsedExpr, ParsedId, ParsedProgram, StringId};
 use crate::typer::scopes::{ScopeId, VariableInScope};
 use crate::typer::types::{Type, TypeId};
 use crate::{SV8, typer::*};
@@ -100,7 +100,7 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
     }
 }
 
-pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) -> SpanId {
+pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) -> Span {
     let span_id = match entity_kind {
         LsEntityKind::Namespace(ns_id) => {
             let ns = k1.namespaces.get(ns_id);
@@ -158,7 +158,7 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
             }
         },
     };
-    span_id
+    k1.remap_span(k1.ast.spans.get(span_id))
 }
 
 pub fn get_function_generic_id(k1: &TypedProgram, function_id: FunctionId) -> FunctionId {
@@ -194,7 +194,7 @@ pub fn splice_completion_marker(content: &str, mut offset: usize) -> String {
 pub fn scope_at_point(k1: &TypedProgram, file_id: FileId, line: u32, col: u32) -> Option<ScopeId> {
     let mut best: Option<(ScopeId, u32)> = None;
     for (expr_id, span_id) in k1.exprs.spans.iter_with_ids() {
-        let span = k1.ast.spans.get(*span_id);
+        let Some(span) = k1.remap_call_arg_span(k1.ast.spans.get(*span_id)) else { continue };
         if span.file_id != file_id || !is_point_in_span(&k1.ast, line, col, span) {
             continue;
         }
@@ -212,6 +212,8 @@ pub struct CompletionCandidate {
     pub kind: CompletionCandidateKind,
     pub detail: String,
     pub sort_group: u8,
+    /// LSP snippet text inserted instead of the label
+    pub snippet: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -244,6 +246,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                         kind: CompletionCandidateKind::Field,
                         detail: k1.type_id_to_string(field.type_id),
                         sort_group: 0,
+                        snippet: None,
                     });
                 }
             }
@@ -258,6 +261,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                             kind: CompletionCandidateKind::Method,
                             detail: k1.function_id_to_string(function_id, false),
                             sort_group: 1,
+                            snippet: None,
                         });
                     }
                 }
@@ -285,6 +289,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                                 kind: CompletionCandidateKind::Method,
                                 detail: k1.function_id_to_string(function_id, false),
                                 sort_group: 1,
+                                snippet: None,
                             });
                         }
                     }
@@ -299,11 +304,18 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                     kind: CompletionCandidateKind::Keyword,
                     detail: String::new(),
                     sort_group: 9,
+                    snippet: None,
                 });
             }
         }
         CompletionSite::Path { path_scope_id } => {
-            collect_one_scope(k1, path_scope_id, &mut Seen::default(), &mut items, true);
+            collect_completion_candidates_in_scope_immediate(
+                k1,
+                path_scope_id,
+                &mut Seen::default(),
+                &mut items,
+                true,
+            );
         }
         CompletionSite::Variant { type_id } => {
             let type_id = match k1.types.get(type_id) {
@@ -321,6 +333,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                                 None => String::new(),
                             },
                             sort_group: 0,
+                            snippet: None,
                         });
                     }
                 }
@@ -331,10 +344,45 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                             kind: CompletionCandidateKind::Variant,
                             detail: format!("= {}", v.int_value),
                             sort_group: 0,
+                            snippet: None,
                         });
                     }
                 }
                 _ => {}
+            }
+        }
+        CompletionSite::StructField { type_id, parsed_struct_id } => {
+            let Type::Struct(st) = k1.types.get(type_id) else { return items };
+            let ParsedExpr::Struct(parsed) = k1.ast.exprs.get(parsed_struct_id) else {
+                return items;
+            };
+            let present = k1.ast.mem.getn(parsed.fields);
+            let mut all_fields = String::new();
+            for field in k1.mem.getn(st.fields) {
+                if present.iter().any(|f| f.name == field.name) {
+                    continue;
+                }
+                let name = k1.ident_str(field.name);
+                if !all_fields.is_empty() {
+                    all_fields.push_str(", ");
+                }
+                all_fields.push_str(&format!("{name} = ${{{}:{name}}}", items.len() + 1));
+                items.push(CompletionCandidate {
+                    label: name.to_string(),
+                    kind: CompletionCandidateKind::Field,
+                    detail: k1.type_id_to_string(field.type_id),
+                    sort_group: 1,
+                    snippet: None,
+                });
+            }
+            if items.len() > 1 {
+                items.push(CompletionCandidate {
+                    label: "all fields".to_string(),
+                    kind: CompletionCandidateKind::Field,
+                    detail: all_fields.clone(),
+                    sort_group: 0,
+                    snippet: Some(all_fields),
+                });
             }
         }
     }
@@ -398,12 +446,12 @@ fn collect_scope_chain(k1: &TypedProgram, scope_id: ScopeId, items: &mut Vec<Com
     let mut seen = Seen::default();
     let mut current = Some(scope_id);
     while let Some(scope_id) = current {
-        collect_one_scope(k1, scope_id, &mut seen, items, false);
+        collect_completion_candidates_in_scope_immediate(k1, scope_id, &mut seen, items, false);
         current = k1.scopes.get_scope(scope_id).parent;
     }
 }
 
-fn collect_one_scope(
+fn collect_completion_candidates_in_scope_immediate(
     k1: &TypedProgram,
     scope_id: ScopeId,
     seen: &mut Seen,
@@ -424,6 +472,7 @@ fn collect_one_scope(
             kind: CompletionCandidateKind::Variable,
             detail: k1.type_id_to_string(k1.variables.get(variable_id).type_id),
             sort_group: 2,
+            snippet: None,
         });
     }
     for (name, function_id, prov) in k1.scopes.iter_scope_functions(scope_id) {
@@ -436,6 +485,7 @@ fn collect_one_scope(
                 kind: CompletionCandidateKind::Function,
                 detail: k1.function_id_to_string(function_id, false),
                 sort_group: 3,
+                snippet: None,
             });
         }
     }
@@ -449,6 +499,7 @@ fn collect_one_scope(
                 kind: CompletionCandidateKind::Type,
                 detail: k1.type_id_to_string(type_id),
                 sort_group: 4,
+                snippet: None,
             });
         }
     }
@@ -462,6 +513,7 @@ fn collect_one_scope(
                 kind: CompletionCandidateKind::Namespace,
                 detail: "ns".to_string(),
                 sort_group: 5,
+                snippet: None,
             });
         }
     }
@@ -475,6 +527,7 @@ fn collect_one_scope(
                 kind: CompletionCandidateKind::Ability,
                 detail: "ability".to_string(),
                 sort_group: 6,
+                snippet: None,
             });
         }
     }
@@ -488,11 +541,9 @@ pub fn get_expr_at_point(
 ) -> Option<String> {
     let mut matching_exprs: SV8<_> = smallvec![];
     for (expr_id, span_id) in k1.exprs.spans.iter_with_ids() {
-        let span = k1.ast.spans.get(*span_id);
-        if span.file_id == file {
-            if is_point_in_span(&k1.ast, line_index, char_index, span) {
-                matching_exprs.push((expr_id, span.len));
-            }
+        let Some(span) = k1.remap_call_arg_span(k1.ast.spans.get(*span_id)) else { continue };
+        if span.file_id == file && is_point_in_span(&k1.ast, line_index, char_index, span) {
+            matching_exprs.push((expr_id, span.len));
         }
     }
     matching_exprs.sort_by_key(|(_, len)| *len);
@@ -535,19 +586,25 @@ mod completion_tests {
     /// Compiles `src` (cursor sigil `@@`) in completion mode: the file goes to
     /// disk verbatim, the marker-spliced version is the source override
     fn compile_with_cursor(test_name: &str, src: &str) -> Box<TypedProgram> {
+        let cursor = src.find("@@").expect("fixture needs an @@ cursor");
+        let content = src.replace("@@", "");
+        let spliced = splice_completion_marker(&content, cursor);
+        compile_check(test_name, &content, Some(spliced))
+    }
+
+    fn compile_check(test_name: &str, content: &str, spliced: Option<String>) -> Box<TypedProgram> {
         static SET_HOME: std::sync::Once = std::sync::Once::new();
         SET_HOME.call_once(|| unsafe {
             std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
         });
-        let cursor = src.find("@@").expect("fixture needs an @@ cursor");
-        let content = src.replace("@@", "");
-        let spliced = splice_completion_marker(&content, cursor);
         let dir = std::env::temp_dir().join("k1_completion_tests");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("{test_name}.k1"));
-        std::fs::write(&path, &content).unwrap();
+        std::fs::write(&path, content).unwrap();
         let mut source_overrides = fxhash::FxHashMap::default();
-        source_overrides.insert(crate::kpath::canonicalize_owned(&path).unwrap(), spliced);
+        if let Some(spliced) = spliced {
+            source_overrides.insert(crate::kpath::canonicalize_owned(&path).unwrap(), spliced);
+        }
         let args = Args {
             no_std: false,
             emit_llvm: false,
@@ -569,6 +626,29 @@ mod completion_tests {
             Ok(program) => Box::new(program),
             Err(CompileProgramError::TyperFailure(program)) => program,
         }
+    }
+
+    /// 0-based (line, col) of the first occurrence of `needle` in `src`
+    fn point_of(src: &str, needle: &str) -> (u32, u32) {
+        let offset = src.find(needle).unwrap();
+        let line = src[..offset].matches('\n').count() as u32;
+        let col = (offset - src[..offset].rfind('\n').map_or(0, |i| i + 1)) as u32;
+        (line, col)
+    }
+
+    fn main_file_id(k1: &TypedProgram, test_name: &str) -> FileId {
+        let wanted = format!("{test_name}.k1");
+        for (file_id, source) in k1.ast.sources.iter() {
+            if source.filename_str(&k1.ast.idents) == wanted {
+                return file_id;
+            }
+        }
+        panic!("no source named {wanted}")
+    }
+
+    fn entity_at(k1: &TypedProgram, test_name: &str, src: &str, needle: &str) -> Option<LsEntity> {
+        let (line, col) = point_of(src, needle);
+        find_entity_at_point(k1, main_file_id(k1, test_name), line, col)
     }
 
     fn labels(k1: &TypedProgram) -> Vec<String> {
@@ -798,6 +878,30 @@ fn use-it(): int {
     }
 
     #[test]
+    fn struct_field_completion() {
+        let k1 = compile_with_cursor(
+            "struct_field",
+            r#"
+ns completion-struct-field
+
+type point = { x: int, y: int, z: int }
+
+fn use-it(): int {
+  let p: point = .{ y = 2, @@ }
+  p.x
+}
+"#,
+        );
+        let site = k1.completion.as_ref().unwrap().site.expect("expected a site");
+        assert!(matches!(site, CompletionSite::StructField { .. }));
+        assert_eq!(labels(&k1), vec!["all fields".to_string(), "x".to_string(), "z".to_string()]);
+        let items = collect_completions(&k1, site);
+        let all = items.iter().find(|c| c.label == "all fields").unwrap();
+        assert_eq!(all.snippet.as_deref(), Some("x = ${1:x}, z = ${2:z}"));
+        assert!(items.iter().filter(|c| c.snippet.is_some()).count() == 1);
+    }
+
+    #[test]
     fn earlier_error_yields_no_site() {
         let k1 = compile_with_cursor(
             "earlier_error",
@@ -814,21 +918,120 @@ fn use-it(): int {
         assert!(k1.completion.as_ref().unwrap().site.is_none());
     }
 
+    const MACRO_SRC: &str = r#"
+ns lsp-macro
+
+fn incr(): int { 1 }
+macro twice(e) {
+  "$e + $e"
+}
+fn use-it(): int {
+  let y = 2
+  let x = twice(incr() + y)
+  x
+}
+"#;
+
     #[test]
-    fn use_path_completion() {
+    fn hover_inside_macro_arg() {
+        let k1 = compile_check("hover_macro_arg", MACRO_SRC, None);
+        assert_eq!(k1.messages.borrow().len(), 0, "expected a clean compile");
+        let entity = entity_at(&k1, "hover_macro_arg", MACRO_SRC, "incr() + y")
+            .expect("entity at incr in arg");
+        let LsEntityKind::Function { function_id, is_defn: false } = entity.kind else {
+            panic!("expected a function reference")
+        };
+        assert_eq!(k1.ident_str(k1.get_function(function_id).name), "incr");
+        let entity =
+            entity_at(&k1, "hover_macro_arg", MACRO_SRC, "y)").expect("entity at y in arg");
+        assert!(matches!(entity.kind, LsEntityKind::Variable { .. }));
+    }
+
+    const SAME_LINE_SRC: &str = r#"
+ns lsp-macro-same-line
+
+macro twice(e) {
+  "$e + $e"
+}
+fn use-it(): int {
+  let y = 2
+  twice(y) + twice(y)
+}
+"#;
+
+    /// Identical emitted text on one line still parses per call site, so the
+    /// second site's argument spans are its own
+    #[test]
+    fn hover_second_identical_macro_call() {
+        let k1 = compile_check("hover_same_line", SAME_LINE_SRC, None);
+        assert_eq!(k1.messages.borrow().len(), 0, "expected a clean compile");
+        let entity =
+            entity_at(&k1, "hover_same_line", SAME_LINE_SRC, "y)\n}").expect("entity at second y");
+        assert!(matches!(entity.kind, LsEntityKind::Variable { .. }));
+    }
+
+    #[test]
+    fn completion_inside_macro_arg() {
         let k1 = compile_with_cursor(
-            "use_path",
+            "completion_macro_arg",
             r#"
-   ns completion-use-path
+ns lsp-macro-completion
 
-   use std/@@
-
-   fn main(): i32 { 0 }
-   "#,
+type point = { x: int, y: int }
+macro twice(e) {
+  "$e + $e"
+}
+fn use-it(): int {
+  let p: point = .{ x = 1, y = 2 }
+  twice(p.@@)
+}
+"#,
         );
+        assert!(labels(&k1).contains(&"x".to_string()));
+    }
 
-        assert!(matches!(k1.completion.as_ref().unwrap().site, Some(CompletionSite::Path { .. })));
+    const DEFN_MACRO_SRC: &str = r#"
+$pre/make-fn(my-fn)
 
-        assert!(labels(&k1).contains(&"time".to_string()));
+ns pre {
+  macro make-fn(name) {
+    "fn $name(): int { 7 }"
+  }
+}
+
+ns lsp-defn-macro
+
+fn use-it(): int { my-fn() }
+"#;
+
+    #[test]
+    fn goto_definition_of_macro_generated_fn() {
+        let k1 = compile_check("goto_defn_macro", DEFN_MACRO_SRC, None);
+        assert_eq!(k1.messages.borrow().len(), 0, "expected a clean compile");
+        let entity =
+            entity_at(&k1, "goto_defn_macro", DEFN_MACRO_SRC, "my-fn()").expect("entity at call");
+        let definition = get_entity_definition_span(&k1, entity.kind);
+        assert_eq!(definition.file_id, main_file_id(&k1, "goto_defn_macro"));
+        assert_eq!(k1.ast.sources.get_span_content(&k1.ast.mem, definition), "my-fn");
+        let (line, col) = point_of(DEFN_MACRO_SRC, "my-fn)");
+        assert_eq!(
+            k1.ast
+                .sources
+                .get(definition.file_id)
+                .get_line_for_span_start(&k1.ast.mem, definition)
+                .unwrap()
+                .line_index,
+            line
+        );
+        assert_eq!(
+            definition.start
+                - k1.ast
+                    .sources
+                    .get(definition.file_id)
+                    .get_line_for_span_start(&k1.ast.mem, definition)
+                    .unwrap()
+                    .start_char,
+            col
+        );
     }
 }
