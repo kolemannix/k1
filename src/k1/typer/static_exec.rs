@@ -1554,9 +1554,10 @@ impl TypedProgram {
                     Ok(parsed_expr) => {
                         if p.ast.errors.len() > error_count_start {
                             let e = p.ast.errors.last().unwrap().clone();
+                            let src = p.source().content(&p.ast.mem);
                             Err(make_message(
                                 &p.ast.idents,
-                                format!("{msg_base}{e}"),
+                                format!("{msg_base}{e}\n{src}"),
                                 e.span(),
                                 MessageLevel::Error,
                             ))
@@ -1569,9 +1570,10 @@ impl TypedProgram {
                     let defns = p.parse_definitions(TokenKind::Eof);
                     if p.ast.errors.len() > error_count_start {
                         let e = p.ast.errors.last().unwrap().clone();
+                        let src = p.source().content(&p.ast.mem);
                         Err(make_message(
                             &p.ast.idents,
-                            format!("{msg_base}{e}"),
+                            format!("{msg_base}{e}\n{src}"),
                             e.span(),
                             MessageLevel::Error,
                         ))

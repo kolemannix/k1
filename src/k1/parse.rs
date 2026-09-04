@@ -2505,7 +2505,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         }))))
     }
 
-    fn source(&self) -> &SourceFile {
+    pub fn source(&self) -> &SourceFile {
         self.ast.sources.get(self.file_id)
     }
 
@@ -4919,9 +4919,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         &mut self,
         terminator: TokenKind,
     ) -> ParseResult<List<ParsedStmtId, ParsedProgram>> {
-        // we'd rather burn some memory than spend time re-allocating block statements
-        // nocommit: should (parsed) block statements be linked-style instead? kmem::dlist?
-        let mut stmts = self.ast.mem.new_list(32);
+        let mut stmts = self.ast.mem.new_list(4);
         self.eat_delimited(
             "Block statements",
             &mut stmts,

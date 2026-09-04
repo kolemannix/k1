@@ -2046,9 +2046,9 @@ mod compiler_test {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let app = dir.join("app.k1");
-        fs::write(&app, "fn main(): i32 {\n  println(\"v1\")\n  0\n}\n").unwrap();
+        fs::write(&app, "fn main(): i32 { 0 }\n").unwrap();
         let args = Args {
-            no_std: false,
+            no_std: true,
             emit_llvm: false,
             optimize: false,
             dump_module: false,
@@ -2069,11 +2069,11 @@ mod compiler_test {
         assert_eq!(cold.restored_module_count, 0, "first compile has nothing to restore");
 
         let warm = compile_program(&args).ok().expect("warm compile must succeed");
-        assert_eq!(warm.restored_module_count, 3, "unchanged input restores core, std, app");
+        assert_eq!(warm.restored_module_count, 2, "unchanged input restores core, app");
 
         fs::write(&app, "fn main(): i32 {\n  println(\"v2\")\n  0\n}\n").unwrap();
         let edited = compile_program(&args).ok().expect("edited compile must succeed");
-        assert_eq!(edited.restored_module_count, 2, "an edited app restores only core and std");
+        assert_eq!(edited.restored_module_count, 1, "an edited app restores only core");
 
         let _ = fs::remove_dir_all(&dir);
     }

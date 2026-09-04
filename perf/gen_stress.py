@@ -237,7 +237,7 @@ def unit(i: int) -> str:
     if s.points.len == 0 {{
       return :empty
     }}
-    let lo = s.points.get(0).value
+    let lo = s.points.[0].value
     let hi = lo
     let total = 0: u64
     let kept = 0: u64

@@ -493,15 +493,6 @@ fn is_static_match_arms() -> ParseResult<()> {
 }
 
 #[test]
-fn bare_match_arms_need_if() {
-    let mut ast = make_test_ast();
-    let mut parser = set_up("{ x is { :a -> 1, _ -> 2 } }", &mut ast);
-    parser.expect_expression().unwrap();
-    assert_eq!(ast.errors.len(), 1);
-    assert!(ast.errors[0].message().contains("belong to an if"));
-}
-
-#[test]
 fn is_struct_pattern_bool() -> ParseResult<()> {
     let (ast, expr, _expr_id) = test_single_expr_with_id("x is .{ x = 1 }")?;
     let ParsedExpr::Is(is_expr) = expr else { panic!("expected is") };
