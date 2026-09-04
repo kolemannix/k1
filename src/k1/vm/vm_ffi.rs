@@ -7,10 +7,10 @@ use libffi::{low::*, raw};
 use crate::ir::PhysicalFunctionType;
 use crate::lex::SpanId;
 use crate::typer::types::{AggType, Layout, PhysicalType, PhysicalTypeEnum, ScalarType};
-use crate::typer::{FunctionId, K1Result, TypedProgram};
+use crate::typer::{FunctionId, K1Result, Linkage, TypedProgram};
 use crate::vm;
 use crate::vm::{Value, Vm};
-use crate::{kbail, kerr, parse::StringId};
+use crate::{ice_span, kbail, kerr, parse::StringId};
 
 /// Core FFI dispatch on already-resolved argument values; the bc VM has the
 /// args contiguous in its out-arg region.
@@ -55,7 +55,13 @@ pub(crate) fn handle_ffi_call_resolved(
         None => {
             let handle_for_search = match lib_name {
                 None => k1.vm_process_dlopen_handle,
-                Some(lib_name) => k1.get_dylib_handle(function_id, lib_name, vm.eval_span)?,
+                Some(lib_name) => {
+                    let Linkage::External { module_id, .. } = k1.functions.get(function_id).linkage
+                    else {
+                        ice_span!(k1, vm.eval_span, "extern call to a non-external function");
+                    };
+                    k1.get_dylib_handle(module_id, lib_name, vm.eval_span)?
+                }
             };
 
             let name_cstr = std::ffi::CString::new(k1.ident_str(fn_name)).unwrap();

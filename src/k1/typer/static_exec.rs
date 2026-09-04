@@ -2,7 +2,6 @@
 // All rights reserved.
 
 use super::*;
-use crate::ice_span;
 
 impl TypedProgram {
     pub(super) fn convert_trivial_static_expr(
@@ -1587,13 +1586,10 @@ impl TypedProgram {
 
     pub fn get_dylib_handle(
         &mut self,
-        function_id: FunctionId,
+        module_id: ModuleId,
         lib_name_ident: StringId,
         span: SpanId,
     ) -> K1Result<*mut std::ffi::c_void> {
-        let Linkage::External { module_id, .. } = self.functions.get(function_id).linkage else {
-            ice_span!(self, span, "get_dylib_handle called for non-external function");
-        };
         if let Some(handle) = self.vm_dylib_handles.get(&(module_id, lib_name_ident)) {
             return Ok(*handle);
         }

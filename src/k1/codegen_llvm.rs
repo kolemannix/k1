@@ -1807,7 +1807,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 };
                 g.set_thread_local_mode(Some(mode));
             }
-            if is_private {
+            if is_private && !global.is_external {
                 g.set_visibility(inkwell::GlobalVisibility::Hidden);
             }
             g
