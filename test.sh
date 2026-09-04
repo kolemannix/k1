@@ -34,7 +34,10 @@ K1_HOME=$(pwd) target/$target_dir/k1 --cache true  build dogfood/httpapp
 K1_HOME=$(pwd) target/$target_dir/k1 --cache false run dogfood/logreport
 K1_HOME=$(pwd) target/$target_dir/k1 --cache false run dogfood/comptime_parity
 K1_HOME=$(pwd) target/$target_dir/k1 --cache false run dogfood/brotli
-K1_HOME=$(pwd) target/$target_dir/k1 --cache false build dogfood/gengame
+if [ "$(uname -s)" = Darwin ]; then
+    # gengame links macOS frameworks and a hand-vendored raylib archive
+    K1_HOME=$(pwd) target/$target_dir/k1 --cache false build dogfood/gengame
+fi
 K1_HOME=$(pwd) target/$target_dir/k1 --cache false run dogfood/fractal > /dev/null
 K1_HOME=$(pwd) target/$target_dir/k1 --cache false build dogfood/klib
 make -C dogfood/klib/consumer clean run
