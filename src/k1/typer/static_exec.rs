@@ -584,7 +584,7 @@ impl TypedProgram {
             kbail!(self, span, "Unknown builtin name: {name}");
         }
         let bool_value = match name {
-            "test" => self.config.is_test_build,
+            "test" => self.config.command.is_test(),
             "no-std" => self.config.no_std,
             "debug" => self.config.debug,
             // The VM overrides this global's value during static execution

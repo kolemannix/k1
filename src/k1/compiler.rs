@@ -260,20 +260,50 @@ impl Command {
         }
     }
 
-    pub fn is_check(&self) -> bool {
-        matches!(self, Command::Check { .. })
+    pub fn kind(&self) -> CommandKind {
+        match self {
+            Command::Check { .. } => CommandKind::Check,
+            Command::Build { .. } => CommandKind::Build,
+            Command::Run { .. } => CommandKind::Run,
+            Command::Test { .. } => CommandKind::Test,
+            Command::Server { .. } => CommandKind::Server,
+            Command::Setup { force, .. } => CommandKind::Setup { force: *force },
+            Command::Clean { .. } => CommandKind::Clean,
+        }
     }
+}
 
-    pub fn is_build(&self) -> bool {
-        matches!(self, Command::Build { .. })
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandKind {
+    Check,
+    Build,
+    Run,
+    Test,
+    Server,
+    Setup { force: bool },
+    Clean,
+}
 
-    pub fn is_run(&self) -> bool {
-        matches!(self, Command::Run { .. })
-    }
-
+impl CommandKind {
     pub fn is_test(&self) -> bool {
-        matches!(self, Command::Test { .. })
+        matches!(self, CommandKind::Test)
+    }
+
+    pub fn codegens(&self) -> bool {
+        !matches!(self, CommandKind::Check | CommandKind::Setup { .. })
+    }
+
+    pub fn inputs_hash_byte(&self) -> u8 {
+        match self {
+            CommandKind::Check => 0,
+            CommandKind::Build => 1,
+            CommandKind::Run => 2,
+            CommandKind::Test => 3,
+            CommandKind::Server => 4,
+            CommandKind::Setup { force: false } => 5,
+            CommandKind::Setup { force: true } => 6,
+            CommandKind::Clean => 7,
+        }
     }
 }
 
@@ -348,28 +378,13 @@ impl Args {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetupMode {
-    /// Run stale setup steps at module load (default)
-    Normal,
-    SetupOnly {
-        force: bool,
-    },
-}
-
-impl SetupMode {
-    pub fn is_setup_only(&self) -> bool {
-        matches!(self, SetupMode::SetupOnly { .. })
-    }
-}
-
 /// All paths are canonical UTF-8 strings interned in the ident pool; see kpath
 #[derive(Debug, Clone, Copy)]
 pub struct CompilerConfig {
     pub src_path: StringId,
     pub home_dir: StringId,
     pub k1_home: StringId,
-    pub is_test_build: bool,
+    pub command: CommandKind,
     pub no_std: bool,
     pub target: Target,
     /// See detect_simd_bytes
@@ -385,10 +400,13 @@ pub struct CompilerConfig {
     pub chatty: bool,
     pub optimize_ir: bool,
     pub cache: bool,
-    pub setup_mode: SetupMode,
 }
 
 impl CompilerConfig {
+    pub fn inline_ir(&self) -> bool {
+        !(self.command.codegens() && self.debug)
+    }
+
     pub fn host_platform(&self) -> Platform {
         match detect_host_target() {
             Some(host) => host.platform(),
@@ -1211,7 +1229,7 @@ pub fn compile_program_ext(
         src_path,
         home_dir,
         k1_home: k1_home_id,
-        is_test_build: args.command.is_test(),
+        command: args.command.kind(),
         no_std: args.no_std,
         target,
         simd_bytes: detect_simd_bytes(target),
@@ -1226,11 +1244,6 @@ pub fn compile_program_ext(
         chatty: args.chatty,
         optimize_ir: args.optimize_ir,
         cache: args.cache,
-        setup_mode: if let Command::Setup { force, .. } = args.command {
-            SetupMode::SetupOnly { force }
-        } else {
-            SetupMode::Normal
-        },
     };
 
     let _cwd = CwdGuard::enter(idents.get_string(home_dir));
@@ -1785,7 +1798,7 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
     }
 
     let mut module_name = k1.program_name().to_string();
-    if args.command.is_test() {
+    if args.command.kind().is_test() {
         module_name.push_str("_test");
     };
     let roots = match Cg::prepare_host(k1) {

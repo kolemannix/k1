@@ -163,9 +163,7 @@ ns for buffer {
   }
 
   fn check-bounds[t](self: buffer[t], index: size) {
-    if index.unsigned() >= self.len.unsigned() {
-      crash("index out of bounds: $index / ${self.len}")
-    }
+    raw-buffer/check-bounds(self.len, index)
   }
 
   fn memset[t](self: buffer[t], value: u8): empty {
@@ -176,38 +174,12 @@ ns for buffer {
     )
   }
 
-  fn slice[t](self: buffer[t], start: size, end: size): buffer[t] {
-    // impl-slice-core(self.as-raw(), types/stride[t], start, end)
-    if start < 0 or start > self.len {
-      crash("slice start index out of bounds: $start. length is: ${self.len}")
-    }
-    
-    let end-clamp = end.min(self.len)
-    
-    if end-clamp <= start or self.len == 0 {
-      return empty[t]()
-    }
-    
-    let new-len = end-clamp - start
-    let new-base = self.[start].&
-    .{ len = new-len, data = new-base }
-  }
+  fn as-raw[t](self: buffer[t]): raw-buffer { .{ data = self.data.as[ptr], len = self.len } }
+  fn from-raw[t](raw: raw-buffer): buffer[t] { .{ data = raw.data.ref[t], len = raw.len } }
 
-  // fn impl-slice-core(self: raw-buffer, stride: size, start: size, end: size): raw-buffer {
-  //   if start < 0 or start > self.len {
-  //     crash("slice start index out of bounds: $start. length is: ${self.len}")
-  //   }
-    
-  //   let end-clamp = end.min(self.len)
-    
-  //   if end-clamp <= start or self.len == 0 {
-  //     return empty[t]()
-  //   }
-    
-  //   let new-len = end-clamp - start
-  //   let new-base = raw-buffer.data + (stride * start)
-  //   .{ len = new-len, data = new-base }
-  // }
+  fn slice[t](self: buffer[t], start: size, end: size): buffer[t] {
+    from-raw[t](self.as-raw().slice(types/stride[t], start, end))
+  }
 
   fn take[t](self: buffer[t], count: size): buffer[t] { self.slice(0, count) }
   fn drop[t](self: buffer[t], count: size): buffer[t] {
@@ -499,6 +471,26 @@ ns for buffer {
     buffer-ref-iterator/from-buffer(self)
   }
 
+}
+
+type raw-buffer = { data: ptr, len: size }
+ns for raw-buffer {
+  fn check-bounds(len: size, index: size) {
+    if index.unsigned() >= len.unsigned() {
+      crash("index out of bounds: $index / $len")
+    }
+  }
+
+  fn slice(self: raw-buffer, stride: size, start: size, end: size): raw-buffer {
+    if start < 0 or start > self.len {
+      crash("slice start index out of bounds: $start. length is: ${self.len}")
+    }
+    let end-clamp = end.min(self.len)
+    if end-clamp <= start or self.len == 0 {
+      return .{ data = ptr/null, len = 0 }
+    }
+    .{ data = self.data.add-bytes(stride * start), len = end-clamp - start }
+  }
 }
 
 type buffer-iterator[t] = {

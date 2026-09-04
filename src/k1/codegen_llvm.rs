@@ -1097,38 +1097,37 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         reachable: &[FunctionId],
         max_units: usize,
     ) -> Vec<UnitPlan> {
-        const MIN_UNIT_INSTRUCTIONS: u32 = 8 * 1024;
-        let mut sized: Vec<(u32, FunctionId)> = Vec::with_capacity(reachable.len());
-        let mut total: u32 = 0;
-        for function_id in reachable {
-            let size = match k1.ir.functions.get(function_id) {
-                Some(unit) => unit.inst_count + 1,
+        const MIN_UNIT_INSTRUCTIONS: u64 = 8 * 1024;
+        let size_of = |function_id: &FunctionId| -> u64 {
+            match k1.ir.functions.get(function_id) {
+                Some(unit) => unit.inst_count as u64 + 1,
                 None => 0,
-            };
-            total += size;
-            sized.push((size, *function_id));
+            }
+        };
+        let mut total: u64 = 0;
+        for function_id in reachable {
+            total += size_of(function_id);
         }
         let count = ((total / MIN_UNIT_INSTRUCTIONS) as usize).clamp(1, max_units.max(1));
-        let mut plans: Vec<UnitPlan> = Vec::with_capacity(count);
-        let mut loads: Vec<u32> = Vec::with_capacity(count);
-        for index in 0..count {
-            plans.push(UnitPlan {
-                index,
-                count,
-                functions: Vec::with_capacity(sized.len() / count + 1),
-            });
-            loads.push(0);
-        }
-        sized.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.as_u32().cmp(&b.1.as_u32())));
-        for (size, function_id) in sized {
-            let mut lightest = 0;
-            for (i, load) in loads.iter().enumerate() {
-                if *load < loads[lightest] {
-                    lightest = i;
-                }
+        let count_u64 = count as u64;
+        let mut by_id: Vec<FunctionId> = reachable.to_vec();
+        by_id.sort_by_key(|f| f.as_u32());
+        let mut chunks: Vec<Vec<FunctionId>> = Vec::with_capacity(count);
+        let mut functions: Vec<FunctionId> = Vec::with_capacity(reachable.len() / count + 1);
+        let mut cumulative: u64 = 0;
+        for function_id in &by_id {
+            functions.push(*function_id);
+            cumulative += size_of(function_id);
+            let boundary = (chunks.len() as u64 + 1) * total;
+            if chunks.len() + 1 < count && cumulative * count_u64 >= boundary {
+                chunks.push(std::mem::take(&mut functions));
             }
-            loads[lightest] += size;
-            plans[lightest].functions.push(function_id);
+        }
+        chunks.push(functions);
+        let count = chunks.len();
+        let mut plans: Vec<UnitPlan> = Vec::with_capacity(count);
+        for (index, functions) in chunks.into_iter().enumerate() {
+            plans.push(UnitPlan { index, count, functions });
         }
         plans
     }
@@ -5512,8 +5511,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn make_string_llvm_global(&mut self, string_id: StringId) -> CgResult<GlobalValue<'ctx>> {
-        let string_name = &format!("k1.string.{}.bytes", string_id.as_u32());
         let rust_str = self.k1.get_string(string_id);
+        let content_hash = xxhash_rust::xxh3::xxh3_128(rust_str.as_bytes());
+        let string_name = &format!("k1.string.{content_hash:032x}.bytes");
         let str_len = rust_str.len();
         let global_str_data = self.llvm_module.add_global(
             self.builtin_types.char.array_type(str_len as u32),
@@ -5564,7 +5564,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let global_str_struct = self.llvm_module.add_global(
             string_wrapper_struct_type,
             None,
-            &format!("k1.string.{}", string_id.as_u32()),
+            &format!("k1.string.{content_hash:032x}"),
         );
         global_str_struct.set_initializer(&string_wrapper_struct);
         global_str_struct.set_constant(true);

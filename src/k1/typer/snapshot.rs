@@ -17,7 +17,7 @@ pub(crate) fn inputs_hash_from_settings(
         src_path,
         home_dir,
         k1_home,
-        is_test_build,
+        command,
         no_std,
         target,
         simd_bytes,
@@ -32,10 +32,8 @@ pub(crate) fn inputs_hash_from_settings(
         chatty: _,
         optimize_ir,
         cache: _,
-        setup_mode,
     } = config;
     let flags = [
-        *is_test_build,
         *no_std,
         *debug,
         *sanitize,
@@ -45,10 +43,6 @@ pub(crate) fn inputs_hash_from_settings(
         cfg!(feature = "lsp"),
     ]
     .map(|b| b as u8);
-    let setup_mode = match setup_mode {
-        crate::compiler::SetupMode::Normal => 0u8,
-        crate::compiler::SetupMode::SetupOnly { .. } => 2,
-    };
     crate::snap::InputsHash(0).add(&[
         crate::BUILD_ID.as_bytes(),
         idents.get_string(*src_path).as_bytes(),
@@ -58,7 +52,7 @@ pub(crate) fn inputs_hash_from_settings(
         target.to_str().as_bytes(),
         &simd_bytes.to_le_bytes(),
         &flags,
-        &[setup_mode],
+        &[command.inputs_hash_byte()],
     ])
 }
 

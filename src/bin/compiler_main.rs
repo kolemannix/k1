@@ -41,7 +41,7 @@ fn run() -> anyhow::Result<ExitCode> {
     let Ok(mut program) = compiler::compile_program(&args) else {
         return Ok(ExitCode::FAILURE);
     };
-    if args.command.is_check() || matches!(args.command, Command::Setup { .. }) {
+    if !args.command.kind().codegens() {
         // Setup runs as a module-load gate, so a successful compile means setup ran.
         // In release builds, just exit fast
         if cfg!(debug_assertions) {

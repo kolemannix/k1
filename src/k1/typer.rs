@@ -3156,7 +3156,7 @@ impl TypedProgram {
             &mut modules_to_typecheck,
         )?;
 
-        if primary_module && self.config.setup_mode.is_setup_only() {
+        if primary_module && matches!(self.config.command, crate::compiler::CommandKind::Setup { .. }) {
             return Ok(added_module_id);
         }
 
@@ -3459,9 +3459,11 @@ impl TypedProgram {
         let setup_decl = self.modules.get(module_id).manifest.setup;
         let mut setup_ran = false;
         if let Some(setup) = setup_decl {
-            let force = self.config.setup_mode
-                == (crate::compiler::SetupMode::SetupOnly { force: true })
-                && primary_module;
+            let force = primary_module
+                && matches!(
+                    self.config.command,
+                    crate::compiler::CommandKind::Setup { force: true }
+                );
             let started = {
                 let request = self.setup_request(module_id, setup, force);
                 let tmp = self.get_tmp_unsafe();

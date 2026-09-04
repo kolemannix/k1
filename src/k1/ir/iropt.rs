@@ -18,7 +18,7 @@ pub fn optimize_unit(k1: &mut TypedProgram, root: IrUnitId) {
         eprintln!("optimizing {}", unit_to_string(k1, root, true));
     }
 
-    let skip_inline = std::env::var("K1_IROPT_NO_INLINE").is_ok();
+    let skip_inline = !k1.config.inline_ir();
 
     let mut visit_stack = std::mem::take(&mut k1.ir.opt_buf_visit_stack);
     let mut visited = std::mem::take(&mut k1.ir.opt_buf_visited);
@@ -81,8 +81,6 @@ fn collect_direct_callees(k1: &TypedProgram, callees: &mut Vec<FunctionId>, unit
     }
 }
 
-/// K1_IROPT_NO_INLINE: the bookkeeping of `inline_calls_in_unit` without any
-/// inlining, so units still get valid counts and cfg.
 fn finish_unit_no_inline(k1: &mut TypedProgram, unit_id: IrUnitId) {
     let blocks = get_compiled_unit(&k1.ir, unit_id).unwrap().blocks;
     let inst_count = k1
