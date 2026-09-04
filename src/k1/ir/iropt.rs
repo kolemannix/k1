@@ -1,140 +1,71 @@
 use super::*;
 
 pub enum OptVisit {
-    Enter { unit: IrUnitId, parent: Option<IrUnitId> },
-    Leave { unit: IrUnitId, parent: Option<IrUnitId> },
+    Enter(IrUnitId),
+    Leave(IrUnitId),
 }
 
-#[derive(Clone, Copy)]
-pub struct SccNode {
-    index: u32,
-    lowlink: u32,
-    on_stack: bool,
-    self_call: bool,
-}
-
-pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
+pub fn optimize_unit(k1: &mut TypedProgram, root: IrUnitId) {
     let start = k1.timing.raw();
     let insts_before = k1.ir.instrs.len();
-    let Some(unit) = get_compiled_unit(&k1.ir, unit_id) else {
+    let Some(unit) = get_compiled_unit(&k1.ir, root) else {
         return;
     };
     if unit.is_optimized {
         return;
     }
     if unit.is_debug {
-        eprintln!("optimizing {}", unit_to_string(k1, unit_id, true));
+        eprintln!("optimizing {}", unit_to_string(k1, root, true));
     }
-
-    let mut order = build_postorder_call_graph(k1, unit_id);
 
     let skip_inline = std::env::var("K1_IROPT_NO_INLINE").is_ok();
 
-    for unit_id in order.iter() {
-        let inline_start = k1.timing.raw();
-        if skip_inline {
-            finish_unit_no_inline(k1, *unit_id);
-        } else {
-            inline_calls_in_unit(k1, *unit_id)
-        }
-        k1.timing.iropt_inline_nanos += k1.timing.elapsed_nanos(inline_start) as i64;
+    let mut visit_stack = std::mem::take(&mut k1.ir.opt_buf_visit_stack);
+    let mut visited = std::mem::take(&mut k1.ir.opt_buf_visited);
+    let mut callees = std::mem::take(&mut k1.ir.opt_buf_callees);
+    visit_stack.push(OptVisit::Enter(root));
+    while let Some(visit) = visit_stack.pop() {
+        match visit {
+            OptVisit::Enter(unit_id) => {
+                if !visited.insert(unit_id) {
+                    continue;
+                }
+                debug_assert!(!get_compiled_unit(&k1.ir, unit_id).unwrap().is_optimized);
+                visit_stack.push(OptVisit::Leave(unit_id));
+                callees.clear();
+                collect_direct_callees(k1, &mut callees, unit_id);
+                for callee_id in &callees {
+                    let callee = IrUnitId::Function(*callee_id);
+                    if !get_compiled_unit(&k1.ir, callee).unwrap().is_optimized {
+                        visit_stack.push(OptVisit::Enter(callee));
+                    }
+                }
+            }
+            OptVisit::Leave(unit_id) => {
+                let inline_start = k1.timing.raw();
+                if skip_inline {
+                    finish_unit_no_inline(k1, unit_id);
+                } else {
+                    inline_calls_in_unit(k1, unit_id)
+                }
+                k1.timing.iropt_inline_nanos += k1.timing.elapsed_nanos(inline_start) as i64;
 
-        let simplify_start = k1.timing.raw();
-        cfg_simplify(k1, *unit_id);
-        k1.timing.iropt_simplify_nanos += k1.timing.elapsed_nanos(simplify_start) as i64;
-        get_compiled_unit_mut(&mut k1.ir, *unit_id).unwrap().is_optimized = true;
+                let simplify_start = k1.timing.raw();
+                cfg_simplify(k1, unit_id);
+                k1.timing.iropt_simplify_nanos += k1.timing.elapsed_nanos(simplify_start) as i64;
+                get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap().is_optimized = true;
+            }
+        }
     }
-    order.clear();
-    k1.ir.opt_buf_order = order;
+    visited.clear();
+    callees.clear();
+    k1.ir.opt_buf_visit_stack = visit_stack;
+    k1.ir.opt_buf_visited = visited;
+    k1.ir.opt_buf_callees = callees;
 
     k1.timing.iropt_insts_created += (k1.ir.instrs.len() - insts_before) as i64;
     let elapsed = k1.timing.elapsed_nanos(start);
     k1.timing.total_iropt_nanos += elapsed as i64;
-}
-
-fn build_postorder_call_graph(k1: &mut TypedProgram, root: IrUnitId) -> Vec<IrUnitId> {
-    let mut visit_stack = std::mem::take(&mut k1.ir.opt_buf_stack);
-    let mut nodes = std::mem::take(&mut k1.ir.opt_buf_nodes);
-    let mut scc_stack = std::mem::take(&mut k1.ir.opt_buf_scc_stack);
-    let mut callees = std::mem::take(&mut k1.ir.opt_buf_callees);
-    let mut order = std::mem::take(&mut k1.ir.opt_buf_order);
-
-    visit_stack.push(OptVisit::Enter { unit: root, parent: None });
-
-    while let Some(visit) = visit_stack.pop() {
-        match visit {
-            OptVisit::Enter { unit, parent } => {
-                if let Some(seen) = nodes.get(&unit).copied() {
-                    if let Some(parent_id) = parent {
-                        if seen.on_stack {
-                            let parent = nodes.get_mut(&parent_id).unwrap();
-                            parent.lowlink = parent.lowlink.min(seen.index);
-                            if parent_id == unit {
-                                parent.self_call = true;
-                            }
-                        }
-                    }
-                    continue;
-                }
-                debug_assert!(!get_compiled_unit(&k1.ir, unit).unwrap().is_optimized);
-                let index = nodes.len() as u32;
-                nodes.insert(
-                    unit,
-                    SccNode { index, lowlink: index, on_stack: true, self_call: false },
-                );
-                scc_stack.push(unit);
-
-                visit_stack.push(OptVisit::Leave { unit, parent });
-                callees.clear();
-                collect_direct_callees(k1, &mut callees, unit);
-                for callee_id in &callees {
-                    let callee = IrUnitId::Function(*callee_id);
-                    if get_compiled_unit(&k1.ir, callee).unwrap().is_optimized {
-                        continue;
-                    }
-                    visit_stack.push(OptVisit::Enter { unit: callee, parent: Some(unit) });
-                }
-            }
-            OptVisit::Leave { unit, parent } => {
-                let node = nodes[&unit];
-                if let Some(parent) = parent {
-                    let parent = nodes.get_mut(&parent).unwrap();
-                    parent.lowlink = parent.lowlink.min(node.lowlink);
-                }
-                if node.lowlink != node.index {
-                    continue;
-                }
-
-                let scc = k1.ir.scc_count;
-                k1.ir.scc_count += 1;
-                let start = order.len();
-                loop {
-                    let member = scc_stack.pop().unwrap();
-                    nodes.get_mut(&member).unwrap().on_stack = false;
-                    order.push(member);
-                    if member == unit {
-                        break;
-                    }
-                }
-                let recursive = order.len() - start > 1 || node.self_call;
-                for member in &order[start..] {
-                    let member_unit = get_compiled_unit_mut(&mut k1.ir, *member).unwrap();
-                    member_unit.scc = scc;
-                    member_unit.recursive = recursive;
-                }
-            }
-        }
-    }
-
-    debug_assert!(scc_stack.is_empty());
-    visit_stack.clear();
-    nodes.clear();
-    callees.clear();
-    k1.ir.opt_buf_stack = visit_stack;
-    k1.ir.opt_buf_nodes = nodes;
-    k1.ir.opt_buf_scc_stack = scc_stack;
-    k1.ir.opt_buf_callees = callees;
-    order
 }
 
 fn collect_direct_callees(k1: &TypedProgram, callees: &mut Vec<FunctionId>, unit_id: IrUnitId) {
@@ -186,7 +117,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                     if !k1.functions.get(function_id).is_reloadable() {
                         let callee_unit =
                             get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
-                        if !callee_unit.recursive && callee_unit.inst_count < 20 {
+                        if callee_unit.is_optimized && callee_unit.inst_count < 20 {
                             cur_block = inline_call(
                                 k1,
                                 unit_id,
@@ -232,254 +163,294 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     k1.timing.iropt_cfg_computes += 1;
     get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap().inst_count = inst_count;
 
-    fn inline_call(
-        k1: &mut TypedProgram,
-        self_unit_id: IrUnitId,
-        call_block_handle: BlockId,
-        call_inst_node: IrHandle<InstNode>,
-        call: IrCall,
-        result_rewrites: &mut RewriteMappings,
-    ) -> BlockId {
-        k1.timing.iropt_inline_count += 1;
-        let call_inst = *k1.ir.mem.get(call_inst_node);
-        let call_inst_id = call_inst.data;
-        debug!("Inlining call i{} {}", call_inst_id, inst_to_string(k1, call_inst_id));
-        let self_unit = get_compiled_unit(&k1.ir, self_unit_id).unwrap();
-        let IrCallee::Direct(callee_fn_id) = call.callee else { panic!() };
-        let call_span = *k1.ir.sources.get(call_inst_id);
-        let callee_unit = *k1.ir.functions.get(&callee_fn_id).unwrap();
-        debug!("callee\n{}", unit_to_string(k1, IrUnitId::Function(callee_fn_id), false));
-        debug!("self\n{}", unit_to_string(k1, self_unit_id, false));
+}
 
-        let entry_span = match self_unit_id {
-            IrUnitId::Expr(e) => k1.exprs.get_span(e),
-            IrUnitId::Function(id) => k1.get_function_span(id),
-        };
-        let mut b = Builder {
-            k1,
-            blocks: self_unit.blocks,
-            fn_type: self_unit.fn_type,
-            returned_alloca: None,
-            last_alloca_index: self_unit.last_alloca_index,
-            cur_block: Handle::nil(),
-            cur_span: call_span,
-            entry_span,
-        };
+fn inline_call(
+    k1: &mut TypedProgram,
+    self_unit_id: IrUnitId,
+    call_block_handle: BlockId,
+    call_inst_node: IrHandle<InstNode>,
+    call: IrCall,
+    result_rewrites: &mut RewriteMappings,
+) -> BlockId {
+    let call_inst = *k1.ir.mem.get(call_inst_node);
+    let call_inst_id = call_inst.data;
+    debug!("Inlining call i{} {}", call_inst_id, inst_to_string(k1, call_inst_id));
+    let self_unit = get_compiled_unit(&k1.ir, self_unit_id).unwrap();
+    let IrCallee::Direct(callee_fn_id) = call.callee else { panic!() };
+    let call_span = *k1.ir.sources.get(call_inst_id);
+    let callee_unit = *k1.ir.functions.get(&callee_fn_id).unwrap();
+    debug!("callee\n{}", unit_to_string(k1, IrUnitId::Function(callee_fn_id), false));
+    debug!("self\n{}", unit_to_string(k1, self_unit_id, false));
 
-        let mut call_block_node_ref = b.k1.ir.mem.get_raw_ref(call_block_handle);
-        let self_entry_block = b.blocks.first;
+    let entry_span = match self_unit_id {
+        IrUnitId::Expr(e) => k1.exprs.get_span(e),
+        IrUnitId::Function(id) => k1.get_function_span(id),
+    };
+    let mut b = Builder {
+        k1,
+        blocks: self_unit.blocks,
+        fn_type: self_unit.fn_type,
+        returned_alloca: None,
+        last_alloca_index: self_unit.last_alloca_index,
+        cur_block: call_block_handle,
+        cur_span: call_span,
+        entry_span,
+    };
 
-        let call_args = b.k1.ir.mem.getn(call.args);
-        let mut inlined_rewrites = std::mem::take(&mut b.k1.ir.opt_buf_inline_inlined_rewrites);
-        inlined_rewrites.fn_params = Some(call_args);
+    let mut call_block_node_ref = b.k1.ir.mem.get_raw_ref(call_block_handle);
 
-        // Remove the call
-        let call_next = b.k1.ir.mem.get(call_inst_node).next;
-        b.k1.ir.mem.dlist_remove(&mut call_block_node_ref.data.instrs, call_inst_node);
-        let call_next = if callee_unit.fn_type.diverges {
-            // There will be an 'unreachable' here, remove it too
-            let next_next = b.k1.ir.mem.get(call_next).next;
-            b.k1.ir.mem.dlist_remove(&mut call_block_node_ref.data.instrs, call_next);
-            next_next
-        } else {
-            call_next
-        };
+    // Remove the call
+    let call_next = b.k1.ir.mem.get(call_inst_node).next;
+    b.k1.ir.mem.dlist_remove(&mut call_block_node_ref.data.instrs, call_inst_node);
+    let call_next = if callee_unit.fn_type.diverges {
+        // There will be an 'unreachable' here, remove it too
+        let next_next = b.k1.ir.mem.get(call_next).next;
+        b.k1.ir.mem.dlist_remove(&mut call_block_node_ref.data.instrs, call_next);
+        next_next
+    } else {
+        call_next
+    };
 
-        // None when the call is the last instruction in the block
-        let call_post_block: Option<BlockId> = match call_next.is_nil() {
-            false => Some(b.split_block_at_inst(call_block_handle, call_next)),
-            true => None,
-        };
-        enum InlinedReturnInfo {
-            Empty,
-            AggInStorage(Value),
-            ScalarInPhi(InstId, List<PhiCase, ProgramIr>),
-        }
-        let ret_layout = b.k1.get_pt_layout(call.ret_type);
-        let mut return_info = match call.dst {
-            None => {
-                match call.ret_type.as_enum() {
-                    PhysicalTypeEnum::Scalar(_) => {
-                        let incomings = b.k1.ir.mem.new_list(0);
-                        // There's always a post block that contains at least a ret if the return
-                        // type is not 'void' or 'never' (its a scalar here)
-                        b.goto_block(call_post_block.unwrap());
-                        let phi = b.push_inst_front(
-                            Inst::Phi { t: call.ret_type, incomings: MSlice::empty() },
-                            IrComment::InlinedScalarReturn,
-                        );
-                        result_rewrites.values.insert(call_inst_id, Value::Inst(phi));
-                        InlinedReturnInfo::ScalarInPhi(phi, incomings)
-                    }
-                    PhysicalTypeEnum::Agg(_) => {
-                        let dst_alloca = b.k1.ir.add_inst(
-                            Inst::Alloca {
-                                t: call.ret_type,
-                                vm_layout: ret_layout,
-                                returned: false,
-                            },
-                            IrComment::InlineRet,
-                            IrDebugInfo::default(),
-                            call_span,
-                        );
-                        let self_entry_instrs =
-                            &mut b.k1.ir.mem.get_raw_ref(self_entry_block).as_mut().data.instrs;
-                        b.k1.ir.mem.dlist_insert(self_entry_instrs, 0, dst_alloca);
-                        result_rewrites.values.insert(call_inst_id, Value::Inst(dst_alloca));
-                        InlinedReturnInfo::AggInStorage(dst_alloca.as_value())
-                    }
-                    PhysicalTypeEnum::Empty => InlinedReturnInfo::Empty,
-                }
+    // None when the call is the last instruction in the block
+    let call_post_block: Option<BlockId> = match call_next.is_nil() {
+        false => Some(b.split_block_at_inst(call_block_handle, call_next)),
+        true => None,
+    };
+
+    // The split moved call_block's terminator into call_post_block; any
+    // phi naming call_block as its predecessor lives in that terminator's
+    // targets and must now name call_post_block instead. (No post block
+    // means the call diverged, so call_block had no successors.)
+    if let Some(call_post_block) = call_post_block {
+        let post_instrs = b.k1.ir.mem.get(call_post_block).data.instrs;
+        let terminator_id = b.k1.ir.mem.get(post_instrs.last).data;
+        match *b.k1.ir.instrs.get(terminator_id) {
+            Inst::Jump(target) => {
+                rewrite_phi_incoming(&mut b.k1.ir, target, call_block_handle, call_post_block)
             }
-            Some(dst) => InlinedReturnInfo::AggInStorage(dst),
-        };
+            Inst::JumpIf { cons, alt, .. } => {
+                rewrite_phi_incoming(&mut b.k1.ir, cons, call_block_handle, call_post_block);
+                rewrite_phi_incoming(&mut b.k1.ir, alt, call_block_handle, call_post_block);
+            }
+            Inst::Switch { cases, default, .. } => {
+                for case in b.k1.ir.mem.getn(cases) {
+                    rewrite_phi_incoming(
+                        &mut b.k1.ir,
+                        case.target,
+                        call_block_handle,
+                        call_post_block,
+                    );
+                }
+                rewrite_phi_incoming(&mut b.k1.ir, default, call_block_handle, call_post_block);
+            }
+            _ => {}
+        }
+    }
 
-        // The split moved call_block's terminator into call_post_block; any
-        // phi naming call_block as its predecessor lives in that terminator's
-        // targets and must now name call_post_block instead. (No post block
-        // means the call diverged, so call_block had no successors.)
-        if let Some(call_post_block) = call_post_block {
-            let post_instrs = b.k1.ir.mem.get(call_post_block).data.instrs;
-            let terminator_id = b.k1.ir.mem.get(post_instrs.last).data;
-            match *b.k1.ir.instrs.get(terminator_id) {
-                Inst::Jump(target) => {
-                    rewrite_phi_incoming(&mut b.k1.ir, target, call_block_handle, call_post_block)
+    let inlined = inline_body(&mut b, callee_unit, call, call_post_block);
+    if call.dst.is_none()
+        && let Some(result) = inlined.result
+    {
+        result_rewrites.values.insert(call_inst_id, result);
+    }
+
+    let unit = get_compiled_unit_mut(&mut b.k1.ir, self_unit_id).unwrap();
+    unit.blocks = b.blocks;
+    unit.last_alloca_index = b.last_alloca_index;
+    unit.cfg_valid = false;
+
+    if inlined.last_block.is_nil() {
+        match call_post_block {
+            Some(post) => post,
+            None => b.k1.ir.mem.get(call_block_handle).next,
+        }
+    } else {
+        b.k1.ir.mem.get(inlined.last_block).next
+    }
+}
+
+pub(super) fn compile_inline_call(
+    b: &mut Builder,
+    callee_id: FunctionId,
+    call: IrCall,
+) -> K1Result<Value> {
+    if b.k1.ir.units_in_progress.contains(&callee_id) {
+        kbail!(
+            b.k1,
+            b.cur_span,
+            "Cannot inline {}: it is recursive through fn(inline) calls, so the inlining would never end",
+            b.k1.ident_str(b.k1.get_function(callee_id).name)
+        );
+    }
+    let caller_variables = std::mem::take(&mut b.k1.ir.b_variables);
+    let caller_loops = std::mem::take(&mut b.k1.ir.b_loops);
+    let compiled = b
+        .k1
+        .require_function_body(callee_id, b.cur_span)
+        .and_then(|_| compile_function(b.k1, callee_id));
+    b.k1.ir.b_variables = caller_variables;
+    b.k1.ir.b_loops = caller_loops;
+    compiled?;
+    let callee_unit = *b.k1.ir.functions.get(&callee_id).unwrap();
+    let exit_block = b.push_block(BlockSourceKind::InlineExit);
+    let inlined = inline_body(b, callee_unit, call, Some(exit_block));
+    b.goto_block(exit_block);
+    if callee_unit.fn_type.diverges {
+        return Ok(b.push_inst_anon(Inst::Unreachable).as_value());
+    }
+    Ok(match call.dst {
+        Some(dst) => dst,
+        None => inlined.result.unwrap_or(Value::Empty),
+    })
+}
+
+struct InlinedBody {
+    result: Option<Value>,
+    last_block: BlockId,
+}
+
+fn inline_body(
+    b: &mut Builder,
+    callee_unit: IrUnit,
+    call: IrCall,
+    exit_block: Option<BlockId>,
+) -> InlinedBody {
+    b.k1.timing.iropt_inline_count += 1;
+    let call_block = b.cur_block;
+    let call_args = b.k1.ir.mem.getn(call.args);
+    let mut inlined_rewrites = std::mem::take(&mut b.k1.ir.opt_buf_inline_inlined_rewrites);
+    inlined_rewrites.fn_params = Some(call_args);
+
+    enum InlinedReturnInfo {
+        Empty,
+        AggInStorage(Value),
+        ScalarInPhi(InstId, List<PhiCase, ProgramIr>),
+    }
+    let mut return_info = match call.dst {
+        None => {
+            match call.ret_type.as_enum() {
+                PhysicalTypeEnum::Scalar(_) => {
+                    let incomings = b.k1.ir.mem.new_list(0);
+                    // There's always an exit block if the return type is not 'void' or 'never'
+                    // (its a scalar here)
+                    b.goto_block(exit_block.unwrap());
+                    let phi = b.push_inst_front(
+                        Inst::Phi { t: call.ret_type, incomings: MSlice::empty() },
+                        IrComment::InlinedScalarReturn,
+                    );
+                    b.cur_block = call_block;
+                    InlinedReturnInfo::ScalarInPhi(phi, incomings)
                 }
-                Inst::JumpIf { cons, alt, .. } => {
-                    rewrite_phi_incoming(&mut b.k1.ir, cons, call_block_handle, call_post_block);
-                    rewrite_phi_incoming(&mut b.k1.ir, alt, call_block_handle, call_post_block);
+                PhysicalTypeEnum::Agg(_) => {
+                    let dst_alloca = b.push_alloca(call.ret_type, IrComment::InlineRet);
+                    InlinedReturnInfo::AggInStorage(dst_alloca.as_value())
                 }
-                Inst::Switch { cases, default, .. } => {
-                    for case in b.k1.ir.mem.getn(cases) {
-                        rewrite_phi_incoming(
-                            &mut b.k1.ir,
-                            case.target,
-                            call_block_handle,
-                            call_post_block,
-                        );
+                PhysicalTypeEnum::Empty => InlinedReturnInfo::Empty,
+            }
+        }
+        Some(dst) => InlinedReturnInfo::AggInStorage(dst),
+    };
+
+    let mut inlined_first: BlockId = Handle::nil();
+    let mut inlined_last: BlockId = Handle::nil();
+    let mut rewritten_returns = b.k1.tmp.new_list(0);
+    for (index, (callee_block_id, callee_block)) in
+        b.k1.ir.mem.dlist_iter_handles(callee_unit.blocks).enumerate()
+    {
+        let inlined_block = b.k1.ir.mem.dlist_insert_after(
+            &mut b.blocks,
+            b.cur_block,
+            Block {
+                kind: callee_block.data.kind,
+                instrs: Dlist::empty(),
+                preds: Dlist::empty(),
+                succs: Dlist::empty(),
+            },
+        );
+        if inlined_first.is_nil() {
+            inlined_first = inlined_block;
+        }
+        inlined_last = inlined_block;
+
+        inlined_rewrites.block_enters.insert(callee_block_id, inlined_block);
+        inlined_rewrites.block_exits.insert(callee_block_id, inlined_block);
+        if index == 0 {
+            b.push_jump(inlined_block, IrComment::EnterInlinedCode);
+        }
+        b.cur_block = inlined_block;
+        for callee_inst in b.k1.ir.mem.dlist_iter(callee_block.data.instrs) {
+            let mut inst = *b.k1.ir.instrs.get(*callee_inst);
+            let mut include = true;
+            // We delay rewriting most instructions until we know about all the blocks; just
+            // makes it easier to have on rewrite routine for everything, and not to worry about
+            // using an incomplete rewrite mappings set
+            match &mut inst {
+                Inst::Alloca { returned, .. } => {
+                    *returned = false;
+                }
+                Inst::Ret { v, .. } => {
+                    // Store to dst_alloca, and jmp to after block
+                    match &mut return_info {
+                        InlinedReturnInfo::Empty => {}
+                        InlinedReturnInfo::AggInStorage(dst_storage) => {
+                            rewrite_value(&mut inlined_rewrites, v);
+                            let store_id = store_value(
+                                b,
+                                call.ret_type,
+                                *dst_storage,
+                                *v,
+                                IrComment::InlinedAggRet,
+                            )
+                            .expect("call.ret_type is not Empty");
+                            rewritten_returns.push_grow(&mut b.k1.tmp, store_id);
+                        }
+                        InlinedReturnInfo::ScalarInPhi(_, cases) => cases.push_grow(
+                            &mut b.k1.ir.mem,
+                            PhiCase { from: inlined_block, value: *v },
+                        ),
                     }
-                    rewrite_phi_incoming(&mut b.k1.ir, default, call_block_handle, call_post_block);
+                    if let Some(exit_block) = exit_block {
+                        b.push_jump(exit_block, IrComment::ExitInlinedCode);
+                    }
+                    include = false;
                 }
                 _ => {}
             }
-        }
-
-        b.cur_block = call_block_handle;
-        // eprintln!("post split\n{}", blocks_to_string(b.k1, b.blocks, false));
-
-        let mut inlined_first: BlockId = Handle::nil();
-        let mut inlined_last: BlockId = Handle::nil();
-        let mut rewritten_returns = b.k1.tmp.new_list(0);
-        for (index, (callee_block_id, callee_block)) in
-            b.k1.ir.mem.dlist_iter_handles(callee_unit.blocks).enumerate()
-        {
-            let inlined_block = b.k1.ir.mem.dlist_insert_after(
-                &mut b.blocks,
-                b.cur_block,
-                Block {
-                    kind: callee_block.data.kind,
-                    instrs: Dlist::empty(),
-                    preds: Dlist::empty(),
-                    succs: Dlist::empty(),
-                },
-            );
-            if inlined_first.is_nil() {
-                inlined_first = inlined_block;
-            }
-            inlined_last = inlined_block;
-
-            inlined_rewrites.block_enters.insert(callee_block_id, inlined_block);
-            inlined_rewrites.block_exits.insert(callee_block_id, inlined_block);
-            if index == 0 {
-                b.push_jump(inlined_block, IrComment::EnterInlinedCode);
-            }
-            b.cur_block = inlined_block;
-            for callee_inst in b.k1.ir.mem.dlist_iter(callee_block.data.instrs) {
-                let mut inst = *b.k1.ir.instrs.get(*callee_inst);
-                let mut include = true;
-                // We delay rewriting most instructions until we know about all the blocks; just
-                // makes it easier to have on rewrite routine for everything, and not to worry about
-                // using an incomplete rewrite mappings set
-                match &mut inst {
-                    Inst::Alloca { returned, .. } => {
-                        *returned = false;
-                    }
-                    Inst::Ret { v, .. } => {
-                        // Store to dst_alloca, and jmp to after block
-                        match &mut return_info {
-                            InlinedReturnInfo::Empty => {}
-                            InlinedReturnInfo::AggInStorage(dst_storage) => {
-                                rewrite_value(&mut inlined_rewrites, v);
-                                let store_id = store_value(
-                                    &mut b,
-                                    call.ret_type,
-                                    *dst_storage,
-                                    *v,
-                                    IrComment::InlinedAggRet,
-                                )
-                                .expect("call.ret_type is not Empty");
-                                rewritten_returns.push_grow(&mut b.k1.tmp, store_id);
-                            }
-                            InlinedReturnInfo::ScalarInPhi(_, cases) => cases.push_grow(
-                                &mut b.k1.ir.mem,
-                                PhiCase { from: inlined_block, value: *v },
-                            ),
-                        }
-                        if let Some(call_post_block) = call_post_block {
-                            b.push_jump(call_post_block, IrComment::ExitInlinedCode);
-                        }
-                        include = false;
-                    }
-                    _ => {}
-                }
-                if include {
-                    let comment = *b.k1.ir.comments.get(*callee_inst);
-                    let new_inst = if let Inst::Alloca { t, .. } = inst {
-                        b.push_alloca(t, comment)
-                    } else {
-                        b.push_inst(inst, comment)
-                    };
-                    inlined_rewrites.values.insert(*callee_inst, Value::Inst(new_inst));
-                }
+            if include {
+                let comment = *b.k1.ir.comments.get(*callee_inst);
+                let new_inst = if let Inst::Alloca { t, .. } = inst {
+                    b.push_alloca(t, comment)
+                } else {
+                    b.push_inst(inst, comment)
+                };
+                inlined_rewrites.values.insert(*callee_inst, Value::Inst(new_inst));
             }
         }
-        if let InlinedReturnInfo::ScalarInPhi(phi, actual_incomings) = return_info {
+    }
+    let result = match return_info {
+        InlinedReturnInfo::Empty => None,
+        InlinedReturnInfo::AggInStorage(storage) => Some(storage),
+        InlinedReturnInfo::ScalarInPhi(phi, actual_incomings) => {
             let mut inst = b.k1.ir.instrs.get_raw(phi);
             let Inst::Phi { incomings, .. } = inst.as_mut() else { panic!() };
             *incomings = actual_incomings.to_slice();
             rewrite_instr(&mut b.k1.ir, &mut inlined_rewrites, &mut inst);
+            Some(Value::Inst(phi))
         }
+    };
 
-        for (self_block, _) in b.k1.ir.mem.dlist_iter_handles_from(b.blocks, inlined_first) {
-            rewrite_in_block(&mut b.k1.ir, self_block, &mut inlined_rewrites, &rewritten_returns);
-            if self_block == inlined_last {
-                break;
-            }
-        }
-        // debug!("post rewrite\n{}", blocks_to_string(b.k1, b.blocks, false, false));
-
-        let unit = get_compiled_unit_mut(&mut b.k1.ir, self_unit_id).unwrap();
-        unit.blocks = b.blocks;
-        unit.cfg_valid = false;
-
-        inlined_rewrites.clear();
-        b.k1.ir.opt_buf_inline_inlined_rewrites = inlined_rewrites;
-
-        // debug!("post inline\n{}", unit_to_string(b.k1, self_unit_id, false));
-        // if let Err(e) = validate_unit(b.k1, self_unit_id) {
-        //     k1.report(e)
-        // };
-
-        if inlined_first.is_nil() {
-            // Callee had no blocks; nothing new to scan
-            match call_post_block {
-                Some(post) => post,
-                None => b.k1.ir.mem.get(call_block_handle).next,
-            }
-        } else {
-            inlined_first
+    for (self_block, _) in b.k1.ir.mem.dlist_iter_handles_from(b.blocks, inlined_first) {
+        rewrite_in_block(&mut b.k1.ir, self_block, &mut inlined_rewrites, &rewritten_returns);
+        if self_block == inlined_last {
+            break;
         }
     }
+
+    inlined_rewrites.clear();
+    b.k1.ir.opt_buf_inline_inlined_rewrites = inlined_rewrites;
+    b.cur_block = call_block;
+    InlinedBody { result, last_block: inlined_last }
 }
 
 fn rewrite_in_block(

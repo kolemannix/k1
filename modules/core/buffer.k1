@@ -177,6 +177,7 @@ ns for buffer {
   }
 
   fn slice[t](self: buffer[t], start: size, end: size): buffer[t] {
+    // impl-slice-core(self.as-raw(), types/stride[t], start, end)
     if start < 0 or start > self.len {
       crash("slice start index out of bounds: $start. length is: ${self.len}")
     }
@@ -191,6 +192,22 @@ ns for buffer {
     let new-base = self.[start].&
     .{ len = new-len, data = new-base }
   }
+
+  // fn impl-slice-core(self: raw-buffer, stride: size, start: size, end: size): raw-buffer {
+  //   if start < 0 or start > self.len {
+  //     crash("slice start index out of bounds: $start. length is: ${self.len}")
+  //   }
+    
+  //   let end-clamp = end.min(self.len)
+    
+  //   if end-clamp <= start or self.len == 0 {
+  //     return empty[t]()
+  //   }
+    
+  //   let new-len = end-clamp - start
+  //   let new-base = raw-buffer.data + (stride * start)
+  //   .{ len = new-len, data = new-base }
+  // }
 
   fn take[t](self: buffer[t], count: size): buffer[t] { self.slice(0, count) }
   fn drop[t](self: buffer[t], count: size): buffer[t] {

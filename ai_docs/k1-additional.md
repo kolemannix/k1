@@ -91,6 +91,12 @@ declared once on the containing namespace with `ns(lib("foo"))` — whole-ns, an
 opening may declare it, disagreeing openings are an error — or per-fn with the
 `lib` modifier (`fn(extern("sym"), lib("foo"))`), which overrides the ns lib.
 
+`fn(inline)` forces inlining: the body is copied into every direct call site
+as the caller's IR is emitted, in every build mode and in the compile-time VM,
+so the fn only gets a standalone copy when its address is taken. It needs a
+body (not intern/extern) and is rejected in reloadable namespaces; a cycle of
+`fn(inline)` calls is an error, a cycle through a normal fn is fine.
+
 A manifest may declare a setup step — `m.setup(outputs, inputs)` — paired with
 `fn setup(ctx: k1/setup-ctx)` in the same `ns build`. When the declared outputs
 are stale (hashed together with the inputs, the root file, and the target), the

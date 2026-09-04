@@ -118,7 +118,6 @@ impl TypedProgram {
             globals_in_progress,
             ability_impl_ast_mappings,
             debug_level_stack: _,
-            functions_pending_body_specialization,
             uses_pending_resolution,
             types_pending_definition,
             module_in_progress,
@@ -203,7 +202,6 @@ impl TypedProgram {
         write_map_snap(w, ability_impl_ast_mappings);
 
         assert!(globals_in_progress.is_empty());
-        assert!(functions_pending_body_specialization.is_empty());
         assert!(uses_pending_resolution.is_empty());
         assert!(types_pending_definition.is_empty());
         assert!(module_in_progress.is_none());

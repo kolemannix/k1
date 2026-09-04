@@ -1020,7 +1020,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
         let roots = &roots;
         for root in roots {
-            ir::compile_function(k1, *root)?;
+            k1.ir.units_pending_compile.insert(*root, ());
         }
         k1.compile_all_pending_ir(SpanId::NONE)?;
         if k1.config.optimize {

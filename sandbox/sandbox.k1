@@ -1,9 +1,15 @@
-macro arith(tokens: tokens) {
-  let i = 0
-  let o1 = tokens.get(i)
-  tokens.*[i]
-}
-#debug fn main(): i32 {
-  arith(<< 3 + 3 >>)
+// macro arith(tokens: tokens) {
+//   let i = 0
+//   let o1 = tokens.get(i)
+//   tokens.*[i]
+// }
+// #debug fn main(): i32 {
+//   arith(<< 3 + 3 >>)
+//   0
+// }
+
+fn main(): i32 {
+  let x: int = false
+  let y: int = false
   0
 }

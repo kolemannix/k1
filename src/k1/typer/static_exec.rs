@@ -1275,7 +1275,8 @@ impl TypedProgram {
 
         let parse_kind =
             if is_definition { ParseAdHocKind::Definitions } else { ParseAdHocKind::Expr };
-        let parsed_metaprogram = self.parse_metaprogram_source(source_for_emission, parse_kind)?;
+        let parsed_metaprogram =
+            self.parse_metaprogram_source(self.module_of_span(span), source_for_emission, parse_kind)?;
         match parsed_metaprogram {
             ParseMetaprogramResult::Expr(parsed_expr_id) => {
                 if let Some(hash) = content_hash {
@@ -1407,7 +1408,7 @@ impl TypedProgram {
             let type_args = TypeArgs::from_slice_in(self.mem.getn(typed_type_args), &mut self.mem);
             let spec_fn_id =
                 self.specialize_function_declaration(type_args, TypeArgs::empty(), function_id);
-            self.specialize_function_body(spec_fn_id)?;
+            self.require_function_body(spec_fn_id, span)?;
             spec_fn_id
         } else {
             function_id
@@ -1502,13 +1503,14 @@ impl TypedProgram {
 
     pub(super) fn with_parser<R>(
         &mut self,
+        module_id: ModuleId,
         file_id: FileId,
         f: impl FnOnce(&mut parse::Parser) -> K1Result<R>,
     ) -> K1Result<R> {
         let mut tokens = std::mem::take(&mut self.buffers.lexer_tokens);
         tokens.clear();
 
-        let module = self.modules.get(self.module_in_progress.unwrap());
+        let module = self.modules.get(module_id);
         let parsed_namespace_id = module.parsed_namespace_id;
         let code_str = self.ast.sources.get(file_id).content(&self.ast.mem);
         let mut lexer = crate::lex::Lexer::make(code_str, &mut self.ast.spans, file_id);
@@ -1537,10 +1539,11 @@ impl TypedProgram {
 
     pub(super) fn parse_metaprogram_source(
         &mut self,
+        module_id: ModuleId,
         file_id: FileId,
         kind: ParseAdHocKind,
     ) -> K1Result<ParseMetaprogramResult> {
-        self.with_parser(file_id, move |p| {
+        self.with_parser(module_id, file_id, move |p| {
             let msg_base = "Failed to parse the code you returned: ";
             let error_count_start = p.ast.errors.len();
             match kind {

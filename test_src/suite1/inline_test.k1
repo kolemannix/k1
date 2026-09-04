@@ -1,0 +1,62 @@
+ns inline_test
+
+fn(inline) add3(a: int, b: int, c: int): int { a + b + c }
+
+fn(inline) clamp(x: int, lo: int, hi: int): int {
+  if x < lo return lo
+  if x > hi return hi
+  x
+}
+
+type pair = { a: int, b: string }
+fn(inline) mk-pair(a: int): pair { .{ a = a, b = "p" } }
+
+let(mutable) hits: int = 0
+fn(inline) bump() { hits = hits + 1 }
+
+fn(inline) first-over(xs: span[int], limit: int): opt[int] {
+  for x in xs {
+    if x > limit return some(x)
+  }
+  none()
+}
+
+fn(inline) ident[t](x: t): t { x }
+
+fn(inline) twice(x: int): int { add3(x, x, 0) }
+
+fn(inline) count-up(n: int): int {
+  let acc = 0
+  let i = 0
+  while i < n {
+    acc = acc + i
+    i = i + 1
+  }
+  acc
+}
+
+fn test() {
+  assert-equals(add3(1, 2, 3), 6)
+  assert-equals(clamp(-5, 0, 10), 0)
+  assert-equals(clamp(50, 0, 10), 10)
+  assert-equals(clamp(5, 0, 10), 5)
+  let p = mk-pair(7)
+  assert-equals(p.a, 7)
+  assert-equals(p.b, "p")
+  bump()
+  bump()
+  assert-equals(hits, 2)
+  let xs = [1, 5, 9, 12]
+  assert-equals(first-over(xs.as-span(), 6), some(9))
+  assert-equals(first-over(xs.as-span(), 100), none())
+  assert-equals(twice(21), 42)
+  assert-equals(ident(3), 3)
+  assert-equals(ident("s"), "s")
+  assert-equals(count-up(5), 10)
+  let f = add3.&
+  assert-equals(f(1, 1, 1), 3)
+  let s1: int = #static add3(2, 2, 2)
+  assert-equals(s1, 6)
+  let s2: int = #static clamp(99, 0, 3)
+  assert-equals(s2, 3)
+}

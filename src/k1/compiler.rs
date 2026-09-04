@@ -1790,7 +1790,10 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
     };
     let roots = match Cg::prepare_host(k1) {
         Ok(roots) => roots,
-        Err(e) => anyhow::bail!(report_codegen_error(k1, e)),
+        Err(e) => match k1.error_count(&[MessageLevel::Error]) {
+            0 => anyhow::bail!(report_codegen_error(k1, e)),
+            n => anyhow::bail!("Module {} failed typechecking with {} errors", k1.program_name(), n),
+        },
     };
     if args.chatty {
         eprintln!(

@@ -70,12 +70,10 @@ pub struct ProgramIr {
     b_loops: FxHashMap<ScopeId, LoopInfo>,
     pub units_pending_compile: FxHashMap<FunctionId, ()>,
     pub globals_pending_eval: FxHashMap<TypedGlobalId, ()>,
+    units_in_progress: FxHashSet<FunctionId>,
 
-    pub scc_count: u32,
-    opt_buf_stack: Vec<iropt::OptVisit>,
-    opt_buf_order: Vec<IrUnitId>,
-    opt_buf_nodes: FxHashMap<IrUnitId, iropt::SccNode>,
-    opt_buf_scc_stack: Vec<IrUnitId>,
+    opt_buf_visit_stack: Vec<iropt::OptVisit>,
+    opt_buf_visited: FxHashSet<IrUnitId>,
     opt_buf_callees: Vec<FunctionId>,
     opt_buf_cfg_compute_work_stack: Vec<BlockId>,
     opt_buf_cfg_compute_visited: FxHashSet<BlockId>,
@@ -106,11 +104,9 @@ impl ProgramIr {
             b_loops: _,
             units_pending_compile,
             globals_pending_eval,
-            scc_count,
-            opt_buf_stack: _,
-            opt_buf_order: _,
-            opt_buf_nodes: _,
-            opt_buf_scc_stack: _,
+            units_in_progress,
+            opt_buf_visit_stack: _,
+            opt_buf_visited: _,
             opt_buf_callees: _,
             opt_buf_cfg_compute_work_stack: _,
             opt_buf_cfg_compute_visited: _,
@@ -126,12 +122,12 @@ impl ProgramIr {
         debug_info.snap(w);
         write_map_snap(w, functions);
         write_map_snap(w, exprs);
-        w.write_u32(*scc_count);
         calls.snap(w);
         cmpxchgs.snap(w);
         vec_ops.snap(w);
         assert!(units_pending_compile.is_empty());
         assert!(globals_pending_eval.is_empty());
+        assert!(units_in_progress.is_empty());
     }
 
     pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
@@ -143,7 +139,6 @@ impl ProgramIr {
         self.debug_info.restore(r);
         self.functions = crate::snap::restore_map_snap(r);
         self.exprs = crate::snap::restore_map_snap(r);
-        self.scc_count = r.read_u32();
         self.calls.restore(r);
         self.cmpxchgs.restore(r);
         self.vec_ops.restore(r);
@@ -365,11 +360,9 @@ impl ProgramIr {
             units_pending_compile: FxHashMap::new(),
             globals_pending_eval: FxHashMap::new(),
 
-            scc_count: 0,
-            opt_buf_stack: vec![],
-            opt_buf_order: vec![],
-            opt_buf_nodes: FxHashMap::new(),
-            opt_buf_scc_stack: vec![],
+            units_in_progress: FxHashSet::default(),
+            opt_buf_visit_stack: vec![],
+            opt_buf_visited: FxHashSet::default(),
             opt_buf_callees: vec![],
             opt_buf_cfg_compute_work_stack: vec![],
             opt_buf_cfg_compute_visited: FxHashSet::new(),
@@ -418,6 +411,7 @@ pub enum BlockSourceKind {
     LoopBody,
     LoopEnd,
     MatchingCondContinue,
+    InlineExit,
 }
 
 impl BlockSourceKind {
@@ -438,6 +432,7 @@ impl BlockSourceKind {
             BlockSourceKind::LoopBody => "loop_body",
             BlockSourceKind::LoopEnd => "loop_end",
             BlockSourceKind::MatchingCondContinue => "matching_cond_continue",
+            BlockSourceKind::InlineExit => "inline_exit",
         }
     }
 }
@@ -476,8 +471,6 @@ pub struct IrUnit {
 
     pub is_optimized: bool,
     pub cfg_valid: bool,
-    pub scc: u32,
-    pub recursive: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1514,11 +1507,24 @@ impl InstKind {
 }
 
 pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Result<()> {
-    let start = k1.timing.clock.raw();
     if k1.ir.functions.contains_key(&function_id) {
         return Ok(());
     }
+    if !k1.ir.units_in_progress.insert(function_id) {
+        kbail!(
+            k1,
+            k1.get_function_span(function_id),
+            "Function {} needs its own compiled ir while it is being compiled",
+            k1.function_id_to_string(function_id, false)
+        );
+    }
+    let result = compile_function_body(k1, function_id);
+    k1.ir.units_in_progress.remove(&function_id);
+    result
+}
 
+fn compile_function_body(k1: &mut TypedProgram, function_id: FunctionId) -> K1Result<()> {
+    let start = k1.timing.clock.raw();
     let mut b = Builder::new(k1);
 
     //eprintln!("ir::compile_function {}", b.k1.function_id_to_string(function_id, false));
@@ -1679,8 +1685,6 @@ fn finalize_unit(
         is_debug,
         is_optimized: false,
         cfg_valid: true,
-        scc: u32::MAX,
-        recursive: false,
     };
     match unit_id {
         IrUnitId::Function(function_id) => {
@@ -2608,10 +2612,13 @@ fn compile_expr(
             }
             debug_assert_eq!(callee_fn_type.params.len(), args.len() as u32);
             let args_handle = args.to_slice();
-            let call_id = add_call(
-                b.k1,
-                IrCall { ret_type: callee_fn_type.return_type, callee, args: args_handle, dst },
-            );
+            let ir_call = IrCall { ret_type: callee_fn_type.return_type, callee, args: args_handle, dst };
+            if let IrCallee::Direct(function_id) = callee
+                && b.k1.get_function(function_id).is_inline()
+            {
+                return iropt::compile_inline_call(b, function_id, ir_call);
+            }
+            let call_id = add_call(b.k1, ir_call);
             let call_inst = Inst::Call { call_id };
             let call_inst_id = b.push_inst_anon(call_inst);
             let value_for_call = {

@@ -977,6 +977,7 @@ bitflags! {
         const Reloadable = 1 << 4;
         const AbiNative = 1 << 5;
         const AddressTaken = 1 << 6;
+        const Inline = 1 << 7;
     }
 }
 
@@ -1038,6 +1039,9 @@ impl TypedFunction {
 
     pub fn is_reloadable(&self) -> bool {
         self.flags.contains(TypedFunctionFlags::Reloadable)
+    }
+    pub fn is_inline(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::Inline)
     }
 
     pub fn abi_native(&self) -> bool {
@@ -2828,7 +2832,6 @@ pub struct TypedProgram {
     pub ability_impl_ast_mappings: FxHashMap<ParsedAbilityImplId, AbilityImplId>,
 
     pub debug_level_stack: RefCell<Vec<log::LevelFilter>>,
-    pub functions_pending_body_specialization: Vec<FunctionId>,
     pub uses_pending_resolution: VecDeque<UsePendingResolution>,
     pub types_pending_definition: VecDeque<TypePendingDefinition>,
 
@@ -3063,7 +3066,6 @@ impl TypedProgram {
             globals_in_progress: vec![],
             ability_impl_ast_mappings: FxHashMap::new(),
             debug_level_stack: RefCell::new(vec![log::max_level()]),
-            functions_pending_body_specialization: vec![],
             uses_pending_resolution: VecDeque::new(),
             types_pending_definition: VecDeque::new(),
             ast,
@@ -5451,6 +5453,7 @@ impl TypedProgram {
                 Ok(impl_handle)
             }
             Some(msg) => {
+                // nocommit what in the world is going on here? How can we kill this?
                 self.unregister_ability_impls_from(first_impl_id);
                 Err(msg)
             }
@@ -5459,13 +5462,11 @@ impl TypedProgram {
 
     fn unregister_ability_impls_from(&mut self, first_impl_id: AbilityImplId) {
         let end = self.ability_impls.next_id();
-        let mut swept_fns: SV8<FunctionId> = smallvec![];
         let mut impl_id = first_impl_id;
         while impl_id != end {
             let imp = self.ability_impls.get(impl_id);
             let self_type_id = imp.self_type_id;
             let base_ability_id = imp.base_ability_id;
-            let functions = imp.functions;
             let handle = AbilityImplHandle {
                 base_ability_id,
                 specialized_ability_id: imp.ability_id,
@@ -5480,15 +5481,7 @@ impl TypedProgram {
             {
                 impls.swap_remove_elem(&self.mem, &handle);
             }
-            for f in self.mem.getn(functions) {
-                if let AbilityImplFunction::FunctionId(fid) = f {
-                    swept_fns.push(*fid);
-                }
-            }
             impl_id = impl_id.add_u32(1);
-        }
-        if !swept_fns.is_empty() {
-            self.functions_pending_body_specialization.retain(|f| !swept_fns.contains(f));
         }
     }
 
@@ -12966,8 +12959,6 @@ impl TypedProgram {
         impl_for: Option<(AbilityId, TypeId)>,
     ) -> FunctionId {
         let parent_function = *self.get_function(parent_function_id);
-        let is_typer_function_builtin =
-            matches!(parent_function.builtin_type, Some(Builtin::TyperPhysicalFunction(_)));
         let specialized_function_type_id = self.substitute_in_type(parent_function.type_id, pairs);
         let specialized_function_id = self.functions.next_id();
         let specialized_function_type =
@@ -13047,16 +13038,12 @@ impl TypedProgram {
             specialized_function_id: FunctionId::PENDING,
             specialized_function_type: specialized_function_type_id,
         };
-        let has_body = match parent_function.parsed_id {
-            ParsedId::Function(f) => self.ast.get_function(f).body.is_some(),
-            ParsedId::Macro(_) => true,
-            _ => panic!("Expected function or macro"),
-        };
         let flags = parent_function.flags
             & (TypedFunctionFlags::CompilerDebug
                 | TypedFunctionFlags::Macro
                 | TypedFunctionFlags::ModuleManifest
-                | TypedFunctionFlags::AbiNative);
+                | TypedFunctionFlags::AbiNative
+                | TypedFunctionFlags::Inline);
         let specialized_function = TypedFunction {
             name: parent_function.name,
             scope: spec_fn_scope,
@@ -13079,112 +13066,9 @@ impl TypedProgram {
         };
         let actual_specialized_function_id = self.add_function(specialized_function);
         debug_assert_eq!(specialized_function_id, actual_specialized_function_id);
-        let is_concrete = self.get_function(specialized_function_id).is_concrete();
-
         self.scopes
             .set_scope_owner_id(spec_fn_scope, ScopeOwnerId::Function(specialized_function_id));
-
-        if (has_body && is_concrete) || is_typer_function_builtin {
-            self.functions_pending_body_specialization.push(specialized_function_id);
-        }
-
         specialized_function_id
-    }
-
-    fn specialize_function_body(&mut self, function_id: FunctionId) -> K1Result<()> {
-        let specialized_function = self.get_function(function_id);
-        if specialized_function.body_failure.is_some() || specialized_function.body_block.is_some()
-        {
-            return Ok(());
-        }
-        let result = self.specialize_function_body_inner(function_id);
-        if let Err(e) = result {
-            self.get_function_mut(function_id).body_failure = Some(e);
-        }
-        result
-    }
-
-    fn specialize_function_body_inner(&mut self, function_id: FunctionId) -> K1Result<()> {
-        let specialized_function = self.get_function(function_id);
-        let specialized_return_type = self.get_function_type(function_id).return_type;
-        let specialized_function_type = specialized_function.type_id;
-        let specialized_function_scope_id = specialized_function.scope;
-        let parent_function = specialized_function
-            .specialization_info
-            .as_ref()
-            .map(|spec_info| spec_info.parent_function)
-            .expect("specialize_function_body wants a specialization");
-        let parent_function = self.get_function(parent_function);
-        if let Some(err) = parent_function.body_failure {
-            kbail!(
-                self,
-                err.span,
-                "Cannot specialize '{}': its definition failed to compile",
-                parent_function.name
-            );
-        }
-
-        // Intrinsics from generic impls (e.g. `impl add for vector[t, n]`) have no
-        // body to specialize; calls resolve through the copied builtin_type
-        if parent_function.linkage == Linkage::Intrinsic && parent_function.body_block.is_none() {
-            return Ok(());
-        }
-
-        // Approach: Synthesize the implementation for this builtin
-        if let Some(Builtin::TyperPhysicalFunction(
-            kind @ (BuiltinTyperFunction::StructPrintTo
-            | BuiltinTyperFunction::SumPrintTo
-            | BuiltinTyperFunction::EnumPrintTo),
-        )) = parent_function.builtin_type
-        {
-            let body_expr_id = self.generate_intrinsic_function_body(
-                function_id,
-                specialized_function_scope_id,
-                kind,
-            )?;
-            self.get_function_mut(function_id).body_block = Some(body_expr_id);
-
-            return Ok(());
-        };
-
-        // Approach: Just compile the AST again, with bound types
-        debug_assert!(specialized_function.body_block.is_none());
-
-        let parsed_body = match parent_function.parsed_id {
-            ParsedId::Function(f) => self.ast.get_function(f).body.unwrap(),
-            ParsedId::Macro(m) => self.ast.get_macro(m).body,
-            _ => panic!("expected function or macro"),
-        };
-        let ParsedExpr::Block(parsed_body_block) = *self.ast.exprs.get(parsed_body) else {
-            kbail!(
-                self,
-                self.ast.exprs.get_span(parsed_body),
-                "[bug] went to specialized function but body expr is not a block"
-            );
-        };
-        let typed_body = self.eval_block(
-            &parsed_body_block,
-            EvalExprContext::make(specialized_function_scope_id)
-                .with_expected_type(Some(specialized_return_type)),
-            true,
-        )?;
-
-        let body_type = self.exprs.get_type(typed_body);
-        if let Err(msg) =
-            self.check_types(specialized_return_type, body_type, specialized_function_scope_id)
-        {
-            kbail!(
-                self,
-                self.get_span_responsible_for_expr_type(typed_body),
-                "[bug] Function body type mismatch: {}\n [occurred in specialization; should not be possible]. signature is: {}",
-                msg,
-                specialized_function_type
-            );
-        }
-
-        self.get_function_mut(function_id).body_block = Some(typed_body);
-
-        Ok(())
     }
 
     /// Used to drill down to the span that is responsible for the type of the given expression
@@ -14495,7 +14379,7 @@ impl TypedProgram {
             TypeArgs::empty(),
             function_id,
         );
-        self.specialize_function_body(specialized_function)?;
+        self.require_function_body(specialized_function, span)?;
         let predicate_result_static_value_id =
             self.execute_static_function(specialized_function, &[], span)?;
         let StaticValue::Bool(predicate_result) =
@@ -15430,6 +15314,22 @@ impl TypedProgram {
                 "'native' only on plain functions; intern, extern, and export govern their own ABI"
             );
         }
+        if ast_fn.is_inline {
+            if !matches!(linkage, Linkage::Standard | Linkage::Exported { .. }) {
+                kbail!(
+                    &**self_,
+                    ast_fn.signature_span,
+                    "'inline' needs a body to inline; intern and extern functions have none"
+                );
+            }
+            if is_reloadable {
+                kbail!(
+                    &**self_,
+                    ast_fn.signature_span,
+                    "'inline' in a reloadable namespace would copy the body across the reload boundary"
+                );
+            }
+        }
         if let Linkage::Exported { .. } = linkage {
             if !type_params.is_empty() || !fnlike_type_params.is_empty() {
                 kbail!(&**self_, ast_fn.signature_span, "exported functions cannot be generic");
@@ -15533,6 +15433,7 @@ impl TypedProgram {
         flags.set(TypedFunctionFlags::ModuleManifest, is_manifest);
         flags.set(TypedFunctionFlags::Reloadable, is_reloadable);
         flags.set(TypedFunctionFlags::AbiNative, ast_fn.is_native);
+        flags.set(TypedFunctionFlags::Inline, ast_fn.is_inline);
         let actual_function_id = self_.add_function(TypedFunction {
             name: ast_fn.name,
             scope: fn_scope_id,
@@ -15852,131 +15753,107 @@ impl TypedProgram {
         Ok(Some(function_id))
     }
 
-    pub fn eval_function_body(&mut self, declaration_id: FunctionId) -> K1Result<()> {
-        let function = self.get_function(declaration_id);
+    pub fn eval_function_body(&mut self, function_id: FunctionId) -> K1Result<()> {
+        let function = self.get_function(function_id);
         if function.body_failure.is_some() || function.body_block.is_some() {
             return Ok(());
         }
-        let result = self.eval_function_body_inner(declaration_id);
-        if let Err(e) = result {
-            self.get_function_mut(declaration_id).body_failure = Some(e);
-        }
-        result
-    }
-
-    fn eval_function_body_inner(&mut self, declaration_id: FunctionId) -> K1Result<()> {
-        let function = self.get_function(declaration_id);
         let is_debug = function.compiler_debug();
         if is_debug {
             self.push_debug_level();
         }
-        let function = self.get_function(declaration_id);
-        let fn_scope_id = function.scope;
-        let return_type = self.get_function_type(declaration_id).return_type;
-        let is_extern = matches!(function.linkage, Linkage::External { .. });
-        let is_concrete = function.is_concrete();
-        // Here. Which type of builtin is it? Some, we should synthesize here.
-        let (builtin_type_phys_fn, other_intrinsic) = match function.builtin_type {
-            Some(Builtin::TyperPhysicalFunction(f)) => (Some(f), false),
-            Some(_) => (None, true),
-            None => (None, false),
-        };
-        let is_ability_defn = matches!(function.kind, TypedFunctionKind::AbilityDefn(_));
-
-        let (parsed_function_ret_type, function_signature_span, parsed_body) =
-            match function.parsed_id {
-                ParsedId::Function(ast_id) => {
-                    let parsed_function = self.ast.get_function(ast_id);
-                    (parsed_function.ret_type, parsed_function.signature_span, parsed_function.body)
-                }
-                ParsedId::Macro(macro_id) => {
-                    let parsed_macro = self.ast.get_macro(macro_id);
-                    (None, parsed_macro.signature_span, Some(parsed_macro.body))
-                }
-                _ => self.ice("Function body for a non-function parsed id", None),
-            };
-
-        let no_body_expected = other_intrinsic || is_extern || is_ability_defn;
-        let is_generic = !is_concrete;
-
-        let body_block = match parsed_body.as_ref() {
-            None if builtin_type_phys_fn.is_some() => {
-                let block_id = self.generate_intrinsic_function_body(
-                    declaration_id,
-                    fn_scope_id,
-                    builtin_type_phys_fn.unwrap(),
-                )?;
-                Some(block_id)
-            }
-            None if no_body_expected => None,
-            None => {
-                kbail!(self, function_signature_span, "function is missing implementation");
-            }
-            Some(_) if no_body_expected => {
-                kbail!(self, function_signature_span, "unexpected function implementation");
-            }
-            Some(body_ast) => {
-                if function.specialization_info.is_some() && !is_concrete {
-                    debug!(
-                        "Skipping typecheck of body for non-concrete specialization of {}",
-                        self.function_id_to_string(declaration_id, true),
-                    );
-                    return Ok(());
-                };
-                let body_ast = *body_ast;
-                let ParsedExpr::Block(block_itself) = self.ast.exprs.get(body_ast) else {
-                    kbail!(self, function_signature_span, "[bug] function bodies must be blocks");
-                };
-                let block_itself = *block_itself;
-
-                let eval_ctx = EvalExprContext::make(fn_scope_id)
-                    .with_expected_type(Some(return_type))
-                    .with_manifest_eval(self.get_function(declaration_id).is_module_manifest_fn())
-                    // Why do we care to indicate if the function is generic?
-                    // Currently, its because we want to avoid running #static and #meta blocks
-                    // until the types and static values are provided
-                    // There are now other implications, like we only want to do
-                    // lsp stuff in the generic pass, and not repeat it in every
-                    // specialization pass
-                    .with_is_generic_pass(is_generic);
-
-                let block =
-                    self.with_clean_inference(|k1| k1.eval_block(&block_itself, eval_ctx, true))?;
-                if let Err(msg) =
-                    self.check_types(return_type, self.exprs.get_type(block), fn_scope_id)
-                {
-                    let return_type_span = match parsed_function_ret_type {
-                        None => function_signature_span,
-                        Some(rt) => self.ast.get_type_expr_span(rt),
-                    };
-                    kbail!(self, return_type_span, "Return type mismatch: {}", msg);
-                } else {
-                    Some(block)
-                }
-            }
-        };
-
-        if let Some(body_block) = body_block {
-            let f = self.functions.get(declaration_id);
-
-            // Macros may conditionally ignore params, e.g. a disabled debug macro
-            if !is_generic && !f.is_macro() {
-                for param_variable in self.mem.getn(f.params).iter() {
-                    self.warn_variable_usage_counts(
-                        "Parameter",
-                        param_variable.variable_id,
-                        param_variable.span,
-                    );
-                }
-            }
-
-            self.get_function_mut(declaration_id).body_block = Some(body_block);
-        }
-
+        let result = self.eval_function_body_inner(function_id);
         if is_debug {
-            eprintln!("DEBUG\n{}", self.function_id_to_string(declaration_id, true));
+            eprintln!("DEBUG\n{}", self.function_id_to_string(function_id, true));
             self.pop_debug_level();
         }
+        if let Err(e) = result {
+            self.get_function_mut(function_id).body_failure = Some(e);
+        }
+        result
+    }
+
+    fn eval_function_body_inner(&mut self, function_id: FunctionId) -> K1Result<()> {
+        let function = *self.get_function(function_id);
+        let fn_scope_id = function.scope;
+        let return_type = self.get_function_type(function_id).return_type;
+        let (parsed_ret_type, signature_span, parsed_body) = match function.parsed_id {
+            ParsedId::Function(ast_id) => {
+                let parsed_function = self.ast.get_function(ast_id);
+                (parsed_function.ret_type, parsed_function.signature_span, parsed_function.body)
+            }
+            ParsedId::Macro(macro_id) => {
+                let parsed_macro = self.ast.get_macro(macro_id);
+                (None, parsed_macro.signature_span, Some(parsed_macro.body))
+            }
+            _ => self.ice("Function body for a non-function parsed id", None),
+        };
+
+        if matches!(function.kind, TypedFunctionKind::AbilityDefn(_)) {
+            return Ok(());
+        }
+        if let Some(spec_info) = function.specialization_info {
+            let parent_function = self.get_function(spec_info.parent_function);
+            if let Some(err) = parent_function.body_failure {
+                kbail!(
+                    self,
+                    err.span,
+                    "Cannot specialize '{}': its definition failed to compile",
+                    parent_function.name
+                );
+            }
+            if !function.is_concrete() {
+                debug!(
+                    "Skipping typecheck of body for non-concrete specialization of {}",
+                    self.function_id_to_string(function_id, true),
+                );
+                return Ok(());
+            }
+        }
+
+        let body_block = if let Some(Builtin::TyperPhysicalFunction(kind)) = function.builtin_type
+        {
+            Some(self.generate_intrinsic_function_body(function_id, fn_scope_id, kind)?)
+        } else if matches!(
+            function.linkage,
+            Linkage::External { .. } | Linkage::Intrinsic | Linkage::LlvmIntrinsic(_)
+        ) {
+            if parsed_body.is_some() {
+                kbail!(self, signature_span, "unexpected function implementation");
+            }
+            None
+        } else {
+            let Some(parsed_body) = parsed_body else {
+                kbail!(self, signature_span, "function is missing implementation");
+            };
+            let ParsedExpr::Block(parsed_block) = *self.ast.exprs.get(parsed_body) else {
+                kbail!(self, signature_span, "[bug] function bodies must be blocks");
+            };
+            let ctx = EvalExprContext::make(fn_scope_id)
+                .with_expected_type(Some(return_type))
+                .with_manifest_eval(function.is_module_manifest_fn())
+                .with_is_generic_pass(!function.is_concrete());
+            let block = self.with_clean_inference(|k1| k1.eval_block(&parsed_block, ctx, true))?;
+            if let Err(msg) = self.check_types(return_type, self.exprs.get_type(block), fn_scope_id)
+            {
+                let return_type_span = match parsed_ret_type {
+                    None => signature_span,
+                    Some(rt) => self.ast.get_type_expr_span(rt),
+                };
+                kbail!(self, return_type_span, "Return type mismatch: {}", msg);
+            }
+            if function.specialization_info.is_none()
+                && function.is_concrete()
+                && !function.is_macro()
+            {
+                for param in self.mem.getn(function.params).iter() {
+                    self.warn_variable_usage_counts("Parameter", param.variable_id, param.span);
+                }
+            }
+            Some(block)
+        };
+
+        self.get_function_mut(function_id).body_block = body_block;
         Ok(())
     }
 
@@ -17994,10 +17871,6 @@ impl TypedProgram {
 
         check_for_errors!("typechecking");
 
-        debug!(">> Pass 6 specialize function bodies");
-        self.specialize_pending_function_bodies()?;
-        check_for_errors!("body specialization");
-
         Ok(())
     }
 
@@ -18063,22 +17936,6 @@ impl TypedProgram {
             debug_assert!(ordering_enum.member_values.len() == 3);
             debug_assert!(info.name == self.ast.idents.b.ordering);
         }
-    }
-
-    fn specialize_pending_function_bodies(&mut self) -> anyhow::Result<()> {
-        let mut function_ids: Vec<FunctionId> =
-            Vec::with_capacity(self.functions_pending_body_specialization.len());
-        while !self.functions_pending_body_specialization.is_empty() {
-            function_ids.extend(&self.functions_pending_body_specialization);
-            self.functions_pending_body_specialization.clear();
-            for function_id in &function_ids {
-                if let Err(e) = self.specialize_function_body(*function_id) {
-                    self.report(e)
-                }
-            }
-            function_ids.clear()
-        }
-        Ok(())
     }
 
     /////////////////////////// Type access apis

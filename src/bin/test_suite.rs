@@ -263,7 +263,22 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
                     }
                 }
             } else {
-                bail!("{name} Expected failed compilation but actually succeeded")
+                let TestExpectation::CompileErrorMessage { message } = &expectation else {
+                    unimplemented!("error line test")
+                };
+                if compiler::codegen_module(&args, ctx, &mut typed_program).is_ok() {
+                    bail!("{name} Expected failed compilation but actually succeeded")
+                }
+                let messages = typed_program.messages.borrow();
+                let Some(err) = messages.iter().find(|e| e.level == MessageLevel::Error) else {
+                    bail!("{name}: Failed after typechecking but had no errors")
+                };
+                if !typed_program.ident_str(err.message).contains(message.as_str()) {
+                    bail!(
+                        "{name}: Failed with unexpected message: {}",
+                        typed_program.ident_str(err.message)
+                    )
+                }
             }
         }
     };

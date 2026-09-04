@@ -96,7 +96,8 @@ pub struct MegareplState {
 
 impl TypedProgram {
     fn parse_repl_source(&mut self, file_id: FileId) -> K1Result<ParseReplSourceResult> {
-        self.with_parser(file_id, move |p| {
+        let module_id = self.primary_module().id;
+        self.with_parser(module_id, file_id, move |p| {
             let msg_base = "Failed to parse the code you returned: ";
             let error_count_start = p.ast.errors.len();
             let p_result = if p.peek().kind == TokenKind::KeywordFn {

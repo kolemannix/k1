@@ -1323,6 +1323,7 @@ pub struct ParsedFunction {
     pub name_span: SpanId,
     pub linkage: Linkage,
     pub is_native: bool,
+    pub is_inline: bool,
     pub compiler_debug: bool,
     pub additional_where_constraints: AstSlice<ParsedTypeConstraint>,
     pub compile_condition: Option<ParsedExprId>,
@@ -4969,11 +4970,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         compiler_debug: bool,
     ) -> ParseResult<ParsedFunctionId> {
         let fn_keyword = self.expect_kind(K::KeywordFn)?;
-        let (linkage, is_native) = if self.maybe_consume(K::OpenParen).is_some() {
+        let (linkage, is_native, is_inline) = if self.maybe_consume(K::OpenParen).is_some() {
             let mut linkage: Option<Linkage> = None;
             let mut lib_name: Option<StringId> = None;
             let mut lib_token: Option<Token> = None;
             let mut is_native = false;
+            let mut is_inline = false;
             loop {
                 let modifier = self.peek();
                 if linkage.is_some() && modifier.kind != K::Ident {
@@ -5037,9 +5039,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 } else if modifier.kind == K::Ident && self.token_chars(modifier) == "native" {
                     self.advance();
                     is_native = true;
+                } else if modifier.kind == K::Ident && self.token_chars(modifier) == "inline" {
+                    self.advance();
+                    is_inline = true;
                 } else {
                     return Err(self.error_expected(
-                        "fn modifier: intern, extern, export, native, or lib",
+                        "fn modifier: intern, extern, export, native, inline, or lib",
                         modifier,
                     ));
                 }
@@ -5061,9 +5066,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 (Some(linkage), None) => linkage,
                 (None, None) => Linkage::Standard,
             };
-            (linkage, is_native)
+            (linkage, is_native, is_inline)
         } else {
-            (Linkage::Standard, false)
+            (Linkage::Standard, false, false)
         };
         let (func_name, func_name_id) = self.expect_ident()?;
         self.emit_semantic_token(fn_keyword, SemanticTokenKind::Keyword);
@@ -5133,6 +5138,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name_span,
             linkage,
             is_native,
+            is_inline,
             compiler_debug,
             additional_where_constraints,
             compile_condition: condition,

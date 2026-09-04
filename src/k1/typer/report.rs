@@ -178,6 +178,18 @@ impl TypedProgram {
         span
     }
 
+    pub fn module_of_span(&self, span_id: SpanId) -> ModuleId {
+        let span = self.remap_span(self.ast.spans.get(span_id));
+        for module in self.modules.iter() {
+            for file in module.source_file_hashes.as_slice(&self.mem) {
+                if file.file_id == span.file_id {
+                    return module.id;
+                }
+            }
+        }
+        self.primary_module().id
+    }
+
     pub fn remap_to_source_span(&mut self, span_id: SpanId) -> SpanId {
         let span = self.ast.spans.get(span_id);
         let remapped = self.remap_span(span);
