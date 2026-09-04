@@ -515,7 +515,7 @@ pub fn run_passes(module: &LlvmModule, machine: &TargetMachine, pipeline: Pipeli
         Pipeline::ThinLtoPreLink => "thinlto-pre-link<O3>",
         // Default builds, not optimized but not debug
         Pipeline::Dev => {
-            "function(mem2reg,instcombine<no-verify-fixpoint;max-iterations=1>,simplifycfg),globaldce"
+            "function(mem2reg,instcombine<no-verify-fixpoint;max-iterations=1>,simplifycfg),globaldce,mergefunc"
         }
     };
     module.run_passes(text, machine, options).unwrap();
@@ -4452,13 +4452,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 TyperLinkage::Exported { fn_name: None } => {
                     self.k1.ident_str(typed_function.name).to_string()
                 }
-                _ => Cg::mangle(self.k1.make_qualified_name(
-                    typed_function.scope,
-                    typed_function.name,
-                    Some(function_id.as_u32() as usize),
-                    ".",
-                    true,
-                )),
+                _ => Cg::mangle(self.k1.function_symbol_name(function_id)),
             }
         };
 

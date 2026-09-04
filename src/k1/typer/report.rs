@@ -80,6 +80,34 @@ impl TypedProgram {
         buf
     }
 
+    /// `impl_<ability>.<fn>_for_t<self>` for ability impl fns, the plain name otherwise
+    pub fn write_function_name(&self, w: &mut impl std::fmt::Write, function_id: FunctionId) {
+        let function = self.get_function(function_id);
+        if let TypedFunctionKind::AbilityImpl(ability_id, self_type_id) = function.kind {
+            write!(
+                w,
+                "impl_{}{}.{}_for_t{}",
+                ability_id.as_u32(),
+                self.ident_str(self.abilities.get(ability_id).name),
+                self.ident_str(function.name),
+                self_type_id.as_u32()
+            )
+            .unwrap();
+        } else {
+            write!(w, "{}", self.ident_str(function.name)).unwrap();
+        }
+    }
+
+    /// Scope path, derived name, and the function id: unique per function
+    pub fn function_symbol_name(&self, function_id: FunctionId) -> String {
+        let mut s = String::with_capacity(64);
+        self.write_scope_path(&mut s, self.get_function(function_id).scope, ".", true);
+        s.push('.');
+        self.write_function_name(&mut s, function_id);
+        write!(s, "_{}", function_id.as_u32()).unwrap();
+        s
+    }
+
     pub fn global_link_symbol(&self, global: &TypedGlobal) -> String {
         let variable = self.variables.get(global.variable_id);
         if let Some(link_name) = global.link_name {

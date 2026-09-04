@@ -122,6 +122,10 @@ ns for span {
     .{ buffer = self.buffer.as-byte-buffer() }
   }
 
+  fn ref-iter[t](self: span[t]): buffer-ref-iterator[t] {
+    buffer-ref-iterator/from-buffer(self.buffer)
+  }
+
 }
 
 impl[t] as-span[t = t] for span[t] {

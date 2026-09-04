@@ -37,8 +37,19 @@ pointer-free predicate - pod/serializable?
 
 ## [x] Ability objects; dyn[<ability expr>]
 
+## Project: less code (specialization count and emitted code; investigation 2026-09-04)
+Measured: stress100 spends 46% of typer time re-checking 640k specialized bodies averaging 14 exprs;
+suite1 types 10k bodies and emits 1.1k; 36% of httpapp's dev-build LLVM functions are exact copies.
+Most instances come from as-buffer/as-span default methods, eagerly declared per impl instantiation.
+- [ ] 1. Lazy bodies for specializations and blanket-derived fns: stop queueing at declaration, let ir lowering and static exec pull via require_function_body. Policy for `check`: primary module eager, library instances lazy
+- [ ] 2. Layout-keyed specialization cache: per-generic "type-sensitive" flag from the generic-pass body (ability calls on t, type patterns, reflection, phony statics); insensitive generics key by structural layout of each type arg (static-value args by value). Needs structural agg interning or a layout hash
+- [x] 3. Never specialize typer-inline intrinsics (size/stride/align/id...): folded at the call site, yet declared per type; suite1 3958 -> 3498 specializations, stress100 801k -> 780k functions
+- [x] 4. Blanket-derived fns are specializations of the blanket fn (specialize_function with substitution pairs); AbilityImplDerivedBlanket kind, blanket_parent_function and the declare_function re-run are gone; generic derived fns no longer get an out-of-regime body pass (suite1 9763 -> 9413 fns)
+- [x] 5. mergefunc in the dev pipeline: httpapp 781 -> 566 defined fns, binary -7%, no codegen time change. ThinLTOCodeGenerator has no tuning hook, so optimized builds would only get it per unit in pre-link
+- [ ] 6. Rejected: typed-tree substitution instead of re-typechecking. Bodies are tiny; the work is call re-resolution and inference, which a copy still has to do since the generic pass skips statics, type patterns and abstract callees
+- [ ] 7. Scan the k1 corpus (modules/, dogfood/) for concrete-core opportunities: generic fns whose body only needs ptr/len/stride, rewritten as an erased core (ptr, len, stride) with a generic shell, the way position-byte and index-of-bytes already are
+
 ## grab bag list mid2026
-- [ ] block stmt type error recovery; get more than 1 typer error per block
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
@@ -52,7 +63,7 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
 }
   - [ ] implement with a macro, for sure
 - [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
-- [ ] Pull 'warnings' and other settings from module-manifest. Want to run a particular lint? edit MODULE_INFO, save, boom, check lsp diagnostics (or `k1 c .`)
+- [ ] Pull warnings config and other compiler-mode settings from module-manifest. Want to run a particular lint? edit `fn module()`, save, boom, check lsp diagnostics (or `k1 c`)
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [ ] `#[must_use]` equivalent
 - [ ] literal inference issue (a) `2 * d` vs `d * 2` differ — literal-lhs
@@ -69,11 +80,12 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
         you need essentially some notion of an 'ability signature function', just like type aliases would need
 
 - [ ] Failed-definition tracking, two markers for one concept: static_exec.rs:418 and typer.rs:16887. Both silently return Ok(()) when an AST mapping is missing, which masks compiler bugs. A set of failed parsed ids, checked in both places, converts "likely" into "certain".
-- [ ] Divergent loops typed as never at typer.rs:7647. ScopeLoopInfo already exists; recording whether any break was seen is the whole change. Only pays off in code that ends in an infinite loop.
-- [ ] Signature help ignores context params at lsp_support.rs:357. Real LSP correctness gap, contained to one function.
+- [ ] Divergent loops typed as never at typer.rs:7647. ScopeLoopInfo already exists; recording whether any break was seen is the whole change
+- [ ] Signature help ignores context params at lsp_support.rs:357
 - [ ] toDyn on generic functions at typer.rs:10251. Explicit type args are already parsed at that call site; specializing before the dyn lift is the same path foo[int].& takes.
 - [ ] Unreachable on type-info miss at codegen_llvm.rs:3109. A garbage type-id at runtime hits unreachable, which is UB. Emit a crash call instead.
 
+- [x] block stmt typer error recovery; get more than 1 typer error per block
 - [x] fix `is {` syntax
 - [x] parallel llvm codegen
 - [x] Better on-heap construction story. We have in-place construction on the stack but not the heap. So `ir` already supports it if we find a
