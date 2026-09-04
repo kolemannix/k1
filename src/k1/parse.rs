@@ -5446,7 +5446,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         &mut self,
         condition: Option<ParsedExprId>,
     ) -> ParseResult<ParsedTypeDefnId> {
-        let _keyword_type = self.expect_ident_chars("type")?;
+        let (keyword_type, _) = self.expect_ident_chars("type")?;
+        self.emit_semantic_token(keyword_type, SemanticTokenKind::Keyword);
 
         let mut flags = ParsedTypeDefnFlags::new(false);
         if self.maybe_consume(K::OpenParen).is_some() {
@@ -5464,6 +5465,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
 
         let (name_token, name) = self.expect_ident()?;
+        self.emit_semantic_token(name_token, SemanticTokenKind::Type);
 
         let mut type_params = self.ast.mem.new_list(0);
         if let Some(_type_params_open) = self.maybe_consume(K::OpenBracket) {
