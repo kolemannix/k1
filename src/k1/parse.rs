@@ -1674,6 +1674,7 @@ pub(crate) type AstHandle<T> = Handle<T, ParsedProgram>;
 pub enum SemanticTokenKind {
     Type,
     Variable,
+    Parameter,
     String,
     Keyword,
     Function,
@@ -4656,6 +4657,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_fn_param(&mut self, is_context: bool) -> ParseResult<ParsedFnParam> {
         let (name_token, name) = self.expect_ident()?;
+        self.emit_semantic_token(name_token, SemanticTokenKind::Parameter);
         let type_expr = if self.maybe_consume(K::Colon).is_some() {
             let type_expr = self.expect_type_expression()?;
             ParsedFnParamType::Expr(type_expr)
