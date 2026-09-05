@@ -104,11 +104,11 @@ ns types {
   fn(intern) id[t](): type-id
 
   fn type-id-of-val[t](_t: t): type-id { id[t] }
-  fn name[t](): string { id[t].name() }
+  fn name[t](): string { id[t].info().name }
 
   fn type-name-of-val[t](_t: t): string { name[t] }
-  fn schema[t](): type-schema { id[t].schema() }
-  fn instance-info[t](): ?instance-info { id[t].instance-info() }
+  fn schema[t](): type-schema { id[t].info().schema }
+  fn instance-info[t](): ?instance-info { id[t].info().instance }
 
   // FIXME: We should encode both width and signedness into the bits instead, 'flags in tags' project
   type int-value = either {

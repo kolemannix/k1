@@ -3156,7 +3156,9 @@ impl TypedProgram {
             &mut modules_to_typecheck,
         )?;
 
-        if primary_module && matches!(self.config.command, crate::compiler::CommandKind::Setup { .. }) {
+        if primary_module
+            && matches!(self.config.command, crate::compiler::CommandKind::Setup { .. })
+        {
             return Ok(added_module_id);
         }
 
@@ -5800,8 +5802,11 @@ impl TypedProgram {
                 + impl_param_count as u32
                 + 2,
         );
-        for (param, solution) in
-            self.mem.getn(blanket_impl.blanket_type_params).iter().zip(solutions.as_slice(&self.mem))
+        for (param, solution) in self
+            .mem
+            .getn(blanket_impl.blanket_type_params)
+            .iter()
+            .zip(solutions.as_slice(&self.mem))
         {
             pairs.push(TypeSubstitutionPair { from: *param, to: *solution });
         }
@@ -6410,6 +6415,14 @@ impl TypedProgram {
                         field_index: field_index as u32,
                     },
                 );
+                if let TypedExpr::StaticValue(stat) = self.exprs.get(base_agg_expr)
+                    && let StaticValue::Struct(static_struct) =
+                        self.static_values.get(stat.value_id)
+                {
+                    let field_value =
+                        *self.static_values.mem.get_nth(static_struct.fields, field_index);
+                    return Ok(self.add_static_constant_expr(field_value, span));
+                }
                 let result_type = target_field.type_id;
                 let packed = self.is_field_access_packed(base_agg_expr, struct_type.record_kind);
                 Ok(self.exprs.add(
@@ -12394,6 +12407,18 @@ impl TypedProgram {
                 Builtin::TyperInline(kind) => {
                     return self.handle_inline_builtin(call, kind, ctx);
                 }
+                Builtin::Backend(BackendBuiltin::TypeInfo) => {
+                    let type_id_arg = *self.mem.get_nth(call.args, 0);
+
+                    // Avoid emitting the runtime switch if type-info is called directly with the
+                    // result of type-id
+                    if let Some(type_id) = self.is_static_type_id_expr(type_id_arg) {
+                        let info = self.get_type_info(type_id);
+                        return Ok(self.add_static_constant_expr(info, span));
+                    } else {
+                        self.check_builtin(&call, builtin, ctx)?
+                    }
+                }
                 // All other builtins can still be checked for correctness here
                 _ => self.check_builtin(&call, builtin, ctx)?,
             }
@@ -12401,6 +12426,21 @@ impl TypedProgram {
 
         let call_id = self.calls.add(call);
         Ok(self.exprs.add(TypedExpr::Call { call_id }, call_return_type, span))
+    }
+
+    fn is_static_type_id_expr(&self, expr: TypedExprId) -> Option<TypeId> {
+        let TypedExpr::StaticValue(stat) = self.exprs.get(expr) else { return None };
+        let StaticValue::Struct(type_id_struct) = self.static_values.get(stat.value_id) else {
+            return None;
+        };
+        if type_id_struct.type_id != self.builtin_types.type_id() {
+            return None;
+        }
+        let inner = *self.static_values.mem.get_nth(type_id_struct.fields, 0);
+        let StaticValue::Int(TypedIntValue::U64(raw)) = self.static_values.get(inner) else {
+            return None;
+        };
+        TypeId::from_u32(*raw as u32)
     }
 
     const LARGE_ARG_COPY_BYTES: u32 = 1024;
@@ -15813,8 +15853,7 @@ impl TypedProgram {
             }
         }
 
-        let body_block = if let Some(Builtin::TyperPhysicalFunction(kind)) = function.builtin_type
-        {
+        let body_block = if let Some(Builtin::TyperPhysicalFunction(kind)) = function.builtin_type {
             Some(self.generate_intrinsic_function_body(function_id, fn_scope_id, kind)?)
         } else if matches!(
             function.linkage,
