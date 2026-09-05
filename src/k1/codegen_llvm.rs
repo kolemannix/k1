@@ -1097,7 +1097,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         reachable: &[FunctionId],
         max_units: usize,
     ) -> Vec<UnitPlan> {
-        const MIN_UNIT_INSTRUCTIONS: u64 = 8 * 1024;
+        const MIN_UNIT_INSTRUCTIONS: u64 = 2 * 1024;
         let size_of = |function_id: &FunctionId| -> u64 {
             match k1.ir.functions.get(function_id) {
                 Some(unit) => unit.inst_count as u64 + 1,

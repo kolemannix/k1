@@ -83,12 +83,7 @@ fn collect_direct_callees(k1: &TypedProgram, callees: &mut Vec<FunctionId>, unit
 
 fn finish_unit_no_inline(k1: &mut TypedProgram, unit_id: IrUnitId) {
     let blocks = get_compiled_unit(&k1.ir, unit_id).unwrap().blocks;
-    let inst_count = k1
-        .ir
-        .mem
-        .dlist_iter(blocks)
-        .map(|block| k1.ir.mem.dlist_compute_len(block.instrs) as u32)
-        .sum();
+    let inst_count = count_insts(&k1.ir, blocks);
     cfg_compute_unit(&mut k1.ir, unit_id);
     get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap().inst_count = inst_count;
 }
@@ -149,12 +144,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         return;
     }
 
-    let inst_count = k1
-        .ir
-        .mem
-        .dlist_iter(blocks)
-        .map(|block| k1.ir.mem.dlist_compute_len(block.instrs) as u32)
-        .sum();
+    let inst_count = count_insts(&k1.ir, blocks);
     let cfg_start = k1.timing.raw();
     cfg_compute_unit(&mut k1.ir, unit_id);
     k1.timing.iropt_cfg_nanos += k1.timing.elapsed_nanos(cfg_start) as i64;
@@ -190,7 +180,7 @@ fn inline_call(
         blocks: self_unit.blocks,
         fn_type: self_unit.fn_type,
         returned_alloca: None,
-        last_alloca_index: self_unit.last_alloca_index,
+        last_alloca: self_unit.last_alloca,
         cur_block: call_block_handle,
         cur_span: call_span,
         entry_span,
@@ -255,7 +245,7 @@ fn inline_call(
 
     let unit = get_compiled_unit_mut(&mut b.k1.ir, self_unit_id).unwrap();
     unit.blocks = b.blocks;
-    unit.last_alloca_index = b.last_alloca_index;
+    unit.last_alloca = b.last_alloca;
     unit.cfg_valid = false;
 
     if inlined.last_block.is_nil() {

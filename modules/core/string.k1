@@ -3,7 +3,7 @@
 
 ns for string {
   
-  fn span(self: string): span[char] { self.span }
+  fn(inline) span(self: string): span[char] { self.span }
 
   fn span-bytes(self: string): span[byte] {
     self.span().as-byte-span()
@@ -107,14 +107,14 @@ ns for string {
     self.index-of-string(target).is-some()
   }
 
-  fn slice(self: string, start: size, end: size): string {
+  fn(inline) slice(self: string, start: size, end: size): string {
     .{ span = self.span.slice(start, end) }
   }
 
-  fn take(self: string, count: size): string { .{ span = self.span.take(count) } }
-  fn drop(self: string, count: size): string { .{ span = self.span.drop(count) } }
-  fn take-right(self: string, count: size): string { .{ span = self.span.take-right(count) } }
-  fn drop-right(self: string, count: size): string { .{ span = self.span.drop-right(count) } }
+  fn(inline) take(self: string, count: size): string { .{ span = self.span.take(count) } }
+  fn(inline) drop(self: string, count: size): string { .{ span = self.span.drop(count) } }
+  fn(inline) take-right(self: string, count: size): string { .{ span = self.span.take-right(count) } }
+  fn(inline) drop-right(self: string, count: size): string { .{ span = self.span.drop-right(count) } }
   
   fn starts-with(self: string, other: string): bool {
     self.span.starts-with(other.span)
@@ -129,9 +129,9 @@ ns for string {
     mem/bitcast[span[span[char]], span[string]](char-spans)
   }
 
-  fn data-ptr(self: string): ptr { self.span.data-ptr() }
-  fn data-ref(self: string): *char { self.span.data-ref() }
-  fn data-ref-byte(self: string): *u8 { self.span.data-ref().as[*u8] }
+  fn(inline) data-ptr(self: string): ptr { self.span.data-ptr() }
+  fn(inline) data-ref(self: string): *char { self.span.data-ref() }
+  fn(inline) data-ref-byte(self: string): *u8 { self.span.data-ref().as[*u8] }
 
   // Converts self to a c-style (NUL byte terminated) string
   fn to-c(self: string): { ptr: ptr, len: size } {
@@ -202,15 +202,15 @@ ns for string {
 }
 
 impl as-span[t = char] for string {
-  fn as-span(self): span[char] { self.span }
+  fn(inline) as-span(self): span[char] { self.span }
 }
 
 impl as-span[t = char] for *string {
-  fn as-span(self): span[char] { self.*.span }
+  fn(inline) as-span(self): span[char] { self.*.span }
 }
 
 impl index[key = size, t = char] for string {
-  fn index-ref(self, key: size): *char { self.span.buffer.index-ref(key) }
+  fn(inline) index-ref(self, key: size): *char { self.span.buffer.index-ref(key) }
 }
 
 impl from-string[e = never] for string {
@@ -236,9 +236,9 @@ impl comparable for string {
 }
 
 impl iterable[item = char, i = buffer-iterator[char]] for string {
-  fn iterator(self: string): i { self.span().iterator() }
+  fn(inline) iterator(self: string): i { self.span().iterator() }
 }
 
 impl iterable[item = char, i = buffer-iterator[char]] for *string {
-  fn iterator(self: *string): i { self.*.iterator() }
+  fn(inline) iterator(self: *string): i { self.*.iterator() }
 }

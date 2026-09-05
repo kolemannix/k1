@@ -17,10 +17,10 @@ ns for buffer {
 
   fn size-bytes[t](self: buffer[t]): size { buffer-size-bytes[t](self.len) }
 
-  fn data-ptr[t](self: buffer[t]): ptr { self.data.as[ptr] }
-  fn data-ref[t](self: buffer[t]): *t { self.data }
+  fn(inline) data-ptr[t](self: buffer[t]): ptr { self.data.as[ptr] }
+  fn(inline) data-ref[t](self: buffer[t]): *t { self.data }
 
-  fn len[t](self: buffer[t]): size { self.len }
+  fn(inline) len[t](self: buffer[t]): size { self.len }
 
   fn raw-parts[t](self: buffer[t]): { ptr: ptr, len: size } { .{ ptr = self.data.as[ptr], len = self.len } }
 
@@ -158,11 +158,11 @@ ns for buffer {
   ///////////////////////////
   // Accessor functions
 
-  fn index-unchecked[t](self: buffer[t], index: size): *mut t {
+  fn(inline) index-unchecked[t](self: buffer[t], index: size): *mut t {
     self.data-ptr().ref-at[t](index)
   }
 
-  fn check-bounds[t](self: buffer[t], index: size) {
+  fn(inline) check-bounds[t](self: buffer[t], index: size) {
     raw-buffer/check-bounds(self.len, index)
   }
 
@@ -174,21 +174,21 @@ ns for buffer {
     )
   }
 
-  fn as-raw[t](self: buffer[t]): raw-buffer { .{ data = self.data.as[ptr], len = self.len } }
-  fn from-raw[t](raw: raw-buffer): buffer[t] { .{ data = raw.data.ref[t], len = raw.len } }
+  fn(inline) as-raw[t](self: buffer[t]): raw-buffer { .{ data = self.data.as[ptr], len = self.len } }
+  fn(inline) from-raw[t](raw: raw-buffer): buffer[t] { .{ data = raw.data.ref[t], len = raw.len } }
 
-  fn slice[t](self: buffer[t], start: size, end: size): buffer[t] {
+  fn(inline) slice[t](self: buffer[t], start: size, end: size): buffer[t] {
     from-raw[t](self.as-raw().slice(types/stride[t], start, end))
   }
 
-  fn take[t](self: buffer[t], count: size): buffer[t] { self.slice(0, count) }
-  fn drop[t](self: buffer[t], count: size): buffer[t] {
+  fn(inline) take[t](self: buffer[t], count: size): buffer[t] { self.slice(0, count) }
+  fn(inline) drop[t](self: buffer[t], count: size): buffer[t] {
     self.slice(count.min(self.len), self.len)
   }
-  fn take-right[t](self: buffer[t], count: size): buffer[t] {
+  fn(inline) take-right[t](self: buffer[t], count: size): buffer[t] {
     self.slice(if count > self.len 0 else self.len - count, self.len)
   }
-  fn drop-right[t](self: buffer[t], count: size): buffer[t] {
+  fn(inline) drop-right[t](self: buffer[t], count: size): buffer[t] {
     self.slice(0, if count > self.len 0 else self.len - count)
   }
 
@@ -319,7 +319,7 @@ ns for buffer {
     span/wrap-buffer(results.as-buffer())
   }
 
-  fn is-empty[t](self: buffer[t]): bool {
+  fn(inline) is-empty[t](self: buffer[t]): bool {
     self.len == 0
   }
 
@@ -467,7 +467,7 @@ ns for buffer {
     )
   }
 
-  fn ref-iter[t](self: buffer[t]): buffer-ref-iterator[t] {
+  fn(inline) ref-iter[t](self: buffer[t]): buffer-ref-iterator[t] {
     buffer-ref-iterator/from-buffer(self)
   }
 
@@ -475,10 +475,8 @@ ns for buffer {
 
 type raw-buffer = { data: ptr, len: size }
 ns for raw-buffer {
-  fn check-bounds(len: size, index: size) {
-    if index.unsigned() >= len.unsigned() {
-      crash("index out of bounds: $index / $len")
-    }
+  fn(inline) check-bounds(len: size, index: size) {
+    if index.unsigned() >= len.unsigned() crash-bounds(len, index, "index out of bounds")
   }
 
   fn slice(self: raw-buffer, stride: size, start: size, end: size): raw-buffer {
@@ -504,7 +502,7 @@ ns for buffer-iterator {
 }
 
 impl[t] iterator[item = t] for buffer-iterator[t] {
-  fn next(self: *mut self): ?item {
+  fn(inline) next(self: *mut self): ?item {
     if self.pos < self.buf.len {
       let item = self.buf.[self.pos]
       self.pos = self.pos + 1
@@ -521,18 +519,18 @@ impl[t] iterator[item = t] for buffer-iterator[t] {
 }
 
 impl[t] as-buffer[t = t] for buffer[t] {
-  fn as-buffer(self): buffer[t] { self }
+  fn(inline) as-buffer(self): buffer[t] { self }
 }
 
 impl[t] index[key = size, t = t] for buffer[t] {
-  fn index-ref(self, key: size): *t {
+  fn(inline) index-ref(self, key: size): *t {
     self.check-bounds(key)
     self.index-unchecked(key)
   }
 }
 
 impl[t] iterable[item = t, i = buffer-iterator[t]] for buffer[t] {
-  fn iterator(self): i {
+  fn(inline) iterator(self): i {
     buffer-iterator/from-buffer(self)
   }
 }
@@ -562,7 +560,7 @@ ns for buffer-ref-iterator {
 }
 
 impl[t] iterator[item = *mut t] for buffer-ref-iterator[t] {
-  fn next(self: *mut self): ?item {
+  fn(inline) next(self: *mut self): ?item {
     if self.pos < self.buf.len {
       let item = self.buf.[self.pos].&
       self.pos = self.pos + 1
@@ -591,7 +589,7 @@ impl[t: equals] equals for buffer[t] {
 }
 
 impl[n: static size, t] iterable[item = t, i = buffer-iterator[t]] for *array[t, n] {
-  fn iterator(self): i {
+  fn(inline) iterator(self): i {
     buffer-iterator/from-buffer(
       self.as-span().inner-buffer()
     )
@@ -599,7 +597,7 @@ impl[n: static size, t] iterable[item = t, i = buffer-iterator[t]] for *array[t,
 }
 
 impl[n: static size, t] iterable[item = *mut t, i = buffer-ref-iterator[t]] for *array[t, n] {
-  fn iterator(self): i {
+  fn(inline) iterator(self): i {
     buffer-ref-iterator/from-buffer(
       self.as-span().inner-buffer()
     )

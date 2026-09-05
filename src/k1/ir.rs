@@ -71,6 +71,7 @@ pub struct ProgramIr {
     pub units_pending_compile: FxHashMap<FunctionId, ()>,
     pub globals_pending_eval: FxHashMap<TypedGlobalId, ()>,
     units_in_progress: FxHashSet<FunctionId>,
+    lowering_depth: u32,
 
     opt_buf_visit_stack: Vec<iropt::OptVisit>,
     opt_buf_visited: FxHashSet<IrUnitId>,
@@ -105,6 +106,7 @@ impl ProgramIr {
             units_pending_compile,
             globals_pending_eval,
             units_in_progress,
+            lowering_depth: _,
             opt_buf_visit_stack: _,
             opt_buf_visited: _,
             opt_buf_callees: _,
@@ -361,6 +363,7 @@ impl ProgramIr {
             globals_pending_eval: FxHashMap::new(),
 
             units_in_progress: FxHashSet::default(),
+            lowering_depth: 0,
             opt_buf_visit_stack: vec![],
             opt_buf_visited: FxHashSet::default(),
             opt_buf_callees: vec![],
@@ -463,7 +466,7 @@ pub struct IrUnit {
     pub unit_id: IrUnitId,
     pub fn_type: PhysicalFunctionType,
     pub inst_count: u32,
-    pub last_alloca_index: Option<u32>,
+    pub last_alloca: IrHandle<InstNode>,
 
     pub blocks: Dlist<Block, ProgramIr>,
     pub function_builtin_kind: Option<BackendBuiltin>,
@@ -1518,13 +1521,18 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
             k1.function_id_to_string(function_id, false)
         );
     }
+    let start = k1.timing.clock.raw();
+    k1.ir.lowering_depth += 1;
     let result = compile_function_body(k1, function_id);
+    k1.ir.lowering_depth -= 1;
     k1.ir.units_in_progress.remove(&function_id);
+    if k1.ir.lowering_depth == 0 {
+        k1.timing.total_ir_nanos += k1.timing.elapsed_nanos(start) as i64;
+    }
     result
 }
 
 fn compile_function_body(k1: &mut TypedProgram, function_id: FunctionId) -> K1Result<()> {
-    let start = k1.timing.clock.raw();
     let mut b = Builder::new(k1);
 
     //eprintln!("ir::compile_function {}", b.k1.function_id_to_string(function_id, false));
@@ -1606,9 +1614,6 @@ fn compile_function_body(k1: &mut TypedProgram, function_id: FunctionId) -> K1Re
         let s = unit_to_string(b.k1, unit_id, true);
         eprintln!("{s}");
     }
-
-    let elapsed = k1.timing.elapsed_nanos(start);
-    k1.timing.total_ir_nanos += elapsed as i64;
     Ok(())
 }
 
@@ -1619,7 +1624,21 @@ pub fn compile_top_level_expr(
     is_debug: bool,
 ) -> K1Result<()> {
     let start = k1.timing.clock.raw();
+    k1.ir.lowering_depth += 1;
+    let result = compile_top_level_expr_body(k1, expr, input_parameters, is_debug);
+    k1.ir.lowering_depth -= 1;
+    if k1.ir.lowering_depth == 0 {
+        k1.timing.total_ir_nanos += k1.timing.elapsed_nanos(start) as i64;
+    }
+    result
+}
 
+fn compile_top_level_expr_body(
+    k1: &mut TypedProgram,
+    expr: TypedExprId,
+    input_parameters: &[(VariableId, StaticValueId)],
+    is_debug: bool,
+) -> K1Result<()> {
     let mut b = Builder::new(k1);
 
     for (variable_id, static_value_id) in input_parameters {
@@ -1653,9 +1672,6 @@ pub fn compile_top_level_expr(
         let s = unit_to_string(k1, unit_id, true);
         eprintln!("{s}");
     }
-
-    let elapsed = k1.timing.elapsed_nanos(start);
-    k1.timing.total_ir_nanos += elapsed as i64;
     Ok(())
 }
 
@@ -1667,19 +1683,12 @@ fn finalize_unit(
     is_debug: bool,
     builtin_kind: Option<BackendBuiltin>,
 ) -> K1Result<()> {
-    let inst_count =
-        b.k1.ir
-            .mem
-            .dlist_iter(b.blocks)
-            .map(|block| b.k1.ir.mem.dlist_compute_len(block.instrs) as u32)
-            .sum();
-
     let unit = IrUnit {
         result_type_id,
         unit_id,
         fn_type,
-        inst_count,
-        last_alloca_index: b.last_alloca_index,
+        inst_count: 0,
+        last_alloca: b.last_alloca,
         blocks: b.blocks,
         function_builtin_kind: builtin_kind,
         is_debug,
@@ -1696,6 +1705,9 @@ fn finalize_unit(
     }
 
     iropt::cfg_compute_unit(&mut b.k1.ir, unit_id);
+    iropt::cfg_simplify(b.k1, unit_id);
+    let blocks = get_compiled_unit(&b.k1.ir, unit_id).unwrap().blocks;
+    get_compiled_unit_mut(&mut b.k1.ir, unit_id).unwrap().inst_count = count_insts(&b.k1.ir, blocks);
     if cfg!(debug_assertions) {
         validate_unit(b.k1, unit_id)?;
     }
@@ -1732,7 +1744,7 @@ pub struct Builder<'k1> {
     fn_type: PhysicalFunctionType,
 
     returned_alloca: Option<InstId>,
-    last_alloca_index: Option<u32>,
+    last_alloca: IrHandle<InstNode>,
     cur_block: BlockId,
     cur_span: SpanId,
     // entry_span is the span assigned to the hoisted allocas
@@ -1748,7 +1760,7 @@ impl<'k1> Builder<'k1> {
             fn_type: PhysicalFunctionType::nil(),
 
             returned_alloca: None,
-            last_alloca_index: None,
+            last_alloca: Handle::nil(),
             cur_block: Handle::nil(),
             cur_span: SpanId::NONE,
             entry_span: SpanId::NONE,
@@ -1776,10 +1788,6 @@ impl<'k1> Builder<'k1> {
         returned: bool,
     ) -> InstId {
         let layout = self.k1.get_pt_layout(pt);
-        let index = match self.last_alloca_index {
-            None => 0,
-            Some(i) => i as usize + 1,
-        };
         let alloca_span = self.entry_span;
         let inst_id = self.k1.ir.add_inst(
             Inst::Alloca { t: pt, vm_layout: layout, returned },
@@ -1788,8 +1796,11 @@ impl<'k1> Builder<'k1> {
             alloca_span,
         );
         let mut first_block = self.k1.ir.mem.get_raw_ref(self.blocks.first);
-        self.k1.ir.mem.dlist_insert(&mut first_block.data.instrs, index, inst_id);
-        self.last_alloca_index = Some(index as u32);
+        self.last_alloca = if self.last_alloca.is_nil() {
+            self.k1.ir.mem.dlist_push_front(&mut first_block.data.instrs, inst_id)
+        } else {
+            self.k1.ir.mem.dlist_insert_after(&mut first_block.data.instrs, self.last_alloca, inst_id)
+        };
         inst_id
     }
 
@@ -4160,6 +4171,14 @@ fn compile_matching_condition(
 pub fn zero(t: ScalarType) -> Value {
     // The all-zeroes bit pattern is zero for every scalar, floats included
     Value::Data32 { t, data: 0 }
+}
+
+pub fn count_insts(ir: &ProgramIr, blocks: IrList<Block>) -> u32 {
+    let mut count = 0;
+    for block in ir.mem.dlist_iter(blocks) {
+        count += ir.mem.dlist_compute_len(block.instrs) as u32;
+    }
+    count
 }
 
 pub fn get_compiled_unit(ir: &ProgramIr, unit: IrUnitId) -> Option<IrUnit> {

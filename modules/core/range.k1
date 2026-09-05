@@ -7,7 +7,7 @@
 type range[t] = { start: t, end: t }
 
 ability rangeable {
-  fn until(self, end: self): range[self] {
+  fn(inline) until(self, end: self): range[self] {
     .{ start = self, end }
   }
 }
@@ -17,7 +17,7 @@ impl[t: add and scalar-cmp and one] rangeable for t {}
 type range-iterator[t] = { current: t, end: t }
 
 impl[t: add and scalar-cmp and one] iterator[item = t] for range-iterator[t] {
-  fn next(self: *mut self): ?t {
+  fn(inline) next(self: *mut self): ?t {
     if self.current < self.end {
       let c = self.current
       self.current = c + one@(t)/one()
@@ -27,7 +27,7 @@ impl[t: add and scalar-cmp and one] iterator[item = t] for range-iterator[t] {
 }
 
 impl[t: add and scalar-cmp and one] iterable[item = t, i = range-iterator[t]] for range[t] {
-  fn iterator(self): range-iterator[t] {
+  fn(inline) iterator(self): range-iterator[t] {
     .{ current = self.start, end = self.end }
   }
 }

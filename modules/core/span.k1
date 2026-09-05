@@ -17,19 +17,19 @@ ns for span {
   // Constructor functions
 
   // Only safe if you have exclusive access to buffer
-  fn wrap-buffer[t](buffer: buffer[t]): span[t] {
+  fn(inline) wrap-buffer[t](buffer: buffer[t]): span[t] {
     .{ buffer }
   }
 
-  fn wrap-raw[t](ptr: ptr, len: size): span[t] {
+  fn(inline) wrap-raw[t](ptr: ptr, len: size): span[t] {
     .{ buffer = buffer/wrap-raw(ptr, len) }
   }
 
-  fn inner-buffer[t](self: span[t]): buffer[t] {
+  fn(inline) inner-buffer[t](self: span[t]): buffer[t] {
     self.buffer
   }
 
-  fn data-ptr[t](self: span[t]): ptr {
+  fn(inline) data-ptr[t](self: span[t]): ptr {
     self.buffer.data-ptr()
   }
   fn data-ref[t](self: span[t]): *t {
@@ -122,22 +122,22 @@ ns for span {
     .{ buffer = self.buffer.as-byte-buffer() }
   }
 
-  fn ref-iter[t](self: span[t]): buffer-ref-iterator[t] {
+  fn(inline) ref-iter[t](self: span[t]): buffer-ref-iterator[t] {
     buffer-ref-iterator/from-buffer(self.buffer)
   }
 
 }
 
 impl[t] as-span[t = t] for span[t] {
-  fn as-span(self): span[t] { self }
+  fn(inline) as-span(self): span[t] { self }
 }
 
 impl[t] index[key = size, t = t] for span[t] {
-  fn index-ref(self, key: size): *t { self.buffer.index-ref(key) }
+  fn(inline) index-ref(self, key: size): *t { self.buffer.index-ref(key) }
 }
 
 impl[t] iterable[item = t, i = buffer-iterator[t]] for span[t] {
-  fn iterator(self): i {
+  fn(inline) iterator(self): i {
     buffer-iterator/from-buffer(self.inner-buffer())
   }
 }

@@ -10,9 +10,9 @@ ability allocator {
   // free may no-op
   fn free(self, ptr: ptr, size: size, align: size)
 
-  fn alloc-t[t](self): *mut t { allocator/alloc(self, types/size[t], types/align[t]).ref[t] }
-  fn free-t[t](self, t: *mut t) { allocator/free(self, t.as(), types/size[t], types/align[t]) }
-  fn new[t](self, t: t): *mut t {
+  fn(inline) alloc-t[t](self): *mut t { allocator/alloc(self, types/size[t], types/align[t]).ref[t] }
+  fn(inline) free-t[t](self, t: *mut t) { allocator/free(self, t.as(), types/size[t], types/align[t]) }
+  fn(inline) new[t](self, t: t): *mut t {
     let ref = self.alloc-t[t]()
     ref.* = t
     ref
@@ -30,7 +30,7 @@ impl allocator for heap {
 
 ns mem {
 
-  fn new[t](t: t): *t { current-arena().new(t) }
+  fn(inline) new[t](t: t): *t { current-arena().new(t) }
 
   macro new-in-place[t](expr) {
     let type-id = types/id[t]
@@ -53,8 +53,8 @@ ns mem {
     `
   }
 
-  fn alloc-layout(size: size, align: size): ptr { current-arena().alloc(size, align) }
-  fn alloc-t[t](): *t { current-arena().alloc-t() }
+  fn(inline) alloc-layout(size: size, align: size): ptr { current-arena().alloc(size, align) }
+  fn(inline) alloc-t[t](): *t { current-arena().alloc-t() }
 
   // 0.as[ptr] inlined rather than ptr/null: this global is demanded during
   // other globals' initializers, and referencing the null global from here

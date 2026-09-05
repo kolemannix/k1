@@ -8,8 +8,8 @@
 // 0    4
 type fixlist[t, n: static size] = { data: array[t, n], used: u32 }
 ns for fixlist {
-  fn cap[t, n](_self: *fixlist[t, n]): size { core/meta/static-type-to-value[_, n]() }
-  fn len[t, n](self: *fixlist[t, n]): size { self.used.widen[size] }
+  fn(inline) cap[t, n](_self: *fixlist[t, n]): size { core/meta/static-type-to-value[_, n]() }
+  fn(inline) len[t, n](self: *fixlist[t, n]): size { self.used.widen[size] }
 
   fn zeroed[t, n](): fixlist[t, n] { mem/zeroed() }
 
@@ -73,17 +73,17 @@ ns for fixlist {
 }
 
 impl[t, n: static size] as-buffer[t = t] for *mut fixlist[t, n] {
-  fn as-buffer(self): buffer[t] {
+  fn(inline) as-buffer(self): buffer[t] {
     self.data.as-buffer().slice(0, self.len())
   }
 }
 
 impl[t, n: static size] index[key = size, t = t] for *mut fixlist[t, n] {
-  fn index-ref(self, key: size): *t { self.as-buffer().index-ref(key) }
+  fn(inline) index-ref(self, key: size): *t { self.as-buffer().index-ref(key) }
 }
 
 impl[t, n: static size] as-span[t = t] for *fixlist[t, n] {
-  fn as-span(self): span[t] {
+  fn(inline) as-span(self): span[t] {
     self.data.as-span().slice(0, self.len())
   }
 }

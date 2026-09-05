@@ -3,10 +3,10 @@
 
 ns for opt {
 
-  fn is-some[t](self: ?t): bool { self is :some _ }
-  fn is-none[t](self: ?t): bool { self is :none }
+  fn(inline) is-some[t](self: ?t): bool { self is :some _ }
+  fn(inline) is-none[t](self: ?t): bool { self is :none }
 
-  fn get[t](context locn: k1/source-location)(self: ?t): t {
+  fn(inline) get[t](context locn: k1/source-location)(self: ?t): t {
     if self is :some(t) t else {
       crash("opt.get on None")
     }
@@ -39,8 +39,8 @@ ns for opt {
 }
 
 // Convenience constructors in the global scope for opt instances
-fn none[t](): opt[t] { opt:none[t] }
-fn some[t](value: t): opt[t] { opt:some[t] value }
+fn(inline) none[t](): opt[t] { opt:none[t] }
+fn(inline) some[t](value: t): opt[t] { opt:some[t] value }
 
 
 impl[t: equals] equals for opt[t] {
@@ -52,15 +52,15 @@ impl[t: equals] equals for opt[t] {
 }
 
 impl[a] try[t = a, e = empty] for opt[a] {
-  fn error(_e: empty): opt[t] { :none }
-  fn value(t: t): opt[t] { opt:some t }
+  fn(inline) error(_e: empty): opt[t] { :none }
+  fn(inline) value(t: t): opt[t] { opt:some t }
 
-  fn is-ok(self: opt[t]): bool { self is :some _ }
+  fn(inline) is-ok(self: opt[t]): bool { self is :some _ }
   fn get-error(self: opt[t]): empty {
     if self is {
       :none -> .{},
       :some _ -> crash("getError on opt:some")
     }
   }
-  fn get-value(self: opt[t]): t { self.get() }
+  fn(inline) get-value(self: opt[t]): t { self.get() }
 }

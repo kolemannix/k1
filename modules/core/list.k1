@@ -12,14 +12,14 @@ ns for list {
     with-capacity[t](0)
   }
 
-  fn len[t](self: list[t]): size { self.len }
-  fn cap[t](self: list[t]): size { self.buffer.len }
+  fn(inline) len[t](self: list[t]): size { self.len }
+  fn(inline) cap[t](self: list[t]): size { self.buffer.len }
 
   // pointer to the underlying buffer
   // Use at your own risk; the region past
   // len is not initialized
-  fn data-ptr[t](self: list[t]): ptr { self.buffer.data-ptr() }
-  fn data-ref[t](self: list[t]): *t { self.buffer.data-ref() }
+  fn(inline) data-ptr[t](self: list[t]): ptr { self.buffer.data-ptr() }
+  fn(inline) data-ref[t](self: list[t]): *t { self.buffer.data-ref() }
 
   fn filled[t](size: size, value: t): list[t] {
     let buffer = buffer/filled(size, value)
@@ -74,7 +74,7 @@ ns for list {
   }
 
   // The possibly-uninitialized backing buffer of this list
-  fn inner-buffer[t](self: list[t]): buffer[t] { self.buffer }
+  fn(inline) inner-buffer[t](self: list[t]): buffer[t] { self.buffer }
 
   fn _grow[t, a: allocator](self: *mut list[t], alloc: a) {
     let new-cap: size = if self.buffer.is-empty() {
@@ -95,7 +95,7 @@ ns for list {
     self.cloned-in[t, _](mem/current-arena())
   }
 
-  fn push-in[t, a: allocator](self: *mut list[t], alloc: a, elem: t) {
+  fn(inline) push-in[t, a: allocator](self: *mut list[t], alloc: a, elem: t) {
     let start-length = self.len
     if start-length == self.*.cap() {
       self._grow(alloc)
@@ -104,11 +104,11 @@ ns for list {
     self.[start-length] = elem
   }
 
-  fn push[t](self: *mut list[t], elem: t) {
+  fn(inline) push[t](self: *mut list[t], elem: t) {
     self.push-in[t, _](mem/current-arena(), elem)
   }
 
-  fn clear[t](self: *mut list[t]) {
+  fn(inline) clear[t](self: *mut list[t]) {
     self.len = 0
   }
 
@@ -225,13 +225,13 @@ ns for list {
 }
 
 impl writer for *mut list[char] {
-  fn write-byte(self, value: u8) { self.push(value.as-char()) }
-  fn write-bytes(self, bytes: span[byte]) { self.append-span(bytes.as-char-span()) }
+  fn(inline) write-byte(self, value: u8) { self.push(value.as-char()) }
+  fn(inline) write-bytes(self, bytes: span[byte]) { self.append-span(bytes.as-char-span()) }
 }
 
 impl writer for *mut list[u8] {
-  fn write-byte(self, value: u8) { self.push(value) }
-  fn write-bytes(self, bytes: span[byte]) {
+  fn(inline) write-byte(self, value: u8) { self.push(value) }
+  fn(inline) write-bytes(self, bytes: span[byte]) {
     self.append-span(bytes)
   }
 }
@@ -265,35 +265,38 @@ impl[t: print] print for list[t] {
 }
 
 impl[t] as-buffer[t = t] for list[t] {
-  fn as-buffer(self): buffer[t] {
+  fn(inline) as-buffer(self): buffer[t] {
     self.buffer.slice(0, self.len)
   }
 }
 
 impl[t] as-buffer[t = t] for *mut list[t] {
-  fn as-buffer(self): buffer[t] {
+  fn(inline) as-buffer(self): buffer[t] {
     self.*.as-buffer()
   }
 }
 
 impl[t] as-span[t = t] for *list[t] {
-  fn as-span(self): span[t] {
+  fn(inline) as-span(self): span[t] {
     self.*.as-span()
   }
 }
 
 impl[t] index[key = size, t = t] for list[t] {
-  fn index-ref(self, key: size): *t { self.as-buffer().index-ref(key) }
+  fn(inline) index-ref(self, key: size): *t {
+    raw-buffer/check-bounds(self.len, key)
+    self.buffer.index-unchecked(key)
+  }
 }
 
 impl[t] iterable[item = t, i = buffer-iterator[t]] for list[t] {
-  fn iterator(self): i {
+  fn(inline) iterator(self): i {
     self.as-buffer().iterator()
   }
 }
 
 impl[t] iterable[item = t, i = buffer-iterator[t]] for *list[t] {
-  fn iterator(self): i {
+  fn(inline) iterator(self): i {
     self.*.iterator()
   }
 }

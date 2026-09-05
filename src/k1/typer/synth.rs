@@ -445,17 +445,13 @@ impl TypedProgram {
         let line_number =
             source.get_line_for_span_start(&self.ast.mem, the_span).unwrap().line_number();
         let filename_string_id = source.filename(&self.ast.idents);
-        let filename_expr = self.synth_string_literal(filename_string_id, span);
-
-        let line_number_expr = self.synth_int(TypedIntValue::U64(line_number as u64), span);
-        let struct_expr = TypedExpr::Struct(StructLiteral {
-            fields: self.mem.pushn(&[
-                StructLiteralField { name: self.ast.idents.b.filename, expr: Some(filename_expr) },
-                StructLiteralField { name: self.ast.idents.b.line, expr: Some(line_number_expr) },
-            ]),
-        });
+        let filename_value = self.static_values.add_string(filename_string_id);
+        let line_value = self.static_values.add_int(TypedIntValue::U64(line_number as u64));
         let source_location_type_id = self.builtin_types.source_location.unwrap();
-        self.exprs.add(struct_expr, source_location_type_id, span)
+        let value = self
+            .static_values
+            .add_struct_from_slice(source_location_type_id, &[filename_value, line_value]);
+        self.add_static_constant_expr(value, span)
     }
 
     pub(super) fn synth_crash_call(

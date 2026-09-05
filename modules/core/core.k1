@@ -13,11 +13,11 @@ fn assert-not-equals[t: print and equals](context locn: k1/source-location)(a: t
   }
 }
 
-fn inc(i: *mut size) { i.* = i.* + 1 }
+fn(inline) inc(i: *mut size) { i.* = i.* + 1 }
 // TODO: Would be cool to have this
 // fn incNew[t: Add and KnowledgeOfOne](i: *mut t): t { i.* = i.* + KnowledgeOfOne@(t)/one() }
 
-fn identity[t](value: t): t { value }
+fn(inline) identity[t](value: t): t { value }
 
 fn print[t: print](t) {
   // TODO: Instead of this hack, make write(Sink, span[byte]) the intrinsic.
@@ -213,10 +213,10 @@ ns for char {
     string/wrap-list([self])
   }
 
-  fn as-u8(self: char): u8 { mem/bitcast[char, u8](self) }
-  fn u8(self: char): u8    { mem/bitcast[char, u8](self) }
-  fn as-i8(self: char): i8 { mem/bitcast[char, i8](self) }
-  fn as-byte(self: char): u8 { mem/bitcast[char, u8](self) }
+  fn(inline) as-u8(self: char): u8 { mem/bitcast[char, u8](self) }
+  fn(inline) u8(self: char): u8    { mem/bitcast[char, u8](self) }
+  fn(inline) as-i8(self: char): i8 { mem/bitcast[char, i8](self) }
+  fn(inline) as-byte(self: char): u8 { mem/bitcast[char, u8](self) }
 
   // mask to convert ASCII letters to uppercase
   let ASCII_CASE_MASK: u8 = 0b0010_0000
@@ -264,10 +264,10 @@ ns for char {
 }
 
 impl scalar-cmp for char {
-  fn lt(self, other: self): bool { (self.as-u8()).lt(other.as-u8()) }
-  fn le(self, other: self): bool { (self.as-u8()).le(other.as-u8()) }
-  fn gt(self, other: self): bool { (self.as-u8()).gt(other.as-u8()) }
-  fn ge(self, other: self): bool { (self.as-u8()).ge(other.as-u8()) }
+  fn(inline) lt(self, other: self): bool { (self.as-u8()).lt(other.as-u8()) }
+  fn(inline) le(self, other: self): bool { (self.as-u8()).le(other.as-u8()) }
+  fn(inline) gt(self, other: self): bool { (self.as-u8()).gt(other.as-u8()) }
+  fn(inline) ge(self, other: self): bool { (self.as-u8()).ge(other.as-u8()) }
 }
 
 impl[t: print] show for t {
@@ -376,10 +376,10 @@ impl print for int {
 }
 
 impl[s, f: print] try[t = s, e = f] for result[s, f] {
-  fn error(e: e): self { :err e }
-  fn value(t: t): self    { :ok t }
+  fn(inline) error(e: e): self { :err e }
+  fn(inline) value(t: t): self    { :ok t }
 
-  fn is-ok(self): bool { self is :ok _ }
+  fn(inline) is-ok(self): bool { self is :ok _ }
   fn get-value(self): t  {
     if self is {
       :ok s -> s,
@@ -395,10 +395,10 @@ impl[s, f: print] try[t = s, e = f] for result[s, f] {
 }
 
 impl[s, f] try[t = s, e = f] for result[s, f] {
-  fn error(e: e): self { :err e }
-  fn value(t: t): self    { :ok t }
+  fn(inline) error(e: e): self { :err e }
+  fn(inline) value(t: t): self    { :ok t }
 
-  fn is-ok(self): bool { self is :ok _ }
+  fn(inline) is-ok(self): bool { self is :ok _ }
   fn get-value(self): t  {
     if self is {
       :ok s -> s,
@@ -415,14 +415,14 @@ impl[s, f] try[t = s, e = f] for result[s, f] {
 
 // Branchless three-way compare: (a > b) - (a < b) is exactly ordering's -1/0/1 tag.
 // LLVM recognizes this shape and lowers it to its scmp/ucmp intrinsics.
-fn compare-scalars[t: scalar-cmp](a: t, b: t): ordering {
+fn(inline) compare-scalars[t: scalar-cmp](a: t, b: t): ordering {
   let gt = a.gt(b).as-u8().signed()
   let lt = a.lt(b).as-u8().signed()
   mem/bitcast[i8, ordering](gt - lt)
 }
 
 impl[t: scalar-cmp] comparable for t {
-  fn compare(self: t, other: t): ordering { compare-scalars(self, other) }
+  fn(inline) compare(self: t, other: t): ordering { compare-scalars(self, other) }
 }
 
 ns for u8 {
@@ -438,44 +438,44 @@ ns for u8 {
     }
   }
 
-  fn as-char(self: u8): char { mem/bitcast[u8, char](self) }
-  fn signed(self: u8): i8 { mem/bitcast[u8, i8](self) }
+  fn(inline) as-char(self: u8): char { mem/bitcast[u8, char](self) }
+  fn(inline) signed(self: u8): i8 { mem/bitcast[u8, i8](self) }
 }
 
 ns for i8 {
-  fn unsigned(self: i8): u8 { mem/bitcast[i8, u8](self) }
+  fn(inline) unsigned(self: i8): u8 { mem/bitcast[i8, u8](self) }
 }
 
 ns for u16 {
-  fn signed(self: u16): i16 { mem/bitcast[u16, i16](self) }
+  fn(inline) signed(self: u16): i16 { mem/bitcast[u16, i16](self) }
 }
 
 ns for i16 {
-  fn unsigned(self: i16): u16 { mem/bitcast[i16, u16](self) }
+  fn(inline) unsigned(self: i16): u16 { mem/bitcast[i16, u16](self) }
 }
 
 ns for u32 {
   let min-value: u32 = 0x00000000
   let max-value: u32 = 0xFFFFFFFF
 
-  fn as-bool(self: u32): bool { self != 0 }
-  fn signed(self: u32): i32 { mem/bitcast(self) }
+  fn(inline) as-bool(self: u32): bool { self != 0 }
+  fn(inline) signed(self: u32): i32 { mem/bitcast(self) }
 }
 
 ns for i32 {
   let max-value: i32 = 0x7FFFFFFF
   let min-value: i32 = -0x80000000
 
-  fn as-bool(self: i32): bool { self != 0 }
-  fn unsigned(self: i32): u32 { mem/bitcast(self) }
+  fn(inline) as-bool(self: i32): bool { self != 0 }
+  fn(inline) unsigned(self: i32): u32 { mem/bitcast(self) }
 }
 
 ns for i64 {
   let max-value: i64 = 0x7FFFFFFFFFFFFFFF
   let min-value: i64 = -0x8000000000000000
 
-  fn unsigned(self: i64): u64 { mem/bitcast[i64, u64](self) }
-  fn to-ptr(self: i64): ptr { mem/bitcast[i64, ptr](self) }
+  fn(inline) unsigned(self: i64): u64 { mem/bitcast[i64, u64](self) }
+  fn(inline) to-ptr(self: i64): ptr { mem/bitcast[i64, ptr](self) }
 
   fn from-string(s: string): result[i64, string] {
     if s.is-empty() return :err "empty string"
@@ -511,8 +511,8 @@ ns for u64 {
   let min-value: u64 = 0
   let max-value: u64 = 0xFFFFFFFFFFFFFFFF
 
-  fn signed(self: u64): i64 { mem/bitcast(self) }
-  fn to-ptr(self: u64): ptr { mem/bitcast[u64, ptr](self) }
+  fn(inline) signed(self: u64): i64 { mem/bitcast(self) }
+  fn(inline) to-ptr(self: u64): ptr { mem/bitcast[u64, ptr](self) }
 
   fn from-string(s: string): result[u64, string] {
     if s.is-empty() return :err "empty string"
@@ -677,12 +677,12 @@ impl scalar-cmp for f64 {
 // even for NaN. Note two divergences from the `==`/`<` operators: -0.0 compares
 // :less than +0.0, and NaN compares :greater than +inf (-NaN :less than -inf).
 impl comparable for f32 {
-  fn compare(self: f32, other: f32): ordering {
+  fn(inline) compare(self: f32, other: f32): ordering {
     compare-scalars(self.total-order-key(), other.total-order-key())
   }
 }
 impl comparable for f64 {
-  fn compare(self: f64, other: f64): ordering {
+  fn(inline) compare(self: f64, other: f64): ordering {
     compare-scalars(self.total-order-key(), other.total-order-key())
   }
 }

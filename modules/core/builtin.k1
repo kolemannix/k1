@@ -241,10 +241,10 @@ ability writer {
   fn write-byte(self, value: u8)
   fn write-bytes(self, bytes: span[byte])
 
-  fn write-char(self, value: char) { self.write-byte(value.as-u8()) }
-  fn write-string(self, value: string) { self.write-bytes(value.span-bytes()) }
+  fn(inline) write-char(self, value: char) { self.write-byte(value.as-u8()) }
+  fn(inline) write-string(self, value: string) { self.write-bytes(value.span-bytes()) }
 
-  fn write(self, value: string) { self.write-string(value) }
+  fn(inline) write(self, value: string) { self.write-string(value) }
 
   fn writeln(self, value: string) {
     self.write-string(value)
@@ -360,8 +360,8 @@ ability scalar-cmp {
   fn le(self, other: self): bool
   fn gt(self, other: self): bool
   fn ge(self, other: self): bool
-  fn min(self, other: self): self { if self.lt(other) self else other }
-  fn max(self, other: self): self { if self.gt(other) self else other }
+  fn(inline) min(self, other: self): self { if self.lt(other) self else other }
+  fn(inline) max(self, other: self): self { if self.gt(other) self else other }
 }
 
 impl scalar-cmp for u8 {
@@ -414,10 +414,10 @@ impl scalar-cmp for i64 {
 }
 
 impl scalar-cmp for ptr {
-  fn lt(self, other: self): bool { self.to-uint().lt(other.to-uint()) }
-  fn le(self, other: self): bool { self.to-uint().le(other.to-uint()) }
-  fn gt(self, other: self): bool { self.to-uint().gt(other.to-uint()) }
-  fn ge(self, other: self): bool { self.to-uint().ge(other.to-uint()) }
+  fn(inline) lt(self, other: self): bool { self.to-uint().lt(other.to-uint()) }
+  fn(inline) le(self, other: self): bool { self.to-uint().le(other.to-uint()) }
+  fn(inline) gt(self, other: self): bool { self.to-uint().gt(other.to-uint()) }
+  fn(inline) ge(self, other: self): bool { self.to-uint().ge(other.to-uint()) }
 }
 
 ability comparable {
@@ -552,43 +552,43 @@ ability as-buffer[impl t] {
 ability as-span[impl t] {
   fn as-span(self): span[t]
 
-  fn len(self): size {
+  fn(inline) len(self): size {
     self.as-span().inner-buffer().len
   }
-  fn is-empty(self): bool {
+  fn(inline) is-empty(self): bool {
     self.as-span().inner-buffer().len == 0
   }
-  fn non-empty(self): bool {
+  fn(inline) non-empty(self): bool {
     self.as-span().inner-buffer().len != 0
   }
-  fn index-opt(self, index: size): ?t {
+  fn(inline) index-opt(self, index: size): ?t {
     let b = self.as-span().inner-buffer()
     if index >= b.len :none
     else :some b.[index]
   }
-  fn first(self): ?t {
+  fn(inline) first(self): ?t {
     let b = self.as-span().inner-buffer()
     if b.len == 0 :none
     else :some b.[0]
   }
-  fn last(self): ?t {
+  fn(inline) last(self): ?t {
     let b = self.as-span().inner-buffer()
     if b.len == 0 :none
     else :some b.[b.len - 1]
   }
-  fn slice(self, start: size, end: size): span[t] {
+  fn(inline) slice(self, start: size, end: size): span[t] {
     span/wrap-buffer(self.as-span().inner-buffer().slice(start, end))
   }
-  fn take(self, count: size): span[t] {
+  fn(inline) take(self, count: size): span[t] {
     span/wrap-buffer(self.as-span().inner-buffer().take(count))
   }
-  fn drop(self, count: size): span[t] {
+  fn(inline) drop(self, count: size): span[t] {
     span/wrap-buffer(self.as-span().inner-buffer().drop(count))
   }
-  fn take-right(self, count: size): span[t] {
+  fn(inline) take-right(self, count: size): span[t] {
     span/wrap-buffer(self.as-span().inner-buffer().take-right(count))
   }
-  fn drop-right(self, count: size): span[t] {
+  fn(inline) drop-right(self, count: size): span[t] {
     span/wrap-buffer(self.as-span().inner-buffer().drop-right(count))
   }
   fn chunks(self, size: size): span[span[t]] {
@@ -617,7 +617,7 @@ ability as-span[impl t] {
 }
 
 impl[t, c: as-buffer[t = t]] as-span[t = t] for c {
-  fn as-span(self): span[t] { span/wrap-buffer(self.as-buffer()) }
+  fn(inline) as-span(self): span[t] { span/wrap-buffer(self.as-buffer()) }
 }
 
 /////////////////////////////////
@@ -904,17 +904,17 @@ ns sys {
 ns for ptr {
   let null: ptr = mem/bitcast[u64, ptr](0)
 
-  fn is-null(self: ptr): bool { self is null }
+  fn(inline) is-null(self: ptr): bool { self is null }
 
-  fn ref[t](self: ptr): *t { mem/bitcast[ptr, *t](self) }
+  fn(inline) ref[t](self: ptr): *t { mem/bitcast[ptr, *t](self) }
 
   fn ref-opt[t](self: ptr): optref[t] {
     .{ inner = self.ref[t] }
   }
 
-  fn to-int(self: ptr): i64 { mem/bitcast[ptr, i64](self) }
-  fn to-uint(self: ptr): u64 { mem/bitcast[ptr, u64](self) }
-  fn to-size(self: ptr): size { mem/bitcast[ptr, size](self) }
+  fn(inline) to-int(self: ptr): i64 { mem/bitcast[ptr, i64](self) }
+  fn(inline) to-uint(self: ptr): u64 { mem/bitcast[ptr, u64](self) }
+  fn(inline) to-size(self: ptr): size { mem/bitcast[ptr, size](self) }
 
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
@@ -922,7 +922,7 @@ ns for ptr {
   fn(intern) ref-at[t](self: ptr, index: size): *mut t
 
   // ref-at compiles to gep, which preserves provenance
-  fn add-bytes(self: ptr, offset: size): ptr {
+  fn(inline) add-bytes(self: ptr, offset: size): ptr {
     self.ref-at[u8](offset).as[ptr]
   }
 
@@ -952,10 +952,10 @@ impl equals for ptr {
 }
 
 ns for bool {
-  fn as-u8(self: bool): u8 { mem/bitcast[bool, u8](self) }
-  fn as-i8(self: bool): i8 { mem/bitcast[bool, i8](self) }
+  fn(inline) as-u8(self: bool): u8 { mem/bitcast[bool, u8](self) }
+  fn(inline) as-i8(self: bool): i8 { mem/bitcast[bool, i8](self) }
 
-  fn from-u8(value: u8): bool { value != 0u8 }
+  fn(inline) from-u8(value: u8): bool { value != 0u8 }
 }
 
 impl neg for bool { fn(intern) negated(self: bool): bool }
@@ -977,10 +977,10 @@ fn discard[t](_t: t): empty {}
 fn phony[t](): t { crash("phony") }
 
 ns array {
-  fn data-ref[t, n](array: *mut array[t, n]): *mut t where n: static size {
+  fn(inline) data-ref[t, n](array: *mut array[t, n]): *mut t where n: static size {
     array.[0].&
   }
-  fn data-ptr[t, n](array: *mut array[t, n]): ptr where n: static size {
+  fn(inline) data-ptr[t, n](array: *mut array[t, n]): ptr where n: static size {
     array.as[ptr]
   }
   fn size-bytes[t, n](_array: array[t, n]): int where n: static size {
@@ -1021,13 +1021,13 @@ ns array {
 }
 
 impl[t, n: static size] as-buffer[t = t] for *mut array[t, n] {
-  fn as-buffer(self): buffer[t] {
+  fn(inline) as-buffer(self): buffer[t] {
     .{ len = self.len(), data = self.data-ref() }
   }
 }
 
 impl[t, n: static size] as-span[t = t] for *array[t, n] {
-  fn as-span(self): span[t] {
+  fn(inline) as-span(self): span[t] {
     span/wrap-raw(self.data-ptr(), self.len())
   }
 }
@@ -1046,7 +1046,7 @@ impl[t: print, n: static size] print for array[t, n] {
   }
 }
 
-fn assert(context locn: k1/source-location)(value: bool) {
+fn(inline) assert(context locn: k1/source-location)(value: bool) {
   if not value crash("ASSERT FAILED")
 }
 
