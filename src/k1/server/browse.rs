@@ -12,13 +12,13 @@ use crate::typer::{
     AbilityId, FunctionId, GlobalInitialValue, NamespaceId, NamespaceKind, TypedProgram, VariableId,
 };
 
-struct NsTree {
-    root: NamespaceId,
+pub struct NsTree {
+    pub root: NamespaceId,
     /// Children of each namespace, sorted by name
-    children: FxHashMap<NamespaceId, Vec<NamespaceId>>,
+    pub children: FxHashMap<NamespaceId, Vec<NamespaceId>>,
 }
 
-fn build_tree(k1: &TypedProgram) -> NsTree {
+pub fn build_tree(k1: &TypedProgram) -> NsTree {
     let mut children: FxHashMap<NamespaceId, Vec<NamespaceId>> = FxHashMap::default();
     let mut root = None;
     for (id, ns) in k1.namespaces.namespaces.iter_with_ids() {
@@ -75,7 +75,7 @@ fn ns_canonical_href(k1: &TypedProgram, ns_id: NamespaceId) -> String {
 }
 
 /// "file.k1:line" for definitions; None for synthesized spans
-fn span_location(k1: &TypedProgram, span_id: SpanId) -> Option<String> {
+pub fn span_location(k1: &TypedProgram, span_id: SpanId) -> Option<String> {
     if span_id == SpanId::NONE {
         return None;
     }
