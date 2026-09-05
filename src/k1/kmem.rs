@@ -1417,6 +1417,7 @@ fn stranded_count(counter: &std::sync::atomic::AtomicU64, bytes: usize) {
     }
 }
 
+#[cfg(feature = "profile")]
 pub fn print_stranded_counters() {
     let fin = STRANDED_FINALIZE_BYTES.load(std::sync::atomic::Ordering::Relaxed);
     let reloc = STRANDED_RELOC_BYTES.load(std::sync::atomic::Ordering::Relaxed);

@@ -106,6 +106,7 @@ pub struct ScopeLambdaInfo {
 pub struct ScopeLoopInfo {
     pub break_type: Option<TypeId>,
     pub label: Option<StringId>,
+    pub has_break: bool,
 }
 
 pub struct ScopeDefers {

@@ -40,7 +40,7 @@ use crate::ir::{
     BackendBuiltin, BlockId, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType, ProgramIr,
     Value,
 };
-use crate::kmem::{Handle, List, MSlice};
+use crate::kmem::{List, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, StringId};
 use crate::typer::types::{
@@ -54,7 +54,6 @@ use crate::typer::{
 };
 use crate::{SV8, ir, kbail, kmem};
 
-#[allow(unused)]
 fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
     Layout { size: td.get_abi_size(typ) as u32, align: td.get_abi_alignment(typ) }
 }
@@ -137,7 +136,6 @@ impl RegisterClass {
 
 #[derive(Copy, Clone)]
 struct LlvmScalarType<'ctx> {
-    #[allow(unused)]
     pt: PhysicalType,
     basic_type: BasicTypeEnum<'ctx>,
     di_type: DIType<'ctx>,
@@ -156,11 +154,7 @@ struct CgStructType<'ctx> {
 #[derive(Copy, Clone)]
 struct CgArrayType<'ctx> {
     pt: PhysicalType,
-    #[allow(unused)]
-    count: u32,
     array_type: ArrayType<'ctx>,
-    #[allow(unused)]
-    element_type: Handle<CgType<'ctx>, CgPerm>,
     di_type: DIType<'ctx>,
     layout: Layout,
 }
@@ -168,11 +162,7 @@ struct CgArrayType<'ctx> {
 #[derive(Copy, Clone)]
 struct CgVectorType<'ctx> {
     pt: PhysicalType,
-    #[allow(unused)]
-    count: u32,
     vector_type: LlvmVectorType<'ctx>,
-    #[allow(unused)]
-    element_type: Handle<CgType<'ctx>, CgPerm>,
     di_type: DIType<'ctx>,
     layout: Layout,
 }
@@ -181,8 +171,6 @@ struct CgVectorType<'ctx> {
 struct CgUnionType<'ctx> {
     pt: PhysicalType,
     aligned_opaque_repr: StructType<'ctx>,
-    #[allow(unused)]
-    members: MSlice<CgType<'ctx>, CgPerm>,
     layout: Layout,
     di_type: DIType<'ctx>,
 }
@@ -247,15 +235,6 @@ impl<'ctx> CgType<'ctx> {
         }
     }
 
-    #[track_caller]
-    #[allow(unused)]
-    fn expect_array(self) -> CgArrayType<'ctx> {
-        match self {
-            CgType::ArrayType(array) => array,
-            _ => panic!("expected array on {}", self.kind_name()),
-        }
-    }
-
     fn rich_repr_layout(&self) -> Layout {
         match self {
             CgType::Scalar(value) => value.layout,
@@ -283,14 +262,6 @@ impl<'ctx> CgType<'ctx> {
             CgType::ArrayType(a) => a.di_type,
             CgType::Vector(v) => v.di_type,
             CgType::Union(u) => u.di_type,
-        }
-    }
-
-    #[allow(unused)]
-    fn as_scalar(self) -> Option<LlvmScalarType<'ctx>> {
-        match self {
-            CgType::Scalar(scalar) => Some(scalar),
-            _ => None,
         }
     }
 }
@@ -2091,9 +2062,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             .as_type();
                         CgType::ArrayType(CgArrayType {
                             pt,
-                            count: len,
                             array_type,
-                            element_type: self.mem.push_h(element_type),
                             di_type,
                             layout: array_layout,
                         })
@@ -2118,21 +2087,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             .as_type();
                         CgType::Vector(CgVectorType {
                             pt,
-                            count: len,
                             vector_type,
-                            element_type: self.mem.push_h(element_type),
                             di_type,
                             layout: vector_layout,
                         })
                     }
                     AggType::Union { members } => {
-                        let mut cg_members = self.mem.new_list(members.len());
                         let mut di_members = self.tmp.new_list(members.len());
                         let mut basic_type_members = self.tmp.new_list(members.len());
                         for m in self.k1.mem.getn(members) {
                             let cg_member = self.codegen_type(m.ty);
                             basic_type_members.push(cg_member.rich_type());
-                            cg_members.push(cg_member);
                             di_members.push(cg_member.debug_type());
                         }
                         let span = self.debug.current_span();
@@ -2157,7 +2122,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         CgType::Union(CgUnionType {
                             pt,
                             aligned_opaque_repr,
-                            members: cg_members.to_slice(),
                             layout: agg_layout,
                             di_type,
                         })
@@ -2193,13 +2157,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                         // For now, we'll call this a 'Union', its just our own type anyway,
                         // arguably it shouldn't even be a Sum since they share so much
-                        CgType::Union(CgUnionType {
-                            pt,
-                            aligned_opaque_repr,
-                            members: MSlice::empty(),
-                            layout,
-                            di_type,
-                        })
+                        CgType::Union(CgUnionType { pt, aligned_opaque_repr, layout, di_type })
                     }
                 };
                 self.llvm_types.insert(agg_id, cg_type);
@@ -3353,7 +3311,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 let else_block = self.append_basic_block("miss");
                 self.builder.position_at_end(else_block);
-                // TODO: Proper crash
+                let trap = match self.llvm_module.get_function("llvm.trap") {
+                    Some(f) => f,
+                    None => self.llvm_module.add_function(
+                        "llvm.trap",
+                        self.ctx.void_type().fn_type(&[], false),
+                        None,
+                    ),
+                };
+                self.builder.build_call(trap, &[], "").unwrap();
                 self.builder.build_unreachable().unwrap();
 
                 let finish_block = self.append_basic_block("finish");

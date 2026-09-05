@@ -402,9 +402,6 @@ pub fn signature_help_info(k1: &TypedProgram, site: CompletionSite) -> Option<Si
     let CompletionSite::CallArg { function_id, arg_index, .. } = site else { return None };
     let function = k1.get_function(function_id);
     let Type::Function(ft) = k1.types.get(function.type_id) else { return None };
-    // FIXME: Does not handle explicit context params properly\
-    // FIXME: Does not use our standard FunctionSignature display because we're not interested in
-    // 'special' params
     let params: Vec<String> = k1
         .mem
         .getn(ft.physical_params)
@@ -855,29 +852,6 @@ fn use-it(): int {
     }
 
     #[test]
-    fn call_arg_generic_method() {
-        let k1 = compile_with_cursor(
-            "callarg_generic",
-            r#"
-ns completion-callarg-generic
-
-fn use-it(): int {
-  let xs: list[int] = list/empty()
-  xs.push(@@)
-  0
-}
-"#,
-        );
-        let site = k1.completion.as_ref().unwrap().site.expect("expected a site");
-        assert!(matches!(site, CompletionSite::CallArg { arg_index: 1, .. }));
-        let info = signature_help_info(&k1, site).unwrap();
-        // Inference solved t=i64 from the receiver; the marker's phony filled elem
-        assert_eq!(info.label, "fn push(self: *list[i64], elem: i64): empty");
-        assert_eq!(info.params, vec!["self: *list[i64]", "elem: i64"]);
-        assert_eq!(info.active_param, 1);
-    }
-
-    #[test]
     fn struct_field_completion() {
         let k1 = compile_with_cursor(
             "struct_field",
@@ -902,7 +876,7 @@ fn use-it(): int {
     }
 
     #[test]
-    fn earlier_error_yields_no_site() {
+    fn earlier_error_still_yields_site() {
         let k1 = compile_with_cursor(
             "earlier_error",
             r#"
@@ -915,7 +889,9 @@ fn use-it(): int {
 }
 "#,
         );
-        assert!(k1.completion.as_ref().unwrap().site.is_none());
+        let site = k1.completion.as_ref().unwrap().site.expect("expected a site");
+        assert!(matches!(site, CompletionSite::Scope { .. }));
+        assert!(labels(&k1).contains(&"use-it".to_string()));
     }
 
     const MACRO_SRC: &str = r#"

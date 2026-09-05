@@ -7654,7 +7654,11 @@ impl TypedProgram {
         );
         self.scopes.add_loop_info(
             body_block_scope_id,
-            ScopeLoopInfo { break_type: Some(self.builtin_types.empty), label: while_expr.label },
+            ScopeLoopInfo {
+                break_type: Some(self.builtin_types.empty),
+                label: while_expr.label,
+                has_break: false,
+            },
         );
 
         let body_block =
@@ -7682,7 +7686,11 @@ impl TypedProgram {
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LoopExprBody, ScopeOwnerId::None);
         self.scopes.add_loop_info(
             body_scope,
-            ScopeLoopInfo { break_type: ctx.expected_type_id, label: loop_expr.label },
+            ScopeLoopInfo {
+                break_type: ctx.expected_type_id,
+                label: loop_expr.label,
+                has_break: false,
+            },
         );
 
         // Expected type is handled by loop info above, its needed by 'break's but notably we do not
@@ -7695,9 +7703,12 @@ impl TypedProgram {
         )?;
 
         let loop_info = self.scopes.get_loop_info(body_scope).unwrap();
-
-        let break_type = loop_info.break_type.unwrap_or(self.builtin_types.empty);
-        Ok(self.exprs.add(TypedExpr::LoopExpr(LoopExpr { body_block }), break_type, loop_expr.span))
+        let loop_type = if loop_info.has_break {
+            loop_info.break_type.unwrap_or(self.builtin_types.empty)
+        } else {
+            NEVER_TYPE_ID
+        };
+        Ok(self.exprs.add(TypedExpr::LoopExpr(LoopExpr { body_block }), loop_type, loop_expr.span))
     }
 
     fn eval_lambda(
@@ -8832,7 +8843,11 @@ impl TypedProgram {
         let loop_scope_id = loop_block.scope_id;
         self.scopes.add_loop_info(
             loop_scope_id,
-            ScopeLoopInfo { break_type: Some(self.builtin_types.empty), label: for_expr.label },
+            ScopeLoopInfo {
+                break_type: Some(self.builtin_types.empty),
+                label: for_expr.label,
+                has_break: false,
+            },
         );
 
         let mut consequent_block =
@@ -9885,19 +9900,20 @@ impl TypedProgram {
                 "break is dead since returned expression is divergent; consider removing the 'break'"
             );
         }
-        match loop_info.break_type {
-            Some(expected_break_type) => {
-                if let Err(msg) =
-                    self.check_types(expected_break_type, actual_break_type, ctx.scope_id)
-                {
-                    kbail!(self, span, "Break with wrong type: {msg}");
-                }
+        if let Some(expected_break_type) = loop_info.break_type {
+            if let Err(msg) = self.check_types(expected_break_type, actual_break_type, ctx.scope_id)
+            {
+                kbail!(self, span, "Break with wrong type: {msg}");
             }
-            None => self.scopes.add_loop_info(
-                loop_scope_id,
-                ScopeLoopInfo { break_type: Some(actual_break_type), ..loop_info },
-            ),
         }
+        self.scopes.add_loop_info(
+            loop_scope_id,
+            ScopeLoopInfo {
+                break_type: Some(loop_info.break_type.unwrap_or(actual_break_type)),
+                has_break: true,
+                ..loop_info
+            },
+        );
         let defers = self.gather_defers(ctx.scope_id, span, DeferExtent::LoopScope(loop_scope_id));
         self.synth_defers_then_exit(defers, break_value, ctx, span, |k1, value| {
             k1.exprs.add(
@@ -11935,17 +11951,25 @@ impl TypedProgram {
     }
 
     /// A completion cursor among a call's direct args is claimed by the call as a CallArg
-    /// site, not by eval_variable; see EvalExprFlags::MarkerOwnedByCall
+    /// site, not by eval_variable; see EvalExprFlags::CompletionCursorOwnedByCall.
+    /// The index counts only the regular args, matching the params signature help lists
     fn find_completion_cursor_arg(&self, fn_call: &ParsedCall) -> Option<u32> {
-        let position = self.ast.mem.getn(fn_call.args).iter().position(|arg| {
-            match self.ast.exprs.get(arg.value) {
+        let mut regular_index = 0;
+        for arg in self.ast.mem.getn(fn_call.args) {
+            let is_marker = match self.ast.exprs.get(arg.value) {
                 ParsedExpr::Variable(v) => {
                     v.name.path.is_empty() && self.string_is_completion_marker(v.name.name, false)
                 }
                 _ => false,
+            };
+            if is_marker {
+                return if arg.is_explicit_context { None } else { Some(regular_index) };
             }
-        });
-        position.map(|i| i as u32)
+            if !arg.is_explicit_context {
+                regular_index += 1;
+            }
+        }
+        None
     }
 
     fn record_call_arg_site(

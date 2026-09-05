@@ -4,7 +4,7 @@
 
 use std::mem::size_of;
 
-pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP18";
+pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP19";
 
 const BLOB_COMPRESS_MIN: usize = 1 << 16;
 const BLOB_CHUNK: usize = 1 << 20;
@@ -176,10 +176,9 @@ impl SnapWriter {
                 });
             }
         });
-        for chunk_index in 0..nchunks {
+        for (chunk_index, &compressed_len) in compressed_lens.iter().enumerate() {
             let chunk_start = chunk_index * BLOB_CHUNK;
             let chunk_end = (chunk_start + BLOB_CHUNK).min(bytes.len());
-            let compressed_len = compressed_lens[chunk_index];
             if compressed_len < chunk_end - chunk_start {
                 self.write_len(compressed_len);
                 let src = stride_base + chunk_index * max_out;

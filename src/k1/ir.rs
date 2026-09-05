@@ -2843,12 +2843,12 @@ fn compile_expr(
             let loop_body_block = b.push_block(BlockSourceKind::LoopBody);
             let loop_end_block = b.push_block(BlockSourceKind::LoopEnd);
 
-            let break_pt_id = b.get_physical_type(expr_type);
-
-            let break_value = if expr_type != b.k1.builtin_types.empty {
-                Some(b.push_alloca(break_pt_id, IrComment::LoopBreakValue))
-            } else {
+            let break_value = if expr_type == NEVER_TYPE_ID || expr_type == b.k1.builtin_types.empty
+            {
                 None
+            } else {
+                let break_pt_id = b.get_physical_type(expr_type);
+                Some(b.push_alloca(break_pt_id, IrComment::LoopBreakValue))
             };
             let TypedExpr::Block(body_block) = b.k1.exprs.get(loop_expr.body_block) else {
                 unreachable!()
@@ -2872,7 +2872,11 @@ fn compile_expr(
             }
 
             b.goto_block(loop_end_block);
+            if expr_type == NEVER_TYPE_ID {
+                return Ok(b.push_inst_anon(Inst::Unreachable).as_value());
+            }
             if let Some(break_alloca) = break_value {
+                let break_pt_id = b.get_physical_type(expr_type);
                 let stored = load_or_copy(
                     b,
                     break_pt_id,

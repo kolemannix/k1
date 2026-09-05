@@ -88,6 +88,10 @@ profile-stress: build-profile
   python3 perf/gen_stress.py 3600
   hyperfine --warmup 2 'K1_HOME=. target/profiling/k1 --cache false c perf/stress100'
 
+# metaprogramming stress: 200 #meta define-soa expansions in one file
+profile-soa: build-profile
+  hyperfine --warmup 2 'K1_HOME=. target/profiling/k1 --cache false c perf/soa_x_200.k1'
+
 valgrind-linux:
   git pull
   cargo build --profile profiling

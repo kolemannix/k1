@@ -47,6 +47,26 @@ fn in-break(): never {
   core/sys/exit(0)
 }
 
+fn loop-without-break(): i64 {
+  let i = 0
+  // A `loop` with no break never completes normally, so it types as never
+  // and satisfies the i64 return type through the `return`
+  loop {
+    if i == 3 return i
+    i = i + 1
+  }
+}
+fn loop-labeled-inner(): i64 {
+  loop @outer {
+    let i = 0
+    // The inner loop only exits via the outer break, so it is never-typed too
+    let x: never = loop {
+      if i == 5 break @outer i
+      i = i + 1
+    }
+  }
+}
+
 fn for-body(run: bool): i64 {
   if run {
     for i in 0.until(5) {
@@ -60,4 +80,6 @@ fn test() {
   let crashy-args-error = test-compile(#static call-arguments())
   assert(crashy-args-error is :none)
   assert(for-body(false) == 42)
+  assert(loop-without-break() == 3)
+  assert(loop-labeled-inner() == 5)
 }

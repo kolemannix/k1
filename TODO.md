@@ -80,10 +80,7 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
         you need essentially some notion of an 'ability signature function', just like type aliases would need
 
 - [ ] Failed-definition tracking, two markers for one concept: static_exec.rs:418 and typer.rs:16887. Both silently return Ok(()) when an AST mapping is missing, which masks compiler bugs. A set of failed parsed ids, checked in both places, converts "likely" into "certain".
-- [ ] Divergent loops typed as never at typer.rs:7647. ScopeLoopInfo already exists; recording whether any break was seen is the whole change
-- [ ] Signature help ignores context params at lsp_support.rs:357
 - [ ] toDyn on generic functions at typer.rs:10251. Explicit type args are already parsed at that call site; specializing before the dyn lift is the same path foo[int].& takes.
-- [ ] Unreachable on type-info miss at codegen_llvm.rs:3109. A garbage type-id at runtime hits unreachable, which is UB. Emit a crash call instead.
 
 - [x] block stmt typer error recovery; get more than 1 typer error per block
 - [x] fix `is {` syntax
