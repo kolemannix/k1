@@ -5648,6 +5648,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_use(&mut self) -> ParseResult<ParsedUseId> {
         let use_token = self.expect_kind(K::KeywordUse)?;
+        self.emit_semantic_token(use_token, SemanticTokenKind::Keyword);
+
         let mut exposed = false;
         if self.maybe_consume(K::OpenParen).is_some() {
             let p = self.peek();

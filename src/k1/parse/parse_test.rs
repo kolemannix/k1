@@ -585,3 +585,41 @@ fn lex_error_does_not_poison_reused_token_buffer() {
         }
     }
 }
+
+#[test]
+fn type_and_use_emit_semantic_tokens() -> ParseResult<()> {
+    let ast = test_parse_input(
+        "semantic_tokens".to_string(),
+        r#"
+   use core/list
+
+   type person = {
+     name: string,
+     age: int
+   }
+   "#,
+    )?;
+
+    let has_token = |text: &str, expected_kind: SemanticTokenKind| {
+        ast.semantic_tokens.iter().any(|token| {
+            let actual_text = ast.sources.get_span_content(&ast.mem, token.span);
+            actual_text == text
+                && std::mem::discriminant(&token.kind) == std::mem::discriminant(&expected_kind)
+        })
+    };
+
+    assert!(
+        has_token("use", SemanticTokenKind::Keyword),
+        "missing keyword semantic token for `use`"
+    );
+    assert!(
+        has_token("type", SemanticTokenKind::Keyword),
+        "missing keyword semantic token for `type`"
+    );
+    assert!(
+        has_token("person", SemanticTokenKind::Type),
+        "missing type semantic token for `person`"
+    );
+
+    Ok(())
+}
