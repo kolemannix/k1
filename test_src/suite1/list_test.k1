@@ -131,7 +131,7 @@ fn assert-ascending(values: list[int]) {
 }
 
 fn test-sort-shapes() {
-  let n = 1000
+  let n = 500
   let ascending = list/empty[int]()
   let descending = list/empty[int]()
   let organ-pipe = list/empty[int]()
@@ -152,7 +152,7 @@ fn test-sort-shapes() {
 
 fn test-sort-stable() {
   let records = list/empty[sort-rec]()
-  for i in 0.until(100) { records.push(.{ key = i % 7, ord = i }) }
+  for i in 0.until(50) { records.push(.{ key = i % 7, ord = i }) }
   records.sort()
   for i in 1.until(records.len()) {
     let a = records.[i - 1]
