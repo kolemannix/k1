@@ -388,8 +388,6 @@ impl TokenKind {
     }
 
     pub fn token_from_bytes(bytes: &[u8]) -> Option<TokenKind> {
-        // TODO: Fewer lexed keywords; more context-aware idents-as-keywords
-        // This prevents 'name-squatting' on things like 'type', 'in', 'for'
         match bytes {
             b"fn" => Some(K::KeywordFn),
             b"let" => Some(K::KeywordLet),
@@ -414,10 +412,6 @@ impl TokenKind {
             b"use" => Some(K::KeywordUse),
             b"require" => Some(K::KeywordRequire),
             b"defer" => Some(K::KeywordDefer),
-            b"==" => Some(K::EqualsEquals),
-            b"!=" => Some(K::BangEquals),
-            b"<=" => Some(K::LessEqual),
-            b">=" => Some(K::GreaterEqual),
             _ => None,
         }
     }
@@ -519,16 +513,8 @@ impl Token {
         file_id: u32,
         start: u32,
         len: u32,
-        whitespace_preceeded: bool,
-        newline_preceded: bool,
+        flags: u8,
     ) -> Token {
-        let mut flags = 0;
-        if whitespace_preceeded {
-            flags |= TOKEN_FLAG_IS_WHITESPACE_PRECEDED
-        };
-        if newline_preceded {
-            flags |= TOKEN_FLAG_IS_NEWLINE_PRECEDED
-        };
         match u16::try_from(len) {
             Ok(len16) => Token { kind, flags, len: len16, start },
             Err(_) => {
@@ -708,7 +694,19 @@ impl LexMode {
 
 #[derive(Debug)]
 struct LexState {
+    mode: LexMode,
     mode_stack: Vec<LexMode>,
+}
+
+impl LexState {
+    fn push_mode(&mut self, mode: LexMode) {
+        self.mode_stack.push(self.mode);
+        self.mode = mode;
+    }
+
+    fn pop_mode(&mut self) {
+        self.mode = self.mode_stack.pop().unwrap();
+    }
 }
 pub struct Lexer<'a, 'spans> {
     pub file_id: FileId,
@@ -717,6 +715,7 @@ pub struct Lexer<'a, 'spans> {
     pub spans: &'spans mut Spans,
     pub pos: u32,
     pub trivia: TokenTriviaTable,
+    next_token_flags: u8,
 }
 
 impl<'content, 'spans> Lexer<'content, 'spans> {
@@ -731,6 +730,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             spans,
             pos: 0,
             trivia: TokenTriviaTable::default(),
+            next_token_flags: TOKEN_FLAG_IS_NEWLINE_PRECEDED,
         }
     }
 
@@ -744,7 +744,8 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
     }
 
     pub fn run(&mut self, tokens: &mut Vec<Token>) -> LexResult<()> {
-        let mut state = LexState { mode_stack: vec![LexMode::Tokens] };
+        let mut state = LexState { mode: LexMode::Tokens, mode_stack: Vec::new() };
+        tokens.reserve(self.content.len() / 3 + 1);
         let result = loop {
             match self.eat_token(tokens, &mut state) {
                 Ok(Some(())) => {}
@@ -764,43 +765,12 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         state: &mut LexState,
     ) -> LexResult<Option<()>> {
         let mut tok_len = 0;
-        let mut is_number = false;
 
         #[inline]
         fn make_token(lex: &mut Lexer, kind: TokenKind, start: u32, len: u32) -> Token {
-            let whitespace_preceded = lex
-                .content
-                .get((start as usize).saturating_sub(1))
-                .is_some_and(|c| (*c as char).is_whitespace());
-            // Walk back over the whitespace run; comment text stops the walk,
-            // but a line comment's own terminating newline sits after it, so
-            // any token after a comment is still seen as newline-preceded
-            let mut newline_preceded = false;
-            let mut i = start as usize;
-            loop {
-                if i == 0 {
-                    newline_preceded = true;
-                    break;
-                }
-                let c = lex.content[i - 1];
-                if c == b'\n' || c == b'\r' {
-                    newline_preceded = true;
-                    break;
-                }
-                if !(c as char).is_whitespace() {
-                    break;
-                }
-                i -= 1;
-            }
-            Token::new(
-                kind,
-                lex.spans,
-                lex.file_id,
-                start,
-                len,
-                whitespace_preceded,
-                newline_preceded,
-            )
+            let flags = lex.next_token_flags;
+            lex.next_token_flags = 0;
+            Token::new(kind, lex.spans, lex.file_id, start, len, flags)
         }
 
         #[inline]
@@ -809,14 +779,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         }
 
         #[inline]
-        fn make_keyword_or_ident(
-            lex: &mut Lexer,
-            end: u32,
-            tok_len: u32,
-            is_number: bool,
-        ) -> Token {
-            let start = end - tok_len;
-            let len = tok_len;
+        fn make_keyword_or_ident(lex: &mut Lexer, start: u32, len: u32, is_number: bool) -> Token {
             if is_number {
                 make_token(lex, K::Numeric, start, len)
             } else if let Some(kind) =
@@ -827,17 +790,12 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 make_token(lex, K::Ident, start, len)
             }
         }
-        macro_rules! make_from_buffer {
-            ($end: expr) => {
-                make_keyword_or_ident(self, $end, tok_len, is_number)
-            };
-        }
         loop {
             let (c, n) = self.peek_with_pos();
             if cfg!(feature = "dbg") {
                 debug!("LEX char='{}' n={} tok_len={} state={:?}", c, n, tok_len, state);
             }
-            let lex_mode = state.mode_stack.last_mut().unwrap();
+            let lex_mode = &mut state.mode;
             match lex_mode {
                 LexMode::DoubleQuoteString | LexMode::BacktickString => {
                     match c {
@@ -874,7 +832,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             debug!("[lex] starting code at {n} with tok_len = {tok_len}");
                             let string_delim_kind = lex_mode.string_delim_kind().unwrap();
                             // Track brace depth and done when == 0
-                            state.mode_stack.push(LexMode::Interp { brace_depth: 1 });
+                            state.push_mode(LexMode::Interp { brace_depth: 1 });
                             tokens.push(make_buffered_token(
                                 self,
                                 K::string(string_delim_kind, false),
@@ -914,7 +872,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             tok_len += 1;
                             self.advance();
                             let string_delim_kind = lex_mode.string_delim_kind().unwrap();
-                            state.mode_stack.pop();
+                            state.pop_mode();
                             tokens.push(make_buffered_token(
                                 self,
                                 K::string(string_delim_kind, true),
@@ -928,7 +886,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             tok_len += 1;
                             self.advance();
                             let string_delim_kind = lex_mode.string_delim_kind().unwrap();
-                            state.mode_stack.pop();
+                            state.pop_mode();
                             tokens.push(make_buffered_token(
                                 self,
                                 K::string(string_delim_kind, true),
@@ -953,276 +911,202 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     continue;
                 }
                 LexMode::Tokens | LexMode::Interp { .. } => {
-                    let next = self.peek_n(1);
-                    if tok_len == 0 {
-                        macro_rules! return_single {
-                            ($kind: expr) => {{
-                                self.advance();
-                                tokens.push(make_token(self, $kind, n, 1));
-                                return Ok(Some(()));
-                            }};
+                    macro_rules! return_single {
+                        ($kind: expr) => {{
+                            self.advance();
+                            tokens.push(make_token(self, $kind, n, 1));
+                            return Ok(Some(()));
+                        }};
+                    }
+                    macro_rules! return_double {
+                        ($kind: expr) => {{
+                            self.advance();
+                            self.advance();
+                            tokens.push(make_token(self, $kind, n, 2));
+                            return Ok(Some(()));
+                        }};
+                    }
+                    match c {
+                        EOF_CHAR => return Ok(None),
+                        '"' => {
+                            state.push_mode(LexMode::DoubleQuoteString);
+                            tok_len += 1;
+                            self.advance();
+                            continue;
                         }
-                        macro_rules! return_double {
-                            ($kind: expr) => {{
-                                self.advance();
-                                self.advance();
-                                tokens.push(make_token(self, $kind, n, 2));
-                                return Ok(Some(()));
-                            }};
+                        '`' => {
+                            state.push_mode(LexMode::BacktickString);
+                            tok_len += 1;
+                            self.advance();
+                            continue;
                         }
-                        match c {
-                            EOF_CHAR => return Ok(None),
-                            '"' => {
-                                state.mode_stack.push(LexMode::DoubleQuoteString);
-                                tok_len += 1;
-                                self.advance();
-                                continue;
+                        '(' => return_single!(K::OpenParen),
+                        ')' => return_single!(K::CloseParen),
+                        '[' => return_single!(K::OpenBracket),
+                        ']' => return_single!(K::CloseBracket),
+                        '{' => {
+                            if let LexMode::Interp { brace_depth } = lex_mode {
+                                *brace_depth += 1;
                             }
-                            '`' => {
-                                state.mode_stack.push(LexMode::BacktickString);
-                                tok_len += 1;
-                                self.advance();
-                                continue;
-                            }
-                            '(' => return_single!(K::OpenParen),
-                            ')' => return_single!(K::CloseParen),
-                            '[' => return_single!(K::OpenBracket),
-                            ']' => return_single!(K::CloseBracket),
-                            '{' => {
-                                if let LexMode::Interp { brace_depth } = lex_mode {
-                                    *brace_depth += 1;
+                            return_single!(K::OpenBrace)
+                        }
+                        '}' => {
+                            if let LexMode::Interp { brace_depth } = lex_mode {
+                                *brace_depth -= 1;
+                                if *brace_depth == 0 {
+                                    debug!("[lex] *pop* code end");
+                                    state.pop_mode();
+                                    debug_assert!(state.mode.string_delim_kind().is_some());
                                 }
-                                return_single!(K::OpenBrace)
                             }
-                            '}' => {
-                                if let LexMode::Interp { brace_depth } = lex_mode {
-                                    *brace_depth -= 1;
-                                    if *brace_depth == 0 {
-                                        debug!("[lex] *pop* code end");
-                                        state.mode_stack.pop();
+                            return_single!(K::CloseBrace)
+                        }
+                        '<' => {
+                            if self.peek_n(1) == '=' {
+                                return_double!(K::LessEqual)
+                            } else if self.peek_n(1) == '<' {
+                                return_double!(K::LAngleLAngle)
+                            } else {
+                                return_single!(K::LAngle)
+                            }
+                        }
+                        '>' => {
+                            if self.peek_n(1) == '=' {
+                                return_double!(K::GreaterEqual)
+                            } else if self.peek_n(1) == '>' {
+                                return_double!(K::RAngleRAngle)
+                            } else {
+                                return_single!(K::RAngle)
+                            }
+                        }
+                        ':' => return_single!(K::Colon),
+                        ';' => return_single!(K::Semicolon),
+                        '=' => {
+                            if self.peek_n(1) == '=' {
+                                return_double!(K::EqualsEquals)
+                            } else {
+                                return_single!(K::Equals)
+                            }
+                        }
+                        '.' => return_single!(K::Dot),
+                        ',' => return_single!(K::Comma),
+                        '\'' => {
+                            self.advance();
+                            let c = self.next();
+                            if c == '\\' {
+                                self.advance();
 
-                                        // Should always be in a string state after finishing an
-                                        // expression interpolation
-                                        debug_assert!(
-                                            state
-                                                .mode_stack
-                                                .last()
-                                                .unwrap()
-                                                .string_delim_kind()
-                                                .is_some()
-                                        );
-                                    }
+                                let q = self.next();
+                                if q != '\'' {
+                                    return Err(errf!(
+                                        self,
+                                        n + 3,
+                                        "Expected closing ' for char literal at {q}"
+                                    ));
                                 }
-                                return_single!(K::CloseBrace)
-                            }
-                            '<' => {
-                                if next == '=' {
-                                    return_double!(K::LessEqual)
-                                } else if next == '<' {
-                                    return_double!(K::LAngleLAngle)
-                                } else {
-                                    return_single!(K::LAngle)
+                                tokens.push(make_token(self, TokenKind::Char, n, 4));
+                                return Ok(Some(()));
+                            } else {
+                                let q = self.next();
+                                if q != '\'' {
+                                    return Err(errf!(
+                                        self,
+                                        n + 2,
+                                        "Expected closing ' for char literal at {q}"
+                                    ));
                                 }
-                            }
-                            '>' => {
-                                if next == '=' {
-                                    return_double!(K::GreaterEqual)
-                                } else if next == '>' {
-                                    return_double!(K::RAngleRAngle)
-                                } else {
-                                    return_single!(K::RAngle)
-                                }
-                            }
-                            ':' => return_single!(K::Colon),
-                            ';' => return_single!(K::Semicolon),
-                            '=' => {
-                                if next == '=' {
-                                    return_double!(K::EqualsEquals)
-                                } else {
-                                    return_single!(K::Equals)
-                                }
-                            }
-                            '.' => return_single!(K::Dot),
-                            ',' => return_single!(K::Comma),
-                            '\'' => {
-                                // char literal
-                                // Eat opening '
-                                self.advance();
-                                let c = self.next();
-                                if c == '\\' {
-                                    // Eat Escaped char
-                                    self.advance();
-
-                                    // Eat Closing '
-                                    let q = self.next();
-                                    if q != '\'' {
-                                        return Err(errf!(
-                                            self,
-                                            n + 3,
-                                            "Expected closing ' for char literal at {q}"
-                                        ));
-                                    }
-                                    tokens.push(make_token(self, TokenKind::Char, n, 4));
-                                    return Ok(Some(()));
-                                } else {
-                                    // Eat Closing ''
-                                    let q = self.next();
-                                    if q != '\'' {
-                                        return Err(errf!(
-                                            self,
-                                            n + 2,
-                                            "Expected closing ' for char literal at {q}"
-                                        ));
-                                    }
-                                    // `n` is the index of the opening quote
-                                    tokens.push(make_token(self, TokenKind::Char, n, 3));
-                                    return Ok(Some(()));
-                                }
-                            }
-                            '+' => return_single!(K::Plus),
-                            '-' => {
-                                if next == '>' {
-                                    return_double!(K::RThinArrow)
-                                } else {
-                                    return_single!(K::Minus)
-                                }
-                            }
-                            '*' => return_single!(K::Asterisk),
-                            '/' => {
-                                if next == '/' {
-                                    // Immediately handle this to either the next line or the EOF,
-                                    // so that the main loop doesn't have to check for this state
-                                    self.advance();
-                                    self.advance();
-                                    let rest = &self.content[self.pos as usize..];
-                                    self.pos = match memchr::memchr(b'\n', rest) {
-                                        // Stop on the '\r' of a "\r\n", otherwise consume the '\n'
-                                        Some(i) if i > 0 && rest[i - 1] == b'\r' => {
-                                            self.pos + i as u32
-                                        }
-                                        Some(i) => self.pos + i as u32 + 1,
-                                        // Matches the old char loop, which consumed one EOF too
-                                        None => self.content.len() as u32 + 1,
-                                    };
-                                    let span = self.add_span(n, self.pos - n);
-                                    self.trivia.push(TriviaEntry {
-                                        token_idx: tokens.len() as u32,
-                                        trivia: TokenTrivia {
-                                            span,
-                                            kind: TokenTriviaKind::LineComment,
-                                        },
-                                    });
-                                    return Ok(Some(()));
-                                } else {
-                                    return_single!(K::Slash)
-                                }
-                            }
-                            '!' => {
-                                if next == '=' {
-                                    return_double!(K::BangEquals)
-                                } else {
-                                    return_single!(K::Bang)
-                                }
-                            }
-                            '?' => return_single!(K::QuestionMark),
-                            '|' => {
-                                if next == '|' {
-                                    return_double!(K::PipePipe)
-                                } else {
-                                    return_single!(K::Pipe)
-                                }
-                            }
-                            '&' => {
-                                if next == '&' {
-                                    return_double!(K::AmpAmp)
-                                } else {
-                                    return_single!(K::Amp)
-                                }
-                            }
-                            '%' => return_single!(K::Percent),
-                            '\\' => return_single!(K::BackSlash),
-                            '#' => return_single!(K::Hash),
-                            '@' => return_single!(K::At),
-                            '$' => return_single!(K::Dollar),
-                            '^' => return_single!(K::Caret),
-                            ' ' | '\x09'..='\x0d' => {
-                                // simply eat whitespace; consume the whole run
-                                // here rather than re-dispatching per char
-                                self.advance();
-                                while matches!(self.peek(), ' ' | '\x09'..='\x0d') {
-                                    self.advance();
-                                }
-                            }
-                            _ if is_ident_or_num_start(c) => {
-                                // Enter number submode of ident mode
-                                if c == '-' || is_numeric_char(c) {
-                                    is_number = true;
-                                }
-                                tok_len += 1;
-                                self.advance();
-                            }
-                            _ => {
-                                return Err(self.make_error(
-                                    format!("Unexpected character {c}"),
-                                    n,
-                                    1,
-                                ));
-                            }
-                        };
-                    } else {
-                        // tok_len != 0
-                        match c {
-                            EOF_CHAR => {
-                                tokens.push(make_from_buffer!(n));
+                                tokens.push(make_token(self, TokenKind::Char, n, 3));
                                 return Ok(Some(()));
                             }
-                            '.' => {
-                                // Dot is a token, but not inside a number, where:
-                                // If followed by a digit, its just part of the Ident stream
-                                // Otherwise, its a 'Dot' token.
-                                // Example:
-                                // 100.42 -> Ident(100.42)
-                                // 100.toInt() -> Ident(100), Dot, Ident(toInt)
-                                if is_number {
-                                    if is_numeric_char(next) {
-                                        tok_len += 1;
-                                        self.advance();
-                                    } else {
-                                        // Conclude the number ident; we'll eat the dot next token w/ an empty buffer
-                                        tokens.push(make_from_buffer!(n));
-                                        return Ok(Some(()));
-                                    }
-                                } else {
-                                    // Flush the ident buffer
-                                    tokens.push(make_from_buffer!(n));
-                                    // Lex the dot
-                                    tokens.push(make_token(self, K::Dot, n, 1));
-                                    self.advance();
-                                    return Ok(Some(()));
-                                }
+                        }
+                        '+' => return_single!(K::Plus),
+                        '-' => {
+                            if self.peek_n(1) == '>' {
+                                return_double!(K::RThinArrow)
+                            } else {
+                                return_single!(K::Minus)
                             }
-                            ' ' | '\x09'..='\x0d' => {
-                                // Flush the ident
-                                tokens.push(make_from_buffer!(n));
-                                // Eat the whitespace too
+                        }
+                        '*' => return_single!(K::Asterisk),
+                        '/' => {
+                            if self.peek_n(1) == '/' {
                                 self.advance();
-                                return Ok(Some(()));
-                            }
-                            _ => {
-                                if is_ident_char(c) {
-                                    tok_len += 1;
-                                    self.advance();
-                                    // Consume the rest of the ident run here
-                                    // rather than re-dispatching per char
-                                    while is_ident_char(self.peek()) {
-                                        tok_len += 1;
-                                        self.advance();
+                                self.advance();
+                                let rest = &self.content[self.pos as usize..];
+                                self.pos = match memchr::memchr(b'\n', rest) {
+                                    Some(i) if i > 0 && rest[i - 1] == b'\r' => self.pos + i as u32,
+                                    Some(i) => {
+                                        self.next_token_flags |= TOKEN_FLAG_IS_WHITESPACE_PRECEDED
+                                            | TOKEN_FLAG_IS_NEWLINE_PRECEDED;
+                                        self.pos + i as u32 + 1
                                     }
-                                } else {
-                                    tokens.push(make_from_buffer!(n));
-                                    return Ok(Some(()));
-                                }
+                                    None => self.content.len() as u32 + 1,
+                                };
+                                let span = self.add_span(n, self.pos - n);
+                                self.trivia.push(TriviaEntry {
+                                    token_idx: tokens.len() as u32,
+                                    trivia: TokenTrivia {
+                                        span,
+                                        kind: TokenTriviaKind::LineComment,
+                                    },
+                                });
+                                return Ok(Some(()));
+                            } else {
+                                return_single!(K::Slash)
                             }
+                        }
+                        '!' => {
+                            if self.peek_n(1) == '=' {
+                                return_double!(K::BangEquals)
+                            } else {
+                                return_single!(K::Bang)
+                            }
+                        }
+                        '?' => return_single!(K::QuestionMark),
+                        '|' => {
+                            if self.peek_n(1) == '|' {
+                                return_double!(K::PipePipe)
+                            } else {
+                                return_single!(K::Pipe)
+                            }
+                        }
+                        '&' => {
+                            if self.peek_n(1) == '&' {
+                                return_double!(K::AmpAmp)
+                            } else {
+                                return_single!(K::Amp)
+                            }
+                        }
+                        '%' => return_single!(K::Percent),
+                        '\\' => return_single!(K::BackSlash),
+                        '#' => return_single!(K::Hash),
+                        '@' => return_single!(K::At),
+                        '$' => return_single!(K::Dollar),
+                        '^' => return_single!(K::Caret),
+                        ' ' | '\x09'..='\x0d' => {
+                            self.eat_whitespace_run();
+                        }
+                        _ if is_ident_char(c) => {
+                            let is_number = is_numeric_char(c);
+                            self.advance();
+                            loop {
+                                while is_ident_char(self.peek()) {
+                                    self.advance();
+                                }
+                                if is_number
+                                    && self.peek() == '.'
+                                    && is_numeric_char(self.peek_n(1))
+                                {
+                                    self.advance();
+                                    continue;
+                                }
+                                break;
+                            }
+                            tokens.push(make_keyword_or_ident(self, n, self.pos - n, is_number));
+                            return Ok(Some(()));
+                        }
+                        _ => {
+                            return Err(self.make_error(format!("Unexpected character {c}"), n, 1));
                         }
                     };
                 }
@@ -1234,6 +1118,20 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         let c = self.peek();
         self.pos += 1;
         c
+    }
+
+    #[inline]
+    fn eat_whitespace_run(&mut self) {
+        let mut flags = TOKEN_FLAG_IS_WHITESPACE_PRECEDED;
+        loop {
+            match self.peek() {
+                '\n' | '\r' => flags |= TOKEN_FLAG_IS_NEWLINE_PRECEDED,
+                ' ' | '\x09' | '\x0b' | '\x0c' => {}
+                _ => break,
+            }
+            self.pos += 1;
+        }
+        self.next_token_flags |= flags;
     }
 
     #[inline]
@@ -1295,11 +1193,6 @@ pub fn is_ident_char(c: char) -> bool {
         Some(class) => class & CLASS_IDENT != 0,
         None => c.is_alphanumeric(),
     }
-}
-
-#[inline]
-fn is_ident_or_num_start(c: char) -> bool {
-    is_ident_char(c)
 }
 
 /// Whether c can start a bare `$ident` interpolation hole: an ident char that
