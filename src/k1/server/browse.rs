@@ -4,7 +4,6 @@
 use fxhash::FxHashMap;
 use maud::{Markup, html};
 
-use crate::lex::SpanId;
 use crate::parse::StringId;
 use crate::typer::scopes::Provenance;
 use crate::typer::types::TypeId;
@@ -72,17 +71,6 @@ fn ns_canonical_href(k1: &TypedProgram, ns_id: NamespaceId) -> String {
     }
     names.reverse();
     ns_href(&names)
-}
-
-/// "file.k1:line" for definitions; None for synthesized spans
-pub fn span_location(k1: &TypedProgram, span_id: SpanId) -> Option<String> {
-    if span_id == SpanId::NONE {
-        return None;
-    }
-    let span = k1.ast.spans.get(span_id);
-    let source = k1.ast.sources.get(span.file_id);
-    let (line, _) = k1.ast.get_lines_for_span_id(span_id)?;
-    Some(format!("{}:{}", source.filename_str(&k1.ast.idents), line.line_number()))
 }
 
 pub fn render_page(k1: &TypedProgram, path: &[&str]) -> Option<Markup> {
@@ -255,7 +243,7 @@ fn render_ns_main(k1: &TypedProgram, tree: &NsTree, ns_id: NamespaceId, path: &[
                             span .member-sig {
                                 (k1.function_signature_to_string(&k1.functions.get(*function_id).signature()))
                             }
-                            @if let Some(loc) = span_location(k1, k1.get_function_span(*function_id)) {
+                            @if let Some(loc) = k1.span_location(k1.get_function_span(*function_id)) {
                                 span .member-meta { (loc) }
                             }
                         }

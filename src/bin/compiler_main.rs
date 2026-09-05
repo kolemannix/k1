@@ -41,6 +41,9 @@ fn run() -> anyhow::Result<ExitCode> {
     let Ok(mut program) = compiler::compile_program(&args) else {
         return Ok(ExitCode::FAILURE);
     };
+    if !args.command.kind().codegens() || matches!(args.command, Command::Server { .. }) {
+        compiler::report_trace(&args, &program);
+    }
     if !args.command.kind().codegens() {
         // Setup runs as a module-load gate, so a successful compile means setup ran.
         // In release builds, just exit fast
@@ -65,7 +68,9 @@ fn run() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     }
     let llvm_ctx = inkwell::context::Context::create();
-    let success = match compiler::codegen_module(&args, &llvm_ctx, &mut program) {
+    let codegen_result = compiler::codegen_module(&args, &llvm_ctx, &mut program);
+    compiler::report_trace(&args, &program);
+    let success = match codegen_result {
         Ok(()) => match args.command {
             Command::Check { .. } => unreachable!(),
             Command::Build { .. } => true,

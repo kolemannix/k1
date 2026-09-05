@@ -18,7 +18,10 @@ use anyhow::{Result, bail};
 use inkwell::context::Context;
 use log::{error, info};
 
-use crate::codegen_llvm::{self, Cg, CgError, CgKind, CodegenRoots, Pipeline, UnitOutput};
+use crate::codegen_llvm::{
+    self, Cg, CgError, CgKind, CodegenRoots, Pipeline, UnitOutput, UnitTiming,
+};
+use crate::typer::trace::{FrameId, TraceKind};
 
 use std::path::PathBuf;
 
@@ -330,6 +333,10 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub dump_idents: bool,
 
+    /// Write the compile trace as folded stacks to out_dir/{program_name}_trace.folded
+    #[arg(long, default_value_t = false)]
+    pub dump_trace: bool,
+
     /// Generate debug info
     #[arg(long)]
     pub debug: bool,
@@ -398,6 +405,8 @@ pub struct CompilerConfig {
     pub optimize: bool,
     pub emit_llvm: bool,
     pub chatty: bool,
+    /// Full frame trace with clocks: chatty or --dump-trace
+    pub record_trace: bool,
     pub optimize_ir: bool,
     pub cache: bool,
 }
@@ -1155,7 +1164,7 @@ pub fn compile_program_ext(
     } else {
         None
     };
-    let start_time = std::time::Instant::now();
+    let clock_start = crate::clock::Clock::new().raw();
 
     let mut ast = crate::parse::ParsedProgram::make();
     let idents = &ast.idents;
@@ -1242,6 +1251,7 @@ pub fn compile_program_ext(
         optimize: args.optimize,
         emit_llvm: args.emit_llvm,
         chatty: args.chatty,
+        record_trace: args.chatty || args.dump_trace,
         optimize_ir: args.optimize_ir,
         cache: args.cache,
     };
@@ -1271,11 +1281,21 @@ pub fn compile_program_ext(
             }
 
             // The snapshot with the most modules in it is at the end
+            let clock = crate::clock::Clock::new();
             for (i, hash) in input_hashes_by_module.iter().enumerate().rev() {
                 // If we have a hit, the file exists by this name, and we restore
+                let load_start = clock.raw();
                 let Some(bytes) = crate::snap::cache_load(cache_dir, *hash) else { continue };
+                let load_end = clock.raw();
                 let module_count = i as u32 + 1;
-                match TypedProgram::restore(&bytes, config, lsp.clone()) {
+                let live = args.chatty && std::io::stderr().is_terminal();
+                match TypedProgram::restore(
+                    &bytes,
+                    config,
+                    lsp.clone(),
+                    (load_start, load_end),
+                    live,
+                ) {
                     Ok(mut restored) => {
                         restored.restored_module_count = module_count;
                         let msg = format!(
@@ -1298,6 +1318,7 @@ pub fn compile_program_ext(
         }
         TypedProgram::new(ast, config, lsp)
     };
+    k1.trace.clock_start = clock_start;
 
     let add_result = (|| {
         k1.add_module(core_plan?, false)?;
@@ -1321,14 +1342,11 @@ pub fn compile_program_ext(
         }
         return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };
-    let total_elapsed_ns = start_time.elapsed().as_nanos();
     let warning_count =
         k1.messages.borrow().iter().filter(|e| e.level == MessageLevel::Warn).count();
     if warning_count > 0 {
+        k1.trace_live_clear();
         eprintln!("Completed with {} warnings", warning_count);
-    }
-    if args.chatty {
-        k1.print_timing_info(total_elapsed_ns as u64, &mut std::io::stderr()).unwrap();
     }
 
     #[cfg(feature = "profile")]
@@ -1476,7 +1494,6 @@ pub fn write_linked_output(
     let optimize = k1.config.optimize;
     let sanitize = k1.config.sanitize;
     let filc = k1.config.filc;
-    let clang_time = std::time::Instant::now();
 
     let out_name = match kind {
         LinkOutputKind::Executable => {
@@ -1503,10 +1520,6 @@ pub fn write_linked_output(
         ld_args.push(out_name.as_str().into());
 
         lld_link("wasm-ld", &ld_args).map_err(|e| anyhow::anyhow!("linking {out_name}: {e}"))?;
-        let elapsed = clang_time.elapsed();
-        if k1.config.chatty {
-            eprintln!("link {out_name} took {}ms", elapsed.as_millis());
-        }
         return Ok(());
     }
 
@@ -1598,11 +1611,6 @@ pub fn write_linked_output(
         eprintln!("Build failed!");
         bail!("linking {out_name} with clang failed");
     }
-
-    let elapsed = clang_time.elapsed();
-    if k1.config.chatty {
-        eprintln!("link {out_name} took {}ms", elapsed.as_millis());
-    }
     Ok(())
 }
 
@@ -1686,7 +1694,6 @@ pub fn write_library_archive(
     let target = k1.config.target;
     let idents = &k1.ast.idents;
     let out_dir = k1.config.out_dir;
-    let ar_time = std::time::Instant::now();
 
     let combined_name =
         kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("lib{module_name}.o"));
@@ -1745,10 +1752,6 @@ pub fn write_library_archive(
     if !command_status(&mut ar_cmd)?.success() {
         bail!("archiving {archive_name} failed");
     }
-
-    if k1.config.chatty {
-        eprintln!("archive {archive_name} took {}ms", ar_time.elapsed().as_millis());
-    }
     Ok(())
 }
 
@@ -1773,8 +1776,6 @@ fn cg_error_to_message(k1: &TypedProgram, e: CgError) -> K1Message {
 }
 
 pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Result<()> {
-    let codegen_start = std::time::Instant::now();
-
     // Ns-driven, not fn-driven: a reload ns holding only globals still gets a dylib
     let mut reload_nss: Vec<NamespaceId> = vec![];
     for ns_id in k1.namespaces.namespaces.iter_ids() {
@@ -1794,28 +1795,31 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
         }
     }
     for ns_id in &reload_nss {
-        write_reload_dylib(args, ctx, k1, *ns_id)?;
+        let frame = k1.trace_push(TraceKind::ReloadDylib, ns_id.as_u32(), 0);
+        let written = write_reload_dylib(args, ctx, k1, *ns_id);
+        k1.trace_pop(frame);
+        written?;
     }
 
     let mut module_name = k1.program_name().to_string();
     if args.command.kind().is_test() {
         module_name.push_str("_test");
     };
-    let roots = match Cg::prepare_host(k1) {
+    let prepare_frame = k1.trace_push(TraceKind::CodegenPrepare, 0, 0);
+    let prepared = Cg::prepare_host(k1);
+    if let Ok(roots) = &prepared {
+        k1.trace.set_top_count(roots.reachable.len() as u64);
+    }
+    k1.trace_pop(prepare_frame);
+    let roots = match prepared {
         Ok(roots) => roots,
         Err(e) => match k1.error_count(&[MessageLevel::Error]) {
             0 => anyhow::bail!(report_codegen_error(k1, e)),
-            n => anyhow::bail!("Module {} failed typechecking with {} errors", k1.program_name(), n),
+            n => {
+                anyhow::bail!("Module {} failed typechecking with {} errors", k1.program_name(), n)
+            }
         },
     };
-    if args.chatty {
-        eprintln!(
-            "ir prep took {}ms ({} reachable functions)",
-            codegen_start.elapsed().as_millis(),
-            roots.reachable.len()
-        );
-    }
-    let k1: &TypedProgram = k1;
     let is_host_native = detect_host_target() == Some(k1.config.target);
     let object_is_artifact = !k1.program_settings.executable && !is_host_native
         || k1.config.target.platform() == Platform::Bare;
@@ -1828,9 +1832,6 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
         &module_name,
         object_is_artifact,
     )?;
-    if args.chatty {
-        eprintln!("codegen took {}ms", codegen_start.elapsed().as_millis());
-    }
 
     if k1.program_settings.executable {
         if k1.config.target.platform() == Platform::Bare {
@@ -1848,20 +1849,81 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
             };
             link_options.push(export_flag.to_string());
         }
-        write_linked_output(k1, &module_name, &objects, &link_options, LinkOutputKind::Executable)?;
+        let frame = k1.trace_push(TraceKind::Link, 0, 0);
+        let linked = write_linked_output(
+            k1,
+            &module_name,
+            &objects,
+            &link_options,
+            LinkOutputKind::Executable,
+        );
+        k1.trace_pop(frame);
+        linked?;
     } else if is_host_native {
         write_library_export_files(k1, &module_name)?;
-        write_linked_output(k1, &module_name, &objects, &[], LinkOutputKind::Dylib)?;
-        write_library_archive(k1, &module_name, &objects)?;
+        let frame = k1.trace_push(TraceKind::Link, 0, 0);
+        let linked = write_linked_output(k1, &module_name, &objects, &[], LinkOutputKind::Dylib);
+        k1.trace_pop(frame);
+        linked?;
+        let frame = k1.trace_push(TraceKind::Archive, 0, 0);
+        let archived = write_library_archive(k1, &module_name, &objects);
+        k1.trace_pop(frame);
+        archived?;
     }
 
     Ok(())
 }
 
+pub fn report_trace(args: &Args, k1: &TypedProgram) {
+    k1.trace_live_clear();
+    if args.chatty {
+        k1.print_trace_summary(&mut std::io::stderr()).unwrap();
+    }
+    if args.dump_trace {
+        let out_dir = k1.ast.idents.get_string(k1.config.out_dir);
+        let path = format!("{out_dir}/{}_trace.folded", k1.program_name());
+        let written = std::fs::File::create(&path).and_then(|file| {
+            let mut out = std::io::BufWriter::new(file);
+            k1.write_trace_folded(&mut out)
+        });
+        match written {
+            Ok(()) => eprintln!("wrote trace to {path}"),
+            Err(e) => eprintln!("failed to write trace to {path}: {e}"),
+        }
+    }
+}
+
+fn report_cg(k1: &TypedProgram, e: CgError) -> anyhow::Error {
+    report_codegen_error(k1, cg_error_to_message(k1, e))
+}
+
+fn record_unit_timings(k1: &mut TypedProgram, root: Option<FrameId>, timings: &[UnitTiming]) {
+    for t in timings {
+        let unit = k1.trace.record(
+            TraceKind::Codegen,
+            t.index as u32,
+            root,
+            t.clock_start,
+            t.clock_end,
+            t.fn_count as u64,
+            0,
+        );
+        k1.trace.record(
+            TraceKind::LlvmPasses,
+            t.index as u32,
+            Some(unit),
+            t.clock_generated,
+            t.clock_end,
+            0,
+            0,
+        );
+    }
+}
+
 fn write_unit_artifacts(
     args: &Args,
     ctx: &Context,
-    k1: &TypedProgram,
+    k1: &mut TypedProgram,
     roots: &CodegenRoots,
     kind: CgKind,
     module_name: &str,
@@ -1882,22 +1944,32 @@ fn write_unit_artifacts(
     };
     let single_file = k1.config.filc || args.emit_llvm || object_is_artifact;
     let object_path = |i: usize| format!("{out_dir}/{module_name}.{i}.o");
-    let report = |e: CgError| report_codegen_error(k1, cg_error_to_message(k1, e));
+    let output = if single_file {
+        UnitOutput::Bitcode(Pipeline::None)
+    } else if optimize_ir {
+        UnitOutput::Bitcode(Pipeline::ThinLtoPreLink)
+    } else {
+        UnitOutput::Object(pipeline)
+    };
+
+    let codegen_frame = k1.trace_push(TraceKind::Codegen, unit_count as u32, 0);
+    let generated = {
+        let k1: &TypedProgram = k1;
+        Cg::codegen_units(k1, roots, plans, kind, args.debug, output, object_path)
+            .map_err(|e| report_cg(k1, e))
+    };
+    if let Ok((_, timings)) = &generated {
+        record_unit_timings(k1, codegen_frame, timings);
+    }
+    k1.trace_pop(codegen_frame);
+    let (artifacts, _) = generated?;
 
     if single_file {
-        let artifacts = Cg::codegen_units(
-            k1,
-            roots,
-            plans,
-            kind,
-            args.debug,
-            UnitOutput::Bitcode(Pipeline::None),
-            object_path,
-        )
-        .map_err(report)?;
-        let merged = Cg::merge_units(ctx, module_name, &artifacts).map_err(report)?;
+        let merged = Cg::merge_units(ctx, module_name, &artifacts).map_err(|e| report_cg(k1, e))?;
         let machine = Cg::make_target_machine(args.optimize, k1.config.target);
+        let passes_frame = k1.trace_push(TraceKind::LlvmPasses, 0, 0);
         codegen_llvm::run_passes(&merged, &machine, pipeline);
+        k1.trace_pop(passes_frame);
         if k1.config.filc {
             let ll_path = format!("{out_dir}/{module_name}.ll");
             std::fs::write(Path::new(&ll_path), codegen_llvm::llvm_ir_text_filc(&merged))
@@ -1910,7 +1982,7 @@ fn write_unit_artifacts(
                 .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
         }
         let path = format!("{out_dir}/{module_name}.o");
-        codegen_llvm::emit_object(&merged, &machine, &path).map_err(report)?;
+        codegen_llvm::emit_object(&merged, &machine, &path).map_err(|e| report_cg(k1, e))?;
         return Ok(vec![path]);
     }
 
@@ -1919,29 +1991,11 @@ fn write_unit_artifacts(
         paths.push(object_path(i));
     }
     if optimize_ir {
-        let artifacts = Cg::codegen_units(
-            k1,
-            roots,
-            plans,
-            kind,
-            args.debug,
-            UnitOutput::Bitcode(Pipeline::ThinLtoPreLink),
-            object_path,
-        )
-        .map_err(report)?;
-        Cg::thinlto_codegen(k1, &artifacts, &paths).map_err(report)?;
-        return Ok(paths);
+        let frame = k1.trace_push(TraceKind::Thinlto, unit_count as u32, 0);
+        let linked = Cg::thinlto_codegen(k1, &artifacts, &paths);
+        k1.trace_pop(frame);
+        linked.map_err(|e| report_cg(k1, e))?;
     }
-    Cg::codegen_units(
-        k1,
-        roots,
-        plans,
-        kind,
-        args.debug,
-        UnitOutput::Object(pipeline),
-        object_path,
-    )
-    .map_err(report)?;
     Ok(paths)
 }
 
@@ -1953,19 +2007,24 @@ fn write_reload_dylib(
     k1: &mut TypedProgram,
     ns_id: NamespaceId,
 ) -> Result<()> {
-    let dylib_start = std::time::Instant::now();
     let ns_name = k1.ident_str(k1.namespaces.get(ns_id).name).to_string();
     let module_name = k1.program_name().to_string();
     let platform = k1.config.target.platform();
     let unit_name = format!("{module_name}.{ns_name}");
 
-    let roots = match Cg::prepare_dylib(k1, ns_id) {
+    let prepare_frame = k1.trace_push(TraceKind::CodegenPrepare, ns_id.as_u32(), 0);
+    let prepared = Cg::prepare_dylib(k1, ns_id);
+    if let Ok(roots) = &prepared {
+        k1.trace.set_top_count(roots.reachable.len() as u64);
+    }
+    k1.trace_pop(prepare_frame);
+    let roots = match prepared {
         Ok(roots) => roots,
         Err(e) => anyhow::bail!(report_codegen_error(k1, e)),
     };
-    let k1: &TypedProgram = k1;
     let objects =
         write_unit_artifacts(args, ctx, k1, &roots, CgKind::ReloadDylib(ns_id), &unit_name, false)?;
+    let k1: &TypedProgram = k1;
 
     let out_dir = k1.ast.idents.get_string(k1.config.out_dir);
     let dylib_ext = platform.dylib_ext();
@@ -1994,9 +2053,6 @@ fn write_reload_dylib(
     }
     std::fs::rename(&staged_path, &dylib_path)
         .map_err(|e| anyhow::anyhow!("Failed to publish reload dylib {dylib_path}: {e}"))?;
-    if args.chatty {
-        eprintln!("reload dylib {unit_name} took {}ms", dylib_start.elapsed().as_millis());
-    }
     Ok(())
 }
 
@@ -2069,6 +2125,7 @@ mod compiler_test {
             optimize: false,
             dump_module: false,
             dump_idents: false,
+            dump_trace: false,
             debug: false,
             sanitize: false,
             filc: false,

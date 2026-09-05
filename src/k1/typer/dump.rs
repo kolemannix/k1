@@ -59,6 +59,39 @@ impl Display for TypedProgram {
 
 /// Dumping impl
 impl TypedProgram {
+    pub fn function_label(&self, function_id: FunctionId) -> String {
+        let function = self.get_function(function_id);
+        let name = self.ident_str(function.name);
+        match function.kind {
+            TypedFunctionKind::AbilityImpl(_, self_type_id) => {
+                format!("{name} for {}", self.type_id_to_string(self_type_id))
+            }
+            _ => name.to_string(),
+        }
+    }
+
+    /// The generic's label plus the instance's type arguments
+    pub fn specialization_label(&self, function_id: FunctionId) -> String {
+        let function = self.get_function(function_id);
+        let Some(info) = function.specialization_info.as_ref() else {
+            return self.function_label(function_id);
+        };
+        let mut label = self.function_label(info.parent_function);
+        let mut args: Vec<String> = Vec::new();
+        for type_id in self.get_type_slice(info.type_arguments) {
+            args.push(self.type_id_to_string(*type_id));
+        }
+        for type_id in self.get_type_slice(info.fnlike_type_arguments) {
+            args.push(self.type_id_to_string(*type_id));
+        }
+        if !args.is_empty() {
+            label.push('[');
+            label.push_str(&args.join(", "));
+            label.push(']');
+        }
+        label
+    }
+
     pub fn scope_id_to_string(&self, scope_id: ScopeId) -> String {
         let mut s = String::new();
         self.display_scope(scope_id, &mut s).unwrap();

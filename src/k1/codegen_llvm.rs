@@ -324,6 +324,15 @@ pub struct UnitPlan {
     pub functions: Vec<FunctionId>,
 }
 
+/// One codegen unit's clock ticks, recorded on its worker thread
+pub struct UnitTiming {
+    pub index: usize,
+    pub fn_count: usize,
+    pub clock_start: u64,
+    pub clock_generated: u64,
+    pub clock_end: u64,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CgKind {
     Host,
@@ -925,11 +934,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn live_successors(ir: &ProgramIr, block_id: BlockId, out: &mut Vec<BlockId>) {
         let block = &ir.mem.get(block_id).data;
-        let mut last: Option<InstId> = None;
-        for inst_id in ir.mem.dlist_iter(block.instrs) {
-            last = Some(*inst_id);
+        if block.instrs.last.is_nil() {
+            return;
         }
-        let Some(last) = last else { return };
+        let last = ir.mem.get(block.instrs.last).data;
         match ir.instrs.get(last) {
             Inst::Jump(target) => out.push(*target),
             Inst::JumpIf { cond, cons, alt } => {
@@ -991,7 +999,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
         let roots = &roots;
         for root in roots {
-            k1.ir.units_pending_compile.insert(*root, ());
+            let requester = k1.trace.top();
+            k1.ir.units_pending_compile.push(*root, requester);
         }
         k1.compile_all_pending_ir(SpanId::NONE)?;
         if k1.config.optimize {
@@ -1148,15 +1157,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         debug: bool,
         output: UnitOutput,
         object_path: impl Fn(usize) -> String + Sync,
-    ) -> CgResult<Vec<UnitArtifact>> {
+    ) -> CgResult<(Vec<UnitArtifact>, Vec<UnitTiming>)> {
         Cg::initialize_targets();
         let shared = SharedProgram(k1);
         let shared = &shared;
         let output = &output;
         let object_path = &object_path;
         let optimize = k1.config.optimize;
-        let chatty = k1.config.chatty;
         let unit_count = plans.len();
+        let timings: std::sync::Mutex<Vec<UnitTiming>> =
+            std::sync::Mutex::new(Vec::with_capacity(unit_count));
+        let timings = &timings;
         let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
         let worker_count = unit_count.min(cores).max(1);
         let queue = std::sync::Mutex::new(plans);
@@ -1177,12 +1188,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .spawn_scoped(scope, move || -> CgResult<()> {
                         loop {
                             let Some(plan) = queue.lock().unwrap().pop() else { return Ok(()) };
-                            let start = std::time::Instant::now();
+                            let clock = shared.0.trace.clock;
+                            let clock_start = clock.raw();
                             let index = plan.index;
                             let ctx = Context::create();
                             let mut cg = Cg::create(&ctx, shared.0, debug, optimize, kind, plan);
                             cg.codegen_program(roots)?;
-                            let generated = start.elapsed();
+                            let clock_generated = clock.raw();
                             cg.finalize_debug_info();
                             cg.verify()?;
                             let artifact = match output {
@@ -1206,14 +1218,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                     }
                                 }
                             };
-                            if chatty {
-                                eprintln!(
-                                    "unit {index}: {} fns; codegen {}ms, passes + output {}ms",
-                                    cg.owned.len(),
-                                    generated.as_millis(),
-                                    (start.elapsed() - generated).as_millis()
-                                );
-                            }
+                            timings.lock().unwrap().push(UnitTiming {
+                                index,
+                                fn_count: cg.owned.len(),
+                                clock_start,
+                                clock_generated,
+                                clock_end: clock.raw(),
+                            });
                             artifacts.lock().unwrap()[index] = Some(artifact);
                         }
                     })
@@ -1235,7 +1246,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         for artifact in artifacts {
             done.push(artifact.expect("every unit produces an artifact"));
         }
-        Ok(done)
+        let timings = std::mem::take(&mut *timings.lock().unwrap());
+        Ok((done, timings))
     }
 
     fn thinlto_bitcode(&self) -> Box<[u8]> {
@@ -1303,7 +1315,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         artifacts: &[UnitArtifact],
         object_paths: &[String],
     ) -> CgResult<()> {
-        let start = std::time::Instant::now();
         let mut units: Vec<K1ThinLtoUnit> = Vec::with_capacity(artifacts.len());
         let mut preserved: Vec<std::ffi::CString> = vec![];
         let mut cross_referenced: Vec<std::ffi::CString> = vec![];
@@ -1367,9 +1378,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
         if code != 0 {
             cgbail!(SpanId::NONE, "ThinLTO failed with code {code}");
-        }
-        if k1.config.chatty {
-            eprintln!("thinlto of {} units took {}ms", units.len(), start.elapsed().as_millis());
         }
         Ok(())
     }

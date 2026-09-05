@@ -23,6 +23,7 @@ use fxhash::{FxHashMap, FxHashSet};
 use crate::ir::{self, BlockId, DataInst, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId};
 use crate::kbail;
 use crate::lex::SpanId;
+use crate::typer::trace::TraceKind;
 use crate::typer::types::{Layout, PhysicalType, PhysicalTypeEnum, ScalarType};
 use crate::typer::{FunctionId, K1Result, TypedExprId, TypedFloatValue, TypedProgram};
 use crate::vm;
@@ -52,7 +53,7 @@ pub fn get_or_lower_function(
         return Ok(*info);
     }
     debug_assert!(
-        !k1.bc.in_progress.contains(&function_id),
+        !k1.trace.on_stack(TraceKind::Bcgen, function_id.as_u32()),
         "get_or_lower_function called on in-progress function; caller must check"
     );
     let Some(unit) = k1.ir.functions.get(&function_id).copied() else {
@@ -354,7 +355,7 @@ fn resolve_lowered_value(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::V
         ir::Value::FunctionAddr(function_id) => {
             // Be sure to lower functions whose addresses have been taken
             if !k1.bc.functions.contains_key(&function_id)
-                && !k1.bc.in_progress.contains(&function_id)
+                && !k1.trace.on_stack(TraceKind::Bcgen, function_id.as_u32())
             {
                 if let Err(e) = get_or_lower_function(k1, function_id, ctx.cur_span) {
                     debug!(
@@ -390,15 +391,10 @@ fn resolve_addr(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::Value) -> 
 
 fn lower_unit(k1: &mut TypedProgram, unit: IrUnit) -> K1Result<UnitInfo> {
     let mut ctx = k1.bc.lower_ctx_pool.pop().unwrap_or_else(LowerCtx::make);
+    let frame = k1.trace_push_unit(TraceKind::Bcgen, unit.unit_id, None);
     let result = lower_unit_with_ctx(k1, unit, &mut ctx);
+    k1.trace_pop(frame);
     k1.bc.lower_ctx_pool.push(ctx);
-    if result.is_err() {
-        // Don't leave a failed unit marked in-progress; a later attempt (or
-        // an unrelated unit's recursion check) must not see stale state.
-        if let IrUnitId::Function(fid) = unit.unit_id {
-            k1.bc.in_progress.remove(&fid);
-        }
-    }
     result
 }
 
@@ -408,9 +404,6 @@ fn lower_unit_with_ctx(
     ctx: &mut LowerCtx,
 ) -> K1Result<UnitInfo> {
     let unit_id = unit.unit_id;
-    if let IrUnitId::Function(fid) = unit_id {
-        k1.bc.in_progress.insert(fid);
-    }
 
     #[cfg(debug_assertions)]
     validate_unit_shape(k1, &unit);
@@ -640,7 +633,6 @@ fn lower_unit_with_ctx(
     match unit_id {
         IrUnitId::Function(fid) => {
             k1.bc.functions.insert(fid, info);
-            k1.bc.in_progress.remove(&fid);
             if let Some(waiting) = k1.bc.pending_call_fixups.remove(&fid) {
                 for at in waiting {
                     debug_assert_eq!(k1.bc.code[at as usize], PENDING_PC);
@@ -1171,7 +1163,7 @@ fn emit_call(
 
             match call.callee {
                 IrCallee::Direct(function_id) => {
-                    if k1.bc.in_progress.contains(&function_id) {
+                    if k1.trace.on_stack(TraceKind::Bcgen, function_id.as_u32()) {
                         // Recursion cycle: patch when the callee's code_start lands
                         ctx.emit(Opcode::Call, 0, nargs as u16);
                         let at = ctx.bc_out.len() as u32;

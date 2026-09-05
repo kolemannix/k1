@@ -618,6 +618,7 @@ mod completion_tests {
             k1_home_override: None,
             command: Command::Check { file: Some(path) },
             dump_idents: false,
+            dump_trace: false,
         };
         match compile_program_ext(&args, LspCompileOptions { source_overrides, completion: true }) {
             Ok(program) => Box::new(program),

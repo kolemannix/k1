@@ -6,14 +6,19 @@ pub enum OptVisit {
 }
 
 pub fn optimize_unit(k1: &mut TypedProgram, root: IrUnitId) {
-    let start = k1.timing.raw();
-    let insts_before = k1.ir.instrs.len();
     let Some(unit) = get_compiled_unit(&k1.ir, root) else {
         return;
     };
     if unit.is_optimized {
         return;
     }
+    let frame = k1.trace_push_unit(TraceKind::IrOptimize, root, None);
+    optimize_unit_body(k1, root, unit);
+    k1.trace_pop(frame);
+}
+
+fn optimize_unit_body(k1: &mut TypedProgram, root: IrUnitId, unit: IrUnit) {
+    let insts_before = k1.ir.instrs.len();
     if unit.is_debug {
         eprintln!("optimizing {}", unit_to_string(k1, root, true));
     }
@@ -42,17 +47,18 @@ pub fn optimize_unit(k1: &mut TypedProgram, root: IrUnitId) {
                 }
             }
             OptVisit::Leave(unit_id) => {
-                let inline_start = k1.timing.raw();
+                let inline_frame = k1.trace_push_unit(TraceKind::IrInline, unit_id, None);
                 if skip_inline {
                     finish_unit_no_inline(k1, unit_id);
                 } else {
                     inline_calls_in_unit(k1, unit_id)
                 }
-                k1.timing.iropt_inline_nanos += k1.timing.elapsed_nanos(inline_start) as i64;
+                k1.trace_pop(inline_frame);
 
-                let simplify_start = k1.timing.raw();
-                cfg_simplify(k1, unit_id);
-                k1.timing.iropt_simplify_nanos += k1.timing.elapsed_nanos(simplify_start) as i64;
+                let simplify_frame = k1.trace_push_unit(TraceKind::IrSimplify, unit_id, None);
+                let passes = cfg_simplify(k1, unit_id);
+                k1.trace.set_top_count(passes);
+                k1.trace_pop(simplify_frame);
                 get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap().is_optimized = true;
             }
         }
@@ -62,10 +68,7 @@ pub fn optimize_unit(k1: &mut TypedProgram, root: IrUnitId) {
     k1.ir.opt_buf_visit_stack = visit_stack;
     k1.ir.opt_buf_visited = visited;
     k1.ir.opt_buf_callees = callees;
-
-    k1.timing.iropt_insts_created += (k1.ir.instrs.len() - insts_before) as i64;
-    let elapsed = k1.timing.elapsed_nanos(start);
-    k1.timing.total_iropt_nanos += elapsed as i64;
+    k1.trace.set_top_count((k1.ir.instrs.len() - insts_before) as u64);
 }
 
 fn collect_direct_callees(k1: &TypedProgram, callees: &mut Vec<FunctionId>, unit_id: IrUnitId) {
@@ -97,7 +100,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     // application converges, even when a later inline copies a still-stale
     // operand into its inlined body.
     let mut result_rewrites = std::mem::take(&mut k1.ir.opt_buf_inline_self_rewrites);
-    let mut did_inline = false;
+    let mut inlined = 0u64;
     let mut cur_block = get_compiled_unit(&k1.ir, unit_id).unwrap().blocks.first;
     'scan: while !cur_block.is_nil() {
         let mut cur_inst = k1.ir.mem.get(cur_block).data.instrs.first;
@@ -119,7 +122,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                                 call,
                                 &mut result_rewrites,
                             );
-                            did_inline = true;
+                            inlined += 1;
                             continue 'scan;
                         }
                     }
@@ -138,19 +141,18 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     }
     result_rewrites.clear();
     k1.ir.opt_buf_inline_self_rewrites = result_rewrites;
+    k1.trace.set_top_count(inlined);
 
-    if !did_inline {
+    if inlined == 0 {
         debug_assert!(get_compiled_unit(&k1.ir, unit_id).unwrap().cfg_valid);
         return;
     }
 
     let inst_count = count_insts(&k1.ir, blocks);
-    let cfg_start = k1.timing.raw();
+    let cfg_frame = k1.trace_push_unit(TraceKind::IrCfgCompute, unit_id, None);
     cfg_compute_unit(&mut k1.ir, unit_id);
-    k1.timing.iropt_cfg_nanos += k1.timing.elapsed_nanos(cfg_start) as i64;
-    k1.timing.iropt_cfg_computes += 1;
+    k1.trace_pop(cfg_frame);
     get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap().inst_count = inst_count;
-
 }
 
 fn inline_call(
@@ -263,7 +265,7 @@ pub(super) fn compile_inline_call(
     callee_id: FunctionId,
     call: IrCall,
 ) -> K1Result<Value> {
-    if b.k1.ir.units_in_progress.contains(&callee_id) {
+    if b.k1.trace.on_stack(TraceKind::IrLower, callee_id.as_u32()) {
         kbail!(
             b.k1,
             b.cur_span,
@@ -273,10 +275,9 @@ pub(super) fn compile_inline_call(
     }
     let caller_variables = std::mem::take(&mut b.k1.ir.b_variables);
     let caller_loops = std::mem::take(&mut b.k1.ir.b_loops);
-    let compiled = b
-        .k1
-        .require_function_body(callee_id, b.cur_span)
-        .and_then(|_| compile_function(b.k1, callee_id));
+    let compiled =
+        b.k1.require_function_body(callee_id, b.cur_span)
+            .and_then(|_| compile_function(b.k1, callee_id, None));
     b.k1.ir.b_variables = caller_variables;
     b.k1.ir.b_loops = caller_loops;
     compiled?;
@@ -304,7 +305,6 @@ fn inline_body(
     call: IrCall,
     exit_block: Option<BlockId>,
 ) -> InlinedBody {
-    b.k1.timing.iropt_inline_count += 1;
     let call_block = b.cur_block;
     let call_args = b.k1.ir.mem.getn(call.args);
     let mut inlined_rewrites = std::mem::take(&mut b.k1.ir.opt_buf_inline_inlined_rewrites);
@@ -898,22 +898,19 @@ pub fn cfg_compute(ir: &mut ProgramIr, blocks: IrList<Block>) {
     ir.opt_buf_cfg_compute_visited = visited;
 }
 
-pub fn cfg_simplify(k1: &mut TypedProgram, unit_id: IrUnitId) {
+pub fn cfg_simplify(k1: &mut TypedProgram, unit_id: IrUnitId) -> u64 {
     let unit = get_compiled_unit(&k1.ir, unit_id).unwrap();
     debug_assert!(unit.cfg_valid, "cfg is not computed");
     let mut blocks = unit.blocks;
-    cfg_simplify_blocks(k1, &mut blocks);
+    let passes = cfg_simplify_blocks(k1, &mut blocks);
 
     let unit = get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap();
     unit.blocks = blocks;
     unit.cfg_valid = true;
-
-    // if let Err(e) = validate_unit(k1, unit_id) {
-    //     k1.report(e)
-    // }
+    passes
 }
 
-fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
+fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) -> u64 {
     // eprintln!("cfg_simplify on {}", blocks_to_string(k1, *blocks, true, false));
 
     // Unreachable elimination first
@@ -956,10 +953,10 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
     // eagerly), and instruction counts, never operands.
     let mut rewrites = std::mem::take(&mut k1.ir.opt_buf_cfg_simpl_rewrites);
 
+    let mut passes = 1u64;
     while do_pass(k1, blocks, &mut rewrites) {
-        k1.timing.iropt_simplify_passes += 1;
+        passes += 1;
     }
-    k1.timing.iropt_simplify_passes += 1; // the final no-op pass
 
     if !rewrites.values.is_empty() {
         for (block_id, _) in k1.ir.mem.dlist_iter_handles(*blocks) {
@@ -1131,6 +1128,7 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
         !noop
     }
     debug!("cfg_simplify end\n{}", blocks_to_string(k1, *blocks, true, false));
+    passes
 }
 
 /// Replace every occurrence of `old` with `new` in a cfg edge list (preds or

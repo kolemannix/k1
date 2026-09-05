@@ -37,36 +37,6 @@ impl Node {
     }
 }
 
-fn function_label(k1: &TypedProgram, function_id: FunctionId) -> String {
-    let function = k1.get_function(function_id);
-    let name = k1.ident_str(function.name);
-    match function.kind {
-        TypedFunctionKind::AbilityImpl(_, self_type_id) => {
-            format!("{name} for {}", k1.type_id_to_string(self_type_id))
-        }
-        _ => name.to_string(),
-    }
-}
-
-fn specialization_label(k1: &TypedProgram, function_id: FunctionId) -> String {
-    let function = k1.get_function(function_id);
-    let info = function.specialization_info.as_ref().unwrap();
-    let mut label = function_label(k1, info.parent_function);
-    let mut args: Vec<String> = Vec::new();
-    for type_id in k1.get_type_slice(info.type_arguments) {
-        args.push(k1.type_id_to_string(*type_id));
-    }
-    for type_id in k1.get_type_slice(info.fnlike_type_arguments) {
-        args.push(k1.type_id_to_string(*type_id));
-    }
-    if !args.is_empty() {
-        label.push('[');
-        label.push_str(&args.join(", "));
-        label.push(']');
-    }
-    label
-}
-
 /// Ability impl functions live in the ability's namespace; the treemap files
 /// them under the module that declares the impl, grouped by ability
 fn placement(k1: &TypedProgram, function_id: FunctionId) -> (NamespaceId, Option<AbilityId>) {
@@ -84,7 +54,7 @@ fn placement(k1: &TypedProgram, function_id: FunctionId) -> (NamespaceId, Option
 
 fn leaf(k1: &TypedProgram, function_id: FunctionId, name: String, kind: &'static str) -> Node {
     let insts = k1.ir.functions.get(&function_id).map_or(0, |unit| unit.inst_count);
-    let location = super::browse::span_location(k1, k1.get_function_span(function_id));
+    let location = k1.span_location(k1.get_function_span(function_id));
     Node { name, kind, insts, location, children: Vec::new() }
 }
 
@@ -118,8 +88,7 @@ fn build_tree(k1: &mut TypedProgram) -> Result<Node, String> {
         Err(e) => return Err(k1.ident_str(e.message).to_string()),
     };
     let mut members: FxHashMap<NamespaceId, Vec<Node>> = FxHashMap::default();
-    let mut ability_members: FxHashMap<(NamespaceId, AbilityId), Vec<Node>> =
-        FxHashMap::default();
+    let mut ability_members: FxHashMap<(NamespaceId, AbilityId), Vec<Node>> = FxHashMap::default();
     let mut ability_order: Vec<(NamespaceId, AbilityId)> = Vec::new();
     let mut specializations: FxHashMap<FunctionId, Vec<Node>> = FxHashMap::default();
     let mut generic_order: Vec<FunctionId> = Vec::new();
@@ -140,7 +109,7 @@ fn build_tree(k1: &mut TypedProgram) -> Result<Node, String> {
         let function = k1.get_function(function_id);
         if let Some(info) = &function.specialization_info {
             let parent = info.parent_function;
-            let label = specialization_label(k1, function_id);
+            let label = k1.specialization_label(function_id);
             let entry = specializations.entry(parent).or_default();
             if entry.is_empty() {
                 generic_order.push(parent);
@@ -151,20 +120,15 @@ fn build_tree(k1: &mut TypedProgram) -> Result<Node, String> {
                 TypedFunctionKind::Lambda => "lambda",
                 _ => "fn",
             };
-            let label = function_label(k1, function_id);
+            let label = k1.function_label(function_id);
             place(k1, function_id, leaf(k1, function_id, label, kind));
         }
     }
     for parent in generic_order {
         let children = specializations.remove(&parent).unwrap();
-        let location = super::browse::span_location(k1, k1.get_function_span(parent));
-        let generic = Node {
-            name: function_label(k1, parent),
-            kind: "generic",
-            insts: 0,
-            location,
-            children,
-        };
+        let location = k1.span_location(k1.get_function_span(parent));
+        let generic =
+            Node { name: k1.function_label(parent), kind: "generic", insts: 0, location, children };
         place(k1, parent, generic);
     }
     for (ns_id, ability_id) in ability_order {

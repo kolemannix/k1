@@ -2,6 +2,10 @@
 // All rights reserved.
 
 use super::*;
+use crate::typer::trace::{
+    FRAME_FLAG_EXPR_UNIT, FrameId, PASS_NAMES, RESTORE_SECTIONS, TraceFrame, TraceKind,
+};
+use fxhash::FxHashMap;
 
 impl TypedProgram {
     pub fn get_span_location(&self, span: SpanId) -> (&parse::SourceFile, parse::Line) {
@@ -251,6 +255,7 @@ impl TypedProgram {
         };
 
         if !skip_print {
+            self.trace_live_clear();
             let use_color = std::io::stderr().is_terminal();
             self.write_error(&mut std::io::stderr(), &e, use_color).unwrap();
         }
@@ -334,79 +339,329 @@ impl TypedProgram {
         panic!("Internal Compiler Error at: {}", msg.as_ref())
     }
 
-    // Timing
-    //
-    pub fn print_timing_info(
-        &self,
-        full_elapsed_ns: u64,
-        out: &mut impl std::io::Write,
-    ) -> std::io::Result<()> {
-        let infer_ms = self.timing.total_infer_nanos as f64 / 1_000_000.0;
-        let vm_ms = self.timing.total_vm_nanos as f64 / 1_000_000.0;
+    /// "file.k1:line" for definitions; None for synthesized spans
+    pub fn span_location(&self, span_id: SpanId) -> Option<String> {
+        if span_id == SpanId::NONE {
+            return None;
+        }
+        let span = self.ast.spans.get(span_id);
+        let source = self.ast.sources.get(span.file_id);
+        let (line, _) = self.ast.get_lines_for_span_id(span_id)?;
+        Some(format!("{}:{}", source.filename_str(&self.ast.idents), line.line_number()))
+    }
+
+    fn unit_frame_label(&self, frame: &TraceFrame) -> String {
+        if frame.is_expr_unit() {
+            let expr_id = TypedExprId::from_u32(frame.key).unwrap();
+            match self.span_location(self.exprs.get_span(expr_id)) {
+                Some(loc) => format!("expr {loc}"),
+                None => format!("expr {}", frame.key),
+            }
+        } else {
+            self.specialization_label(FunctionId::from_u32(frame.key).unwrap())
+        }
+    }
+
+    pub fn frame_label(&self, frame: &TraceFrame) -> String {
+        let key = frame.key;
+        let span_label = || {
+            self.span_location(SpanId::from_u32(key).unwrap()).unwrap_or_else(|| "?".to_string())
+        };
+        let mut label = match frame.kind {
+            TraceKind::ModuleDiscover => {
+                self.ident_str(StringId::from_u32(key).unwrap()).to_string()
+            }
+            TraceKind::ModuleCompile | TraceKind::ModuleRead | TraceKind::SnapStore => {
+                self.ident_str(self.modules.get(ModuleId::from_u32(key).unwrap()).name).to_string()
+            }
+            TraceKind::Parse => {
+                let filename = self.ident_str(StringId::from_u32(key).unwrap());
+                filename.to_string()
+            }
+            TraceKind::Lex => String::new(),
+            TraceKind::SetupFn
+            | TraceKind::TypeInfer
+            | TraceKind::StaticExec
+            | TraceKind::Metaprogram
+            | TraceKind::VmValueFerry => span_label(),
+            TraceKind::SnapRestore => format!("{key} modules"),
+            TraceKind::SnapRestoreSection => RESTORE_SECTIONS[key as usize].to_string(),
+            TraceKind::TyperPass => PASS_NAMES[key as usize].to_string(),
+            TraceKind::SnapRoundtrip | TraceKind::Link | TraceKind::Archive => String::new(),
+            TraceKind::FunctionTypecheck => {
+                let function_id = FunctionId::from_u32(key).unwrap();
+                match self.span_location(self.get_function_span(function_id)) {
+                    Some(loc) => format!("{} {loc}", self.specialization_label(function_id)),
+                    None => self.specialization_label(function_id),
+                }
+            }
+            TraceKind::GlobalEval => {
+                let global = self.globals.get(TypedGlobalId::from_u32(key).unwrap());
+                self.ident_str(self.variables.get(global.variable_id).name).to_string()
+            }
+            TraceKind::FunctionSpecialize | TraceKind::MacroCall => {
+                self.function_label(FunctionId::from_u32(key).unwrap())
+            }
+            TraceKind::TypeInstantiate => self.type_id_to_string(TypeId::from_u32(key).unwrap()),
+            TraceKind::IrLower
+            | TraceKind::IrOptimize
+            | TraceKind::IrInline
+            | TraceKind::IrSimplify
+            | TraceKind::IrCfgCompute
+            | TraceKind::Bcgen
+            | TraceKind::VmRun => self.unit_frame_label(frame),
+            TraceKind::CodegenPrepare | TraceKind::ReloadDylib => {
+                if key == 0 {
+                    "host".to_string()
+                } else {
+                    let ns = self.namespaces.get(NamespaceId::from_u32(key).unwrap());
+                    self.ident_str(ns.name).to_string()
+                }
+            }
+            TraceKind::Codegen => {
+                if frame.data_count == 0 {
+                    format!("{key} units")
+                } else {
+                    format!("unit {key}")
+                }
+            }
+            TraceKind::LlvmPasses => match frame.parent_frame {
+                Some(parent) if self.trace.frames.get(parent).kind == TraceKind::Codegen => {
+                    format!("unit {key}")
+                }
+                _ => "merged".to_string(),
+            },
+            TraceKind::Thinlto => format!("{key} units"),
+        };
+        if frame.is_speculative() {
+            label.push_str(" [spec]");
+        }
+        label
+    }
+
+    /// Who asked for this work: the frame that queued a drained unit, else the structural parent
+    fn requester_of(&self, frame: &TraceFrame) -> Option<&TraceFrame> {
+        let parent = self.trace.frames.get(frame.parent_frame?);
+        if parent.kind == TraceKind::IrLower
+            && let Some(requester) = parent.requester_frame
+        {
+            return Some(self.trace.frames.get(requester));
+        }
+        Some(parent)
+    }
+
+    /// Kind name and label, e.g. "typecheck main main.k1:3"
+    pub fn frame_title(&self, frame: &TraceFrame) -> String {
+        let label = self.frame_label(frame);
+        if label.is_empty() {
+            frame.kind.name().to_string()
+        } else {
+            format!("{} {label}", frame.kind.name())
+        }
+    }
+
+    pub fn print_trace_summary(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
+        let trace = &self.trace;
+        let ms = |ticks: u64| trace.nanos(ticks) as f64 / 1e6;
+        let wall_ns = trace.nanos(trace.wall_ticks());
         let lines: usize = self.ast.sources.iter().map(|s| s.1.line_count(&self.ast.mem)).sum();
-        // mm lines per ns, aka lines per second
-        let lines_per_s = if lines > 0 { lines as f64 * 1e9 / full_elapsed_ns as f64 } else { 0.0 };
-        eprintln!(
+        let lines_per_s = if lines > 0 { lines as f64 * 1e9 / wall_ns as f64 } else { 0.0 };
+        writeln!(
+            out,
             "program {} took {}ms ({:.2} line/s, {} lines)",
             self.ast.name_str(),
-            full_elapsed_ns / 1_000_000,
+            wall_ns / 1_000_000,
             lines_per_s,
             lines
-        );
-        eprintln!("\t{} expressions", self.exprs.len());
-        eprintln!("\t{} statements", self.stmts.len());
-        eprintln!("\t{} functions", self.functions.len());
-        eprintln!("\t{} types", self.type_count());
-        eprintln!("\t{} idents", self.ast.idents.len());
-        let iropt_created = self.timing.iropt_insts_created;
-        let irgen_created = self.ir.instrs.len() as i64 - iropt_created;
-        eprintln!(
-            "\t{} instructions ({} irgen + {} iropt, {:.2}x), {}ms ir, {}ms iropt, {:.2}ms bcgen ({} code words)",
+        )?;
+        writeln!(out, "\t{} expressions", self.exprs.len())?;
+        writeln!(out, "\t{} statements", self.stmts.len())?;
+        writeln!(out, "\t{} functions", self.functions.len())?;
+        writeln!(out, "\t{} types", self.type_count())?;
+        writeln!(out, "\t{} idents", self.ast.idents.len())?;
+        writeln!(
+            out,
+            "\t{} instructions, {} code words",
             self.ir.instrs.len(),
-            irgen_created,
-            iropt_created,
-            self.ir.instrs.len() as f64 / irgen_created.max(1) as f64,
-            self.timing.total_ir_nanos / 1_000_000,
-            self.timing.total_iropt_nanos / 1_000_000,
-            self.timing.total_bcgen_nanos as f64 / 1_000_000.0,
-            self.bc.code.len(),
-        );
-        eprintln!(
-            "\t  iropt: {:.2}ms inline ({} inlines), {:.2}ms simplify ({} passes), {:.2}ms cfg ({} computes; nested in the others)",
-            self.timing.iropt_inline_nanos as f64 / 1_000_000.0,
-            self.timing.iropt_inline_count,
-            self.timing.iropt_simplify_nanos as f64 / 1_000_000.0,
-            self.timing.iropt_simplify_passes,
-            self.timing.iropt_cfg_nanos as f64 / 1_000_000.0,
-            self.timing.iropt_cfg_computes,
-        );
+            self.bc.code.len()
+        )?;
         self.tmp.print_usage("\ttmp");
         self.mem.print_usage("\tperm");
         self.ir.mem.print_usage("\tmem ir");
         #[cfg(feature = "profile")]
         crate::kmem::print_stranded_counters();
-        writeln!(
-            out,
-            "\t{} infers: {:.2}ms. avg: {:.2}ms. {} static execs during inference: {:.2}ms",
-            self.timing.total_infers,
-            infer_ms,
-            if self.timing.total_infers > 0 {
-                infer_ms / self.timing.total_infers as f64
+        if self.restored_module_count > 0 {
+            let mut names: Vec<&str> = Vec::new();
+            for module in self.modules.iter().take(self.restored_module_count as usize) {
+                names.push(self.ident_str(module.name));
+            }
+            writeln!(out, "\trestored {} modules: {}", names.len(), names.join(", "))?;
+        }
+
+        let kind_count = TraceKind::ALL.len();
+        let mut counts = vec![0u64; kind_count];
+        let mut exclusive = vec![0u64; kind_count];
+        let mut speculative = vec![0u64; kind_count];
+        let mut data = vec![0u64; kind_count];
+        let mut root_ticks = 0u64;
+        let mut codegen_wall = 0u64;
+        let mut codegen_cpu = 0u64;
+        for frame in trace.frames.iter() {
+            let i = frame.kind as usize;
+            counts[i] += 1;
+            exclusive[i] += frame.exclusive_ticks();
+            data[i] += frame.data_count;
+            if frame.is_speculative() {
+                speculative[i] += frame.exclusive_ticks();
+            }
+            if frame.parent_frame.is_none() {
+                root_ticks += frame.ticks();
+            }
+            if frame.kind == TraceKind::Codegen {
+                if frame.data_count == 0 {
+                    codegen_wall += frame.ticks();
+                } else {
+                    codegen_cpu += frame.ticks();
+                }
+            }
+        }
+        writeln!(out, "\t{:<18} {:>8} {:>10} {:>6}", "kind", "count", "excl ms", "speculative %")?;
+        for kind in TraceKind::ALL {
+            let i = kind as usize;
+            if counts[i] == 0 {
+                continue;
+            }
+            let spec_pct = if exclusive[i] > 0 {
+                speculative[i] as f64 * 100.0 / exclusive[i] as f64
             } else {
                 0.0
-            },
-            self.timing.total_infer_execs,
-            self.timing.total_infer_exec_nanos as f64 / 1_000_000.0,
-        )?;
-        let vm_us = self.timing.total_vm_nanos as f64 / 1_000.0;
-        let vm_us_per_instr = vm_us / self.timing.total_vm_instrs as f64;
+            };
+            let mut line = format!(
+                "\t{:<18} {:>8} {:>10.2} {:>5.0}%",
+                kind.name(),
+                counts[i],
+                ms(exclusive[i]),
+                spec_pct
+            );
+            if let Some(label) = kind.data_label() {
+                line.push_str(&format!("  {} {}", human_count(data[i] as i64), label));
+                if kind == TraceKind::VmRun && data[i] > 0 {
+                    line.push_str(&format!(
+                        " ({:.2}us/instr)",
+                        trace.nanos(exclusive[i]) as f64 / 1e3 / data[i] as f64
+                    ));
+                }
+            }
+            if kind == TraceKind::Codegen {
+                line.push_str(&format!(
+                    "  wall {:.2}ms, cpu {:.2}ms",
+                    ms(codegen_wall),
+                    ms(codegen_cpu)
+                ));
+            }
+            writeln!(out, "{line}")?;
+        }
+        let untracked_ns = wall_ns.saturating_sub(trace.nanos(root_ticks));
+        writeln!(out, "\t{:<18} {:>8} {:>10.2}", "untracked", "", untracked_ns as f64 / 1e6)?;
 
-        writeln!(out, "\t{:.2}ms vm, avg {:.2}us/instr", vm_ms, vm_us_per_instr)?;
-        let total_ops: i64 = self.timing.opcode_counts.iter().sum();
+        let mut by_exclusive: Vec<(u64, FrameId)> = Vec::with_capacity(trace.frames.len());
+        for (id, frame) in trace.frames.iter_with_ids() {
+            by_exclusive.push((frame.exclusive_ticks(), id));
+        }
+        by_exclusive.sort_by_key(|(ticks, _)| std::cmp::Reverse(*ticks));
+        writeln!(out, "\ttop frames:")?;
+        for (ticks, id) in by_exclusive.iter().take(10) {
+            let frame = trace.frames.get(*id);
+            writeln!(
+                out,
+                "\t  {:>8.2}ms ({:>6.0}ms incl) {}",
+                ms(*ticks),
+                ms(frame.ticks()),
+                self.frame_title(frame)
+            )?;
+        }
+
+        let mut by_generic: FxHashMap<u32, (u64, u64)> = FxHashMap::default();
+        let mut by_requester: FxHashMap<(TraceKind, u32, u8), (u64, u64)> = FxHashMap::default();
+        for frame in trace.frames.iter() {
+            match frame.kind {
+                TraceKind::FunctionSpecialize => {
+                    let entry = by_generic.entry(frame.key).or_insert((0, 0));
+                    entry.0 += 1;
+                    entry.1 += frame.ticks();
+                    if let Some(requester) = self.requester_of(frame) {
+                        let unit_flag = requester.flags & FRAME_FLAG_EXPR_UNIT;
+                        let entry = by_requester
+                            .entry((requester.kind, requester.key, unit_flag))
+                            .or_insert((0, 0));
+                        entry.0 += 1;
+                        entry.1 += frame.ticks();
+                    }
+                }
+                TraceKind::FunctionTypecheck => {
+                    let function = self.get_function(FunctionId::from_u32(frame.key).unwrap());
+                    if let Some(info) = &function.specialization_info {
+                        let entry =
+                            by_generic.entry(info.parent_function.as_u32()).or_insert((0, 0));
+                        entry.1 += frame.ticks();
+                        if let Some(requester) = self.requester_of(frame) {
+                            let unit_flag = requester.flags & FRAME_FLAG_EXPR_UNIT;
+                            let entry = by_requester
+                                .entry((requester.kind, requester.key, unit_flag))
+                                .or_insert((0, 0));
+                            entry.1 += frame.ticks();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut generics: Vec<(u32, (u64, u64))> = by_generic.into_iter().collect();
+        generics.sort_by_key(|(_, (_, ticks))| std::cmp::Reverse(*ticks));
+        if !generics.is_empty() {
+            writeln!(out, "\ttop generics by specialization + body time:")?;
+            for (key, (count, ticks)) in generics.iter().take(10) {
+                writeln!(
+                    out,
+                    "\t  {:>8.2}ms {:>5} instances {}",
+                    ms(*ticks),
+                    count,
+                    self.function_label(FunctionId::from_u32(*key).unwrap())
+                )?;
+            }
+        }
+        let mut requesters: Vec<((TraceKind, u32, u8), (u64, u64))> =
+            by_requester.into_iter().collect();
+        requesters.sort_by_key(|(_, (_, ticks))| std::cmp::Reverse(*ticks));
+        if !requesters.is_empty() {
+            writeln!(out, "\ttop requesters of specializations (declaration + body time):")?;
+            for ((kind, key, unit_flag), (count, ticks)) in requesters.iter().take(10) {
+                let probe = TraceFrame {
+                    clock_start: 0,
+                    clock_end: 0,
+                    child_ticks: 0,
+                    data_count: 0,
+                    key: *key,
+                    parent_frame: None,
+                    requester_frame: None,
+                    kind: *kind,
+                    flags: *unit_flag,
+                };
+                writeln!(
+                    out,
+                    "\t  {:>8.2}ms {:>5} declared by {}",
+                    ms(*ticks),
+                    count,
+                    self.frame_title(&probe)
+                )?;
+            }
+        }
+
+        let total_ops: i64 = trace.opcode_counts.iter().sum();
         if total_ops > 0 {
             let mut counts: Vec<(crate::bc::Opcode, i64)> =
-                Vec::with_capacity(self.timing.opcode_counts.len());
-            for (i, n) in self.timing.opcode_counts.iter().enumerate() {
+                Vec::with_capacity(trace.opcode_counts.len());
+            for (i, n) in trace.opcode_counts.iter().enumerate() {
                 counts.push((crate::bc::Opcode::from_u8(i as u8), *n));
             }
             counts.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
@@ -429,11 +684,34 @@ impl TypedProgram {
             }
             writeln!(out, "\t  ops: {}", parts.join(", "))?;
         }
-        writeln!(
-            out,
-            "\t{:.2}ms ferry (static_value <-> vm memory)",
-            self.timing.total_ferry_nanos as f64 / 1_000_000.0
-        )?;
+        Ok(())
+    }
+
+    /// Folded stacks, one line per frame: `root;...;frame <exclusive nanos>`
+    pub fn write_trace_folded(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
+        let trace = &self.trace;
+        let mut labels: Vec<String> = Vec::with_capacity(trace.frames.len());
+        for frame in trace.frames.iter() {
+            labels.push(self.frame_title(frame).replace(';', ","));
+        }
+        let mut path: Vec<u32> = Vec::with_capacity(32);
+        for (id, frame) in trace.frames.iter_with_ids() {
+            path.clear();
+            path.push(id.as_u32());
+            let mut cursor = frame.parent_frame;
+            while let Some(parent) = cursor {
+                path.push(parent.as_u32());
+                cursor = trace.frames.get(parent).parent_frame;
+            }
+            let mut line = String::new();
+            for (i, key) in path.iter().rev().enumerate() {
+                if i > 0 {
+                    line.push(';');
+                }
+                line.push_str(&labels[*key as usize - 1]);
+            }
+            writeln!(out, "{line} {}", trace.nanos(frame.exclusive_ticks()))?;
+        }
         Ok(())
     }
 }

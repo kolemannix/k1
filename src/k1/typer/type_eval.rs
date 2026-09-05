@@ -1301,7 +1301,12 @@ impl TypedProgram {
         let args = self.intern_type_slice(type_arguments);
         match self.get_specialization(generic_type, args) {
             Some(existing) => existing,
-            None => self.instantiate_generic_type_miss(generic_type, args),
+            None => self.traced(
+                super::trace::TraceKind::TypeInstantiate,
+                generic_type.as_u32(),
+                0,
+                |k1| k1.instantiate_generic_type_miss(generic_type, args),
+            ),
         }
     }
 

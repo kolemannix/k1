@@ -1,6 +1,7 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
+use super::trace::{FrameId, TraceKind};
 use super::*;
 use crate::ice_span;
 
@@ -86,9 +87,15 @@ impl TypedProgram {
         }
     }
 
-    fn compile_function_for_exec(&mut self, function_id: FunctionId, span: SpanId) -> K1Result<()> {
-        self.require_function_body(function_id, span)?;
-        if let Err(e) = ir::compile_function(self, function_id) {
+    fn compile_function_for_exec(
+        &mut self,
+        function_id: FunctionId,
+        requester_frame: Option<FrameId>,
+        span: SpanId,
+    ) -> K1Result<()> {
+        if let Err(e) = ir::compile_function(self, function_id, requester_frame)
+            && self.get_function(function_id).body_failure.is_none()
+        {
             self.get_function_mut(function_id).body_failure = Some(e);
             self.report(e);
         }
@@ -97,20 +104,20 @@ impl TypedProgram {
 
     pub fn compile_all_pending_ir(&mut self, on_behalf_of_span: SpanId) -> K1Result<()> {
         loop {
-            if let Some(function_id) = self.ir.units_pending_compile.keys().next().copied() {
-                self.ir.units_pending_compile.remove(&function_id);
-                if let Err(e) = self.compile_function_for_exec(function_id, on_behalf_of_span) {
-                    self.ir.units_pending_compile.insert(function_id, ());
+            if let Some((function_id, requester)) = self.ir.units_pending_compile.pop() {
+                if let Err(e) =
+                    self.compile_function_for_exec(function_id, requester, on_behalf_of_span)
+                {
+                    self.ir.units_pending_compile.push(function_id, requester);
                     return Err(e);
                 }
-            } else if let Some(global_id) = self.ir.globals_pending_eval.keys().next().copied() {
-                self.ir.globals_pending_eval.remove(&global_id);
+            } else if let Some((global_id, ())) = self.ir.globals_pending_eval.pop() {
                 let ast_id = self.globals.get(global_id).ast_id;
                 if let Err(e) = self.eval_global_body(ast_id) {
                     self.report(e)
                 }
                 if let GlobalInitialValue::Failed(_) = self.globals.get(global_id).initial_value {
-                    self.ir.globals_pending_eval.insert(global_id, ());
+                    self.ir.globals_pending_eval.push(global_id, ());
                     kbail!(
                         self,
                         on_behalf_of_span,
@@ -223,22 +230,18 @@ impl TypedProgram {
         input_parameters: &[(VariableId, StaticValueId)],
     ) -> K1Result<StaticValueId> {
         let span = self.ast.exprs.get(parsed_expr).get_span();
-        let infer_start = if ctx.is_inference() { Some(self.timing.clock.raw()) } else { None };
-        let result = self.do_with_vm(span, |k1, vm| {
+        self.do_with_vm(span, ctx.trace_flags(), |k1, vm| {
             k1.execute_parsed_expr_with_vm(vm, parsed_expr, ctx, input_parameters)
-        });
-        if let Some(start) = infer_start {
-            self.timing.total_infer_execs += 1;
-            self.timing.total_infer_exec_nanos += self.timing.clock.elapsed_nanos(start) as i64;
-        }
-        result
+        })
     }
 
     pub(super) fn do_with_vm<T>(
         &mut self,
-        _span: SpanId,
+        span: SpanId,
+        trace_flags: u8,
         mut f: impl FnMut(&mut TypedProgram, &mut vm::Vm) -> T,
     ) -> T {
+        let frame = self.trace_push(TraceKind::StaticExec, span.as_u32(), trace_flags);
         let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
             None => {
                 let maybe_alt = self.vm_alts.pop();
@@ -261,7 +264,7 @@ impl TypedProgram {
             debug!("Restoring alt VM to pool");
             self.vm_alts.push(vm);
         }
-
+        self.trace_pop(frame);
         res
     }
 
@@ -271,7 +274,7 @@ impl TypedProgram {
         function_parameters: &[StaticValueId],
         span: SpanId,
     ) -> K1Result<StaticValueId> {
-        self.do_with_vm(span, |k1, vm| {
+        self.do_with_vm(span, 0, |k1, vm| {
             let result =
                 Self::static_exec_function_with_vm(k1, vm, function_id, function_parameters, span);
             vm.reset(k1.global_id_k1_arena);
@@ -284,7 +287,8 @@ impl TypedProgram {
         function_id: FunctionId,
         span: SpanId,
     ) -> K1Result<()> {
-        k1.compile_function_for_exec(function_id, span)?;
+        let requester = k1.trace.top();
+        k1.compile_function_for_exec(function_id, requester, span)?;
         k1.compile_all_pending_ir(span)?;
         ir::optimize_unit(k1, IrUnitId::Function(function_id));
         Ok(())
@@ -423,16 +427,16 @@ impl TypedProgram {
         if !self.globals.get(global_id).initial_value.is_pending() {
             return Ok(());
         }
-        if self.globals_in_progress.contains(&global_id) {
-            let global_name = |id: &TypedGlobalId| {
-                self.ident_str(self.variables.get(self.globals.get(*id).variable_id).name)
+        if self.trace.on_stack(TraceKind::GlobalEval, global_id.as_u32()) {
+            let global_name = |id: TypedGlobalId| {
+                self.ident_str(self.variables.get(self.globals.get(id).variable_id).name)
             };
             let mut cycle = String::new();
-            for id in self.globals_in_progress.iter() {
-                cycle.push_str(global_name(id));
+            for key in self.trace.stack_keys(TraceKind::GlobalEval) {
+                cycle.push_str(global_name(TypedGlobalId::from_u32(key).unwrap()));
                 cycle.push_str(" -> ");
             }
-            cycle.push_str(global_name(&global_id));
+            cycle.push_str(global_name(global_id));
             kbail!(
                 self,
                 self.ast.get_global(parsed_global_id).span,
@@ -440,11 +444,9 @@ impl TypedProgram {
                 cycle,
             );
         }
-        self.globals_in_progress.push(global_id);
-        let result =
-            self.with_clean_inference(|k1| k1.eval_global_body_inner(parsed_global_id, global_id));
-        let popped = self.globals_in_progress.pop();
-        debug_assert_eq!(popped, Some(global_id));
+        let result = self.traced(TraceKind::GlobalEval, global_id.as_u32(), 0, |k1| {
+            k1.with_clean_inference(|k1| k1.eval_global_body_inner(parsed_global_id, global_id))
+        });
         if let Err(e) = result {
             self.globals.get_mut(global_id).initial_value = GlobalInitialValue::Failed(e);
         }
@@ -1105,20 +1107,22 @@ impl TypedProgram {
                 Ok(StaticExecutionResult::TypedExpr(expr))
             }
             ParsedStaticBlockKind::Metaprogram => {
-                let emitted = self.do_with_vm(span, |k1, vm| {
-                    let result = (|| {
-                        let expr = k1.compile_parsed_expr_for_exec(
-                            base_expr,
-                            exec_ctx,
-                            &static_parameters,
-                        )?;
-                        let raw = bc::exec::execute_compiled_expr_raw(k1, vm, expr, true)?;
-                        Self::read_emitted_code_raw(k1, &raw, span, is_definition)
-                    })();
-                    vm.reset(k1.global_id_k1_arena);
-                    result
-                })?;
-                self.compile_emitted_code(emitted, span, ctx, is_definition)
+                self.traced(TraceKind::Metaprogram, span.as_u32(), ctx.trace_flags(), |k1| {
+                    let emitted = k1.do_with_vm(span, ctx.trace_flags(), |k1, vm| {
+                        let result = (|| {
+                            let expr = k1.compile_parsed_expr_for_exec(
+                                base_expr,
+                                exec_ctx,
+                                &static_parameters,
+                            )?;
+                            let raw = bc::exec::execute_compiled_expr_raw(k1, vm, expr, true)?;
+                            Self::read_emitted_code_raw(k1, &raw, span, is_definition)
+                        })();
+                        vm.reset(k1.global_id_k1_arena);
+                        result
+                    })?;
+                    k1.compile_emitted_code(emitted, span, ctx, is_definition)
+                })
             }
             ParsedStaticBlockKind::MacroCall => unreachable!(),
         }
@@ -1142,7 +1146,7 @@ impl TypedProgram {
         }
         #[cfg(debug_assertions)]
         k1.assert_code_layouts();
-        let ferry_start = k1.timing.clock.raw();
+        let frame = k1.trace_push(TraceKind::VmValueFerry, span.as_u32(), 0);
         let code = unsafe { *(raw.ret_addr as *const K1Code) };
         let chunks = unsafe {
             std::slice::from_raw_parts(
@@ -1151,7 +1155,7 @@ impl TypedProgram {
             )
         };
         let emitted = k1.build_emitted_source(span, is_definition, chunks);
-        k1.timing.total_ferry_nanos += k1.timing.elapsed_nanos(ferry_start) as i64;
+        k1.trace_pop(frame);
         emitted
     }
 
@@ -1275,8 +1279,11 @@ impl TypedProgram {
 
         let parse_kind =
             if is_definition { ParseAdHocKind::Definitions } else { ParseAdHocKind::Expr };
+        let module_id = self.module_of_span(span);
         let parsed_metaprogram =
-            self.parse_metaprogram_source(self.module_of_span(span), source_for_emission, parse_kind)?;
+            self.traced(TraceKind::Parse, generated_path.as_u32(), 0, |k1| {
+                k1.parse_metaprogram_source(module_id, source_for_emission, parse_kind)
+            })?;
         match parsed_metaprogram {
             ParseMetaprogramResult::Expr(parsed_expr_id) => {
                 if let Some(hash) = content_hash {
@@ -1352,6 +1359,20 @@ impl TypedProgram {
     }
 
     pub(super) fn execute_macro_call(
+        &mut self,
+        type_args: &[NamedTypeArg],
+        args: &[ParsedCallArg],
+        span: SpanId,
+        function_id: FunctionId,
+        is_definition: bool,
+        ctx: EvalExprContext,
+    ) -> K1Result<StaticExecutionResult> {
+        self.traced(TraceKind::MacroCall, function_id.as_u32(), ctx.trace_flags(), |k1| {
+            k1.execute_macro_call_body(type_args, args, span, function_id, is_definition, ctx)
+        })
+    }
+
+    fn execute_macro_call_body(
         &mut self,
         type_args: &[NamedTypeArg],
         args: &[ParsedCallArg],
@@ -1479,7 +1500,7 @@ impl TypedProgram {
         is_definition: bool,
         ctx: EvalExprContext,
     ) -> K1Result<StaticExecutionResult> {
-        let emitted = self.do_with_vm(span, |k1, vm| {
+        let emitted = self.do_with_vm(span, ctx.trace_flags(), |k1, vm| {
             let result =
                 Self::macro_emit_with_vm(k1, vm, function_id, static_args, span, is_definition);
             vm.reset(k1.global_id_k1_arena);

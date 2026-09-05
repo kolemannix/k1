@@ -304,6 +304,7 @@ impl Backend {
             k1_home_override: None,
             command: k1::compiler::Command::Check { file: Some(root_path) },
             dump_idents: false,
+            dump_trace: false,
         };
 
         let my_generation = self.completion_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -451,6 +452,7 @@ impl Backend {
             k1_home_override: None,
             command: k1::compiler::Command::Check { file: Some(src_path) },
             dump_idents: false,
+            dump_trace: false,
         };
         let compile_result = k1::compiler::compile_program(&args);
         let compiled_module = match compile_result {

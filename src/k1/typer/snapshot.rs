@@ -30,19 +30,12 @@ pub(crate) fn inputs_hash_from_settings(
         optimize,
         emit_llvm: _,
         chatty: _,
+        record_trace: _,
         optimize_ir,
         cache: _,
     } = config;
-    let flags = [
-        *no_std,
-        *debug,
-        *sanitize,
-        *filc,
-        *optimize,
-        *optimize_ir,
-        cfg!(feature = "lsp"),
-    ]
-    .map(|b| b as u8);
+    let flags = [*no_std, *debug, *sanitize, *filc, *optimize, *optimize_ir, cfg!(feature = "lsp")]
+        .map(|b| b as u8);
     crate::snap::InputsHash(0).add(&[
         crate::BUILD_ID.as_bytes(),
         idents.get_string(*src_path).as_bytes(),
@@ -109,7 +102,6 @@ impl TypedProgram {
             function_ast_mappings,
             macro_ast_mappings,
             global_ast_mappings,
-            globals_in_progress,
             ability_impl_ast_mappings,
             debug_level_stack: _,
             uses_pending_resolution,
@@ -136,7 +128,7 @@ impl TypedProgram {
             tmp: _,
             ir,
             bc: _,
-            timing: _,
+            trace: _,
             global_id_k1_arena,
             megarepl,
             inputs_hash: _,
@@ -195,7 +187,6 @@ impl TypedProgram {
         write_map_snap(w, global_ast_mappings);
         write_map_snap(w, ability_impl_ast_mappings);
 
-        assert!(globals_in_progress.is_empty());
         assert!(uses_pending_resolution.is_empty());
         assert!(types_pending_definition.is_empty());
         assert!(module_in_progress.is_none());
@@ -225,16 +216,39 @@ impl TypedProgram {
         // lets us preserve settings like chatty, cache, overrides, completion
         config: CompilerConfig,
         lsp: crate::compiler::LspCompileOptions,
+        load: (u64, u64),
+        live: bool,
     ) -> Result<TypedProgram, String> {
+        use crate::typer::trace::{TraceKind, restore_section};
+        let clock = crate::clock::Clock::new();
+        let ast_start = clock.raw();
         let mut reader = SnapReader::new(bytes)?;
         let r = &mut reader;
         let ast = ParsedProgram::restore(r);
+        let ast_end = clock.raw();
         let mut k1 = TypedProgram::new(ast, config, lsp);
+        k1.trace.live = live;
+        let root = k1.trace_push(TraceKind::SnapRestore, 0, 0);
+        if let Some(root) = root {
+            k1.trace.frames.get_mut(root).clock_start = load.0;
+        }
+        let load_section = restore_section("load");
+        k1.trace.record(TraceKind::SnapRestoreSection, load_section, root, load.0, load.1, 0, 0);
+        let ast_section = restore_section("ast");
+        k1.trace.record(TraceKind::SnapRestoreSection, ast_section, root, ast_start, ast_end, 0, 0);
         r.section("typed");
+
+        let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("mem"), 0);
         k1.mem.restore(r);
+        k1.trace_pop(section);
+
+        let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("modules"), 0);
         k1.modules.restore(r);
         k1.modules_completed = r.read_vec();
         k1.program_settings = r.read_t();
+        k1.trace_pop(section);
+
+        let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("functions"), 0);
         k1.functions.restore(r);
         for (id, function) in k1.functions.iter_with_ids() {
             if let Some(info) = function.specialization_info {
@@ -243,6 +257,9 @@ impl TypedProgram {
                     .or_insert(id);
             }
         }
+        k1.trace_pop(section);
+
+        let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("types"), 0);
         k1.variables.restore(r);
         k1.types.restore(r);
         k1.type_hashes = restore_map_snap(r);
@@ -258,7 +275,13 @@ impl TypedProgram {
         k1.agg_types.restore(r);
         k1.lambda_types.restore(r);
         k1.type_idents = r.read_t();
+        k1.trace_pop(section);
+
+        let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("globals"), 0);
         k1.globals.restore(r);
+        k1.trace_pop(section);
+
+        let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("exprs"), 0);
         k1.exprs.exprs.restore(r);
         k1.exprs.type_ids.restore(r);
         k1.exprs.spans.restore(r);
@@ -266,7 +289,14 @@ impl TypedProgram {
         k1.stmts.restore(r);
         k1.static_values.restore(r);
         k1.type_infos = restore_map_snap(r);
+        k1.trace_pop(section);
+
+        let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("scopes"), 0);
         k1.scopes = Scopes::restore(r);
+        k1.trace_pop(section);
+
+        let section =
+            k1.trace_push(TraceKind::SnapRestoreSection, restore_section("namespaces"), 0);
         k1.messages = RefCell::new(r.read_vec());
         let mut ls_entities = FxHashMap::default();
         for _ in 0..r.read_len() {
@@ -290,8 +320,17 @@ impl TypedProgram {
         k1.patterns.mem.restore(r);
         k1.emitted_sources = r.read_vec();
         k1.emitted_parse_cache.clear();
+        k1.trace_pop(section);
+
+        let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("ir"), 0);
         k1.ir.restore(r);
         k1.global_id_k1_arena = r.read_t();
+        k1.trace_pop(section);
+
+        k1.trace_pop(root);
+        if let Some(root) = root {
+            k1.trace.frames.get_mut(root).key = k1.modules.len() as u32;
+        }
         r.section("end");
         assert!(r.is_done(), "snapshot has {} trailing bytes", bytes.len() - r.pos());
         Ok(k1)
@@ -306,22 +345,20 @@ impl TypedProgram {
         {
             return;
         }
-        let snap_start = std::time::Instant::now();
+        let frame = self.trace_push(crate::typer::trace::TraceKind::SnapRoundtrip, 0, 0);
         let first = self.snap();
-        let mut restored = match TypedProgram::restore(&first, self.config, self.lsp.clone()) {
-            Ok(restored) => restored,
-            Err(e) => panic!("snapshot restore failed: {e}"),
-        };
-        eprintln!(
-            "roundtripping {}mb snapshot took ({:?})",
-            first.len() as f64 / (1024.0 * 1024.0),
-            snap_start.elapsed()
-        );
+        let now = self.trace.clock.raw();
+        let mut restored =
+            match TypedProgram::restore(&first, self.config, self.lsp.clone(), (now, now), false) {
+                Ok(restored) => restored,
+                Err(e) => panic!("snapshot restore failed: {e}"),
+            };
         let second = restored.snap();
         crate::snap::assert_identical(&first, &second, "TypedProgram snapshot roundtrip");
         restored.inputs_hash = self.inputs_hash;
         restored.restored_module_count = self.restored_module_count;
-        std::mem::swap(&mut restored.timing, &mut self.timing);
+        std::mem::swap(&mut restored.trace, &mut self.trace);
         std::mem::swap(self, &mut restored);
+        self.trace_pop(frame);
     }
 }

@@ -496,9 +496,7 @@ type buffer-iterator[t] = {
   pos: size
 }
 ns for buffer-iterator {
-  fn from-buffer[t](buf: buffer[t]): buffer-iterator[t] { 
-    .{ buf, pos = 0 }
-  }
+  fn(inline) from-buffer[t](buf: buffer[t]): buffer-iterator[t] { .{ buf, pos = 0 } }
 }
 
 impl[t] iterator[item = t] for buffer-iterator[t] {

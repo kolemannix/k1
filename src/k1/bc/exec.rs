@@ -14,6 +14,7 @@ use std::num::NonZeroU32;
 
 use crate::ir::{self, BackendBuiltin, IrUnitId};
 use crate::lex::SpanId;
+use crate::typer::trace::TraceKind;
 use crate::typer::types::{PhysicalType, RecordKind, TypeId};
 use crate::typer::{FunctionId, K1Result, StaticValueId, TypedExprId, TypedGlobalId, TypedProgram};
 use crate::vm::{
@@ -100,10 +101,10 @@ pub fn execute_compiled_unit(
     if !raw.returns_value {
         return Ok(k1.static_values.add_empty_typed(raw.result_type_id));
     }
-    let ferry_start = k1.timing.clock.raw();
+    let frame = k1.trace_push(TraceKind::VmValueFerry, span.as_u32(), 0);
     let loaded = load_value(raw.ret_pt, raw.ret_addr);
     let result = vm::vm_value_to_static_value(k1, raw.result_type_id, loaded, span);
-    k1.timing.total_ferry_nanos += k1.timing.elapsed_nanos(ferry_start) as i64;
+    k1.trace_pop(frame);
     result
 }
 
@@ -118,13 +119,10 @@ pub fn execute_compiled_unit_raw(
     vm.eval_span = span;
     vm.bc_fault = None;
 
-    let bcgen_start = k1.timing.clock.raw();
     let info = lower::get_or_lower_unit(k1, unit_id, span)?;
-    k1.timing.total_bcgen_nanos += k1.timing.elapsed_nanos(bcgen_start) as i64;
     if info.kind != UnitKind::Body {
         kbail!(k1, span, "Cannot execute a bodyless ({}) unit", info.kind);
     }
-    let start = k1.timing.clock.raw();
     let ir_unit = ir::get_compiled_unit(&k1.ir, unit_id).unwrap();
     let result_type_id = ir_unit.result_type_id;
     let ret_pt = info.ret_pt;
@@ -138,7 +136,7 @@ pub fn execute_compiled_unit_raw(
     let align_mask = super::FRAME_ALIGN as usize - 1;
     let fp0: *mut u8 = vm.stack.mem.cursor().map_addr(|a| (a + align_mask) & !align_mask);
     vm.stack.mem.set_cursor(fp0);
-    let ferry_start = k1.timing.clock.raw();
+    let ferry_frame = k1.trace_push(TraceKind::VmValueFerry, span.as_u32(), 0);
     unsafe {
         let words = fp0 as *mut u64;
         words.write(0); // caller_fp: none
@@ -150,13 +148,11 @@ pub fn execute_compiled_unit_raw(
             words.add(super::FRAME_HEADER_WORDS as usize + i).write(vm_value.bits());
         }
     }
-    let ferry_in_nanos = k1.timing.elapsed_nanos(ferry_start) as i64;
-    k1.timing.total_ferry_nanos += ferry_in_nanos;
+    k1.trace_pop(ferry_frame);
 
+    let run_frame = k1.trace_push_unit(TraceKind::VmRun, unit_id, None);
     let exec_result = exec_loop(k1, vm, info.code_start, fp0, ret_pt);
-
-    let elapsed_nanos = k1.timing.elapsed_nanos(start);
-    k1.timing.total_vm_nanos += elapsed_nanos as i64 - ferry_in_nanos;
+    k1.trace_pop(run_frame);
 
     let exit_code = match exec_result {
         Ok(exit_code) => exit_code,
@@ -384,10 +380,10 @@ fn exec_loop(
                 if !top_ret_pt.is_empty() && !top_ret_pt.is_agg() {
                     store_value(k1, top_ret_pt, vm.overall_return_addr, ret_reg);
                 }
-                k1.timing.total_vm_instrs += instrs_run;
+                k1.trace.set_top_count(instrs_run as u64);
                 if count_ops {
                     for (i, n) in op_counts.iter().enumerate() {
-                        k1.timing.opcode_counts[i] += *n as i64;
+                        k1.trace.opcode_counts[i] += *n as i64;
                     }
                 }
                 return Ok(0);
@@ -492,13 +488,7 @@ fn exec_loop(
                             k1.function_id_to_string(function_id, false)
                         );
                         vm.eval_span = k1.bc.span_for_pc(pc_u32!());
-                        let bcgen_start = k1.timing.clock.raw();
-                        let info =
-                            vmtry!(lower::get_or_lower_function(k1, function_id, vm.eval_span));
-                        let elapsed = k1.timing.elapsed_nanos(bcgen_start) as i64;
-                        k1.timing.total_bcgen_nanos += elapsed;
-                        k1.timing.total_vm_nanos -= elapsed;
-                        info
+                        vmtry!(lower::get_or_lower_function(k1, function_id, vm.eval_span))
                     }
                 };
                 if info.kind != UnitKind::Body {

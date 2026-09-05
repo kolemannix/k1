@@ -19,6 +19,7 @@ mod rawref;
 pub mod server;
 pub mod snap;
 pub mod typer;
+mod unique_stack;
 mod vecpool;
 pub mod vm;
 mod vpool;

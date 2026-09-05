@@ -44,7 +44,7 @@ ns secret {
   fn before() {}
 }
 
-ns foo {
+ns for foo {
   ns core {
     type nested = either { a, b }
     ns for nested {

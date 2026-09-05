@@ -12,6 +12,8 @@ use crate::kmem::{DlNode, Dlist, Handle, List, NodeHandle};
 use crate::parse::{self, NumericWidth, StringId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
+use crate::typer::trace::{FrameId, TraceKind};
+use crate::unique_stack::UniqueStack;
 use crate::{kbail, kerr, static_assert_size};
 use crate::{
     kmem::{self, MSlice},
@@ -68,10 +70,8 @@ pub struct ProgramIr {
     // Builder data
     b_variables: FxHashMap<VariableId, BuilderVariable>,
     b_loops: FxHashMap<ScopeId, LoopInfo>,
-    pub units_pending_compile: FxHashMap<FunctionId, ()>,
-    pub globals_pending_eval: FxHashMap<TypedGlobalId, ()>,
-    units_in_progress: FxHashSet<FunctionId>,
-    lowering_depth: u32,
+    pub units_pending_compile: UniqueStack<FunctionId, Option<FrameId>>,
+    pub globals_pending_eval: UniqueStack<TypedGlobalId>,
 
     opt_buf_visit_stack: Vec<iropt::OptVisit>,
     opt_buf_visited: FxHashSet<IrUnitId>,
@@ -105,8 +105,6 @@ impl ProgramIr {
             b_loops: _,
             units_pending_compile,
             globals_pending_eval,
-            units_in_progress,
-            lowering_depth: _,
             opt_buf_visit_stack: _,
             opt_buf_visited: _,
             opt_buf_callees: _,
@@ -129,7 +127,6 @@ impl ProgramIr {
         vec_ops.snap(w);
         assert!(units_pending_compile.is_empty());
         assert!(globals_pending_eval.is_empty());
-        assert!(units_in_progress.is_empty());
     }
 
     pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
@@ -359,11 +356,8 @@ impl ProgramIr {
             module_config: IrModuleConfig {},
             b_variables: FxHashMap::new(),
             b_loops: FxHashMap::default(),
-            units_pending_compile: FxHashMap::new(),
-            globals_pending_eval: FxHashMap::new(),
-
-            units_in_progress: FxHashSet::default(),
-            lowering_depth: 0,
+            units_pending_compile: UniqueStack::new(),
+            globals_pending_eval: UniqueStack::new(),
             opt_buf_visit_stack: vec![],
             opt_buf_visited: FxHashSet::default(),
             opt_buf_callees: vec![],
@@ -751,7 +745,8 @@ fn add_call(k1: &mut TypedProgram, call: IrCall) -> IrCallId {
     if let Some(function_id) = call.callee.known_function_id()
         && !k1.ir.functions.contains_key(&function_id)
     {
-        k1.ir.units_pending_compile.entry(function_id).or_insert(());
+        let requester = k1.trace.top();
+        k1.ir.units_pending_compile.push(function_id, requester);
     }
     k1.ir.calls.add(call)
 }
@@ -1509,11 +1504,15 @@ impl InstKind {
     }
 }
 
-pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Result<()> {
+pub fn compile_function(
+    k1: &mut TypedProgram,
+    function_id: FunctionId,
+    requester_frame: Option<FrameId>,
+) -> K1Result<()> {
     if k1.ir.functions.contains_key(&function_id) {
         return Ok(());
     }
-    if !k1.ir.units_in_progress.insert(function_id) {
+    if k1.trace.on_stack(TraceKind::IrLower, function_id.as_u32()) {
         kbail!(
             k1,
             k1.get_function_span(function_id),
@@ -1521,14 +1520,14 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
             k1.function_id_to_string(function_id, false)
         );
     }
-    let start = k1.timing.clock.raw();
-    k1.ir.lowering_depth += 1;
-    let result = compile_function_body(k1, function_id);
-    k1.ir.lowering_depth -= 1;
-    k1.ir.units_in_progress.remove(&function_id);
-    if k1.ir.lowering_depth == 0 {
-        k1.timing.total_ir_nanos += k1.timing.elapsed_nanos(start) as i64;
-    }
+    let frame =
+        k1.trace_push_unit(TraceKind::IrLower, IrUnitId::Function(function_id), requester_frame);
+    let span = k1.get_function_span(function_id);
+    let result = match k1.require_function_body(function_id, span) {
+        Ok(()) => compile_function_body(k1, function_id),
+        Err(e) => Err(e),
+    };
+    k1.trace_pop(frame);
     result
 }
 
@@ -1623,13 +1622,9 @@ pub fn compile_top_level_expr(
     input_parameters: &[(VariableId, StaticValueId)],
     is_debug: bool,
 ) -> K1Result<()> {
-    let start = k1.timing.clock.raw();
-    k1.ir.lowering_depth += 1;
+    let frame = k1.trace_push_unit(TraceKind::IrLower, IrUnitId::Expr(expr), None);
     let result = compile_top_level_expr_body(k1, expr, input_parameters, is_debug);
-    k1.ir.lowering_depth -= 1;
-    if k1.ir.lowering_depth == 0 {
-        k1.timing.total_ir_nanos += k1.timing.elapsed_nanos(start) as i64;
-    }
+    k1.trace_pop(frame);
     result
 }
 
@@ -1707,7 +1702,8 @@ fn finalize_unit(
     iropt::cfg_compute_unit(&mut b.k1.ir, unit_id);
     iropt::cfg_simplify(b.k1, unit_id);
     let blocks = get_compiled_unit(&b.k1.ir, unit_id).unwrap().blocks;
-    get_compiled_unit_mut(&mut b.k1.ir, unit_id).unwrap().inst_count = count_insts(&b.k1.ir, blocks);
+    get_compiled_unit_mut(&mut b.k1.ir, unit_id).unwrap().inst_count =
+        count_insts(&b.k1.ir, blocks);
     if cfg!(debug_assertions) {
         validate_unit(b.k1, unit_id)?;
     }
@@ -1799,7 +1795,11 @@ impl<'k1> Builder<'k1> {
         self.last_alloca = if self.last_alloca.is_nil() {
             self.k1.ir.mem.dlist_push_front(&mut first_block.data.instrs, inst_id)
         } else {
-            self.k1.ir.mem.dlist_insert_after(&mut first_block.data.instrs, self.last_alloca, inst_id)
+            self.k1.ir.mem.dlist_insert_after(
+                &mut first_block.data.instrs,
+                self.last_alloca,
+                inst_id,
+            )
         };
         inst_id
     }
@@ -2623,7 +2623,8 @@ fn compile_expr(
             }
             debug_assert_eq!(callee_fn_type.params.len(), args.len() as u32);
             let args_handle = args.to_slice();
-            let ir_call = IrCall { ret_type: callee_fn_type.return_type, callee, args: args_handle, dst };
+            let ir_call =
+                IrCall { ret_type: callee_fn_type.return_type, callee, args: args_handle, dst };
             if let IrCallee::Direct(function_id) = callee
                 && b.k1.get_function(function_id).is_inline()
             {
@@ -3010,14 +3011,16 @@ fn compile_expr(
             let l = b.k1.lambda_types.get(lambda_type_id);
             let function_id = l.function_id;
             let env_struct = l.environment_struct;
-            b.k1.ir.units_pending_compile.insert(function_id, ());
+            let requester = b.k1.trace.top();
+            b.k1.ir.units_pending_compile.push(function_id, requester);
             compile_expr(b, dst, env_struct)
         }
         TypedExpr::FunctionPointer(fpe) => {
             let fp = Value::FunctionAddr(fpe.function_id);
             let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
             let stored = store_rich_if_dst(b, dst, ptr_pt, fp, IrComment::DeliverFnPointer);
-            b.k1.ir.units_pending_compile.insert(fpe.function_id, ());
+            let requester = b.k1.trace.top();
+            b.k1.ir.units_pending_compile.push(fpe.function_id, requester);
             Ok(stored)
         }
         TypedExpr::StaticValue(stat) => {
@@ -3155,7 +3158,7 @@ fn compile_variable_to_address(
             let global = b.k1.globals.get(global_id).clone();
             if global.initial_value.is_pending() {
                 // We'll need to compile this global's body before we can execute this ir unit
-                b.k1.ir.globals_pending_eval.entry(global_id).or_insert(());
+                b.k1.ir.globals_pending_eval.push(global_id, ());
             }
             // We typically generate an instruction
             // representing the **address** of the global, because they are always

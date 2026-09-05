@@ -1,6 +1,7 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
+use super::trace::TraceKind;
 /// Inference in the `typer` phase.
 ///
 /// Obviously the lines are really blurry, and I honestly might just prefer to leave everything in
@@ -83,11 +84,7 @@ impl TypedProgram {
         }
 
         self.ictx_mut().origin_stack.push(span);
-        if self.ictx().origin_stack.len() == 1 && self.config.chatty {
-            let raw = self.timing.clock.raw();
-            self.ictx_mut().start_raw = raw;
-        }
-
+        let frame = self.trace_push(TraceKind::TypeInfer, span.as_u32(), 0);
         let result = self.infer_types_inner(
             all_type_params,
             must_solve_params,
@@ -97,14 +94,10 @@ impl TypedProgram {
             stash,
         );
 
+        self.trace_pop(frame);
         let popped = self.ictx_mut().origin_stack.pop().unwrap();
         debug_assert_eq!(popped, span);
         if self.ictx().origin_stack.is_empty() {
-            if self.config.chatty {
-                let elapsed = self.timing.clock.elapsed_nanos(self.ictx().start_raw);
-                self.timing.total_infer_nanos += elapsed as i64;
-            }
-            self.timing.total_infers += 1;
             debug!("Resetting inference context");
             self.ictx_pop();
         }

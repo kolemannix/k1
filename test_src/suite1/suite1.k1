@@ -101,16 +101,38 @@ fn moderate() {
 fn core-lib() {
   // core lib coverage
   for_yield_test/test()
+  #static for_yield_test/test()
+
   allocator_test/test()
+  #static allocator_test/test()
+
   iterator_tests/test()
+  #static iterator_tests/test()
+
   buffer_test/test()
+  #static buffer_test/test()
+
   as_buffer/test()
+  #static as_buffer/test()
+
   ability_deref_self/test()
+  #static ability_deref_self/test()
+
   string_test/test()
+  #static string_test/test()
+
   list_test/test()
+  #static list_test/test()
+
   range_test/test()
+  #static range_test/test()
+
   string_interp_test/test()
+  #static string_interp_test/test()
+
   lib_compiler_test/test()
+  #static lib_compiler_test/test()
+
 }
 
 // Compiler Core test coverage, ideally increasing complexity
@@ -133,7 +155,6 @@ fn main(): i32 {
   test_macro/test()
 
   core-lib()
-  #static core-lib()
 
   println("[suite1] All tests passed!")
 

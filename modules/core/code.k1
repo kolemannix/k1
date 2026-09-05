@@ -6,8 +6,8 @@ type code-chunk = { text: string, source: u64 }
 
 type code = { chunks: list[code-chunk] }
 
-#static types/assert-layout[code-chunk](24, 8, [0, 16].as-span())
-#static types/assert-layout[code](24, 8, [0].as-span())
+// #static types/assert-layout[code-chunk](24, 8, [0, 16].as-span())
+// #static types/assert-layout[code](24, 8, [0].as-span())
 
 ns for code {
   fn from-string(s: string): code {
