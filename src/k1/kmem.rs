@@ -215,6 +215,18 @@ pub struct MSlice<T, Tag = ()> {
 }
 static_assert_size!(MSlice<u128, ()>, 8);
 impl<T, Tag> Copy for MSlice<T, Tag> {}
+impl<T, Tag> PartialEq for MSlice<T, Tag> {
+    fn eq(&self, other: &Self) -> bool {
+        self.offset == other.offset && self.count == other.count
+    }
+}
+impl<T, Tag> Eq for MSlice<T, Tag> {}
+impl<T, Tag> std::hash::Hash for MSlice<T, Tag> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.offset.hash(state);
+        self.count.hash(state);
+    }
+}
 impl<T, Tag> Clone for MSlice<T, Tag> {
     fn clone(&self) -> Self {
         *self

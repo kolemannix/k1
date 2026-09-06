@@ -920,7 +920,7 @@ impl TypedProgram {
 
     pub(super) fn eval_match_expr(
         &mut self,
-        match_expr_id: ParsedExprId,
+        parsed_match: parse::ParsedMatch,
         ctx: EvalExprContext,
         check_exhaustive: bool,
         allow_bindings: bool,
@@ -942,10 +942,6 @@ impl TypedProgram {
             }
         }
 
-        let parsed_match = *self.ast.exprs.get(match_expr_id).as_match().unwrap();
-        if parsed_match.is_static {
-            return self.eval_static_match_expr(match_expr_id, ctx);
-        };
         if parsed_match.cases.is_empty() {
             return self.make_fail(
                 "match with no arms; note `x is {}` is an empty match, `x is .{}` matches the empty struct",

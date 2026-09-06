@@ -1044,11 +1044,8 @@ impl TypedProgram {
         };
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
         for param in self.ast.mem.getn(stat.parameter_names) {
-            let variable_expr = self.ast.exprs.add(ParsedExpr::Variable(ParsedVariable {
-                name: QIdent::naked(param.name, param.span),
-                span: param.span,
-            }));
-            let (variable_id, variable_expr) = self.eval_variable(variable_expr, ctx, false)?;
+            let param_name = QIdent::naked(param.name, param.span);
+            let (variable_id, variable_expr) = self.eval_variable_named(param_name, ctx, false)?;
             let Some(variable_id) = variable_id else {
                 kbail!(self, param.span, "Must be a plain variable");
             };

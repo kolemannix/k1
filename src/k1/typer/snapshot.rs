@@ -95,6 +95,7 @@ impl TypedProgram {
             ability_impls,
             ability_impl_table,
             ability_impl_table_by_ability,
+            core_fns_by_name: _,
             blanket_impls,
             function_name_to_ability_names,
             namespace_type_params,

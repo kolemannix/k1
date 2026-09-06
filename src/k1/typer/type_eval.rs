@@ -394,17 +394,18 @@ impl TypedProgram {
 
                 Ok(type_id)
             }
-            ParsedTypeExpr::TypeApplication(_ty_app) => {
+            ParsedTypeExpr::TypeApplication(ty_app) => {
+                let ty_app = *ty_app;
                 let type_op_result =
                     self.detect_and_eval_type_operator(type_expr_id, scope_id, context)?;
                 match type_op_result {
-                    None => self.eval_type_application(type_expr_id, scope_id, context),
+                    None => self.eval_type_application(ty_app, scope_id, context),
                     Some(type_op_result) => Ok(type_op_result),
                 }
             }
             ParsedTypeExpr::Optional(opt) => {
                 // Rewrite the sugar and compile the parsed
-                let parsed_ty_app = ParsedTypeExpr::TypeApplication(parse::TypeApplication {
+                let opt_app = parse::TypeApplication {
                     span: opt.span,
                     name: QIdent::naked(self.ast.idents.b.opt, opt.span),
                     args: self.ast.mem.pushn(&[NamedTypeArg {
@@ -412,9 +413,8 @@ impl TypedProgram {
                         type_expr: Some(opt.base),
                         span: opt.span,
                     }]),
-                });
-                let parsed_ty_app_id = self.ast.type_exprs.add(parsed_ty_app);
-                self.eval_type_expr(parsed_ty_app_id, scope_id)
+                };
+                self.eval_type_application(opt_app, scope_id, EvalTypeExprContext::EMPTY)
             }
             ParsedTypeExpr::Reference(r) => {
                 let inner_ty = self.eval_type_expr_ext(r.base, scope_id, context.descended())?;
@@ -1077,14 +1077,10 @@ impl TypedProgram {
 
     pub(super) fn eval_type_application(
         &mut self,
-        ty_app_id: ParsedTypeExprId,
+        ty_app: parse::TypeApplication,
         scope_id: ScopeId,
         context: EvalTypeExprContext,
     ) -> K1Result<TypeId> {
-        let ParsedTypeExpr::TypeApplication(ty_app) = *self.ast.type_exprs.get(ty_app_id) else {
-            panic_at_disco!("Expected TypeApplication")
-        };
-
         if self.string_is_completion_marker(ty_app.name.name, false) {
             self.record_qident_completion_site(scope_id, &ty_app.name);
             return Ok(NEVER_TYPE_ID);
@@ -1286,7 +1282,7 @@ impl TypedProgram {
                         );
 
                         let _result = self.eval_type_defn(pending_parsed_id, pending_scope_id)?;
-                        self.eval_type_application(ty_app_id, scope_id, context)
+                        self.eval_type_application(ty_app, scope_id, context)
                     }
                 }
             },
