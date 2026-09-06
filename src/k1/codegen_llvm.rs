@@ -4434,6 +4434,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Some(existing) => {
                 if !is_definition {
                     Some(existing)
+                } else if existing.count_basic_blocks() == 0 {
+                    Some(existing)
                 } else {
                     cgbail!(
                         self.k1.ast.get_span_for_id(typed_function.parsed_id),
@@ -4477,7 +4479,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         )?;
         let is_sret = llvm_function_type.is_sret;
 
-        if let Some(existing) = existing_declaration {
+        let function_value = if let Some(existing) = existing_declaration {
             if existing.get_type() != llvm_function_type.llvm_function_type {
                 cgbail!(
                     function_span,
@@ -4485,29 +4487,32 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     llvm_name
                 );
             }
-            self.llvm_functions.insert(
-                function_id,
-                CgFunction {
-                    param_values: Vec::with_capacity(
-                        llvm_function_type.param_k1_types.len() as usize
-                    ),
-                    function_type: llvm_function_type,
-                    function_value: existing,
-                    blocks: FxHashMap::new(),
-                    last_alloca_instr: None,
-                    returned_sret_variable: None,
-                    debug_info: di_subprogram,
-                    debug_file: di_file,
-                },
-            );
-            return Ok(existing);
-        }
-
-        let function_value = self.llvm_module.add_function(
-            &llvm_name,
-            llvm_function_type.llvm_function_type,
-            Some(llvm_linkage),
-        );
+            if !is_definition {
+                self.llvm_functions.insert(
+                    function_id,
+                    CgFunction {
+                        param_values: Vec::with_capacity(
+                            llvm_function_type.param_k1_types.len() as usize
+                        ),
+                        function_type: llvm_function_type,
+                        function_value: existing,
+                        blocks: FxHashMap::new(),
+                        last_alloca_instr: None,
+                        returned_sret_variable: None,
+                        debug_info: di_subprogram,
+                        debug_file: di_file,
+                    },
+                );
+                return Ok(existing);
+            }
+            existing
+        } else {
+            self.llvm_module.add_function(
+                &llvm_name,
+                llvm_function_type.llvm_function_type,
+                Some(llvm_linkage),
+            )
+        };
         if abi_mode == AbiMode::Internal {
             function_value.set_call_conventions(LLVM_CALL_CONV_FAST);
         }
