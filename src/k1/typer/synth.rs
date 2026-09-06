@@ -40,15 +40,24 @@ impl TypedProgram {
         else {
             self.ice_span(span, "got abstract equals impl")
         };
+        self.synth_static_call(*equals_function_id, &[lhs, rhs], BOOL_TYPE_ID, span)
+    }
+
+    pub(super) fn synth_static_call(
+        &mut self,
+        function_id: FunctionId,
+        args: &[TypedExprId],
+        return_type: TypeId,
+        span: SpanId,
+    ) -> TypedExprId {
         let call_id = self.calls.add(Call {
-            callee: Callee::StaticFunction(*equals_function_id),
-            args: self.mem.pushn(&[lhs, rhs]),
+            callee: Callee::StaticFunction(function_id),
+            args: self.mem.pushn(args),
             type_args: TypeArgs::empty(),
-            return_type: BOOL_TYPE_ID,
+            return_type,
             span,
         });
-        let expr_id = self.exprs.add(TypedExpr::Call { call_id }, BOOL_TYPE_ID, span);
-        expr_id
+        self.exprs.add(TypedExpr::Call { call_id }, return_type, span)
     }
 
     pub(super) fn synth_add_call(
@@ -346,18 +355,6 @@ impl TypedProgram {
         let call_id = self.synth_parsed_function_call(name, &[], &[], is_method);
         let call = self.ast.exprs.get(call_id).expect_call().clone();
         self.eval_function_call(&call, Some((type_args, args)), ctx, None)
-    }
-
-    pub(super) fn synth_typed_call_parsed_args(
-        &mut self,
-        name: QIdent,
-        type_args: &[ParsedTypeExprId],
-        args: &[ParsedExprId],
-        ctx: EvalExprContext,
-    ) -> K1Result<TypedExprId> {
-        let call_id = self.synth_parsed_function_call(name, type_args, args, false);
-        let call = self.ast.exprs.get(call_id).expect_call().clone();
-        self.eval_function_call(&call, None, ctx, None)
     }
 
     pub(super) fn synth_printto_call(

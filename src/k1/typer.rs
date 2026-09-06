@@ -7093,7 +7093,7 @@ impl TypedProgram {
                     Some(expected) => Some(self.add_reference_type(expected)),
                     None => None,
                 };
-                let element_ref = self.eval_method_call_on_typed_receiver(
+                let element_ref = self.eval_function_call_with_typed_first_arg(
                     &call,
                     (index.base, base),
                     ctx.with_expected_type(element_ref_expected),
@@ -9485,10 +9485,9 @@ impl TypedProgram {
                 let or = self.synth_if_else(BOOL_TYPE_ID, lhs, true_expr, rhs, binary_op.span);
                 Ok(or)
             }
-            // We convert most binary ops into ability function calls by rewriting to parsed calls
-            // and compiling the code
-            K::Equals | K::NotEquals => self.eval_equality_expr(binary_op_id, ctx),
-            K::Add
+            K::Equals
+            | K::NotEquals
+            | K::Add
             | K::Subtract
             | K::Multiply
             | K::Divide
@@ -9501,31 +9500,153 @@ impl TypedProgram {
             | K::BitOr
             | K::BitXor
             | K::BitShiftLeft
-            | K::BitShiftRight => {
-                let fn_ident = match binary_op.op_kind {
-                    K::Add => self.ast.idents.f.add__add,
-                    K::Subtract => self.ast.idents.f.sub__sub,
-                    K::Multiply => self.ast.idents.f.mul__mul,
-                    K::Divide => self.ast.idents.f.div__div,
-                    K::Rem => self.ast.idents.f.rem__rem,
-                    K::Less => self.ast.idents.f.ScalarCmp_lt,
-                    K::LessEqual => self.ast.idents.f.ScalarCmp_le,
-                    K::Greater => self.ast.idents.f.ScalarCmp_gt,
-                    K::GreaterEqual => self.ast.idents.f.ScalarCmp_ge,
-                    K::BitAnd => self.ast.idents.f.bitwise_and,
-                    K::BitOr => self.ast.idents.f.bitwise_or,
-                    K::BitXor => self.ast.idents.f.bitwise_xor,
-                    K::BitShiftLeft => self.ast.idents.f.bitwise_shl,
-                    K::BitShiftRight => self.ast.idents.f.bitwise_shr,
-                    _ => unreachable!(),
-                };
-                self.synth_typed_call_parsed_args(
-                    fn_ident.with_span(binary_op.span),
-                    &[],
-                    &[binary_op.lhs, binary_op.rhs],
-                    ctx,
-                )
+            | K::BitShiftRight => self.eval_operator_call(binary_op, ctx),
+        }
+    }
+
+    fn operator_ability_fn(&self, op_kind: BinaryOpKind) -> (QIdent, AbilityId) {
+        use BinaryOpKind as K;
+        let f = &self.ast.idents.f;
+        match op_kind {
+            K::Equals | K::NotEquals => (f.equals__equals, ABILITY_ID_EQUALS),
+            K::Add => (f.add__add, ABILITY_ID_ADD),
+            K::Subtract => (f.sub__sub, ABILITY_ID_SUB),
+            K::Multiply => (f.mul__mul, ABILITY_ID_MUL),
+            K::Divide => (f.div__div, ABILITY_ID_DIV),
+            K::Rem => (f.rem__rem, ABILITY_ID_REM),
+            K::Less => (f.ScalarCmp_lt, ABILITY_ID_SCALAR_CMP),
+            K::LessEqual => (f.ScalarCmp_le, ABILITY_ID_SCALAR_CMP),
+            K::Greater => (f.ScalarCmp_gt, ABILITY_ID_SCALAR_CMP),
+            K::GreaterEqual => (f.ScalarCmp_ge, ABILITY_ID_SCALAR_CMP),
+            K::BitAnd => (f.bitwise_and, ABILITY_ID_BITWISE),
+            K::BitOr => (f.bitwise_or, ABILITY_ID_BITWISE),
+            K::BitXor => (f.bitwise_xor, ABILITY_ID_BITWISE),
+            K::BitShiftLeft => (f.bitwise_shl, ABILITY_ID_BITWISE),
+            K::BitShiftRight => (f.bitwise_shr, ABILITY_ID_BITWISE),
+            K::And | K::Or | K::Pipe | K::OptionalElse => unreachable!(),
+        }
+    }
+
+    fn scalar_operator_fn(
+        &self,
+        self_type: TypeId,
+        ability_id: AbilityId,
+        fn_name: StringId,
+    ) -> Option<FunctionId> {
+        let is_scalar = matches!(
+            self.types.get(self_type),
+            Type::Integer(_) | Type::Float(_) | Type::Char | Type::Bool | Type::Pointer
+        );
+        if !is_scalar {
+            return None;
+        }
+        let handles = self
+            .ability_impl_table_by_ability
+            .get(&TypeAbilityPair { self_type_id: self_type, base_ability_id: ability_id })?;
+        let [handle] = handles.as_slice(&self.mem) else { return None };
+        let ability_fn =
+            self.abilities.get(ability_id).find_function_by_name(&self.mem, fn_name)?;
+        match self
+            .ability_impls
+            .get(handle.full_impl_id)
+            .function_at_index(&self.mem, ability_fn.index)
+        {
+            AbilityImplFunction::FunctionId(function_id) => Some(*function_id),
+            AbilityImplFunction::Abstract(_) | AbilityImplFunction::Unavailable => None,
+        }
+    }
+
+    fn eval_operator_call(
+        &mut self,
+        binary_op: parse::BinaryOp,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
+        use BinaryOpKind as K;
+        let span = binary_op.span;
+        let (fn_name, ability_id) = self.operator_ability_fn(binary_op.op_kind);
+        let is_predicate = matches!(
+            binary_op.op_kind,
+            K::Equals | K::NotEquals | K::Less | K::LessEqual | K::Greater | K::GreaterEqual
+        );
+        let lhs_hint = match ctx.expected_type_id {
+            Some(expected) if !is_predicate => {
+                let counts = self.get_type_variable_counts(expected);
+                if counts.inference_hole_count == 0 && counts.unresolved_static_count == 0 {
+                    Some(expected)
+                } else {
+                    None
+                }
             }
+            _ => None,
+        };
+        let operand_ctx = ctx.with_is_method_receiver(false);
+        let lhs = self.eval_expr(binary_op.lhs, operand_ctx.with_expected_type(lhs_hint))?;
+        let lhs_type = self.exprs.get_type(lhs);
+        let self_type = self.get_static_family_id_if_static(lhs_type);
+        let result = match self.scalar_operator_fn(self_type, ability_id, fn_name.name) {
+            Some(function_id) => {
+                let lhs = self.check_and_coerce_expr(self_type, lhs, ctx.scope_id, false)?;
+                let fn_type = *self
+                    .types
+                    .get(self.get_function(function_id).signature().function_type)
+                    .as_function()
+                    .unwrap();
+                let rhs_type = self.mem.get_nth(fn_type.logical_params(), 1).type_id;
+                let rhs = self.eval_expr_with_coercion(
+                    binary_op.rhs,
+                    operand_ctx.with_expected_type(Some(rhs_type)),
+                    true,
+                )?;
+                if !ctx.is_hidden_calls() {
+                    self.emit_ls_entity(
+                        span,
+                        LsEntityKind::Function { function_id, is_defn: false },
+                    );
+                }
+                if self.exprs.get_type(rhs) == NEVER_TYPE_ID {
+                    return Ok(self.make_never_block(&[lhs, rhs], ctx.scope_id, span));
+                }
+                self.synth_static_call(function_id, &[lhs, rhs], fn_type.return_type, span)
+            }
+            None => {
+                let lhs = match lhs_hint {
+                    Some(expected) => self
+                        .check_and_coerce_expr(expected, lhs, ctx.scope_id, false)
+                        .unwrap_or(lhs),
+                    None => lhs,
+                };
+                let args = self.ast.mem.pushn(&[
+                    ParsedCallArg::unnamed(binary_op.lhs),
+                    ParsedCallArg::unnamed(binary_op.rhs),
+                ]);
+                let call = ParsedCall {
+                    name: fn_name.with_span(span),
+                    type_args: MSlice::empty(),
+                    args,
+                    span,
+                    is_method: false,
+                    id: ParsedExprId::PENDING,
+                };
+                let call_ctx =
+                    if is_predicate { ctx.with_expected_type(Some(BOOL_TYPE_ID)) } else { ctx };
+                self.eval_function_call_with_typed_first_arg(&call, (binary_op.lhs, lhs), call_ctx)?
+            }
+        };
+        if binary_op.op_kind != K::NotEquals || self.exprs.get_type(result) == NEVER_TYPE_ID {
+            return Ok(result);
+        }
+        let negated = self.ast.idents.f.neg__negated;
+        match self.scalar_operator_fn(BOOL_TYPE_ID, ABILITY_ID_NEG, negated.name) {
+            Some(function_id) => {
+                Ok(self.synth_static_call(function_id, &[result], BOOL_TYPE_ID, span))
+            }
+            None => self.synth_typed_call_typed_args(
+                negated.with_span(span),
+                &[],
+                &[result],
+                ctx.with_no_expected_type(),
+                false,
+            ),
         }
     }
 
@@ -9584,38 +9705,6 @@ impl TypedProgram {
         self.push_block_stmt_id(&mut coalesce_block, lhs_variable.defn_stmt);
         self.push_block_expr_id(&mut coalesce_block, if_else);
         Ok(self.exprs.add_block(coalesce_block, output_type))
-    }
-
-    fn eval_equality_expr(
-        &mut self,
-        binary_op_id: ParsedExprId,
-        ctx: EvalExprContext,
-    ) -> K1Result<TypedExprId> {
-        let ParsedExpr::BinaryOp(binary_op) = *self.ast.exprs.get(binary_op_id) else {
-            unreachable!()
-        };
-
-        let parsed_equals_call = self.synth_parsed_function_call(
-            self.ast.idents.f.equals__equals.with_span(binary_op.span),
-            &[],
-            &[binary_op.lhs, binary_op.rhs],
-            false,
-        );
-        let call = *self.ast.exprs.get(parsed_equals_call).expect_call();
-        let equality_result =
-            self.eval_function_call(&call, None, ctx.with_expected_type(Some(BOOL_TYPE_ID)), None)?;
-        let final_result = match binary_op.op_kind {
-            BinaryOpKind::Equals => equality_result,
-            BinaryOpKind::NotEquals => self.synth_typed_call_typed_args(
-                self.ast.idents.f.neg__negated.with_span(binary_op.span),
-                &[],
-                &[equality_result],
-                ctx.with_no_expected_type(),
-                false,
-            )?,
-            _ => unreachable!(),
-        };
-        Ok(final_result)
     }
 
     fn eval_pipe_expr(
@@ -11122,6 +11211,7 @@ impl TypedProgram {
             true,
             false,
         )?;
+        self.splice_stashed_args(aligned.args, stashed_args);
         let mut args_and_params = self.tmp.new_list(aligned.len() + 1 + fn_call.type_args.len());
         for (index, type_arg) in self.ast.mem.getn(fn_call.type_args).iter().enumerate() {
             let Some(passed_type_expr) = type_arg.type_expr else { continue };
@@ -11988,14 +12078,14 @@ impl TypedProgram {
         result
     }
 
-    fn eval_method_call_on_typed_receiver(
+    fn eval_function_call_with_typed_first_arg(
         &mut self,
         fn_call: &ParsedCall,
-        receiver: (ParsedExprId, TypedExprId),
+        first_arg: (ParsedExprId, TypedExprId),
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let tmp_mark = self.tmp.mark();
-        let result = self.eval_function_call_inner(fn_call, None, ctx, None, &[receiver]);
+        let result = self.eval_function_call_inner(fn_call, None, ctx, None, &[first_arg]);
         self.tmp.reset_to(tmp_mark);
         result
     }
