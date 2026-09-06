@@ -59,7 +59,8 @@ impl TypedProgram {
     pub fn snap_into(&self, w: &mut SnapWriter) {
         let TypedProgram {
             modules,
-            modules_completed,
+            module_order,
+            completed_module_count,
             config: _,
             program_settings,
             emitted_parse_cache: _,
@@ -134,6 +135,7 @@ impl TypedProgram {
             megarepl,
             inputs_hash: _,
             restored_module_count: _,
+            setups_fresh: _,
         } = self;
         assert!(megarepl.is_none(), "cannot snapshot a megarepl session");
         assert!(inference_context_stack.is_empty(), "cannot snapshot mid-inference");
@@ -142,7 +144,8 @@ impl TypedProgram {
         w.write_section("typed");
         mem.snap(w);
         modules.snap(w);
-        w.write_slice(modules_completed);
+        w.write_slice(module_order);
+        w.write_t(completed_module_count);
         w.write_t(program_settings);
         functions.snap(w);
         variables.snap(w);
@@ -245,7 +248,8 @@ impl TypedProgram {
 
         let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("modules"), 0);
         k1.modules.restore(r);
-        k1.modules_completed = r.read_vec();
+        k1.module_order = r.read_vec();
+        k1.completed_module_count = r.read_t();
         k1.program_settings = r.read_t();
         k1.trace_pop(section);
 

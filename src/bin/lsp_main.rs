@@ -465,7 +465,11 @@ impl Backend {
                 Some(Box::new(module))
             }
             Err(CompileProgramError::TyperFailure(module)) => {
-                info!("compile {} typing failed", iteration_number);
+                info!(
+                    "compile {} typing failed in {}ms",
+                    iteration_number,
+                    compile_start.elapsed().as_millis()
+                );
                 Some(module)
             }
         };
@@ -790,7 +794,11 @@ impl LanguageServer for Backend {
             for entry in ast_for_file.mem.getn_lt(source.trivia) {
                 match entry.trivia.kind {
                     lex::TokenTriviaKind::LineComment => {
-                        let span = ast_for_file.spans.get(entry.trivia.span);
+                        let span = lex::Span {
+                            file_id: source.file_id,
+                            start: entry.trivia.start,
+                            len: entry.trivia.len,
+                        };
                         spans_and_kinds.push((span, TokenTypes::Comment as u32, 0));
                     }
                     _ => {}

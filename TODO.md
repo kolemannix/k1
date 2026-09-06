@@ -37,18 +37,6 @@ pointer-free predicate - pod/serializable?
 
 ## [x] Ability objects; dyn[<ability expr>]
 
-## Project: less code (specialization count and emitted code; investigation 2026-09-04)
-Measured: stress100 spends 46% of typer time re-checking 640k specialized bodies averaging 14 exprs;
-suite1 types 10k bodies and emits 1.1k; 36% of httpapp's dev-build LLVM functions are exact copies.
-Most instances come from as-buffer/as-span default methods, eagerly declared per impl instantiation.
-- [ ] 1. Lazy bodies for specializations and blanket-derived fns: stop queueing at declaration, let ir lowering and static exec pull via require_function_body. Policy for `check`: primary module eager, library instances lazy
-- [ ] 2. Layout-keyed specialization cache: per-generic "type-sensitive" flag from the generic-pass body (ability calls on t, type patterns, reflection, phony statics); insensitive generics key by structural layout of each type arg (static-value args by value). Needs structural agg interning or a layout hash
-- [x] 3. Never specialize typer-inline intrinsics (size/stride/align/id...): folded at the call site, yet declared per type; suite1 3958 -> 3498 specializations, stress100 801k -> 780k functions
-- [x] 4. Blanket-derived fns are specializations of the blanket fn (specialize_function with substitution pairs); AbilityImplDerivedBlanket kind, blanket_parent_function and the declare_function re-run are gone; generic derived fns no longer get an out-of-regime body pass (suite1 9763 -> 9413 fns)
-- [x] 5. mergefunc in the dev pipeline: httpapp 781 -> 566 defined fns, binary -7%, no codegen time change. ThinLTOCodeGenerator has no tuning hook, so optimized builds would only get it per unit in pre-link
-- [ ] 6. Rejected: typed-tree substitution instead of re-typechecking. Bodies are tiny; the work is call re-resolution and inference, which a copy still has to do since the generic pass skips statics, type patterns and abstract callees
-- [ ] 7. Scan the k1 corpus (modules/, dogfood/) for concrete-core opportunities: generic fns whose body only needs ptr/len/stride, rewritten as an erased core (ptr, len, stride) with a generic shell, the way position-byte and index-of-bytes already are
-
 ## grab bag list mid2026
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
@@ -64,7 +52,6 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
   - [ ] implement with a macro, for sure
 - [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
 - [ ] Pull warnings config and other compiler-mode settings from module-manifest. Want to run a particular lint? edit `fn module()`, save, boom, check lsp diagnostics (or `k1 c`)
-- When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [ ] `#[must_use]` equivalent
 - [ ] literal inference issue (a) `2 * d` vs `d * 2` differ — literal-lhs
       defaults i64 and widens the u32 rhs up, literal-rhs adopts u32 and wraps; (b) binary ops widen
@@ -82,6 +69,7 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
 - [ ] Failed-definition tracking, two markers for one concept: static_exec.rs:418 and typer.rs:16887. Both silently return Ok(()) when an AST mapping is missing, which masks compiler bugs. A set of failed parsed ids, checked in both places, converts "likely" into "certain".
 - [ ] toDyn on generic functions at typer.rs:10251. Explicit type args are already parsed at that call site; specializing before the dyn lift is the same path foo[int].& takes.
 
+- [x] When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [x] block stmt typer error recovery; get more than 1 typer error per block
 - [x] fix `is {` syntax
 - [x] parallel llvm codegen
@@ -148,6 +136,19 @@ bindgen dogfood list
       A program can take arguments; this replaces macro features in C.
       Make it plain k1 data; pass it where you depend on the module.
 - [x] solution for lazily evaluated log arguments
+
+## Project: less code (specialization count and emitted code; investigation 2026-09-04)
+Measured: stress100 spends 46% of typer time re-checking 640k specialized bodies averaging 14 exprs;
+suite1 types 10k bodies and emits 1.1k; 36% of httpapp's dev-build LLVM functions are exact copies.
+Most instances come from as-buffer/as-span default methods, eagerly declared per impl instantiation.
+- [x] 1. Lazy bodies for specializations and blanket-derived fns: stop queueing at declaration, let ir lowering and static exec pull via require_function_body. Policy for `check`: primary module eager, library instances lazy
+- [x] 2. Layout-keyed specialization cache: per-generic "type-sensitive" flag from the generic-pass body (ability calls on t, type patterns, reflection, phony statics); insensitive generics key by structural layout of each type arg (static-value args by value). Needs structural agg interning or a layout hash
+- [x] 3. Never specialize typer-inline intrinsics (size/stride/align/id...): folded at the call site, yet declared per type; suite1 3958 -> 3498 specializations, stress100 801k -> 780k functions
+- [x] 4. Blanket-derived fns are specializations of the blanket fn (specialize_function with substitution pairs); AbilityImplDerivedBlanket kind, blanket_parent_function and the declare_function re-run are gone; generic derived fns no longer get an out-of-regime body pass (suite1 9763 -> 9413 fns)
+- [x] 5. mergefunc in the dev pipeline: httpapp 781 -> 566 defined fns, binary -7%, no codegen time change. ThinLTOCodeGenerator has no tuning hook, so optimized builds would only get it per unit in pre-link
+- [x] 6. Rejected: typed-tree substitution instead of re-typechecking. Bodies are tiny; the work is call re-resolution and inference, which a copy still has to do since the generic pass skips statics, type patterns and abstract callees
+- [x] 7. Scan the k1 corpus (modules/, dogfood/) for concrete-core opportunities: generic fns whose body only needs ptr/len/stride, rewritten as an erased core (ptr, len, stride) with a generic shell, the way position-byte and index-of-bytes already are
+
 
 ## [x] Distribute builds that work
 - [x] Test on linux

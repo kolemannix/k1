@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use k1::compiler;
-use k1::compiler::{Args, Command};
+use k1::compiler::{Args, Command, CompileProgramError};
 use log::info;
 use mimalloc::MiMalloc;
 
@@ -38,8 +38,12 @@ fn run() -> anyhow::Result<ExitCode> {
     let args = Args::parse();
     log::debug!("{:#?}", args);
 
-    let Ok(mut program) = compiler::compile_program(&args) else {
-        return Ok(ExitCode::FAILURE);
+    let mut program = match compiler::compile_program(&args) {
+        Ok(program) => program,
+        Err(CompileProgramError::TyperFailure(program)) => {
+            compiler::report_trace(&args, &program);
+            return Ok(ExitCode::FAILURE);
+        }
     };
     if !args.command.kind().codegens() || matches!(args.command, Command::Server { .. }) {
         compiler::report_trace(&args, &program);

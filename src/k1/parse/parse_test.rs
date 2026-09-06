@@ -15,10 +15,10 @@ fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'a
     let source = SourceFile::make(&mut ast.mem, file_path, input);
     let module_id = ModuleId::ONE;
     let module_name = ast.idents.intern("unit_test");
-    let mut token_vec = vec![];
-    let (file_id, lex_result) = lex_file_into_program(ast, source, &mut token_vec);
-    lex_result.unwrap();
-    let token_vec = token_vec.leak();
+    let file_id = ast.sources.add_file(source);
+    let mut lexed = lex(input, vec![]);
+    ast.materialize_lexed_file(file_id, &mut lexed).unwrap();
+    let token_vec = lexed.tokens.leak();
     println!("{:#?}", token_vec);
     let mut kinds = vec![];
     for t in token_vec.iter() {
@@ -574,14 +574,38 @@ fn lex_error_does_not_poison_reused_token_buffer() {
     let good_file_path = ast.idents.intern("unit_test/good.k1");
     let good = SourceFile::make(&mut ast.mem, good_file_path, "fn g(): i32 { 42 }");
 
-    let mut tokens = vec![];
-    assert!(lex_file_into_program(&mut ast, bad, &mut tokens).1.is_err());
-    assert!(!tokens.is_empty());
+    let bad_id = ast.sources.add_file(bad);
+    let bad_content = ast.sources.get(bad_id).content(&ast.mem);
+    let mut lexed = lex(bad_content, vec![]);
+    assert!(ast.materialize_lexed_file(bad_id, &mut lexed).is_err());
+    assert!(!lexed.tokens.is_empty());
 
-    lex_file_into_program(&mut ast, good, &mut tokens).1.unwrap();
-    for t in &tokens {
+    let good_id = ast.sources.add_file(good);
+    let good_content = ast.sources.get(good_id).content(&ast.mem);
+    let mut lexed = lex(good_content, lexed.tokens);
+    ast.materialize_lexed_file(good_id, &mut lexed).unwrap();
+    for t in &lexed.tokens {
         if t.kind != TokenKind::Eof {
             assert_eq!(t.span(1, &ast.spans).file_id, 1);
         }
     }
+}
+
+#[test]
+fn long_token_materializes_to_a_span() {
+    let mut ast = make_test_ast();
+    let path = ast.idents.intern("unit_test/long.k1");
+    let literal = "x".repeat(70_000);
+    let content = format!("let s = \"{literal}\"\nlet t = 1");
+    let source = SourceFile::make(&mut ast.mem, path, &content);
+    let file_id = ast.sources.add_file(source);
+    let mut lexed = lex(&content, vec![]);
+    assert_eq!(lexed.long_tokens.len(), 1);
+    ast.materialize_lexed_file(file_id, &mut lexed).unwrap();
+    let string_token = lexed.tokens[3];
+    assert_eq!(string_token.kind, TokenKind::StringDoneDq);
+    let span = string_token.span(file_id, &ast.spans);
+    assert_eq!((span.file_id, span.start, span.len), (file_id, 8, 70_002));
+    assert_eq!(string_token.materialized_span_id(), string_token.span_id(file_id, &mut ast.spans));
+    assert_eq!(lexed.tokens[4].kind, TokenKind::KeywordLet);
 }

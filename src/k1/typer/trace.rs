@@ -18,8 +18,8 @@ pub const FRAME_FLAG_EXPR_UNIT: u8 = 2;
 pub enum TraceKind {
     ModuleDiscover,
     ModuleRead,
-    Lex,
     Parse,
+    SetupStamp,
     SetupFn,
     ModuleCompile,
     TyperPass,
@@ -56,8 +56,8 @@ impl TraceKind {
     pub const ALL: [TraceKind; 34] = [
         TraceKind::ModuleDiscover,
         TraceKind::ModuleRead,
-        TraceKind::Lex,
         TraceKind::Parse,
+        TraceKind::SetupStamp,
         TraceKind::SetupFn,
         TraceKind::ModuleCompile,
         TraceKind::TyperPass,
@@ -94,8 +94,8 @@ impl TraceKind {
         match self {
             TraceKind::ModuleDiscover => "discover",
             TraceKind::ModuleRead => "read",
-            TraceKind::Lex => "lex",
             TraceKind::Parse => "parse",
+            TraceKind::SetupStamp => "setup stamp",
             TraceKind::SetupFn => "setup",
             TraceKind::ModuleCompile => "module",
             TraceKind::TyperPass => "typer pass",
@@ -139,8 +139,8 @@ impl TraceKind {
             | TraceKind::IrLower
             | TraceKind::Bcgen => true,
             TraceKind::ModuleRead
-            | TraceKind::Lex
             | TraceKind::Parse
+            | TraceKind::SetupStamp
             | TraceKind::SetupFn
             | TraceKind::ModuleCompile
             | TraceKind::TyperPass
@@ -178,6 +178,7 @@ impl TraceKind {
             TraceKind::ModuleDiscover
                 | TraceKind::ModuleRead
                 | TraceKind::Parse
+                | TraceKind::SetupStamp
                 | TraceKind::SetupFn
                 | TraceKind::ModuleCompile
                 | TraceKind::TyperPass

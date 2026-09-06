@@ -60,7 +60,7 @@ use crate::kpath;
 use crate::lex::{self, Span, SpanId, TokenKind};
 use crate::parse::{
     self, AstHandle, AstSlice, BinaryOpKind, FileId, ForExpr, IdentPool, IdentSpanned,
-    InterpolatedStringPart, NamedTypeArg, NumericWidth, ParseError, ParsedAbilityExpr,
+    InterpolatedStringPart, NamedTypeArg, NumericWidth, ParsedAbilityExpr,
     ParsedAbilityId, ParsedAbilityImplId, ParsedBlock, ParsedBlockKind, ParsedBreak, ParsedCall,
     ParsedCallArg, ParsedContinue, ParsedExpr, ParsedExprId, ParsedFnParamType, ParsedFunctionId,
     ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr,
@@ -2758,7 +2758,10 @@ pub struct TypeAbilityPair {
 pub struct TypedProgram {
     pub modules: VPool<Module, ModuleId>,
     /// Fully typechecked modules, in completion order (deps before dependents)
-    pub modules_completed: Vec<ModuleId>,
+    /// Every discovered module in inputs-hash order; the first
+    /// `completed_module_count` are typechecked
+    pub module_order: Vec<ModuleId>,
+    pub completed_module_count: u32,
     pub config: CompilerConfig,
     pub program_settings: ProgramSettings,
     pub ast: ParsedProgram,
@@ -2891,6 +2894,7 @@ pub struct TypedProgram {
 
     /// diagnostic only, for --chatty and tests
     pub restored_module_count: u32,
+    pub setups_fresh: SV8<StringId>,
 }
 
 // SAFETY: TypedProgram's raw pointers point into its own heap allocations
@@ -2971,7 +2975,8 @@ impl TypedProgram {
 
         let mut k1 = TypedProgram {
             modules: VPool::make("modules"),
-            modules_completed: vec![],
+            module_order: vec![],
+            completed_module_count: 0,
             config,
             program_settings: ProgramSettings { executable: false },
             functions: VPool::make("typed_functions"),
@@ -3063,6 +3068,7 @@ impl TypedProgram {
             megarepl: None,
             inputs_hash,
             restored_module_count: 0,
+            setups_fresh: smallvec![],
         };
 
         let empty_struct_id = k1.add_type_anon(Type::Struct(StructType::struc(MSlice::empty())));
@@ -3077,9 +3083,10 @@ impl TypedProgram {
         load_handle: crate::compiler::ModuleLoadHandle,
         primary_module: bool,
     ) -> anyhow::Result<ModuleId> {
+        let restored = self.modules.iter().any(|m| m.name == load_handle.module_name);
         let mut modules_to_typecheck: SV8<(
             ModuleId,
-            Option<crate::compiler::ModuleRemainingSourcesHandle>,
+            crate::compiler::ModuleRemainingSourcesHandle,
         )> = smallvec![];
         let added_module_id =
             self.discover_module_and_deps(load_handle, primary_module, &mut modules_to_typecheck)?;
@@ -3090,101 +3097,82 @@ impl TypedProgram {
             return Ok(added_module_id);
         }
 
-        // Every root is parsed before any typing, so all headers are hashed
-        // in discovery order first
         let mut hash = self.inputs_hash;
-        for (module_id, _) in &modules_to_typecheck {
-            let module = self.modules.get(*module_id);
-            let root = module.source_file_hashes.as_slice(&self.mem)[0];
-            let source = self.ast.sources.get(root.file_id);
-            hash = hash.add_module_header(
-                self.ident_str(module.name),
-                self.ast.idents.get_string(source.file_path),
-                root.hash,
-            );
+        if !restored {
+            for (module_id, _) in &modules_to_typecheck {
+                let module = self.modules.get(*module_id);
+                let root = module.source_file_hashes.as_slice(&self.mem)[0];
+                let source = self.ast.sources.get(root.file_id);
+                hash = hash.add_module_header(
+                    self.ident_str(module.name),
+                    self.ast.idents.get_string(source.file_path),
+                    root.hash,
+                );
+                self.module_order.push(*module_id);
+            }
         }
         for (module_id, remaining) in modules_to_typecheck.into_iter() {
             let module_frame = self.trace_push(TraceKind::ModuleCompile, module_id.as_u32(), 0);
             let module_result: anyhow::Result<()> = (|| {
                 let read_frame = self.trace_push(TraceKind::ModuleRead, module_id.as_u32(), 0);
-                let files = remaining.map(|r| r.join()).transpose();
+                let files = remaining.join();
                 self.trace_pop(read_frame);
                 let files = files?;
                 let module = self.modules.get(module_id);
                 let (module_name, parsed_namespace_id, build_ns_defn) =
                     (module.name, module.parsed_namespace_id, module.build_ns_defn);
-                let name = self.ident_str(module_name);
-                hash = match &files {
-                    Some(files) => hash.add_module_sources(
-                        name,
-                        files.iter().map(|f| (f.path.as_str(), f.content_hash)),
-                    ),
-                    None => {
-                        let file_hashes = module.source_file_hashes.as_slice(&self.mem);
-                        hash.add_module_sources(
-                            name,
-                            file_hashes[1..].iter().map(|sfh| {
-                                let s = self.ast.sources.get(sfh.file_id);
-                                let path_str = self.ast.idents.get_string(s.file_path);
-                                (path_str, sfh.hash)
-                            }),
-                        )
-                    }
-                };
+                hash = hash.add_module_sources(
+                    self.ident_str(module_name),
+                    files.iter().map(|f| (f.path.as_str(), f.content_hash)),
+                );
                 let module_hash = hash;
-                if let Some(files) = files {
-                    let parse_frame = self.trace_push(TraceKind::Parse, module_name.as_u32(), 0);
-                    for file in files {
-                        self.parse_module_source_file(
-                            module_id,
-                            module_name,
-                            parsed_namespace_id,
-                            file,
-                        );
-                    }
-                    self.trace_pop(parse_frame);
-                    if !self.ast.errors.is_empty() && !self.lsp.completion {
-                        bail!(
-                            "Parsing module {} failed with {} errors",
-                            self.ident_str(module_name),
-                            self.ast.errors.len()
-                        );
-                    }
-                    self.typecheck_module(module_id, parsed_namespace_id, build_ns_defn)?;
-                    self.modules_completed.push(module_id);
-                    // Drain pending IR so a snapshot here contains only whole
-                    // modules (pending queues empty)
-                    if self.compile_all_pending_ir(SpanId::NONE).is_err() {
-                        bail!("Failed to compile ir");
-                    };
+                let parse_frame = self.trace_push(TraceKind::Parse, module_name.as_u32(), 0);
+                for file in files {
+                    self.parse_module_source_file(
+                        module_id,
+                        module_name,
+                        parsed_namespace_id,
+                        file,
+                    );
                 }
+                self.trace_pop(parse_frame);
+                if !self.ast.errors.is_empty() && !self.lsp.completion {
+                    bail!(
+                        "Parsing module {} failed with {} errors",
+                        self.ident_str(module_name),
+                        self.ast.errors.len()
+                    );
+                }
+                self.typecheck_module(module_id, parsed_namespace_id, build_ns_defn)?;
+                debug_assert_eq!(self.module_order[self.completed_module_count as usize], module_id);
+                self.completed_module_count += 1;
+                if self.compile_all_pending_ir(SpanId::NONE).is_err() {
+                    bail!("Failed to compile ir");
+                };
                 self.inputs_hash = module_hash;
-                // Sessions compiling overridden content (LSP buffers, completion
-                // splices) should not write to the cache
                 if self.config.cache
                     && self.lsp.source_overrides.is_empty()
                     && !self.lsp.completion
                     && self.megarepl.is_none()
+                    && !crate::snap::cache_exists_entry(self.cache_dir(), module_hash)
                 {
-                    if !crate::snap::cache_exists_entry(self.cache_dir(), module_hash) {
-                        let cache_dir = self.cache_dir().to_path_buf();
-                        let frame = self.trace_push(TraceKind::SnapStore, module_id.as_u32(), 0);
-                        let stored = match crate::snap::cache_store_begin(&cache_dir, module_hash) {
-                            Ok(mut w) => {
-                                self.snap_into(&mut w);
-                                crate::snap::cache_store_finish(&cache_dir, module_hash, w)
-                            }
-                            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-                            Err(e) => Err(e),
-                        };
-                        self.trace_pop(frame);
-                        if let Err(e) = stored {
-                            let warning = self.make_warning(
-                                format!("failed to store snapshot cache entry: {e}"),
-                                SpanId::NONE,
-                            );
-                            self.report(warning);
+                    let cache_dir = self.cache_dir().to_path_buf();
+                    let frame = self.trace_push(TraceKind::SnapStore, module_id.as_u32(), 0);
+                    let stored = match crate::snap::cache_store_begin(&cache_dir, module_hash) {
+                        Ok(mut w) => {
+                            self.snap_into(&mut w);
+                            crate::snap::cache_store_finish(&cache_dir, module_hash, w)
                         }
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                        Err(e) => Err(e),
+                    };
+                    self.trace_pop(frame);
+                    if let Err(e) = stored {
+                        let warning = self.make_warning(
+                            format!("failed to store snapshot cache entry: {e}"),
+                            SpanId::NONE,
+                        );
+                        self.report(warning);
                     }
                 }
                 Ok(())
@@ -3251,10 +3239,7 @@ impl TypedProgram {
         &mut self,
         root_load_handle: crate::compiler::ModuleLoadHandle,
         primary_module: bool,
-        modules_to_typecheck: &mut SV8<(
-            ModuleId,
-            Option<crate::compiler::ModuleRemainingSourcesHandle>,
-        )>,
+        modules_to_typecheck: &mut SV8<(ModuleId, crate::compiler::ModuleRemainingSourcesHandle)>,
     ) -> anyhow::Result<ModuleId> {
         let module_name = root_load_handle.module_name;
         self.traced(TraceKind::ModuleDiscover, module_name.as_u32(), 0, |k1| {
@@ -3266,26 +3251,22 @@ impl TypedProgram {
         &mut self,
         root_load_handle: crate::compiler::ModuleLoadHandle,
         primary_module: bool,
-        modules_to_typecheck: &mut SV8<(
-            ModuleId,
-            Option<crate::compiler::ModuleRemainingSourcesHandle>,
-        )>,
+        modules_to_typecheck: &mut SV8<(ModuleId, crate::compiler::ModuleRemainingSourcesHandle)>,
     ) -> anyhow::Result<ModuleId> {
         debug!("Loading module {}...", root_load_handle.src_path);
         let module_name = root_load_handle.module_name;
         if let Some(m) = self.modules.iter().find(|m| m.name == module_name) {
-            // Already discovered this run, or restored from a snapshot; either way its
-            // parsed sources, namespaces, and manifest exist. Only the run-scoped work
-            // list is rebuilt: queue it (deps first) with readers for incomplete modules.
             fn queue(
                 k1: &mut TypedProgram,
                 module_id: ModuleId,
                 modules_to_typecheck: &mut SV8<(
                     ModuleId,
-                    Option<crate::compiler::ModuleRemainingSourcesHandle>,
+                    crate::compiler::ModuleRemainingSourcesHandle,
                 )>,
             ) {
-                if modules_to_typecheck.iter().any(|(id, _)| *id == module_id) {
+                if k1.module_completed(module_id)
+                    || modules_to_typecheck.iter().any(|(id, _)| *id == module_id)
+                {
                     return;
                 }
                 let deps = k1.modules.get(module_id).manifest.deps;
@@ -3305,9 +3286,7 @@ impl TypedProgram {
                     }
                     queue(k1, dep_id, modules_to_typecheck);
                 }
-                let remaining = (!k1.modules_completed.contains(&module_id))
-                    .then(|| k1.spawn_remaining_sources(module_id));
-                modules_to_typecheck.push((module_id, remaining));
+                modules_to_typecheck.push((module_id, k1.spawn_remaining_sources(module_id)));
             }
             let module_id = m.id;
             queue(self, module_id, modules_to_typecheck);
@@ -3420,12 +3399,16 @@ impl TypedProgram {
                     self.config.command,
                     crate::compiler::CommandKind::Setup { force: true }
                 );
-            let started = {
+            let started = if !force && self.setups_fresh.contains(&module_name) {
+                Ok(None)
+            } else {
+                let frame = self.trace_push(TraceKind::SetupStamp, module_name.as_u32(), 0);
                 let request = self.setup_request(module_id, setup, force);
                 let tmp = self.get_tmp_unsafe();
                 let mark = tmp.mark();
                 let result = crate::compiler::start_setup(&request, tmp);
                 tmp.reset_to(mark);
+                self.trace_pop(frame);
                 result
             };
             let started = match started {
@@ -3544,7 +3527,7 @@ impl TypedProgram {
             self.discover_module_and_deps(handle, false, modules_to_typecheck)?;
         }
 
-        modules_to_typecheck.push((module_id, Some(remaining)));
+        modules_to_typecheck.push((module_id, remaining));
         Ok(module_id)
     }
 
@@ -3718,27 +3701,23 @@ impl TypedProgram {
         module_id: ModuleId,
         module_name: StringId,
         parsed_namespace_id: ParsedNamespaceId,
-        file: crate::compiler::SourceFile,
+        mut file: crate::compiler::SourceFile,
         path: StringId,
     ) -> FileId {
         let source = parse::SourceFile::make(&mut self.ast.mem, path, &file.content);
-        let mut token_buffer = std::mem::take(&mut self.buffers.lexer_tokens);
-        let lex_frame = self.trace_push(TraceKind::Lex, 0, 0);
-        let (file_id, lex_result) =
-            parse::lex_file_into_program(&mut self.ast, source, &mut token_buffer);
-        self.trace_pop(lex_frame);
+        let file_id = self.ast.sources.add_file(source);
+        let lex_result = self.ast.materialize_lexed_file(file_id, &mut file.lexed);
         self.modules
             .get_mut(module_id)
             .source_file_hashes
             .push_grow(&mut self.mem, SourceFileHash { file_id, hash: file.content_hash });
         if let Err(e) = lex_result {
             self.ast.report_error(e);
-            self.buffers.lexer_tokens = token_buffer;
             return file_id;
         }
 
         if cfg!(feature = "lsp") {
-            let tokens = self.ast.mem.pushn(&token_buffer);
+            let tokens = self.ast.mem.pushn(&file.lexed.tokens);
             self.ast.sources.get_mut(file_id).tokens = tokens;
         };
 
@@ -3747,11 +3726,10 @@ impl TypedProgram {
             module_name,
             parsed_namespace_id,
             &mut self.ast,
-            &token_buffer,
+            &file.lexed.tokens,
             file_id,
         );
         parser.parse_file_into_module();
-        self.buffers.lexer_tokens = token_buffer;
         file_id
     }
 
@@ -3879,9 +3857,12 @@ impl TypedProgram {
             .unwrap_or_else(|| self.modules.iter().last().unwrap())
     }
 
+    pub fn module_completed(&self, id: ModuleId) -> bool {
+        self.module_order[..self.completed_module_count as usize].contains(&id)
+    }
+
     pub fn primary_module_completed(&self) -> bool {
-        let id = self.primary_module().id;
-        self.modules_completed.contains(&id)
+        self.module_completed(self.primary_module().id)
     }
 
     pub fn validate_exports(&mut self) -> anyhow::Result<()> {
@@ -5444,7 +5425,6 @@ impl TypedProgram {
                 Ok(impl_handle)
             }
             Some(msg) => {
-                // nocommit what in the world is going on here? How can we kill this?
                 self.unregister_ability_impls_from(first_impl_id);
                 Err(msg)
             }

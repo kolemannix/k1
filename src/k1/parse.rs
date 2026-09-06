@@ -1998,20 +1998,23 @@ pub enum ParseError {
         token: Token,
         cause: Option<Box<ParseError>>,
     },
-    Lex(LexError),
+    Lex {
+        message: String,
+        span: SpanId,
+    },
 }
 
 impl ParseError {
     pub fn message(&self) -> &str {
         match self {
-            ParseError::Lex(lex_error) => &lex_error.message,
+            ParseError::Lex { message, .. } => message,
             ParseError::Parse { message, .. } => message,
         }
     }
 
     pub fn span(&self) -> SpanId {
         match self {
-            ParseError::Lex(lex_error) => lex_error.span,
+            ParseError::Lex { span, .. } => *span,
             ParseError::Parse { token, .. } => token.materialized_span_id(),
         }
     }
@@ -2020,8 +2023,8 @@ impl ParseError {
 impl Display for ParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseError::Lex(lex_error) => {
-                write!(f, "LexError: {}", lex_error.message)
+            ParseError::Lex { message, .. } => {
+                write!(f, "LexError: {}", message)
             }
             ParseError::Parse { message, token, cause, .. } => {
                 if let Some(cause) = &cause {
@@ -2040,14 +2043,14 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
     let use_color = stderr.is_terminal();
 
     match parse_error {
-        ParseError::Lex(lex_error) => {
+        ParseError::Lex { message, span } => {
             write_source_location(
                 &mut stderr,
                 module,
-                lex_error.span,
+                *span,
                 MessageLevel::Error,
                 6,
-                Some(&lex_error.message),
+                Some(message),
                 use_color,
             )
             .unwrap();
@@ -6246,22 +6249,34 @@ impl ParsedProgram {
     }
 }
 
-pub fn lex_file_into_program(
-    module: &mut ParsedProgram,
-    source: SourceFile,
-    tokens: &mut Vec<Token>,
-) -> (FileId, ParseResult<()>) {
-    tokens.clear();
-    let file_id = module.sources.add_file(source);
-    let text = module.sources.get(file_id).content(&module.mem);
-    let mut lexer = Lexer::make(text, &mut module.spans, file_id);
-    let result = lexer.run(tokens).map_err(ParseError::Lex);
-    let trivia = std::mem::take(&mut lexer.trivia);
-    if result.is_ok() {
-        let handle = module.mem.pushn(trivia.entries());
-        module.sources.get_mut(file_id).trivia = handle;
+impl ParsedProgram {
+    /// Long tokens and the lex error, if any, get their SpanId now that the file has an id
+    pub fn materialize_lexed_file(&mut self, file_id: FileId, lexed: &mut Lexed) -> ParseResult<()> {
+        if !lexed.long_tokens.is_empty() {
+            let mut long_tokens = lexed.long_tokens.iter();
+            for token in lexed.tokens.iter_mut() {
+                if token.flags & TOKEN_FLAG_SPAN_ID == 0 {
+                    continue;
+                }
+                let long = long_tokens.next().expect("a long_tokens entry per flagged token");
+                let span_id =
+                    self.spans.add(Span { file_id, start: long.start, len: long.len });
+                token.start = Into::<std::num::NonZeroU32>::into(span_id).get();
+            }
+            debug_assert!(long_tokens.next().is_none());
+        }
+        match lexed.error.take() {
+            Some(e) => {
+                let span = self.spans.add(Span { file_id, start: e.start, len: e.len });
+                Err(ParseError::Lex { message: e.message, span })
+            }
+            None => {
+                let handle = self.mem.pushn(lexed.trivia.entries());
+                self.sources.get_mut(file_id).trivia = handle;
+                Ok(())
+            }
+        }
     }
-    (file_id, result)
 }
 
 /// To be used by the lsp or other tools that are
@@ -6278,9 +6293,9 @@ pub fn parse_standalone(program_name: String, content: &str) -> ParsedProgram {
         kpath::join_id(&ast.idents, &mut ast.tmp, directory.as_path(), program_name_id)
     };
     let source = SourceFile::make(&mut ast.mem, source_file_path, content);
-    let mut token_vec = vec![];
-    let (file_id, lex_result) = lex_file_into_program(&mut ast, source, &mut token_vec);
-    if let Err(e) = lex_result {
+    let file_id = ast.sources.add_file(source);
+    let mut lexed = lex(content, vec![]);
+    if let Err(e) = ast.materialize_lexed_file(file_id, &mut lexed) {
         ast.errors.push(e);
         return ast;
     }
@@ -6289,14 +6304,20 @@ pub fn parse_standalone(program_name: String, content: &str) -> ParsedProgram {
     let module_name = program_name_id;
     let module_ns_id = init_module(module_name, &mut ast);
 
-    let mut parser =
-        Parser::make_for_file(module_id, module_name, module_ns_id, &mut ast, &token_vec, file_id);
+    let mut parser = Parser::make_for_file(
+        module_id,
+        module_name,
+        module_ns_id,
+        &mut ast,
+        &lexed.tokens,
+        file_id,
+    );
     parser.parse_file_into_module();
 
     // Store tokens for the lsp
     #[cfg(feature = "lsp")]
     {
-        let tokens = ast.mem.pushn(&token_vec);
+        let tokens = ast.mem.pushn(&lexed.tokens);
         ast.sources.get_mut(file_id).tokens = tokens;
     }
 

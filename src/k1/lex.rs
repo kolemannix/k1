@@ -7,7 +7,6 @@ use std::fmt::{Display, Formatter};
 use crate::debug;
 use crate::nz_u32_id;
 use crate::parse::BinaryOpKind;
-use crate::parse::FileId;
 use crate::vpool::VPool;
 use crate::{static_assert_niched, static_assert_size};
 use TokenKind as K;
@@ -19,11 +18,36 @@ pub const EOF_TOKEN: Token = Token { kind: TokenKind::Eof, flags: 0x01 | 0x04, l
 #[derive(Debug, Clone)]
 pub struct LexError {
     pub message: String,
-    pub file_id: FileId,
-    pub span: SpanId,
+    pub start: u32,
+    pub len: u32,
 }
 
 pub type LexResult<A> = anyhow::Result<A, LexError>;
+
+/// A token too long for the positional Token; carried under TOKEN_FLAG_SPAN_ID
+/// until `materialize_lexed_file` gives it a SpanId
+#[derive(Debug, Clone, Copy)]
+pub struct LongToken {
+    pub start: u32,
+    pub len: u32,
+}
+
+pub struct Lexed {
+    pub tokens: Vec<Token>,
+    pub trivia: TokenTriviaTable,
+    /// In token order, one per TOKEN_FLAG_SPAN_ID token
+    pub long_tokens: Vec<LongToken>,
+    pub error: Option<LexError>,
+}
+
+/// No pool, file id, or span in hand, so it runs on any thread; `tokens` is
+/// the buffer to fill and comes back in the result
+pub fn lex(content: &str, mut tokens: Vec<Token>) -> Lexed {
+    tokens.clear();
+    let mut lexer = Lexer::make(content);
+    let error = lexer.run(&mut tokens).err();
+    Lexed { tokens, trivia: lexer.trivia, long_tokens: lexer.long_tokens, error }
+}
 
 nz_u32_id!(SpanId);
 impl SpanId {
@@ -73,7 +97,7 @@ impl Default for Spans {
 
 impl Display for LexError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "LexError in file {}: {}", self.file_id, self.message)
+        write!(f, "LexError at {}: {}", self.start, self.message)
     }
 }
 impl std::error::Error for LexError {}
@@ -489,7 +513,7 @@ const TOKEN_FLAG_IS_WHITESPACE_PRECEDED: u8 = 0x01;
 #[allow(unused)]
 const TOKEN_FLAG_IS_WHITESPACE_FOLLOWED: u8 = 0x02;
 const TOKEN_FLAG_IS_NEWLINE_PRECEDED: u8 = 0x04;
-const TOKEN_FLAG_SPAN_ID: u8 = 0x08;
+pub const TOKEN_FLAG_SPAN_ID: u8 = 0x08;
 
 fn nzu32(v: u32) -> std::num::NonZeroU32 {
     std::num::NonZeroU32::new(v).unwrap()
@@ -509,22 +533,16 @@ static_assert_size!(Token, 8);
 impl Token {
     pub fn new(
         kind: TokenKind,
-        spans: &mut Spans,
-        file_id: u32,
         start: u32,
         len: u32,
         flags: u8,
+        long_tokens: &mut Vec<LongToken>,
     ) -> Token {
         match u16::try_from(len) {
             Ok(len16) => Token { kind, flags, len: len16, start },
             Err(_) => {
-                let span_id = spans.add(Span { file_id, start, len });
-                Token {
-                    kind,
-                    flags: flags | TOKEN_FLAG_SPAN_ID,
-                    len: 0,
-                    start: Into::<std::num::NonZeroU32>::into(span_id).get(),
-                }
+                long_tokens.push(LongToken { start, len });
+                Token { kind, flags: flags | TOKEN_FLAG_SPAN_ID, len: 0, start: 0 }
             }
         }
     }
@@ -615,7 +633,8 @@ pub enum TokenTriviaKind {
 
 #[derive(Debug, Clone, Copy)]
 pub struct TokenTrivia {
-    pub span: SpanId,
+    pub start: u32,
+    pub len: u32,
     pub kind: TokenTriviaKind,
 }
 
@@ -708,42 +727,31 @@ impl LexState {
         self.mode = self.mode_stack.pop().unwrap();
     }
 }
-pub struct Lexer<'a, 'spans> {
-    pub file_id: FileId,
+struct Lexer<'a> {
     // Known valid utf8; see `make`
     content: &'a [u8],
-    pub spans: &'spans mut Spans,
-    pub pos: u32,
-    pub trivia: TokenTriviaTable,
+    pos: u32,
+    trivia: TokenTriviaTable,
+    long_tokens: Vec<LongToken>,
     next_token_flags: u8,
 }
 
-impl<'content, 'spans> Lexer<'content, 'spans> {
-    pub fn make(
-        input: &'content str,
-        spans: &'spans mut Spans,
-        file_id: FileId,
-    ) -> Lexer<'content, 'spans> {
+impl<'content> Lexer<'content> {
+    fn make(input: &'content str) -> Lexer<'content> {
         Lexer {
-            file_id,
             content: input.as_bytes(),
-            spans,
             pos: 0,
             trivia: TokenTriviaTable::default(),
+            long_tokens: Vec::new(),
             next_token_flags: TOKEN_FLAG_IS_NEWLINE_PRECEDED,
         }
     }
 
     fn make_error(&mut self, message: String, start: u32, len: u32) -> LexError {
-        let span = self.add_span(start, len);
-        LexError { message, file_id: self.file_id, span }
+        LexError { message, start, len }
     }
 
-    fn add_span(&mut self, start: u32, len: u32) -> SpanId {
-        self.spans.add(Span { start, len, file_id: self.file_id })
-    }
-
-    pub fn run(&mut self, tokens: &mut Vec<Token>) -> LexResult<()> {
+    fn run(&mut self, tokens: &mut Vec<Token>) -> LexResult<()> {
         let mut state = LexState { mode: LexMode::Tokens, mode_stack: Vec::new() };
         tokens.reserve(self.content.len() / 3 + 1);
         let result = loop {
@@ -770,7 +778,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         fn make_token(lex: &mut Lexer, kind: TokenKind, start: u32, len: u32) -> Token {
             let flags = lex.next_token_flags;
             lex.next_token_flags = 0;
-            Token::new(kind, lex.spans, lex.file_id, start, len, flags)
+            Token::new(kind, start, len, flags, &mut lex.long_tokens)
         }
 
         #[inline]
@@ -1042,11 +1050,11 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                     }
                                     None => self.content.len() as u32 + 1,
                                 };
-                                let span = self.add_span(n, self.pos - n);
                                 self.trivia.push(TriviaEntry {
                                     token_idx: tokens.len() as u32,
                                     trivia: TokenTrivia {
-                                        span,
+                                        start: n,
+                                        len: self.pos - n,
                                         kind: TokenTriviaKind::LineComment,
                                     },
                                 });
@@ -1210,18 +1218,9 @@ fn is_numeric_char(c: char) -> bool {
     }
 }
 
-pub fn lex_standalone(content: &str) -> (Spans, Vec<Token>, Option<LexError>) {
-    let mut spans = Spans::new();
-    let mut token_vec = vec![];
-    match Lexer::make(content, &mut spans, 1).run(&mut token_vec) {
-        Err(e) => (spans, token_vec, Some(e)),
-        Ok(()) => (spans, token_vec, None),
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use crate::lex::{Lexer, Span, Spans, Token, TokenKind as K, TokenTriviaKind};
+    use crate::lex::{Spans, Token, TokenKind as K, TokenTriviaKind, lex};
 
     #[test]
     fn byte_class_matches_char_methods() {
@@ -1236,16 +1235,15 @@ mod test {
     }
 
     fn set_up(input: &str) -> anyhow::Result<(Spans, Vec<Token>)> {
-        let mut spans = Spans::new();
-        let mut token_vec = vec![];
-        Lexer::make(input, &mut spans, 0).run(&mut token_vec)?;
-        Ok((spans, token_vec))
+        let lexed = lex(input, vec![]);
+        if let Some(e) = lexed.error {
+            anyhow::bail!("{}", e.message);
+        }
+        Ok((Spans::new(), lexed.tokens))
     }
 
     fn expect_token_kinds(input: &str, expected: Vec<K>) -> anyhow::Result<()> {
-        let mut spans = Spans::new();
-        let mut token_vec = vec![];
-        Lexer::make(input, &mut spans, 0).run(&mut token_vec)?;
+        let (_, token_vec) = set_up(input)?;
         let mut kinds: Vec<K> = Vec::with_capacity(token_vec.len());
         for t in &token_vec {
             kinds.push(t.kind);
@@ -1354,11 +1352,9 @@ mod test {
         // <test harness> expected output
         //
         "#;
-        let mut spans = Spans::new();
-        let mut tokens = vec![];
-        let mut lexer = Lexer::make(input, &mut spans, 0);
-        lexer.run(&mut tokens)?;
-        let trivia = lexer.trivia;
+        let lexed = lex(input, vec![]);
+        assert!(lexed.error.is_none());
+        let (tokens, trivia) = (lexed.tokens, lexed.trivia);
 
         let mut kinds: Vec<K> = Vec::with_capacity(tokens.len());
         for t in &tokens {
@@ -1377,22 +1373,23 @@ mod test {
             ],
             kinds
         );
-        assert_eq!(tokens[0].span(0, &spans), Span { start: 45, len: 3, file_id: 0 });
+        let let_span = tokens[0].span(0, &Spans::new());
+        assert_eq!((let_span.start, let_span.len), (45, 3));
 
         let let_trivia = trivia.for_token(0);
         assert_eq!(let_trivia.len(), 2);
         assert_eq!(let_trivia[0].trivia.kind, TokenTriviaKind::LineComment);
-        assert_eq!(spans.get(let_trivia[0].trivia.span), Span { start: 0, len: 16, file_id: 0 });
+        assert_eq!((let_trivia[0].trivia.start, let_trivia[0].trivia.len), (0, 16));
         assert_eq!(let_trivia[1].trivia.kind, TokenTriviaKind::LineComment);
-        assert_eq!(spans.get(let_trivia[1].trivia.span), Span { start: 24, len: 13, file_id: 0 });
+        assert_eq!((let_trivia[1].trivia.start, let_trivia[1].trivia.len), (24, 13));
 
         assert!(trivia.for_token(3).is_empty());
 
         // Trailing comments attach to the EOF sentinel, the last token
         let trailing = trivia.for_token(tokens.len() as u32 - 1);
         assert_eq!(trailing.len(), 2);
-        assert_eq!(spans.get(trailing[0].trivia.span), Span { start: 72, len: 34, file_id: 0 });
-        assert_eq!(spans.get(trailing[1].trivia.span), Span { start: 114, len: 3, file_id: 0 });
+        assert_eq!((trailing[0].trivia.start, trailing[0].trivia.len), (72, 34));
+        assert_eq!((trailing[1].trivia.start, trailing[1].trivia.len), (114, 3));
         Ok(())
     }
 

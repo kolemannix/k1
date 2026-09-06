@@ -1525,18 +1525,15 @@ impl TypedProgram {
         file_id: FileId,
         f: impl FnOnce(&mut parse::Parser) -> K1Result<R>,
     ) -> K1Result<R> {
-        let mut tokens = std::mem::take(&mut self.buffers.lexer_tokens);
-        tokens.clear();
+        let tokens = std::mem::take(&mut self.buffers.lexer_tokens);
 
         let module = self.modules.get(module_id);
         let parsed_namespace_id = module.parsed_namespace_id;
         let code_str = self.ast.sources.get(file_id).content(&self.ast.mem);
-        let mut lexer = crate::lex::Lexer::make(code_str, &mut self.ast.spans, file_id);
-        if let Err(e) = lexer.run(&mut tokens) {
-            let e = ParseError::Lex(e);
+        let mut lexed = crate::lex::lex(code_str, tokens);
+        if let Err(e) = self.ast.materialize_lexed_file(file_id, &mut lexed) {
             parse::print_error(&self.ast, &e);
-            tokens.clear();
-            self.buffers.lexer_tokens = tokens;
+            self.buffers.lexer_tokens = lexed.tokens;
             kbail!(self, e.span(), "Failed to lex code emitted from here");
         };
 
@@ -1545,13 +1542,12 @@ impl TypedProgram {
             module.name,
             parsed_namespace_id,
             &mut self.ast,
-            &tokens,
+            &lexed.tokens,
             file_id,
         );
 
         let r = f(&mut p);
-        tokens.clear();
-        self.buffers.lexer_tokens = tokens;
+        self.buffers.lexer_tokens = lexed.tokens;
         r
     }
 
