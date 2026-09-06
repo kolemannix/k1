@@ -86,7 +86,7 @@ fn string_literal() -> ParseResult<()> {
 fn infix() -> Result<(), ParseError> {
     let mut ast = make_test_ast();
     let mut parser = set_up("let x = a + b * doStuff(1, 2)", &mut ast);
-    let result = parser.parse_statement()?.unwrap();
+    let result = parser.expect_statement()?;
     if let ParsedStmt::Let(ParsedLet { value: expr_id, .. }) = ast.stmts.get(result) {
         let ParsedExpr::BinaryOp(op) = ast.exprs.get(expr_id.unwrap()) else { panic!() };
         assert_eq!(op.op_kind, BinaryOpKind::Add);
