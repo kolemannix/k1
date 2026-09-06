@@ -2489,7 +2489,6 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             self.eat_delimited(
                 "params",
                 &mut parameter_names,
-                K::Comma,
                 false,
                 K::CloseParen,
                 |p| {
@@ -3360,7 +3359,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.eat_delimited(
             "Struct fields",
             &mut fields,
-            K::Comma,
             true,
             K::CloseBrace,
             Parser::expect_struct_type_field,
@@ -3436,7 +3434,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.eat_delimited(
             "either members",
             &mut variants,
-            K::Comma,
             true,
             K::CloseBrace,
             Parser::expect_sum_variant,
@@ -3518,7 +3515,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.eat_delimited(
             "Struct",
             &mut fields,
-            K::Comma,
             true,
             K::CloseBrace,
             Parser::expect_struct_field,
@@ -3768,7 +3764,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.eat_delimited(
             "Type Arguments",
             &mut type_args,
-            K::Comma,
             false,
             K::CloseBracket,
             |p| {
@@ -4046,7 +4041,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.eat_delimited(
                     "list elements",
                     &mut elements,
-                    TokenKind::Comma,
                     false,
                     TokenKind::CloseBracket,
                     Parser::expect_expression,
@@ -4482,7 +4476,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.eat_delimited(
                 "Function context arguments",
                 &mut args,
-                K::Comma,
                 true,
                 K::CloseParen,
                 |p| p.expect_fn_arg(true),
@@ -4492,7 +4485,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.eat_delimited(
             "Function arguments",
             &mut args,
-            K::Comma,
             true,
             K::CloseParen,
             |p| p.expect_fn_arg(false),
@@ -4519,7 +4511,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             self.eat_delimited(
                                 "Context abilities",
                                 &mut context_abilities,
-                                K::Comma,
                                 false,
                                 K::CloseParen,
                                 |p| {
@@ -4676,7 +4667,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.eat_delimited(
                 "Function context parameters",
                 &mut params,
-                K::Comma,
                 true,
                 K::CloseParen,
                 |p| Parser::expect_fn_param(p, true),
@@ -4686,7 +4676,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             "Function parameters",
             &mut params,
             K::OpenParen,
-            K::Comma,
             true,
             K::CloseParen,
             |p| Parser::expect_fn_param(p, false),
@@ -4700,7 +4689,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         name: &str,
         destination: &mut List<T, ParsedProgram>,
         opener: TokenKind,
-        delim: TokenKind,
         newline_delim: bool,
         terminator: TokenKind,
         parse: F,
@@ -4711,7 +4699,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let next = self.peek();
         if next.kind == opener {
             self.advance();
-            self.eat_delimited(name, destination, delim, newline_delim, terminator, parse)?;
+            self.eat_delimited(name, destination, newline_delim, terminator, parse)?;
             let span = self.extend_tok_to_here(next);
             Ok(Some(span))
         } else {
@@ -4724,7 +4712,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         name: &str,
         destination: &mut List<T, ParsedProgram>,
         opener: TokenKind,
-        delim: TokenKind,
         newline_delim: bool,
         terminator: TokenKind,
         parse: F,
@@ -4736,7 +4723,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name,
             destination,
             opener,
-            delim,
             newline_delim,
             terminator,
             parse,
@@ -4751,7 +4737,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         &mut self,
         name: &str,
         destination: &mut List<T, ParsedProgram>,
-        delim: TokenKind,
         newline_delim: bool,
         terminator: TokenKind,
         parse: F,
@@ -4768,8 +4753,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             match parse(self) {
                 Err(e) => {
                     self.ast.report_error(e);
-                    match self.scan_to_kind(&[delim, terminator])? {
-                        t if t.kind == delim => continue,
+                    match self.scan_to_kind(&[K::Comma, terminator])? {
+                        t if t.kind == K::Comma => continue,
                         t if t.kind == terminator => break Ok(()),
                         _ => {
                             break Err(
@@ -4787,20 +4772,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.advance();
                 return Ok(());
             }
-            let found_delim = self.maybe_consume(delim);
-            if found_delim.is_none() {
-                // A line break separates statements; `;` remains the explicit
-                // same-line separator
+            if self.maybe_consume(K::Comma).is_none() {
                 if newline_delim && self.peek().is_newline_preceded() {
                     continue;
                 }
                 let e = self.error_expected(
-                    format!("new line or '{delim}' in between each {name}"),
+                    format!("new line or ',' in between each {name}"),
                     self.peek(),
                 );
                 self.ast.report_error(e);
-                match self.scan_to_kind(&[delim, terminator])? {
-                    t if t.kind == delim => continue,
+                match self.scan_to_kind(&[K::Comma, terminator])? {
+                    t if t.kind == K::Comma => continue,
                     t if t.kind == terminator => break Ok(()),
                     _ => {
                         break Err(
@@ -4905,15 +4887,67 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         terminator: TokenKind,
     ) -> ParseResult<List<ParsedStmtId, ParsedProgram>> {
         let mut stmts = self.ast.mem.new_list(4);
-        self.eat_delimited(
-            "Block statements",
-            &mut stmts,
-            K::Semicolon,
-            true,
-            terminator,
-            Parser::expect_statement,
-        )?;
-        Ok(stmts)
+        loop {
+            let t = self.peek();
+            if t.kind == terminator {
+                self.advance();
+                return Ok(stmts);
+            }
+            if t.kind == K::Eof {
+                let back = self.peek_back();
+                return Err(self.error_expected(format!("a statement or {terminator}"), back));
+            }
+            let cursor_before = self.tokens.cursor_position();
+            match self.expect_statement() {
+                Ok(stmt) => {
+                    stmts.push_grow(&mut self.ast.mem, stmt);
+                    let next = self.peek();
+                    if next.kind == K::Semicolon {
+                        self.advance();
+                        continue;
+                    }
+                    if next.kind == terminator || next.kind == K::Eof || next.is_newline_preceded()
+                    {
+                        continue;
+                    }
+                    let e = self.error_expected("new line or ';' in between each statement", next);
+                    self.ast.report_error(e);
+                }
+                Err(e) => self.ast.report_error(e),
+            }
+            if self.tokens.cursor_position() == cursor_before {
+                self.advance();
+            }
+            if !self.recover_to_statement(terminator) {
+                let back = self.peek_back();
+                return Err(self.error_expected(format!("a statement or {terminator}"), back));
+            }
+        }
+    }
+
+    fn recover_to_statement(&mut self, terminator: TokenKind) -> bool {
+        let mut depth: u32 = 0;
+        loop {
+            let t = self.peek();
+            match t.kind {
+                K::Eof => return false,
+                k if k == terminator && depth == 0 => return true,
+                K::Semicolon if depth == 0 => {
+                    self.advance();
+                    return true;
+                }
+                _ if depth == 0 && t.is_newline_preceded() => return true,
+                K::OpenBrace | K::OpenParen | K::OpenBracket => {
+                    depth += 1;
+                    self.advance();
+                }
+                K::CloseBrace | K::CloseParen | K::CloseBracket => {
+                    depth = depth.saturating_sub(1);
+                    self.advance();
+                }
+                _ => self.advance(),
+            }
+        }
     }
 
     fn parse_type_constraints(
@@ -5062,7 +5096,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             "Function type parameters",
             &mut type_params,
             K::OpenBracket,
-            TokenKind::Comma,
             false,
             TokenKind::CloseBracket,
             |p| p.expect_type_param(),
@@ -5152,7 +5185,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             "macro type parameters",
             &mut type_params,
             TokenKind::OpenBracket,
-            TokenKind::Comma,
             false,
             TokenKind::CloseBracket,
             |p| p.expect_type_param(),
@@ -5300,7 +5332,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.eat_delimited(
                 "Ability Parameter",
                 &mut ability_params,
-                K::Comma,
                 false,
                 K::CloseBracket,
                 expect_ability_type_param,
@@ -5342,7 +5373,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             "Ability Arguments",
             &mut arguments,
             K::OpenBracket,
-            K::Comma,
             false,
             K::CloseBracket,
             Parser::expect_ability_type_argument,
@@ -5364,7 +5394,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.eat_delimited(
                 "Generic implementation parameters",
                 &mut generic_impl_params,
-                K::Comma,
                 false,
                 K::CloseBracket,
                 |p| p.expect_type_param(),
@@ -5422,7 +5451,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.eat_delimited(
                 "Type arguments",
                 &mut type_params,
-                K::Comma,
                 false,
                 K::CloseBracket,
                 Parser::expect_type_param,
