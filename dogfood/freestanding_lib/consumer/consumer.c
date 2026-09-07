@@ -65,6 +65,7 @@ int k1_platform_io_is_tty(int fd) {
   return 1;
 }
 void k1_platform_process_exit(int code) { sys_exit(code); }
+unsigned long k1_platform_tmp_arena_size(void) { return 64UL << 20; }
 
 int main(void) {
   long data[4] = {10, 20, 30, 40};
