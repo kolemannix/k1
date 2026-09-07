@@ -48,6 +48,14 @@ ns platform {
       r
     }
 
+    fn tmp-arena-size(): size {
+      if k1/is-static 1 * arena/gb
+      else #if k1/platform is {
+        :posix-macos or :posix-linux or :wasi -> 1 * arena/gb,
+        :bare -> port/bare/tmp-arena-size()
+      }
+    }
+
   }
 
   // heap delegates to whoever owns an allocator: libc on posix, the linking
@@ -920,6 +928,7 @@ ns platform {
       fn(extern("k1_platform_file_close")) close-fd(fd: i32)
       fn(extern("k1_platform_file_size")) file-size(fd: i32): i64
       fn(extern("k1_platform_process_exit")) exit(code: i32): never
+      fn(extern("k1_platform_tmp_arena_size")) tmp-arena-size(): size
       fn(extern("k1_platform_env_get")) getenv(name: ptr): ptr
       fn(extern("k1_platform_dylib_open")) dylib-open-c(path: ptr): ptr
       fn(extern("k1_platform_dylib_open_self")) dylib-open-self(): ptr
