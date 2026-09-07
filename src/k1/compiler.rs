@@ -431,6 +431,7 @@ pub struct LspCompileOptions {
     /// Arms completion-marker recording and parse-error tolerance; see
     /// TypedProgram::completion
     pub completion: bool,
+    pub progress_sink: Option<crate::typer::trace::LiveProgressSink>,
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -593,12 +594,8 @@ impl ModuleLoadHandle {
             .join()
             .expect("module root reader thread panicked")
             .map_err(|e| anyhow::anyhow!(e))?;
-        let remaining = ModuleRemainingSources {
-            module_dir: self.module_dir,
-            root_source_file_path: self.root_source_file_path,
-            is_dir: self.is_dir,
-            speculative_read_handle: self.remaining,
-        };
+        let remaining =
+            ModuleRemainingSources { is_dir: self.is_dir, speculative_read_handle: self.remaining };
         Ok((root, remaining))
     }
 }
@@ -631,8 +628,6 @@ pub fn collect_directory_module_source_paths(
 }
 
 pub struct ModuleRemainingSources {
-    module_dir: StringId,
-    root_source_file_path: StringId,
     is_dir: bool,
     speculative_read_handle: ModuleRemainingSourcesHandle,
 }
@@ -642,23 +637,8 @@ impl ModuleRemainingSources {
         self.is_dir
     }
 
-    pub fn into_read_sources_handle(
-        self,
-        idents: &IdentPool,
-        setup_ran: bool,
-        source_overrides: &fxhash::FxHashMap<String, String>,
-    ) -> ModuleRemainingSourcesHandle {
-        if setup_ran {
-            spawn_sources_read(
-                idents,
-                self.module_dir,
-                self.root_source_file_path,
-                self.is_dir,
-                source_overrides,
-            )
-        } else {
-            self.speculative_read_handle
-        }
+    pub fn read_handle(self) -> ModuleRemainingSourcesHandle {
+        self.speculative_read_handle
     }
 }
 
@@ -775,7 +755,6 @@ pub fn start_setup<Tag>(
         return Ok(None);
     }
 
-    eprintln!("Setting up module '{module_name}' (running fn setup in {root_path})...");
     let _ = fs::remove_file(Path::new(stamp_path.as_str()));
     for output in req.outputs {
         let output_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *output);
@@ -1381,11 +1360,13 @@ pub fn compile_program_ext(
     let _cwd = CwdGuard::enter(idents.get_string(home_dir));
 
     let mut stamp_checks: Vec<StampCheck> = vec![];
+    let mut listed_module_count = 0;
     let mut k1 = 'program: {
         let cache_dir = Path::new(ast.idents.get_string(cache_dir));
         if args.cache
             && let Some(modules) = read_module_list(&ast.idents, cache_dir)
         {
+            listed_module_count = modules.len() as u32;
             let tmp_mark = ast.tmp.mark();
             let input_hashes_by_module = inputs_hashes_from_module_list(
                 &ast.idents,
@@ -1412,14 +1393,7 @@ pub fn compile_program_ext(
                 let Some(bytes) = crate::snap::cache_load(cache_dir, *hash) else { continue };
                 let load_end = clock.raw();
                 let module_count = i as u32 + 1;
-                let live = args.chatty && std::io::stderr().is_terminal();
-                match TypedProgram::restore(
-                    &bytes,
-                    config,
-                    lsp.clone(),
-                    (load_start, load_end),
-                    live,
-                ) {
+                match TypedProgram::restore(&bytes, config, lsp.clone(), (load_start, load_end)) {
                     Ok(mut restored) => {
                         restored.inputs_hash = *hash;
                         restored.restored_module_count = module_count;
@@ -1444,9 +1418,10 @@ pub fn compile_program_ext(
         TypedProgram::new(ast, config, lsp)
     };
     k1.trace.clock_start = clock_start;
+    k1.listed_module_count = listed_module_count;
     for check in stamp_checks {
         let module_name = k1.ast.idents.intern(&check.module_name);
-        if k1.trace.recording {
+        if k1.trace.profiling_mode {
             k1.trace.record(
                 TraceKind::SetupStamp,
                 module_name.as_u32(),
@@ -1487,7 +1462,7 @@ pub fn compile_program_ext(
     let warning_count =
         k1.messages.borrow().iter().filter(|e| e.level == MessageLevel::Warn).count();
     if warning_count > 0 {
-        k1.trace_live_clear();
+        k1.trace_clear();
         eprintln!("Completed with {} warnings", warning_count);
     }
 
@@ -2017,7 +1992,7 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
 }
 
 pub fn report_trace(args: &Args, k1: &TypedProgram) {
-    k1.trace_live_clear();
+    k1.trace_clear();
     if args.chatty {
         k1.print_trace_summary(&mut std::io::stderr()).unwrap();
     }

@@ -234,7 +234,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 
 ## Project: More LSP features
 - [ ] LSP Workspace symbols
-- [ ] Rest of the completion sites (fill in as I hit them)
+- [x] Rest of the completion sites (fill in as I hit them)
 - [x] Hover first pass
 - [x] Hover much better
 - [x] Hover no more markdown

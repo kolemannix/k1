@@ -7,6 +7,7 @@ use crate::ir::IrUnitId;
 use crate::typer::{EvalExprContext, TypedProgram};
 use crate::vpool::VPool;
 use crate::{SV8, nz_u32_id, static_assert_size};
+use std::sync::Arc;
 
 nz_u32_id!(FrameId);
 
@@ -171,7 +172,31 @@ impl TraceKind {
         }
     }
 
-    /// Kinds worth a line in the live stack: coarse enough not to flicker
+    pub fn is_planned(self) -> bool {
+        matches!(
+            self,
+            TraceKind::ModuleDiscover
+                | TraceKind::ModuleRead
+                | TraceKind::Parse
+                | TraceKind::SetupStamp
+                | TraceKind::SetupFn
+                | TraceKind::ModuleCompile
+                | TraceKind::TyperPass
+                | TraceKind::SnapRestore
+                | TraceKind::SnapRestoreSection
+                | TraceKind::SnapRoundtrip
+                | TraceKind::SnapStore
+                | TraceKind::CodegenPrepare
+                | TraceKind::Codegen
+                | TraceKind::LlvmPasses
+                | TraceKind::Thinlto
+                | TraceKind::Link
+                | TraceKind::Archive
+                | TraceKind::ReloadDylib
+        )
+    }
+
+    /// coarse enough not to flicker, (at least theoretically)
     pub fn is_coarse(self) -> bool {
         matches!(
             self,
@@ -271,16 +296,29 @@ impl TraceFrame {
     }
 }
 
+#[derive(Clone)]
+pub enum LiveProgressSink {
+    Stderr,
+    Fn(Arc<dyn Fn(&str, Option<u32>) + Send + Sync>),
+}
+
+impl std::fmt::Debug for LiveProgressSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            LiveProgressSink::Stderr => "Stderr",
+            LiveProgressSink::Fn(_) => "Fn",
+        })
+    }
+}
+
 pub struct Trace {
     pub clock: Clock,
     pub clock_start: u64,
     pub frames: VPool<TraceFrame, FrameId>,
     stack: Vec<FrameId>,
-    /// Off: no clock reads, and only essential kinds are pushed
-    pub recording: bool,
+    pub profiling_mode: bool,
     pub opcode_counts: [i64; OPCODE_COUNT as usize],
-    /// Redraw the stack on stderr as it changes (chatty on a tty)
-    pub live: bool,
+    pub progress_sink: Option<LiveProgressSink>,
     next_draw: u64,
     draw_interval: u64,
 }
@@ -295,15 +333,19 @@ fn unit_key(unit: IrUnitId) -> (u32, u8) {
 }
 
 impl Trace {
-    pub fn make(clock: Clock, live: bool, recording: bool) -> Trace {
+    pub fn make(
+        clock: Clock,
+        progress_sink: Option<LiveProgressSink>,
+        profiling_mode: bool,
+    ) -> Trace {
         Trace {
             clock,
             clock_start: clock.raw(),
             frames: VPool::make_with_hint("trace_frames", 16 * 1024),
             stack: Vec::with_capacity(64),
-            recording,
+            profiling_mode,
             opcode_counts: [0; OPCODE_COUNT as usize],
-            live,
+            progress_sink,
             next_draw: 0,
             draw_interval: clock.nanos_to_ticks(LIVE_DRAW_INTERVAL_NANOS),
         }
@@ -313,13 +355,12 @@ impl Trace {
         &self.stack
     }
 
-    /// True at most once per draw interval, and never when not live
-    pub fn draw_due(&mut self) -> bool {
-        if !self.live {
+    pub fn is_draw_due(&mut self, planned_push: bool) -> bool {
+        if self.progress_sink.is_none() {
             return false;
         }
         let now = self.clock.raw();
-        if now < self.next_draw {
+        if !planned_push && now < self.next_draw {
             return false;
         }
         self.next_draw = now + self.draw_interval;
@@ -327,7 +368,8 @@ impl Trace {
     }
 
     pub fn push(&mut self, kind: TraceKind, key: u32, flags: u8) -> Option<FrameId> {
-        if !self.recording && !kind.is_essential() {
+        let live_planned = self.progress_sink.is_some() && kind.is_planned();
+        if !self.profiling_mode && !kind.is_essential() && !live_planned {
             return None;
         }
         let parent_frame = self.top();
@@ -335,7 +377,7 @@ impl Trace {
             Some(parent) => self.frames.get(parent).flags & FRAME_FLAG_SPECULATIVE,
             None => 0,
         };
-        let clock_start = if self.recording { self.clock.raw() } else { 0 };
+        let clock_start = if self.profiling_mode { self.clock.raw() } else { 0 };
         let id = self.frames.add(TraceFrame {
             clock_start,
             clock_end: 0,
@@ -367,7 +409,7 @@ impl Trace {
         let Some(frame) = frame else { return };
         let popped = self.stack.pop();
         debug_assert_eq!(popped, Some(frame));
-        if !self.recording {
+        if !self.profiling_mode {
             return;
         }
         let clock_end = self.clock.raw();
@@ -475,7 +517,7 @@ impl TypedProgram {
 
     pub fn trace_push(&mut self, kind: TraceKind, key: u32, flags: u8) -> Option<FrameId> {
         let frame = self.trace.push(kind, key, flags);
-        if self.trace.draw_due() {
+        if self.trace.is_draw_due(kind.is_planned()) {
             self.trace_draw();
         }
         frame
@@ -488,7 +530,7 @@ impl TypedProgram {
         requester_frame: Option<FrameId>,
     ) -> Option<FrameId> {
         let frame = self.trace.push_unit(kind, unit, requester_frame);
-        if self.trace.draw_due() {
+        if self.trace.is_draw_due(kind.is_planned()) {
             self.trace_draw();
         }
         frame
@@ -496,16 +538,32 @@ impl TypedProgram {
 
     pub fn trace_pop(&mut self, frame: Option<FrameId>) {
         self.trace.pop(frame);
-        if self.trace.draw_due() {
+        if self.trace.is_draw_due(false) {
             self.trace_draw();
         }
     }
 
-    /// One line, coarse frames only, outermost first, cut to the terminal width
+    fn trace_current_progress_percent(&self) -> Option<u32> {
+        if self.listed_module_count == 0 {
+            return None;
+        }
+        let total = self.module_order.len().max(self.listed_module_count as usize);
+        let mut pass_fraction = 0.0;
+        for id in self.trace.stack() {
+            let frame = self.trace.frames.get(*id);
+            if frame.kind == TraceKind::TyperPass {
+                pass_fraction = frame.key as f64 / PASS_NAMES.len() as f64;
+            }
+        }
+        let done = self.completed_module_count as f64 + pass_fraction;
+        Some((done * 100.0 / total as f64).min(100.0) as u32)
+    }
+
+    /// One line, coarse frames only, outermost first
     fn trace_draw(&self) {
         use std::io::Write;
-        let columns = terminal_columns();
-        let mut line = String::with_capacity(columns);
+        let Some(sink) = &self.trace.progress_sink else { return };
+        let mut line = String::with_capacity(128);
         for id in self.trace.stack() {
             let frame = self.trace.frames.get(*id);
             if !frame.kind.is_coarse() {
@@ -516,23 +574,32 @@ impl TypedProgram {
             }
             line.push_str(&self.frame_title(frame));
         }
-        if line.chars().count() >= columns {
-            let mut cut = String::with_capacity(columns);
-            for c in line.chars().take(columns.saturating_sub(2)) {
-                cut.push(c);
+        let percent = self.trace_current_progress_percent();
+        match sink {
+            LiveProgressSink::Fn(f) => f(&line, percent),
+            LiveProgressSink::Stderr => {
+                let columns = terminal_columns();
+                if let Some(percent) = percent {
+                    line.insert_str(0, &format!("{percent:>3}% "));
+                }
+                if line.chars().count() >= columns {
+                    let mut cut = String::with_capacity(columns);
+                    for c in line.chars().take(columns.saturating_sub(2)) {
+                        cut.push(c);
+                    }
+                    cut.push('…');
+                    line = cut;
+                }
+                let mut stderr = std::io::stderr().lock();
+                let _ = write!(stderr, "\r\x1b[2K{line}");
+                let _ = stderr.flush();
             }
-            cut.push('…');
-            line = cut;
         }
-        let mut stderr = std::io::stderr().lock();
-        let _ = write!(stderr, "\r\x1b[2K{line}");
-        let _ = stderr.flush();
     }
 
-    /// Clear the live line before other stderr output
-    pub fn trace_live_clear(&self) {
+    pub fn trace_clear(&self) {
         use std::io::Write;
-        if self.trace.live {
+        if matches!(self.trace.progress_sink, Some(LiveProgressSink::Stderr)) {
             let mut stderr = std::io::stderr().lock();
             let _ = write!(stderr, "\r\x1b[2K");
             let _ = stderr.flush();
@@ -556,7 +623,7 @@ mod tests {
 
     #[test]
     fn exclusive_is_inclusive_minus_children() {
-        let mut trace = Trace::make(Clock::new(), false, true);
+        let mut trace = Trace::make(Clock::new(), None, true);
         let outer = trace.push(TraceKind::FunctionTypecheck, 1, 0);
         let inner = trace.push(TraceKind::TypeInfer, 2, 0);
         std::thread::sleep(std::time::Duration::from_millis(2));
@@ -572,7 +639,7 @@ mod tests {
 
     #[test]
     fn recorded_children_charge_parent_and_saturate() {
-        let mut trace = Trace::make(Clock::new(), false, true);
+        let mut trace = Trace::make(Clock::new(), None, true);
         let parent = trace.push(TraceKind::Codegen, 0, 0);
         let start = trace.clock.raw();
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -587,7 +654,7 @@ mod tests {
 
     #[test]
     fn speculative_flag_inherits_and_stack_scans() {
-        let mut trace = Trace::make(Clock::new(), false, true);
+        let mut trace = Trace::make(Clock::new(), None, true);
         let a = trace.push(TraceKind::StaticExec, 7, FRAME_FLAG_SPECULATIVE);
         let b = trace.push(TraceKind::IrLower, 9, 0);
         assert!(frame(&trace, b.unwrap()).is_speculative());
@@ -603,7 +670,7 @@ mod tests {
 
     #[test]
     fn not_recording_keeps_essential_frames_without_clocks() {
-        let mut trace = Trace::make(Clock::new(), false, false);
+        let mut trace = Trace::make(Clock::new(), None, false);
         let typecheck = trace.push(TraceKind::FunctionTypecheck, 1, 0);
         let lower = trace.push(TraceKind::IrLower, 9, 0);
         assert_eq!(typecheck, None);
@@ -620,7 +687,7 @@ mod tests {
     #[should_panic]
     #[cfg(debug_assertions)]
     fn pop_of_non_top_frame_panics() {
-        let mut trace = Trace::make(Clock::new(), false, true);
+        let mut trace = Trace::make(Clock::new(), None, true);
         let a = trace.push(TraceKind::Parse, 1, 0);
         let _b = trace.push(TraceKind::Parse, 2, 0);
         trace.pop(a);

@@ -620,7 +620,10 @@ mod completion_tests {
             dump_idents: false,
             dump_trace: false,
         };
-        match compile_program_ext(&args, LspCompileOptions { source_overrides, completion: true }) {
+        match compile_program_ext(
+            &args,
+            LspCompileOptions { source_overrides, completion: true, progress_sink: None },
+        ) {
             Ok(program) => Box::new(program),
             Err(CompileProgramError::TyperFailure(program)) => program,
         }

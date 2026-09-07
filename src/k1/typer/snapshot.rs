@@ -135,6 +135,7 @@ impl TypedProgram {
             megarepl,
             inputs_hash: _,
             restored_module_count: _,
+            listed_module_count: _,
             setups_fresh: _,
         } = self;
         assert!(megarepl.is_none(), "cannot snapshot a megarepl session");
@@ -221,7 +222,6 @@ impl TypedProgram {
         config: CompilerConfig,
         lsp: crate::compiler::LspCompileOptions,
         load: (u64, u64),
-        live: bool,
     ) -> Result<TypedProgram, String> {
         use crate::typer::trace::{TraceKind, restore_section};
         let clock = crate::clock::Clock::new();
@@ -231,7 +231,6 @@ impl TypedProgram {
         let ast = ParsedProgram::restore(r);
         let ast_end = clock.raw();
         let mut k1 = TypedProgram::new(ast, config, lsp);
-        k1.trace.live = live;
         let root = k1.trace_push(TraceKind::SnapRestore, 0, 0);
         if let Some(root) = root {
             k1.trace.frames.get_mut(root).clock_start = load.0;
@@ -354,7 +353,7 @@ impl TypedProgram {
         let first = self.snap();
         let now = self.trace.clock.raw();
         let mut restored =
-            match TypedProgram::restore(&first, self.config, self.lsp.clone(), (now, now), false) {
+            match TypedProgram::restore(&first, self.config, self.lsp.clone(), (now, now)) {
                 Ok(restored) => restored,
                 Err(e) => panic!("snapshot restore failed: {e}"),
             };

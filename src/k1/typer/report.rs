@@ -255,7 +255,7 @@ impl TypedProgram {
         };
 
         if !skip_print {
-            self.trace_live_clear();
+            self.trace_clear();
             let use_color = std::io::stderr().is_terminal();
             self.write_error(&mut std::io::stderr(), &e, use_color).unwrap();
         }
@@ -368,7 +368,7 @@ impl TypedProgram {
             self.span_location(SpanId::from_u32(key).unwrap()).unwrap_or_else(|| "?".to_string())
         };
         let mut label = match frame.kind {
-            TraceKind::ModuleDiscover | TraceKind::SetupStamp => {
+            TraceKind::ModuleDiscover | TraceKind::SetupStamp | TraceKind::SetupFn => {
                 self.ident_str(StringId::from_u32(key).unwrap()).to_string()
             }
             TraceKind::ModuleCompile | TraceKind::ModuleRead | TraceKind::SnapStore => {
@@ -378,8 +378,7 @@ impl TypedProgram {
                 let filename = self.ident_str(StringId::from_u32(key).unwrap());
                 filename.to_string()
             }
-            TraceKind::SetupFn
-            | TraceKind::TypeInfer
+            TraceKind::TypeInfer
             | TraceKind::StaticExec
             | TraceKind::Metaprogram
             | TraceKind::VmValueFerry => span_label(),

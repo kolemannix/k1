@@ -170,7 +170,9 @@ An empty block `{}` is legal and yields `.{}` — fine as a no-op fn body
 
 ## Variables And Mutation
 
-Use `let` for local bindings and `=` for assignment:
+Use `let` for local bindings and `=` for assignment. Every local is
+assignable; there is no `mut` on a binding (`mutable` exists only as a global
+modifier, `let(mutable) g = 0`):
 
 ```rust
 let count = 0

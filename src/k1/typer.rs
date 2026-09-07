@@ -13,7 +13,7 @@ pub(crate) mod snapshot;
 pub(crate) mod static_exec;
 pub(crate) mod static_value;
 pub(crate) mod synth;
-pub(crate) mod trace;
+pub mod trace;
 pub(crate) mod type_eval;
 pub(crate) mod typed_int_value;
 pub(crate) mod types;
@@ -60,15 +60,15 @@ use crate::kpath;
 use crate::lex::{self, Span, SpanId, TokenKind};
 use crate::parse::{
     self, AstHandle, AstSlice, BinaryOpKind, FileId, ForExpr, IdentPool, IdentSpanned,
-    InterpolatedStringPart, NamedTypeArg, NumericWidth, ParsedAbilityExpr,
-    ParsedAbilityId, ParsedAbilityImplId, ParsedBlock, ParsedBlockKind, ParsedBreak, ParsedCall,
-    ParsedCallArg, ParsedContinue, ParsedExpr, ParsedExprId, ParsedFnParamType, ParsedFunctionId,
-    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr,
-    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind,
-    ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr,
-    ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUnaryOpKind,
-    ParsedUseId, ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, StringId,
-    StructValueField, StructValueFieldKind,
+    InterpolatedStringPart, NamedTypeArg, NumericWidth, ParsedAbilityExpr, ParsedAbilityId,
+    ParsedAbilityImplId, ParsedBlock, ParsedBlockKind, ParsedBreak, ParsedCall, ParsedCallArg,
+    ParsedContinue, ParsedExpr, ParsedExprId, ParsedFnParamType, ParsedFunctionId, ParsedGlobalId,
+    ParsedId, ParsedIfExpr, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId,
+    ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr,
+    ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr, ParsedTypeDefnId,
+    ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUnaryOpKind, ParsedUseId,
+    ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, StringId, StructValueField,
+    StructValueFieldKind,
 };
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -2894,6 +2894,7 @@ pub struct TypedProgram {
 
     /// diagnostic only, for --chatty and tests
     pub restored_module_count: u32,
+    pub listed_module_count: u32,
     pub setups_fresh: SV8<StringId>,
 }
 
@@ -2920,8 +2921,12 @@ impl TypedProgram {
     pub fn new(
         ast: ParsedProgram,
         config: CompilerConfig,
-        lsp: crate::compiler::LspCompileOptions,
+        mut lsp: crate::compiler::LspCompileOptions,
     ) -> TypedProgram {
+        let progress_sink = lsp.progress_sink.take().or_else(|| {
+            (config.chatty && std::io::stderr().is_terminal())
+                .then_some(trace::LiveProgressSink::Stderr)
+        });
         let completion = lsp
             .completion
             .then(|| CompletionState { marker: ast.idents.intern(COMPLETION_MARKER), site: None });
@@ -3059,15 +3064,12 @@ impl TypedProgram {
             ir: ir::ProgramIr::make(),
             bc: crate::bc::BcProgram::make(),
 
-            trace: trace::Trace::make(
-                clock,
-                config.chatty && std::io::stderr().is_terminal(),
-                config.record_trace,
-            ),
+            trace: trace::Trace::make(clock, progress_sink, config.record_trace),
             global_id_k1_arena: None,
             megarepl: None,
             inputs_hash,
             restored_module_count: 0,
+            listed_module_count: 0,
             setups_fresh: smallvec![],
         };
 
@@ -3092,8 +3094,11 @@ impl TypedProgram {
             self.discover_module_and_deps(load_handle, primary_module, &mut modules_to_typecheck)?;
 
         if primary_module
-            && matches!(self.config.command, crate::compiler::CommandKind::Setup { .. })
+            && let crate::compiler::CommandKind::Setup { force } = self.config.command
         {
+            for (module_id, _) in &modules_to_typecheck {
+                self.ensure_module_setup(*module_id, force && *module_id == added_module_id)?;
+            }
             return Ok(added_module_id);
         }
 
@@ -3114,6 +3119,11 @@ impl TypedProgram {
         for (module_id, remaining) in modules_to_typecheck.into_iter() {
             let module_frame = self.trace_push(TraceKind::ModuleCompile, module_id.as_u32(), 0);
             let module_result: anyhow::Result<()> = (|| {
+                let remaining = if self.ensure_module_setup(module_id, false)? {
+                    self.spawn_remaining_sources(module_id)
+                } else {
+                    remaining
+                };
                 let read_frame = self.trace_push(TraceKind::ModuleRead, module_id.as_u32(), 0);
                 let files = remaining.join();
                 self.trace_pop(read_frame);
@@ -3144,7 +3154,10 @@ impl TypedProgram {
                     );
                 }
                 self.typecheck_module(module_id, parsed_namespace_id, build_ns_defn)?;
-                debug_assert_eq!(self.module_order[self.completed_module_count as usize], module_id);
+                debug_assert_eq!(
+                    self.module_order[self.completed_module_count as usize],
+                    module_id
+                );
                 self.completed_module_count += 1;
                 if self.compile_all_pending_ir(SpanId::NONE).is_err() {
                     bail!("Failed to compile ir");
@@ -3391,64 +3404,7 @@ impl TypedProgram {
         m.build_ns_defn = build_ns.map(|b| b.parsed_id());
         m.is_dir = remaining_sources.is_dir();
 
-        let setup_decl = self.modules.get(module_id).manifest.setup;
-        let mut setup_ran = false;
-        if let Some(setup) = setup_decl {
-            let force = primary_module
-                && matches!(
-                    self.config.command,
-                    crate::compiler::CommandKind::Setup { force: true }
-                );
-            let started = if !force && self.setups_fresh.contains(&module_name) {
-                Ok(None)
-            } else {
-                let frame = self.trace_push(TraceKind::SetupStamp, module_name.as_u32(), 0);
-                let request = self.setup_request(module_id, setup, force);
-                let tmp = self.get_tmp_unsafe();
-                let mark = tmp.mark();
-                let result = crate::compiler::start_setup(&request, tmp);
-                tmp.reset_to(mark);
-                self.trace_pop(frame);
-                result
-            };
-            let started = match started {
-                Ok(started) => started,
-                Err(e) => {
-                    let msg =
-                        format!("Setup failed for module '{}': {e:#}", self.ident_str(module_name));
-                    return Err(self.module_error(build_ns_span, msg));
-                }
-            };
-            if let Some(started) = started {
-                let Some(build_ns) = build_ns else {
-                    self.ice_span(build_ns_span, "setup was declared with no ns build")
-                };
-                if let Err(e) = self.execute_setup_fn(build_ns.scope_id, home_dir, build_ns_span) {
-                    self.report(e);
-                    bail!("fn setup failed for module {}", self.ident_str(module_name))
-                }
-                let finished = {
-                    let request = self.setup_request(module_id, setup, force);
-                    let tmp = self.get_tmp_unsafe();
-                    let mark = tmp.mark();
-                    let result = crate::compiler::finish_setup(&request, started, tmp);
-                    tmp.reset_to(mark);
-                    result
-                };
-                if let Err(e) = finished {
-                    let msg =
-                        format!("Setup failed for module '{}': {e:#}", self.ident_str(module_name));
-                    return Err(self.module_error(build_ns_span, msg));
-                }
-                setup_ran = true;
-            }
-        }
-
-        let remaining = remaining_sources.into_read_sources_handle(
-            &self.ast.idents,
-            setup_ran,
-            &self.lsp.source_overrides,
-        );
+        let remaining = remaining_sources.read_handle();
         let mut dep_handles: SV8<crate::compiler::ModuleLoadHandle> = smallvec![];
         for dep in self.mem.getn(deps) {
             let dep_name = dep.name;
@@ -3626,13 +3582,76 @@ impl TypedProgram {
         }
     }
 
+    /// Runs the module's `fn setup` when its declared outputs are stale (or
+    /// `force`), and says whether it ran, since it writes the module's sources
+    fn ensure_module_setup(&mut self, module_id: ModuleId, force: bool) -> anyhow::Result<bool> {
+        let module = self.modules.get(module_id);
+        let Some(setup) = module.manifest.setup else { return Ok(false) };
+        let (module_name, home_dir, namespace_scope_id, build_ns_defn) =
+            (module.name, module.home_dir, module.namespace_scope_id, module.build_ns_defn);
+        let build_ns_span =
+            build_ns_defn.map(|id| self.ast.get_span_for_id(id)).unwrap_or(SpanId::NONE);
+        let started = if !force && self.setups_fresh.contains(&module_name) {
+            Ok(None)
+        } else {
+            let frame = self.trace_push(TraceKind::SetupStamp, module_name.as_u32(), 0);
+            let request = self.setup_request(module_id, setup, force);
+            let tmp = self.get_tmp_unsafe();
+            let mark = tmp.mark();
+            let result = crate::compiler::start_setup(&request, tmp);
+            tmp.reset_to(mark);
+            self.trace_pop(frame);
+            result
+        };
+        let started = match started {
+            Ok(started) => started,
+            Err(e) => {
+                let msg =
+                    format!("Setup failed for module '{}': {e:#}", self.ident_str(module_name));
+                return Err(self.module_error(build_ns_span, msg));
+            }
+        };
+        let Some(started) = started else { return Ok(false) };
+        let Some(build_ns_id) =
+            self.scopes.find_namespace_local(namespace_scope_id, self.ast.idents.b.build)
+        else {
+            self.ice_span(build_ns_span, "setup was declared with no ns build")
+        };
+        let build_ns_scope = self.namespaces.get(build_ns_id).scope_id;
+        self.trace_clear();
+        eprintln!(
+            "Setting up module '{}' (running fn setup in {})...",
+            self.ident_str(module_name),
+            self.ident_str(self.modules.get(module_id).root_file_path)
+        );
+        if let Err(e) = self.execute_setup_fn(module_name, build_ns_scope, home_dir, build_ns_span)
+        {
+            self.report(e);
+            bail!("fn setup failed for module {}", self.ident_str(module_name))
+        }
+        let finished = {
+            let request = self.setup_request(module_id, setup, force);
+            let tmp = self.get_tmp_unsafe();
+            let mark = tmp.mark();
+            let result = crate::compiler::finish_setup(&request, started, tmp);
+            tmp.reset_to(mark);
+            result
+        };
+        if let Err(e) = finished {
+            let msg = format!("Setup failed for module '{}': {e:#}", self.ident_str(module_name));
+            return Err(self.module_error(build_ns_span, msg));
+        }
+        Ok(true)
+    }
+
     fn execute_setup_fn(
         &mut self,
+        module_name: StringId,
         build_ns_scope: ScopeId,
         module_dir: StringId,
         decl_span: SpanId,
     ) -> K1Result<()> {
-        self.traced(TraceKind::SetupFn, decl_span.as_u32(), 0, |k1| {
+        self.traced(TraceKind::SetupFn, module_name.as_u32(), 0, |k1| {
             k1.execute_setup_fn_body(build_ns_scope, module_dir, decl_span)
         })
     }

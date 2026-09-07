@@ -4,7 +4,7 @@
 use k1::debug;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use k1::compiler::{CompileProgramError, LspCompileOptions};
@@ -12,6 +12,7 @@ use k1::lex::{self, Span, SpanId};
 use k1::lsp_support::CompletionCandidateKind;
 use k1::parse;
 use k1::parse::{ParsedProgram, SourceFile};
+use k1::typer::trace::LiveProgressSink;
 use k1::typer::*;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
@@ -222,6 +223,77 @@ struct Backend {
     retarget_lock: tokio::sync::Mutex<()>,
     completion_generation: AtomicU32,
     completion_compile_lock: tokio::sync::Mutex<()>,
+    /// The client accepts `$/progress` (window.workDoneProgress)
+    progress_supported: AtomicBool,
+}
+
+const PROGRESS_TICK: std::time::Duration = std::time::Duration::from_millis(100);
+
+async fn send_progress_task(
+    client: Client,
+    token: NumberOrString,
+    title: String,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<(String, Option<u32>)>,
+) {
+    let started = std::time::Instant::now();
+    let mut tick = tokio::time::interval(PROGRESS_TICK);
+    let mut latest: Option<(String, Option<u32>)> = None;
+    let mut begun = false;
+    let mut shown_percent: Option<u32> = None;
+    loop {
+        tokio::select! {
+            line = rx.recv() => match line {
+                Some(line) => latest = Some(line),
+                None => break,
+            },
+            _ = tick.tick() => {
+                let Some((line, percent)) = latest.take() else { continue };
+                if let Some(percent) = percent {
+                    shown_percent = Some(shown_percent.unwrap_or(0).max(percent));
+                }
+                let value = if begun {
+                    WorkDoneProgress::Report(WorkDoneProgressReport {
+                        cancellable: Some(false),
+                        message: Some(line),
+                        percentage: shown_percent,
+                    })
+                } else {
+                    let created = client
+                        .send_request::<request::WorkDoneProgressCreate>(
+                            WorkDoneProgressCreateParams { token: token.clone() },
+                        )
+                        .await;
+                    if created.is_err() {
+                        return;
+                    }
+                    begun = true;
+                    WorkDoneProgress::Begin(WorkDoneProgressBegin {
+                        title: title.clone(),
+                        cancellable: Some(false),
+                        message: Some(line),
+                        percentage: shown_percent,
+                    })
+                };
+                client
+                    .send_notification::<notification::Progress>(ProgressParams {
+                        token: token.clone(),
+                        value: ProgressParamsValue::WorkDone(value),
+                    })
+                    .await;
+            }
+        }
+    }
+    if begun {
+        let message = format!("done in {}ms", started.elapsed().as_millis());
+        client
+            .send_notification::<notification::Progress>(ProgressParams {
+                token,
+                value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(WorkDoneProgressEnd {
+                    message: Some(message),
+                })),
+            })
+            .await;
+    }
 }
 
 impl Backend {
@@ -240,6 +312,7 @@ impl Backend {
             retarget_lock: tokio::sync::Mutex::new(()),
             completion_generation: AtomicU32::new(0),
             completion_compile_lock: tokio::sync::Mutex::new(()),
+            progress_supported: AtomicBool::new(false),
         }
     }
 
@@ -287,7 +360,7 @@ impl Backend {
 
         let mut source_overrides = fxhash::FxHashMap::default();
         source_overrides.insert(canonical_path, spliced);
-        let lsp_options = LspCompileOptions { source_overrides, completion: true };
+        let lsp_options = LspCompileOptions { source_overrides, completion: true, progress_sink: None };
         let args = k1::compiler::Args {
             no_std: false,
             emit_llvm: false,
@@ -422,12 +495,12 @@ impl Backend {
         if !(changed || no_program || force_compile) {
             return false;
         }
-        self.compile();
+        self.compile().await;
         self.send_diagnostics().await;
         true
     }
 
-    fn compile(&self) -> u32 {
+    async fn compile(&self) -> u32 {
         let iteration_number = self.compile_iteration.load(Ordering::Relaxed);
         let src_path = self.src_path.read().unwrap().clone();
         let Some(src_path) = src_path else {
@@ -436,6 +509,20 @@ impl Backend {
         };
         info!("compiling version {} target {}", iteration_number, src_path.display());
         let compile_start = std::time::Instant::now();
+        let progress_sink = if self.progress_supported.load(Ordering::Relaxed) {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let title = format!(
+                "k1 check {}",
+                src_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+            );
+            let token = NumberOrString::String(format!("k1-check-{iteration_number}"));
+            tokio::spawn(send_progress_task(self.client.clone(), token, title, rx));
+            Some(LiveProgressSink::Fn(Arc::new(move |line: &str, percent| {
+                let _ = tx.send((line.to_string(), percent));
+            })))
+        } else {
+            None
+        };
         let args = k1::compiler::Args {
             no_std: false,
             emit_llvm: false,
@@ -454,15 +541,20 @@ impl Backend {
             dump_idents: false,
             dump_trace: false,
         };
-        let compile_result = k1::compiler::compile_program(&args);
-        let compiled_module = match compile_result {
+        let lsp_options = LspCompileOptions { progress_sink, ..LspCompileOptions::default() };
+        let compile_result = tokio::task::spawn_blocking(move || {
+            k1::compiler::compile_program_ext(&args, lsp_options)
+        })
+        .await
+        .expect("check compile panicked");
+        let mut compiled_module = match compile_result {
             Ok(module) => {
                 info!(
                     "compile {} succeeded in {}ms",
                     iteration_number,
                     compile_start.elapsed().as_millis()
                 );
-                Some(Box::new(module))
+                Box::new(module)
             }
             Err(CompileProgramError::TyperFailure(module)) => {
                 info!(
@@ -470,12 +562,13 @@ impl Backend {
                     iteration_number,
                     compile_start.elapsed().as_millis()
                 );
-                Some(module)
+                module
             }
         };
+        compiled_module.trace.progress_sink = None;
 
         let mut module_lock = self.module.lock().unwrap();
-        *module_lock = compiled_module;
+        *module_lock = Some(compiled_module);
         let prev_iteration = self.compile_iteration.fetch_add(1, Ordering::Relaxed);
         prev_iteration + 1
     }
@@ -614,6 +707,9 @@ impl LanguageServer for Backend {
         });
         res.server_info =
             Some(ServerInfo { name: "k1lsp".to_string(), version: Some("ALPHA".to_string()) });
+        let progress_supported =
+            params.capabilities.window.as_ref().and_then(|w| w.work_done_progress).unwrap_or(false);
+        self.progress_supported.store(progress_supported, Ordering::Relaxed);
         info!("Got initialize params: {params:#?}");
         Ok(res)
     }
@@ -872,19 +968,11 @@ impl LanguageServer for Backend {
             let mut es = self.edited_sources.lock().unwrap();
             es.remove(&params.text_document.uri);
         }
-        let start = std::time::Instant::now();
         let compiled = self.ensure_target_and_compile(&params.text_document.uri, true).await;
         if !compiled {
             return;
         }
-        let elapsed_ms = start.elapsed().as_millis();
         self.client.semantic_tokens_refresh().await.unwrap();
-        self.client
-            .show_message(
-                MessageType::INFO,
-                format!("recompiled {} in {}ms", params.text_document.uri.path(), elapsed_ms),
-            )
-            .await;
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
