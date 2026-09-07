@@ -8,7 +8,7 @@ export RUST_BACKTRACE=1
 profile=dev
 target_dir=debug
 
-cargo test --lib
+cargo test --lib --features=llvm-sys/prefer-dynamic
 cargo build --features=llvm-sys/prefer-dynamic --profile $profile --bin k1_test --bin k1
 
 
@@ -28,13 +28,19 @@ K1_HOME=$(pwd) target/$target_dir/k1 --emit-llvm --cache false run test_src/suit
 target/$target_dir/k1 --cache false build dogfood/refchess
 target/$target_dir/k1 --cache false build dogfood/profiling
 target/$target_dir/k1 --cache false test  dogfood/k1bindgen
+# module setups regenerate bindings with the k1bindgen on PATH; use this build's
+target/$target_dir/k1 --cache false build dogfood/k1bindgen
+export PATH=$(pwd)/dogfood/k1bindgen/.k1-out:$PATH
 rm -rf dogfood/httpapp/.k1-out/cache
 K1_HOME=$(pwd) target/$target_dir/k1 --cache false build dogfood/httpapp
 K1_HOME=$(pwd) target/$target_dir/k1 --cache true  build dogfood/httpapp
 K1_HOME=$(pwd) target/$target_dir/k1 --cache false run dogfood/logreport
 K1_HOME=$(pwd) target/$target_dir/k1 --cache false run dogfood/comptime_parity
 K1_HOME=$(pwd) target/$target_dir/k1 --cache false run dogfood/brotli
-K1_HOME=$(pwd) target/$target_dir/k1 --cache false build dogfood/gengame
+if [ "$(uname -s)" = Darwin ]; then
+    # gengame links macOS frameworks and a hand-vendored raylib archive
+    K1_HOME=$(pwd) target/$target_dir/k1 --cache false build dogfood/gengame
+fi
 K1_HOME=$(pwd) target/$target_dir/k1 --cache false run dogfood/fractal > /dev/null
 K1_HOME=$(pwd) target/$target_dir/k1 --cache false build dogfood/klib
 make -C dogfood/klib/consumer clean run

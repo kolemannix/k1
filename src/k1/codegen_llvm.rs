@@ -1785,7 +1785,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 };
                 g.set_thread_local_mode(Some(mode));
             }
-            if is_private {
+            if is_private && !global.is_external {
                 g.set_visibility(inkwell::GlobalVisibility::Hidden);
             }
             g
@@ -4194,11 +4194,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, div.as_basic_value_enum());
                 Ok(())
             }
+            // MIN / -1 wraps like the VM; sdiv traps on x86 and wasm, so it never sees -1
             Inst::IntDivSigned { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let div = self.builder.build_int_signed_div(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, div.as_basic_value_enum());
+                let is_neg_one = self.divisor_is_neg_one(rhs_value);
+                let safe_rhs = self.divisor_or_one(is_neg_one, rhs_value);
+                let div = self.builder.build_int_signed_div(lhs_value, safe_rhs, "").unwrap();
+                let neg = self.builder.build_int_neg(lhs_value, "").unwrap();
+                let result = self.builder.build_select(is_neg_one, neg, div, "").unwrap();
+                inst_mappings.insert(inst_id, result.as_basic_value_enum());
                 Ok(())
             }
             Inst::IntRemUnsigned { lhs, rhs, .. } => {
@@ -4211,7 +4216,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::IntRemSigned { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rem = self.builder.build_int_signed_rem(lhs_value, rhs_value, "").unwrap();
+                let is_neg_one = self.divisor_is_neg_one(rhs_value);
+                let safe_rhs = self.divisor_or_one(is_neg_one, rhs_value);
+                let rem = self.builder.build_int_signed_rem(lhs_value, safe_rhs, "").unwrap();
                 inst_mappings.insert(inst_id, rem.as_basic_value_enum());
                 Ok(())
             }
@@ -5399,6 +5406,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn target_supports_tls(&self) -> bool {
         self.k1.config.target.arch() != compiler::Arch::Wasm
             && self.k1.config.target.platform() != compiler::Platform::Bare
+    }
+
+    fn divisor_is_neg_one(&self, rhs: IntValue<'ctx>) -> IntValue<'ctx> {
+        let neg_one = rhs.get_type().const_all_ones();
+        self.builder.build_int_compare(IntPredicate::EQ, rhs, neg_one, "").unwrap()
+    }
+
+    fn divisor_or_one(&self, is_neg_one: IntValue<'ctx>, rhs: IntValue<'ctx>) -> IntValue<'ctx> {
+        let one = rhs.get_type().const_int(1, false);
+        self.builder.build_select(is_neg_one, one, rhs, "").unwrap().into_int_value()
     }
 
     fn make_external_global(

@@ -577,7 +577,7 @@ pub(crate) fn resolve_global(
 
     // Case 3: First use in this VM. If not mutable, put in share global constants. If mutable,
     // generate and store the shared original, but store a copy in our local vm to allow mutation
-    let global = k1.globals.get(global_id);
+    let global = *k1.globals.get(global_id);
     let is_constant = global.is_constant;
     let initial_value_id = match global.initial_value {
         GlobalInitialValue::Pending | GlobalInitialValue::Failed(_) => {
@@ -590,14 +590,21 @@ pub(crate) fn resolve_global(
         }
         GlobalInitialValue::Uninit => {
             if global.is_external {
-                let symbol = k1.global_link_symbol(global);
+                let symbol = k1.global_link_symbol(&global);
+                let ns = k1.namespaces.get(k1.scopes.nearest_parent_namespace(global.parent_scope));
+                let handle = match (ns.lib_name, ns.owner_module) {
+                    (Some(lib_name), Some(module_id)) => {
+                        k1.get_dylib_handle(module_id, lib_name, vm.eval_span)?
+                    }
+                    _ => k1.vm_process_dlopen_handle,
+                };
                 let name_cstr = std::ffi::CString::new(symbol.as_str()).unwrap();
-                let sym = unsafe { libc::dlsym(k1.vm_process_dlopen_handle, name_cstr.as_ptr()) };
+                let sym = unsafe { libc::dlsym(handle, name_cstr.as_ptr()) };
                 if sym.is_null() {
                     kbail!(
                         k1,
                         vm.eval_span,
-                        "Could not resolve external global symbol '{}' at compile time; the platform does not export it dynamically",
+                        "Could not resolve external global symbol '{}' at compile time",
                         symbol
                     );
                 }
