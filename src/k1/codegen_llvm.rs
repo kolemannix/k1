@@ -1734,8 +1734,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
         let global = self.k1.globals.get(global_id).clone();
 
-        let name = self.k1.global_link_symbol(&global);
-
         if let Some(reload_ns) = global.reload_ns {
             if self.kind != CgKind::ReloadDylib(reload_ns) {
                 cgbail!(
@@ -1744,31 +1742,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                      accesses must go through the addr slot"
                 );
             }
-            let initial_static_value_id = global.initial_value.as_value().unwrap();
-            let initializer_basic_value =
-                self.codegen_static_value_as_const(initial_static_value_id, 0)?;
-            let layout = self.k1.get_layout_computed(global.type_id).unwrap();
-            let symbol = self.make_reloadable_global_symbol(global_id);
-            let llvm_global = self.make_global_from_value(
-                initializer_basic_value,
-                layout.align,
-                &symbol,
-                global.is_constant,
-                LlvmLinkage::External,
-                false,
-            );
-            self.globals.insert(global_id, llvm_global);
-            return Ok(llvm_global);
         }
+        let owned_here = global.reload_ns.is_some();
+        let name = if owned_here {
+            self.make_reloadable_global_symbol(global_id)
+        } else {
+            self.k1.global_link_symbol(&global)
+        };
 
         let is_dylib = matches!(self.kind, CgKind::ReloadDylib(_));
         let is_private = !global.is_exported && !self.has_reloadable_fns;
         let shared = is_private && global.is_constant;
         let defined_elsewhere = !shared && self.multi_unit() && !self.is_first_unit();
 
-        // If we're a reloadable dylib, all globals get treated like externals usually do
-        // we link to them and expect to find them in the host
-        let llvm_global = if global.is_external || is_dylib || defined_elsewhere {
+        // A reloadable dylib defines only the globals of its own ns; every other
+        // global is a declaration bound to the host's copy at dlopen
+        let llvm_global = if global.is_external || (is_dylib && !owned_here) || defined_elsewhere {
             let PhysicalTypeResult::Yes(global_pt) =
                 self.k1.get_physical_type_computed(global.type_id)
             else {
