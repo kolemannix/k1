@@ -15,7 +15,7 @@ mod vm_test;
 use crate::ir;
 use crate::typer::types::{
     ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, PhysicalTypeEnum,
-    PhysicalTypeResult, ScalarType, Type, TypeId,
+    PhysicalTypeResult, RecordKind, ScalarType, Type, TypeId,
 };
 use crate::typer::{
     ErrorKind, FunctionId, GlobalInitialValue, K1Message, K1Result, MessageLevel,
@@ -1299,20 +1299,25 @@ pub fn vm_value_to_static_value(
                 let struct_ptr = vm_value.as_ptr();
                 let struct_type_fields = struct_type.fields;
                 let mut field_value_ids = k1.static_values.mem.new_list(struct_type.fields.len());
-                let struct_shape = k1.get_struct_layout(type_id);
-                for (physical_field, k1_field) in
-                    struct_shape.iter().zip(k1.mem.getn(struct_type_fields))
-                {
-                    let field_ptr = unsafe { struct_ptr.byte_add(physical_field.offset as usize) };
-                    let field_value = load_value(physical_field.field_t, field_ptr);
-                    let field_static_value_id =
-                        vm_value_to_static_value(k1, k1_field.type_id, field_value, span)?;
-                    field_value_ids.push(field_static_value_id)
+                if struct_type.record_kind == RecordKind::Union {
+                    kbail!(k1, span, "Cannot (yet) bake union value to static value")
+                } else {
+                    let struct_shape = k1.get_struct_layout(type_id);
+                    for (physical_field, k1_field) in
+                        struct_shape.iter().zip(k1.mem.getn(struct_type_fields))
+                    {
+                        let field_ptr =
+                            unsafe { struct_ptr.byte_add(physical_field.offset as usize) };
+                        let field_value = load_value(physical_field.field_t, field_ptr);
+                        let field_static_value_id =
+                            vm_value_to_static_value(k1, k1_field.type_id, field_value, span)?;
+                        field_value_ids.push(field_static_value_id)
+                    }
+                    k1.static_values.add(StaticValue::Struct(StaticStruct {
+                        type_id,
+                        fields: field_value_ids.to_slice(),
+                    }))
                 }
-                k1.static_values.add(StaticValue::Struct(StaticStruct {
-                    type_id,
-                    fields: field_value_ids.to_slice(),
-                }))
             }
         }
         Type::Sum(typed_sum) => {

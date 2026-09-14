@@ -1535,20 +1535,13 @@ pub struct LetStmt {
 }
 impl_copy_if_small!(20, LetStmt);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AssignmentKind {
-    Set,
-    Store,
-}
-
 #[derive(Debug, Clone)]
 pub struct AssignmentStmt {
     pub destination: TypedExprId,
     pub value: TypedExprId,
     pub span: SpanId,
-    pub kind: AssignmentKind,
 }
-impl_copy_if_small!(16, AssignmentStmt);
+impl_copy_if_small!(12, AssignmentStmt);
 
 #[derive(Clone, Copy)]
 pub struct TypedRequireStmt {
@@ -3093,8 +3086,7 @@ impl TypedProgram {
         let added_module_id =
             self.discover_module_and_deps(load_handle, primary_module, &mut modules_to_typecheck)?;
 
-        if primary_module
-            && let crate::compiler::CommandKind::Setup { force } = self.config.command
+        if primary_module && let crate::compiler::CommandKind::Setup { force } = self.config.command
         {
             for (module_id, _) in &modules_to_typecheck {
                 self.ensure_module_setup(*module_id, force && *module_id == added_module_id)?;
@@ -6141,12 +6133,14 @@ impl TypedProgram {
         }
         match variable_id {
             None => match self.find_function_namespaced(scope_id, &name)? {
-                None => Err(kerr!(
-                    self,
-                    name.name_span,
-                    "No value '{}' is in scope",
-                    self.ast.idents.get_string(name.name),
-                )),
+                None => {
+                    let msg = if name.path.is_empty() {
+                        k1_format_user!(self, "No value '{}' is visible here", name.name)
+                    } else {
+                        k1_format_user!(self, "value '{}' is not defined", &name)
+                    };
+                    Err(self.make_error(msg, name.name_span))
+                }
                 Some(fn_id) => {
                     if self.get_function(fn_id).is_macro() {
                         kbail!(
@@ -7330,7 +7324,7 @@ impl TypedProgram {
         list_lit_block.statements.push(dest_coll_variable.defn_stmt);
         for (index, element_value_expr) in elements.iter().enumerate() {
             let index_expr = self.synth_i64(index as i64, span);
-            let element_ref = match list_kind {
+            let element_place = match list_kind {
                 ContainerKind::List => {
                     let push_call = self.synth_typed_call_typed_args(
                         self.ast.idents.f.list_push.with_span(span),
@@ -7344,31 +7338,34 @@ impl TypedProgram {
                     self.push_block_stmt_id(&mut list_lit_block, push_stmt);
                     continue;
                 }
-                ContainerKind::Buffer | ContainerKind::Span => self.synth_typed_call_typed_args(
-                    self.ast.idents.f.buffer_index_unchecked.with_span(span),
-                    &[element_type],
-                    &[dest_coll_expr, index_expr],
-                    list_lit_ctx,
-                    false,
-                )?,
-                ContainerKind::Array(_) => {
-                    let element = self.exprs.add(
-                        TypedExpr::ArrayGetElement(ArrayGetElement {
-                            base_array: dest_coll_expr,
-                            index: index_expr,
-                            packed: false,
-                        }),
+                ContainerKind::Buffer | ContainerKind::Span => {
+                    let element_ref = self.synth_typed_call_typed_args(
+                        self.ast.idents.f.buffer_index_unchecked.with_span(span),
+                        &[element_type],
+                        &[dest_coll_expr, index_expr],
+                        list_lit_ctx,
+                        false,
+                    )?;
+                    self.exprs.add(
+                        TypedExpr::Deref(DerefExpr { target: element_ref }),
                         element_type,
                         span,
-                    );
-                    self.synth_address_of(element, span, true)?
+                    )
                 }
+                ContainerKind::Array(_) => self.exprs.add(
+                    TypedExpr::ArrayGetElement(ArrayGetElement {
+                        base_array: dest_coll_expr,
+                        index: index_expr,
+                        packed: false,
+                    }),
+                    element_type,
+                    span,
+                ),
             };
             let store_stmt = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
-                destination: element_ref,
+                destination: element_place,
                 value: *element_value_expr,
                 span,
-                kind: AssignmentKind::Store,
             }));
             self.push_block_stmt_id(&mut list_lit_block, store_stmt);
         }
@@ -8741,7 +8738,7 @@ impl TypedProgram {
             Some(b) => self.ast.exprs.get(b).expect_variable().name.name,
         };
         let binding_span = match for_expr.binding {
-            None => for_expr.span,
+            None => SpanId::NONE,
             Some(binding_expr) => self.ast.exprs.get_span(binding_expr),
         };
         let iterable_expr = self.eval_expr(for_expr.iterable_expr, ctx.with_no_expected_type())?;
@@ -8924,7 +8921,6 @@ impl TypedProgram {
             destination: index_variable.variable_expr,
             value: add_operation,
             span: iterable_span,
-            kind: AssignmentKind::Set,
         });
         self.push_block_stmt(&mut loop_block, index_increment_statement);
 
@@ -13571,11 +13567,7 @@ impl TypedProgram {
                 static_assert_size!(parse::AssignStmt, 12);
                 let assignment = *assign;
                 let lhs_span = self.ast.exprs.get_span(assignment.lhs);
-                // A bare variable name rebinds a local (or writes a mutable
-                // global); any other lhs must denote a place, and we store to
-                // its address. Storing through a reference requires an
-                // explicit deref: `r.* = v`.
-                let (destination, expected_rhs_type, reassigned_variable_id) =
+                let (destination, root_variable) =
                     if let ParsedExpr::Variable(lhs_variable) = self.ast.exprs.get(assignment.lhs) {
                         let lhs_name = lhs_variable.name;
                         let (typed_variable_id, lhs) =
@@ -13583,7 +13575,6 @@ impl TypedProgram {
                         let Some(variable_id) = typed_variable_id else {
                             kbail!(self, lhs_span, "Must be a regular variable, eg not a function");
                         };
-                        let lhs_type = self.exprs.get_type(lhs);
                         match self.variables.get(variable_id).kind {
                             VariableKind::FnParam(_) => {
                                 kbail!(
@@ -13599,45 +13590,45 @@ impl TypedProgram {
                                     "Cannot re-assign a synthetic variable or binding; if this is a pattern-bound reference, store through it with `x.* = ...`"
                                 );
                             }
-                            VariableKind::Stack(_) => (lhs, lhs_type, Some(variable_id)),
-                            VariableKind::Global(global_id) => {
-                                if self.globals.get(global_id).is_constant {
-                                    kbail!(
-                                        self,
-                                        lhs_span,
-                                        "Cannot assign an immutable global; declare it with `let(mutable)`"
-                                    );
-                                }
-                                let dest = self.synth_address_of(lhs, lhs_span, false)?;
-                                (dest, lhs_type, None)
+                            VariableKind::Stack(_) => {
+                                self.variables
+                                    .get_mut(variable_id)
+                                    .flags
+                                    .insert(VariableFlags::Reassigned);
                             }
+                            VariableKind::Global(_) => {}
                         }
+                        (lhs, Some(variable_id))
                     } else {
                         let lhs = self.eval_expr(assignment.lhs, ctx.with_no_expected_type())?;
-                        let lhs_type = self.exprs.get_type(lhs);
-                        let dest =
-                            self.synth_address_of(lhs, lhs_span, false).map_err(|mut e| {
+                        let kind = self
+                            .check_place_for_address_of(lhs, false, lhs_span)
+                            .map_err(|mut e| {
                                 e.message = self.ast.idents.intern(format!(
                                     "Assignment destination must be a place: {}",
                                     self.ident_str(e.message)
                                 ));
                                 e
                             })?;
-                        if let TypedExpr::AddressOf(addr_of) = self.exprs.get(dest) {
-                            if let AddressOfKind::GlobalVariable(variable_id) = addr_of.kind {
-                                let global_id =
-                                    self.variables.get(variable_id).global_id().unwrap();
-                                if self.globals.get(global_id).is_constant {
-                                    kbail!(
-                                        self,
-                                        lhs_span,
-                                        "Cannot assign an immutable global; declare it with `let(mutable)`"
-                                    );
-                                }
+                        let root_variable = match kind {
+                            AddressOfKind::StackVariable(v) | AddressOfKind::GlobalVariable(v) => {
+                                Some(v)
                             }
-                        }
-                        (dest, lhs_type, None)
+                            AddressOfKind::ReferenceExpr => None,
+                        };
+                        (lhs, root_variable)
                     };
+                if let Some(root_variable) = root_variable
+                    && let Some(global_id) = self.variables.get(root_variable).global_id()
+                    && self.globals.get(global_id).is_constant
+                {
+                    kbail!(
+                        self,
+                        lhs_span,
+                        "Cannot assign an immutable global; declare it with `let(mutable)`"
+                    );
+                }
+                let expected_rhs_type = self.exprs.get_type(destination);
                 let rhs = self
                     .eval_expr_with_coercion(
                         assignment.rhs,
@@ -13655,21 +13646,10 @@ impl TypedProgram {
                 if self.exprs.get_type(rhs) == NEVER_TYPE_ID {
                     return Ok(Some(self.add_expr_stmt(rhs)));
                 }
-                let kind = match reassigned_variable_id {
-                    Some(variable_id) => {
-                        self.variables
-                            .get_mut(variable_id)
-                            .flags
-                            .set(VariableFlags::Reassigned, true);
-                        AssignmentKind::Set
-                    }
-                    None => AssignmentKind::Store,
-                };
                 let stmt_id = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
                     destination,
                     value: rhs,
                     span: assignment.span,
-                    kind,
                 }));
                 Ok(Some(stmt_id))
             }
@@ -18229,6 +18209,7 @@ impl TypedProgram {
             core!("span"),
             core!("array"),
             core!("list"),
+            core!("fixlist"),
             core!("string"),
             core!("opt"),
             core!("some"),
@@ -18284,6 +18265,7 @@ impl TypedProgram {
             QIdent { path: core_scalarcmp, name: get_ident!(self, "min"), name_span: span },
             QIdent { path: core_scalarcmp, name: get_ident!(self, "max"), name_span: span },
             QIdent { path: core_mem, name: get_ident!(self, "zeroed"), name_span: span },
+            QIdent { path: core_mem, name: get_ident!(self, "bitcast"), name_span: span },
             QIdent { path: core_types, name: self.ast.idents.b.enum_, name_span: span },
             QIdent { path: core_types, name: get_ident!(self, "sum"), name_span: span },
             QIdent { path: core_types, name: get_ident!(self, "type-id"), name_span: span },

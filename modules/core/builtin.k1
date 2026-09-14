@@ -541,8 +541,14 @@ ability as-buffer[impl t] {
   fn first-ref(self): ?*t {
     self.as-buffer().first-ref()
   }
+  fn first(self): ?t {
+    self.as-buffer().first()
+  }
   fn last-ref(self): ?*t {
     self.as-buffer().last-ref()
+  }
+  fn last(self): ?t {
+    self.as-buffer().last()
   }
   fn ref-iter(self): buffer-ref-iterator[t] {
     self.as-buffer().ref-iter()

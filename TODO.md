@@ -38,6 +38,12 @@ pointer-free predicate - pod/serializable?
 ## [x] Ability objects; dyn[<ability expr>]
 
 ## grab bag list mid2026
+- [ ] zeroing after alloc should not be necessary; either buffer/zeroed or ensure all k1 allocations always zero, even arena push (does arena.reset() always clear, or is there a special path for 'alloc-no-ensure-zeroed?')
+- [ ] 
+    let app = userData.ref[app-state]
+    //                     ^ go definition here goes to the 'ref' call
+- [ ] `self` sugar: `*self` as well as bare `self` inside an `ns for t`
+- [ ] struct type defn sugar as well; `atlas-cursor: *atlas-cursor` -> `*atlas-cursor`
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)

@@ -460,6 +460,8 @@ ns for u32 {
 
   fn(inline) as-bool(self: u32): bool { self != 0 }
   fn(inline) signed(self: u32): i32 { mem/bitcast(self) }
+
+  fn(inline) as-size(self: u32): size { self.widen[u64].signed() }
 }
 
 ns for i32 {

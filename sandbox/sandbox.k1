@@ -8,8 +8,17 @@
 //   0
 // }
 
+ability stuff {}
+
+type foo = { x: int }
+impl stuff for foo {}
+
+type box[t: stuff] = { t: t }
+
+type bar = {
+  xs: box[foo]
+}
+
 fn main(): i32 {
-  let x: int = false
-  let y: int = false
   0
 }

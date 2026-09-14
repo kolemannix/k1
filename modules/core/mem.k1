@@ -56,9 +56,6 @@ ns mem {
   fn(inline) alloc-layout(size: size, align: size): ptr { current-arena().alloc(size, align) }
   fn(inline) alloc-t[t](): *t { current-arena().alloc-t() }
 
-  // 0.as[ptr] inlined rather than ptr/null: this global is demanded during
-  // other globals' initializers, and referencing the null global from here
-  // closes an initializer cycle.
   let(mutable, tls) arena-tmp: *arena = ptr/null.ref[arena]
 
   type(alias) ALLOC_STACK_MAX = 64
@@ -82,13 +79,21 @@ ns mem {
     }
   }
 
-  fn init-tmp-arena() {
-    if not (arena-tmp is null) crash("arena-tmp already initialized")
-    arena-tmp = arena/init-fixed(1 * arena/gb)
+  fn set-tmp-arena(arena: *arena) {
+    arena-tmp = arena
   }
 
   fn tmp(): *arena {
-    if arena-tmp is null { init-tmp-arena() }
+    if arena-tmp is null {
+      #if k1/platform is {
+        :posix-macos or :posix-linux or :wasi -> {
+          arena-tmp = arena/init-fixed(1073741824)
+        },
+        :bare -> {
+          arena-tmp = arena/init(1024 * 8)
+        }
+      }
+    }
     arena-tmp
   }
 

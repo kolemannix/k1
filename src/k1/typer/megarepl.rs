@@ -606,7 +606,6 @@ impl TypedProgram {
                             destination: variable_expr,
                             value: initializer,
                             span: parsed_let.span,
-                            kind: AssignmentKind::Set,
                         }));
                         self.push_block_stmt_id(&mut cell_block, assign_stmt);
                     }
@@ -652,7 +651,6 @@ impl TypedProgram {
                                     destination: variable_expr,
                                     value: expr_id,
                                     span: expr_span,
-                                    kind: AssignmentKind::Set,
                                 }));
                             self.push_block_stmt_id(&mut cell_block, assign_stmt);
                             output_globals.push((global_id, expr_type));

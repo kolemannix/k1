@@ -1557,12 +1557,12 @@ fn compile_function_body(k1: &mut TypedProgram, function_id: FunctionId) -> K1Re
 
     // Set up parameters
     let fn_params = f.params;
-    let phys_fn_type = b.get_physical_fn_type(f.type_id);
+    let phys_fn_type = b.get_physical_fn_type(f.type_id)?;
     b.fn_type = phys_fn_type;
     let mut non_empty_index = 0;
     for param in b.k1.mem.getn(fn_params).iter() {
         let v = b.k1.variables.get(param.variable_id);
-        let t = b.get_physical_type(v.type_id);
+        let t = b.get_physical_type(v.type_id)?;
 
         // We do not skip empty types here, even though they do not appear in the physical function
         // type. This is because they do not need to be passed, but we do need to be able to look
@@ -1638,7 +1638,7 @@ fn compile_top_level_expr_body(
 
     for (variable_id, static_value_id) in input_parameters {
         let variable = b.k1.variables.get(*variable_id);
-        let pt = b.get_physical_type(variable.type_id);
+        let pt = b.get_physical_type(variable.type_id)?;
         b.k1.ir.b_variables.insert(
             *variable_id,
             BuilderVariable {
@@ -1651,7 +1651,7 @@ fn compile_top_level_expr_body(
     }
 
     let return_type_id = b.k1.exprs.get_type(expr);
-    let (return_type, diverges) = b.get_function_return_type(return_type_id);
+    let (return_type, diverges) = b.get_function_return_type(return_type_id)?;
     let params = MSlice::empty();
     let phys_fn_type = PhysicalFunctionType { return_type, diverges, params };
     b.fn_type = phys_fn_type;
@@ -2042,52 +2042,49 @@ impl<'k1> Builder<'k1> {
         self.k1.get_physical_type(type_id)
     }
 
-    fn get_physical_type(&mut self, type_id: TypeId) -> PhysicalType {
+    fn get_physical_type(&mut self, type_id: TypeId) -> K1Result<PhysicalType> {
         match self.get_physical_type_result(type_id) {
-            PhysicalTypeResult::Never => {
-                b_ice!(
-                    self,
-                    "ir never type: {}",
-                    self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
-                )
-            }
-            PhysicalTypeResult::No => {
-                b_ice!(
-                    self,
-                    "ir non-physical type: {}",
-                    self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
-                )
-            }
-            PhysicalTypeResult::Infinite => {
-                b_ice!(
-                    self,
-                    "ir infinite type: {}",
-                    self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
-                )
-            }
-            PhysicalTypeResult::Yes(pt) => pt,
+            PhysicalTypeResult::Never => Err(kerr!(
+                self.k1,
+                self.cur_span,
+                "cannot lower 'never' type to a physical type: {}",
+                self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
+            )),
+            PhysicalTypeResult::No => Err(kerr!(
+                self.k1,
+                self.cur_span,
+                "cannot lower this type to a physical type: {}",
+                self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
+            )),
+            PhysicalTypeResult::Infinite => Err(kerr!(
+                self.k1,
+                self.cur_span,
+                "cannot lower this infinite type to a physical type: {}",
+                self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
+            )),
+            PhysicalTypeResult::Yes(pt) => Ok(pt),
         }
     }
 
-    fn type_to_inst_kind(&mut self, type_id: TypeId) -> InstKind {
+    fn type_to_inst_kind(&mut self, type_id: TypeId) -> K1Result<InstKind> {
         if type_id == NEVER_TYPE_ID {
-            InstKind::Terminator
+            Ok(InstKind::Terminator)
         } else {
-            let t = self.get_physical_type(type_id);
-            InstKind::Value(t)
+            let t = self.get_physical_type(type_id)?;
+            Ok(InstKind::Value(t))
         }
     }
 
-    fn get_physical_fn_type(&mut self, type_id: TypeId) -> PhysicalFunctionType {
+    fn get_physical_fn_type(&mut self, type_id: TypeId) -> K1Result<PhysicalFunctionType> {
         if let Some(pt) = self.k1.ir.phys_fn_type_cache.get(&type_id) {
-            return *pt;
+            return Ok(*pt);
         }
         let function_type = *self.k1.types.get(type_id).expect_function();
-        let (return_type, diverges) = self.get_function_return_type(function_type.return_type);
+        let (return_type, diverges) = self.get_function_return_type(function_type.return_type)?;
 
         let mut phys_params = self.k1.ir.mem.new_list(function_type.physical_params.len());
         for (index, param) in self.k1.mem.getn(function_type.physical_params).iter().enumerate() {
-            let pt = self.get_physical_type(param.type_id);
+            let pt = self.get_physical_type(param.type_id)?;
             if pt.is_empty() {
                 continue;
             }
@@ -2099,16 +2096,19 @@ impl<'k1> Builder<'k1> {
         let fn_ty = PhysicalFunctionType { params: phys_params.to_slice(), diverges, return_type };
 
         self.k1.ir.phys_fn_type_cache.insert(type_id, fn_ty);
-        fn_ty
+        Ok(fn_ty)
     }
 
     // Returns: (the function return type, diverges)
-    fn get_function_return_type(&mut self, return_type_id: TypeId) -> (PhysicalType, bool) {
+    fn get_function_return_type(
+        &mut self,
+        return_type_id: TypeId,
+    ) -> K1Result<(PhysicalType, bool)> {
         if return_type_id == NEVER_TYPE_ID {
-            (PhysicalType::EMPTY, true)
+            Ok((PhysicalType::EMPTY, true))
         } else {
-            let t = self.get_physical_type(return_type_id);
-            (t, false)
+            let t = self.get_physical_type(return_type_id)?;
+            Ok((t, false))
         }
     }
 
@@ -2222,8 +2222,8 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
             let let_stmt = *let_stmt;
 
             let rich_type_id = let_stmt.variable_type;
-            let var_pt = b.get_physical_type(let_stmt.variable_type);
-            let rich_pt = b.get_physical_type(rich_type_id);
+            let var_pt = b.get_physical_type(let_stmt.variable_type)?;
+            let rich_pt = b.get_physical_type(rich_type_id)?;
 
             let typed_var = b.k1.variables.get(let_stmt.variable_id);
             let returned = typed_var.is_returned();
@@ -2280,27 +2280,10 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
         }
         TypedStmt::Assignment(ass) => {
             let ass = *ass;
-            match ass.kind {
-                AssignmentKind::Set => {
-                    let TypedExpr::Variable(v) = b.k1.exprs.get(ass.destination) else {
-                        b.k1.ice_span(ass.span, "Invalid value assignment lhs")
-                    };
-                    let variable_id = v.variable_id;
-                    let CompileVariableResult::Address { addr, constant, .. } =
-                        compile_variable_to_address(b, variable_id, true)
-                    else {
-                        unreachable!()
-                    };
-                    debug_assert!(!constant);
-                    store_assignment_value(b, addr, ass.value)?;
-                    Ok(Value::Empty)
-                }
-                AssignmentKind::Store => {
-                    let lhs = compile_expr(b, None, ass.destination)?;
-                    store_assignment_value(b, lhs, ass.value)?;
-                    Ok(Value::Empty)
-                }
-            }
+            let (addr, frozen) = compile_expr_place(b, ass.destination)?;
+            debug_assert!(!frozen);
+            store_assignment_value(b, addr, ass.value)?;
+            Ok(Value::Empty)
         }
         TypedStmt::Require(req) => {
             let req = req.clone();
@@ -2338,7 +2321,7 @@ fn store_assignment_value(b: &mut Builder, addr: Value, value: TypedExprId) -> K
     if b.get_value_kind(rhs).is_terminator() {
         return Ok(());
     }
-    let pt = b.get_physical_type(b.k1.exprs.get_type(value));
+    let pt = b.get_physical_type(b.k1.exprs.get_type(value))?;
     store_value(b, pt, addr, rhs, IrComment::AssignmentStore);
     Ok(())
 }
@@ -2359,7 +2342,7 @@ fn compile_expr(
     match e {
         TypedExpr::Struct(struct_literal) => {
             let struct_type_id = expr_type;
-            let struct_pt = b.get_physical_type(struct_type_id);
+            let struct_pt = b.get_physical_type(struct_type_id)?;
             if struct_pt.is_empty() {
                 return Ok(Value::Empty);
             }
@@ -2388,20 +2371,20 @@ fn compile_expr(
         }
         TypedExpr::StructFieldAccess(_) => {
             let (field_ptr, frozen) = compile_expr_place(b, expr)?;
-            let result_type = b.get_physical_type(expr_type);
+            let result_type = b.get_physical_type(expr_type)?;
             let needs_copy = !frozen;
             let result = build_field_access(b, dst, field_ptr, result_type, needs_copy);
             Ok(result)
         }
         TypedExpr::ArrayGetElement(_) => {
             let (element_ptr, frozen) = compile_expr_place(b, expr)?;
-            let result_type = b.get_physical_type(expr_type);
+            let result_type = b.get_physical_type(expr_type)?;
             let needs_copy = !frozen;
             let result = build_field_access(b, dst, element_ptr, result_type, needs_copy);
             Ok(result)
         }
         TypedExpr::Variable(variable_expr) => {
-            let var_result = compile_variable_to_address(b, variable_expr.variable_id, false);
+            let var_result = compile_variable_to_address(b, variable_expr.variable_id, false)?;
             match var_result {
                 CompileVariableResult::FoldedValue { value, pt } => {
                     let stored = store_rich_if_dst(b, dst, pt, value, IrComment::FoldedVariable);
@@ -2437,7 +2420,7 @@ fn compile_expr(
         }
         TypedExpr::Deref(_) => {
             let (src, frozen) = compile_expr_place(b, expr)?;
-            let target_pt = b.get_physical_type(expr_type);
+            let target_pt = b.get_physical_type(expr_type)?;
             let copy_aggregates = !frozen;
             let loaded = load_or_copy(
                 b,
@@ -2465,7 +2448,7 @@ fn compile_expr(
             let call = b.k1.calls.get(call_id).clone();
 
             let function_type_id = b.k1.get_callee_function_type(&call.callee);
-            let callee_fn_type = b.get_physical_fn_type(function_type_id);
+            let callee_fn_type = b.get_physical_fn_type(function_type_id)?;
 
             let maybe_function_id = call.callee.maybe_function_id();
             let (maybe_builtin, linkage) = match maybe_function_id {
@@ -2512,7 +2495,7 @@ fn compile_expr(
                         // The body takes its env by pointer; spill the by-value env
                         let lambda_env = compile_expr(b, None, *lambda_value_expr)?;
                         let lambda_env_type_id = b.k1.exprs.get_type(*lambda_value_expr);
-                        let env_pt = b.get_physical_type(lambda_env_type_id);
+                        let env_pt = b.get_physical_type(lambda_env_type_id)?;
                         let env_ptr =
                             b.push_alloca(env_pt, IrComment::LambdaEnvLocation).as_value();
                         store_value(
@@ -2534,8 +2517,8 @@ fn compile_expr(
                     Callee::DynamicLambda(dl) => {
                         let lambda_obj = compile_expr(b, None, *dl)?;
                         let lam_obj_type_id = b.k1.builtin_types.dyn_lambda_obj.unwrap();
-                        let lam_obj_pt = b.get_physical_type(lam_obj_type_id).expect_agg();
-                        let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
+                        let lam_obj_pt = b.get_physical_type(lam_obj_type_id).unwrap().expect_agg();
+                        let ptr_pt = PhysicalType::PTR;
                         let fn_ptr_addr = b.push_struct_offset(
                             lam_obj_pt,
                             lambda_obj,
@@ -2557,8 +2540,8 @@ fn compile_expr(
                     Callee::DynamicAbilityFn { object_expr, field_index, slot_function_type } => {
                         let object = compile_expr(b, None, *object_expr)?;
                         let object_type_id = b.k1.exprs.get_type(*object_expr);
-                        let object_pt = b.get_physical_type(object_type_id).expect_agg();
-                        let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
+                        let object_pt = b.get_physical_type(object_type_id).unwrap().expect_agg();
+                        let ptr_pt = PhysicalType::PTR;
                         let fn_ptr_addr = b.push_struct_offset(
                             object_pt,
                             object,
@@ -2645,7 +2628,7 @@ fn compile_expr(
         }
         TypedExpr::Match(match_expr) => {
             let match_result_type = expr_type;
-            let result_inst_kind = b.type_to_inst_kind(match_result_type);
+            let result_inst_kind = b.type_to_inst_kind(match_result_type)?;
             if let Some(stmt) = match_expr.subject_defn {
                 compile_stmt(b, None, stmt)?;
             }
@@ -2667,8 +2650,13 @@ fn compile_expr(
                 Some(scrutinee_expr) => {
                     let value = compile_expr(b, None, scrutinee_expr)?;
                     let scrutinee_type = b.k1.exprs.get_type(scrutinee_expr);
-                    let width =
-                        b.get_physical_type(scrutinee_type).as_scalar().unwrap().width().bits();
+                    let width = b
+                        .get_physical_type(scrutinee_type)
+                        .unwrap()
+                        .as_scalar()
+                        .unwrap()
+                        .width()
+                        .bits();
                     Some((value, width as u8))
                 }
             };
@@ -2848,7 +2836,7 @@ fn compile_expr(
             {
                 None
             } else {
-                let break_pt_id = b.get_physical_type(expr_type);
+                let break_pt_id = b.get_physical_type(expr_type)?;
                 Some(b.push_alloca(break_pt_id, IrComment::LoopBreakValue))
             };
             let TypedExpr::Block(body_block) = b.k1.exprs.get(loop_expr.body_block) else {
@@ -2877,7 +2865,7 @@ fn compile_expr(
                 return Ok(b.push_inst_anon(Inst::Unreachable).as_value());
             }
             if let Some(break_alloca) = break_value {
-                let break_pt_id = b.get_physical_type(expr_type);
+                let break_pt_id = b.get_physical_type(expr_type)?;
                 let stored = load_or_copy(
                     b,
                     break_pt_id,
@@ -2910,7 +2898,7 @@ fn compile_expr(
             Ok(jmp.as_value())
         }
         TypedExpr::SumConstructor(sum_c) => {
-            let sum_pt = b.get_physical_type(expr_type);
+            let sum_pt = b.get_physical_type(expr_type)?;
             let sum_agg_id = sum_pt.expect_agg();
             let sum_pt_agg = b.k1.agg_types.get(sum_agg_id).agg_type.expect_sum();
             let variants = sum_pt_agg.variants;
@@ -2951,7 +2939,7 @@ fn compile_expr(
         }
         TypedExpr::SumGetPayload(_sum_get_payload) => {
             let (payload_place, frozen) = compile_expr_place(b, expr)?;
-            let result_type = b.get_physical_type(expr_type);
+            let result_type = b.get_physical_type(expr_type)?;
             let make_copy = !frozen;
             let copied = load_or_copy(
                 b,
@@ -3017,14 +3005,14 @@ fn compile_expr(
         }
         TypedExpr::FunctionPointer(fpe) => {
             let fp = Value::FunctionAddr(fpe.function_id);
-            let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
+            let ptr_pt = PhysicalType::PTR;
             let stored = store_rich_if_dst(b, dst, ptr_pt, fp, IrComment::DeliverFnPointer);
             let requester = b.k1.trace.top();
             b.k1.ir.units_pending_compile.push(fpe.function_id, requester);
             Ok(stored)
         }
         TypedExpr::StaticValue(stat) => {
-            let t = b.get_physical_type(expr_type);
+            let t = b.get_physical_type(expr_type)?;
             let value = compile_static_value(b, stat.value_id, t);
             let stored = store_rich_if_dst(b, dst, t, value, IrComment::StoreStaticValueToDst);
             Ok(stored)
@@ -3036,7 +3024,7 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
     match b.k1.exprs.get(expr).clone() {
         TypedExpr::StructFieldAccess(field_access) => {
             let struct_type = b.k1.exprs.get_type(field_access.base_struct);
-            let struct_pt_id = b.get_physical_type(struct_type).expect_agg();
+            let struct_pt_id = b.get_physical_type(struct_type)?.expect_agg();
             let (base_ptr, frozen) = compile_expr_place(b, field_access.base_struct)?;
             let field_ptr = b.push_struct_offset(
                 struct_pt_id,
@@ -3049,7 +3037,7 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
         TypedExpr::ArrayGetElement(array_get) => {
             let (array_base, frozen) = compile_expr_place(b, array_get.base_array)?;
             let array_type = b.k1.exprs.get_type(array_get.base_array);
-            let array_agg_id = b.get_physical_type(array_type).expect_agg();
+            let array_agg_id = b.get_physical_type(array_type)?.expect_agg();
             let (element_pt, _len) = b.k1.agg_types.get(array_agg_id).agg_type.expect_array();
             let index = compile_expr(b, None, array_get.index)?;
             let element_ptr = b.push_inst(
@@ -3060,7 +3048,7 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
         }
         TypedExpr::Variable(variable_expr) => {
             let CompileVariableResult::Address { addr, constant, .. } =
-                compile_variable_to_address(b, variable_expr.variable_id, true)
+                compile_variable_to_address(b, variable_expr.variable_id, true)?
             else {
                 panic!("require_address not honored")
             };
@@ -3151,7 +3139,7 @@ fn compile_variable_to_address(
     variable_id: VariableId,
     // Don't fold to the value; the caller wants the address explicitly
     require_address: bool,
-) -> CompileVariableResult {
+) -> K1Result<CompileVariableResult> {
     let variable = b.k1.variables.get(variable_id);
     match variable.global_id() {
         Some(global_id) => {
@@ -3172,10 +3160,13 @@ fn compile_variable_to_address(
 
             let value_type = variable.type_id;
             let is_constant = global.is_constant;
-            let value_pt = b.get_physical_type(value_type);
+            let value_pt = b.get_physical_type(value_type)?;
 
             if global_id == GLOBAL_ID_K1_IS_STATIC && !require_address {
-                return CompileVariableResult::FoldedValue { value: Value::IsStatic, pt: value_pt };
+                return Ok(CompileVariableResult::FoldedValue {
+                    value: Value::IsStatic,
+                    pt: value_pt,
+                });
             }
 
             if let Some(initial_value) = global.initial_value.as_value()
@@ -3205,19 +3196,19 @@ fn compile_variable_to_address(
                     Value::Empty => Some(value),
                 };
                 if let Some(value) = folded_value {
-                    return CompileVariableResult::FoldedValue { value, pt: value_pt };
+                    return Ok(CompileVariableResult::FoldedValue { value, pt: value_pt });
                 }
             }
 
             {
                 let addr = Value::GlobalAddr { storage_pt: value_pt, id: global_id };
                 let is_direct = value_pt.is_agg();
-                CompileVariableResult::Address {
+                Ok(CompileVariableResult::Address {
                     addr,
                     pt: value_pt,
                     indirect: !is_direct,
                     constant: is_constant,
-                }
+                })
             }
         }
         None => {
@@ -3235,12 +3226,12 @@ fn compile_variable_to_address(
             let var_value = var.value;
             let var_indirect = var.indirect;
             let is_constant = false;
-            CompileVariableResult::Address {
+            Ok(CompileVariableResult::Address {
                 addr: var_value,
                 pt: var.pt,
                 indirect: var_indirect,
                 constant: is_constant,
-            }
+            })
         }
     }
 }
@@ -3291,7 +3282,7 @@ fn compile_ir_builtin(
         }
         BuiltinIr::Zeroed => {
             let type_id = call.type_args.as_slice(&b.k1.mem)[0];
-            let pt = b.get_physical_type(type_id);
+            let pt = b.get_physical_type(type_id)?;
             match pt.as_enum() {
                 PhysicalTypeEnum::Empty => Ok(Value::Empty),
                 PhysicalTypeEnum::Agg(agg_id) => {
@@ -3335,7 +3326,7 @@ fn compile_ir_builtin(
         BuiltinIr::Negate => {
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
             let base = compile_expr(b, None, arg0)?;
-            let pt = b.get_physical_type(b.k1.exprs.get_type(arg0));
+            let pt = b.get_physical_type(b.k1.exprs.get_type(arg0))?;
             let st = pt.expect_scalar();
             let width = b.k1.get_pt_layout(pt).size_bits() as u8;
             let neg = match st {
@@ -3359,8 +3350,8 @@ fn compile_ir_builtin(
             let from_type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let to_type_id = call.type_args.as_slice(&b.k1.mem)[1];
 
-            let from_pt = b.get_physical_type(from_type_id);
-            let to_pt = b.get_physical_type(to_type_id);
+            let from_pt = b.get_physical_type(from_type_id)?;
+            let to_pt = b.get_physical_type(to_type_id)?;
 
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
             let from_value = compile_expr(b, None, arg0)?;
@@ -3501,7 +3492,7 @@ fn compile_ir_builtin(
         BuiltinIr::PointerIndex => {
             // fn(intern) refAtIndex[T](self: Pointer, index: uword): T*
             let elem_type_id = call.type_args.as_slice(&b.k1.mem)[0];
-            let elem_pt = b.get_physical_type(elem_type_id);
+            let elem_pt = b.get_physical_type(elem_type_id)?;
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
             let base = compile_expr(b, None, arg0)?;
             let arg1 = *b.k1.mem.get_nth(call.args, 1);
@@ -3514,7 +3505,8 @@ fn compile_ir_builtin(
             Ok(stored)
         }
         BuiltinIr::VolatileLoad => {
-            let t = b.get_physical_type(call.type_args.as_slice(&b.k1.mem)[0]);
+            let load_type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let t = b.get_physical_type(load_type_id)?;
             if t.is_empty() {
                 return Ok(Value::Empty);
             }
@@ -3542,7 +3534,8 @@ fn compile_ir_builtin(
             }
         }
         BuiltinIr::VolatileStore => {
-            let t = b.get_physical_type(call.type_args.as_slice(&b.k1.mem)[0]);
+            let store_type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let t = b.get_physical_type(store_type_id)?;
             if !t.is_empty() {
                 let store_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
                 let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
@@ -3560,7 +3553,8 @@ fn compile_ir_builtin(
         }
         BuiltinIr::AtomicLoad => {
             // fn(intern) load[t](src: *t, ord: ordering): t
-            let t = atomic_element_type(b, &call, true)?;
+            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let t = check_atomic_scalar_type(b, type_id, true)?;
             let ord = b.k1.atomic_ordering_arg(&call, 1)?;
             let src = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let inst = b.push_inst_anon(Inst::AtomicLoad { t, src, ord });
@@ -3568,7 +3562,8 @@ fn compile_ir_builtin(
         }
         BuiltinIr::AtomicStore => {
             // fn(intern) store[t](dst: *mut t, value: t, ord: ordering)
-            let t = atomic_element_type(b, &call, true)?;
+            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let t = check_atomic_scalar_type(b, type_id, true)?;
             let ord = b.k1.atomic_ordering_arg(&call, 2)?;
             let store_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
@@ -3579,7 +3574,8 @@ fn compile_ir_builtin(
             // fn(intern) <op>[t](dst: *mut t, value: t, ord: ordering): t
             use crate::typer::AtomicRmwOp as Op;
             let allow_pointer = op == Op::Xchg;
-            let t = atomic_element_type(b, &call, allow_pointer)?;
+            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let t = check_atomic_scalar_type(b, type_id, allow_pointer)?;
             let signed =
                 matches!(t, ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64);
             let op = match op {
@@ -3603,7 +3599,8 @@ fn compile_ir_builtin(
         BuiltinIr::AtomicCmpxchg { weak } => {
             // fn(intern) cmpxchg[t](dst: *mut t, expected: t, desired: t,
             //                      success: ordering, failure: ordering): cmpxchg-result[t]
-            let t = atomic_element_type(b, &call, true)?;
+            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let t = check_atomic_scalar_type(b, type_id, true)?;
             let success = b.k1.atomic_ordering_arg(&call, 3)?;
             let failure = b.k1.atomic_ordering_arg(&call, 4)?;
             let cas_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3836,11 +3833,14 @@ fn vector_pt_parts(b: &mut Builder, pt: PhysicalType) -> K1Result<(ScalarType, u
     }
 }
 
-/// The element type of an atomic intrinsic: type_args[0], which must be an
+/// The element type of an atomic intrinsic, which must be an
 /// integer-class scalar (pointers allowed for the non-arithmetic ops).
-fn atomic_element_type(b: &mut Builder, call: &Call, allow_pointer: bool) -> K1Result<ScalarType> {
-    let type_id = call.type_args.as_slice(&b.k1.mem)[0];
-    let pt = b.get_physical_type(type_id);
+fn check_atomic_scalar_type(
+    b: &mut Builder,
+    type_id: TypeId,
+    allow_pointer: bool,
+) -> K1Result<ScalarType> {
+    let pt = b.get_physical_type(type_id)?;
     let scalar = match pt.as_enum() {
         PhysicalTypeEnum::Scalar(st) => Some(st),
         _ => None,
@@ -3877,7 +3877,7 @@ fn compile_cast(
         | CastType::PointerToReference
         | CastType::ReferenceToPointer => {
             let base_noop = compile_expr(b, None, c.base_expr)?;
-            let to_pt = b.get_physical_type(target_type_id);
+            let to_pt = b.get_physical_type(target_type_id)?;
             let stored =
                 store_rich_if_dst(b, dst, to_pt, base_noop, IrComment::FulfillCastDestination);
             Ok(stored)
@@ -3885,14 +3885,14 @@ fn compile_cast(
         CastType::IntegerCast(IntegerCastDirection::Extend)
         | CastType::IntegerCast(IntegerCastDirection::Truncate) => {
             let base = compile_expr(b, None, c.base_expr)?;
-            let to_pt = b.get_physical_type(target_type_id);
+            let to_pt = b.get_physical_type(target_type_id)?;
             let to = to_pt.expect_scalar();
             let inst = match c.cast_type {
                 CastType::IntegerCast(IntegerCastDirection::Extend) => {
                     let signed = b.k1.get_expr_type(c.base_expr).as_integer().unwrap().is_signed();
                     if signed {
                         let from_type_id = b.k1.exprs.get_type(c.base_expr);
-                        let from = b.get_physical_type(from_type_id).expect_scalar();
+                        let from = b.get_physical_type(from_type_id)?.expect_scalar();
                         Inst::IntExtS { from, v: base, to }
                     } else {
                         Inst::IntExtU { v: base, to }
@@ -3915,7 +3915,7 @@ fn compile_cast(
         | CastType::IntegerSignedToFloat => {
             let base = compile_expr(b, None, c.base_expr)?;
             let from = b.get_value_kind(base).expect_value().unwrap().expect_scalar();
-            let to = b.get_physical_type(target_type_id).expect_scalar();
+            let to = b.get_physical_type(target_type_id)?.expect_scalar();
             let inst = match c.cast_type {
                 CastType::FloatExtend => Inst::FloatExt { v: base, to },
                 CastType::FloatTruncate => Inst::FloatTrunc { v: base, to },
@@ -3953,7 +3953,7 @@ fn compile_arith_binop(
     use ArithOpClass as Class;
     use ArithOpOp as Op;
     let lhs_type = b.k1.exprs.get_type(arg0);
-    let lhs_pt = b.get_physical_type(lhs_type);
+    let lhs_pt = b.get_physical_type(lhs_type)?;
     let lhs_width = b.k1.get_pt_layout(lhs_pt).size_bits() as u8;
     let inst = match (op.op, op.class) {
         (Op::Add, Class::SignedInt | Class::UnsignedInt) => {
@@ -4099,7 +4099,7 @@ fn compile_int_equals(
 ) -> K1Result<Value> {
     let subject_value = compile_expr(b, None, subject)?;
     let subject_type = b.k1.exprs.get_type(subject);
-    let pt = b.get_physical_type(subject_type);
+    let pt = b.get_physical_type(subject_type)?;
     let width = b.k1.get_pt_layout(pt).size_bits() as u8;
     let rhs = compile_static_value(b, value, pt);
     let cmp = b.push_inst(
