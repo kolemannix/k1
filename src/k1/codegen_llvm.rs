@@ -23,8 +23,9 @@ use inkwell::types::{
     VectorType as LlvmVectorType,
 };
 use inkwell::values::{
-    ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FloatValue,
-    FunctionValue, GlobalValue, InstructionValue, IntValue, PointerValue, StructValue, ValueKind,
+    AggregateValue, ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum,
+    FloatValue, FunctionValue, GlobalValue, InstructionValue, IntValue, PhiValue, PointerValue,
+    StructValue, ValueKind,
 };
 use inkwell::{
     AddressSpace, AtomicOrdering, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode,
@@ -52,7 +53,7 @@ use crate::typer::{
     StaticRawContainer, StaticValue, StaticValueId, TypedFloatValue, TypedGlobalId, TypedIntValue,
     TypedProgram,
 };
-use crate::{SV8, ir, kbail, kmem};
+use crate::{SV4, SV8, ir, kbail, kmem};
 
 fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
     Layout { size: td.get_abi_size(typ) as u32, align: td.get_abi_alignment(typ) }
@@ -294,6 +295,7 @@ pub struct CgFunction<'ctx> {
     pub param_values: Vec<BasicValueEnum<'ctx>>,
     pub last_alloca_instr: Option<InstructionValue<'ctx>>,
     pub returned_sret_variable: Option<InstId>,
+    pub return_block: Option<(BasicBlock<'ctx>, SV4<PhiValue<'ctx>>)>,
     pub debug_info: DISubprogram<'ctx>,
     pub debug_file: DIFile<'ctx>,
 }
@@ -2504,6 +2506,62 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
+    fn branch_to_return_block(&mut self, abi_value: BasicValueEnum<'ctx>) {
+        let from_block = self.builder.get_insert_block().unwrap();
+        let mut parts: SV4<BasicValueEnum<'ctx>> = smallvec::smallvec![];
+        match abi_value {
+            BasicValueEnum::StructValue(s) => {
+                for i in 0..s.get_type().count_fields() {
+                    parts.push(self.builder.build_extract_value(s, i, "").unwrap());
+                }
+            }
+            BasicValueEnum::ArrayValue(a) => {
+                for i in 0..a.get_type().len() {
+                    parts.push(self.builder.build_extract_value(a, i, "").unwrap());
+                }
+            }
+            other => parts.push(other),
+        }
+        if self.get_current_function().return_block.is_none() {
+            let block =
+                self.ctx.append_basic_block(self.get_current_function().function_value, "ret");
+            self.builder.position_at_end(block);
+            let mut phis: SV4<PhiValue<'ctx>> = smallvec::smallvec![];
+            for part in &parts {
+                debug_assert!(!part.is_struct_value() && !part.is_array_value());
+                phis.push(self.builder.build_phi(part.get_type(), "").unwrap());
+            }
+            self.builder.position_at_end(from_block);
+            self.get_current_function_mut().return_block = Some((block, phis));
+        }
+        let (block, phis) = self.get_current_function().return_block.as_ref().unwrap();
+        for (phi, part) in phis.iter().zip(parts.iter()) {
+            phi.add_incoming(&[(part, from_block)]);
+        }
+        self.builder.build_unconditional_branch(*block).unwrap();
+    }
+
+    fn codegen_return_block(&mut self, function_span: SpanId) {
+        let Some((block, phis)) = self.get_current_function_mut().return_block.take() else {
+            return;
+        };
+        self.builder.position_at_end(block);
+        self.set_debug_location_from_span(function_span);
+        let abi_type = self.get_current_function().function_value.get_type().get_return_type();
+        let mut agg = match abi_type {
+            Some(BasicTypeEnum::StructType(st)) => st.get_poison().as_aggregate_value_enum(),
+            Some(BasicTypeEnum::ArrayType(at)) => at.get_poison().as_aggregate_value_enum(),
+            _ => {
+                self.builder.build_return(Some(&phis[0].as_basic_value())).unwrap();
+                return;
+            }
+        };
+        for (i, phi) in phis.iter().enumerate() {
+            agg = self.builder.build_insert_value(agg, phi.as_basic_value(), i as u32, "").unwrap();
+        }
+        self.builder.build_return(Some(&agg)).unwrap();
+    }
+
     /// Takes a canonical k1 value to pass to or return from a function and converts it
     /// to the ABI format
     fn marshal_abi_param_value(
@@ -4027,8 +4085,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         ret_value,
                     );
                     match ret_value_marshalled {
-                        None => self.builder.build_return(None).unwrap(),
-                        Some(v) => self.builder.build_return(Some(&v)).unwrap(),
+                        None => {
+                            self.builder.build_return(None).unwrap();
+                        }
+                        Some(v) => self.branch_to_return_block(v),
                     };
                 }
                 Ok(())
@@ -4489,6 +4549,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     blocks: FxHashMap::new(),
                     last_alloca_instr: None,
                     returned_sret_variable: None,
+                    return_block: None,
                     debug_info: di_subprogram,
                     debug_file: di_file,
                 },
@@ -4596,6 +4657,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 blocks: FxHashMap::new(),
                 last_alloca_instr: None,
                 returned_sret_variable: None,
+                return_block: None,
                 debug_info: di_subprogram,
                 debug_file: di_file,
             },
@@ -5078,6 +5140,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         for block in &blocks_rpo {
             self.codegen_block(inst_mappings, *block)?;
         }
+        self.codegen_return_block(self.k1.get_function_span(function_id));
         {
             blocks_rpo.clear();
             seen.clear();

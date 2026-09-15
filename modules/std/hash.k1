@@ -3,12 +3,13 @@
 
 // A swiss table in the style of hashbrown: one control byte per bucket
 // (0 empty, 1 deleted, else 0x80 | the top seven bits of the hash), probed
-// sixteen bytes at a time with SIMD compares. Buckets are a power of two,
-// at least one group, and the control array carries a mirrored group past
-// the end so group loads never wrap. Deletes leave a tombstone only when
-// the neighboring groups are full enough that a probe could have crossed
-// the slot; tombstones are purged by an in-place rehash when live entries
-// fit, and growth doubles the bucket count.
+// a group at a time with SIMD compares: 8 bytes on arm64, where a lane mask
+// is one plain register move, 16 where a movemask instruction exists.
+// Buckets are a power of two, at least 16, and the control array carries a
+// mirrored 16 bytes past the end so group loads never wrap. Deletes leave a
+// tombstone only when the neighboring groups are full enough that a probe
+// could have crossed the slot; tombstones are purged by an in-place rehash
+// when live entries fit, and growth doubles the bucket count.
 
 ability hash {
   fn hash(self): u64
@@ -26,13 +27,32 @@ fn fmix64(h0: u64): u64 {
   h ^ (h >> 33)
 }
 
+fn(inline) mix-word(h: u64, w: u64): u64 {
+  (((h << 5) | (h >> 59)) ^ w) * 0x9E3779B97F4A7C15
+}
+
 impl hash for string {
   fn hash(self): u64 {
-    let FNV_OFFSET: u64 = 0xcbf29ce484222325
-    let FNV_PRIME: u64 = 0x100000001b3
-    let h = FNV_OFFSET
-    for b in self.span-bytes() {
-      h = (h ^ b.widen[u64]) * FNV_PRIME
+    let bytes = self.span-bytes()
+    let p = bytes.data-ref().as[ptr]
+    let len = bytes.len()
+    let h: u64 = 0xcbf29ce484222325 ^ len.unsigned()
+    if len >= 8 {
+      let i: size = 0
+      while i + 8 <= len {
+        h = mix-word(h, mem/read-unaligned[u64](p.ref-at[u8](i).as[ptr]))
+        i = i + 8
+      }
+      if i < len { h = mix-word(h, mem/read-unaligned[u64](p.ref-at[u8](len - 8).as[ptr])) }
+    } else if len >= 4 {
+      let head = mem/read-unaligned[u32](p).widen[u64]
+      let tail = mem/read-unaligned[u32](p.ref-at[u8](len - 4).as[ptr]).widen[u64]
+      h = mix-word(h, (head << 32) | tail)
+    } else if len > 0 {
+      let first = p.ref-at[u8](0).*.widen[u64]
+      let middle = p.ref-at[u8](len >> 1).*.widen[u64]
+      let last = p.ref-at[u8](len - 1).*.widen[u64]
+      h = mix-word(h, (first << 16) | (middle << 8) | last)
     }
     fmix64(h)
   }
@@ -63,7 +83,11 @@ type map[k, v] = {
 
 ns for map {
 
-  let GROUP: size = 16
+  let MIRROR: size = 16
+  let GROUP-SHIFT: u32 = #if k1/arch is { :arm64 -> 3, :intel64 or :wasm64 -> 4 }
+  let GROUP: size = 1 << GROUP-SHIFT
+  let LANE-SHIFT: u32 = #if k1/arch is { :arm64 -> 3, :intel64 or :wasm64 -> 0 }
+  let MASK-BITS: u32 = GROUP.trunc[u32] << LANE-SHIFT
   let EMPTY: u8 = 0
   let DELETED: u8 = 1
   let FULL: u8 = 128
@@ -71,10 +95,10 @@ ns for map {
   fn(inline) _h2(h: u64): u8 { (h >> 57).trunc[u8] | FULL }
   fn(inline) _is-full(c: u8): bool { (c & FULL) != 0 }
 
-  fn(inline) _capacity-of(buckets: size): size { buckets / 8 * 7 }
+  fn(inline) _capacity-of(buckets: size): size { (buckets >> 3) * 7 }
 
   fn _buckets-for(min-capacity: size): size {
-    let b = GROUP
+    let b = MIRROR
     while _capacity-of(b) < min-capacity { b = b * 2 }
     b
   }
@@ -87,7 +111,7 @@ ns for map {
     .{
       count = 0,
       growth-left = _capacity-of(buckets),
-      ctrl = buffer/allocate-in[u8, _](alloc, buckets + GROUP),
+      ctrl = buffer/allocate-in[u8, _](alloc, buckets + MIRROR),
       entries = buffer/allocate-in[{ key: k, value: v }, _](alloc, buckets),
     }
   }
@@ -113,16 +137,25 @@ ns for map {
 
   fn capacity[k, v](self: *map[k, v]): size { self.entries.len }
 
-  fn(inline) _group[k, v](self: *map[k, v], pos: size): vector[u8, 16] {
-    vector/load-unchecked[u8, 16](self.ctrl.data-ptr().ref-at[u8](pos).as[ptr])
+  fn(inline) _group[k, v](self: *map[k, v], pos: size): vector[u8, GROUP] {
+    vector/load-unchecked[u8, GROUP](self.ctrl.data-ptr().ref-at[u8](pos).as[ptr])
   }
 
-  fn(inline) _match-h2(g: vector[u8, 16], h2: u8): u64 { g.eq-lanes(vector/splat[u8, 16](h2)).to-mask() }
-  fn(inline) _match-empty(g: vector[u8, 16]): u64 { g.eq-lanes(vector/splat[u8, 16](EMPTY)).to-mask() }
-  fn(inline) _match-empty-or-deleted(g: vector[u8, 16]): u64 { g.to-mask() ^ 0xFFFF }
+  fn(inline) _lanes(v: vector[u8, GROUP]): u64 {
+    #if k1/arch is {
+      :arm64 -> v.to-u64() & 0x8080808080808080,
+      :intel64 or :wasm64 -> v.to-mask()
+    }
+  }
+  fn(inline) _match-h2(g: vector[u8, GROUP], h2: u8): u64 { _lanes(g.eq-lanes(vector/splat[u8, GROUP](h2))) }
+  fn(inline) _match-empty(g: vector[u8, GROUP]): u64 { _lanes(g.eq-lanes(vector/splat[u8, GROUP](EMPTY))) }
+  fn(inline) _match-empty-or-deleted(g: vector[u8, GROUP]): u64 { _lanes(g.bit-not()) }
+  fn(inline) _lane(m: u64): size { (m.trailing-zeros() >> LANE-SHIFT).signed() }
+  fn(inline) _lead(m: u64): u64 { (m << (64 - MASK-BITS)).leading-zeros() >> LANE-SHIFT }
+  fn(inline) _trail(m: u64): u64 { m.trailing-zeros() >> LANE-SHIFT }
 
   fn _set-ctrl[k, v](self: *mut map[k, v], idx: size, c: u8) {
-    let mirror = ((idx - GROUP) & (self.entries.len - 1)) + GROUP
+    let mirror = ((idx - MIRROR) & (self.entries.len - 1)) + MIRROR
     self.ctrl.index-unchecked(idx).* = c
     self.ctrl.index-unchecked(mirror).* = c
   }
@@ -137,7 +170,7 @@ ns for map {
       let g = self._group(pos)
       let m = _match-h2(g, h2)
       while m != 0 {
-        let idx = (pos + m.trailing-zeros().signed()) & mask
+        let idx = (pos + _lane(m)) & mask
         if self.entries.index-unchecked(idx).key == key return :some idx
         m = m & (m - 1)
       }
@@ -153,7 +186,7 @@ ns for map {
     let stride: size = 0
     loop {
       let m = _match-empty-or-deleted(self._group(pos))
-      if m != 0 break (pos + m.trailing-zeros().signed()) & mask
+      if m != 0 break (pos + _lane(m)) & mask
       stride = stride + GROUP
       pos = (pos + stride) & mask
     }
@@ -184,7 +217,7 @@ ns for map {
       let c = self.ctrl.index-unchecked(i)
       c.* = if _is-full(c.*) DELETED else EMPTY
     }
-    for i in 0.until(GROUP) {
+    for i in 0.until(MIRROR) {
       self.ctrl.index-unchecked(buckets + i).* = self.ctrl.index-unchecked(i).*
     }
     let i: size = 0
@@ -194,7 +227,7 @@ ns for map {
           let h = self.entries.index-unchecked(i).key.hash()
           let home = h.signed() & mask
           let new-i = self._find-insert-slot(h)
-          if ((i - home) & mask) / GROUP == ((new-i - home) & mask) / GROUP {
+          if ((i - home) & mask) >> GROUP-SHIFT == ((new-i - home) & mask) >> GROUP-SHIFT {
             self._set-ctrl(i, _h2(h))
             break
           }
@@ -213,7 +246,7 @@ ns for map {
     self.growth-left = capacity - self.count
   }
 
-  fn _claim[k, v](self: *mut map[k, v], idx: size, h: u64) {
+  fn(inline) _claim[k, v](self: *mut map[k, v], idx: size, h: u64) {
     if self.ctrl.index-unchecked(idx).* == EMPTY { self.growth-left = self.growth-left - 1 }
     self._set-ctrl(idx, _h2(h))
     self.count = self.count + 1
@@ -221,10 +254,10 @@ ns for map {
 
   fn _make-room[k, v, a: allocator](self: *mut map[k, v], alloc: a, h: u64): size where k: hash {
     if self.entries.len == 0 {
-      self.* = _allocate[k, v, _](alloc, GROUP)
+      self.* = _allocate[k, v, _](alloc, MIRROR)
     } else {
       let capacity = _capacity-of(self.entries.len)
-      if self.count + 1 <= capacity / 2 {
+      if self.count + 1 <= capacity >> 1 {
         self._rehash-in-place(capacity)
       } else {
         self._resize(alloc, self.entries.len * 2)
@@ -318,9 +351,9 @@ ns for map {
     let before = (idx - GROUP) & mask
     let empty-before = _match-empty(self._group(before))
     let empty-after = _match-empty(self._group(idx))
-    let lead = (empty-before << 48).leading-zeros()
-    let trail = empty-after.trailing-zeros()
-    if lead + trail >= 16 {
+    let lead = _lead(empty-before)
+    let trail = _trail(empty-after)
+    if lead + trail >= GROUP.unsigned() {
       self._set-ctrl(idx, DELETED)
     } else {
       self._set-ctrl(idx, EMPTY)
@@ -555,8 +588,8 @@ ns for fixmap {
 
   fn new[k, v, n](): fixmap[k, v, n] {
     let c: size = core/meta/static-type-to-value[_, n]()
-    if (c & (c - 1)) != 0 or c < map/GROUP {
-      crash("fixmap slot count must be a power of two, at least ${map/GROUP}")
+    if (c & (c - 1)) != 0 or c < map/MIRROR {
+      crash("fixmap slot count must be a power of two, at least ${map/MIRROR}")
     }
     let m: fixmap[k, v, n] = mem/zeroed()
     m.growth-left = (c - 1).trunc[u32]
@@ -579,7 +612,7 @@ ns for fixmap {
     .{
       count = self.count.widen[size],
       growth-left = self.growth-left.widen[size],
-      ctrl = .{ data = self.ctrl.data-ref(), len = self._slots() + map/GROUP },
+      ctrl = .{ data = self.ctrl.data-ref(), len = self._slots() + map/MIRROR },
       entries = self.slots.as-buffer(),
     }
   }
@@ -589,16 +622,19 @@ ns for fixmap {
     self.growth-left = t.growth-left.trunc[u32]
   }
 
-  fn _make-room[k, v](t: *mut map[k, v], capacity: size, h: u64): size where k: hash {
-    t._rehash-in-place(capacity)
+  fn _make-room[k, v, n](self: *mut fixmap[k, v, n], h: u64): size where k: hash {
+    let t = self._table()
+    t._rehash-in-place(self.cap())
+    self._store(t)
     t._find-insert-slot(h)
   }
 
-  fn(inline) _claim-slot[k, v](t: *mut map[k, v], capacity: size, h: u64): ?size where k: hash {
+  fn(inline) _claim-slot[k, v, n](self: *mut fixmap[k, v, n], t: *mut map[k, v], h: u64): ?size where k: hash {
     let idx = t._find-insert-slot(h)
     if t.ctrl.index-unchecked(idx).* == map/EMPTY and t.growth-left == 0 {
-      if t.count == capacity return :none
-      idx = _make-room(t, capacity, h)
+      if t.count == self.cap() return :none
+      idx = self._make-room(h)
+      t.* = self._table()
     }
     t._claim(idx, h)
     :some idx
@@ -614,7 +650,7 @@ ns for fixmap {
         :ok
       },
       :none -> {
-        if _claim-slot(t.&, self.cap(), h) is {
+        if self._claim-slot(t.&, h) is {
           :some idx -> {
             t.entries.index-unchecked(idx).* = .{ key, value }
             self._store(t)
@@ -640,7 +676,7 @@ ns for fixmap {
     let idx = if t._find(key, h) is {
       :some idx -> idx,
       :none -> {
-        if _claim-slot(t.&, self.cap(), h) is {
+        if self._claim-slot(t.&, h) is {
           :some idx -> {
             t.entries.index-unchecked(idx).* = .{ key, value = make() }
             self._store(t)

@@ -770,6 +770,9 @@ ns k1 {
   let platform-bare: bool = #if platform is { :bare -> true, :posix-linux or :posix-macos or :wasi -> false }
   let platform-posix: bool = #if platform is { :posix-linux or :posix-macos -> true, :wasi or :bare -> false }
 
+  type arch = either { intel64 = 0, arm64 = 1, wasm64 = 2 }
+  let arch: arch = builtin
+
   // The widest SIMD register the target supports;
   let simd-bytes: size = builtin
 

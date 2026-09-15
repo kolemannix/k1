@@ -32,6 +32,12 @@ ns mem {
 
   fn(inline) new[t](t: t): *t { current-arena().new(t) }
 
+  fn(inline) read-unaligned[t](src: ptr): t {
+    let value: t = zeroed()
+    copy(value.&.as[ptr], src, types/size[t])
+    value
+  }
+
   macro new-in-place[t](expr) {
     let type-id = types/id[t]
     `

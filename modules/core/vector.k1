@@ -40,6 +40,13 @@ ns vector {
     load-unchecked[t, n](s.data-ptr().ref-at[t](start).as[ptr])
   }
 
+  fn(inline) to-u64[t, n: static size](v: vector[t, n]): u64 {
+    if types/size[vector[t, n]] != 8 { crash("vector/to-u64 needs an 8-byte vector") }
+    let w: u64 = 0
+    store-unchecked(v, w.&.as[ptr])
+    w
+  }
+
   fn eq-mask[t, n: static size](a: vector[t, n], b: vector[t, n]): u64 {
     a.eq-lanes(b).to-mask()
   }

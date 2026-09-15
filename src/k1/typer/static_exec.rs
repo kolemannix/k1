@@ -600,6 +600,15 @@ impl TypedProgram {
                     StaticValue::Enum(expected_type_id, TypedIntValue::U8(host_platform as u8));
                 return Ok(self.static_values.add(static_enum));
             }
+            "arch" => {
+                let arch_tag = match self.config.target.arch() {
+                    crate::compiler::Arch::Intel => 0,
+                    crate::compiler::Arch::Arm => 1,
+                    crate::compiler::Arch::Wasm => 2,
+                };
+                let static_enum = StaticValue::Enum(expected_type_id, TypedIntValue::U8(arch_tag));
+                return Ok(self.static_values.add(static_enum));
+            }
             "simd-bytes" => {
                 let width = self.config.simd_bytes as i64;
                 return Ok(self.static_values.add(StaticValue::Int(TypedIntValue::I64(width))));
