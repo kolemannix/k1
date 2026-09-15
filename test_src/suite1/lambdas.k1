@@ -75,7 +75,7 @@ fn run-things(thunks: list[dyn[fn() -> empty]]) {
 }
 
 fn thunks-test() {
-  let counter = { let x = 0; &x }
+  let counter = { let x = 0; x.& }
   let thunks: list[dyn[fn() -> empty]] = [
     fn[counter]. { counter.* = counter.* + 1 },
     fn[counter]. { counter.* = counter.* + 1 },
@@ -113,7 +113,7 @@ fn test() {
     || filter(fn x. x % 2 == 0)
   assert(result == [2, 4, 6, 8])
 
-  let x = { let tmp = 10; &tmp }
+  let x = { let tmp = 10; tmp.& }
   // Coerce lambdas to lambda objects
   simple-dyn(fn[x]. { let _ = "Thunk! ${x.*}"; x.* = 11 })
   assert-equals(x.*, 11)

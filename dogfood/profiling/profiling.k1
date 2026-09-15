@@ -84,7 +84,7 @@ fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *profile-anchor) {
 
 // Print all anchor profiling data
 fn print_anchor_data(total_cpu_elapsed: u64) {
-    for anchor in (&global_profiler_anchors).as-buffer().ref-iter() {
+    for anchor in global_profiler_anchors.&.as-buffer().ref-iter() {
         if anchor.hit_count != 0 {
             print_time_elapsed(total_cpu_elapsed, anchor)
         }

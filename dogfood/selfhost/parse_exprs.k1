@@ -29,7 +29,7 @@ ns for parser {
     loop {
       let tok = self.peek()
       require binary-op-from-kind(tok.kind) is :some op-kind else { break }
-      if newline-terminates(tok) { break }
+      if tok.is-newline-starter() { break }
       let op-precedence = op-kind.precedence()
       if op-precedence < min-precedence { break }
       self.advance()
@@ -42,7 +42,7 @@ ns for parser {
       loop {
         let next-tok = self.peek()
         require binary-op-from-kind(next-tok.kind) is :some next-op else { break }
-        if newline-terminates(next-tok) { break }
+        if next-tok.is-newline-starter() { break }
         let next-precedence = next-op.precedence()
         let should-recurse = next-precedence > op-precedence
           or (next-precedence == op-precedence and op-kind.is-right-assoc())
@@ -479,22 +479,17 @@ ns for parser {
       :some(self.add-expr(:loop-expr(.{ label, body, span })))
     } else if first.kind is :kw-for {
       :some(self.expect-for-expr(false).try)
-    } else if first.kind is :amp {
-      self.advance()
-      let expr = self.expect-expression-with-postfix-ops().try
-      let span = first.span().thru(self.expr-span(expr))
-      :some(self.add-expr(:un-op(.{ op = :address-of, expr, span })))
     } else if first.kind is :kw-not {
       self.advance()
       let expr = self.expect-expression-with-postfix-ops().try
       let next = self.peek()
       if binary-op-from-kind(next.kind) is :some op {
-        if not newline-terminates(next) {
+        if not next.is-newline-starter() {
           return :err(make-error("`not` followed by `${op.repr()}` is ambiguous; use parens to disambiguate", next))
         }
       }
       let span = first.span().thru(self.expr-span(expr))
-      :some(self.add-expr(:un-op(.{ op = :bool-negation, expr, span })))
+      :some(self.add-expr(:not-expr(.{ expr, span })))
     } else if first.kind is :colon {
       self.advance()
       let it = self.expect-ident().try

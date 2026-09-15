@@ -47,11 +47,11 @@ fn emit-arg-match(cb: *mut code-builder, s: types/type-schema:struct) {
     for s.fields {
       if get-arg-kind(it.type-id) is {
         :string or :opt-string -> {
-          cb.line(`"-${it.name}" -> { if parse-next(&i, args) is :some next { ${it.name}-val = :some next } },`)
-          cb.line(`"/${it.name}" -> { if parse-next(&i, args) is :some(next) .{} },`)
+          cb.line(`"-${it.name}" -> { if parse-next(i.&, args) is :some next { ${it.name}-val = :some next } },`)
+          cb.line(`"/${it.name}" -> { if parse-next(i.&, args) is :some(next) .{} },`)
         },
         :list-string -> {
-          cb.line(`"+${it.name}" -> { if parse-next(&i, args) is :some next { ${it.name}-val.push(next) } },`)
+          cb.line(`"+${it.name}" -> { if parse-next(i.&, args) is :some next { ${it.name}-val.push(next) } },`)
         },
       }
     }

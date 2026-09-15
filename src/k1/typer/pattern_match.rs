@@ -626,19 +626,15 @@ impl TypedProgram {
                         )),
                     },
                     ParsedLiteral::String(string_id, span) => {
-                        match self.types.get(target_type_id) {
-                            Type::StaticValue(svt)
-                                if svt.family_type_id == self.builtin_types.string() =>
-                            {
-                                Ok(())
-                            }
-                            _ if target_type_id == self.builtin_types.string() => Ok(()),
-                            _ => Err(kerr!(
+                        if self.get_type_family_type(target_type_id) == self.builtin_types.string() {
+                            Ok(())
+                        } else {
+                            Err(kerr!(
                                 self,
                                 self.ast.get_pattern_span(pat_expr),
                                 "string literal pattern will never match {}",
                                 target_type_id
-                            )),
+                            ))
                         }?;
                         Ok(self.patterns.add(TypedPattern::LiteralString(*string_id, *span)))
                     }
@@ -1103,14 +1099,20 @@ impl TypedProgram {
                     };
                     let consequent_expr_type = self.exprs.get_type(consequent_expr);
 
-                    if expected_arm_type_id.is_none() && consequent_expr_type != NEVER_TYPE_ID {
-                        // We chase down the type because, if its a static, it doesn't really make
-                        // sense to expect every arm to evaluate to the same static, but rather to
-                        // the static's inner type
-                        let chased_consequent_id =
-                            self.get_static_family_id_if_static(consequent_expr_type);
-                        expected_arm_type_id = Some(chased_consequent_id);
-                    }
+                    let consequent_expr = if consequent_expr_type != NEVER_TYPE_ID {
+                        let arm_type = self.get_type_family_type(consequent_expr_type);
+                        if expected_arm_type_id.is_none() {
+                            expected_arm_type_id = Some(arm_type);
+                        }
+                        self.check_and_coerce_expr(
+                            arm_type,
+                            consequent_expr,
+                            pattern_eval_ctx.scope_id,
+                            false,
+                        )?
+                    } else {
+                        consequent_expr
+                    };
 
                     let match_arm = TypedMatchArm {
                         case,

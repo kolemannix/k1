@@ -631,7 +631,7 @@ See `test_src/suite1/ns_extend.k1`,
 
 The guide covers field references, but tests also use:
 
-- `&x` / `&array` to take addresses.
+- `x.&` / `array.&` to take addresses.
 - `ptr/null`.
 - `.as[ptr]` and `.as[*t]` casts.
 - `.ref[t]` to assert a raw pointer as `*t` (`.ref-opt[t]` wraps it as

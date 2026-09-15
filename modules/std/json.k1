@@ -200,7 +200,7 @@ fn _parse-next-value(context p: *mut parser)(): result[json, string] {
 
 fn parse-from-string(input: string): result[json, string] {
   let p: parser = .{ input, cursor = 0 }
-  if _parse-next-value(context &p)() is {
+  if _parse-next-value(context p.&)() is {
     :err msg -> :err "Failed at pos ${p.cursor}: $msg",
     :ok json -> {
       p.eat-whitespace()

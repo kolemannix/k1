@@ -190,7 +190,7 @@ fn parser-init[user-data](
   on-body-complete: *fn(*mut user-data, span[span[u8]]) -> {}
 ): parser {
   let settings: llhttp/settings = zeroed()
-  llhttp/settings_init(&settings)
+  llhttp/settings_init(settings.&)
   let settings = connection-arena.push(settings.with(.{
     on_method            = fn(_p, _, _) 0,
     on_url               = on-url-part.narrow(),
@@ -205,7 +205,7 @@ fn parser-init[user-data](
   }))
 
   let parser: parser = uninit
-  llhttp/init((&parser).as(), :BOTH, settings)
+  llhttp/init(parser.&.as(), :BOTH, settings)
   let parse-state: *mut parse-state = connection-arena.push(
     parse-state/empty(request-arena, user-data, on-header-complete.narrow(), on-body-complete.narrow())
   )

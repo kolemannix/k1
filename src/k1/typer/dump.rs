@@ -837,10 +837,8 @@ impl TypedProgram {
                 w.write_str(".*")
             }
             TypedExpr::AddressOf(addr_of) => {
-                w.write_str("&(")?;
                 self.display_expr_id(addr_of.target_expr, w, indentation)?;
-                w.write_str(")")?;
-                Ok(())
+                w.write_str(".&")
             }
             TypedExpr::SumConstructor(enum_constr) => {
                 w.write_str(".")?;

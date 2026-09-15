@@ -77,7 +77,7 @@ fn test() {
   assert(w == 42)
 
   // Postfix * still wraps the whole sum pattern, like :some(r)*
-  let qr = &qo
+  let qr = qo.&
   if qr is :some r* {
     assert(r.* == 42)
   } else crash("")

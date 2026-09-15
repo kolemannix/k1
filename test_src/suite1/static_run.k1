@@ -106,7 +106,7 @@ fn test() {
 
   let field-ptr-test: int = #static {
     let x = 21
-    let s = .{ ptr = &x }
+    let s = .{ ptr = x.& }
     s.ptr.*
   }
   assert-equals(field-ptr-test, 21)
@@ -114,7 +114,7 @@ fn test() {
 
   let ptr-in-structs = #static {
     let b: u8 = 10
-    let f = .{ asdf = &b }
+    let f = .{ asdf = b.& }
     f.asdf.*
   }
   assert-equals[u8](ptr-in-structs, 10)

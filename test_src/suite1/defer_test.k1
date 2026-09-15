@@ -96,39 +96,39 @@ fn test() {
   // We use an integer so that we can detect if a defer
   // runs too few or too many times!
   let sensor = 0
-  loop-test(&sensor)
+  loop-test(sensor.&)
   assert-equals(sensor, 10)
 
   sensor = 0
-  return-test(&sensor)
+  return-test(sensor.&)
   assert-equals(sensor, 3)
 
   sensor = 0
-  assert(value-block-test(&sensor) is :reject)
+  assert(value-block-test(sensor.&) is :reject)
   assert-equals(sensor, 2)
 
   sensor = 0
-  assert-equals(value-return-test(&sensor), 42)
+  assert-equals(value-return-test(sensor.&), 42)
   assert-equals(sensor, 2)
 
   sensor = 0
-  assert-equals(branchy-test(&sensor), 1)
+  assert-equals(branchy-test(sensor.&), 1)
   assert-equals(sensor, 1)
 
   sensor = 0
-  assert-equals(break-test(&sensor), 30)
+  assert-equals(break-test(sensor.&), 30)
   assert-equals(sensor, 4)
 
   sensor = 0
-  assert(try-defers(&sensor) is :err "boom")
+  assert(try-defers(sensor.&) is :err "boom")
   assert-equals(sensor, 1)
 
   sensor = 0
-  lifo-block-test(&sensor)
+  lifo-block-test(sensor.&)
   assert-equals(sensor, 2)
 
   sensor = 0
-  lifo-return-test(&sensor)
+  lifo-return-test(sensor.&)
   assert-equals(sensor, 2)
 
   .{}

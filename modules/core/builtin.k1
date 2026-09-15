@@ -983,13 +983,13 @@ fn discard[t](_t: t): empty {}
 fn phony[t](): t { crash("phony") }
 
 ns array {
-  fn(inline) data-ref[t, n](array: *mut array[t, n]): *mut t where n: static size {
+  fn(inline) data-ref[t, n](array: *array[t, n]): *mut t where n: static size {
     array.[0].&
   }
-  fn(inline) data-ptr[t, n](array: *mut array[t, n]): ptr where n: static size {
+  fn(inline) data-ptr[t, n](array: *array[t, n]): ptr where n: static size {
     array.as[ptr]
   }
-  fn size-bytes[t, n](_array: array[t, n]): int where n: static size {
+  fn(inline) size-bytes[t, n](_array: *array[t, n]): int where n: static size {
     types/size[array[t, n]]
   }
 

@@ -66,7 +66,7 @@ use crate::parse::{
     ParsedId, ParsedIfExpr, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId,
     ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr,
     ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr, ParsedTypeDefnId,
-    ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUnaryOpKind, ParsedUseId,
+    ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUseId,
     ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, StringId, StructValueField,
     StructValueFieldKind,
 };
@@ -5696,11 +5696,7 @@ impl TypedProgram {
             let tp = self.get_type_parameter(*typed_param);
             if let Some(static_constraint) = tp.static_constraint {
                 let static_type = self.types.get(static_constraint).as_value_type().unwrap();
-                let matched = match self.types.get(*solution) {
-                    Type::StaticValue(s) => static_type.family_type_id == s.family_type_id,
-                    _non_static => static_type.family_type_id == *solution,
-                };
-                if !matched {
+                if static_type.family_type_id != self.get_type_family_type(*solution) {
                     self.report_hint(
                         span,
                         format!(
@@ -6812,22 +6808,17 @@ impl TypedProgram {
             ParsedExpr::Break(b) => self.eval_break(*b, ctx),
             ParsedExpr::Continue(c) => self.eval_continue(*c, ctx),
             ParsedExpr::BinaryOp(_binary_op) => self.eval_binary_op(expr_id, ctx),
-            ParsedExpr::UnaryOp(op) => {
-                let op = *op;
-                match op.op_kind {
-                    ParsedUnaryOpKind::BooleanNegation => {
-                        let base = self.eval_expr_with_coercion(
-                            op.expr,
-                            ctx.with_expected_type(Some(BOOL_TYPE_ID)),
-                            true,
-                        )?;
-                        if self.exprs.get_type(base) == NEVER_TYPE_ID {
-                            Ok(base)
-                        } else {
-                            self.synth_negated(base, ctx, op.span)
-                        }
-                    }
-                    ParsedUnaryOpKind::AddressOf => self.compile_address_of(op.expr, ctx, op.span),
+            ParsedExpr::Not(n) => {
+                let n = *n;
+                let base = self.eval_expr_with_coercion(
+                    n.expr,
+                    ctx.with_expected_type(Some(BOOL_TYPE_ID)),
+                    true,
+                )?;
+                if self.exprs.get_type(base) == NEVER_TYPE_ID {
+                    Ok(base)
+                } else {
+                    self.synth_negated(base, ctx, n.span)
                 }
             }
             ParsedExpr::Literal(ParsedLiteral::Char(byte, span)) => {
@@ -7208,7 +7199,7 @@ impl TypedProgram {
             if element_type.is_none() {
                 // Erase static type info since a list of all one static value isn't very useful
                 let this_element_type = self.exprs.get_type(element_expr);
-                let chased_type = self.get_static_family_id_if_static(this_element_type);
+                let chased_type = self.get_type_family_type(this_element_type);
                 element_type = Some(chased_type)
             };
             elements.push(element_expr);
@@ -9145,37 +9136,30 @@ impl TypedProgram {
             consequent
         };
 
-        let consequent_type = self.exprs.get_type(consequent);
+        let consequent_type = self.get_type_family_type(self.exprs.get_type(consequent));
         let cons_never = consequent_type == NEVER_TYPE_ID;
 
         let alternate = if let Some(parsed_alt) = if_expr.alt {
-            let type_hint = if cons_never {
-                ctx.expected_type_id
-            } else {
-                // We chase down the type because, if its a static, it doesn't really make
-                // sense to expect every arm to evaluate to the same static, but rather to
-                // the static's inner type
-                let consequent_type_chased = self.get_static_family_id_if_static(consequent_type);
-                Some(consequent_type_chased)
-            };
+            let type_hint = if cons_never { ctx.expected_type_id } else { Some(consequent_type) };
             self.eval_expr(parsed_alt, ctx.with_expected_type(type_hint))?
         } else {
             self.synth_empty_value(if_expr.span)
         };
-        let alternate_type = self.exprs.get_type(alternate);
+        let alternate_type = self.get_type_family_type(self.exprs.get_type(alternate));
         let alternate_span = self.exprs.get_span(alternate);
-
         let alt_never = alternate_type == NEVER_TYPE_ID;
-        let no_never = !cons_never && !alt_never;
 
-        let overall_type = if no_never {
-            consequent_type
+        let overall_type = if cons_never { alternate_type } else { consequent_type };
+
+        let consequent = if cons_never {
+            consequent
         } else {
-            if cons_never { alternate_type } else { consequent_type }
+            self.check_and_coerce_expr(overall_type, consequent, ctx.scope_id, false)?
         };
-
-        let alternate = if no_never {
-            self.check_and_coerce_expr(consequent_type, alternate, ctx.scope_id, false).map_err(
+        let alternate = if alt_never {
+            alternate
+        } else {
+            self.check_and_coerce_expr(overall_type, alternate, ctx.scope_id, false).map_err(
                 |e| {
                     kerr!(
                         self,
@@ -9185,8 +9169,6 @@ impl TypedProgram {
                     )
                 },
             )?
-        } else {
-            alternate
         };
 
         let cons_arm = TypedMatchArm { case: None, condition, consequent_expr: consequent };
@@ -9604,7 +9586,7 @@ impl TypedProgram {
         let operand_ctx = ctx.with_is_method_receiver(false);
         let lhs = self.eval_expr(binary_op.lhs, operand_ctx.with_expected_type(lhs_hint))?;
         let lhs_type = self.exprs.get_type(lhs);
-        let self_type = self.get_static_family_id_if_static(lhs_type);
+        let self_type = self.get_type_family_type(lhs_type);
         let result = match self.direct_ability_fn(self_type, ability_id, fn_name.name) {
             Some(function_id) => {
                 let lhs = self.check_and_coerce_expr(self_type, lhs, ctx.scope_id, false)?;
@@ -11297,7 +11279,7 @@ impl TypedProgram {
         }
         let solved_self = self_solution.as_slice(&self.mem)[0];
 
-        let solved_self = self.get_static_family_id_if_static(solved_self);
+        let solved_self = self.get_type_family_type(solved_self);
         let (impl_handle, _) = self
             .find_or_generate_ability_impl_for_type(
                 solved_self,

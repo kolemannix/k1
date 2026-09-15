@@ -109,7 +109,7 @@ ns io {
         if value == 10 and (stdout-buffering-mode() is :line) flush-stdout()
       } else {
         let value_spot = value
-        write-all(self.file-no, (&value_spot).as[ptr], 1)
+        write-all(self.file-no, value_spot.&.as[ptr], 1)
       }
       .{}
     }
@@ -273,7 +273,7 @@ impl scalar-cmp for char {
 impl[t: print] show for t {
   fn show(self): string { 
     let sb = string-builder/new()
-    self.print-to(&sb)
+    self.print-to(sb.&)
     sb.build()
   }
 }
@@ -594,7 +594,7 @@ ns for f64 {
   }
   fn parse-string(s: string, require-total: bool): result[{ value: f64, len: size }, string] {
     let out: f64 = uninit
-    let result = ffc/parse_double(s.len(), s.data-ptr(), &out)
+    let result = ffc/parse_double(s.len(), s.data-ptr(), out.&)
     if not ffc/result_is_ok(result) {
       :err "Could not parse '$s' as f64"
     } else {

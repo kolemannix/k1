@@ -7,7 +7,7 @@ fn macro-body-tokens(unit: clang/CXTranslationUnit, cursor: clang/CXCursor): lis
   let extent = clang/getCursorExtent(cursor)
   let toks-ptr: *mut clang/CXToken = ptr/null.narrow()
   let count: u32 = 0
-  clang/tokenize(unit, extent, &toks-ptr, &count)
+  clang/tokenize(unit, extent, toks-ptr.&, count.&)
   let body: list[c-token] = list/with-capacity(count.widen[size])
   let toks = buffer/wrap-raw[clang/CXToken](toks-ptr.as[ptr], count.widen[size])
   // Token 0 is the macro's own name
@@ -36,7 +36,7 @@ fn transpile-macro-body(names: name-config, emitted: map[string, string], body: 
   if all-strings return string-macro-value(body)
 
   let t: macro-transpile = .{ toks = body, pos = 0, names, emitted, ty = "i64" }
-  let text = transpile-expr(&t).try
+  let text = transpile-expr(t.&).try
   if t.pos != body.len() return :err "trailing tokens after expression"
   :ok .{ type = t.ty, text }
 }

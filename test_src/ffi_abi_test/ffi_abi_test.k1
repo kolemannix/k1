@@ -185,7 +185,7 @@ fn test-all() {
 
   assert(foo/tag-union-iszero(:c ptr/null).as-bool())
   let x = 10
-  assert(not foo/tag-union-iszero(:c((&x).as())).as-bool())
+  assert(not foo/tag-union-iszero(:c(x.&.as())).as-bool())
 
   #static types/assert-layout[foo/packed5](5, 1, [0, 1])
   #static types/assert-layout[foo/packed11](11, 1, [0, 1, 9])

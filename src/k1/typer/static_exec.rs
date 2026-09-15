@@ -487,10 +487,7 @@ impl TypedProgram {
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
 
-        let expected_type_for_execution = match self.get_static_type_of_type(declared_type) {
-            Some(s) => s.family_type_id,
-            None => declared_type,
-        };
+        let expected_type_for_execution = self.get_type_family_type(declared_type);
 
         let static_value_id = if let ParsedExpr::Builtin(span) = self.ast.exprs.get(value_expr_id) {
             let span = *span;
@@ -1032,13 +1029,9 @@ impl TypedProgram {
 
         let kind = stat.kind;
         let expected_type_for_execution = match kind {
-            ParsedStaticBlockKind::Value => match ctx.expected_type_id {
-                None => None,
-                Some(expected_type_id) => match self.get_static_type_of_type(expected_type_id) {
-                    Some(s) => Some(s.family_type_id),
-                    None => Some(expected_type_id),
-                },
-            },
+            ParsedStaticBlockKind::Value => {
+                ctx.expected_type_id.map(|t| self.get_type_family_type(t))
+            }
             ParsedStaticBlockKind::Metaprogram => self.builtin_types.code,
             ParsedStaticBlockKind::MacroCall => unreachable!(),
         };

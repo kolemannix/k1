@@ -1774,10 +1774,6 @@ impl TypedProgram {
         }
     }
 
-    pub fn is_static(&self, type_id: TypeId) -> bool {
-        self.get_value_type_id_of_type(type_id).is_some()
-    }
-
     #[inline]
     pub fn get_struct_field(&self, type_id: TypeId, field_index: usize) -> &StructTypeField {
         self.mem.get_nth(self.types.get(type_id).expect_struct().fields, field_index)
@@ -1791,10 +1787,10 @@ impl TypedProgram {
         self.types.get(type_id).expect_struct().find_field(&self.mem, name)
     }
 
-    pub fn get_static_family_id_if_static(&self, type_id: TypeId) -> TypeId {
-        match self.types.get(type_id) {
-            Type::StaticValue(svt) => svt.family_type_id,
-            _ => type_id,
+    pub fn get_type_family_type(&self, type_id: TypeId) -> TypeId {
+        match self.get_static_type_of_type(type_id) {
+            Some(svt) => svt.family_type_id,
+            None => type_id,
         }
     }
 

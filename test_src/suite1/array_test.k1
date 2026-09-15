@@ -9,7 +9,7 @@ fn test-literals() {
   let array: array[bool, 3] = [false, true, true]
   let buffer: buffer[bool] = [false, true, true]
   let list: list[bool] = [false, true, true]
-  assert-equals((&array).as-buffer(), buffer)
+  assert-equals(array.&.as-buffer(), buffer)
   assert-equals(list.as-buffer(), buffer)
 }
 

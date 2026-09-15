@@ -147,10 +147,10 @@ let n = "hello"
 ```
 
 Tokens that can begin a statement end the previous one instead, even where a
-binary reading exists: `-` (negative literal), `&` (address-of), `(`, `[`,
-and string literals. To continue with one of those, put the operator at the
-end of the previous line (`let x = a -` ... `b`). Call parens, type-arg
-brackets, and juxtaposed string concatenation bind only on the same line.
+binary reading exists: `-` (negative literal), `(`, `[`, and string literals.
+To continue with one of those, put the operator at the end of the previous
+line (`let x = a -` ... `b`). Call parens, type-arg brackets, and juxtaposed
+string concatenation bind only on the same line.
 Payloads never cross a line break: `return`, `break`, or a `:variant` at end
 of line is bare.
 

@@ -18,7 +18,7 @@ use std/rc-byte-stream
 fn test-run-to-sum() {
   let nums: span[int] = [1, 2, 3, 4, 5]
   let summer: sum-sink[int] = .{ total = 0 }
-  assert-equals(source/run-to(source/from-span(nums, chunk-size = 2), &summer), 15)
+  assert-equals(source/run-to(source/from-span(nums, chunk-size = 2), summer.&), 15)
 }
 
 fn expect-one(p: pull[int]): int {
@@ -47,7 +47,7 @@ fn test-channel() {
 
   let src = chan.to-dyn[source[t = int]]()
   let wakes = 0
-  src.start(.{ state = (&wakes).as[ptr], wake-fn = fn(p: ptr) { p.ref[int]().* = p.ref[int]().* + 1 } })
+  src.start(.{ state = wakes.&.as[ptr], wake-fn = fn(p: ptr) { p.ref[int]().* = p.ref[int]().* + 1 } })
   chan.flush()
   assert-equals(wakes, 1)
   chan.flush()
@@ -111,13 +111,13 @@ fn test-mpsc() {
   q.send(3)
   assert-equals(notify-count, 3)
   let out = list/empty[int]()
-  q.take(&out)
+  q.take(out.&)
   assert-equals(out.len(), 3)
   assert-equals(out.[0], 1)
   assert-equals(out.[1], 2)
   assert-equals(out.[2], 3)
   out.clear()
-  q.take(&out)
+  q.take(out.&)
   assert(out.is-empty())
 }
 

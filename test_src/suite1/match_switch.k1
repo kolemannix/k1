@@ -120,9 +120,9 @@ fn test() {
   assert-equals[string](tagged:b.sum-name(), "b")
 
   let s: shape = :circle 9
-  assert-equals(ref-match(&s), 9)
+  assert-equals(ref-match(s.&), 9)
   s = :dot
-  assert-equals(ref-match(&s), 0)
+  assert-equals(ref-match(s.&), 0)
   s = :label "q"
-  assert-equals(ref-match(&s), -1)
+  assert-equals(ref-match(s.&), -1)
 }

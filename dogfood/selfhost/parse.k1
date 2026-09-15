@@ -24,10 +24,6 @@ fn min-of(a: ?u32, b: u32): u32 {
   }
 }
 
-fn newline-terminates(t: token): bool {
-  t.is-newline-preceded() and (t.kind is :minus or t.kind is :amp)
-}
-
 fn make-error(message: string, t: token): perror {
   .{ message, span = t.span() }
 }

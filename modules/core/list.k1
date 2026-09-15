@@ -141,7 +141,7 @@ ns for list {
   fn join[t: print](self: list[t], sep: string): string {
     let b = string-builder/new()
     for s in self {
-      s.print-to(&b)
+      s.print-to(b.&)
       let is-last = it-index + 1 == self.len
       if not is-last { b.write(sep) }
     }

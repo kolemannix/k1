@@ -94,7 +94,7 @@ fn counter-events(): http-response {
 
 fn big-file(): http-response {
   let out = string-builder/new()
-  render-big-json(&out, rows = 20000)
+  render-big-json(out.&, rows = 20000)
   response/stream("application/json", source/from-span(out.build().span-bytes(), chunk-size = 65536))
 }
 

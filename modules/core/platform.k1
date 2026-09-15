@@ -712,15 +712,15 @@ ns platform {
         }
 
         let pid: i32 = 0
-        let rc = c/posix_spawn(&pid, path.to-c-tmp().ptr, fa, ptr/null, cargv.data-ptr(), environ-ptr())
+        let rc = c/posix_spawn(pid.&, path.to-c-tmp().ptr, fa, ptr/null, cargv.data-ptr(), environ-ptr())
         if rc != 0 :err rc else :ok pid
       }
 
       fn wait(pid: i32): result[process/wait-status, i32] {
         let status: i32 = 0
-        let rc = c/waitpid(pid, &status, 0)
+        let rc = c/waitpid(pid, status.&, 0)
         while rc < 0 and errno-now() == c/EINTR {
-          rc = c/waitpid(pid, &status, 0)
+          rc = c/waitpid(pid, status.&, 0)
         }
         if rc < 0 return :err errno-now()
         if status.bit-and(0x7f) == 0 {

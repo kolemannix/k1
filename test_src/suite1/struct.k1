@@ -21,7 +21,7 @@ ns for foo {
 
 fn struct-arg-mut() {
   let x = foo/new(42)
-  let x = &x
+  let x = x.&
   assert(x.x == 42)
   assert(x.get-value() == 42)
   x.set-value(41)

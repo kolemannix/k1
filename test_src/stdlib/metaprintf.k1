@@ -51,7 +51,7 @@ fn fmt[fmt: static string, args, w: writer](w, fmt-string: fmt, args: args) {
 
 fn fmt-string[fmt: static string, args](fmt-string: fmt, args: args): string {
   let result = string-builder/new()
-  fmt(&result, fmt-string, args)
+  fmt(result.&, fmt-string, args)
   result.build()
 }
 

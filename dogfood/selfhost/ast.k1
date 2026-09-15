@@ -124,10 +124,8 @@ ns for binary-op-kind {
   }
 }
 
-type unary-op-kind = either(u8) { bool-negation, address-of }
-
 type binary-op = { op: binary-op-kind, lhs: expr-id, rhs: expr-id, span: src-span }
-type unary-op = { op: unary-op-kind, expr: expr-id, span: src-span }
+type not-expr = { expr: expr-id, span: src-span }
 
 type fmt-settings = { precision: u8, pretty: bool }
 
@@ -234,7 +232,7 @@ type for-expr = {
 
 type expr = either {
   bin-op(binary-op),
-  un-op(unary-op),
+  not-expr(not-expr),
   literal(literal),
   interp-string(interp-string),
   call(call),
@@ -267,7 +265,7 @@ ns for expr {
   fn get-span(self: *expr): src-span {
     if self.* is {
       :bin-op op -> op.span,
-      :un-op op -> op.span,
+      :not-expr n -> n.span,
       :literal l -> l.get-span(),
       :interp-string i -> i.span,
       :call c -> c.span,
@@ -694,7 +692,7 @@ ns for program {
     let e = self.exprs.[id.widen[size]].&
     if e is {
       :bin-op(op)* -> { op.span = new-span },
-      :un-op(op)* -> { op.span = new-span },
+      :not-expr(n)* -> { n.span = new-span },
       :literal(l)* -> {
         if l is {
           :char-lit(c)* -> { c.span = new-span },

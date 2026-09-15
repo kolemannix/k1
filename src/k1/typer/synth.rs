@@ -908,17 +908,13 @@ impl TypedProgram {
     }
 
     fn expr_type_is_code(&self, expr: TypedExprId) -> bool {
-        let type_id = self.get_static_family_id_if_static(self.exprs.get_type(expr));
+        let type_id = self.get_type_family_type(self.exprs.get_type(expr));
         Some(type_id) == self.builtin_types.code
     }
 
     pub(super) fn expected_type_is_code(&self, expected: Option<TypeId>) -> bool {
         let Some(expected) = expected else { return false };
-        let expected = match self.get_static_type_of_type(expected) {
-            Some(stat) => stat.family_type_id,
-            None => expected,
-        };
-        Some(expected) == self.builtin_types.code
+        Some(self.get_type_family_type(expected)) == self.builtin_types.code
     }
 
     /// Produces a `code` value, resulting from using a core/code-builder
