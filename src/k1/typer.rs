@@ -6247,7 +6247,7 @@ impl TypedProgram {
             }]);
             return self.eval_function_call(
                 &ParsedCall {
-                    name: QIdent::naked(field_access.field_name, span),
+                    name: QIdent::naked(field_access.field_name, field_access.field_name_span),
                     type_args: field_access.type_args,
                     args,
                     span,
@@ -10840,16 +10840,16 @@ impl TypedProgram {
     pub fn function_to_reference(
         &mut self,
         function_id: FunctionId,
-        call_span: SpanId,
+        span: SpanId,
     ) -> TypedExprId {
         let function = self.get_function(function_id);
         let function_pointer_type = self.add_function_pointer_type(function.type_id);
         self.get_function_mut(function_id).flags.insert(TypedFunctionFlags::AddressTaken);
-        self.emit_ls_entity(call_span, LsEntityKind::Function { function_id, is_defn: false });
+        self.emit_ls_entity(span, LsEntityKind::Function { function_id, is_defn: false });
         self.exprs.add(
             TypedExpr::FunctionPointer(FunctionPointerExpr { function_id }),
             function_pointer_type,
-            call_span,
+            span,
         )
     }
 

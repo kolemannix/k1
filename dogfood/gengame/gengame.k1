@@ -2605,7 +2605,7 @@ fn main(): i32 {
       rl/take-screenshot(name.to-c().ptr)
       break
     }
-    frame.reset(false)
+    frame.reset()
   }
   rl/close-window()
   0

@@ -1,12 +1,13 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-// An open-addressing hash table with linear probing, in the style of
-// Sean Barrett's stb_ds. Capacity is always a power of two so probing
-// wraps with a mask. Each slot caches the key's full 64-bit hash so
-// probing compares hashes before touching keys, and so rehashing never
-// re-hashes keys. Hash values 0 and 1 are reserved to mark empty and
-// tombstone slots; real hashes are nudged out of that range.
+// An open-addressing hash table with linear probing and backward-shift
+// deletion. Capacity is always a power of two so probing wraps with a
+// mask. Each slot caches the key's full 64-bit hash so probing compares
+// hashes before touching keys, and so rehashing and shifting never
+// re-hash keys. Hash value 0 marks an empty slot; real hashes are nudged
+// off it. Removes shift later entries of the cluster back, so a
+// reference into the table is valid until the next insert or remove.
 
 ability hash {
   fn hash(self): u64
@@ -56,22 +57,20 @@ type map-slot[k, v] = { hash: u64, key: k, value: v }
 
 type map[k, v] = {
   count: size,
-  tombstones: size,
   slots: buffer[map-slot[k, v]],
 }
 
 ns for map {
 
   let EMPTY: u64 = 0
-  let TOMBSTONE: u64 = 1
 
   fn _slot-hash[k](key: k): u64 where k: hash {
     let h = key.hash()
-    if h < 2 h + 2 else h
+    if h == EMPTY 1 else h
   }
 
   fn new[k, v](): map[k, v] {
-    .{ count = 0, tombstones = 0, slots = buffer/empty() }
+    .{ count = 0, slots = buffer/empty() }
   }
 
   // smallest power-of-two capacity that holds min-capacity live
@@ -85,7 +84,7 @@ ns for map {
   }
 
   fn with-capacity-in[k, v, a: allocator](alloc: a, min-capacity: size): map[k, v] {
-    .{ count = 0, tombstones = 0, slots = _allocate-slots[k, v, _](alloc, _capacity-for(min-capacity)) }
+    .{ count = 0, slots = _allocate-slots[k, v, _](alloc, _capacity-for(min-capacity)) }
   }
 
   fn with-capacity[k, v](min-capacity: size): map[k, v] {
@@ -109,7 +108,7 @@ ns for map {
     let new-slots = _allocate-slots[k, v, _](alloc, new-cap)
     let mask = new-cap - 1
     for s in old {
-      if s.hash >= 2 {
+      if s.hash != EMPTY {
         let idx = s.hash.signed() & mask
         while new-slots.index-unchecked(idx).*.hash != EMPTY {
           idx = (idx + 1) & mask
@@ -117,24 +116,22 @@ ns for map {
         new-slots.index-unchecked(idx).* = s
       }
     }
-    self.* = .{ count = self.count, tombstones = 0, slots = new-slots }
+    self.* = .{ count = self.count, slots = new-slots }
     if old.non-empty() {
       alloc.free(old.data-ptr(), old.size-bytes(), core/types/align[map-slot[k, v]]())
     }
   }
 
   // Keeps at least a quarter of the table empty so probe sequences
-  // always terminate. Doubles only when live entries justify it;
-  // otherwise rehashes at the same size to purge tombstones.
+  // always terminate
   fn _ensure-room[k, v, a: allocator](self: *mut map[k, v], alloc: a) {
     let cap = self.slots.len
     if cap == 0 {
       self._rehash(alloc, 8)
       return
     }
-    if (self.count + self.tombstones + 1) * 4 > cap * 3 {
-      let new-cap = if (self.count + 1) * 2 > cap { cap * 2 } else cap
-      self._rehash(alloc, new-cap)
+    if (self.count + 1) * 4 > cap * 3 {
+      self._rehash(alloc, cap * 2)
     }
   }
 
@@ -151,30 +148,20 @@ ns for map {
   }
 
   // Where an insert of key should land: the slot already holding it, or
-  // the best open slot on its probe path (first tombstone, else first empty)
-  fn _probe-insert[k, v](self: map[k, v], key: k, h: u64): { idx: size, found: bool, from-tombstone: bool }
+  // the first empty slot on its probe path
+  fn _probe-insert[k, v](self: map[k, v], key: k, h: u64): { idx: size, found: bool }
     where k: equals {
     let mask = self.slots.len - 1
     let idx = h.signed() & mask
-    let tombstone: ?size = :none
     loop {
       let s = self.slots.index-unchecked(idx)
-      if s.hash == h and s.key == key {
-        break .{ idx, found = true, from-tombstone = false }
-      }
-      if s.hash == EMPTY {
-        break if tombstone is {
-          :some t -> .{ idx = t, found = false, from-tombstone = true },
-          :none -> .{ idx, found = false, from-tombstone = false }
-        }
-      }
-      if s.hash == TOMBSTONE and tombstone is :none { tombstone = :some idx }
+      if s.hash == h and s.key == key break .{ idx, found = true }
+      if s.hash == EMPTY break .{ idx, found = false }
       idx = (idx + 1) & mask
     }
   }
 
-  fn _place[k, v](self: *mut map[k, v], probe: { idx: size, found: bool, from-tombstone: bool }, slot: map-slot[k, v]) {
-    if probe.from-tombstone { self.tombstones = self.tombstones - 1 }
+  fn _place[k, v](self: *mut map[k, v], probe: { idx: size, found: bool }, slot: map-slot[k, v]) {
     self.slots.index-unchecked(probe.idx).* = slot
     self.count = self.count + 1
   }
@@ -242,11 +229,22 @@ ns for map {
     if self._find-index(key, _slot-hash(key)) is {
       :none -> :none,
       :some idx -> {
-        let s = self.slots.index-unchecked(idx)
-        let evicted = s.value
-        s.hash = TOMBSTONE
+        let evicted = self.slots.index-unchecked(idx).value
+        let mask = self.slots.len - 1
+        let i = idx
+        let j = idx
+        loop {
+          j = (j + 1) & mask
+          let s = self.slots.index-unchecked(j)
+          if s.hash == EMPTY break
+          let home = s.hash.signed() & mask
+          if ((i - home) & mask) < ((j - home) & mask) {
+            self.slots.index-unchecked(i).* = s.*
+            i = j
+          }
+        }
+        self.slots.index-unchecked(i).hash = EMPTY
         self.count = self.count - 1
-        self.tombstones = self.tombstones + 1
         :some evicted
       }
     }
@@ -255,18 +253,15 @@ ns for map {
   fn clear[k, v](self: *mut map[k, v]) {
     self.slots.memset(0)
     self.count = 0
-    self.tombstones = 0
   }
 
   fn dump[k, v](self: map[k, v]) where k: print, v: print {
     let count = self.count
-    let tombstones = self.tombstones
     let capacity = self.slots.len
-    println("count: $count, tombstones: $tombstones, capacity: $capacity")
+    println("count: $count, capacity: $capacity")
     for s in self.slots {
       print("  slot $it-index: ")
       if s.hash == EMPTY { println("empty") }
-      else if s.hash == TOMBSTONE { println("tombstone") }
       else {
         let key = s.key
         let value = s.value
@@ -286,7 +281,7 @@ type map-iterator[k, v] = {
 ns for map-iterator {
   fn _next-live[k, v](self: *map-iterator[k, v], from: size): size {
     let i = from
-    while i < self.slots.len and self.slots.index-unchecked(i).hash < 2 {
+    while i < self.slots.len and self.slots.index-unchecked(i).hash == map/EMPTY {
       i = i + 1
     }
     i
@@ -438,6 +433,247 @@ impl[t] iterable[item = t, i = set-iterator[t]] for set[t] {
 }
 
 impl[t: print] print for set[t] {
+  fn print-to[w: writer](self, w): empty {
+    w.write-char('{')
+    let first = true
+    for v in self {
+      if not first { w.write-string(", ") }
+      first = false
+      v.print-to(w)
+    }
+    w.write-char('}')
+  }
+}
+
+type fixmap[k, v, n: static size] = {
+  count: u32,
+  ctrl: array[u8, n],
+  slots: array[{ key: k, value: v }, n],
+}
+
+ns for fixmap {
+
+  let EMPTY: u8 = 0
+  let LIVE: u8 = 128
+
+  fn(inline) _slots[k, v, n](_self: *fixmap[k, v, n]): size { core/meta/static-type-to-value[_, n]() }
+
+  fn(inline) _h2(h: u64): u8 { (h >> 57).trunc[u8] | LIVE }
+
+  fn new[k, v, n](): fixmap[k, v, n] {
+    let c: size = core/meta/static-type-to-value[_, n]()
+    if (c & (c - 1)) != 0 crash("fixmap slot count must be a power of two")
+    mem/zeroed()
+  }
+
+  fn(inline) cap[k, v, n](self: *fixmap[k, v, n]): size { self._slots() - 1 }
+  fn(inline) len[k, v, n](self: *fixmap[k, v, n]): size { self.count.widen[size] }
+  fn(inline) is-empty[k, v, n](self: *fixmap[k, v, n]): bool { self.count == 0 }
+  fn(inline) is-full[k, v, n](self: *fixmap[k, v, n]): bool { self.len() == self.cap() }
+
+  fn clear[k, v, n](self: *mut fixmap[k, v, n]) {
+    self.ctrl.memset(0)
+    self.count = 0
+  }
+
+  fn _probe[k, v, n](self: *fixmap[k, v, n], key: k, h: u64): { idx: size, found: bool } where k: equals {
+    let mask = self._slots() - 1
+    let h2 = _h2(h)
+    let idx = h.signed() & mask
+    loop {
+      let c = self.ctrl.[idx]
+      if c == h2 and self.slots.[idx].key == key break .{ idx, found = true }
+      if c == EMPTY break .{ idx, found = false }
+      idx = (idx + 1) & mask
+    }
+  }
+
+  fn _place[k, v, n](self: *mut fixmap[k, v, n], idx: size, h: u64, key: k, value: v) {
+    self.ctrl.[idx] = _h2(h)
+    self.slots.[idx] = .{ key, value }
+    self.count = self.count + 1
+  }
+
+  fn try-insert[k, v, n](self: *mut fixmap[k, v, n], key: k, value: v): result[empty, empty]
+    where k: hash, k: equals {
+    let h = key.hash()
+    let p = self._probe(key, h)
+    if p.found {
+      self.slots.[p.idx].value = value
+      :ok
+    } else if self.is-full() {
+      :err
+    } else {
+      self._place(p.idx, h, key, value)
+      :ok
+    }
+  }
+
+  fn insert[k, v, n](self: *mut fixmap[k, v, n], key: k, value: v) where k: hash, k: equals {
+    if self.try-insert(key, value) is :err {
+      let typename = types/name[type-of(self).value]
+      crash("$typename cannot fulfill insert: full at ${self.cap()}")
+    }
+  }
+
+  fn get-or-insert[k, v, n](self: *mut fixmap[k, v, n], key: k, make: some fn() -> v): ?(*mut v)
+    where k: hash, k: equals {
+    let h = key.hash()
+    let p = self._probe(key, h)
+    if not p.found {
+      if self.is-full() return :none
+      self._place(p.idx, h, key, make())
+    }
+    :some self.slots.[p.idx].value.&
+  }
+
+  fn get[k, v, n](self: *fixmap[k, v, n], key: k): ?v where k: hash, k: equals {
+    let p = self._probe(key, key.hash())
+    if p.found :some self.slots.[p.idx].value else :none
+  }
+
+  fn get-ref[k, v, n](self: *mut fixmap[k, v, n], key: k): ?(*mut v) where k: hash, k: equals {
+    let p = self._probe(key, key.hash())
+    if p.found :some self.slots.[p.idx].value.& else :none
+  }
+
+  fn contains[k, v, n](self: *fixmap[k, v, n], key: k): bool where k: hash, k: equals {
+    self._probe(key, key.hash()).found
+  }
+
+  fn remove[k, v, n](self: *mut fixmap[k, v, n], key: k): ?v where k: hash, k: equals {
+    let p = self._probe(key, key.hash())
+    if not p.found return :none
+    let evicted = self.slots.[p.idx].value
+    let mask = self._slots() - 1
+    let i = p.idx
+    let j = i
+    loop {
+      j = (j + 1) & mask
+      if self.ctrl.[j] == EMPTY break
+      let home = self.slots.[j].key.hash().signed() & mask
+      if ((i - home) & mask) < ((j - home) & mask) {
+        self.ctrl.[i] = self.ctrl.[j]
+        self.slots.[i] = self.slots.[j]
+        i = j
+      }
+    }
+    self.ctrl.[i] = EMPTY
+    self.count = self.count - 1
+    :some evicted
+  }
+
+}
+
+type fixmap-iterator[k, v, n: static size] = { map: *fixmap[k, v, n], pos: size, remaining: size }
+
+impl[k, v, n: static size] iterator[item = { key: k, value: v }] for fixmap-iterator[k, v, n] {
+  fn next(self: *mut self): ?item {
+    let m = self.map
+    let n = m._slots()
+    while self.pos < n and m.ctrl.[self.pos] == fixmap/EMPTY {
+      self.pos = self.pos + 1
+    }
+    if self.pos < n {
+      let s = m.slots.[self.pos]
+      self.pos = self.pos + 1
+      self.remaining = self.remaining - 1
+      :some s
+    } else :none
+  }
+  fn size-hint(self: *self): { at-least: size, at-most: ?size } {
+    .{ at-least = self.remaining, at-most = :some self.remaining }
+  }
+}
+
+impl[k, v, n: static size] iterable[item = { key: k, value: v }, i = fixmap-iterator[k, v, n]] for *fixmap[k, v, n] {
+  fn iterator(self): i {
+    .{ map = self, pos = 0, remaining = self.len() }
+  }
+}
+
+impl[k: hash and equals, v, n: static size] index[key = k, t = v] for *mut fixmap[k, v, n] {
+  fn index-ref(self, key: k): *v {
+    let p = self._probe(key, key.hash())
+    if p.found self.slots.[p.idx].value.& else crash("fixmap index: key not found")
+  }
+}
+
+impl[k: print, v: print, n: static size] print for fixmap[k, v, n] {
+  fn print-to[w: writer](self, w): empty {
+    w.write-char('{')
+    let first = true
+    for kv in self {
+      if not first { w.write-string(", ") }
+      first = false
+      kv.key.print-to(w)
+      w.write-string(": ")
+      kv.value.print-to(w)
+    }
+    w.write-char('}')
+  }
+}
+
+type fixset[t, n: static size] = { inner: fixmap[t, empty, n] }
+
+ns for fixset {
+
+  fn new[t, n](): fixset[t, n] { .{ inner = fixmap/new() } }
+
+  fn(inline) cap[t, n](self: *fixset[t, n]): size { self.inner.cap() }
+  fn(inline) len[t, n](self: *fixset[t, n]): size { self.inner.len() }
+  fn(inline) is-empty[t, n](self: *fixset[t, n]): bool { self.inner.is-empty() }
+  fn(inline) is-full[t, n](self: *fixset[t, n]): bool { self.inner.is-full() }
+
+  fn clear[t, n](self: *mut fixset[t, n]) { self.inner.clear() }
+
+  fn try-add[t, n](self: *mut fixset[t, n], value: t): result[bool, empty] where t: hash, t: equals {
+    let before = self.inner.len()
+    if self.inner.try-insert(value, .{}) is :err { return :err }
+    :ok (self.inner.len() != before)
+  }
+
+  fn add[t, n](self: *mut fixset[t, n], value: t): bool where t: hash, t: equals {
+    if self.try-add(value) is {
+      :ok added -> added,
+      :err -> {
+        let typename = types/name[type-of(self).value]
+        crash("$typename cannot fulfill add: full at ${self.cap()}")
+      }
+    }
+  }
+
+  fn contains[t, n](self: *fixset[t, n], value: t): bool where t: hash, t: equals {
+    self.inner.contains(value)
+  }
+
+  fn remove[t, n](self: *mut fixset[t, n], value: t): bool where t: hash, t: equals {
+    self.inner.remove(value).is-some()
+  }
+
+}
+
+type fixset-iterator[t, n: static size] = { inner: fixmap-iterator[t, empty, n] }
+
+impl[t, n: static size] iterator[item = t] for fixset-iterator[t, n] {
+  fn next(self: *mut self): ?item {
+    if self.inner.next() is {
+      :some kv -> :some kv.key,
+      :none -> :none
+    }
+  }
+  fn size-hint(self: *self): { at-least: size, at-most: ?size } {
+    self.inner.size-hint()
+  }
+}
+
+impl[t, n: static size] iterable[item = t, i = fixset-iterator[t, n]] for *fixset[t, n] {
+  fn iterator(self): i {
+    .{ inner = self.inner.iterator() }
+  }
+}
+
+impl[t: print, n: static size] print for fixset[t, n] {
   fn print-to[w: writer](self, w): empty {
     w.write-char('{')
     let first = true

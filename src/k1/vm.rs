@@ -126,6 +126,7 @@ pub mod k1_types {
         pub basePtr: *const u8,
         pub curAddr: u64,
         pub endAddr: u64,
+        pub cleanAddr: u64,
         pub firstBase: *const u8,
         pub firstEnd: u64,
         pub extraChunks: *const u8,
@@ -319,14 +320,11 @@ impl Vm {
 
         if let Some(arena_ptr) = arena_ptr_to_preserve {
             debug!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
-            // Zero, don't release, the vm's main tmp arena, which is never chained
+            // Rewind, don't release, the vm's main tmp arena, which is never chained
             unsafe {
                 debug_assert!((*arena_ptr).fixed);
                 debug_assert!((*arena_ptr).extraChunks.is_null());
-                let base = (*arena_ptr).basePtr;
-                let used = (*arena_ptr).curAddr - base.addr() as u64;
-                core::ptr::write_bytes(base.cast_mut(), 0, used as usize);
-                (*arena_ptr).curAddr = base.addr() as u64;
+                (*arena_ptr).curAddr = (*arena_ptr).basePtr.addr() as u64;
             }
             let cell = self.static_stack.push_t(arena_ptr);
             self.globals.insert(arena_global_id.unwrap(), Value::ptr(cell));

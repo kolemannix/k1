@@ -523,6 +523,7 @@ pub struct FieldAccess {
     pub base: ParsedExprId,
     pub field_name: StringId,
     pub type_args: AstSlice<NamedTypeArg>,
+    pub field_name_span: SpanId,
     pub span: SpanId,
 }
 
@@ -3595,11 +3596,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     })))
                 } else {
                     // a.b[int] <complete expression>
-                    let target = self.make_ident(target);
+                    let target_ident = self.make_ident(target);
                     let span = self.extend_to_here(self.get_expression_span(result));
+                    let field_name_span = self.tok_span_id(target);
                     Some(self.add_expression(ParsedExpr::FieldAccess(FieldAccess {
                         base: result,
-                        field_name: target,
+                        field_name: target_ident,
+                        field_name_span,
                         type_args,
                         span,
                     })))

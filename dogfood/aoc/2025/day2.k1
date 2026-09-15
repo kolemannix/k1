@@ -27,7 +27,7 @@ fn day2(part: int, input: string) {
     }
     values-processed = values-processed + (end - start)
     total-mem = total-mem + mem/tmp().used-bytes()
-    mem/tmp().reset(false)
+    mem/tmp().reset()
   }
 
   println("Day 1 part $part: $invalid-sum (processed $values-processed values)")

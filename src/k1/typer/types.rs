@@ -70,8 +70,8 @@ impl Layout {
         offset
     }
 
-    pub fn size_bits(&self) -> u32 {
-        self.size * 8
+    pub fn size_bits(&self) -> u64 {
+        self.size as u64 * 8
     }
 
     pub fn align_bits(&self) -> u32 {

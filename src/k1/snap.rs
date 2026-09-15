@@ -591,6 +591,19 @@ fn cache_run_eviction(cache_dir: &std::path::Path, max_bytes: u64) {
     }
 }
 
+pub fn assert_identical(first: &[u8], second: &[u8], what: &str) {
+    if first == second {
+        return;
+    }
+    let n = first.len().min(second.len());
+    let diff_at = (0..n).find(|&i| first[i] != second[i]).unwrap_or(n);
+    panic!(
+        "{what}: snapshot roundtrip mismatch at byte {diff_at} (lens {} vs {})",
+        first.len(),
+        second.len()
+    );
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -665,17 +678,4 @@ mod test {
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
-}
-
-pub fn assert_identical(first: &[u8], second: &[u8], what: &str) {
-    if first == second {
-        return;
-    }
-    let n = first.len().min(second.len());
-    let diff_at = (0..n).find(|&i| first[i] != second[i]).unwrap_or(n);
-    panic!(
-        "{what}: snapshot roundtrip mismatch at byte {diff_at} (lens {} vs {})",
-        first.len(),
-        second.len()
-    );
 }

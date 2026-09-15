@@ -17,6 +17,43 @@ fn test() {
   mark-test()
   ability-test()
   chaining-test()
+  zeroing-test()
+}
+
+fn assert-all-zero(b: buffer[u64]) {
+  for i in 0.until(b.len) {
+    assert-equals(b.[i], 0)
+  }
+}
+
+fn zeroing-test() {
+  let a = core/arena/init(4096)
+  a.alloc-buffer[u64](16).fill(7)
+  a.reset()
+  assert-all-zero(a.alloc-buffer[u64](16))
+
+  let m = a.mark()
+  a.alloc-buffer[u64](8).fill(9)
+  a.pop-to-mark(m)
+  assert-all-zero(a.alloc-buffer[u64](8))
+
+  a.pop-to-mark(m)
+  a.alloc-buffer[u64](4).fill(5)
+  a.pop-to-mark(m)
+  let base = a.alloc(8, 8)
+  base.ref[u64].* = 1
+  let grown = a.realloc(base, old-size = 8, align = 8, new-size = 32)
+  assert-equals(grown, base)
+  let tail: buffer[u64] = buffer/wrap-raw(grown.add-bytes(8), 3)
+  assert-all-zero(tail)
+
+  for i in 0.until(600) {
+    a.push(i.unsigned() + 1)
+  }
+  assert(not a.extra-chunks.is-null())
+  a.reset()
+  assert-all-zero(a.alloc-buffer[u64](400))
+  a.release()
 }
 
 fn chaining-test() {
@@ -35,7 +72,7 @@ fn chaining-test() {
   // 600 * 8 bytes exceeds one 4096 chunk: growth must have chained
   assert(not a.extra-chunks.is-null())
 
-  a.reset(false)
+  a.reset()
   assert(a.extra-chunks.is-null())
   let after-reset = a.push(42: u64)
   assert-equals(after-reset.*, 42)

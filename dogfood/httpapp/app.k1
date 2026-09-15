@@ -174,7 +174,7 @@ fn start-mock-publisher(bus: *mut pubsub/bus[span[u8]]) {
     loop {
       uv/sleep(1000)
       // this thread's tmp arena holds the interpolated event data
-      mem/tmp().reset(clear = false)
+      mem/tmp().reset()
       game-tick = game-tick + 1
       publish-text(bus, game-topic(42), `{"tick": $game-tick}`)
       if game-tick % 5 == 0 {

@@ -126,7 +126,7 @@ fn main(): i32 {
     raylib/begin-drawing()
     scene/draw(t, orbs.&, reloads)
     raylib/end-drawing()
-    frame.reset(false)
+    frame.reset()
   }
 
   raylib/close-window()

@@ -1948,7 +1948,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
         let di_type = debug
             .debug_builder
-            .create_basic_type(name, layout.size_bits() as u64, encoding, 0)
+            .create_basic_type(name, layout.size_bits(), encoding, 0)
             .unwrap()
             .as_type();
         LlvmScalarType { pt: PhysicalType::scalar(st), basic_type, layout, di_type }
@@ -1988,7 +1988,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                     field_name,
                                     self.debug.current_file(),
                                     line_number,
-                                    cg_type.rich_repr_layout().size_bits() as u64,
+                                    cg_type.rich_repr_layout().size_bits(),
                                     cg_type.rich_repr_layout().align_bits(),
                                     phys_field.offset as u64,
                                     0,
@@ -2052,7 +2052,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             .debug_builder
                             .create_array_type(
                                 element_type.debug_type(),
-                                array_layout.size_bits() as u64,
+                                array_layout.size_bits(),
                                 array_layout.align_bits(),
                                 &[],
                             )
@@ -2077,7 +2077,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             .debug_builder
                             .create_array_type(
                                 element_type.debug_type(),
-                                vector_layout.size_bits() as u64,
+                                vector_layout.size_bits(),
                                 vector_layout.align_bits(),
                                 &[],
                             )
@@ -2107,7 +2107,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 &type_name,
                                 self.debug.current_file(),
                                 line_number,
-                                agg_layout.size_bits() as u64,
+                                agg_layout.size_bits(),
                                 agg_layout.align_bits(),
                                 0,
                                 &di_members,
@@ -2143,7 +2143,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 &type_name,
                                 self.debug.current_file(),
                                 line_number,
-                                agg_layout.size_bits() as u64,
+                                agg_layout.size_bits(),
                                 agg_layout.align_bits(),
                                 0,
                                 &[],
@@ -3601,7 +3601,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 } else {
                     self.builder.build_int_compare(IntPredicate::EQ, l, r, "").unwrap()
                 };
-                let elem_bits = vop.elem.get_layout().size_bits();
+                let elem_bits = vop.elem.get_layout().size_bits() as u32;
                 let int_lane_vec = self
                     .ctx
                     .custom_width_int_type(std::num::NonZeroU32::new(elem_bits).unwrap())
@@ -3622,7 +3622,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             VecOpIr::ToMask => {
                 let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
-                let elem_bits = vop.elem.get_layout().size_bits();
+                let elem_bits = vop.elem.get_layout().size_bits() as u32;
                 let int_lane_vec = self
                     .ctx
                     .custom_width_int_type(std::num::NonZeroU32::new(elem_bits).unwrap())
@@ -4815,7 +4815,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         classes,
                         active_bits2,
                         offset_bits,
-                        st.get_layout().size_bits(),
+                        st.get_layout().size_bits() as u32,
                         class,
                     )
                 }
@@ -4870,7 +4870,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 classes,
                                 active_bits2,
                                 offset_bits,
-                                agg_record.layout.size_bits(),
+                                agg_record.layout.size_bits() as u32,
                                 RegisterClass::Int,
                             )
                         }

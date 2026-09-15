@@ -51,7 +51,7 @@ type http-handler-work = {
 
 fn do-work(req: *mut uv/work) {
   // this is a good time to clear our thread-local temporary allocator
-  mem/tmp().reset(clear = true)
+  mem/tmp().reset()
 
   tprintln("handle-request")
   let work: *mut http-handler-work = req.get-data()
@@ -360,7 +360,7 @@ ns for connection {
     } else {
       tprintln("keepalive! conn${self.serial-no} request arena reset used-bytes: ${self.request-arena.used-bytes()}")
       self.current-work = :none
-      self.request-arena.reset(true)
+      self.request-arena.reset()
       self.request-parser.reset()
       let read-rc = uv/read_start(self.client().as-stream(), alloc-read-buffer, on_client_read)
       if read-rc != 0 {
@@ -409,7 +409,7 @@ fn on-complete-http-body(connection: *mut connection, chunks: span[span[u8]]) {
 }
 
 fn on-new-connection(server: *mut uv/stream, status: i32) {
-  mem/tmp().reset(true)
+  mem/tmp().reset()
   tprintln("------------ on_new_connection -------------")
   if status < 0 {
     println("new connection error: $status")
